@@ -422,7 +422,7 @@ Deno.test("mkax: a real sample from this box is finite, bounded and evidence-sha
 });
 
 Deno.test("mkax: the launcher refuses to START the browser when the box is not quiet", async () => {
-  const { launchChrome } = await import("../scripts/lib/chrome-launch.ts");
+  const { launchChrome, teardownChrome } = await import("../scripts/lib/chrome-launch.ts");
   const fake = await Deno.makeTempFile({ suffix: ".sh" });
   const started = `${fake}.started`;
   await Deno.writeTextFile(
@@ -479,8 +479,7 @@ Deno.test("mkax: the launcher refuses to START the browser when the box is not q
     if (launched === null) return; // INCONCLUSIVE, stated above
     assertEquals(launched.quietWaitMs >= 0, true);
     assert(launched.quietWaitMs < 2000, `a quiet-enough box starts at once (${launched.quietWaitMs} ms)`);
-    try { launched.proc.kill("SIGKILL"); } catch { /* gone */ }
-    await launched.proc.status;
+    await teardownChrome(launched);
   } finally {
     await Deno.remove(fake).catch(() => {});
     await Deno.remove(started).catch(() => {});
@@ -489,7 +488,7 @@ Deno.test("mkax: the launcher refuses to START the browser when the box is not q
 });
 
 Deno.test("mkax: a harness that does not ask for a quiet window is unaffected", async () => {
-  const { launchChrome } = await import("../scripts/lib/chrome-launch.ts");
+  const { launchChrome, teardownChrome } = await import("../scripts/lib/chrome-launch.ts");
   const fake = await Deno.makeTempFile({ suffix: ".sh" });
   await Deno.writeTextFile(
     fake,
@@ -500,8 +499,7 @@ Deno.test("mkax: a harness that does not ask for a quiet window is unaffected", 
   try {
     const launched = await launchChrome({ binary: fake, args: [], timeoutMs: 5000, lockPath: scope });
     assertEquals(launched.quietWaitMs, 0, "no requirement, no wait, no measurement");
-    try { launched.proc.kill("SIGKILL"); } catch { /* gone */ }
-    await launched.proc.status;
+    await teardownChrome(launched);
   } finally {
     await Deno.remove(fake).catch(() => {});
     await Deno.remove(scope).catch(() => {});

@@ -461,11 +461,10 @@ Deno.test("uzik: the launcher prints the gate marker only when a runner asks for
     Deno.env.set("CAP_CHROME_MAX_CONCURRENT", "4");
     Deno.env.set("CAP_CHROME_LOCK_WAIT_MS", "3000");
     ${"" /* marker env set by the parent below */}
-    const { launchChrome } = await import(${JSON.stringify(new URL("../scripts/lib/chrome-launch.ts", import.meta.url).href)});
+    const { launchChrome, teardownChrome } = await import(${JSON.stringify(new URL("../scripts/lib/chrome-launch.ts", import.meta.url).href)});
     const c = await launchChrome({ binary: ${JSON.stringify(fake)}, args: [], timeoutMs: 5000 });
     console.log("SLOT " + c.chromeSlot);
-    try { c.proc.kill("SIGKILL"); } catch {}
-    await c.proc.status;`;
+    await teardownChrome(c);`;
   // --no-check: the subprocess only has to RUN the launcher, and type-checking
   // the imported module graph costs ~15 s per subprocess in the parallel phase.
   const withMarker = new Deno.Command(Deno.execPath(), {

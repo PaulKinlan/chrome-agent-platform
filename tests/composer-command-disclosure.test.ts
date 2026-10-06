@@ -16,7 +16,7 @@
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { launchChrome, waitForServiceWorker, resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
 import { COMMAND_INSERTION_DISCLOSURE } from "../extension/shared/composer-commands.js";
 
@@ -159,7 +159,7 @@ Deno.test({
       }
     } finally {
       try { ws.close(); } catch { /* already closed */ }
-      try { launched.process?.kill("SIGKILL"); } catch { /* exited */ }
+      await teardownChrome(launched, profile);
     }
   },
 });

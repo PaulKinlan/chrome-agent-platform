@@ -6,7 +6,7 @@
 // 3. Opening a thread fires <= 4 RPCs (down from 14–21).
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { launchChrome, openCdp, waitForServiceWorker, computeUnpackedExtensionId, resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
+import { launchChrome, openCdp, waitForServiceWorker, computeUnpackedExtensionId, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const EXT = `${Deno.cwd()}/extension`;
@@ -172,9 +172,7 @@ Deno.test({
       );
     } finally {
       if (cdp) cdp.close();
-      if (chrome?.proc) {
-        try { chrome.proc.kill("SIGKILL"); } catch {}
-      }
+      await teardownChrome(chrome, profile);
       try { Deno.removeSync(profile, { recursive: true }); } catch {}
       try { Deno.removeSync(lockPath); } catch {}
     }

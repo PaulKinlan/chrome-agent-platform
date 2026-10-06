@@ -11,24 +11,15 @@ import {
   countDiagnosticsBadgeErrors,
   classifyDiagnosticBadgeLevel,
 } from "../extension/lib/diagnostics-badge.js";
-import { launchChrome } from "../scripts/lib/chrome-launch.ts";
+import { launchChrome, openCdp, computeUnpackedExtensionId, teardownChrome, resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
-import { openCdp, computeUnpackedExtensionId } from "../scripts/lib/chrome-launch.ts";
 
 const EXT = fileURLToPath(new URL("../extension", import.meta.url));
 
 function findChromeForTesting(): string | null {
   const env = Deno.env.get("CHROME_BINARY");
   if (env) return env;
-  const home = Deno.env.get("HOME");
-  if (!home) return null;
-  const candidate = `${home}/.cache/puppeteer/chrome/mac_arm-149.0.7827.22/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`;
-  try {
-    if (Deno.statSync(candidate).isFile) return candidate;
-  } catch {
-    // not present
-  }
-  return null;
+  return resolveChromiumBinaryReport().binary;
 }
 
 const CHROME_BINARY = findChromeForTesting();
@@ -333,7 +324,7 @@ Deno.test({
 
       await cdp.close();
     } finally {
-      try { chrome.proc.kill("SIGKILL"); await chrome.proc.status; } catch { /* cleaned up */ }
+      await teardownChrome(chrome, profile);
     }
   },
 });
@@ -469,7 +460,7 @@ Deno.test({
 
       await cdp.close();
     } finally {
-      try { chrome.proc.kill("SIGKILL"); await chrome.proc.status; } catch { /* cleaned up */ }
+      await teardownChrome(chrome, profile);
     }
   },
 });

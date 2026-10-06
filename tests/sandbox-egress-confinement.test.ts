@@ -15,7 +15,7 @@
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { launchChrome, openCdp, computeUnpackedExtensionId, resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
+import { launchChrome, openCdp, computeUnpackedExtensionId, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
 import { STORE_SANDBOX_CSP } from "../scripts/store-target-policy.mjs";
 
@@ -231,10 +231,7 @@ Deno.test({
       assertEquals(imageStatus, "loaded:20", "Artifact preview must render local data: images without CSP blockage");
     } finally {
       cdp?.close();
-      if (chromeInstance) {
-        try { chromeInstance.proc.kill("SIGKILL"); } catch { /* gone */ }
-        try { await chromeInstance.proc.status; } catch { /* reaped */ }
-      }
+      await teardownChrome(chromeInstance, profile);
       await server.shutdown();
     }
   },

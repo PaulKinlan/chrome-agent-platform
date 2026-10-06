@@ -30,6 +30,7 @@ import { requireQuietWindow, type QuietSpec } from "./quiet-window.ts";
 import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, type HeavyGateLease } from "./heavy-gate-slot.ts";
 import { resolveChromeForTesting } from "./chrome-for-testing.ts";
 import { isUsableBinary } from "./browser-refusal.ts";
+import { killProcessTree } from "./process-tree.ts";
 
 export interface LaunchedChrome {
   /** The spawned Chrome. The caller owns killing it. */
@@ -54,6 +55,10 @@ export interface LaunchedChrome {
   /** How long this launch waited for the FLEET-WIDE heavy-gate slot (0 when it
    *  did not ask for one, or the slot was free). chrome-agent-platform-0lj3. */
   fleetSlotWaitMs?: number;
+  /** The profile directory used for this launch, if any. */
+  profile?: string;
+  /** Cleanly tear down this Chrome instance and all its child processes. */
+  close?: () => Promise<void>;
 }
 
 const TAIL_LIMIT = 8192;
@@ -685,7 +690,18 @@ export async function launchChrome(opts: {
     proc.status.then(() => lease.release(), () => lease.release());
   }
 
-  return {
+  const USER_DATA_PREFIX = "--" + "user-data-dir=";
+  let resolvedProfile = opts.profile;
+  if (!resolvedProfile && opts.args) {
+    for (const arg of opts.args) {
+      if (arg.startsWith(USER_DATA_PREFIX)) {
+        resolvedProfile = arg.slice(USER_DATA_PREFIX.length);
+        break;
+      }
+    }
+  }
+
+  const launched: LaunchedChrome = {
     proc,
     wsUrl,
     port: Number(new URL(wsUrl).port),
@@ -694,8 +710,49 @@ export async function launchChrome(opts: {
     chromeSlot: lock.slot,
     quietWaitMs,
     fleetSlotWaitMs,
+    profile: resolvedProfile,
+    close: async () => {
+      await teardownChrome(proc, resolvedProfile);
+    },
   };
+  return launched;
 }
+
+/**
+ * Cleanly tear down a launched Chrome process AND its entire process tree
+ * (zygote, GPU, renderer, crashpad children) using killProcessTree().
+ *
+ * Chromium child processes inherit `--user-data-dir=...` in their command line,
+ * so matching `user-data-dir=${profile}` eliminates orphaned children that
+ * would otherwise be reparented to init (PPID=1) and trigger the fleet reaper's
+ * orphan kill rule (chrome-agent-platform-jixr).
+ *
+ * `target` can be a `LaunchedChrome`, a `Deno.ChildProcess`, or an object with `{ proc }`.
+ * If `profile` is not explicitly provided, it will be extracted from `target.profile`
+ * or inferred from the launch options.
+ * If no profile is available (e.g. fake test binaries), it falls back to killing `proc`
+ * and awaiting `proc.status`.
+ */
+export async function teardownChrome(
+  target: LaunchedChrome | Deno.ChildProcess | { proc?: Deno.ChildProcess | null; profile?: string } | null | undefined,
+  profile?: string,
+): Promise<void> {
+  if (!target && !profile) return;
+  const proc = target ? ("proc" in target ? (target.proc ?? null) : (target instanceof Deno.ChildProcess ? target : null)) : null;
+  const matchedProfile = profile ?? (target && "profile" in target ? target.profile : undefined);
+  if (matchedProfile) {
+    const raw = matchedProfile.replace(/^--/, "");
+    const match = raw.startsWith("user-data-dir=") ? raw : `user-data-dir=${raw}`;
+    await killProcessTree(proc, match);
+    return;
+  }
+  if (proc) {
+    try { proc.kill("SIGKILL"); } catch { /* already gone */ }
+    try { await proc.status; } catch { /* reaped */ }
+  }
+}
+
+export const closeChrome = teardownChrome;
 
 export type CdpSend = (method: string, params?: any, sessionId?: string) => Promise<any>;
 

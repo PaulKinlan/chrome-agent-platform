@@ -4,11 +4,12 @@
 // Invariants guarded:
 //   1. docs/SW-DISPATCH-AUTHORITY-CENSUS.md exists and is cited in AGENTS.md and routes/ROUTE_MAP.md.
 //   2. Every registered route in handlers (via mergeRouteMaps) is extracted from actual AST composition.
-//   3. The census classification is complete, disjoint, and covers 100% of registered routes (259 total).
-//      (l0r: recipe.list catalog fork deleted; wfo5: browser.callTool added; net 259 total.)
+//   3. The census classification is complete, disjoint, and covers all 276 registered routes.
 //   4. Any new route added to mergeRouteMaps without explicit census classification fails RED.
 //   5. Unclassified mutations (e.g. named-agent.set-tools) are pinned to an explicit inventory.
-//   6. Unknown message types fail closed at the dispatcher.
+//   6. The document's §3/§4 categories exactly match the tested classifications (4h47).
+//   7. Each §4.3/§4.4 handler reaches its declared approval seam and owner-direct policy (gn3c).
+//   8. Deleting a route seam or its injection fails RED naming the route (gn3c).
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
@@ -351,4 +352,226 @@ Deno.test("census: the document's §4 tables and §3 summary ARE this test's cla
     extractAllRegisteredRoutes().size,
     "census §3: the Total row must equal the registered-route population this test derives from handlers",
   );
+});
+
+// gn3c: declarations above do not themselves prove that an individual handler
+// reaches its declared approval seam. Parse the registered handler nodes, not
+// arbitrary text elsewhere in the worker (or comments that mention a call).
+function walkApprovalAst(node: any, visit: (node: any) => void): void {
+  if (Array.isArray(node)) {
+    for (const child of node) walkApprovalAst(child, visit);
+    return;
+  }
+  if (!node || typeof node !== "object" || typeof node.type !== "string") return;
+  visit(node);
+  for (const [key, child] of Object.entries(node)) {
+    if (key !== "start" && key !== "end" && key !== "loc") walkApprovalAst(child, visit);
+  }
+}
+
+function approvalCalls(node: any, name: string): any[] {
+  const calls: any[] = [];
+  walkApprovalAst(node, (part) => {
+    if (part.type === "CallExpression" && part.callee?.type === "Identifier" && part.callee.name === name) {
+      calls.push(part);
+    }
+  });
+  return calls;
+}
+
+function approvalFunction(ast: any, name: string): any {
+  for (const statement of ast.body) {
+    const declaration = statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;
+    if (declaration?.type === "FunctionDeclaration" && declaration.id?.name === name) return declaration;
+  }
+  return null;
+}
+
+const APPROVAL_MODULES = {
+  schedulerRoutes: "extension/background/routes/scheduler.js",
+  fsGrantRoutes: "extension/background/routes/fs-grants.js",
+  agentScheduleRoutes: "extension/background/routes/agent-schedule.js",
+};
+
+// These are action-name aliases or indirect paths, NOT blanket exemptions from
+// enforcement. Every entry must still prove the named helper/factory calls the
+// approval seam. A route added to the classification without a handler fails.
+const APPROVAL_ACTION_ALIASES: Record<string, { action: string; reason: string }> = {
+  "asset.patch": { action: "asset.update", reason: "a patch pays the asset.update card" },
+  "asset.append": { action: "asset.update", reason: "an append pays the asset.update card" },
+  "fs-grant.write-file-approved": { action: "fs.write", reason: "model file writes use the fs.write card" },
+  "browser.destructive-action": { action: "<DESTRUCTIVE_BROWSER_ACTIONS>", reason: "validated browser action chooses one of the declared destructive actions" },
+};
+
+function approvalHandlerNodes(swAst: any): Map<string, { node: any; module?: string }> {
+  const target = new Set([
+    ...CENSUS_CATEGORIES.OWNER_APPROVAL_DIRECT,
+    ...CENSUS_CATEGORIES.OWNER_APPROVAL_REQUIRED,
+  ]);
+  const handlers = new Map<string, { node: any; module?: string }>();
+  let mergeCall: any = null;
+  for (const statement of swAst.body) {
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declaration of statement.declarations) {
+      if (declaration.id?.name === "handlers" && declaration.init?.callee?.name === "mergeRouteMaps") {
+        mergeCall = declaration.init;
+      }
+    }
+  }
+  assert(mergeCall, "approval census: handlers must be registered via mergeRouteMaps");
+  for (const arg of mergeCall.arguments) {
+    if (arg.type === "ObjectExpression") {
+      for (const property of arg.properties) {
+        const name = property.key?.value ?? property.key?.name;
+        if (target.has(name)) {
+          assert(!handlers.has(name), `approval census: route "${name}" is registered more than once`);
+          handlers.set(name, { node: property.value });
+        }
+      }
+    } else if (arg.type === "Identifier" && Object.hasOwn(APPROVAL_MODULES, arg.name)) {
+      const module = APPROVAL_MODULES[arg.name as keyof typeof APPROVAL_MODULES];
+      const moduleAst = acorn.parse(Deno.readTextFileSync(`${ROOT}${module}`), { ecmaVersion: "latest", sourceType: "module" });
+      walkApprovalAst(moduleAst, (part) => {
+        if (part.type !== "Property" || !target.has(part.key?.value ?? part.key?.name)) return;
+        const name = part.key?.value ?? part.key?.name;
+        assert(!handlers.has(name), `approval census: route "${name}" is registered more than once`);
+        handlers.set(name, { node: part.value, module: arg.name });
+      });
+    }
+  }
+  return handlers;
+}
+
+function approvalFindings(swSource: string): string[] {
+  const swAst = acorn.parse(swSource, { ecmaVersion: "latest", sourceType: "module" });
+  const handlers = approvalHandlerNodes(swAst);
+  const expected = new Set([
+    ...CENSUS_CATEGORIES.OWNER_APPROVAL_DIRECT,
+    ...CENSUS_CATEGORIES.OWNER_APPROVAL_REQUIRED,
+  ]);
+  const findings: string[] = [];
+  if (expected.size !== 30) findings.push(`approval census population drift: expected 30, found ${expected.size}`);
+
+  const approvalBridge = approvalFunction(swAst, "requireOwnerApproval");
+  const entersOwnerDirectPath = approvalCalls(approvalBridge?.body, "isOwnerDirectApproval")
+    .some((call) => call.arguments[0]?.name === "context" && call.arguments[1]?.name === "action");
+  const scriptBridge = approvalFunction(swAst, "scriptApprovalGate");
+  const forwardsScriptAction = scriptBridge?.params?.[1]?.name === "action" &&
+    approvalCalls(scriptBridge.body, "requireOwnerApproval")
+      .some((call) => call.arguments[0]?.name === "context" && call.arguments[1]?.name === "action");
+  const siteToolBridge = approvalFunction(swAst, "requestSiteToolFirstUse");
+  const agentScheduleAst = acorn.parse(
+    Deno.readTextFileSync(`${ROOT}extension/background/routes/agent-schedule.js`),
+    { ecmaVersion: "latest", sourceType: "module" },
+  );
+  const deleteBridge = approvalFunction(agentScheduleAst, "createNamedAgentDeleteGate");
+
+  for (const route of [...expected].sort()) {
+    const category = CENSUS_CATEGORIES.OWNER_APPROVAL_DIRECT.has(route)
+      ? "OWNER_APPROVAL_DIRECT" : "OWNER_APPROVAL_REQUIRED";
+    const entry = handlers.get(route);
+    if (!entry) {
+      findings.push(`route "${route}" (${category}) has no registered handler AST — if extracted, add its binding to APPROVAL_MODULES`);
+      continue;
+    }
+    if (entry.module) {
+      const declaration = swAst.body.flatMap((statement: any) => statement.type === "VariableDeclaration" ? statement.declarations : [])
+        .find((part: any) => part.id?.name === entry.module);
+      const injected = declaration?.init?.arguments?.some((arg: any) => arg.type === "ObjectExpression" &&
+        arg.properties.some((prop: any) => prop.key?.name === "requireOwnerApproval" && prop.value?.name === "requireOwnerApproval"));
+      if (!injected) findings.push(`route "${route}" (${category}) has no requireOwnerApproval dependency injection`);
+    }
+    const calls = [
+      ...approvalCalls(entry.node, "requireOwnerApproval"),
+      ...approvalCalls(entry.node, "scriptApprovalGate"),
+    ];
+    const actions = new Set<string>();
+    for (const call of calls) {
+      const action = call.arguments[1];
+      if (typeof action?.value === "string") actions.add(action.value);
+      else if (route === "browser.destructive-action" && action?.name === "act") {
+        let guarded = false;
+        walkApprovalAst(entry.node, (part) => {
+          const test = part.type === "IfStatement" && part.start < call.start &&
+            part.test?.type === "UnaryExpression" && part.test.operator === "!" && part.test.argument;
+          if (test?.callee?.object?.name === "DESTRUCTIVE_BROWSER_ACTIONS" &&
+            test.callee?.property?.name === "has" && test.arguments[0]?.name === "act" &&
+            part.consequent?.body?.some((statement: any) => statement.type === "ReturnStatement")) guarded = true;
+        });
+        if (guarded) actions.add("<DESTRUCTIVE_BROWSER_ACTIONS>");
+      }
+      if (call.callee.name === "scriptApprovalGate" && !forwardsScriptAction) {
+        findings.push(`route "${route}" (${category}) calls scriptApprovalGate without a requireOwnerApproval action-forwarding bridge`);
+      }
+    }
+    if (route === "webmcp.use-tool" && approvalCalls(entry.node, "requestSiteToolFirstUse").length) {
+      if (approvalCalls(siteToolBridge?.body, "requireOwnerApproval").some((call) => call.arguments[1]?.value === route)) {
+        actions.add(route);
+      }
+    }
+    if (route === "named-agent.delete" && approvalCalls(entry.node, "createNamedAgentDeleteGate").length) {
+      const hookCall = approvalCalls(entry.node, "createNamedAgentDeleteGate")[0];
+      const wired = hookCall.arguments[1]?.properties?.some((prop: any) =>
+        prop.key?.name === "requireOwnerApproval" && prop.value?.name === "requireOwnerApproval");
+      const installed = approvalCalls(entry.node, "deleteNamedAgent").some((call) =>
+        call.arguments[1]?.properties?.some((prop: any) =>
+          prop.key?.name === "gateBeforeDelete" && prop.value === hookCall));
+      if (wired && installed && approvalCalls(deleteBridge?.body, "requireOwnerApproval").some((call) => call.arguments[1]?.value === route)) {
+        actions.add(route);
+      }
+    }
+    const alias = APPROVAL_ACTION_ALIASES[route];
+    if (alias && !alias.reason) findings.push(`route "${route}" (${category}) has an undocumented action alias`);
+    const wanted = alias?.action ?? route;
+    if (actions.size !== 1 || !actions.has(wanted)) {
+      findings.push(`route "${route}" (${category}) reaches [${[...actions].sort().join(", ") || "no approval seam"}] instead of declared owner-approval action "${wanted}"`);
+    }
+    if (category === "OWNER_APPROVAL_DIRECT") {
+      if (!OWNER_DIRECT_ACTIONS.has(wanted) || !entersOwnerDirectPath) {
+        findings.push(`route "${route}" (${category}) action "${wanted}" cannot enter the owner-principal direct path`);
+      }
+    } else if (route === "browser.destructive-action") {
+      const declaration = swAst.body.flatMap((statement: any) => statement.type === "VariableDeclaration" ? statement.declarations : [])
+        .find((part: any) => part.id?.name === "DESTRUCTIVE_BROWSER_ACTIONS");
+      const members = declaration?.init?.arguments?.[0]?.elements?.map((member: any) => member.value);
+      if (!members?.length || members.some((action: string) => !DESTRUCTIVE_ACTIONS.has(action))) {
+        findings.push(`route "${route}" (${category}) browser action set is absent or contains an unapprovable action`);
+      }
+    } else if (!DESTRUCTIVE_ACTIONS.has(wanted)) {
+      findings.push(`route "${route}" (${category}) action "${wanted}" cannot create a pending approval`);
+    }
+  }
+  return findings;
+}
+
+Deno.test("census: each direct/required route handler reaches its declared approval seam by route name", () => {
+  const sw = Deno.readTextFileSync(`${ROOT}extension/background/service-worker.js`);
+  assertEquals(approvalFindings(sw), []);
+});
+
+Deno.test("census: deleting a route seam or its injected authority turns RED naming the route", () => {
+  const sw = Deno.readTextFileSync(`${ROOT}extension/background/service-worker.js`);
+  const ast = acorn.parse(sw, { ecmaVersion: "latest", sourceType: "module" });
+  const handler = approvalHandlerNodes(ast).get("capability.revoke")?.node;
+  const call = approvalCalls(handler, "requireOwnerApproval");
+  assertEquals(call.length, 1, "falsification must find the live capability.revoke seam by AST");
+  const remove = (node: any) => sw.slice(0, node.start) + "null" + sw.slice(node.end);
+  const routeFindings = approvalFindings(remove(call[0]));
+  assert(routeFindings.some((finding) => finding.includes('route "capability.revoke"') && finding.includes("no approval seam")),
+    `removing capability.revoke's seam must fail by name, got ${routeFindings.join("; ")}`);
+
+  const scheduler = ast.body.flatMap((statement: any) => statement.type === "VariableDeclaration" ? statement.declarations : [])
+    .find((part: any) => part.id?.name === "schedulerRoutes");
+  const injected = scheduler?.init?.arguments?.flatMap((arg: any) => arg.type === "ObjectExpression" ? arg.properties : [])
+    .filter((part: any) => part.key?.name === "requireOwnerApproval");
+  assertEquals(injected?.length, 1, "falsification must find scheduler's live approval injection by AST");
+  const injectionFindings = approvalFindings(sw.slice(0, injected[0].start) + "missingApproval: null" + sw.slice(injected[0].end));
+  assert(injectionFindings.some((finding) => finding.includes('route "task.pause"') && finding.includes("dependency injection")),
+    `removing task.pause's approval injection must fail by name, got ${injectionFindings.join("; ")}`);
+
+  const script = approvalCalls(approvalFunction(ast, "scriptApprovalGate")?.body, "requireOwnerApproval");
+  assertEquals(script.length, 1, "falsification must find the script helper's live forwarding seam by AST");
+  const scriptFindings = approvalFindings(remove(script[0]));
+  assert(scriptFindings.some((finding) => finding.includes('route "script.run"') && finding.includes("action-forwarding bridge")),
+    `removing script.run's forwarding seam must fail by name, got ${scriptFindings.join("; ")}`);
 });

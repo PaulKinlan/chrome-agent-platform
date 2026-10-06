@@ -5,7 +5,7 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchChrome, openCdp, computeUnpackedExtensionId, resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
+import { launchChrome, openCdp, computeUnpackedExtensionId, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 // THE BROWSER IS RESOLVED, NOT PINNED (voicebox-beads-i76t). This test carried an absolute macOS
@@ -185,7 +185,7 @@ Deno.test("716s.10: browser verification of sentence-case kickers and no upperca
 
   } finally {
     cdp.close();
-    try { proc.kill(); } catch {}
+    await teardownChrome(launched, tmpProfile);
     try { Deno.removeSync(tmpProfile, { recursive: true }); } catch {}
   }
 });

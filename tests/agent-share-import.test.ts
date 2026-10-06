@@ -12,7 +12,7 @@
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { launchChrome, waitForServiceWorker, resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
@@ -202,9 +202,8 @@ Deno.test({
       assertEquals(imported.role, card.role, "imported role equals the exported card's role");
       assertEquals(imported.skills ?? [], card.skills ?? [], "imported skills equal the exported card's skills");
     } finally {
-      ws.close();
-      try { launched.proc.kill("SIGKILL"); } catch { /* gone */ }
-      try { await launched.proc.status; } catch { /* reaped */ }
+      try { ws.close(); } catch { /* closed */ }
+      await teardownChrome(launched, profile);
       await Deno.remove(downloads, { recursive: true }).catch(() => {});
     }
   },
