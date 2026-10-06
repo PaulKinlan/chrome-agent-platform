@@ -446,7 +446,8 @@ export function changedWithoutCoverage(changed, reverse) {
   return uncovered;
 }
 
-const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_MS ?? 600_000);
+export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
+const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_MS ?? DEFAULT_PARALLEL_TIMEOUT_MS);
 
 function runPhase(files, flags, label, timeoutMs = 300_000) {
   const t0 = Date.now();
@@ -457,10 +458,19 @@ function runPhase(files, flags, label, timeoutMs = 300_000) {
     env: { ...process.env, CAP_TEST_RUNNER: "1" },
     timeout: timeoutMs,
     killSignal: "SIGKILL",
+    detached: true,
   });
   if (r.error && r.error.code === "ETIMEDOUT") {
+    if (r.pid) {
+      try { process.kill(-r.pid, "SIGKILL"); } catch { /* gone */ }
+    }
     console.error(`select-tests: ${label} TIMED OUT after ${timeoutMs / 1000}s`);
     return 124;
+  }
+  // Safety: kill any remaining process group descendants so orphaned background processes
+  // cannot linger even if the direct child exited or crashed.
+  if (r.pid) {
+    try { process.kill(-r.pid, "SIGKILL"); } catch { /* clean */ }
   }
   const secs = ((Date.now() - t0) / 1000).toFixed(0);
   console.error(`select-tests: ${label} ${r.status === 0 ? "GREEN" : "FAILED"} in ${secs}s`);

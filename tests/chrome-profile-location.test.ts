@@ -29,6 +29,7 @@ import {
   SHARED_ROOT_MIN_OLDER_THAN_MS,
 } from "../scripts/lib/chrome-profile-dir.ts";
 import { durableRoot, isRamBacked } from "../scripts/lib/durable-root.mjs";
+import { killProcessTree } from "../scripts/lib/process-tree.ts";
 
 /** The file's ONE browser-dependent test, named where the refusal counts it. */
 const BROWSER_DEPENDENT_TESTS = ["9t1b: a REAL browser holds its profile while the whole tree is copied"];
@@ -163,8 +164,9 @@ Deno.test("9t1b: a REAL browser holds its profile while the whole tree is copied
     assertEquals(offenders, [], "a live Chrome profile is still inside the working tree");
   } finally {
     if (proc) {
-      try { proc.kill("SIGKILL"); } catch { /* gone */ }
-      try { await proc.status; } catch { /* reaped */ }
+      await killProcessTree(proc, `user-data-dir=${profile}`).catch(() => {
+        try { proc?.kill("SIGKILL"); } catch { /* gone */ }
+      });
     }
     await new Promise((r) => setTimeout(r, 500));
     Deno.removeSync(scratch, { recursive: true });
