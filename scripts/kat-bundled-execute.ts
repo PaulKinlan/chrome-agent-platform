@@ -316,9 +316,9 @@ try {
   assert(typed === true, "composer input not found");
   await cdp.eval(ntp.sessionId, `document.querySelector('${composerSend("hub")}')?.click()`);
 
-  // 12 searches + 12 executes + the final text = 25 model calls; the 25th
+  // 14 searches + 14 executes + the final text = 29 model calls; the 29th
   // carries the last execute's result. Wait well past that.
-  const EXPECTED_CALLS = 25;
+  const EXPECTED_CALLS = 29;
   let calls = 0;
   for (let i = 0; i < 240; i++) {
     calls = provider.requests.length;

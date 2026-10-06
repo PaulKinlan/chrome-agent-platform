@@ -1,19 +1,19 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:984b12e3-b76a-470f-858f-43aa965658cd",
+  "serialNumber": "urn:uuid:58308a6f-83dd-412c-87c1-6045ebba13ce",
   "version": 1,
   "metadata": {
     "timestamp": "1970-01-01T00:00:00Z",
     "component": {
       "type": "application",
-      "bom-ref": "hashwasm-blake3@4.12.0",
-      "name": "hashwasm-blake3",
+      "bom-ref": "hashwasm-whirlpool@4.12.0",
+      "name": "hashwasm-whirlpool",
       "version": "4.12.0",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "984b12e3b76a670fe58f43aa965658cdfefe0867f88c4935a292f68bdf3c55e1"
+          "content": "58308a6f83dd912cb7c16045ebba13ce507a2554ea0fc008b12582822c812d26"
         }
       ],
       "licenses": [
@@ -24,7 +24,7 @@
       "properties": [
         {
           "name": "provenance",
-          "value": "byte-exact extraction from the pinned hash-wasm npm tarball (no rebuild); chrome-agent-platform-uslb"
+          "value": "byte-exact extraction from the pinned hash-wasm npm tarball (no rebuild); chrome-agent-platform-3wei"
         }
       ]
     }

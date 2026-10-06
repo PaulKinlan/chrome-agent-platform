@@ -144,7 +144,7 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
   hash_ripemd160: "hash_ripemd160 - hash data with RIPEMD-160. Use for cryptographic address and checksum derivation. In/out: base64-encoded bytes as 'data' to a 40-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'ripemd160'.",
   hash_sm3: "hash_sm3 - hash data with Chinese National Standard SM3. Use for commercial cryptographic compliance. In/out: base64-encoded bytes as 'data' to a 64-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sm3'.",
   hash_whirlpool: "hash_whirlpool - hash data with Whirlpool (512-bit). Use for ISO/IEC 10118-3 cryptographic hashing. In/out: base64-encoded bytes as 'data' to a 128-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'whirlpool'.",
-  hash_adler32: "hash_adler32 - compute Adler-32 rolling checksum. Use for quick data error-detection in zlib streams. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'adler32'.",
+  hash_adler32: "hash_adler32 - compute Adler-32 rolling checksum. Use for quick data error-detection in compressed streams. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'adler32'.",
   hash_crc32: "hash_crc32 - compute standard CRC-32 (IEEE 802.3) cyclic redundancy checksum. Use for integrity checks. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'crc32'.",
   hash_xxhash32: "hash_xxhash32 - compute fast 32-bit xxHash non-cryptographic checksum. Use for high-speed hash tables. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'xxhash32'.",
   compressops: "compressops - compress or decompress with zstd or brotli. Use to shrink text or bytes. Compress text (stdin) to a base64 frame; decompress a base64 frame to base64; info reports a base64 frame. zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
@@ -378,16 +378,78 @@ for (const toolId of LANES.c2.tools) {
       ...(item.initParam != null ? { initParam: item.initParam } : {}),
       ...(item.finalParam != null ? { finalParam: item.finalParam } : {}),
     };
+    const algo = item.toolId.replace(/^hash_/, "");
+    const compName = `hashwasm-${algo}`;
+    const uuid = `urn:uuid:${item.sha256.slice(0, 8)}-${item.sha256.slice(8, 12)}-4${item.sha256.slice(13, 16)}-8${item.sha256.slice(17, 20)}-${item.sha256.slice(20, 32)}`;
+    const sbomData = {
+      bomFormat: "CycloneDX",
+      specVersion: "1.5",
+      serialNumber: uuid,
+      version: 1,
+      metadata: {
+        timestamp: "1970-01-01T00:00:00Z",
+        component: {
+          type: "application",
+          "bom-ref": `${compName}@4.12.0`,
+          name: compName,
+          version: "4.12.0",
+          hashes: [
+            {
+              alg: "SHA-256",
+              content: item.sha256,
+            },
+          ],
+          licenses: [
+            {
+              expression: "MIT",
+            },
+          ],
+          properties: [
+            {
+              name: "provenance",
+              value: "byte-exact extraction from the pinned hash-wasm npm tarball (no rebuild); chrome-agent-platform-3wei",
+            },
+          ],
+        },
+      },
+      components: [
+        {
+          type: "library",
+          "bom-ref": "npm:hash-wasm@4.12.0",
+          name: "hash-wasm",
+          version: "4.12.0",
+          licenses: [
+            {
+              expression: "MIT",
+            },
+          ],
+          hashes: [
+            {
+              alg: "SHA-512",
+              content: "+/2B2rYLb48I/evdOIhP+K/DD2ca2fgBjp6O+GBEnCDk2e4rpeXIK8GvIyRPjTezgmWn9gmKwkQjjx6BtqDHVQ==",
+            },
+          ],
+          externalReferences: [
+            {
+              type: "distribution",
+              url: "https://registry.npmjs.org/hash-wasm/-/hash-wasm-4.12.0.tgz",
+            },
+          ],
+        },
+      ],
+    };
+    const sbomBytes = enc.encode(JSON.stringify(sbomData, null, 2) + "\n");
     packages.push({
       toolId: item.toolId,
       lane: "hashwasm",
       bytes: wasm,
       row: null,
       spdx: "MIT",
-      licenseFile: "extension/wasm/licenses/MIT.txt",
+      licenseFile: "extension/wasm/licenses/hash-wasm-MIT.txt",
       notices: null,
       sbom: {
-        src: join(PATHS.hashwasm, "sbom/cyclonedx-1.5.json"),
+        src: null,
+        bytes: sbomBytes,
         rel: `extension/wasm/sbom/${item.toolId}.cdx.json`,
         format: "cyclonedx-json@1.5",
       },
@@ -546,6 +608,7 @@ const LICENSE_WRITES = {
   "extension/wasm/licenses/minised-BSD-3-Clause.txt": readFileSync(join(PATHS.sed, "NOTICES.md")),
   "extension/wasm/licenses/posixutils-rs-MIT.txt": readFileSync(join(PATHS.awkFull, "source/LICENSE")),
   "extension/wasm/licenses/jq-MIT.txt": readFileSync(join(PATHS.jq, "COPYING-jq.txt")),
+  "extension/wasm/licenses/hash-wasm-MIT.txt": readFileSync(join(PATHS.hashwasm, "LICENSES/hash-wasm-MIT.txt")),
 };
 
 // ── Manifests (authority-schema-exact; canonical bytes; re-validated) ───────
