@@ -462,7 +462,76 @@ Deno.test("afpl: every ALWAYS_ON and SCANNER_EXCLUSIONS entry is a test file, ne
   }
 });
 
-// chrome-agent-platform-afpl — the augmentation's proof, in BOTH directions and against a REAL file.
+// chrome-agent-platform-afpl — REAL-TREE falsification: places a depth-2 repo-walking helper
+// in tests/helpers/ in the actual repository tree, proves the audit discovers and NAMES it,
+// proves prose-only helpers are not falsely flagged, and cleans up the tree in a finally block.
+Deno.test("afpl: REAL-TREE falsification — a depth-2 repo-walking helper is NAMED and fails closed; prose helper is NOT flagged", async () => {
+  const realHelpersDir = join(ROOT, "tests", "helpers");
+  await Deno.mkdir(realHelpersDir, { recursive: true });
+
+  const depth2Walker = join(realHelpersDir, "zz-afpl-depth2-walk.ts");
+  const proseHelper = join(realHelpersDir, "zz-afpl-prose-only.ts");
+  const fixtureReader = join(realHelpersDir, "zz-afpl-fixture-read.ts");
+
+  try {
+    // 1. (F1) Depth-2 helper walking root via "../../" (the repo's own depth-2 idiom).
+    await Deno.writeTextFile(
+      depth2Walker,
+      `// Real depth-2 helper walking repo root via ../../\n` +
+        `const root = new URL("../../", import.meta.url);\n` +
+        `export function census() { for (const f of Deno.readDirSync(root)) void f; }\n`,
+    );
+
+    // 2. (F2) Prose-only helper mentioning SCAN_DIRS and git ls-files in comments.
+    await Deno.writeTextFile(
+      proseHelper,
+      `// Shared helper. Deliberately does NOT shell out to git ls-files; it reads two files.\n` +
+        `// See SCAN_DIRS and GUARD_ROOTS for context.\n` +
+        `export function add(a: number, b: number): number { return a + b; }\n`,
+    );
+
+    // 3. Over-match negative: fixture-reading helper.
+    await Deno.writeTextFile(
+      fixtureReader,
+      `import { join } from "node:path";\nconst ROOT = "/repo";\n` +
+        `export function list() { for (const f of Deno.readDirSync(join(ROOT, "tests", "fixtures"))) void f; }\n`,
+    );
+
+    const scanned = sharedSupportFiles();
+    const named = findUnclassifiedSourceScanners(scanned, new Set());
+
+    // (F1) Depth-2 helper MUST be named by the real-tree scan:
+    assertEquals(
+      named.includes("tests/helpers/zz-afpl-depth2-walk.ts"),
+      true,
+      `REAL-TREE: a depth-2 repo-walking helper must be SCANNED and NAMED: ${JSON.stringify(named)}`,
+    );
+
+    // ...and the audit must provide actionable guidance:
+    const guidance = formatUnclassifiedScannersMessage(named);
+    assertStringIncludes(guidance, "zz-afpl-depth2-walk.ts", "the guidance must name the module");
+    assertStringIncludes(guidance, "Move the walk into the test file", "the guidance must say what to do");
+    assertStringIncludes(guidance, "can never be an ALWAYS_ON member", "the guidance must say why not");
+
+    // (F2) Prose-only helper MUST NOT be flagged as unclassified:
+    assertEquals(
+      named.includes("tests/helpers/zz-afpl-prose-only.ts"),
+      false,
+      `REAL-TREE: a support module with prose mentioning SCAN_DIRS/git ls-files must NOT be flagged: ${JSON.stringify(named)}`,
+    );
+
+    // Fixture reader MUST NOT be admitted:
+    assertEquals(
+      named.includes("tests/helpers/zz-afpl-fixture-read.ts"),
+      false,
+      `REAL-TREE: a fixture-walking helper must NOT be admitted: ${JSON.stringify(named)}`,
+    );
+  } finally {
+    try { await Deno.remove(realHelpersDir, { recursive: true }); } catch { /* ignore */ }
+  }
+});
+
+// chrome-agent-platform-afpl — scratch-tree coverage proof, in BOTH directions and against a REAL file.
 // Uses an isolated scratch tree in durableDir("scratch") so the test never writes untracked files into
 // the tracked repository (preventing concurrent test race conditions and SIGKILL residue).
 Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fixture-walking helper is NOT admitted", async () => {
