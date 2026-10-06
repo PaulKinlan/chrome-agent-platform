@@ -195,10 +195,23 @@ Deno.test("bgagent delete: sidepanel routes through background-agent.delete with
 Deno.test("bgagent delete: the service-worker exposes the non-blocking routes", async () => {
   const src = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   assertMatch(src, /async "task\.cancelBackground"\(/, "task.cancelBackground must exist");
-  // background-agent.delete tears the schedule down NON-BLOCKING (instant-delete contract)
+  // background-agent.delete tears the schedule down NON-BLOCKING (instant-delete contract).
+  //
+  // chrome-agent-platform-4h47, repaired by the merger: this used to allow 2000 CHARACTERS between
+  // the handler and the call. 4h47 correctly made the owner-approval gate the FIRST thing the route
+  // does (plus the comment explaining the disposition), which pushed the teardown to 2149 characters
+  // and redded this pin — a proximity window is a PROXY for the property, and the property is intact:
+  // the gate returns early only for a non-owner, and the approved/owner path still marks the payload
+  // cancelling DURABLY before responding. Scoping the assertion to the handler's OWN BODY is both
+  // faithful and STRONGER than the window: it cannot be satisfied by a call in a different route, and
+  // it survives any amount of preamble. (The pin's message is unchanged, because its meaning is.)
+  const handlerStart = src.indexOf('async "background-agent.delete"(');
+  assert(handlerStart >= 0, "the background-agent.delete handler must exist");
+  const nextHandler = src.indexOf('\n  async "', handlerStart + 1);
+  const deleteHandlerBody = src.slice(handlerStart, nextHandler === -1 ? undefined : nextHandler);
   assertMatch(
-    src,
-    /async "background-agent\.delete"\([\s\S]{0,2000}?cancelScheduledTaskBackground\(`skill:\$\{id\}`\)/,
+    deleteHandlerBody,
+    /cancelScheduledTaskBackground\(`skill:\$\{id\}`\)/,
     "background-agent.delete must use the non-blocking cancel",
   );
   // The durable-before-response contract: BOTH routes await the teardown's
@@ -215,8 +228,8 @@ Deno.test("bgagent delete: the service-worker exposes the non-blocking routes", 
     "background-agent.delete must await the durable mark before responding",
   );
   assertMatch(
-    src,
-    /async "background-agent\.delete"\([\s\S]{0,2400}?return \{ ok: true, stopping: true \}/,
+    deleteHandlerBody,
+    /return \{ ok: true, stopping: true \}/,
     "background-agent.delete reports the non-blocking shape",
   );
 });
