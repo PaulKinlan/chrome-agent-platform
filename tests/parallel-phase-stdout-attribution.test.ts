@@ -17,12 +17,14 @@ async function drive(site: "run-tests" | "select-tests") {
     `Deno.test("fixture: holds the event loop past the phase bound", async () => {\n` +
       `  await new Promise((resolve) => setTimeout(resolve, 30000));\n});\n`);
   const target = site === "run-tests"
-    ? `import { runParallel } from ${JSON.stringify(join(ROOT, "scripts/run-tests.mjs"))};\n` +
-      `const rc = runParallel([process.argv[2]], { timeoutMs: 2500 });\n`
+    ? `process.env.CAP_PARALLEL_TEST_TIMEOUT_MS = "2500";\n` +
+      `const { main } = await import(${JSON.stringify(join(ROOT, "scripts/run-tests.mjs"))});\n` +
+      `await main([process.argv[2]]);\n` // main exits 124; its CLI-file seam runs just the hung fixture.
     : `process.env.CAP_PARALLEL_TEST_TIMEOUT_MS = "2500";\n` +
       `const { runPartitioned } = await import(${JSON.stringify(join(ROOT, "scripts/select-tests.mjs"))});\n` +
-      `const rc = runPartitioned([process.argv[2]]);\n`;
-  await Deno.writeTextFile(driver, target + `console.log("WEFF_DRIVER_RC=" + rc);\n`);
+      `const rc = await runPartitioned([process.argv[2]]);\n` +
+      `console.log("WEFF_DRIVER_RC=" + rc);\n`;
+  await Deno.writeTextFile(driver, target);
   try {
     // STDERR is deliberately thrown away, not consulted to satisfy assertions.
     const { code, stdout } = await new Deno.Command("node", {
@@ -59,7 +61,7 @@ Deno.test("weff: a symlinked run-tests entry cannot exit green without running t
 for (const site of ["run-tests", "select-tests"] as const) {
   Deno.test(`weff: ${site} parallel timeout names candidates in a STDOUT-ONLY capture`, async () => {
     const { code, out, name } = await drive(site);
-    assertEquals(code, 0, `driver should report its phase result without hiding a crash:\n${out}`);
+    assertEquals(code, site === "run-tests" ? 124 : 0, `driver must report the timed-out phase result:\n${out}`);
     const prefix = site + ":";
     const notice = `${prefix} parallel phase TIMED OUT after`;
     const block = `${prefix} TIMED-OUT PARALLEL PHASE CANDIDATE FILE(S)`;
@@ -69,7 +71,11 @@ for (const site of ["run-tests", "select-tests"] as const) {
     assertStringIncludes(out, block, `stdout must carry the named timeout block:\n${out}`);
     assertStringIncludes(out.slice(out.indexOf(block)), name, `the block itself must name its candidate:\n${out}`);
     assertStringIncludes(out, "culprit unconfirmed", `do not call every parallel candidate a proven failure:\n${out}`);
-    assertStringIncludes(out, "WEFF_DRIVER_RC=124", `the fixture must actually hit the phase timeout:\n${out}`);
+    if (site === "run-tests") {
+      assertStringIncludes(out, "run-tests: 1 files total", `the full-gate CLI-file path must reach its summary:\n${out}`);
+    } else {
+      assertStringIncludes(out, "WEFF_DRIVER_RC=124", `the selector fixture must hit its phase timeout:\n${out}`);
+    }
     assert(!out.includes(`${site === "run-tests" ? "select-tests" : "run-tests"}: parallel phase TIMED OUT after`),
       `the other site's notice must not satisfy this pin:\n${out}`);
   });

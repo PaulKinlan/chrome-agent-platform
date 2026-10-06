@@ -37,7 +37,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { partition } from "./test-partition.mjs";
-import { runSerialFiles } from "./lib/serial-phase.mjs";
+import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -454,6 +454,9 @@ export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
 const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_MS ?? DEFAULT_PARALLEL_TIMEOUT_MS);
 
 function runPhase(files, flags, label, timeoutMs = 300_000) {
+  // Deno schedules parallel files independently; print candidate names first
+  // so a mid-phase kill retains attribution without falsely naming a culprit.
+  announce(`select-tests: ${label} candidates (${files.length} file(s)):\n${files.map((file) => `  - ${file}`).join("\n")}`);
   const t0 = Date.now();
   return new Promise((resolve) => {
     const child = spawn("deno", ["test", "-A", "--config", "deno.runner.jsonc", ...flags, ...files], {
@@ -500,7 +503,9 @@ function runPhase(files, flags, label, timeoutMs = 300_000) {
     child.on("close", (code, signal) => {
       cleanup();
       if (timedOut) {
-        console.error(`select-tests: ${label} TIMED OUT after ${timeoutMs / 1000}s`);
+        announce(`select-tests: ${label} TIMED OUT after ${timeoutMs / 1000}s`);
+        announce(`select-tests: TIMED-OUT ${label.toUpperCase()} CANDIDATE FILE(S) (culprit unconfirmed):`);
+        for (const file of files) announce(`  - ${file} (${label} timed out; individual culprit unknown)`);
         resolve(124);
         return;
       }
