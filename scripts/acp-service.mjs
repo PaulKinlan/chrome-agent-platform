@@ -1,9 +1,14 @@
 // scripts/acp-service.mjs — run the ACP bridge as a background service so there
 // is no CLI to babysit. macOS: a launchd LaunchAgent (starts at login, restarts
 // on crash). Linux: a systemd --user unit (same). One install, then the browser
-// just connects to ws://127.0.0.1:3210/acp.
+// connects to ws://127.0.0.1:3210/acp AND presents the bridge's shared secret:
+// authentication is required on EVERY upgrade (chrome-agent-platform-jsjy), so
+// paste the token into the extension's acp.token setting as well as the endpoint.
 //
 //   node scripts/acp-service.mjs install [--harness pi] [--port 3210] [--token SECRET]
+//     --token is optional: without it the bridge GENERATES a secret on first start and
+//     persists it (default $XDG_CONFIG_HOME/cap-acp/bridge-token, mode 0600), and the
+//     status line below says so. There is no unauthenticated mode.
 //   node scripts/acp-service.mjs status
 //   node scripts/acp-service.mjs uninstall
 //   node scripts/acp-service.mjs logs        (tail the bridge log)
@@ -37,6 +42,15 @@ const ACTION = args._[0] || "status";
 let HARNESS = String(args.harness || ""); // "" = resolve from what this machine has (never a binary it lacks)
 const PORT = String(args.port || "3210");
 const TOKEN = args.token ? String(args.token) : "";
+
+/** jsjy: the bridge requires a secret on every upgrade whether or not the operator passed --token —
+ *  without one it GENERATES and persists a token, so "no token" no longer means "no auth". Say which
+ *  case this install is in, and name the file, so the operator can find the value to paste. */
+function tokenNote() {
+  return TOKEN
+    ? " · token required (the --token you installed)"
+    : " · token required (generated + persisted in $XDG_CONFIG_HOME/cap-acp/bridge-token; paste it into acp.token)";
+}
 // The working directory the service hands the adapter. NOT defaulted at all: the
 // caller declares one or the adapter reports it. A tool must not carry a directory
 // convention (chrome-agent-platform-7p7e: the old default invented
@@ -181,7 +195,7 @@ function installMac() {
   try { run("launchctl", ["unload", plist]); } catch { /* not loaded yet */ }
   run("launchctl", ["load", plist]);
   console.log(`installed ${plist}`);
-  console.log(`harness ${HARNESS} · port ${PORT}${TOKEN ? " · token required" : ""} · logs: ${LOG}`);
+  console.log(`harness ${HARNESS} · port ${PORT}${tokenNote()} · logs: ${LOG}`);
   console.log(`captured PATH: ${process.env.PATH || "(default)"}`);
 }
 
@@ -209,7 +223,7 @@ WantedBy=default.target
   run("systemctl", ["--user", "enable", "--now", "cap-acp-bridge.service"]);
   console.log(`installed ${unit} (enabled + started)`);
   console.log(`captured PATH: ${process.env.PATH || "(default)"}`);
-  console.log(`harness ${HARNESS} · port ${PORT}${TOKEN ? " · token required" : ""}`);
+  console.log(`harness ${HARNESS} · port ${PORT}${tokenNote()}`);
   console.log("logs: journalctl --user -u cap-acp-bridge -f");
 }
 
