@@ -39,7 +39,7 @@ Component map, with the file that owns each surface:
 
 | Component | Where | Notes |
 |---|---|---|
-| Service worker (the privileged broker) | `extension/background/service-worker.js:11849` | the ONE `chrome.runtime.onMessage` listener; 260 registered routes |
+| Service worker (the privileged broker) | `extension/background/service-worker.js:11923` | the ONE `chrome.runtime.onMessage` listener; 260 registered routes |
 | Route modules | `extension/background/routes/` | dispatched through `mergeRouteMaps` (census §2) |
 | New-tab hub / Settings / side panel | `extension/ntp/`, `extension/options/`, `extension/sidepanel/` | extension documents; principal `extension` / `owner-options` |
 | Offscreen document | `extension/offscreen/offscreen.js` | one document multiplexes five subsystems (register R12) |
@@ -67,10 +67,10 @@ Component map, with the file that owns each surface:
 - **TB2 — The service worker is the privileged broker.** No other component may reach
   storage, OPFS, providers or browser control directly: the content-script realm may
   reach exactly eight routes (`extension/lib/pure.js:1178-1187`) and every other route
-  is refused at the listener (`extension/background/service-worker.js:11879-11883`).
+  is refused at the listener (`extension/background/service-worker.js:11953-11957`).
   The receiver's authority is derived from the BROWSER-ATTESTED `sender`, never from the
-  message body (`extension/background/service-worker.js:11861-11866`, `:11886`,
-  `:11895-11905`).
+  message body (`extension/background/service-worker.js:11935-11940`, `:11960`,
+  `:11969-11979`).
 - **TB3 — The two provider paths.** Path A sends the conversation from the service
   worker directly to a hosted provider host, listed exhaustively in `OUTBOUND_HOSTS`
   (`extension/lib/provider-catalog.js:111`, pinned by `tests/privacy-statement.test.ts`);
@@ -158,7 +158,7 @@ should reason about; the threats that use them are in sections 5 and 6.
 
 | ID | Surface | Where it enters | What is hostile about it |
 |---|---|---|---|
-| S1 | Page content and page messages | `extension/background/service-worker.js:11849` listener; page routes at `extension/lib/pure.js:1178-1187` | a page may call any of the eight allowed routes for its OWN origin, and may put anything in the message body |
+| S1 | Page content and page messages | `extension/background/service-worker.js:11923` listener; page routes at `extension/lib/pure.js:1178-1187` | a page may call any of the eight allowed routes for its OWN origin, and may put anything in the message body |
 | S2 | WebMCP tool descriptors and tool results | `extension/lib/tools.js:511`, `extension/lib/webmcp-authority.js:68` | a site authors its own tool schema and result text |
 | S3 | Model output (tool calls and prose) | `extension/lib/lazy-tool-protocol.js:1`, `extension/lib/untrusted-fence.js:59` | a steered model calls real tools |
 | S4 | Tool results rendered into the transcript | `extension/shared/components.js:566` (`renderHtmlFrame`) | an artifact body or fetched body is untrusted HTML |
@@ -190,8 +190,8 @@ consequences are carried by the matching register entry where one exists.
 ### T2. Sender-origin spoofing by a content script
 
 - **Boundary:** TB2. **Evidence:** `extension/lib/pure.js:912-950` (the classifier),
-  `extension/background/service-worker.js:11886` (the receiver OVERWRITES `message.origin`
-  with the browser-derived origin) and `:11879-11883` (route allowlist). **Answer:** the
+  `extension/background/service-worker.js:11960` (the receiver OVERWRITES `message.origin`
+  with the browser-derived origin) and `:11953-11957` (route allowlist). **Answer:** the
   origin comes from the sender, never from the body; a claimed-origin mismatch is
   refused. **Live proof:** `scripts/security-suite.ts:306-308` (a page MAIN world has no
   `chrome.runtime` at all) and `docs/CONSTITUTION.md:17`.
@@ -211,9 +211,9 @@ consequences are carried by the matching register entry where one exists.
 
 - **Boundary:** TB2. **Evidence:** `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` §4.9 — 31
   routes mutate persistent state with no route-local principal check and no approval
-  gate (for example `named-agent.set-tools` at `extension/background/service-worker.js:8048`
-  and `background-agent.delete` at `:10616`). **Answer:** the central listener refuses every
-  non-page-allowed route to page senders (`extension/background/service-worker.js:11879`),
+  gate (for example `named-agent.set-tools` at `extension/background/service-worker.js:8087`
+  and `background-agent.delete` at `:10655`). **Answer:** the central listener refuses every
+  non-page-allowed route to page senders (`extension/background/service-worker.js:11953`),
   so the class is reachable only from extension principals. **Register:** R11.
 
 ### T5. Sandbox escape and network egress from the script sandbox
@@ -295,7 +295,7 @@ consequences are carried by the matching register entry where one exists.
   owner-approval seam invoked at `:550` (it was `:516` before 51cd). `hooks.subscribe` is
   classified approval-required in the dispatch census §4.4 and in
   `tests/owner-approval-classification.test.ts:25`.
-- **Evidence pin: `origin/main@eb59da7e`.** The file:line citations in this threat (and in
+- **Evidence pin: `origin/main@213bafbc`.** The file:line citations in this threat (and in
   the S12 row above) were re-read against that tree. They MOVED off the document pin when
   4h47 and hlgr landed after 51cd — the `subscribeHook` declaration, the `service-worker.js`
   route and the classification test line all shifted. Treat the named symbol as the anchor
@@ -365,7 +365,7 @@ These are the properties a change must not break. Each is stated so it can be fa
 and each names the executable check that would catch a regression.
 
 - **INV-1 — Authority is derived from the browser-attested sender, never from the body.**
-  `extension/background/service-worker.js:11861-11866`, `:11886`, `:11895`;
+  `extension/background/service-worker.js:11935-11940`, `:11960`, `:11969`;
   `scripts/security-suite.ts:306-308`. A new route that reads an origin, tab id or
   document id out of the message body breaks this.
 - **INV-2 — The page-reachable route set is closed and tiny.**
