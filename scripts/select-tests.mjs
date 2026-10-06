@@ -3,6 +3,9 @@
 //   node scripts/select-tests.mjs            run the subset: `deno test -A <files>`
 //   node scripts/select-tests.mjs --list     print the selected test files, one per line
 //   node scripts/select-tests.mjs --core     run the always-on core only (security/vocabulary)
+//   node scripts/select-tests.mjs --always-on   run EXACTLY the always-on set (core + source-inspecting
+//                                                guards) — the set a subset gate cannot be trusted to
+//                                                cover (chrome-agent-platform-kz27)
 //   node scripts/select-tests.mjs --base <ref>   compare against <ref> instead of origin/main
 //
 // WHY: the full suite (321 files) is the merge gate and stays exactly as it is
@@ -69,7 +72,49 @@ export const SOURCE_INSPECTING_GUARDS = [
   "tests/source-materialization.test.ts",
   "tests/source-inspecting-tests-guard.test.ts",
   "tests/postmessage-wildcard-guard.test.ts",
+  // chrome-agent-platform-kz27 — FOUR tree-walking guards were missing from this list, which is the
+  // third shape of the blind spot that bead names: a guard everyone BELIEVES is always-on, simply not
+  // in the set. tests/durable-root.test.ts is the measured case, and the cost was concrete: it sat
+  // outside, so test:changed selected it in NONE of the night's gates, and its violation lived on
+  // main through three of them while each gate reported green. The other three were found by widening
+  // the qcfc audit's detector to the shape that actually matters — a walk ROOTED AT THE REPO TREE —
+  // rather than "uses a directory API", which a dozen fixture-reading tests do harmlessly.
+  "tests/durable-root.test.ts",
+  "tests/chrome-profile-location.test.ts",
+  "tests/dialog-confirm-modernization.test.ts",
+  "tests/single-source-helpers.test.ts",
 ];
+
+/**
+ * The always-on guard files that exist on disk (chrome-agent-platform-kz27).
+ * Exposed because a SUBSET gate cannot see them: they have no static import edges, so a FAIL-CLOSED
+ * selector, a focused test:file run, and a serial failure that skips the parallel phase each hide
+ * them. Whatever else a gate does, a lane must be able to run exactly this set.
+ */
+export function alwaysOnGuards() {
+  return ALWAYS_ON.filter((f) => existsSync(join(ROOT, f)));
+}
+
+/**
+ * What a FAIL-CLOSED selection must do (chrome-agent-platform-kz27). Pure and exported so the
+ * regression test can prove the always-on guard set is SURFACED rather than asserting the shape of a
+ * print statement: a lane told only "FULL_SUITE" has no way to learn which guards it just failed to
+ * run, which is exactly how the jfbn and fyvc violations reached main.
+ * @returns {{ output: string[], action: "list" | "run" }}
+ */
+export function failClosedPlan({ uncovered, list }) {
+  const guards = alwaysOnGuards();
+  return {
+    action: list ? "list" : "run",
+    output: [
+      `select-tests: FAIL CLOSED — changed file(s) with no reachable test cannot be proved covered by a subset:`,
+      ...uncovered.map((f) => `  ${f}`),
+      `Running the FULL suite (npm test) instead.`,
+      `select-tests: THE ALWAYS-ON GUARD SET (${guards.length} files) IS NOT COVERED BY A SUBSET GATE — run these explicitly if you cannot run the full suite:`,
+      ...guards.map((f) => `  ${f}`),
+    ],
+  };
+}
 
 export const ALWAYS_ON = Object.freeze([
   ...CORE,
@@ -328,9 +373,18 @@ function main() {
   const args = process.argv.slice(2);
   const list = args.includes("--list");
   const coreOnly = args.includes("--core");
+  const alwaysOnOnly = args.includes("--always-on");
   const baseIdx = args.indexOf("--base");
   const base = baseIdx >= 0 ? args[baseIdx + 1] : "origin/main";
 
+  if (alwaysOnOnly) {
+    // EXACTLY the always-on set (core + source-inspecting guards), runnable on its own
+    // (chrome-agent-platform-kz27): a guard result must never depend on a subset gate selecting it.
+    const files = alwaysOnGuards();
+    if (list) console.log(files.join("\n"));
+    else runDeno(files);
+    return;
+  }
   if (coreOnly) {
     const files = CORE.filter((c) => existsSync(join(ROOT, c)));
     if (list) console.log(files.join("\n"));
@@ -342,10 +396,9 @@ function main() {
   const reverse = changed.length ? buildReverseGraph() : null;
   const uncovered = changed.length ? changedWithoutCoverage(changed, reverse) : [];
   if (uncovered.length) {
-    console.error(
-      `select-tests: FAIL CLOSED — changed file(s) with no reachable test cannot be proved covered by a subset:\n  ${uncovered.join("\n  ")}\nRunning the FULL suite (npm test) instead.`,
-    );
-    if (list) console.log("FULL_SUITE");
+    const plan = failClosedPlan({ uncovered, list });
+    console.error(plan.output.join("\n"));
+    if (plan.action === "list") console.log("FULL_SUITE");
     else runFullSuite();
     return;
   }

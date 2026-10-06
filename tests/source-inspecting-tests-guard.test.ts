@@ -66,6 +66,17 @@ export function findUnclassifiedSourceScanners(
     /filesUnder\s*\(/i,
     /extractAllRegisteredRoutes/i,
     /git\s+ls-files/i,
+    // chrome-agent-platform-kz27: the four patterns above missed a whole SHAPE of guard — one that
+    // WALKS the repository tree to read tracked source as data. That is how tests/durable-root.test.ts
+    // sat outside ALWAYS_ON while three separate gates failed to select it, and a violation lived on
+    // main through all three. "Uses a directory API" is deliberately NOT the signal: a dozen tests
+    // read their own temp fixtures that way and belong in neither set. The signal is a walk rooted at
+    // the repo tree, which a fixture reader does not do.
+    /walk\(\s*`\$\{ROOT\}/,
+    /walk\(\s*ROOT\b/,
+    /readDirSync\(\s*ROOT\b/,
+    /readDirSync\(\s*join\(\s*ROOT\b/,
+    /GUARD_ROOTS/,
   ];
 
   for (const { rel, code } of testFiles) {
@@ -103,12 +114,19 @@ Deno.test("qcfc: falsification: unclassified source scanner fails the audit clos
       rel: "tests/fake-unclassified-scanner.test.ts",
       code: `const SCAN_DIRS = ["scripts", "tests"];\nasync function filesUnder() {}`,
     },
+    {
+      // kz27: the REPO-WALK shape specifically — a walk rooted at ROOT. This is the shape that shipped
+      // OUTSIDE ALWAYS_ON (tests/durable-root.test.ts), so the audit must catch it and not only the
+      // SCAN_DIRS/filesUnder family above.
+      rel: "tests/fake-unlisted-walk-scanner.test.ts",
+      code: `const ROOT = fileURLToPath(new URL("..", import.meta.url));\nfor (const e of Deno.readDirSync(ROOT)) { if (e.isDirectory) walk(ROOT); }`,
+    },
   ];
   const alwaysOnSet = new Set(["tests/security.test.ts"]);
   const unclassified = findUnclassifiedSourceScanners(fakeTests, alwaysOnSet);
   assertEquals(
     unclassified,
-    ["tests/fake-unclassified-scanner.test.ts"],
-    "Audit must catch unclassified source scanners",
+    ["tests/fake-unclassified-scanner.test.ts", "tests/fake-unlisted-walk-scanner.test.ts"],
+    "Audit must catch unclassified source scanners, including a REPO-WALK scanner (kz27)",
   );
 });

@@ -58,8 +58,19 @@ function runParallel(files) {
   return r.status ?? 1;
 }
 
+import { ALWAYS_ON } from "./select-tests.mjs";
+import { parallelPlan } from "./lib/parallel-plan.mjs";
+
+// chrome-agent-platform-kz27: the parallel phase used to be conditional on the serial phase
+// (`if (rc === 0) …`), which meant ONE serial failure SKIPPED the ~500-file parallel phase — and the
+// always-on guards live there. So a guard violation could sit on main while the gate reported the
+// guards green, because they never ran. The plan is pure and lives in scripts/lib/parallel-plan.mjs;
+// here we only print what it decides and let the serial failure still decide the exit code.
 const t0 = Date.now();
-let rc = runSerialFiles([...SERIAL]);
-if (rc === 0) rc = runParallel(parallel);
-console.log(`run-tests: ${all.length} files total, wall ${((Date.now() - t0) / 1000).toFixed(0)}s`);
+const serialRc = runSerialFiles([...SERIAL]);
+const plan = parallelPlan({ serialRc, parallel, alwaysOn: ALWAYS_ON });
+if (plan.announce) console.error(`\n${plan.announce}`);
+const parallelRc = runParallel(plan.files);
+const rc = serialRc === 0 ? parallelRc : serialRc;
+console.log(`run-tests: ${all.length} files total, ${plan.skipped} skipped, wall ${((Date.now() - t0) / 1000).toFixed(0)}s`);
 process.exit(rc);
