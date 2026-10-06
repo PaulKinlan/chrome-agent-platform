@@ -169,6 +169,13 @@ and landed. That recurrence is the defect this class fixes: the adjudication now
 where the auditors read. Cite the entry; do not re-derive it. `THREAT_MODEL.md` §7 is the
 threat-model half of the same list.
 
+A decision that was adjudicated and has SINCE been ENFORCED is not an entry here: it is a
+delivered control, and it belongs in `THREAT_MODEL.md` beside the assertions that falsify
+it. The `hooks.subscribe` first-time create gate (`chrome-agent-platform-51cd`, merge
+`2b4da1f3`; `THREAT_MODEL.md` T13) is recorded that way and deliberately NOT as an
+R-number — a class that mixed withheld decisions with enforced controls would stop meaning
+"cite this and move on", which is the only thing it is for.
+
 ### R22 (M). The shared sender classifier's extension default is a WITHHELD hardening (lw6d)
 - **Risk:** `authorizeToolReport` (`extension/lib/pure.js:912`) returns `{ kind: "extension" }` for any sender that is not a browser-attested content script and carries no tab URL (`extension/lib/pure.js:934`). A synthetic sender — a foreign extension id with an `https://attacker.example/` url, `origin: "https://attacker.example"` and no `tab` — therefore classifies as an INTERNAL extension document, which would reach every route including the 31 unclassified mutations of R11 without a page-origin fence. No route-local principal check stands between that classification and those mutations.
 - **Lives at:** `extension/lib/pure.js:934` (the `{ kind: "extension" }` default), `extension/lib/pure.js:912` (`authorizeToolReport`), `extension/background/service-worker.js:11861` (the one listener that feeds it the browser-attested sender).
