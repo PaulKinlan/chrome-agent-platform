@@ -208,7 +208,7 @@ auth) merged with fail-closed duplicate detection
 `run-task`, `run.cancel` (service-worker.js:7791, owner/extension principals
 only), `run.resume` (:7802), `run.logs` (:7995), `agent.delegate` — are still
 inline in service-worker.js. routes/ROUTE_MAP.md documents the complete
-258-route population (audited in docs/SW-DISPATCH-AUTHORITY-CENSUS.md).
+285-route population (audited in docs/SW-DISPATCH-AUTHORITY-CENSUS.md).
 
 ### 2.2 The agent-worker protocol
 Per-agent SharedWorkers (hosted by the offscreen doc, §1.3) execute agent loops

@@ -7,9 +7,9 @@ This document records the assignment of service-worker message routes to their o
 2. **Central Dispatcher (`dispatchRoute`)**: Performs route handler lookup, `__`-prefix / `userActivation` body parameter scrubbing, and `__sender` injection.
 3. **Route Modules (`extension/background/routes/*.js`)**: Export frozen route maps containing pure handler functions. Modules never duplicate the central dispatcher, listener, or allowlist seams.
 
-## Route Map Inventory (Comprehensive Census — 258 Routes)
+## Route Map Inventory (Comprehensive Census — 285 Routes)
 
-See `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` for the exhaustive authority classification across all 258 routes.
+See `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` for the exhaustive authority classification across all 285 routes. Argument indexes below are zero-based positions in `service-worker.js`'s `mergeRouteMaps`; `tests/sw-dispatch-authority-census.test.ts` checks them against the executable composition.
 
 | Module / Scope | Route Count | Routes Included | Gating / Authority Model |
 |---|---|---|---|
@@ -25,6 +25,10 @@ See `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` for the exhaustive authority classifi
 | `routes/scheduler.js` | 5 | `schedules.list`, `task.pause`, `task.resume`, `task.update`, `task.retry` | Mutation routes gated by `requireOwnerApproval` (`OWNER_DIRECT_ACTIONS`) |
 | `routes/agent-worker.js` | 10 | `agent-worker.ensure`, `agent-worker.run`, `agent-worker.dispatch`, `agent-worker.tool`, `agent-worker.alive`, `agent-worker.close`, `agent-worker.steer`, `agent-worker.progress`, `agent-worker.result`, `agent-worker.journal-append` | Offscreen agent worker RPC bridge; internal coordination |
 | `extension/lib/agent-board.js` (`boardRoutes.routes`) | 13 | `board.post`, `board.wake`, `board.claim`, `board.complete`, `board.fail`, `board.heartbeat`, `board.list`, `board.messages`, `board.read`, `board.message`, `board.deny.add`, `board.deny.remove`, `board.deny.list` | Multi-agent task board state machine; model/extension principal |
-| `service-worker.js` (inline arg[8]) | 17 | `table.run`, `tool-stream.*` (12 routes), `observability.page-measures`, `observability.setVerbosity`, `diagnostics.report`, `security.state` | `table.run` requires live agent run; `tool-stream.*` requires Settings document ID via `wasmStreamOwner` |
-| `service-worker.js` (inline arg[13]) | 177 | Approval-gated mutations (agent/asset/script/browser/hooks/workflows), Settings-only routes, extension-only management, task execution, WebMCP, and query routes | See `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` for per-route classification |
-| **Total Registered Routes** | **258** | Complete population verified by `tests/sw-dispatch-authority-census.test.ts` | Complete census |
+| `routes/vault.js` (`vaultRoutes`, arg[0]) | 7 | `vault.status`, `vault.set`, `vault.configureProxy`, `vault.rotate`, `vault.delete`, `vault.ledger.clear`, `vault.test` | Settings-only via `requireSettingsSender` |
+| `routes/enclave-proxy.js` (`enclaveProxyRoutes`, arg[1]) | 1 | `enclave.proxy` | Owner extension fence or trusted SW internal caller |
+| `service-worker.js` (`enclaveStatusRoutes`, arg[2]) | 1 | `enclave.status` | Settings-only |
+| `service-worker.js` (inline arg[3]) | 7 | `browser.callTool`, `onDeviceText.summarize`, `onDeviceText.detectLanguage`, `onDeviceText.translate`, `onDeviceText.availability`, `clipboard.write`, `write_clipboard` | See census for per-route authority |
+| `service-worker.js` (inline arg[12]) | 24 | `table.run`, `tool-stream.input.create`, `tool-stream.input.append`, `tool-stream.input.seal`, `tool-stream.run`, `tool-stream.output.read`, `tool-stream.output.receipt`, `tool-stream.remove`, `actions.list`, `actions.undo`, `cap:fetch`, `python.fetch`, `python.network.grants`, `python.network.grant`, `python.network.revoke`, `wheel.list`, `wheel.put`, `wheel.delete`, `capabilities.status`, `notifications.list`, `notification.get`, `notification.dismiss`, `alarms.permission-granted`, `capability.revoke` | Mixed authority; see census for each route |
+| `service-worker.js` (inline arg[17]) | 181 | Approval-gated mutations (agent/asset/script/browser/hooks/workflows), Settings-only routes, extension-only management, task execution, WebMCP, and query routes | See `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` for per-route classification |
+| **Total Registered Routes** | **285** | Complete population verified by `tests/sw-dispatch-authority-census.test.ts` | Complete census |

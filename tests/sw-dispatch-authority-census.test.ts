@@ -12,9 +12,10 @@
 //   6. The document's §3/§4 categories exactly match the tested classifications (4h47).
 //   7. Each §4.3/§4.4 handler reaches its declared approval seam and owner-direct policy (gn3c).
 //   8. Deleting a route seam or its injection fails RED naming the route (gn3c).
+//   9. Every mergeRouteMaps group and companion R11/ROUTE_MAP/threat counts stay in sync (zb58).
 
 import { fileURLToPath } from "node:url";
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import * as acorn from "npm:acorn";
 import { PAGE_ALLOWED_ROUTES } from "../extension/lib/pure.js";
 import { OWNER_DIRECT_ACTIONS, DESTRUCTIVE_ACTIONS } from "../extension/lib/owner-approval.js";
@@ -144,8 +145,9 @@ export const CENSUS_CATEGORIES = {
   ]),
 };
 
-function extractAllRegisteredRoutes(): Set<string> {
-  const swSrc = Deno.readTextFileSync(`${ROOT}extension/background/service-worker.js`);
+function extractAllRegisteredRoutes(
+  swSrc = Deno.readTextFileSync(`${ROOT}extension/background/service-worker.js`),
+): Set<string> {
   const ast = acorn.parse(swSrc, { ecmaVersion: "latest", sourceType: "module" }) as any;
 
   let mergeCall: any = null;
@@ -186,7 +188,8 @@ function extractAllRegisteredRoutes(): Set<string> {
   const keysOfObjectExpression = (node: any): string[] => {
     const keys: string[] = [];
     for (const prop of node.properties) {
-      if (prop.type !== "Property") continue;
+      assert(prop.type === "Property", `mergeRouteMaps object contains unsupported ${prop.type}; route keys cannot be skipped`);
+      assert(prop.key.type === "Literal" || prop.key.type === "Identifier", `mergeRouteMaps object contains computed key ${prop.key.type}`);
       keys.push(prop.key.type === "Literal" ? String(prop.key.value) : prop.key.name);
     }
     return keys;
@@ -263,13 +266,142 @@ Deno.test("census: docs/SW-DISPATCH-AUTHORITY-CENSUS.md exists and is cited", as
   assert(agents.includes("docs/SW-DISPATCH-AUTHORITY-CENSUS.md"), "AGENTS.md must cite census");
 });
 
+// zb58: the route-map inventory was still at 258 after the executable census
+// reached 285. Reconcile each named module/inline row with actual factory keys
+// or service-worker AST keys; do not merely compare two hand-kept doc totals.
+function assertRouteMap(routeMap: string): void {
+  const registered = extractAllRegisteredRoutes();
+  for (const [part, pattern] of [
+    ["title", /## Route Map Inventory \(Comprehensive Census — (\d+) Routes\)/],
+    ["intro", /exhaustive authority classification across all (\d+) routes/],
+    ["total", /\| \*\*Total Registered Routes\*\* \| \*\*(\d+)\*\* \|/],
+  ] as const) {
+    const match = pattern.exec(routeMap);
+    assert(match, `ROUTE_MAP ${part} must state a route total`);
+    assertEquals(Number(match[1]), registered.size, `ROUTE_MAP ${part} must equal registered ${registered.size}`);
+  }
+
+  const sw = Deno.readTextFileSync(`${ROOT}extension/background/service-worker.js`);
+  const ast = acorn.parse(sw, { ecmaVersion: "latest", sourceType: "module" }) as any;
+  const decls = ast.body.flatMap((node: any) => node.type === "VariableDeclaration" ? node.declarations : []);
+  const args = decls.find((decl: any) => decl.id?.name === "handlers")?.init?.arguments;
+  assert(args, "SW handlers must still have mergeRouteMaps arguments");
+  const keys = (arg: any): string[] => arg.properties.map((prop: any) => {
+    assert(prop.type === "Property", `ROUTE_MAP cannot omit spread route group ${prop.type}`);
+    return prop.key.type === "Literal" ? String(prop.key.value) : prop.key.name;
+  });
+  const assertNames = (row: string, cell: string, actual: string[]) => {
+    const listed = [...cell.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+    assertEquals(listed.length, actual.length, `ROUTE_MAP ${row} must list ${actual.length} names once`);
+    for (const name of listed) assert(actual.includes(name), `ROUTE_MAP ${row} lists unknown route ${name}`);
+    for (const name of actual) assert(listed.includes(name), `ROUTE_MAP ${row} omits registered route ${name}`);
+  };
+  let rowTotal = 0;
+  const inline = args.map((arg: any, index: number) => arg.type === "ObjectExpression" ? index : -1).filter((n: number) => n >= 0);
+  const inlineRows = [...routeMap.matchAll(/^\| `service-worker\.js` \(inline arg\[(\d+)\]\) \| (\d+) \| ([^|]+) \|/gm)];
+  assertEquals(inlineRows.map((row) => Number(row[1])), inline, "ROUTE_MAP inline indexes must follow executable composition");
+  for (const row of inlineRows) {
+    const index = Number(row[1]);
+    const actual = keys(args[index]);
+    assertEquals(Number(row[2]), actual.length, `ROUTE_MAP inline arg[${index}] count`);
+    if (actual.length <= 24) assertNames(`inline arg[${index}]`, row[3], actual);
+    rowTotal += Number(row[2]);
+  }
+
+  const modules = new Map<string, string[]>([
+    ["routes/kv.js", Object.keys(kvRoutes)],
+    ["routes/perm-lease.js", Object.keys(permLeaseRoutes)],
+    ["routes/provider.js", Object.keys(createProviderRoutes({}))],
+    ["routes/mcp.js", Object.keys(createMcpRoutes({}))],
+    ["routes/activity.js", Object.keys(createActivityRoutes({}))],
+    ["routes/memory.js", Object.keys(createMemoryRoutes({}))],
+    ["routes/fs-grants.js", Object.keys(createFsGrantRoutes({}))],
+    ["routes/agent-workspace.js", Object.keys(createAgentWorkspaceRoutes())],
+    ["routes/agent-schedule.js", Object.keys(createAgentScheduleRoutes({}))],
+    ["routes/scheduler.js", Object.keys(createSchedulerRoutes({}))],
+    ["routes/agent-worker.js", Object.keys(createAgentWorkerRoutes({}))],
+    ["extension/lib/agent-board.js", Object.keys(createAgentBoardRoutes({}).routes)],
+    ["routes/vault.js", Object.keys(createVaultRoutes({ vault: { listMasked: () => [] }, requireSettingsSender: () => {}, storageArea: null }))],
+    ["routes/enclave-proxy.js", Object.keys(createEnclaveProxyRoutes({ vault: { getSecretRaw: () => null } }))],
+  ]);
+  const moduleRows = [...routeMap.matchAll(/^\| `((?:routes\/|extension\/lib\/)[^`]+)`(?: \([^|]+\))? \| (\d+) \| ([^|]+) \|/gm)];
+  assertEquals(moduleRows.map((row) => row[1]), [...modules.keys()], "ROUTE_MAP must list all composed route modules once");
+  for (const row of moduleRows) {
+    const actual = modules.get(row[1])!;
+    assertEquals(Number(row[2]), actual.length, `ROUTE_MAP ${row[1]} count`);
+    assertNames(row[1], row[3], actual);
+    rowTotal += Number(row[2]);
+  }
+
+  const statusRow = /^\| `service-worker\.js` \(`enclaveStatusRoutes`, arg\[(\d+)\]\) \| (\d+) \| ([^|]+) \|/m.exec(routeMap);
+  assert(statusRow, "ROUTE_MAP must name the enclaveStatusRoutes group");
+  const statusIndex = Number(statusRow[1]);
+  assertEquals(args[statusIndex]?.name, "enclaveStatusRoutes", "ROUTE_MAP enclaveStatusRoutes index must match AST");
+  const status = decls.find((decl: any) => decl.id?.name === "enclaveStatusRoutes")?.init;
+  assertEquals(status?.type, "ObjectExpression", "enclaveStatusRoutes must remain an AST-readable route map");
+  const statusKeys = keys(status);
+  assertEquals(Number(statusRow[2]), statusKeys.length, "ROUTE_MAP enclaveStatusRoutes count");
+  assertNames("enclaveStatusRoutes", statusRow[3], statusKeys);
+  rowTotal += Number(statusRow[2]);
+  assertEquals(rowTotal, registered.size, "ROUTE_MAP row counts must sum to registered population");
+}
+
+function assertRiskAndThreatPopulation(risks: string, threat: string): void {
+  const r11 = /^### R11[^\n]*\n([\s\S]*?)(?=^---|^### R12)/m.exec(risks)?.[1];
+  assert(r11, "RISK-REGISTER R11 section must exist");
+  const unclassified = CENSUS_CATEGORIES.UNCLASSIFIED_MUTATIONS;
+  const examples = /For example, ([^\n]+)$/.exec(r11.split("\n").find((line) => line.includes("For example,")) ?? "")?.[1] ?? "";
+  const listed = [...examples.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+  assertEquals(listed.length, 2, "RISK-REGISTER R11 must name two example routes");
+  assertEquals(new Set(listed).size, 2, "RISK-REGISTER R11 examples must be distinct");
+  for (const name of listed) assert(unclassified.has(name), `RISK-REGISTER R11 example route ${name} is not unclassified`);
+  assert(CENSUS_CATEGORIES.OWNER_APPROVAL_DIRECT.has("background-agent.delete"), "R11's former deletion example must now be owner-direct");
+  for (const [place, pattern, expected] of [
+    ["R11 risk", /lists (\d+) unclassified mutation routes/, unclassified.size],
+    ["R11 other routes", /other (\d+) routes in §4\.9/, unclassified.size - listed.length],
+    ["R11 open question", /all (\d+) unclassified mutation routes/, unclassified.size],
+  ] as const) {
+    const match = pattern.exec(r11);
+    assert(match, `RISK-REGISTER ${place} must state a population`);
+    assertEquals(Number(match[1]), expected, `RISK-REGISTER ${place} population`);
+  }
+  const registered = extractAllRegisteredRoutes().size;
+  for (const [place, pattern, expected] of [
+    ["component map", /Service worker \(the privileged broker\)[^\n]*; (\d+) registered routes/, registered],
+    ["dispatch census", /the (\d+)-route dispatch census and its (\d+) unclassified mutations/, registered],
+    ["T4", /The (\d+) unclassified mutation routes \(T4\)/, unclassified.size],
+  ] as const) {
+    const match = pattern.exec(threat);
+    assert(match, `THREAT_MODEL ${place} must state a population`);
+    assertEquals(Number(match[1]), expected, `THREAT_MODEL ${place} population`);
+    if (place === "dispatch census") assertEquals(Number(match[2]), unclassified.size, "THREAT_MODEL dispatch census gap count");
+  }
+}
+
+Deno.test("census: ROUTE_MAP, risk R11, and THREAT_MODEL match executable population", async () => {
+  assertRouteMap(await Deno.readTextFile(`${ROOT}extension/background/routes/ROUTE_MAP.md`));
+  assertRiskAndThreatPopulation(
+    await Deno.readTextFile(`${ROOT}docs/RISK-REGISTER.md`),
+    await Deno.readTextFile(`${ROOT}THREAT_MODEL.md`),
+  );
+});
+
+Deno.test("census: companion-doc total and route-name falsifications RED by document/name", async () => {
+  const map = await Deno.readTextFile(`${ROOT}extension/background/routes/ROUTE_MAP.md`);
+  const risks = await Deno.readTextFile(`${ROOT}docs/RISK-REGISTER.md`);
+  const threat = await Deno.readTextFile(`${ROOT}THREAT_MODEL.md`);
+  assertThrows(() => assertRouteMap(map.replace("**285**", "**284**")), Error, "ROUTE_MAP total");
+  assertThrows(() => assertRouteMap(map.replace("`enclave.proxy`", "`enclave.proxy-renamed`")), Error, "enclave.proxy-renamed");
+  assertThrows(() => assertRiskAndThreatPopulation(risks.replace("37 unclassified mutation routes", "31 unclassified mutation routes"), threat), Error, "RISK-REGISTER R11 risk");
+  assertThrows(() => assertRiskAndThreatPopulation(risks.replace("`asset.export-to-folder` writes", "`asset.export-to-folder-renamed` writes"), threat), Error, "asset.export-to-folder-renamed");
+});
+
 Deno.test("census: all registered routes in handlers are derived via AST and total 285", () => {
   const registered = extractAllRegisteredRoutes();
   assertEquals(registered.size, 285, `registered routes population must equal 285 (got ${registered.size})`);
 });
 
-Deno.test("census: classification categories are exhaustive and mutually disjoint", () => {
-  const registered = extractAllRegisteredRoutes();
+function assertCompleteClassification(registered: Set<string>): void {
   const classified = new Set<string>();
 
   for (const [categoryName, set] of Object.entries(CENSUS_CATEGORIES)) {
@@ -287,6 +419,29 @@ Deno.test("census: classification categories are exhaustive and mutually disjoin
     `new route(s) registered in handlers without census classification: ${unclassified.join(", ")}`,
   );
   assertEquals(classified.size, registered.size, "every registered route must be classified");
+}
+
+Deno.test("census: classification categories are exhaustive and mutually disjoint", () => {
+  assertCompleteClassification(extractAllRegisteredRoutes());
+});
+
+Deno.test("census: a newly composed route group cannot be skipped or silently classified", () => {
+  const source = Deno.readTextFileSync(`${ROOT}extension/background/service-worker.js`);
+  const anchor = "const handlers = mergeRouteMaps(";
+  assertEquals(source.split(anchor).length, 2, "falsification must find the real handlers composition exactly once");
+  const original = extractAllRegisteredRoutes(source);
+  // A newly declared map is resolvable from the ACTUAL service-worker AST. Its
+  // route changes the population and the same exhaustive check must fail by name.
+  const named = source.replace(anchor,
+    `const zb58AddedRoutes = { "zb58.synthetic.route": () => ({ ok: true }) };\n${anchor}\n  zb58AddedRoutes,`);
+  const added = extractAllRegisteredRoutes(named);
+  assertEquals(added.size, original.size + 1, "the new group must change the registered population");
+  assert(added.has("zb58.synthetic.route"), "the new group must retain its route name");
+  assertThrows(() => assertCompleteClassification(added), Error, "zb58.synthetic.route");
+  // An unknown identifier must name its group rather than being silently
+  // ignored (the exact failure that undercounted vault/enclave routes).
+  const unresolved = source.replace(anchor, `${anchor}\n  zb58UnresolvedRoutes,`);
+  assertThrows(() => extractAllRegisteredRoutes(unresolved), Error, "zb58UnresolvedRoutes");
 });
 
 Deno.test("census: PAGE_ALLOWED matches PAGE_ALLOWED_ROUTES in lib/pure.js exactly", () => {
