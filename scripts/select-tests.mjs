@@ -109,6 +109,40 @@ export const SOURCE_INSPECTING_GUARDS = [
   // wiring) were split into tests/quiet-window-static.test.ts — 3 tests, ZERO spawns, measured 32ms —
   // and THAT is always-on below; the burner workload stays in npm test where it belongs.
   "tests/quiet-window-static.test.ts",
+  // chrome-agent-platform-p1lp: tests/chrome-tools-t12.test.ts walks the extension root through a
+  // LOWERCASE alias — `const root = new URL("../extension/", import.meta.url)` then `await walk(root)` —
+  // which the kz27 widening missed because that pattern demanded an UPPERCASE identifier. That is the
+  // original failure mode in a different spelling: a guard that reads tracked source as data with no
+  // import edge, invisible to the audit. Its assertion is cross-cutting (no extension source may
+  // reference the single-driver lease), and the walk is pure static file reading with NO spawn and no
+  // browser, so it is host-independent and costs milliseconds — the three properties an always-on
+  // guard must have (the lesson from qepn/3bv7/j3o1). Adjudicated IN as its OWN file, not as the whole
+  // 24-test tool-capability KAT: the repo's established remedy for a mixed file is the split
+  // (tests/quiet-window-static.test.ts, tests/chrome-profile-static.test.ts), and promoting the whole
+  // file would run 23 unrelated KATs in every subset gate for this one invariant (reviewer P2).
+  // BUILD BEHAVIOUR, corrected after review: THIS entry has no build precondition — it reads raw .js
+  // under extension/ and skips dist/, so it passes on a worktree that has never built. The file it was
+  // split from does import built bundles, which is a property of that file, not of this guard. More
+  // generally: in `npm test` the serial build phase runs before the parallel phase, while a SUBSET gate
+  // runs the serial phase only for its SELECTED files, so a never-built worktree can fail a
+  // build-reading guard on a missing module — pre-existing (tests/owner-approval-security.test.ts is in
+  // CORE and already imports dist), and worth knowing when adding an entry that does read dist.
+  "tests/chrome-tools-t12-static.test.ts",
+  // chrome-agent-platform-p1lp: the shape whitelist also caught a pure census guard that reads the
+  // shipped pages as data — every one of its five tests is about that census, so it is promoted whole.
+  "tests/unbundled-page-census.test.ts",
+  // chrome-agent-platform-p1lp: caught by the delta review, not by my own probe. Its detector signal is a
+  // LIST OF DIRECTORIES (SCAN_ROOTS = ["scripts", "cap-evidence", "tests"]) and its walks are computed
+  // (`${ROOT}${root}`), so it evaded both the SCAN_DIRS pattern and the shape whitelist; the pattern now
+  // covers the SCAN_(DIRS|ROOTS|TREES) family. Adjudicated IN: all three of its tests are the same
+  // census over tracked source, it spawns nothing (the chrome-journeys mentions are prose in comments),
+  // and it reads files, so it is cheap and host-independent.
+  "tests/composer-selector-migration.test.ts",
+  // chrome-agent-platform-p1lp: the same symmetry caught a real repo-walker that reads the tests
+  // directory as data — `const TESTS_DIR = fileURLToPath(new URL("./", import.meta.url))` then a walk of
+  // every test file. It asserts a cross-cutting invariant, is a static text walk, and is cheap, so it is
+  // adjudicated IN.
+  "tests/chrome-lock-fixture-scope.test.ts",
 ];
 
 /**
@@ -119,8 +153,31 @@ export const SOURCE_INSPECTING_GUARDS = [
  * audit FAIL CLOSED, which is the detector working as intended.
  */
 export const SCANNER_EXCLUSIONS = Object.freeze({
+  // chrome-agent-platform-p1lp: a genuine repo-walker (`const TESTS = `${ROOT}tests/``, then a walk of
+  // every test file to catch vacuous .includes() pins) — and NOT promoted while it is RED. It fails
+  // "the attributed population and its documented exclusions" on current main, adjudicated by running it
+  // with main's versions of this bead's files swapped in, so the failure is not caused here. An
+  // always-on guard that is red on main makes EVERY subset gate red, which is worse than the gap it
+  // closes; promotion is owed the moment that red is fixed, and the red itself needs its own bead.
+  "tests/substring-pin-honesty.test.ts":
+    "a real repo-walker over the test sources, deliberately held out because it is RED on current main (its 'attributed population and documented exclusions' guard), adjudicated by running it with main's copies of this bead's files, so the promotion would turn every subset gate red. Promotion is owed once that red is fixed; the red is the follow-up, owned by chrome-agent-platform-p1lp's report.",
+  // chrome-agent-platform-p1lp: caught by the widened detector, and DELIBERATELY not always-on for the
+  // reason the architecture demands — this file is 16 tests of manifest/schema/import policy over
+  // fixtures, and only ONE of them walks the extension tree. Promoting it would run fifteen unit tests
+  // in every subset gate to cover one static invariant, which is the mixed-file mistake the split
+  // pattern exists to avoid. The invariant is real and should be split into its own -static file the way
+  // tests/chrome-tools-t12 was here; until that happens this entry is the written-down decision rather
+  // than a silent hole. Follow-up owed by chrome-agent-platform-p1lp.
+  "tests/wasm-package-authority.test.ts":
+    "one of its 16 tests walks extension/ (walk(fileURLToPath(new URL('../extension', import.meta.url)))) while the other fifteen are manifest/schema policy unit tests over fixtures, so promoting the file would run fifteen unit tests in every subset gate for one static invariant. The established remedy is the split (tests/quiet-window-static.test.ts, tests/chrome-profile-static.test.ts, and tests/chrome-tools-t12-static.test.ts from this same bead). Follow-up owed by chrome-agent-platform-p1lp.",
+  // chrome-agent-platform-p1lp: it walks `${ROOT}scripts` to find load-sensitive harnesses, so it IS a
+  // repo-walker — but the file is a 15-test harness for the heavy-gate slot that SPAWNS processes to
+  // take and hold the slot, so it fails the host-independent and cost-budgeted criteria an always-on
+  // entry must meet. Its static half belongs in its own file, as above.
+  "tests/heavy-gate-slot.test.ts":
+    "it walks ${ROOT}scripts to find load-sensitive harnesses, but the file is a 15-test harness for the heavy-gate slot itself and spawns processes to take and hold that slot, so it fails the host-independent and cost-budgeted criteria for an always-on entry (the qepn/3bv7/j3o1 lesson). Its static census belongs in its own -static file; that split is owed by chrome-agent-platform-p1lp.",
   "tests/quiet-window.test.ts":
-    "its BURNER helper locates the real esbuild binary by reading a ROOT-rooted node_modules path, which the widened detector matches because the pattern accepts any ROOT-rooted read. That read is a fixture lookup, not a scan of tracked source, and it is NOT the reason this file is interesting: its tracked-source assertions (registry <-> source consistency, the no-interference pin, the journey harness's exit wiring) were SPLIT into tests/quiet-window-static.test.ts, which is always-on and spawns nothing. The file itself must stay out of the set because it spawns real esbuild --minify burners and costs 23s, tripling every subset gate and injecting compiler load during other lanes' gates — see chrome-agent-platform-fgik. NOTE FOR p1lp: fixing the detector to match KNOWN SOURCE ROOTS explicitly (rather than any uppercase identifier or ROOT-rooted read) would make this exclusion unnecessary, since the only matched read is node_modules.",
+    "its BURNER helper locates the real esbuild binary by reading a ROOT-rooted node_modules path, which the widened detector matches because the pattern accepts any ROOT-rooted read. That read is a fixture lookup, not a scan of tracked source, and it is NOT the reason this file is interesting: its tracked-source assertions (registry <-> source consistency, the no-interference pin, the journey harness's exit wiring) were SPLIT into tests/quiet-window-static.test.ts, which is always-on and spawns nothing. The file itself must stay out of the set because it spawns real esbuild --minify burners and costs 23s, tripling every subset gate and injecting compiler load during other lanes' gates — see chrome-agent-platform-fgik. p1lp RESULT: the exclusion is STILL NECESSARY, and that is a residual detection limit rather than an oversight. Narrowing the walk pattern moved the match to the ROOT-rooted read instead: `Deno.readDir(`${ROOT}node_modules/@esbuild`)` matches /Deno\.readDir\(\s*`\$\{ROOT\}/, so the detector still sees a ROOT-rooted directory read. Distinguishing 'reads node_modules' from 'walks tracked source' needs the TARGET PATH, not the root, and no pattern-based detector here has that — so the decision stays written down in this list, where a reader can find it.",
   "tests/chrome-profile-location.test.ts":
     "it still matches the repo-walk detector through its helper reads, but it also holds the LIVE race test that launches a real browser — and docs/CHROME-TEST-CONTRACT.md §2.3 PROMISES that a subset gate launches a browser only when this file or its dependencies changed. Listing it as always-on would break that promise fleet-wide, on every VM without a working browser. Its cross-cutting half (the static scripts/ scan) was SPLIT OUT into tests/chrome-profile-static.test.ts, which is always-on; what remains here is helper semantics plus the live race, and the environmental-refusal path that would let the browser case report honestly is chrome-agent-platform-hlgr.",
 });

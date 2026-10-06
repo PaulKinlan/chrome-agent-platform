@@ -63,7 +63,11 @@ export function findUnclassifiedSourceScanners(
 ): string[] {
   const unclassified: string[] = [];
   const SCANNER_PATTERNS = [
-    /SCAN_DIRS/i,
+    // A test that declares a LIST OF DIRECTORIES to scan is the audit's target shape whatever the
+    // constant is called. `SCAN_DIRS` alone missed tests/composer-selector-migration.test.ts, whose
+    // list is named SCAN_ROOTS and whose walks are computed (`${ROOT}${root}`), so both the name pattern
+    // and the shape whitelist stepped over a real repo-scanning guard (delta review P2).
+    /SCAN_(?:DIRS|ROOTS|TREES)/i,
     /filesUnder\s*\(/i,
     /extractAllRegisteredRoutes/i,
     /git\s+ls-files/i,
@@ -86,17 +90,100 @@ export function findUnclassifiedSourceScanners(
     // three further guards this caught.
     /Deno\.readDir\(\s*`\$\{ROOT\}/,
     /readDir\(\s*`\$\{ROOT\}/,
-    /walk\(\s*[A-Z][A-Z0-9_]*\b/,
   ];
 
+  // chrome-agent-platform-p1lp — SYMMETRY, not just coverage. The kz27 widening used
+  // /walk\(\s*[A-Z][A-Z0-9_]*\b/, which failed in BOTH directions:
+  //   UNDER-MATCH: it demanded an uppercase identifier, so tests/chrome-tools-t12.test.ts's
+  //     `await walk(root)`, where `const root = new URL("../extension/", import.meta.url)`,
+  //     escaped the audit entirely — the original failure mode in a different spelling.
+  //   OVER-MATCH: it matched ANY uppercase identifier, so a file that merely walked a fixture
+  //     directory looked like a scanner.
+  // A bare name list cannot fix this, because `walk(root)` is ALSO how a dozen tests traverse a
+  // DOM tree (tests/agent-permissions-panel.test.ts passes an Element). The identifier's SHAPE
+  // carries no information; its DEFINITION does. So a walk/read counts as a scanner only when the
+  // thing being walked is a repo source root, established two ways:
+  //   (1) a KNOWN source-root constant (the uppercase set below), or
+  //   (2) an identifier THIS FILE defines from a source-root path ("../extension/", ROOT, ...).
+  // Anything else — a fixture dir, a temp dir, a DOM node, a parsed tree — is not a scanner
+  // signal, which is what keeps a non-scanner out of the always-on set.
+  const KNOWN_SOURCE_ROOTS = /^(?:ROOT|EXT|EXTENSION_DIR|TESTS|TESTS_DIR|SCRIPTS|SCRIPTS_DIR|ROOT_DIR|GUARD_ROOTS)$/;
+  const TOP_LEVEL_DIRS = "extension|scripts|tests|lib|packages";
+  // What counts is a walk ROOTED AT THE REPO TREE, or at a TOP-LEVEL source dir, because that is the
+  // shape that reads the repository as data. A walk of a SUB-root (extension/wasm/cas,
+  // extension/wasm/manifests, scripts/git-hooks, a probe dir inside extension/) is a data or fixture
+  // read, and admitting that class is how a 23s esbuild-spawning file entered the always-on set
+  // (chrome-agent-platform-fgik).
+  //
+  // The expression is judged by the SHAPES that genuinely denote such a root, listed explicitly, rather
+  // than by loosely matching a dir name anywhere in the text. Loose matching was tried first and it
+  // flagged `const probe = `${extension}/_emscripten_abi_probe`` (a temp probe dir INSIDE extension)
+  // and `path.join(..., "scripts", "git-hooks")` (a subdir) — both false positives of exactly the
+  // over-match class this bead exists to prevent.
+  const REPO_ROOT_URL = /new URL\(\s*["']\.\.\/?["']/;
+  const TOP_LEVEL_URL = new RegExp(`new URL\\(\\s*["']\\.\\.?\\/(?:${TOP_LEVEL_DIRS})\\/?["']`);
+  // path.join(..., "extension") — the LAST literal is a top-level dir and closes the call.
+  const JOIN_ENDS_AT_TOP_LEVEL = new RegExp(
+    `(?:ROOT|\\$\\{[^}]*\\}|["'][^"']*\\.\\.\\/(?:${TOP_LEVEL_DIRS})[^"']*["'])[^)]*["'](?:${TOP_LEVEL_DIRS})\\/?["']\\s*\\)`,
+  );
+  // `${ROOT}tests/` — an interpolation, then a top-level dir, then the end of the template.
+  const TEMPLATE_ENDS_AT_TOP_LEVEL = new RegExp("\\$\\{[^}]*\\}\\/?(?:" + TOP_LEVEL_DIRS + ")\\/?[`\"']?$");
+  const flatten = (src: string) => src.replace(/\s+/g, " ").trim();
+  const isTestsDirUrl = (flat: string, rel: string) =>
+    /new URL\(\s*["']\.\/["']/.test(flat) && /^tests\//.test(rel);
+  const denotesSourceRoot = (text: string, rel: string) => {
+    const flat = flatten(text);
+    if (REPO_ROOT_URL.test(flat)) return true;
+    if (TOP_LEVEL_URL.test(flat)) return true;
+    if (JOIN_ENDS_AT_TOP_LEVEL.test(flat)) return true;
+    if (TEMPLATE_ENDS_AT_TOP_LEVEL.test(flat)) return true;
+    return isTestsDirUrl(flat, rel);
+  };
+  const identifierIsSourceRoot = (id: string, code: string, rel: string) => {
+    if (KNOWN_SOURCE_ROOTS.test(id)) return true;
+    // Capture the RHS ACROSS newlines: `[^;\n]+` stopped at the first newline, so a formatted
+    // multi-line `const root = new URL(\n "../extension/",\n import.meta.url,\n)` evaded the rule
+    // entirely (reviewer P1).
+    const m = new RegExp(`\\b(?:const|let|var)\\s+${id}\\s*=\\s*([^;]+)`).exec(code);
+    return m ? denotesSourceRoot(m[1], rel) : false;
+  };
+  /** The FIRST ARGUMENT of every call to `name(`, as source text. */
+  const firstArgs = (code: string, name: string): string[] => {
+    const out: string[] = [];
+    for (const m of code.matchAll(new RegExp(`\\b${name}\\(`, "g"))) {
+      let depth = 0;
+      let buf = "";
+      for (let i = m.index + m[0].length; i < code.length; i++) {
+        const c = code[i];
+        if (c === "(" || c === "[" || c === "{") depth++;
+        else if (c === ")" || c === "]" || c === "}") {
+          if (depth === 0) break;
+          depth--;
+        } else if (c === "," && depth === 0) break;
+        buf += c;
+      }
+      out.push(flatten(buf));
+    }
+    return out;
+  };
+  // The argument counts when it is an identifier defined from a root, or an INLINE EXPRESSION naming
+  // one — two real guards walk `walk(path.join(ROOT, "extension"))` and
+  // `walk(fileURLToPath(new URL("../extension", import.meta.url)))`, and an identifier-only rule misses
+  // both. Argument extraction does not demand a closing paren either: `walk(root, opts)` and
+  // `walk(abs, rel)` are ordinary calls (reviewer P1/P2).
+  const walkOrReadRoots = (code: string, rel: string) =>
+    ["walk", "readDir", "readDirSync", "readdir"].flatMap((name) => firstArgs(code, name))
+      .filter((arg) => (/^[A-Za-z_$][\w$]*$/.test(arg) ? identifierIsSourceRoot(arg, code, rel) : denotesSourceRoot(arg, rel)));
   for (const { rel, code } of testFiles) {
     if (alwaysOnSet.has(rel)) continue;
     // chrome-agent-platform-kz27: a DECLARED exclusion is classified — it carries a reason and a bead,
     // so the choice is written down rather than being an accidental omission. That is why
     // SCANNER_EXCLUSIONS exists instead of a quietly missing list entry.
     if (Object.hasOwn(SCANNER_EXCLUSIONS, rel)) continue;
-    // If it dynamically scans source directories, it must be in ALWAYS_ON
-    if (SCANNER_PATTERNS.some((pat) => pat.test(code))) {
+    // If it dynamically scans source directories, it must be in ALWAYS_ON. The literal
+    // patterns catch the ROOT-rooted shapes; the source-root test catches a walk over an
+    // identifier that this file derives from a source root (p1lp), including lowercase ones.
+    if (SCANNER_PATTERNS.some((pat) => pat.test(code)) || walkOrReadRoots(code, rel).length > 0) {
       unclassified.push(rel);
     }
   }
@@ -153,6 +240,33 @@ Deno.test("qcfc: REAL-TREE falsification — an actual repo-walking guard is fla
     unclassified,
     [rel],
     "a REAL repo-walking guard must be flagged when it is neither always-on nor declared excluded",
+  );
+});
+
+Deno.test("p1lp: REAL-TREE symmetry — a lowercase-alias source-root walk is flagged, a DOM walk is not", () => {
+  // chrome-agent-platform-p1lp. The kz27 detector demanded an UPPERCASE identifier, which failed in
+  // BOTH directions against files this repo actually ships:
+  //   MET   — tests/chrome-tools-t12-static.test.ts walks the extension root through a LOWERCASE alias
+  //           (`const root = new URL("../extension/", import.meta.url)`), so it escaped entirely.
+  //   MISSED— a file that walks a DOM tree also calls `walk(root)`, and a name list cannot tell the
+  //           two apart: the identifier's SHAPE carries no information, its DEFINITION does. Getting
+  //           this wrong upward is not hypothetical — an over-match is how a 23s esbuild-spawning file
+  //           entered the always-on set and tripled every subset gate (chrome-agent-platform-fgik).
+  // Real files rather than synthetic strings, because the synthetic fixtures prove the PARSER while
+  // this proves the CLASSIFIER against the tree we ship.
+  const read = (rel: string) => ({ rel, code: readFileSync(join(ROOT, rel), "utf8") });
+  const unlisted = new Set(["tests/security.test.ts"]);
+
+  assertEquals(
+    findUnclassifiedSourceScanners([read("tests/chrome-tools-t12-static.test.ts")], unlisted),
+    ["tests/chrome-tools-t12-static.test.ts"],
+    "a walk over a LOWERCASE alias of a source root must be flagged when it is unlisted",
+  );
+
+  assertEquals(
+    findUnclassifiedSourceScanners([read("tests/agent-permissions-panel.test.ts")], unlisted),
+    [],
+    "a walk over a NON-source identifier (a DOM node) must NOT be flagged — admitting it is the over-match that cost 23s a gate",
   );
 });
 
