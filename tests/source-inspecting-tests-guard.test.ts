@@ -32,6 +32,16 @@ import { durableDir } from "../scripts/lib/durable-root.mjs";
 export const IS_TEST_RE = /\.test\.(ts|js)$/;
 
 // NEW-3: Exact paths of real-tree falsification fixtures that could be left by SIGKILL.
+export const AFPL_REAL_TREE_FIXTURES: Record<string, string> = {
+  "tests/helpers/zz-afpl-depth2-walk.ts":
+    `// Real depth-2 helper walking repo root via ../../\nconst root = new URL("../../", import.meta.url);\nexport function census() { for (const f of Deno.readDirSync(root)) void f; }\n`,
+  "tests/helpers/zz-afpl-prose-only.ts":
+    `// Shared helper. Deliberately does NOT shell out to git ls-files; it reads two files.\n// See SCAN_DIRS and GUARD_ROOTS for context.\nexport function add(a: number, b: number): number { return a + b; }\n`,
+  "tests/helpers/zz-afpl-fixture-read.ts":
+    `import { join } from "node:path";\nconst ROOT = "/repo";\nexport function list() { for (const f of Deno.readDirSync(join(ROOT, "tests", "fixtures"))) void f; }\n`,
+  "tests/helpers/zz-afpl-preexisting-sibling.ts":
+    "// Pre-existing sibling helper\nexport const ok = true;\n",
+};
 export const AFPL_REAL_TREE_RESIDUE = [
   "tests/helpers/zz-afpl-depth2-walk.ts",
   "tests/helpers/zz-afpl-prose-only.ts",
@@ -58,14 +68,9 @@ Deno.test("afpl: SIGKILL residue is reconciled before the audit scans the tree",
   if (!hadHelpers) {
     Deno.mkdirSync(helpersDir, { recursive: true });
   }
-  const fixtureBodies = [
-    `const root = new URL("../../", import.meta.url);\nexport function census() { for (const f of Deno.readDirSync(root)) void f; }\n`,
-    `// SCAN_DIRS and git ls-files are prose only.\nexport const ok = true;\n`,
-    `import { join } from "node:path";\nconst ROOT = "/repo";\nexport function list() { return Deno.readDirSync(join(ROOT, "tests", "fixtures")); }\n`,
-    `// Pre-existing sibling helper\nexport const ok = true;\n`,
-  ];
-  for (const [index, rel] of AFPL_REAL_TREE_RESIDUE.entries()) {
-    Deno.writeTextFileSync(join(ROOT, rel), fixtureBodies[index]);
+  assertEquals(Object.keys(AFPL_REAL_TREE_FIXTURES).sort(), [...AFPL_REAL_TREE_RESIDUE].sort());
+  for (const [rel, body] of Object.entries(AFPL_REAL_TREE_FIXTURES)) {
+    Deno.writeTextFileSync(join(ROOT, rel), body);
   }
   reconcileAfplRealTreeResidue();
   for (const rel of AFPL_REAL_TREE_RESIDUE) {
@@ -529,31 +534,32 @@ Deno.test("afpl: REAL-TREE falsification — a depth-2 repo-walking helper is NA
   }
 
   // NEW-1: Plant a pre-existing sibling to prove cleanup preserves un-owned files
-  const siblingBody = "// Pre-existing sibling helper\nexport const ok = true;\n";
+  assertEquals(Object.keys(AFPL_REAL_TREE_FIXTURES).sort(), [...AFPL_REAL_TREE_RESIDUE].sort());
+  const fixtureBody = (rel: string): string => {
+    assert(Object.hasOwn(AFPL_REAL_TREE_FIXTURES, rel), `missing real-tree fixture ${rel}`);
+    return AFPL_REAL_TREE_FIXTURES[rel];
+  };
+  const siblingBody = fixtureBody("tests/helpers/zz-afpl-preexisting-sibling.ts");
   await Deno.writeTextFile(siblingFile, siblingBody);
 
   try {
+    try {
     // 1. (F1) Depth-2 helper walking root via "../../" (the repo's own depth-2 idiom).
     await Deno.writeTextFile(
       depth2Walker,
-      `// Real depth-2 helper walking repo root via ../../\n` +
-        `const root = new URL("../../", import.meta.url);\n` +
-        `export function census() { for (const f of Deno.readDirSync(root)) void f; }\n`,
+      fixtureBody("tests/helpers/zz-afpl-depth2-walk.ts"),
     );
 
     // 2. (F2) Prose-only helper mentioning SCAN_DIRS and git ls-files in comments.
     await Deno.writeTextFile(
       proseHelper,
-      `// Shared helper. Deliberately does NOT shell out to git ls-files; it reads two files.\n` +
-        `// See SCAN_DIRS and GUARD_ROOTS for context.\n` +
-        `export function add(a: number, b: number): number { return a + b; }\n`,
+      fixtureBody("tests/helpers/zz-afpl-prose-only.ts"),
     );
 
     // 3. Over-match negative: fixture-reading helper.
     await Deno.writeTextFile(
       fixtureReader,
-      `import { join } from "node:path";\nconst ROOT = "/repo";\n` +
-        `export function list() { for (const f of Deno.readDirSync(join(ROOT, "tests", "fixtures"))) void f; }\n`,
+      fixtureBody("tests/helpers/zz-afpl-fixture-read.ts"),
     );
 
     const scanned = sharedSupportFiles();
@@ -591,22 +597,20 @@ Deno.test("afpl: REAL-TREE falsification — a depth-2 repo-walking helper is NA
     for (const f of testFiles) {
       try { await Deno.remove(f); } catch { /* ignore */ }
     }
-    if (!helpersDirPreexisted) {
-      try {
-        await Deno.remove(realHelpersDir); // Non-recursive rmdir; fails harmlessly if directory contains other files
-      } catch { /* ignore */ }
     }
+    assert(
+      existsSync(siblingFile),
+      "NEW-1: pre-existing sibling in tests/helpers must survive cleanup byte-identically",
+    );
+    assertEquals(
+      await Deno.readTextFile(siblingFile),
+      siblingBody,
+      "NEW-1: pre-existing sibling in tests/helpers must survive cleanup byte-identically",
+    );
+  } finally {
+    await Deno.remove(siblingFile).catch(() => {});
+    if (!helpersDirPreexisted) await Deno.remove(realHelpersDir).catch(() => {});
   }
-  assert(
-    existsSync(siblingFile),
-    "NEW-1: pre-existing sibling in tests/helpers must survive cleanup byte-identically",
-  );
-  assertEquals(
-    await Deno.readTextFile(siblingFile),
-    siblingBody,
-    "NEW-1: pre-existing sibling in tests/helpers must survive cleanup byte-identically",
-  );
-  await Deno.remove(siblingFile);
 });
 
 // chrome-agent-platform-afpl — scratch-tree coverage proof, in BOTH directions and against a REAL file.
@@ -744,38 +748,37 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
   }
 });
 
-// Mask comments and the bodies of `code: ` fixture strings without letting a backtick in
-// a comment pair with a later live template. Preserve line breaks for readable diagnostics.
-export function maskGuardFixtureBodies(code: string): string {
-  let out = "";
-  for (let i = 0; i < code.length;) {
-    const start = i;
-    const c = code[i];
-    if (c === "/" && code[i + 1] === "/") {
-      i = code.indexOf("\n", i + 2);
-      if (i < 0) i = code.length;
-      out += code.slice(start, i).replace(/[^\n]/g, " ");
-    } else if (c === "/" && code[i + 1] === "*") {
-      const end = code.indexOf("*/", i + 2);
-      i = end < 0 ? code.length : end + 2;
-      out += code.slice(start, i).replace(/[^\n]/g, " ");
-    } else if (c === "`" || c === '"' || c === "'") {
-      const fixture = c === "`" && /\bcode:\s*$/.test(out);
-      i++;
-      for (; i < code.length; i++) {
-        if (code[i] === "\\") { i++; continue; }
-        if (code[i] === c) { i++; break; }
-      }
-      const literal = code.slice(start, i);
-      out += fixture || (c !== "`" && /(?:Deno\.remove|\brm\s*\()/.test(literal))
-        ? literal.replace(/[^\n]/g, " ")
-        : literal;
-    } else {
-      out += c;
-      i++;
+// Only synthetic `code: ` template fixtures are excluded. Never rewrite the source:
+// slash/quote heuristics can mistake a regex character class for a string boundary
+// and silently erase live removals in the rest of a file.
+export function guardFixtureRanges(code: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (const match of code.matchAll(/(?:^|[\n{,])[ \t]*code:[ \t]*`/g)) {
+    const start = match.index + match[0].length;
+    let end = start;
+    while (end < code.length) {
+      if (code[end] === "\\") { end += 2; continue; }
+      if (code[end] === "`") break;
+      end++;
+    }
+    if (end < code.length) ranges.push({ start, end });
+  }
+  return ranges;
+}
+
+const REMOVAL_FUNCTIONS = ["Deno.remove", "Deno.removeSync", "rm", "rmSync", "fsp.rm", "fsp2.rm"];
+export function removalCallSites(code: string): { raw: number[]; considered: number[]; fixture: number[] } {
+  const ranges = guardFixtureRanges(code);
+  const raw: number[] = [];
+  const considered: number[] = [];
+  const fixture: number[] = [];
+  for (const fn of REMOVAL_FUNCTIONS) {
+    for (const match of code.matchAll(new RegExp(`\\b${fn.replace(/\./g, "\\.")}\\s*\\(`, "g"))) {
+      raw.push(match.index);
+      (ranges.some(({ start, end }) => match.index >= start && match.index < end) ? fixture : considered).push(match.index);
     }
   }
-  return out;
+  return { raw, considered, fixture };
 }
 
 /**
@@ -787,13 +790,14 @@ export function findRecursiveRemovalsOfSharedPaths(
   files: Array<{ rel: string; code: string }>,
 ): string[] {
   const violations: string[] = [];
-  const fnNames = ["Deno.remove", "Deno.removeSync", "rm", "rmSync", "fsp.rm", "fsp2.rm"];
   const SHARED_PATH_PATTERN = /(?:tests\/helpers|tests(?!\/node_modules)|\bscripts\b|\bextension\/(?:lib|background|options|ntp|sidepanel)\b)/i;
 
   for (const { rel, code } of files) {
-    for (const fn of fnNames) {
+    const consideredSites = new Set(removalCallSites(code).considered);
+    for (const fn of REMOVAL_FUNCTIONS) {
       const escaped = fn.replace(/\./g, "\\.");
       for (const m of code.matchAll(new RegExp(`\\b${escaped}\\s*\\(`, "g"))) {
+        if (!consideredSites.has(m.index)) continue;
         let depth = 0;
         let buf = "";
         const args: string[] = [];
@@ -859,12 +863,7 @@ export function findRecursiveRemovalsOfSharedPaths(
 }
 
 Deno.test("afpl: no test in tests/ recursively removes shared repository directories (e.g. tests/helpers)", () => {
-  const testFiles = enumerateTestFiles().map((f) => ({
-    rel: f.rel,
-    // Ignore only `code: ` fixture bodies, not arbitrary backtick pairs. A backtick in a
-    // comment must not consume subsequent live calls (the old stripComments failure).
-    code: maskGuardFixtureBodies(f.code),
-  }));
+  const testFiles = enumerateTestFiles();
   const violations = findRecursiveRemovalsOfSharedPaths(testFiles);
   assertEquals(
     violations,
@@ -873,13 +872,48 @@ Deno.test("afpl: no test in tests/ recursively removes shared repository directo
   );
 });
 
-Deno.test("afpl: fixture masking preserves live removal calls after a backtick in a comment", () => {
+Deno.test("afpl: repo-wide removal-call differential excludes only fixture ranges, never live calls", () => {
+  const files = enumerateTestFiles();
+  let raw = 0;
+  let considered = 0;
+  let fixtures = 0;
+  for (const { rel, code } of files) {
+    const sites = removalCallSites(code);
+    raw += sites.raw.length;
+    considered += sites.considered.length;
+    fixtures += sites.fixture.length;
+    // The independent raw scan and byte offsets must account for every dropped match.
+    const independent = REMOVAL_FUNCTIONS.flatMap((fn) => [...code.matchAll(
+      new RegExp(`\\b${fn.replace(/\./g, "\\.")}\\s*\\(`, "g"),
+    )].map((m) => m.index));
+    const ranges = guardFixtureRanges(code);
+    const legitimate = independent.filter((index) => ranges.some(({ start, end }) => index >= start && index < end));
+    assertEquals(sites.considered.slice().sort((a, b) => a - b),
+      independent.filter((index) => !legitimate.includes(index)).sort((a, b) => a - b),
+      `${rel}: no non-fixture call may be dropped`);
+    assertEquals(sites.fixture.length, legitimate.length, `${rel}: only code: fixture calls may be skipped`);
+  }
+  assert(raw > 200 && considered > 190, `repo-wide differential must inspect live calls: ${raw} raw, ${considered} considered`);
+  assertEquals(raw - considered - fixtures, 0, "illegitimate removal-call drops must be zero");
+  const evidence = files.find(({ rel }) => rel === "tests/evidence-durable.test.ts");
+  assert(evidence, "evidence-durable test must be scanned");
+  const live = removalCallSites(evidence.code).considered;
+  assert(live.some((index) => evidence.code.slice(index).startsWith("Deno.removeSync(required)")), "required cleanup must be considered");
+  assert(live.some((index) => evidence.code.slice(index).startsWith("Deno.removeSync(tmp,")), "tmp cleanup must be considered");
+});
+
+Deno.test("afpl: real regex and literal slashes cannot hide a planted live shared-path removal", () => {
+  for (const rel of ["tests/evidence-durable.test.ts", "tests/package-scripts-exist.test.ts"]) {
+    const code = readFileSync(join(ROOT, rel), "utf8") +
+      '\nconst afplLiveShared = join(ROOT, "tests", "helpers");\nawait Deno.remove(afplLiveShared, { recursive: true });\n';
+    const violations = findRecursiveRemovalsOfSharedPaths([{ rel, code }]);
+    assertEquals(violations.length, 1, `${rel}: live removal after regex trigger must RED`);
+  }
   const source = '// unrelated ` comment\nconst scratch = join(ROOT, "tests", "helpers");\n' +
     'await Deno.remove(scratch, { recursive: true });\n' +
-    'const mock = { code: `await Deno.remove("tests/helpers", { recursive: true });` };';
-  const masked = maskGuardFixtureBodies(source);
-  const violations = findRecursiveRemovalsOfSharedPaths([{ rel: "tests/zz-live.test.ts", code: masked }]);
-  assertEquals(violations.length, 1, "live removal must be caught; fixture-body call must be ignored");
+    'const mock = {\n code: `await Deno.' + 'remove("tests/helpers", { recursive: true });` };';
+  assertEquals(findRecursiveRemovalsOfSharedPaths([{ rel: "tests/zz-live.test.ts", code: source }]).length, 1,
+    "live removal must be caught; fixture-body call must be ignored");
 });
 
 Deno.test("afpl: falsification — recursive removal of tests/helpers or a shared root is flagged and temp dirs are admitted", () => {
