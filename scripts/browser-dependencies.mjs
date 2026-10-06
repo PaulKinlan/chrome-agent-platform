@@ -72,4 +72,38 @@ export const browserDependencies = {
 
 // Explicit provider keys are supplied by CAP. Do not manufacture a Node global
 // (SDK runtime detection must see a browser); only environment defaults are empty.
-export const browserDefines = { 'process.env': '{}' };
+//
+// chrome-agent-platform-3337: the browser `process.env` shim is ONE esbuild option fragment carrying
+// BOTH the define and the banner that declares it (browserProcessEnvOptions below), so no build target
+// can acquire the define without the banner — a bare identifier define with no declaration references
+// an undeclared global and dies at module init with a ReferenceError, which no byte comparison can see.
+const EMPTY_PROCESS_ENV_IDENTIFIER = "__CAP_EMPTY_PROCESS_ENV__";
+
+/**
+ * The browser `process.env` shim, as one esbuild option fragment: `define` + the `banner` that
+ * declares it. Spread BOTH keys into the build config (`...browserProcessEnvOptions.define` plus
+ * `banner: browserProcessEnvOptions.banner`); never one without the other.
+ *
+ * WHY NOT THE OBVIOUS OBJECT LITERAL: `define: { 'process.env': '{}' }` makes esbuild synthesise a
+ * shared `<define:process.env>` virtual module and inject an init call into every file that reads
+ * process.env — 314 of the 317 files in the agent-worker graph. Those injected init calls are
+ * borderline side-effect parts, and esbuild 0.25.12's tree-shaking includes/excludes one of them
+ * nondeterministically, which moved `workers/agent-worker.js` by exactly 4 bytes (`A(),`) between two
+ * builds of the same commit (the 846613 vs 846617 drift this fix removes). An IDENTIFIER define is
+ * substituted as TEXT: esbuild creates no virtual module and injects no init calls, so that class of
+ * byte-visible nondeterminism cannot arise. MEASURED in one process, 10 worker builds per shape:
+ * object literal 7x/3x across two output states (307 vs 308 inputs, 305 vs 306 init calls);
+ * identifier 10/10 byte-identical sha with 0 init calls and 0 define module.
+ *
+ * VALUE IS PRESERVED: the substituted text is the banner-declared const, so `process.env` still
+ * evaluates to one shared empty object. Measured by executing both shapes: value
+ * `{isObject:true, propIsUndefined:true, keyCount:0}` in BOTH. No `process` global is manufactured,
+ * so SDK runtime detection still sees a browser.
+ */
+export const browserProcessEnvOptions = Object.freeze({
+  define: Object.freeze({ "process.env": EMPTY_PROCESS_ENV_IDENTIFIER }),
+  banner: Object.freeze({ js: `const ${EMPTY_PROCESS_ENV_IDENTIFIER} = {};` }),
+});
+
+/** Exported so the guard test can prove the banner declares exactly the identifier the define names. */
+export const EMPTY_PROCESS_ENV_DEFINE_NAME = EMPTY_PROCESS_ENV_IDENTIFIER;
