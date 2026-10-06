@@ -88,6 +88,11 @@ p.lead,
   margin: 8px 0 0 18px;
   padding: 0;
 }
+.technical-storage-details p {
+  font-size: inherit;
+  line-height: 1.5;
+  margin: 8px 0 0;
+}
 .technical-storage-details li {
   margin-bottom: 4px;
 }
