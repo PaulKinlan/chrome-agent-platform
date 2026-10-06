@@ -927,8 +927,20 @@ Deno.test("bd06: build.mjs auto-materializes node_modules/.deno via deno install
 //      cannot silently drop out of dist.complete.
 Deno.test("o2t3: the declared budgets and the reported/marked bundle sets cannot drift apart", async () => {
   const buildSrc = await Deno.readTextFile(new URL("../build.mjs", import.meta.url));
-  const decls = [...buildSrc.matchAll(/\{\s*name:\s*"([^"]+)"[^}]*?out:\s*"([^"]+)"[^}]*?budget:\s*([0-9_]+)\s*\}/gs)]
-    .map((m) => ({ name: m[1], out: m[2], budget: Number(m[3].replace(/_/g, "")) }));
+  // Order-independent, so a harmless reformat of build.mjs (reordering keys, adding
+  // a property) cannot turn this pin red for the wrong reason. The >=6 guard below
+  // still fails closed if the block is renamed or restructured enough to parse none.
+  const surfaceStart = buildSrc.indexOf("const SURFACE_BUNDLES");
+  assert(surfaceStart >= 0, "build.mjs must declare SURFACE_BUNDLES for this pin to bind anything");
+  const surfaceSrc = buildSrc.slice(surfaceStart, buildSrc.indexOf("];", surfaceStart));
+  const decls = [...surfaceSrc.matchAll(/\{([^{}]*)\}/gs)]
+    .map((m) => m[1])
+    .map((block) => ({
+      name: /name:\s*"([^"]+)"/.exec(block)?.[1] ?? "",
+      out: /out:\s*"([^"]+)"/.exec(block)?.[1] ?? "",
+      budget: Number((/budget:\s*([0-9_]+)/.exec(block)?.[1] ?? "0").replace(/_/g, "")),
+    }))
+    .filter((d) => d.out && d.budget > 0);
 
   // A parse that silently matches nothing would make every assertion below vacuous.
   assert(decls.length > 0, "build.mjs must declare at least one bundle budget for this pin to mean anything");
