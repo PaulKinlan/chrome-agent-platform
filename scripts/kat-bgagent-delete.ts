@@ -73,6 +73,7 @@ const profile = chromeProfileDir("kat-bgagent-delete");
 async function teardownTree() {
   console.log("NOTE: tearing down the Chrome tree (teardownChrome)");
   await teardownChrome(launched, profile);
+  try { await Deno.remove(profile, { recursive: true }); } catch { /* gone */ }
   console.log("NOTE: teardownChrome complete");
 }
 

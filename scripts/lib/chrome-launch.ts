@@ -777,6 +777,18 @@ export async function teardownChrome(
     const raw = matchedProfile.replace(/^--/, "");
     const match = raw.startsWith("user-data-dir=") ? raw : `user-data-dir=${raw}`;
     await killProcessTree(proc, match, { group });
+    const profilePath = raw.startsWith("user-data-dir=") ? raw.slice("user-data-dir=".length) : raw;
+    if (profilePath && typeof profilePath === "string" && profilePath.length > 5 && !profilePath.endsWith("/..")) {
+      const normalized = profilePath.replace(/\/+$/, "");
+      const home = Deno.env.get("HOME");
+      if (normalized !== "/" && normalized !== "/home" && (!home || normalized !== home.replace(/\/+$/, ""))) {
+        try {
+          await Deno.remove(normalized, { recursive: true });
+        } catch {
+          /* already removed or absent */
+        }
+      }
+    }
     return;
   }
   if (proc) {
