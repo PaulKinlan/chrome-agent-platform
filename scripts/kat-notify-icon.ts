@@ -16,7 +16,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
@@ -135,8 +135,7 @@ try {
   console.log(`FAIL: harness error — ${String((e as Error)?.message ?? e)}`);
 } finally {
   try { ws.close(); } catch { /* closed */ }
-  try { proc.kill("SIGKILL"); } catch { /* gone */ }
-  try { await proc.status; } catch { /* reaped */ }
+  await teardownChrome(proc, profile);
   await Deno.remove(profile, { recursive: true }).catch(() => {});
 }
 console.log(`kat-notify-icon: ${pass} pass, ${fail} fail`);

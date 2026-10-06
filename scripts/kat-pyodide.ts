@@ -6,7 +6,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -187,12 +187,7 @@ try {
   try {
     socket?.close();
   } catch { /* gone */ }
-  try {
-    browser?.kill("SIGKILL");
-  } catch { /* gone */ }
-  try {
-    if (browser) await browser.status;
-  } catch { /* gone */ }
+  if (browser) await teardownChrome(browser, profile);
   try {
     await Deno.remove(profile, { recursive: true });
   } catch { /* preserve no profile */ }

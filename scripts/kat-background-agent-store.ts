@@ -21,7 +21,7 @@
 //   deno run -A scripts/kat-background-agent-store.ts <path-to-extension> [<out-dir>]
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
 
@@ -48,13 +48,14 @@ try { await Deno.stat(`${EXT}/dist/background/service-worker.js`); } catch {
 
 let proc!: Deno.ChildProcess;
 let ws: WebSocket | null = null;
+const profile = chromeProfileDir("kat-background-agent-store");
 try {
   const launched = await launchChrome({
     binary: CHROMIUM,
     args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
       `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
       "--remote-allow-origins=*",
-      `--user-data-dir=${chromeProfileDir("kat-background-agent-store")}`, "about:blank"],
+      `--user-data-dir=${profile}`, "about:blank"],
   });
   proc = launched.proc;
   ws = new WebSocket(launched.wsUrl);
@@ -63,6 +64,7 @@ try {
   console.log(`FAIL: could not start Chrome for Testing — ${String(e)}`);
   Deno.exit(1);
 }
+try {
 let id = 0; const pending = new Map<string, (v: any) => void>();
 ws!.onmessage = (m: MessageEvent) => { const j = JSON.parse(m.data); if (j.id && pending.has(String(j.id))) { pending.get(String(j.id))!(j); pending.delete(String(j.id)); } };
 const send = (method: string, params: any = {}, sessionId?: string) => new Promise<any>((res) => {
@@ -226,6 +228,9 @@ const finalRows = await ntp.ev(`(() => {
 check("disable: the row leaves the hub list (a template again)", finalRows === 0, finalRows);
 await ntp.shot(`${OUT}/03-disabled-gone.png`);
 
+} finally {
+  await teardownChrome(proc, profile);
+}
+
 console.log(`\n${fail === 0 ? "PASS" : "FAIL"}: kat-background-agent-store — ${pass} passed, ${fail} failed`);
-try { await send("Browser.close"); } catch { proc!.kill("SIGKILL"); }
 Deno.exit(fail === 0 ? 0 : 1);

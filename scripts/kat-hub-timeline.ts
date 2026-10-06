@@ -13,7 +13,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, teardownChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -29,13 +29,14 @@ function check(name: string, cond: boolean, detail?: unknown) {
 }
 
 await Deno.mkdir(OUT, { recursive: true });
+const profile = `${OUT}/profile`;
 
 const { proc, wsUrl } = await launchChrome({
   binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${OUT}/profile`, "about:blank"],
+    `--user-data-dir=${profile}`, "about:blank"],
 });
 
 const ws = new WebSocket(wsUrl);
@@ -146,7 +147,7 @@ try {
   console.log(`\n${pass}/${pass + fail} checks passed — screenshots in ${OUT}`);
 } finally {
   try { ws.close(); } catch { /* ignore */ }
-  try { proc.kill(); } catch { /* ignore */ }
+  await teardownChrome(proc, profile);
 }
 
 if (fail > 0) Deno.exit(1);

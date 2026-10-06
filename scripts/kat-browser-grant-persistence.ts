@@ -11,7 +11,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -148,8 +148,7 @@ try {
   check("revoke persistence: grant remains inactive after reload", finalGrant?.active === false, finalGrant);
 
 } finally {
-  try { proc.kill("SIGKILL"); } catch { /* already dead */ }
-  try { await proc.status; } catch { /* reaped */ }
+  await teardownChrome(proc, profile);
   await Deno.remove(profile, { recursive: true }).catch(() => {});
 }
 

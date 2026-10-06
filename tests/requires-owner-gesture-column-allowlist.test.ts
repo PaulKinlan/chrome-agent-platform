@@ -106,13 +106,13 @@ Deno.test("requiresOwnerGesture: zero occurrences in extension/ (the column is d
 });
 
 Deno.test("requiresOwnerGesture: falsification — an un-allowlisted file mentioning the column is caught end-to-end", () => {
-  const probePath = `${ROOT}extension/lib/__probe_stray_gesture_reader.js`;
+  const probePath = `${ROOT}tests/__probe_stray_gesture_reader.js`;
   try {
     Deno.writeTextFileSync(probePath, `// Probe testing falsification\nconst x = "${COLUMN_NAME}";\n`);
     const mentioned = filesMentioningColumn();
-    assert(mentioned.includes("extension/lib/__probe_stray_gesture_reader.js"), "git grep --untracked must discover the probe file");
+    assert(mentioned.includes("tests/__probe_stray_gesture_reader.js"), "git grep --untracked must discover the probe file");
     const unexpected = mentioned.filter((file) => !Object.hasOwn(MENTION_ALLOWLIST, file));
-    assertEquals(unexpected, ["extension/lib/__probe_stray_gesture_reader.js"], "the un-allowlisted probe must be flagged as unexpected");
+    assertEquals(unexpected, ["tests/__probe_stray_gesture_reader.js"], "the un-allowlisted probe must be flagged as unexpected");
   } finally {
     try { Deno.removeSync(probePath); } catch { /* ignore */ }
   }

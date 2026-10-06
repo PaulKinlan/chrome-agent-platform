@@ -13,7 +13,7 @@
 //   deno run -A scripts/kat-scheduled-next-run-widget.ts [extension] [out-dir]
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
@@ -36,6 +36,7 @@ function check(name: string, condition: boolean, detail?: unknown) {
 }
 
 await Deno.mkdir(OUT, { recursive: true });
+const profile = chromeProfileDir("kat-scheduled-next-run-widget");
 const { proc, wsUrl } = await launchChrome({
   binary: CHROME,
   args: [
@@ -43,7 +44,7 @@ const { proc, wsUrl } = await launchChrome({
     "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*", "--window-size=1440,1600",
-    `--user-data-dir=${chromeProfileDir("kat-scheduled-next-run-widget")}`,
+    `--user-data-dir=${profile}`,
     "about:blank",
   ],
 });
@@ -141,7 +142,7 @@ try {
     widget?.shadow);
 } finally {
   ws.close();
-  try { proc.kill("SIGTERM"); } catch { /* already exited */ }
+  await teardownChrome(proc, profile);
 }
 
 console.log(`\nkat-scheduled-next-run-widget: ${pass} passed, ${fail} failed`);

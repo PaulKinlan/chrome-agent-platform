@@ -27,7 +27,7 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-progress-inline`;
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 import { composerInput, composerSend } from "./lib/composer-target.ts";
 
@@ -44,12 +44,14 @@ await Deno.mkdir(OUT, { recursive: true });
 // Kernel-assigned debugging port, read back from THIS Chrome by the shared
 // launcher — a named port can silently attach to another lane's browser
 // (CAP-FB-20260829-FIXED-DEBUG-PORTS-01).
+const profile = chromeProfileDir("kat-progress-inline");
 const { proc, wsUrl, port } = await launchChrome({
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${chromeProfileDir("kat-progress-inline")}`, "about:blank"],
+    `--user-data-dir=${profile}`, "about:blank"],
 });
+try {
 const ws = new WebSocket(wsUrl);
 await new Promise((r) => { ws.onopen = () => r(null); });
 let id = 0; const pending = new Map<string, (v: any) => void>();
@@ -256,8 +258,8 @@ try {
   check("axe: axe loaded", false, String(e).slice(0, 120));
 }
 
+} finally {
+  await teardownChrome(proc, profile);
+}
 console.log(`\nkat-progress-inline: ${pass} passed, ${fail} failed`);
-try { proc.kill(); } catch { /* already exited */ }
-// Never leave the chromium child holding the port (killed runs strand it).
-try { proc.kill("SIGKILL"); } catch { /* already exited */ }
 Deno.exit(fail === 0 ? 0 : 1);

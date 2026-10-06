@@ -15,7 +15,7 @@
 //   deno run -A scripts/kat-genui-error-state.ts <path-to-extension> [<out-dir>]
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, teardownChrome } from "./lib/chrome-launch.ts";
 import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
@@ -46,21 +46,23 @@ try { await Deno.stat(`${EXT}/dist/background/service-worker.js`); } catch {
 // (CAP-FB-20260829-FIXED-DEBUG-PORTS-01).
 let proc: any;
 let ws: WebSocket | null = null;
+const profile = chromeProfileDir("kat-genui-error-state");
 try {
   const launched = await launchChrome({
     binary: CHROMIUM,
     args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
       `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
       "--remote-allow-origins=*",
-      `--user-data-dir=${chromeProfileDir("kat-genui-error-state")}`, "about:blank"],
+      `--user-data-dir=${profile}`, "about:blank"],
   });
   proc = launched.proc;
   ws = new WebSocket(launched.wsUrl);
   await new Promise((r) => ws!.onopen = r);
 } catch (e) {
   console.log(`FAIL: could not start Chrome for Testing — ${String(e)}`);
-  proc.kill(); Deno.exit(1);
+  Deno.exit(1);
 }
+try {
 let id = 0; const pending = new Map<string, (v: any) => void>();
 const contexts: any[] = [];
 ws!.onmessage = (m: MessageEvent) => {
@@ -91,10 +93,10 @@ else {
     prefsRaw = await Deno.readTextFile(prof).catch(() => null);
     if (prefsRaw === null) await sleep(1000);
   }
-  if (prefsRaw === null) { console.log("FAIL: Chrome profile never materialized"); proc.kill(); Deno.exit(1); }
+  if (prefsRaw === null) { console.log("FAIL: Chrome profile never materialized"); await teardownChrome(proc, profile); Deno.exit(1); }
   const prefs = JSON.parse(prefsRaw);
   const entry = Object.entries<any>(prefs.extensions?.settings ?? {}).find(([, v]) => String(v?.path ?? "").endsWith("extension") && v?.location === 8);
-  if (!entry) { console.log("FAIL: extension never registered"); proc.kill(); Deno.exit(1); }
+  if (!entry) { console.log("FAIL: extension never registered"); await teardownChrome(proc, profile); Deno.exit(1); }
   extId = entry[0];
 }
 
@@ -228,9 +230,12 @@ await sleep(1500);
 const retried = await host.ev(`({ status: document.getElementById("preview-status")?.textContent ?? null })`);
 check("the retry reloads back to the preparing state (the embedder re-posts on load)", /Preparing restricted preview/.test(retried?.status ?? ""), retried);
 
-console.log(`\n${pass} passed, ${fail} failed`);
 await send("Target.closeTarget", { targetId: ntp.targetId });
 await send("Target.closeTarget", { targetId: hostA.targetId });
 await send("Target.closeTarget", { targetId: host.targetId });
-proc.kill();
+} finally {
+  await teardownChrome(proc, profile);
+}
+
+console.log(`\n${pass} passed, ${fail} failed`);
 Deno.exit(fail > 0 ? 1 : 0);

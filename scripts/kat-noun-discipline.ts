@@ -11,7 +11,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -31,15 +31,17 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // lanes run at once — which produced a full page of false failures against a
 // stale extension before this was hardened. The port is assigned by the kernel
 // and read back from THIS Chrome's stderr, so there is nothing to collide with.
+const profile = chromeProfileDir("kat-noun-discipline");
 const { proc, wsUrl } = await launchChrome({
   binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     "--window-size=1280,900",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${chromeProfileDir("kat-noun-discipline")}`, "about:blank"],
+    `--user-data-dir=${profile}`, "about:blank"],
 });
 const ws = new WebSocket(wsUrl);
+try {
 await new Promise((r) => ws.onopen = r);
 let id = 0; const pending = new Map<string, (v: any) => void>();
 const send = (method: string, params: any = {}, sessionId?: string) => new Promise<any>((res) => {
@@ -54,7 +56,7 @@ ws.onmessage = (m) => {
 // MV3 registers the worker a beat after the browser is reachable — wait for
 // it rather than depending on how long the CDP handshake happened to take.
 const sw = await waitForServiceWorker(send);
-if (!sw) { console.log("FAIL: no service worker target"); Deno.exit(1); }
+if (!sw) { console.log("FAIL: no service worker target"); await teardownChrome(proc, profile); Deno.exit(1); }
 const extId = new URL(sw.url).host;
 const { result: { targetId } } = await send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` });
 const { result: { sessionId } } = await send("Target.attachToTarget", { targetId, flatten: true });
@@ -127,7 +129,9 @@ await shot("04-artifacts-view-from-card");
 
 const errors = await ev(`JSON.stringify((window.__capErrors ?? []).slice(0,5))`);
 console.log("page errors:", errors);
+} finally {
+  try { ws?.close(); } catch { /* ignore */ }
+  await teardownChrome(proc, profile);
+}
 console.log(`\n${pass} passed, ${fail} failed — screenshots in ${OUT}`);
-try { proc.kill(); } catch { /* already gone */ }
-ws.close();
 Deno.exit(fail === 0 ? 0 : 1);

@@ -24,7 +24,7 @@
 import { wireValue } from "./lib/cdp-eval.ts";
 import { composerInput } from "./lib/composer-target.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -42,13 +42,15 @@ await Deno.mkdir(OUT, { recursive: true });
 
 // The debugging port is assigned by the kernel and read back from THIS Chrome's
 // stderr — a fixed port silently attaches the harness to another lane's browser.
+const profile = chromeProfileDir("kat-composer-grow");
 const { proc, wsUrl } = await launchChrome({
   binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${chromeProfileDir("kat-composer-grow")}`, "about:blank"],
+    `--user-data-dir=${profile}`, "about:blank"],
 });
+try {
 const ws = new WebSocket(wsUrl);
 await new Promise((r) => { ws.onopen = () => r(null); });
 let id = 0; const pending = new Map<string, (v: any) => void>();
@@ -79,7 +81,7 @@ for (let i = 0; i < 100; i++) {
   if (sw) break;
   await sleep(300);
 }
-if (!sw) { console.log("FAIL: no service worker target"); proc.kill(); Deno.exit(1); }
+if (!sw) { console.log("FAIL: no service worker target"); await teardownChrome(proc, profile); Deno.exit(1); }
 const extId = new URL(sw.url).host;
 const { result: { targetId } } = await send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` });
 ({ result: { sessionId: pageSession } } = await send("Target.attachToTarget", { targetId, flatten: true }));
@@ -170,6 +172,9 @@ check("360px: no horizontal overflow introduced", (narrow?.docW ?? 9999) <= (nar
 await shot("04-composer-narrow-360");
 await send("Emulation.clearDeviceMetricsOverride", {}, pageSession);
 
+} finally {
+  await teardownChrome(proc, profile);
+}
+
 console.log(`\nKAT composer-grow: ${pass} passed, ${fail} failed`);
-proc.kill();
 Deno.exit(fail ? 1 : 0);

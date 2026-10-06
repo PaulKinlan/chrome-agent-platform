@@ -8,7 +8,7 @@
 // DOM path — the store's 2 MiB bound cannot be filled in a headless run.
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -129,7 +129,7 @@ try {
 } finally {
   await Deno.writeTextFile(`${OUT}/report.json`, JSON.stringify({ passed, failed, results }, null, 2));
   try { ws.close(); } catch { /* ignore */ }
-  try { proc.kill("SIGKILL"); } catch { /* ignore */ }
+  await teardownChrome(proc, profile);
 }
 console.log(`\n${passed} passed, ${failed} failed`);
 Deno.exit(failed === 0 ? 0 : 1);

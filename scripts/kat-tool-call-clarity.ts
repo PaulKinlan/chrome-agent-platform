@@ -14,7 +14,7 @@
 //   deno run -A scripts/kat-tool-call-clarity.ts [extension-dir] [out-dir]
 
 import { fileURLToPath } from "node:url";
-import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+import { launchChrome, openCdp, teardownChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { composerInput, composerSend } from "./lib/composer-target.ts";
 
@@ -43,8 +43,8 @@ async function main() {
   });
   const proc = chrome.proc;
   const port = chrome.port;
-
   const cdp = await openCdp(chrome.wsUrl);
+  try {
   const consoleErrors: string[] = [];
   // Console + uncaught errors from every attached target (the "no page
   // console errors" assertion at the end).
@@ -222,10 +222,13 @@ async function main() {
 
   check("no page console errors during the journey", consoleErrors.length === 0, consoleErrors.slice(0, 3));
 
+  } finally {
+    cdp.close();
+    await teardownChrome(proc, profile);
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   if (failures.length) console.log("FAILURES:", failures.join(" | "));
-  cdp.close();
-  try { proc.kill(); } catch { /* gone */ }
   Deno.exit(fail ? 1 : 0);
 }
 

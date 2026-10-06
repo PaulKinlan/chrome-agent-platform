@@ -15,7 +15,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, teardownChrome } from "./lib/chrome-launch.ts";
 import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
@@ -42,14 +42,16 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const userDataStamp = Date.now();
 // The debugging port is assigned by the kernel and read back from THIS Chrome's
 // stderr — a fixed port silently attaches the harness to another lane's browser.
+const profile = chromeProfileDir("kat-ux-lows");
 const { proc, wsUrl } = await launchChrome({
   binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${chromeProfileDir("kat-ux-lows")}`, "about:blank"],
+    `--user-data-dir=${profile}`, "about:blank"],
 });
 
+try {
 const ws = new WebSocket(wsUrl);
 await new Promise(r => ws.onopen = r);
 let id = 0; const pending = new Map<string, (v: any) => void>();
@@ -189,6 +191,9 @@ const disclosureOpen = await side.ev(`(() => { const d = document.getElementById
 check("UX-011: the 'Open another site…' disclosure reveals the URL field on demand", disclosureOpen === true, { disclosureOpen });
 await send("Target.closeTarget", { targetId: side.targetId });
 
+} finally {
+  await teardownChrome(proc, profile);
+}
+
 console.log(`\nkat-ux-lows: ${pass} passed, ${fail} failed`);
-try { proc.kill(); } catch { /* already exited */ }
 Deno.exit(fail === 0 ? 0 : 1);

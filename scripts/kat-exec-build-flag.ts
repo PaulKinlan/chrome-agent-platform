@@ -18,7 +18,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -195,8 +195,7 @@ async function main() {
     await shot(cdp, s1, "settings-developer-nav.png");
   } finally {
     try { ws.close(); } catch { /* */ }
-    try { proc.kill("SIGKILL"); } catch { /* */ }
-    try { await proc.status; } catch { /* */ }
+    await teardownChrome(proc, profile);
     try { await Deno.remove(profile, { recursive: true }); } catch { /* */ }
   }
 

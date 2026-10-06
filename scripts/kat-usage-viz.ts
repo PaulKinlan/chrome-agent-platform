@@ -17,7 +17,7 @@
 // product decision changes, needs a run-driven probe then.
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
@@ -34,13 +34,15 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 await Deno.mkdir(OUT, { recursive: true });
 // The debugging port is assigned by the kernel and read back from THIS Chrome's
 // stderr — a fixed port silently attaches the harness to another lane's browser.
+const profile = chromeProfileDir("kat-usage-viz");
 const { proc, wsUrl } = await launchChrome({
   binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${chromeProfileDir("kat-usage-viz")}`, "about:blank"],
+    `--user-data-dir=${profile}`, "about:blank"],
 });
+try {
 const ws = new WebSocket(wsUrl);
 await new Promise(r => ws.onopen = r);
 let id = 0; const pending = new Map<string, (v: any) => void>();
@@ -194,6 +196,8 @@ check("cleared ledger shows the honest empty state", empty.includes("no data"), 
 await screenshot("usage-empty");
 
 await send("Target.closeTarget", { targetId });
-await proc.kill();
+} finally {
+  await teardownChrome(proc, profile);
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 Deno.exit(fail === 0 ? 0 : 1);

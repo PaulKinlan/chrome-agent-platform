@@ -28,7 +28,7 @@
 // source as an ES module inside the sandboxed iframe.
 
 import { fileURLToPath } from "node:url";
-import { launchChrome, openCdp, computeUnpackedExtensionId } from "./lib/chrome-launch.ts";
+import { launchChrome, openCdp, computeUnpackedExtensionId, teardownChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -171,7 +171,8 @@ const GUARD_MOD_SOURCE = `export default async () => {
 };`;
 
 async function runModuleCases() {
-  const { proc, wsUrl } = await launchChrome({ extension: EXT, timeoutMs: 40_000 });
+  const launched = await launchChrome({ extension: EXT, timeoutMs: 40_000 });
+  const { proc, wsUrl, profile } = launched;
   try {
     const cdp = await openCdp(wsUrl);
     const id = await computeUnpackedExtensionId(EXT);
@@ -206,7 +207,7 @@ async function runModuleCases() {
       return { out };
     })()`);
   } finally {
-    try { proc.kill("SIGKILL"); } catch { /* already gone */ }
+    await teardownChrome(proc, profile);
   }
 }
 
@@ -222,7 +223,8 @@ async function runModuleCases() {
 //     which the module path does not touch (the third, script-host's inline
 //     resolveScriptModules, stays a documented scope limit: it is the SW path).
 async function runSeamCases() {
-  const { proc, wsUrl } = await launchChrome({ extension: EXT, timeoutMs: 40_000 });
+  const launched = await launchChrome({ extension: EXT, timeoutMs: 40_000 });
+  const { proc, wsUrl, profile } = launched;
   try {
     const cdp = await openCdp(wsUrl);
     const id = await computeUnpackedExtensionId(EXT);
@@ -253,12 +255,13 @@ async function runSeamCases() {
       return out;
     })()`);
   } finally {
-    try { proc.kill("SIGKILL"); } catch { /* already gone */ }
+    await teardownChrome(proc, profile);
   }
 }
 
 // ── run it through the real host path ─────────────────────────────────────
-const { proc, wsUrl } = await launchChrome({ extension: EXT, timeoutMs: 40_000 });
+const launched = await launchChrome({ extension: EXT, timeoutMs: 40_000 });
+const { proc, wsUrl, profile } = launched;
 let result: any = null;
 try {
   const cdp = await openCdp(wsUrl);
@@ -271,7 +274,7 @@ try {
     return await host.runScriptInIframe(document, ${JSON.stringify(MODULE_SOURCE)}, "ovfm4-kat", { timeoutMs: 25000 });
   })()`);
 } finally {
-  try { proc.kill("SIGKILL"); } catch { /* already gone */ }
+  await teardownChrome(proc, profile);
   // the owned endpoint stays up for the module cases below: shutting it down here
   // would make "never reached the endpoint" vacuously true
 }

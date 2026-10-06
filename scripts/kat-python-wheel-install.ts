@@ -4,7 +4,7 @@
 // Run:
 //   deno run -A scripts/kat-python-wheel-install.ts
 
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 import { fileURLToPath } from "node:url";
 
@@ -257,7 +257,7 @@ except Exception as e:
 
 } finally {
   try { ws.close(); } catch {}
-  try { proc.kill("SIGTERM"); } catch {}
+  await teardownChrome(proc, profile);
   try { await Deno.remove(profile, { recursive: true }); } catch {}
 }
 

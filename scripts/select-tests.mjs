@@ -173,6 +173,10 @@ export const SOURCE_INSPECTING_GUARDS = [
   // and no script declares private or ad-hoc duplicate service-worker match filters.
   // It reads scripts/ as data without import edges, so it is registered in ALWAYS_ON.
   "tests/kat-service-worker-match.test.ts",
+  // chrome-agent-platform-elst: asserts that real-browser tests and KAT harnesses
+  // reap their full process tree carrying a profile, not a bare proc.kill().
+  // It reads tests/ and scripts/ as data, so it is registered in ALWAYS_ON.
+  "tests/real-browser-teardown.test.ts",
 ];
 
 /**

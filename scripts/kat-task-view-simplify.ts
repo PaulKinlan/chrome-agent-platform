@@ -27,7 +27,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -46,13 +46,15 @@ await Deno.mkdir(OUT, { recursive: true });
 // Kernel-assigned debugging port, read back from THIS Chrome by the shared
 // launcher — a named port can silently attach to another lane's browser
 // (CAP-FB-20260829-FIXED-DEBUG-PORTS-01).
+const profile = chromeProfileDir("kat-tvs");
 const { proc, wsUrl, port } = await launchChrome({
   binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${chromeProfileDir("kat-tvs")}`, "about:blank"],
+    `--user-data-dir=${profile}`, "about:blank"],
 });
+try {
 const ws = new WebSocket(wsUrl);
 await new Promise((r) => { ws.onopen = () => r(null); });
 let id = 0; const pending = new Map<string, (v: any) => void>();
@@ -342,6 +344,8 @@ await sleep(2000);
 st = await evalIn(viewState, pageSession);
 check("a settled run leaves no debug affordance", !!st && st.toggleExists === true && st.toggleHidden === true, st);
 
+} finally {
+  await teardownChrome(proc, profile);
+}
 console.log(`\n${pass} passed, ${fail} failed`);
-proc.kill();
 Deno.exit(fail ? 1 : 0);

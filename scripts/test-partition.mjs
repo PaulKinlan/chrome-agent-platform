@@ -34,6 +34,9 @@ export const SERIAL_REASONS = {
   // nz2r: writes a stale build stage dir under extension/ to prove the
   // per-change gate is immune to killed-build residue (swept in its finally).
   "tests/select-tests-residue.test.ts": "plants build residue under extension/ to prove test:changed ignores it (removed in finally)",
+  // elst: plants an untracked scripts/kat-*.ts probe in the real tree for its real-tree falsification;
+  // races harness-registry's scripts/ census and residue on kill REDs two always-on guards.
+  "tests/real-browser-teardown.test.ts": "plants an untracked scripts/kat-*.ts probe in the real tree for its real-tree falsification; races harness-registry's scripts/ census and residue on kill REDs two always-on guards",
   // mwz3/yx2h: the allowlist guard writes extension/lib/__probe_stray_gesture_reader.js
   // to the REAL repo tree for its end-to-end falsification, then removes it in finally.
   // A kill before finally leaves untracked shipped-path residue that poisons

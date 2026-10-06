@@ -21,7 +21,7 @@
 //
 //   deno run -A scripts/kat-python-permissioned-fetch.ts
 
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 import { fileURLToPath } from "node:url";
 
@@ -308,8 +308,7 @@ except ImportError as e:
   check("and nothing further reached the origin",
     seen.filter((r) => r.path === "/ok").length === 1, seen.map((r) => r.path));
 } finally {
-  try { proc.kill("SIGKILL"); } catch { /* already dead */ }
-  try { await proc.status; } catch { /* reaped */ }
+  await teardownChrome(proc, profile);
   await server.shutdown().catch(() => {});
   await Deno.remove(profile, { recursive: true }).catch(() => {});
 }

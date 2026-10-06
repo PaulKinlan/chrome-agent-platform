@@ -18,7 +18,7 @@
 // default-focus rule. CAP-FB-20260827-DIALOG-CONSOLIDATION-01.
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 
 const EXT = fileURLToPath(new URL("../extension", import.meta.url));
 const SHOTS = Deno.env.get("CAP_EVIDENCE_DIR") ?? "./evidence/dialogs";
@@ -216,7 +216,7 @@ console.log(`\ndialog evidence: ${results.length - failed}/${results.length} pas
 } finally {
   clearTimeout(hardTimer);
   try { ws.close(); } catch { /* closed */ }
-  try { proc.kill("SIGKILL"); } catch { /* gone */ }
+  await teardownChrome(proc, profile);
   await Deno.remove(profile, { recursive: true }).catch(() => {});
 }
 Deno.exit(failed ? 1 : 0);

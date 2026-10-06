@@ -11,7 +11,7 @@
 // deno run -A scripts/kat-user-wasm-call.ts [extension-dir] [evidence-dir]
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { launchChrome, openCdp, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, openCdp, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { buildWasiStdoutBytesWasm } from "../tests/wasm-fixture-builder.mjs";
 
@@ -336,7 +336,7 @@ try {
   check(`KAT execution threw: ${String(err?.message ?? err)}`, false, err);
 } finally {
   if (chromeInstance) {
-    try { await chromeInstance.close(); } catch { /* best effort */ }
+    try { await teardownChrome(chromeInstance, PROFILE); } catch { /* best effort */ }
   }
 }
 

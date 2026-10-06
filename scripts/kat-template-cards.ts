@@ -3,7 +3,7 @@
 // behind Advanced, applies an editable template, and saves through real MV3.
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -17,13 +17,15 @@ function check(name: string, condition: boolean, detail?: unknown) {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 await Deno.mkdir(OUT, { recursive: true });
 
+const profile = `${OUT}/profile-${Date.now()}`;
 const { proc, wsUrl } = await launchChrome({
   binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    "--remote-allow-origins=*", `--user-data-dir=${OUT}/profile-${Date.now()}`, "about:blank"],
+    "--remote-allow-origins=*", `--user-data-dir=${profile}`, "about:blank"],
 });
 const ws = new WebSocket(wsUrl);
+try {
 await new Promise((resolve) => { ws.onopen = () => resolve(null); });
 let id = 0;
 const pending = new Map<string, (value: any) => void>();
@@ -40,7 +42,7 @@ ws.onmessage = (event) => {
 };
 
 const sw = await waitForServiceWorker(send);
-if (!sw) { console.log("FAIL: no service worker target"); Deno.exit(1); }
+if (!sw) { console.log("FAIL: no service worker target"); await teardownChrome(proc, profile); Deno.exit(1); }
 const extId = new URL(sw.url).host;
 const target = await send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` });
 const attached = await send("Target.attachToTarget", { targetId: target.result.targetId, flatten: true });
@@ -108,8 +110,10 @@ const saved = await ev(`chrome.runtime.sendMessage({ type: 'named-agent.get', id
 check("Create persists the selected template through named-agent.create", saved?.ok === true && saved?.name === "Chief of Staff" && saved?.role.includes("Chief of Staff Persona") && saved?.skills.length === 5, saved);
 await shot("02-template-created");
 
+} finally {
+  ws.close();
+  await teardownChrome(proc, profile);
+}
+
 console.log(`\nkat-template-cards: ${pass} passed, ${fail} failed`);
-try { proc.kill(); } catch { /* already exited */ }
-await proc.status.catch(() => null);
-ws.close();
 if (fail) Deno.exit(1);

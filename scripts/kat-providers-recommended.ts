@@ -15,7 +15,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -30,14 +30,15 @@ function check(name: string, cond: boolean, detail?: unknown) {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+const profile = chromeProfileDir("kat-providers-recommended");
 const { proc, wsUrl } = await launchChrome({
   binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${chromeProfileDir("kat-providers-recommended")}`, "about:blank"],
+    `--user-data-dir=${profile}`, "about:blank"],
 });
-
+try {
 const ws = new WebSocket(wsUrl);
 await new Promise((r) => ws.onopen = r);
 let id = 0; const pending = new Map<string, (v: any) => void>();
@@ -154,6 +155,8 @@ check("the hub strip reads 'No model connected yet' on a fresh profile", strip?.
 check("the fresh-profile strip never says 'Internal testing provider active'", !/Internal testing provider/.test(String(strip?.text)), strip);
 await shot(`${OUT}/hub-strip-no-model.png`);
 
+} finally {
+  await teardownChrome(proc, profile);
+}
 console.log(`\n${pass} passed, ${fail} failed`);
-proc.kill();
 Deno.exit(fail === 0 ? 0 : 1);

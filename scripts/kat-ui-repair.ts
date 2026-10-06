@@ -2,7 +2,7 @@
 // Runs against the real loaded extension and writes durable screenshots + metrics.
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -181,7 +181,7 @@ try {
   check("dialog width is stable across disclosures", widths.every(Number.isFinite) && Math.max(...widths) - Math.min(...widths) <= 1, widths);
   check("disclosures stay inside the dialog without horizontal overflow", [collapsed, advanced, skills].every((state) => (state.scrollOverflow ?? 1) <= 0), { collapsed: collapsed.scrollOverflow, advanced: advanced.scrollOverflow, skills: skills.scrollOverflow });
 } finally {
-  try { proc.kill("SIGKILL"); } catch { /* already gone */ }
+  await teardownChrome(proc, profile);
   await Deno.remove(profile, { recursive: true }).catch(() => {});
 }
 console.log(`\nUI repair KAT: ${passed} passed, ${failed} failed`);

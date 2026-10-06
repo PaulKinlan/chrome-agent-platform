@@ -46,7 +46,7 @@ function stripStrings(src: string): string {
 
 /** Source with comments and string literals removed: what is executable. */
 function codeOnly(src: string): string {
-  return stripStrings(stripComments(src));
+  return stripComments(stripStrings(src));
 }
 
 /** A launchChrome call is a FAKE-browser probe iff its args name a fake binary. */
@@ -78,7 +78,17 @@ function launchSites(code: string): string[] {
 
 /** True when a source contains a shared tree-kill teardown carrying a profile. */
 function hasTreeKillTeardown(code: string): boolean {
-  return /(?:teardownChrome|closeChrome|killProcessTree)\s*\([^)]*,/.test(code);
+  if (/\b(?:launched|chrome|chromeInstance)\.close\s*\(\s*\)/.test(code)) {
+    return true;
+  }
+  const matches = [...code.matchAll(/(?:teardownChrome|closeChrome|killProcessTree)\s*\(\s*([^,()]+)\s*,\s*([^,()]+)\s*\)/g)];
+  for (const m of matches) {
+    const profileArg = m[2].trim();
+    // A re-minting call like chromeProfileDir(...) fails closed: it mints a fresh unattached path
+    if (/\bchromeProfileDir\s*\(/.test(profileArg)) continue;
+    if (profileArg.length > 0) return true;
+  }
+  return false;
 }
 
 async function testFiles(): Promise<string[]> {
@@ -106,10 +116,11 @@ Deno.test("jixr: every real-browser test tears down its whole tree with a profil
   );
 });
 
-// The two harnesses a parallel-phase test SPAWNS and that launch a real browser.
+// The harnesses a test spawns that launch a real browser.
 // Each must reap the tree via the shared helper, carrying its profile. A revert
 // to `proc.kill()` here is exactly the orphan the reaper killed the gate for.
 const SPAWNED_REAL_BROWSER_HARNESSES = [
+  "scripts/agent-provider-picker.ts",
   "scripts/kat-bgagent-delete.ts",
   "scripts/kat-site-delegation-attachments.ts",
 ];
@@ -128,4 +139,89 @@ Deno.test("jixr: every test-spawned real-browser harness tears down its whole tr
     "a test-spawned real-browser harness must use teardownChrome/closeChrome/killProcessTree with a profile:\n" +
       offenders.join("\n"),
   );
+});
+
+async function katHarnessFiles(): Promise<string[]> {
+  const out: string[] = [];
+  for await (const entry of Deno.readDir(`${ROOT}scripts`)) {
+    if (entry.isFile && entry.name.startsWith("kat-") && entry.name.endsWith(".ts") && entry.name !== "kat-runner.ts") {
+      out.push(`scripts/${entry.name}`);
+    }
+  }
+  return out.sort();
+}
+
+Deno.test("elst: every test:kat real-browser harness tears down its whole tree with a profile", async () => {
+  const offenders: string[] = [];
+  const kats = await katHarnessFiles();
+  assert(kats.length > 50, `must discover the test:kat harness suite (found ${kats.length})`);
+  for (const rel of kats) {
+    const code = codeOnly(await Deno.readTextFile(`${ROOT}${rel}`));
+    const sites = launchSites(code);
+    if (sites.length === 0) continue;
+    if (sites.every(isFakeBinary)) continue;
+    if (!hasTreeKillTeardown(code)) offenders.push(rel);
+  }
+  assertEquals(
+    offenders,
+    [],
+    "a test:kat harness launches Chrome but does not call teardownChrome/closeChrome/killProcessTree " +
+      "with a profile (a bare proc.kill() orphans the tree):\n" + offenders.join("\n"),
+  );
+});
+
+Deno.test("elst: falsification — dropping teardownChrome or using bare proc.kill turns the guard RED", () => {
+  // Mutant A: a launch with a bare proc.kill() and no profile teardown
+  const mutantBareKill = `
+    const { proc } = await launchChrome({ binary: "/usr/bin/chromium" });
+    try { doWork(); } finally { proc.kill(); }
+  `;
+  const codeA = codeOnly(mutantBareKill);
+  assert(launchSites(codeA).length > 0, "Mutant A must register as a real launch");
+  assertEquals(hasTreeKillTeardown(codeA), false, "Mutant A with bare proc.kill() must FAIL teardown check");
+
+  // Mutant B: a launch with no teardown at all
+  const mutantNoTeardown = `
+    const { proc } = await launchChrome({ binary: "/usr/bin/chromium" });
+    doWork();
+  `;
+  const codeB = codeOnly(mutantNoTeardown);
+  assert(launchSites(codeB).length > 0, "Mutant B must register as a real launch");
+  assertEquals(hasTreeKillTeardown(codeB), false, "Mutant B with no teardown must FAIL teardown check");
+
+  // Mutant C: teardownChrome called without a profile (parent-only single-arg form)
+  const mutantNoProfile = `
+    const { proc } = await launchChrome({ binary: "/usr/bin/chromium" });
+    try { doWork(); } finally { await teardownChrome(proc); }
+  `;
+  const codeC = codeOnly(mutantNoProfile);
+  assert(launchSites(codeC).length > 0, "Mutant C must register as a real launch");
+  assertEquals(hasTreeKillTeardown(codeC), false, "Mutant C without profile must FAIL teardown check");
+
+  // Compliant: real compliant teardown passes
+  const compliant = `
+    const { proc } = await launchChrome({ binary: "/usr/bin/chromium", profile });
+    try { doWork(); } finally { await teardownChrome(proc, profile); }
+  `;
+  const codeD = codeOnly(compliant);
+  assert(launchSites(codeD).length > 0, "Compliant code must register as a real launch");
+  assertEquals(hasTreeKillTeardown(codeD), true, "Compliant code must PASS teardown check");
+});
+
+Deno.test("elst: REAL-TREE falsification — a real kat-*.ts harness dropping teardown fails the guard", async () => {
+  const probePath = `${ROOT}scripts/kat-__probe_unreaped_test.ts`;
+  try {
+    await Deno.writeTextFile(
+      probePath,
+      `// Temporary test probe\nimport { launchChrome } from "./lib/chrome-launch.ts";\nconst { proc } = await launchChrome({ binary: "/usr/bin/chromium" });\nproc.kill();\n`,
+    );
+    const files = await katHarnessFiles();
+    assert(files.includes("scripts/kat-__probe_unreaped_test.ts"), "katHarnessFiles must discover the probe harness");
+    const code = codeOnly(await Deno.readTextFile(probePath));
+    const sites = launchSites(code);
+    assert(sites.length > 0, "probe must register as a real launch site");
+    assertEquals(hasTreeKillTeardown(code), false, "probe with bare proc.kill must FAIL teardown check");
+  } finally {
+    try { await Deno.remove(probePath); } catch { /* ignore */ }
+  }
 });

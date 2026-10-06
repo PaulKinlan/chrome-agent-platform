@@ -18,7 +18,7 @@
 //   CAP_CHROMIUM=<binary> deno run -A scripts/kat-attention-badge.ts [<ext>] [<out-dir>]
 
 import { fileURLToPath } from "node:url";
-import { launchChrome, openCdp, SW_MATCH } from "./lib/chrome-launch.ts";
+import { launchChrome, openCdp, SW_MATCH, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
@@ -236,8 +236,7 @@ try {
   console.log(`FAIL: harness error — ${String((e as Error)?.stack ?? (e as Error)?.message ?? e)}`);
 } finally {
   cdp.close();
-  try { proc.kill("SIGKILL"); } catch { /* gone */ }
-  try { await proc.status; } catch { /* reaped */ }
+  await teardownChrome(proc, profile);
   await Deno.remove(profile, { recursive: true }).catch(() => {});
   await Deno.remove(tempExt, { recursive: true }).catch(() => {});
 }
