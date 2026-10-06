@@ -1,0 +1,78 @@
+// tests/chrome-profile-location-environment.test.ts — chrome-agent-platform-hlgr.
+//
+// A browser-dependent guard must refuse ENVIRONMENTALLY on a host with no resolvable browser: NAMED,
+// COUNTED, and distinguishable from BOTH a pass and a product failure. This drives that path — and the
+// degradation cases are asserted explicitly, so the test goes RED if the refusal is ever weakened into
+// a silent ignore (which reads as green) or into a generic failure (which blames the tree).
+//
+// HOW ABSENCE IS FORCED, and why not by hiding the host's browser: `resolveChromiumBinaryReport` takes
+// an injectable `exists` "for deterministic tests" — its own documented hook — because on a VM that HAS
+// a browser (this one does, /usr/bin/chromium plus the chrome-for-testing cache, both provisioned for
+// the fleet) no amount of CAP_CHROMIUM/HOME redirection makes the host browserless. So the absence is
+// produced through the supported hook, and the resolver's REAL report is what feeds the refusal, rather
+// than a hand-written stub: the two halves are proven to fit.
+import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { browserRefusal } from "../scripts/lib/browser-refusal.ts";
+import { resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
+import { ENVIRONMENTAL_REFUSAL_EXIT } from "../scripts/lib/quiet-window.ts";
+
+const BROWSER_TEST = "9t1b: a REAL browser holds its profile while the whole tree is copied";
+
+Deno.test("hlgr: no browser => NAMED and COUNTED environmental refusal at exit 75", () => {
+  const refusal = browserRefusal(
+    {
+      binary: null,
+      tried: ["CAP_CHROMIUM=/nonexistent-browser", "chrome-for-testing cache: <none>", "default /usr/bin/chromium (missing on this box)"],
+    },
+    [BROWSER_TEST],
+  );
+  assert(refusal !== null, "a missing browser must produce a refusal");
+
+  // (1) ENVIRONMENTAL, not a product failure: the repo's third verdict.
+  assertEquals(refusal!.exit, ENVIRONMENTAL_REFUSAL_EXIT, "the refusal exit must be the environmental one (75)");
+  assert(refusal!.exit !== 1, "exit 1 would be indistinguishable from a product defect");
+  assert(refusal!.exit !== 0, "exit 0 with no marker would be a silent ignore, which reads as a pass");
+
+  // (2) NAMED in the human-readable summary, with the reason, where the operator looks.
+  assertStringIncludes(refusal!.line, "ENVIRONMENT:", "the refusal must carry the ENVIRONMENT: marker line");
+  assert(/no resolvable browser/i.test(refusal!.line), "the refusal must NAME the environmental reason");
+  assertStringIncludes(refusal!.line, BROWSER_TEST, "the refusal must NAME the test it refused");
+  assertEquals(
+    refusal!.marker,
+    "CAP_ENVIRONMENTAL_REFUSAL",
+    "the machine-readable marker must be the repo's, so a consumer can tell this apart from a pass",
+  );
+
+  // (3) COUNTED, on both channels — a count without a name is unusable, and a name without a count
+  // cannot tell a reader how much of the file went unverified.
+  assert(/refusing 1 browser-dependent test/i.test(refusal!.line), "the summary must count the refusals");
+  assertEquals(refusal!.payload.refused, 1, "the payload must carry the count");
+  assertEquals(refusal!.payload.tests, [BROWSER_TEST], "the payload must name what was refused");
+  assertEquals(refusal!.payload.reason, "no-resolvable-browser", "the payload must carry the reason");
+  assertEquals(
+    (refusal!.payload.tried as string[]).length,
+    3,
+    "the payload must keep the resolution steps, so the operator knows what to fix",
+  );
+});
+
+Deno.test("hlgr: a RESOLVED browser never refuses — the guard cannot refuse spuriously", () => {
+  assertEquals(
+    browserRefusal({ binary: "/usr/bin/chromium", tried: ["default /usr/bin/chromium"] }, [BROWSER_TEST]),
+    null,
+    "a resolved browser must NOT produce a refusal, or the guard would skip work it can do",
+  );
+});
+
+Deno.test("hlgr: the resolver's real absence report drives the refusal end-to-end", () => {
+  // The injectable hook is the supported way to produce absence; the failure-path report it returns is
+  // exactly what the guard hands to the refusal in production.
+  const report = resolveChromiumBinaryReport({ envGet: () => undefined, cacheRoot: "/nonexistent-cache-for-hlgr", exists: () => false });
+  assertEquals(report.binary, null, "with no override, no cache and no default binary, nothing resolves");
+  assert(report.tried.length >= 1, `the report must name what it tried: ${JSON.stringify(report.tried)}`);
+  const refusal = browserRefusal(report, [BROWSER_TEST]);
+  assert(refusal !== null, "the real absence report must produce a refusal");
+  assertEquals(refusal!.exit, ENVIRONMENTAL_REFUSAL_EXIT);
+  assertStringIncludes(refusal!.line, BROWSER_TEST);
+  assert(/refusing 1 browser-dependent test/i.test(refusal!.line));
+});

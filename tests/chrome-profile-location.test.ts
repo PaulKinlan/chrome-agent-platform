@@ -30,6 +30,9 @@ import {
 } from "../scripts/lib/chrome-profile-dir.ts";
 import { durableRoot, isRamBacked } from "../scripts/lib/durable-root.mjs";
 
+/** The file's ONE browser-dependent test, named where the refusal counts it. */
+const BROWSER_DEPENDENT_TESTS = ["9t1b: a REAL browser holds its profile while the whole tree is copied"];
+
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/u, "");
 const SCRIPTS = `${ROOT}/scripts`;
 
@@ -86,12 +89,26 @@ Deno.test("9t1b: isInsideRepo sees through a symlink into the tree", () => {
 });
 
 Deno.test("9t1b: a REAL browser holds its profile while the whole tree is copied", async () => {
+  // chrome-agent-platform-hlgr: this file's ONE browser-dependent test. On a host with no resolvable
+  // browser it must refuse ENVIRONMENTALLY — NAMED and COUNTED — never a silent ignore (which reads as
+  // a pass) and never a product red (which blames the tree for an environment difference). Exit 75 is
+  // the repo's third verdict (scripts/lib/quiet-window.ts, as scripts/lib/heavy-gate-slot.ts already
+  // uses); the summary names the test and counts the refusals, because a count without a name is
+  // unusable and an exit code alone is invisible to a human reading the log.
+  // chrome-agent-platform-hlgr: this file's ONE browser-dependent test. On a host with no resolvable
+  // browser it must refuse ENVIRONMENTALLY — NAMED and COUNTED — never a silent ignore (which reads as
+  // a pass) and never a product red (which blames the tree for an environment difference). The verdict
+  // lives in scripts/lib/browser-refusal.ts so its wording and count are unit-testable without a
+  // browser; resolveChromiumBinaryReport is the repo's resolver that distinguishes "resolved" from
+  // "fell through to a default that may not exist".
+  const { launchChrome, resolveChromiumBinaryReport } = await import("../scripts/lib/chrome-launch.ts");
+  const { refuseWithoutBrowser } = await import("../scripts/lib/browser-refusal.ts");
+  refuseWithoutBrowser(resolveChromiumBinaryReport(), BROWSER_DEPENDENT_TESTS);
   // The race, driven for real: launch Chrome with a profile from the helper,
   // keep it alive, and copy the WHOLE working tree underneath it — the exact
   // command that failed in tests/cdp-client.test.ts (`cp -a <repo>/. <dst>/.`).
   // Before this bead the profile was inside the tree, so the copy died on files
   // Chrome unlinked mid-copy. It costs a few seconds of I/O; that is the point.
-  const { launchChrome } = await import("../scripts/lib/chrome-launch.ts");
   const profile = chromeProfileDir("kat-live-copy");
   const scratch = Deno.makeTempDirSync({ prefix: "9t1b-copy-" });
   const lockScope = await Deno.makeTempFile({ prefix: "9t1b-scope-" });
