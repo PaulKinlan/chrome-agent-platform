@@ -2,7 +2,7 @@
 import { assert, assertEquals, assertRejects, assertStringIncludes, assertThrows } from 'jsr:@std/assert@1';
 import { build, stop } from 'npm:esbuild@0.25.12';
 import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { browserDependencies, browserProcessEnvOptions, EMPTY_PROCESS_ENV_DEFINE_NAME, projectAgentDoBrowser } from '../scripts/browser-dependencies.mjs';
 
@@ -154,6 +154,43 @@ Deno.test('browser dependencies (3337): the coupled shim still EVALUATES to one 
     JSON.stringify({ isObject: true, keyCount: 0, propUndefined: true }),
     'the shim must still be one empty object',
   );
+});
+
+Deno.test('browser dependencies (3337): EVERY bundle build.mjs emits carries the banner, substitutes every process.env and has no define module', async () => {
+  // The per-bundle STATIC leg (coord's addition): the worker entry is EXECUTED in the test below, but the
+  // other shipped bundles' init paths need a browser to run, so their substitution is checked on the
+  // emitted artifact instead — banner declared, no reference left to process.env, no define module. The
+  // entry list mirrors build.mjs (the six surfaces are its SURFACE_BUNDLES plus the named bundles).
+  const entries = [
+    'background/service-worker.js',
+    'options/options.js',
+    'ntp/ntp.js',
+    'sidepanel/sidepanel.js',
+    'shared/diff-core.js',
+    'artifacts/index.js',
+    'artifact/artifact.js',
+    'directory/directory.js',
+    'privacy/privacy.js',
+    'offscreen/offscreen.js',
+    'lib/user-wasm-store-client.js',
+    'workers/agent-worker.js',
+  ];
+  const result = await build({
+    ...options,
+    outdir: join(ROOT, '.build', 'process-env-shim-static'),
+    entryPoints: entries.map((e) => join(ROOT, 'extension', e)),
+  });
+  assertEquals(result.outputFiles.length, entries.length, 'every entry must produce exactly one bundle');
+  for (const out of result.outputFiles) {
+    const label = relative(ROOT, out.path);
+    assertStringIncludes(
+      out.text,
+      `const ${EMPTY_PROCESS_ENV_DEFINE_NAME} = {};`,
+      `${label} must carry the banner that declares the defined identifier`,
+    );
+    assertEquals((out.text.match(/\bprocess\.env/g) || []).length, 0, `${label} must substitute every process.env`);
+    assert(!/<define:/.test(out.text), `${label} must not carry esbuild's shared define module`);
+  }
 });
 
 Deno.test('browser dependencies (3337): the REAL agent-worker entry builds with the coupled shim and EXECUTES without a ReferenceError', async () => {
