@@ -34,6 +34,28 @@ async function drive(site: "run-tests" | "select-tests") {
   }
 }
 
+Deno.test("weff: a symlinked run-tests entry cannot exit green without running the gate", async () => {
+  const dir = durableDir(`weff-main-guard-${Deno.pid}`);
+  const link = join(dir, "zz-weff-run-tests-link.mjs");
+  const driver = join(dir, "zz-weff-main-guard-driver.mjs");
+  await Deno.symlink(join(ROOT, "scripts/run-tests.mjs"), link);
+  await Deno.writeTextFile(driver,
+    `import { isRunTestsEntry } from ${JSON.stringify(join(ROOT, "scripts/run-tests.mjs"))};\n` +
+      `console.log("WEFF_SYMLINK_ENTRY=" + isRunTestsEntry(process.argv[2]));\n` +
+      `console.log("WEFF_IMPORTED_DRIVER=" + isRunTestsEntry(process.argv[1]));\n`);
+  try {
+    const { code, stdout } = await new Deno.Command("node", {
+      args: [driver, link], cwd: ROOT, stdout: "piped", stderr: "null",
+    }).output();
+    const out = decoder.decode(stdout);
+    assertEquals(code, 0, `the guard probe must not crash:\n${out}`);
+    assertStringIncludes(out, "WEFF_SYMLINK_ENTRY=true", "a symlinked entry must run the gate");
+    assertStringIncludes(out, "WEFF_IMPORTED_DRIVER=false", "importing the module must not launch the full suite");
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
 for (const site of ["run-tests", "select-tests"] as const) {
   Deno.test(`weff: ${site} parallel timeout names candidates in a STDOUT-ONLY capture`, async () => {
     const { code, out, name } = await drive(site);
