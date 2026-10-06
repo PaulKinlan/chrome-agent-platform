@@ -164,19 +164,22 @@ Deno.test("9epn.4 bundle budget: every generated bundle has a ceiling and the ga
   assertEquals(
     [...Object.keys(STORE_BUNDLE_BUDGETS)].sort(),
     [
-      "background/service-worker.js",
-      "ntp.bundle.js",
-      "options.bundle.js",
-      "shared/diff-core.bundle.js",
-      "sidepanel.bundle.js",
-      "workers/agent-worker.js",
       "artifacts.bundle.js",
       "artifact.bundle.js",
+      "background/service-worker.js",
       "directory.bundle.js",
-      "privacy.bundle.js",
+      "ntp.bundle.js",
       "offscreen.bundle.js",
+      "options.bundle.js",
+      "privacy.bundle.js",
+      "shared/diff-core.bundle.js",
+      "sidepanel.bundle.js",
       "user-wasm-store-client.bundle.js",
-    ],
+      "workers/agent-worker.js",
+      // Sorted here rather than by hand: the actual list is sorted, and the two
+      // "artifact" names differ only at the 9th character ('.' < 's'), which is
+      // exactly the kind of hand-ordering that fails for the wrong reason.
+    ].sort(),
   );
   for (const [surface, budget] of entries) {
     assert(Number.isSafeInteger(budget) && budget > 0, `${surface} has a positive integer ceiling (got ${budget})`);
