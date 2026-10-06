@@ -20,6 +20,28 @@ function stripComments(src: string): string {
     .replace(/(^|\s)\/\/.*$/gm, "$1");
 }
 
+// A launch call is CODE; the same text written INSIDE a string literal is a
+// FIXTURE. tests/chrome-profile-static.test.ts feeds the launch-site scanner
+// arrays of real source lines AS STRINGS, and the raw-text predicate below
+// read one of those fixtures as a second real browser launch
+// (chrome-agent-platform-qepn: that made this always-on guard red on main
+// 28fde694, in every lane's subset gate). Strip string literals too, so this
+// guard measures calls. It does not weaken the guard for real calls — it
+// strengthens them: a template literal in an argument list can no longer hide
+// the closing `})` the pattern needs. Escapes and newlines are honoured so one
+// unterminated quote cannot swallow the rest of the file.
+function stripStrings(src: string): string {
+  return src
+    .replace(/`(?:\\[\s\S]|[^\\`])*`/g, "``")
+    .replace(/'(?:\\[\s\S]|[^\\'\n])*'/g, "''")
+    .replace(/"(?:\\[\s\S]|[^\\"\n])*"/g, '""');
+}
+
+/** Source with comments and string literals removed: what is executable. */
+function codeOnly(src: string): string {
+  return stripStrings(stripComments(src));
+}
+
 Deno.test("contract: docs/CHROME-TEST-CONTRACT.md exists and is cited in AGENTS.md", async () => {
   const contract = await Deno.readTextFile(`${ROOT}docs/CHROME-TEST-CONTRACT.md`).catch(() => null);
   assert(contract !== null, "docs/CHROME-TEST-CONTRACT.md must exist");
@@ -43,7 +65,7 @@ Deno.test("contract: chrome-profile-location.test.ts is the SOLE real-browser te
 
   for (const rel of files.sort()) {
     const raw = await Deno.readTextFile(`${ROOT}${rel}`);
-    const code = stripComments(raw);
+    const code = codeOnly(raw);
     for (const m of code.matchAll(/launchChrome\s*\(\s*\{([^)]*)\}\s*\)/gs)) {
       const callArgs = m[1];
       if (/\bbinary\s*:/.test(callArgs)) {
@@ -76,7 +98,7 @@ Deno.test("contract: no unit test in tests/ requests canonicalLock on launchChro
   const offenders: string[] = [];
   for (const rel of files) {
     const raw = await Deno.readTextFile(`${ROOT}${rel}`);
-    const code = stripComments(raw);
+    const code = codeOnly(raw);
     for (const m of code.matchAll(/launchChrome\s*\(\s*\{([^)]*)\}\s*\)/gs)) {
       const callArgs = m[1];
       // Canonical lock is reserved for scripts/ acceptance suites; unit tests never take it
