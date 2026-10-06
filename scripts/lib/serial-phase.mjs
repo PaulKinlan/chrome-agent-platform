@@ -167,6 +167,14 @@ function announce(line) {
   console.error(line);
 }
 
+// chrome-agent-platform-ulcw: a per-process monotonic run counter. Millisecond stamp + pid is NOT
+// unique within one process — two calls started in the same millisecond share it — and a reader who
+// then counts the durable per-file logs under one stamp can see MORE failures than the summary of any
+// single run reported, which is exactly the '1/6 failed with two failure logs' evidence on this bead.
+// The counter makes each call's run id unique on the box, and the summary PRINTS that id, so the count
+// and its logs are matched by the same value instead of inferred from a timestamp.
+let SERIAL_RUN_SEQ = 0;
+
 /**
  * @param {string[]} files
  * @param {{ timeoutMs?: number, perFileTimeoutMs?: Record<string, number> | null, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
@@ -202,8 +210,9 @@ export function runSerialFiles(files, {
   // ($HOME/cap-evidence/serial-phase-logs), so a millisecond-resolution stamp alone let two runs
   // that failed the same file in the same millisecond write the same path and overwrite each
   // other's evidence — losing exactly what this cluster exists to preserve. The pid namespaces the
-  // run; the millisecond stamp still orders runs within one process.
-  const stamp = `${new Date().toISOString().replace(/[:.]/g, "-")}-p${process.pid}`;
+  // run; the millisecond stamp still orders runs within one process. (ulcw adds the per-process
+  // counter: pid separates processes, the counter separates CALLS inside one process.)
+  const stamp = `${new Date().toISOString().replace(/[:.]/g, "-")}-p${process.pid}-r${++SERIAL_RUN_SEQ}`;
 
   for (const file of files) {
     const started = Date.now();
@@ -249,7 +258,9 @@ export function runSerialFiles(files, {
 
   const secs = ((Date.now() - t0) / 1000).toFixed(0);
   const statusStr = failures.length === 0 ? "GREEN" : `FAILED (${failures.length}/${files.length} failed)`;
-  console.log(`\nrun-tests: serial phase (${files.length} build/artifact files) ${statusStr} in ${secs}s`);
+  // ulcw: the run id is printed WITH the count, so a reader can match this summary to exactly the
+  // durable logs whose names carry the same id — the count and its evidence share one value.
+  console.log(`\nrun-tests: serial phase (${files.length} build/artifact files) ${statusStr} in ${secs}s [run ${stamp}]`);
 
   if (failures.length > 0) {
     // THE WHOLE POINT (dsoq): a COUNT without a NAME cannot be acted on. This block is what a
