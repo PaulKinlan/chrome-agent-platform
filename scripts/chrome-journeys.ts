@@ -58,6 +58,7 @@ import { HeavyGateSlotRefusedError, heavyGateRefusalPayload } from "./lib/heavy-
 import { HeavyGateSlotSetupError, heavyGateSetupFailurePayload } from "./lib/heavy-gate-slot.ts";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, searchResultNames, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 import { composerInput, composerSend, composerPopup } from "./lib/composer-target.ts";
+import { clickVisibleCreateAgent } from "./lib/create-agent-click.ts";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -1877,7 +1878,9 @@ async function main() {
         value: sel.value, filter: filter?.value ?? '' };
     })()`);
     const openCreateDialog = async () => {
-      await clickSel(cdp, ntpSession, "#new-agent");
+      // w51r: a geometry click on a hidden/occluded rail button misses silently,
+      // then the dialog wait reports a misleading timeout. Refuse before input.
+      await clickVisibleCreateAgent(cdp, ntpSession, (expression) => evalIn(cdp, ntpSession, expression));
       for (let i = 0; i < 20; i++) { if ((await pickerState()).open) break; await sleep(150); }
       await sleep(200);
     };
