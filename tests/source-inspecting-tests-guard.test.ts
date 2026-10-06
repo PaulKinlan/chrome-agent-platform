@@ -58,8 +58,14 @@ Deno.test("afpl: SIGKILL residue is reconciled before the audit scans the tree",
   if (!hadHelpers) {
     Deno.mkdirSync(helpersDir, { recursive: true });
   }
-  for (const rel of AFPL_REAL_TREE_RESIDUE) {
-    Deno.writeTextFileSync(join(ROOT, rel), "// residue\n");
+  const fixtureBodies = [
+    `const root = new URL("../../", import.meta.url);\nexport function census() { for (const f of Deno.readDirSync(root)) void f; }\n`,
+    `// SCAN_DIRS and git ls-files are prose only.\nexport const ok = true;\n`,
+    `import { join } from "node:path";\nconst ROOT = "/repo";\nexport function list() { return Deno.readDirSync(join(ROOT, "tests", "fixtures")); }\n`,
+    `// Pre-existing sibling helper\nexport const ok = true;\n`,
+  ];
+  for (const [index, rel] of AFPL_REAL_TREE_RESIDUE.entries()) {
+    Deno.writeTextFileSync(join(ROOT, rel), fixtureBodies[index]);
   }
   reconcileAfplRealTreeResidue();
   for (const rel of AFPL_REAL_TREE_RESIDUE) {
@@ -523,7 +529,8 @@ Deno.test("afpl: REAL-TREE falsification — a depth-2 repo-walking helper is NA
   }
 
   // NEW-1: Plant a pre-existing sibling to prove cleanup preserves un-owned files
-  await Deno.writeTextFile(siblingFile, "// Pre-existing sibling helper\nexport const ok = true;\n");
+  const siblingBody = "// Pre-existing sibling helper\nexport const ok = true;\n";
+  await Deno.writeTextFile(siblingFile, siblingBody);
 
   try {
     // 1. (F1) Depth-2 helper walking root via "../../" (the repo's own depth-2 idiom).
@@ -579,15 +586,9 @@ Deno.test("afpl: REAL-TREE falsification — a depth-2 repo-walking helper is NA
       `REAL-TREE: a fixture-walking helper must NOT be admitted: ${JSON.stringify(named)}`,
     );
 
-    // N2: Clean up owned test files at end of try block and assert sibling survival
-    for (const f of testFiles) {
-      try { await Deno.remove(f); } catch { /* ignore */ }
-    }
-    const siblingSurvived = existsSync(siblingFile);
-    assertEquals(siblingSurvived, true, "NEW-1: pre-existing sibling in tests/helpers must NOT be removed by test cleanup");
   } finally {
     // NEW-1: Idempotent cleanup of owned test files, never wiping existing/tracked files in tests/helpers
-    for (const f of [...testFiles, siblingFile]) {
+    for (const f of testFiles) {
       try { await Deno.remove(f); } catch { /* ignore */ }
     }
     if (!helpersDirPreexisted) {
@@ -596,6 +597,16 @@ Deno.test("afpl: REAL-TREE falsification — a depth-2 repo-walking helper is NA
       } catch { /* ignore */ }
     }
   }
+  assert(
+    existsSync(siblingFile),
+    "NEW-1: pre-existing sibling in tests/helpers must survive cleanup byte-identically",
+  );
+  assertEquals(
+    await Deno.readTextFile(siblingFile),
+    siblingBody,
+    "NEW-1: pre-existing sibling in tests/helpers must survive cleanup byte-identically",
+  );
+  await Deno.remove(siblingFile);
 });
 
 // chrome-agent-platform-afpl — scratch-tree coverage proof, in BOTH directions and against a REAL file.
@@ -706,13 +717,17 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
     );
 
     // (v) N1: NEW-2 exclusion pin — top-level and nested node_modules are excluded by enumerateTestFiles.
-    const nmTopDir = join(scratch, "tests", "node_modules");
-    const nmNestedDir = join(scratch, "tests", "helpers", "node_modules");
+    const nmTopDir = join(scratch, "node_modules");
+    const nmNestedDir = join(scratch, "helpers", "node_modules");
     await Deno.mkdir(nmTopDir, { recursive: true });
     await Deno.mkdir(nmNestedDir, { recursive: true });
     await Deno.writeTextFile(join(nmTopDir, "zz-nm.test.ts"), "// mock node_modules test\n");
     await Deno.writeTextFile(join(nmNestedDir, "zz-nm-nested.test.ts"), "// mock nested node_modules test\n");
     const enumeratedWithNm = enumerateTestFiles(scratch).map((e) => e.rel);
+    assert(
+      enumeratedWithNm.includes("tests/helpers/zz-nested.test.ts"),
+      "enumeration must still return a real test alongside excluded node_modules files",
+    );
     assertEquals(
       enumeratedWithNm.some((f) => f.includes("node_modules")),
       false,
@@ -729,6 +744,40 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
   }
 });
 
+// Mask comments and the bodies of `code: ` fixture strings without letting a backtick in
+// a comment pair with a later live template. Preserve line breaks for readable diagnostics.
+export function maskGuardFixtureBodies(code: string): string {
+  let out = "";
+  for (let i = 0; i < code.length;) {
+    const start = i;
+    const c = code[i];
+    if (c === "/" && code[i + 1] === "/") {
+      i = code.indexOf("\n", i + 2);
+      if (i < 0) i = code.length;
+      out += code.slice(start, i).replace(/[^\n]/g, " ");
+    } else if (c === "/" && code[i + 1] === "*") {
+      const end = code.indexOf("*/", i + 2);
+      i = end < 0 ? code.length : end + 2;
+      out += code.slice(start, i).replace(/[^\n]/g, " ");
+    } else if (c === "`" || c === '"' || c === "'") {
+      const fixture = c === "`" && /\bcode:\s*$/.test(out);
+      i++;
+      for (; i < code.length; i++) {
+        if (code[i] === "\\") { i++; continue; }
+        if (code[i] === c) { i++; break; }
+      }
+      const literal = code.slice(start, i);
+      out += fixture || (c !== "`" && /(?:Deno\.remove|\brm\s*\()/.test(literal))
+        ? literal.replace(/[^\n]/g, " ")
+        : literal;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
 /**
  * Detects calls to recursive directory removal (Deno.remove, Deno.removeSync, rm, rmSync, fsp.rm)
  * where the target denotes a shared directory in the repository (e.g. tests/helpers, tests, scripts)
@@ -739,8 +788,7 @@ export function findRecursiveRemovalsOfSharedPaths(
 ): string[] {
   const violations: string[] = [];
   const fnNames = ["Deno.remove", "Deno.removeSync", "rm", "rmSync", "fsp.rm", "fsp2.rm"];
-  const SHARED_PATH_PATTERN = /(?:tests\/helpers|tests(?!\/node_modules)|\bscripts\b|\bextension\/(?:lib|background|options|ntp|sidepanel)\b|realHelpersDir)/i;
-  const SCRATCH_OR_TEMP_PATTERN = /\b(?:makeTempDir|makeTempDirSync|durableDir|durableRoot|tmpdir|tmpDir|tempDir|scratch|STAGE|\.cap-scratch|tempProbe|tmpProfile|profile|downloads|tmpRoot|parentBox|outDir|parent|victim|extractDir)\b/;
+  const SHARED_PATH_PATTERN = /(?:tests\/helpers|tests(?!\/node_modules)|\bscripts\b|\bextension\/(?:lib|background|options|ntp|sidepanel)\b)/i;
 
   for (const { rel, code } of files) {
     for (const fn of fnNames) {
@@ -769,19 +817,38 @@ export function findRecursiveRemovalsOfSharedPaths(
 
         if (args.length >= 2 && /recursive:\s*true/.test(args[1])) {
           const target = args[0];
-          let targetDef = "";
-          if (/^[A-Za-z_$][\w$]*$/.test(target)) {
-            const escapedId = target.replace(/\$/g, "\\$");
-            const defMatch = new RegExp(`\\b(?:const|let|var)\\s+${escapedId}\\s*=\\s*([^;]+);`).exec(code);
-            if (defMatch) targetDef = defMatch[1].replace(/\s+/g, " ").trim();
-          }
-
-          const combined = `${target} ${targetDef}`;
-          if (SCRATCH_OR_TEMP_PATTERN.test(combined)) {
-            continue;
-          }
-
-          if (SHARED_PATH_PATTERN.test(combined)) {
+          // Resolve aliases by their declarations, never by their names. In particular `scratch` can
+          // denote join(ROOT, "tests", "helpers"), while `realHelpersDir` can denote makeTempDir().
+          const seen = new Set<string>();
+          const definitions: string[] = [];
+          const resolve = (expression: string): void => {
+            definitions.push(expression);
+            // Follow only path-bearing expressions: an identifier, the base of join(), or a
+            // template interpolation. Do not treat every word in a declaration as an alias
+            // (a diagnostic string mentioning `scripts` is not a path definition).
+            const base = /^(?:await\s+)?(?:join|resolve)\(\s*([A-Za-z_$][\w$]*)\s*,/.exec(expression);
+            const ids = /^[A-Za-z_$][\w$]*$/.test(expression)
+              ? [expression]
+              : [...(base ? [base[1]] : []), ...[...expression.matchAll(/\$\{([A-Za-z_$][\w$]*)\}/g)].map((match) => match[1])];
+            for (const id of ids) {
+              if (seen.has(id)) continue;
+              seen.add(id);
+              const declarations = [...code.slice(0, m.index).matchAll(
+                new RegExp(`\\b(?:const|let|var)\\s+${id}\\s*=\\s*([^;]+);`, "g"),
+              )];
+              const declaration = declarations.at(-1);
+              if (declaration) resolve(declaration[1].trim());
+            }
+          };
+          resolve(target);
+          const combined = definitions.join(" ");
+          // An isolated root must be proven by the expression's definition. durableDir alone is
+          // persistent and does not make a path per-run; a makeTempDir result does.
+          const isolatedRoot = definitions.slice(1).some((definition) =>
+            /^(?:await\s+)?(?:Deno\.)?makeTempDir(?:Sync)?\s*\(/.test(definition)
+          ) || /^(?:await\s+)?(?:Deno\.)?makeTempDir(?:Sync)?\s*\(/.test(target) ||
+            /^(?:join|resolve)\(\s*(?:await\s+)?(?:Deno\.)?makeTempDir(?:Sync)?\s*\(/.test(target);
+          if (SHARED_PATH_PATTERN.test(combined) && !isolatedRoot) {
             violations.push(`${rel}: ${fn}(${target}, ${args[1]}) denotes shared path: "${combined}"`);
           }
         }
@@ -794,8 +861,9 @@ export function findRecursiveRemovalsOfSharedPaths(
 Deno.test("afpl: no test in tests/ recursively removes shared repository directories (e.g. tests/helpers)", () => {
   const testFiles = enumerateTestFiles().map((f) => ({
     rel: f.rel,
-    // Strip multi-statement mock code template literals so falsification fixture strings are not parsed as call sites:
-    code: f.code.replace(/`[\s\S]*?`/g, (m) => m.includes(";") ? '""' : m),
+    // Ignore only `code: ` fixture bodies, not arbitrary backtick pairs. A backtick in a
+    // comment must not consume subsequent live calls (the old stripComments failure).
+    code: maskGuardFixtureBodies(f.code),
   }));
   const violations = findRecursiveRemovalsOfSharedPaths(testFiles);
   assertEquals(
@@ -803,6 +871,15 @@ Deno.test("afpl: no test in tests/ recursively removes shared repository directo
     [],
     `Tests must never recursively remove shared repository directories:\n${violations.join("\n")}`,
   );
+});
+
+Deno.test("afpl: fixture masking preserves live removal calls after a backtick in a comment", () => {
+  const source = '// unrelated ` comment\nconst scratch = join(ROOT, "tests", "helpers");\n' +
+    'await Deno.remove(scratch, { recursive: true });\n' +
+    'const mock = { code: `await Deno.remove("tests/helpers", { recursive: true });` };';
+  const masked = maskGuardFixtureBodies(source);
+  const violations = findRecursiveRemovalsOfSharedPaths([{ rel: "tests/zz-live.test.ts", code: masked }]);
+  assertEquals(violations.length, 1, "live removal must be caught; fixture-body call must be ignored");
 });
 
 Deno.test("afpl: falsification — recursive removal of tests/helpers or a shared root is flagged and temp dirs are admitted", () => {
@@ -840,13 +917,28 @@ Deno.test("afpl: falsification — recursive removal of tests/helpers or a share
     },
     {
       rel: "tests/zz-good2.test.ts",
-      code: `const tempDir = join(durableDir("test"), "dir");\nawait Deno.remove(tempDir, { recursive: true }).catch(() => {});`,
+      code: `const tempDir = await Deno.makeTempDir({ dir: durableDir("test") });\nconst output = join(tempDir, "dir");\nawait Deno.remove(output, { recursive: true }).catch(() => {});`,
     },
     {
       rel: "tests/zz-good3.test.ts",
       code: `const profile = await Deno.makeTempDir({ dir: durableDir("scratch") });\nawait rm(profile, { recursive: true, force: true });`,
     },
   ];
+  badSamples.push(
+    { rel: "tests/zz-bad-alias.test.ts", code: `const scratch = join(ROOT, "tests", "helpers");\nawait Deno.remove(scratch, { recursive: true });` },
+    { rel: "tests/zz-bad-template.test.ts", code: `const parent = join(ROOT, "tests", "helpers");\nawait Deno.remove(\`\${parent}/nested\`, { recursive: true });` },
+    { rel: "tests/zz-bad-false-temp.test.ts", code: `await Deno.remove(join(ROOT, "tests", "helpers", Deno.makeTempDirSync()), { recursive: true });` },
+  );
+  for (const sample of badSamples.slice(-3)) {
+    assert(
+      findRecursiveRemovalsOfSharedPaths([sample]).length > 0,
+      `a shared path must be flagged regardless of the alias name in ${sample.rel}`,
+    );
+  }
+  goodSamples.push({
+    rel: "tests/zz-good-alias.test.ts",
+    code: `const realHelpersDir = await Deno.makeTempDir();\nawait Deno.remove(realHelpersDir, { recursive: true });`,
+  });
   const falsePositives = findRecursiveRemovalsOfSharedPaths(goodSamples);
   assertEquals(falsePositives, [], `scratch/temp directory removals must NOT be flagged: ${falsePositives.join(", ")}`);
 });
