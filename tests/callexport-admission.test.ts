@@ -134,3 +134,115 @@ Deno.test("callexport: non-base64 input and missing spec fail closed", async () 
   try { await executeCallexportRun({ wasmBytes: bytes, executable: { memory: { tier: "tiny", maxPages: 512 }, imports: { allowed: [], disallowed: [] } }, data: btoa("x") }); } catch (e) { caught = e; }
   assert(caught && String(caught.message).includes("no_callexport_spec"), "missing spec refuses");
 });
+
+const extractHashWasm = (name) => {
+  try {
+    return Deno.readFileSync(`packages/bundled/evidence/hashwasm/binaries/${name}.wasm`);
+  } catch {
+    const cmd = new Deno.Command("tar", {
+      args: ["-xOzf", "packages/bundled/evidence/hashwasm-blake3/hash-wasm-4.12.0.tgz", `package/dist/${name}.umd.min.js`],
+    });
+    const { stdout } = cmd.outputSync();
+    const text = new TextDecoder().decode(stdout);
+    const blobs = text.match(/[A-Za-z0-9+/=]{500,}/g);
+    if (!blobs || blobs.length !== 1) throw new Error(`expected exactly one blob for ${name}`);
+    const binStr = atob(blobs[0]);
+    const bytes = new Uint8Array(binStr.length);
+    for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+    return bytes;
+  }
+};
+
+Deno.test("callexport: sha224 with initParam 224 matches library vector while initParam 0 yields sha256 (falsification)", async () => {
+  const bytes = extractHashWasm("sha256");
+  const data = btoa("hello");
+  // SHA-224 mode (initParam = 224, digestBytes = 28)
+  const sha224Result = await executeCallexportRun({
+    wasmBytes: bytes,
+    executable: {
+      memory: { tier: "tiny", maxPages: 512 },
+      imports: { allowed: [], disallowed: [] },
+      callExport: { entry: "Hash_Calculate", inputBuffer: "Hash_GetBuffer", digestBytes: 28, initParam: 224 },
+    },
+    data,
+  });
+  // Standard SHA-224 digest for "hello"
+  assertEquals(sha224Result, "ea09ae9cc6768c50fcee903ed054556e5bfc8347907f12598aa24193");
+
+  // With initParam = 0 (or default), the exact SAME bytes execute SHA-256 and truncate to 28 bytes
+  const sha256TruncResult = await executeCallexportRun({
+    wasmBytes: bytes,
+    executable: {
+      memory: { tier: "tiny", maxPages: 512 },
+      imports: { allowed: [], disallowed: [] },
+      callExport: { entry: "Hash_Calculate", inputBuffer: "Hash_GetBuffer", digestBytes: 28, initParam: 0 },
+    },
+    data,
+  });
+  // First 28 bytes (56 hex chars) of SHA-256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362
+  assertEquals(sha256TruncResult, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362");
+  assert(sha224Result !== sha256TruncResult, "initParam MUST differentiate sha224 from sha256");
+});
+
+Deno.test("callexport: sha3 with finalParam 0x06 matches library vector while absent finalParam does NOT (falsification)", async () => {
+  const bytes = extractHashWasm("sha3");
+  const data = btoa("hello");
+  // SHA3-256 mode (initParam = 256, digestBytes = 32, finalParam = 0x06 padding)
+  const sha3Result = await executeCallexportRun({
+    wasmBytes: bytes,
+    executable: {
+      memory: { tier: "tiny", maxPages: 512 },
+      imports: { allowed: [], disallowed: [] },
+      callExport: { entry: "Hash_Calculate", inputBuffer: "Hash_GetBuffer", digestBytes: 32, initParam: 256, finalParam: 0x06 },
+    },
+    data,
+  });
+  // Standard SHA3-256 digest for "hello"
+  assertEquals(sha3Result, "3338be694f50c5f338814986cdf0686453a888b84f424d792af4b9202398f392");
+
+  // Old behavior: finalParam absent -> falls back to digestBytes (32 = 0x20 padding), producing non-standard result
+  const oldResult = await executeCallexportRun({
+    wasmBytes: bytes,
+    executable: {
+      memory: { tier: "tiny", maxPages: 512 },
+      imports: { allowed: [], disallowed: [] },
+      callExport: { entry: "Hash_Calculate", inputBuffer: "Hash_GetBuffer", digestBytes: 32, initParam: 256 },
+    },
+    data,
+  });
+  assert(oldResult !== sha3Result, "finalParam MUST differentiate standard SHA3 padding 0x06 from digestBytes fallback");
+});
+
+Deno.test("callexport: manifest validation rejects out-of-range initParam and finalParam", async () => {
+  const authority = new WasmPackageAuthority({ now: () => 1 });
+  const manifestText = await Deno.readTextFile("extension/wasm/manifests/cap.bundled.hash.blake3-1.0.0.manifest.json");
+
+  // initParam < 0
+  const m1 = JSON.parse(manifestText);
+  m1.executables[0].callExport.initParam = -1;
+  const res1 = authority.validateManifest(JSON.stringify(m1));
+  assertEquals(res1.ok, false);
+  assertEquals(res1.error, "callexport_initparam_invalid");
+
+  // initParam > 0xffffffff (uint32 overflow)
+  const m2 = JSON.parse(manifestText);
+  m2.executables[0].callExport.initParam = 0x1_0000_0000;
+  const res2 = authority.validateManifest(JSON.stringify(m2));
+  assertEquals(res2.ok, false);
+  assertEquals(res2.error, "callexport_initparam_invalid");
+
+  // finalParam < 0
+  const m3 = JSON.parse(manifestText);
+  m3.executables[0].callExport.finalParam = -1;
+  const res3 = authority.validateManifest(JSON.stringify(m3));
+  assertEquals(res3.ok, false);
+  assertEquals(res3.error, "callexport_finalparam_invalid");
+
+  // finalParam > 0xff (uint8 overflow)
+  const m4 = JSON.parse(manifestText);
+  m4.executables[0].callExport.finalParam = 256;
+  const res4 = authority.validateManifest(JSON.stringify(m4));
+  assertEquals(res4.ok, false);
+  assertEquals(res4.error, "callexport_finalparam_invalid");
+});
+

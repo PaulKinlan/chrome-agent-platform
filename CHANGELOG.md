@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.579] — 2026-10-06
+- Extend call-export WebAssembly runner with init and final parameters for expanded hash algorithm support
+
 ## [0.3.578] — 2026-10-06
 
 ### Features
