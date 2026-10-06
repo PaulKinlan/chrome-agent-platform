@@ -9,6 +9,7 @@
 import { fileURLToPath } from "node:url";
 import { assert, assertMatch, assertNotMatch, assertEquals } from "jsr:@std/assert@1";
 import { resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
+import { parseHardTimeout } from "../scripts/lib/hard-timeout.ts";
 
 const registry = new Map();
 
@@ -258,7 +259,7 @@ if (BROWSER_BINARY === null) {
 // lives in the harness, and the harness is never spawned on this path. Without the
 // warning above a fresh clone shows "1 ignored" and has to read the source to learn why.
 
-// The journey's own check count (12 `check()` calls in the harness at the time of
+// The journey's own check count (15 `check()` calls in the harness at the time of
 // writing). A FLOOR, not an equality: adding checks is fine, losing them is a coverage
 // regression that `out.success` cannot catch, because a harness that stopped issuing
 // checks after the third one still exits 0 when nothing it did issue failed.
@@ -309,9 +310,48 @@ async function runHarness(env: Record<string, string>, timeoutMs: number): Promi
 // True when any process whose argv carries the harness's profile still lives.
 // The profile is per-instance and recorded on a `NOTE: Chrome profile:` line,
 // so this can only ever match THIS run's browser.
-function survivingChrome(profile: string): boolean {
-  const pg = new Deno.Command("/usr/bin/pgrep", { args: ["-f", `user-data-dir=${profile}`] }).outputSync();
-  return pg.code === 0; // 0 = match, 1 = none, else pgrep error (treated as surviving)
+export function survivingChrome(
+  profile: string,
+  pgRunner: (args: string[]) => { code: number } = (args) =>
+    new Deno.Command("/usr/bin/pgrep", { args }).outputSync(),
+): boolean {
+  const pg = pgRunner(["-f", `user-data-dir=${profile}`]);
+  return pg.code !== 1; // 0 = match, 1 = none, else pgrep error (treated as surviving, fail-closed)
+}
+
+Deno.test("bgagent delete: survivingChrome treats pgrep exit 0 as surviving, exit 1 as dead, and exit 2/error as surviving (N1)", () => {
+  assertEquals(survivingChrome("test-profile", () => ({ code: 0 })), true, "match (exit 0) must report surviving");
+  assertEquals(survivingChrome("test-profile", () => ({ code: 1 })), false, "no match (exit 1) must report not surviving");
+  assertEquals(survivingChrome("test-profile", () => ({ code: 2 })), true, "pgrep error (exit 2) must fail closed as surviving");
+  assertEquals(survivingChrome("test-profile", () => ({ code: 127 })), true, "pgrep error (exit 127) must fail closed as surviving");
+});
+
+Deno.test("bgagent delete: parseHardTimeout input validation (N3)", () => {
+  assertEquals(parseHardTimeout(undefined), 300_000, "unset defaults to 300_000");
+  assertEquals(parseHardTimeout(null), 300_000, "null defaults to 300_000");
+  assertEquals(parseHardTimeout(""), 300_000, "empty string defaults to 300_000 (>0 guard)");
+  assertEquals(parseHardTimeout("   "), 300_000, "whitespace defaults to 300_000 (>0 guard)");
+  assertEquals(parseHardTimeout("garbage"), 300_000, "NaN string defaults to 300_000 (isFinite guard)");
+  assertEquals(parseHardTimeout("-5"), 300_000, "negative defaults to 300_000 (>0 guard)");
+  assertEquals(parseHardTimeout("0"), 300_000, "zero defaults to 300_000 (>0 guard)");
+  assertEquals(parseHardTimeout("1e999"), 300_000, "Infinity defaults to 300_000 (isFinite guard)");
+  assertEquals(parseHardTimeout("3000"), 3000, "valid positive integer parses correctly");
+  assertEquals(parseHardTimeout("50000"), 50_000, "valid positive integer parses correctly");
+});
+
+/**
+ * Asserts the journey log proves teardownChrome ran to completion and that no
+ * Chrome process matching the logged user-data-dir survived.
+ */
+export function verifyJourneyTeardown(
+  log: string,
+  isChromeSurviving: (profile: string) => boolean = survivingChrome,
+): { hasTeardownMarker: boolean; profile: string | null; survives: boolean } {
+  const hasTeardownMarker = log.includes("NOTE: teardownChrome complete");
+  const m = /NOTE: Chrome profile: (.+)$/m.exec(log);
+  const profile = m ? m[1] : null;
+  const survives = profile ? isChromeSurviving(profile) : true;
+  return { hasTeardownMarker, profile, survives };
 }
 
 Deno.test({
@@ -352,7 +392,45 @@ Deno.test({
       `the journey ran ${tally[1]} checks, below the ${JOURNEY_CHECK_FLOOR} it owns — a check went missing ` +
       `(Chrome for Testing: ${BROWSER_BINARY}):\n${log}`,
     );
+
+    // N2: The success path must execute teardownChrome in finally and leave zero surviving processes.
+    const teardownStatus = verifyJourneyTeardown(log);
+    assert(
+      teardownStatus.hasTeardownMarker,
+      `the journey must execute teardownChrome on success:\n${log}`,
+    );
+    assert(
+      teardownStatus.profile !== null,
+      `the harness must record its profile so the test can verify no survivor:\n${log}`,
+    );
+    assert(
+      !teardownStatus.survives,
+      `no Chrome process may survive the success path (${teardownStatus.profile}):\n${log}`,
+    );
   },
+});
+
+Deno.test("bgagent delete: verifyJourneyTeardown paired discrimination (N2 falsification)", () => {
+  // Scenario A: Successful log with teardown marker and dead browser
+  const cleanLog = "NOTE: Chrome profile: test-clean\nNOTE: teardownChrome complete\n15 passed, 0 failed";
+  const cleanStatus = verifyJourneyTeardown(cleanLog, () => false);
+  assertEquals(cleanStatus.hasTeardownMarker, true, "marker must be detected on teardown log");
+  assertEquals(cleanStatus.profile, "test-clean", "profile must be extracted");
+  assertEquals(cleanStatus.survives, false, "no survivor reported when browser reaped");
+
+  // Scenario B: Mutant omitting finally teardown (lacks marker)
+  const mutantNoTeardown = "NOTE: Chrome profile: test-mutant\n15 passed, 0 failed";
+  const noTeardownStatus = verifyJourneyTeardown(mutantNoTeardown, () => false);
+  assertEquals(noTeardownStatus.hasTeardownMarker, false, "omitted teardown must fail marker check");
+
+  // Scenario C: Surviving browser (reaping failed)
+  const leakingStatus = verifyJourneyTeardown(cleanLog, () => true);
+  assertEquals(leakingStatus.survives, true, "surviving browser must be flagged");
+
+  // Scenario D: Missing profile line
+  const noProfileStatus = verifyJourneyTeardown("NOTE: teardownChrome complete", () => false);
+  assertEquals(noProfileStatus.profile, null, "missing profile must be flagged");
+  assertEquals(noProfileStatus.survives, true, "a missing profile must fail closed as surviving");
 });
 
 Deno.test({
@@ -362,8 +440,10 @@ Deno.test({
     const { code, log } = await runHarness({ CAP_BGAGENT_DELETE_FAIL_AFTER_LAUNCH: "1" }, 120_000);
     assert(code !== 0, `a mid-journey throw must exit nonzero:\n${log}`);
     assert(log.includes("injected mid-journey throw"), `the injected throw must be the abort cause:\n${log}`);
-    // The honest proof teardown RAN — Chrome for Testing 154 reaps children on
-    // parent death on this VM, so "no survivor" alone would not prove it.
+    // The honest proof teardown RAN. Chrome child processes do NOT reliably
+    // self-reap on parent death on this VM (field measurements confirmed the process tree
+    // survives exits 0, 1, and 2), so teardownChrome is mandatory and this log line is
+    // the required proof.
     assert(log.includes("NOTE: tearing down the Chrome tree (teardownChrome)"), `teardown must actually run on the throw path:\n${log}`);
     const m = /NOTE: Chrome profile: (.+)$/m.exec(log);
     assert(m, `the harness must record its profile so the test can verify no survivor:\n${log}`);
@@ -385,5 +465,24 @@ Deno.test({
     const m = /NOTE: Chrome profile: (.+)$/m.exec(log);
     assert(m, `the harness must record its profile:\n${log}`);
     assert(!survivingChrome(m[1]), `no Chrome process may survive the hang path (${m[1]}):\n${log}`);
+  },
+});
+
+Deno.test({
+  name: "bgagent delete: garbage or empty hard timeout defaults safely without premature exit 2 (N3)",
+  ignore: BROWSER_BINARY === null,
+  fn: async () => {
+    // When CAP_BGAGENT_DELETE_HARD_TIMEOUT_MS is garbage or empty, it must NOT parse as
+    // NaN or 0 and fire immediately with exit 2. Combined with FAIL_AFTER_LAUNCH, both
+    // inputs must proceed to the injected throw and exit 1 (not 2).
+    for (const badValue of ["garbage", ""]) {
+      const { code, log } = await runHarness(
+        { CAP_BGAGENT_DELETE_FAIL_AFTER_LAUNCH: "1", CAP_BGAGENT_DELETE_HARD_TIMEOUT_MS: badValue },
+        120_000,
+      );
+      assert(code === 1, `timeout value ${JSON.stringify(badValue)} must not exit 2 via premature timer fire:\n${log}`);
+      assert(log.includes("injected mid-journey throw"), `must reach injected throw with ${JSON.stringify(badValue)}:\n${log}`);
+      assert(!log.includes("hard timeout"), `must not trigger hard timeout with ${JSON.stringify(badValue)}:\n${log}`);
+    }
   },
 });

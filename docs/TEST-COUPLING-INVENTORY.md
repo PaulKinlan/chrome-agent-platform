@@ -330,12 +330,12 @@ exactly like the failures that put the others there. **Subject moves:** LOUD-BY-
 
 ## 17. The journey-tally coupling (added by icf1)
 
-`tests/bgagent-delete.test.ts` holds `JOURNEY_CHECK_FLOOR = 11` against the 11
+`tests/bgagent-delete.test.ts` holds `JOURNEY_CHECK_FLOOR = 15` against the 15
 `check()` calls in `scripts/kat-bgagent-delete.ts`, and asserts the harness's printed
 tally plus the `NOTE: Chrome for Testing: <path>` line. There is NO automated watcher
 between the constant and the harness's checks — by design it is a floor (adding checks
 is free), and the detection drill is the instance-removal mutant, verified: deleting one
-`check()` call reddens the gate with "the journey ran 10 checks, below the 11 it owns".
+`check()` call reddens the gate with "the journey ran 14 checks, below the 15 it owns".
 **Owed by a re-anchor:** `grep -c "^check(\|^  check(" scripts/kat-bgagent-delete.ts`
 before changing the harness's check count; the floor is a floor, so only REMOVAL needs
 the constant updated. The resolver itself (`scripts/lib/chrome-for-testing.ts`) is the
