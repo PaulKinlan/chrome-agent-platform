@@ -72,6 +72,12 @@ Deno.test("kz27: a FAIL-CLOSED selection NAMES the always-on guard set it could 
     text.includes("tests/durable-root.test.ts"),
     "durable-root must be named: it is the guard whose absence from ALWAYS_ON hid a real violation",
   );
+  // F2 (delta review, c1a77598): the report must SAY that running the guards is not a full
+  // verification, so nobody reads "the guards were green" as "my change is verified".
+  assert(
+    text.includes("DOES NOT VALIDATE YOUR CHANGES"),
+    `the fail-closed report must state that the always-on set is not a full verification: ${text}`,
+  );
 });
 
 Deno.test("kz27: the always-on set is runnable by name (--always-on) without the selector choosing it", async () => {
@@ -85,7 +91,14 @@ Deno.test("kz27: the always-on set is runnable by name (--always-on) without the
     stderr: "piped",
   }).output();
   const out = new TextDecoder().decode(stdout);
-  assertEquals(code, 0, `--always-on --list must succeed: ${new TextDecoder().decode(stderr)}`);
+  const err = new TextDecoder().decode(stderr);
+  assertEquals(code, 0, `--always-on --list must succeed: ${err}`);
+  // F2: the warning must reach stderr in this mode too, and stdout must stay parseable for callers.
+  assert(
+    err.includes("DOES NOT VALIDATE YOUR CHANGES"),
+    `--always-on must warn that it does not validate changes: ${err}`,
+  );
+  assert(err.includes("WARNING"), err);
   const listed = out.split("\n").map((l) => l.trim()).filter(Boolean);
   assertEquals(listed, alwaysOnGuards(), "--always-on --list must print exactly the always-on set");
   assert(

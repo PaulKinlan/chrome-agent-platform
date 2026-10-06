@@ -125,6 +125,12 @@ export function failClosedPlan({ uncovered, list }) {
       `Running the FULL suite (npm test) instead.`,
       `select-tests: THE ALWAYS-ON GUARD SET (${guards.length} files) IS NOT COVERED BY A SUBSET GATE — run these explicitly if you cannot run the full suite:`,
       ...guards.map((f) => `  ${f}`),
+      // F2 (delta review, c1a77598): the fail-closed report must say the same thing `--always-on`
+      // warns about, in words, so a lane cannot read "I ran the guards and they were green" as "my
+      // change is verified".
+      `select-tests: NOTE — running that guard set covers the cross-cutting guards, but it does NOT ` +
+        `run the tests your changed files select and it does NOT run the full suite, so a green result ` +
+        `there DOES NOT VALIDATE YOUR CHANGES.`,
     ],
   };
 }
@@ -393,7 +399,20 @@ function main() {
   if (alwaysOnOnly) {
     // EXACTLY the always-on set (core + source-inspecting guards), runnable on its own
     // (chrome-agent-platform-kz27): a guard result must never depend on a subset gate selecting it.
+    //
+    // F2 (delta review, c1a77598): this mode exits 0 having verified ONLY the guards. It does not run
+    // the tests the changed files select and it does not run the full suite, so a green here DOES NOT
+    // VALIDATE YOUR CHANGES — and this branch's own gate used this mode, which is exactly how its two
+    // new tests went unexecuted by the gate that cleared it. The warning is printed on stderr in BOTH
+    // modes, so a lane that reads the result cannot mistake it for a full verification, and `--list`
+    // stays clean on stdout for callers that parse it.
     const files = alwaysOnGuards();
+    console.error(
+      `select-tests: WARNING — --always-on runs ONLY the always-on set (${files.length} files). It does ` +
+        `NOT run the tests your changed files select, and it does NOT run the full suite: a green ` +
+        `result here DOES NOT VALIDATE YOUR CHANGES. Use it to cover the guards a subset gate cannot ` +
+        `see, never as the whole gate.`,
+    );
     if (list) console.log(files.join("\n"));
     else runDeno(files);
     return;
