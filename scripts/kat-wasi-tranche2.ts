@@ -4,7 +4,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -93,16 +93,7 @@ try {
   await Deno.writeTextFile(`${OUT}/browser-result.json`, JSON.stringify({ sha, extensionSha, pass, fail, results }, null, 2) + "\n");
 } finally {
   try { ws.close(); } catch {}
-  try { proc.kill("SIGKILL"); } catch {}
-  // chrome-agent-platform-j6au: /usr/bin/chromium is a wrapper script —
-  // SIGKILL kills the wrapper while the REAL browser orphans and keeps
-  // mutating its profile (Default/, SingletonLock, Local State) inside the
-  // working tree, which fails the suite-honesty copy test (9t1b) on the next
-  // npm test. Kill every process that holds THIS run's profile path, then the
-  // removal succeeds. Evidence (result.json + screenshot) is never touched.
-  try {
-    await new Deno.Command("pkill", { args: ["-9", "-f", PROFILE_DIR] }).output();
-  } catch { /* best effort */ }
+  await teardownChrome(proc, PROFILE_DIR);
   for (let attempt = 0; attempt < 10; attempt++) {
     try {
       await Deno.remove(PROFILE_DIR, { recursive: true });

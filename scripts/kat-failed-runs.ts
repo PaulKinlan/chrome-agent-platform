@@ -12,7 +12,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -32,13 +32,15 @@ await Deno.mkdir(OUT, { recursive: true });
 // stderr — a fixed port silently attaches the harness to another lane's browser
 // (9357 was also probed by kat-bgagent-delete, and a zombie holding it hung
 // this harness for the whole timeout).
+const profile = chromeProfileDir("kat-failed-runs");
 const { proc, wsUrl } = await launchChrome({
   binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${chromeProfileDir("kat-failed-runs")}`, "about:blank"],
+    `--user-data-dir=${profile}`, "about:blank"],
 });
+try {
 const ws = new WebSocket(wsUrl);
 await new Promise((r) => { ws.onopen = () => r(null); });
 let id = 0; const pending = new Map<string, (v: any) => void>();
@@ -146,6 +148,9 @@ st = await sectionState();
 check("clear-all empties and hides the section", !!st && (st.hidden === true || st.rows.length === 0), st);
 await shot("03-after-clear-all");
 
+} finally {
+  await teardownChrome(proc, profile);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
-proc.kill();
 Deno.exit(fail ? 1 : 0);

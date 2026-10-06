@@ -8,7 +8,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 import { composerInput, composerSend } from "./lib/composer-target.ts";
 
@@ -193,8 +193,7 @@ try {
 
   await send("Target.closeTarget", { targetId });
 } finally {
-  try { proc.kill("SIGKILL"); } catch { /* gone */ }
-  try { await proc.status; } catch { /* reaped */ }
+  await teardownChrome(proc, profile);
   await Deno.remove(profile, { recursive: true }).catch(() => {});
 }
 

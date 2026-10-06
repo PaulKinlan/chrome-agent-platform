@@ -26,7 +26,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, teardownChrome } from "./lib/chrome-launch.ts";
 import { startMcpTestServer } from "./mcp-test-server.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 import { durableDir } from "./lib/durable-root.mjs";
@@ -64,20 +64,21 @@ console.log(`unreachable MCP server: ${badUrl}`);
 
 let proc: Deno.ChildProcess | null = null;
 let ws: WebSocket | null = null;
+const profile = chromeProfileDir("kat-mcp-tool-injection");
 try {
   const launched = await launchChrome({
     binary: CHROMIUM,
     args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
       "--silent-debugger-extension-api",
       `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--remote-allow-origins=*",
-      `--user-data-dir=${chromeProfileDir("kat-mcp-tool-injection")}`, "about:blank"],
+      `--user-data-dir=${profile}`, "about:blank"],
   });
   proc = launched.proc;
   ws = new WebSocket(launched.wsUrl);
   await new Promise((r) => ws!.onopen = r);
 } catch (e) {
   console.log(`FAIL: could not start Chrome — ${String(e)}`);
-  try { proc?.kill(); } catch { /* already gone */ }
+  await teardownChrome(proc, profile);
   try { await good.close(); } catch { /* */ }
   Deno.exit(1);
 }
@@ -91,10 +92,9 @@ const send = (method: string, params: any = {}, sessionId?: string) => new Promi
 
 async function cleanup(code: number) {
   try { ws?.close(); } catch { /* */ }
-  try { proc?.kill("SIGKILL"); } catch { /* */ }
-  try { await proc?.status; } catch { /* */ }
+  await teardownChrome(proc, profile);
   try { await good.close(); } catch { /* */ }
-  try { await Deno.remove(chromeProfileDir("kat-mcp-tool-injection"), { recursive: true }); } catch { /* */ }
+  try { await Deno.remove(profile, { recursive: true }); } catch { /* */ }
   Deno.exit(code);
 }
 

@@ -11,7 +11,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -29,14 +29,15 @@ function check(name: string, cond: boolean, detail?: unknown) {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+const profile = chromeProfileDir("kat-keyed");
 const { proc, wsUrl } = await launchChrome({
   binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${chromeProfileDir("kat-keyed")}`, "about:blank"],
+    `--user-data-dir=${profile}`, "about:blank"],
 });
-
+try {
 const ws = new WebSocket(wsUrl);
 await new Promise((r) => ws.onopen = r);
 let id = 0; const pending = new Map<string, (v: any) => void>();
@@ -50,7 +51,7 @@ ws.onmessage = (m) => {
 };
 
 const sw = await waitForServiceWorker(send);
-if (!sw) { console.log("FAIL: no service worker target"); proc.kill(); Deno.exit(1); }
+if (!sw) { console.log("FAIL: no service worker target"); await teardownChrome(proc, profile); Deno.exit(1); }
 const extId = new URL(sw.url).host;
 
 // attach helper: open a target + flat session.
@@ -126,6 +127,9 @@ check("the keyed run reaches the model (no [demo model], no 'returned no content
   { answered, respondedWithToolAttempt: responded });
 await shot(`${OUT}/hub-first-answer.png`);
 
+} finally {
+  await teardownChrome(proc, profile);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
-proc.kill();
 Deno.exit(fail === 0 ? 0 : 1);

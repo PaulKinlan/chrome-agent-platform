@@ -12,7 +12,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, teardownChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -28,6 +28,7 @@ function check(name: string, cond: boolean, detail?: unknown) {
 }
 
 await Deno.mkdir(OUT, { recursive: true });
+const profile = `${OUT}/profile`;
 
 // Kernel-assigned debugging port, read back from THIS Chrome by the shared
 // launcher — a named port can silently attach to another lane's browser
@@ -37,7 +38,7 @@ const { proc, wsUrl, port } = await launchChrome({
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${OUT}/profile`, "about:blank"],
+    `--user-data-dir=${profile}`, "about:blank"],
 });
 
 const ws = new WebSocket(wsUrl);
@@ -324,7 +325,7 @@ try {
   })()`);
   check("refresh() on seeded (gallery) data never clobbers it", seededRefresh.seeded === true && seededRefresh.after === seededRefresh.before, seededRefresh);
 } finally {
-  try { proc.kill(); } catch { /* best effort */ }
+  await teardownChrome(proc, profile);
 }
 
 console.log(`KAT recent-activity: ${pass} passed, ${fail} failed — evidence in ${OUT}`);

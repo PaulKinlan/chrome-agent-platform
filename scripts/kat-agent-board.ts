@@ -14,7 +14,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -31,12 +31,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 Deno.mkdir(OUT, { recursive: true });
 
+const profile = chromeProfileDir("kat-agent-board");
 const { proc, wsUrl } = await launchChrome({
   binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${chromeProfileDir("kat-agent-board")}`, "about:blank"],
+    `--user-data-dir=${profile}`, "about:blank"],
 });
 
 const ws = new WebSocket(wsUrl);
@@ -396,7 +397,7 @@ try {
   await Deno.writeFile(`${OUT}/board-sidebar.png`, Uint8Array.from(atob(shot.result.data), (c) => c.charCodeAt(0)));
   console.log(`screenshot: ${OUT}/board-sidebar.png`);
 } finally {
-  try { proc.kill(); } catch { /* already gone */ }
+  await teardownChrome(proc, profile);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -12,7 +12,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -28,15 +28,17 @@ function check(name: string, condition: boolean, detail?: unknown) {
   else { fail++; console.log(`FAIL: ${name} — ${JSON.stringify(detail)}`); }
 }
 
+const profile = chromeProfileDir("kat-settings-cleanliness");
 const { proc, wsUrl } = await launchChrome({
   binary: CHROMIUM,
   args: [
     "--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    "--remote-allow-origins=*", `--user-data-dir=${chromeProfileDir("kat-settings-cleanliness")}`, "about:blank",
+    "--remote-allow-origins=*", `--user-data-dir=${profile}`, "about:blank",
   ],
 });
 const ws = new WebSocket(wsUrl);
+try {
 await new Promise((resolve) => { ws.onopen = () => resolve(null); });
 let id = 0;
 const pending = new Map<number, (value: any) => void>();
@@ -55,7 +57,7 @@ ws.onmessage = (event) => {
 const worker = await waitForServiceWorker(send, { timeoutMs: 20000 });
 check("the loaded extension registered its service worker", Boolean(worker), worker);
 if (!worker) {
-  try { proc.kill("SIGKILL"); } catch {}
+  await teardownChrome(proc, profile);
   Deno.exit(1);
 }
 const extensionId = new URL(worker.url).host;
@@ -235,8 +237,10 @@ for (const [width, height] of [[1440, 900], [1024, 700]] as const) {
   }
 }
 
+} finally {
+  try { ws.close(); } catch {}
+  await teardownChrome(proc, profile);
+}
+
 console.log(`${pass} passed, ${fail} failed`);
-try { ws.close(); } catch {}
-try { proc.kill("SIGKILL"); } catch {}
-try { await proc.status; } catch {}
 if (fail) Deno.exit(1);

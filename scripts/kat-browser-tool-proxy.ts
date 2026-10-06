@@ -14,7 +14,7 @@
 //
 // Run: npm run kat:browser-tool-proxy     (or: deno run -A scripts/kat-browser-tool-proxy.ts)
 
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, teardownChrome } from "./lib/chrome-launch.ts";
 import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { buildVariant } from "./permission-variant.mjs";
@@ -63,6 +63,7 @@ const { dir: extDir } = await buildVariant({
 
 const profile = durableDir("cap-chrome-profiles", `2amt-drive-${Deno.pid}-${Date.now()}`);
 const chrome = await launchChrome({ binary: resolveChromeForTesting(), extension: extDir, profile, windowSize: "1200,900" });
+try {
 const ws = new WebSocket(chrome.wsUrl);
 await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
 let idc = 0; const pend = new Map();
@@ -270,10 +271,12 @@ check(
 console.log(`\n=== ${pass} passed / ${fail} failed`);
 if (failures.length) console.log(`FAILURES:\n  - ${failures.join("\n  - ")}`);
 console.log(`harness report: ${REPORTS}`);
-try { bridge.kill("SIGKILL"); } catch { /* gone */ }
-try { await cdp("Browser.close"); } catch { /* gone */ }
-await sleep(500);
-try { await Deno.remove(variantDir, { recursive: true }); } catch { /* cleaned */ }
-try { await Deno.remove(profile, { recursive: true }); } catch { /* cleaned */ }
-try { await Deno.remove(REPORTS); } catch { /* cleaned */ }
+} finally {
+  try { bridge.kill("SIGKILL"); } catch { /* gone */ }
+  await teardownChrome(chrome.proc, profile);
+  await sleep(500);
+  try { await Deno.remove(variantDir, { recursive: true }); } catch { /* cleaned */ }
+  try { await Deno.remove(profile, { recursive: true }); } catch { /* cleaned */ }
+  try { await Deno.remove(REPORTS); } catch { /* cleaned */ }
+}
 Deno.exit(fail ? 1 : 0);

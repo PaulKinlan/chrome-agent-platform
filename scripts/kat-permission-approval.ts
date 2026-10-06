@@ -15,7 +15,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+import { launchChrome, openCdp, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -285,7 +285,7 @@ try {
   await send("Target.closeTarget", { targetId: ntpTargetId });
   await send("Target.closeTarget", { targetId: optTargetId });
   ws.close();
-  proc.kill("SIGTERM");
+  await teardownChrome(chrome.proc, userDataDir);
 } catch {}
 
 const summary = {

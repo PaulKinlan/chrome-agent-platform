@@ -25,7 +25,7 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-patch-asset`;
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 import { composerInput, composerSend } from "./lib/composer-target.ts";
 
@@ -46,14 +46,16 @@ try { await Deno.stat(`${EXT}/dist/background/service-worker.js`); } catch {
 
 // Kernel-assigned debugging port, read back from THIS Chrome by the shared
 // launcher (CAP-FB-20260829-FIXED-DEBUG-PORTS-01).
+const profile = chromeProfileDir("kat-patch-asset");
 const { proc, wsUrl, port } = await launchChrome({
   binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${chromeProfileDir("kat-patch-asset")}`, "about:blank"],
+    `--user-data-dir=${profile}`, "about:blank"],
 });
 const ws = new WebSocket(wsUrl);
+try {
 await new Promise((r) => { ws.onopen = () => r(null); });
 let id = 0; const pending = new Map<string, (v: any) => void>();
 const send = (method: string, params: any = {}, sessionId?: string) => new Promise<any>((res) => {
@@ -85,7 +87,7 @@ for (let i = 0; i < 100 && !sw; i++) {
   catch { /* not up yet */ }
   if (!sw) await sleep(200);
 }
-if (!sw) { console.log("FAIL: no service worker target"); proc.kill(); Deno.exit(1); }
+if (!sw) { console.log("FAIL: no service worker target"); await teardownChrome(proc, profile); Deno.exit(1); }
 const extId = new URL(sw.url).host;
 // Attach the debugger to the MV3 service worker so it is NOT suspended during
 // the owner-approval pause — a suspended worker drops its in-memory tool
@@ -235,7 +237,9 @@ check("the stale re-edit did NOT mutate (no #16a34a) and the original colour is 
 check("only the first patch landed — the head version is 2", storeState.head === 2, storeState);
 
 if (swLog.length) console.log(`SW log (filtered):\n  ${swLog.join("\n  ")}`);
+} finally {
+  try { ws.close(); } catch { /* ignore */ }
+  await teardownChrome(proc, profile);
+}
 console.log(`\nkat-patch-asset: ${pass} passed, ${fail} failed`);
-try { ws.close(); } catch { /* ignore */ }
-try { proc.kill(); } catch { /* ignore */ }
 Deno.exit(fail === 0 ? 0 : 1);

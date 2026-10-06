@@ -4,7 +4,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome, SW_MATCH } from "./lib/chrome-launch.ts";
 import { textToDataUrl } from "../extension/lib/attachments.js";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
@@ -50,7 +50,7 @@ let failed = 0;
 try {
   const sw = await waitForServiceWorker(send, {
     timeoutMs: 15_000,
-    match: (t: any) => t.type === "service_worker" && String(t.url).includes("dist/background"),
+    match: SW_MATCH,
   });
   if (!sw) throw new Error("extension service worker did not register");
   const extId = new URL(sw.url).host;

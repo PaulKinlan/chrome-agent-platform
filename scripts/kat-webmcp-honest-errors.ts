@@ -22,7 +22,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { copyBuiltTree } from "./lib/copy-built-tree.mjs";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
@@ -406,8 +406,7 @@ try {
   }, null, 2) + "\n");
 } finally {
   try { fixture.kill("SIGKILL"); } catch { /* already dead */ }
-  try { proc.kill("SIGKILL"); } catch { /* already dead */ }
-  try { await proc.status; } catch { /* reaped */ }
+  await teardownChrome(proc, profile);
   await Deno.remove(profile, { recursive: true }).catch(() => {});
   await Deno.remove(VARIANT, { recursive: true }).catch(() => {});
 }

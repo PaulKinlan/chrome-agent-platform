@@ -10,7 +10,7 @@
 // this script is the wiring only.
 
 import { fileURLToPath } from "node:url";
-import { launchChrome, openCdp, withTimeout } from "./lib/chrome-launch.ts";
+import { launchChrome, openCdp, withTimeout, teardownChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import {
   announceRunError,
@@ -196,6 +196,7 @@ try {
   runError = captureRunError(err);
   announceRunError(err);
 } finally {
+  try { await teardownChrome(chrome, PROFILE); } catch { /* best effort; settleBistroRun finalizes */ }
   // GUARANTEED TEARDOWN + decision + reports + fail-closed exit: ONE call into
   // the production finalizer via the extracted settle unit — the committed
   // tests execute THAT function, never a simulation of it.

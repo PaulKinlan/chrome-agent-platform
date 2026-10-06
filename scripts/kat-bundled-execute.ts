@@ -33,7 +33,7 @@
 // Run: deno run -A scripts/kat-bundled-execute.ts   (takes the Chrome slot)
 
 import { fileURLToPath } from "node:url";
-import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+import { launchChrome, openCdp, teardownChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import {
   startScriptedProvider,
@@ -193,6 +193,8 @@ const state: any = {
   error: null,
 };
 
+let launched: Awaited<ReturnType<typeof launchChrome>> | null = null;
+
 try {
   state.commit = await new Deno.Command("git", { args: ["-C", ROOT, "rev-parse", "HEAD"] })
     .output().then((o) => new TextDecoder().decode(o.stdout).trim());
@@ -276,7 +278,7 @@ try {
     ],
   });
 
-  const launched = await launchChrome({ extension: EXTENSION, profile: PROFILE, timeoutMs: 30_000 });
+  launched = await launchChrome({ extension: EXTENSION, profile: PROFILE, timeoutMs: 30_000 });
   const cdp = await openCdp(launched.wsUrl, { timeoutMs: 240_000 });
   const serviceWorker = await cdp.serviceWorker({ timeoutMs: 30_000 });
   assert(serviceWorker, "extension service worker did not register");
@@ -556,12 +558,13 @@ try {
   await Deno.writeTextFile(`${EVIDENCE}/result.json`, JSON.stringify(state, null, 2));
   console.log(`PASS: bundled execute spot-check — evidence ${EVIDENCE}`);
   await provider.close();
-  await launched.proc.kill();
+  await teardownChrome(launched, PROFILE);
   Deno.exit(0);
 } catch (e) {
   state.error = String((e as Error)?.message ?? e);
   await Deno.writeTextFile(`${EVIDENCE}/result.json`, JSON.stringify(state, null, 2)).catch(() => {});
   console.error(`FAIL: ${state.error}`);
   console.error(`evidence: ${EVIDENCE}`);
+  if (launched) await teardownChrome(launched, PROFILE);
   Deno.exit(1);
 }

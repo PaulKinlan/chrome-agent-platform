@@ -21,7 +21,7 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-pipeline-steps`;
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const CHROMIUM = "/usr/bin/chromium";
@@ -34,13 +34,15 @@ function check(name: string, cond: boolean, detail?: unknown) {
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 await Deno.mkdir(OUT, { recursive: true });
 
+const profile = chromeProfileDir("kat-pipeline-steps");
 const { proc, wsUrl, port } = await launchChrome({
   binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${chromeProfileDir("kat-pipeline-steps")}`, "about:blank"],
+    `--user-data-dir=${profile}`, "about:blank"],
 });
+try {
 const ws = new WebSocket(wsUrl);
 await new Promise((r) => { ws.onopen = () => r(null); });
 let id = 0; const pending = new Map<string, (v: any) => void>();
@@ -160,6 +162,8 @@ check("the final answer carries the value the pipe actually moved",
 check("no row is left active after settle (every pipeline-step event arrived paired)",
   !!settled?.rows && settled.rows.every((r: any) => r.status !== "active"), settled?.rows);
 
-try { proc.kill("SIGKILL"); } catch { /* already gone */ }
+} finally {
+  await teardownChrome(proc, profile);
+}
 console.log(`kat-pipeline-steps: ${pass} passed, ${fail} failed`);
 Deno.exit(fail ? 1 : 0);

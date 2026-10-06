@@ -4,7 +4,7 @@
 // deno run -A scripts/kat-user-wasm-store.ts [extension-dir] [evidence-dir]
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { launchChrome, openCdp, waitForServiceWorker, withTimeout } from "./lib/chrome-launch.ts";
+import { launchChrome, openCdp, waitForServiceWorker, withTimeout, teardownChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -220,7 +220,7 @@ try {
     note: "Functional upload/storage/UI only. No executor, tool registration, or runtime compatibility claim.",
   }, null, 2) + "\n");
   if (cdp) await cdp.send("Browser.close").catch(() => {});
-  if (chrome) await withTimeout(chrome.proc.status, 8000).catch(() => { try { chrome?.proc.kill("SIGKILL"); } catch { /* already exited */ } });
+  if (chrome) await teardownChrome(chrome.proc, PROFILE);
   cdp?.close();
   await Deno.remove(PROFILE, { recursive: true }).catch(() => {});
   await Deno.remove(inputs, { recursive: true }).catch(() => {});

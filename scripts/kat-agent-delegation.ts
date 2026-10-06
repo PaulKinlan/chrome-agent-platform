@@ -21,7 +21,7 @@
 //   deno run -A scripts/kat-agent-delegation.ts <path-to-extension> [<out-dir>]
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, teardownChrome } from "./lib/chrome-launch.ts";
 import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
 // The pure delegation guard's own constants — the over-cap checks pin the
 // production floor and child cap, never a copied number.
@@ -53,12 +53,13 @@ try { await Deno.stat(`${EXT}/dist/background/service-worker.js`); } catch {
 // Kernel-assigned CDP port; the endpoint comes from THIS Chrome process.
 let proc: Deno.ChildProcess | null = null;
 let ws: WebSocket | null = null;
+const profile = chromeProfileDir("kat-agent-delegation");
 try {
   const launched = await launchChrome({
     binary: CHROMIUM,
     args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
       `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--remote-allow-origins=*",
-      `--user-data-dir=${chromeProfileDir("kat-agent-delegation")}`, "about:blank"],
+      `--user-data-dir=${profile}`, "about:blank"],
   });
   proc = launched.proc;
   ws = new WebSocket(launched.wsUrl);
@@ -507,7 +508,7 @@ try {
   check("queued sibling is denied by durable parent revalidation", queuedDenial?.outcome === "denied", queuedDenial);
   await page.ev(`globalThis.__katQueued?.port?.disconnect()`);
 } finally {
-  try { proc?.kill(); } catch { /* already gone */ }
+  await teardownChrome(proc, profile);
 }
 console.log(`\nKAT agent-delegation: ${pass} passed, ${fail} failed`);
 Deno.exit(fail ? 1 : 0);

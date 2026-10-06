@@ -15,7 +15,7 @@
 
 import { fileURLToPath } from "node:url";
 import { ensureDir } from "https://deno.land/std@0.224.0/fs/ensure_dir.ts";
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, teardownChrome } from "./lib/chrome-launch.ts";
 import { wireValue } from "./lib/cdp-eval.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
@@ -124,11 +124,12 @@ function ensureCleanup(reason: string): Promise<void> {
         // resolves asynchronously, onclose clears it; if neither, the timeout
         // above settles once.
       }));
-      await step("chromium kill+status", async () => {
-        if (!proc) return;
-        try { proc.kill(); } catch { /* already dead */ }
-        const status = await proc.status.catch(() => null);
-        if (status) void status;
+      await step("chromium teardown", async () => {
+        if (launched) {
+          await launched.close();
+        } else if (proc) {
+          await teardownChrome(proc, profile ?? undefined);
+        }
       });
       await step("server stop", () => byoServer?.shutdown() ?? Promise.resolve());
       await step("profile dir remove", async () => {

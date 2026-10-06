@@ -3,7 +3,7 @@
 import { wireValue } from "./lib/cdp-eval.ts";
 import { composerInput } from "./lib/composer-target.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -23,6 +23,7 @@ function check(name: string, condition: boolean, detail?: unknown) {
 }
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const profile = chromeProfileDir("kat-composer-slash-commands");
 const { proc, wsUrl } = await launchChrome({
   binary: "/usr/bin/chromium",
   args: [
@@ -32,7 +33,7 @@ const { proc, wsUrl } = await launchChrome({
     `--disable-extensions-except=${EXT}`,
     `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${chromeProfileDir("kat-composer-slash-commands")}`,
+    `--user-data-dir=${profile}`,
     "about:blank",
   ],
 });
@@ -262,8 +263,6 @@ try {
   socket.close();
   fixtureAc.abort();
 } finally {
-  try {
-    proc.kill("SIGKILL");
-  } catch { /* already exited */ }
+  await teardownChrome(proc, profile);
 }
 Deno.exit(failed ? 1 : 0);

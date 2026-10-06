@@ -18,7 +18,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -35,14 +35,16 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // The debugging port is assigned by the kernel and read back from THIS Chrome's
 // stderr — a fixed port silently attaches the harness to another lane's browser.
+const profile = chromeProfileDir("kat-narrow-toggle");
 const { proc, wsUrl } = await launchChrome({
   binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${chromeProfileDir("kat-narrow-toggle")}`, "about:blank"],
+    `--user-data-dir=${profile}`, "about:blank"],
 });
 
+try {
 const ws = new WebSocket(wsUrl);
 await new Promise(r => ws.onopen = r);
 let id = 0; const pending = new Map<string, (v: any) => void>();
@@ -164,6 +166,9 @@ await sleep(700);
 const wideBack = await ev(`(() => { const side = document.getElementById('side'); return { collapsed: side.classList.contains('collapsed'), inlineSize: parseFloat(getComputedStyle(side).inlineSize) }; })()`);
 check("1280px manual toggle again: the 240px rail returns", wideBack?.collapsed === false && wideBack?.inlineSize === 240, wideBack);
 
+} finally {
+  await teardownChrome(proc, profile);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
-await proc.kill();
 Deno.exit(fail ? 1 : 0);

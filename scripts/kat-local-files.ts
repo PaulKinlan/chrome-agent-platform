@@ -15,7 +15,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 import { composerInput, composerSend } from "./lib/composer-target.ts";
 
@@ -425,6 +425,6 @@ try {
   console.log(`MANUAL REMAINDER: choose a real directory once via Settings → Local folders → Add folder; CDP cannot select a showDirectoryPicker() directory in headless Chrome.`);
   console.log(`Evidence: ${OUT}`);
 } finally {
-  try { proc.kill(); } catch { /* already exited */ }
+  await teardownChrome(proc, PROFILE);
 }
 Deno.exit(failed ? 1 : 0);

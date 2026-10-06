@@ -8,7 +8,7 @@
 // deno run -A scripts/kat-fingerprint-surface.ts [extension-dir] [evidence-dir]
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -35,6 +35,7 @@ const server = Deno.serve({ port: 0, hostname: "127.0.0.1", onListen: () => {} }
   }));
 const PAGE = `http://127.0.0.1:${(server as any).addr.port}/page`;
 
+const profile = chromeProfileDir("kat-fingerprint-surface");
 const { proc, wsUrl } = await launchChrome({
   binary: "/usr/bin/chromium",
   args: [
@@ -44,7 +45,7 @@ const { proc, wsUrl } = await launchChrome({
     `--disable-extensions-except=${EXT}`,
     `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${chromeProfileDir("kat-fingerprint-surface")}`,
+    `--user-data-dir=${profile}`,
     "about:blank",
   ],
 });
@@ -143,7 +144,7 @@ try {
   check("the static detector hook name is absent", hookProbe?.static === "undefined" && hookProbe?.legacy === "undefined", hookProbe);
   check("the per-document randomized detector hook is installed", hookProbe?.randomized === 1, hookProbe);
 } finally {
-  try { proc.kill("SIGKILL"); } catch { /* already gone */ }
+  await teardownChrome(proc, profile);
   await server.shutdown();
 }
 

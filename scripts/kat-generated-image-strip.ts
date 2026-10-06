@@ -10,7 +10,7 @@
 // Kernel-assigned debugging port via launchChrome() (no fixed port — see CLAUDE.md).
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -118,8 +118,7 @@ try {
   await Deno.writeTextFile(`${OUT}/result.json`, JSON.stringify({ passed, failed, results }, null, 2) + "\n");
 } finally {
   ws.close();
-  try { proc.kill("SIGKILL"); } catch { /* already stopped */ }
-  try { await proc.status; } catch { /* reaped */ }
+  await teardownChrome(proc, profile);
   await Deno.remove(profile, { recursive: true }).catch(() => {});
 }
 

@@ -11,7 +11,7 @@
 //   deno run -A scripts/kat-activity-explorer.ts
 
 import { fileURLToPath } from "node:url";
-import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+import { launchChrome, openCdp, teardownChrome } from "./lib/chrome-launch.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -207,7 +207,7 @@ async function main() {
     }
   } finally {
     cdp.close();
-    try { proc.kill(); } catch {}
+    await teardownChrome(proc, tmp);
     await close();
   }
 

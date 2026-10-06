@@ -13,7 +13,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
@@ -41,14 +41,16 @@ await Deno.mkdir(OUT, { recursive: true });
 // The debugging port is kernel-assigned and read back from THIS Chrome by the
 // shared launcher — a hard-coded port can silently attach to another lane's
 // browser (CAP-FB-20260829-FIXED-DEBUG-PORTS-01).
+const profile = chromeProfileDir("kat-mic-state");
 const { proc, wsUrl } = await launchChrome({
   binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${chromeProfileDir("kat-mic-state")}`, "about:blank"],
+    `--user-data-dir=${profile}`, "about:blank"],
 });
+try {
 const ws = new WebSocket(wsUrl);
 await new Promise(r => ws.onopen = r);
 let id = 0; const pending = new Map<string, (v: any) => void>();
@@ -62,7 +64,7 @@ ws.onmessage = (m) => {
 };
 
 const sw = await waitForServiceWorker(send);
-if (!sw) { console.log("FAIL: no service worker target"); proc.kill(); Deno.exit(1); }
+if (!sw) { console.log("FAIL: no service worker target"); await teardownChrome(proc, profile); Deno.exit(1); }
 const extId = new URL(sw.url).host;
 
 const { result: { targetId } } = await send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` });
@@ -685,6 +687,9 @@ await evalJs(`(() => {
 })()`);
 await sleep(300);
 
+} finally {
+  await teardownChrome(proc, profile);
+}
+
 console.log(`${pass} passed, ${fail} failed`);
-proc.kill();
 Deno.exit(fail ? 1 : 0);
