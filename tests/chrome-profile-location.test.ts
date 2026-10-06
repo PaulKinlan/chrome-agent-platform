@@ -29,6 +29,7 @@ import {
   SHARED_ROOT_MIN_OLDER_THAN_MS,
 } from "../scripts/lib/chrome-profile-dir.ts";
 import { durableRoot, isRamBacked } from "../scripts/lib/durable-root.mjs";
+import { killProcessTree } from "../scripts/lib/process-tree.ts";
 
 /** The file's ONE browser-dependent test, named where the refusal counts it. */
 const BROWSER_DEPENDENT_TESTS = ["9t1b: a REAL browser holds its profile while the whole tree is copied"];
