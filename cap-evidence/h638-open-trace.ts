@@ -4,10 +4,9 @@
 //
 // The owner's case is not "a running task" and not "a big task" — it is a task
 // he has been using (history) that is CURRENTLY running. So this harness:
-//   1. seeds a thread with real history through the REAL durable-run API (the
-//      same durableRuns.start()/appendLog() the product uses, in the page's own
-//      OPFS origin), the way scripts/thread-open-trace.ts does;
-//   2. opens it and sends a follow-up carrying @demo-slow (10 s hold on the
+//   1. builds a task's history with real hub/thread composer turns; each turn
+//      must produce a NEW successfully settled durable execution;
+//   2. sends a follow-up carrying @demo-slow (10 s hold on the
 //      first model step) + @demo-stream (paced chunks) so the run is genuinely
 //      IN FLIGHT on that thread;
 //   3. goes home and clicks the row with real mouse input, timing the open;
@@ -16,11 +15,11 @@
 // The demo model needs the developer flag (`cap:developerFeatures`); without it
 // a "demo" provider runs the local assistant and no marker engages.
 //
-//   deno run -A cap-evidence/h638-open-trace.ts [--runs=5] [--logs=50]
+//   deno run -A cap-evidence/h638-open-trace.ts [--first="h638 trace turn 1"]
 
 import { launchChrome, waitForServiceWorker, teardownChrome, withTimeout, SW_MATCH } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
-import { selectLiveOpenExecution } from "../scripts/lib/live-open-precondition.ts";
+import { selectLiveOpenExecution, requireTraceMeasures } from "../scripts/lib/live-open-precondition.ts";
 import { composerInput, composerSend } from "../scripts/lib/composer-target.ts";
 import { fileURLToPath } from "node:url";
 
@@ -113,17 +112,19 @@ const typeInto = async (session: string, expr: string, text: string) => {
 // ── provider: developer flag + demo model (the marker seam the journeys use)
 const opts = await openPage(`chrome-extension://${extId}/options/options.html`);
 await sleep(1200);
-await evl(opts, `chrome.runtime.sendMessage({ type: "kv.set", values: { "cap:developerFeatures": true } })`);
-await evl(opts, `chrome.runtime.sendMessage({ type: "provider.set", config: { provider: "demo", apiKey: "", baseURL: "", model: "" } })`);
+const developerFlag = await evl(opts, `chrome.runtime.sendMessage({ type: "kv.set", values: { "cap:developerFeatures": true } })`);
+if (developerFlag?.ok !== true) throw new Error(`demo developer flag refused: ${JSON.stringify(developerFlag)}`);
+const demoProvider = await evl(opts, `chrome.runtime.sendMessage({ type: "provider.set", config: { provider: "demo", apiKey: "", baseURL: "", model: "" } })`);
+if (demoProvider?.ok !== true) throw new Error(`demo provider refused: ${JSON.stringify(demoProvider)}`);
 await send("Target.closeTarget", { targetId: (await send("Target.getTargets")).result.targetInfos.find((t: any) => t.url.includes("options.html"))?.targetId });
 
 const ntp = await openPage(`chrome-extension://${extId}/ntp/ntp.html`);
 await sleep(2500);
 
+const traceMeasures = async () => requireTraceMeasures(await evl(ntp, `chrome.runtime.sendMessage({ type: "observability.dumpTrace" })`));
 const spans = async () => {
-  const dump = await evl(ntp, `chrome.runtime.sendMessage({ type: "observability.dumpTrace" }).then(v => v, e => ({ err: String(e?.message ?? e) }))`);
   const out: Record<string, { count: number; totalMs: number }> = {};
-  for (const m of (dump?.perf?.measures ?? [])) {
+  for (const m of await traceMeasures()) {
     const key = String(m.name ?? "").replace(/^cap:/, "").replace(/:\d+$/, "");
     const bucket = key.startsWith("thread-view:logs:") ? "thread-view:logs:*" : key;
     const b = out[bucket] ?? (out[bucket] = { count: 0, totalMs: 0 });
@@ -134,9 +135,8 @@ const spans = async () => {
 };
 /** RAW spans (ids kept) for the window — per-execution log reads included. */
 const spansRaw = async () => {
-  const dump = await evl(ntp, `chrome.runtime.sendMessage({ type: "observability.dumpTrace" }).then(v => v, e => ({ err: String(e?.message ?? e) }))`);
   const out: Record<string, { count: number; totalMs: number }> = {};
-  for (const m of (dump?.perf?.measures ?? [])) {
+  for (const m of await traceMeasures()) {
     const key = String(m.name ?? "").replace(/^cap:/, "");
     const b = out[key] ?? (out[key] = { count: 0, totalMs: 0 });
     b.count += m.count ?? 1;
@@ -173,9 +173,12 @@ const HUB_SEND = `document.querySelector(${JSON.stringify(composerSend("hub"))})
 const THREAD_INPUT = `document.querySelector(${JSON.stringify(composerInput("thread"))})`;
 const THREAD_SEND = `document.querySelector(${JSON.stringify(composerSend("thread"))})`;
 
+let runBootId: string | undefined;
 const runSnapshot = async () => {
   const snapshot = await evl(ntp, `chrome.runtime.sendMessage({ type: "run.list" })`);
-  if (!Array.isArray(snapshot?.runs)) throw new Error(`run.list unavailable: ${JSON.stringify(snapshot)}`);
+  if (!Array.isArray(snapshot?.runs) || typeof snapshot.bootId !== "string") throw new Error(`run.list unavailable: ${JSON.stringify(snapshot)}`);
+  if (runBootId && runBootId !== snapshot.bootId) throw new Error("REFUSING live-open: service worker boot changed during measurement");
+  runBootId = snapshot.bootId;
   return snapshot.runs;
 };
 const settledRunIds = new Set<string>((await runSnapshot()).map((r: any) => r.executionId));

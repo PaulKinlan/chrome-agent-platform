@@ -7,6 +7,16 @@ type Row = { executionId?: string; phase?: string; threadId?: string; updatedAt?
 type Selection = { ok: true; executionId: string; phase: "running" } |
   { ok: false; reason: "missing_thread" | "send_absorbed" | "settled_before_click" | "different_live_run"; executionId?: string; phase?: string };
 
+export function requireTraceMeasures(dump: unknown): Array<{ name?: string; count?: number; totalMs?: number }> {
+  if (!dump || typeof dump !== "object" || (dump as any).ok !== true ||
+      !Array.isArray((dump as any).perf?.measures)) {
+    // A failed trace fetch must never become an empty delta and a vacuous
+    // "no live-log reads" pass. Do not log the trace's private buffer.
+    throw new Error("observability.dumpTrace failed or returned no perf.measures array");
+  }
+  return (dump as any).perf.measures;
+}
+
 export function selectLiveOpenExecution({ threadId, runs, priorIds }: {
   threadId: string; runs: Row[]; priorIds: string[];
 }): Selection {
