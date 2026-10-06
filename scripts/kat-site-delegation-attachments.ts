@@ -48,7 +48,10 @@ const send = (m: string, p: any = {}, s?: string) =>
 let failed = 0;
 
 try {
-  const sw = await waitForServiceWorker(send, { timeoutMs: 15_000 });
+  const sw = await waitForServiceWorker(send, {
+    timeoutMs: 15_000,
+    match: (t: any) => t.type === "service_worker" && String(t.url).includes("dist/background"),
+  });
   if (!sw) throw new Error("extension service worker did not register");
   const extId = new URL(sw.url).host;
 
