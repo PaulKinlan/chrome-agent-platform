@@ -16,6 +16,8 @@ import { browserRefusal } from "../scripts/lib/browser-refusal.ts";
 import { resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
 import { ENVIRONMENTAL_REFUSAL_EXIT } from "../scripts/lib/quiet-window.ts";
 
+const decoder = new TextDecoder();
+
 const BROWSER_TEST = "9t1b: a REAL browser holds its profile while the whole tree is copied";
 
 Deno.test("hlgr: no browser => NAMED and COUNTED environmental refusal at exit 75", () => {
@@ -75,4 +77,28 @@ Deno.test("hlgr: the resolver's real absence report drives the refusal end-to-en
   assertEquals(refusal!.exit, ENVIRONMENTAL_REFUSAL_EXIT);
   assertStringIncludes(refusal!.line, BROWSER_TEST);
   assert(/refusing 1 browser-dependent test/i.test(refusal!.line));
+});
+
+// review P2: the PURE verdict was tested but the PROCESS path was not — a refusal degraded to exit 0, or
+// removed from the guard entirely, would still have passed. This drives the real exit through a
+// subprocess, so the degradation cases are covered end-to-end rather than by inspection.
+Deno.test("hlgr: the refusal's PROCESS path exits 75 with the marker, and never returns", async () => {
+  const module = new URL("../scripts/lib/browser-refusal.ts", import.meta.url).href;
+  const script =
+    `import { refuseWithoutBrowser } from ${JSON.stringify(module)};\n` +
+    `refuseWithoutBrowser({ binary: null, tried: ["probe"] }, ["a browser-dependent test"]);\n` +
+    `console.log("HLGR_REFUSAL_RETURNED");\n`;
+  const { code, stdout, stderr } = await new Deno.Command(Deno.execPath(), {
+    args: ["eval", script],
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  const out = decoder.decode(stdout) + decoder.decode(stderr);
+  assertEquals(code, 75, `the process path must exit 75 (not 0, not 1). Got ${code}:\n${out.slice(0, 800)}`);
+  assertStringIncludes(out, "ENVIRONMENT:", `the refusal line must reach stdout:\n${out.slice(0, 800)}`);
+  assertStringIncludes(out, "CAP_ENVIRONMENTAL_REFUSAL", `the machine-readable marker must be emitted:\n${out.slice(0, 800)}`);
+  assert(
+    !out.includes("HLGR_REFUSAL_RETURNED"),
+    "refuseWithoutBrowser must NOT return — a caller that continues would launch anyway",
+  );
 });

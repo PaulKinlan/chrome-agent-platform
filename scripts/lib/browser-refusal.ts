@@ -9,6 +9,7 @@
 // The count matters as much as the name: a silent ignore reads as green, and a bare exit code is
 // invisible to the human reading the log. Both the human-readable ENVIRONMENT: line and the
 // machine-readable marker payload carry the reason AND the number of tests that went unverified.
+import { existsSync } from "node:fs";
 import { ENVIRONMENTAL_REFUSAL_EXIT, ENVIRONMENTAL_REFUSAL_MARKER } from "./quiet-window.ts";
 
 export interface BrowserResolution {
@@ -21,13 +22,20 @@ export function browserRefusal(
   report: BrowserResolution,
   browserDependentTests: string[],
 ): { line: string; marker: string; payload: Record<string, unknown>; exit: number } | null {
-  if (report.binary) return null;
+  // review P1: resolveChromiumBinaryReport trusts a CAP_CHROMIUM override without checking that the
+  // path EXISTS (scripts/lib/chrome-launch.ts — j5yz-owned, so this is defended here rather than edited
+  // there). A missing override would otherwise pass as resolved, the refusal would not fire, and the
+  // launch would die with ENOENT: a product red for an environment difference, which is the exact
+  // failure this bead removes.
+  const binary = report.binary && existsSync(report.binary) ? report.binary : null;
+  if (binary) return null;
   const refused = browserDependentTests.length;
   return {
     line:
       `ENVIRONMENT: no resolvable browser — refusing ${refused} browser-dependent test(s): ` +
       `${browserDependentTests.map((t) => `"${t}"`).join(", ")}. ` +
-      `Tried: ${report.tried.join(", ") || "<nothing to try>"}. ` +
+      `Tried: ${report.tried.join(", ") || "<nothing to try>"}` +
+      `${report.binary && !binary ? ` (the reported path does not exist: ${report.binary})` : ""}. ` +
       `Set CAP_CHROMIUM or install a browser to run ${refused === 1 ? "it" : "them"}; ` +
       `this is an environment difference, not a product failure. ` +
       `(environmental verdict, exit ${ENVIRONMENTAL_REFUSAL_EXIT})`,

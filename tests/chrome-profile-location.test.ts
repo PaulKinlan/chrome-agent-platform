@@ -103,7 +103,11 @@ Deno.test("9t1b: a REAL browser holds its profile while the whole tree is copied
   // "fell through to a default that may not exist".
   const { launchChrome, resolveChromiumBinaryReport } = await import("../scripts/lib/chrome-launch.ts");
   const { refuseWithoutBrowser } = await import("../scripts/lib/browser-refusal.ts");
-  refuseWithoutBrowser(resolveChromiumBinaryReport(), BROWSER_DEPENDENT_TESTS);
+  // chrome-agent-platform-hlgr review P1: do NOT exit from here. This test sits before five STATIC
+  // tests in this file, and Deno.exit(75) would abort them, losing coverage that needs no browser at
+  // all. Without a browser this test declines to assert and the refusal is emitted by the LAST test in
+  // the file, which runs after every static one has had its chance.
+  if (!resolveChromiumBinaryReport().binary) return;
   // The race, driven for real: launch Chrome with a profile from the helper,
   // keep it alive, and copy the WHOLE working tree underneath it — the exact
   // command that failed in tests/cdp-client.test.ts (`cp -a <repo>/. <dst>/.`).
@@ -369,4 +373,14 @@ Deno.test("9t1b/z5ym/xvco: an UNKNOWN lock is kept AND reported, never deleted b
     agentsDoc.includes("Lockless profiles") && agentsDoc.includes("`unknown`"),
     "AGENTS.md documents that lockless profiles self-prune while unknown locked profiles are retained and logged",
   );
+});
+
+// chrome-agent-platform-hlgr: the environmental verdict is emitted HERE, last, so a browserless host
+// still runs every static test above before the file reports that its browser test was refused. The
+// refusal NAMES the reason and COUNTS what went unverified, and exits 75 — the repo's third verdict,
+// distinguishable from a pass (0) and from a product failure (1).
+Deno.test("hlgr: no resolvable browser => the environmental refusal (named, counted, exit 75)", async () => {
+  const { refuseWithoutBrowser } = await import("../scripts/lib/browser-refusal.ts");
+  const { resolveChromiumBinaryReport } = await import("../scripts/lib/chrome-launch.ts");
+  refuseWithoutBrowser(resolveChromiumBinaryReport(), BROWSER_DEPENDENT_TESTS);
 });
