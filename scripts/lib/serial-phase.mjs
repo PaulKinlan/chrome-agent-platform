@@ -117,7 +117,7 @@ export function runSerialFile(file, {
         // Group already gone or reaped.
       }
     }
-    console.error(`\nrun-tests: serial file ${file} TIMED OUT after ${timeoutMs / 1000}s`);
+    announce(`\nrun-tests: serial file ${file} TIMED OUT after ${timeoutMs / 1000}s`);
     return { code: 124, timedOut: true, error: r.error, stdout: r.stdout, stderr: r.stderr };
   }
   // Safety: kill any remaining process group descendants so orphaned background processes
@@ -144,7 +144,7 @@ function serialLogDir() {
     mkdirSync(dir, { recursive: true });
     return dir;
   } catch (e) {
-    console.error(
+    announce(
       `run-tests: WARNING — per-file serial logs unavailable (${e?.message ?? e}); ` +
         `failing files are still named and their output printed below`,
     );
@@ -172,6 +172,21 @@ function serialLogDir() {
  * their header, which is what keeps the phase readable. `stdio` can still be passed explicitly
  * (the focused tests pass ["ignore","ignore","ignore"]).
  */
+/**
+ * chrome-agent-platform-ia4z: the per-file failure notices and the named failing-file
+ * block used to go to STDERR ONLY, while the phase headers and the summary went to
+ * STDOUT. A consumer that captures stdout alone therefore got a COUNT WITH NO NAME —
+ * which is how a red gets misattributed to whoever changed something, and it happened
+ * twice on 2026-10-06 (0iln's gate and o2t3's, where the name had to be recovered from
+ * the durable per-file belt). Attribution now goes to BOTH streams: stdout so it
+ * survives a stdout-only capture AND a mid-phase kill (a kill deletes any end-of-phase-
+ * only mechanism), stderr because a human running the command reads it there.
+ */
+function announce(line) {
+  console.log(line);
+  console.error(line);
+}
+
 export function runSerialFiles(files, {
   timeoutMs = defaultSerialTimeoutMs(),
   perFileTimeoutMs = SERIAL_FILE_TIMEOUTS,
@@ -222,10 +237,12 @@ export function runSerialFiles(files, {
       failures.push({ file, code: result.code, timedOut: Boolean(result.timedOut), secs, log });
       // Named HERE as well as in the summary: the reader watching the log sees which file broke the
       // moment it breaks, instead of scrolling back to guess from a missing banner.
-      console.error(
+      announce(
         `\nrun-tests: serial file ${file} FAILED (exit ${result.code}${result.timedOut ? ", TIMED OUT" : ""}) in ${secs}s` +
           `${log ? ` — captured output: ${log}` : ""}`,
       );
+      // The captured output stays on stderr: it is unbounded, and BOTH streams above name the
+      // durable per-file log that holds it, so a stdout-only reader loses no attribution.
       if (text.trim()) console.error(text.replace(/\n$/, ""));
     }
   }
@@ -237,9 +254,9 @@ export function runSerialFiles(files, {
   if (failures.length > 0) {
     // THE WHOLE POINT (dsoq): a COUNT without a NAME cannot be acted on. This block is what a
     // landing gate must print, and tests/serial-phase-failure-attribution.test.ts fails if it stops.
-    console.error("run-tests: FAILING SERIAL FILE(S):");
+    announce("run-tests: FAILING SERIAL FILE(S):");
     for (const f of failures) {
-      console.error(
+      announce(
         `  - ${f.file} (exit ${f.code}${f.timedOut ? ", TIMED OUT" : ""}) in ${f.secs}s` +
           `${f.log ? ` — log: ${f.log}` : ""}`,
       );
