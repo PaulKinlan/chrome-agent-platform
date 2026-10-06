@@ -1896,20 +1896,29 @@ Deno.test("guard: the census shapes are live in the real repo, not only in the p
     'R4n: the pin is inside `if (rel.endsWith("usage-store.js"))`, so only that member is its target');
 
   // R4 — chrome-agent-platform-lrok RE-ANCHORED the last real-repo instance of
-  // this shape: the three bare-word pins in quiet-window.test.ts's filtered
+  // this shape: the three bare-word pins in quiet-window's filtered
   // Object.entries loop are now anchored inside the refusal handler
   // (/instanceof QuietWindowRefusedError … ENVIRONMENTAL_REFUSAL_MARKER/), so
   // the substring-pin instance this sentinel watched no longer exists. The
   // truth that remains checkable: the retired instance stays retired, and the
-  // re-anchored handler pins exist.
-  assertEquals(
-    attributionsAt(tp("quiet-window.test.ts"), "QuietWindowRefusedError"),
-    [],
-    "the bare-word QuietWindowRefusedError pin was re-anchored by lrok — if this attribution reappears, a substring pin returned and this entry must be re-audited",
-  );
+  // re-anchored handler pins exist. chrome-agent-platform-fgik SPLIT that
+  // file's tracked-source half into quiet-window-static.test.ts (so the
+  // always-on set no longer pays the esbuild burners), which moved BOTH
+  // halves: the anchored handler now lives in the static file, while the
+  // retired bare-word instance stays retired in both. Each is checked where it
+  // now lives — a grep for the token, not an assumption about which file kept
+  // it (AGENTS.md coupling rule 3: this split reded this sentinel until it
+  // followed the pin).
+  for (const file of ["quiet-window.test.ts", "quiet-window-static.test.ts"]) {
+    assertEquals(
+      attributionsAt(tp(file), "QuietWindowRefusedError"),
+      [],
+      `the bare-word QuietWindowRefusedError pin was re-anchored by lrok — if this attribution reappears in ${file}, a substring pin returned and this entry must be re-audited`,
+    );
+  }
   assert(
     /QuietWindowRefusedError[\s\S]{0,400}?ENVIRONMENTAL_REFUSAL_MARKER/.test(
-      await Deno.readTextFile(new URL("./quiet-window.test.ts", import.meta.url)),
+      await Deno.readTextFile(new URL("./quiet-window-static.test.ts", import.meta.url)),
     ),
     "lrok's anchored handler pins remain in place (the refusal is pinned inside the handler, not on its imports)",
   );

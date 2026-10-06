@@ -202,8 +202,15 @@ whole-suite mutant run); **inspection** means read from the source, not executed
 - **Subject moves:** LOUD: the assertion names the page, the new total, the pin, the
   delta and the re-measure command.
 
-## 10. tests/quiet-window.test.ts + scripts/lib/quiet-window.ts + the registry
+## 10. tests/quiet-window.test.ts + tests/quiet-window-static.test.ts + scripts/lib/quiet-window.ts + the registry
 
+- **Split by chrome-agent-platform-fgik:** the assertions that read tracked source as
+  data — the registry ↔ source agreement below, and the `scripts/chrome-journeys.ts`
+  pins — live in `tests/quiet-window-static.test.ts`, which spawns nothing and is in
+  the ALWAYS_ON set. `tests/quiet-window.test.ts` keeps the burner/waiting workload
+  (real esbuild processes, load sampling, refusal simulation) and runs in the full
+  suite only: it cost 23s as an always-on member and injected compiler load into
+  other lanes' gates. A pin that names a file must name the one it is actually in.
 - **Watches:** the three-verdict contract (0 ran-and-passed / 1 ran-and-failed /
   75 environmental refusal) and the agreement between the set of harnesses DECLARED
   load-sensitive (`loadSensitive` in `scripts/lib/harness-registry.ts`) and the set that
