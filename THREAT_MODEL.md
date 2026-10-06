@@ -69,8 +69,8 @@ Component map, with the file that owns each surface:
   reach exactly eight routes (`extension/lib/pure.js:1178-1187`) and every other route
   is refused at the listener (`extension/background/service-worker.js:11953-11957`).
   The receiver's authority is derived from the BROWSER-ATTESTED `sender`, never from the
-  message body (`extension/background/service-worker.js:11935-11940`, `:11960`,
-  `:11969-11979`).
+  message body (`extension/background/service-worker.js:11933-11938`, `:11960`,
+  `:11966-11978`).
 - **TB3 — The two provider paths.** Path A sends the conversation from the service
   worker directly to a hosted provider host, listed exhaustively in `OUTBOUND_HOSTS`
   (`extension/lib/provider-catalog.js:111`, pinned by `tests/privacy-statement.test.ts`);
@@ -365,7 +365,7 @@ These are the properties a change must not break. Each is stated so it can be fa
 and each names the executable check that would catch a regression.
 
 - **INV-1 — Authority is derived from the browser-attested sender, never from the body.**
-  `extension/background/service-worker.js:11935-11940`, `:11960`, `:11969`;
+  `extension/background/service-worker.js:11933-11938`, `:11960`, `:11969`;
   `scripts/security-suite.ts:306-308`. A new route that reads an origin, tab id or
   document id out of the message body breaks this.
 - **INV-2 — The page-reachable route set is closed and tiny.**
