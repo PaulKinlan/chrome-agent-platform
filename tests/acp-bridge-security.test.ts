@@ -25,7 +25,9 @@ async function upgradeStatus(port: number, origin: string | null, token?: string
   const conn = await Deno.connect({ hostname: "127.0.0.1", port });
   try {
     const headers = [
-      `GET /acp${token ? `?token=${token}` : ""} HTTP/1.1`,
+      // jsjy review F5: `token !== undefined` (not truthiness) so a caller can send an
+      // EXPLICIT empty `?token=` — that is a distinct bypass shape and must be testable.
+      `GET /acp${token !== undefined ? `?token=${encodeURIComponent(token)}` : ""} HTTP/1.1`,
       `Host: 127.0.0.1:${port}`,
       ...(origin ? [`Origin: ${origin}`] : []),
       "Connection: Upgrade",
@@ -181,6 +183,50 @@ Deno.test("ACP bridge: auth is required BY DEFAULT — a loopback upgrade with n
         true,
         "a wrong token must still be refused",
       );
+      // jsjy review F5: an EXPLICIT empty `?token=` is a distinct bypass shape from a
+      // missing one and must be refused too.
+      assertEquals(
+        (await upgradeStatus(port, EXTENSION_ORIGIN, "")).includes("403"),
+        true,
+        "an explicit empty ?token= must be refused, not compared as equal to an empty secret",
+      );
+
+      // jsjy review F5: RESTART REUSE. A second bridge on the same config dir must
+      // READ the persisted token rather than rotating it — otherwise "persisted on
+      // first use" would be true only for the process that created it, and the
+      // operator's pasted acp.token would break on every restart.
+      const before = Deno.readTextFileSync(tokenFile).trim();
+      const listener2 = Deno.listen({ hostname: "127.0.0.1", port: 0 });
+      const port2 = (listener2.addr as Deno.NetAddr).port;
+      listener2.close();
+      const child2 = new Deno.Command(Deno.execPath(), {
+        args: ["run", "-A", "scripts/acp-bridge.ts", "--port", String(port2), "--adapter", FAKE_ADAPTER],
+        cwd: fileURLToPath(new URL("..", import.meta.url)),
+        env: { XDG_CONFIG_HOME: scratch },
+        stdout: "null",
+        stderr: "null",
+      }).spawn();
+      try {
+        let up2 = false;
+        for (let i = 0; i < 60 && !up2; i++) {
+          try { const c = await Deno.connect({ hostname: "127.0.0.1", port: port2 }); c.close(); up2 = true; }
+          catch { await new Promise((r) => setTimeout(r, 200)); }
+        }
+        assertEquals(up2, true, "the second bridge must start listening");
+        assertEquals(
+          Deno.readTextFileSync(tokenFile).trim(),
+          before,
+          "a restart must NOT rotate the persisted token",
+        );
+        assertEquals(
+          (await upgradeStatus(port2, EXTENSION_ORIGIN, before)).includes("101"),
+          true,
+          "the token persisted by the FIRST start must still be accepted after a restart",
+        );
+      } finally {
+        try { child2.kill("SIGTERM"); } catch { /* already gone */ }
+        await child2.status.catch(() => null);
+      }
     } finally {
       try { child.kill("SIGTERM"); } catch { /* already gone */ }
       await child.status.catch(() => null);
@@ -188,6 +234,17 @@ Deno.test("ACP bridge: auth is required BY DEFAULT — a loopback upgrade with n
   } finally {
     try { Deno.removeSync(scratch, { recursive: true }); } catch { /* best effort */ }
   }
+});
+
+// jsjy review F4: the fail-closed invariant is now ASSERTED, so an empty secret cannot
+// be passed by a future caller or a test harness without changing this deliberately.
+Deno.test("ACP bridge: createAcpServer REFUSES an empty secret rather than building an unauthenticated bridge", () => {
+  assertThrows(
+    () => createAcpServer(0, FAKE_ADAPTER, {}, "", ""),
+    Error,
+    "non-empty token",
+    "an empty tokenOverride must throw instead of accepting an empty ?token=",
+  );
 });
 
 // jsjy: the CLIENT half of the same boundary. acp.endpoint is operator-settable,

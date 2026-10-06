@@ -13,6 +13,10 @@
 import { parseArgs } from "jsr:@std/cli@1/parse-args";
 import { acpChildEnvFor, acpChildEnvNote, acpChildSpawnOptions, actionableAuthWarning } from "./lib/acp-child-env.ts";
 import { existsSync } from "node:fs";
+// jsjy review F2: crypto.subtle.timingSafeEqual does NOT exist in this Deno
+// (verified: `typeof crypto.subtle.timingSafeEqual === "undefined"`), so the
+// secret comparison uses node:crypto's constant-time primitive instead.
+import { timingSafeEqual } from "node:crypto";
 import { hostname } from "node:os";
 import { acpToolChannel, createAcpTools } from "./lib/acp-tools.ts";
 
@@ -47,7 +51,11 @@ const HOST = String(args.host || "127.0.0.1");
 /** Is this bind address reachable from another machine? */
 export function isLoopbackHost(host: string): boolean {
   const h = String(host || "").trim().toLowerCase();
-  return h === "127.0.0.1" || h === "::1" || h === "localhost" || h.startsWith("127.");
+  // jsjy review F6: the loose `startsWith("127.")` would also read
+  // `127.0.0.1.evil.com` as local. This now matches the CLIENT's predicate
+  // (extension/lib/acp-client.js isLoopbackAcpEndpoint) octet-for-octet. It is
+  // only used for the startup log lines now, not for any auth decision.
+  return h === "::1" || h === "localhost" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
 }
 
 /** The persisted shared secret's default location: a per-user config dir, mode
@@ -72,13 +80,27 @@ function defaultTokenFile(): string {
 export function readOrCreateToken(path: string): string {
   try {
     const existing = Deno.readTextFileSync(path).trim();
-    if (existing) return existing;
+    if (existing) {
+      // jsjy review F3: a token that already exists but is group/world-readable is
+      // tightened on read. Best effort — an unprivileged process may not be able to
+      // chmod, and the secret is still required on the upgrade either way.
+      try {
+        if (((Deno.statSync(path).mode ?? 0) & 0o077) !== 0) Deno.chmodSync(path, 0o600);
+      } catch { /* best effort */ }
+      return existing;
+    }
   } catch {
     // Missing or unreadable: fall through and create it.
   }
   const token = crypto.randomUUID().replace(/-/g, "");
   try {
-    const dir = path.replace(/\/[^/]*$/, "");
+    // jsjy review F1: derive the directory from the LAST separator, not from a
+    // regex that returns the WHOLE path when there is none. With
+    // `--token-file bridge-token`, the old code called mkdirSync("bridge-token"),
+    // creating a DIRECTORY of that name, so every write then failed with EISDIR
+    // and the bridge silently degraded to a per-run token.
+    const lastSlash = path.lastIndexOf("/");
+    const dir = lastSlash > 0 ? path.slice(0, lastSlash) : "";
     if (dir) Deno.mkdirSync(dir, { recursive: true, mode: 0o700 });
     Deno.writeTextFileSync(path, `${token}\n`, { mode: 0o600 });
     Deno.chmodSync(path, 0o600);
@@ -592,7 +614,7 @@ if (import.meta.main) {
 }
 if (!isLoopbackHost(HOST) && import.meta.main) {
   console.log(`[acp-bridge] Bound to ${HOST} — reachable from other machines on this network.`);
-  console.log(`[acp-bridge] Token required${args.token ? "" : " (generated)"}: ${TOKEN}`);
+  console.log(`[acp-bridge] Token required${args.token ? "" : " (generated)"} — persisted at ${TOKEN_FILE} (mode 0600)`);
   console.log("[acp-bridge] Plain ws:// on a network is UNENCRYPTED (the token and the agent's traffic are visible");
   console.log("[acp-bridge] to anything on the path). For anything beyond a trusted LAN, put TLS in front (a reverse");
   console.log("[acp-bridge] proxy or a tunnel) and keep this process on loopback behind it.");
@@ -624,6 +646,13 @@ export function createAcpServer(
    * empty override would be an unauthenticated bridge. */
   tokenOverride: string = TOKEN,
 ) {
+  // jsjy review F4: the invariant is FAIL-CLOSED, so it is asserted rather than
+  // documented. An EMPTY override would make the guard accept an empty `?token=`
+  // (presented "" === expected ""), i.e. an unauthenticated bridge. Refuse to
+  // build one rather than trusting every future caller to pass a real secret.
+  if (typeof tokenOverride !== "string" || tokenOverride.trim() === "") {
+    throw new Error("createAcpServer requires a non-empty token: an empty secret would accept an empty ?token=");
+  }
   const toolEndpoints = new Map<string, Awaited<ReturnType<typeof createAcpTools>>>();
   const server = Deno.serve({ port, hostname: HOST }, (req) => {
     const url = new URL(req.url);
@@ -697,8 +726,14 @@ export function createAcpServer(
     }
     // jsjy: the shared secret is REQUIRED, always — including on loopback, where
     // a local process sends no Origin and the guard above admits it by design.
-    // An unauthenticated upgrade is refused rather than served.
-    if (url.searchParams.get("token") !== tokenOverride) {
+    // An unauthenticated upgrade is refused rather than served, and the comparison
+    // is CONSTANT-TIME (jsjy review F2) so a local attacker cannot recover the
+    // secret from response timing. The length check leaks only the length.
+    const presented = url.searchParams.get("token") ?? "";
+    const encoder = new TextEncoder();
+    const tokenAccepted = presented.length === tokenOverride.length &&
+      timingSafeEqual(encoder.encode(presented), encoder.encode(tokenOverride));
+    if (!tokenAccepted) {
       return new Response("ACP Bridge: missing or wrong token", { status: 403 });
     }
 
@@ -904,16 +939,21 @@ export function createAcpServer(
 if (import.meta.main) {
   const server = createAcpServer(PORT);
   const bound = (server as any).addr?.port ?? PORT;
-  const q = `?token=${TOKEN}`;
   if (isLoopbackHost(HOST)) {
-    console.log(`[acp-bridge] listening on ws://127.0.0.1:${bound}/acp${q} (token required)`);
-    console.log(`[acp-bridge] paste the endpoint into CAP: acp.endpoint and the token into acp.token`);
-    console.log(`[acp-bridge] token persisted at ${TOKEN_FILE} (mode 0600); --token overrides it for one run`);
+    // jsjy review (challenged judgement call): the token is NOT printed here. A
+    // PERSISTED secret in scrollback, shell history, journald or a `> bridge.log`
+    // redirection outlives the process — strictly worse than the old ephemeral
+    // per-start token, which is why the reviewer's recommendation is adopted. The
+    // file is cited instead, and the plaintext is printed only in the
+    // read-only-HOME fallback above, where no file could be written.
+    console.log(`[acp-bridge] listening on ws://127.0.0.1:${bound}/acp (token required)`);
+    console.log(`[acp-bridge] paste the endpoint into CAP: acp.endpoint, and the token from this file into acp.token:`);
+    console.log(`[acp-bridge]   ${TOKEN_FILE}   (mode 0600; --token overrides it for one run)`);
   } else {
     const addrs = Deno.networkInterfaces()
       .filter((i) => i.family === "IPv4" && !i.address.startsWith("127."))
       .map((i) => i.address);
-    for (const a of addrs) console.log(`[acp-bridge] reachable at ws://${a}:${bound}/acp${q}`);
+    for (const a of addrs) console.log(`[acp-bridge] reachable at ws://${a}:${bound}/acp`);
     console.log(`[acp-bridge] paste one of those into CAP: acp.endpoint, and the token into acp.token`);
   }
 }
