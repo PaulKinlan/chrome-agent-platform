@@ -13,6 +13,7 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import { dirname, join } from "node:path";
 import { fromFileUrl } from "jsr:@std/path@1/from-file-url";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
+import { TEST_BRIDGE_TOKEN } from "./fixtures/acp-bridge-token.ts";
 
 const ROOT = join(dirname(fromFileUrl(import.meta.url)), "..");
 const SCRIPT = join(ROOT, "scripts", "acp-service.mjs");
@@ -178,7 +179,10 @@ Deno.test("acp-bridge drive: the client's missing cwd is warned about once and r
   const port = 39847;
   const bridge = new Deno.Command(Deno.execPath(), {
     args: ["run", "-A", "scripts/acp-bridge.ts", "--port", String(port), "--harness", "claude-code",
-      "--adapter", join(Deno.cwd(), "tests/fixtures/acp-fake-adapter.mjs")],
+      "--adapter", join(Deno.cwd(), "tests/fixtures/acp-fake-adapter.mjs"),
+      // jsjy: the spawned bridge REQUIRES a shared secret, so the CLI is told which one to require
+      // (otherwise it would generate and persist one the client cannot know).
+      "--token", TEST_BRIDGE_TOKEN],
     cwd: Deno.cwd(),
     env: {
       HOME: home,
@@ -206,7 +210,7 @@ Deno.test("acp-bridge drive: the client's missing cwd is warned about once and r
       } catch { /* not up yet */ }
       await new Promise((r) => setTimeout(r, 200));
     }
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/acp`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/acp?token=${TEST_BRIDGE_TOKEN}`);
     await new Promise<void>((resolve, reject) => {
       ws.onopen = () => resolve();
       ws.onerror = () => reject(new Error("websocket error"));
