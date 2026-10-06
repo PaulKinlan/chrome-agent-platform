@@ -3,6 +3,9 @@
 //   node scripts/select-tests.mjs            run the subset: `deno test -A <files>`
 //   node scripts/select-tests.mjs --list     print the selected test files, one per line
 //   node scripts/select-tests.mjs --core     run the always-on core only (security/vocabulary)
+//   node scripts/select-tests.mjs --always-on   run EXACTLY the always-on set (core + source-inspecting
+//                                                guards) — the set a subset gate cannot be trusted to
+//                                                cover (chrome-agent-platform-kz27)
 //   node scripts/select-tests.mjs --base <ref>   compare against <ref> instead of origin/main
 //
 // WHY: the full suite (321 files) is the merge gate and stays exactly as it is
@@ -69,7 +72,86 @@ export const SOURCE_INSPECTING_GUARDS = [
   "tests/source-materialization.test.ts",
   "tests/source-inspecting-tests-guard.test.ts",
   "tests/postmessage-wildcard-guard.test.ts",
+  // chrome-agent-platform-kz27 — tree-walking guards that were MISSING from this list, which is the
+  // third shape of the blind spot that bead names: a guard everyone BELIEVES is always-on, simply not
+  // in the set. tests/durable-root.test.ts is the measured case, and the cost was concrete: it sat
+  // outside, so test:changed selected it in NONE of the night's gates, and its violation lived on
+  // main through three of them while each gate reported green. The others were found by widening the
+  // qcfc audit's detector to the shape that actually matters — a walk ROOTED AT THE REPO TREE — rather
+  // than "uses a directory API", which a dozen fixture-reading tests do harmlessly.
+  // tests/chrome-profile-location.test.ts also matches that shape and is held out BY DECLARATION
+  // instead of by omission: see SCANNER_EXCLUSIONS just below, which says why.
+  // tests/chrome-profile-location.test.ts is NOT here, and that is a contract decision rather than an
+  // omission: its live race test launches a real browser, and docs/CHROME-TEST-CONTRACT.md §2.3 PROMISES
+  // that a subset gate launches a browser only when that file or its dependencies changed. Its
+  // cross-cutting half — the static scan of scripts/ for repo-resident Chrome profiles, which reads
+  // tracked source as data and therefore has no import edges — was SPLIT OUT into
+  // tests/chrome-profile-static.test.ts, which IS always-on below. See SCANNER_EXCLUSIONS for the
+  // browser-dependent remainder.
+  "tests/durable-root.test.ts",
+  "tests/dialog-confirm-modernization.test.ts",
+  "tests/single-source-helpers.test.ts",
+  "tests/chrome-profile-static.test.ts",
+  // F3 (delta review of c1a77598): the widened detector then caught these — all real repo-walking
+  // guards that read tracked source as data, none needing a browser. Adjudicated individually rather
+  // than added wholesale: machine-path-honesty walks tests/ and scripts/; settings-strings-audit walks
+  // extension/; quiet-window reads a ROOT-rooted path (node_modules) with no import edge for that read,
+  // and inclusion is the conservative and cheap direction for a test that guards gate behaviour.
+  "tests/chrome-test-contract.test.ts",
+  "tests/code-health.test.ts",
+  "tests/machine-path-honesty.test.ts",
+  "tests/settings-strings-audit.test.ts",
+  "tests/quiet-window.test.ts",
 ];
+
+/**
+ * Repo-tree scanners that are DELIBERATELY not always-on, each with a reason and the bead that owns
+ * the follow-up (chrome-agent-platform-kz27). An exclusion has to be WRITTEN DOWN and justified rather
+ * than being an accidental omission — the same principle as the list itself, and the reason this is a
+ * declaration rather than a missing line: with the detector widened, omitting the entry makes the
+ * audit FAIL CLOSED, which is the detector working as intended.
+ */
+export const SCANNER_EXCLUSIONS = Object.freeze({
+  "tests/chrome-profile-location.test.ts":
+    "it still matches the repo-walk detector through its helper reads, but it also holds the LIVE race test that launches a real browser — and docs/CHROME-TEST-CONTRACT.md §2.3 PROMISES that a subset gate launches a browser only when this file or its dependencies changed. Listing it as always-on would break that promise fleet-wide, on every VM without a working browser. Its cross-cutting half (the static scripts/ scan) was SPLIT OUT into tests/chrome-profile-static.test.ts, which is always-on; what remains here is helper semantics plus the live race, and the environmental-refusal path that would let the browser case report honestly is chrome-agent-platform-hlgr.",
+});
+
+/**
+ * The always-on guard files that exist on disk (chrome-agent-platform-kz27).
+ * Exposed because a SUBSET gate cannot see them: they have no static import edges, so a FAIL-CLOSED
+ * selector, a focused test:file run, and a serial failure that skips the parallel phase each hide
+ * them. Whatever else a gate does, a lane must be able to run exactly this set.
+ */
+export function alwaysOnGuards() {
+  return ALWAYS_ON.filter((f) => existsSync(join(ROOT, f)));
+}
+
+/**
+ * What a FAIL-CLOSED selection must do (chrome-agent-platform-kz27). Pure and exported so the
+ * regression test can prove the always-on guard set is SURFACED rather than asserting the shape of a
+ * print statement: a lane told only "FULL_SUITE" has no way to learn which guards it just failed to
+ * run, which is exactly how the jfbn and fyvc violations reached main.
+ * @returns {{ output: string[], action: "list" | "run" }}
+ */
+export function failClosedPlan({ uncovered, list }) {
+  const guards = alwaysOnGuards();
+  return {
+    action: list ? "list" : "run",
+    output: [
+      `select-tests: FAIL CLOSED — changed file(s) with no reachable test cannot be proved covered by a subset:`,
+      ...uncovered.map((f) => `  ${f}`),
+      `Running the FULL suite (npm test) instead.`,
+      `select-tests: THE ALWAYS-ON GUARD SET (${guards.length} files) IS NOT COVERED BY A SUBSET GATE — run these explicitly if you cannot run the full suite:`,
+      ...guards.map((f) => `  ${f}`),
+      // F2 (delta review, c1a77598): the fail-closed report must say the same thing `--always-on`
+      // warns about, in words, so a lane cannot read "I ran the guards and they were green" as "my
+      // change is verified".
+      `select-tests: NOTE — running that guard set covers the cross-cutting guards, but it does NOT ` +
+        `run the tests your changed files select and it does NOT run the full suite, so a green result ` +
+        `there DOES NOT VALIDATE YOUR CHANGES.`,
+    ],
+  };
+}
 
 export const ALWAYS_ON = Object.freeze([
   ...CORE,
@@ -328,9 +410,31 @@ function main() {
   const args = process.argv.slice(2);
   const list = args.includes("--list");
   const coreOnly = args.includes("--core");
+  const alwaysOnOnly = args.includes("--always-on");
   const baseIdx = args.indexOf("--base");
   const base = baseIdx >= 0 ? args[baseIdx + 1] : "origin/main";
 
+  if (alwaysOnOnly) {
+    // EXACTLY the always-on set (core + source-inspecting guards), runnable on its own
+    // (chrome-agent-platform-kz27): a guard result must never depend on a subset gate selecting it.
+    //
+    // F2 (delta review, c1a77598): this mode exits 0 having verified ONLY the guards. It does not run
+    // the tests the changed files select and it does not run the full suite, so a green here DOES NOT
+    // VALIDATE YOUR CHANGES — and this branch's own gate used this mode, which is exactly how its two
+    // new tests went unexecuted by the gate that cleared it. The warning is printed on stderr in BOTH
+    // modes, so a lane that reads the result cannot mistake it for a full verification, and `--list`
+    // stays clean on stdout for callers that parse it.
+    const files = alwaysOnGuards();
+    console.error(
+      `select-tests: WARNING — --always-on runs ONLY the always-on set (${files.length} files). It does ` +
+        `NOT run the tests your changed files select, and it does NOT run the full suite: a green ` +
+        `result here DOES NOT VALIDATE YOUR CHANGES. Use it to cover the guards a subset gate cannot ` +
+        `see, never as the whole gate.`,
+    );
+    if (list) console.log(files.join("\n"));
+    else runDeno(files);
+    return;
+  }
   if (coreOnly) {
     const files = CORE.filter((c) => existsSync(join(ROOT, c)));
     if (list) console.log(files.join("\n"));
@@ -342,10 +446,9 @@ function main() {
   const reverse = changed.length ? buildReverseGraph() : null;
   const uncovered = changed.length ? changedWithoutCoverage(changed, reverse) : [];
   if (uncovered.length) {
-    console.error(
-      `select-tests: FAIL CLOSED — changed file(s) with no reachable test cannot be proved covered by a subset:\n  ${uncovered.join("\n  ")}\nRunning the FULL suite (npm test) instead.`,
-    );
-    if (list) console.log("FULL_SUITE");
+    const plan = failClosedPlan({ uncovered, list });
+    console.error(plan.output.join("\n"));
+    if (plan.action === "list") console.log("FULL_SUITE");
     else runFullSuite();
     return;
   }

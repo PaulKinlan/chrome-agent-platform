@@ -20,6 +20,7 @@ import {
   ALWAYS_ON,
   CORE,
   ROOT,
+  SCANNER_EXCLUSIONS,
   SOURCE_INSPECTING_GUARDS,
   buildReverseGraph,
   selectTestFiles,
@@ -66,10 +67,34 @@ export function findUnclassifiedSourceScanners(
     /filesUnder\s*\(/i,
     /extractAllRegisteredRoutes/i,
     /git\s+ls-files/i,
+    // chrome-agent-platform-kz27: the four patterns above missed a whole SHAPE of guard — one that
+    // WALKS the repository tree to read tracked source as data. That is how tests/durable-root.test.ts
+    // sat outside ALWAYS_ON while three separate gates failed to select it, and a violation lived on
+    // main through all three. "Uses a directory API" is deliberately NOT the signal: a dozen tests
+    // read their own temp fixtures that way and belong in neither set. The signal is a walk rooted at
+    // the repo tree, which a fixture reader does not do.
+    /walk\(\s*`\$\{ROOT\}/,
+    /walk\(\s*ROOT\b/,
+    /readDirSync\(\s*ROOT\b/,
+    /readDirSync\(\s*join\(\s*ROOT\b/,
+    /GUARD_ROOTS/,
+    // F3 (delta review of c1a77598): the patterns above only matched literal ROOT / GUARD_ROOTS, so two
+    // real repo-walking guards were invisible to the audit — tests/chrome-test-contract.test.ts
+    // (async Deno.readDir(`${ROOT}tests`)) and tests/code-health.test.ts (walk(EXTENSION_DIR)). Widened
+    // to the ASYNC ROOT-rooted read and to a walk rooted at any module-level ROOT-derived const, which
+    // is the shape a sub-tree census takes. Both were then adjudicated into ALWAYS_ON, and so were the
+    // three further guards this caught.
+    /Deno\.readDir\(\s*`\$\{ROOT\}/,
+    /readDir\(\s*`\$\{ROOT\}/,
+    /walk\(\s*[A-Z][A-Z0-9_]*\b/,
   ];
 
   for (const { rel, code } of testFiles) {
     if (alwaysOnSet.has(rel)) continue;
+    // chrome-agent-platform-kz27: a DECLARED exclusion is classified — it carries a reason and a bead,
+    // so the choice is written down rather than being an accidental omission. That is why
+    // SCANNER_EXCLUSIONS exists instead of a quietly missing list entry.
+    if (Object.hasOwn(SCANNER_EXCLUSIONS, rel)) continue;
     // If it dynamically scans source directories, it must be in ALWAYS_ON
     if (SCANNER_PATTERNS.some((pat) => pat.test(code))) {
       unclassified.push(rel);
@@ -97,18 +122,59 @@ Deno.test("qcfc: self-checking audit: all dynamic source-scanning test guards ar
   );
 });
 
+Deno.test("qcfc: every declared exclusion is JUSTIFIED (a reason and a bead, never a silent hole)", () => {
+  // kz27: an exclusion is allowed, but it must say WHY and who owns the follow-up. Without this an
+  // entry could be added merely to silence the audit, which is the failure mode the audit exists to
+  // prevent.
+  const entries = Object.entries(SCANNER_EXCLUSIONS);
+  assert(entries.length > 0, "the exclusion list must be populated if it is referenced");
+  for (const [file, reason] of entries) {
+    assert(existsSync(join(ROOT, file)), `excluded scanner ${file} must exist on disk`);
+    assert(reason.trim().length > 80, `exclusion ${file} must carry a real reason, not a placeholder`);
+    assert(
+      /chrome-agent-platform-[a-z0-9]{4}/.test(reason),
+      `exclusion ${file} must name the bead that owns the follow-up`,
+    );
+    assert(
+      !ALWAYS_ON.includes(file),
+      `${file} cannot be both always-on and excluded — that contradiction would hide the decision`,
+    );
+  }
+});
+
+Deno.test("qcfc: REAL-TREE falsification — an actual repo-walking guard is flagged when unlisted", () => {
+  // F3: the synthetic fixtures prove the PARSER; a real file proves the DETECTOR against the tree we
+  // actually ship. If the patterns stop catching real repo-walking code, this fails on main rather than
+  // silently certifying a classifier that no longer classifies anything.
+  const rel = "tests/settings-strings-audit.test.ts";
+  const code = readFileSync(join(ROOT, rel), "utf8");
+  const unclassified = findUnclassifiedSourceScanners([{ rel, code }], new Set());
+  assertEquals(
+    unclassified,
+    [rel],
+    "a REAL repo-walking guard must be flagged when it is neither always-on nor declared excluded",
+  );
+});
+
 Deno.test("qcfc: falsification: unclassified source scanner fails the audit closed", () => {
   const fakeTests = [
     {
       rel: "tests/fake-unclassified-scanner.test.ts",
       code: `const SCAN_DIRS = ["scripts", "tests"];\nasync function filesUnder() {}`,
     },
+    {
+      // kz27: the REPO-WALK shape specifically — a walk rooted at ROOT. This is the shape that shipped
+      // OUTSIDE ALWAYS_ON (tests/durable-root.test.ts), so the audit must catch it and not only the
+      // SCAN_DIRS/filesUnder family above.
+      rel: "tests/fake-unlisted-walk-scanner.test.ts",
+      code: `const ROOT = fileURLToPath(new URL("..", import.meta.url));\nfor (const e of Deno.readDirSync(ROOT)) { if (e.isDirectory) walk(ROOT); }`,
+    },
   ];
   const alwaysOnSet = new Set(["tests/security.test.ts"]);
   const unclassified = findUnclassifiedSourceScanners(fakeTests, alwaysOnSet);
   assertEquals(
     unclassified,
-    ["tests/fake-unclassified-scanner.test.ts"],
-    "Audit must catch unclassified source scanners",
+    ["tests/fake-unclassified-scanner.test.ts", "tests/fake-unlisted-walk-scanner.test.ts"],
+    "Audit must catch unclassified source scanners, including a REPO-WALK scanner (kz27)",
   );
 });
