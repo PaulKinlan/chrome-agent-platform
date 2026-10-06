@@ -31,7 +31,7 @@ import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, type HeavyGateLease } 
 import { resolveChromeForTesting } from "./chrome-for-testing.ts";
 import { isUsableBinary } from "./browser-refusal.ts";
 import { isolatedProcessGroup, killProcessTree } from "./process-tree.ts";
-import { chromeProfileDir } from "./chrome-profile-dir.ts";
+import { chromeProfileDir, isInsideRepo, profileLiveness } from "./chrome-profile-dir.ts";
 
 export interface LaunchedChrome {
   /** The spawned Chrome. The caller owns killing it. */
@@ -781,11 +781,20 @@ export async function teardownChrome(
     if (profilePath && typeof profilePath === "string" && profilePath.length > 5 && !profilePath.endsWith("/..")) {
       const normalized = profilePath.replace(/\/+$/, "");
       const home = Deno.env.get("HOME");
-      if (normalized !== "/" && normalized !== "/home" && (!home || normalized !== home.replace(/\/+$/, ""))) {
-        try {
-          await Deno.remove(normalized, { recursive: true });
-        } catch {
-          /* already removed or absent */
+      if (
+        normalized.startsWith("/") &&
+        !isInsideRepo(normalized) &&
+        normalized !== "/" &&
+        normalized !== "/home" &&
+        (!home || normalized !== home.replace(/\/+$/, ""))
+      ) {
+        // Enforce the never-delete-live invariant via profileLiveness authority (chrome-agent-platform-yfsf)
+        if (profileLiveness(normalized) !== "live") {
+          try {
+            await Deno.remove(normalized, { recursive: true });
+          } catch {
+            /* already removed or absent */
+          }
         }
       }
     }
