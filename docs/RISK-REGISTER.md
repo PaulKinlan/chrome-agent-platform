@@ -84,10 +84,10 @@ Ordered by architectural class; severity is marked H/M/L (likelihood $\times$ bl
 - **Open question:** Should MCP server registrations be capped per agent, and should outbound MCP tool arguments display an owner preview before transmission?
 
 ### R11 (H). Unclassified Service Worker dispatch mutations (ygvt)
-- **Risk:** As established in the dispatch authority census (`docs/SW-DISPATCH-AUTHORITY-CENSUS.md`), 31 message routes perform persistent state mutations without route-local principal checks (`isOwnerPrincipal`) or owner-approval gates (`requireOwnerApproval`). For instance, `named-agent.set-tools` (`service-worker.js:7101`) mutates agent tool configurations and `background-agent.delete` (born as `recipe.delete`) deletes custom skills without verifying the caller principal.
-- **Lives at:** `extension/background/service-worker.js:7101` (`named-agent.set-tools`), `extension/background/service-worker.js` (`background-agent.delete`, born as `recipe.delete`), and 29 additional mutation routes documented in `docs/SW-DISPATCH-AUTHORITY-CENSUS.md`.
+- **Risk:** The executable dispatch census (`docs/SW-DISPATCH-AUTHORITY-CENSUS.md` §4.9) lists 37 unclassified mutation routes without route-local principal checks (`isOwnerPrincipal`) or owner-approval gates (`requireOwnerApproval`). For example, `named-agent.set-tools` mutates agent tool configurations and `asset.export-to-folder` writes an asset to a granted folder. Unclassified does not alone establish exploitability; the central listener still filters page callers.
+- **Lives at:** `extension/background/service-worker.js:8087` (`named-agent.set-tools`), `extension/background/service-worker.js:9782` (`asset.export-to-folder`), and the other 35 routes in §4.9. `background-agent.delete` (`extension/background/service-worker.js:10655`) is now owner-direct approval-gated (§4.3), not part of these 37.
 - **Mitigation:** Central message listener blocks content scripts (`PAGE_ALLOWED_ROUTES`), ensuring external pages cannot invoke these routes.
-- **Open question:** Should all 31 unclassified mutation routes be retrofitted to require `isOwnerPrincipal(context)` or explicit `requireOwnerApproval` gates to ensure non-owner extension contexts cannot trigger unprompted mutations?
+- **Open question:** Should all 37 unclassified mutation routes be retrofitted to require `isOwnerPrincipal(context)` or explicit `requireOwnerApproval` gates to ensure non-owner extension contexts cannot trigger unprompted mutations?
 
 ---
 
