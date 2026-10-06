@@ -417,8 +417,12 @@ export async function resolveSupervisorConfig({
   const scenario = env.CAP_SECURITY_TEST_SCENARIO ?? "";
   if (!scenarios.has(scenario)) throw new Error("unknown self-test scenario");
   const timeoutMs = Number(env.CAP_SECURITY_SELF_TEST_TIMEOUT_MS ?? "1000");
+  // chrome-agent-platform-2zqd: the upper bound is TEST-ONLY headroom, raised from 5_000 so a
+  // declared self-test budget can sit ~3.6x above the worst first-sample/ACK latency measured on
+  // this box (2_800 ms at loadavg ~10). An absurd value is still refused, and the lower bound is
+  // unchanged, so this is not a general timeout increase.
   if (
-    !Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 5_000
+    !Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 20_000
   ) {
     throw new Error("self-test timeout is out of bounds");
   }

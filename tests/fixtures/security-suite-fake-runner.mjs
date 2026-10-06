@@ -111,7 +111,31 @@ if (process.argv[2] === "--stubborn-child") {
       record("escape-no-ack-path", {});
       process.exit(97);
     }
-    const deadline = Date.now() + 1_500;
+    // chrome-agent-platform-2zqd: the handshake window is DECLARED, not a private literal. Under
+    // parallel always-on load the supervisor's first sample + ACK can take 500-2800 ms on this box,
+    // so a fixed 1_500 ms deadline made the OUTCOME a function of the machine: the fixture gave up
+    // and exited 97 ("escape-unconfirmed") before the supervisor could observe the escape, and the
+    // failing test then looked like a custody failure. The window is now an explicit parameter,
+    // defaulting to the old literal, and the declared value is RECORDED in the state file so a test
+    // can assert the process honoured the number it was given instead of racing a clock only this
+    // file knows.
+    const declaredAckDeadlineMs = Number(
+      process.env.CAP_SECURITY_TEST_ACK_DEADLINE_MS ?? 1_500,
+    );
+    if (
+      !Number.isSafeInteger(declaredAckDeadlineMs) || declaredAckDeadlineMs < 1 ||
+      declaredAckDeadlineMs > 60_000
+    ) {
+      record("escape-ack-deadline-invalid", {
+        ackDeadlineMs: String(process.env.CAP_SECURITY_TEST_ACK_DEADLINE_MS ?? ""),
+      });
+      process.exit(97);
+    }
+    record("escape-ack-deadline-declared", {
+      ackDeadlineMs: declaredAckDeadlineMs,
+      childPid: child.pid,
+    });
+    const deadline = Date.now() + declaredAckDeadlineMs;
     const confirmed = () => {
       try {
         const ack = JSON.parse(readFileSync(ackPath, "utf8"));
