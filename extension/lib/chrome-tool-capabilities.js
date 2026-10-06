@@ -599,7 +599,6 @@ function validateRow(row, seen) {
   if (!Array.isArray(row.optionalPermissions) || row.optionalPermissions.length > CHROME_TOOL_CAPABILITY_BOUNDS.maxPermissions || new Set(row.optionalPermissions).size !== row.optionalPermissions.length || row.optionalPermissions.some((permission) => typeof permission !== "string" || !PERMISSION.test(permission) || bytes(permission) > CHROME_TOOL_CAPABILITY_BOUNDS.maxPermissionBytes)) throw new Error("invalid_capability_permissions");
   if (!GRANT_SCOPES.has(row.productGrantScopeKind)) throw new Error("invalid_grant_scope");
   if (!REPLAY.has(row.replayClass) || row.trustedReplaySafety !== row.replayClass) throw new Error("invalid_replay_class");
-  // The DEPRECATED column's only reader: a boolean-shape check, NOT a gate
   if (!MUTATION.has(row.mutationClass)) throw new Error("invalid_mutation_metadata");
   if (typeof row.routeFamily !== "string" || !ROUTE.test(row.routeFamily) || bytes(row.routeFamily) > CHROME_TOOL_CAPABILITY_BOUNDS.maxRouteFamilyBytes) throw new Error("invalid_route_family");
   if (typeof row.developerOnly !== "boolean") throw new Error("invalid_developer_only");
