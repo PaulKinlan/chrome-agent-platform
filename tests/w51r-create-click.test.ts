@@ -24,6 +24,11 @@ Deno.test("w51r: refusing a hidden button sends no CDP input; a visible button s
   } catch (e) { error = e as Error; }
   assertEquals(error?.message, "Create dialog click refused: hidden #new-agent");
   assertEquals(sent, [], "a refusal must emit zero mouse events");
+  let unreadable: Error | undefined;
+  try { await clickVisibleCreateAgent(cdp, "test", async () => undefined); }
+  catch (e) { unreadable = e as Error; }
+  assertEquals(unreadable?.message, "Create dialog click refused: unreadable #new-agent");
+  assertEquals(sent, [], "an unreadable target must emit zero mouse events");
   await clickVisibleCreateAgent(cdp, "test", async () => ({ ok: true, x: 28, y: 80 }));
   assertEquals(sent, [
     { method: "Input.dispatchMouseEvent", type: "mousePressed", x: 28, y: 80, session: "test" },
@@ -38,6 +43,8 @@ Deno.test("w51r: refusing a hidden button sends no CDP input; a visible button s
   });
   assertEquals(createAgentClickTarget(doc(null)), { ok: false, reason: "missing #new-agent" });
   assertEquals(createAgentClickTarget(doc(button, { display: "none", visibility: "visible", opacity: "1" })), { ok: false, reason: "hidden #new-agent" });
+  assertEquals(createAgentClickTarget(doc(button, { display: "block", visibility: "hidden", opacity: "1" })), { ok: false, reason: "hidden #new-agent" });
+  assertEquals(createAgentClickTarget(doc(button, { display: "block", visibility: "collapse", opacity: "1" })), { ok: false, reason: "hidden #new-agent" });
   assertEquals(createAgentClickTarget(doc(button, { display: "block", visibility: "visible", opacity: "0" })), { ok: false, reason: "hidden #new-agent" });
   assertEquals(createAgentClickTarget(doc({ ...button, hasAttribute: () => true })), { ok: false, reason: "disabled or inert #new-agent" });
   assertEquals(createAgentClickTarget(doc({ ...button, closest: () => ({}) })), { ok: false, reason: "disabled or inert #new-agent" });
