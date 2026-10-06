@@ -21,6 +21,11 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fromFileUrl } from "jsr:@std/path@1/from-file-url";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { clipCloseReason, createAcpServer, HARNESS_ADAPTERS } from "../scripts/acp-bridge.ts";
+import { TEST_BRIDGE_TOKEN } from "./fixtures/acp-bridge-token.ts";
+
+/** jsjy: the bridge refuses an unauthenticated upgrade, so clients carry the secret on the endpoint. */
+const authedEndpoint = (port: number | string, harness?: string) =>
+  `ws://127.0.0.1:${port}/acp?token=${TEST_BRIDGE_TOKEN}${harness ? `&harness=${harness}` : ""}`;
 import { acpEndpointWithHarness, acpHealthUrl, probeAcpBridgeHealth, runAcpTaskTurn } from "../extension/lib/acp-runner.js";
 
 const FAKE_ADAPTER = fromFileUrl(new URL("./fixtures/acp-fake-adapter.mjs", import.meta.url));
@@ -40,12 +45,12 @@ process.exit(0);
 `,
   );
 
-  const server = createAcpServer(0, adapterPath);
+  const server = createAcpServer(0, adapterPath, {}, "", TEST_BRIDGE_TOKEN);
   const port = (server as any).addr.port;
 
   try {
     // 1. Connect requesting claude-code
-    const wsClaude = new WebSocket(`ws://127.0.0.1:${port}/acp?harness=claude-code`);
+    const wsClaude = new WebSocket(authedEndpoint(port, "claude-code"));
     await new Promise<void>((resolve) => {
       wsClaude.onclose = (ev) => {
         assert(ev.reason.includes('adapter for harness "claude-code" exited'), ev.reason);
@@ -56,7 +61,7 @@ process.exit(0);
     assertEquals(loggedClaude.PI_ACP_HARNESS, "claude-code");
 
     // 2. Connect requesting codex
-    const wsCodex = new WebSocket(`ws://127.0.0.1:${port}/acp?harness=codex`);
+    const wsCodex = new WebSocket(authedEndpoint(port, "codex"));
     await new Promise<void>((resolve) => {
       wsCodex.onclose = (ev) => {
         assert(ev.reason.includes('adapter for harness "codex" exited'), ev.reason);
@@ -67,7 +72,7 @@ process.exit(0);
     assertEquals(loggedCodex.PI_ACP_HARNESS, "codex");
 
     // 3. Connect requesting pi (default)
-    const wsPi = new WebSocket(`ws://127.0.0.1:${port}/acp`);
+    const wsPi = new WebSocket(authedEndpoint(port));
     await new Promise<void>((resolve) => {
       wsPi.onclose = (ev) => {
         assert(ev.reason.includes('adapter for harness "pi" exited'), ev.reason);
@@ -82,7 +87,7 @@ process.exit(0);
 });
 
 Deno.test("acp harness selection (direction 1): runAcpTaskTurn drives full turn for claude-code and codex", async () => {
-  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", TEST_BRIDGE_TOKEN);
   const port = (bridge as any).addr.port;
 
   const mockContainer = {
@@ -101,7 +106,7 @@ Deno.test("acp harness selection (direction 1): runAcpTaskTurn drives full turn 
       container: mockContainer,
       task: "test claude turn",
       harnessId: "claude-code",
-      endpoint: `ws://127.0.0.1:${port}/acp`,
+      endpoint: authedEndpoint(port),
     });
     assertEquals(resClaude.ok, true, String(resClaude.error));
     assertEquals(resClaude.result, "fake reply");
@@ -111,7 +116,7 @@ Deno.test("acp harness selection (direction 1): runAcpTaskTurn drives full turn 
       container: mockContainer,
       task: "test codex turn",
       harnessId: "codex",
-      endpoint: `ws://127.0.0.1:${port}/acp`,
+      endpoint: authedEndpoint(port),
     });
     assertEquals(resCodex.ok, true, String(resCodex.error));
     assertEquals(resCodex.result, "fake reply");
@@ -174,7 +179,7 @@ Deno.test("acp harness selection (direction 2): mismatch between requested harne
       container: mockContainer,
       task: "run code in claude",
       harnessId: "claude-code",
-      endpoint: `ws://127.0.0.1:${port}/acp`,
+      endpoint: authedEndpoint(port),
     });
 
     assertEquals(res.ok, false);
@@ -212,19 +217,19 @@ Deno.test("acp harness selection (legibility): /health endpoint reports default 
   const server = createAcpServer(0);
   const port = (server as any).addr.port;
   try {
-    const defaultHealth = await probeAcpBridgeHealth(`ws://127.0.0.1:${port}/acp`);
+    const defaultHealth = await probeAcpBridgeHealth(authedEndpoint(port));
     assertEquals(defaultHealth.ok, true);
     assertEquals(defaultHealth.harness, "pi");
     assertEquals(defaultHealth.supportsHarnessSelection, true);
     assertEquals(defaultHealth.knownHarnesses, ["pi", "claude-code", "codex"]);
 
-    const claudeHealth = await probeAcpBridgeHealth(`ws://127.0.0.1:${port}/acp`, "claude-code");
+    const claudeHealth = await probeAcpBridgeHealth(authedEndpoint(port), "claude-code");
     assertEquals(claudeHealth.ok, true);
     assertEquals(claudeHealth.harness, "pi");
     assertEquals(claudeHealth.probeHarness, "claude-code");
     assertEquals(claudeHealth.harnessCli, "claude");
 
-    const codexHealth = await probeAcpBridgeHealth(`ws://127.0.0.1:${port}/acp`, "codex");
+    const codexHealth = await probeAcpBridgeHealth(authedEndpoint(port), "codex");
     assertEquals(codexHealth.ok, true);
     assertEquals(codexHealth.harness, "pi");
     assertEquals(codexHealth.probeHarness, "codex");

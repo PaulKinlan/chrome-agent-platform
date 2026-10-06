@@ -2,14 +2,18 @@
 // restore pi conversation memory AFTER the adapter process was killed (the
 // exact per-turn lifecycle acp-runner.js uses: connect → prompt → close)?
 import { createAcpServer } from "../scripts/acp-bridge.ts";
+
+// jsjy: the bridge refuses an unauthenticated upgrade (loopback included), so this instrument
+// requires a secret of its own and presents it — the same shape an operator uses, with no bypass.
+const TOKEN = "cap-acp-instrument-token";
 import { AcpClient } from "../extension/lib/acp-client.js";
 
-const bridge = createAcpServer(0);
+const bridge = createAcpServer(0, undefined, {}, undefined, TOKEN);
 const port = (bridge as any).addr.port;
 const cwd = "/home/paulkinlan/journal";
 
 async function connectClient() {
-  const c = new AcpClient({ url: `ws://127.0.0.1:${port}/acp`, defaultCwd: cwd });
+  const c = new AcpClient({ url: `ws://127.0.0.1:${port}/acp?token=${TOKEN}`, defaultCwd: cwd });
   await c.connect();
   await c.initialize();
   return c;

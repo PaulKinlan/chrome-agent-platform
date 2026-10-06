@@ -54,9 +54,14 @@ class MockContainer {
 const logPath = `${durableDir("acp-fixture-logs")}/u0cc-resume-failure-${Date.now()}.jsonl`;
 Deno.env.set("CAP_ACP_FIXTURE_LOG", logPath);
 
-const bridge = createAcpServer(0, FAKE_ADAPTER);
+/** jsjy: the bridge requires a shared secret on EVERY upgrade — loopback included — so this instrument
+ *  names its own. It is not an operator token and nothing else uses it; the point is that the
+ *  instrument keeps exercising the REAL authenticated path rather than a test-only bypass. */
+const TOKEN = "cap-acp-resume-probe-token";
+
+const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", TOKEN);
 const port = (bridge as any).addr.port;
-const endpoint = `ws://127.0.0.1:${port}/acp`;
+const endpoint = `ws://127.0.0.1:${port}/acp?token=${TOKEN}`;
 const container = new MockContainer();
 // The stale hint a surface holds after a reload: the session id it believes it
 // owns. The harness no longer has it, so session/load fails.

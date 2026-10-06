@@ -7,9 +7,13 @@
 //      cwd the adapter received is pinned by the fixture test, not here).
 // Fails closed: a failed property exits non-zero.
 import { createAcpServer } from "../scripts/acp-bridge.ts";
+
+// jsjy: the bridge refuses an unauthenticated upgrade (loopback included), so this instrument
+// requires a secret of its own and presents it — the same shape an operator uses, with no bypass.
+const TOKEN = "cap-acp-instrument-token";
 import { runAcpTaskTurn } from "../extension/lib/acp-runner.js";
 
-const bridge = createAcpServer(0);
+const bridge = createAcpServer(0, undefined, {}, undefined, TOKEN);
 const port = (bridge as any).addr.port;
 
 class MockContainer {
@@ -23,7 +27,7 @@ class MockContainer {
 }
 
 const container = new MockContainer();
-const endpoint = `ws://127.0.0.1:${port}/acp`;
+const endpoint = `ws://127.0.0.1:${port}/acp?token=${TOKEN}`;
 const checks: Array<[string, boolean, string]> = [];
 
 try {

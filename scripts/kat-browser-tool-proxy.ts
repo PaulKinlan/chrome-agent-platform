@@ -23,7 +23,11 @@ import { methodValue } from "./lib/cdp-eval.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PORT = Number(Deno.env.get("CAP_2AMT_PORT") ?? 3312); // NOT 3210: a real bridge may be there
-const ENDPOINT = `ws://127.0.0.1:${PORT}/acp`;
+// jsjy: the bridge refuses an unauthenticated upgrade, so this KAT names a secret, requires it
+// from the bridge it spawns, and hands it to the REAL extension client through the endpoint —
+// the same shape an operator uses (acp.endpoint + acp.token).
+const TOKEN = "cap-2amt-kat-token";
+const ENDPOINT = `ws://127.0.0.1:${PORT}/acp?token=${TOKEN}`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0;
 const failures: string[] = [];
@@ -37,7 +41,8 @@ const HARNESS = `${ROOT}scripts/fixtures/fake-acp-harness-2amt.mjs`;
 const REPORTS = `${durableDir("scratch")}/2amt-fake-harness-report-${Date.now()}.json`;
 
 const bridge = new Deno.Command(Deno.execPath(), {
-  args: ["run", "-A", `${ROOT}scripts/acp-bridge.ts`, "--port", String(PORT), "--adapter", HARNESS, "--cwd", durableDir("scratch")],
+  args: ["run", "-A", `${ROOT}scripts/acp-bridge.ts`, "--port", String(PORT), "--adapter", HARNESS, "--cwd", durableDir("scratch"),
+    "--token", TOKEN],
   cwd: ROOT, stdout: "piped", stderr: "piped",
   env: { ...Deno.env.toObject(), CAP_2AMT_REPORT: REPORTS },
 }).spawn();

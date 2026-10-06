@@ -19,6 +19,44 @@
  */
 
 /**
+ * Is this ACP endpoint on the LOOPBACK interface?
+ *
+ * jsjy (2026-10-06): an `acp.endpoint` pointing anywhere else is refused before
+ * a socket is opened. The bridge speaks plain ws:// and hands the harness our
+ * approval surface, so a non-loopback endpoint means the token and the agent's
+ * traffic cross the network in the clear, and the peer is not provably this
+ * machine's bridge. Loopback means 127.0.0.0/8, ::1 or localhost — the
+ * interface the bridge binds by default (`--host 127.0.0.1`).
+ *
+ * @param {string} url
+ * @returns {boolean}
+ */
+export function isLoopbackAcpEndpoint(url) {
+  let host;
+  try {
+    host = new URL(String(url ?? "")).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (host === "localhost" || host === "::1" || host === "[::1]") return true;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+
+/**
+ * Refuse a non-loopback ACP endpoint rather than connecting to it (jsjy).
+ * @param {string} url
+ */
+function assertLoopbackEndpoint(url) {
+  if (isLoopbackAcpEndpoint(url)) return;
+  throw new Error(
+    `ACP endpoint ${url} is not on loopback — refusing to connect. ` +
+      `The bridge speaks plain ws:// and drives the local approval surface, so only a loopback ` +
+      `endpoint (127.0.0.1, ::1 or localhost) is accepted. Run the bridge with its default ` +
+      `--host and put TLS in front of it if it must be reached remotely.`,
+  );
+}
+
+/**
  * @typedef {Object} AcpClientOptions
  * @property {string} [url] - WebSocket URL to ACP bridge (default: 'ws://127.0.0.1:3210/acp')
  * @property {string} [defaultCwd] - Default working directory for sessions
@@ -60,6 +98,7 @@ export class AcpClient {
    */
   constructor(options = {}) {
     this.url = options.url || "ws://127.0.0.1:3210/acp";
+    assertLoopbackEndpoint(this.url);
     this.defaultCwd = options.defaultCwd || "";
     this.requestTimeoutMs = options.requestTimeoutMs || 120_000;
     this.permissionHandler = options.permissionHandler || null;
@@ -96,7 +135,10 @@ export class AcpClient {
    * @returns {Promise<void>}
    */
   async connect(urlOverride) {
-    if (urlOverride) this.url = urlOverride;
+    if (urlOverride) {
+      assertLoopbackEndpoint(urlOverride);
+      this.url = urlOverride;
+    }
 
     if (this.customTransport) {
       this.connected = true;

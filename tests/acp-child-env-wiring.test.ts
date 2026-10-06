@@ -18,6 +18,10 @@ import { assertEquals } from "jsr:@std/assert@1";
 import { fromFileUrl } from "jsr:@std/path@1/from-file-url";
 import { fileURLToPath } from "node:url";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
+import { TEST_BRIDGE_TOKEN } from "./fixtures/acp-bridge-token.ts";
+
+/** jsjy: the bridge refuses an unauthenticated upgrade; the token travels on the endpoint here. */
+const authedEndpoint = (port: number | string) => `ws://127.0.0.1:${port}/acp?token=${TEST_BRIDGE_TOKEN}`;
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -59,7 +63,7 @@ async function fixtureEnvReport(logPath: string, timeoutMs = 20_000): Promise<"P
  *  read the listening URL it prints (kernel-assigned port, never a literal). */
 async function startBridgeChild(extraEnv: Record<string, string>) {
   const proc = new Deno.Command(Deno.execPath(), {
-    args: ["run", "-A", BRIDGE, "--adapter", FAKE_ADAPTER, "--port", "0"],
+    args: ["run", "-A", BRIDGE, "--adapter", FAKE_ADAPTER, "--port", "0", "--token", TEST_BRIDGE_TOKEN],
     cwd: ROOT,
     env: { ...Deno.env.toObject(), ...CLEAN_FIXTURE_KNOBS, ...extraEnv },
     stdin: "null",
@@ -100,7 +104,10 @@ async function startBridgeChild(extraEnv: Record<string, string>) {
  *  adapter, and closing it kills that child — so the caller keeps this socket
  *  open until the child has reported. */
 async function connect(url: string): Promise<WebSocket> {
-  const ws = new WebSocket(url);
+  // jsjy: the bridge prints its URL WITHOUT the token on purpose (a PERSISTED secret does not belong in
+  // scrollback, shell history or a redirected log), so every child-bridge client appends the shared
+  // secret itself — which is what an operator does once, by pasting it into acp.token.
+  const ws = new WebSocket(`${url}${url.includes("?") ? "&" : "?"}token=${TEST_BRIDGE_TOKEN}`);
   await new Promise<void>((resolve, reject) => {
     ws.onopen = () => resolve();
     ws.onerror = () => reject(new Error(`failed to connect to ${url}`));
@@ -154,9 +161,9 @@ Deno.test("5f5u wiring: an explicit childEnv key reaches the adapter through the
     ...CLEAN_FIXTURE_KNOBS,
     CAP_ACP_FIXTURE_LOG: logPath,
     ANTHROPIC_API_KEY: FAKE_KEY,
-  });
+  }, "", TEST_BRIDGE_TOKEN);
   const port = (bridge as any).addr.port;
-  const ws = await connect(`ws://127.0.0.1:${port}/acp`);
+  const ws = await connect(authedEndpoint(port));
   try {
     assertEquals(
       await fixtureEnvReport(logPath),

@@ -16,7 +16,13 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { fromFileUrl } from "jsr:@std/path@1/from-file-url";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
+import { TEST_BRIDGE_TOKEN } from "./fixtures/acp-bridge-token.ts";
 import { AcpClient, type AcpTurnEvent } from "../extension/lib/acp-client.js";
+
+/** jsjy: the bridge refuses an unauthenticated upgrade, so every client here carries the shared
+ *  secret on the endpoint (the production shape is acp.endpoint + acp.token, composed by the runner). */
+const authedEndpoint = (port: number | string, harness?: string) =>
+  `ws://127.0.0.1:${port}/acp?token=${TEST_BRIDGE_TOKEN}${harness ? `&harness=${harness}` : ""}`;
 
 const LIVE = Deno.env.get("CAP_ACP_LIVE") === "1";
 const FAKE_ADAPTER = fromFileUrl(new URL("./fixtures/acp-fake-adapter.mjs", import.meta.url));
@@ -52,11 +58,11 @@ Deno.test("ACP End-to-End (fixture): drives a full turn through the loopback bri
 
   // Kernel-assigned port (never a fixed literal): two lanes, or a stray
   // process, can never collide on it. All knobs pinned cleanly.
-  const bridge = createAcpServer(0, FAKE_ADAPTER, CLEAN_FIXTURE_ENV);
+  const bridge = createAcpServer(0, FAKE_ADAPTER, CLEAN_FIXTURE_ENV, "", TEST_BRIDGE_TOKEN);
   const TEST_PORT = (bridge as any).addr.port;
 
   const client = new AcpClient({
-    url: `ws://127.0.0.1:${TEST_PORT}/acp`,
+    url: authedEndpoint(TEST_PORT),
     defaultCwd: FIXTURE_CWD,
   });
 
@@ -98,7 +104,7 @@ Deno.test("ACP End-to-End (fixture): drives a full turn through the loopback bri
     // 5. Session resume round-trips across a reconnect (the runner's lifecycle)
     client.close();
     await new Promise((r) => setTimeout(r, 50));
-    const client2 = new AcpClient({ url: `ws://127.0.0.1:${TEST_PORT}/acp`, defaultCwd: FIXTURE_CWD });
+    const client2 = new AcpClient({ url: authedEndpoint(TEST_PORT), defaultCwd: FIXTURE_CWD });
     await client2.connect();
     await client2.initialize();
     const loaded = await client2.loadSession({ sessionId: session.sessionId, cwd: FIXTURE_CWD });
@@ -126,11 +132,11 @@ Deno.test("ACP tool servers: Pi refuses new/load before the adapter; empty Pi an
     const logPath = `${durableDir("acp-tool-server-refusal")}/frames-${crypto.randomUUID()}.jsonl`;
     const bridge = createAcpServer(0, FAKE_ADAPTER, {
       ...CLEAN_FIXTURE_ENV, CAP_ACP_FIXTURE_LOG: logPath, CAP_ACP_FIXTURE_AGENT_NAME: adapter,
-    });
+    }, "", TEST_BRIDGE_TOKEN);
     let expectedForwards = 0;
     try {
     for (const harness of names) {
-      const client = new AcpClient({ url: `ws://127.0.0.1:${bridge.addr.port}/acp?harness=${harness}`, requestTimeoutMs: 5000 });
+      const client = new AcpClient({ url: authedEndpoint(bridge.addr.port, harness), requestTimeoutMs: 5000 });
       try {
         await client.connect();
         if (harness === "not-a-harness") {
@@ -183,11 +189,11 @@ Deno.test({
   fn: async () => {
   assert(LIVE_CWD, "set CAP_ACP_CWD (or $HOME) — the live journey needs a working directory");
 
-  const bridge = createAcpServer(0);
+  const bridge = createAcpServer(0, undefined, {}, undefined, TEST_BRIDGE_TOKEN);
   const TEST_PORT = (bridge as any).addr.port;
 
   const client = new AcpClient({
-    url: `ws://127.0.0.1:${TEST_PORT}/acp`,
+    url: authedEndpoint(TEST_PORT),
     defaultCwd: LIVE_CWD,
   });
 

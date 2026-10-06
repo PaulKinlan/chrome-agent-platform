@@ -9,11 +9,15 @@
 // @ts-nocheck
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
+
+// jsjy: the bridge refuses an unauthenticated upgrade (loopback included), so this instrument
+// requires a secret of its own and presents it — the same shape an operator uses, with no bypass.
+const TOKEN = "cap-acp-instrument-token";
 import { AcpClient } from "../extension/lib/acp-client.js";
 
 const PORT = 3296;
 console.log(`[acceptance] Starting ACP bridge on port ${PORT}...`);
-const server = createAcpServer(PORT);
+const server = createAcpServer(PORT, undefined, {}, undefined, TOKEN);
 
 let passed = 0;
 let failed = 0;
@@ -31,7 +35,7 @@ function check(desc: string, ok: boolean) {
 try {
   // ── 1. CODEX: list_tabs tool execution ──
   console.log("\n[test 1] Codex: query tools over MCP and call list_tabs...");
-  const ws1 = new WebSocket(`ws://127.0.0.1:${PORT}/acp?harness=codex`);
+  const ws1 = new WebSocket(`ws://127.0.0.1:${PORT}/acp?token=${TOKEN}&harness=codex`);
   await new Promise((r) => (ws1.onopen = r));
 
   let listCalled = false;
@@ -74,7 +78,7 @@ try {
 
   // ── 2. CODEX: close_tab approval denial ──
   console.log("\n[test 2] Codex: call close_tab, trigger approval card, and receive denial...");
-  const ws2 = new WebSocket(`ws://127.0.0.1:${PORT}/acp?harness=codex`);
+  const ws2 = new WebSocket(`ws://127.0.0.1:${PORT}/acp?token=${TOKEN}&harness=codex`);
   await new Promise((r) => (ws2.onopen = r));
 
   let closePrompted = false;
@@ -118,7 +122,7 @@ try {
 
   // ── 3. PI: Pure chat turn over bridge ──
   console.log("\n[test 3] Pi: pure chat turn over bridge (tool-less chat path)...");
-  const ws3 = new WebSocket(`ws://127.0.0.1:${PORT}/acp?harness=pi`);
+  const ws3 = new WebSocket(`ws://127.0.0.1:${PORT}/acp?token=${TOKEN}&harness=pi`);
   await new Promise((r) => (ws3.onopen = r));
 
   const client3 = new AcpClient({
