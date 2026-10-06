@@ -14,7 +14,7 @@
 //   5. Falsification: an unlisted source-inspecting test fails the audit closed.
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
   ALWAYS_ON,
@@ -80,7 +80,6 @@ export function findUnclassifiedSourceScanners(
     /walk\(\s*`\$\{ROOT\}/,
     /walk\(\s*ROOT\b/,
     /readDirSync\(\s*ROOT\b/,
-    /readDirSync\(\s*join\(\s*ROOT\b/,
     /GUARD_ROOTS/,
     // F3 (delta review of c1a77598): the patterns above only matched literal ROOT / GUARD_ROOTS, so two
     // real repo-walking guards were invisible to the audit — tests/chrome-test-contract.test.ts
@@ -175,11 +174,14 @@ export function findUnclassifiedSourceScanners(
     ["walk", "readDir", "readDirSync", "readdir"].flatMap((name) => firstArgs(code, name))
       .filter((arg) => (/^[A-Za-z_$][\w$]*$/.test(arg) ? identifierIsSourceRoot(arg, code, rel) : denotesSourceRoot(arg, rel)));
   for (const { rel, code } of testFiles) {
-    if (alwaysOnSet.has(rel)) continue;
+    const isTest = /\.test\.(ts|js)$/.test(rel);
+    // Non-test support modules / helpers cannot be silenced by ALWAYS_ON or SCANNER_EXCLUSIONS.
+    // If a helper dynamically scans a source root, it must fail closed and cannot be excused.
+    if (isTest && alwaysOnSet.has(rel)) continue;
     // chrome-agent-platform-kz27: a DECLARED exclusion is classified — it carries a reason and a bead,
     // so the choice is written down rather than being an accidental omission. That is why
     // SCANNER_EXCLUSIONS exists instead of a quietly missing list entry.
-    if (Object.hasOwn(SCANNER_EXCLUSIONS, rel)) continue;
+    if (isTest && Object.hasOwn(SCANNER_EXCLUSIONS, rel)) continue;
     // If it dynamically scans source directories, it must be in ALWAYS_ON. The literal
     // patterns catch the ROOT-rooted shapes; the source-root test catches a walk over an
     // identifier that this file derives from a source root (p1lp), including lowercase ones.
@@ -191,58 +193,103 @@ export function findUnclassifiedSourceScanners(
 }
 
 /**
- * The shared test-support roots this audit must scan too (chrome-agent-platform-afpl). The audit used to
+ * The shared test-support files this audit must scan too (chrome-agent-platform-afpl). The audit used to
  * enumerate tests/*.test.ts ONLY, so a repo walk moved into a HELPER was invisible — and that is the
  * shape a faithful `-static` split encourages, because the shared machinery has to live somewhere. The
  * same blind spot covered the non-test support modules sitting directly under tests/.
  *
- * tests/fixtures/ is deliberately NOT scanned: it is data, and a fixture reader must not be admitted.
- * That half matters as much as the other — widening a scan until it admits every fixture reader is how
- * an over-broad pattern once put a 23s esbuild-spawning file into the always-on set and tripled every
- * subset gate (chrome-agent-platform-fgik, and the reason p1lp replaced names with DEFINITIONS).
+ * All subdirectories under tests/ (such as tests/helpers/, tests/support/, tests/utils/) are dynamically
+ * scanned, EXCEPT tests/fixtures/ which is deliberately NOT scanned: it is data, and a fixture reader
+ * must not be admitted. That half matters as much as the other — widening a scan until it admits every
+ * fixture reader is how an over-broad pattern once put a 23s esbuild-spawning file into the always-on
+ * set and tripled every subset gate (chrome-agent-platform-fgik, and the reason p1lp replaced names
+ * with DEFINITIONS).
  */
-const SHARED_SUPPORT_ROOTS = ["tests/helpers"];
 
-/** Every shared test-support source file: the support roots above, plus non-test modules under tests/. */
+/** Every shared test-support source file: subdirectories under tests/ (except fixtures/), plus non-test modules directly under tests/. */
 export function sharedSupportFiles(
-  readDir: (dir: string) => { name: string; isDirectory: () => boolean; isFile: () => boolean }[] = (dir) =>
+  readDir: (dir: string) => { name: string; isDirectory: () => boolean; isFile: () => boolean; isSymbolicLink?: () => boolean }[] = (dir) =>
     readdirSync(dir, { withFileTypes: true }),
 ): { rel: string; code: string }[] {
   const out: { rel: string; code: string }[] = [];
   const collect = (dir: string, rel: string) => {
-    let entries: ReturnType<typeof readDir>;
-    try { entries = readDir(dir); } catch { return; }
+    const entries = readDir(dir);
     for (const e of entries) {
       if (e.name.startsWith(".") || e.name === "node_modules") continue;
       const childRel = `${rel}/${e.name}`;
-      if (e.isDirectory()) { collect(join(dir, e.name), childRel); continue; }
-      if (!/\.(ts|js|mjs)$/.test(e.name) || /\.test\.(ts|js)$/.test(e.name)) continue;
-      out.push({ rel: childRel, code: readFileSync(join(dir, e.name), "utf8") });
+      const childAbs = join(dir, e.name);
+      let isDir = false;
+      let isFile = false;
+      try {
+        const st = statSync(childAbs);
+        isDir = st.isDirectory();
+        isFile = st.isFile();
+      } catch {
+        isDir = e.isDirectory();
+        isFile = e.isFile();
+      }
+      if (isDir) {
+        collect(childAbs, childRel);
+        continue;
+      }
+      if (isFile && /\.(ts|js|mjs)$/.test(e.name) && !/\.test\.(ts|js)$/.test(e.name)) {
+        out.push({ rel: childRel, code: readFileSync(childAbs, "utf8") });
+      }
     }
   };
-  for (const root of SHARED_SUPPORT_ROOTS) {
-    const abs = join(ROOT, root);
-    if (existsSync(abs)) collect(abs, root);
-  }
-  for (const e of readDir(join(ROOT, "tests"))) {
-    if (!e.isFile() || !/\.(ts|js|mjs)$/.test(e.name) || /\.test\.(ts|js)$/.test(e.name)) continue;
-    out.push({ rel: `tests/${e.name}`, code: readFileSync(join(ROOT, "tests", e.name), "utf8") });
+
+  const testsDir = join(ROOT, "tests");
+  const topEntries = readDir(testsDir);
+  for (const e of topEntries) {
+    if (e.name.startsWith(".") || e.name === "node_modules" || e.name === "fixtures") continue;
+    const rel = `tests/${e.name}`;
+    const abs = join(ROOT, rel);
+    let isDir = false;
+    let isFile = false;
+    try {
+      const st = statSync(abs);
+      isDir = st.isDirectory();
+      isFile = st.isFile();
+    } catch {
+      isDir = e.isDirectory();
+      isFile = e.isFile();
+    }
+    if (isDir) {
+      collect(abs, rel);
+    } else if (isFile && /\.(ts|js|mjs)$/.test(e.name) && !/\.test\.(ts|js)$/.test(e.name)) {
+      out.push({ rel, code: readFileSync(abs, "utf8") });
+    }
   }
   return out;
 }
 
 /**
- * What to DO about a flagged shared-support module (coord's refinement on afpl): a helper cannot be an
- * ALWAYS_ON member, so naming it without saying so leaves the next splitter a red they cannot act on —
- * the same count-without-a-name failure this cluster has been removing all night, in a new place.
+ * Format guidance for unclassified files (coord's refinement on afpl):
+ * Test files should be added to SOURCE_INSPECTING_GUARDS.
+ * Support modules / helpers can NEVER be in ALWAYS_ON; the message explains what to do instead of
+ * giving contradictory advice or leaving the next splitter a red they cannot act on.
  */
-export function supportModuleGuidance(unclassified: string[]): string {
+export function formatUnclassifiedScannersMessage(unclassified: string[]): string {
+  const tests = unclassified.filter((rel) => /\.test\.(ts|js)$/.test(rel));
   const support = unclassified.filter((rel) => !/\.test\.(ts|js)$/.test(rel));
-  if (support.length === 0) return "";
-  return `\n\n${support.length} of these are SHARED TEST-SUPPORT MODULE(S), which can never be an ALWAYS_ON member: ${support.join(", ")}. ` +
-    `Move the walk into the test file that needs it, or put the static half in a test file. ` +
-    `Do NOT silence this by adding a helper to SOURCE_INSPECTING_GUARDS — the list is for test files, ` +
-    `and a helper there would be selected as a guard it is not.`;
+
+  const parts: string[] = [];
+  if (tests.length > 0) {
+    parts.push(
+      `Dynamic source-scanning test guard(s) found without being in ALWAYS_ON: ${tests.join(", ")}. ` +
+        `Add them to SOURCE_INSPECTING_GUARDS in scripts/select-tests.mjs.`,
+    );
+  }
+  if (support.length > 0) {
+    parts.push(
+      `${support.length} dynamic source-scanning SHARED TEST-SUPPORT MODULE(S) found: ${support.join(", ")}. ` +
+        `Shared support modules can never be an ALWAYS_ON member. ` +
+        `Move the walk into the test file that needs it, or put the static half in a test file. ` +
+        `Do NOT silence this by adding a helper to SOURCE_INSPECTING_GUARDS — that list is for test files, ` +
+        `and a helper there would be selected as a guard it is not.`,
+    );
+  }
+  return parts.join("\n\n");
 }
 
 Deno.test("qcfc: self-checking audit: all dynamic source-scanning test guards are in ALWAYS_ON", () => {
@@ -264,9 +311,7 @@ Deno.test("qcfc: self-checking audit: all dynamic source-scanning test guards ar
   assertEquals(
     unclassified,
     [],
-    `Dynamic source-scanning guard(s) found without being in ALWAYS_ON: ${unclassified.join(", ")}. ` +
-      `Add them to SOURCE_INSPECTING_GUARDS in scripts/select-tests.mjs.` +
-      supportModuleGuidance(unclassified),
+    formatUnclassifiedScannersMessage(unclassified),
   );
 });
 
@@ -354,16 +399,35 @@ Deno.test("qcfc: falsification: unclassified source scanner fails the audit clos
   );
 });
 
+Deno.test("afpl: every ALWAYS_ON and SCANNER_EXCLUSIONS entry is a test file, never a helper", () => {
+  for (const f of ALWAYS_ON) {
+    assert(
+      /\.test\.(ts|js)$/.test(f),
+      `ALWAYS_ON entry ${f} must be a test file (*.test.ts or *.test.js), never a helper module`,
+    );
+  }
+  for (const f of Object.keys(SCANNER_EXCLUSIONS)) {
+    assert(
+      /\.test\.(ts|js)$/.test(f),
+      `SCANNER_EXCLUSIONS entry ${f} must be a test file (*.test.ts or *.test.js), never a helper module`,
+    );
+  }
+});
+
 // chrome-agent-platform-afpl — the augmentation's proof, in BOTH directions and against a REAL file.
 // The real tree has no repo-walking helper today (tests/helpers/ does not even exist), so the honest
-// evidence is a helper CREATED on disk, asserted, and removed in a finally — a killed run must not leave
-// residue (the reaper lesson). Substituting a synthetic string here would prove the parser and not the
-// scan: the whole point is that the scan reaches that directory at all.
+// evidence is a helper CREATED on disk, asserted, and removed in a finally. Pre-cleanup handles residue
+// from an uncatchable SIGKILL.
 Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fixture-walking helper is NOT admitted", async () => {
   const dir = join(ROOT, "tests", "helpers");
   const walker = join(dir, "zz-afpl-repo-walk.ts");
   const fixtureReader = join(dir, "zz-afpl-fixture-read.ts");
   const dirWasAbsent = !existsSync(dir);
+
+  // Pre-cleanup in case a previous run was abruptly killed
+  await Deno.remove(walker).catch(() => {});
+  await Deno.remove(fixtureReader).catch(() => {});
+
   try {
     await Deno.mkdir(dir, { recursive: true });
     // (i) A helper that walks a SOURCE root — the shape a -static split's shared machinery could hide.
@@ -379,17 +443,18 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
       `a repo-walking helper must be SCANNED and NAMED — this is the coverage proof, not a skip: ${JSON.stringify(named)}`,
     );
     // ...and the audit must say WHAT TO DO, because a helper can never be an ALWAYS_ON member.
-    const guidance = supportModuleGuidance(named);
+    const guidance = formatUnclassifiedScannersMessage(named);
     assertStringIncludes(guidance, "zz-afpl-repo-walk.ts", "the guidance must name the module");
     assertStringIncludes(guidance, "Move the walk into the test file", "the guidance must say what to do");
     assertStringIncludes(guidance, "can never be an ALWAYS_ON member", "the guidance must say why not");
 
-    // (ii) A helper that walks ONLY its own fixture directory must NOT be admitted — the over-match half,
-    // which is what stops the scan being widened until every fixture reader is a "guard" (p1lp's lesson).
+    // (ii) A helper that walks ONLY its own fixture directory must NOT be admitted — the over-match half.
+    // Tests join(ROOT, "tests", "fixtures") to ensure definition-aware matching does not over-flag
+    // fixture directories, and avoids /tmp string literals (durable-root rule).
     await Deno.writeTextFile(
       fixtureReader,
-      `import { join } from "node:path";\nconst SCRATCH = "/tmp/afpl-fixtures";\n` +
-        `export function list() { for (const f of Deno.readDirSync(SCRATCH)) void f; }\n`,
+      `import { join } from "node:path";\nconst ROOT = "/repo";\n` +
+        `export function list() { for (const f of Deno.readDirSync(join(ROOT, "tests", "fixtures"))) void f; }\n`,
     );
     const after = findUnclassifiedSourceScanners(sharedSupportFiles(), new Set());
     assertEquals(
@@ -397,8 +462,19 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
       false,
       `a fixture-walking helper must NOT be admitted: ${JSON.stringify(after)}`,
     );
+
+    // (iii) Evasion resistance: adding a helper to alwaysOnSet or SCANNER_EXCLUSIONS must NOT exempt it.
+    const evasionAttempt = findUnclassifiedSourceScanners(
+      sharedSupportFiles(),
+      new Set(["tests/helpers/zz-afpl-repo-walk.ts"]),
+    );
+    assertEquals(
+      evasionAttempt.includes("tests/helpers/zz-afpl-repo-walk.ts"),
+      true,
+      "a helper cannot be exempted by alwaysOnSet: support modules must fail closed",
+    );
   } finally {
-    // No residue, even on a kill: the finally covers an exception, and the names are unmistakable.
+    // Normal exception / clean exit cleanup
     await Deno.remove(walker).catch(() => {});
     await Deno.remove(fixtureReader).catch(() => {});
     if (dirWasAbsent) await Deno.remove(dir).catch(() => {});
