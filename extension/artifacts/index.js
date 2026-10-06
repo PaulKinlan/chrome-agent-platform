@@ -28,6 +28,13 @@ import { t, hydrateI18n } from "../shared/i18n.js";
 // cards (still openable/deletable).
 const MAX_PREVIEWS = 24;
 
+// Fetch previews with bounded concurrency. The gallery used to await one
+// asset.get at a time, so a long thread converged over the SUM of up to 24
+// round-trips. A small pool puts the newest (top-of-grid, so visible first)
+// previews on screen in about one read instead, without firing an unbounded
+// burst at OPFS.
+const PREVIEW_CONCURRENCY = 8;
+
 let allAssets = [];
 let filterKind = "";
 let searchQuery = "";
@@ -591,13 +598,18 @@ export async function renderArtifactsView(containerEl, options = {}) {
       grid.append(card);
     }
 
-    // Fetch content for the live previews (bounded to MAX_PREVIEWS).
-    for (const { card, a } of cards.slice(0, MAX_PREVIEWS)) {
-      const full = await send("asset.get", { origin: a.origin ?? "master", id: a.id });
-      if (full?.ok && full.asset) {
-        card.preview = full.asset.type === "image" ? (full.asset.content ?? "") : (full.asset.content ?? "");
+    // Fetch content for the live previews: bounded to MAX_PREVIEWS artifacts and
+    // to PREVIEW_CONCURRENCY reads in flight, newest first so what is on screen
+    // lands first.
+    const pending = cards.slice(0, MAX_PREVIEWS);
+    const workers = Array.from({ length: Math.min(PREVIEW_CONCURRENCY, pending.length) }, async () => {
+      for (let job = pending.shift(); job; job = pending.shift()) {
+        const { card, a } = job;
+        const full = await send("asset.get", { origin: a.origin ?? "master", id: a.id });
+        if (full?.ok && full.asset) card.preview = full.asset.content ?? "";
       }
-    }
+    });
+    await Promise.all(workers);
   };
 
   const refreshAll = async () => {
