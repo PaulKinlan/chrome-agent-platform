@@ -72,7 +72,16 @@ async function openPage(url: string) {
   await send("Runtime.enable", {}, session);
   await send("Page.enable", {}, session);
   await send("Page.bringToFront", {}, session);
-  return session;
+  const deadline = Date.now() + 15000;
+  let state;
+  do {
+    const reply = await send("Runtime.evaluate", { expression: `(() => ({ url:location.href, ready:document.readyState,
+      composer:!!document.querySelector('#composer [data-composer-input]'), options:!!document.getElementById('prompts') }))()`, returnByValue: true }, session);
+    state = reply?.result?.result?.value;
+    if (state?.url === url && state.ready === "complete" && (url.includes("/ntp/") ? state.composer : state.options)) return session;
+    await sleep(100);
+  } while (Date.now() < deadline);
+  throw new Error(`extension page never became ready: expected ${url}, observed ${JSON.stringify(state)}`);
 }
 const evl = async (session: string, expression: string) => {
   const r = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true, timeout: 300000 }, session);
