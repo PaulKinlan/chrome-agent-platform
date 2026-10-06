@@ -369,8 +369,25 @@ export async function createNamedAgent(
     // Replacement detection, trusted approval consumption, and mutation share
     // this ONE uninterrupted registry-lock critical section. The callback is
     // supplied only by the service worker; request/model data cannot provide it.
-    if (existing && typeof gateOnReplace === "function") {
-      const gate = await gateOnReplace({ slug, existing, candidate: agent });
+    //
+    // chrome-agent-platform-4h47: THE SEAM RUNS FOR EVERY CREATE, not only a
+    // replacement. It used to be `existing && typeof gateOnReplace ===
+    // "function"`, which left the FIRST-time create — the common case for a
+    // model calling the `create_agent` tool, and the only case for a new name —
+    // with no owner-facing decision at all, while owner-approval.js (now
+    // OWNER_DIRECT_ACTIONS + DESTRUCTIVE_ACTIONS), the dispatch census §4.4 and
+    // the route's own requireOwnerApproval call all declare `named-agent.create`
+    // approval-classified. That is the same defect shape as 51cd's
+    // `hooks.subscribe`. `existing` is null on create and the caller's payload
+    // builder accepts that. The seam stays OPTIONAL here: the internal callers
+    // (agent templates, seeds, tests) pass no gate and must keep working; the
+    // ROUTE is where the gate is mandatory.
+    if (typeof gateOnReplace === "function") {
+      const gate = await gateOnReplace({
+        slug,
+        existing: existing ? { ...existing } : null,
+        candidate: { ...agent },
+      });
       if (!gate?.ok) return gate ?? { ok: false, error: "owner approval required" };
     }
     map[slug] = agent;

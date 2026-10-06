@@ -15,9 +15,15 @@ import { DESTRUCTIVE_ACTIONS, OWNER_DIRECT_ACTIONS, isOwnerDirectApproval } from
 // route still calls requireOwnerApproval, because a MODEL-initiated edit keeps
 // the full inline card; that path is pinned in
 // tests/asset-update-owner-direct.test.ts.
+// chrome-agent-platform-4h47: named-agent.create moved the same way — the
+// route's seam now runs for EVERY create (the create path used to skip it), and
+// the owner's own Create click is the owner gesture the gate exists to require,
+// so it is owner-DIRECT while a MODEL create keeps the full card. The pair is
+// mutually exclusive by construction (the assertion below), which is why the
+// name is not in this set.
 const APPROVAL_REQUIRED_ACTIONS = new Set([
   "agent.update", "capability.revoke", "hooks.subscribe", "hooks.unsubscribe",
-  "named-agent.create", "named-agent.set-provider", "script.delete", "script.update", "fs.write",
+  "named-agent.set-provider", "script.delete", "script.update", "fs.write",
   "task.schedule-script", "browser.cookie-value", "webmcp.use-tool", "mcp.use-server",
   "browser.close-foreign-tab", "browser.close-window", "browser.wipe", "browser.remove-bookmark",
   "browser.set-cookie", "browser.remove-cookie", "workflow.run",

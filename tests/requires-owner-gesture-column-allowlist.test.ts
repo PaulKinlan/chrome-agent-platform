@@ -1,0 +1,120 @@
+// tests/requires-owner-gesture-column-allowlist.test.ts — chrome-agent-platform-4h47
+//
+// THE COLUMN. `requiresOwnerGesture` in extension/lib/chrome-tool-capabilities.js
+// is passed `false` by every catalogue row, and NO shipped code decides anything
+// from its value. It is the exact class this bead exists to remove: an authority
+// column that reads as declared coverage while enforcing nothing — the mirror of
+// the kz27 lesson, where a guard everyone believed was always-on was not a guard.
+//
+// TWO GUARANTEES, AND THEY ARE DIFFERENT:
+//
+//   1. "the value is uniformly false today" — pinned in
+//      tests/chrome-tool-capabilities.test.ts (all 191 rows), together with the
+//      positional-argument check that makes the column's deferred removal safe.
+//   2. "the column cannot be read as an authority" — THIS file. A uniformly-false
+//      column is still an invitation: the next lane that reads
+//      `requiresOwnerGesture` sees a name promising an owner gesture and wires a
+//      decision to it — a new authority introduced with no review and no test,
+//      and nothing in the tree would say so. So the set of files that may mention
+//      the name at all is an EXPLICIT ALLOWLIST, each entry carrying why it is
+//      allowed to. Anything else FAILS here BY NAME.
+//
+// WHY AN ALLOWLIST AND NOT A CENSUS. A census records what is there; an allowlist
+// decides what may be. The allowlist shape (and its "an entry that stops matching
+// is stale and also fails" rule) is copied from the guards this repo already runs
+// this way — `SCANNER_EXCLUSIONS` in scripts/select-tests.mjs and the allowlist in
+// tests/machine-path-honesty.test.ts — because a quiet hole is what both exist to
+// prevent.
+//
+// THIS GUARD IS CROSS-CUTTING, so it is registered in SOURCE_INSPECTING_GUARDS
+// (scripts/select-tests.mjs) and therefore runs in ALWAYS_ON: it inspects the whole
+// tracked tree at runtime and imports none of the files it inspects, so no
+// reverse-import selection would ever pick it up for a change to the reader it is
+// supposed to catch (AGENTS.md coupling rule 4, dqc1).
+//
+// THE DEFERRED REMOVAL is owned by chrome-agent-platform-yx2h: the parameter is
+// positionally 7th of 10, so deleting it shifts mutationClass/routeFamily/
+// developerOnly at all 191 record() call sites, and the row-count pins would not
+// see the shift because the counts stay identical while the arguments move.
+import { assert, assertEquals } from "jsr:@std/assert@1";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
+const COLUMN_NAME = "requiresOwnerGesture";
+
+/** Every file allowed to MENTION `requiresOwnerGesture`, keyed repo-relative (so a
+ *  line move cannot break an entry) with the reason it may. A file that mentions
+ *  the column and is not listed here fails the guard below; a listed file that
+ *  stops mentioning it also fails, because a stale exception hides a fix. */
+const MENTION_ALLOWLIST: Readonly<Record<string, string>> = {
+  "extension/lib/chrome-tool-capabilities.js":
+    "The column's DECLARATION (record()'s positional 7th parameter, marked DEPRECATED in place), its " +
+    "one reader (validateRow's boolean-shape check) and the two summary projections that copy the value " +
+    "forward. None of the three decides anything from it: the validator checks its SHAPE, the projections " +
+    "preserve an object's shape. Removal is deferred to chrome-agent-platform-yx2h.",
+  "extension/lib/lazy-tool-wire.js":
+    "The catch-fallback capability summary fabricates `requiresOwnerGesture: false` so the projection's " +
+    "shape is unchanged when a catalogue lookup throws. A shape placeholder, never a decision — and it " +
+    "carries the same deprecation marker as the table's own fallback.",
+  "tests/chrome-tool-capabilities.test.ts":
+    "The two ENFORCING pins this bead added: every row's value must be FALSE (a `true` cannot arrive as a " +
+    "silent claim), and every positional record() call's 8th argument must still be a mutationClass, so " +
+    "the deprecated 7th parameter cannot be dropped without shifting the arguments that follow it.",
+  "tests/requires-owner-gesture-column-allowlist.test.ts":
+    "THIS guard. It names the column because the column is what it searches for — its own mentions are the " +
+    "search key, not a read of the value.",
+  "scripts/select-tests.mjs":
+    "The SOURCE_INSPECTING_GUARDS adjudication that promotes THIS guard into ALWAYS_ON. Its mention is prose " +
+    "in that entry's justification (why a cross-cutting guard has no import edge), not a read of the value.",
+};
+
+/** The tracked (and not-yet-committed, non-ignored) files that mention the column.
+ *  `git grep` is the repo's tracked-tree idiom (see tests/docs-process-truth.test.ts);
+ *  `--untracked` keeps this guard honest for the file that is adding it, which is
+ *  not tracked until it lands. */
+function filesMentioningColumn(): string[] {
+  const result = spawnSync("git", ["grep", "-l", "-I", "--untracked", "-e", COLUMN_NAME], { cwd: ROOT, encoding: "utf8" });
+  // 1 is "no match" — an empty tree is a legitimate (and loud, via the stale check) state.
+  assert(
+    result.status === 0 || result.status === 1,
+    `the tracked-tree search for ${COLUMN_NAME} must run (git exited ${result.status}): ${result.stderr ?? ""}`,
+  );
+  return result.stdout.split("\n").map((line) => line.trim()).filter(Boolean).sort();
+}
+
+Deno.test("requiresOwnerGesture: only the allowlisted files may mention the dead column (a new reader fails by name)", () => {
+  const mentioned = filesMentioningColumn();
+
+  // The guard cannot silently degrade into a no-op: if the search stopped finding
+  // ANYTHING the allowlist itself would be stale, and the assertions below would
+  // pass over an empty result.
+  assert(mentioned.length > 0, `the search must find at least this guard's own mention of ${COLUMN_NAME}`);
+
+  const unexpected = mentioned.filter((file) => !Object.hasOwn(MENTION_ALLOWLIST, file));
+  assertEquals(
+    unexpected,
+    [],
+    `file(s) mention ${COLUMN_NAME} without being allowlisted: ${unexpected.join(", ")}. This column is ` +
+      "DEPRECATED and gates nothing (chrome-agent-platform-4h47) — if you are READING it to decide " +
+      "something, stop: wire the gate in browser-tools.js/owner-approval.js and make a real authority the " +
+      "single source (chrome-agent-platform-yx2h owns deleting the column). Otherwise add the file here " +
+      "with the reason it may mention the name.",
+  );
+
+  const stale = Object.keys(MENTION_ALLOWLIST).filter((file) => !mentioned.includes(file));
+  assertEquals(
+    stale,
+    [],
+    `allowlist entr(ies) no longer mention ${COLUMN_NAME}: ${stale.join(", ")} — a stale exception hides a ` +
+      "fix, so it is removed in the same change that removes the mention.",
+  );
+});
+
+Deno.test("requiresOwnerGesture: every allowlist entry carries a real reason", () => {
+  const entries = Object.entries(MENTION_ALLOWLIST);
+  assertEquals(entries.length, 5, "the allowlist is exactly the five known mention sites — a sixth needs review");
+  for (const [file, reason] of entries) {
+    assert(reason.trim().length > 80, `allowlist entry ${file} must carry a real reason, not a placeholder`);
+  }
+});

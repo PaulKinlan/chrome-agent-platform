@@ -232,3 +232,123 @@ Deno.test("census: named-agent.set-tools is pinned as an unclassified mutation g
     "named-agent.set-tools must be tracked as an unclassified mutation gap",
   );
 });
+
+// ── chrome-agent-platform-4h47: the doc and this table are ONE authority ─────
+//
+// Until this bead, tests/sw-dispatch-authority-census.test.ts held its own copy
+// of the classification and NEVER parsed the markdown, so the doc rotted while
+// every gate stayed green: it said 260 total where this file pins 276, and six
+// section headers disagreed with their OWN tables (4.2 36/40, 4.4 16/17, 4.5
+// 23/24, 4.6 21/23, 4.9 31/37, 4.10 88/91). The assertion below parses the doc
+// and requires, per section, that the route-name SET equals this file's
+// CENSUS_CATEGORIES set AND that the section header's stated count matches its
+// own table. A number that rots, or a route that moves between sections in only
+// one of the two authorities, now REDs here naming the section.
+//
+// The document's shape, stated so the parse is not a guess:
+//   • §4.1–4.9 are markdown tables whose FIRST cell is the route name (4.9's
+//     first row is bolded, hence the optional `**`).
+//   • §4.10 is NOT a table — it is one prose line listing the routes. It is
+//     still parsed exactly, not skipped: the only backticked tokens in that
+//     section are the route names, and the set-equality assertion is itself the
+//     guard — a stray code token in the prose would fail the parse loudly rather
+//     than silently shrink the set.
+//   • §3 is the high-level summary table; its rows are asserted against the
+//     same sets, and its Total against the registered-route population.
+const CENSUS_DOC_SECTIONS: Readonly<Record<string, keyof typeof CENSUS_CATEGORIES>> = {
+  "4.1": "PAGE_ALLOWED",
+  "4.2": "SETTINGS_ONLY_DIRECT",
+  "4.3": "OWNER_APPROVAL_DIRECT",
+  "4.4": "OWNER_APPROVAL_REQUIRED",
+  "4.5": "OWNER_EXTENSION_FENCED",
+  "4.6": "EXECUTION_AND_WORKER_ORCHESTRATION",
+  "4.7": "AGENT_BOARD",
+  "4.8": "STORAGE_KV_MEMORY_FENCED",
+  "4.9": "UNCLASSIFIED_MUTATIONS",
+  "4.10": "READ_ONLY_STATUS_TELEMETRY",
+};
+
+const CENSUS_DOC_SUMMARY_ROWS: ReadonlyArray<readonly [string, keyof typeof CENSUS_CATEGORIES]> = [
+  ["Page-Allowed (`PAGE_ALLOWED`)", "PAGE_ALLOWED"],
+  ["Settings-Only Direct (`SETTINGS_ONLY_DIRECT`)", "SETTINGS_ONLY_DIRECT"],
+  ["Owner-Approval Direct (`OWNER_APPROVAL_DIRECT`)", "OWNER_APPROVAL_DIRECT"],
+  ["Owner-Approval Required (`OWNER_APPROVAL_REQUIRED`)", "OWNER_APPROVAL_REQUIRED"],
+  ["Owner Extension-Fenced (`OWNER_EXTENSION_FENCED`)", "OWNER_EXTENSION_FENCED"],
+  ["Execution & Worker Orchestration", "EXECUTION_AND_WORKER_ORCHESTRATION"],
+  ["Agent Task Board (`AGENT_BOARD`)", "AGENT_BOARD"],
+  ["Storage, KV & Memory Fenced", "STORAGE_KV_MEMORY_FENCED"],
+  ["Unclassified Mutations (Gaps)", "UNCLASSIFIED_MUTATIONS"],
+  ["Read-Only / Status / Telemetry", "READ_ONLY_STATUS_TELEMETRY"],
+];
+
+/** The route names a §4.N section lists, plus the count its own header states. */
+function parseCensusDocSection(section: string, header: string, body: string): { names: Set<string>; stated: number } {
+  const tableNames = [...body.matchAll(/^\|\s*\*{0,2}`([^`]+)`/gm)].map((match) => match[1]);
+  // §4.10 is a prose list, not a table; its backticked tokens ARE its routes.
+  const names = new Set(tableNames.length ? tableNames : [...body.matchAll(/`([^`]+)`/g)].map((match) => match[1]));
+  const stated = /\((?:[^()]*?)(\d+) routes\)/.exec(header);
+  assert(stated !== null, `census ${section} header must state its route count: ${header}`);
+  return { names, stated: Number(stated[1]) };
+}
+
+Deno.test("census: the document's §4 tables and §3 summary ARE this test's classification (no drift possible)", async () => {
+  const census = await Deno.readTextFile(`${ROOT}docs/SW-DISPATCH-AUTHORITY-CENSUS.md`);
+  const lines = census.split("\n");
+
+  // Every section this file knows about, in document order.
+  const sections: Array<{ section: string; header: string; start: number }> = [];
+  lines.forEach((line, index) => {
+    const match = /^### (4\.\d+)/.exec(line);
+    if (match) sections.push({ section: match[1], header: line, start: index });
+  });
+  assertEquals(
+    sections.map((s) => s.section),
+    Object.keys(CENSUS_DOC_SECTIONS),
+    "the document must still have exactly the §4.N sections this test maps",
+  );
+
+  let docTotal = 0;
+  for (const [index, { section, header, start }] of sections.entries()) {
+    const end = sections[index + 1]?.start ?? lines.findIndex((line, at) => at > start && line.startsWith("## "));
+    const body = lines.slice(start + 1, end).join("\n");
+    const category = CENSUS_DOC_SECTIONS[section];
+    const expected = CENSUS_CATEGORIES[category];
+    const { names, stated } = parseCensusDocSection(section, header, body);
+    const where = `census ${section} (${category})`;
+
+    assertEquals(
+      [...names].sort(),
+      [...expected].sort(),
+      `${where}: the document's route set must equal this test's category set — ` +
+        `doc-only ${[...names].filter((name) => !expected.has(name)).join(", ") || "(none)"}; ` +
+        `test-only ${[...expected].filter((name) => !names.has(name)).join(", ") || "(none)"}`,
+    );
+    assertEquals(names.size, stated, `${where}: the header states ${stated} routes but the table lists ${names.size}`);
+    docTotal += names.size;
+  }
+
+  // §3's summary table, keyed by its own row labels — a row that disappears (or
+  // a count that rots) fails here as well as above.
+  const summary = new Map<string, number>();
+  for (const line of lines) {
+    const row = /^\| \*\*(.+?)\*\* \| \*{0,2}(\d+)\*{0,2} \|/.exec(line);
+    if (row) summary.set(row[1], Number(row[2]));
+  }
+  for (const [label, category] of CENSUS_DOC_SUMMARY_ROWS) {
+    assertEquals(
+      summary.get(label),
+      CENSUS_CATEGORIES[category].size,
+      `census §3: the "${label}" summary row must equal the ${category} set (which is what §4 lists)`,
+    );
+  }
+  assertEquals(
+    summary.get("Total"),
+    docTotal,
+    "census §3: the Total row must equal the sum of the §4 section tables",
+  );
+  assertEquals(
+    summary.get("Total"),
+    extractAllRegisteredRoutes().size,
+    "census §3: the Total row must equal the registered-route population this test derives from handlers",
+  );
+});

@@ -1,5 +1,6 @@
 // @ts-nocheck — exact shipped tool maps and metadata-only adapters.
 import { assert, assertEquals, assertMatch, assertThrows } from "jsr:@std/assert@1";
+import { parse } from "npm:acorn";
 import { browserToolset } from "../extension/lib/browser-tools.js";
 import {
   MANAGEMENT_TOOL_NAMES,
@@ -293,6 +294,79 @@ Deno.test("unsafe-for-cutover list remains policy metadata and does not filter t
   assert(!FLAGGED_FOR_LATER_PROVIDER_CUTOVER.includes("open_side_panel"));
   assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 191);
   assertEquals(new Set(CHROME_TOOL_CAPABILITY_TABLE.map((row) => row.toolName)).size, 191);
+});
+
+// chrome-agent-platform-4h47: `requiresOwnerGesture` is a DEAD AUTHORITY COLUMN.
+// All 191 rows pass false and nothing in the shipped extension reads the value
+// to make a decision, so the column cannot express the gate its name promises —
+// a declaration that is not enforced, which is the class this bead removes. It
+// is deprecated in place (deleting it would shift `mutationClass`, `routeFamily`
+// and `developerOnly` at every positional record() call, and the 139/52/191
+// count pins would NOT see that shift) and pinned here instead, in two halves:
+//   1. the value is uniformly FALSE, so a `true` cannot arrive as a silent claim;
+//   2. the POSITIONAL contract of the row builder — the declaration's exact
+//      parameter list, and the 8th argument of every call (a mutationClass
+//      literal). Measured teeth, mutant by mutant: dropping one call site's 7th
+//      argument leaves 1/191 calls with "browser.fs-grant" where a mutationClass
+//      belongs, which assertion 2 reports by offset; and a whole-declaration
+//      change is reported by the parameter-list assertion.
+// HONEST LIMIT (measured, not assumed): a half-done removal that drops the
+// PARAMETER and leaves the 191 call sites alone is caught FIRST by this module's
+// own validateRow — `mutationClass` then binds the old `false` and the table
+// throws "invalid_mutation_metadata" at import, before any test body runs. So
+// assertion 2 is the SECOND net, and the one that still holds if the yx2h lane
+// relaxes that validator in the same change (which removing the column requires
+// it to do: the boolean clause on the removed column), plus it states the
+// argument order the 191 sites are written against instead of leaving it
+// implicit in the declaration.
+const REQUIRES_OWNER_GESTURE_DEPRECATION =
+  "requiresOwnerGesture is DEPRECATED and uniformly false (chrome-agent-platform-4h47): no shipped code reads it, so it cannot express an owner gesture. " +
+  "Do not set it true to declare a gate — wire the gate in browser-tools.js/owner-approval.js and make this column its single source (or delete the column, which requires shifting the positional record() arguments). " +
+  "The removal is owned by chrome-agent-platform-yx2h; tests/requires-owner-gesture-column-allowlist.test.ts pins the READ side (which files may even mention the name).";
+
+Deno.test("requiresOwnerGesture is a deprecated, uniformly-false column that gates nothing", () => {
+  const claiming = CHROME_TOOL_CAPABILITY_TABLE
+    .filter((row) => row.requiresOwnerGesture !== false)
+    .map((row) => row.toolName);
+  assertEquals(claiming, [], REQUIRES_OWNER_GESTURE_DEPRECATION);
+  // The count is re-asserted here so this pin cannot be satisfied by an empty
+  // table (a filter over nothing is trivially uniform).
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 191, REQUIRES_OWNER_GESTURE_DEPRECATION);
+});
+
+Deno.test("the capability table's positional record() arguments still line up with the declaration", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/chrome-tool-capabilities.js", import.meta.url));
+  const ast = parse(source, { ecmaVersion: "latest", sourceType: "module" });
+  const declaration = ast.body.find((node) => node.type === "FunctionDeclaration" && node.id.name === "record");
+  assert(declaration, "the capability table must declare its record() row builder");
+  assertEquals(
+    declaration.params.map((param) => param.name ?? param.left?.name),
+    [
+      "toolName", "sourceKind", "capabilityTokens", "optionalPermissions", "productGrantScopeKind",
+      "replayClass", "requiresOwnerGesture", "mutationClass", "routeFamily", "developerOnly",
+    ],
+    "record()'s positional parameter list is the contract every row call site is written against",
+  );
+  const mutationClasses = new Set(["read", "idempotent", "mutating"]);
+  const calls = [];
+  const walk = (node) => {
+    if (!node || typeof node !== "object") return;
+    if (node.type === "CallExpression" && node.callee?.type === "Identifier" && node.callee.name === "record") calls.push(node);
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "start" || key === "end") continue;
+      for (const child of Array.isArray(value) ? value : [value]) walk(child);
+    }
+  };
+  walk(ast);
+  assertEquals(calls.length, 191, "every catalogue row is built through record()");
+  for (const call of calls) {
+    const mutationClass = call.arguments[7];
+    assert(
+      mutationClass?.type === "Literal" && mutationClasses.has(mutationClass.value),
+      `record() call at offset ${call.start} must pass a mutationClass literal 8th (got ${source.slice(mutationClass?.start ?? 0, mutationClass?.end ?? 0) || "nothing"}) — ` +
+        "if the deprecated requiresOwnerGesture parameter moved or was dropped, every argument after it shifted.",
+    );
+  }
 });
 
 Deno.test("Tranche 2 tools: permission-gated execution fails closed when permission is missing", async () => {

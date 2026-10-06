@@ -158,6 +158,17 @@ export const SOURCE_INSPECTING_GUARDS = [
   // p1lp closed. It reads tracked source, spawns nothing and needs no browser, so it is host-independent
   // and the cost is disclosed here for the always-on budget: ~4s at low load.
   "tests/substring-pin-honesty.test.ts",
+  // chrome-agent-platform-4h47: the READ-SIDE guard for the dead `requiresOwnerGesture`
+  // column. It resolves every mention of the name across the tracked tree and asserts the
+  // file set is exactly an explicit allowlist-with-reasons, so no future lane can start
+  // reading the column as an authority without failing by name. It has no import edge to the
+  // files it inspects (git grep + the allowlist), which is precisely the cross-cutting shape
+  // AGENTS.md coupling rule 4 (dqc1) says a subset gate cannot see, so it is always-on. Kept
+  // as its OWN file rather than folded into the capability KAT: that file is 24 capability
+  // tests, and promoting it would run all of them in every subset gate for this one
+  // invariant (the p1lp mixed-file split lesson). Cost: one `git grep` spawn over the tracked
+  // tree, no browser, no build.
+  "tests/requires-owner-gesture-column-allowlist.test.ts",
 ];
 
 /**

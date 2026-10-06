@@ -139,6 +139,16 @@ export const OWNER_DIRECT_ACTIONS = new Set([
   "asset.update",
   "agent.delete",
   "named-agent.delete",
+  // chrome-agent-platform-4h47: the owner's own Create click in an extension UI
+  // document IS the approval — the same reviewed principle as its sibling
+  // `named-agent.update` below (and asset.update/script.create). It is listed
+  // here because the route now runs its owner-approval seam for EVERY create
+  // (the create path used to skip it entirely, so a MODEL calling the
+  // `create_agent` tool wrote a new agent with no owner-facing decision while
+  // three authorities declared the action approval-classified). A MODEL create
+  // is not an extension-document principal, so it still pays the full
+  // pending-approval card; only the owner's own gesture is direct.
+  "named-agent.create",
   // The owner's own Edit dialog Save IS the approval; model edits still pay
   // the pending approval card through their separate model principal.
   "named-agent.update",
@@ -368,6 +378,17 @@ export function canonicalOperationTarget(kind, parts = Object.create(null)) {
       // recipe:<id>, or an explicit owner name) — taken verbatim, length-bounded;
       // slug-normalizing it would be lossy (two names could collapse to one
       // target and share an approval row).
+      const id = typeof parts.id === "string" ? parts.id.trim() : "";
+      values = [id.slice(0, 200)];
+      break;
+    }
+    case "background": {
+      // A background agent's identity is its custom-skill id (a generated
+      // `<baseId>-custom-<ts>` string, or an owner-named id) — taken verbatim
+      // and length-bounded, like `scheduled`. It gets its OWN kind rather than
+      // reusing `named`/`scheduled`: the kind is the discriminator in the target
+      // string, so borrowing one would render two different stores as the same
+      // target ref (chrome-agent-platform-4h47, background-agent.delete).
       const id = typeof parts.id === "string" ? parts.id.trim() : "";
       values = [id.slice(0, 200)];
       break;
