@@ -292,6 +292,9 @@ read in run 2.
      The suite's serial phase asserts the built tree is current at HEAD, so run
      `npm run build:production` after your LAST commit and before this gate:
      any commit invalidates `extension/dist/dist.complete` (1mz2).
+  4. `npm run test:build` — the dedicated heavy build-behaviour gate (Option D,
+     chrome-agent-platform-h65e) covering in-place rebuilds, mode alternation,
+     and bundled-tool verify/regen. Run during landing.
   Never weaken or skip a test to make a subset pass; the subset differs from
   the gate only in WHICH files run.
 - **Visual verification.** UI work is verified by driving the real UI in headless
@@ -360,7 +363,7 @@ read in run 2.
   `npm run test:file -- tests/x.test.ts`. Do not add `--config deno.runner.jsonc`
   to a sweep by hand; that is the runner's job.
   **Real browser requirement:** `npm test` is NOT a pure in-memory test run.
-  While all 17 serial files and 480+ parallel files are in-memory unit tests or use
+  While all 19 serial files and 480+ parallel files are in-memory unit tests or use
   fake-runner probes (`binary: fake`), `tests/chrome-profile-location.test.ts:115`
   unconditionally launches a REAL Chromium instance to test live profile mutation
   during whole-tree copies. It requires `/usr/bin/chromium` (or Chrome binary).

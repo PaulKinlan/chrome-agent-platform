@@ -25,7 +25,7 @@ import { readdirSync, realpathSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath } from "node:path";
-import { SERIAL, partition } from "./test-partition.mjs";
+import { BUILD_GATE, SERIAL, partition } from "./test-partition.mjs";
 import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
 import { parallelPlan } from "./lib/parallel-plan.mjs";
@@ -105,9 +105,11 @@ export async function main(args = process.argv.slice(2)) {
   const cliFiles = args.filter((f) => !f.startsWith("-"));
   let all;
   let serialFiles;
+  let parallel;
   if (cliFiles.length > 0) {
     all = cliFiles.sort();
     serialFiles = all.filter((f) => SERIAL.has(f));
+    parallel = all.filter((f) => !SERIAL.has(f));
   } else {
     // Recursive: `deno test tests/` walks subdirectories, so this walk must too
     // (a non-recursive readdir would silently drop future tests/**/ nested files).
@@ -120,9 +122,13 @@ export async function main(args = process.argv.slice(2)) {
       console.error(`run-tests: SERIAL names files that do not exist: ${missing.join(", ")}`);
       process.exit(2);
     }
-    serialFiles = [...SERIAL];
+    // Option D (chrome-agent-platform-h65e): BUILD_GATE files run in the dedicated
+    // npm run test:build gate, so npm test runs only the remaining serial hazard files.
+    // Preserve SERIAL declaration order so early fixtures (build-smoke) run before consumers.
+    const part = partition(all);
+    serialFiles = [...SERIAL].filter((f) => !BUILD_GATE.has(f));
+    parallel = part.parallel;
   }
-  const { parallel } = partition(all);
 
   // chrome-agent-platform-kz27: the parallel phase used to be conditional on the serial phase
   // (`if (rc === 0) …`), which meant ONE serial failure SKIPPED the ~500-file parallel phase — and the
@@ -135,7 +141,12 @@ export async function main(args = process.argv.slice(2)) {
   if (plan.announce) console.error(`\n${plan.announce}`);
   const parallelRc = await runParallel(plan.files);
   const rc = serialRc === 0 ? parallelRc : serialRc;
-  console.log(`run-tests: ${all.length} files total, ${plan.skipped} skipped, wall ${((Date.now() - t0) / 1000).toFixed(0)}s`);
+  const deferredCount = cliFiles.length === 0 ? all.length - (serialFiles.length + parallel.length) : 0;
+  console.log(
+    `run-tests: ${serialFiles.length + parallel.length} files total, ${plan.skipped} skipped` +
+      ` (${serialFiles.length} serial, ${parallel.length} parallel` +
+      `${deferredCount ? `, ${deferredCount} deferred to npm run test:build` : ""}), wall ${((Date.now() - t0) / 1000).toFixed(0)}s`,
+  );
   process.exit(rc);
 }
 

@@ -21,7 +21,7 @@ A reader or scheduler must not infer the absence of Chrome from names like "pure
 ### 2.1 The Full Test Gate (`npm test` / `scripts/run-tests.mjs`)
 The full gate runs in two sequential phases:
 
-- **Phase 1: Serial Phase (15 hazard files)**
+- **Phase 1: Serial Phase (19 hazard files)**
   - Runs build-artifact hazard tests serially with per-file process isolation and bounded timeouts (`scripts/lib/serial-phase.mjs`): 180s per file at idle, scaled by load per CPU up to 720s. An explicit `CAP_SERIAL_TEST_TIMEOUT_MS` overrides this without scaling; scaled defaults print their effective bound.
   - **Browser requirement:** NONE of the serial files launch a real browser. Lock-machinery tests (`tests/chrome-launch-lock.test.ts`, `tests/chrome-launch-lock-scope.test.ts`, `tests/chrome-slot-semaphore.test.ts`, `tests/chrome-slot-semaphore-honesty.test.ts`) test concurrency and locking logic using `binary: fake` (a mock process printing DevTools banners).
 - **Phase 2: Parallel Phase (422+ files)**
@@ -39,6 +39,18 @@ The full gate runs in two sequential phases:
     - This test exercises the live race condition where Chrome holds and continuously churns its profile (`Default/`, `SingletonLock`, WAL) outside the repository while a whole-tree copy (`cp -a <repo>/. <dst>/.`) executes concurrently.
     - If `/usr/bin/chromium` is missing or cannot be spawned (e.g. headless container missing shared libraries or sandbox permissions), `npm test` fails.
     - All other parallel test files in `tests/` are in-memory unit tests, mock Web/DOM tests, or static source scanners that require no browser.
+
+### 2.1b The Dedicated Build Gate (`npm run test:build` / `scripts/build-gate.ts`)
+Option D (chrome-agent-platform-h65e) partitions heavy in-place build-behaviour tests out of `npm test` into a dedicated explicitly-budgeted gate:
+- **Command:** `npm run test:build` (invokes `scripts/build-gate.ts`, enforced ceiling: 2120s; ~8 min typical; explicit `CAP_SERIAL_TEST_TIMEOUT_MS` overrides without scaling).
+- **Enumerated Coverage:**
+  - `tests/build-bootstrap.test.ts` (per-file bound: 850s): steady-state symlink bootstrap, GC of dangling v-boot symlinks under dist-versions, live version counts, archive packaging idempotence.
+  - `tests/build-debug-mode.test.ts` (per-file bound: 550s): developer vs store target marker validation, sourcemap inclusion/exclusion, and mode alternation integrity.
+  - `tests/build-tool-bundling.test.ts` (base serial window, measured ~10s; ceiling 720s under 4x load): bundled-tool generator verify-mode drift check, `--regen-tools` idempotence, and provenance validation.
+- **Coverage Remaining in `npm test`:**
+  - `tests/build-smoke.test.ts`: fast assertion proving `node build.mjs` exits 0 and emits a valid `dist.complete` marker.
+  - `tests/store-doc-denial.test.ts`: validates store build output and Zod Doc.compile denial (reuses warm build record in ~6s).
+  - `tests/package-extension-freshness.test.ts`, `tests/bundle-budget.test.ts`, `tests/diff-core.test.ts`, `tests/wasm-tree-shaking.test.ts`: dist bundle and marker integrity checks.
 
 ### 2.2 Acceptance and Journey Harnesses (`scripts/`)
 All harnesses under `scripts/` require a real browser:

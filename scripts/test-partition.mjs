@@ -23,6 +23,7 @@
 // means stating why it is a shared-build-artifact hazard. The guard test
 // asserts every entry carries one.
 export const SERIAL_REASONS = {
+  "tests/build-smoke.test.ts": "fast smoke-level assertion in npm test proving build.mjs exits 0 and emits a valid marker (chrome-agent-platform-h65e)",
   "tests/build-bootstrap.test.ts": "runs node build.mjs in-place (dist/dist-versions rewrite)",
   "tests/store-doc-denial.test.ts": "runs node build.mjs in-place and reads the built extension/dist bundles (shared build artifacts)",
   "tests/build-debug-mode.test.ts": "runs node build.mjs in-place (debug+store bundles)",
@@ -72,6 +73,17 @@ export const SERIAL_REASONS = {
   "tests/serial-phase-timeout.test.ts": "wall-clock kill/survive bounds assertions (declared 5000 ms work vs 4000 ms flat / 12000 ms scaled bounds) race the parallel phase",
 };
 export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
+
+// Build-behaviour tests moved to the dedicated npm run test:build gate (Option D / chrome-agent-platform-h65e).
+// These files run multiple in-place builds and are partitioned out of standard npm test to eliminate
+// load variance and save ~8 minutes on every lane's gate.
+export const BUILD_GATE_REASONS = {
+  "tests/build-bootstrap.test.ts": "runs node build.mjs in-place (dist/dist-versions rewrite; 3 production builds)",
+  "tests/build-debug-mode.test.ts": "runs node build.mjs in-place (debug+store bundles; mode alternation)",
+  "tests/build-tool-bundling.test.ts": "runs build.mjs / the bundled-tool generator in-place (verify-mode drift check and regen)",
+};
+export const BUILD_GATE_FILES = Object.freeze(Object.keys(BUILD_GATE_REASONS));
+export const BUILD_GATE = new Set(BUILD_GATE_FILES);
 
 /**
  * The bound for ONE child production build, used by the build-heavy serial files instead of a
