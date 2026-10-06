@@ -17,6 +17,16 @@ Deno.test("ACP local bind-race residual is named, reversible, and separate from 
   ]) {
     assert(r24.includes(pin), `R24 must retain ${pin}`);
   }
+  // All ACP entry points in the threat model must agree on the current bridge
+  // controls, not retain pre-jsjy line numbers beside a corrected T15.
+  for (const outdated of ["scripts/acp-bridge.ts:44", "scripts/acp-bridge.ts:67-71",
+    "scripts/acp-bridge.ts:636-646", "scripts/acp-bridge.ts:641-646"]) {
+    assert(!model.includes(outdated), `THREAT_MODEL.md must not retain stale ACP pin ${outdated}`);
+  }
+  for (const anchor of ["scripts/acp-bridge.ts:49", "scripts/acp-bridge.ts:136-141",
+    "scripts/acp-bridge.ts:723-743"]) {
+    assert(model.includes(anchor), `THREAT_MODEL.md must retain current ACP pin ${anchor}`);
+  }
   const t15 = model.split("### T15.")[1]?.split("### T16.")[0];
   assert(t15?.includes("**Register:** R24"), "T15 must point to the owning R24 decision");
   const exclusions = model.split("## 7. Explicit Exclusions")[1]?.split("## 8.")[0];
