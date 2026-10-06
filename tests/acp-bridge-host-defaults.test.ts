@@ -8,6 +8,7 @@
 // CAP-FB-20260912-ACP-INTEGRATION-01 (tracking epic chrome-agent-platform-qlho)
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
+import { TEST_BRIDGE_TOKEN } from "./fixtures/acp-bridge-token.ts";
 import { applyHostDefaults, childEnvForHarness, clipCloseReason, createAcpServer, harnessCliWarning, resolveAdapter, resolveCliOnPath, HARNESS_ADAPTERS, adapterNameFromInitialize, toolServerError } from "../scripts/acp-bridge.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
@@ -177,7 +178,7 @@ Deno.test("harnessCliWarning: a PATH miss is fatal only for adapters without a b
 });
 
 Deno.test("createAcpServer: /health supports ?harness= query and returns supportsHarnessSelection", async () => {
-  const server = createAcpServer(0);
+  const server = createAcpServer(0, undefined, {}, undefined, TEST_BRIDGE_TOKEN);
   const port = (server as any).addr.port;
   try {
     // Default probe
@@ -203,7 +204,7 @@ Deno.test("createAcpServer: /health supports ?harness= query and returns support
 });
 
 Deno.test("createAcpServer: rejects unknown harness with HTTP 400 naming known harnesses", async () => {
-  const server = createAcpServer(0);
+  const server = createAcpServer(0, undefined, {}, undefined, TEST_BRIDGE_TOKEN);
   const port = (server as any).addr.port;
   try {
     const res = await fetch(`http://127.0.0.1:${port}/acp?harness=unknown-harness`);
@@ -236,12 +237,12 @@ process.exit(0);
 `,
   );
 
-  const server = createAcpServer(0, mockAdapter);
+  const server = createAcpServer(0, mockAdapter, {}, "", TEST_BRIDGE_TOKEN);
   const port = (server as any).addr.port;
 
   try {
     // Connect with ?harness=claude-code
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/acp?harness=claude-code`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/acp?token=${TEST_BRIDGE_TOKEN}&harness=claude-code`);
     await new Promise<void>((resolve) => {
       ws.onclose = (event) => {
         // Must name started harness in close reason

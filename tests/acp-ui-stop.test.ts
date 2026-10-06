@@ -12,6 +12,10 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fromFileUrl } from "jsr:@std/path@1/from-file-url";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
+import { TEST_BRIDGE_TOKEN } from "./fixtures/acp-bridge-token.ts";
+
+/** jsjy: the bridge refuses an unauthenticated upgrade; the token travels on the endpoint here. */
+const authedEndpoint = (port: number | string) => `ws://127.0.0.1:${port}/acp?token=${TEST_BRIDGE_TOKEN}`;
 import { runAcpTaskTurn, cancelAcpTurn, acpSessionKey } from "../extension/lib/acp-runner.js";
 
 const FAKE_ADAPTER = fromFileUrl(new URL("./fixtures/acp-fake-adapter.mjs", import.meta.url));
@@ -36,8 +40,8 @@ Deno.test("c6gq: an in-flight ACP turn exposes Stop and settles to cancelled on 
   const bridge = createAcpServer(0, FAKE_ADAPTER, {
     CAP_ACP_FIXTURE_HOLD_TEXT: HOLD_TEXT,
     CAP_ACP_FIXTURE_DIE_ON_SPAWN: "0",
-  });
-  const endpoint = `ws://127.0.0.1:${(bridge as any).addr.port}/acp`;
+  }, "", TEST_BRIDGE_TOKEN);
+  const endpoint = authedEndpoint((bridge as any).addr.port);
 
   const container = new MockContainer();
   const statuses: any[] = [];
@@ -101,8 +105,8 @@ Deno.test("c6gq: cancelling something already finished or never started returns 
   const bridge = createAcpServer(0, FAKE_ADAPTER, {
     CAP_ACP_FIXTURE_HOLD_TEXT: "",
     CAP_ACP_FIXTURE_DIE_ON_SPAWN: "0",
-  });
-  const endpoint = `ws://127.0.0.1:${(bridge as any).addr.port}/acp`;
+  }, "", TEST_BRIDGE_TOKEN);
+  const endpoint = authedEndpoint((bridge as any).addr.port);
   const container = new MockContainer();
   const threadId = "thread_finish_first";
   const harnessId = "pi";
@@ -131,8 +135,8 @@ Deno.test("c6gq: calling cancelAcpTurn twice on in-flight turn reports run_alrea
   const bridge = createAcpServer(0, FAKE_ADAPTER, {
     CAP_ACP_FIXTURE_HOLD_TEXT: HOLD_TEXT,
     CAP_ACP_FIXTURE_DIE_ON_SPAWN: "0",
-  });
-  const endpoint = `ws://127.0.0.1:${(bridge as any).addr.port}/acp`;
+  }, "", TEST_BRIDGE_TOKEN);
+  const endpoint = authedEndpoint((bridge as any).addr.port);
 
   const container = new MockContainer();
   const threadId = "thread_double_cancel";

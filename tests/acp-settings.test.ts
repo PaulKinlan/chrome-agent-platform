@@ -4,9 +4,13 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
 import { runAcpTaskTurn } from "../extension/lib/acp-runner.js";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
+import { TEST_BRIDGE_TOKEN } from "./fixtures/acp-bridge-token.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const FAKE_ADAPTER = fileURLToPath(new URL("./fixtures/acp-fake-adapter.mjs", import.meta.url));
+
+/** jsjy: the bridge refuses an unauthenticated upgrade; the token travels on the endpoint here. */
+const authedEndpoint = (port: number | string) => `ws://127.0.0.1:${port}/acp?token=${TEST_BRIDGE_TOKEN}`;
 
 class MockContainer {
   tools: any[] = [];
@@ -20,9 +24,9 @@ class MockContainer {
 
 Deno.test("acp.cwd: setting in kv configures the working directory when none is passed in options (khkk)", async () => {
   const logPath = `${durableDir("acp-fixture-logs")}/frames-settings-cwd-${Date.now()}.jsonl`;
-  const bridge = createAcpServer(0, FAKE_ADAPTER, { CAP_ACP_FIXTURE_LOG: logPath });
+  const bridge = createAcpServer(0, FAKE_ADAPTER, { CAP_ACP_FIXTURE_LOG: logPath }, "", TEST_BRIDGE_TOKEN);
   const port = (bridge as any).addr.port;
-  const endpoint = `ws://127.0.0.1:${port}/acp`;
+  const endpoint = authedEndpoint(port);
   const container = new MockContainer();
 
   const customCwd = `${durableDir("scratch")}/cap-custom-acp-workdir`;
