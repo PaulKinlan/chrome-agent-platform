@@ -264,6 +264,56 @@ if (BROWSER_BINARY === null) {
 // checks after the third one still exits 0 when nothing it did issue failed.
 const JOURNEY_CHECK_FLOOR = 15;
 
+// The harness path, resolved once so every spawn here drives the SAME file.
+const HARNESS = fileURLToPath(new URL("../scripts/kat-bgagent-delete.ts", import.meta.url));
+
+// Clear any ambient fault-injection knobs so a test can never be flipped by
+// another lane's environment, then apply this test's own.
+function harnessEnv(extra: Record<string, string>): Record<string, string> {
+  const env = Deno.env.toObject();
+  for (const k of [
+    "CAP_BGAGENT_DELETE_FAIL_AFTER_LAUNCH",
+    "CAP_BGAGENT_DELETE_HANG_AFTER_LAUNCH",
+    "CAP_BGAGENT_DELETE_HARD_TIMEOUT_MS",
+  ]) {
+    delete env[k];
+  }
+  return { ...env, ...extra };
+}
+
+// Spawn the harness with a HARD deadline: the child is killed and the test
+// fails loudly if it overruns, so a hang can never leave an unbounded await
+// (and the live browser that used to ride along with it). P1 fix 4.
+async function runHarness(env: Record<string, string>, timeoutMs: number): Promise<{ code: number; log: string }> {
+  const cmd = new Deno.Command(Deno.execPath(), {
+    args: ["run", "-A", HARNESS],
+    stdout: "piped", stderr: "piped",
+    env: harnessEnv(env),
+  });
+  const proc = cmd.spawn();
+  let overran = false;
+  const timer = setTimeout(() => {
+    overran = true;
+    try { proc.kill("SIGKILL"); } catch { /* already gone */ }
+  }, timeoutMs);
+  const out = await proc.output();
+  clearTimeout(timer);
+  const log = new TextDecoder().decode(out.stdout) + new TextDecoder().decode(out.stderr);
+  assert(
+    !overran,
+    `the harness must finish within ${timeoutMs}ms (it was killed — a hang left a live browser?):\n${log}`,
+  );
+  return { code: out.code, log };
+}
+
+// True when any process whose argv carries the harness's profile still lives.
+// The profile is per-instance and recorded on a `NOTE: Chrome profile:` line,
+// so this can only ever match THIS run's browser.
+function survivingChrome(profile: string): boolean {
+  const pg = new Deno.Command("/usr/bin/pgrep", { args: ["-f", `user-data-dir=${profile}`] }).outputSync();
+  return pg.code === 0; // 0 = match, 1 = none, else pgrep error (treated as surviving)
+}
+
 Deno.test({
   name: "bgagent delete: the real-browser delete journey (loaded extension, real clicks)",
   ignore: BROWSER_BINARY === null,
@@ -282,13 +332,8 @@ Deno.test({
     // also what makes the two resolutions honest: if a concurrent cache refresh makes the
     // harness resolve a different build than this module saw, the gate fails LOUDLY
     // instead of driving a browser nobody chose.
-    const cmd = new Deno.Command(Deno.execPath(), {
-      args: ["run", "-A", fileURLToPath(new URL("../scripts/kat-bgagent-delete.ts", import.meta.url))],
-      stdout: "piped", stderr: "piped",
-    });
-    const out = await cmd.output();
-    const log = new TextDecoder().decode(out.stdout) + new TextDecoder().decode(out.stderr);
-    assert(out.success, `the delete journey must pass (Chrome for Testing: ${BROWSER_BINARY}):\n${log}`);
+    const { code, log } = await runHarness({}, 320_000);
+    assert(code === 0, `the delete journey must pass (Chrome for Testing: ${BROWSER_BINARY}):\n${log}`);
     assert(
       log.includes(`Chrome for Testing: ${BROWSER_BINARY}`),
       `the journey must record which Chrome for Testing build it drove:\n${log}`,
@@ -307,5 +352,38 @@ Deno.test({
       `the journey ran ${tally[1]} checks, below the ${JOURNEY_CHECK_FLOOR} it owns — a check went missing ` +
       `(Chrome for Testing: ${BROWSER_BINARY}):\n${log}`,
     );
+  },
+});
+
+Deno.test({
+  name: "bgagent delete: a mid-journey throw still tears the whole Chrome tree down (P1 falsification)",
+  ignore: BROWSER_BINARY === null,
+  fn: async () => {
+    const { code, log } = await runHarness({ CAP_BGAGENT_DELETE_FAIL_AFTER_LAUNCH: "1" }, 120_000);
+    assert(code !== 0, `a mid-journey throw must exit nonzero:\n${log}`);
+    assert(log.includes("injected mid-journey throw"), `the injected throw must be the abort cause:\n${log}`);
+    // The honest proof teardown RAN — Chrome for Testing 154 reaps children on
+    // parent death on this VM, so "no survivor" alone would not prove it.
+    assert(log.includes("NOTE: tearing down the Chrome tree (teardownChrome)"), `teardown must actually run on the throw path:\n${log}`);
+    const m = /NOTE: Chrome profile: (.+)$/m.exec(log);
+    assert(m, `the harness must record its profile so the test can verify no survivor:\n${log}`);
+    assert(!survivingChrome(m[1]), `no Chrome process may survive the throw path (${m[1]}):\n${log}`);
+  },
+});
+
+Deno.test({
+  name: "bgagent delete: the hard timer tears the tree down when the journey hangs (P1 falsification)",
+  ignore: BROWSER_BINARY === null,
+  fn: async () => {
+    const { code, log } = await runHarness(
+      { CAP_BGAGENT_DELETE_HANG_AFTER_LAUNCH: "1", CAP_BGAGENT_DELETE_HARD_TIMEOUT_MS: "3000" },
+      60_000,
+    );
+    assert(code === 2, `the hard timer must fire and exit 2:\n${log}`);
+    assert(log.includes("hard timeout"), `the hard timeout must be the abort cause:\n${log}`);
+    assert(log.includes("NOTE: tearing down the Chrome tree (teardownChrome)"), `teardown must actually run on the hang path:\n${log}`);
+    const m = /NOTE: Chrome profile: (.+)$/m.exec(log);
+    assert(m, `the harness must record its profile:\n${log}`);
+    assert(!survivingChrome(m[1]), `no Chrome process may survive the hang path (${m[1]}):\n${log}`);
   },
 });

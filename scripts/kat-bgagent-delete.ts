@@ -65,6 +65,26 @@ try { await Deno.stat(`${EXT}/dist/background/service-worker.js`); } catch {
 let ws: WebSocket | null = null;
 let launched: Awaited<ReturnType<typeof launchChrome>> | null = null;
 const profile = chromeProfileDir("kat-bgagent-delete");
+
+// The ONE teardown path, used by BOTH the finally below and the hard-timer
+// backstop. The log line is the honest proof teardown actually RAN on a given
+// exit path (Chrome for Testing 154 reaps children on parent death on this VM,
+// so "no survivor" alone is not proof — this line is).
+async function teardownTree() {
+  console.log("NOTE: tearing down the Chrome tree (teardownChrome)");
+  await teardownChrome(launched, profile);
+  console.log("NOTE: teardownChrome complete");
+}
+
+// HARD global bound: no hang (dead CDP socket, stalled page, whatever) may
+// outlive this. On fire it tears the WHOLE tree down and exits nonzero, so a
+// hung journey can never leave a live browser for the ~10 min gate reaper to
+// collect (the observed rc=124 shape). The finally below alone is not enough:
+// a hung await never reaches it, so the timer is the backstop. Overridable so
+// the falsification test can fire it in seconds rather than 5 minutes.
+const HARD_TIMEOUT_MS = Number(Deno.env.get("CAP_BGAGENT_DELETE_HARD_TIMEOUT_MS") ?? 300_000);
+let hardTimer: ReturnType<typeof setTimeout> | undefined;
+
 try {
   launched = await launchChrome({
     binary: CHROMIUM,
@@ -74,17 +94,58 @@ try {
       `--user-data-dir=${profile}`, "about:blank"],
   });
   ws = new WebSocket(launched.wsUrl);
-  await new Promise((r) => ws!.onopen = r);
-} catch (e) {
-  console.log(`FAIL: could not start Chrome for Testing — ${String(e)}`);
-  Deno.exit(1);
-}
-let id = 0; const pending = new Map<string, (v: any) => void>();
-ws!.onmessage = (m: MessageEvent) => { const j = JSON.parse(m.data); if (j.id && pending.has(String(j.id))) { pending.get(String(j.id))!(j); pending.delete(String(j.id)); } };
-const send = (method: string, params: any = {}, sessionId?: string) => new Promise<any>((res) => {
-  const mid = ++id; pending.set(String(mid), res);
-  ws!.send(JSON.stringify({ id: mid, method, params, sessionId }));
-});
+  await new Promise((r, rej) => { ws!.onopen = r; ws!.onerror = () => rej(new Error("CDP websocket failed to open")); });
+  console.log(`NOTE: Chrome profile: ${profile}`);
+
+  // Arm the hard timer only AFTER the browser is up: the bound guards the
+  // JOURNEY (the launch is already bounded inside launchChrome), and teardown
+  // on fire needs `launched` to be set so the WHOLE tree is matched by profile.
+  hardTimer = setTimeout(() => {
+    console.log(`FAIL: bgagent-delete journey exceeded the ${HARD_TIMEOUT_MS}ms hard timeout`);
+    teardownTree()
+      .catch((e) => console.log(`teardown during hard timeout failed: ${String(e)}`))
+      .finally(() => Deno.exit(2));
+  }, HARD_TIMEOUT_MS);
+
+  // One id → { resolve, reject, timer }: a send that never gets a reply (dead
+  // socket, page gone) must REJECT after SEND_TIMEOUT_MS, never hang forever.
+  const SEND_TIMEOUT_MS = 30_000;
+  let id = 0;
+  const pending = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  ws!.onmessage = (m: MessageEvent) => {
+    let j: any;
+    try { j = JSON.parse(m.data); } catch { return; }
+    if (j?.id == null) return;
+    const key = String(j.id);
+    const p = pending.get(key);
+    if (p) { clearTimeout(p.timer); pending.delete(key); p.resolve(j); }
+  };
+  const send = (method: string, params: any = {}, sessionId?: string) => new Promise<any>((resolve, reject) => {
+    const mid = ++id;
+    const timer = setTimeout(() => {
+      pending.delete(String(mid));
+      reject(new Error(`CDP send timed out after ${SEND_TIMEOUT_MS}ms: ${method}`));
+    }, SEND_TIMEOUT_MS);
+    pending.set(String(mid), { resolve, reject, timer });
+    try {
+      ws!.send(JSON.stringify({ id: mid, method, params, sessionId }));
+    } catch (e) {
+      clearTimeout(timer);
+      pending.delete(String(mid));
+      reject(e instanceof Error ? e : new Error(String(e)));
+    }
+  });
+
+  // Fault injection (falsification only, off by default): prove the finally
+  // tears the tree down on a mid-journey throw, and the hard timer does it on
+  // a journey hang (the dead-socket class the review found). These env hooks
+  // exist so the P1 teardown finding stays falsifiable on every future diff.
+  if (Deno.env.get("CAP_BGAGENT_DELETE_FAIL_AFTER_LAUNCH") === "1") {
+    throw new Error("injected mid-journey throw (CAP_BGAGENT_DELETE_FAIL_AFTER_LAUNCH)");
+  }
+  if (Deno.env.get("CAP_BGAGENT_DELETE_HANG_AFTER_LAUNCH") === "1") {
+    await new Promise(() => {}); // hang forever — only the hard timer can stop this
+  }
 
 // The extension id: prefer the live SW target; fall back to the profile's
 // Preferences (the unpacked id is deterministic per path).
@@ -95,17 +156,17 @@ const sw = await waitForServiceWorker(send, {
 let extId: string;
 if (sw) extId = new URL(sw.url).host;
 else {
-  const prof = `${chromeProfileDir("kat-bgagent-delete")}/Default/Preferences`;
+  const prof = `${profile}/Default/Preferences`;
   // Under fleet load Chrome can take >10s to materialize the profile — poll.
   let prefsRaw: string | null = null;
   for (let i = 0; i < 30 && prefsRaw === null; i++) {
     prefsRaw = await Deno.readTextFile(prof).catch(() => null);
     if (prefsRaw === null) await sleep(1000);
   }
-  if (prefsRaw === null) { console.log("FAIL: Chrome profile never materialized (Preferences absent after 30s)"); Deno.exit(1); }
+  if (prefsRaw === null) { throw new Error("Chrome profile never materialized (Preferences absent after 30s)"); }
   const prefs = JSON.parse(prefsRaw);
   const entry = Object.entries<any>(prefs.extensions?.settings ?? {}).find(([, v]) => String(v?.path ?? "").endsWith("extension") && v?.location === 8);
-  if (!entry) { console.log("FAIL: extension never registered"); Deno.exit(1); }
+  if (!entry) { throw new Error("extension never registered"); }
   extId = entry[0];
   console.log("NOTE: SW idle; using Preferences id (navigating wakes it)");
 }
@@ -192,7 +253,7 @@ await ntp.shot(`${OUT}/01-seeded-enabled.png`);
 // <agent-picker> summary rows (CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01): the
 // row is `.opt` inside the picker's shadow root and its destructive control is
 // a SIBLING `.rowdel` (a button may not contain a button).
-const findRow = (name) => `(() => {
+const findRow = (name: string) => `(() => {
   const picker = document.querySelector("#named-agents agent-picker");
   const rows = [...(picker?.shadowRoot?.querySelectorAll(".opt") ?? [])];
   const row = rows.find((r) => (r.querySelector(".name")?.textContent || "") === ${JSON.stringify(name)});
@@ -323,6 +384,17 @@ check("journey: a focus successor is placed after re-render", focusAfter?.inList
 
 await send("Target.closeTarget", { targetId: ntp.targetId });
 ws!.close();
-await teardownChrome(launched, profile);
+} catch (e) {
+  console.log(`FAIL: bgagent-delete journey aborted — ${String(e)}`);
+  fail++;
+} finally {
+  // Every throw (launch, profile-miss, a mid-journey send timeout) and the
+  // success path all land here, so the tree is torn down on EVERY exit. The
+  // hard-timer backstop has already exited before reaching this finally.
+  clearTimeout(hardTimer);
+  hardTimer = undefined;
+  try { ws?.close(); } catch { /* already closed */ }
+  await teardownTree();
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 Deno.exit(fail === 0 ? 0 : 1);
