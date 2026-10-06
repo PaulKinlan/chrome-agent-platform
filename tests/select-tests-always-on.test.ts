@@ -52,17 +52,57 @@ Deno.test("kz27: the split put the browser-free SCAN in the set and left the liv
     "the live-browser file must NOT be always-on — that would break the §2.3 promise fleet-wide",
   );
   const staticCode = Deno.readTextFileSync(join(ROOT, "tests/chrome-profile-static.test.ts"));
-  // The signal for a LAUNCH is the dynamic import of the launcher (what the live race test does), not
-  // the string "launchChrome" — this file's fixtures deliberately CONTAIN launch lines as test data, and
-  // an assertion that grepped for the bare word would fail on its own fixtures. That mistake was made
-  // and caught here before the review was requested.
+  // fgik F2: the reviewer showed the literal-string form was evadable — a top-level STATIC import, a
+  // single-quoted import, or a non-awaited dynamic import all slipped past it. Match the IDENTIFIER
+  // instead, so every way of pulling the launcher in fails this; the variant test below proves the old
+  // form missed one of them.
   assert(
-    !staticCode.includes('await import("../scripts/lib/chrome-launch.ts")'),
-    "the always-on half must not launch a browser: it must not import the launcher",
+    !/chrome-launch/i.test(staticCode),
+    "the always-on half must not reference the launcher at all, in any import form",
   );
   assert(
     staticCode.includes("--user-data-dir="),
     "sanity: the always-on half is the one that SCANS for --user-data-dir sites",
+  );
+});
+
+Deno.test("fgik F2: the launcher assertion catches a STATIC-import variant the old form missed", () => {
+  // Acceptance from the review: the assertion must fail against a static-import variant rather than only
+  // against the one spelling it used to look for.
+  const staticCode = Deno.readTextFileSync(join(ROOT, "tests/chrome-profile-static.test.ts"));
+  const withStaticImport =
+    `import { launchChrome } from "../scripts/lib/chrome-launch.ts";\n` + staticCode;
+  assert(
+    /chrome-launch/i.test(withStaticImport),
+    "the identifier-based assertion must catch a top-level static import",
+  );
+  assert(
+    !withStaticImport.includes('await import("../scripts/lib/chrome-launch.ts")'),
+    "the OLD literal form passes this variant — that is the F2 defect, kept as the reason the assertion changed",
+  );
+  const singleQuoted = `await import('../scripts/lib/chrome-launch.ts');\n` + staticCode;
+  assert(/chrome-launch/i.test(singleQuoted), "and a single-quoted import");
+});
+
+Deno.test("fgik F1: the always-on quiet-window half is the SOURCE READER, not the burner", () => {
+  // The split's whole point: the tracked-source assertions stay always-on and the esbuild burners do NOT
+  // come with them. A file that spawns a compiler must never be in a set that runs on every gate.
+  const staticCode = Deno.readTextFileSync(join(ROOT, "tests/quiet-window-static.test.ts"));
+  assert(
+    !/Deno\.Command|spawn\(/.test(staticCode),
+    "the always-on quiet-window half must spawn nothing",
+  );
+  assert(
+    staticCode.includes("scripts/"),
+    "the always-on half must be the one that READS tracked source",
+  );
+  assert(
+    !SOURCE_INSPECTING_GUARDS.includes("tests/quiet-window.test.ts"),
+    "the burner file must NOT be always-on (fgik F1)",
+  );
+  assert(
+    SOURCE_INSPECTING_GUARDS.includes("tests/quiet-window-static.test.ts"),
+    "its tracked-source half must be",
   );
 });
 

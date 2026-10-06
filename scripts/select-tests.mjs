@@ -101,7 +101,14 @@ export const SOURCE_INSPECTING_GUARDS = [
   "tests/code-health.test.ts",
   "tests/machine-path-honesty.test.ts",
   "tests/settings-strings-audit.test.ts",
-  "tests/quiet-window.test.ts",
+  // fgik F1: tests/quiet-window.test.ts was here and costs 23s because it spawns REAL esbuild --minify
+  // burners — while the other thirty guards together cost ~10-12s, so this one file tripled every
+  // subset gate AND injected compiler load onto 2-vCPU lanes DURING other lanes' gates, which is worse
+  // than the seconds because our serial red count tracks LOAD. Its TRACKED-SOURCE assertions (the
+  // harness registry <-> source consistency, the no-interference pin, the journey harness's exit
+  // wiring) were split into tests/quiet-window-static.test.ts — 3 tests, ZERO spawns, measured 32ms —
+  // and THAT is always-on below; the burner workload stays in npm test where it belongs.
+  "tests/quiet-window-static.test.ts",
 ];
 
 /**
@@ -112,6 +119,8 @@ export const SOURCE_INSPECTING_GUARDS = [
  * audit FAIL CLOSED, which is the detector working as intended.
  */
 export const SCANNER_EXCLUSIONS = Object.freeze({
+  "tests/quiet-window.test.ts":
+    "its BURNER helper locates the real esbuild binary by reading a ROOT-rooted node_modules path, which the widened detector matches because the pattern accepts any ROOT-rooted read. That read is a fixture lookup, not a scan of tracked source, and it is NOT the reason this file is interesting: its tracked-source assertions (registry <-> source consistency, the no-interference pin, the journey harness's exit wiring) were SPLIT into tests/quiet-window-static.test.ts, which is always-on and spawns nothing. The file itself must stay out of the set because it spawns real esbuild --minify burners and costs 23s, tripling every subset gate and injecting compiler load during other lanes' gates — see chrome-agent-platform-fgik. NOTE FOR p1lp: fixing the detector to match KNOWN SOURCE ROOTS explicitly (rather than any uppercase identifier or ROOT-rooted read) would make this exclusion unnecessary, since the only matched read is node_modules.",
   "tests/chrome-profile-location.test.ts":
     "it still matches the repo-walk detector through its helper reads, but it also holds the LIVE race test that launches a real browser — and docs/CHROME-TEST-CONTRACT.md §2.3 PROMISES that a subset gate launches a browser only when this file or its dependencies changed. Listing it as always-on would break that promise fleet-wide, on every VM without a working browser. Its cross-cutting half (the static scripts/ scan) was SPLIT OUT into tests/chrome-profile-static.test.ts, which is always-on; what remains here is helper semantics plus the live race, and the environmental-refusal path that would let the browser case report honestly is chrome-agent-platform-hlgr.",
 });
