@@ -31,6 +31,49 @@ import { durableDir } from "../scripts/lib/durable-root.mjs";
 /** Pattern matching test filenames (.test.ts or .test.js, matching runner conventions). */
 export const IS_TEST_RE = /\.test\.(ts|js)$/;
 
+// NEW-3: Exact paths of real-tree falsification fixtures that could be left by SIGKILL.
+export const AFPL_REAL_TREE_RESIDUE = [
+  "tests/helpers/zz-afpl-depth2-walk.ts",
+  "tests/helpers/zz-afpl-prose-only.ts",
+  "tests/helpers/zz-afpl-fixture-read.ts",
+  "tests/helpers/zz-afpl-preexisting-sibling.ts",
+];
+
+export function reconcileAfplRealTreeResidue(): void {
+  for (const rel of AFPL_REAL_TREE_RESIDUE) {
+    try {
+      Deno.removeSync(join(ROOT, rel));
+    } catch {
+      /* absent — fine */
+    }
+  }
+}
+// Run reconciliation at module evaluation so any residue from a killed run is swept
+// BEFORE any Deno.test (including qcfc: self-checking audit) evaluates.
+reconcileAfplRealTreeResidue();
+
+Deno.test("afpl: SIGKILL residue is reconciled before the audit scans the tree", () => {
+  const helpersDir = join(ROOT, "tests", "helpers");
+  const hadHelpers = existsSync(helpersDir);
+  if (!hadHelpers) {
+    Deno.mkdirSync(helpersDir, { recursive: true });
+  }
+  for (const rel of AFPL_REAL_TREE_RESIDUE) {
+    Deno.writeTextFileSync(join(ROOT, rel), "// residue\n");
+  }
+  reconcileAfplRealTreeResidue();
+  for (const rel of AFPL_REAL_TREE_RESIDUE) {
+    assertEquals(existsSync(join(ROOT, rel)), false, `residue ${rel} must be reconciled`);
+  }
+  if (!hadHelpers) {
+    try {
+      Deno.removeSync(helpersDir);
+    } catch {
+      /* ignore */
+    }
+  }
+});
+
 Deno.test("qcfc: every declared source-inspecting guard exists on disk", () => {
   for (const file of SOURCE_INSPECTING_GUARDS) {
     assert(existsSync(join(ROOT, file)), `guard ${file} must exist on disk`);
@@ -473,11 +516,6 @@ Deno.test("afpl: REAL-TREE falsification — a depth-2 repo-walking helper is NA
   const siblingFile = join(realHelpersDir, "zz-afpl-preexisting-sibling.ts");
   const testFiles = [depth2Walker, proseHelper, fixtureReader];
 
-  // NEW-3: Self-healing residue reconciliation from any prior SIGKILL before starting
-  for (const f of [...testFiles, siblingFile]) {
-    try { await Deno.remove(f); } catch { /* ignore if absent */ }
-  }
-
   // NEW-1: Record whether tests/helpers existed prior to this test
   const helpersDirPreexisted = existsSync(realHelpersDir);
   if (!helpersDirPreexisted) {
@@ -540,20 +578,23 @@ Deno.test("afpl: REAL-TREE falsification — a depth-2 repo-walking helper is NA
       false,
       `REAL-TREE: a fixture-walking helper must NOT be admitted: ${JSON.stringify(named)}`,
     );
-  } finally {
-    // NEW-1: Clean up ONLY our own test files, never wiping existing/tracked files in tests/helpers
+
+    // N2: Clean up owned test files at end of try block and assert sibling survival
     for (const f of testFiles) {
       try { await Deno.remove(f); } catch { /* ignore */ }
     }
-    // NEW-1 regression assertion: prove pre-existing sibling was NOT deleted by test cleanup
     const siblingSurvived = existsSync(siblingFile);
-    try { await Deno.remove(siblingFile); } catch { /* ignore */ }
+    assertEquals(siblingSurvived, true, "NEW-1: pre-existing sibling in tests/helpers must NOT be removed by test cleanup");
+  } finally {
+    // NEW-1: Idempotent cleanup of owned test files, never wiping existing/tracked files in tests/helpers
+    for (const f of [...testFiles, siblingFile]) {
+      try { await Deno.remove(f); } catch { /* ignore */ }
+    }
     if (!helpersDirPreexisted) {
       try {
         await Deno.remove(realHelpersDir); // Non-recursive rmdir; fails harmlessly if directory contains other files
       } catch { /* ignore */ }
     }
-    assertEquals(siblingSurvived, true, "NEW-1: pre-existing sibling in tests/helpers must NOT be removed by test cleanup");
   }
 });
 
@@ -662,6 +703,20 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
       nestedNamed.includes("tests/helpers/zz-nested.test.ts"),
       true,
       "nested test files must be detected as test guards",
+    );
+
+    // (v) N1: NEW-2 exclusion pin — top-level and nested node_modules are excluded by enumerateTestFiles.
+    const nmTopDir = join(scratch, "tests", "node_modules");
+    const nmNestedDir = join(scratch, "tests", "helpers", "node_modules");
+    await Deno.mkdir(nmTopDir, { recursive: true });
+    await Deno.mkdir(nmNestedDir, { recursive: true });
+    await Deno.writeTextFile(join(nmTopDir, "zz-nm.test.ts"), "// mock node_modules test\n");
+    await Deno.writeTextFile(join(nmNestedDir, "zz-nm-nested.test.ts"), "// mock nested node_modules test\n");
+    const enumeratedWithNm = enumerateTestFiles(scratch).map((e) => e.rel);
+    assertEquals(
+      enumeratedWithNm.some((f) => f.includes("node_modules")),
+      false,
+      `enumerateTestFiles must exclude top-level and nested node_modules: ${JSON.stringify(enumeratedWithNm)}`,
     );
     const nestedGuidance = formatUnclassifiedScannersMessage(nestedNamed);
     assertStringIncludes(
