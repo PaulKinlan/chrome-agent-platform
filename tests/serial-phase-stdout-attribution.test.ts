@@ -65,10 +65,15 @@ Deno.test("ia4z: a failing serial file is NAMED in a STDOUT-ONLY capture, with i
       /FAILED \(exit [1-9][0-9]*/.test(out),
       `a stdout-only capture must carry the failing file's exit code:\n${out}`,
     );
+    const blockAt = out.indexOf("FAILING SERIAL FILE(S)");
+    assert(blockAt >= 0, `a stdout-only capture must carry the named failing-file block, not only a count:\n${out}`);
+    // The block's OWN entries must name the file on stdout: the per-file FAILED line above already
+    // contains the name, so asserting the name anywhere in stdout would pass even if the block's
+    // entries were reverted to stderr only (reviewer P2).
     assertStringIncludes(
-      out,
-      "FAILING SERIAL FILE(S)",
-      `a stdout-only capture must carry the named failing-file block, not only a count:\n${out}`,
+      out.slice(blockAt),
+      "zz-ia4z-failing.test.ts",
+      `the named block itself must name the failing file on stdout:\n${out.slice(blockAt)}`,
     );
     // stderr keeps both, because a human running the command reads it there (coord's ask).
     assertStringIncludes(err, "zz-ia4z-failing.test.ts", `stderr must still name the file:\n${err}`);
@@ -110,9 +115,17 @@ Deno.test("ia4z: a per-file TIMEOUT is NAMED in a STDOUT-ONLY capture too", asyn
       "zz-ia4z-hung.test.ts",
       `a stdout-only capture must name the timed-out file (this is the path a bound-killed gate sees):\n${out}`,
     );
+    // "TIMED OUT after" is the IMMEDIATE runner notice's wording; the loop's later line says
+    // "FAILED (exit 124, TIMED OUT) in ...". Asserting only the latter would pass even if the
+    // immediate notice were reverted to stderr (reviewer P2).
+    assertStringIncludes(
+      out,
+      "TIMED OUT after",
+      `a stdout-only capture must carry the immediate TIMED OUT notice, not only the later FAILED line:\n${out}`,
+    );
     assert(
-      /TIMED OUT|FAILED \(exit 124/.test(out),
-      `a stdout-only capture must say the file timed out, not only count it:\n${out}`,
+      /FAILED \(exit 124/.test(out),
+      `a stdout-only capture must also carry the exit code for the timeout kill:\n${out}`,
     );
     assertStringIncludes(err, "zz-ia4z-hung.test.ts", `stderr must still name the timed-out file:\n${err}`);
   } finally {
