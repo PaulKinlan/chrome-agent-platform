@@ -12,7 +12,7 @@
 //   6. The document's §3/§4 categories exactly match the tested classifications (4h47).
 //   7. Each §4.3/§4.4 handler reaches its declared approval seam and owner-direct policy (gn3c).
 //   8. Deleting a route seam or its injection fails RED naming the route (gn3c).
-//   9. Every mergeRouteMaps group and companion R11/ROUTE_MAP/threat counts stay in sync (zb58).
+//   9. Every mergeRouteMaps group and companion R11/ROUTE_MAP/threat/architecture/strategy counts stay in sync (zb58/r073).
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
@@ -378,11 +378,26 @@ function assertRiskAndThreatPopulation(risks: string, threat: string): void {
   }
 }
 
-Deno.test("census: ROUTE_MAP, risk R11, and THREAT_MODEL match executable population", async () => {
+function assertArchitectureAndStrategyPopulation(arch: string, nativePlan: string): void {
+  const registered = extractAllRegisteredRoutes().size;
+  const archMatch = /documents the complete\s+(\d+)-route population/.exec(arch);
+  assert(archMatch, "ARCHITECTURE.md must state the complete route population");
+  assertEquals(Number(archMatch[1]), registered, "ARCHITECTURE.md route count must equal registered population");
+
+  const planMatch = /maintain a (\d+)-route dispatch authority/.exec(nativePlan);
+  assert(planMatch, "NATIVE-AGENT-POSITION-PLAN.md must state the dispatch authority route count");
+  assertEquals(Number(planMatch[1]), registered, "NATIVE-AGENT-POSITION-PLAN.md route count must equal registered population");
+}
+
+Deno.test("census: ROUTE_MAP, risk R11, THREAT_MODEL, ARCHITECTURE, and NATIVE-AGENT-POSITION-PLAN match executable population", async () => {
   assertRouteMap(await Deno.readTextFile(`${ROOT}extension/background/routes/ROUTE_MAP.md`));
   assertRiskAndThreatPopulation(
     await Deno.readTextFile(`${ROOT}docs/RISK-REGISTER.md`),
     await Deno.readTextFile(`${ROOT}THREAT_MODEL.md`),
+  );
+  assertArchitectureAndStrategyPopulation(
+    await Deno.readTextFile(`${ROOT}docs/ARCHITECTURE.md`),
+    await Deno.readTextFile(`${ROOT}docs/NATIVE-AGENT-POSITION-PLAN.md`),
   );
 });
 
@@ -390,10 +405,35 @@ Deno.test("census: companion-doc total and route-name falsifications RED by docu
   const map = await Deno.readTextFile(`${ROOT}extension/background/routes/ROUTE_MAP.md`);
   const risks = await Deno.readTextFile(`${ROOT}docs/RISK-REGISTER.md`);
   const threat = await Deno.readTextFile(`${ROOT}THREAT_MODEL.md`);
+  const arch = await Deno.readTextFile(`${ROOT}docs/ARCHITECTURE.md`);
+  const plan = await Deno.readTextFile(`${ROOT}docs/NATIVE-AGENT-POSITION-PLAN.md`);
+
   assertThrows(() => assertRouteMap(map.replace("**285**", "**284**")), Error, "ROUTE_MAP total");
   assertThrows(() => assertRouteMap(map.replace("`enclave.proxy`", "`enclave.proxy-renamed`")), Error, "enclave.proxy-renamed");
   assertThrows(() => assertRiskAndThreatPopulation(risks.replace("37 unclassified mutation routes", "31 unclassified mutation routes"), threat), Error, "RISK-REGISTER R11 risk");
   assertThrows(() => assertRiskAndThreatPopulation(risks.replace("`asset.export-to-folder` writes", "`asset.export-to-folder-renamed` writes"), threat), Error, "asset.export-to-folder-renamed");
+
+  // r073 falsification drills:
+  assertThrows(
+    () => assertArchitectureAndStrategyPopulation(arch.replace("285-route population", "284-route population"), plan),
+    Error,
+    "ARCHITECTURE.md route count must equal registered population",
+  );
+  assertThrows(
+    () => assertArchitectureAndStrategyPopulation(arch.replace("285-route population", "bogus text"), plan),
+    Error,
+    "ARCHITECTURE.md must state the complete route population",
+  );
+  assertThrows(
+    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("285-route dispatch authority", "284-route dispatch authority")),
+    Error,
+    "NATIVE-AGENT-POSITION-PLAN.md route count must equal registered population",
+  );
+  assertThrows(
+    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("285-route dispatch authority", "bogus text")),
+    Error,
+    "NATIVE-AGENT-POSITION-PLAN.md must state the dispatch authority route count",
+  );
 });
 
 Deno.test("census: all registered routes in handlers are derived via AST and total 285", () => {

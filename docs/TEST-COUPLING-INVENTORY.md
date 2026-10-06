@@ -373,6 +373,20 @@ the literal.
 
 ---
 
+## 19. tests/sw-dispatch-authority-census.test.ts + routes and companion docs (zb58/r073)
+
+- **What watches what:** `tests/sw-dispatch-authority-census.test.ts` derives the 285 registered service-worker routes from AST composition (`mergeRouteMaps`) and guards count and naming consistency across companion documentation:
+  - `extension/background/routes/ROUTE_MAP.md` (total count and group breakdowns)
+  - `docs/RISK-REGISTER.md` (R11 unclassified mutation routes)
+  - `THREAT_MODEL.md` (broker registered routes and gap census)
+  - `docs/ARCHITECTURE.md:211` (complete 285-route population)
+  - `docs/NATIVE-AGENT-POSITION-PLAN.md:37` (285-route dispatch authority)
+- **The trap it exists around:** Moving or adding a service worker route updates AST composition but leaves doc route counts silently stale (e.g. 258/276 rot before zb58/r073).
+- **Owed by a re-anchor:** Whenever a route is added, renamed, or deleted, update the corresponding module, `ROUTE_MAP.md`, `RISK-REGISTER.md`, `THREAT_MODEL.md`, `ARCHITECTURE.md`, and `NATIVE-AGENT-POSITION-PLAN.md`.
+- **Subject moves:** LOUD, naming the specific document and asserting AST population equality.
+
+---
+
 ## The four book rules
 
 **(a) File-disjointness is not suite-greenness.** Two lanes whose diffs touch disjoint
