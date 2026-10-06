@@ -259,7 +259,7 @@ consequences are carried by the matching register entry where one exists.
   `extension/lib/system-prompts.js:763-773`, and the approval gate for the destructive
   action set at `extension/lib/owner-approval.js:23`. **Live proof:**
   `scripts/security-suite.ts:274` (no extension API inside the sandbox) and
-  `:541` (a real run pauses on the card). **Register:** R4.
+  `:430-437` (a real run pauses on the card). **Register:** R4.
 
 ### T10. WebMCP tool invocation beyond the consent the owner gave
 
