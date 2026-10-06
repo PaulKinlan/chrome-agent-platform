@@ -728,3 +728,125 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
     await Deno.remove(scratch, { recursive: true }).catch(() => {});
   }
 });
+
+/**
+ * Detects calls to recursive directory removal (Deno.remove, Deno.removeSync, rm, rmSync, fsp.rm)
+ * where the target denotes a shared directory in the repository (e.g. tests/helpers, tests, scripts)
+ * rather than an isolated per-run temp/scratch directory.
+ */
+export function findRecursiveRemovalsOfSharedPaths(
+  files: Array<{ rel: string; code: string }>,
+): string[] {
+  const violations: string[] = [];
+  const fnNames = ["Deno.remove", "Deno.removeSync", "rm", "rmSync", "fsp.rm", "fsp2.rm"];
+  const SHARED_PATH_PATTERN = /(?:tests\/helpers|tests(?!\/node_modules)|\bscripts\b|\bextension\/(?:lib|background|options|ntp|sidepanel)\b|realHelpersDir)/i;
+  const SCRATCH_OR_TEMP_PATTERN = /\b(?:makeTempDir|makeTempDirSync|durableDir|durableRoot|tmpdir|tmpDir|tempDir|scratch|STAGE|\.cap-scratch|tempProbe|tmpProfile|profile|downloads|tmpRoot|parentBox|outDir|parent|victim|extractDir)\b/;
+
+  for (const { rel, code } of files) {
+    for (const fn of fnNames) {
+      const escaped = fn.replace(/\./g, "\\.");
+      for (const m of code.matchAll(new RegExp(`\\b${escaped}\\s*\\(`, "g"))) {
+        let depth = 0;
+        let buf = "";
+        const args: string[] = [];
+        let i = m.index! + m[0].length;
+        for (; i < code.length; i++) {
+          const c = code[i];
+          if (c === "(" || c === "[" || c === "{") depth++;
+          else if (c === ")" || c === "]" || c === "}") {
+            if (depth === 0) {
+              if (buf.trim()) args.push(buf.replace(/\s+/g, " ").trim());
+              break;
+            }
+            depth--;
+          } else if (c === "," && depth === 0) {
+            args.push(buf.replace(/\s+/g, " ").trim());
+            buf = "";
+            continue;
+          }
+          buf += c;
+        }
+
+        if (args.length >= 2 && /recursive:\s*true/.test(args[1])) {
+          const target = args[0];
+          let targetDef = "";
+          if (/^[A-Za-z_$][\w$]*$/.test(target)) {
+            const escapedId = target.replace(/\$/g, "\\$");
+            const defMatch = new RegExp(`\\b(?:const|let|var)\\s+${escapedId}\\s*=\\s*([^;]+);`).exec(code);
+            if (defMatch) targetDef = defMatch[1].replace(/\s+/g, " ").trim();
+          }
+
+          const combined = `${target} ${targetDef}`;
+          if (SCRATCH_OR_TEMP_PATTERN.test(combined)) {
+            continue;
+          }
+
+          if (SHARED_PATH_PATTERN.test(combined)) {
+            violations.push(`${rel}: ${fn}(${target}, ${args[1]}) denotes shared path: "${combined}"`);
+          }
+        }
+      }
+    }
+  }
+  return violations;
+}
+
+Deno.test("afpl: no test in tests/ recursively removes shared repository directories (e.g. tests/helpers)", () => {
+  const testFiles = enumerateTestFiles().map((f) => ({
+    rel: f.rel,
+    // Strip multi-statement mock code template literals so falsification fixture strings are not parsed as call sites:
+    code: f.code.replace(/`[\s\S]*?`/g, (m) => m.includes(";") ? '""' : m),
+  }));
+  const violations = findRecursiveRemovalsOfSharedPaths(testFiles);
+  assertEquals(
+    violations,
+    [],
+    `Tests must never recursively remove shared repository directories:\n${violations.join("\n")}`,
+  );
+});
+
+Deno.test("afpl: falsification — recursive removal of tests/helpers or a shared root is flagged and temp dirs are admitted", () => {
+  const badSamples = [
+    {
+      rel: "tests/zz-bad1.test.ts",
+      code: `const realHelpersDir = join(ROOT, "tests", "helpers");\nawait Deno.remove(realHelpersDir, { recursive: true });`,
+    },
+    {
+      rel: "tests/zz-bad2.test.ts",
+      code: `await Deno.remove(join(ROOT, "tests", "helpers"), { recursive: true });`,
+    },
+    {
+      rel: "tests/zz-bad3.test.ts",
+      code: `Deno.removeSync("tests/helpers", { recursive: true });`,
+    },
+    {
+      rel: "tests/zz-bad4.test.ts",
+      code: `await rm(join(ROOT, "tests"), { recursive: true });`,
+    },
+  ];
+  for (const sample of badSamples) {
+    const violations = findRecursiveRemovalsOfSharedPaths([sample]);
+    assert(
+      violations.length > 0,
+      `falsification drill must flag recursive removal of shared directory in ${sample.rel}`,
+    );
+  }
+
+  // Over-match negative: per-run makeTempDir and durableDir scratch dirs must NOT be flagged
+  const goodSamples = [
+    {
+      rel: "tests/zz-good1.test.ts",
+      code: `const scratch = await Deno.makeTempDir({ dir: durableDir("scratch") });\nawait Deno.remove(scratch, { recursive: true });`,
+    },
+    {
+      rel: "tests/zz-good2.test.ts",
+      code: `const tempDir = join(durableDir("test"), "dir");\nawait Deno.remove(tempDir, { recursive: true }).catch(() => {});`,
+    },
+    {
+      rel: "tests/zz-good3.test.ts",
+      code: `const profile = await Deno.makeTempDir({ dir: durableDir("scratch") });\nawait rm(profile, { recursive: true, force: true });`,
+    },
+  ];
+  const falsePositives = findRecursiveRemovalsOfSharedPaths(goodSamples);
+  assertEquals(falsePositives, [], `scratch/temp directory removals must NOT be flagged: ${falsePositives.join(", ")}`);
+});
