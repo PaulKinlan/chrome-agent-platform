@@ -47,7 +47,7 @@ export interface HarnessEntry {
    *  defects, so it waits for a quiet box and refuses with exit 75 rather than
    *  reddening mid-run (chrome-agent-platform-mkax). The value is the evidence
    *  for the declaration — which run history showed the load-induced red.
-   *  `tests/quiet-window.test.ts` fails when this field and the harness's own
+   *  `tests/quiet-window-static.test.ts` fails when this field and the harness's own
    *  `launchChrome({ requireQuiet })` disagree: a declaration nobody honours is
    *  worse than none. */
   loadSensitive?: string;
