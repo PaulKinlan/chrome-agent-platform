@@ -14,7 +14,7 @@
 //   - per-FILE modes preserved from the previous tree; failures roll back and
 //     ROLLBACK FAILURE IS FATAL; every failure path cleans its staging.
 import { build, transform } from "esbuild";
-import { browserDependencies, browserDefines } from './scripts/browser-dependencies.mjs';
+import { browserDependencies, browserProcessEnvOptions } from './scripts/browser-dependencies.mjs';
 import { createRequire } from "node:module";
 import { readFile, writeFile, rename, mkdir, rm, readdir, stat, lstat, chmod, utimes, symlink, readlink, copyFile } from "node:fs/promises";
 import path, { join, extname } from "node:path";
@@ -471,9 +471,12 @@ try {
       metafile: true,
       nodePaths: [denoStoreNodeModules],
       define: {
-        ...browserDefines,
+        ...browserProcessEnvOptions.define,
         __CAP_BUILD_LOG_DEFAULT__: JSON.stringify(DEBUG_BUILD ? "verbose" : "off"),
       },
+      // The declaration for the identifier the define above substitutes — they travel together
+      // (chrome-agent-platform-3337): the define without this banner is an undeclared global.
+      banner: browserProcessEnvOptions.banner,
     };
     const SW = path.join(STAGE, "background/service-worker.js");
     const OPT = path.join(STAGE, "options.bundle.js");

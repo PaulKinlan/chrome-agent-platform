@@ -144,6 +144,13 @@ export const EXEMPTIONS = {
   // tool-descriptions.test.ts pins that purity, so a regression re-serialises this file
   // the moment the child probe reds.
   "tests/tool-descriptions.test.ts": "imports the bundled-tool generator for its one pure export and spawns a no-write child that does the same; since chrome-agent-platform-i1i9 the generation work runs only under isMain, so neither the import nor the probe writes extension/wasm/cas — measured (CAS mtime fingerprint unchanged, no generation line on stdout)",
+  // chrome-agent-platform-3337: the browser-dependencies test bundles agent-do and the REAL
+  // agent-worker entry to MEMORY (esbuild write:false) and executes them under fakes; it names
+  // build.mjs only as a STRING in a consumer list which it then reads as TEXT, to prove the
+  // process.env define+banner pair cannot be split. Nothing is imported or spawned from build.mjs, and
+  // the only file written is a makeTempDir it removes — no read or write touches repo extension/ or
+  // packages/.
+  "tests/browser-dependencies.test.ts": "names build.mjs only inside a consumer list read as TEXT (never spawned or loaded); all bundles are in-memory (write:false) and the one written file is a removed temp dir",
 };
 
 // A test that SPAWNS or IMPORTS one of these local drivers inherits the

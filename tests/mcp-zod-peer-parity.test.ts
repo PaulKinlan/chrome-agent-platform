@@ -238,12 +238,20 @@ Deno.test("mcp-zod-peer-parity: MCP Server tool registration wire schema preserv
   assertEquals(compiledFromWire3.zodSchema.safeParse({ keyword: "key", depth: 1 }).success, true);
 });
 
-Deno.test("mcp-zod-peer-parity: preminify converter contribution is exactly 2460 bytes in SW bundle", async () => {
-  // Verify that zod-to-json-schema's actual contribution in the service worker
-  // bundle output exactly matches the 2,460 bytes identified in the azlc audit.
+Deno.test("mcp-zod-peer-parity: preminify converter contribution is exactly 354 bytes across 6 files in SW bundle (re-derived after 3337)", async () => {
+  // Verify that zod-to-json-schema's actual contribution in the service worker bundle output exactly
+  // matches the figure re-derived after chrome-agent-platform-3337.
+  //
+  // WHY THIS IS 354 AND NOT THE AUDIT'S 2,460: the azlc audit measured while the build injected
+  // esbuild's shared `<define:process.env>` init call into every file that reads process.env. That
+  // carrier kept 78 zod-to-json-schema files in the SW output for their SCAFFOLDING alone (one 27-byte
+  // init call each) and summed to 2,460 bytes. 3337 replaced the object-literal define with an
+  // identifier define + banner (no shared module, no init calls), so tree-shaking now keeps only the 6
+  // files carrying real converter code, 354 bytes. The pin keeps its teeth: a duplicated converter
+  // instance, or any real change to what is emitted, moves BOTH the byte total and the file count.
   const { build, stop } = await import("npm:esbuild@0.25.12");
   const path = await import("node:path");
-  const { browserDependencies, browserDefines } = await import("../scripts/browser-dependencies.mjs");
+  const { browserDependencies, browserProcessEnvOptions } = await import("../scripts/browser-dependencies.mjs");
 
   try {
     const res = await build({
@@ -256,26 +264,38 @@ Deno.test("mcp-zod-peer-parity: preminify converter contribution is exactly 2460
       metafile: true,
       plugins: [browserDependencies],
       define: {
-        ...browserDefines,
+        ...browserProcessEnvOptions.define,
         __CAP_BUILD_LOG_DEFAULT__: JSON.stringify("off"),
       },
+      banner: browserProcessEnvOptions.banner,
     });
 
     let emittedBytes = 0;
+    let emittedFiles = 0;
+    const contributions = [];
     for (const outData of Object.values(res.metafile.outputs)) {
       if (outData.inputs) {
         for (const [inPath, inData] of Object.entries(outData.inputs)) {
           if (inPath.includes("zod-to-json-schema")) {
             emittedBytes += inData.bytesInOutput;
+            emittedFiles += 1;
+            contributions.push(inData.bytesInOutput);
           }
         }
       }
     }
 
-    // Exact assertion pinning the azlc audit observation:
-    // Despite 78 source files totaling 108,530 bytes of source input, tree-shaking
-    // limits the emitted preminify converter contribution to exactly 2,460 bytes.
-    assertEquals(emittedBytes, 2460, "emitted converter contribution is exactly 2460 bytes");
+    // The measured contribution is exact (see the header for why it moved off the audit's 2,460).
+    assertEquals(emittedFiles, 6, "emitted converter input files is exactly 6");
+    assertEquals(emittedBytes, 354, "emitted converter contribution is exactly 354 bytes");
+    // Per-file contributions too (review P2-2): the two aggregate numbers alone could be held at 6 / 354
+    // by an equal-and-opposite edit between two converter files. Two peer-context copies x
+    // (Options.js 83 + index.js 0 + parsers/string.js 94) = [0,0,83,83,94,94].
+    assertEquals(
+      contributions.sort((a, b) => a - b),
+      [0, 0, 83, 83, 94, 94],
+      "per-file converter contributions (equal-and-opposite edits cannot cancel out)",
+    );
   } finally {
     await stop();
   }

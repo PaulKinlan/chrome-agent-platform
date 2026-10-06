@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { build } from "esbuild";
-import { browserDependencies, browserDefines } from "./browser-dependencies.mjs";
+import { browserDependencies, browserProcessEnvOptions } from "./browser-dependencies.mjs";
 import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -54,7 +54,8 @@ const shared = {
   sourcemap: false,
   legalComments: "none",
   plugins: [browserDependencies],
-  define: browserDefines,
+  define: browserProcessEnvOptions.define,
+  banner: browserProcessEnvOptions.banner,
   metafile: true,
 };
 await build({
