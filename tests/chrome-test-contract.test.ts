@@ -30,16 +30,61 @@ function stripComments(src: string): string {
 // strengthens them: a template literal in an argument list can no longer hide
 // the closing `})` the pattern needs. Escapes and newlines are honoured so one
 // unterminated quote cannot swallow the rest of the file.
-function stripStrings(src: string): string {
+//
+// In chrome-agent-platform-m7b1:
+//   1. stripRegexes strips regex literals (/.../flags) before stripStrings, so
+//      a regex literal containing a backtick (e.g. /[`]/ or /`/) cannot be
+//      misread as opening a template literal that spans to the next backtick.
+//   2. stripStrings enforces same-line pairing for backticks so an unpaired
+//      stray backtick cannot swallow real calls across newlines.
+//   3. extractLaunchChromeCalls tracks balanced braces { ... }, so nested
+//      parentheses (e.g. { profile: getDir("x"), args: [] }) do not truncate
+//      the argument object.
+const REGEX_PREFIX =
+  /(^|[=(,;:!&|?+*\-%^~<>{}[\n\r]|(?:\b(?:return|case|default|throw|yield|await|typeof|void|delete)\b))\s*(\/(?![*\/])(?:\\.|\[(?:\\.|[^\]\r\n])*\]|[^\\\/\r\n])+\/[a-z]*)/g;
+
+export function stripRegexes(src: string): string {
+  return src.replace(REGEX_PREFIX, "$1 /reg/ ");
+}
+
+export function stripStrings(src: string): string {
   return src
-    .replace(/`(?:\\[\s\S]|[^\\`])*`/g, "``")
+    .replace(/`(?:\\[\s\S]|[^\\`\n])*`/g, "``")
     .replace(/'(?:\\[\s\S]|[^\\'\n])*'/g, "''")
     .replace(/"(?:\\[\s\S]|[^\\"\n])*"/g, '""');
 }
 
-/** Source with comments and string literals removed: what is executable. */
-function codeOnly(src: string): string {
-  return stripStrings(stripComments(src));
+/** Source with comments, regexes, and string literals removed: what is executable. */
+export function codeOnly(src: string): string {
+  return stripStrings(stripRegexes(stripComments(src)));
+}
+
+/** Extract launchChrome({ ... }) call sites, robust to nested parens, braces, and brackets (m7b1). */
+export function* extractLaunchChromeCalls(code: string): Generator<{ full: string; callArgs: string }> {
+  const re = /\blaunchChrome\s*\(\s*\{/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(code)) !== null) {
+    const objStart = match.index + match[0].length - 1;
+    let depth = 0;
+    let objEnd = -1;
+    for (let i = objStart; i < code.length; i++) {
+      const ch = code[i];
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          objEnd = i;
+          break;
+        }
+      }
+    }
+    if (objEnd === -1) continue;
+    const after = code.slice(objEnd + 1);
+    const closeParenMatch = after.match(/^\s*\)/);
+    if (!closeParenMatch) continue;
+    const callArgs = code.slice(objStart + 1, objEnd);
+    yield { full: code.slice(match.index, objEnd + 1 + closeParenMatch[0].length), callArgs };
+  }
 }
 
 Deno.test("contract: docs/CHROME-TEST-CONTRACT.md exists and is cited in AGENTS.md", async () => {
@@ -66,8 +111,7 @@ Deno.test("contract: chrome-profile-location.test.ts is the SOLE real-browser te
   for (const rel of files.sort()) {
     const raw = await Deno.readTextFile(`${ROOT}${rel}`);
     const code = codeOnly(raw);
-    for (const m of code.matchAll(/launchChrome\s*\(\s*\{([^)]*)\}\s*\)/gs)) {
-      const callArgs = m[1];
+    for (const { callArgs } of extractLaunchChromeCalls(code)) {
       if (/\bbinary\s*:/.test(callArgs)) {
         if (!fakeRunnerTests.includes(rel)) fakeRunnerTests.push(rel);
       } else {
@@ -99,8 +143,7 @@ Deno.test("contract: no unit test in tests/ requests canonicalLock on launchChro
   for (const rel of files) {
     const raw = await Deno.readTextFile(`${ROOT}${rel}`);
     const code = codeOnly(raw);
-    for (const m of code.matchAll(/launchChrome\s*\(\s*\{([^)]*)\}\s*\)/gs)) {
-      const callArgs = m[1];
+    for (const { callArgs } of extractLaunchChromeCalls(code)) {
       // Canonical lock is reserved for scripts/ acceptance suites; unit tests never take it
       if (/\bcanonicalLock\s*:\s*true\b/.test(callArgs) && !/\bbinary\s*:/.test(callArgs)) {
         offenders.push(rel);
@@ -125,4 +168,50 @@ Deno.test("contract: chrome-profile-location.test.ts runs in the parallel phase 
   const { serial, parallel } = partition(files);
   assert(!serial.includes("tests/chrome-profile-location.test.ts"), "chrome-profile-location is not a serial build hazard");
   assert(parallel.includes("tests/chrome-profile-location.test.ts"), "chrome-profile-location runs in the parallel phase");
+});
+
+Deno.test("contract (m7b1): launch-site scanner handles nested parens, regex backticks, and stray backtick lines (falsification drills)", () => {
+  // Legacy regex for falsification comparison:
+  const LEGACY_LAUNCH_RE = /launchChrome\s*\(\s*\{([^)]*)\}\s*\)/gs;
+  const legacyScan = (src: string) => [...src.matchAll(LEGACY_LAUNCH_RE)].map((m) => m[1]);
+
+  // 1. Nested parens inside launchChrome arguments:
+  const nestedParenSnippet = 'await launchChrome({ profile: getDir("x"), args: [getFlags("y")] });';
+  const legacyParenHits = legacyScan(codeOnly(nestedParenSnippet));
+  assertEquals(legacyParenHits.length, 0, "falsification proof: legacy scanner fails to match nested parens");
+
+  const newParenHits = [...extractLaunchChromeCalls(codeOnly(nestedParenSnippet))];
+  assertEquals(newParenHits.length, 1, "new scanner extracts call with nested parens");
+  assert(newParenHits[0].callArgs.includes('getDir('), "callArgs captures complete argument block");
+
+  // 2. Regex literal containing backtick does not swallow subsequent launchChrome:
+  const regexBacktickSnippet = [
+    "const regex = /[`]/;",
+    'await launchChrome({ profile: "x", args: [] });',
+    "const msg = `done`;",
+  ].join("\n");
+
+  // Legacy stripStrings without stripRegexes consumes the launch call into a bogus template literal:
+  const legacyStringsOnly = (src: string) =>
+    src.replace(/`(?:\\[\s\S]|[^\\`])*`/g, "``").replace(/'(?:\\[\s\S]|[^\\'\n])*'/g, "''").replace(/"(?:\\[\s\S]|[^\\"\n])*"/g, '""');
+  const legacyRegexCode = legacyStringsOnly(stripComments(regexBacktickSnippet));
+  assert(!legacyRegexCode.includes("launchChrome"), "falsification proof: legacy stripStrings swallows call following regex with backtick");
+
+  const newRegexCode = codeOnly(regexBacktickSnippet);
+  assert(newRegexCode.includes("launchChrome"), "new codeOnly preserves call following regex with backtick");
+  const newRegexHits = [...extractLaunchChromeCalls(newRegexCode)];
+  assertEquals(newRegexHits.length, 1, "call is extracted and detected");
+  assertEquals(/\bbinary\s*:/.test(newRegexHits[0].callArgs), false, "correctly identified as real browser launch");
+
+  // 3. A stray backtick line cannot hide a following real call:
+  const strayBacktickSnippet = [
+    "const x = 1; `",
+    'await launchChrome({ profile: "x", args: [] });',
+    "const y = `done`;",
+  ].join("\n");
+
+  const newStrayCode = codeOnly(strayBacktickSnippet);
+  assert(newStrayCode.includes("launchChrome"), "new codeOnly preserves call following stray backtick line");
+  const newStrayHits = [...extractLaunchChromeCalls(newStrayCode)];
+  assertEquals(newStrayHits.length, 1, "call following stray backtick line is extracted");
 });
