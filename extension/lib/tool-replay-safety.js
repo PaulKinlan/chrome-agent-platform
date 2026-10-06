@@ -136,8 +136,10 @@ const IDEMPOTENT_TOOLS = new Set([
   "memory_set",
   "memory_append",
   "skill_add",
-  "subscribe_hook",
-  "unsubscribe_hook",
+  // chrome-agent-platform-51cd: subscribe_hook and unsubscribe_hook were idempotent here, which was the
+  // wrong class for them - their ROUTE now requires owner approval on every call (the gate used to run only
+  // on a replacement, so a first-time subscribe was ungated). Same reasoning as the schedule controls below:
+  // a replay re-runs the gated route, so the gate re-arms, and the replay is no longer idempotent.
   // Deterministic local transforms publish under a full operation digest that
   // includes the output bytes. Replaying an exact call resolves the same asset.
   "table_filter",

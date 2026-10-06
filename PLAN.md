@@ -100,7 +100,11 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
       Settings → Site agents → Diagnostics, including page-local full failure detail
       while bridged/model errors remain redacted.
 - [x] Tasks-as-threads, skills (`/skill:<id>`), generative-UI artifacts, agent-generated
-      scripts, the system-hooks layer, the omnibox keyword.
+      scripts, the system-hooks layer, the omnibox keyword. The hook subscription
+      gate is enforced on EVERY subscribe, a first-time pair included, and a stored
+      `promptTemplate` is owner-authored only (the model path supplies none) and
+      bounded at 64 KiB — chrome-agent-platform-51cd, where the create path had been
+      written with the deny-list check alone.
 - [x] Visible one-click hard Stop on every live conversation and actively running
       scheduled-task row, bound to the rendered execution ID, gated on a trusted live
       user gesture, routed through durable cancellation, and settled as Stopped.

@@ -164,6 +164,12 @@ Path-class rights reduction in the WASI runtime (`inputs/` read-only,
   (`MAX_PENDING_APPROVALS=64`, `APPROVAL_TTL_MS=60_000`), digest-bound canonical
   payloads, deduplicated pending requests, and a closed `DESTRUCTIVE_ACTIONS`
   set (agent.delete, asset.update, fs.write, script.*, hooks.subscribe, …).
+  A declared action is only gated where the gate is actually reached:
+  `hooks.subscribe` invoked its seam on a replacement alone until
+  chrome-agent-platform-51cd, so a first-time subscription was written with the
+  deny-list check by itself; the seam now runs on every subscribe (the create
+  form is the explicit `existing: {present: false}` digest marker) and a model
+  principal cannot author the stored `promptTemplate`.
 - **Untrusted-content fence** (`extension/lib/untrusted-fence.js`): every
   untrusted tool result reaches the model inside a per-assembly random boundary
   token named by a protected dynamic system-prompt layer
