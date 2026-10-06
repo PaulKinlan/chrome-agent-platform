@@ -70,10 +70,24 @@ Deno.test("fyvc resolution: CAP_CHROMIUM wins outright, the cache is next, /usr/
   assertEquals(resolveChromiumBinary({ envGet: noEnv, cacheRoot: "/nonexistent-fyvc-probe" }), CHROMIUM);
 });
 
-Deno.test("fyvc report: names every step it tried; a null binary only when the last resort is missing", () => {
-  // Override path: reported as the override, no existence games.
-  const r1 = resolveChromiumBinaryReport({ envGet: envOf({ CAP_CHROMIUM: "/opt/c" }), exists: () => false });
-  assertEquals(r1, { binary: "/opt/c", tried: ["CAP_CHROMIUM=/opt/c"] });
+Deno.test("fyvc/s7wr report: names every step it tried; a null binary when the OVERRIDE is unusable or the last resort is missing", () => {
+  // chrome-agent-platform-s7wr CHANGED THIS PIN. It previously asserted the opposite - "reported as the
+  // override, no existence games" - and that trust WAS the defect: a reported-but-missing override made
+  // the hlgr environmental refusal unreachable and the launch died ENOENT, i.e. an environment difference
+  // surfacing as a product-shaped red. An unusable override now REFUSES, naming the path and the reason.
+  const missing = resolveChromiumBinaryReport({
+    envGet: envOf({ CAP_CHROMIUM: "/opt/c" }), exists: () => false, usable: () => false,
+  });
+  assertEquals(missing, { binary: null, tried: ["CAP_CHROMIUM=/opt/c (missing)"] });
+  const notExecutable = resolveChromiumBinaryReport({
+    envGet: envOf({ CAP_CHROMIUM: "/opt/c" }), exists: () => true, usable: () => false,
+  });
+  assertEquals(notExecutable, { binary: null, tried: ["CAP_CHROMIUM=/opt/c (not executable)"] });
+  // A USABLE override still resolves - the falsification that the check did not break the happy path.
+  const usableOverride = resolveChromiumBinaryReport({
+    envGet: envOf({ CAP_CHROMIUM: "/opt/c" }), exists: () => true, usable: () => true,
+  });
+  assertEquals(usableOverride, { binary: "/opt/c", tried: ["CAP_CHROMIUM=/opt/c"] });
 
   // Nothing anywhere, and the last resort missing: null + a tried-list that
   // SAYS it is missing, so the census's failure message names what to fix.
@@ -85,6 +99,44 @@ Deno.test("fyvc report: names every step it tried; a null binary only when the l
   const r3 = resolveChromiumBinaryReport({ envGet: noEnv, cacheRoot: "/nonexistent-fyvc-probe", exists: () => true });
   assertEquals(r3.binary, CHROMIUM);
   assertEquals(r3.tried, [`default ${CHROMIUM}`]);
+});
+
+Deno.test("s7wr: an unusable override does NOT fall through to an available cache or default", () => {
+  // The refusal is the point: quietly using a DIFFERENT browser behind an explicit override would hide the
+  // operator's misconfiguration. The fixture cache here is REAL and usable, so a fall-through would resolve.
+  const cache = fixtureCache("1.2.3");
+  try {
+    const r = resolveChromiumBinaryReport({
+      envGet: envOf({ CAP_CHROMIUM: "/opt/c" }),
+      cacheRoot: cache,
+      usable: () => false,
+    });
+    assertEquals(r, { binary: null, tried: ["CAP_CHROMIUM=/opt/c (missing)"] });
+  } finally {
+    Deno.removeSync(cache, { recursive: true });
+  }
+});
+
+Deno.test("s7wr: the REAL filesystem predicate refuses a non-executable override and accepts an executable one", async () => {
+  // No injection at all: this pins the actual statSync + execute-bit behaviour, including the shape that
+  // the refusal module's review already caught once (a real file with no execute bit is as absent as a
+  // missing one).
+  const dir = durableDir(`s7wr-usable-${Deno.pid}-${tmpSeq++}`);
+  const plain = `${dir}/not-executable`;
+  const runnable = `${dir}/runnable`;
+  Deno.writeTextFileSync(plain, "not a browser\n");
+  Deno.writeTextFileSync(runnable, "#!/bin/sh\nexit 0\n");
+  Deno.chmodSync(plain, 0o644);
+  Deno.chmodSync(runnable, 0o755);
+  try {
+    const refused = resolveChromiumBinaryReport({ envGet: envOf({ CAP_CHROMIUM: plain }) });
+    assertEquals(refused.binary, null, "a non-executable override must refuse, not resolve");
+    assertEquals(refused.tried, [`CAP_CHROMIUM=${plain} (not executable)`]);
+    const resolved = resolveChromiumBinaryReport({ envGet: envOf({ CAP_CHROMIUM: runnable }) });
+    assertEquals(resolved, { binary: runnable, tried: [`CAP_CHROMIUM=${runnable}`] });
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
 });
 
 Deno.test("fyvc lock: a lockPath under a not-yet-existing directory acquires — the parent is created, never the misleading other-lane blame", async () => {

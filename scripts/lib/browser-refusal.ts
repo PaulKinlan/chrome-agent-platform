@@ -14,13 +14,18 @@ import { ENVIRONMENTAL_REFUSAL_EXIT, ENVIRONMENTAL_REFUSAL_MARKER } from "./quie
 /**
  * Is a REPORTED binary a usable one — a real, executable FILE?
  *
+ * chrome-agent-platform-s7wr: this is now the ONE definition of "usable", shared with the resolver in
+ * ./chrome-launch.ts, so the resolution helper and the refusal module cannot drift on what a usable
+ * browser path means. (The check exists here first because the refusal module had to compensate for a
+ * resolver that accepted an override unchecked.)
+ *
  * review P2 (delta): the existence check alone accepted a DIRECTORY (CAP_CHROMIUM=/tmp) and a
  * non-executable file (CAP_CHROMIUM=/etc/passwd) as resolved, so the refusal never fired and the
  * launch died EISDIR / EACCES — the same product-red-for-an-environment-difference this module
  * exists to prevent, one shape over. `statSync` FOLLOWS symlinks, so a dangling symlink is absent
  * (correct) and a symlink to a real executable is usable (also correct).
  */
-function isUsableBinary(path: string | null | undefined): path is string {
+export function isUsableBinary(path: string | null | undefined): path is string {
   if (!path) return false;
   try {
     // Deno.statSync, NOT node:fs's: in node:fs, `isFile` is a METHOD, so `!st.isFile` is false for a

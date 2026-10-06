@@ -29,6 +29,7 @@ import { acquireChromeSlot } from "./chrome-slots.ts";
 import { requireQuietWindow, type QuietSpec } from "./quiet-window.ts";
 import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, type HeavyGateLease } from "./heavy-gate-slot.ts";
 import { resolveChromeForTesting } from "./chrome-for-testing.ts";
+import { isUsableBinary } from "./browser-refusal.ts";
 
 export interface LaunchedChrome {
   /** The spawned Chrome. The caller owns killing it. */
@@ -122,7 +123,8 @@ export const CHROMIUM = "/usr/bin/chromium";
 // spawn — indistinguishable from "this machine has no browser capability" —
 // and a reviewer once had to create a system-level symlink just to run the
 // repo's own gates. Resolution order, ONE place, every consumer:
-//   1. the CAP_CHROMIUM env override (explicit, wins outright);
+//   1. the CAP_CHROMIUM env override (explicit; wins outright WHEN USABLE - an override that is missing
+//      or not executable REFUSES rather than being reported as resolved, per chrome-agent-platform-s7wr);
 //   2. the newest Chrome-for-Testing in the puppeteer cache
 //      (scripts/lib/chrome-for-testing.ts — includes bare-version cache dirs
 //      per chrome-agent-platform-fyvc/wvg);
@@ -147,16 +149,34 @@ export function resolveChromiumBinary(
  *  so the failure message tells the operator exactly what to fix.
  *  `exists` is injectable for deterministic tests. */
 export function resolveChromiumBinaryReport(
-  opts: { envGet?: (name: string) => string | undefined; cacheRoot?: string; exists?: (path: string) => boolean } = {},
+  opts: {
+    envGet?: (name: string) => string | undefined;
+    cacheRoot?: string;
+    exists?: (path: string) => boolean;
+    usable?: (path: string) => boolean;
+  } = {},
 ): { binary: string | null; tried: string[] } {
   const exists = opts.exists ?? ((path: string) => {
     try { return Deno.statSync(path).isFile; } catch { return false; }
   });
+  // chrome-agent-platform-s7wr: an override is the OPERATOR's explicit instruction, so it is VERIFIED
+  // (existence AND executability) before it is reported as resolved. Reporting a missing override as
+  // resolved made the hlgr environmental refusal unreachable and the launch died ENOENT - an environment
+  // difference surfacing as a product-shaped red, which is the failure class hlgr exists to remove. The
+  // predicate is the refusal module's, shared, so the two cannot drift on what "usable" means.
+  const usable = opts.usable ?? isUsableBinary;
   const tried: string[] = [];
   const override = (opts.envGet ?? ((name: string) => Deno.env.get(name)))("CAP_CHROMIUM");
   if (typeof override === "string" && override.trim()) {
-    tried.push(`CAP_CHROMIUM=${override}`);
-    return { binary: override, tried };
+    if (usable(override)) {
+      tried.push(`CAP_CHROMIUM=${override}`);
+      return { binary: override, tried };
+    }
+    // REFUSE, and do not fall through: quietly using a DIFFERENT browser behind an explicit override
+    // would hide the operator's misconfiguration. The reason and the path are both named so the refusal
+    // line says exactly what to fix.
+    tried.push(`CAP_CHROMIUM=${override}${exists(override) ? " (not executable)" : " (missing)"}`);
+    return { binary: null, tried };
   }
   const cached = resolveChromeForTesting(opts.cacheRoot != null ? { cacheRoot: opts.cacheRoot } : {});
   if (cached) {
