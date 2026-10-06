@@ -342,3 +342,57 @@ Deno.test("preference-bridge: percolates channel to content-script and page-agen
   disconnect();
   assertEquals(listeners.length, 0);
 });
+
+// chrome-agent-platform-yi5q: dynamic wildcard postMessage fallbacks fail closed
+Deno.test("preference-bridge (yi5q): sendPageAgentPreference fails closed on missing, empty, or wildcard origin", () => {
+  let callCount = 0;
+  let postedTarget = "";
+  const targetWindow = {
+    postMessage(_data: any, targetOrigin: string) {
+      callCount++;
+      postedTarget = targetOrigin;
+    },
+  };
+
+  const pref = { locale: "en-US", colorScheme: "dark" };
+  const nonce = "nonce-test-123";
+
+  // 1. Missing origin -> fails closed, no postMessage
+  assertEquals(sendPageAgentPreference(targetWindow, pref, { nonce } as any), false);
+  assertEquals(callCount, 0);
+
+  // 2. Empty string origin -> fails closed, no postMessage
+  assertEquals(sendPageAgentPreference(targetWindow, pref, { origin: "", nonce }), false);
+  assertEquals(callCount, 0);
+
+  // 3. Wildcard origin ("*") -> fails closed, no postMessage
+  assertEquals(sendPageAgentPreference(targetWindow, pref, { origin: "*", nonce }), false);
+  assertEquals(callCount, 0);
+
+  // 4. Whitespace-only origin -> fails closed, no postMessage
+  assertEquals(sendPageAgentPreference(targetWindow, pref, { origin: "   ", nonce }), false);
+  assertEquals(callCount, 0);
+
+  // 5. Valid origin -> succeeds, targetOrigin passed directly (no wildcard fallback)
+  const validOrigin = "https://trusted.example.com";
+  assertEquals(sendPageAgentPreference(targetWindow, pref, { origin: validOrigin, nonce }), true);
+  assertEquals(callCount, 1);
+  assertEquals(postedTarget, validOrigin);
+});
+
+Deno.test("preference-bridge (yi5q): buildPreferenceBootstrapScript fails closed when targetOrigin is absent or wildcard", () => {
+  // 1. When targetOrigin is omitted, expectedOrigin is "" and postMessage is guarded (never posts to "*")
+  const scriptNoOrigin = buildPreferenceBootstrapScript({ nonce: "test-nonce" });
+  assert(!scriptNoOrigin.includes("expectedOrigin||'*'"), "must not contain dynamic fallback expectedOrigin||'*'");
+  assert(!scriptNoOrigin.includes("expectedOrigin || '*'"), "must not contain dynamic fallback expectedOrigin || '*'");
+  assert(scriptNoOrigin.includes("if(expectedOrigin&&expectedOrigin!=='*')"), "must guard postMessage fail-closed");
+
+  // 2. When targetOrigin is explicitly provided, expectedOrigin is bound and target is expectedOrigin
+  const scriptWithOrigin = buildPreferenceBootstrapScript({
+    nonce: "test-nonce",
+    targetOrigin: "chrome-extension://my-extension-id",
+  });
+  assert(scriptWithOrigin.includes('expectedOrigin="chrome-extension://my-extension-id"'));
+  assert(scriptWithOrigin.includes("window.parent.postMessage({type:'cap:preference-ready',nonce:nonce},expectedOrigin)"));
+});
+

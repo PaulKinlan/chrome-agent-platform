@@ -180,7 +180,7 @@ export function buildPreferenceBootstrapScript({ nonce, targetOrigin = "" } = {}
     "var d=e.data;if(!d||d.type!=='cap:preference'||d.nonce!==nonce)return;",
     "if(d.targetOrigin&&expectedOrigin&&d.targetOrigin!==expectedOrigin)return;",
     "apply(d.preference);});",
-    "try{window.parent.postMessage({type:'cap:preference-ready',nonce:nonce},expectedOrigin||'*');}catch(e){}",
+    "if(expectedOrigin&&expectedOrigin!=='*'){try{window.parent.postMessage({type:'cap:preference-ready',nonce:nonce},expectedOrigin);}catch(e){}}",
     "})();"
   ].join("")}</script>`;
 }
@@ -281,7 +281,8 @@ export function createPageAgentPreferenceChannel({
  */
 export function sendPageAgentPreference(targetWindow, preference, { origin = "", nonce = "" } = {}) {
   if (!targetWindow || typeof targetWindow.postMessage !== "function") return false;
+  if (!origin || typeof origin !== "string" || origin === "*" || !origin.trim()) return false;
   const msg = buildPreferenceMessage(preference, nonce, { targetOrigin: origin });
-  targetWindow.postMessage(msg, origin || "*");
+  targetWindow.postMessage(msg, origin);
   return true;
 }

@@ -35,8 +35,12 @@ export const SCAN_DIRS = ["extension"];
 
 const SKIP_DIRS = new Set(["node_modules", "dist", "dist-versions", ".git"]);
 
-/** A wildcard target is the literal "*" in any quoting. */
-const WILDCARD_RE = /^["'`]\*["'`]$/;
+/**
+ * A wildcard target is the literal "*" in any quoting, or a dynamic fallback/ternary resolving to "*"
+ * (chrome-agent-platform-yi5q).
+ */
+export const WILDCARD_RE =
+  /^["'`]\*["'`]$|(?:(?:\|\||\?\?)\s*["'`]\*["'`])|(?:\?\s*["'`]\*["'`]\s*:)|(?::\s*["'`]\*["'`]\s*$)/;
 
 /**
  * A payload "names a secret or an action" when it mentions one of these. Deliberately broad: a false
@@ -650,3 +654,48 @@ Deno.test("wfxe: the hardened reference channel is actually scoped (it left the 
     "the hardened channel must no longer appear as a wildcard",
   );
 });
+
+Deno.test("yi5q: falsification — a dynamic wildcard fallback (origin || '*') is refused by the rule", () => {
+  const syntheticSource = `
+    const origin = getTargetOrigin();
+    window.parent.postMessage({ type: "run-action", apiKey: "super-secret" }, origin || "*");
+  `;
+  const found = findWildcardPostMessages([{ path: "extension/synthetic-fallback.js", source: syntheticSource }]);
+  assertEquals(found.length, 1, "dynamic fallback 'origin || \"*\"' must be detected as a wildcard target");
+  assertEquals(found[0].file, "extension/synthetic-fallback.js");
+  assert(found[0].payload.includes("apiKey"), "payload must carry the action/secret");
+
+  const classification = classifyWildcard(found[0], ALLOWED_WILDCARD_CHANNELS);
+  assert(classification !== null, "unlisted dynamic wildcard fallback must be classified as a violation");
+  assert(
+    (classification ?? "").includes("NOT listed in ALLOWED_WILDCARD_CHANNELS"),
+    `expected refusal, got: ${classification}`,
+  );
+  assert(
+    (classification ?? "").includes("SECRET"),
+    `expected secret refusal, got: ${classification}`,
+  );
+});
+
+Deno.test("yi5q: preference-bridge has zero wildcard postMessage calls (literal or dynamic fallback)", () => {
+  const prefBridgeSource = readFileSync(join(ROOT, "extension/lib/preference-bridge.js"), "utf8");
+  const found = findWildcardPostMessages([{ path: "extension/lib/preference-bridge.js", source: prefBridgeSource }]);
+  assertEquals(
+    found,
+    [],
+    `preference-bridge must have zero wildcard postMessage calls, found: ${JSON.stringify(found)}`,
+  );
+  assert(
+    !prefBridgeSource.includes('expectedOrigin||"*"') &&
+      !prefBridgeSource.includes("expectedOrigin || '*'") &&
+      !prefBridgeSource.includes('expectedOrigin||\'*\''),
+    "preference-bridge must not contain expectedOrigin||'*' fallback",
+  );
+  assert(
+    !prefBridgeSource.includes('origin || "*"') &&
+      !prefBridgeSource.includes('origin||"*"') &&
+      !prefBridgeSource.includes("origin || '*'"),
+    "preference-bridge must not contain origin || '*' fallback",
+  );
+});
+
