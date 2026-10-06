@@ -117,6 +117,12 @@ export const SOURCE_INSPECTING_GUARDS = [
   // reference the single-driver lease), and the walk is pure static file reading with NO spawn and no
   // browser, so it is host-independent and costs milliseconds — the three properties an always-on
   // guard must have (the lesson from qepn/3bv7/j3o1). Adjudicated IN, not excluded.
+  // PRECONDITION, stated because a subset gate is where an always-on guard has to survive: it imports a
+  // built bundle (extension/dist/shared/diff-core.bundle.js via extension/lib/artifacts.js), so it needs
+  // a dist build exactly as the other build-reading guards do. That is safe in the gate flow — the
+  // serial phase builds before the parallel phase runs the always-on set, which the ia4z gate's log
+  // shows — but it means this file cannot be run standalone on a worktree that has never built. That is
+  // a pre-existing property of the file, not something this listing creates.
   "tests/chrome-tools-t12.test.ts",
   // chrome-agent-platform-p1lp: the same symmetry caught two more real repo-walkers that read the
   // tests directory itself as data — substring-pin-honesty via `const TESTS = `${ROOT}tests/`` and
