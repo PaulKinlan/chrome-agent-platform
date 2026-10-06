@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.579] — 2026-10-06
+- The privacy page now lists every kind of storage the extension uses and says where each kind of your data stays, so you can check the claim against the extension's own list.
+
 ## [0.3.578] — 2026-10-06
 
 ### Features

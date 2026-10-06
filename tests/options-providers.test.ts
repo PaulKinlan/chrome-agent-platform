@@ -70,11 +70,93 @@ const root = new URL("../extension/options/", import.meta.url);
 const html = await Deno.readTextFile(new URL("options.html", root));
 const js = await Deno.readTextFile(new URL("options.js", root));
 
+// ── the no-internal-API-in-user-copy pin (df8b55ea) ───────────────────────
+// User copy says what the reader gets, never the API the extension calls: the
+// Providers copy once read "stored locally in chrome.storage".
+//
+// EXEMPT — extension/privacy/privacy.html (owner ruling, 2026-10-06,
+// chrome-agent-platform-zo5u: "privacy.html should be exempt and explicit
+// about the apis used and where the data is used"). In a privacy disclosure,
+// naming where data is stored is the point, not a leak: the reader has to be
+// able to check the claim against the storage the extension really uses. The
+// exemption covers THAT file only, and it is conditional — privacy.html must
+// stay explicit about the APIs it stores with, which
+// tests/privacy-page-716s12.test.ts pins against lib/factory-reset.js
+// FACTORY_RESET_STORAGE_CLASSES (a class the page stops naming fails there).
+// Every other user-facing file still fails this pin; the falsification test
+// below drives a non-exempt file red with the pre-fix sentence.
+const INTERNAL_API_IN_USER_COPY = /chrome\.storage/;
+
+/** The user-facing files this pin exempts, each with the reason it may name an
+ *  internal API. A second entry is a decision, not housekeeping: it means that
+ *  file tells the reader which API the product calls. */
+const USER_COPY_INTERNAL_API_EXEMPTIONS: Readonly<Record<string, string>> = {
+  "extension/privacy/privacy.html":
+    "a privacy disclosure — naming where data is stored is the point, not a leak (owner ruling 2026-10-06, chrome-agent-platform-zo5u)",
+};
+
+/** Every internal API name in `src`, or [] when `file` is an exempt
+ *  disclosure. */
+function internalApiNamesInUserCopy(file: string, src: string): string[] {
+  if (file in USER_COPY_INTERNAL_API_EXEMPTIONS) return [];
+  return [...src.matchAll(new RegExp(INTERNAL_API_IN_USER_COPY.source, "g"))].map((m) => m[0]);
+}
+
 Deno.test("the Providers copy never names chrome.storage", () => {
-  assert(!html.includes("chrome.storage"), "options.html must not name chrome.storage in user copy");
+  assertEquals(
+    internalApiNamesInUserCopy("extension/options/options.html", html),
+    [],
+    "options.html must not name chrome.storage in user copy",
+  );
   assert(
     !/stored (?:locally )?in <code>chrome\.storage/.test(html),
     "the storage sentence must not point at chrome.storage",
+  );
+});
+
+Deno.test("the pin exempts privacy.html, and only privacy.html, with a stated reason", async () => {
+  assertEquals(
+    Object.keys(USER_COPY_INTERNAL_API_EXEMPTIONS),
+    ["extension/privacy/privacy.html"],
+    "privacy.html is the documented exemption — a second exempt file is a decision, not housekeeping",
+  );
+  for (const [file, reason] of Object.entries(USER_COPY_INTERNAL_API_EXEMPTIONS)) {
+    assert(/privacy disclosure/i.test(reason), `${file}'s exemption says what makes the file different`);
+    assert(
+      reason.includes("chrome-agent-platform-zo5u"),
+      `${file}'s exemption names the ruling it rests on`,
+    );
+  }
+  // The exemption is load-bearing, not blindness: the rule really does match
+  // this page's copy, so deleting the entry above turns the pin red.
+  const privacy = await Deno.readTextFile(new URL("../extension/privacy/privacy.html", import.meta.url));
+  assert(
+    INTERNAL_API_IN_USER_COPY.test(privacy),
+    "privacy.html names the storage API — the pin would catch it without the exemption",
+  );
+  assertEquals(
+    internalApiNamesInUserCopy("extension/privacy/privacy.html", privacy),
+    [],
+    "the exempt file reports nothing",
+  );
+});
+
+Deno.test("falsification: the same rule still fails a NON-exempt user-facing file", async () => {
+  // The pre-df8b55ea Providers sentence this pin was written for.
+  const before = `<p class="muted">Your key is stored locally in <code>chrome.storage</code> on this device.</p>`;
+  assert(
+    internalApiNamesInUserCopy("extension/options/options.html", before).length > 0,
+    "the unfixed Providers copy is reported",
+  );
+  const hub = "extension/ntp/ntp.html";
+  assert(
+    internalApiNamesInUserCopy(hub, before).length > 0,
+    "a non-exempt user-facing surface is reported by the same rule",
+  );
+  assertEquals(
+    internalApiNamesInUserCopy(hub, await Deno.readTextFile(new URL(`../${hub}`, import.meta.url))),
+    [],
+    "the hub really carries no internal API name in user copy today",
   );
 });
 

@@ -38,10 +38,17 @@
           </p>
           <details class="technical-storage-details" data-vocab="advanced">
             <summary data-i18n="privacy_technical_storage_summary">Technical storage details</summary>
+            <p class="storage-apis">
+              These are the browser storage APIs the extension keeps your data in. Every one of them is on this device and none of them sends anything anywhere — what leaves this computer is only what you send to a model you chose or to a server you approved.
+            </p>
             <ul>
-              <li><code>chrome.storage.local</code>: Local extension preferences, active provider choices, and schedule definitions.</li>
-              <li><code>Origin-Private File System (OPFS)</code>: Isolated per-site agent memory, run logs, and task artifacts.</li>
-              <li><code>IndexedDB</code>: Local file and folder handles granted to agents, plus token usage ledgers.</li>
+              <li><code>chrome.storage.local</code>: Local extension preferences, the model you chose and its key — kept as you typed it, not encrypted — the sites and servers you allowed, your agents, tasks, schedules and the rules you set in Settings.</li>
+              <li><code>chrome.storage.session</code>: Short-lived working state that Chrome drops when it closes.</li>
+              <li><code>in-memory-session-kv</code>: The same settings held in memory while Chrome runs, for the moments Chrome cannot store them.</li>
+              <li><code>origin-private-file-system</code> (OPFS): Each agent's memory, kept apart per site so one site never reads another's; run logs; artifacts; screenshots an agent took; models you downloaded.</li>
+              <li><code>indexed-db</code> (IndexedDB): The folders and files you gave an agent access to — the access itself, not copies of the files — and the running count of what your model use has cost.</li>
+              <li><code>cache-storage</code>: Files the extension fetched and kept for reuse.</li>
+              <li><code>chrome.alarms</code>: The timers behind your schedules.</li>
             </ul>
           </details>
         </div>

@@ -4,6 +4,7 @@
 
 import { assert, assertEquals, assertMatch, assertNotMatch } from "jsr:@std/assert@1";
 import { scanSource, checkVocabulary } from "../scripts/check-vocabulary.mjs";
+import { FACTORY_RESET_STORAGE_CLASSES } from "../extension/lib/factory-reset.js";
 import { I18N_DEFAULT_CATALOGUE, t } from "../extension/shared/i18n.js";
 
 const ROOT = new URL("../", import.meta.url);
@@ -49,6 +50,34 @@ Deno.test("privacy.html: primary visible copy explains on-device storage & per-s
   if (html.includes("<details")) {
     assert(html.includes("data-vocab=\"advanced\"") || html.includes("<details"), "technical details tag is present");
   }
+});
+
+Deno.test("privacy.html: the technical disclosure names every storage class the product really uses", async () => {
+  // The CONDITION on this page's exemption from the no-internal-API-in-user-copy
+  // pin (tests/options-providers.test.ts; owner ruling 2026-10-06,
+  // chrome-agent-platform-zo5u): a privacy page may name the storage APIs
+  // BECAUSE it says which API holds what. The classes come from the code the
+  // factory reset runs on, so a new storage class must be disclosed here before
+  // the page can claim to be explicit — and the exemption loses its ground the
+  // moment the list stops covering what the extension really uses.
+  const html = await read("extension/privacy/privacy.html");
+  const details = html.match(/<details\b[\s\S]*?<\/details>/i)?.[0] ?? "";
+  assert(details, "privacy.html keeps its technical storage disclosure");
+  assertMatch(
+    details,
+    /<code>chrome\.storage\.local<\/code>/,
+    "the disclosure names chrome.storage.local — naming where data is stored is the point of the exemption",
+  );
+  for (const storageClass of FACTORY_RESET_STORAGE_CLASSES) {
+    assert(
+      details.includes(`<code>${storageClass}</code>`),
+      `the disclosure names ${storageClass}, a class the extension really stores in`,
+    );
+  }
+  assert(
+    /on this device/i.test(details),
+    "the disclosure says the storage is on this device, so the list cannot read as outbound",
+  );
 });
 
 Deno.test("privacy.html: secondary destructive buttons use calm danger outline, reserving solid fill for confirm", async () => {
