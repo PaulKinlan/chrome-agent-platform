@@ -166,10 +166,17 @@ whole-suite mutant run); **inspection** means read from the source, not executed
   `tests/tool-exec-preview.test.ts` (revalidates REAL shipped bytes), plus
   `scripts/package-archive.mjs`, `scripts/emscripten-abi-loaded.ts`,
   `scripts/evidence-runner.sh`.
-  **Since chrome-agent-platform-9epn.4 the marker binds SIX outputs**
-  (`DIST_COMPLETE_OUTPUTS`: SW, options, ntp, sidepanel, diff-core, agent worker),
-  and `STORE_BUNDLE_BUDGETS` in `scripts/bundle-budget.mjs` must name the SAME set
-  (`tests/bundle-budget.test.ts` "every generated bundle has a ceiling"). Both scratch
+  **Since chrome-agent-platform-o2t3 the marker binds TWELVE outputs**
+  (`DIST_COMPLETE_OUTPUTS`: SW, options, ntp, sidepanel, diff-core, agent worker, plus
+  the six secondary surface bundles — artifacts, artifact, directory, privacy,
+  offscreen, user-wasm-store-client), and `STORE_BUNDLE_BUDGETS` in
+  `scripts/bundle-budget.mjs` must name the SAME set
+  (`tests/bundle-budget.test.ts` "every generated bundle has a ceiling"). o2t3 closed
+  the gap in which those six declared a `budget:` in build.mjs but were named by
+  neither list, so nothing reported their size and the marker recorded no hash for
+  them; `tests/bundle-budget.test.ts` now also pins every declared budget to a reported
+  one and every archived bundle to a recorded one. Before o2t3 (chrome-agent-platform
+  9epn.4) the marker bound SIX outputs. Both scratch
   fixtures above iterate `DIST_COMPLETE_OUTPUTS`, so adding a bundle to the build means
   adding it to BOTH lists and nothing else; a scratch fixture that hand-writes two
   files will fail with `generated output is missing or special: <path>`.
