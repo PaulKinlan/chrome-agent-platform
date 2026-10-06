@@ -8,6 +8,7 @@
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertNotEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { boundedChildTimeoutMs, MAX_TIMER_MS, runBoundedChild } from "../scripts/lib/bounded-child.mjs";
+import { PRODUCTION_BUILD_TIMEOUT_MS } from "../scripts/test-partition.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const GENERATOR = `${ROOT}scripts/build-bundled-tool-packages.mjs`;
@@ -16,7 +17,14 @@ const DRIFT_TARGET = `${ROOT}packages/bundled/sqlite3/PROVENANCE.json`;
 // 61h3: parse the operator's override through the shared helper, where an empty value means
 // "unset" — `Number("") === 0` used to make CAP_BOUNDED_CHILD_TIMEOUT_MS="" a 0 ms bound that
 // killed every child on the first tick.
-const CHILD_TIMEOUT_MS = boundedChildTimeoutMs(Deno.env.toObject());
+// kj9s: floored at the MEASURED production-build bound. The shared default of 120s sat only ~1.7x
+// above the ~72s measured developer/store build, so a loaded box killed the build before it could
+// finish (a killed build cannot release its lock). The floor is a bound, not an exemption: a hung
+// child is still killed and named by runBoundedChild, and the file's window still governs the file.
+const CHILD_TIMEOUT_MS = Math.max(
+  boundedChildTimeoutMs(Deno.env.toObject()),
+  PRODUCTION_BUILD_TIMEOUT_MS,
+);
 // build.mjs runs the generator under its OWN bound (CAP_BUNDLED_TOOL_TIMEOUT_MS,
 // default 120s) and each helper spawn is its own process group, so the outer
 // bound must be LONGER than the inner one: the inner error must surface first,

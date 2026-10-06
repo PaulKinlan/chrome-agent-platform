@@ -22,6 +22,12 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
 import { durableRoot } from "./durable-root.mjs";
+// The per-file serial windows live in ONE table (chrome-agent-platform-kj9s). They are the DEFAULT
+// here, not an opt-in argument, so every caller gets them — including scripts/select-tests.mjs,
+// which runs a subset of the same serial files under `npm run test:changed` and would otherwise
+// hand a build-heavy file the base window and kill it. A caller that wants the old behaviour passes
+// `perFileTimeoutMs: null` explicitly.
+import { SERIAL_FILE_TIMEOUTS } from "../test-partition.mjs";
 
 export const DEFAULT_SERIAL_FILE_TIMEOUT_MS = 180_000; // 3 minutes per file ON AN IDLE BOX
 
@@ -148,7 +154,7 @@ function serialLogDir() {
 
 /**
  * @param {string[]} files
- * @param {{ timeoutMs?: number, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
+ * @param {{ timeoutMs?: number, perFileTimeoutMs?: Record<string, number> | null, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
  * @returns {number}
  *
  * chrome-agent-platform-dsoq: this used to print only a COUNT — "serial phase (19 build/artifact
@@ -168,6 +174,7 @@ function serialLogDir() {
  */
 export function runSerialFiles(files, {
   timeoutMs = defaultSerialTimeoutMs(),
+  perFileTimeoutMs = SERIAL_FILE_TIMEOUTS,
   stdio = "pipe",
   cwd = undefined,
   env = process.env,
@@ -185,8 +192,14 @@ export function runSerialFiles(files, {
 
   for (const file of files) {
     const started = Date.now();
-    console.log(`run-tests: serial file ${file}`);
-    const result = runSerialFile(file, { timeoutMs, stdio, cwd, env });
+    // chrome-agent-platform-kj9s: ONE global window for every serial file was the mismatch that
+    // made a handful of build-heavy files look like a capacity problem. A per-file bound (measured
+    // work x a modest factor, see SERIAL_FILE_TIMEOUTS) is used where one exists; the base window
+    // stays the fallback for every other file. The effective window is PRINTED when it differs, so
+    // a reader never has to guess which bound a file ran under.
+    const fileTimeoutMs = perFileTimeoutMs?.[file] ?? timeoutMs;
+    console.log(`run-tests: serial file ${file}${fileTimeoutMs !== timeoutMs ? ` (per-file bound ${fileTimeoutMs / 1000}s)` : ""}`);
+    const result = runSerialFile(file, { timeoutMs: fileTimeoutMs, stdio, cwd, env });
     const secs = ((Date.now() - started) / 1000).toFixed(1);
     // (1) chrome-agent-platform-grj9: an OS-level spawnSync failure (ENOENT when the runtime is
     // missing, EACCES, ENOBUFS when maxBuffer is exceeded) carries NO stdout and NO stderr — the

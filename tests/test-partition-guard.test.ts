@@ -21,8 +21,10 @@ import {
   classifyHazards,
   EXEMPTIONS,
   partition,
+  PRODUCTION_BUILD_TIMEOUT_MS,
   realDriverRefs,
   SERIAL,
+  SERIAL_FILE_TIMEOUTS,
   SERIAL_REASONS,
   unserialisedHazards,
 } from "../scripts/test-partition.mjs";
@@ -564,4 +566,31 @@ Deno.test("4lc0: the DELIMITER CLASS is proved by LOADING, not by the predicate 
   } finally {
     await Deno.remove(scratch, { recursive: true }).catch(() => {});
   }
+});
+
+// ── chrome-agent-platform-kj9s: the per-file bound table stays honest ────────
+// The table exists so a handful of build-heavy files get a window sized to MEASURED work. Two ways
+// it could rot: an entry for a file that is not serial (a bound that governs nothing, silently
+// accepting a stale filename), or an entry so large it stops being a bound. Both are checked here,
+// and the count is capped so the table cannot quietly become a blanket exemption for the phase.
+Deno.test("kj9s: every per-file serial bound names a SERIAL file, and no entry stops being a bound", () => {
+  const entries = Object.entries(SERIAL_FILE_TIMEOUTS);
+  assert(entries.length > 0, "the per-file table must name the files that need it");
+  assert(entries.length <= 5, `the per-file table must stay targeted, got ${entries.length} entries`);
+  for (const [file, ms] of entries) {
+    assert(SERIAL.has(file), `${file} has a per-file bound but is not in the SERIAL phase`);
+    assert(Number.isSafeInteger(ms) && ms > 0, `${file} must carry a positive integer bound, got ${ms}`);
+    assert(ms <= 1_200_000, `${file}'s bound (${ms}ms) must stay a bound, not an essay-writing window`);
+    // A single child build must be killed and NAMED by the child bound before the file window it
+    // runs under expires — otherwise the only thing a reader learns is "the file timed out".
+    assert(
+      PRODUCTION_BUILD_TIMEOUT_MS < ms,
+      `${file}'s window (${ms}ms) must outlast one child build (${PRODUCTION_BUILD_TIMEOUT_MS}ms)`,
+    );
+  }
+  // The child bound is MEASURED (~72s store build) x ~4, so it must never fall back to a token value.
+  assert(
+    Number.isSafeInteger(PRODUCTION_BUILD_TIMEOUT_MS) && PRODUCTION_BUILD_TIMEOUT_MS >= 180_000,
+    `the child build bound must stay above the measured build cost, got ${PRODUCTION_BUILD_TIMEOUT_MS}`,
+  );
 });

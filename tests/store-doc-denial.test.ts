@@ -14,18 +14,22 @@ import { assertEquals, assertMatch } from "jsr:@std/assert@1";
 import { parse } from "npm:acorn";
 import { findDynamicEvaluators } from "../scripts/lib/dynamic-evaluator-scan.mjs";
 
-const { execFileSync } = await import("node:child_process");
 const { readFile } = await import("node:fs/promises");
+// chrome-agent-platform-kj9s (condition 4): this file still needs a REAL build's stdout (the pinned
+// denial count is the build's own report), but it no longer pays for its own build when a validated
+// record for THIS tree's source authority already exists — see tests/fixtures/build-once.mjs.
+import { storeBuildOnce } from "./fixtures/build-once.mjs";
 const path = (await import("node:path")).default;
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 Deno.test("store: the pinned Doc.compile denial fires and no evaluator survives in any bundle", async () => {
-  const output = execFileSync("node", ["build.mjs", "--target=store"], {
-    cwd: ROOT,
-    encoding: "utf8",
-    timeout: 180_000,
-  });
+  const built = await storeBuildOnce({ root: ROOT });
+  // execFileSync threw on a non-zero build; the memoized helper returns the code, so assert it here
+  // (STRONGER than before: the failure is now named instead of thrown).
+  assertEquals(built.code, 0, `the production build must succeed:\n${built.stdout.slice(-2000)}`);
+  const output = built.stdout;
+  console.log(`store-doc-denial: production build output came from ${built.source}${built.source === "record" ? " (a validated record for this tree's source authority — no rebuild)" : ""}`);
   // Tooth: the build must report at least one pinned denial — a rotted
   // class-body pin (zod bump, pipeline change) reads as 0 and fails this.
   assertMatch(

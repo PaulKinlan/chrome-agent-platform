@@ -63,6 +63,41 @@ export const SERIAL_REASONS = {
 };
 export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
 
+/**
+ * The bound for ONE child production build, used by the build-heavy serial files instead of a
+ * hard-coded 180s/300s (chrome-agent-platform-kj9s). MEASURED on this 2-vCPU box at load ~5, warm
+ * worktree: `node build.mjs --target=store` ~72s and `node build.mjs` (developer) ~59s (evidence:
+ * kj9s bead, /tmp/j5yz-kj9s-timing.log and the kj9s-timing2 gate). 300s is ~4x the measured store
+ * build: enough that a loaded box does not SIGKILL a build (a killed build cannot release its lock,
+ * which is how the old 180s bound seeded the zombie/stale-lock symptom), while a genuinely hung
+ * build is still killed here and NAMED before the file window expires.
+ */
+export const PRODUCTION_BUILD_TIMEOUT_MS = 300_000;
+
+/**
+ * Per-file serial windows (chrome-agent-platform-kj9s). ONE global window for every serial file was
+ * the mismatch that made a handful of build-heavy files look like a capacity problem: those files run
+ * several REAL production builds, so their cost is a property of build COUNT, not of tree health.
+ * Every value here is MEASURED WORK x ~3 — headroom for a loaded box that does not turn a hung file
+ * into a 15-minute wait — and ONLY files that genuinely need it are listed; every other serial file
+ * keeps the base window, so a hang there is still caught fast.
+ *
+ * MEASURED 2026-10-06 by gate kj9s-measure AFTER the 7->3 / 6->3 regroup (the box was deliberately
+ * loaded: a merger gate was running concurrently, so these are pessimistic):
+ *   build-bootstrap      278s  (3 production builds + 2 ZIP packagings; ~216s quiet at ~72s/build)
+ *   build-debug-mode     173s  (developer + store + steady-state store)
+ *   build-tool-bundling   10s  -> NEEDS NO BOUND. This corrects an UNMEASURED earlier estimate of
+ *                               ~510s: the two generator "regenerations" are sub-second, and the
+ *                               file's only build.mjs calls are fail-fast (bogus flag, disabled
+ *                               target, drifted verify). It keeps the base window.
+ *   store-doc-denial       6s  via the memoized record (97s when it really builds) -> base window.
+ * A bound is MEASURED WORK x ~3, which is what the two entries below are.
+ */
+export const SERIAL_FILE_TIMEOUTS = Object.freeze({
+  "tests/build-bootstrap.test.ts": 850_000, // 278s measured (contended) x 3.1
+  "tests/build-debug-mode.test.ts": 550_000, // 173s measured (contended) x 3.2
+});
+
 // Files a content scan classifies as hazards but that are provably
 // parallel-safe. Each exemption MUST state why the shared-artifact hazard
 // does not apply; the guard test pins the reason. Keep this list tiny —
