@@ -18,16 +18,17 @@
 //
 //   deno run -A cap-evidence/h638-open-trace.ts [--runs=5] [--logs=50]
 
-import { launchChrome, waitForServiceWorker } from "../scripts/lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome, withTimeout, SW_MATCH } from "../scripts/lib/chrome-launch.ts";
+import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
+import { selectLiveOpenExecution } from "../scripts/lib/live-open-precondition.ts";
 import { composerInput, composerSend } from "../scripts/lib/composer-target.ts";
-import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const profile = durableDir(`h638-open-trace-${Date.now()}`);
+const profile = chromeProfileDir("h638-open-trace");
 // House-style consolidation, NOT a fix (see the correction below): this used to
 // pass the hand-rolled `binary: CHROMIUM` + --load-extension form; it now uses
 // the launcher's `extension:` option, which is the shape every other live
@@ -39,23 +40,28 @@ const profile = durableDir(`h638-open-trace-${Date.now()}`);
 // "extension service worker not found" fired before any composer was touched,
 // and (b) the retired-id selectors below, which were the load-bearing fix.
 const chrome = await launchChrome({ extension: EXT, profile, windowSize: "1400,1200", clearEnv: true });
-
-const ws = new WebSocket(chrome.wsUrl);
-await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
+let ws: WebSocket | undefined;
+try {
+ws = new WebSocket(chrome.wsUrl);
+await withTimeout(new Promise((r, j) => { ws!.onopen = r; ws!.onerror = j; }), 15000);
 let msgId = 0;
 const pending = new Map<number, (v: any) => void>();
 ws.onmessage = (e: MessageEvent) => {
   const d = JSON.parse(String(e.data));
   if (d.id && pending.has(d.id)) { pending.get(d.id)!(d); pending.delete(d.id); }
 };
-const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string) =>
-  new Promise<any>((res) => { const id = ++msgId; pending.set(id, res); ws.send(JSON.stringify({ id, method, params, sessionId })); });
+const send = async (method: string, params: Record<string, unknown> = {}, sessionId?: string) => {
+  const id = ++msgId;
+  const call = new Promise<any>((res) => { pending.set(id, res); ws!.send(JSON.stringify({ id, method, params, sessionId })); });
+  try { return await withTimeout(call, 15000); }
+  finally { pending.delete(id); }
+};
 
 const sw = await waitForServiceWorker(send, {
   timeoutMs: 20000,
-  match: (t: any) => t.type === "service_worker" && t.url.startsWith("chrome-extension://"),
+  match: SW_MATCH,
 });
-if (!sw) { console.error("extension service worker not found"); Deno.exit(1); }
+if (!sw) throw new Error("extension service worker not found");
 const extId = new URL(sw.url).host;
 
 async function openPage(url: string) {
@@ -158,12 +164,22 @@ const HUB_SEND = `document.querySelector(${JSON.stringify(composerSend("hub"))})
 const THREAD_INPUT = `document.querySelector(${JSON.stringify(composerInput("thread"))})`;
 const THREAD_SEND = `document.querySelector(${JSON.stringify(composerSend("thread"))})`;
 
+const runSnapshot = async () => {
+  const snapshot = await evl(ntp, `chrome.runtime.sendMessage({ type: "run.list" })`);
+  if (!Array.isArray(snapshot?.runs)) throw new Error(`run.list unavailable: ${JSON.stringify(snapshot)}`);
+  return snapshot.runs;
+};
+const settledRunIds = new Set<string>((await runSnapshot()).map((r: any) => r.executionId));
 const waitForIdle = async (timeoutMs = 60000) => {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
-    const st = await evl(ntp, `(() => { const items = [...document.querySelectorAll("#thread-sidebar .thread-item")];
-      return { running: items.filter(it => it.querySelector(".t-dot.running")).length, status: document.getElementById("status")?.textContent ?? "" }; })()`);
-    if (st?.running === 0) return true;
+    const fresh = (await runSnapshot()).filter((r: any) => !settledRunIds.has(r.executionId));
+    // A 0-dot snapshot immediately after Send is NOT evidence of a settled turn:
+    // the new run may not have been admitted yet. Require its durable terminal row.
+    if (fresh.length && fresh.every((r: any) => r.phase === "terminal" && r.terminal?.ok === true)) {
+      for (const row of fresh) settledRunIds.add(row.executionId);
+      return true;
+    }
     await sleep(300);
   }
   return false;
@@ -171,80 +187,68 @@ const waitForIdle = async (timeoutMs = 60000) => {
 
 // Turn 1 from the HUB (starts the task); the rest continue the SAME thread.
 const firstText = Deno.args.find((a) => a.startsWith("--first="))?.split("=")[1] ?? "h638 trace turn 1";
-if (!await typeInto(ntp, HUB_INPUT, firstText)) { console.error("hub composer not found"); Deno.exit(1); }
-if (!await clickSel(ntp, HUB_SEND)) { console.error("hub send not found"); Deno.exit(1); }
-if (!await waitForIdle()) { console.error("the first turn never settled"); Deno.exit(1); }
+if (!await typeInto(ntp, HUB_INPUT, firstText)) throw new Error("hub composer not found");
+if (!await clickSel(ntp, HUB_SEND)) throw new Error("hub send not found");
+if (!await waitForIdle()) throw new Error("the first turn never settled");
 
 // Filler turns: the LONG-ANSWER and BIG-RESULT markers put real projection work
 // in the thread (a >4000-char message and a ~5 KiB nested tool result).
 const FILLERS = ["@demo-long-answer summarise", "@demo-big-result dump", "second turn", "third turn"];
 for (const filler of FILLERS) {
-  if (!await typeInto(ntp, THREAD_INPUT, filler)) { console.error("thread composer not found"); Deno.exit(1); }
-  if (!await clickSel(ntp, THREAD_SEND)) { console.error("thread send not found"); Deno.exit(1); }
-  if (!await waitForIdle()) { console.error(`filler turn \"${filler}\" never settled`); Deno.exit(1); }
+  if (!await typeInto(ntp, THREAD_INPUT, filler)) throw new Error("thread composer not found");
+  if (!await clickSel(ntp, THREAD_SEND)) throw new Error("thread send not found");
+  if (!await waitForIdle()) throw new Error(`filler turn \"${filler}\" never settled`);
 }
 const historyState = await evl(ntp, `(() => { const c = document.getElementById("thread-conversation");
   return { bubbles: c ? c.querySelectorAll("message-bubble").length : 0, chars: c ? (c.textContent || "").length : 0 }; })()`);
 console.log(`built a real task with history: ${JSON.stringify(historyState)}`);
 
-// Record the last settled execution so the live one can be identified by a
-// DIFFERENT id (a run is admitted asynchronously: looking too early sees the
-// previous turn and would measure the wrong thing).
-const beforeLive = await evl(ntp, `(async () => {
-  const { durableRuns } = await import("/lib/durable-runs.js");
-  const threads = await chrome.runtime.sendMessage({ type: "thread.list" });
-  const list = Array.isArray(threads?.threads) ? threads.threads : [];
-  const target = list.find(t => String(t.name || "").toLowerCase().includes("h638")) ?? list[0];
-  const execs = await durableRuns.listThreadExecutions(target?.id).catch(() => []);
-  return Array.isArray(execs) && execs.length ? execs[execs.length - 1].executionId : null;
-})()`);
-console.log(`last settled execution before the live turn: ${beforeLive}`);
+// Pin the EXACT row the click will use, not a name-substring thread.list guess
+// (the latter could silently select another task or fall back to list[0]).
+const TASK_ROW = `[...document.querySelectorAll("#thread-sidebar .thread-item")].find(it => (it.title || "").toLowerCase().includes(${JSON.stringify(firstText.toLowerCase().slice(0, 18))}))?.querySelector("button.t-open")`;
+const threadId = await evl(ntp, `(() => (${TASK_ROW})?.closest('.thread-item')?.getAttribute('data-thread-id') ?? null)()`);
+if (typeof threadId !== "string" || !threadId) throw new Error("the clicked task row has no durable thread id");
+// Even a durable terminal row can settle before the UI releases its control bar.
+// Steer/queue modes absorb a send; require the real composer to offer a fresh
+// turn BEFORE typing the measured @demo-slow turn.
+let readyToSend = false;
+for (let i = 0; i < 50; i++) {
+  const state = await evl(ntp, `(() => ({ barHidden: document.getElementById('run-control-bar')?.hidden === true,
+    running: !!document.querySelector('[data-thread-id=${JSON.stringify(threadId)}] .t-dot.running') }))()`);
+  if (state?.barHidden === true && state.running === false) { readyToSend = true; break; }
+  await sleep(200);
+}
+if (!readyToSend) throw new Error("REFUSING live-open: run-control bar is still active; the turn would be steered/queued");
+const priorIds = (await runSnapshot()).filter((r: any) => r.threadId === threadId).map((r: any) => r.executionId);
+console.log(`clicked task ${threadId}: ${priorIds.length} prior executions before measured send`);
 
 // The live turn: @demo-slow holds the first model step for 10 s, so the task is
 // genuinely RUNNING while the open below happens.
-if (!await typeInto(ntp, THREAD_INPUT, "@demo-slow @demo-stream live turn")) { console.error("thread composer gone"); Deno.exit(1); }
-if (!await clickSel(ntp, THREAD_SEND)) { console.error("thread send gone"); Deno.exit(1); }
-
-// The seeded/live task's row: the one whose title matches the first turn text.
-const TASK_ROW = `[...document.querySelectorAll("#thread-sidebar .thread-item")].find(it => (it.title || "").toLowerCase().includes(${JSON.stringify(firstText.toLowerCase().slice(0, 18))}))?.querySelector("button.t-open")`;
+if (!await typeInto(ntp, THREAD_INPUT, "@demo-slow @demo-stream live turn")) throw new Error("thread composer gone");
+if (!await clickSel(ntp, THREAD_SEND)) throw new Error("thread send gone");
 
 // Click INSIDE the run. The @demo-slow hold is 10 s, so home + click must happen
 // well within it — and the phase is asserted at that moment, because a run that
 // quietly settled turns this measurement into a different one (the first read
 // after a settle drains the settle/compaction writes).
-const phaseNow = async () => await evl(ntp, `(async () => {
-  const { durableRuns } = await import("/lib/durable-runs.js");
-  const threads = await chrome.runtime.sendMessage({ type: "thread.list" });
-  const list = Array.isArray(threads?.threads) ? threads.threads : [];
-  const target = list.find(t => String(t.name || "").toLowerCase().includes("h638")) ?? list[0];
-  if (!target) return null;
-  const execs = await durableRuns.listThreadExecutions(target.id).catch(() => []);
-  const last = Array.isArray(execs) ? execs[execs.length - 1] : null;
-  return last ? { id: last.executionId, phase: last.record?.phase ?? null } : null;
-})()`);
-// Wait for the live run to be ADMITTED and running (bounded: the hold is 10 s).
-let atClick = null;
-for (let i = 0; i < 40; i++) {
-  atClick = await phaseNow();
-  // The SUBSTANTIVE precondition is "a run is in flight while the owner clicks".
-  // The id may legitimately be unchanged (a send while a run is active is
-  // queued into that run by the product's own steer/queue path), so the id is
-  // recorded rather than required.
-  if (atClick && atClick.phase === "running") break;
+// Mirror the page's actionable updatedAt authority, but require a NEW run
+// (not a steered/queued send into an old run) with phase running at click.
+let atClick = selectLiveOpenExecution({ threadId, runs: await runSnapshot(), priorIds });
+for (let i = 0; i < 40 && !atClick.ok; i++) {
+  if (atClick.reason !== "send_absorbed") break; // a fresh run already settled; do not relabel it
   await sleep(200);
+  atClick = selectLiveOpenExecution({ threadId, runs: await runSnapshot(), priorIds });
 }
-console.log(`newest execution at click time: ${JSON.stringify(atClick)}${atClick?.id === beforeLive ? " (same id as the last settled one — the send was queued into the in-flight run)" : ""}`);
-if (atClick?.phase !== "running") {
-  console.error(`REFUSING to report a running-open number: the newest execution is "${atClick?.phase}"`);
-  Deno.exit(1);
-}
+console.log(`clicked task execution at click time: ${JSON.stringify(atClick)}`);
+if (!atClick.ok) throw new Error(`REFUSING live-open: ${atClick.reason} (${atClick.executionId ?? "no fresh id"}, ${atClick.phase ?? "no phase"})`);
 // The sidebar must also show it running (what the owner clicks).
-const rowState = await evl(ntp, `(() => { const items = [...document.querySelectorAll("#thread-sidebar .thread-item")];
-  return { items: items.length, running: items.filter(it => it.querySelector(".t-dot.running")).length }; })()`);
-console.log(`sidebar at click time: ${JSON.stringify(rowState)}\n`);
+const rowState = await evl(ntp, `(() => { const row = document.querySelector('[data-thread-id=${JSON.stringify(threadId)}]');
+  return { exists: !!row, running: !!row?.querySelector('.t-dot.running') }; })()`);
+if (rowState?.exists !== true || rowState?.running !== true) throw new Error(`REFUSING live-open: clicked row does not show a running task: ${JSON.stringify(rowState)}`);
+console.log(`clicked sidebar row at click time: ${JSON.stringify(rowState)}\n`);
 
 /** Time one open: measure from the real click to the first transcript repaint. */
-async function measureOpen(label: string, rowExpr: string) {
+async function measureOpen(label: string, rowExpr: string, expectedLiveId: string | null = null) {
   // Clear the live conversation so "first paint" means THIS open repainted the
   // transcript (otherwise the previous surface is simply still on screen).
   await evl(ntp, `(() => { const c = document.getElementById("thread-conversation"); c?.replaceChildren?.(); return true; })()`);
@@ -270,6 +274,10 @@ async function measureOpen(label: string, rowExpr: string) {
   const beforeRaw = await spansRaw();
   const box = await boxOf(ntp, rowExpr);
   if (!box) return { label, error: `row not found` };
+  if (expectedLiveId) {
+    const live = selectLiveOpenExecution({ threadId, runs: await runSnapshot(), priorIds });
+    if (!live.ok || live.executionId !== expectedLiveId) return { label, error: `the live run settled/changed before pointer click: ${JSON.stringify(live)}` };
+  }
   await clickAt(ntp, box);
   let result: any = null;
   for (let i = 0; i < 200; i++) {
@@ -290,12 +298,14 @@ async function measureOpen(label: string, rowExpr: string) {
              status: document.getElementById("status")?.textContent ?? "" }; })()`);
   const after = await spans();
   const afterRaw = await spansRaw();
+  const rawSpans = spanDeltaRaw(beforeRaw, afterRaw);
   return {
     label,
+    liveLogReads: expectedLiveId ? rawSpans.filter((s) => s.name === `thread-view:logs:${expectedLiveId}`).length : null,
     firstPaintMs: Math.round(result?.firstBubble ?? -1),
     viewVisibleMs: Math.round(result?.viewVisible ?? -1),
     spans: spanDelta(before, after).slice(0, 14),
-    rawSpans: spanDeltaRaw(beforeRaw, afterRaw).slice(0, 12),
+    rawSpans: rawSpans.slice(0, 12),
     painted,
     afterLive,
   };
@@ -303,7 +313,9 @@ async function measureOpen(label: string, rowExpr: string) {
 
 await evl(ntp, `document.getElementById("home")?.click?.(); true`);
 await sleep(500);
-const runningMeasure = await measureOpen("RUNNING task with history", TASK_ROW);
+const runningMeasure = await measureOpen("RUNNING task with history", TASK_ROW, atClick.executionId);
+if (runningMeasure.error) throw new Error(`REFUSING live-open: ${runningMeasure.error}`);
+if (runningMeasure.liveLogReads !== 0) throw new Error(`REFUSING live-open: view read the live execution's own log: ${JSON.stringify(runningMeasure)}`);
 
 // The diagnostics run AFTER the measured open: their own multi-second work
 // would otherwise consume the run's 10 s live window and turn this measurement
@@ -314,10 +326,8 @@ const viewProbe = await evl(ntp, `(async () => {
   const { durableRuns } = await import("/lib/durable-runs.js");
   const { buildThreadRunView } = await import("/lib/thread-run-view.js");
   const { getThread } = await import("/lib/threads.js");
-  const threads = await chrome.runtime.sendMessage({ type: "thread.list" });
-  const list = Array.isArray(threads?.threads) ? threads.threads : [];
-  const target = list.find(t => String(t.name || "").toLowerCase().includes("h638")) ?? list[0];
-  const thread = await getThread(target.id);
+  const targetId = ${JSON.stringify(threadId)};
+  const thread = await getThread(targetId);
   const reads = [];
   const t0 = performance.now();
   const view = await buildThreadRunView(thread, {
@@ -345,13 +355,10 @@ console.log(`2 s control (no call): ${JSON.stringify(noopWindow).slice(0, 400)}\
 // SW's own spans. This is the clean attribution (the merged dump cannot say
 // which context a span came from).
 const swIsolated = await evl(ntp, `(async () => {
-  const threads = await chrome.runtime.sendMessage({ type: "thread.list" });
-  const list = Array.isArray(threads?.threads) ? threads.threads : [];
-  const target = list.find(t => String(t.name || "").toLowerCase().includes("h638")) ?? list[0];
-  if (!target) return { error: "no thread" };
+  const targetId = ${JSON.stringify(threadId)};
   await chrome.runtime.sendMessage({ type: "observability.clearTrace" });
   const t0 = performance.now();
-  const r = await chrome.runtime.sendMessage({ type: "thread.get", id: target.id });
+  const r = await chrome.runtime.sendMessage({ type: "thread.get", id: targetId });
   const ms = Math.round(performance.now() - t0);
   const dump = await chrome.runtime.sendMessage({ type: "observability.dumpTrace" });
   const spans = (dump?.perf?.measures ?? []).map(m => ({ name: String(m.name || "").replace(/^cap:/, ""), count: m.count ?? 1, totalMs: Math.round(m.totalMs ?? 0) }))
@@ -391,6 +398,9 @@ for (const r of [runningMeasure, settledMeasure]) {
 }
 console.log("─".repeat(72));
 
-try { chrome.proc.kill("SIGKILL"); } catch { /* already gone */ }
 const failed = [runningMeasure, settledMeasure].some((r) => (r as any).error || (r as any).firstPaintMs < 0);
-Deno.exit(failed ? 1 : 0);
+if (failed) throw new Error("h638 live/settled open measurement failed — see per-case result above");
+} finally {
+  try { ws?.close(); } catch { /* already closed */ }
+  await teardownChrome(chrome, profile);
+}
