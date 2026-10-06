@@ -36,6 +36,7 @@ http(s) page) and it acts on two different untrusted feeds at once: web page con
 and model output.
 
 Component map, with the file that owns each surface:
+- **Evidence pin: `origin/main@213bafbc`.** The file:line citations in this section were re-read against that tree. Treat the named symbol as the anchor and the line as the locator, and re-read both if the tree has moved again.
 
 | Component | Where | Notes |
 |---|---|---|
@@ -71,6 +72,7 @@ Component map, with the file that owns each surface:
   The receiver's authority is derived from the BROWSER-ATTESTED `sender`, never from the
   message body (`extension/background/service-worker.js:11933-11938`, `:11960`,
   `:11966-11978`).
+- **Evidence pin: `origin/main@213bafbc`.** The file:line citations in this boundary were re-read against that tree. Treat the named symbol as the anchor and the line as the locator, and re-read both if the tree has moved again.
 - **TB3 — The two provider paths.** Path A sends the conversation from the service
   worker directly to a hosted provider host, listed exhaustively in `OUTBOUND_HOSTS`
   (`extension/lib/provider-catalog.js:111`, pinned by `tests/privacy-statement.test.ts`);
@@ -155,6 +157,7 @@ the platform, and each has a mechanical check:
 
 Ordered by how much authority sits behind them. Every row is an entry point an auditor
 should reason about; the threats that use them are in sections 5 and 6.
+- **Evidence pin: `origin/main@213bafbc`.** The file:line citations in this surface (S1) were re-read against that tree. Treat the named symbol as the anchor and the line as the locator, and re-read both if the tree has moved again.
 
 | ID | Surface | Where it enters | What is hostile about it |
 |---|---|---|---|
@@ -195,6 +198,7 @@ consequences are carried by the matching register entry where one exists.
   origin comes from the sender, never from the body; a claimed-origin mismatch is
   refused. **Live proof:** `scripts/security-suite.ts:306-308` (a page MAIN world has no
   `chrome.runtime` at all) and `docs/CONSTITUTION.md:17`.
+- **Evidence pin: `origin/main@213bafbc`.** The file:line citations in this threat were re-read against that tree. Treat the named symbol as the anchor and the line as the locator, and re-read both if the tree has moved again.
 
 ### T3. Sender-classifier default: an out-of-spec sender is classified as an extension document
 
@@ -215,6 +219,7 @@ consequences are carried by the matching register entry where one exists.
   and `background-agent.delete` at `:10655`). **Answer:** the central listener refuses every
   non-page-allowed route to page senders (`extension/background/service-worker.js:11953`),
   so the class is reachable only from extension principals. **Register:** R11.
+- **Evidence pin: `origin/main@213bafbc`.** The file:line citations in this threat were re-read against that tree. Treat the named symbol as the anchor and the line as the locator, and re-read both if the tree has moved again.
 
 ### T5. Sandbox escape and network egress from the script sandbox
 
@@ -368,6 +373,7 @@ and each names the executable check that would catch a regression.
   `extension/background/service-worker.js:11933-11938`, `:11960`, `:11969`;
   `scripts/security-suite.ts:306-308`. A new route that reads an origin, tab id or
   document id out of the message body breaks this.
+- **Evidence pin: `origin/main@213bafbc`.** The file:line citations in this invariant were re-read against that tree. Treat the named symbol as the anchor and the line as the locator, and re-read both if the tree has moved again.
 - **INV-2 — The page-reachable route set is closed and tiny.**
   `extension/lib/pure.js:1178-1187`, pinned by
   `tests/internal-sender-contract-audit.test.ts:117-120`. An admin route appearing in
