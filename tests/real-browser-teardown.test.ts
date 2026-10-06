@@ -31,18 +31,22 @@ function codeOnly(src: string): string {
   let state: "code" | "line" | "block" | "quote" | "template" | "regex" = "code";
   let quote = "";
   let inClass = false;
-  let regexAt = -1;
+  let stateAt = -1;
   let last = "";
   for (let i = 0; i < src.length; i++) {
     const ch = src[i], next = src[i + 1];
     if (state === "code") {
       if (ch === "/" && next === "/") { blank(i); blank(++i); state = "line"; continue; }
-      if (ch === "/" && next === "*") { blank(i); blank(++i); state = "block"; continue; }
+      if (ch === "/" && next === "*") { stateAt = i; blank(i); blank(++i); state = "block"; continue; }
       if (ch === "'" || ch === '"' || ch === "`") {
-        quote = ch; state = ch === "`" ? "template" : "quote"; blank(i); last = "value"; continue;
+        quote = ch; stateAt = i; state = ch === "`" ? "template" : "quote"; blank(i); last = "value"; continue;
       }
-      if (ch === "/" && /[=(,;:!&|?+*%\^~<>{\[]/.test(last)) {
-        state = "regex"; regexAt = i; inClass = false; blank(i); continue;
+      if (ch === "/") {
+        const before = out.slice(Math.max(0, i - 24), i).join("");
+        const keyword = /(?:^|[^\w$])(?:return|throw|case|yield|await|typeof|void|delete)\s*$/.test(before);
+        if (/[=(,;:!&|?+*%\^~<>{\[]/.test(last) || keyword) {
+          state = "regex"; stateAt = i; inClass = false; blank(i); continue;
+        }
       }
       if (!/\s/.test(ch)) last = ch;
       continue;
@@ -57,20 +61,18 @@ function codeOnly(src: string): string {
     if (state === "regex") {
       if (ch === "[") inClass = true;
       if (ch === "]") inClass = false;
-      if (ch === "/" && !inClass) state = "code";
+      if (ch === "/" && !inClass) { state = "code"; last = "value"; }
     } else if (ch === quote) state = "code";
     blank(i);
   }
   if (state === "block" || state === "quote" || state === "template" || state === "regex") {
-    throw new Error(`unclosed source literal/comment (${state}) at line ${lineAt(src, regexAt)}: ${JSON.stringify(src.slice(regexAt, regexAt + 75))}; cannot prove Chrome teardown`);
+    throw new Error(`unclosed source literal/comment (${state}) at line ${lineAt(src, stateAt)}: ${JSON.stringify(src.slice(stateAt, stateAt + 75))}; cannot prove Chrome teardown`);
   }
   return out.join("");
 }
 
 const lineAt = (src: string, at: number) => 1 + (src.slice(0, at).match(/\n/g)?.length ?? 0);
-const ident = /^[A-Za-z_$][\w$]*$/;
-
-type Site = { start: number; end: number; line: number; binding: string; args: string };
+type Site = { start: number; end: number; line: number; binding: string; closesResult: boolean; args: string };
 type Teardown = { start: number; target: string; kind: string; args: string[] };
 
 /** Find the matching close delimiter in code with strings already blanked. */
@@ -95,7 +97,7 @@ function launchSites(src: string, code = codeOnly(src)): Site[] {
     const destructured = prefix.match(/\{([^{}]+)\}\s*=\s*await\s*$/)?.[1];
     const binding = variable ?? destructured?.match(/\bproc\b/)?.[0] ?? "";
     sites.push({ start: m.index!, end: end + 1 + tail[0].length, line: lineAt(code, m.index!), binding,
-      args: src.slice(from, end + 1) });
+      closesResult: !!variable, args: src.slice(from, end + 1) });
   }
   return sites;
 }
@@ -176,7 +178,8 @@ function unguardedLaunches(src: string, rel = "<fixture>"): string[] {
     const start = sites.length === 1 ? 0 : site.end;
     const owned = aliases(code, site, end);
     const matched = site.binding && teardowns.some((t) => t.start >= start && t.start < end &&
-      owned.has(t.target) && (t.start >= site.end || prelaunchCleanupInvoked(code, t.start, site.end)));
+      owned.has(t.target) && (t.kind !== "launched.close" || (site.closesResult && t.target === site.binding)) &&
+      (t.start >= site.end || prelaunchCleanupInvoked(code, t.start, site.end)));
     return matched ? [] : [`${rel}:${site.line} (${site.binding || "unbound"}: no associated process-tree teardown)`];
   });
 }
@@ -304,6 +307,13 @@ Deno.test("elst: falsification — dropping teardownChrome or using bare proc.ki
   const unrelatedClose = `const launched = await launchChrome({ binary: "/usr/bin/chromium" });
     try { doWork(); } finally { await cdp.close(); }`;
   assertEquals(unguardedLaunches(unrelatedClose).length, 1, "an unrelated close() is not a Chrome teardown");
+  const procClose = `const launched = await launchChrome({ binary: "/usr/bin/chromium" });
+    const child = launched.proc; await child.close();`;
+  assertEquals(unguardedLaunches(procClose).length, 1, "a proc alias has no tree-killing close() API");
+  const keywordRegex = `const { proc } = await launchChrome({ binary: "/usr/bin/chromium" });
+    function example() { return /\\bsettleBistroRun\\s*\\(/.test(value); }
+    await teardownChrome(proc, profile);`;
+  assertEquals(unguardedLaunches(keywordRegex), [], "return-position regex cannot mask a real teardown");
   const nullTarget = `const { proc } = await launchChrome({ binary: "/usr/bin/chromium" });
     try { doWork(); } finally { await killProcessTree(null, marker); }`;
   assertEquals(unguardedLaunches(nullTarget).length, 1, "null is not a launch target");
