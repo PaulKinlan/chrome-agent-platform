@@ -6,6 +6,8 @@
 // "cap:fetch" route calls exactly this function before fetching.
 // @ts-nocheck
 import { assert, assertEquals } from "jsr:@std/assert@1";
+import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { checkFetchPolicy, extractFetchHosts, isPrivateOrLoopbackHost } from "../extension/lib/fetch-policy.js";
 
 const PRIVATE = [
@@ -77,3 +79,17 @@ Deno.test("cap:fetch policy: hosts are extracted from URL literals; a computed f
   const many = Array.from({ length: 200 }, (_, i) => `fetch("https://h${i}.example/")`).join(";");
   assert(extractFetchHosts(many).hosts.length <= 64);
 });
+
+Deno.test("cap:fetch policy (v6ej): DNS-rebinding residual is formally registered in RISK-REGISTER and THREAT_MODEL", async () => {
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const riskRegister = await Deno.readTextFile(join(root, "docs/RISK-REGISTER.md"));
+  assert(riskRegister.includes("R23 (M)"), "RISK-REGISTER.md must define entry R23 for DNS-rebinding residual");
+  assert(riskRegister.includes("extension/lib/fetch-policy.js:21"), "R23 must cite fetch-policy.js:21");
+  assert(riskRegister.includes("v6ej"), "R23 must cite bead v6ej");
+  assert(riskRegister.includes("TM-104"), "R23 must cite software factory TM-104 finding");
+
+  const threatModel = await Deno.readTextFile(join(root, "THREAT_MODEL.md"));
+  assert(threatModel.includes("Brokered fetch DNS rebinding (TM-104 / v6ej)"), "THREAT_MODEL.md must document DNS rebinding exclusion in §7");
+  assert(threatModel.includes("**Register:** R23"), "THREAT_MODEL.md T6 must cross-reference register R23");
+});
+

@@ -19,8 +19,9 @@
 // resolves elsewhere is refused at run time).
 //
 // DNS rebinding of a listed public hostname is NOT covered here: the deny list
-// works on the URL's host, not on the resolved address. The allow-list bounds
-// the damage to hosts the owner explicitly approved.
+// works on the URL's host, not on the resolved address (adjudicated and withheld
+// in docs/RISK-REGISTER.md R23 and THREAT_MODEL.md §7 item 9 / TM-104). The allow-list
+// bounds the damage to hosts the owner explicitly approved.
 
 const MAX_HOSTS = 64;
 

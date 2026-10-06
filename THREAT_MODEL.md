@@ -239,7 +239,8 @@ consequences are carried by the matching register entry where one exists.
   (`credentials: "omit"`, no redirect following, per-run host allow-list, GET/HEAD only).
   **Tests:** `tests/cap-fetch-deny.test.ts`; live SSRF probe at
   `scripts/security-suite.ts:389`. **Residual, stated in the source:** DNS rebinding of a
-  listed host is not covered (`extension/lib/fetch-policy.js:21`).
+  listed host is not covered (`extension/lib/fetch-policy.js:21`). **Register:** R23
+  (adjudicated and withheld in §7 item 9).
 
 ### T7. Credential exfiltration into hook prompts, logs and errors
 
@@ -446,6 +447,12 @@ decision and, where one exists, the trigger that would reopen it.
 8. **The `debugger` permission is absent.** Not an accepted risk so much as a standing
    prohibition: `tests/chrome-tools-t12.test.ts` holds the removal guard and the journey
    suite asserts absence from the manifest (`docs/CONSTITUTION.md:107`).
+9. **Brokered fetch DNS rebinding (TM-104 / v6ej).** ADJUDICATED AND WITHHELD.
+   The service worker fetch policy (`extension/lib/fetch-policy.js:21`) enforces the
+   private/loopback deny list on the URL host string and cannot resolve DNS or pin
+   socket destination IPs within the MV3 platform. Bounded by the owner-approved
+   per-run host allowlist (`checkFetchPolicy`). **Owning register entry: R23,
+   including its reopen trigger.**
 
 ---
 
