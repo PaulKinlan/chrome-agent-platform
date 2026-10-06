@@ -48,19 +48,29 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     // entries in the CANONICAL changelog — part of the normal check, not a
     // separate optional script.
     const { execFileSync } = await import("node:child_process");
-    try {
-      execFileSync(
-        "node",
-        [fileURLToPath(new URL("./check-changelog.mjs", import.meta.url)).replace(
-          /^\/([A-Za-z]:)/,
-          "",
-        )],
-        { stdio: "pipe" },
-      );
-    } catch (error) {
-      console.error(String(error.stderr ?? error.message));
-      process.exit(1);
-    }
+    const run = (script) => {
+      try {
+        execFileSync(
+          "node",
+          [fileURLToPath(new URL(script, import.meta.url)).replace(
+            /^\/([A-Za-z]:)/,
+            "",
+          )],
+          { stdio: "pipe" },
+        );
+      } catch (error) {
+        console.error(String(error.stderr ?? error.message));
+        process.exit(1);
+      }
+    };
+    // Release-identity gate (review a258814): see above.
+    run("./check-changelog.mjs");
+    // Owed-changelog ledger (chrome-agent-platform-xe11): every product commit
+    // after the newest entry's introducing commit is owed a release entry — the
+    // stall that kept both sides of the identity check equally stale at 0.3.577
+    // while a day of landings went unrecorded. Wired here so the release step
+    // (MERGER-PLAYBOOK §3 step 4) cannot skip it.
+    run("./check-owed-changelog.mjs");
   }
   await syncChangelog({ check });
 }

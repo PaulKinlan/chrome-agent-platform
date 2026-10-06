@@ -95,6 +95,8 @@ npm run sync:changelog
 npm run check:changelog
 npm run check:changelog-order
 npm run check:vocabulary
+npm run check:changelog-ledger   # owed-changelog ledger (xe11): product commits since
+                              # the newest entry with no release entry FAIL here
 
 # 5. Commit with appropriate subject (avoiding post-commit double-bump)
 git add CHANGELOG.md package.json package-lock.json extension/manifest.json extension/lib/bundled-inventory-data.js ...
@@ -117,6 +119,12 @@ npm run test:build > /tmp/npm-test-build-<bead>.log 2>&1
 
 # 9. Push explicit SHA to main
 git push origin <commit-sha>:main
+
+# 9a. Tag the release (the repo's release identity — xe11). The tag points at the
+# LANDED main sha, so it is created HERE, at landing — never on a worker/release
+# branch (the branch tip is not the release; the merger owns this step).
+git tag -a v<version> -m "Release v<version> — <date>: <one-line headline>" <commit-sha>
+git push origin v<version>
 
 # 10. Link and close bead
 node scripts/beads-landing-link.mjs <previous-main>..<commit-sha> --comment <commit-sha>

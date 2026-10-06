@@ -1,30 +1,49 @@
 # Changelog
 
+## [0.3.578] — 2026-10-06
+
+### Features
+- Settings → Web services now reads as one calm three-column summary: the architecture strip, the button hierarchy, and the request log table are aligned and evenly spaced.
+
+### Fixes
+- Creating an agent from the hub works again, and an agent can no longer create agents without your approval.
+- Artifacts gallery previews load a few at a time instead of strictly one after another, so a full grid of thumbnails finishes in a fraction of the round-trips it used to need.
+- The encrypted-storage card in Settings → Web services describes where your secrets live in plain words instead of naming an internal storage API.
+
+### Security
+- Extension pages now address their window messages to their own origin, and a wildcard audience is refused outright instead of being used as a fallback.
+- The local bridge that external coding agents connect through now requires an authentication token on every connection — including connections from this machine — and the extension refuses bridge endpoints that are not local.
+
+### Internal
+- Automated verification now closes every browser it opens, so a day of checks no longer leaves stray Chrome processes behind on your machine.
+- Three long-standing failures in the project's own verification tooling are fixed, and the complete pre-release verification passes cleanly again at this release.
+- The tool capability table no longer carries an authority column that was wrong in every row, and the architecture references now match the shipped route map.
+
 ## [0.3.577] — 2026-10-05
 - Artifacts search applies the final query after a 110 ms typing pause instead of rebuilding the gallery on every keystroke; changing filters or leaving the view cancels pending work.
 - Adds encrypted service secret management, origin-pinned proxy rules, live service-tool authorization, and request audit ledger to Settings → Web services.
 - Hook subscriptions now ask for your approval every time, first subscription to a hook included. A first-time subscription used to be written with only the deny-list check behind it, so an agent could start listening to a browser event and store its own text as the instruction a run re-executes on every matching event, up to 50 runs each time. Agents can no longer supply that text — the run uses the skill's own prompt plus the event payload — and a stored template is capped at 64 KiB, the limit this project used before the cap was removed and about 16,000 tokens of instruction.
 
 ## [0.3.576] — 2026-10-05
-- j5yz: eliminate the NTP thread-list heartbeat hydration storm, deduplicate terminal thread.get refreshes, show the thread surface immediately on click, and lazy-load offscreen artifact previews
+- eliminate the NTP thread-list heartbeat hydration storm, deduplicate terminal thread.get refreshes, show the thread surface immediately on click, and lazy-load offscreen artifact previews
 
 ## [0.3.575] — 2026-10-05
-- internal: the managed WebAssembly catalogue declares the official sqlite-wasm and wa-sqlite as unavailable entries with measured pins and a named blocker, instead of leaving them undeclared.
+- the managed WebAssembly catalogue declares the official sqlite-wasm and wa-sqlite as unavailable entries with measured pins and a named blocker, instead of leaving them undeclared.
 
 ## [0.3.574] — 2026-10-05
-- internal: bundled WebAssembly manifests now point their rebuild reference at the reproduction script that actually exists, and the generator fails closed rather than emitting a dead reference.
+- bundled WebAssembly manifests now point their rebuild reference at the reproduction script that actually exists, and the generator fails closed rather than emitting a dead reference.
 
 ## [0.3.573] — 2026-10-05
-- internal: bundle sizes are now measured and reported against their reference sizes instead of failing the store build; the dependency-integrity checks still fail closed (owner decision, 2026-10-05).
+- bundle sizes are now measured and reported against their reference sizes instead of failing the store build; the dependency-integrity checks still fail closed (owner decision, 2026-10-05).
 
 ## [0.3.572] — 2026-10-05
 - The WebAssembly tool catalogue now says what actually ships, so entries that are only proposed or not yet built are no longer described as available.
 
 ## [0.3.571] — 2026-10-05
-- In-context Artifacts explorer renders natively within the Hub DOM without an iframe, eliminating cross-document message hops on Reuse and retiring view resize thrash (chrome-agent-platform-5r5s).
+- In-context Artifacts explorer renders natively within the Hub DOM without an iframe, eliminating cross-document message hops on Reuse and retiring view resize thrash.
 
 ## [0.3.570] — 2026-10-05
-- In-context Agent Directory renders natively inside the Hub document without an iframe, eliminating document-bootstrap latency and preserving single-entry back history (chrome-agent-platform-9xj8).
+- In-context Agent Directory renders natively inside the Hub document without an iframe, eliminating document-bootstrap latency and preserving single-entry back history.
 
 ## [0.3.569] — 2026-10-05
 - a failed agent session attach no longer drops your active session or its commands
@@ -145,13 +164,13 @@
 - C15 resolved — profile-store is the form-filler substrate, retained and documented
 
 ## [0.3.542] — 2026-09-25
-- internal: resolve C15 cleanup decision to retain profile-store as the form-filler substrate and document its role
+- resolve C15 cleanup decision to retain profile-store as the form-filler substrate and document its role
 
 ## [0.3.541] — 2026-09-25
 - the passive-detector probe waits for its relay instead of guessing 100 ms
 
 ## [0.3.540] — 2026-09-25
-- internal: passive-detector test waits on condition with bounded budget instead of fixed sleep to prevent load flakes
+- passive-detector test waits on condition with bounded budget instead of fixed sleep to prevent load flakes
 
 ## [0.3.539] — 2026-09-25
 - evaluate MCP Zod peer unification with schema parity tests and evidence
@@ -159,7 +178,7 @@
 ## [0.3.538] — 2026-09-25
 
 ## [0.3.537] — 2026-09-25
-- internal: evaluate MCP Zod peer unification with schema parity tests and evidence (decision: retain separate peers)
+- evaluate MCP Zod peer unification with schema parity tests and evidence (decision: retain separate peers)
 
 ## [0.3.536] — 2026-09-25
 - destructive browser tool calls from external agent runs can now be approved directly in the conversation
@@ -167,7 +186,7 @@
 ## [0.3.535] — 2026-09-25
 
 ## [0.3.534] — 2026-09-25
-- resolve the picker checkout from the environment and walk .sh in the home-path guard (tgx6)
+- resolve the picker checkout from the environment and walk .sh in the home-path guard
 
 ## [0.3.533] — 2026-09-25
 - share an agent as a .agent.json card and import one back
@@ -179,7 +198,7 @@
 - drop the wall-clock bound from the quiesced-screenshot fallback test
 
 ## [0.3.530] — 2026-09-25
-- internal: drop wall-clock bound from quiesced-screenshot fallback test to avoid timing flakiness in parallel phase
+- drop wall-clock bound from quiesced-screenshot fallback test to avoid timing flakiness in parallel phase
 
 ## [0.3.529] — 2026-09-25
 - use deno run stdin instead of eval for permission flags in Deno 2
@@ -194,28 +213,28 @@
 - check:dist becomes note:dist to clearly indicate it is an informational check, not an enforcement gate
 
 ## [0.3.525] — 2026-09-25
-- bump only on an explicit release note, once per branch (8nec)
+- bump only on an explicit release note, once per branch
 
 ## [0.3.524] — 2026-09-25
-- count raw value-read sites, not handled files (8ko7)
+- count raw value-read sites, not handled files
 
 ## [0.3.523] — 2026-09-25
 - route raw console.* through cap-log, annotate bare catches, gate both
 
 ## [0.3.522] — 2026-09-25
-- internal: route raw console calls through cap-log, annotate bare catches, and gate both in code-health
+- route raw console calls through cap-log, annotate bare catches, and gate both in code-health
 
 ## [0.3.521] — 2026-09-25
 - catalog re-collect drift is catalog-stale (not scope-mismatch); the demo site-tool flow retries once
 
 ## [0.3.520] — 2026-09-25
-- internal: split catalog generation drift from selection scope mismatch and retry demo model site tool runs once
+- split catalog generation drift from selection scope mismatch and retry demo model site tool runs once
 
 ## [0.3.519] — 2026-09-25
 - internal: extract shared typed cdp-eval helper for evaluating page scripts without swallowing exceptions, and migrate scripts/ drivers
 
 ## [0.3.518] — 2026-09-25
-- sync docs/components.js from extension/shared/components.js (ypz0)
+- sync docs/components.js from extension/shared/components.js
 
 ## [0.3.517] — 2026-09-25
 - keyboard navigation in tab strips uses non-scrolling focus so component scroll bounds remain discriminating
@@ -230,7 +249,7 @@
 - code-diff view limits split from retention budgets so lifting caps cannot OOM the store
 
 ## [0.3.513] — 2026-09-25
-- internal: split code diff limits into document intake, retention, and view limits to allow separable view cap lifting
+- split code diff limits into document intake, retention, and view limits to allow separable view cap lifting
 
 ## [0.3.512] — 2026-09-25
 - renaming an agent mid-compose can no longer leave a stale name in the header
@@ -242,19 +261,19 @@
 - the residue map names the semicolon escape inside a spawn argument region
 
 ## [0.3.509] — 2026-09-25
-- internal: clarify the semicolon escape boundary inside spawn argument regions in test partition residue docs
+- clarify the semicolon escape boundary inside spawn argument regions in test partition residue docs
 
 ## [0.3.508] — 2026-09-25
 - a run settles and heartbeats survive even when its durable record vanishes under it
 
 ## [0.3.507] — 2026-09-25
-- internal: durable run state reconciles on settling, terminal, and live-run writes if an underlying record is lost, with negative paths pinned
+- durable run state reconciles on settling, terminal, and live-run writes if an underlying record is lost, with negative paths pinned
 
 ## [0.3.506] — 2026-09-25
 - route serial-phase timeout test to serial and pin wall-clock flake declarations
 
 ## [0.3.505] — 2026-09-25
-- internal: route serial-phase timeout test to the serial phase to prevent wall-clock flakiness under load, and pin wall-clock flake declarations
+- route serial-phase timeout test to the serial phase to prevent wall-clock flakiness under load, and pin wall-clock flake declarations
 
 ## [0.3.504] — 2026-09-25
 - static pairing guard for chrome-checks, agent-access-checks and run-status-lifecycle check literals against EXPECTED ledgers
@@ -266,16 +285,16 @@
 - explaining a test no longer makes your file inherit its hazards
 
 ## [0.3.501] — 2026-09-25
-- internal: test partition guard restricts hazard inheritance to real module loads and process spawns, ignoring prose mentions
+- test partition guard restricts hazard inheritance to real module loads and process spawns, ignoring prose mentions
 
 ## [0.3.500] — 2026-09-25
-- mark theme-picker as owner-retained (ol11)
+- mark theme-picker as owner-retained
 
 ## [0.3.499] — 2026-09-25
 - the schema-2 surface is injected, so the decoder can never enter the service worker
 
 ## [0.3.498] — 2026-09-25
-- internal: the schema-2 surface is injected into the package authority so the decoder never enters the service worker bundle
+- the schema-2 surface is injected into the package authority so the decoder never enters the service worker bundle
 
 ## [0.3.497] — 2026-09-25
 - the sweep's three equivalent mutants are recorded at their sites, and A2 is now a killed mutant rather than an unkillable one
@@ -287,19 +306,19 @@
 - the Diagnostics probe clicks the control in the panel it names, and says which seam failed
 
 ## [0.3.494] — 2026-09-25
-- internal: the diagnostics probe selects the active settings panel and verifies control state before querying the gate
+- the diagnostics probe selects the active settings panel and verifies control state before querying the gate
 
 ## [0.3.493] — 2026-09-25
 - the summary row's Delete pin reads parentage, not descendant counts
 
 ## [0.3.492] — 2026-09-25
-- internal: the agent summary row Delete pin checks direct parentage rather than descendant counts
+- the agent summary row Delete pin checks direct parentage rather than descendant counts
 
 ## [0.3.491] — 2026-09-25
 - the settings picker can never quietly re-offer Demo or Chrome Prompt API
 
 ## [0.3.490] — 2026-09-25
-- internal: the settings picker source is guarded against re-offering internal provider cards
+- the settings picker source is guarded against re-offering internal provider cards
 
 ## [0.3.489] — 2026-09-25
 - finish recipes to skills rename and sync check EXPECTED ledger
@@ -392,11 +411,11 @@
 - editing an agent that already has skills now saves your other changes too — adding a schedule no longer reports a failed save
 
 ## [0.3.459] — 2026-09-23
-- internal: load-sensitive fleet gate lock hardens error paths against leaks and derives private sidecar paths
+- load-sensitive fleet gate lock hardens error paths against leaks and derives private sidecar paths
 
 ## [0.3.458] — 2026-09-23
 - the What's New and side panel release notes now describe what changed for you, and the changelog gate permits stated-internal notes
-- internal: the post-commit version hook imports the unified changelog filter instead of carrying a duplicate copy
+- the post-commit version hook imports the unified changelog filter instead of carrying a duplicate copy
 
 ## [0.3.457] — 2026-09-23
 - the quiet-window gate now measures active compiling processes rather than process names, preventing parked background build daemons from keeping browser gates closed
@@ -428,13 +447,13 @@
 - the agent buttons now show a badge for each agent, and the side panel stops squashing them when it is narrow
 
 ## [0.3.448] — 2026-09-22
-- internal: corrected the account of why the side panel's layout broke, to what was actually measured
+- corrected the account of why the side panel's layout broke, to what was actually measured
 
 ## [0.3.447] — 2026-09-22
 - a broken side panel is now caught before it reaches you, instead of the check passing whatever the layout did
 
 ## [0.3.446] — 2026-09-22
-- internal: the measurements behind the side panel's constrained-width layout fix
+- the measurements behind the side panel's constrained-width layout fix
 
 ## [0.3.445] — 2026-09-22
 - each agent button carries a badge, and a narrow side panel no longer breaks the layout
@@ -444,16 +463,10 @@
 
 ## [0.3.443] — 2026-09-21
 - project browser agent runtime and reject Node imports
-
-## Unreleased
-- Pi now refuses supplied tool servers it cannot use, explains the limitation, and names alternatives instead of accepting them silently. Sessions without tool servers still work.
-- Identify `node:` imports as Node builtins, with their importer, rather than remote script URLs in the pre-bundle scan (azlc review).
-- Remove Node process-launcher dependencies from browser bundles; reject builtin imports instead of shimming them (azlc).
-- Each one-click agent button now carries a badge, so a narrow side panel still shows which agent is which instead of squashing the names.
 - The Jobs board no longer pushes the Agents panel off the side, and its rows now sit on the same inset as its own heading.
 
 ## [0.3.442] — 2026-09-21
-- merge fix/astra-unex-9z37 (, 9z37)
+- merged the astra-unex review-fix branch
 
 ## [0.3.441] — 2026-09-21
 - validation now rejects unexpected finalizer outcomes and missing session-restore reasons
@@ -462,7 +475,7 @@
 - remove unregistered js-minifier + jwt-decode tools, worker bundles, and their tests
 
 ## [0.3.439] — 2026-09-21
-- the forced-window proof consumes its ACK and reaps the child it creates (d2vz)
+- the forced-window proof consumes its ACK and reaps the child it creates
 
 ## [0.3.438] — 2026-09-21
 - give build checks bounded extra time on a busy machine
@@ -517,37 +530,37 @@
 - genuine reachable subset test for executable evidence instruments
 
 ## [0.3.420] — 2026-09-18
-- ACP settings surface for endpoint, working directory, and permission mode (khkk)
-- disclose owner-gate leg execution state in ACP browser acceptance (dbmz)
-- configure self-contained fixture identity and explicit failure in hygiene audit tests (2d36)
-- close custody supervisor detection blind window via during-life sample handshake (d5st)
-- guard teardown child process termination in directory discovery test runner (hhh8)
-- persist ACP agent turns into the task and thread store (hg03)
-- entry-point CLI checks compare canonical pathToFileURL encoding (esh8)
-- reclaim store service-worker bundle headroom by lowering hoisting threshold (eerc)
-- build root derived via fileURLToPath for spaced checkout support (7fzu)
-- audit and test labels use fileURLToPath paths (k7c5)
-- guard teardown browser termination in unique composer evidence script (8dmf)
-- repair model-edit approval acceptance instrument (b5q4)
-- sync-changelog check treats absent destination as unbuilt rather than drift (idco)
-- scrub legacy project references from codebase comments and guard with tests (i6n6)
-- classify acp.journal route in SW dispatch authority census (vv98)
-- isolate serial lock fixtures and heal killed drift residue (p15i)
-- include source-inspecting test guards in always-on changed set (qcfc)
-- extend fileURLToPath root handling across verification and fixture scripts (0j1a)
-- pin unbounded executor bounds and calibrate non-finite over-budget test (cqhq)
-- report symlinked dependency root in bundle budget errors (2eb5)
-- bundle NTP hub and side panel surfaces as single modules (ox5s)
+- ACP settings surface for endpoint, working directory, and permission mode
+- disclose owner-gate leg execution state in ACP browser acceptance
+- configure self-contained fixture identity and explicit failure in hygiene audit tests
+- close custody supervisor detection blind window via during-life sample handshake
+- guard teardown child process termination in directory discovery test runner
+- persist ACP agent turns into the task and thread store
+- entry-point CLI checks compare canonical pathToFileURL encoding
+- reclaim store service-worker bundle headroom by lowering hoisting threshold
+- build root derived via fileURLToPath for spaced checkout support
+- audit and test labels use fileURLToPath paths
+- guard teardown browser termination in unique composer evidence script
+- repair model-edit approval acceptance instrument
+- sync-changelog check treats absent destination as unbuilt rather than drift
+- scrub legacy project references from codebase comments and guard with tests
+- classify acp.journal route in SW dispatch authority census
+- isolate serial lock fixtures and heal killed drift residue
+- include source-inspecting test guards in always-on changed set
+- extend fileURLToPath root handling across verification and fixture scripts
+- pin unbounded executor bounds and calibrate non-finite over-budget test
+- report symlinked dependency root in bundle budget errors
+- bundle NTP hub and side panel surfaces as single modules
 
 ## [0.3.419] — 2026-09-18
 - ACP settings surface for endpoint, working directory, and permission mode
 
 ## [0.3.418] — 2026-09-18
-- connect landings back to the beads they already name (j4t1)
-- enable Stop affordance for in-flight ACP turns (c6gq)
-- diagnose shebang rot, dangling symlinks and real binary execution in acp:service doctor (d1ti)
-- guard hash pins so a blanket sweep cannot stale a pinned fixture (e273)
-- honour per-connection agent selection and make bridge mismatch legible with one-command fix (lpmv)
+- connect landings back to the beads they already name
+- enable Stop affordance for in-flight ACP turns
+- diagnose shebang rot, dangling symlinks and real binary execution in acp:service doctor
+- guard hash pins so a blanket sweep cannot stale a pinned fixture
+- honour per-connection agent selection and make bridge mismatch legible with one-command fix
 
 ## [0.3.417] — 2026-09-18
 - the fresh-checkout fixture materializes the SOURCE CLOSURE, not just the tracked set
@@ -556,14 +569,14 @@
 - security-suite escape fixture fails closed when descendant fails to persist
 - exported agentConfig credentials can no longer cross the owner export walk
 - preserve the unlanded S3 registry-oracle work with 49-control execution matrix
-- the pinned Doc denial respects lexical Function bindings (ol0j)
-- Doc.compile denial wired over all four bundles (tptx, absorbing 4f3j)
-- the final generated Store JavaScript gets an evaluator AST gate (kdax)
-- scoped per-instance IDs and data-composer-input for agent-composer (sndb)
-- guard against ambient CAP_ACP_FIXTURE_* process env contamination (tqfg)
-- discovered open pages reach the hub's Directory button (cthe)
-- land ejme's tool-config test driving the production filters (1frz)
-- add acp:service doctor to diagnose captured PATH rot and bridge health (d1ti)
+- the pinned Doc denial respects lexical Function bindings
+- Doc.compile denial wired over all four bundles
+- the final generated Store JavaScript gets an evaluator AST gate
+- scoped per-instance IDs and data-composer-input for agent-composer
+- guard against ambient CAP_ACP_FIXTURE_* process env contamination
+- discovered open pages reach the hub's Directory button
+- land ejme's tool-config test driving the production filters
+- add acp:service doctor to diagnose captured PATH rot and bridge health
 
 ## [0.3.415] — 2026-09-18
 - isolate ACP fixture child env and evidence-gate continuity retries
@@ -646,10 +659,10 @@
 - host dispatch and import map injection for installable JS modules (ovfm.3)
 
 ## [0.3.389] — 2026-09-17
-- position plan for native agent support on Web and Chrome (cdld)
+- position plan for native agent support on Web and Chrome
 
 ## [0.3.388] — 2026-09-17
-- synchronize sandboxing, messaging, board deny, backup, and MCP filter sections (dzyx)
+- synchronize sandboxing, messaging, board deny, backup, and MCP filter sections
 
 ## [0.3.387] — 2026-09-17
 - correct compaction review measurements and scope
@@ -673,10 +686,10 @@
 - strip ambient storage from the python worker to enforce fresh execution
 
 ## [0.3.380] — 2026-09-17
-- design specification for installable JS modules in script sandbox (ovfm)
+- design specification for installable JS modules in script sandbox
 
 ## [0.3.379] — 2026-09-17
-- address 9ux7.4 review follow-ups: docstring honesty, dead wasmBytes branch, and network-strip pin (xn2q)
+- address 9ux7.4 review follow-ups: docstring honesty, dead wasmBytes branch, and network-strip pin
 
 ## [0.3.378] — 2026-09-17
 - document and pin streaming credential filter reserved member parity

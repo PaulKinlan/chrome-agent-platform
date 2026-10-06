@@ -129,6 +129,12 @@ export const SERIAL_FILE_TIMEOUTS = Object.freeze({
 // membership is a review-time decision, never a default.
 export const EXEMPTIONS = {
   "tests/evidence-durable.test.ts": "spawns the bundled-tool generator ONLY inside a pristine makeTempDir checkout materialization; every write goes to the temp dir, never to repo extension/ or packages/",
+  // xe11: the owed-changelog ledger test builds throwaway git FIXTURE repos in a
+  // makeTempDir and writes `extension/lib/tool.js` INSIDE them (the product-path
+  // that makes a fixture commit owed). The extension/ and extension/dist literals
+  // are fixture strings in temp dirs, never repo paths — and the ledger's CLI runs
+  // with --repo pointing at the fixture, never at the checkout.
+  "tests/owed-changelog-ledger.test.ts": "writes extension/* paths only inside its own makeTempDir git fixtures (with --repo pinned to the fixture); the repo tree is read, never written",
   // 4lc0 re-review: the fresh-instance gate plants `tests/*.test.ts` files in a makeTempDir scratch tree
   // and walks it. The write-hazard heuristic sees a write call near an `extension/` literal (the SAFE
   // fixture string it plants) and correctly flags the text — but every write goes to the scratch tree,

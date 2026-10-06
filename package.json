@@ -1,7 +1,7 @@
 {
   "default_locale": "en",
   "name": "chrome-agent-platform",
-  "version": "0.3.577",
+  "version": "0.3.578",
   "private": true,
   "type": "module",
   "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
@@ -47,6 +47,7 @@
     "test:sidebar": "deno run -A scripts/sidebar-parity.ts",
     "sync:changelog": "node scripts/sync-changelog.mjs",
     "check:changelog": "node scripts/sync-changelog.mjs --check",
+    "check:changelog-ledger": "node scripts/check-owed-changelog.mjs",
     "package": "node scripts/package-extension.mjs --target=store",
     "package:store": "node scripts/package-extension.mjs --target=store",
     "check:changelog-order": "node scripts/check-changelog.mjs",

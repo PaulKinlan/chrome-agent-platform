@@ -111,6 +111,23 @@ into the shared checkout and staged the primary's file into the worktree's
 commit (chrome-agent-platform-ufrr). Git already runs hooks at the committing
 checkout's root; `tests/beads-precommit-hook.test.ts` pins this.
 
+**Release identity is gated, not remembered (chrome-agent-platform-xe11, owner
+directive 2026-10-06):** the version, its CHANGELOG entry and an annotated `vX.Y.Z`
+tag are ONE coherent change — a release is a commit that introduces the `## [x.y.z]`
+heading, carries the version in every file it appears in (package.json,
+package-lock.json ×2, extension/manifest.json version+version_name,
+extension/lib/bundled-inventory-data.js release), and is tagged
+`git tag -a vX.Y.Z -m "Release vX.Y.Z — <date>: <headline>"`. The owed-changelog
+ledger (`npm run check:changelog-ledger`, also chained into `npm run check:changelog`)
+FAILS when a committed product change lands after the newest entry with no release —
+the stall that left the changelog a full day behind at 0.3.577 while every existing
+check stayed green, because a stall keeps both sides of the version==changelog
+comparison equally stale. The ledger reads HEAD (a release exists when it is
+committed) and is live-asserted in `tests/owed-changelog-ledger.test.ts`; landing
+cadence is in `docs/MERGER-PLAYBOOK.md` §3 steps 4/9a. If the post-commit hook is not
+installed in your checkout's shared `.git/hooks`, entries do not write themselves —
+run `node scripts/bump-version.mjs patch --user-note "<what the user gets>"`.
+
 - **Pick work**: `bd ready` (the claimable frontier — open beads with no open
   blockers). Claim atomically: `bd update <id> --claim`.
 - **Read work**: `bd show <id>` — the description alone must be enough for any

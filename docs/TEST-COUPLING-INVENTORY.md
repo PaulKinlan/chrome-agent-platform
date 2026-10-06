@@ -387,6 +387,30 @@ the literal.
 
 ---
 
+## 20. scripts/check-owed-changelog.mjs + tests/owed-changelog-ledger.test.ts (added by xe11)
+
+- **What watches what:** the owed-changelog ledger — `scripts/check-owed-changelog.mjs`
+  (chained into `npm run check:changelog` by `scripts/sync-changelog.mjs`, aliased as
+  `npm run check:changelog-ledger`, and live-asserted by the last test in
+  `tests/owed-changelog-ledger.test.ts`) reads **HEAD's** `CHANGELOG.md` + `package.json`,
+  finds the commit that introduced the newest `## [x.y.z]` heading (pickaxe `-S`), and
+  fails when any non-merge commit after it changes shipped product code (`extension/`
+  minus `*.md`, `bundled-inventory-data.js`, `dist/`) without a release entry, or when
+  `package.json`'s version and the newest heading disagree.
+- **The trap it exists around:** the identity check (`check-changelog.mjs`) compares the
+  changelog against `package.json` — a STALL keeps both sides equally stale and green
+  (0.3.577 sat unchanged for a full day while 200+ commits landed; the post-commit bump
+  hook was not installed in the checkout's shared `.git/hooks`).
+- **Owed by a re-anchor:** if the product-surface definition moves (new top-level
+  product dir, a new generated file under `extension/`), update `isProductPath` — its
+  truth lives in `tests/owed-changelog-ledger.test.ts`'s classifier test. The ledger is
+  HEAD-based by design: uncommitted entries are invisible, so the gate reads clean only
+  once the release commit exists.
+- **Subject moves:** LOUD — the failure names each owed commit (sha + subject + files)
+  and the release it falls behind.
+
+---
+
 ## The four book rules
 
 **(a) File-disjointness is not suite-greenness.** Two lanes whose diffs touch disjoint
