@@ -118,6 +118,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "constrained-width-layout.ts": { class: "named", npm: "test:width", reason: "46/0 measured against the canonical extension on 2026-09-22 (~40 s): the marks render, the collapsed container query fires, nothing wraps or overflows. Run on demand — promotion to test:all is the owner's call" },
   "webmcp-acceptance.ts": { class: "named", npm: "test:webmcp", reason: "82/0 at the re-inventory (after its stderr-reader crash was removed by the launcher migration); the WebMCP lane's acceptance, run on demand with its fresh-profile picker proof" },
   "webmcp-realsite-probe.ts": { class: "manual", reason: "network-dependent diagnostic (chrome-agent-platform-ajcc): drives the REAL search_docs on beads.gascity.com through production enrollment + invocation with the diagnostics channel on, capturing the raw page-side error the bridge redaction strips; run by hand when the dispatch path changes" },
+  "report-chrome-profiles.ts": { class: "manual", reason: "vk1t read-only on-demand inventory of the shared Chrome profile root; reports admission headroom and dead/unknown/live lock evidence without pruning any profile. Not a browser gate or an automated cleanup job", noVerdict: "inventory only: reports observations, not a pass/fail assertion; an admission-cap warning is not a defect in the inventory" },
 
   // ── KATs (npm run test:kat via scripts/kat-runner.ts) ───────────────────
   "kat-attention-badge.ts": { class: "kat" },
