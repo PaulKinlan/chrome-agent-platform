@@ -22,6 +22,7 @@ import {
   formatArtifactType,
 } from "../shared/components.js";
 import { t, hydrateI18n } from "../shared/i18n.js";
+import { createSearchDebounce } from "./search-debounce.js";
 
 // Bound the live-preview work: preview at most this many artifacts (the most
 // recent), so a large gallery stays responsive. The rest render as placeholder
@@ -43,6 +44,13 @@ let inspectorCleanup = null;
 let activeContainer = null;
 let activeOptions = {};
 let activeRefresh = null;
+let pendingSearch = null;
+
+export function teardownArtifactsView() {
+  pendingSearch?.cancel();
+  pendingSearch = null;
+  activeRefresh = null;
+}
 
 // CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01 — the library never silently
 // evicts the owner's oldest artifact; at capacity a create is refused. This
@@ -513,6 +521,9 @@ function wireCard(card, { container, onAttachArtifact, onGoHome, refresh } = {})
 }
 
 export async function renderArtifactsView(containerEl, options = {}) {
+  // A prior mount's once-wired listener must not fire its pending rebuild after
+  // navigation, or keep a stale render closure when this container is remounted.
+  teardownArtifactsView();
   activeContainer = containerEl;
   activeOptions = options;
 
@@ -612,7 +623,10 @@ export async function renderArtifactsView(containerEl, options = {}) {
     await Promise.all(workers);
   };
 
+  pendingSearch = createSearchDebounce(() => { void updateFilteredView(); });
+
   const refreshAll = async () => {
+    pendingSearch?.cancel();
     if (capacity) await renderCapacity(capacity);
     const res = await send("asset.list", { origin: "all" }).catch(() => ({ assets: [] }));
     const assets = (Array.isArray(res.assets) ? res.assets : []).slice().reverse();
@@ -670,7 +684,7 @@ export async function renderArtifactsView(containerEl, options = {}) {
     containerEl.dataset.capWired = "1";
     searchInput?.addEventListener("input", (e) => {
       searchQuery = e.target.value.trim();
-      updateFilteredView();
+      pendingSearch?.();
     });
 
     kindFilter?.addEventListener("click", (e) => {
@@ -683,6 +697,7 @@ export async function renderArtifactsView(containerEl, options = {}) {
       pill.classList.add("active");
       pill.setAttribute("aria-selected", "true");
       filterKind = pill.dataset.kind || "";
+      pendingSearch?.cancel(); // A discrete filter choice renders now, not again after typing.
       if (typeof history !== "undefined" && history.replaceState) {
         const hash = filterKind ? `#view=artifacts&kind=${encodeURIComponent(filterKind)}` : "#view=artifacts";
         try { history.replaceState(history.state, "", hash); } catch { /* test env */ }

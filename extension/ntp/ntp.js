@@ -61,7 +61,7 @@ import {
 } from "./route-focus.js";
 import { applySidebarNubPolicy, SIDEBAR_NARROW_QUERY, sidebarWidthPolicy } from "./view-policy.js";
 import { renderDirectoryContent } from "../directory/directory.js";
-import { renderArtifactsView, closeArtifactInspector } from "../artifacts/index.js";
+import { renderArtifactsView, closeArtifactInspector, teardownArtifactsView } from "../artifacts/index.js";
 import {
   ensureNtpHistoryRoot,
   navigateHome,
@@ -2761,6 +2761,7 @@ function hideThreadViewInner() {
   syncViewOpen();
 }
 function hideViewInner() {
+  teardownArtifactsView();
   viewOverlay.hidden = true;
   if (viewClientHost) viewClientHost.hidden = true;
   if (directoryViewEl) directoryViewEl.hidden = true;
@@ -5369,6 +5370,7 @@ function openView(path, title, trigger) {
   const [basePath, hash] = String(path ?? "").split("#");
   const targetRoute = embeddedViewRoute(path);
   const isClientSide = targetRoute === VIEW_ROUTE.DIRECTORY || targetRoute === VIEW_ROUTE.ARTIFACTS;
+  if (targetRoute !== VIEW_ROUTE.ARTIFACTS) teardownArtifactsView();
 
   if (isClientSide) {
     if (viewClientHost) {

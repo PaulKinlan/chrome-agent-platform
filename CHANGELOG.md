@@ -1,6 +1,7 @@
 # Changelog
 
 ## [0.3.577] — 2026-10-05
+- Artifacts search applies the final query after a 110 ms typing pause instead of rebuilding the gallery on every keystroke; changing filters or leaving the view cancels pending work.
 - Adds encrypted service secret management, origin-pinned proxy rules, live service-tool authorization, and request audit ledger to Settings → Web services.
 - Hook subscriptions now ask for your approval every time, first subscription to a hook included. A first-time subscription used to be written with only the deny-list check behind it, so an agent could start listening to a browser event and store its own text as the instruction a run re-executes on every matching event, up to 50 runs each time. Agents can no longer supply that text — the run uses the skill's own prompt plus the event payload — and a stored template is capped at 64 KiB, the limit this project used before the cap was removed and about 16,000 tokens of instruction.
 

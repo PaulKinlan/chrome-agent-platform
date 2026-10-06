@@ -363,7 +363,7 @@ per agent with a master index; a generated UI IS an artifact. Empty states use t
 `<empty-state>` component with owner voice and direct actions (`chrome-agent-platform-716s.7`).
 The Artifacts gallery redesign (`chrome-agent-platform-qvve`) introduces miniature desktop
 previews without scrollbars, non-wrapping action controls, human-readable size formatting,
-search and type filters, and a responsive wide-screen split inspector.
+search and type filters, and a responsive wide-screen split inspector. Search applies the final query after a 110 ms typing pause instead of rebuilding cards and fetching previews for each keystroke (`chrome-agent-platform-j5sh`); switching filters or leaving the view cancels pending work.
 
 ## Feature: Attention Badging & Completion Notifications (chrome-agent-platform-3p3e.6) — shipped
 Toolbar action badge counts runs waiting on the owner while no surface displays them:
