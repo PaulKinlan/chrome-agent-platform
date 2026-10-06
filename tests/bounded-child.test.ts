@@ -101,8 +101,10 @@ Deno.test("bounded child: a futex-waiting child is killed, and the error NAMES i
   const threadTable = m[5];
   // The pin is the futex FAMILY, not one kernel's spelling: the Atomics.wait sleep reads
   // wchan=futex_do_wait on kernels ≤6.6 (this test's original spelling) and futex_wait_queue on
-  // ≥6.7 (the futex rework into kernel/futex/wait.c; measured on 6.12.93 — i0u7). Either way an
-  // epoll-idle thread reads do_epoll_wait, which never matches, so the pin stays falsifiable.
+  // ≥6.7 (the futex rework into kernel/futex/wait.c; measured on 6.12.93 — i0u7). V8/libuv
+  // background threads always show a futex symbol (the table is tasks.slice(0,4) over TID-sorted
+  // tasks), so the main-thread discriminator is and remains the unchanged process-wide wchan
+  // assertion at line 92.
   assert(/:futex/.test(threadTable), `the thread table must show the futex wait, got ${threadTable}; sample=${report}`);
   assert(m[6].includes("No diagnostic report was produced"), `the message must say no report came, got: ${m[6]}`);
   assert(/futex|thread-wchan/.test(m[6]), `and it must point at the thread table instead, got: ${m[6]}`);
