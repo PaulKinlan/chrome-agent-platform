@@ -100,10 +100,11 @@ export function reconcileFixtureResidue() {
  * build-bundled-tool-packages.mjs generator children running as orphans
  * (ppid 1, futex_wait). When the next serial phase runs, that orphan
  * wedges regeneration and causes timeouts. Reap any generator orphan
- * reparented to init (ppid 1) before running tests.
+ * reparented to init (ppid 1) strictly scoped to this worktree before running tests.
  */
 export function reapOrphanedGenerators(): number[] {
   const reaped: number[] = [];
+  const normalizedRoot = ROOT.replace(/\/+$/, "");
   try {
     for (const entry of Deno.readDirSync("/proc")) {
       if (!/^\d+$/.test(entry.name)) continue;
@@ -111,17 +112,31 @@ export function reapOrphanedGenerators(): number[] {
       if (pid === Deno.pid) continue;
       try {
         const stat = Deno.readTextFileSync(`/proc/${pid}/stat`);
-        const match = /\)\s+\S+\s+(\d+)/.exec(stat);
-        if (!match || Number(match[1]) !== 1) continue; // Only orphans reparented to init (ppid 1)
+        const afterComm = stat.slice(stat.lastIndexOf(")") + 2).trim();
+        const fields = afterComm.split(/\s+/);
+        // fields[0]=state, fields[1]=ppid. Only orphans reparented to init (ppid 1).
+        if (fields[1] !== "1") continue;
 
         const cmdline = Deno.readTextFileSync(`/proc/${pid}/cmdline`);
-        if (cmdline.includes("build-bundled-tool-packages.mjs")) {
-          try {
-            Deno.kill(pid, "SIGKILL");
-            reaped.push(pid);
-          } catch {
-            /* already gone */
+        if (!cmdline.includes("build-bundled-tool-packages.mjs")) continue;
+
+        // Scope strictly to this worktree so other lanes are never touched
+        let belongsToThisTree = false;
+        try {
+          const procCwd = Deno.readLinkSync(`/proc/${pid}/cwd`).replace(/\/+$/, "");
+          if (procCwd === normalizedRoot || procCwd.startsWith(normalizedRoot + "/")) {
+            belongsToThisTree = true;
           }
+        } catch {
+          /* cwd read error */
+        }
+        if (!belongsToThisTree && !cmdline.includes(normalizedRoot)) continue;
+
+        try {
+          Deno.kill(pid, "SIGKILL");
+          reaped.push(pid);
+        } catch {
+          /* already gone */
         }
       } catch {
         /* transient process exited */
@@ -241,13 +256,30 @@ Deno.test("build wiring: the DEFAULT build fails closed on generated drift (prov
 });
 
 Deno.test("of6z: reapOrphanedGenerators sweeps ppid-1 generator orphans and ignores active non-orphans", () => {
-  // Spawning a child with this test process as PPID (ppid === Deno.pid !== 1)
-  const child = new Deno.Command("sleep", { args: ["10"] }).spawn();
+  // Spawning an active child matching the command line but with this process as parent (ppid === Deno.pid !== 1)
+  const child = new Deno.Command("sh", {
+    args: ["-c", "sleep 10", "build-bundled-tool-packages.mjs"],
+  }).spawn();
   try {
     const reaped = reapOrphanedGenerators();
     // Must NOT reap child because child's PPID is Deno.pid, not 1
-    assert(!reaped.includes(child.pid), "active non-orphan child must not be reaped");
+    assert(!reaped.includes(child.pid), "active non-orphan child matching cmdline must not be reaped");
   } finally {
     try { child.kill("SIGKILL"); } catch { /* ignore */ }
   }
+});
+
+Deno.test("of6z: reapOrphanedGenerators successfully reaps a real ppid-1 orphan in this worktree", async () => {
+  // Spawn a real detached grandchild reparented to init (ppid 1)
+  new Deno.Command("bash", {
+    args: ["-c", '(setsid sh -c "sleep 30" build-bundled-tool-packages.mjs) &'],
+    stdout: "null",
+    stderr: "null",
+  }).outputSync();
+
+  // Allow kernel a brief moment to complete reparenting to init
+  await new Promise((r) => setTimeout(r, 100));
+
+  const reaped = reapOrphanedGenerators();
+  assertEquals(reaped.length > 0, true, "orphan generator reparented to init must be detected and reaped");
 });

@@ -172,7 +172,7 @@ if (missingEvidence.length > 0) {
     `skipping regeneration-drift verification. Committed generated outputs are trusted as pinned ` +
     `(build.mjs shipped-Wasm manifest checks still apply). Provide --evidence-root <dir> for full verification.`
   );
-  process.exit(0);
+  return;
 }
 
 const CATALOG = JSON.parse(readFileSync(PATHS.catalog, "utf8"));
@@ -958,6 +958,4 @@ console.log(`OK: ${packages.length} packages, ${inventoryFiles.length} shipped f
 
 if (isMain) {
   main();
-  // Explicit exit avoids Node v24 DelayedTaskScheduler / isolate disposal futex race on shutdown (chrome-agent-platform-pozs)
-  process.exit(0);
 }

@@ -28,24 +28,10 @@ function cleanActiveChildren() {
   activeChildPids.clear();
 }
 
-// chrome-agent-platform-of6z: ensure detached generator/child processes do not
-// linger as PPID=1 orphans when the parent process exits or is terminated by a gate signal.
+// chrome-agent-platform-of6z: ensure detached child process groups do not
+// linger as PPID=1 orphans when the parent process exits.
 if (typeof process !== "undefined" && typeof process.on === "function") {
   process.on("exit", cleanActiveChildren);
-  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
-    try {
-      process.on(sig, () => {
-        cleanActiveChildren();
-        try {
-          process.kill(process.pid, sig);
-        } catch {
-          process.exit(128 + (sig === "SIGHUP" ? 1 : sig === "SIGINT" ? 2 : 15));
-        }
-      });
-    } catch {
-      // ignored
-    }
-  }
 }
 
 /** Per-thread wchan, which is what identifies a futex hang when a signal report cannot be written.

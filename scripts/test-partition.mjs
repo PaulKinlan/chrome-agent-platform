@@ -121,7 +121,6 @@ export const PRODUCTION_BUILD_TIMEOUT_MS = 300_000;
 export const SERIAL_FILE_TIMEOUTS = Object.freeze({
   "tests/build-bootstrap.test.ts": 850_000, // 278s measured (contended) x 3.1
   "tests/build-debug-mode.test.ts": 550_000, // 173s measured (contended) x 3.2
-  "tests/build-tool-bundling.test.ts": 550_000, // of6z: full regen idempotence x2 under contention
 });
 
 // Files a content scan classifies as hazards but that are provably
