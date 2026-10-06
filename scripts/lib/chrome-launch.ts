@@ -616,7 +616,14 @@ export async function launchChrome(opts: {
   // otherwise share Chrome's default profile and leave no tree-kill marker.
   // Assign a per-instance durable profile so the tree can always be reaped.
   if (!resolvedProfile && opts.extension) {
-    resolvedProfile = chromeProfileDir("auto");
+    try {
+      resolvedProfile = chromeProfileDir("auto");
+    } catch (e) {
+      // Admission can now refuse at the profile cap. The browser never starts;
+      // release the fleet turn just like every other pre-spawn refusal.
+      fleetLease?.release();
+      throw e;
+    }
   }
   const args = (opts.extension || opts.profile)
     ? [

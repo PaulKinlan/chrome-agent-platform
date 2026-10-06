@@ -728,7 +728,20 @@ the retired markdown trackers (`TASKS.md`, `KNOWN-ISSUES.md` — history only).
   touched at any threshold, and a locked profile whose owner cannot be verified
   (`unknown`, including dead-PID locks from crashed browsers) is retained and
   logged in the `unknown` count (`chrome-agent-platform-z5ym`,
-  `chrome-agent-platform-xvco`).
+  `chrome-agent-platform-xvco`). `reportChromeProfileDirs()` and
+  `deno run -A scripts/report-chrome-profiles.ts` report each local dead-PID
+  lock's owner host/PID, creator name/PID and age without deleting it; the KAT
+  runner stores the full JSON inventory under its durable log directory.
+  `chromeProfileDir()` serializes new-profile admission across lanes and
+  refuses to create beyond 512 directories in the shared root. This bounds
+  new **managed** admissions, not bytes already on disk or external writers;
+  a full root fails closed instead of evicting live or unknown profiles.
+  Dead-lock deletion remains deferred to a separate guardian-lease redesign:
+  PID/age/`/proc` scans and rename cannot rule out a surviving descendant or a
+  delayed Chrome attach after the scan. Even the legacy lockless age pruner's
+  60-second shared-root minimum is not a lifecycle lease (a launch can wait
+  up to 20 minutes for a slot); do not treat its retention rule as proof that
+  every queued creator is gone. No new locked-profile deletion is authorized.
 - **Scripts and tests route evidence, Chrome profiles, and big scratch copies through
   `scripts/lib/durable-root.mjs`** (`durableRoot()`/`durableDir()`; default `$HOME/cap-evidence`,
   override `CAP_DURABLE_ROOT`). The helper REFUSES a RAM-backed target rather than silently
