@@ -16,24 +16,8 @@
 /** The shared secret every in-repo bridge test uses. */
 export const TEST_BRIDGE_TOKEN = "cap-test-bridge-token";
 
-/** Args to give a spawned `deno run scripts/acp-bridge.ts …` so it requires this secret. */
-export const TEST_BRIDGE_TOKEN_ARGS = ["--token", TEST_BRIDGE_TOKEN] as const;
-
-/**
- * A loopback bridge URL carrying the test secret, and optionally a harness override.
- * Use this instead of hand-writing `ws://127.0.0.1:${port}/acp…` in a test: a URL
- * without the token is refused with 403 and reads as a broken suite.
- *
- * @param port the bound bridge port
- * @param harness optional `?harness=` value
- * @returns the authenticated WebSocket URL
- */
-export function authedAcpUrl(port: number, harness?: string): string {
-  const base = `ws://127.0.0.1:${port}/acp?token=${encodeURIComponent(TEST_BRIDGE_TOKEN)}`;
-  return harness ? `${base}&harness=${encodeURIComponent(harness)}` : base;
-}
-
-/** The token as an HTTP header-free query suffix, for raw upgrade helpers. */
-export function tokenQuery(): string {
-  return `token=${encodeURIComponent(TEST_BRIDGE_TOKEN)}`;
-}
+// NOTE (delta review, finding 3): this file used to also export authedAcpUrl, TEST_BRIDGE_TOKEN_ARGS
+// and tokenQuery — all three had ZERO call sites, because each suite that needed a URL builder defined
+// a small local authedEndpoint() with the harness parameter it actually wanted. Dead exports inside a
+// "single source of truth" are worse than none: they invite a reader to believe the shapes are
+// centralised when they are not. What IS centralised and used by every suite is the token, above.

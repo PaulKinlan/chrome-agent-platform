@@ -517,10 +517,17 @@ Deno.test("runAcpTaskTurn: a configured endpoint setting overrides the built-in 
       harnessId: "settings-probe",
       endpoint: "ws://127.0.0.1:1/unreachable",
       settings: {
-        // jsjy: the runner composes ?token= from acp.token, so every settings stub used against a
-        // token-requiring bridge must answer it; the endpoint alone is no longer enough.
+        // jsjy: this test exists to prove the PRODUCTION composition — the runner builds the URL from
+        // acp.endpoint and then appends acp.token (extension/lib/acp-runner.js acpEndpointWithToken).
+        // So acp.endpoint must stay BARE here: returning an endpoint that already carries ?token=
+        // makes acpEndpointWithToken short-circuit and the test would pass with acp.token deleted
+        // (the delta review caught exactly that, finding 2).
         get: (key: string) => Promise.resolve(
-          key === "acp.token" ? TEST_BRIDGE_TOKEN : key === "acp.endpoint" ? authedEndpoint(port) : null,
+          key === "acp.token"
+            ? TEST_BRIDGE_TOKEN
+            : key === "acp.endpoint"
+            ? `ws://127.0.0.1:${port}/acp`
+            : null,
         ),
       },
     });

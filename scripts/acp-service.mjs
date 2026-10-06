@@ -242,6 +242,12 @@ function uninstall() {
 }
 
 function status() {
+  // jsjy: the bridge requires a secret whether or not the operator passed --token, so `status` must say
+  // where the value the extension needs can be found — /health never discloses it (delta review,
+  // finding 4).
+  console.log(TOKEN
+    ? "auth: token required — the --token you installed"
+    : "auth: token required — the bridge generated one; it is persisted in $XDG_CONFIG_HOME/cap-acp/bridge-token (paste it into acp.token)");
   const url = `http://127.0.0.1:${PORT}/health`;
   fetch(url).then(async (r) => {
     console.log(`bridge: UP at ${url}`);

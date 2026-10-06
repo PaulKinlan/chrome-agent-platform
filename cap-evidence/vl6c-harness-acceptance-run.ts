@@ -17,7 +17,7 @@ import { AcpClient } from "../extension/lib/acp-client.js";
 
 const PORT = 3296;
 console.log(`[acceptance] Starting ACP bridge on port ${PORT}...`);
-const server = createAcpServer(PORT, {}, "", TOKEN);
+const server = createAcpServer(PORT, undefined, {}, undefined, TOKEN);
 
 let passed = 0;
 let failed = 0;

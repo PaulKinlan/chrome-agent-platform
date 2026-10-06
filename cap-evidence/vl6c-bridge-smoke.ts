@@ -19,7 +19,7 @@ import { createAcpModel } from "../extension/lib/acp-model.js";
 
 const PORT = 3291;
 console.log(`[acceptance] Starting ACP bridge on port ${PORT}...`);
-const server = createAcpServer(PORT, {}, "", TOKEN);
+const server = createAcpServer(PORT, undefined, {}, undefined, TOKEN);
 
 let passed = 0;
 let failed = 0;
