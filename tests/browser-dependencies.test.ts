@@ -64,16 +64,28 @@ Deno.test('browser dependencies: real agent-do bundles without Node modules or i
 // Removing the define-module (the object literal) is what makes the worker bundle reproducible; the
 // define must then be an IDENTIFIER and the banner must DECLARE that exact identifier, or the bundle
 // references an undeclared global and dies at module init with a ReferenceError — a failure no byte
-// comparison can see. These three tests are the pair's guard (shape + consumers), its executed value,
-// and the REAL worker entry executed under the protocol fakes.
-const PROCESS_ENV_CONSUMERS = [
-  'build.mjs',
-  'scripts/build-test-extension.mjs',
-  'tests/browser-dependencies.test.ts',
-  'tests/mcp-zod-peer-parity.test.ts',
-];
+// comparison can see. These three tests are the pair's guard (shape + every consumer), its executed
+// value, and the REAL worker entry executed under the protocol fakes.
+const PROCESS_ENV_DEFINER = 'scripts/browser-dependencies.mjs';
+/** Every file under scripts/ and tests/ plus build.mjs, so a NEW consumer cannot escape the guard by
+ *  not being in a hand-maintained list (review P2-1, chrome-agent-platform-3337). */
+async function processEnvCandidates() {
+  const exts = ['.mjs', '.js', '.ts'];
+  const out = ['build.mjs'];
+  for (const dir of ['scripts', 'tests']) {
+    const walk = async (d) => {
+      for await (const e of Deno.readDir(d)) {
+        const p = join(d, e.name);
+        if (e.isDirectory) await walk(p);
+        else if (exts.some((x) => e.name.endsWith(x))) out.push(p);
+      }
+    };
+    await walk(join(ROOT, dir));
+  }
+  return out.map((p) => p.startsWith(ROOT) ? p.slice(ROOT.length).replace(/^\/+/, '') : p);
+}
 
-Deno.test('browser dependencies (3337): the process.env define is an identifier and its banner declares it, and no consumer can split the pair', async () => {
+Deno.test('browser dependencies (3337): the process.env define is an identifier and its banner declares it, and NO consumer can split the pair', async () => {
   assertEquals(Object.keys(browserProcessEnvOptions).sort(), ['banner', 'define']);
   const defineName = browserProcessEnvOptions.define['process.env'];
   // A regression to the object literal ('{}') would reintroduce the shared define module and the
@@ -88,15 +100,28 @@ Deno.test('browser dependencies (3337): the process.env define is an identifier 
     `const ${defineName} = {};`,
     'the banner must DECLARE exactly the identifier the define substitutes',
   );
-  // Consumer scan: a build config that spreads the define without the banner is the unsafe split.
-  for (const rel of PROCESS_ENV_CONSUMERS) {
+  // Consumer scan over EVERY scripts/ and tests/ file (review P2-1): a config that spreads the define
+  // without the banner is the unsafe split, wherever it lives; and DESTRUCTURING the export is rejected
+  // outright, because destructuring ONLY the define out of it drops the banner while still looking like a
+  // use of the export. (The pattern is built from pieces so this comment cannot trip its own check.)
+  let scanned = 0;
+  const destructure = new RegExp('\\{[^}]*\\}\\s*=\\s*browserProcessEnvOptions');
+  for (const rel of await processEnvCandidates()) {
+    if (rel === PROCESS_ENV_DEFINER) continue; // the module that DEFINES the pair
     const text = await Deno.readTextFile(join(ROOT, rel));
+    if (!text.includes('browserProcessEnvOptions')) continue;
+    scanned += 1;
+    assert(
+      !destructure.test(text),
+      `${rel} destructures browserProcessEnvOptions — spread .define AND set .banner instead (chrome-agent-platform-3337)`,
+    );
     if (!text.includes('browserProcessEnvOptions.define')) continue;
     assert(
       text.includes('browserProcessEnvOptions.banner'),
       `${rel} takes the process.env define without its banner (chrome-agent-platform-3337)`,
     );
   }
+  assert(scanned >= 3, `the consumer scan must actually find consumers, found ${scanned}`);
   // …and the two build targets that need it must still be consumers, so deleting the coupling is red.
   for (const rel of ['build.mjs', 'scripts/build-test-extension.mjs']) {
     const text = await Deno.readTextFile(join(ROOT, rel));

@@ -272,12 +272,14 @@ Deno.test("mcp-zod-peer-parity: preminify converter contribution is exactly 354 
 
     let emittedBytes = 0;
     let emittedFiles = 0;
+    const contributions = [];
     for (const outData of Object.values(res.metafile.outputs)) {
       if (outData.inputs) {
         for (const [inPath, inData] of Object.entries(outData.inputs)) {
           if (inPath.includes("zod-to-json-schema")) {
             emittedBytes += inData.bytesInOutput;
             emittedFiles += 1;
+            contributions.push(inData.bytesInOutput);
           }
         }
       }
@@ -286,6 +288,14 @@ Deno.test("mcp-zod-peer-parity: preminify converter contribution is exactly 354 
     // The measured contribution is exact (see the header for why it moved off the audit's 2,460).
     assertEquals(emittedFiles, 6, "emitted converter input files is exactly 6");
     assertEquals(emittedBytes, 354, "emitted converter contribution is exactly 354 bytes");
+    // Per-file contributions too (review P2-2): the two aggregate numbers alone could be held at 6 / 354
+    // by an equal-and-opposite edit between two converter files. Two peer-context copies x
+    // (Options.js 83 + index.js 0 + parsers/string.js 94) = [0,0,83,83,94,94].
+    assertEquals(
+      contributions.sort((a, b) => a - b),
+      [0, 0, 83, 83, 94, 94],
+      "per-file converter contributions (equal-and-opposite edits cannot cancel out)",
+    );
   } finally {
     await stop();
   }
