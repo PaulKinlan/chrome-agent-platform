@@ -123,25 +123,48 @@ export const CHROMIUM = "/usr/bin/chromium";
 // spawn — indistinguishable from "this machine has no browser capability" —
 // and a reviewer once had to create a system-level symlink just to run the
 // repo's own gates. Resolution order, ONE place, every consumer:
-//   1. the CAP_CHROMIUM env override (explicit; wins outright). resolveChromiumBinaryReport VERIFIES it -
-//      missing, not executable, or a bare name absent from $PATH means it REFUSES and names the reason,
-//      never reporting an unusable path as resolved (chrome-agent-platform-s7wr); resolveChromiumBinary
-//      returns the raw override, because its callers spawn it directly and a bad value fails there;
+//   1. the CAP_CHROMIUM env override (explicit; wins when usable). Both entry points use the same report:
+//      missing, not executable, or a bare name absent from $PATH refuses with a named reason, rather than
+//      returning an unusable path for a later ENOENT (chrome-agent-platform-s7wr/oy4m);
 //   2. the newest Chrome-for-Testing in the puppeteer cache
 //      (scripts/lib/chrome-for-testing.ts — includes bare-version cache dirs
 //      per chrome-agent-platform-fyvc/wvg);
 //   3. /usr/bin/chromium, the documented last resort.
-// Resolved AT SPAWN TIME (not module load) so a runner can set the env per
-// invocation; the cache glob is one readdir on a path that is usually absent.
+// launchChrome resolves at spawn time; callers that invoke a resolver at module load
+// bind the then-current environment. The cache glob is one readdir on a usually absent path.
+/** Thrown when nothing USABLE resolves and a caller asked for a single path (chrome-agent-platform-oy4m).
+ *  Named as an ENVIRONMENT difference (not an hlgr exit-75 verdict): the tried list says what to fix,
+ *  rather than returning a bare path that dies ENOENT downstream,
+ *  which is the product-shaped red for an environment difference that hlgr exists to remove. */
+export class BrowserUnresolvedError extends Error {
+  readonly tried: string[];
+  constructor(tried: string[]) {
+    super(
+      `ENVIRONMENT: no usable browser resolved. Tried: ${tried.join(", ") || "<nothing>"}. ` +
+        `Set CAP_CHROMIUM to an existing executable (a bare name is resolved through $PATH), or install a browser. ` +
+        `This is an environment difference, not a product failure.`,
+    );
+    this.name = "BrowserUnresolvedError";
+    this.tried = tried;
+  }
+}
+
 export function resolveChromiumBinary(
-  opts: { envGet?: (name: string) => string | undefined; cacheRoot?: string } = {},
+  opts: {
+    envGet?: (name: string) => string | undefined;
+    cacheRoot?: string;
+    exists?: (path: string) => boolean;
+    usable?: (path: string) => boolean;
+  } = {},
 ): string {
-  const envGet = opts.envGet ?? ((name: string) => Deno.env.get(name));
-  const override = envGet("CAP_CHROMIUM");
-  if (typeof override === "string" && override.trim()) return override;
-  const cached = resolveChromeForTesting(opts.cacheRoot != null ? { cacheRoot: opts.cacheRoot } : {});
-  if (cached) return cached;
-  return CHROMIUM;
+  // ONE resolution, shared with the report: oy4m ADOPTED the s7wr shape here rather than keeping the old
+  // "never existence-checked" contract, whose own justification ("a wrong override surfaces as a loud spawn
+  // error") is exactly what failed in the original defect. A caller that must REFUSE with an environmental
+  // verdict (a guard) uses resolveChromiumBinaryReport + browserRefusal instead; a caller that will SPAWN
+  // gets a path or a named throw.
+  const report = resolveChromiumBinaryReport(opts);
+  if (report.binary) return report.binary;
+  throw new BrowserUnresolvedError(report.tried);
 }
 
 /** The resolution as a REPORT for callers that must distinguish "resolved"
