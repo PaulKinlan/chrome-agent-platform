@@ -14,7 +14,8 @@
 //   5. Falsification: an unlisted source-inspecting test fails the audit closed.
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import type { Dirent } from "node:fs";
 import { join } from "node:path";
 import {
   ALWAYS_ON,
@@ -25,6 +26,21 @@ import {
   buildReverseGraph,
   selectTestFiles,
 } from "../scripts/select-tests.mjs";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
+
+/** Pattern matching test filenames (.test.ts, .test.js, or _test.ts Deno convention). */
+export const IS_TEST_RE = /(\.test|_test)\.(ts|js)$/;
+
+/**
+ * Strips comments from JS/TS code before scanning.
+ * Prevents prose (such as a doc comment mentioning `git ls-files` or path examples) from
+ * triggering false-positive classifier matches.
+ */
+export function stripComments(code: string): string {
+  return code
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => "\n".repeat(m.split("\n").length - 1))
+    .replace(/(^|[^:])\/\/[^\n]*/gm, "$1");
+}
 
 Deno.test("qcfc: every declared source-inspecting guard exists on disk", () => {
   for (const file of SOURCE_INSPECTING_GUARDS) {
@@ -171,10 +187,10 @@ export function findUnclassifiedSourceScanners(
   // both. Argument extraction does not demand a closing paren either: `walk(root, opts)` and
   // `walk(abs, rel)` are ordinary calls (reviewer P1/P2).
   const walkOrReadRoots = (code: string, rel: string) =>
-    ["walk", "readDir", "readDirSync", "readdir"].flatMap((name) => firstArgs(code, name))
+    ["walk", "readDir", "readDirSync", "readdir", "readdirSync", "opendir", "opendirSync"].flatMap((name) => firstArgs(code, name))
       .filter((arg) => (/^[A-Za-z_$][\w$]*$/.test(arg) ? identifierIsSourceRoot(arg, code, rel) : denotesSourceRoot(arg, rel)));
   for (const { rel, code } of testFiles) {
-    const isTest = /\.test\.(ts|js)$/.test(rel);
+    const isTest = IS_TEST_RE.test(rel);
     // Non-test support modules / helpers cannot be silenced by ALWAYS_ON or SCANNER_EXCLUSIONS.
     // If a helper dynamically scans a source root, it must fail closed and cannot be excused.
     if (isTest && alwaysOnSet.has(rel)) continue;
@@ -185,7 +201,8 @@ export function findUnclassifiedSourceScanners(
     // If it dynamically scans source directories, it must be in ALWAYS_ON. The literal
     // patterns catch the ROOT-rooted shapes; the source-root test catches a walk over an
     // identifier that this file derives from a source root (p1lp), including lowercase ones.
-    if (SCANNER_PATTERNS.some((pat) => pat.test(code)) || walkOrReadRoots(code, rel).length > 0) {
+    const cleanCode = stripComments(code);
+    if (SCANNER_PATTERNS.some((pat) => pat.test(cleanCode)) || walkOrReadRoots(cleanCode, rel).length > 0) {
       unclassified.push(rel);
     }
   }
@@ -207,15 +224,36 @@ export function findUnclassifiedSourceScanners(
  */
 
 /** Every shared test-support source file: subdirectories under tests/ (except fixtures/), plus non-test modules directly under tests/. */
-export function sharedSupportFiles(
-  readDir: (dir: string) => { name: string; isDirectory: () => boolean; isFile: () => boolean; isSymbolicLink?: () => boolean }[] = (dir) =>
-    readdirSync(dir, { withFileTypes: true }),
-): { rel: string; code: string }[] {
+export function sharedSupportFiles(testsDir = join(ROOT, "tests")): { rel: string; code: string }[] {
   const out: { rel: string; code: string }[] = [];
+  let realTestsDir: string;
+  try {
+    realTestsDir = realpathSync(testsDir);
+  } catch {
+    return out;
+  }
+  const visited = new Set<string>();
+
   const collect = (dir: string, rel: string) => {
-    const entries = readDir(dir);
+    let realDir: string;
+    try {
+      realDir = realpathSync(dir);
+    } catch {
+      return;
+    }
+    if (!realDir.startsWith(realTestsDir)) return; // symlink confinement to testsDir
+    if (visited.has(realDir)) return; // loop prevention
+    visited.add(realDir);
+
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
     for (const e of entries) {
-      if (e.name.startsWith(".") || e.name === "node_modules") continue;
+      if (e.name.startsWith(".") || e.name === "node_modules" || e.name === "fixtures") continue;
       const childRel = `${rel}/${e.name}`;
       const childAbs = join(dir, e.name);
       let isDir = false;
@@ -232,18 +270,24 @@ export function sharedSupportFiles(
         collect(childAbs, childRel);
         continue;
       }
-      if (isFile && /\.(ts|js|mjs)$/.test(e.name) && !/\.test\.(ts|js)$/.test(e.name)) {
-        out.push({ rel: childRel, code: readFileSync(childAbs, "utf8") });
+      if (isFile && /\.(ts|js|mjs)$/.test(e.name) && !IS_TEST_RE.test(e.name)) {
+        out.push({ rel: childRel, code: stripComments(readFileSync(childAbs, "utf8")) });
       }
     }
   };
 
-  const testsDir = join(ROOT, "tests");
-  const topEntries = readDir(testsDir);
+  visited.add(realTestsDir);
+  let topEntries: Dirent[];
+  try {
+    topEntries = readdirSync(testsDir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+
   for (const e of topEntries) {
     if (e.name.startsWith(".") || e.name === "node_modules" || e.name === "fixtures") continue;
     const rel = `tests/${e.name}`;
-    const abs = join(ROOT, rel);
+    const abs = join(testsDir, e.name);
     let isDir = false;
     let isFile = false;
     try {
@@ -256,8 +300,8 @@ export function sharedSupportFiles(
     }
     if (isDir) {
       collect(abs, rel);
-    } else if (isFile && /\.(ts|js|mjs)$/.test(e.name) && !/\.test\.(ts|js)$/.test(e.name)) {
-      out.push({ rel, code: readFileSync(abs, "utf8") });
+    } else if (isFile && /\.(ts|js|mjs)$/.test(e.name) && !IS_TEST_RE.test(e.name)) {
+      out.push({ rel, code: stripComments(readFileSync(abs, "utf8")) });
     }
   }
   return out;
@@ -270,8 +314,8 @@ export function sharedSupportFiles(
  * giving contradictory advice or leaving the next splitter a red they cannot act on.
  */
 export function formatUnclassifiedScannersMessage(unclassified: string[]): string {
-  const tests = unclassified.filter((rel) => /\.test\.(ts|js)$/.test(rel));
-  const support = unclassified.filter((rel) => !/\.test\.(ts|js)$/.test(rel));
+  const tests = unclassified.filter((rel) => IS_TEST_RE.test(rel));
+  const support = unclassified.filter((rel) => !IS_TEST_RE.test(rel));
 
   const parts: string[] = [];
   if (tests.length > 0) {
@@ -294,8 +338,10 @@ export function formatUnclassifiedScannersMessage(unclassified: string[]): strin
 
 Deno.test("qcfc: self-checking audit: all dynamic source-scanning test guards are in ALWAYS_ON", () => {
   const testsDir = join(ROOT, "tests");
-  const testFiles = readdirSync(testsDir)
-    .filter((f) => f.endsWith(".test.ts") || f.endsWith(".test.js"))
+  // Recursive enumeration: matches run-tests.mjs so nested tests/**/ files cannot evade the audit.
+  const testFiles = readdirSync(testsDir, { recursive: true })
+    .map(String)
+    .filter((f) => IS_TEST_RE.test(f) && !f.includes("/fixtures/") && !f.startsWith("fixtures/"))
     .map((f) => ({
       rel: `tests/${f}`,
       code: readFileSync(join(testsDir, f), "utf8"),
@@ -402,41 +448,38 @@ Deno.test("qcfc: falsification: unclassified source scanner fails the audit clos
 Deno.test("afpl: every ALWAYS_ON and SCANNER_EXCLUSIONS entry is a test file, never a helper", () => {
   for (const f of ALWAYS_ON) {
     assert(
-      /\.test\.(ts|js)$/.test(f),
+      IS_TEST_RE.test(f),
       `ALWAYS_ON entry ${f} must be a test file (*.test.ts or *.test.js), never a helper module`,
     );
   }
   for (const f of Object.keys(SCANNER_EXCLUSIONS)) {
     assert(
-      /\.test\.(ts|js)$/.test(f),
+      IS_TEST_RE.test(f),
       `SCANNER_EXCLUSIONS entry ${f} must be a test file (*.test.ts or *.test.js), never a helper module`,
     );
   }
 });
 
 // chrome-agent-platform-afpl — the augmentation's proof, in BOTH directions and against a REAL file.
-// The real tree has no repo-walking helper today (tests/helpers/ does not even exist), so the honest
-// evidence is a helper CREATED on disk, asserted, and removed in a finally. Pre-cleanup handles residue
-// from an uncatchable SIGKILL.
+// Uses an isolated scratch tree in durableDir("scratch") so the test never writes untracked files into
+// the tracked repository (preventing concurrent test race conditions and SIGKILL residue).
 Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fixture-walking helper is NOT admitted", async () => {
-  const dir = join(ROOT, "tests", "helpers");
-  const walker = join(dir, "zz-afpl-repo-walk.ts");
-  const fixtureReader = join(dir, "zz-afpl-fixture-read.ts");
-  const dirWasAbsent = !existsSync(dir);
+  const scratch = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-afpl-census-" });
+  const helpersDir = join(scratch, "helpers");
+  await Deno.mkdir(helpersDir, { recursive: true });
 
-  // Pre-cleanup in case a previous run was abruptly killed
-  await Deno.remove(walker).catch(() => {});
-  await Deno.remove(fixtureReader).catch(() => {});
+  const walker = join(helpersDir, "zz-afpl-repo-walk.ts");
+  const fixtureReader = join(helpersDir, "zz-afpl-fixture-read.ts");
+  const nestedTest = join(helpersDir, "zz-nested.test.ts");
 
   try {
-    await Deno.mkdir(dir, { recursive: true });
     // (i) A helper that walks a SOURCE root — the shape a -static split's shared machinery could hide.
     await Deno.writeTextFile(
       walker,
       `import { join } from "node:path";\nconst ROOT = "/repo";\n` +
         `export function census() { for (const f of Deno.readDirSync(join(ROOT, "tests"))) void f; }\n`,
     );
-    const named = findUnclassifiedSourceScanners(sharedSupportFiles(), new Set());
+    const named = findUnclassifiedSourceScanners(sharedSupportFiles(scratch), new Set());
     assertEquals(
       named.includes("tests/helpers/zz-afpl-repo-walk.ts"),
       true,
@@ -456,7 +499,7 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
       `import { join } from "node:path";\nconst ROOT = "/repo";\n` +
         `export function list() { for (const f of Deno.readDirSync(join(ROOT, "tests", "fixtures"))) void f; }\n`,
     );
-    const after = findUnclassifiedSourceScanners(sharedSupportFiles(), new Set());
+    const after = findUnclassifiedSourceScanners(sharedSupportFiles(scratch), new Set());
     assertEquals(
       after.includes("tests/helpers/zz-afpl-fixture-read.ts"),
       false,
@@ -465,7 +508,7 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
 
     // (iii) Evasion resistance: adding a helper to alwaysOnSet or SCANNER_EXCLUSIONS must NOT exempt it.
     const evasionAttempt = findUnclassifiedSourceScanners(
-      sharedSupportFiles(),
+      sharedSupportFiles(scratch),
       new Set(["tests/helpers/zz-afpl-repo-walk.ts"]),
     );
     assertEquals(
@@ -473,10 +516,29 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
       true,
       "a helper cannot be exempted by alwaysOnSet: support modules must fail closed",
     );
+
+    // (iv) A nested test file under a subdirectory is identified as a test guard, NOT a helper module.
+    await Deno.writeTextFile(
+      nestedTest,
+      `import { join } from "node:path";\nconst ROOT = "/repo";\n` +
+        `export function testRepo() { for (const f of Deno.readDirSync(join(ROOT, "scripts"))) void f; }\n`,
+    );
+    const nestedNamed = findUnclassifiedSourceScanners(
+      [{ rel: "tests/helpers/zz-nested.test.ts", code: await Deno.readTextFile(nestedTest) }],
+      new Set(),
+    );
+    assertEquals(
+      nestedNamed.includes("tests/helpers/zz-nested.test.ts"),
+      true,
+      "nested test files must be detected as test guards",
+    );
+    const nestedGuidance = formatUnclassifiedScannersMessage(nestedNamed);
+    assertStringIncludes(
+      nestedGuidance,
+      "Add them to SOURCE_INSPECTING_GUARDS",
+      "test files must be directed to SOURCE_INSPECTING_GUARDS",
+    );
   } finally {
-    // Normal exception / clean exit cleanup
-    await Deno.remove(walker).catch(() => {});
-    await Deno.remove(fixtureReader).catch(() => {});
-    if (dirWasAbsent) await Deno.remove(dir).catch(() => {});
+    await Deno.remove(scratch, { recursive: true }).catch(() => {});
   }
 });
