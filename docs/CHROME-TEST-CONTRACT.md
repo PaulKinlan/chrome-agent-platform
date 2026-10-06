@@ -54,7 +54,9 @@ All harnesses under `scripts/` require a real browser:
 
 ## 3. The Three Launch Scopes (`acquireLaunchScope`)
 
-All browser launches go through `launchChrome()` in `scripts/lib/chrome-launch.ts`. The launcher enforces exactly one launch scope via `acquireLaunchScope()`:
+All browser launches go through `launchChrome()` in `scripts/lib/chrome-launch.ts`. The launcher enforces exactly one launch scope via `acquireLaunchScope()`. On Linux it starts Chrome through `setsid` and records the dedicated process group from `/proc/<pid>/stat`; `teardownChrome(launched)` kills and verifies that entire group as well as matching the unique profile. Chromium children can encode their arguments in a single `argv[0]`, so profile-text matching alone does not establish that every descendant was reaped. `chromeProfileDir()` supplies a fresh pid/time/random-suffixed profile per launch.
+
+
 
 ```
                           ┌─────────────────────────────┐
