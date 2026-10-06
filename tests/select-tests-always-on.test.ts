@@ -39,6 +39,33 @@ Deno.test("kz27: the tree-walking guards are IN the always-on list, and every en
   }
 });
 
+Deno.test("kz27: the split put the browser-free SCAN in the set and left the live race out", () => {
+  // F1 (delta review): the static half is always-on; the live-browser half is not, because
+  // docs/CHROME-TEST-CONTRACT.md §2.3 promises a subset gate launches a browser only when that file or
+  // its dependencies changed. Both halves must stay on their own side of that line.
+  assert(
+    SOURCE_INSPECTING_GUARDS.includes("tests/chrome-profile-static.test.ts"),
+    "the browser-free static scan must be always-on",
+  );
+  assert(
+    !SOURCE_INSPECTING_GUARDS.includes("tests/chrome-profile-location.test.ts"),
+    "the live-browser file must NOT be always-on — that would break the §2.3 promise fleet-wide",
+  );
+  const staticCode = Deno.readTextFileSync(join(ROOT, "tests/chrome-profile-static.test.ts"));
+  // The signal for a LAUNCH is the dynamic import of the launcher (what the live race test does), not
+  // the string "launchChrome" — this file's fixtures deliberately CONTAIN launch lines as test data, and
+  // an assertion that grepped for the bare word would fail on its own fixtures. That mistake was made
+  // and caught here before the review was requested.
+  assert(
+    !staticCode.includes('await import("../scripts/lib/chrome-launch.ts")'),
+    "the always-on half must not launch a browser: it must not import the launcher",
+  );
+  assert(
+    staticCode.includes("--user-data-dir="),
+    "sanity: the always-on half is the one that SCANS for --user-data-dir sites",
+  );
+});
+
 Deno.test("kz27: the browser-dependent scanner is held out BY DECLARATION, with a reason and a bead", () => {
   // It also matches the repo-walk shape, so it cannot simply be left off the list: the widened
   // detector would fail the audit closed. The exclusion has to be written down instead — and it must
@@ -51,8 +78,8 @@ Deno.test("kz27: the browser-dependent scanner is held out BY DECLARATION, with 
   );
   assert(reason.includes("chrome-agent-platform-hlgr"), "the exclusion must name its follow-up bead");
   assert(
-    /browser/i.test(reason) && reason.length > 80,
-    "the exclusion must say WHY (it needs a real browser unconditionally)",
+    reason.includes("CHROME-TEST-CONTRACT") && /browser/i.test(reason) && reason.length > 80,
+    "the exclusion must say WHY (it holds the live race test and §2.3 promises the trigger condition)",
   );
 });
 

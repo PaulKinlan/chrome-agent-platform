@@ -81,9 +81,27 @@ export const SOURCE_INSPECTING_GUARDS = [
   // than "uses a directory API", which a dozen fixture-reading tests do harmlessly.
   // tests/chrome-profile-location.test.ts also matches that shape and is held out BY DECLARATION
   // instead of by omission: see SCANNER_EXCLUSIONS just below, which says why.
+  // tests/chrome-profile-location.test.ts is NOT here, and that is a contract decision rather than an
+  // omission: its live race test launches a real browser, and docs/CHROME-TEST-CONTRACT.md §2.3 PROMISES
+  // that a subset gate launches a browser only when that file or its dependencies changed. Its
+  // cross-cutting half — the static scan of scripts/ for repo-resident Chrome profiles, which reads
+  // tracked source as data and therefore has no import edges — was SPLIT OUT into
+  // tests/chrome-profile-static.test.ts, which IS always-on below. See SCANNER_EXCLUSIONS for the
+  // browser-dependent remainder.
   "tests/durable-root.test.ts",
   "tests/dialog-confirm-modernization.test.ts",
   "tests/single-source-helpers.test.ts",
+  "tests/chrome-profile-static.test.ts",
+  // F3 (delta review of c1a77598): the widened detector then caught these — all real repo-walking
+  // guards that read tracked source as data, none needing a browser. Adjudicated individually rather
+  // than added wholesale: machine-path-honesty walks tests/ and scripts/; settings-strings-audit walks
+  // extension/; quiet-window reads a ROOT-rooted path (node_modules) with no import edge for that read,
+  // and inclusion is the conservative and cheap direction for a test that guards gate behaviour.
+  "tests/chrome-test-contract.test.ts",
+  "tests/code-health.test.ts",
+  "tests/machine-path-honesty.test.ts",
+  "tests/settings-strings-audit.test.ts",
+  "tests/quiet-window.test.ts",
 ];
 
 /**
@@ -95,7 +113,7 @@ export const SOURCE_INSPECTING_GUARDS = [
  */
 export const SCANNER_EXCLUSIONS = Object.freeze({
   "tests/chrome-profile-location.test.ts":
-    "requires a real browser UNCONDITIONALLY — four `await launchChrome(...)` calls and no skip guard, stated in docs/CHROME-TEST-CONTRACT.md:13 — so making it always-on would make a working browser a prerequisite for EVERY subset gate on EVERY VM, converting an environment difference into a red gate (the same class of error as the hardcoded browser path fixed in chrome-agent-platform-fyvc). Held out by declaration, not by omission; the environmental-refusal path that would let it be always-on honestly is chrome-agent-platform-hlgr.",
+    "it still matches the repo-walk detector through its helper reads, but it also holds the LIVE race test that launches a real browser — and docs/CHROME-TEST-CONTRACT.md §2.3 PROMISES that a subset gate launches a browser only when this file or its dependencies changed. Listing it as always-on would break that promise fleet-wide, on every VM without a working browser. Its cross-cutting half (the static scripts/ scan) was SPLIT OUT into tests/chrome-profile-static.test.ts, which is always-on; what remains here is helper semantics plus the live race, and the environmental-refusal path that would let the browser case report honestly is chrome-agent-platform-hlgr.",
 });
 
 /**

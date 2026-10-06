@@ -78,6 +78,15 @@ export function findUnclassifiedSourceScanners(
     /readDirSync\(\s*ROOT\b/,
     /readDirSync\(\s*join\(\s*ROOT\b/,
     /GUARD_ROOTS/,
+    // F3 (delta review of c1a77598): the patterns above only matched literal ROOT / GUARD_ROOTS, so two
+    // real repo-walking guards were invisible to the audit — tests/chrome-test-contract.test.ts
+    // (async Deno.readDir(`${ROOT}tests`)) and tests/code-health.test.ts (walk(EXTENSION_DIR)). Widened
+    // to the ASYNC ROOT-rooted read and to a walk rooted at any module-level ROOT-derived const, which
+    // is the shape a sub-tree census takes. Both were then adjudicated into ALWAYS_ON, and so were the
+    // three further guards this caught.
+    /Deno\.readDir\(\s*`\$\{ROOT\}/,
+    /readDir\(\s*`\$\{ROOT\}/,
+    /walk\(\s*[A-Z][A-Z0-9_]*\b/,
   ];
 
   for (const { rel, code } of testFiles) {
@@ -131,6 +140,20 @@ Deno.test("qcfc: every declared exclusion is JUSTIFIED (a reason and a bead, nev
       `${file} cannot be both always-on and excluded — that contradiction would hide the decision`,
     );
   }
+});
+
+Deno.test("qcfc: REAL-TREE falsification — an actual repo-walking guard is flagged when unlisted", () => {
+  // F3: the synthetic fixtures prove the PARSER; a real file proves the DETECTOR against the tree we
+  // actually ship. If the patterns stop catching real repo-walking code, this fails on main rather than
+  // silently certifying a classifier that no longer classifies anything.
+  const rel = "tests/settings-strings-audit.test.ts";
+  const code = readFileSync(join(ROOT, rel), "utf8");
+  const unclassified = findUnclassifiedSourceScanners([{ rel, code }], new Set());
+  assertEquals(
+    unclassified,
+    [rel],
+    "a REAL repo-walking guard must be flagged when it is neither always-on nor declared excluded",
+  );
 });
 
 Deno.test("qcfc: falsification: unclassified source scanner fails the audit closed", () => {
