@@ -51,9 +51,7 @@ const send = (method: string, params: Record<string, unknown> = {}, sessionId?: 
   });
 
 try {
-  const worker = await waitForServiceWorker(send, {
-    match: (target: any) => target.type === "service_worker" && String(target.url).includes("dist/background"),
-  });
+  const worker = await waitForServiceWorker(send);
   if (!worker) throw new Error("service worker did not register");
   const extensionId = new URL(worker.url).host;
   const created = await send("Target.createTarget", { url: `chrome-extension://${extensionId}/ntp/ntp.html` });

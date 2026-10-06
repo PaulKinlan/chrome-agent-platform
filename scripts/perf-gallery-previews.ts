@@ -273,7 +273,7 @@ try {
   // two harness runs proved it — the page title was the URL and href was the
   // error page).
   const wantName = JSON.parse(await Deno.readTextFile(`${EXT}/manifest.json`)).name as string;
-  await waitForServiceWorker(send, { match: (t: any) => t.type === "service_worker" && t.url.startsWith("chrome-extension://") }).catch(() => null);
+  await waitForServiceWorker(send).catch(() => null);
   let extId = "";
   for (let attempt = 0; attempt < 60 && !extId; attempt++) {
     const targets = (await send("Target.getTargets")).result.targetInfos

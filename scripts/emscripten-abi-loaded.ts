@@ -543,9 +543,6 @@ async function main() {
     browserVersion = (await cdp.send("Browser.getVersion")).result;
     const serviceWorker = await waitForServiceWorker(cdp.send, {
       timeoutMs: 20_000,
-      match: (target) =>
-        target.type === "service_worker" &&
-        target.url.endsWith("/dist/background/service-worker.js"),
     });
     if (!serviceWorker) {
       throw new Error(

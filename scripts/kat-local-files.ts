@@ -94,9 +94,7 @@ try {
     return sessionId;
   };
 
-  const sw = await waitForServiceWorker(send, {
-    match: (target) => target.type === "service_worker" && target.url.includes("chrome-extension://"),
-  });
+  const sw = await waitForServiceWorker(send);
   if (!sw) throw new Error("extension service worker did not register");
   const extensionId = new URL(sw.url).host;
 

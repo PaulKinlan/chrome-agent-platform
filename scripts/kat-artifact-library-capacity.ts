@@ -87,9 +87,7 @@ function stub(cap: Record<string, unknown>) {
 }
 
 try {
-  const worker = await waitForServiceWorker(send, {
-    match: (t: any) => t.type === "service_worker" && String(t.url).includes("dist/background"),
-  });
+  const worker = await waitForServiceWorker(send);
   if (!worker) throw new Error("service worker did not register");
   const extId = new URL(worker.url).host;
   const galleryUrl = `chrome-extension://${extId}/artifacts/index.html`;

@@ -152,7 +152,7 @@ try {
   chrome = await launchChrome({ extension: EXT, profile: PROFILE, windowSize: "1400,1100" });
   cdp = await openCdp(chrome.wsUrl, { timeoutMs: 60000 });
   browserVersion = (await cdp.send("Browser.getVersion")).result;
-  const sw = await waitForServiceWorker(cdp.send, { match: (t: any) => t.type === "service_worker" && t.url.endsWith("/dist/background/service-worker.js") });
+  const sw = await waitForServiceWorker(cdp.send);
   check("this fresh-profile extension registered its service worker", Boolean(sw));
   const extensionId = new URL(sw.url).host;
   options = (await cdp.open(`chrome-extension://${extensionId}/options/options.html#user-wasm`)).sessionId;

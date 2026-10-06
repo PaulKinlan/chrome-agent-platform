@@ -72,7 +72,6 @@ const send = (method: string, params: any = {}, sessionId?: string) => new Promi
 
 const sw = await waitForServiceWorker(send, {
   timeoutMs: 10000,
-  match: (t: any) => t.type === "service_worker" && String(t.url).includes("dist/background"),
 });
 if (!sw) { console.log("FAIL: the extension service worker never appeared"); Deno.exit(1); }
 const extId = new URL(sw.url).host;

@@ -90,7 +90,6 @@ const send = (method: string, params: any = {}, sessionId?: string) => new Promi
 // Preferences (the unpacked id is deterministic per path).
 const sw = await waitForServiceWorker(send, {
   timeoutMs: 10000,
-  match: (t: any) => t.type === "service_worker" && String(t.url).includes("dist/background"),
 });
 let extId: string;
 if (sw) extId = new URL(sw.url).host;

@@ -117,7 +117,7 @@ async function boot() {
       if (swConsole.length > 400) swConsole.splice(0, swConsole.length - 400);
     }
   };
-  const sw = await waitForServiceWorker(send, { timeoutMs: 20000, match: (t: any) => t.type === "service_worker" && t.url.startsWith("chrome-extension://") });
+  const sw = await waitForServiceWorker(send, { timeoutMs: 20000 });
   if (!sw) throw new Error("no service worker");
   try {
     const attached = await send("Target.attachToTarget", { targetId: sw.targetId, flatten: true });

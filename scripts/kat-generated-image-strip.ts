@@ -48,7 +48,7 @@ const send = (method: string, params: Record<string, unknown> = {}, sessionId?: 
   new Promise<any>((resolve) => { const id = ++nextId; pending.set(id, resolve); ws.send(JSON.stringify({ id, method, params, sessionId })); });
 
 try {
-  const worker = await waitForServiceWorker(send, { match: (t: any) => t.type === "service_worker" && String(t.url).includes("dist/background") });
+  const worker = await waitForServiceWorker(send);
   if (!worker) throw new Error("service worker did not register");
   const extId = new URL(worker.url).host;
   const created = await send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` });
