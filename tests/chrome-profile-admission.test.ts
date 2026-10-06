@@ -51,6 +51,30 @@ Deno.test("vk1t: dead-lock evidence names creator, owner PID and age but never d
   }
 });
 
+Deno.test("vk1t: trailing-slash durable-root override still admits under the normalized profile root", () => {
+  const base = `${durableRoot()}/vk1t-durable-override-fixture-${Deno.pid}-${Date.now()}`;
+  const previous = Deno.env.get("CAP_DURABLE_ROOT");
+  Deno.mkdirSync(base, { recursive: true });
+  try {
+    Deno.env.set("CAP_DURABLE_ROOT", `${base}/`);
+    const created = chromeProfileDir("override");
+    assert(created.startsWith(`${base}/${PROFILE_ROOT_NAME}/`), `normalized profile path: ${created}`);
+    assertEquals(Deno.statSync(created).isDirectory, true);
+  } finally {
+    if (previous === undefined) Deno.env.delete("CAP_DURABLE_ROOT");
+    else Deno.env.set("CAP_DURABLE_ROOT", previous);
+    Deno.removeSync(base, { recursive: true }); // isolated fixture only
+  }
+});
+
+Deno.test("vk1t: auto-profile admission refusal releases the fleet turn before rethrow", () => {
+  const source = Deno.readTextFileSync(`${ROOT}scripts/lib/chrome-launch.ts`);
+  const body = source.match(/if \(!resolvedProfile && opts\.extension\) \{([\s\S]*?)\n  \}/)?.[1] ?? "";
+  assert(body.includes('resolvedProfile = chromeProfileDir("auto")'), "pin the actual auto-profile admission site");
+  assert(/catch\s*\(e\)\s*\{[\s\S]*?fleetLease\?\.release\(\);[\s\S]*?throw e;/.test(body),
+    "a cap-reached throw must release the already-acquired fleet slot");
+});
+
 Deno.test("vk1t: concurrent creators cannot exceed cap; a free slot is reusable without evicting survivors", async () => {
   const root = `${durableRoot()}/${PROFILE_ROOT_NAME}-parallel-fixture-${Deno.pid}-${Date.now()}`;
   Deno.mkdirSync(root, { recursive: true });

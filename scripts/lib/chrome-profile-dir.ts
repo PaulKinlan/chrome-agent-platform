@@ -57,7 +57,7 @@ function suffix(): string {
  */
 export function chromeProfileDir(
   name: string,
-  { root = `${durableRoot()}/${PROFILE_ROOT_NAME}`, maxEntries = MAX_CHROME_PROFILE_DIRS }:
+  { root = `${durableRoot().replace(/\/+$/u, "")}/${PROFILE_ROOT_NAME}`, maxEntries = MAX_CHROME_PROFILE_DIRS }:
     { root?: string; maxEntries?: number } = {},
 ): string {
   if (typeof name !== "string" || !NAME_RE.test(name)) {
