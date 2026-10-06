@@ -156,9 +156,18 @@ Deno.test("audit fixtures: git failure under missing identity fails explicitly w
   let errorMsg = "";
   try {
     const p = new Deno.Command("git", {
-      args: ["commit", "-q", "-m", "fail"],
+      // user.useConfigOnly=true FORCES the missing-identity failure (puv0): a sanitized HOME
+      // alone is not enough on every fleet box. With no user.name/user.email config git
+      // auto-detects the ident from the SYSTEM — passwd GECOS + a resolvable hostname — and
+      // that succeeds here (measured: `git var GIT_COMMITTER_IDENT` under `env -i` returns
+      // "exe.dev user <exedev@…>" because this VM's GECOS is populated, so the commit SUCCEEDS,
+      // exit 0). useConfigOnly forbids that auto-detection — but Deno.Command env MERGES with
+      // the parent, so a system /etc/gitconfig could still supply the identity (exit 0);
+      // GIT_CONFIG_NOSYSTEM=1 excludes the system config too, so the fixture fails with exit
+      // 128 + "Author identity unknown" on every box — including ones where GECOS is empty (2d36).
+      args: ["-c", "user.useConfigOnly=true", "commit", "-q", "-m", "fail"],
       cwd: dir,
-      env: { HOME: dir },
+      env: { HOME: dir, GIT_CONFIG_NOSYSTEM: "1" },
       stdout: "piped",
       stderr: "piped",
     }).outputSync();
