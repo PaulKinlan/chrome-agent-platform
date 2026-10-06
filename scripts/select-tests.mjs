@@ -32,7 +32,7 @@
 // without statically importing touched files will not be selected by test:changed.
 // npm test is the mandatory pre-push gate. See docs/CHROME-TEST-CONTRACT.md.
 
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -451,53 +451,89 @@ const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_M
 
 function runPhase(files, flags, label, timeoutMs = 300_000) {
   const t0 = Date.now();
-  const r = spawnSync("deno", ["test", "-A", "--config", "deno.runner.jsonc", ...flags, ...files], {
-    stdio: "inherit",
-    cwd: ROOT,
-    // The marker tests/00-use-npm-test_test.ts checks for.
-    env: { ...process.env, CAP_TEST_RUNNER: "1" },
-    timeout: timeoutMs,
-    killSignal: "SIGKILL",
-    detached: true,
-  });
-  if (r.error && r.error.code === "ETIMEDOUT") {
-    if (r.pid) {
-      try { process.kill(-r.pid, "SIGKILL"); } catch { /* gone */ }
+  return new Promise((resolve) => {
+    const child = spawn("deno", ["test", "-A", "--config", "deno.runner.jsonc", ...flags, ...files], {
+      stdio: "inherit",
+      cwd: ROOT,
+      // The marker tests/00-use-npm-test_test.ts checks for.
+      env: { ...process.env, CAP_TEST_RUNNER: "1" },
+      detached: true,
+    });
+
+    let timedOut = false;
+    let timer = null;
+    if (timeoutMs > 0 && Number.isFinite(timeoutMs)) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        if (child.pid) {
+          try { process.kill(-child.pid, "SIGKILL"); } catch { /* gone */ }
+        }
+      }, timeoutMs);
     }
-    console.error(`select-tests: ${label} TIMED OUT after ${timeoutMs / 1000}s`);
-    return 124;
-  }
-  // Safety: kill any remaining process group descendants so orphaned background processes
-  // cannot linger even if the direct child exited or crashed.
-  if (r.pid) {
-    try { process.kill(-r.pid, "SIGKILL"); } catch { /* clean */ }
-  }
-  const secs = ((Date.now() - t0) / 1000).toFixed(0);
-  console.error(`select-tests: ${label} ${r.status === 0 ? "GREEN" : "FAILED"} in ${secs}s`);
-  return r.status ?? 1;
+
+    const onSig = (sig) => {
+      if (child.pid) {
+        try { process.kill(-child.pid, "SIGKILL"); } catch { /* gone */ }
+      }
+      process.removeListener("SIGTERM", onSigTerm);
+      process.removeListener("SIGINT", onSigInt);
+      process.kill(process.pid, sig);
+    };
+    const onSigTerm = () => onSig("SIGTERM");
+    const onSigInt = () => onSig("SIGINT");
+    process.on("SIGTERM", onSigTerm);
+    process.on("SIGINT", onSigInt);
+
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      process.removeListener("SIGTERM", onSigTerm);
+      process.removeListener("SIGINT", onSigInt);
+      if (child.pid) {
+        try { process.kill(-child.pid, "SIGKILL"); } catch { /* clean */ }
+      }
+    };
+
+    child.on("close", (code, signal) => {
+      cleanup();
+      if (timedOut) {
+        console.error(`select-tests: ${label} TIMED OUT after ${timeoutMs / 1000}s`);
+        resolve(124);
+        return;
+      }
+      const secs = ((Date.now() - t0) / 1000).toFixed(0);
+      console.error(`select-tests: ${label} ${code === 0 ? "GREEN" : "FAILED"} in ${secs}s`);
+      resolve(code ?? (signal ? 128 + 15 : 1));
+    });
+
+    child.on("error", (err) => {
+      cleanup();
+      console.error(`select-tests: ${label} spawn error: ${err.message}`);
+      resolve(1);
+    });
+  });
 }
 
 // The shared two-phase partition (scripts/test-partition.mjs): serial hazards
 // first (never parallel), the rest with --parallel — same shape as the gate.
 // Exported so the 76hu before/after measurement can drive it directly.
-export function runPartitioned(files) {
+export async function runPartitioned(files) {
   const { serial, parallel } = partition(files);
   console.error(
     `select-tests: ${files.length} file(s) — partition: ${serial.length} serial hazard(s)${serial.length ? ` [${serial.join(", ")}]` : ""}, ${parallel.length} parallel`,
   );
   let rc = 0;
   if (serial.length) rc = runSerialFiles(serial, { cwd: ROOT });
-  if (rc === 0 && parallel.length) rc = runPhase(parallel, ["--parallel"], "parallel phase", PARALLEL_PHASE_TIMEOUT_MS);
+  if (rc === 0 && parallel.length) rc = await runPhase(parallel, ["--parallel"], "parallel phase", PARALLEL_PHASE_TIMEOUT_MS);
   return rc;
 }
 
-function runDeno(files) {
+async function runDeno(files) {
   if (!files.length) {
     console.error("select-tests: no test files selected — nothing to run.");
     process.exit(1);
   }
   console.error(`select-tests: ${files.length} file(s):\n  ${files.map((f) => `  ${f}`).join("\n")}`);
-  process.exit(runPartitioned(files));
+  process.exit(await runPartitioned(files));
 }
 
 function runFullSuite() {
@@ -506,7 +542,7 @@ function runFullSuite() {
   process.exit(r.status ?? 1);
 }
 
-function main() {
+async function main() {
   const args = process.argv.slice(2);
   const list = args.includes("--list");
   const coreOnly = args.includes("--core");
@@ -532,13 +568,13 @@ function main() {
         `see, never as the whole gate.`,
     );
     if (list) console.log(files.join("\n"));
-    else runDeno(files);
+    else await runDeno(files);
     return;
   }
   if (coreOnly) {
     const files = CORE.filter((c) => existsSync(join(ROOT, c)));
     if (list) console.log(files.join("\n"));
-    else runDeno(files);
+    else await runDeno(files);
     return;
   }
   const changed = changedFiles(base);
@@ -554,7 +590,7 @@ function main() {
   }
   const files = selectTestFiles(changed, reverse);
   if (list) console.log(files.join("\n"));
-  else runDeno(files);
+  else await runDeno(files);
 }
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) main();

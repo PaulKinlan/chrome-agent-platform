@@ -164,9 +164,7 @@ Deno.test("9t1b: a REAL browser holds its profile while the whole tree is copied
     assertEquals(offenders, [], "a live Chrome profile is still inside the working tree");
   } finally {
     if (proc) {
-      await killProcessTree(proc, `user-data-dir=${profile}`).catch(() => {
-        try { proc?.kill("SIGKILL"); } catch { /* gone */ }
-      });
+      await killProcessTree(proc, `user-data-dir=${profile}`);
     }
     await new Promise((r) => setTimeout(r, 500));
     Deno.removeSync(scratch, { recursive: true });

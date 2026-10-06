@@ -20,8 +20,8 @@ import { DEFAULT_PARALLEL_TIMEOUT_MS as SELECT_PARALLEL_TIMEOUT_MS } from "../sc
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/u, "");
 
 Deno.test("1k2a: DEFAULT_PARALLEL_TIMEOUT_MS is at least 30 minutes (1,800,000 ms)", () => {
-  assertEquals(RUN_PARALLEL_TIMEOUT_MS >= 1_800_000, true);
-  assertEquals(SELECT_PARALLEL_TIMEOUT_MS >= 1_800_000, true);
+  assert(RUN_PARALLEL_TIMEOUT_MS >= 1_800_000, `run-tests default was ${RUN_PARALLEL_TIMEOUT_MS}`);
+  assert(SELECT_PARALLEL_TIMEOUT_MS >= 1_800_000, `select-tests default was ${SELECT_PARALLEL_TIMEOUT_MS}`);
 });
 
 Deno.test("1k2a: run-tests.mjs exits with rc=0 after printing totals for a passing test", async () => {
@@ -39,7 +39,7 @@ Deno.test("1k2a: run-tests.mjs exits with rc=0 after printing totals for a passi
 });
 
 Deno.test("1k2a: parallel phase timeout kills entire process group leaving no orphans", async () => {
-  const dir = await durableDir("1k2a-parallel-orphan-test");
+  const dir = await durableDir(`1k2a-parallel-orphan-test-${Deno.pid}-${crypto.randomUUID().slice(0, 8)}`);
   const pidFile = `${dir}/grandchild.pid`;
   const probeFile = `${dir}/zz-probe-hang.test.ts`;
 
@@ -106,7 +106,7 @@ Deno.test("hangs in parallel phase", async () => {
 });
 
 Deno.test("1k2a: passing parallel test that leaves an orphan process has orphan reaped on exit", async () => {
-  const dir = await durableDir("1k2a-parallel-residual-test");
+  const dir = await durableDir(`1k2a-parallel-residual-test-${Deno.pid}-${crypto.randomUUID().slice(0, 8)}`);
   const pidFile = `${dir}/grandchild.pid`;
   const probeFile = `${dir}/zz-probe-pass-orphan.test.ts`;
 
