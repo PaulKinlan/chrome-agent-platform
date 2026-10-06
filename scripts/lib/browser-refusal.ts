@@ -9,8 +9,32 @@
 // The count matters as much as the name: a silent ignore reads as green, and a bare exit code is
 // invisible to the human reading the log. Both the human-readable ENVIRONMENT: line and the
 // machine-readable marker payload carry the reason AND the number of tests that went unverified.
-import { existsSync } from "node:fs";
 import { ENVIRONMENTAL_REFUSAL_EXIT, ENVIRONMENTAL_REFUSAL_MARKER } from "./quiet-window.ts";
+
+/**
+ * Is a REPORTED binary a usable one — a real, executable FILE?
+ *
+ * review P2 (delta): the existence check alone accepted a DIRECTORY (CAP_CHROMIUM=/tmp) and a
+ * non-executable file (CAP_CHROMIUM=/etc/passwd) as resolved, so the refusal never fired and the
+ * launch died EISDIR / EACCES — the same product-red-for-an-environment-difference this module
+ * exists to prevent, one shape over. `statSync` FOLLOWS symlinks, so a dangling symlink is absent
+ * (correct) and a symlink to a real executable is usable (also correct).
+ */
+function isUsableBinary(path: string | null | undefined): path is string {
+  if (!path) return false;
+  try {
+    // Deno.statSync, NOT node:fs's: in node:fs, `isFile` is a METHOD, so `!st.isFile` is false for a
+    // directory too (a function is truthy) and the check silently passes — I shipped exactly that and
+    // a drill with CAP_CHROMIUM=/tmp caught it. Deno's FileInfo exposes `isFile` as a BOOLEAN.
+    const st = Deno.statSync(path);
+    if (!st.isFile) return false;
+    // A path that cannot be executed is as absent as a missing one. (There is no execute bit to
+    // check on Windows; spawnability there is decided by the extension, not by mode.)
+    return Deno.build.os === "windows" || ((st.mode ?? 0) & 0o111) !== 0;
+  } catch {
+    return false;
+  }
+}
 
 export interface BrowserResolution {
   binary: string | null;
@@ -27,7 +51,7 @@ export function browserRefusal(
   // there). A missing override would otherwise pass as resolved, the refusal would not fire, and the
   // launch would die with ENOENT: a product red for an environment difference, which is the exact
   // failure this bead removes.
-  const binary = report.binary && existsSync(report.binary) ? report.binary : null;
+  const binary = isUsableBinary(report.binary) ? report.binary : null;
   if (binary) return null;
   const refused = browserDependentTests.length;
   return {

@@ -91,23 +91,25 @@ Deno.test("9t1b: isInsideRepo sees through a symlink into the tree", () => {
 Deno.test("9t1b: a REAL browser holds its profile while the whole tree is copied", async () => {
   // chrome-agent-platform-hlgr: this file's ONE browser-dependent test. On a host with no resolvable
   // browser it must refuse ENVIRONMENTALLY — NAMED and COUNTED — never a silent ignore (which reads as
-  // a pass) and never a product red (which blames the tree for an environment difference). Exit 75 is
-  // the repo's third verdict (scripts/lib/quiet-window.ts, as scripts/lib/heavy-gate-slot.ts already
-  // uses); the summary names the test and counts the refusals, because a count without a name is
-  // unusable and an exit code alone is invisible to a human reading the log.
-  // chrome-agent-platform-hlgr: this file's ONE browser-dependent test. On a host with no resolvable
-  // browser it must refuse ENVIRONMENTALLY — NAMED and COUNTED — never a silent ignore (which reads as
   // a pass) and never a product red (which blames the tree for an environment difference). The verdict
   // lives in scripts/lib/browser-refusal.ts so its wording and count are unit-testable without a
   // browser; resolveChromiumBinaryReport is the repo's resolver that distinguishes "resolved" from
   // "fell through to a default that may not exist".
+  // (review P2: the block that used to precede this one was a duplicate of it and was deleted.)
   const { launchChrome, resolveChromiumBinaryReport } = await import("../scripts/lib/chrome-launch.ts");
   const { refuseWithoutBrowser } = await import("../scripts/lib/browser-refusal.ts");
   // chrome-agent-platform-hlgr review P1: do NOT exit from here. This test sits before five STATIC
   // tests in this file, and Deno.exit(75) would abort them, losing coverage that needs no browser at
   // all. Without a browser this test declines to assert and the refusal is emitted by the LAST test in
   // the file, which runs after every static one has had its chance.
-  if (!resolveChromiumBinaryReport().binary) return;
+  //
+  // review P1 (delta): a REPORTED binary is not a RESOLVED one. resolveChromiumBinaryReport trusts a
+  // CAP_CHROMIUM override without checking the path, so testing `.binary` here let a missing (or a
+  // directory, or a non-executable) override through, and this test then died ENOENT/EISDIR/EACCES —
+  // a product red for an environment difference, which is the exact class this bead removes.
+  // browserRefusal() owns that judgement, so ask IT rather than the resolver.
+  const { browserRefusal } = await import("../scripts/lib/browser-refusal.ts");
+  if (browserRefusal(resolveChromiumBinaryReport(), BROWSER_DEPENDENT_TESTS)) return;
   // The race, driven for real: launch Chrome with a profile from the helper,
   // keep it alive, and copy the WHOLE working tree underneath it — the exact
   // command that failed in tests/cdp-client.test.ts (`cp -a <repo>/. <dst>/.`).

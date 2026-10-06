@@ -102,3 +102,26 @@ Deno.test("hlgr: the refusal's PROCESS path exits 75 with the marker, and never 
     "refuseWithoutBrowser must NOT return — a caller that continues would launch anyway",
   );
 });
+
+// review P2 (delta): THE ORDERING THE WHOLE DESIGN RESTS ON WAS UNPINNED. The refusal is emitted by the
+// LAST test in tests/chrome-profile-location.test.ts precisely so every static test above it runs first
+// on a browserless host — Deno.exit(75) aborts the file. Nothing asserted that it is still last, so an
+// edit appending one more test, or moving the refusal earlier, would silently restore the mid-file
+// abort and lose that coverage. This reads the file as TEXT (it must not be imported: importing it would
+// RUN it) and pins the position, so the regression fails BY NAME here instead.
+Deno.test("hlgr: the environmental refusal is the LAST declared test in chrome-profile-location.test.ts", async () => {
+  const src = await Deno.readTextFile(new URL("./chrome-profile-location.test.ts", import.meta.url));
+  const declared = [...src.matchAll(/^Deno\.test\(\s*["`']([^"`']+)/gm)].map((m) => m[1]);
+  assert(declared.length >= 2, `the file must declare its tests, found ${declared.length}`);
+  const last = declared[declared.length - 1];
+  assert(
+    /no resolvable browser/i.test(last),
+    `the refusal must be the LAST test, or a browserless host aborts the static tests above it. Last is: "${last}"`,
+  );
+  // And no OTHER test may declare the refusal: one refusal per file keeps the count honest.
+  assertEquals(
+    declared.filter((t) => /no resolvable browser/i.test(t)).length,
+    1,
+    `exactly one test may emit the refusal; found ${declared.filter((t) => /no resolvable browser/i.test(t)).join(", ")}`,
+  );
+});
