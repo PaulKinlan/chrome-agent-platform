@@ -212,3 +212,89 @@ Deno.test("grj9: the durable per-file log path is namespaced by the run's pid", 
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+// ── chrome-agent-platform-ulcw: the COUNT and its durable logs share ONE run id ──────────────────────
+// THE DEFECT: for one run's stamp the durable per-file logs named more files than the summary counted
+// (the bead's "1/6 failed while two failure logs existed"). Measured on this tree, the accounting was
+// ALREADY correct per call — a run with one exit-failure and one timeout-failure prints 2/3 and names
+// both — so the divergence the bead saw is a RUN-IDENTITY defect: the millisecond stamp + pid was not
+// unique per call, and the summary did not print any run id at all, so a reader counting logs under a
+// timestamp saw a different set from the run that printed the count. This test pins BOTH halves: the
+// count/name/timeout-distinction of a two-failure run, and that the summary's run id is what every one
+// of ITS logs carries and that two calls in one process never share an id.
+Deno.test("ulcw: TWO failing files (one exit, one TIMEOUT) are both counted, both named, and the run id ties the count to exactly its own logs", async () => {
+  const dir = durableDir(`ulcw-two-failures-${Deno.pid}`);
+  const passFile = join(dir, "zz-ulcw-pass.test.ts");
+  const exitFile = join(dir, "zz-ulcw-exit.test.ts");
+  const hangFile = join(dir, "zz-ulcw-hang.test.ts");
+  const driver = join(dir, "zz-ulcw-driver.mjs");
+  await Deno.writeTextFile(passFile, `Deno.test("fixture: passes", () => {});\n`);
+  await Deno.writeTextFile(
+    exitFile,
+    `Deno.test("fixture: exits non-zero", () => {\n  throw new Error("ULCW_EXIT_FAILURE");\n});\n`,
+  );
+  await Deno.writeTextFile(
+    hangFile,
+    `Deno.test("fixture: hangs", async () => {\n  setInterval(() => {}, 1000);\n  await new Promise(() => {});\n});\n`,
+  );
+  await Deno.writeTextFile(
+    driver,
+    `import { runSerialFiles } from ${JSON.stringify(join(ROOT, "scripts/lib/serial-phase.mjs"))};\n` +
+      `import { readdirSync } from "node:fs";\n` +
+      `const logDir = ${JSON.stringify(join(Deno.env.get("HOME") ?? "", "cap-evidence", "serial-phase-logs"))};\n` +
+      `const before = new Set(readdirSync(logDir));\n` +
+      `const rc = runSerialFiles([process.argv[2], process.argv[3], process.argv[4]], {\n` +
+      `  stdio: "pipe", cwd: ${JSON.stringify(ROOT)}, timeoutMs: 120000,\n` +
+      `  perFileTimeoutMs: { [process.argv[4]]: 2000 },\n});\n` +
+      `console.log("ULCW_DRIVER_RC=" + rc);\n` +
+      `console.log("ULCW_ADDED_LOGS=" + JSON.stringify(readdirSync(logDir).filter((f) => !before.has(f))));\n`,
+  );
+  const runOnce = async () => {
+    const r = await new Deno.Command("node", {
+      args: [driver, passFile, exitFile, hangFile],
+      cwd: ROOT,
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    return decoder.decode(r.stdout) + decoder.decode(r.stderr);
+  };
+  try {
+    const out = await runOnce();
+    // (1) THE COUNT: two of three failed, and BOTH are named - the count is not a lower bound.
+    assert(
+      /serial phase \(3 build\/artifact files\) FAILED \(2\/3 failed\)/.test(out),
+      `the count must be 2/3:\n${out}`,
+    );
+    const failingBlock = out.slice(out.indexOf("FAILING SERIAL FILE(S)"));
+    assert(
+      failingBlock.includes("zz-ulcw-exit.test.ts") && failingBlock.includes("zz-ulcw-hang.test.ts"),
+      `both failing files must be named:\n${failingBlock}`,
+    );
+    assert(
+      !failingBlock.includes("zz-ulcw-pass.test.ts"),
+      `the passing file must not be blamed:\n${failingBlock}`,
+    );
+    assert(
+      failingBlock.includes("exit 1") && failingBlock.includes("exit 124, TIMED OUT"),
+      `the exit failure and the TIMEOUT must be distinguished:\n${failingBlock}`,
+    );
+    // (2) THE INVARIANT: exactly one durable log per counted failure, and every one carries the run id
+    // the summary printed - the count and its evidence are tied by one value, not by a timestamp.
+    const added = JSON.parse(out.match(/ULCW_ADDED_LOGS=(\[.*?\])/s)?.[1] ?? "[]");
+    assertEquals(added.length, 2, `one durable log per counted failure (got ${JSON.stringify(added)})`);
+    const runId = out.match(/FAILED \(2\/3 failed\) in \d+s \[run ([^\]]+)\]/)?.[1];
+    assert(runId, `the summary must print its run id:\n${out}`);
+    for (const log of added) {
+      assert(log.includes(runId), `log ${log} must carry the summary's run id ${runId}`);
+    }
+    // (3) two calls in ONE process get DIFFERENT ids, so one run's logs can never be counted as another's.
+    const out2 = await runOnce();
+    const runId2 = out2.match(/FAILED \(2\/3 failed\) in \d+s \[run ([^\]]+)\]/)?.[1];
+    assert(runId2, `the second run must also print a run id:\n${out2}`);
+    assert(runId2 !== runId, `a second call must not reuse the run id (${runId} vs ${runId2})`);
+    // (4) the aggregator's contract is unchanged: first failing code.
+    assert(out.includes("ULCW_DRIVER_RC=1"), `the aggregator must return the first failing code:\n${out}`);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
