@@ -290,13 +290,29 @@ consequences are carried by the matching register entry where one exists.
 
 - **Boundary:** S12. **Evidence:** `extension/lib/hooks.js:399` (`checkHookAllowed` —
   the owner deny-list, checked FIRST and fail-closed), `:481` (`subscribeHook`), with the
-  owner-approval seam invoked at `:516`. `hooks.subscribe` is classified
-  approval-required in the dispatch census §4.4 and in
-  `tests/owner-approval-classification.test.ts:19`. **Live gap on this tree:** the seam
-  at `extension/lib/hooks.js:516` is guarded by `if (existing && …)`, so a FIRST-TIME
-  `(hookId, skillId)` pair is written with only the deny-list check. The fix is in
-  flight on branch `fleet/j5yz-51cd` (commit `8be5ec07`) and is NOT on `origin/main@75e032f7`;
-  this line must be re-read against the tree at the moment of audit.
+  owner-approval seam invoked at `:550` (it was `:516` before 51cd). `hooks.subscribe` is
+  classified approval-required in the dispatch census §4.4 and in
+  `tests/owner-approval-classification.test.ts:19`.
+- **CONTROL: LANDED (chrome-agent-platform-51cd, merge `2b4da1f3`).** The seam runs for
+  EVERY subscribe rather than only a replacement — it is gated on
+  `typeof gate === "function"`, not the old `if (existing && …)` — and it is invoked with
+  `{ existing: existing ? { …existing } : null }`, so a FIRST-TIME `(hookId, skillId)` pair
+  reaches the owner gate instead of being written on the deny-list check alone. A
+  model-authored `promptTemplate` can no longer reach the instruction position either: the
+  model-facing schema no longer carries the field, and the route forces a model
+  principal's template to empty (`extension/background/service-worker.js:10855`) — which
+  matters because `dispatchHook` executes that template verbatim as the recurring run's
+  task (`:12092-12093`).
+- **Falsifiable, not prose:** `tests/hook-subscribe-approval.test.ts` drives the REAL route
+  through the MODEL path with the real approval store and asserts that a first-time
+  subscribe publishes one approval card and leaves exactly one pending row, that nothing
+  is persisted before the owner decides, and that a same-pair replacement still gates. The
+  file names the mutant it is calibrated against: restoring the old
+  `if (existing && typeof gate === "function")` short-circuit must turn its first two
+  tests RED. Those assertions, not this paragraph, are what would catch a regression.
+- **Residual, to re-read at audit time:** the seam stays OPTIONAL in `hooks.js` by design —
+  internal seed callers (agent-seeds, skill enable/disable) pass no gate — so the control
+  lives in the ROUTE, and a change to who may call `subscribeHook` directly reopens it.
 
 ### T14. MCP: unbounded server count and argument egress to a third party
 
