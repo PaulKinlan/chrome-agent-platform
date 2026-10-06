@@ -401,7 +401,10 @@ read in run 2.
   an environmental verdict, never a product red and never a pass. A harness
   declares itself load-sensitive with `launchChrome({ requireQuiet: true })`
   plus a `loadSensitive` reason in `scripts/lib/harness-registry.ts`;
-  `tests/quiet-window.test.ts` fails if the two sets disagree, so a declaration
+  `tests/quiet-window-static.test.ts` fails if the two sets disagree (the
+  tracked-source half of the mkax guard, split out by chrome-agent-platform-fgik
+  so the always-on set does not pay `tests/quiet-window.test.ts`'s esbuild
+  burners, which stay in the full suite), so a declaration
   nobody honours cannot survive. The wait is bounded, sampled and printed
   (`scripts/lib/quiet-window.ts`: 1-minute loadavg per core plus a count of
   heavy build processes — rustc/cargo/cc1/ld/esbuild/ninja/make/wasm-opt/

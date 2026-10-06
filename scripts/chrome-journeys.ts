@@ -134,7 +134,7 @@ function launchJourneyChrome(profile: string) {
     // quiet box (bounded, printed) and refuses with exit 75 + the load numbers
     // attached rather than dying at 250/370 on a CDP transport timeout. The
     // declaration lives in scripts/lib/harness-registry.ts (`loadSensitive`)
-    // and tests/quiet-window.test.ts keeps the two in step.
+    // and tests/quiet-window-static.test.ts keeps the two in step.
     requireQuiet: true,
     // 0lj3: and it TAKES TURNS. On 2026-09-22 this suite started on a box the
     // quiet predicate called quiet and reached 132/370 before a `cdp evaluate`
