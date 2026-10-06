@@ -162,7 +162,7 @@ function serialLogDir() {
  * survives a stdout-only capture AND a mid-phase kill (a kill deletes any end-of-phase-
  * only mechanism), stderr because a human running the command reads it there.
  */
-function announce(line) {
+export function announce(line) {
   console.log(line);
   console.error(line);
 }
