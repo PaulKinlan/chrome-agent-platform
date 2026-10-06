@@ -319,6 +319,15 @@ Implemented and verified live (pi-acp 0.0.33 over `npm run acp:bridge`):
   token is refused with 403 even on loopback. The extension side REFUSES a
   non-loopback `acp.endpoint` rather than connecting to it, because the bridge
   speaks plain `ws://`. The Settings UI for these is still pending (bead khkk).
+  **Accepted local-server-identity residual (R24 / 6hly):** the persisted token
+  authenticates the extension to the bridge, not the bridge to the extension.
+  On the WebSocket fallback, a local process that binds `127.0.0.1:3210` first
+  can receive that token in the upgrade query and impersonate the harness.
+  The operator accepts this on a single-user development machine where local
+  processes are owner-controlled; do not extend that assumption to a shared
+  or multi-user host. R24 records the reversible decision, three declined
+  alternatives, and the trigger that reopens it; voicebox `k74h` is a separate
+  cross-origin web-page issue.
 
 Deliberately NOT yet implemented (tracked as beads):
 

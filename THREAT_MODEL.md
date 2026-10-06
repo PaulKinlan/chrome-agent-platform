@@ -348,11 +348,20 @@ consequences are carried by the matching register entry where one exists.
 
 ### T15. A web page driving the local shell-capable ACP harness
 
-- **Boundary:** TB5. **Evidence:** `scripts/acp-bridge.ts:44` (loopback default),
-  `:67-71` (`originAllowed` — extension schemes only unless an exact origin is named),
-  `:641-646` (403 on a refused Origin or a wrong token), `:52-56` (shared-secret
-  requirement when bound off loopback). **Test:** `tests/acp-bridge-security.test.ts:44-56`
-  (a web Origin is refused, an extension Origin is accepted).
+- **Boundary:** TB5. **Evidence:** `scripts/acp-bridge.ts:49` (loopback default),
+  `:126-130` (`originAllowed` admits extension origins and local clients without Origin),
+  `:723-743` (403 on a refused Origin or wrong token, including loopback), and
+  `:80-125` (the default shared secret persists across restarts). **Test:**
+  `tests/acp-bridge-security.test.ts:44-56` (a web Origin is refused, an extension
+  Origin is accepted); `:189-230` (the persisted token survives restart).
+- **Residual (accepted, `chrome-agent-platform-6hly`):** the loopback WebSocket
+  bridge authenticates the client, not the server. If an unprivileged local
+  process binds `127.0.0.1:3210` before the real bridge (or while it is down),
+  the extension hands the process its persisted token in the upgrade query
+  (`extension/lib/acp-runner.js:260,292-298,551-552`); it can impersonate the
+  shell-capable harness or reuse that token later. The decision assumes a
+  single-user development machine whose local processes are owner-controlled;
+  it must be reopened if that assumption changes. **Register:** R24.
 
 ### T16. Resource exhaustion rather than data theft
 
@@ -461,6 +470,13 @@ decision and, where one exists, the trigger that would reopen it.
    per-run host allowlist (`checkFetchPolicy` for script fetch), per-origin grants
    (`python.fetch`), and frozen service allowlists (enclave proxy). **Owning register
    entry: R23, including its reopen trigger.**
+10. **ACP loopback server-identity bind race (T15 / 6hly).** ADJUDICATED AND
+    WITHHELD by the operator on 2026-10-06 under the single-user development-
+    machine assumption. A local process that wins the `127.0.0.1:3210` bind
+    receives the persisted token; the client cannot authenticate that server.
+    Reopen if the machine is shared or hosts an untrusted local process. This
+    is not voicebox `k74h` (a cross-origin web-page threat in another project).
+    **Owning register entry: R24, including alternatives and the reopen trigger.**
 
 ---
 
