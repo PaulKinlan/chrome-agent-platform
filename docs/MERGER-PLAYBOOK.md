@@ -40,7 +40,7 @@ When a test run fails, never guess and never blame ambient load without mechanis
 
 | Name | Trigger / Symptom | Phase | Mechanism & Discriminator |
 |---|---|---|---|
-| **`fnmr` futex hang** | `build-bundled-tool-packages.mjs --verify` hangs > 120s (`futex_do_wait`) | Serial (`tests/build-tool-bundling.test.ts:136`) | Rare Node/Deno futex deadlock in child process. **Discriminator**: Runs in ~1–2s when executed in isolation (`npm run test:file -- tests/build-tool-bundling.test.ts`). |
+| **`fnmr` futex hang** | `build-bundled-tool-packages.mjs --verify` hangs > 120s (wchan `futex_do_wait` ≤6.6, `futex_wait_queue` ≥6.7 — i0u7) | Serial (`tests/build-tool-bundling.test.ts:136`) | Rare Node/Deno futex deadlock in child process. **Discriminator**: Runs in ~1–2s when executed in isolation (`npm run test:file -- tests/build-tool-bundling.test.ts`). |
 | **`m3a2` env race** | `ENOENT: mkdir '/proc/cap-chp-impossible/...'` | Parallel (`tests/dist-staleness-note.test.ts`) | `tests/durable-root.test.ts:69` mutates process-global `CAP_DURABLE_ROOT` in the shared parallel test process. **Discriminator**: Passes 100% in isolation; fails only when racing `durable-root.test.ts`. |
 | **`4vfj` stale selector** | 4 combobox checks fail on `#task-input` | Standalone (`npm run test:a11y`) | Pre-existing selector drift on unmodified main prior to composer-target migration. |
 

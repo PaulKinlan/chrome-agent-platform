@@ -99,7 +99,11 @@ Deno.test("bounded child: a futex-waiting child is killed, and the error NAMES i
   // a full one). Per-thread wchan shows which threads are in the futex, which the process-wide field
   // cannot. The trailing clause must say a report is missing rather than promise one.
   const threadTable = m[5];
-  assert(/:futex_do_wait/.test(threadTable), `the thread table must show the futex wait, got ${threadTable}; sample=${report}`);
+  // The pin is the futex FAMILY, not one kernel's spelling: the Atomics.wait sleep reads
+  // wchan=futex_do_wait on kernels ≤6.6 (this test's original spelling) and futex_wait_queue on
+  // ≥6.7 (the futex rework into kernel/futex/wait.c; measured on 6.12.93 — i0u7). Either way an
+  // epoll-idle thread reads do_epoll_wait, which never matches, so the pin stays falsifiable.
+  assert(/:futex/.test(threadTable), `the thread table must show the futex wait, got ${threadTable}; sample=${report}`);
   assert(m[6].includes("No diagnostic report was produced"), `the message must say no report came, got: ${m[6]}`);
   assert(/futex|thread-wchan/.test(m[6]), `and it must point at the thread table instead, got: ${m[6]}`);
   // THE RECORD IS A FILE, NOT A SENTENCE (fnmr review). This child has no SIGUSR2 listener, so the
