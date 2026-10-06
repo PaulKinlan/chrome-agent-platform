@@ -4,11 +4,12 @@
 // Invariants guarded:
 //   1. docs/SW-DISPATCH-AUTHORITY-CENSUS.md exists and is cited in AGENTS.md and routes/ROUTE_MAP.md.
 //   2. Every registered route in handlers (via mergeRouteMaps) is extracted from actual AST composition.
-//   3. The census classification is complete, disjoint, and covers 100% of registered routes (259 total).
-//      (l0r: recipe.list catalog fork deleted; wfo5: browser.callTool added; net 259 total.)
+//   3. The census classification is complete, disjoint, and covers all 276 registered routes.
 //   4. Any new route added to mergeRouteMaps without explicit census classification fails RED.
 //   5. Unclassified mutations (e.g. named-agent.set-tools) are pinned to an explicit inventory.
-//   6. Unknown message types fail closed at the dispatcher.
+//   6. The document's §3/§4 categories exactly match the tested classifications (4h47).
+//   7. Each §4.3/§4.4 handler reaches its declared approval seam and owner-direct policy (gn3c).
+//   8. Deleting a route seam or its injection fails RED naming the route (gn3c).
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
@@ -470,7 +471,7 @@ function approvalFindings(swSource: string): string[] {
       ? "OWNER_APPROVAL_DIRECT" : "OWNER_APPROVAL_REQUIRED";
     const entry = handlers.get(route);
     if (!entry) {
-      findings.push(`route "${route}" (${category}) has no registered handler AST`);
+      findings.push(`route "${route}" (${category}) has no registered handler AST — if extracted, add its binding to APPROVAL_MODULES`);
       continue;
     }
     if (entry.module) {
@@ -548,12 +549,29 @@ Deno.test("census: each direct/required route handler reaches its declared appro
   assertEquals(approvalFindings(sw), []);
 });
 
-Deno.test("census: deleting a route's sole approval call turns RED naming that route", () => {
+Deno.test("census: deleting a route seam or its injected authority turns RED naming the route", () => {
   const sw = Deno.readTextFileSync(`${ROOT}extension/background/service-worker.js`);
-  const call = 'const approval = await requireOwnerApproval(context, "capability.revoke", target, payload);';
-  assertEquals(sw.split(call).length, 2, "falsification must target exactly one live capability.revoke seam");
-  const mutant = sw.replace(call, "const approval = { ok: true };");
-  const findings = approvalFindings(mutant);
-  assert(findings.some((finding) => finding.includes('route "capability.revoke"') && finding.includes("no approval seam")),
-    `removing capability.revoke's seam must fail by name, got ${findings.join("; ")}`);
+  const ast = acorn.parse(sw, { ecmaVersion: "latest", sourceType: "module" });
+  const handler = approvalHandlerNodes(ast).get("capability.revoke")?.node;
+  const call = approvalCalls(handler, "requireOwnerApproval");
+  assertEquals(call.length, 1, "falsification must find the live capability.revoke seam by AST");
+  const remove = (node: any) => sw.slice(0, node.start) + "null" + sw.slice(node.end);
+  const routeFindings = approvalFindings(remove(call[0]));
+  assert(routeFindings.some((finding) => finding.includes('route "capability.revoke"') && finding.includes("no approval seam")),
+    `removing capability.revoke's seam must fail by name, got ${routeFindings.join("; ")}`);
+
+  const scheduler = ast.body.flatMap((statement: any) => statement.type === "VariableDeclaration" ? statement.declarations : [])
+    .find((part: any) => part.id?.name === "schedulerRoutes");
+  const injected = scheduler?.init?.arguments?.flatMap((arg: any) => arg.type === "ObjectExpression" ? arg.properties : [])
+    .filter((part: any) => part.key?.name === "requireOwnerApproval");
+  assertEquals(injected?.length, 1, "falsification must find scheduler's live approval injection by AST");
+  const injectionFindings = approvalFindings(sw.slice(0, injected[0].start) + "missingApproval: null" + sw.slice(injected[0].end));
+  assert(injectionFindings.some((finding) => finding.includes('route "task.pause"') && finding.includes("dependency injection")),
+    `removing task.pause's approval injection must fail by name, got ${injectionFindings.join("; ")}`);
+
+  const script = approvalCalls(approvalFunction(ast, "scriptApprovalGate")?.body, "requireOwnerApproval");
+  assertEquals(script.length, 1, "falsification must find the script helper's live forwarding seam by AST");
+  const scriptFindings = approvalFindings(remove(script[0]));
+  assert(scriptFindings.some((finding) => finding.includes('route "script.run"') && finding.includes("action-forwarding bridge")),
+    `removing script.run's forwarding seam must fail by name, got ${scriptFindings.join("; ")}`);
 });
