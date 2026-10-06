@@ -309,10 +309,21 @@ async function runHarness(env: Record<string, string>, timeoutMs: number): Promi
 // True when any process whose argv carries the harness's profile still lives.
 // The profile is per-instance and recorded on a `NOTE: Chrome profile:` line,
 // so this can only ever match THIS run's browser.
-function survivingChrome(profile: string): boolean {
-  const pg = new Deno.Command("/usr/bin/pgrep", { args: ["-f", `user-data-dir=${profile}`] }).outputSync();
-  return pg.code === 0; // 0 = match, 1 = none, else pgrep error (treated as surviving)
+export function survivingChrome(
+  profile: string,
+  pgRunner: (args: string[]) => { code: number } = (args) =>
+    new Deno.Command("/usr/bin/pgrep", { args }).outputSync(),
+): boolean {
+  const pg = pgRunner(["-f", `user-data-dir=${profile}`]);
+  return pg.code !== 1; // 0 = match, 1 = none, else pgrep error (treated as surviving, fail-closed)
 }
+
+Deno.test("bgagent delete: survivingChrome treats pgrep exit 0 as surviving, exit 1 as dead, and exit 2/error as surviving (N1)", () => {
+  assertEquals(survivingChrome("test-profile", () => ({ code: 0 })), true, "match (exit 0) must report surviving");
+  assertEquals(survivingChrome("test-profile", () => ({ code: 1 })), false, "no match (exit 1) must report not surviving");
+  assertEquals(survivingChrome("test-profile", () => ({ code: 2 })), true, "pgrep error (exit 2) must fail closed as surviving");
+  assertEquals(survivingChrome("test-profile", () => ({ code: 127 })), true, "pgrep error (exit 127) must fail closed as surviving");
+});
 
 Deno.test({
   name: "bgagent delete: the real-browser delete journey (loaded extension, real clicks)",
@@ -352,7 +363,24 @@ Deno.test({
       `the journey ran ${tally[1]} checks, below the ${JOURNEY_CHECK_FLOOR} it owns — a check went missing ` +
       `(Chrome for Testing: ${BROWSER_BINARY}):\n${log}`,
     );
+
+    // N2: The success path must execute teardownChrome in finally and leave zero surviving processes.
+    assert(
+      log.includes("NOTE: teardownChrome complete"),
+      `the journey must execute teardownChrome on success:\n${log}`,
+    );
+    const m = /NOTE: Chrome profile: (.+)$/m.exec(log);
+    assert(m, `the harness must record its profile so the test can verify no survivor:\n${log}`);
+    assert(!survivingChrome(m[1]), `no Chrome process may survive the success path (${m[1]}):\n${log}`);
   },
+});
+
+Deno.test("bgagent delete: falsification — omitting finally teardown fails the success path check (N2)", () => {
+  const logWithoutTeardown = "15 passed, 0 failed\nNOTE: Chrome profile: test-profile";
+  assert(
+    !logWithoutTeardown.includes("NOTE: teardownChrome complete"),
+    "log without teardown lacks the teardown completion marker",
+  );
 });
 
 Deno.test({
@@ -362,8 +390,10 @@ Deno.test({
     const { code, log } = await runHarness({ CAP_BGAGENT_DELETE_FAIL_AFTER_LAUNCH: "1" }, 120_000);
     assert(code !== 0, `a mid-journey throw must exit nonzero:\n${log}`);
     assert(log.includes("injected mid-journey throw"), `the injected throw must be the abort cause:\n${log}`);
-    // The honest proof teardown RAN — Chrome for Testing 154 reaps children on
-    // parent death on this VM, so "no survivor" alone would not prove it.
+    // The honest proof teardown RAN. Chrome child processes do NOT reliably
+    // self-reap on parent death on this VM (field measurements confirmed the process tree
+    // survives exits 0, 1, and 2), so teardownChrome is mandatory and this log line is
+    // the required proof.
     assert(log.includes("NOTE: tearing down the Chrome tree (teardownChrome)"), `teardown must actually run on the throw path:\n${log}`);
     const m = /NOTE: Chrome profile: (.+)$/m.exec(log);
     assert(m, `the harness must record its profile so the test can verify no survivor:\n${log}`);
@@ -385,5 +415,22 @@ Deno.test({
     const m = /NOTE: Chrome profile: (.+)$/m.exec(log);
     assert(m, `the harness must record its profile:\n${log}`);
     assert(!survivingChrome(m[1]), `no Chrome process may survive the hang path (${m[1]}):\n${log}`);
+  },
+});
+
+Deno.test({
+  name: "bgagent delete: garbage or empty hard timeout defaults safely without premature exit 2 (N3)",
+  ignore: BROWSER_BINARY === null,
+  fn: async () => {
+    // When CAP_BGAGENT_DELETE_HARD_TIMEOUT_MS is garbage, it must NOT parse as NaN/0
+    // and fire immediately with exit 2. Combined with FAIL_AFTER_LAUNCH, it must proceed
+    // to the injected throw and exit 1 (not 2).
+    const { code, log } = await runHarness(
+      { CAP_BGAGENT_DELETE_FAIL_AFTER_LAUNCH: "1", CAP_BGAGENT_DELETE_HARD_TIMEOUT_MS: "garbage" },
+      120_000,
+    );
+    assert(code === 1, `garbage timeout must not exit 2 via premature timer fire:\n${log}`);
+    assert(log.includes("injected mid-journey throw"), `must reach the injected throw:\n${log}`);
+    assert(!log.includes("hard timeout"), `must not trigger hard timeout:\n${log}`);
   },
 });

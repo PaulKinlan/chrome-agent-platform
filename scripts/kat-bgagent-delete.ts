@@ -18,7 +18,7 @@
 //   deno run -A scripts/kat-bgagent-delete.ts <path-to-extension> [<out-dir>]
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker, resolveChromiumBinaryReport, teardownChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, resolveChromiumBinaryReport, teardownChrome, withTimeout } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -68,8 +68,9 @@ const profile = chromeProfileDir("kat-bgagent-delete");
 
 // The ONE teardown path, used by BOTH the finally below and the hard-timer
 // backstop. The log line is the honest proof teardown actually RAN on a given
-// exit path (Chrome for Testing 154 reaps children on parent death on this VM,
-// so "no survivor" alone is not proof — this line is).
+// exit path. Chrome child processes do NOT reliably self-reap on parent death on
+// this VM (field measurements confirmed the process tree survives exits 0, 1, and 2),
+// so teardownChrome is mandatory and this log line is the required proof.
 async function teardownTree() {
   console.log("NOTE: tearing down the Chrome tree (teardownChrome)");
   await teardownChrome(launched, profile);
@@ -82,7 +83,9 @@ async function teardownTree() {
 // collect (the observed rc=124 shape). The finally below alone is not enough:
 // a hung await never reaches it, so the timer is the backstop. Overridable so
 // the falsification test can fire it in seconds rather than 5 minutes.
-const HARD_TIMEOUT_MS = Number(Deno.env.get("CAP_BGAGENT_DELETE_HARD_TIMEOUT_MS") ?? 300_000);
+const rawTimeout = Deno.env.get("CAP_BGAGENT_DELETE_HARD_TIMEOUT_MS");
+const parsedTimeout = rawTimeout != null ? Number(rawTimeout) : NaN;
+const HARD_TIMEOUT_MS = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 300_000;
 let hardTimer: ReturnType<typeof setTimeout> | undefined;
 
 try {
@@ -93,19 +96,25 @@ try {
       "--remote-allow-origins=*",
       `--user-data-dir=${profile}`, "about:blank"],
   });
-  ws = new WebSocket(launched.wsUrl);
-  await new Promise((r, rej) => { ws!.onopen = r; ws!.onerror = () => rej(new Error("CDP websocket failed to open")); });
   console.log(`NOTE: Chrome profile: ${profile}`);
 
-  // Arm the hard timer only AFTER the browser is up: the bound guards the
-  // JOURNEY (the launch is already bounded inside launchChrome), and teardown
-  // on fire needs `launched` to be set so the WHOLE tree is matched by profile.
+  // Arm the hard timer immediately once the browser is launched so ANY hang
+  // (including a stalled websocket open or dead CDP endpoint) is bounded.
   hardTimer = setTimeout(() => {
     console.log(`FAIL: bgagent-delete journey exceeded the ${HARD_TIMEOUT_MS}ms hard timeout`);
     teardownTree()
       .catch((e) => console.log(`teardown during hard timeout failed: ${String(e)}`))
       .finally(() => Deno.exit(2));
   }, HARD_TIMEOUT_MS);
+
+  ws = new WebSocket(launched.wsUrl);
+  await withTimeout(
+    new Promise((r, rej) => {
+      ws!.onopen = r;
+      ws!.onerror = () => rej(new Error("CDP websocket failed to open"));
+    }),
+    15_000,
+  );
 
   // One id → { resolve, reject, timer }: a send that never gets a reply (dead
   // socket, page gone) must REJECT after SEND_TIMEOUT_MS, never hang forever.
