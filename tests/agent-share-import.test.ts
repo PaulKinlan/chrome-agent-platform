@@ -31,6 +31,40 @@ if (BROWSER_BINARY === null) {
     ". Reporting the browser journey as IGNORED (a visible tally line, never a pass); set CAP_CHROMIUM or install a browser to run it.");
 }
 
+// Hub rows render after the staged boot's asynchronous named-agent.list reply;
+// Page.navigate plus a fixed sleep is not evidence that the picker is ready.
+async function clickShareAgentRowWhenReady(ev: (expression: string) => Promise<any>, waitMs = 15000) {
+  const deadline = Date.now() + waitMs;
+  let observed;
+  do {
+    observed = await ev(`(() => {
+      const picker = document.querySelector("#named-agents agent-picker");
+      const rows = [...(picker?.shadowRoot?.querySelectorAll(".opt") ?? [])];
+      const names = rows.map((r) => r.querySelector(".name")?.textContent || "");
+      const row = rows.find((r) => (r.querySelector(".name")?.textContent || "") === "Share Pilot");
+      if (row) row.click();
+      return { clicked: !!row, pickerFound: !!picker, names };
+    })()`);
+    if (observed?.clicked) return;
+    if (Date.now() < deadline) await new Promise((r) => setTimeout(r, 150));
+  } while (Date.now() < deadline);
+  throw new Error(`Share Pilot row did not render within ${waitMs}ms: ${JSON.stringify(observed)}`);
+}
+
+Deno.test("share picker readiness retries delayed rows and diagnoses missing rows", async () => {
+  let calls = 0;
+  await clickShareAgentRowWhenReady(async () => {
+    calls++;
+    return { clicked: calls === 3, pickerFound: true, names: calls === 3 ? ["Share Pilot"] : [] };
+  }, 3000);
+  assertEquals(calls, 3, "a late picker row must be re-probed before declaring it missing");
+  let error;
+  try {
+    await clickShareAgentRowWhenReady(async () => ({ clicked: false, pickerFound: true, names: ["Other"] }), 0);
+  } catch (e) { error = e; }
+  assert(error?.message?.includes('"Other"'), "a truly missing row must fail with observed picker names");
+});
+
 Deno.test({
   name: "pu7n: share downloads a card and importing it recreates the agent (export → import equivalence)",
   ignore: BROWSER_BINARY === null,
@@ -115,15 +149,7 @@ Deno.test({
       // 2. Open its surface via the real hub row; the Share button must unhide.
       await send("Page.navigate", { url: `chrome-extension://${extId}/ntp/ntp.html` }, sessionId);
       await new Promise((r) => setTimeout(r, 1500));
-      const opened = await ev(`(() => {
-        const picker = document.querySelector("#named-agents agent-picker");
-        const rows = [...(picker?.shadowRoot?.querySelectorAll(".opt") ?? [])];
-        const row = rows.find((r) => (r.querySelector(".name")?.textContent || "") === "Share Pilot");
-        if (!row) return false;
-        row.click();
-        return true;
-      })()`);
-      assertEquals(opened, true, "Agent row must be found and opened");
+      await clickShareAgentRowWhenReady(ev);
       await new Promise((r) => setTimeout(r, 1200));
       assertEquals(await ev(`document.getElementById("share-agent")?.hidden`), false, "the Share button is offered on a named agent's view header");
 
