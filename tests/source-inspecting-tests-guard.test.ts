@@ -470,10 +470,11 @@ Deno.test("afpl: REAL-TREE falsification — a depth-2 repo-walking helper is NA
   const depth2Walker = join(realHelpersDir, "zz-afpl-depth2-walk.ts");
   const proseHelper = join(realHelpersDir, "zz-afpl-prose-only.ts");
   const fixtureReader = join(realHelpersDir, "zz-afpl-fixture-read.ts");
+  const siblingFile = join(realHelpersDir, "zz-afpl-preexisting-sibling.ts");
   const testFiles = [depth2Walker, proseHelper, fixtureReader];
 
   // NEW-3: Self-healing residue reconciliation from any prior SIGKILL before starting
-  for (const f of testFiles) {
+  for (const f of [...testFiles, siblingFile]) {
     try { await Deno.remove(f); } catch { /* ignore if absent */ }
   }
 
@@ -482,6 +483,9 @@ Deno.test("afpl: REAL-TREE falsification — a depth-2 repo-walking helper is NA
   if (!helpersDirPreexisted) {
     await Deno.mkdir(realHelpersDir, { recursive: true });
   }
+
+  // NEW-1: Plant a pre-existing sibling to prove cleanup preserves un-owned files
+  await Deno.writeTextFile(siblingFile, "// Pre-existing sibling helper\nexport const ok = true;\n");
 
   try {
     // 1. (F1) Depth-2 helper walking root via "../../" (the repo's own depth-2 idiom).
@@ -541,11 +545,15 @@ Deno.test("afpl: REAL-TREE falsification — a depth-2 repo-walking helper is NA
     for (const f of testFiles) {
       try { await Deno.remove(f); } catch { /* ignore */ }
     }
+    // NEW-1 regression assertion: prove pre-existing sibling was NOT deleted by test cleanup
+    const siblingSurvived = existsSync(siblingFile);
+    try { await Deno.remove(siblingFile); } catch { /* ignore */ }
     if (!helpersDirPreexisted) {
       try {
         await Deno.remove(realHelpersDir); // Non-recursive rmdir; fails harmlessly if directory contains other files
       } catch { /* ignore */ }
     }
+    assertEquals(siblingSurvived, true, "NEW-1: pre-existing sibling in tests/helpers must NOT be removed by test cleanup");
   }
 });
 
