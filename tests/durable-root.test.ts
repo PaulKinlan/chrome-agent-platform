@@ -70,8 +70,13 @@ function probeEnvCases(): Promise<Record<string, Probe>> {
   })();
 }
 
-Deno.test("isRamBacked identifies the tmpfs /tmp and disk-backed $HOME", () => {
-  assertEquals(isRamBacked("/tmp"), true, "/tmp is tmpfs on the build host");
+// /dev/shm is tmpfs on EVERY Linux host, so it is the universal RAM-backed
+// witness. /tmp is NOT: it is tmpfs on the build host and ext4 on this fleet
+// VM (chrome-agent-platform-3bv7), and this file is in ALWAYS_ON (kz27), so
+// asserting the host's /tmp layout reds every lane's subset gate with a
+// failure that belongs to no one's change. The /tmp root is checked against
+// THIS host's mount table instead, below.
+Deno.test("isRamBacked identifies the RAM-backed /dev/shm and disk-backed $HOME", () => {
   assertEquals(isRamBacked("/dev/shm"), true, "/dev/shm is tmpfs");
   assertEquals(isRamBacked(Deno.env.get("HOME") ?? "/home"), false, "$HOME is disk");
 });
@@ -94,8 +99,12 @@ Deno.test("durableRoot treats an EMPTY CAP_DURABLE_ROOT as unset — never a rel
 
 Deno.test("durableRoot THROWS on a RAM-backed root — no silent tmpfs fallback", async () => {
   const probed = await probeEnvCases();
-  assertStringIncludes(probed.tmpfs.threw ?? "", "RAM-backed");
-  assert(probed.shm.threw !== undefined, "a /dev/shm root must throw too");
+  assertStringIncludes(probed.shm.threw ?? "", "RAM-backed");
+  // The /tmp root must agree with the HOST's own mount table: refused where
+  // /tmp is tmpfs, accepted where it is disk-backed (this VM). Both branches
+  // assert — the condition only picks which.
+  if (isRamBacked("/tmp")) assertStringIncludes(probed.tmpfs.threw ?? "", "RAM-backed");
+  else assertEquals(probed.tmpfs.threw, undefined, "/tmp is disk-backed here, so no refusal");
 });
 
 Deno.test("durableDir fails loudly when the durable location is unavailable", async () => {
