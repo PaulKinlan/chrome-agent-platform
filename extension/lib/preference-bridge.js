@@ -180,7 +180,10 @@ export function buildPreferenceBootstrapScript({ nonce, targetOrigin = "" } = {}
     "var d=e.data;if(!d||d.type!=='cap:preference'||d.nonce!==nonce)return;",
     "if(d.targetOrigin&&expectedOrigin&&d.targetOrigin!==expectedOrigin)return;",
     "apply(d.preference);});",
-    "try{window.parent.postMessage({type:'cap:preference-ready',nonce:nonce},expectedOrigin||'*');}catch(e){}",
+    // fails closed: module is unmounted per check-reachability.mjs, so the fallback was reachable
+    // only via the default targetOrigin = "". If expectedOrigin is missing, empty, or "*", the frame
+    // fails closed rather than broadcasting the nonce to an unauthenticated parent.
+    "if(expectedOrigin&&expectedOrigin!=='*'){try{window.parent.postMessage({type:'cap:preference-ready',nonce:nonce},expectedOrigin);}catch(e){}}",
     "})();"
   ].join("")}</script>`;
 }
@@ -274,6 +277,8 @@ export function createPageAgentPreferenceChannel({
 
 /**
  * Send an origin-scoped preference update to a page-agent or content-script layer.
+ * Fails closed if origin is falsy, empty, whitespace, or "*".
+ * Module is unmounted per check-reachability.mjs, so the fallback was reachable only via default origin = "".
  * @param {any} targetWindow the target window/world object (e.g. contentWindow or window)
  * @param {{locale?: string, colorScheme?: string, reduceMotion?: boolean|string}} preference
  * @param {{ origin: string, nonce: string }} opts
@@ -281,7 +286,10 @@ export function createPageAgentPreferenceChannel({
  */
 export function sendPageAgentPreference(targetWindow, preference, { origin = "", nonce = "" } = {}) {
   if (!targetWindow || typeof targetWindow.postMessage !== "function") return false;
-  const msg = buildPreferenceMessage(preference, nonce, { targetOrigin: origin });
-  targetWindow.postMessage(msg, origin || "*");
+  if (!origin || typeof origin !== "string" || origin === "*" || !origin.trim()) return false;
+  const o = origin.trim();
+  if (o === "*") return false;
+  const msg = buildPreferenceMessage(preference, nonce, { targetOrigin: o });
+  targetWindow.postMessage(msg, o);
   return true;
 }

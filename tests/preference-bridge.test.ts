@@ -342,3 +342,87 @@ Deno.test("preference-bridge: percolates channel to content-script and page-agen
   disconnect();
   assertEquals(listeners.length, 0);
 });
+
+// chrome-agent-platform-yi5q: dynamic wildcard postMessage fallbacks fail closed
+Deno.test("preference-bridge (yi5q): sendPageAgentPreference fails closed on missing, empty, or wildcard origin", () => {
+  let callCount = 0;
+  let postedTarget = "";
+  const targetWindow = {
+    postMessage(_data: any, targetOrigin: string) {
+      callCount++;
+      postedTarget = targetOrigin;
+    },
+  };
+
+  const pref = { locale: "en-US", colorScheme: "dark" };
+  const nonce = "nonce-test-123";
+
+  // 1. Missing origin -> fails closed, no postMessage
+  assertEquals(sendPageAgentPreference(targetWindow, pref, { nonce } as any), false);
+  assertEquals(callCount, 0);
+
+  // 2. Empty string origin -> fails closed, no postMessage
+  assertEquals(sendPageAgentPreference(targetWindow, pref, { origin: "", nonce }), false);
+  assertEquals(callCount, 0);
+
+  // 3. Wildcard origin ("*") -> fails closed, no postMessage
+  assertEquals(sendPageAgentPreference(targetWindow, pref, { origin: "*", nonce }), false);
+  assertEquals(callCount, 0);
+
+  // 4. Whitespace-only origin -> fails closed, no postMessage
+  assertEquals(sendPageAgentPreference(targetWindow, pref, { origin: "   ", nonce }), false);
+  assertEquals(callCount, 0);
+
+  // 5. Valid origin -> succeeds, targetOrigin passed directly (no wildcard fallback)
+  const validOrigin = "https://trusted.example.com";
+  assertEquals(sendPageAgentPreference(targetWindow, pref, { origin: validOrigin, nonce }), true);
+  assertEquals(callCount, 1);
+  assertEquals(postedTarget, validOrigin);
+});
+
+Deno.test("preference-bridge (yi5q): buildPreferenceBootstrapScript fails closed when targetOrigin is absent or wildcard", () => {
+  const extractBody = (scriptTag: string) => scriptTag.replace(/<script[^>]*>/, "").replace(/<\/script>/, "");
+
+  // 1. Behavioral execution test (P1): When targetOrigin is omitted, expectedOrigin is ""
+  // and the IIFE fails closed: postMessage is NEVER called (posted.length === 0).
+  const scriptNoOrigin = buildPreferenceBootstrapScript({ nonce: "test-nonce-1" });
+  assert(!scriptNoOrigin.includes("expectedOrigin||'*'"), "must not contain dynamic fallback expectedOrigin||'*'");
+  assert(!scriptNoOrigin.includes("expectedOrigin || '*'"), "must not contain dynamic fallback expectedOrigin || '*'");
+
+  const postedNoOrigin: Array<{ msg: any; target: string }> = [];
+  const winShimNoOrigin = {
+    parent: {
+      postMessage: (msg: any, target: string) => postedNoOrigin.push({ msg, target }),
+    },
+    addEventListener: () => {},
+  };
+  const docShim = { documentElement: { setAttribute: () => {}, style: {} } };
+
+  // Parse and execute against shims — proves syntax validity and behavior
+  const fnNoOrigin = new Function("window", "document", extractBody(scriptNoOrigin));
+  fnNoOrigin(winShimNoOrigin, docShim);
+  assertEquals(postedNoOrigin.length, 0, "must fail closed without targetOrigin: zero messages posted");
+
+  // 2. Behavioral execution test (P1): When targetOrigin is provided, expectedOrigin is bound
+  // and the frame posts cap:preference-ready strictly to expectedOrigin (never '*').
+  const expectedTarget = "chrome-extension://my-extension-id";
+  const scriptWithOrigin = buildPreferenceBootstrapScript({
+    nonce: "test-nonce-2",
+    targetOrigin: expectedTarget,
+  });
+
+  const postedWithOrigin: Array<{ msg: any; target: string }> = [];
+  const winShimWithOrigin = {
+    parent: {
+      postMessage: (msg: any, target: string) => postedWithOrigin.push({ msg, target }),
+    },
+    addEventListener: () => {},
+  };
+
+  const fnWithOrigin = new Function("window", "document", extractBody(scriptWithOrigin));
+  fnWithOrigin(winShimWithOrigin, docShim);
+  assertEquals(postedWithOrigin.length, 1, "exactly one message posted when targetOrigin is set");
+  assertEquals(postedWithOrigin[0].target, expectedTarget, "target must match expectedOrigin exactly");
+  assertEquals(postedWithOrigin[0].msg, { type: "cap:preference-ready", nonce: "test-nonce-2" });
+});
+
