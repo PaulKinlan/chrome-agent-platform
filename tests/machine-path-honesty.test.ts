@@ -27,6 +27,15 @@
 //     nuisance and it would get switched off — the same fate as any guard that cries
 //     wolf. So the detector keys on the CALL, not on the string.
 //   * a `file://` URL, a regex, and prose are not filesystem arguments.
+//   * NO URL IS EVER LOADED FROM ANOTHER MACHINE (added 2026-10-06, chrome-agent-
+//     platform-hi7t). "A `file://` URL is resolved against a base" is true of a URL
+//     that is PARSED or COMPARED, and that boundary stays — its probe below still holds.
+//     It was false of a URL that is LOADED: review49-regression.test.ts imported
+//     `file:///<author>/worktrees/…/memory.js`, so all nine of its cases died at import
+//     on every other machine in 13-22 ms while the file looked like it was testing
+//     artifact transactions, and nine unexplained failures sat in every lane's gate.
+//     A file URL under a home directory that reaches `import(…)` is therefore flagged
+//     too, as a literal or through a const the import consumes.
 //   * matches inside a line comment are skipped: a comment recording a past defect
 //     (which is how the canon teaches it) must not trip the guard that exists because
 //     of it.
@@ -177,6 +186,50 @@ export function detect(text: string, file: string): Hit[] {
   return hits;
 }
 
+// A `file://` URL that names a home directory, and the two shapes that LOAD one.
+const FILE_URL_HOME = String.raw`file:\/{2,3}(?:home|root|Users)\/`;
+
+/** `await import("file:///<a home>/…/x.js")` — the URL is the literal argument. */
+const IMPORT_URL_RE = new RegExp(
+  String.raw`import\s*\(\s*(["'\`])([^"'\`\n]*${FILE_URL_HOME}[^"'\`\n]*)\1`, "g");
+
+/** `const U = "file:///<a home>/…/x.js"` — the const form review49-regression.test.ts used. */
+const URL_CONST_RE = new RegExp(
+  String.raw`(?:const|let|var)\s+([\w$]+)\s*(?::[^=\n]{0,40})?=\s*(["'\`])([^"'\`\n]*${FILE_URL_HOME}[^"'\`\n]*)\2`, "g");
+
+/** `import(U + "?reg1")` — the const reaches a module load, so it is a path, not a value. */
+const IMPORT_NAME_RE = new RegExp(String.raw`import\s*\(\s*([\w$]+)`, "g");
+
+/** The module-load rule for `tests/`: a file URL under a home directory reaches
+ *  `import(…)`. Keys on the LOAD, so the parse-and-compare idiom stays legal. */
+export function detectUrlImportHomeLiteral(text: string, file: string): Hit[] {
+  const hits: Hit[] = [];
+  const lineOf = (pos: number): number => text.slice(0, pos).split("\n").length;
+  const push = (pos: number, kind: string, value: string, evidence: string): void => {
+    if (inLineComment(text, pos, file)) return;
+    hits.push({ file, line: lineOf(pos), kind, key: `${file}::${value}`, evidence });
+  };
+
+  for (const m of text.matchAll(IMPORT_URL_RE)) {
+    push(m.index!, "url-import", m[2].slice(0, 120), m[0].replace(/\s+/g, " ").trim().slice(0, 120));
+  }
+
+  const urlConsts = new Map<string, { pos: number; value: string }>();
+  for (const m of text.matchAll(URL_CONST_RE)) {
+    if (inLineComment(text, m.index!, file)) continue;
+    urlConsts.set(m[1], { pos: m.index!, value: m[3] });
+  }
+  if (urlConsts.size) {
+    for (const m of text.matchAll(IMPORT_NAME_RE)) {
+      const held = urlConsts.get(m[1]);
+      if (!held) continue;
+      push(m.index!, "url-const-import", held.value.slice(0, 120),
+        `${m[1]} = "${held.value}" reaches ${m[0].trim()}`);
+    }
+  }
+  return hits;
+}
+
 /** THE SCRIPTS RULE, stricter than the tests rule on purpose. Harness code hands
  *  paths to `launchChrome`, to `--load-extension`, to spawned processes — none of
  *  which is a filesystem call the tests/ detector can key on. So in scripts/ ANY
@@ -227,6 +280,7 @@ function scanAll(): { hits: Hit[]; files: number } {
     let text: string;
     try { text = Deno.readTextFileSync(`${ROOT}${rel}`); } catch { continue; }
     hits.push(...detect(text, rel));
+    hits.push(...detectUrlImportHomeLiteral(text, rel));
   }
   return { hits, files: files.length };
 }
@@ -247,8 +301,9 @@ Deno.test("machine paths: no test reads or writes an absolute path outside the r
       `      repo-relative (new URL("./fixtures/x", import.meta.url), or a \${ROOT} built from\n` +
       `      import.meta.url), commit the fixture, or read it from git history — and if the\n` +
       `      value is optional, a missing one must FAIL with a reason, never skip silently\n` +
-      `      behind .catch(() => null). If this really is a reviewed environment probe, add\n` +
-      `      it to ALLOWED in this file with the reason.`,
+      `      behind .catch(() => null). A file URL naming a home directory is the same defect\n` +
+      `      when import(…) loads it: the module exists on exactly one machine. If this really\n` +
+      `      is a reviewed environment probe, add it to ALLOWED in this file with the reason.`,
     );
   }
   assertEquals(offenders, [], `${offenders.length} test path(s) depend on this machine:\n\n${offenders.join("\n\n")}`);
@@ -297,6 +352,9 @@ Deno.test("machine paths: no harness names a home directory anywhere in scripts/
 // its own documentation gets disabled.
 const A = (rest: string): string => `/home/probe/${rest}`;
 const quoted = (s: string): string => `"${s}"`;
+// The file URL is assembled at runtime too: this file must not carry a home-prefixed
+// file URL of its own, or its own scan (and its own probe text) would match.
+const urlOf = (rest: string): string => quoted(`file://${A(rest)}`);
 
 Deno.test("machine paths: the detector fires on a literal read and on a const that reaches a call", () => {
   const direct = detect(
@@ -337,6 +395,42 @@ Deno.test("machine paths: the boundary — fixture values, URLs, prose and relat
     "tests/probe.test.ts").length, 0, "a comment recording a past defect is not a live path");
   assertEquals(detect(`const CHROME = ${quoted(A(".cache/chrome"))};\nconst label = \`uses \${CHROME}\`;\n`,
     "tests/probe.test.ts").length, 0, "a const that never reaches a filesystem call is a value, not a path");
+
+  // The parse-and-compare boundary this guard keeps on purpose: a URL that is only
+  // turned into a string is not a LOAD, so the machine-path rule does not reach it.
+  assertEquals(detectUrlImportHomeLiteral(`const u = new URL(${urlOf("worktrees/x/lib/memory.js")});\n`,
+    "tests/probe.test.ts"), [], "a file:// URL that is only parsed is not a load");
+});
+
+Deno.test("machine paths: a file:// URL under a home directory is flagged when it is LOADED (hi7t)", () => {
+  const direct = detectUrlImportHomeLiteral(
+    `const m = await import(${urlOf("worktrees/cap-artifact-tx-snapshot/extension/lib/memory.js")});\n`,
+    "tests/probe.test.ts");
+  assertEquals(direct.length, 1, "an import() of a file URL naming another machine is flagged");
+  assertEquals(direct[0].kind, "url-import");
+
+  // The exact review49-regression.test.ts shape: a const holds the URL and the import
+  // consumes it with a cache-busting suffix. The key is the URL, so a line move cannot
+  // break the allowlist — and the failure message names the machine path, not the call.
+  const viaConst = detectUrlImportHomeLiteral(
+    `const memUrl=${urlOf("worktrees/x/extension/lib/memory.js")};\n` +
+    `const a = await import(memUrl + "?reg1");\n`, "tests/probe.test.ts");
+  assertEquals(viaConst.length, 1, "a const holding a file URL and reaching import() is flagged");
+  assertEquals(viaConst[0].kind, "url-const-import");
+  assertEquals(viaConst[0].key, `tests/probe.test.ts::file://${A("worktrees/x/extension/lib/memory.js")}`,
+    "the key is the URL, so re-indenting or moving the import does not hide the entry");
+
+  // The boundary: the portable idiom, a const that never reaches an import, and a
+  // comment recording the defect this rule exists for are all legal.
+  assertEquals(detectUrlImportHomeLiteral(
+    `const memUrl=new URL("./fixtures/x/memory.js", import.meta.url).href;\nconst a = await import(memUrl + "?reg1");\n`,
+    "tests/probe.test.ts"), [], "the repo-relative idiom is the fix, not a hit");
+  assertEquals(detectUrlImportHomeLiteral(
+    `const u = ${urlOf("worktrees/x/lib/memory.js")};\nconst label = \`loads \${u}\`;\n`,
+    "tests/probe.test.ts"), [], "a const that never reaches an import is a value, not a path");
+  assertEquals(detectUrlImportHomeLiteral(
+    `// was: import(${urlOf("gone.js")}) — removed by hi7t\n`, "tests/probe.test.ts"), [],
+    "a line comment recording the past defect is not a live load");
 });
 
 // ── scripts/ probes: the stricter harness rule and its boundary ─────────────────
