@@ -26,7 +26,7 @@
 // Chrome's SingletonLock makes the second launch fail or attach to the first
 // run's browser, and one run's cleanup then deletes the other's live profile.
 
-import { durableDir, durableRoot, isRamBacked } from "./durable-root.mjs";
+import { durableRoot, isRamBacked } from "./durable-root.mjs";
 import { readlinkSync } from "node:fs";
 import { hostname } from "node:os";
 
@@ -37,6 +37,8 @@ export const PROFILE_ROOT_NAME = "cap-chrome-profiles";
  *  brand-new directory created by `chromeProfileDir()` cannot be deleted in the
  *  window before Chrome writes `SingletonLock` (chrome-agent-platform-xvco). */
 export const SHARED_ROOT_MIN_OLDER_THAN_MS = 60_000;
+/** Admission is bounded, not eviction: unknown/live locks are never deleted to make room. */
+export const MAX_CHROME_PROFILE_DIRS = 512;
 
 const NAME_RE = /^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$/u;
 
@@ -53,22 +55,51 @@ function suffix(): string {
  * profile can be attributed; it is validated rather than interpolated, because
  * it becomes a path segment.
  */
-export function chromeProfileDir(name: string): string {
+export function chromeProfileDir(
+  name: string,
+  { root = `${durableRoot()}/${PROFILE_ROOT_NAME}`, maxEntries = MAX_CHROME_PROFILE_DIRS }:
+    { root?: string; maxEntries?: number } = {},
+): string {
   if (typeof name !== "string" || !NAME_RE.test(name)) {
     throw new Error(
       `chromeProfileDir: not a profile name (${JSON.stringify(name)}) — ` +
         "expected /^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$/ (it becomes a path segment)",
     );
   }
-  const dir = durableDir(PROFILE_ROOT_NAME, `${name}-${suffix()}`);
-  // durableDir already refuses a RAM-backed root; assert the two properties
-  // this module exists for, so a future CAP_DURABLE_ROOT pointing at a checkout
-  // or at tmpfs fails here rather than in a copy race three weeks later.
-  if (isRamBacked(dir)) throw new Error(`chromeProfileDir: ${dir} is RAM-backed`);
-  if (isInsideRepo(dir)) {
-    throw new Error(`chromeProfileDir: ${dir} is inside the repository (bead 9t1b)`);
+  if (!Number.isSafeInteger(maxEntries) || maxEntries < 1 || maxEntries > MAX_CHROME_PROFILE_DIRS) {
+    throw new Error(`chromeProfileDir: maxEntries must be an integer in 1..${MAX_CHROME_PROFILE_DIRS}`);
   }
-  return dir;
+  const base = durableRoot().replace(/\/+$/u, "");
+  const defaultRoot = `${base}/${PROFILE_ROOT_NAME}`;
+  if (root !== defaultRoot && !(root.startsWith(`${defaultRoot}-`) &&
+    /^[a-zA-Z0-9-]+$/.test(root.slice(defaultRoot.length + 1)))) {
+    throw new Error("chromeProfileDir: fixture root must be a direct cap-chrome-profiles-* child of the durable root");
+  }
+  // Shared root and isolated test fixtures are both durable. Never follow a
+  // symlinked profile root to a checkout or a different filesystem.
+  if (isRamBacked(root) || isInsideRepo(root)) throw new Error(`chromeProfileDir: unsafe profile root ${root}`);
+  Deno.mkdirSync(root, { recursive: true });
+  if (Deno.realPathSync(root) !== root) throw new Error(`chromeProfileDir: refusing symlinked root ${root}`);
+  const lock = Deno.openSync(`${root}/.admission.lock`, { create: true, read: true, write: true });
+  try {
+    // Kernel flock serializes creators across lanes. A killed creator drops
+    // the fd automatically; a stale lockfile is not a stale lock. Holding this
+    // through BOTH count and mkdir prevents two launches admitting over cap.
+    lock.lockSync(true);
+    let count = 0;
+    for (const entry of Deno.readDirSync(root)) if (entry.isDirectory) count++;
+    if (count >= maxEntries) {
+      throw new Error(`chromeProfileDir: admission cap ${maxEntries} reached (${count} profiles); ` +
+        "no live/unknown profile is deleted to make room — inspect the stale-lock report");
+    }
+    const dir = `${root}/${name}-${suffix()}`;
+    Deno.mkdirSync(dir); // exclusive: a name collision is a refusal, not reuse
+    return dir;
+  } finally {
+    // Failure to acquire the lock must not turn the admission check into an
+    // unlocked best-effort count; close also releases on exception/SIGKILL.
+    lock.close();
+  }
 }
 
 /** The repo root this harness tree belongs to (the directory holding `.git`). */
@@ -121,34 +152,99 @@ function resolveExisting(path: string): string {
  *              without risking cross-namespace or unverified deletion. */
 export type ProfileLiveness = "live" | "absent" | "unknown";
 
-/** Classify a Chrome profile directory's `SingletonLock` state (`live`, `absent`, or `unknown`). */
-export function profileLiveness(path: string): ProfileLiveness {
-  let target = "";
+export type ProfileLockEvidence = {
+  liveness: ProfileLiveness;
+  pidStatus: "alive" | "dead" | "permission-denied" | "unverifiable" | "absent";
+  lockTarget: string | null;
+  ownerHost: string | null;
+  ownerPid: number | null;
+};
+
+/** Diagnostics only: a dead PID is UNKNOWN for deletion even if local. */
+export function profileLockEvidence(path: string): ProfileLockEvidence {
+  const evidence: ProfileLockEvidence = {
+    liveness: "unknown", pidStatus: "unverifiable", lockTarget: null, ownerHost: null, ownerPid: null,
+  };
+  let target: string;
   try {
     target = readlinkSync(`${path}/SingletonLock`);
   } catch (e) {
-    // NotFound = no lock (clean exit). Anything else (EINVAL when the lock is
-    // not a symlink, EACCES, ...) is unreadable: UNKNOWN, never "fresh" and
-    // never "stale enough to delete". node:fs errors carry `code` (ENOENT);
-    // Deno's own errors carry `name` (NotFound) — accept either.
     const kind = (e as { code?: string; name?: string })?.code ?? (e as { name?: string })?.name;
-    return kind === "ENOENT" || kind === "NotFound" ? "absent" : "unknown";
+    if (kind === "ENOENT" || kind === "NotFound") {
+      evidence.liveness = "absent";
+      evidence.pidStatus = "absent";
+    }
+    return evidence; // malformed or unreadable locks stay unknown
   }
+  evidence.lockTarget = target;
   const match = /^(.*)-(\d+)$/u.exec(target);
-  if (!match) return "unknown";
-  const [, host, pidText] = match;
-  if (host !== hostname()) return "unknown"; // another machine's profile: cannot prove it is dead
-  const pid = Number(pidText);
-  if (!Number.isSafeInteger(pid) || pid <= 0) return "unknown";
+  if (!match) return evidence;
+  evidence.ownerHost = match[1];
+  const pid = Number(match[2]);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return evidence;
+  evidence.ownerPid = pid;
+  if (match[1] !== hostname()) return evidence; // foreign host: no local PID proof
   try {
-    Deno.kill(pid, 0); // signal 0: existence check only
-    return "live";
+    Deno.kill(pid, 0); // signal 0: existence only, not ownership or deletion authority
+    evidence.liveness = "live";
+    evidence.pidStatus = "alive";
   } catch (e) {
-    // PermissionDenied = it exists but is not ours -> live. NotFound = a dead
-    // pid -> UNKNOWN (a namespace may hide the real owner), never stale.
     const kind = (e as { code?: string; name?: string })?.code ?? (e as { name?: string })?.name;
-    return kind === "EPERM" || kind === "PermissionDenied" ? "live" : "unknown";
+    if (kind === "EPERM" || kind === "PermissionDenied") {
+      evidence.liveness = "live";
+      evidence.pidStatus = "permission-denied";
+    } else if (kind === "ESRCH" || kind === "NotFound") {
+      evidence.pidStatus = "dead"; // still UNKNOWN: orphan/namespace/late attach may survive
+    }
   }
+  return evidence;
+}
+
+/** Existing conservative three-state contract: dead lock remains UNKNOWN. */
+export function profileLiveness(path: string): ProfileLiveness {
+  return profileLockEvidence(path).liveness;
+}
+
+export type StaleProfileEvidence = ProfileLockEvidence & {
+  name: string;
+  createdBy: string | null;
+  createdPid: number | null;
+  createdAtMs: number | null;
+  ageMs: number | null;
+};
+
+/** Read-only inventory, never a deletion predicate. Lists every local dead-PID lock. */
+export function reportChromeProfileDirs(
+  { root = `${durableRoot()}/${PROFILE_ROOT_NAME}`, now = Date.now() }:
+    { root?: string; now?: number } = {},
+): { directories: number; stale: StaleProfileEvidence[]; live: number; absent: number; unknown: number; errors: string[] } {
+  if (!Number.isFinite(now)) throw new Error("reportChromeProfileDirs: now must be finite");
+  const report = { directories: 0, stale: [] as StaleProfileEvidence[], live: 0, absent: 0,
+    unknown: 0, errors: [] as string[] };
+  let entries: Deno.DirEntry[];
+  try { entries = [...Deno.readDirSync(root)]; }
+  catch (e) {
+    if (e instanceof Deno.errors.NotFound) return report;
+    throw e;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory) continue;
+    report.directories++;
+    const path = `${root}/${entry.name}`;
+    const evidence = profileLockEvidence(path);
+    if (evidence.liveness === "live") { report.live++; continue; }
+    if (evidence.liveness === "absent") { report.absent++; continue; }
+    report.unknown++;
+    if (evidence.pidStatus !== "dead") continue;
+    const created = /^(.+)-(\d+)-(\d{10,})-([0-9a-f]{4})$/u.exec(entry.name);
+    let ageMs: number | null = null;
+    try { ageMs = Math.max(0, now - (Deno.statSync(path).mtime?.getTime() ?? now)); }
+    catch (e) { report.errors.push(`${entry.name}: ${String((e as Error)?.message ?? e)}`); }
+    report.stale.push({ ...evidence, name: entry.name, createdBy: created?.[1] ?? null,
+      createdPid: created ? Number(created[2]) : null, createdAtMs: created ? Number(created[3]) : null,
+      ageMs });
+  }
+  return report;
 }
 
 /**
