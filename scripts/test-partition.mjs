@@ -67,7 +67,10 @@ export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
  * The bound for ONE child production build, used by the build-heavy serial files instead of a
  * hard-coded 180s/300s (chrome-agent-platform-kj9s). MEASURED on this 2-vCPU box at load ~5, warm
  * worktree: `node build.mjs --target=store` ~72s and `node build.mjs` (developer) ~59s (evidence:
- * kj9s bead, /tmp/j5yz-kj9s-timing.log and the kj9s-timing2 gate). 300s is ~4x the measured store
+ * the kj9s bead, which names the two timing gates and their per-file measurements; the raw log paths
+ * are recorded THERE and deliberately not here, because a temp-path literal in this file trips the
+ * always-on durable-root guard and reds every lane's subset gate — chrome-agent-platform-j3o1).
+ * 300s is ~4x the measured store
  * build: enough that a loaded box does not SIGKILL a build (a killed build cannot release its lock,
  * which is how the old 180s bound seeded the zombie/stale-lock symptom), while a genuinely hung
  * build is still killed here and NAMED before the file window expires.
