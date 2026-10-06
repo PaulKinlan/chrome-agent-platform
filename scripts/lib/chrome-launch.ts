@@ -600,7 +600,8 @@ export async function launchChrome(opts: {
   // close()/teardownChrome always have a unique marker to match the WHOLE
   // Chromium process tree against, as a second check alongside its isolated group.
   // chrome-agent-platform-jixr: a launch with no resolvable profile falls back
-  // to a parent-only kill in teardownChrome, which orphans zygote/renderer/GPU.
+  // to its isolated group; only a spawn that exited before group observation
+  // is reaped parent-only.
   const USER_DATA_PREFIX = "--" + "user-data-dir=";
   let resolvedProfile = opts.profile;
   if (!resolvedProfile) {
