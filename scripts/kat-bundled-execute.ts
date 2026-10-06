@@ -222,6 +222,16 @@ try {
         selectionRef: refFor(req, "hash_blake3"),
         arguments: { data: btoa("abc") },
       }) },
+      { tool: "search_tools", args: { query: "hash sha224", limit: 5 } },
+      { tool: "execute_tool", args: (req: any) => ({
+        selectionRef: refFor(req, "hash_sha224"),
+        arguments: { data: btoa("hello") },
+      }) },
+      { tool: "search_tools", args: { query: "hash sha3 256", limit: 5 } },
+      { tool: "execute_tool", args: (req: any) => ({
+        selectionRef: refFor(req, "hash_sha3_256"),
+        arguments: { data: btoa("hello") },
+      }) },
       { tool: "search_tools", args: { query: "gzip compress", limit: 5 } },
       { tool: "execute_tool", args: (req: any) => ({
         selectionRef: refFor(req, "gzip"),
@@ -364,6 +374,16 @@ try {
       const out = JSON.stringify(env?.result ?? "");
       assert(out.includes(ABC_HASH), `hash_blake3 vector wrong: ${out.slice(0, 200)}`);
     }],
+    ["hash_sha224", "execute_tool", (env) => {
+      assert(env?.ok === true, `hash_sha224 envelope not ok: ${JSON.stringify(env)?.slice(0, 300)}`);
+      const out = JSON.stringify(env?.result ?? "");
+      assert(out.includes("ea09ae9cc6768c50fcee903ed054556e5bfc8347907f12598aa24193"), `hash_sha224 vector wrong: ${out.slice(0, 200)}`);
+    }],
+    ["hash_sha3_256", "execute_tool", (env) => {
+      assert(env?.ok === true, `hash_sha3_256 envelope not ok: ${JSON.stringify(env)?.slice(0, 300)}`);
+      const out = JSON.stringify(env?.result ?? "");
+      assert(out.includes("3338be694f50c5f338814986cdf0686453a888b84f424d792af4b9202398f392"), `hash_sha3_256 vector wrong: ${out.slice(0, 200)}`);
+    }],
     ["gzip", "execute_tool", (env) => {
       // ten9 (no tool may be preview-gated): gzip now EXECUTES in-run through
       // the offscreen WASI host — output must be real gzip bytes (magic 1f8b),
@@ -477,7 +497,7 @@ try {
         : toolId === "jxl" ? "offscreen WASI job (agpu: admitted straight into the job lane)"
         : toolId === "svg_rasterise" ? "native offscreen canvas (moim: browser rasteriser, no Wasm)"
         : toolId === "avif" ? "offscreen WASI job (ou4x: admitted straight into the job lane)"
-        : toolId === "hash_blake3" ? "call-export host" : "offscreen WASI stream",
+        : toolId.startsWith("hash_") ? "call-export host" : "offscreen WASI stream",
       ok: env?.ok === true,
       result: env?.result ?? env,
       latencyMs,

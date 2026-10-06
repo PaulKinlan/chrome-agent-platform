@@ -246,3 +246,37 @@ Deno.test("callexport: manifest validation rejects out-of-range initParam and fi
   assertEquals(res4.error, "callexport_finalparam_invalid");
 });
 
+Deno.test("callexport: all 14 admitted hash tools run through the harness and match KAT vectors", async () => {
+  const EXPECTED_HELLO_VECTORS = {
+    hash_md4: "866437cb7a794bce2b727acc0362ee27",
+    hash_sha1: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d",
+    hash_sha224: "ea09ae9cc6768c50fcee903ed054556e5bfc8347907f12598aa24193",
+    hash_sha384: "59e1748777448c69de6b800d7a33bbfb9ff1b463e44354c3553bcdb9c666fa90125a3c79f90397bdf5f6a13de828684f",
+    hash_sha3_256: "3338be694f50c5f338814986cdf0686453a888b84f424d792af4b9202398f392",
+    hash_blake2b: "e4cfa39a3d37be31c59609e807970799caa68a19bfaa15135f165085e01d41a65ba1e1b146aeb6bd0092b49eac214c103ccfa3a365954bbbe52f74a2b3620c94",
+    hash_blake2s: "19213bacc58dee6dbde3ceb9a47cbb330b3d86f8cca8997eb00be456f140ca25",
+    hash_ripemd160: "108f07b8382412612c048d07d13f814118445acd",
+    hash_sm3: "becbbfaae6548b8bf0cfcad5a27183cd1be6093b1cceccc303d9c61d0a645268",
+    hash_whirlpool: "0a25f55d7308eca6b9567a7ed3bd1b46327f0f1ffdc804dd8bb5af40e88d78b88df0d002a89e2fdbd5876c523f1b67bc44e9f87047598e7548298ea1c81cfd73",
+    hash_adler32: "062c0215",
+    hash_crc32: "3610a686",
+    hash_xxhash32: "fb0077f9",
+    hash_blake3: "ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f",
+  };
+
+  for (const [toolId, expectedHash] of Object.entries(EXPECTED_HELLO_VECTORS)) {
+    const pkgId = `cap.bundled.${toolId.replace(/_/g, ".")}`;
+    const manifestPath = `extension/wasm/manifests/${pkgId}-1.0.0.manifest.json`;
+    const manifest = JSON.parse(await Deno.readTextFile(manifestPath));
+    const exec = manifest.executables[0];
+    const bytes = await Deno.readFile(`extension/wasm/cas/${exec.sha256}.wasm`);
+    const actual = await executeCallexportRun({
+      wasmBytes: bytes,
+      executable: exec,
+      data: btoa("hello"),
+    });
+    assertEquals(actual, expectedHash, `${toolId} known-answer vector for 'hello'`);
+  }
+});
+
+
