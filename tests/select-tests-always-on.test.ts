@@ -15,15 +15,14 @@ import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
-import { alwaysOnGuards, failClosedPlan, SOURCE_INSPECTING_GUARDS } from "../scripts/select-tests.mjs";
+import { alwaysOnGuards, failClosedPlan, SCANNER_EXCLUSIONS, SOURCE_INSPECTING_GUARDS } from "../scripts/select-tests.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
-Deno.test("kz27: the four tree-walking guards are IN the always-on list, and every entry exists", () => {
+Deno.test("kz27: the tree-walking guards are IN the always-on list, and every entry exists", () => {
   for (
     const guard of [
       "tests/durable-root.test.ts",
-      "tests/chrome-profile-location.test.ts",
       "tests/dialog-confirm-modernization.test.ts",
       "tests/single-source-helpers.test.ts",
     ]
@@ -38,6 +37,23 @@ Deno.test("kz27: the four tree-walking guards are IN the always-on list, and eve
   for (const file of SOURCE_INSPECTING_GUARDS) {
     assert(existsSync(join(ROOT, file)), `always-on guard ${file} must exist on disk`);
   }
+});
+
+Deno.test("kz27: the browser-dependent scanner is held out BY DECLARATION, with a reason and a bead", () => {
+  // It also matches the repo-walk shape, so it cannot simply be left off the list: the widened
+  // detector would fail the audit closed. The exclusion has to be written down instead — and it must
+  // not be in the list at the same time, because that contradiction would hide the decision.
+  const reason = SCANNER_EXCLUSIONS["tests/chrome-profile-location.test.ts"];
+  assert(reason, "the browser-dependent guard must appear in SCANNER_EXCLUSIONS");
+  assert(
+    !SOURCE_INSPECTING_GUARDS.includes("tests/chrome-profile-location.test.ts"),
+    "it must not be in both sets",
+  );
+  assert(reason.includes("chrome-agent-platform-hlgr"), "the exclusion must name its follow-up bead");
+  assert(
+    /browser/i.test(reason) && reason.length > 80,
+    "the exclusion must say WHY (it needs a real browser unconditionally)",
+  );
 });
 
 Deno.test("kz27: a FAIL-CLOSED selection NAMES the always-on guard set it could not cover", () => {

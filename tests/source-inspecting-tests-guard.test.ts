@@ -20,6 +20,7 @@ import {
   ALWAYS_ON,
   CORE,
   ROOT,
+  SCANNER_EXCLUSIONS,
   SOURCE_INSPECTING_GUARDS,
   buildReverseGraph,
   selectTestFiles,
@@ -81,6 +82,10 @@ export function findUnclassifiedSourceScanners(
 
   for (const { rel, code } of testFiles) {
     if (alwaysOnSet.has(rel)) continue;
+    // chrome-agent-platform-kz27: a DECLARED exclusion is classified — it carries a reason and a bead,
+    // so the choice is written down rather than being an accidental omission. That is why
+    // SCANNER_EXCLUSIONS exists instead of a quietly missing list entry.
+    if (Object.hasOwn(SCANNER_EXCLUSIONS, rel)) continue;
     // If it dynamically scans source directories, it must be in ALWAYS_ON
     if (SCANNER_PATTERNS.some((pat) => pat.test(code))) {
       unclassified.push(rel);
@@ -106,6 +111,26 @@ Deno.test("qcfc: self-checking audit: all dynamic source-scanning test guards ar
     [],
     `Dynamic source-scanning test(s) found without being in ALWAYS_ON: ${unclassified.join(", ")}. Add them to SOURCE_INSPECTING_GUARDS in scripts/select-tests.mjs.`,
   );
+});
+
+Deno.test("qcfc: every declared exclusion is JUSTIFIED (a reason and a bead, never a silent hole)", () => {
+  // kz27: an exclusion is allowed, but it must say WHY and who owns the follow-up. Without this an
+  // entry could be added merely to silence the audit, which is the failure mode the audit exists to
+  // prevent.
+  const entries = Object.entries(SCANNER_EXCLUSIONS);
+  assert(entries.length > 0, "the exclusion list must be populated if it is referenced");
+  for (const [file, reason] of entries) {
+    assert(existsSync(join(ROOT, file)), `excluded scanner ${file} must exist on disk`);
+    assert(reason.trim().length > 80, `exclusion ${file} must carry a real reason, not a placeholder`);
+    assert(
+      /chrome-agent-platform-[a-z0-9]{4}/.test(reason),
+      `exclusion ${file} must name the bead that owns the follow-up`,
+    );
+    assert(
+      !ALWAYS_ON.includes(file),
+      `${file} cannot be both always-on and excluded — that contradiction would hide the decision`,
+    );
+  }
 });
 
 Deno.test("qcfc: falsification: unclassified source scanner fails the audit closed", () => {

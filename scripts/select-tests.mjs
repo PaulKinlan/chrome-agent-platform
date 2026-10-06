@@ -72,18 +72,31 @@ export const SOURCE_INSPECTING_GUARDS = [
   "tests/source-materialization.test.ts",
   "tests/source-inspecting-tests-guard.test.ts",
   "tests/postmessage-wildcard-guard.test.ts",
-  // chrome-agent-platform-kz27 — FOUR tree-walking guards were missing from this list, which is the
+  // chrome-agent-platform-kz27 — tree-walking guards that were MISSING from this list, which is the
   // third shape of the blind spot that bead names: a guard everyone BELIEVES is always-on, simply not
   // in the set. tests/durable-root.test.ts is the measured case, and the cost was concrete: it sat
   // outside, so test:changed selected it in NONE of the night's gates, and its violation lived on
-  // main through three of them while each gate reported green. The other three were found by widening
-  // the qcfc audit's detector to the shape that actually matters — a walk ROOTED AT THE REPO TREE —
-  // rather than "uses a directory API", which a dozen fixture-reading tests do harmlessly.
+  // main through three of them while each gate reported green. The others were found by widening the
+  // qcfc audit's detector to the shape that actually matters — a walk ROOTED AT THE REPO TREE — rather
+  // than "uses a directory API", which a dozen fixture-reading tests do harmlessly.
+  // tests/chrome-profile-location.test.ts also matches that shape and is held out BY DECLARATION
+  // instead of by omission: see SCANNER_EXCLUSIONS just below, which says why.
   "tests/durable-root.test.ts",
-  "tests/chrome-profile-location.test.ts",
   "tests/dialog-confirm-modernization.test.ts",
   "tests/single-source-helpers.test.ts",
 ];
+
+/**
+ * Repo-tree scanners that are DELIBERATELY not always-on, each with a reason and the bead that owns
+ * the follow-up (chrome-agent-platform-kz27). An exclusion has to be WRITTEN DOWN and justified rather
+ * than being an accidental omission — the same principle as the list itself, and the reason this is a
+ * declaration rather than a missing line: with the detector widened, omitting the entry makes the
+ * audit FAIL CLOSED, which is the detector working as intended.
+ */
+export const SCANNER_EXCLUSIONS = Object.freeze({
+  "tests/chrome-profile-location.test.ts":
+    "requires a real browser UNCONDITIONALLY — four `await launchChrome(...)` calls and no skip guard, stated in docs/CHROME-TEST-CONTRACT.md:13 — so making it always-on would make a working browser a prerequisite for EVERY subset gate on EVERY VM, converting an environment difference into a red gate (the same class of error as the hardcoded browser path fixed in chrome-agent-platform-fyvc). Held out by declaration, not by omission; the environmental-refusal path that would let it be always-on honestly is chrome-agent-platform-hlgr.",
+});
 
 /**
  * The always-on guard files that exist on disk (chrome-agent-platform-kz27).
