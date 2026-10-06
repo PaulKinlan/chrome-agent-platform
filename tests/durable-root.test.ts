@@ -261,6 +261,9 @@ const ALLOWED_CALLS_ONLY = new Set([
   // removed in the same test. Call-only — no literal tmpfs path, no retained
   // evidence.
   "tests/heavy-gate-slot.test.ts",
+  // jixr: raw process teardown uses a private fixture dir removed in the
+  // same test's finally. Permit the temp-dir call, not tmpfs path literals.
+  "tests/process-tree-cleanup.test.ts",
 ]);
 
 function* walk(dir: string): Generator<string> {

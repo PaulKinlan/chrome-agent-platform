@@ -54,7 +54,7 @@ All harnesses under `scripts/` require a real browser:
 
 ## 3. The Three Launch Scopes (`acquireLaunchScope`)
 
-All browser launches go through `launchChrome()` in `scripts/lib/chrome-launch.ts`. The launcher enforces exactly one launch scope via `acquireLaunchScope()`:
+All browser launches go through `launchChrome()` in `scripts/lib/chrome-launch.ts`. The launcher enforces exactly one launch scope via `acquireLaunchScope()`. It invokes `/usr/bin/setsid` (a Linux-specific hardcoded path) and records the dedicated process group from `/proc/<pid>/stat`; `teardownChrome(launched)` kills and verifies that entire group as well as matching the unique profile. Encoding `--user-data-dir` in a descendant's `argv[0]` does **not** defeat `pkill -f`: it matches the joined cmdline (17/17 baseline descendants and 11/11 live group members matched). Group killing is defense in depth for a descendant that leaves the profile match or is born after it. The cause of the original confirmation miss remains open; the full gate plus the user-data-dir monitor is the deciding evidence. `chromeProfileDir()` supplies a fresh pid/time/random-suffixed profile per launch.
 
 ```
                           ┌─────────────────────────────┐

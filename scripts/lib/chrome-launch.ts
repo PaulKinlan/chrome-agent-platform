@@ -30,7 +30,7 @@ import { requireQuietWindow, type QuietSpec } from "./quiet-window.ts";
 import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, type HeavyGateLease } from "./heavy-gate-slot.ts";
 import { resolveChromeForTesting } from "./chrome-for-testing.ts";
 import { isUsableBinary } from "./browser-refusal.ts";
-import { killProcessTree } from "./process-tree.ts";
+import { isolatedProcessGroup, killProcessTree } from "./process-tree.ts";
 import { chromeProfileDir } from "./chrome-profile-dir.ts";
 
 export interface LaunchedChrome {
@@ -58,11 +58,15 @@ export interface LaunchedChrome {
   fleetSlotWaitMs?: number;
   /** The profile directory used for this launch, if any. */
   profile?: string;
+  /** Dedicated process group created by setsid for this launch. */
+  processGroup?: number;
   /** Cleanly tear down this Chrome instance and all its child processes. */
   close?: () => Promise<void>;
 }
 
 const TAIL_LIMIT = 8192;
+// Raw ChildProcess callers must retain their isolated group at teardown too.
+const procGroups = new WeakMap<Deno.ChildProcess, number>();
 
 /** The browser every harness drives. */
 export async function computeUnpackedExtensionId(path: string): Promise<string> {
@@ -594,9 +598,10 @@ export async function launchChrome(opts: {
   }
   // Resolve the profile this launch runs under BEFORE building argv, so that
   // close()/teardownChrome always have a unique marker to match the WHOLE
-  // Chromium process tree against (children inherit --user-data-dir in argv).
+  // Chromium process tree against, as a second check alongside its isolated group.
   // chrome-agent-platform-jixr: a launch with no resolvable profile falls back
-  // to a parent-only kill in teardownChrome, which orphans zygote/renderer/GPU.
+  // to its isolated group; only a spawn that exited before group observation
+  // is reaped parent-only.
   const USER_DATA_PREFIX = "--" + "user-data-dir=";
   let resolvedProfile = opts.profile;
   if (!resolvedProfile) {
@@ -630,14 +635,27 @@ export async function launchChrome(opts: {
   }
   let proc: Deno.ChildProcess;
   try {
-    proc = new Deno.Command(opts.binary ?? resolveChromiumBinary(), {
-      args: [...args, "--remote-debugging-port=0"],
+    // setsid execs the browser in a new process group (without -f, the spawned
+    // child is not a group leader). This makes descendants identifiable even
+    // when Chromium rewrites their command line or a wrapper replaces the binary.
+    proc = new Deno.Command("/usr/bin/setsid", {
+      args: [opts.binary ?? resolveChromiumBinary(), ...args, "--remote-debugging-port=0"],
       stdout: opts.stdout ?? "null",
       stderr: "piped",
       ...(opts.clearEnv ? { clearEnv: true } : {}),
       ...(opts.env ? { env: opts.env } : {}),
     }).spawn();
   } catch (e) {
+    lock.release();
+    fleetLease?.release();
+    throw e;
+  }
+  let group: number | undefined;
+  try {
+    group = await isolatedProcessGroup(proc);
+    if (group !== undefined) procGroups.set(proc, group);
+  } catch (e) {
+    await teardownChrome(proc, resolvedProfile);
     lock.release();
     fleetLease?.release();
     throw e;
@@ -680,7 +698,7 @@ export async function launchChrome(opts: {
 
   if (!wsUrl) {
     try { reader.releaseLock(); } catch { /* already released */ }
-    await teardownChrome(proc, resolvedProfile);
+    await teardownChrome({ proc, profile: resolvedProfile, processGroup: group });
     lock.release();
     fleetLease?.release();
     // The browser never came up: give the FLEET turn back too. Without this, a
@@ -721,8 +739,9 @@ export async function launchChrome(opts: {
     quietWaitMs,
     fleetSlotWaitMs,
     profile: resolvedProfile,
+    processGroup: group,
     close: async () => {
-      await teardownChrome(proc, resolvedProfile);
+      await teardownChrome({ proc, profile: resolvedProfile, processGroup: group });
     },
   };
   return launched;
@@ -732,31 +751,39 @@ export async function launchChrome(opts: {
  * Cleanly tear down a launched Chrome process AND its entire process tree
  * (zygote, GPU, renderer, crashpad children) using killProcessTree().
  *
- * Chromium child processes inherit `--user-data-dir=...` in their command line,
- * so matching `user-data-dir=${profile}` eliminates orphaned children that
- * would otherwise be reparented to init (PPID=1) and trigger the fleet reaper's
- * orphan kill rule (chrome-agent-platform-jixr).
+ * Chromium descendants can put --user-data-dir in argv[0]; that does NOT
+ * defeat pkill -f, which matches the joined cmdline (17/17 baseline and 11/11
+ * live group members matched). Group killing is defense in depth for a child
+ * that leaves the profile match or is born after it. The original confirmation
+ * miss remains unexplained; the full gate plus the user-data-dir monitor is
+ * the deciding evidence.
  *
  * `target` can be a `LaunchedChrome`, a `Deno.ChildProcess`, or an object with `{ proc }`.
  * If `profile` is not explicitly provided, it will be extracted from `target.profile`
  * or inferred from the launch options.
- * If no profile is available (e.g. fake test binaries), it falls back to killing `proc`
- * and awaiting `proc.status`.
+ * If no profile is available, a launched group's members are still killed and
+ * verified; a bare process without either group or profile is reaped alone.
  */
 export async function teardownChrome(
-  target: LaunchedChrome | Deno.ChildProcess | { proc?: Deno.ChildProcess | null; profile?: string } | null | undefined,
+  target: LaunchedChrome | Deno.ChildProcess | { proc?: Deno.ChildProcess | null; profile?: string; processGroup?: number } | null | undefined,
   profile?: string,
 ): Promise<void> {
   if (!target && !profile) return;
   const proc = target ? ("proc" in target ? (target.proc ?? null) : (target instanceof Deno.ChildProcess ? target : null)) : null;
   const matchedProfile = profile ?? (target && "profile" in target ? target.profile : undefined);
+  const group = (target && "processGroup" in target ? target.processGroup : undefined) ??
+    (proc ? procGroups.get(proc) : undefined);
   if (matchedProfile) {
     const raw = matchedProfile.replace(/^--/, "");
     const match = raw.startsWith("user-data-dir=") ? raw : `user-data-dir=${raw}`;
-    await killProcessTree(proc, match);
+    await killProcessTree(proc, match, { group });
     return;
   }
   if (proc) {
+    if (group !== undefined) {
+      await killProcessTree(proc, `chrome-group-${group}-no-profile-${crypto.randomUUID()}`, { group });
+      return;
+    }
     try { proc.kill("SIGKILL"); } catch { /* already gone */ }
     try { await proc.status; } catch { /* reaped */ }
   }

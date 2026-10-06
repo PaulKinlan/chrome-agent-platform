@@ -4,7 +4,8 @@
 // These tests drive REAL process trees: a parent that spawns children whose
 // argv carries a unique marker, exactly like `--user-data-dir=<profile>`.
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { killProcessTree } from "../scripts/lib/process-tree.ts";
+import { isolatedProcessGroup, killProcessTree } from "../scripts/lib/process-tree.ts";
+import { launchChrome, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 
 const PGREP = "/usr/bin/pgrep";
 
@@ -47,6 +48,78 @@ Deno.test("killProcessTree: the parent kill alone leaves children — the tree k
   assertEquals(await survivors(marker), [], "no descendant survives the tree kill");
 });
 
+Deno.test("teardownChrome: an isolated group reaps descendants whose argv has no profile marker", async () => {
+  const marker = `2ypf-group-${crypto.randomUUID()}`;
+  // Only bash carries the marker; its sleep child does not. A profile-only
+  // pkill reports success while leaving this unmarked child alive.
+  const proc = new Deno.Command("/usr/bin/setsid", {
+    args: ["/bin/bash", "-c", "sleep 300 & wait", `user-data-dir=${marker}`],
+    stdout: "null", stderr: "null", clearEnv: true,
+  }).spawn();
+  try {
+    const group = await isolatedProcessGroup(proc);
+    assert(group !== undefined, "fixture parent must have entered its isolated group");
+    await new Promise((r) => setTimeout(r, 150));
+    const memberPids = () => [...Deno.readDirSync("/proc")].filter((entry) => /^\d+$/.test(entry.name)).flatMap((entry) => {
+      try {
+        const text = Deno.readTextFileSync(`/proc/${entry.name}/stat`);
+        const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
+        return Number(fields[2]) === group && fields[0] !== "Z" ? [Number(entry.name)] : [];
+      } catch { return []; }
+    });
+    assert(memberPids().length >= 2, "the group includes a child whose argv omits the marker");
+    assertEquals((await survivors(marker)).length, 1, "only the parent has the marker");
+    await teardownChrome({ proc, profile: marker, processGroup: group });
+    assertEquals(memberPids(), [], "the unmarked child must be gone as well as the parent");
+    assertEquals(await survivors(marker), []);
+  } finally {
+    // An assertion failure or mutant must never leave the fixture child running.
+    try { Deno.kill(-proc.pid, "SIGKILL"); } catch { /* gone */ }
+    try { proc.kill("SIGKILL"); } catch { /* gone */ }
+    await proc.status;
+  }
+});
+
+Deno.test("teardownChrome: raw launched proc reaps unmarked group descendants", async () => {
+  const root = Deno.makeTempDirSync({ prefix: "2ypf-raw-proc-" });
+  const fake = `${root}/fake-browser`;
+  const profile = `${root}/profile`;
+  const lockPath = `${root}/scope`;
+  Deno.writeTextFileSync(fake,
+    "#!/bin/sh\necho 'DevTools listening on ws://127.0.0.1:31337/devtools/browser/abc' >&2\nsleep 300 & wait\n");
+  Deno.chmodSync(fake, 0o755);
+  let proc: Deno.ChildProcess | undefined;
+  try {
+    const launched = await launchChrome({ binary: fake, profile, lockPath, timeoutMs: 5000 });
+    proc = launched.proc;
+    const group = launched.processGroup;
+    assert(group !== undefined, "fixture has an isolated group");
+    const members = () => [...Deno.readDirSync("/proc")].filter((entry) => /^\d+$/.test(entry.name)).flatMap((entry) => {
+      try {
+        const text = Deno.readTextFileSync(`/proc/${entry.name}/stat`);
+        const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
+        return Number(fields[2]) === group && fields[0] !== "Z" ? [Number(entry.name)] : [];
+      } catch { return []; }
+    });
+    for (let i = 0; i < 20 && members().length < 2; i++) await new Promise((r) => setTimeout(r, 25));
+    assert(members().length >= 2, "unmarked child is running before raw-proc teardown");
+    await teardownChrome(proc, profile); // No launched object or explicit group.
+    assertEquals(members(), [], "raw-proc teardown must reap the unmarked child");
+  } finally {
+    if (proc) {
+      try { Deno.kill(-proc.pid, "SIGKILL"); } catch { /* gone */ }
+      try { proc.kill("SIGKILL"); } catch { /* gone */ }
+      await proc.status;
+    }
+    Deno.removeSync(root, { recursive: true });
+  }
+});
+
+Deno.test("killProcessTree: rejects a group without a leader process", async () => {
+  await assertRejects(() => killProcessTree(null, `2ypf-absent-${crypto.randomUUID()}`, { group: Deno.pid + 100 }),
+    Error, "refusing unsafe process group");
+});
+
 Deno.test("killProcessTree: kills a running tree and returns once it is gone", async () => {
   const marker = `2ypf-marker-${crypto.randomUUID().slice(0, 8)}`;
   const proc = spawnTree(marker);
@@ -70,7 +143,7 @@ Deno.test("killProcessTree: a surviving tree hard-fails, never fails open", asyn
 
 Deno.test("live-every-tab uses the tree kill for its Chromium cleanup (2ypf source contract)", async () => {
   const src = await Deno.readTextFile(new URL("../scripts/live-every-tab.ts", import.meta.url));
-  assert(src.includes("killProcessTree(proc, `user-data-dir=${profile}`)"),
+  assert(src.includes("killProcessTree(proc, `user-data-dir=${profile}`, { group })"),
     "live-every-tab kills the whole Chromium tree by its unique profile path");
   assert(!/proc\?\.kill\("SIGKILL"\)[\s\S]{0,200}await proc\?\.status[\s\S]{0,200}ws\?\.close/.test(src),
     "the parent-only kill pattern is gone");
