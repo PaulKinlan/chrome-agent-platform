@@ -13,8 +13,9 @@
 // matches a walk rooted at a top-level source root by its DEFINITION, and this file is adjudicated into
 // SOURCE_INSPECTING_GUARDS so the audit keeps failing closed on it.
 //
-// Precondition, as with the other build-reading guards: it reads extension sources, and its sibling
-// tests import built bundles, so it needs a dist build in a worktree that has never built.
+// It does NOT need a dist build: it reads raw .js files under extension/ and skips dist/ explicitly, so
+// it passes on a worktree that has never built. (Its former siblings in chrome-tools-t12.test.ts do
+// import built bundles, which is why the file it came from has that precondition — this one does not.)
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
 const LEASE_KEY = "cap:browser-command-lease";

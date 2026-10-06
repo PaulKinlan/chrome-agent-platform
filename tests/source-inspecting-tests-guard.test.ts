@@ -63,7 +63,11 @@ export function findUnclassifiedSourceScanners(
 ): string[] {
   const unclassified: string[] = [];
   const SCANNER_PATTERNS = [
-    /SCAN_DIRS/i,
+    // A test that declares a LIST OF DIRECTORIES to scan is the audit's target shape whatever the
+    // constant is called. `SCAN_DIRS` alone missed tests/composer-selector-migration.test.ts, whose
+    // list is named SCAN_ROOTS and whose walks are computed (`${ROOT}${root}`), so both the name pattern
+    // and the shape whitelist stepped over a real repo-scanning guard (delta review P2).
+    /SCAN_(?:DIRS|ROOTS|TREES)/i,
     /filesUnder\s*\(/i,
     /extractAllRegisteredRoutes/i,
     /git\s+ls-files/i,
@@ -119,9 +123,11 @@ export function findUnclassifiedSourceScanners(
   const REPO_ROOT_URL = /new URL\(\s*["']\.\.\/?["']/;
   const TOP_LEVEL_URL = new RegExp(`new URL\\(\\s*["']\\.\\.?\\/(?:${TOP_LEVEL_DIRS})\\/?["']`);
   // path.join(..., "extension") — the LAST literal is a top-level dir and closes the call.
-  const JOIN_ENDS_AT_TOP_LEVEL = new RegExp(`["'](?:${TOP_LEVEL_DIRS})\\/?["']\\s*\\)`);
+  const JOIN_ENDS_AT_TOP_LEVEL = new RegExp(
+    `(?:ROOT|\\$\\{[^}]*\\}|["'][^"']*\\.\\.\\/(?:${TOP_LEVEL_DIRS})[^"']*["'])[^)]*["'](?:${TOP_LEVEL_DIRS})\\/?["']\\s*\\)`,
+  );
   // `${ROOT}tests/` — an interpolation, then a top-level dir, then the end of the template.
-  const TEMPLATE_ENDS_AT_TOP_LEVEL = new RegExp("\\$\\{[^}]*\\}(?:" + TOP_LEVEL_DIRS + ")\\/?[`\"']?$");
+  const TEMPLATE_ENDS_AT_TOP_LEVEL = new RegExp("\\$\\{[^}]*\\}\\/?(?:" + TOP_LEVEL_DIRS + ")\\/?[`\"']?$");
   const flatten = (src: string) => src.replace(/\s+/g, " ").trim();
   const isTestsDirUrl = (flat: string, rel: string) =>
     /new URL\(\s*["']\.\/["']/.test(flat) && /^tests\//.test(rel);

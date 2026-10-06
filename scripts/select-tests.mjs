@@ -120,16 +120,24 @@ export const SOURCE_INSPECTING_GUARDS = [
   // 24-test tool-capability KAT: the repo's established remedy for a mixed file is the split
   // (tests/quiet-window-static.test.ts, tests/chrome-profile-static.test.ts), and promoting the whole
   // file would run 23 unrelated KATs in every subset gate for this one invariant (reviewer P2).
-  // BUILD BEHAVIOUR, stated precisely because the first version of this comment had it wrong: in
-  // `npm test` the serial build phase runs before the parallel phase, so a dist build exists; in a
-  // SUBSET gate select-tests.mjs runs the serial phase only for the files it SELECTED, so a worktree
-  // that has never built can fail a build-reading guard on a missing module. That is pre-existing —
-  // tests/owner-approval-security.test.ts is in CORE and already imports dist — and it is not created
-  // by this listing, but an always-on entry is where a reader has to be told.
+  // BUILD BEHAVIOUR, corrected after review: THIS entry has no build precondition — it reads raw .js
+  // under extension/ and skips dist/, so it passes on a worktree that has never built. The file it was
+  // split from does import built bundles, which is a property of that file, not of this guard. More
+  // generally: in `npm test` the serial build phase runs before the parallel phase, while a SUBSET gate
+  // runs the serial phase only for its SELECTED files, so a never-built worktree can fail a
+  // build-reading guard on a missing module — pre-existing (tests/owner-approval-security.test.ts is in
+  // CORE and already imports dist), and worth knowing when adding an entry that does read dist.
   "tests/chrome-tools-t12-static.test.ts",
   // chrome-agent-platform-p1lp: the shape whitelist also caught a pure census guard that reads the
   // shipped pages as data — every one of its five tests is about that census, so it is promoted whole.
   "tests/unbundled-page-census.test.ts",
+  // chrome-agent-platform-p1lp: caught by the delta review, not by my own probe. Its detector signal is a
+  // LIST OF DIRECTORIES (SCAN_ROOTS = ["scripts", "cap-evidence", "tests"]) and its walks are computed
+  // (`${ROOT}${root}`), so it evaded both the SCAN_DIRS pattern and the shape whitelist; the pattern now
+  // covers the SCAN_(DIRS|ROOTS|TREES) family. Adjudicated IN: all three of its tests are the same
+  // census over tracked source, it spawns nothing (the chrome-journeys mentions are prose in comments),
+  // and it reads files, so it is cheap and host-independent.
+  "tests/composer-selector-migration.test.ts",
   // chrome-agent-platform-p1lp: the same symmetry caught a real repo-walker that reads the tests
   // directory as data — `const TESTS_DIR = fileURLToPath(new URL("./", import.meta.url))` then a walk of
   // every test file. It asserts a cross-cutting invariant, is a static text walk, and is cheap, so it is
