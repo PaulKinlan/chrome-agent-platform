@@ -795,6 +795,10 @@ export async function teardownChrome(
           } catch {
             /* already removed or absent */
           }
+        } else {
+          console.error(
+            `teardownChrome: refusing to delete ${normalized} — SingletonLock still reads live (never-delete-live rule)`,
+          );
         }
       }
     }

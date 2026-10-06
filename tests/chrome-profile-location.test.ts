@@ -404,6 +404,7 @@ Deno.test("yfsf: teardownChrome safety guards refuse relative, inside-repo, or l
   const { teardownChrome } = await import("../scripts/lib/chrome-launch.ts");
 
   // 1. Relative marker path (e.g. process-tree-cleanup marker) must NEVER be deleted
+  assertEquals(Deno.cwd(), ROOT, "test process runs from repository root");
   const relativeMarker = `2ypf-marker-test-${crypto.randomUUID()}`;
   const relativePath = join(ROOT, relativeMarker);
   Deno.mkdirSync(relativePath, { recursive: true });
@@ -414,8 +415,8 @@ Deno.test("yfsf: teardownChrome safety guards refuse relative, inside-repo, or l
     try { Deno.removeSync(relativePath, { recursive: true }); } catch { /* ignore */ }
   }
 
-  // 2. An inside-repo path must NEVER be deleted
-  const insideRepoPath = join(ROOT, `.cache-test-yfsf-${crypto.randomUUID()}`);
+  // 2. An inside-repo path must NEVER be deleted (placed under gitignored .cache/)
+  const insideRepoPath = join(ROOT, ".cache", `yfsf-inside-repo-${crypto.randomUUID()}`);
   Deno.mkdirSync(insideRepoPath, { recursive: true });
   try {
     await teardownChrome(null, insideRepoPath);
