@@ -180,12 +180,23 @@ try {
   check("NTP composer renders (input + mic + attach + run)", composer?.hasInput && composer?.hasMic && composer?.hasRun, composer);
 
   // 2. The sidebar collapses to an icon rail (the empty-state TEXT must be hidden).
-  const collapse = await cdp.eval(hub, `(() => {
-    const btn = document.querySelector('.side-toggle,[aria-label*=collapse i],[aria-label*=Collapse]');
-    if (btn) btn.click();
-    return !!btn;
+  const collapse = await cdp.eval(hub, `(async () => {
+    const btn = document.getElementById('side-toggle');
+    const side = document.getElementById('side');
+    if (!btn || !side) return { clicked: false, reason: 'missing toggle/sidebar' };
+    // The initial async sidebar restore may finish after the DOM and composer
+    // are ready. Retry only while still expanded, and require a stable state.
+    for (let i = 0; i < 40; i++) {
+      if (!side.classList.contains('collapsed')) btn.click();
+      await new Promise(r => setTimeout(r, 150));
+      if (side.classList.contains('collapsed') && btn.getAttribute('aria-expanded') === 'false') {
+        await new Promise(r => setTimeout(r, 300));
+        if (side.classList.contains('collapsed')) return { clicked: true };
+      }
+    }
+    return { clicked: false, expanded: btn.getAttribute('aria-expanded'), collapsed: side.classList.contains('collapsed') };
   })()`);
-  await sleep(500);
+  if (!collapse?.clicked) throw new Error(`Could not collapse the sidebar through its real button: ${JSON.stringify(collapse)}`);
   const collapsedText = await cdp.eval(hub, `(() => {
     const side = document.querySelector('aside,.sidebar,[class*=sidebar]');
     if (!side) return { note: 'no sidebar' };
@@ -193,7 +204,7 @@ try {
     const text = Array.from(side.querySelectorAll('*')).filter(el => el.children.length===0 && (el.textContent||'').trim().length>0 && vis(el)).map(el=>el.textContent.trim());
     return { sidebarWidth: side.getBoundingClientRect().width, visibleText: text.join(' | ').slice(0,120) };
   })()`);
-  check("sidebar collapse hides the empty-state text (no 'No tasks yet' leak)", collapse && !/No tasks yet/i.test(collapsedText?.visibleText ?? ""), collapsedText);
+  check("sidebar collapse hides the empty-state text (no 'No tasks yet' leak)", collapse.clicked && !/No tasks yet/i.test(collapsedText?.visibleText ?? ""), collapsedText);
   check("sidebar collapses to a narrow icon rail", collapsedText?.sidebarWidth != null && collapsedText.sidebarWidth < 120, collapsedText);
 
   // 2b. The current design is an IN-FLOW 56px rail with five section-nav
@@ -234,6 +245,18 @@ try {
   check("collapsed rail action hit targets are not clipped by the sidebar", railGeom?.actions?.every((i: any) => i.left >= railGeom.sideLeft && i.right <= railGeom.sideRight) === true, railGeom?.actions);
   check("collapse control is an in-rail 36×36 hit target", railGeom?.toggle?.w === 36 && railGeom?.toggle?.h === 36 && railGeom.toggle.left >= railGeom.sideLeft && railGeom.toggle.right <= railGeom.sideRight && railGeom.toggleHit === true, railGeom?.toggle);
   check("collapse control has a clear 44×44 effective hit window", railGeom?.competing?.length === 0, railGeom?.competing);
+  // Creating an agent takes the named Agents rail route, not the hidden +.
+  // Drive a REAL pointer click so the navigation affordance cannot pass as markup alone.
+  const agentsRail = await cdp.eval(hub, `(() => { const r = document.querySelector('#side-rail-nav [data-rail-target="agents-section"]').getBoundingClientRect(); return { x: r.left + r.width/2, y: r.top + r.height/2 }; })()`);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: agentsRail.x, y: agentsRail.y, button: "left", clickCount: 1 }, hub);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: agentsRail.x, y: agentsRail.y, button: "left", clickCount: 1 }, hub);
+  await sleep(300);
+  const agentsRoute = await cdp.eval(hub, `(() => {
+    const a = document.getElementById('new-agent'), r = a.getBoundingClientRect();
+    return { expanded: !document.getElementById('side').classList.contains('collapsed'),
+      createVisible: r.width > 0 && r.height > 0 && getComputedStyle(a).display !== 'none' };
+  })()`);
+  check("Agents rail button expands the sidebar and exposes Create", agentsRoute?.expanded === true && agentsRoute?.createVisible === true, agentsRoute);
   // With the real thread open below, assert actual hit-testing and pointer
   // activation instead of the retired nub's z-index (now 'auto' by design).
   // Collapsed evidence (force the collapsed state first).
@@ -386,7 +409,7 @@ try {
   //    (REAL CDP input: mouse click to focus, Input.insertText to type, mouse
   //    click on #run-task) → the demo provider (no key) runs → a thread is
   //    created; then reopen it through the sidebar thread-item (real pointer) and
-  //    hit-test the nub with the thread overlay OPEN (not a forced hidden).
+  //    hit-test the in-flow toggle with the thread overlay OPEN (not a forced hidden).
   const inpRect = await cdp.eval(hub, `(() => { const r = document.querySelector("${composerInput("hub")}").getBoundingClientRect(); return { x: r.left + r.width/2, y: r.top + r.height/2 }; })()`);
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: inpRect.x, y: inpRect.y }, hub);
   await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: inpRect.x, y: inpRect.y, button: "left", clickCount: 1 }, hub);
@@ -555,26 +578,26 @@ try {
   await cdp.eval(settings, `(() => { const el = document.querySelector('#prompts error-console'); const panel = el?.shadowRoot?.querySelector('.panel'); const btn = el?.shadowRoot?.querySelector('button'); if (panel && !panel.hidden && btn) btn.click(); })()`);
   await sleep(300);
 
-  // 8. Responsive + theme + reduced-motion matrix (the nub must hold up beyond
+  // 8. Responsive + theme + reduced-motion matrix (the toggle must hold up beyond
   //    the default 1400×900 light LTR run).
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 500, height: 800, deviceScaleFactor: 1, mobile: false }, hub);
   const narrow = await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); const r = t.getBoundingClientRect(); return { left: Math.round(r.left), right: Math.round(r.right), vw: innerWidth, inBounds: r.left >= 0 && r.right <= innerWidth }; })()`);
-  check("narrow (500px) viewport: nub stays in-bounds", narrow?.inBounds === true, narrow);
+  check("narrow (500px) viewport: toggle stays in-bounds", narrow?.inBounds === true, narrow);
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false }, hub);
 
   await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] }, hub);
   const reducedMotion = await cdp.eval(hub, `(() => {
     const g = (sel) => getComputedStyle(document.querySelector(sel)).transition;
-    return { nub: g('#side-toggle'), side: g('#side'), overlay: g('#thread-view') };
+    return { toggle: g('#side-toggle'), side: g('#side'), overlay: g('#thread-view') };
   })()`);
   const noMotion = (t: string) => t === "none" || t.includes("0s") || t === "all 0s ease 0s";
-  check("prefers-reduced-motion disables the nub transition", reducedMotion && noMotion(reducedMotion.nub), reducedMotion);
+  check("prefers-reduced-motion disables the toggle transition", reducedMotion && noMotion(reducedMotion.toggle), reducedMotion);
   check("prefers-reduced-motion disables the sidebar transition", reducedMotion && noMotion(reducedMotion.side), reducedMotion);
   check("prefers-reduced-motion disables the overlay transition", reducedMotion && noMotion(reducedMotion.overlay), reducedMotion);
   await cdp.send("Emulation.setEmulatedMedia", { features: [] }, hub);
 
   // 9. Overlay-OPEN matrix (the reviewer's D blocker): the real thread overlay
-  //    must stay OPEN while sidebar + overlay + nub are asserted across RTL /
+  //    must stay OPEN while sidebar + overlay + toggle are asserted across RTL /
   //    dark / narrow / reduced-motion / focus — not just the default light LTR
   //    run. Re-open the thread created in step 7 (real pointer), then assert
   //    each dimension + capture overlay-open screenshots.
@@ -602,12 +625,12 @@ try {
 
   const overlayGeom = await cdp.eval(hub, `(() => {
     const r = (el) => { if (!el) return null; const b = el.getBoundingClientRect(); return { left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top), bottom: Math.round(b.bottom), w: Math.round(b.width), h: Math.round(b.height), cx: Math.round(b.left + b.width/2) }; };
-    return { side: r(document.querySelector('#side')), overlay: r(document.getElementById('thread-view')), nub: r(document.querySelector('#side-toggle')), vw: innerWidth, vh: innerHeight };
+    return { side: r(document.querySelector('#side')), overlay: r(document.getElementById('thread-view')), toggle: r(document.querySelector('#side-toggle')), vw: innerWidth, vh: innerHeight };
   })()`);
-  check("overlay-open matrix: overlay + nub are in-bounds", overlayGeom && overlayGeom.overlay && overlayGeom.nub && overlayGeom.overlay.left >= 0 && overlayGeom.overlay.right <= overlayGeom.vw && overlayGeom.nub.right <= overlayGeom.vw && overlayGeom.nub.left >= 0, overlayGeom);
+  check("overlay-open matrix: overlay + toggle are in-bounds", overlayGeom && overlayGeom.overlay && overlayGeom.toggle && overlayGeom.overlay.left >= 0 && overlayGeom.overlay.right <= overlayGeom.vw && overlayGeom.toggle.right <= overlayGeom.vw && overlayGeom.toggle.left >= 0, overlayGeom);
 
-  // RTL (overlay open): the rail + nub flip to the right; the overlay reserves
-  // space on the right so the sidebar + nub stay visible (no overlap). Wait for
+  // RTL (overlay open): the sidebar + toggle flip to the right; the overlay reserves
+  // space on the right so both controls stay visible (no overlap). Wait for
   // the overlay's left/right transition to settle before measuring.
   // RTL flip with transitions DISABLED: the overlay's left/right transition
   // only advances when the headless renderer produces frames, and forcing a
@@ -624,14 +647,14 @@ try {
   await sleep(300);
   const overlayRtl = await cdp.eval(hub, `(() => {
     const r = (el) => { const b = el.getBoundingClientRect(); return { left: Math.round(b.left), right: Math.round(b.right), cx: Math.round(b.left + b.width/2) }; };
-    const side = r(document.querySelector('#side')); const nub = r(document.querySelector('#side-toggle')); const tv = document.getElementById('thread-view'); const overlay = r(tv);
+    const side = r(document.querySelector('#side')); const toggle = r(document.querySelector('#side-toggle')); const tv = document.getElementById('thread-view'); const overlay = r(tv);
     const tcs = getComputedStyle(tv);
-    return { sideLeft: side.left, sideRight: side.right, toggleInside: nub.left >= side.left && nub.right <= side.right, overlayLeft: overlay.left, overlayRight: overlay.right, overlayInBounds: overlay.left >= 0 && overlay.right <= innerWidth, noOverlap: overlay.right <= side.left, vw: innerWidth,
+    return { sideLeft: side.left, sideRight: side.right, toggleInside: toggle.left >= side.left && toggle.right <= side.right, overlayLeft: overlay.left, overlayRight: overlay.right, overlayInBounds: overlay.left >= 0 && overlay.right <= innerWidth, noOverlap: overlay.right <= side.left, vw: innerWidth,
       dbg: { dir: document.documentElement.getAttribute('dir'), hidden: tv.hidden, cls: tv.className, matches: tv.matches('[dir="rtl"] #thread-view.view-overlay'), cssLeft: tcs.left, cssRight: tcs.right, display: tcs.display, pos: tcs.position } };
   })()`);
   check("overlay-open RTL: toggle remains inside the sidebar", overlayRtl?.toggleInside === true, overlayRtl);
   check("overlay-open RTL: overlay stays in-bounds", overlayRtl?.overlayInBounds === true, overlayRtl);
-  check("overlay-open RTL: overlay does NOT cover the sidebar/nub (no overlap)", overlayRtl?.noOverlap === true, overlayRtl);
+  check("overlay-open RTL: overlay does NOT cover the sidebar/toggle (no overlap)", overlayRtl?.noOverlap === true, overlayRtl);
   // RTL screenshot: safely captured with safeCaptureScreenshot fallback (f5lb)
   const shotOverlayRtl = await safeCaptureScreenshot((m, p, s) => cdp.send(m, p, s), hub, { format: "png", fromSurface: true, timeoutMs: 5000 });
   if (shotOverlayRtl) {
@@ -644,25 +667,25 @@ try {
   })()`);
   await sleep(300);
 
-  // Narrow (overlay open): overlay + nub remain in-bounds at 500px.
+  // Narrow (overlay open): overlay + toggle remain in-bounds at 500px.
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 500, height: 800, deviceScaleFactor: 1, mobile: false }, hub);
   const overlayNarrow = await cdp.eval(hub, `(() => {
     const r = (el) => { const b = el.getBoundingClientRect(); return { left: Math.round(b.left), right: Math.round(b.right), w: Math.round(b.width) }; };
-    const overlay = r(document.getElementById('thread-view')); const nub = r(document.querySelector('#side-toggle')); const side = r(document.querySelector('#side'));
+    const overlay = r(document.getElementById('thread-view')); const toggle = r(document.querySelector('#side-toggle')); const side = r(document.querySelector('#side'));
     const inb = (x) => x.left >= 0 && x.right <= innerWidth;
-    return { overlayInBounds: inb(overlay), nubInBounds: inb(nub), sideInBounds: inb(side), overlayW: overlay.w, sideW: side.w, vw: innerWidth };
+    return { overlayInBounds: inb(overlay), toggleInBounds: inb(toggle), sideInBounds: inb(side), overlayW: overlay.w, sideW: side.w, vw: innerWidth };
   })()`);
-  check("overlay-open narrow: overlay + nub + sidebar all stay in-bounds", overlayNarrow?.overlayInBounds === true && overlayNarrow?.nubInBounds === true && overlayNarrow?.sideInBounds === true, overlayNarrow);
+  check("overlay-open narrow: overlay + toggle + sidebar all stay in-bounds", overlayNarrow?.overlayInBounds === true && overlayNarrow?.toggleInBounds === true && overlayNarrow?.sideInBounds === true, overlayNarrow);
   check("overlay-open narrow: overlay + sidebar coexist (no cover)", overlayNarrow && overlayNarrow.overlayW + overlayNarrow.sideW <= overlayNarrow.vw, overlayNarrow);
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false }, hub);
 
-  // Reduced-motion (overlay open): sidebar + overlay + nub transitions disabled.
+  // Reduced-motion (overlay open): sidebar + overlay + toggle transitions disabled.
   await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] }, hub);
   const overlayReduced = await cdp.eval(hub, `(() => {
     const g = (sel) => getComputedStyle(document.querySelector(sel)).transition;
-    return { nub: g('#side-toggle'), side: g('#side'), overlay: g('#thread-view') };
+    return { toggle: g('#side-toggle'), side: g('#side'), overlay: g('#thread-view') };
   })()`);
-  check("overlay-open reduced-motion: nub transition disabled", overlayReduced && noMotion(overlayReduced.nub), overlayReduced);
+  check("overlay-open reduced-motion: toggle transition disabled", overlayReduced && noMotion(overlayReduced.toggle), overlayReduced);
   check("overlay-open reduced-motion: sidebar transition disabled", overlayReduced && noMotion(overlayReduced.side), overlayReduced);
   check("overlay-open reduced-motion: overlay transition disabled", overlayReduced && noMotion(overlayReduced.overlay), overlayReduced);
   await cdp.send("Emulation.setEmulatedMedia", { features: [] }, hub);
@@ -675,10 +698,10 @@ try {
   await sleep(200);
   const overlayFocus = await cdp.eval(hub, `(() => {
     const r = (el) => { const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0; };
-    return { nubFocused: document.activeElement?.id === 'side-toggle', sidebarVisible: r(document.querySelector('#side')), overlayVisible: document.getElementById('thread-view').hidden === false && r(document.getElementById('thread-view')) };
+    return { toggleFocused: document.activeElement?.id === 'side-toggle', sidebarVisible: r(document.querySelector('#side')), overlayVisible: document.getElementById('thread-view').hidden === false && r(document.getElementById('thread-view')) };
   })()`);
-  check("overlay-open focus: the toggle is Tab-reachable from Home", overlayFocus?.nubFocused === true, overlayFocus);
-  check("overlay-open focus: sidebar + overlay are both visible while the nub holds focus", overlayFocus?.sidebarVisible === true && overlayFocus?.overlayVisible === true, overlayFocus);
+  check("overlay-open focus: the toggle is Tab-reachable from Home", overlayFocus?.toggleFocused === true, overlayFocus);
+  check("overlay-open focus: sidebar + overlay are both visible while the toggle holds focus", overlayFocus?.sidebarVisible === true && overlayFocus?.overlayVisible === true, overlayFocus);
   // Restore: close the overlay for a clean end state.
   await cdp.eval(hub, `document.getElementById('thread-back')?.click()`);
   await sleep(300);
