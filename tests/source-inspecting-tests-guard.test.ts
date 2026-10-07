@@ -12,12 +12,13 @@
 //   4. Self-checking audit: any test performing dynamic repository tree scans or AST
 //      census of tracked files without being in ALWAYS_ON fails RED.
 //   5. Falsification: an unlisted source-inspecting test fails the audit closed.
-//   6. p4tf: no test or script under tests/ or scripts/ invokes find for file absence or inspection (box hazard).
+//   6. 2irv: repo-walking modules outside tests/ reachable from tests have an ALWAYS_ON consumer.
+//   7. p4tf: no test or script under tests/ or scripts/ invokes find for file absence or inspection (box hazard).
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import type { Dirent } from "node:fs";
-import { join, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import {
   ALWAYS_ON,
   CORE,
@@ -235,8 +236,9 @@ export function findUnclassifiedSourceScanners(
       .filter((arg) => (/^[A-Za-z_$][\w$]*$/.test(arg) ? identifierIsSourceRoot(arg, code, rel) : denotesSourceRoot(arg, rel)));
   for (const { rel, code } of testFiles) {
     const isTest = IS_TEST_RE.test(rel);
-    // Non-test support modules / helpers cannot be silenced by ALWAYS_ON or SCANNER_EXCLUSIONS.
-    // If a helper dynamically scans a source root, it must fail closed and cannot be excused.
+    // Non-test support modules INSIDE tests/** cannot be silenced by ALWAYS_ON or
+    // SCANNER_EXCLUSIONS. Imported modules outside tests/ get the separate 2irv
+    // reverse-graph consumer check below, not this direct unclassified verdict.
     if (isTest && alwaysOnSet.has(rel)) continue;
     // chrome-agent-platform-kz27: a DECLARED exclusion is classified — it carries a reason and a bead,
     // so the choice is written down rather than being an accidental omission. That is why
@@ -271,9 +273,10 @@ export function findUnclassifiedSourceScanners(
  * set and tripled every subset gate (chrome-agent-platform-fgik, and the reason p1lp replaced names
  * with DEFINITIONS).
  *
- * Scope note (afpl Finding 3): this audit scans tests/** (test guards and shared support modules). It does
- * not scan shared test-support machinery under scripts/lib/ (e.g. scripts/lib/harness-registry.ts) that tests
- * may import; tests consuming such helpers must be listed in ALWAYS_ON directly.
+ * Scope note (afpl Finding 3, closed by 2irv): shared modules outside tests/**
+ * (e.g. scripts/lib/harness-registry.ts) are checked separately against the
+ * reverse import graph below: a repo-walking helper must have an ALWAYS_ON
+ * test consumer. Helpers themselves can never be ALWAYS_ON entries.
  */
 
 /** Every shared test-support source file: subdirectories under tests/ (except fixtures/), plus non-test modules directly under tests/. */
@@ -399,6 +402,93 @@ export function enumerateTestFiles(testsDir = join(ROOT, "tests")): { rel: strin
       code: readFileSync(join(testsDir, f), "utf8"),
     }));
 }
+
+// 2irv: afpl audited tests/**, but a repo-walking helper in scripts/lib/ or
+// another imported source root was invisible there. The selector's own reverse
+// import graph tells us which non-test modules a test can actually execute.
+function testConsumerReachable(start: string, reverse: Map<string, Set<string>>, predicate: (rel: string) => boolean): boolean {
+  const seen = new Set([start]);
+  const queue = [start];
+  while (queue.length) {
+    for (const importer of reverse.get(queue.pop()!) ?? []) {
+      const rel = relative(ROOT, importer).replaceAll("\\", "/");
+      if (rel === ".." || rel.startsWith("../") || seen.has(importer)) continue;
+      if (IS_TEST_RE.test(rel) && predicate(rel)) return true;
+      seen.add(importer);
+      queue.push(importer);
+    }
+  }
+  return false;
+}
+
+/** Repo-walking modules outside tests/ without a transitive ALWAYS_ON consumer. */
+export function uncoveredExternalRepoWalks(
+  reverse: Map<string, Set<string>>,
+  alwaysOn: Set<string>,
+  sourceFor: (abs: string) => string | null = (abs) => existsSync(abs) ? readFileSync(abs, "utf8") : null,
+): string[] {
+  const candidates: { rel: string; code: string }[] = [];
+  for (const abs of reverse.keys()) {
+    const rel = relative(ROOT, abs).replaceAll("\\", "/");
+    if (rel === ".." || rel.startsWith("../") || rel.startsWith("tests/") ||
+        rel.startsWith(["extension", "dist"].join("/") + "/") || !/\.(?:js|ts|mjs)$/.test(rel)) continue;
+    if (!testConsumerReachable(abs, reverse, (testRel) => true)) continue;
+    const code = sourceFor(abs);
+    if (code !== null) candidates.push({ rel, code });
+  }
+  const walkers = findUnclassifiedSourceScanners(candidates, new Set());
+  return walkers.filter((rel) => !testConsumerReachable(join(ROOT, rel), reverse, (testRel) => alwaysOn.has(testRel))).sort();
+}
+
+Deno.test("2irv: every tested repo-walking helper outside tests/ has an ALWAYS_ON consumer", () => {
+  const reverse = buildReverseGraph();
+  const gaps = uncoveredExternalRepoWalks(reverse, new Set(ALWAYS_ON));
+  assertEquals(gaps, [], `Repo-walking helper(s) outside tests/ lack an ALWAYS_ON consumer: ${gaps.join(", ")}. ` +
+    "Add the consuming TEST to SOURCE_INSPECTING_GUARDS; never list a helper as a guard.");
+});
+
+Deno.test("2irv: REAL-TREE falsification exposes unguarded repo walks in root and shared helpers", () => {
+  const reverse = buildReverseGraph();
+  const original = new Set(ALWAYS_ON);
+  assertEquals(uncoveredExternalRepoWalks(reverse, original), []);
+
+  // Both files below are actual repo walkers outside tests/**. Removing their
+  // real consumers from ALWAYS_ON must name each gap, not fail on synthetic
+  // parse text, a missing file, or an unrelated fixture.
+  const withoutBuildConsumer = new Set(original);
+  withoutBuildConsumer.delete("tests/changelog-shipping.test.ts");
+  assert(
+    uncoveredExternalRepoWalks(reverse, withoutBuildConsumer).includes(["build", ".mjs"].join("")),
+    "the repo-root build script walk must RED when its test is no longer always-on",
+  );
+  const withoutHarnessConsumers = new Set(original);
+  withoutHarnessConsumers.delete("tests/harness-registry.test.ts");
+  withoutHarnessConsumers.delete("tests/quiet-window-static.test.ts");
+  // The substring-pin guard imports kat-runner, which imports this helper:
+  // transitive consumers count too. Strip the third real always-on consumer.
+  withoutHarnessConsumers.delete("tests/substring-pin-honesty.test.ts");
+  assert(
+    uncoveredExternalRepoWalks(reverse, withoutHarnessConsumers).includes("scripts/lib/harness-registry.ts"),
+    "a shared-helper repo walk must RED when no consuming test is always-on",
+  );
+});
+
+Deno.test("2irv: a NEW unguarded shared-helper walk is caught without mutating the parallel test tree", () => {
+  const helper = "scripts/lib/zz-2irv-repo-walk.ts";
+  const consumer = "tests/zz-2irv-consumer.test.ts";
+  const code = 'const root = new URL("../../", import.meta.url);\n' +
+    'export function census() { for (const entry of Deno.readDirSync(root)) void entry; }\n';
+  assertEquals(findUnclassifiedSourceScanners([{ rel: helper, code }], new Set()), [helper],
+    "the shared-helper scanner must classify a fresh repo-root walk");
+  // A newly imported helper is absent from the old tests/** audit. Inject its
+  // source and import edge IN MEMORY so parallel whole-suite guards cannot see
+  // a transient extra test file (or leave a dirty worktree after SIGKILL).
+  const oldAudit = findUnclassifiedSourceScanners([...enumerateTestFiles(), ...sharedSupportFiles()], new Set(ALWAYS_ON));
+  assertEquals(oldAudit, [], "the existing tests-only audit would miss the outside-root helper");
+  const reverse = new Map([[join(ROOT, helper), new Set([join(ROOT, consumer)])]]);
+  assertEquals(uncoveredExternalRepoWalks(reverse, new Set(ALWAYS_ON),
+    (abs) => abs === join(ROOT, helper) ? code : null), [helper]);
+});
 
 Deno.test("qcfc: self-checking audit: all dynamic source-scanning test guards are in ALWAYS_ON", () => {
   // Recursive enumeration: matches run-tests.mjs so nested tests/**/ files cannot evade the audit.

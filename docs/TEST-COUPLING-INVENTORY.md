@@ -418,6 +418,31 @@ the literal.
 
 ---
 
+## 21. tests/source-inspecting-tests-guard.test.ts + test-reachable shared source modules (2irv)
+
+- **Watches:** every repo-root/top-level-source directory walk in `tests/**`
+  requires a test guard in `ALWAYS_ON`; afpl covers nested test-support helpers.
+  For a source module **outside** `tests/` that a test imports (e.g.
+  `scripts/lib/harness-registry.ts`, `scripts/select-tests.mjs`, `build.mjs`), 2irv
+  classifies the real source file and follows `buildReverseGraph()` back to an
+  `ALWAYS_ON` consuming test. A helper cannot itself be listed as a guard.
+- **Owed by a re-anchor:** when moving a repo walk into a shared source/helper,
+  ensure a consuming test is in `SOURCE_INSPECTING_GUARDS` (or make the source
+  read directly by the already-always-on test); run
+  `npm run test:file -- tests/source-inspecting-tests-guard.test.ts` after the
+  move. New executable modules with no importing test already fail closed to the
+  full suite via `changedWithoutCoverage`.
+- **Subject moves:** LOUD — an uncovered outside-root walker is named. The
+  real-tree falsifications remove actual always-on consumers of `build.mjs` and
+  `scripts/lib/harness-registry.ts`. A second, in-memory new-helper/import-edge
+  mutant proves the rule covers a fresh module: the old tests-only audit stays
+  green while the new import-graph check names the gap, without writing a
+  transient test file during the parallel suite. Detector limits remain the existing
+  `walk/readDir/readdir/opendir` source-root patterns; an unparsed dynamic
+  import or an alias they cannot classify is not proof of absence.
+
+---
+
 ## The four book rules
 
 **(a) File-disjointness is not suite-greenness.** Two lanes whose diffs touch disjoint
