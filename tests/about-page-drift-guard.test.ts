@@ -17,11 +17,11 @@ import {
 
 const ROOT = join(import.meta.dirname ?? ".", "..");
 
-Deno.test("about-page drift guard: inventory contains valid manifests and metadata", () => {
+Deno.test("about-page drift guard: inventory contains valid manifests and metadata", async () => {
   const inventoryManifests = BUNDLED_INVENTORY.manifests;
   assert(inventoryManifests.length > 0, "Inventory must contain at least 1 manifest");
 
-  const { metadata, entries } = extractAboutData({ root: ROOT });
+  const { metadata, entries } = await extractAboutData({ root: ROOT });
 
   assertEquals(
     metadata.toolCount,
@@ -51,7 +51,7 @@ Deno.test("about-page drift guard: every inventory tool is rendered in about.htm
   assert(html.includes("<!doctype html>"), "about.html must be valid HTML");
   assert(html.includes("About &amp; Third-Party Software Notices"), "about.html must carry the About heading");
 
-  const { entries } = extractAboutData({ root: ROOT });
+  const { entries } = await extractAboutData({ root: ROOT });
 
   for (const entry of entries) {
     // 1. Tool card container must exist with data attributes
@@ -208,7 +208,7 @@ Deno.test("about-page drift guard: all inventory manifests have explicit UPSTREA
 
     let threw = false;
     try {
-      extractAboutData({ root: tmp });
+      await extractAboutData({ root: tmp });
     } catch (err) {
       threw = true;
       assert(String(err).includes("Missing UPSTREAM_MAP entry"), `Error message must name UPSTREAM_MAP: ${err}`);

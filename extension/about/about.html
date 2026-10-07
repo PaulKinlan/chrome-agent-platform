@@ -18,7 +18,7 @@
         </p>
         <h1 class="page-title">About &amp; Third-Party Software Notices</h1>
         <div class="version-banner">
-          <span class="version-label">Version <strong id="about-version">v0.3.579</strong></span>
+          <span class="version-label">Version <strong id="about-version">v0.3.582</strong></span>
         </div>
         <nav class="head-nav" aria-label="Related pages">
           <a href="../options/options.html#about" class="head-nav-link">&larr; Back to Settings</a>
@@ -33,7 +33,7 @@
 
       <section class="tools-section" aria-labelledby="tools-heading">
         <div class="tools-section-header">
-          <h2 id="tools-heading">Bundled Tools &amp; Libraries (<span id="tool-count">38</span>)</h2>
+          <h2 id="tools-heading">Bundled Tools &amp; Libraries (<span id="tool-count">51</span>)</h2>
           <div class="section-actions">
             <button type="button" class="btn small" id="expand-all-btn">Expand all notices</button>
             <button type="button" class="btn small" id="collapse-all-btn">Collapse all notices</button>
@@ -42,7 +42,7 @@
         <div class="toolbar">
           <label for="tool-search" class="sr-only">Filter bundled tools</label>
           <input type="search" id="tool-search" class="search-input" placeholder="Filter by name, license, category, or keyword (e.g. jq, MIT, media)…" autocomplete="off" spellcheck="false">
-          <p id="filter-status" class="filter-status" role="status" aria-live="polite">Showing 38 tools</p>
+          <p id="filter-status" class="filter-status" role="status" aria-live="polite">Showing 51 tools</p>
         </div>
         <div class="tools-grid" id="tools-container">
         <article class="tool-card" id="tool-avif" data-tool-id="avif" data-package-id="cap.bundled.avif" data-category="media" data-spdx="BSD-3-Clause AND Apache-2.0">
@@ -1882,6 +1882,222 @@ licence expression is &quot;Zlib AND Apache-2.0&quot;.
             </div>
           </details>
         </article>
+        <article class="tool-card" id="tool-hash_adler32" data-tool-id="hash_adler32" data-package-id="cap.bundled.hash.adler32" data-category="data" data-spdx="MIT">
+          <header class="tool-card-head">
+            <div class="tool-identity">
+              <h3 class="tool-title"><code>hash_adler32</code></h3>
+              <span class="badge version-badge">v1.0.0</span>
+              <span class="badge category-badge">data</span>
+            </div>
+            <div class="tool-meta-row">
+              <span class="badge spdx-badge" title="SPDX license expression">SPDX: <strong>MIT</strong></span>
+              <a href="https://github.com/Daninet/hash-wasm" class="source-link" target="_blank" rel="noopener noreferrer" title="View upstream source repository">
+                <span>Source</span>
+                <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          </header>
+          <p class="tool-desc">hash_adler32 - compute Adler-32 rolling checksum. Use for quick data error-detection in compressed streams. In/out: base64-encoded bytes as &#39;data&#39; to an 8-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;adler32&#39;.</p>
+          <div class="tool-provenance">
+            <span class="prov-item">Package: <code>cap.bundled.hash.adler32</code></span>
+            <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
+          </div>
+          <details class="license-disclosure">
+            <summary class="disclosure-summary">
+              <span class="summary-label">View License (hash-wasm-MIT.txt)</span>
+            </summary>
+            <div class="disclosure-body">
+              
+              
+              <div class="license-block">
+                <h4 class="notice-heading">License Text (hash-wasm-MIT.txt &mdash; MIT)</h4>
+                <pre class="license-pre">MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak &lt;solar@openwall.com&gt;
+- Aleksey Kravchenko &lt;rhash.admin@gmail.com&gt;
+- Colin Percival
+- Stephan Brumme &lt;create@stephan-brumme.com&gt;
+- Steve Reid &lt;steve@edmweb.com&gt;
+- Samuel Neves &lt;sneves@dei.uc.pt&gt;
+- Solar Designer &lt;solar@openwall.com&gt;
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
+</pre>
+              </div>
+            </div>
+          </details>
+        </article>
+        <article class="tool-card" id="tool-hash_blake2b" data-tool-id="hash_blake2b" data-package-id="cap.bundled.hash.blake2b" data-category="data" data-spdx="MIT">
+          <header class="tool-card-head">
+            <div class="tool-identity">
+              <h3 class="tool-title"><code>hash_blake2b</code></h3>
+              <span class="badge version-badge">v1.0.0</span>
+              <span class="badge category-badge">data</span>
+            </div>
+            <div class="tool-meta-row">
+              <span class="badge spdx-badge" title="SPDX license expression">SPDX: <strong>MIT</strong></span>
+              <a href="https://github.com/Daninet/hash-wasm" class="source-link" target="_blank" rel="noopener noreferrer" title="View upstream source repository">
+                <span>Source</span>
+                <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          </header>
+          <p class="tool-desc">hash_blake2b - hash data with BLAKE2b (512-bit). Use for fast secure hashing and fingerprinting. In/out: base64-encoded bytes as &#39;data&#39; to a 128-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;blake2b&#39;.</p>
+          <div class="tool-provenance">
+            <span class="prov-item">Package: <code>cap.bundled.hash.blake2b</code></span>
+            <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
+          </div>
+          <details class="license-disclosure">
+            <summary class="disclosure-summary">
+              <span class="summary-label">View License (hash-wasm-MIT.txt)</span>
+            </summary>
+            <div class="disclosure-body">
+              
+              
+              <div class="license-block">
+                <h4 class="notice-heading">License Text (hash-wasm-MIT.txt &mdash; MIT)</h4>
+                <pre class="license-pre">MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak &lt;solar@openwall.com&gt;
+- Aleksey Kravchenko &lt;rhash.admin@gmail.com&gt;
+- Colin Percival
+- Stephan Brumme &lt;create@stephan-brumme.com&gt;
+- Steve Reid &lt;steve@edmweb.com&gt;
+- Samuel Neves &lt;sneves@dei.uc.pt&gt;
+- Solar Designer &lt;solar@openwall.com&gt;
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
+</pre>
+              </div>
+            </div>
+          </details>
+        </article>
+        <article class="tool-card" id="tool-hash_blake2s" data-tool-id="hash_blake2s" data-package-id="cap.bundled.hash.blake2s" data-category="data" data-spdx="MIT">
+          <header class="tool-card-head">
+            <div class="tool-identity">
+              <h3 class="tool-title"><code>hash_blake2s</code></h3>
+              <span class="badge version-badge">v1.0.0</span>
+              <span class="badge category-badge">data</span>
+            </div>
+            <div class="tool-meta-row">
+              <span class="badge spdx-badge" title="SPDX license expression">SPDX: <strong>MIT</strong></span>
+              <a href="https://github.com/Daninet/hash-wasm" class="source-link" target="_blank" rel="noopener noreferrer" title="View upstream source repository">
+                <span>Source</span>
+                <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          </header>
+          <p class="tool-desc">hash_blake2s - hash data with BLAKE2s (256-bit). Use for fast 32-bit architecture secure hashing. In/out: base64-encoded bytes as &#39;data&#39; to a 64-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;blake2s&#39;.</p>
+          <div class="tool-provenance">
+            <span class="prov-item">Package: <code>cap.bundled.hash.blake2s</code></span>
+            <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
+          </div>
+          <details class="license-disclosure">
+            <summary class="disclosure-summary">
+              <span class="summary-label">View License (hash-wasm-MIT.txt)</span>
+            </summary>
+            <div class="disclosure-body">
+              
+              
+              <div class="license-block">
+                <h4 class="notice-heading">License Text (hash-wasm-MIT.txt &mdash; MIT)</h4>
+                <pre class="license-pre">MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak &lt;solar@openwall.com&gt;
+- Aleksey Kravchenko &lt;rhash.admin@gmail.com&gt;
+- Colin Percival
+- Stephan Brumme &lt;create@stephan-brumme.com&gt;
+- Steve Reid &lt;steve@edmweb.com&gt;
+- Samuel Neves &lt;sneves@dei.uc.pt&gt;
+- Solar Designer &lt;solar@openwall.com&gt;
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
+</pre>
+              </div>
+            </div>
+          </details>
+        </article>
         <article class="tool-card" id="tool-hash_blake3" data-tool-id="hash_blake3" data-package-id="cap.bundled.hash.blake3" data-category="data" data-spdx="MIT">
           <header class="tool-card-head">
             <div class="tool-identity">
@@ -1932,6 +2148,726 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+</pre>
+              </div>
+            </div>
+          </details>
+        </article>
+        <article class="tool-card" id="tool-hash_crc32" data-tool-id="hash_crc32" data-package-id="cap.bundled.hash.crc32" data-category="data" data-spdx="MIT">
+          <header class="tool-card-head">
+            <div class="tool-identity">
+              <h3 class="tool-title"><code>hash_crc32</code></h3>
+              <span class="badge version-badge">v1.0.0</span>
+              <span class="badge category-badge">data</span>
+            </div>
+            <div class="tool-meta-row">
+              <span class="badge spdx-badge" title="SPDX license expression">SPDX: <strong>MIT</strong></span>
+              <a href="https://github.com/Daninet/hash-wasm" class="source-link" target="_blank" rel="noopener noreferrer" title="View upstream source repository">
+                <span>Source</span>
+                <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          </header>
+          <p class="tool-desc">hash_crc32 - compute standard CRC-32 (IEEE 802.3) cyclic redundancy checksum. Use for integrity checks. In/out: base64-encoded bytes as &#39;data&#39; to an 8-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;crc32&#39;.</p>
+          <div class="tool-provenance">
+            <span class="prov-item">Package: <code>cap.bundled.hash.crc32</code></span>
+            <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
+          </div>
+          <details class="license-disclosure">
+            <summary class="disclosure-summary">
+              <span class="summary-label">View License (hash-wasm-MIT.txt)</span>
+            </summary>
+            <div class="disclosure-body">
+              
+              
+              <div class="license-block">
+                <h4 class="notice-heading">License Text (hash-wasm-MIT.txt &mdash; MIT)</h4>
+                <pre class="license-pre">MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak &lt;solar@openwall.com&gt;
+- Aleksey Kravchenko &lt;rhash.admin@gmail.com&gt;
+- Colin Percival
+- Stephan Brumme &lt;create@stephan-brumme.com&gt;
+- Steve Reid &lt;steve@edmweb.com&gt;
+- Samuel Neves &lt;sneves@dei.uc.pt&gt;
+- Solar Designer &lt;solar@openwall.com&gt;
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
+</pre>
+              </div>
+            </div>
+          </details>
+        </article>
+        <article class="tool-card" id="tool-hash_md4" data-tool-id="hash_md4" data-package-id="cap.bundled.hash.md4" data-category="data" data-spdx="MIT">
+          <header class="tool-card-head">
+            <div class="tool-identity">
+              <h3 class="tool-title"><code>hash_md4</code></h3>
+              <span class="badge version-badge">v1.0.0</span>
+              <span class="badge category-badge">data</span>
+            </div>
+            <div class="tool-meta-row">
+              <span class="badge spdx-badge" title="SPDX license expression">SPDX: <strong>MIT</strong></span>
+              <a href="https://github.com/Daninet/hash-wasm" class="source-link" target="_blank" rel="noopener noreferrer" title="View upstream source repository">
+                <span>Source</span>
+                <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          </header>
+          <p class="tool-desc">hash_md4 - hash data with MD4. Use for legacy compatibility checksums. In/out: base64-encoded bytes as &#39;data&#39; to a 32-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;md4&#39;.</p>
+          <div class="tool-provenance">
+            <span class="prov-item">Package: <code>cap.bundled.hash.md4</code></span>
+            <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
+          </div>
+          <details class="license-disclosure">
+            <summary class="disclosure-summary">
+              <span class="summary-label">View License (hash-wasm-MIT.txt)</span>
+            </summary>
+            <div class="disclosure-body">
+              
+              
+              <div class="license-block">
+                <h4 class="notice-heading">License Text (hash-wasm-MIT.txt &mdash; MIT)</h4>
+                <pre class="license-pre">MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak &lt;solar@openwall.com&gt;
+- Aleksey Kravchenko &lt;rhash.admin@gmail.com&gt;
+- Colin Percival
+- Stephan Brumme &lt;create@stephan-brumme.com&gt;
+- Steve Reid &lt;steve@edmweb.com&gt;
+- Samuel Neves &lt;sneves@dei.uc.pt&gt;
+- Solar Designer &lt;solar@openwall.com&gt;
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
+</pre>
+              </div>
+            </div>
+          </details>
+        </article>
+        <article class="tool-card" id="tool-hash_ripemd160" data-tool-id="hash_ripemd160" data-package-id="cap.bundled.hash.ripemd160" data-category="data" data-spdx="MIT">
+          <header class="tool-card-head">
+            <div class="tool-identity">
+              <h3 class="tool-title"><code>hash_ripemd160</code></h3>
+              <span class="badge version-badge">v1.0.0</span>
+              <span class="badge category-badge">data</span>
+            </div>
+            <div class="tool-meta-row">
+              <span class="badge spdx-badge" title="SPDX license expression">SPDX: <strong>MIT</strong></span>
+              <a href="https://github.com/Daninet/hash-wasm" class="source-link" target="_blank" rel="noopener noreferrer" title="View upstream source repository">
+                <span>Source</span>
+                <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          </header>
+          <p class="tool-desc">hash_ripemd160 - hash data with RIPEMD-160. Use for cryptographic address and checksum derivation. In/out: base64-encoded bytes as &#39;data&#39; to a 40-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;ripemd160&#39;.</p>
+          <div class="tool-provenance">
+            <span class="prov-item">Package: <code>cap.bundled.hash.ripemd160</code></span>
+            <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
+          </div>
+          <details class="license-disclosure">
+            <summary class="disclosure-summary">
+              <span class="summary-label">View License (hash-wasm-MIT.txt)</span>
+            </summary>
+            <div class="disclosure-body">
+              
+              
+              <div class="license-block">
+                <h4 class="notice-heading">License Text (hash-wasm-MIT.txt &mdash; MIT)</h4>
+                <pre class="license-pre">MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak &lt;solar@openwall.com&gt;
+- Aleksey Kravchenko &lt;rhash.admin@gmail.com&gt;
+- Colin Percival
+- Stephan Brumme &lt;create@stephan-brumme.com&gt;
+- Steve Reid &lt;steve@edmweb.com&gt;
+- Samuel Neves &lt;sneves@dei.uc.pt&gt;
+- Solar Designer &lt;solar@openwall.com&gt;
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
+</pre>
+              </div>
+            </div>
+          </details>
+        </article>
+        <article class="tool-card" id="tool-hash_sha1" data-tool-id="hash_sha1" data-package-id="cap.bundled.hash.sha1" data-category="data" data-spdx="MIT">
+          <header class="tool-card-head">
+            <div class="tool-identity">
+              <h3 class="tool-title"><code>hash_sha1</code></h3>
+              <span class="badge version-badge">v1.0.0</span>
+              <span class="badge category-badge">data</span>
+            </div>
+            <div class="tool-meta-row">
+              <span class="badge spdx-badge" title="SPDX license expression">SPDX: <strong>MIT</strong></span>
+              <a href="https://github.com/Daninet/hash-wasm" class="source-link" target="_blank" rel="noopener noreferrer" title="View upstream source repository">
+                <span>Source</span>
+                <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          </header>
+          <p class="tool-desc">hash_sha1 - hash data with SHA-1. Use to verify legacy file or commit integrity. In/out: base64-encoded bytes as &#39;data&#39; to a 40-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;sha1&#39;.</p>
+          <div class="tool-provenance">
+            <span class="prov-item">Package: <code>cap.bundled.hash.sha1</code></span>
+            <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
+          </div>
+          <details class="license-disclosure">
+            <summary class="disclosure-summary">
+              <span class="summary-label">View License (hash-wasm-MIT.txt)</span>
+            </summary>
+            <div class="disclosure-body">
+              
+              
+              <div class="license-block">
+                <h4 class="notice-heading">License Text (hash-wasm-MIT.txt &mdash; MIT)</h4>
+                <pre class="license-pre">MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak &lt;solar@openwall.com&gt;
+- Aleksey Kravchenko &lt;rhash.admin@gmail.com&gt;
+- Colin Percival
+- Stephan Brumme &lt;create@stephan-brumme.com&gt;
+- Steve Reid &lt;steve@edmweb.com&gt;
+- Samuel Neves &lt;sneves@dei.uc.pt&gt;
+- Solar Designer &lt;solar@openwall.com&gt;
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
+</pre>
+              </div>
+            </div>
+          </details>
+        </article>
+        <article class="tool-card" id="tool-hash_sha224" data-tool-id="hash_sha224" data-package-id="cap.bundled.hash.sha224" data-category="data" data-spdx="MIT">
+          <header class="tool-card-head">
+            <div class="tool-identity">
+              <h3 class="tool-title"><code>hash_sha224</code></h3>
+              <span class="badge version-badge">v1.0.0</span>
+              <span class="badge category-badge">data</span>
+            </div>
+            <div class="tool-meta-row">
+              <span class="badge spdx-badge" title="SPDX license expression">SPDX: <strong>MIT</strong></span>
+              <a href="https://github.com/Daninet/hash-wasm" class="source-link" target="_blank" rel="noopener noreferrer" title="View upstream source repository">
+                <span>Source</span>
+                <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          </header>
+          <p class="tool-desc">hash_sha224 - hash data with SHA-224. Use for cryptographic checksums and integrity. In/out: base64-encoded bytes as &#39;data&#39; to a 56-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;sha224&#39;.</p>
+          <div class="tool-provenance">
+            <span class="prov-item">Package: <code>cap.bundled.hash.sha224</code></span>
+            <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
+          </div>
+          <details class="license-disclosure">
+            <summary class="disclosure-summary">
+              <span class="summary-label">View License (hash-wasm-MIT.txt)</span>
+            </summary>
+            <div class="disclosure-body">
+              
+              
+              <div class="license-block">
+                <h4 class="notice-heading">License Text (hash-wasm-MIT.txt &mdash; MIT)</h4>
+                <pre class="license-pre">MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak &lt;solar@openwall.com&gt;
+- Aleksey Kravchenko &lt;rhash.admin@gmail.com&gt;
+- Colin Percival
+- Stephan Brumme &lt;create@stephan-brumme.com&gt;
+- Steve Reid &lt;steve@edmweb.com&gt;
+- Samuel Neves &lt;sneves@dei.uc.pt&gt;
+- Solar Designer &lt;solar@openwall.com&gt;
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
+</pre>
+              </div>
+            </div>
+          </details>
+        </article>
+        <article class="tool-card" id="tool-hash_sha3_256" data-tool-id="hash_sha3_256" data-package-id="cap.bundled.hash.sha3.256" data-category="data" data-spdx="MIT">
+          <header class="tool-card-head">
+            <div class="tool-identity">
+              <h3 class="tool-title"><code>hash_sha3_256</code></h3>
+              <span class="badge version-badge">v1.0.0</span>
+              <span class="badge category-badge">data</span>
+            </div>
+            <div class="tool-meta-row">
+              <span class="badge spdx-badge" title="SPDX license expression">SPDX: <strong>MIT</strong></span>
+              <a href="https://github.com/Daninet/hash-wasm" class="source-link" target="_blank" rel="noopener noreferrer" title="View upstream source repository">
+                <span>Source</span>
+                <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          </header>
+          <p class="tool-desc">hash_sha3_256 - hash data with SHA3-256. Use for modern Keccak/SHA-3 cryptographic hashing. In/out: base64-encoded bytes as &#39;data&#39; to a 64-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;sha3_256&#39;.</p>
+          <div class="tool-provenance">
+            <span class="prov-item">Package: <code>cap.bundled.hash.sha3.256</code></span>
+            <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
+          </div>
+          <details class="license-disclosure">
+            <summary class="disclosure-summary">
+              <span class="summary-label">View License (hash-wasm-MIT.txt)</span>
+            </summary>
+            <div class="disclosure-body">
+              
+              
+              <div class="license-block">
+                <h4 class="notice-heading">License Text (hash-wasm-MIT.txt &mdash; MIT)</h4>
+                <pre class="license-pre">MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak &lt;solar@openwall.com&gt;
+- Aleksey Kravchenko &lt;rhash.admin@gmail.com&gt;
+- Colin Percival
+- Stephan Brumme &lt;create@stephan-brumme.com&gt;
+- Steve Reid &lt;steve@edmweb.com&gt;
+- Samuel Neves &lt;sneves@dei.uc.pt&gt;
+- Solar Designer &lt;solar@openwall.com&gt;
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
+</pre>
+              </div>
+            </div>
+          </details>
+        </article>
+        <article class="tool-card" id="tool-hash_sha384" data-tool-id="hash_sha384" data-package-id="cap.bundled.hash.sha384" data-category="data" data-spdx="MIT">
+          <header class="tool-card-head">
+            <div class="tool-identity">
+              <h3 class="tool-title"><code>hash_sha384</code></h3>
+              <span class="badge version-badge">v1.0.0</span>
+              <span class="badge category-badge">data</span>
+            </div>
+            <div class="tool-meta-row">
+              <span class="badge spdx-badge" title="SPDX license expression">SPDX: <strong>MIT</strong></span>
+              <a href="https://github.com/Daninet/hash-wasm" class="source-link" target="_blank" rel="noopener noreferrer" title="View upstream source repository">
+                <span>Source</span>
+                <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          </header>
+          <p class="tool-desc">hash_sha384 - hash data with SHA-384. Use for high-security cryptographic hashing. In/out: base64-encoded bytes as &#39;data&#39; to a 96-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;sha384&#39;.</p>
+          <div class="tool-provenance">
+            <span class="prov-item">Package: <code>cap.bundled.hash.sha384</code></span>
+            <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
+          </div>
+          <details class="license-disclosure">
+            <summary class="disclosure-summary">
+              <span class="summary-label">View License (hash-wasm-MIT.txt)</span>
+            </summary>
+            <div class="disclosure-body">
+              
+              
+              <div class="license-block">
+                <h4 class="notice-heading">License Text (hash-wasm-MIT.txt &mdash; MIT)</h4>
+                <pre class="license-pre">MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak &lt;solar@openwall.com&gt;
+- Aleksey Kravchenko &lt;rhash.admin@gmail.com&gt;
+- Colin Percival
+- Stephan Brumme &lt;create@stephan-brumme.com&gt;
+- Steve Reid &lt;steve@edmweb.com&gt;
+- Samuel Neves &lt;sneves@dei.uc.pt&gt;
+- Solar Designer &lt;solar@openwall.com&gt;
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
+</pre>
+              </div>
+            </div>
+          </details>
+        </article>
+        <article class="tool-card" id="tool-hash_sm3" data-tool-id="hash_sm3" data-package-id="cap.bundled.hash.sm3" data-category="data" data-spdx="MIT">
+          <header class="tool-card-head">
+            <div class="tool-identity">
+              <h3 class="tool-title"><code>hash_sm3</code></h3>
+              <span class="badge version-badge">v1.0.0</span>
+              <span class="badge category-badge">data</span>
+            </div>
+            <div class="tool-meta-row">
+              <span class="badge spdx-badge" title="SPDX license expression">SPDX: <strong>MIT</strong></span>
+              <a href="https://github.com/Daninet/hash-wasm" class="source-link" target="_blank" rel="noopener noreferrer" title="View upstream source repository">
+                <span>Source</span>
+                <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          </header>
+          <p class="tool-desc">hash_sm3 - hash data with Chinese National Standard SM3. Use for commercial cryptographic compliance. In/out: base64-encoded bytes as &#39;data&#39; to a 64-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;sm3&#39;.</p>
+          <div class="tool-provenance">
+            <span class="prov-item">Package: <code>cap.bundled.hash.sm3</code></span>
+            <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
+          </div>
+          <details class="license-disclosure">
+            <summary class="disclosure-summary">
+              <span class="summary-label">View License (hash-wasm-MIT.txt)</span>
+            </summary>
+            <div class="disclosure-body">
+              
+              
+              <div class="license-block">
+                <h4 class="notice-heading">License Text (hash-wasm-MIT.txt &mdash; MIT)</h4>
+                <pre class="license-pre">MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak &lt;solar@openwall.com&gt;
+- Aleksey Kravchenko &lt;rhash.admin@gmail.com&gt;
+- Colin Percival
+- Stephan Brumme &lt;create@stephan-brumme.com&gt;
+- Steve Reid &lt;steve@edmweb.com&gt;
+- Samuel Neves &lt;sneves@dei.uc.pt&gt;
+- Solar Designer &lt;solar@openwall.com&gt;
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
+</pre>
+              </div>
+            </div>
+          </details>
+        </article>
+        <article class="tool-card" id="tool-hash_whirlpool" data-tool-id="hash_whirlpool" data-package-id="cap.bundled.hash.whirlpool" data-category="data" data-spdx="MIT">
+          <header class="tool-card-head">
+            <div class="tool-identity">
+              <h3 class="tool-title"><code>hash_whirlpool</code></h3>
+              <span class="badge version-badge">v1.0.0</span>
+              <span class="badge category-badge">data</span>
+            </div>
+            <div class="tool-meta-row">
+              <span class="badge spdx-badge" title="SPDX license expression">SPDX: <strong>MIT</strong></span>
+              <a href="https://github.com/Daninet/hash-wasm" class="source-link" target="_blank" rel="noopener noreferrer" title="View upstream source repository">
+                <span>Source</span>
+                <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          </header>
+          <p class="tool-desc">hash_whirlpool - hash data with Whirlpool (512-bit). Use for ISO/IEC 10118-3 cryptographic hashing. In/out: base64-encoded bytes as &#39;data&#39; to a 128-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;whirlpool&#39;.</p>
+          <div class="tool-provenance">
+            <span class="prov-item">Package: <code>cap.bundled.hash.whirlpool</code></span>
+            <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
+          </div>
+          <details class="license-disclosure">
+            <summary class="disclosure-summary">
+              <span class="summary-label">View License (hash-wasm-MIT.txt)</span>
+            </summary>
+            <div class="disclosure-body">
+              
+              
+              <div class="license-block">
+                <h4 class="notice-heading">License Text (hash-wasm-MIT.txt &mdash; MIT)</h4>
+                <pre class="license-pre">MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak &lt;solar@openwall.com&gt;
+- Aleksey Kravchenko &lt;rhash.admin@gmail.com&gt;
+- Colin Percival
+- Stephan Brumme &lt;create@stephan-brumme.com&gt;
+- Steve Reid &lt;steve@edmweb.com&gt;
+- Samuel Neves &lt;sneves@dei.uc.pt&gt;
+- Solar Designer &lt;solar@openwall.com&gt;
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
+</pre>
+              </div>
+            </div>
+          </details>
+        </article>
+        <article class="tool-card" id="tool-hash_xxhash32" data-tool-id="hash_xxhash32" data-package-id="cap.bundled.hash.xxhash32" data-category="data" data-spdx="MIT">
+          <header class="tool-card-head">
+            <div class="tool-identity">
+              <h3 class="tool-title"><code>hash_xxhash32</code></h3>
+              <span class="badge version-badge">v1.0.0</span>
+              <span class="badge category-badge">data</span>
+            </div>
+            <div class="tool-meta-row">
+              <span class="badge spdx-badge" title="SPDX license expression">SPDX: <strong>MIT</strong></span>
+              <a href="https://github.com/Daninet/hash-wasm" class="source-link" target="_blank" rel="noopener noreferrer" title="View upstream source repository">
+                <span>Source</span>
+                <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          </header>
+          <p class="tool-desc">hash_xxhash32 - compute fast 32-bit xxHash non-cryptographic checksum. Use for high-speed hash tables. In/out: base64-encoded bytes as &#39;data&#39; to an 8-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;xxhash32&#39;.</p>
+          <div class="tool-provenance">
+            <span class="prov-item">Package: <code>cap.bundled.hash.xxhash32</code></span>
+            <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
+          </div>
+          <details class="license-disclosure">
+            <summary class="disclosure-summary">
+              <span class="summary-label">View License (hash-wasm-MIT.txt)</span>
+            </summary>
+            <div class="disclosure-body">
+              
+              
+              <div class="license-block">
+                <h4 class="notice-heading">License Text (hash-wasm-MIT.txt &mdash; MIT)</h4>
+                <pre class="license-pre">MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak &lt;solar@openwall.com&gt;
+- Aleksey Kravchenko &lt;rhash.admin@gmail.com&gt;
+- Colin Percival
+- Stephan Brumme &lt;create@stephan-brumme.com&gt;
+- Steve Reid &lt;steve@edmweb.com&gt;
+- Samuel Neves &lt;sneves@dei.uc.pt&gt;
+- Solar Designer &lt;solar@openwall.com&gt;
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
 </pre>
               </div>
             </div>

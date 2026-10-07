@@ -11,7 +11,7 @@
 
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -234,28 +234,26 @@ function escapeHtml(text) {
     .replaceAll("'", "&#39;");
 }
 
-export function extractAboutData({ root = REPO } = {}) {
+export async function extractAboutData({ root = REPO } = {}) {
   // Load BUNDLED_INVENTORY from extension/lib/bundled-inventory-data.js
   const invPath = join(root, "extension/lib/bundled-inventory-data.js");
-  const invContent = readFileSync(invPath, "utf8");
-  // Extract BUNDLED_INVENTORY object from exported code
-  const jsonMatch = invContent.match(/export const BUNDLED_INVENTORY = Object\.freeze\((\{[\s\S]+\})\);\n?$/);
-  if (!jsonMatch) throw new Error("Could not parse BUNDLED_INVENTORY from " + invPath);
-  const inventory = JSON.parse(jsonMatch[1]);
+  if (!existsSync(invPath)) {
+    throw new Error("Could not find " + invPath);
+  }
+  const invUrl = pathToFileURL(resolve(invPath)).href + `?t=${Date.now()}_${Math.random()}`;
+  const invMod = await import(invUrl);
+  const inventory = invMod.BUNDLED_INVENTORY;
+  if (!inventory || !Array.isArray(inventory.manifests)) {
+    throw new Error("Could not parse BUNDLED_INVENTORY from " + invPath);
+  }
 
   // Load package rows for tool metadata
   const rowsPath = join(root, "extension/lib/bundled-tool-packages.data.js");
-  const rowsContent = readFileSync(rowsPath, "utf8");
-  // Find SHARED_STRINGS array
-  const sharedMatch = rowsContent.match(/const SHARED_STRINGS = Object\.freeze\((\[[\s\S]+?\])\);/);
-  const sharedStrings = sharedMatch ? JSON.parse(sharedMatch[1]) : [];
-  // Find BUNDLED_TOOL_PACKAGE_ROWS
-  const rowsRawMatch = rowsContent.match(/export const BUNDLED_TOOL_PACKAGE_ROWS = Object\.freeze\((\[[\s\S]+?\])\);\n?$/);
   let packageRows = [];
-  if (rowsRawMatch) {
-    // Replace SHARED_STRINGS[i] references
-    const substituted = rowsRawMatch[1].replace(/SHARED_STRINGS\[(\d+)\]/g, (_, idx) => JSON.stringify(sharedStrings[Number(idx)]));
-    packageRows = JSON.parse(substituted);
+  if (existsSync(rowsPath)) {
+    const rowsUrl = pathToFileURL(resolve(rowsPath)).href + `?t=${Date.now()}_${Math.random()}`;
+    const rowsMod = await import(rowsUrl);
+    packageRows = rowsMod.BUNDLED_TOOL_PACKAGE_ROWS || [];
   }
   const rowMap = new Map();
   for (const r of packageRows) {
@@ -465,7 +463,7 @@ ${toolCards}
 }
 
 export async function syncAboutPage({ root = REPO, check = false } = {}) {
-  const { metadata, entries } = extractAboutData({ root });
+  const { metadata, entries } = await extractAboutData({ root });
   const htmlContent = renderAboutHtml({ metadata, entries, root });
   const htmlPath = join(root, "extension/about/about.html");
 
