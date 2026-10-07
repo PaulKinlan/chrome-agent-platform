@@ -11,6 +11,7 @@ import { registerUserWasmHost } from "../lib/user-wasm-host.js";
 import { WasmExecutor } from "../lib/wasm-executor.js";
 import { registerWasmStreamHost } from "../lib/wasm-stream-host.js";
 import { registerCallexportHost } from "../lib/wasm-callexport-host.js";
+import { registerEmscriptenHost } from "../lib/emscripten-host.js";
 import { registerWasmJobHost } from "../lib/wasm-job-host.js";
 import { registerAgentWorkerHost } from "../lib/agent-worker-host.js";
 import { registerPythonHost } from "../lib/python-host.js";
@@ -45,6 +46,11 @@ registerWasmStreamHost();
 // The call-export lane (uslb): zero-import compute modules (hash_blake3 pilot)
 // run through the CAP-authored harness here — no package JS ever executes.
 registerCallexportHost();
+
+// The admitted-Emscripten lane (ltkj.3): schema-2 packages admitted through
+// Settings validation execute here in a fresh module worker per job, behind
+// the exact cap:emscripten-run envelope and the SW-only sender gate.
+registerEmscriptenHost();
 
 // The WASI-job lane (ten9): every non-stream bundled tool executes here — the
 // former in-SW preview-only refusal is gone; this host runs the shared
