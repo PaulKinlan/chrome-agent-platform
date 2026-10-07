@@ -181,7 +181,27 @@ Deno.test("a FAILED run keeps its network records — that is often the run that
   const result = await runPython(runtime, { code: "await cap.fetch('https://evil.example/b')" });
   assertEquals(result.ok, false);
   assertEquals(result.network.length, 2, "a traceback must not swallow the requests that led to it");
+  assertEquals(result.untrusted, true, "a failed run with successful fetch history carries untrusted taint");
   assertEquals(ledger.size(), 0);
+});
+
+Deno.test("a run with dropped ledger records taints output fail-closed", async () => {
+  const ledger = createPythonNetworkLedger();
+  const runtime = await createPythonRuntimeProvider({
+    ensureHost: async () => ({ ok: true }),
+    networkLedger: ledger,
+    sendMessage: async (message) => {
+      // Flood ledger past 500 records
+      for (let i = 0; i < 501; i++) {
+        ledger.record(message.runId, { method: "GET", url: `https://api.example.com/${i}`, origin: "https://api.example.com", ok: false, refused: true, error: "not granted", ms: 1 });
+      }
+      return { ok: true, stdout: "overflowed\n" };
+    },
+  }).provider();
+  const result = await runPython(runtime, { code: "print('overflowed')" });
+  assertEquals(result.ok, true);
+  assertEquals(result.networkDropped, 1);
+  assertEquals(result.untrusted, true, "dropped records must taint output fail-closed (INV-7)");
 });
 
 Deno.test("a run that asked for nothing carries no network field at all", async () => {

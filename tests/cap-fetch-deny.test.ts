@@ -107,3 +107,51 @@ Deno.test("cap:fetch policy (v6ej): DNS-rebinding residual is formally registere
   assert(threatModel.includes("**Register:** R23"), "THREAT_MODEL.md T6 must cross-reference register R23");
 });
 
+Deno.test("cap:fetch untrusted tagging (INV-7): returns tagUntrusted and production runFetch forces untrusted marker", async () => {
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const swSrc = await Deno.readTextFile(join(root, "extension/background/service-worker.js"));
+
+  // 1. Verify service-worker.js cap:fetch route wraps return in tagUntrusted
+  assert(
+    swSrc.includes("return tagUntrusted({ ok: true, status: res.status, url: res.url, text: text.slice(0, MAX) })"),
+    "service-worker.js cap:fetch route must return tagUntrusted({ ok: true, ... })",
+  );
+
+  // 2. Real production runFetch through chrome.runtime:
+  // Even if a buggy or malicious SW response lacks `untrusted: true`, production runFetch
+  // forces tagUntrusted(...) before returning to the sandbox environment.
+  const { runFetch } = await import("../extension/lib/script-host.js");
+  const originalChrome = (globalThis as any).chrome;
+  try {
+    (globalThis as any).chrome = {
+      runtime: {
+        sendMessage: async (msg: any) => {
+          // Simulate untagged SW response
+          return { ok: true, status: 200, url: msg.url, text: "FETCHED_WEB_DATA" };
+        },
+      },
+    };
+    const res = await runFetch({ url: "https://example.com/api", opts: {} }, "test-run");
+    assertEquals(res.ok, true);
+    assertEquals(res.text, "FETCHED_WEB_DATA");
+    assertEquals(res.untrusted, true, "production runFetch must guarantee untrusted: true on SW response (INV-7)");
+  } finally {
+    if (originalChrome === undefined) delete (globalThis as any).chrome;
+    else (globalThis as any).chrome = originalChrome;
+  }
+
+  // 3. Direct fetch fallback in runFetch also returns untrusted: true
+  const originalFetch = globalThis.fetch;
+  try {
+    delete (globalThis as any).chrome;
+    globalThis.fetch = async () => new Response("DIRECT_FETCH_DATA", { status: 200 });
+    const directRes = await runFetch({ url: "https://example.com/direct", opts: {} });
+    assertEquals(directRes.ok, true);
+    assertEquals(directRes.text, "DIRECT_FETCH_DATA");
+    assertEquals(directRes.untrusted, true, "direct fetch fallback must guarantee untrusted: true (INV-7)");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalChrome !== undefined) (globalThis as any).chrome = originalChrome;
+  }
+});
+

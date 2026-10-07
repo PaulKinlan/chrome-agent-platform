@@ -33,6 +33,7 @@
 
 import { validatePipeline, runPipeline } from "./tool-pipeline.js";
 import { isToolResultFailure } from "./tool-summary.js";
+import { hasUntrustedMarker } from "./untrusted-fence.js";
 
 export const WORKFLOW_NAMESPACE = "workflows:";
 export const WORKFLOW_KINDS = ["script-js", "script-python", "pipeline", "instructions"];
@@ -124,7 +125,14 @@ export async function runWorkflowRoute({ name, kind, source, description, gate, 
   const gateResult = await gate({ name: wfName, description: String(description ?? "") });
   if (!gateResult.ok) return gateResult;
   const run = await runSandboxed(plan.source);
-  return { ok: run?.ok ?? false, result: run?.result ?? null, error: run?.error, logs: run?.logs ?? [] };
+  const isUntrusted = run?.untrusted === true || hasUntrustedMarker(run?.result) || hasUntrustedMarker(run?.logs);
+  return {
+    ok: run?.ok ?? false,
+    result: run?.result ?? null,
+    error: run?.error,
+    logs: run?.logs ?? [],
+    ...(isUntrusted ? { untrusted: true } : {}),
+  };
 }
 
 /** The step-tool names that must NEVER dispatch from a pipeline step:

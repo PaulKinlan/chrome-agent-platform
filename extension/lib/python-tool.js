@@ -52,8 +52,14 @@ export const pythonExecuteTool = tool({
     const network = Array.isArray(result.network) && result.network.length
       ? { network: result.network, ...(result.networkDropped ? { networkDropped: result.networkDropped } : {}) }
       : {};
-    if (!result.ok) return { error: result.error, ...network };
-    return { ok: true, stdout: result.stdout, stdoutBytes: new TextEncoder().encode(result.stdout).byteLength, ...network };
+    if (!result.ok) return { error: result.error, ...network, ...(result.untrusted ? { untrusted: true } : {}) };
+    return {
+      ok: true,
+      stdout: result.stdout,
+      stdoutBytes: new TextEncoder().encode(result.stdout).byteLength,
+      ...network,
+      ...(result.untrusted ? { untrusted: true } : {}),
+    };
   },
 });
 
