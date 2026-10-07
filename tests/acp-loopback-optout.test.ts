@@ -514,4 +514,41 @@ Deno.test("ACP service status: reports installed mode from unit file, not CLI fl
   } finally {
     try { Deno.removeSync(anonPlistUnit); } catch { /* ignore */ }
   }
+
+  //    (e) Launchd plist with the flag written using XML numeric character
+  //        references (hex &#x2D; and decimal &#45; for hyphens): the decoded
+  //        argument value MUST still report anonymous, pinning the
+  //        entity-decoding path so it is not verified only in scratch.
+  const entityPlistUnit = Deno.makeTempFileSync();
+  try {
+    Deno.writeTextFileSync(entityPlistUnit, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.chrome-agent-platform.acp-bridge</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/deno</string>
+    <string>run</string>
+    <string>scripts/acp-bridge.ts</string>
+    <string>--port</string>
+    <string>3210</string>
+    <string>&#x2D;&#x2D;allow-anonymous&#45;loopback</string>
+  </array>
+</dict>
+</plist>`);
+    const child8 = new Deno.Command("node", {
+      args: [script, "status", "--unit", entityPlistUnit],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const out8 = new TextDecoder().decode(child8.outputSync().stdout);
+    assertEquals(
+      out8.includes("auth: ANONYMOUS loopback (installed with --allow-anonymous-loopback)"),
+      true,
+      `an entity-encoded --allow-anonymous-loopback argument must report anonymous after decoding, got:\n${out8}`,
+    );
+  } finally {
+    try { Deno.removeSync(entityPlistUnit); } catch { /* ignore */ }
+  }
 });
