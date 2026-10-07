@@ -64,10 +64,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "base64 - stream binary data to base64 text or decode it. Use for lossless text/binary conversion. In/out: file-backed stdin to chainable output. Flag: -d. Example: 'hello' -> 'aGVsbG8=\\n'.",
   "caveats": V0,
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": L0,
   "binary": {
@@ -97,10 +94,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Legacy checksum matching/non-adversarial accidental-corruption detection only; never signatures, content trust, or collision-resistant integrity.",
    S[5]
   ],
-  "capabilities": [
-   S[1],
-   S[6]
-  ],
+  "capabilities": C1,
   "replayClass": S[2],
   "licence": L0,
   "binary": {
@@ -130,10 +124,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Implements the FIPS 180-4 SHA-256 cryptographic hash contract; emits lowercase 64-hex digest string from stdin",
    S[5]
   ],
-  "capabilities": [
-   S[1],
-   S[6]
-  ],
+  "capabilities": C1,
   "replayClass": S[2],
   "licence": L0,
   "binary": {
@@ -163,10 +154,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Implements the FIPS 180-4 SHA-512 cryptographic hash contract; emits lowercase 128-hex digest string from stdin",
    S[5]
   ],
-  "capabilities": [
-   S[1],
-   S[6]
-  ],
+  "capabilities": C1,
   "replayClass": S[2],
   "licence": L0,
   "binary": {
@@ -196,10 +184,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Supports plain dump/reverse and traditional 16-byte hex dump round-trip modes from stdin.",
    S[5]
   ],
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": L0,
   "binary": {
@@ -229,10 +214,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Backed by WASI random_get (crypto.getRandomValues). Replay is read-only (zero external mutation) but output is intentionally nondeterministic (replaying produces a fresh UUID).",
    S[5]
   ],
-  "capabilities": [
-   S[1],
-   S[6]
-  ],
+  "capabilities": C1,
   "replayClass": S[2],
   "licence": L0,
   "binary": {
@@ -259,10 +241,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "wc - stream and count lines, words, and bytes. Use to measure arbitrarily large text without loading it whole. In/out: file-backed stdin to counts. Flags: -l, -w, -c. Example: 'a b\\n' -> '1 2 4\\n'.",
   "caveats": V0,
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": L0,
   "binary": {
@@ -292,10 +271,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Extracts first N lines (-n N, default 10). Buffers stdin subject to the exact 8 MiB input ceiling.",
    S[5]
   ],
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": L0,
   "binary": {
@@ -325,10 +301,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Extracts last N lines (-n N, default 10). Buffers stdin subject to the exact 8 MiB input ceiling.",
    S[5]
   ],
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": L0,
   "binary": {
@@ -358,10 +331,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Extracts single column via -d <delim> -f <col>. Stdin-only; zero file operands.",
    S[5]
   ],
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": L0,
   "binary": {
@@ -388,10 +358,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "sort - external merge-sort file-backed text in the C byte locale. Use to order data larger than Wasm memory. In/out: chainable references. Flags: -r, -n, -u. Example: 'b\\na\\n' -> 'a\\nb\\n'.",
   "caveats": V0,
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": L0,
   "binary": {
@@ -418,10 +385,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "uniq - stream adjacent lines and remove or count duplicates. Use after sort for deduplication. In/out: file-backed stdin to chainable output. Flags: -c, -d, -u. Example: 'a\\na\\nb' -> 'a\\nb'.",
   "caveats": V0,
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": L0,
   "binary": {
@@ -448,10 +412,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "tr - stream byte translation, deletion, and squeezing in the C locale. Use for case shifts and character maps. In/out: file-backed stdin to chainable output. Flags: -c, -d, -s. Example: 'a-z' 'A-Z' maps 'hi' to 'HI'.",
   "caveats": V0,
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": L0,
   "binary": {
@@ -478,10 +439,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "grep - stream matching text lines with POSIX BRE/ERE or fixed strings. Use to search, find, and filter large text. In/out: file-backed stdin to chainable output. Flags: -E, -F, -i, -v, -n, -c.",
   "caveats": V0,
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": L0,
   "binary": {
@@ -511,10 +469,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Two literal document arguments, one full-context hunk, 16 MiB LCS workspace cap. Exits 0 (match), 1 (diff), 2 (syntax error).",
    S[5]
   ],
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": L1,
   "binary": {
@@ -544,10 +499,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Exact-position literal-text transform over two arguments (original text, unified diff). No fuzz, offsets, reverse application, multi-file patching, or filesystem mutation.",
    S[5]
   ],
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": L1,
   "binary": {
@@ -655,10 +607,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Settings preview requires an explicit owner click and model execution requires live run ownership; both enumerate only the immutable inputs/f.bin job seed, using /job by default.",
    "file.read is confined to bounded recursive enumeration of the immutable per-job inputs/f.bin seed; path normalization and read-only inputs rights prevent escape, mutation, persistence, and cross-job access."
   ],
-  "capabilities": [
-   S[1],
-   S[14]
-  ],
+  "capabilities": C2,
   "replayClass": S[2],
   "licence": L1,
   "binary": {
@@ -689,10 +638,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Settings preview requires an explicit owner click and model execution requires live run ownership; both read only the immutable in-memory inputs/f.bin job seed.",
    "file.read is confined to the immutable per-job inputs/f.bin seed; path normalization and read-only inputs rights prevent escape, mutation, persistence, and cross-job access."
   ],
-  "capabilities": [
-   S[1],
-   S[14]
-  ],
+  "capabilities": C2,
   "replayClass": S[2],
   "licence": L1,
   "binary": {
@@ -723,10 +669,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Settings preview requires an explicit owner click and model execution requires live run ownership; both enumerate only the immutable nested /job/inputs seed.",
    "file.read is confined to bounded recursive enumeration of the immutable nested per-job inputs seed; path normalization and read-only inputs rights prevent escape, mutation, persistence, and cross-job access."
   ],
-  "capabilities": [
-   S[1],
-   S[14]
-  ],
+  "capabilities": C2,
   "replayClass": S[2],
   "licence": L1,
   "binary": {
@@ -826,10 +769,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Stdin/stdout only; no file operands.",
    S[5]
   ],
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": L1,
   "binary": {
@@ -859,9 +799,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "reads png/jpeg (anything stb_image decodes); writes png only; stdin/stdout; text is UTF-8.",
    "zxing read takes an image on stdin as canonical base64; write emits the PNG as canonical base64. Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
-  "capabilities": [
-   S[1]
-  ],
+  "capabilities": C3,
   "replayClass": S[2],
   "licence": L1,
   "binary": {
@@ -891,9 +829,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "png/jpeg/webp only; stdin/stdout; no EXIF editing.",
    S[5]
   ],
-  "capabilities": [
-   S[1]
-  ],
+  "capabilities": C3,
   "replayClass": S[2],
   "licence": L1,
   "binary": {
@@ -923,9 +859,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "zstd and brotli only; stdin/stdout; no in-place archive manipulation.",
    "Decompress and info take a base64 frame on stdin; compressed and decompressed output is canonical base64 (gzip's lossless binary arm). Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
-  "capabilities": [
-   S[1]
-  ],
+  "capabilities": C3,
   "replayClass": S[2],
   "licence": L1,
   "binary": {
@@ -955,9 +889,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "PNG in, PNG out; stdin/stdout; lossless (pixels identical) but colour type or bit depth may be reduced; a 3.5 s internal deadline bounds the effort.",
    S[5]
   ],
-  "capabilities": [
-   S[1]
-  ],
+  "capabilities": C3,
   "replayClass": S[2],
   "licence": {
    "spdx": S[21],
@@ -991,9 +923,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "JXL in, PNG out; stdin/stdout; decodes JPEG XL to raw PNG (base64 at the tool boundary).",
    S[5]
   ],
-  "capabilities": [
-   S[1]
-  ],
+  "capabilities": C3,
   "replayClass": S[2],
   "licence": {
    "spdx": S[21],
@@ -1027,9 +957,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "PNG/JPEG/WebP in, AVIF out; stdin/stdout; lossy at the chosen quality; a high-entropy source can encode larger than the input.",
    S[5]
   ],
-  "capabilities": [
-   S[1]
-  ],
+  "capabilities": C3,
   "replayClass": S[2],
   "licence": {
    "spdx": "BSD-3-Clause AND Apache-2.0",
@@ -1060,10 +988,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "hash_blake3 - hash data with BLAKE3. Use to fingerprint content, verify integrity, or derive ids. In/out: base64-encoded bytes as 'data' to a hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}.",
   "caveats": V1,
-  "capabilities": [
-   S[1],
-   S[6]
-  ],
+  "capabilities": C1,
   "replayClass": S[2],
   "licence": L0,
   "binary": {
@@ -1091,10 +1016,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "hash_md4 - hash data with MD4. Use for legacy compatibility checksums. In/out: base64-encoded bytes as 'data' to a 32-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'md4'.",
   "caveats": V1,
-  "capabilities": [
-   S[1],
-   S[6]
-  ],
+  "capabilities": C1,
   "replayClass": S[2],
   "licence": L2,
   "binary": {
@@ -1122,10 +1044,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "hash_sha1 - hash data with SHA-1. Use to verify legacy file or commit integrity. In/out: base64-encoded bytes as 'data' to a 40-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha1'.",
   "caveats": V1,
-  "capabilities": [
-   S[1],
-   S[6]
-  ],
+  "capabilities": C1,
   "replayClass": S[2],
   "licence": L2,
   "binary": {
@@ -1153,10 +1072,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "hash_sha224 - hash data with SHA-224. Use for cryptographic checksums and integrity. In/out: base64-encoded bytes as 'data' to a 56-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha224'.",
   "caveats": V1,
-  "capabilities": [
-   S[1],
-   S[6]
-  ],
+  "capabilities": C1,
   "replayClass": S[2],
   "licence": L2,
   "binary": {
@@ -1184,10 +1100,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "hash_sha384 - hash data with SHA-384. Use for high-security cryptographic hashing. In/out: base64-encoded bytes as 'data' to a 96-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha384'.",
   "caveats": V1,
-  "capabilities": [
-   S[1],
-   S[6]
-  ],
+  "capabilities": C1,
   "replayClass": S[2],
   "licence": L2,
   "binary": {
@@ -1215,10 +1128,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "hash_sha3_256 - hash data with SHA3-256. Use for modern Keccak/SHA-3 cryptographic hashing. In/out: base64-encoded bytes as 'data' to a 64-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha3_256'.",
   "caveats": V1,
-  "capabilities": [
-   S[1],
-   S[6]
-  ],
+  "capabilities": C1,
   "replayClass": S[2],
   "licence": L2,
   "binary": {
@@ -1246,10 +1156,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "hash_blake2b - hash data with BLAKE2b (512-bit). Use for fast secure hashing and fingerprinting. In/out: base64-encoded bytes as 'data' to a 128-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'blake2b'.",
   "caveats": V1,
-  "capabilities": [
-   S[1],
-   S[6]
-  ],
+  "capabilities": C1,
   "replayClass": S[2],
   "licence": L2,
   "binary": {
@@ -1277,10 +1184,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "hash_blake2s - hash data with BLAKE2s (256-bit). Use for fast 32-bit architecture secure hashing. In/out: base64-encoded bytes as 'data' to a 64-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'blake2s'.",
   "caveats": V1,
-  "capabilities": [
-   S[1],
-   S[6]
-  ],
+  "capabilities": C1,
   "replayClass": S[2],
   "licence": L2,
   "binary": {
@@ -1308,10 +1212,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "hash_ripemd160 - hash data with RIPEMD-160. Use for cryptographic address and checksum derivation. In/out: base64-encoded bytes as 'data' to a 40-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'ripemd160'.",
   "caveats": V1,
-  "capabilities": [
-   S[1],
-   S[6]
-  ],
+  "capabilities": C1,
   "replayClass": S[2],
   "licence": L2,
   "binary": {
@@ -1339,10 +1240,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "hash_sm3 - hash data with Chinese National Standard SM3. Use for commercial cryptographic compliance. In/out: base64-encoded bytes as 'data' to a 64-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sm3'.",
   "caveats": V1,
-  "capabilities": [
-   S[1],
-   S[6]
-  ],
+  "capabilities": C1,
   "replayClass": S[2],
   "licence": L2,
   "binary": {
@@ -1370,10 +1268,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "hash_whirlpool - hash data with Whirlpool (512-bit). Use for ISO/IEC 10118-3 cryptographic hashing. In/out: base64-encoded bytes as 'data' to a 128-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'whirlpool'.",
   "caveats": V1,
-  "capabilities": [
-   S[1],
-   S[6]
-  ],
+  "capabilities": C1,
   "replayClass": S[2],
   "licence": L2,
   "binary": {
@@ -1401,9 +1296,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "hash_adler32 - compute Adler-32 rolling checksum. Use for quick data error-detection in compressed streams. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'adler32'.",
   "caveats": V1,
-  "capabilities": [
-   S[1]
-  ],
+  "capabilities": C3,
   "replayClass": S[2],
   "licence": L2,
   "binary": {
@@ -1431,9 +1324,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "hash_crc32 - compute standard CRC-32 (IEEE 802.3) cyclic redundancy checksum. Use for integrity checks. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'crc32'.",
   "caveats": V1,
-  "capabilities": [
-   S[1]
-  ],
+  "capabilities": C3,
   "replayClass": S[2],
   "licence": L2,
   "binary": {
@@ -1461,9 +1352,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "hash_xxhash32 - compute fast 32-bit xxHash non-cryptographic checksum. Use for high-speed hash tables. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'xxhash32'.",
   "caveats": V1,
-  "capabilities": [
-   S[1]
-  ],
+  "capabilities": C3,
   "replayClass": S[2],
   "licence": L2,
   "binary": {
@@ -1495,10 +1384,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Experimental candidate; not the canonical full gzip.",
    "Settings preview represents lossless binary output as canonical base64; file-backed model execution keeps binary stdout as an owner-bound OPFS reference."
   ],
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": {
    "spdx": "Zlib AND Apache-2.0",
@@ -1533,10 +1419,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "CAP preview is stdin-only; no owner files are projected.",
    S[5]
   ],
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": {
    "spdx": S[31],
@@ -1570,10 +1453,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Bounded clean-room formatter, not canonical date; exact numeric epoch and ISO date inputs only.",
    S[5]
   ],
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": {
    "spdx": S[31],
@@ -1607,10 +1487,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Stdin/stdout only; file operands and in-place editing are unavailable.",
    S[13]
   ],
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": {
    "spdx": "BSD-3-Clause",
@@ -1644,10 +1521,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Stdin record input only; command pipes are unavailable and system() returns -1.",
    S[13]
   ],
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": {
    "spdx": "MIT",
@@ -1681,10 +1555,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "Oniguruma-dependent regex built-ins are unavailable in this WASI profile.",
    S[13]
   ],
-  "capabilities": [
-   S[1],
-   S[4]
-  ],
+  "capabilities": C0,
   "replayClass": S[2],
   "licence": {
    "spdx": "MIT",
