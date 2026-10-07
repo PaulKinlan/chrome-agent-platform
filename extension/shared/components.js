@@ -14266,9 +14266,12 @@ customElements.define("durable-run-registry", DurableRunRegistry);
  * <tool-library> — READ-ONLY owner diagnostics for the tool catalog contract
  * (CAP-FB-20260822-TOOL-LIBRARY-UI-01, panel-1 first slice).
  *
- * HARD BOUNDARY: the ONLY action surface is the Settings preview Run
- * button (an EXPLICIT owner click that emits tool-preview-request; the options
- * surface wires the single tool.preview.run route over the static allowlist).
+ * HARD BOUNDARY: the ONLY action surfaces are explicit-owner-click buttons —
+ * the Settings preview Run button (emits tool-preview-request; the options
+ * surface wires the single tool.preview.run route over the static allowlist)
+ * and the package-validate button (emits tool-package-validate-request for
+ * the EXACTLY-ONE listed package only — the ltkj.2 Settings validation
+ * surface; validation never enables execution).
  * No install/update/revoke/grant/execute/verify/copy, no catalog/provider
  * selection authority.
  * It renders bounded metadata from the Settings-principal tool-catalog.shadow
@@ -14346,6 +14349,77 @@ class ToolLibrary extends Component {
     const out = this._root.querySelector(".preview-output");
     if (button) button.disabled = value === true;
     if (out) out.textContent = value === true ? "Running…" : out.textContent;
+  }
+  get validationPackages() {
+    return this._validationPackages ?? [];
+  }
+  set validationPackages(value) {
+    this._validationPackages = Array.isArray(value) ? value : [];
+    this._renderValidationPackages();
+  }
+  get validationResult() {
+    return this._validationResult ?? null;
+  }
+  set validationResult(value) {
+    this._validationResult = value && typeof value === "object" ? value : null;
+    const statusEl = this._root.querySelector(".validation-status");
+    if (!statusEl) return;
+    if (value && typeof value === "object") {
+      if (value.ok === true) {
+        statusEl.classList.remove("error");
+        statusEl.textContent = "Package validated. Execution is not enabled.";
+      } else {
+        statusEl.classList.add("error");
+        const where = value.path ? ` (at ${value.path})` : "";
+        statusEl.textContent = `Validation failed: ${value.error ?? "unknown refusal"}${where}.`;
+      }
+    } else {
+      statusEl.classList.remove("error");
+      statusEl.textContent = "";
+    }
+  }
+  get validationBusy() {
+    return this._validationBusy === true;
+  }
+  set validationBusy(value) {
+    this._validationBusy = value === true;
+    // Every validate affordance (section button + per-row buttons) tracks the
+    // busy state — the section button was previously the only one toggled.
+    for (const btn of this._root.querySelectorAll(".package-validate-btn")) {
+      btn.disabled = value === true;
+    }
+    const statusEl = this._root.querySelector(".validation-status");
+    if (statusEl && value === true) {
+      statusEl.textContent = "Validating package…";
+    }
+  }
+  _renderValidationPackages() {
+    const container = this._root.querySelector(".validation-packages");
+    const btn = this._root.querySelector(".package-validate-btn");
+    if (!container) return;
+    container.replaceChildren();
+    const pkgs = this._validationPackages ?? [];
+    if (pkgs.length === 0) {
+      if (btn) btn.hidden = true;
+      const p = document.createElement("p");
+      p.className = "validation-empty meta";
+      p.textContent = "No Emscripten packages are available for validation in this build.";
+      container.append(p);
+      return;
+    }
+    if (btn) btn.hidden = pkgs.length !== 1; // the section button serves the single-package case only
+    const list = document.createElement("div");
+    list.className = "validation-list";
+    for (const pkg of pkgs) {
+      const row = document.createElement("div");
+      row.className = "validation-row";
+      const info = document.createElement("span");
+      info.className = "validation-pkg-info";
+      info.textContent = `${pkg.packageId} (v${pkg.version})`;
+      row.append(info);
+      list.append(row);
+    }
+    container.append(list);
   }
   // Per-tool example/help copy (static, bounded — the tool selector shows it).
   _previewHelp(toolId, gzipMode = "compress") {
@@ -14532,6 +14606,22 @@ class ToolLibrary extends Component {
     });
     this._root.querySelector(".preview-doc-a")?.addEventListener("input", () => this._updateDocCounts());
     this._root.querySelector(".preview-doc-b")?.addEventListener("input", () => this._updateDocCounts());
+    this._root.querySelector(".package-validate-btn")?.addEventListener("click", (sourceEvent) => {
+      if (this._validationBusy) return;
+      // STRICT single-package binding: the section button exists (unhidden)
+      // only when exactly one package is listed, and it validates exactly
+      // that package — an implicit [0] selection over a multi-package list is
+      // never possible (round-2 review finding 2; multi-package selection UI
+      // is future reviewed work).
+      if (this._validationPackages?.length !== 1) return;
+      const pkg = this._validationPackages[0];
+      this._emit("tool-package-validate-request", {
+        packageId: pkg.packageId,
+        version: pkg.version,
+        expectedVersion: pkg.expectedVersion ?? null,
+        sourceEvent,
+      });
+    });
   }
   _render() {
     // Mount ONCE: the live region must be a STABLE node so a polite
@@ -14590,6 +14680,14 @@ class ToolLibrary extends Component {
         font-size:12px; color:var(--muted, #625d57); }
       .packages { margin-top:20px; border-block-start:1px solid var(--border, #ddd8d2); padding-block-start:16px; }
       .packages h3 { margin:0 0 4px; font-size:15px; }
+      .packages .package-validate-btn { margin-top:10px; padding:6px 14px; border:1px solid var(--border, #ddd8d2);
+        border-radius:999px; background:var(--accent, #0e6e63); color:var(--btn-fg,#fff); font:inherit; font-size:13px;
+        cursor:pointer; }
+      .packages .package-validate-btn:focus-visible { outline:2px solid var(--accent, #0e6e63); outline-offset:2px; }
+      .packages .package-validate-btn[disabled] { opacity:.55; cursor:default; }
+      .packages .validation-status { min-block-size:1.25rem; margin:10px 0 0; font-size:13px; color:var(--muted, #625d57); }
+      .packages .validation-status.error { color:var(--danger, #b3261e); }
+      .packages .validation-pkg-info { font-size:13px; font-weight:600; }
       .preview { margin-top:20px; border-block-start:1px solid var(--border, #ddd8d2); padding-block-start:16px; }
       .preview h3 { margin:0 0 4px; font-size:15px; }
       .preview label { display:block; margin:8px 0 0; font-size:13px; color:var(--muted, #625d57); }
@@ -14646,6 +14744,11 @@ class ToolLibrary extends Component {
       <div class="packages">
         <h3>Bundled tool packages</h3>
         <p class="meta">Admitted bundled WebAssembly tool packages will be listed here when loaded.</p>
+        <div class="validation-packages">
+          <p class="validation-empty meta">No Emscripten packages are available for validation in this build.</p>
+        </div>
+        <button class="package-validate-btn" type="button" hidden>Validate package</button>
+        <p class="validation-status" role="status" aria-live="polite" aria-atomic="true"></p>
       </div>
       <div class="preview" hidden>
         <h3>Bundled tool previews</h3>

@@ -143,7 +143,58 @@ async function walkWasm(dir, out = []) {
   return out;
 }
 const { scanShippedJs, scanBundledWasmFiles } = await import("./scripts/scan-shipped.mjs");
-const shippedJs = await walkJs("extension");
+const { BUNDLED_INVENTORY: BUNDLED_INVENTORY_EARLY } = await import("./extension/lib/bundled-inventory-data.js");
+const shippedJsAll = await walkJs("extension");
+// ltkj.2: JS members of the package store (extension/wasm/runtime/**) are
+// generated data, not authored shipped code — the same contract as the
+// vendored pyodide lane, except the pin is the BUNDLED_INVENTORY digest rather
+// than a hardcoded hash. Exemption is content-addressed: a file is exempt ONLY
+// while its bytes hash-match its inventory row, so a drifted or undeclared
+// file stays inside the AST scan and fails closed.
+const packageStoreExempt = new Set();
+// walkJs returns RELATIVE paths ("extension/wasm/..."), so the exemption set
+// keys on the same rel form — join(ROOT, …) is only used to READ the bytes.
+for (const row of BUNDLED_INVENTORY_EARLY.files) {
+  if (!/^extension\/wasm\/.+\.m?js$/.test(row.rel)) continue;
+  let bytes;
+  try {
+    bytes = await readFile(join(ROOT, row.rel));
+  } catch {
+    continue; // absent file is not this scan's problem (walkJs only saw present files)
+  }
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  if (row.sha256 === digest) packageStoreExempt.add(row.rel);
+}
+// Schema-2 runtime data assets (roles adapter/glue/pthread-bootstrap/data)
+// are MANIFEST members, not inventory file rows: their pin is the asset
+// sha256 inside a manifest whose own digest is tied to the inventory row
+// (assertManifestRowDigest). Same contract — exemption only on exact byte
+// match; drifted/undeclared files stay inside the AST scan and fail closed.
+const { manifestCasMappings: mapSchemas, assertManifestRowDigest: tieRow } =
+  await import("./scripts/lib/wasm-manifest-assets.mjs");
+for (const identity of BUNDLED_INVENTORY_EARLY.manifests) {
+  const manifestRel = `extension/wasm/manifests/${identity.pkg}-${identity.version}.manifest.json`;
+  const manifestText = await readFile(join(ROOT, manifestRel), "utf8");
+  tieRow(manifestText, identity);
+  const manifest = JSON.parse(manifestText);
+  if (manifest?.schemaVersion !== 2) continue;
+  mapSchemas(manifest); // validation side effect: roles/paths/CAS invariants
+  for (const asset of manifest.assets ?? []) {
+    if (!/^extension\/wasm\/.+\.m?js$/.test(asset?.path ?? "")) continue;
+    let bytes;
+    try {
+      bytes = await readFile(join(ROOT, asset.path));
+    } catch {
+      continue;
+    }
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (asset.sha256 === digest) packageStoreExempt.add(asset.path);
+  }
+}
+const shippedJs = shippedJsAll.filter((file) => !packageStoreExempt.has(file));
+if (packageStoreExempt.size > 0) {
+  console.log(`shipped-code scan: ${packageStoreExempt.size} package-store JS asset(s) verified by inventory digest pin (not AST-scanned)`);
+}
 // The __zod_*/__vite_* oracle exemption applies ONLY inside the generated
 // dependency bundles (esbuild inlines the zod/vite source there) — never in
 // shipped source files.
@@ -177,14 +228,19 @@ await checkReachability({ root: ROOT });
 // A binary with no exact manifest mapping still fails the build closed.
 const shippedWasm = await walkWasm("extension");
 const { BUNDLED_INVENTORY } = await import("./extension/lib/bundled-inventory-data.js");
+// Single schema-aware manifest→CAS mapping (ltkj.2): the same helper serves the
+// generator, this scan and the Store archive map — one rule, not three parsers.
+// Inventory-row digest drift fails closed before any mapping is trusted.
+const { manifestCasMappings, assertManifestRowDigest } = await import("./scripts/lib/wasm-manifest-assets.mjs");
 const manifestByFile = new Map();
 for (const identity of BUNDLED_INVENTORY.manifests) {
   const manifestRel = `extension/wasm/manifests/${identity.pkg}-${identity.version}.manifest.json`;
-  const manifest = JSON.parse(await readFile(join(ROOT, manifestRel), "utf8"));
-  for (const executable of manifest.executables ?? []) {
-    const casRel = `extension/wasm/cas/${executable.sha256}.wasm`;
+  const manifestText = await readFile(join(ROOT, manifestRel), "utf8");
+  assertManifestRowDigest(manifestText, identity);
+  const manifest = JSON.parse(manifestText);
+  for (const { casRel, schemaVersion, executable, asset } of manifestCasMappings(manifest)) {
     if (manifestByFile.has(casRel)) throw new Error(`bundled-Wasm manifest collision: ${casRel}`);
-    manifestByFile.set(casRel, executable);
+    manifestByFile.set(casRel, schemaVersion === 2 ? { schemaVersion: 2, asset } : executable);
   }
 }
 const wasmViolations = await scanBundledWasmFiles(shippedWasm, {

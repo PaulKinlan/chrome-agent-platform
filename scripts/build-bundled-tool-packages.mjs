@@ -69,6 +69,14 @@ const EVIDENCE = evidenceIdx >= 0 ? args[evidenceIdx + 1] : join(REPO, "packages
 // On a host WITHOUT the frozen evidence trees, verify degrades to an honest
 // WARNING + pass (fresh-checkout portability); regeneration still hard-fails.
 const VERIFY = args.includes("--verify");
+// ltkj.2 acceptance target (BUILD-TIME ONLY): emits the reviewed A0 numeric
+// schema-2 fixture into the generated inventory. Default/release generation
+// NEVER includes it (schema-2 candidate set stays empty); the loaded acceptance
+// harness sets this in a disposable durable copy only. It selects exclusively
+// tracked, source-reviewed fixture pins — no arbitrary asset roots or manifests.
+const ACCEPTANCE_NUMERIC =
+  args.includes("--acceptance-emscripten-numeric") ||
+  process.env.CAP_ACCEPTANCE_EMSCRIPTEN_NUMERIC === "1";
 const emitted = new Map(); // verify mode only: repo-relative path -> bytes
 function emit(abs, bytes) {
   if (VERIFY) { emitted.set(abs.slice(REPO.length + 1), Buffer.from(bytes)); return; }
@@ -171,7 +179,7 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
 // markdown and licence text whose exact bytes --verify asserts, and their content opens at
 // column 0: adding two spaces would change shipped bytes, not just layout. Same reason the
 // body keeps its original column-0 statements inside the function.
-function main() {
+async function main() {
 const missingEvidence = Object.entries(PATHS).filter(([, p]) => !existsSync(p));
 if (missingEvidence.length > 0) {
   if (!VERIFY) {
@@ -894,6 +902,15 @@ for (const pkg of packages) {
   });
 }
 
+// ── ltkj.2 acceptance fixture (build-time-only target; see ACCEPTANCE_NUMERIC) ──
+if (ACCEPTANCE_NUMERIC) {
+const { buildNumericAcceptancePackage } = await import("./lib/emscripten-numeric-acceptance.mjs");
+const acceptance = await buildNumericAcceptancePackage();
+for (const file of acceptance.files) ship(file.rel, file.bytes);
+inventoryManifests.push(acceptance.inventoryManifestRow);
+console.log(`acceptance: emitted ${acceptance.files.length} schema-2 fixture files (manifest ${acceptance.manifestDigest})`);
+}
+
 // ── Generated data modules ──────────────────────────────────────────────────
 const inventory = {
   schemaVersion: 1, release: RELEASE, signer: SIGNER,
@@ -1102,5 +1119,5 @@ console.log(`OK: ${packages.length} packages, ${inventoryFiles.length} shipped f
 }
 
 if (isMain) {
-  main();
+  await main();
 }

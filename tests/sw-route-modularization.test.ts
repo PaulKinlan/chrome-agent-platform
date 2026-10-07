@@ -55,6 +55,8 @@ const BASELINE_ROUTES = [
   "invalidate-agent",
   "agent.orchestrator",
   "tool-catalog.shadow",
+  "tool.package.validation-list",
+  "tool.package.validate",
   "tool.preview.run",
   "agent.run",
   "agent.list",

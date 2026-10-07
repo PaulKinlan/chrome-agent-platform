@@ -183,6 +183,10 @@ export const EXEMPTIONS = {
   // the only file written is a makeTempDir it removes — no read or write touches repo extension/ or
   // packages/.
   "tests/browser-dependencies.test.ts": "names build.mjs only inside a consumer list read as TEXT (never spawned or loaded); all bundles are in-memory (write:false) and the one written file is a removed temp dir",
+  // ltkj.2: the loaded-admission harness contract test asserts on harness SOURCE text (naming
+  // build.mjs/the generator inside string pins, never spawning either); the acceptance builder it
+  // executes only READS tracked evidence files and returns bytes in memory. Zero filesystem writes.
+  "tests/emscripten-admission-loaded-harness.test.ts": "names build.mjs only inside harness-source TEXT pins (never spawned or loaded); the acceptance builder runs read-only over tracked evidence and returns in-memory bytes; no writes at all",
 };
 
 // A test that SPAWNS or IMPORTS one of these local drivers inherits the
