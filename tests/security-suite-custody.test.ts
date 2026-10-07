@@ -172,6 +172,7 @@ Deno.test("security-suite custody: production mode is immutable and fake runners
   assertEquals(production.selfTest, false);
   assertEquals(production.timeoutMs, 120_000);
   assertEquals(production.attestDeadlineMs, 2_000, "production keeps the old attestation clock");
+  assertEquals(production.sampleFreezeMs, 0, "production keeps zero sample freeze");
   assertEquals(production.runner, RUNNER);
 
   await assertRejects(
@@ -191,6 +192,18 @@ Deno.test("security-suite custody: production mode is immutable and fake runners
   await assertRejects(
     () => resolveSupervisorConfig({
       env: { HOME: Deno.env.get("HOME") ?? "", CAP_SECURITY_TEST_ATTEST_DEADLINE_MS: "5000" },
+      repoRoot: ROOT,
+      expectedFixtureHash: "unused-in-production",
+    }),
+    Error,
+    "self-test-only override refused in production mode",
+  );
+
+  // chrome-agent-platform-a6x5: CAP_SECURITY_TEST_SAMPLE_FREEZE_MS is a test-only determinism
+  // knob and must refuse loudly if present in production mode.
+  await assertRejects(
+    () => resolveSupervisorConfig({
+      env: { HOME: Deno.env.get("HOME") ?? "", CAP_SECURITY_TEST_SAMPLE_FREEZE_MS: "500" },
       repoRoot: ROOT,
       expectedFixtureHash: "unused-in-production",
     }),
@@ -306,6 +319,21 @@ Deno.test("zfsl: invalid attestation declaration refuses by name before a runner
     }, 20, "CAP_SECURITY_LOCK_ACQUIRED");
     assertEquals(result.code, 2);
     assert(result.text.includes("SECURITY-SUITE SUPERVISOR REFUSED: CAP_SECURITY_TEST_ATTEST_DEADLINE_MS out of bounds"));
+    assert(!result.text.includes("CAP_SECURITY_RESULT"), "config refusal must precede spawning and receipt");
+  }
+});
+
+Deno.test("a6x5: invalid sample freeze declaration refuses by name before a runner is spawned", async () => {
+  for (const bad of ["not-a-number", "-1", "20001"]) {
+    const result = await command("bash", [SUPERVISOR], {
+      CAP_SECURITY_SELF_TEST: SELF_TEST_TOKEN,
+      CAP_SECURITY_RUNNER: FIXTURE,
+      CAP_SECURITY_TEST_SCENARIO: "guard",
+      CAP_SECURITY_SELF_TEST_TIMEOUT_MS: "1000",
+      CAP_SECURITY_TEST_SAMPLE_FREEZE_MS: bad,
+    }, 20, "CAP_SECURITY_LOCK_ACQUIRED");
+    assertEquals(result.code, 2);
+    assert(result.text.includes("SECURITY-SUITE SUPERVISOR REFUSED: CAP_SECURITY_TEST_SAMPLE_FREEZE_MS out of bounds"));
     assert(!result.text.includes("CAP_SECURITY_RESULT"), "config refusal must precede spawning and receipt");
   }
 });
@@ -592,6 +620,7 @@ Deno.test(
         ESCAPE_ACK_DEADLINE_MS,
         "the fixture must record the DECLARED window it was given",
       );
+      assertEquals(result.receipt?.sampleFreezeMs, ESCAPE_SAMPLE_FREEZE_MS, "the supervisor receipt must record the declared sample freeze window");
       assertEquals(result.receipt?.custodyReason, "descendant-residue");
       const residue = result.receipt?.residue as Array<Record<string, unknown>>;
       assert(residue.length >= 1);
