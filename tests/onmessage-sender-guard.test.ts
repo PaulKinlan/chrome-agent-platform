@@ -540,9 +540,9 @@ Deno.test("behavioral: content-script onRuntimeMessage filters foreign sender an
   assertEquals(ret3, true, "valid extension SW sender must be accepted");
   assertEquals(onRuntimeMessage.getSyncCalled(), true, "sync must be called on valid sender");
 
-  // Sender-less test stub invocation: must be tolerated
+  // Missing sender: must be rejected fail-closed per docs/SW-DISPATCH-AUTHORITY-CENSUS.md
   const ret4 = onRuntimeMessage.onRuntimeMessage({ type: "enrollment.poke" }, undefined, () => {});
-  assertEquals(ret4, true, "sender-less test invocation must be tolerated");
+  assertEquals(ret4, false, "missing sender must be rejected fail-closed");
 });
 
 Deno.test("census: docs/SW-DISPATCH-AUTHORITY-CENSUS.md documents non-dispatcher listeners", async () => {
