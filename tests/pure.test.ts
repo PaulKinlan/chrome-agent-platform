@@ -702,6 +702,11 @@ Deno.test("redactToolArgs: recurses into nested arguments envelopes and arbitrar
   }
   const capped = redactToolArgs("execute_tool", deep);
   assert(JSON.stringify(capped).includes("[depth-capped]"));
+
+  // Shared noncyclic DAG objects are preserved on distinct branches (unwound seen set)
+  const shared = { name: "shared-item", count: 42 };
+  const dag = redactToolArgs("execute_tool", { a: shared, b: shared });
+  assertEquals(dag, { a: { name: "shared-item", count: 42 }, b: { name: "shared-item", count: 42 } });
 });
 
 Deno.test("sw-egress: service-worker.js progress chokepoint and run-digest wire redactToolArgs (c8ee / P1 pin)", async () => {
@@ -710,12 +715,45 @@ Deno.test("sw-egress: service-worker.js progress chokepoint and run-digest wire 
     sw.includes("toolArgs: redactDeep(redactToolArgs(event.selectedTool ?? event.toolName, event.toolArgs))"),
     "SW progress seam must wire redactToolArgs on tool-call events",
   );
+  assert(
+    sw.includes('result: "[REDACTION_FAILED]", resultFull: "[REDACTION_FAILED]"'),
+    "SW progress seam catch block must fail closed on both result and resultFull",
+  );
 
   const digest = await Deno.readTextFile(new URL("../extension/lib/run-digest.js", import.meta.url));
   assert(
     digest.includes("const safeArgs = redactToolArgs(name, shownArgs === undefined ? {} : shownArgs, extraSecret)"),
     "run-digest must wire redactToolArgs on continuation args",
   );
+});
+
+Deno.test("sw-egress fail-closed: redaction exception clears result and resultFull", () => {
+  let event: any = {
+    type: "tool-result",
+    toolName: "read_file",
+    result: { get boom() { throw new Error("hostile getter"); } },
+    resultFull: "confidential raw full result text",
+  };
+
+  try {
+    event = {
+      ...event,
+      ...(event.type === "tool-call"
+        ? { toolArgs: redactDeep(redactToolArgs(event.selectedTool ?? event.toolName, event.toolArgs)) }
+        : { result: redactDeep(event.result) }),
+    };
+  } catch {
+    event = {
+      ...event,
+      ...(event.type === "tool-call"
+        ? { toolArgs: "[REDACTION_FAILED]" }
+        : { result: "[REDACTION_FAILED]", resultFull: "[REDACTION_FAILED]", resultFullBytes: 18 }),
+    };
+  }
+
+  assertEquals(event.result, "[REDACTION_FAILED]");
+  assertEquals(event.resultFull, "[REDACTION_FAILED]");
+  assert(!JSON.stringify(event).includes("confidential raw full result"));
 });
 
 Deno.test("execute_tool secret redaction transform simulation: broadcast, journal, and durable run log (2uhx)", () => {

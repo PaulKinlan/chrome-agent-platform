@@ -3908,10 +3908,12 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
             };
           }
         } catch {
-          // Redaction failure must fail closed on egress rather than forwarding raw arguments
+          // Redaction failure must fail closed on egress rather than forwarding raw arguments or results
           event = {
             ...event,
-            ...(event.type === "tool-call" ? { toolArgs: "[REDACTION_FAILED]" } : { result: "[REDACTION_FAILED]" }),
+            ...(event.type === "tool-call"
+              ? { toolArgs: "[REDACTION_FAILED]" }
+              : { result: "[REDACTION_FAILED]", resultFull: "[REDACTION_FAILED]", resultFullBytes: 18 }),
           };
         }
       }

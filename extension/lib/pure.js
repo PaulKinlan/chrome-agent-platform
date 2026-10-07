@@ -1168,10 +1168,10 @@ const ALL_KNOWN_TOOL_SECRET_ARGS = Object.freeze(
  * @param {any} args
  * @param {readonly string[]|string[]|null} [extraSecretArgs]
  * @param {number} [depth=0]
- * @param {WeakSet<object>} [seen=new WeakSet()]
+ * @param {Set<object>} [activeAncestors=new Set()]
  * @returns {any}
  */
-export function redactToolArgs(toolName, args, extraSecretArgs = null, depth = 0, seen = new WeakSet()) {
+export function redactToolArgs(toolName, args, extraSecretArgs = null, depth = 0, activeAncestors = new Set()) {
   if (args == null) return args;
   if (depth > 8) return "[depth-capped]";
 
@@ -1179,7 +1179,7 @@ export function redactToolArgs(toolName, args, extraSecretArgs = null, depth = 0
     try {
       const parsed = JSON.parse(args);
       if (parsed && typeof parsed === "object") {
-        return JSON.stringify(redactToolArgs(toolName, parsed, extraSecretArgs, depth + 1, seen));
+        return JSON.stringify(redactToolArgs(toolName, parsed, extraSecretArgs, depth + 1, activeAncestors));
       }
     } catch {
       return args;
@@ -1188,43 +1188,47 @@ export function redactToolArgs(toolName, args, extraSecretArgs = null, depth = 0
   }
 
   if (typeof args !== "object") return args;
-  if (seen.has(args)) return "[cycle]";
-  seen.add(args);
+  if (activeAncestors.has(args)) return "[cycle]";
+  activeAncestors.add(args);
 
-  if (Array.isArray(args)) {
-    return args.slice(0, 200).map((item) => redactToolArgs(toolName, item, extraSecretArgs, depth + 1, seen));
-  }
+  try {
+    if (Array.isArray(args)) {
+      return args.slice(0, 200).map((item) => redactToolArgs(toolName, item, extraSecretArgs, depth + 1, activeAncestors));
+    }
 
-  const tool = String(toolName ?? "").slice(0, 64);
-  const effectiveTool = tool || (typeof args?.toolId === "string" ? args.toolId : (typeof args?.tool === "string" ? args.tool : ""));
-  const isProtocolOrUnknown = !effectiveTool || effectiveTool === "execute_tool" || effectiveTool === "search_tools" || effectiveTool === "tool";
-  const secretSet = new Set(
-    Array.isArray(extraSecretArgs)
-      ? extraSecretArgs
-      : (KNOWN_TOOL_SECRET_ARGS[effectiveTool] ?? (isProtocolOrUnknown ? ALL_KNOWN_TOOL_SECRET_ARGS : []))
-  );
+    const tool = String(toolName ?? "").slice(0, 64);
+    const effectiveTool = tool || (typeof args?.toolId === "string" ? args.toolId : (typeof args?.tool === "string" ? args.tool : ""));
+    const isProtocolOrUnknown = !effectiveTool || effectiveTool === "execute_tool" || effectiveTool === "search_tools" || effectiveTool === "tool";
+    const secretSet = new Set(
+      Array.isArray(extraSecretArgs)
+        ? extraSecretArgs
+        : (KNOWN_TOOL_SECRET_ARGS[effectiveTool] ?? (isProtocolOrUnknown ? ALL_KNOWN_TOOL_SECRET_ARGS : []))
+    );
 
-  const out = {};
-  let n = 0;
-  for (const [k, v] of Object.entries(args)) {
-    if (n++ >= 200) { out["…"] = "[truncated]"; break; }
-    if (secretSet.has(k)) {
-      out[k] = "[REDACTED]";
-    } else if (v && typeof v === "object") {
-      const nestedExtra = (k === "arguments" && secretSet.size === 0) ? ALL_KNOWN_TOOL_SECRET_ARGS : extraSecretArgs;
-      out[k] = redactToolArgs(toolName, v, nestedExtra, depth + 1, seen);
-    } else if (typeof v === "string") {
-      if (k === "arguments") {
-        const nestedExtra = secretSet.size === 0 ? ALL_KNOWN_TOOL_SECRET_ARGS : extraSecretArgs;
-        out[k] = redactToolArgs(toolName, v, nestedExtra, depth + 1, seen);
+    const out = {};
+    let n = 0;
+    for (const [k, v] of Object.entries(args)) {
+      if (n++ >= 200) { out["…"] = "[truncated]"; break; }
+      if (secretSet.has(k)) {
+        out[k] = "[REDACTED]";
+      } else if (v && typeof v === "object") {
+        const nestedExtra = (k === "arguments" && secretSet.size === 0) ? ALL_KNOWN_TOOL_SECRET_ARGS : extraSecretArgs;
+        out[k] = redactToolArgs(toolName, v, nestedExtra, depth + 1, activeAncestors);
+      } else if (typeof v === "string") {
+        if (k === "arguments") {
+          const nestedExtra = secretSet.size === 0 ? ALL_KNOWN_TOOL_SECRET_ARGS : extraSecretArgs;
+          out[k] = redactToolArgs(toolName, v, nestedExtra, depth + 1, activeAncestors);
+        } else {
+          out[k] = v;
+        }
       } else {
         out[k] = v;
       }
-    } else {
-      out[k] = v;
     }
+    return out;
+  } finally {
+    activeAncestors.delete(args);
   }
-  return out;
 }
 
 /** redactDeep — BOTH redaction layers for a structured value crossing a
