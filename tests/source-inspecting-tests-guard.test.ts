@@ -14,9 +14,10 @@
 //   5. Falsification: an unlisted source-inspecting test fails the audit closed.
 //   6. p4tf: no test or script under tests/ or scripts/ invokes find for file absence or inspection (box hazard).
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import type { Dirent } from "node:fs";
+import { join, sep } from "node:path";
 import {
   ALWAYS_ON,
   CORE,
@@ -26,6 +27,64 @@ import {
   buildReverseGraph,
   selectTestFiles,
 } from "../scripts/select-tests.mjs";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
+
+/** Pattern matching test filenames (.test.ts or .test.js, matching runner conventions). */
+export const IS_TEST_RE = /\.test\.(ts|js)$/;
+
+// NEW-3: Exact paths of real-tree falsification fixtures that could be left by SIGKILL.
+export const AFPL_REAL_TREE_FIXTURES: Record<string, string> = {
+  "tests/helpers/zz-afpl-depth2-walk.ts":
+    `// Real depth-2 helper walking repo root via ../../\nconst root = new URL("../../", import.meta.url);\nexport function census() { for (const f of Deno.readDirSync(root)) void f; }\n`,
+  "tests/helpers/zz-afpl-prose-only.ts":
+    `// Shared helper. Deliberately does NOT shell out to git ls-files; it reads two files.\n// See SCAN_DIRS and GUARD_ROOTS for context.\nexport function add(a: number, b: number): number { return a + b; }\n`,
+  "tests/helpers/zz-afpl-fixture-read.ts":
+    `import { join } from "node:path";\nconst ROOT = "/repo";\nexport function list() { for (const f of Deno.readDirSync(join(ROOT, "tests", "fixtures"))) void f; }\n`,
+  "tests/helpers/zz-afpl-preexisting-sibling.ts":
+    "// Pre-existing sibling helper\nexport const ok = true;\n",
+};
+export const AFPL_REAL_TREE_RESIDUE = [
+  "tests/helpers/zz-afpl-depth2-walk.ts",
+  "tests/helpers/zz-afpl-prose-only.ts",
+  "tests/helpers/zz-afpl-fixture-read.ts",
+  "tests/helpers/zz-afpl-preexisting-sibling.ts",
+];
+
+export function reconcileAfplRealTreeResidue(): void {
+  for (const rel of AFPL_REAL_TREE_RESIDUE) {
+    try {
+      Deno.removeSync(join(ROOT, rel));
+    } catch {
+      /* absent — fine */
+    }
+  }
+}
+// Run reconciliation at module evaluation so any residue from a killed run is swept
+// BEFORE any Deno.test (including qcfc: self-checking audit) evaluates.
+reconcileAfplRealTreeResidue();
+
+Deno.test("afpl: SIGKILL residue is reconciled before the audit scans the tree", () => {
+  const helpersDir = join(ROOT, "tests", "helpers");
+  const hadHelpers = existsSync(helpersDir);
+  if (!hadHelpers) {
+    Deno.mkdirSync(helpersDir, { recursive: true });
+  }
+  assertEquals(Object.keys(AFPL_REAL_TREE_FIXTURES).sort(), [...AFPL_REAL_TREE_RESIDUE].sort());
+  for (const [rel, body] of Object.entries(AFPL_REAL_TREE_FIXTURES)) {
+    Deno.writeTextFileSync(join(ROOT, rel), body);
+  }
+  reconcileAfplRealTreeResidue();
+  for (const rel of AFPL_REAL_TREE_RESIDUE) {
+    assertEquals(existsSync(join(ROOT, rel)), false, `residue ${rel} must be reconciled`);
+  }
+  if (!hadHelpers) {
+    try {
+      Deno.removeSync(helpersDir);
+    } catch {
+      /* ignore */
+    }
+  }
+});
 
 Deno.test("qcfc: every declared source-inspecting guard exists on disk", () => {
   for (const file of SOURCE_INSPECTING_GUARDS) {
@@ -81,7 +140,6 @@ export function findUnclassifiedSourceScanners(
     /walk\(\s*`\$\{ROOT\}/,
     /walk\(\s*ROOT\b/,
     /readDirSync\(\s*ROOT\b/,
-    /readDirSync\(\s*join\(\s*ROOT\b/,
     /GUARD_ROOTS/,
     // F3 (delta review of c1a77598): the patterns above only matched literal ROOT / GUARD_ROOTS, so two
     // real repo-walking guards were invisible to the audit — tests/chrome-test-contract.test.ts
@@ -121,8 +179,8 @@ export function findUnclassifiedSourceScanners(
   // flagged `const probe = `${extension}/_emscripten_abi_probe`` (a temp probe dir INSIDE extension)
   // and `path.join(..., "scripts", "git-hooks")` (a subdir) — both false positives of exactly the
   // over-match class this bead exists to prevent.
-  const REPO_ROOT_URL = /new URL\(\s*["']\.\.\/?["']/;
-  const TOP_LEVEL_URL = new RegExp(`new URL\\(\\s*["']\\.\\.?\\/(?:${TOP_LEVEL_DIRS})\\/?["']`);
+  const REPO_ROOT_URL = /new URL\(\s*["']\.\.(?:\/\.\.)*\/?["']/;
+  const TOP_LEVEL_URL = new RegExp(`new URL\\(\\s*["']\\.\\.(?:\\/\\.\\.)*\\/(?:${TOP_LEVEL_DIRS})\\/?["']`);
   // path.join(..., "extension") — the LAST literal is a top-level dir and closes the call.
   const JOIN_ENDS_AT_TOP_LEVEL = new RegExp(
     `(?:ROOT|\\$\\{[^}]*\\}|["'][^"']*\\.\\.\\/(?:${TOP_LEVEL_DIRS})[^"']*["'])[^)]*["'](?:${TOP_LEVEL_DIRS})\\/?["']\\s*\\)`,
@@ -173,40 +231,190 @@ export function findUnclassifiedSourceScanners(
   // both. Argument extraction does not demand a closing paren either: `walk(root, opts)` and
   // `walk(abs, rel)` are ordinary calls (reviewer P1/P2).
   const walkOrReadRoots = (code: string, rel: string) =>
-    ["walk", "readDir", "readDirSync", "readdir"].flatMap((name) => firstArgs(code, name))
+    ["walk", "readDir", "readDirSync", "readdir", "readdirSync", "opendir", "opendirSync"].flatMap((name) => firstArgs(code, name))
       .filter((arg) => (/^[A-Za-z_$][\w$]*$/.test(arg) ? identifierIsSourceRoot(arg, code, rel) : denotesSourceRoot(arg, rel)));
   for (const { rel, code } of testFiles) {
-    if (alwaysOnSet.has(rel)) continue;
+    const isTest = IS_TEST_RE.test(rel);
+    // Non-test support modules / helpers cannot be silenced by ALWAYS_ON or SCANNER_EXCLUSIONS.
+    // If a helper dynamically scans a source root, it must fail closed and cannot be excused.
+    if (isTest && alwaysOnSet.has(rel)) continue;
     // chrome-agent-platform-kz27: a DECLARED exclusion is classified — it carries a reason and a bead,
     // so the choice is written down rather than being an accidental omission. That is why
     // SCANNER_EXCLUSIONS exists instead of a quietly missing list entry.
-    if (Object.hasOwn(SCANNER_EXCLUSIONS, rel)) continue;
+    if (isTest && Object.hasOwn(SCANNER_EXCLUSIONS, rel)) continue;
     // If it dynamically scans source directories, it must be in ALWAYS_ON. The literal
     // patterns catch the ROOT-rooted shapes; the source-root test catches a walk over an
     // identifier that this file derives from a source root (p1lp), including lowercase ones.
-    if (SCANNER_PATTERNS.some((pat) => pat.test(code)) || walkOrReadRoots(code, rel).length > 0) {
+    // For non-test support modules/helpers, only definition-based walks (walkOrReadRoots) apply:
+    // prose patterns (SCAN_DIRS, git ls-files, GUARD_ROOTS) cannot match support modules because
+    // helpers have no exemption path and comment mentions must not cause unactionable reds (afpl Finding 2).
+    const matchesScanner = isTest
+      ? (SCANNER_PATTERNS.some((pat) => pat.test(code)) || walkOrReadRoots(code, rel).length > 0)
+      : (walkOrReadRoots(code, rel).length > 0);
+    if (matchesScanner) {
       unclassified.push(rel);
     }
   }
   return unclassified;
 }
 
-Deno.test("qcfc: self-checking audit: all dynamic source-scanning test guards are in ALWAYS_ON", () => {
-  const testsDir = join(ROOT, "tests");
-  const testFiles = readdirSync(testsDir)
-    .filter((f) => f.endsWith(".test.ts") || f.endsWith(".test.js"))
+/**
+ * The shared test-support files this audit must scan too (chrome-agent-platform-afpl). The audit used to
+ * enumerate tests/*.test.ts ONLY, so a repo walk moved into a HELPER was invisible — and that is the
+ * shape a faithful `-static` split encourages, because the shared machinery has to live somewhere. The
+ * same blind spot covered the non-test support modules sitting directly under tests/.
+ *
+ * All subdirectories under tests/ (such as tests/helpers/, tests/support/, tests/utils/) are dynamically
+ * scanned, EXCEPT tests/fixtures/ which is deliberately NOT scanned: it is data, and a fixture reader
+ * must not be admitted. That half matters as much as the other — widening a scan until it admits every
+ * fixture reader is how an over-broad pattern once put a 23s esbuild-spawning file into the always-on
+ * set and tripled every subset gate (chrome-agent-platform-fgik, and the reason p1lp replaced names
+ * with DEFINITIONS).
+ *
+ * Scope note (afpl Finding 3): this audit scans tests/** (test guards and shared support modules). It does
+ * not scan shared test-support machinery under scripts/lib/ (e.g. scripts/lib/harness-registry.ts) that tests
+ * may import; tests consuming such helpers must be listed in ALWAYS_ON directly.
+ */
+
+/** Every shared test-support source file: subdirectories under tests/ (except fixtures/), plus non-test modules directly under tests/. */
+export function sharedSupportFiles(testsDir = join(ROOT, "tests")): { rel: string; code: string }[] {
+  const out: { rel: string; code: string }[] = [];
+  let realTestsDir: string;
+  try {
+    realTestsDir = realpathSync(testsDir);
+  } catch {
+    return out;
+  }
+  const visited = new Set<string>();
+
+  const collect = (dir: string, rel: string) => {
+    let realDir: string;
+    try {
+      realDir = realpathSync(dir);
+    } catch {
+      return;
+    }
+    if (realDir !== realTestsDir && !realDir.startsWith(realTestsDir + sep)) return; // symlink confinement to testsDir
+    if (visited.has(realDir)) return; // loop prevention
+    visited.add(realDir);
+
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const e of entries) {
+      if (e.name.startsWith(".") || e.name === "node_modules" || e.name === "fixtures") continue;
+      const childRel = `${rel}/${e.name}`;
+      const childAbs = join(dir, e.name);
+      let isDir = false;
+      let isFile = false;
+      try {
+        const st = statSync(childAbs);
+        isDir = st.isDirectory();
+        isFile = st.isFile();
+      } catch {
+        isDir = e.isDirectory();
+        isFile = e.isFile();
+      }
+      if (isDir) {
+        collect(childAbs, childRel);
+        continue;
+      }
+      if (isFile && /\.(ts|js|mjs)$/.test(e.name) && !IS_TEST_RE.test(e.name)) {
+        out.push({ rel: childRel, code: readFileSync(childAbs, "utf8") });
+      }
+    }
+  };
+
+  visited.add(realTestsDir);
+  let topEntries: Dirent[];
+  try {
+    topEntries = readdirSync(testsDir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+
+  for (const e of topEntries) {
+    if (e.name.startsWith(".") || e.name === "node_modules" || e.name === "fixtures") continue;
+    const rel = `tests/${e.name}`;
+    const abs = join(testsDir, e.name);
+    let isDir = false;
+    let isFile = false;
+    try {
+      const st = statSync(abs);
+      isDir = st.isDirectory();
+      isFile = st.isFile();
+    } catch {
+      isDir = e.isDirectory();
+      isFile = e.isFile();
+    }
+    if (isDir) {
+      collect(abs, rel);
+    } else if (isFile && /\.(ts|js|mjs)$/.test(e.name) && !IS_TEST_RE.test(e.name)) {
+      out.push({ rel, code: readFileSync(abs, "utf8") });
+    }
+  }
+  return out;
+}
+
+/**
+ * Format guidance for unclassified files (coord's refinement on afpl):
+ * Test files should be added to SOURCE_INSPECTING_GUARDS.
+ * Support modules / helpers can NEVER be in ALWAYS_ON; the message explains what to do instead of
+ * giving contradictory advice or leaving the next splitter a red they cannot act on.
+ */
+export function formatUnclassifiedScannersMessage(unclassified: string[]): string {
+  const tests = unclassified.filter((rel) => IS_TEST_RE.test(rel));
+  const support = unclassified.filter((rel) => !IS_TEST_RE.test(rel));
+
+  const parts: string[] = [];
+  if (tests.length > 0) {
+    parts.push(
+      `Dynamic source-scanning test guard(s) found without being in ALWAYS_ON: ${tests.join(", ")}. ` +
+        `Add them to SOURCE_INSPECTING_GUARDS in scripts/select-tests.mjs.`,
+    );
+  }
+  if (support.length > 0) {
+    parts.push(
+      `${support.length} dynamic source-scanning SHARED TEST-SUPPORT MODULE(S) found: ${support.join(", ")}. ` +
+        `Shared support modules can never be an ALWAYS_ON member. ` +
+        `Move the walk into the test file that needs it, or put the static half in a test file. ` +
+        `Do NOT silence this by adding a helper to SOURCE_INSPECTING_GUARDS — that list is for test files, ` +
+        `and a helper there would be selected as a guard it is not.`,
+    );
+  }
+  return parts.join("\n\n");
+}
+
+/** Enumerate all test files recursively under testsDir (excluding fixtures). */
+export function enumerateTestFiles(testsDir = join(ROOT, "tests")): { rel: string; code: string }[] {
+  return readdirSync(testsDir, { recursive: true })
+    .map(String)
+    .filter((f) => IS_TEST_RE.test(f) && !f.includes("/fixtures/") && !f.startsWith("fixtures/") && !f.includes("/node_modules/") && !f.startsWith("node_modules/"))
     .map((f) => ({
       rel: `tests/${f}`,
       code: readFileSync(join(testsDir, f), "utf8"),
     }));
+}
+
+Deno.test("qcfc: self-checking audit: all dynamic source-scanning test guards are in ALWAYS_ON", () => {
+  // Recursive enumeration: matches run-tests.mjs so nested tests/**/ files cannot evade the audit.
+  const testFiles = enumerateTestFiles();
 
   const alwaysOnSet = new Set(ALWAYS_ON);
-  const unclassified = findUnclassifiedSourceScanners(testFiles, alwaysOnSet);
+  // afpl: TEST FILES AND THE SHARED SUPPORT MODULES, through the SAME classifier. A repo walk in a helper
+  // is therefore a NAMED failure rather than an invisible hole, and it fails closed because a helper can
+  // never legitimately be classified (it is not a guard and cannot be an ALWAYS_ON member).
+  const scanned = [...testFiles, ...sharedSupportFiles()];
+  const unclassified = findUnclassifiedSourceScanners(scanned, alwaysOnSet);
 
   assertEquals(
     unclassified,
     [],
-    `Dynamic source-scanning test(s) found without being in ALWAYS_ON: ${unclassified.join(", ")}. Add them to SOURCE_INSPECTING_GUARDS in scripts/select-tests.mjs.`,
+    formatUnclassifiedScannersMessage(unclassified),
   );
 });
 
@@ -372,4 +580,480 @@ Deno.test("p4tf: falsification: a script or test invoking find is flagged", () =
     fakeOffenders.map((x) => x.rel),
     "all find-invoking scripts and tests must be flagged by findFindInvocations",
   );
+});
+
+Deno.test("afpl: every ALWAYS_ON and SCANNER_EXCLUSIONS entry is a test file, never a helper", () => {
+  for (const f of ALWAYS_ON) {
+    assert(
+      IS_TEST_RE.test(f),
+      `ALWAYS_ON entry ${f} must be a test file (*.test.ts or *.test.js), never a helper module`,
+    );
+  }
+  for (const f of Object.keys(SCANNER_EXCLUSIONS)) {
+    assert(
+      IS_TEST_RE.test(f),
+      `SCANNER_EXCLUSIONS entry ${f} must be a test file (*.test.ts or *.test.js), never a helper module`,
+    );
+  }
+});
+
+// chrome-agent-platform-afpl — REAL-TREE falsification: places a depth-2 repo-walking helper
+// in tests/helpers/ in the actual repository tree, proves the audit discovers and NAMES it,
+// proves prose-only helpers are not falsely flagged, and cleans up the tree in a finally block.
+Deno.test("afpl: REAL-TREE falsification — a depth-2 repo-walking helper is NAMED and fails closed; prose helper is NOT flagged", async () => {
+  const realHelpersDir = join(ROOT, "tests", "helpers");
+  const depth2Walker = join(realHelpersDir, "zz-afpl-depth2-walk.ts");
+  const proseHelper = join(realHelpersDir, "zz-afpl-prose-only.ts");
+  const fixtureReader = join(realHelpersDir, "zz-afpl-fixture-read.ts");
+  const siblingFile = join(realHelpersDir, "zz-afpl-preexisting-sibling.ts");
+  const testFiles = [depth2Walker, proseHelper, fixtureReader];
+
+  // NEW-1: Record whether tests/helpers existed prior to this test
+  const helpersDirPreexisted = existsSync(realHelpersDir);
+  if (!helpersDirPreexisted) {
+    await Deno.mkdir(realHelpersDir, { recursive: true });
+  }
+
+  // NEW-1: Plant a pre-existing sibling to prove cleanup preserves un-owned files
+  assertEquals(Object.keys(AFPL_REAL_TREE_FIXTURES).sort(), [...AFPL_REAL_TREE_RESIDUE].sort());
+  const fixtureBody = (rel: string): string => {
+    assert(Object.hasOwn(AFPL_REAL_TREE_FIXTURES, rel), `missing real-tree fixture ${rel}`);
+    return AFPL_REAL_TREE_FIXTURES[rel];
+  };
+  const siblingBody = fixtureBody("tests/helpers/zz-afpl-preexisting-sibling.ts");
+  await Deno.writeTextFile(siblingFile, siblingBody);
+
+  try {
+    try {
+    // 1. (F1) Depth-2 helper walking root via "../../" (the repo's own depth-2 idiom).
+    await Deno.writeTextFile(
+      depth2Walker,
+      fixtureBody("tests/helpers/zz-afpl-depth2-walk.ts"),
+    );
+
+    // 2. (F2) Prose-only helper mentioning SCAN_DIRS and git ls-files in comments.
+    await Deno.writeTextFile(
+      proseHelper,
+      fixtureBody("tests/helpers/zz-afpl-prose-only.ts"),
+    );
+
+    // 3. Over-match negative: fixture-reading helper.
+    await Deno.writeTextFile(
+      fixtureReader,
+      fixtureBody("tests/helpers/zz-afpl-fixture-read.ts"),
+    );
+
+    const scanned = sharedSupportFiles();
+    const named = findUnclassifiedSourceScanners(scanned, new Set());
+
+    // (F1) Depth-2 helper MUST be named by the real-tree scan:
+    assertEquals(
+      named.includes("tests/helpers/zz-afpl-depth2-walk.ts"),
+      true,
+      `REAL-TREE: a depth-2 repo-walking helper must be SCANNED and NAMED: ${JSON.stringify(named)}`,
+    );
+
+    // ...and the audit must provide actionable guidance:
+    const guidance = formatUnclassifiedScannersMessage(named);
+    assertStringIncludes(guidance, "zz-afpl-depth2-walk.ts", "the guidance must name the module");
+    assertStringIncludes(guidance, "Move the walk into the test file", "the guidance must say what to do");
+    assertStringIncludes(guidance, "can never be an ALWAYS_ON member", "the guidance must say why not");
+
+    // (F2) Prose-only helper MUST NOT be flagged as unclassified:
+    assertEquals(
+      named.includes("tests/helpers/zz-afpl-prose-only.ts"),
+      false,
+      `REAL-TREE: a support module with prose mentioning SCAN_DIRS/git ls-files must NOT be flagged: ${JSON.stringify(named)}`,
+    );
+
+    // Fixture reader MUST NOT be admitted:
+    assertEquals(
+      named.includes("tests/helpers/zz-afpl-fixture-read.ts"),
+      false,
+      `REAL-TREE: a fixture-walking helper must NOT be admitted: ${JSON.stringify(named)}`,
+    );
+
+  } finally {
+    // NEW-1: Idempotent cleanup of owned test files, never wiping existing/tracked files in tests/helpers
+    for (const f of testFiles) {
+      try { await Deno.remove(f); } catch { /* ignore */ }
+    }
+    }
+    assert(
+      existsSync(siblingFile),
+      "NEW-1: pre-existing sibling in tests/helpers must survive cleanup byte-identically",
+    );
+    assertEquals(
+      await Deno.readTextFile(siblingFile),
+      siblingBody,
+      "NEW-1: pre-existing sibling in tests/helpers must survive cleanup byte-identically",
+    );
+  } finally {
+    await Deno.remove(siblingFile).catch(() => {});
+    if (!helpersDirPreexisted) await Deno.remove(realHelpersDir).catch(() => {});
+  }
+});
+
+// chrome-agent-platform-afpl — scratch-tree coverage proof, in BOTH directions and against a REAL file.
+// Uses an isolated scratch tree in durableDir("scratch") so the test never writes untracked files into
+// the tracked repository (preventing concurrent test race conditions and SIGKILL residue).
+Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fixture-walking helper is NOT admitted", async () => {
+  const scratch = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-afpl-census-" });
+  const helpersDir = join(scratch, "helpers");
+  await Deno.mkdir(helpersDir, { recursive: true });
+
+  const walker = join(helpersDir, "zz-afpl-repo-walk.ts");
+  const depth2Walker = join(helpersDir, "zz-afpl-depth2-walk.ts");
+  const proseHelper = join(helpersDir, "zz-afpl-prose-only.ts");
+  const fixtureReader = join(helpersDir, "zz-afpl-fixture-read.ts");
+  const nestedTest = join(helpersDir, "zz-nested.test.ts");
+
+  try {
+    // (i) A helper that walks a SOURCE root — the shape a -static split's shared machinery could hide.
+    await Deno.writeTextFile(
+      walker,
+      `import { join } from "node:path";\nconst ROOT = "/repo";\n` +
+        `export function census() { for (const f of Deno.readDirSync(join(ROOT, "tests"))) void f; }\n`,
+    );
+    // (i-b) A depth-2 helper with lowercase-alias repo-root URL (Finding 1 mutant).
+    await Deno.writeTextFile(
+      depth2Walker,
+      `const root = new URL("../../", import.meta.url);\n` +
+        `export function census() { for (const f of Deno.readDirSync(root)) void f; }\n`,
+    );
+    const named = findUnclassifiedSourceScanners(sharedSupportFiles(scratch), new Set());
+    assertEquals(
+      named.includes("tests/helpers/zz-afpl-repo-walk.ts"),
+      true,
+      `a repo-walking helper must be SCANNED and NAMED — this is the coverage proof, not a skip: ${JSON.stringify(named)}`,
+    );
+    assertEquals(
+      named.includes("tests/helpers/zz-afpl-depth2-walk.ts"),
+      true,
+      `a depth-2 lowercase-alias repo-walking helper must be SCANNED and NAMED: ${JSON.stringify(named)}`,
+    );
+    // ...and the audit must say WHAT TO DO, because a helper can never be an ALWAYS_ON member.
+    const guidance = formatUnclassifiedScannersMessage(named);
+    assertStringIncludes(guidance, "zz-afpl-repo-walk.ts", "the guidance must name the module");
+    assertStringIncludes(guidance, "Move the walk into the test file", "the guidance must say what to do");
+    assertStringIncludes(guidance, "can never be an ALWAYS_ON member", "the guidance must say why not");
+
+    // (ii) A helper with prose comments mentioning SCAN_DIRS, git ls-files, or GUARD_ROOTS must NOT
+    // trigger a false-positive red (Finding 2).
+    await Deno.writeTextFile(
+      proseHelper,
+      `// Shared helper. Deliberately does NOT shell out to git ls-files; it reads two files.\n` +
+        `// See SCAN_DIRS and GUARD_ROOTS for context.\n` +
+        `export function add(a: number, b: number): number { return a + b; }\n`,
+    );
+    const afterProse = findUnclassifiedSourceScanners(sharedSupportFiles(scratch), new Set());
+    assertEquals(
+      afterProse.includes("tests/helpers/zz-afpl-prose-only.ts"),
+      false,
+      `a support module with prose mentioning SCAN_DIRS/git ls-files must NOT be flagged: ${JSON.stringify(afterProse)}`,
+    );
+
+    // (iii) A helper that walks ONLY its own fixture directory must NOT be admitted — the over-match half.
+    // Tests join(ROOT, "tests", "fixtures") to ensure definition-aware matching does not over-flag
+    // fixture directories, and avoids /tmp string literals (durable-root rule).
+    await Deno.writeTextFile(
+      fixtureReader,
+      `import { join } from "node:path";\nconst ROOT = "/repo";\n` +
+        `export function list() { for (const f of Deno.readDirSync(join(ROOT, "tests", "fixtures"))) void f; }\n`,
+    );
+    const after = findUnclassifiedSourceScanners(sharedSupportFiles(scratch), new Set());
+    assertEquals(
+      after.includes("tests/helpers/zz-afpl-fixture-read.ts"),
+      false,
+      `a fixture-walking helper must NOT be admitted: ${JSON.stringify(after)}`,
+    );
+
+    // (iv) Evasion resistance: adding a helper to alwaysOnSet or SCANNER_EXCLUSIONS must NOT exempt it.
+    const evasionAttempt = findUnclassifiedSourceScanners(
+      sharedSupportFiles(scratch),
+      new Set(["tests/helpers/zz-afpl-repo-walk.ts"]),
+    );
+    assertEquals(
+      evasionAttempt.includes("tests/helpers/zz-afpl-repo-walk.ts"),
+      true,
+      "a helper cannot be exempted by alwaysOnSet: support modules must fail closed",
+    );
+
+    // (iv) A nested test file under a subdirectory is identified by enumerateTestFiles as a test guard, NOT a helper module.
+    await Deno.writeTextFile(
+      nestedTest,
+      `import { join } from "node:path";\nconst ROOT = "/repo";\n` +
+        `export function testRepo() { for (const f of Deno.readDirSync(join(ROOT, "scripts"))) void f; }\n`,
+    );
+    const enumerated = enumerateTestFiles(scratch);
+    assertEquals(
+      enumerated.map((e) => e.rel).includes("tests/helpers/zz-nested.test.ts"),
+      true,
+      "nested test files must be discovered on disk by enumerateTestFiles",
+    );
+    const nestedNamed = findUnclassifiedSourceScanners(
+      enumerated,
+      new Set(),
+    );
+    assertEquals(
+      nestedNamed.includes("tests/helpers/zz-nested.test.ts"),
+      true,
+      "nested test files must be detected as test guards",
+    );
+
+    // (v) N1: NEW-2 exclusion pin — top-level and nested node_modules are excluded by enumerateTestFiles.
+    const nmTopDir = join(scratch, "node_modules");
+    const nmNestedDir = join(scratch, "helpers", "node_modules");
+    await Deno.mkdir(nmTopDir, { recursive: true });
+    await Deno.mkdir(nmNestedDir, { recursive: true });
+    await Deno.writeTextFile(join(nmTopDir, "zz-nm.test.ts"), "// mock node_modules test\n");
+    await Deno.writeTextFile(join(nmNestedDir, "zz-nm-nested.test.ts"), "// mock nested node_modules test\n");
+    const enumeratedWithNm = enumerateTestFiles(scratch).map((e) => e.rel);
+    assert(
+      enumeratedWithNm.includes("tests/helpers/zz-nested.test.ts"),
+      "enumeration must still return a real test alongside excluded node_modules files",
+    );
+    assertEquals(
+      enumeratedWithNm.some((f) => f.includes("node_modules")),
+      false,
+      `enumerateTestFiles must exclude top-level and nested node_modules: ${JSON.stringify(enumeratedWithNm)}`,
+    );
+    const nestedGuidance = formatUnclassifiedScannersMessage(nestedNamed);
+    assertStringIncludes(
+      nestedGuidance,
+      "Add them to SOURCE_INSPECTING_GUARDS",
+      "test files must be directed to SOURCE_INSPECTING_GUARDS",
+    );
+  } finally {
+    await Deno.remove(scratch, { recursive: true }).catch(() => {});
+  }
+});
+
+// Only synthetic `code: ` template fixtures are excluded. Never rewrite the source:
+// slash/quote heuristics can mistake a regex character class for a string boundary
+// and silently erase live removals in the rest of a file.
+export function guardFixtureRanges(code: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (const match of code.matchAll(/(?:^|[\n{,])[ \t]*code:[ \t]*`/g)) {
+    const start = match.index + match[0].length;
+    let end = start;
+    while (end < code.length) {
+      if (code[end] === "\\") { end += 2; continue; }
+      if (code[end] === "`") break;
+      end++;
+    }
+    if (end < code.length) ranges.push({ start, end });
+  }
+  return ranges;
+}
+
+const REMOVAL_FUNCTIONS = ["Deno.remove", "Deno.removeSync", "rm", "rmSync", "fsp.rm", "fsp2.rm"];
+export function removalCallSites(code: string): { raw: number[]; considered: number[]; fixture: number[] } {
+  const ranges = guardFixtureRanges(code);
+  const raw: number[] = [];
+  const considered: number[] = [];
+  const fixture: number[] = [];
+  for (const fn of REMOVAL_FUNCTIONS) {
+    for (const match of code.matchAll(new RegExp(`\\b${fn.replace(/\./g, "\\.")}\\s*\\(`, "g"))) {
+      raw.push(match.index);
+      (ranges.some(({ start, end }) => match.index >= start && match.index < end) ? fixture : considered).push(match.index);
+    }
+  }
+  return { raw, considered, fixture };
+}
+
+/**
+ * Detects calls to recursive directory removal (Deno.remove, Deno.removeSync, rm, rmSync, fsp.rm)
+ * where the target denotes a shared directory in the repository (e.g. tests/helpers, tests, scripts)
+ * rather than an isolated per-run temp/scratch directory.
+ */
+export function findRecursiveRemovalsOfSharedPaths(
+  files: Array<{ rel: string; code: string }>,
+): string[] {
+  const violations: string[] = [];
+  const SHARED_PATH_PATTERN = /(?:tests\/helpers|tests(?!\/node_modules)|\bscripts\b|\bextension\/(?:lib|background|options|ntp|sidepanel)\b)/i;
+
+  for (const { rel, code } of files) {
+    const consideredSites = new Set(removalCallSites(code).considered);
+    for (const fn of REMOVAL_FUNCTIONS) {
+      const escaped = fn.replace(/\./g, "\\.");
+      for (const m of code.matchAll(new RegExp(`\\b${escaped}\\s*\\(`, "g"))) {
+        if (!consideredSites.has(m.index)) continue;
+        let depth = 0;
+        let buf = "";
+        const args: string[] = [];
+        let i = m.index! + m[0].length;
+        for (; i < code.length; i++) {
+          const c = code[i];
+          if (c === "(" || c === "[" || c === "{") depth++;
+          else if (c === ")" || c === "]" || c === "}") {
+            if (depth === 0) {
+              if (buf.trim()) args.push(buf.replace(/\s+/g, " ").trim());
+              break;
+            }
+            depth--;
+          } else if (c === "," && depth === 0) {
+            args.push(buf.replace(/\s+/g, " ").trim());
+            buf = "";
+            continue;
+          }
+          buf += c;
+        }
+
+        if (args.length >= 2 && /recursive:\s*true/.test(args[1])) {
+          const target = args[0];
+          // Resolve aliases by their declarations, never by their names. In particular `scratch` can
+          // denote join(ROOT, "tests", "helpers"), while `realHelpersDir` can denote makeTempDir().
+          const seen = new Set<string>();
+          const definitions: string[] = [];
+          const resolve = (expression: string): void => {
+            definitions.push(expression);
+            // Follow only path-bearing expressions: an identifier, the base of join(), or a
+            // template interpolation. Do not treat every word in a declaration as an alias
+            // (a diagnostic string mentioning `scripts` is not a path definition).
+            const base = /^(?:await\s+)?(?:join|resolve)\(\s*([A-Za-z_$][\w$]*)\s*,/.exec(expression);
+            const ids = /^[A-Za-z_$][\w$]*$/.test(expression)
+              ? [expression]
+              : [...(base ? [base[1]] : []), ...[...expression.matchAll(/\$\{([A-Za-z_$][\w$]*)\}/g)].map((match) => match[1])];
+            for (const id of ids) {
+              if (seen.has(id)) continue;
+              seen.add(id);
+              const declarations = [...code.slice(0, m.index).matchAll(
+                new RegExp(`\\b(?:const|let|var)\\s+${id}\\s*=\\s*([^;]+);`, "g"),
+              )];
+              const declaration = declarations.at(-1);
+              if (declaration) resolve(declaration[1].trim());
+            }
+          };
+          resolve(target);
+          const combined = definitions.join(" ");
+          // An isolated root must be proven by the expression's definition. durableDir alone is
+          // persistent and does not make a path per-run; a makeTempDir result does.
+          const isolatedRoot = definitions.slice(1).some((definition) =>
+            /^(?:await\s+)?(?:Deno\.)?makeTempDir(?:Sync)?\s*\(/.test(definition)
+          ) || /^(?:await\s+)?(?:Deno\.)?makeTempDir(?:Sync)?\s*\(/.test(target) ||
+            /^(?:join|resolve)\(\s*(?:await\s+)?(?:Deno\.)?makeTempDir(?:Sync)?\s*\(/.test(target);
+          if (SHARED_PATH_PATTERN.test(combined) && !isolatedRoot) {
+            violations.push(`${rel}: ${fn}(${target}, ${args[1]}) denotes shared path: "${combined}"`);
+          }
+        }
+      }
+    }
+  }
+  return violations;
+}
+
+Deno.test("afpl: no test in tests/ recursively removes shared repository directories (e.g. tests/helpers)", () => {
+  const testFiles = enumerateTestFiles();
+  const violations = findRecursiveRemovalsOfSharedPaths(testFiles);
+  assertEquals(
+    violations,
+    [],
+    `Tests must never recursively remove shared repository directories:\n${violations.join("\n")}`,
+  );
+});
+
+Deno.test("afpl: repo-wide removal-call differential excludes only fixture ranges, never live calls", () => {
+  const files = enumerateTestFiles();
+  let raw = 0;
+  let considered = 0;
+  let fixtures = 0;
+  for (const { rel, code } of files) {
+    const sites = removalCallSites(code);
+    raw += sites.raw.length;
+    considered += sites.considered.length;
+    fixtures += sites.fixture.length;
+    // The independent raw scan and byte offsets must account for every dropped match.
+    const independent = REMOVAL_FUNCTIONS.flatMap((fn) => [...code.matchAll(
+      new RegExp(`\\b${fn.replace(/\./g, "\\.")}\\s*\\(`, "g"),
+    )].map((m) => m.index));
+    const ranges = guardFixtureRanges(code);
+    const legitimate = independent.filter((index) => ranges.some(({ start, end }) => index >= start && index < end));
+    assertEquals(sites.considered.slice().sort((a, b) => a - b),
+      independent.filter((index) => !legitimate.includes(index)).sort((a, b) => a - b),
+      `${rel}: no non-fixture call may be dropped`);
+    assertEquals(sites.fixture.length, legitimate.length, `${rel}: only code: fixture calls may be skipped`);
+  }
+  assert(raw > 200 && considered > 190, `repo-wide differential must inspect live calls: ${raw} raw, ${considered} considered`);
+  assertEquals(raw - considered - fixtures, 0, "illegitimate removal-call drops must be zero");
+  const evidence = files.find(({ rel }) => rel === "tests/evidence-durable.test.ts");
+  assert(evidence, "evidence-durable test must be scanned");
+  const live = removalCallSites(evidence.code).considered;
+  assert(live.some((index) => evidence.code.slice(index).startsWith("Deno.removeSync(required)")), "required cleanup must be considered");
+  assert(live.some((index) => evidence.code.slice(index).startsWith("Deno.removeSync(tmp,")), "tmp cleanup must be considered");
+});
+
+Deno.test("afpl: real regex and literal slashes cannot hide a planted live shared-path removal", () => {
+  for (const rel of ["tests/evidence-durable.test.ts", "tests/package-scripts-exist.test.ts"]) {
+    const code = readFileSync(join(ROOT, rel), "utf8") +
+      '\nconst afplLiveShared = join(ROOT, "tests", "helpers");\nawait Deno.remove(afplLiveShared, { recursive: true });\n';
+    const violations = findRecursiveRemovalsOfSharedPaths([{ rel, code }]);
+    assertEquals(violations.length, 1, `${rel}: live removal after regex trigger must RED`);
+  }
+  const source = '// unrelated ` comment\nconst scratch = join(ROOT, "tests", "helpers");\n' +
+    'await Deno.remove(scratch, { recursive: true });\n' +
+    'const mock = {\n code: `await Deno.' + 'remove("tests/helpers", { recursive: true });` };';
+  assertEquals(findRecursiveRemovalsOfSharedPaths([{ rel: "tests/zz-live.test.ts", code: source }]).length, 1,
+    "live removal must be caught; fixture-body call must be ignored");
+});
+
+Deno.test("afpl: falsification — recursive removal of tests/helpers or a shared root is flagged and temp dirs are admitted", () => {
+  const badSamples = [
+    {
+      rel: "tests/zz-bad1.test.ts",
+      code: `const realHelpersDir = join(ROOT, "tests", "helpers");\nawait Deno.remove(realHelpersDir, { recursive: true });`,
+    },
+    {
+      rel: "tests/zz-bad2.test.ts",
+      code: `await Deno.remove(join(ROOT, "tests", "helpers"), { recursive: true });`,
+    },
+    {
+      rel: "tests/zz-bad3.test.ts",
+      code: `Deno.removeSync("tests/helpers", { recursive: true });`,
+    },
+    {
+      rel: "tests/zz-bad4.test.ts",
+      code: `await rm(join(ROOT, "tests"), { recursive: true });`,
+    },
+  ];
+  for (const sample of badSamples) {
+    const violations = findRecursiveRemovalsOfSharedPaths([sample]);
+    assert(
+      violations.length > 0,
+      `falsification drill must flag recursive removal of shared directory in ${sample.rel}`,
+    );
+  }
+
+  // Over-match negative: per-run makeTempDir and durableDir scratch dirs must NOT be flagged
+  const goodSamples = [
+    {
+      rel: "tests/zz-good1.test.ts",
+      code: `const scratch = await Deno.makeTempDir({ dir: durableDir("scratch") });\nawait Deno.remove(scratch, { recursive: true });`,
+    },
+    {
+      rel: "tests/zz-good2.test.ts",
+      code: `const tempDir = await Deno.makeTempDir({ dir: durableDir("test") });\nconst output = join(tempDir, "dir");\nawait Deno.remove(output, { recursive: true }).catch(() => {});`,
+    },
+    {
+      rel: "tests/zz-good3.test.ts",
+      code: `const profile = await Deno.makeTempDir({ dir: durableDir("scratch") });\nawait rm(profile, { recursive: true, force: true });`,
+    },
+  ];
+  badSamples.push(
+    { rel: "tests/zz-bad-alias.test.ts", code: `const scratch = join(ROOT, "tests", "helpers");\nawait Deno.remove(scratch, { recursive: true });` },
+    { rel: "tests/zz-bad-template.test.ts", code: `const parent = join(ROOT, "tests", "helpers");\nawait Deno.remove(\`\${parent}/nested\`, { recursive: true });` },
+    { rel: "tests/zz-bad-false-temp.test.ts", code: `await Deno.remove(join(ROOT, "tests", "helpers", Deno.makeTempDirSync({ dir: durableDir("scratch") })), { recursive: true });` },
+  );
+  for (const sample of badSamples.slice(-3)) {
+    assert(
+      findRecursiveRemovalsOfSharedPaths([sample]).length > 0,
+      `a shared path must be flagged regardless of the alias name in ${sample.rel}`,
+    );
+  }
+  goodSamples.push({
+    rel: "tests/zz-good-alias.test.ts",
+    code: `const realHelpersDir = await Deno.makeTempDir({ dir: durableDir("scratch") });\nawait Deno.remove(realHelpersDir, { recursive: true });`,
+  });
+  const falsePositives = findRecursiveRemovalsOfSharedPaths(goodSamples);
+  assertEquals(falsePositives, [], `scratch/temp directory removals must NOT be flagged: ${falsePositives.join(", ")}`);
 });
