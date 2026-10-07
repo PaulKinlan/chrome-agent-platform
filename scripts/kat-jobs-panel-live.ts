@@ -206,7 +206,27 @@ export async function main(): Promise<Check[]> {
     const jpAgentId = jpAgent?.agent?.id ?? null;
     if (!jpAgentId) throw new Error(`named-agent.create failed: ${JSON.stringify(jpAgent)}`);
 
-    const jpRun = await ntpMsg({ type: "named-agent.run", id: jpAgentId, task: "@demo-board" });
+    // A named run may take longer than CDP's 30s Runtime.evaluate budget.
+    // Start the REAL route in the NTP page without awaiting it in CDP, then
+    // observe its eventual reply through short, independently bounded reads.
+    const started = await ntpEval(`(() => {
+      window.__jobsPanelRunReply = null;
+      chrome.runtime.sendMessage(${JSON.stringify({ type: "named-agent.run", id: jpAgentId, task: "@demo-board" })}).then(
+        value => { window.__jobsPanelRunReply = { value }; },
+        error => { window.__jobsPanelRunReply = { error: String(error?.message ?? error) }; },
+      );
+      return true;
+    })()`);
+    if (started !== true) throw new Error("named-agent.run was not submitted from the NTP principal");
+    let runReply: any = null;
+    const runDeadline = Date.now() + 90_000;
+    while (!runReply && Date.now() < runDeadline) {
+      runReply = await ntpEval("window.__jobsPanelRunReply ?? null");
+      if (!runReply) await sleep(500);
+    }
+    domSnapshots.agentRunReply = runReply;
+    if (!runReply || runReply.error) throw new Error(`named-agent.run did not reply successfully: ${JSON.stringify(runReply)}`);
+    const jpRun = runReply.value;
     if (jpRun?.ok !== true && jpRun?.status !== "done" && jpRun?.done !== true) {
       throw new Error(`named-agent.run @demo-board failed: ${JSON.stringify(jpRun)}`);
     }

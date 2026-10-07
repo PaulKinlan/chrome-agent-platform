@@ -34,6 +34,29 @@ function assertSessionBoundMouse(source: string) {
     "both real mouse events must target their exact page session, never browser-root CDP");
 }
 
+function assertRunOutsideCdpDeadline(source: string) {
+  const start = source.indexOf("const started = await ntpEval(");
+  const end = source.indexOf("// board.list confirms completed job id and result", start);
+  assert(start >= 0 && end > start, "named run must be submitted without a long CDP evaluate");
+  const run = source.slice(start, end);
+  assert(run.includes("chrome.runtime.sendMessage(${JSON.stringify({ type: \"named-agent.run\""),
+    "submit the real named-agent.run route from the NTP principal");
+  assert(run.includes("window.__jobsPanelRunReply = { value }"),
+    "capture the real route reply instead of treating submission as completion");
+  assert(run.includes("runDeadline = Date.now() + 90_000") && run.includes("while (!runReply"),
+    "the worker reply must be polled within its own explicit bound");
+  assert(!run.includes('await ntpMsg({ type: "named-agent.run"'),
+    "a long worker run must not exhaust Runtime.evaluate's per-call deadline");
+}
+
+Deno.test("named-agent.run completes outside CDP evaluate's 30-second request budget", async () => {
+  const source = await Deno.readTextFile(new URL("../scripts/kat-jobs-panel-live.ts", import.meta.url));
+  assertRunOutsideCdpDeadline(source);
+  const synchronousMutant = source.replace("const started = await ntpEval(", "const jpRun = await ntpMsg(");
+  assert(synchronousMutant !== source);
+  assertThrows(() => assertRunOutsideCdpDeadline(synchronousMutant), Error, "named run must be submitted");
+});
+
 Deno.test("static audit: kat-jobs-panel-live enforces real mouse dispatch, SW_MATCH, dist binding, and fail-closed teardown", async () => {
   const source = await Deno.readTextFile(new URL("../scripts/kat-jobs-panel-live.ts", import.meta.url));
   assert(source.includes("const mouse = async (session: string, x: number, y: number) =>"));
