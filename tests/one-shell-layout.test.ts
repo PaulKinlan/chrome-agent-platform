@@ -32,6 +32,17 @@ Deno.test("one-shell layout: Directory view adopts shared layout and embedded ru
   assert(html.includes("[data-embedded] #directory-title"), "Directory must hide title under [data-embedded]");
 });
 
+Deno.test("z4gg: inspector is the named Artifacts full-bleed exception, not a browse-mode parity target", async () => {
+  const hub = await Deno.readTextFile("extension/ntp/ntp.html");
+  assert(
+    /\.artifacts-view:has\(\.inspector:not\(\[hidden\]\)\)\s*\{\s*max-inline-size:\s*1680px;/.test(hub),
+    "only a visible inspector may expand the browse container to 1680px",
+  );
+  const probe = await Deno.readTextFile("cap-evidence/z4gg-layout-probe.ts");
+  assert(probe.includes("inspect.left !== 40"), "browser probe must assert inspector's full-bleed edge at both widths");
+  assert(probe.includes("width === 1024 && browse.left !== inspect.left"), "narrow inspector keeps the browse gutter");
+});
+
 Deno.test("one-shell layout: Settings adopts shared layout and embedded rule", async () => {
   const html = await Deno.readTextFile("extension/options/options.html");
   assert(html.includes('class="options-shell"'), "options.html must have options-shell wrapping side and content");

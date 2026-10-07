@@ -68,6 +68,14 @@ try {
     await wait("visible inspector", `document.getElementById('artifact-inspector')?.hidden === false`);
     const inspect = await art();
     console.log(`z4gg ${width} inspect:`, JSON.stringify(inspect));
+    // Named exception: the visible inspector widens Artifacts to 1680px;
+    // at 1440 that makes its 40px gutter full-bleed instead of the 235px
+    // centered browse edge. At 1024 both modes use the 40px content gutter.
+    if (!inspect.inspectorVisible || inspect.frameCount !== 0 || inspect.left !== 40 ||
+      (width === 1440 && browse.left - inspect.left < 100) ||
+      (width === 1024 && browse.left !== inspect.left)) {
+      throw new Error(`z4gg: Artifacts inspector full-bleed exception failed at ${width}: ${JSON.stringify({ browse, inspect })}`);
+    }
     await shot(`artifacts-inspect-${width}`);
     await pointer(`document.querySelector('#artifact-inspector .insp-close')`);
     await wait("inspector closed", `document.getElementById('artifact-inspector')?.hidden === true`);
@@ -93,7 +101,7 @@ try {
     results.push(row);
     console.log("z4gg browser coordinates:", JSON.stringify(row));
     if (directory.frameCount !== 0 || Math.abs(browse.left - directory.left) > 1) throw new Error(`z4gg: current in-page browse parity failed: ${JSON.stringify(row)}`);
-    if (width === 1440 && !(inspect.left < browse.left - 100)) throw new Error(`z4gg: inspect-mode full-bleed exception not visible: ${JSON.stringify(row)}`);
+
   }
   await Deno.writeTextFile(`${evidence}/coordinates.json`, JSON.stringify({ build: id, results }, null, 2));
   console.log(`z4gg evidence: ${evidence}`);
