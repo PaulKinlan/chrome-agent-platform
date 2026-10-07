@@ -13,6 +13,7 @@
 //   - default-tree vacuity: the reviewed tree ships no JS under extension/wasm
 //     (the acceptance lane is build-time only and never lands in a release).
 import { assert, assertEquals, assertNotEquals } from "jsr:@std/assert@1";
+import { fileURLToPath } from "node:url";
 import { buildNumericAcceptancePackage, NUMERIC_ACCEPTANCE_PINS } from "../scripts/lib/emscripten-numeric-acceptance.mjs";
 import {
   validateEmscriptenManifest,
@@ -21,7 +22,7 @@ import {
 } from "../extension/lib/emscripten-manifest.js";
 import { auditEmscriptenGraph, auditEmscriptenModule } from "../extension/lib/emscripten-module-audit.js";
 
-const root = (rel: string) => new URL(`../${rel}`, import.meta.url).pathname;
+const root = (rel: string) => fileURLToPath(new URL(`../${rel}`, import.meta.url));
 
 Deno.test("acceptance fixture: emitted digests are the reviewed deterministic pins", async () => {
   const out = await buildNumericAcceptancePackage();

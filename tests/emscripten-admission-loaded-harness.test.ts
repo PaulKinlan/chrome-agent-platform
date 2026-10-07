@@ -141,8 +141,11 @@ Deno.test("harness source pins: durable scratch, teardown-before-delete, accepta
   // The reviewed tree is never a write target.
   assert(!source.includes("Deno.writeFile(join(ROOT"), "harness must never write into the reviewed tree");
   assert(!source.includes("Deno.remove(ROOT"), "harness must never remove reviewed-tree paths");
-  // Natural drain: no hard exit calls.
-  assert(!source.includes("Deno.exit(") && !source.includes("process.exit("), "harness must drain naturally (of6z)");
+  // Terminal derived exit (scripts-exit-codes contract): a red run must exit
+  // non-zero. The exit is a terminal decision after teardown/evidence writes
+  // — never a mid-run exit, and never ambient exit-code mutation (of6z).
+  assert(source.includes("Deno.exit(error ? 1 : 0);"), "harness must end with a failure-derived exit");
+  assert(!source.includes("Deno.exitCode") && !source.includes("process.exit("), "no ambient exit-code mutation; no node exits");
   // Owner click drives the real button; receipt copy is the contract string.
   assert(source.includes("package-validate-btn"), "the harness must click the real validation button");
   assert(source.includes("Package validated. Execution is not enabled."), "success copy is the pinned contract string");

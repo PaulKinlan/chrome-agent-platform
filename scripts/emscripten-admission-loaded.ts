@@ -394,7 +394,7 @@ async function main() {
       try { await Deno.remove(dir, { recursive: true }); } catch { /* scratch copy: best-effort after confirmed teardown */ }
     }
   }
-  if (error) Deno.exitCode = 1;
+  Deno.exit(error ? 1 : 0);
 }
 
 async function waitForLibraryReady(cdp: Cdp, sessionId: string) {

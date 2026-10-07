@@ -143,7 +143,31 @@ async function walkWasm(dir, out = []) {
   return out;
 }
 const { scanShippedJs, scanBundledWasmFiles } = await import("./scripts/scan-shipped.mjs");
-const shippedJs = await walkJs("extension");
+const { BUNDLED_INVENTORY: BUNDLED_INVENTORY_EARLY } = await import("./extension/lib/bundled-inventory-data.js");
+const shippedJsAll = await walkJs("extension");
+// ltkj.2: JS members of the package store (extension/wasm/runtime/**) are
+// generated data, not authored shipped code — the same contract as the
+// vendored pyodide lane, except the pin is the BUNDLED_INVENTORY digest rather
+// than a hardcoded hash. Exemption is content-addressed: a file is exempt ONLY
+// while its bytes hash-match its inventory row, so a drifted or undeclared
+// file stays inside the AST scan and fails closed.
+const packageStoreExempt = new Set();
+for (const row of BUNDLED_INVENTORY_EARLY.files) {
+  if (!/^extension\/wasm\/.+\.m?js$/.test(row.rel)) continue;
+  const abs = join(ROOT, row.rel);
+  let bytes;
+  try {
+    bytes = await readFile(abs);
+  } catch {
+    continue; // absent file is not this scan's problem (walkJs only saw present files)
+  }
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  if (row.sha256 === digest) packageStoreExempt.add(abs);
+}
+const shippedJs = shippedJsAll.filter((file) => !packageStoreExempt.has(file));
+if (packageStoreExempt.size > 0) {
+  console.log(`shipped-code scan: ${packageStoreExempt.size} package-store JS asset(s) verified by inventory digest pin (not AST-scanned)`);
+}
 // The __zod_*/__vite_* oracle exemption applies ONLY inside the generated
 // dependency bundles (esbuild inlines the zod/vite source there) — never in
 // shipped source files.
