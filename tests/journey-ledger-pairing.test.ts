@@ -16,8 +16,12 @@ Deno.test("journey-ledger-pairing: chrome-journeys.ts matches EXPECTED ledger in
   const file = `${ROOT}scripts/chrome-journeys.ts`;
   const result = verifyJourneyLedgerPairing(file);
   assertEquals(result.ok, true, `chrome-journeys ledger must be clean: ${result.errors.join("; ")}`);
-  assertEquals(result.expectedCount, 374, "clean chrome-journeys carries 374 non-meta checks (371 + 3 v15y site-agent checks)");
-  assertEquals(result.actualCount, 374);
+  assertEquals(
+    result.expectedCount,
+    376,
+    "clean chrome-journeys carries 376 non-meta checks (374 + 2 z4gg checks: in-page browse views share one content left edge and Settings iframe offset matches its scrollport at 1440/1024)",
+  );
+  assertEquals(result.actualCount, 376);
   assertEquals(result.missing.length, 0);
   assertEquals(result.extra.length, 0);
   assertEquals(result.orderMismatch, null);
