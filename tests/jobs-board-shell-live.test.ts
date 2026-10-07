@@ -11,6 +11,11 @@ function assertLiveBoardShell(source: string) {
   assert(reconnect.indexOf('invalidateRpcCache("board.")') >= 0 &&
     reconnect.indexOf('invalidateRpcCache("board.")') < reconnect.indexOf("renderJobsBoard()"),
     "a lost progress-port event must invalidate the board before reconnect refresh");
+  const boardEvent = source.slice(source.indexOf('if (typeof ev.type === "string" && ev.type.startsWith("board-"))'),
+    source.indexOf("// A settled job's result", source.indexOf('if (typeof ev.type === "string" && ev.type.startsWith("board-"))')));
+  assert(boardEvent.indexOf('handleBroadcastEvent(ev.type)') >= 0 &&
+    boardEvent.indexOf('handleBroadcastEvent(ev.type)') < boardEvent.indexOf('renderJobsBoard()'),
+    "board progress must invalidate before the ambient subscriber renders (the generic subscriber runs later)");
 }
 
 Deno.test("NTP Jobs hint follows every jobs-change paint; reconnect evicts pre-disconnect board cache", async () => {
@@ -22,4 +27,8 @@ Deno.test("NTP Jobs hint follows every jobs-change paint; reconnect evicts pre-d
   const staleReconnect = source.replace('invalidateRpcCache("board.");', '/* missed cache */');
   assert(staleReconnect !== source);
   assertThrows(() => assertLiveBoardShell(staleReconnect), Error, "lost progress-port event");
+  const staleEvent = source.replace('      handleBroadcastEvent(ev.type);\n      refreshBoard();',
+    '      refreshBoard();');
+  assert(staleEvent !== source);
+  assertThrows(() => assertLiveBoardShell(staleEvent), Error, "board progress must invalidate before");
 });

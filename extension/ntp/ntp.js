@@ -1920,7 +1920,13 @@ const subscribeAmbientProgress = () => {
     if (["tool-call", "tool-result", "done", "error"].includes(ev.type)) scheduleRunLogRefresh();
     // Board changes re-render the sidebar section + the Jobs panel live
     // (post/claim/settle/message).
-    if (typeof ev.type === "string" && ev.type.startsWith("board-")) { refreshBoard(); renderJobsBoard(); }
+    if (typeof ev.type === "string" && ev.type.startsWith("board-")) {
+      // This subscriber was installed before the general broadcast listener.
+      // Invalidate first: otherwise the live repaint joins pre-event cached reads.
+      handleBroadcastEvent(ev.type);
+      refreshBoard();
+      renderJobsBoard();
+    }
     // A settled job's result was delivered into its poster's thread — if that
     // thread is the one open right now, re-read it so the result bubble
     // appears without a reopen (the delivery is committed by the claimant's
