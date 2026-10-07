@@ -120,3 +120,56 @@ Deno.test("a11y: <task-row> row is not a focusable button; open is an explicit s
   assert(!/\.row"\)\?\.addEventListener\("keydown"/.test(wire[0]), "_wire still forwards row keydown");
   assert(/"\.row-open"\)\?\.addEventListener\("click"/.test(wire[0]), "_wire does not open via .row-open");
 });
+
+Deno.test("robc: a11y-audit harness uses SW_MATCH, bounded readiness, and honest Tab wrap check", async () => {
+  const auditSrc = await read("./scripts/a11y-audit.ts");
+
+  // 1. Must use canonical SW_MATCH and client.serviceWorker rather than unfiltered getTargets
+  assert(auditSrc.includes("SW_MATCH"), "a11y-audit must import and use canonical SW_MATCH");
+  assert(
+    auditSrc.includes("client.serviceWorker({ timeoutMs: 15000, match: SW_MATCH })") ||
+    auditSrc.includes("client.serviceWorker({ match: SW_MATCH"),
+    "a11y-audit extId must target serviceWorker with SW_MATCH to avoid component worker mis-attach",
+  );
+  assert(
+    !auditSrc.includes('(res?.targetInfos ?? []).find((t: any) => t.type === "service_worker")'),
+    "a11y-audit must not use unfiltered type === 'service_worker' lookup",
+  );
+
+  // 2. openPage must perform bounded readiness check and fail fast on blank page
+  assert(
+    auditSrc.includes("pageState?.ready === \"complete\""),
+    "openPage must verify document.readyState === 'complete'",
+  );
+  assert(
+    auditSrc.includes("blank page or boot failure detected") ||
+    auditSrc.includes("page never became ready"),
+    "openPage must fail fast on unready or blank extension page",
+  );
+
+  // 3. Tab walk must guard against zero focusables and classify consecutive BODY stops honestly
+  assert(
+    auditSrc.includes("cannot execute Tab walk on a page with zero focusable elements"),
+    "Tab walk must guard against zero focusables to prevent false 39-stop violations on blank pages",
+  );
+  assert(
+    auditSrc.includes("prev !== \"BODY\""),
+    "Tab walk wrap predicate must reject consecutive BODY stops as valid wraps",
+  );
+
+  // 4. Teardown must delegate to canonical teardownChrome
+  assert(
+    auditSrc.includes("teardownChrome(chrome, profile)"),
+    "a11y-audit must clean up using canonical teardownChrome(chrome, profile)",
+  );
+
+  // 5. Never-delete-live guard on profile cleanup
+  assert(
+    auditSrc.includes("profileLiveness(profile)"),
+    "a11y-audit must check profileLiveness before attempting profile removal",
+  );
+  assert(
+    auditSrc.includes('liveness === "live"'),
+    "a11y-audit must refuse profile deletion if profile is live",
+  );
+});
