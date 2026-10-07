@@ -141,6 +141,19 @@ export async function main(): Promise<Check[]> {
         };
       })()`);
 
+    // An unsuccessful live projection is an observed named FAIL, not a
+    // NOT_REACHED thrown by a waitFor() before the check could run.
+    const observePanel = async (accept: (state: any) => boolean, ms = 15000) => {
+      const deadline = Date.now() + ms;
+      let latest: any = null;
+      do {
+        latest = await jobsPanel();
+        if (accept(latest)) break;
+        await sleep(150);
+      } while (Date.now() < deadline);
+      return latest;
+    };
+
     // 1. Precondition: empty board fresh profile
     const emptyBoard = await waitFor("Jobs board empty state on fresh profile", async () => {
       const jp = await jobsPanel();
@@ -161,11 +174,7 @@ export async function main(): Promise<Check[]> {
     if (jpMsg?.ok !== true) throw new Error(`board.message failed: ${JSON.stringify(jpMsg)}`);
 
     // The panel re-renders LIVE from the board-* progress events (no reload)
-    const populatedBoard = await waitFor("Jobs board populated with 2 open jobs and 1 message", async () => {
-      const jp = await jobsPanel();
-      if (jp && jp.openRows === 2 && jp.msgRows === 1) return jp;
-      return null;
-    }, 15000);
+    const populatedBoard = await observePanel((jp) => jp?.openRows === 2 && jp?.msgRows === 1 && jp?.hint === "2 open");
     domSnapshots.populated = populatedBoard;
     await save("jobs-panel-populated.png", await cdp.screenshot(ntpSession, { timeoutMs: 8000 }));
 
@@ -175,18 +184,15 @@ export async function main(): Promise<Check[]> {
       populatedBoard.text.includes("Find three comparable tools") &&
       populatedBoard.text.includes("posted by Hub");
     record(EXPECTED_CHECKS[0], openJobsOk, { populatedBoard });
-    if (!openJobsOk) throw new Error("open jobs did not render with expected content");
 
     // Check 2: 'jobs panel: the message feed renders the broadcast'
     const msgOk = populatedBoard !== null && populatedBoard.msgRows === 1 &&
       populatedBoard.text.includes("Two jobs are up for the journey");
     record(EXPECTED_CHECKS[1], msgOk, { populatedBoard });
-    if (!msgOk) throw new Error("message feed did not render broadcast");
 
     // Check 3: 'jobs panel: the open-count hint reflects the board'
     const hintOk = populatedBoard !== null && populatedBoard.hint === "2 open";
-    record(EXPECTED_CHECKS[2], hintOk, { hint: populatedBoard?.hint });
-    if (!hintOk) throw new Error(`jobs-count hint was not '2 open': ${populatedBoard?.hint}`);
+    record(EXPECTED_CHECKS[2], hintOk, { hint: populatedBoard?.hint, populatedBoard });
 
     // Precondition for Check 4: worker named-agent.create + named-agent.run @demo-board after kv.set developerFeatures
     const kvRes = await ntpMsg({ type: "kv.set", values: { "cap:developerFeatures": true } });
@@ -215,15 +221,13 @@ export async function main(): Promise<Check[]> {
 
     // Live again: the settled group shows outcome + bounded result excerpt,
     // and the open count drops — all WITHOUT a reload.
-    const settledBoard = await waitFor("Jobs board settled state with 1 settled row and 1 open row", async () => {
-      const jp = await jobsPanel();
-      if (jp && jp.settledRows === 1 && jp.openRows === 1) return jp;
-      return null;
-    }, 15000);
+    const settledBoard = await observePanel((jp) => jp?.settledRows === 1 && jp?.openRows === 1 && jp?.hint === "1 open");
     domSnapshots.settled = settledBoard;
     await save("jobs-panel-settled.png", await cdp.screenshot(ntpSession, { timeoutMs: 8000 }));
 
     // Real CDP Input.dispatchMouseEvent click on settled button and assert expanded result
+    let expandedState: any = null, expansionError: string | null = null;
+    try {
     const settledBtnPoint = await waitFor("settled button center point", async () => {
       const pt = await ntpEval(`(() => {
         const el = document.querySelector("#jobs-board-host jobs-board");
@@ -239,7 +243,7 @@ export async function main(): Promise<Check[]> {
 
     await mouse(ntpSession, settledBtnPoint.x, settledBtnPoint.y);
 
-    const expandedState = await waitFor("expanded result visible after click", async () => {
+    expandedState = await waitFor("expanded result visible after click", async () => {
       const exp = await ntpEval(`(() => {
         const el = document.querySelector("#jobs-board-host jobs-board");
         const sr = el?.shadowRoot;
@@ -257,6 +261,9 @@ export async function main(): Promise<Check[]> {
       }
       return null;
     }, 15000);
+    } catch (error) {
+      expansionError = String(error);
+    }
     domSnapshots.expanded = expandedState;
 
     // Check 4: 'jobs panel: the settled group renders the outcome + result excerpt (live, no reload)'
@@ -268,19 +275,16 @@ export async function main(): Promise<Check[]> {
       expandedState?.fullHidden === false &&
       typeof expandedState?.fullText === "string" &&
       expandedState.fullText.includes(completedJob.result);
-    record(EXPECTED_CHECKS[3], settledOk, { settledBoard, expandedState, completedJobId: completedJob.id });
-    if (!settledOk) throw new Error("settled group did not render outcome + result excerpt as expected");
+    record(EXPECTED_CHECKS[3], settledOk, { settledBoard, expandedState, expansionError, completedJobId: completedJob.id });
   } catch (error) {
     failure = String(error?.stack ?? error?.message ?? error);
     console.error(`FOCUSED_KAT_ABORT: ${failure}`);
   } finally {
     cdp?.close();
-    if (chrome) {
-      try {
-        await teardownChrome(chrome, profile);
-      } catch (error) {
-        teardownError = `Chrome teardown: ${String(error)}`;
-      }
+    try {
+      await teardownChrome(chrome, profile);
+    } catch (error) {
+      teardownError = `Chrome teardown: ${String(error)}`;
     }
     const manifest = {
       schema: "cap-jobs-panel-live-v1",
