@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.584] — 2026-10-07
+- Fail closed on secret redaction when a sandboxed tool run errors, so error output cannot leak secrets.
+
 ## [0.3.583] — 2026-10-07
 - Add an on-device ChaCha20-Poly1305 encryption tool and stop collapsed sidebar sections from catching an extra Tab stop.
 
