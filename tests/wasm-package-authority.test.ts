@@ -382,6 +382,25 @@ Deno.test("wasm scanner: no section/custom/binary size caps (dptw); unmanifested
   assertEquals(violations, ["fixture.wasm: unmanifested_binary"]);
 });
 
+Deno.test("scanBundledWasmFiles preserves schema-2 validation and sorted violations", async () => {
+  const s = await scenario();
+  const numeric = await Deno.readFile("packages/bundled/evidence/emscripten-abi/build-a/numeric.wasm");
+  const files = ["z-emscripten.wasm", "a-legacy.wasm", "m-missing.wasm"];
+  const bytes = new Map([[files[0], numeric], [files[1], s.wasm]]);
+  const manifestByFile = new Map([
+    [files[0], { schemaVersion: 2, asset: { id: "numeric" } }],
+    [files[1], s.object.executables[0]],
+  ]);
+  assertEquals(await scanBundledWasmFiles(files, {
+    readBytes: async (file) => bytes.get(file),
+    manifestByFile,
+  }), ["m-missing.wasm: unmanifested_binary"]);
+  assertEquals(await scanBundledWasmFiles(files, {
+    readBytes: async (file) => file === files[0] ? new Uint8Array([0]) : bytes.get(file),
+    manifestByFile,
+  }), ["m-missing.wasm: unmanifested_binary", "z-emscripten.wasm: section_size_overflow"]);
+});
+
 Deno.test("wasm inventory/admission: exact bytes, size, SBOM, licence and signer inventory are required", async () => {
   const s = await scenario();
   const admitted = await s.authority.admitBundled({ manifest: s.raw, files: s.admissionFiles });
