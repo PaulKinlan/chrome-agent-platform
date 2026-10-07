@@ -1178,6 +1178,27 @@ Deno.test("fence: an untrusted result's strings are wrapped in the boundary", as
         untrusted: true,
       }),
     }),
+    python_error_run: tool({
+      description: "Python failure carrying network taint",
+      inputSchema: z.object({ value: z.string().max(64) }),
+      execute: () => ({
+        error: `Exception: fetch failed for ${RAW}`,
+        network: [{ url: "https://api.example.com", ok: true }],
+        untrusted: true,
+      }),
+    }),
+    depth12_script: tool({
+      description: "Object at depth 12 with untrusted content",
+      inputSchema: z.object({ value: z.string().max(64) }),
+      execute: () => ({
+        ok: true,
+        result: {
+          d1: { d2: { d3: { d4: { d5: { d6: { d7: { d8: { d9: { d10: { d11: { d12: { text: RAW } } } } } } } } } } } },
+        },
+        logs: [],
+        untrusted: true,
+      }),
+    }),
   };
   const deepRecords = executableBuiltinToolRecords(deepNestedTools, adapterContext());
   const deepProtocol = new LazyToolProtocol({
@@ -1203,6 +1224,21 @@ Deno.test("fence: an untrusted result's strings are wrapped in the boundary", as
   const pythonExec = await deepProtocol.execute({ selectionRef: pythonSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
   assertEquals(pythonExec.ok, true);
   assertEquals(pythonExec.result.stdout, `${open}\n${RAW}\n${close}`);
+
+  // 4. Python failure carrying taint fences error message
+  const errSearch = await deepProtocol.search({ query: "python_error_run", limit: 1 }, context);
+  const errExec = await deepProtocol.execute({ selectionRef: errSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
+  assertEquals(errExec.ok, true);
+  assert(errExec.result.error.startsWith(open));
+  assertEquals(errExec.result.error, `${open}\nException: fetch failed for ${RAW}\n${close}`);
+
+  // 5. Depth-12 subtree is fenced fail-closed without leaking bare strings
+  const d12Search = await deepProtocol.search({ query: "depth12_script", limit: 1 }, context);
+  const d12Exec = await deepProtocol.execute({ selectionRef: d12Search.results[0].selectionRef, arguments: { value: "x" } }, context);
+  assertEquals(d12Exec.ok, true);
+  const serializedD12 = JSON.stringify(d12Exec.result);
+  assert(!serializedD12.includes(`"${RAW}"`), "depth-12 content must not leak unfenced");
+  assert(serializedD12.includes("<<<UNTRUSTED run:tok0123456789>>>"), "depth-12 content must carry fence token");
 });
 
 // ── CAP-FB-20260830-SCREENSHOT-TO-MODEL-01 ───────────────────────────────────

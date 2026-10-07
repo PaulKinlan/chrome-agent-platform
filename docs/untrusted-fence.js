@@ -55,10 +55,22 @@ export function wrapUntrustedContent(content, token = UNTRUSTED_TOKEN_PLACEHOLDE
 
 /** Wrap EVERY non-empty string inside a projected result (recursively, bounded
  * depth) — the shape is preserved so structured renderers keep working; only
- * the string leaves carry the boundary. Non-string leaves pass through. */
+ * the string leaves carry the boundary. Subtrees reaching MAX_FENCE_DEPTH are
+ * serialized and fenced fail-closed so no string can escape unfenced (INV-7).
+ * Non-string leaves pass through. */
 export function fenceUntrustedValue(value, token, depth = 0) {
   if (typeof value === "string") return value.length ? fenceUntrustedText(value, token) : value;
-  if (depth >= MAX_FENCE_DEPTH) return value;
+  if (depth >= MAX_FENCE_DEPTH) {
+    if (value && typeof value === "object") {
+      try {
+        const serialized = JSON.stringify(value);
+        return fenceUntrustedText(serialized ?? "[untrusted]", token);
+      } catch {
+        return fenceUntrustedText("[depth-capped untrusted content]", token);
+      }
+    }
+    return value;
+  }
   if (Array.isArray(value)) return value.map((child) => fenceUntrustedValue(child, token, depth + 1));
   if (value && typeof value === "object") {
     const out = {};

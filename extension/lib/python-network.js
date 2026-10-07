@@ -239,7 +239,7 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
   function ensureRow(id) {
     let row = runs.get(id);
     if (!row) {
-      row = { records: [], dropped: 0, inFlight: new Set(), settled: false };
+      row = { records: [], dropped: 0, hasSuccessfulFetch: false, inFlight: new Set(), settled: false };
       runs.set(id, row);
     }
     return row;
@@ -324,6 +324,9 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
           if (inflight.settled || row.settled || takenIds.has(id)) return false;
           inflight.settled = true;
           row.inFlight.delete(inflight);
+          if (finalEntry?.ok === true && !finalEntry?.refused) {
+            row.hasSuccessfulFetch = true;
+          }
           if (inflight.index >= 0 && inflight.index < row.records.length) {
             const ms = Number.isFinite(finalEntry?.ms)
               ? Number(finalEntry.ms)
@@ -358,6 +361,9 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
       const id = String(runId ?? "");
       if (!id || takenIds.has(id) || runs.get(id)?.settled) return;
       const row = ensureRow(id);
+      if (entry?.ok === true && !entry?.refused) {
+        row.hasSuccessfulFetch = true;
+      }
       if (row.records.length >= maxPerRun) {
         row.dropped += 1; // honest count, never a silent truncation
         return;
@@ -370,13 +376,13 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
      * days. Aborts and finalizes any in-flight fetches for `runId` first. */
     take(runId, { now = Date.now() } = {}) {
       const id = String(runId ?? "");
-      if (!id) return { records: [], dropped: 0 };
+      if (!id) return { records: [], dropped: 0, hasSuccessfulFetch: false };
       rememberTaken(id);
       abortInFlight(id, now);
       const row = runs.get(id);
       runs.delete(id);
-      if (!row) return { records: [], dropped: 0 };
-      return { records: Object.freeze([...row.records]), dropped: row.dropped };
+      if (!row) return { records: [], dropped: 0, hasSuccessfulFetch: false };
+      return { records: Object.freeze([...row.records]), dropped: row.dropped, hasSuccessfulFetch: row.hasSuccessfulFetch };
     },
 
     /** Live count, for tests and for a run still in flight. */
