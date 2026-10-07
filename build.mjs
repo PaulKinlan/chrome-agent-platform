@@ -21,7 +21,6 @@ import path, { join, extname } from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { readFileSync, readdirSync, realpathSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { boundedChildTimeoutMs, runBoundedChild } from "./scripts/lib/bounded-child.mjs";
 import { syncGallery } from "./scripts/sync-gallery.mjs";
 import { syncChangelog } from "./scripts/sync-changelog.mjs";

@@ -157,4 +157,62 @@ console.log("GUARD_PASSED");
     }
   });
 
+  await t.step("Passes when root SDK is bound to zod@3 and a dual-zod .deno store is present", async () => {
+    const tmp = await Deno.makeTempDir();
+    try {
+      await Deno.writeTextFile(path.join(tmp, "package.json"), `{"name":"test"}`);
+      const nm = path.join(tmp, "node_modules");
+      await mkPkg(nm, "@ai-sdk/anthropic");
+      await mkPkg(nm, "@ai-sdk/provider-utils");
+      
+      const denoStore = path.join(nm, ".deno");
+      
+      // Hoisted real zods in .deno
+      await mkPkg(path.join(denoStore, "zod@3.25.76", "node_modules"), "zod");
+      await mkPkg(path.join(denoStore, "zod@4.4.3", "node_modules"), "zod");
+      await Deno.mkdir(path.join(denoStore, "zod@3.25.76", "node_modules", "zod", "v4"));
+      await Deno.writeTextFile(path.join(denoStore, "zod@3.25.76", "node_modules", "zod", "v4", "index.js"), "");
+
+      // Symlink the canonical zod
+      await Deno.symlink(
+        path.join(denoStore, "zod@3.25.76", "node_modules", "zod"),
+        path.join(nm, "zod"),
+        { type: "dir" }
+      );
+      
+      // Candidate 1 (bound to zod@3)
+      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "@modelcontextprotocol"), "sdk");
+      await Deno.symlink(
+        path.join(denoStore, "zod@3.25.76", "node_modules", "zod"),
+        path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "zod"),
+        { type: "dir" }
+      );
+
+      // Candidate 2 (bound to zod@4)
+      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0_1", "node_modules", "@modelcontextprotocol"), "sdk");
+      await Deno.symlink(
+        path.join(denoStore, "zod@4.4.3", "node_modules", "zod"),
+        path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0_1", "node_modules", "zod"),
+        { type: "dir" }
+      );
+
+      // Symlink root sdk to Candidate 1 (this is the regression case: it's ALREADY bound to zod@3)
+      await Deno.mkdir(path.join(nm, "@modelcontextprotocol"), { recursive: true });
+      await Deno.symlink(
+        path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "@modelcontextprotocol", "sdk"),
+        path.join(nm, "@modelcontextprotocol", "sdk"),
+        { type: "dir" }
+      );
+
+      await Deno.writeTextFile(path.join(tmp, "guard.mjs"), guardLogic);
+      const cmd = new Deno.Command("node", { args: ["guard.mjs"], cwd: tmp });
+      const { code, stdout, stderr } = await cmd.output();
+      const out = new TextDecoder().decode(stdout);
+      const err = new TextDecoder().decode(stderr);
+      assert(out.includes("GUARD_PASSED"), "Expected guard to PASS when root SDK is already correct\\n" + err);
+    } finally {
+      await Deno.remove(tmp, { recursive: true });
+    }
+  });
+
 });
