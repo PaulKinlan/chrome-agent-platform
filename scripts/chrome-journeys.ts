@@ -3138,6 +3138,11 @@ async function main() {
       ],
     });
     let createdAgentId = null;
+    let ledgerCardSeen = false;
+    let ledgerCardTitle = null;
+    let ledgerCardApproved = false;
+    let ledgerCardShot = null;
+    let ledgerCardElapsedMs = null;
     // Hoisted: try/finally are separate lexical blocks — a const inside try is
     // NOT visible in finally.
     let ledgerOptsSession = null;
@@ -3156,15 +3161,46 @@ async function main() {
       const ledgerBeforeIds = await listRunIds(cdp, ledgerOptsSession);
       await typeInto(cdp, ntpSession, composerInput("hub"), "create the Undo Journey Agent");
       await clickSel(cdp, ntpSession, composerSend("hub"));
-      for (let i = 0; i < 120 && ledgerProvider.requests.length < 3; i++) await sleep(250);
+      // A model-initiated named-agent.create now pays a real owner card. Do
+      // not let an unanswered/expired request look like a completed create:
+      // observe the pending card, capture it for owner-visible evidence, then
+      // issue ONE genuine Allow click for that exact action before reading the
+      // terminal run. A missing card or mismatched title fails the named check.
+      const ledgerApprovalStart = Date.now();
+      for (let i = 0; i < 120 && ledgerProvider.requests.length < 3; i++) {
+        if (!ledgerCardSeen) {
+          const pending = await evalIn(cdp, ntpSession, `(() => {
+            const card = [...document.querySelectorAll('#thread-conversation approval-card')]
+              .find((x) => (x.getAttribute('state') || 'pending') === 'pending');
+            return card ? { title: card.shadowRoot?.querySelector('.title')?.textContent ?? '' } : null;
+          })()`).catch(() => null);
+          if (pending) {
+            ledgerCardSeen = true;
+            ledgerCardTitle = String(pending.title ?? "");
+            ledgerCardElapsedMs = Date.now() - ledgerApprovalStart;
+            ledgerCardShot = await captureShot(cdp, ntpSession);
+            if (ledgerCardShot) await writeEvidence("activity-create-approval-pending.png", ledgerCardShot);
+            if (ledgerCardTitle === "Approve named-agent.create?" && ledgerCardShot?.length > 200) {
+              ledgerCardApproved = await clickShadow(cdp, ntpSession, "#thread-conversation approval-card", ".approve");
+            }
+          }
+        }
+        if (ledgerProvider.requests.length < 3) await sleep(250);
+      }
       const ledgerRun = await awaitNewRunTerminal(cdp, ledgerOptsSession, ledgerBeforeIds, "create the Undo Journey Agent");
       const env = ledgerProvider.requests.length > 0 ? executeEnvelope(ledgerProvider.requests[ledgerProvider.requests.length - 1], "create_named_agent") : null;
       createdAgentId = env?.result?.agent?.id ?? env?.result?.id ?? null;
       check(
         "Activity ledger: a real run creates the agent inside a genuine live run",
-        ledgerProvider.requests.length === 3 && ledgerProvider.overflow === 0 && env?.ok === true && typeof createdAgentId === "string" && createdAgentId.length > 0 &&
+        ledgerCardSeen === true && ledgerCardTitle === "Approve named-agent.create?" && ledgerCardApproved === true &&
+          ledgerCardShot?.length > 200 && ledgerProvider.requests.length === 3 &&
+          ledgerProvider.overflow === 0 && env?.ok === true && env?.result?.approvalDenied !== true &&
+          typeof createdAgentId === "string" && createdAgentId.length > 0 &&
           ledgerRun?.phase === "terminal" && ledgerRun?.terminal?.ok === true,
-        { requests: ledgerProvider.requests.length, overflow: ledgerProvider.overflow, env, runPhase: ledgerRun?.phase ?? null, terminalOk: ledgerRun?.terminal?.ok ?? null },
+        { cardSeen: ledgerCardSeen, cardTitle: ledgerCardTitle, cardApproved: ledgerCardApproved,
+          cardShotBytes: ledgerCardShot?.length ?? 0, cardElapsedMs: ledgerCardElapsedMs,
+          requests: ledgerProvider.requests.length, overflow: ledgerProvider.overflow, env,
+          runPhase: ledgerRun?.phase ?? null, terminalOk: ledgerRun?.terminal?.ok ?? null },
       );
       // The run's durable thread is the owner-visible record of the run's
       // tool calls — the create is recorded there.
