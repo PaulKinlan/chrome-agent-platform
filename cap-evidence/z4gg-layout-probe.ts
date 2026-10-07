@@ -5,6 +5,7 @@
 import { fileURLToPath } from "node:url";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
 import { launchChrome, openCdp, SW_MATCH, teardownChrome } from "../scripts/lib/chrome-launch.ts";
+import { viewEdgeParity } from "../scripts/lib/view-edge-parity.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const evidence = `/home/exedev/cap-evidence/z4gg-layout/${Date.now()}`;
@@ -83,25 +84,45 @@ try {
     await pointer(`document.getElementById('open-directory')`);
     await wait("in-page Directory", `document.getElementById('directory-view')?.hidden === false`);
     const directory = await evl(`(() => { const host=document.getElementById('directory-view'); const el=host?.querySelector('.sub, .site-group, #directory-rows');
+      const viewHost=document.getElementById('view-client-host');
       return {left:el?Math.round(el.getBoundingClientRect().left):null, hostLeft:Math.round(host.getBoundingClientRect().left), docWidth:document.documentElement.clientWidth,
-        frameCount:document.querySelectorAll('iframe[data-panel-path="directory/directory.html"]').length}; })()`);
+        frameCount:document.querySelectorAll('iframe[data-panel-path="directory/directory.html"]').length,
+        viewHostWidth:viewHost?.clientWidth??null,
+        contentMax:viewHost?parseFloat(getComputedStyle(viewHost).getPropertyValue('--content-max')):null}; })()`);
     console.log(`z4gg ${width} directory:`, JSON.stringify(directory));
     await shot(`directory-${width}`);
     await backToHub();
     await pointer(`document.getElementById('open-settings')`);
     await wait("Settings frame", `!!document.querySelector('iframe[data-panel-path="options/options.html"]')?.contentDocument?.querySelector('.side')`);
     const settings = await evl(`(() => { const f=document.querySelector('iframe[data-panel-path="options/options.html"]'); const d=f?.contentDocument;
-      const s=d?.querySelector('.side'); return {left:s?Math.round(s.getBoundingClientRect().left):null,
-        screenLeft:s?Math.round(f.getBoundingClientRect().left+s.getBoundingClientRect().left):null,
-        frameLeft:f?Math.round(f.getBoundingClientRect().left):null, docWidth:d?.documentElement.clientWidth??null}; })()`);
+      const s=d?.querySelector('.side'); const sr=s?.getBoundingClientRect(); const fr=f?.getBoundingClientRect();
+      return {left:sr?Math.round(sr.left):null,
+        screenLeft:sr&&fr?Math.round(fr.left+sr.left):null,
+        frameLeft:fr?Math.round(fr.left):null, docWidth:d?.documentElement.clientWidth??null,
+        childScrollLeft:d?.scrollingElement?.scrollLeft??null, parentClientWidth:document.documentElement.clientWidth}; })()`);
     console.log(`z4gg ${width} settings:`, JSON.stringify(settings));
-    await shot(`settings-${width}`);
-    await backToHub();
-    const row = { width, browse, inspect, directory, settings };
+    await shot(`settings-${width}`); // retain a screenshot even when the parity assertion below goes RED
+    // Settings is an iframe: .side.left is child-local, while Directory is in
+    // the parent viewport. Compare screen-space edges with the SAME inset
+    // formula as chrome-journeys, using the browse host's width measured while
+    // Directory was visible (the host is hidden once Settings opens).
+    const parity = viewEdgeParity({
+      artifacts: browse.left ?? null, directory: directory.left ?? null,
+      settings: settings.screenLeft ?? null,
+      hostWidth: directory.viewHostWidth ?? null, settingsWidth: settings.docWidth ?? null,
+      contentMax: directory.contentMax ?? null,
+    });
+    const row = { width, browse, inspect, directory, settings, settingsParity: parity };
     results.push(row);
     console.log("z4gg browser coordinates:", JSON.stringify(row));
     if (directory.frameCount !== 0 || Math.abs(browse.left - directory.left) > 1) throw new Error(`z4gg: current in-page browse parity failed: ${JSON.stringify(row)}`);
-
+    if (settings.parentClientWidth !== width || settings.childScrollLeft !== 0 ||
+      !Number.isFinite(settings.left) || !Number.isFinite(settings.frameLeft) || !Number.isFinite(settings.screenLeft) ||
+      Math.abs(settings.screenLeft - settings.frameLeft - settings.left) > 1) {
+      throw new Error(`z4gg: Settings coordinate-space invalid at ${width}: ${JSON.stringify(row)}`);
+    }
+    if (!parity.settingsAccounted) throw new Error(`z4gg: Settings parity failed at ${width} (view=settings mode=browse): ${JSON.stringify(row)}`);
+    await backToHub();
   }
   await Deno.writeTextFile(`${evidence}/coordinates.json`, JSON.stringify({ build: id, results }, null, 2));
   console.log(`z4gg evidence: ${evidence}`);
