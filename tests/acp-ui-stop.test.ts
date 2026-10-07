@@ -34,6 +34,17 @@ class MockContainer {
   appendSystem(s: string) { this.systemMessages.push(s); }
 }
 
+async function waitForHeldPrompt(container: MockContainer, maxWaitMs = 10000): Promise<void> {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    if (container.thoughts.some((t) => typeof t?.delta === "string" && t.delta.includes("Holding the first prompt"))) {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(`Timeout (${maxWaitMs}ms) waiting for adapter to enter held state (thoughts: ${JSON.stringify(container.thoughts)})`);
+}
+
 Deno.test("c6gq: an in-flight ACP turn exposes Stop and settles to cancelled on cancelAcpTurn()", async () => {
   // Hold prompt containing "hold-this-turn" until session/cancel arrives
   const HOLD_TEXT = "hold-this-turn";
@@ -70,8 +81,8 @@ Deno.test("c6gq: an in-flight ACP turn exposes Stop and settles to cancelled on 
     assert(registeredExecutionId !== null, "onRunRegistered must be called with executionId");
     assert(String(registeredExecutionId).startsWith("acp:"), "executionId must carry acp: prefix");
 
-    // Give adapter time to enter held state
-    await new Promise((r) => setTimeout(r, 200));
+    // jnxn: wait boundedly for the observable holding update from the fixture instead of a fixed 200ms sleep
+    await waitForHeldPrompt(container);
 
     // Cancel the in-flight turn via cancelAcpTurn
     const cancelRes = await cancelAcpTurn({ threadId, harnessId });
@@ -151,8 +162,8 @@ Deno.test("c6gq: calling cancelAcpTurn twice on in-flight turn reports run_alrea
       endpoint,
     });
 
-    // Wait until turn starts
-    await new Promise((r) => setTimeout(r, 300));
+    // jnxn: wait boundedly for the adapter to hold the prompt instead of a fixed 300ms sleep
+    await waitForHeldPrompt(container);
 
     // First cancel: ok
     const firstCancel = await cancelAcpTurn({ threadId, harnessId });
@@ -167,6 +178,49 @@ Deno.test("c6gq: calling cancelAcpTurn twice on in-flight turn reports run_alrea
     );
 
     await turnPromise;
+  } finally {
+    await bridge.shutdown();
+  }
+});
+
+Deno.test("c6gq/jnxn: delayed-prompt fixture reliably cancels via held-prompt handshake without sleeping", async () => {
+  const HOLD_TEXT = "hold-delayed-turn";
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {
+    CAP_ACP_FIXTURE_HOLD_TEXT: HOLD_TEXT,
+    CAP_ACP_FIXTURE_DIE_ON_SPAWN: "0",
+    CAP_ACP_FIXTURE_PROMPT_DELAY_MS: "350",
+  }, "", TEST_BRIDGE_TOKEN);
+  const endpoint = authedEndpoint((bridge as any).addr.port);
+
+  const container = new MockContainer();
+  const statuses: any[] = [];
+  const threadId = "thread_delayed_prompt";
+  const harnessId = "pi";
+
+  try {
+    const turnPromise = runAcpTaskTurn({
+      container,
+      task: `Please ${HOLD_TEXT} with prompt delay`,
+      threadId,
+      harnessId,
+      endpoint,
+      onStatus: (s: any) => { statuses.push(s); },
+    });
+
+    // Wait until adapter signals that it is holding the prompt
+    await waitForHeldPrompt(container);
+
+    // Cancel the in-flight turn via cancelAcpTurn
+    const cancelRes = await cancelAcpTurn({ threadId, harnessId });
+    assertEquals(cancelRes.ok, true, `cancelAcpTurn must succeed: ${JSON.stringify(cancelRes)}`);
+    assertEquals(cancelRes.cancelledOnWire, true, "cancel must be dispatched over wire");
+
+    const result = await turnPromise;
+    assertEquals(result.ok, false);
+    assertEquals(result.stopReason, "cancelled");
+
+    const finalStatus = statuses.at(-1);
+    assertEquals(finalStatus?.state, "cancelled");
   } finally {
     await bridge.shutdown();
   }
