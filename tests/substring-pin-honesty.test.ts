@@ -2027,7 +2027,9 @@ Deno.test("guard: the attributed population and its documented exclusions", () =
     "no build artifact was judged — the skip happens before the target is read");
   // A BACKTICK token containing ${...} is computed per iteration. 10 of these were
   // mis-filed as TOKEN_ABSENT by the audit and 1 more by the census; 13 measured here.
-  assertEquals(stats.skippedInterpolated, 13,
+  // z4gg (2026-10-07) declared the 14th: one-shell-layout.test.ts loops over the journey
+  // names and pins each via an interpolated (computed) token, skipped by construction.
+  assertEquals(stats.skippedInterpolated, 14,
     "interpolated backtick tokens are skipped; a change means the delimiter gate moved");
 
   // Absence pins and disjunctions stay skipped (conservative, not false greens).
