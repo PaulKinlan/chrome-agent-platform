@@ -29,7 +29,7 @@ import {
 } from "./security-suite-custody.mjs";
 
 const EXPECTED_FIXTURE_HASH =
-  "9e9660b4cdc7bfbfe0b78b14e515243efd786f28c7224ce7df553fbd1efa5d02";
+  "1ebd6acd66e83d986c4893a31d433a9a18261cabfec6eceb85facca88013b679";
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.dirname(SCRIPT_DIR);
 const SUPERVISOR_SIGNALS = new Map([
@@ -317,19 +317,69 @@ for (const signal of SUPERVISOR_SIGNALS.keys()) {
     interruptResolve({ kind: "supervisor-signal", signal });
   });
 }
-const timeoutPromise = new Promise((resolve) => {
-  setTimeout(() => resolve({ kind: "timeout" }), config.timeoutMs);
-});
+// chrome-agent-platform-r222: in the stubborn scenario, the supervisor must wait
+// for child readiness (spawned, registered SIGTERM handler, observed by supervisor,
+// and ACK confirmed) before starting the scenario timeout clock. Under CPU contention,
+// booting a second Node process can exceed config.timeoutMs; starting the clock only
+// after confirmed readiness ensures TERM arrives at an established handler and tests
+// genuine stubborn-child custody instead of racing Node cold boot.
+let earlyTrigger = null;
+if (config.selfTest && config.scenario === "stubborn") {
+  const ackDeadline = Number(process.env.CAP_SECURITY_TEST_ACK_DEADLINE_MS ?? 12_000);
+  const readyTimeoutMs = Number.isSafeInteger(ackDeadline) && ackDeadline >= 1
+    ? ackDeadline
+    : 12_000;
+  const readyDeadline = Date.now() + readyTimeoutMs;
+  let stubbornReady = false;
+  while (Date.now() < readyDeadline) {
+    const early = await Promise.race([
+      exitPromise,
+      interruptPromise,
+      new Promise((r) => setTimeout(r, 10)),
+    ]);
+    if (early) {
+      earlyTrigger = early;
+      break;
+    }
+    try {
+      const stateContent = await readFile(statePath, "utf8");
+      if (
+        stateContent.includes('"stubborn-observed-by-supervisor"') &&
+        stateContent.includes('"stubborn-child-ready"') &&
+        observed.size >= 1
+      ) {
+        stubbornReady = true;
+        break;
+      }
+    } catch {
+      // state file not yet written or readable
+    }
+  }
+  if (!earlyTrigger && !stubbornReady) {
+    earlyTrigger = { kind: "readiness-timeout" };
+  }
+}
 
-const trigger = await Promise.race([
-  exitPromise,
-  timeoutPromise,
-  interruptPromise,
-]);
+let trigger;
+if (earlyTrigger) {
+  trigger = earlyTrigger;
+} else {
+  const timeoutPromise = new Promise((resolve) => {
+    setTimeout(() => resolve({ kind: "timeout" }), config.timeoutMs);
+  });
+  trigger = await Promise.race([
+    exitPromise,
+    timeoutPromise,
+    interruptPromise,
+  ]);
+}
 const timedOut = trigger.kind === "timeout";
 let outcome = trigger;
 let termination = { termSent: false, killSent: false, survived: false };
-if (trigger.kind === "timeout" || trigger.kind === "supervisor-signal") {
+if (
+  trigger.kind === "timeout" || trigger.kind === "supervisor-signal" ||
+  trigger.kind === "readiness-timeout"
+) {
   termination = await terminateAttestedGroup({
     attestation,
     observed,
@@ -378,6 +428,9 @@ let runnerSignal = null;
 if (interruptedSignal) {
   runnerSignal = interruptedSignal;
   exitCode = 128 + SUPERVISOR_SIGNALS.get(interruptedSignal);
+} else if (trigger.kind === "readiness-timeout") {
+  exitCode = 97;
+  custodyReason ||= "stubborn-readiness-timeout";
 } else if (timedOut) {
   exitCode = 124;
 } else if (outcome.kind === "exit" && outcome.signal) {

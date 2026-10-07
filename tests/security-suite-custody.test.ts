@@ -42,6 +42,7 @@ const RETIRED_POISON = "/tmp/cap-chrome-slot-POISON";
 // and the red looked like a custody failure.
 const ESCAPE_SELF_TEST_BUDGET_MS = 10_000;
 const ESCAPE_ACK_DEADLINE_MS = 12_000;
+const STUBBORN_ACK_DEADLINE_MS = 12_000;
 const ESCAPE_SAMPLE_FREEZE_MS = 400;
 // chrome-agent-platform-2zqd: how long the reap/cleanup assertions wait for a recorded pid to STOP being a
 // live process before calling it a survivor. The PROPERTY is unchanged (a survivor still REDs) - only the
@@ -204,6 +205,26 @@ Deno.test("security-suite custody: production mode is immutable and fake runners
   await assertRejects(
     () => resolveSupervisorConfig({
       env: { HOME: Deno.env.get("HOME") ?? "", CAP_SECURITY_TEST_SAMPLE_FREEZE_MS: "500" },
+      repoRoot: ROOT,
+      expectedFixtureHash: "unused-in-production",
+    }),
+    Error,
+    "self-test-only override refused in production mode",
+  );
+
+  await assertRejects(
+    () => resolveSupervisorConfig({
+      env: { HOME: Deno.env.get("HOME") ?? "", CAP_SECURITY_TEST_ACK_DEADLINE_MS: "5000" },
+      repoRoot: ROOT,
+      expectedFixtureHash: "unused-in-production",
+    }),
+    Error,
+    "self-test-only override refused in production mode",
+  );
+
+  await assertRejects(
+    () => resolveSupervisorConfig({
+      env: { HOME: Deno.env.get("HOME") ?? "", CAP_SECURITY_TEST_STUBBORN_BOOT_DELAY_MS: "500" },
       repoRoot: ROOT,
       expectedFixtureHash: "unused-in-production",
     }),
@@ -389,7 +410,9 @@ Deno.test("security-suite custody: hard timeout sends TERM and returns 124", asy
 });
 
 Deno.test("security-suite custody: stubborn owned group receives TERM then KILL and leaves no survivor", async () => {
-  const result = await runSupervisor("stubborn", 350);
+  const result = await runSupervisor("stubborn", 350, {
+    CAP_SECURITY_TEST_ACK_DEADLINE_MS: String(STUBBORN_ACK_DEADLINE_MS),
+  });
   try {
     assertEquals(result.code, 124);
     assertEquals(result.receipt?.termSent, true);
@@ -397,7 +420,154 @@ Deno.test("security-suite custody: stubborn owned group receives TERM then KILL 
     assertEquals(result.receipt?.groupSurvived, false);
     assert(result.state.some((row) => row.event === "runner-term-ignored"));
     assert(result.state.some((row) => row.event === "stubborn-child-term"));
+    assert(result.state.some((row) => row.event === "stubborn-observed-by-supervisor"));
+    assertEquals(
+      result.state.find((row) => row.event === "stubborn-ack-deadline-declared")
+        ?.ackDeadlineMs,
+      STUBBORN_ACK_DEADLINE_MS,
+      "the fixture must record the DECLARED window it was given",
+    );
     assertEquals((result.receipt?.residue as unknown[])?.length, 0);
+    await assertRecordedPidsGone(result);
+  } finally {
+    await removeEvidence(result);
+  }
+});
+
+// chrome-agent-platform-r222: under CPU load, spawning and booting the stubborn child Node process
+// can take longer than the 350 ms scenario timeout. The supervisor must await child readiness
+// before starting the scenario timeout clock.
+Deno.test("security-suite custody: stubborn child with boot delay awaits readiness before starting timeout clock", async () => {
+  // 500 ms boot delay > 350 ms scenario timeout: without readiness handshake,
+  // supervisor would timeout at 350 ms and send TERM before the child installs its handler.
+  const result = await runSupervisor("stubborn", 350, {
+    CAP_SECURITY_TEST_STUBBORN_BOOT_DELAY_MS: "500",
+    CAP_SECURITY_TEST_ACK_DEADLINE_MS: String(STUBBORN_ACK_DEADLINE_MS),
+  });
+  try {
+    assertEquals(result.code, 124);
+    assertEquals(result.receipt?.termSent, true);
+    assertEquals(result.receipt?.killSent, true);
+    assertEquals(result.receipt?.groupSurvived, false);
+    assert(result.state.some((row) => row.event === "runner-term-ignored"));
+    assert(result.state.some((row) => row.event === "stubborn-child-term"));
+    assert(result.state.some((row) => row.event === "stubborn-observed-by-supervisor"));
+    assertEquals((result.receipt?.residue as unknown[])?.length, 0);
+    await assertRecordedPidsGone(result);
+  } finally {
+    await removeEvidence(result);
+  }
+});
+
+// chrome-agent-platform-r222: stubborn descendant failing to persist must fail loudly (exit 97)
+Deno.test("security-suite custody: stubborn descendant that fails to persist fails scenario loudly", async () => {
+  const result = await runSupervisor("stubborn", 2_000, {
+    CAP_SECURITY_TEST_STUBBORN_CHILD_FAIL: "1",
+  });
+  try {
+    assertEquals(result.receipt?.exit, 97);
+    assertEquals(result.receipt?.result, "FAIL");
+    assert(
+      result.state.some((r) =>
+        r.event === "stubborn-child-not-persistent" ||
+        r.event === "stubborn-child-spawn-error" ||
+        r.event === "stubborn-unconfirmed"
+      ),
+      `fixture must record WHY the stubborn scenario could not run: ${
+        JSON.stringify(result.state)
+      }`,
+    );
+  } finally {
+    await removeEvidence(result);
+  }
+});
+
+// chrome-agent-platform-r222: stubborn declared window that cannot be met records loud refusal by name
+Deno.test("security-suite custody: stubborn declared window the ACK cannot meet records loud refusal by name", async () => {
+  const dir = durableDir(`r222-stubborn-ack-refusal-${Deno.pid}`);
+  const stateFile = `${dir}/self-test-state.jsonl`;
+  const ackPath = `${dir}/sample-ack.json`;
+  await Deno.writeTextFile(ackPath, `${JSON.stringify({ pids: [] })}\n`);
+  let childPid = 0;
+  try {
+    const r = await command("node", [FIXTURE], {
+      CAP_SECURITY_TEST_SCENARIO: "stubborn",
+      CAP_SECURITY_TEST_STATE: stateFile,
+      CAP_SECURITY_SAMPLE_ACK: ackPath,
+      CAP_SECURITY_TEST_ACK_DEADLINE_MS: "1",
+    }, 20);
+    assertEquals(r.code, 97, "a window the ACK can never meet must produce the fixture's loud refusal");
+    const events = (await Deno.readTextFile(stateFile)).trim().split("\n")
+      .filter(Boolean).map((line) => JSON.parse(line));
+    const named = events.map((row) => row.event);
+    assert(named.includes("stubborn-ack-deadline-declared"), `the declared window must be recorded: ${named.join(",")}`);
+    assert(named.includes("stubborn-unconfirmed"), `the refusal must be recorded BY NAME: ${named.join(",")}`);
+  } finally {
+    childPid = await escapeChildPidFrom(stateFile);
+    if (childPid > 0) {
+      try {
+        Deno.kill(childPid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+// chrome-agent-platform-r222: invalid declared window for stubborn scenario is refused loudly
+Deno.test("security-suite custody: stubborn invalid declared window is refused loudly and by name", async () => {
+  const dir = durableDir(`r222-stubborn-ack-invalid-${Deno.pid}`);
+  const stateFile = `${dir}/self-test-state.jsonl`;
+  const ackPath = `${dir}/sample-ack.json`;
+  await Deno.writeTextFile(ackPath, `${JSON.stringify({ pids: [] })}\n`);
+  let childPid = 0;
+  try {
+    const r = await command("node", [FIXTURE], {
+      CAP_SECURITY_TEST_SCENARIO: "stubborn",
+      CAP_SECURITY_TEST_STATE: stateFile,
+      CAP_SECURITY_SAMPLE_ACK: ackPath,
+      CAP_SECURITY_TEST_ACK_DEADLINE_MS: "not-a-number",
+    }, 20);
+    assertEquals(r.code, 97, "an invalid declared window must be refused loudly, never silently defaulted");
+    const events = (await Deno.readTextFile(stateFile)).trim().split("\n")
+      .filter(Boolean).map((line) => JSON.parse(line));
+    const named = events.map((row) => row.event);
+    assert(
+      named.includes("stubborn-ack-deadline-invalid"),
+      `the refusal must be recorded BY NAME: ${named.join(",")}`,
+    );
+    assert(
+      !named.includes("stubborn-ack-deadline-declared"),
+      `an invalid window must not be recorded as honoured: ${named.join(",")}`,
+    );
+  } finally {
+    childPid = await escapeChildPidFrom(stateFile);
+    if (childPid > 0) {
+      try {
+        Deno.kill(childPid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+// chrome-agent-platform-r222: stubborn readiness deadline expiry produces loud refusal exit 97 (not 124)
+Deno.test("security-suite custody: stubborn readiness deadline expiry produces loud refusal exit 97 (not 124)", async () => {
+  const result = await runSupervisor("stubborn", 350, {
+    CAP_SECURITY_TEST_SAMPLE_FREEZE_MS: "400",
+    CAP_SECURITY_TEST_ACK_DEADLINE_MS: "100",
+  });
+  try {
+    assertEquals(result.code, 97, "readiness expiry must be a loud refusal (exit 97), never a false scenario timeout (124)");
+    assertEquals(result.receipt?.result, "FAIL");
+    assert(
+      result.state.some((r) => r.event === "stubborn-unconfirmed") ||
+      result.receipt?.custodyReason === "stubborn-readiness-timeout",
+      "must record stubborn-unconfirmed or stubborn-readiness-timeout",
+    );
     await assertRecordedPidsGone(result);
   } finally {
     await removeEvidence(result);
