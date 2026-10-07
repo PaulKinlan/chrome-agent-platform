@@ -13,18 +13,23 @@ Deno.test("ACP local bind-race residual is named, reversible, and separate from 
     "ADJUDICATED AND WITHHELD", "chrome-agent-platform-6hly", "REOPEN TRIGGER",
     "single-user development machine", "shared or multi-user",
     "per-run token", "pinned certificate", "native-messaging transport",
-    "extension/lib/acp-runner.js:292", "scripts/acp-bridge.ts:657",
+    "extension/lib/acp-runner.js:292", "scripts/acp-bridge.ts:751",
   ]) {
     assert(r24.includes(pin), `R24 must retain ${pin}`);
   }
   // All ACP entry points in the threat model must agree on the current bridge
   // controls, not retain pre-jsjy line numbers beside a corrected T15.
-  for (const outdated of ["scripts/acp-bridge.ts:44", "scripts/acp-bridge.ts:67-71",
-    "scripts/acp-bridge.ts:636-646", "scripts/acp-bridge.ts:641-646"]) {
+  for (const outdated of [
+    "scripts/acp-bridge.ts:44", "scripts/acp-bridge.ts:49", "scripts/acp-bridge.ts:67-71",
+    "scripts/acp-bridge.ts:136-141", "scripts/acp-bridge.ts:636-646",
+    "scripts/acp-bridge.ts:641-646", "scripts/acp-bridge.ts:723-743",
+  ]) {
     assert(!model.includes(outdated), `THREAT_MODEL.md must not retain stale ACP pin ${outdated}`);
   }
-  for (const anchor of ["scripts/acp-bridge.ts:49", "scripts/acp-bridge.ts:136-141",
-    "scripts/acp-bridge.ts:723-743"]) {
+  for (const anchor of [
+    "scripts/acp-bridge.ts:52", "scripts/acp-bridge.ts:173-178",
+    "scripts/acp-bridge.ts:825-833",
+  ]) {
     assert(model.includes(anchor), `THREAT_MODEL.md must retain current ACP pin ${anchor}`);
   }
   const t15 = model.split("### T15.")[1]?.split("### T16.")[0];
