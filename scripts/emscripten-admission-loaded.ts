@@ -397,10 +397,17 @@ async function main() {
       throw new Error(`developer-features flag could not be set: ${kvSet}`);
     }
     await cdp.eval(sessionId, "window.__harnessPreReload = true");
-    await cdp.eval(sessionId, "location.reload()");
+    // location.reload() measured STALE in headless (a beforeunload cancels it);
+    // force a CROSS-DOCUMENT navigation through about:blank so the page module
+    // genuinely re-runs and re-reads the developer-features flag.
+    await cdp.send("Page.navigate", { url: "about:blank" }, sessionId);
+    await cdp.send("Page.navigate", { url: `chrome-extension://${extensionId}/options/options.html` }, sessionId);
     await waitForLibraryReady(cdp, sessionId);
     const preReloadMarker = await cdp.eval(sessionId, "window.__harnessPreReload ?? 'gone'").catch(() => "eval-failed");
     (result as Record<string, unknown>).reloadVerified = preReloadMarker === "gone" ? "fresh-context (reload worked)" : `STALE CONTEXT (marker=${String(preReloadMarker)})`;
+    if (preReloadMarker !== "gone") {
+      throw new Error(`options page did not reload for the developer-features flag (${String(preReloadMarker)})`);
+    }
 
     // The validation list must name the acceptance package exactly once.
     const rows = await waitForLibrary(cdp, sessionId, `(() => { const r = Array.from(root.querySelectorAll(".validation-packages .validation-row .validation-pkg-info")).map((n) => n.textContent); return r.length ? r : false; })()`, 30_000, consoleTail);
