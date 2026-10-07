@@ -19,7 +19,9 @@ Deno.test("g599r: all three journey finalizers use the group-aware cleanup seam"
   const sites = [...source.matchAll(/if\s*\(proc\)\s*await\s+teardownJourneyChrome\(proc,\s*profile\);\s*else\s+await\s+runBounded\(RM,\s*\["-rf",\s*profile\]\);/g)];
   assertEquals(sites.length, 3, "main, demo-path and factory-reset use shared teardown; rm only if Chrome never spawned");
   assert(!source.includes("async function killChromiumTree("), "do not restore the parent-only pkill helper");
-  assert(source.includes('"--disable-crash-reporter"'), "long headless journey opts out of crash reporting");
+  // Crashpad double-forks out of Chrome's group in CfT 155 even with
+  // --disable-crash-reporter. Reaper ownership of that helper is a fleet gate,
+  // not proof this group/profile-scoped teardown can kill it.
 });
 
 Deno.test("g599r: journey cleanup awaits the exact proc/profile in shared group-aware teardown", async () => {

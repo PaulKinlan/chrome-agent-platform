@@ -149,8 +149,6 @@ function launchJourneyChrome(profile: string) {
       "--no-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
-      // Avoid crashpad sidecars becoming orphaned during this long headless gate.
-      "--disable-crash-reporter",
       "--silent-debugger-extension-api",
       `--disable-extensions-except=${EXT}`,
       `--load-extension=${EXT}`,
@@ -954,9 +952,9 @@ const EXPECTED = [
   "approval: primary NTP Settings iframe can deny an exact request",
   "approval: deny row is singular and capability material absent from the payload",
   "approval: NTP cannot programmatically resolve an owner approval",
-  "approval: deny leaves the exact asset unchanged",
+  "approval: deny leaves the exact target unchanged",
   "approval: install-scoped opaque reference survives a worker restart",
-  "approval: post-restart deny leaves the exact asset unchanged",
+  "approval: post-restart deny leaves the exact target unchanged",
   "mgmt: update_asset patched the asset",
   "artifact versions: two rows with distinct sha256 after the edit turn",
   "artifact versions: version-get returns v1's exact body",
@@ -7409,11 +7407,16 @@ async function main() {
     if (frameReadyShot) await writeEvidence("artifact-frame-ready.png", frameReadyShot);
     await evalIn(cdp, ntpSession, `document.querySelector("agent-dialog")?.close?.()`);
 
-    // The PRIMARY Settings entry is the NTP's embedded options iframe. Drive
-    // its navigation and Deny button with genuine CDP clicks (Runtime.evaluate
-    // is used only for coordinate discovery/assertions).
+    // The PRIMARY Settings entry is the NTP's embedded options iframe. Open it
+    // with a genuine CDP click, then resolve the queued request from the
+    // embedded frame's browser-attested Settings execution context.
+    // asset.update is owner-direct from extension documents; it executes with
+    // no pending row. agent.update remains approval-gated from the NTP, so
+    // Settings must genuinely deny this exact request before it can mutate.
+    const approvalTargetOrigin = "https://mgmt.example";
+    const unchangedApprovalTargetName = "renamed-worker";
     const iframeDeniedRequest = await msgValue({
-      type: "asset.update", origin: "master", id: assetId, name: "must-not-apply",
+      type: "agent.update", origin: approvalTargetOrigin, name: "must-not-apply",
     });
     // Keep this acceptance focused on owner input/authority rather than a
     // concurrent ViewTransition lifecycle; reduced-motion is a supported
@@ -7482,7 +7485,9 @@ async function main() {
         cdp.send("Runtime.evaluate", {
           expression: `(async () => {
             const pending = await chrome.runtime.sendMessage({ type: "management.pending-approvals" });
-            const id = pending?.approvals?.[0]?.approvalId;
+            if (pending?.ok !== true || pending.approvals?.length !== 1 ||
+                pending.approvals[0]?.action !== "agent.update") return false;
+            const id = pending.approvals[0].approvalId;
             if (!id) return false;
             const out = await chrome.runtime.sendMessage({ type: "management.resolve-approval", approvalId: id, approve: false });
             return out?.ok === true && out?.decision === "denied";
@@ -7497,28 +7502,27 @@ async function main() {
       iframeDeny = wireValue<any>(denied, "jny.iframe-deny") === true;
     }
     await sleep(250);
-    const iframeAfter = await msgValue({ type: "asset.get", origin: "master", id: assetId });
+    const iframeAfter = await msgValue({ type: "agent.get", origin: approvalTargetOrigin });
     const iframeShot = await captureShot(cdp, ntpSession).catch(() => null);
     if (iframeShot) await writeEvidence("approval-iframe-denied.png", iframeShot);
-    const iframePass = iframeDeniedRequest?.ok === false && iframeNav && iframeDeny &&
-      iframeAfter?.ok === true && iframeAfter.asset?.name === "generated page";
-    console.log(`approval journey (iframe deny): ${JSON.stringify({ deniedRequest: iframeDeniedRequest, settingsFrameId, settingsCtx: !!settingsCtx?.id, iframeNav, iframeDeny, after: iframeAfter?.asset?.name ?? iframeAfter })}`);
+    const iframePass = iframeDeniedRequest?.ok === false &&
+      /requires owner approval/i.test(String(iframeDeniedRequest?.error ?? "")) && iframeNav && iframeDeny &&
+      iframeAfter?.ok === true && iframeAfter.agent?.name === unchangedApprovalTargetName;
+    console.log(`approval journey (iframe deny): ${JSON.stringify({ deniedRequest: iframeDeniedRequest, settingsFrameId, settingsCtx: !!settingsCtx?.id, iframeNav, iframeDeny, after: iframeAfter?.agent?.name ?? iframeAfter })}`);
     check(
       "approval: primary NTP Settings iframe can deny an exact request",
       iframePass,
-      { request: iframeDeniedRequest, iframeNav, iframeDeny, assetName: iframeAfter?.asset?.name },
+      { request: iframeDeniedRequest, iframeNav, iframeDeny, targetName: iframeAfter?.agent?.name },
     );
     await clickSel(cdp, ntpSession, "#view-back").catch(() => false);
 
-    // Exact correlated DENY: one request → one row; neither the raw target,
-    // asset id, digest nor approval id is present in the DOM. A genuine Deny
-    // click removes that exact tuple and the mutation never runs.
-    // `asset.delete` became an OWNER-DIRECT action
-    // (CAP-FB-20260823-ARTIFACT-DELETE-PERMISSION-01), so an owner surface's own
-    // delete no longer queues an approval and cannot exercise the deny path.
-    // `asset.update` is still gated and drives the identical request → single
-    // row → deny → mutation-never-ran flow, so the coverage is unchanged.
-    const denyRequest = await msgValue({ type: "asset.update", origin: "master", id: assetId, name: "deny-must-not-apply" });
+    // Exact correlated DENY: one request → one row. The owner-options payload
+    // exposes an opaque approval id but never the raw target or digest. Denial
+    // of that row removes the exact tuple without running the mutation.
+    // Both asset.delete and asset.update are owner-direct from extension
+    // documents. agent.update still queues an exact ui:-bound approval, unlike
+    // a model/run-bound row that the NTP conversation could itself resolve.
+    const denyRequest = await msgValue({ type: "agent.update", origin: approvalTargetOrigin, name: "deny-must-not-apply" });
     await sleep(250);
     // REPOINTED 2026-08-27: this used to scrape #approval-list's DOM. That list
     // is gone, but the property it protected is not — and asserting it on the
@@ -7537,7 +7541,7 @@ async function main() {
     // created) and is the one capability value the old DOM assertion checked
     // was never rendered as an attribute; here it must be present but opaque.
     // Everything that would let a caller reconstruct the target — the asset
-    // id, a digest, the raw `asset:master` target string — must be absent, and
+    // origin, a digest, the raw target string — must be absent, and
     // targetRef must be the 32-char install-scoped opaque reference.
     const denyDom = {
       count: denyList.length,
@@ -7561,17 +7565,19 @@ async function main() {
     console.log(`approval journey (deny row): ${JSON.stringify({ denyRequest, denyDom: { ...denyDom, text: String(denyDom.text).slice(0, 300) } })}`);
     check(
       "approval: deny row is singular and capability material absent from the payload",
-      denyRequest?.ok === false && denyDom.count === 1 &&
+      denyRequest?.ok === false && /requires owner approval/i.test(String(denyRequest?.error ?? "")) &&
+        denyDom.count === 1 && denyRow.action === "agent.update" &&
         denyDom.fields === "action,approvalId,at,targetRef" &&
         denyDom.hasApprovalId && denyDom.opaqueRef &&
-        !String(denyDom.text).includes(assetId) &&
+        !String(denyDom.text).includes(approvalTargetOrigin) &&
         !String(denyDom.text).includes("digest") &&
-        !String(denyDom.text).includes("asset:master"),
+        !String(denyDom.text).includes("origin:"),
       denyDom,
     );
-    // Assertion-only retrieval from the exact owner surface: the identifier is
-    // then replayed from NTP with every old body bypass flag. The SW must still
-    // reject because sender authority is a separate browser-derived context.
+    // Retrieve the real pending id from the exact Settings surface, then replay
+    // it from NTP with old bypass fields. An empty id/expired-row rejection is
+    // NOT custody evidence: the SW must reject this live ui:-bound row because
+    // sender authority is a separate browser-derived context.
     const pendingForForgery = await evalOpts(`chrome.runtime.sendMessage({type:'management.pending-approvals'}).then(v => v.approvals?.[0]?.approvalId || '')`);
     const forgedResolve = await msgValue({
       type: "management.resolve-approval",
@@ -7582,22 +7588,21 @@ async function main() {
     });
     check(
       "approval: NTP cannot programmatically resolve an owner approval",
-      forgedResolve?.ok === false,
+      typeof pendingForForgery === "string" && pendingForForgery.length > 0 &&
+        forgedResolve?.ok === false && /Settings/.test(String(forgedResolve?.error ?? "")),
     );
     await resolveNextApproval(false);
     await captureApprovalEvidence("approval-deny-resolved.png");
-    const afterDeniedDelete = await msgValue({ type: "asset.get", origin: "master", id: assetId });
+    const afterDeniedAgentEdit = await msgValue({ type: "agent.get", origin: approvalTargetOrigin });
     check(
-      "approval: deny leaves the exact asset unchanged",
-      afterDeniedDelete?.ok === true &&
-        afterDeniedDelete.asset?.content === "<h1>hello</h1>" &&
-        afterDeniedDelete.asset?.name !== "deny-must-not-apply",
+      "approval: deny leaves the exact target unchanged",
+      afterDeniedAgentEdit?.ok === true && afterDeniedAgentEdit.agent?.name === unchangedApprovalTargetName,
     );
 
     // Stable install-scoped target reference across an actual MV3 worker
     // restart. Pending/granted capabilities are intentionally worker-ephemeral
     // (restart fails closed); the private OPFS HMAC key remains install-scoped.
-    await msgValue({ type: "asset.update", origin: "master", id: assetId, name: "restart-must-not-apply" });
+    const restartRequest = await msgValue({ type: "agent.update", origin: approvalTargetOrigin, name: "restart-must-not-apply" });
     await sleep(250);
     const refBeforeRestart = await evalOpts(`chrome.runtime.sendMessage({type:'management.pending-approvals'}).then(v => v.approvals?.[0]?.targetRef || '')`);
     const targetsForApprovalRestart = await cdp.send("Target.getTargets");
@@ -7610,20 +7615,19 @@ async function main() {
       approvalWake = await msgValue({ type: "asset.list", origin: "master" }).catch(() => null);
       if (!approvalWake) await sleep(200);
     }
-    await msgValue({ type: "asset.update", origin: "master", id: assetId, name: "restart-must-not-apply" });
+    const restartAgain = await msgValue({ type: "agent.update", origin: approvalTargetOrigin, name: "restart-must-not-apply" });
     await sleep(250);
     const refAfterRestart = await evalOpts(`chrome.runtime.sendMessage({type:'management.pending-approvals'}).then(v => v.approvals?.[0]?.targetRef || '')`);
     check(
       "approval: install-scoped opaque reference survives a worker restart",
-      typeof refBeforeRestart === "string" && refBeforeRestart.length === 32 && refAfterRestart === refBeforeRestart,
+      restartRequest?.ok === false && restartAgain?.ok === false &&
+        typeof refBeforeRestart === "string" && refBeforeRestart.length === 32 && refAfterRestart === refBeforeRestart,
     );
     await resolveNextApproval(false);
-    const afterRestartDeny = await msgValue({ type: "asset.get", origin: "master", id: assetId });
+    const afterRestartDeny = await msgValue({ type: "agent.get", origin: approvalTargetOrigin });
     check(
-      "approval: post-restart deny leaves the exact asset unchanged",
-      afterRestartDeny?.ok === true &&
-        afterRestartDeny.asset?.content === "<h1>hello</h1>" &&
-        afterRestartDeny.asset?.name !== "restart-must-not-apply",
+      "approval: post-restart deny leaves the exact target unchanged",
+      afterRestartDeny?.ok === true && afterRestartDeny.agent?.name === unchangedApprovalTargetName,
     );
 
     const assetUpdate = await approvedMsg({
