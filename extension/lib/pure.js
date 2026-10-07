@@ -1178,7 +1178,15 @@ export function redactToolArgs(toolName, args, extraSecretArgs = null) {
       ? extraSecretArgs
       : (KNOWN_TOOL_SECRET_ARGS[effectiveTool] ?? (isProtocolOrUnknown ? ALL_KNOWN_TOOL_SECRET_ARGS : []))
   );
-  if (secretSet.size === 0) return args;
+  if (secretSet.size === 0) {
+    if (args && typeof args === "object" && "arguments" in args && args.arguments && typeof args.arguments === "object") {
+      const inner = redactToolArgs(toolName, args.arguments, ALL_KNOWN_TOOL_SECRET_ARGS);
+      if (inner !== args.arguments) {
+        return { ...args, arguments: inner };
+      }
+    }
+    return args;
+  }
 
   if (typeof args === "string") {
     try {
@@ -1200,8 +1208,12 @@ export function redactToolArgs(toolName, args, extraSecretArgs = null) {
   for (const [k, v] of Object.entries(args)) {
     if (secretSet.has(k)) {
       out[k] = "[REDACTED]";
-    } else if (k === "arguments" && v && (typeof v === "object" || typeof v === "string")) {
-      out[k] = redactToolArgs(toolName, v, extraSecretArgs);
+    } else if (v && typeof v === "object") {
+      const nestedExtra = (k === "arguments" && secretSet.size === 0) ? ALL_KNOWN_TOOL_SECRET_ARGS : extraSecretArgs;
+      out[k] = redactToolArgs(toolName, v, nestedExtra);
+    } else if (k === "arguments" && typeof v === "string") {
+      const nestedExtra = secretSet.size === 0 ? ALL_KNOWN_TOOL_SECRET_ARGS : extraSecretArgs;
+      out[k] = redactToolArgs(toolName, v, nestedExtra);
     } else {
       out[k] = v;
     }

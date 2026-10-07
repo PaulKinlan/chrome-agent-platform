@@ -4,7 +4,7 @@
 **Candidate branch:** `fleet/2uhx`  
 **Base:** `origin/main` @ `61b8e4c9`  
 **Author:** `cap-gemini` (Gemini 3.8 Flash)  
-**Date:** 2026-09-26  
+**Date:** 2026-09-26 (refreshed 2026-10-07 post-134f66e1 / c8ee)  
 
 ---
 
@@ -49,11 +49,12 @@ This expands CAP's native on-device cryptographic capability with authenticated 
 ## 4. Verification & Gates
 
 - **Targeted Callexport Tests:**
-  - `tests/callexport-admission.test.ts`: **12 passed / 0 failed** in 22ms.
+  - `tests/callexport-admission.test.ts`: **16 passed / 0 failed** in 36ms.
     - Verified audit of real `chacha_poly1305.wasm`.
     - Verified round-trip encrypt and decrypt, and verified against RFC 8439 §2.8.2 known-answer vector.
     - Verified authenticated associated data (AAD) binding.
     - Verified fail-closed defense against tampered ciphertext.
+    - Verified executableBundledToolRecords chacha20_poly1305 validator and SW envelope args (P2-1).
 - **Inventory & Allowlist Tests:**
   - `tests/agent-wasm-discovery.test.ts`: **6 passed / 0 failed** (updated 38 → 39 bundled tools).
   - `tests/bundled-tool-packages.test.ts`: **23 passed / 0 failed** (updated 38 → 39 manifests, CAS blobs, allowlist, store map).
@@ -66,9 +67,10 @@ This expands CAP's native on-device cryptographic capability with authenticated 
   - `tests/tool-purpose-groups.test.ts`: **7 passed / 0 failed** (classified `chacha20_poly1305` in `hashes-ids`).
   - `tests/evidence-durable.test.ts`: **2 passed / 0 failed** (verified 144 generated files byte-identical).
   - `tests/test-partition-guard.test.ts`: **9 passed / 0 failed**.
-- **Full Changed Suite:**
-  - `npm run test:changed`: **4,569 passed across 508 files / 0 failed** in 253s.
+- **Real-Path Progress Seam & Redaction Tests:**
+  - `tests/sw-egress-redaction.test.ts`: **1 passed / 0 failed** (real-path SW progress seam asserting broadcast, journal, and durable log redaction).
+  - `tests/pure.test.ts`: **60 passed / 0 failed** (includes nested arguments envelope recursion, arbitrary property traversal, and SW/digest call site pins).
 - **Build & Vocabulary:**
-  - `npm run build:production`: Store SW bundle built atomically, 39 packages / 39 manifests / 114 shipped files, budget OK (2,990,177 <= 3,000,000 bytes).
+  - `npm run build:production`: Store SW bundle built atomically, 52 packages / 52 manifests / 154 shipped files, budget OK (2,589,220 <= 3,000,000 bytes).
   - `npm run note:dist`: Clean.
-  - `npm run check:vocabulary`: Clean (17 surfaces).
+  - `npm run check:vocabulary`: Clean (19 surfaces).

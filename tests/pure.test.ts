@@ -653,7 +653,40 @@ Deno.test("redactToolArgs: per-tool secretArgs redaction (P1-3)", () => {
   assertEquals(custom, { customSecret: "[REDACTED]", safe: "bar" });
 });
 
-Deno.test("execute_tool end-to-end secret redaction: broadcast, journal, and durable run log (P1 / 2uhx)", () => {
+Deno.test("redactToolArgs: recurses into nested arguments envelopes and arbitrary object properties (c8ee / P2.2)", () => {
+  const secretKey = "super-secret-key-bytes";
+  // Nested under arguments.cfg
+  const nested = redactToolArgs("execute_tool", {
+    arguments: { cfg: { key: secretKey, other: "val" } },
+  });
+  assertEquals(nested, {
+    arguments: { cfg: { key: "[REDACTED]", other: "val" } },
+  });
+
+  // Non-protocol tool with arguments envelope carrying secret arg
+  const readFileWithSecret = redactToolArgs("read_file", {
+    arguments: { key: secretKey, path: "foo.txt" },
+  });
+  assertEquals(readFileWithSecret, {
+    arguments: { key: "[REDACTED]", path: "foo.txt" },
+  });
+});
+
+Deno.test("sw-egress: service-worker.js progress chokepoint and run-digest wire redactToolArgs (c8ee / P1 pin)", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  assert(
+    sw.includes("toolArgs: redactDeep(redactToolArgs(event.selectedTool ?? event.toolName, event.toolArgs))"),
+    "SW progress seam must wire redactToolArgs on tool-call events",
+  );
+
+  const digest = await Deno.readTextFile(new URL("../extension/lib/run-digest.js", import.meta.url));
+  assert(
+    digest.includes("const safeArgs = redactToolArgs(name, shownArgs === undefined ? {} : shownArgs, extraSecret)"),
+    "run-digest must wire redactToolArgs on continuation args",
+  );
+});
+
+Deno.test("execute_tool secret redaction transform simulation: broadcast, journal, and durable run log (2uhx)", () => {
   const rawKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="; // 32-byte secret key in base64
   const nonce = "BwAAAAQAQUJDREVGRw==";
   const data = "c3VwZXItY29uZmlkZW50aWFsLXBsYWludGV4dA==";
