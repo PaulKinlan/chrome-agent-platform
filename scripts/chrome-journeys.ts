@@ -45,7 +45,8 @@ import { DEMO_STREAM_ANSWER } from "../extension/lib/models/demo-model.js";
 import { durableDir } from "./lib/durable-root.mjs";
 import { isCdpEvaluateTimeout } from "./lib/quiet-window.ts";
 import { wireValue } from "./lib/cdp-eval.ts";
-import { launchChrome as spawnChrome } from "./lib/chrome-launch.ts";
+import { computeUnpackedExtensionId, launchChrome as spawnChrome, SW_MATCH } from "./lib/chrome-launch.ts";
+import { assertJourneyNtpPrincipal } from "./lib/journey-ntp-principal.ts";
 import {
   ENVIRONMENTAL_REFUSAL_EXIT,
   ENVIRONMENTAL_REFUSAL_MARKER,
@@ -1293,7 +1294,7 @@ async function main() {
     // (CAP-FB-20260830-SUITE-HONESTY-01).
     for (let i = 0; i < 100; i++) {
       const targets = await fetchJson(`http://127.0.0.1:${port}/json/list`);
-      if (targets.find((t) => t.type === "service_worker")) break;
+      if (targets.find(SW_MATCH)) break;
       await sleep(100);
     }
     const autoAttachRes = await cdp.send("Target.setAutoAttach", {
@@ -1312,15 +1313,19 @@ async function main() {
     let sw = null;
     for (let i = 0; i < 60 && !sw; i++) {
       const targets = await fetchJson(`http://127.0.0.1:${port}/json/list`);
-      sw = targets.find((t) => t.type === "service_worker");
+      sw = targets.find(SW_MATCH);
       if (!sw) await sleep(200);
     }
-    if (!sw) {
+    // CfT also registers component-extension workers (e.g. thunk.js). Even a
+    // matched background path must belong to the unpacked extension we loaded.
+    const expectedExtId = await computeUnpackedExtensionId(EXT);
+    const workerId = sw ? new URL(sw.url).host : null;
+    if (!sw || workerId !== expectedExtId) {
       check("extension loaded", false);
-      throw new Error("extension did not load");
+      throw new Error("the unpacked extension's background service worker did not load");
     }
     check("extension loaded", true);
-    const extId = sw.url.split("/")[2];
+    const extId = expectedExtId;
 
     // Reuse the pre-attached SW session when auto-attach already won the race.
     // Explicitly attaching the same worker twice is flaky and can hang CDP.
@@ -1389,6 +1394,17 @@ async function main() {
     await sleep(1500);
     const ntpSession = await attachRuntime(cdp, ntpPage.id);
     cdp.pageSessions.add(ntpSession);
+    // A valid CDP target can display chrome-error://chromewebdata/ when the
+    // derived extension ID was wrong. Fail with a named principal error BEFORE
+    // the SW restart, never reinterpret a missing runtime as a product answer.
+    const ntpPrincipal = await evalIn(cdp, ntpSession,
+      `({ href: location.href, sendMessageType: typeof globalThis.chrome?.runtime?.sendMessage })`);
+    try {
+      assertJourneyNtpPrincipal(ntpPrincipal, extId);
+    } catch (error) {
+      throw new Error(`${error instanceof Error ? error.message : "journey NTP principal unavailable"}; ` +
+        `targetId=${Cdp.diagnosticId(ntpPage.id)} sessionId=${Cdp.diagnosticId(ntpSession)}`);
+    }
 
     // sendMsg from the NTP (extension page) — backend message probes.
     const sendMsg = (payload) =>
