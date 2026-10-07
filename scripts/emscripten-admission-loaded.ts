@@ -364,9 +364,18 @@ async function main() {
     await waitForLibraryReady(cdp, sessionId);
 
     // Enable developer features through the SAME kv path the About switch uses,
-    // then reload so renderToolLibrary runs with the flag on.
-    await cdp.eval(sessionId, `chrome.runtime.sendMessage({ type: "kv.set", values: { ${JSON.stringify(DEVELOPER_FEATURES_KEY)}: true } })`);
-    await cdp.send("Page.navigate", { url: `chrome-extension://${extensionId}/options/options.html#tool-library` }, sessionId);
+    // then RELOAD (a hash navigation does not re-run the page module, and the
+    // flag is read once at module init — the page must boot again to see it).
+    const kvSet = await cdp.eval(sessionId, `await new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ type: "kv.set", values: { ${JSON.stringify(DEVELOPER_FEATURES_KEY)}: true } }, (r) => {
+        const err = chrome.runtime.lastError;
+        if (err) reject(new Error(err.message ?? "kv.set failed")); else resolve(JSON.stringify(r));
+      });
+    })`).catch((e) => `kv.set-failed: ${e?.message ?? e}`);
+    if (typeof kvSet === "string" && kvSet.startsWith("kv.set-failed")) {
+      throw new Error(`developer-features flag could not be set: ${kvSet}`);
+    }
+    await cdp.eval(sessionId, "location.reload()");
     await waitForLibraryReady(cdp, sessionId);
 
     // The validation list must name the acceptance package exactly once.
