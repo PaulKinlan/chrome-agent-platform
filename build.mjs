@@ -392,16 +392,6 @@ try {
     } catch (err) {
       if (err?.code !== "ENOENT") throw err;
     }
-    if (!denoEntries.some((d) => d.startsWith("@modelcontextprotocol+sdk@"))) {
-      try {
-        execFileSync("deno", ["install"], { cwd: ROOT, stdio: "inherit" });
-        denoEntries = readdirSync(denoStoreDir);
-      } catch (err) {
-        throw new Error(
-          `cap-deno-store-resolve: ${denoStoreDir} is missing or incomplete and automatic \`deno install\` failed (${err?.message || err}) — run \`deno install\` and retry.`,
-        );
-      }
-    }
     const requireFromRoot = createRequire(path.join(ROOT, "package.json"));
     function resolveCanonical(spec, opts, what) {
       try {
@@ -409,7 +399,7 @@ try {
       } catch (err) {
         throw new Error(
           `cap-ai-sdk-dedup: cannot resolve the canonical ${what} (${spec}) in this install — ${err?.message || err}. ` +
-          `Run deno install and retry; the build refuses to bundle duplicated AI SDK instances.`,
+          `Run npm install/deno install and retry; the build refuses to bundle duplicated AI SDK instances.`,
         );
       }
     }
@@ -440,37 +430,53 @@ try {
     // behind the second copy (chrome-agent-platform-9epn.3, 2026-10-01 audit;
     // upgraded to 1.31.0 for GHSA-6qxp-vccf-f47h in chrome-agent-platform-1grt).
     //
-    // The canonical instance is chosen by its ZOD PEER, not by readdir order:
-    // the one whose node_modules/zod is the extension's own zod line (the
-    // context lib/mcp-client.js always built against — the KAT-proven flavor;
-    // agent-do's bare `zod` imports already resolve to that same zod via
-    // CANON_ZOD_V4, so its MCP client now shares one zod with the rest of its
-    // stack). Live-resolved and fail-closed: no matching instance, no build.
+    // The canonical instance is chosen by its ZOD PEER.
+    // Live-resolved and fail-closed: no matching instance, no build.
     const CANON_ZOD_DIR = realpathSync(path.join(ROOT, "node_modules", "zod"));
-    const mcpStoreCandidates = readdirSync(denoStoreDir)
-      .filter((d) => d.startsWith("@modelcontextprotocol+sdk@"))
-      .sort()
-      .map((entry) => {
-        let zodPeer = null;
-        try { zodPeer = realpathSync(path.join(denoStoreDir, entry, "node_modules", "zod")); } catch { /* no zod peer linked */ }
-        return { entry, zodPeer };
-      });
-    if (mcpStoreCandidates.length === 0) {
+    
+    const mcpSdkPkgPath = path.join(ROOT, "node_modules", "@modelcontextprotocol", "sdk", "package.json");
+    const CANON_MCP_SDK_DIR = realpathSync(path.dirname(mcpSdkPkgPath));
+
+    const mcpSdkReq = createRequire(mcpSdkPkgPath);
+    let mcpZodPeer = null;
+    try {
+      mcpZodPeer = realpathSync(mcpSdkReq.resolve("zod/package.json").replace(/\/package\.json$/, ""));
+    } catch {}
+
+    if (mcpZodPeer !== CANON_ZOD_DIR) {
       throw new Error(
-        `cap-deno-store-resolve: no @modelcontextprotocol+sdk@* instance in ${denoStoreDir} — run deno install. ` +
-        `The build refuses to guess.`,
+        `cap-ai-sdk-dedup: no @modelcontextprotocol/sdk instance is bound to the extension's zod (${CANON_ZOD_DIR}). ` +
+        `Resolved: ${CANON_MCP_SDK_DIR} → zod ${mcpZodPeer ?? "(none)"}. ` +
+        `The SDK must share one zod with lib/mcp-client.js and agent-do.`
       );
     }
-    const mcpStoreEntry = mcpStoreCandidates.find((c) => c.zodPeer === CANON_ZOD_DIR)?.entry;
-    if (!mcpStoreEntry) {
+    
+    const distinctZods = new Set();
+    const sdkInstances = [];
+    
+    if (denoEntries.length > 0) {
+      const candidates = denoEntries.filter((d) => d.startsWith("@modelcontextprotocol+sdk@"));
+      for (const entry of candidates) {
+        let entryZodPeer = null;
+        try {
+          const pkgPath = path.join(denoStoreDir, entry, "node_modules", "@modelcontextprotocol", "sdk", "package.json");
+          entryZodPeer = realpathSync(createRequire(pkgPath).resolve("zod/package.json").replace(/\/package\.json$/, ""));
+        } catch { }
+        sdkInstances.push({ entry, zodPeer: entryZodPeer });
+        if (entryZodPeer) distinctZods.add(entryZodPeer);
+      }
+    } else {
+      sdkInstances.push({ entry: "npm-hoisted", zodPeer: mcpZodPeer });
+      if (mcpZodPeer) distinctZods.add(mcpZodPeer);
+    }
+
+    if (distinctZods.size > 1) {
       throw new Error(
-        `cap-ai-sdk-dedup: no @modelcontextprotocol/sdk store instance is bound to the extension's zod (${CANON_ZOD_DIR}). ` +
-        `Candidates: ${mcpStoreCandidates.map((c) => `${c.entry} → zod ${c.zodPeer ?? "(none)"}`).join("; ")}. ` +
-        `The SDK must share one zod with lib/mcp-client.js and agent-do; run deno install and retry.`,
+        `cap-ai-sdk-dedup: exactly one distinct zod is required among the sdk instances, but found ${distinctZods.size}. ` +
+        `Candidates: ${sdkInstances.map((c) => `${c.entry} → zod ${c.zodPeer ?? "(none)"}`).join("; ")}. ` +
+        `The SDK must share one zod with lib/mcp-client.js and agent-do.`
       );
     }
-    const denoStoreNodeModules = path.join(denoStoreDir, mcpStoreEntry, "node_modules");
-    const CANON_MCP_SDK_DIR = realpathSync(path.join(denoStoreNodeModules, "@modelcontextprotocol", "sdk"));
     // Marker for the re-entrant resolve below: esbuild hands pluginData back
     // to onResolve, so the pin can tell its own lookup from an importer's.
     const MCP_SDK_PIN = "cap-mcp-sdk-pin";
@@ -535,7 +541,7 @@ try {
       logLevel: "silent", sourcemap: DEBUG_BUILD, legalComments: "none",
       plugins: [browserDependencies, diffCoreFromSource, capAiSdkDedup],
       metafile: true,
-      nodePaths: [denoStoreNodeModules],
+      nodePaths: [path.dirname(CANON_MCP_SDK_DIR)],
       define: {
         ...browserProcessEnvOptions.define,
         __CAP_BUILD_LOG_DEFAULT__: JSON.stringify(DEBUG_BUILD ? "verbose" : "off"),
