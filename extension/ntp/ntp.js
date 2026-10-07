@@ -1921,8 +1921,8 @@ const subscribeAmbientProgress = () => {
     // Board changes re-render the sidebar section + the Jobs panel live
     // (post/claim/settle/message).
     if (typeof ev.type === "string" && ev.type.startsWith("board-")) {
-      // This subscriber was installed before the general broadcast listener.
-      // Invalidate first: otherwise the live repaint joins pre-event cached reads.
+      // Invalidate synchronously before this subscriber repaints: never join
+      // pre-event cached reads, regardless of progress-listener install order.
       handleBroadcastEvent(ev.type);
       refreshBoard();
       renderJobsBoard();

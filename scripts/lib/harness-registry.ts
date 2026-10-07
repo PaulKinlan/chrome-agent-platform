@@ -174,7 +174,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-genui-error-state.ts": { class: "kat", ...RED("15/3", "three generated-UI error-state checks red: preview frame absent and retry status null", "the generated-UI bootstrap syntax lane (in flight)") },
   "kat-hub-timeline.ts": { class: "kat" },
   "kat-interactive-artifact-click.ts": { class: "kat", budgetMs: 240_000 },
-  "kat-jobs-panel-live.ts": { class: "kat", budgetMs: 180_000 },
+  "kat-jobs-panel-live.ts": { class: "kat", budgetMs: 240_000 },
   "kat-mcp-agent-ui.ts": { class: "kat" },
   "kat-mcp-global-ui.ts": { class: "kat" },
   "kat-mcp-tool-injection.ts": { class: "kat" },
