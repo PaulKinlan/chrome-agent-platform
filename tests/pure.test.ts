@@ -670,6 +670,38 @@ Deno.test("redactToolArgs: recurses into nested arguments envelopes and arbitrar
   assertEquals(readFileWithSecret, {
     arguments: { key: "[REDACTED]", path: "foo.txt" },
   });
+
+  // Non-protocol tool with deeply nested arguments envelope
+  const readFileDeepNested = redactToolArgs("read_file", {
+    cfg: { arguments: { key: secretKey, path: "foo.txt" } },
+  });
+  assertEquals(readFileDeepNested, {
+    cfg: { arguments: { key: "[REDACTED]", path: "foo.txt" } },
+  });
+
+  // JSON string arguments envelope
+  const readFileStringEnvelope = redactToolArgs("read_file", {
+    cfg: { arguments: JSON.stringify({ key: secretKey, path: "foo.txt" }) },
+  });
+  assertEquals(readFileStringEnvelope, {
+    cfg: { arguments: JSON.stringify({ key: "[REDACTED]", path: "foo.txt" }) },
+  });
+
+  // Cyclic object defense (never throws or overflows stack)
+  const cyclic: any = { a: 1, key: secretKey };
+  cyclic.self = cyclic;
+  const redactedCyclic = redactToolArgs("execute_tool", cyclic);
+  assertEquals(redactedCyclic.a, 1);
+  assertEquals(redactedCyclic.key, "[REDACTED]");
+  assertEquals(redactedCyclic.self, "[cycle]");
+
+  // Deep object capping
+  let deep: any = { key: secretKey };
+  for (let i = 0; i < 12; i++) {
+    deep = { nested: deep };
+  }
+  const capped = redactToolArgs("execute_tool", deep);
+  assert(JSON.stringify(capped).includes("[depth-capped]"));
 });
 
 Deno.test("sw-egress: service-worker.js progress chokepoint and run-digest wire redactToolArgs (c8ee / P1 pin)", async () => {
