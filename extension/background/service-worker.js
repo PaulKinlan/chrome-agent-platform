@@ -7570,8 +7570,9 @@ const handlers = mergeRouteMaps(
   mcpRoutes,
   {
   async "invalidate-agent"() {
-    // The options page calls this after toggling agent mode (multi-agent) so the
-    // running orchestrator is rebuilt with the new setting.
+    // The options page calls this after toggling agent mode (multi-agent) or
+    // restoring profile data so the running orchestrator and cached run states are dropped.
+    durableRuns.forgetCachedState?.();
     invalidateAgent();
     return { invalidated: true };
   },
@@ -8933,7 +8934,9 @@ const handlers = mergeRouteMaps(
     return { ok: true, targets };
   },
 
-  /** Owner export of ALL agent data (chrome-agent-platform-ykb). OWNER
+  /** Legacy buffered owner export (JSON bundle) — retained for backward
+   * compatibility with test harnesses and legacy tools. Settings UI now runs
+   * the unbounded streaming TAR export driver directly in the Options page. OWNER
    * GESTURE ONLY — this route is never registered in any model-callable tool
    * catalog: a full memory export is a high-value exfiltration target. The
    * bundle is inspectable JSON; provider API keys and MCP auth headers are
@@ -8976,25 +8979,46 @@ const handlers = mergeRouteMaps(
     if (typeof bundle !== "string" || !bundle.length) {
       return { ok: false, code: "archive-bad-shape", error: "no bundle supplied" };
     }
-    try {
-      const root = await navigator.storage.getDirectory();
-      const report = await importArchive(bundle, {
-        kvGet,
-        kvSet,
-        kvRemove,
-        opfs: createOpfsAdapter(root),
-        alarms: createChromeAlarmsAdapter(),
-        overwrite: overwrite === true,
-      });
-      // The restored profile changes provider config, agents and durable runs
-      // under this worker's feet — drop cached state the way factory reset
-      // does, so the next run reads the restored stores, not a stale cache.
-      durableRuns.forgetCachedState?.();
-      invalidateAgent();
-      return { ok: true, report };
-    } catch (err) {
-      return { ok: false, code: err?.code ?? "import_failed", error: `import failed: ${err?.message || err}` };
+
+    // Check if a streaming restore is currently active with fresh heartbeat
+    const activeCheck = await kvGet(["cap:restoreHeartbeat", "cap:restoreClaim"]).catch(() => null);
+    if (activeCheck?.["cap:restoreHeartbeat"] && (Date.now() - Number(activeCheck["cap:restoreHeartbeat"])) < 30000) {
+      return { ok: false, code: "restore_in_progress", error: "Another restore operation is currently in progress." };
     }
+
+    const executeWithLock = async (fn) => {
+      if (typeof navigator !== "undefined" && navigator.locks?.request) {
+        return await navigator.locks.request("cap:restoreLock", { mode: "exclusive", ifAvailable: true }, async (lock) => {
+          if (!lock) {
+            return { ok: false, code: "restore_in_progress", error: "Another restore operation is currently in progress." };
+          }
+          return await fn();
+        });
+      }
+      return await fn();
+    };
+
+    return await executeWithLock(async () => {
+      try {
+        const root = await navigator.storage.getDirectory();
+        const report = await importArchive(bundle, {
+          kvGet,
+          kvSet,
+          kvRemove,
+          opfs: createOpfsAdapter(root),
+          alarms: createChromeAlarmsAdapter(),
+          overwrite: overwrite === true,
+        });
+        // The restored profile changes provider config, agents and durable runs
+        // under this worker's feet — drop cached state the way factory reset
+        // does, so the next run reads the restored stores, not a stale cache.
+        durableRuns.forgetCachedState?.();
+        invalidateAgent();
+        return { ok: true, report };
+      } catch (err) {
+        return { ok: false, code: err?.code ?? "import_failed", error: `import failed: ${err?.message || err}` };
+      }
+    });
   },
 
   /** The privacy page's inputs (CAP-FB-20260830-PRIVACY-STATEMENT-01): the
@@ -10415,6 +10439,17 @@ const handlers = mergeRouteMaps(
   },
 
   async "register-task"(m) {
+    if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+      try {
+        const fenceCheck = await chrome.storage.local.get("cap:restoreFence");
+        if (fenceCheck?.["cap:restoreFence"]) {
+          throw new Error("Cannot register task: profile restore is in progress");
+        }
+      } catch (err) {
+        if (err?.message?.includes("profile restore is in progress")) throw err;
+        throw new Error(`Failed to verify restore admission fence: ${err?.message || err}`);
+      }
+    }
     const { name, when } = await registerAlarm(m.task);
     return { ok: true, name, when };
   },
@@ -12677,32 +12712,143 @@ recoverOnBoot()
     }
   })
   .catch((e) => swLog.error("wz6i schedule re-key:", e?.message ?? e));
+const RESTORE_RECOVERY_ALARM = "cap-restore-recovery-alarm";
+function scheduleRecoveryAlarm(delayMs) {
+  if (typeof chrome !== "undefined" && chrome?.alarms?.create) {
+    chrome.alarms.create(RESTORE_RECOVERY_ALARM, { when: Date.now() + delayMs });
+  }
+}
+function clearRecoveryAlarm() {
+  if (typeof chrome !== "undefined" && chrome?.alarms?.clear) {
+    chrome.alarms.clear(RESTORE_RECOVERY_ALARM).catch(() => {});
+  }
+}
+if (typeof chrome !== "undefined" && chrome?.alarms?.onAlarm) {
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm?.name === RESTORE_RECOVERY_ALARM) {
+      if (typeof checkPendingImport === "function") checkPendingImport();
+    }
+  });
+}
+
 // chrome-agent-platform-ch8x: a worker death mid-import leaves a durable
 // recovery journal — restore the original profile before anything reads it.
 // Module eval runs on EVERY worker start (onStartup does not), and the
 // recovery self-cancels once the journal is consumed. Skipped where the
 // storage surface does not exist (test harness contexts).
+let checkPendingImport = null;
 if (navigator?.storage?.getDirectory) {
-  const checkPendingImport = async () => {
+  checkPendingImport = async () => {
     try {
-      let pendingVal = null;
-      if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-        const stored = await chrome.storage.local.get("cap:importBackup");
-        pendingVal = stored?.["cap:importBackup"];
-      } else {
-        pendingVal = await kvGet("cap:importBackup");
-      }
-      if (!pendingVal) return;
-      const root = await navigator.storage.getDirectory();
-      await recoverPendingImport({
-        kvGet,
-        kvSet,
-        kvRemove,
-        opfs: createOpfsAdapter(root),
-        alarms: createChromeAlarmsAdapter(),
+      const executeWithLock = async (fn) => {
+        if (typeof navigator !== "undefined" && navigator.locks?.request) {
+          return await navigator.locks.request("cap:restoreLock", { mode: "exclusive", ifAvailable: true }, async (lock) => {
+            if (!lock) {
+              // Lock contention: another context holds restoreLock. Schedule a retry
+              // after the heartbeat window so if Options dies mid-commit, the journal
+              // is guaranteed to be recovered even if the service worker sleeps.
+              setTimeout(checkPendingImport, 15000);
+              scheduleRecoveryAlarm(35000);
+              return;
+            }
+            return await fn();
+          });
+        }
+        return await fn();
+      };
+
+      await executeWithLock(async () => {
+        let pendingVal = null;
+        let stored = null;
+        if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+          stored = await chrome.storage.local.get([
+            "cap:importBackup",
+            "cap:restoreHeartbeat",
+            "cap:restoreFence",
+            "cap:restoreClaim",
+            "cap:invalidationPending",
+          ]);
+          pendingVal = stored?.["cap:importBackup"];
+          // Do not roll back an active restore with a fresh heartbeat from Options page
+          if (stored?.["cap:restoreHeartbeat"] && (Date.now() - Number(stored["cap:restoreHeartbeat"])) < 30000) {
+            const remaining = 30000 - (Date.now() - Number(stored["cap:restoreHeartbeat"]));
+            const delay = Math.max(remaining + 2000, 5000);
+            setTimeout(checkPendingImport, delay);
+            scheduleRecoveryAlarm(delay + 5000);
+            return;
+          }
+        } else {
+          pendingVal = await kvGet("cap:importBackup");
+        }
+        if (!pendingVal) {
+          // If a prior committed restore left an invalidation-pending marker, confirmed invalidation
+          // must succeed before clearing coordination keys and releasing run admission.
+          if (stored?.["cap:invalidationPending"]) {
+            try {
+              durableRuns.forgetCachedState?.();
+              invalidateAgent?.();
+              await chrome.storage.local.remove(["cap:invalidationPending"]);
+            } catch (invErr) {
+              scheduleRecoveryAlarm(15000);
+              return;
+            }
+          }
+          // A crash before the journal was written leaves no backup journal, but
+          // may have left an admission fence and abandoned staging/rollback copies.
+          // Clean stale coordination keys and reclaim abandoned temporary directories under lock
+          // and verify removal before clearing the alarm so run admission is not permanently blocked.
+          if (stored?.["cap:restoreFence"] || stored?.["cap:restoreClaim"]) {
+            const recheck = await chrome.storage.local.get(["cap:restoreClaim", "cap:restoreHeartbeat"]);
+            if (!recheck?.["cap:restoreHeartbeat"] || (Date.now() - Number(recheck["cap:restoreHeartbeat"])) >= 30000) {
+              try {
+                // Reclaim abandoned temporary directories in OPFS (.staging-restore-* or .rollback-backup-*)
+                try {
+                  const root = await navigator.storage.getDirectory();
+                  const adapter = createOpfsAdapter(root);
+                  const files = await adapter.listFiles();
+                  for (const f of files) {
+                    if (f.startsWith(".staging-restore-") || f.startsWith(".rollback-backup-") || f.startsWith(".staging-export-")) {
+                      await adapter.removeFile(f).catch(() => {});
+                    }
+                  }
+                } catch { /* best-effort cleanup of orphan staging files */ }
+
+                await chrome.storage.local.remove(["cap:restoreFence", "cap:restoreClaim", "cap:restoreHeartbeat"]);
+                const verify = await chrome.storage.local.get("cap:restoreFence");
+                if (verify?.["cap:restoreFence"]) {
+                  throw new Error("fence verification failed");
+                }
+                clearRecoveryAlarm();
+              } catch (cleanErr) {
+                // Removal failed: reschedule recovery alarm to retry fence cleanup
+                scheduleRecoveryAlarm(10000);
+              }
+            } else {
+              scheduleRecoveryAlarm(15000);
+            }
+          } else {
+            clearRecoveryAlarm();
+          }
+          return;
+        }
+        const root = await navigator.storage.getDirectory();
+        await recoverPendingImport({
+          kvGet,
+          kvSet,
+          kvRemove,
+          opfs: createOpfsAdapter(root),
+          alarms: createChromeAlarmsAdapter(),
+          onRollback: async () => {
+            durableRuns.forgetCachedState?.();
+            invalidateAgent?.();
+            return { invalidated: true };
+          },
+        });
+        clearRecoveryAlarm();
       });
     } catch (e) {
       swLog.error("import recovery:", e?.message ?? e);
+      scheduleRecoveryAlarm(15000);
     }
   };
   checkPendingImport();
