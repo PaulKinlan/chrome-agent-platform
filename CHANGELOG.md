@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.583] — 2026-10-07
+- Add an on-device ChaCha20-Poly1305 encryption tool and stop collapsed sidebar sections from catching an extra Tab stop.
+
 ## [0.3.582] — 2026-10-06
 - View all bundled tools, libraries, and third-party license notices in a dedicated About page generated from the extension inventory.
 

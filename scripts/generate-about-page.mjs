@@ -34,6 +34,10 @@ export const UPSTREAM_MAP = Object.freeze({
     upstreamName: "Chrome Agent Platform (unix-stream-v1)",
     upstreamUrl: "https://github.com/PaulKinlan/chrome-agent-platform",
   },
+  "cap.bundled.chacha20.poly1305": {
+    upstreamName: "@awasm/noble (Paul Miller)",
+    upstreamUrl: "https://github.com/paulmillr/awasm-noble",
+  },
   "cap.bundled.compressops": {
     upstreamName: "Chrome Agent Platform",
     upstreamUrl: "https://github.com/PaulKinlan/chrome-agent-platform",
