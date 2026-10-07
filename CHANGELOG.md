@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.589] — 2026-10-07
+- Admitted Emscripten packages gain a runtime home: the offscreen document now executes admitted operations in isolated fresh-per-job workers with broker authorization and host-owned deadlines.
+
 ## [0.3.588] — 2026-10-07
 - Improve keyboard focus visibility and small-text readability across the Artifacts viewer, New Tab, side panel, and Options.
 

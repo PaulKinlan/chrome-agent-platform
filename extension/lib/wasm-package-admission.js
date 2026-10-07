@@ -168,6 +168,18 @@ export async function handleToolPackageValidate(message, context, {
       epoch: record.epoch,
       status: "validated-not-enabled",
       signatureVerified: false,
+      // ltkj.3: the bounded admitted operation descriptors (ids + scalar param
+      // bounds) so the Settings surface can render the run panel. Broker-side
+      // dispatch re-derives everything from the admitted manifest; these are
+      // display/validation hints only.
+      operations: (record.current.manifest?.entry?.operations ?? []).map((op) => ({
+        id: op.id,
+        toolId: op.toolId,
+        result: op.result,
+        params: (op.params ?? []).map((param) => ({
+          name: param.name, type: param.type, minimum: param.minimum, maximum: param.maximum,
+        })),
+      })),
     };
   } catch (err) {
     if (err instanceof WasmPackageAuthorityError) {

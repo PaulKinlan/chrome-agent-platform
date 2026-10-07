@@ -100,6 +100,15 @@ import {
 } from "../lib/wasm-stream-run-lifecycle.js";
 import { WASM_STREAM_RUN_TYPE, WASM_STREAM_WALL_MS } from "../lib/wasm-stream-host.js";
 import { CALLEXPORT_RUN_TYPE } from "../lib/wasm-callexport-host.js";
+import { EMSCRIPTEN_RUN_TYPE } from "../lib/emscripten-host.js";
+// The dispatch broker reads the registry through the small read-only core —
+// the write/validation authority module stays out of this bundle (the
+// standing static/RHC boundary pin).
+import { readCommittedPackages } from "../lib/wasm-package-registry-core.js";
+import {
+  buildEmscriptenRunEnvelope,
+  executableEmscriptenToolRecords,
+} from "../lib/emscripten-run-broker.js";
 import { WASI_JOB_RUN_TYPE } from "../lib/wasm-job-host.js";
 import { decodeCanonicalBase64 } from "../lib/wasm-base64.js";
 import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
@@ -745,6 +754,83 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
     return result;
   } finally {
     if (staged) await removeWasmStream({ ref: inputRef, owner }).catch(() => {});
+  }
+}
+
+// Admitted-Emscripten lane (chrome-agent-platform-ltkj.3): the broker
+// re-queries the registry FRESH at dispatch (a stale version/graphDigest fails
+// closed — admission state is the execution grant), builds the exact
+// cap:emscripten-run envelope from the admitted manifest, and races the
+// offscreen host with the lifecycle-derived deadline. graphDigest may be null
+// when the caller is the Settings surface — identity then comes entirely from
+// the fresh read (nothing is caller-asserted).
+async function runAdmittedEmscripten({ packageId, version, graphDigest, operationId, args, authority }) {
+  const store = await masterMemory();
+  const read = await readCommittedPackages(store);
+  if (!read.ok) return { ok: false, phase: "failed", error: `emscripten_${read.error}` };
+  const current = read.packages.get(packageId);
+  if (!current) return { ok: false, phase: "failed", error: "emscripten_registry_absent" };
+  if (!current.manifest) return { ok: false, phase: "failed", error: "emscripten_not_schema2" };
+  if (current.version !== version || (graphDigest != null && current.graphDigest !== graphDigest)) {
+    return { ok: false, phase: "failed", error: "emscripten_stale_graph" };
+  }
+  const envelope = buildEmscriptenRunEnvelope({ record: current, operationId, args, authority });
+  if (!envelope) return { ok: false, phase: "failed", error: "emscripten_operation_unknown" };
+  const host = await ensureOffscreen();
+  if (!host.ok) return host;
+  const wallMs = envelope.lifecycle.startupMs + envelope.lifecycle.callMs + 10_000;
+  try {
+    return await new Promise((resolve) => {
+      let settled = false;
+      const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+      const timer = setTimeout(
+        () => finish({ ok: false, phase: "timeout", error: "emscripten run timed out (SW)" }),
+        wallMs,
+      );
+      chrome.runtime.sendMessage(envelope, (result) => {
+        clearTimeout(timer);
+        const lastErr = chrome.runtime.lastError;
+        if (lastErr) finish({ ok: false, phase: "failed", error: lastErr.message ?? "emscripten_no_response" });
+        else finish(result ?? { ok: false, phase: "failed", error: "emscripten_empty_response" });
+      });
+    });
+  } catch (error) {
+    return failPhaseResult(error);
+  }
+}
+
+async function dispatchEmscriptenRun({ packageId, version, graphDigest, operationId, args, context }) {
+  const runId = typeof context?.runId === "string" && context.runId ? context.runId : null;
+  if (!runId) throw new Error("emscripten_run_required");
+  const authority = buildPreviewAuthority({
+    origin: typeof context?.origin === "string" && /^https?:\/\//u.test(context.origin)
+      ? new URL(context.origin).origin
+      : "https://agent.cap",
+    documentId: String(context?.documentId || runId),
+  });
+  return await runAdmittedEmscripten({ packageId, version, graphDigest, operationId, args, authority });
+}
+
+async function loadAdmittedEmscriptenPackages() {
+  try {
+    const store = await masterMemory();
+    const read = await readCommittedPackages(store);
+    if (!read.ok) return []; // busy/corrupt registry surfaces no tools (fail closed)
+    const rows = [];
+    for (const [packageId, current] of read.packages) {
+      rows.push({
+        packageId,
+        version: current.version,
+        manifestDigest: current.manifestDigest,
+        capabilityDigest: current.capabilityDigest,
+        graphDigest: current.graphDigest ?? null,
+        schema2: Boolean(current.manifest),
+        manifest: current.manifest ?? null,
+      });
+    }
+    return rows;
+  } catch {
+    return []; // registry unavailable (e.g. OPFS absent in a test realm) — no tools surface
   }
 }
 
@@ -2368,6 +2454,13 @@ async function liveChromeLazyRecords({ browserTools, managementTools, onDeviceTo
         dispatchBundledTool: dispatchBundledWasmStream,
       },
     ),
+    // Admitted schema-2 Emscripten packages (ltkj.3): the registry is the
+    // source of truth — committed records surface as tools; dispatch
+    // re-authorizes against a fresh registry read (stale graphs fail closed).
+    ...executableEmscriptenToolRecords(await loadAdmittedEmscriptenPackages(), {
+      scope,
+      dispatchEmscriptenRun,
+    }),
     ...userWasmLazyRecords(userWasmRows, {
       agentTools,
       scope,
@@ -7588,6 +7681,116 @@ const handlers = mergeRouteMaps(
         if (lastErr) finish({ ok: false, error: lastErr.message ?? "no options host response" });
         else finish(res ?? { ok: false, error: "empty validation response" });
       });
+    });
+  },
+  // Settings-only schema-2 tool package execution (chrome-agent-platform-ltkj.3).
+  // An explicit owner action from the Settings surface executes an admitted
+  // operation; the service worker is the sole authority that resolves the
+  // admitted manifest from the registry, validates the args, and brokers the
+  // run to the offscreen host.
+  async "tool.package.run"(m, context) {
+    if (context?.principal !== "owner-options") {
+      securityEvent("blocked-action", `tool package run denied for principal ${context?.principal ?? "unknown"}`);
+      return { ok: false, error: "tool package run is restricted to the Settings surface" };
+    }
+    const optionsUrl = chrome.runtime.getURL("options/options.html");
+    const senderUrl = context?.senderUrl ?? "";
+    const exactDoc = senderUrl === optionsUrl ||
+      (typeof senderUrl === "string" &&
+        senderUrl.startsWith(optionsUrl) &&
+        /^#[A-Za-z0-9-]+$/.test(senderUrl.slice(optionsUrl.length)));
+    if (typeof context?.documentId !== "string" || !context.documentId || !exactDoc || Boolean(context?.pageSender)) {
+      securityEvent("blocked-action", "tool package run sender rejected");
+      return { ok: false, error: "sender is not the exact Settings document" };
+    }
+    const messageKeys = Object.keys(m ?? {});
+    const allowed = new Set(["type", "packageId", "version", "graphDigest", "operationId", "args", "mode"]);
+    if (messageKeys.some((k) => !allowed.has(k))) {
+      return { ok: false, error: "extra_keys_rejected" };
+    }
+    const { packageId, version, graphDigest, operationId, args, mode } = m ?? {};
+    if (typeof packageId !== "string" || !/^[a-z0-9]+(\.[a-z0-9_-]+)+$/u.test(packageId)) {
+      return { ok: false, error: "package_id_invalid" };
+    }
+    if (typeof version !== "string" || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(version)) {
+      return { ok: false, error: "version_invalid" };
+    }
+    if (graphDigest !== undefined && (typeof graphDigest !== "string" || !/^[0-9a-f]{64}$/u.test(graphDigest))) {
+      return { ok: false, error: "graph_digest_invalid" };
+    }
+    if (typeof operationId !== "string" || !operationId) {
+      return { ok: false, error: "operation_id_invalid" };
+    }
+    if (mode !== undefined && mode !== "broker" && mode !== "direct") {
+      return { ok: false, error: "mode_invalid" };
+    }
+    if (!Array.isArray(args) && (typeof args !== "object" || args === null)) {
+      return { ok: false, error: "args_invalid" };
+    }
+
+    // Call Path 2: Model-facing broker dispatch via liveChromeLazyRecords (line 2460).
+    // Exercises the live registered lazy tool records constructed in the Service Worker,
+    // runs argument validation against the admitted parameter schema, authorizes, and
+    // dispatches through the broker's dispatchEmscriptenRun closure.
+    if (mode === "broker") {
+      const records = await liveChromeLazyRecords({ browserTools: {}, managementTools: {} });
+      const record = records.find(
+        (r) => r.descriptorInput?.packageId === packageId &&
+               r.descriptorInput?.sourceKind === "emscripten-package" &&
+               r.descriptorInput?.operationId === operationId,
+      );
+      if (!record) return { ok: false, phase: "failed", error: "lazy_tool_not_registered" };
+
+      let namedArgs = args;
+      if (Array.isArray(args)) {
+        namedArgs = {};
+        const paramNames = Object.keys(record.descriptorInput.inputSchema?.properties ?? {});
+        for (let i = 0; i < args.length; i++) {
+          if (paramNames[i]) namedArgs[paramNames[i]] = args[i];
+        }
+      }
+      const validated = await record.validateArguments(namedArgs);
+      if (!validated.ok) return { ok: false, phase: "failed", error: "lazy_args_invalid: " + validated.error };
+      const auth = await record.authorize(validated.data, context);
+      if (!auth.ok) return { ok: false, phase: "failed", error: "lazy_auth_denied" };
+
+      // If a specific graphDigest was requested (e.g. stale-graph testing), dispatch
+      // directly with that graphDigest; otherwise invoke the record's dispatch method.
+      if (typeof graphDigest === "string") {
+        return await dispatchEmscriptenRun({
+          packageId,
+          version,
+          graphDigest,
+          operationId,
+          args: validated.data?.args ?? [],
+          context: {
+            runId: `model-run-${crypto.randomUUID().slice(0, 8)}`,
+            agentId: "hub",
+            origin: "https://agent.cap",
+            documentId: String(context.documentId),
+          },
+        });
+      }
+      return await record.dispatch(validated.data, {
+        runId: `model-run-${crypto.randomUUID().slice(0, 8)}`,
+        agentId: "hub",
+        origin: "https://agent.cap",
+        documentId: String(context.documentId),
+      });
+    }
+
+    // Call Path 1: Settings direct run to broker dispatch.
+    return await dispatchEmscriptenRun({
+      packageId,
+      version,
+      graphDigest: typeof graphDigest === "string" ? graphDigest : null,
+      operationId,
+      args: Array.isArray(args) ? args : [],
+      context: {
+        runId: `settings-preview-${crypto.randomUUID().slice(0, 12)}`,
+        origin: "https://agent.cap",
+        documentId: String(context.documentId),
+      },
     });
   },
   // CAP-FB-20260822-TOOL-PREVIEW-EXEC-01 — the FIRST real bundled execution:

@@ -273,6 +273,13 @@ const PYTHON_WORKER_HOST_ALLOWED_RE = /new\s+WorkerCtor\s*\(/g;
 const STREAM_WORKER_HOST_CANONICAL_PATH = "extension/lib/wasm-stream-host.js";
 const STREAM_WORKER_HOST_CANONICAL_LOCATION = { line: 57, column: 26 };
 const STREAM_WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
+// The admitted-Emscripten host (chrome-agent-platform-ltkj.3) creates exactly
+// one fresh module Worker per job from the literal packaged path
+// lib/emscripten-worker.js, behind the same dependency-injected factory shape
+// as the stream host; the worker is terminated on every settlement path.
+const EMSCRIPTEN_WORKER_HOST_CANONICAL_PATH = "extension/lib/emscripten-host.js";
+const EMSCRIPTEN_WORKER_HOST_CANONICAL_LOCATION = { line: 192, column: 26 };
+const EMSCRIPTEN_WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
 // The table host likewise creates exactly one fresh module Worker from the
 // extension-root URL. Its dependency-injected WorkerCtor is pinned to this
 // one file, one node, and one constructor occurrence.
@@ -532,6 +539,13 @@ export async function scanShippedJs(files, {
             node.loc?.start?.column === STREAM_WORKER_HOST_CANONICAL_LOCATION.column &&
             value === null &&
             (text.match(STREAM_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
+          ) || (
+            isCanonicalScannedPath(file, EMSCRIPTEN_WORKER_HOST_CANONICAL_PATH) &&
+            workerSink === "Worker" &&
+            node.loc?.start?.line === EMSCRIPTEN_WORKER_HOST_CANONICAL_LOCATION.line &&
+            node.loc?.start?.column === EMSCRIPTEN_WORKER_HOST_CANONICAL_LOCATION.column &&
+            value === null &&
+            (text.match(EMSCRIPTEN_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
           ) || (
             isCanonicalScannedPath(file, TABLE_WORKER_HOST_CANONICAL_PATH) &&
             workerSink === "WorkerCtor" &&

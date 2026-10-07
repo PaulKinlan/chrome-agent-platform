@@ -2,13 +2,13 @@
 
 **Status:** Authoritative Census (chrome-agent-platform-ygvt / CAP-FB-20260908-OWNER-DISPATCH-CENSUS-01)  
 **Seams:** `extension/background/service-worker.js`, `extension/background/routes/`, `extension/lib/owner-approval.js`, `extension/lib/pure.js`  
-**Population:** 287 total registered routes, derived by evaluating the executable composition (`mergeRouteMaps`) at `origin/main@f507d58f`.
+**Population:** 288 total registered routes, derived by evaluating the executable composition (`mergeRouteMaps`) at `origin/main@f507d58f`.
 
 ---
 
 ## 1. Executive Summary & Purpose
 
-This document provides a total, honest census of all 287 message routes registered in the Chrome Agent Platform Service Worker.
+This document provides a total, honest census of all 288 message routes registered in the Chrome Agent Platform Service Worker.
 
 The population is the key set `mergeRouteMaps` in `service-worker.js` actually returns, evaluated at `origin/main@f507d58f` — not a hand-kept list. That evaluation corrected 276 → 285 (chrome-agent-platform-s7wl): the earlier count silently skipped the three maps `vaultRoutes`, `enclaveProxyRoutes` and `enclaveStatusRoutes` (9 routes, landed 2026-10-03 in `bd17634f`). The 260 this document's sibling threat model quoted and the 276 here were both wrong about the composed population; 285 is what composition produces.
 
@@ -41,7 +41,7 @@ Every message arriving at the Service Worker passes through a layered defense-in
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │ Layer 2: Central Dispatcher (dispatchRoute)                            │
-│ - look up type in handlers map (287 registered routes)                 │
+│ - look up type in handlers map (288 registered routes)                 │
 │ - scrub __* fields and userActivation from message body                │
 │ - inject trusted browser-attested sender (__sender = pageSender)       │
 └───────────────────────────────────┬────────────────────────────────────┘
@@ -73,12 +73,12 @@ Every message arriving at the Service Worker passes through a layered defense-in
 
 ---
 
-## 3. High-Level Population Summary (287 Routes)
+## 3. High-Level Population Summary (288 Routes)
 
 | Category | Count | Permitted Callers | Gating Mechanism |
 |---|---|---|---|
 | **Page-Allowed (`PAGE_ALLOWED`)** | 8 | Web pages (content scripts) | `PAGE_ALLOWED_ROUTES` allowlist in `lib/pure.js` |
-| **Settings-Only Direct (`SETTINGS_ONLY_DIRECT`)** | 50 | `owner-options` | `requireSettingsSender` or `wasmStreamOwner` |
+| **Settings-Only Direct (`SETTINGS_ONLY_DIRECT`)** | 51 | `owner-options` | `requireSettingsSender` or `wasmStreamOwner` |
 | **Owner-Approval Direct (`OWNER_APPROVAL_DIRECT`)** | 13 | `owner-options`, `extension` | `requireOwnerApproval` + `isOwnerDirectApproval` |
 | **Owner-Approval Required (`OWNER_APPROVAL_REQUIRED`)** | 17 | `model`, `extension` | `requireOwnerApproval` (always prompts or model card) |
 | **Owner Extension-Fenced (`OWNER_EXTENSION_FENCED`)** | 25 | `owner-options`, `extension` | `isOwnerPrincipal(context)` |
@@ -87,7 +87,7 @@ Every message arriving at the Service Worker passes through a layered defense-in
 | **Storage, KV & Memory Fenced** | 10 | `owner-options`, `extension` | Secret key fences, quiescence tracking, leases |
 | **Unclassified Mutations (Gaps)** | 37 | `extension` (any) | Central page filter only; no route-local gate |
 | **Read-Only / Status / Telemetry** | 91 | `owner-options`, `extension` | Read-only; no state mutation |
-| **Total** | **287** | | |
+| **Total** | **288** | | |
 
 ---
 
@@ -109,7 +109,7 @@ These are the ONLY routes accessible to content scripts. All other 279 routes re
 
 ---
 
-### 4.2 Settings-Only Direct Routes (`SETTINGS_ONLY_DIRECT` — 50 routes)
+### 4.2 Settings-Only Direct Routes (`SETTINGS_ONLY_DIRECT` — 51 routes)
 Restricted strictly to the Settings surface (`principal === "owner-options"`). General extension documents (hub, side panel), pages, and model calls are denied.
 
 | Route Name | Owning Module | Description | Policy Gate |
@@ -131,6 +131,7 @@ Restricted strictly to the Settings surface (`principal === "owner-options"`). G
 | `tool.preview.run` | `service-worker.js` | Diagnostic execution preview | `principal === "owner-options"` |
 | `tool.package.validation-list`| `service-worker.js`| Lists schema-2 packages available for validation | `principal === "owner-options"` |
 | `tool.package.validate` | `service-worker.js` | Validates a schema-2 package and records validation | `principal === "owner-options"` |
+| `tool.package.run` | `service-worker.js` | Executes an admitted schema-2 package operation | `principal === "owner-options"` |
 | `tool-catalog.shadow` | `service-worker.js` | Diagnostic shadow catalog query | `principal === "owner-options"` |
 | `management.pending-approvals`| `service-worker.js`| Lists pending approval cards | `principal === "owner-options"` |
 | `hooks.deny` | `service-worker.js` | Denies a hook subscription | `principal === "owner-options"` |

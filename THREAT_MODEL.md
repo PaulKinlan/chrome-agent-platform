@@ -23,7 +23,7 @@ section 9 and is marked as an open question — it is not asserted as a threat.
 | [`docs/RISK-REGISTER.md`](docs/RISK-REGISTER.md) | the architectural risk register (R1–R21 + the withheld decisions) |
 | [`docs/CONSTITUTION.md`](docs/CONSTITUTION.md) §1 | the security vector list every change is reviewed against |
 | [`docs/INTERNAL-SENDER-CONTRACT-AUDIT.md`](docs/INTERNAL-SENDER-CONTRACT-AUDIT.md) | the sender-classifier adjudication (bead `lw6d`) |
-| [`docs/SW-DISPATCH-AUTHORITY-CENSUS.md`](docs/SW-DISPATCH-AUTHORITY-CENSUS.md) | the 287-route dispatch census and its 37 unclassified mutations |
+| [`docs/SW-DISPATCH-AUTHORITY-CENSUS.md`](docs/SW-DISPATCH-AUTHORITY-CENSUS.md) | the 288-route dispatch census and its 37 unclassified mutations |
 | [`docs/CHROME-TEST-CONTRACT.md`](docs/CHROME-TEST-CONTRACT.md) | which gate runs a real browser, and why a subset gate cannot see a cross-cutting guard |
 | [`docs/STREAMING-CREDENTIAL-FILTER-RESERVED-MEMBERS.md`](docs/STREAMING-CREDENTIAL-FILTER-RESERVED-MEMBERS.md) | the archive credential/`__proto__` filter parity contract |
 | [`docs/PERMISSION-MATRIX.md`](docs/PERMISSION-MATRIX.md) | the permission-state mechanism classes and their headless acceptance |
@@ -43,7 +43,7 @@ Component map, with the file that owns each surface:
 
 | Component | Where | Notes |
 |---|---|---|
-| Service worker (the privileged broker) | `extension/background/service-worker.js:11923` | the ONE `chrome.runtime.onMessage` listener; 287 registered routes |
+| Service worker (the privileged broker) | `extension/background/service-worker.js:11923` | the ONE `chrome.runtime.onMessage` listener; 288 registered routes |
 | Route modules | `extension/background/routes/` | dispatched through `mergeRouteMaps` (census §2) |
 | New-tab hub / Settings / side panel | `extension/ntp/`, `extension/options/`, `extension/sidepanel/` | extension documents; principal `extension` / `owner-options` |
 | Offscreen document | `extension/offscreen/offscreen.js` | one document multiplexes five subsystems (register R12) |

@@ -54,9 +54,19 @@ export const WASM_PACKAGE_LIMITS = Object.freeze({
   }),
 });
 
-const REGISTRY_KEY = "wasmPkg";
-const WAL_KEY = "__wasmTx";
-const REPAIR_KEY = "wasmPkgRepair";
+// The registry/WAL key constants and shape validators live in
+// wasm-package-registry-core.js (ltkj.3) so the service-worker's dispatch
+// broker can share the exact read contract without importing this module
+// (the standing static/RHC boundary pin). The typed fail is injected so
+// error classes/details are unchanged.
+import {
+  REGISTRY_KEY,
+  REPAIR_KEY,
+  validateRegistry as validateRegistryShape,
+  validateWalShape,
+  WAL_KEY,
+} from "./wasm-package-registry-core.js";
+
 const HEX64_RE = /^[0-9a-f]{64}$/u;
 const COMMIT_RE = /^[0-9a-f]{40}$/u;
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
@@ -603,20 +613,11 @@ function semverCompare(a, b) {
 }
 
 function validateRegistry(raw) {
-  if (raw == null) return { schemaVersion: 1, packages: {} };
-  if (!raw || typeof raw !== "object" || Array.isArray(raw) || raw.schemaVersion !== 1 || !raw.packages || typeof raw.packages !== "object" || Array.isArray(raw.packages) || Object.keys(raw).some((key) => !new Set(["schemaVersion", "packages"]).has(key))) fail("registry_corrupt");
-
-  for (const [packageId, record] of Object.entries(raw.packages)) {
-    if (record?.packageId !== packageId || record?.lane !== "bundled" || !record.current || !Array.isArray(record.history)) fail("registry_corrupt", packageId);
-    if (!new Set(["committed", "revoked"]).has(record.current.state)) fail("registry_corrupt", packageId);
-  }
-  return structuredClone(raw);
+  return validateRegistryShape(raw, fail);
 }
 
 function validateWal(raw) {
-  if (raw == null || raw?.state === "none") return null;
-  if (!raw || typeof raw !== "object" || !new Set(["prepared", "committed", "compensated"]).has(raw.state) || !new Set(["install", "update", "revoke"]).has(raw.op) || !PACKAGE_ID_RE.test(raw.packageId ?? "") || !Number.isSafeInteger(raw.registryBeforeGen) || (raw.registryAfterGen != null && !Number.isSafeInteger(raw.registryAfterGen)) || !Object.hasOwn(raw, "prevRecord") || !raw.nextRecord) fail("wasm_wal_corrupt");
-  return raw;
+  return validateWalShape(raw, fail);
 }
 
 const storeLocks = new WeakMap();
@@ -924,6 +925,33 @@ export class WasmPackageAuthority {
     const result = await this.query({ packageId });
     if (!result.ok) return result;
     return { ok: true, epoch: `${result.record.current.version}:${result.record.current.capabilityDigest}` };
+  }
+
+  // Broker read path (chrome-agent-platform-ltkj.3): the SW enumerates
+  // COMMITTED records to surface admitted schema-2 operations as model-facing
+  // tools. Pruned to dispatch identity + the admitted manifest (schema-2 only);
+  // revoked/historical entries never appear.
+  async list() {
+    const store = await this._store();
+    return await withStoreLock(store, async () => {
+      await this._recoverLocked(store);
+      const registry = await this._readRegistry(store);
+      const packages = [];
+      for (const [packageId, record] of Object.entries(registry.packages ?? {})) {
+        const current = record?.current;
+        if (!current || current.state !== "committed") continue;
+        packages.push({
+          packageId,
+          version: current.version,
+          manifestDigest: current.manifestDigest,
+          capabilityDigest: current.capabilityDigest,
+          graphDigest: current.graphDigest ?? null,
+          schema2: Boolean(current.manifest),
+          manifest: current.manifest ? structuredClone(current.manifest) : null,
+        });
+      }
+      return { ok: true, packages };
+    });
   }
 }
 
