@@ -367,7 +367,7 @@ async function main() {
     await cdp.send("Network.enable", {}, sessionId);
     const consoleTail = [] as string[];
     cdp.on("Runtime.consoleAPICalled", (params) => {
-      const text = (params?.args ?? []).map((a) => String(a?.value ?? a?.description ?? "")).join(" ").slice(0, 300);
+      const text = (params?.args ?? []).map((a: { value?: unknown; description?: string }) => String(a?.value ?? a?.description ?? "")).join(" ").slice(0, 300);
       consoleTail.push(`${params?.type ?? "log"}: ${text}`);
       if (consoleTail.length > 60) consoleTail.shift();
     });
