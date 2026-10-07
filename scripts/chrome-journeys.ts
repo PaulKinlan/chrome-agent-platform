@@ -1715,10 +1715,18 @@ async function main() {
     // Open Directory
     await evalIn(cdp, ntpSession, `document.getElementById('open-directory')?.click(); true`);
     await sleep(900);
-    const dirLeft1440 = await evalIn(cdp, ntpSession, `(() => {
+    // Settings hides the browse host; sample its scrollport while Directory has a layout box.
+    const directoryMetrics1440 = await evalIn(cdp, ntpSession, `(() => {
       const el = document.querySelector('#directory-view .sub, #directory-view .site-group, #directory-rows');
-      return el ? Math.round(el.getBoundingClientRect().left) : null;
+      const host = document.getElementById('view-client-host');
+      const measurable = !!host && !host.hidden && host.getClientRects().length > 0;
+      return {
+        left: el ? Math.round(el.getBoundingClientRect().left) : null,
+        hostWidth: measurable ? host.clientWidth : null,
+        contentMax: measurable ? parseFloat(getComputedStyle(host).getPropertyValue('--content-max')) : null,
+      };
     })()`);
+    const dirLeft1440 = directoryMetrics1440?.left ?? null;
     const dirShot1440 = await captureShot(cdp, ntpSession);
     if (dirShot1440) await writeEvidence("hub-view-directory-1440.png", dirShot1440);
 
@@ -1731,8 +1739,6 @@ async function main() {
       return {
         left: el ? Math.round(el.getBoundingClientRect().left) : null,
         width: frame?.contentDocument?.documentElement.clientWidth ?? null,
-        hostWidth: document.getElementById('view-client-host')?.clientWidth ?? null,
-        contentMax: parseFloat(getComputedStyle(document.getElementById('view-client-host')).getPropertyValue('--content-max')),
       };
     })()`);
     const settingsLeft1440 = settingsMetrics1440?.left ?? null;
@@ -1740,9 +1746,9 @@ async function main() {
     if (setShot1440) await writeEvidence("hub-view-settings-1440.png", setShot1440);
 
     const parity1440 = viewEdgeParity({ artifacts: artifactsLeft1440, directory: dirLeft1440, settings: settingsLeft1440,
-      hostWidth: settingsMetrics1440?.hostWidth ?? null, settingsWidth: settingsMetrics1440?.width ?? null,
-      contentMax: settingsMetrics1440?.contentMax ?? null });
-    console.log("1440px browse edges and scrollports:", { artifactsLeft1440, dirLeft1440, settingsMetrics1440, parity1440, artifactsTitleCount });
+      hostWidth: directoryMetrics1440?.hostWidth ?? null, settingsWidth: settingsMetrics1440?.width ?? null,
+      contentMax: directoryMetrics1440?.contentMax ?? null });
+    console.log("1440px browse edges and scrollports:", { artifactsLeft1440, dirLeft1440, directoryMetrics1440, settingsMetrics1440, parity1440, artifactsTitleCount });
     check("in-page browse views share one content left edge at 1440", parity1440.inPageAligned);
     check("Settings iframe offset matches its scrollport at 1440", parity1440.settingsAccounted);
 
@@ -1756,18 +1762,24 @@ async function main() {
       return {
         left: el ? Math.round(el.getBoundingClientRect().left) : null,
         width: frame?.contentDocument?.documentElement.clientWidth ?? null,
-        hostWidth: document.getElementById('view-client-host')?.clientWidth ?? null,
-        contentMax: parseFloat(getComputedStyle(document.getElementById('view-client-host')).getPropertyValue('--content-max')),
       };
     })()`);
     const settingsLeft1024 = settingsMetrics1024?.left ?? null;
 
     await evalIn(cdp, ntpSession, `document.getElementById('open-directory')?.click(); true`);
     await sleep(900);
-    const dirLeft1024 = await evalIn(cdp, ntpSession, `(() => {
+    // Settings was still open at resize; sample the host only after Directory is visible again.
+    const directoryMetrics1024 = await evalIn(cdp, ntpSession, `(() => {
       const el = document.querySelector('#directory-view .sub, #directory-view .site-group, #directory-rows');
-      return el ? Math.round(el.getBoundingClientRect().left) : null;
+      const host = document.getElementById('view-client-host');
+      const measurable = !!host && !host.hidden && host.getClientRects().length > 0;
+      return {
+        left: el ? Math.round(el.getBoundingClientRect().left) : null,
+        hostWidth: measurable ? host.clientWidth : null,
+        contentMax: measurable ? parseFloat(getComputedStyle(host).getPropertyValue('--content-max')) : null,
+      };
     })()`);
+    const dirLeft1024 = directoryMetrics1024?.left ?? null;
 
     await evalIn(cdp, ntpSession, `document.getElementById('open-artifacts')?.click(); true`);
     await sleep(900);
@@ -1777,9 +1789,9 @@ async function main() {
     })()`);
 
     const parity1024 = viewEdgeParity({ artifacts: artifactsLeft1024, directory: dirLeft1024, settings: settingsLeft1024,
-      hostWidth: settingsMetrics1024?.hostWidth ?? null, settingsWidth: settingsMetrics1024?.width ?? null,
-      contentMax: settingsMetrics1024?.contentMax ?? null });
-    console.log("1024px browse edges and scrollports:", { artifactsLeft1024, dirLeft1024, settingsMetrics1024, parity1024 });
+      hostWidth: directoryMetrics1024?.hostWidth ?? null, settingsWidth: settingsMetrics1024?.width ?? null,
+      contentMax: directoryMetrics1024?.contentMax ?? null });
+    console.log("1024px browse edges and scrollports:", { artifactsLeft1024, dirLeft1024, directoryMetrics1024, settingsMetrics1024, parity1024 });
     check("in-page browse views share one content left edge at 1024", parity1024.inPageAligned);
     check("Settings iframe offset matches its scrollport at 1024", parity1024.settingsAccounted);
 

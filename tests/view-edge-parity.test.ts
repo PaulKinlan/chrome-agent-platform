@@ -9,6 +9,13 @@ Deno.test("z4gg: in-page browse aligns, Settings' nested scrollport has a measur
   assertEquals(viewEdgeParity(narrow), { inPageAligned: true, settingsAccounted: true, expectedSettingsInset: 0 });
 });
 
+Deno.test("i8ii: a hidden or absent browse host cannot establish Settings parity", () => {
+  for (const hostWidth of [0, null]) {
+    assertEquals(viewEdgeParity({ ...wide, hostWidth }),
+      { inPageAligned: false, settingsAccounted: false, expectedSettingsInset: null });
+  }
+});
+
 Deno.test("z4gg: changing Artifacts alone REDs browse parity, even if Settings stays within its known inset", () => {
   assertEquals(viewEdgeParity({ ...wide, artifacts: 36 }).inPageAligned, false);
   assertEquals(viewEdgeParity({ ...narrow, artifacts: 25 }).inPageAligned, false);
