@@ -14,12 +14,13 @@ function fakeRuntime() {
   return {
     id: "test-ext-id",
     getURL: (p) => `chrome-extension://test-ext-id/${p}`,
+    getManifest: () => ({ background: { service_worker: "dist/background/service-worker.js" } }),
     onMessage: { addListener: (fn) => listeners.push(fn) },
     _listeners: listeners,
   };
 }
 
-const SW_SENDER = { id: "test-ext-id", tab: null };
+const SW_SENDER = { id: "test-ext-id", tab: null, documentId: null, url: "chrome-extension://test-ext-id/dist/background/service-worker.js" };
 const TAB_SENDER = { id: "test-ext-id", tab: { id: 7 } };
 const FOREIGN_SENDER = { id: "other-ext", tab: null };
 

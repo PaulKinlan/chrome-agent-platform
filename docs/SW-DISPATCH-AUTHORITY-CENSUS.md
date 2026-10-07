@@ -416,6 +416,7 @@ Every non-dispatcher message listener in `extension/` MUST enforce a sender pred
 
 2. **Content Script Isolation Fences**:
    Content scripts receiving extension notifications (`content-script.js`, `webmcp-detect-relay.js`) must verify:
+   - `sender != null` (reject missing sender)
    - `sender.id === runtime.id`
    - `sender.tab == null` (prevent cross-tab / cross-frame message injection)
 

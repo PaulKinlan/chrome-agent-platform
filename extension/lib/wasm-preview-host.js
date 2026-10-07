@@ -42,7 +42,7 @@ export function registerWasmPreviewHost({ runtime = globalThis.chrome?.runtime, 
   const seams = loaders ? { ...defaultLoaders(runtime), ...loaders } : defaultLoaders(runtime);
   const listener = (message, sender, sendResponse) => {
     if (message?.type !== "wasm.preview.options") return undefined;
-    if (sender?.id !== runtime.id || sender?.tab != null || (sender?.url && !isTrustedServiceWorkerSender(sender, runtime))) {
+    if (sender?.id !== runtime.id || sender?.tab != null || !isTrustedServiceWorkerSender(sender, runtime)) {
       sendResponse({ ok: false, error: "wasm preview host denied: sender is not the service worker" });
       return undefined;
     }

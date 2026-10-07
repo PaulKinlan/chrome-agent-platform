@@ -188,6 +188,12 @@ export function handleScriptRunMessage(message, sender, sendResponse, doc = docu
     actualOptions = typeof hostId === "object" && hostId ? hostId : {};
   }
 
+  // Only handle script-host message types; ignore unrelated runtime messages
+  // immediately so the host never races or interferes with SW message dispatch.
+  if (message?.type !== "cap:script-run-announce" && message?.type !== "cap:script-run") {
+    return false;
+  }
+
   const effectiveRuntime = actualOptions.runtime ?? globalThis.chrome?.runtime;
   if (effectiveRuntime?.id) {
     if (!isTrustedServiceWorkerSender(actualSender, effectiveRuntime)) {

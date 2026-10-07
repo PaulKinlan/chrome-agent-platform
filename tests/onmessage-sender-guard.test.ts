@@ -63,6 +63,47 @@ interface ListenerSite {
   reason?: string;
 }
 
+function isAuthenticatingSender(body: any, senderName: string): boolean {
+  const KNOWN_PREDICATES = new Set([
+    "isTrustedServiceWorkerSender",
+    "isTrustedWasmStreamSender",
+    "isTrustedTableWorkerSender",
+    "authorizeToolReport",
+    "handleScriptRunMessage",
+  ]);
+  const KNOWN_PROPERTIES = new Set([
+    "id",
+    "tab",
+    "url",
+    "documentId",
+    "origin",
+    "frameId",
+  ]);
+  let validated = false;
+  walkAst(body, (sub) => {
+    // 1. Passed to a recognized sender authentication helper/predicate
+    if (sub.type === "CallExpression") {
+      const callee = sub.callee;
+      const name = callee.name || (callee.property && callee.property.name);
+      if (KNOWN_PREDICATES.has(name)) {
+        if (sub.arguments.some((arg: any) => arg.type === "Identifier" && arg.name === senderName)) {
+          validated = true;
+        }
+      }
+    }
+    // 2. Member property check (e.g. sender.id, sender.tab, sender.url, etc.)
+    if (sub.type === "MemberExpression") {
+      if (sub.object && sub.object.type === "Identifier" && sub.object.name === senderName) {
+        const prop = sub.property && (sub.property.name || sub.property.value);
+        if (KNOWN_PROPERTIES.has(prop)) {
+          validated = true;
+        }
+      }
+    }
+  });
+  return validated;
+}
+
 function analyzeOnMessageListeners(code: string, filePath: string): ListenerSite[] {
   let ast: any;
   try {
@@ -117,11 +158,7 @@ function analyzeOnMessageListeners(code: string, filePath: string): ListenerSite
           const p2 = fn.params[1];
           if (p2.type === "Identifier" && !p2.name.startsWith("_")) {
             senderParamName = p2.name;
-            walkAst(fn.body, (sub) => {
-              if (sub.type === "Identifier" && sub.name === senderParamName) {
-                checksSender = true;
-              }
-            });
+            checksSender = isAuthenticatingSender(fn.body, senderParamName);
           }
         }
 
@@ -209,6 +246,26 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   const sites4 = analyzeOnMessageListeners(probeCheckedSender, "extension/test-probe4.js");
   assertEquals(sites4.length, 1);
   assertEquals(sites4[0].checksSender, true);
+
+  const probeIneffectualVoidSender = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      void sender;
+      sendResponse({ ok: true });
+    });
+  `;
+  const sites5 = analyzeOnMessageListeners(probeIneffectualVoidSender, "extension/test-probe5.js");
+  assertEquals(sites5.length, 1);
+  assertEquals(sites5[0].checksSender, false, "void sender must not count as validation");
+
+  const probeIneffectualLogSender = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      console.log(sender);
+      sendResponse({ ok: true });
+    });
+  `;
+  const sites6 = analyzeOnMessageListeners(probeIneffectualLogSender, "extension/test-probe6.js");
+  assertEquals(sites6.length, 1);
+  assertEquals(sites6[0].checksSender, false, "console.log(sender) must not count as validation");
 });
 
 Deno.test("behavioral: isTrustedServiceWorkerSender enforces SW bundle path and rejects documents/tabs", () => {
@@ -339,6 +396,19 @@ Deno.test("behavioral: on-device text host listener refuses untrusted senders", 
 
   assertEquals(handled, false);
   assertEquals(response, { ok: false, error: "on_device_text_host_untrusted_sender" });
+});
+
+Deno.test("behavioral: script host handleScriptRunMessage ignores unrelated message types without responding", () => {
+  let responded = false;
+  const ret = handleScriptRunMessage(
+    { type: "tools.upsert", tool: {} },
+    null,
+    () => { responded = true; },
+    {} as any,
+    "offscreen",
+  );
+  assertEquals(ret, false, "must return false immediately for unrelated types");
+  assertEquals(responded, false, "must not send any response for unrelated types");
 });
 
 Deno.test("behavioral: script host handleScriptRunMessage refuses untrusted senders", async () => {
