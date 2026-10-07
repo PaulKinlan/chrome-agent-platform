@@ -237,6 +237,7 @@ files/delegates, reviews, and reports. Anything >30s of work is dispatched.
 - No provider keys in the bundle/logs/receipts.
 - The bundle contains no eval/new Function (MV3 CSP).
 - Untrusted data renders with textContent/escaping, never innerHTML.
+- **Absence measurements and file verification must not use `/usr/bin/find` (chrome-agent-platform-p4tf, GLM 2026-10-05).** On some fleet VMs `/usr/bin/find` (GNU findutils 4.11.0-modified) silently filters gitignored paths — any lane verifying file, source map, or marker absence via `find` proves nothing (vacuous counts). Use Python `os.walk`, Node/Deno `fs.readdir` (recursive), or `rg --hidden --no-ignore` for absence or inventory measurements.
 
 ## The skills
 - **beads-flow** (.agents/skills/beads-flow) — the fast loop: pick the next
@@ -633,6 +634,11 @@ damage in this canon was done:
   2/2 green under each mutant in isolation, i.e. load-induced. The same applies to a
   build failure, a type-check-only failure, an errored suite and a timeout: report
   INCONCLUSIVE. Never green, never a kill.
+- **ABSENCE VIA FIND IS VACUOUS (chrome-agent-platform-p4tf, GLM 2026-10-05).** A command like
+  `find . -name "*.map"` or `find . -name "*<marker>*"` returning 0 files is NOT proof of absence:
+  on some fleet VMs `/usr/bin/find` silently filters gitignored paths. Use
+  `python3 -c "import os; ... os.walk ..."` or `rg --hidden --no-ignore` or explicit Deno/Node
+  filesystem traversal.
 
 Evidence for every instance above lives with the bead that found it (beads are the
 only task authority — see "Task tracking") and in the mutation logs under

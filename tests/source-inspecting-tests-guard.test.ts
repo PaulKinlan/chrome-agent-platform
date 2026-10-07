@@ -12,6 +12,7 @@
 //   4. Self-checking audit: any test performing dynamic repository tree scans or AST
 //      census of tracked files without being in ALWAYS_ON fails RED.
 //   5. Falsification: an unlisted source-inspecting test fails the audit closed.
+//   6. p4tf: no test or script under tests/ or scripts/ invokes find for file absence or inspection (box hazard).
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -290,5 +291,85 @@ Deno.test("qcfc: falsification: unclassified source scanner fails the audit clos
     unclassified,
     ["tests/fake-unclassified-scanner.test.ts", "tests/fake-unlisted-walk-scanner.test.ts"],
     "Audit must catch unclassified source scanners, including a REPO-WALK scanner (kz27)",
+  );
+});
+
+const UBF = ["/usr", "bin", "find"].join("/");
+const FIND_CMD_REGEX = new RegExp(
+  `(?:\\bexec(?:Sync|File|FileSync)?\\s*\\(\\s*["'\`]|spawn(?:Sync)?\\s*\\(\\s*["'\`]|Command\\s*\\(\\s*["'\`]|\\bsh\\s+-c\\s+["'\`]|\\bbash\\s+-c\\s+["'\`])[^"'\`]*\\b(?:fi` +
+    `nd|${UBF})\\b`,
+);
+const SHELL_FIND_REGEX = new RegExp(
+  `(?:^\\s*|[;&|()]\\s*|(?:then|do|else|elif)\\s+|\\$\\(\\s*)(?:fi` + `nd|${UBF})\\s`,
+  "m",
+);
+
+export function findFindInvocations(files: { rel: string; code: string }[]): string[] {
+  const offenders: string[] = [];
+  for (const { rel, code } of files) {
+    const stripped = rel.endsWith(".sh")
+      ? code.replace(/^\s*#.*/gm, "")
+      : code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<!:)\/\/(?![/*]).*/g, "");
+
+    if (stripped.includes(UBF)) {
+      offenders.push(rel);
+      continue;
+    }
+    if (rel.endsWith(".sh")) {
+      if (SHELL_FIND_REGEX.test(stripped)) offenders.push(rel);
+    } else {
+      if (FIND_CMD_REGEX.test(stripped)) offenders.push(rel);
+    }
+  }
+  return offenders;
+}
+
+Deno.test("p4tf: no test or script under tests/ or scripts/ invokes find for file absence or inspection (box hazard)", () => {
+  // chrome-agent-platform-p4tf: /usr/bin/find on fleet machines silently filters gitignored
+  // paths, making absence checks vacuous. Test suites and scripts must not invoke find or
+  // /usr/bin/find as a file absence or inventory oracle (use python os.walk, node fs, or rg --hidden --no-ignore).
+  const dirs = ["tests", "scripts"];
+  const collected: { rel: string; code: string }[] = [];
+  for (const dir of dirs) {
+    const dirPath = join(ROOT, dir);
+    assert(existsSync(dirPath), `scanned directory ${dirPath} must exist`);
+    for (const entry of readdirSync(dirPath, { recursive: true })) {
+      const entryStr = String(entry);
+      if (!entryStr.endsWith(".ts") && !entryStr.endsWith(".js") && !entryStr.endsWith(".mjs") && !entryStr.endsWith(".sh")) continue;
+      const rel = join(dir, entryStr);
+      const fullPath = join(dirPath, entryStr);
+      collected.push({ rel, code: readFileSync(fullPath, "utf8") });
+    }
+  }
+  // A floor: if the scan silently found nothing, this guard would pass while measuring nothing
+  assert(collected.length >= 400, `scanned file floor not met: expected >= 400, got ${collected.length}`);
+  assert(collected.some((f) => f.rel.split(/[/\\]/).length > 2), "nested paths must be in scope");
+  const offenders = findFindInvocations(collected);
+  assertEquals(offenders, [], "test or script invokes find executable (box hazard: silently filters gitignored paths; use python os.walk or rg --hidden --no-ignore)");
+});
+
+Deno.test("p4tf: falsification: a script or test invoking find is flagged", () => {
+  const f = "fi" + "nd";
+  const fakeClean = [
+    { rel: "tests/clean-example.test.ts", code: "const x = [1, 2].find((n) => n === 1);" },
+    { rel: "scripts/clean-example.sh", code: "echo 'searching files with python'\npython3 -c 'import os; os.walk(...)'" },
+    { rel: "tests/clean-url.test.ts", code: "const u = 'https://example.com/find?q=1';" },
+  ];
+  assertEquals(findFindInvocations(fakeClean), [], "clean files must not be flagged");
+
+  const fakeOffenders = [
+    { rel: "tests/fake-exec.test.ts", code: `const res = execSync("${f} . -name '*.map'");` },
+    { rel: "tests/fake-spawn.test.ts", code: `spawn("${f}", [".", "-name", "*.map"]);` },
+    { rel: "tests/fake-bash.test.ts", code: `await run("bash -c '${f} /tmp -name test'");` },
+    { rel: "tests/fake-url-then-exec.test.ts", code: `const base = "https://example.com"; execSync("${f} . -name '*.map'");` },
+    { rel: "scripts/fake-shell.sh", code: `#!/usr/bin/env bash\n${f} . -name "*.js"` },
+    { rel: "scripts/fake-indented.sh", code: `#!/usr/bin/env bash\nif true; then\n  ${f} . -type f\nfi` },
+    { rel: "scripts/fake-one-line.sh", code: `if true; then ${f} . -type f; fi` },
+    { rel: "scripts/fake-direct.sh", code: `#!/usr/bin/env bash\n/usr/bin/${f} . -name "*.js"` },
+  ];
+  assertEquals(
+    findFindInvocations(fakeOffenders),
+    fakeOffenders.map((x) => x.rel),
+    "all find-invoking scripts and tests must be flagged by findFindInvocations",
   );
 });
