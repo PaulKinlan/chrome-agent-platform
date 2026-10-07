@@ -178,7 +178,13 @@ Deno.test("11rm.1: multi-file TAR with empty, binary, Unicode and long paths int
     await Deno.writeFile(tarFile, fullArchive);
 
     // 1. System tar lists archive without error
-    const tarEnv = { ...Deno.env.toObject(), LC_ALL: "en_US.UTF-8", LANG: "en_US.UTF-8" };
+    // macOS bsdtar prints Unicode names escaped unless a UTF-8 locale is set, so force one there
+    // (en_US.UTF-8 ships with every macOS). Elsewhere the environment is inherited UNCHANGED: forcing
+    // a locale a Linux host may not have installed would make GNU tar fall back to the C locale and
+    // escape the names — a regression on the primary platform.
+    const tarEnv = Deno.build.os === "darwin"
+      ? { ...Deno.env.toObject(), LC_ALL: "en_US.UTF-8", LANG: "en_US.UTF-8" }
+      : Deno.env.toObject();
     const listProc = new Deno.Command("tar", {
       args: ["-tvf", tarFile],
       env: tarEnv,

@@ -23,7 +23,7 @@
 // means stating why it is a shared-build-artifact hazard. The guard test
 // asserts every entry carries one.
 export const SERIAL_REASONS = {
-  "tests/build-smoke.test.ts": "fast smoke-level assertion in npm test proving build.mjs exits 0 and emits a valid marker (chrome-agent-platform-h65e)",
+  "tests/build-smoke.test.ts": "fast smoke-level assertion in npm test: a store build of THIS tree exited 0 (run now, or reused from the record build.mjs writes only when it exits 0 for the same commit and source authority) and the live dist.complete validates (chrome-agent-platform-h65e, jjsz)",
   "tests/build-bootstrap.test.ts": "runs node build.mjs in-place (dist/dist-versions rewrite)",
   "tests/store-doc-denial.test.ts": "runs node build.mjs in-place and reads the built extension/dist bundles (shared build artifacts)",
   "tests/build-debug-mode.test.ts": "runs node build.mjs in-place (debug+store bundles)",
@@ -187,6 +187,11 @@ export const EXEMPTIONS = {
   // build.mjs/the generator inside string pins, never spawning either); the acceptance builder it
   // executes only READS tracked evidence files and returns bytes in memory. Zero filesystem writes.
   "tests/emscripten-admission-loaded-harness.test.ts": "names build.mjs only inside harness-source TEXT pins (never spawned or loaded); the acceptance builder runs read-only over tracked evidence and returns in-memory bytes; no writes at all",
+  // chrome-agent-platform-jjsz: the build-discipline test parses build.mjs and scripts/package-archive.mjs
+  // with acorn to pin the settleAll fan-out rule and the build-once record ordering. Its ONLY I/O is one
+  // Deno.readTextFileSync per source file; it imports neither script (importing build.mjs RUNS a build),
+  // spawns nothing and writes nothing, so it cannot race a rebuild of extension/dist.
+  "tests/build-parallel-discipline.test.ts": "reads build.mjs and scripts/package-archive.mjs as TEXT (one readTextFileSync each) and parses them with acorn; never imported, spawned or run, and performs no writes at all",
 };
 
 // A test that SPAWNS or IMPORTS one of these local drivers inherits the

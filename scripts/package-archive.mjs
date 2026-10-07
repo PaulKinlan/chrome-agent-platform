@@ -30,6 +30,7 @@ import { execFile, execFileSync, spawn } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import { validateDistCompleteMarker } from "./dist-complete.mjs";
+import { settleAll } from "./lib/build-concurrency.mjs";
 
 const execFileAsync = promisify(execFile);
 const TRACKED_MODES = new Set(["100644", "100755"]);
@@ -322,7 +323,10 @@ async function copyInventoryToStage(entries, stage, epochSeconds) {
   const time = new Date(epochSeconds * 1000);
   const BATCH_SIZE = 64;
   for (let start = 0; start < entries.length; start += BATCH_SIZE) {
-    await Promise.all(
+    // settleAll, not Promise.all: these tasks WRITE into `stage`, which packageExtensionArchive's
+    // `finally` removes. Every sibling must finish before a failure reaches that cleanup, or it can
+    // race a copy still in flight (ENOTEMPTY masking the real cause).
+    await settleAll(
       entries.slice(start, start + BATCH_SIZE).map(async (entry) => {
         const destination = path.join(stage, ...entry.archivePath.split("/"));
         if (!inside(stage, destination)) {

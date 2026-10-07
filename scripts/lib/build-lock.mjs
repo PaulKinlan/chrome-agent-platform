@@ -15,7 +15,7 @@
 // Sibling bead chrome-agent-platform-nz2r is complementary and does NOT fix this: nz2r makes
 // test:changed ignore .build.lock-family residue as changed files; it does not change the liveness
 // check.
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -65,6 +65,70 @@ export function parseProcStat(text) {
   return { state: rest[0], start: rest[19] };
 }
 
+/** The environment `/bin/ps` runs under on a no-/proc platform (chrome-agent-platform-jjsz).
+ *
+ *  `lstart` is rendered with the CALLER's locale AND local time zone, and both are inherited from the
+ *  environment. Measured on macOS 15.8, ONE live process prints as
+ *    LC_ALL=C `Wed Oct  7 12:10:01 2026` | en_GB.UTF-8 `Wed  7 Oct 12:10:01 2026` |
+ *    fr_FR `Mer  7 oct ...` | de_DE `Mi  7 Okt ...`, and as 12:26 / 21:26 / 08:26 under
+ *    TZ=UTC / Asia/Tokyo / America/New_York.
+ *  An owner started from a Terminal (LANG=en_GB, local zone) and a contender started from launchd, a GUI
+ *  or CI (C locale, TZ unset) therefore recorded UNEQUAL start strings for one live process, and the
+ *  pid-reuse compare in holderIsDead read that as "a different process": the lock was stolen from a LIVE
+ *  build (two concurrent publishes, then the build GC removing the sibling's fresh version). Every writer
+ *  AND reader of a start string now goes through this one environment, so the strings are comparable.
+ *
+ *  TZ=UTC is deliberate and not merely tidy: a child spawned with an explicit env that has NO TZ renders
+ *  in the MACHINE zone. That is consistent between two readers on one machine, but not across a zone
+ *  change (a laptop that sets its zone from its location while a long build runs), which would print the
+ *  same live process at a different hour and read as pid reuse. UTC makes the string independent of both.
+ *  `/bin/ps` is an absolute path, so no PATH is needed. */
+export const PS_ENV = Object.freeze({ LC_ALL: "C", TZ: "UTC" });
+/** A wedged `ps` must not hang the lock acquire: it is bounded, then killed (SIGKILL — a wedged ps may
+ *  ignore SIGTERM). A timeout is "unreadable", which holderIsDead treats as ALIVE and polls again. */
+export const PS_TIMEOUT_MS = 5_000;
+/** `ps -o state=,lstart=` under PS_ENV prints `<state flags> <Www Mmm d hh:mm:ss yyyy>`. Anything else is
+ *  not a start time and must not be compared as one. */
+const PS_STATE_LSTART = /^(\S+)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})$/u;
+
+/**
+ * One `ps -o state=,lstart=` probe, classified (the no-/proc branch of procStatFields).
+ *
+ * ONLY exit status 1 with EMPTY stdout AND EMPTY stderr means "gone": that is exactly what
+ * `ps -p <absent pid>` produces (measured: status 1, 0 bytes, 0 bytes). Every other outcome — a spawn
+ * failure (EAGAIN/EMFILE/ENOENT), a timeout, a signal, any other status, any stderr text, an exit 0 with
+ * no output — is "unreadable" (or "unparseable"), which holderIsDead already treats as ALIVE. The first
+ * draft mapped ANY numeric non-zero status, and an empty exit-0 output, to "gone": a `ps` that merely
+ * could not read the process table (a bad keyword also exits 1) was read as proof of death and the lock
+ * of a LIVE build became stealable.
+ */
+function psStateAndStart(pid, exec, timeoutMs = PS_TIMEOUT_MS) {
+  let r;
+  try {
+    r = exec("/bin/ps", ["-o", "state=,lstart=", "-p", String(pid)], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: PS_ENV,
+      timeout: timeoutMs,
+      killSignal: "SIGKILL",
+      maxBuffer: 64 * 1024,
+    });
+  } catch (e) {
+    // A seam (or spawnSync itself) that throws failed to READ; that is never a verdict of absence.
+    return { ok: false, reason: "unreadable", code: e?.code };
+  }
+  if (r?.error) return { ok: false, reason: "unreadable", code: r.error.code }; // spawn failure, timeout, over-large output
+  if (r?.signal) return { ok: false, reason: "unreadable", code: r.signal }; // killed by a signal
+  const stdout = typeof r?.stdout === "string" ? r.stdout : null;
+  const stderr = typeof r?.stderr === "string" ? r.stderr : null;
+  if (r?.status === 1 && stdout === "" && stderr === "") return { ok: false, reason: "gone" };
+  if (r?.status !== 0 || stdout === null) return { ok: false, reason: "unreadable", code: r?.status };
+  const row = stdout.trim();
+  const m = PS_STATE_LSTART.exec(row);
+  if (!m) return { ok: false, reason: row === "" ? "unreadable" : "unparseable" };
+  return { ok: true, state: m[1][0] ?? "?", start: m[2].replace(/\s+/gu, " ") };
+}
+
 /**
  * Read a pid's state + start time from /proc (or `/bin/ps` when `/proc` is absent on macOS),
  * distinguishing "gone" from "unreadable".
@@ -73,25 +137,22 @@ export function parseProcStat(text) {
  * even when an earlier kill(pid, 0) succeeded — that race is exactly how a lock is orphaned.
  * Any other error (EACCES/EPERM) means the process EXISTS but we may not inspect it, and there the
  * conservative direction is to treat it as alive and refuse to steal.
+ *
+ * The no-/proc branch applies the same rule to `ps`'s own evidence (see psStateAndStart): only an
+ * exit-1, empty-stdout, empty-stderr `ps` is "gone"; and it runs under PS_ENV so the start string is
+ * the same whichever environment the owner and the contender were launched from.
+ *
+ * `deps` is a test seam, default = today's behaviour: `hasProc` overrides the /proc probe so the macOS
+ * branch is reachable on Linux, and `exec` stands in for `spawnSync` (same return shape). A non-default
+ * `read` always selects the /proc branch.
+ *
+ * @param {number | string} pid
+ * @param {(path: string) => string} [read]  /proc reader (default: readFileSync utf8)
+ * @param {{hasProc?: boolean, exec?: Function, timeoutMs?: number}} [deps]
  */
-export function procStatFields(pid, read = defaultProcRead) {
-  if (!HAS_PROC && read === defaultProcRead) {
-    try {
-      const out = execFileSync("/bin/ps", ["-o", "state=,lstart=", "-p", String(pid)], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
-      if (!out) return { ok: false, reason: "gone" };
-      const parts = out.split(/\s+/);
-      if (parts.length < 2) return { ok: false, reason: "unparseable" };
-      return { ok: true, state: parts[0][0] ?? "?", start: parts.slice(1).join(" ") };
-    } catch (e) {
-      if (typeof e?.status === "number" && e.status !== 0) {
-        return { ok: false, reason: "gone" };
-      }
-      return { ok: false, reason: "unreadable", code: e?.code };
-    }
-  }
+export function procStatFields(pid, read = defaultProcRead, deps = {}) {
+  const { hasProc = HAS_PROC, exec = spawnSync, timeoutMs = PS_TIMEOUT_MS } = deps;
+  if (!hasProc && read === defaultProcRead) return psStateAndStart(pid, exec, timeoutMs);
   try {
     const parsed = parseProcStat(read(`/proc/${pid}/stat`));
     if (!parsed) return { ok: false, reason: "unparseable" };
@@ -106,14 +167,27 @@ export function procStatFields(pid, read = defaultProcRead) {
 }
 
 /** This process's holder identity: pid + a fresh token + /proc start ticks + the machine boot id
- *  (the boot id fences pid+starttime reuse across reboots, not only within one boot). */
-export function buildOwnerIdentity(pid = process.pid, boot = machineBootId()) {
-  const self = procStatFields(pid);
+ *  (the boot id fences pid+starttime reuse across reboots, not only within one boot).
+ *
+ *  `start` is `null` — never a placeholder string — when the identity read failed. The first draft
+ *  recorded "0", which is TRUTHY: every later compare against the live process then mismatched and
+ *  read as pid reuse, so a build that merely failed to read its own identity could have its lock
+ *  stolen out from under it (chrome-agent-platform-jjsz). `null` makes holderIsDead skip the reuse
+ *  compare ("cannot prove reuse") and leave the holder alive.
+ *
+ *  `deps.procStat(pid)` is a test seam (default: procStatFields) returning `{ok, start, ...}`.
+ *
+ *  @param {number} [pid]
+ *  @param {string} [boot]
+ *  @param {{procStat?: (pid: number) => {ok: boolean, start?: string}}} [deps] */
+export function buildOwnerIdentity(pid = process.pid, boot = machineBootId(), deps = {}) {
+  const { procStat = procStatFields } = deps;
+  const self = procStat(pid);
   return {
     pid,
     token: randomUUID(),
     at: Date.now(),
-    start: self.ok ? self.start : "0",
+    start: self?.ok && self.start ? self.start : null,
     boot,
   };
 }
@@ -174,6 +248,12 @@ export async function holderIsDead(holder, deps = {}) {
   if (resolved.state === "Z" || resolved.state === "X") return true;
 
   // pid reuse: same pid, different process (starttime is per-process, not per-pid).
+  //
+  // The compare only runs when BOTH sides carry a start. A holder whose start could not be recorded
+  // (`start: null` — see buildOwnerIdentity) or a probe that returned none cannot PROVE reuse, so it is
+  // treated as "cannot prove reuse" and the holder stays alive: the first draft recorded the truthy string
+  // "0" on a failed read, which mismatched every later read and made a LIVE build's lock stealable
+  // (chrome-agent-platform-jjsz).
   if (holder.start && resolved.start && String(resolved.start) !== String(holder.start)) return true;
 
   return false;

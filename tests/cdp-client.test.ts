@@ -258,7 +258,7 @@ Deno.test("real child + streams: log bounded, terminal partial FLUSHED, port cap
     const child = await fakeChild();
     const c = factory(WSStub, child);
     // Pump the REAL child streams: write >400 lines to child stdout? Our fake
-    // child (deno eval) prints nothing — drive via the production log path
+    // child (a `sleep` process) prints nothing — drive via the production log path
     // instead: exercise the exposed chromiumLogLines through real pushes by
     // writing to the child… not possible without IPC. The production invariants
     // (bound, flush, port-at-ingestion) are therefore asserted on the exposed

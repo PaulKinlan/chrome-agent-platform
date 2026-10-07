@@ -4,7 +4,13 @@
 // These tests drive REAL process trees: a parent that spawns children whose
 // argv carries a unique marker, exactly like `--user-data-dir=<profile>`.
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { isolatedProcessGroup, killProcessTree, liveGroupMembers, setsidSpawnSpec } from "../scripts/lib/process-tree.ts";
+import {
+  isolatedProcessGroup,
+  killProcessTree,
+  liveGroupMembers,
+  processGroup,
+  setsidSpawnSpec,
+} from "../scripts/lib/process-tree.ts";
 import { launchChrome, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 
 const PGREP = "/usr/bin/pgrep";
@@ -32,20 +38,37 @@ function spawnTree(marker: string): Deno.ChildProcess {
 Deno.test("killProcessTree: the parent kill alone leaves children — the tree kill removes them (2ypf)", async () => {
   const marker = `2ypf-marker-${crypto.randomUUID().slice(0, 8)}`;
   const proc = spawnTree(marker);
-  // Let the children spawn.
-  await new Promise((r) => setTimeout(r, 300));
-  const before = await survivors(marker);
-  assertEquals(before.length, 3, "parent + two children all carry the marker");
+  try {
+    // Let the children spawn: a bounded poll for the precondition, not a fixed delay (bash needs far
+    // longer than 300 ms to fork them on a saturated machine).
+    for (let i = 0; i < 100 && (await survivors(marker)).length < 3; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const before = await survivors(marker);
+    assertEquals(before.length, 3, "parent + two children all carry the marker");
 
-  // THE BUG: killing only the parent leaves the children running.
-  try { proc.kill("SIGKILL"); } catch { /* gone */ }
-  try { await proc.status; } catch { /* reaped */ }
-  const afterParentKill = await survivors(marker);
-  assertEquals(afterParentKill.length, 2, "children survive a parent-only kill (the reported bug)");
+    // THE BUG: killing only the parent leaves the children running.
+    try { proc.kill("SIGKILL"); } catch { /* gone */ }
+    try { await proc.status; } catch { /* reaped */ }
+    const afterParentKill = await survivors(marker);
+    assertEquals(afterParentKill.length, 2, "children survive a parent-only kill (the reported bug)");
 
-  // THE FIX: the tree kill removes them, verified.
-  await killProcessTree(null, marker);
-  assertEquals(await survivors(marker), [], "no descendant survives the tree kill");
+    // THE FIX: the tree kill removes them, verified.
+    await killProcessTree(null, marker);
+    assertEquals(await survivors(marker), [], "no descendant survives the tree kill");
+  } finally {
+    // An assertion failure (or a mutant of killProcessTree) must never leave the three 300 s fixture
+    // children running. The marker is unique to this run, so this kill can touch nothing else; it is
+    // deliberately NOT killProcessTree, which is the subject of this test.
+    try { proc.kill("SIGKILL"); } catch { /* gone */ }
+    await new Deno.Command("/usr/bin/pkill", {
+      args: ["-9", "-f", marker],
+      stdout: "null",
+      stderr: "null",
+      clearEnv: true,
+    }).output();
+    try { await proc.status; } catch { /* reaped */ }
+  }
 });
 
 Deno.test("teardownChrome: an isolated group reaps descendants whose argv has no profile marker", async () => {
@@ -60,8 +83,9 @@ Deno.test("teardownChrome: an isolated group reaps descendants whose argv has no
   try {
     const group = await isolatedProcessGroup(proc);
     assert(group !== undefined, "fixture parent must have entered its isolated group");
-    await new Promise((r) => setTimeout(r, 150));
     const memberPids = () => liveGroupMembers(group);
+    // A bounded poll for the unmarked child, not a fixed delay (it needs longer on a saturated machine).
+    for (let i = 0; i < 100 && memberPids().length < 2; i++) await new Promise((r) => setTimeout(r, 50));
     assert(memberPids().length >= 2, "the group includes a child whose argv omits the marker");
     assertEquals((await survivors(marker)).length, 1, "only the parent has the marker");
     await teardownChrome({ proc, profile: marker, processGroup: group });
@@ -115,8 +139,10 @@ Deno.test("launchChrome lifeline: SIGKILLing the parent test process reaps the i
     "#!/bin/sh\necho 'DevTools listening on ws://127.0.0.1:31337/devtools/browser/abc' >&2\nsleep 300 & wait\n");
   Deno.chmodSync(fake, 0o755);
   const launchUrl = new URL("../scripts/lib/chrome-launch.ts", import.meta.url).href;
+  const treeUrl = new URL("../scripts/lib/process-tree.ts", import.meta.url).href;
   Deno.writeTextFileSync(childScript, `
     import { launchChrome } from ${JSON.stringify(launchUrl)};
+    import { lifelineState } from ${JSON.stringify(treeUrl)};
     const launched = await launchChrome({
       binary: ${JSON.stringify(fake)},
       profile: ${JSON.stringify(profile)},
@@ -124,7 +150,7 @@ Deno.test("launchChrome lifeline: SIGKILLing the parent test process reaps the i
       timeoutMs: 5000,
     });
     await Deno.writeTextFile(${JSON.stringify(groupFile)}, String(launched.processGroup ?? launched.proc.pid));
-    console.log("READY");
+    console.log("READY " + lifelineState(launched.proc)?.watcherPid);
     await new Promise(() => {});
   `);
   const spec = setsidSpawnSpec(Deno.execPath(), ["run", "-A", "--no-check", childScript]);
@@ -138,20 +164,35 @@ Deno.test("launchChrome lifeline: SIGKILLing the parent test process reaps the i
     const reader = parentProc.stdout.getReader();
     const dec = new TextDecoder();
     let out = "";
-    const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline && !out.includes("READY")) {
+    // 20 s, like every other subprocess-readiness wait in the lifeline tests: a cold `deno run` plus the
+    // chrome-launch import graph, in a parallel phase that is running dozens of other test files.
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline && !/READY \S+\n/.test(out)) {
       const { value, done } = await reader.read();
       if (done) break;
       out += dec.decode(value, { stream: true });
     }
     reader.releaseLock();
     assert(out.includes("READY"), `child must launch fake browser and report READY (got: ${out})`);
+    const watcherPid = Number(/READY (\d+)/.exec(out)?.[1]);
+    assert(watcherPid > 1, `the launch must have started a lifeline watcher (got: ${out})`);
     browserGroup = Number(Deno.readTextFileSync(groupFile).trim());
     assert(browserGroup > 1, `browser must have an isolated group, got ${browserGroup}`);
     for (let i = 0; i < 20 && liveGroupMembers(browserGroup).length < 2; i++) {
       await new Promise((r) => setTimeout(r, 25));
     }
     assert(liveGroupMembers(browserGroup).length >= 2, "browser + unmarked helper are alive in isolated group");
+    // The watcher's perl wrapper runs setsid a few ms after it is spawned; until then it still shares
+    // the parent's process group and the group kill below would take it along (measured: 7 of 20
+    // immediate kills orphaned the browser). The crash guarantee is defined from that point on.
+    for (let i = 0; i < 200 && processGroup(watcherPid)?.group !== watcherPid; i++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    assertEquals(
+      processGroup(watcherPid)?.group,
+      watcherPid,
+      "the lifeline watcher is in its own session before its parent's process group is killed",
+    );
 
     // Simulate a timed-out test runner killing only the parent deno process group (-parentProc.pid).
     // Because the browser is in its own setsid group (browserGroup !== parentProc.pid), only the
@@ -176,6 +217,15 @@ Deno.test("launchChrome lifeline: SIGKILLing the parent test process reaps the i
     try { Deno.kill(-parentProc.pid, "SIGKILL"); } catch { /* gone */ }
     try { parentProc.kill("SIGKILL"); } catch { /* gone */ }
     await parentProc.status.catch(() => {});
+    if (browserGroup <= 1) {
+      // An assertion that fired before browserGroup was read (no READY, no watcher) must not strand
+      // the 300 s browser: the child writes the group file BEFORE it prints READY, and it can write
+      // nothing more now that its process group is dead, so the file is final here.
+      try {
+        const late = Number(Deno.readTextFileSync(groupFile).trim());
+        if (late > 1) Deno.kill(-late, "SIGKILL");
+      } catch { /* never written, or the group is already gone */ }
+    }
     Deno.removeSync(root, { recursive: true });
   }
 });

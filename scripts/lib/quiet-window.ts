@@ -289,14 +289,20 @@ function describe(sample: LoadSample | null, spec: ResolvedSpec): string {
  * entries in 406 ms"), and refusing on that turns a timing artifact into a red in tests that assume a
  * measurable box (`2bli`, `r2ai`). The retry gets 4x the budget and is still bounded, so a box that
  * genuinely cannot be sampled still refuses — with both attempts named in the evidence.
+ *
+ * `deps` is a test seam, every default = today's behaviour (chrome-agent-platform-jjsz F6): the no-/proc
+ * (macOS) branch shells out to `/bin/ps`, so its verdicts could only be driven on macOS.
  */
-export async function readLoadSample(prev?: ProcCpuMap | null): Promise<LoadSample> {
-  const budget = procScanBudget();
-  const first = await readLoadSampleOnce(prev, budget);
+export async function readLoadSample(prev?: ProcCpuMap | null, deps: LoadSampleDeps = {}): Promise<LoadSample> {
+  const budget = deps.budget ?? procScanBudget();
+  const first = await readLoadSampleOnce(prev, budget, deps);
   if (first.measurable !== false || typeof first.error !== "string" || !first.error.includes("truncated")) return first;
   const retry = { entries: budget.entries * 4, ms: budget.ms * 4 };
-  const second = await readLoadSampleOnce(prev, retry);
+  const second = await readLoadSampleOnce(prev, retry, deps);
   if (second.measurable === false) {
+    // The suffix says the RETRY truncated too, so it is only said when it did. A retry that failed for
+    // another reason (unreadable `ps` rows, `ps` exiting non-zero) keeps its own error, unadorned (jjsz F6).
+    if (typeof second.error !== "string" || !second.error.includes("truncated")) return second;
     return {
       ...second,
       error: `${second.error} — and a retry with ${retry.entries} entries / ${retry.ms} ms truncated too, so this box could not be sampled at either budget`,
@@ -309,6 +315,51 @@ const HAS_PROC = (() => {
   try { return Deno.statSync("/proc").isDirectory; } catch { return false; }
 })();
 
+/** What readLoadSample asks of the no-/proc branch's `ps` (chrome-agent-platform-jjsz F6). */
+export interface PsInvocation {
+  args: string[];
+  env: Record<string, string>;
+  clearEnv: boolean;
+}
+
+export interface PsResult {
+  code: number;
+  stdout: string;
+}
+
+/** Test seam of readLoadSample, every field optional, every default = the real thing. */
+export interface LoadSampleDeps {
+  /** True = the `/proc` walk, false = `/bin/ps` + `Deno.loadavg()`. Default: this platform. */
+  hasProc?: boolean;
+  /** Stands in for the `/bin/ps` child process. Default: spawn it. */
+  runPs?: (invocation: PsInvocation) => Promise<PsResult>;
+  /** Stands in for `Deno.loadavg()` on the no-/proc branch. */
+  loadavg?: () => number[];
+  /** The scan budget, instead of the CAP_QUIET_MAX_PROC_SCAN(_MS) environment. */
+  budget?: { entries: number; ms: number };
+}
+
+/** The environment `ps` runs under on the no-/proc branch (chrome-agent-platform-jjsz F6).
+ *
+ *  `ps` prints `lstart` in the CALLER's locale and zone, and the row parser reads ONE fixed shape. Measured
+ *  on macOS 15.8: C `Wed Oct  7 12:26:48 2026`, de_DE `Mi  7 Okt 12:26:48 2026`, and ja_JP shifts the
+ *  fields again, so an inherited LANG/LC_ALL used to drop EVERY row of such a box (`if (!m) continue`),
+ *  which read as "no builders": a quiet verdict under a running build, the 1io9 defect class. `LC_ALL=C`
+ *  pins the shape. `TZ=UTC` pins the zone, because the lstart text is the identity token
+ *  classifyActiveBuilders compares ACROSS samples (up to CAP_QUIET_WAIT_MS apart): a laptop that changes
+ *  zone mid-wait would otherwise turn every idle builder into "a new process" and hold the gate shut.
+ *
+ *  The spawn ALSO clears the rest of the caller's environment (`clearEnv`). For the SHAPE that and `LC_ALL=C`
+ *  are each enough on today's macOS ps (a cleared environment already is the C locale), and they are kept
+ *  together on purpose: a later change that lets ps inherit a few variables must not reopen the locale
+ *  hole. `TZ=UTC` has no such twin: without it ps falls back to the machine's zone. */
+const PS_ENV: Readonly<Record<string, string>> = Object.freeze({ LC_ALL: "C", TZ: "UTC" });
+
+async function defaultRunPs({ args, env, clearEnv }: PsInvocation): Promise<PsResult> {
+  const out = await new Deno.Command("/bin/ps", { args, env, clearEnv, stdout: "piped", stderr: "null" }).output();
+  return { code: out.code, stdout: new TextDecoder().decode(out.stdout) };
+}
+
 function parsePsCpuTicks(timeStr: string): number {
   const parts = timeStr.split(":");
   let seconds = 0;
@@ -316,13 +367,18 @@ function parsePsCpuTicks(timeStr: string): number {
   return Number.isFinite(seconds) ? Math.round(seconds * 100) : 0;
 }
 
-async function readLoadSampleOnce(prev: ProcCpuMap | null | undefined, budget: { entries: number; ms: number }): Promise<LoadSample> {
+async function readLoadSampleOnce(
+  prev: ProcCpuMap | null | undefined,
+  budget: { entries: number; ms: number },
+  deps: LoadSampleDeps = {},
+): Promise<LoadSample> {
+  const hasProc = deps.hasProc ?? HAS_PROC;
   const at = Date.now();
   const cores = Math.max(1, navigator.hardwareConcurrency || 1);
   let load1 = NaN, load5 = NaN, load15 = NaN;
   try {
-    if (!HAS_PROC) {
-      [load1, load5, load15] = Deno.loadavg();
+    if (!hasProc) {
+      [load1, load5, load15] = (deps.loadavg ?? Deno.loadavg)();
     } else {
       const raw = (await Deno.readTextFile("/proc/loadavg")).trim();
       const parts = raw.split(/\s+/u);
@@ -358,15 +414,25 @@ async function readLoadSampleOnce(prev: ProcCpuMap | null | undefined, budget: {
     // (the module's contract: an unmeasurable box is a refusal, never an
     // assumed quiet one).
     let truncated = false;
-    const startedAt = Date.now();
-    if (!HAS_PROC) {
-      const out = await new Deno.Command("/bin/ps", {
+    let startedAt = Date.now();
+    // chrome-agent-platform-jjsz F6: the rows the macOS parser read and the rows it could not. A row that
+    // matches nothing is a process this walk cannot see, so it is COUNTED, never dropped (the old
+    // `if (!m) continue` made an unreadable table read as "no builders"): any such row, or no row at all,
+    // turns the sample unmeasurable below.
+    let psRowsParsed = 0;
+    let psRowsUnparsed = 0;
+    if (!hasProc) {
+      const ps = await (deps.runPs ?? defaultRunPs)({
         args: ["-axo", "pid=,time=,lstart=,comm="],
-        stdout: "piped",
-        stderr: "null",
-      }).output();
-      if (out.code !== 0) throw new Error(`ps exited ${out.code}`);
-      const lines = new TextDecoder().decode(out.stdout).split("\n");
+        env: { ...PS_ENV },
+        clearEnv: true,
+      });
+      // The scan budget bounds the PARSE of the table, not the `ps` child that prints it. `startedAt` used
+      // to be taken before this await, so a slow ps (a loaded box) spent the budget before one row was
+      // read and the sample was refused as "truncated" for a reason that is not the box's process count.
+      startedAt = Date.now();
+      if (ps.code !== 0) throw new Error(`ps exited ${ps.code}`);
+      const lines = ps.stdout.split("\n");
       for (const line of lines) {
         if (!line.trim()) continue;
         if (seen >= budget.entries || Date.now() - startedAt > budget.ms) {
@@ -374,7 +440,11 @@ async function readLoadSampleOnce(prev: ProcCpuMap | null | undefined, budget: {
           break;
         }
         const m = /^\s*(\d+)\s+(\S+)\s+([A-Za-z]{3}\s+\S+\s+\S+\s+\d+:\d+:\d+\s+\d{4})\s+(.+)$/u.exec(line);
-        if (!m) continue;
+        if (!m) {
+          psRowsUnparsed++;
+          continue;
+        }
+        psRowsParsed++;
         const pid = m[1];
         if (pid === selfPid) continue;
         seen++;
@@ -418,6 +488,20 @@ async function readLoadSampleOnce(prev: ProcCpuMap | null | undefined, budget: {
           `(budget ${budget.entries} entries / ${budget.ms} ms) — the builder count is INCOMPLETE, ` +
           `so this sample is NOT a quiet verdict; raise CAP_QUIET_MAX_PROC_SCAN(_MS) deliberately ` +
           `if this box really has that many processes (chrome-agent-platform-1io9)`,
+      };
+    }
+    // chrome-agent-platform-jjsz F6: the table was read but not all of it could be understood. A row the
+    // parser drops is a builder it cannot see, so this is NOT a quiet verdict. (The word "truncated" is
+    // deliberately absent: readLoadSample retries on it, and re-reading the same bytes cannot help.)
+    if (!hasProc && (psRowsUnparsed > 0 || psRowsParsed === 0)) {
+      const why = psRowsParsed === 0 && psRowsUnparsed === 0
+        ? "ps printed no process rows"
+        : `ps printed ${psRowsUnparsed} row(s) this parser cannot read (${psRowsParsed} parsed)`;
+      return {
+        at, load1, load5, load15, cores, loadPerCore: load1 / cores,
+        compilers, compilerNames: [...names], measurable: false,
+        error: `${why} — the builder count is INCOMPLETE, so this sample is NOT a quiet verdict ` +
+          `(expected "pid time lstart comm" rows; chrome-agent-platform-jjsz)`,
       };
     }
   } catch (e) {

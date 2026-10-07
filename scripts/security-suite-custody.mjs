@@ -1,5 +1,10 @@
 // Shared live custody helpers for the serialized real-Chromium security suite.
 // Production supervision and no-Chrome mutants call these same functions.
+//
+// Platform note (chrome-agent-platform-jjsz): process identity is read from `/proc` where it exists and
+// from `/bin/ps` on macOS. `ps` cannot report a session id, so a macOS identity carries `sid` = `pgid` and
+// the PGID/SID attestation proves less there (see parsePsIdentityLine and attestOwnedGroup). A `ps` that
+// cannot answer is "unreadable", which is never treated as "gone" (see readProcIdentity).
 
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -89,22 +94,96 @@ function parsePsIdentityLine(line) {
     state,
     ppid,
     pgid,
+    // NOT A MEASUREMENT (chrome-agent-platform-jjsz F5). macOS `ps` has no session-id keyword (`sess`
+    // prints 0 for every process and `tpgid` is the terminal's group), so the session id CANNOT be read
+    // here and is set EQUAL TO THE PGID. Consequence: attestOwnedGroup's `sid === pid` half is vacuous on
+    // this branch and only `pgid === pid` (+ uid) is proven; see attestOwnedGroup. The STAT column's `s`
+    // flag does mark a session leader and could close that gap; it is not wired, and nothing here may
+    // read this field as evidence of a session.
     sid: pgid,
     starttime,
     uid,
   };
 }
 
-export async function readProcIdentity(pid) {
-  if (!HAS_PROC) {
-    const { stdout } = await execFileAsync("/bin/ps", [
-      "-o",
-      "pid=,state=,ppid=,pgid=,uid=,lstart=",
-      "-p",
-      String(pid),
-    ]);
-    const parsed = parsePsIdentityLine(stdout.trim());
-    if (!parsed) throw new Error("process not found");
+/** `ps` ran, and the process is not there. Carries `code: "ENOENT"` so it has the same shape as the
+ *  missing `/proc/<pid>/stat` of the Linux branch (chrome-agent-platform-jjsz F2). */
+export class ProcessGoneError extends Error {
+  /** @param {number | null} pid */
+  constructor(pid) {
+    super(`process ${pid} not found`);
+    this.name = "ProcessGoneError";
+    this.code = "ENOENT";
+    this.pid = pid;
+  }
+}
+
+/** `ps` could NOT tell whether the process exists: a spawn failure, a timeout, a signal, an unexpected
+ *  status or stderr, or output that holds nothing parseable. This is never "gone", and it deliberately
+ *  does NOT carry `code: "ENOENT"`: a missing `/bin/ps` rejects with a native ENOENT of its own, and the
+ *  two must stay distinguishable (chrome-agent-platform-jjsz F2). */
+export class ProcessUnreadableError extends Error {
+  /** @param {number | null} pid @param {string} detail @param {unknown} [cause] */
+  constructor(pid, detail, cause) {
+    super(`process ${pid ?? "table"} unreadable: ${detail}`);
+    this.name = "ProcessUnreadableError";
+    this.code = "EPROCUNREADABLE";
+    this.pid = pid;
+    if (cause !== undefined) this.cause = cause;
+  }
+}
+
+/** A wedged `ps` must not hang custody: it is bounded and then killed (SIGKILL, since a wedged ps may
+ *  ignore SIGTERM). The whole-table read is larger than a single-pid read, hence the buffer.
+ *  `makePsRun(timeoutMs)` builds the runner so a test can shorten the bound and prove it. */
+export const PS_TIMEOUT_MS = 5_000;
+export const makePsRun = (timeoutMs = PS_TIMEOUT_MS) => (file, args) =>
+  execFileAsync(file, args, {
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+    maxBuffer: 8 * 1024 * 1024,
+  });
+const defaultPsRun = makePsRun();
+
+/**
+ * Read one process's identity: `/proc` where it exists, `/bin/ps` where it does not (macOS).
+ *
+ * The no-/proc branch separates "gone" from "unreadable", because custody treats gone as CLEAN and
+ * everything else as unproven (chrome-agent-platform-jjsz F2). ONLY a `ps` that exits 1 with EMPTY
+ * stdout AND EMPTY stderr, which is exactly what `ps -p <absent pid>` produces (measured on macOS 15.8),
+ * is a ProcessGoneError. Every other outcome is a ProcessUnreadableError: a spawn failure, a timeout, a
+ * signal, any other status, any stderr, an exit 0 with an empty or unparseable row.
+ *
+ * `deps` is a test seam, defaults = today's behaviour: `hasProc` selects the branch (so the macOS one
+ * runs on Linux) and `run(file, args)` stands in for the promisified execFile.
+ *
+ * @param {number} pid
+ * @param {{hasProc?: boolean, run?: (file: string, args: string[]) => Promise<{stdout: string, stderr: string}>}} [deps]
+ */
+export async function readProcIdentity(pid, deps = {}) {
+  const { hasProc = HAS_PROC, run = defaultPsRun } = deps;
+  if (!hasProc) {
+    let stdout;
+    try {
+      ({ stdout } = await run("/bin/ps", [
+        "-o",
+        "pid=,state=,ppid=,pgid=,uid=,lstart=",
+        "-p",
+        String(pid),
+      ]));
+    } catch (error) {
+      if (
+        error?.code === 1 && !error.signal && error.killed !== true &&
+        error.stdout === "" && error.stderr === ""
+      ) throw new ProcessGoneError(pid);
+      throw new ProcessUnreadableError(
+        pid,
+        `ps failed (${error?.code ?? error?.signal ?? error?.message ?? "unknown"})`,
+        error,
+      );
+    }
+    const parsed = typeof stdout === "string" ? parsePsIdentityLine(stdout.trim()) : null;
+    if (!parsed) throw new ProcessUnreadableError(pid, "ps exited 0 with no parseable row");
     return parsed;
   }
   const [raw, procInfo] = await Promise.all([
@@ -120,16 +199,37 @@ export async function sha256File(file) {
 
 /** `flock -n -E <code>` exits with this status when the lock is held by another open file
  *  description. A distinctive value (not the default 1) so a usage error, a signal or a
- *  missing binary can never be mistaken for "held". */
-export const FLOCK_HELD_EXIT = 73;
+ *  missing binary can never be mistaken for "held".
+ *
+ *  It must also sit OUTSIDE every range flock itself uses to report its OWN failures. util-linux
+ *  flock exits with sysexits codes when it cannot open the lock file (EX_NOINPUT 66, EX_OSERR 71,
+ *  EX_CANTCREAT 73 on a read-only or full filesystem) and EX_USAGE 64 on a usage error, and a
+ *  launcher reports 126 (cannot execute), 127 (not found) and 255 by convention. The first draft
+ *  chose 73, which collides with the EX_CANTCREAT case (chrome-agent-platform-jjsz). 97 is outside
+ *  sysexits 64-78, 126, 127 and 255, and is not 1 (the default conflict status, which a generic
+ *  failure also produces). tests/security-suite-lock-probe.test.ts pins this property, not the
+ *  number. */
+export const FLOCK_HELD_EXIT = 97;
 
 /**
  * No-/proc platforms (macOS) have no `fdinfo` `lock:` line, so liveness of the canonical
  * lock is proven by FAILING to take it ourselves. Only the distinctive "held" status proves
- * it; acquiring the lock (nobody holds it), a missing `flock`, a signal or any other status
- * all FAIL CLOSED (chrome-agent-platform-jjsz: the first draft returned null for ANY
+ * it, and only with an EMPTY stderr: every way flock can fail on its own (cannot open the lock
+ * file, usage, fork) prints a diagnostic, so a status that merely COLLIDES with FLOCK_HELD_EXIT
+ * can never read as held. Acquiring the lock (nobody holds it), a missing `flock`, a signal or any
+ * other status all FAIL CLOSED (chrome-agent-platform-jjsz: the first draft returned null for ANY
  * rejection, which read a missing binary as "held"). `run` is injectable so every verdict is
  * testable on every platform.
+ *
+ * WHAT THIS PROVES ON macOS, AND WHAT IT DOES NOT. Combined with the dev/ino comparison in
+ * verifyInheritedCanonicalLock (the file behind fd 9 IS the canonical lock file), a "held" verdict
+ * proves the lock file is locked by SOMEONE. It cannot prove that fd 9 ITSELF is the open file
+ * description holding the lock: macOS has no `/proc/self/fdinfo`, so nothing attributes the lock to
+ * a descriptor. A process that merely inherited a descriptor on the right file while the real holder
+ * is somebody else (another supervisor, a stray flock) passes here, and fails on Linux, whose branch
+ * reads the `lock:` line of `/proc/self/fdinfo/<fd>`. `flock` is resolved through PATH, exactly as
+ * scripts/security-suite-supervisor.sh resolves the `flock -x 9` that takes the lock in the first
+ * place, so this adds no trust boundary.
  *
  * @param {string} [lockPath]
  * @param {(file: string, args: string[]) => Promise<unknown>} [run]
@@ -143,29 +243,58 @@ export async function probeCanonicalLockHeld(
     await run("flock", ["-n", "-E", String(FLOCK_HELD_EXIT), lockPath, "true"]);
     return "canonical inherited lock has no live exclusive flock";
   } catch (e) {
-    if (e?.code === FLOCK_HELD_EXIT) return null;
+    if (e?.code === FLOCK_HELD_EXIT && e.stderr === "") return null;
     return "canonical inherited lock could not be verified (flock unavailable or failed)";
   }
 }
 
-export async function verifyInheritedCanonicalLock(fd = 9) {
-  if (!HAS_PROC) {
+/**
+ * Verify that the inherited lock descriptor is the canonical lock and that the lock is live.
+ *
+ * Two platform branches. With `/proc` the descriptor's target and its `fdinfo` `lock:` line prove the
+ * descriptor itself holds the exclusive flock. Without it (macOS) the verdict is weaker, by necessity:
+ * the descriptor's device and inode must equal the canonical lock file's (the descriptor IS that file)
+ * and `flock` must fail to take the lock (somebody holds it); see probeCanonicalLockHeld for what that
+ * does and does not prove.
+ *
+ * `deps` is a test seam, every default = today's behaviour (chrome-agent-platform-jjsz F3: the no-/proc
+ * branch cannot run on Linux, so it had no test of its verdicts): `hasProc` selects the platform
+ * branch, `fstat(fd)` and `statPath(path)` read the descriptor and the lock path, and
+ * `probe(lockPath)` is probeCanonicalLockHeld. The /proc branch does not use them.
+ *
+ * @param {number} [fd]
+ * @param {{
+ *   hasProc?: boolean,
+ *   fstat?: (fd: number) => {dev: number | bigint, ino: number | bigint},
+ *   statPath?: (path: string) => {dev: number | bigint, ino: number | bigint},
+ *   probe?: (lockPath: string) => Promise<string | null>,
+ * }} [deps]
+ * @returns {Promise<string | null>} null when verified, else the refusal reason.
+ */
+export async function verifyInheritedCanonicalLock(fd = 9, deps = {}) {
+  const {
+    hasProc = HAS_PROC,
+    fstat = fstatSync,
+    statPath = statSync,
+    probe = probeCanonicalLockHeld,
+  } = deps;
+  if (!hasProc) {
     let fdStat;
     try {
-      fdStat = fstatSync(fd);
+      fdStat = fstat(fd);
     } catch {
       return "canonical inherited lock fd is missing";
     }
     let lockStat;
     try {
-      lockStat = statSync(CANONICAL_LOCK);
+      lockStat = statPath(CANONICAL_LOCK);
     } catch {
       return "inherited lock fd has the wrong target";
     }
     if (fdStat.dev !== lockStat.dev || fdStat.ino !== lockStat.ino) {
       return "inherited lock fd has the wrong target";
     }
-    return await probeCanonicalLockHeld();
+    return await probe(CANONICAL_LOCK);
   }
   let target;
   let fdinfo;
@@ -300,6 +429,27 @@ export async function cleanupExactProfile(options) {
   return { ok: true, removed: true, profile: inspected.profile };
 }
 
+/**
+ * Attest that `pid` leads a process group (and, where the platform lets us read it, a session) that
+ * this uid owns, so a negative-PGID signal can only reach that group.
+ *
+ * WHAT IT PROVES DIFFERS BY PLATFORM (chrome-agent-platform-jjsz F5).
+ *  - Linux (`/proc`): `pid === pgid && pid === sid && uid === expectedUid`. The session id is READ from
+ *    `/proc/<pid>/stat`, so a runner that only called setpgid(0, 0) and never setsid() is refused.
+ *  - macOS (no `/proc`): `ps` has no session-id keyword, so parsePsIdentityLine sets `sid` EQUAL TO
+ *    `pgid`. The `sid === pid` clause is therefore implied by `pgid === pid` and proves nothing about a
+ *    session: only `pgid === pid` and the uid are attested. A runner that did setpgid(0, 0) without
+ *    setsid() passes here and is refused on Linux.
+ * The supervisor starts the runner with `detached: true` (libuv calls setsid) on both platforms, so
+ * real runs ARE session leaders by construction; the attestation on macOS just does not verify it. The
+ * STAT column's `s` flag marks a session leader and could close that gap; it is not wired.
+ *
+ * @param {number} pid
+ * @param {{
+ *   expectedUid?: number,
+ *   readIdentity?: (pid: number) => Promise<{pid: number, pgid: number, sid: number, uid: number}>,
+ * }} [options]
+ */
 export async function attestOwnedGroup(pid, {
   expectedUid = process.getuid(),
   readIdentity = readProcIdentity,
@@ -346,20 +496,46 @@ export async function waitUntil(predicate, timeoutMs, intervalMs = 20) {
   return !await predicate();
 }
 
-async function procIdentities() {
+/**
+ * Every process on the box as an identity row. On `/proc` platforms a row that cannot be read is a
+ * process that exited mid-sample, and an unreadable `/proc` is an empty table (unchanged).
+ *
+ * The no-/proc branch (macOS) does NOT turn a failed `ps` into an empty table (chrome-agent-platform-jjsz
+ * F2): an empty table reads as "no descendants" and "no group members", which custody treats as clean,
+ * so a `ps` that failed, timed out or printed nothing would have reported a quiet machine. It rejects with
+ * a ProcessUnreadableError instead. Rows that do not parse are skipped, not fatal: on a healthy macOS 15.8
+ * table a handful of rows legitimately fail parsePsIdentityLine (5 of 883 measured: `uid` prints as `-2`
+ * for the `nobody` account and the uid group is digits-only), and none of those can be this runner's
+ * descendant. Only a table with NO parseable row is refused.
+ *
+ * `deps` is a test seam, defaults = today's behaviour: `hasProc` selects the branch and `run(file, args)`
+ * stands in for the promisified execFile.
+ *
+ * @param {{hasProc?: boolean, run?: (file: string, args: string[]) => Promise<{stdout: string, stderr: string}>}} [deps]
+ */
+export async function procIdentities(deps = {}) {
+  const { hasProc = HAS_PROC, run = defaultPsRun } = deps;
   const rows = [];
-  if (!HAS_PROC) {
+  if (!hasProc) {
+    let stdout;
     try {
-      const { stdout } = await execFileAsync("/bin/ps", [
+      ({ stdout } = await run("/bin/ps", [
         "-axo",
         "pid=,state=,ppid=,pgid=,uid=,lstart=",
-      ]);
-      for (const line of stdout.split("\n")) {
-        const parsed = parsePsIdentityLine(line);
-        if (parsed) rows.push(parsed);
-      }
-    } catch {
-      // ignore
+      ]));
+    } catch (error) {
+      throw new ProcessUnreadableError(
+        null,
+        `ps failed (${error?.code ?? error?.signal ?? error?.message ?? "unknown"})`,
+        error,
+      );
+    }
+    for (const line of String(stdout).split("\n")) {
+      const parsed = parsePsIdentityLine(line);
+      if (parsed) rows.push(parsed);
+    }
+    if (rows.length === 0) {
+      throw new ProcessUnreadableError(null, "ps exited 0 with no parseable row");
     }
     return rows;
   }
@@ -386,8 +562,18 @@ async function procIdentities() {
   return rows;
 }
 
-export async function observeDescendants(rootPid, observed = new Map()) {
-  const rows = await procIdentities();
+/**
+ * Walk the ppid chain from `rootPid` over ONE process-table sample and record every descendant in
+ * `observed`. It rejects when the table cannot be read (no-/proc: a ProcessUnreadableError, see
+ * procIdentities) and leaves `observed` untouched, so a failed sample can never read as "no
+ * descendants". `deps` is procIdentities' test seam.
+ *
+ * @param {number} rootPid
+ * @param {Map<number, any>} [observed]
+ * @param {Parameters<typeof procIdentities>[0]} [deps]
+ */
+export async function observeDescendants(rootPid, observed = new Map(), deps = {}) {
+  const rows = await procIdentities(deps);
   const descendants = new Set([rootPid]);
   let changed = true;
   while (changed) {
@@ -406,18 +592,40 @@ export async function observeDescendants(rootPid, observed = new Map()) {
   return observed;
 }
 
-export async function liveObservedResidue(observed) {
+/**
+ * The observed descendants that are still live: same pid, starttime and uid, and not a zombie.
+ *
+ * "Gone is clean" holds only when we KNOW it is gone. On the no-/proc branch (macOS) a `ps` that failed,
+ * timed out or printed nothing for a pid says nothing about that pid, and counting it clean reported a
+ * quiet machine exactly when the process table could not be read (chrome-agent-platform-jjsz F2). There
+ * only a ProcessGoneError (`ps` ran and the pid is not there) is clean; any other error is RESIDUE, the
+ * observed row marked `unverified: true` with the reason. The `/proc` branch is unchanged: every error
+ * there still reads as gone (known, left alone: that can hide an EMFILE-style failure on Linux).
+ *
+ * `deps` is a test seam, defaults = today's behaviour: `readIdentity(pid)` and `hasProc`.
+ *
+ * @param {Map<number, any>} observed
+ * @param {{readIdentity?: (pid: number) => Promise<any>, hasProc?: boolean}} [deps]
+ */
+export async function liveObservedResidue(observed, deps = {}) {
+  const { readIdentity = readProcIdentity, hasProc = HAS_PROC } = deps;
   const residue = [];
   for (const expected of observed.values()) {
     try {
-      const current = await readProcIdentity(expected.pid);
+      const current = await readIdentity(expected.pid);
       if (
         current.starttime === expected.starttime &&
         current.uid === expected.uid &&
         current.state !== "Z"
       ) residue.push(current);
-    } catch {
+    } catch (error) {
       // Gone is clean.
+      if (hasProc || error instanceof ProcessGoneError) continue;
+      residue.push({
+        ...expected,
+        unverified: true,
+        unverifiedReason: String(error?.message ?? error).slice(0, 200),
+      });
     }
   }
   return residue;
@@ -428,6 +636,8 @@ export async function terminateAttestedGroup({
   observed,
   termWaitMs,
   killWaitMs,
+  readIdentity = readProcIdentity,
+  listIdentities = procIdentities,
 }) {
   const pgid = attestation.identity.pgid;
   const leaderStart = attestation.identity.starttime;
@@ -435,7 +645,7 @@ export async function terminateAttestedGroup({
     return { termSent: false, killSent: false, survived: false };
   }
   try {
-    const current = await readProcIdentity(attestation.identity.pid);
+    const current = await readIdentity(attestation.identity.pid);
     if (
       current.starttime !== leaderStart || current.pgid !== pgid ||
       current.sid !== attestation.identity.sid ||
@@ -445,7 +655,16 @@ export async function terminateAttestedGroup({
     // The leader may exit while owned descendants remain. In that case every
     // currently live group member must have been observed as this runner's
     // exact pid/starttime/uid descendant before any negative-PGID signal.
-    const rows = (await procIdentities()).filter((row) => row.pgid === pgid);
+    let table;
+    try {
+      table = await listIdentities();
+    } catch {
+      // chrome-agent-platform-jjsz F2: an unreadable process table (no-/proc: procIdentities now rejects)
+      // proves nothing about who is in the group, so nothing is signalled. The ORIGINAL error is what
+      // the caller sees, exactly as when the table used to come back empty.
+      throw error;
+    }
+    const rows = table.filter((row) => row.pgid === pgid);
     if (
       rows.length === 0 || rows.some((row) => {
         const prior = observed.get(row.pid);

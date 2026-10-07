@@ -11,7 +11,7 @@
 //   • tests/build-tool-bundling.test.ts (base serial window, measured ~10s; ceiling 720s under 4x load) — bundled-tool
 //     generator verify-mode drift check, --regen-tools idempotence, and provenance validation.
 //
-// Total enforced ceiling: 2120s (~35 min under max load scale; ~8 min typical).
+// Total enforced ceiling: 2120s (~35 min under max load scale; measured 31-36 s on an Apple-silicon workstation after jjsz).
 
 import { fileURLToPath } from "node:url";
 import { runSerialFiles } from "./lib/serial-phase.mjs";

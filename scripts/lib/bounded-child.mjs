@@ -65,9 +65,12 @@ function threadTable(pid) {
 /** Best-effort state of a live child, for the hang message. */
 function snapshot(pid) {
   if (!HAS_PROC) {
+    // Diagnostic only, and synchronous: bound each ps so a wedged ps cannot hang the very message
+    // that reports a hang. A timeout throws, which the catches below turn into "state unavailable".
     try {
       const stateRaw = execFileSync("/bin/ps", ["-o", "state=", "-p", String(pid)], {
         encoding: "utf8",
+        timeout: 5_000,
         stdio: ["ignore", "pipe", "ignore"],
       }).trim();
       if (!stateRaw) return `pid=${pid} (state unavailable — process already gone)`;
@@ -76,6 +79,7 @@ function snapshot(pid) {
       try {
         const mOut = execFileSync("/bin/ps", ["-M", "-p", String(pid)], {
           encoding: "utf8",
+          timeout: 5_000,
           stdio: ["ignore", "pipe", "ignore"],
         }).trim().split("\n");
         threads = String(Math.max(1, mOut.length - 1));

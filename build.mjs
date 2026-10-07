@@ -41,6 +41,7 @@ import {
   writeLastBuiltVersion,
   DEFAULT_BUILT_VERSION_PATH,
 } from "./scripts/changelog-delta.mjs";
+import { resolveGcGraceMs, settleAll } from "./scripts/lib/build-concurrency.mjs";
 
 function parseBuildTarget(args) {
   if (!Array.isArray(args) || args.length > 1) {
@@ -303,6 +304,9 @@ let currentChangelog = null;
 // completed; the version record runs AFTER every fatal finalizer (see
 // shouldRecordBuild) so a late death never records a success.
 let buildSucceeded = false;
+// The serial-build-once record for a STORE build ({ key, stdout }), captured at publish and written
+// only after the last fatal finalizer (see the block after the outer `finally`).
+let storeBuildRecord = null;
 
 try {
   // Snapshot the previous successful build version + the current package
@@ -556,7 +560,7 @@ try {
     const DIFF_CORE = path.join(STAGE, "shared/diff-core.bundle.js");
     const WORKER = path.join(STAGE, "workers/agent-worker.js");
 
-    await Promise.all([
+    await settleAll([
       mkdir(path.dirname(SW), { recursive: true }),
       mkdir(path.dirname(DIFF_CORE), { recursive: true }),
       mkdir(path.dirname(WORKER), { recursive: true }),
@@ -574,7 +578,9 @@ try {
     const swInject = [];
     if (DEBUG_BUILD) swInject.push(path.join(ROOT, "scripts/mcp-probe-entry.js"));
 
-    // chrome-agent-platform-9epn.5 + jjsz: build all 12 bundles concurrently.
+    // chrome-agent-platform-9epn.5 + jjsz: build all 12 bundles concurrently. settleAll, not
+    // Promise.all: esbuild writes into STAGE, so every bundle must finish (or fail) before a
+    // failure reaches the rollback that removes STAGE.
     const [
       swResult,
       optResult,
@@ -588,7 +594,7 @@ try {
       userWasmClientResult,
       diffCoreResult,
       workerResult,
-    ] = await Promise.all([
+    ] = await settleAll([
       build({
         ...shared,
         entryPoints: [path.join(EXT_DIR, "background/service-worker.js")],
@@ -631,7 +637,7 @@ try {
       // .build/ (gitignored) for inspection.
       const { formatContributors } = await import("./scripts/bundle-budget.mjs");
       console.log(`bundle report (service-worker, pre-minify inputs):\n${formatContributors(swResult.metafile)}`);
-      await Promise.all([
+      await settleAll([
         writeFile(path.join(ROOT, ".build", "bundle-report.json"), JSON.stringify(swResult.metafile)),
         writeFile(path.join(ROOT, ".build", "bundle-report-worker.json"), JSON.stringify(workerResult.metafile)),
         writeFile(path.join(ROOT, ".build", "bundle-report-options.json"), JSON.stringify(optResult.metafile)),
@@ -659,7 +665,7 @@ try {
     let zodProbes = 0;
     let zodDocCompiles = 0;
     const { denyZodDocCompiles } = await import("./scripts/lib/scrub-zod-doc.mjs");
-    const scrubCounts = await Promise.all(ALL_BUNDLE_PATHS.map(async (scrubPath) => {
+    const scrubCounts = await settleAll(ALL_BUNDLE_PATHS.map(async (scrubPath) => {
       let bundle = await readFile(scrubPath, "utf8");
       if (bundle.includes("key-sentinel") || bundle.includes("__CAP_TEST_SEAM")) {
         throw new Error("production bundle unexpectedly contains test-seam markers — refusing to publish");
@@ -693,7 +699,7 @@ try {
     // only reliable on unminified code, and minification never reintroduces
     // them (globals are never renamed). The developer build is untouched.
     if (!DEBUG_BUILD) {
-      await Promise.all(ALL_BUNDLE_PATHS.map(async (minifyPath) => {
+      await settleAll(ALL_BUNDLE_PATHS.map(async (minifyPath) => {
         const source = await readFile(minifyPath, "utf8");
         const minified = await transform(source, {
           minify: true,
@@ -721,7 +727,7 @@ try {
     // as a separately reviewed, manifest-hash-pinned blob lane
     // (scripts/store-target-policy.mjs), not generated JavaScript.
     const { assertNoDynamicEvaluators } = await import("./scripts/lib/dynamic-evaluator-scan.mjs");
-    await Promise.all(ALL_BUNDLE_PATHS.map(async (gatePath) => {
+    await settleAll(ALL_BUNDLE_PATHS.map(async (gatePath) => {
       assertNoDynamicEvaluators(await readFile(gatePath, "utf8"), gatePath);
     }));
 
@@ -786,20 +792,22 @@ try {
       const runtimeFiles = Object.keys(manifest.files); // 7 pinned files incl. python-worker.js
       const PY = path.join(STAGE, "wasm-tools/python");
       await mkdir(PY, { recursive: true });
-      await Promise.all(runtimeFiles.map(async (file) => {
+      // Phase 1 — verify EVERY admitted file before any is staged: a drifted byte fails the build
+      // closed with nothing copied, rather than leaving its already-verified siblings in STAGE.
+      await settleAll(runtimeFiles.map(async (file) => {
         const expected = manifest.files[file]?.sha256;
         if (!expected) throw new Error(`pyodide runtime ${file} has no admission hash in wasm-tools/python/MANIFEST.json`);
-        const srcFile = path.join(RUNTIME_SRC, file);
-        const digest = createHash("sha256").update(await readFile(srcFile)).digest("hex");
+        const digest = createHash("sha256").update(await readFile(path.join(RUNTIME_SRC, file))).digest("hex");
         if (digest !== expected) {
           throw new Error(`pyodide runtime admission mismatch: ${file} sha256 ${digest} != manifest ${expected}`);
         }
-        await copyFile(srcFile, path.join(PY, file));
       }));
+      // Phase 2 — stage them.
+      await settleAll(runtimeFiles.map((file) => copyFile(path.join(RUNTIME_SRC, file), path.join(PY, file))));
       console.log(`build: admitted Pyodide runtime staged (${runtimeFiles.length} files, sha256-verified against MANIFEST.json)`);
     }
 
-    await Promise.all(["background/service-worker.js", "options.bundle.js", "ntp.bundle.js", "sidepanel.bundle.js", "shared/diff-core.bundle.js", ...SURFACE_BUNDLES.map((s) => s.out)].map(async (rel) => {
+    await settleAll(["background/service-worker.js", "options.bundle.js", "ntp.bundle.js", "sidepanel.bundle.js", "shared/diff-core.bundle.js", ...SURFACE_BUNDLES.map((s) => s.out)].map(async (rel) => {
       const mode = await prevMode(rel);
       if (mode != null) await chmod(path.join(STAGE, rel), mode); // mode failure = publish failure (fatal)
     }));
@@ -910,11 +918,10 @@ try {
     // covers the open-then-read window on the old target). It was a fixed 2 s on
     // every build — about half of a warm `build:production` (chrome-agent-platform-
     // jjsz). The default is now 50 ms; CAP_BUILD_GC_GRACE_MS=<ms> restores any
-    // window (2000 = the previous behaviour). A missing, empty, negative or
-    // non-numeric value falls back to the default, never to "no grace".
-    const rawGrace = (process.env.CAP_BUILD_GC_GRACE_MS ?? "").trim();
-    const parsedGrace = rawGrace === "" ? NaN : Number(rawGrace);
-    const gcGraceMs = Number.isFinite(parsedGrace) && parsedGrace >= 0 ? Math.min(parsedGrace, 60_000) : 50;
+    // window (2000 = the previous behaviour, 0 = none). A missing, empty, negative or
+    // non-numeric value falls back to the default, never to "no grace" — the policy
+    // lives in scripts/lib/build-concurrency.mjs (resolveGcGraceMs) so it is tested.
+    const gcGraceMs = resolveGcGraceMs(process.env);
     if (gcGraceMs > 0) await new Promise((r) => setTimeout(r, gcGraceMs));
     try {
       for (const d of await readdir(VERSIONS, { withFileTypes: true })) {
@@ -952,18 +959,12 @@ try {
     const publishSummary = `built ${path.join("extension", "dist", "background", "service-worker.js")} + dist/options.bundle.js ATOMICALLY (serialized owner-token lock; one dist dir; removed ${occurrences} new-Function + ${zodProbes} probes + ${zodDocCompiles} pinned Doc.compile methods; seam scan clean; dist.complete marker; rollback-fatal)`;
     console.log(publishSummary);
     if (isStoreBuild) {
-      try {
-        const { durableRoot } = await import("./scripts/lib/durable-root.mjs");
-        const recDir = path.join(durableRoot(), "serial-build-once");
-        await mkdir(recDir, { recursive: true });
-        const recKey = `${writtenMarker.commit}-${writtenMarker.source.digest}`;
-        await writeFile(
-          path.join(recDir, `${recKey}.json`),
-          JSON.stringify({ code: 0, stdout: `${publishSummary}\n`, at: new Date().toISOString() }),
-        );
-      } catch {
-        /* non-fatal cache population for storeBuildOnce */
-      }
+      // Captured here (the marker and summary are known now) but WRITTEN only after the last fatal
+      // finalizer below the outer `finally`, behind shouldRecordBuild.
+      storeBuildRecord = {
+        key: `${writtenMarker.commit}-${writtenMarker.source.digest}`,
+        stdout: `${publishSummary}\n`,
+      };
     }
     // The dist is published and the marker validated — the build is a genuine
     // success from here. The changelog-delta print + version record are NOT
@@ -1007,6 +1008,27 @@ try {
       console.error(`FATAL: lock release verification failed (${e?.message ?? e}) — ${LOCK_DIR} remains`);
       process.exitCode = 1;
     }
+  }
+}
+
+// The build-once record (tests/fixtures/build-once.mjs reads it so a later serial file reuses THIS
+// build's output instead of paying for another). It says "this build exited 0", so it is written
+// HERE — after the gallery sync, the staging cleanup and the lock release — and only through the
+// same strict gate as the version record below. Written any earlier it outlives a late failure (a
+// FATAL staging cleanup, a lock that will not release, a gallery sync that throws) and lets
+// build-smoke pass on a build that exited non-zero (chrome-agent-platform-jjsz review). A failed
+// build is never recorded.
+if (storeBuildRecord !== null && shouldRecordBuild({ buildSucceeded, exitCode: process.exitCode ?? 0 })) {
+  try {
+    const { durableRoot } = await import("./scripts/lib/durable-root.mjs");
+    const recDir = path.join(durableRoot(), "serial-build-once");
+    await mkdir(recDir, { recursive: true });
+    await writeFile(
+      path.join(recDir, `${storeBuildRecord.key}.json`),
+      JSON.stringify({ code: 0, stdout: storeBuildRecord.stdout, at: new Date().toISOString() }),
+    );
+  } catch {
+    /* non-fatal cache population for storeBuildOnce */
   }
 }
 

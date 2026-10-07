@@ -17,7 +17,12 @@ const rejectWith = (props: Record<string, unknown>) => () =>
   Promise.reject(Object.assign(new Error("flock failed"), props));
 
 Deno.test("probeCanonicalLockHeld: only the distinctive held status proves the lock is live", async () => {
-  assertEquals(await probeCanonicalLockHeld("/x", rejectWith({ code: FLOCK_HELD_EXIT })), null);
+  // The held shape is the distinctive status AND a silent stderr (jjsz F4): a real held flock writes
+  // nothing, whereas every failure of flock's own prints a diagnostic.
+  assertEquals(
+    await probeCanonicalLockHeld("/x", rejectWith({ code: FLOCK_HELD_EXIT, stderr: "" })),
+    null,
+  );
 });
 
 Deno.test("probeCanonicalLockHeld: acquiring the lock means nobody holds it", async () => {
@@ -102,4 +107,133 @@ Deno.test("probeCanonicalLockHeld: the REAL flock agrees — a live holder is ve
     try { await holder.status; } catch { /* reaped */ }
     Deno.removeSync(dir, { recursive: true });
   }
+});
+
+// ---------------------------------------------------------------------------------------------
+// chrome-agent-platform-jjsz F4: the held status must not collide with flock's OWN failure statuses.
+//
+// The first macOS draft used 73. util-linux flock exits 73 (EX_CANTCREAT) when it cannot open the lock
+// file on a read-only or full filesystem, so an unusable lock path would have read as "held". The held
+// verdict now needs a status flock never uses for itself AND a silent stderr (every own failure prints a
+// diagnostic). The tests pin those PROPERTIES, then prove with the real flock that a genuinely held lock
+// still verifies and an own failure does not.
+// ---------------------------------------------------------------------------------------------
+
+Deno.test("jjsz F4: the held status sits outside every range flock or a launcher uses for its own failures", () => {
+  assert(
+    Number.isInteger(FLOCK_HELD_EXIT) && FLOCK_HELD_EXIT > 1 && FLOCK_HELD_EXIT < 256,
+    `FLOCK_HELD_EXIT must be a status in 2..255, got ${FLOCK_HELD_EXIT}`,
+  );
+  const sysexits = Array.from({ length: 15 }, (_, i) => 64 + i); // 64..78
+  for (const own of [...sysexits, 1, 126, 127, 255]) {
+    assert(
+      FLOCK_HELD_EXIT !== own,
+      `FLOCK_HELD_EXIT ${FLOCK_HELD_EXIT} collides with ${own}, a status flock or a launcher uses for its own failures`,
+    );
+  }
+});
+
+Deno.test("jjsz F4: a flock status that collides with the held status never reads as held", async () => {
+  const diagnostic = "flock: cannot open lock file /x: Read-only file system\n";
+
+  // The held status WITH a diagnostic is a failure of flock's own that reused our code.
+  assertEquals(
+    await probeCanonicalLockHeld("/x", rejectWith({ code: FLOCK_HELD_EXIT, stderr: diagnostic })),
+    UNVERIFIED,
+    "the held status with a non-empty stderr is not proof of a held lock",
+  );
+
+  // The held status whose stderr cannot be confirmed silent.
+  for (const stderr of [undefined, null, " ", "\n"]) {
+    assertEquals(
+      await probeCanonicalLockHeld("/x", rejectWith({ code: FLOCK_HELD_EXIT, stderr })),
+      UNVERIFIED,
+      `the held status with stderr ${JSON.stringify(stderr)} must not verify`,
+    );
+  }
+
+  // Every sysexits status is one of flock's own failures, silent or not.
+  for (let code = 64; code <= 78; code++) {
+    for (const stderr of ["", diagnostic]) {
+      assertEquals(
+        await probeCanonicalLockHeld("/x", rejectWith({ code, stderr })),
+        UNVERIFIED,
+        `sysexits status ${code} (stderr ${JSON.stringify(stderr)}) must not prove the lock is held`,
+      );
+    }
+  }
+});
+
+const FLOCK_AVAILABLE = (() => {
+  try {
+    return new Deno.Command("flock", { args: ["--version"], stdout: "null", stderr: "null" })
+      .outputSync().success;
+  } catch {
+    return false;
+  }
+})();
+
+Deno.test({
+  name: "jjsz F4: REAL flock — a held lock exits with the held status and a SILENT stderr, an own failure does not",
+  ignore: !FLOCK_AVAILABLE,
+  fn: async () => {
+    const dir = Deno.makeTempDirSync({ dir: durableDir("jjsz-lock-probe-scratch"), prefix: "f4-" });
+    const lock = `${dir}/canonical.lock`;
+    Deno.writeTextFileSync(lock, "");
+    // The holder takes the exclusive lock, announces it, then blocks on stdin; that pipe is its only life line.
+    const holder = new Deno.Command("flock", {
+      args: ["-x", lock, "sh", "-c", "echo held; cat >/dev/null"],
+      stdin: "piped",
+      stdout: "piped",
+      stderr: "null",
+    }).spawn();
+    const decoder = new TextDecoder();
+    const reader = holder.stdout.getReader();
+    const rawFlock = async (path: string) => {
+      const out = await new Deno.Command("flock", {
+        args: ["-n", "-E", String(FLOCK_HELD_EXIT), path, "true"],
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      return { code: out.code, stderr: decoder.decode(out.stderr) };
+    };
+    try {
+      let announced = "";
+      while (!announced.includes("held")) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        announced += decoder.decode(value);
+      }
+      assert(announced.includes("held"), "fixture: the flock holder must announce that it owns the lock");
+
+      // The raw contract the verdict rests on: held = the held status and nothing on stderr.
+      const held = await rawFlock(lock);
+      assertEquals(held.code, FLOCK_HELD_EXIT, "a held lock must exit with the held status");
+      assertEquals(held.stderr, "", "a held lock must be SILENT on stderr: the held verdict relies on it");
+      assertEquals(await probeCanonicalLockHeld(lock), null, "a genuinely held lock must verify");
+
+      // An own failure of flock's: the lock path cannot be opened. It must differ from the held shape
+      // and must never verify.
+      const unopenable = `${dir}/no-such-dir/canonical.lock`;
+      const own = await rawFlock(unopenable);
+      assert(own.code !== FLOCK_HELD_EXIT, `an unopenable path must not exit ${FLOCK_HELD_EXIT}`);
+      assert(own.stderr.length > 0, "an own failure of flock must explain itself on stderr");
+      assertEquals(
+        await probeCanonicalLockHeld(unopenable),
+        UNVERIFIED,
+        "an unopenable lock path must never read as held",
+      );
+
+      // Release: the lock is free again and the probe says so.
+      await holder.stdin.close();
+      await holder.status;
+      assertEquals(await probeCanonicalLockHeld(lock), NOT_HELD, "a released lock must not verify");
+    } finally {
+      try { holder.kill("SIGKILL"); } catch { /* already gone */ }
+      try { await holder.stdin.close(); } catch { /* already closed */ }
+      try { await reader.cancel(); } catch { /* already drained */ }
+      try { await holder.status; } catch { /* reaped */ }
+      Deno.removeSync(dir, { recursive: true });
+    }
+  },
 });

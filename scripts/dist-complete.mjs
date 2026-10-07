@@ -225,20 +225,37 @@ export function planSourceReadBatches(sizes, maxRows = SOURCE_READ_BATCH_ROWS, m
   return plan;
 }
 
-export async function computeIndexedSourceAuthority({ root }) {
+/**
+ * @param {{
+ *   root: string,
+ *   observe?: ((event: { phase: "stat" | "read", start: number, end: number, bytes?: number }) => void) | null,
+ * }} args `observe` is for tests and diagnostics: it is told about every stat batch and every read
+ *   batch ([start, end) over the index-ordered rows; read batches also carry the lstat byte total)
+ *   just before that batch runs. It receives plain numbers, never changes the digest, and exists so
+ *   the memory bound can be pinned at the CALL SITE — every batching yields the same digest, so the
+ *   result alone can never show that the bound is honoured.
+ */
+export async function computeIndexedSourceAuthority({ root, observe = null }) {
   root = path.resolve(root);
   const hash = createHash("sha256");
   let totalBytes = 0;
   const rows = indexedRows(root);
   const statted = [];
   for (let start = 0; start < rows.length; start += SOURCE_STAT_BATCH) {
+    const end = Math.min(start + SOURCE_STAT_BATCH, rows.length);
+    observe?.({ phase: "stat", start, end });
     statted.push(
       ...await Promise.all(
-        rows.slice(start, start + SOURCE_STAT_BATCH).map((row) => statIndexedRow(root, row)),
+        rows.slice(start, end).map((row) => statIndexedRow(root, row)),
       ),
     );
   }
   for (const [start, end] of planSourceReadBatches(statted.map((s) => s.size))) {
+    if (observe) {
+      let planned = 0;
+      for (let i = start; i < end; i++) planned += statted[i].size;
+      observe({ phase: "read", start, end, bytes: planned });
+    }
     const batch = await Promise.all(statted.slice(start, end).map(readIndexedRow));
     // Hash strictly in index order: the digest is order-sensitive and the byte contract is
     // unchanged from the sequential walk.

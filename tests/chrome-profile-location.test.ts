@@ -118,10 +118,21 @@ Deno.test("9t1b: a REAL browser holds its profile while the whole tree is copied
   const { browserRefusal } = await import("../scripts/lib/browser-refusal.ts");
   if (browserRefusal(resolveChromiumBinaryReport(), BROWSER_DEPENDENT_TESTS)) return;
   // The race, driven for real: launch Chrome with a profile from the helper,
-  // keep it alive, and copy the WHOLE working tree underneath it — the exact
-  // command that failed in tests/cdp-client.test.ts (`cp -a <repo>/. <dst>/.`).
+  // keep it alive, and copy the working tree underneath it — the failure that
+  // used to hit tests/cdp-client.test.ts with `cp -a <repo>/. <dst>/.`.
   // Before this bead the profile was inside the tree, so the copy died on files
   // Chrome unlinked mid-copy. It costs a few seconds of I/O; that is the point.
+  //
+  // WHAT IS COPIED, stated exactly (jjsz): `rsync -a` of the tree MINUS four bulk directories —
+  // /node_modules/, /.git/, /packages/bundled/evidence/ and dist-versions/ (the name says "whole
+  // tree" because it is a stable identifier cited by the environmental-refusal test and the contract
+  // doc; the copy is not literally the whole tree). The excludes are for speed (copying node_modules
+  // and .git dominated the suite) and do not weaken the property: the race needs the PROFILE inside
+  // the copied tree, this repo's launcher never puts a profile in any of those four directories (the
+  // profile root is outside the repo — asserted by an earlier test in this file), and the
+  // profile-signature scan below reads the REAL tree, excluded directories included, not the copy.
+  // A profile placed anywhere else in the repo is copied here, and that scan looks for profile
+  // signatures up to three directory levels below the repo root.
   const profile = chromeProfileDir("kat-live-copy");
   const scratch = Deno.makeTempDirSync({ prefix: "9t1b-copy-" });
   const lockScope = await Deno.makeTempFile({ prefix: "9t1b-scope-" });

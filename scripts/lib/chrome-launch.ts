@@ -30,7 +30,7 @@ import { requireQuietWindow, type QuietSpec } from "./quiet-window.ts";
 import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, type HeavyGateLease } from "./heavy-gate-slot.ts";
 import { resolveChromeForTesting } from "./chrome-for-testing.ts";
 import { isUsableBinary } from "./browser-refusal.ts";
-import { attachProcessLifeline, isolatedProcessGroup, killProcessTree, setsidSpawnSpec } from "./process-tree.ts";
+import { attachProcessLifeline, isolatedProcessGroup, killProcessTree, type ProcessTableDeps, setsidSpawnSpec } from "./process-tree.ts";
 import { chromeProfileDir, isInsideRepo, profileLiveness } from "./chrome-profile-dir.ts";
 
 export interface LaunchedChrome {
@@ -519,6 +519,10 @@ export async function launchChrome(opts: {
    *  Refusal THROWS HeavyGateSlotRefusedError: the harness turns it into its
    *  environmental verdict (exit 75 + the holder named), never a product red. */
   fleetSlot?: boolean | { gate?: string; kind?: string; boundMs?: number };
+  /** Test seam (chrome-agent-platform-jjsz): the process-table reader behind the isolated-group
+   *  probe. Production never sets it; tests inject a failing `ps` to prove an unreadable table
+   *  FAILS THE LAUNCH CLOSED (teardown + rethrow) rather than running an unprotected browser. */
+  processTable?: ProcessTableDeps;
 }): Promise<LaunchedChrome> {
   // chrome-agent-platform-ryrr: NEVER take the fleet turn while this process
   // already holds the canonical serialized-Chrome lock. The custody supervisor
@@ -660,7 +664,7 @@ export async function launchChrome(opts: {
   }
   let group: number | undefined;
   try {
-    group = await isolatedProcessGroup(proc);
+    group = await isolatedProcessGroup(proc, opts.processTable);
     if (group !== undefined) procGroups.set(proc, group);
     attachProcessLifeline(proc, {
       group,
