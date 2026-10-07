@@ -135,6 +135,7 @@ if (config.selfTest) {
 // Supervisor-only declarations must not reach the spawned runner in either mode.
 delete childEnv.CAP_SECURITY_TEST_ATTEST_DEADLINE_MS;
 delete childEnv.CAP_SECURITY_TEST_FORCE_ATTEST_UNSETTLED;
+delete childEnv.CAP_SECURITY_TEST_SAMPLE_FREEZE_MS;
 
 const stdio = ["ignore", runnerHandle.fd, runnerHandle.fd];
 while (stdio.length < 9) stdio.push("ignore");
@@ -210,6 +211,7 @@ async function finalizeEarlyFailure(reason) {
     result: "REFUSED",
     reason,
     attestDeadlineMs: config.attestDeadlineMs,
+    sampleFreezeMs: config.sampleFreezeMs,
     pid: child.pid,
     cleaned: cleanup.ok && cleanup.removed,
     selfTest: config.selfTest,
@@ -256,14 +258,13 @@ await writeFile(
 
 const observed = new Map();
 let sampling = false;
-// chrome-agent-platform-d5st: the determinism knob. A supervisor that gets no
-// CPU during a short runner's lifetime samples nothing in that window — under
-// full-suite load that was the nightly false pass. The knob forces that exact
-// window so the handshake below can be falsified deterministically instead of
-// waiting for the scheduler to cooperate. Test-only: CAP_SECURITY_TEST_* envs
-// never reach a production runner's environment.
-const sampleFreezeMs =
-  Number(process.env.CAP_SECURITY_TEST_SAMPLE_FREEZE_MS ?? 0) || 0;
+// chrome-agent-platform-d5st / chrome-agent-platform-a6x5: the determinism knob.
+// A supervisor that gets no CPU during a short runner's lifetime samples nothing in
+// that window — under full-suite load that was the nightly false pass. The knob forces
+// that exact window so the handshake below can be falsified deterministically instead
+// of waiting for the scheduler to cooperate. Resolved through resolveSupervisorConfig;
+// refused in production mode.
+const sampleFreezeMs = config.sampleFreezeMs ?? 0;
 if (sampleFreezeMs > 0) {
   await new Promise((resolve) => setTimeout(resolve, sampleFreezeMs));
 }
@@ -400,6 +401,7 @@ const receipt = {
   selfTest: config.selfTest,
   scenario: config.scenario,
   attestDeadlineMs: config.attestDeadlineMs,
+  sampleFreezeMs: config.sampleFreezeMs,
   pid: child.pid,
   pgid: attestation.identity.pgid,
   sid: attestation.identity.sid,
