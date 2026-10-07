@@ -536,14 +536,14 @@ Deno.test("i0rf N1: URL instrument lexing distinguishes inert text from live tem
 Deno.test("57uw: an unlexable source reports its URL lexer failure while retaining edges for selection", () => {
   const source = 'const sample = `new URL("../scripts/lib/harness-registry.ts", import.meta.url)`;\n¤';
   const failures: string[] = [];
-  assertEquals(codeUrlInstrumentSpecs(source, (error) => failures.push(String(error))), ["../scripts/lib/harness-registry.ts"],
+  assertEquals(codeUrlInstrumentSpecs(source, (error: unknown) => failures.push(String(error))), ["../scripts/lib/harness-registry.ts"],
     "selection must conservatively retain a quoted edge when the lexer cannot classify it");
   assertEquals(failures.length, 1, "the lexer failure must be surfaced to the audit rather than silently crediting the edge");
 });
 
 Deno.test("57uw: the full source graph names every URL lexer failure for an audit decision", () => {
   const failures: string[] = [];
-  buildReverseGraph((abs) => failures.push(relative(ROOT, abs).replaceAll("\\", "/")));
+  buildReverseGraph((abs: string) => failures.push(relative(ROOT, abs).replaceAll("\\", "/")));
   assertEquals(failures.sort(), ["scripts/perf-gallery-previews.ts"],
     `URL lexer failures must be named and audited; observed: ${JSON.stringify(failures)}`);
   assertEquals(codeUrlInstrumentSpecs(readFileSync(join(ROOT, failures[0]), "utf8")), [".."],
