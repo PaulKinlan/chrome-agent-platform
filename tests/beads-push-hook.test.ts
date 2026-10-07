@@ -16,10 +16,10 @@
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(new URL(import.meta.url))), "..");
 const HELPER = path.join(REPO_ROOT, "scripts", "git-hooks", "beads-push.sh");
@@ -37,7 +37,7 @@ exit 0
 `;
 
 async function scratch() {
-  const dir = await mkdtemp(path.join(tmpdir(), "cap-f151-"));
+  const dir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-f151-" });
   const bin = path.join(dir, "bin");
   await mkdir(bin);
   await writeFile(path.join(bin, "bd"), FAKE_BD);
