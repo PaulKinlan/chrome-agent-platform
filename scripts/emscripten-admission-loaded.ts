@@ -291,6 +291,10 @@ async function waitForLibrary(cdp: Cdp, sessionId: string, predicate: string, ti
       const el = document.querySelector("#tool-library-view");
       const root = el && (el.shadowRoot || el);
       out.sectionHtml = root?.querySelector(".validation-packages")?.outerHTML?.slice(0, 800) ?? "no section";
+      out.libraryState = JSON.stringify({
+        validationPackages: el?.validationPackages ?? null,
+        validationListDiag: el?.validationListDiag ?? null,
+      });
     } catch (e) { out.sectionHtml = "err: " + (e?.message ?? e); }
     return JSON.stringify(out);
   })()`).catch((e) => `diag-eval-failed: ${e?.message ?? e}`);
