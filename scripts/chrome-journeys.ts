@@ -58,6 +58,7 @@ import { HeavyGateSlotRefusedError, heavyGateRefusalPayload } from "./lib/heavy-
 import { HeavyGateSlotSetupError, heavyGateSetupFailurePayload } from "./lib/heavy-gate-slot.ts";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, searchResultNames, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 import { composerInput, composerSend, composerPopup } from "./lib/composer-target.ts";
+import { viewEdgeParity } from "./lib/view-edge-parity.ts";
 import { clickVisibleCreateAgent } from "./lib/create-agent-click.ts";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -668,8 +669,10 @@ const EXPECTED = [
   "hub: retained the shield-badge screenshot",
   "hub: idle header has no status text, no dot, at most one icon button",
   "hub: no footer button is filled when idle; the open view's button has aria-current=page",
-  "embedded views share one content left edge at 1440",
-  "embedded views share one content left edge at 1024",
+  "in-page browse views share one content left edge at 1440",
+  "Settings iframe offset matches its scrollport at 1440",
+  "in-page browse views share one content left edge at 1024",
+  "Settings iframe offset matches its scrollport at 1024",
   "embedded Artifacts view shows its name exactly once",
   "hub: #agent=named:writer reload shows Writer",
   "after enabling one recipe the four agent surfaces agree (1)",
@@ -1678,7 +1681,8 @@ async function main() {
         ["directory", "artifacts", "settings"].every((k) => footerBack?.[k]?.current === null) && noneFilled(footerBack),
     );
 
-    // ── CAP-FB-20260830-ONE-SHELL-01: one content width and gutter across views ──
+    // ── CAP-FB-20260830-ONE-SHELL-01 / z4gg: in-page browse parity;
+    // Settings remains a scrollable iframe with its own narrower scrollport. ──
     // 1440px viewport measurement
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false }, ntpSession);
     await sleep(300);
@@ -1687,13 +1691,10 @@ async function main() {
     await evalIn(cdp, ntpSession, `document.getElementById('open-artifacts')?.click(); true`);
     await sleep(900);
     const artifactsLeft1440 = await evalIn(cdp, ntpSession, `(() => {
-      const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
-      const el = document.querySelector('#artifacts-view .sub, #artifacts-view .grid, #artifacts-view .empty') ||
-        frame?.contentDocument?.querySelector('.sub, .grid, .empty');
+      const el = document.querySelector('#artifacts-view .sub, #artifacts-view .grid, #artifacts-view .empty');
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
     const artifactsTitleCount = await evalIn(cdp, ntpSession, `(() => {
-      const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
       const isRendered = (el) => {
         if (!el) return false;
         if (typeof el.checkVisibility === 'function') {
@@ -1703,10 +1704,10 @@ async function main() {
       };
       const parentTitle = document.getElementById('view-title');
       const isParentVisible = isRendered(parentTitle) && /artifacts/i.test(parentTitle.textContent || '');
-      const doc = frame?.contentDocument || document.getElementById('artifacts-view');
-      const iframeHeadings = doc ? Array.from(doc.querySelectorAll('h1, .logo, [role="heading"]'))
+      const view = document.getElementById('artifacts-view');
+      const viewHeadings = view ? Array.from(view.querySelectorAll('h1, .logo, [role="heading"]'))
         .filter(e => /artifacts/i.test(e.textContent || '') && isRendered(e)) : [];
-      return (isParentVisible ? 1 : 0) + iframeHeadings.length;
+      return (isParentVisible ? 1 : 0) + viewHeadings.length;
     })()`);
     const artShot1440 = await captureShot(cdp, ntpSession);
     if (artShot1440) await writeEvidence("hub-view-artifacts-1440.png", artShot1440);
@@ -1715,9 +1716,7 @@ async function main() {
     await evalIn(cdp, ntpSession, `document.getElementById('open-directory')?.click(); true`);
     await sleep(900);
     const dirLeft1440 = await evalIn(cdp, ntpSession, `(() => {
-      const frame = document.querySelector('iframe[data-panel-path="directory/directory.html"]');
-      const el = document.querySelector('#directory-view .sub, #directory-view .site-group, #directory-rows') ||
-        frame?.contentDocument?.querySelector('.sub, #rows, .site-group');
+      const el = document.querySelector('#directory-view .sub, #directory-view .site-group, #directory-rows');
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
     const dirShot1440 = await captureShot(cdp, ntpSession);
@@ -1726,51 +1725,63 @@ async function main() {
     // Open Settings
     await evalIn(cdp, ntpSession, `document.getElementById('open-settings')?.click(); true`);
     await sleep(900);
-    const settingsLeft1440 = await evalIn(cdp, ntpSession, `(() => {
+    const settingsMetrics1440 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="options/options.html"]');
       const el = frame?.contentDocument?.querySelector('.side');
-      return el ? Math.round(el.getBoundingClientRect().left) : null;
+      return {
+        left: el ? Math.round(el.getBoundingClientRect().left) : null,
+        width: frame?.contentDocument?.documentElement.clientWidth ?? null,
+        hostWidth: document.getElementById('view-client-host')?.clientWidth ?? null,
+        contentMax: parseFloat(getComputedStyle(document.getElementById('view-client-host')).getPropertyValue('--content-max')),
+      };
     })()`);
+    const settingsLeft1440 = settingsMetrics1440?.left ?? null;
     const setShot1440 = await captureShot(cdp, ntpSession);
     if (setShot1440) await writeEvidence("hub-view-settings-1440.png", setShot1440);
 
-    console.log("1440px content left edges:", { artifactsLeft1440, dirLeft1440, settingsLeft1440, artifactsTitleCount });
-    const match1440 = artifactsLeft1440 !== null && dirLeft1440 !== null && settingsLeft1440 !== null &&
-      Math.abs(artifactsLeft1440 - dirLeft1440) <= 1 && Math.abs(artifactsLeft1440 - settingsLeft1440) <= 1;
-    check("embedded views share one content left edge at 1440", match1440);
+    const parity1440 = viewEdgeParity({ artifacts: artifactsLeft1440, directory: dirLeft1440, settings: settingsLeft1440,
+      hostWidth: settingsMetrics1440?.hostWidth ?? null, settingsWidth: settingsMetrics1440?.width ?? null,
+      contentMax: settingsMetrics1440?.contentMax ?? null });
+    console.log("1440px browse edges and scrollports:", { artifactsLeft1440, dirLeft1440, settingsMetrics1440, parity1440, artifactsTitleCount });
+    check("in-page browse views share one content left edge at 1440", parity1440.inPageAligned);
+    check("Settings iframe offset matches its scrollport at 1440", parity1440.settingsAccounted);
 
     // 1024px viewport measurement
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 768, deviceScaleFactor: 1, mobile: false }, ntpSession);
     await sleep(300);
 
-    const settingsLeft1024 = await evalIn(cdp, ntpSession, `(() => {
+    const settingsMetrics1024 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="options/options.html"]');
       const el = frame?.contentDocument?.querySelector('.side');
-      return el ? Math.round(el.getBoundingClientRect().left) : null;
+      return {
+        left: el ? Math.round(el.getBoundingClientRect().left) : null,
+        width: frame?.contentDocument?.documentElement.clientWidth ?? null,
+        hostWidth: document.getElementById('view-client-host')?.clientWidth ?? null,
+        contentMax: parseFloat(getComputedStyle(document.getElementById('view-client-host')).getPropertyValue('--content-max')),
+      };
     })()`);
+    const settingsLeft1024 = settingsMetrics1024?.left ?? null;
 
     await evalIn(cdp, ntpSession, `document.getElementById('open-directory')?.click(); true`);
     await sleep(900);
     const dirLeft1024 = await evalIn(cdp, ntpSession, `(() => {
-      const frame = document.querySelector('iframe[data-panel-path="directory/directory.html"]');
-      const el = document.querySelector('#directory-view .sub, #directory-view .site-group, #directory-rows') ||
-        frame?.contentDocument?.querySelector('.sub, #rows, .site-group');
+      const el = document.querySelector('#directory-view .sub, #directory-view .site-group, #directory-rows');
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
 
     await evalIn(cdp, ntpSession, `document.getElementById('open-artifacts')?.click(); true`);
     await sleep(900);
     const artifactsLeft1024 = await evalIn(cdp, ntpSession, `(() => {
-      const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
-      const el = document.querySelector('#artifacts-view .sub, #artifacts-view .grid, #artifacts-view .empty') ||
-        frame?.contentDocument?.querySelector('.sub, .grid, .empty');
+      const el = document.querySelector('#artifacts-view .sub, #artifacts-view .grid, #artifacts-view .empty');
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
 
-    console.log("1024px content left edges:", { artifactsLeft1024, dirLeft1024, settingsLeft1024 });
-    const match1024 = artifactsLeft1024 !== null && dirLeft1024 !== null && settingsLeft1024 !== null &&
-      Math.abs(artifactsLeft1024 - dirLeft1024) <= 1 && Math.abs(artifactsLeft1024 - settingsLeft1024) <= 1;
-    check("embedded views share one content left edge at 1024", match1024);
+    const parity1024 = viewEdgeParity({ artifacts: artifactsLeft1024, directory: dirLeft1024, settings: settingsLeft1024,
+      hostWidth: settingsMetrics1024?.hostWidth ?? null, settingsWidth: settingsMetrics1024?.width ?? null,
+      contentMax: settingsMetrics1024?.contentMax ?? null });
+    console.log("1024px browse edges and scrollports:", { artifactsLeft1024, dirLeft1024, settingsMetrics1024, parity1024 });
+    check("in-page browse views share one content left edge at 1024", parity1024.inPageAligned);
+    check("Settings iframe offset matches its scrollport at 1024", parity1024.settingsAccounted);
 
     check("embedded Artifacts view shows its name exactly once", artifactsTitleCount === 1);
 

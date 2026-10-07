@@ -60,16 +60,26 @@ Deno.test("one-shell layout: openView boots panel views at their exact canonical
   assert(ntp.includes('p !== "embedded=1"'), "openView must strip legacy embedded=1 markers from stored routes");
 });
 
-Deno.test("one-shell layout: chrome-journeys.ts carries the 3 required journey assertions in EXPECTED", async () => {
+Deno.test("one-shell layout: chrome-journeys.ts checks current browse routes, not the retired Artifacts/Directory iframe", async () => {
   const journeys = await Deno.readTextFile("scripts/chrome-journeys.ts");
-  assert(journeys.includes('"embedded views share one content left edge at 1440"'), "1440px check in EXPECTED");
-  assert(journeys.includes('"embedded views share one content left edge at 1024"'), "1024px check in EXPECTED");
-  assert(journeys.includes('"embedded Artifacts view shows its name exactly once"'), "Artifacts title check in EXPECTED");
+  for (const name of [
+    "in-page browse views share one content left edge at 1440",
+    "Settings iframe offset matches its scrollport at 1440",
+    "in-page browse views share one content left edge at 1024",
+    "Settings iframe offset matches its scrollport at 1024",
+    "embedded Artifacts view shows its name exactly once",
+  ]) {
+    assert(journeys.includes(`"${name}"`), `${name} must be in EXPECTED and checked`);
+  }
 
-  // Verify probes target visible content edges, not unpadded wrappers
-  assert(journeys.includes("frame?.contentDocument?.querySelector('.sub, .grid, .empty')"), "Artifacts probes visible content");
-  assert(journeys.includes("frame?.contentDocument?.querySelector('.sub, #rows, .site-group')"), "Directory probes visible content");
-  assert(journeys.includes("frame?.contentDocument?.querySelector('.side')"), "Settings probes visible content");
+  // Verify probes target rendered content edges, not unpadded wrappers or the
+  // obsolete iframe fallback (which hid Stage 2's in-page layout regression).
+  assert(journeys.includes("document.querySelector('#artifacts-view .sub, #artifacts-view .grid, #artifacts-view .empty')"), "Artifacts probes in-page content");
+  assert(journeys.includes("document.querySelector('#directory-view .sub, #directory-view .site-group, #directory-rows')"), "Directory probes in-page content");
+  assert(!journeys.includes('iframe[data-panel-path="artifacts/index.html"]'), "Artifacts must not fall back to the retired iframe");
+  assert(!journeys.includes('iframe[data-panel-path="directory/directory.html"]'), "Directory must not fall back to the retired iframe");
+  assert(journeys.includes("frame?.contentDocument?.querySelector('.side')"), "Settings probes visible iframe content");
+  assert(journeys.includes("frame?.contentDocument?.documentElement.clientWidth"), "Settings measures its own scrollport");
 
   // Verify title check includes both parent #view-title and iframe headings with rendered visibility
   assert(journeys.includes("document.getElementById('view-title')"), "Title probe checks parent #view-title");
