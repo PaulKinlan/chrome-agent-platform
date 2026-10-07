@@ -19,7 +19,7 @@
 
 import { launchChrome, waitForServiceWorker, teardownChrome, withTimeout, SW_MATCH } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
-import { selectLiveOpenExecution, requireTraceMeasures, isDemoProviderConfigured } from "../scripts/lib/live-open-precondition.ts";
+import { selectLiveOpenExecution, requireTraceMeasures, isDemoProviderConfigured, requireRunningOpenTrace, requireSettledOpenTrace, requirePriorOpenReads } from "../scripts/lib/live-open-precondition.ts";
 import { composerInput, composerSend } from "../scripts/lib/composer-target.ts";
 import { fileURLToPath } from "node:url";
 
@@ -310,6 +310,9 @@ async function measureOpen(label: string, rowExpr: string, expectedLiveId: strin
              status: document.getElementById("status")?.textContent ?? "" }; })()`);
   const after = await spans();
   const afterRaw = await spansRaw();
+  // A SW restart between the click and dump resets the trace timeline. The
+  // pre-click boot guard alone cannot distinguish that from an empty delta.
+  await runSnapshot();
   const rawSpans = spanDeltaRaw(beforeRaw, afterRaw);
   return {
     label,
@@ -317,7 +320,7 @@ async function measureOpen(label: string, rowExpr: string, expectedLiveId: strin
     firstPaintMs: Math.round(result?.firstBubble ?? -1),
     viewVisibleMs: Math.round(result?.viewVisible ?? -1),
     spans: spanDelta(before, after).slice(0, 14),
-    rawSpans: rawSpans.slice(0, 12),
+    rawSpans, // keep all identities: the settled positive span must not fall off a top-12 display slice
     painted,
     afterLive,
   };
@@ -327,7 +330,7 @@ await evl(ntp, `document.getElementById("home")?.click?.(); true`);
 await sleep(500);
 const runningMeasure = await measureOpen("RUNNING task with history", TASK_ROW, atClick.executionId);
 if (runningMeasure.error) throw new Error(`REFUSING live-open: ${runningMeasure.error}`);
-if (runningMeasure.liveLogReads !== 0) throw new Error(`REFUSING live-open: view read the live execution's own log: ${JSON.stringify(runningMeasure)}`);
+requireRunningOpenTrace(runningMeasure, atClick.executionId);
 
 // The diagnostics run AFTER the measured open: their own multi-second work
 // would otherwise consume the run's 10 s live window and turn this measurement
@@ -349,6 +352,7 @@ const viewProbe = await evl(ntp, `(async () => {
   });
   return { ms: Math.round(performance.now() - t0), reads, messages: view?.messages?.length ?? null };
 })()`);
+requirePriorOpenReads(viewProbe, atClick.executionId);
 console.log(`direct view build while running: ${JSON.stringify(viewProbe).slice(0, 400)}\n`);
 
 // CONTROL: clear the trace and do NOTHING for 2 s. Any span that appears here
@@ -394,6 +398,10 @@ for (let i = 0; i < 240; i++) {
 const settledMeasure = settled
   ? await measureOpen("SETTLED task with history (control)", TASK_ROW)
   : { label: "SETTLED task with history (control)", error: "still running after 120 s" };
+if (settledMeasure.error) throw new Error(`REFUSING settled-open: ${settledMeasure.error}`);
+// A previously warmed settled-view cache can suppress this positive span;
+// refuse and remeasure rather than accepting an unproven control.
+requireSettledOpenTrace(settledMeasure, atClick.executionId);
 
 console.log("─".repeat(72));
 console.log(`bead h638 — task open in the loaded extension (${FILLERS.length + 2} real turns, measured ${JSON.stringify(historyState)})\n`);
