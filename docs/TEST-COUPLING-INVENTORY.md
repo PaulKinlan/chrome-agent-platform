@@ -431,11 +431,17 @@ the literal.
 - **Edge truth (i0rf):** `new URL(path, import.meta.url)` is an edge only in
   executable source code, not in a string/template/regexp/comment quoted by a
   test. Acorn's lexer retains edges on unsupported syntax rather than hiding
-  them. A test node TERMINATES the consumer walk: another always-on test that
-  merely reads that test's text cannot inherit its imports. A direct always-on
-  source-text read of the actual module remains a direct consumer (this is how
-  `tests/changelog-shipping.test.ts` covers `build.mjs`), but a quoted URL in a
-  synthetic source sample never becomes one.
+  them. 57uw also reports each Acorn lexer failure to the always-on audit by
+  source path while selection retains the edges: otherwise an unlexable
+  always-on test with a quoted URL could silently credit a phantom consumer.
+  The single pinned exception, `scripts/perf-gallery-previews.ts`, has TS syntax
+  Acorn cannot tokenize and retains only `..` (a directory, not an executable
+  import); any new failure or disappearance of that exception is a named RED
+  until reviewed. A test node TERMINATES the consumer walk: another always-on
+  test that merely reads that test's text cannot inherit its imports. A direct
+  always-on source-text read of the actual module remains a direct consumer
+  (this is how `tests/changelog-shipping.test.ts` covers `build.mjs`), but a
+  quoted URL in a synthetic source sample never becomes one.
 - **Owed by a re-anchor:** when moving a repo walk into a shared source/helper,
   ensure a consuming test is in `SOURCE_INSPECTING_GUARDS` (or make the source
   read directly by the already-always-on test); run
@@ -449,6 +455,12 @@ the literal.
   in a synthetic template). An in-memory source mutation of the **real**
   test-imported `tests/fixtures/build-once.mjs` proves an executable fixture
   walk is caught without creating a transient test file in the parallel suite.
+  57uw pins runner-vs-audit test credit: `npm test` recursively discovers
+  `tests/**/*.test.ts`, including a hypothetical `tests/fixtures/**/*.test.ts`;
+  fixture tests are data, never credited as an always-on consumer, and the
+  guard asserts none currently exist. `*.test.js` files are terminal graph
+  nodes but do not count as coverage because the runner never executes them.
+  Synthetic names/edges falsify both policies without creating test files.
 - **Known limit (i0rf N3):** a shipped entry such as `extension/privacy/privacy.js`
   is bundled into `extension/dist/privacy.bundle.js` but is not a key in the
   test reverse-import graph. `changedWithoutCoverage` does fail an edit of the

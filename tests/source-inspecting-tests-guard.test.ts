@@ -31,9 +31,16 @@ import {
   selectTestFiles,
 } from "../scripts/select-tests.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
+import { enumerateRunnerTests } from "../scripts/run-tests.mjs";
 
-/** Pattern matching test filenames (.test.ts or .test.js, matching runner conventions). */
+/** Test-looking modules are terminal graph nodes, even if the runner never executes them. */
 export const IS_TEST_RE = /\.test\.(ts|js)$/;
+
+/** Fixtures are data; only runner-enumerated *.test.ts files outside fixtures can supply audit credit. */
+export function isCreditableRunnerTest(rel: string): boolean {
+  return rel.startsWith("tests/") && rel.endsWith(".test.ts") &&
+    !/(?:^|\/)(?:fixtures|node_modules)\//.test(rel);
+}
 
 // NEW-3: Exact paths of real-tree falsification fixtures that could be left by SIGKILL.
 export const AFPL_REAL_TREE_FIXTURES: Record<string, string> = {
@@ -398,7 +405,7 @@ export function formatUnclassifiedScannersMessage(unclassified: string[]): strin
 export function enumerateTestFiles(testsDir = join(ROOT, "tests")): { rel: string; code: string }[] {
   return readdirSync(testsDir, { recursive: true })
     .map(String)
-    .filter((f) => IS_TEST_RE.test(f) && !f.includes("/fixtures/") && !f.startsWith("fixtures/") && !f.includes("/node_modules/") && !f.startsWith("node_modules/"))
+    .filter((f) => isCreditableRunnerTest(`tests/${f}`))
     .map((f) => ({
       rel: `tests/${f}`,
       code: readFileSync(join(testsDir, f), "utf8"),
@@ -420,7 +427,7 @@ function testConsumerReachable(start: string, reverse: Map<string, Set<string>>,
         // Only tests that the runner enumerates can supply coverage. Even an
         // unlisted test is terminal: traversing through its imports would let
         // a DIFFERENT always-on test that reads it as TEXT fake execution.
-        if (rel.startsWith("tests/") && !/(?:^|\/)(?:fixtures|node_modules)\//.test(rel) && predicate(rel)) return true;
+        if (isCreditableRunnerTest(rel) && predicate(rel)) return true;
         continue;
       }
       seen.add(importer);
@@ -526,6 +533,23 @@ Deno.test("i0rf N1: URL instrument lexing distinguishes inert text from live tem
   assertEquals(codeUrlInstrumentSpecs('new URL("../scripts/kat-runner.ts", import.meta.url);\n¤'), [url]);
 });
 
+Deno.test("57uw: an unlexable source reports its URL lexer failure while retaining edges for selection", () => {
+  const source = 'const sample = `new URL("../scripts/lib/harness-registry.ts", import.meta.url)`;\n¤';
+  const failures: string[] = [];
+  assertEquals(codeUrlInstrumentSpecs(source, (error: unknown) => failures.push(String(error))), ["../scripts/lib/harness-registry.ts"],
+    "selection must conservatively retain a quoted edge when the lexer cannot classify it");
+  assertEquals(failures.length, 1, "the lexer failure must be surfaced to the audit rather than silently crediting the edge");
+});
+
+Deno.test("57uw: the full source graph names every URL lexer failure for an audit decision", () => {
+  const failures: string[] = [];
+  buildReverseGraph((abs: string) => failures.push(relative(ROOT, abs).replaceAll("\\", "/")));
+  assertEquals(failures.sort(), ["scripts/perf-gallery-previews.ts"],
+    `URL lexer failures must be named and audited; observed: ${JSON.stringify(failures)}`);
+  assertEquals(codeUrlInstrumentSpecs(readFileSync(join(ROOT, failures[0]), "utf8")), [".."],
+    "the one known TS lexer failure only retains a directory spec, not an executable import");
+});
+
 Deno.test("i0rf N2: an actual test-imported fixture with an injected repo walk is detected", () => {
   const rel = "tests/fixtures/build-once.mjs";
   const abs = join(ROOT, rel);
@@ -553,6 +577,29 @@ Deno.test("i0rf N2: data fixtures and ordinary fixture-local reads do not become
   assertEquals(uncoveredExternalRepoWalks(fakeGraph, new Set(), () =>
     'const root = new URL("../../", import.meta.url); Deno.readDirSync(root);'), [],
     "even a synthetic graph link cannot classify JSON data as an executable helper");
+});
+
+Deno.test("57uw: fixture tests cannot supply always-on credit to an external repo walker", () => {
+  const fixtureTest = "tests/fixtures/zz-57uw-consumer.test.ts";
+  const helper = "scripts/lib/zz-57uw-repo-walk.ts";
+  const code = 'const root = new URL("../../", import.meta.url);\n' +
+    'export function census() { for (const entry of Deno.readDirSync(root)) void entry; }\n';
+  const abs = join(ROOT, helper);
+  const reverse = new Map([[abs, new Set([join(ROOT, "tests/zz-57uw-ordinary.test.ts"), join(ROOT, fixtureTest)])]]);
+  assertEquals(uncoveredExternalRepoWalks(reverse, new Set([fixtureTest]), (source) => source === abs ? code : null), [helper],
+    "a fixture *.test.ts is runner-enumerated but cannot claim ALWAYS_ON coverage of a repo walk");
+});
+
+Deno.test("57uw: runner enumeration cannot silently add tests outside the audit's credit policy", () => {
+  const runnable = enumerateRunnerTests(join(ROOT, "tests"));
+  assertEquals(runnable.filter((rel) => !isCreditableRunnerTest(rel)), [],
+    "npm test would execute fixture/node_modules *.test.ts files that the source-walk audit does not credit; decide their policy before adding them");
+  const synthetic = enumerateRunnerTests("unused", ["fixtures/nested/zz-57uw.test.ts", "nested/executed.test.ts", "not-run.test.js"]);
+  assertEquals(synthetic, ["tests/fixtures/nested/zz-57uw.test.ts", "tests/nested/executed.test.ts"],
+    "the runner discovers nested fixture *.test.ts but does not execute *.test.js");
+  assertEquals(synthetic.map(isCreditableRunnerTest), [false, true],
+    "fixture tests are visible but cannot supply source-walk credit; nested ordinary tests can");
+  assertEquals(isCreditableRunnerTest("tests/not-run.test.js"), false, "a *.test.js file cannot credit an audit while npm test ignores it");
 });
 
 Deno.test("i0rf N3: a bundle-only shipped source is outside the static graph but changed-file gating fails closed", () => {
@@ -744,18 +791,12 @@ Deno.test("p4tf: falsification: a script or test invoking find is flagged", () =
   );
 });
 
-Deno.test("afpl: every ALWAYS_ON and SCANNER_EXCLUSIONS entry is a test file, never a helper", () => {
+Deno.test("afpl: every ALWAYS_ON and SCANNER_EXCLUSIONS entry is a runner-executed test, never a helper", () => {
   for (const f of ALWAYS_ON) {
-    assert(
-      IS_TEST_RE.test(f),
-      `ALWAYS_ON entry ${f} must be a test file (*.test.ts or *.test.js), never a helper module`,
-    );
+    assert(isCreditableRunnerTest(f), `ALWAYS_ON entry ${f} must be an executable *.test.ts outside fixtures, never a helper`);
   }
   for (const f of Object.keys(SCANNER_EXCLUSIONS)) {
-    assert(
-      IS_TEST_RE.test(f),
-      `SCANNER_EXCLUSIONS entry ${f} must be a test file (*.test.ts or *.test.js), never a helper module`,
-    );
+    assert(isCreditableRunnerTest(f), `SCANNER_EXCLUSIONS entry ${f} must be an executable *.test.ts outside fixtures, never a helper`);
   }
 });
 

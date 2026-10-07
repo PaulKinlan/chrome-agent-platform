@@ -153,6 +153,14 @@ function runParallel(files) {
   });
 }
 
+// Keep the audit's executable-test policy tied to the runner's actual recursive
+// discovery. The optional names make the policy falsifiable in memory without
+// writing transient *.test.ts files during the parallel suite.
+export function enumerateRunnerTests(dir = "tests", names = readdirSync(dir, { recursive: true })) {
+  return names.filter((f) => String(f).endsWith(".test.ts"))
+    .map((f) => `tests/${f}`).sort();
+}
+
 export async function main(args = process.argv.slice(2)) {
   const cliFiles = args.filter((f) => !f.startsWith("-"));
   let all;
@@ -165,10 +173,7 @@ export async function main(args = process.argv.slice(2)) {
   } else {
     // Recursive: `deno test tests/` walks subdirectories, so this walk must too
     // (a non-recursive readdir would silently drop future tests/**/ nested files).
-    all = readdirSync("tests", { recursive: true })
-      .filter((f) => f.endsWith(".test.ts"))
-      .map((f) => `tests/${f}`)
-      .sort();
+    all = enumerateRunnerTests();
     const missing = [...SERIAL].filter((f) => !all.includes(f));
     if (missing.length > 0) {
       console.error(`run-tests: SERIAL names files that do not exist: ${missing.join(", ")}`);
