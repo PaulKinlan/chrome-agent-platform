@@ -25,6 +25,17 @@ Deno.test("focused acceptance verdict seam exits nonzero for incomplete, failed,
   assertEquals(errors.length, 1);
 });
 
+function assertOwnerApprovedSeed(source: string) {
+  const created = source.indexOf('const seeded = await ntpMsg({ type: "agent.create", origin });');
+  const denied = source.indexOf("const seedRequest = await ntpMsg(rename);");
+  const row = source.indexOf('const seedRow = await onePending("agent.update");');
+  const approved = source.indexOf("await resolve(seedRow.approvalId, true);");
+  const retried = source.indexOf("const seededRename = await ntpMsg(rename);");
+  const firstDeny = source.indexOf('const firstRequest = await ntpMsg({ type: "agent.update"');
+  assert(created >= 0 && created < denied && denied < row && row < approved && approved < retried && retried < firstDeny,
+    "Settings target name must be established by an exact owner-approved agent.update before deny tests");
+}
+
 function assertSessionBoundMouse(source: string) {
   const dispatches = source.match(/await cdp\.send\("Input\.dispatchMouseEvent", \{ type: "mouse(?:Pressed|Released)"[^\n]+/g) ?? [];
   assert(dispatches.length === 2 && dispatches.every((line) => line.endsWith("}, session);")),
@@ -35,6 +46,10 @@ Deno.test("focused KAT dispatches every genuine click to its page session and re
   const source = await Deno.readTextFile(new URL("../scripts/kat-gi0jw-activity-approval.ts", import.meta.url));
   assert(source.includes('const mouse = async (session: string, x: number, y: number) =>'));
   assertSessionBoundMouse(source);
+  assertOwnerApprovedSeed(source);
+  const skipSeedApproval = source.replace('await resolve(seedRow.approvalId, true);', 'await resolve(seedRow.approvalId, false);');
+  assert(skipSeedApproval !== source, "seed mutant must replace the actual owner approval");
+  assertThrows(() => assertOwnerApprovedSeed(skipSeedApproval), Error, "exact owner-approved agent.update");
   const browserRootMutant = source.replace('buttons: 1, clickCount: 1 }, session);', 'buttons: 1, clickCount: 1 });');
   assert(browserRootMutant !== source, "mutant must remove a live press-event session");
   assertThrows(() => assertSessionBoundMouse(browserRootMutant), Error, "both real mouse events");

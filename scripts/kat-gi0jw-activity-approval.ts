@@ -6,7 +6,7 @@
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { validateDistCompleteMarker } from "./dist-complete.mjs";
-import { launchChrome, openCdp, SW_MATCH, teardownChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, openCdp, resolveChromiumBinary, SW_MATCH, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { composerInput, composerSend } from "./lib/composer-target.ts";
@@ -71,7 +71,7 @@ async function main(): Promise<Check[]> {
   const profile = chromeProfileDir(`gi0jw-activity-approval-${Deno.pid}-${Date.now()}`);
   await Deno.mkdir(evidence, { recursive: true });
   const sourceCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).trim();
-  let distMarker: any = null, browser: any = null, chrome: any = null, cdp: any = null;
+  let distMarker: any = null, browser: any = null, chrome: any = null, cdp: any = null, binary: string | null = null;
   let provider: any = null, optsSession: string | null = null;
   let failure: string | null = null;
   let teardownError: string | null = null;
@@ -92,7 +92,8 @@ async function main(): Promise<Check[]> {
     // A passing KAT against yesterday's ignored bundle would be counterfeit.
     distMarker = await validateDistCompleteMarker({ root: ROOT, distRoot: `${EXT}/dist`, expectedTarget: "store" });
     if (distMarker.commit !== sourceCommit) throw new Error("production bundle is not bound to this KAT's exact source commit — rebuild first");
-    chrome = await launchChrome({ extension: EXT, profile, windowSize: "1400,900", clearEnv: true,
+    binary = resolveChromiumBinary();
+    chrome = await launchChrome({ extension: EXT, profile, binary, windowSize: "1400,900", clearEnv: true,
       env: Deno.env.get("FLEET_LANE") ? { FLEET_LANE: Deno.env.get("FLEET_LANE")! } : {} });
     cdp = await openCdp(chrome.wsUrl);
     const sw = await cdp.serviceWorker({ match: SW_MATCH, timeoutMs: 20000 });
@@ -156,11 +157,23 @@ async function main(): Promise<Check[]> {
     await waitFor("NTP and owner Settings documents", async () =>
       await ntpEval(`!!document.querySelector('#open-settings')`) && await optsEval(`!!chrome.runtime?.id`), 15000);
     const origin = "https://mgmt.example", original = "renamed-worker";
-    const seeded = await ntpMsg({ type: "agent.create", origin, name: original });
-    if (seeded?.ok !== true || (await ntpMsg({ type: "agent.get", origin }))?.agent?.name !== original) {
-      throw new Error(`agent seed precondition failed: ${JSON.stringify(seeded)}`);
+    // agent.create enrols the origin but DOES NOT persist its supplied name.
+    // Establish the expected target through the real gated update, then
+    // consume the exact digest-bound owner approval before the deny checks.
+    const seeded = await ntpMsg({ type: "agent.create", origin });
+    if (seeded?.ok !== true) throw new Error(`agent enrolment failed: ${JSON.stringify(seeded)}`);
+    const rename = { type: "agent.update", origin, name: original };
+    const seedRequest = await ntpMsg(rename);
+    if (seedRequest?.ok !== false || !/requires owner approval/i.test(String(seedRequest.error))) {
+      throw new Error(`agent rename did not pay its real owner gate: ${JSON.stringify(seedRequest)}`);
     }
-    if ((await pending())?.approvals?.length !== 0) throw new Error("fresh Settings approval queue was not empty");
+    const seedRow = await onePending("agent.update");
+    await resolve(seedRow.approvalId, true);
+    const seededRename = await ntpMsg(rename);
+    if (seededRename?.ok !== true || (await ntpMsg({ type: "agent.get", origin }))?.agent?.name !== original) {
+      throw new Error(`agent owner-approved rename precondition failed: ${JSON.stringify(seededRename)}`);
+    }
+    if ((await pending())?.approvals?.length !== 0) throw new Error("Settings approval queue was not drained by seed rename");
     const contexts: { frameId: string; id: number; sessionId?: string }[] = [];
     const unsubscribe = cdp.on("Runtime.executionContextCreated", (event: any, sessionId?: string) => {
       if (event?.context?.auxData?.isDefault && event?.context?.auxData?.frameId && event?.context?.id) {
@@ -227,7 +240,10 @@ async function main(): Promise<Check[]> {
     if (!oldSw?.targetId) throw new Error("approval service worker target missing before restart");
     await cdp.send("Target.closeTarget", { targetId: oldSw.targetId });
     await sleep(300);
-    const wake = await waitFor("service worker wake", async () => (await ntpMsg({ type: "asset.list", origin: "master" })) ?? null, 7000);
+    const wake = await waitFor("service worker wake", async () => {
+      const reply = await ntpMsg({ type: "asset.list", origin: "master" });
+      return reply?.ok === true ? reply : null;
+    }, 7000);
     const restartAgain = await ntpMsg({ type: "agent.update", origin, name: "restart-must-not-apply" });
     const newRow = await onePending("agent.update");
     const newSw = await waitFor("different service worker target", async () =>
@@ -359,7 +375,7 @@ async function main(): Promise<Check[]> {
       catch (error) { teardownError = `${teardownError ?? ""}; Chrome teardown: ${String(error)}`; }
     }
     const manifest = { schema: "cap-focused-approval-v1", sourceCommit, distMarker,
-      browser: browser?.Browser ?? null, binary: chrome?.binary ?? null,
+      browser: browser?.Browser ?? null, binary,
       checks, settings: checks.slice(0, SETTINGS_CHECKS.length), activity: checks.slice(SETTINGS_CHECKS.length),
       files: evidenceFiles, failure, teardownError, evidenceDir: evidence,
       totals: { passed: checks.filter((c) => c.verdict === "PASS").length,
