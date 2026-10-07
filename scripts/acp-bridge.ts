@@ -71,16 +71,39 @@ export function isLoopbackHost(host: string): boolean {
   return h === "::1" || h === "localhost" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
 }
 
-// FAIL CLOSED at the CLI boundary: anonymous access is loopback-only. Refuse to
-// start (rather than silently ignoring the flag, or worse allowing anonymous on
-// a routable address) when the operator asks for tokenless access but also
-// binds beyond loopback. createAcpServer asserts the same invariant for in-
-// process callers (tests, the native host).
-if (import.meta.main && ALLOW_ANONYMOUS_LOOPBACK && !isLoopbackHost(HOST)) {
+/**
+ * Strict validator for the anonymous loopback opt-out: hostnames like "localhost"
+ * are REJECTED outright because they depend on resolver configuration and could
+ * resolve to a routable interface. Only genuine, parsed literal loopback IPs are
+ * permitted: 127.0.0.0/8 (strictly four decimal octets 0..255, with 127 as the
+ * first octet, no leading zeros in octets, no trailing/leading characters or whitespace)
+ * or IPv6 loopback (::1 / [::1]).
+ */
+export function isValidatedLiteralLoopback(host: string): boolean {
+  if (typeof host !== "string") return false;
+  if (host === "::1" || host === "[::1]") return true;
+  const parts = host.split(".");
+  if (parts.length !== 4) return false;
+  if (parts[0] !== "127") return false;
+  for (let i = 1; i < 4; i++) {
+    const p = parts[i];
+    if (!/^(?:0|[1-9]\d{0,2})$/.test(p)) return false;
+    const num = Number(p);
+    if (num < 0 || num > 255) return false;
+  }
+  return true;
+}
+
+// FAIL CLOSED at the CLI boundary: anonymous access is validated literal loopback-
+// only. Refuse to start when the operator asks for tokenless access but binds
+// beyond a validated literal loopback IP (or uses a hostname like "localhost" that
+// cannot guarantee fail-closed loopback binding). createAcpServer asserts the
+// same invariant for in-process callers (tests, the native host).
+if (import.meta.main && ALLOW_ANONYMOUS_LOOPBACK && !isValidatedLiteralLoopback(HOST)) {
   console.error(
-    `[acp-bridge] refusing to start: --allow-anonymous-loopback requires a loopback bind, ` +
-      `but --host is "${HOST}" (reachable from other machines). Anonymous access is never ` +
-      `permitted on a non-loopback address — remove the flag or bind to 127.0.0.1 / ::1 / localhost.`,
+    `[acp-bridge] refusing to start: --allow-anonymous-loopback requires a validated literal loopback IP (e.g. 127.0.0.1 or ::1), ` +
+      `but --host is "${HOST}". Hostnames like "localhost" and unvalidated addresses cannot guarantee fail-closed loopback binding — ` +
+      `bind to a literal loopback IP (127.0.0.1 / ::1) or remove --allow-anonymous-loopback.`,
   );
   Deno.exit(1);
 }
@@ -730,14 +753,18 @@ export function createAcpServer(
    * accidental unauthenticated bridge. */
   tokenOverride: string = TOKEN,
   allowAnonymousLoopback: boolean = ALLOW_ANONYMOUS_LOOPBACK,
+  hostOverride: string = HOST,
 ) {
+  const effectiveHost = String(hostOverride || HOST);
   // FAIL CLOSED, both halves asserted rather than documented:
-  //  1. Anonymous access is loopback-ONLY. Asking for it while bound beyond
-  //     loopback must refuse to build the server, not silently admit an
-  //     unauthenticated harness on a routable address.
-  if (allowAnonymousLoopback && !isLoopbackHost(HOST)) {
+  //  1. Anonymous access is validated literal loopback-ONLY. Asking for it while
+  //     bound beyond loopback or to a hostname like "localhost" must refuse to
+  //     build the server, not silently admit an unauthenticated harness on a
+  //     routable address.
+  if (allowAnonymousLoopback && !isValidatedLiteralLoopback(effectiveHost)) {
     throw new Error(
-      "--allow-anonymous-loopback requires a loopback bind: anonymous access is never permitted on a non-loopback address",
+      `--allow-anonymous-loopback requires a validated literal loopback IP (e.g. 127.0.0.1 or ::1), but host is "${effectiveHost}": ` +
+        `hostnames like "localhost" and non-loopback addresses are rejected for anonymous access`,
     );
   }
   //  2. Without the opt-out, an EMPTY override would make the guard accept an
@@ -748,7 +775,7 @@ export function createAcpServer(
     throw new Error("createAcpServer requires a non-empty token: an empty secret would accept an empty ?token= (or set allowAnonymousLoopback deliberately)");
   }
   const toolEndpoints = new Map<string, Awaited<ReturnType<typeof createAcpTools>>>();
-  const server = Deno.serve({ port, hostname: HOST }, (req) => {
+  const server = Deno.serve({ port, hostname: effectiveHost }, (req) => {
     const url = new URL(req.url);
     if (url.pathname.startsWith("/cap-tools/")) {
       return toolEndpoints.get(url.pathname)?.handle(req) ?? new Response("CAP run unavailable", { status: 404 });
@@ -1044,7 +1071,7 @@ if (import.meta.main) {
     console.error("[acp-bridge] WARNING: the bridge is UNAUTHENTICATED on loopback — no token is required, and ANY");
     console.error("[acp-bridge] WARNING: local process can connect and drive the harness (shell commands, file");
     console.error("[acp-bridge] WARNING: writes, the approval surface). This was chosen on purpose and applies only");
-    console.error("[acp-bridge] WARNING: to 127.0.0.1 / ::1 / localhost — a non-loopback bind refuses to start.");
+    console.error("[acp-bridge] WARNING: to literal loopback (127.0.0.1 / ::1) — a non-loopback or hostname bind refuses to start.");
     if (args.token || args["token-file"]) {
       console.error("[acp-bridge] WARNING: --token/--token-file was also given but is IGNORED under --allow-anonymous-loopback.");
     }

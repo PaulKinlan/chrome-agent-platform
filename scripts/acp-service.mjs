@@ -251,31 +251,83 @@ function uninstall() {
   }
 }
 
-function status() {
-  // jsjy: the bridge requires a secret whether or not the operator passed --token, so `status` must say
-  // where the value the extension needs can be found — /health never discloses it (delta review,
-  // finding 4). The one exception is --allow-anonymous-loopback, which must NOT claim a token is required.
-  if (ALLOW_ANONYMOUS_LOOPBACK) {
-    console.log("auth: ANONYMOUS loopback (--allow-anonymous-loopback) — NO token required; any local process can drive the harness");
-  } else {
-    console.log(TOKEN
-      ? "auth: token required — the --token you installed"
-      : "auth: token required — the bridge generated one; it is persisted in $XDG_CONFIG_HOME/cap-acp/bridge-token (paste it into acp.token)");
+function getInstalledUnitPath() {
+  if (UNIT_OVERRIDE) return UNIT_OVERRIDE;
+  if (OS === "darwin") {
+    return join(HOME, "Library", "LaunchAgents", `${LABEL}.plist`);
   }
-  const url = `http://127.0.0.1:${PORT}/health`;
+  return join(HOME, ".config", "systemd", "user", "cap-acp-bridge.service");
+}
+
+function readInstalledServiceUnit(unitPath) {
+  if (!existsSync(unitPath)) return null;
+  try {
+    const content = readFileSync(unitPath, "utf8");
+    const isPlist = content.includes("<?xml") || content.includes("<plist");
+    const isAnonymous = content.includes("--allow-anonymous-loopback");
+    let token = "";
+    let port = "";
+    let harness = "";
+    if (isPlist) {
+      const tokenMatch = content.match(/<string>--token<\/string>\s*<string>([^<]*)<\/string>/);
+      if (tokenMatch) token = tokenMatch[1];
+      const portMatch = content.match(/<string>--port<\/string>\s*<string>([^<]*)<\/string>/);
+      if (portMatch) port = portMatch[1];
+      const harnessMatch = content.match(/<string>--harness<\/string>\s*<string>([^<]*)<\/string>/);
+      if (harnessMatch) harness = harnessMatch[1];
+    } else {
+      const tokenMatch = content.match(/--token\s+([^\s]+)/);
+      if (tokenMatch) token = tokenMatch[1];
+      const portMatch = content.match(/--port\s+([^\s]+)/);
+      if (portMatch) port = portMatch[1];
+      const harnessMatch = content.match(/--harness\s+([^\s]+)/);
+      if (harnessMatch) harness = harnessMatch[1];
+    }
+    return { unitPath, isPlist, isAnonymous, token, port, harness };
+  } catch {
+    return null;
+  }
+}
+
+function status() {
+  const unitPath = getInstalledUnitPath();
+  const installed = readInstalledServiceUnit(unitPath);
+
+  // Report the ACTUAL installed configuration from the unit/plist file if installed;
+  // otherwise, explicitly label output as an assumption so we do not claim knowledge
+  // we do not have.
+  if (installed) {
+    if (installed.isAnonymous) {
+      console.log("auth: ANONYMOUS loopback (installed with --allow-anonymous-loopback) — NO token required; any local process can drive the harness");
+    } else if (installed.token) {
+      console.log("auth: token required (installed with explicit --token)");
+    } else {
+      console.log("auth: token required (installed service uses generated token in $XDG_CONFIG_HOME/cap-acp/bridge-token; paste into acp.token)");
+    }
+  } else {
+    if (ALLOW_ANONYMOUS_LOOPBACK) {
+      console.log("auth (assumption from CLI flag --allow-anonymous-loopback; service not installed): ANONYMOUS loopback — NO token required");
+    } else if (TOKEN) {
+      console.log("auth (assumption from CLI flag --token; service not installed): token required — the --token you provided");
+    } else {
+      console.log("auth (assumption; service not installed): token required by default — bridge generates token in $XDG_CONFIG_HOME/cap-acp/bridge-token");
+    }
+  }
+
+  const effectivePort = installed?.port || PORT;
+  const url = `http://127.0.0.1:${effectivePort}/health`;
   fetch(url).then(async (r) => {
     console.log(`bridge: UP at ${url}`);
     console.log(JSON.stringify(await r.json(), null, 2));
   }).catch(() => {
     console.log(`bridge: DOWN at ${url}`);
-    console.log(OS === "darwin"
-      ? "start it in the background with: node scripts/acp-service.mjs install"
-      : "start it in the background with: node scripts/acp-service.mjs install");
+    console.log("start it in the background with: node scripts/acp-service.mjs install");
   });
   if (OS === "darwin") {
-    const plist = join(HOME, "Library", "LaunchAgents", `${LABEL}.plist`);
-    console.log(`launch agent: ${existsSync(plist) ? plist : "(not installed)"}`);
+    console.log(`launch agent: ${installed ? unitPath : "(not installed)"}`);
     if (existsSync(LOG)) console.log(`recent log:\n${readFileSync(LOG, "utf8").split("\n").slice(-8).join("\n")}`);
+  } else {
+    console.log(`systemd unit: ${installed ? unitPath : "(not installed)"}`);
   }
 }
 
