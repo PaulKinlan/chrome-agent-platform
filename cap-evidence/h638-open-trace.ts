@@ -19,7 +19,7 @@
 
 import { launchChrome, waitForServiceWorker, teardownChrome, withTimeout, SW_MATCH } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
-import { selectLiveOpenExecution, requireTraceMeasures } from "../scripts/lib/live-open-precondition.ts";
+import { selectLiveOpenExecution, requireTraceMeasures, isDemoProviderConfigured } from "../scripts/lib/live-open-precondition.ts";
 import { composerInput, composerSend } from "../scripts/lib/composer-target.ts";
 import { fileURLToPath } from "node:url";
 
@@ -115,7 +115,7 @@ await sleep(1200);
 const developerFlag = await evl(opts, `chrome.runtime.sendMessage({ type: "kv.set", values: { "cap:developerFeatures": true } })`);
 if (developerFlag?.ok !== true) throw new Error(`demo developer flag refused: ${JSON.stringify(developerFlag)}`);
 const demoProvider = await evl(opts, `chrome.runtime.sendMessage({ type: "provider.set", config: { provider: "demo", apiKey: "", baseURL: "", model: "" } })`);
-if (demoProvider?.ok !== true) throw new Error(`demo provider refused: ${JSON.stringify(demoProvider)}`);
+if (!isDemoProviderConfigured(demoProvider)) throw new Error(`demo provider setup refused or unexpected reply: ${JSON.stringify(demoProvider)}`);
 await send("Target.closeTarget", { targetId: (await send("Target.getTargets")).result.targetInfos.find((t: any) => t.url.includes("options.html"))?.targetId });
 
 const ntp = await openPage(`chrome-extension://${extId}/ntp/ntp.html`);

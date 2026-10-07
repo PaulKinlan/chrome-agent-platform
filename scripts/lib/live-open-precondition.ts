@@ -7,6 +7,15 @@ type Row = { executionId?: string; phase?: string; threadId?: string; updatedAt?
 type Selection = { ok: true; executionId: string; phase: "running" } |
   { ok: false; reason: "missing_thread" | "send_absorbed" | "settled_before_click" | "different_live_run"; executionId?: string; phase?: string };
 
+// provider.set succeeds with a REDACTED CONFIG (no `ok` property), whereas
+// refusal replies are {ok:false,error}. kv.set uses a different reply shape.
+export function isDemoProviderConfigured(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const reply = value as Record<string, unknown>;
+  return reply.provider === "demo" && reply.ok !== false && !Object.hasOwn(reply, "error") &&
+    reply.apiKey === "" && reply.hasApiKey === false;
+}
+
 export function requireTraceMeasures(dump: unknown): Array<{ name?: string; count?: number; totalMs?: number }> {
   if (!dump || typeof dump !== "object" || (dump as any).ok !== true ||
       !Array.isArray((dump as any).perf?.measures)) {

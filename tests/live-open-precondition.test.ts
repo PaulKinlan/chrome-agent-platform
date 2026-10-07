@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { requireTraceMeasures, selectLiveOpenExecution } from "../scripts/lib/live-open-precondition.ts";
+import { isDemoProviderConfigured, requireTraceMeasures, selectLiveOpenExecution } from "../scripts/lib/live-open-precondition.ts";
 
 const prior = { executionId: "old", threadId: "clicked", phase: "terminal", updatedAt: 10 };
 const newRun = { executionId: "new", threadId: "clicked", phase: "running", updatedAt: 20 };
@@ -26,6 +26,13 @@ Deno.test("ly7n: page-bound actionable run wins over a newer terminal row", () =
   const newTerminal = { executionId: "settled", threadId: "clicked", phase: "terminal", updatedAt: 40 };
   assertEquals(selectLiveOpenExecution({ threadId: "clicked", priorIds: [], runs: [newTerminal, oldLive] }),
     { ok: true, executionId: "live", phase: "running" });
+});
+
+Deno.test("ly7n: provider.set success is a redacted config without ok, not an {ok:true} envelope", () => {
+  assertEquals(isDemoProviderConfigured({ provider: "demo", baseURL: "", apiKey: "", model: "", hasApiKey: false }), true);
+  assertEquals(isDemoProviderConfigured({ ok: false, error: "unknown provider", provider: "demo" }), false);
+  assertEquals(isDemoProviderConfigured({ ok: true }), false, "kv.set-style reply cannot masquerade as provider setup");
+  assertEquals(isDemoProviderConfigured({ __error: "port closed" }), false);
 });
 
 Deno.test("ly7n: a successful trace carries measurable perf rows", () => {
