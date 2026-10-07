@@ -86,6 +86,10 @@ git cherry-pick <candidate-sha> -n
 # 3. Resolve merge conflicts
 #    - .beads/issues.jsonl: restore from HEAD (Dolt DB is authoritative)
 git checkout HEAD -- .beads/issues.jsonl
+# Before any manual bd export overwrites that committed snapshot, check for
+# committed IDs missing from the canonical DB. Stop and investigate if it fails;
+# NEVER bulk-import an old passive export to make this check green (vf69).
+node scripts/check-beads-export-divergence.mjs
 #    - CHANGELOG.md: union-merge bodies, place new version at top, preserve all prior bullets
 #    - Version files: update package.json, package-lock.json, extension/manifest.json,
 #      and extension/lib/bundled-inventory-data.js to the next sequential version

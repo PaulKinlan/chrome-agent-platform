@@ -29,7 +29,7 @@ import path from "node:path";
 
 const HOOKS_DIR = path.join(path.dirname(fileURLToPath(new URL(import.meta.url))), "..", "scripts", "git-hooks");
 const BASE = '{"_type":"issue","id":"base-1"}\n';
-const FRESH = '{"_type":"issue","id":"fresh-1"}\n{"_type":"issue","id":"fresh-2"}\n';
+const FRESH = BASE + '{"_type":"issue","id":"fresh-1"}\n{"_type":"issue","id":"fresh-2"}\n';
 
 // The hook installed on this machine before ufrr, byte for byte.
 const OLD_HOOK = `#!/bin/sh
@@ -54,7 +54,7 @@ for a in "$@"; do [ "$a" = "--path" ] && { echo "Error: unknown flag: --path" >&
 printf '%s' "$FAKE_BD_OUT"
 `;
 
-type Opts = { fail?: boolean; empty?: boolean; commitIn?: "worktree" | "primary" };
+type Opts = { fail?: boolean; empty?: boolean; out?: string; checkManual?: boolean; missingGuardScript?: boolean; onDiskExtra?: boolean; commitIn?: "worktree" | "primary" };
 
 async function scenario(hookText: string, opts: Opts = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "cap-ufrr-"));
@@ -78,7 +78,7 @@ async function scenario(hookText: string, opts: Opts = {}) {
       GIT_COMMITTER_NAME: "t",
       GIT_COMMITTER_EMAIL: "t@t",
       FAKE_BD_LOG: log,
-      FAKE_BD_OUT: FRESH,
+      FAKE_BD_OUT: opts.out ?? FRESH,
       ...(opts.fail ? { FAKE_BD_FAIL: "1" } : {}),
       ...(opts.empty ? { FAKE_BD_EMPTY: "1" } : {}),
     };
@@ -90,6 +90,11 @@ async function scenario(hookText: string, opts: Opts = {}) {
     ok(git(root, "init", "-q", "-b", "main", primary), "init");
     await mkdir(path.join(primary, ".beads"));
     await writeFile(path.join(primary, ".beads", "issues.jsonl"), BASE);
+    if (!opts.missingGuardScript) {
+      await mkdir(path.join(primary, "scripts"));
+      await writeFile(path.join(primary, "scripts", "check-beads-export-divergence.mjs"),
+        await readFile(path.join(HOOKS_DIR, "..", "check-beads-export-divergence.mjs")));
+    }
     await writeFile(path.join(primary, "README"), "x\n");
     ok(git(primary, "add", "-A"), "add");
     ok(git(primary, "commit", "-q", "-m", "init"), "init commit");
@@ -101,6 +106,10 @@ async function scenario(hookText: string, opts: Opts = {}) {
     ok(git(primary, "worktree", "add", "-q", "-b", "lane", wt), "worktree add");
 
     const where = opts.commitIn === "primary" ? primary : wt;
+    if (opts.onDiskExtra) await writeFile(path.join(where, ".beads", "issues.jsonl"), BASE + '{"_type":"issue","id":"disk-only"}\n');
+    const manualCheck = opts.checkManual
+      ? spawnSync("node", [path.join(where, "scripts", "check-beads-export-divergence.mjs")], { cwd: where, env, encoding: "utf8" })
+      : null;
     await writeFile(path.join(where, "change.txt"), "change\n");
     ok(git(where, "add", "change.txt"), "stage the change");
     const commit = git(where, "commit", "-q", "-m", "a change");
@@ -114,6 +123,7 @@ async function scenario(hookText: string, opts: Opts = {}) {
     };
     return {
       commit,
+      manualCheck,
       bdCwd: ((await read(log)) ?? "").split("\n").filter(Boolean),
       primaryDisk: await read(path.join(primary, ".beads", "issues.jsonl")),
       primaryHead: head(primary),
@@ -167,6 +177,44 @@ Deno.test("ufrr: a failing or empty bd export never truncates the committed expo
     assert(/\[pre-commit\] bd export failed or empty/.test(s.commit.stderr), `${which}: the hook says what it skipped: ${s.commit.stderr}`);
     if (opts.fail) assert(/database locked \(fake\)/.test(s.commit.stderr), `${which}: bd's own error is relayed: ${s.commit.stderr}`);
   }
+});
+
+Deno.test("vf69: manual pre-export check compares committed IDs to canonical DB without writing", async () => {
+  const ok = await scenario(await referenceHook(), { checkManual: true });
+  assertEquals(ok.manualCheck?.status, 0, ok.manualCheck?.stderr);
+  assert(/all 1 committed\/on-disk issue IDs exist/.test(ok.manualCheck?.stdout ?? ""));
+  const missing = await scenario(await referenceHook(), { out: '{"_type":"issue","id":"other-1"}\n', checkManual: true });
+  assert(missing.manualCheck?.status !== 0, "manual check fails before destructive re-export");
+  assert(/base-1/.test(missing.manualCheck?.stderr ?? ""), missing.manualCheck?.stderr);
+});
+
+Deno.test("vf69: hook refuses to silently drop a committed issue missing from the live DB export", async () => {
+  const s = await scenario(await referenceHook(), { out: '{"_type":"issue","id":"other-1"}\n' });
+  assert(s.commit.status !== 0, "a missing committed ID must block the re-exporting commit");
+  assert(/base-1/.test(s.commit.stderr), `name the missing ID for human adjudication: ${s.commit.stderr}`);
+  assertEquals(s.worktreeHead, BASE, "the committed export remains intact");
+  assertEquals(s.worktreeDisk, BASE, "the on-disk export remains intact");
+  assertEquals(s.primaryDisk, BASE, "the shared primary checkout remains untouched");
+  assertEquals(s.litter, [], "no temp file remains after refusal");
+});
+
+Deno.test("vf69: the guard protects the on-disk export as well as HEAD", async () => {
+  const s = await scenario(await referenceHook(), { onDiskExtra: true });
+  assert(s.commit.status !== 0, "candidate must not silently remove a disk-only issue");
+  assert(/disk-only/.test(s.commit.stderr), s.commit.stderr);
+  assertEquals(s.worktreeHead, BASE);
+  assertEquals(s.worktreeDisk, BASE + '{"_type":"issue","id":"disk-only"}\n');
+  assertEquals(s.litter, []);
+});
+
+Deno.test("vf69: an older worktree without the checker commits without refreshing rather than erasing the export", async () => {
+  const s = await scenario(await referenceHook(), { missingGuardScript: true });
+  assertEquals(s.commit.status, 0, s.commit.stderr);
+  assertEquals(s.bdCwd, [], "no export runs without the guard");
+  assertEquals(s.worktreeHead, BASE);
+  assertEquals(s.worktreeDisk, BASE);
+  assert(/divergence check unavailable/.test(s.commit.stderr), s.commit.stderr);
+  assertEquals(s.litter, []);
 });
 
 Deno.test("ufrr harness honesty: the pre-ufrr hook text reproduces the defect here — bd runs in the PRIMARY, the primary is dirtied, the worktree commits a fresh export it does not have on disk", async () => {

@@ -142,7 +142,14 @@ run `node scripts/bump-version.mjs patch --user-note "<what the user gets>"`.
   `bd link <new-id> <current-id> --type discovered-from`; hard ordering gets
   `bd link <blocked-id> <blocker-id>` (or `bd dep add <blocked-id> --blocked-by <blocker-id>`). The dependency graph — not
   a human dispatcher — decides what is workable next.
-- `.beads/issues.jsonl` is a passive export, not the tracker.
+- `.beads/issues.jsonl` is a passive export, not the tracker. Before a manual
+  re-export, run `node scripts/check-beads-export-divergence.mjs` **from the
+  worktree being committed**: it compares committed and on-disk issue IDs with
+  the canonical `bd export --all` and fails if any would disappear. The reference
+  pre-commit hook checks its candidate export before replacing the file, but hooks may not
+  be installed in the shared git directory. A missing ID is an investigation,
+  **not** permission to bulk-import the stale export into the authoritative DB;
+  see `docs/BEADS-EXPORT-DIVERGENCE.md` (vf69).
 
 ### Epics and breakdown (beads best practice)
 A feature is not one bead. Break work down like this:
