@@ -307,7 +307,7 @@ const URL_INSTRUMENT_RE = /new\s+URL\s*\(\s*["']([^"']+)["']\s*,\s*import\.meta\
 // tokenizer locates inert strings, template text, regexps and comments without
 // executing the file; template ${...} expressions remain live code. A future
 // unsupported syntax cannot quietly hide an edge: on lexer failure retain it.
-function inertRanges(text) {
+function inertRanges(text, onLexerFailure) {
   const ranges = [];
   try {
     const tokens = tokenizer(text, {
@@ -319,20 +319,23 @@ function inertRanges(text) {
       if (token.type.label === "eof") break;
       if (["string", "template", "regexp", "`"].includes(token.type.label)) ranges.push([token.start, token.end]);
     }
-  } catch {
+  } catch (error) {
+    // Selection still retains every edge on unsupported syntax; the audit can
+    // separately reject unclassified failures rather than credit phantom edges.
+    onLexerFailure?.(error);
     return null;
   }
   return ranges;
 }
 
-export function codeUrlInstrumentSpecs(text) {
+export function codeUrlInstrumentSpecs(text, onLexerFailure) {
   const matches = [...text.matchAll(URL_INSTRUMENT_RE)];
-  const inert = matches.length ? inertRanges(text) : [];
+  const inert = matches.length ? inertRanges(text, onLexerFailure) : [];
   return matches.filter((m) => !inert?.some(([start, end]) => m.index >= start && m.index < end))
     .map((m) => m[1].trim());
 }
 
-function importsOf(absPath) {
+function importsOf(absPath, onLexerFailure) {
   if (!existsSync(absPath)) return [];
   const text = readFileSync(absPath, "utf8");
   const out = [];
@@ -359,7 +362,7 @@ function importsOf(absPath) {
   }
   // Link real code instruments via new URL(..., import.meta.url) (1smd),
   // but not identical text quoted inside test fixtures (i0rf N1).
-  for (const spec of codeUrlInstrumentSpecs(text)) {
+  for (const spec of codeUrlInstrumentSpecs(text, (error) => onLexerFailure?.(absPath, error))) {
     if (spec.startsWith(".") && /\.(js|ts|mjs)$/.test(spec)) {
       const clean = spec.split("?")[0].split("#")[0];
       const resolved = resolve(dirname(absPath), clean);
@@ -382,7 +385,7 @@ function resolvePath(p) {
 }
 
 // Reverse edges over the whole source tree: file -> files that import it.
-export function buildReverseGraph() {
+export function buildReverseGraph(onLexerFailure) {
   const reverse = new Map(); // abs path -> Set(abs paths of importers)
   const files = new Set();
   const walk = (dir) => {
@@ -397,7 +400,7 @@ export function buildReverseGraph() {
     if (existsSync(join(ROOT, d))) walk(join(ROOT, d));
   }
   for (const f of files) {
-    for (const imp of importsOf(f)) {
+    for (const imp of importsOf(f, onLexerFailure)) {
       if (!reverse.has(imp)) reverse.set(imp, new Set());
       reverse.get(imp).add(f);
     }
