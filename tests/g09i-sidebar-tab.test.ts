@@ -66,7 +66,30 @@ Deno.test({
       }
       assert(focus[0]?.inSidebar && focus[0]?.inTasks,
         `first Tab must enter visible Tasks, not bypass the sidebar: ${JSON.stringify(focus)}`);
+      // d284: first Tab reaches #new-task directly without a redundant unnamed summary stop
+      assertEquals(focus[0]?.id, "new-task", `first Tab must land directly on new-task: ${JSON.stringify(focus[0])}`);
+      assertEquals(focus[0]?.label, "New task", `first Tab element must have accessible label: ${JSON.stringify(focus[0])}`);
       assert(focus.some((s) => s.inRail), `subsequent Tabs must reach the rail: ${JSON.stringify(focus)}`);
+
+      // d284: verify that collapsed sidebar sets tabindex='-1' on summary, and expanding restores natural tabindex (null)
+      const collapsedSummary = await cdp.eval(sid, `(() => {
+        const summary = document.querySelector('#tasks-section > summary');
+        return summary?.getAttribute('tabindex');
+      })()`);
+      assertEquals(collapsedSummary, "-1", "collapsed sidebar must set tabindex='-1' on summary");
+
+      const expanded = await cdp.eval(sid, `(async () => {
+        const toggle = document.getElementById('side-toggle'), side = document.getElementById('side');
+        toggle.click();
+        await new Promise((r) => setTimeout(r, 200));
+        const summary = document.querySelector('#tasks-section > summary');
+        return {
+          collapsed: side.classList.contains('collapsed'),
+          summaryTabindex: summary?.getAttribute('tabindex'),
+        };
+      })()`);
+      assertEquals(expanded.collapsed, false, "sidebar must be expanded after toggle click");
+      assertEquals(expanded.summaryTabindex, null, "expanding sidebar must restore natural tabindex on summary (no tabindex attribute)");
       const after = await cdp.screenshot(sid, { fromSurface: false, timeoutMs: 6000 });
       assert(after, "capture the keyboard-focused rail");
       await Deno.writeFile(`${evidence}/after.png`, after);
