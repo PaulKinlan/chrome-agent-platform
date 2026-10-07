@@ -538,7 +538,7 @@ Deno.test("ui-contrast-a11y: artifacts search input preserves keyboard focus-vis
   const artifactsHtml = await Deno.readTextFile(new URL("../extension/artifacts/index.html", import.meta.url));
   assert(!/\.search-input\s*\{[^}]*outline:\s*none/s.test(artifactsHtml), ".search-input must not unconditionally suppress outline");
   assert(/\.search-input:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--accent\)/s.test(artifactsHtml), ".search-input:focus-visible must preserve 2px accent outline ring");
-  assert(/\.search-input:focus:not\(:focus-visible\)\s*\{[^}]*outline:\s*none/s.test(artifactsHtml), ".search-input:focus:not(:focus-visible) must suppress outline on mouse click");
+  assert(/\.search-input:focus:not\(:focus-visible\)\s*\{[^}]*outline:\s*none/s.test(artifactsHtml), ".search-input:focus:not(:focus-visible) must restrict outline:none to non-visible focus states");
 });
 
 Deno.test("ui-contrast-a11y: permission status and notes adhere to min 12px design scale step (chrome-agent-platform-upwb)", async () => {
@@ -563,7 +563,6 @@ Deno.test("ui-contrast-a11y: permission status and notes adhere to min 12px desi
 Deno.test("ui-contrast-a11y: artifact preview host adapts to dark mode and styles retry button with focus-visible (chrome-agent-platform-1rjv)", async () => {
   const previewHtml = await Deno.readTextFile(new URL("../extension/sandbox/artifact-preview.html", import.meta.url));
   const previewCss = await Deno.readTextFile(new URL("../extension/sandbox/artifact-preview.css", import.meta.url));
-  const previewJs = await Deno.readTextFile(new URL("../extension/sandbox/artifact-preview.js", import.meta.url));
 
   assert(previewHtml.includes('<meta name="color-scheme" content="light dark">'), "artifact-preview.html must declare color-scheme: light dark");
   assert(previewHtml.includes('href="../shared/theme.css"'), "artifact-preview.html must link shared theme.css");
@@ -575,6 +574,4 @@ Deno.test("ui-contrast-a11y: artifact preview host adapts to dark mode and style
   assert(/#preview-retry:focus-visible\s*\{[^}]*outline:\s*2px solid/s.test(previewCss), "#preview-retry must declare 2px focus-visible outline ring");
   assert(/#preview-retry:active\s*\{/s.test(previewCss), "#preview-retry must style :active state");
   assert(/#preview-retry:disabled\s*\{/s.test(previewCss), "#preview-retry must style :disabled state");
-
-  assert(previewJs.includes("applyPreference"), "artifact-preview.js must apply received preference to host document");
 });

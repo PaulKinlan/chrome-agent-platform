@@ -63,20 +63,6 @@ function relayPreference(data) {
   } catch { /* inner frame not ready */ }
 }
 
-function applyPreference(preference) {
-  if (!preference) return;
-  if (preference.colorScheme) {
-    try {
-      const cs = preference.colorScheme;
-      document.documentElement.setAttribute("data-color-scheme", cs);
-      if (document.documentElement.style) {
-        document.documentElement.style.colorScheme =
-          (cs === "system" || cs === "no-preference") ? "light dark" : cs;
-      }
-    } catch { /* document not ready */ }
-  }
-}
-
 window.addEventListener("message", (event) => {
   const data = event.data;
 
@@ -89,7 +75,6 @@ window.addEventListener("message", (event) => {
       return;
     }
     if (data?.type === "cap:preference" && validNonce(data.nonce)) {
-      applyPreference(data.preference);
       relayPreference(data);
     }
     return;
