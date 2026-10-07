@@ -129,6 +129,11 @@ async function sha256Hex(bytes) {
  * CAP browsers, NOT other lanes' compilers — a quiet box is still what this
  * suite needs, and this opt-in only stops our own gates from eating it. */
 function launchJourneyChrome(profile: string) {
+  // clearEnv prevents ambient variables reaching Chrome, but the fleet's
+  // non-secret lane identifier must survive into detached crashpad helpers.
+  // The reaper uses this inherited marker to recognize a live lane; it does
+  // not prevent or clean up crashpad, which is the hub reaper's responsibility.
+  const fleetLane = Deno.env.get("FLEET_LANE");
   return spawnChrome({
     canonicalLock: true,
     // mkax: this gate's load-induced reds are environmental, so it waits for a
@@ -158,6 +163,7 @@ function launchJourneyChrome(profile: string) {
     ],
     stdout: "null",
     clearEnv: true,
+    env: fleetLane ? { FLEET_LANE: fleetLane } : {},
     timeoutMs: 20000,
   }).catch((e) => {
     // An environmental refusal is a THIRD verdict. It must never be re-read as
@@ -7618,9 +7624,13 @@ async function main() {
     const restartAgain = await msgValue({ type: "agent.update", origin: approvalTargetOrigin, name: "restart-must-not-apply" });
     await sleep(250);
     const refAfterRestart = await evalOpts(`chrome.runtime.sendMessage({type:'management.pending-approvals'}).then(v => v.approvals?.[0]?.targetRef || '')`);
+    const restartedTargets = await cdp.send("Target.getTargets");
+    const restartedApprovalWorker = restartedTargets?.result?.targetInfos?.find((t) =>
+      t.type === "service_worker" && t.url.includes(extId));
     check(
       "approval: install-scoped opaque reference survives a worker restart",
       restartRequest?.ok === false && restartAgain?.ok === false &&
+        !!restartedApprovalWorker?.targetId && restartedApprovalWorker.targetId !== approvalWorker.targetId &&
         typeof refBeforeRestart === "string" && refBeforeRestart.length === 32 && refAfterRestart === refBeforeRestart,
     );
     await resolveNextApproval(false);

@@ -38,6 +38,14 @@ Deno.test("gi0jw: a wrong owner-direct driver is rejected rather than credited",
   assertThrows(() => assertPendingDrivers(""), Error, "iframe deny, row deny");
 });
 
+Deno.test("gi0jw: target reference is credited only after an observed worker restart", () => {
+  const before = denyBlock.indexOf('Target.closeTarget", { targetId: approvalWorker.targetId }');
+  const after = denyBlock.indexOf('const restartedTargets = await cdp.send("Target.getTargets")');
+  assert(before >= 0 && after > before, "observe the worker after closing its original target");
+  assert(denyBlock.includes("restartedApprovalWorker.targetId !== approvalWorker.targetId"),
+    "stable targetRef must not be credited by deduplicating the same in-memory row");
+});
+
 Deno.test("gi0jw: a live ui:-bound row is Settings-only, not an expired-id refusal", () => {
   const row = { runId: "ui:real-ntp-document" };
   assert(mayResolveApproval(row, "owner-options", "settings-document"));
