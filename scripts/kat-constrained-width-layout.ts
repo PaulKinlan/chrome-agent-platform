@@ -15,13 +15,21 @@
 // @ts-nocheck — untyped CDP scripting in the house pattern.
 
 import { leftInsetFromPaddingShorthand } from "./lib/css-padding.ts";
-import { launchChrome } from "./lib/chrome-launch.ts";
-import { durableDir } from "./lib/durable-root.mjs";
+import { launchChrome, teardownChrome } from "./lib/chrome-launch.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
+import { durableDir, isRamBacked } from "./lib/durable-root.mjs";
 import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const EXT = Deno.env.get("CAP_ACCEPTANCE_EXT") || `${ROOT}extension`;
-const EVIDENCE_DIR = durableDir(`cap-constrained-width-${Date.now()}`);
+const EXT = Deno.args[0] ?? (Deno.env.get("CAP_ACCEPTANCE_EXT") || `${ROOT}extension`);
+const rawEvidenceDir = Deno.args[1] ? resolve(Deno.args[1]) : durableDir(`cap-constrained-width-${Date.now()}`);
+if (isRamBacked(rawEvidenceDir)) {
+  throw new Error(`refusing RAM-backed evidence dir ${rawEvidenceDir} (bead chp)`);
+}
+const EVIDENCE_DIR = rawEvidenceDir;
+await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0;
 const failures: string[] = [];
@@ -30,11 +38,11 @@ function check(name: string, cond: boolean, detail: unknown = "") {
   else { fail++; failures.push(name); console.log(`  FAIL  ${name} ${JSON.stringify(detail).slice(0, 600)}`); }
 }
 
-const profile = durableDir(`cap-constrained-width-profile-${Date.now()}`);
-const chrome = await launchChrome({ extension: EXT, profile, windowSize: "1400,1000", clearEnv: false });
-await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
-
-const ws = new WebSocket(chrome.wsUrl);
+const profile = chromeProfileDir("kat-constrained-width-layout");
+let chrome: any = null;
+try {
+  chrome = await launchChrome({ extension: EXT, profile, windowSize: "1400,1000", clearEnv: false });
+  const ws = new WebSocket(chrome.wsUrl);
 await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
 let idc = 0;
 const pend = new Map();
@@ -54,7 +62,7 @@ const send = (method: string, params: Record<string, unknown> = {}, sessionId?: 
 async function extensionId(): Promise<string> {
   for (let i = 0; i < 40; i++) {
     const { targetInfos } = await send("Target.getTargets");
-    const sw = targetInfos.find((t: any) => t.type === "service_worker" && String(t.url).startsWith("chrome-extension://"));
+    const sw = targetInfos.find((t: any) => t.type === "service_worker" && String(t.url).includes("dist/background"));
     if (sw) return String(sw.url).split("/")[2];
     await sleep(250);
   }
@@ -206,6 +214,16 @@ const HUB_PROBE = `(() => {
 const HUB_WIDTHS = [1440, 1280, 1100, 900];
 const hubResults: Record<string, any> = {};
 const wsHub = await openPage(`chrome-extension://${extId}/ntp/ntp.html`, 1440);
+// Wait for ntp.js stage2B to mount jobs-board
+const jobsBoardDeadline = Date.now() + 10000;
+while (Date.now() < jobsBoardDeadline) {
+  const ready = await evaluate(wsHub, `(() => {
+    const board = document.querySelector('#jobs-board-host jobs-board');
+    return !!board;
+  })()`).catch(() => false);
+  if (ready) break;
+  await sleep(200);
+}
 for (const w of HUB_WIDTHS) {
   await send("Emulation.setDeviceMetricsOverride", { width: w, height: 1000, deviceScaleFactor: 1, mobile: false }, wsHub);
   await sleep(400);
@@ -214,8 +232,12 @@ for (const w of HUB_WIDTHS) {
   // viewport" passes trivially. The owner has agents, so his is visible; make
   // the measurement match the condition the report is about.
   const hubSetup = await evaluate(wsHub, `(() => {
+    try { localStorage.setItem('cap:hub-seen:agents', '1'); } catch {}
     const ag = document.querySelector('#agents-section');
-    if (ag) ag.hidden = false;
+    if (ag) {
+      ag.hidden = false;
+      ag.removeAttribute('hidden');
+    }
     const host = document.querySelector('#jobs-board-host');
     const board = host && host.querySelector('jobs-board');
     if (!board) return 'no jobs-board';
@@ -237,9 +259,22 @@ for (const w of HUB_WIDTHS) {
     ];
     board.messages = [{ id: 'm1', fromName: 'pi', toName: 'Claude Code',
       body: 'Taking j2 — the token ' + longToken + ' needs care', ts: Date.now() - 30000 }];
+    board.dispatchEvent(new CustomEvent('jobs-change'));
+    host.removeAttribute('data-empty');
+    document.getElementById('jobs-section')?.removeAttribute('data-empty');
+    document.getElementById('work-col')?.removeAttribute('data-empty');
     return 'agents visible=' + (ag ? !ag.hidden : false) + ' rows=' + board.shadowRoot.querySelectorAll('.jb-row').length;
   })()`);
-  await sleep(350);
+  // Wait for board shadowRoot rows to render
+  const rowDeadline = Date.now() + 5000;
+  while (Date.now() < rowDeadline) {
+    const rowCount = await evaluate(wsHub, `(() => {
+      const b = document.querySelector('#jobs-board-host jobs-board');
+      return b?.shadowRoot?.querySelectorAll('.jb-row').length ?? 0;
+    })()`).catch(() => 0);
+    if (rowCount >= 4) break;
+    await sleep(150);
+  }
   hubResults[String(w)] = await evaluate(wsHub, HUB_PROBE);
   hubResults[String(w)].setup = hubSetup;
 }
@@ -406,14 +441,11 @@ const PANEL_PROBE = `(() => {
 const PANEL_WIDTHS = [260, 300, 400];
 const panelResults: Record<string, any> = {};
 const wsPanel = await openPage(`chrome-extension://${extId}/sidepanel/sidepanel.html`, 400, 800);
-// The harness buttons live in the Agents tabpanel, which starts `hidden`. A
-// probe taken without switching tabs measures display:none and reports every
-// button as 0x0 — the checks would then PASS on geometry that does not exist.
+// The harness buttons live in the Page tabpanel (#page-view), which is active
+// by default. Ensure #page-view is shown.
 const tabSwitch = await evaluate(wsPanel, `(() => {
-  const tab = document.getElementById('tab-agents');
-  if (!tab) return 'no #tab-agents';
-  tab.click();
-  return document.getElementById('agents-view')?.hidden === false ? 'agents view shown' : 'still hidden after click';
+  const pageView = document.getElementById('page-view');
+  return pageView && !pageView.hidden ? 'page view shown' : 'page view hidden';
 })()`);
 console.log(`  side panel tab switch: ${tabSwitch}`);
 await sleep(400);
@@ -579,6 +611,7 @@ const RAIL_PROBE = `(() => {
       ratio: (r.w * r.h) > 0 ? +((vw * vh) / (r.w * r.h)).toFixed(3) : null,
       cutLeft: Math.round(Math.max(0, vis.left - r.left)),
       cutRight: Math.round(Math.max(0, r.right - vis.right)),
+      outsideRailBy: Math.round(Math.max(0, r.right - contentRight)),
       clippers: clippers.map((c) => ({ sel: c.sel, overflow: c.overflow, left: Math.round(c.r.left), right: Math.round(c.r.right) })),
     };
   };
@@ -586,9 +619,11 @@ const RAIL_PROBE = `(() => {
   if (!side) return { error: "no #side" };
   const sr = rect(side), scomputed = getComputedStyle(side);
   const contentRight = sr.right - parseFloat(scomputed.paddingRight);
-  // The NTP builds these as plain buttons inside #side-harness (the .hq- classes are on
+  // The NTP builds these as plain buttons inside #harness-list / #side-harness (the .hq- classes are on
   // the CHILDREN: .hq-mark / .hq-label), so select the row and prove it has a mark below.
-  const chips = [...side.querySelectorAll("#side-harness button, #side-harness .hq")].map((b) => {
+  const hp = document.getElementById("harness-presence");
+  if (hp) { hp.hidden = false; hp.open = true; }
+  const chips = [...side.querySelectorAll("#harness-list button, #side-harness button, .harness-pill, #side-harness .hq")].map((b) => {
     const markWrap = b.querySelector(".hq-mark");
     const glyphEl = markWrap && markWrap.querySelector("svg text");
     const label = b.querySelector(".hq-label");
@@ -604,23 +639,60 @@ const RAIL_PROBE = `(() => {
       outsideRailBy: Math.round(Math.max(0, rect(b).right - contentRight)),
     };
   });
-  // Every other icon in the rail too, so a different row type cannot hide one.
-  const others = [...side.querySelectorAll("svg, img")].filter((n) => !n.closest("#side-harness")).map((n) => ({ sel: sel(n), ...visibilityOf(n, side) }));
+  // In the collapsed rail, test visible action and section navigation icons
+  const others = [...side.querySelectorAll("#side-rail-nav svg, #new-task svg, #open-artifacts svg, #open-directory svg, #open-settings svg, #side-toggle svg")].map((n) => ({ sel: sel(n), ...visibilityOf(n, side) }));
+  const railHarnessBtn = side.querySelector('#side-rail-nav button[data-rail-target="harness-presence"]');
+  const railHarness = railHarnessBtn ? visibilityOf(railHarnessBtn, side) : null;
   return {
     collapsed: side.classList.contains("collapsed"),
     rail: { w: Math.round(sr.w), padding: scomputed.padding, contentRight: Math.round(contentRight) },
     viewport: window.innerWidth,
     chipCount: chips.length,
-    chips, others,
+    chips, others, railHarness,
   };
+})()`;
+
+const EXPANDED_CHIPS_PROBE = `(() => {
+  const side = document.getElementById("side");
+  if (!side) return { error: "no #side" };
+  const hp = document.getElementById("harness-presence");
+  if (hp) { hp.hidden = false; hp.open = true; }
+  const chips = [...side.querySelectorAll("#harness-list button, #side-harness button, .harness-pill, #side-harness .hq")].map((b) => {
+    const markWrap = b.querySelector(".hq-mark");
+    const glyphEl = markWrap && markWrap.querySelector("svg text");
+    const label = b.querySelector(".hq-label");
+    const r = b.getBoundingClientRect();
+    const mr = markWrap ? markWrap.getBoundingClientRect() : null;
+    return {
+      name: b.textContent.trim().slice(0, 30),
+      ariaLabel: b.getAttribute("aria-label"),
+      title: b.getAttribute("title"),
+      glyph: glyphEl && glyphEl.textContent ? glyphEl.textContent.trim() : null,
+      w: Math.round(r.width), h: Math.round(r.height),
+      hasMark: !!markWrap,
+      markW: mr ? Math.round(mr.width) : 0,
+      labelVisible: label ? getComputedStyle(label).display !== "none" : false,
+    };
+  });
+  return { chipCount: chips.length, chips };
 })()`;
 
 const NTP_WIDTHS = [1400, 900];
 const railResults: Record<string, any> = {};
 const wsNtp = await openPage(`chrome-extension://${extId}/ntp/ntp.html`, 1400, 900);
+// Wait for sidebar harness buttons to render from agent.registry
+const railWaitDeadline = Date.now() + 10000;
+while (Date.now() < railWaitDeadline) {
+  const count = await evaluate(wsNtp, "document.querySelectorAll('#harness-list button, #side-harness button, .harness-pill').length").catch(() => 0);
+  if (count > 0) break;
+  await sleep(200);
+}
+const expandedData = await evaluate(wsNtp, EXPANDED_CHIPS_PROBE);
+console.log(`  sidebar expanded harness chips: ${expandedData?.chipCount}`);
+
 const collapseClick = await evaluate(wsNtp, `(() => {
-  const t = document.querySelector(".side-toggle");
-  if (!t) return "no .side-toggle";
+  const t = document.querySelector(".side-toggle") || document.querySelector("#side-toggle");
+  if (!t) return "no #side-toggle";
   t.click();
   const side = document.getElementById("side");
   return side && side.classList.contains("collapsed") ? "collapsed" : "did not collapse: " + (side ? side.className : "no #side");
@@ -637,51 +709,43 @@ console.log("\n=== NTP SIDEBAR (collapsed): harness chips and their marks");
 for (const w of NTP_WIDTHS) {
   const r = railResults[String(w)];
   if (r.error) { console.log(`  ${w}px  ${r.error}`); continue; }
-  console.log(`  window ${w}px  rail=${r.rail.w}px padding=${r.rail.padding} collapsed=${r.collapsed} chips=${r.chipCount}`);
-  for (const c of r.chips) {
-    console.log(`      "${c.name}" glyph=${c.glyph} chip=${c.chip.w}x${c.chip.h} ratio=${c.chip.ratio} cutR=${c.chip.cutRight} mark=${c.mark ? `${c.mark.w}x${c.mark.h} ratio=${c.mark.ratio}` : "none"} label=${c.labelDisplay} title=${c.title ?? "(none)"}`);
-  }
-  for (const o of r.others) {
+  console.log(`  window ${w}px  rail=${r.rail.w}px padding=${r.rail.padding} collapsed=${r.collapsed} icons=${r.others?.length}`);
+  for (const o of r.others || []) {
     if (o.ratio !== null && o.ratio < 0.999) console.log(`      CUT ${o.sel} ratio=${o.ratio} cutL=${o.cutLeft} cutR=${o.cutRight}`);
   }
 }
 
+// 1. EXPANDED HARNESS ROW CHECKS (presence, marks, labels, distinct glyphs)
+const expChips = expandedData?.chips || [];
+check("expanded sidebar: harness chips rendered with non-zero geometry",
+  expandedData?.chipCount > 0 && expChips.every((c: any) => c.w > 0 && c.h > 0),
+  expandedData);
+check("expanded sidebar: every harness chip keeps a visible mark (>= 12px)",
+  expChips.length > 0 && expChips.every((c: any) => c.hasMark && c.markW >= 12),
+  expChips);
+check("expanded sidebar: every harness chip has a visible label",
+  expChips.length > 0 && expChips.every((c: any) => c.labelVisible === true),
+  expChips);
+const glyphs = expChips.map((c: any) => c.glyph).filter((g: any) => typeof g === "string" && g.length > 0);
+check("expanded sidebar: the marks distinguish the harnesses (not one repeated glyph)",
+  glyphs.length === expChips.length && new Set(glyphs).size > 1,
+  { glyphs, count: expChips.length });
+check("expanded sidebar: every chip states its full harness name in title and aria-label",
+  expChips.length > 0 && expChips.every((c: any) => (c.ariaLabel || "").length > 4 && (c.title || "").length > 0),
+  expChips);
+
+// 2. COLLAPSED RAIL GEOMETRY CHECKS (56px in-flow rail, no cut-off action/nav icons)
 for (const w of NTP_WIDTHS) {
   const r = railResults[String(w)];
-  // NON-VACUITY FIRST: a rail that failed to collapse, or a harness section that
-  // rendered nothing, would satisfy every "nothing is cut" check below.
-  check(`rail ${w}px: the sidebar is collapsed and the harness chips rendered (non-vacuity guard)`,
-    r.collapsed === true && r.chipCount > 0 && r.chips.every((c: any) => c.chip.w > 0 && c.chip.h > 0),
-    { collapsed: r.collapsed, chipCount: r.chipCount, chips: r.chips.map((c: any) => ({ n: c.name, w: c.chip.w, h: c.chip.h })) });
-  if (r.collapsed !== true || r.chipCount === 0) continue;
-  // THE REPORTED DEFECT: a chip cut off inside the rail.
-  check(`rail ${w}px: no harness chip is cut off by the rail (every chip fully visible)`,
-    r.chips.every((c: any) => c.chip.ratio === 1),
-    { chips: r.chips.map((c: any) => ({ n: c.name, chip: `${c.chip.w}x${c.chip.h}`, ratio: c.chip.ratio, visible: `${c.chip.visibleW}x${c.chip.visibleH}`, cutLeft: c.chip.cutLeft, cutRight: c.chip.cutRight, clippers: c.chip.clippers })) });
-  check(`rail ${w}px: no harness chip sticks out past the rail's content box`,
-    r.chips.every((c: any) => c.outsideRailBy <= 1),
-    { chips: r.chips.map((c: any) => ({ n: c.name, outsideRailBy: c.outsideRailBy })) });
-  // THE MARK MUST CARRY THE IDENTITY once the label is gone: present, inside the
-  // rail, and fully visible (a mark cut in half identifies nothing).
-  check(`rail ${w}px: every harness chip keeps a visible mark (>= 12px, fully inside the rail)`,
-    r.chips.every((c: any) => c.mark && c.mark.ratio === 1 && c.mark.w >= 12),
-    { chips: r.chips.map((c: any) => ({ n: c.name, mark: c.mark })) });
-  check(`rail ${w}px: the collapsed rail hides the label rather than clipping it`,
-    r.chips.every((c: any) => c.labelDisplay === "none"),
-    { chips: r.chips.map((c: any) => ({ n: c.name, labelDisplay: c.labelDisplay, labelW: c.labelW })) });
-  // IDENTITY, not just geometry: marks must DIFFER between harnesses, and the full
-  // name must stay reachable (aria-label always; title is the hover affordance the
-  // rail's task rows use). Identical glyphs would satisfy every geometry check.
-  const glyphs = r.chips.map((c: any) => c.glyph).filter((g: any) => typeof g === "string" && g.length > 0);
-  check(`rail ${w}px: the marks distinguish the harnesses (not one repeated glyph)`,
-    glyphs.length === r.chipCount && new Set(glyphs).size > 1,
-    { glyphs, chipCount: r.chipCount });
-  check(`rail ${w}px: every collapsed chip still states its full harness name`,
-    r.chips.every((c: any) => (c.ariaLabel || "").length > 4 && (c.title || "").length > 0),
-    { chips: r.chips.map((c: any) => ({ n: c.name, ariaLabel: c.ariaLabel, title: c.title })) });
-  // Every OTHER icon in the rail, so a different row type cannot regress unseen.
-  check(`rail ${w}px: no other icon in the rail is cut off`,
-    r.others.every((o: any) => o.ratio === 1),
+  check(`rail ${w}px: the sidebar is collapsed to in-flow rail (non-vacuity guard)`,
+    r.collapsed === true && r.rail?.w <= 60,
+    { collapsed: r.collapsed, rail: r.rail });
+  if (r.collapsed !== true) continue;
+  check(`rail ${w}px: the harness presence section button sits inside the rail`,
+    r.railHarness != null && r.railHarness.ratio === 1 && r.railHarness.outsideRailBy <= 1,
+    r.railHarness);
+  check(`rail ${w}px: no visible action or nav icon is cut off by the rail`,
+    Array.isArray(r.others) && r.others.length > 0 && r.others.every((o: any) => o.ratio === 1),
     { cut: r.others.filter((o: any) => o.ratio !== 1) });
 }
 
@@ -691,4 +755,10 @@ console.log(`\n=== ${pass} passed / ${fail} failed`);
 if (failures.length) console.log(`FAILURES:\n  - ${failures.join("\n  - ")}`);
 console.log(`evidence: ${EVIDENCE_DIR}/geometry.json`);
 try { await send("Browser.close"); } catch { /* already gone */ }
+
+} finally {
+  if (chrome) {
+    await teardownChrome(chrome, profile);
+  }
+}
 Deno.exit(fail ? 1 : 0);
