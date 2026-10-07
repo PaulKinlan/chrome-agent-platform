@@ -498,7 +498,13 @@ the literal.
 - **Subject moves:** LOUD, verified by mutation: reverting or weakening each pinned rule turned a
   named test red across 258 worker mutants and 63 coordinator mutants of the build pins (the
   one survivor was an equivalent mutant: `exitCode == 0` behind a `typeof exitCode === "number"`
-  guard), and the reap call-site pins were drilled the same way.
+  guard). The reap pins were drilled in a private snapshot too: 26 of 28 mutants of the helper,
+  the fixture and the three call sites went red with the intended killer. One (the helper's
+  `kill` removed) never terminates, because the leader is never signalled and the helper tests
+  wait on it, so it was stopped by hand and is not counted as a clean kill. One survived (the
+  import deleted while the call stays), which is why the binding pin exists; its 12 mutants (four
+  per script: import deleted, another export aliased to the name, imported from another module,
+  defined locally) are each killed by that pin alone.
 - **Known limits, stated in the test headers (not claimed closed):** a write through a primitive
   outside the 20 names the discipline test lists; an imported helper that fans out with
   `Promise.all` internally; a fatal raised from an exit handler after the record call; and a

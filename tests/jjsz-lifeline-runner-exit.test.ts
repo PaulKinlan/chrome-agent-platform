@@ -36,7 +36,10 @@
 //     the RUNNER has printed NEGATIVE_WINDOW_TICKS ticks past the marker (`afterLeaderExit`).
 //   * The call-site pins parse the three scripts (esbuild strips the types, acorn parses what is left): an
 //     import is not a call site. Each pin is checked against mutants of the REAL source text inside this file
-//     (the same checker must reject them), so the net is proven on every run.
+//     (the same checker must reject them), so the net is proven on every run. The converse needs its own pin: a
+//     call site is not an import, and with the import deleted the call is an unbound name that throws only when a
+//     real run reaches it (a drill of exactly that survived every call-site pin). The binding pin at the end of
+//     the file requires `import { reapLeaderAndSettle } from "./lib/reap-leader.ts"`, once, under that name.
 //
 // THE PINS ARE PER-SITE, NOT A RULE. They prove these three scripts go through the helper. The rule ("a runner
 // that kills its leader and then exits or relaunches goes through `reapLeaderAndSettle` or `teardownChrome`")
@@ -914,6 +917,59 @@ for (const journey of JOURNEYS) {
           `mutant "${name}": property "${property}" ${broken.includes(property) ? "must be violated" : "must stay clean"}; got ${JSON.stringify(found)}`,
         );
       }
+    }
+  });
+}
+
+// ── the binding pin ─────────────────────────────────────────────────────────
+//
+// An import is not a call site, and a call site is not an import. Every pin above reads the CALL; with the
+// import deleted the call stays and is an unbound name, which throws a ReferenceError only when a real run
+// reaches the `finally` (or the phase-1 to phase-2 boundary). A drilled mutant of exactly that (delete the import
+// line of scripts/security-suite.ts) survived every pin above, and no gate on this box runs the real security
+// suite (bead 8bp69) to notice. A local re-implementation, or some other export aliased to the same local name,
+// would equally satisfy the call-site pins, so the import must name the helper, under its own name, from the
+// one module.
+
+const REAP_MODULE = "./lib/reap-leader.ts";
+const REAP_IMPORT = `import { reapLeaderAndSettle } from "${REAP_MODULE}";\n`;
+
+function reapBindingViolations(program: Ast): string[] {
+  const imports = program.body.filter((s: Ast) => s.type === "ImportDeclaration" && s.source?.value === REAP_MODULE);
+  if (imports.length !== 1) return [`the script must import from ${REAP_MODULE} exactly once; it does ${imports.length} times`];
+  const bound = imports[0].specifiers.some((s: Ast) =>
+    s.type === "ImportSpecifier" && (s.imported?.name ?? s.imported?.value) === "reapLeaderAndSettle" &&
+    s.local?.name === "reapLeaderAndSettle"
+  );
+  return bound ? [] : [`${REAP_MODULE} must be imported as { reapLeaderAndSettle }, under that same local name`];
+}
+
+function reapBindingMutants(source: string): Array<[string, string]> {
+  return [
+    ["delete the import (the call stays)", mutate(source, REAP_IMPORT, "")],
+    ["alias another export to the name", mutate(source, REAP_IMPORT, `import { teardownChrome as reapLeaderAndSettle } from "${REAP_MODULE}";\n`)],
+    ["import it from another module", mutate(source, REAP_IMPORT, 'import { reapLeaderAndSettle } from "./lib/process-tree.ts";\n')],
+    [
+      "define it locally",
+      mutate(
+        source,
+        REAP_IMPORT,
+        'async function reapLeaderAndSettle(proc: Deno.ChildProcess): Promise<void> {\n  try { proc.kill("SIGKILL"); } catch { /* gone */ }\n  await proc.status;\n}\n',
+      ),
+    ],
+  ];
+}
+
+for (const script of [SECURITY_SUITE, ...JOURNEYS]) {
+  const name = script.replace("scripts/", "");
+  Deno.test(`jjsz pin: ${name} imports reapLeaderAndSettle from ./lib/reap-leader.ts under its own name (kills: delete the import and keep the call, alias another export to the name, import it from elsewhere, define it locally)`, async () => {
+    assertEquals(reapBindingViolations(await parseTs(sourceOf(script))), []);
+  });
+  Deno.test(`jjsz pin check: every binding mutant of ${name} is rejected`, async () => {
+    const source = sourceOf(script);
+    assertEquals(reapBindingViolations(await parseTs(source)), [], "the real source binds the helper");
+    for (const [mutantName, mutant] of reapBindingMutants(source)) {
+      assertNotEquals(reapBindingViolations(await parseTs(mutant)), [], `mutant "${mutantName}" must be rejected`);
     }
   });
 }
