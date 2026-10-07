@@ -38,7 +38,7 @@ We distinguish three tiers of platform status with strict checkability:
 
 ### Position 2: DO NOT adopt Chrome's Built-in AI (`window.ai` / Gemini Nano) for the core agent loop or tool orchestration.
 - **The Stance:** Confine Built-in AI strictly to zero-cost peripheral tasks (e.g. classification, search indexing, title generation). Never allow it to execute the primary agent tool-calling loop.
-- **The Rationale & Evidence:** The Prompt API in Canary/Origin Trial has severe context ceilings (4k–8k tokens) and weak function-calling fidelity. CAP's lazy tool protocol alone requires multi-turn search and schema validation across a 188-tool catalog and complex pipelines (up to 200 steps). Attempting to orchestrate multi-step browser tasks on Gemini Nano causes hallucinated tool calls and immediate context exhaustion.
+- **The Rationale & Evidence:** The Prompt API in Canary/Origin Trial has severe context ceilings (4k–8k tokens) and weak function-calling fidelity. CAP's lazy tool protocol alone requires multi-turn search and schema validation across a 191-tool catalog and complex pipelines (up to 200 steps). Attempting to orchestrate multi-step browser tasks on Gemini Nano causes hallucinated tool calls and immediate context exhaustion.
 - **Trade-off:** We accept reliance on external provider APIs and user credentials, but we gain the reasoning depth required to navigate real websites and execute code.
 
 ### Position 3: DO NOT abandon the Offscreen Document; harden it as an explicit disposable worker hub.
