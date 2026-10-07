@@ -1,5 +1,6 @@
 import { assert } from "https://deno.land/std@0.224.0/testing/asserts.ts";
 import * as path from "https://deno.land/std@0.224.0/path/mod.ts";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 Deno.test("cap-ai-sdk-dedup layout behaviors", async (t) => {
   const ROOT = Deno.cwd();
@@ -12,7 +13,7 @@ Deno.test("cap-ai-sdk-dedup layout behaviors", async (t) => {
 import fs from "fs";
 import path from "path";
 import { createRequire } from "module";
-import { execFileSync } from "child_process";
+const execFileSync = () => { fs.mkdirSync(denoStoreDir, { recursive: true }); }; // Mock auto-install for tests
 const { readdirSync } = fs;
 function realpathSync(p) { return fs.realpathSync(p); }
 const ROOT = process.cwd();
@@ -30,7 +31,7 @@ console.log("GUARD_PASSED");
   }
 
   await t.step("Mac-style npm layout (no .deno) passes guard", async () => {
-    const tmp = await Deno.makeTempDir();
+    const tmp = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-sdkdedup-" });
     try {
       await Deno.writeTextFile(path.join(tmp, "package.json"), `{"name":"test"}`);
       const nm = path.join(tmp, "node_modules");
@@ -53,7 +54,7 @@ console.log("GUARD_PASSED");
   });
 
   await t.step("Deno layout with zod@3 + zod@4 passes by selecting zod@3", async () => {
-    const tmp = await Deno.makeTempDir();
+    const tmp = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-sdkdedup-" });
     try {
       await Deno.writeTextFile(path.join(tmp, "package.json"), `{"name":"test"}`);
       const nm = path.join(tmp, "node_modules");
@@ -111,7 +112,7 @@ console.log("GUARD_PASSED");
   });
 
   await t.step("Throws when NO zod@3-bound entry exists", async () => {
-    const tmp = await Deno.makeTempDir();
+    const tmp = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-sdkdedup-" });
     try {
       await Deno.writeTextFile(path.join(tmp, "package.json"), `{"name":"test"}`);
       const nm = path.join(tmp, "node_modules");
@@ -158,7 +159,7 @@ console.log("GUARD_PASSED");
   });
 
   await t.step("Passes when root SDK is bound to zod@3 and a dual-zod .deno store is present", async () => {
-    const tmp = await Deno.makeTempDir();
+    const tmp = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-sdkdedup-" });
     try {
       await Deno.writeTextFile(path.join(tmp, "package.json"), `{"name":"test"}`);
       const nm = path.join(tmp, "node_modules");

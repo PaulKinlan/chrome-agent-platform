@@ -23,6 +23,7 @@
 // means stating why it is a shared-build-artifact hazard. The guard test
 // asserts every entry carries one.
 export const SERIAL_REASONS = {
+  "tests/build-sdk-dedup.test.ts": "spawns build.mjs to assert the AI SDK deduplication guard behaviors in different layouts",
   "tests/build-smoke.test.ts": "fast smoke-level assertion in npm test proving build.mjs exits 0 and emits a valid marker (chrome-agent-platform-h65e)",
   "tests/build-bootstrap.test.ts": "runs node build.mjs in-place (dist/dist-versions rewrite)",
   "tests/store-doc-denial.test.ts": "runs node build.mjs in-place and reads the built extension/dist bundles (shared build artifacts)",
