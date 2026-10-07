@@ -186,6 +186,24 @@ export async function prepareAcceptanceCopy(copyRoot: string, { buildTimeoutMs =
   if (!generatorOut.includes("acceptance: emitted 6 schema-2 fixture files")) {
     throw new Error(`acceptance generator did not emit the fixture:\n${generatorOut.slice(-1000)}`);
   }
+  // 1b) The store build binds itself to a git-indexed source authority
+  // (dist.complete binds commit identity + indexed source bytes). The
+  // disposable copy therefore gets its OWN throwaway repository AFTER the
+  // generator ran, so the regenerated acceptance files are part of the
+  // indexed authority and every production security assertion runs
+  // unrelaxed against exactly the tree being built. The reviewed tree's
+  // history is never touched; node_modules stays ignored via the copied
+  // .gitignore.
+  for (const [label, args] of [
+    ["git init", ["init", "--quiet", "-b", "main"]],
+    ["git add", ["add", "-A"]],
+    ["git commit", ["-c", "user.email=acceptance@cap.invalid", "-c", "user.name=cap-acceptance-copy", "commit", "--quiet", "-m", "disposable acceptance-copy snapshot (never pushed)"]],
+  ] as const) {
+    const step = await new Deno.Command("git", { args: [...args], cwd: copyRoot, stdout: "piped", stderr: "piped" }).output();
+    if (!step.success) {
+      throw new Error(`${label} failed in acceptance copy: ${new TextDecoder().decode(step.stderr).slice(0, 400)}`);
+    }
+  }
   // 2) Rebuild + rebundle the REAL service-worker/options inventory imports.
   const build = await new Deno.Command("node", {
     args: ["build.mjs", "--target=store"],

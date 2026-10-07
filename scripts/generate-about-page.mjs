@@ -226,6 +226,13 @@ export const UPSTREAM_MAP = Object.freeze({
     upstreamName: "zxing-cpp (zxing-cpp/zxing-cpp)",
     upstreamUrl: "https://github.com/zxing-cpp/zxing-cpp",
   },
+  // ltkj.2 acceptance lane: first-party A0 numeric fixture, built from the
+  // tracked evidence tree (never third-party upstream; never in the default
+  // release inventory — only present under CAP_ACCEPTANCE_EMSCRIPTEN_NUMERIC).
+  "cap.acceptance.a0.numeric": {
+    upstreamName: "Chrome Agent Platform (A0 numeric acceptance fixture)",
+    upstreamUrl: "https://github.com/PaulKinlan/chrome-agent-platform",
+  },
 });
 
 function escapeHtml(text) {

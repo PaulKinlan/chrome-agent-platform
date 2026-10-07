@@ -152,17 +152,44 @@ const shippedJsAll = await walkJs("extension");
 // while its bytes hash-match its inventory row, so a drifted or undeclared
 // file stays inside the AST scan and fails closed.
 const packageStoreExempt = new Set();
+// walkJs returns RELATIVE paths ("extension/wasm/..."), so the exemption set
+// keys on the same rel form — join(ROOT, …) is only used to READ the bytes.
 for (const row of BUNDLED_INVENTORY_EARLY.files) {
   if (!/^extension\/wasm\/.+\.m?js$/.test(row.rel)) continue;
-  const abs = join(ROOT, row.rel);
   let bytes;
   try {
-    bytes = await readFile(abs);
+    bytes = await readFile(join(ROOT, row.rel));
   } catch {
     continue; // absent file is not this scan's problem (walkJs only saw present files)
   }
   const digest = createHash("sha256").update(bytes).digest("hex");
-  if (row.sha256 === digest) packageStoreExempt.add(abs);
+  if (row.sha256 === digest) packageStoreExempt.add(row.rel);
+}
+// Schema-2 runtime data assets (roles adapter/glue/pthread-bootstrap/data)
+// are MANIFEST members, not inventory file rows: their pin is the asset
+// sha256 inside a manifest whose own digest is tied to the inventory row
+// (assertManifestRowDigest). Same contract — exemption only on exact byte
+// match; drifted/undeclared files stay inside the AST scan and fail closed.
+const { manifestCasMappings: mapSchemas, assertManifestRowDigest: tieRow } =
+  await import("./scripts/lib/wasm-manifest-assets.mjs");
+for (const identity of BUNDLED_INVENTORY_EARLY.manifests) {
+  const manifestRel = `extension/wasm/manifests/${identity.pkg}-${identity.version}.manifest.json`;
+  const manifestText = await readFile(join(ROOT, manifestRel), "utf8");
+  tieRow(manifestText, identity);
+  const manifest = JSON.parse(manifestText);
+  if (manifest?.schemaVersion !== 2) continue;
+  mapSchemas(manifest); // validation side effect: roles/paths/CAS invariants
+  for (const asset of manifest.assets ?? []) {
+    if (!/^extension\/wasm\/.+\.m?js$/.test(asset?.path ?? "")) continue;
+    let bytes;
+    try {
+      bytes = await readFile(join(ROOT, asset.path));
+    } catch {
+      continue;
+    }
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (asset.sha256 === digest) packageStoreExempt.add(asset.path);
+  }
 }
 const shippedJs = shippedJsAll.filter((file) => !packageStoreExempt.has(file));
 if (packageStoreExempt.size > 0) {
