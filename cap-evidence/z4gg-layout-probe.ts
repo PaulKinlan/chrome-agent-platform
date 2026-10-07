@@ -29,10 +29,14 @@ try {
     throw new Error(`z4gg: timeout waiting for ${label}`);
   };
   const pointer = async (expression: string) => {
-    const box = await evl(`(() => { const el = ${expression}; if (!el || !el.getClientRects().length) return null;
+    const box = await evl(`(() => { const el = ${expression}; if (!el || !el.getClientRects().length) return { error: 'absent' };
       el.scrollIntoView({ block: 'center', inline: 'center' }); const r = el.getBoundingClientRect();
-      return { x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2) }; })()`);
-    if (!box) throw new Error(`z4gg: missing pointer target: ${expression}`);
+      const x = Math.round(r.left + r.width/2), y = Math.round(r.top + r.height/2);
+      const hit = document.elementFromPoint(x, y);
+      const shadowHost = el.getRootNode() instanceof ShadowRoot ? el.getRootNode().host : null;
+      if (!hit || !(hit === el || el.contains(hit) || hit === shadowHost)) return { error: 'occluded', hit: hit?.id || hit?.tagName || null };
+      return { x, y }; })()`);
+    if (!box || box.error) throw new Error(`z4gg: pointer target unavailable (${box?.error ?? 'unknown'}; hit=${box?.hit ?? 'none'}): ${expression}`);
     await cdp!.send("Input.dispatchMouseEvent", { type: "mousePressed", x: box.x, y: box.y, button: "left", clickCount: 1 }, ntp);
     await cdp!.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: box.x, y: box.y, button: "left", clickCount: 1 }, ntp);
   };
@@ -42,6 +46,10 @@ try {
     await Deno.writeFile(`${evidence}/${name}.png`, png);
   };
   await wait("hub composer", `!!document.querySelector('#composer [data-composer-input]')`);
+  const backToHub = async () => {
+    await pointer(`document.getElementById('view-back')`);
+    await wait("visible hub footer", `document.getElementById('view')?.hidden === true`);
+  };
   const created = await evl(`chrome.runtime.sendMessage({ type: 'asset.create', origin: 'master', assetType: 'html', name: 'z4gg layout probe', content: '<h1>probe</h1>' })`);
   if (created?.ok !== true || !created.asset?.id) throw new Error("z4gg: seed artifact was not created");
   const results = [];
@@ -53,27 +61,34 @@ try {
       return {left:el?Math.round(el.getBoundingClientRect().left):null, hostLeft:Math.round(host.getBoundingClientRect().left),
         inspectorVisible:!!insp && !insp.hidden, docWidth:document.documentElement.clientWidth, frameCount:document.querySelectorAll('iframe[data-panel-path="artifacts/index.html"]').length}; })()`);
     const browse = await art();
+    console.log(`z4gg ${width} browse:`, JSON.stringify(browse));
     if (browse.inspectorVisible || browse.left == null || browse.frameCount !== 0) throw new Error(`z4gg: Artifacts browse precondition failed: ${JSON.stringify(browse)}`);
     await shot(`artifacts-browse-${width}`);
     await pointer(`document.querySelector('#artifacts-view artifact-card[id=${JSON.stringify(created.asset.id)}]')?.shadowRoot?.querySelector('.preview')`);
     await wait("visible inspector", `document.getElementById('artifact-inspector')?.hidden === false`);
     const inspect = await art();
+    console.log(`z4gg ${width} inspect:`, JSON.stringify(inspect));
     await shot(`artifacts-inspect-${width}`);
     await pointer(`document.querySelector('#artifact-inspector .insp-close')`);
     await wait("inspector closed", `document.getElementById('artifact-inspector')?.hidden === true`);
+    await backToHub();
     await pointer(`document.getElementById('open-directory')`);
     await wait("in-page Directory", `document.getElementById('directory-view')?.hidden === false`);
     const directory = await evl(`(() => { const host=document.getElementById('directory-view'); const el=host?.querySelector('.sub, .site-group, #directory-rows');
       return {left:el?Math.round(el.getBoundingClientRect().left):null, hostLeft:Math.round(host.getBoundingClientRect().left), docWidth:document.documentElement.clientWidth,
         frameCount:document.querySelectorAll('iframe[data-panel-path="directory/directory.html"]').length}; })()`);
+    console.log(`z4gg ${width} directory:`, JSON.stringify(directory));
     await shot(`directory-${width}`);
+    await backToHub();
     await pointer(`document.getElementById('open-settings')`);
     await wait("Settings frame", `!!document.querySelector('iframe[data-panel-path="options/options.html"]')?.contentDocument?.querySelector('.side')`);
     const settings = await evl(`(() => { const f=document.querySelector('iframe[data-panel-path="options/options.html"]'); const d=f?.contentDocument;
       const s=d?.querySelector('.side'); return {left:s?Math.round(s.getBoundingClientRect().left):null,
         screenLeft:s?Math.round(f.getBoundingClientRect().left+s.getBoundingClientRect().left):null,
         frameLeft:f?Math.round(f.getBoundingClientRect().left):null, docWidth:d?.documentElement.clientWidth??null}; })()`);
+    console.log(`z4gg ${width} settings:`, JSON.stringify(settings));
     await shot(`settings-${width}`);
+    await backToHub();
     const row = { width, browse, inspect, directory, settings };
     results.push(row);
     console.log("z4gg browser coordinates:", JSON.stringify(row));
