@@ -1,5 +1,5 @@
-import { assertEquals } from "jsr:@std/assert@1";
-import { isDemoProviderConfigured, requireTraceMeasures, selectLiveOpenExecution } from "../scripts/lib/live-open-precondition.ts";
+import { assertEquals, assertThrows } from "jsr:@std/assert@1";
+import { isDemoProviderConfigured, requirePriorOpenReads, requireRunningOpenTrace, requireSettledOpenTrace, requireTraceMeasures, selectLiveOpenExecution } from "../scripts/lib/live-open-precondition.ts";
 
 const prior = { executionId: "old", threadId: "clicked", phase: "terminal", updatedAt: 10 };
 const newRun = { executionId: "new", threadId: "clicked", phase: "running", updatedAt: 20 };
@@ -52,4 +52,29 @@ Deno.test("ly7n: a fresh running row is refused if a different older run is page
   const stale = { executionId: "stale", threadId: "clicked", phase: "running", updatedAt: 50 };
   assertEquals(selectLiveOpenExecution({ threadId: "clicked", priorIds: ["stale"], runs: [stale, newRun] }),
     { ok: false, reason: "different_live_run", executionId: "new", phase: "running" });
+});
+
+Deno.test("g4k5: running delta must positively contain a measured thread-view projection", () => {
+  const valid = { rawSpans: [{ name: "thread-view:project", count: 1 }], liveLogReads: 0 };
+  requireRunningOpenTrace(valid, "live");
+  for (const invalid of [
+    { rawSpans: [], liveLogReads: 0 },
+    { rawSpans: [{ name: "thread-view:project", count: 0 }], liveLogReads: 0 },
+    { rawSpans: [{ name: "thread.get:read", count: 1 }], liveLogReads: 0 },
+  ]) assertThrows(() => requireRunningOpenTrace(invalid, "live"), Error, "no running thread-view:project span");
+  assertThrows(() => requireRunningOpenTrace({ ...valid, liveLogReads: 1 }, "live"), Error, "view read live execution");
+});
+
+Deno.test("g4k5: settled control requires the SAME execution's positive log-read span", () => {
+  requireSettledOpenTrace({ rawSpans: [{ name: "thread-view:logs:live", count: 1 }] }, "live");
+  for (const rawSpans of [[], [{ name: "thread-view:logs:other", count: 1 }], [{ name: "thread-view:logs:live", count: 0 }]]) {
+    assertThrows(() => requireSettledOpenTrace({ rawSpans }, "live"), Error, "missing positive log-read span");
+  }
+});
+
+Deno.test("g4k5: direct view probe must read prior logs and skip the running execution", () => {
+  requirePriorOpenReads({ reads: ["old"] }, "live");
+  for (const probe of [{ reads: [] }, { reads: ["old", "live"] }, { __error: "port closed" }, null]) {
+    assertThrows(() => requirePriorOpenReads(probe, "live"), Error, "viewProbe must read prior logs");
+  }
 });

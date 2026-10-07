@@ -26,6 +26,33 @@ export function requireTraceMeasures(dump: unknown): Array<{ name?: string; coun
   return (dump as any).perf.measures;
 }
 
+type RawSpan = { name?: string; count?: number };
+
+// An empty but well-formed trace is not proof that the live path skipped its
+// own log: it may simply contain no measurements (e.g. after a SW restart).
+export function requireRunningOpenTrace(measure: { rawSpans?: RawSpan[]; liveLogReads?: number | null }, executionId: string): void {
+  if (!Array.isArray(measure?.rawSpans) ||
+    !measure.rawSpans.some((span) => span.name === "thread-view:project" && (span.count ?? 0) > 0)) {
+    throw new Error("REFUSING live-open: no running thread-view:project span in the measured delta");
+  }
+  if (measure.liveLogReads !== 0) {
+    throw new Error(`REFUSING live-open: view read live execution ${executionId}'s own log`);
+  }
+}
+
+export function requireSettledOpenTrace(measure: { rawSpans?: RawSpan[] }, executionId: string): void {
+  if (!Array.isArray(measure?.rawSpans) ||
+    !measure.rawSpans.some((span) => span.name === `thread-view:logs:${executionId}` && (span.count ?? 0) > 0)) {
+    throw new Error(`REFUSING settled-open: missing positive log-read span for ${executionId}`);
+  }
+}
+
+export function requirePriorOpenReads(probe: { reads?: unknown } | null, executionId: string): void {
+  if (!Array.isArray(probe?.reads) || probe.reads.length === 0 || probe.reads.includes(executionId)) {
+    throw new Error("REFUSING live-open: viewProbe must read prior logs but not the running execution's log");
+  }
+}
+
 export function selectLiveOpenExecution({ threadId, runs, priorIds }: {
   threadId: string; runs: Row[]; priorIds: string[];
 }): Selection {
