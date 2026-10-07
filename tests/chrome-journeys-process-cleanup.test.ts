@@ -33,5 +33,5 @@ Deno.test("g599r: journey cleanup awaits the exact proc/profile in shared group-
 
 Deno.test("g599r: group cleanup failure propagates rather than crediting a clean shutdown", async () => {
   const cleanup = await build(async () => { throw new Error("group-survivor"); });
-  await assertRejects(() => cleanup({ pid: 24123 }, "/tmp/g599r-cleanup-fixture"), Error, "group-survivor");
+  await assertRejects(() => cleanup({ pid: 24123 }, "/home/exedev/.cache/cap-review/g599r-cleanup-fixture"), Error, "group-survivor");
 });
