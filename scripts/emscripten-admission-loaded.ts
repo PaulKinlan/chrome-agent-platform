@@ -260,7 +260,7 @@ const LIBRARY_EVAL = (expr: string) => `(() => {
 
 type Cdp = Awaited<ReturnType<typeof openCdp>>;
 
-async function waitForLibrary(cdp: Cdp, sessionId: string, predicate: string, timeoutMs: number) {
+async function waitForLibrary(cdp: Cdp, sessionId: string, predicate: string, timeoutMs: number, consoleTail: string[] = []) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const value = await cdp.eval(sessionId, LIBRARY_EVAL(predicate)).catch(() => null);
@@ -308,7 +308,7 @@ async function waitForLibrary(cdp: Cdp, sessionId: string, predicate: string, ti
     } catch (e) { out.flagProbe = "eval-failed: " + (e?.message ?? e); }
     return JSON.stringify(out);
   })()`).catch((e) => `diag-eval-failed: ${e?.message ?? e}`);
-  throw new Error(`timed out waiting for tool-library predicate: ${predicate}\ndiagnostics: ${diag}`);
+  throw new Error(`timed out waiting for tool-library predicate: ${predicate}\ndiagnostics: ${diag}\nconsole tail:\n${consoleTail.join("\n")}`);
 }
 
 const REGISTRY_QUERY = `(async () => {
@@ -365,6 +365,17 @@ async function main() {
     const page = await cdp.open("about:blank");
     const sessionId = page.sessionId;
     await cdp.send("Network.enable", {}, sessionId);
+    const consoleTail = [] as string[];
+    cdp.on("Runtime.consoleAPICalled", (params) => {
+      const text = (params?.args ?? []).map((a) => String(a?.value ?? a?.description ?? "")).join(" ").slice(0, 300);
+      consoleTail.push(`${params?.type ?? "log"}: ${text}`);
+      if (consoleTail.length > 60) consoleTail.shift();
+    });
+    cdp.on("Runtime.exceptionThrown", (params) => {
+      const d = params?.exceptionDetails ?? {};
+      consoleTail.push(`EXCEPTION: ${d.text ?? ""} ${d.exception?.description ?? ""}`.slice(0, 400));
+    });
+    await cdp.send("Runtime.enable", {}, sessionId);
     cdp.on("Network.requestWillBeSent", (params) => {
       const url = String(params?.request?.url ?? "");
       if (/^https?:/u.test(url)) externalRequests.push(url);
@@ -385,11 +396,14 @@ async function main() {
     if (typeof kvSet === "string" && kvSet.startsWith("kv.set-failed")) {
       throw new Error(`developer-features flag could not be set: ${kvSet}`);
     }
+    await cdp.eval(sessionId, "window.__harnessPreReload = true");
     await cdp.eval(sessionId, "location.reload()");
     await waitForLibraryReady(cdp, sessionId);
+    const preReloadMarker = await cdp.eval(sessionId, "window.__harnessPreReload ?? 'gone'").catch(() => "eval-failed");
+    (result as Record<string, unknown>).reloadVerified = preReloadMarker === "gone" ? "fresh-context (reload worked)" : `STALE CONTEXT (marker=${String(preReloadMarker)})`;
 
     // The validation list must name the acceptance package exactly once.
-    const rows = await waitForLibrary(cdp, sessionId, `(() => { const r = Array.from(root.querySelectorAll(".validation-packages .validation-row .validation-pkg-info")).map((n) => n.textContent); return r.length ? r : false; })()`, 30_000);
+    const rows = await waitForLibrary(cdp, sessionId, `(() => { const r = Array.from(root.querySelectorAll(".validation-packages .validation-row .validation-pkg-info")).map((n) => n.textContent); return r.length ? r : false; })()`, 30_000, consoleTail);
     result.listRows = rows;
     const expectedRow = `${PACKAGE_ID} (v${P.packageVersion})`;
     if (!Array.isArray(rows) || rows.length !== 1 || rows[0] !== expectedRow) {
