@@ -46,9 +46,13 @@
     background: var(--panel);
     color: var(--text);
     box-sizing: border-box;
-    outline: none;
   }
   .search-input:focus { border-color: var(--accent); }
+  .search-input:focus:not(:focus-visible) { outline: none; }
+  .search-input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
   .kind-pills {
     display: flex;
     align-items: center;
