@@ -161,6 +161,52 @@ async function assertRecordedPidsGone(result: RunResult) {
   }
 }
 
+// chrome-agent-platform-wtjz: boundedly verify live process ownership by identity rather than unguarded
+// /proc reads that throw raw ENOENT under churn when inspecting transient descendants.
+function matchEscapeResidueByIdentity(
+  residue: Array<Record<string, unknown>>,
+  expectedChildPid: number,
+): Record<string, unknown> {
+  const match = residue.find((r) => Number(r.pid) === expectedChildPid);
+  assert(
+    match,
+    `expected escape child pid ${expectedChildPid} must be in residue: ${
+      JSON.stringify(residue.map((r) => ({ pid: r.pid, starttime: r.starttime })))
+    }`,
+  );
+  return match;
+}
+
+async function verifyLiveProcOwnership(
+  pid: number,
+  expectedStart: string,
+  timeoutMs = 2_000,
+): Promise<{ starttime: string; uid: number }> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: Error | null = null;
+  while (Date.now() < deadline) {
+    try {
+      const id = await readProcIdentity(pid);
+      if (id.state !== "Z") {
+        if (id.starttime !== expectedStart) {
+          throw new Error(
+            `proc ${pid} starttime mismatch: expected ${expectedStart}, got ${id.starttime}`,
+          );
+        }
+        return id;
+      }
+    } catch (err) {
+      lastError = err as Error;
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(
+    `custody verification failed for pid ${pid} (expected start ${expectedStart}): ${
+      lastError?.message ?? "process not live"
+    }`,
+  );
+}
+
 Deno.test("security-suite custody: production mode is immutable and fake runners are hash-pinned", async () => {
   const production = await resolveSupervisorConfig({
     env: {
@@ -665,11 +711,25 @@ Deno.test("security-suite custody: escaped descendant fails THIS run (exit 70) a
       "the fixture must record the DECLARED window it was given",
     );
     assertEquals(result.receipt?.custodyReason, "descendant-residue");
-    const residue = result.receipt?.residue as Array<Record<string, unknown>>;
-    assert(residue.length >= 1);
-    escapedPid = Number(residue[0].pid);
-    escapedStart = String(residue[0].starttime);
-    const live = await readProcIdentity(escapedPid);
+    const residue = (result.receipt?.residue as Array<Record<string, unknown>>) ?? [];
+    assert(residue.length >= 1, "receipt residue must contain at least one process");
+    // chrome-agent-platform-wtjz: select escape-child-spawned pid from fixture state and match receipt residue
+    // by identity rather than assuming residue[0], avoiding race with transient descendants under parallel load.
+    const expectedChildPid = Number(
+      result.state.find((row) => row.event === "escape-child-spawned")?.childPid ??
+        await escapeChildPidFrom(`${result.receipt?.evidence}/self-test-state.jsonl`),
+    );
+    assert(
+      Number.isSafeInteger(expectedChildPid) && expectedChildPid > 0,
+      "fixture state must record escape-child-spawned with valid childPid",
+    );
+    const matchingResidue = matchEscapeResidueByIdentity(
+      residue,
+      expectedChildPid,
+    );
+    escapedPid = Number(matchingResidue.pid);
+    escapedStart = String(matchingResidue.starttime);
+    const live = await verifyLiveProcOwnership(escapedPid, escapedStart);
     assertEquals(live.starttime, escapedStart);
     assertEquals(live.uid, Deno.uid());
     // uzik: the finding is this run's own (receipt + exit code). It must NOT be
@@ -792,10 +852,27 @@ Deno.test(
       );
       assertEquals(result.receipt?.sampleFreezeMs, ESCAPE_SAMPLE_FREEZE_MS, "the supervisor receipt must record the declared sample freeze window");
       assertEquals(result.receipt?.custodyReason, "descendant-residue");
-      const residue = result.receipt?.residue as Array<Record<string, unknown>>;
-      assert(residue.length >= 1);
-      escapedPid = Number(residue[0].pid);
-      escapedStart = String(residue[0].starttime);
+      const residue = (result.receipt?.residue as Array<Record<string, unknown>>) ?? [];
+      assert(residue.length >= 1, "receipt residue must contain at least one process");
+      // chrome-agent-platform-wtjz: select escape-child-spawned pid from fixture state and match receipt residue
+      // by identity rather than assuming residue[0], avoiding race with transient descendants under parallel load.
+      const expectedChildPid = Number(
+        result.state.find((row) => row.event === "escape-child-spawned")?.childPid ??
+          await escapeChildPidFrom(`${result.receipt?.evidence}/self-test-state.jsonl`),
+      );
+      assert(
+        Number.isSafeInteger(expectedChildPid) && expectedChildPid > 0,
+        "fixture state must record escape-child-spawned with valid childPid",
+      );
+      const matchingResidue = matchEscapeResidueByIdentity(
+        residue,
+        expectedChildPid,
+      );
+      escapedPid = Number(matchingResidue.pid);
+      escapedStart = String(matchingResidue.starttime);
+      const live = await verifyLiveProcOwnership(escapedPid, escapedStart);
+      assertEquals(live.starttime, escapedStart);
+      assertEquals(live.uid, Deno.uid());
       /**
        * d2vz: 70/residue is only HALF the guard. The handshake's other half is
        * that the runner CONSUMED the supervisor's ACK for its real child — the
@@ -925,4 +1002,26 @@ Deno.test("2zqd: an INVALID declared window is refused loudly and by name (the b
     }
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
+});
+
+// chrome-agent-platform-wtjz: residue matching selects escape child by identity even when foreign residue precedes it
+Deno.test("security-suite custody: residue matching selects escape child by identity even when foreign residue precedes it", () => {
+  const residue = [
+    { pid: 99999, starttime: "12345", pgid: 99999, sid: 99999 },
+    { pid: 54321, starttime: "67890", pgid: 54321, sid: 54321 },
+  ];
+  const expectedChildPid = 54321;
+  const match = matchEscapeResidueByIdentity(residue, expectedChildPid);
+  assertEquals(match.pid, 54321);
+  assertEquals(match.starttime, "67890");
+});
+
+// chrome-agent-platform-wtjz: verifyLiveProcOwnership fails with named reason rather than raw ENOENT for non-existent pid
+Deno.test("security-suite custody: verifyLiveProcOwnership fails with named reason rather than raw ENOENT for non-existent pid", async () => {
+  const deadPid = 999999999;
+  await assertRejects(
+    () => verifyLiveProcOwnership(deadPid, "12345", 50),
+    Error,
+    `custody verification failed for pid ${deadPid}`,
+  );
 });
