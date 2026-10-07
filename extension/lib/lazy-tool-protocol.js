@@ -38,6 +38,7 @@ import { createWorkflowPipelineDispatcher } from "./workflows.js";
 import {
   fenceUntrustedText,
   fenceUntrustedValue,
+  hasUntrustedMarker,
   isUntrustedToken,
   mintUntrustedToken,
 } from "./untrusted-fence.js";
@@ -380,9 +381,10 @@ export function sanitizeLazyToolArguments(value, descriptor) {
 /** Is this result untrusted content — page/site/board data, never an
  * instruction? Either the tool tagged it (`untrusted: true`, e.g. read_page,
  * board reads, cap:fetch) or it came from a site-origin (WebMCP) tool, whose
- * output is page-controlled by construction. */
+ * output is page-controlled by construction. Traverses nested envelopes to
+ * detect untrusted fetched text or sandboxed script results (INV-7). */
 function isUntrustedResult(value, descriptor) {
-  if (ownData(value, "untrusted") === true) return true;
+  if (hasUntrustedMarker(value)) return true;
   const kind = String(ownData(descriptor, "sourceKind") ?? "");
   // WebMCP (page-exposed) and remote MCP (connect-out) tool output is external
   // content by construction — fenced even if the tool forgot to tag it.

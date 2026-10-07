@@ -70,6 +70,26 @@ export function fenceUntrustedValue(value, token, depth = 0) {
   return value;
 }
 
+/** Check whether a value or any nested property carries untrusted: true.
+ * Bounded depth and cycle-resistant; never throws on hostile objects or cycles. */
+export function hasUntrustedMarker(value, depth = 0, seen = new WeakSet()) {
+  if (!value || typeof value !== "object" || depth > 6) return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  try {
+    if (value.untrusted === true) return true;
+    if (Array.isArray(value)) {
+      return value.some((v) => hasUntrustedMarker(v, depth + 1, seen));
+    }
+    for (const v of Object.values(value)) {
+      if (hasUntrustedMarker(v, depth + 1, seen)) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 /** Tag a tool result as untrusted (the hook a tool calls on its own output —
  * e.g. `cap:fetch` bodies, board reads). Objects gain `untrusted: true`;
  * strings/arrays are wrapped in an object so the flag has somewhere to live. */

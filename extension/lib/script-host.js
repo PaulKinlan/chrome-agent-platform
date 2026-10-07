@@ -14,6 +14,7 @@ import {
   readAndVerifyJsModule,
   resolveScriptModules,
 } from "./script-sandbox-modules.js";
+import { tagUntrusted } from "./untrusted-fence.js";
 
 
 /** Validate a fetch URL: http/https only, no credentials. */
@@ -73,7 +74,7 @@ export async function runFetch(payload, runId = null) {
   } catch {
     text = "";
   }
-  return { ok: true, status: res.status, url: res.url, text };
+  return tagUntrusted({ ok: true, status: res.status, url: res.url, text });
 }
 
 /**

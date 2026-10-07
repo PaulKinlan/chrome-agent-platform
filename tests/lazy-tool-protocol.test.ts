@@ -1115,6 +1115,36 @@ Deno.test("fence: an untrusted result's strings are wrapped in the boundary", as
   const trustedSearch = await protocol.search({ query: "trusted", limit: 1 }, context);
   const trusted = await protocol.execute({ selectionRef: trustedSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
   assertEquals(trusted.result, { text: RAW });
+
+  // INV-7: Nested untrusted result from sandboxed script execution / cap:fetch
+  const nestedTools = {
+    script_with_fetch: tool({
+      description: "Run script that fetched untrusted web data",
+      inputSchema: z.object({ value: z.string().max(64) }),
+      execute: () => ({ ok: true, result: { ok: true, status: 200, url: "https://example.com", text: RAW, untrusted: true }, logs: [] }),
+    }),
+    script_pure_math: tool({
+      description: "Run script with purely trusted computation",
+      inputSchema: z.object({ value: z.string().max(64) }),
+      execute: () => ({ ok: true, result: { ok: true, text: RAW }, logs: [] }),
+    }),
+  };
+  const nestedRecords = executableBuiltinToolRecords(nestedTools, adapterContext());
+  const nestedProtocol = new LazyToolProtocol({
+    readSources: () => nestedRecords,
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const scriptSearch = await nestedProtocol.search({ query: "script_with_fetch", limit: 1 }, context);
+  const scriptExec = await nestedProtocol.execute({ selectionRef: scriptSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
+  assertEquals(scriptExec.ok, true);
+  assert(scriptExec.result.result.text.startsWith(open), `nested text must be fenced: ${scriptExec.result.result.text}`);
+  assertEquals(scriptExec.result.result.text, `${open}\n${RAW}\n${close}`);
+
+  // Falsification: pure math script without untrusted marker remains unfenced
+  const mathSearch = await nestedProtocol.search({ query: "script_pure_math", limit: 1 }, context);
+  const mathExec = await nestedProtocol.execute({ selectionRef: mathSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
+  assertEquals(mathExec.ok, true);
+  assertEquals(mathExec.result.result.text, RAW, "unmarked computation must not be fenced");
 });
 
 // ── CAP-FB-20260830-SCREENSHOT-TO-MODEL-01 ───────────────────────────────────

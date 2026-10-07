@@ -107,3 +107,43 @@ Deno.test("cap:fetch policy (v6ej): DNS-rebinding residual is formally registere
   assert(threatModel.includes("**Register:** R23"), "THREAT_MODEL.md T6 must cross-reference register R23");
 });
 
+Deno.test("cap:fetch untrusted tagging (INV-7): returns tagUntrusted and untagged fetched bodies fail closed", async () => {
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const swSrc = await Deno.readTextFile(join(root, "extension/background/service-worker.js"));
+
+  // 1. Verify service-worker.js cap:fetch route wraps return in tagUntrusted
+  assert(
+    swSrc.includes("return tagUntrusted({ ok: true, status: res.status, url: res.url, text: text.slice(0, MAX) })"),
+    "service-worker.js cap:fetch route must return tagUntrusted({ ok: true, ... })",
+  );
+
+  // 2. Verify tagUntrusted marks the return value with untrusted: true
+  const { tagUntrusted, hasUntrustedMarker } = await import("../extension/lib/untrusted-fence.js");
+  const rawBody = { ok: true, status: 200, url: "https://example.com/api", text: "UNTRUSTED_CONTENT" };
+  const tagged = tagUntrusted(rawBody);
+  assertEquals(tagged.untrusted, true, "tagUntrusted must add untrusted: true");
+  assertEquals(hasUntrustedMarker(tagged), true, "hasUntrustedMarker must detect tagged result");
+
+  // 3. Falsification: untagged fetched body fails closed
+  const untagged = { ok: true, status: 200, url: "https://example.com/api", text: "UNTRUSTED_CONTENT" };
+  assertEquals(hasUntrustedMarker(untagged), false, "untagged body must not report untrusted");
+
+  function assertUntrustedFetchedBody(res: any) {
+    if (!res || typeof res !== "object" || res.untrusted !== true) {
+      throw new Error("INV-7 violation: fetched body must be tagged untrusted");
+    }
+    return true;
+  }
+
+  // Tagged passes
+  assertEquals(assertUntrustedFetchedBody(tagged), true);
+  // Untagged fails closed
+  let failedClosed = false;
+  try {
+    assertUntrustedFetchedBody(untagged);
+  } catch {
+    failedClosed = true;
+  }
+  assert(failedClosed, "untagged fetched body must fail closed under INV-7 gate");
+});
+

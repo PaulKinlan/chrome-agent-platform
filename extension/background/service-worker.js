@@ -131,6 +131,7 @@ import {
   storeAskAgentPrefill,
 } from "../lib/ask-agent-entry.js";
 import { appendRunEndCleanupNote, autoCloseTabPlan, createLifecycleTracker, liveLifecycleSnapshot } from "../lib/lifecycle-cleanup.js";
+import { hasUntrustedMarker, tagUntrusted } from "../lib/untrusted-fence.js";
 import {
   canonicalOrigin,
   journalAppend,
@@ -6920,9 +6921,8 @@ const handlers = mergeRouteMaps(
       // bounding it (arrayBuffer() followed by text() throws in Chrome).
       const text = await res.text();
       // Fetched bodies are untrusted web content: wrap this return in
-      // `tagUntrusted(...)` (lib/untrusted-fence.js) when this route is next
-      // touched (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01 owns the route).
-      return { ok: true, status: res.status, url: res.url, text: text.slice(0, MAX) };
+      // `tagUntrusted(...)` (lib/untrusted-fence.js, INV-7).
+      return tagUntrusted({ ok: true, status: res.status, url: res.url, text: text.slice(0, MAX) });
     } catch (e) {
       return { ok: false, error: `fetch failed: ${e?.message ?? e}` };
     }
@@ -7127,8 +7127,8 @@ const handlers = mergeRouteMaps(
       }
       // The body is untrusted web content. It reaches the model as the return
       // value of cap.fetch inside Python, i.e. as data the program chose to
-      // read — the same trust level as any fetched text.
-      return {
+      // read — the same trust level as any fetched text (INV-7).
+      return tagUntrusted({
         ok: true,
         status: res.status,
         url: res.url || u.href,
@@ -7136,7 +7136,7 @@ const handlers = mergeRouteMaps(
         text,
         bytes,
         refusedHeaders,
-      };
+      });
     } catch (e) {
       const wasAborted = controller.signal.aborted;
       const runSettled = Boolean(inflight?.isSettled?.());
@@ -9981,7 +9981,14 @@ const handlers = mergeRouteMaps(
       } catch { result = String(result).slice(0, 256 * 1024); }
     }
     await recordScriptRun(origin ?? "master", id, { ok: run?.ok, result, error: run?.error }).catch(() => {});
-    return { ok: run?.ok ?? false, result, error: run?.error, logs: run?.logs ?? [] };
+    const isUntrusted = hasUntrustedMarker(run?.result);
+    return {
+      ok: run?.ok ?? false,
+      result,
+      error: run?.error,
+      logs: run?.logs ?? [],
+      ...(isUntrusted ? { untrusted: true } : {}),
+    };
   },
   async "python.execute"({ code, stdin, wheels }) {
     const provider = getPythonRuntimeProvider();
