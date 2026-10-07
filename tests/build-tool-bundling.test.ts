@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertNotEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { boundedChildTimeoutMs, MAX_TIMER_MS, runBoundedChild } from "../scripts/lib/bounded-child.mjs";
 import { PRODUCTION_BUILD_TIMEOUT_MS } from "../scripts/test-partition.mjs";
+import { setsidSpawnSpec } from "../scripts/lib/process-tree.ts";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const GENERATOR = `${ROOT}scripts/build-bundled-tool-packages.mjs`;
@@ -33,6 +35,53 @@ const CHILD_TIMEOUT_MS = Math.max(
 // ceiling when the operator sets the inner bound near it, and the runtime would silently clamp
 // it to 1 ms (chrome-agent-platform-61h3 re-review).
 const BUILD_TIMEOUT_MS = Math.min(CHILD_TIMEOUT_MS + 30_000, MAX_TIMER_MS);
+
+// chrome-agent-platform-jjsz: /proc and setsid are Linux-only. Where they are absent (macOS) the
+// of6z orphan sweep falls back to ps(1)/lsof(8) and the tests detach their orphan with the portable
+// setsid spawn spec, so the sweep is EXERCISED on the host most developers use instead of failing
+// on a missing /proc. The /proc paths below are unchanged.
+const HAS_PROC = (() => {
+  try { return Deno.statSync("/proc").isDirectory; } catch { return false; }
+})();
+
+function runTool(bin: string, args: string[]): string | null {
+  try {
+    const out = new Deno.Command(bin, { args, stdout: "piped", stderr: "null", clearEnv: true }).outputSync();
+    return out.code === 0 ? new TextDecoder().decode(out.stdout) : null;
+  } catch {
+    return null; // tool absent
+  }
+}
+
+/** Full command line of `pid` ("" when it is gone): /proc on Linux, ps(1) elsewhere. */
+function cmdlineOf(pid: number): string {
+  if (HAS_PROC) {
+    try { return Deno.readTextFileSync(`/proc/${pid}/cmdline`); } catch { return ""; }
+  }
+  return (runTool("/bin/ps", ["-ww", "-o", "command=", "-p", String(pid)]) ?? "").trim();
+}
+
+/** Working directory of `pid` (null when unknown): /proc on Linux, lsof(8) elsewhere. */
+function cwdOf(pid: number): string | null {
+  if (HAS_PROC) {
+    try { return Deno.readLinkSync(`/proc/${pid}/cwd`); } catch { return null; }
+  }
+  const out = runTool("/usr/sbin/lsof", ["-a", "-d", "cwd", "-p", String(pid), "-Fn"]);
+  for (const line of (out ?? "").split("\n")) if (line.startsWith("n")) return line.slice(1);
+  return null;
+}
+
+/** Parent pid of `pid` (null when it is gone): /proc on Linux, ps(1) elsewhere. */
+function ppidOf(pid: number): number | null {
+  if (HAS_PROC) {
+    try {
+      const stat = Deno.readTextFileSync(`/proc/${pid}/stat`);
+      return Number(stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/)[1]);
+    } catch { return null; }
+  }
+  const n = Number((runTool("/bin/ps", ["-o", "ppid=", "-p", String(pid)]) ?? "").trim());
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
 
 /** Bounded child runner — the SAME implementation build.mjs uses
  * (scripts/lib/bounded-child.mjs). The bundled-tool generator can block in a
@@ -144,6 +193,28 @@ export function reapOrphanedGenerators(): number[] {
     }
   } catch {
     /* non-Linux or /proc unreadable */
+  }
+  if (!HAS_PROC) {
+    // ps(1) walk (macOS): the SAME three conditions as the /proc walk above — reparented to init,
+    // a generator command line, and strictly this worktree — so another lane is never touched.
+    const listing = runTool("/bin/ps", ["-ax", "-ww", "-o", "pid=,ppid=,command="]) ?? "";
+    for (const line of listing.split("\n")) {
+      const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+      if (!m) continue;
+      const pid = Number(m[1]);
+      if (pid === Deno.pid || m[2] !== "1") continue;
+      const cmdline = m[3];
+      if (!cmdline.includes("build-bundled-tool-packages.mjs")) continue;
+      const cwd = cwdOf(pid)?.replace(/\/+$/, "") ?? null;
+      const belongsToThisTree = cwd !== null && (cwd === normalizedRoot || cwd.startsWith(normalizedRoot + "/"));
+      if (!belongsToThisTree && !cmdline.includes(normalizedRoot)) continue;
+      try {
+        Deno.kill(pid, "SIGKILL");
+        reaped.push(pid);
+      } catch {
+        /* already gone */
+      }
+    }
   }
   return reaped;
 }
@@ -262,10 +333,8 @@ Deno.test("of6z: reapOrphanedGenerators sweeps ppid-1 generator orphans and igno
   try {
     let cmdline = "";
     for (let i = 0; i < 20; i++) {
-      try {
-        cmdline = Deno.readTextFileSync(`/proc/${child.pid}/cmdline`);
-        if (cmdline.length > 0) break;
-      } catch { /* wait */ }
+      cmdline = cmdlineOf(child.pid);
+      if (cmdline.length > 0) break;
       await new Promise((r) => setTimeout(r, 10));
     }
     assert(cmdline.includes("build-bundled-tool-packages.mjs"), "negative control must carry the generator marker in argv");
@@ -282,8 +351,15 @@ Deno.test("of6z: reapOrphanedGenerators successfully reaps a real ppid-1 orphan 
   let targetPid: number | null = null;
   try {
     // Spawn a real detached grandchild reparented to init (ppid 1)
+    // setsidSpawnSpec: /usr/bin/setsid on Linux, perl POSIX::setsid on macOS (no setsid binary).
+    const spec = setsidSpawnSpec("sh", [
+      "-c",
+      `echo $$ > "${pidFile}"; sleep 30; echo /scripts/build-bundled-tool-packages.mjs`,
+      "dummy",
+    ]);
+    const detached = [spec.command, ...spec.args].map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
     new Deno.Command("bash", {
-      args: ["-c", `(setsid sh -c 'echo $$ > "${pidFile}"; sleep 30; echo /scripts/build-bundled-tool-packages.mjs' dummy) &`],
+      args: ["-c", `(${detached}) &`],
       stdout: "null",
       stderr: "null",
     }).outputSync();
@@ -302,8 +378,65 @@ Deno.test("of6z: reapOrphanedGenerators successfully reaps a real ppid-1 orphan 
     assert(reaped.includes(targetPid), `orphan generator PID ${targetPid} reparented to init must be detected and reaped`);
   } finally {
     if (targetPid) {
+      // The sleeper the orphan shell forked shares its session: take the group too, so the test
+      // does not leave a `sleep 30` behind. A no-op (ESRCH) when the shell was not a group leader.
+      try { Deno.kill(-targetPid, "SIGKILL"); } catch { /* no such group */ }
       try { Deno.kill(targetPid, "SIGKILL"); } catch { /* already reaped */ }
     }
     try { Deno.removeSync(pidFile); } catch { /* ignore */ }
+  }
+});
+
+/** Detach `script` as a real ppid-1 orphan (own session) running in `cwd`; resolves its pid once it has written it. */
+async function detachOrphan(cwd: string, pidFile: string, script: string): Promise<number> {
+  const spec = setsidSpawnSpec("sh", ["-c", script, "dummy"]);
+  const detached = [spec.command, ...spec.args].map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
+  new Deno.Command("bash", { args: ["-c", `(${detached}) &`], cwd, stdout: "null", stderr: "null" }).outputSync();
+  let pid: number | null = null;
+  for (let i = 0; i < 20 && pid === null; i++) {
+    try {
+      const text = Deno.readTextFileSync(pidFile).trim();
+      if (text) pid = Number(text);
+    } catch { /* wait */ }
+    if (pid === null) await new Promise((r) => setTimeout(r, 20));
+  }
+  assert(pid !== null && Number.isSafeInteger(pid), "orphan PID file must be populated");
+  for (let i = 0; i < 20 && ppidOf(pid) !== 1; i++) await new Promise((r) => setTimeout(r, 20));
+  assertEquals(ppidOf(pid), 1, "the fixture must be reparented to init, or it is not a sweep candidate");
+  return pid;
+}
+
+Deno.test("of6z: reapOrphanedGenerators spares a ppid-1 process that is not THIS tree's generator", async () => {
+  // The two conditions that confine the sweep are its safety property: an orphan generator that runs
+  // outside this worktree is another lane's, and an orphan inside this worktree that is not a generator
+  // is somebody's daemon; killing either breaks that owner. Both fixtures are real detached ppid-1
+  // orphans, each differing from a reapable one in exactly one respect, and their preconditions are
+  // asserted first, so "not reaped" cannot pass because a fixture was never a candidate.
+  const root = ROOT.replace(/\/+$/, "");
+  const scratch = Deno.makeTempDirSync({ dir: durableDir("jjsz-of6z-other-tree"), prefix: "tree-" });
+  const pids: number[] = [];
+  try {
+    assert(!scratch.startsWith(root + "/"), `the other-tree fixture ${scratch} must live outside this worktree ${root}`);
+    const otherTree = await detachOrphan(
+      scratch,
+      `${scratch}/generator.pid`,
+      `echo $$ > "${scratch}/generator.pid"; sleep 30; echo /scripts/build-bundled-tool-packages.mjs`,
+    );
+    pids.push(otherTree);
+    assert(cmdlineOf(otherTree).includes("build-bundled-tool-packages.mjs"), "the other-tree fixture must carry the generator marker");
+    const notAGenerator = await detachOrphan(root, `${scratch}/daemon.pid`, `echo $$ > "${scratch}/daemon.pid"; sleep 30`);
+    pids.push(notAGenerator);
+    assert(!cmdlineOf(notAGenerator).includes("build-bundled-tool-packages.mjs"), "the in-tree daemon fixture must NOT carry the marker");
+
+    const reaped = reapOrphanedGenerators();
+    assert(!reaped.includes(otherTree), `another tree's orphan generator ${otherTree} must NOT be reaped by this worktree's sweep`);
+    assert(!reaped.includes(notAGenerator), `an in-tree orphan that is not a generator (${notAGenerator}) must NOT be reaped`);
+    for (const pid of pids) assert(cmdlineOf(pid).length > 0, `orphan ${pid} must still be alive after the sweep`);
+  } finally {
+    for (const pid of pids) {
+      try { Deno.kill(-pid, "SIGKILL"); } catch { /* no such group */ }
+      try { Deno.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    }
+    try { Deno.removeSync(scratch, { recursive: true }); } catch { /* ignore */ }
   }
 });

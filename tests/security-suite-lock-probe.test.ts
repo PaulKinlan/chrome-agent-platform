@@ -7,6 +7,7 @@
 // `flock` agrees with the table: held -> verified, free -> refused.
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { FLOCK_HELD_EXIT, probeCanonicalLockHeld } from "../scripts/security-suite-custody.mjs";
 
 const NOT_HELD = "canonical inherited lock has no live exclusive flock";
@@ -50,15 +51,15 @@ Deno.test("probeCanonicalLockHeld: the default conflict status, a usage status a
 
 Deno.test("probeCanonicalLockHeld: asks flock for exactly the distinctive conflict code on the lock path", async () => {
   let seen: string[] = [];
-  await probeCanonicalLockHeld("/tmp/some.lock", (file: string, args: string[]) => {
+  await probeCanonicalLockHeld("lock-path-under-test", (file: string, args: string[]) => {
     seen = [file, ...args];
     return rejectWith({ code: FLOCK_HELD_EXIT })();
   });
-  assertEquals(seen, ["flock", "-n", "-E", String(FLOCK_HELD_EXIT), "/tmp/some.lock", "true"]);
+  assertEquals(seen, ["flock", "-n", "-E", String(FLOCK_HELD_EXIT), "lock-path-under-test", "true"]);
 });
 
 Deno.test("probeCanonicalLockHeld: the REAL flock agrees — a live holder is verified, a released lock is refused", async () => {
-  const dir = Deno.makeTempDirSync({ prefix: "jjsz-lock-probe-" });
+  const dir = Deno.makeTempDirSync({ dir: durableDir("jjsz-lock-probe-scratch"), prefix: "probe-" });
   const lock = `${dir}/canonical.lock`;
   Deno.writeTextFileSync(lock, "");
   // The holder takes the exclusive lock, announces it, then blocks on stdin. Its only life
