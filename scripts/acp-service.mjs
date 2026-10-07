@@ -264,23 +264,32 @@ function readInstalledServiceUnit(unitPath) {
   try {
     const content = readFileSync(unitPath, "utf8");
     const isPlist = content.includes("<?xml") || content.includes("<plist");
-    const isAnonymous = content.includes("--allow-anonymous-loopback");
+    let isAnonymous = false;
     let token = "";
     let port = "";
     let harness = "";
+
     if (isPlist) {
-      const tokenMatch = content.match(/<string>--token<\/string>\s*<string>([^<]*)<\/string>/);
+      // Derive arguments SOLELY from the ProgramArguments array (never comments or other directives)
+      const progArgsMatch = content.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/);
+      const argsBlock = progArgsMatch ? progArgsMatch[1] : "";
+      isAnonymous = /<string>--allow-anonymous-loopback<\/string>/.test(argsBlock);
+      const tokenMatch = argsBlock.match(/<string>--token<\/string>\s*<string>([^<]*)<\/string>/);
       if (tokenMatch) token = tokenMatch[1];
-      const portMatch = content.match(/<string>--port<\/string>\s*<string>([^<]*)<\/string>/);
+      const portMatch = argsBlock.match(/<string>--port<\/string>\s*<string>([^<]*)<\/string>/);
       if (portMatch) port = portMatch[1];
-      const harnessMatch = content.match(/<string>--harness<\/string>\s*<string>([^<]*)<\/string>/);
+      const harnessMatch = argsBlock.match(/<string>--harness<\/string>\s*<string>([^<]*)<\/string>/);
       if (harnessMatch) harness = harnessMatch[1];
     } else {
-      const tokenMatch = content.match(/--token\s+([^\s]+)/);
+      // Derive arguments SOLELY from the ExecStart line (never comments, descriptions, or working directory)
+      const execMatch = content.match(/^ExecStart=(.*)$/m);
+      const execLine = execMatch ? execMatch[1] : "";
+      isAnonymous = /(?:^|\s)--allow-anonymous-loopback(?:\s|$)/.test(execLine);
+      const tokenMatch = execLine.match(/(?:^|\s)--token(?:\s+|=)([^\s]+)/);
       if (tokenMatch) token = tokenMatch[1];
-      const portMatch = content.match(/--port\s+([^\s]+)/);
+      const portMatch = execLine.match(/(?:^|\s)--port(?:\s+|=)([^\s]+)/);
       if (portMatch) port = portMatch[1];
-      const harnessMatch = content.match(/--harness\s+([^\s]+)/);
+      const harnessMatch = execLine.match(/(?:^|\s)--harness(?:\s+|=)([^\s]+)/);
       if (harnessMatch) harness = harnessMatch[1];
     }
     return { unitPath, isPlist, isAnonymous, token, port, harness };

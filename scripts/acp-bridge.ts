@@ -49,7 +49,7 @@ const HOME = Deno.env.get("HOME") ?? "";
 /** Extra exact origins `--allow-origin` admitted (repeatable). */
 const ALLOWED_ORIGINS = (Array.isArray(args["allow-origin"]) ? args["allow-origin"] : []).filter(Boolean);
 
-const HOST = String(args.host || "127.0.0.1");
+const HOST = normalizeLoopbackHost(String(args.host || "127.0.0.1"));
 
 /**
  * Explicit opt-out: `--allow-anonymous-loopback` makes the LOOPBACK WebSocket
@@ -71,18 +71,25 @@ export function isLoopbackHost(host: string): boolean {
   return h === "::1" || h === "localhost" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
 }
 
+/** Canonicalize bracketed IPv6 loopback host `[::1]` to bare `::1` before validation and bind. */
+export function normalizeLoopbackHost(host: string): string {
+  if (typeof host !== "string") return "";
+  return host === "[::1]" ? "::1" : host;
+}
+
 /**
  * Strict validator for the anonymous loopback opt-out: hostnames like "localhost"
  * are REJECTED outright because they depend on resolver configuration and could
  * resolve to a routable interface. Only genuine, parsed literal loopback IPs are
  * permitted: 127.0.0.0/8 (strictly four decimal octets 0..255, with 127 as the
  * first octet, no leading zeros in octets, no trailing/leading characters or whitespace)
- * or IPv6 loopback (::1 / [::1]).
+ * or IPv6 loopback (::1 / [::1] canonicalized).
  */
 export function isValidatedLiteralLoopback(host: string): boolean {
   if (typeof host !== "string") return false;
-  if (host === "::1" || host === "[::1]") return true;
-  const parts = host.split(".");
+  const h = normalizeLoopbackHost(host);
+  if (h === "::1") return true;
+  const parts = h.split(".");
   if (parts.length !== 4) return false;
   if (parts[0] !== "127") return false;
   for (let i = 1; i < 4; i++) {
@@ -755,7 +762,7 @@ export function createAcpServer(
   allowAnonymousLoopback: boolean = ALLOW_ANONYMOUS_LOOPBACK,
   hostOverride: string = HOST,
 ) {
-  const effectiveHost = String(hostOverride || HOST);
+  const effectiveHost = normalizeLoopbackHost(String(hostOverride || HOST));
   // FAIL CLOSED, both halves asserted rather than documented:
   //  1. Anonymous access is validated literal loopback-ONLY. Asking for it while
   //     bound beyond loopback or to a hostname like "localhost" must refuse to

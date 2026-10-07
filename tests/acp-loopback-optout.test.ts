@@ -213,9 +213,11 @@ Deno.test("ACP loopback opt-out: flag + '0.0.0.0' refuses to start", async () =>
   );
 });
 
-Deno.test("ACP loopback opt-out: flag + '127.0.0.1' starts", async () => {
+Deno.test("ACP loopback opt-out: flag + '127.0.0.1' binds loopback and upgrades", async () => {
   const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true, "127.0.0.1");
-  const port = (bridge as any).addr.port;
+  const boundAddr = (bridge as any).addr;
+  assertEquals(boundAddr.hostname, "127.0.0.1", "actual bound address must be 127.0.0.1");
+  const port = boundAddr.port;
   try {
     const res = await upgradeStatus(port, EXTENSION_ORIGIN);
     assertEquals(res.includes("101"), true, `must start and upgrade on 127.0.0.1, got: ${res}`);
@@ -224,9 +226,11 @@ Deno.test("ACP loopback opt-out: flag + '127.0.0.1' starts", async () => {
   }
 });
 
-Deno.test("ACP loopback opt-out: flag + '::1' starts", async () => {
+Deno.test("ACP loopback opt-out: flag + '::1' binds IPv6 loopback and upgrades", async () => {
   const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true, "::1");
-  const port = (bridge as any).addr.port;
+  const boundAddr = (bridge as any).addr;
+  assertEquals(boundAddr.hostname, "::1", "actual bound address must be ::1");
+  const port = boundAddr.port;
   try {
     const conn = await Deno.connect({ hostname: "::1", port });
     try {
@@ -246,6 +250,38 @@ Deno.test("ACP loopback opt-out: flag + '::1' starts", async () => {
       const n = await conn.read(buf);
       const res = new TextDecoder().decode(buf.subarray(0, n ?? 0)).split("\r\n")[0];
       assertEquals(res.includes("101"), true, `must start and upgrade on ::1, got: ${res}`);
+    } finally {
+      try { conn.close(); } catch { /* closed */ }
+    }
+  } finally {
+    await bridge.shutdown();
+  }
+});
+
+Deno.test("ACP loopback opt-out: flag + '[::1]' canonicalizes to bare '::1', binds IPv6 loopback and upgrades", async () => {
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true, "[::1]");
+  const boundAddr = (bridge as any).addr;
+  assertEquals(boundAddr.hostname, "::1", "actual bound address for [::1] must canonicalize to bare ::1");
+  const port = boundAddr.port;
+  try {
+    const conn = await Deno.connect({ hostname: "::1", port });
+    try {
+      const headers = [
+        "GET /acp HTTP/1.1",
+        `Host: [::1]:${port}`,
+        `Origin: ${EXTENSION_ORIGIN}`,
+        "Connection: Upgrade",
+        "Upgrade: websocket",
+        "Sec-WebSocket-Version: 13",
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+        "",
+        "",
+      ].join("\r\n");
+      await conn.write(new TextEncoder().encode(headers));
+      const buf = new Uint8Array(1024);
+      const n = await conn.read(buf);
+      const res = new TextDecoder().decode(buf.subarray(0, n ?? 0)).split("\r\n")[0];
+      assertEquals(res.includes("101"), true, `must start and upgrade on canonicalized ::1, got: ${res}`);
     } finally {
       try { conn.close(); } catch { /* closed */ }
     }
@@ -329,4 +365,77 @@ Deno.test("ACP service status: reports installed mode from unit file, not CLI fl
     true,
     `status with no installed unit must explicitly label output as assumption, got:\n${out3}`,
   );
+
+  // 4. Negative fixture test (P2 finding): comment or substring mention of
+  //    --allow-anonymous-loopback does NOT flip the reported mode to anonymous.
+  //    (a) Systemd unit with comment/description/working-dir substring:
+  const commentUnit = Deno.makeTempFileSync();
+  try {
+    Deno.writeTextFileSync(commentUnit, [
+      "# Warning: do NOT run with --allow-anonymous-loopback here!",
+      "[Unit]",
+      "Description=Bridge service (--allow-anonymous-loopback in description)",
+      "[Service]",
+      "WorkingDirectory=/var/log/--allow-anonymous-loopback",
+      "ExecStart=/usr/bin/deno run scripts/acp-bridge.ts --port 3210 --harness pi",
+    ].join("\n"));
+    const child4 = new Deno.Command("node", {
+      args: [script, "status", "--unit", commentUnit],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const out4 = new TextDecoder().decode(child4.outputSync().stdout);
+    assertEquals(
+      out4.includes("ANONYMOUS loopback"),
+      false,
+      `comment/description substring must NOT report anonymous loopback, got:\n${out4}`,
+    );
+    assertEquals(
+      out4.includes("auth: token required (installed service uses generated token"),
+      true,
+      `comment substring must still report token required, got:\n${out4}`,
+    );
+  } finally {
+    try { Deno.removeSync(commentUnit); } catch { /* ignore */ }
+  }
+
+  //    (b) Launchd plist with comment/working-dir substring:
+  const plistUnit = Deno.makeTempFileSync();
+  try {
+    Deno.writeTextFileSync(plistUnit, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Do not use --allow-anonymous-loopback -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.chrome-agent-platform.acp-bridge</string>
+  <key>WorkingDirectory</key><string>/tmp/--allow-anonymous-loopback</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/deno</string>
+    <string>run</string>
+    <string>scripts/acp-bridge.ts</string>
+    <string>--port</string>
+    <string>3210</string>
+  </array>
+</dict>
+</plist>`);
+    const child5 = new Deno.Command("node", {
+      args: [script, "status", "--unit", plistUnit],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const out5 = new TextDecoder().decode(child5.outputSync().stdout);
+    assertEquals(
+      out5.includes("ANONYMOUS loopback"),
+      false,
+      `plist comment substring must NOT report anonymous loopback, got:\n${out5}`,
+    );
+    assertEquals(
+      out5.includes("auth: token required"),
+      true,
+      `plist comment substring must still report token required, got:\n${out5}`,
+    );
+  } finally {
+    try { Deno.removeSync(plistUnit); } catch { /* ignore */ }
+  }
 });
