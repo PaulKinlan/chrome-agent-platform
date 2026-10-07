@@ -1145,6 +1145,64 @@ Deno.test("fence: an untrusted result's strings are wrapped in the boundary", as
   const mathExec = await nestedProtocol.execute({ selectionRef: mathSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
   assertEquals(mathExec.ok, true);
   assertEquals(mathExec.result.result.text, RAW, "unmarked computation must not be fenced");
+
+  // Deep nested detection: untrusted object nested beyond depth 6 (e.g. depth 8)
+  const deepNestedTools = {
+    deep_script: tool({
+      description: "Deeply wrapped untrusted data",
+      inputSchema: z.object({ value: z.string().max(64) }),
+      execute: () => ({
+        ok: true,
+        result: { l1: { l2: { l3: { l4: { l5: { l6: { l7: { text: RAW, untrusted: true } } } } } } } },
+        logs: [],
+      }),
+    }),
+    tainted_script_run: tool({
+      description: "Script run tainted by fetch returning raw string",
+      inputSchema: z.object({ value: z.string().max(64) }),
+      execute: () => ({
+        ok: true,
+        result: RAW,
+        logs: [`fetched: ${RAW}`],
+        untrusted: true,
+      }),
+    }),
+    python_fetch_run: tool({
+      description: "Python execution with cap.fetch network taint",
+      inputSchema: z.object({ value: z.string().max(64) }),
+      execute: () => ({
+        ok: true,
+        stdout: RAW,
+        stdoutBytes: RAW.length,
+        network: [{ url: "https://api.example.com", ok: true }],
+        untrusted: true,
+      }),
+    }),
+  };
+  const deepRecords = executableBuiltinToolRecords(deepNestedTools, adapterContext());
+  const deepProtocol = new LazyToolProtocol({
+    readSources: () => deepRecords,
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+
+  // 1. Deep nested object is detected and fenced
+  const deepSearch = await deepProtocol.search({ query: "deep_script", limit: 1 }, context);
+  const deepExec = await deepProtocol.execute({ selectionRef: deepSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
+  assertEquals(deepExec.ok, true);
+  assertEquals(deepExec.result.result.l1.l2.l3.l4.l5.l6.l7.text, `${open}\n${RAW}\n${close}`);
+
+  // 2. Script run tainted by fetch fences raw string result AND logs
+  const taintedSearch = await deepProtocol.search({ query: "tainted_script_run", limit: 1 }, context);
+  const taintedExec = await deepProtocol.execute({ selectionRef: taintedSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
+  assertEquals(taintedExec.ok, true);
+  assertEquals(taintedExec.result.result, `${open}\n${RAW}\n${close}`);
+  assertEquals(taintedExec.result.logs[0], `${open}\nfetched: ${RAW}\n${close}`);
+
+  // 3. Python run tainted by network fetch fences stdout
+  const pythonSearch = await deepProtocol.search({ query: "python_fetch_run", limit: 1 }, context);
+  const pythonExec = await deepProtocol.execute({ selectionRef: pythonSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
+  assertEquals(pythonExec.ok, true);
+  assertEquals(pythonExec.result.stdout, `${open}\n${RAW}\n${close}`);
 });
 
 // ── CAP-FB-20260830-SCREENSHOT-TO-MODEL-01 ───────────────────────────────────

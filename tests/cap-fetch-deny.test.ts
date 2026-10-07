@@ -107,7 +107,7 @@ Deno.test("cap:fetch policy (v6ej): DNS-rebinding residual is formally registere
   assert(threatModel.includes("**Register:** R23"), "THREAT_MODEL.md T6 must cross-reference register R23");
 });
 
-Deno.test("cap:fetch untrusted tagging (INV-7): returns tagUntrusted and untagged fetched bodies fail closed", async () => {
+Deno.test("cap:fetch untrusted tagging (INV-7): returns tagUntrusted and production runFetch forces untrusted marker", async () => {
   const root = fileURLToPath(new URL("..", import.meta.url));
   const swSrc = await Deno.readTextFile(join(root, "extension/background/service-worker.js"));
 
@@ -117,33 +117,41 @@ Deno.test("cap:fetch untrusted tagging (INV-7): returns tagUntrusted and untagge
     "service-worker.js cap:fetch route must return tagUntrusted({ ok: true, ... })",
   );
 
-  // 2. Verify tagUntrusted marks the return value with untrusted: true
-  const { tagUntrusted, hasUntrustedMarker } = await import("../extension/lib/untrusted-fence.js");
-  const rawBody = { ok: true, status: 200, url: "https://example.com/api", text: "UNTRUSTED_CONTENT" };
-  const tagged = tagUntrusted(rawBody);
-  assertEquals(tagged.untrusted, true, "tagUntrusted must add untrusted: true");
-  assertEquals(hasUntrustedMarker(tagged), true, "hasUntrustedMarker must detect tagged result");
-
-  // 3. Falsification: untagged fetched body fails closed
-  const untagged = { ok: true, status: 200, url: "https://example.com/api", text: "UNTRUSTED_CONTENT" };
-  assertEquals(hasUntrustedMarker(untagged), false, "untagged body must not report untrusted");
-
-  function assertUntrustedFetchedBody(res: any) {
-    if (!res || typeof res !== "object" || res.untrusted !== true) {
-      throw new Error("INV-7 violation: fetched body must be tagged untrusted");
-    }
-    return true;
-  }
-
-  // Tagged passes
-  assertEquals(assertUntrustedFetchedBody(tagged), true);
-  // Untagged fails closed
-  let failedClosed = false;
+  // 2. Real production runFetch through chrome.runtime:
+  // Even if a buggy or malicious SW response lacks `untrusted: true`, production runFetch
+  // forces tagUntrusted(...) before returning to the sandbox environment.
+  const { runFetch } = await import("../extension/lib/script-host.js");
+  const originalChrome = (globalThis as any).chrome;
   try {
-    assertUntrustedFetchedBody(untagged);
-  } catch {
-    failedClosed = true;
+    (globalThis as any).chrome = {
+      runtime: {
+        sendMessage: async (msg: any) => {
+          // Simulate untagged SW response
+          return { ok: true, status: 200, url: msg.url, text: "FETCHED_WEB_DATA" };
+        },
+      },
+    };
+    const res = await runFetch({ url: "https://example.com/api", opts: {} }, "test-run");
+    assertEquals(res.ok, true);
+    assertEquals(res.text, "FETCHED_WEB_DATA");
+    assertEquals(res.untrusted, true, "production runFetch must guarantee untrusted: true on SW response (INV-7)");
+  } finally {
+    if (originalChrome === undefined) delete (globalThis as any).chrome;
+    else (globalThis as any).chrome = originalChrome;
   }
-  assert(failedClosed, "untagged fetched body must fail closed under INV-7 gate");
+
+  // 3. Direct fetch fallback in runFetch also returns untrusted: true
+  const originalFetch = globalThis.fetch;
+  try {
+    delete (globalThis as any).chrome;
+    globalThis.fetch = async () => new Response("DIRECT_FETCH_DATA", { status: 200 });
+    const directRes = await runFetch({ url: "https://example.com/direct", opts: {} });
+    assertEquals(directRes.ok, true);
+    assertEquals(directRes.text, "DIRECT_FETCH_DATA");
+    assertEquals(directRes.untrusted, true, "direct fetch fallback must guarantee untrusted: true (INV-7)");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalChrome !== undefined) (globalThis as any).chrome = originalChrome;
+  }
 });
 

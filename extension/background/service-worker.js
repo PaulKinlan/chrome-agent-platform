@@ -868,7 +868,15 @@ async function runScriptSandboxed(source) {
   // Phase 2 — send the source to the winning host ONLY.
   return new Promise((resolve) => {
     let settled = false;
-    const finish = (v) => { if (!settled) { settled = true; scriptRunPolicies.delete(runId); resolve(v); } };
+    const finish = (v) => {
+      if (!settled) {
+        settled = true;
+        const policy = scriptRunPolicies.get(runId);
+        scriptRunPolicies.delete(runId);
+        const tainted = policy?.fetched === true || v?.untrusted === true;
+        resolve(tainted ? { ...v, untrusted: true } : v);
+      }
+    };
     const timer = setTimeout(() => finish({ ok: false, error: "script run timed out (SW)" }), 40_000);
     chrome.runtime.sendMessage({ type: "cap:script-run", source, runId, for: winner }).then(
       (res) => { clearTimeout(timer); finish(res ?? { ok: false, error: "no response from the script host" }); },
@@ -6920,6 +6928,7 @@ const handlers = mergeRouteMaps(
       // Response bodies are one-shot streams: cache the single read before
       // bounding it (arrayBuffer() followed by text() throws in Chrome).
       const text = await res.text();
+      if (policy) policy.fetched = true;
       // Fetched bodies are untrusted web content: wrap this return in
       // `tagUntrusted(...)` (lib/untrusted-fence.js, INV-7).
       return tagUntrusted({ ok: true, status: res.status, url: res.url, text: text.slice(0, MAX) });
@@ -9981,7 +9990,7 @@ const handlers = mergeRouteMaps(
       } catch { result = String(result).slice(0, 256 * 1024); }
     }
     await recordScriptRun(origin ?? "master", id, { ok: run?.ok, result, error: run?.error }).catch(() => {});
-    const isUntrusted = hasUntrustedMarker(run?.result);
+    const isUntrusted = run?.untrusted === true || hasUntrustedMarker(run?.result) || hasUntrustedMarker(run?.logs);
     return {
       ok: run?.ok ?? false,
       result,

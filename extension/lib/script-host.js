@@ -54,7 +54,7 @@ export async function runFetch(payload, runId = null) {
       // (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01); a fetch outside a
       // registered run is refused there.
       const res = await chrome.runtime.sendMessage({ type: "cap:fetch", url: v.url, method, runId });
-      if (res?.ok) return res;
+      if (res?.ok) return tagUntrusted(res);
       return { ok: false, error: res?.error ?? "fetch failed" };
     } catch (e) {
       return { ok: false, error: `fetch failed: ${e?.message ?? e}` };
@@ -100,6 +100,7 @@ export function runScriptInIframe(doc, source, runId, { timeoutMs = 30_000, modu
     doc.body.appendChild(iframe);
 
     const logs = [];
+    let fetchedTaint = false;
     let settled = false;
     const onMessage = (event) => {
       if (event.source !== iframe.contentWindow) return;
@@ -109,6 +110,7 @@ export function runScriptInIframe(doc, source, runId, { timeoutMs = 30_000, modu
         case "cap:script-call": {
           if (d.kind === "fetch") {
             runFetch(d.payload, runId).then((value) => {
+              if (value?.ok) fetchedTaint = true;
               iframe.contentWindow?.postMessage(
                 { type: "cap:script-call-result", runId, callId: d.callId, ok: value.ok, value: value.ok ? value : undefined, error: value.ok ? undefined : value.error },
                 "*"
@@ -126,10 +128,10 @@ export function runScriptInIframe(doc, source, runId, { timeoutMs = 30_000, modu
           if (typeof d.text === "string") logs.push(d.text.slice(0, 2000));
           break;
         case "cap:script-result":
-          settle({ ok: true, result: d.result, logs });
+          settle({ ok: true, result: d.result, logs, ...(fetchedTaint ? { untrusted: true } : {}) });
           break;
         case "cap:script-error":
-          settle({ ok: false, error: typeof d.error === "string" ? d.error : "script failed", logs });
+          settle({ ok: false, error: typeof d.error === "string" ? d.error : "script failed", logs, ...(fetchedTaint ? { untrusted: true } : {}) });
           break;
       }
     };

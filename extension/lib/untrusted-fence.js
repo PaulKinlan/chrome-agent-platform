@@ -71,9 +71,11 @@ export function fenceUntrustedValue(value, token, depth = 0) {
 }
 
 /** Check whether a value or any nested property carries untrusted: true.
- * Bounded depth and cycle-resistant; never throws on hostile objects or cycles. */
+ * Bounded depth (matching MAX_FENCE_DEPTH) and cycle-resistant; fails closed
+ * on excessive depth or hostile throwing accessors (INV-7). */
 export function hasUntrustedMarker(value, depth = 0, seen = new WeakSet()) {
-  if (!value || typeof value !== "object" || depth > 6) return false;
+  if (!value || typeof value !== "object") return false;
+  if (depth >= MAX_FENCE_DEPTH) return true;
   if (seen.has(value)) return false;
   seen.add(value);
   try {
@@ -86,7 +88,7 @@ export function hasUntrustedMarker(value, depth = 0, seen = new WeakSet()) {
     }
     return false;
   } catch {
-    return false;
+    return true;
   }
 }
 

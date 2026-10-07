@@ -125,7 +125,7 @@ export async function runWorkflowRoute({ name, kind, source, description, gate, 
   const gateResult = await gate({ name: wfName, description: String(description ?? "") });
   if (!gateResult.ok) return gateResult;
   const run = await runSandboxed(plan.source);
-  const isUntrusted = hasUntrustedMarker(run?.result);
+  const isUntrusted = run?.untrusted === true || hasUntrustedMarker(run?.result) || hasUntrustedMarker(run?.logs);
   return {
     ok: run?.ok ?? false,
     result: run?.result ?? null,

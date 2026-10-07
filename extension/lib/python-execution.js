@@ -119,5 +119,6 @@ export async function runPython(runtime, { code = "", stdin = "", wheels = null,
   if (utf8Bytes(out).byteLength > PYTHON_EXEC_BOUNDS.maxStdoutBytes) {
     return { ok: false, error: "python_stdout_over_budget", ...network };
   }
-  return { ok: true, stdout: out, ...network };
+  const hasSuccessfulFetch = Array.isArray(network.network) && network.network.some((r) => r && r.ok === true && !r.refused);
+  return { ok: true, stdout: out, ...network, ...(hasSuccessfulFetch ? { untrusted: true } : {}) };
 }
