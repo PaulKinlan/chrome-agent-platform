@@ -8,7 +8,9 @@
 // before any Chrome call), host-permission scoping, origin-coverage of every
 // matches pattern, bounded outputs + honest truncation. In-memory chrome shim
 // extended from chrome-tools-t8.test.ts.
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
+import { statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   browserToolset,
   setGlobalBrowserControlGrant,
@@ -37,6 +39,72 @@ const userScripts = new Map(); // id -> script
 const contentScripts = new Map(); // id -> script
 const scriptCalls = []; // records userScripts/scripting API calls
 let sendCommandResult = {};
+
+// Shape-only simulation of Chrome's declared registration API. These errors
+// are from THIS FAKE, not observations of real Chrome or proof of execution.
+// In particular, checking a ScriptSource.code object never evaluates its code.
+function fakeSchemaError(api, reason) {
+  throw new TypeError(`[T12 schema fake, NOT Chrome] ${api}: ${reason}`);
+}
+function packagedJs(file, api) {
+  if (typeof file !== "string" || !file || file.startsWith("/") || file.split("/").includes("..") ||
+      file.includes("\\") || file.includes("%") || !/\.m?js$/.test(file)) {
+    fakeSchemaError(api, "js entries must be extension-relative packaged JS filenames");
+  }
+  const candidate = new URL(`../extension/${file}`, import.meta.url);
+  try {
+    if (!statSync(fileURLToPath(candidate)).isFile()) throw new Error("not a file");
+  } catch {
+    fakeSchemaError(api, "js entry is not a packaged extension JS file");
+  }
+}
+function validateRegistration(scripts, api) {
+  if (!Array.isArray(scripts) || scripts.length === 0) fakeSchemaError(api, "scripts must be a nonempty array");
+  const userScript = api.startsWith("userScripts.");
+  const update = api.endsWith(".update");
+  for (const script of scripts) {
+    if (!script || typeof script !== "object" || typeof script.id !== "string" ||
+        !script.id || script.id.startsWith("_") ||
+        (script.matches === undefined && !update) ||
+        (script.matches !== undefined && (!Array.isArray(script.matches) || !script.matches.length ||
+          script.matches.some((match) => typeof match !== "string" || !match)))) {
+      fakeSchemaError(api, "script needs a non-reserved id and nonempty match strings when supplied");
+    }
+    if (script.runAt !== undefined && !["document_start", "document_end", "document_idle"].includes(script.runAt)) {
+      fakeSchemaError(api, "invalid runAt");
+    }
+    if (script.world !== undefined && !(userScript ? ["MAIN", "USER_SCRIPT"] : ["MAIN", "ISOLATED"]).includes(script.world)) {
+      fakeSchemaError(api, "invalid world");
+    }
+    // update may omit js (and preserve the existing script), but this tool
+    // ALWAYS sends js; register requires it. Validate every supplied value.
+    if (script.js === undefined && update) continue;
+    if (!Array.isArray(script.js) || script.js.length === 0) {
+      fakeSchemaError(api, userScript ? "js must be a nonempty ScriptSource[] (e.g. [{code}])" :
+        "js must be a nonempty string[] of packaged extension filenames");
+    }
+    if (userScript) {
+      for (const source of script.js) {
+        if (!source || typeof source !== "object" || Array.isArray(source) ||
+            ("code" in source) === ("file" in source)) {
+          fakeSchemaError(api, "each ScriptSource must specify exactly one of code or file");
+        }
+        if ("code" in source && typeof source.code !== "string") fakeSchemaError(api, "code must be a string");
+        if ("file" in source) packagedJs(source.file, api);
+      }
+    } else {
+      for (const file of script.js) packagedJs(file, api);
+    }
+  }
+}
+
+function assertRawJsRejected(result, api, source) {
+  assert(result.error?.includes(`[T12 schema fake, NOT Chrome] ${api}: js must be a nonempty`), JSON.stringify(result));
+  const [reached, payload] = scriptCalls.at(-1) ?? [];
+  assertEquals(reached, api, "permission/grant checks must reach exactly this API call");
+  assertEquals(payload?.length, 1);
+  assertEquals(payload[0].js, source, "the tool still supplies a bare source string, not a valid Chrome js array");
+}
 
 function reset() {
   store.clear();
@@ -133,6 +201,7 @@ globalThis.chrome = {
   userScripts: {
     register: async (scripts) => {
       scriptCalls.push(["userScripts.register", scripts]);
+      validateRegistration(scripts, "userScripts.register");
       for (const s of scripts) {
         if (userScripts.has(s.id)) throw new Error(`Duplicate user script id ${s.id}.`);
         userScripts.set(s.id, { ...s });
@@ -140,6 +209,7 @@ globalThis.chrome = {
     },
     update: async (scripts) => {
       scriptCalls.push(["userScripts.update", scripts]);
+      validateRegistration(scripts, "userScripts.update");
       for (const s of scripts) {
         if (!userScripts.has(s.id)) throw new Error(`No user script with id ${s.id}.`);
         userScripts.set(s.id, { ...s });
@@ -163,6 +233,7 @@ globalThis.chrome = {
     },
     registerContentScripts: async (scripts) => {
       scriptCalls.push(["scripting.register", scripts]);
+      validateRegistration(scripts, "scripting.register");
       for (const s of scripts) {
         if (contentScripts.has(s.id)) throw new Error(`Duplicate content script id ${s.id}.`);
         contentScripts.set(s.id, { ...s });
@@ -170,6 +241,7 @@ globalThis.chrome = {
     },
     updateContentScripts: async (scripts) => {
       scriptCalls.push(["scripting.update", scripts]);
+      validateRegistration(scripts, "scripting.update");
       for (const s of scripts) {
         if (!contentScripts.has(s.id)) throw new Error(`No content script with id ${s.id}.`);
         contentScripts.set(s.id, { ...s });
@@ -275,12 +347,13 @@ Deno.test("T12 register_user_script: grant must cover every matches origin (per-
   assertEquals(scriptCalls.length, 0);
   // Origin grant covering BOTH:
   await setOriginBrowserControlGrant(["https://a.example", "https://b.example"]);
-  const ok = await tools().register_user_script.execute({
+  const rejected = await tools().register_user_script.execute({
     id: "s3", js: "console.log(1)", matches: ["https://a.example/*", "https://b.example/*"], runAt: "document_idle",
   });
-  assertEquals(ok.ok, true);
-  assertEquals(ok.matches, ["https://a.example/*", "https://b.example/*"]);
-  assertEquals(userScripts.get("s3").runAt, "document_idle");
+  assertRawJsRejected(rejected, "userScripts.register", "console.log(1)");
+  assertEquals(scriptCalls.at(-1)[1][0].runAt, "document_idle");
+  assertEquals(scriptCalls.at(-1)[1][0].matches, ["https://a.example/*", "https://b.example/*"]);
+  assertEquals(userScripts.has("s3"), false, "strict fake refuses the invalid shape without registering");
 });
 
 Deno.test("T12 update_user_script: same discipline as register", async () => {
@@ -288,10 +361,10 @@ Deno.test("T12 update_user_script: same discipline as register", async () => {
   grantedPermissions.add("userScripts");
   grantedOrigins.add("https://a.example/*");
   await setOriginBrowserControlGrant(["https://a.example"]);
-  userScripts.set("s1", { id: "s1", js: "old", matches: ["https://a.example/*"] });
-  const ok = await tools().update_user_script.execute({ id: "s1", js: "new", matches: ["https://a.example/*"] });
-  assertEquals(ok.ok, true);
-  assertEquals(userScripts.get("s1").js, "new");
+  userScripts.set("s1", { id: "s1", js: [{ code: "old" }], matches: ["https://a.example/*"] });
+  const rejected = await tools().update_user_script.execute({ id: "s1", js: "new", matches: ["https://a.example/*"] });
+  assertRawJsRejected(rejected, "userScripts.update", "new");
+  assertEquals(userScripts.get("s1").js, [{ code: "old" }], "invalid update must leave prior registration intact");
   await revokeBrowserControlGrant();
   const denied = await tools().update_user_script.execute({ id: "s1", js: "x", matches: ["https://a.example/*"] });
   assert(denied.error.includes("browser control not granted"), JSON.stringify(denied));
@@ -363,16 +436,48 @@ Deno.test("T12 register_content_script: host + origin-coverage + world enum", as
   grantedPermissions.add("scripting");
   grantedOrigins.add("https://a.example/*");
   await setOriginBrowserControlGrant(["https://a.example"]);
-  const ok = await tools().register_content_script.execute({
+  const rejected = await tools().register_content_script.execute({
     id: "c1", js: "document.title='x'", matches: ["https://a.example/*"], runAt: "document_start", world: "MAIN",
   });
-  assertEquals(ok.ok, true);
-  assertEquals(contentScripts.get("c1").world, "MAIN");
-  assertEquals(contentScripts.get("c1").runAt, "document_start");
+  assertRawJsRejected(rejected, "scripting.register", "document.title='x'");
+  assertEquals(scriptCalls.at(-1)[1][0].world, "MAIN");
+  assertEquals(scriptCalls.at(-1)[1][0].runAt, "document_start");
+  assertEquals(contentScripts.has("c1"), false, "strict fake refuses inline source; no registration");
   await revokeBrowserControlGrant();
   const denied = await tools().register_content_script.execute({ id: "c2", js: "x", matches: ["https://a.example/*"] });
   assert(denied.error.includes("browser control not granted"), JSON.stringify(denied));
   assertEquals(scriptCalls.filter(([k]) => k === "scripting.register").length, 1);
+});
+
+Deno.test("T12 update_content_script: granted raw source is rejected, existing packaged registration remains", async () => {
+  reset();
+  grantedPermissions.add("scripting");
+  grantedOrigins.add("https://a.example/*");
+  await setOriginBrowserControlGrant(["https://a.example"]);
+  const before = { id: "c1", js: ["content/bridge-auth.js"], matches: ["https://a.example/*"], world: "ISOLATED" };
+  contentScripts.set("c1", before);
+  const rejected = await tools().update_content_script.execute({ id: "c1", js: "document.title='x'", matches: ["https://a.example/*"] });
+  assertRawJsRejected(rejected, "scripting.update", "document.title='x'");
+  assertEquals(contentScripts.get("c1"), before);
+});
+
+Deno.test("T12 schema fake: valid userScripts code objects and packaged scripting files are SHAPES only", () => {
+  const base = { id: "s1", matches: ["https://a.example/*"] };
+  // Never invoke or evaluate the code; a valid schema is not an execution verdict.
+  validateRegistration([{ ...base, js: [{ code: "document.title = 'x'" }] }], "userScripts.register");
+  validateRegistration([{ ...base, js: [{ file: "content/bridge-auth.js" }] }], "userScripts.update");
+  validateRegistration([{ ...base, js: ["content/bridge-auth.js"] }], "scripting.register");
+  validateRegistration([{ ...base, js: ["content/main-world.js"] }], "scripting.update");
+  validateRegistration([{ id: "s1", runAt: "document_idle" }], "userScripts.update");
+  validateRegistration([{ id: "s1", runAt: "document_idle" }], "scripting.update");
+  assertThrows(() => validateRegistration([{ ...base, js: "document.title='x'" }], "userScripts.register"),
+    TypeError, "[T12 schema fake, NOT Chrome]");
+  assertThrows(() => validateRegistration([{ ...base, js: "content/bridge-auth.js" }], "scripting.register"),
+    TypeError, "[T12 schema fake, NOT Chrome]");
+  assertThrows(() => validateRegistration([{ ...base, js: ["../outside.js"] }], "scripting.register"),
+    TypeError, "extension-relative packaged JS filenames");
+  assertThrows(() => validateRegistration([{ ...base, js: ["content/missing.js"] }], "scripting.register"),
+    TypeError, "not a packaged extension JS file");
 });
 
 Deno.test("T12 unregister_content_script: registered-matches coverage; invalid matches ⇒ global grant only", async () => {
