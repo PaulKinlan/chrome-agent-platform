@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.582] — 2026-10-06
+- View all bundled tools, libraries, and third-party license notices in a dedicated About page generated from the extension inventory.
+
 ## [0.3.581] — 2026-10-06
 - Extend call-export WebAssembly runner with init and final parameters for expanded hash algorithm support
 

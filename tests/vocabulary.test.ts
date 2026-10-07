@@ -292,6 +292,7 @@ Deno.test("CSP hygiene: shipped extension pages ship NO inline scripts (MV3 scri
     "extension/ntp/ntp.html",
     "extension/sidepanel/sidepanel.html",
     "extension/privacy/privacy.html",
+    "extension/about/about.html",
     "extension/artifact/artifact.html",
     "extension/sandbox/script-sandbox.html",
     "extension/sandbox/artifact-preview.html",

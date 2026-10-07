@@ -128,6 +128,10 @@ export const SERIAL_FILE_TIMEOUTS = Object.freeze({
 // does not apply; the guard test pins the reason. Keep this list tiny —
 // membership is a review-time decision, never a default.
 export const EXEMPTIONS = {
+  // chrome-agent-platform-fixn: the drift guard plants mutated about.html / inventory fixtures
+  // inside makeTempDir scratch trees to verify drift detection and fail-closed attribution;
+  // the real repo tree is read, never written.
+  "tests/about-page-drift-guard.test.ts": "writes mutated about.html fixtures only inside makeTempDir scratch trees to prove drift detection; the repo tree is read, never written",
   "tests/evidence-durable.test.ts": "spawns the bundled-tool generator ONLY inside a pristine makeTempDir checkout materialization; every write goes to the temp dir, never to repo extension/ or packages/",
   // xe11: the owed-changelog ledger test builds throwaway git FIXTURE repos in a
   // makeTempDir and writes `extension/lib/tool.js` INSIDE them (the product-path
