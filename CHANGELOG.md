@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.591] — 2026-10-07
+- Streamed assistant bubbles properly complete and clear their active streaming state when the final answer settles.
+
 ## [0.3.590] — 2026-10-07
 - Fix a long cold-boot stall by persisting the run-log WAL marker and letting read paths share the lock.
 
