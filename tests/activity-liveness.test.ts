@@ -181,10 +181,13 @@ Deno.test("activity explorer: summary + detail/copy route tool RESULTS through r
 
 Deno.test("activity explorer redacts historical values before render + copy", () => {
   const src = Deno.readTextFileSync(fileURLToPath(new URL("../extension/shared/components.js", import.meta.url)));
-  assert(
-    /^\s*import\s*\{[^}]*\bredactSecrets\b[^}]*\}\s*from\s*["']\.\.\/lib\/pure\.js["']/m.test(src),
-    "the canonical redactor is imported",
-  );
+  const clean = src.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
+  const specifiers = [...clean.matchAll(/import\s*\{([^}]+)\}\s*from\s*["']\.\.\/lib\/pure\.js["']/g)]
+    .flatMap((m) => m[1].split(","))
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const importsRedactSecrets = specifiers.some((s) => s.split(/\s+as\s+/).map((p) => p.trim()).includes("redactSecrets"));
+  assert(importsRedactSecrets, "the canonical redactor is imported from lib/pure.js");
   assert(src.includes("redactSecrets(parsed.value)"), "_detailBody redacts parsed values before tree render + copy");
   assert(src.includes("redactSecrets(p.value)"), "the summary-line args preview is redacted too");
 });
