@@ -101,9 +101,23 @@ Deno.test("acpConnectionErrorMessage: maps each refusal reason to actionable wor
     /acp\.token setting/.test(acpConnectionErrorMessage({ reason: "token-missing", detail: "" })),
     "token-missing must name the acp.token setting",
   );
+  // The settings field is under Settings → Agents, NOT a top-level "ACP" item
+  // (e25gk follow-up: options.html is wired by renderAcpSettings).
+  assert(
+    /External agent harnesses \(ACP\)/.test(acpConnectionErrorMessage({ reason: "token-missing", detail: "" })),
+    "token-missing must name the real nav path, not a top-level 'ACP'",
+  );
+  assert(
+    /--token/.test(acpConnectionErrorMessage({ reason: "token-missing", detail: "" })),
+    "token-missing must offer --token as an alternative to the settings field",
+  );
   assert(
     /does not match/.test(acpConnectionErrorMessage({ reason: "token-invalid", detail: "" })),
     "token-invalid must say the token does not match",
+  );
+  assert(
+    /--token-file/.test(acpConnectionErrorMessage({ reason: "token-invalid", detail: "" })),
+    "token-invalid must offer --token-file as an alternative",
   );
   assert(
     /Origin rejected/.test(acpConnectionErrorMessage({ reason: "origin-rejected", detail: "" })),

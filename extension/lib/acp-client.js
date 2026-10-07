@@ -111,13 +111,21 @@ export async function acpProbeConnectionFailure(endpoint) {
  * Returns "" when there is nothing more specific to say. */
 export function acpConnectionErrorMessage(refusal) {
   const reason = refusal?.reason ?? "";
+  // The token field lives at Settings → Agents → External agent harnesses (ACP) →
+  // Token (options.html, wired by renderAcpSettings). The bridge accepts the
+  // secret either pasted there (acp.token) or passed at start-up with --token / a
+  // custom --token-file, so both are named (the token became mandatory on EVERY
+  // connection, loopback included, in 0.3.578; there is no unauthenticated WS mode).
+  const TOKEN_HINT = "Settings → Agents → External agent harnesses (ACP) → Token (the acp.token setting)";
   if (reason === "token-missing") {
     return "Authentication required: the ACP bridge needs its shared token, but none was provided. " +
-      "Paste the token from $XDG_CONFIG_HOME/cap-acp/bridge-token into the acp.token setting (Settings → ACP), then retry.";
+      `Paste the token from $XDG_CONFIG_HOME/cap-acp/bridge-token into ${TOKEN_HINT}, or run the bridge ` +
+      "with --token (or --token-file to name your own file), then retry.";
   }
   if (reason === "token-invalid") {
     return "Authentication failed: the token in acp.token does not match the ACP bridge's token. " +
-      "Re-copy it from $XDG_CONFIG_HOME/cap-acp/bridge-token into the acp.token setting (Settings → ACP).";
+      `Re-copy it from $XDG_CONFIG_HOME/cap-acp/bridge-token into ${TOKEN_HINT}, or run the bridge ` +
+      "with --token (or --token-file) to pin the secret it expects.";
   }
   if (reason === "origin-rejected") {
     return "Origin rejected: the ACP bridge refused a connection from this page's origin. " +
