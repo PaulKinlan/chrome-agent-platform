@@ -51,6 +51,28 @@ Deno.test("wwj5: the real-browser probe asserts Settings parity in parent viewpo
   assert(probe.includes("if (!parity.settingsAccounted)"), "the browser probe must fail closed on Settings drift");
 });
 
+Deno.test("i8ii: journey parity reads the browse host only while Directory has a layout box", async () => {
+  const journey = await Deno.readTextFile("scripts/chrome-journeys.ts");
+  assert(journey.includes("hostWidth: directoryMetrics1440?.hostWidth ?? null"), "1440 parity must use the visible Directory width");
+  assert(journey.includes("hostWidth: directoryMetrics1024?.hostWidth ?? null"), "1024 parity must use the visible Directory width");
+  assert(journey.includes("contentMax: directoryMetrics1440?.contentMax ?? null"), "1440 parity must use the visible Directory token");
+  assert(journey.includes("contentMax: directoryMetrics1024?.contentMax ?? null"), "1024 parity must use the visible Directory token");
+  for (const width of [1440, 1024]) {
+    const directoryStart = journey.indexOf(`const directoryMetrics${width} = await evalIn(cdp, ntpSession,`);
+    const directoryEnd = journey.indexOf(`const dirLeft${width} = directoryMetrics${width}?.left ?? null;`, directoryStart);
+    assert(directoryStart >= 0 && directoryEnd > directoryStart, `Directory must measure the browse host at ${width}`);
+    const directoryMeasure = journey.slice(directoryStart, directoryEnd);
+    assert(directoryMeasure.includes("!host.hidden && host.getClientRects().length > 0"), `host must have a visible layout box at ${width}`);
+    assert(directoryMeasure.includes("hostWidth: measurable ? host.clientWidth : null"), `the ${width} browse scrollport must fail closed if hidden`);
+    const settingsStart = journey.indexOf(`const settingsMetrics${width} = await evalIn(cdp, ntpSession,`);
+    const settingsEnd = journey.indexOf(`const settingsLeft${width} =`, settingsStart);
+    assert(settingsStart >= 0 && settingsEnd > settingsStart, `Settings must be measured at ${width}`);
+    assert(!journey.slice(settingsStart, settingsEnd).includes("view-client-host"), `Settings must not read the hidden host at ${width}`);
+    assert(width === 1440 ? directoryEnd < settingsStart : settingsEnd < directoryStart,
+      `the ${width} browse width must be measured while Directory, not Settings, is open`);
+  }
+});
+
 Deno.test("one-shell layout: Settings adopts shared layout and embedded rule", async () => {
   const html = await Deno.readTextFile("extension/options/options.html");
   assert(html.includes('class="options-shell"'), "options.html must have options-shell wrapping side and content");
