@@ -653,7 +653,110 @@ Deno.test("redactToolArgs: per-tool secretArgs redaction (P1-3)", () => {
   assertEquals(custom, { customSecret: "[REDACTED]", safe: "bar" });
 });
 
-Deno.test("execute_tool end-to-end secret redaction: broadcast, journal, and durable run log (P1 / 2uhx)", () => {
+Deno.test("redactToolArgs: recurses into nested arguments envelopes and arbitrary object properties (c8ee / P2.2)", () => {
+  const secretKey = "super-secret-key-bytes";
+  // Nested under arguments.cfg
+  const nested = redactToolArgs("execute_tool", {
+    arguments: { cfg: { key: secretKey, other: "val" } },
+  });
+  assertEquals(nested, {
+    arguments: { cfg: { key: "[REDACTED]", other: "val" } },
+  });
+
+  // Non-protocol tool with arguments envelope carrying secret arg
+  const readFileWithSecret = redactToolArgs("read_file", {
+    arguments: { key: secretKey, path: "foo.txt" },
+  });
+  assertEquals(readFileWithSecret, {
+    arguments: { key: "[REDACTED]", path: "foo.txt" },
+  });
+
+  // Non-protocol tool with deeply nested arguments envelope
+  const readFileDeepNested = redactToolArgs("read_file", {
+    cfg: { arguments: { key: secretKey, path: "foo.txt" } },
+  });
+  assertEquals(readFileDeepNested, {
+    cfg: { arguments: { key: "[REDACTED]", path: "foo.txt" } },
+  });
+
+  // JSON string arguments envelope
+  const readFileStringEnvelope = redactToolArgs("read_file", {
+    cfg: { arguments: JSON.stringify({ key: secretKey, path: "foo.txt" }) },
+  });
+  assertEquals(readFileStringEnvelope, {
+    cfg: { arguments: JSON.stringify({ key: "[REDACTED]", path: "foo.txt" }) },
+  });
+
+  // Cyclic object defense (never throws or overflows stack)
+  const cyclic: any = { a: 1, key: secretKey };
+  cyclic.self = cyclic;
+  const redactedCyclic = redactToolArgs("execute_tool", cyclic);
+  assertEquals(redactedCyclic.a, 1);
+  assertEquals(redactedCyclic.key, "[REDACTED]");
+  assertEquals(redactedCyclic.self, "[cycle]");
+
+  // Deep object capping
+  let deep: any = { key: secretKey };
+  for (let i = 0; i < 12; i++) {
+    deep = { nested: deep };
+  }
+  const capped = redactToolArgs("execute_tool", deep);
+  assert(JSON.stringify(capped).includes("[depth-capped]"));
+
+  // Shared noncyclic DAG objects are preserved on distinct branches (unwound seen set)
+  const shared = { name: "shared-item", count: 42 };
+  const dag = redactToolArgs("execute_tool", { a: shared, b: shared });
+  assertEquals(dag, { a: { name: "shared-item", count: 42 }, b: { name: "shared-item", count: 42 } });
+});
+
+Deno.test("sw-egress: service-worker.js progress chokepoint and run-digest wire redactToolArgs (c8ee / P1 pin)", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  assert(
+    sw.includes("toolArgs: redactDeep(redactToolArgs(event.selectedTool ?? event.toolName, event.toolArgs))"),
+    "SW progress seam must wire redactToolArgs on tool-call events",
+  );
+  assert(
+    sw.includes('result: "[REDACTION_FAILED]", resultFull: "[REDACTION_FAILED]"'),
+    "SW progress seam catch block must fail closed on both result and resultFull",
+  );
+
+  const digest = await Deno.readTextFile(new URL("../extension/lib/run-digest.js", import.meta.url));
+  assert(
+    digest.includes("const safeArgs = redactToolArgs(name, shownArgs === undefined ? {} : shownArgs, extraSecret)"),
+    "run-digest must wire redactToolArgs on continuation args",
+  );
+});
+
+Deno.test("sw-egress fail-closed: redaction exception clears result and resultFull", () => {
+  let event: any = {
+    type: "tool-result",
+    toolName: "read_file",
+    result: { get boom() { throw new Error("hostile getter"); } },
+    resultFull: "confidential raw full result text",
+  };
+
+  try {
+    event = {
+      ...event,
+      ...(event.type === "tool-call"
+        ? { toolArgs: redactDeep(redactToolArgs(event.selectedTool ?? event.toolName, event.toolArgs)) }
+        : { result: redactDeep(event.result) }),
+    };
+  } catch {
+    event = {
+      ...event,
+      ...(event.type === "tool-call"
+        ? { toolArgs: "[REDACTION_FAILED]" }
+        : { result: "[REDACTION_FAILED]", resultFull: "[REDACTION_FAILED]", resultFullBytes: 18 }),
+    };
+  }
+
+  assertEquals(event.result, "[REDACTION_FAILED]");
+  assertEquals(event.resultFull, "[REDACTION_FAILED]");
+  assert(!JSON.stringify(event).includes("confidential raw full result"));
+});
+
+Deno.test("execute_tool secret redaction transform simulation: broadcast, journal, and durable run log (2uhx)", () => {
   const rawKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="; // 32-byte secret key in base64
   const nonce = "BwAAAAQAQUJDREVGRw==";
   const data = "c3VwZXItY29uZmlkZW50aWFsLXBsYWludGV4dA==";

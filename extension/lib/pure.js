@@ -1163,28 +1163,23 @@ const ALL_KNOWN_TOOL_SECRET_ARGS = Object.freeze(
  * When the tool is a protocol tool (e.g. execute_tool) or unknown/unresolved,
  * arguments (including nested arguments envelopes) are redacted against the union
  * of known tool secret argument names.
+ * Bounded depth and cycle-resistant; never throws on hostile input.
  * @param {string} toolName
  * @param {any} args
  * @param {readonly string[]|string[]|null} [extraSecretArgs]
+ * @param {number} [depth=0]
+ * @param {Set<object>} [activeAncestors=new Set()]
  * @returns {any}
  */
-export function redactToolArgs(toolName, args, extraSecretArgs = null) {
-  if (args == null || (typeof args !== "object" && typeof args !== "string")) return args;
-  const tool = String(toolName ?? "").slice(0, 64);
-  const effectiveTool = tool || (typeof args?.toolId === "string" ? args.toolId : "");
-  const isProtocolOrUnknown = !effectiveTool || effectiveTool === "execute_tool" || effectiveTool === "search_tools" || effectiveTool === "tool";
-  const secretSet = new Set(
-    Array.isArray(extraSecretArgs)
-      ? extraSecretArgs
-      : (KNOWN_TOOL_SECRET_ARGS[effectiveTool] ?? (isProtocolOrUnknown ? ALL_KNOWN_TOOL_SECRET_ARGS : []))
-  );
-  if (secretSet.size === 0) return args;
+export function redactToolArgs(toolName, args, extraSecretArgs = null, depth = 0, activeAncestors = new Set()) {
+  if (args == null) return args;
+  if (depth > 8) return "[depth-capped]";
 
   if (typeof args === "string") {
     try {
       const parsed = JSON.parse(args);
       if (parsed && typeof parsed === "object") {
-        return JSON.stringify(redactToolArgs(toolName, parsed, extraSecretArgs));
+        return JSON.stringify(redactToolArgs(toolName, parsed, extraSecretArgs, depth + 1, activeAncestors));
       }
     } catch {
       return args;
@@ -1192,21 +1187,48 @@ export function redactToolArgs(toolName, args, extraSecretArgs = null) {
     return args;
   }
 
-  if (Array.isArray(args)) {
-    return args.map((item) => redactToolArgs(toolName, item, extraSecretArgs));
-  }
+  if (typeof args !== "object") return args;
+  if (activeAncestors.has(args)) return "[cycle]";
+  activeAncestors.add(args);
 
-  const out = {};
-  for (const [k, v] of Object.entries(args)) {
-    if (secretSet.has(k)) {
-      out[k] = "[REDACTED]";
-    } else if (k === "arguments" && v && (typeof v === "object" || typeof v === "string")) {
-      out[k] = redactToolArgs(toolName, v, extraSecretArgs);
-    } else {
-      out[k] = v;
+  try {
+    if (Array.isArray(args)) {
+      return args.slice(0, 200).map((item) => redactToolArgs(toolName, item, extraSecretArgs, depth + 1, activeAncestors));
     }
+
+    const tool = String(toolName ?? "").slice(0, 64);
+    const effectiveTool = tool || (typeof args?.toolId === "string" ? args.toolId : (typeof args?.tool === "string" ? args.tool : ""));
+    const isProtocolOrUnknown = !effectiveTool || effectiveTool === "execute_tool" || effectiveTool === "search_tools" || effectiveTool === "tool";
+    const secretSet = new Set(
+      Array.isArray(extraSecretArgs)
+        ? extraSecretArgs
+        : (KNOWN_TOOL_SECRET_ARGS[effectiveTool] ?? (isProtocolOrUnknown ? ALL_KNOWN_TOOL_SECRET_ARGS : []))
+    );
+
+    const out = {};
+    let n = 0;
+    for (const [k, v] of Object.entries(args)) {
+      if (n++ >= 200) { out["…"] = "[truncated]"; break; }
+      if (secretSet.has(k)) {
+        out[k] = "[REDACTED]";
+      } else if (v && typeof v === "object") {
+        const nestedExtra = (k === "arguments" && secretSet.size === 0) ? ALL_KNOWN_TOOL_SECRET_ARGS : extraSecretArgs;
+        out[k] = redactToolArgs(toolName, v, nestedExtra, depth + 1, activeAncestors);
+      } else if (typeof v === "string") {
+        if (k === "arguments") {
+          const nestedExtra = secretSet.size === 0 ? ALL_KNOWN_TOOL_SECRET_ARGS : extraSecretArgs;
+          out[k] = redactToolArgs(toolName, v, nestedExtra, depth + 1, activeAncestors);
+        } else {
+          out[k] = v;
+        }
+      } else {
+        out[k] = v;
+      }
+    }
+    return out;
+  } finally {
+    activeAncestors.delete(args);
   }
-  return out;
 }
 
 /** redactDeep — BOTH redaction layers for a structured value crossing a

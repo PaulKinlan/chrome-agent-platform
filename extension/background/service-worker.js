@@ -3907,7 +3907,16 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
               resultFullBytes: Math.max(Number(event.resultFullBytes) || 0, again.bytes),
             };
           }
-        } catch { /* redaction failure must never break the run */ }  }
+        } catch {
+          // Redaction failure must fail closed on egress rather than forwarding raw arguments or results
+          event = {
+            ...event,
+            ...(event.type === "tool-call"
+              ? { toolArgs: "[REDACTION_FAILED]" }
+              : { result: "[REDACTION_FAILED]", resultFull: "[REDACTION_FAILED]", resultFullBytes: 18 }),
+          };
+        }
+      }
       // Live budget tracking for the delegation guard: each model step emits a
       // thinking event carrying the loop's 0-based step counter; the count of
       // consumed iterations is event.step + 1, so the caller's REMAINING
