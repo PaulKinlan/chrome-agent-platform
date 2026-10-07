@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.585] — 2026-10-07
+- Content fetched from the web is now clearly marked as untrusted before scripts or Python tools can read it.
+
 ## [0.3.584] — 2026-10-07
 - Fail closed on secret redaction when a sandboxed tool run errors, so error output cannot leak secrets.
 
