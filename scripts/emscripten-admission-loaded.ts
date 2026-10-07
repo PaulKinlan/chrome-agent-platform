@@ -296,6 +296,16 @@ async function waitForLibrary(cdp: Cdp, sessionId: string, predicate: string, ti
         validationListDiag: el?.validationListDiag ?? null,
       });
     } catch (e) { out.sectionHtml = "err: " + (e?.message ?? e); }
+    try {
+      out.flagProbe = await new Promise((resolve) => {
+        try {
+          chrome.runtime.sendMessage({ type: "kv.get", keys: ["cap:developerFeatures"] }, (r) => {
+            out.flagLastError = chrome.runtime.lastError?.message ?? null;
+            resolve(JSON.stringify(r));
+          });
+        } catch (e) { resolve("throw: " + (e?.message ?? e)); }
+      });
+    } catch (e) { out.flagProbe = "eval-failed: " + (e?.message ?? e); }
     return JSON.stringify(out);
   })()`).catch((e) => `diag-eval-failed: ${e?.message ?? e}`);
   throw new Error(`timed out waiting for tool-library predicate: ${predicate}\ndiagnostics: ${diag}`);
