@@ -16,10 +16,11 @@ import { registerAgentWorkerHost } from "../lib/agent-worker-host.js";
 import { registerPythonHost } from "../lib/python-host.js";
 import { registerTableWorkerHost } from "../lib/table-worker-host.js";
 import { registerAcpModelHost } from "../lib/acp-model-host.js";
+import { isTrustedServiceWorkerSender } from "../lib/pure.js";
 registerAcpModelHost();
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
-  handleScriptRunMessage(message, sendResponse, document, "offscreen")
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) =>
+  handleScriptRunMessage(message, sender, sendResponse, document, "offscreen")
 );
 // (czwz) This listener was registered TWICE — identical handler, two
 // addListener calls. The announce phase survived it (Chrome honors the first
@@ -69,8 +70,12 @@ import { registerOnDeviceTextHost } from "../lib/on-device-text-host.js";
 registerOnDeviceTextHost();
 
 // Clipboard write execution in offscreen document (chrome-agent-platform-3p3e.10).
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "cap:clipboard-write" && typeof message?.text === "string") {
+    if (!isTrustedServiceWorkerSender(sender)) {
+      sendResponse({ ok: false, error: "clipboard_host_untrusted_sender" });
+      return false;
+    }
     navigator.clipboard?.writeText?.(message.text)
       .then(() => sendResponse({ ok: true }))
       .catch((err) => sendResponse({ ok: false, error: String(err?.message ?? err) }));

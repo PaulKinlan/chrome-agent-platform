@@ -94,7 +94,8 @@
   // every open tab to retry: bootstrap if the nonce never arrived, arm if it
   // did. Without this, pages open before the grant stay undetectable until a
   // reload, and the fresh-profile picker could never list them.
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, sender) => {
+    if (!sender || sender.id !== chrome.runtime?.id || sender.tab != null) return;
     if (message?.type !== "webmcp.detect.rearm") return;
     if (!nonce) bootstrap();
     else if (!armed) arm();

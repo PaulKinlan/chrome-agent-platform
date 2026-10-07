@@ -9,12 +9,22 @@
 // or capabilities ever ride the request (toolId/args/stdin only).
 
 import { executeBundledWasiJob } from "./tool-exec-preview.js";
+import { isTrustedServiceWorkerSender } from "./pure.js";
 
 export const WASI_JOB_RUN_TYPE = "cap:wasm-wasi-job-run";
 
-export function registerWasmJobHost() {
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+export function registerWasmJobHost({ runtime = globalThis.chrome?.runtime } = {}) {
+  if (!runtime?.onMessage) return;
+  runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type !== WASI_JOB_RUN_TYPE) return;
+    if (!isTrustedServiceWorkerSender(sender, runtime)) {
+      sendResponse({
+        ok: false,
+        phase: "failed",
+        error: "wasm_job_host_untrusted_sender",
+      });
+      return false;
+    }
     executeBundledWasiJob({
       toolId: String(message.toolId ?? ""),
       args: Array.isArray(message.args) ? message.args : [],
