@@ -327,7 +327,7 @@ async function main(): Promise<Check[]> {
       row.inverse?.tool === "delete_named_agent" && row.inverse?.args?.id === createdId && row.undone === false);
     const ui = await waitFor("Activity sidebar Undo button", async () => {
       const state = await ntpEval(`(async () => { const el = document.getElementById('side-action-ledger');
-        await el?.refresh?.(); const section = document.getElementById('activity-ledger-section');
+        await el?.refresh?.(); const section = document.getElementById('activity-section');
         const root = el?.shadowRoot; const undo = root?.querySelector('.al-undo');
         return { hidden: section?.hidden, text: root?.textContent ?? '', rows:root?.querySelectorAll('.al-row').length ?? 0,
           hasUndo: !!undo, undoLabel:undo?.getAttribute('aria-label') ?? '' }; })()`);
@@ -336,9 +336,9 @@ async function main(): Promise<Check[]> {
     record(ACTIVITY_CHECKS[3], ui.hidden === false && ui.rows >= 1 &&
       ui.text.includes("Created the agent Undo Journey Agent") && ui.undoLabel.includes("Undo:"), ui);
     await save("activity-before-undo.png", await cdp.screenshot(ntpSession, { timeoutMs: 8000 }));
-    const summaryClicked = await click(ntpSession, "#activity-ledger-section > summary");
+    const summaryClicked = await click(ntpSession, "#activity-section > summary");
     const visible = await waitFor("expanded Activity Undo hit target", async () => ntpEval(`(() => {
-      const section = document.getElementById('activity-ledger-section');
+      const section = document.getElementById('activity-section');
       const host = document.getElementById('side-action-ledger'); const undo = host?.shadowRoot?.querySelector('.al-undo');
       if (!section?.open || !undo) return null;
       undo.scrollIntoView({block:'center',inline:'center'}); const r = undo.getBoundingClientRect();
