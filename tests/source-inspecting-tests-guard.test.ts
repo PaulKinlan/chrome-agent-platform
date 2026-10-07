@@ -26,6 +26,8 @@ import {
   SCANNER_EXCLUSIONS,
   SOURCE_INSPECTING_GUARDS,
   buildReverseGraph,
+  changedWithoutCoverage,
+  codeUrlInstrumentSpecs,
   selectTestFiles,
 } from "../scripts/select-tests.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
@@ -404,8 +406,9 @@ export function enumerateTestFiles(testsDir = join(ROOT, "tests")): { rel: strin
 }
 
 // 2irv: afpl audited tests/**, but a repo-walking helper in scripts/lib/ or
-// another imported source root was invisible there. The selector's own reverse
-// import graph tells us which non-test modules a test can actually execute.
+// another imported source root was invisible there. The selector's reverse
+// import graph includes executable imports AND direct source-text reads, so a
+// test node must be terminal: reading a test's text cannot execute its imports.
 function testConsumerReachable(start: string, reverse: Map<string, Set<string>>, predicate: (rel: string) => boolean): boolean {
   const seen = new Set([start]);
   const queue = [start];
@@ -413,7 +416,13 @@ function testConsumerReachable(start: string, reverse: Map<string, Set<string>>,
     for (const importer of reverse.get(queue.pop()!) ?? []) {
       const rel = relative(ROOT, importer).replaceAll("\\", "/");
       if (rel === ".." || rel.startsWith("../") || seen.has(importer)) continue;
-      if (IS_TEST_RE.test(rel) && predicate(rel)) return true;
+      if (IS_TEST_RE.test(rel)) {
+        // Only tests that the runner enumerates can supply coverage. Even an
+        // unlisted test is terminal: traversing through its imports would let
+        // a DIFFERENT always-on test that reads it as TEXT fake execution.
+        if (rel.startsWith("tests/") && !/(?:^|\/)(?:fixtures|node_modules)\//.test(rel) && predicate(rel)) return true;
+        continue;
+      }
       seen.add(importer);
       queue.push(importer);
     }
@@ -430,7 +439,12 @@ export function uncoveredExternalRepoWalks(
   const candidates: { rel: string; code: string }[] = [];
   for (const abs of reverse.keys()) {
     const rel = relative(ROOT, abs).replaceAll("\\", "/");
-    if (rel === ".." || rel.startsWith("../") || rel.startsWith("tests/") ||
+    // tests/** support is checked by afpl, but test-imported executable
+    // fixtures under tests/fixtures/** are excluded THERE as data. Admit only
+    // non-test JS/TS fixture modules here, through real graph importers;
+    // JSON/HTML/data and fixture *.test.ts files never become candidates.
+    if (rel === ".." || rel.startsWith("../") ||
+        (rel.startsWith("tests/") && (!rel.startsWith("tests/fixtures/") || IS_TEST_RE.test(rel))) ||
         rel.startsWith(["extension", "dist"].join("/") + "/") || !/\.(?:js|ts|mjs)$/.test(rel)) continue;
     if (!testConsumerReachable(abs, reverse, (testRel) => true)) continue;
     const code = sourceFor(abs);
@@ -464,12 +478,9 @@ Deno.test("2irv: REAL-TREE falsification exposes unguarded repo walks in root an
   const withoutHarnessConsumers = new Set(original);
   withoutHarnessConsumers.delete("tests/harness-registry.test.ts");
   withoutHarnessConsumers.delete("tests/quiet-window-static.test.ts");
-  // The substring-pin guard imports kat-runner, which imports this helper:
-  // transitive consumers count too. Strip the third real always-on consumer.
-  withoutHarnessConsumers.delete("tests/substring-pin-honesty.test.ts");
   assert(
     uncoveredExternalRepoWalks(reverse, withoutHarnessConsumers).includes("scripts/lib/harness-registry.ts"),
-    "a shared-helper repo walk must RED when no consuming test is always-on",
+    "a shared-helper repo walk must RED when its two executing tests are no longer always-on",
   );
 });
 
@@ -488,6 +499,67 @@ Deno.test("2irv: a NEW unguarded shared-helper walk is caught without mutating t
   const reverse = new Map([[join(ROOT, helper), new Set([join(ROOT, consumer)])]]);
   assertEquals(uncoveredExternalRepoWalks(reverse, new Set(ALWAYS_ON),
     (abs) => abs === join(ROOT, helper) ? code : null), [helper]);
+});
+
+Deno.test("i0rf N1: a synthetic source-text URL cannot supply an ALWAYS_ON importer", () => {
+  const reverse = buildReverseGraph();
+  const allegedImporter = join(ROOT, "tests/substring-pin-honesty.test.ts");
+  assert(
+    !(reverse.get(join(ROOT, "scripts/kat-runner.ts"))?.has(allegedImporter) ?? false),
+    "the real substring-pin test has a URL only inside a synthetic template fixture; it does not load kat-runner",
+  );
+  // A real read of another test's text is still an edge for changed-test
+  // selection, but the consumer walk must stop at that test (not traverse it).
+  assert(reverse.get(join(ROOT, "tests/quiet-window-static.test.ts"))?.has(allegedImporter));
+});
+
+Deno.test("i0rf N1: URL instrument lexing distinguishes inert text from live template interpolation", () => {
+  const url = '../scripts/kat-runner.ts';
+  const code = [
+    '// new URL("../scripts/kat-runner.ts", import.meta.url)',
+    'const sample = `new URL("../scripts/kat-runner.ts", import.meta.url)`;',
+    'const live = new URL("../scripts/kat-runner.ts", import.meta.url);',
+    'const interpolated = `${new URL("../scripts/kat-runner.ts", import.meta.url).href}`;',
+  ].join("\n");
+  assertEquals(codeUrlInstrumentSpecs(code), [url, url]);
+  // If a newer TS syntax cannot be lexed, retain the edge rather than hide it.
+  assertEquals(codeUrlInstrumentSpecs('new URL("../scripts/kat-runner.ts", import.meta.url);\n¤'), [url]);
+});
+
+Deno.test("i0rf N2: an actual test-imported fixture with an injected repo walk is detected", () => {
+  const rel = "tests/fixtures/build-once.mjs";
+  const abs = join(ROOT, rel);
+  const reverse = buildReverseGraph();
+  assert(reverse.get(abs)?.has(join(ROOT, "tests/store-doc-denial.test.ts")), "the fixture is imported by a REAL test");
+  const code = 'const root = new URL("../../", import.meta.url);\n' +
+    'export function census() { for (const entry of Deno.readDirSync(root)) void entry; }\n';
+  assertEquals(findUnclassifiedSourceScanners([{ rel, code }], new Set()), [rel], "the walker itself is classifiable");
+  assertEquals(uncoveredExternalRepoWalks(reverse, new Set(ALWAYS_ON),
+    (candidate) => candidate === abs ? code : null), [rel],
+    "an executable fixture with real non-ALWAYS_ON importers must not be hidden by the tests/** exclusion");
+});
+
+Deno.test("i0rf N2: data fixtures and ordinary fixture-local reads do not become source scanners", () => {
+  const rel = "tests/fixtures/run-log-wal-memory.js";
+  const abs = join(ROOT, rel);
+  const reverse = buildReverseGraph();
+  assert(reverse.get(abs)?.has(join(ROOT, "tests/memory.test.ts")), "REAL fixture module is imported by a test");
+  assertEquals(findUnclassifiedSourceScanners([{ rel, code: readFileSync(abs, "utf8") }], new Set()), [],
+    "a fixture-local memory walker is not a repo-source walk");
+  assertEquals(uncoveredExternalRepoWalks(reverse, new Set(ALWAYS_ON)), [], "no current imported fixture walks a repo source root");
+
+  const data = "tests/fixtures/pm-skills-tree.json";
+  const fakeGraph = new Map([[join(ROOT, data), new Set([join(ROOT, "tests/skill-discovery.test.ts")])]]);
+  assertEquals(uncoveredExternalRepoWalks(fakeGraph, new Set(), () =>
+    'const root = new URL("../../", import.meta.url); Deno.readDirSync(root);'), [],
+    "even a synthetic graph link cannot classify JSON data as an executable helper");
+});
+
+Deno.test("i0rf N3: a bundle-only shipped source is outside the static graph but changed-file gating fails closed", () => {
+  const source = "extension/privacy/privacy.js";
+  const reverse = buildReverseGraph();
+  assertEquals(reverse.has(join(ROOT, source)), false, "the real built entry is not a relative-import target");
+  assertEquals(changedWithoutCoverage([source], reverse), [source], "an edit must fail closed to the full suite");
 });
 
 Deno.test("qcfc: self-checking audit: all dynamic source-scanning test guards are in ALWAYS_ON", () => {
