@@ -91,11 +91,41 @@ function isAuthenticatingSender(body: any, senderName: string): boolean {
         }
       }
     }
-    // 2. Member property check (e.g. sender.id, sender.tab, sender.url, etc.)
-    if (sub.type === "MemberExpression") {
-      if (sub.object && sub.object.type === "Identifier" && sub.object.name === senderName) {
-        const prop = sub.property && (sub.property.name || sub.property.value);
-        if (KNOWN_PROPERTIES.has(prop)) {
+    // 2. Rejecting conditional check: IfStatement whose test checks sender / sender.prop
+    // and whose consequent returns or throws.
+    if (sub.type === "IfStatement") {
+      let testHasSenderCheck = false;
+      walkAst(sub.test, (tNode: any) => {
+        if (tNode.type === "BinaryExpression") {
+          const isComp = ["===", "!==", "==", "!="].includes(tNode.operator);
+          if (isComp) {
+            walkAst(tNode, (operand: any) => {
+              if (operand.type === "MemberExpression" && operand.object?.name === senderName) {
+                const prop = operand.property?.name || operand.property?.value;
+                if (KNOWN_PROPERTIES.has(prop)) testHasSenderCheck = true;
+              }
+            });
+          }
+        }
+        if (tNode.type === "UnaryExpression" && tNode.operator === "!") {
+          if (tNode.argument?.type === "Identifier" && tNode.argument?.name === senderName) {
+            testHasSenderCheck = true;
+          }
+          if (tNode.argument?.type === "MemberExpression" && tNode.argument.object?.name === senderName) {
+            const prop = tNode.argument.property?.name || tNode.argument.property?.value;
+            if (KNOWN_PROPERTIES.has(prop)) testHasSenderCheck = true;
+          }
+        }
+      });
+
+      if (testHasSenderCheck) {
+        let consequentRejects = false;
+        walkAst(sub.consequent, (cNode: any) => {
+          if (cNode.type === "ReturnStatement" || cNode.type === "ThrowStatement") {
+            consequentRejects = true;
+          }
+        });
+        if (consequentRejects) {
           validated = true;
         }
       }
@@ -266,6 +296,26 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   const sites6 = analyzeOnMessageListeners(probeIneffectualLogSender, "extension/test-probe6.js");
   assertEquals(sites6.length, 1);
   assertEquals(sites6[0].checksSender, false, "console.log(sender) must not count as validation");
+
+  const probeIneffectualVoidSenderProperty = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      void sender.id;
+      sendResponse({ ok: true });
+    });
+  `;
+  const sites7 = analyzeOnMessageListeners(probeIneffectualVoidSenderProperty, "extension/test-probe7.js");
+  assertEquals(sites7.length, 1);
+  assertEquals(sites7[0].checksSender, false, "void sender.id must not count as validation");
+
+  const probeIneffectualAssignment = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      const id = sender.id;
+      sendResponse({ ok: true, id });
+    });
+  `;
+  const sites8 = analyzeOnMessageListeners(probeIneffectualAssignment, "extension/test-probe8.js");
+  assertEquals(sites8.length, 1);
+  assertEquals(sites8[0].checksSender, false, "const id = sender.id must not count as validation without rejecting branch");
 });
 
 Deno.test("behavioral: isTrustedServiceWorkerSender enforces SW bundle path and rejects documents/tabs", () => {
