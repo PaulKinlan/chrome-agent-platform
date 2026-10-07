@@ -77,15 +77,14 @@ Deno.test("the generated descriptor module keeps every value AND pays for the re
   }
 
   // The file-size guard: original 50,000 ceiling was calibrated for 38 tools
-  // (~1,316 B/tool). With 13 new hash-wasm tools admitted (51 total), the
-  // proportional budget would be ~67,100 bytes. With string and full structure
-  // hoisting (shared S table, capability arrays C*, licences L*, caveats V*), the emitted
-  // module is compacted to 55,769 bytes (chrome-agent-platform-3ugl). The ceiling is set to
-  // 56,500 bytes (hoisted size + ~1.3% headroom, ~731 B; each tool adds ~1,090 B so new tool
-  // admissions ratchet this ceiling deliberately), ensuring dead-defs regressions
-  // (56,611 B) and unhoisted structure regressions (58,744 B) fail.
+  // (~1,316 B/tool). With 52 tools admitted (13 hash-wasm + chacha20_poly1305),
+  // full hoisting (shared S table, capability arrays C*, licences L*, caveats V*)
+  // emits 56,866 bytes (3ugl hoisting + the 2uhx chacha admission). The ceiling is
+  // 57,600 bytes (hoisted + ~1.3% headroom). Each new tool admission ratchets this
+  // ceiling deliberately; dead-defs and unhoisted-structure regressions remain
+  // above it, and the structure pins below are the primary guard either way.
   const bytes = (await Deno.stat(DATA_MODULE)).size;
-  assert(bytes < 56_500, `the generated descriptor module should stay compact, was ${bytes} bytes`);
+  assert(bytes < 57_600, `the generated descriptor module should stay compact, was ${bytes} bytes`);
 
   // 3ugl / F2: Structure hoisting pins
   // Verify that all 3 hoisted structure kinds are actually emitted as definitions AND referenced in the rows
