@@ -480,16 +480,18 @@ the literal.
   write primitive is held to the same rule, the one `writeBuildOnceRecord` call sits after the
   last top-level `try` with its exact arguments and nothing fatal after it, and the GC grace
   goes through `resolveGcGraceMs`. It has a reasoned entry in `scripts/test-partition.mjs`.
-  `tests/build-once-record.test.ts` EXECUTES `scripts/lib/build-once-record.mjs` (the one
-  writer of `serial-build-once/<key>.json`) against real files and judges it with an oracle
+  `tests/build-once-record.test.ts` EXECUTES `scripts/lib/build-once-record.mjs` (the only writer
+  of `serial-build-once/<key>.json` that `build.mjs` uses; the fixture `tests/fixtures/build-once.mjs`
+  is a second writer, so the test ties the two together) against real files and judges it with an oracle
   that deliberately does not import the gate; its "fixture tie" tests compare the written
   directory, file name and property list with the reader in `tests/fixtures/build-once.mjs`
   (what `build-smoke` and `store-doc-denial` trust). `tests/build-concurrency.test.ts` pins
   `settleAll` and `resolveGcGraceMs` (`scripts/lib/build-concurrency.mjs`),
   `tests/scrub-zod-doc.test.ts` pins the fast path in `scripts/lib/scrub-zod-doc.mjs`, and
   `tests/jjsz-lifeline-runner-exit.test.ts` reads `scripts/security-suite.ts`,
-  `scripts/page-actions-journey.ts` and `scripts/keyless-first-result.ts` as text to pin each
-  `reapLeaderAndSettle` call site.
+  `scripts/page-actions-journey.ts`, `scripts/keyless-first-result.ts` and
+  `scripts/security-injection.ts` as text to pin each `reapLeaderAndSettle` call site, and each
+  script's one import of that helper under its own name.
 - **Owed by a re-anchor:** editing a fan-out, the record call, the GC grace or a leader kill in
   one of those files owes `npm run test:file -- tests/<each file named above>.test.ts` before
   you believe the change is local. Changing the record's shape in `tests/fixtures/build-once.mjs`
@@ -500,16 +502,33 @@ the literal.
   one survivor was an equivalent mutant: `exitCode == 0` behind a `typeof exitCode === "number"`
   guard). The reap pins were drilled in a private snapshot too: 26 of 28 mutants of the helper,
   the fixture and the three call sites went red with the intended killer. One (the helper's
-  `kill` removed) never terminates, because the leader is never signalled and the helper tests
-  wait on it, so it was stopped by hand and is not counted as a clean kill. One survived (the
-  import deleted while the call stays), which is why the binding pin exists; its 12 mutants (four
-  per script: import deleted, another export aliased to the name, imported from another module,
-  defined locally) are each killed by that pin alone.
+  `kill` removed) never terminated, because the leader is never signalled and the helper tests
+  waited on it; those awaits now run under `within(...)`, and the same mutant goes red with seven
+  `timed out after ...` failures instead of hanging. One survived (the import deleted while the call
+  stays), which is why the binding pin exists; its 12 mutants (four per script: import deleted,
+  another export aliased to the name, imported from another module, defined locally) are each
+  killed by that pin alone. The fourth script, `scripts/security-injection.ts`, is a FRESH instance
+  of the pattern that none of those pins could see: the round-3 security review found it by
+  reading the code (its one `launchChrome` call sits in a `boot()` the script runs twice), and a
+  real-Chrome A/B confirmed it (second boot reached the checks 0 of 3 before the fix, 3 of 3 on
+  `origin/main`, 3 of 3 after). It is pinned like the other three, and the binding pin now counts
+  every declaration of the helper's name and esbuild's renamed variants (`name2`), so a nested
+  shadow is rejected by its own rule, not only by the call-site pins. 23 coordinator mutants went
+  red with the named killer: 8 of the injection pin (the call deleted, its `await` dropped, another
+  signal, the old two-line shape in place of the helper and added back beside it, the first and final
+  `kill()` not awaited, the first one deleted), 5 of the binding pin (the four forms above and a
+  shadow that keeps a live import), 7 of the helper and the fixture, and 3 of the test's own rules
+  (a declaration count that matches the exact name only, a shadow rule folded into another check,
+  duplicate declarations accepted). The mutant counts are author and coordinator attestations
+  (logs: `~/cap-evidence/jjsz-landing/coordinator-drills/`), not something this document proves.
 - **Known limits, stated in the test headers (not claimed closed):** a write through a primitive
-  outside the 20 names the discipline test lists; an imported helper that fans out with
+  outside the 19 names the discipline test lists; an imported helper that fans out with
   `Promise.all` internally; a fatal raised from an exit handler after the record call; and a
   new script that bare-kills a launched leader and then exits or relaunches: the reap pins are
-  per-site, not a rule (`chrome-agent-platform-6efbv`).
+  per-site, not a rule (`chrome-agent-platform-6efbv`; the structural fix is `80yqb`: make
+  `launchChrome` wait for an in-flight sweep on its own profile, which removes the class for every
+  caller). The injection script was the fourth known way to get that wrong, and it was found by a
+  reader, not a gate.
 
 ---
 

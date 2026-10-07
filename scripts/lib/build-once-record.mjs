@@ -1,4 +1,5 @@
-// scripts/lib/build-once-record.mjs — the ONE writer of the build-once record (bead
+// scripts/lib/build-once-record.mjs — the only writer of the build-once record that build.mjs uses
+// (tests/fixtures/build-once.mjs writes one too, when the fixture itself has to run a build) (bead
 // chrome-agent-platform-jjsz, round-2 review N1).
 //
 // The record says "this build exited 0". tests/fixtures/build-once.mjs trusts it so a later serial

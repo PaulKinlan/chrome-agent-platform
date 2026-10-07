@@ -1,6 +1,7 @@
 // tests/build-once-record.test.ts — bead chrome-agent-platform-jjsz (round-2 review N1).
 //
-// scripts/lib/build-once-record.mjs is the ONE writer of the build-once record: the file that says
+// scripts/lib/build-once-record.mjs is the only writer of the build-once record that build.mjs uses (the
+// fixture's own fallback build writes one too): the file that says
 // "this build exited 0", which tests/fixtures/build-once.mjs trusts so a later serial test file
 // (build-smoke, store-doc-denial) reuses this build's captured output instead of paying for another
 // build. A record written for a build that did NOT exit 0 lets build-smoke pass a failed build — the

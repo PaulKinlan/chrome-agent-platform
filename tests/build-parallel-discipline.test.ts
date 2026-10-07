@@ -43,7 +43,7 @@
 //     functions that also call rm, mkdir or rename); an aliased named fs import
 //     (`import { writeFile as put }`), a write at module top level, and code reached through eval,
 //     `new Function`, import() of another module or `(async () => {})().constructor`.
-//  B. The build-once record ("this build exited 0") has ONE writer: writeBuildOnceRecord in
+//  B. The build-once record ("this build exited 0") has ONE writer in build.mjs: writeBuildOnceRecord in
 //     scripts/lib/build-once-record.mjs, which applies the strict shouldRecordBuild gate INSIDE
 //     itself and whose behaviour is executed by tests/build-once-record.test.ts. This file pins the
 //     CALL SITE in build.mjs: it is imported from the helper under its own name and never redeclared;
@@ -774,7 +774,7 @@ Deno.test("build discipline B.3: the record write comes after the last top-level
   assertClean(report, ["B.tail"], "nothing fatal may run between the record write and the end of the build");
 });
 
-Deno.test("build discipline B.4: the record has ONE writer — the helper; build.mjs holds no record directory name, no durableRoot and no other reader of the captured record", () => {
+Deno.test("build discipline B.4: build.mjs has ONE writer of the record — the helper; it holds no record directory name, no durableRoot and no other reader of the captured record", () => {
   const { report } = realBuild();
   assertClean(report, ["B.singleWriter"], "a second writer could skip the gate");
 });

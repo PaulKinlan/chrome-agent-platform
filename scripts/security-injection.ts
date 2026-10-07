@@ -21,6 +21,7 @@
 // usage: deno run -A scripts/security-injection.ts [--evidence <dir>]
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { reapLeaderAndSettle } from "./lib/reap-leader.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
@@ -106,8 +107,12 @@ async function boot() {
   return new URL(sw.url).host;
 }
 async function kill() {
-  try { proc?.kill("SIGKILL"); } catch { /* gone */ }
-  try { await proc?.status; } catch { /* reaped */ }
+  // Kill the browser AND wait for its lifeline's leader-exit sweep (scripts/lib/reap-leader.ts). boot() opens a
+  // SECOND browser on this same profile right after the first is killed, and a sweep still running would end with
+  // `pkill -9 -f 'user-data-dir=<profile>( |$)'`, which matches the second browser's command line and kills it
+  // during start-up (measured on macOS: 0 of 3 second boots reached the checks - "Chrome never printed a DevTools
+  // endpoint" twice and an EPERM once). The final kill() also has to finish before the profile is removed.
+  if (proc) await reapLeaderAndSettle(proc);
   try { ws?.close(); } catch { /* closed */ }
 }
 async function attach(url: string, waitMs = 1500) {

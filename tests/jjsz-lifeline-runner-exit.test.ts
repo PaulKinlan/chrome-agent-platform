@@ -8,11 +8,18 @@
 //   N1  scripts/security-suite.ts exits within milliseconds. The real supervisor
 //       (scripts/security-suite-supervisor.mjs) samples the runner's descendants every 20 ms, takes one more
 //       sample after the runner exits and calls `liveObservedResidue` on what it saw: an observed watcher
-//       that is still alive is RESIDUE, exit 70 ("descendant-residue"). Pristine main has no lifeline, so
-//       this is a regression the lifeline introduced.
+//       that is still alive is RESIDUE, exit 70 ("descendant-residue"). origin/main's lifeline is DISARMED
+//       the moment its leader exits (`proc.status.then(disarm, disarm)`): it never sweeps, so nothing
+//       lingers. The leader-exit SWEEP is what this work added, so the regression is the sweep's.
 //   N2  scripts/page-actions-journey.ts and scripts/keyless-first-result.ts kill the browser that
-//       materialised the profile and open a SECOND browser on the SAME profile 700/800 ms later. A sweep still
-//       running then ends with `pkill -9 -f 'user-data-dir=<profile>( |$)'`, which matches the second browser.
+//       materialised the profile and open a SECOND browser on the SAME profile 700/800 ms later, and so does
+//       scripts/security-injection.ts, with no pause at all (found by the round-3 security review; a count of
+//       `launchChrome(` call sites cannot show it, because its one call site sits in a `boot()` the script
+//       runs twice). A sweep still running then ends with `pkill -9 -f 'user-data-dir=<profile>( |$)'`, which
+//       matches the second browser. Measured on the real script with Chrome for Testing on macOS: the second
+//       boot never came up in 3 runs of 3 before the fix (two "Chrome never printed a DevTools endpoint", one
+//       EPERM out of the killed launch's own teardown), against 3 of 3 on origin/main (which never sweeps) and 3
+//       of 3 with the helper.
 // The fix is `reapLeaderAndSettle` (scripts/lib/reap-leader.ts): kill, reap, then wait for the sweep.
 //
 // WHAT IS PROVEN, AND HOW.
@@ -22,10 +29,10 @@
 //     security-suite.ts's tail, with THIS file playing the supervisor and calling the REAL custody functions
 //     `observeDescendants` and `liveObservedResidue` (scripts/security-suite-custody.mjs).
 //   * The fixture's watcher is HELD: the production script with only its `sleep 0.1;` replaced by a wait for a
-//     release file. On a quiet box the real window is ~110 ms, which makes the old shape's failure a coin flip
-//     that depends on `ps` latency; holding the sweep makes the overlap deterministic, and a loaded box
-//     produces that overlap anyway. One test uses the unmodified watcher and is labelled a SMOKE test: it
-//     cannot tell the two shapes apart reliably, so it pins nothing.
+//     release file. On a quiet box the real window is ~110 ms, so whether the old shape's failure shows depends
+//     on how long `ps` takes (how often, on a quiet box, was not measured); holding the sweep makes the overlap
+//     deterministic, and a loaded box produces that overlap anyway. One test uses the unmodified watcher and is
+//     labelled a SMOKE test: it cannot tell the two shapes apart reliably, so it pins nothing.
 //   * Every behavioural claim has a POSITIVE CONTROL: the same run with the pre-fix shape must show the harm
 //     (N1: the real judge reports the watcher; N2: the second browser dies). Without it a green "no residue"
 //     proves only that the harness cannot see residue.
@@ -34,21 +41,27 @@
 //     sweep from a runner that was starved and has not run yet: a mutant that skips the wait would pass it. The
 //     fixture prints a `LEADER_EXITED` marker and a 50 ms `TICK` heartbeat, and the assertion is made only after
 //     the RUNNER has printed NEGATIVE_WINDOW_TICKS ticks past the marker (`afterLeaderExit`).
-//   * The call-site pins parse the three scripts (esbuild strips the types, acorn parses what is left): an
+//   * The call-site pins parse the four scripts (esbuild strips the types, acorn parses what is left): an
 //     import is not a call site. Each pin is checked against mutants of the REAL source text inside this file
 //     (the same checker must reject them), so the net is proven on every run. The converse needs its own pin: a
 //     call site is not an import, and with the import deleted the call is an unbound name that throws only when a
 //     real run reaches it (a drill of exactly that survived every call-site pin). The binding pin at the end of
-//     the file requires `import { reapLeaderAndSettle } from "./lib/reap-leader.ts"`, once, under that name.
+//     the file requires `import { reapLeaderAndSettle } from "./lib/reap-leader.ts"`, once, under that name, and
+//     that nothing else in the script declares that name or its numbered form (esbuild drops an import whose
+//     only use a shadow covers, and renames a shadow when the import stays used; both happen to be caught by
+//     other pins, but they are properties of the transform, so the declaration count is its own rule).
 //
-// THE PINS ARE PER-SITE, NOT A RULE. They prove these three scripts go through the helper. The rule ("a runner
+// THE PINS ARE PER-SITE, NOT A RULE. They prove these four scripts go through the helper. The rule ("a runner
 // that kills its leader and then exits or relaunches goes through `reapLeaderAndSettle` or `teardownChrome`")
 // is stated in scripts/lib/reap-leader.ts; proving a RULE needs a fresh-instance mutant (a new runner with the
-// old shape that the test then has to catch), and this file does not catch one. The acceptance scripts that
-// still end with a bare `proc.kill(...); await proc.status` and then exit are outside it on purpose: no
-// supervisor judges them and nothing relaunches on their profile, so their watcher finishes alone. The
-// end-of-script `finally` of the two journeys is the same shape and is left alone for the same reason; only
-// the phase-1 to phase-2 boundary, which has a relaunch, is pinned.
+// old shape that the test then has to catch), and this file does not catch one. That is not hypothetical:
+// scripts/security-injection.ts was a fresh instance that every earlier pin missed, and it was found by a
+// reviewer reading the code, not by a gate (bead 80yqb keeps the structural fix open: make `launchChrome`
+// wait for an in-flight sweep on its own profile, which removes the class for every caller). The acceptance
+// scripts that still end with a bare `proc.kill(...); await proc.status` and then exit are outside it on
+// purpose: no supervisor judges them and nothing relaunches on their profile, so their watcher finishes alone.
+// The end-of-script `finally` of the two journeys is the same shape and is left alone for the same reason;
+// only the phase-1 to phase-2 boundary, which has a relaunch, is pinned.
 import { assert, assertEquals, assertNotEquals } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
 import * as acorn from "npm:acorn";
@@ -122,7 +135,10 @@ Deno.test("jjsz helper: kills with SIGKILL by default, waits until the leader is
   try {
     assert(alive(leader.pid), "the leader starts alive");
     assertEquals(lifelineState(leader), undefined, "this leader has no lifeline: there is no sweep to wait for");
-    assertEquals(await reapLeaderAndSettle(leader), undefined);
+    assertEquals(
+      await within(reapLeaderAndSettle(leader), 15_000, "the helper to kill the leader, reap it and resolve"),
+      undefined,
+    );
     assertEquals((await leader.status).signal, "SIGKILL", "the default signal is SIGKILL (the old security-suite shape)");
     assertEquals(processGroup(leader.pid), null, "the leader is reaped, not a zombie, by the time the helper resolves");
   } finally {
@@ -147,7 +163,7 @@ Deno.test("jjsz helper: an explicit signal is honoured (the journeys send SIGTER
     const termed = trappingLeader(`${scratch}/termed`);
     spawned.push(termed);
     await waitFor(() => exists(`${scratch}/termed`), 10_000, "the first leader to install its SIGTERM trap");
-    await reapLeaderAndSettle(termed, "SIGTERM");
+    await within(reapLeaderAndSettle(termed, "SIGTERM"), 15_000, "the helper to deliver SIGTERM, reap the leader and resolve");
     const termedStatus = await termed.status;
     assertEquals(
       [termedStatus.code, termedStatus.signal],
@@ -158,7 +174,7 @@ Deno.test("jjsz helper: an explicit signal is honoured (the journeys send SIGTER
     const killed = trappingLeader(`${scratch}/killed`);
     spawned.push(killed);
     await waitFor(() => exists(`${scratch}/killed`), 10_000, "the second leader to install its SIGTERM trap");
-    await reapLeaderAndSettle(killed);
+    await within(reapLeaderAndSettle(killed), 15_000, "the helper to kill the second leader, reap it and resolve");
     assertEquals(
       (await killed.status).signal,
       "SIGKILL",
@@ -663,9 +679,10 @@ function descend(node: Ast, visit: (node: Ast) => void): void {
   }
 }
 
-/** `a.b.c` for a non-computed member chain rooted at an identifier; null for anything else. */
+/** `a.b.c` for a non-computed member chain rooted at an identifier (optional chains included); null for anything else. */
 function dotted(node: Ast | null | undefined): string | null {
   if (!node) return null;
+  if (node.type === "ChainExpression") return dotted(node.expression);
   if (node.type === "Identifier") return node.name;
   if (node.type === "MemberExpression" && !node.computed && node.property?.type === "Identifier") {
     const base = dotted(node.object);
@@ -813,8 +830,60 @@ function journeyViolations(program: Ast): Violations {
   return violations;
 }
 
+// scripts/security-injection.ts: a top-level `async function kill()` and a top-level try whose body boots the
+// browser (`let extId = await boot()`), kills it, seeds the profile and boots it AGAIN (`extId = await boot()`).
+// Both boots run on ONE profile, so the kill between them has to wait for the sweep, and the file's only other
+// process handling, the finally, has to as well (the profile is removed after it).
+function injectionViolations(program: Ast): Violations {
+  const killFunction = program.body.find((s: Ast) => s.type === "FunctionDeclaration" && s.id?.name === "kill");
+  if (!killFunction) return everything("no `function kill` in scripts/security-injection.ts: update this pin");
+  const tryStatement = program.body.find((s: Ast) => s.type === "TryStatement" && s.finalizer);
+  if (!tryStatement) return everything("no top-level try/finally in scripts/security-injection.ts: update this pin");
+  const sequence: Ast[] = tryStatement.block.body;
+  const awaitsBoot = (statement: Ast): boolean => {
+    let found = false;
+    descend(statement, (node) => {
+      if (node.type === "AwaitExpression" && node.argument?.type === "CallExpression" && dotted(node.argument.callee) === "boot") found = true;
+    });
+    return found;
+  };
+  const boots = sequence.flatMap((s, index) => (awaitsBoot(s) ? [index] : []));
+  if (boots.length !== 2) return everything(`the try body must boot the browser exactly twice (\`await boot()\`); it does ${boots.length}: update this pin`);
+
+  const violations: Violations = { call: [], order: [], bare: [] };
+  // call: kill() holds exactly one `await reapLeaderAndSettle(proc)` statement, directly or as the body of `if (proc)`.
+  const killStatements: Ast[] = killFunction.body.body.flatMap((s: Ast) =>
+    s.type === "IfStatement" && !s.alternate && dotted(s.test) === "proc"
+      ? (s.consequent.type === "BlockStatement" ? s.consequent.body : [s.consequent])
+      : [s]
+  );
+  const reaps = killStatements.filter((s) => awaitedCall(s, "reapLeaderAndSettle") !== null);
+  if (reaps.length !== 1) {
+    violations.call.push(`kill() must hold exactly one \`await reapLeaderAndSettle(...)\` statement; it holds ${reaps.length}`);
+  } else {
+    const call = awaitedCall(reaps[0], "reapLeaderAndSettle")!;
+    if (call.arguments.length !== 1 || dotted(call.arguments[0]) !== "proc") {
+      violations.call.push("it must reap the launch handle with the default signal: `reapLeaderAndSettle(proc)`");
+    }
+  }
+  // order: an awaited kill() sits between the two boots, and the finally awaits kill() as well.
+  if (!sequence.slice(boots[0] + 1, boots[1]).some((s) => awaitedCall(s, "kill") !== null)) {
+    violations.order.push("an `await kill()` statement must sit between the two `await boot()` statements: the second boot opens the same profile");
+  }
+  if (!tryStatement.finalizer.body.some((s: Ast) => awaitedCall(s, "kill") !== null)) {
+    violations.order.push("the finally must `await kill()`: the profile is removed after the browser and its sweep are gone");
+  }
+  // bare: nothing in the script kills or waits for the browser by hand (the optional chains are read through).
+  descend(program, (node) => {
+    if (node.type === "CallExpression" && dotted(node.callee) === "proc.kill") violations.bare.push("a bare `proc.kill(...)` is in the script");
+    if (node.type === "AwaitExpression" && dotted(node.argument) === "proc.status") violations.bare.push("a bare `await proc.status` is in the script");
+  });
+  return violations;
+}
+
 const SECURITY_SUITE = "scripts/security-suite.ts";
 const JOURNEYS = ["scripts/page-actions-journey.ts", "scripts/keyless-first-result.ts"];
+const SECURITY_INJECTION = "scripts/security-injection.ts";
 
 Deno.test("jjsz pin: scripts/security-suite.ts finally awaits reapLeaderAndSettle(chrome.proc) as a statement (kills: delete the call, drop the await, the old two-line shape)", async () => {
   assertEquals(securitySuiteViolations(await parseTs(sourceOf(SECURITY_SUITE))).call, []);
@@ -840,6 +909,18 @@ for (const journey of JOURNEYS) {
     assertEquals(journeyViolations(await parseTs(sourceOf(journey))).bare, []);
   });
 }
+
+Deno.test("jjsz pin: scripts/security-injection.ts kill() awaits reapLeaderAndSettle(proc) as a statement (kills: delete the call, drop the await, another signal, the old two-line shape)", async () => {
+  assertEquals(injectionViolations(await parseTs(sourceOf(SECURITY_INJECTION))).call, []);
+});
+
+Deno.test("jjsz pin: scripts/security-injection.ts awaits kill() between its two boots and in its finally (kills: drop the await, delete the call)", async () => {
+  assertEquals(injectionViolations(await parseTs(sourceOf(SECURITY_INJECTION))).order, []);
+});
+
+Deno.test("jjsz pin: scripts/security-injection.ts holds no bare proc.kill / await proc.status (kills: the old shape added back)", async () => {
+  assertEquals(injectionViolations(await parseTs(sourceOf(SECURITY_INJECTION))).bare, []);
+});
 
 // ── the pins are themselves checked against mutants of the real sources ─────
 
@@ -921,6 +1002,39 @@ for (const journey of JOURNEYS) {
   });
 }
 
+const INJECTION_REAP = "  if (proc) await reapLeaderAndSettle(proc);\n";
+const INJECTION_OLD_SHAPE = '  try { proc?.kill("SIGKILL"); } catch { /* gone */ }\n  try { await proc?.status; } catch { /* reaped */ }\n';
+const INJECTION_FIRST_KILL = "  await kill();\n  const prefPath";
+const INJECTION_LAST_KILL = "  await kill();\n  // Chrome's helpers release";
+
+function injectionMutants(source: string): Array<[string, string, Array<keyof Violations>]> {
+  return [
+    ["delete the reap statement (the import stays)", mutate(source, INJECTION_REAP, ""), ["call"]],
+    ["drop the await", mutate(source, INJECTION_REAP, "  if (proc) reapLeaderAndSettle(proc);\n"), ["call"]],
+    ["reap with another signal", mutate(source, "reapLeaderAndSettle(proc)", 'reapLeaderAndSettle(proc, "SIGTERM")'), ["call"]],
+    ["replace the call with the old two-line shape", mutate(source, INJECTION_REAP, INJECTION_OLD_SHAPE), ["call", "bare"]],
+    ["add the old two-line shape back next to the helper", mutate(source, INJECTION_REAP, INJECTION_REAP + INJECTION_OLD_SHAPE), ["bare"]],
+    ["relaunch without awaiting the kill", mutate(source, INJECTION_FIRST_KILL, "  kill();\n  const prefPath"), ["order"]],
+    ["delete the kill between the two boots", mutate(source, INJECTION_FIRST_KILL, "  const prefPath"), ["order"]],
+    ["the finally stops awaiting kill()", mutate(source, INJECTION_LAST_KILL, "  kill();\n  // Chrome's helpers release"), ["order"]],
+  ];
+}
+
+Deno.test("jjsz pin check: every mutant of scripts/security-injection.ts is rejected by exactly the properties it breaks", async () => {
+  const source = sourceOf(SECURITY_INJECTION);
+  assertEquals(injectionViolations(await parseTs(source)), { call: [], order: [], bare: [] }, "the real source satisfies every property");
+  for (const [name, mutant, broken] of injectionMutants(source)) {
+    const found = injectionViolations(await parseTs(mutant));
+    for (const property of ["call", "order", "bare"] as const) {
+      assertEquals(
+        found[property].length > 0,
+        broken.includes(property),
+        `mutant "${name}": property "${property}" ${broken.includes(property) ? "must be violated" : "must stay clean"}; got ${JSON.stringify(found)}`,
+      );
+    }
+  }
+});
+
 // ── the binding pin ─────────────────────────────────────────────────────────
 //
 // An import is not a call site, and a call site is not an import. Every pin above reads the CALL; with the
@@ -930,39 +1044,142 @@ for (const journey of JOURNEYS) {
 // suite (bead 8bp69) to notice. A local re-implementation, or some other export aliased to the same local name,
 // would equally satisfy the call-site pins, so the import must name the helper, under its own name, from the
 // one module.
+//
+// A binding is also not a name. Declaring `reapLeaderAndSettle` again where the call runs (a `const` in the
+// finally, a parameter, a catch binding) binds the call to something that is not the helper while a call-site pin
+// that only compared names would still see an awaited call by that name. What the transform does with that shadow
+// was drilled (esbuild 0.25.12, shadow in the finally block): when the shadow covers the import's only use,
+// esbuild drops the now-unused import and the import rule above rejects the file; when the import stays
+// referenced elsewhere, esbuild renames the shadow to `reapLeaderAndSettle2`, so the call no longer names the
+// helper and the call-site pins reject it as a missing call. Both are properties of how a TypeScript transform
+// treats names, not of these pins, so the declaration count is its own rule: it counts the name and the
+// renamer's numbered variants, so it rejects the shadow whether or not the transform renames it. The shadow
+// mutant below keeps the import alive with a stray reference and is rejected by the count on its own.
 
+const REAP_NAME = "reapLeaderAndSettle";
 const REAP_MODULE = "./lib/reap-leader.ts";
-const REAP_IMPORT = `import { reapLeaderAndSettle } from "${REAP_MODULE}";\n`;
+const REAP_IMPORT = `import { ${REAP_NAME} } from "${REAP_MODULE}";\n`;
 
-function reapBindingViolations(program: Ast): string[] {
+/**
+ * Every binding the program declares for `name`: imports, function names and parameters, classes, variables, catch
+ * parameters. The parser here sees the program AFTER esbuild's transform, and esbuild renames a nested declaration
+ * that collides with a live outer binding (`const reapLeaderAndSettle` in a block becomes `reapLeaderAndSettle2`), so
+ * `name` followed by digits is that same declaration and is counted with it. Counting only the exact name would
+ * never see a shadow that the transform had already renamed.
+ */
+function declarationsOf(program: Ast, name: string): string[] {
+  const found: string[] = [];
+  const renamed = new RegExp(`^${name}[0-9]+$`);
+  const pattern = (node: Ast | null | undefined, what: string): void => {
+    if (!node) return;
+    switch (node.type) {
+      case "Identifier":
+        if (node.name === name || renamed.test(node.name)) found.push(what);
+        break;
+      case "ObjectPattern":
+        for (const property of node.properties) pattern(property.type === "RestElement" ? property.argument : property.value, what);
+        break;
+      case "ArrayPattern":
+        for (const element of node.elements) pattern(element, what);
+        break;
+      case "AssignmentPattern":
+        pattern(node.left, what);
+        break;
+      case "RestElement":
+        pattern(node.argument, what);
+        break;
+    }
+  };
+  descend(program, (node) => {
+    switch (node.type) {
+      case "ImportSpecifier":
+      case "ImportDefaultSpecifier":
+      case "ImportNamespaceSpecifier":
+        pattern(node.local, "an import");
+        break;
+      case "FunctionDeclaration":
+      case "FunctionExpression":
+        pattern(node.id, "a function name");
+        for (const parameter of node.params) pattern(parameter, "a parameter");
+        break;
+      case "ArrowFunctionExpression":
+        for (const parameter of node.params) pattern(parameter, "a parameter");
+        break;
+      case "ClassDeclaration":
+      case "ClassExpression":
+        pattern(node.id, "a class name");
+        break;
+      case "VariableDeclarator":
+        pattern(node.id, "a variable");
+        break;
+      case "CatchClause":
+        pattern(node.param, "a catch parameter");
+        break;
+    }
+  });
+  return found;
+}
+
+/** The import: exactly one, `{ reapLeaderAndSettle }` from the one module, under its own name. */
+function reapImportViolations(program: Ast): string[] {
   const imports = program.body.filter((s: Ast) => s.type === "ImportDeclaration" && s.source?.value === REAP_MODULE);
   if (imports.length !== 1) return [`the script must import from ${REAP_MODULE} exactly once; it does ${imports.length} times`];
   const bound = imports[0].specifiers.some((s: Ast) =>
-    s.type === "ImportSpecifier" && (s.imported?.name ?? s.imported?.value) === "reapLeaderAndSettle" &&
-    s.local?.name === "reapLeaderAndSettle"
+    s.type === "ImportSpecifier" && (s.imported?.name ?? s.imported?.value) === REAP_NAME &&
+    s.local?.name === REAP_NAME
   );
-  return bound ? [] : [`${REAP_MODULE} must be imported as { reapLeaderAndSettle }, under that same local name`];
+  return bound ? [] : [`${REAP_MODULE} must be imported as { ${REAP_NAME} }, under that same local name`];
+}
+
+/** Nothing else in the script declares the name: a shadow binds the call to something that is not the helper. */
+function reapShadowViolations(program: Ast): string[] {
+  const declared = declarationsOf(program, REAP_NAME);
+  return declared.length === 1
+    ? []
+    : [`${REAP_NAME} must be declared exactly once, by the import; it is declared ${declared.length} times (${declared.join(", ")})`];
+}
+
+function reapBindingViolations(program: Ast): string[] {
+  const imported = reapImportViolations(program);
+  return imported.length > 0 ? imported : reapShadowViolations(program);
 }
 
 function reapBindingMutants(source: string): Array<[string, string]> {
   return [
     ["delete the import (the call stays)", mutate(source, REAP_IMPORT, "")],
-    ["alias another export to the name", mutate(source, REAP_IMPORT, `import { teardownChrome as reapLeaderAndSettle } from "${REAP_MODULE}";\n`)],
-    ["import it from another module", mutate(source, REAP_IMPORT, 'import { reapLeaderAndSettle } from "./lib/process-tree.ts";\n')],
+    ["alias another export to the name", mutate(source, REAP_IMPORT, `import { teardownChrome as ${REAP_NAME} } from "${REAP_MODULE}";\n`)],
+    ["import it from another module", mutate(source, REAP_IMPORT, `import { ${REAP_NAME} } from "./lib/process-tree.ts";\n`)],
     [
       "define it locally",
       mutate(
         source,
         REAP_IMPORT,
-        'async function reapLeaderAndSettle(proc: Deno.ChildProcess): Promise<void> {\n  try { proc.kill("SIGKILL"); } catch { /* gone */ }\n  await proc.status;\n}\n',
+        `async function ${REAP_NAME}(proc: Deno.ChildProcess): Promise<void> {\n  try { proc.kill("SIGKILL"); } catch { /* gone */ }\n  await proc.status;\n}\n`,
       ),
     ],
   ];
 }
 
-for (const script of [SECURITY_SUITE, ...JOURNEYS]) {
+/**
+ * The name is declared again right where the real call runs, in the same block, and a stray top-level reference keeps
+ * the import alive. The import rule sees one correct import; only the declaration count sees the second binding.
+ */
+function reapShadowMutant(source: string, reapStatement: string): string {
+  const indent = reapStatement.match(/^ */)![0];
+  const shadow = `${indent}const ${REAP_NAME} = async (_proc: Deno.ChildProcess, _signal?: Deno.Signal) => {};\n`;
+  return mutate(source, reapStatement, shadow + reapStatement) + `\nvoid ${REAP_NAME};\n`;
+}
+
+const REAP_STATEMENT_OF: Record<string, string> = {
+  [SECURITY_SUITE]: REAP_LINE,
+  [JOURNEYS[0]]: JOURNEY_REAP,
+  [JOURNEYS[1]]: JOURNEY_REAP,
+  [SECURITY_INJECTION]: INJECTION_REAP,
+};
+
+for (const script of [SECURITY_SUITE, ...JOURNEYS, SECURITY_INJECTION]) {
   const name = script.replace("scripts/", "");
-  Deno.test(`jjsz pin: ${name} imports reapLeaderAndSettle from ./lib/reap-leader.ts under its own name (kills: delete the import and keep the call, alias another export to the name, import it from elsewhere, define it locally)`, async () => {
+  Deno.test(`jjsz pin: ${name} imports reapLeaderAndSettle from ./lib/reap-leader.ts under its own name and declares it nowhere else (kills: delete the import and keep the call, alias another export to the name, import it from elsewhere, define it locally, declare the name again where the call runs)`, async () => {
     assertEquals(reapBindingViolations(await parseTs(sourceOf(script))), []);
   });
   Deno.test(`jjsz pin check: every binding mutant of ${name} is rejected`, async () => {
@@ -971,5 +1188,43 @@ for (const script of [SECURITY_SUITE, ...JOURNEYS]) {
     for (const [mutantName, mutant] of reapBindingMutants(source)) {
       assertNotEquals(reapBindingViolations(await parseTs(mutant)), [], `mutant "${mutantName}" must be rejected`);
     }
+    const shadowed = await parseTs(reapShadowMutant(source, REAP_STATEMENT_OF[script]));
+    assertEquals(reapImportViolations(shadowed), [], "the shadow mutant keeps a correct, used import: the import rule alone cannot see it");
+    assertNotEquals(reapShadowViolations(shadowed), [], "the declaration count must reject a shadow of the helper's name");
+    assertNotEquals(reapBindingViolations(shadowed), [], "the binding pin must reject the shadow mutant");
   });
 }
+
+Deno.test("jjsz pin check: declarationsOf finds every form that could shadow the helper and nothing that merely mentions it", async () => {
+  const table: Array<[string, string, number]> = [
+    ["an import", `import { ${REAP_NAME} } from "${REAP_MODULE}";\nawait ${REAP_NAME}(1 as any);`, 1],
+    ["a variable in a block", `{ const ${REAP_NAME} = 1; }`, 1],
+    ["a destructured variable", `{ const { a: ${REAP_NAME} } = { a: 1 }; }`, 1],
+    ["a shorthand destructured variable", `{ const { ${REAP_NAME} } = { ${REAP_NAME}: 1 }; }`, 1],
+    ["an array-pattern variable", `{ const [${REAP_NAME}] = [1]; }`, 1],
+    ["a function declaration in a block", `{ function ${REAP_NAME}() {} }`, 1],
+    ["a function parameter", `function f(${REAP_NAME}: number) { return ${REAP_NAME}; }`, 1],
+    ["a defaulted parameter", `function f(${REAP_NAME} = 1) { return ${REAP_NAME}; }`, 1],
+    ["a rest parameter", `function f(...${REAP_NAME}: number[]) { return ${REAP_NAME}; }`, 1],
+    ["an arrow parameter", `const g = (${REAP_NAME}: number) => ${REAP_NAME};`, 1],
+    ["a catch parameter", `try { 1; } catch (${REAP_NAME}) { 1; }`, 1],
+    ["a named function expression", `const h = function ${REAP_NAME}() {};`, 1],
+    ["a class", `{ class ${REAP_NAME} {} }`, 1],
+    ["a property key is not a declaration", `const o = { ${REAP_NAME}: 1 };`, 0],
+    ["a member access is not a declaration", `const o: any = {}; o.${REAP_NAME}(1);`, 0],
+    ["a call is not a declaration", `async function main() { await ${REAP_NAME}(1 as any); }`, 0],
+    [
+      "a nested redeclaration esbuild renames next to a live import is counted with the import",
+      `import { ${REAP_NAME} } from "${REAP_MODULE}";\n{ const ${REAP_NAME} = 1; void ${REAP_NAME}; }\nvoid ${REAP_NAME};`,
+      2,
+    ],
+    ["the renamer's numbered form is a declaration of the same name", `const ${REAP_NAME}2 = 1;`, 1],
+    ["a look-alike that merely starts with the name is not a declaration", `const ${REAP_NAME}Later = 1; const ${REAP_NAME}2x = 1;`, 0],
+  ];
+  // The pinned scripts are modules. A fragment with no import or export is parsed as a sloppy script, and esbuild
+  // lowers a block-level function in a script into a block-scoped binding plus a hoisted `var` copy under a numbered
+  // name (two bindings, drilled), so each fragment is made a module the way the real scripts are.
+  for (const [what, source, expected] of table) {
+    assertEquals(declarationsOf(await parseTs(`export {};\n${source}`), REAP_NAME).length, expected, `${what}: ${source}`);
+  }
+});

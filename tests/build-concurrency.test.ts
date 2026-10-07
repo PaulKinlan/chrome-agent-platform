@@ -215,16 +215,16 @@ Deno.test("resolveGcGraceMs N9: plain decimal digits are honoured exactly; zero 
 Deno.test("resolveGcGraceMs N9: digits above the cap are capped, but digit strings that overflow to Infinity are a bad value (default), not a clamp", () => {
   assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "60001" }), MAX_GC_GRACE_MS);
   assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "9".repeat(20) }), MAX_GC_GRACE_MS, "1e20 is finite: capped");
-  // The exact finite/overflow boundary of a double: 1e308 is finite, 1e309 is Infinity.
+  // The exact finite/overflow boundary of a double: 1e308 (a 1 and 308 zeros, 309 digits) is finite, 1e309 is Infinity.
   assertEquals(
     resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "1" + "0".repeat(308) }),
     MAX_GC_GRACE_MS,
-    "the largest finite magnitude is capped like any other large number",
+    "1e308 is finite, so it is capped like any other large number",
   );
   assertEquals(
     resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "1" + "0".repeat(309) }),
     DEFAULT_GC_GRACE_MS,
-    "309 digits overflow to Infinity: unusable, so the default (never 'no grace', never the cap)",
+    "1e309 overflows to Infinity: unusable, so the default (never 'no grace', never the cap)",
   );
   assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "9".repeat(400) }), DEFAULT_GC_GRACE_MS);
 });

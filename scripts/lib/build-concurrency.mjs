@@ -68,7 +68,7 @@ export const MAX_GC_GRACE_MS = 60_000;
  *   2000                                            -> 2000  (the previous behaviour)
  *   7, 007, 010                                     -> 7, 7, 10 (leading zeros are decimal, never octal)
  *   anything above 60000                            -> 60000
- *   so many digits they overflow to Infinity (309+) -> 50    (unusable, not a clamp)
+ *   a value too large for a double (Number(raw) is Infinity, from about 1.8e308) -> 50    (unusable, not a clamp)
  *
  * @param {Record<string, string | undefined> | undefined} env
  * @returns {number}
