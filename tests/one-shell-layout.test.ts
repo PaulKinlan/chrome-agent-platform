@@ -43,6 +43,14 @@ Deno.test("z4gg: inspector is the named Artifacts full-bleed exception, not a br
   assert(probe.includes("width === 1024 && browse.left !== inspect.left"), "narrow inspector keeps the browse gutter");
 });
 
+Deno.test("wwj5: the real-browser probe asserts Settings parity in parent viewport coordinates", async () => {
+  const probe = await Deno.readTextFile(new URL("../cap-evidence/z4gg-layout-probe.ts", import.meta.url));
+  assert(probe.includes("settings: settings.screenLeft"), "Settings must be compared in the parent viewport, not child-local coordinates");
+  assert(probe.includes("hostWidth: directory.viewHostWidth"), "browse scrollport must be measured while Directory is visible");
+  assert(probe.includes("settingsWidth: settings.docWidth"), "Settings iframe scrollport width must enter the parity formula");
+  assert(probe.includes("if (!parity.settingsAccounted)"), "the browser probe must fail closed on Settings drift");
+});
+
 Deno.test("one-shell layout: Settings adopts shared layout and embedded rule", async () => {
   const html = await Deno.readTextFile("extension/options/options.html");
   assert(html.includes('class="options-shell"'), "options.html must have options-shell wrapping side and content");
