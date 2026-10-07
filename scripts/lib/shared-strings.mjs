@@ -15,6 +15,9 @@
 /** Placeholder for a hoisted string, chosen to survive JSON escaping unharmed. */
 const placeholder = (index) => `\u0000S${index}\u0000`;
 
+/** Escapes special regex characters in a string for literal matching. */
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 /**
  * The repeated strings worth hoisting, most-repeated first (stable output).
  * @param {unknown} value a JSON-shaped value
@@ -54,7 +57,7 @@ export function collectSharedStrings(value, { minLength = 20, minCount = 2, minS
  *   declaration?: string,
  *   sharedStrings?: string[],
  *   tableName?: string,
- *   hoistStructures?: boolean,
+ *   hoistStructures?: boolean, // Hoists repeated capabilities (>=3), licences (>=3, notices: null), caveats (>=5)
  * }} options
  * @returns {string}
  */
@@ -80,71 +83,98 @@ export function renderHoistedValue({
 
   let extraDefs = "";
   if (hoistStructures && Array.isArray(value)) {
-    // 1. Capabilities arrays repeated >= 3 times
+    // 1. Capabilities arrays repeated >= 3 times (excluding empty arrays)
     const capCounts = new Map();
     for (const r of value) {
-      if (r && Array.isArray(r.capabilities)) {
+      if (r && Array.isArray(r.capabilities) && r.capabilities.length > 0) {
         const k = JSON.stringify(r.capabilities);
         capCounts.set(k, (capCounts.get(k) || 0) + 1);
       }
     }
     const sharedCaps = [...capCounts.entries()].filter(([k, n]) => n >= 3).map(([k]) => JSON.parse(k));
 
-    // 2. Licence objects repeated >= 3 times
+    // 2. Licence objects repeated >= 3 times (contract: spdx, file, notices: null)
     const licCounts = new Map();
     for (const r of value) {
-      if (r && r.licence) {
+      if (r && r.licence && r.licence.notices === null) {
         const k = JSON.stringify(r.licence);
         licCounts.set(k, (licCounts.get(k) || 0) + 1);
       }
     }
     const sharedLics = [...licCounts.entries()].filter(([k, n]) => n >= 3).map(([k]) => JSON.parse(k));
 
-    // 3. Caveats arrays repeated >= 5 times
+    // 3. Caveats arrays repeated >= 5 times (excluding empty arrays)
     const caveatCounts = new Map();
     for (const r of value) {
-      if (r && Array.isArray(r.caveats)) {
+      if (r && Array.isArray(r.caveats) && r.caveats.length > 0) {
         const k = JSON.stringify(r.caveats);
         caveatCounts.set(k, (caveatCounts.get(k) || 0) + 1);
       }
     }
     const sharedCaveats = [...caveatCounts.entries()].filter(([k, n]) => n >= 5).map(([k]) => JSON.parse(k));
 
+    const elemPattern = (s) =>
+      index.has(s) ? `${escapeRegex(tableName)}\\[${index.get(s)}\\]` : escapeRegex(JSON.stringify(s));
+
     sharedCaps.forEach((caps, i) => {
       const rendered = caps.map((c) => index.has(c) ? `${tableName}[${index.get(c)}]` : JSON.stringify(c)).join(", ");
       extraDefs += `const C${i} = Object.freeze([${rendered}]);\n`;
+      const expectedCount = capCounts.get(JSON.stringify(caps));
       const pattern = new RegExp(
         `"capabilities": \\[\\n\\s+` +
-        caps.map((c) => (index.has(c) ? `${tableName}\\[${index.get(c)}\\]` : JSON.stringify(c)).replace(/\[/g, "\\[").replace(/\]/g, "\\]")).join(`,\\n\\s+`) +
+        caps.map(elemPattern).join(`,\\n\\s+`) +
         `\\n\\s+\\]`,
-        "g"
+        "g",
       );
-      body = body.replace(pattern, `"capabilities": C${i}`);
+      let matchCount = 0;
+      body = body.replace(pattern, () => {
+        matchCount++;
+        return `"capabilities": C${i}`;
+      });
+      if (matchCount !== expectedCount) {
+        throw new Error(`hoisted capabilities C${i} replacement count mismatch: expected ${expectedCount}, got ${matchCount}`);
+      }
     });
 
     sharedLics.forEach((lic, i) => {
       const f = index.has(lic.file) ? `${tableName}[${index.get(lic.file)}]` : JSON.stringify(lic.file);
       const s = index.has(lic.spdx) ? `${tableName}[${index.get(lic.spdx)}]` : JSON.stringify(lic.spdx);
       extraDefs += `const L${i} = Object.freeze({ spdx: ${s}, file: ${f}, notices: null });\n`;
-      const fileRef = index.has(lic.file) ? `${tableName}\\[${index.get(lic.file)}\\]` : JSON.stringify(lic.file);
-      const spdxRef = index.has(lic.spdx) ? `${tableName}\\[${index.get(lic.spdx)}\\]` : JSON.stringify(lic.spdx);
+      const expectedCount = licCounts.get(JSON.stringify(lic));
+      const fileRef = elemPattern(lic.file);
+      const spdxRef = elemPattern(lic.spdx);
       const pattern = new RegExp(
         `"licence": \\{\\n\\s+"spdx": ${spdxRef},\\n\\s+"file": ${fileRef},\\n\\s+"notices": null\\n\\s+\\}`,
-        "g"
+        "g",
       );
-      body = body.replace(pattern, `"licence": L${i}`);
+      let matchCount = 0;
+      body = body.replace(pattern, () => {
+        matchCount++;
+        return `"licence": L${i}`;
+      });
+      if (matchCount !== expectedCount) {
+        throw new Error(`hoisted licence L${i} replacement count mismatch: expected ${expectedCount}, got ${matchCount}`);
+      }
     });
 
     sharedCaveats.forEach((cavs, i) => {
       const rendered = cavs.map((c) => index.has(c) ? `${tableName}[${index.get(c)}]` : JSON.stringify(c)).join(", ");
       extraDefs += `const V${i} = Object.freeze([${rendered}]);\n`;
+      const expectedCount = caveatCounts.get(JSON.stringify(cavs));
       const pattern = new RegExp(
         `"caveats": \\[\\n\\s+` +
-        cavs.map((c) => index.has(c) ? `${tableName}\\[${index.get(c)}\\]` : JSON.stringify(c)).join(`,\\n\\s+`) +
+        cavs.map(elemPattern).join(`,\\n\\s+`) +
         `\\n\\s+\\]`,
-        "g"
+        "g",
       );
-      body = body.replace(pattern, `"caveats": V${i}`);
+      let matchCount = 0;
+      body = body.replace(pattern, () => {
+        matchCount++;
+        return `"caveats": V${i}`;
+      });
+      if (matchCount !== expectedCount) {
+        throw new Error(`hoisted caveats V${i} replacement count mismatch: expected ${expectedCount}, got ${matchCount}`);
+      }
     });
   }
 
