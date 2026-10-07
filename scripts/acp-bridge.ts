@@ -140,6 +140,46 @@ function originAllowed(origin: string | null): boolean {
   return /^(chrome|moz)-extension:\/\//.test(origin);
 }
 
+/** A structured connection refusal: the reason an ACP upgrade is refused, in the
+ * order the guards run. Shared by the live upgrade and the /acp/preflight
+ * diagnostic so both report the SAME cause (chrome-agent-platform-e25gk). */
+export type AcpConnectionRefusal =
+  | { reason: "origin-rejected"; detail: string }
+  | { reason: "token-missing"; detail: string }
+  | { reason: "token-invalid"; detail: string };
+
+/** The origin + shared-secret guards, shared by the upgrade and the /acp/preflight
+ * diagnostic. The harness guard runs inline BEFORE this (an unknown harness is
+ * refused there with 400, and `connectionHarness` must be known before the spawn).
+ * Returns null when the connection would be admitted past these guards.
+ *
+ * chrome-agent-platform-e25gk: a browser hides the HTTP status/body of a refused
+ * WebSocket upgrade (it fires only an opaque "error" then close 1006), so this is
+ * the single source of truth for the client-side error mapping — "auth required",
+ * "wrong token" and "origin rejected" must be told apart, not collapsed into
+ * "failed to connect". */
+export function acpConnectionRefusal(
+  req: Request,
+  url: URL,
+  tokenOverride: string,
+): AcpConnectionRefusal | null {
+  const clientOrigin = req.headers.get("origin");
+  if (!originAllowed(clientOrigin)) {
+    return { reason: "origin-rejected", detail: "web origins are not allowed to drive the harness" };
+  }
+  const encoder = new TextEncoder();
+  const presentedParam = url.searchParams.get("token");
+  const presented = encoder.encode(presentedParam ?? "");
+  const expected = encoder.encode(tokenOverride);
+  const accepted = presented.byteLength === expected.byteLength && timingSafeEqual(presented, expected);
+  if (!accepted) {
+    return (presentedParam === null || presentedParam === "")
+      ? { reason: "token-missing", detail: "authentication required: the bridge needs its shared token (paste it into the acp.token setting)" }
+      : { reason: "token-invalid", detail: "authentication failed: the token does not match the bridge's shared token" };
+  }
+  return null;
+}
+
 /** The ACP adapters CAP knows how to launch, from the official registry
  * (https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json):
  * package + pinned version, run with `npx -y` so NOTHING has to be installed
@@ -710,38 +750,37 @@ export function createAcpServer(
     }
     const connectionHarness = requestedHarness || HARNESS;
 
+    // /acp/preflight — the same origin + token guards as the upgrade, but as a
+    // plain HTTP probe (no upgrade header) whose JSON reason the extension can
+    // read. A browser hides the status/body of a refused WebSocket upgrade, so
+    // without this the client can only say "failed to connect", never WHY
+    // (chrome-agent-platform-e25gk). An unknown harness is already refused with
+    // 400 above, so this reports the two causes a browser cannot see.
+    if (url.pathname === "/acp/preflight") {
+      const refusal = acpConnectionRefusal(req, url, tokenOverride);
+      return new Response(
+        JSON.stringify(refusal ? { ok: false, ...refusal } : { ok: true }),
+        { status: refusal ? 403 : 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
     if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return new Response("ACP Bridge: Connect via WebSocket at /acp", { status: 426 });
     }
 
-    // Origin guard (iadt, KEPT not replaced): browsers ALWAYS send Origin on
-    // WebSocket upgrades. A web page (http/https) may not drive the local
-    // harness over loopback — that would let any site execute shell commands
-    // through the user's pi session. Extension pages and local scripts (no
-    // Origin header) are allowed; the shared secret below binds the connection
-    // to a client that knows it.
+    // Origin guard (iadt, KEPT not replaced) + the jsjy shared secret. Both are
+    // the SAME guards /acp/preflight runs, so the client's diagnostic and the
+    // actual refusal can never disagree. The comparison stays CONSTANT-TIME
+    // (jsjy review F2) and on byte lengths (delta-review polish) — see
+    // acpConnectionRefusal.
+    const refusal = acpConnectionRefusal(req, url, tokenOverride);
+    if (refusal) {
+      return new Response(`ACP Bridge: ${refusal.detail}`, { status: 403 });
+    }
+
+    // Captured SYNCHRONOUSLY: the request's headers are no longer readable from
+    // the async socket.onopen callback (the body is consumed by the upgrade).
     const clientOrigin = req.headers.get("origin");
-    if (!originAllowed(clientOrigin)) {
-      return new Response("ACP Bridge: web origins are not allowed to drive the harness", { status: 403 });
-    }
-    // jsjy: the shared secret is REQUIRED, always — including on loopback, where
-    // a local process sends no Origin and the guard above admits it by design.
-    // An unauthenticated upgrade is refused rather than served, and the comparison
-    // is CONSTANT-TIME (jsjy review F2) so a local attacker cannot recover the
-    // secret from response timing. The length check leaks only the length.
-    // Compare BYTE lengths, not string lengths (delta-review polish): a token of 32
-    // MULTI-BYTE characters has a string length of 32 but a larger byte length, and
-    // timingSafeEqual THROWS on unequal buffers — Deno.serve would turn that into a
-    // 500 rather than an auth decision. Encoding first keeps every mismatched input
-    // on the refusal path.
-    const encoder = new TextEncoder();
-    const presented = encoder.encode(url.searchParams.get("token") ?? "");
-    const expected = encoder.encode(tokenOverride);
-    const tokenAccepted = presented.byteLength === expected.byteLength &&
-      timingSafeEqual(presented, expected);
-    if (!tokenAccepted) {
-      return new Response("ACP Bridge: missing or wrong token", { status: 403 });
-    }
 
     const { socket, response } = Deno.upgradeWebSocket(req);
 
