@@ -494,5 +494,104 @@ Deno.test("mxra: .side-foot is anchored to bottom via margin-block-start: auto a
   );
 });
 
+Deno.test("l80u: rail navigation and disclosure initialization scope selectors to #side to avoid duplicate agents-section ID", async () => {
+  const js = await Deno.readTextFile(`${ROOT}/extension/ntp/ntp.js`);
+  const html = await Deno.readTextFile(`${ROOT}/extension/ntp/ntp.html`);
+
+  // Document verification: exactly two elements with id="agents-section" exist in ntp.html (the feed section and the sidebar details)
+  const agentsSectionMatches = html.match(/id="agents-section"/g) ?? [];
+  assertEquals(agentsSectionMatches.length, 2, "ntp.html contains both feed section and sidebar details with id='agents-section'");
+
+  // Verify markup: feed section is in main feed outside #side, while sidebar details is inside #side
+  const sideIndex = html.indexOf('id="side"');
+  const sideEndIndex = html.indexOf('</aside>', sideIndex);
+  assert(sideIndex > 0 && sideEndIndex > sideIndex, "#side aside exists in ntp.html");
+  const sideMarkup = html.slice(sideIndex, sideEndIndex);
+
+  assert(
+    /<details[^>]*id="agents-section"[^>]*>/.test(sideMarkup),
+    "sidebar details#agents-section must be inside #side aside",
+  );
+  assert(
+    !/<section[^>]*id="agents-section"[^>]*>/.test(sideMarkup),
+    "feed section#agents-section must NOT be inside #side aside",
+  );
+
+  // Verify that initSideRailNav resolves its target within side before global document fallback
+  assert(
+    js.includes("side?.querySelector?.(`#${targetId}`)") ||
+    js.includes("side?.querySelector(`#${targetId}`)"),
+    "initSideRailNav must query within #side for targetId to avoid unhiding and focusing the feed column",
+  );
+
+  // Verify that initSideDisclosures resolves sections within side before global document fallback
+  assert(
+    js.includes("side?.querySelector?.(`#${id}`)") ||
+    js.includes("side?.querySelector(`#${id}`)"),
+    "initSideDisclosures must query within #side for section ids to properly attach toggle listener to sidebar details",
+  );
+
+  // Behavioral test: simulate DOM with feed section preceding sidebar section
+  let feedFocused = false;
+  let sidebarFocused = false;
+
+  interface MockElement {
+    id: string;
+    tagName: string;
+    hidden: boolean;
+    open?: boolean;
+    querySelector: () => { focus: () => void };
+    focus?: () => void;
+    scrollIntoView?: () => void;
+  }
+
+  const mockFeedSection: MockElement = {
+    id: "agents-section",
+    tagName: "SECTION",
+    hidden: true,
+    querySelector: () => ({ focus: () => { feedFocused = true; } }),
+    focus: () => { feedFocused = true; },
+  };
+
+  const mockSidebarSection: MockElement = {
+    id: "agents-section",
+    tagName: "DETAILS",
+    open: false,
+    hidden: false,
+    querySelector: () => ({
+      focus: () => { sidebarFocused = true; },
+    }),
+    scrollIntoView: () => {},
+  };
+
+  const mockSide = {
+    classList: { remove: () => {} },
+    querySelector: (sel: string) => {
+      if (sel === "#agents-section") return mockSidebarSection;
+      return null;
+    },
+  };
+
+  // Simulating the scoped resolution vs unscoped getElementById
+  const targetId = "agents-section";
+  const unscopedTarget = mockFeedSection; // document.getElementById would return first element in DOM
+  const scopedTarget = mockSide.querySelector(`#${targetId}`) || unscopedTarget;
+
+  assertEquals(scopedTarget, mockSidebarSection, "scoped selector must resolve to sidebar details");
+
+  // Execute disclosure logic on scopedTarget
+  if (scopedTarget.hidden) scopedTarget.hidden = false;
+  if (scopedTarget.tagName === "DETAILS") {
+    scopedTarget.open = true;
+  }
+  const focusable = scopedTarget.querySelector();
+  focusable?.focus?.();
+
+  assertEquals(mockFeedSection.hidden, true, "feed section must remain hidden");
+  assertEquals(feedFocused, false, "feed section must not receive focus");
+  assertEquals(mockSidebarSection.open, true, "sidebar details must be opened");
+  assertEquals(sidebarFocused, true, "focus must land inside sidebar details");
+});
+
 
 

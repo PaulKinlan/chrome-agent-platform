@@ -5192,7 +5192,7 @@ function initSideDisclosures() {
   const states = loadSideDisclosureStates() || {};
   const defaultOpen = new Set(["tasks-section", "agents-section"]);
   for (const id of sections) {
-    const el = document.getElementById(id);
+    const el = side?.querySelector?.(`#${id}`) || document.getElementById(id);
     if (!el || el.tagName !== "DETAILS") continue;
     if (typeof states[id] === "boolean") {
       el.open = states[id];
@@ -5222,7 +5222,7 @@ function initSideRailNav() {
     updateSideToggleLabels(true);
 
     if (targetId) {
-      const target = document.getElementById(targetId);
+      const target = side?.querySelector?.(`#${targetId}`) || document.getElementById(targetId);
       if (target) {
         if (target.hidden) target.hidden = false;
         if (target.tagName === "DETAILS") {
