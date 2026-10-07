@@ -31,7 +31,7 @@
 //
 // Pure: no chrome.*, no DOM. The agent loop wires it; the tests drive it alone.
 
-import { redactSecretText, truncateUtf8, utf8ByteLength } from "./pure.js";
+import { redactSecretText, redactToolArgs, truncateUtf8, utf8ByteLength } from "./pure.js";
 import { isUntrustedToken, mintUntrustedToken, untrustedClose, untrustedOpen } from "./untrusted-fence.js";
 
 export const RUN_DIGEST_BOUNDS = Object.freeze({
@@ -165,7 +165,7 @@ function failureText(envelope, value, result) {
  * boundary (the same one the composed system prompt names); a missing token
  * mints a private one so the excerpts are still fenced.
  */
-export function createRunDigest({ token = null, bounds = RUN_DIGEST_BOUNDS } = {}) {
+export function createRunDigest({ token = null, bounds = RUN_DIGEST_BOUNDS, secretArgsByTool = {} } = {}) {
   const fenceToken = isUntrustedToken(token) ? token : mintUntrustedToken();
   const B = Object.freeze({ ...RUN_DIGEST_BOUNDS, ...(bounds && typeof bounds === "object" ? bounds : {}) });
   let entries = [];
@@ -213,12 +213,14 @@ export function createRunDigest({ token = null, bounds = RUN_DIGEST_BOUNDS } = {
     const ref = typeof refCandidate === "string" && SELECTION_REF_RE.test(refCandidate) ? refCandidate : null;
     const inner = envelope ? ownData(envelope, "result") : value;
     const excerptSource = unfenceForDigest(searchResultView(inner === undefined ? value : inner) ?? (inner === undefined ? value : inner));
+    const extraSecret = ownData(e, "secretArgs") ?? secretArgsByTool?.[name];
+    const safeArgs = redactToolArgs(name, shownArgs === undefined ? {} : shownArgs, extraSecret);
     const entry = {
       seq: ++seq,
       step,
       call,
       name,
-      args: redactSecretText(compactJson(shownArgs === undefined ? {} : shownArgs, B.maxArgsChars)),
+      args: redactSecretText(compactJson(safeArgs, B.maxArgsChars)),
       ok,
       error: ok ? "" : redactSecretText(compactJson(failureText(envelope, inner, result), B.maxErrorChars)),
       excerpt: ok ? redactSecretText(compactJson(excerptSource, B.maxExcerptChars)) : "",

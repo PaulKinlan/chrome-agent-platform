@@ -508,11 +508,11 @@ execution-host contract").
 
 ### 6.3 Store policy
 Chrome Web Store lane: no Store release is planned (Q11, Paul 2026-09-18).
-Shipped default tools are bundled-reviewed executables (38 admitted packages).
+Shipped default tools are bundled-reviewed executables (39 admitted packages).
 Owner-selected packages are an unpacked/developer lane; whether they may run there is
 open (Q13; docs/tool-platform-architecture.md §"Distribution lanes"; docs/OPEN-QUESTIONS.md Q13).
 The store build target statically rejects unmanifested `.wasm` and non-literal Worker
-constructors (README §"Load + run"). Today's shipped set: 38 admitted single-tool packages
+constructors (README §"Load + run"). Today's shipped set: 39 admitted single-tool packages
 (`build.mjs:108`, `packages/bundled/README.md`, `extension/wasm/manifests/`).
 
 ## 7. MCP discovery & capacity/messaging

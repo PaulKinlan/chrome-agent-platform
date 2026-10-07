@@ -220,8 +220,8 @@ const STREAM_EXECUTION_HOST_ALLOWED_CALL_RE = /WebAssembly\.instantiate\(/g;
 // new WebAssembly.Instance(module, {}) — the audited CAS bytes and an EMPTY
 // imports object, never anything else.
 const CALLEXPORT_HOST_CANONICAL_PATH = "extension/lib/wasm-callexport-host.js";
-const CALLEXPORT_HOST_MODULE_LOCATION = { line: 49, column: 19 };
-const CALLEXPORT_HOST_INSTANCE_LOCATION = { line: 50, column: 15 };
+const CALLEXPORT_HOST_MODULE_LOCATION = { line: 48, column: 19 };
+const CALLEXPORT_HOST_INSTANCE_LOCATION = { line: 49, column: 15 };
 const CALLEXPORT_HOST_MODULE_RE = /new\s+WebAssembly\.Module\(/g;
 const CALLEXPORT_HOST_INSTANCE_RE = /new\s+WebAssembly\.Instance\(/g;
 // The inert structural auditor validates bytes, never instantiates a module.

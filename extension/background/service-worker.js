@@ -674,6 +674,7 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
         type: CALLEXPORT_RUN_TYPE,
         toolId,
         data: String(validatedArgs?.data ?? ""),
+        args: validatedArgs ?? {},
         owner,
         authority,
       });
@@ -1105,7 +1106,8 @@ import {
   KEYBOARD_COMMANDS,
   hubUrlForCommand,
   newId,
-  sleep
+  sleep,
+  redactToolArgs
 } from "../lib/pure.js";
 import { redactToolResult, toolResultFullJson } from "../lib/tool-summary.js";
 import {
@@ -3888,7 +3890,7 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
         try {
           event = {
             ...event,
-            ...(event.type === "tool-call" ? { toolArgs: redactDeep(event.toolArgs) } : { result: redactDeep(event.result) }),
+            ...(event.type === "tool-call" ? { toolArgs: redactDeep(redactToolArgs(event.selectedTool ?? event.toolName, event.toolArgs)) } : { result: redactDeep(event.result) }),
           };
           // The retained FULL result (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01)
           // is redacted AGAIN at this boundary — the write path never trusts

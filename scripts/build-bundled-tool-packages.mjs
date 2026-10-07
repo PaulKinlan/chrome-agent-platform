@@ -90,6 +90,7 @@ const PATHS = {
   avif: join(EVIDENCE, "avif"),
   hashwasmBlake3: join(EVIDENCE, "hashwasm-blake3"),
   hashwasm: join(EVIDENCE, "hashwasm"),
+  awasmChacha: join(EVIDENCE, "awasm-chacha"),
   d3: join(EVIDENCE, "d3"),
   sqlite3: join(EVIDENCE, "sqlite3"),
   stream: join(REPO, "packages/bundled/unix-stream-v1"),
@@ -147,6 +148,7 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
   hash_adler32: "hash_adler32 - compute Adler-32 rolling checksum. Use for quick data error-detection in compressed streams. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'adler32'.",
   hash_crc32: "hash_crc32 - compute standard CRC-32 (IEEE 802.3) cyclic redundancy checksum. Use for integrity checks. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'crc32'.",
   hash_xxhash32: "hash_xxhash32 - compute fast 32-bit xxHash non-cryptographic checksum. Use for high-speed hash tables. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'xxhash32'.",
+  chacha20_poly1305: "chacha20_poly1305 - encrypt/decrypt data with ChaCha20-Poly1305 AEAD. Use for authenticated encryption on-device. In/out: base64 key (32B), nonce (12B), data, mode ('encrypt'|'decrypt'). Example: {key: '...', nonce: '...', data: '...'} -> {data: '...'}.",
   compressops: "compressops - compress or decompress with zstd or brotli. Use to shrink text or bytes. Compress text (stdin) to a base64 frame; decompress a base64 frame to base64; info reports a base64 frame. zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
   oxipng: "oxipng - shrink a PNG without changing its pixels. Use to optimise a PNG before saving or sharing it. In/out: base64 PNG text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: -o <0..6> effort (default 2); --strip safe|all.",
   jxl: "jxl - decode a JPEG XL (JXL) image to PNG. Use to decode or view a JXL file or convert JXL to PNG. In/out: base64 JXL text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: --to png (default).",
@@ -466,6 +468,13 @@ for (const toolId of LANES.c2.tools) {
       metaNote: "live via the call-export host (extension/lib/wasm-callexport-host.js); evidence: packages/bundled/evidence/hashwasm",
     });
   }
+}
+{ // chacha20_poly1305 (2uhx — the call-export lane: @awasm/noble 0.1.4's chacha_poly1305,
+  // a ZERO-IMPORT compute module byte-extracted from the pinned npm tarball;
+  // no rebuild claimed. MIT, Paul Miller)
+  const wasm = readFileSync(join(PATHS.awasmChacha, "binaries/chacha_poly1305.wasm"));
+  if (sha256(wasm) !== "e1acae9b3ee3da01b2bd0574f906fede6f5219da4b9b43fd5c36ee16fbf11330" || wasm.byteLength !== 43461) throw new Error("awasm-chacha hash/size mismatch");
+  packages.push({ toolId: "chacha20_poly1305", lane: "awasm-chacha", bytes: wasm, row: null, tier: "default", spdx: "MIT", licenseFile: "extension/wasm/licenses/MIT.txt", notices: null, sbom: { src: join(PATHS.awasmChacha, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/chacha20_poly1305.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "byte-exact extraction (extract.mjs; tarball sha512-pinned)", buildScriptLane: "awasm-chacha", displayName: "chacha20_poly1305", category: "crypto", description: AGENT_DESCRIPTIONS.chacha20_poly1305, caveats: ["Authenticated encryption of base64 input with ChaCha20-Poly1305 up to 2 MiB."], replayClass: "read-only", capabilities: ["compute", "crypto"], secretArgs: ["key"], callexport: { abi: "chacha20_poly1305" }, metaStatus: "call-export-enabled", metaNote: "live via the call-export host (extension/lib/wasm-callexport-host.js); evidence: packages/bundled/evidence/awasm-chacha" });
 }
 { // gzip (zlib 1.3.1 minigzip upstream + CAP-authored runtime): Zlib AND Apache-2.0
   const d3 = JSON.parse(readFileSync(join(PATHS.d3, "inventory.json"), "utf8"));
@@ -874,6 +883,7 @@ for (const pkg of packages) {
     binary: { sha256: wasmSha, bytes: pkg.bytes.byteLength, tier, initialPages, maxPages },
     manifestRef: manifestRel, sourceKind: "bundled-package",
     canonicalNameClaim: false,
+    ...(Array.isArray(pkg.secretArgs) ? { secretArgs: pkg.secretArgs } : {}),
     ...(settingsPreview
       ? { admitted: true, settingsPreview: true, disabled: false, disabledReason: null }
       : pkg.callexport

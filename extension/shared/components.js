@@ -67,7 +67,7 @@ import { safeParseOnce, buildTree, subtreeJson, safeJsonStringify, prettyJson, t
 // SW write path): activity journals may predate write-path redaction, so the
 // explorer redacts again at render AND the tree/copy paths only ever see the
 // redacted value.
-import { redactSecrets } from "../lib/pure.js";
+import { redactSecrets, redactToolArgs } from "../lib/pure.js";
 import { filterTimeline, timelineMatchesFilter, groupTimelineByTopic } from "../lib/hub-timeline.js";
 // The single-sourced shared helpers (CAP-FB-20260830-ESCAPEHTML-SINGLE-SOURCE-01).
 import { escapeHtml, timeAgo, sleep } from "../lib/pure.js";
@@ -5765,6 +5765,7 @@ export function buildToolCardDom({ name, status: statusIn, args, result, detail,
     }
     return args;
   })();
+  const safeShownArgs = redactToolArgs(rawToolName, shownArgs);
 
   // THE COLLAPSED CARD MUST ANSWER "what happened" WITHOUT A CLICK
   // (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01). It used to show only the tool
@@ -5790,8 +5791,8 @@ export function buildToolCardDom({ name, status: statusIn, args, result, detail,
   // argument interpolation, never a broken card.
   let what = "";
   try {
-    const parsedArgs = shownArgs != null && shownArgs !== "" ? safeParseOnce(shownArgs) : null;
-    what = describeToolCall(lazyName || name, parsedArgs && parsedArgs.kind === "json" ? parsedArgs.value : shownArgs);
+    const parsedArgs = safeShownArgs != null && safeShownArgs !== "" ? safeParseOnce(safeShownArgs) : null;
+    what = describeToolCall(lazyName || name, parsedArgs && parsedArgs.kind === "json" ? parsedArgs.value : safeShownArgs);
     if (status === "done" && what.startsWith("Running ")) what = `Completed ${what.slice("Running ".length)}`;
     else if (status === "error" && what.startsWith("Running ")) what = `Failed ${what.slice("Running ".length)}`;
   } catch { what = ""; }
@@ -5937,7 +5938,7 @@ export function buildToolCardDom({ name, status: statusIn, args, result, detail,
       insertBlock(div);
     };
 
-    addBlock("inputs", shownArgs);
+    addBlock("inputs", safeShownArgs);
 
     const resultParsed = result != null && result !== "" ? safeParseOnce(result) : null;
     const detailParsed = detail != null && detail !== "" ? safeParseOnce(detail) : null;
@@ -12700,7 +12701,7 @@ class ActivityExplorer extends Component {
       wrap.appendChild(plainDetailBlock(label, String(parsed.value ?? raw ?? "")));
     };
     switch (e?.type) {
-      case "tool-call": addBlock("inputs", e.args); break;
+      case "tool-call": addBlock("inputs", redactToolArgs(e.tool ?? "", e.args)); break;
       // Normalize + redact ONCE (redactToolResult): the collapsed-row summary,
       // this detail tree, and its copy path all render the same redacted
       // decoded view — wrapped modelContent JSON strings included.

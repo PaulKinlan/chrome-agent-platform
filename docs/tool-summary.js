@@ -342,6 +342,10 @@ export function describeToolCall(name, args) {
       // (effectiveToolCall), at which point THIS gets the real name + args.
       return "Running the selected tool";
     }
+    case "chacha20_poly1305": {
+      const m = pickArg(args, ["mode"]);
+      return m === "decrypt" ? "Decrypting data" : "Encrypting data";
+    }
     case "navigate": case "open_url": case "open_tab": {
       const u = pickArg(args, ["url"]);
       return u ? `Opening ${u}` : "Opening a page";

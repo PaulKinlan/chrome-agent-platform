@@ -275,6 +275,7 @@ const DIRECT_TOOL_GROUP = Object.freeze({
   "hash_adler32": "hashes-ids",
   "hash_crc32": "hashes-ids",
   "hash_xxhash32": "hashes-ids",
+  "chacha20_poly1305": "hashes-ids",
   "md5sum": "hashes-ids",
   "sha256sum": "hashes-ids",
   "sha512sum": "hashes-ids",
