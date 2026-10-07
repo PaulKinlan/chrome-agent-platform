@@ -5055,6 +5055,9 @@ function persistSidebar(collapsed) {
 // `auto` marks a form-factor-driven change (the narrow-width policy): it moves
 // the rail without overwriting the user's persisted preference.
 let persistedSidebarCollapsed = false;
+// A boot kv.get may return after an explicit user click. Its older value must
+// never overwrite either the visible choice or the newly persisted choice.
+let sidebarUserToggled = false;
 // UX-004 REVISE: the narrow manual expansion is an OFF-CANVAS overlay, never
 // the inline 240px rail (which overflows a 360px viewport). The overlay is
 // transient (never persisted) and closes on scrim tap, Escape, or leaving the
@@ -5140,6 +5143,9 @@ sideToggle?.addEventListener("click", () => {
     runRouteUpdate(() => setSidebarOverlay(!sidebarOverlayOpen));
     return;
   }
+  // Only the wide toggle changes the persisted choice; a narrow overlay click
+  // must still accept the saved choice when its boot read arrives later.
+  sidebarUserToggled = true;
   runRouteUpdate(() => setSidebarCollapsed(!sidebarCollapsed));
 });
 // The toggle is now inside .side-top, BEFORE the Tasks + section-nav controls.
@@ -5252,9 +5258,9 @@ function initSideRailNav() {
 async function restoreSidebar() {
   try {
     const s = await send("kv.get", { keys: SIDEBAR_KEY });
-    persistedSidebarCollapsed = s?.[SIDEBAR_KEY] === true;
+    if (!sidebarUserToggled) persistedSidebarCollapsed = s?.[SIDEBAR_KEY] === true;
   } catch {
-    persistedSidebarCollapsed = false; // worker unreachable — default expanded.
+    if (!sidebarUserToggled) persistedSidebarCollapsed = false; // worker unreachable — default expanded.
   }
   applySidebarForWidth();
   updateSidebarSummariesTabindex(side?.classList?.contains("collapsed") ?? false);
