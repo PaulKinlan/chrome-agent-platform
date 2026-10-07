@@ -31,7 +31,7 @@ extension/.dist-prev-*
 .lock-quarantine-*
 .owner.tmp-*
 .claude/worktrees/
-evidence/
+/evidence/
 .cap-scratch/
 
 # Beads / Dolt files (added by bd init)

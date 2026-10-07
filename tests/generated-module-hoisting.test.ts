@@ -76,9 +76,14 @@ Deno.test("the generated descriptor module keeps every value AND pays for the re
     );
   }
 
-  // The file-size guard: hoisting reclaimed ~3.5 KB (52,275 -> 48,712 at the time
-  // of writing). A generous ceiling, so ordinary row growth is fine but losing
-  // the hoisting is not.
+  // The file-size guard: original 50,000 ceiling was calibrated for 38 tools
+  // (~1,316 B/tool). With 13 new hash-wasm tools admitted (51 total), the
+  // proportional budget would be ~67,100 bytes. With string and structure
+  // hoisting (shared S table, capability arrays, licences, caveats), the emitted
+  // module is compacted to 56,611 bytes. The ceiling is set to 58,800 bytes
+  // (hoisted size + <=4% headroom), staying significantly tighter per tool
+  // (~1,153 B/tool) than the original while ensuring unhoisted regressions
+  // (~67 KB+) fail.
   const bytes = (await Deno.stat(DATA_MODULE)).size;
-  assert(bytes < 50_000, `the generated descriptor module should stay compact, was ${bytes} bytes`);
+  assert(bytes < 58_800, `the generated descriptor module should stay compact, was ${bytes} bytes`);
 });

@@ -62,8 +62,8 @@ export async function executeCallexportRun({ wasmBytes, executable, data }) {
     // The lane's ABI v1 (the hash-wasm convention): input written at the
     // inputBuffer pointer; entry(inputLength, initParam, digestBytes)
     // computes IN PLACE (the digest replaces the input at the buffer);
-    // initParam 0 = the algorithm default.
-    ex[spec.entry](input.byteLength, 0, spec.digestBytes);
+    // initParam 0 = the algorithm default. finalParam defaults to digestBytes.
+    ex[spec.entry](input.byteLength, spec.initParam ?? 0, spec.finalParam ?? spec.digestBytes);
     digest = new Uint8Array(memory.buffer, bufferPtr, spec.digestBytes).slice();
   } catch { fail("entry_call_failed"); }
   if (digest.byteLength !== spec.digestBytes) fail("digest_read_failed");

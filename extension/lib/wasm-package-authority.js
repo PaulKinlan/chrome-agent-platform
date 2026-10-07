@@ -325,13 +325,15 @@ function validateManifestObject(manifest) {
       if (new Set(values).size !== values.length || JSON.stringify(values) !== JSON.stringify([...values].sort())) fail("import_order", `${path}.imports.${field}`);
     }
     if (executable.callExport != null) {
-      exactKeys(executable.callExport, ["entry", "inputBuffer", "digestBytes"], [], `${path}.callExport`);
+      exactKeys(executable.callExport, ["entry", "inputBuffer", "digestBytes"], ["initParam", "finalParam"], `${path}.callExport`);
       // Wasm export names are case-sensitive identifiers (Hash_Calculate) —
       // broader than the lowercase ID_RE used for tool/package ids.
       const EXPORT_NAME_RE = /^[A-Za-z0-9_.$-]{1,64}$/u;
       if (!EXPORT_NAME_RE.test(assertAscii(executable.callExport.entry, `${path}.callExport.entry`, { min: 1, max: 64 }))) fail("callexport_entry_invalid", `${path}.callExport.entry`);
       if (!EXPORT_NAME_RE.test(assertAscii(executable.callExport.inputBuffer, `${path}.callExport.inputBuffer`, { min: 1, max: 64 }))) fail("callexport_buffer_invalid", `${path}.callExport.inputBuffer`);
       if (!Number.isSafeInteger(executable.callExport.digestBytes) || executable.callExport.digestBytes < 1 || executable.callExport.digestBytes > 4096) fail("callexport_digest_invalid", `${path}.callExport.digestBytes`);
+      if (executable.callExport.initParam != null && (!Number.isSafeInteger(executable.callExport.initParam) || executable.callExport.initParam < 0 || executable.callExport.initParam > 0xffffffff)) fail("callexport_initparam_invalid", `${path}.callExport.initParam`);
+      if (executable.callExport.finalParam != null && (!Number.isSafeInteger(executable.callExport.finalParam) || executable.callExport.finalParam < 0 || executable.callExport.finalParam > 0xff)) fail("callexport_finalparam_invalid", `${path}.callExport.finalParam`);
       if (executable.imports.allowed.length !== 0) fail("callexport_imports_nonzero", `${path}.imports.allowed`);
     }
     exactKeys(executable.memory, ["tier", "initialPages", "maxPages"], [], `${path}.memory`);

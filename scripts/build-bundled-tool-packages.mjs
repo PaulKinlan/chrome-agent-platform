@@ -89,6 +89,7 @@ const PATHS = {
   jxl: join(EVIDENCE, "jxl"),
   avif: join(EVIDENCE, "avif"),
   hashwasmBlake3: join(EVIDENCE, "hashwasm-blake3"),
+  hashwasm: join(EVIDENCE, "hashwasm"),
   d3: join(EVIDENCE, "d3"),
   sqlite3: join(EVIDENCE, "sqlite3"),
   stream: join(REPO, "packages/bundled/unix-stream-v1"),
@@ -133,6 +134,19 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
   zxing: "zxing - read and write barcodes. Use when decoding a barcode image or generating one from text. In/out: read takes image bytes on stdin, one JSON line per barcode out; write <format> <text> prints PNG. Formats: qrcode, ean13, code128, datamatrix, pdf417.",
   imageops: "imageops - inspect, resize, and convert images (png/jpeg/webp). Use for image dimensions, resizing, or format conversion. In/out: base64 image text on stdin; base64 image bytes (or info JSON text) on stdout. Subcommands: info; resize; convert.",
   hash_blake3: "hash_blake3 - hash data with BLAKE3. Use to fingerprint content, verify integrity, or derive ids. In/out: base64-encoded bytes as 'data' to a hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}.",
+  hash_md4: "hash_md4 - hash data with MD4. Use for legacy compatibility checksums. In/out: base64-encoded bytes as 'data' to a 32-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'md4'.",
+  hash_sha1: "hash_sha1 - hash data with SHA-1. Use to verify legacy file or commit integrity. In/out: base64-encoded bytes as 'data' to a 40-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha1'.",
+  hash_sha224: "hash_sha224 - hash data with SHA-224. Use for cryptographic checksums and integrity. In/out: base64-encoded bytes as 'data' to a 56-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha224'.",
+  hash_sha384: "hash_sha384 - hash data with SHA-384. Use for high-security cryptographic hashing. In/out: base64-encoded bytes as 'data' to a 96-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha384'.",
+  hash_sha3_256: "hash_sha3_256 - hash data with SHA3-256. Use for modern Keccak/SHA-3 cryptographic hashing. In/out: base64-encoded bytes as 'data' to a 64-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha3_256'.",
+  hash_blake2b: "hash_blake2b - hash data with BLAKE2b (512-bit). Use for fast secure hashing and fingerprinting. In/out: base64-encoded bytes as 'data' to a 128-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'blake2b'.",
+  hash_blake2s: "hash_blake2s - hash data with BLAKE2s (256-bit). Use for fast 32-bit architecture secure hashing. In/out: base64-encoded bytes as 'data' to a 64-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'blake2s'.",
+  hash_ripemd160: "hash_ripemd160 - hash data with RIPEMD-160. Use for cryptographic address and checksum derivation. In/out: base64-encoded bytes as 'data' to a 40-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'ripemd160'.",
+  hash_sm3: "hash_sm3 - hash data with Chinese National Standard SM3. Use for commercial cryptographic compliance. In/out: base64-encoded bytes as 'data' to a 64-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sm3'.",
+  hash_whirlpool: "hash_whirlpool - hash data with Whirlpool (512-bit). Use for ISO/IEC 10118-3 cryptographic hashing. In/out: base64-encoded bytes as 'data' to a 128-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'whirlpool'.",
+  hash_adler32: "hash_adler32 - compute Adler-32 rolling checksum. Use for quick data error-detection in compressed streams. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'adler32'.",
+  hash_crc32: "hash_crc32 - compute standard CRC-32 (IEEE 802.3) cyclic redundancy checksum. Use for integrity checks. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'crc32'.",
+  hash_xxhash32: "hash_xxhash32 - compute fast 32-bit xxHash non-cryptographic checksum. Use for high-speed hash tables. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'xxhash32'.",
   compressops: "compressops - compress or decompress with zstd or brotli. Use to shrink text or bytes. Compress text (stdin) to a base64 frame; decompress a base64 frame to base64; info reports a base64 frame. zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
   oxipng: "oxipng - shrink a PNG without changing its pixels. Use to optimise a PNG before saving or sharing it. In/out: base64 PNG text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: -o <0..6> effort (default 2); --strip safe|all.",
   jxl: "jxl - decode a JPEG XL (JXL) image to PNG. Use to decode or view a JXL file or convert JXL to PNG. In/out: base64 JXL text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: --to png (default).",
@@ -336,6 +350,123 @@ for (const toolId of LANES.c2.tools) {
   if (sha256(wasm) !== "984b12e3b76a670fe58f43aa965658cdfefe0867f88c4935a292f68bdf3c55e1" || wasm.byteLength !== 11891) throw new Error("hashwasm-blake3 hash/size mismatch");
   packages.push({ toolId: "hash_blake3", lane: "hashwasm-blake3", bytes: wasm, row: null, spdx: "MIT", licenseFile: "extension/wasm/licenses/MIT.txt", notices: null, sbom: { src: join(PATHS.hashwasmBlake3, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/hash_blake3.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "byte-exact extraction (extract.mjs; tarball sha512-pinned)", buildScriptLane: "hashwasm-blake3", displayName: "hash_blake3", category: "data", description: AGENT_DESCRIPTIONS.hash_blake3, caveats: ["One-shot hashing of base64 input up to 4 MiB; no streaming API yet."], replayClass: "read-only", capabilities: ["compute", "crypto"], callexport: { entry: "Hash_Calculate", inputBuffer: "Hash_GetBuffer", digestBytes: 32 }, metaStatus: "call-export-enabled", metaNote: "live via the call-export host (extension/lib/wasm-callexport-host.js); evidence: packages/bundled/evidence/hashwasm-blake3" });
 }
+{ // hash-wasm 4.12.0 wave-1 admissions (chrome-agent-platform-3wei)
+  const HASHWASM_WAVE1_TOOLS = [
+    { toolId: "hash_md4", binaryName: "md4", sha256: "3ac6d44a150d6e51afec98a6552ea313067162429066486ed3c5fc8698937197", bytes: 2853, digestBytes: 16, capabilities: ["compute", "crypto"] },
+    { toolId: "hash_sha1", binaryName: "sha1", sha256: "17266992619f52e5af20f90738dc9a955b694873e4d8a937db53b9abad752bb9", bytes: 5592, digestBytes: 20, capabilities: ["compute", "crypto"] },
+    { toolId: "hash_sha224", binaryName: "sha256", sha256: "c44604aaa9d054401459b0d07f3d6deeb440fa7afdcb0cfd900ef2596d55ce55", bytes: 9689, digestBytes: 28, initParam: 224, capabilities: ["compute", "crypto"] },
+    { toolId: "hash_sha384", binaryName: "sha512", sha256: "60afdfbea19ee8ad976da15ef9f557778e1c5de6ee54407e04269da72f5727e5", bytes: 13522, digestBytes: 48, initParam: 384, capabilities: ["compute", "crypto"] },
+    { toolId: "hash_sha3_256", binaryName: "sha3", sha256: "4b3e3ab7973037bfdf21c776085c617dd15d8faad72c073f2eb4ca022a233f8b", bytes: 4018, digestBytes: 32, initParam: 256, finalParam: 0x06, capabilities: ["compute", "crypto"] },
+    { toolId: "hash_blake2b", binaryName: "blake2b", sha256: "b478c0d889d97d7a8db4d10501457ad78dd406d02dcb4c892c0d844805ef05bb", bytes: 7442, digestBytes: 64, initParam: 512, capabilities: ["compute", "crypto"] },
+    { toolId: "hash_blake2s", binaryName: "blake2s", sha256: "89704350070c32c1ea055c06cada4d1b29d2a66e94f49efa9ca1eaab4ef7fe9b", bytes: 6652, digestBytes: 32, initParam: 256, capabilities: ["compute", "crypto"] },
+    { toolId: "hash_ripemd160", binaryName: "ripemd160", sha256: "ce819c4a2404b47180d9eee9fb1ea0bf4ace1bc5a1e54c71cb6a1af4ac4e731e", bytes: 6765, digestBytes: 20, capabilities: ["compute", "crypto"] },
+    { toolId: "hash_sm3", binaryName: "sm3", sha256: "126cc3271d1a0ad2e347494af526339945d81ea0a30e59286abeaa49c51d727d", bytes: 4056, digestBytes: 32, capabilities: ["compute", "crypto"] },
+    { toolId: "hash_whirlpool", binaryName: "whirlpool", sha256: "58308a6f83dd912cb7c16045ebba13ce507a2554ea0fc008b12582822c812d26", bytes: 5817, digestBytes: 64, capabilities: ["compute", "crypto"] },
+    { toolId: "hash_adler32", binaryName: "adler32", sha256: "7aa030fcf233eb001ee09036e9ea025c40754d3792d7d10c605a3b81a39f7a54", bytes: 1452, digestBytes: 4, capabilities: ["compute"] },
+    { toolId: "hash_crc32", binaryName: "crc32", sha256: "e2223e87187457beaaaf58af50a88772141c5a83bc68d0340608215423ba901d", bytes: 1231, digestBytes: 4, initParam: 0xedb88320, capabilities: ["compute"] },
+    { toolId: "hash_xxhash32", binaryName: "xxhash32", sha256: "0cd750338eee542f087493e656c67f7358120e201a23cc5c0faa8f1fd60c1058", bytes: 2475, digestBytes: 4, capabilities: ["compute"] },
+  ];
+  for (const item of HASHWASM_WAVE1_TOOLS) {
+    const wasm = readFileSync(join(PATHS.hashwasm, `binaries/${item.binaryName}.wasm`));
+    if (sha256(wasm) !== item.sha256 || wasm.byteLength !== item.bytes) {
+      throw new Error(`${item.toolId} hash/size mismatch`);
+    }
+    const callexport = {
+      entry: "Hash_Calculate",
+      inputBuffer: "Hash_GetBuffer",
+      digestBytes: item.digestBytes,
+      ...(item.initParam != null ? { initParam: item.initParam } : {}),
+      ...(item.finalParam != null ? { finalParam: item.finalParam } : {}),
+    };
+    const algo = item.toolId.replace(/^hash_/, "");
+    const compName = `hashwasm-${algo}`;
+    const uuid = `urn:uuid:${item.sha256.slice(0, 8)}-${item.sha256.slice(8, 12)}-4${item.sha256.slice(13, 16)}-8${item.sha256.slice(17, 20)}-${item.sha256.slice(20, 32)}`;
+    const sbomData = {
+      bomFormat: "CycloneDX",
+      specVersion: "1.5",
+      serialNumber: uuid,
+      version: 1,
+      metadata: {
+        timestamp: "1970-01-01T00:00:00Z",
+        component: {
+          type: "application",
+          "bom-ref": `${compName}@4.12.0`,
+          name: compName,
+          version: "4.12.0",
+          hashes: [
+            {
+              alg: "SHA-256",
+              content: item.sha256,
+            },
+          ],
+          licenses: [
+            {
+              expression: "MIT",
+            },
+          ],
+          properties: [
+            {
+              name: "provenance",
+              value: "byte-exact extraction from the pinned hash-wasm npm tarball (no rebuild); chrome-agent-platform-3wei",
+            },
+          ],
+        },
+      },
+      components: [
+        {
+          type: "library",
+          "bom-ref": "npm:hash-wasm@4.12.0",
+          name: "hash-wasm",
+          version: "4.12.0",
+          licenses: [
+            {
+              expression: "MIT",
+            },
+          ],
+          hashes: [
+            {
+              alg: "SHA-512",
+              content: "+/2B2rYLb48I/evdOIhP+K/DD2ca2fgBjp6O+GBEnCDk2e4rpeXIK8GvIyRPjTezgmWn9gmKwkQjjx6BtqDHVQ==",
+            },
+          ],
+          externalReferences: [
+            {
+              type: "distribution",
+              url: "https://registry.npmjs.org/hash-wasm/-/hash-wasm-4.12.0.tgz",
+            },
+          ],
+        },
+      ],
+    };
+    const sbomBytes = enc.encode(JSON.stringify(sbomData, null, 2) + "\n");
+    packages.push({
+      toolId: item.toolId,
+      lane: "hashwasm",
+      bytes: wasm,
+      row: null,
+      spdx: "MIT",
+      licenseFile: "extension/wasm/licenses/hash-wasm-MIT.txt",
+      notices: null,
+      sbom: {
+        src: null,
+        bytes: sbomBytes,
+        rel: `extension/wasm/sbom/${item.toolId}.cdx.json`,
+        format: "cyclonedx-json@1.5",
+      },
+      toolchain: "byte-exact extraction (extract.mjs; tarball sha512-pinned)",
+      buildScriptLane: "hashwasm",
+      displayName: item.toolId,
+      category: "data",
+      description: AGENT_DESCRIPTIONS[item.toolId],
+      caveats: ["One-shot hashing of base64 input up to 4 MiB; no streaming API yet."],
+      replayClass: "read-only",
+      capabilities: item.capabilities,
+      callexport,
+      metaStatus: "call-export-enabled",
+      metaNote: "live via the call-export host (extension/lib/wasm-callexport-host.js); evidence: packages/bundled/evidence/hashwasm",
+    });
+  }
+}
 { // gzip (zlib 1.3.1 minigzip upstream + CAP-authored runtime): Zlib AND Apache-2.0
   const d3 = JSON.parse(readFileSync(join(PATHS.d3, "inventory.json"), "utf8"));
   const bin = d3.retainedBinaries[0];
@@ -477,6 +608,7 @@ const LICENSE_WRITES = {
   "extension/wasm/licenses/minised-BSD-3-Clause.txt": readFileSync(join(PATHS.sed, "NOTICES.md")),
   "extension/wasm/licenses/posixutils-rs-MIT.txt": readFileSync(join(PATHS.awkFull, "source/LICENSE")),
   "extension/wasm/licenses/jq-MIT.txt": readFileSync(join(PATHS.jq, "COPYING-jq.txt")),
+  "extension/wasm/licenses/hash-wasm-MIT.txt": readFileSync(join(PATHS.hashwasm, "LICENSES/hash-wasm-MIT.txt")),
 };
 
 // ── Manifests (authority-schema-exact; canonical bytes; re-validated) ───────
@@ -761,14 +893,16 @@ const inventory = {
 };
 const banner = "// GENERATED by scripts/build-bundled-tool-packages.mjs — do not hand-edit.\n// Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>\n";
 emit(join(REPO, "extension/lib/bundled-inventory-data.js"), `${banner}export const BUNDLED_INVENTORY = Object.freeze(${JSON.stringify(inventory, null, 1)});\n`);
-// Long strings repeated per package are hoisted into ONE table: the exported
-// value is unchanged, but every bundle that includes these rows stops paying for
-// the duplicates (chrome-agent-platform-ehsl — the store SW bundle's budget).
+// Long strings and repeated descriptor structures are hoisted into shared tables:
+// the exported value is unchanged, but every bundle that includes these rows stops
+// paying for duplicates (chrome-agent-platform-ehsl / chrome-agent-platform-3wei).
 emit(join(REPO, "extension/lib/bundled-tool-packages.data.js"), renderHoistedValue({
   value: descriptorRows,
   banner,
   declaration: "BUNDLED_TOOL_PACKAGE_ROWS",
-  sharedStrings: collectSharedStrings(descriptorRows),
+  sharedStrings: collectSharedStrings(descriptorRows, { minLength: 5, minSaving: 1 }),
+  tableName: "S",
+  hoistStructures: true,
 }));
 
 // ── packages/bundled/: exact build scripts + provenance ─────────────────────
