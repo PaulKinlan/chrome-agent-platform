@@ -8,6 +8,7 @@
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { join } from "node:path";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { BUNDLED_INVENTORY } from "../extension/lib/bundled-inventory-data.js";
 import {
   extractAboutData,
@@ -55,18 +56,21 @@ Deno.test("about-page drift guard: every inventory tool is rendered in about.htm
 
   for (const entry of entries) {
     // 1. Tool card container must exist with data attributes
+    const pkgAttr = 'data-package-id="' + entry.packageId + '"';
     assert(
-      html.includes(`data-package-id="${entry.packageId}"`),
+      html.includes(pkgAttr),
       `about.html must render card for package '${entry.packageId}'`,
     );
+    const toolAttr = 'data-tool-id="' + entry.toolId + '"';
     assert(
-      html.includes(`data-tool-id="${entry.toolId}"`),
+      html.includes(toolAttr),
       `about.html must render data-tool-id for '${entry.toolId}'`,
     );
 
     // 2. Tool version must be displayed
+    const versionStr = "v" + entry.version;
     assert(
-      html.includes(`v${entry.version}`),
+      html.includes(versionStr),
       `about.html must display version v${entry.version} for tool '${entry.toolId}'`,
     );
 
@@ -77,8 +81,9 @@ Deno.test("about-page drift guard: every inventory tool is rendered in about.htm
     );
 
     // 4. Upstream source URL must be linked
+    const hrefAttr = 'href="' + entry.upstreamUrl + '"';
     assert(
-      html.includes(`href="${entry.upstreamUrl}"`),
+      html.includes(hrefAttr),
       `about.html must link to upstream source URL '${entry.upstreamUrl}' for tool '${entry.toolId}'`,
     );
 
@@ -108,7 +113,7 @@ Deno.test("about-page drift guard: syncAboutPage({ check: true }) confirms zero 
 });
 
 Deno.test("about-page drift guard: falsification — syncAboutPage({ check: true }) fails on drifted HTML with missing tool card", async () => {
-  const tmp = await Deno.makeTempDir({ prefix: "cap-about-drift-" });
+  const tmp = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-about-drift-" });
   try {
     await Deno.mkdir(join(tmp, "extension/about"), { recursive: true });
     await Deno.symlink(join(ROOT, "extension/lib"), join(tmp, "extension/lib"));
@@ -150,8 +155,9 @@ Deno.test("about-page drift guard: falsification — card-presence verification 
   // The drift verification loop must detect that the card is missing
   let detected = false;
   try {
+    const cardAttr = 'data-package-id="' + pkgId + '"';
     assert(
-      strippedHtml.includes(`data-package-id="${pkgId}"`),
+      strippedHtml.includes(cardAttr),
       `about.html must render card for package '${pkgId}'`,
     );
   } catch (_e) {
@@ -179,7 +185,7 @@ Deno.test("about-page drift guard: all inventory manifests have explicit UPSTREA
   }
 
   // Falsification: extractAboutData must throw (fail closed) on unknown package
-  const tmp = await Deno.makeTempDir({ prefix: "cap-about-upstream-" });
+  const tmp = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-about-upstream-" });
   try {
     await Deno.mkdir(join(tmp, "extension/lib"), { recursive: true });
     await Deno.mkdir(join(tmp, "extension/wasm/manifests"), { recursive: true });
