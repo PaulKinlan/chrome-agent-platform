@@ -22,7 +22,7 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { durableDir } from "../scripts/lib/durable-root.mjs";
+import { durableDir, durableRoot } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const decoder = new TextDecoder();
@@ -99,6 +99,7 @@ Deno.test("dsoq: a failing serial file is NAMED, with its captured output, and p
     // (6) the aggregator's contract is unchanged: first failing code, and the driver ran clean.
     assert(out.includes("DSOQ_DRIVER_RC=1"), `the aggregator must return the first failing code:\n${out}`);
     assertEquals(code, 0, `the driver itself must exit 0 (its rc is reported in-band):\n${out}`);
+    if (logPath) await Deno.remove(logPath).catch(() => {});
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -160,6 +161,7 @@ Deno.test("grj9: an OS-level spawn error's REASON reaches the captured failure o
     assert(logPath, `a per-file log path must be named:\n${out}`);
     const logged = await Deno.readTextFile(logPath);
     assert(logged.includes("ENOENT"), `the per-file log must hold the spawn reason: ${logPath}\n${logged}`);
+    if (logPath) await Deno.remove(logPath).catch(() => {});
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -207,6 +209,7 @@ Deno.test("grj9: the durable per-file log path is namespaced by the run's pid", 
         (await Deno.readTextFile(r.log)).includes("GRJ9_DELIBERATE_FAILURE"),
         `each run's log must hold its own captured output: ${r.log}`,
       );
+      await Deno.remove(r.log).catch(() => {});
     }
   } finally {
     await Deno.remove(dir, { recursive: true });
@@ -240,8 +243,9 @@ Deno.test("ulcw: TWO failing files (one exit, one TIMEOUT) are both counted, bot
   await Deno.writeTextFile(
     driver,
     `import { runSerialFiles } from ${JSON.stringify(join(ROOT, "scripts/lib/serial-phase.mjs"))};\n` +
-      `import { readdirSync } from "node:fs";\n` +
-      `const logDir = ${JSON.stringify(join(Deno.env.get("HOME") ?? "", "cap-evidence", "serial-phase-logs"))};\n` +
+      `import { readdirSync, mkdirSync } from "node:fs";\n` +
+      `const logDir = ${JSON.stringify(join(durableRoot(), "serial-phase-logs"))};\n` +
+      `mkdirSync(logDir, { recursive: true });\n` +
       `const files = [process.argv[2], process.argv[3], process.argv[4]];\n` +
       `const opts = { stdio: "pipe", cwd: ${JSON.stringify(ROOT)}, timeoutMs: 120000, perFileTimeoutMs: { [process.argv[4]]: 2000 } };\n` +
       `const runs = [];\n` +
@@ -256,11 +260,12 @@ Deno.test("ulcw: TWO failing files (one exit, one TIMEOUT) are both counted, bot
       `  const rc = runSerialFiles(files, opts);\n` +
       `  console.log = realLog;\n` +
       `  const text = captured.join("\\n");\n` +
+      `  const id = (text.match(/FAILED \\(2\\/3 failed\\) in \\d+s \\[run ([^\\]]+)\\]/) || [])[1] ?? null;\n` +
       `  runs.push({\n` +
       `    rc,\n` +
       `    out: text,\n` +
-      `    id: (text.match(/FAILED \\(2\\/3 failed\\) in \\d+s \\[run ([^\\]]+)\\]/) || [])[1] ?? null,\n` +
-      `    added: readdirSync(logDir).filter((f) => !before.has(f)),\n` +
+      `    id,\n` +
+      `    added: readdirSync(logDir).filter((f) => !before.has(f) && (id ? f.startsWith(id + "-") : false)),\n` +
       `  });\n` +
       `}\n` +
       `console.log("ULCW_RUNS=" + JSON.stringify(runs));\n`,
@@ -304,8 +309,8 @@ Deno.test("ulcw: TWO failing files (one exit, one TIMEOUT) are both counted, bot
     // (2) THE INVARIANT, per call: exactly one durable log per counted failure, EVERY one carrying that
     // call's run id - the count and its evidence are tied by one value, not inferred from a timestamp.
     for (const run of runs) {
-      assertEquals(run.added.length, 2, `one durable log per counted failure (got ${JSON.stringify(run.added)})`);
       assert(run.id, `every call must print its run id:\n${run.out}`);
+      assertEquals(run.added.length, 2, `one durable log per counted failure (got ${JSON.stringify(run.added)})`);
       for (const log of run.added) {
         assert(log.includes(run.id), `log ${log} must carry its own call's run id ${run.id}`);
       }
@@ -319,6 +324,82 @@ Deno.test("ulcw: TWO failing files (one exit, one TIMEOUT) are both counted, bot
     // (4) the aggregator's contract is unchanged: first failing code.
     assertEquals(runs[0].rc, 1, `the aggregator must return the first failing code (got ${runs[0].rc})`);
   } finally {
+    const logDir = join(durableRoot(), "serial-phase-logs");
+    for (const run of runs ?? []) {
+      for (const f of run.added ?? []) {
+        try { await Deno.remove(join(logDir, f)); } catch { /* ignore */ }
+      }
+    }
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+// chrome-agent-platform-t0vh: serial-phase-failure-attribution.test.ts:307 raced sibling
+// serial-phase tests on the shared ~/cap-evidence/serial-phase-logs/ dir under parallel load,
+// counting foreign failure logs. The added log filter must be strictly scoped to the call's
+// own runId, ignoring concurrent sibling test logs.
+Deno.test("t0vh: concurrent sibling test logs in shared logDir do not corrupt failure attribution", async () => {
+  const dir = durableDir(`t0vh-concurrency-${Deno.pid}`);
+  const logDir = join(durableRoot(), "serial-phase-logs");
+  const passFile = join(dir, "zz-t0vh-pass.test.ts");
+  const failFile = join(dir, "zz-t0vh-fail.test.ts");
+  const driver = join(dir, "zz-t0vh-driver.mjs");
+  const foreignLogName = "2026-10-06T00-00-00-000Z-p999999-r99-sibling-test.log";
+  const foreignLogPath = join(logDir, foreignLogName);
+
+  // Ensure no stale leftover from a previous crash
+  try { Deno.removeSync(foreignLogPath); } catch { /* ignore */ }
+
+  await Deno.writeTextFile(passFile, `Deno.test("fixture: passes", () => {});\n`);
+  await Deno.writeTextFile(failFile, `Deno.test("fixture: fails", () => { throw new Error("deliberate failure"); });\n`);
+  await Deno.writeTextFile(
+    driver,
+    `import { runSerialFiles } from ${JSON.stringify(join(ROOT, "scripts/lib/serial-phase.mjs"))};\n` +
+      `import { readdirSync, writeFileSync, mkdirSync } from "node:fs";\n` +
+      `import { join } from "node:path";\n` +
+      `const logDir = ${JSON.stringify(logDir)};\n` +
+      `mkdirSync(logDir, { recursive: true });\n` +
+      `const files = [process.argv[2], process.argv[3]];\n` +
+      `const opts = { stdio: "pipe", cwd: ${JSON.stringify(ROOT)}, timeoutMs: 30000 };\n` +
+      `const before = new Set(readdirSync(logDir));\n` +
+      `const captured = [];\n` +
+      `const realLog = console.log;\n` +
+      `console.log = (...a) => captured.push(a.join(" "));\n` +
+      `const rc = runSerialFiles(files, opts);\n` +
+      `// Simulate a concurrent sibling test writing to the shared directory while runSerialFiles was running:\n` +
+      `writeFileSync(join(logDir, ${JSON.stringify(foreignLogName)}), "sibling failure log\\n");\n` +
+      `console.log = realLog;\n` +
+      `const text = captured.join("\\n");\n` +
+      `const id = (text.match(/FAILED \\(1\\/2 failed\\) in \\d+s \\[run ([^\\]]+)\\]/) || [])[1] ?? null;\n` +
+      `const added = readdirSync(logDir).filter((f) => !before.has(f) && (id ? f.startsWith(id + "-") : false));\n` +
+      `console.log("T0VH_RESULT=" + JSON.stringify({ rc, id, added, wasInBefore: before.has(${JSON.stringify(foreignLogName)}) }));\n`,
+  );
+
+  let runResult: { rc: number; id: string | null; added: string[]; wasInBefore: boolean } | null = null;
+  try {
+    const driverRun = await new Deno.Command("node", {
+      args: [driver, passFile, failFile],
+      cwd: ROOT,
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    const out = decoder.decode(driverRun.stdout) + decoder.decode(driverRun.stderr);
+    const line = out.split("\n").find((l) => l.startsWith("T0VH_RESULT="));
+    assert(line, `the driver must report its result:\n${out}`);
+    runResult = JSON.parse(line.slice("T0VH_RESULT=".length));
+    assert(runResult?.id, "run id must be captured");
+    assertEquals(runResult.wasInBefore, false, "foreign log must not exist in before snapshot");
+    // Crucial assertion: exactly 1 log added for the 1 failing file; the foreign sibling log is NOT included
+    assertEquals(runResult.added.length, 1, `exactly one log for this run's failure (got ${JSON.stringify(runResult.added)})`);
+    assert(!runResult.added.includes(foreignLogName), `foreign sibling log must NOT be attributed to this run`);
+    assert(runResult.added[0].includes(runResult.id), `added log must carry this run's own id`);
+  } finally {
+    try { await Deno.remove(foreignLogPath); } catch { /* ignore */ }
+    if (runResult) {
+      for (const f of runResult.added) {
+        try { await Deno.remove(join(logDir, f)); } catch { /* ignore */ }
+      }
+    }
     await Deno.remove(dir, { recursive: true });
   }
 });
