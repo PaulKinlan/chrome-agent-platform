@@ -418,14 +418,24 @@ the literal.
 
 ---
 
-## 21. tests/source-inspecting-tests-guard.test.ts + test-reachable shared source modules (2irv)
+## 21. tests/source-inspecting-tests-guard.test.ts + test-reachable shared source modules (2irv/i0rf)
 
-- **Watches:** every repo-root/top-level-source directory walk in `tests/**`
-  requires a test guard in `ALWAYS_ON`; afpl covers nested test-support helpers.
-  For a source module **outside** `tests/` that a test imports (e.g.
-  `scripts/lib/harness-registry.ts`, `scripts/select-tests.mjs`, `build.mjs`), 2irv
-  classifies the real source file and follows `buildReverseGraph()` back to an
-  `ALWAYS_ON` consuming test. A helper cannot itself be listed as a guard.
+- **Watches:** repo-root/top-level-source directory walks in `tests/**` require
+  a guard in `ALWAYS_ON`; afpl covers nested support helpers outside fixtures.
+  For an imported module **outside** `tests/` (e.g. `scripts/lib/harness-registry.ts`,
+  `scripts/select-tests.mjs`, `build.mjs`), 2irv classifies the real source file
+  and follows `buildReverseGraph()` back to an `ALWAYS_ON` test. i0rf also
+  checks imported executable `tests/fixtures/**/*.{js,ts,mjs}` modules, without
+  scanning JSON, HTML or unimported data fixtures. Helpers/fixtures cannot be
+  listed as test guards themselves.
+- **Edge truth (i0rf):** `new URL(path, import.meta.url)` is an edge only in
+  executable source code, not in a string/template/regexp/comment quoted by a
+  test. Acorn's lexer retains edges on unsupported syntax rather than hiding
+  them. A test node TERMINATES the consumer walk: another always-on test that
+  merely reads that test's text cannot inherit its imports. A direct always-on
+  source-text read of the actual module remains a direct consumer (this is how
+  `tests/changelog-shipping.test.ts` covers `build.mjs`), but a quoted URL in a
+  synthetic source sample never becomes one.
 - **Owed by a re-anchor:** when moving a repo walk into a shared source/helper,
   ensure a consuming test is in `SOURCE_INSPECTING_GUARDS` (or make the source
   read directly by the already-always-on test); run
@@ -434,12 +444,18 @@ the literal.
   full suite via `changedWithoutCoverage`.
 - **Subject moves:** LOUD — an uncovered outside-root walker is named. The
   real-tree falsifications remove actual always-on consumers of `build.mjs` and
-  `scripts/lib/harness-registry.ts`. A second, in-memory new-helper/import-edge
-  mutant proves the rule covers a fresh module: the old tests-only audit stays
-  green while the new import-graph check names the gap, without writing a
-  transient test file during the parallel suite. Detector limits remain the existing
-  `walk/readDir/readdir/opendir` source-root patterns; an unparsed dynamic
-  import or an alias they cannot classify is not proof of absence.
+  `scripts/lib/harness-registry.ts`; i0rf needs to remove only the two tests
+  that execute the registry, not `substring-pin-honesty` (it only quoted a URL
+  in a synthetic template). An in-memory source mutation of the **real**
+  test-imported `tests/fixtures/build-once.mjs` proves an executable fixture
+  walk is caught without creating a transient test file in the parallel suite.
+- **Known limit (i0rf N3):** a shipped entry such as `extension/privacy/privacy.js`
+  is bundled into `extension/dist/privacy.bundle.js` but is not a key in the
+  test reverse-import graph. `changedWithoutCoverage` does fail an edit of the
+  source closed to the full suite; that does NOT mean this scanner can see a
+  repo walk in the source. Generated bundles are excluded. Custom walk names,
+  unparsed dynamic imports, and source-root aliases the classifier cannot
+  recognize also remain outside its proof.
 
 ---
 
