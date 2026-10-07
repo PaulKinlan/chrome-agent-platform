@@ -196,3 +196,96 @@ Deno.test("rpc-cache: mutating flows are never served from cache", async () => {
   assertEquals(r1, { ok: true, runs: 1 });
   assertEquals(r2, { ok: true, runs: 2 });
 });
+
+Deno.test("rpc-cache: every board progress event invalidates both cached board reads without polling", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/agent-board.js", import.meta.url));
+  const emitted = [...source.matchAll(/\bfire\(\{ type: "(board-[^"]+)"/g)].map((match) => match[1]);
+  assertEquals(emitted.length, 6, "a newly emitted board event requires an explicit invalidation review");
+  for (const event of emitted) {
+    clearRpcCache();
+    let calls = 0;
+    const send = async () => ({ ok: true, revision: ++calls });
+    await cachedRpc("board.list", {}, { send });
+    await cachedRpc("board.messages", { limit: 5 }, { send });
+    assertEquals(calls, 2);
+    handleBroadcastEvent(event);
+    assertEquals(calls, 2, `${event} must not itself add a boot/idle RPC`);
+    const board = await cachedRpc("board.list", {}, { send });
+    const messages = await cachedRpc("board.messages", { limit: 5 }, { send });
+    assertEquals(board.revision, 3, `${event} must invalidate stale jobs`);
+    assertEquals(messages.revision, 4, `${event} must invalidate stale messages`);
+  }
+});
+
+Deno.test("rpc-cache: board.message write invalidates both board reads even on the same page", async () => {
+  clearRpcCache();
+  let calls = 0;
+  const send = async (type: string) => ({ ok: true, type, revision: ++calls });
+  await cachedRpc("board.list", {}, { send });
+  await cachedRpc("board.messages", { limit: 5 }, { send });
+  await cachedRpc("board.message", { to: "broadcast", body: "New task" }, { send });
+  assertEquals((await cachedRpc("board.list", {}, { send })).revision, 4);
+  assertEquals((await cachedRpc("board.messages", { limit: 5 }, { send })).revision, 5);
+});
+
+Deno.test("rpc-cache: a board event detaches an in-flight stale read; its late result cannot replace fresh cache", async () => {
+  clearRpcCache();
+  const pending: Array<(value: { ok: true; revision: number }) => void> = [];
+  const send = () => new Promise<{ ok: true; revision: number }>((resolve) => pending.push(resolve));
+  const oldRead = cachedRpc("board.list", {}, { send });
+  await Promise.resolve(); // send() starts in a microtask
+  assertEquals(pending.length, 1);
+  handleBroadcastEvent("board-job-posted");
+  const freshRead = cachedRpc("board.list", {}, { send });
+  await Promise.resolve();
+  assertEquals(pending.length, 2, "refresh after an event must not join the old in-flight snapshot");
+  pending[1]({ ok: true, revision: 2 });
+  assertEquals((await freshRead).revision, 2);
+  pending[0]({ ok: true, revision: 1 });
+  assertEquals((await oldRead).revision, 1, "existing consumers still settle with their own earlier reply");
+  assertEquals((await cachedRpc("board.list", {}, { send })).revision, 2,
+    "late pre-event response must not overwrite or recache the post-event snapshot");
+});
+
+Deno.test("rpc-cache: an early stale reply cannot delete the newer in-flight board read", async () => {
+  clearRpcCache();
+  const pending: Array<(value: { ok: true; revision: number }) => void> = [];
+  const send = () => new Promise<{ ok: true; revision: number }>((resolve) => pending.push(resolve));
+  const oldRead = cachedRpc("board.list", {}, { send });
+  await Promise.resolve();
+  handleBroadcastEvent("board-job-completed");
+  const newRead = cachedRpc("board.list", {}, { send });
+  await Promise.resolve();
+  assertEquals(pending.length, 2);
+  pending[0]({ ok: true, revision: 1 });
+  await oldRead;
+  assertEquals(getRpcCacheStats().inFlightCount, 1, "stale settlement must preserve its live successor");
+  const joinedRead = cachedRpc("board.list", {}, { send });
+  await Promise.resolve();
+  assertEquals(pending.length, 2, "a third caller must join the NEW flight, not start a third RPC");
+  pending[1]({ ok: true, revision: 2 });
+  assertEquals((await newRead).revision, 2);
+  assertEquals((await joinedRead).revision, 2);
+  assertEquals((await cachedRpc("board.list", {}, { send })).revision, 2);
+});
+
+Deno.test("rpc-cache: board.messages is a read and board events leave unrelated in-flight reads coalesced", async () => {
+  clearRpcCache();
+  let boardCalls = 0;
+  const boardSend = async () => ({ ok: true, revision: ++boardCalls });
+  await cachedRpc("board.list", {}, { send: boardSend });
+  await cachedRpc("board.messages", { limit: 5 }, { send: boardSend });
+  await cachedRpc("board.messages", { limit: 5 }, { send: boardSend });
+  assertEquals((await cachedRpc("board.list", {}, { send: boardSend })).revision, 1,
+    "cached board.messages READ must not flush cached board.list");
+  let finish!: (value: { ok: true }) => void;
+  let otherCalls = 0;
+  const otherSend = () => { otherCalls++; return new Promise<{ ok: true }>((resolve) => { finish = resolve; }); };
+  const first = cachedRpc("agent.directory", {}, { send: otherSend });
+  await Promise.resolve();
+  handleBroadcastEvent("board-job-posted");
+  const second = cachedRpc("agent.directory", {}, { send: otherSend });
+  assertEquals(otherCalls, 1, "board invalidation must not restart unrelated in-flight agent reads");
+  finish({ ok: true });
+  await Promise.all([first, second]);
+});
