@@ -62,7 +62,8 @@ const WRITE_INVALIDATIONS = [
   { match: /^(?:tasks?\.(?:create|update|delete|pause|resume|cancel))/, prefixes: ["tasks.", "task."] },
   { match: /^(?:provider\.(?:set|save|delete))/, prefixes: ["provider."] },
   { match: /^(?:asset\.(?:create|delete|update))/, prefixes: ["asset.", "artifacts."] },
-  { match: /^(?:board\.(?:post|claim))/, prefixes: ["board."] },
+  // Only writes: board.messages is a cached READ, not board.message.
+  { match: /^board\.(?:post|claim|message|complete|fail)$/, prefixes: ["board."] },
   { match: /^(?:run\.(?:retry|dismissFailed|dismissedFailed))/, prefixes: ["run."] },
 ];
 
@@ -84,6 +85,14 @@ const BROADCAST_INVALIDATIONS = {
   "tasks-changed": ["task.", "tasks."],
   "commands-changed": ["command.list"],
   "settings-changed": ["settings."],
+  // A board event is the only live repaint trigger; a TTL hit here would
+  // freeze the Jobs panel and its open-count hint until another event arrives.
+  "board-job-posted": ["board."],
+  "board-job-claimed": ["board."],
+  "board-job-completed": ["board."],
+  "board-job-failed": ["board."],
+  "board-message-posted": ["board."],
+  "board-job-woke": ["board."],
 };
 
 let lastChrome = typeof chrome !== "undefined" ? chrome : null;
@@ -120,12 +129,16 @@ export function cacheKey(type, payload = {}) {
 export function invalidateRpcCache(prefix = "") {
   if (!prefix) {
     cache.clear();
+    inFlight.clear();
     return;
   }
   for (const key of cache.keys()) {
-    if (key.startsWith(prefix)) {
-      cache.delete(key);
-    }
+    if (key.startsWith(prefix)) cache.delete(key);
+  }
+  // Do not let the next repaint join a read started BEFORE the broadcast.
+  // Existing callers keep their promise; only future reads start fresh.
+  for (const key of inFlight.keys()) {
+    if (key.startsWith(prefix)) inFlight.delete(key);
   }
 }
 
@@ -154,6 +167,9 @@ export function handleBroadcastEvent(type) {
 // or through progress subscriptions, avoiding duplicate onMessage listeners in SW.
 
 function checkWriteInvalidation(type) {
+  // Some legacy write matchers match an entire route prefix (settings.*).
+  // A read must never evict its own in-flight request and defeat coalescing.
+  if (READ_ONLY_ROUTES.has(type)) return;
   for (const inv of WRITE_INVALIDATIONS) {
     if (inv.match.test(type)) {
       for (const p of inv.prefixes) {
@@ -241,17 +257,21 @@ export function cachedRpc(type, payload = {}, options = {}) {
   const promise = Promise.resolve()
     .then(() => send(type, payload, timeoutMs))
     .then((result) => {
-      inFlight.delete(key);
-      if (result && result.ok !== false) {
-        cache.set(key, {
-          value: result,
-          expiresAt: Date.now() + ttlMs,
-        });
+      // Invalidation may have evicted this flight and begun a newer one.
+      // Never let the old response delete or overwrite its successor.
+      if (inFlight.get(key) === promise) {
+        inFlight.delete(key);
+        if (result && result.ok !== false) {
+          cache.set(key, {
+            value: result,
+            expiresAt: Date.now() + ttlMs,
+          });
+        }
       }
       return result;
     })
     .catch((err) => {
-      inFlight.delete(key);
+      if (inFlight.get(key) === promise) inFlight.delete(key);
       throw err;
     });
 

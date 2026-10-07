@@ -6,7 +6,7 @@
 //   and the hub lists every prior thread (auto-named).
 
 import { send } from "../lib/messages.js";
-import { handleBroadcastEvent } from "../shared/rpc-cache.js";
+import { handleBroadcastEvent, invalidateRpcCache } from "../shared/rpc-cache.js";
 import { saveArtifactToDisk } from "../lib/artifact-export.js";
 import { harnessMarkEl } from "../shared/harness-marks.js";
 import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, skillAsTemplate, templatePrefill } from "../lib/agent-templates.js";
@@ -1832,24 +1832,28 @@ function renderJobsBoard() {
   const jobsSection = document.getElementById("jobs-section") || document.getElementById("work-col");
   const workCol = document.getElementById("work-col");
   if (!host) return;
+  const syncJobsBoardShell = () => {
+    const hint = document.getElementById("jobs-count");
+    if (hint && jobsBoardEl) hint.textContent = jobsBoardEl.summary;
+    const emptyStr = String(!jobsBoardEl?.summary);
+    host.setAttribute("data-empty", emptyStr);
+    if (workList) workList.setAttribute("data-empty", emptyStr);
+    if (jobsSection) jobsSection.setAttribute("data-empty", emptyStr);
+    if (workCol) workCol.setAttribute("data-empty", emptyStr);
+  };
   if (!jobsBoardEl) {
     jobsBoardEl = document.createElement("jobs-board");
+    // A trailing refresh can paint AFTER the first refresh() promise settles.
+    // Keep the hint and section visibility coupled to every actual paint, not
+    // just the first request in a burst of board progress events.
+    jobsBoardEl.addEventListener("jobs-change", syncJobsBoardShell);
     // The Jobs section is ALWAYS visible (CAP-FB-20260831-BOARD-VISIBILITY-01):
     // the owner can always see the shared work queue, empty state included, so
     // it is NOT gated behind noteHubData like Timeline/Agents. The board's own
     // honest empty state carries the "nothing yet" message.
     host.replaceChildren(jobsBoardEl);
   }
-  jobsBoardEl?.refresh?.().then(() => {
-    const hint = document.getElementById("jobs-count");
-    if (hint && jobsBoardEl) hint.textContent = jobsBoardEl.summary;
-    const hasJobs = Boolean(jobsBoardEl.summary);
-    const emptyStr = String(!hasJobs);
-    host.setAttribute("data-empty", emptyStr);
-    if (workList) workList.setAttribute("data-empty", emptyStr);
-    if (jobsSection) jobsSection.setAttribute("data-empty", emptyStr);
-    if (workCol) workCol.setAttribute("data-empty", emptyStr);
-  }).catch(() => {});
+  jobsBoardEl.refresh?.().then(syncJobsBoardShell).catch(() => {});
 }
 
 // LIVE timeline (CAP-FB-20260828-HUB-AS-TIMELINE-01, replacing the old Recent
@@ -1903,6 +1907,9 @@ const subscribeAmbientProgress = () => {
     if (!ev || typeof ev !== "object") return;
     if (ev.type === "disconnect") {
       subscribeAmbientProgress();
+      // A missed board event cannot invalidate the cache itself. Evict any
+      // snapshot taken before the port dropped before the reconnect re-read.
+      invalidateRpcCache("board.");
       // Events during the disconnect window are lost — re-read the surfaces
       // once on reconnect so nothing settled while we were deaf stays stale.
       scheduleRunLogRefresh();
@@ -1913,7 +1920,13 @@ const subscribeAmbientProgress = () => {
     if (["tool-call", "tool-result", "done", "error"].includes(ev.type)) scheduleRunLogRefresh();
     // Board changes re-render the sidebar section + the Jobs panel live
     // (post/claim/settle/message).
-    if (typeof ev.type === "string" && ev.type.startsWith("board-")) { refreshBoard(); renderJobsBoard(); }
+    if (typeof ev.type === "string" && ev.type.startsWith("board-")) {
+      // Invalidate synchronously before this subscriber repaints: never join
+      // pre-event cached reads, regardless of progress-listener install order.
+      handleBroadcastEvent(ev.type);
+      refreshBoard();
+      renderJobsBoard();
+    }
     // A settled job's result was delivered into its poster's thread — if that
     // thread is the one open right now, re-read it so the result bubble
     // appears without a reopen (the delivery is committed by the claimant's
