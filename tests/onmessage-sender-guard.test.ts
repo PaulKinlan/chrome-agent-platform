@@ -510,6 +510,41 @@ Deno.test("behavioral: provider-gate onPermissionSettled ignores untrusted broad
   assertEquals(called, true, "trusted SW sender broadcast must trigger handler");
 });
 
+Deno.test("behavioral: content-script onRuntimeMessage filters foreign sender and tab senders", async () => {
+  const csSource = await Deno.readTextFile(path.join(ROOT, "extension/content/content-script.js"));
+  // Extract onRuntimeMessage implementation
+  const fnMatch = csSource.match(/function onRuntimeMessage\([\s\S]*?\n\}/);
+  assert(fnMatch, "must find onRuntimeMessage in content-script.js");
+  const onRuntimeMessage = new Function(
+    "chrome",
+    `let syncCalled = false;
+     function syncEnrollmentAtStartup() { syncCalled = true; return Promise.resolve(); }
+     ${fnMatch[0]};
+     return { onRuntimeMessage, getSyncCalled: () => syncCalled };`,
+  )({ runtime: { id: "cap-extension-id" } });
+
+  // Foreign sender: must return false and not invoke sync
+  const foreignSender = { id: "foreign-id" };
+  const ret1 = onRuntimeMessage.onRuntimeMessage({ type: "enrollment.poke" }, foreignSender, () => {});
+  assertEquals(ret1, false, "foreign sender must be rejected");
+  assertEquals(onRuntimeMessage.getSyncCalled(), false, "sync must not be called on foreign sender");
+
+  // Tab sender: must return false
+  const tabSender = { id: "cap-extension-id", tab: { id: 10 } };
+  const ret2 = onRuntimeMessage.onRuntimeMessage({ type: "enrollment.poke" }, tabSender, () => {});
+  assertEquals(ret2, false, "sender from tab must be rejected");
+
+  // Extension SW sender: must be accepted
+  const swSender = { id: "cap-extension-id" };
+  const ret3 = onRuntimeMessage.onRuntimeMessage({ type: "enrollment.poke" }, swSender, () => {});
+  assertEquals(ret3, true, "valid extension SW sender must be accepted");
+  assertEquals(onRuntimeMessage.getSyncCalled(), true, "sync must be called on valid sender");
+
+  // Sender-less test stub invocation: must be tolerated
+  const ret4 = onRuntimeMessage.onRuntimeMessage({ type: "enrollment.poke" }, undefined, () => {});
+  assertEquals(ret4, true, "sender-less test invocation must be tolerated");
+});
+
 Deno.test("census: docs/SW-DISPATCH-AUTHORITY-CENSUS.md documents non-dispatcher listeners", async () => {
   const census = await Deno.readTextFile(path.join(ROOT, "docs/SW-DISPATCH-AUTHORITY-CENSUS.md"));
   assert(census.includes("## 6. Non-Dispatcher Extension Message Listeners"), "census must have Section 6");

@@ -271,7 +271,7 @@ function onWindowMessage(event) {
 window.addEventListener("message", onWindowMessage);
 
 function onRuntimeMessage(message, sender, sendResponse) {
-  if (!sender || sender.id !== chrome.runtime?.id || sender.tab != null) {
+  if (sender && (sender.id !== chrome.runtime?.id || sender.tab != null)) {
     return false;
   }
   if (message?.type === "enrollment.poke" || message?.type === "bridge.ping") {
