@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.586] — 2026-10-07
+- The sidebar no longer flips back after you collapse it during startup.
+
 ## [0.3.585] — 2026-10-07
 - Content fetched from the web is now clearly marked as untrusted before scripts or Python tools can read it.
 
