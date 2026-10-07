@@ -375,12 +375,13 @@ try {
       "zod/v4 (the v4 implementation shipped inside zod@3)",
     ).replace(/\.cjs$/, ".js");
     // chrome-agent-platform-63et: @modelcontextprotocol/sdk is a Deno-store
-    // package (package.json pins 1.30.0; agent-do also depends on it). Deno
+    // package (package.json pins 1.31.0; agent-do also depends on it). Deno
     // instantiates it ONCE PER PEER CONTEXT: the root context binds zod@3.25.76
-    // (`@modelcontextprotocol+sdk@1.30.0`), agent-do's context binds zod@4.4.3
-    // (`…@1.30.0_1`). Without a pin esbuild bundled BOTH — the same SDK
+    // (`@modelcontextprotocol+sdk@1.31.0`), agent-do's context binds zod@4.4.3
+    // (`…@1.31.0_1`). Without a pin esbuild bundled BOTH — the same SDK
     // version twice, plus zod-to-json-schema twice and the whole zod@4 major
-    // behind the second copy (chrome-agent-platform-9epn.3, 2026-10-01 audit).
+    // behind the second copy (chrome-agent-platform-9epn.3, 2026-10-01 audit;
+    // upgraded to 1.31.0 for GHSA-6qxp-vccf-f47h in chrome-agent-platform-1grt).
     //
     // The canonical instance is chosen by its ZOD PEER, not by readdir order:
     // the one whose node_modules/zod is the extension's own zod line (the
