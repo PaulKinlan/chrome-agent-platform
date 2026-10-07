@@ -186,7 +186,7 @@ Deno.test("activity explorer redacts historical values before render + copy", ()
     .flatMap((m) => m[1].split(","))
     .map((s) => s.trim())
     .filter(Boolean);
-  const importsRedactSecrets = specifiers.some((s) => s.split(/\s+as\s+/).map((p) => p.trim()).includes("redactSecrets"));
+  const importsRedactSecrets = specifiers.some((s) => s.split(/\s+as\s+/)[0].trim() === "redactSecrets");
   assert(importsRedactSecrets, "the canonical redactor is imported from lib/pure.js");
   assert(src.includes("redactSecrets(parsed.value)"), "_detailBody redacts parsed values before tree render + copy");
   assert(src.includes("redactSecrets(p.value)"), "the summary-line args preview is redacted too");
