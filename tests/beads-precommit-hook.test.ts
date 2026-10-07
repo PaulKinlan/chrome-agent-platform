@@ -51,10 +51,11 @@ for a in "$@"; do [ "$a" = "--path" ] && { echo "Error: unknown flag: --path" >&
 [ "$1" = "export" ] || exit 2
 [ -n "$FAKE_BD_FAIL" ] && { echo "database locked (fake)" >&2; exit 1; }
 [ -n "$FAKE_BD_EMPTY" ] && exit 0
+[ -n "$FAKE_BD_REQUIRE_ALL" ] && [ "$2" != "--all" ] && { echo "export must use --all (fake)" >&2; exit 2; }
 printf '%s' "$FAKE_BD_OUT"
 `;
 
-type Opts = { fail?: boolean; empty?: boolean; out?: string; checkManual?: boolean; missingGuardScript?: boolean; onDiskExtra?: boolean; commitIn?: "worktree" | "primary" };
+type Opts = { fail?: boolean; empty?: boolean; out?: string; checkManual?: boolean; missingGuardScript?: boolean; onDiskExtra?: boolean; diskMissing?: boolean; diskEmpty?: boolean; approved?: string; decision?: string; requireAll?: boolean; commitIn?: "worktree" | "primary" };
 
 async function scenario(hookText: string, opts: Opts = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "cap-ufrr-"));
@@ -81,6 +82,9 @@ async function scenario(hookText: string, opts: Opts = {}) {
       FAKE_BD_OUT: opts.out ?? FRESH,
       ...(opts.fail ? { FAKE_BD_FAIL: "1" } : {}),
       ...(opts.empty ? { FAKE_BD_EMPTY: "1" } : {}),
+      ...(opts.requireAll ? { FAKE_BD_REQUIRE_ALL: "1" } : {}),
+      ...(opts.approved ? { CAP_BEADS_EXPORT_APPROVED_REMOVALS: opts.approved } : {}),
+      ...(opts.decision ? { CAP_BEADS_EXPORT_DECISION_BEAD: opts.decision } : {}),
     };
     const git = (cwd: string, ...args: string[]) => spawnSync("git", args, { cwd, env, encoding: "utf8" });
     const ok = (r: ReturnType<typeof git>, what: string) => {
@@ -107,6 +111,8 @@ async function scenario(hookText: string, opts: Opts = {}) {
 
     const where = opts.commitIn === "primary" ? primary : wt;
     if (opts.onDiskExtra) await writeFile(path.join(where, ".beads", "issues.jsonl"), BASE + '{"_type":"issue","id":"disk-only"}\n');
+    if (opts.diskMissing) await rm(path.join(where, ".beads", "issues.jsonl"));
+    if (opts.diskEmpty) await writeFile(path.join(where, ".beads", "issues.jsonl"), "");
     const manualCheck = opts.checkManual
       ? spawnSync("node", [path.join(where, "scripts", "check-beads-export-divergence.mjs")], { cwd: where, env, encoding: "utf8" })
       : null;
@@ -215,6 +221,37 @@ Deno.test("vf69: an older worktree without the checker commits without refreshin
   assertEquals(s.worktreeDisk, BASE);
   assert(/divergence check unavailable/.test(s.commit.stderr), s.commit.stderr);
   assertEquals(s.litter, []);
+});
+
+Deno.test("vf69: only an exact owner-decision allowlist permits a deliberate missing ID", async () => {
+  const approved = await scenario(await referenceHook(), {
+    out: '{"_type":"issue","id":"other-1"}\n', approved: "base-1", decision: "chrome-agent-platform-vf69",
+  });
+  assertEquals(approved.commit.status, 0, approved.commit.stderr);
+  assertEquals(approved.worktreeHead, '{"_type":"issue","id":"other-1"}\n');
+  assert(/chrome-agent-platform-vf69/.test(approved.commit.stderr), approved.commit.stderr);
+  const noDecision = await scenario(await referenceHook(), { out: '{"_type":"issue","id":"other-1"}\n', approved: "base-1" });
+  assert(noDecision.commit.status !== 0, "an ID without a recorded owner-decision bead cannot override the guard");
+  assertEquals(noDecision.worktreeHead, BASE);
+  const wrongId = await scenario(await referenceHook(), { out: '{"_type":"issue","id":"other-1"}\n', approved: "not-base-1", decision: "chrome-agent-platform-vf69" });
+  assert(wrongId.commit.status !== 0, "a different ID cannot bypass this missing ID");
+  assertEquals(wrongId.worktreeHead, BASE);
+});
+
+Deno.test("vf69: missing/empty on-disk export is regenerated after checking HEAD", async () => {
+  for (const opts of [{ diskMissing: true }, { diskEmpty: true }] as Opts[]) {
+    const s = await scenario(await referenceHook(), { ...opts, checkManual: true });
+    assertEquals(s.manualCheck?.status, 0, JSON.stringify(opts) + ": " + s.manualCheck?.stderr);
+    assertEquals(s.commit.status, 0, JSON.stringify(opts) + ": " + s.commit.stderr);
+    assertEquals(s.worktreeHead, FRESH);
+    assertEquals(s.worktreeDisk, FRESH);
+  }
+});
+
+Deno.test("vf69: hook and manual checker compare the same --all export scope", async () => {
+  const s = await scenario(await referenceHook(), { requireAll: true });
+  assertEquals(s.commit.status, 0, s.commit.stderr);
+  assertEquals(s.worktreeHead, FRESH);
 });
 
 Deno.test("ufrr harness honesty: the pre-ufrr hook text reproduces the defect here — bd runs in the PRIMARY, the primary is dirtied, the worktree commits a fresh export it does not have on disk", async () => {

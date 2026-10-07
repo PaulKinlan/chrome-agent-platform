@@ -89,6 +89,9 @@ git checkout HEAD -- .beads/issues.jsonl
 # Before any manual bd export overwrites that committed snapshot, check for
 # committed IDs missing from the canonical DB. Stop and investigate if it fails;
 # NEVER bulk-import an old passive export to make this check green (vf69).
+# If the deletion is intentional, the project coordinator must record the exact
+# IDs + snapshot ref on a decision bead and use the one-commit exact-ID override
+# documented in docs/BEADS-EXPORT-DIVERGENCE.md; do not bypass all hooks.
 node scripts/check-beads-export-divergence.mjs
 #    - CHANGELOG.md: union-merge bodies, place new version at top, preserve all prior bullets
 #    - Version files: update package.json, package-lock.json, extension/manifest.json,

@@ -10,7 +10,9 @@ From the worktree being committed, run
 `node scripts/check-beads-export-divergence.mjs`. It compares the union of
 issue IDs in `HEAD:.beads/issues.jsonl` and the on-disk export against
 `bd export --all`; it prints missing IDs and exits nonzero if one would
-disappear. It makes no changes. The tracked
+disappear. It makes no changes. A missing or empty *on-disk* export is
+recoverable from the committed snapshot; a missing, empty, or malformed
+*candidate* export is not. The tracked
 `scripts/git-hooks/pre-commit` checks its already-generated candidate before
 replacing/staging the export. On an older branch without the checker (or a
 machine without Node) it skips the refresh, warns, and allows the commit;
@@ -27,6 +29,28 @@ Only after that decision should an individual record be recovered using
 `bd import <single-record.jsonl>` and confirmed with `bd show` and
 `bd export --all`. Never treat the committed export as an automatically
 correct replacement for the canonical DB.
+
+**Intentional deletion escape hatch (owner: `chrome-agent-platform-coord`):**
+The project coordinator must record the deletion rationale, old Git snapshot
+ref and exact removed issue IDs as a comment on a decision bead first. For
+*that one commit only*, provide both environment variables inline to the
+commit command (or inline to a manual pre-export check):
+
+```sh
+CAP_BEADS_EXPORT_APPROVED_REMOVALS=chrome-agent-platform-abc,chrome-agent-platform-def \
+CAP_BEADS_EXPORT_DECISION_BEAD=chrome-agent-platform-DECISION-ID \
+git commit -m 'Record coordinator-approved Beads removal'
+```
+
+The checker requires the allowlist to equal **exactly** the IDs absent from the
+canonical DB and a nonempty decision-bead ID; it prints both to stderr for
+review. It does not query the bead to authenticate the human decision — the
+coordinator must make and verify that decision. A missing/partial/stale list,
+or a missing decision reference, still blocks the commit. Never export this
+setting persistently in a shell, use blanket `--no-verify`, disable the hook,
+or import all historical issues just to make the check pass. On branches
+without the checker or Node, the shared hook skips refreshing the passive
+export and warns rather than silently erasing IDs.
 
 ## 2026-10-07 incident inventory
 

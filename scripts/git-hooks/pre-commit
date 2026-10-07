@@ -28,7 +28,7 @@ fi
 tmp=".beads/.issues.jsonl.$$.tmp"
 err="$tmp.err"
 trap 'rm -f "$tmp" "$err"' EXIT
-if bd export --quiet > "$tmp" 2> "$err" && [ -s "$tmp" ]; then
+if bd export --all > "$tmp" 2> "$err" && [ -s "$tmp" ]; then
   # A passive export can be stale, but overwriting it must not silently erase
   # the last visible copy of an issue missing from the canonical DB (vf69).
   node scripts/check-beads-export-divergence.mjs --candidate "$tmp" || exit 1

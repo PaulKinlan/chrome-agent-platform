@@ -148,8 +148,11 @@ run `node scripts/bump-version.mjs patch --user-note "<what the user gets>"`.
   the canonical `bd export --all` and fails if any would disappear. The reference
   pre-commit hook checks its candidate export before replacing the file, but hooks may not
   be installed in the shared git directory. A missing ID is an investigation,
-  **not** permission to bulk-import the stale export into the authoritative DB;
-  see `docs/BEADS-EXPORT-DIVERGENCE.md` (vf69).
+  **not** permission to bulk-import the stale export into the authoritative DB.
+  For an intentional deletion, the project coordinator records the exact IDs and
+  decision on a bead, then uses the single-command exact-ID reconciliation
+  override in `docs/BEADS-EXPORT-DIVERGENCE.md` (vf69); never bypass the hook
+  wholesale.
 
 ### Epics and breakdown (beads best practice)
 A feature is not one bead. Break work down like this:
