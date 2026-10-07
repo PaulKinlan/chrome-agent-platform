@@ -565,7 +565,7 @@ input:focus, select:focus, textarea:focus {
   color: var(--btn-fg);
   font-weight: 600;
 }
-.usage-cost-note { font-size: 11px; }
+.usage-cost-note { font-size: var(--text-xs, 12px); }
 .usage-cards {
   display: flex;
   gap: 20px;
