@@ -32,7 +32,7 @@ changes that never updated the gate, all fixed 2026-08-27 under
 2. **`debugger` removed** (owner decision, Q17 resolved). `0.2.286` had re-declared it
    in `optional_permissions` for the CDP power tools, reversing its deliberate removal
    at `c5ccb2d0`. The permission, the four CDP tools, the capability row and the
-   Settings label are gone; the browser-tool count is **138** (188 capability rows total in `tests/chrome-tool-capabilities.test.ts:71`). `tests/chrome-tools-t12.test.ts` carries a
+   Settings label are gone; the browser-tool count is **139** (191 capability rows total in `tests/chrome-tool-capabilities.test.ts:68`). `tests/chrome-tools-t12.test.ts` carries a
    removal guard so it cannot come back by accident — re-adding it must be a
    deliberate act. The user-scripts half of T12 is untouched.
 3. **The capability count is now derived**, not hard-coded. The assertion read

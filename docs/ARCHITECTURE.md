@@ -294,9 +294,9 @@ failures hand the use back (retryable), dispatch failures do too; search
 authorizes nothing (docs/tool-platform-architecture.md §"Live bounded lazy
 protocol" — mechanism current).
 Catalog sources (lazy-tool-protocol.js:896-907 summary): builtin, browser,
-management, bundled-wasm, webmcp, provider-server, mcp. All 138 browser tools +
-50 management tools are rows in `CHROME_TOOL_CAPABILITY_TABLE` (188 rows;
-tests/chrome-tool-capabilities.test.ts:67-72).
+management, bundled-wasm, webmcp, provider-server, mcp. All 139 browser tools +
+52 management tools are rows in `CHROME_TOOL_CAPABILITY_TABLE` (191 rows;
+tests/chrome-tool-capabilities.test.ts:68-74).
 
 ### 3.2 Pipelines
 `run_pipeline` (`extension/lib/tool-pipeline.js`) chains up to 200 existing tools

@@ -195,7 +195,7 @@ approving its use rather than pre-registering the site. This is the biggest gap 
 what the product IS and how it presents itself, and it is not currently tracked as
 anything.
 
-**The two tool families are invisible.** The tool library is one flat list of 138 browser tools (plus 50 management tools, 188 capability rows total in `tests/chrome-tool-capabilities.test.ts:71`).
+**The two tool families are invisible.** The tool library is one flat list of 139 browser tools (plus 52 management tools, 191 capability rows total in `tests/chrome-tool-capabilities.test.ts:68`).
 If "run the browser" and "do the work" are genuinely different halves, saying so helps a
 person predict what they can ask for — which is the actual problem a long unpartitioned list
 creates. Right now the only grouping is by Chrome API.
