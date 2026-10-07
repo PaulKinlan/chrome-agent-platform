@@ -48,7 +48,13 @@ Deno.test("rkrn: a stale sidebar restore cannot undo a persisted manual collapse
     const wait = async (label: string, script: string, maxMs = 12000) => {
       const deadline = Date.now() + maxMs;
       while (Date.now() < deadline) {
-        if (await evaluate(script)) return;
+        try {
+          if (await evaluate(script)) return;
+        } catch (error) {
+          // Page.reload briefly destroys the old execution context. Other
+          // script errors are still real failures, not reasons to keep waiting.
+          if (!/execution context|navigat/i.test(String(error))) throw error;
+        }
         await new Promise((r) => setTimeout(r, 100));
       }
       throw new Error(`rkrn: timed out waiting for ${label}`);
@@ -86,6 +92,35 @@ Deno.test("rkrn: a stale sidebar restore cannot undo a persisted manual collapse
     assertEquals(afterRelease.collapsed, true, "stale hydration must not undo the user's collapse");
     assertEquals(afterRelease.expanded, "false", "toggle ARIA must still reflect the user's collapse");
     assertEquals(afterRelease.durability, beforeRelease.durability, "restoration must not hide saved-choice durability");
+
+    // Narrow toggle opens a TRANSIENT off-canvas overlay; it does not change
+    // the saved collapsed preference. Holding a stored-true boot reply across
+    // that click must still hydrate the saved choice when resizing wide.
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 360, height: 700, deviceScaleFactor: 1, mobile: false }, sid);
+    await cdp.send("Page.reload", {}, sid);
+    await wait("narrow document and held saved-true reply", `document.readyState === 'complete' &&
+      window.matchMedia('(max-width: 599.98px)').matches &&
+      window.__rkrnHydration?.heldCount === 1 && window.__rkrnHydration?.replyHeld === true`);
+    const narrowInitial = await state();
+    assertEquals(narrowInitial.shim.reply?.["hub.sidebarCollapsed"], true, "saved collapse from wide arm must be hydrated");
+    await evaluate(`document.getElementById('side-toggle').click(); true`);
+    const overlay = await evaluate(`document.getElementById('side')?.classList.contains('overlay')`);
+    assertEquals(overlay, true, "narrow click must open the overlay, not persist a new rail choice");
+    assertEquals(await evaluate(`window.__releaseSidebarHydration()`), true);
+    await evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false }, sid);
+    await wait("wide viewport after closing transient overlay", `!window.matchMedia('(max-width: 599.98px)').matches &&
+      document.getElementById('side')?.classList.contains('overlay') === false`);
+    await evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+    const afterNarrowToWide = await state();
+    const savedAfterNarrow = await evaluate(`new Promise(resolve => chrome.runtime.sendMessage({type:'kv.get',keys:'hub.sidebarCollapsed'}, resolve))`);
+    await Deno.writeTextFile(`${evidence}/narrow-state.json`, JSON.stringify({ narrowInitial, overlay, afterNarrowToWide, savedAfterNarrow }, null, 2));
+    const narrowShot = await cdp.screenshot(sid, { timeoutMs: 8000 });
+    assert(narrowShot, "capture sidebar after narrow overlay returns to wide viewport");
+    await Deno.writeFile(`${evidence}/narrow-to-wide.png`, narrowShot);
+    assertEquals(afterNarrowToWide.collapsed, true, "transient narrow overlay must not erase saved collapse on wide resize");
+    assertEquals(afterNarrowToWide.expanded, "false");
+    assertEquals(savedAfterNarrow?.["hub.sidebarCollapsed"], true, "transient overlay must not overwrite the stored preference");
   } finally {
     cdp?.close();
     if (chrome) await teardownChrome(chrome, profile);

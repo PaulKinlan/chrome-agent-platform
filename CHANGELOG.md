@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.584] — 2026-10-07
+- The sidebar no longer flips back after you collapse it during startup.
+
 ## [0.3.583] — 2026-10-07
 - Add an on-device ChaCha20-Poly1305 encryption tool and stop collapsed sidebar sections from catching an extra Tab stop.
 
