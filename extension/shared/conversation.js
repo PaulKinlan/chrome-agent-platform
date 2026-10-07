@@ -296,9 +296,9 @@ export function createStreamProjector(container) {
       const b = bubble;
       bubble = null;
       step = null;
+      b.removeAttribute("streaming");
       if (typeof text === "string" && text) b.setAttribute("content", text);
       else if (text === "") b.remove();
-      else b.removeAttribute("streaming"); // keep what streamed (an aborted run)
       return b;
     },
     get active() { return Boolean(bubble && bubble.isConnected); },

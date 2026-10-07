@@ -2,6 +2,8 @@
 
 ## [0.3.591] — 2026-10-07
 - The Jobs board now shows new jobs, messages, open counts, and completed results as soon as agents update them.
+- Streamed assistant bubbles properly complete and clear their active streaming state when the final answer settles.
+- Add an explicit loopback-only tokenless option for the ACP bridge, correct the ACP token guidance, and show the real bridge-refusal reason.
 
 ## [0.3.590] — 2026-10-07
 - Fix a long cold-boot stall by persisting the run-log WAL marker and letting read paths share the lock.

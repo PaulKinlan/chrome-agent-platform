@@ -140,9 +140,9 @@ Deno.test("KAT callers enumeration: every KAT harness calling waitForServiceWork
     }
   }
 
-  // Exactly 51 KAT harnesses call waitForServiceWorker / cdp.serviceWorker,
-  // including the rkrn sidebar-hydration, gi0jw Activity approval, and jobs panel live KATs.
-  assertEquals(katFilesCallingSw.length, 51, "all 51 KAT harnesses call waitForServiceWorker / cdp.serviceWorker");
+  // Exactly 52 KAT harnesses call waitForServiceWorker / cdp.serviceWorker,
+  // including the rkrn sidebar-hydration, gi0jw Activity approval, jobs panel live, and streaming bubble KATs.
+  assertEquals(katFilesCallingSw.length, 52, "all 52 KAT harnesses call waitForServiceWorker / cdp.serviceWorker");
 
   // Every one of them either relies on the SW_MATCH default or explicitly passes SW_MATCH
   for (const file of katFilesCallingSw) {

@@ -89,5 +89,33 @@ Deno.test("appendBubble forwards ts to the rich append methods", async () => {
   assertEquals(calls[2], ["system", "note", t]);
 });
 
+Deno.test("createStreamProjector: finalize unconditionally removes streaming attribute from the bubble", async () => {
+  const { createStreamProjector } = await import("../extension/shared/conversation.js");
+  const container = {
+    appendAgent: (_text) => {
+      const bubble = {
+        attributes: new Map(),
+        isConnected: true,
+        setAttribute(name, val) { this.attributes.set(name, String(val)); },
+        hasAttribute(name) { return this.attributes.has(name); },
+        removeAttribute(name) { this.attributes.delete(name); },
+        getAttribute(name) { return this.attributes.get(name) ?? null; },
+        appendText(_delta) {
+          this.setAttribute("streaming", "");
+        },
+      };
+      return bubble;
+    },
+  };
+
+  const projector = createStreamProjector(container);
+  projector.onDelta({ step: 1, delta: "hello " });
+  projector.onDelta({ step: 1, delta: "world" });
+  const finalized = projector.finalize(1, "hello world");
+  assert(finalized !== null, "bubble finalized");
+  assertEquals(finalized.hasAttribute("streaming"), false, "streaming attribute must be removed on finalize");
+  assertEquals(finalized.getAttribute("content"), "hello world", "content matches final text");
+});
+
 // ── this review: the ACTUAL conversation consumer (runConversationTurn) under
 // hostile stale/newer settlements — drives the real binding path end to end.
