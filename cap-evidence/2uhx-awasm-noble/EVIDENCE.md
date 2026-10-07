@@ -69,7 +69,7 @@ This expands CAP's native on-device cryptographic capability with authenticated 
   - `tests/test-partition-guard.test.ts`: **9 passed / 0 failed**.
 - **Real-Path Progress Seam & Redaction Tests:**
   - `tests/sw-egress-redaction.test.ts`: **1 passed / 0 failed** (real-path SW progress seam asserting broadcast, journal, and durable log redaction).
-  - `tests/pure.test.ts`: **60 passed / 0 failed** (includes nested arguments envelope recursion, arbitrary property traversal, and SW/digest call site pins).
+  - `tests/pure.test.ts`: **61 passed / 0 failed** (includes nested arguments envelope recursion, arbitrary property traversal, and SW/digest call site pins).
 - **Build & Vocabulary:**
   - `npm run build:production`: Store SW bundle built atomically, 52 packages / 52 manifests / 154 shipped files, budget OK (2,589,220 <= 3,000,000 bytes).
   - `npm run note:dist`: Clean.
