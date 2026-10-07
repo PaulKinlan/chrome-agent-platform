@@ -31,7 +31,12 @@ async function runBlock(
   const { code, stdout, stderr } = await new Deno.Command("bash", {
     args: [SCRIPT, ...args],
     cwd: opts.cwd,
-    env: opts.env,
+    env: {
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "safe.bareRepository",
+      GIT_CONFIG_VALUE_0: "all",
+      ...opts.env,
+    },
     stdout: "piped",
     stderr: "piped",
   }).output();
@@ -40,7 +45,7 @@ async function runBlock(
 
 async function git(args: string[], cwd?: string): Promise<string> {
   const { code, stdout, stderr } = await new Deno.Command("git", {
-    args,
+    args: ["-c", "safe.bareRepository=all", ...args],
     cwd,
     stdout: "piped",
     stderr: "piped",

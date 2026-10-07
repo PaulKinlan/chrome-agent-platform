@@ -154,40 +154,101 @@ function indexedRows(root) {
   return rows;
 }
 
+// Stage 1 of the parallel source walk (chrome-agent-platform-jjsz): validate the on-disk
+// shape of one indexed row from lstat alone, holding no file bytes.
+async function statIndexedRow(root, row) {
+  const file = path.join(root, ...row.repoPath.split("/"));
+  const info = await lstat(file).catch(() => null);
+  if (!info) throw markerError(`indexed source is missing: ${row.repoPath}`);
+  if (row.mode === "120000") {
+    if (!info.isSymbolicLink()) {
+      throw markerError(`indexed symlink changed type: ${row.repoPath}`);
+    }
+    return { row, file, size: 0 };
+  }
+  if (!info.isFile() || info.isSymbolicLink()) {
+    throw markerError(
+      `indexed regular source changed type: ${row.repoPath}`,
+    );
+  }
+  if ((info.mode & 0o111) !== (row.mode === "100755" ? 0o111 : 0)) {
+    throw markerError(`indexed source mode drift: ${row.repoPath}`);
+  }
+  if (info.size > MAX_SOURCE_FILE_BYTES) {
+    throw markerError(`indexed source exceeds file bound: ${row.repoPath}`);
+  }
+  return { row, file, size: info.size };
+}
+
+// Stage 2: read the bytes of a row stage 1 already validated.
+async function readIndexedRow({ row, file }) {
+  const bytes = row.mode === "120000"
+    ? Buffer.from(await readlink(file), "utf8")
+    : await readFile(file);
+  return { row, bytes };
+}
+
+export const SOURCE_STAT_BATCH = 64;
+export const SOURCE_READ_BATCH_ROWS = 64;
+// The old walk held one file (<= MAX_SOURCE_FILE_BYTES) at a time. A parallel read batch is
+// capped by lstat size so resident file bytes stay within the same order, not 64 x the
+// per-file cap before the aggregate bound is checked.
+export const SOURCE_READ_BATCH_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Greedy read batches over the lstat sizes of the indexed rows, in index order. A batch always
+ * holds at least one row (so a file larger than the budget is read alone), then grows until it
+ * reaches `maxRows` or adding the next row would pass `maxBytes`. Returns `[start, end)` index
+ * pairs that cover every row exactly once. Pure, so the memory bound is testable on its own.
+ *
+ * @param {number[]} sizes
+ * @param {number} [maxRows]
+ * @param {number} [maxBytes]
+ * @returns {Array<[number, number]>}
+ */
+export function planSourceReadBatches(sizes, maxRows = SOURCE_READ_BATCH_ROWS, maxBytes = SOURCE_READ_BATCH_BYTES) {
+  const plan = [];
+  for (let start = 0; start < sizes.length;) {
+    let end = start;
+    let budget = 0;
+    while (
+      end < sizes.length &&
+      end - start < maxRows &&
+      (end === start || budget + sizes[end] <= maxBytes)
+    ) {
+      budget += sizes[end];
+      end++;
+    }
+    plan.push([start, end]);
+    start = end;
+  }
+  return plan;
+}
+
 export async function computeIndexedSourceAuthority({ root }) {
   root = path.resolve(root);
   const hash = createHash("sha256");
   let totalBytes = 0;
   const rows = indexedRows(root);
-  for (const row of rows) {
-    const file = path.join(root, ...row.repoPath.split("/"));
-    const info = await lstat(file).catch(() => null);
-    if (!info) throw markerError(`indexed source is missing: ${row.repoPath}`);
-    let bytes;
-    if (row.mode === "120000") {
-      if (!info.isSymbolicLink()) {
-        throw markerError(`indexed symlink changed type: ${row.repoPath}`);
+  const statted = [];
+  for (let start = 0; start < rows.length; start += SOURCE_STAT_BATCH) {
+    statted.push(
+      ...await Promise.all(
+        rows.slice(start, start + SOURCE_STAT_BATCH).map((row) => statIndexedRow(root, row)),
+      ),
+    );
+  }
+  for (const [start, end] of planSourceReadBatches(statted.map((s) => s.size))) {
+    const batch = await Promise.all(statted.slice(start, end).map(readIndexedRow));
+    // Hash strictly in index order: the digest is order-sensitive and the byte contract is
+    // unchanged from the sequential walk.
+    for (const { row, bytes } of batch) {
+      totalBytes += bytes.length;
+      if (totalBytes > MAX_SOURCE_TOTAL_BYTES) {
+        throw markerError("indexed source bytes exceed aggregate bound");
       }
-      bytes = Buffer.from(await readlink(file), "utf8");
-    } else {
-      if (!info.isFile() || info.isSymbolicLink()) {
-        throw markerError(
-          `indexed regular source changed type: ${row.repoPath}`,
-        );
-      }
-      if ((info.mode & 0o111) !== (row.mode === "100755" ? 0o111 : 0)) {
-        throw markerError(`indexed source mode drift: ${row.repoPath}`);
-      }
-      if (info.size > MAX_SOURCE_FILE_BYTES) {
-        throw markerError(`indexed source exceeds file bound: ${row.repoPath}`);
-      }
-      bytes = await readFile(file);
+      hashRecord(hash, `${row.mode}:${row.repoPath}`, bytes);
     }
-    totalBytes += bytes.length;
-    if (totalBytes > MAX_SOURCE_TOTAL_BYTES) {
-      throw markerError("indexed source bytes exceed aggregate bound");
-    }
-    hashRecord(hash, `${row.mode}:${row.repoPath}`, bytes);
   }
   return Object.freeze({
     digest: hash.digest("hex"),
@@ -196,8 +257,7 @@ export async function computeIndexedSourceAuthority({ root }) {
 }
 
 async function outputAuthority(distRoot) {
-  const outputs = [];
-  for (const outputPath of DIST_COMPLETE_OUTPUTS) {
+  const outputs = await Promise.all(DIST_COMPLETE_OUTPUTS.map(async (outputPath) => {
     const file = path.join(distRoot, ...outputPath.split("/"));
     const info = await lstat(file).catch(() => null);
     if (!info?.isFile() || info.isSymbolicLink()) {
@@ -211,12 +271,12 @@ async function outputAuthority(distRoot) {
       );
     }
     const bytes = await readFile(file);
-    outputs.push(Object.freeze({
+    return Object.freeze({
       path: outputPath,
       sha256: createHash("sha256").update(bytes).digest("hex"),
       size: bytes.length,
-    }));
-  }
+    });
+  }));
   return Object.freeze(outputs);
 }
 
@@ -224,15 +284,28 @@ function validTarget(value) {
   return DIST_COMPLETE_TARGETS.includes(value);
 }
 
-export async function createDistCompleteMarker({ root, distRoot, target }) {
+/**
+ * @param {{
+ *   root: string,
+ *   distRoot: string,
+ *   target: string,
+ *   source?: { digest: string, files: number } | null,
+ * }} args `source` is an authority the caller ALREADY computed for the same tree (build.mjs's
+ *   mixed-generation check) so it is not hashed twice. It is a speed shortcut, never a trust
+ *   input: `validateDistCompleteMarker` recomputes from disk, so a stale `source` is refused.
+ */
+export async function createDistCompleteMarker({ root, distRoot, target, source: precomputedSource = null }) {
   if (!validTarget(target)) throw markerError("marker target is invalid");
-  const source = await computeIndexedSourceAuthority({ root });
+  const [source, outputs] = await Promise.all([
+    precomputedSource ?? computeIndexedSourceAuthority({ root }),
+    outputAuthority(distRoot),
+  ]);
   // The key order is part of the canonical v2 byte contract. `target` is an
   // intent/mismatch declaration, not independent proof of output content; the
   // Store scanner must still inspect the actual package bytes.
   const marker = {
     commit: gitCommit(root),
-    outputs: await outputAuthority(distRoot),
+    outputs,
     schema: DIST_COMPLETE_SCHEMA,
     source: { digest: source.digest, files: source.files },
     target,
@@ -243,8 +316,16 @@ export async function createDistCompleteMarker({ root, distRoot, target }) {
   });
 }
 
-export async function writeDistCompleteMarker({ root, distRoot, target }) {
-  const marker = await createDistCompleteMarker({ root, distRoot, target });
+/**
+ * @param {{
+ *   root: string,
+ *   distRoot: string,
+ *   target: string,
+ *   source?: { digest: string, files: number } | null,
+ * }} args see createDistCompleteMarker for what `source` is and is not.
+ */
+export async function writeDistCompleteMarker({ root, distRoot, target, source = null }) {
+  const marker = await createDistCompleteMarker({ root, distRoot, target, source });
   await writeFile(path.join(distRoot, "dist.complete"), canonicalJson(marker), {
     flag: "wx",
     mode: 0o644,

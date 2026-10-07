@@ -172,16 +172,23 @@ export async function collectPackageInventory({
   }
 
   const entries = [];
-  for (const tracked of trackedExtensionIndex(root)) {
-    const sourcePath = path.join(root, tracked.repoPath);
-    await assertRegularInput(sourcePath, tracked.repoPath);
-    entries.push({
-      sourcePath,
-      archivePath: tracked.archivePath,
-      mode: tracked.mode === "100755" ? 0o755 : 0o644,
-      source: "tracked",
-      sha256: await sha256File(sourcePath),
-    });
+  const trackedRows = trackedExtensionIndex(root);
+  const BATCH_SIZE = 64;
+  for (let start = 0; start < trackedRows.length; start += BATCH_SIZE) {
+    const batch = await Promise.all(
+      trackedRows.slice(start, start + BATCH_SIZE).map(async (tracked) => {
+        const sourcePath = path.join(root, tracked.repoPath);
+        await assertRegularInput(sourcePath, tracked.repoPath);
+        return {
+          sourcePath,
+          archivePath: tracked.archivePath,
+          mode: tracked.mode === "100755" ? 0o755 : 0o644,
+          source: "tracked",
+          sha256: await sha256File(sourcePath),
+        };
+      }),
+    );
+    entries.push(...batch);
   }
 
   const canonicalChangelog = path.join(root, "CHANGELOG.md");
@@ -215,15 +222,16 @@ export async function collectPackageInventory({
     distRoot,
     expectedTarget,
   });
-  for (const generated of await walkRegularFiles(distRoot)) {
-    const archivePath = `${GENERATED_DIST}/${generated.archivePath}`;
-    entries.push({
+  const generatedRows = await walkRegularFiles(distRoot);
+  const generatedEntries = await Promise.all(
+    generatedRows.map(async (generated) => ({
       ...generated,
-      archivePath,
+      archivePath: `${GENERATED_DIST}/${generated.archivePath}`,
       source: "generated-dist",
       sha256: await sha256File(generated.sourcePath),
-    });
-  }
+    })),
+  );
+  entries.push(...generatedEntries);
 
   const byPath = new Map();
   for (const entry of entries) {
@@ -311,20 +319,25 @@ function compareInventory(actual, expected, label) {
 }
 
 async function copyInventoryToStage(entries, stage, epochSeconds) {
-  for (const entry of entries) {
-    const destination = path.join(stage, ...entry.archivePath.split("/"));
-    if (!inside(stage, destination)) {
-      throw packageError(`stage path escape: ${entry.archivePath}`);
-    }
-    await mkdir(path.dirname(destination), { recursive: true });
-    await copyFile(
-      entry.sourcePath,
-      destination,
-      fsConstants.COPYFILE_EXCL,
+  const time = new Date(epochSeconds * 1000);
+  const BATCH_SIZE = 64;
+  for (let start = 0; start < entries.length; start += BATCH_SIZE) {
+    await Promise.all(
+      entries.slice(start, start + BATCH_SIZE).map(async (entry) => {
+        const destination = path.join(stage, ...entry.archivePath.split("/"));
+        if (!inside(stage, destination)) {
+          throw packageError(`stage path escape: ${entry.archivePath}`);
+        }
+        await mkdir(path.dirname(destination), { recursive: true });
+        await copyFile(
+          entry.sourcePath,
+          destination,
+          fsConstants.COPYFILE_EXCL,
+        );
+        await chmod(destination, entry.mode);
+        await utimes(destination, time, time);
+      }),
     );
-    await chmod(destination, entry.mode);
-    const time = new Date(epochSeconds * 1000);
-    await utimes(destination, time, time);
   }
   compareInventory(await inventoryDirectory(stage), entries, "staging tree");
 }

@@ -305,18 +305,33 @@ export async function readLoadSample(prev?: ProcCpuMap | null): Promise<LoadSamp
   return { ...second, retriedAfterTruncation: true };
 }
 
+const HAS_PROC = (() => {
+  try { return Deno.statSync("/proc").isDirectory; } catch { return false; }
+})();
+
+function parsePsCpuTicks(timeStr: string): number {
+  const parts = timeStr.split(":");
+  let seconds = 0;
+  for (const p of parts) seconds = seconds * 60 + Number(p);
+  return Number.isFinite(seconds) ? Math.round(seconds * 100) : 0;
+}
+
 async function readLoadSampleOnce(prev: ProcCpuMap | null | undefined, budget: { entries: number; ms: number }): Promise<LoadSample> {
   const at = Date.now();
   const cores = Math.max(1, navigator.hardwareConcurrency || 1);
   let load1 = NaN, load5 = NaN, load15 = NaN;
   try {
-    const raw = (await Deno.readTextFile("/proc/loadavg")).trim();
-    const parts = raw.split(/\s+/u);
-    load1 = Number(parts[0]);
-    load5 = Number(parts[1]);
-    load15 = Number(parts[2]);
+    if (!HAS_PROC) {
+      [load1, load5, load15] = Deno.loadavg();
+    } else {
+      const raw = (await Deno.readTextFile("/proc/loadavg")).trim();
+      const parts = raw.split(/\s+/u);
+      load1 = Number(parts[0]);
+      load5 = Number(parts[1]);
+      load15 = Number(parts[2]);
+    }
     if (![load1, load5, load15].every((n) => Number.isFinite(n))) {
-      throw new Error(`malformed /proc/loadavg: ${raw.slice(0, 60)}`);
+      throw new Error("malformed loadavg");
     }
   } catch (e) {
     return {
@@ -325,10 +340,10 @@ async function readLoadSampleOnce(prev: ProcCpuMap | null | undefined, budget: {
       error: String((e as Error)?.message ?? e),
     };
   }
-  // Heavy builders: a bounded /proc walk. Names only (never arguments), so this
-  // is not a process inventory of other lanes' work — just a count. For a name
-  // match we also read the accumulated CPU, so the threshold can count what is
-  // COMPILING rather than what is merely named (dnop).
+  // Heavy builders: a bounded /proc walk (or /bin/ps walk on macOS). Names only
+  // (never arguments), so this is not a process inventory of other lanes' work —
+  // just a count. For a name match we also read the accumulated CPU, so the
+  // threshold can count what is COMPILING rather than what is merely named (dnop).
   let compilers = 0;
   const names = new Set<string>();
   const cpu: ProcCpuMap = new Map();
@@ -344,22 +359,54 @@ async function readLoadSampleOnce(prev: ProcCpuMap | null | undefined, budget: {
     // assumed quiet one).
     let truncated = false;
     const startedAt = Date.now();
-    for await (const entry of Deno.readDir("/proc")) {
-      if (seen >= budget.entries || Date.now() - startedAt > budget.ms) {
-        truncated = true;
-        break;
-      }
-      if (!entry.isDirectory || !/^\d+$/u.test(entry.name) || entry.name === selfPid) continue;
-      seen++;
-      try {
-        const comm = (await Deno.readTextFile(`/proc/${entry.name}/comm`)).trim();
+    if (!HAS_PROC) {
+      const out = await new Deno.Command("/bin/ps", {
+        args: ["-axo", "pid=,time=,lstart=,comm="],
+        stdout: "piped",
+        stderr: "null",
+      }).output();
+      if (out.code !== 0) throw new Error(`ps exited ${out.code}`);
+      const lines = new TextDecoder().decode(out.stdout).split("\n");
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        if (seen >= budget.entries || Date.now() - startedAt > budget.ms) {
+          truncated = true;
+          break;
+        }
+        const m = /^\s*(\d+)\s+(\S+)\s+([A-Za-z]{3}\s+\S+\s+\S+\s+\d+:\d+:\d+\s+\d{4})\s+(.+)$/u.exec(line);
+        if (!m) continue;
+        const pid = m[1];
+        if (pid === selfPid) continue;
+        seen++;
+        const comm = m[4].trim().split("/").pop() ?? "";
         if (HEAVY_PROCESS_NAMES.has(comm)) {
           compilers++;
           if (names.size < 8) names.add(comm);
-          const parsed = parseProcStatCpu(await Deno.readTextFile(`/proc/${entry.name}/stat`), comm);
-          if (parsed) cpu.set(entry.name, parsed);
+          cpu.set(pid, {
+            name: comm,
+            startTicks: m[3].replace(/\s+/gu, " "),
+            cpuTicks: parsePsCpuTicks(m[2]),
+          });
         }
-      } catch { /* a process that exited mid-scan is not an error */ }
+      }
+    } else {
+      for await (const entry of Deno.readDir("/proc")) {
+        if (seen >= budget.entries || Date.now() - startedAt > budget.ms) {
+          truncated = true;
+          break;
+        }
+        if (!entry.isDirectory || !/^\d+$/u.test(entry.name) || entry.name === selfPid) continue;
+        seen++;
+        try {
+          const comm = (await Deno.readTextFile(`/proc/${entry.name}/comm`)).trim();
+          if (HEAVY_PROCESS_NAMES.has(comm)) {
+            compilers++;
+            if (names.size < 8) names.add(comm);
+            const parsed = parseProcStatCpu(await Deno.readTextFile(`/proc/${entry.name}/stat`), comm);
+            if (parsed) cpu.set(entry.name, parsed);
+          }
+        } catch { /* a process that exited mid-scan is not an error */ }
+      }
     }
     if (truncated) {
       return {

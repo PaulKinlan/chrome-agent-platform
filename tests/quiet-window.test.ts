@@ -186,7 +186,11 @@ Deno.test("dnop: the REAL sampler counts this test's compiling process and not i
   let compiler: Deno.ChildProcess | null = null;
   try {
     for (const n of ["rustc", "esbuild", "cargo"]) {
-      await Deno.copyFile("/bin/sleep", `${dir}/${n}`);
+      if (Deno.build.os === "darwin") {
+        await Deno.symlink("/bin/sleep", `${dir}/${n}`);
+      } else {
+        await Deno.copyFile("/bin/sleep", `${dir}/${n}`);
+      }
       parked.push(new Deno.Command(`${dir}/${n}`, { args: ["30"], stdout: "null", stderr: "null" }).spawn());
     }
     await new Promise((r) => setTimeout(r, 500));
@@ -814,7 +818,14 @@ Deno.test("r2ai: a truncated /proc walk is retried with room, and a box that CAN
   // count and rely on the retry's 4x to clear it. This is the real mechanism — the suite's own churn
   // trips the 400 ms budget — without depending on a fixed process count.
   const { readLoadSample } = await import("../scripts/lib/quiet-window.ts");
-  const entries = [...Deno.readDirSync("/proc")].length;
+  const entries = (() => {
+    try {
+      return [...Deno.readDirSync("/proc")].length;
+    } catch {
+      const out = new Deno.Command("/bin/ps", { args: ["-axo", "pid="], stdout: "piped", stderr: "null" }).outputSync();
+      return new TextDecoder().decode(out.stdout).trim().split("\n").filter(Boolean).length;
+    }
+  })();
   const first = Math.max(1, Math.floor(entries / 2)); // 4x this must exceed `entries`
   const before = [Deno.env.get("CAP_QUIET_MAX_PROC_SCAN"), Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS")] as const;
   Deno.env.set("CAP_QUIET_MAX_PROC_SCAN", String(first));

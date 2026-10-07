@@ -45,10 +45,16 @@ export function chromeForTestingCacheRoot(): string {
  *  and handed the census an empty resolution, which it then reported GREEN
  *  having measured nothing. */
 function versionOf(dirName: string): number[] | null {
-  const m = /^linux-(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(dirName)
+  const m = /^(?:linux|mac_arm|mac)-(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(dirName)
     ?? /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(dirName);
   return m ? m.slice(1).map(Number) : null;
 }
+
+const BINARY_SUBPATHS = [
+  "chrome-linux64/chrome",
+  "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+  "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+] as const;
 
 /** Descending NUMERIC compare. A lexicographic sort ranks `linux-99.x` above
  *  `linux-100.x` and hands the caller the wrong browser — tests/chrome-for-testing
@@ -99,17 +105,19 @@ export function resolveChromeForTesting(opts: { cacheRoot?: string } = {}): stri
     .sort(byCandidateDesc);
 
   for (const c of ranked) {
-    const binary = `${root}/${c.name}/chrome-linux64/chrome`;
-    try {
-      // Existence AND shape AND the executable bit: an interrupted install leaves the
-      // DIRECTORY behind without a runnable binary, and returning that surfaces as a
-      // confusing EACCES on spawn instead of "this candidate is incomplete, try the next
-      // newest". `st.isFile` is what rejects the directory; the exec bit rejects a file
-      // the installer wrote but never chmodded.
-      const st = Deno.statSync(binary);
-      if (st.isFile && ((st.mode ?? 0) & 0o111) !== 0) return binary;
-    } catch {
-      /* incomplete candidate — fall through to the next newest */
+    for (const subpath of BINARY_SUBPATHS) {
+      const binary = `${root}/${c.name}/${subpath}`;
+      try {
+        // Existence AND shape AND the executable bit: an interrupted install leaves the
+        // DIRECTORY behind without a runnable binary, and returning that surfaces as a
+        // confusing EACCES on spawn instead of "this candidate is incomplete, try the next
+        // newest". `st.isFile` is what rejects the directory; the exec bit rejects a file
+        // the installer wrote but never chmodded.
+        const st = Deno.statSync(binary);
+        if (st.isFile && ((st.mode ?? 0) & 0o111) !== 0) return binary;
+      } catch {
+        /* incomplete candidate — fall through to the next subpath / newest build */
+      }
     }
   }
   return null;

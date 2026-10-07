@@ -352,12 +352,15 @@ Deno.test("0lj3 drill: a Chrome that never starts hands the fleet slot back (def
   // red an assertion — it HUNG. That is the defect's real shape, and the drill
   // must be able to fail deterministically, so the child runs under a timeout and
   // its clean exit is part of the assertion.
-  const child = new Deno.Command("/usr/bin/timeout", {
-    args: ["20", Deno.execPath(), "run", "-A", "--no-check", script, "6000"],
+  const child = new Deno.Command(Deno.execPath(), {
+    args: ["run", "-A", "--no-check", script, "6000"],
     cwd: ROOT,
     stdout: "piped", stderr: "piped",
     env: { CAP_HEAVY_GATE_SLOT: `${dir}/gate.lock` },
   }).spawn();
+  const killTimer = setTimeout(() => {
+    try { child.kill("SIGKILL"); } catch { /* gone */ }
+  }, 20_000);
   try {
     // Read the child's report WHILE IT IS STILL RUNNING: the property is that a
     // live holder that owns no browser does not own the machine. (Asserting after
@@ -392,6 +395,7 @@ Deno.test("0lj3 drill: a Chrome that never starts hands the fleet slot back (def
     const status = await child.status;
     assertEquals(status.code, 0, "the failed launcher exited cleanly");
   } finally {
+    clearTimeout(killTimer);
     await reap(child);
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }

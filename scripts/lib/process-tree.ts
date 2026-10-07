@@ -10,8 +10,62 @@ const PGREP = "/usr/bin/pgrep";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Linux /proc stat has a parenthesized comm (which may contain spaces or ')'). */
+const HAS_PROC = (() => {
+  try { return Deno.statSync("/proc").isDirectory; } catch { return false; }
+})();
+
+const HAS_SETSID = (() => {
+  try { return Deno.statSync("/usr/bin/setsid").isFile; } catch { return false; }
+})();
+
+/**
+ * Build a command + args pair that launches `binary` as a new session and
+ * process-group leader (`pgid === sid === pid`) in-place via `exec`. Uses
+ * `/usr/bin/setsid` when present (Linux) and `/usr/bin/perl -MPOSIX` when
+ * `/usr/bin/setsid` is absent (macOS).
+ */
+export function setsidSpawnSpec(binary: string, args: string[]): { command: string; args: string[] } {
+  if (HAS_SETSID) {
+    return { command: "/usr/bin/setsid", args: [binary, ...args] };
+  }
+  return {
+    command: "/usr/bin/perl",
+    args: [
+      "-MPOSIX",
+      "-e",
+      "POSIX::setsid() >= 0 or die $!; exec {$ARGV[0]} @ARGV; POSIX::_exit(127)",
+      "--",
+      binary,
+      ...args,
+    ],
+  };
+}
+
+/** Linux /proc stat has a parenthesized comm (which may contain spaces or ')').
+ *  Falls back to `/bin/ps` when `/proc` is absent (macOS). */
 function processGroup(pid: number): { group: number; state: string; startTicks: string } | null {
+  if (!HAS_PROC) {
+    try {
+      const out = new Deno.Command("/bin/ps", {
+        args: ["-o", "pid=,pgid=,state=,lstart=", "-p", String(pid)],
+        stdout: "piped",
+        stderr: "null",
+        clearEnv: true,
+      }).outputSync();
+      if (out.code !== 0) return null;
+      const line = new TextDecoder().decode(out.stdout).trim();
+      if (!line) return null;
+      const parts = line.split(/\s+/);
+      if (parts.length < 4) return null;
+      return {
+        state: parts[2][0] ?? "?",
+        group: Number(parts[1]),
+        startTicks: parts.slice(3).join(" "),
+      };
+    } catch {
+      return null;
+    }
+  }
   try {
     const stat = Deno.readTextFileSync(`/proc/${pid}/stat`);
     const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
@@ -25,6 +79,67 @@ function processGroup(pid: number): { group: number; state: string; startTicks: 
 // Bind a group to the exact leader observed after setsid exec, not just its PID:
 // Linux may reuse a reaped leader's PID for an unrelated process group.
 const leaderStartTicks = new WeakMap<Deno.ChildProcess, string>();
+const lifelines = new WeakMap<Deno.ChildProcess, () => Promise<void>>();
+
+/**
+ * Attach a crash-safe lifeline watchdog to `proc`. The watchdog runs in its own
+ * session and reads a pipe whose write end is held exclusively by this parent
+ * process. If this process dies for ANY reason (including `SIGKILL` or a test
+ * runner killing the parent's process group), the kernel closes the pipe and the
+ * watchdog immediately terminates `proc`, its isolated process group, and any
+ * helper matching `treeMatch`. Normal `killProcessTree` disarms the watchdog
+ * before cleanup.
+ */
+export function attachProcessLifeline(
+  proc: Deno.ChildProcess,
+  { group, treeMatch }: { group?: number; treeMatch?: string } = {},
+): () => Promise<void> {
+  const existing = lifelines.get(proc);
+  if (existing) return existing;
+  const target = String(group ?? proc.pid);
+  const match = treeMatch && !treeMatch.startsWith("-") ? treeMatch : "";
+  const spec = setsidSpawnSpec("/bin/sh", [
+    "-c",
+    'cat >/dev/null 2>&1; ' +
+      'if [ -n "$CAP_LIFELINE_TARGET" ]; then ' +
+      'kill -TERM -"$CAP_LIFELINE_TARGET" "$CAP_LIFELINE_TARGET" 2>/dev/null || true; ' +
+      'sleep 0.1; ' +
+      'kill -KILL -"$CAP_LIFELINE_TARGET" "$CAP_LIFELINE_TARGET" 2>/dev/null || true; ' +
+      'fi; ' +
+      'if [ -n "$CAP_LIFELINE_MATCH" ]; then ' +
+      '/usr/bin/pkill -9 -f "$CAP_LIFELINE_MATCH" 2>/dev/null || true; ' +
+      'fi',
+  ]);
+  let watcher: Deno.ChildProcess | null = null;
+  try {
+    watcher = new Deno.Command(spec.command, {
+      args: spec.args,
+      stdin: "piped",
+      stdout: "null",
+      stderr: "null",
+      clearEnv: true,
+      env: {
+        CAP_LIFELINE_TARGET: target,
+        CAP_LIFELINE_MATCH: match,
+      },
+    }).spawn();
+  } catch {
+    const noop = async () => {};
+    lifelines.set(proc, noop);
+    return noop;
+  }
+  let disarmed = false;
+  const disarm = async () => {
+    if (disarmed || !watcher) return;
+    disarmed = true;
+    try { watcher.kill("SIGKILL"); } catch { /* gone */ }
+    try { await watcher.stdin.close(); } catch { /* closed */ }
+    try { await watcher.status; } catch { /* reaped */ }
+  };
+  lifelines.set(proc, disarm);
+  proc.status.then(disarm, disarm);
+  return disarm;
+}
 
 /** The launcher waits for setsid to exec before recording the isolated group. */
 export async function isolatedProcessGroup(proc: Deno.ChildProcess): Promise<number | undefined> {
@@ -40,7 +155,28 @@ export async function isolatedProcessGroup(proc: Deno.ChildProcess): Promise<num
   throw new Error(`Chrome pid ${proc.pid} did not enter its own process group; refusing group kill`);
 }
 
-function liveGroupMembers(group: number): number[] {
+export function liveGroupMembers(group: number): number[] {
+  if (!HAS_PROC) {
+    try {
+      const out = new Deno.Command("/bin/ps", {
+        args: ["-axo", "pid=,pgid=,state="],
+        stdout: "piped",
+        stderr: "null",
+        clearEnv: true,
+      }).outputSync();
+      if (out.code !== 0) return [];
+      return new TextDecoder().decode(out.stdout).split("\n").flatMap((line) => {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 3) return [];
+        const pid = Number(parts[0]);
+        const pgid = Number(parts[1]);
+        const state = parts[2][0];
+        return pgid === group && state !== "Z" && state !== "X" ? [pid] : [];
+      });
+    } catch {
+      return [];
+    }
+  }
   const members: number[] = [];
   for (const entry of Deno.readDirSync("/proc")) {
     if (!/^\d+$/.test(entry.name)) continue;
@@ -71,6 +207,10 @@ export async function killProcessTree(
 ): Promise<void> {
   if (treeMatch.startsWith("-")) {
     throw new Error("treeMatch must not start with '-' (pkill would parse it as an option)");
+  }
+  if (proc) {
+    const disarm = lifelines.get(proc);
+    if (disarm) await disarm();
   }
   if (group !== undefined) {
     if (!proc || !Number.isSafeInteger(group) || group <= 1 || group === Deno.pid ||
