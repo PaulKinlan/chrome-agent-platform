@@ -190,6 +190,14 @@ export async function walkShipped(root, { readdir }) {
       const rel = relDir ? `${relDir}/${name}` : name;
       if (entry.isDirectory) {
         if (SKIPPED_DIRS.has(name) || name.startsWith(".")) continue;
+        // extension/wasm/ is the content-addressed package store: hash-pinned
+        // generated data (inventory assets), never module source. Its files are
+        // gated by the generated inventory mapping, the shipped-code/Wasm scans
+        // and the admission authority — not by the module graph. The ltkj.2
+        // acceptance lane ships runtime .mjs assets there that no bundle imports.
+        // Scoped to the exact top-level path: a directory named "wasm" deeper in
+        // the tree is still walked.
+        if (rel === "wasm") continue;
         await walk(`${dir}/${name}`, rel);
       } else if (SHIPPED_EXTENSIONS.has(name.slice(name.lastIndexOf(".")))) {
         // Generated esbuild outputs are never shipped sources: the bundles in

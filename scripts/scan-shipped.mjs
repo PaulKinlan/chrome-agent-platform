@@ -13,6 +13,7 @@
 import { parse } from "acorn";
 import { findDynamicEvaluators } from "./lib/dynamic-evaluator-scan.mjs";
 import { auditWasmBinary } from "../extension/lib/wasm-package-authority.js";
+import { auditEmscriptenModule } from "../extension/lib/emscripten-module-audit.js";
 
 // Test controls/oracles that must never appear in shipped code (scanned
 // case-insensitively over the RAW text so a renamed identifier is still caught
@@ -707,7 +708,12 @@ export async function scanShippedJs(files, {
 }
 
 /** Audit a set of immutable bundled Wasm fixtures. Production build discovery
- * passes every physical `.wasm`; a missing manifest mapping fails closed. */
+ * passes every physical `.wasm`; a missing manifest mapping fails closed.
+ * Mapping values are schema-1 executable records (legacy shape) or tagged
+ * schema-2 entries `{schemaVersion: 2, asset}` from the single schema-aware
+ * helper (scripts/lib/wasm-manifest-assets.mjs). Schema-2 members get the
+ * bounded typed decode + engine validation here; the full graph/eligibility
+ * audit runs at admission through the real authority. */
 export async function scanBundledWasmFiles(files, {
   readBytes,
   manifestByFile = new Map(),
@@ -717,13 +723,18 @@ export async function scanBundledWasmFiles(files, {
   }
   const violations = [];
   for (const file of [...files].sort()) {
-    const executable = manifestByFile.get(file);
-    if (!executable) {
+    const entry = manifestByFile.get(file);
+    if (!entry) {
       violations.push(`${file}: unmanifested_binary`);
       continue;
     }
     try {
-      auditWasmBinary(new Uint8Array(await readBytes(file)), executable);
+      const bytes = new Uint8Array(await readBytes(file));
+      if (entry.schemaVersion === 2) {
+        auditEmscriptenModule(bytes);
+      } else {
+        auditWasmBinary(bytes, entry);
+      }
     } catch (error) {
       violations.push(`${file}: ${error?.code ?? "wasm_scan_failed"}`);
     }
