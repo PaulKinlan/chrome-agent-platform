@@ -1199,6 +1199,16 @@ Deno.test("fence: an untrusted result's strings are wrapped in the boundary", as
         untrusted: true,
       }),
     }),
+    untrusted_property_string_run: tool({
+      description: "Script returning fetched text inside the untrusted property itself",
+      inputSchema: z.object({ value: z.string().max(64) }),
+      execute: () => ({
+        ok: true,
+        result: { untrusted: RAW },
+        logs: [],
+        untrusted: true,
+      }),
+    }),
   };
   const deepRecords = executableBuiltinToolRecords(deepNestedTools, adapterContext());
   const deepProtocol = new LazyToolProtocol({
@@ -1239,6 +1249,12 @@ Deno.test("fence: an untrusted result's strings are wrapped in the boundary", as
   const serializedD12 = JSON.stringify(d12Exec.result);
   assert(!serializedD12.includes(`"${RAW}"`), "depth-12 content must not leak unfenced");
   assert(serializedD12.includes("<<<UNTRUSTED run:tok0123456789>>>"), "depth-12 content must carry fence token");
+
+  // 6. Untrusted property value is fenced when it carries a string
+  const propSearch = await deepProtocol.search({ query: "untrusted_property_string_run", limit: 1 }, context);
+  const propExec = await deepProtocol.execute({ selectionRef: propSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
+  assertEquals(propExec.ok, true);
+  assertEquals(propExec.result.result.untrusted, `${open}\n${RAW}\n${close}`);
 });
 
 // ── CAP-FB-20260830-SCREENSHOT-TO-MODEL-01 ───────────────────────────────────

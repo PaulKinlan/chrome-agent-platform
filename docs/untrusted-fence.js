@@ -75,7 +75,7 @@ export function fenceUntrustedValue(value, token, depth = 0) {
   if (value && typeof value === "object") {
     const out = {};
     for (const [key, child] of Object.entries(value)) {
-      out[key] = key === "untrusted" ? child : fenceUntrustedValue(child, token, depth + 1);
+      out[key] = fenceUntrustedValue(child, token, depth + 1);
     }
     return out;
   }
