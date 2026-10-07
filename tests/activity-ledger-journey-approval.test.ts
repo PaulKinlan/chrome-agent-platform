@@ -33,6 +33,9 @@ function assertCardDrivenApproval(body: string) {
     "bind a NEW pending card, not stale cards from a prior run");
   assert(scroll > saved && scroll < screenshot && screenshot < sameCard && sameCard < click && click < passed,
     "screenshot the visible pending card, then CDP-click the SAME connected card before reading the result");
+  const dispatches = body.match(/await cdp\.send\("Input\.dispatchMouseEvent", \{ type: "mouse(?:Pressed|Released)"[^\n]+/g) ?? [];
+  assert(dispatches.length === 2 && dispatches.every((line) => line.endsWith("}, ntpSession);")),
+    "both CDP mouse events must target the NTP page session, never the browser-root socket");
   assert(body.includes("ledgerCardSeen === true") && body.includes("ledgerCardApproved === true"),
     "missing card or owner click must fail the existing named check, not silently pass after gate removal");
 }
@@ -53,6 +56,9 @@ Deno.test("activity ledger: wrong-card, missing click or card assertion is RED",
   const noClick = leg.replace('await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x', 'await Promise.resolve({ type: "mousePressed", x: point.x');
   assert(noClick !== leg, "mutant must replace the live CDP click");
   assertThrows(() => assertCardDrivenApproval(noClick), Error, "CDP-click the SAME connected card");
+  const browserRootClick = leg.replace("}, ntpSession);", "});");
+  assert(browserRootClick !== leg, "mutant must remove a live NTP session argument");
+  assertThrows(() => assertCardDrivenApproval(browserRootClick), Error, "both CDP mouse events");
   const noCardAssertion = leg.replace("ledgerCardSeen === true", "true");
   assert(noCardAssertion !== leg, "mutant must replace the live card assertion");
   assertThrows(() => assertCardDrivenApproval(noCardAssertion), Error, "missing card or owner click");
