@@ -129,4 +129,19 @@ async function main() {
   }
 }
 
-await main();
+// A rejected CDP assertion or teardown failure is a KAT failure, not an
+// unhandled promise whose exit status an aggregate might silently misread.
+// Export the verdict seam so the success and failure exits are unit-tested
+// without starting a browser in tests/ (the real drive stays in this KAT).
+export async function runForVerdict(run: () => Promise<void>, report: (error: unknown) => void = console.error): Promise<number> {
+  let failures = 0;
+  try {
+    await run();
+  } catch (error) {
+    failures++;
+    report(error);
+  }
+  return failures === 0 ? 0 : 1;
+}
+
+if (import.meta.main) Deno.exit(await runForVerdict(main));
