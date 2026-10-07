@@ -371,28 +371,44 @@ async function main() {
     const shotPath = join(evidence, `${mode}.png`);
     await Deno.writeFile(shotPath, png);
     result.screenshot = { path: shotPath, bytes: png.byteLength, sha256: await sha256(png) };
-
-    await Deno.writeTextFile(join(evidence, "result.json"), JSON.stringify(result, null, 1) + "\n");
-    console.log(`RESULT: GREEN; mode ${mode}; evidence ${evidence}`);
   } catch (reason) {
     error = String(reason instanceof Error ? reason.stack ?? reason.message : reason);
     result.error = error;
     result.externalRequests = externalRequests;
-    await Deno.writeTextFile(join(evidence, "result.json"), JSON.stringify(result, null, 1) + "\n").catch(() => {});
     console.error(error);
     console.log(`RESULT: RED; mode ${mode}; evidence ${evidence}`);
   } finally {
     // Kill first, verify death, only then remove the disposable copy/profile
-    // (never-delete-live: teardownChrome gates profile removal on liveness).
+    // (never-delete-live: teardownChrome gates profile removal on liveness;
+    // the scratch COPY is likewise removed only after confirmed teardown — a
+    // failed teardown retains it for inspection instead of deleting live).
+    let teardownOk = false;
     try {
       await teardownChrome(chrome, profile);
+      teardownOk = true;
     } catch (reason) {
       console.error(`teardown failed: ${reason}`);
       if (!error) error = String(reason);
+      result.teardownFailed = true;
+      result.retainedCopyRoot = copyRoot;
     }
-    for (const dir of [copyRoot]) {
-      try { await Deno.remove(dir, { recursive: true }); } catch { /* scratch copy: best-effort after confirmed teardown */ }
+    if (teardownOk) {
+      try {
+        await Deno.remove(copyRoot, { recursive: true });
+      } catch {
+        // scratch copy: best-effort removal AFTER confirmed teardown
+      }
+    } else {
+      console.error(`RETAINED scratch copy (teardown unconfirmed, never-delete-live): ${copyRoot}`);
     }
+    // result.json is written ONCE here — after teardown — so teardownFailed /
+    // retainedCopyRoot are persisted in the evidence, not lost to an earlier write.
+    try {
+      await Deno.writeTextFile(join(evidence, "result.json"), JSON.stringify(result, null, 1) + "\n");
+    } catch (writeErr) {
+      if (!error) error = String(writeErr);
+    }
+    console.log(`RESULT: ${error ? "RED" : "GREEN"}; mode ${mode}; evidence ${evidence}`);
   }
   Deno.exit(error ? 1 : 0);
 }

@@ -126,12 +126,13 @@ Deno.test("harness source pins: durable scratch, teardown-before-delete, accepta
   assert(source.includes('durableDir("scratch")'), "the disposable copy must live under durable scratch");
   assert(source.includes('durableDir("chrome-profiles")'), "the profile must live under durable chrome-profiles");
   assert(!/makeTempDir\(\s*\)/u.test(source), "unrooted makeTempDir is banned");
-  // Teardown runs in finally and precedes copy removal (never-delete-live).
+  // Teardown runs in finally and precedes copy removal (never-delete-live),
+  // and removal is FLAG-GATED: a failed teardown RETAINS the copy (review F3).
   const finallyIdx = source.indexOf("} finally {");
   const teardownIdx = source.indexOf("await teardownChrome(chrome, profile)");
-  const removeIdx = source.indexOf("await Deno.remove(dir, { recursive: true })");
+  const removeIdx = source.indexOf("await Deno.remove(copyRoot, { recursive: true })");
   assert(finallyIdx > 0 && teardownIdx > finallyIdx && removeIdx > teardownIdx, "teardown must run before scratch removal inside finally");
-  assert(source.includes("for (const dir of [copyRoot])"), "only the harness's own scratch copy may be removed");
+  assert(source.includes("if (teardownOk)"), "scratch removal must be gated on the confirmed-teardown flag");
   // The rebuild goes through the explicit acceptance target + env, and the
   // generated inventory import is REBUNDLED (no post-build injection).
   assert(source.includes('"--acceptance-emscripten-numeric"'), "generator must run with the explicit acceptance flag");
@@ -146,6 +147,10 @@ Deno.test("harness source pins: durable scratch, teardown-before-delete, accepta
   // — never a mid-run exit, and never ambient exit-code mutation (of6z).
   assert(source.includes("Deno.exit(error ? 1 : 0);"), "harness must end with a failure-derived exit");
   assert(!source.includes("Deno.exitCode") && !source.includes("process.exit("), "no ambient exit-code mutation; no node exits");
+  // Never-delete-live extends to the scratch copy: removal is gated on CONFIRMED
+  // teardown; a failed teardown retains the copy and records it (review F3).
+  assert(source.includes("let teardownOk = false"), "copy removal must be gated on a confirmed-teardown flag");
+  assert(source.includes("retainedCopyRoot"), "a failed teardown must retain the copy and record it in result.json");
   // Owner click drives the real button; receipt copy is the contract string.
   assert(source.includes("package-validate-btn"), "the harness must click the real validation button");
   assert(source.includes("Package validated. Execution is not enabled."), "success copy is the pinned contract string");
