@@ -14,7 +14,7 @@
     "npm:@ai-sdk/google@^4.0.44": "4.0.44_zod@3.25.76",
     "npm:@ai-sdk/openai-compatible@^3.0.30": "3.0.31_zod@3.25.76",
     "npm:@ai-sdk/openai@^4.0.42": "4.0.42_zod@3.25.76",
-    "npm:@modelcontextprotocol/sdk@1.30.0": "1.30.0_zod@3.25.76",
+    "npm:@modelcontextprotocol/sdk@1.31.0": "1.31.0_zod@3.25.76",
     "npm:@types/node@^24.13.3": "24.13.3",
     "npm:acorn@^8.18.0": "8.18.0",
     "npm:agent-do@0.7": "0.7.0_@ai-sdk+anthropic@4.0.45__zod@4.4.3_@ai-sdk+google@4.0.44__zod@4.4.3_@ai-sdk+openai@4.0.42__zod@4.4.3",
@@ -307,14 +307,14 @@
       "os": ["win32"],
       "cpu": ["x64"]
     },
-    "@hono/node-server@2.1.1_hono@4.13.5": {
+    "@hono/node-server@2.1.1_hono@4.13.13": {
       "integrity": "sha512-ELuehkj5VCBdgEw9zs+ivkKwyzzUCSQuE96YmiPvn1ECBoZCczbFXJLeEGMTYjphP6gydh4pHMqEYPVMYUVgQg==",
       "dependencies": [
         "hono"
       ]
     },
-    "@modelcontextprotocol/sdk@1.30.0_zod@3.25.76": {
-      "integrity": "sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA==",
+    "@modelcontextprotocol/sdk@1.31.0_zod@3.25.76": {
+      "integrity": "sha512-UvTMgnNlnIBO/22ob2RcVGDlcvOslQs8T59+FTGdA0L27a39fdGF/EDETNtDVK4DZGpwomlsYpRdA8UXcVL/pw==",
       "dependencies": [
         "@hono/node-server",
         "ajv",
@@ -335,8 +335,8 @@
         "zod-to-json-schema@3.25.2_zod@3.25.76"
       ]
     },
-    "@modelcontextprotocol/sdk@1.30.0_zod@4.4.3": {
-      "integrity": "sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA==",
+    "@modelcontextprotocol/sdk@1.31.0_zod@4.4.3": {
+      "integrity": "sha512-UvTMgnNlnIBO/22ob2RcVGDlcvOslQs8T59+FTGdA0L27a39fdGF/EDETNtDVK4DZGpwomlsYpRdA8UXcVL/pw==",
       "dependencies": [
         "@hono/node-server",
         "ajv",
@@ -389,7 +389,7 @@
         "@ai-sdk/anthropic@4.0.45_zod@4.4.3",
         "@ai-sdk/google@4.0.44_zod@4.4.3",
         "@ai-sdk/openai@4.0.42_zod@4.4.3",
-        "@modelcontextprotocol/sdk@1.30.0_zod@4.4.3",
+        "@modelcontextprotocol/sdk@1.31.0_zod@4.4.3",
         "ai@7.0.66_zod@4.4.3",
         "ignore",
         "yaml",
@@ -688,8 +688,8 @@
         "function-bind"
       ]
     },
-    "hono@4.13.5": {
-      "integrity": "sha512-O6+/eCYRkzzzy0rPWwKLiGBR1nFuUPZynnwjxN1MBA62NNqbT0wQEzQyK2gSO5yDIDB336sXQleAhOHrzlYyKw=="
+    "hono@4.13.13": {
+      "integrity": "sha512-CQ46U0ZkAGmbT/4UxdzzGJpacP2IeKgY4a5/tOI9AABbpOMfK739wfDXmv1usCk+3RkKj1hQy4/fjhiwa2xlrA=="
     },
     "http-errors@2.0.1": {
       "integrity": "sha512-4FbRdAX+bSdmo4AUFuS0WNiPz8NgFt+r8ThgNWmlrjQjt1Q7ZR9+zTlce2859x4KSXrwIsaeTqDoKQmtP8pLmQ==",
@@ -1182,7 +1182,7 @@
         "npm:@ai-sdk/google@^4.0.44",
         "npm:@ai-sdk/openai-compatible@^3.0.30",
         "npm:@ai-sdk/openai@^4.0.42",
-        "npm:@modelcontextprotocol/sdk@1.30.0",
+        "npm:@modelcontextprotocol/sdk@1.31.0",
         "npm:@types/node@^24.13.3",
         "npm:acorn@^8.18.0",
         "npm:agent-do@0.7",

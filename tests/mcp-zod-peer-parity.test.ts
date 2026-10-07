@@ -39,11 +39,11 @@ import {
   objectFromShape,
   getParseErrorMessage,
   safeParse,
-} from "../node_modules/.deno/@modelcontextprotocol+sdk@1.30.0/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js";
+} from "../node_modules/.deno/@modelcontextprotocol+sdk@1.31.0/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js";
 import {
   toJsonSchemaCompat,
-} from "../node_modules/.deno/@modelcontextprotocol+sdk@1.30.0/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-json-schema-compat.js";
-import { McpServer } from "../node_modules/.deno/@modelcontextprotocol+sdk@1.30.0/node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js";
+} from "../node_modules/.deno/@modelcontextprotocol+sdk@1.31.0/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-json-schema-compat.js";
+import { McpServer } from "../node_modules/.deno/@modelcontextprotocol+sdk@1.31.0/node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js";
 import { compileSchemaToZod } from "../extension/lib/pure.js";
 
 Deno.test("mcp-zod-peer-parity: runtime detection correctly identifies Zod 3 vs Zod 4 schemas", () => {
