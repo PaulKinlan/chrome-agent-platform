@@ -267,7 +267,34 @@ async function waitForLibrary(cdp: Cdp, sessionId: string, predicate: string, ti
     if (value !== null && value !== undefined && value !== false) return value;
     await sleep(150);
   }
-  throw new Error(`timed out waiting for tool-library predicate: ${predicate}`);
+  // Diagnostics BEFORE throwing: the exact refusal string from the live SW
+  // route + host fence, the rendered section, and page errors — so a red run
+  // self-diagnoses instead of needing a rerun with printfs.
+  const diag = await cdp.eval(sessionId, `(async () => {
+    const out = {};
+    try {
+      out.routeProbe = await new Promise((resolve) => {
+        try {
+          chrome.runtime.sendMessage({ type: "tool.package.validation-list" }, (r) => {
+            out.lastError = chrome.runtime.lastError?.message ?? null;
+            resolve(JSON.stringify(r));
+          });
+        } catch (e) { resolve("throw: " + (e?.message ?? e)); }
+      });
+    } catch (e) { out.routeProbe = "eval-failed: " + (e?.message ?? e); }
+    try {
+      out.hostRegistered = await import(chrome.runtime.getURL("lib/wasm-package-admission.js"))
+        .then(() => "import-ok")
+        .catch((e) => "import-failed: " + (e?.message ?? e));
+    } catch (e) { out.hostRegistered = "eval-failed: " + (e?.message ?? e); }
+    try {
+      const el = document.querySelector("#tool-library-view");
+      const root = el && (el.shadowRoot || el);
+      out.sectionHtml = root?.querySelector(".validation-packages")?.outerHTML?.slice(0, 800) ?? "no section";
+    } catch (e) { out.sectionHtml = "err: " + (e?.message ?? e); }
+    return JSON.stringify(out);
+  })()`).catch((e) => `diag-eval-failed: ${e?.message ?? e}`);
+  throw new Error(`timed out waiting for tool-library predicate: ${predicate}\ndiagnostics: ${diag}`);
 }
 
 const REGISTRY_QUERY = `(async () => {
