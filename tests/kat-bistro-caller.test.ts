@@ -66,7 +66,7 @@ Deno.test("oy4m: pure bistro caller import does not resolve a missing browser at
   const code = `import { buildBistroLaunchConfig } from ${JSON.stringify(moduleUrl)};\n` +
     `if (buildBistroLaunchConfig({extensionDir:"/ext",profileDir:"/prof"}).binary !== undefined) throw Error("eager browser resolution");`;
   const result = await new Deno.Command(Deno.execPath(), {
-    args: ["eval", "-A", code],
+    args: ["eval", code],
     env: { ...Deno.env.toObject(), CAP_CHROMIUM: "/definitely-missing-browser-oy4m" },
     stdout: "piped",
     stderr: "piped",

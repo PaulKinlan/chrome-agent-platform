@@ -1,7 +1,9 @@
 // Shared live custody helpers for the serialized real-Chromium security suite.
 // Production supervision and no-Chrome mutants call these same functions.
 
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { fstatSync, statSync } from "node:fs";
 import {
   chmod,
   lstat,
@@ -14,7 +16,13 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { promisify } from "node:util";
 import { durableDir } from "./lib/durable-root.mjs";
+
+const execFileAsync = promisify(execFile);
+const HAS_PROC = (() => {
+  try { return statSync("/proc").isDirectory(); } catch { return false; }
+})();
 
 export const CANONICAL_LOCK = "/tmp/cap-serialized-chrome-acceptance.lock";
 // SLOT_POISON ("/tmp/cap-chrome-slot-POISON") was retired by
@@ -57,7 +65,48 @@ export function parseProcStat(raw) {
   return identity;
 }
 
+function parsePsIdentityLine(line) {
+  const m = /^\s*(\d+)\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/u.exec(line);
+  if (!m) return null;
+  const pid = Number(m[1]);
+  const state = m[2][0] ?? "";
+  const ppid = Number(m[3]);
+  const pgid = Number(m[4]);
+  const uid = Number(m[5]);
+  const lstart = m[6].trim().replace(/\s+/gu, " ");
+  const parsedMs = Date.parse(lstart);
+  const starttime = Number.isFinite(parsedMs) && parsedMs > 0
+    ? String(Math.floor(parsedMs / 1000))
+    : Array.from(Buffer.from(lstart, "utf8"), (b) => String(b).padStart(3, "0")).join("");
+  if (
+    !Number.isSafeInteger(pid) || pid <= 0 ||
+    !Number.isSafeInteger(ppid) || ppid < 0 ||
+    !Number.isSafeInteger(pgid) || pgid <= 0 ||
+    !/^\d+$/u.test(starttime)
+  ) return null;
+  return {
+    pid,
+    state,
+    ppid,
+    pgid,
+    sid: pgid,
+    starttime,
+    uid,
+  };
+}
+
 export async function readProcIdentity(pid) {
+  if (!HAS_PROC) {
+    const { stdout } = await execFileAsync("/bin/ps", [
+      "-o",
+      "pid=,state=,ppid=,pgid=,uid=,lstart=",
+      "-p",
+      String(pid),
+    ]);
+    const parsed = parsePsIdentityLine(stdout.trim());
+    if (!parsed) throw new Error("process not found");
+    return parsed;
+  }
   const [raw, procInfo] = await Promise.all([
     readFile(`/proc/${pid}/stat`, "utf8"),
     stat(`/proc/${pid}`),
@@ -70,6 +119,32 @@ export async function sha256File(file) {
 }
 
 export async function verifyInheritedCanonicalLock(fd = 9) {
+  if (!HAS_PROC) {
+    let fdStat;
+    try {
+      fdStat = fstatSync(fd);
+    } catch {
+      return "canonical inherited lock fd is missing";
+    }
+    let lockStat;
+    try {
+      lockStat = statSync(CANONICAL_LOCK);
+    } catch {
+      return "inherited lock fd has the wrong target";
+    }
+    if (fdStat.dev !== lockStat.dev || fdStat.ino !== lockStat.ino) {
+      return "inherited lock fd has the wrong target";
+    }
+    try {
+      await execFileAsync("flock", ["-n", CANONICAL_LOCK, "true"]);
+      return "canonical inherited lock has no live exclusive flock";
+    } catch (error) {
+      // Only a contention exit proves that another process holds the lock.
+      // In particular, a missing flock binary must fail closed on Darwin.
+      if (error?.code === 1) return null;
+      return "canonical inherited lock could not be verified";
+    }
+  }
   let target;
   let fdinfo;
   try {
@@ -251,6 +326,21 @@ export async function waitUntil(predicate, timeoutMs, intervalMs = 20) {
 
 async function procIdentities() {
   const rows = [];
+  if (!HAS_PROC) {
+    try {
+      const { stdout } = await execFileAsync("/bin/ps", [
+        "-axo",
+        "pid=,state=,ppid=,pgid=,uid=,lstart=",
+      ]);
+      for (const line of stdout.split("\n")) {
+        const parsed = parsePsIdentityLine(line);
+        if (parsed) rows.push(parsed);
+      }
+    } catch {
+      // ignore
+    }
+    return rows;
+  }
   // A plain name listing: with `withFileTypes` Node lstat()s entries whose
   // type the kernel does not report, and a process that exits between the
   // listing and that lstat rejects the WHOLE readdir (ENOENT /proc/<pid>) —

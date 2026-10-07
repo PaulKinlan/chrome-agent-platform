@@ -138,8 +138,16 @@ Deno.test("9t1b: a REAL browser holds its profile while the whole tree is copied
     await new Promise((r) => setTimeout(r, 1500));
     const entries = [...Deno.readDirSync(profile)].map((e) => e.name);
     assert(entries.length > 0, `the profile is live: ${entries.slice(0, 5).join(",")}`);
-    const cp = await new Deno.Command("cp", {
-      args: ["-a", `${ROOT}/.`, `${scratch}/.`],
+    const cp = await new Deno.Command("rsync", {
+      args: [
+        "-a",
+        "--exclude", "/node_modules/",
+        "--exclude", "/.git/",
+        "--exclude", "/packages/bundled/evidence/",
+        "--exclude", "dist-versions/",
+        `${ROOT}/`,
+        `${scratch}/`,
+      ],
       stdout: "piped", stderr: "piped",
     }).output();
     assertEquals(cp.code, 0, `copying the tree under a live browser: ${new TextDecoder().decode(cp.stderr)}`);

@@ -15,10 +15,17 @@
 // Sibling bead chrome-agent-platform-nz2r is complementary and does NOT fix this: nz2r makes
 // test:changed ignore .build.lock-family residue as changed files; it does not change the liveness
 // check.
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync, statSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+
+const HAS_PROC = (() => {
+  try { return statSync("/proc").isDirectory(); } catch { return false; }
+})();
+
+const defaultProcRead = (p) => readFileSync(p, "utf8");
 
 export const LOCK_DIRNAME = ".build.lock.d";
 export const OWNER_FILE = "owner.json";
@@ -30,7 +37,7 @@ export const DEFAULT_INTERVAL_MS = 500;
 export const OWNERLESS_STALE_MS = 60_000;
 export const QUARANTINE_PREFIX = ".lock-quarantine-";
 
-export function machineBootId(read = (p) => readFileSync(p, "utf8")) {
+export function machineBootId(read = defaultProcRead) {
   try {
     return String(read("/proc/sys/kernel/random/boot_id")).trim();
   } catch {
@@ -59,14 +66,32 @@ export function parseProcStat(text) {
 }
 
 /**
- * Read a pid's state + start time from /proc, distinguishing "gone" from "unreadable".
+ * Read a pid's state + start time from /proc (or `/bin/ps` when `/proc` is absent on macOS),
+ * distinguishing "gone" from "unreadable".
  *
  * ENOENT means the pid no longer exists (the /proc entry is gone), which is itself proof of death
  * even when an earlier kill(pid, 0) succeeded — that race is exactly how a lock is orphaned.
  * Any other error (EACCES/EPERM) means the process EXISTS but we may not inspect it, and there the
  * conservative direction is to treat it as alive and refuse to steal.
  */
-export function procStatFields(pid, read = (p) => readFileSync(p, "utf8")) {
+export function procStatFields(pid, read = defaultProcRead) {
+  if (!HAS_PROC && read === defaultProcRead) {
+    try {
+      const out = execFileSync("/bin/ps", ["-o", "state=,lstart=", "-p", String(pid)], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      if (!out) return { ok: false, reason: "gone" };
+      const parts = out.split(/\s+/);
+      if (parts.length < 2) return { ok: false, reason: "unparseable" };
+      return { ok: true, state: parts[0][0] ?? "?", start: parts.slice(1).join(" ") };
+    } catch (e) {
+      if (typeof e?.status === "number" && e.status !== 0) {
+        return { ok: false, reason: "gone" };
+      }
+      return { ok: false, reason: "unreadable", code: e?.code };
+    }
+  }
   try {
     const parsed = parseProcStat(read(`/proc/${pid}/stat`));
     if (!parsed) return { ok: false, reason: "unparseable" };

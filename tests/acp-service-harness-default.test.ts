@@ -17,6 +17,9 @@ import { TEST_BRIDGE_TOKEN } from "./fixtures/acp-bridge-token.ts";
 
 const ROOT = join(dirname(fromFileUrl(import.meta.url)), "..");
 const SCRIPT = join(ROOT, "scripts", "acp-service.mjs");
+const NODE_BIN = new TextDecoder().decode(
+  new Deno.Command("which", { args: ["node"], stdout: "piped" }).outputSync().stdout,
+).trim() || "node";
 
 /** A scratch home, a bin dir with exactly `bins`, and the dry-run plan. */
 async function plan({ bins, harness }: { bins: string[]; harness?: string }) {
@@ -31,7 +34,7 @@ async function plan({ bins, harness }: { bins: string[]; harness?: string }) {
   }
   const args = [SCRIPT, "install", "--dry-run"];
   if (harness) args.push("--harness", harness);
-  const res = new Deno.Command("node", {
+  const res = new Deno.Command(NODE_BIN, {
     args,
     cwd: ROOT,
     stdout: "piped",

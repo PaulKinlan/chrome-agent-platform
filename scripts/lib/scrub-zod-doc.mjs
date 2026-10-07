@@ -19,8 +19,9 @@ function structural(node) {
   return node;
 }
 export function denyZodDocCompiles(source) {
+  if (!/\bDoc\d*\b/u.test(source)) return { code: source, count: 0 };
   const ast = parse(source, { ecmaVersion: "latest", sourceType: "module" });
-  const evaluators = new Set(findDynamicEvaluators(ast));
+  let evaluators = null;
   const spans = [];
   function visit(node, parent) {
     if (!node?.type) return;
@@ -30,6 +31,7 @@ export function denyZodDocCompiles(source) {
       if (/^Doc\d*$/u.test(name ?? "")) {
         const digest = createHash("sha256").update(JSON.stringify(structural(node.body))).digest("hex");
         if (DOC_CLASS_BODIES.has(digest)) {
+          evaluators ??= new Set(findDynamicEvaluators(ast));
           const body = node.body.body.find(method => method.key?.name === "compile").value.body;
           // A matching body may close over an ordinary local Function binding.
           // Require this exact constructor's whole-AST lexical provenance too.

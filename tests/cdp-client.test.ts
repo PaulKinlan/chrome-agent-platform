@@ -10,7 +10,7 @@ const fsQ = "node:fs/promises", osQ = "node:os", pathQ = "node:path", esbQ = "es
 const fsp = await import(fsQ);
 const os = await import(osQ);
 const path = (await import(pathQ)).default;
-const { build } = await import(esbQ);
+const { transform } = await import(esbQ);
 
 // ── extract the production client section (verbatim bytes) ──
 const src = await fsp.readFile(fileURLToPath(new URL("../scripts/agent-provider-picker.ts", import.meta.url)), "utf8");
@@ -18,13 +18,18 @@ const START = src.indexOf("// ── robust CDP client");
 const END = src.indexOf("// find the extension id");
 assert(START !== -1 && END !== -1 && END > START);
 
+const activeFakeChildren = new Set<Deno.ChildProcess>();
+
 // ── a REAL fake child: a spawned `sleep`-like process with real streams+status ──
 async function fakeChild() {
-  const cmd = new Deno.Command(Deno.execPath(), {
-    args: ["eval", "await new Promise(r=>setTimeout(r, 60000))"], // lives 60s (test kills it)
+  const cmd = new Deno.Command("/bin/sleep", {
+    args: ["60"], // lives 60s (test kills it)
     stdout: "piped", stderr: "piped",
   });
-  return cmd.spawn();
+  const child = cmd.spawn();
+  activeFakeChildren.add(child);
+  void child.status.finally(() => activeFakeChildren.delete(child));
+  return child;
 }
 
 class WSStub {
@@ -46,67 +51,91 @@ class WSStub {
   emitError(msg = "stub error") { const ev = { message: msg }; this.onerror?.(ev); }
 }
 
-async function makeClient() {
-  const child = await fakeChild();
-  // Build the production section as a module with the REAL child wired in.
-  let client = src.slice(START, END).replace(/void 0 as never;/, "");
-  // Strip declarations duplicated by the prelude (the extraction window starts
-  // after their original definitions in the journey).
-  client = client
-    .replace(/let transportTerminal[^;]*;/, "")
-    .replace(/const terminalWaiters[^;]*;/, "")
-    .replace(/function goTerminal\(reason: string\) \{[\s\S]*?\n\}/, "")
-    .replace(/function onTerminal\(fn: \(\) => void\) \{[\s\S]*?\n\}/, "")
-    .replace(/function offTerminal\(fn: \(\) => void\) \{[^}]*\}/, "")
-    .replace(/var discoveredPort = 0;\nfunction currentPort\(\) \{ return discoveredPort; \}/, "");
-  client = client.replace(
-    /ws = new WebSocket\(version\.webSocketDebuggerUrl\);[\s\S]*?\n(?=function attachWsHandlers)/,
-    ""
-  ); // strip journey wiring; we attach our stub socket
-  const wrapper = `
-var version = { webSocketDebuggerUrl: "ws://stub" };
-var proc = null;
-var ws = null;
-var chromiumExitState = null;
-var chromiumLogLines = [];
-var CHROMIUM_LOG_MAX_LINES = 400;
-let transportTerminal = null;
-const terminalWaiters = new Set();
-function goTerminal(reason) {
-  if (transportTerminal) return;
-  transportTerminal = { reason };
-  for (const w of [...terminalWaiters]) { try { w(); } catch { /* waiter error */ } }
-  terminalWaiters.clear();
-  rejectAllPending(reason);
-}
-function onTerminal(fn) { if (transportTerminal) { fn(); return; } terminalWaiters.add(fn); }
-function offTerminal(fn) { terminalWaiters.delete(fn); }
-var discoveredPort = 0;
-function currentPort() { return discoveredPort; }
-${client}
-export function __make(WS, child) {
-  proc = child;
-  drainChromiumOutput();
-  ws = new WS("ws://stub");
-  attachWsHandlers();
-  return { send, waitForLoad, pending,
-    getTerminal: () => transportTerminal,
-    getExit: () => chromiumExitState, getLog: () => (typeof chromiumLogLines !== "undefined" ? chromiumLogLines : []),
-    setWs: (w) => { ws = w; attachWsHandlers(); wsClosedReason = null; },
-    getPort: () => (typeof currentPort === "function" ? currentPort() : 0),
-    child,
+let cachedCreateScopePromise: Promise<() => any> | null = null;
+
+function getCreateScope(): Promise<() => any> {
+  if (!cachedCreateScopePromise) {
+    cachedCreateScopePromise = (async () => {
+      // Build the production section as a reusable scope factory with the REAL child wired in.
+      let client = src.slice(START, END).replace(/void 0 as never;/, "");
+      // Strip declarations duplicated by the prelude (the extraction window starts
+      // after their original definitions in the journey).
+      client = client
+        .replace(/let transportTerminal[^;]*;/, "")
+        .replace(/const terminalWaiters[^;]*;/, "")
+        .replace(/function goTerminal\(reason: string\) \{[\s\S]*?\n\}/, "")
+        .replace(/function onTerminal\(fn: \(\) => void\) \{[\s\S]*?\n\}/, "")
+        .replace(/function offTerminal\(fn: \(\) => void\) \{[^}]*\}/, "")
+        .replace(/var discoveredPort = 0;\nfunction currentPort\(\) \{ return discoveredPort; \}/, "");
+      client = client.replace(
+        /ws = new WebSocket\(version\.webSocketDebuggerUrl\);[\s\S]*?\n(?=function attachWsHandlers)/,
+        ""
+      ); // strip journey wiring; we attach our stub socket
+      const wrapper = `
+export function __createScope() {
+  var version = { webSocketDebuggerUrl: "ws://stub" };
+  var proc = null;
+  var ws = null;
+  var chromiumExitState = null;
+  var chromiumLogLines = [];
+  var CHROMIUM_LOG_MAX_LINES = 400;
+  let transportTerminal = null;
+  const terminalWaiters = new Set();
+  function goTerminal(reason) {
+    if (transportTerminal) return;
+    transportTerminal = { reason };
+    for (const w of [...terminalWaiters]) { try { w(); } catch { /* waiter error */ } }
+    terminalWaiters.clear();
+    rejectAllPending(reason);
+  }
+  function onTerminal(fn) { if (transportTerminal) { fn(); return; } terminalWaiters.add(fn); }
+  function offTerminal(fn) { terminalWaiters.delete(fn); }
+  var discoveredPort = 0;
+  function currentPort() { return discoveredPort; }
+  ${client}
+  return function __make(WS, child) {
+    proc = child;
+    drainChromiumOutput();
+    ws = new WS("ws://stub");
+    attachWsHandlers();
+    return { send, waitForLoad, pending,
+      getTerminal: () => transportTerminal,
+      getExit: () => chromiumExitState, getLog: () => (typeof chromiumLogLines !== "undefined" ? chromiumLogLines : []),
+      setWs: (w) => { ws = w; attachWsHandlers(); wsClosedReason = null; },
+      getPort: () => (typeof currentPort === "function" ? currentPort() : 0),
+      child,
+    };
   };
 }
 `;
-  const { durableDir } = await import("../scripts/lib/durable-root.mjs");
-  const dir = await fsp.mkdtemp(path.join(durableDir("scratch"), "cap-cdp-"));
-  const f = path.join(dir, "c.mts");
-  await fsp.writeFile(f, wrapper);
-  const b = path.join(dir, "c.bundle.mjs");
-  await build({ entryPoints: [f], outfile: b, bundle: false, format: "esm", platform: "browser", logLevel: "silent" });
-  const mod = await import(b + "?t=" + Date.now());
-  await fsp.rm(dir, { recursive: true, force: true });
-  return { factory: mod.__make, kill: async () => { try { child.kill(); await child.status; } catch { /* gone */ } } };
+      const out = await transform(wrapper, {
+        loader: "ts",
+        format: "esm",
+        target: "esnext",
+        logLevel: "silent",
+      });
+      const b64 = Buffer.from(out.code, "utf8").toString("base64");
+      const mod = await import(`data:text/javascript;base64,${b64}`);
+      return mod.__createScope;
+    })();
+  }
+  return cachedCreateScopePromise;
+}
+
+async function makeClient() {
+  const createScope = await getCreateScope();
+  const factory = createScope();
+  return {
+    factory,
+    kill: async () => {
+      const toKill = [...activeFakeChildren];
+      activeFakeChildren.clear();
+      await Promise.all(toKill.map(async (c) => {
+        try { c.kill(); } catch { /* gone */ }
+        try { await c.status; } catch { /* gone */ }
+      }));
+    },
+  };
 }
 
 Deno.test("terminal: CONNECTING send REFUSED (never queued)", async () => {
@@ -300,14 +329,16 @@ Deno.test("startup: a FAILING test-build child preserves its first cause (exit c
   try {
     const cpMod2 = "node:child_process";
     const { execSync } = await import(cpMod2);
-    // Copy the tree WITHOUT `.cache/`: that directory holds live Chrome profile
-    // dirs (`${ROOT}.cache/kat-<name>-<stamp>`) that other tests are driving
-    // RIGHT NOW. `cp -a` of a profile mid-run fails on files Chrome unlinks as
-    // it goes (`cannot stat '…/Default/DIPS-journal': No such file or
-    // directory`), which read as a startup-handling defect in this test.
-    // chrome-agent-platform-uzik made the gates concurrent, so the race is
-    // reachable; `.cache/` is gitignored scratch and the child never needs it.
-    execSync(`rsync -a --exclude '/.cache/' ${JSON.stringify(fileURLToPath(new URL("..", import.meta.url)) + "/")} ${JSON.stringify(repo + "/")}`, { shell: "/bin/bash", stdio: "pipe" });
+    const srcRoot = fileURLToPath(new URL("..", import.meta.url));
+    // Copy ONLY `scripts/` (where build-test-extension.mjs is mutated for this test)
+    // and symlink the immutable/heavy repo entries (`.git`, `node_modules`, `extension`,
+    // `deno.json`, `deno.lock`, `package.json`) so we never copy `.cache/` (live Chrome
+    // profiles) or hundreds of MB of `node_modules/.deno` and `packages/bundled`.
+    await fsp2.mkdir(path2.join(repo, "scripts"), { recursive: true });
+    execSync(`rsync -a --exclude '/.cache/' ${JSON.stringify(path2.join(srcRoot, "scripts") + "/")} ${JSON.stringify(path2.join(repo, "scripts") + "/")}`, { shell: "/bin/bash", stdio: "pipe" });
+    for (const entry of [".git", "node_modules", "extension", "deno.json", "deno.lock", "package.json"]) {
+      await fsp2.symlink(path2.join(srcRoot, entry), path2.join(repo, entry)).catch(() => {});
+    }
     // Break the builder so the child exits nonzero:
     await fsp2.writeFile(path2.join(repo, "scripts/build-test-extension.mjs"), "process.exit(97);\n");
     // Run the journey; it must exit nonzero and emit an early manifest naming code=97.
@@ -337,6 +368,7 @@ Deno.test("startup: a FAILING test-build child preserves its first cause (exit c
     assert((found?.chromium?.logTail ?? []).some((l: string) => l.includes("[test-build:")), "bounded child output in the manifest log");
   } finally {
     await fsp2.rm(repo, { recursive: true, force: true });
+    await fsp2.rm(evidenceRoot, { recursive: true, force: true }).catch(() => {});
   }
 });
 

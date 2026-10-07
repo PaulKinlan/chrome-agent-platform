@@ -47,8 +47,17 @@ function probeSource(pidFile: string, { hang }: { hang: boolean }): string {
 b.outputSync();
 const sleeper = Number((await Deno.readTextFile("${pidFile}.sleep")).trim());
 const pgrpOf = async (pid: number) => {
-  const stat = await Deno.readTextFile("/proc/" + pid + "/stat");
-  return Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[2]);
+  try {
+    const stat = await Deno.readTextFile("/proc/" + pid + "/stat");
+    return Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[2]);
+  } catch {
+    const out = await new Deno.Command("/bin/ps", {
+      args: ["-o", "pgid=", "-p", String(pid)],
+      stdout: "piped",
+      stderr: "null",
+    }).output();
+    return Number(new TextDecoder().decode(out.stdout).trim()) || 0;
+  }
 };
 await Deno.writeTextFile("${pidFile}", JSON.stringify({
   sleeper,
@@ -94,6 +103,28 @@ async function readRecord(pidFile: string): Promise<GrandchildRecord> {
   }
 }
 
+async function readProcessState(pid: number): Promise<string | null> {
+  try {
+    const stat = await Deno.readTextFile(`/proc/${pid}/stat`);
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0]; // field 3 of /proc/pid/stat
+  } catch {
+    if (Deno.build.os === "darwin") {
+      try {
+        const out = await new Deno.Command("/bin/ps", {
+          args: ["-o", "state=", "-p", String(pid)],
+          stdout: "piped",
+          stderr: "null",
+        }).output();
+        const s = new TextDecoder().decode(out.stdout).trim();
+        return s ? s[0] : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
 /**
  * The liveness question is the WRONG one (iypw). SIGCONT succeeds for a zombie as well as for a
  * running process, and a kill that has landed may sit unreaped for a while under load — so an
@@ -105,13 +136,8 @@ async function readRecord(pidFile: string): Promise<GrandchildRecord> {
 async function outcomeFor(pid: number, budgetMs = 3_000): Promise<"gone" | "zombie" | "alive"> {
   const deadline = Date.now() + budgetMs;
   for (;;) {
-    let state = "";
-    try {
-      const stat = await Deno.readTextFile(`/proc/${pid}/stat`);
-      state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0]; // field 3 of /proc/pid/stat
-    } catch {
-      return "gone";
-    }
+    const state = await readProcessState(pid);
+    if (state === null) return "gone";
     if (state === "Z" || state === "X") return "zombie";
     if (Date.now() > deadline) return "alive";
     await new Promise((r) => setTimeout(r, 50));
@@ -120,13 +146,7 @@ async function outcomeFor(pid: number, budgetMs = 3_000): Promise<"gone" | "zomb
 
 /** The instrument's reading, for a failure message: state plus the SIGCONT result. */
 async function outcomeReading(pid: number): Promise<string> {
-  let state = "?";
-  try {
-    const stat = await Deno.readTextFile(`/proc/${pid}/stat`);
-    state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
-  } catch {
-    state = "gone";
-  }
+  const state = (await readProcessState(pid)) ?? "gone";
   return `state=${state} /procExists=${existsProc(pid)} killResult=${killReading(pid)}`;
 }
 
@@ -152,7 +172,11 @@ function load1(): string {
   try {
     return Deno.readTextFileSync("/proc/loadavg").split(" ")[0];
   } catch {
-    return "?";
+    try {
+      return String(Deno.loadavg()[0]);
+    } catch {
+      return "?";
+    }
   }
 }
 
