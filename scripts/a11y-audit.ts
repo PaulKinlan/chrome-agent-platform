@@ -16,8 +16,8 @@
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 import { fileURLToPath } from "node:url";
-import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
-import { chromeProfileDir, pruneChromeProfileDirs } from "./lib/chrome-profile-dir.ts";
+import { launchChrome, openCdp, SW_MATCH, teardownChrome } from "./lib/chrome-launch.ts";
+import { chromeProfileDir, profileLiveness, pruneChromeProfileDirs } from "./lib/chrome-profile-dir.ts";
 import { composerInput, composerPopup } from "./lib/composer-target.ts";
 import { makeChecker } from "./lib/expected-red.ts";
 
@@ -51,21 +51,21 @@ const check = (name: string, cond: boolean, detail?: unknown) => checker.check(n
 type Cdp = {
   send: (method: string, params: unknown, sessionId?: string) => Promise<any>;
   evl: (s: string, expr: string) => Promise<any>;
+  client: any;
 };
 
 // Launch Chrome with the extension through the shared launcher (the port is
 // kernel-assigned and read back from this child's own stderr) + connect.
-async function launch(): Promise<{ proc: Deno.ChildProcess; cdp: Cdp; port: number; close: () => Promise<void> }> {
+async function launch(profile: string): Promise<{ proc: Deno.ChildProcess; cdp: Cdp; port: number; chrome: any; close: () => Promise<void> }> {
   // THE HOUSE PROFILE API, NOT a system temp directory (chrome-agent-platform-tuw7): this used to
   // create an uncleaned temporary profile and never remove it — thirteen directories, 71 MB of
   // residue, on a machine whose temp filesystem is a 46 GB RAM-backed mount that suites have already
   // exhausted once (bead chp). A Chrome profile is exactly the scratch that does not belong there.
   // chromeProfileDir() puts it under the durable root, outside the repo, attributed to "a11y", and
   // refuses a RAM-backed or in-repo location outright.
-  const profile = chromeProfileDir("a11y");
   const chrome = await launchChrome({ extension: EXT, profile, windowSize: "1440,900" });
   const client = await openCdp(chrome.wsUrl);
-  const send = async (method: string, params: unknown, sessionId?: string): Promise<any> =>
+  const send = async (method: string, params?: unknown, sessionId?: string): Promise<any> =>
     (await client.send(method, params, sessionId)).result;
   const evl = async (s: string, expr: string): Promise<any> => {
     const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, s);
@@ -82,22 +82,33 @@ async function launch(): Promise<{ proc: Deno.ChildProcess; cdp: Cdp; port: numb
   };
   return {
     proc: chrome.proc,
-    cdp: { send, evl },
+    cdp: { send, evl, client },
     port: chrome.port,
-    // The profile goes with the client. `close()` is the audit's own teardown and every exit path
-    // runs it (the finally in main), so this is where the directory stops existing; a run that is
-    // KILLED instead leaves it for pruneChromeProfileDirs(), whose 6 h threshold means a live
-    // profile is never touched.
+    chrome,
+    // The profile goes with the client. `close()` delegates to canonical teardownChrome,
+    // reaping the full process group, while enforcing the never-delete-live rule before removal retries.
     close: async () => {
       try { client.close(); } catch { /* already closed */ }
-      // Reports only whether it went: the caller killed the browser first, so a failure here is a
-      // real leftover rather than a race with Chrome — and saying so beats swallowing it.
+      let teardownOk = false;
+      try {
+        await teardownChrome(chrome, profile);
+        teardownOk = true;
+      } catch (err) {
+        console.error(`a11y-audit: teardownChrome failed: ${String(err)}`);
+      }
+      // Never delete a profile if teardown failed or if profileLiveness indicates Chrome is live
+      const liveness = profileLiveness(profile);
+      if (!teardownOk || liveness === "live") {
+        console.warn(`a11y-audit: preserving profile ${profile} (teardownOk: ${teardownOk}, liveness: ${liveness}) — pruneChromeProfileDirs() reaps it later`);
+        return;
+      }
+      // If teardown succeeded and profile is confirmed non-live, verify removal with bounded retry
       for (let attempt = 1; attempt <= 5; attempt++) {
         try { await Deno.remove(profile, { recursive: true }); return; } catch (e) {
           const code = (e as Deno.errors.NotFound)?.name;
-          if (code === "NotFound") return; // gone: nothing to report
+          if (code === "NotFound") return; // already removed by teardownChrome
           if (attempt === 5) {
-            console.log(`a11y-audit: could not remove the profile ${profile} after 5 attempts: ${String((e as Error)?.message ?? e)} — pruneChromeProfileDirs() removes it later; this line exists so the next reader knows why it is there.`);
+            console.log(`a11y-audit: could not remove non-live profile ${profile} after 5 attempts: ${String((e as Error)?.message ?? e)} — pruneChromeProfileDirs() removes it later; this line exists so the next reader knows why it is there.`);
             return;
           }
           await new Promise((r) => setTimeout(r, 200 * attempt)); // a helper may still be closing files
@@ -107,15 +118,20 @@ async function launch(): Promise<{ proc: Deno.ChildProcess; cdp: Cdp; port: numb
   };
 }
 
-async function extId(cdp: Cdp): Promise<string> {
-  // Discover the service worker target (the extension id lives in its URL).
-  for (let i = 0; i < 60; i++) {
-    const res = await cdp.send("Target.getTargets", {});
-    const sw = (res?.targetInfos ?? []).find((t: any) => t.type === "service_worker");
-    if (sw) return new URL(sw.url).host;
-    await sleep(200);
+async function extId(client: any): Promise<string> {
+  // Discover our extension's background service worker target using canonical SW_MATCH.
+  // Filters out Chrome for Testing's internal component extension workers (such as thunk.js).
+  const sw = await client.serviceWorker({ timeoutMs: 15000, match: SW_MATCH });
+  if (sw) {
+    const host = new URL(sw.url).host;
+    console.log(`a11y-audit: matched extension SW at ${sw.url} (extension ID: ${host})`);
+    return host;
   }
-  throw new Error("extension did not load");
+  // Diagnostic dump of observed targets to differentiate wrong SW vs boot race
+  const res = await client.send("Target.getTargets", {}).catch(() => null);
+  const targets = (res?.result?.targetInfos ?? []).map((t: any) => ({ type: t.type, url: t.url }));
+  console.error("a11y-audit: extension service worker matching SW_MATCH did not appear within 15s. Observed targets:", JSON.stringify(targets, null, 2));
+  throw new Error(`extension service worker matching SW_MATCH did not load (observed ${targets.length} targets: ${JSON.stringify(targets)})`);
 }
 
 async function openPage(cdp: Cdp, url: string): Promise<{ sessionId: string; targetId: string }> {
@@ -125,8 +141,46 @@ async function openPage(cdp: Cdp, url: string): Promise<{ sessionId: string; tar
   await cdp.send("Runtime.enable", {}, sessionId);
   await cdp.send("Page.enable", {}, sessionId);
   await cdp.send("Accessibility.enable", {}, sessionId);
-  await sleep(2500);
-  return { sessionId, targetId: t.targetId };
+
+  // Bounded readiness check (compare lx6b ui-integration):
+  // Poll until the document is complete, URL matches, and key surface elements exist.
+  const deadline = Date.now() + 15000;
+  let pageState: any = null;
+  while (Date.now() < deadline) {
+    try {
+      pageState = await cdp.evl(sessionId, `(() => {
+        const url = location.href;
+        const ready = document.readyState;
+        const interactives = document.querySelectorAll('button, a[href], input, textarea, select, [tabindex]').length;
+        const composer = !!document.querySelector('#composer, agent-composer, [data-composer-input]');
+        const side = !!document.getElementById('side');
+        const options = !!document.getElementById('prompts') || !!document.querySelector('.settings-page, #settings, .options-wrap');
+        const gallery = !!document.querySelector('#diff-container, .diff-view, table, pre');
+        const isHub = url.includes('/ntp/');
+        const isSettings = url.includes('/options/');
+        const isGallery = url.includes('components.html') || url.includes('artifact-diff');
+        const surfaceOk = isHub ? (composer && side) : isSettings ? options : isGallery ? (gallery || interactives > 0) : (interactives > 0);
+        return {
+          url,
+          ready,
+          elementCount: document.body ? document.body.querySelectorAll('*').length : 0,
+          interactives,
+          surfaceOk: Boolean(surfaceOk),
+        };
+      })()`);
+      if (pageState?.url === url && pageState?.ready === "complete" && pageState?.surfaceOk) {
+        console.log(`a11y-audit: page ready at ${url} (interactives: ${pageState.interactives})`);
+        return { sessionId, targetId: t.targetId };
+      }
+    } catch {
+      // DOM context still evaluating / navigating
+    }
+    await sleep(150);
+  }
+
+  // Fail fast on blank page or boot race: log observed URL/ready/worker state
+  console.error(`a11y-audit: page failed to reach readiness for ${url}. Observed state:`, JSON.stringify(pageState, null, 2));
+  throw new Error(`a11y-audit page never became ready: expected ${url}, observed ${JSON.stringify(pageState)}`);
 }
 
 // ── in-page a11y analysis (labels / roles / contrast / focus) ───────────────
@@ -378,11 +432,12 @@ async function main() {
   // are pruned, exactly as scripts/kat-runner.ts does once per run. Cheap, and never touches a live
   // browser because a live profile is newer than the threshold.
   await pruneChromeProfileDirs().catch(() => { /* hygiene, never a gate */ });
-  const { proc, cdp, port, close } = await launch();
+  const profile = chromeProfileDir("a11y");
+  const { proc, cdp, port, close } = await launch(profile);
   (cdp as any).port = port;
   const docs = await serveDocs();
   try {
-    const id = await extId(cdp);
+    const id = await extId(cdp.client);
 
     // ── the hub ──
     let page = await openPage(cdp, `chrome-extension://${id}/ntp/ntp.html`);
@@ -393,7 +448,11 @@ async function main() {
       `(() => { try { chrome.runtime.sendMessage({ type: "named-agent.create", name: "Audit Seed", role: "a11y audit fixture" }); } catch (e) { return String(e); } })()`);
     await sleep(1000);
     await cdp.send("Page.reload", {}, page.sessionId);
-    await sleep(2500);
+    for (let i = 0; i < 60; i++) {
+      const ready = await cdp.evl(page.sessionId, `document.readyState === 'complete' && !!document.querySelector('#composer, agent-composer, [data-composer-input]')`).catch(() => false);
+      if (ready) break;
+      await sleep(100);
+    }
     let a = await analyze(cdp, page.sessionId, "hub");
     check("hub: no unlabeled interactive controls", (a.unlabeled || []).length === 0, a.unlabeled);
     check("hub: no generic div-interactives", (a.genericInteractives || []).length === 0, a.genericInteractives);
@@ -418,9 +477,12 @@ async function main() {
       const seqInfo = await cdp.evl(page.sessionId, `(() => {
         const vis = [...document.querySelectorAll('button, a[href], input, textarea, select, [tabindex]:not([tabindex="-1"])')].filter((e) => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; });
         const idOf = (e) => e.tagName + (e.id ? '#' + e.id : '');
-        return JSON.stringify({ first: idOf(vis[0] ?? {}), last: idOf(vis[vis.length - 1] ?? {}) });
+        return JSON.stringify({ first: idOf(vis[0] ?? {}), last: idOf(vis[vis.length - 1] ?? {}), total: vis.length });
       })()`);
-      const { first, last } = JSON.parse(seqInfo);
+      const { first, last, total } = JSON.parse(seqInfo);
+      if (!total || total === 0 || first === "undefined" || last === "undefined") {
+        throw new Error(`a11y-audit: cannot execute Tab walk on a page with zero focusable elements (${page.sessionId})`);
+      }
       await cdp.evl(page.sessionId, `document.getElementById("side-toggle")?.focus()`);
       const stops: string[] = [];
       for (let i = 0; i < 40; i++) {
@@ -432,13 +494,13 @@ async function main() {
       }
       // Classify each body stop: legal ONLY when it is the wrap (preceded by
       // the last focusable OR followed by the first). Anything else is a dead
-      // stop. The very last stop (truncation) is not judged.
+      // stop. Consecutive body stops are dead stops. The very last stop (truncation) is not judged.
       const badStops: string[] = [];
       for (let idx = 0; idx < stops.length - 1; idx++) {
         if (stops[idx] !== "BODY") continue;
         const prev = idx > 0 ? stops[idx - 1] : null;
         const next = stops[idx + 1] ?? null;
-        const isWrap = (prev === last || next === first);
+        const isWrap = prev !== "BODY" && (prev === last || next === first);
         if (!isWrap) badStops.push(`@${idx} prev=${prev} next=${next}`);
       }
       check("hub: the Tab walk has no mid-sequence dead stops (body only at the standard wrap)", badStops.length === 0, { badStops, first, last, stops: stops.slice(0, 10) });
@@ -630,20 +692,13 @@ async function main() {
       error instanceof Error ? (error.stack ?? error.message) : String(error),
     );
   } finally {
-    // ORDER AND SCOPE BOTH MATTER, and the first two versions of this fix got one wrong each:
-    // removing the profile while the browser held it left it half-deleted, and killing only the
-    // DIRECT child left Chrome's helper processes writing into it — `Deno.remove(recursive)` then
-    // failed with "Directory not empty (os error 39)" and the directory survived (observed twice in
-    // the durable root after green runs). So: kill the PROCESS GROUP (pozs: a helper outliving the
-    // parent is exactly how a profile keeps being written), wait, then remove with a bounded retry —
-    // and if it still will not go, say so, because pruneChromeProfileDirs() takes it later and a
-    // silent failure is how this bead started.
-    if (proc.pid) {
-      try { process.kill(-proc.pid, "SIGKILL"); } catch { try { proc.kill("SIGKILL"); } catch { /* dead */ } }
+    try {
+      await close();
+    } catch (cleanupErr) {
+      console.error(`a11y-audit: cleanup failed: ${String(cleanupErr)}`);
+    } finally {
+      await docs.close().catch(() => {});
     }
-    await proc.status.catch(() => { /* already reaped */ });
-    await close();
-    await docs.close();
   }
 
   console.log(`\n${checker.summary()}`);
