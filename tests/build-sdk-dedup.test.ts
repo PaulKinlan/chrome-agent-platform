@@ -52,36 +52,109 @@ console.log("GUARD_PASSED");
     }
   });
 
-  await t.step("Deno layout with distinct Zods fails the guard", async () => {
+  await t.step("Deno layout with zod@3 + zod@4 passes by selecting zod@3", async () => {
     const tmp = await Deno.makeTempDir();
     try {
       await Deno.writeTextFile(path.join(tmp, "package.json"), `{"name":"test"}`);
       const nm = path.join(tmp, "node_modules");
-      await mkPkg(nm, "zod");
-      await Deno.mkdir(path.join(nm, "zod", "v4"));
-      await Deno.writeTextFile(path.join(nm, "zod", "v4", "index.js"), "");
       await mkPkg(nm, "@ai-sdk/anthropic");
       await mkPkg(nm, "@ai-sdk/provider-utils");
       
-      await mkPkg(nm, "@modelcontextprotocol/sdk");
+      const denoStore = path.join(nm, ".deno");
+      
+      // Hoisted real zods in .deno
+      await mkPkg(path.join(denoStore, "zod@3.25.76", "node_modules"), "zod");
+      await mkPkg(path.join(denoStore, "zod@4.4.3", "node_modules"), "zod");
+      await Deno.mkdir(path.join(denoStore, "zod@3.25.76", "node_modules", "zod", "v4"));
+      await Deno.writeTextFile(path.join(denoStore, "zod@3.25.76", "node_modules", "zod", "v4", "index.js"), "");
+
+      // Symlink the canonical zod
+      await Deno.symlink(
+        path.join(denoStore, "zod@3.25.76", "node_modules", "zod"),
+        path.join(nm, "zod"),
+        { type: "dir" }
+      );
+      
+      // Candidate 1 (bound to zod@3)
+      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "@modelcontextprotocol"), "sdk");
+      await Deno.symlink(
+        path.join(denoStore, "zod@3.25.76", "node_modules", "zod"),
+        path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "zod"),
+        { type: "dir" }
+      );
+
+      // Candidate 2 (bound to zod@4)
+      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0_1", "node_modules", "@modelcontextprotocol"), "sdk");
+      await Deno.symlink(
+        path.join(denoStore, "zod@4.4.3", "node_modules", "zod"),
+        path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0_1", "node_modules", "zod"),
+        { type: "dir" }
+      );
+
+      // Symlink root sdk to Candidate 2 to test that requireFromRoot mismatch triggers the fallback loop!
+      await Deno.mkdir(path.join(nm, "@modelcontextprotocol"), { recursive: true });
+      await Deno.symlink(
+        path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0_1", "node_modules", "@modelcontextprotocol", "sdk"),
+        path.join(nm, "@modelcontextprotocol", "sdk"),
+        { type: "dir" }
+      );
+
+      await Deno.writeTextFile(path.join(tmp, "guard.mjs"), guardLogic);
+      const cmd = new Deno.Command("node", { args: ["guard.mjs"], cwd: tmp });
+      const { code, stdout, stderr } = await cmd.output();
+      const out = new TextDecoder().decode(stdout);
+      const err = new TextDecoder().decode(stderr);
+      assert(out.includes("GUARD_PASSED"), "Expected guard to PASS by selecting candidate 1\\n" + err);
+    } finally {
+      await Deno.remove(tmp, { recursive: true });
+    }
+  });
+
+  await t.step("Throws when NO zod@3-bound entry exists", async () => {
+    const tmp = await Deno.makeTempDir();
+    try {
+      await Deno.writeTextFile(path.join(tmp, "package.json"), `{"name":"test"}`);
+      const nm = path.join(tmp, "node_modules");
+      await mkPkg(nm, "@ai-sdk/anthropic");
+      await mkPkg(nm, "@ai-sdk/provider-utils");
       
       const denoStore = path.join(nm, ".deno");
       
-      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "@modelcontextprotocol"), "sdk");
-      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules"), "zod");
+      await mkPkg(path.join(denoStore, "zod@3.25.76", "node_modules"), "zod");
+      await mkPkg(path.join(denoStore, "zod@4.4.3", "node_modules"), "zod");
+      await Deno.mkdir(path.join(denoStore, "zod@3.25.76", "node_modules", "zod", "v4"));
+      await Deno.writeTextFile(path.join(denoStore, "zod@3.25.76", "node_modules", "zod", "v4", "index.js"), "");
 
-      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0_1", "node_modules", "@modelcontextprotocol"), "sdk");
-      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0_1", "node_modules"), "zod");
+      await Deno.symlink(
+        path.join(denoStore, "zod@3.25.76", "node_modules", "zod"),
+        path.join(nm, "zod"),
+        { type: "dir" }
+      );
+      
+      // Candidate 1 (bound to zod@4 instead of zod@3)
+      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "@modelcontextprotocol"), "sdk");
+      await Deno.symlink(
+        path.join(denoStore, "zod@4.4.3", "node_modules", "zod"),
+        path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "zod"),
+        { type: "dir" }
+      );
+
+      // Symlink root sdk to Candidate 1
+      await Deno.mkdir(path.join(nm, "@modelcontextprotocol"), { recursive: true });
+      await Deno.symlink(
+        path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "@modelcontextprotocol", "sdk"),
+        path.join(nm, "@modelcontextprotocol", "sdk"),
+        { type: "dir" }
+      );
 
       await Deno.writeTextFile(path.join(tmp, "guard.mjs"), guardLogic);
       const cmd = new Deno.Command("node", { args: ["guard.mjs"], cwd: tmp });
       const { code, stdout, stderr } = await cmd.output();
       const err = new TextDecoder().decode(stderr);
-      const out = new TextDecoder().decode(stdout);
-      assert(!out?.includes("GUARD_PASSED"), "Expected guard to FAIL on distinct Zods");
-      assert(err.includes("exactly one distinct zod is required among the sdk instances, but found 2"), "Did not find expected error message:\\n" + err);
+      assert(err.includes("no @modelcontextprotocol/sdk instance is bound to the extension's zod"), "Expected guard to FAIL when no entry matches");
     } finally {
       await Deno.remove(tmp, { recursive: true });
     }
   });
+
 });
