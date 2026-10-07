@@ -55,6 +55,13 @@ fi
 # committing checkout's root (where git runs every hook); bd resolves the shared
 # database from a linked worktree by itself. Never locate the repo via $0 — that
 # is the primary checkout's hook file from every worktree (chrome-agent-platform-ufrr).
-(
-  bd dolt push 2>/dev/null
-) &
+#
+# chrome-agent-platform-f151: the old push sent stderr to /dev/null and never
+# checked the background job's exit code, so a rejected push (non-fast-forward
+# divergence, no network) failed silently on every commit. The push stays async
+# (a commit is never blocked) but failure is now LOUD: the helper captures the
+# full output to <git-dir>/beads-push.log and prints one named stderr line with
+# the exit code, timestamp, log path and remediation. Quiet on success.
+if [ -f scripts/git-hooks/beads-push.sh ]; then
+  ( sh scripts/git-hooks/beads-push.sh ) &
+fi
