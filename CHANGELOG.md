@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.581] — 2026-10-06
+- Extend call-export WebAssembly runner with init and final parameters for expanded hash algorithm support
+
 ## [0.3.580] — 2026-10-06
 - Tabbing from the sidebar toggle now reaches its task and section controls instead of skipping straight to the composer.
 
