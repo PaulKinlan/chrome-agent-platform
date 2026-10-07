@@ -20,14 +20,19 @@ function assertGatedModelAction(isDirect = isOwnerDirectApproval) {
 }
 
 function assertCardDrivenApproval(body: string) {
-  const pending = body.indexOf("#thread-conversation approval-card");
+  const baseline = body.indexOf("__jnyLedgerPriorApprovalCards = new WeakSet");
+  const pending = body.indexOf("!globalThis.__jnyLedgerPriorApprovalCards.has(card)");
+  const saved = body.indexOf("globalThis.__jnyLedgerCard = card");
   const observed = body.indexOf("ledgerCardSeen = true");
+  const scroll = body.indexOf("card.scrollIntoView(");
   const screenshot = body.indexOf('writeEvidence("activity-create-approval-pending.png"');
-  const click = body.indexOf('ledgerCardApproved = await clickShadow(cdp, ntpSession, "#thread-conversation approval-card", ".approve")');
+  const sameCard = body.indexOf("const card = globalThis.__jnyLedgerCard");
+  const click = body.indexOf('await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x');
   const passed = body.indexOf("env?.ok === true");
-  assert(pending >= 0 && pending < observed, "observe a real pending conversation card before approval");
-  assert(observed < screenshot && screenshot < click && click < passed,
-    "capture the still-pending card, click real Allow once, then read the tool result");
+  assert(baseline >= 0 && baseline < pending && pending < saved && saved < observed,
+    "bind a NEW pending card, not stale cards from a prior run");
+  assert(scroll > saved && scroll < screenshot && screenshot < sameCard && sameCard < click && click < passed,
+    "screenshot the visible pending card, then CDP-click the SAME connected card before reading the result");
   assert(body.includes("ledgerCardSeen === true") && body.includes("ledgerCardApproved === true"),
     "missing card or owner click must fail the existing named check, not silently pass after gate removal");
 }
@@ -41,10 +46,13 @@ Deno.test("activity ledger: journey observes and allows the exact model-created 
   assertCardDrivenApproval(leg);
 });
 
-Deno.test("activity ledger: missing click or card-seen assertion is RED", () => {
-  const noClick = leg.replace('ledgerCardApproved = await clickShadow(cdp, ntpSession, "#thread-conversation approval-card", ".approve")', 'ledgerCardApproved = false');
-  assert(noClick !== leg, "mutant must replace the live click, not a comment");
-  assertThrows(() => assertCardDrivenApproval(noClick), Error, "capture the still-pending card");
+Deno.test("activity ledger: wrong-card, missing click or card assertion is RED", () => {
+  const noIdentity = leg.replace("!globalThis.__jnyLedgerPriorApprovalCards.has(card)", "true");
+  assert(noIdentity !== leg, "mutant must remove the live prior-card exclusion");
+  assertThrows(() => assertCardDrivenApproval(noIdentity), Error, "bind a NEW pending card");
+  const noClick = leg.replace('await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x', 'await Promise.resolve({ type: "mousePressed", x: point.x');
+  assert(noClick !== leg, "mutant must replace the live CDP click");
+  assertThrows(() => assertCardDrivenApproval(noClick), Error, "CDP-click the SAME connected card");
   const noCardAssertion = leg.replace("ledgerCardSeen === true", "true");
   assert(noCardAssertion !== leg, "mutant must replace the live card assertion");
   assertThrows(() => assertCardDrivenApproval(noCardAssertion), Error, "missing card or owner click");

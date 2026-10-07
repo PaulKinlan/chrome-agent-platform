@@ -3159,6 +3159,13 @@ async function main() {
       // Snapshot BEFORE the click: the terminal wait must bind to THIS run's
       // exact execution (request-count arrival is not settlement).
       const ledgerBeforeIds = await listRunIds(cdp, ledgerOptsSession);
+      // A stale card from a prior turn may still LOOK pending after expiry.
+      // Snapshot existing DOM nodes so this run can approve only its new card.
+      await evalIn(cdp, ntpSession, `(() => {
+        globalThis.__jnyLedgerPriorApprovalCards = new WeakSet(document.querySelectorAll('#thread-conversation approval-card'));
+        globalThis.__jnyLedgerCard = null;
+        return true;
+      })()`);
       await typeInto(cdp, ntpSession, composerInput("hub"), "create the Undo Journey Agent");
       await clickSel(cdp, ntpSession, composerSend("hub"));
       // A model-initiated named-agent.create now pays a real owner card. Do
@@ -3170,18 +3177,43 @@ async function main() {
       for (let i = 0; i < 120 && ledgerProvider.requests.length < 3; i++) {
         if (!ledgerCardSeen) {
           const pending = await evalIn(cdp, ntpSession, `(() => {
-            const card = [...document.querySelectorAll('#thread-conversation approval-card')]
-              .find((x) => (x.getAttribute('state') || 'pending') === 'pending');
-            return card ? { title: card.shadowRoot?.querySelector('.title')?.textContent ?? '' } : null;
+            const cards = [...document.querySelectorAll('#thread-conversation approval-card')]
+              .filter((card) => !globalThis.__jnyLedgerPriorApprovalCards.has(card) &&
+                (card.getAttribute('state') || 'pending') === 'pending' &&
+                card.shadowRoot?.querySelector('.title')?.textContent === 'Approve named-agent.create?');
+            if (cards.length !== 1) return null;
+            const card = cards[0];
+            globalThis.__jnyLedgerCard = card;
+            card.scrollIntoView({ block: 'center', inline: 'center' });
+            return { title: card.shadowRoot.querySelector('.title').textContent };
           })()`).catch(() => null);
           if (pending) {
             ledgerCardSeen = true;
             ledgerCardTitle = String(pending.title ?? "");
             ledgerCardElapsedMs = Date.now() - ledgerApprovalStart;
             ledgerCardShot = await captureShot(cdp, ntpSession);
-            if (ledgerCardShot) await writeEvidence("activity-create-approval-pending.png", ledgerCardShot);
             if (ledgerCardTitle === "Approve named-agent.create?" && ledgerCardShot?.length > 200) {
-              ledgerCardApproved = await clickShadow(cdp, ntpSession, "#thread-conversation approval-card", ".approve");
+              await writeEvidence("activity-create-approval-pending.png", ledgerCardShot);
+              // clickShadow selects the LAST matching host, not the observed
+              // one. Recheck the saved node and send real CDP mouse events at
+              // THAT button; never approve another run's pending request.
+              const point = await evalIn(cdp, ntpSession, `(() => {
+                const card = globalThis.__jnyLedgerCard;
+                if (!card?.isConnected || (card.getAttribute('state') || 'pending') !== 'pending' ||
+                    card.shadowRoot?.querySelector('.title')?.textContent !== 'Approve named-agent.create?') return null;
+                const button = card.shadowRoot.querySelector('.approve');
+                if (!button) return null;
+                button.scrollIntoView({ block: 'center', inline: 'center' });
+                const r = button.getBoundingClientRect();
+                const x = r.x + r.width / 2, y = r.y + r.height / 2;
+                if (r.width <= 0 || r.height <= 0 || card.shadowRoot.elementFromPoint(x, y) !== button) return null;
+                return { x, y };
+              })()`).catch(() => null);
+              if (point) {
+                await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 });
+                await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 });
+                ledgerCardApproved = true;
+              }
             }
           }
         }
