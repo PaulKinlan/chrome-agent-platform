@@ -172,7 +172,7 @@ if (missingEvidence.length > 0) {
     `skipping regeneration-drift verification. Committed generated outputs are trusted as pinned ` +
     `(build.mjs shipped-Wasm manifest checks still apply). Provide --evidence-root <dir> for full verification.`
   );
-  process.exit(0);
+  return;
 }
 
 const CATALOG = JSON.parse(readFileSync(PATHS.catalog, "utf8"));
@@ -947,7 +947,8 @@ if (VERIFY) {
     console.error(`bundled-tool VERIFY FAILED — generated outputs drifted (${drift.length}):`);
     for (const d of drift) console.error(`  ${d}`);
     console.error("regenerate deliberately with: node build.mjs --target=store --regen-tools");
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
   console.log(`VERIFY OK: ${emitted.size} generated files byte-identical to the committed tree`);
 }
@@ -958,6 +959,4 @@ console.log(`OK: ${packages.length} packages, ${inventoryFiles.length} shipped f
 
 if (isMain) {
   main();
-  // Explicit exit avoids Node v24 DelayedTaskScheduler / isolate disposal futex race on shutdown (chrome-agent-platform-pozs)
-  process.exit(0);
 }
