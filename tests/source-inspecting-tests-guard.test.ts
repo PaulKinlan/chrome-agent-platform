@@ -961,7 +961,7 @@ Deno.test("afpl: falsification — recursive removal of tests/helpers or a share
   badSamples.push(
     { rel: "tests/zz-bad-alias.test.ts", code: `const scratch = join(ROOT, "tests", "helpers");\nawait Deno.remove(scratch, { recursive: true });` },
     { rel: "tests/zz-bad-template.test.ts", code: `const parent = join(ROOT, "tests", "helpers");\nawait Deno.remove(\`\${parent}/nested\`, { recursive: true });` },
-    { rel: "tests/zz-bad-false-temp.test.ts", code: `await Deno.remove(join(ROOT, "tests", "helpers", Deno.makeTempDirSync()), { recursive: true });` },
+    { rel: "tests/zz-bad-false-temp.test.ts", code: `await Deno.remove(join(ROOT, "tests", "helpers", Deno.makeTempDirSync({ dir: durableDir("scratch") })), { recursive: true });` },
   );
   for (const sample of badSamples.slice(-3)) {
     assert(
@@ -971,7 +971,7 @@ Deno.test("afpl: falsification — recursive removal of tests/helpers or a share
   }
   goodSamples.push({
     rel: "tests/zz-good-alias.test.ts",
-    code: `const realHelpersDir = await Deno.makeTempDir();\nawait Deno.remove(realHelpersDir, { recursive: true });`,
+    code: `const realHelpersDir = await Deno.makeTempDir({ dir: durableDir("scratch") });\nawait Deno.remove(realHelpersDir, { recursive: true });`,
   });
   const falsePositives = findRecursiveRemovalsOfSharedPaths(goodSamples);
   assertEquals(falsePositives, [], `scratch/temp directory removals must NOT be flagged: ${falsePositives.join(", ")}`);
