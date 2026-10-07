@@ -1690,6 +1690,13 @@ async function main() {
     const footerSettingsShot = await captureShot(cdp, ntpSession);
     if (footerSettingsShot) await writeEvidence("hub-footer-settings-current.png", footerSettingsShot);
     await evalIn(cdp, ntpSession, `document.getElementById('view-back')?.click(); true`);
+    // b7ny0.1: the genuine CDP click on #open-settings parks the pointer ON that
+    // button, so `.foot-btn:hover` (background: var(--panel-2) !important,
+    // ntp.html:1034) still paints it when footerBack is read — aria-current is
+    // correctly null and ghost stays true, but bg reads rgb(239,237,232). Park the
+    // pointer on neutral chrome (top-left) so the idle fill read is not polluted by
+    // a lingering hover. The fill assertion itself is unchanged.
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 1, y: 1 }, ntpSession);
     await sleep(900);
     const footerBack = await footerState();
     console.log("footer states:", JSON.stringify({ footerIdle, footerSettings, footerBack }));
@@ -2573,7 +2580,12 @@ async function main() {
       createdFromCard = (list?.agents ?? []).find((a) => a?.name === "Research Analyst") ?? null;
       if (!createdFromCard) await sleep(200);
     }
-    const namedCount1 = ((await msgValue({ type: "named-agent.list" }))?.agents ?? []).length;
+    // b7ny0.3: listNamedAgents overlays the built-in background seeds under the
+    // persisted records (seedOverlay in extension/lib/named-agents.js:215-223), so
+    // a raw length is 1 + 22 seeds = 23, not 1. Count only the NON-seeded
+    // (persisted/named) records so "yields ONE named agent" stays honest and does
+    // not re-break when the seed set changes.
+    const namedCount1 = ((await msgValue({ type: "named-agent.list" }))?.agents ?? []).filter((a) => !a?.seeded).length;
     const savedSkillIds = (createdFromCard?.skills ?? []).map((s) => (s && typeof s === "object" ? s?.id : s));
     console.log("createdFromCard from card:", JSON.stringify({ id: createdFromCard?.id, role: String(createdFromCard?.role ?? "").slice(0, 40), skills: savedSkillIds, namedCount1 }));
     check(
@@ -2642,7 +2654,11 @@ async function main() {
     check(
       "create dialog: a Scheduled-group template creates one scheduled agent that the sidebar and Settings both list",
       schedPick?.picked === true && /every \d+ minutes/.test(schedMinutes) && scheduledAgent !== null &&
-        Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && /Scheduled · every \d+ min/.test(t)) &&
+        // b7ny0.4: the sidebar chip renders the HUMANISED cadence via
+        // formatCadenceMinutes (10080 -> "weekly"), not the raw "every N min" form.
+        // Assert the name + the "Scheduled" marker, not the cadence wording, so this
+        // cannot drift again when the humanisation changes.
+        Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && t.includes("Scheduled")) &&
         surfacesS.sidebarRows === 2 && surfacesS.panelRows === 2 && surfacesS.settingsRows === 2 && /^2 agents/.test(surfacesS.panelCount) &&
         // h97m: the FOURTH surface asserts too — the picker's +3 (acp harness
         // rows leaking into the created-agents projection) walked through this
