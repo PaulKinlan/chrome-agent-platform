@@ -169,6 +169,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-dialog-consolidation.ts": { class: "kat" },
   "kat-exec-build-flag.ts": { class: "kat", ...RED("29/1", "'flag on: all thirteen nav items are visible' — the nav now has fourteen entries") },
   "kat-failed-runs.ts": { class: "kat" },
+  "kat-gi0jw-activity-approval.ts": { class: "kat", budgetMs: 900_000 },
   "kat-generated-image-strip.ts": { class: "kat" },
   "kat-genui-error-state.ts": { class: "kat", ...RED("15/3", "three generated-UI error-state checks red: preview frame absent and retry status null", "the generated-UI bootstrap syntax lane (in flight)") },
   "kat-hub-timeline.ts": { class: "kat" },

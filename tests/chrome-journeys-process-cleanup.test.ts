@@ -1,7 +1,7 @@
 // The long Chrome journey used to kill only the Chrome parent + processes whose
-// argv contained its profile. Crashpad sidecars need the isolated group owned
-// by launchChrome; exercise this journey's actual cleanup seam without starting
-// a browser or importing chrome-journeys.ts (which starts one on import).
+// argv contained its profile. Shared teardown also owns Chrome's process group;
+// detached crashpad helpers leave that group and remain a separate reaper issue.
+// Exercise the seam without importing chrome-journeys.ts (starts a browser).
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 const source = await Deno.readTextFile(new URL("../scripts/chrome-journeys.ts", import.meta.url));
@@ -19,7 +19,22 @@ Deno.test("g599r: all three journey finalizers use the group-aware cleanup seam"
   const sites = [...source.matchAll(/if\s*\(proc\)\s*await\s+teardownJourneyChrome\(proc,\s*profile\);\s*else\s+await\s+runBounded\(RM,\s*\["-rf",\s*profile\]\);/g)];
   assertEquals(sites.length, 3, "main, demo-path and factory-reset use shared teardown; rm only if Chrome never spawned");
   assert(!source.includes("async function killChromiumTree("), "do not restore the parent-only pkill helper");
-  assert(source.includes('"--disable-crash-reporter"'), "long headless journey opts out of crash reporting");
+  // Crashpad double-forks out of Chrome's group in CfT 155 even with
+  // --disable-crash-reporter. Reaper ownership of that helper is a fleet gate,
+  // not proof this group/profile-scoped teardown can kill it.
+});
+
+Deno.test("gi0jw: isolated journey Chrome forwards only its non-secret fleet lane", () => {
+  const start = source.indexOf("function launchJourneyChrome(profile: string)");
+  const end = source.indexOf("}).catch((e) => {", start);
+  assert(start >= 0 && end > start, "find the journey-owned browser launch");
+  const launcher = source.slice(start, end);
+  assert(launcher.includes('const fleetLane = Deno.env.get("FLEET_LANE");'),
+    "read the authenticated lane name, not a hardcoded or body-supplied value");
+  assert(/clearEnv:\s*true,\s*env:\s*fleetLane\s*\?\s*\{\s*FLEET_LANE:\s*fleetLane\s*\}\s*:\s*\{\}/.test(launcher),
+    "Chrome's cleared child environment must contain only FLEET_LANE when set");
+  assertEquals([...launcher.matchAll(/\benv\s*:/g)].length, 1,
+    "do not sneak additional ambient variables into the clean browser environment");
 });
 
 Deno.test("g599r: journey cleanup awaits the exact proc/profile in shared group-aware teardown", async () => {
