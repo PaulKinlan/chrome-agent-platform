@@ -3258,10 +3258,11 @@ async function main() {
     // Seed the ledger row for the run-created agent (the production render +
     // undo path is what this journey exercises; run-driven mutations are
     // recorded in the run thread, not the ledger — see the bead notes).
+    const ledgerRowId = "act-seed-create";
     await msgValue({
       type: "memory.set", origin: "master", key: "cap:action-ledger",
       value: [{
-        id: "act-seed-create", ts: Date.now(), tool: "create_named_agent",
+        id: ledgerRowId, ts: Date.now(), tool: "create_named_agent",
         sentence: "Created the agent Undo Journey Agent", argsDigest: `name=Undo Journey Agent`,
         inverse: createdAgentId ? { tool: "delete_named_agent", args: { id: createdAgentId } } : null,
         source: "hub", undone: false,
@@ -3271,13 +3272,13 @@ async function main() {
     for (let i = 0; i < 24; i++) {
       const r = await msgValue({ type: "actions.list", limit: 20 });
       ledgerRows = Array.isArray(r?.rows) ? r.rows : [];
-      if (ledgerRows.some((row) => row.tool === "create_named_agent")) break;
+      if (ledgerRows.some((row) => row.id === ledgerRowId)) break;
       await sleep(250);
     }
-    const createRow = ledgerRows.find((row) => row.tool === "create_named_agent") ?? null;
+    const createRow = ledgerRows.find((row) => row.id === ledgerRowId) ?? null;
     check(
       "Activity ledger: the ledger row for the run-created agent carries its undo",
-      createRow !== null &&
+      createRow?.id === ledgerRowId && createRow.tool === "create_named_agent" &&
         createRow.sentence === "Created the agent Undo Journey Agent" &&
         createRow.inverse?.tool === "delete_named_agent" &&
         createRow.inverse?.args?.id === createdAgentId &&
@@ -3288,7 +3289,7 @@ async function main() {
     // shadow DOM — the exact production render.
     const ledgerUi = async () => await evalIn(cdp, ntpSession, `(async () => {
       const el = document.getElementById("side-action-ledger");
-      const section = document.getElementById("activity-ledger-section");
+      const section = document.getElementById("activity-section");
       if (!el) return null;
       await el.refresh?.();
       const sr = el.shadowRoot;
@@ -3330,14 +3331,14 @@ async function main() {
     // owner gesture — a genuine click on the summary — then asserts the button
     // is hit-testable before clicking it, so a regression is the click-dead
     // signature again, not a mystery.
-    const summaryClicked = await clickSel(cdp, ntpSession, "#activity-ledger-section > summary");
+    const summaryClicked = await clickSel(cdp, ntpSession, "#activity-section > summary");
     let sectionOpen = false;
     for (let i = 0; i < 12 && !sectionOpen; i++) {
-      sectionOpen = await evalIn(cdp, ntpSession, `document.getElementById("activity-ledger-section")?.open === true`);
+      sectionOpen = await evalIn(cdp, ntpSession, `document.getElementById("activity-section")?.open === true`);
       if (!sectionOpen) await sleep(200);
     }
     const visibility = await evalIn(cdp, ntpSession, `(() => {
-      const section = document.getElementById("activity-ledger-section");
+      const section = document.getElementById("activity-section");
       const el = document.getElementById("side-action-ledger");
       const undo = el?.shadowRoot?.querySelector(".al-undo");
       if (!section || !undo) return null;
@@ -3392,10 +3393,10 @@ async function main() {
     // user sees (co35 re-review, uplift-opus: leaving the disclosure open cost
     // five downstream Thread-view checks). Guarded: only click when the leg
     // actually opened it, so a failed leg is not compounded by opening it.
-    if (await evalIn(cdp, ntpSession, `document.getElementById("activity-ledger-section")?.open === true`)) {
-      await clickSel(cdp, ntpSession, "#activity-ledger-section > summary");
+    if (await evalIn(cdp, ntpSession, `document.getElementById("activity-section")?.open === true`)) {
+      await clickSel(cdp, ntpSession, "#activity-section > summary");
       for (let i = 0; i < 12; i++) {
-        if (await evalIn(cdp, ntpSession, `document.getElementById("activity-ledger-section")?.open !== true`)) break;
+        if (await evalIn(cdp, ntpSession, `document.getElementById("activity-section")?.open !== true`)) break;
         await sleep(200);
       }
     }
