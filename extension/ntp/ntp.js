@@ -5085,6 +5085,18 @@ function ensureSideScrim() {
   side.after(sideScrim);
   return sideScrim;
 }
+function updateSidebarSummariesTabindex(collapsed) {
+  const summaries = side?.querySelectorAll?.("details.side-disclosure > summary");
+  if (!summaries) return;
+  for (const s of summaries) {
+    if (collapsed) {
+      s.setAttribute("tabindex", "-1");
+    } else {
+      s.removeAttribute("tabindex");
+    }
+  }
+}
+
 function setSidebarOverlay(open) {
   const next = open === true && (narrowSidebarMq?.matches === true);
   if (next && !sidebarOverlayOpen) {
@@ -5097,10 +5109,9 @@ function setSidebarOverlay(open) {
   // OFF for the drawer's lifetime. On close the captured rail state goes back
   // on (at narrow that is the icon rail again; at wide the width policy owns
   // the class, so fall back to the live state until it applies).
-  side.classList.toggle(
-    "collapsed",
-    next ? false : ((narrowSidebarMq?.matches === true) ? sidebarOverlayWasCollapsed : sidebarCollapsed),
-  );
+  const isCollapsed = next ? false : ((narrowSidebarMq?.matches === true) ? sidebarOverlayWasCollapsed : sidebarCollapsed);
+  side.classList.toggle("collapsed", isCollapsed);
+  updateSidebarSummariesTabindex(isCollapsed);
   const scrim = ensureSideScrim();
   scrim.hidden = !next;
   // expanded-ness is the overlay at narrow width, so aria-expanded + the
@@ -5116,6 +5127,7 @@ function setSidebarCollapsed(collapsed, { auto = false } = {}) {
   const expandedNow = (narrowSidebarMq?.matches === true) ? sidebarOverlayOpen : !collapsed;
   updateSideToggleLabels(expandedNow);
   setSideToggleExpanded(expandedNow);
+  updateSidebarSummariesTabindex(!expandedNow);
   renderDurability();
   if (auto) return; // form-factor state — the user's saved choice stands
   persistedSidebarCollapsed = collapsed;
@@ -5245,6 +5257,7 @@ async function restoreSidebar() {
     persistedSidebarCollapsed = false; // worker unreachable — default expanded.
   }
   applySidebarForWidth();
+  updateSidebarSummariesTabindex(side?.classList?.contains("collapsed") ?? false);
   initSideDisclosures();
   initSideRailNav();
 }

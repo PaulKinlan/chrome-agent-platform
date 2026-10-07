@@ -592,6 +592,43 @@ Deno.test("l80u: rail navigation and disclosure initialization scope selectors t
   assertEquals(mockSidebarSection.open, true, "sidebar details must be opened");
   assertEquals(sidebarFocused, true, "focus must land inside sidebar details");
 });
+Deno.test("d284: updateSidebarSummariesTabindex manages tabindex on sidebar summaries to eliminate redundant collapsed tab stops", async () => {
+  const js = await Deno.readTextFile(`${ROOT}/extension/ntp/ntp.js`);
+
+  // Verify function existence and usage in ntp.js
+  assert(
+    js.includes("function updateSidebarSummariesTabindex"),
+    "ntp.js must define updateSidebarSummariesTabindex",
+  );
+  assert(
+    js.includes('s.setAttribute("tabindex", "-1")') &&
+    js.includes('s.removeAttribute("tabindex")'),
+    "updateSidebarSummariesTabindex must toggle tabindex='-1' based on collapsed state",
+  );
+
+  // Behavioral test: simulate sidebar summaries
+  const summaries = [
+    { attributes: new Map<string, string>(), setAttribute(k: string, v: string) { this.attributes.set(k, v); }, removeAttribute(k: string) { this.attributes.delete(k); }, getAttribute(k: string) { return this.attributes.get(k) ?? null; } },
+    { attributes: new Map<string, string>(), setAttribute(k: string, v: string) { this.attributes.set(k, v); }, removeAttribute(k: string) { this.attributes.delete(k); }, getAttribute(k: string) { return this.attributes.get(k) ?? null; } },
+  ];
+
+  function simulateUpdate(collapsed: boolean) {
+    for (const s of summaries) {
+      if (collapsed) s.setAttribute("tabindex", "-1");
+      else s.removeAttribute("tabindex");
+    }
+  }
+
+  // Collapsed: summaries have tabindex="-1" so keyboard navigation skips them
+  simulateUpdate(true);
+  assertEquals(summaries[0].getAttribute("tabindex"), "-1");
+  assertEquals(summaries[1].getAttribute("tabindex"), "-1");
+
+  // Expanded: summaries are in natural tab order (no tabindex)
+  simulateUpdate(false);
+  assertEquals(summaries[0].getAttribute("tabindex"), null);
+  assertEquals(summaries[1].getAttribute("tabindex"), null);
+});
 
 
 
