@@ -1513,8 +1513,6 @@ const ALLOWED = new Map<string, string>([
     'message says "the scan keeps the honest future-host wording": the pin guards documentation wording, not behaviour.'],
   // --- an import-only pin whose USE is separately pinned in the same file, so
   //     the binding cannot go dead unnoticed.
-  [tp("activity-liveness.test.ts::extension/shared/components.js::import { redactSecrets } from \"../lib/pure.js\";"),
-    'message "the canonical redactor is imported"; siblings pin redactSecrets(event.toolArgs), redactSecrets(parsed.value) and redactSecrets(p.value) as live call sites.'],
   [tp("table-management-tools.test.ts::extension/offscreen/offscreen.js::import { registerTableWorkerHost } from \"../lib/table-worker-host.js\""),
     'the very next assertion pins the call site: assert(offscreen.includes("registerTableWorkerHost();")).'],
   [tp("ux008-failed-dispatch.test.ts::extension/background/service-worker.js::import { buildRetryDispatch, retryRunId } from \"../lib/run-retry.js\";"),
