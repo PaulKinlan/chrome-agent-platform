@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.590] — 2026-10-07
+- Fix a long cold-boot stall by persisting the run-log WAL marker and letting read paths share the lock.
+
 ## [0.3.589] — 2026-10-07
 - Admitted Emscripten packages gain a runtime home: the offscreen document now executes admitted operations in isolated fresh-per-job workers with broker authorization and host-owned deadlines.
 
