@@ -408,7 +408,7 @@ Deno.test("ACP service status: reports installed mode from unit file, not CLI fl
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.chrome-agent-platform.acp-bridge</string>
-  <key>WorkingDirectory</key><string>/tmp/--allow-anonymous-loopback</string>
+  <key>WorkingDirectory</key><string>/Users/example/Code/--allow-anonymous-loopback</string>
   <key>ProgramArguments</key>
   <array>
     <string>/usr/bin/deno</string>
