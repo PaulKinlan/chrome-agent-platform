@@ -1513,8 +1513,6 @@ const ALLOWED = new Map<string, string>([
     'message says "the scan keeps the honest future-host wording": the pin guards documentation wording, not behaviour.'],
   // --- an import-only pin whose USE is separately pinned in the same file, so
   //     the binding cannot go dead unnoticed.
-  [tp("activity-liveness.test.ts::extension/shared/components.js::import { redactSecrets } from \"../lib/pure.js\";"),
-    'message "the canonical redactor is imported"; siblings pin redactSecrets(event.toolArgs), redactSecrets(parsed.value) and redactSecrets(p.value) as live call sites.'],
   [tp("table-management-tools.test.ts::extension/offscreen/offscreen.js::import { registerTableWorkerHost } from \"../lib/table-worker-host.js\""),
     'the very next assertion pins the call site: assert(offscreen.includes("registerTableWorkerHost();")).'],
   [tp("ux008-failed-dispatch.test.ts::extension/background/service-worker.js::import { buildRetryDispatch, retryRunId } from \"../lib/run-retry.js\";"),
@@ -2029,7 +2027,9 @@ Deno.test("guard: the attributed population and its documented exclusions", () =
     "no build artifact was judged — the skip happens before the target is read");
   // A BACKTICK token containing ${...} is computed per iteration. 10 of these were
   // mis-filed as TOKEN_ABSENT by the audit and 1 more by the census; 13 measured here.
-  assertEquals(stats.skippedInterpolated, 13,
+  // z4gg (2026-10-07) declared the 14th: one-shell-layout.test.ts loops over the journey
+  // names and pins each via an interpolated (computed) token, skipped by construction.
+  assertEquals(stats.skippedInterpolated, 14,
     "interpolated backtick tokens are skipped; a change means the delimiter gate moved");
 
   // Absence pins and disjunctions stay skipped (conservative, not false greens).

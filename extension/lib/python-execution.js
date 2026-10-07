@@ -79,10 +79,23 @@ export async function runPython(runtime, { code = "", stdin = "", wheels = null,
       const taken = runtime.takeNetworkRecords();
       const records = Array.isArray(taken?.records) ? taken.records : [];
       if (records.length === 0 && !taken?.dropped) return null;
-      return { network: records, ...(taken?.dropped ? { networkDropped: taken.dropped } : {}) };
+      return {
+        network: records,
+        ...(taken?.dropped ? { networkDropped: taken.dropped } : {}),
+        ...(taken?.hasSuccessfulFetch ? { hasSuccessfulFetch: true } : {}),
+      };
     } catch {
       return null;
     }
+  };
+  const isTaintedNetwork = (net) => {
+    if (!net) return false;
+    if (net.hasSuccessfulFetch === true) return true;
+    if (Array.isArray(net.network) && net.network.some((r) => r && r.ok === true && !r.refused)) return true;
+    // Bounded ledger overrun: if any requests were dropped past the per-run ledger capacity,
+    // conservatively fail closed so an attacker cannot hide a successful fetch behind 500 refusals.
+    if (typeof net.networkDropped === "number" && net.networkDropped > 0) return true;
+    return false;
   };
   try {
     // Wire the bounded stdout + stdin into the interpreter BEFORE running, so
@@ -112,12 +125,21 @@ export async function runPython(runtime, { code = "", stdin = "", wheels = null,
     void result;
   } catch (error) {
     // Fail closed: a JS-level throw (including any accidental eval path) is a
-    // bounded error, never a raw exception escape.
-    return { ok: false, error: String(error?.message ?? error).slice(0, 200), ...(takeNetwork() ?? {}) };
+    // bounded error, never a raw exception escape. Compute network taint so an
+    // exception containing fetched text is still fenced for the model (INV-7).
+    const network = takeNetwork() ?? {};
+    const untrusted = isTaintedNetwork(network);
+    return {
+      ok: false,
+      error: String(error?.message ?? error).slice(0, 200),
+      ...network,
+      ...(untrusted ? { untrusted: true } : {}),
+    };
   }
   const network = takeNetwork() ?? {};
+  const untrusted = isTaintedNetwork(network);
   if (utf8Bytes(out).byteLength > PYTHON_EXEC_BOUNDS.maxStdoutBytes) {
-    return { ok: false, error: "python_stdout_over_budget", ...network };
+    return { ok: false, error: "python_stdout_over_budget", ...network, ...(untrusted ? { untrusted: true } : {}) };
   }
-  return { ok: true, stdout: out, ...network };
+  return { ok: true, stdout: out, ...network, ...(untrusted ? { untrusted: true } : {}) };
 }

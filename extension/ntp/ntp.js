@@ -5055,6 +5055,9 @@ function persistSidebar(collapsed) {
 // `auto` marks a form-factor-driven change (the narrow-width policy): it moves
 // the rail without overwriting the user's persisted preference.
 let persistedSidebarCollapsed = false;
+// A boot kv.get may return after an explicit user click. Its older value must
+// never overwrite either the visible choice or the newly persisted choice.
+let sidebarUserToggled = false;
 // UX-004 REVISE: the narrow manual expansion is an OFF-CANVAS overlay, never
 // the inline 240px rail (which overflows a 360px viewport). The overlay is
 // transient (never persisted) and closes on scrim tap, Escape, or leaving the
@@ -5085,6 +5088,18 @@ function ensureSideScrim() {
   side.after(sideScrim);
   return sideScrim;
 }
+function updateSidebarSummariesTabindex(collapsed) {
+  const summaries = side?.querySelectorAll?.("details.side-disclosure > summary");
+  if (!summaries) return;
+  for (const s of summaries) {
+    if (collapsed) {
+      s.setAttribute("tabindex", "-1");
+    } else {
+      s.removeAttribute("tabindex");
+    }
+  }
+}
+
 function setSidebarOverlay(open) {
   const next = open === true && (narrowSidebarMq?.matches === true);
   if (next && !sidebarOverlayOpen) {
@@ -5097,10 +5112,9 @@ function setSidebarOverlay(open) {
   // OFF for the drawer's lifetime. On close the captured rail state goes back
   // on (at narrow that is the icon rail again; at wide the width policy owns
   // the class, so fall back to the live state until it applies).
-  side.classList.toggle(
-    "collapsed",
-    next ? false : ((narrowSidebarMq?.matches === true) ? sidebarOverlayWasCollapsed : sidebarCollapsed),
-  );
+  const isCollapsed = next ? false : ((narrowSidebarMq?.matches === true) ? sidebarOverlayWasCollapsed : sidebarCollapsed);
+  side.classList.toggle("collapsed", isCollapsed);
+  updateSidebarSummariesTabindex(isCollapsed);
   const scrim = ensureSideScrim();
   scrim.hidden = !next;
   // expanded-ness is the overlay at narrow width, so aria-expanded + the
@@ -5116,6 +5130,7 @@ function setSidebarCollapsed(collapsed, { auto = false } = {}) {
   const expandedNow = (narrowSidebarMq?.matches === true) ? sidebarOverlayOpen : !collapsed;
   updateSideToggleLabels(expandedNow);
   setSideToggleExpanded(expandedNow);
+  updateSidebarSummariesTabindex(!expandedNow);
   renderDurability();
   if (auto) return; // form-factor state — the user's saved choice stands
   persistedSidebarCollapsed = collapsed;
@@ -5128,28 +5143,14 @@ sideToggle?.addEventListener("click", () => {
     runRouteUpdate(() => setSidebarOverlay(!sidebarOverlayOpen));
     return;
   }
+  // Only the wide toggle changes the persisted choice; a narrow overlay click
+  // must still accept the saved choice when its boot read arrives later.
+  sidebarUserToggled = true;
   runRouteUpdate(() => setSidebarCollapsed(!sidebarCollapsed));
 });
-// chrome-agent-platform-716s.11: Tab from #side-toggle cycles cleanly to the
-// first interactive element (composer input) rather than hitting a dead-stop on <body>.
-sideToggle?.addEventListener("keydown", (event) => {
-  if (event.key === "Tab" && !event.shiftKey) {
-    event.preventDefault();
-    const threadView = document.getElementById("thread-view");
-    if (threadView && !threadView.hidden) {
-      const firstInThread = threadView.querySelector("button:not([hidden]), [tabindex]:not([tabindex='-1'])");
-      if (firstInThread) {
-        firstInThread.focus();
-        return;
-      }
-    }
-    const composerEl = document.querySelector("#composer");
-    const target = composerEl?.shadowRoot?.querySelector("textarea, button, [tabindex='0']")
-      || composerEl?.querySelector?.("[data-composer-input], textarea")
-      || document.getElementById("home");
-    target?.focus?.();
-  }
-});
+// The toggle is now inside .side-top, BEFORE the Tasks + section-nav controls.
+// Native Tab order must continue through them; the old 716s.11 redirect to the
+// composer skipped the entire sidebar (chrome-agent-platform-g09i).
 // Escape closes the overlay. Optional-chained: the unit-thread harnesses
 // evaluate this module against a partial DOM shim without addEventListener.
 document.addEventListener?.("keydown", (event) => {
@@ -5209,7 +5210,7 @@ function initSideDisclosures() {
   const states = loadSideDisclosureStates() || {};
   const defaultOpen = new Set(["tasks-section", "agents-section"]);
   for (const id of sections) {
-    const el = document.getElementById(id);
+    const el = side?.querySelector?.(`#${id}`) || document.getElementById(id);
     if (!el || el.tagName !== "DETAILS") continue;
     if (typeof states[id] === "boolean") {
       el.open = states[id];
@@ -5239,7 +5240,7 @@ function initSideRailNav() {
     updateSideToggleLabels(true);
 
     if (targetId) {
-      const target = document.getElementById(targetId);
+      const target = side?.querySelector?.(`#${targetId}`) || document.getElementById(targetId);
       if (target) {
         if (target.hidden) target.hidden = false;
         if (target.tagName === "DETAILS") {
@@ -5257,11 +5258,12 @@ function initSideRailNav() {
 async function restoreSidebar() {
   try {
     const s = await send("kv.get", { keys: SIDEBAR_KEY });
-    persistedSidebarCollapsed = s?.[SIDEBAR_KEY] === true;
+    if (!sidebarUserToggled) persistedSidebarCollapsed = s?.[SIDEBAR_KEY] === true;
   } catch {
-    persistedSidebarCollapsed = false; // worker unreachable — default expanded.
+    if (!sidebarUserToggled) persistedSidebarCollapsed = false; // worker unreachable — default expanded.
   }
   applySidebarForWidth();
+  updateSidebarSummariesTabindex(side?.classList?.contains("collapsed") ?? false);
   initSideDisclosures();
   initSideRailNav();
 }
@@ -5823,6 +5825,6 @@ async function bootNtpRoutes() {
 // runs, and THIS page is the on-demand fallback (so a script run from the hub
 // works even where chrome.offscreen is unavailable). The claim protocol ensures
 // only ONE host executes (no double side-effects).
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
-  handleScriptRunMessage(message, sendResponse, document, "ntp")
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) =>
+  handleScriptRunMessage(message, sender, sendResponse, document, "ntp")
 );

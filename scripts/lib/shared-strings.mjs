@@ -15,13 +15,16 @@
 /** Placeholder for a hoisted string, chosen to survive JSON escaping unharmed. */
 const placeholder = (index) => `\u0000S${index}\u0000`;
 
+/** Escapes special regex characters in a string for literal matching. */
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 /**
  * The repeated strings worth hoisting, most-repeated first (stable output).
  * @param {unknown} value a JSON-shaped value
- * @param {{ minLength?: number, minCount?: number }} [options]
+ * @param {{ minLength?: number, minCount?: number, minSaving?: number, refLen?: number }} [options]
  * @returns {string[]}
  */
-export function collectSharedStrings(value, { minLength = 20, minCount = 2 } = {}) {
+export function collectSharedStrings(value, { minLength = 20, minCount = 2, minSaving = 0, refLen = 5 } = {}) {
   /** @type {Map<string, number>} */
   const counts = new Map();
   /** @param {any} v */
@@ -32,20 +35,41 @@ export function collectSharedStrings(value, { minLength = 20, minCount = 2 } = {
   };
   visit(value);
   return [...counts.entries()]
-    .filter(([s, n]) => s.length >= minLength && n >= minCount)
+    .filter(([s, n]) => {
+      if (s.length < minLength || n < minCount) return false;
+      if (minSaving > 0) {
+        const jsonLen = JSON.stringify(s).length;
+        if ((n - 1) * jsonLen - n * refLen - 2 < minSaving) return false;
+      }
+      return true;
+    })
     .sort((a, b) => (b[1] - a[1]) || (b[0].length - a[0].length) || (a[0] < b[0] ? -1 : 1))
     .map(([s]) => s);
 }
 
 /**
- * Render `<banner>const SHARED_STRINGS = [...]; export const <declaration> = Object.freeze(<rows>);`
+ * Render `<banner>const <tableName> = [...]; <extraDefs> export const <declaration> = Object.freeze(<rows>);`
  * with every shared string replaced by a table reference. With no shared
  * strings the output is byte-identical to a plain JSON emission.
- * @param {{ value: unknown, banner?: string, declaration?: string, sharedStrings?: string[] }} options
+ * @param {{
+ *   value: unknown,
+ *   banner?: string,
+ *   declaration?: string,
+ *   sharedStrings?: string[],
+ *   tableName?: string,
+ *   hoistStructures?: boolean, // Hoists repeated capabilities (>=3), licences (>=3, notices: null), caveats (>=5)
+ * }} options
  * @returns {string}
  */
-export function renderHoistedValue({ value, banner = "", declaration = "ROWS", sharedStrings = [] }) {
-  if (!sharedStrings.length) {
+export function renderHoistedValue({
+  value,
+  banner = "",
+  declaration = "ROWS",
+  sharedStrings = [],
+  tableName = "SHARED_STRINGS",
+  hoistStructures = false,
+}) {
+  if (!sharedStrings.length && !hoistStructures) {
     return `${banner}export const ${declaration} = Object.freeze(${JSON.stringify(value, null, 1)});\n`;
   }
   const index = new Map(sharedStrings.map((s, i) => [s, i]));
@@ -55,9 +79,107 @@ export function renderHoistedValue({ value, banner = "", declaration = "ROWS", s
     (_key, v) => (typeof v === "string" && index.has(v) ? placeholder(index.get(v)) : v),
     1,
   );
-  const body = json.replace(/"\\u0000S(\d+)\\u0000"/g, (_m, i) => `SHARED_STRINGS[${i}]`);
+  let body = json.replace(/"\\u0000S(\d+)\\u0000"/g, (_m, i) => `${tableName}[${i}]`);
+
+  let extraDefs = "";
+  if (hoistStructures && Array.isArray(value)) {
+    // 1. Capabilities arrays repeated >= 3 times (excluding empty arrays)
+    const capCounts = new Map();
+    for (const r of value) {
+      if (r && Array.isArray(r.capabilities) && r.capabilities.length > 0) {
+        const k = JSON.stringify(r.capabilities);
+        capCounts.set(k, (capCounts.get(k) || 0) + 1);
+      }
+    }
+    const sharedCaps = [...capCounts.entries()].filter(([k, n]) => n >= 3).map(([k]) => JSON.parse(k));
+
+    // 2. Licence objects repeated >= 3 times (contract: spdx, file, notices: null)
+    const licCounts = new Map();
+    for (const r of value) {
+      if (r && r.licence && r.licence.notices === null) {
+        const k = JSON.stringify(r.licence);
+        licCounts.set(k, (licCounts.get(k) || 0) + 1);
+      }
+    }
+    const sharedLics = [...licCounts.entries()].filter(([k, n]) => n >= 3).map(([k]) => JSON.parse(k));
+
+    // 3. Caveats arrays repeated >= 5 times (excluding empty arrays)
+    const caveatCounts = new Map();
+    for (const r of value) {
+      if (r && Array.isArray(r.caveats) && r.caveats.length > 0) {
+        const k = JSON.stringify(r.caveats);
+        caveatCounts.set(k, (caveatCounts.get(k) || 0) + 1);
+      }
+    }
+    const sharedCaveats = [...caveatCounts.entries()].filter(([k, n]) => n >= 5).map(([k]) => JSON.parse(k));
+
+    const elemPattern = (s) =>
+      index.has(s) ? `${escapeRegex(tableName)}\\[${index.get(s)}\\]` : escapeRegex(JSON.stringify(s));
+
+    sharedCaps.forEach((caps, i) => {
+      const rendered = caps.map((c) => index.has(c) ? `${tableName}[${index.get(c)}]` : JSON.stringify(c)).join(", ");
+      extraDefs += `const C${i} = Object.freeze([${rendered}]);\n`;
+      const expectedCount = capCounts.get(JSON.stringify(caps));
+      const pattern = new RegExp(
+        `"capabilities": \\[\\n\\s+` +
+        caps.map(elemPattern).join(`,\\n\\s+`) +
+        `\\n\\s+\\]`,
+        "g",
+      );
+      let matchCount = 0;
+      body = body.replace(pattern, () => {
+        matchCount++;
+        return `"capabilities": C${i}`;
+      });
+      if (matchCount !== expectedCount) {
+        throw new Error(`hoisted capabilities C${i} replacement count mismatch: expected ${expectedCount}, got ${matchCount}`);
+      }
+    });
+
+    sharedLics.forEach((lic, i) => {
+      const f = index.has(lic.file) ? `${tableName}[${index.get(lic.file)}]` : JSON.stringify(lic.file);
+      const s = index.has(lic.spdx) ? `${tableName}[${index.get(lic.spdx)}]` : JSON.stringify(lic.spdx);
+      extraDefs += `const L${i} = Object.freeze({ spdx: ${s}, file: ${f}, notices: null });\n`;
+      const expectedCount = licCounts.get(JSON.stringify(lic));
+      const fileRef = elemPattern(lic.file);
+      const spdxRef = elemPattern(lic.spdx);
+      const pattern = new RegExp(
+        `"licence": \\{\\n\\s+"spdx": ${spdxRef},\\n\\s+"file": ${fileRef},\\n\\s+"notices": null\\n\\s+\\}`,
+        "g",
+      );
+      let matchCount = 0;
+      body = body.replace(pattern, () => {
+        matchCount++;
+        return `"licence": L${i}`;
+      });
+      if (matchCount !== expectedCount) {
+        throw new Error(`hoisted licence L${i} replacement count mismatch: expected ${expectedCount}, got ${matchCount}`);
+      }
+    });
+
+    sharedCaveats.forEach((cavs, i) => {
+      const rendered = cavs.map((c) => index.has(c) ? `${tableName}[${index.get(c)}]` : JSON.stringify(c)).join(", ");
+      extraDefs += `const V${i} = Object.freeze([${rendered}]);\n`;
+      const expectedCount = caveatCounts.get(JSON.stringify(cavs));
+      const pattern = new RegExp(
+        `"caveats": \\[\\n\\s+` +
+        cavs.map(elemPattern).join(`,\\n\\s+`) +
+        `\\n\\s+\\]`,
+        "g",
+      );
+      let matchCount = 0;
+      body = body.replace(pattern, () => {
+        matchCount++;
+        return `"caveats": V${i}`;
+      });
+      if (matchCount !== expectedCount) {
+        throw new Error(`hoisted caveats V${i} replacement count mismatch: expected ${expectedCount}, got ${matchCount}`);
+      }
+    });
+  }
+
   // Fail closed: a sentinel that survived substitution would silently corrupt a
   // generated value (and the module is imported by tests that compare values).
   if (body.includes("\\u0000")) throw new Error("shared-string placeholder leaked through JSON escaping");
-  return `${banner}const SHARED_STRINGS = Object.freeze([\n ${table}\n]);\nexport const ${declaration} = Object.freeze(${body});\n`;
+  return `${banner}const ${tableName} = Object.freeze([\n ${table}\n]);\n${extraDefs}export const ${declaration} = Object.freeze(${body});\n`;
 }

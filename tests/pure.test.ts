@@ -11,12 +11,17 @@ import {
   authorizeToolReport,
   discoveredOnly,
   fnv1a,
+  KNOWN_TOOL_SECRET_ARGS,
   PAGE_ALLOWED_ROUTES,
   parseOmniboxContent,
+  redactDeep,
   redactSecrets,
+  redactToolArgs,
   sanitizeToolName,
   schemaToZod,
+  SECRET_KEY_RE,
 } from "../extension/lib/pure.js";
+import { journalJson } from "../extension/shared/tool-tree.js";
 
 Deno.test("canonicalOrigin accepts http/https and rejects everything else", () => {
   assertEquals(canonicalOrigin("https://example.com/"), "https://example.com");
@@ -588,4 +593,212 @@ Deno.test("discoveredOnly: discovered pages minus enrolled, deduped by origin", 
   // non-arrays fail closed:
   assertEquals(discoveredOnly(null, []), []);
   assertEquals(discoveredOnly(undefined, []), []);
+});
+
+Deno.test("redactToolArgs: per-tool secretArgs redaction (P1-3)", () => {
+  // 1. Bare "key" is NOT in SECRET_KEY_RE (targeted; no global widening)
+  assertEquals(SECRET_KEY_RE.test("key"), false, "SECRET_KEY_RE must not match bare key");
+
+  // 2. chacha20_poly1305 is declared in KNOWN_TOOL_SECRET_ARGS with ["key"]
+  assertEquals(KNOWN_TOOL_SECRET_ARGS["chacha20_poly1305"], ["key"]);
+
+  // 3. chacha20_poly1305 redacts key argument in structured object
+  const chachaObj = { key: "raw-secret-key-32-bytes", nonce: "nonce123", data: "aGk=" };
+  const redactedObj = redactToolArgs("chacha20_poly1305", chachaObj);
+  assertEquals(redactedObj, { key: "[REDACTED]", nonce: "nonce123", data: "aGk=" });
+
+  // 4. Unrelated tools do NOT have bare "key" redacted (no false positives)
+  const otherObj = { key: "normal-map-key", name: "foo" };
+  assertEquals(redactToolArgs("other_tool", otherObj), otherObj);
+
+  // 5. Nested arguments under execute_tool envelope are redacted
+  const lazyEnvelope = {
+    selectionRef: "sel_12345678-1234-1234-1234-123456789abc",
+    arguments: { key: "secret-key", data: "aGk=" },
+  };
+  const redactedLazy = redactToolArgs("chacha20_poly1305", lazyEnvelope);
+  assertEquals(redactedLazy.arguments.key, "[REDACTED]");
+  assertEquals(redactedLazy.arguments.data, "aGk=");
+
+  // 5b. Real provider-facing toolName "execute_tool" redacts nested arguments envelope (P1 / 2uhx)
+  const redactedExecuteTool = redactToolArgs("execute_tool", lazyEnvelope);
+  assertEquals(redactedExecuteTool.arguments.key, "[REDACTED]");
+  assertEquals(redactedExecuteTool.arguments.data, "aGk=");
+  assertEquals(redactedExecuteTool.selectionRef, lazyEnvelope.selectionRef);
+
+  // 5c. Still-running tool card with rawToolName "" falls back to union of known secrets (P2 / 2uhx)
+  const runningCardArgs = { key: "running-card-secret-key", nonce: "nonce123", data: "aGk=" };
+  const redactedRunning = redactToolArgs("", runningCardArgs);
+  assertEquals(redactedRunning, { key: "[REDACTED]", nonce: "nonce123", data: "aGk=" });
+
+  // 6. JSON string arguments are parsed, redacted, and stringified
+  const jsonStr = JSON.stringify({ key: "secret-in-json", nonce: "n", data: "d" });
+  const redactedJson = redactToolArgs("chacha20_poly1305", jsonStr);
+  const parsed = JSON.parse(redactedJson);
+  assertEquals(parsed.key, "[REDACTED]");
+  assertEquals(parsed.nonce, "n");
+
+  // 6b. JSON string arguments nested inside execute_tool are parsed and redacted
+  const jsonNestedLazy = {
+    selectionRef: "sel_12345678-1234-1234-1234-123456789abc",
+    arguments: JSON.stringify({ key: "secret-nested-json", nonce: "n", data: "d" }),
+  };
+  const redactedNestedJson = redactToolArgs("execute_tool", jsonNestedLazy);
+  const parsedNested = JSON.parse(redactedNestedJson.arguments);
+  assertEquals(parsedNested.key, "[REDACTED]");
+  assertEquals(parsedNested.nonce, "n");
+
+  // 7. Extra secret args can be supplied per call
+  const custom = redactToolArgs("custom_tool", { customSecret: "foo", safe: "bar" }, ["customSecret"]);
+  assertEquals(custom, { customSecret: "[REDACTED]", safe: "bar" });
+});
+
+Deno.test("redactToolArgs: recurses into nested arguments envelopes and arbitrary object properties (c8ee / P2.2)", () => {
+  const secretKey = "super-secret-key-bytes";
+  // Nested under arguments.cfg
+  const nested = redactToolArgs("execute_tool", {
+    arguments: { cfg: { key: secretKey, other: "val" } },
+  });
+  assertEquals(nested, {
+    arguments: { cfg: { key: "[REDACTED]", other: "val" } },
+  });
+
+  // Non-protocol tool with arguments envelope carrying secret arg
+  const readFileWithSecret = redactToolArgs("read_file", {
+    arguments: { key: secretKey, path: "foo.txt" },
+  });
+  assertEquals(readFileWithSecret, {
+    arguments: { key: "[REDACTED]", path: "foo.txt" },
+  });
+
+  // Non-protocol tool with deeply nested arguments envelope
+  const readFileDeepNested = redactToolArgs("read_file", {
+    cfg: { arguments: { key: secretKey, path: "foo.txt" } },
+  });
+  assertEquals(readFileDeepNested, {
+    cfg: { arguments: { key: "[REDACTED]", path: "foo.txt" } },
+  });
+
+  // JSON string arguments envelope
+  const readFileStringEnvelope = redactToolArgs("read_file", {
+    cfg: { arguments: JSON.stringify({ key: secretKey, path: "foo.txt" }) },
+  });
+  assertEquals(readFileStringEnvelope, {
+    cfg: { arguments: JSON.stringify({ key: "[REDACTED]", path: "foo.txt" }) },
+  });
+
+  // Cyclic object defense (never throws or overflows stack)
+  const cyclic: any = { a: 1, key: secretKey };
+  cyclic.self = cyclic;
+  const redactedCyclic = redactToolArgs("execute_tool", cyclic);
+  assertEquals(redactedCyclic.a, 1);
+  assertEquals(redactedCyclic.key, "[REDACTED]");
+  assertEquals(redactedCyclic.self, "[cycle]");
+
+  // Deep object capping
+  let deep: any = { key: secretKey };
+  for (let i = 0; i < 12; i++) {
+    deep = { nested: deep };
+  }
+  const capped = redactToolArgs("execute_tool", deep);
+  assert(JSON.stringify(capped).includes("[depth-capped]"));
+
+  // Shared noncyclic DAG objects are preserved on distinct branches (unwound seen set)
+  const shared = { name: "shared-item", count: 42 };
+  const dag = redactToolArgs("execute_tool", { a: shared, b: shared });
+  assertEquals(dag, { a: { name: "shared-item", count: 42 }, b: { name: "shared-item", count: 42 } });
+});
+
+Deno.test("sw-egress: service-worker.js progress chokepoint and run-digest wire redactToolArgs (c8ee / P1 pin)", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  assert(
+    sw.includes("toolArgs: redactDeep(redactToolArgs(event.selectedTool ?? event.toolName, event.toolArgs))"),
+    "SW progress seam must wire redactToolArgs on tool-call events",
+  );
+  assert(
+    sw.includes('result: "[REDACTION_FAILED]", resultFull: "[REDACTION_FAILED]"'),
+    "SW progress seam catch block must fail closed on both result and resultFull",
+  );
+
+  const digest = await Deno.readTextFile(new URL("../extension/lib/run-digest.js", import.meta.url));
+  assert(
+    digest.includes("const safeArgs = redactToolArgs(name, shownArgs === undefined ? {} : shownArgs, extraSecret)"),
+    "run-digest must wire redactToolArgs on continuation args",
+  );
+});
+
+Deno.test("sw-egress fail-closed: redaction exception clears result and resultFull", () => {
+  let event: any = {
+    type: "tool-result",
+    toolName: "read_file",
+    result: { get boom() { throw new Error("hostile getter"); } },
+    resultFull: "confidential raw full result text",
+  };
+
+  try {
+    event = {
+      ...event,
+      ...(event.type === "tool-call"
+        ? { toolArgs: redactDeep(redactToolArgs(event.selectedTool ?? event.toolName, event.toolArgs)) }
+        : { result: redactDeep(event.result) }),
+    };
+  } catch {
+    event = {
+      ...event,
+      ...(event.type === "tool-call"
+        ? { toolArgs: "[REDACTION_FAILED]" }
+        : { result: "[REDACTION_FAILED]", resultFull: "[REDACTION_FAILED]", resultFullBytes: 18 }),
+    };
+  }
+
+  assertEquals(event.result, "[REDACTION_FAILED]");
+  assertEquals(event.resultFull, "[REDACTION_FAILED]");
+  assert(!JSON.stringify(event).includes("confidential raw full result"));
+});
+
+Deno.test("execute_tool secret redaction transform simulation: broadcast, journal, and durable run log (2uhx)", () => {
+  const rawKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="; // 32-byte secret key in base64
+  const nonce = "BwAAAAQAQUJDREVGRw==";
+  const data = "c3VwZXItY29uZmlkZW50aWFsLXBsYWludGV4dA==";
+
+  // The provider emits tool-call for execute_tool without selectedTool (it only sees lazy protocol tools)
+  const swToolCallEvent = {
+    type: "tool-call",
+    toolName: "execute_tool",
+    toolArgs: {
+      selectionRef: "sel_12345678-1234-1234-1234-123456789abc",
+      arguments: { key: rawKey, nonce, data, mode: "encrypt" },
+    },
+    step: 0,
+  };
+
+  // 1. SW egress / broadcast transformation (service-worker.js:3893)
+  const transformedEvent = {
+    ...swToolCallEvent,
+    toolArgs: redactDeep(redactToolArgs((swToolCallEvent as Record<string, any>).selectedTool ?? swToolCallEvent.toolName, swToolCallEvent.toolArgs)),
+  };
+  const broadcastJson = JSON.stringify(transformedEvent);
+  assert(!broadcastJson.includes(rawKey), "broadcast payload must NOT contain raw chacha key");
+  assert(broadcastJson.includes("[REDACTED]"), "broadcast payload must contain [REDACTED]");
+  assertEquals(transformedEvent.toolArgs.arguments.key, "[REDACTED]");
+  assertEquals(transformedEvent.toolArgs.arguments.nonce, nonce);
+
+  // 2. Journal serialization (service-worker.js:3964, tool-tree.js journalJson)
+  const journalArgs = transformedEvent.toolArgs != null ? journalJson(redactSecrets(transformedEvent.toolArgs)) : "";
+  assert(!journalArgs.includes(rawKey), "persisted journal args must NOT contain raw chacha key");
+  assert(journalArgs.includes("[REDACTED]"), "persisted journal args must contain [REDACTED]");
+
+  // 3. Durable run log entry (service-worker.js:3967)
+  const durableLog = {
+    type: "tool-call",
+    id: "task-1",
+    executionId: "exec-1",
+    run: 1,
+    callId: "call-1",
+    tool: swToolCallEvent.toolName ?? "tool",
+    args: journalArgs,
+  };
+  const durableLogJson = JSON.stringify(durableLog);
+  assert(!durableLogJson.includes(rawKey), "durable run log must NOT contain raw chacha key");
+  assert(durableLogJson.includes("[REDACTED]"), "durable run log must contain [REDACTED]");
 });

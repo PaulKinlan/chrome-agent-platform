@@ -87,6 +87,23 @@ Deno.test("waitForServiceWorker: FALSIFICATION — legacy unfiltered match mis-a
   assert(derivedId !== "abcdefghijklmnopabcdefghijklmnop", "legacy match fails to identify our extension");
 });
 
+Deno.test("6sra: the journey selects our worker and checks the page principal before waking it", async () => {
+  const journey = await Deno.readTextFile(new URL("../scripts/chrome-journeys.ts", import.meta.url));
+  const initialWait = journey.indexOf("for (let i = 0; i < 100; i++) {");
+  const discoveryEnd = journey.indexOf("const extId =", initialWait);
+  assert(initialWait >= 0 && discoveryEnd > initialWait, "journey worker discovery must remain observable");
+  const discovery = journey.slice(initialWait, discoveryEnd);
+  assertEquals([...discovery.matchAll(/\.find\(SW_MATCH\)/g)].length, 2,
+    "both startup wait and worker selection must reject component workers");
+  assertEquals([THUNK_COMPONENT_SW, EXTENSION_SW].find(SW_MATCH), EXTENSION_SW,
+    "the same authority selects the unpacked worker when a component worker arrives first");
+  const ntpAttach = journey.indexOf("const ntpSession = await attachRuntime(cdp, ntpPage.id);");
+  const principalCheck = journey.indexOf("assertJourneyNtpPrincipal(", ntpAttach);
+  const restart = journey.indexOf('const close0 = await cdp.send("Target.closeTarget"');
+  assert(ntpAttach >= 0 && principalCheck > ntpAttach && principalCheck < restart,
+    "the NTP's extension principal must be verified before the restart and first message");
+});
+
 Deno.test("harness audit: no script declares a private SW_MATCH or inline thunk workarounds", async () => {
   const scriptsDir = new URL("../scripts/", import.meta.url);
   const offenders: string[] = [];
@@ -123,8 +140,9 @@ Deno.test("KAT callers enumeration: every KAT harness calling waitForServiceWork
     }
   }
 
-  // Exactly 48 KAT harnesses call waitForServiceWorker / cdp.serviceWorker
-  assertEquals(katFilesCallingSw.length, 48, "all 48 KAT harnesses call waitForServiceWorker / cdp.serviceWorker");
+  // Exactly 49 KAT harnesses call waitForServiceWorker / cdp.serviceWorker,
+  // including the rkrn sidebar-hydration browser acceptance moved out of tests/.
+  assertEquals(katFilesCallingSw.length, 49, "all 49 KAT harnesses call waitForServiceWorker / cdp.serviceWorker");
 
   // Every one of them either relies on the SW_MATCH default or explicitly passes SW_MATCH
   for (const file of katFilesCallingSw) {

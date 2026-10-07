@@ -8,10 +8,10 @@
 // script sandbox and the agent workers (Chrome allows one offscreen doc per
 // profile — do NOT add a second).
 //
-// Invariants (from docs/AGENT-EXECUTION-ARCHITECTURE.md):
-//   - one authoritative port map `agentId -> { worker, port }`, held here;
-//   - the host holds a port per live agent (keep-alive with zero visible pages);
-//   - the SW is the only caller (validated routes stay in the SW).
+// Invariants: port map `agentId -> { worker, port }`; host holds port per live agent;
+// the SW is the only caller (validated routes stay in the SW).
+
+import { isTrustedServiceWorkerSender } from "./pure.js";
 
 const WORKER_URL = "dist/workers/agent-worker.js";
 
@@ -150,9 +150,22 @@ export function postAgentWorkerMessage(agentId, message, { expectReply = null } 
  * Register the host's chrome.runtime.onMessage listener. Messages come from
  * the service worker (the validated authority). Returns an unregister fn.
  */
-export function registerAgentWorkerHost() {
-  const listener = (message, _sender, sendResponse) => {
+export function registerAgentWorkerHost({ runtime = (typeof chrome !== "undefined" ? chrome.runtime : null) } = {}) {
+  const listener = (message, sender, sendResponse) => {
     if (!message || typeof message !== "object") return false;
+    if (
+      message.type === "agent-worker-host:ensure" ||
+      message.type === "agent-worker-host:close" ||
+      message.type === "agent-worker-host:list" ||
+      message.type === "agent-worker-host:post"
+    ) {
+      if (!isTrustedServiceWorkerSender(sender, runtime)) {
+        sendResponse({ ok: false, error: "agent_worker_host_untrusted_sender" });
+        return false;
+      }
+    } else {
+      return false;
+    }
     if (message.type === "agent-worker-host:ensure") {
       sendResponse(ensureAgentWorker(message.agentId));
       return false;
@@ -183,12 +196,12 @@ export function registerAgentWorkerHost() {
     }
     return false;
   };
-  if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
-    chrome.runtime.onMessage.addListener(listener);
+  if (runtime?.onMessage) {
+    runtime.onMessage.addListener(listener);
   }
   return () => {
-    if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
-      chrome.runtime.onMessage.removeListener(listener);
+    if (runtime?.onMessage) {
+      runtime.onMessage.removeListener(listener);
     }
   };
 }

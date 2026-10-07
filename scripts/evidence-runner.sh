@@ -63,6 +63,7 @@ GATE 12-gallery deno run -A scripts/component-gallery-smoke.ts
 GATE 13-security bash scripts/security-suite-supervisor.sh
 GATE 14-drift-gallery npm run check:gallery
 GATE 15-drift-changelog npm run check:changelog
+GATE 15a-drift-about npm run check:about
 GATE 16-picker50 deno run -A scripts/agent-provider-picker.ts
 GATE 17-package node scripts/package-extension.mjs
 GATE 18-package-load deno run -A scripts/validate-package-load.ts

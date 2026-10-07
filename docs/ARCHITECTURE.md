@@ -208,7 +208,7 @@ auth) merged with fail-closed duplicate detection
 `run-task`, `run.cancel` (service-worker.js:7791, owner/extension principals
 only), `run.resume` (:7802), `run.logs` (:7995), `agent.delegate` — are still
 inline in service-worker.js. routes/ROUTE_MAP.md documents the complete
-285-route population (audited in docs/SW-DISPATCH-AUTHORITY-CENSUS.md).
+287-route population (audited in docs/SW-DISPATCH-AUTHORITY-CENSUS.md).
 
 ### 2.2 The agent-worker protocol
 Per-agent SharedWorkers (hosted by the offscreen doc, §1.3) execute agent loops
@@ -508,11 +508,11 @@ execution-host contract").
 
 ### 6.3 Store policy
 Chrome Web Store lane: no Store release is planned (Q11, Paul 2026-09-18).
-Shipped default tools are bundled-reviewed executables (38 admitted packages).
+Shipped default tools are bundled-reviewed executables (39 admitted packages).
 Owner-selected packages are an unpacked/developer lane; whether they may run there is
 open (Q13; docs/tool-platform-architecture.md §"Distribution lanes"; docs/OPEN-QUESTIONS.md Q13).
 The store build target statically rejects unmanifested `.wasm` and non-literal Worker
-constructors (README §"Load + run"). Today's shipped set: 38 admitted single-tool packages
+constructors (README §"Load + run"). Today's shipped set: 39 admitted single-tool packages
 (`build.mjs:108`, `packages/bundled/README.md`, `extension/wasm/manifests/`).
 
 ## 7. MCP discovery & capacity/messaging

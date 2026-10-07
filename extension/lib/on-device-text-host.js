@@ -2,6 +2,8 @@
 // Bead: chrome-agent-platform-3p3e.5
 // Runs in the offscreen document DOM context with ZERO dependencies on ai/zod.
 
+import { isTrustedServiceWorkerSender } from "./pure.js";
+
 export const ON_DEVICE_UNAVAILABLE_FALLBACK = Object.freeze({
   ok: false,
   code: "on_device_model_unavailable",
@@ -233,9 +235,23 @@ export async function translateOnDevice(
  */
 export function registerOnDeviceTextHost({ runtime = globalThis.chrome?.runtime, env = globalThis } = {}) {
   if (!runtime?.onMessage) return null;
-  const listener = (message, _sender, sendResponse) => {
+  const listener = (message, sender, sendResponse) => {
     const type = message?.type || message?.action;
     if (!type || typeof type !== "string") return false;
+
+    if (
+      type === "onDeviceText.summarize" ||
+      type === "onDeviceText.detectLanguage" ||
+      type === "onDeviceText.translate" ||
+      type === "onDeviceText.availability"
+    ) {
+      if (!isTrustedServiceWorkerSender(sender, runtime)) {
+        sendResponse({ ok: false, error: "on_device_text_host_untrusted_sender" });
+        return false;
+      }
+    } else {
+      return false;
+    }
 
     if (type === "onDeviceText.summarize") {
       summarizeOnDevice(message, env).then(sendResponse, (err) =>

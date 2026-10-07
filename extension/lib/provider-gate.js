@@ -19,7 +19,7 @@
 //    per-event log) until a successful provider call resets it.
 
 import { normalizeHostPattern, requestPermissionBundleFromGesture } from "./permission-orchestration.js";
-import { safeProviderError } from "./pure.js";
+import { safeProviderError, isTrustedServiceWorkerSender } from "./pure.js";
 import { effectiveBaseURL, PROVIDER_CHOICES } from "./provider-catalog.js";
 import { defaultModelFor } from "./model-catalog.js";
 
@@ -148,14 +148,15 @@ async function _directBoundedRequest(pattern) {
 
 /** Late-settle broadcast consumer registry (pages call this to reconcile
  *  their UI when another surface's request settles). Returns an unlisten. */
-export function onPermissionSettled(handler) {
-  const listener = (msg) => {
+export function onPermissionSettled(handler, { runtime = (typeof chrome !== "undefined" ? chrome.runtime : null) } = {}) {
+  const listener = (msg, sender) => {
     if (msg?.type === "provider-host-perm:settled") {
+      if (runtime && !isTrustedServiceWorkerSender(sender, runtime)) return;
       try { handler(msg); } catch { /* consumer error never breaks the bus */ }
     }
   };
-  try { chrome.runtime.onMessage.addListener(listener); } catch { /* non-extension */ }
-  return () => { try { chrome.runtime.onMessage.removeListener(listener); } catch { /* noop */ } };
+  try { runtime?.onMessage?.addListener(listener); } catch { /* non-extension */ }
+  return () => { try { runtime?.onMessage?.removeListener(listener); } catch { /* noop */ } };
 }
 
 // ── the circuit-breaker ─────────────────────────────────────────────────────

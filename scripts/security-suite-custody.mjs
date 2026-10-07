@@ -138,8 +138,11 @@ export async function verifyInheritedCanonicalLock(fd = 9) {
     try {
       await execFileAsync("flock", ["-n", CANONICAL_LOCK, "true"]);
       return "canonical inherited lock has no live exclusive flock";
-    } catch {
-      return null;
+    } catch (error) {
+      // Only a contention exit proves that another process holds the lock.
+      // In particular, a missing flock binary must fail closed on Darwin.
+      if (error?.code === 1) return null;
+      return "canonical inherited lock could not be verified";
     }
   }
   let target;
@@ -450,6 +453,11 @@ export async function resolveSupervisorConfig({
       env.CAP_SECURITY_TEST_FORCE_ATTEST_MISMATCH ||
       env.CAP_SECURITY_TEST_ATTEST_DEADLINE_MS !== undefined ||
       env.CAP_SECURITY_TEST_FORCE_ATTEST_UNSETTLED !== undefined ||
+      env.CAP_SECURITY_TEST_SAMPLE_FREEZE_MS !== undefined ||
+      env.CAP_SECURITY_TEST_ACK_DEADLINE_MS !== undefined ||
+      env.CAP_SECURITY_TEST_STUBBORN_BOOT_DELAY_MS !== undefined ||
+      env.CAP_SECURITY_TEST_STUBBORN_CHILD_FAIL !== undefined ||
+      env.CAP_SECURITY_TEST_ESCAPE_CHILD_FAIL !== undefined ||
       env.CAP_SECURITY_TEST_SCENARIO
     ) throw new Error("self-test-only override refused in production mode");
     if (!env.HOME || !path.isAbsolute(env.HOME)) {
@@ -463,6 +471,7 @@ export async function resolveSupervisorConfig({
       timeoutMs: PRODUCTION_TIMEOUT_MS,
       attestDeadlineMs: 2_000,
       forceAttestationUnsettled: false,
+      sampleFreezeMs: 0,
       termWaitMs: 5_000,
       killWaitMs: 5_000,
       evidenceRoot: path.join(
@@ -527,6 +536,12 @@ export async function resolveSupervisorConfig({
       env.CAP_SECURITY_TEST_FORCE_ATTEST_UNSETTLED !== "1") {
     throw new Error("CAP_SECURITY_TEST_FORCE_ATTEST_UNSETTLED must be 1");
   }
+  // a6x5: the third, SAMPLING-DELAY handshake clock. Preserve 0 ms default,
+  // but ensure any declared test freeze is bounded and integer.
+  const sampleFreezeMs = Number(env.CAP_SECURITY_TEST_SAMPLE_FREEZE_MS ?? "0");
+  if (!Number.isSafeInteger(sampleFreezeMs) || sampleFreezeMs < 0 || sampleFreezeMs > 20_000) {
+    throw new Error("CAP_SECURITY_TEST_SAMPLE_FREEZE_MS out of bounds (0..20000)");
+  }
   return {
     selfTest: true,
     runner: fixture,
@@ -535,6 +550,7 @@ export async function resolveSupervisorConfig({
     timeoutMs,
     attestDeadlineMs,
     forceAttestationUnsettled: env.CAP_SECURITY_TEST_FORCE_ATTEST_UNSETTLED === "1",
+    sampleFreezeMs,
     termWaitMs: 250,
     killWaitMs: 1_000,
     evidenceRoot: durableDir("cap-sec-selftest-evidence"),

@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.587] — 2026-10-07
+- The Settings tool library can now list and structurally validate schema-2 Emscripten packages (validation only — execution is not enabled).
+
+## [0.3.586] — 2026-10-07
+- The sidebar no longer flips back after you collapse it during startup.
+
+## [0.3.585] — 2026-10-07
+- Content fetched from the web is now clearly marked as untrusted before scripts or Python tools can read it.
+
+## [0.3.584] — 2026-10-07
+- Fail closed on secret redaction when a sandboxed tool run errors, so error output cannot leak secrets.
+
+## [0.3.583] — 2026-10-07
+- Add an on-device ChaCha20-Poly1305 encryption tool and stop collapsed sidebar sections from catching an extra Tab stop.
+
+## [0.3.582] — 2026-10-06
+- View all bundled tools, libraries, and third-party license notices in a dedicated About page generated from the extension inventory.
+
+## [0.3.581] — 2026-10-06
+- Extend call-export WebAssembly runner with init and final parameters for expanded hash algorithm support
+
+## [0.3.580] — 2026-10-06
+- Tabbing from the sidebar toggle now reaches its task and section controls instead of skipping straight to the composer.
+
+## [0.3.579] — 2026-10-06
+- The privacy page now lists every kind of storage the extension uses and says where each kind of your data stays, so you can check the claim against the extension's own list.
+
 ## [0.3.578] — 2026-10-06
 
 ### Features

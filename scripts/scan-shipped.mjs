@@ -13,6 +13,7 @@
 import { parse } from "acorn";
 import { findDynamicEvaluators } from "./lib/dynamic-evaluator-scan.mjs";
 import { auditWasmBinary } from "../extension/lib/wasm-package-authority.js";
+import { auditEmscriptenModule } from "../extension/lib/emscripten-module-audit.js";
 
 // Test controls/oracles that must never appear in shipped code (scanned
 // case-insensitively over the RAW text so a renamed identifier is still caught
@@ -220,8 +221,8 @@ const STREAM_EXECUTION_HOST_ALLOWED_CALL_RE = /WebAssembly\.instantiate\(/g;
 // new WebAssembly.Instance(module, {}) — the audited CAS bytes and an EMPTY
 // imports object, never anything else.
 const CALLEXPORT_HOST_CANONICAL_PATH = "extension/lib/wasm-callexport-host.js";
-const CALLEXPORT_HOST_MODULE_LOCATION = { line: 49, column: 19 };
-const CALLEXPORT_HOST_INSTANCE_LOCATION = { line: 50, column: 15 };
+const CALLEXPORT_HOST_MODULE_LOCATION = { line: 48, column: 19 };
+const CALLEXPORT_HOST_INSTANCE_LOCATION = { line: 49, column: 15 };
 const CALLEXPORT_HOST_MODULE_RE = /new\s+WebAssembly\.Module\(/g;
 const CALLEXPORT_HOST_INSTANCE_RE = /new\s+WebAssembly\.Instance\(/g;
 // The inert structural auditor validates bytes, never instantiates a module.
@@ -709,7 +710,12 @@ export async function scanShippedJs(files, {
 }
 
 /** Audit a set of immutable bundled Wasm fixtures. Production build discovery
- * passes every physical `.wasm`; a missing manifest mapping fails closed. */
+ * passes every physical `.wasm`; a missing manifest mapping fails closed.
+ * Mapping values are schema-1 executable records (legacy shape) or tagged
+ * schema-2 entries `{schemaVersion: 2, asset}` from the single schema-aware
+ * helper (scripts/lib/wasm-manifest-assets.mjs). Schema-2 members get the
+ * bounded typed decode + engine validation here; the full graph/eligibility
+ * audit runs at admission through the real authority. */
 export async function scanBundledWasmFiles(files, {
   readBytes,
   manifestByFile = new Map(),
@@ -719,12 +725,15 @@ export async function scanBundledWasmFiles(files, {
   }
   const sorted = [...files].sort();
   const results = await Promise.all(sorted.map(async (file) => {
-    const executable = manifestByFile.get(file);
-    if (!executable) {
-      return `${file}: unmanifested_binary`;
-    }
+    const entry = manifestByFile.get(file);
+    if (!entry) return `${file}: unmanifested_binary`;
     try {
-      auditWasmBinary(new Uint8Array(await readBytes(file)), executable);
+      const bytes = new Uint8Array(await readBytes(file));
+      if (entry.schemaVersion === 2) {
+        auditEmscriptenModule(bytes);
+      } else {
+        auditWasmBinary(bytes, entry);
+      }
       return null;
     } catch (error) {
       return `${file}: ${error?.code ?? "wasm_scan_failed"}`;

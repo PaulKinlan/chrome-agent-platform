@@ -55,19 +55,53 @@ export function wrapUntrustedContent(content, token = UNTRUSTED_TOKEN_PLACEHOLDE
 
 /** Wrap EVERY non-empty string inside a projected result (recursively, bounded
  * depth) — the shape is preserved so structured renderers keep working; only
- * the string leaves carry the boundary. Non-string leaves pass through. */
+ * the string leaves carry the boundary. Subtrees reaching MAX_FENCE_DEPTH are
+ * serialized and fenced fail-closed so no string can escape unfenced (INV-7).
+ * Non-string leaves pass through. */
 export function fenceUntrustedValue(value, token, depth = 0) {
   if (typeof value === "string") return value.length ? fenceUntrustedText(value, token) : value;
-  if (depth >= MAX_FENCE_DEPTH) return value;
+  if (depth >= MAX_FENCE_DEPTH) {
+    if (value && typeof value === "object") {
+      try {
+        const serialized = JSON.stringify(value);
+        return fenceUntrustedText(serialized ?? "[untrusted]", token);
+      } catch {
+        return fenceUntrustedText("[depth-capped untrusted content]", token);
+      }
+    }
+    return value;
+  }
   if (Array.isArray(value)) return value.map((child) => fenceUntrustedValue(child, token, depth + 1));
   if (value && typeof value === "object") {
     const out = {};
     for (const [key, child] of Object.entries(value)) {
-      out[key] = key === "untrusted" ? child : fenceUntrustedValue(child, token, depth + 1);
+      out[key] = fenceUntrustedValue(child, token, depth + 1);
     }
     return out;
   }
   return value;
+}
+
+/** Check whether a value or any nested property carries untrusted: true.
+ * Bounded depth (matching MAX_FENCE_DEPTH) and cycle-resistant; fails closed
+ * on excessive depth or hostile throwing accessors (INV-7). */
+export function hasUntrustedMarker(value, depth = 0, seen = new WeakSet()) {
+  if (!value || typeof value !== "object") return false;
+  if (depth >= MAX_FENCE_DEPTH) return true;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  try {
+    if (value.untrusted === true) return true;
+    if (Array.isArray(value)) {
+      return value.some((v) => hasUntrustedMarker(v, depth + 1, seen));
+    }
+    for (const v of Object.values(value)) {
+      if (hasUntrustedMarker(v, depth + 1, seen)) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 /** Tag a tool result as untrusted (the hook a tool calls on its own output —

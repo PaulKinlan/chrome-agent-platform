@@ -199,6 +199,7 @@ Deno.test("runFetch reads a one-shot Response body once and caches the text", as
     globalThis.fetch = async () => response;
     const result = await runFetch({ url: "https://example.com/data", opts: {} });
     assertEquals(result.text, "one-shot body");
+    assertEquals(result.untrusted, true, "fetched bodies must be tagged untrusted (INV-7)");
     assertEquals(response.bodyUsed, true, "the native Response stream was consumed once");
   } finally {
     globalThis.fetch = originalFetch;

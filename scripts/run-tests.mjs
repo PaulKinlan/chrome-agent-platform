@@ -21,7 +21,7 @@
 // kept running the serial sweep per edit (Paul, 2026-09-04). The runner passes
 // --config deno.runner.jsonc to see every file.
 // This script is the merge gate via `npm test`; explicit files still run directly.
-import { readdirSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath } from "node:path";
@@ -32,6 +32,8 @@ import { parallelPlan } from "./lib/parallel-plan.mjs";
 
 export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
 const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_MS ?? DEFAULT_PARALLEL_TIMEOUT_MS);
+const PARALLEL_READY_FILE = process.env.CAP_PARALLEL_READY_FILE;
+const PARALLEL_READY_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_READY_TIMEOUT_MS ?? 60_000);
 
 function runParallel(files) {
   if (!files || files.length === 0) return Promise.resolve(0);
@@ -48,13 +50,47 @@ function runParallel(files) {
 
     let timedOut = false;
     let timer = null;
-    if (PARALLEL_PHASE_TIMEOUT_MS > 0 && Number.isFinite(PARALLEL_PHASE_TIMEOUT_MS)) {
-      timer = setTimeout(() => {
-        timedOut = true;
-        if (child.pid) {
-          try { process.kill(-child.pid, "SIGKILL"); } catch { /* gone */ }
+    let readyPoll = null;
+    let readyOk = !PARALLEL_READY_FILE;
+
+    const startPhaseTimer = () => {
+      if (PARALLEL_PHASE_TIMEOUT_MS > 0 && Number.isFinite(PARALLEL_PHASE_TIMEOUT_MS)) {
+        timer = setTimeout(() => {
+          timedOut = true;
+          if (child.pid) {
+            try { process.kill(-child.pid, "SIGKILL"); } catch { /* gone */ }
+          }
+        }, PARALLEL_PHASE_TIMEOUT_MS);
+      }
+    };
+
+    if (PARALLEL_READY_FILE) {
+      const t0Ready = Date.now();
+      readyPoll = setInterval(() => {
+        let ready = false;
+        try {
+          if (existsSync(PARALLEL_READY_FILE) && statSync(PARALLEL_READY_FILE).size > 0) {
+            ready = true;
+          }
+        } catch {}
+
+        if (ready) {
+          clearInterval(readyPoll);
+          readyPoll = null;
+          readyOk = true;
+          startPhaseTimer();
+        } else if (Date.now() - t0Ready > PARALLEL_READY_TIMEOUT_MS) {
+          clearInterval(readyPoll);
+          readyPoll = null;
+          timedOut = true;
+          announce(`\nrun-tests: parallel phase ready marker ${PARALLEL_READY_FILE} never appeared within ${PARALLEL_READY_TIMEOUT_MS / 1000}s`);
+          if (child.pid) {
+            try { process.kill(-child.pid, "SIGKILL"); } catch {}
+          }
         }
-      }, PARALLEL_PHASE_TIMEOUT_MS);
+      }, 50);
+    } else {
+      startPhaseTimer();
     }
 
     const onSig = (sig) => {
@@ -71,6 +107,7 @@ function runParallel(files) {
     process.on("SIGINT", onSigInt);
 
     const cleanup = () => {
+      if (readyPoll) clearInterval(readyPoll);
       if (timer) clearTimeout(timer);
       process.removeListener("SIGTERM", onSigTerm);
       process.removeListener("SIGINT", onSigInt);
@@ -81,6 +118,21 @@ function runParallel(files) {
 
     child.on("close", (code, signal) => {
       cleanup();
+      // Recheck ready marker on close to avoid race where child writes marker and exits between polls
+      if (PARALLEL_READY_FILE && !readyOk) {
+        try {
+          if (existsSync(PARALLEL_READY_FILE) && statSync(PARALLEL_READY_FILE).size > 0) {
+            readyOk = true;
+          }
+        } catch {
+          // unwritten or inaccessible
+        }
+      }
+      if (PARALLEL_READY_FILE && !readyOk) {
+        announce(`\nrun-tests: parallel phase child exited before creating ready marker ${PARALLEL_READY_FILE}`);
+        resolve(124);
+        return;
+      }
       if (timedOut) {
         announce(`\nrun-tests: parallel phase TIMED OUT after ${PARALLEL_PHASE_TIMEOUT_MS / 1000}s`);
         announce("run-tests: TIMED-OUT PARALLEL PHASE CANDIDATE FILE(S) (culprit unconfirmed):");
@@ -101,6 +153,14 @@ function runParallel(files) {
   });
 }
 
+// Keep the audit's executable-test policy tied to the runner's actual recursive
+// discovery. The optional names make the policy falsifiable in memory without
+// writing transient *.test.ts files during the parallel suite.
+export function enumerateRunnerTests(dir = "tests", names = readdirSync(dir, { recursive: true })) {
+  return names.filter((f) => String(f).endsWith(".test.ts"))
+    .map((f) => `tests/${f}`).sort();
+}
+
 export async function main(args = process.argv.slice(2)) {
   const cliFiles = args.filter((f) => !f.startsWith("-"));
   let all;
@@ -113,10 +173,7 @@ export async function main(args = process.argv.slice(2)) {
   } else {
     // Recursive: `deno test tests/` walks subdirectories, so this walk must too
     // (a non-recursive readdir would silently drop future tests/**/ nested files).
-    all = readdirSync("tests", { recursive: true })
-      .filter((f) => f.endsWith(".test.ts"))
-      .map((f) => `tests/${f}`)
-      .sort();
+    all = enumerateRunnerTests();
     const missing = [...SERIAL].filter((f) => !all.includes(f));
     if (missing.length > 0) {
       console.error(`run-tests: SERIAL names files that do not exist: ${missing.join(", ")}`);

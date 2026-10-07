@@ -32,6 +32,47 @@ Deno.test("one-shell layout: Directory view adopts shared layout and embedded ru
   assert(html.includes("[data-embedded] #directory-title"), "Directory must hide title under [data-embedded]");
 });
 
+Deno.test("z4gg: inspector is the named Artifacts full-bleed exception, not a browse-mode parity target", async () => {
+  const hub = await Deno.readTextFile("extension/ntp/ntp.html");
+  assert(
+    /\.artifacts-view:has\(\.inspector:not\(\[hidden\]\)\)\s*\{\s*max-inline-size:\s*1680px;/.test(hub),
+    "only a visible inspector may expand the browse container to 1680px",
+  );
+  const probe = await Deno.readTextFile("cap-evidence/z4gg-layout-probe.ts");
+  assert(probe.includes("inspect.left !== 40"), "browser probe must assert inspector's full-bleed edge at both widths");
+  assert(probe.includes("width === 1024 && browse.left !== inspect.left"), "narrow inspector keeps the browse gutter");
+});
+
+Deno.test("wwj5: the real-browser probe asserts Settings parity in parent viewport coordinates", async () => {
+  const probe = await Deno.readTextFile(new URL("../cap-evidence/z4gg-layout-probe.ts", import.meta.url));
+  assert(probe.includes("settings: settings.screenLeft"), "Settings must be compared in the parent viewport, not child-local coordinates");
+  assert(probe.includes("hostWidth: directory.viewHostWidth"), "browse scrollport must be measured while Directory is visible");
+  assert(probe.includes("settingsWidth: settings.docWidth"), "Settings iframe scrollport width must enter the parity formula");
+  assert(probe.includes("if (!parity.settingsAccounted)"), "the browser probe must fail closed on Settings drift");
+});
+
+Deno.test("i8ii: journey parity reads the browse host only while Directory has a layout box", async () => {
+  const journey = await Deno.readTextFile("scripts/chrome-journeys.ts");
+  assert(journey.includes("hostWidth: directoryMetrics1440?.hostWidth ?? null"), "1440 parity must use the visible Directory width");
+  assert(journey.includes("hostWidth: directoryMetrics1024?.hostWidth ?? null"), "1024 parity must use the visible Directory width");
+  assert(journey.includes("contentMax: directoryMetrics1440?.contentMax ?? null"), "1440 parity must use the visible Directory token");
+  assert(journey.includes("contentMax: directoryMetrics1024?.contentMax ?? null"), "1024 parity must use the visible Directory token");
+  for (const width of [1440, 1024]) {
+    const directoryStart = journey.indexOf(`const directoryMetrics${width} = await evalIn(cdp, ntpSession,`);
+    const directoryEnd = journey.indexOf(`const dirLeft${width} = directoryMetrics${width}?.left ?? null;`, directoryStart);
+    assert(directoryStart >= 0 && directoryEnd > directoryStart, `Directory must measure the browse host at ${width}`);
+    const directoryMeasure = journey.slice(directoryStart, directoryEnd);
+    assert(directoryMeasure.includes("!host.hidden && host.getClientRects().length > 0"), `host must have a visible layout box at ${width}`);
+    assert(directoryMeasure.includes("hostWidth: measurable ? host.clientWidth : null"), `the ${width} browse scrollport must fail closed if hidden`);
+    const settingsStart = journey.indexOf(`const settingsMetrics${width} = await evalIn(cdp, ntpSession,`);
+    const settingsEnd = journey.indexOf(`const settingsLeft${width} =`, settingsStart);
+    assert(settingsStart >= 0 && settingsEnd > settingsStart, `Settings must be measured at ${width}`);
+    assert(!journey.slice(settingsStart, settingsEnd).includes("view-client-host"), `Settings must not read the hidden host at ${width}`);
+    assert(width === 1440 ? directoryEnd < settingsStart : settingsEnd < directoryStart,
+      `the ${width} browse width must be measured while Directory, not Settings, is open`);
+  }
+});
+
 Deno.test("one-shell layout: Settings adopts shared layout and embedded rule", async () => {
   const html = await Deno.readTextFile("extension/options/options.html");
   assert(html.includes('class="options-shell"'), "options.html must have options-shell wrapping side and content");
@@ -60,16 +101,26 @@ Deno.test("one-shell layout: openView boots panel views at their exact canonical
   assert(ntp.includes('p !== "embedded=1"'), "openView must strip legacy embedded=1 markers from stored routes");
 });
 
-Deno.test("one-shell layout: chrome-journeys.ts carries the 3 required journey assertions in EXPECTED", async () => {
+Deno.test("one-shell layout: chrome-journeys.ts checks current browse routes, not the retired Artifacts/Directory iframe", async () => {
   const journeys = await Deno.readTextFile("scripts/chrome-journeys.ts");
-  assert(journeys.includes('"embedded views share one content left edge at 1440"'), "1440px check in EXPECTED");
-  assert(journeys.includes('"embedded views share one content left edge at 1024"'), "1024px check in EXPECTED");
-  assert(journeys.includes('"embedded Artifacts view shows its name exactly once"'), "Artifacts title check in EXPECTED");
+  for (const name of [
+    "in-page browse views share one content left edge at 1440",
+    "Settings iframe offset matches its scrollport at 1440",
+    "in-page browse views share one content left edge at 1024",
+    "Settings iframe offset matches its scrollport at 1024",
+    "embedded Artifacts view shows its name exactly once",
+  ]) {
+    assert(journeys.includes(`"${name}"`), `${name} must be in EXPECTED and checked`);
+  }
 
-  // Verify probes target visible content edges, not unpadded wrappers
-  assert(journeys.includes("frame?.contentDocument?.querySelector('.sub, .grid, .empty')"), "Artifacts probes visible content");
-  assert(journeys.includes("frame?.contentDocument?.querySelector('.sub, #rows, .site-group')"), "Directory probes visible content");
-  assert(journeys.includes("frame?.contentDocument?.querySelector('.side')"), "Settings probes visible content");
+  // Verify probes target rendered content edges, not unpadded wrappers or the
+  // obsolete iframe fallback (which hid Stage 2's in-page layout regression).
+  assert(journeys.includes("document.querySelector('#artifacts-view .sub, #artifacts-view .grid, #artifacts-view .empty')"), "Artifacts probes in-page content");
+  assert(journeys.includes("document.querySelector('#directory-view .sub, #directory-view .site-group, #directory-rows')"), "Directory probes in-page content");
+  assert(!journeys.includes('iframe[data-panel-path="artifacts/index.html"]'), "Artifacts must not fall back to the retired iframe");
+  assert(!journeys.includes('iframe[data-panel-path="directory/directory.html"]'), "Directory must not fall back to the retired iframe");
+  assert(journeys.includes("frame?.contentDocument?.querySelector('.side')"), "Settings probes visible iframe content");
+  assert(journeys.includes("frame?.contentDocument?.documentElement.clientWidth"), "Settings measures its own scrollport");
 
   // Verify title check includes both parent #view-title and iframe headings with rendered visibility
   assert(journeys.includes("document.getElementById('view-title')"), "Title probe checks parent #view-title");

@@ -1,9 +1,9 @@
 // Transport plumbing only: the catalogue and execution stay in the CAP run.
-import { Server } from "npm:@modelcontextprotocol/sdk@1.30.0/server";
+import { Server } from "npm:@modelcontextprotocol/sdk@1.31.0/server";
 // @ts-ignore SDK wildcard exports append .d.ts to .js during Deno type resolution (runtime tested).
-import { WebStandardStreamableHTTPServerTransport } from "npm:@modelcontextprotocol/sdk@1.30.0/server/webStandardStreamableHttp.js";
+import { WebStandardStreamableHTTPServerTransport } from "npm:@modelcontextprotocol/sdk@1.31.0/server/webStandardStreamableHttp.js";
 // @ts-ignore Same SDK wildcard export mismatch.
-import { CallToolRequestSchema, ListToolsRequestSchema } from "npm:@modelcontextprotocol/sdk@1.30.0/types.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "npm:@modelcontextprotocol/sdk@1.31.0/types.js";
 
 export async function createAcpTools(call: (method: string, params: unknown) => Promise<any>) {
   const token = crypto.randomUUID();

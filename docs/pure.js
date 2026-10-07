@@ -949,6 +949,22 @@ export function authorizeToolReport(
   return { kind: "content-script", origin: senderOrigin };
 }
 
+export const SERVICE_WORKER_BUNDLE_PATH = "dist/background/service-worker.js";
+
+/**
+ * Validates that a runtime message sender is the extension's own background service worker.
+ * Same-extension documents/tabs share sender.id, so checking id alone is insufficient;
+ * documentId and tab are strictly forbidden, and the sender URL must match the background service worker bundle.
+ */
+export function isTrustedServiceWorkerSender(sender, runtime = globalThis.chrome?.runtime) {
+  if (!runtime || !runtime.id || sender?.id !== runtime.id || sender?.tab != null || sender?.documentId != null) return false;
+  const url = typeof sender?.url === "string" ? sender.url : "";
+  const declared = runtime.getManifest?.()?.background?.service_worker;
+  if (typeof declared === "string" && declared.length > 0 && declared !== SERVICE_WORKER_BUNDLE_PATH) return false;
+  return url === runtime.getURL(SERVICE_WORKER_BUNDLE_PATH);
+}
+export const isTrustedWasmStreamSender = isTrustedServiceWorkerSender;
+
 /** SECRET-key pattern for `redactSecrets`: any object key matching this must
  * never be serialized into a hook task/prompt/journal (the wider-goal review's
  * CRITICAL — the storage.onChanged hook forwarded providerConfig.apiKey). */
@@ -1143,6 +1159,92 @@ export function redactSecrets(value, seen = new WeakSet()) {
     }
   }
   return value;
+}
+
+/** Known per-tool secret argument names (P1-3 / 2uhx). Bare argument names
+ * like "key" are not covered by generic SECRET_KEY_RE to avoid global false
+ * positives, but are redacted on tool egress, digest, and display paths. */
+export const KNOWN_TOOL_SECRET_ARGS = Object.freeze({
+  chacha20_poly1305: Object.freeze(["key"]),
+});
+
+const ALL_KNOWN_TOOL_SECRET_ARGS = Object.freeze(
+  Array.from(new Set(Object.values(KNOWN_TOOL_SECRET_ARGS).flat()))
+);
+
+/**
+ * Redact tool arguments declared as secret for a specific tool.
+ * Targeted: avoids widening SECRET_KEY_RE globally while ensuring bare secret
+ * arguments (such as AEAD keys) never reach continuation digests or tool cards.
+ * When the tool is a protocol tool (e.g. execute_tool) or unknown/unresolved,
+ * arguments (including nested arguments envelopes) are redacted against the union
+ * of known tool secret argument names.
+ * Bounded depth and cycle-resistant; never throws on hostile input.
+ * @param {string} toolName
+ * @param {any} args
+ * @param {readonly string[]|string[]|null} [extraSecretArgs]
+ * @param {number} [depth=0]
+ * @param {Set<object>} [activeAncestors=new Set()]
+ * @returns {any}
+ */
+export function redactToolArgs(toolName, args, extraSecretArgs = null, depth = 0, activeAncestors = new Set()) {
+  if (args == null) return args;
+  if (depth > 8) return "[depth-capped]";
+
+  if (typeof args === "string") {
+    try {
+      const parsed = JSON.parse(args);
+      if (parsed && typeof parsed === "object") {
+        return JSON.stringify(redactToolArgs(toolName, parsed, extraSecretArgs, depth + 1, activeAncestors));
+      }
+    } catch {
+      return args;
+    }
+    return args;
+  }
+
+  if (typeof args !== "object") return args;
+  if (activeAncestors.has(args)) return "[cycle]";
+  activeAncestors.add(args);
+
+  try {
+    if (Array.isArray(args)) {
+      return args.slice(0, 200).map((item) => redactToolArgs(toolName, item, extraSecretArgs, depth + 1, activeAncestors));
+    }
+
+    const tool = String(toolName ?? "").slice(0, 64);
+    const effectiveTool = tool || (typeof args?.toolId === "string" ? args.toolId : (typeof args?.tool === "string" ? args.tool : ""));
+    const isProtocolOrUnknown = !effectiveTool || effectiveTool === "execute_tool" || effectiveTool === "search_tools" || effectiveTool === "tool";
+    const secretSet = new Set(
+      Array.isArray(extraSecretArgs)
+        ? extraSecretArgs
+        : (KNOWN_TOOL_SECRET_ARGS[effectiveTool] ?? (isProtocolOrUnknown ? ALL_KNOWN_TOOL_SECRET_ARGS : []))
+    );
+
+    const out = {};
+    let n = 0;
+    for (const [k, v] of Object.entries(args)) {
+      if (n++ >= 200) { out["…"] = "[truncated]"; break; }
+      if (secretSet.has(k)) {
+        out[k] = "[REDACTED]";
+      } else if (v && typeof v === "object") {
+        const nestedExtra = (k === "arguments" && secretSet.size === 0) ? ALL_KNOWN_TOOL_SECRET_ARGS : extraSecretArgs;
+        out[k] = redactToolArgs(toolName, v, nestedExtra, depth + 1, activeAncestors);
+      } else if (typeof v === "string") {
+        if (k === "arguments") {
+          const nestedExtra = secretSet.size === 0 ? ALL_KNOWN_TOOL_SECRET_ARGS : extraSecretArgs;
+          out[k] = redactToolArgs(toolName, v, nestedExtra, depth + 1, activeAncestors);
+        } else {
+          out[k] = v;
+        }
+      } else {
+        out[k] = v;
+      }
+    }
+    return out;
+  } finally {
+    activeAncestors.delete(args);
+  }
 }
 
 /** redactDeep — BOTH redaction layers for a structured value crossing a

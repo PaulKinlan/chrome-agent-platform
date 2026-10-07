@@ -1616,6 +1616,39 @@ Deno.test("buildToolCardDom labels on-device tool results with On-device chip", 
   }
 });
 
+Deno.test("buildToolCardDom: running execute_tool card redacts secret key arguments before result lands (P2 / 2uhx)", async () => {
+  const { buildToolCardDom } = await import("../extension/shared/components.js");
+  const restoreDoc = installFakeDocument();
+  try {
+    const rawKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
+    const card = buildToolCardDom({
+      name: "execute_tool",
+      status: "running",
+      args: {
+        selectionRef: "sel_12345678-1234-1234-1234-123456789abc",
+        arguments: { key: rawKey, nonce: "BwAAAAQAQUJDREVGRw==", data: "aGk=", mode: "encrypt" },
+      },
+      result: null,
+      detail: null,
+      duration: null,
+      cardExpanded: true,
+      expandedState: new Map(),
+    });
+    function collectText(node: any): string {
+      let text = String(node.textContent ?? "");
+      for (const kid of node.children ?? []) {
+        text += " " + collectText(kid);
+      }
+      return text;
+    }
+    const cardText = collectText(card);
+    if (cardText.includes(rawKey)) throw new Error("running tool card must NOT contain raw chacha key");
+    if (!cardText.includes("[REDACTED]")) throw new Error("running tool card must contain [REDACTED]");
+  } finally {
+    restoreDoc();
+  }
+});
+
 Deno.test("site activity control writes only origin + tool + timestamp, then opens query-free Settings", async () => {
   await import("../extension/shared/components.js");
   const restoreDoc = installFakeDocument();

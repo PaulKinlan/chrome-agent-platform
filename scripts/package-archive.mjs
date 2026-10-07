@@ -515,14 +515,18 @@ export async function packageExtensionArchive(
 // buildBundledWasmManifestMap — the EXACT archivePath→executable authority for
 // the Store boundary's bundled-Wasm scan. Derived from the generated bundled
 // inventory (extension/lib/bundled-inventory-data.js) + the shipped manifest
-// files, failing closed on: a manifest file absent from the declared inventory
-// or unreadable, an executable whose content address is not a declared
-// extension/wasm/cas/<64-hex>.wasm member, or a duplicate archivePath mapping.
+// files through the single schema-aware helper (scripts/lib/wasm-manifest-
+// assets.mjs; ltkj.2 — one mapping rule shared with build.mjs + the generator,
+// not a per-consumer parser), failing closed on: a manifest file absent from
+// the declared inventory or unreadable, inventory-row manifest digest drift, an
+// asset whose content address is not a declared extension/wasm/cas/<64-hex>.wasm
+// member, or a duplicate archivePath mapping.
 export async function buildBundledWasmManifestMap(root, { inventory = null } = {}) {
   const data = inventory ?? (await import("../extension/lib/bundled-inventory-data.js")).BUNDLED_INVENTORY;
   if (!data || !Array.isArray(data.files) || !Array.isArray(data.manifests)) {
     throw packageError("bundled inventory authority is malformed");
   }
+  const { manifestCasMappings, assertManifestRowDigest } = await import("./lib/wasm-manifest-assets.mjs");
   const declared = new Set(data.files.map((row) => row?.rel));
   const CAS_RE = /^extension\/wasm\/cas\/[0-9a-f]{64}\.wasm$/u;
   const map = new Map();
@@ -534,14 +538,28 @@ export async function buildBundledWasmManifestMap(root, { inventory = null } = {
     if (!declared.has(manifestRel)) {
       throw packageError(`bundled manifest is not a declared inventory file: ${manifestRel}`);
     }
-    let manifest;
+    let manifestText;
     try {
-      manifest = JSON.parse(await readFile(path.join(root, manifestRel), "utf8"));
+      manifestText = await readFile(path.join(root, manifestRel), "utf8");
     } catch {
       throw packageError(`bundled manifest unreadable: ${manifestRel}`);
     }
-    for (const executable of manifest.executables ?? []) {
-      const casRel = `extension/wasm/cas/${executable?.sha256}.wasm`;
+    let manifest;
+    try {
+      // Inventory-row digest drift fails closed before the mapping is trusted.
+      assertManifestRowDigest(manifestText, identity);
+      manifest = JSON.parse(manifestText);
+    } catch (error) {
+      if (error?.code === "manifest_mapping_invalid") throw packageError(error.message);
+      throw packageError(`bundled manifest unreadable: ${manifestRel}`);
+    }
+    let mappings;
+    try {
+      mappings = manifestCasMappings(manifest);
+    } catch (error) {
+      throw packageError(error?.message ?? `bundled manifest mapping invalid: ${manifestRel}`);
+    }
+    for (const { casRel, schemaVersion, executable, asset } of mappings) {
       if (!CAS_RE.test(casRel) || !declared.has(casRel)) {
         throw packageError(`bundled Wasm executable outside the declared CAS inventory: ${casRel}`);
       }
@@ -549,7 +567,7 @@ export async function buildBundledWasmManifestMap(root, { inventory = null } = {
       if (map.has(archivePath)) {
         throw packageError(`duplicate bundled Wasm manifest mapping: ${archivePath}`);
       }
-      map.set(archivePath, executable);
+      map.set(archivePath, schemaVersion === 2 ? { schemaVersion: 2, id: asset.id, sha256: asset.sha256, size: asset.size } : executable);
     }
   }
   return map;

@@ -326,3 +326,30 @@ Deno.test("scan: the table host's one fresh WorkerCtor is exact-path and exact-l
     assert(violations.length >= 1, `table worker-host lookalike ${JSON.stringify(file)} must violate`);
   }
 });
+
+const CALLEXPORT_HOST_CANONICAL_REL = "extension/lib/wasm-callexport-host.js";
+
+Deno.test("scan: the wasm-callexport-host canonical WebAssembly.Module/Instance are accepted at their exact location", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/wasm-callexport-host.js", import.meta.url));
+  assertEquals(await scanShippedJs([CALLEXPORT_HOST_CANONICAL_REL], { readText: async () => source }), []);
+});
+
+Deno.test("scan: lookalike wasm-callexport-host paths NEVER inherit the canonical exemption", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/wasm-callexport-host.js", import.meta.url));
+  for (const file of [
+    `/repo/${CALLEXPORT_HOST_CANONICAL_REL}.evil`,
+    `/repo/xx${CALLEXPORT_HOST_CANONICAL_REL}`,
+    "/repo/extension/lib/not-wasm-callexport-host.js",
+  ]) {
+    const violations = await scanShippedJs([file], { readText: async () => source });
+    assert(violations.length >= 1, `wasm-callexport-host lookalike ${JSON.stringify(file)} must violate`);
+  }
+});
+
+Deno.test("scan: off-location WebAssembly constructions in wasm-callexport-host are flagged", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/wasm-callexport-host.js", import.meta.url));
+  const shiftedSource = "// an extra line that shifts locations\n" + source;
+  const violations = await scanShippedJs([CALLEXPORT_HOST_CANONICAL_REL], { readText: async () => shiftedSource });
+  assert(violations.length >= 1, "shifted WebAssembly constructors must be flagged as violations");
+});
+

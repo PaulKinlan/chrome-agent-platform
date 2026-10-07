@@ -20,6 +20,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { durableRoot } from "./durable-root.mjs";
 // The per-file serial windows live in ONE table (chrome-agent-platform-kj9s). They are the DEFAULT
@@ -88,15 +89,34 @@ export function defaultSerialTimeoutMs(env = process.env) {
 
 /**
  * @param {string} file
- * @param {{ timeoutMs?: number, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
+ * @param {{ timeoutMs?: number, readyFile?: string, readyTimeoutMs?: number, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
  * @returns {{ code: number, timedOut: boolean, error?: Error, stdout?: Buffer|null, stderr?: Buffer|null }}
  */
 export function runSerialFile(file, {
   timeoutMs = defaultSerialTimeoutMs(),
+  readyFile = undefined,
+  readyTimeoutMs = 60_000,
   stdio = "inherit",
   cwd = undefined,
   env = process.env,
 } = {}) {
+  const targetReadyFile = readyFile ?? env?.CAP_SERIAL_READY_FILE;
+  if (targetReadyFile) {
+    const runnerScript = fileURLToPath(new URL("serial-runner.mjs", import.meta.url));
+    const r = spawnSync(process.execPath, [runnerScript, file, targetReadyFile, String(timeoutMs), String(readyTimeoutMs)], {
+      stdio,
+      cwd,
+      env: { ...env, CAP_TEST_RUNNER: "1" },
+      detached: true,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    if (r.status === 124) {
+      announce(`\nrun-tests: serial file ${file} TIMED OUT after ${timeoutMs / 1000}s`);
+      return { code: 124, timedOut: true, error: r.error, stdout: r.stdout, stderr: r.stderr };
+    }
+    return { code: r.status ?? 1, timedOut: false, error: r.error, stdout: r.stdout, stderr: r.stderr };
+  }
+
   const r = spawnSync("deno", ["test", "-A", "--config", "deno.runner.jsonc", file], {
     stdio,
     cwd,

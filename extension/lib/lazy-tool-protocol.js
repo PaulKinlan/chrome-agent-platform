@@ -38,6 +38,7 @@ import { createWorkflowPipelineDispatcher } from "./workflows.js";
 import {
   fenceUntrustedText,
   fenceUntrustedValue,
+  hasUntrustedMarker,
   isUntrustedToken,
   mintUntrustedToken,
 } from "./untrusted-fence.js";
@@ -380,9 +381,10 @@ export function sanitizeLazyToolArguments(value, descriptor) {
 /** Is this result untrusted content — page/site/board data, never an
  * instruction? Either the tool tagged it (`untrusted: true`, e.g. read_page,
  * board reads, cap:fetch) or it came from a site-origin (WebMCP) tool, whose
- * output is page-controlled by construction. */
+ * output is page-controlled by construction. Traverses nested envelopes to
+ * detect untrusted fetched text or sandboxed script results (INV-7). */
 function isUntrustedResult(value, descriptor) {
-  if (ownData(value, "untrusted") === true) return true;
+  if (hasUntrustedMarker(value)) return true;
   const kind = String(ownData(descriptor, "sourceKind") ?? "");
   // WebMCP (page-exposed) and remote MCP (connect-out) tool output is external
   // content by construction — fenced even if the tool forgot to tag it.
@@ -1417,6 +1419,33 @@ export function executableBundledToolRecords(rows, context = {}) {
         // convention) — tolerate it, reject a MISMATCHED one.
         if (Object.hasOwn(rawArgs, "toolId") && rawArgs.toolId !== toolId) {
           return { ok: false, error: "invalid_arguments: toolId" };
+        }
+        if (toolId === "chacha20_poly1305") {
+          const keys = Object.keys(rawArgs).filter((k) => k !== "toolId");
+          const allowedKeys = new Set(["data", "key", "nonce", "mode", "aad"]);
+          if (!keys.every((k) => allowedKeys.has(k))) {
+            return { ok: false, error: "invalid_arguments: unexpected_keys" };
+          }
+          if (typeof rawArgs.data !== "string" || typeof rawArgs.key !== "string" || typeof rawArgs.nonce !== "string") {
+            return { ok: false, error: "invalid_arguments: required_fields" };
+          }
+          if (rawArgs.mode !== undefined && rawArgs.mode !== "encrypt" && rawArgs.mode !== "decrypt") {
+            return { ok: false, error: "invalid_arguments: mode" };
+          }
+          if (rawArgs.aad !== undefined && typeof rawArgs.aad !== "string") {
+            return { ok: false, error: "invalid_arguments: aad" };
+          }
+          return {
+            ok: true,
+            data: Object.freeze({
+              toolId,
+              data: rawArgs.data,
+              key: rawArgs.key,
+              nonce: rawArgs.nonce,
+              mode: rawArgs.mode ?? "encrypt",
+              ...(rawArgs.aad !== undefined ? { aad: rawArgs.aad } : {}),
+            }),
+          };
         }
         const keys = Object.keys(rawArgs).filter((k) => k !== "toolId");
         if (JSON.stringify(keys) !== JSON.stringify(["data"]) ||

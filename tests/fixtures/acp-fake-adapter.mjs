@@ -53,6 +53,7 @@ if (DIE_ON_SPAWN > 0 && SPAWN_COUNTER) {
 // spawns a fresh adapter per connection, so "the first prompt" would hold the
 // superseding turn too.
 const HOLD_TEXT = process.env.CAP_ACP_FIXTURE_HOLD_TEXT ?? "";
+const PROMPT_DELAY_MS = Number(process.env.CAP_ACP_FIXTURE_PROMPT_DELAY_MS ?? 0);
 let pendingPermissionId = null;
 let pendingPromptId = null;
 let lastPermissionAnswer = "none";
@@ -164,61 +165,69 @@ function handle(msg) {
       }
       break;
     case "session/prompt": {
-      const sid = msg.params?.sessionId ?? "";
-      const promptText = (Array.isArray(msg.params?.prompt) ? msg.params.prompt : [])
-        .map((p) => (typeof p?.text === "string" ? p.text : "")).join(" ");
-      lastSessionId = sid;
-      if (ASK_PERMISSION && pendingPermissionId === null) {
-        // ONE permission request per connection, then the prompt completes with
-        // whatever the client answered.
-        pendingPromptId = msg.id;
-        pendingPermissionId = 9000 + (msg.id ?? 0);
-        sendAndLog({
-          jsonrpc: "2.0",
-          id: pendingPermissionId,
-          method: "session/request_permission",
-          params: {
-            sessionId: sid,
-            toolCall: { toolCallId: "tc_perm_1", title: "Run bash: rm -rf ./demo-dir" },
-            options: [
-              { optionId: "allow_once", name: "Allow once", kind: "allow_once" },
-              { optionId: "allow_always", name: "Allow always", kind: "allow_always" },
-              { optionId: "deny", name: "Deny", kind: "deny" },
-            ],
-          },
-        });
-        break;
-      }
-      if (HOLD_TEXT && promptText.includes(HOLD_TEXT)) {
-        heldPromptId = msg.id;
+      const executePrompt = () => {
+        const sid = msg.params?.sessionId ?? "";
+        const promptText = (Array.isArray(msg.params?.prompt) ? msg.params.prompt : [])
+          .map((p) => (typeof p?.text === "string" ? p.text : "")).join(" ");
+        lastSessionId = sid;
+        if (ASK_PERMISSION && pendingPermissionId === null) {
+          // ONE permission request per connection, then the prompt completes with
+          // whatever the client answered.
+          pendingPromptId = msg.id;
+          pendingPermissionId = 9000 + (msg.id ?? 0);
+          sendAndLog({
+            jsonrpc: "2.0",
+            id: pendingPermissionId,
+            method: "session/request_permission",
+            params: {
+              sessionId: sid,
+              toolCall: { toolCallId: "tc_perm_1", title: "Run bash: rm -rf ./demo-dir" },
+              options: [
+                { optionId: "allow_once", name: "Allow once", kind: "allow_once" },
+                { optionId: "allow_always", name: "Allow always", kind: "allow_always" },
+                { optionId: "deny", name: "Deny", kind: "deny" },
+              ],
+            },
+          });
+          return;
+        }
+        if (HOLD_TEXT && promptText.includes(HOLD_TEXT)) {
+          heldPromptId = msg.id;
+          sendAndLog({
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: { sessionId: sid, update: { sessionUpdate: "agent_thought_chunk", content: { text: "Holding the first prompt…" } } },
+          });
+          return;
+        }
         sendAndLog({
           jsonrpc: "2.0",
           method: "session/update",
-          params: { sessionId: sid, update: { sessionUpdate: "agent_thought_chunk", content: { text: "Holding the first prompt…" } } },
+          params: { sessionId: sid, update: { sessionUpdate: "agent_thought_chunk", content: { text: "Fake reasoning…" } } },
         });
-        break;
+        sendAndLog({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: sid, update: { sessionUpdate: "tool_call", toolCallId: "tc_fake_1", title: "fake tool call", status: "in_progress" } },
+        });
+        sendAndLog({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: sid, update: { sessionUpdate: "tool_call_update", toolCallId: "tc_fake_1", title: "fake tool call", status: "completed" } },
+        });
+        sendAndLog({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: sid, update: { sessionUpdate: "agent_message_chunk", content: { text: "fake reply" } } },
+        });
+        sendAndLog({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } });
+      };
+
+      if (PROMPT_DELAY_MS > 0) {
+        setTimeout(executePrompt, PROMPT_DELAY_MS);
+      } else {
+        executePrompt();
       }
-      sendAndLog({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: { sessionId: sid, update: { sessionUpdate: "agent_thought_chunk", content: { text: "Fake reasoning…" } } },
-      });
-      sendAndLog({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: { sessionId: sid, update: { sessionUpdate: "tool_call", toolCallId: "tc_fake_1", title: "fake tool call", status: "in_progress" } },
-      });
-      sendAndLog({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: { sessionId: sid, update: { sessionUpdate: "tool_call_update", toolCallId: "tc_fake_1", title: "fake tool call", status: "completed" } },
-      });
-      sendAndLog({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: { sessionId: sid, update: { sessionUpdate: "agent_message_chunk", content: { text: "fake reply" } } },
-      });
-      sendAndLog({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } });
       break;
     }
     case "session/cancel":

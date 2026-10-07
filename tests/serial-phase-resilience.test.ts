@@ -268,10 +268,10 @@ Deno.test("pozs: timed-out serial file leaves no descendant processes behind (pr
   let grandchildPid = 0;
   try {
     const res = runSerialFile(tempTest, {
-      // The property is "a TIMED-OUT serial file leaves no descendant behind", so the bound only
-      // has to sit far below the orphan's 300 s sleep: 10 s leaves a loaded box room to boot Deno
-      // and stays 30x smaller than the sleeper. Deliberately NOT a boot-time assertion (htl8).
+      // 5nhz: readyFile handshake guarantees the 10s timeout starts only after the probe
+      // has initialized, spawned the sleeper and written the premise to pidFile.
       timeoutMs: 10_000,
+      readyFile: pidFile,
       stdio: "pipe",
       cwd: ROOT,
     });
@@ -291,6 +291,126 @@ Deno.test("pozs: timed-out serial file leaves no descendant processes behind (pr
     if (grandchildPid > 0) {
       try { Deno.kill(grandchildPid, "SIGKILL"); } catch { /* gone */ }
     }
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("pozs/5nhz: timed-out serial file with cold-boot delay awaits ready marker before starting timer", async () => {
+  const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-grandchild-delayed-" });
+  const pidFile = `${tempDir}/grandchild.pid`;
+  const tempTest = `${tempDir}/grandchild-delayed-hang.test.ts`;
+
+  // Delayed probe: sleeps 2.5s before recording premise and hanging.
+  // Delay (2500ms) exceeds execution timeout (1500ms), proving the timeout starts only after readiness.
+  const delayedSource = `
+await new Promise((r) => setTimeout(r, 2500));
+${probeSource(pidFile, { hang: true })}
+`;
+  await Deno.writeTextFile(tempTest, delayedSource);
+
+  let grandchildPid = 0;
+  try {
+    const res = runSerialFile(tempTest, {
+      timeoutMs: 1_500,
+      readyFile: pidFile,
+      readyTimeoutMs: 15_000,
+      stdio: "pipe",
+      cwd: ROOT,
+    });
+    assertEquals(res.code, 124, `timed out child must return exit 124; got ${res.code}`);
+    assertEquals(res.timedOut, true, "runner must report timedOut: true");
+
+    const recorded = await readRecord(pidFile);
+    grandchildPid = recorded.sleeper;
+    assertPremise(recorded, "the delayed timed-out child");
+    const outcome = await outcomeFor(grandchildPid);
+    assert(
+      outcome !== "alive",
+      `orphan PID ${grandchildPid} must not survive the runner's timeout`,
+    );
+  } finally {
+    if (grandchildPid > 0) {
+      try { Deno.kill(grandchildPid, "SIGKILL"); } catch { /* gone */ }
+    }
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("pozs/5nhz: runSerialFile fails closed with diagnostic if ready marker never appears", async () => {
+  const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-unready-serial-" });
+  const missingReadyFile = `${tempDir}/nonexistent.pid`;
+  const tempTest = `${tempDir}/hangs-never-ready.test.ts`;
+
+  await Deno.writeTextFile(tempTest, `
+Deno.test("hangs without writing marker", async () => {
+  setInterval(() => {}, 1000);
+  await new Promise(() => {});
+});
+`);
+
+  try {
+    const res = runSerialFile(tempTest, {
+      timeoutMs: 5_000,
+      readyFile: missingReadyFile,
+      readyTimeoutMs: 500,
+      stdio: "pipe",
+      cwd: ROOT,
+    });
+    assertEquals(res.code, 124, "unready serial file must return exit 124");
+    assertEquals(res.timedOut, true, "unready serial file must report timedOut: true");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("pozs/5nhz: runSerialFile fails closed if child exits 0 without writing ready marker", async () => {
+  const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-exit-unready-" });
+  const missingReadyFile = `${tempDir}/unwritten.marker`;
+  const tempTest = `${tempDir}/exits-without-marker.test.ts`;
+
+  // Fixture returns 0 immediately without writing marker
+  await Deno.writeTextFile(tempTest, `
+Deno.test("passes immediately without marker", () => {
+  // returns 0
+});
+`);
+
+  try {
+    const res = runSerialFile(tempTest, {
+      timeoutMs: 5_000,
+      readyFile: missingReadyFile,
+      readyTimeoutMs: 5_000,
+      stdio: "pipe",
+      cwd: ROOT,
+    });
+    assertEquals(res.code, 124, "exiting without ready marker must fail closed with exit 124");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("pozs/5nhz: runSerialFile succeeds when child writes ready marker and exits immediately", async () => {
+  const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-fast-ready-serial-" });
+  const readyFile = `${tempDir}/fast.marker`;
+  const tempTest = `${tempDir}/fast-ready.test.ts`;
+
+  // Fixture writes marker and exits 0 immediately without hanging
+  await Deno.writeTextFile(tempTest, `
+await Deno.writeTextFile("${readyFile}", "ready");
+Deno.test("passes immediately after marker", () => {});
+`);
+
+  try {
+    const res = runSerialFile(tempTest, {
+      timeoutMs: 5_000,
+      readyFile,
+      readyTimeoutMs: 5_000,
+      stdio: "pipe",
+      cwd: ROOT,
+    });
+    assertEquals(res.code, 0, "fast marker-then-exit must succeed with code 0");
+    assertEquals(res.timedOut, false);
+  } finally {
     await Deno.remove(tempDir, { recursive: true }).catch(() => {});
   }
 });

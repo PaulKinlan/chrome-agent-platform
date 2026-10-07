@@ -35,8 +35,6 @@ function homeCacheProfile(name: string): string {
 }
 
 // chrome-agent-platform-fyvc: no binary literal — spawnChrome (launchChrome) resolves CAP_CHROMIUM → CfT cache → /usr/bin/chromium.
-const PKILL = "/usr/bin/pkill";
-const PGREP = "/usr/bin/pgrep";
 const RM = "/bin/rm";
 const GIT = "/usr/bin/git";
 
@@ -45,7 +43,8 @@ import { DEMO_STREAM_ANSWER } from "../extension/lib/models/demo-model.js";
 import { durableDir } from "./lib/durable-root.mjs";
 import { isCdpEvaluateTimeout } from "./lib/quiet-window.ts";
 import { wireValue } from "./lib/cdp-eval.ts";
-import { launchChrome as spawnChrome } from "./lib/chrome-launch.ts";
+import { computeUnpackedExtensionId, launchChrome as spawnChrome, SW_MATCH, teardownChrome } from "./lib/chrome-launch.ts";
+import { assertJourneyNtpPrincipal } from "./lib/journey-ntp-principal.ts";
 import {
   ENVIRONMENTAL_REFUSAL_EXIT,
   ENVIRONMENTAL_REFUSAL_MARKER,
@@ -58,6 +57,7 @@ import { HeavyGateSlotRefusedError, heavyGateRefusalPayload } from "./lib/heavy-
 import { HeavyGateSlotSetupError, heavyGateSetupFailurePayload } from "./lib/heavy-gate-slot.ts";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, searchResultNames, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 import { composerInput, composerSend, composerPopup } from "./lib/composer-target.ts";
+import { viewEdgeParity } from "./lib/view-edge-parity.ts";
 import { clickVisibleCreateAgent } from "./lib/create-agent-click.ts";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -149,6 +149,8 @@ function launchJourneyChrome(profile: string) {
       "--no-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
+      // Avoid crashpad sidecars becoming orphaned during this long headless gate.
+      "--disable-crash-reporter",
       "--silent-debugger-extension-api",
       `--disable-extensions-except=${EXT}`,
       `--load-extension=${EXT}`,
@@ -668,8 +670,10 @@ const EXPECTED = [
   "hub: retained the shield-badge screenshot",
   "hub: idle header has no status text, no dot, at most one icon button",
   "hub: no footer button is filled when idle; the open view's button has aria-current=page",
-  "embedded views share one content left edge at 1440",
-  "embedded views share one content left edge at 1024",
+  "in-page browse views share one content left edge at 1440",
+  "Settings iframe offset matches its scrollport at 1440",
+  "in-page browse views share one content left edge at 1024",
+  "Settings iframe offset matches its scrollport at 1024",
   "embedded Artifacts view shows its name exactly once",
   "hub: #agent=named:writer reload shows Writer",
   "after enabling one recipe the four agent surfaces agree (1)",
@@ -1290,7 +1294,7 @@ async function main() {
     // (CAP-FB-20260830-SUITE-HONESTY-01).
     for (let i = 0; i < 100; i++) {
       const targets = await fetchJson(`http://127.0.0.1:${port}/json/list`);
-      if (targets.find((t) => t.type === "service_worker")) break;
+      if (targets.find(SW_MATCH)) break;
       await sleep(100);
     }
     const autoAttachRes = await cdp.send("Target.setAutoAttach", {
@@ -1309,15 +1313,19 @@ async function main() {
     let sw = null;
     for (let i = 0; i < 60 && !sw; i++) {
       const targets = await fetchJson(`http://127.0.0.1:${port}/json/list`);
-      sw = targets.find((t) => t.type === "service_worker");
+      sw = targets.find(SW_MATCH);
       if (!sw) await sleep(200);
     }
-    if (!sw) {
+    // CfT also registers component-extension workers (e.g. thunk.js). Even a
+    // matched background path must belong to the unpacked extension we loaded.
+    const expectedExtId = await computeUnpackedExtensionId(EXT);
+    const workerId = sw ? new URL(sw.url).host : null;
+    if (!sw || workerId !== expectedExtId) {
       check("extension loaded", false);
-      throw new Error("extension did not load");
+      throw new Error("the unpacked extension's background service worker did not load");
     }
     check("extension loaded", true);
-    const extId = sw.url.split("/")[2];
+    const extId = expectedExtId;
 
     // Reuse the pre-attached SW session when auto-attach already won the race.
     // Explicitly attaching the same worker twice is flaky and can hang CDP.
@@ -1386,6 +1394,17 @@ async function main() {
     await sleep(1500);
     const ntpSession = await attachRuntime(cdp, ntpPage.id);
     cdp.pageSessions.add(ntpSession);
+    // A valid CDP target can display chrome-error://chromewebdata/ when the
+    // derived extension ID was wrong. Fail with a named principal error BEFORE
+    // the SW restart, never reinterpret a missing runtime as a product answer.
+    const ntpPrincipal = await evalIn(cdp, ntpSession,
+      `({ href: location.href, sendMessageType: typeof globalThis.chrome?.runtime?.sendMessage })`);
+    try {
+      assertJourneyNtpPrincipal(ntpPrincipal, extId);
+    } catch (error) {
+      throw new Error(`${error instanceof Error ? error.message : "journey NTP principal unavailable"}; ` +
+        `targetId=${Cdp.diagnosticId(ntpPage.id)} sessionId=${Cdp.diagnosticId(ntpSession)}`);
+    }
 
     // sendMsg from the NTP (extension page) — backend message probes.
     const sendMsg = (payload) =>
@@ -1678,7 +1697,8 @@ async function main() {
         ["directory", "artifacts", "settings"].every((k) => footerBack?.[k]?.current === null) && noneFilled(footerBack),
     );
 
-    // ── CAP-FB-20260830-ONE-SHELL-01: one content width and gutter across views ──
+    // ── CAP-FB-20260830-ONE-SHELL-01 / z4gg: in-page browse parity;
+    // Settings remains a scrollable iframe with its own narrower scrollport. ──
     // 1440px viewport measurement
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false }, ntpSession);
     await sleep(300);
@@ -1687,13 +1707,10 @@ async function main() {
     await evalIn(cdp, ntpSession, `document.getElementById('open-artifacts')?.click(); true`);
     await sleep(900);
     const artifactsLeft1440 = await evalIn(cdp, ntpSession, `(() => {
-      const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
-      const el = document.querySelector('#artifacts-view .sub, #artifacts-view .grid, #artifacts-view .empty') ||
-        frame?.contentDocument?.querySelector('.sub, .grid, .empty');
+      const el = document.querySelector('#artifacts-view .sub, #artifacts-view .grid, #artifacts-view .empty');
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
     const artifactsTitleCount = await evalIn(cdp, ntpSession, `(() => {
-      const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
       const isRendered = (el) => {
         if (!el) return false;
         if (typeof el.checkVisibility === 'function') {
@@ -1703,10 +1720,10 @@ async function main() {
       };
       const parentTitle = document.getElementById('view-title');
       const isParentVisible = isRendered(parentTitle) && /artifacts/i.test(parentTitle.textContent || '');
-      const doc = frame?.contentDocument || document.getElementById('artifacts-view');
-      const iframeHeadings = doc ? Array.from(doc.querySelectorAll('h1, .logo, [role="heading"]'))
+      const view = document.getElementById('artifacts-view');
+      const viewHeadings = view ? Array.from(view.querySelectorAll('h1, .logo, [role="heading"]'))
         .filter(e => /artifacts/i.test(e.textContent || '') && isRendered(e)) : [];
-      return (isParentVisible ? 1 : 0) + iframeHeadings.length;
+      return (isParentVisible ? 1 : 0) + viewHeadings.length;
     })()`);
     const artShot1440 = await captureShot(cdp, ntpSession);
     if (artShot1440) await writeEvidence("hub-view-artifacts-1440.png", artShot1440);
@@ -1714,63 +1731,85 @@ async function main() {
     // Open Directory
     await evalIn(cdp, ntpSession, `document.getElementById('open-directory')?.click(); true`);
     await sleep(900);
-    const dirLeft1440 = await evalIn(cdp, ntpSession, `(() => {
-      const frame = document.querySelector('iframe[data-panel-path="directory/directory.html"]');
-      const el = document.querySelector('#directory-view .sub, #directory-view .site-group, #directory-rows') ||
-        frame?.contentDocument?.querySelector('.sub, #rows, .site-group');
-      return el ? Math.round(el.getBoundingClientRect().left) : null;
+    // Settings hides the browse host; sample its scrollport while Directory has a layout box.
+    const directoryMetrics1440 = await evalIn(cdp, ntpSession, `(() => {
+      const el = document.querySelector('#directory-view .sub, #directory-view .site-group, #directory-rows');
+      const host = document.getElementById('view-client-host');
+      const measurable = !!host && !host.hidden && host.getClientRects().length > 0;
+      return {
+        left: el ? Math.round(el.getBoundingClientRect().left) : null,
+        hostWidth: measurable ? host.clientWidth : null,
+        contentMax: measurable ? parseFloat(getComputedStyle(host).getPropertyValue('--content-max')) : null,
+      };
     })()`);
+    const dirLeft1440 = directoryMetrics1440?.left ?? null;
     const dirShot1440 = await captureShot(cdp, ntpSession);
     if (dirShot1440) await writeEvidence("hub-view-directory-1440.png", dirShot1440);
 
     // Open Settings
     await evalIn(cdp, ntpSession, `document.getElementById('open-settings')?.click(); true`);
     await sleep(900);
-    const settingsLeft1440 = await evalIn(cdp, ntpSession, `(() => {
+    const settingsMetrics1440 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="options/options.html"]');
       const el = frame?.contentDocument?.querySelector('.side');
-      return el ? Math.round(el.getBoundingClientRect().left) : null;
+      return {
+        left: el ? Math.round(el.getBoundingClientRect().left) : null,
+        width: frame?.contentDocument?.documentElement.clientWidth ?? null,
+      };
     })()`);
+    const settingsLeft1440 = settingsMetrics1440?.left ?? null;
     const setShot1440 = await captureShot(cdp, ntpSession);
     if (setShot1440) await writeEvidence("hub-view-settings-1440.png", setShot1440);
 
-    console.log("1440px content left edges:", { artifactsLeft1440, dirLeft1440, settingsLeft1440, artifactsTitleCount });
-    const match1440 = artifactsLeft1440 !== null && dirLeft1440 !== null && settingsLeft1440 !== null &&
-      Math.abs(artifactsLeft1440 - dirLeft1440) <= 1 && Math.abs(artifactsLeft1440 - settingsLeft1440) <= 1;
-    check("embedded views share one content left edge at 1440", match1440);
+    const parity1440 = viewEdgeParity({ artifacts: artifactsLeft1440, directory: dirLeft1440, settings: settingsLeft1440,
+      hostWidth: directoryMetrics1440?.hostWidth ?? null, settingsWidth: settingsMetrics1440?.width ?? null,
+      contentMax: directoryMetrics1440?.contentMax ?? null });
+    console.log("1440px browse edges and scrollports:", { artifactsLeft1440, dirLeft1440, directoryMetrics1440, settingsMetrics1440, parity1440, artifactsTitleCount });
+    check("in-page browse views share one content left edge at 1440", parity1440.inPageAligned);
+    check("Settings iframe offset matches its scrollport at 1440", parity1440.settingsAccounted);
 
     // 1024px viewport measurement
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 768, deviceScaleFactor: 1, mobile: false }, ntpSession);
     await sleep(300);
 
-    const settingsLeft1024 = await evalIn(cdp, ntpSession, `(() => {
+    const settingsMetrics1024 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="options/options.html"]');
       const el = frame?.contentDocument?.querySelector('.side');
-      return el ? Math.round(el.getBoundingClientRect().left) : null;
+      return {
+        left: el ? Math.round(el.getBoundingClientRect().left) : null,
+        width: frame?.contentDocument?.documentElement.clientWidth ?? null,
+      };
     })()`);
+    const settingsLeft1024 = settingsMetrics1024?.left ?? null;
 
     await evalIn(cdp, ntpSession, `document.getElementById('open-directory')?.click(); true`);
     await sleep(900);
-    const dirLeft1024 = await evalIn(cdp, ntpSession, `(() => {
-      const frame = document.querySelector('iframe[data-panel-path="directory/directory.html"]');
-      const el = document.querySelector('#directory-view .sub, #directory-view .site-group, #directory-rows') ||
-        frame?.contentDocument?.querySelector('.sub, #rows, .site-group');
-      return el ? Math.round(el.getBoundingClientRect().left) : null;
+    // Settings was still open at resize; sample the host only after Directory is visible again.
+    const directoryMetrics1024 = await evalIn(cdp, ntpSession, `(() => {
+      const el = document.querySelector('#directory-view .sub, #directory-view .site-group, #directory-rows');
+      const host = document.getElementById('view-client-host');
+      const measurable = !!host && !host.hidden && host.getClientRects().length > 0;
+      return {
+        left: el ? Math.round(el.getBoundingClientRect().left) : null,
+        hostWidth: measurable ? host.clientWidth : null,
+        contentMax: measurable ? parseFloat(getComputedStyle(host).getPropertyValue('--content-max')) : null,
+      };
     })()`);
+    const dirLeft1024 = directoryMetrics1024?.left ?? null;
 
     await evalIn(cdp, ntpSession, `document.getElementById('open-artifacts')?.click(); true`);
     await sleep(900);
     const artifactsLeft1024 = await evalIn(cdp, ntpSession, `(() => {
-      const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
-      const el = document.querySelector('#artifacts-view .sub, #artifacts-view .grid, #artifacts-view .empty') ||
-        frame?.contentDocument?.querySelector('.sub, .grid, .empty');
+      const el = document.querySelector('#artifacts-view .sub, #artifacts-view .grid, #artifacts-view .empty');
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
 
-    console.log("1024px content left edges:", { artifactsLeft1024, dirLeft1024, settingsLeft1024 });
-    const match1024 = artifactsLeft1024 !== null && dirLeft1024 !== null && settingsLeft1024 !== null &&
-      Math.abs(artifactsLeft1024 - dirLeft1024) <= 1 && Math.abs(artifactsLeft1024 - settingsLeft1024) <= 1;
-    check("embedded views share one content left edge at 1024", match1024);
+    const parity1024 = viewEdgeParity({ artifacts: artifactsLeft1024, directory: dirLeft1024, settings: settingsLeft1024,
+      hostWidth: directoryMetrics1024?.hostWidth ?? null, settingsWidth: settingsMetrics1024?.width ?? null,
+      contentMax: directoryMetrics1024?.contentMax ?? null });
+    console.log("1024px browse edges and scrollports:", { artifactsLeft1024, dirLeft1024, directoryMetrics1024, settingsMetrics1024, parity1024 });
+    check("in-page browse views share one content left edge at 1024", parity1024.inPageAligned);
+    check("Settings iframe offset matches its scrollport at 1024", parity1024.settingsAccounted);
 
     check("embedded Artifacts view shows its name exactly once", artifactsTitleCount === 1);
 
@@ -4264,17 +4303,20 @@ async function main() {
       { tool: "execute_tool", args: (req) => ({ selectionRef: selectionRefOf(req), arguments: { toolId: "imageops", args: ["info"], stdin: IMAGEOPS_PNG_B64 } }) },
       { text: "The image is 2x2 png." },
     ], "probe the image with imageops", 3);
-    const imageopsInfoResult = lastToolResult(imageopsInfoProvider.requests[2] ?? {});
-    const imageopsInfoText = typeof imageopsInfoResult === "string" ? imageopsInfoResult : JSON.stringify(imageopsInfoResult ?? "");
-    const imageopsInfoOk = /"width"\s*:\s*2/.test(imageopsInfoText) &&
-      /"format"\s*:\s*"png"/.test(imageopsInfoText) &&
-      /"phase"\s*:\s*"completed"/.test(imageopsInfoText);
+    const imageopsInfoEnv = executeEnvelope(imageopsInfoProvider.requests[2] ?? {}, "imageops");
+    const imageopsInfoResult = imageopsInfoEnv?.result;
+    const imageopsInfoText = typeof imageopsInfoResult?.stdout === "string" ? imageopsInfoResult.stdout : "";
+    let imageopsInfoParsed = null;
+    try { imageopsInfoParsed = JSON.parse(imageopsInfoText); } catch { /* malformed or absent stdout fails the check */ }
+    const imageopsInfoOk = imageopsInfoEnv?.ok === true &&
+      imageopsInfoResult?.phase === "completed" && imageopsInfoResult?.exitCode === 0 &&
+      imageopsInfoParsed?.width === 2 && imageopsInfoParsed?.format === "png";
     await imageopsInfoProvider.close();
     await evalOpts(`chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "demo", apiKey: "" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`).catch(() => {});
     check(
       "bundled wasm: imageops info executes live through the hub run",
       imageopsInfoRun?.phase === "terminal" && imageopsInfoRun?.terminal?.ok === true && imageopsInfoOk,
-      { result: imageopsInfoText.slice(0, 300), phase: imageopsInfoRun?.phase ?? null, terminalOk: imageopsInfoRun?.terminal?.ok ?? null },
+      { result: imageopsInfoText.slice(0, 300), toolPhase: imageopsInfoResult?.phase ?? null, exitCode: imageopsInfoResult?.exitCode ?? null, phase: imageopsInfoRun?.phase ?? null, terminalOk: imageopsInfoRun?.terminal?.ok ?? null },
     );
 
     // RESIZE ROUND-TRIP: resize --width 4 over the same PNG. The output is
@@ -4289,13 +4331,13 @@ async function main() {
       { tool: "execute_tool", args: (req) => ({ selectionRef: selectionRefOf(req), arguments: { toolId: "imageops", args: ["resize", "--width", "4"], stdin: IMAGEOPS_PNG_B64 } }) },
       { text: "Resized to width 4." },
     ], "resize the image with imageops to width 4", 3);
-    const imageopsResizeResult = lastToolResult(imageopsResizeProvider.requests[2] ?? {});
-    const imageopsResizeInner = imageopsResizeResult?.result ?? imageopsResizeResult ?? {};
+    const imageopsResizeEnv = executeEnvelope(imageopsResizeProvider.requests[2] ?? {}, "imageops");
+    const imageopsResizeInner = imageopsResizeEnv?.result ?? {};
     await imageopsResizeProvider.close();
     await evalOpts(`chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "demo", apiKey: "" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`).catch(() => {});
     check(
       "bundled wasm: imageops resize round-trip through the hub run",
-      imageopsResizeRun?.phase === "terminal" && imageopsResizeRun?.terminal?.ok === true &&
+      imageopsResizeRun?.phase === "terminal" && imageopsResizeRun?.terminal?.ok === true && imageopsResizeEnv?.ok === true &&
         imageopsResizeInner?.phase === "completed" && imageopsResizeInner?.exitCode === 0 &&
         imageopsResizeInner?.output?.bytes === 120 &&
         imageopsResizeInner?.output?.sha256 === "085de7b5f422a7474cbd6502934befa346a57628f933cdb0dd345653d505c623",
@@ -8535,8 +8577,8 @@ async function main() {
     let removed = false;
     let clean = true;
     try {
-      if (proc) await killChromiumTree(proc, profile);
-      await runBounded(RM, ["-rf", profile]);
+      if (proc) await teardownJourneyChrome(proc, profile);
+      else await runBounded(RM, ["-rf", profile]);
       removed = !(await Deno.stat(profile).then(() => true).catch(() => false));
       if (removed) {
         await sleep(800);
@@ -9087,8 +9129,8 @@ async function demoPathJourney() {
     try { if (cdp) cdp.intentionalClose = true; ws?.close(); } catch { /* ignore */ }
     await Promise.all([docs.shutdown(), shop.shutdown()].map((p) => withTimeout(p, 8000, "demo-path fixture.shutdown").catch(() => { demoPathLeak = true; })));
     try {
-      if (proc) await killChromiumTree(proc, profile);
-      await runBounded(RM, ["-rf", profile]);
+      if (proc) await teardownJourneyChrome(proc, profile);
+      else await runBounded(RM, ["-rf", profile]);
       if (await Deno.stat(profile).then(() => true).catch(() => false)) demoPathLeak = true;
     } catch (e) {
       demoPathLeak = true;
@@ -9352,8 +9394,8 @@ async function factoryResetJourney() {
     }
     try { if (cdp) cdp.intentionalClose = true; ws?.close(); } catch { /* ignore */ }
     try {
-      if (proc) await killChromiumTree(proc, profile);
-      await runBounded(RM, ["-rf", profile]);
+      if (proc) await teardownJourneyChrome(proc, profile);
+      else await runBounded(RM, ["-rf", profile]);
       if (await Deno.stat(profile).then(() => true).catch(() => false)) factoryResetLeak = true;
     } catch (e) {
       factoryResetLeak = true;
@@ -9368,37 +9410,11 @@ async function factoryResetJourney() {
  * bounded wait; HARD FAILS if any descendant survives (never silently falls
  * through and lets an orphan recreate profile files after the suite exits).
  */
-async function killChromiumTree(proc, profile) {
-  try { proc.kill("SIGKILL"); } catch { /* already gone */ }
-  try { await withTimeout(proc.status, 5000, "proc status"); } catch { /* gone */ }
-  // NOTE: the match pattern must NOT start with "-" (pgrep/pkill would parse
-  // a leading "--user-data-dir=…" as an OPTION and exit 2 — a syntax error that
-  // the old code silently treated as "no process remains"). Matching the
-  // substring without the leading dashes is equivalent (the chromium argv still
-  // contains the full "--user-data-dir=…" token).
-  const match = `user-data-dir=${profile}`;
-  await runBounded(PKILL, ["-9", "-f", match]).catch(() => {});
-  // Bounded wait for the full tree to disappear — HARD FAIL if any remain.
-  // Distinguish a REAL "no process found" (pgrep exit code 1) from a pgrep
-  // FAILURE (spawn/permission/timeout error): a failed pgrep must NOT be read
-  // as "clean" (that was the fail-open path where a broken pgrep meant "no
-  // descendants survived").
-  for (let i = 0; i < 20; i++) {
-    let out;
-    try {
-      out = await runBounded(PGREP, ["-f", match]);
-    } catch (e) {
-      throw new Error(
-        `pgrep failed (${e?.message ?? e}) — cannot confirm cleanup`,
-      );
-    }
-    if (out.code === 1) return; // pgrep found nothing → no matching process
-    if (out.code !== 0) {
-      throw new Error(`pgrep exited ${out.code} — cannot confirm cleanup`);
-    }
-    await sleep(250);
-  }
-  throw new Error("chromium descendants survived cleanup");
+async function teardownJourneyChrome(proc, profile) {
+  // launchChrome starts Chrome in an isolated process group; shared teardown
+  // uses that captured group AND the profile marker. Parent kill plus argv
+  // containing user-data-dir alone misses crashpad children.
+  await teardownChrome(proc, profile);
 }
 
 await main();

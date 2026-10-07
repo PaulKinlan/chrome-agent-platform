@@ -42,6 +42,7 @@ const RETIRED_POISON = "/tmp/cap-chrome-slot-POISON";
 // and the red looked like a custody failure.
 const ESCAPE_SELF_TEST_BUDGET_MS = 10_000;
 const ESCAPE_ACK_DEADLINE_MS = 12_000;
+const STUBBORN_ACK_DEADLINE_MS = 12_000;
 const ESCAPE_SAMPLE_FREEZE_MS = 400;
 // chrome-agent-platform-2zqd: how long the reap/cleanup assertions wait for a recorded pid to STOP being a
 // live process before calling it a survivor. The PROPERTY is unchanged (a survivor still REDs) - only the
@@ -160,6 +161,52 @@ async function assertRecordedPidsGone(result: RunResult) {
   }
 }
 
+// chrome-agent-platform-wtjz: boundedly verify live process ownership by identity rather than unguarded
+// /proc reads that throw raw ENOENT under churn when inspecting transient descendants.
+function matchEscapeResidueByIdentity(
+  residue: Array<Record<string, unknown>>,
+  expectedChildPid: number,
+): Record<string, unknown> {
+  const match = residue.find((r) => Number(r.pid) === expectedChildPid);
+  assert(
+    match,
+    `expected escape child pid ${expectedChildPid} must be in residue: ${
+      JSON.stringify(residue.map((r) => ({ pid: r.pid, starttime: r.starttime })))
+    }`,
+  );
+  return match;
+}
+
+async function verifyLiveProcOwnership(
+  pid: number,
+  expectedStart: string,
+  timeoutMs = 2_000,
+): Promise<{ starttime: string; uid: number }> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: Error | null = null;
+  while (Date.now() < deadline) {
+    try {
+      const id = await readProcIdentity(pid);
+      if (id.state !== "Z") {
+        if (id.starttime !== expectedStart) {
+          throw new Error(
+            `proc ${pid} starttime mismatch: expected ${expectedStart}, got ${id.starttime}`,
+          );
+        }
+        return id;
+      }
+    } catch (err) {
+      lastError = err as Error;
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(
+    `custody verification failed for pid ${pid} (expected start ${expectedStart}): ${
+      lastError?.message ?? "process not live"
+    }`,
+  );
+}
+
 Deno.test("security-suite custody: production mode is immutable and fake runners are hash-pinned", async () => {
   const production = await resolveSupervisorConfig({
     env: {
@@ -172,6 +219,7 @@ Deno.test("security-suite custody: production mode is immutable and fake runners
   assertEquals(production.selfTest, false);
   assertEquals(production.timeoutMs, 120_000);
   assertEquals(production.attestDeadlineMs, 2_000, "production keeps the old attestation clock");
+  assertEquals(production.sampleFreezeMs, 0, "production keeps zero sample freeze");
   assertEquals(production.runner, RUNNER);
 
   await assertRejects(
@@ -191,6 +239,38 @@ Deno.test("security-suite custody: production mode is immutable and fake runners
   await assertRejects(
     () => resolveSupervisorConfig({
       env: { HOME: Deno.env.get("HOME") ?? "", CAP_SECURITY_TEST_ATTEST_DEADLINE_MS: "5000" },
+      repoRoot: ROOT,
+      expectedFixtureHash: "unused-in-production",
+    }),
+    Error,
+    "self-test-only override refused in production mode",
+  );
+
+  // chrome-agent-platform-a6x5: CAP_SECURITY_TEST_SAMPLE_FREEZE_MS is a test-only determinism
+  // knob and must refuse loudly if present in production mode.
+  await assertRejects(
+    () => resolveSupervisorConfig({
+      env: { HOME: Deno.env.get("HOME") ?? "", CAP_SECURITY_TEST_SAMPLE_FREEZE_MS: "500" },
+      repoRoot: ROOT,
+      expectedFixtureHash: "unused-in-production",
+    }),
+    Error,
+    "self-test-only override refused in production mode",
+  );
+
+  await assertRejects(
+    () => resolveSupervisorConfig({
+      env: { HOME: Deno.env.get("HOME") ?? "", CAP_SECURITY_TEST_ACK_DEADLINE_MS: "5000" },
+      repoRoot: ROOT,
+      expectedFixtureHash: "unused-in-production",
+    }),
+    Error,
+    "self-test-only override refused in production mode",
+  );
+
+  await assertRejects(
+    () => resolveSupervisorConfig({
+      env: { HOME: Deno.env.get("HOME") ?? "", CAP_SECURITY_TEST_STUBBORN_BOOT_DELAY_MS: "500" },
       repoRoot: ROOT,
       expectedFixtureHash: "unused-in-production",
     }),
@@ -310,6 +390,21 @@ Deno.test("zfsl: invalid attestation declaration refuses by name before a runner
   }
 });
 
+Deno.test("a6x5: invalid sample freeze declaration refuses by name before a runner is spawned", async () => {
+  for (const bad of ["not-a-number", "-1", "20001"]) {
+    const result = await command("bash", [SUPERVISOR], {
+      CAP_SECURITY_SELF_TEST: SELF_TEST_TOKEN,
+      CAP_SECURITY_RUNNER: FIXTURE,
+      CAP_SECURITY_TEST_SCENARIO: "guard",
+      CAP_SECURITY_SELF_TEST_TIMEOUT_MS: "1000",
+      CAP_SECURITY_TEST_SAMPLE_FREEZE_MS: bad,
+    }, 20, "CAP_SECURITY_LOCK_ACQUIRED");
+    assertEquals(result.code, 2);
+    assert(result.text.includes("SECURITY-SUITE SUPERVISOR REFUSED: CAP_SECURITY_TEST_SAMPLE_FREEZE_MS out of bounds"));
+    assert(!result.text.includes("CAP_SECURITY_RESULT"), "config refusal must precede spawning and receipt");
+  }
+});
+
 Deno.test("zfsl: exhausted declared attestation window refuses by name and reaps the child", async () => {
   const declaredAttestDeadlineMs = 100;
   const result = await runSupervisor("timeout", 1_000, {
@@ -361,7 +456,9 @@ Deno.test("security-suite custody: hard timeout sends TERM and returns 124", asy
 });
 
 Deno.test("security-suite custody: stubborn owned group receives TERM then KILL and leaves no survivor", async () => {
-  const result = await runSupervisor("stubborn", 350);
+  const result = await runSupervisor("stubborn", 350, {
+    CAP_SECURITY_TEST_ACK_DEADLINE_MS: String(STUBBORN_ACK_DEADLINE_MS),
+  });
   try {
     assertEquals(result.code, 124);
     assertEquals(result.receipt?.termSent, true);
@@ -369,7 +466,154 @@ Deno.test("security-suite custody: stubborn owned group receives TERM then KILL 
     assertEquals(result.receipt?.groupSurvived, false);
     assert(result.state.some((row) => row.event === "runner-term-ignored"));
     assert(result.state.some((row) => row.event === "stubborn-child-term"));
+    assert(result.state.some((row) => row.event === "stubborn-observed-by-supervisor"));
+    assertEquals(
+      result.state.find((row) => row.event === "stubborn-ack-deadline-declared")
+        ?.ackDeadlineMs,
+      STUBBORN_ACK_DEADLINE_MS,
+      "the fixture must record the DECLARED window it was given",
+    );
     assertEquals((result.receipt?.residue as unknown[])?.length, 0);
+    await assertRecordedPidsGone(result);
+  } finally {
+    await removeEvidence(result);
+  }
+});
+
+// chrome-agent-platform-r222: under CPU load, spawning and booting the stubborn child Node process
+// can take longer than the 350 ms scenario timeout. The supervisor must await child readiness
+// before starting the scenario timeout clock.
+Deno.test("security-suite custody: stubborn child with boot delay awaits readiness before starting timeout clock", async () => {
+  // 500 ms boot delay > 350 ms scenario timeout: without readiness handshake,
+  // supervisor would timeout at 350 ms and send TERM before the child installs its handler.
+  const result = await runSupervisor("stubborn", 350, {
+    CAP_SECURITY_TEST_STUBBORN_BOOT_DELAY_MS: "500",
+    CAP_SECURITY_TEST_ACK_DEADLINE_MS: String(STUBBORN_ACK_DEADLINE_MS),
+  });
+  try {
+    assertEquals(result.code, 124);
+    assertEquals(result.receipt?.termSent, true);
+    assertEquals(result.receipt?.killSent, true);
+    assertEquals(result.receipt?.groupSurvived, false);
+    assert(result.state.some((row) => row.event === "runner-term-ignored"));
+    assert(result.state.some((row) => row.event === "stubborn-child-term"));
+    assert(result.state.some((row) => row.event === "stubborn-observed-by-supervisor"));
+    assertEquals((result.receipt?.residue as unknown[])?.length, 0);
+    await assertRecordedPidsGone(result);
+  } finally {
+    await removeEvidence(result);
+  }
+});
+
+// chrome-agent-platform-r222: stubborn descendant failing to persist must fail loudly (exit 97)
+Deno.test("security-suite custody: stubborn descendant that fails to persist fails scenario loudly", async () => {
+  const result = await runSupervisor("stubborn", 2_000, {
+    CAP_SECURITY_TEST_STUBBORN_CHILD_FAIL: "1",
+  });
+  try {
+    assertEquals(result.receipt?.exit, 97);
+    assertEquals(result.receipt?.result, "FAIL");
+    assert(
+      result.state.some((r) =>
+        r.event === "stubborn-child-not-persistent" ||
+        r.event === "stubborn-child-spawn-error" ||
+        r.event === "stubborn-unconfirmed"
+      ),
+      `fixture must record WHY the stubborn scenario could not run: ${
+        JSON.stringify(result.state)
+      }`,
+    );
+  } finally {
+    await removeEvidence(result);
+  }
+});
+
+// chrome-agent-platform-r222: stubborn declared window that cannot be met records loud refusal by name
+Deno.test("security-suite custody: stubborn declared window the ACK cannot meet records loud refusal by name", async () => {
+  const dir = durableDir(`r222-stubborn-ack-refusal-${Deno.pid}`);
+  const stateFile = `${dir}/self-test-state.jsonl`;
+  const ackPath = `${dir}/sample-ack.json`;
+  await Deno.writeTextFile(ackPath, `${JSON.stringify({ pids: [] })}\n`);
+  let childPid = 0;
+  try {
+    const r = await command("node", [FIXTURE], {
+      CAP_SECURITY_TEST_SCENARIO: "stubborn",
+      CAP_SECURITY_TEST_STATE: stateFile,
+      CAP_SECURITY_SAMPLE_ACK: ackPath,
+      CAP_SECURITY_TEST_ACK_DEADLINE_MS: "1",
+    }, 20);
+    assertEquals(r.code, 97, "a window the ACK can never meet must produce the fixture's loud refusal");
+    const events = (await Deno.readTextFile(stateFile)).trim().split("\n")
+      .filter(Boolean).map((line) => JSON.parse(line));
+    const named = events.map((row) => row.event);
+    assert(named.includes("stubborn-ack-deadline-declared"), `the declared window must be recorded: ${named.join(",")}`);
+    assert(named.includes("stubborn-unconfirmed"), `the refusal must be recorded BY NAME: ${named.join(",")}`);
+  } finally {
+    childPid = await escapeChildPidFrom(stateFile);
+    if (childPid > 0) {
+      try {
+        Deno.kill(childPid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+// chrome-agent-platform-r222: invalid declared window for stubborn scenario is refused loudly
+Deno.test("security-suite custody: stubborn invalid declared window is refused loudly and by name", async () => {
+  const dir = durableDir(`r222-stubborn-ack-invalid-${Deno.pid}`);
+  const stateFile = `${dir}/self-test-state.jsonl`;
+  const ackPath = `${dir}/sample-ack.json`;
+  await Deno.writeTextFile(ackPath, `${JSON.stringify({ pids: [] })}\n`);
+  let childPid = 0;
+  try {
+    const r = await command("node", [FIXTURE], {
+      CAP_SECURITY_TEST_SCENARIO: "stubborn",
+      CAP_SECURITY_TEST_STATE: stateFile,
+      CAP_SECURITY_SAMPLE_ACK: ackPath,
+      CAP_SECURITY_TEST_ACK_DEADLINE_MS: "not-a-number",
+    }, 20);
+    assertEquals(r.code, 97, "an invalid declared window must be refused loudly, never silently defaulted");
+    const events = (await Deno.readTextFile(stateFile)).trim().split("\n")
+      .filter(Boolean).map((line) => JSON.parse(line));
+    const named = events.map((row) => row.event);
+    assert(
+      named.includes("stubborn-ack-deadline-invalid"),
+      `the refusal must be recorded BY NAME: ${named.join(",")}`,
+    );
+    assert(
+      !named.includes("stubborn-ack-deadline-declared"),
+      `an invalid window must not be recorded as honoured: ${named.join(",")}`,
+    );
+  } finally {
+    childPid = await escapeChildPidFrom(stateFile);
+    if (childPid > 0) {
+      try {
+        Deno.kill(childPid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+// chrome-agent-platform-r222: stubborn readiness deadline expiry produces loud refusal exit 97 (not 124)
+Deno.test("security-suite custody: stubborn readiness deadline expiry produces loud refusal exit 97 (not 124)", async () => {
+  const result = await runSupervisor("stubborn", 350, {
+    CAP_SECURITY_TEST_SAMPLE_FREEZE_MS: "400",
+    CAP_SECURITY_TEST_ACK_DEADLINE_MS: "100",
+  });
+  try {
+    assertEquals(result.code, 97, "readiness expiry must be a loud refusal (exit 97), never a false scenario timeout (124)");
+    assertEquals(result.receipt?.result, "FAIL");
+    assert(
+      result.state.some((r) => r.event === "stubborn-unconfirmed") ||
+      result.receipt?.custodyReason === "stubborn-readiness-timeout",
+      "must record stubborn-unconfirmed or stubborn-readiness-timeout",
+    );
     await assertRecordedPidsGone(result);
   } finally {
     await removeEvidence(result);
@@ -467,11 +711,25 @@ Deno.test("security-suite custody: escaped descendant fails THIS run (exit 70) a
       "the fixture must record the DECLARED window it was given",
     );
     assertEquals(result.receipt?.custodyReason, "descendant-residue");
-    const residue = result.receipt?.residue as Array<Record<string, unknown>>;
-    assert(residue.length >= 1);
-    escapedPid = Number(residue[0].pid);
-    escapedStart = String(residue[0].starttime);
-    const live = await readProcIdentity(escapedPid);
+    const residue = (result.receipt?.residue as Array<Record<string, unknown>>) ?? [];
+    assert(residue.length >= 1, "receipt residue must contain at least one process");
+    // chrome-agent-platform-wtjz: select escape-child-spawned pid from fixture state and match receipt residue
+    // by identity rather than assuming residue[0], avoiding race with transient descendants under parallel load.
+    const expectedChildPid = Number(
+      result.state.find((row) => row.event === "escape-child-spawned")?.childPid ??
+        await escapeChildPidFrom(`${result.receipt?.evidence}/self-test-state.jsonl`),
+    );
+    assert(
+      Number.isSafeInteger(expectedChildPid) && expectedChildPid > 0,
+      "fixture state must record escape-child-spawned with valid childPid",
+    );
+    const matchingResidue = matchEscapeResidueByIdentity(
+      residue,
+      expectedChildPid,
+    );
+    escapedPid = Number(matchingResidue.pid);
+    escapedStart = String(matchingResidue.starttime);
+    const live = await verifyLiveProcOwnership(escapedPid, escapedStart);
     assertEquals(live.starttime, escapedStart);
     assertEquals(live.uid, Deno.uid());
     // uzik: the finding is this run's own (receipt + exit code). It must NOT be
@@ -592,11 +850,29 @@ Deno.test(
         ESCAPE_ACK_DEADLINE_MS,
         "the fixture must record the DECLARED window it was given",
       );
+      assertEquals(result.receipt?.sampleFreezeMs, ESCAPE_SAMPLE_FREEZE_MS, "the supervisor receipt must record the declared sample freeze window");
       assertEquals(result.receipt?.custodyReason, "descendant-residue");
-      const residue = result.receipt?.residue as Array<Record<string, unknown>>;
-      assert(residue.length >= 1);
-      escapedPid = Number(residue[0].pid);
-      escapedStart = String(residue[0].starttime);
+      const residue = (result.receipt?.residue as Array<Record<string, unknown>>) ?? [];
+      assert(residue.length >= 1, "receipt residue must contain at least one process");
+      // chrome-agent-platform-wtjz: select escape-child-spawned pid from fixture state and match receipt residue
+      // by identity rather than assuming residue[0], avoiding race with transient descendants under parallel load.
+      const expectedChildPid = Number(
+        result.state.find((row) => row.event === "escape-child-spawned")?.childPid ??
+          await escapeChildPidFrom(`${result.receipt?.evidence}/self-test-state.jsonl`),
+      );
+      assert(
+        Number.isSafeInteger(expectedChildPid) && expectedChildPid > 0,
+        "fixture state must record escape-child-spawned with valid childPid",
+      );
+      const matchingResidue = matchEscapeResidueByIdentity(
+        residue,
+        expectedChildPid,
+      );
+      escapedPid = Number(matchingResidue.pid);
+      escapedStart = String(matchingResidue.starttime);
+      const live = await verifyLiveProcOwnership(escapedPid, escapedStart);
+      assertEquals(live.starttime, escapedStart);
+      assertEquals(live.uid, Deno.uid());
       /**
        * d2vz: 70/residue is only HALF the guard. The handshake's other half is
        * that the runner CONSUMED the supervisor's ACK for its real child — the
@@ -726,4 +1002,26 @@ Deno.test("2zqd: an INVALID declared window is refused loudly and by name (the b
     }
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
+});
+
+// chrome-agent-platform-wtjz: residue matching selects escape child by identity even when foreign residue precedes it
+Deno.test("security-suite custody: residue matching selects escape child by identity even when foreign residue precedes it", () => {
+  const residue = [
+    { pid: 99999, starttime: "12345", pgid: 99999, sid: 99999 },
+    { pid: 54321, starttime: "67890", pgid: 54321, sid: 54321 },
+  ];
+  const expectedChildPid = 54321;
+  const match = matchEscapeResidueByIdentity(residue, expectedChildPid);
+  assertEquals(match.pid, 54321);
+  assertEquals(match.starttime, "67890");
+});
+
+// chrome-agent-platform-wtjz: verifyLiveProcOwnership fails with named reason rather than raw ENOENT for non-existent pid
+Deno.test("security-suite custody: verifyLiveProcOwnership fails with named reason rather than raw ENOENT for non-existent pid", async () => {
+  const deadPid = 999999999;
+  await assertRejects(
+    () => verifyLiveProcOwnership(deadPid, "12345", 50),
+    Error,
+    `custody verification failed for pid ${deadPid}`,
+  );
 });

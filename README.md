@@ -68,7 +68,7 @@ isolated OPFS memory, run history, skills, and avatar.
   installs or executes. Execute accepts only a returned reference and revalidates
   catalog, source, capability, permission, grant, enrollment, document, run, expiry and
   replay fences before validation, before dispatch, and after dispatch.
-- **38 bundled Wasm tools** — 38 single-tool packages (including sed, jq, oxipng, jxl,
+- **52 bundled Wasm tools** — 52 single-tool packages (including sed, jq, oxipng, jxl,
   avif, zxing, compressops, imageops, hashwasm-blake3, sqlite3, gzip, csvtool, diff, patch,
   awk, date, and core Unix utilities). Each ships with an exact manifest, CAS digest, SBOM
   and licence record, verified at build time by a bounded raw import/memory scan

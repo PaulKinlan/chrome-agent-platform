@@ -2,13 +2,13 @@
 
 **Status:** Authoritative Census (chrome-agent-platform-ygvt / CAP-FB-20260908-OWNER-DISPATCH-CENSUS-01)  
 **Seams:** `extension/background/service-worker.js`, `extension/background/routes/`, `extension/lib/owner-approval.js`, `extension/lib/pure.js`  
-**Population:** 285 total registered routes, derived by evaluating the executable composition (`mergeRouteMaps`) at `origin/main@f507d58f`.
+**Population:** 287 total registered routes, derived by evaluating the executable composition (`mergeRouteMaps`) at `origin/main@f507d58f`.
 
 ---
 
 ## 1. Executive Summary & Purpose
 
-This document provides a total, honest census of all 285 message routes registered in the Chrome Agent Platform Service Worker.
+This document provides a total, honest census of all 287 message routes registered in the Chrome Agent Platform Service Worker.
 
 The population is the key set `mergeRouteMaps` in `service-worker.js` actually returns, evaluated at `origin/main@f507d58f` — not a hand-kept list. That evaluation corrected 276 → 285 (chrome-agent-platform-s7wl): the earlier count silently skipped the three maps `vaultRoutes`, `enclaveProxyRoutes` and `enclaveStatusRoutes` (9 routes, landed 2026-10-03 in `bd17634f`). The 260 this document's sibling threat model quoted and the 276 here were both wrong about the composed population; 285 is what composition produces.
 
@@ -41,7 +41,7 @@ Every message arriving at the Service Worker passes through a layered defense-in
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │ Layer 2: Central Dispatcher (dispatchRoute)                            │
-│ - look up type in handlers map (285 registered routes)                 │
+│ - look up type in handlers map (287 registered routes)                 │
 │ - scrub __* fields and userActivation from message body                │
 │ - inject trusted browser-attested sender (__sender = pageSender)       │
 └───────────────────────────────────┬────────────────────────────────────┘
@@ -73,12 +73,12 @@ Every message arriving at the Service Worker passes through a layered defense-in
 
 ---
 
-## 3. High-Level Population Summary (285 Routes)
+## 3. High-Level Population Summary (287 Routes)
 
 | Category | Count | Permitted Callers | Gating Mechanism |
 |---|---|---|---|
 | **Page-Allowed (`PAGE_ALLOWED`)** | 8 | Web pages (content scripts) | `PAGE_ALLOWED_ROUTES` allowlist in `lib/pure.js` |
-| **Settings-Only Direct (`SETTINGS_ONLY_DIRECT`)** | 48 | `owner-options` | `requireSettingsSender` or `wasmStreamOwner` |
+| **Settings-Only Direct (`SETTINGS_ONLY_DIRECT`)** | 50 | `owner-options` | `requireSettingsSender` or `wasmStreamOwner` |
 | **Owner-Approval Direct (`OWNER_APPROVAL_DIRECT`)** | 13 | `owner-options`, `extension` | `requireOwnerApproval` + `isOwnerDirectApproval` |
 | **Owner-Approval Required (`OWNER_APPROVAL_REQUIRED`)** | 17 | `model`, `extension` | `requireOwnerApproval` (always prompts or model card) |
 | **Owner Extension-Fenced (`OWNER_EXTENSION_FENCED`)** | 25 | `owner-options`, `extension` | `isOwnerPrincipal(context)` |
@@ -87,14 +87,14 @@ Every message arriving at the Service Worker passes through a layered defense-in
 | **Storage, KV & Memory Fenced** | 10 | `owner-options`, `extension` | Secret key fences, quiescence tracking, leases |
 | **Unclassified Mutations (Gaps)** | 37 | `extension` (any) | Central page filter only; no route-local gate |
 | **Read-Only / Status / Telemetry** | 91 | `owner-options`, `extension` | Read-only; no state mutation |
-| **Total** | **285** | | |
+| **Total** | **287** | | |
 
 ---
 
 ## 4. Total Route Inventory & Classification
 
 ### 4.1 Page-Allowed Routes (`PAGE_ALLOWED_ROUTES` — 8 routes)
-These are the ONLY routes accessible to content scripts. All other 277 routes reject content-script callers with `"not authorized from a page"`.
+These are the ONLY routes accessible to content scripts. All other 279 routes reject content-script callers with `"not authorized from a page"`.
 
 | Route Name | Owning Module | Description | Authority Gate |
 |---|---|---|---|
@@ -109,7 +109,7 @@ These are the ONLY routes accessible to content scripts. All other 277 routes re
 
 ---
 
-### 4.2 Settings-Only Direct Routes (`SETTINGS_ONLY_DIRECT` — 48 routes)
+### 4.2 Settings-Only Direct Routes (`SETTINGS_ONLY_DIRECT` — 50 routes)
 Restricted strictly to the Settings surface (`principal === "owner-options"`). General extension documents (hub, side panel), pages, and model calls are denied.
 
 | Route Name | Owning Module | Description | Policy Gate |
@@ -129,6 +129,8 @@ Restricted strictly to the Settings surface (`principal === "owner-options"`). G
 | `memory.purgeJournals` | `service-worker.js` | Purges journal history | `principal === "owner-options"` |
 | `memory.sweepOrphans` | `service-worker.js` | Sweeps orphaned memory stores | `principal === "owner-options"` |
 | `tool.preview.run` | `service-worker.js` | Diagnostic execution preview | `principal === "owner-options"` |
+| `tool.package.validation-list`| `service-worker.js`| Lists schema-2 packages available for validation | `principal === "owner-options"` |
+| `tool.package.validate` | `service-worker.js` | Validates a schema-2 package and records validation | `principal === "owner-options"` |
 | `tool-catalog.shadow` | `service-worker.js` | Diagnostic shadow catalog query | `principal === "owner-options"` |
 | `management.pending-approvals`| `service-worker.js`| Lists pending approval cards | `principal === "owner-options"` |
 | `hooks.deny` | `service-worker.js` | Denies a hook subscription | `principal === "owner-options"` |
@@ -395,3 +397,48 @@ These routes perform no state mutations and return status, listings, configurati
 `tests/sw-dispatch-authority-census.test.ts` parses the registered handler AST and checks each of the 13 §4.3 direct and 17 §4.4 required routes against its approval call. Extracted scheduler, agent-schedule, and file-grant handlers must retain their injected `requireOwnerApproval`; the script and site-tool helper calls must retain their forwarding seam. Direct actions must remain in `OWNER_DIRECT_ACTIONS` and reach `isOwnerDirectApproval`; required actions must remain approvable in `DESTRUCTIVE_ACTIONS`. AST mutants deleting the `capability.revoke` call, scheduler approval injection, or script helper's forwarding call each fail naming the affected route.
 
 The reviewed action-name exceptions are explicit and still require a real call: `asset.patch` and `asset.append` use the `asset.update` card; `fs-grant.write-file-approved` uses `fs.write`; `browser.destructive-action` accepts only members of `DESTRUCTIVE_BROWSER_ACTIONS`, each of which must be approvable. `named-agent.delete` uses the injected `createNamedAgentDeleteGate` before teardown. This check proves static seam presence and the declared action, not full runtime control-flow dominance or authority coverage for the 37 unclassified §4.9 routes; those gaps remain separately tracked.
+
+---
+
+## 6. Non-Dispatcher Extension Message Listeners & Sender Predicates
+
+In addition to the central Service Worker dispatcher (`chrome.runtime.onMessage.addListener` in `extension/background/service-worker.js`), several modules register `chrome.runtime.onMessage` listeners in offscreen document, page, or content script contexts.
+
+Because `chrome.runtime.onMessage` is a broadcast message bus within the extension, any frame or content script sharing the extension ID can emit messages to this bus. If host listeners accept execution requests without checking `sender`, callers can bypass the Service Worker's Layer 1 (`PAGE_ALLOWED_ROUTES`), Layer 2 (`dispatchRoute`), and Layer 3 principal fences.
+
+### 6.1 Defense-in-Depth Invariant: Sender Identity Predicates
+Every non-dispatcher message listener in `extension/` MUST enforce a sender predicate or be explicitly allowlisted in `tests/onmessage-sender-guard.test.ts`.
+
+1. **Service Worker Authority Fences (`isTrustedServiceWorkerSender`)**:
+   Execution hosts (offscreen Worker executors, Python Pyodide runner, shared agent workers, on-device text models, sandboxed iframe script execution, and clipboard writes) must accept execution commands ONLY from the background Service Worker:
+   - `sender.id === runtime.id`
+   - `sender.tab == null` (reject content scripts)
+   - `sender.documentId == null` (reject extension documents/frames)
+   - `sender.url === runtime.getURL("dist/background/service-worker.js")` (pin to the compiled Service Worker bundle)
+
+2. **Content Script Isolation Fences**:
+   Content scripts receiving extension notifications (`content-script.js`, `webmcp-detect-relay.js`) must verify:
+   - `sender != null` (reject missing sender)
+   - `sender.id === runtime.id`
+   - `sender.tab == null` (prevent cross-tab / cross-frame message injection)
+
+### 6.2 Complete Non-Dispatcher Listener Inventory
+
+| Location | Context | Message Types / Operations | Enforced Sender Predicate | Authority Level |
+|---|---|---|---|---|
+| `extension/lib/wasm-stream-host.js` | Offscreen Document | `cap:wasm-stream-run` | `isTrustedWasmStreamSender` | SW execution authority only |
+| `extension/lib/wasm-callexport-host.js` | Offscreen Document | `cap:wasm-callexport-run` | `isTrustedWasmStreamSender` | SW execution authority only |
+| `extension/lib/wasm-job-host.js` | Offscreen Document | `cap:wasm-wasi-job-run` | `isTrustedServiceWorkerSender` | SW execution authority only |
+| `extension/lib/user-wasm-host.js` | Offscreen Document | `cap:user-wasm-run` | `isTrustedWasmStreamSender` | SW execution authority only |
+| `extension/lib/svg-rasterise-host.js` | Offscreen Document | `cap:svg-rasterise-run` | `isTrustedWasmStreamSender` | SW execution authority only |
+| `extension/lib/wasm-preview-host.js` | Options Page | `wasm.preview.options` | `isTrustedServiceWorkerSender` | SW execution authority only |
+| `extension/lib/table-worker-host.js` | Offscreen Document | `table-worker:run`, `table-worker:cancel` | `isTrustedTableWorkerSender` | SW execution authority only |
+| `extension/lib/python-host.js` | Offscreen Document | `python.run` | `isTrustedServiceWorkerSender` | SW execution authority only |
+| `extension/lib/agent-worker-host.js` | Offscreen Document | `agent-worker-host:ensure`, `close`, `list`, `post` | `isTrustedServiceWorkerSender` | SW execution authority only |
+| `extension/lib/on-device-text-host.js` | Offscreen Document | `onDeviceText.summarize`, `detectLanguage`, `translate`, `availability` | `isTrustedServiceWorkerSender` | SW execution authority only |
+| `extension/offscreen/offscreen.js` | Offscreen Document | `cap:clipboard-write` | `isTrustedServiceWorkerSender` | SW execution authority only |
+| `extension/lib/script-host.js` (`ntp.js`, `offscreen.js`) | NTP Page / Offscreen Document | `cap:script-run-announce`, `cap:script-run` | `isTrustedServiceWorkerSender` | SW execution authority only |
+| `extension/lib/provider-gate.js` | Options / NTP Page | `provider-host-perm:settled` | `isTrustedServiceWorkerSender` | SW broadcast notification |
+| `extension/content/content-script.js` | Web Page (Isolated World) | `invoke-tool`, `collect-tools`, `enrollment-sync`, `disenrollment`, `tool-consent-revoked`, `enrollment.poke`, `bridge.ping` | Extension ID + `tab == null` | Extension origin only |
+| `extension/content/webmcp-detect-relay.js` | Web Page (Isolated World) | `webmcp.detect.rearm` | Extension ID + `tab == null` | Extension origin only |
+

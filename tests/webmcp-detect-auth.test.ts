@@ -147,8 +147,11 @@ Deno.test("passive detector relay re-arms on the SW's post-grant nudge", async (
     postMessage() {},
   };
   const onMessageListeners = [];
+  const testExtensionId = "detector-test-extension-id";
+  const swSender = { id: testExtensionId };
   const chromeStub = {
     runtime: {
+      id: testExtensionId,
       onMessage: { addListener: (fn) => onMessageListeners.push(fn) },
       async sendMessage(message) {
         runtimeMessages.push(message.type);
@@ -180,7 +183,7 @@ Deno.test("passive detector relay re-arms on the SW's post-grant nudge", async (
   // No arm before the MAIN probe's hook announcement arrives (f62c) — even
   // with the nonce in hand and an explicit SW nudge.
   assertEquals(armAttempts, 0, "the relay cannot arm before the probe announces its hook name");
-  for (const fn of onMessageListeners) fn({ type: "webmcp.detect.rearm" });
+  for (const fn of onMessageListeners) fn({ type: "webmcp.detect.rearm" }, swSender);
   await new Promise((resolve) => setTimeout(resolve, 20));
   assertEquals(armAttempts, 0, "a nudge without the hook name still cannot arm");
   // The announcement arrives: with the nonce already present the relay arms
@@ -194,19 +197,26 @@ Deno.test("passive detector relay re-arms on the SW's post-grant nudge", async (
   assertEquals(armHook, "capWebmcpDetectBootstrap_0123456789abcdef0123456789abcdef", "the arm carries the probe-announced hook name");
   assertEquals(onMessageListeners.length, 1, "the relay listens for the SW's re-arm nudge");
 
+  // Untrusted senders (foreign ID or from a tab) are rejected fail-closed.
+  for (const fn of onMessageListeners) fn({ type: "webmcp.detect.rearm" }, { id: "foreign-ext" });
+  for (const fn of onMessageListeners) fn({ type: "webmcp.detect.rearm" }, { id: testExtensionId, tab: { id: 1 } });
+  for (const fn of onMessageListeners) fn({ type: "webmcp.detect.rearm" }, undefined);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assertEquals(armAttempts, 1, "untrusted senders cannot trigger a re-arm");
+
   // Unrelated messages do not retry the arm.
-  for (const fn of onMessageListeners) fn({ type: "webmcp.unrelated" });
+  for (const fn of onMessageListeners) fn({ type: "webmcp.unrelated" }, swSender);
   await new Promise((resolve) => setTimeout(resolve, 20));
   assertEquals(armAttempts, 1, "unrelated messages trigger no re-arm");
 
   // The SW's nudge retries the arm — and with the JIT grant landed it succeeds.
   armSucceeds = true;
-  for (const fn of onMessageListeners) fn({ type: "webmcp.detect.rearm" });
+  for (const fn of onMessageListeners) fn({ type: "webmcp.detect.rearm" }, swSender);
   await new Promise((resolve) => setTimeout(resolve, 20));
   assertEquals(armAttempts, 2, "the re-arm nudge retries the arm exactly once");
 
   // Once armed, further nudges are no-ops (no repeated MAIN-world injection).
-  for (const fn of onMessageListeners) fn({ type: "webmcp.detect.rearm" });
+  for (const fn of onMessageListeners) fn({ type: "webmcp.detect.rearm" }, swSender);
   await new Promise((resolve) => setTimeout(resolve, 20));
   assertEquals(armAttempts, 2, "an already-armed relay ignores further nudges");
 });

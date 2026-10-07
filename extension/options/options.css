@@ -1387,6 +1387,7 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   font-size: var(--text-sm);
 }
 .privacy-link a,
+.about-licenses-link a,
 .changelog-full-link a {
   color: var(--accent, #1a73e8);
   display: inline-flex;

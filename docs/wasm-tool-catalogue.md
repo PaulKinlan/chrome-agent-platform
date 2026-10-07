@@ -36,8 +36,8 @@ Managed default tools run across three dedicated execution lanes:
   - Contract: Zero imports (no WASI, no POSIX glue); exports direct computation functions.
   - Communication: CAP-authored JS harness writes buffers directly into WebAssembly memory, invokes the export, and reads back return values. Instantiates in-thread within the offscreen document host via `extension/lib/wasm-callexport-host.js`.
   - Confinement: Memory32 bounds; zero side effects; runs in offscreen document without full Emscripten runtime.
-  - Status: **BUILT** (`extension/lib/wasm-callexport-host.js`, registered in `extension/offscreen/offscreen.js`; closed under `chrome-agent-platform-uslb`). Shipped package: `cap.bundled.hash.blake3-1.0.0` (byte-exact extraction from a sha512-pinned tarball, `packages/bundled/evidence/hashwasm-blake3/`; entry `Hash_Calculate`).
-  - Proposed Admits: **SPECIFIED, NOT BUILT** — `awasm-noble` (owning bead: `chrome-agent-platform-2uhx`, IN_PROGRESS); `hash-wasm` (owning bead: `chrome-agent-platform-3wei`, BLOCKED).
+  - Status: **BUILT** (`extension/lib/wasm-callexport-host.js`, registered in `extension/offscreen/offscreen.js`; closed under `chrome-agent-platform-uslb`, expanded under `chrome-agent-platform-3wei`). Shipped packages: `cap.bundled.hash.blake3-1.0.0` plus 13 `cap.bundled.hash.*` modules (byte-exact extraction from a sha512-pinned tarball, `packages/bundled/evidence/hashwasm/`; entry `Hash_Calculate`).
+  - Proposed Admits: **SPECIFIED, NOT BUILT** — `awasm-noble` (owning bead: `chrome-agent-platform-2uhx`, IN_PROGRESS).
 - **Lane C: Offscreen Emscripten/Pyodide Runtime (Complex System Runtimes):**
   - Contract: Python execution via Pyodide; fresh worker per run with a 30s timeout and `worker.terminate()` cleanup.
   - Communication: Hosted within the extension's offscreen document (`extension/offscreen/offscreen.html`), communicating with background service workers via structured message passing.

@@ -1115,6 +1115,146 @@ Deno.test("fence: an untrusted result's strings are wrapped in the boundary", as
   const trustedSearch = await protocol.search({ query: "trusted", limit: 1 }, context);
   const trusted = await protocol.execute({ selectionRef: trustedSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
   assertEquals(trusted.result, { text: RAW });
+
+  // INV-7: Nested untrusted result from sandboxed script execution / cap:fetch
+  const nestedTools = {
+    script_with_fetch: tool({
+      description: "Run script that fetched untrusted web data",
+      inputSchema: z.object({ value: z.string().max(64) }),
+      execute: () => ({ ok: true, result: { ok: true, status: 200, url: "https://example.com", text: RAW, untrusted: true }, logs: [] }),
+    }),
+    script_pure_math: tool({
+      description: "Run script with purely trusted computation",
+      inputSchema: z.object({ value: z.string().max(64) }),
+      execute: () => ({ ok: true, result: { ok: true, text: RAW }, logs: [] }),
+    }),
+  };
+  const nestedRecords = executableBuiltinToolRecords(nestedTools, adapterContext());
+  const nestedProtocol = new LazyToolProtocol({
+    readSources: () => nestedRecords,
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const scriptSearch = await nestedProtocol.search({ query: "script_with_fetch", limit: 1 }, context);
+  const scriptExec = await nestedProtocol.execute({ selectionRef: scriptSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
+  assertEquals(scriptExec.ok, true);
+  assert(scriptExec.result.result.text.startsWith(open), `nested text must be fenced: ${scriptExec.result.result.text}`);
+  assertEquals(scriptExec.result.result.text, `${open}\n${RAW}\n${close}`);
+
+  // Falsification: pure math script without untrusted marker remains unfenced
+  const mathSearch = await nestedProtocol.search({ query: "script_pure_math", limit: 1 }, context);
+  const mathExec = await nestedProtocol.execute({ selectionRef: mathSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
+  assertEquals(mathExec.ok, true);
+  assertEquals(mathExec.result.result.text, RAW, "unmarked computation must not be fenced");
+
+  // Deep nested detection: untrusted object nested beyond depth 6 (e.g. depth 8)
+  const deepNestedTools = {
+    deep_script: tool({
+      description: "Deeply wrapped untrusted data",
+      inputSchema: z.object({ value: z.string().max(64) }),
+      execute: () => ({
+        ok: true,
+        result: { l1: { l2: { l3: { l4: { l5: { l6: { l7: { text: RAW, untrusted: true } } } } } } } },
+        logs: [],
+      }),
+    }),
+    tainted_script_run: tool({
+      description: "Script run tainted by fetch returning raw string",
+      inputSchema: z.object({ value: z.string().max(64) }),
+      execute: () => ({
+        ok: true,
+        result: RAW,
+        logs: [`fetched: ${RAW}`],
+        untrusted: true,
+      }),
+    }),
+    python_fetch_run: tool({
+      description: "Python execution with cap.fetch network taint",
+      inputSchema: z.object({ value: z.string().max(64) }),
+      execute: () => ({
+        ok: true,
+        stdout: RAW,
+        stdoutBytes: RAW.length,
+        network: [{ url: "https://api.example.com", ok: true }],
+        untrusted: true,
+      }),
+    }),
+    python_error_run: tool({
+      description: "Python failure carrying network taint",
+      inputSchema: z.object({ value: z.string().max(64) }),
+      execute: () => ({
+        error: `Exception: fetch failed for ${RAW}`,
+        network: [{ url: "https://api.example.com", ok: true }],
+        untrusted: true,
+      }),
+    }),
+    depth12_script: tool({
+      description: "Object at depth 12 with untrusted content",
+      inputSchema: z.object({ value: z.string().max(64) }),
+      execute: () => ({
+        ok: true,
+        result: {
+          d1: { d2: { d3: { d4: { d5: { d6: { d7: { d8: { d9: { d10: { d11: { d12: { text: RAW } } } } } } } } } } } },
+        },
+        logs: [],
+        untrusted: true,
+      }),
+    }),
+    untrusted_property_string_run: tool({
+      description: "Script returning fetched text inside the untrusted property itself",
+      inputSchema: z.object({ value: z.string().max(64) }),
+      execute: () => ({
+        ok: true,
+        result: { untrusted: RAW },
+        logs: [],
+        untrusted: true,
+      }),
+    }),
+  };
+  const deepRecords = executableBuiltinToolRecords(deepNestedTools, adapterContext());
+  const deepProtocol = new LazyToolProtocol({
+    readSources: () => deepRecords,
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+
+  // 1. Deep nested object is detected and fenced
+  const deepSearch = await deepProtocol.search({ query: "deep_script", limit: 1 }, context);
+  const deepExec = await deepProtocol.execute({ selectionRef: deepSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
+  assertEquals(deepExec.ok, true);
+  assertEquals(deepExec.result.result.l1.l2.l3.l4.l5.l6.l7.text, `${open}\n${RAW}\n${close}`);
+
+  // 2. Script run tainted by fetch fences raw string result AND logs
+  const taintedSearch = await deepProtocol.search({ query: "tainted_script_run", limit: 1 }, context);
+  const taintedExec = await deepProtocol.execute({ selectionRef: taintedSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
+  assertEquals(taintedExec.ok, true);
+  assertEquals(taintedExec.result.result, `${open}\n${RAW}\n${close}`);
+  assertEquals(taintedExec.result.logs[0], `${open}\nfetched: ${RAW}\n${close}`);
+
+  // 3. Python run tainted by network fetch fences stdout
+  const pythonSearch = await deepProtocol.search({ query: "python_fetch_run", limit: 1 }, context);
+  const pythonExec = await deepProtocol.execute({ selectionRef: pythonSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
+  assertEquals(pythonExec.ok, true);
+  assertEquals(pythonExec.result.stdout, `${open}\n${RAW}\n${close}`);
+
+  // 4. Python failure carrying taint fences error message
+  const errSearch = await deepProtocol.search({ query: "python_error_run", limit: 1 }, context);
+  const errExec = await deepProtocol.execute({ selectionRef: errSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
+  assertEquals(errExec.ok, true);
+  assert(errExec.result.error.startsWith(open));
+  assertEquals(errExec.result.error, `${open}\nException: fetch failed for ${RAW}\n${close}`);
+
+  // 5. Depth-12 subtree is fenced fail-closed without leaking bare strings
+  const d12Search = await deepProtocol.search({ query: "depth12_script", limit: 1 }, context);
+  const d12Exec = await deepProtocol.execute({ selectionRef: d12Search.results[0].selectionRef, arguments: { value: "x" } }, context);
+  assertEquals(d12Exec.ok, true);
+  const serializedD12 = JSON.stringify(d12Exec.result);
+  assert(!serializedD12.includes(`"${RAW}"`), "depth-12 content must not leak unfenced");
+  assert(serializedD12.includes("<<<UNTRUSTED run:tok0123456789>>>"), "depth-12 content must carry fence token");
+
+  // 6. Untrusted property value is fenced when it carries a string
+  const propSearch = await deepProtocol.search({ query: "untrusted_property_string_run", limit: 1 }, context);
+  const propExec = await deepProtocol.execute({ selectionRef: propSearch.results[0].selectionRef, arguments: { value: "x" } }, context);
+  assertEquals(propExec.ok, true);
+  assertEquals(propExec.result.result.untrusted, `${open}\n${RAW}\n${close}`);
 });
 
 // ── CAP-FB-20260830-SCREENSHOT-TO-MODEL-01 ───────────────────────────────────

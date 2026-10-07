@@ -2,7 +2,7 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
- "release": "0.3.578",
+ "release": "0.3.587",
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"
@@ -27,6 +27,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "pkg": "cap.bundled.base64",
    "version": "2.0.0",
    "digest": "383721407a8268454306cab7bec26cf659279cc0f1934ac712e754bff2e5e7df"
+  },
+  {
+   "pkg": "cap.bundled.chacha20.poly1305",
+   "version": "1.0.0",
+   "digest": "180c0006c134408ff3d0e8dae65cdb809754bbf00c35679207e838641a02f880"
   },
   {
    "pkg": "cap.bundled.compressops",
@@ -69,9 +74,74 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "digest": "486d8548f2d123cb5474645460ac854037c692c3d316d5386e6365b88d369f88"
   },
   {
+   "pkg": "cap.bundled.hash.adler32",
+   "version": "1.0.0",
+   "digest": "10e8c1b348a9d06ffb6548b0fbb89cc240eb0dbbbd611b890db922ad5fa8862e"
+  },
+  {
+   "pkg": "cap.bundled.hash.blake2b",
+   "version": "1.0.0",
+   "digest": "ba1ff8af17fe56ba64cfd6295b11e25b8e9d36e62e4c4031ad6f917044665d35"
+  },
+  {
+   "pkg": "cap.bundled.hash.blake2s",
+   "version": "1.0.0",
+   "digest": "827df6d4b1e013e97ec338a225e9192c53015d834ac1dc6993e85c31a82f33e6"
+  },
+  {
    "pkg": "cap.bundled.hash.blake3",
    "version": "1.0.0",
    "digest": "724d6d245f7022586adcb9749d7abdb95ad1254d7c21aad422a132b70fcac642"
+  },
+  {
+   "pkg": "cap.bundled.hash.crc32",
+   "version": "1.0.0",
+   "digest": "46ca602b097d817c917e3025ed79e1e8fbc256b76e9e591e105c3b03b2a8d65e"
+  },
+  {
+   "pkg": "cap.bundled.hash.md4",
+   "version": "1.0.0",
+   "digest": "8f80818720934e42af112f18a21338fcdf5b6a754999e46bdf211363b4628450"
+  },
+  {
+   "pkg": "cap.bundled.hash.ripemd160",
+   "version": "1.0.0",
+   "digest": "a5bc475faa59e5fbf8b2ea6ec2c8f732eb3c11148491ac6b1b6476dfd1c4d5e9"
+  },
+  {
+   "pkg": "cap.bundled.hash.sha1",
+   "version": "1.0.0",
+   "digest": "3e2887237905cae25afbdcb480386d23127fa70c417e87aae1ecf242d12755dc"
+  },
+  {
+   "pkg": "cap.bundled.hash.sha224",
+   "version": "1.0.0",
+   "digest": "b0ad06e53e6d5129cbf50da958dfe9a15ae1a830151c3396f82255009d1fd344"
+  },
+  {
+   "pkg": "cap.bundled.hash.sha3.256",
+   "version": "1.0.0",
+   "digest": "a3e37bf6ff91166247dcd636583dae3bf9309ed46baab3dd649963013c64b454"
+  },
+  {
+   "pkg": "cap.bundled.hash.sha384",
+   "version": "1.0.0",
+   "digest": "bd9dd42cb7982c136b7f8bda0c5dbb42e7c11e3539d0aa302ddb06187b68b4b1"
+  },
+  {
+   "pkg": "cap.bundled.hash.sm3",
+   "version": "1.0.0",
+   "digest": "8938a85fe771369a44d3f4fc9fe27643fce268aff6a46bbf9dfba71f69799726"
+  },
+  {
+   "pkg": "cap.bundled.hash.whirlpool",
+   "version": "1.0.0",
+   "digest": "19878e6c39dd6d3d11da8af08ed933694bc423415d0fa96ab0ccc73fb847ce8f"
+  },
+  {
+   "pkg": "cap.bundled.hash.xxhash32",
+   "version": "1.0.0",
+   "digest": "d0eef46db2d1dd39deebb1f19b862394ff06a949aa2bb9eb36eb62a28d40441b"
   },
   {
    "pkg": "cap.bundled.head",
@@ -211,6 +281,21 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 36905
   },
   {
+   "rel": "extension/wasm/cas/0cd750338eee542f087493e656c67f7358120e201a23cc5c0faa8f1fd60c1058.wasm",
+   "sha256": "0cd750338eee542f087493e656c67f7358120e201a23cc5c0faa8f1fd60c1058",
+   "size": 2475
+  },
+  {
+   "rel": "extension/wasm/cas/126cc3271d1a0ad2e347494af526339945d81ea0a30e59286abeaa49c51d727d.wasm",
+   "sha256": "126cc3271d1a0ad2e347494af526339945d81ea0a30e59286abeaa49c51d727d",
+   "size": 4056
+  },
+  {
+   "rel": "extension/wasm/cas/17266992619f52e5af20f90738dc9a955b694873e4d8a937db53b9abad752bb9.wasm",
+   "sha256": "17266992619f52e5af20f90738dc9a955b694873e4d8a937db53b9abad752bb9",
+   "size": 5592
+  },
+  {
    "rel": "extension/wasm/cas/195026a42b8ec87cde58f91b151d7cb657b41c0f4a725c0dde7b16825faa8a01.wasm",
    "sha256": "195026a42b8ec87cde58f91b151d7cb657b41c0f4a725c0dde7b16825faa8a01",
    "size": 32962
@@ -229,6 +314,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/cas/24793c383472ffcbf477488b293830fdc22bf368fd36df1cc0631c8e288b5705.wasm",
    "sha256": "24793c383472ffcbf477488b293830fdc22bf368fd36df1cc0631c8e288b5705",
    "size": 34894
+  },
+  {
+   "rel": "extension/wasm/cas/3ac6d44a150d6e51afec98a6552ea313067162429066486ed3c5fc8698937197.wasm",
+   "sha256": "3ac6d44a150d6e51afec98a6552ea313067162429066486ed3c5fc8698937197",
+   "size": 2853
   },
   {
    "rel": "extension/wasm/cas/3e553ca399ce02c6d796cf80e08057ae41730f32f507d9bc2561e75faa4c2438.wasm",
@@ -251,9 +341,24 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 149489
   },
   {
+   "rel": "extension/wasm/cas/4b3e3ab7973037bfdf21c776085c617dd15d8faad72c073f2eb4ca022a233f8b.wasm",
+   "sha256": "4b3e3ab7973037bfdf21c776085c617dd15d8faad72c073f2eb4ca022a233f8b",
+   "size": 4018
+  },
+  {
+   "rel": "extension/wasm/cas/58308a6f83dd912cb7c16045ebba13ce507a2554ea0fc008b12582822c812d26.wasm",
+   "sha256": "58308a6f83dd912cb7c16045ebba13ce507a2554ea0fc008b12582822c812d26",
+   "size": 5817
+  },
+  {
    "rel": "extension/wasm/cas/5c8210c93d390893f961943093ccad314e87500b29eafe9f166b0b3327333d81.wasm",
    "sha256": "5c8210c93d390893f961943093ccad314e87500b29eafe9f166b0b3327333d81",
    "size": 10581
+  },
+  {
+   "rel": "extension/wasm/cas/60afdfbea19ee8ad976da15ef9f557778e1c5de6ee54407e04269da72f5727e5.wasm",
+   "sha256": "60afdfbea19ee8ad976da15ef9f557778e1c5de6ee54407e04269da72f5727e5",
+   "size": 13522
   },
   {
    "rel": "extension/wasm/cas/6119489ddf0cb9648a4ac87b943108f850be3e3b637cea6c478bf7ec1bf6432a.wasm",
@@ -264,6 +369,16 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/cas/65362b548d918eeb102f034bc4fc270ef450be463b82a0ffbe71a3ef1b8aa2cb.wasm",
    "sha256": "65362b548d918eeb102f034bc4fc270ef450be463b82a0ffbe71a3ef1b8aa2cb",
    "size": 39108
+  },
+  {
+   "rel": "extension/wasm/cas/7aa030fcf233eb001ee09036e9ea025c40754d3792d7d10c605a3b81a39f7a54.wasm",
+   "sha256": "7aa030fcf233eb001ee09036e9ea025c40754d3792d7d10c605a3b81a39f7a54",
+   "size": 1452
+  },
+  {
+   "rel": "extension/wasm/cas/89704350070c32c1ea055c06cada4d1b29d2a66e94f49efa9ca1eaab4ef7fe9b.wasm",
+   "sha256": "89704350070c32c1ea055c06cada4d1b29d2a66e94f49efa9ca1eaab4ef7fe9b",
+   "size": 6652
   },
   {
    "rel": "extension/wasm/cas/973d78aa28f825019fbfb4aa9463dc6940a65d7da6de80590ba1a691443154df.wasm",
@@ -296,6 +411,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 150630
   },
   {
+   "rel": "extension/wasm/cas/b478c0d889d97d7a8db4d10501457ad78dd406d02dcb4c892c0d844805ef05bb.wasm",
+   "sha256": "b478c0d889d97d7a8db4d10501457ad78dd406d02dcb4c892c0d844805ef05bb",
+   "size": 7442
+  },
+  {
    "rel": "extension/wasm/cas/b86d327e1d17ddce9a07fb92a43fb151372bbaa662b5bf6ef8aba138fc3e2e32.wasm",
    "sha256": "b86d327e1d17ddce9a07fb92a43fb151372bbaa662b5bf6ef8aba138fc3e2e32",
    "size": 725870
@@ -326,6 +446,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 186886
   },
   {
+   "rel": "extension/wasm/cas/c44604aaa9d054401459b0d07f3d6deeb440fa7afdcb0cfd900ef2596d55ce55.wasm",
+   "sha256": "c44604aaa9d054401459b0d07f3d6deeb440fa7afdcb0cfd900ef2596d55ce55",
+   "size": 9689
+  },
+  {
    "rel": "extension/wasm/cas/cc493debd83fca19910ab7de3f174c89625efd2e03c3884ed2682e6f1cd39a5f.wasm",
    "sha256": "cc493debd83fca19910ab7de3f174c89625efd2e03c3884ed2682e6f1cd39a5f",
    "size": 30190
@@ -334,6 +459,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/cas/ce303be0226d2675019191dddbcded6d83de100922fcc10e5ee48a058c0d27d5.wasm",
    "sha256": "ce303be0226d2675019191dddbcded6d83de100922fcc10e5ee48a058c0d27d5",
    "size": 28861
+  },
+  {
+   "rel": "extension/wasm/cas/ce819c4a2404b47180d9eee9fb1ea0bf4ace1bc5a1e54c71cb6a1af4ac4e731e.wasm",
+   "sha256": "ce819c4a2404b47180d9eee9fb1ea0bf4ace1bc5a1e54c71cb6a1af4ac4e731e",
+   "size": 6765
   },
   {
    "rel": "extension/wasm/cas/d03a2558682ea04653d34753eae8df1fcd5cc8d92fc53de43106c3db0e1c57dc.wasm",
@@ -354,6 +484,16 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/cas/e0543d170ac9bd0cd55b274604b55add18c17c5d87169ebfdf25b4b7245a386a.wasm",
    "sha256": "e0543d170ac9bd0cd55b274604b55add18c17c5d87169ebfdf25b4b7245a386a",
    "size": 35917
+  },
+  {
+   "rel": "extension/wasm/cas/e1acae9b3ee3da01b2bd0574f906fede6f5219da4b9b43fd5c36ee16fbf11330.wasm",
+   "sha256": "e1acae9b3ee3da01b2bd0574f906fede6f5219da4b9b43fd5c36ee16fbf11330",
+   "size": 43461
+  },
+  {
+   "rel": "extension/wasm/cas/e2223e87187457beaaaf58af50a88772141c5a83bc68d0340608215423ba901d.wasm",
+   "sha256": "e2223e87187457beaaaf58af50a88772141c5a83bc68d0340608215423ba901d",
+   "size": 1231
   },
   {
    "rel": "extension/wasm/cas/e2d4687d1b04f3fdc009a089f68b3c1afc1ca19cb614dd7b32f43b9b4f0446d2.wasm",
@@ -426,6 +566,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 1256
   },
   {
+   "rel": "extension/wasm/licenses/hash-wasm-MIT.txt",
+   "sha256": "c14dea172f72f2714284a0ac2ab1b00b5352a01409d58255a46227ffc541debd",
+   "size": 1630
+  },
+  {
    "rel": "extension/wasm/licenses/jq-MIT.txt",
    "sha256": "ad2b4a266b2268939c1446979759706077421cf906a203aa188c6f396e8cfd74",
    "size": 7887
@@ -491,6 +636,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 1779
   },
   {
+   "rel": "extension/wasm/manifests/cap.bundled.chacha20.poly1305-1.0.0.manifest.json",
+   "sha256": "180c0006c134408ff3d0e8dae65cdb809754bbf00c35679207e838641a02f880",
+   "size": 1987
+  },
+  {
    "rel": "extension/wasm/manifests/cap.bundled.compressops-1.0.0.manifest.json",
    "sha256": "c274b9df594ef88e555275ef8cd33e7c192d3303d646496a52c05cab5d95d241",
    "size": 1878
@@ -531,9 +681,74 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 1874
   },
   {
+   "rel": "extension/wasm/manifests/cap.bundled.hash.adler32-1.0.0.manifest.json",
+   "sha256": "10e8c1b348a9d06ffb6548b0fbb89cc240eb0dbbbd611b890db922ad5fa8862e",
+   "size": 1960
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.hash.blake2b-1.0.0.manifest.json",
+   "sha256": "ba1ff8af17fe56ba64cfd6295b11e25b8e9d36e62e4c4031ad6f917044665d35",
+   "size": 1985
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.hash.blake2s-1.0.0.manifest.json",
+   "sha256": "827df6d4b1e013e97ec338a225e9192c53015d834ac1dc6993e85c31a82f33e6",
+   "size": 1985
+  },
+  {
    "rel": "extension/wasm/manifests/cap.bundled.hash.blake3-1.0.0.manifest.json",
    "sha256": "724d6d245f7022586adcb9749d7abdb95ad1254d7c21aad422a132b70fcac642",
    "size": 1943
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.hash.crc32-1.0.0.manifest.json",
+   "sha256": "46ca602b097d817c917e3025ed79e1e8fbc256b76e9e591e105c3b03b2a8d65e",
+   "size": 1965
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.hash.md4-1.0.0.manifest.json",
+   "sha256": "8f80818720934e42af112f18a21338fcdf5b6a754999e46bdf211363b4628450",
+   "size": 1914
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.hash.ripemd160-1.0.0.manifest.json",
+   "sha256": "a5bc475faa59e5fbf8b2ea6ec2c8f732eb3c11148491ac6b1b6476dfd1c4d5e9",
+   "size": 1984
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.hash.sha1-1.0.0.manifest.json",
+   "sha256": "3e2887237905cae25afbdcb480386d23127fa70c417e87aae1ecf242d12755dc",
+   "size": 1931
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.hash.sha224-1.0.0.manifest.json",
+   "sha256": "b0ad06e53e6d5129cbf50da958dfe9a15ae1a830151c3396f82255009d1fd344",
+   "size": 1965
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.hash.sha3.256-1.0.0.manifest.json",
+   "sha256": "a3e37bf6ff91166247dcd636583dae3bf9309ed46baab3dd649963013c64b454",
+   "size": 2001
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.hash.sha384-1.0.0.manifest.json",
+   "sha256": "bd9dd42cb7982c136b7f8bda0c5dbb42e7c11e3539d0aa302ddb06187b68b4b1",
+   "size": 1964
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.hash.sm3-1.0.0.manifest.json",
+   "sha256": "8938a85fe771369a44d3f4fc9fe27643fce268aff6a46bbf9dfba71f69799726",
+   "size": 1945
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.hash.whirlpool-1.0.0.manifest.json",
+   "sha256": "19878e6c39dd6d3d11da8af08ed933694bc423415d0fa96ab0ccc73fb847ce8f",
+   "size": 1986
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.hash.xxhash32-1.0.0.manifest.json",
+   "sha256": "d0eef46db2d1dd39deebb1f19b862394ff06a949aa2bb9eb36eb62a28d40441b",
+   "size": 1962
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.head-1.0.0.manifest.json",
@@ -691,6 +906,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 8211
   },
   {
+   "rel": "extension/wasm/sbom/chacha20_poly1305.cdx.json",
+   "sha256": "cbc7a48ee1e77c4d755e7cdf7f3ff74bc076ddd7b53539e4593d1e39f2e51d37",
+   "size": 1392
+  },
+  {
    "rel": "extension/wasm/sbom/compressops.cdx.json",
    "sha256": "c56ad4717495810d5f4abe26b06d782ae1c6ae0fed147e265d6ed153ba2ba736",
    "size": 1314
@@ -711,9 +931,74 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 7233
   },
   {
+   "rel": "extension/wasm/sbom/hash_adler32.cdx.json",
+   "sha256": "398ad1c98f77a3370501f5a7d1bd93c0df05135ae4ea166d021f118fc308688d",
+   "size": 1397
+  },
+  {
+   "rel": "extension/wasm/sbom/hash_blake2b.cdx.json",
+   "sha256": "3169f5e6bd2d89f196529fceb2aa08b44fb7ec5dab9f8c927c35b2e3014f4891",
+   "size": 1397
+  },
+  {
+   "rel": "extension/wasm/sbom/hash_blake2s.cdx.json",
+   "sha256": "0a914165e9d118e8202e8911830b33e862a67053e3f92419d22930290eadaece",
+   "size": 1397
+  },
+  {
    "rel": "extension/wasm/sbom/hash_blake3.cdx.json",
    "sha256": "14e02ee6bf76dea01339312780f881e96ce41b9d7539f161f8ebd44e54b78df4",
    "size": 1395
+  },
+  {
+   "rel": "extension/wasm/sbom/hash_crc32.cdx.json",
+   "sha256": "ced1db2cc02ce73e436ad90497377c02a302226320315d26812526dbf221484e",
+   "size": 1393
+  },
+  {
+   "rel": "extension/wasm/sbom/hash_md4.cdx.json",
+   "sha256": "b4ebd5fa684ea19ea1292f513e07248d91ed2772a21b1013493c91f477aef2be",
+   "size": 1389
+  },
+  {
+   "rel": "extension/wasm/sbom/hash_ripemd160.cdx.json",
+   "sha256": "9bf2937b5ff8e21795de76baa77b514068b383b69b8b34c5048321ff6b39353c",
+   "size": 1401
+  },
+  {
+   "rel": "extension/wasm/sbom/hash_sha1.cdx.json",
+   "sha256": "16322bdaf542d1c3d9659c4c75989e391048a70d1ecb9dd1af4f0b4c3f180e73",
+   "size": 1391
+  },
+  {
+   "rel": "extension/wasm/sbom/hash_sha224.cdx.json",
+   "sha256": "1be4c1ca5844470b229cd93b954c01bea6175535d79e997b0153412e7f429815",
+   "size": 1395
+  },
+  {
+   "rel": "extension/wasm/sbom/hash_sha3_256.cdx.json",
+   "sha256": "082dcdef0d842d221eded26676a971cb7c384bfff82d2bbb652d0b6340a9d9e3",
+   "size": 1399
+  },
+  {
+   "rel": "extension/wasm/sbom/hash_sha384.cdx.json",
+   "sha256": "60d415a9523ece03e26e7d284d1254945e7f672609aeb1c4b9e22b1320a7c337",
+   "size": 1395
+  },
+  {
+   "rel": "extension/wasm/sbom/hash_sm3.cdx.json",
+   "sha256": "272c63afa3770d7e773c907b5ee54bf0c556df35bbf09db59dc5783bd95a3fe0",
+   "size": 1389
+  },
+  {
+   "rel": "extension/wasm/sbom/hash_whirlpool.cdx.json",
+   "sha256": "12bba0ab76622e0bea2cf1b8e54614fed91cc987442bc2171aa72e2cb10bd43d",
+   "size": 1401
+  },
+  {
+   "rel": "extension/wasm/sbom/hash_xxhash32.cdx.json",
+   "sha256": "d873d17e50c6b56ddbe4ca71be8566636a681d00e3e24b7ffd9342d1dbb1b78d",
+   "size": 1399
   },
   {
    "rel": "extension/wasm/sbom/imageops.cdx.json",

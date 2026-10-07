@@ -26,6 +26,15 @@ const stayAlive = (maxMs = 30_000) => {
 };
 
 if (process.argv[2] === "--stubborn-child") {
+  const bootDelayMs = Number(
+    process.env.CAP_SECURITY_TEST_STUBBORN_BOOT_DELAY_MS ?? 0,
+  );
+  if (
+    Number.isSafeInteger(bootDelayMs) && bootDelayMs > 0 &&
+    bootDelayMs <= 60_000
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, bootDelayMs));
+  }
   process.on("SIGTERM", () => record("stubborn-child-term"));
   record("stubborn-child-ready");
   stayAlive();
@@ -61,7 +70,92 @@ if (process.argv[2] === "--stubborn-child") {
       stdio: "ignore",
     });
     record("stubborn-child-spawned", { childPid: child.pid });
-    stayAlive();
+    const killChild = () => {
+      if (typeof child.pid === "number" && child.pid > 0) {
+        try {
+          process.kill(child.pid, "SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+    };
+    child.once("error", () => {
+      record("stubborn-child-spawn-error", {});
+      killChild();
+      process.exit(97);
+    });
+    if (process.env.CAP_SECURITY_TEST_STUBBORN_CHILD_FAIL === "1") {
+      killChild();
+    }
+    const ackPath = process.env.CAP_SECURITY_SAMPLE_ACK;
+    if (!ackPath) {
+      record("stubborn-no-ack-path", {});
+      killChild();
+      process.exit(97);
+    }
+    const declaredAckDeadlineMs = Number(
+      process.env.CAP_SECURITY_TEST_ACK_DEADLINE_MS ?? 1_500,
+    );
+    if (
+      !Number.isSafeInteger(declaredAckDeadlineMs) || declaredAckDeadlineMs < 1 ||
+      declaredAckDeadlineMs > 60_000
+    ) {
+      record("stubborn-ack-deadline-invalid", {
+        ackDeadlineMs: String(process.env.CAP_SECURITY_TEST_ACK_DEADLINE_MS ?? ""),
+      });
+      killChild();
+      process.exit(97);
+    }
+    record("stubborn-ack-deadline-declared", {
+      ackDeadlineMs: declaredAckDeadlineMs,
+      childPid: child.pid,
+    });
+    const deadline = Date.now() + declaredAckDeadlineMs;
+    const confirmed = () => {
+      try {
+        const ack = JSON.parse(readFileSync(ackPath, "utf8"));
+        return Array.isArray(ack.pids) && ack.pids.includes(child.pid);
+      } catch {
+        return false;
+      }
+    };
+    const childReady = () => {
+      try {
+        if (!state) return false;
+        const text = readFileSync(state, "utf8");
+        return text.includes('"stubborn-child-ready"');
+      } catch {
+        return false;
+      }
+    };
+    const poll = () => {
+      let alive = false;
+      if (typeof child.pid === "number" && child.pid > 0) {
+        try {
+          process.kill(child.pid, 0);
+          alive = true;
+        } catch {
+          alive = false;
+        }
+      }
+      if (!alive) {
+        record("stubborn-child-not-persistent", {});
+        killChild();
+        process.exit(97);
+      }
+      if (confirmed() && childReady()) {
+        record("stubborn-observed-by-supervisor", { childPid: child.pid });
+        stayAlive();
+        return;
+      }
+      if (Date.now() > deadline) {
+        record("stubborn-unconfirmed", {});
+        killChild();
+        process.exit(97);
+      }
+      setTimeout(poll, 10);
+    };
+    poll();
   } else if (scenario === "pgid-mismatch") {
     process.on("SIGTERM", () => process.exit(0));
     stayAlive();

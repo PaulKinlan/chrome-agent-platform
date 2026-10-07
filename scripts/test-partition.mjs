@@ -128,6 +128,10 @@ export const SERIAL_FILE_TIMEOUTS = Object.freeze({
 // does not apply; the guard test pins the reason. Keep this list tiny —
 // membership is a review-time decision, never a default.
 export const EXEMPTIONS = {
+  // chrome-agent-platform-fixn: the drift guard plants mutated about.html / inventory fixtures
+  // inside makeTempDir scratch trees to verify drift detection and fail-closed attribution;
+  // the real repo tree is read, never written.
+  "tests/about-page-drift-guard.test.ts": "writes mutated about.html fixtures only inside makeTempDir scratch trees to prove drift detection; the repo tree is read, never written",
   "tests/evidence-durable.test.ts": "spawns the bundled-tool generator ONLY inside a pristine makeTempDir checkout materialization; every write goes to the temp dir, never to repo extension/ or packages/",
   // xe11: the owed-changelog ledger test builds throwaway git FIXTURE repos in a
   // makeTempDir and writes `extension/lib/tool.js` INSIDE them (the product-path
@@ -179,6 +183,10 @@ export const EXEMPTIONS = {
   // the only file written is a makeTempDir it removes — no read or write touches repo extension/ or
   // packages/.
   "tests/browser-dependencies.test.ts": "names build.mjs only inside a consumer list read as TEXT (never spawned or loaded); all bundles are in-memory (write:false) and the one written file is a removed temp dir",
+  // ltkj.2: the loaded-admission harness contract test asserts on harness SOURCE text (naming
+  // build.mjs/the generator inside string pins, never spawning either); the acceptance builder it
+  // executes only READS tracked evidence files and returns bytes in memory. Zero filesystem writes.
+  "tests/emscripten-admission-loaded-harness.test.ts": "names build.mjs only inside harness-source TEXT pins (never spawned or loaded); the acceptance builder runs read-only over tracked evidence and returns in-memory bytes; no writes at all",
 };
 
 // A test that SPAWNS or IMPORTS one of these local drivers inherits the

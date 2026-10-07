@@ -14,6 +14,8 @@ import {
   readAndVerifyJsModule,
   resolveScriptModules,
 } from "./script-sandbox-modules.js";
+import { tagUntrusted } from "./untrusted-fence.js";
+import { isTrustedServiceWorkerSender } from "./pure.js";
 
 
 /** Validate a fetch URL: http/https only, no credentials. */
@@ -53,7 +55,7 @@ export async function runFetch(payload, runId = null) {
       // (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01); a fetch outside a
       // registered run is refused there.
       const res = await chrome.runtime.sendMessage({ type: "cap:fetch", url: v.url, method, runId });
-      if (res?.ok) return res;
+      if (res?.ok) return tagUntrusted(res);
       return { ok: false, error: res?.error ?? "fetch failed" };
     } catch (e) {
       return { ok: false, error: `fetch failed: ${e?.message ?? e}` };
@@ -73,7 +75,7 @@ export async function runFetch(payload, runId = null) {
   } catch {
     text = "";
   }
-  return { ok: true, status: res.status, url: res.url, text };
+  return tagUntrusted({ ok: true, status: res.status, url: res.url, text });
 }
 
 /**
@@ -99,6 +101,7 @@ export function runScriptInIframe(doc, source, runId, { timeoutMs = 30_000, modu
     doc.body.appendChild(iframe);
 
     const logs = [];
+    let fetchedTaint = false;
     let settled = false;
     const onMessage = (event) => {
       if (event.source !== iframe.contentWindow) return;
@@ -108,6 +111,7 @@ export function runScriptInIframe(doc, source, runId, { timeoutMs = 30_000, modu
         case "cap:script-call": {
           if (d.kind === "fetch") {
             runFetch(d.payload, runId).then((value) => {
+              if (value?.ok) fetchedTaint = true;
               iframe.contentWindow?.postMessage(
                 { type: "cap:script-call-result", runId, callId: d.callId, ok: value.ok, value: value.ok ? value : undefined, error: value.ok ? undefined : value.error },
                 "*"
@@ -125,10 +129,10 @@ export function runScriptInIframe(doc, source, runId, { timeoutMs = 30_000, modu
           if (typeof d.text === "string") logs.push(d.text.slice(0, 2000));
           break;
         case "cap:script-result":
-          settle({ ok: true, result: d.result, logs });
+          settle({ ok: true, result: d.result, logs, ...(fetchedTaint ? { untrusted: true } : {}) });
           break;
         case "cap:script-error":
-          settle({ ok: false, error: typeof d.error === "string" ? d.error : "script failed", logs });
+          settle({ ok: false, error: typeof d.error === "string" ? d.error : "script failed", logs, ...(fetchedTaint ? { untrusted: true } : {}) });
           break;
       }
     };
@@ -171,37 +175,68 @@ export function runScriptInIframe(doc, source, runId, { timeoutMs = 30_000, modu
  * `hostId` identifies the caller ("offscreen" or "ntp").
  *
  * Returns `true` to hold the channel for the async response. */
-export function handleScriptRunMessage(message, sendResponse, doc = document, hostId = "host", options = {}) {
+export function handleScriptRunMessage(message, sender, sendResponse, doc = document, hostId = "host", options = {}) {
+  let actualSender = sender;
+  let actualSendResponse = sendResponse;
+  let actualDoc = doc;
+  let actualHostId = hostId;
+  let actualOptions = options;
+
+  if (typeof sender === "function") {
+    // Backwards-compatible signature: handleScriptRunMessage(message, sendResponse, doc, hostId, options)
+    actualSendResponse = sender;
+    actualSender = null;
+    actualDoc = sendResponse || document;
+    actualHostId = typeof doc === "string" ? doc : "host";
+    actualOptions = typeof hostId === "object" && hostId ? hostId : {};
+  }
+
+  // Only handle script-host message types; ignore unrelated runtime messages
+  // immediately so the host never races or interferes with SW message dispatch.
+  if (message?.type !== "cap:script-run-announce" && message?.type !== "cap:script-run") {
+    return false;
+  }
+
+  const effectiveRuntime = actualOptions.runtime ?? globalThis.chrome?.runtime;
+  if (effectiveRuntime?.id) {
+    if (!isTrustedServiceWorkerSender(actualSender, effectiveRuntime)) {
+      if (typeof actualSendResponse === "function") {
+        actualSendResponse({ ok: false, error: "script_host_untrusted_sender" });
+      }
+      return false;
+    }
+  }
+
   if (message?.type === "cap:script-run-announce") {
     // Claim phase: the FIRST host to respond wins (Chrome resolves the SW's
     // sendMessage with the first sendResponse). Identify ourselves so the SW
     // can address the source back to us.
     if (typeof message.runId !== "string" || message.runId.length < 8 || message.runId.length > 64) return false;
-    sendResponse({ claimed: true, host: hostId, runId: message.runId });
+    actualSendResponse({ claimed: true, host: actualHostId, runId: message.runId });
     return false;
   }
   if (message?.type !== "cap:script-run") return false;
   const { source, runId, for: forHost, modules } = message;
   // Only the claimed host executes — a script addressed to another host is
   // dropped (prevents every fetch/side-effect firing twice).
-  if (forHost && forHost !== hostId) return false;
+  if (forHost && forHost !== actualHostId) return false;
   if (typeof source !== "string" || typeof runId !== "string" || runId.length < 8 || runId.length > 64) {
-    sendResponse({ ok: false, error: "invalid script-run request" });
+    actualSendResponse({ ok: false, error: "invalid script-run request" });
     return false;
   }
 
   (async () => {
     try {
       const resolvedModules = Array.isArray(modules) && modules.length > 0
-        ? await resolveScriptModules(modules, options)
+        ? await resolveScriptModules(modules, actualOptions)
         : [];
-      const outcome = await runScriptInIframe(doc, source, runId, {
-        timeoutMs: options.timeoutMs ?? 30_000,
+      const outcome = await runScriptInIframe(actualDoc, source, runId, {
+        timeoutMs: actualOptions.timeoutMs ?? 30_000,
         modules: resolvedModules,
       });
-      sendResponse(outcome);
+      actualSendResponse(outcome);
     } catch (err) {
-      sendResponse({ ok: false, error: err?.message ?? String(err) });
+      actualSendResponse({ ok: false, error: err?.message ?? String(err) });
     }
   })();
 

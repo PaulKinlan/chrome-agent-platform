@@ -87,6 +87,7 @@ import {
 import { mountSkillsSection } from "../skills/skills-panel.js";
 import { mountUserWasmPanel } from "./user-wasm-panel.js";
 import {
+  capLog,
   capLogReady,
   getLogFullDetail,
   getLogVerbosity,
@@ -344,10 +345,79 @@ async function providerStatusChanged() {
 // This wiring requests the bounded summary and sets properties; it installs no
 // listener, issues no search, and wires no control — the component emits no
 // events and exposes no actions by construction.
+// One validate-request listener per library instance (see the guard below).
+const validateListenersInstalled = new WeakSet();
+
 async function renderToolLibrary() {
   const library = $("#tool-library-view");
   if (!library) return;
   library.state = "loading";
+  // ltkj.2: the schema-2 validation list is INDEPENDENT of the catalog
+  // diagnostics below — the summary's decline/unavailable paths early-return
+  // out of this function, and the validation section must still render
+  // whatever the admission host reports. Detached: it cannot delay the
+  // catalog render, and the catalog cannot starve it.
+  (async () => {
+    await admissionHostReady; // registration attempted before the first round trip
+    const listDiag = [];
+    const requestValidationList = async () => {
+      try {
+        const listRes = await boundedSend("tool.package.validation-list", {});
+        if (listRes?.ok === true && Array.isArray(listRes.packages)) return listRes.packages;
+        listDiag.push(`!ok: ${String(listRes?.error ?? JSON.stringify(listRes)?.slice(0, 120))}`);
+      } catch (e) {
+        listDiag.push(`throw: ${String(e?.message ?? e).slice(0, 120)}`);
+      }
+      return null;
+    };
+    // One retry covers a forward that raced the listener registration window.
+    library.validationPackages = (await requestValidationList()) ?? (await requestValidationList()) ?? [];
+    // Bounded, non-rendered diagnostics: why the list is what it is (empty
+    // lists are legitimate on default builds — this names the refusal when
+    // they are not).
+    library.validationListDiag = listDiag;
+  })();
+
+  // The validate-request listener installs ONCE per library instance —
+  // renderToolLibrary runs from more than one call site (boot + navigation),
+  // and duplicate listeners would multiply every admission request
+  // (round-2 review finding 1).
+  if (!validateListenersInstalled.has(library)) {
+    validateListenersInstalled.add(library);
+    library.addEventListener("tool-package-validate-request", async (event) => {
+    const detail = event?.detail ?? {};
+    const { packageId, version, expectedVersion } = detail;
+    if (typeof packageId !== "string" || !packageId || typeof version !== "string" || !version) {
+      library.validationResult = { ok: false, error: "invalid package identity" };
+      return;
+    }
+    library.validationBusy = true;
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "tool.package.validate",
+        packageId,
+        version,
+        expectedVersion: expectedVersion ?? null,
+      });
+      if (!response || response.ok !== true) {
+        library.validationResult = {
+          ok: false,
+          error: String(response?.error ?? "validation declined"),
+          path: response?.path ?? null,
+        };
+      } else {
+        library.validationResult = response;
+      }
+    } catch (error) {
+      library.validationResult = {
+        ok: false,
+        error: String(error?.message ?? error ?? "validation failed"),
+      };
+    } finally {
+      library.validationBusy = false;
+    }
+  });
+  }
   try {
     const summary = await boundedSend("tool-catalog.shadow", { action: "summary" });
     if (!summary || summary.ok !== true) {
@@ -411,6 +481,7 @@ async function renderToolLibrary() {
       library.previewBusy = false;
     }
   });
+
 }
 
 // The Settings-only Gate-2 wasm preview host (chrome-agent-platform-j6au):
@@ -419,6 +490,25 @@ async function renderToolLibrary() {
 // cause of the 'no offscreen response' RED class). The listener itself lives
 // in lib/wasm-preview-host.js and is executed by committed tests.
 registerWasmPreviewHost();
+
+// The Settings-only schema-2 admission host (chrome-agent-platform-ltkj.2):
+// registered at MODULE SCOPE via dynamic runtime URL import so options.bundle.js
+// carries no inlined WebAssembly.validate from lib/emscripten-module-audit.js.
+// admissionHostReady resolves once registration has been ATTEMPTED (it never
+// rejects — failures are logged); the validation-list request awaits it so the
+// SW-forwarded round trip cannot race ahead of the host listener.
+const admissionHostLog = capLog("options:wasm-package-admission");
+const admissionHostReady = (async () => {
+  try {
+    const runtime = globalThis.chrome?.runtime;
+    if (runtime?.getURL && runtime?.onMessage) {
+      const { registerWasmPackageAdmissionHost } = await import(runtime.getURL("lib/wasm-package-admission.js"));
+      registerWasmPackageAdmissionHost({ runtime });
+    }
+  } catch (err) {
+    admissionHostLog.warn("host registration failed:", err?.message ?? err);
+  }
+})();
 
 // ── local folders (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01) ────────────────
 export async function renderLocalFolders() {
@@ -4916,6 +5006,10 @@ let aboutRendered = false;
 async function renderAbout() {
   if (aboutRendered) return;
   aboutRendered = true;
+  try {
+    const licensesLink = document.getElementById("open-about-licenses");
+    if (licensesLink) licensesLink.setAttribute("href", chrome.runtime.getURL("about/about.html"));
+  } catch { /* non-extension context */ }
   // The full release notes link targets the bundled changelog (also reachable
   // as a packaged file) so it works offline and with no network dependency.
   try {

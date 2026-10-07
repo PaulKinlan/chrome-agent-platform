@@ -19,6 +19,26 @@ const HAS_PROC = (() => {
   try { return statSync("/proc").isDirectory(); } catch { return false; }
 })();
 
+const activeChildPids = new Set();
+
+function cleanActiveChildren() {
+  for (const pid of activeChildPids) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // gone
+    }
+  }
+  activeChildPids.clear();
+}
+
+// chrome-agent-platform-of6z: ensure detached child process groups do not
+// linger as PPID=1 orphans on a clean exit; a signal-killed parent is covered
+// by reapOrphanedGenerators() in tests/build-tool-bundling.test.ts.
+if (typeof process !== "undefined" && typeof process.on === "function") {
+  process.on("exit", cleanActiveChildren);
+}
+
 /** Per-thread wchan, which is what identifies a futex hang when a signal report cannot be written.
  *  MEASURED (2026-09-24, node v24.21.0): `--report-on-signal --report-signal=SIGUSR2` writes a full
  *  report for an idle child (measured: 31 KB file, child survives), but a child BLOCKED in a futex
@@ -154,6 +174,7 @@ export async function runBoundedChild(command, args, {
 } = {}) {
   const started = Date.now();
   const child = spawn(command, args, { cwd, env, stdio, detached: true });
+  if (child.pid) activeChildPids.add(child.pid);
   const capture = Array.isArray(stdio) && (stdio[1] === "pipe" || stdio[2] === "pipe");
   const outChunks = [];
   const errChunks = [];
@@ -188,8 +209,15 @@ export async function runBoundedChild(command, args, {
     }
   }, timeoutMs);
   const [status, signal] = await new Promise((resolve) => {
-    child.on("close", (code, sig) => resolve([code, sig]));
-    child.on("error", (error) => { spawnError = error; resolve([null, null]); });
+    child.on("close", (code, sig) => {
+      if (child.pid) activeChildPids.delete(child.pid);
+      resolve([code, sig]);
+    });
+    child.on("error", (error) => {
+      if (child.pid) activeChildPids.delete(child.pid);
+      spawnError = error;
+      resolve([null, null]);
+    });
   });
   clearTimeout(timer);
   if (killTimer !== undefined) clearTimeout(killTimer);

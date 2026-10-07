@@ -15,13 +15,23 @@
 #
 # The export lands in a temp file first: `bd export > file` truncates the file
 # before bd starts, so a failing bd would have staged an EMPTY export. A failed
-# or empty export leaves the committed file alone and says so. The commit is
-# never blocked by this hook.
+# or empty export leaves the committed file alone and says so. A successful
+# export that drops a committed issue ID blocks the commit for manual review.
 [ -d .beads ] || exit 0
+# The hook is shared across worktrees, including older branches that predate
+# this checker. Without it (or Node), preserve the old export rather than
+# silently replacing it or blocking every commit on that branch.
+if [ ! -f scripts/check-beads-export-divergence.mjs ] || ! command -v node >/dev/null 2>&1; then
+  echo "[pre-commit] divergence check unavailable — committing without refreshing .beads/issues.jsonl" >&2
+  exit 0
+fi
 tmp=".beads/.issues.jsonl.$$.tmp"
 err="$tmp.err"
 trap 'rm -f "$tmp" "$err"' EXIT
-if bd export --quiet > "$tmp" 2> "$err" && [ -s "$tmp" ]; then
+if bd export --all > "$tmp" 2> "$err" && [ -s "$tmp" ]; then
+  # A passive export can be stale, but overwriting it must not silently erase
+  # the last visible copy of an issue missing from the canonical DB (vf69).
+  node scripts/check-beads-export-divergence.mjs --candidate "$tmp" || exit 1
   mv -f "$tmp" .beads/issues.jsonl
   git add .beads/issues.jsonl
 else

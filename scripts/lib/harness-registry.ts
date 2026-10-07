@@ -106,7 +106,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "perf-gallery-previews.ts": { class: "named", npm: "test:perf:gallery", reason: "0iln: measures the artifacts-gallery preview waterfall in a real browser (seeded with 30 artifacts, run twice — fixed tree vs a pre-fix baseline via CAP_EXT) and needs a real Chrome, so it is evidence-on-demand rather than a test:all gate" },
   "read-page-host-grant-acceptance.ts": { class: "named", npm: "test:read-page-host-grant", reason: "11/11 at the re-inventory (14 s); run on demand — promotion is the owner's call" },
   "sidebar-parity.ts": { class: "named", npm: "test:sidebar", reason: "19/1 after the cwy2 instrument repair (2026-09-22). It had been crashing on main with an uncaught TypeError and running ZERO of its checks: drifted #task-input/#run-task composer selectors (the component's stable hooks are [data-composer-input]/[data-composer-send]), a .threads.length read off the dispatcher's {ok:false,error} reply, a dark step driving the removed cap:theme/data-theme mechanism, and an inherited colour scheme that resolves dark on this box. The one red is a PRODUCT finding owned by chrome-agent-platform-o1y1 — the Site tools panel states one instruction three ways, all three lines measured visible; promote once o1y1 lands" },
-  "ui-integration.ts": { class: "named", npm: "test:ui", reason: "56/0 after the 5ht repair (hub moved #run-log → action-ledger; theme switching removed; durability contract now state-conditional; 6-min watchdog caps any hang; falsification: a rail-width break produces 4 failing checks); ~90s; run on demand — promotion is the owner's call" },
+  "ui-integration.ts": { class: "named", npm: "test:ui", reason: "58/0 on lx6b (2026-10-06): current 56px in-flow rail, five named 36px nav controls, hidden Create, real Agents pointer route, in-rail toggle hit-test/Tab/Enter/Space, thread-overlay pointer and RTL/narrow/reduced-motion; screenshot evidence; 29s; 6-min watchdog still bounds a hang, not a cure; run on demand — promotion is the owner's call" },
   // The measured counterpart to tests/harness-marks.test.ts. That test pins the chips' CSS
   // BY TEXT (a regex over sidepanel.html); this drives the real side panel in a real browser at
   // 260/300/400px and asserts on GEOMETRY, so it fails when the behaviour goes and the text stays.
@@ -200,6 +200,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-python-wheel-install.ts": { class: "kat" },
   "kat-settings-multi-section.ts": { class: "kat" },
   "kat-settings-server-tools.ts": { class: "kat" },
+  "kat-sidebar-hydration-race.ts": { class: "kat" },
   "kat-site-delegation-attachments.ts": { class: "kat" },
   "kat-task-lifecycle.ts": { class: "kat", ...RED("0/1", "'no service worker target' — the KAT does not wait for the MV3 worker to register") },
   "kat-task-view-simplify.ts": { class: "kat", ...RED("21/1", "'a settled run leaves no debug affordance' — a toggle is still visible") },
@@ -222,6 +223,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "agent-provider-picker.ts": { class: "manual", reason: "the picker-50 evidence run (scripts/evidence-runner.sh gate 16); 0/2 at the re-inventory both before and after the launcher migration — its build-test-extension.mjs copy does not load on this tree ('extension target not found'), which is outside this lane" },
   "axe-audit.ts": { class: "manual", reason: "4/3 at the re-inventory; a11y-audit.ts is the gate — this is the axe-core cross-check kept for comparison" },
   "emscripten-abi-loaded.ts": { class: "manual", reason: "ltkj.1 A0 evidence: after explicit coordinator browser-slot authorization, loads a durable byte-identical production extension copy plus hash-pinned test-only native fixtures; never a product runtime or admission gate" },
+  "emscripten-admission-loaded.ts": { class: "manual", reason: "ltkj.2 acceptance: after explicit coordinator browser-slot authorization, regenerates the inventory with the build-time-only numeric acceptance target in a disposable durable copy, REBUNDLES it, and drives the real Settings validation flow (positive + one-byte-mutation negatives); never a product runtime gate and never writes the reviewed tree" },
   "flake-evidence.ts": { class: "manual", reason: "a bisect tool: runs the journey suite N times on a branch and its base and compares failure sets; exits 1 only for a branch-only failure" },
   "focus-shots.ts": { class: "manual", reason: "a screenshot generator for focus-ring evidence (3/0 at the re-inventory: the Tab walk reaches the control, the ring is present, the shot is written)" },
   "keyless-first-result.ts": { class: "manual", reason: "green at the re-inventory (16 s); the behaviour is journey 2k in chrome-journeys.ts (KEYLESS-FIRST-RESULT-01) — kept as the standalone repro" },

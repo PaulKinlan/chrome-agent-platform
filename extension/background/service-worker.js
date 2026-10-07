@@ -131,6 +131,7 @@ import {
   storeAskAgentPrefill,
 } from "../lib/ask-agent-entry.js";
 import { appendRunEndCleanupNote, autoCloseTabPlan, createLifecycleTracker, liveLifecycleSnapshot } from "../lib/lifecycle-cleanup.js";
+import { hasUntrustedMarker, tagUntrusted } from "../lib/untrusted-fence.js";
 import {
   canonicalOrigin,
   journalAppend,
@@ -674,6 +675,7 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
         type: CALLEXPORT_RUN_TYPE,
         toolId,
         data: String(validatedArgs?.data ?? ""),
+        args: validatedArgs ?? {},
         owner,
         authority,
       });
@@ -866,7 +868,15 @@ async function runScriptSandboxed(source) {
   // Phase 2 — send the source to the winning host ONLY.
   return new Promise((resolve) => {
     let settled = false;
-    const finish = (v) => { if (!settled) { settled = true; scriptRunPolicies.delete(runId); resolve(v); } };
+    const finish = (v) => {
+      if (!settled) {
+        settled = true;
+        const policy = scriptRunPolicies.get(runId);
+        scriptRunPolicies.delete(runId);
+        const tainted = policy?.fetched === true || v?.untrusted === true;
+        resolve(tainted ? { ...v, untrusted: true } : v);
+      }
+    };
     const timer = setTimeout(() => finish({ ok: false, error: "script run timed out (SW)" }), 40_000);
     chrome.runtime.sendMessage({ type: "cap:script-run", source, runId, for: winner }).then(
       (res) => { clearTimeout(timer); finish(res ?? { ok: false, error: "no response from the script host" }); },
@@ -1105,7 +1115,8 @@ import {
   KEYBOARD_COMMANDS,
   hubUrlForCommand,
   newId,
-  sleep
+  sleep,
+  redactToolArgs
 } from "../lib/pure.js";
 import { redactToolResult, toolResultFullJson } from "../lib/tool-summary.js";
 import {
@@ -3888,7 +3899,7 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
         try {
           event = {
             ...event,
-            ...(event.type === "tool-call" ? { toolArgs: redactDeep(event.toolArgs) } : { result: redactDeep(event.result) }),
+            ...(event.type === "tool-call" ? { toolArgs: redactDeep(redactToolArgs(event.selectedTool ?? event.toolName, event.toolArgs)) } : { result: redactDeep(event.result) }),
           };
           // The retained FULL result (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01)
           // is redacted AGAIN at this boundary — the write path never trusts
@@ -3905,7 +3916,16 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
               resultFullBytes: Math.max(Number(event.resultFullBytes) || 0, again.bytes),
             };
           }
-        } catch { /* redaction failure must never break the run */ }  }
+        } catch {
+          // Redaction failure must fail closed on egress rather than forwarding raw arguments or results
+          event = {
+            ...event,
+            ...(event.type === "tool-call"
+              ? { toolArgs: "[REDACTION_FAILED]" }
+              : { result: "[REDACTION_FAILED]", resultFull: "[REDACTION_FAILED]", resultFullBytes: 18 }),
+          };
+        }
+      }
       // Live budget tracking for the delegation guard: each model step emits a
       // thinking event carrying the loop's 0-based step counter; the count of
       // consumed iterations is event.step + 1, so the caller's REMAINING
@@ -6917,10 +6937,10 @@ const handlers = mergeRouteMaps(
       // Response bodies are one-shot streams: cache the single read before
       // bounding it (arrayBuffer() followed by text() throws in Chrome).
       const text = await res.text();
+      if (policy) policy.fetched = true;
       // Fetched bodies are untrusted web content: wrap this return in
-      // `tagUntrusted(...)` (lib/untrusted-fence.js) when this route is next
-      // touched (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01 owns the route).
-      return { ok: true, status: res.status, url: res.url, text: text.slice(0, MAX) };
+      // `tagUntrusted(...)` (lib/untrusted-fence.js, INV-7).
+      return tagUntrusted({ ok: true, status: res.status, url: res.url, text: text.slice(0, MAX) });
     } catch (e) {
       return { ok: false, error: `fetch failed: ${e?.message ?? e}` };
     }
@@ -7125,8 +7145,8 @@ const handlers = mergeRouteMaps(
       }
       // The body is untrusted web content. It reaches the model as the return
       // value of cap.fetch inside Python, i.e. as data the program chose to
-      // read — the same trust level as any fetched text.
-      return {
+      // read — the same trust level as any fetched text (INV-7).
+      return tagUntrusted({
         ok: true,
         status: res.status,
         url: res.url || u.href,
@@ -7134,7 +7154,7 @@ const handlers = mergeRouteMaps(
         text,
         bytes,
         refusedHeaders,
-      };
+      });
     } catch (e) {
       const wasAborted = controller.signal.aborted;
       const runSettled = Boolean(inflight?.isSettled?.());
@@ -7492,6 +7512,83 @@ const handlers = mergeRouteMaps(
       };
     }
     return await shadowToolCatalog.inspect(m, context);
+  },
+  // Settings-only schema-2 tool package validation (chrome-agent-platform-ltkj.2)
+  async "tool.package.validation-list"(m, context) {
+    if (context?.principal !== "owner-options") {
+      securityEvent("blocked-action", `tool package validation list denied for principal ${context?.principal ?? "unknown"}`);
+      return { ok: false, error: "tool package validation is restricted to the Settings surface" };
+    }
+    const optionsUrl = chrome.runtime.getURL("options/options.html");
+    const senderUrl = context?.senderUrl ?? "";
+    const exactDoc = senderUrl === optionsUrl ||
+      (typeof senderUrl === "string" &&
+        senderUrl.startsWith(optionsUrl) &&
+        /^#[A-Za-z0-9-]+$/.test(senderUrl.slice(optionsUrl.length)));
+    if (typeof context?.documentId !== "string" || !context.documentId || !exactDoc || Boolean(context?.pageSender)) {
+      securityEvent("blocked-action", "tool package validation list sender rejected");
+      return { ok: false, error: "sender is not the exact Settings document" };
+    }
+    return await new Promise((resolve) => {
+      let settled = false;
+      const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+      const timer = setTimeout(() => finish({ ok: false, error: "validation list timed out (SW)" }), 5000);
+      chrome.runtime.sendMessage({
+        type: "wasm.package.options.validation-list",
+      }, (res) => {
+        clearTimeout(timer);
+        const lastErr = chrome.runtime.lastError;
+        if (lastErr) finish({ ok: false, error: lastErr.message ?? "no options host response" });
+        else finish(res ?? { ok: false, error: "empty validation list response" });
+      });
+    });
+  },
+  async "tool.package.validate"(m, context) {
+    if (context?.principal !== "owner-options") {
+      securityEvent("blocked-action", `tool package validation denied for principal ${context?.principal ?? "unknown"}`);
+      return { ok: false, error: "tool package validation is restricted to the Settings surface" };
+    }
+    const optionsUrl = chrome.runtime.getURL("options/options.html");
+    const senderUrl = context?.senderUrl ?? "";
+    const exactDoc = senderUrl === optionsUrl ||
+      (typeof senderUrl === "string" &&
+        senderUrl.startsWith(optionsUrl) &&
+        /^#[A-Za-z0-9-]+$/.test(senderUrl.slice(optionsUrl.length)));
+    if (typeof context?.documentId !== "string" || !context.documentId || !exactDoc || Boolean(context?.pageSender)) {
+      securityEvent("blocked-action", "tool package validation sender rejected");
+      return { ok: false, error: "sender is not the exact Settings document" };
+    }
+    const messageKeys = Object.keys(m ?? {});
+    const allowed = new Set(["type", "packageId", "version", "expectedVersion"]);
+    if (messageKeys.some((k) => !allowed.has(k))) {
+      return { ok: false, error: "extra_keys_rejected" };
+    }
+    const { packageId, version, expectedVersion } = m ?? {};
+    if (typeof packageId !== "string" || !/^[a-z0-9]+(\.[a-z0-9_-]+)+$/u.test(packageId)) {
+      return { ok: false, error: "package_id_invalid" };
+    }
+    if (typeof version !== "string" || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(version)) {
+      return { ok: false, error: "version_invalid" };
+    }
+    if (expectedVersion !== null && expectedVersion !== undefined && (typeof expectedVersion !== "string" || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(expectedVersion))) {
+      return { ok: false, error: "expected_version_invalid" };
+    }
+    return await new Promise((resolve) => {
+      let settled = false;
+      const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+      const timer = setTimeout(() => finish({ ok: false, error: "package validation timed out (SW)" }), 10000);
+      chrome.runtime.sendMessage({
+        type: "wasm.package.options.validate",
+        packageId,
+        version,
+        expectedVersion: expectedVersion ?? null,
+      }, (res) => {
+        clearTimeout(timer);
+        const lastErr = chrome.runtime.lastError;
+        if (lastErr) finish({ ok: false, error: lastErr.message ?? "no options host response" });
+        else finish(res ?? { ok: false, error: "empty validation response" });
+      });
+    });
   },
   // CAP-FB-20260822-TOOL-PREVIEW-EXEC-01 — the FIRST real bundled execution:
   // a static allowlist (csvtool, uuid, head, tail, cut) runs ONLY
@@ -9979,7 +10076,14 @@ const handlers = mergeRouteMaps(
       } catch { result = String(result).slice(0, 256 * 1024); }
     }
     await recordScriptRun(origin ?? "master", id, { ok: run?.ok, result, error: run?.error }).catch(() => {});
-    return { ok: run?.ok ?? false, result, error: run?.error, logs: run?.logs ?? [] };
+    const isUntrusted = run?.untrusted === true || hasUntrustedMarker(run?.result) || hasUntrustedMarker(run?.logs);
+    return {
+      ok: run?.ok ?? false,
+      result,
+      error: run?.error,
+      logs: run?.logs ?? [],
+      ...(isUntrusted ? { untrusted: true } : {}),
+    };
   },
   async "python.execute"({ code, stdin, wheels }) {
     const provider = getPythonRuntimeProvider();

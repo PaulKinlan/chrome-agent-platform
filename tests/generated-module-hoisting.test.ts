@@ -9,7 +9,7 @@
 // happening (bytes returned to the bundle) or if it corrupts a value.
 
 import { fileURLToPath } from "node:url";
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import { collectSharedStrings, renderHoistedValue } from "../scripts/lib/shared-strings.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -76,9 +76,116 @@ Deno.test("the generated descriptor module keeps every value AND pays for the re
     );
   }
 
-  // The file-size guard: hoisting reclaimed ~3.5 KB (52,275 -> 48,712 at the time
-  // of writing). A generous ceiling, so ordinary row growth is fine but losing
-  // the hoisting is not.
+  // The file-size guard: original 50,000 ceiling was calibrated for 38 tools
+  // (~1,316 B/tool). With 52 tools admitted (13 hash-wasm + chacha20_poly1305),
+  // full hoisting (shared S table, capability arrays C*, licences L*, caveats V*)
+  // emits 56,866 bytes (3ugl hoisting + the 2uhx chacha admission). The ceiling is
+  // 57,600 bytes (hoisted + ~1.3% headroom). Each new tool admission ratchets this
+  // ceiling deliberately; dead-defs and unhoisted-structure regressions remain
+  // above it, and the structure pins below are the primary guard either way.
   const bytes = (await Deno.stat(DATA_MODULE)).size;
-  assert(bytes < 50_000, `the generated descriptor module should stay compact, was ${bytes} bytes`);
+  assert(bytes < 57_600, `the generated descriptor module should stay compact, was ${bytes} bytes`);
+
+  // 3ugl / F2: Structure hoisting pins
+  // Verify that all 3 hoisted structure kinds are actually emitted as definitions AND referenced in the rows
+  const capDefs = text.match(/const C\d+ =/g)?.length ?? 0;
+  const capRefs = text.match(/"capabilities": C\d+/g)?.length ?? 0;
+  assert(capDefs >= 4, `must define at least 4 hoisted capability arrays (got ${capDefs})`);
+  assert(capRefs >= 40, `must reference hoisted capability arrays across rows (got ${capRefs})`);
+
+  const licDefs = text.match(/const L\d+ =/g)?.length ?? 0;
+  const licRefs = text.match(/"licence": L\d+/g)?.length ?? 0;
+  assert(licDefs >= 3, `must define at least 3 hoisted licence objects (got ${licDefs})`);
+  assert(licRefs >= 30, `must reference hoisted licences across rows (got ${licRefs})`);
+
+  const cavDefs = text.match(/const V\d+ =/g)?.length ?? 0;
+  const cavRefs = text.match(/"caveats": V\d+/g)?.length ?? 0;
+  assert(cavDefs >= 2, `must define at least 2 hoisted caveat arrays (got ${cavDefs})`);
+  assert(cavRefs >= 15, `must reference hoisted caveats across rows (got ${cavRefs})`);
+});
+
+Deno.test("structure hoisting: round-trip re-rendering of BUNDLED_TOOL_PACKAGE_ROWS is deep-equal (3ugl / F4)", async () => {
+  const { BUNDLED_TOOL_PACKAGE_ROWS } = await import("../extension/lib/bundled-tool-packages.data.js");
+  const reRendered = renderHoistedValue({
+    value: BUNDLED_TOOL_PACKAGE_ROWS,
+    declaration: "BUNDLED_TOOL_PACKAGE_ROWS",
+    sharedStrings: collectSharedStrings(BUNDLED_TOOL_PACKAGE_ROWS, { minLength: 5, minSaving: 1 }),
+    tableName: "S",
+    hoistStructures: true,
+  });
+  const mod = await import(`data:text/javascript,${encodeURIComponent(reRendered)}`);
+  assertEquals(mod.BUNDLED_TOOL_PACKAGE_ROWS, BUNDLED_TOOL_PACKAGE_ROWS, "re-rendered rows must be strictly deep-equal to committed rows");
+});
+
+Deno.test("structure hoisting: survives regex-special characters and hoists repeated structures (3ugl / F2, F3)", async () => {
+  const trickyCap1 = "tool:read(v1.0)+fast? [beta]";
+  const trickyCap2 = "tool:write^$*\\complex";
+  const trickyLic = { spdx: "MIT-0 (Custom+Ref)", file: "LICENCE.v1+2.txt", notices: null };
+  const trickyCav = ["Note: item (a) + item (b) must be >= 100%", "Regex check: ^[a-z]+$"];
+
+  const value = [
+    { name: "tool-a", capabilities: [trickyCap1, trickyCap2], licence: trickyLic, caveats: trickyCav },
+    { name: "tool-b", capabilities: [trickyCap1, trickyCap2], licence: trickyLic, caveats: trickyCav },
+    { name: "tool-c", capabilities: [trickyCap1, trickyCap2], licence: trickyLic, caveats: trickyCav },
+    { name: "tool-d", capabilities: [trickyCap1, trickyCap2], licence: trickyLic, caveats: trickyCav },
+    { name: "tool-e", capabilities: [trickyCap1, trickyCap2], licence: trickyLic, caveats: trickyCav },
+  ];
+
+  const sharedStrings = collectSharedStrings(value, { minLength: 5, minSaving: 0 });
+  const rendered = renderHoistedValue({
+    value,
+    declaration: "ROWS",
+    sharedStrings,
+    tableName: "TABLE",
+    hoistStructures: true,
+  });
+
+  // Verify structure definitions and references exist
+  assert(rendered.includes("const C0 = Object.freeze("), "capabilities must be hoisted into C0");
+  assert(rendered.includes("const L0 = Object.freeze("), "licence must be hoisted into L0");
+  assert(rendered.includes("const V0 = Object.freeze("), "caveats must be hoisted into V0");
+  assert(rendered.includes('"capabilities": C0'), "capabilities C0 must be referenced");
+  assert(rendered.includes('"licence": L0'), "licence L0 must be referenced");
+  assert(rendered.includes('"caveats": V0'), "caveats V0 must be referenced");
+
+  // Verify value survives round-trip deep-equal
+  const mod = await import(`data:text/javascript,${encodeURIComponent(rendered)}`);
+  assertEquals(mod.ROWS, value, "round-trip value with regex characters must be deep-equal");
+});
+
+Deno.test("structure hoisting: escapeRegex is load-bearing for unhoisted literals with regex metacharacters (3ugl / P1)", async () => {
+  // By passing sharedStrings: [], every string inside capabilities/licence/caveats
+  // remains a literal (never TABLE[n]), forcing elemPattern to take the escapeRegex(JSON.stringify(s)) branch.
+  const row = {
+    capabilities: ["a.b*c", "d+e?f", "x[y]z"],
+    licence: { spdx: "MIT-0 (Custom+Ref)", file: "LICENCE.v1+2.txt", notices: null },
+    caveats: ["Note: item (a) + item (b) must be >= 100%"],
+  };
+  const value = [row, row, row, row, row];
+  const rendered = renderHoistedValue({
+    value,
+    declaration: "ROWS",
+    sharedStrings: [],
+    tableName: "TABLE",
+    hoistStructures: true,
+  });
+  assert(rendered.includes('"capabilities": C0'), "capabilities with unhoisted regex metacharacters must be substituted");
+  assert(rendered.includes('"licence": L0'), "licence with unhoisted regex metacharacters must be substituted");
+  assert(rendered.includes('"caveats": V0'), "caveats with unhoisted regex metacharacters must be substituted");
+  const mod = await import(`data:text/javascript,${encodeURIComponent(rendered)}`);
+  assertEquals(mod.ROWS, value, "round-trip value with unhoisted regex metacharacters must be deep-equal");
+});
+
+Deno.test("structure hoisting: replacement count mismatch throws fail-closed (3ugl / P2)", () => {
+  // A nested 'capabilities' array inside meta causes matchCount (4) to exceed expectedCount (3)
+  const value = [
+    { capabilities: ["x", "y"], meta: { capabilities: ["x", "y"] } },
+    { capabilities: ["x", "y"] },
+    { capabilities: ["x", "y"] },
+  ];
+  assertThrows(
+    () => renderHoistedValue({ value, declaration: "ROWS", sharedStrings: [], hoistStructures: true }),
+    Error,
+    "replacement count mismatch",
+  );
 });

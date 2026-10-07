@@ -66,6 +66,7 @@ Deno.test("hangs in parallel phase", async () => {
       cwd: ROOT,
       env: {
         CAP_PARALLEL_TEST_TIMEOUT_MS: "5000",
+        CAP_PARALLEL_READY_FILE: pidFile,
       },
       stdout: "piped",
       stderr: "piped",
@@ -109,6 +110,188 @@ Deno.test("hangs in parallel phase", async () => {
     if (orphanPid > 0) {
       try { Deno.kill(orphanPid, "SIGKILL"); } catch { /* gone */ }
     }
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("1k2a/5nhz: parallel phase timeout with cold-boot delay awaits ready marker before starting timer", async () => {
+  const dir = await durableDir(`1k2a-parallel-delayed-boot-${Deno.pid}-${crypto.randomUUID().slice(0, 8)}`);
+  const pidFile = `${dir}/grandchild.pid`;
+  const probeFile = `${dir}/zz-probe-delayed-hang.test.ts`;
+
+  // Simulates a heavy cold boot: sleeps 2.5s before spawning sleeper and writing pidFile.
+  // Delay (2500ms) exceeds execution timeout (1500ms), proving the timeout starts only after readiness.
+  const probeSrc = `
+await new Promise((r) => setTimeout(r, 2500));
+const b = new Deno.Command("bash", {
+  args: ["-c", "sleep 300 & echo $! > ${pidFile}.sleep"],
+  stdout: "null",
+  stderr: "null",
+});
+b.outputSync();
+const sleeper = Number((await Deno.readTextFile("${pidFile}.sleep")).trim());
+await Deno.writeTextFile("${pidFile}", String(sleeper));
+Deno.test("delayed boot hangs in parallel phase", async () => {
+  setInterval(() => {}, 1000);
+  await new Promise(() => {});
+});
+`;
+  await Deno.writeTextFile(probeFile, probeSrc);
+
+  let orphanPid = 0;
+  try {
+    const proc = new Deno.Command("node", {
+      args: ["scripts/run-tests.mjs", probeFile],
+      cwd: ROOT,
+      env: {
+        CAP_PARALLEL_TEST_TIMEOUT_MS: "1500",
+        CAP_PARALLEL_READY_FILE: pidFile,
+        CAP_PARALLEL_READY_TIMEOUT_MS: "15000",
+      },
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stdout, stderr } = await proc.output();
+    const out = new TextDecoder().decode(stdout);
+    const err = new TextDecoder().decode(stderr);
+    assertEquals(code, 124, `expected code 124 on parallel timeout, got ${code}:\n${err}\n${out}`);
+    assert(out.includes("TIMED OUT") || err.includes("TIMED OUT"));
+
+    const sleeperText = await Deno.readTextFile(pidFile).catch(() => "");
+    orphanPid = Number(sleeperText.trim()) || 0;
+    assert(orphanPid > 0, "probe must have spawned sleeper despite cold boot delay");
+
+    let alive = true;
+    for (let i = 0; i < 20; i++) {
+      try {
+        const stat = await Deno.readTextFile(`/proc/${orphanPid}/stat`);
+        const state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
+        if (state === "Z" || state === "X") {
+          alive = false;
+          break;
+        }
+      } catch {
+        alive = false;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assertEquals(alive, false, `orphan PID ${orphanPid} must be killed on parallel timeout`);
+  } finally {
+    if (orphanPid > 0) {
+      try { Deno.kill(orphanPid, "SIGKILL"); } catch { /* gone */ }
+    }
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("1k2a/5nhz: parallel phase fails closed with diagnostic if ready marker never appears", async () => {
+  const dir = await durableDir(`1k2a-parallel-never-ready-${Deno.pid}-${crypto.randomUUID().slice(0, 8)}`);
+  const missingReadyFile = `${dir}/nonexistent-ready.marker`;
+  const probeFile = `${dir}/zz-probe-never-ready.test.ts`;
+
+  // Fixture never writes the ready marker
+  const probeSrc = `
+Deno.test("never writes marker", async () => {
+  setInterval(() => {}, 1000);
+  await new Promise(() => {});
+});
+`;
+  await Deno.writeTextFile(probeFile, probeSrc);
+
+  try {
+    const proc = new Deno.Command("node", {
+      args: ["scripts/run-tests.mjs", probeFile],
+      cwd: ROOT,
+      env: {
+        CAP_PARALLEL_TEST_TIMEOUT_MS: "5000",
+        CAP_PARALLEL_READY_FILE: missingReadyFile,
+        CAP_PARALLEL_READY_TIMEOUT_MS: "500",
+      },
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stdout, stderr } = await proc.output();
+    const out = new TextDecoder().decode(stdout);
+    const err = new TextDecoder().decode(stderr);
+    assertEquals(code, 124, `expected code 124 on unready timeout, got ${code}:\n${err}\n${out}`);
+    assert(
+      out.includes("parallel phase ready marker") || err.includes("parallel phase ready marker"),
+      `output must include diagnostic naming missing ready marker:\n${err}\n${out}`,
+    );
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("1k2a/5nhz: parallel phase fails closed if child exits 0 without writing ready marker", async () => {
+  const dir = await durableDir(`1k2a-parallel-exit-unready-${Deno.pid}-${crypto.randomUUID().slice(0, 8)}`);
+  const missingReadyFile = `${dir}/unwritten.marker`;
+  const probeFile = `${dir}/zz-probe-exit-unready.test.ts`;
+
+  // Fixture passes immediately without writing marker
+  const probeSrc = `
+Deno.test("passes immediately without marker", () => {
+  // finishes with exit 0
+});
+`;
+  await Deno.writeTextFile(probeFile, probeSrc);
+
+  try {
+    const proc = new Deno.Command("node", {
+      args: ["scripts/run-tests.mjs", probeFile],
+      cwd: ROOT,
+      env: {
+        CAP_PARALLEL_TEST_TIMEOUT_MS: "5000",
+        CAP_PARALLEL_READY_FILE: missingReadyFile,
+        CAP_PARALLEL_READY_TIMEOUT_MS: "5000",
+      },
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stdout, stderr } = await proc.output();
+    const out = new TextDecoder().decode(stdout);
+    const err = new TextDecoder().decode(stderr);
+    assertEquals(code, 124, `expected code 124 when exiting without marker, got ${code}:\n${err}\n${out}`);
+    assert(
+      out.includes("child exited before creating ready marker") ||
+        err.includes("child exited before creating ready marker"),
+      `output must name early exit before ready marker:\n${err}\n${out}`,
+    );
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("1k2a/5nhz: parallel phase succeeds when child writes ready marker and exits immediately", async () => {
+  const dir = await durableDir(`1k2a-parallel-fast-ready-${Deno.pid}-${crypto.randomUUID().slice(0, 8)}`);
+  const readyFile = `${dir}/fast.marker`;
+  const probeFile = `${dir}/zz-probe-fast-ready.test.ts`;
+
+  const probeSrc = `
+await Deno.writeTextFile("${readyFile}", "ready");
+Deno.test("passes immediately after marker", () => {});
+`;
+  await Deno.writeTextFile(probeFile, probeSrc);
+
+  try {
+    const proc = new Deno.Command("node", {
+      args: ["scripts/run-tests.mjs", probeFile],
+      cwd: ROOT,
+      env: {
+        CAP_PARALLEL_TEST_TIMEOUT_MS: "5000",
+        CAP_PARALLEL_READY_FILE: readyFile,
+        CAP_PARALLEL_READY_TIMEOUT_MS: "5000",
+      },
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stdout, stderr } = await proc.output();
+    const out = new TextDecoder().decode(stdout);
+    const err = new TextDecoder().decode(stderr);
+    assertEquals(code, 0, `expected code 0 for fast marker-then-exit, got ${code}:\n${err}\n${out}`);
+    assertStringIncludes(out, "run-tests: parallel phase (1 files) GREEN");
+  } finally {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 });
