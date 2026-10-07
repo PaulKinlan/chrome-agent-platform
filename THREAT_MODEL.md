@@ -53,7 +53,7 @@ Component map, with the file that owns each surface:
 | Providers | `extension/lib/provider.js`, `extension/lib/provider-server-tools.js` | the two provider paths (boundary TB4) |
 | MCP | `extension/lib/mcp-config.js:113`, `extension/lib/mcp-client-core.js:99` | owner-registered external servers |
 | WebMCP site tools | `extension/lib/webmcp-authority.js`, `extension/lib/tools.js:511` | page-declared tools, owner-enrolled |
-| ACP bridge (host-side) | `scripts/acp-bridge.ts:49`, `:657` | loopback WebSocket in front of a shell-capable harness |
+| ACP bridge (host-side) | `scripts/acp-bridge.ts:52`, `:785` | loopback WebSocket in front of a shell-capable harness |
 
 ---
 
@@ -91,9 +91,9 @@ Component map, with the file that owns each surface:
   `extension/lib/fetch-policy.js:135`.
 - **TB5 — The ACP bridge.** A loopback WebSocket on the host in front of an agent
   harness that can run shell commands and write files
-  (`scripts/acp-bridge.ts:49` defaults to `127.0.0.1`, `:657` binds the server;
-  `:136-141` defines the Origin guard and `:723-743` refuses an unapproved Origin
-  or wrong token). This is a host-process boundary, not an extension one — the
+  (`scripts/acp-bridge.ts:52` defaults to `127.0.0.1`, `:785` binds the server;
+  `:203-208` defines the Origin guard and `:859-867` refuses an unapproved Origin
+  or wrong token by default). This is a host-process boundary, not an extension one — the
   extension only ever holds the client end.
 - **TB6 — The OPFS root and the extension origin.** Chromium grants the extension
   origin exactly one OPFS root; per-site, per-agent and per-workspace separation is
@@ -174,7 +174,7 @@ should reason about; the threats that use them are in sections 5 and 6.
 | S7 | Imported archives | `extension/lib/archive-target-registry.js:375`, `:427` | a file the owner restores carries attacker-chosen keys and values |
 | S8 | MCP server output | `extension/lib/mcp-client-core.js:99` | a registered server returns arbitrary text and tool results |
 | S9 | Provider responses and provider errors | `extension/lib/pure.js:1034`, `:1102` | an endpoint can echo a credential back into a log or a card |
-| S10 | Host-side ACP WebSocket clients | `scripts/acp-bridge.ts:723-743` | a local client with the token can drive a shell-capable agent; a web page without an approved Origin and token is refused |
+| S10 | Host-side ACP WebSocket clients | `scripts/acp-bridge.ts:859-867` | a local client with the token (or unauthenticated under --allow-anonymous-loopback) can drive a shell-capable agent; a web page without an approved Origin and token is refused |
 | S11 | Owner-supplied local folders (fs grants) | `extension/lib/fs-grants.js:47`, `:130` | path strings the owner grants are still resolved by the extension |
 | S12 | Hook event payloads | `extension/lib/hooks.js:494`, `:550` | a hook body is serialized into a model INSTRUCTION position |
 
@@ -349,14 +349,15 @@ consequences are carried by the matching register entry where one exists.
 
 ### T15. A web page driving the local shell-capable ACP harness
 
-- **Boundary:** TB5. **Evidence:** `scripts/acp-bridge.ts:49` (loopback default),
-  `:127-141` (`originAllowed` admits extension origins and local clients without Origin),
-  `:723-743` (403 on a refused Origin or wrong token, including loopback), and
-  `:80-125` (the default shared secret persists across restarts). **Test:**
+- **Boundary:** TB5. **Evidence:** `scripts/acp-bridge.ts:52` (loopback default),
+  `:191-208` (`originAllowed` admits extension origins and local clients without Origin),
+  `:859-867` (403 on a refused Origin or wrong token, including loopback by default), and
+  `:137-189` (the default shared secret persists across restarts). **Test:**
   `tests/acp-bridge-security.test.ts:49-60` (a web Origin is refused, an extension
   Origin is accepted); `:189-230` (the persisted token survives restart).
-- **Residual (accepted, `chrome-agent-platform-6hly`):** the loopback WebSocket
-  bridge authenticates the client, not the server. If an unprivileged local
+- **Residual (accepted, `chrome-agent-platform-6hly`):** by default, the loopback WebSocket
+  bridge authenticates the client, not the server (under --allow-anonymous-loopback,
+  neither authenticates the other). If an unprivileged local
   process binds `127.0.0.1:3210` before the real bridge (or while it is down),
   the extension hands the process its persisted token in the upgrade query
   (`extension/lib/acp-runner.js:260,292-298,551-552`); it can impersonate the
@@ -426,9 +427,12 @@ and each names the executable check that would catch a regression.
 - **INV-13 — Every wildcard `postMessage` target is a deliberate, reasoned allowlist
   entry.** `tests/postmessage-wildcard-guard.test.ts:1-15`.
 - **INV-14 — The ACP bridge refuses any non-extension Origin unless one was named
-  explicitly, requires a token even on loopback, and binds loopback by default.**
-  `scripts/acp-bridge.ts:49`, `scripts/acp-bridge.ts:136-141`,
-  `scripts/acp-bridge.ts:723-743`; `tests/acp-bridge-security.test.ts:49-60`.
+  explicitly, requires a token even on loopback by default, and binds loopback by default.**
+  The explicit `--allow-anonymous-loopback` opt-out is a deliberate, loopback-only
+  exception; combining the flag with a non-loopback bind or unvalidated hostname is a startup error.
+  `scripts/acp-bridge.ts:52`, `scripts/acp-bridge.ts:109-116`, `scripts/acp-bridge.ts:203-208`,
+  `scripts/acp-bridge.ts:859-867`; `tests/acp-bridge-security.test.ts:49-60`,
+  `tests/acp-loopback-optout.test.ts`.
 
 ---
 
@@ -474,7 +478,7 @@ decision and, where one exists, the trigger that would reopen it.
    entry: R23, including its reopen trigger.**
 10. **ACP loopback server-identity bind race (T15 / 6hly).** ADJUDICATED AND
     WITHHELD by the operator on 2026-10-06 under the single-user development-
-    machine assumption. A local process that wins the `127.0.0.1:3210` bind
+    machine assumption. By default, a local process that wins the `127.0.0.1:3210` bind
     receives the persisted token; the client cannot authenticate that server.
     Reopen if the machine is shared or hosts an untrusted local process. This
     is not voicebox `k74h` (a cross-origin web-page threat in another project).

@@ -2,7 +2,7 @@
 // CAP-FB-20260912-ACP-INTEGRATION-01 (tracking epic chrome-agent-platform-qlho)
 //
 // Bridges Chrome Extension WebSocket connections to a locally spawned ACP adapter (e.g. pi-acp).
-// Usage: npm run acp:bridge [--port 3210] [--adapter path/to/adapter] [--cwd /working/dir]
+// Usage: npm run acp:bridge [--port 3210] [--adapter path/to/adapter] [--cwd /working/dir] [--allow-anonymous-loopback]
 //
 // Host defaults the extension cannot know live HERE, never as source literals:
 // the adapter path and the session working directory resolve from $HOME at run
@@ -22,6 +22,7 @@ import { acpToolChannel, createAcpTools } from "./lib/acp-tools.ts";
 
 const args = parseArgs(Deno.args, {
   string: ["port", "adapter", "harness", "cwd", "token", "token-file", "allow-origin", "host"],
+  boolean: ["allow-anonymous-loopback"],
   collect: ["allow-origin"],
   default: {
     port: "3210",
@@ -34,6 +35,8 @@ const args = parseArgs(Deno.args, {
     // Loopback by default: this process spawns a shell-capable agent, so it is
     // only exposed deliberately (--host 0.0.0.0 / a LAN address).
     host: "127.0.0.1",
+    // Off by default: auth is required everywhere unless the operator opts out.
+    "allow-anonymous-loopback": false,
   },
 });
 
@@ -46,7 +49,17 @@ const HOME = Deno.env.get("HOME") ?? "";
 /** Extra exact origins `--allow-origin` admitted (repeatable). */
 const ALLOWED_ORIGINS = (Array.isArray(args["allow-origin"]) ? args["allow-origin"] : []).filter(Boolean);
 
-const HOST = String(args.host || "127.0.0.1");
+const HOST = normalizeLoopbackHost(String(args.host || "127.0.0.1"));
+
+/**
+ * Explicit opt-out: `--allow-anonymous-loopback` makes the LOOPBACK WebSocket
+ * bridge tokenless ON PURPOSE (Paul, 2026-10-07). The default is unchanged —
+ * auth is still required on every upgrade unless this flag is set. It is
+ * LOOPBACK-ONLY: a non-loopback bind refuses to start (fail-closed checks in
+ * the CLI entry below and inside createAcpServer), never silently anonymous on
+ * a routable address. See docs/ACP-INTEGRATION-RESEARCH.md "Origin scope".
+ */
+const ALLOW_ANONYMOUS_LOOPBACK = Boolean(args["allow-anonymous-loopback"]);
 
 /** Is this bind address reachable from another machine? */
 export function isLoopbackHost(host: string): boolean {
@@ -56,6 +69,50 @@ export function isLoopbackHost(host: string): boolean {
   // (extension/lib/acp-client.js isLoopbackAcpEndpoint) octet-for-octet. It is
   // only used for the startup log lines now, not for any auth decision.
   return h === "::1" || h === "localhost" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
+}
+
+/** Canonicalize bracketed IPv6 loopback host `[::1]` to bare `::1` before validation and bind. */
+export function normalizeLoopbackHost(host: string): string {
+  if (typeof host !== "string") return "";
+  return host === "[::1]" ? "::1" : host;
+}
+
+/**
+ * Strict validator for the anonymous loopback opt-out: hostnames like "localhost"
+ * are REJECTED outright because they depend on resolver configuration and could
+ * resolve to a routable interface. Only genuine, parsed literal loopback IPs are
+ * permitted: 127.0.0.0/8 (strictly four decimal octets 0..255, with 127 as the
+ * first octet, no leading zeros in octets, no trailing/leading characters or whitespace)
+ * or IPv6 loopback (::1 / [::1] canonicalized).
+ */
+export function isValidatedLiteralLoopback(host: string): boolean {
+  if (typeof host !== "string") return false;
+  const h = normalizeLoopbackHost(host);
+  if (h === "::1") return true;
+  const parts = h.split(".");
+  if (parts.length !== 4) return false;
+  if (parts[0] !== "127") return false;
+  for (let i = 1; i < 4; i++) {
+    const p = parts[i];
+    if (!/^(?:0|[1-9]\d{0,2})$/.test(p)) return false;
+    const num = Number(p);
+    if (num < 0 || num > 255) return false;
+  }
+  return true;
+}
+
+// FAIL CLOSED at the CLI boundary: anonymous access is validated literal loopback-
+// only. Refuse to start when the operator asks for tokenless access but binds
+// beyond a validated literal loopback IP (or uses a hostname like "localhost" that
+// cannot guarantee fail-closed loopback binding). createAcpServer asserts the
+// same invariant for in-process callers (tests, the native host).
+if (import.meta.main && ALLOW_ANONYMOUS_LOOPBACK && !isValidatedLiteralLoopback(HOST)) {
+  console.error(
+    `[acp-bridge] refusing to start: --allow-anonymous-loopback requires a validated literal loopback IP (e.g. 127.0.0.1 or ::1), ` +
+      `but --host is "${HOST}". Hostnames like "localhost" and unvalidated addresses cannot guarantee fail-closed loopback binding — ` +
+      `bind to a literal loopback IP (127.0.0.1 / ::1) or remove --allow-anonymous-loopback.`,
+  );
+  Deno.exit(1);
 }
 
 /** The persisted shared secret's default location: a per-user config dir, mode
@@ -117,12 +174,19 @@ export function readOrCreateToken(path: string): string {
 }
 
 /** Shared-secret requirement (`--token`): the upgrade URL must carry `?token=…`.
- * jsjy: there is NO unauthenticated mode — `--token` overrides, and otherwise
- * the token is read from (or created in) the token file, INCLUDING on loopback. A
- * NETWORK bind always had one; loopback now has one too, because "loopback" is
- * not an authorization boundary between local processes. */
+ * jsjy: auth is required BY DEFAULT — `--token` overrides, and otherwise the
+ * token is read from (or created in) the token file, INCLUDING on loopback. A
+ * NETWORK bind always had one; loopback has one too, because "loopback" is not
+ * an authorization boundary between local processes. The ONE exception is the
+ * explicit `--allow-anonymous-loopback` opt-out (Paul, 2026-10-07): it is
+ * loopback-only, fail-closed on a non-loopback bind, and loudly logged. */
 const TOKEN_FILE = String(args["token-file"] ?? "").trim() || defaultTokenFile();
-const TOKEN = String(args.token ?? "") || readOrCreateToken(TOKEN_FILE);
+// Anonymous loopback opts out of the token ENTIRELY: nothing is generated or
+// read (so no confusing token file appears), and an explicit --token/--token-file
+// is ignored — the operator chose tokenless local access on purpose.
+const TOKEN = ALLOW_ANONYMOUS_LOOPBACK
+  ? ""
+  : (String(args.token ?? "") || readOrCreateToken(TOKEN_FILE));
 
 /**
  * May this request drive the harness? Both guards run, in this order:
@@ -131,13 +195,61 @@ const TOKEN = String(args.token ?? "") || readOrCreateToken(TOKEN_FILE);
  *     driving the harness. An ABSENT Origin is a local script client.
  *  2. jsjy's shared secret: EVERY upgrade must carry `?token=…`, loopback
  *     included, because a local process sends no Origin and would otherwise be
- *     admitted by guard 1. There is no unauthenticated path.
+ *     admitted by guard 1. The ONE deliberate exception is
+ *     `--allow-anonymous-loopback` (Paul, 2026-10-07): loopback-only, so any
+ *     LOCAL process may drive the harness without a token — never a web origin,
+ *     and never on a routable bind (which refuses to start).
  */
 function originAllowed(origin: string | null): boolean {
   if (!origin) return true; // local script client
   const normalized = origin.replace(/\/$/, "");
   if (ALLOWED_ORIGINS.some((p) => p.replace(/\/$/, "") === normalized)) return true;
   return /^(chrome|moz)-extension:\/\//.test(origin);
+}
+
+/** A structured connection refusal: the reason an ACP upgrade is refused, in the
+ * order the guards run. Shared by the live upgrade and the /acp/preflight
+ * diagnostic so both report the SAME cause (chrome-agent-platform-e25gk). */
+export type AcpConnectionRefusal =
+  | { reason: "origin-rejected"; detail: string }
+  | { reason: "token-missing"; detail: string }
+  | { reason: "token-invalid"; detail: string };
+
+/** The origin + shared-secret guards, shared by the upgrade and the /acp/preflight
+ * diagnostic. The harness guard runs inline BEFORE this (an unknown harness is
+ * refused there with 400, and `connectionHarness` must be known before the spawn).
+ * Returns null when the connection would be admitted past these guards.
+ *
+ * chrome-agent-platform-e25gk: a browser hides the HTTP status/body of a refused
+ * WebSocket upgrade (it fires only an opaque "error" then close 1006), so this is
+ * the single source of truth for the client-side error mapping — "auth required",
+ * "wrong token" and "origin rejected" must be told apart, not collapsed into
+ * "failed to connect". */
+export function acpConnectionRefusal(
+  req: Request,
+  url: URL,
+  tokenOverride: string,
+  allowAnonymousLoopback = false,
+): AcpConnectionRefusal | null {
+  const clientOrigin = req.headers.get("origin");
+  if (!originAllowed(clientOrigin)) {
+    return { reason: "origin-rejected", detail: "web origins are not allowed to drive the harness" };
+  }
+  // Anonymous loopback opt-out: the origin guard still runs (web origins stay
+  // refused), but the token guard is skipped entirely — the operator chose
+  // tokenless LOCAL access on purpose.
+  if (allowAnonymousLoopback) return null;
+  const encoder = new TextEncoder();
+  const presentedParam = url.searchParams.get("token");
+  const presented = encoder.encode(presentedParam ?? "");
+  const expected = encoder.encode(tokenOverride);
+  const accepted = presented.byteLength === expected.byteLength && timingSafeEqual(presented, expected);
+  if (!accepted) {
+    return (presentedParam === null || presentedParam === "")
+      ? { reason: "token-missing", detail: "authentication required: the bridge needs its shared token (paste it into the acp.token setting)" }
+      : { reason: "token-invalid", detail: "authentication failed: the token does not match the bridge's shared token" };
+  }
+  return null;
 }
 
 /** The ACP adapters CAP knows how to launch, from the official registry
@@ -642,19 +754,35 @@ export function createAcpServer(
   hostCwdDefault: string = args.cwd,
   /** jsjy: the shared secret this server requires. Defaults to the module-level
    * TOKEN (CLI --token or the persisted file); a test passes its own so it never
-   * reads or writes the operator's real token file. There is no "" value: an
-   * empty override would be an unauthenticated bridge. */
+   * reads or writes the operator's real token file. When `allowAnonymousLoopback`
+   * is true the token is not required at all (the explicit loopback-only opt-out,
+   * Paul 2026-10-07), and an empty override is then the INTENDED value — never an
+   * accidental unauthenticated bridge. */
   tokenOverride: string = TOKEN,
+  allowAnonymousLoopback: boolean = ALLOW_ANONYMOUS_LOOPBACK,
+  hostOverride: string = HOST,
 ) {
-  // jsjy review F4: the invariant is FAIL-CLOSED, so it is asserted rather than
-  // documented. An EMPTY override would make the guard accept an empty `?token=`
-  // (presented "" === expected ""), i.e. an unauthenticated bridge. Refuse to
-  // build one rather than trusting every future caller to pass a real secret.
-  if (typeof tokenOverride !== "string" || tokenOverride.trim() === "") {
-    throw new Error("createAcpServer requires a non-empty token: an empty secret would accept an empty ?token=");
+  const effectiveHost = normalizeLoopbackHost(String(hostOverride || HOST));
+  // FAIL CLOSED, both halves asserted rather than documented:
+  //  1. Anonymous access is validated literal loopback-ONLY. Asking for it while
+  //     bound beyond loopback or to a hostname like "localhost" must refuse to
+  //     build the server, not silently admit an unauthenticated harness on a
+  //     routable address.
+  if (allowAnonymousLoopback && !isValidatedLiteralLoopback(effectiveHost)) {
+    throw new Error(
+      `--allow-anonymous-loopback requires a validated literal loopback IP (e.g. 127.0.0.1 or ::1), but host is "${effectiveHost}": ` +
+        `hostnames like "localhost" and non-loopback addresses are rejected for anonymous access`,
+    );
+  }
+  //  2. Without the opt-out, an EMPTY override would make the guard accept an
+  //     empty `?token=` (presented "" === expected ""), i.e. an unauthenticated
+  //     bridge. Refuse to build one rather than trusting every future caller to
+  //     pass a real secret (jsjy review F4).
+  if (!allowAnonymousLoopback && (typeof tokenOverride !== "string" || tokenOverride.trim() === "")) {
+    throw new Error("createAcpServer requires a non-empty token: an empty secret would accept an empty ?token= (or set allowAnonymousLoopback deliberately)");
   }
   const toolEndpoints = new Map<string, Awaited<ReturnType<typeof createAcpTools>>>();
-  const server = Deno.serve({ port, hostname: HOST }, (req) => {
+  const server = Deno.serve({ port, hostname: effectiveHost }, (req) => {
     const url = new URL(req.url);
     if (url.pathname.startsWith("/cap-tools/")) {
       return toolEndpoints.get(url.pathname)?.handle(req) ?? new Response("CAP run unavailable", { status: 404 });
@@ -710,38 +838,37 @@ export function createAcpServer(
     }
     const connectionHarness = requestedHarness || HARNESS;
 
+    // /acp/preflight — the same origin + token guards as the upgrade, but as a
+    // plain HTTP probe (no upgrade header) whose JSON reason the extension can
+    // read. A browser hides the status/body of a refused WebSocket upgrade, so
+    // without this the client can only say "failed to connect", never WHY
+    // (chrome-agent-platform-e25gk). An unknown harness is already refused with
+    // 400 above, so this reports the two causes a browser cannot see.
+    if (url.pathname === "/acp/preflight") {
+      const refusal = acpConnectionRefusal(req, url, tokenOverride, allowAnonymousLoopback);
+      return new Response(
+        JSON.stringify(refusal ? { ok: false, ...refusal } : { ok: true }),
+        { status: refusal ? 403 : 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
     if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return new Response("ACP Bridge: Connect via WebSocket at /acp", { status: 426 });
     }
 
-    // Origin guard (iadt, KEPT not replaced): browsers ALWAYS send Origin on
-    // WebSocket upgrades. A web page (http/https) may not drive the local
-    // harness over loopback — that would let any site execute shell commands
-    // through the user's pi session. Extension pages and local scripts (no
-    // Origin header) are allowed; the shared secret below binds the connection
-    // to a client that knows it.
+    // Origin guard (iadt, KEPT not replaced) + the jsjy shared secret. Both are
+    // the SAME guards /acp/preflight runs, so the client's diagnostic and the
+    // actual refusal can never disagree. The comparison stays CONSTANT-TIME
+    // (jsjy review F2) and on byte lengths (delta-review polish) — see
+    // acpConnectionRefusal.
+    const refusal = acpConnectionRefusal(req, url, tokenOverride, allowAnonymousLoopback);
+    if (refusal) {
+      return new Response(`ACP Bridge: ${refusal.detail}`, { status: 403 });
+    }
+
+    // Captured SYNCHRONOUSLY: the request's headers are no longer readable from
+    // the async socket.onopen callback (the body is consumed by the upgrade).
     const clientOrigin = req.headers.get("origin");
-    if (!originAllowed(clientOrigin)) {
-      return new Response("ACP Bridge: web origins are not allowed to drive the harness", { status: 403 });
-    }
-    // jsjy: the shared secret is REQUIRED, always — including on loopback, where
-    // a local process sends no Origin and the guard above admits it by design.
-    // An unauthenticated upgrade is refused rather than served, and the comparison
-    // is CONSTANT-TIME (jsjy review F2) so a local attacker cannot recover the
-    // secret from response timing. The length check leaks only the length.
-    // Compare BYTE lengths, not string lengths (delta-review polish): a token of 32
-    // MULTI-BYTE characters has a string length of 32 but a larger byte length, and
-    // timingSafeEqual THROWS on unequal buffers — Deno.serve would turn that into a
-    // 500 rather than an auth decision. Encoding first keeps every mismatched input
-    // on the refusal path.
-    const encoder = new TextEncoder();
-    const presented = encoder.encode(url.searchParams.get("token") ?? "");
-    const expected = encoder.encode(tokenOverride);
-    const tokenAccepted = presented.byteLength === expected.byteLength &&
-      timingSafeEqual(presented, expected);
-    if (!tokenAccepted) {
-      return new Response("ACP Bridge: missing or wrong token", { status: 403 });
-    }
 
     const { socket, response } = Deno.upgradeWebSocket(req);
 
@@ -943,6 +1070,19 @@ export function createAcpServer(
 
 // If invoked directly from CLI
 if (import.meta.main) {
+  // LOUD, explicit warning whenever the opt-out is active: reading the log later
+  // must make it obvious that loopback is unauthenticated ON PURPOSE (and that a
+  // token, if one was also passed, is deliberately ignored).
+  if (ALLOW_ANONYMOUS_LOOPBACK) {
+    console.error("[acp-bridge] WARNING: ANONYMOUS LOOPBACK ACCESS ENABLED (--allow-anonymous-loopback)");
+    console.error("[acp-bridge] WARNING: the bridge is UNAUTHENTICATED on loopback — no token is required, and ANY");
+    console.error("[acp-bridge] WARNING: local process can connect and drive the harness (shell commands, file");
+    console.error("[acp-bridge] WARNING: writes, the approval surface). This was chosen on purpose and applies only");
+    console.error("[acp-bridge] WARNING: to literal loopback (127.0.0.1 / ::1) — a non-loopback or hostname bind refuses to start.");
+    if (args.token || args["token-file"]) {
+      console.error("[acp-bridge] WARNING: --token/--token-file was also given but is IGNORED under --allow-anonymous-loopback.");
+    }
+  }
   const server = createAcpServer(PORT);
   const bound = (server as any).addr?.port ?? PORT;
   if (isLoopbackHost(HOST)) {
@@ -952,9 +1092,14 @@ if (import.meta.main) {
     // per-start token, which is why the reviewer's recommendation is adopted. The
     // file is cited instead, and the plaintext is printed only in the
     // read-only-HOME fallback above, where no file could be written.
-    console.log(`[acp-bridge] listening on ws://127.0.0.1:${bound}/acp (token required)`);
-    console.log(`[acp-bridge] paste the endpoint into CAP: acp.endpoint, and the token from this file into acp.token:`);
-    console.log(`[acp-bridge]   ${TOKEN_FILE}   (mode 0600; --token overrides it for one run)`);
+    if (ALLOW_ANONYMOUS_LOOPBACK) {
+      console.log(`[acp-bridge] listening on ws://127.0.0.1:${bound}/acp (ANONYMOUS — no token required)`);
+      console.log(`[acp-bridge] paste the endpoint into CAP: acp.endpoint and leave acp.token empty`);
+    } else {
+      console.log(`[acp-bridge] listening on ws://127.0.0.1:${bound}/acp (token required)`);
+      console.log(`[acp-bridge] paste the endpoint into CAP: acp.endpoint, and the token from this file into acp.token:`);
+      console.log(`[acp-bridge]   ${TOKEN_FILE}   (mode 0600; --token overrides it for one run)`);
+    }
   } else {
     const addrs = Deno.networkInterfaces()
       .filter((i) => i.family === "IPv4" && !i.address.startsWith("127."))
