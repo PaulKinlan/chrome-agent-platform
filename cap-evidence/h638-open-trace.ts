@@ -310,6 +310,9 @@ async function measureOpen(label: string, rowExpr: string, expectedLiveId: strin
              status: document.getElementById("status")?.textContent ?? "" }; })()`);
   const after = await spans();
   const afterRaw = await spansRaw();
+  // A SW restart between the click and dump resets the trace timeline. The
+  // pre-click boot guard alone cannot distinguish that from an empty delta.
+  await runSnapshot();
   const rawSpans = spanDeltaRaw(beforeRaw, afterRaw);
   return {
     label,
@@ -396,6 +399,8 @@ const settledMeasure = settled
   ? await measureOpen("SETTLED task with history (control)", TASK_ROW)
   : { label: "SETTLED task with history (control)", error: "still running after 120 s" };
 if (settledMeasure.error) throw new Error(`REFUSING settled-open: ${settledMeasure.error}`);
+// A previously warmed settled-view cache can suppress this positive span;
+// refuse and remeasure rather than accepting an unproven control.
 requireSettledOpenTrace(settledMeasure, atClick.executionId);
 
 console.log("─".repeat(72));
