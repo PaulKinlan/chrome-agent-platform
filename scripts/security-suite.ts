@@ -38,6 +38,7 @@
 import { fileURLToPath } from "node:url";
 import { inspectExactProfile, verifyRunnerGuard } from "./security-suite-custody.mjs";
 import { launchChrome, openCdp, type CdpClient } from "./lib/chrome-launch.ts";
+import { reapLeaderAndSettle } from "./lib/reap-leader.ts";
 import { isEvalDiagnostic, wireValue } from "./lib/cdp-eval.ts";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 // The composer is addressed by host + stable hook, never by the retired fixed
@@ -594,8 +595,7 @@ async function main() {
     check("suite: ran to completion", false, String((e as Error)?.message ?? e));
   } finally {
     cdp.close();
-    try { chrome.proc.kill("SIGKILL"); } catch { /* already dead */ }
-    try { await chrome.proc.status; } catch { /* reaped */ }
+    await reapLeaderAndSettle(chrome.proc);
     await provider.close();
     await attacker.close();
     await docs.close();

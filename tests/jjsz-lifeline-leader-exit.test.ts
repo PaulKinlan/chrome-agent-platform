@@ -14,10 +14,16 @@
 //     (armed -> fired | disarmed) sit behind one guard.
 // F3. `attachProcessLifeline` validates `group` like `killProcessTree` does and fails closed.
 // F5. A watcher that cannot start says so, once, instead of silently running unprotected.
+// N1 (round 2). The leader-exit sweep is ASYNCHRONOUS: the watcher outlives the leader while it
+//     kills and verifies, so a script that exits straight after `await proc.status` can still
+//     race it. security-suite.ts, page-actions-journey.ts and keyless-first-result.ts therefore
+//     await `reapLeaderAndSettle` (scripts/lib/reap-leader.ts, pinned by
+//     tests/jjsz-lifeline-runner-exit.test.ts). The bare shape pinned below is what the other
+//     acceptance scripts still do (bead chrome-agent-platform-6efbv).
 //
 // The fake-watcher cases pin ORDER and IDEMPOTENCE deterministically (a real shell makes the
 // close-before-kill race unobservable); the real-process cases pin the behaviour end to end.
-import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects, assertStrictEquals, assertThrows } from "jsr:@std/assert@1";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import {
   attachProcessLifeline,
@@ -133,11 +139,13 @@ async function afterLeaderExit(proc: Deno.ChildProcess, ms = 8000): Promise<void
   await transitionSettled(proc, ms);
 }
 
-/** A watcher that records exactly what the lifeline does to it, in order. */
+/** A watcher that records exactly what the lifeline does to it, in order. `end()` is the TEST's own way to
+ *  finish a held watcher (`hangs: true`) the way a real one finishes (its kill logic completes and it exits):
+ *  it settles `status` and records no kill, so `calls` stays a record of what the lifeline did. */
 function fakeWatcher(
   calls: string[],
   opts: { exitCode?: number; hangs?: boolean; onKill?: () => void; onClose?: () => Promise<void> } = {},
-): LifelineWatcher {
+): LifelineWatcher & { end(): void } {
   let settle!: (status: { code: number; signal: string | null }) => void;
   const status = new Promise<{ code: number; signal: string | null }>((resolve) => {
     settle = resolve;
@@ -157,7 +165,32 @@ function fakeWatcher(
       opts.onKill?.();
       settle({ code: 137, signal: signo });
     },
+    end() {
+      settle({ code: opts.exitCode ?? 0, signal: null });
+    },
   };
+}
+
+type HeldWatcher = ReturnType<typeof fakeWatcher>;
+
+/**
+ * Run each cleanup step in its OWN try/catch and never throw (jjsz N8). Cleanup in a `finally` must never
+ * replace the assertion error that is already propagating, and one failing step must not skip the steps
+ * after it (a throwing `teardownChrome` used to skip the `removeSync` below it AND mask the assertion that
+ * failed). A swallowed failure is still REPORTED (stderr by default), so a leak does not go unseen: it is
+ * only barred from becoming the test's verdict. Never use it for the ASSERTING part of a test.
+ */
+async function cleanupSteps(
+  steps: Array<() => unknown>,
+  report: (line: string) => void = (line) => console.error(line),
+): Promise<void> {
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      report(`cleanup step failed (ignored so it cannot mask the test's own result): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 }
 
 const out = (code: number, stdout = "", stderr = "", signal: string | null = null): PsOutput => ({
@@ -240,8 +273,9 @@ Deno.test("lifeline: a leader-only SIGKILL with the parent ALIVE sweeps the whol
     const watcherPid = armed?.watcherPid;
     assert(typeof watcherPid === "number" && !pidGone(watcherPid), "a live watcher is attached");
 
-    // The shape of security-suite.ts and about ten other acceptance scripts: kill the
-    // leader, reap it, and never call teardownChrome.
+    // The shape of about ten other acceptance scripts (and, until jjsz round-2 N1, of
+    // security-suite.ts too — it now awaits reapLeaderAndSettle): kill the leader, reap it, and
+    // never call teardownChrome.
     proc.kill("SIGKILL");
     await proc.status;
 
@@ -265,8 +299,10 @@ Deno.test("lifeline: a leader-only SIGKILL with the parent ALIVE sweeps the whol
     if (launched) {
       try { Deno.kill(-launched.proc.pid, "SIGKILL"); } catch { /* gone */ }
     }
-    await teardownChrome(null, profile);
-    Deno.removeSync(root, { recursive: true });
+    await cleanupSteps([
+      () => teardownChrome(null, profile),
+      () => Deno.removeSync(root, { recursive: true }),
+    ]);
   }
 });
 
@@ -299,8 +335,10 @@ Deno.test("lifeline: launchChrome hands the sweep the PROFILE marker — a helpe
     if (launched) {
       try { Deno.kill(-launched.proc.pid, "SIGKILL"); } catch { /* gone */ }
     }
-    await teardownChrome(null, profile);
-    Deno.removeSync(root, { recursive: true });
+    await cleanupSteps([
+      () => teardownChrome(null, profile),
+      () => Deno.removeSync(root, { recursive: true }),
+    ]);
   }
 });
 
@@ -327,8 +365,10 @@ Deno.test("lifeline: a normal teardownChrome ends with an empty group, no error,
     if (launched) {
       try { Deno.kill(-launched.proc.pid, "SIGKILL"); } catch { /* gone */ }
     }
-    await teardownChrome(null, profile);
-    Deno.removeSync(root, { recursive: true });
+    await cleanupSteps([
+      () => teardownChrome(null, profile),
+      () => Deno.removeSync(root, { recursive: true }),
+    ]);
   }
 });
 
@@ -452,11 +492,14 @@ Deno.test("lifeline: a parent that dies in the middle of a FAILED teardown still
   // The child launches the fake browser, then runs a killProcessTree whose process table is
   // unreadable: it kills the leader and the profile-carrying helper, cannot verify the group,
   // and THROWS — the unmarked helper is still alive. It then waits to be killed.
+  // Before the teardown it WAITS for the leader and both helpers to be in the group (bounded by a deadline)
+  // instead of sleeping a fixed 400 ms: launchChrome returns on the browser's first line, before the helpers
+  // are forked, and a starved box can outrun any fixed sleep.
   Deno.writeTextFileSync(
     childScript,
     `
     import { launchChrome } from ${JSON.stringify(launchUrl)};
-    import { killProcessTree, lifelineState } from ${JSON.stringify(treeUrl)};
+    import { killProcessTree, lifelineState, liveGroupMembers } from ${JSON.stringify(treeUrl)};
     const SELF = Deno.pid;
     const launched = await launchChrome({
       binary: ${JSON.stringify(fake)},
@@ -465,7 +508,10 @@ Deno.test("lifeline: a parent that dies in the middle of a FAILED teardown still
       timeoutMs: 8000,
     });
     const group = launched.processGroup;
-    await new Promise((r) => setTimeout(r, 400));
+    try {
+      const helpersBy = Date.now() + 8000;
+      while (Date.now() < helpersBy && liveGroupMembers(group).length < 3) await new Promise((r) => setTimeout(r, 25));
+    } catch { /* an unreadable table here is not what this test is about; the parent asserts what it needs */ }
     const deps = {
       hasProc: false,
       ps: (args) => {
@@ -541,14 +587,18 @@ Deno.test("lifeline: a parent that dies in the middle of a FAILED teardown still
     // The watcher's sweep ends with `pkill -9 -f '<profile>( |$)'`, which also matches the argv of the
     // profile-pattern pkill/pgrep that teardownChrome(null, ...) runs next: wait for the watcher to finish
     // so the two never overlap (each would SIGKILL the other: "pkill exited 137").
-    if (watcherPid > 1) {
-      await until(() => {
-        const row = processGroup(watcherPid);
-        return row === null || row.state === "Z";
-      }, 8000);
-    }
-    await teardownChrome(null, profile);
-    Deno.removeSync(root, { recursive: true });
+    await cleanupSteps([
+      () => {
+        if (watcherPid > 1) {
+          return until(() => {
+            const row = processGroup(watcherPid);
+            return row === null || row.state === "Z";
+          }, 8000);
+        }
+      },
+      () => teardownChrome(null, profile),
+      () => Deno.removeSync(root, { recursive: true }),
+    ]);
   }
 });
 
@@ -661,14 +711,18 @@ Deno.test("lifeline: a leader exit that lands WHILE a disarm is still running do
   }
 });
 
-Deno.test("lifeline: a disarm that arrives while the sweep is still running waits for it and adds no kill of its own (jjsz F1c)", async () => {
+Deno.test("lifeline: a disarm that arrives while the sweep is still running WAITS for it and adds no kill of its own (jjsz F1c)", async () => {
   const proc = spawnLeader("/bin/sleep", ["300"]);
+  const held: { watcher?: HeldWatcher } = {};
   try {
     const calls: string[] = [];
     const disarm = attachProcessLifeline(proc, { group: proc.pid }, {
-      spawn: () => fakeWatcher(calls, { hangs: true }),
+      spawn: () => (held.watcher = fakeWatcher(calls, { hangs: true })),
       warn: () => {},
-      sweepTimeoutMs: 250,
+      // So large that the sweep's own overrun bound cannot fire while this test is looking: the ONLY thing that can
+      // settle the disarm early is the disarm itself ignoring the sweep it found in flight. The bound is the next
+      // test's subject, so no wall-clock race against it is left in this one.
+      sweepTimeoutMs: 60_000,
     });
     proc.kill("SIGKILL");
     await proc.status;
@@ -680,6 +734,35 @@ Deno.test("lifeline: a disarm that arrives while the sweep is still running wait
     await new Promise((r) => setTimeout(r, 60));
     assertEquals(resolved, false, "the disarm must wait for the sweep it found in flight (a teardown would otherwise leave a stray watcher)");
     assertEquals(calls, ["stdin.close"], "and must not kill the watcher out from under the sweep");
+
+    // END the sweep deterministically, the way a real one ends: its watcher finishes and exits. Nothing is
+    // recorded as a kill, so the calls below prove the disarm never killed the watcher at all.
+    held.watcher!.end();
+    assert(await settlesWithin(pending, 8000), "the disarm settles once the sweep it was waiting for has ended");
+    assertEquals(resolved, true, "and it resolved: it was waiting for that sweep, not stuck");
+    assertEquals(calls, ["stdin.close"], "the disarm added no kill of its own, neither while the sweep ran nor after it ended");
+    assertEquals(lifelineState(proc)?.state, "fired", "the disarm did not rewrite a spent lifeline");
+  } finally {
+    held.watcher?.end(); // an assertion that failed above must not leave the 60 s sweep bound armed
+    await reap(proc);
+  }
+});
+
+Deno.test("lifeline: a disarm that arrives while the sweep is still running settles once the sweep's own overrun bound has fired — a sweep with no bound would hang it (jjsz F1c)", async () => {
+  const proc = spawnLeader("/bin/sleep", ["300"]);
+  try {
+    const calls: string[] = [];
+    const disarm = attachProcessLifeline(proc, { group: proc.pid }, {
+      spawn: () => fakeWatcher(calls, { hangs: true }),
+      warn: () => {},
+      sweepTimeoutMs: 250,
+    });
+    proc.kill("SIGKILL");
+    await proc.status;
+    assert(await until(() => lifelineState(proc)?.state === "fired", 5000), "the exit fired the sweep");
+    // No negative wall-clock assertion here: on a starved box the bound may already have fired by the time the disarm
+    // is called, and both orders are legitimate. What must hold either way is that the disarm settles.
+    const pending = disarm();
     assert(
       await settlesWithin(pending, 8000),
       "the disarm settles once the sweep's own overrun bound (250 ms) has fired — a sweep with no bound would hang it",
@@ -693,15 +776,36 @@ Deno.test("lifeline: a disarm that arrives while the sweep is still running wait
 
 Deno.test("killProcessTree started while the leader-exit sweep is in flight WAITS for it — the sweep's pkill would SIGKILL the teardown's own pkill/pgrep (jjsz F1b)", async () => {
   const marker = `jjsz-f1-await-${crypto.randomUUID()}`;
+  const controlMarker = `jjsz-f1-await-control-${crypto.randomUUID()}`;
   // Carries the teardown's pattern in its argv: the teardown's pkill kills it the moment that pkill runs.
   const bystander = carrier(`--user-data-dir=${marker}`);
+  const controlCarrier = carrier(`--user-data-dir=${controlMarker}`);
   const proc = spawnLeader("/bin/sleep", ["300"]);
+  const controlProc = spawnLeader("/bin/sleep", ["300"]);
+  const held: { watcher?: HeldWatcher } = {};
+  let teardown: Promise<void> | undefined;
   try {
-    const held: { watcher?: LifelineWatcher } = {};
+    // CONTROL (anti-vacuity): with NO sweep in flight, the very same teardown kills an identical fresh carrier.
+    // How long that takes, on this box at this moment, is what the observation window below is measured against:
+    // a "still alive" observation shorter than the time the teardown needs to act proves nothing, because a mutant
+    // that skipped the wait would simply not have acted yet (a starved box makes that likely).
+    attachProcessLifeline(controlProc, { group: controlProc.pid }, { spawn: () => fakeWatcher([]), warn: () => {} });
+    assert(await untilCarriers(`user-data-dir=${controlMarker}`, 1), "the control carrier is running");
+    const controlStart = performance.now();
+    await killProcessTree(controlProc, `user-data-dir=${controlMarker}`);
+    const unblockedMs = performance.now() - controlStart;
+    assertEquals(
+      await exitsWithin(controlCarrier, 8000),
+      true,
+      "control: with no sweep in flight, the same teardown kills an identical carrier",
+    );
+    // At least 2 s, and at least ten times what the unblocked teardown needed just now.
+    const windowMs = Math.min(30_000, Math.max(2000, Math.ceil(unblockedMs * 10)));
+
     attachProcessLifeline(proc, { group: proc.pid }, {
       spawn: () => (held.watcher = fakeWatcher([], { hangs: true })),
       warn: () => {},
-      sweepTimeoutMs: 30_000,
+      sweepTimeoutMs: 120_000, // longer than any window above: only the test ends this sweep
     });
     assert(await untilCarriers(`user-data-dir=${marker}`, 1), "the bystander is running");
     proc.kill("SIGKILL");
@@ -709,19 +813,24 @@ Deno.test("killProcessTree started while the leader-exit sweep is in flight WAIT
     assert(await until(() => lifelineState(proc)?.state === "fired", 5000), "the leader's exit fired the sweep");
 
     // The caller proceeds to a teardown of the same browser while the sweep is still running.
-    const teardown = killProcessTree(proc, `user-data-dir=${marker}`);
+    teardown = killProcessTree(proc, `user-data-dir=${marker}`);
     assertEquals(
-      await exitsWithin(bystander, 300),
+      await exitsWithin(bystander, windowMs),
       false,
-      "the teardown must not run its pkill while the sweep is in flight (its pkill/pgrep would be killed by the sweep's, or kill the sweep's)",
+      "the teardown must not run its pkill while the sweep is in flight (its pkill/pgrep would be killed by the sweep's, or kill the sweep's); " +
+        `observed for ${windowMs} ms, and the same teardown needed ${Math.round(unblockedMs)} ms when nothing blocked it`,
     );
-    held.watcher!.kill("SIGKILL"); // the fake's kill() settles its status: the sweep ends
+    held.watcher!.end(); // the held sweep ends the way a real one does: its watcher finishes and exits
     assert(await settlesWithin(teardown, 8000), "the teardown proceeds once the sweep has settled");
     await teardown;
-    assertEquals(await exitsWithin(bystander, 5000), true, "and then it runs: the profile carrier is killed");
+    assertEquals(await exitsWithin(bystander, 8000), true, "and then it runs: the profile carrier is killed");
   } finally {
+    held.watcher?.end(); // an assertion that failed above must not leave the held sweep (and its bound timer) behind
+    await cleanupSteps([() => teardown]); // never let a teardown rejection replace the assertion that failed
     await reap(proc);
     await reap(bystander);
+    await reap(controlProc);
+    await reap(controlCarrier);
   }
 });
 
@@ -815,7 +924,7 @@ Deno.test("lifeline: a finished sweep leaves no timer behind — a script that k
     try { Deno.kill(-child.pid, "SIGKILL"); } catch { /* gone */ }
     try { child.kill("SIGKILL"); } catch { /* gone */ }
     await child.status.catch(() => {});
-    Deno.removeSync(root, { recursive: true });
+    await cleanupSteps([() => Deno.removeSync(root, { recursive: true })]);
   }
 });
 
@@ -930,4 +1039,49 @@ Deno.test("attachProcessLifeline: the default sink for the unprotected-browser l
   }
   assertEquals(lines.length, 1, JSON.stringify(lines));
   assert(lines[0].includes("NOT protected") && lines[0].includes("ENOENT"), lines[0]);
+});
+
+// ── jjsz N8: cleanup in a `finally` must never replace the real assertion error ─────────────────
+//
+// The helper is exercised with INJECTED failing steps (a real teardown failure cannot be produced on
+// demand). Drill: make the helper rethrow, or stop at the first failing step, and this test goes RED.
+
+Deno.test("jjsz N8: the cleanup helper never throws, runs every later step after a failing one, reports the failure, and cannot replace the error already propagating", async () => {
+  const ran: string[] = [];
+  const reported: string[] = [];
+  await cleanupSteps([
+    () => {
+      ran.push("synchronous step that throws");
+      throw new Error("injected synchronous failure");
+    },
+    async () => {
+      ran.push("asynchronous step that rejects");
+      await Promise.resolve();
+      throw new Error("injected asynchronous failure");
+    },
+    () => {
+      ran.push("step after the failures");
+    },
+  ], (line) => reported.push(line));
+  assertEquals(
+    ran,
+    ["synchronous step that throws", "asynchronous step that rejects", "step after the failures"],
+    "every step ran, in order, although the ones before it failed",
+  );
+  assertEquals(reported.length, 2, "each swallowed failure is reported once, never silent");
+  assert(reported[0].includes("injected synchronous failure"), reported[0]);
+  assert(reported[1].includes("injected asynchronous failure"), reported[1]);
+
+  // End to end through a `finally`, the shape of every site: the test's OWN error is what surfaces.
+  const own = new Error("the assertion that actually failed");
+  const surfaced = await assertRejects(async () => {
+    try {
+      throw own;
+    } finally {
+      await cleanupSteps([() => {
+        throw new Error("injected cleanup failure");
+      }], () => {});
+    }
+  });
+  assertStrictEquals(surfaced, own, "a failing cleanup must not replace the error that was already propagating");
 });

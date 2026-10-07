@@ -29,6 +29,7 @@
 
 import { fileURLToPath } from "node:url";
 import { launchChrome, resolveChromiumBinary } from "./lib/chrome-launch.ts";
+import { reapLeaderAndSettle } from "./lib/reap-leader.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 import { composerInput, composerSend } from "./lib/composer-target.ts";
@@ -166,8 +167,7 @@ try {
   const extId = String(sw.url).split("/")[2];
   await sleep(1200);
   ws.close();
-  launched.proc.kill("SIGTERM");
-  await launched.proc.status;
+  await reapLeaderAndSettle(launched.proc, "SIGTERM");
   launched = null;
   await sleep(700);
 

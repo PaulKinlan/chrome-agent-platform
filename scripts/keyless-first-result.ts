@@ -23,6 +23,7 @@
 
 import { fileURLToPath } from "node:url";
 import { launchChrome, resolveChromiumBinary } from "./lib/chrome-launch.ts";
+import { reapLeaderAndSettle } from "./lib/reap-leader.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { composerInput, composerSend } from "./lib/composer-target.ts";
 
@@ -169,8 +170,7 @@ try {
   check("phase 1: no provider is configured", !providerBefore?.providerConfig || providerBefore.providerConfig.provider === "demo", providerBefore);
   await sleep(1500);
   ws.close();
-  launched.proc.kill("SIGTERM");
-  await launched.proc.status;
+  await reapLeaderAndSettle(launched.proc, "SIGTERM");
   launched = null;
   await sleep(800);
 

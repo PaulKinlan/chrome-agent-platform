@@ -13,7 +13,7 @@
 // kill (incl. the timeout), stderr text or an unparsable listing THROWS, and a launch
 // FAILS CLOSED. Every case below drives the macOS branch through the injected
 // `ProcessTableDeps` seam, so it runs on Linux CI as well as on a Mac.
-import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects, assertStrictEquals, assertThrows } from "jsr:@std/assert@1";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import {
   boundedCommandSpec,
@@ -76,6 +76,25 @@ async function reap(proc: Deno.ChildProcess): Promise<void> {
   try { Deno.kill(-proc.pid, "SIGKILL"); } catch { /* gone */ }
   try { proc.kill("SIGKILL"); } catch { /* gone */ }
   await proc.status.catch(() => {});
+}
+
+/**
+ * Run each cleanup step in its OWN try/catch and never throw (jjsz N8). Cleanup in a `finally` must never
+ * replace the assertion error that is already propagating, and one failing step must not skip the steps
+ * after it. A swallowed failure is still REPORTED (stderr by default), so a leak does not go unseen: it is
+ * only barred from becoming the test's verdict. Never use it for the ASSERTING part of a test.
+ */
+async function cleanupSteps(
+  steps: Array<() => unknown>,
+  report: (line: string) => void = (line) => console.error(line),
+): Promise<void> {
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      report(`cleanup step failed (ignored so it cannot mask the test's own result): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 }
 
 // ── processGroup ────────────────────────────────────────────────────────────
@@ -174,21 +193,26 @@ Deno.test("the default ps runner, forced onto the fallback path, agrees with thi
 });
 
 Deno.test("boundedCommandSpec: a wedged probe is ended by the kernel at the bound; a finishing one is untouched", () => {
-  const wedged = boundedCommandSpec(1, "/bin/sleep", ["30"]);
+  const wedged = boundedCommandSpec(1, "/bin/sleep", ["3"]);
   const t0 = performance.now();
   const killed = new Deno.Command(wedged.command, { args: wedged.args, stdout: "null", stderr: "null", clearEnv: true })
     .outputSync();
   const ms = performance.now() - t0;
+  // The signal is the race-free proof that the KERNEL's alarm ended it: perl arms the alarm BEFORE the exec and a
+  // pending alarm survives it, so the alarm always fires before a sleep that has not started yet, whatever the
+  // scheduling. The 3 s sleep is the proof's ceiling: an alarm armed for 3 s or more would lose the race to the
+  // sleep and end it with exit 0, so this one assertion also holds the bound below 3 s with NO wall-clock
+  // threshold. The upper wall-clock bound below is only a hang guard sized for a starved box (15x the alarm).
   assertEquals(killed.signal, "SIGALRM", "the alarm, not the sleep, ended it");
-  assert(ms >= 800 && ms < 8000, `bounded at about one second, took ${Math.round(ms)} ms`);
+  assert(ms >= 800 && ms < 15_000, `bounded at about one second, took ${Math.round(ms)} ms`);
   // `alarm 0` means NO alarm: a sub-second bound must clamp to one second, never become unbounded.
-  const sub = boundedCommandSpec(0.2, "/bin/sleep", ["6"]);
+  const sub = boundedCommandSpec(0.2, "/bin/sleep", ["3"]);
   const t1 = performance.now();
   const subRun = new Deno.Command(sub.command, { args: sub.args, stdout: "null", stderr: "null", clearEnv: true })
     .outputSync();
   const subMs = performance.now() - t1;
   assertEquals(subRun.signal, "SIGALRM", "a sub-second bound is still a bound (it clamps to one second)");
-  assert(subMs >= 800 && subMs < 4500, `clamped to about one second, took ${Math.round(subMs)} ms`);
+  assert(subMs >= 800 && subMs < 15_000, `clamped to about one second, took ${Math.round(subMs)} ms`);
   const echo = boundedCommandSpec(5, "/bin/echo", ["hello world", "x"]);
   const fine = new Deno.Command(echo.command, { args: echo.args, stdout: "piped", stderr: "null", clearEnv: true })
     .outputSync();
@@ -202,10 +226,12 @@ Deno.test("boundedCommandSpec: a wedged probe is ended by the kernel at the boun
 
 Deno.test("runBoundedProbe: the REAL default runner is kernel-bounded, runs under a CLEARED environment, and reports both streams, the exit status and the signal (jjsz F2)", () => {
   const t0 = performance.now();
-  const wedged = runBoundedProbe("/bin/sleep", ["6"], 1);
+  const wedged = runBoundedProbe("/bin/sleep", ["3"], 1);
   const ms = performance.now() - t0;
   assertEquals(wedged.signal, "SIGALRM", "a wedged probe ends as SIGALRM at the bound — it can never hang a teardown");
-  assert(ms >= 800 && ms < 4500, `bounded at about one second, took ${Math.round(ms)} ms`);
+  // As above: the signal proves the kernel alarm ended a probe that was still sleeping (an alarm of 3 s or more would
+  // lose the race to the sleep); the wall-clock bound is only the hang guard.
+  assert(ms >= 800 && ms < 15_000, `bounded at about one second, took ${Math.round(ms)} ms`);
   // clearEnv: the probe inherits NOTHING (a C locale parses lstart the same everywhere; no PATH/LD_*
   // tricks reach a cleanup path). A planted variable is the witness; a perl shim that adds its own
   // variables on an older macOS cannot make this lie.
@@ -386,8 +412,55 @@ Deno.test("launchChrome: an unreadable process table fails the LAUNCH closed —
     assertEquals(holders, [], "the failed launch must release its lock");
   } finally {
     // Only reached with a live browser when the launch wrongly succeeded.
-    if (launched) await teardownChrome(launched);
-    await teardownChrome(null, profile);
-    Deno.removeSync(root, { recursive: true });
+    await cleanupSteps([
+      () => launched && teardownChrome(launched),
+      () => teardownChrome(null, profile),
+      () => Deno.removeSync(root, { recursive: true }),
+    ]);
   }
+});
+
+// ── jjsz N8: cleanup in a `finally` must never replace the real assertion error ─────────────────
+//
+// The helper is exercised with INJECTED failing steps (a real teardown failure cannot be produced on
+// demand). Drill: make the helper rethrow, or stop at the first failing step, and this test goes RED.
+
+Deno.test("jjsz N8: the cleanup helper never throws, runs every later step after a failing one, reports the failure, and cannot replace the error already propagating", async () => {
+  const ran: string[] = [];
+  const reported: string[] = [];
+  await cleanupSteps([
+    () => {
+      ran.push("synchronous step that throws");
+      throw new Error("injected synchronous failure");
+    },
+    async () => {
+      ran.push("asynchronous step that rejects");
+      await Promise.resolve();
+      throw new Error("injected asynchronous failure");
+    },
+    () => {
+      ran.push("step after the failures");
+    },
+  ], (line) => reported.push(line));
+  assertEquals(
+    ran,
+    ["synchronous step that throws", "asynchronous step that rejects", "step after the failures"],
+    "every step ran, in order, although the ones before it failed",
+  );
+  assertEquals(reported.length, 2, "each swallowed failure is reported once, never silent");
+  assert(reported[0].includes("injected synchronous failure"), reported[0]);
+  assert(reported[1].includes("injected asynchronous failure"), reported[1]);
+
+  // End to end through a `finally`, the shape of every site: the test's OWN error is what surfaces.
+  const own = new Error("the assertion that actually failed");
+  const surfaced = await assertRejects(async () => {
+    try {
+      throw own;
+    } finally {
+      await cleanupSteps([() => {
+        throw new Error("injected cleanup failure");
+      }], () => {});
+    }
+  });
+  assertStrictEquals(surfaced, own, "a failing cleanup must not replace the error that was already propagating");
 });

@@ -21,7 +21,7 @@
 // regression that stops controlling the environment changes the answer). The two REAL-ps tests at the
 // end are the integration check against the box's own ps; they are `ignore`d (visibly) where that ps
 // cannot answer `-o state=,lstart=`.
-import { assert, assertEquals, assertMatch, assertRejects } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertMatch, assertRejects, assertStrictEquals } from "jsr:@std/assert@1";
 import { spawnSync } from "node:child_process";
 import {
   acquireBuildLock,
@@ -132,6 +132,25 @@ function lockToken(root: string): string | null {
   }
 }
 const removeRoot = (root: string) => Deno.remove(root, { recursive: true }).catch(() => {});
+
+/**
+ * Run each cleanup step in its OWN try/catch and never throw (jjsz N8). Cleanup in a `finally` must never
+ * replace the assertion error that is already propagating, and one failing step must not skip the steps
+ * after it. A swallowed failure is still REPORTED (stderr by default), so a leak does not go unseen: it is
+ * only barred from becoming the test's verdict. Never use it for the ASSERTING part of a test.
+ */
+async function cleanupSteps(
+  steps: Array<() => unknown>,
+  report: (line: string) => void = (line) => console.error(line),
+): Promise<void> {
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      report(`cleanup step failed (ignored so it cannot mask the test's own result): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
 
 /** A contender's own identity: its content is irrelevant to the steal decision. */
 const contenderIdentity = () =>
@@ -796,8 +815,7 @@ Deno.test({
         "the library's start must equal ps's own lstart under LC_ALL=C TZ=UTC",
       );
     } finally {
-      sleeper.kill();
-      await sleeper.status.catch(() => {});
+      await cleanupSteps([() => sleeper.kill(), () => sleeper.status]);
     }
   },
 });
@@ -822,4 +840,51 @@ Deno.test({
         "(if this reds, the classification is too strict: dead locks would never be stolen)",
     );
   },
+});
+
+// ---------------------------------------------------------------------------------------------
+// jjsz N8: cleanup in a `finally` must never replace the real assertion error.
+//
+// The helper is exercised with INJECTED failing steps (a real teardown failure cannot be produced on
+// demand). Drill: make the helper rethrow, or stop at the first failing step, and this test goes RED.
+// ---------------------------------------------------------------------------------------------
+
+Deno.test("jjsz N8: the cleanup helper never throws, runs every later step after a failing one, reports the failure, and cannot replace the error already propagating", async () => {
+  const ran: string[] = [];
+  const reported: string[] = [];
+  await cleanupSteps([
+    () => {
+      ran.push("synchronous step that throws");
+      throw new Error("injected synchronous failure");
+    },
+    async () => {
+      ran.push("asynchronous step that rejects");
+      await Promise.resolve();
+      throw new Error("injected asynchronous failure");
+    },
+    () => {
+      ran.push("step after the failures");
+    },
+  ], (line) => reported.push(line));
+  assertEquals(
+    ran,
+    ["synchronous step that throws", "asynchronous step that rejects", "step after the failures"],
+    "every step ran, in order, although the ones before it failed",
+  );
+  assertEquals(reported.length, 2, "each swallowed failure is reported once, never silent");
+  assert(reported[0].includes("injected synchronous failure"), reported[0]);
+  assert(reported[1].includes("injected asynchronous failure"), reported[1]);
+
+  // End to end through a `finally`, the shape of every site: the test's OWN error is what surfaces.
+  const own = new Error("the assertion that actually failed");
+  const surfaced = await assertRejects(async () => {
+    try {
+      throw own;
+    } finally {
+      await cleanupSteps([() => {
+        throw new Error("injected cleanup failure");
+      }], () => {});
+    }
+  });
+  assertStrictEquals(surfaced, own, "a failing cleanup must not replace the error that was already propagating");
 });

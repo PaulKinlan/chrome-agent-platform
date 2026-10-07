@@ -19,7 +19,7 @@
 // is prefixed by a unique scratch directory name: even with the fix reverted, nothing but
 // this file's own throwaway processes can match. The `|` / `(` / `[` cases use only the
 // non-destructive pure builder and `pgrep`.
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects, assertStrictEquals } from "jsr:@std/assert@1";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import {
   attachProcessLifeline,
@@ -124,6 +124,33 @@ async function afterLeaderExit(proc: Deno.ChildProcess, ms = 8000): Promise<void
 function scratch(topic: string): string {
   return Deno.makeTempDirSync({ dir: durableDir("scratch"), prefix: `jjsz-f4-${topic}-` });
 }
+
+/**
+ * Run each cleanup step in its OWN try/catch and never throw (jjsz N8). Cleanup in a `finally` must never
+ * replace the assertion error that is already propagating, and one failing step must not skip the steps
+ * after it. A swallowed failure is still REPORTED (stderr by default), so a leak does not go unseen: it is
+ * only barred from becoming the test's verdict. Never use it for the ASSERTING part of a test.
+ */
+async function cleanupSteps(
+  steps: Array<() => unknown>,
+  report: (line: string) => void = (line) => console.error(line),
+): Promise<void> {
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      report(`cleanup step failed (ignored so it cannot mask the test's own result): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
+
+/**
+ * How long a sibling that must SURVIVE the lifeline's pkill is watched. It is only ever read AFTER the sweep
+ * has settled and the targeted carrier's exit has been observed, so a wrongly-targeted sibling dies in the
+ * same pkill pass and is seen within a few milliseconds; the window is the slack for a starved box, and it
+ * is one concurrent window per test, so it costs one second, not one per sibling.
+ */
+const SURVIVAL_WINDOW_MS = 1000;
 
 function fakeWatcher(): LifelineWatcher {
   let settle!: (status: { code: number; signal: string | null }) => void;
@@ -248,11 +275,15 @@ Deno.test("lifeline: firing for .../p1 kills ONLY p1 — not p10, not p1-extra (
     leader.kill("SIGKILL");
     await afterLeaderExit(leader); // the real watcher (and its pkill) has finished
     assertEquals(await exitsWithin(p1, 5000), true, "p1 is the lifeline's target: it is killed");
-    assertEquals(await exitsWithin(p10, 300), false, "p10 only shares a prefix: it must survive");
-    assertEquals(await exitsWithin(extra, 300), false, "p1-extra only shares a prefix: it must survive");
+    const [p10Exited, extraExited] = await Promise.all([
+      exitsWithin(p10, SURVIVAL_WINDOW_MS),
+      exitsWithin(extra, SURVIVAL_WINDOW_MS),
+    ]);
+    assertEquals(p10Exited, false, "p10 only shares a prefix: it must survive");
+    assertEquals(extraExited, false, "p1-extra only shares a prefix: it must survive");
   } finally {
     for (const proc of [p1, p10, extra, leader]) await reap(proc);
-    Deno.removeSync(root, { recursive: true });
+    await cleanupSteps([() => Deno.removeSync(root, { recursive: true })]);
   }
 });
 
@@ -269,11 +300,15 @@ Deno.test("lifeline: a '.' and '+' in the profile path match literally — the l
     leader.kill("SIGKILL");
     await afterLeaderExit(leader);
     assertEquals(await exitsWithin(target, 5000), true, "the literal path is the target: killed");
-    assertEquals(await exitsWithin(lookalike, 300), false, "the regex lookalike must survive");
-    assertEquals(await exitsWithin(longer, 300), false, "a longer path with the same prefix must survive");
+    const [lookalikeExited, longerExited] = await Promise.all([
+      exitsWithin(lookalike, SURVIVAL_WINDOW_MS),
+      exitsWithin(longer, SURVIVAL_WINDOW_MS),
+    ]);
+    assertEquals(lookalikeExited, false, "the regex lookalike must survive");
+    assertEquals(longerExited, false, "a longer path with the same prefix must survive");
   } finally {
     for (const proc of [target, lookalike, longer, leader]) await reap(proc);
-    Deno.removeSync(root, { recursive: true });
+    await cleanupSteps([() => Deno.removeSync(root, { recursive: true })]);
   }
 });
 
@@ -328,7 +363,7 @@ Deno.test("lifeline: a parent KILLED outright fires the watcher for p1 and still
     await child.status;
 
     assertEquals(await exitsWithin(p1, 8000), true, "p1 is the lifeline's target: the crash-time watcher kills it");
-    assertEquals(await exitsWithin(p10, 300), false, "p10 only shares a prefix: it must survive");
+    assertEquals(await exitsWithin(p10, SURVIVAL_WINDOW_MS), false, "p10 only shares a prefix: it must survive");
     assert(await until(() => processGroup(leaderPid) === null, 5000), "and the leader's group was reaped too");
   } finally {
     // An assertion that fired before READY was parsed must not strand the leader the child announced.
@@ -341,7 +376,7 @@ Deno.test("lifeline: a parent KILLED outright fires the watcher for p1 and still
     await child.status.catch(() => {});
     await reap(p1);
     await reap(p10);
-    Deno.removeSync(root, { recursive: true });
+    await cleanupSteps([() => Deno.removeSync(root, { recursive: true })]);
   }
 });
 
@@ -370,4 +405,49 @@ Deno.test("lifeline: a pattern pkill rejects (exit 2) is reported once and the g
   } finally {
     await reap(leader);
   }
+});
+
+// ── jjsz N8: cleanup in a `finally` must never replace the real assertion error ─────────────────
+//
+// The helper is exercised with INJECTED failing steps (a real teardown failure cannot be produced on
+// demand). Drill: make the helper rethrow, or stop at the first failing step, and this test goes RED.
+
+Deno.test("jjsz N8: the cleanup helper never throws, runs every later step after a failing one, reports the failure, and cannot replace the error already propagating", async () => {
+  const ran: string[] = [];
+  const reported: string[] = [];
+  await cleanupSteps([
+    () => {
+      ran.push("synchronous step that throws");
+      throw new Error("injected synchronous failure");
+    },
+    async () => {
+      ran.push("asynchronous step that rejects");
+      await Promise.resolve();
+      throw new Error("injected asynchronous failure");
+    },
+    () => {
+      ran.push("step after the failures");
+    },
+  ], (line) => reported.push(line));
+  assertEquals(
+    ran,
+    ["synchronous step that throws", "asynchronous step that rejects", "step after the failures"],
+    "every step ran, in order, although the ones before it failed",
+  );
+  assertEquals(reported.length, 2, "each swallowed failure is reported once, never silent");
+  assert(reported[0].includes("injected synchronous failure"), reported[0]);
+  assert(reported[1].includes("injected asynchronous failure"), reported[1]);
+
+  // End to end through a `finally`, the shape of every site: the test's OWN error is what surfaces.
+  const own = new Error("the assertion that actually failed");
+  const surfaced = await assertRejects(async () => {
+    try {
+      throw own;
+    } finally {
+      await cleanupSteps([() => {
+        throw new Error("injected cleanup failure");
+      }], () => {});
+    }
+  });
+  assertStrictEquals(surfaced, own, "a failing cleanup must not replace the error that was already propagating");
 });

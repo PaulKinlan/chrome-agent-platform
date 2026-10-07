@@ -192,7 +192,12 @@ Deno.test("11rm.1: multi-file TAR with empty, binary, Unicode and long paths int
       stderr: "piped",
     }).outputSync();
     assertEquals(listProc.code, 0, `tar -tvf failed: ${new TextDecoder().decode(listProc.stderr)}`);
-    const listOut = (new TextDecoder().decode(listProc.stdout) + new TextDecoder().decode(listProc.stderr)).normalize("NFC");
+    // stdout ONLY: stderr text must never be able to satisfy the `includes` checks below.
+    // macOS bsdtar lists this archive's Unicode name DECOMPOSED (measured on macOS arm64: the name arrives
+    // as code points f8,308,1f525 rather than f8,eb,1f525), so the listing is composed back to NFC there.
+    // On every other platform the listing is used as printed and the check stays byte-exact.
+    const rawList = new TextDecoder().decode(listProc.stdout);
+    const listOut = Deno.build.os === "darwin" ? rawList.normalize("NFC") : rawList;
     assert(listOut.includes("empty.txt"));
     assert(listOut.includes("small.txt"));
     assert(listOut.includes("binary.dat"));

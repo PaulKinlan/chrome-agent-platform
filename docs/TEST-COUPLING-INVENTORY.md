@@ -469,6 +469,42 @@ the literal.
   unparsed dynamic imports, and source-root aliases the classifier cannot
   recognize also remain outside its proof.
 
+## 22. The build-concurrency, build-once and reap-the-leader watchers (chrome-agent-platform-jjsz)
+
+- **Watches:** these tests read or execute a file other than their own, so editing the
+  subject can redden them with a message that names the rule, not your edit.
+  `tests/build-parallel-discipline.test.ts` reads `build.mjs` and `scripts/package-archive.mjs`
+  as TEXT (an acorn AST, never imported or run): every staging fan-out goes through
+  `settleAll` and is awaited (never `Promise.all` / `race` / `any` / `allSettled`, no
+  `globalThis` or `Reflect` indirection), every `package-archive.mjs` function that calls a
+  write primitive is held to the same rule, the one `writeBuildOnceRecord` call sits after the
+  last top-level `try` with its exact arguments and nothing fatal after it, and the GC grace
+  goes through `resolveGcGraceMs`. It has a reasoned entry in `scripts/test-partition.mjs`.
+  `tests/build-once-record.test.ts` EXECUTES `scripts/lib/build-once-record.mjs` (the one
+  writer of `serial-build-once/<key>.json`) against real files and judges it with an oracle
+  that deliberately does not import the gate; its "fixture tie" tests compare the written
+  directory, file name and property list with the reader in `tests/fixtures/build-once.mjs`
+  (what `build-smoke` and `store-doc-denial` trust). `tests/build-concurrency.test.ts` pins
+  `settleAll` and `resolveGcGraceMs` (`scripts/lib/build-concurrency.mjs`),
+  `tests/scrub-zod-doc.test.ts` pins the fast path in `scripts/lib/scrub-zod-doc.mjs`, and
+  `tests/jjsz-lifeline-runner-exit.test.ts` reads `scripts/security-suite.ts`,
+  `scripts/page-actions-journey.ts` and `scripts/keyless-first-result.ts` as text to pin each
+  `reapLeaderAndSettle` call site.
+- **Owed by a re-anchor:** editing a fan-out, the record call, the GC grace or a leader kill in
+  one of those files owes `npm run test:file -- tests/<each file named above>.test.ts` before
+  you believe the change is local. Changing the record's shape in `tests/fixtures/build-once.mjs`
+  owes the same shape in `scripts/lib/build-once-record.mjs`; changing what the discipline test
+  reads owes its `scripts/test-partition.mjs` reason.
+- **Subject moves:** LOUD, verified by mutation: reverting or weakening each pinned rule turned a
+  named test red across 258 worker mutants and 63 coordinator mutants of the build pins (the
+  one survivor was an equivalent mutant: `exitCode == 0` behind a `typeof exitCode === "number"`
+  guard), and the reap call-site pins were drilled the same way.
+- **Known limits, stated in the test headers (not claimed closed):** a write through a primitive
+  outside the 20 names the discipline test lists; an imported helper that fans out with
+  `Promise.all` internally; a fatal raised from an exit handler after the record call; and a
+  new script that bare-kills a launched leader and then exits or relaunches: the reap pins are
+  per-site, not a rule (`chrome-agent-platform-6efbv`).
+
 ---
 
 ## The four book rules

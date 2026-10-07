@@ -42,6 +42,7 @@ import {
   DEFAULT_BUILT_VERSION_PATH,
 } from "./scripts/changelog-delta.mjs";
 import { resolveGcGraceMs, settleAll } from "./scripts/lib/build-concurrency.mjs";
+import { writeBuildOnceRecord } from "./scripts/lib/build-once-record.mjs";
 
 function parseBuildTarget(args) {
   if (!Array.isArray(args) || args.length > 1) {
@@ -304,8 +305,8 @@ let currentChangelog = null;
 // completed; the version record runs AFTER every fatal finalizer (see
 // shouldRecordBuild) so a late death never records a success.
 let buildSucceeded = false;
-// The serial-build-once record for a STORE build ({ key, stdout }), captured at publish and written
-// only after the last fatal finalizer (see the block after the outer `finally`).
+// The build-once record for a STORE build ({ key, stdout }), captured at publish and written only
+// after the last fatal finalizer (see the writeBuildOnceRecord call after the outer `finally`).
 let storeBuildRecord = null;
 
 try {
@@ -960,7 +961,7 @@ try {
     console.log(publishSummary);
     if (isStoreBuild) {
       // Captured here (the marker and summary are known now) but WRITTEN only after the last fatal
-      // finalizer below the outer `finally`, behind shouldRecordBuild.
+      // finalizer below the outer `finally`, by writeBuildOnceRecord (which applies shouldRecordBuild).
       storeBuildRecord = {
         key: `${writtenMarker.commit}-${writtenMarker.source.digest}`,
         stdout: `${publishSummary}\n`,
@@ -1013,24 +1014,18 @@ try {
 
 // The build-once record (tests/fixtures/build-once.mjs reads it so a later serial file reuses THIS
 // build's output instead of paying for another). It says "this build exited 0", so it is written
-// HERE — after the gallery sync, the staging cleanup and the lock release — and only through the
-// same strict gate as the version record below. Written any earlier it outlives a late failure (a
-// FATAL staging cleanup, a lock that will not release, a gallery sync that throws) and lets
-// build-smoke pass on a build that exited non-zero (chrome-agent-platform-jjsz review). A failed
-// build is never recorded.
-if (storeBuildRecord !== null && shouldRecordBuild({ buildSucceeded, exitCode: process.exitCode ?? 0 })) {
-  try {
-    const { durableRoot } = await import("./scripts/lib/durable-root.mjs");
-    const recDir = path.join(durableRoot(), "serial-build-once");
-    await mkdir(recDir, { recursive: true });
-    await writeFile(
-      path.join(recDir, `${storeBuildRecord.key}.json`),
-      JSON.stringify({ code: 0, stdout: storeBuildRecord.stdout, at: new Date().toISOString() }),
-    );
-  } catch {
-    /* non-fatal cache population for storeBuildOnce */
-  }
-}
+// HERE — after the gallery sync, the staging cleanup and the lock release. Written any earlier it
+// outlives a late failure (a FATAL staging cleanup, a lock that will not release, a gallery sync
+// that throws) and lets build-smoke pass on a build that exited non-zero (chrome-agent-platform-jjsz
+// review). The strict shouldRecordBuild gate lives INSIDE writeBuildOnceRecord
+// (scripts/lib/build-once-record.mjs), which refuses — touching nothing on disk — unless this
+// build succeeded AND exited 0, so a failed build is never recorded and this call site cannot
+// weaken the gate. A record that cannot be written is non-fatal cache population: the helper
+// returns { written: false, reason } and never throws. This is the ONLY writer of the record; it
+// sits between the outer try/finally and the warn-only changelog block, so nothing fatal can follow
+// it (tests/build-parallel-discipline.test.ts, rule B, pins the call site; its behaviour is executed
+// by tests/build-once-record.test.ts).
+await writeBuildOnceRecord({ record: storeBuildRecord, buildSucceeded, exitCode: process.exitCode ?? 0 });
 
 // Owner-requested build output: print the changelog delta since the last
 // SUCCESSFUL build, then record THIS version for the next build. This runs

@@ -54,19 +54,30 @@ export const MAX_GC_GRACE_MS = 60_000;
  * mid-open finish (the pointer swap itself is atomic); it used to be a fixed 2000 ms on every
  * build, about half of a warm `build:production`. The default is now 50 ms.
  *
- *   unset / empty / whitespace            -> 50   (default)
- *   negative, NaN, non-numeric, +-Infinity -> 50   (a bad value is never read as "no grace")
- *   0                                     -> 0    (explicit: no grace at all)
- *   2000                                  -> 2000 (the previous behaviour)
- *   anything above 60000                  -> 60000
+ * Only a plain run of decimal digits (after trimming surrounding whitespace) is a number. Every
+ * other spelling that `Number()` would have accepted is a bad value, not a clever one: `-0` read
+ * as NO grace although this table promises a bad value never is, and `0x10` / `0b101` / `1e3` /
+ * `12.5` silently meant 16 / 5 / 1000 / 12.5.
+ *
+ *   unset / empty / whitespace                      -> 50    (default)
+ *   anything but plain decimal digits               -> 50    (a bad value is never read as "no grace"):
+ *       negative or signed (-1, -0, +5), fractional (12.5, .5), exponent (1e3),
+ *       hex / octal / binary (0x10, 0o7, 0b101), words (abc, NaN, Infinity),
+ *       units or separators (12px, 1,5, 1_000), non-ASCII digits
+ *   0 (any number of zeros)                         -> 0     (explicit: no grace at all)
+ *   2000                                            -> 2000  (the previous behaviour)
+ *   7, 007, 010                                     -> 7, 7, 10 (leading zeros are decimal, never octal)
+ *   anything above 60000                            -> 60000
+ *   so many digits they overflow to Infinity (309+) -> 50    (unusable, not a clamp)
  *
  * @param {Record<string, string | undefined> | undefined} env
  * @returns {number}
  */
 export function resolveGcGraceMs(env) {
   const raw = (env?.CAP_BUILD_GC_GRACE_MS ?? "").trim();
-  const parsed = raw === "" ? NaN : Number(raw);
-  return Number.isFinite(parsed) && parsed >= 0
+  if (!/^\d+$/.test(raw)) return DEFAULT_GC_GRACE_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed)
     ? Math.min(parsed, MAX_GC_GRACE_MS)
     : DEFAULT_GC_GRACE_MS;
 }

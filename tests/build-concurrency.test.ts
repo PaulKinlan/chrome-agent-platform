@@ -138,12 +138,93 @@ Deno.test("resolveGcGraceMs: an explicit value is honoured — 0 means no grace,
   assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "0" }), 0, "explicit 0 disables the grace");
   assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "2000" }), 2000);
   assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: " 250 " }), 250, "surrounding whitespace is ignored");
-  assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "1e3" }), 1000);
+  // N9 (round-2 review) INVERTED this row on purpose: "1e3" used to be read as 1000 because the
+  // parser was Number(raw). Only plain decimal digits are a number now, so exponent notation is a
+  // bad value and falls back to the default; spell 1000 as "1000".
+  assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "1e3" }), DEFAULT_GC_GRACE_MS);
+  assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "1000" }), 1000);
 });
 
 Deno.test("resolveGcGraceMs: an explicit grace is capped so a typo cannot stall every build", () => {
   assertEquals(MAX_GC_GRACE_MS, 60_000);
   assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "60000" }), 60_000);
   assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "60001" }), 60_000);
-  assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "1e9" }), 60_000);
+  // N9: was "1e9"; exponent notation is a bad value now (see the not-canonical table below), so the
+  // same magnitude is spelled in plain digits to keep the cap itself covered.
+  assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "1000000000" }), 60_000);
+});
+
+// ── N9 (round-2 review): only a plain run of decimal digits is a number ──────────────────────────
+//
+// The parser used to be `Number(raw)`, which also reads `-0` (as -0: NO grace, although the doc table
+// promises a bad value is never read as no grace), `0x10` (16), `0b101` (5), `0o7` (7), `1e3` (1000),
+// `12.5` and `+5`. After trim(), ONLY /^\d+$/ is a number now; everything else falls back to the
+// default. One test PER ROW so the failing row names itself: each row below whose behaviour differs
+// from the old `Number(raw)` parse is RED against it (mutation drill M1 in the N9 report).
+const NOT_A_PLAIN_DECIMAL: Array<[input: string, why: string]> = [
+  ["-0", "negative zero used to come back as -0, i.e. no grace"],
+  ["+5", "a sign is not a digit; Number() read it as 5"],
+  ["0x10", "hex; Number() read it as 16"],
+  ["0b101", "binary; Number() read it as 5"],
+  ["0o7", "octal; Number() read it as 7"],
+  ["1e3", "exponent; Number() read it as 1000"],
+  ["1e9", "exponent; Number() read it as 1e9 (then capped to 60000)"],
+  ["12.5", "fractional milliseconds; Number() read it as 12.5"],
+  [".5", "leading-dot fraction; Number() read it as 0.5"],
+  ["1.", "trailing dot; Number() read it as 1"],
+  ["Infinity", "not finite"],
+  ["-Infinity", "not finite"],
+  ["NaN", "not a number"],
+  ["1_000", "numeric separators are source syntax, not a value"],
+  ["12 5", "internal whitespace"],
+  ["5\n5", "internal newline: `$` is end-of-input in JS, never before a trailing newline"],
+  ["٥", "a non-ASCII digit is not a digit here (\\d is [0-9])"],
+  ["５", "a fullwidth digit is not a digit here"],
+];
+for (const [input, why] of NOT_A_PLAIN_DECIMAL) {
+  Deno.test(`resolveGcGraceMs N9: ${JSON.stringify(input)} is not a plain decimal integer -> default, never a number (${why})`, () => {
+    const got = resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: input });
+    assertEquals(got, DEFAULT_GC_GRACE_MS, `${JSON.stringify(input)} must fall back to the default`);
+    assert(!Object.is(got, -0), "a bad value must never come back as negative zero");
+  });
+}
+
+Deno.test("resolveGcGraceMs N9: plain decimal digits are honoured exactly; zero is +0; leading zeros are decimal, never octal", () => {
+  const rows: Array<[input: string, expected: number]> = [
+    ["0", 0],
+    ["00", 0],
+    ["7", 7],
+    ["007", 7],
+    ["010", 10], // a legacy-octal reading would be 8
+    ["50", 50],
+    ["250", 250],
+    ["2000", 2000],
+    ["60000", 60_000],
+  ];
+  for (const [input, expected] of rows) {
+    const got = resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: input });
+    assertEquals(got, expected, `${JSON.stringify(input)} -> ${expected}`);
+    assert(Object.is(got, expected), `${JSON.stringify(input)} must be exactly ${expected} (not -0)`);
+  }
+  // surrounding whitespace of every kind is trimmed first (unchanged behaviour)
+  for (const padded of [" 250 ", "\t250\n", "\u00a0250\u00a0"]) {
+    assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: padded }), 250, `${JSON.stringify(padded)} trims to 250`);
+  }
+});
+
+Deno.test("resolveGcGraceMs N9: digits above the cap are capped, but digit strings that overflow to Infinity are a bad value (default), not a clamp", () => {
+  assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "60001" }), MAX_GC_GRACE_MS);
+  assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "9".repeat(20) }), MAX_GC_GRACE_MS, "1e20 is finite: capped");
+  // The exact finite/overflow boundary of a double: 1e308 is finite, 1e309 is Infinity.
+  assertEquals(
+    resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "1" + "0".repeat(308) }),
+    MAX_GC_GRACE_MS,
+    "the largest finite magnitude is capped like any other large number",
+  );
+  assertEquals(
+    resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "1" + "0".repeat(309) }),
+    DEFAULT_GC_GRACE_MS,
+    "309 digits overflow to Infinity: unusable, so the default (never 'no grace', never the cap)",
+  );
+  assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: "9".repeat(400) }), DEFAULT_GC_GRACE_MS);
 });

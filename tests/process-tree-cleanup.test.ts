@@ -3,7 +3,7 @@
 // scripts' Chromium cleanup bug: child processes + temp profiles survived).
 // These tests drive REAL process trees: a parent that spawns children whose
 // argv carries a unique marker, exactly like `--user-data-dir=<profile>`.
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects, assertStrictEquals } from "jsr:@std/assert@1";
 import {
   isolatedProcessGroup,
   killProcessTree,
@@ -35,6 +35,35 @@ function spawnTree(marker: string): Deno.ChildProcess {
   }).spawn();
 }
 
+/**
+ * Run each cleanup step in its OWN try/catch and never throw (jjsz N8). Cleanup in a `finally` must never
+ * replace the assertion error that is already propagating, and one failing step must not skip the steps
+ * after it. A swallowed failure is still REPORTED (stderr by default), so a leak does not go unseen: it is
+ * only barred from becoming the test's verdict. Never use it for the ASSERTING part of a test.
+ */
+async function cleanupSteps(
+  steps: Array<() => unknown>,
+  report: (line: string) => void = (line) => console.error(line),
+): Promise<void> {
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      report(`cleanup step failed (ignored so it cannot mask the test's own result): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
+
+/** Kill everything carrying `marker`. The marker is unique to one test run, so this can touch nothing else;
+ *  it is deliberately NOT killProcessTree, which is the subject of these tests. */
+const pkillMarker = (marker: string) =>
+  new Deno.Command("/usr/bin/pkill", {
+    args: ["-9", "-f", marker],
+    stdout: "null",
+    stderr: "null",
+    clearEnv: true,
+  }).output();
+
 Deno.test("killProcessTree: the parent kill alone leaves children — the tree kill removes them (2ypf)", async () => {
   const marker = `2ypf-marker-${crypto.randomUUID().slice(0, 8)}`;
   const proc = spawnTree(marker);
@@ -61,13 +90,7 @@ Deno.test("killProcessTree: the parent kill alone leaves children — the tree k
     // children running. The marker is unique to this run, so this kill can touch nothing else; it is
     // deliberately NOT killProcessTree, which is the subject of this test.
     try { proc.kill("SIGKILL"); } catch { /* gone */ }
-    await new Deno.Command("/usr/bin/pkill", {
-      args: ["-9", "-f", marker],
-      stdout: "null",
-      stderr: "null",
-      clearEnv: true,
-    }).output();
-    try { await proc.status; } catch { /* reaped */ }
+    await cleanupSteps([() => pkillMarker(marker), () => proc.status]);
   }
 });
 
@@ -95,7 +118,7 @@ Deno.test("teardownChrome: an isolated group reaps descendants whose argv has no
     // An assertion failure or mutant must never leave the fixture child running.
     try { Deno.kill(-proc.pid, "SIGKILL"); } catch { /* gone */ }
     try { proc.kill("SIGKILL"); } catch { /* gone */ }
-    await proc.status;
+    await cleanupSteps([() => proc.status]);
   }
 });
 
@@ -114,7 +137,8 @@ Deno.test("teardownChrome: raw launched proc reaps unmarked group descendants", 
     const group = launched.processGroup;
     assert(group !== undefined, "fixture has an isolated group");
     const members = () => liveGroupMembers(group);
-    for (let i = 0; i < 20 && members().length < 2; i++) await new Promise((r) => setTimeout(r, 25));
+    // A bounded poll for the unmarked child (5 s), not a fixed delay: a saturated machine forks it late.
+    for (let i = 0; i < 200 && members().length < 2; i++) await new Promise((r) => setTimeout(r, 25));
     assert(members().length >= 2, "unmarked child is running before raw-proc teardown");
     await teardownChrome(proc, profile); // No launched object or explicit group.
     assertEquals(members(), [], "raw-proc teardown must reap the unmarked child");
@@ -122,9 +146,11 @@ Deno.test("teardownChrome: raw launched proc reaps unmarked group descendants", 
     if (proc) {
       try { Deno.kill(-proc.pid, "SIGKILL"); } catch { /* gone */ }
       try { proc.kill("SIGKILL"); } catch { /* gone */ }
-      await proc.status;
     }
-    Deno.removeSync(root, { recursive: true });
+    await cleanupSteps([
+      () => proc?.status,
+      () => Deno.removeSync(root, { recursive: true }),
+    ]);
   }
 });
 
@@ -178,7 +204,8 @@ Deno.test("launchChrome lifeline: SIGKILLing the parent test process reaps the i
     assert(watcherPid > 1, `the launch must have started a lifeline watcher (got: ${out})`);
     browserGroup = Number(Deno.readTextFileSync(groupFile).trim());
     assert(browserGroup > 1, `browser must have an isolated group, got ${browserGroup}`);
-    for (let i = 0; i < 20 && liveGroupMembers(browserGroup).length < 2; i++) {
+    // Bounded at 5 s, like the waits around it: a saturated machine forks the unmarked helper late.
+    for (let i = 0; i < 200 && liveGroupMembers(browserGroup).length < 2; i++) {
       await new Promise((r) => setTimeout(r, 25));
     }
     assert(liveGroupMembers(browserGroup).length >= 2, "browser + unmarked helper are alive in isolated group");
@@ -226,7 +253,7 @@ Deno.test("launchChrome lifeline: SIGKILLing the parent test process reaps the i
         if (late > 1) Deno.kill(-late, "SIGKILL");
       } catch { /* never written, or the group is already gone */ }
     }
-    Deno.removeSync(root, { recursive: true });
+    await cleanupSteps([() => Deno.removeSync(root, { recursive: true })]);
   }
 });
 
@@ -238,9 +265,20 @@ Deno.test("killProcessTree: rejects a group without a leader process", async () 
 Deno.test("killProcessTree: kills a running tree and returns once it is gone", async () => {
   const marker = `2ypf-marker-${crypto.randomUUID().slice(0, 8)}`;
   const proc = spawnTree(marker);
-  await new Promise((r) => setTimeout(r, 300));
-  await killProcessTree(proc, marker);
-  assertEquals(await survivors(marker), []);
+  try {
+    // A bounded poll for the precondition, not a fixed 300 ms: bash needs far longer than that to fork the
+    // children on a saturated machine, and a tree that is not running proves nothing about killing it.
+    for (let i = 0; i < 100 && (await survivors(marker)).length < 3; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assertEquals((await survivors(marker)).length, 3, "the fixture tree (parent + two children) is running before the kill");
+    await killProcessTree(proc, marker);
+    assertEquals(await survivors(marker), []);
+  } finally {
+    // A failing killProcessTree (or a mutant of it) must never leave the three 300 s fixture children running.
+    try { proc.kill("SIGKILL"); } catch { /* gone */ }
+    await cleanupSteps([() => pkillMarker(marker), () => proc.status]);
+  }
 });
 
 Deno.test("killProcessTree: a surviving tree hard-fails, never fails open", async () => {
@@ -262,4 +300,49 @@ Deno.test("live-every-tab uses the tree kill for its Chromium cleanup (2ypf sour
     "live-every-tab kills the whole Chromium tree by its unique profile path");
   assert(!/proc\?\.kill\("SIGKILL"\)[\s\S]{0,200}await proc\?\.status[\s\S]{0,200}ws\?\.close/.test(src),
     "the parent-only kill pattern is gone");
+});
+
+// ── jjsz N8: cleanup in a `finally` must never replace the real assertion error ─────────────────
+//
+// The helper is exercised with INJECTED failing steps (a real teardown failure cannot be produced on
+// demand). Drill: make the helper rethrow, or stop at the first failing step, and this test goes RED.
+
+Deno.test("jjsz N8: the cleanup helper never throws, runs every later step after a failing one, reports the failure, and cannot replace the error already propagating", async () => {
+  const ran: string[] = [];
+  const reported: string[] = [];
+  await cleanupSteps([
+    () => {
+      ran.push("synchronous step that throws");
+      throw new Error("injected synchronous failure");
+    },
+    async () => {
+      ran.push("asynchronous step that rejects");
+      await Promise.resolve();
+      throw new Error("injected asynchronous failure");
+    },
+    () => {
+      ran.push("step after the failures");
+    },
+  ], (line) => reported.push(line));
+  assertEquals(
+    ran,
+    ["synchronous step that throws", "asynchronous step that rejects", "step after the failures"],
+    "every step ran, in order, although the ones before it failed",
+  );
+  assertEquals(reported.length, 2, "each swallowed failure is reported once, never silent");
+  assert(reported[0].includes("injected synchronous failure"), reported[0]);
+  assert(reported[1].includes("injected asynchronous failure"), reported[1]);
+
+  // End to end through a `finally`, the shape of every site: the test's OWN error is what surfaces.
+  const own = new Error("the assertion that actually failed");
+  const surfaced = await assertRejects(async () => {
+    try {
+      throw own;
+    } finally {
+      await cleanupSteps([() => {
+        throw new Error("injected cleanup failure");
+      }], () => {});
+    }
+  });
+  assertStrictEquals(surfaced, own, "a failing cleanup must not replace the error that was already propagating");
 });

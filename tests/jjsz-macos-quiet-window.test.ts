@@ -274,9 +274,13 @@ Deno.test("jjsz F6: an idle builder stays idle when the machine changes time zon
 // ---------------------------------------------------------------------------------------------
 
 Deno.test("jjsz F6: a SLOW ps does not spend the scan budget before one row is read", async () => {
-  // ps takes 80 ms; the budget for reading the table is 20 ms. The clock must start AFTER ps returned.
-  const ps = fakePs([...ordinary(30), ...COMPILERS], { delayMs: 80 });
-  const sample = await readLoadSample(null, depsOf(ps, { budget: { entries: 4096, ms: 20 } }));
+  // ps takes 1000 ms; the budget for reading the table is 200 ms, and the bounded retry gets 4x that (800 ms),
+  // so a clock that started BEFORE ps returned has spent 1000 ms and is out of budget on both attempts: the
+  // sample would be refused as truncated. The clock must start AFTER ps returned. The delay is a real timer,
+  // which cannot fire early, so that verdict does not depend on scheduling; and the budget dwarfs what parsing
+  // these rows takes, so a stalled box cannot trip the CORRECT code (it used to be 80 ms against 20 ms).
+  const ps = fakePs([...ordinary(30), ...COMPILERS], { delayMs: 1000 });
+  const sample = await readLoadSample(null, depsOf(ps, { budget: { entries: 4096, ms: 200 } }));
   assertEquals(sample.measurable, true, `ps latency is not the box's process count: ${sample.error ?? ""}`);
   assertEquals(sample.compilers, 3);
   assertEquals(sample.retriedAfterTruncation, undefined, "and it was not even a retry");
