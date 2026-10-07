@@ -1,15 +1,15 @@
-// Offscreen host for file-backed bundled WASI tools. It fetches and
-// revalidates the shipped manifest/CAS, then gives one fresh Worker only opaque
-// OPFS references plus the audited executable bytes.
+// Offscreen host for file-backed bundled WASI tools. It fetches/revalidates shipped
+// manifest/CAS, then gives one fresh Worker opaque OPFS refs + audited bytes.
 
 import { isStreamBackedBundledTool, previewSpecFor, previewStdoutEncoding, previewWasiArgs, revalidatePreviewExecution } from "./tool-exec-preview.js";
 import { createWasiJob } from "./wasm-host-types.js";
 import { BUNDLED_INVENTORY } from "./bundled-inventory-data.js";
 import { validateAuthorityRecord } from "./wasm-executor.js";
 import { validateWasmStreamRef, WASM_STREAM_ROOT_NAME } from "./wasm-stream-files.js";
+import { isTrustedServiceWorkerSender, SERVICE_WORKER_BUNDLE_PATH } from "./pure.js";
 
 export const WASM_STREAM_RUN_TYPE = "cap:wasm-stream-run";
-export const WASM_STREAM_WALL_MS = 180_000; export const WASM_STREAM_SERVICE_WORKER_PATH = "dist/background/service-worker.js";
+export const WASM_STREAM_WALL_MS = 180_000; export const WASM_STREAM_SERVICE_WORKER_PATH = SERVICE_WORKER_BUNDLE_PATH;
 
 function plain(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value) &&
@@ -220,16 +220,7 @@ function validateWorkerResult(result, request) {
   return Object.freeze({ ...result, outputRef, receipt: Object.freeze({ ...receipt }) });
 }
 
-export function isTrustedWasmStreamSender(sender, runtime = chrome.runtime) {
-  if (sender?.id !== runtime.id || sender?.tab != null || sender?.documentId != null) return false;
-  const url = typeof sender?.url === "string" ? sender.url : "";
-  // Chrome strips the background section from getManifest() in an offscreen
-  // document, so this path is pinned and separately tested against the shipped
-  // manifest rather than inferred from attacker-controlled sender fields.
-  const declared = runtime.getManifest?.()?.background?.service_worker;
-  if (typeof declared === "string" && declared.length > 0 && declared !== WASM_STREAM_SERVICE_WORKER_PATH) return false;
-  return url === runtime.getURL("dist/background/service-worker.js");
-}
+export const isTrustedWasmStreamSender = isTrustedServiceWorkerSender;
 
 export function registerWasmStreamHost() {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

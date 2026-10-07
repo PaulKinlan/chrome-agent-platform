@@ -19,6 +19,7 @@ import {
   rehydratePreviewStdin,
   rehydratePreviewWasmBytes,
 } from "./tool-exec-preview.js";
+import { isTrustedServiceWorkerSender } from "./pure.js";
 
 /** The production module loaders (runtime-URL dynamic imports). Tests inject
  * fakes; the shipped wiring uses chrome.runtime.getURL. */
@@ -41,7 +42,7 @@ export function registerWasmPreviewHost({ runtime = globalThis.chrome?.runtime, 
   const seams = loaders ? { ...defaultLoaders(runtime), ...loaders } : defaultLoaders(runtime);
   const listener = (message, sender, sendResponse) => {
     if (message?.type !== "wasm.preview.options") return undefined;
-    if (sender?.id !== runtime.id || sender?.tab != null) {
+    if (sender?.id !== runtime.id || sender?.tab != null || (sender?.url && !isTrustedServiceWorkerSender(sender, runtime))) {
       sendResponse({ ok: false, error: "wasm preview host denied: sender is not the service worker" });
       return undefined;
     }

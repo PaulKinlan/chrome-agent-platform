@@ -5806,6 +5806,6 @@ async function bootNtpRoutes() {
 // runs, and THIS page is the on-demand fallback (so a script run from the hub
 // works even where chrome.offscreen is unavailable). The claim protocol ensures
 // only ONE host executes (no double side-effects).
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
-  handleScriptRunMessage(message, sendResponse, document, "ntp")
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) =>
+  handleScriptRunMessage(message, sender, sendResponse, document, "ntp")
 );

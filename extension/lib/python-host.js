@@ -21,7 +21,7 @@
 // and location intact.
 
 import { PYTHON_RUNTIME_DIR, PYTHON_RUNTIME_PIN, PYTHON_EXEC_TIMEOUT_MS } from "./python-runtime.js";
-import { sha256HexBytes } from "./pure.js";
+import { sha256HexBytes, isTrustedServiceWorkerSender } from "./pure.js";
 
 const RUN_TIMEOUT_MS = PYTHON_EXEC_TIMEOUT_MS;
 
@@ -194,9 +194,14 @@ async function executeRun(message, deps) {
  * broadcast resolves with this host's response. */
 export function registerPythonHost(deps = null) {
   const resolved = deps ?? defaults();
-  if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
-    chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  const runtime = deps?.runtime ?? (typeof chrome !== "undefined" ? chrome.runtime : null);
+  if (runtime?.onMessage) {
+    runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!message || typeof message !== "object" || message.type !== "python.run") return false;
+      if (!isTrustedServiceWorkerSender(sender, runtime)) {
+        sendResponse({ ok: false, error: "python_host_untrusted_sender" });
+        return false;
+      }
       executeRun(message, resolved).then(
         (result) => sendResponse(result),
         (error) => sendResponse({ ok: false, error: String(error?.message ?? error) }),

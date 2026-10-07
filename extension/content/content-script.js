@@ -270,7 +270,10 @@ function onWindowMessage(event) {
 }
 window.addEventListener("message", onWindowMessage);
 
-function onRuntimeMessage(message, _sender, sendResponse) {
+function onRuntimeMessage(message, sender, sendResponse) {
+  if (sender && (sender.id !== chrome.runtime?.id || sender.tab != null)) {
+    return false;
+  }
   if (message?.type === "enrollment.poke" || message?.type === "bridge.ping") {
     // The SW requests a bridge re-sync/poke (e.g. on invocation tab reuse/open).
     syncEnrollmentAtStartup().then(() => {

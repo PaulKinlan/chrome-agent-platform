@@ -949,6 +949,22 @@ export function authorizeToolReport(
   return { kind: "content-script", origin: senderOrigin };
 }
 
+export const SERVICE_WORKER_BUNDLE_PATH = "dist/background/service-worker.js";
+
+/**
+ * Validates that a runtime message sender is the extension's own background service worker.
+ * Same-extension documents/tabs share sender.id, so checking id alone is insufficient;
+ * documentId and tab are strictly forbidden, and the sender URL must match the background service worker bundle.
+ */
+export function isTrustedServiceWorkerSender(sender, runtime = globalThis.chrome?.runtime) {
+  if (!runtime || !runtime.id || sender?.id !== runtime.id || sender?.tab != null || sender?.documentId != null) return false;
+  const url = typeof sender?.url === "string" ? sender.url : "";
+  const declared = runtime.getManifest?.()?.background?.service_worker;
+  if (typeof declared === "string" && declared.length > 0 && declared !== SERVICE_WORKER_BUNDLE_PATH) return false;
+  return url === runtime.getURL(SERVICE_WORKER_BUNDLE_PATH);
+}
+export const isTrustedWasmStreamSender = isTrustedServiceWorkerSender;
+
 /** SECRET-key pattern for `redactSecrets`: any object key matching this must
  * never be serialized into a hook task/prompt/journal (the wider-goal review's
  * CRITICAL — the storage.onChanged hook forwarded providerConfig.apiKey). */
