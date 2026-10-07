@@ -11,6 +11,7 @@ import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { composerInput, composerSend } from "./lib/composer-target.ts";
 import { startScriptedProvider, SCRIPTED_DUMMY_KEY, selectionRefOf, executeEnvelope } from "./lib/scripted-provider.ts";
+import { trackEmbeddedFrameContexts } from "./lib/embedded-frame-eval.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const EXT = `${ROOT}extension`;
@@ -73,6 +74,7 @@ async function main(): Promise<Check[]> {
   const sourceCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).trim();
   let distMarker: any = null, browser: any = null, chrome: any = null, cdp: any = null, binary: string | null = null;
   let provider: any = null, optsSession: string | null = null;
+  let closeFrameTracker = () => {};
   let failure: string | null = null;
   let teardownError: string | null = null;
   const record = (name: string, ok: boolean, detail?: unknown) => {
@@ -174,37 +176,32 @@ async function main(): Promise<Check[]> {
       throw new Error(`agent owner-approved rename precondition failed: ${JSON.stringify(seededRename)}`);
     }
     if ((await pending())?.approvals?.length !== 0) throw new Error("Settings approval queue was not drained by seed rename");
-    const contexts: { frameId: string; id: number; sessionId?: string }[] = [];
-    const unsubscribe = cdp.on("Runtime.executionContextCreated", (event: any, sessionId?: string) => {
-      if (event?.context?.auxData?.isDefault && event?.context?.auxData?.frameId && event?.context?.id) {
-        contexts.push({ frameId: event.context.auxData.frameId, id: event.context.id, sessionId });
-      }
-    });
+    // Subscribe BEFORE opening the pooled Settings frame. CDP frameId survives
+    // navigation, but its earlier default-context id does not; the shared
+    // tracker removes destroyed contexts and checks URL/readiness before use.
+    const frameTracker = trackEmbeddedFrameContexts(cdp, ntpSession);
+    closeFrameTracker = frameTracker.close;
     const firstRequest = await ntpMsg({ type: "agent.update", origin, name: "must-not-apply" });
     await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] }, ntpSession);
     if (!(await click(ntpSession, "#open-settings"))) throw new Error("could not click NTP Settings view");
-    const frame = await waitFor("embedded NTP Settings frame", async () => {
-      const tree = (await cdp.send("Page.getFrameTree", {}, ntpSession))?.result?.frameTree;
-      return tree?.childFrames?.find((child: any) => String(child?.frame?.url ?? "").includes("options/options.html"))?.frame ?? null;
-    }, 12000);
-    const frameCtx = await waitFor("embedded Settings DEFAULT execution context", async () =>
-      contexts.find((event) => event.sessionId === ntpSession && event.frameId === frame.id) ?? null, 8000);
-    unsubscribe();
-    const iframeResult = await cdp.send("Runtime.evaluate", {
+    const iframeEvaluation = await frameTracker.evaluate({
+      extensionId: extId, path: "/options/options.html", timeoutMs: 15_000,
       expression: `(async () => { const rows = await chrome.runtime.sendMessage({type:'management.pending-approvals'});
         if (rows?.ok !== true || rows.approvals?.length !== 1 || rows.approvals[0]?.action !== 'agent.update') return {ok:false,rows};
         const id = rows.approvals[0].approvalId;
         const resolved = await chrome.runtime.sendMessage({type:'management.resolve-approval',approvalId:id,approve:false});
         return {ok:!!id && resolved?.ok === true && resolved?.decision === 'denied',resolved}; })()`,
-      contextId: frameCtx.id, returnByValue: true, awaitPromise: true,
-    }, ntpSession);
-    if (iframeResult?.result?.exceptionDetails) throw new Error("embedded Settings evaluation threw");
+    });
+    closeFrameTracker();
+    closeFrameTracker = () => {};
+    const iframeResult = iframeEvaluation.result;
     const iframeDeny = iframeResult?.result?.result?.value?.ok === true;
     const iframeAfter = await ntpMsg({ type: "agent.get", origin });
     await save("settings-iframe-denied.png", await cdp.screenshot(ntpSession, { timeoutMs: 8000 }));
     record(SETTINGS_CHECKS[0], firstRequest?.ok === false && /requires owner approval/i.test(String(firstRequest.error)) &&
       iframeDeny && iframeAfter?.ok === true && iframeAfter.agent?.name === original,
-      { deniedRequest: firstRequest?.error, iframeDeny, targetName: iframeAfter?.agent?.name });
+      { deniedRequest: firstRequest?.error, iframeDeny, staleContextRetries: iframeEvaluation.staleRetries,
+        frameId: iframeEvaluation.frameId, targetName: iframeAfter?.agent?.name });
     if (!iframeDeny) throw new Error("embedded owner Settings did not deny exact row; refusing contaminated next checks");
     await click(ntpSession, "#view-back");
 
@@ -364,6 +361,7 @@ async function main(): Promise<Check[]> {
     failure = String(error?.stack ?? error?.message ?? error);
     console.error(`FOCUSED_KAT_ABORT: ${failure}`);
   } finally {
+    closeFrameTracker();
     try {
       if (optsSession && cdp) await cdp.eval(optsSession,
         `chrome.runtime.sendMessage({type:'provider.set',config:{provider:'demo',apiKey:''}}).then(v=>v,e=>({error:String(e?.message??e)}))`);

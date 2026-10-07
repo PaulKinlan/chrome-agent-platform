@@ -56,8 +56,10 @@ Deno.test("focused KAT dispatches every genuine click to its page session and re
   assert(source.includes('await mouse(ntpSession, point.x, point.y);'), "the approval click must target NTP");
   assert(source.indexOf('save("activity-pending-card.png"') < source.indexOf('await mouse(ntpSession, point.x, point.y);'),
     "save the genuinely pending card BEFORE clicking Allow");
-  assert(source.includes("contextId: frameCtx.id") && source.includes("}, ntpSession);"),
-    "the embedded Settings deny must execute in its own context on the NTP target");
+  assert(source.includes("trackEmbeddedFrameContexts(cdp, ntpSession)") &&
+    source.includes("await frameTracker.evaluate({") && source.includes('path: "/options/options.html"') &&
+    !source.includes("contextId: frameCtx.id"),
+    "Settings deny must track the current embedded default context, not the first stale frameCtx");
   assert(source.includes('await cdp.send("Target.closeTarget", { targetId: oldSw.targetId });'),
     "a worker restart must be observed rather than simulated");
   assert(source.includes("await teardownChrome(chrome, profile)"), "the one browser must be owner-cleaned");
