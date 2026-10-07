@@ -35,8 +35,6 @@ function homeCacheProfile(name: string): string {
 }
 
 // chrome-agent-platform-fyvc: no binary literal — spawnChrome (launchChrome) resolves CAP_CHROMIUM → CfT cache → /usr/bin/chromium.
-const PKILL = "/usr/bin/pkill";
-const PGREP = "/usr/bin/pgrep";
 const RM = "/bin/rm";
 const GIT = "/usr/bin/git";
 
@@ -45,7 +43,7 @@ import { DEMO_STREAM_ANSWER } from "../extension/lib/models/demo-model.js";
 import { durableDir } from "./lib/durable-root.mjs";
 import { isCdpEvaluateTimeout } from "./lib/quiet-window.ts";
 import { wireValue } from "./lib/cdp-eval.ts";
-import { computeUnpackedExtensionId, launchChrome as spawnChrome, SW_MATCH } from "./lib/chrome-launch.ts";
+import { computeUnpackedExtensionId, launchChrome as spawnChrome, SW_MATCH, teardownChrome } from "./lib/chrome-launch.ts";
 import { assertJourneyNtpPrincipal } from "./lib/journey-ntp-principal.ts";
 import {
   ENVIRONMENTAL_REFUSAL_EXIT,
@@ -151,6 +149,8 @@ function launchJourneyChrome(profile: string) {
       "--no-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
+      // Avoid crashpad sidecars becoming orphaned during this long headless gate.
+      "--disable-crash-reporter",
       "--silent-debugger-extension-api",
       `--disable-extensions-except=${EXT}`,
       `--load-extension=${EXT}`,
@@ -4303,17 +4303,20 @@ async function main() {
       { tool: "execute_tool", args: (req) => ({ selectionRef: selectionRefOf(req), arguments: { toolId: "imageops", args: ["info"], stdin: IMAGEOPS_PNG_B64 } }) },
       { text: "The image is 2x2 png." },
     ], "probe the image with imageops", 3);
-    const imageopsInfoResult = lastToolResult(imageopsInfoProvider.requests[2] ?? {});
-    const imageopsInfoText = typeof imageopsInfoResult === "string" ? imageopsInfoResult : JSON.stringify(imageopsInfoResult ?? "");
-    const imageopsInfoOk = /"width"\s*:\s*2/.test(imageopsInfoText) &&
-      /"format"\s*:\s*"png"/.test(imageopsInfoText) &&
-      /"phase"\s*:\s*"completed"/.test(imageopsInfoText);
+    const imageopsInfoEnv = executeEnvelope(imageopsInfoProvider.requests[2] ?? {}, "imageops");
+    const imageopsInfoResult = imageopsInfoEnv?.result;
+    const imageopsInfoText = typeof imageopsInfoResult?.stdout === "string" ? imageopsInfoResult.stdout : "";
+    let imageopsInfoParsed = null;
+    try { imageopsInfoParsed = JSON.parse(imageopsInfoText); } catch { /* malformed or absent stdout fails the check */ }
+    const imageopsInfoOk = imageopsInfoEnv?.ok === true &&
+      imageopsInfoResult?.phase === "completed" && imageopsInfoResult?.exitCode === 0 &&
+      imageopsInfoParsed?.width === 2 && imageopsInfoParsed?.format === "png";
     await imageopsInfoProvider.close();
     await evalOpts(`chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "demo", apiKey: "" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`).catch(() => {});
     check(
       "bundled wasm: imageops info executes live through the hub run",
       imageopsInfoRun?.phase === "terminal" && imageopsInfoRun?.terminal?.ok === true && imageopsInfoOk,
-      { result: imageopsInfoText.slice(0, 300), phase: imageopsInfoRun?.phase ?? null, terminalOk: imageopsInfoRun?.terminal?.ok ?? null },
+      { result: imageopsInfoText.slice(0, 300), toolPhase: imageopsInfoResult?.phase ?? null, exitCode: imageopsInfoResult?.exitCode ?? null, phase: imageopsInfoRun?.phase ?? null, terminalOk: imageopsInfoRun?.terminal?.ok ?? null },
     );
 
     // RESIZE ROUND-TRIP: resize --width 4 over the same PNG. The output is
@@ -4328,13 +4331,13 @@ async function main() {
       { tool: "execute_tool", args: (req) => ({ selectionRef: selectionRefOf(req), arguments: { toolId: "imageops", args: ["resize", "--width", "4"], stdin: IMAGEOPS_PNG_B64 } }) },
       { text: "Resized to width 4." },
     ], "resize the image with imageops to width 4", 3);
-    const imageopsResizeResult = lastToolResult(imageopsResizeProvider.requests[2] ?? {});
-    const imageopsResizeInner = imageopsResizeResult?.result ?? imageopsResizeResult ?? {};
+    const imageopsResizeEnv = executeEnvelope(imageopsResizeProvider.requests[2] ?? {}, "imageops");
+    const imageopsResizeInner = imageopsResizeEnv?.result ?? {};
     await imageopsResizeProvider.close();
     await evalOpts(`chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "demo", apiKey: "" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`).catch(() => {});
     check(
       "bundled wasm: imageops resize round-trip through the hub run",
-      imageopsResizeRun?.phase === "terminal" && imageopsResizeRun?.terminal?.ok === true &&
+      imageopsResizeRun?.phase === "terminal" && imageopsResizeRun?.terminal?.ok === true && imageopsResizeEnv?.ok === true &&
         imageopsResizeInner?.phase === "completed" && imageopsResizeInner?.exitCode === 0 &&
         imageopsResizeInner?.output?.bytes === 120 &&
         imageopsResizeInner?.output?.sha256 === "085de7b5f422a7474cbd6502934befa346a57628f933cdb0dd345653d505c623",
@@ -8574,8 +8577,8 @@ async function main() {
     let removed = false;
     let clean = true;
     try {
-      if (proc) await killChromiumTree(proc, profile);
-      await runBounded(RM, ["-rf", profile]);
+      if (proc) await teardownJourneyChrome(proc, profile);
+      else await runBounded(RM, ["-rf", profile]);
       removed = !(await Deno.stat(profile).then(() => true).catch(() => false));
       if (removed) {
         await sleep(800);
@@ -9126,8 +9129,8 @@ async function demoPathJourney() {
     try { if (cdp) cdp.intentionalClose = true; ws?.close(); } catch { /* ignore */ }
     await Promise.all([docs.shutdown(), shop.shutdown()].map((p) => withTimeout(p, 8000, "demo-path fixture.shutdown").catch(() => { demoPathLeak = true; })));
     try {
-      if (proc) await killChromiumTree(proc, profile);
-      await runBounded(RM, ["-rf", profile]);
+      if (proc) await teardownJourneyChrome(proc, profile);
+      else await runBounded(RM, ["-rf", profile]);
       if (await Deno.stat(profile).then(() => true).catch(() => false)) demoPathLeak = true;
     } catch (e) {
       demoPathLeak = true;
@@ -9391,8 +9394,8 @@ async function factoryResetJourney() {
     }
     try { if (cdp) cdp.intentionalClose = true; ws?.close(); } catch { /* ignore */ }
     try {
-      if (proc) await killChromiumTree(proc, profile);
-      await runBounded(RM, ["-rf", profile]);
+      if (proc) await teardownJourneyChrome(proc, profile);
+      else await runBounded(RM, ["-rf", profile]);
       if (await Deno.stat(profile).then(() => true).catch(() => false)) factoryResetLeak = true;
     } catch (e) {
       factoryResetLeak = true;
@@ -9407,37 +9410,11 @@ async function factoryResetJourney() {
  * bounded wait; HARD FAILS if any descendant survives (never silently falls
  * through and lets an orphan recreate profile files after the suite exits).
  */
-async function killChromiumTree(proc, profile) {
-  try { proc.kill("SIGKILL"); } catch { /* already gone */ }
-  try { await withTimeout(proc.status, 5000, "proc status"); } catch { /* gone */ }
-  // NOTE: the match pattern must NOT start with "-" (pgrep/pkill would parse
-  // a leading "--user-data-dir=…" as an OPTION and exit 2 — a syntax error that
-  // the old code silently treated as "no process remains"). Matching the
-  // substring without the leading dashes is equivalent (the chromium argv still
-  // contains the full "--user-data-dir=…" token).
-  const match = `user-data-dir=${profile}`;
-  await runBounded(PKILL, ["-9", "-f", match]).catch(() => {});
-  // Bounded wait for the full tree to disappear — HARD FAIL if any remain.
-  // Distinguish a REAL "no process found" (pgrep exit code 1) from a pgrep
-  // FAILURE (spawn/permission/timeout error): a failed pgrep must NOT be read
-  // as "clean" (that was the fail-open path where a broken pgrep meant "no
-  // descendants survived").
-  for (let i = 0; i < 20; i++) {
-    let out;
-    try {
-      out = await runBounded(PGREP, ["-f", match]);
-    } catch (e) {
-      throw new Error(
-        `pgrep failed (${e?.message ?? e}) — cannot confirm cleanup`,
-      );
-    }
-    if (out.code === 1) return; // pgrep found nothing → no matching process
-    if (out.code !== 0) {
-      throw new Error(`pgrep exited ${out.code} — cannot confirm cleanup`);
-    }
-    await sleep(250);
-  }
-  throw new Error("chromium descendants survived cleanup");
+async function teardownJourneyChrome(proc, profile) {
+  // launchChrome starts Chrome in an isolated process group; shared teardown
+  // uses that captured group AND the profile marker. Parent kill plus argv
+  // containing user-data-dir alone misses crashpad children.
+  await teardownChrome(proc, profile);
 }
 
 await main();
