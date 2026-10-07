@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.588] — 2026-10-07
+- Improve keyboard focus visibility and small-text readability across the Artifacts viewer, New Tab, side panel, and Options.
+
 ## [0.3.587] — 2026-10-07
 - The Settings tool library can now list and structurally validate schema-2 Emscripten packages (validation only — execution is not enabled).
 
