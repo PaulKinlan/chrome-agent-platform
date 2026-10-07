@@ -438,4 +438,117 @@ Deno.test("ACP service status: reports installed mode from unit file, not CLI fl
   } finally {
     try { Deno.removeSync(plistUnit); } catch { /* ignore */ }
   }
+
+  //    (c) Launchd plist with an XML comment INSIDE the ProgramArguments array
+  //        containing the flag-looking string. launchd ignores the comment, so
+  //        the installed mode must NOT report anonymous.
+  const inArrayCommentUnit = Deno.makeTempFileSync();
+  try {
+    Deno.writeTextFileSync(inArrayCommentUnit, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.chrome-agent-platform.acp-bridge</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/deno</string>
+    <string>run</string>
+    <!-- <string>--allow-anonymous-loopback</string> -->
+    <string>scripts/acp-bridge.ts</string>
+    <string>--port</string>
+    <string>3210</string>
+  </array>
+</dict>
+</plist>`);
+    const child6 = new Deno.Command("node", {
+      args: [script, "status", "--unit", inArrayCommentUnit],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const out6 = new TextDecoder().decode(child6.outputSync().stdout);
+    assertEquals(
+      out6.includes("ANONYMOUS loopback"),
+      false,
+      `an in-array XML comment containing the flag must NOT report anonymous loopback, got:\n${out6}`,
+    );
+    assertEquals(
+      out6.includes("auth: token required"),
+      true,
+      `an in-array XML comment containing the flag must still report token required, got:\n${out6}`,
+    );
+  } finally {
+    try { Deno.removeSync(inArrayCommentUnit); } catch { /* ignore */ }
+  }
+
+  //    (d) Launchd plist with a real <string>--allow-anonymous-loopback</string>
+  //        element in ProgramArguments: the installed mode MUST report anonymous.
+  const anonPlistUnit = Deno.makeTempFileSync();
+  try {
+    Deno.writeTextFileSync(anonPlistUnit, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.chrome-agent-platform.acp-bridge</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/deno</string>
+    <string>run</string>
+    <string>scripts/acp-bridge.ts</string>
+    <string>--port</string>
+    <string>3210</string>
+    <string>--allow-anonymous-loopback</string>
+  </array>
+</dict>
+</plist>`);
+    const child7 = new Deno.Command("node", {
+      args: [script, "status", "--unit", anonPlistUnit],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const out7 = new TextDecoder().decode(child7.outputSync().stdout);
+    assertEquals(
+      out7.includes("auth: ANONYMOUS loopback (installed with --allow-anonymous-loopback)"),
+      true,
+      `a real --allow-anonymous-loopback ProgramArguments element must report anonymous, got:\n${out7}`,
+    );
+  } finally {
+    try { Deno.removeSync(anonPlistUnit); } catch { /* ignore */ }
+  }
+
+  //    (e) Launchd plist with the flag written using XML numeric character
+  //        references (hex &#x2D; and decimal &#45; for hyphens): the decoded
+  //        argument value MUST still report anonymous, pinning the
+  //        entity-decoding path so it is not verified only in scratch.
+  const entityPlistUnit = Deno.makeTempFileSync();
+  try {
+    Deno.writeTextFileSync(entityPlistUnit, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.chrome-agent-platform.acp-bridge</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/deno</string>
+    <string>run</string>
+    <string>scripts/acp-bridge.ts</string>
+    <string>--port</string>
+    <string>3210</string>
+    <string>&#x2D;&#x2D;allow-anonymous&#45;loopback</string>
+  </array>
+</dict>
+</plist>`);
+    const child8 = new Deno.Command("node", {
+      args: [script, "status", "--unit", entityPlistUnit],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const out8 = new TextDecoder().decode(child8.outputSync().stdout);
+    assertEquals(
+      out8.includes("auth: ANONYMOUS loopback (installed with --allow-anonymous-loopback)"),
+      true,
+      `an entity-encoded --allow-anonymous-loopback argument must report anonymous after decoding, got:\n${out8}`,
+    );
+  } finally {
+    try { Deno.removeSync(entityPlistUnit); } catch { /* ignore */ }
+  }
 });

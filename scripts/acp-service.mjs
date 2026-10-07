@@ -259,6 +259,47 @@ function getInstalledUnitPath() {
   return join(HOME, ".config", "systemd", "user", "cap-acp-bridge.service");
 }
 
+/** Strip XML comments from a plist fragment. */
+function stripXmlComments(s) {
+  return s.replace(/<!--[\s\S]*?-->/g, "");
+}
+
+/** Decode the five predefined XML entities plus numeric character references. */
+function decodeXmlEntities(s) {
+  return s.replace(/&(amp|lt|gt|quot|apos|#x?[0-9a-fA-F]+);/g, (match, entity) => {
+    switch (entity) {
+      case "amp": return "&";
+      case "lt": return "<";
+      case "gt": return ">";
+      case "quot": return '"';
+      case "apos": return "'";
+    }
+    if (entity[0] === "#") {
+      const code = entity[1] === "x" || entity[1] === "X"
+        ? parseInt(entity.slice(2), 16)
+        : parseInt(entity.slice(1), 10);
+      if (!Number.isNaN(code) && code >= 0 && code <= 0x10ffff) {
+        try { return String.fromCodePoint(code); } catch { /* fall through to raw match */ }
+      }
+    }
+    return match;
+  });
+}
+
+/** Parse the ProgramArguments <array> into its decoded <string> values, or null when absent. */
+function parseLaunchdProgramArguments(content) {
+  const match = content.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/);
+  if (!match) return null;
+  const block = stripXmlComments(match[1]);
+  const args = [];
+  const stringRe = /<string[^>]*>([\s\S]*?)<\/string>/g;
+  let m;
+  while ((m = stringRe.exec(block)) !== null) {
+    args.push(decodeXmlEntities(m[1]));
+  }
+  return args;
+}
+
 function readInstalledServiceUnit(unitPath) {
   if (!existsSync(unitPath)) return null;
   try {
@@ -270,16 +311,19 @@ function readInstalledServiceUnit(unitPath) {
     let harness = "";
 
     if (isPlist) {
-      // Derive arguments SOLELY from the ProgramArguments array (never comments or other directives)
-      const progArgsMatch = content.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/);
-      const argsBlock = progArgsMatch ? progArgsMatch[1] : "";
-      isAnonymous = /<string>--allow-anonymous-loopback<\/string>/.test(argsBlock);
-      const tokenMatch = argsBlock.match(/<string>--token<\/string>\s*<string>([^<]*)<\/string>/);
-      if (tokenMatch) token = tokenMatch[1];
-      const portMatch = argsBlock.match(/<string>--port<\/string>\s*<string>([^<]*)<\/string>/);
-      if (portMatch) port = portMatch[1];
-      const harnessMatch = argsBlock.match(/<string>--harness<\/string>\s*<string>([^<]*)<\/string>/);
-      if (harnessMatch) harness = harnessMatch[1];
+      // Derive arguments SOLELY from the parsed ProgramArguments string values:
+      // strip XML comments and decode entities first, so a commented-out flag
+      // (which launchd ignores) or an entity-encoded flag cannot misreport the mode.
+      const args = parseLaunchdProgramArguments(content);
+      if (args) {
+        isAnonymous = args.includes("--allow-anonymous-loopback");
+        const tokenIdx = args.indexOf("--token");
+        if (tokenIdx !== -1 && args[tokenIdx + 1] !== undefined) token = args[tokenIdx + 1];
+        const portIdx = args.indexOf("--port");
+        if (portIdx !== -1 && args[portIdx + 1] !== undefined) port = args[portIdx + 1];
+        const harnessIdx = args.indexOf("--harness");
+        if (harnessIdx !== -1 && args[harnessIdx + 1] !== undefined) harness = args[harnessIdx + 1];
+      }
     } else {
       // Derive arguments SOLELY from the ExecStart line (never comments, descriptions, or working directory)
       const execMatch = content.match(/^ExecStart=(.*)$/m);
