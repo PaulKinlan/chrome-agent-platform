@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.587] — 2026-10-07
+- The Settings tool library can now list and structurally validate schema-2 Emscripten packages (validation only — execution is not enabled).
+
 ## [0.3.586] — 2026-10-07
 - The sidebar no longer flips back after you collapse it during startup.
 

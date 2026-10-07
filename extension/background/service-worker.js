@@ -7513,6 +7513,83 @@ const handlers = mergeRouteMaps(
     }
     return await shadowToolCatalog.inspect(m, context);
   },
+  // Settings-only schema-2 tool package validation (chrome-agent-platform-ltkj.2)
+  async "tool.package.validation-list"(m, context) {
+    if (context?.principal !== "owner-options") {
+      securityEvent("blocked-action", `tool package validation list denied for principal ${context?.principal ?? "unknown"}`);
+      return { ok: false, error: "tool package validation is restricted to the Settings surface" };
+    }
+    const optionsUrl = chrome.runtime.getURL("options/options.html");
+    const senderUrl = context?.senderUrl ?? "";
+    const exactDoc = senderUrl === optionsUrl ||
+      (typeof senderUrl === "string" &&
+        senderUrl.startsWith(optionsUrl) &&
+        /^#[A-Za-z0-9-]+$/.test(senderUrl.slice(optionsUrl.length)));
+    if (typeof context?.documentId !== "string" || !context.documentId || !exactDoc || Boolean(context?.pageSender)) {
+      securityEvent("blocked-action", "tool package validation list sender rejected");
+      return { ok: false, error: "sender is not the exact Settings document" };
+    }
+    return await new Promise((resolve) => {
+      let settled = false;
+      const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+      const timer = setTimeout(() => finish({ ok: false, error: "validation list timed out (SW)" }), 5000);
+      chrome.runtime.sendMessage({
+        type: "wasm.package.options.validation-list",
+      }, (res) => {
+        clearTimeout(timer);
+        const lastErr = chrome.runtime.lastError;
+        if (lastErr) finish({ ok: false, error: lastErr.message ?? "no options host response" });
+        else finish(res ?? { ok: false, error: "empty validation list response" });
+      });
+    });
+  },
+  async "tool.package.validate"(m, context) {
+    if (context?.principal !== "owner-options") {
+      securityEvent("blocked-action", `tool package validation denied for principal ${context?.principal ?? "unknown"}`);
+      return { ok: false, error: "tool package validation is restricted to the Settings surface" };
+    }
+    const optionsUrl = chrome.runtime.getURL("options/options.html");
+    const senderUrl = context?.senderUrl ?? "";
+    const exactDoc = senderUrl === optionsUrl ||
+      (typeof senderUrl === "string" &&
+        senderUrl.startsWith(optionsUrl) &&
+        /^#[A-Za-z0-9-]+$/.test(senderUrl.slice(optionsUrl.length)));
+    if (typeof context?.documentId !== "string" || !context.documentId || !exactDoc || Boolean(context?.pageSender)) {
+      securityEvent("blocked-action", "tool package validation sender rejected");
+      return { ok: false, error: "sender is not the exact Settings document" };
+    }
+    const messageKeys = Object.keys(m ?? {});
+    const allowed = new Set(["type", "packageId", "version", "expectedVersion"]);
+    if (messageKeys.some((k) => !allowed.has(k))) {
+      return { ok: false, error: "extra_keys_rejected" };
+    }
+    const { packageId, version, expectedVersion } = m ?? {};
+    if (typeof packageId !== "string" || !/^[a-z0-9]+(\.[a-z0-9_-]+)+$/u.test(packageId)) {
+      return { ok: false, error: "package_id_invalid" };
+    }
+    if (typeof version !== "string" || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(version)) {
+      return { ok: false, error: "version_invalid" };
+    }
+    if (expectedVersion !== null && expectedVersion !== undefined && (typeof expectedVersion !== "string" || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(expectedVersion))) {
+      return { ok: false, error: "expected_version_invalid" };
+    }
+    return await new Promise((resolve) => {
+      let settled = false;
+      const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+      const timer = setTimeout(() => finish({ ok: false, error: "package validation timed out (SW)" }), 10000);
+      chrome.runtime.sendMessage({
+        type: "wasm.package.options.validate",
+        packageId,
+        version,
+        expectedVersion: expectedVersion ?? null,
+      }, (res) => {
+        clearTimeout(timer);
+        const lastErr = chrome.runtime.lastError;
+        if (lastErr) finish({ ok: false, error: lastErr.message ?? "no options host response" });
+        else finish(res ?? { ok: false, error: "empty validation response" });
+      });
+    });
+  },
   // CAP-FB-20260822-TOOL-PREVIEW-EXEC-01 — the FIRST real bundled execution:
   // a static allowlist (csvtool, uuid, head, tail, cut) runs ONLY
   // from the exact Settings options document by an EXPLICIT owner click. The

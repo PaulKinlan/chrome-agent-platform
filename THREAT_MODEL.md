@@ -23,7 +23,7 @@ section 9 and is marked as an open question — it is not asserted as a threat.
 | [`docs/RISK-REGISTER.md`](docs/RISK-REGISTER.md) | the architectural risk register (R1–R21 + the withheld decisions) |
 | [`docs/CONSTITUTION.md`](docs/CONSTITUTION.md) §1 | the security vector list every change is reviewed against |
 | [`docs/INTERNAL-SENDER-CONTRACT-AUDIT.md`](docs/INTERNAL-SENDER-CONTRACT-AUDIT.md) | the sender-classifier adjudication (bead `lw6d`) |
-| [`docs/SW-DISPATCH-AUTHORITY-CENSUS.md`](docs/SW-DISPATCH-AUTHORITY-CENSUS.md) | the 285-route dispatch census and its 37 unclassified mutations |
+| [`docs/SW-DISPATCH-AUTHORITY-CENSUS.md`](docs/SW-DISPATCH-AUTHORITY-CENSUS.md) | the 287-route dispatch census and its 37 unclassified mutations |
 | [`docs/CHROME-TEST-CONTRACT.md`](docs/CHROME-TEST-CONTRACT.md) | which gate runs a real browser, and why a subset gate cannot see a cross-cutting guard |
 | [`docs/STREAMING-CREDENTIAL-FILTER-RESERVED-MEMBERS.md`](docs/STREAMING-CREDENTIAL-FILTER-RESERVED-MEMBERS.md) | the archive credential/`__proto__` filter parity contract |
 | [`docs/PERMISSION-MATRIX.md`](docs/PERMISSION-MATRIX.md) | the permission-state mechanism classes and their headless acceptance |
@@ -39,11 +39,11 @@ http(s) page) and it acts on two different untrusted feeds at once: web page con
 and model output.
 
 Component map, with the file that owns each surface:
-- **Evidence pin: `origin/main@f507d58f`.** The file:line citations in this section were re-read at `origin/main@213bafbc` and resolve identically here; the registered-route count in the component map was re-measured at this pin by evaluating the composition (`mergeRouteMaps`) the service worker builds, which returns 285. Treat the named symbol as the anchor and the line as the locator, and re-read both if the tree has moved again.
+- **Evidence pin: `origin/main@f507d58f`.** The file:line citations in this section were re-read at `origin/main@213bafbc` and resolve identically here; the registered-route count in the component map was re-measured at this pin by evaluating the composition (`mergeRouteMaps`) the service worker builds, which returns 287 (chrome-agent-platform-ltkj.2 added two Settings-only schema-2 validation routes). Treat the named symbol as the anchor and the line as the locator, and re-read both if the tree has moved again.
 
 | Component | Where | Notes |
 |---|---|---|
-| Service worker (the privileged broker) | `extension/background/service-worker.js:11923` | the ONE `chrome.runtime.onMessage` listener; 285 registered routes |
+| Service worker (the privileged broker) | `extension/background/service-worker.js:11923` | the ONE `chrome.runtime.onMessage` listener; 287 registered routes |
 | Route modules | `extension/background/routes/` | dispatched through `mergeRouteMaps` (census §2) |
 | New-tab hub / Settings / side panel | `extension/ntp/`, `extension/options/`, `extension/sidepanel/` | extension documents; principal `extension` / `owner-options` |
 | Offscreen document | `extension/offscreen/offscreen.js` | one document multiplexes five subsystems (register R12) |
@@ -223,7 +223,7 @@ consequences are carried by the matching register entry where one exists.
   and `background-agent.delete` at `:10655`). **Answer:** the central listener refuses every
   non-page-allowed route to page senders (`extension/background/service-worker.js:11953`),
   so the class is reachable only from extension principals. **Register:** R11.
-- **Evidence pin: `origin/main@f507d58f`.** The file:line citations in this threat were re-read at `origin/main@213bafbc` and resolve identically here; the unclassified-mutation count is the census §4.9 table's (37 of the 285 registered routes). Treat the named symbol as the anchor and the line as the locator, and re-read both if the tree has moved again.
+- **Evidence pin: `origin/main@f507d58f`.** The file:line citations in this threat were re-read at `origin/main@213bafbc` and resolve identically here; the unclassified-mutation count is the census §4.9 table's (37 of the 287 registered routes). Treat the named symbol as the anchor and the line as the locator, and re-read both if the tree has moved again.
 
 ### T5. Sandbox escape and network egress from the script sandbox
 

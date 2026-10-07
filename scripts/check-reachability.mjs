@@ -65,11 +65,8 @@ export const RETAINED = {
   // and the RETAINED line is gone. tests/agent-cards.test.ts still pins it.)
   "lib/bundled-tool-packages.js":
     "Owner directive 2026-08-30: the WASI bundled-package inventory API must not change; tests/bundled-tool-packages.test.ts pins it (the service worker reads the generated *.data.js modules directly).",
-  "lib/bundled-inventory.js":
-    "Owner directive 2026-08-30: part of the WASI bundled-package inventory (imported by lib/bundled-tool-packages.js); tests/bundled-tool-packages.test.ts pins it.",
+  // (lib/bundled-inventory.js was RETAINED here; ltkj.2 reachable now via lib/wasm-package-admission.js)
   // ── surfaces or modules another OPEN entry owns ──
-  "lib/emscripten-module-audit.js":
-    "40an: inert structural auditor until ltkj.2's admission integration references it; remove this entry when reachable (the stale-retention gate enforces that).",
   "lib/archive-target-registry.js":
     "CAP-FB-20260905-UNBOUNDED-DATA-ARCHIVE-01 (11rm / qcuf): classification authority for durable targets. Its sanitizer family stayed tests-only; 8wbb shipped the agentConfig authority separately (lib/logical-site-agent-config.js) — this module ships when the 11rm streaming converter lands.",
   "lib/tabular-diff-artifacts.js":

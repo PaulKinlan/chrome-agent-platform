@@ -13,7 +13,14 @@ import { BUNDLED_INVENTORY } from "./bundled-inventory-data.js";
 async function defaultReadFile(rel) {
   const runtime = globalThis.chrome?.runtime;
   if (!runtime?.getURL) throw new Error("bundled-inventory: chrome.runtime.getURL unavailable (inject readFile)");
-  const response = await fetch(runtime.getURL(rel));
+  // Inventory rel paths are REPO-rooted ("extension/wasm/…") but the packaged
+  // extension serves them from the extension root — the "extension/" prefix
+  // is the repo directory, not a packaged path segment. Strip it before
+  // getURL or every runtime inventory fetch 404s (ltkj.2: the Settings
+  // validation list was silently empty for exactly this reason). Injected
+  // readers (tests, generators) keep receiving the repo-rooted rel unchanged.
+  const packagedRel = rel.startsWith("extension/") ? rel.slice("extension/".length) : rel;
+  const response = await fetch(runtime.getURL(packagedRel));
   if (!response.ok) throw new Error(`bundled-inventory: fetch failed ${response.status} for ${rel}`);
   return await response.arrayBuffer();
 }

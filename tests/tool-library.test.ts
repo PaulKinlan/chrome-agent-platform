@@ -67,7 +67,12 @@ Deno.test("tool-library: registered component with the tool selector + ONE expli
   assertNotMatch(block, /\(csvtool, uuid, head, tail, cut\)/, "no stale five-tool enumeration in the preview copy");
   assertMatch(block, /_emit\("tool-preview-request"/, "the component emits exactly the preview-request event");
   assertMatch(block, /toolId, args, stdin, sourceEvent/, "the preview request carries the toolId");
-  assertEquals((block.match(/<button/g) ?? []).length, 1, "exactly one button (the preview-run)");
+  assertMatch(block, /_emit\("tool-package-validate-request"/, "the component emits the package validation event");
+  assertMatch(block, /class="package-validate-btn"/, "the explicit owner package-validate button exists");
+  assertMatch(block, />Validate package</, "the package-validate button has exact copy 'Validate package'");
+  assertMatch(block, /No Emscripten packages are available for validation in this build\./, "empty release state copy matches spec");
+  assertMatch(block, /Package validated\. Execution is not enabled\./, "success receipt copy matches spec");
+  assertEquals((block.match(/<button/g) ?? []).length, 2, "exactly two buttons (preview-run and package-validate-btn)");
   assertNotMatch(block, /createElement\("button"/, "no programmatic buttons");
   assertNotMatch(block, /\bfetch\s*\(|XMLHttpRequest|new WebSocket|sendMessage/, "the component performs no network/message calls itself");
   assertNotMatch(block, /chrome\.permissions/, "the component touches no permissions");
