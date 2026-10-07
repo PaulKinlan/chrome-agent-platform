@@ -4303,17 +4303,20 @@ async function main() {
       { tool: "execute_tool", args: (req) => ({ selectionRef: selectionRefOf(req), arguments: { toolId: "imageops", args: ["info"], stdin: IMAGEOPS_PNG_B64 } }) },
       { text: "The image is 2x2 png." },
     ], "probe the image with imageops", 3);
-    const imageopsInfoResult = lastToolResult(imageopsInfoProvider.requests[2] ?? {});
-    const imageopsInfoText = typeof imageopsInfoResult === "string" ? imageopsInfoResult : JSON.stringify(imageopsInfoResult ?? "");
-    const imageopsInfoOk = /"width"\s*:\s*2/.test(imageopsInfoText) &&
-      /"format"\s*:\s*"png"/.test(imageopsInfoText) &&
-      /"phase"\s*:\s*"completed"/.test(imageopsInfoText);
+    const imageopsInfoEnv = executeEnvelope(imageopsInfoProvider.requests[2] ?? {}, "imageops");
+    const imageopsInfoResult = imageopsInfoEnv?.result;
+    const imageopsInfoText = typeof imageopsInfoResult?.stdout === "string" ? imageopsInfoResult.stdout : "";
+    let imageopsInfoParsed = null;
+    try { imageopsInfoParsed = JSON.parse(imageopsInfoText); } catch { /* malformed or absent stdout fails the check */ }
+    const imageopsInfoOk = imageopsInfoEnv?.ok === true &&
+      imageopsInfoResult?.phase === "completed" && imageopsInfoResult?.exitCode === 0 &&
+      imageopsInfoParsed?.width === 2 && imageopsInfoParsed?.format === "png";
     await imageopsInfoProvider.close();
     await evalOpts(`chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "demo", apiKey: "" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`).catch(() => {});
     check(
       "bundled wasm: imageops info executes live through the hub run",
       imageopsInfoRun?.phase === "terminal" && imageopsInfoRun?.terminal?.ok === true && imageopsInfoOk,
-      { result: imageopsInfoText.slice(0, 300), phase: imageopsInfoRun?.phase ?? null, terminalOk: imageopsInfoRun?.terminal?.ok ?? null },
+      { result: imageopsInfoText.slice(0, 300), toolPhase: imageopsInfoResult?.phase ?? null, exitCode: imageopsInfoResult?.exitCode ?? null, phase: imageopsInfoRun?.phase ?? null, terminalOk: imageopsInfoRun?.terminal?.ok ?? null },
     );
 
     // RESIZE ROUND-TRIP: resize --width 4 over the same PNG. The output is
@@ -4328,13 +4331,13 @@ async function main() {
       { tool: "execute_tool", args: (req) => ({ selectionRef: selectionRefOf(req), arguments: { toolId: "imageops", args: ["resize", "--width", "4"], stdin: IMAGEOPS_PNG_B64 } }) },
       { text: "Resized to width 4." },
     ], "resize the image with imageops to width 4", 3);
-    const imageopsResizeResult = lastToolResult(imageopsResizeProvider.requests[2] ?? {});
-    const imageopsResizeInner = imageopsResizeResult?.result ?? imageopsResizeResult ?? {};
+    const imageopsResizeEnv = executeEnvelope(imageopsResizeProvider.requests[2] ?? {}, "imageops");
+    const imageopsResizeInner = imageopsResizeEnv?.result ?? {};
     await imageopsResizeProvider.close();
     await evalOpts(`chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "demo", apiKey: "" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`).catch(() => {});
     check(
       "bundled wasm: imageops resize round-trip through the hub run",
-      imageopsResizeRun?.phase === "terminal" && imageopsResizeRun?.terminal?.ok === true &&
+      imageopsResizeRun?.phase === "terminal" && imageopsResizeRun?.terminal?.ok === true && imageopsResizeEnv?.ok === true &&
         imageopsResizeInner?.phase === "completed" && imageopsResizeInner?.exitCode === 0 &&
         imageopsResizeInner?.output?.bytes === 120 &&
         imageopsResizeInner?.output?.sha256 === "085de7b5f422a7474cbd6502934befa346a57628f933cdb0dd345653d505c623",
