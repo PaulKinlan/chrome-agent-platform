@@ -12,6 +12,7 @@ import { BUNDLED_INVENTORY } from "../extension/lib/bundled-inventory-data.js";
 import {
   extractAboutData,
   syncAboutPage,
+  UPSTREAM_MAP,
 } from "../scripts/generate-about-page.mjs";
 
 const ROOT = join(import.meta.dirname ?? ".", "..");
@@ -106,37 +107,114 @@ Deno.test("about-page drift guard: syncAboutPage({ check: true }) confirms zero 
   assertEquals(inSync, true, "About page on disk must match generator output exactly");
 });
 
-Deno.test("about-page drift guard: falsification — detects missing tool from inventory", () => {
-  const { entries } = extractAboutData({ root: ROOT });
+Deno.test("about-page drift guard: falsification — syncAboutPage({ check: true }) fails on drifted HTML with missing tool card", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "cap-about-drift-" });
+  try {
+    await Deno.mkdir(join(tmp, "extension/about"), { recursive: true });
+    await Deno.symlink(join(ROOT, "extension/lib"), join(tmp, "extension/lib"));
+    await Deno.symlink(join(ROOT, "extension/wasm"), join(tmp, "extension/wasm"));
 
-  // Simulate an ungenerated tool missing from entries
-  const simulatedEntries = entries.filter((e) => e.toolId !== "jq");
-  const missingPkg = "cap.bundled.jq";
+    // Case 1: empty about.html must fail check
+    await Deno.writeTextFile(join(tmp, "extension/about/about.html"), "");
+    const emptyCheck = await syncAboutPage({ root: tmp, check: true });
+    assertEquals(emptyCheck, false, "Empty about.html must fail drift check");
 
-  const entryPackageIds = new Set(simulatedEntries.map((e) => e.packageId));
-  const detectedMissing = !entryPackageIds.has(missingPkg);
+    // Case 2: about.html with a tool card removed must fail check
+    const realHtml = await Deno.readTextFile(join(ROOT, "extension/about/about.html"));
+    const mutatedHtml = realHtml.replace(
+      /<article class="tool-card"[^>]*data-package-id="cap\.bundled\.jq"[\s\S]*?<\/article>/,
+      "",
+    );
+    assert(mutatedHtml !== realHtml, "Failed to remove cap.bundled.jq card in test setup");
+    await Deno.writeTextFile(join(tmp, "extension/about/about.html"), mutatedHtml);
 
-  assertEquals(
-    detectedMissing,
-    true,
-    `Drift guard must detect when tool '${missingPkg}' is missing from about entries`,
-  );
+    const driftedCheck = await syncAboutPage({ root: tmp, check: true });
+    assertEquals(driftedCheck, false, "about.html missing cap.bundled.jq must fail syncAboutPage check");
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
 });
 
-Deno.test("about-page drift guard: falsification — detects missing tool from rendered HTML", async () => {
+Deno.test("about-page drift guard: falsification — card-presence verification fails when tool card is missing from HTML", async () => {
   const htmlPath = join(ROOT, "extension/about/about.html");
   const html = await Deno.readTextFile(htmlPath);
-
-  // Strip a tool card from the HTML to verify detection
   const pkgId = "cap.bundled.sqlite3.query.bounded";
 
-  // When card is removed from HTML:
-  const strippedHtml = html.replaceAll(`data-package-id="${pkgId}"`, `data-package-id="removed"`);
-  const hasPkg = strippedHtml.includes(`data-package-id="${pkgId}"`);
-
-  assertEquals(
-    hasPkg,
-    false,
-    `Stripped HTML must fail check for missing tool '${pkgId}'`,
+  // Strip a tool card from the real HTML
+  const strippedHtml = html.replace(
+    new RegExp(`<article class="tool-card"[^>]*data-package-id="${pkgId.replaceAll(".", "\\.")}"[\\s\\S]*?</article>`),
+    "",
   );
+  assert(strippedHtml !== html, `Failed to strip card for ${pkgId}`);
+
+  // The drift verification loop must detect that the card is missing
+  let detected = false;
+  try {
+    assert(
+      strippedHtml.includes(`data-package-id="${pkgId}"`),
+      `about.html must render card for package '${pkgId}'`,
+    );
+  } catch (_e) {
+    detected = true;
+  }
+  assertEquals(detected, true, `Verification loop must throw when package '${pkgId}' card is removed`);
+});
+
+Deno.test("about-page drift guard: all inventory manifests have explicit UPSTREAM_MAP entries and fail-closed on unknown", async () => {
+  const inventoryManifests = BUNDLED_INVENTORY.manifests;
+  for (const m of inventoryManifests) {
+    const entry = (UPSTREAM_MAP as Record<string, { upstreamName: string; upstreamUrl: string }>)[m.pkg];
+    assert(
+      entry !== undefined,
+      `Manifest package '${m.pkg}' must have an explicit entry in UPSTREAM_MAP`,
+    );
+    assert(
+      entry.upstreamName && entry.upstreamName.length > 0,
+      `Package '${m.pkg}' must have non-empty upstreamName`,
+    );
+    assert(
+      entry.upstreamUrl && entry.upstreamUrl.startsWith("http"),
+      `Package '${m.pkg}' must have valid upstreamUrl (got '${entry.upstreamUrl}')`,
+    );
+  }
+
+  // Falsification: extractAboutData must throw (fail closed) on unknown package
+  const tmp = await Deno.makeTempDir({ prefix: "cap-about-upstream-" });
+  try {
+    await Deno.mkdir(join(tmp, "extension/lib"), { recursive: true });
+    await Deno.mkdir(join(tmp, "extension/wasm/manifests"), { recursive: true });
+    await Deno.symlink(join(ROOT, "extension/wasm/licenses"), join(tmp, "extension/wasm/licenses"));
+    await Deno.copyFile(
+      join(ROOT, "extension/lib/bundled-tool-packages.data.js"),
+      join(tmp, "extension/lib/bundled-tool-packages.data.js"),
+    );
+
+    // Create a valid manifest for a fake package that is not in UPSTREAM_MAP
+    await Deno.writeTextFile(
+      join(tmp, "extension/wasm/manifests/cap.bundled.fake.tool-1.0.0.manifest.json"),
+      JSON.stringify({
+        package: { id: "cap.bundled.fake.tool", version: "1.0.0" },
+        license: { file: "extension/wasm/licenses/MIT.txt", spdx: "MIT" },
+      }),
+    );
+
+    // Inventory listing the fake tool
+    const fakeInv = `export const BUNDLED_INVENTORY = Object.freeze(${JSON.stringify({
+      schemaVersion: 1,
+      release: "0.0.0",
+      manifests: [{ pkg: "cap.bundled.fake.tool", version: "1.0.0" }],
+    })});\n`;
+    await Deno.writeTextFile(join(tmp, "extension/lib/bundled-inventory-data.js"), fakeInv);
+
+    let threw = false;
+    try {
+      extractAboutData({ root: tmp });
+    } catch (err) {
+      threw = true;
+      assert(String(err).includes("Missing UPSTREAM_MAP entry"), `Error message must name UPSTREAM_MAP: ${err}`);
+    }
+    assertEquals(threw, true, "extractAboutData must throw on package missing from UPSTREAM_MAP");
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
 });

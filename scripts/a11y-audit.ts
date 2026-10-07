@@ -604,6 +604,16 @@ async function main() {
     const shape = JSON.parse(String(privacyShape ?? "{}"));
     check("privacy: exactly one h1 and every list section is labelled by its heading", shape.h1 === 1 && shape.sections >= 5, shape);
 
+    // ── the about page (chrome-agent-platform-fixn) ──
+    page = await openPage(cdp, `chrome-extension://${id}/about/about.html`);
+    a = await analyze(cdp, page.sessionId, "about");
+    check("about: no unlabeled interactive controls", (a.unlabeled || []).length === 0, a.unlabeled);
+    check("about: main landmark present", a.landmarks.main === true, a.landmarks);
+    check("about: at least one heading present", a.landmarks.heading === true, a.landmarks);
+    check("about: contrast — no AA failures", (a.contrastFails || []).length === 0, a.contrastFails);
+    check("about: has focusable elements + first is not body", a.focus.total > 0 && a.focus.first !== "none", a.focus);
+    check("about: no interactive element under 24x24 px", (a.smallTargets || []).length === 0, a.smallTargets);
+
     // ── the component gallery: the <artifact-diff> specimen, both schemes ──
     // (CAP-FB-20260830-ARTIFACT-DIFF-COMPONENT-01) zero unlabeled controls and
     // zero AA contrast failures inside the specimen under light AND dark.

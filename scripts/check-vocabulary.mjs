@@ -52,6 +52,9 @@ const SURFACES = [
   "extension/privacy/privacy.html",
   "extension/privacy/privacy.js",
   "extension/lib/privacy-statement.js",
+  // The about & third-party notices page (chrome-agent-platform-fixn)
+  "extension/about/about.html",
+  "extension/about/about.js",
 ];
 
 // ── rule 1: banned user-facing terms ──────────────────────────────────────
@@ -199,13 +202,14 @@ function lineOf(source, index) {
   return line;
 }
 
-/** Strip comments, <style> and <script> so CSS class names and code are never
- *  mistaken for text a person reads. */
+/** Strip comments, <style>, <script>, and verbatim third-party license blocks so code and
+ *  verbatim legal text are never mistaken for text a person reads in product copy. */
 function stripNonVisible(html) {
   return html
     .replace(/<!--[\s\S]*?-->/g, (m) => " ".repeat(m.length))
     .replace(/<style\b[\s\S]*?<\/style>/gi, (m) => " ".repeat(m.length))
-    .replace(/<script\b[\s\S]*?<\/script>/gi, (m) => " ".repeat(m.length));
+    .replace(/<script\b[\s\S]*?<\/script>/gi, (m) => " ".repeat(m.length))
+    .replace(/<pre\b[^>]*class="[^"]*license-pre[^"]*"[\s\S]*?<\/pre>/gi, (m) => " ".repeat(m.length));
 }
 
 /** Every user-visible string in an HTML document (or an HTML template string):

@@ -207,7 +207,11 @@ await syncGallery();
 // build to materialize and verify it before the extension is copied/loaded.
 await syncChangelog({ check: false });
 await syncChangelog({ check: true });
-// Generated About page and data module from the bundled tool inventory.
+// Generated About page from the bundled tool inventory. The build materializes
+// and verifies it ({check: false} writes, then {check: true} asserts write integrity).
+// Note: because the previous line regenerates it, build.mjs cannot catch uncommitted
+// source drift on its own — the real drift gate is `npm run check:about` (chained in
+// test:all and evidence-runner.sh) plus tests/about-page-drift-guard.test.ts.
 await syncAboutPage({ check: false });
 await syncAboutPage({ check: true });
 
