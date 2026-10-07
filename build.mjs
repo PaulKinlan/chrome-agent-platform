@@ -303,6 +303,7 @@ let currentChangelog = null;
 // completed; the version record runs AFTER every fatal finalizer (see
 // shouldRecordBuild) so a late death never records a success.
 let buildSucceeded = false;
+let storeBuildRecord = null;
 
 try {
   // Snapshot the previous successful build version + the current package
@@ -945,18 +946,10 @@ try {
     const publishSummary = `built ${path.join("extension", "dist", "background", "service-worker.js")} + dist/options.bundle.js ATOMICALLY (serialized owner-token lock; one dist dir; removed ${occurrences} new-Function + ${zodProbes} probes + ${zodDocCompiles} pinned Doc.compile methods; seam scan clean; dist.complete marker; rollback-fatal)`;
     console.log(publishSummary);
     if (isStoreBuild) {
-      try {
-        const { durableRoot } = await import("./scripts/lib/durable-root.mjs");
-        const recDir = path.join(durableRoot(), "serial-build-once");
-        await mkdir(recDir, { recursive: true });
-        const recKey = `${writtenMarker.commit}-${writtenMarker.source.digest}`;
-        await writeFile(
-          path.join(recDir, `${recKey}.json`),
-          JSON.stringify({ code: 0, stdout: `${publishSummary}\n`, at: new Date().toISOString() }),
-        );
-      } catch {
-        /* non-fatal cache population for storeBuildOnce */
-      }
+      storeBuildRecord = {
+        key: `${writtenMarker.commit}-${writtenMarker.source.digest}`,
+        stdout: `${publishSummary}\n`,
+      };
     }
     // The dist is published and the marker validated — the build is a genuine
     // success from here. The changelog-delta print + version record are NOT
@@ -1009,6 +1002,20 @@ try {
 // that died in a finalizer never records a version, so the next build's delta
 // is always honest. Warn-only — this feature never fails the build.
 if (shouldRecordBuild({ buildSucceeded, exitCode: process.exitCode ?? 0 })) {
+  // A finalizer or gallery failure must never leave a success record behind.
+  if (storeBuildRecord) {
+    try {
+      const { durableRoot } = await import("./scripts/lib/durable-root.mjs");
+      const recDir = path.join(durableRoot(), "serial-build-once");
+      await mkdir(recDir, { recursive: true });
+      await writeFile(
+        path.join(recDir, `${storeBuildRecord.key}.json`),
+        JSON.stringify({ code: 0, stdout: storeBuildRecord.stdout, at: new Date().toISOString() }),
+      );
+    } catch {
+      /* non-fatal cache population for storeBuildOnce */
+    }
+  }
   try {
     if (currentVersion) {
       if (!previousBuiltVersion) {
