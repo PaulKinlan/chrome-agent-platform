@@ -236,13 +236,13 @@
         </div>
         <div class="acp-settings" id="acp-settings-section" style="margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border, #e3e0d9);">
           <h3>External agent harnesses (ACP)</h3>
-          <p class="muted">Configure local agent harnesses (pi, Claude Code, Codex). Control the bridge endpoint, token, working directory, and permission prompt mode. The WebSocket bridge requires a token: paste the value from <code>$XDG_CONFIG_HOME/cap-acp/bridge-token</code> (or the <code>--token</code> you installed the service with) into the Token field.</p>
+          <p class="muted">Configure local agent harnesses (pi, Claude Code, Codex). Control the bridge endpoint, token, working directory, and permission prompt mode. The WebSocket bridge requires a token: paste the value from <code>$XDG_CONFIG_HOME/cap-acp/bridge-token</code> (or the <code>--token</code> you installed the service with) into the Token field. The token is not needed on loopback <em>only</em> when the bridge was started with the explicit <code>--allow-anonymous-loopback</code> opt-out.</p>
           <div class="enroll-row" style="margin-bottom: 8px;">
             <label class="field" style="flex:2"><span class="field-label">Bridge endpoint</span>
               <input type="text" id="acp-endpoint" placeholder="ws://127.0.0.1:3210/acp">
             </label>
-            <label class="field" style="flex:1"><span class="field-label">Token (required for the WebSocket bridge)</span>
-              <input type="password" id="acp-token" placeholder="Paste the bridge's shared token">
+            <label class="field" style="flex:1"><span class="field-label">Token (required for the WebSocket bridge; not on loopback when the bridge runs with --allow-anonymous-loopback)</span>
+              <input type="password" id="acp-token" placeholder="Paste the bridge's shared token (leave empty only with --allow-anonymous-loopback)">
             </label>
           </div>
           <div class="enroll-row" style="margin-bottom: 8px;">

@@ -5,10 +5,13 @@
 // authentication is required on EVERY upgrade (chrome-agent-platform-jsjy), so
 // paste the token into the extension's acp.token setting as well as the endpoint.
 //
-//   node scripts/acp-service.mjs install [--harness pi] [--port 3210] [--token SECRET]
+//   node scripts/acp-service.mjs install [--harness pi] [--port 3210] [--token SECRET] [--allow-anonymous-loopback]
 //     --token is optional: without it the bridge GENERATES a secret on first start and
 //     persists it (default $XDG_CONFIG_HOME/cap-acp/bridge-token, mode 0600), and the
-//     status line below says so. There is no unauthenticated mode.
+//     status line below says so.
+//     --allow-anonymous-loopback is an EXPLICIT opt-out (Paul, 2026-10-07): the loopback
+//     bridge then runs with NO token, so any local process can drive the harness. It is
+//     loopback-only — a non-loopback bind refuses to start — and is logged loudly.
 //   node scripts/acp-service.mjs status
 //   node scripts/acp-service.mjs uninstall
 //   node scripts/acp-service.mjs logs        (tail the bridge log)
@@ -42,11 +45,17 @@ const ACTION = args._[0] || "status";
 let HARNESS = String(args.harness || ""); // "" = resolve from what this machine has (never a binary it lacks)
 const PORT = String(args.port || "3210");
 const TOKEN = args.token ? String(args.token) : "";
+/** Explicit opt-out (Paul, 2026-10-07): the loopback bridge runs tokenless on purpose. */
+const ALLOW_ANONYMOUS_LOOPBACK = Boolean(args["allow-anonymous-loopback"]);
 
 /** jsjy: the bridge requires a secret on every upgrade whether or not the operator passed --token —
  *  without one it GENERATES and persists a token, so "no token" no longer means "no auth". Say which
- *  case this install is in, and name the file, so the operator can find the value to paste. */
+ *  case this install is in, and name the file, so the operator can find the value to paste. The ONE
+ *  exception is --allow-anonymous-loopback, which must say so plainly (never claim a token is required). */
 function tokenNote() {
+  if (ALLOW_ANONYMOUS_LOOPBACK) {
+    return " · ANONYMOUS loopback (--allow-anonymous-loopback: NO token required; any local process can drive the harness)";
+  }
   return TOKEN
     ? " · token required (the --token you installed)"
     : " · token required (generated + persisted in $XDG_CONFIG_HOME/cap-acp/bridge-token; paste it into acp.token)";
@@ -109,7 +118,8 @@ function resolveHarnessForInstall() {
 
 function bridgeArgs() {
   const a = ["run", "-A", join(ROOT, "scripts", "acp-bridge.ts"), "--port", PORT, "--harness", HARNESS];
-  if (TOKEN) a.push("--token", TOKEN);
+  if (TOKEN && !ALLOW_ANONYMOUS_LOOPBACK) a.push("--token", TOKEN);
+  if (ALLOW_ANONYMOUS_LOOPBACK) a.push("--allow-anonymous-loopback");
   if (CWD) a.push("--cwd", CWD);
   return a;
 }
@@ -244,10 +254,14 @@ function uninstall() {
 function status() {
   // jsjy: the bridge requires a secret whether or not the operator passed --token, so `status` must say
   // where the value the extension needs can be found — /health never discloses it (delta review,
-  // finding 4).
-  console.log(TOKEN
-    ? "auth: token required — the --token you installed"
-    : "auth: token required — the bridge generated one; it is persisted in $XDG_CONFIG_HOME/cap-acp/bridge-token (paste it into acp.token)");
+  // finding 4). The one exception is --allow-anonymous-loopback, which must NOT claim a token is required.
+  if (ALLOW_ANONYMOUS_LOOPBACK) {
+    console.log("auth: ANONYMOUS loopback (--allow-anonymous-loopback) — NO token required; any local process can drive the harness");
+  } else {
+    console.log(TOKEN
+      ? "auth: token required — the --token you installed"
+      : "auth: token required — the bridge generated one; it is persisted in $XDG_CONFIG_HOME/cap-acp/bridge-token (paste it into acp.token)");
+  }
   const url = `http://127.0.0.1:${PORT}/health`;
   fetch(url).then(async (r) => {
     console.log(`bridge: UP at ${url}`);

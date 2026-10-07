@@ -115,17 +115,21 @@ export function acpConnectionErrorMessage(refusal) {
   // Token (options.html, wired by renderAcpSettings). The bridge accepts the
   // secret either pasted there (acp.token) or passed at start-up with --token / a
   // custom --token-file, so both are named (the token became mandatory on EVERY
-  // connection, loopback included, in 0.3.578; there is no unauthenticated WS mode).
+  // connection, loopback included, in 0.3.578). The ONE exception is the explicit
+  // loopback-only opt-out --allow-anonymous-loopback (Paul, 2026-10-07), named as
+  // the alternative when the operator deliberately wants tokenless LOCAL access.
   const TOKEN_HINT = "Settings → Agents → External agent harnesses (ACP) → Token (the acp.token setting)";
+  const ANON_HINT = "to deliberately allow tokenless LOCAL access, restart the bridge with " +
+    "--allow-anonymous-loopback (loopback only — any local process could then drive the harness)";
   if (reason === "token-missing") {
     return "Authentication required: the ACP bridge needs its shared token, but none was provided. " +
       `Paste the token from $XDG_CONFIG_HOME/cap-acp/bridge-token into ${TOKEN_HINT}, or run the bridge ` +
-      "with --token (or --token-file to name your own file), then retry.";
+      `with --token (or --token-file to name your own file), then retry. Or ${ANON_HINT}.`;
   }
   if (reason === "token-invalid") {
     return "Authentication failed: the token in acp.token does not match the ACP bridge's token. " +
       `Re-copy it from $XDG_CONFIG_HOME/cap-acp/bridge-token into ${TOKEN_HINT}, or run the bridge ` +
-      "with --token (or --token-file) to pin the secret it expects.";
+      `with --token (or --token-file) to pin the secret it expects. Or ${ANON_HINT}.`;
   }
   if (reason === "origin-rejected") {
     return "Origin rejected: the ACP bridge refused a connection from this page's origin. " +
