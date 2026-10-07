@@ -544,6 +544,92 @@ Deno.test("durable store routes the thread-runs reverse index instead of throwin
   await assertRejects(() => durable.setTrusted(`thread-runs:${"a".repeat(201)}`, ["x"]));
 });
 
+Deno.test("durable store routes the run-log-wal migration marker instead of throwing", async () => {
+  // Regression for the 27s thread.get stall (chrome-agent-platform-gf82):
+  // durable-runs.js marks an execution's WAL migration with a
+  // `run-log-wal:<executionId>` key, but DURABLE_KEY_RE/DURABLE_PREFIXES
+  // omitted `run-log-wal` while archive-target-registry.js already admitted it.
+  // Every store.has/setTrusted for the marker threw
+  // `invalid durable-run key: run-log-wal:<id>` and was swallowed by
+  // `.catch(() => false)` — so the marker was NEVER persisted, and a cold
+  // worker re-ran the full-OPFS migration walk on every boot.
+  root.children.clear();
+  const durable = durableRunMemory();
+  const id = "exec:00000000-0000-4000-8000-000000000010";
+  const key = `run-log-wal:${id}`;
+
+  await durable.setTrusted(key, { schemaVersion: 1, retentionPolicyVersion: "run-retention-v1", executionId: id, migratedRows: 0 });
+  assertEquals((await durable.get(key))?.executionId, id, "the migration marker must round-trip");
+  assertEquals(await durable.has(key), true);
+  assert((await durable.keys()).includes(key), "keys() must surface run-log-wal markers");
+
+  // A second execution's marker must not overwrite the first.
+  const otherId = "exec:00000000-0000-4000-8000-000000000011";
+  await durable.setTrusted(`run-log-wal:${otherId}`, { schemaVersion: 1, retentionPolicyVersion: "run-retention-v1", executionId: otherId, migratedRows: 3 });
+  assertEquals((await durable.get(key))?.executionId, id, "a second execution's marker must not overwrite the first");
+});
+
+Deno.test("cold-boot listLogs for a WAL execution makes zero store.keys() walks (the marker persists)", async () => {
+  // The other half of the 27s stall: before `run-log-wal:` was routable, a cold
+  // worker could not read the marker, so listLogs queued migrateExecutionLog on
+  // the exclusive write lock and that migration walked the ENTIRE durable store
+  // (every execution/payload/thread directory) once per worker lifetime. With
+  // the marker persisted, a fresh worker reads it in one store.has() and never
+  // walks the store at all.
+  root.children.clear();
+  const executionId = "exec:00000000-0000-4000-8000-000000000020";
+  const logHandleFor = createMemoryRunLogHandles();
+  const deps = {
+    resolveJournalStore: async () => ({}),
+    appendJournal: async () => {},
+    replaceCancellationJournal: async () => {},
+    commitThread: async () => {},
+    replaceCancellationThread: async () => {},
+  };
+
+  // Seed a WAL execution the way a live worker does (marker written by start()).
+  const seed = createDurableRunRegistry({
+    store: durableRunMemory(),
+    logHandleFor,
+    bootId: "boot-gf82-seed",
+    ...deps,
+  });
+  await seed.start({
+    executionId,
+    kind: "task",
+    taskPreview: "gf82 cold-boot",
+    journalTarget: "master",
+    resumeRequest: { id: "task-gf82", task: "gf82 cold-boot" },
+  });
+  await seed.appendLog(executionId, { type: "tool-call", tool: "echo", callId: "c1" });
+  await seed.settle(executionId, { ok: true, result: "done" });
+
+  // A cold worker: a fresh registry + fresh durableRunMemory meeting the same
+  // OPFS tree, with a counting wrapper over the store's keys() walk.
+  let keysCalls = 0;
+  const raw = durableRunMemory();
+  const countingStore = new Proxy(raw, {
+    get(target, name) {
+      if (name === "keys") {
+        return async (...args) => { keysCalls += 1; return await target.keys(...args); };
+      }
+      const value = target[name];
+      if (typeof value === "function") return (...args) => value.apply(target, args);
+      return value;
+    },
+  });
+  const cold = createDurableRunRegistry({
+    store: countingStore,
+    logHandleFor,
+    bootId: "boot-gf82-cold",
+    ...deps,
+  });
+
+  const rows = await cold.listLogs(executionId, 10);
+  assert(Array.isArray(rows) && rows.length >= 1, "a WAL execution still reads its rows on a cold worker");
+  assertEquals(keysCalls, 0, "a cold worker reading a WAL execution must make 0 store.keys() walks");
+});
+
 Deno.test("deleting a thread reclaims its durable reverse index", async () => {
   // Without this the durable/threads/<id> directory outlives every deleted
   // thread — one leaked directory per delete, which the memory-resilience

@@ -2110,7 +2110,11 @@ export function createDurableRunRegistry({
   }
 
   async function list() {
-    return locked(async () => {
+    // Read-only projection (run.list): shares the read lock with other readers
+    // instead of serialising behind them. readRecord's legacy retention-stamp
+    // repair is CAS-guarded and idempotent (the same path listLogs and
+    // listThreadExecutions already run under lockedRead).
+    return lockedRead(async () => {
       const runs = [];
       for (const executionId of await indexIds()) {
         const record = await readRecord(executionId);
@@ -2138,7 +2142,7 @@ export function createDurableRunRegistry({
   }
 
   async function dismissedFailedRuns() {
-    return locked(async () => [...(await readDismissedIds())]);
+    return lockedRead(async () => [...(await readDismissedIds())]);
   }
 
   async function dismissFailedRuns(ids) {

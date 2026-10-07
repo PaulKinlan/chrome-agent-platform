@@ -263,6 +263,69 @@ Deno.test("thread-open-perf: listThreadExecutions on indexed thread runs via loc
   assertEquals(raceResult, "immediate", "listThreadExecutions on an indexed thread must not block on active reads");
 });
 
+Deno.test("thread-open-perf: list() and dismissedFailedRuns() run via lockedRead concurrently with active reads", async () => {
+  // list() (run.list) and dismissedFailedRuns() (actions.list) used to take the
+  // EXCLUSIVE lock — so a run.list queued behind an active log read for the
+  // whole stall (bead chrome-agent-platform-gf82 root cause 3). Both are
+  // read-only projections and must share the read lock: a run.list must not
+  // block on an in-flight reader.
+  let releaseSlowRead: () => void = () => {};
+  const slowReadPromise = new Promise<void>((r) => { releaseSlowRead = r; });
+  let slowReadEntered = false;
+  let slowReadEnteredResolve: () => void = () => {};
+  const slowReadEnteredPromise = new Promise<void>((r) => { slowReadEnteredResolve = r; });
+
+  const store = new InstrumentedStore();
+  const registry = makeRegistry(store);
+
+  // An indexed execution — list() reads this record, so it must not be the
+  // blocked one.
+  await registry.start({
+    executionId: "exec_idx_00000001",
+    threadId: "t-idx",
+    kind: "task",
+    taskPreview: "indexed",
+    journalTarget: "master",
+  });
+  await registry.settle("exec_idx_00000001", { ok: true, result: "ok" });
+
+  // A slow execution: record present but NOT admitted to the registry index, so
+  // list() never reads it. listLogs() blocks on its record read instead.
+  await store.setTrusted("run:exec_slow_00000002", {
+    executionId: "exec_slow_00000002",
+    phase: "terminal",
+    revision: 1,
+    startedAt: 1000,
+    retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
+    terminal: { ok: true },
+  });
+
+  registry.forgetCachedState();
+  store.onGet = async (key: string) => {
+    if (key === "run:exec_slow_00000002") {
+      slowReadEntered = true;
+      slowReadEnteredResolve();
+      await slowReadPromise;
+    }
+  };
+
+  const slowListLogs = registry.listLogs("exec_slow_00000002");
+  await slowReadEnteredPromise;
+
+  const race = (p: Promise<unknown>) => Promise.race([
+    p.then(() => "immediate"),
+    new Promise((resolve) => setTimeout(() => resolve("blocked"), 50)),
+  ]);
+
+  try {
+    assertEquals(await race(registry.list()), "immediate", "list() must not block on active reads");
+    assertEquals(await race(registry.dismissedFailedRuns()), "immediate", "dismissedFailedRuns() must not block on active reads");
+  } finally {
+    releaseSlowRead();
+    await Promise.allSettled([slowListLogs]);
+  }
+});
+
 Deno.test("thread-open-perf: concurrent identical thread.get requests deduplicate in flight", async () => {
   let buildRunViewCallCount = 0;
   const inFlight = new Map();
