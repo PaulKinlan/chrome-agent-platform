@@ -3,7 +3,7 @@
 // explicit user grant (a chrome.storage flag the hub sets when the user opts
 // in), so a page's untrusted text can never drive arbitrary tab control.
 
-import { newId } from "./pure.js";
+import { newId, sha256Hex } from "./pure.js";
 import { tool } from "ai";
 import { z } from "zod";
 import { scheduleTask } from "./scheduler.js";
@@ -2080,8 +2080,8 @@ export async function recordRequestActivity(entry) {
  * the T8 single-origin validator (<all_urls>, wildcard-subdomain, decorated
  * and multi-origin patterns are refused). */
 function t12ScriptMatches(matches) {
-  if (!Array.isArray(matches) || matches.length === 0) {
-    return { error: "matches must be a non-empty array of single-origin patterns" };
+  if (!Array.isArray(matches) || matches.length === 0 || matches.length > 8) {
+    return { error: "matches must be a non-empty array of at most 8 single-origin patterns" };
   }
   const patterns = [];
   const origins = [];
@@ -2098,6 +2098,9 @@ function t12ScriptMatches(matches) {
       }
       if (!origins.includes(origin)) origins.push(origin);
     }
+  }
+  if (patterns.length > 8) {
+    return { error: "matches must be at most 8 patterns" };
   }
   return { patterns, origins };
 }
@@ -2397,6 +2400,10 @@ export const HARNESS_GATED_BROWSER_TOOLS = new Set([
   "set_cookie",
   "remove_cookie",
   "write_file",
+  "register_user_script",
+  "update_user_script",
+  "register_content_script",
+  "update_content_script",
 ]);
 
 /**
@@ -6336,6 +6343,14 @@ export function browserToolset(readOnly = false, {
       execute: async ({ id, js, matches, runAt }) => {
         const m = t12ScriptMatches(matches);
         if (m.error) return m;
+        const digest = sha256Hex(js);
+        const jsBytes = new TextEncoder().encode(js).byteLength;
+        const approved = await requireDestructiveApproval(
+          "browser.register-user-script",
+          `user_script:${id}`,
+          { kind: "user_script", id, matches: m.patterns, digest, jsBytes, runAt },
+        );
+        if (approved.ok !== true) return approved;
         return await withScriptRegistrationGrant(
           { permission: "userScripts", permissionLabel: "User scripts", patterns: m.patterns, origins: m.origins },
           "registered",
@@ -6343,7 +6358,7 @@ export function browserToolset(readOnly = false, {
             const script = { id, js, matches: m.patterns };
             if (runAt !== undefined) script.runAt = runAt;
             await chrome.userScripts.register([script]);
-            return { ok: true, id, matches: m.patterns, jsBytes: js.length };
+            return { ok: true, id, matches: m.patterns, jsBytes };
           },
         );
       },
@@ -6360,6 +6375,14 @@ export function browserToolset(readOnly = false, {
       execute: async ({ id, js, matches, runAt }) => {
         const m = t12ScriptMatches(matches);
         if (m.error) return m;
+        const digest = sha256Hex(js);
+        const jsBytes = new TextEncoder().encode(js).byteLength;
+        const approved = await requireDestructiveApproval(
+          "browser.update-user-script",
+          `user_script:${id}`,
+          { kind: "user_script", id, matches: m.patterns, digest, jsBytes, runAt },
+        );
+        if (approved.ok !== true) return approved;
         return await withScriptRegistrationGrant(
           { permission: "userScripts", permissionLabel: "User scripts", patterns: m.patterns, origins: m.origins },
           "updated",
@@ -6367,7 +6390,7 @@ export function browserToolset(readOnly = false, {
             const script = { id, js, matches: m.patterns };
             if (runAt !== undefined) script.runAt = runAt;
             await chrome.userScripts.update([script]);
-            return { ok: true, id, matches: m.patterns, jsBytes: js.length };
+            return { ok: true, id, matches: m.patterns, jsBytes };
           },
         );
       },
@@ -6474,6 +6497,14 @@ export function browserToolset(readOnly = false, {
       execute: async ({ id, js, matches, runAt, world }) => {
         const m = t12ScriptMatches(matches);
         if (m.error) return m;
+        const digest = sha256Hex(js);
+        const jsBytes = new TextEncoder().encode(js).byteLength;
+        const approved = await requireDestructiveApproval(
+          "browser.register-content-script",
+          `content_script:${id}`,
+          { kind: "content_script", id, matches: m.patterns, digest, jsBytes, runAt, world },
+        );
+        if (approved.ok !== true) return approved;
         return await withScriptRegistrationGrant(
           { permission: "scripting", permissionLabel: "Site Agents", patterns: m.patterns, origins: m.origins },
           "registered",
@@ -6482,7 +6513,7 @@ export function browserToolset(readOnly = false, {
             if (runAt !== undefined) script.runAt = runAt;
             if (world !== undefined) script.world = world;
             await chrome.scripting.registerContentScripts([script]);
-            return { ok: true, id, matches: m.patterns, jsBytes: js.length };
+            return { ok: true, id, matches: m.patterns, jsBytes };
           },
         );
       },
@@ -6500,6 +6531,14 @@ export function browserToolset(readOnly = false, {
       execute: async ({ id, js, matches, runAt, world }) => {
         const m = t12ScriptMatches(matches);
         if (m.error) return m;
+        const digest = sha256Hex(js);
+        const jsBytes = new TextEncoder().encode(js).byteLength;
+        const approved = await requireDestructiveApproval(
+          "browser.update-content-script",
+          `content_script:${id}`,
+          { kind: "content_script", id, matches: m.patterns, digest, jsBytes, runAt, world },
+        );
+        if (approved.ok !== true) return approved;
         return await withScriptRegistrationGrant(
           { permission: "scripting", permissionLabel: "Site Agents", patterns: m.patterns, origins: m.origins },
           "updated",
@@ -6508,7 +6547,7 @@ export function browserToolset(readOnly = false, {
             if (runAt !== undefined) script.runAt = runAt;
             if (world !== undefined) script.world = world;
             await chrome.scripting.updateContentScripts([script]);
-            return { ok: true, id, matches: m.patterns, jsBytes: js.length };
+            return { ok: true, id, matches: m.patterns, jsBytes };
           },
         );
       },

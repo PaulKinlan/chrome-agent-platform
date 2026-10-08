@@ -87,6 +87,7 @@ Deno.test("dark-scheme: primary pages declare the color-scheme meta", () => {
     "extension/options/options.html",
     "extension/artifact/artifact.html",
     "extension/artifacts/index.html",
+    "extension/sandbox/artifact-preview.html",
   ]) {
     assert(
       read(page).includes('<meta name="color-scheme" content="light dark">'),

@@ -100,6 +100,15 @@ import {
 } from "../lib/wasm-stream-run-lifecycle.js";
 import { WASM_STREAM_RUN_TYPE, WASM_STREAM_WALL_MS } from "../lib/wasm-stream-host.js";
 import { CALLEXPORT_RUN_TYPE } from "../lib/wasm-callexport-host.js";
+import { EMSCRIPTEN_RUN_TYPE } from "../lib/emscripten-host.js";
+// The dispatch broker reads the registry through the small read-only core —
+// the write/validation authority module stays out of this bundle (the
+// standing static/RHC boundary pin).
+import { readCommittedPackages } from "../lib/wasm-package-registry-core.js";
+import {
+  buildEmscriptenRunEnvelope,
+  executableEmscriptenToolRecords,
+} from "../lib/emscripten-run-broker.js";
 import { WASI_JOB_RUN_TYPE } from "../lib/wasm-job-host.js";
 import { decodeCanonicalBase64 } from "../lib/wasm-base64.js";
 import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
@@ -411,7 +420,7 @@ import {
 } from "../lib/browser-tools.js";
 import { getSkill, SKILLS, backgroundSkills, intentOf, agentSkillIds, mergeRunSkills } from "../lib/skill-registry.js";
 import { skillMatchesUrl } from "../shared/match-patterns.js";
-import { resolveSkillRef } from "../lib/skill-resolve.js";
+import { resolveSkillRef, createMemoizedSkillStores } from "../lib/skill-resolve.js";
 import {
   fetchSkillFromUrl,
   installImportedSkill,
@@ -748,6 +757,83 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
   }
 }
 
+// Admitted-Emscripten lane (chrome-agent-platform-ltkj.3): the broker
+// re-queries the registry FRESH at dispatch (a stale version/graphDigest fails
+// closed — admission state is the execution grant), builds the exact
+// cap:emscripten-run envelope from the admitted manifest, and races the
+// offscreen host with the lifecycle-derived deadline. graphDigest may be null
+// when the caller is the Settings surface — identity then comes entirely from
+// the fresh read (nothing is caller-asserted).
+async function runAdmittedEmscripten({ packageId, version, graphDigest, operationId, args, authority }) {
+  const store = await masterMemory();
+  const read = await readCommittedPackages(store);
+  if (!read.ok) return { ok: false, phase: "failed", error: `emscripten_${read.error}` };
+  const current = read.packages.get(packageId);
+  if (!current) return { ok: false, phase: "failed", error: "emscripten_registry_absent" };
+  if (!current.manifest) return { ok: false, phase: "failed", error: "emscripten_not_schema2" };
+  if (current.version !== version || (graphDigest != null && current.graphDigest !== graphDigest)) {
+    return { ok: false, phase: "failed", error: "emscripten_stale_graph" };
+  }
+  const envelope = buildEmscriptenRunEnvelope({ record: current, operationId, args, authority });
+  if (!envelope) return { ok: false, phase: "failed", error: "emscripten_operation_unknown" };
+  const host = await ensureOffscreen();
+  if (!host.ok) return host;
+  const wallMs = envelope.lifecycle.startupMs + envelope.lifecycle.callMs + 10_000;
+  try {
+    return await new Promise((resolve) => {
+      let settled = false;
+      const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+      const timer = setTimeout(
+        () => finish({ ok: false, phase: "timeout", error: "emscripten run timed out (SW)" }),
+        wallMs,
+      );
+      chrome.runtime.sendMessage(envelope, (result) => {
+        clearTimeout(timer);
+        const lastErr = chrome.runtime.lastError;
+        if (lastErr) finish({ ok: false, phase: "failed", error: lastErr.message ?? "emscripten_no_response" });
+        else finish(result ?? { ok: false, phase: "failed", error: "emscripten_empty_response" });
+      });
+    });
+  } catch (error) {
+    return failPhaseResult(error);
+  }
+}
+
+async function dispatchEmscriptenRun({ packageId, version, graphDigest, operationId, args, context }) {
+  const runId = typeof context?.runId === "string" && context.runId ? context.runId : null;
+  if (!runId) throw new Error("emscripten_run_required");
+  const authority = buildPreviewAuthority({
+    origin: typeof context?.origin === "string" && /^https?:\/\//u.test(context.origin)
+      ? new URL(context.origin).origin
+      : "https://agent.cap",
+    documentId: String(context?.documentId || runId),
+  });
+  return await runAdmittedEmscripten({ packageId, version, graphDigest, operationId, args, authority });
+}
+
+async function loadAdmittedEmscriptenPackages() {
+  try {
+    const store = await masterMemory();
+    const read = await readCommittedPackages(store);
+    if (!read.ok) return []; // busy/corrupt registry surfaces no tools (fail closed)
+    const rows = [];
+    for (const [packageId, current] of read.packages) {
+      rows.push({
+        packageId,
+        version: current.version,
+        manifestDigest: current.manifestDigest,
+        capabilityDigest: current.capabilityDigest,
+        graphDigest: current.graphDigest ?? null,
+        schema2: Boolean(current.manifest),
+        manifest: current.manifest ?? null,
+      });
+    }
+    return rows;
+  } catch {
+    return []; // registry unavailable (e.g. OPFS absent in a test realm) — no tools surface
+  }
+}
+
 async function runWasmStreamTool({ toolId, args, inputRef, owner, origin = PREVIEW_SETTINGS_ORIGIN, documentId = "settings-options" }) {
   if (!STREAM_BACKED_BUNDLED_TOOL_IDS.includes(toolId)) {
     // ten9: the stream route only serves stream-backed tools; non-stream tools
@@ -921,7 +1007,7 @@ const loadAllImported = async () => {
   return rows;
 };
 
-async function resolveSkill(id) {
+async function resolveSkill(id, stores = null) {
   // The REAL resolver lives in lib/skill-resolve.js (CAP-FB-20260831-SKILL-
   // LIST-SYNC-01 r4) so tests exercise the actual resolution logic against
   // real (faked-OPFS) stores. Source-locking: imported:<id> only the imported
@@ -930,10 +1016,25 @@ async function resolveSkill(id) {
   // duplicated agents).
   return await resolveSkillRef({
     ref: id,
-    stores: { getSkill, getCustomSkills, loadAllImported, readSkillFile },
+    stores: stores ?? { getSkill, getCustomSkills, loadAllImported, readSkillFile },
     bodyBudget: PROMPT_SKILL_BODY_BUDGET,
   });
 }
+
+async function mapConcurrentChunks(items, fn, chunkSize = 24) {
+  const results = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    const chunk = items.slice(i, i + chunkSize);
+    const chunkResults = await Promise.all(chunk.map(fn));
+    results.push(...chunkResults);
+  }
+  return results;
+}
+
+function skillStores() {
+  return createMemoizedSkillStores({ getSkill, getCustomSkills, loadAllImported, readSkillFile });
+}
+
 // ── skill references (a skill is INCLUDED in a task) ─────────────────────
 // The composer can reference a skill ANYWHERE in the string via /skill:<id>.
 // resolveSkillRefs extracts those references + expands each to its prompt, so
@@ -953,14 +1054,14 @@ function skillRefIds(task) {
   }
   return ids;
 }
-async function resolveSkillRefs(task) {
+async function resolveSkillRefs(task, stores = null) {
   const ids = skillRefIds(task);
-  const out = [];
-  for (const id of ids) {
-    const skill = await resolveSkill(id);
-    if (skill) out.push(skill);
-  }
-  return out;
+  if (ids.length === 0) return [];
+  const s = stores ?? skillStores();
+  const resolved = await Promise.all(
+    ids.map((id) => resolveSkill(id, s))
+  );
+  return resolved.filter(Boolean);
 }
 
 // An agent's SAVED skills (picked at create/edit, e.g. from a template) ride
@@ -968,13 +1069,14 @@ async function resolveSkillRefs(task) {
 // and composed into the system prompt (the templates review P1: saved skills
 // were persisted but decorative at execution). Unknown ids resolve to nothing
 // (a deleted skill drops out of the composition honestly).
-async function resolveAgentSkills(agent) {
-  const out = [];
-  for (const id of agentSkillIds(agent)) {
-    const skill = await resolveSkill(id);
-    if (skill) out.push(skill);
-  }
-  return out;
+async function resolveAgentSkills(agent, stores = null) {
+  const ids = agentSkillIds(agent);
+  if (ids.length === 0) return [];
+  const s = stores ?? skillStores();
+  const resolved = await Promise.all(
+    ids.map((id) => resolveSkill(id, s))
+  );
+  return resolved.filter(Boolean);
 }
 
 // ── agent schedules (ONE agent concept: persona + skills + memory + OPTIONAL
@@ -2368,6 +2470,13 @@ async function liveChromeLazyRecords({ browserTools, managementTools, onDeviceTo
         dispatchBundledTool: dispatchBundledWasmStream,
       },
     ),
+    // Admitted schema-2 Emscripten packages (ltkj.3): the registry is the
+    // source of truth — committed records surface as tools; dispatch
+    // re-authorizes against a fresh registry read (stale graphs fail closed).
+    ...executableEmscriptenToolRecords(await loadAdmittedEmscriptenPackages(), {
+      scope,
+      dispatchEmscriptenRun,
+    }),
     ...userWasmLazyRecords(userWasmRows, {
       agentTools,
       scope,
@@ -4295,14 +4404,16 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
       // those skills on resume — a continuation that does not re-mention
       // /skill:x still runs with it. Deleted skills resolve to nothing and are
       // silently skipped (resolveSkill returns null).
-      let runSkills = mergeRunSkills(agentSkills, await resolveSkillRefs(task));
+      const runSkillStores = skillStores();
+      const taskSkills = await resolveSkillRefs(task, runSkillStores);
+      let runSkills = mergeRunSkills(agentSkills, taskSkills);
       if (Array.isArray(journaledSkillIds) && journaledSkillIds.length > 0) {
-        const journaled = [];
-        for (const skillId of journaledSkillIds) {
-          const skill = await resolveSkill(skillId);
-          if (skill) journaled.push(skill);
-        }
-        runSkills = mergeRunSkills(agentSkills, journaled, await resolveSkillRefs(task));
+        const journaled = (await mapConcurrentChunks(
+          journaledSkillIds,
+          (skillId) => resolveSkill(skillId, runSkillStores),
+          JOURNALED_SKILLS_CAP,
+        )).filter(Boolean);
+        runSkills = mergeRunSkills(agentSkills, journaled, taskSkills);
       }
       // The resolved skill IDs journal onto the terminal thread row so a LATER
       // continuation re-applies them (the same union the caller of a fresh
@@ -5049,7 +5160,7 @@ chrome.permissions?.onAdded?.addListener((granted) => {
   })().catch(() => {});
 });
 
-async function issueBridgeNonce(tabId, documentId, diagnostics) {
+async function issueBridgeNonce(tabId, documentId) {
   let nonce = bridgeNonceMemory.get(documentId) ?? null;
   if (!nonce) {
     try {
@@ -5090,7 +5201,7 @@ async function issueBridgeNonce(tabId, documentId, diagnostics) {
         }
         g.capMainWorldPendingBootstrap = { nonce: n, diagnostics: d };
       },
-      args: [nonce, diagnostics === true],
+      args: [nonce, false], // page MAIN world must never receive an owner-global toggle
     });
     return nonce;
   } catch {
@@ -5653,6 +5764,16 @@ const DESTRUCTIVE_BROWSER_ACTIONS = new Set([
   "browser.remove-bookmark",
   "browser.set-cookie",
   "browser.remove-cookie",
+  "browser.register-user-script",
+  "browser.update-user-script",
+  "browser.register-content-script",
+  "browser.update-content-script",
+]);
+const SCRIPT_REGISTRATION_ACTIONS = new Set([
+  "browser.register-user-script",
+  "browser.update-user-script",
+  "browser.register-content-script",
+  "browser.update-content-script",
 ]);
 const DESTRUCTIVE_POLICY_KEY = "cap:destructiveActionPolicy";
 // The owner's Settings choice for the Destructive class: "ask" (default — every
@@ -5933,6 +6054,10 @@ const GATED_WORKER_TOOLS = new Set([
   // write_file pays the diff approval card through the route-bound gate
   // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
   "write_file",
+  // Script registration pays the source-digest approval card
+  // (chrome-agent-platform-oagmf).
+  "register_user_script", "update_user_script",
+  "register_content_script", "update_content_script",
 ]);
 async function executeWorkerTool(toolName, args, context) {
   const name = String(toolName || "").slice(0, 128);
@@ -6697,6 +6822,12 @@ const handlers = mergeRouteMaps(
             return { ok: false, approvalDenied: true, error: `Destructive browser actions are blocked in Settings; ${action} was not performed.` };
           }
           if (isApproved) {
+            if (typeof SCRIPT_REGISTRATION_ACTIONS !== "undefined" && SCRIPT_REGISTRATION_ACTIONS.has(action)) {
+              if (typeof message?.approvedDigest === "string" && message.approvedDigest === payload?.digest && /^[0-9a-f]{64}$/.test(payload?.digest)) {
+                return { ok: true, approvalConsumed: true };
+              }
+              return { ok: false, approvalDenied: true, error: "script registration digest was not approved" };
+            }
             return { ok: true, approvalConsumed: true };
           }
           const res = await dispatchRoute("browser.destructive-action", { action, ...payload }, callContext);
@@ -7477,8 +7608,9 @@ const handlers = mergeRouteMaps(
   mcpRoutes,
   {
   async "invalidate-agent"() {
-    // The options page calls this after toggling agent mode (multi-agent) so the
-    // running orchestrator is rebuilt with the new setting.
+    // The options page calls this after toggling agent mode (multi-agent) or
+    // restoring profile data so the running orchestrator and cached run states are dropped.
+    durableRuns.forgetCachedState?.();
     invalidateAgent();
     return { invalidated: true };
   },
@@ -7588,6 +7720,116 @@ const handlers = mergeRouteMaps(
         if (lastErr) finish({ ok: false, error: lastErr.message ?? "no options host response" });
         else finish(res ?? { ok: false, error: "empty validation response" });
       });
+    });
+  },
+  // Settings-only schema-2 tool package execution (chrome-agent-platform-ltkj.3).
+  // An explicit owner action from the Settings surface executes an admitted
+  // operation; the service worker is the sole authority that resolves the
+  // admitted manifest from the registry, validates the args, and brokers the
+  // run to the offscreen host.
+  async "tool.package.run"(m, context) {
+    if (context?.principal !== "owner-options") {
+      securityEvent("blocked-action", `tool package run denied for principal ${context?.principal ?? "unknown"}`);
+      return { ok: false, error: "tool package run is restricted to the Settings surface" };
+    }
+    const optionsUrl = chrome.runtime.getURL("options/options.html");
+    const senderUrl = context?.senderUrl ?? "";
+    const exactDoc = senderUrl === optionsUrl ||
+      (typeof senderUrl === "string" &&
+        senderUrl.startsWith(optionsUrl) &&
+        /^#[A-Za-z0-9-]+$/.test(senderUrl.slice(optionsUrl.length)));
+    if (typeof context?.documentId !== "string" || !context.documentId || !exactDoc || Boolean(context?.pageSender)) {
+      securityEvent("blocked-action", "tool package run sender rejected");
+      return { ok: false, error: "sender is not the exact Settings document" };
+    }
+    const messageKeys = Object.keys(m ?? {});
+    const allowed = new Set(["type", "packageId", "version", "graphDigest", "operationId", "args", "mode"]);
+    if (messageKeys.some((k) => !allowed.has(k))) {
+      return { ok: false, error: "extra_keys_rejected" };
+    }
+    const { packageId, version, graphDigest, operationId, args, mode } = m ?? {};
+    if (typeof packageId !== "string" || !/^[a-z0-9]+(\.[a-z0-9_-]+)+$/u.test(packageId)) {
+      return { ok: false, error: "package_id_invalid" };
+    }
+    if (typeof version !== "string" || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(version)) {
+      return { ok: false, error: "version_invalid" };
+    }
+    if (graphDigest !== undefined && (typeof graphDigest !== "string" || !/^[0-9a-f]{64}$/u.test(graphDigest))) {
+      return { ok: false, error: "graph_digest_invalid" };
+    }
+    if (typeof operationId !== "string" || !operationId) {
+      return { ok: false, error: "operation_id_invalid" };
+    }
+    if (mode !== undefined && mode !== "broker" && mode !== "direct") {
+      return { ok: false, error: "mode_invalid" };
+    }
+    if (!Array.isArray(args) && (typeof args !== "object" || args === null)) {
+      return { ok: false, error: "args_invalid" };
+    }
+
+    // Call Path 2: Model-facing broker dispatch via liveChromeLazyRecords (line 2460).
+    // Exercises the live registered lazy tool records constructed in the Service Worker,
+    // runs argument validation against the admitted parameter schema, authorizes, and
+    // dispatches through the broker's dispatchEmscriptenRun closure.
+    if (mode === "broker") {
+      const records = await liveChromeLazyRecords({ browserTools: {}, managementTools: {} });
+      const record = records.find(
+        (r) => r.descriptorInput?.packageId === packageId &&
+               r.descriptorInput?.sourceKind === "emscripten-package" &&
+               r.descriptorInput?.operationId === operationId,
+      );
+      if (!record) return { ok: false, phase: "failed", error: "lazy_tool_not_registered" };
+
+      let namedArgs = args;
+      if (Array.isArray(args)) {
+        namedArgs = {};
+        const paramNames = Object.keys(record.descriptorInput.inputSchema?.properties ?? {});
+        for (let i = 0; i < args.length; i++) {
+          if (paramNames[i]) namedArgs[paramNames[i]] = args[i];
+        }
+      }
+      const validated = await record.validateArguments(namedArgs);
+      if (!validated.ok) return { ok: false, phase: "failed", error: "lazy_args_invalid: " + validated.error };
+      const auth = await record.authorize(validated.data, context);
+      if (!auth.ok) return { ok: false, phase: "failed", error: "lazy_auth_denied" };
+
+      // If a specific graphDigest was requested (e.g. stale-graph testing), dispatch
+      // directly with that graphDigest; otherwise invoke the record's dispatch method.
+      if (typeof graphDigest === "string") {
+        return await dispatchEmscriptenRun({
+          packageId,
+          version,
+          graphDigest,
+          operationId,
+          args: validated.data?.args ?? [],
+          context: {
+            runId: `model-run-${crypto.randomUUID().slice(0, 8)}`,
+            agentId: "hub",
+            origin: "https://agent.cap",
+            documentId: String(context.documentId),
+          },
+        });
+      }
+      return await record.dispatch(validated.data, {
+        runId: `model-run-${crypto.randomUUID().slice(0, 8)}`,
+        agentId: "hub",
+        origin: "https://agent.cap",
+        documentId: String(context.documentId),
+      });
+    }
+
+    // Call Path 1: Settings direct run to broker dispatch.
+    return await dispatchEmscriptenRun({
+      packageId,
+      version,
+      graphDigest: typeof graphDigest === "string" ? graphDigest : null,
+      operationId,
+      args: Array.isArray(args) ? args : [],
+      context: {
+        runId: `settings-preview-${crypto.randomUUID().slice(0, 12)}`,
+        origin: "https://agent.cap",
+        documentId: String(context.documentId),
+      },
     });
   },
   // CAP-FB-20260822-TOOL-PREVIEW-EXEC-01 — the FIRST real bundled execution:
@@ -8730,7 +8972,9 @@ const handlers = mergeRouteMaps(
     return { ok: true, targets };
   },
 
-  /** Owner export of ALL agent data (chrome-agent-platform-ykb). OWNER
+  /** Legacy buffered owner export (JSON bundle) — retained for backward
+   * compatibility with test harnesses and legacy tools. Settings UI now runs
+   * the unbounded streaming TAR export driver directly in the Options page. OWNER
    * GESTURE ONLY — this route is never registered in any model-callable tool
    * catalog: a full memory export is a high-value exfiltration target. The
    * bundle is inspectable JSON; provider API keys and MCP auth headers are
@@ -8773,25 +9017,46 @@ const handlers = mergeRouteMaps(
     if (typeof bundle !== "string" || !bundle.length) {
       return { ok: false, code: "archive-bad-shape", error: "no bundle supplied" };
     }
-    try {
-      const root = await navigator.storage.getDirectory();
-      const report = await importArchive(bundle, {
-        kvGet,
-        kvSet,
-        kvRemove,
-        opfs: createOpfsAdapter(root),
-        alarms: createChromeAlarmsAdapter(),
-        overwrite: overwrite === true,
-      });
-      // The restored profile changes provider config, agents and durable runs
-      // under this worker's feet — drop cached state the way factory reset
-      // does, so the next run reads the restored stores, not a stale cache.
-      durableRuns.forgetCachedState?.();
-      invalidateAgent();
-      return { ok: true, report };
-    } catch (err) {
-      return { ok: false, code: err?.code ?? "import_failed", error: `import failed: ${err?.message || err}` };
+
+    // Check if a streaming restore is currently active with fresh heartbeat
+    const activeCheck = await kvGet(["cap:restoreHeartbeat", "cap:restoreClaim"]).catch(() => null);
+    if (activeCheck?.["cap:restoreHeartbeat"] && (Date.now() - Number(activeCheck["cap:restoreHeartbeat"])) < 30000) {
+      return { ok: false, code: "restore_in_progress", error: "Another restore operation is currently in progress." };
     }
+
+    const executeWithLock = async (fn) => {
+      if (typeof navigator !== "undefined" && navigator.locks?.request) {
+        return await navigator.locks.request("cap:restoreLock", { mode: "exclusive", ifAvailable: true }, async (lock) => {
+          if (!lock) {
+            return { ok: false, code: "restore_in_progress", error: "Another restore operation is currently in progress." };
+          }
+          return await fn();
+        });
+      }
+      return await fn();
+    };
+
+    return await executeWithLock(async () => {
+      try {
+        const root = await navigator.storage.getDirectory();
+        const report = await importArchive(bundle, {
+          kvGet,
+          kvSet,
+          kvRemove,
+          opfs: createOpfsAdapter(root),
+          alarms: createChromeAlarmsAdapter(),
+          overwrite: overwrite === true,
+        });
+        // The restored profile changes provider config, agents and durable runs
+        // under this worker's feet — drop cached state the way factory reset
+        // does, so the next run reads the restored stores, not a stale cache.
+        durableRuns.forgetCachedState?.();
+        invalidateAgent();
+        return { ok: true, report };
+      } catch (err) {
+        return { ok: false, code: err?.code ?? "import_failed", error: `import failed: ${err?.message || err}` };
+      }
+    });
   },
 
   /** The privacy page's inputs (CAP-FB-20260830-PRIVACY-STATEMENT-01): the
@@ -9434,11 +9699,9 @@ const handlers = mergeRouteMaps(
       // (unbound) or a failed arm gets no key — its bridge stays unarmed and
       // every discovery/invocation message fails closed.
       if (snap.enrolled && epoch != null) {
-        nonce = await issueBridgeNonce(
-          __sender.tabId,
-          __sender.documentId,
-          await webmcpDiagnosticsEnabled(),
-        );
+        // MAIN executes in the page realm; the nonce is document-scoped, but
+        // the owner's global diagnostics preference is never delivered there.
+        nonce = await issueBridgeNonce(__sender.tabId, __sender.documentId);
       }
     }
     return { ok: true, enrolled: snap.enrolled, gen: snap.gen, epoch, nonce };
@@ -9459,7 +9722,8 @@ const handlers = mergeRouteMaps(
   async "tools.allOrigins"() {
     return await listOrigins();
   },
-  async "webmcp.diagnostics.get"() {
+  async "webmcp.diagnostics.get"(_message, context) {
+    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
     return { enabled: await webmcpDiagnosticsEnabled() };
   },
   async "webmcp.diagnostics.set"({ enabled }) {
@@ -9987,10 +10251,18 @@ const handlers = mergeRouteMaps(
   // is digest-bound to this precise operation. The Settings policy is consulted
   // first: the owner can set the Destructive class to "never" (block outright);
   // the default is "ask".
-  async "browser.destructive-action"({ action, ref }, context) {
+  async "browser.destructive-action"({ action, ref, digest, ...extra }, context) {
     const act = typeof action === "string" ? action : "";
     if (!DESTRUCTIVE_BROWSER_ACTIONS.has(act)) {
       return ERR_ACTION_NOT_APPROVABLE;
+    }
+    if (SCRIPT_REGISTRATION_ACTIONS.has(act)) {
+      if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest)) {
+        return { ok: false, error: "valid 64-character lowercase hex sha256 digest is required for script registration approval" };
+      }
+      if (!Array.isArray(extra?.matches) || extra.matches.length === 0 || extra.matches.length > 8 || extra.matches.some((m) => typeof m !== "string" || !m || m.length > 2048)) {
+        return { ok: false, error: "script registration approval requires an array of 1 to 8 match patterns" };
+      }
     }
     const policy = await destructiveActionPolicy();
     if (policy === "never") {
@@ -10001,9 +10273,31 @@ const handlers = mergeRouteMaps(
     if (!target) return ERR_ACTION_NOT_APPROVABLE;
     let payload;
     try {
-      payload = payloadFields([["action", act], ["ref", refStr]]);
+      const fields = [["action", act], ["ref", refStr]];
+      if (typeof digest === "string" && digest) {
+        fields.push(["digest", digest]);
+      }
+      if (SCRIPT_REGISTRATION_ACTIONS.has(act)) {
+        const matchesArr = Array.isArray(extra?.matches)
+          ? extra.matches.filter((m) => typeof m === "string").sort().join(",")
+          : "";
+        fields.push(["matches", matchesArr]);
+        if (typeof extra?.runAt === "string" && extra.runAt) {
+          fields.push(["runAt", extra.runAt]);
+        }
+        if (typeof extra?.world === "string" && extra.world) {
+          fields.push(["world", extra.world]);
+        }
+      }
+      payload = payloadFields(fields);
     } catch { return ERR_ACTION_NOT_APPROVABLE; }
-    return await requireOwnerApproval(context, act, target, payload);
+    const detail = {
+      action: act,
+      ref: refStr,
+      ...(typeof digest === "string" ? { digest } : {}),
+      ...(extra && typeof extra === "object" ? extra : {}),
+    };
+    return await requireOwnerApproval(context, act, target, payload, detail);
   },
   async "task.schedule-script"({ scriptId }, context) {
     // The approval leg of schedule_task with a scriptId: the browser tool
@@ -10212,6 +10506,17 @@ const handlers = mergeRouteMaps(
   },
 
   async "register-task"(m) {
+    if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+      try {
+        const fenceCheck = await chrome.storage.local.get("cap:restoreFence");
+        if (fenceCheck?.["cap:restoreFence"]) {
+          throw new Error("Cannot register task: profile restore is in progress");
+        }
+      } catch (err) {
+        if (err?.message?.includes("profile restore is in progress")) throw err;
+        throw new Error(`Failed to verify restore admission fence: ${err?.message || err}`);
+      }
+    }
     const { name, when } = await registerAlarm(m.task);
     return { ok: true, name, when };
   },
@@ -12474,32 +12779,143 @@ recoverOnBoot()
     }
   })
   .catch((e) => swLog.error("wz6i schedule re-key:", e?.message ?? e));
+const RESTORE_RECOVERY_ALARM = "cap-restore-recovery-alarm";
+function scheduleRecoveryAlarm(delayMs) {
+  if (typeof chrome !== "undefined" && chrome?.alarms?.create) {
+    chrome.alarms.create(RESTORE_RECOVERY_ALARM, { when: Date.now() + delayMs });
+  }
+}
+function clearRecoveryAlarm() {
+  if (typeof chrome !== "undefined" && chrome?.alarms?.clear) {
+    chrome.alarms.clear(RESTORE_RECOVERY_ALARM).catch(() => {});
+  }
+}
+if (typeof chrome !== "undefined" && chrome?.alarms?.onAlarm) {
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm?.name === RESTORE_RECOVERY_ALARM) {
+      if (typeof checkPendingImport === "function") checkPendingImport();
+    }
+  });
+}
+
 // chrome-agent-platform-ch8x: a worker death mid-import leaves a durable
 // recovery journal — restore the original profile before anything reads it.
 // Module eval runs on EVERY worker start (onStartup does not), and the
 // recovery self-cancels once the journal is consumed. Skipped where the
 // storage surface does not exist (test harness contexts).
+let checkPendingImport = null;
 if (navigator?.storage?.getDirectory) {
-  const checkPendingImport = async () => {
+  checkPendingImport = async () => {
     try {
-      let pendingVal = null;
-      if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-        const stored = await chrome.storage.local.get("cap:importBackup");
-        pendingVal = stored?.["cap:importBackup"];
-      } else {
-        pendingVal = await kvGet("cap:importBackup");
-      }
-      if (!pendingVal) return;
-      const root = await navigator.storage.getDirectory();
-      await recoverPendingImport({
-        kvGet,
-        kvSet,
-        kvRemove,
-        opfs: createOpfsAdapter(root),
-        alarms: createChromeAlarmsAdapter(),
+      const executeWithLock = async (fn) => {
+        if (typeof navigator !== "undefined" && navigator.locks?.request) {
+          return await navigator.locks.request("cap:restoreLock", { mode: "exclusive", ifAvailable: true }, async (lock) => {
+            if (!lock) {
+              // Lock contention: another context holds restoreLock. Schedule a retry
+              // after the heartbeat window so if Options dies mid-commit, the journal
+              // is guaranteed to be recovered even if the service worker sleeps.
+              setTimeout(checkPendingImport, 15000);
+              scheduleRecoveryAlarm(35000);
+              return;
+            }
+            return await fn();
+          });
+        }
+        return await fn();
+      };
+
+      await executeWithLock(async () => {
+        let pendingVal = null;
+        let stored = null;
+        if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+          stored = await chrome.storage.local.get([
+            "cap:importBackup",
+            "cap:restoreHeartbeat",
+            "cap:restoreFence",
+            "cap:restoreClaim",
+            "cap:invalidationPending",
+          ]);
+          pendingVal = stored?.["cap:importBackup"];
+          // Do not roll back an active restore with a fresh heartbeat from Options page
+          if (stored?.["cap:restoreHeartbeat"] && (Date.now() - Number(stored["cap:restoreHeartbeat"])) < 30000) {
+            const remaining = 30000 - (Date.now() - Number(stored["cap:restoreHeartbeat"]));
+            const delay = Math.max(remaining + 2000, 5000);
+            setTimeout(checkPendingImport, delay);
+            scheduleRecoveryAlarm(delay + 5000);
+            return;
+          }
+        } else {
+          pendingVal = await kvGet("cap:importBackup");
+        }
+        if (!pendingVal) {
+          // If a prior committed restore left an invalidation-pending marker, confirmed invalidation
+          // must succeed before clearing coordination keys and releasing run admission.
+          if (stored?.["cap:invalidationPending"]) {
+            try {
+              durableRuns.forgetCachedState?.();
+              invalidateAgent?.();
+              await chrome.storage.local.remove(["cap:invalidationPending"]);
+            } catch (invErr) {
+              scheduleRecoveryAlarm(15000);
+              return;
+            }
+          }
+          // A crash before the journal was written leaves no backup journal, but
+          // may have left an admission fence and abandoned staging/rollback copies.
+          // Clean stale coordination keys and reclaim abandoned temporary directories under lock
+          // and verify removal before clearing the alarm so run admission is not permanently blocked.
+          if (stored?.["cap:restoreFence"] || stored?.["cap:restoreClaim"]) {
+            const recheck = await chrome.storage.local.get(["cap:restoreClaim", "cap:restoreHeartbeat"]);
+            if (!recheck?.["cap:restoreHeartbeat"] || (Date.now() - Number(recheck["cap:restoreHeartbeat"])) >= 30000) {
+              try {
+                // Reclaim abandoned temporary directories in OPFS (.staging-restore-* or .rollback-backup-*)
+                try {
+                  const root = await navigator.storage.getDirectory();
+                  const adapter = createOpfsAdapter(root);
+                  const files = await adapter.listFiles();
+                  for (const f of files) {
+                    if (f.startsWith(".staging-restore-") || f.startsWith(".rollback-backup-") || f.startsWith(".staging-export-")) {
+                      await adapter.removeFile(f).catch(() => {});
+                    }
+                  }
+                } catch { /* best-effort cleanup of orphan staging files */ }
+
+                await chrome.storage.local.remove(["cap:restoreFence", "cap:restoreClaim", "cap:restoreHeartbeat"]);
+                const verify = await chrome.storage.local.get("cap:restoreFence");
+                if (verify?.["cap:restoreFence"]) {
+                  throw new Error("fence verification failed");
+                }
+                clearRecoveryAlarm();
+              } catch (cleanErr) {
+                // Removal failed: reschedule recovery alarm to retry fence cleanup
+                scheduleRecoveryAlarm(10000);
+              }
+            } else {
+              scheduleRecoveryAlarm(15000);
+            }
+          } else {
+            clearRecoveryAlarm();
+          }
+          return;
+        }
+        const root = await navigator.storage.getDirectory();
+        await recoverPendingImport({
+          kvGet,
+          kvSet,
+          kvRemove,
+          opfs: createOpfsAdapter(root),
+          alarms: createChromeAlarmsAdapter(),
+          onRollback: async () => {
+            durableRuns.forgetCachedState?.();
+            invalidateAgent?.();
+            return { invalidated: true };
+          },
+        });
+        clearRecoveryAlarm();
       });
     } catch (e) {
       swLog.error("import recovery:", e?.message ?? e);
+      scheduleRecoveryAlarm(15000);
     }
   };
   checkPendingImport();

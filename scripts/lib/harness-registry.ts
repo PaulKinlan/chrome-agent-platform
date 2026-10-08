@@ -107,21 +107,13 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "read-page-host-grant-acceptance.ts": { class: "named", npm: "test:read-page-host-grant", reason: "11/11 at the re-inventory (14 s); run on demand — promotion is the owner's call" },
   "sidebar-parity.ts": { class: "named", npm: "test:sidebar", reason: "19/1 after the cwy2 instrument repair (2026-09-22). It had been crashing on main with an uncaught TypeError and running ZERO of its checks: drifted #task-input/#run-task composer selectors (the component's stable hooks are [data-composer-input]/[data-composer-send]), a .threads.length read off the dispatcher's {ok:false,error} reply, a dark step driving the removed cap:theme/data-theme mechanism, and an inherited colour scheme that resolves dark on this box. The one red is a PRODUCT finding owned by chrome-agent-platform-o1y1 — the Site tools panel states one instruction three ways, all three lines measured visible; promote once o1y1 lands" },
   "ui-integration.ts": { class: "named", npm: "test:ui", reason: "58/0 on lx6b (2026-10-06): current 56px in-flow rail, five named 36px nav controls, hidden Create, real Agents pointer route, in-rail toggle hit-test/Tab/Enter/Space, thread-overlay pointer and RTL/narrow/reduced-motion; screenshot evidence; 29s; 6-min watchdog still bounds a hang, not a cure; run on demand — promotion is the owner's call" },
-  // The measured counterpart to tests/harness-marks.test.ts. That test pins the chips' CSS
-  // BY TEXT (a regex over sidepanel.html); this drives the real side panel in a real browser at
-  // 260/300/400px and asserts on GEOMETRY, so it fails when the behaviour goes and the text stays.
-  // Why it exists: the owner reported the harness buttons squashing when the panel collapses, and
-  // "the fix is on disk" and "the fix is in front of him" are different claims — the second is
-  // what this measures. Falsification (2026-09-22): deleting the mark append turns "every harness
-  // button carries a mark" red; removing the @container block turns the collapsed-rule check red
-  // (the chip grows 34px -> 54px and nothing else notices).
-  "constrained-width-layout.ts": { class: "named", npm: "test:width", reason: "46/0 measured against the canonical extension on 2026-09-22 (~40 s): the marks render, the collapsed container query fires, nothing wraps or overflows. Run on demand — promotion to test:all is the owner's call" },
   "webmcp-acceptance.ts": { class: "named", npm: "test:webmcp", reason: "82/0 at the re-inventory (after its stderr-reader crash was removed by the launcher migration); the WebMCP lane's acceptance, run on demand with its fresh-profile picker proof" },
   "webmcp-realsite-probe.ts": { class: "manual", reason: "network-dependent diagnostic (chrome-agent-platform-ajcc): drives the REAL search_docs on beads.gascity.com through production enrollment + invocation with the diagnostics channel on, capturing the raw page-side error the bridge redaction strips; run by hand when the dispatch path changes" },
   "report-chrome-profiles.ts": { class: "manual", reason: "vk1t read-only on-demand inventory of the shared Chrome profile root; reports admission headroom and dead/unknown/live lock evidence without pruning any profile. Not a browser gate or an automated cleanup job", noVerdict: "inventory only: reports observations, not a pass/fail assertion; an admission-cap warning is not a defect in the inventory" },
 
   // ── KATs (npm run test:kat via scripts/kat-runner.ts) ───────────────────
   "kat-attention-badge.ts": { class: "kat" },
+  "kat-constrained-width-layout.ts": { class: "kat" },
   "kat-activity-explorer.ts": { class: "kat", ...RED("7/5", "the backend 'ok' scenario renders 1 row with options ['', 'master']") },
   "kat-agent-board.ts": { class: "kat" },
   // 61/0 since CAP-FB-20260902-KAT-AGENT-DELEGATION-RED-01 re-baselined the over-cap
@@ -169,10 +161,12 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-dialog-consolidation.ts": { class: "kat" },
   "kat-exec-build-flag.ts": { class: "kat", ...RED("29/1", "'flag on: all thirteen nav items are visible' — the nav now has fourteen entries") },
   "kat-failed-runs.ts": { class: "kat" },
+  "kat-gi0jw-activity-approval.ts": { class: "kat", budgetMs: 900_000 },
   "kat-generated-image-strip.ts": { class: "kat" },
   "kat-genui-error-state.ts": { class: "kat", ...RED("15/3", "three generated-UI error-state checks red: preview frame absent and retry status null", "the generated-UI bootstrap syntax lane (in flight)") },
   "kat-hub-timeline.ts": { class: "kat" },
   "kat-interactive-artifact-click.ts": { class: "kat", budgetMs: 240_000 },
+  "kat-jobs-panel-live.ts": { class: "kat", budgetMs: 240_000 },
   "kat-mcp-agent-ui.ts": { class: "kat" },
   "kat-mcp-global-ui.ts": { class: "kat" },
   "kat-mcp-tool-injection.ts": { class: "kat" },
@@ -202,6 +196,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-settings-server-tools.ts": { class: "kat" },
   "kat-sidebar-hydration-race.ts": { class: "kat" },
   "kat-site-delegation-attachments.ts": { class: "kat" },
+  "kat-streaming-bubble.ts": { class: "kat" },
   "kat-task-lifecycle.ts": { class: "kat", ...RED("0/1", "'no service worker target' — the KAT does not wait for the MV3 worker to register") },
   "kat-task-view-simplify.ts": { class: "kat", ...RED("21/1", "'a settled run leaves no debug affordance' — a toggle is still visible") },
   "kat-template-cards.ts": { class: "kat", ...RED("0/6", "the create dialog no longer has the template select the KAT expects (Name / What it does / Run on a schedule)") },
@@ -224,6 +219,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "axe-audit.ts": { class: "manual", reason: "4/3 at the re-inventory; a11y-audit.ts is the gate — this is the axe-core cross-check kept for comparison" },
   "emscripten-abi-loaded.ts": { class: "manual", reason: "ltkj.1 A0 evidence: after explicit coordinator browser-slot authorization, loads a durable byte-identical production extension copy plus hash-pinned test-only native fixtures; never a product runtime or admission gate" },
   "emscripten-admission-loaded.ts": { class: "manual", reason: "ltkj.2 acceptance: after explicit coordinator browser-slot authorization, regenerates the inventory with the build-time-only numeric acceptance target in a disposable durable copy, REBUNDLES it, and drives the real Settings validation flow (positive + one-byte-mutation negatives); never a product runtime gate and never writes the reviewed tree" },
+  "emscripten-runtime-loaded.ts": { class: "manual", reason: "ltkj.3 acceptance: after explicit coordinator browser-slot authorization, loads a durable copy with the acceptance target, validates through Settings, and verifies native operation execution from both call paths (Settings tool.package.run + SW broker dispatchEmscriptenRun) and runtime falsifications; never a product runtime gate and never writes the reviewed tree" },
   "flake-evidence.ts": { class: "manual", reason: "a bisect tool: runs the journey suite N times on a branch and its base and compares failure sets; exits 1 only for a branch-only failure" },
   "focus-shots.ts": { class: "manual", reason: "a screenshot generator for focus-ring evidence (3/0 at the re-inventory: the Tab walk reaches the control, the ring is present, the shot is written)" },
   "keyless-first-result.ts": { class: "manual", reason: "green at the re-inventory (16 s); the behaviour is journey 2k in chrome-journeys.ts (KEYLESS-FIRST-RESULT-01) — kept as the standalone repro" },

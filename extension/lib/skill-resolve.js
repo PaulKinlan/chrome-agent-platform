@@ -19,6 +19,38 @@ import { parseSkillRef, skillResolutionOrder } from "./skill-registry.js";
 const DEFAULT_BODY_BUDGET = 8 * 1024; // PROMPT_SKILL_BODY_BUDGET (small bodies compose)
 
 /**
+ * Wrap a skill stores collection so that getCustomSkills() and loadAllImported()
+ * are only invoked once per batch resolution (chrome-agent-platform-3m3sn).
+ *
+ * @param {object} baseStores
+ * @returns {object}
+ */
+export function createMemoizedSkillStores(baseStores) {
+  if (!baseStores || typeof baseStores !== "object") return baseStores;
+  let importedPromise = null;
+  let customPromise = null;
+  return {
+    ...baseStores,
+    getCustomSkills: () => {
+      if (!customPromise) {
+        customPromise = Promise.resolve(
+          typeof baseStores.getCustomSkills === "function" ? baseStores.getCustomSkills() : []
+        ).catch(() => []);
+      }
+      return customPromise;
+    },
+    loadAllImported: () => {
+      if (!importedPromise) {
+        importedPromise = Promise.resolve(
+          typeof baseStores.loadAllImported === "function" ? baseStores.loadAllImported() : []
+        ).catch(() => []);
+      }
+      return importedPromise;
+    },
+  };
+}
+
+/**
  * Resolve one skill reference to its record.
  *
  * @param {object} opts

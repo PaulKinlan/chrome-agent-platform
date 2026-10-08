@@ -239,12 +239,24 @@ Chrome; ~350 KB gz ICU4C wasm only needed for other browsers)
 
 ## 6. Regex
 
-### rregex — ADMIT-NOW (ReDoS-safe linear-time regex — right for untrusted agent input)
+### rregex — DECLARED, NOT ADMITTED (packaged npm/JSR build refused at admission; ReDoS-safe regex capability routed to nmc2)
 - Repo: https://github.com/2fd/rregex · JSR: https://jsr.io/@rregex/rregex
 - License: recorded at admission
 - Dependency-free wasm build of the Rust `regex` crate: finite automata,
   guaranteed linear-time matching; no lookaround/backreferences (safety feature)
-- npm + JSR + Deno packaging; *pin version+sha at admission*
+- Measured packaged `rregex@1.13.1` (npm): `rregex.wasm` 1,085,505 bytes, sha256
+  `ee360fc3cd0162de0ddf27b1cb510027dc581f0ae3dc03ded3dcb9e04e82227d`; imports `wbg`
+  (wasm-bindgen) ×21, incl. `__wbindgen_string_new`/`__wbindgen_string_get` (string ABI);
+  13 function types with >1 result (multi-value).
+- Verdict: **NOT ADMITTED — refused by the live admission gates after
+  `chrome-agent-platform-ltkj` landed** (`chrome-agent-platform-tmdm`).
+  schema-1 `auditWasmBinary` refuses `import_not_allowed at wbg` (Lane A WASI and
+  Lane B call-export; `wbg` is not in the closed `wasi_snapshot_preview1`
+  allowlist); schema-2 `auditEmscriptenModule` refuses `multi_value_unsupported at wasm`
+  before import admission (the Emscripten 6.0.0 thin-native profile has no
+  wasm-bindgen string-ABI host).
+- ReDoS-safe regex capability is separately filed as `chrome-agent-platform-nmc2`
+  (CAP-authored WASI preview-1 Rust-regex driver, Lane A — admissible in shape, not admitted).
 - Sources: https://github.com/rust-lang/regex (linear-time guarantee)
 
 ### pcre2-wasm — NOT-FOUND (no maintained npm wasm port; rust regex covers the need)
@@ -431,15 +443,15 @@ Rust wasm core, Python + JS; new)
 
 | Verdict | Count | Highlights |
 |---|---|---|
-| admit-now | 20 | wasm-vips, photon-rs, jSquash, resvg, zstd-wasm, brotli-wasm, hash-wasm, blake3-wasm, awasm-noble, sax-wasm, expat-wasm, multilingual-stemmer, rregex, diff-match-patch-wasm, gmp-wasm, wat-fft, sqlite-wasm, wa-sqlite, h3-js, h3o-wasm, @embedpdf/pdfium, pulldown-cmark-wasm, comrak, @tybys/qrcodegen, zxing-wasm (list de-duped in beads) |
+| admit-now | 19 | wasm-vips, photon-rs, jSquash, resvg, zstd-wasm, brotli-wasm, hash-wasm, blake3-wasm, awasm-noble, sax-wasm, expat-wasm, multilingual-stemmer, diff-match-patch-wasm, gmp-wasm, wat-fft, sqlite-wasm, wa-sqlite, h3-js, h3o-wasm, @embedpdf/pdfium, pulldown-cmark-wasm, comrak, @tybys/qrcodegen, zxing-wasm (list de-duped in beads) |
 | investigate | 12 | compress-utils, vectorjson, noyalib-wasm, yaml-wasm, ICU4X, diffwtf-core, similar, nalgebra, MathTS, sql.js, duckdb-wasm, ffmpeg.wasm, proj.js, proj-wasm, m3s, mupdf, icu-segmentation-wasm, squoosh-kit (some listed in multiple cats) |
 | reject-as-wasm | 6 | fflate/pako, simdjson-npm, protobuf, msgpack/cbor JS, intl-segmenter-polyfill, big.js/decimal.js, turf.js, noble JS |
 | not-found | 1 | pcre2-wasm |
 
 ### Top-admit priority order (coordinator, 2026-09-05)
 1. wasm-vips 2. photon-rs 3. jSquash 4. zstd-wasm + brotli-wasm
-5. hash-wasm + blake3-wasm 6. rregex 7. sqlite-wasm + wa-sqlite
-8. zxing-wasm 9. @embedpdf/pdfium
+5. hash-wasm + blake3-wasm 6. sqlite-wasm + wa-sqlite
+7. zxing-wasm 8. @embedpdf/pdfium
 
 ### Follow-ups for the admission pipeline
 - Measure exact .wasm sizes + memory profiles at admission time (marked
@@ -472,7 +484,8 @@ technical). Sizes unverified → *measure at admission*.
 - License: MIT · Size: onig.wasm ~1.4 MB class — *measure at admission*
 - Notes: only needed for TextMate-grammar compat (Shiki default engine).
   Shiki alternative: oniguruma-to-es translates to native JS RegExp (no
-  wasm) — and v1's rregex already covers ReDoS-safe general regex.
+  wasm) — and the ReDoS-safe regex capability is routed to `chrome-agent-platform-nmc2`
+  (packaged rregex is blocked; see §6).
   Admit only if TextMate grammar support becomes a product requirement.
 - Sources: https://shiki.style/guide/regex-engines
 
@@ -562,7 +575,7 @@ admit needed. Kaitai Struct → see §57.
 ### ripgrep-wasm — INVESTIGATE
 - Repo: https://github.com/NathanHimpens/ripgrep-wasm
 - Notes: WASI-targeted rg; browser fit (fs shimming, stdin/stdout) unverified.
-  v1's rregex + OPFS streams may cover most need. *Verify browser path at admission.*
+  the `chrome-agent-platform-nmc2` WASI regex tool + OPFS streams may cover most need. *Verify browser path at admission.*
 
 ### tree-sitter based structural search — reuse §13 (no separate admit).
 

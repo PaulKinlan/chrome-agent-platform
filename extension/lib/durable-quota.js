@@ -26,6 +26,28 @@ export function durableQuotaResponse(error, executionId) {
  * invoke rollback when no readable run authority was established.
  */
 export async function admitDurableRun(durableRuns, meta) {
+  if (typeof chrome !== "undefined" && chrome.storage?.local?.get) {
+    try {
+      const fence = await chrome.storage.local.get("cap:restoreFence");
+      if (fence?.["cap:restoreFence"]) {
+        return {
+          ok: false,
+          error: "admission_fenced",
+          code: "restore_in_progress",
+          message: "Profile restore in progress; new runs cannot be admitted",
+          executionId: meta?.executionId ?? null,
+        };
+      }
+    } catch (fenceErr) {
+      return {
+        ok: false,
+        error: "storage_unreadable",
+        code: "fence_check_failed",
+        message: `Failed to verify restore admission fence: ${fenceErr?.message || fenceErr}`,
+        executionId: meta?.executionId ?? null,
+      };
+    }
+  }
   try {
     // Paid provider-tool identity must survive every durable resume. Older or
     // generic callers that omit it are UNKNOWN and therefore fail closed; an
@@ -39,6 +61,15 @@ export async function admitDurableRun(durableRuns, meta) {
     await durableRuns.start(normalizedMeta);
     return null;
   } catch (error) {
+    if (error?.message?.includes("profile restore fence is active")) {
+      return {
+        ok: false,
+        error: "admission_fenced",
+        code: "restore_in_progress",
+        message: "A profile restore is currently in progress. New runs are paused until the restore finishes.",
+        executionId: meta?.executionId ?? null,
+      };
+    }
     if (!isNativeQuotaExceededError(error)) throw error;
     return durableQuotaResponse(error, meta.executionId);
   }

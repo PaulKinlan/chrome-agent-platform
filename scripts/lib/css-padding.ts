@@ -2,7 +2,7 @@
 // chrome-agent-platform-rshb
 //
 // Why this is its own module: the rule existed inline in
-// scripts/constrained-width-layout.ts, which is registered as a NAMED harness —
+// scripts/kat-constrained-width-layout.ts, which is registered as a KAT harness —
 // no gate runs it, so the rule had no regression guard at all. It was wrong in
 // two ways at once, and BOTH were driven:
 //

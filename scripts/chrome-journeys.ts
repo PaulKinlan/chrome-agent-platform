@@ -25,11 +25,10 @@ const RUN_ID = `cap-${Date.now()}`;
  *  a literal home path, which names exactly one machine's layout and dies on every
  *  other checkout (chrome-agent-platform-3khn, the machine-path rule). A missing or
  *  relative HOME is a broken environment: fail loudly, never guess. */
-function homeCacheProfile(name: string): string {
+function homeCacheProfile(name) {
   const home = Deno.env.get("HOME");
   if (!home || !home.startsWith("/")) {
-    console.log(`FAIL: HOME must be an absolute path to build the journey profile root — got ${JSON.stringify(home)}`);
-    Deno.exit(1);
+    throw new Error(`HOME must be an absolute path to build the journey profile root — got ${JSON.stringify(home)}`);
   }
   return `${home}/.cache/cap-review/${name}`;
 }
@@ -129,6 +128,11 @@ async function sha256Hex(bytes) {
  * CAP browsers, NOT other lanes' compilers — a quiet box is still what this
  * suite needs, and this opt-in only stops our own gates from eating it. */
 function launchJourneyChrome(profile: string) {
+  // clearEnv prevents ambient variables reaching Chrome, but the fleet's
+  // non-secret lane identifier must survive into detached crashpad helpers.
+  // The reaper uses this inherited marker to recognize a live lane; it does
+  // not prevent or clean up crashpad, which is the hub reaper's responsibility.
+  const fleetLane = Deno.env.get("FLEET_LANE");
   return spawnChrome({
     canonicalLock: true,
     // mkax: this gate's load-induced reds are environmental, so it waits for a
@@ -149,8 +153,6 @@ function launchJourneyChrome(profile: string) {
       "--no-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
-      // Avoid crashpad sidecars becoming orphaned during this long headless gate.
-      "--disable-crash-reporter",
       "--silent-debugger-extension-api",
       `--disable-extensions-except=${EXT}`,
       `--load-extension=${EXT}`,
@@ -160,6 +162,7 @@ function launchJourneyChrome(profile: string) {
     ],
     stdout: "null",
     clearEnv: true,
+    env: fleetLane ? { FLEET_LANE: fleetLane } : {},
     timeoutMs: 20000,
   }).catch((e) => {
     // An environmental refusal is a THIRD verdict. It must never be re-read as
@@ -352,16 +355,29 @@ async function attachRuntime(cdp, targetId) {
  * naming this site — never a bare undefined a check can read as a product
  * answer (kwrx / 0aeh). */
 async function evalIn(cdp, session, expression) {
-  const r = await withTimeout(
-    cdp.send(
-      "Runtime.evaluate",
-      { expression, returnByValue: true, awaitPromise: true },
-      session,
-    ),
-    15000,
-    "evalIn",
-  );
-  return wireValue<any>(r, "jny.evalIn");
+  let lastErr = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const r = await withTimeout(
+        cdp.send(
+          "Runtime.evaluate",
+          { expression, returnByValue: true, awaitPromise: true },
+          session,
+        ),
+        15000,
+        "evalIn",
+      );
+      return wireValue<any>(r, "jny.evalIn");
+    } catch (e) {
+      lastErr = e;
+      if (String(e?.message ?? e).includes("Cannot find default execution context") && attempt < 4) {
+        await sleep(250);
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr;
 }
 
 /** EVERY piece of text the thread can show the owner — light DOM AND every
@@ -523,13 +539,61 @@ async function awaitNewRunTerminal(cdp, optsSession, beforeIds, task, timeoutMs 
  *  is the durable terminal record (phase/terminal.ok/threadId) for the exact
  *  new execution. The caller restores the demo provider and closes the probe
  *  provider. */
+async function activateNtpSession(cdp, session) {
+  const targetInfo = await cdp?.send?.("Target.getTargetInfo", {}, session)?.catch?.(() => null);
+  const targetId = targetInfo?.targetInfo?.targetId;
+  if (targetId) {
+    await cdp?.send?.("Target.activateTarget", { targetId })?.catch?.(() => {});
+  }
+  await cdp?.send?.("Page.bringToFront", {}, session)?.catch?.(() => {});
+}
+
 async function runScriptedToolProbe(cdp, ntpSession, optsSession, steps, task, expectRequests, onPause = null) {
   const provider = await startScriptedProvider({ steps });
   await evalIn(cdp, optsSession, `chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "openai-compatible", baseURL: provider.baseURL, apiKey: SCRIPTED_DUMMY_KEY, model: "scripted" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`);
   const beforeIds = await listRunIds(cdp, optsSession);
+  await activateNtpSession(cdp, ntpSession);
+  await evalIn(cdp, ntpSession, `(() => {
+    if (location.hash) location.hash = "";
+    const v = document.getElementById("view");
+    if (v) v.hidden = true;
+    const vch = document.getElementById("view-client-host");
+    if (vch) vch.hidden = true;
+    const dv = document.getElementById("directory-view");
+    if (dv) dv.hidden = true;
+    const av = document.getElementById("artifacts-view");
+    if (av) av.hidden = true;
+    const tv = document.getElementById("thread-view");
+    if (tv) tv.hidden = true;
+    document.body.classList.remove("view-open", "full-view-open");
+    return true;
+  })()`).catch(() => {});
+  await sleep(300);
   await clickSel(cdp, ntpSession, "#home").catch(() => false);
   await sleep(600);
+  await evalIn(cdp, ntpSession, `(() => {
+    const el = document.querySelector('${composerInput("hub")}');
+    el?.focus();
+    return true;
+  })()`).catch(() => {});
   await typeInto(cdp, ntpSession, composerInput("hub"), task);
+  let inputVal = await evalIn(cdp, ntpSession, `document.querySelector('${composerInput("hub")}')?.value ?? null`);
+  if (!inputVal) {
+    // If char typing missed due to window activation, set value & fire input event
+    await evalIn(cdp, ntpSession, `(() => {
+      const c = document.getElementById("composer");
+      if (c && typeof c.setText === "function") {
+        c.setText(${JSON.stringify(task)});
+      } else {
+        const inp = document.querySelector('${composerInput("hub")}');
+        if (inp) {
+          inp.value = ${JSON.stringify(task)};
+          inp.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }
+      return true;
+    })()`);
+  }
   await clickSel(cdp, ntpSession, composerSend("hub"));
   const t0 = Date.now();
   while (provider.requests.length < expectRequests && Date.now() - t0 < 120000) {
@@ -619,6 +683,59 @@ function formatCheckDetail(detail) {
   }
   return ` — ${serialized}`;
 }
+
+// Frontier tracking for abnormal exit diagnosis (chrome-agent-platform-9ud9e).
+// Tracks the last completed assertion and the next expected (or active) assertion
+// so any abnormal abort names the exact frontier rather than leaving a bare exit code.
+let lastCompletedCheck = null;
+let lastStartedCheck = null;
+
+let watchdogTimer = null;
+const WATCHDOG_MS = typeof Deno !== "undefined" && Deno.env
+  ? Number(Deno.env.get("CAP_JOURNEY_WATCHDOG_MS") || "90000")
+  : 90000;
+
+function resetWatchdog() {
+  if (typeof Deno === "undefined" || !Deno.env) return;
+  if (watchdogTimer) clearTimeout(watchdogTimer);
+  if (WATCHDOG_MS <= 0) return;
+  watchdogTimer = setTimeout(() => {
+    const reason = `watchdog timeout: no assertion completed for ${WATCHDOG_MS}ms`;
+    console.error(`\n[JOURNEY WATCHDOG TIMEOUT] Hang detected at frontier check: "${lastStartedCheck}" (last completed: "${lastCompletedCheck}") after ${WATCHDOG_MS}ms`);
+    printAbnormalExitSummary({
+      reason,
+      lastStartedCheck,
+      lastCompletedCheck,
+      missingCount: typeof EXPECTED !== "undefined" && Array.isArray(EXPECTED) && typeof ran !== "undefined"
+        ? EXPECTED.length - ran.size
+        : undefined,
+    });
+    Deno.exit(124);
+  }, WATCHDOG_MS);
+  if (typeof watchdogTimer?.unref === "function") {
+    watchdogTimer.unref();
+  }
+}
+
+function clearWatchdog() {
+  if (watchdogTimer) {
+    clearTimeout(watchdogTimer);
+    watchdogTimer = null;
+  }
+}
+
+function updateFrontier(completedName) {
+  lastCompletedCheck = completedName;
+  if (typeof EXPECTED !== "undefined" && Array.isArray(EXPECTED)) {
+    const idx = EXPECTED.indexOf(completedName);
+    lastStartedCheck = idx >= 0 && idx + 1 < EXPECTED.length ? EXPECTED[idx + 1] : null;
+    if (lastStartedCheck && (typeof META_CHECKS === "undefined" || !META_CHECKS.has(lastStartedCheck))) {
+      console.log(`RUN: ${lastStartedCheck}`);
+    }
+  }
+  if (typeof resetWatchdog === "function") resetWatchdog();
+}
+
 function checkShutdown(name, cond, detail) {
   // Shutdown checks run in the run's finally block — on an ABORT they fire
   // mid-sequence (out of band), so they report honestly but never enter the
@@ -629,22 +746,49 @@ function checkShutdown(name, cond, detail) {
   results.push(!cond && detail !== undefined ? { name, pass: false, detail } : { name, pass: !!cond });
   console.log(`${cond ? "PASS" : "FAIL"}: ${name} (shutdown)${cond ? "" : formatCheckDetail(detail)}`);
 }
+class JourneyEarlyStopError extends Error {
+  constructor(target) {
+    super(`CAP_JOURNEY_STOP_AFTER: ${target}`);
+    this.name = "JourneyEarlyStopError";
+    this.target = target;
+  }
+}
+
+function isIntentionalEarlyStop(err, configuredTarget) {
+  if (!configuredTarget) return false;
+  if (err instanceof JourneyEarlyStopError && err.target === configuredTarget) {
+    return true;
+  }
+  const msg = String(err?.message ?? err);
+  return msg === `CAP_JOURNEY_STOP_AFTER: ${configuredTarget}` ||
+         msg === `Error: CAP_JOURNEY_STOP_AFTER: ${configuredTarget}`;
+}
+
 function check(name, cond, detail) {
+  if (typeof resetWatchdog === "function") resetWatchdog();
   if (ran.has(name)) throw new Error(`duplicate assertion: ${name}`);
+  lastStartedCheck = name;
   ran.add(name);
   const owner = EXPECTED_RED.get(name);
   if (owner && !cond) {
     results.push(detail === undefined ? { name, pass: false, expectedRed: owner } : { name, pass: false, expectedRed: owner, detail });
     console.log(`EXPECTED-RED (${owner}): ${name}${formatCheckDetail(detail)}`);
+    updateFrontier(name);
     return;
   }
   if (owner && cond) {
     results.push({ name, pass: false, unexpectedGreen: owner });
     console.log(`UNEXPECTED-GREEN: ${name} — now passes; remove it from EXPECTED_RED (${owner})`);
+    updateFrontier(name);
     return;
   }
   results.push(!cond && detail !== undefined ? { name, pass: false, detail } : { name, pass: !!cond });
   console.log(`${cond ? "PASS" : "FAIL"}: ${name}${cond ? "" : formatCheckDetail(detail)}`);
+  updateFrontier(name);
+  const stopTarget = typeof Deno !== "undefined" ? Deno.env?.get?.("CAP_JOURNEY_STOP_AFTER") : null;
+  if (stopTarget && stopTarget === name) {
+    throw new JourneyEarlyStopError(name);
+  }
 }
 
 /** The exact, ordered set of assertions this suite must run. */
@@ -675,6 +819,7 @@ const EXPECTED = [
   "in-page browse views share one content left edge at 1024",
   "Settings iframe offset matches its scrollport at 1024",
   "embedded Artifacts view shows its name exactly once",
+  "hub: browse overlay teardown restores hidden #view and clean body (no view-open)",
   "hub: #agent=named:writer reload shows Writer",
   "after enabling one recipe the four agent surfaces agree (1)",
   "after disabling that recipe the four agent surfaces agree (0) again",
@@ -954,9 +1099,9 @@ const EXPECTED = [
   "approval: primary NTP Settings iframe can deny an exact request",
   "approval: deny row is singular and capability material absent from the payload",
   "approval: NTP cannot programmatically resolve an owner approval",
-  "approval: deny leaves the exact asset unchanged",
+  "approval: deny leaves the exact target unchanged",
   "approval: install-scoped opaque reference survives a worker restart",
-  "approval: post-restart deny leaves the exact asset unchanged",
+  "approval: post-restart deny leaves the exact target unchanged",
   "mgmt: update_asset patched the asset",
   "artifact versions: two rows with distinct sha256 after the edit turn",
   "artifact versions: version-get returns v1's exact body",
@@ -1029,6 +1174,114 @@ const EXPECTED = [
 ];
 
 const evidenceFiles = [];
+
+// Frontier initialization: the first assertion that will run
+lastStartedCheck = EXPECTED[0] ?? null;
+
+let abnormalReported = false;
+function printAbnormalExitSummary(context) {
+  if (abnormalReported) return;
+  abnormalReported = true;
+  const line = (s) => {
+    console.log(s);
+    try {
+      console.error(s);
+    } catch {
+      // ignore
+    }
+  };
+  const started = context?.lastStartedCheck ?? lastStartedCheck;
+  const completed = context?.lastCompletedCheck ?? lastCompletedCheck;
+  line("\n=== ABNORMAL JOURNEY EXIT ===");
+  line(`reason:                ${context?.reason ?? "unknown"}`);
+  line(`last completed check:  ${completed ? `"${completed}"` : "(none)"}`);
+  line(`frontier check:        ${started ? `"${started}"` : "(none)"}`);
+  if (typeof context?.missingCount === "number" && context.missingCount > 0) {
+    line(`unreached checks:      ${context.missingCount} downstream checks were NOT REACHED`);
+  }
+  if (context?.error !== undefined && context?.error !== null) {
+    const errObj = context.error;
+    const detail = errObj?.stack || String(errObj?.message ?? errObj);
+    line(`error:                 ${detail}`);
+  }
+  line("==============================\n");
+}
+
+function evaluateJourneyFinalization({
+  intentionalEarlyStop,
+  results,
+  missing,
+  mainException,
+  uncaughtJourneyException,
+  evaluateTimeoutVerdict,
+  cdpFatalEvents,
+  frontierSnapshot,
+  exitFn,
+}) {
+  if (intentionalEarlyStop) {
+    const failed = (results || []).filter((r) => !r.pass);
+    console.log(`early stop summary: ${(results || []).length} assertions ran, ${failed.length} failed`);
+    if (typeof exitFn === "function") {
+      exitFn(failed.length ? 1 : 0);
+    }
+    return { status: "early_stop", exitCode: failed.length ? 1 : 0 };
+  }
+
+  if (missing && missing.length > 0) {
+    const reason = mainException
+      ? `uncaught exception: ${String(mainException?.message ?? mainException)}`
+      : (uncaughtJourneyException
+        ? `unhandled rejection/error: ${String(uncaughtJourneyException?.message ?? uncaughtJourneyException)}`
+        : (evaluateTimeoutVerdict
+          ? `cdp evaluate timeout: ${evaluateTimeoutVerdict.reason}`
+          : (cdpFatalEvents?.length
+            ? `cdp fatal protocol event: ${cdpFatalEvents.join("; ")}`
+            : "silent premature exit: main() exited before reaching the remaining checks without throwing")));
+    printAbnormalExitSummary({
+      reason,
+      error: mainException ?? uncaughtJourneyException,
+      lastStartedCheck: frontierSnapshot?.lastStartedCheck,
+      lastCompletedCheck: frontierSnapshot?.lastCompletedCheck,
+      missingCount: missing.length,
+    });
+    return { status: "abnormal_exit", reason, missingCount: missing.length };
+  }
+
+  return { status: "clean_pass" };
+}
+
+function computeUnreachedCount() {
+  if (typeof EXPECTED !== "undefined" && Array.isArray(EXPECTED) && typeof ran !== "undefined") {
+    return EXPECTED.filter((n) => (typeof META_CHECKS !== "undefined" ? !META_CHECKS.has(n) : true) && !ran.has(n)).length;
+  }
+  return undefined;
+}
+
+let uncaughtJourneyException = null;
+if (typeof globalThis !== "undefined") {
+  globalThis.addEventListener?.("unhandledrejection", (ev) => {
+    uncaughtJourneyException = ev?.reason ?? ev;
+    const missingCount = computeUnreachedCount();
+    printAbnormalExitSummary({
+      reason: `unhandled promise rejection: ${String(uncaughtJourneyException?.message ?? uncaughtJourneyException)}`,
+      error: uncaughtJourneyException,
+      lastStartedCheck,
+      lastCompletedCheck,
+      missingCount,
+    });
+  });
+  globalThis.addEventListener?.("error", (ev) => {
+    uncaughtJourneyException = ev?.error ?? ev;
+    const missingCount = computeUnreachedCount();
+    printAbnormalExitSummary({
+      reason: `uncaught error event: ${String(uncaughtJourneyException?.message ?? uncaughtJourneyException)}`,
+      error: uncaughtJourneyException,
+      lastStartedCheck,
+      lastCompletedCheck,
+      missingCount,
+    });
+  });
+}
 
 // Minimal PNG decoder (deno): inflate the IDAT and undo the per-scanline
 // filters, returning { width, height, rgba } so the journey can sample the
@@ -1148,91 +1401,96 @@ async function writeEvidence(name, bytes) {
 }
 
 async function main() {
-  const profile = homeCacheProfile(`j2-${Date.now()}`);
-  await Deno.mkdir(EVIDENCE_DIR, { recursive: true }).catch(() => {});
+  if (typeof resetWatchdog === "function") resetWatchdog();
+  if (typeof EXPECTED !== "undefined" && EXPECTED[0]) {
+    console.log(`RUN: ${EXPECTED[0]}`);
+  }
+  let profile: string | null = null;
   let proc: Deno.ChildProcess | null = null;
   let port;
   let ws;
   let cdp;
-  // qk7p flagged a CDP evaluate timeout as environmental. 9t1p: that verdict is
-  // only true when the BOX says so, so the abort now carries the reading that
-  // decided it (null until an evaluate timeout is actually classified).
+  let mainException: any = null;
+  let intentionalEarlyStop = false;
   let evaluateTimeoutVerdict: EvaluateTimeoutVerdict | null = null;
-
-  // A local HTTP fixture server (red page + wrong-origin page) for a REAL
-  // screenshot target that isn't a chrome-extension:// page.
-  // Every request the fixture receives (the script-fetch journey asserts a
-  // refused loopback fetch never reaches it).
-  const fixtureHits = [];
-  // The /answered provider lane's answer text (the budget-verdict journey
-  // asserts it is the run's result) and its call counter (unique ids per step).
-  const ANSWERED_TEXT = "Every tab is read. Digest: FACT-01 on page 1 reports 37 units (journey answer).";
-  let answeredCalls = 0;
-  const fixture = Deno.serve({ port: 0, hostname: "127.0.0.1" }, (req) => {
-    const u = new URL(req.url);
-    fixtureHits.push(u.pathname + u.search);
-    if (u.pathname === "/red.html") {
-      return new Response(
-        `<html><body style="margin:0;background:#ff0000;width:400px;height:300px"></body></html>`,
-        { headers: { "content-type": "text/html" } },
-      );
-    }
-    if (u.pathname === "/answered/v1/chat/completions") {
-      // CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01: a provider that ANSWERS
-      // while still working — every step streams the answer text AND one tool
-      // call (finish_reason tool_calls), so a bounded run ends only when its
-      // budget runs out, with the answer already written on its last allowed
-      // step. The run's verdict must be ok, never "Budget reached".
-      answeredCalls += 1;
-      const chunk = (delta, finish = null, usage = null) =>
-        `data: ${JSON.stringify({ id: `chatcmpl-answered-${answeredCalls}`, object: "chat.completion.chunk", created: 0, model: "answers-while-working", choices: [{ index: 0, delta, finish_reason: finish }], ...(usage ? { usage } : {}) })}\n\n`;
-      const body = chunk({ role: "assistant", content: ANSWERED_TEXT }) +
-        chunk({ tool_calls: [{ index: 0, id: `call_answered_${answeredCalls}`, type: "function", function: { name: "search_tools", arguments: JSON.stringify({ query: "memory_get", limit: 1 }) } }] }) +
-        chunk({}, "tool_calls", { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }) +
-        "data: [DONE]\n\n";
-      return new Response(body, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } });
-    }
-    if (u.pathname.endsWith("/chat/completions")) {
-      // An OpenAI-shaped 401 for the provider-error-truth journey: the body
-      // echoes a key-shaped token exactly the way OpenAI does, so the journey
-      // also proves the bubble never carries it.
-      return new Response(
-        JSON.stringify({ error: { type: "authentication_error", code: "invalid_api_key", message: "Incorrect API key provided: sk-journey-invalid-0000. You can find your API key at the provider dashboard." } }),
-        { status: 401, headers: { "content-type": "application/json" } },
-      );
-    }
-    // CAP-FB-20260830-SKILLS-UNCAPPED-01: a >64KiB skill fixture (the old cap
-    // rejected anything over 65536 bytes — the owner hit 303729). Served as a
-    // plain SKILL.md URL so the REAL import path (fetchDirectSkill →
-    // readSkillText) must accept it.
-    if (u.pathname === "/big-skill/SKILL.md") {
-      const body =
-        "---\nname: Big Fixture Skill\ndescription: A large multi-file skill fixture (SKILLS-UNCAPPED-01)\n---\n\n# Big Fixture Skill\n\n" +
-        "lorem ipsum dolor sit amet, consectetur adipiscing elit\n".repeat(9000);
-      return new Response(body, { headers: { "content-type": "text/markdown; charset=utf-8" } });
-    }
-    if (u.pathname === "/big-skill/scripts/helper.md") {
-      return new Response("# helper\n\nA supporting file in scripts/.\n", { headers: { "content-type": "text/markdown; charset=utf-8" } });
-    }
-    // CAP-FB-20260831-SKILL-LIST-SYNC-01 r2: an imported skill whose name
-    // slugs to a BUILT-IN BACKGROUND recipe's id (auto-group-by-domain, the
-    // Sorting Hat). The import must be offered as imported:auto-group-by-domain
-    // and never resolve to the background recipe.
-    if (u.pathname === "/collide/SKILL.md") {
-      const body =
-        "---\nname: Auto Group By Domain\ndescription: An imported skill that collides with the Sorting Hat recipe id\n---\n\n# Colliding Import\n\nGroup domains into sets for review. (imported body marker: COLLIDE-IMPORTED-BODY)\n";
-      return new Response(body, { headers: { "content-type": "text/markdown; charset=utf-8" } });
-    }
-    return new Response(`<html><body>fixture ${u.pathname}</body></html>`, {
-      headers: { "content-type": "text/html" },
-    });
-  });
-  const fixturePort = fixture.addr.port;
-  const RED_ORIGIN = `http://127.0.0.1:${fixturePort}`;
-  const RED_URL = `${RED_ORIGIN}/red.html`;
+  let fixture: any = null;
   let fixtureShutdownFailed = false;
 
   try {
+    profile = homeCacheProfile(`j2-${Date.now()}`);
+    await Deno.mkdir(EVIDENCE_DIR, { recursive: true }).catch(() => {});
+
+    // A local HTTP fixture server (red page + wrong-origin page) for a REAL
+    // screenshot target that isn't a chrome-extension:// page.
+    // Every request the fixture receives (the script-fetch journey asserts a
+    // refused loopback fetch never reaches it).
+    const fixtureHits = [];
+    // The /answered provider lane's answer text (the budget-verdict journey
+    // asserts it is the run's result) and its call counter (unique ids per step).
+    const ANSWERED_TEXT = "Every tab is read. Digest: FACT-01 on page 1 reports 37 units (journey answer).";
+    let answeredCalls = 0;
+    fixture = Deno.serve({ port: 0, hostname: "127.0.0.1" }, (req) => {
+      const u = new URL(req.url);
+      fixtureHits.push(u.pathname + u.search);
+      if (u.pathname === "/red.html") {
+        return new Response(
+          `<html><body style="margin:0;background:#ff0000;width:400px;height:300px"></body></html>`,
+          { headers: { "content-type": "text/html" } },
+        );
+      }
+      if (u.pathname === "/answered/v1/chat/completions") {
+        // CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01: a provider that ANSWERS
+        // while still working — every step streams the answer text AND one tool
+        // call (finish_reason tool_calls), so a bounded run ends only when its
+        // budget runs out, with the answer already written on its last allowed
+        // step. The run's verdict must be ok, never "Budget reached".
+        answeredCalls += 1;
+        const chunk = (delta, finish = null, usage = null) =>
+          `data: ${JSON.stringify({ id: `chatcmpl-answered-${answeredCalls}`, object: "chat.completion.chunk", created: 0, model: "answers-while-working", choices: [{ index: 0, delta, finish_reason: finish }], ...(usage ? { usage } : {}) })}\n\n`;
+        const body = chunk({ role: "assistant", content: ANSWERED_TEXT }) +
+          chunk({ tool_calls: [{ index: 0, id: `call_answered_${answeredCalls}`, type: "function", function: { name: "search_tools", arguments: JSON.stringify({ query: "memory_get", limit: 1 }) } }] }) +
+          chunk({}, "tool_calls", { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }) +
+          "data: [DONE]\n\n";
+        return new Response(body, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } });
+      }
+      if (u.pathname.endsWith("/chat/completions")) {
+        // An OpenAI-shaped 401 for the provider-error-truth journey: the body
+        // echoes a key-shaped token exactly the way OpenAI does, so the journey
+        // also proves the bubble never carries it.
+        return new Response(
+          JSON.stringify({ error: { type: "authentication_error", code: "invalid_api_key", message: "Incorrect API key provided: sk-journey-invalid-0000. You can find your API key at the provider dashboard." } }),
+          { status: 401, headers: { "content-type": "application/json" } },
+        );
+      }
+      // CAP-FB-20260830-SKILLS-UNCAPPED-01: a >64KiB skill fixture (the old cap
+      // rejected anything over 65536 bytes — the owner hit 303729). Served as a
+      // plain SKILL.md URL so the REAL import path (fetchDirectSkill →
+      // readSkillText) must accept it.
+      if (u.pathname === "/big-skill/SKILL.md") {
+        const body =
+          "---\nname: Big Fixture Skill\ndescription: A large multi-file skill fixture (SKILLS-UNCAPPED-01)\n---\n\n# Big Fixture Skill\n\n" +
+          "lorem ipsum dolor sit amet, consectetur adipiscing elit\n".repeat(9000);
+        return new Response(body, { headers: { "content-type": "text/markdown; charset=utf-8" } });
+      }
+      if (u.pathname === "/big-skill/scripts/helper.md") {
+        return new Response("# helper\n\nA supporting file in scripts/.\n", { headers: { "content-type": "text/markdown; charset=utf-8" } });
+      }
+      // CAP-FB-20260831-SKILL-LIST-SYNC-01 r2: an imported skill whose name
+      // slugs to a BUILT-IN BACKGROUND recipe's id (auto-group-by-domain, the
+      // Sorting Hat). The import must be offered as imported:auto-group-by-domain
+      // and never resolve to the background recipe.
+      if (u.pathname === "/collide/SKILL.md") {
+        const body =
+          "---\nname: Auto Group By Domain\ndescription: An imported skill that collides with the Sorting Hat recipe id\n---\n\n# Colliding Import\n\nGroup domains into sets for review. (imported body marker: COLLIDE-IMPORTED-BODY)\n";
+        return new Response(body, { headers: { "content-type": "text/markdown; charset=utf-8" } });
+      }
+      return new Response(`<html><body>fixture ${u.pathname}</body></html>`, {
+        headers: { "content-type": "text/html" },
+      });
+    });
+    const fixturePort = fixture.addr.port;
+    const RED_ORIGIN = `http://127.0.0.1:${fixturePort}`;
+    const RED_URL = `${RED_ORIGIN}/red.html`;
     // The launcher bounds both phases itself: the serialized-Chrome lock wait
     // (queued behind another lane's browser, printed when it happens) and the
     // 20 s wait for this child's own DevTools endpoint.
@@ -1686,6 +1944,13 @@ async function main() {
     const footerSettingsShot = await captureShot(cdp, ntpSession);
     if (footerSettingsShot) await writeEvidence("hub-footer-settings-current.png", footerSettingsShot);
     await evalIn(cdp, ntpSession, `document.getElementById('view-back')?.click(); true`);
+    // b7ny0.1: the genuine CDP click on #open-settings parks the pointer ON that
+    // button, so `.foot-btn:hover` (background: var(--panel-2) !important,
+    // ntp.html:1034) still paints it when footerBack is read — aria-current is
+    // correctly null and ghost stays true, but bg reads rgb(239,237,232). Park the
+    // pointer on neutral chrome (top-left) so the idle fill read is not polluted by
+    // a lingering hover. The fill assertion itself is unchanged.
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 1, y: 1 }, ntpSession);
     await sleep(900);
     const footerBack = await footerState();
     console.log("footer states:", JSON.stringify({ footerIdle, footerSettings, footerBack }));
@@ -1813,9 +2078,62 @@ async function main() {
 
     check("embedded Artifacts view shows its name exactly once", artifactsTitleCount === 1);
 
-    await cdp.send("Emulation.clearDeviceMetricsOverride", {}, ntpSession);
-    await evalIn(cdp, ntpSession, `document.getElementById('view-back')?.click(); true`);
-    await sleep(500);
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false }, ntpSession);
+    // Return to hub: close the browse overlay and await settlement so subsequent steps see the hub composer
+    await evalIn(cdp, ntpSession, `document.getElementById('view-back')?.click(); true`).catch(() => {});
+    for (let i = 0; i < 30; i++) {
+      const open = await evalIn(cdp, ntpSession, `!document.getElementById('view')?.hidden`).catch(() => false);
+      if (!open) break;
+      await sleep(100);
+    }
+    // Fail-safe ensure hub view is restored if normal view-back closure was stranded
+    const failSafeReport = await evalIn(cdp, ntpSession, `(() => {
+      const v = document.getElementById('view');
+      if (v && !v.hidden) {
+        if (location.hash) location.hash = '';
+        v.hidden = true;
+        const vch = document.getElementById('view-client-host');
+        if (vch) vch.hidden = true;
+        const dv = document.getElementById('directory-view');
+        if (dv) dv.hidden = true;
+        const av = document.getElementById('artifacts-view');
+        if (av) av.hidden = true;
+        document.body.classList.remove('view-open', 'full-view-open');
+        const side = document.getElementById('side');
+        if (side) { side.inert = false; side.removeAttribute('aria-hidden'); }
+        const footButtons = document.querySelectorAll('.foot-btn, [data-view-route]');
+        footButtons.forEach((b) => b.removeAttribute('aria-current'));
+        return { wasStranded: true, hash: location.hash };
+      }
+      return { wasStranded: false };
+    })()`).catch(() => ({ wasStranded: false }));
+
+    if (failSafeReport?.wasStranded) {
+      console.error(
+        "FAIL: browse-view teardown: #view overlay was stranded (still open after poll) — forcibly reset DOM: " +
+        "hidden=true, hash cleared, view-open/full-view-open removed, side inert cleared",
+        failSafeReport,
+      );
+    }
+
+    const hubSettled = await evalIn(cdp, ntpSession, `(() => {
+      const v = document.getElementById('view');
+      const mc = document.querySelector('main.content');
+      const composer = document.querySelector('#composer') || document.querySelector('agent-composer');
+      return {
+        viewHidden: v?.hidden === true,
+        bodyClean: !document.body.classList.contains('view-open') && !document.body.classList.contains('full-view-open'),
+        mainVisible: mc ? getComputedStyle(mc).display !== 'none' : false,
+        composerInteractive: !!composer && !composer.hasAttribute('disabled') && !composer.hidden,
+      };
+    })()`);
+
+    check(
+      "hub: browse overlay teardown restores hidden #view and clean body (no view-open)",
+      Boolean(!failSafeReport?.wasStranded && hubSettled?.viewHidden && hubSettled?.bodyClean && hubSettled?.mainVisible && hubSettled?.composerInteractive),
+      { failSafeReport, hubSettled },
+    );
+    await sleep(300);
 
     // (2) An agent opened by URL is titled by its NAME: create "Writer", open a
     // fresh hub page at #agent=named:writer (no history.state carries the
@@ -1919,14 +2237,15 @@ async function main() {
     const openCreateDialog = async () => {
       // w51r: a geometry click on a hidden/occluded rail button misses silently,
       // then the dialog wait reports a misleading timeout. Refuse before input.
+      await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});
       await clickVisibleCreateAgent(cdp, ntpSession, (expression) => evalIn(cdp, ntpSession, expression));
-      for (let i = 0; i < 20; i++) { if ((await pickerState()).open) break; await sleep(150); }
+      for (let i = 0; i < 30; i++) { if ((await pickerState()).open) break; await sleep(150); }
       await sleep(200);
     };
     await openCreateDialog();
     const p0 = await pickerState();
     const curated = await evalIn(cdp, ntpSession, `(() => { const sel = document.getElementById('agent-template-select'); return sel ? [...sel.options].filter((o) => o.value).length : -1; })()`);
-    const schedOpts = await evalIn(cdp, ntpSession, `(() => { const sel = document.getElementById('agent-template-select'); const og = [...sel.querySelectorAll('optgroup')].find((g) => g.label === 'Scheduled'); return og ? og.querySelectorAll('option').length : -1; })()`);
+    const schedOpts = await evalIn(cdp, ntpSession, `(() => { const sel = document.getElementById('agent-template-select'); const og = [...(sel?.querySelectorAll('optgroup') ?? [])].find((g) => g.label === 'Scheduled'); return og ? og.querySelectorAll('option').length : -1; })()`);
     const galleryGone = await evalIn(cdp, ntpSession, `document.getElementById('agent-template-gallery') === null`);
     console.log("create dialog picker:", JSON.stringify({ p0, curated, schedOpts, galleryGone }));
     check(
@@ -2569,7 +2888,12 @@ async function main() {
       createdFromCard = (list?.agents ?? []).find((a) => a?.name === "Research Analyst") ?? null;
       if (!createdFromCard) await sleep(200);
     }
-    const namedCount1 = ((await msgValue({ type: "named-agent.list" }))?.agents ?? []).length;
+    // b7ny0.3: listNamedAgents overlays the built-in background seeds under the
+    // persisted records (seedOverlay in extension/lib/named-agents.js:215-223), so
+    // a raw length is 1 + 22 seeds = 23, not 1. Count only the NON-seeded
+    // (persisted/named) records so "yields ONE named agent" stays honest and does
+    // not re-break when the seed set changes.
+    const namedCount1 = ((await msgValue({ type: "named-agent.list" }))?.agents ?? []).filter((a) => !a?.seeded).length;
     const savedSkillIds = (createdFromCard?.skills ?? []).map((s) => (s && typeof s === "object" ? s?.id : s));
     console.log("createdFromCard from card:", JSON.stringify({ id: createdFromCard?.id, role: String(createdFromCard?.role ?? "").slice(0, 40), skills: savedSkillIds, namedCount1 }));
     check(
@@ -2630,20 +2954,68 @@ async function main() {
       scheduledAgent = (list?.agents ?? []).find((a) => a?.name === schedName) ?? null;
       if (!scheduledAgent) await sleep(200);
     }
-    await sleep(1500);
-    const sidebarSched = await evalIn(cdp, ntpSession, `[...document.querySelectorAll('#side-agents .agent-item')].map((el) => el.textContent.replace(/\s+/g, ' ').trim())`);
+    // b7ny0.4: Bounded poll for the sidebar row to settle in ntpSession. In a clean genuine-UI path,
+    // the sidebar updates via automatic rerenders (+67/+83/+99ms per j5yz diagnosis; settled by +252ms).
+    // Poll ntpSession's #side-agents boundedly up to 5s in fast 200ms steps.
+    // Note: measureAgentSurfaces() takes ~7.5s, so it must run AFTER this fast poll,
+    // never inside the loop (which would cause a single iteration to exhaust the 5s deadline).
+    const READ_SIDEBAR = `[...document.querySelectorAll('#side-agents .agent-item')].map((el) => el.textContent.replace(/\\s+/g, ' ').trim())`;
+    let sidebarSched = [];
+    const pollStart = Date.now();
+    while (Date.now() - pollStart < 5000) {
+      sidebarSched = (await evalIn(cdp, ntpSession, READ_SIDEBAR)) ?? [];
+      if (Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && /Scheduled ·/.test(t))) {
+        break;
+      }
+      await sleep(200);
+    }
     const surfacesS = await measureAgentSurfaces();
     if (surfacesS.shot) await writeEvidence("templates-created.png", surfacesS.shot);
-    console.log("scheduled from select:", JSON.stringify({ schedPick, schedMinutes, g2value: g2.value, scheduledAgent: scheduledAgent && { id: scheduledAgent.id, schedule: scheduledAgent.schedule }, sidebarSched, surfaces: { ...surfacesS, shot: undefined } }));
+
+    // If poll exhausted, capture sidebar DOM for diagnosis
+    let sidebarDomFailure = null;
+    const hasScheduledRow = Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && /Scheduled ·/.test(t));
+    if (!hasScheduledRow || surfacesS.sidebarRows !== 2) {
+      sidebarDomFailure = await evalIn(cdp, ntpSession, `(() => {
+        const side = document.querySelector('#side-agents');
+        return {
+          innerHTML: side?.innerHTML ?? null,
+          items: [...(side?.querySelectorAll('.agent-item') ?? [])].map(b => ({
+            text: b.textContent.replace(/\\s+/g, ' ').trim(),
+            className: b.className,
+            title: b.title,
+          })),
+        };
+      })()`);
+    }
+
+    console.log("scheduled from select:", JSON.stringify({
+      schedPick,
+      schedMinutes,
+      g2value: g2.value,
+      scheduledAgent: scheduledAgent && { id: scheduledAgent.id, schedule: scheduledAgent.schedule },
+      sidebarSched,
+      surfaces: { ...surfacesS, shot: undefined },
+      sidebarDomFailure,
+    }));
     check(
       "create dialog: a Scheduled-group template creates one scheduled agent that the sidebar and Settings both list",
       schedPick?.picked === true && /every \d+ minutes/.test(schedMinutes) && scheduledAgent !== null &&
-        Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && /Scheduled · every \d+ min/.test(t)) &&
+        hasScheduledRow &&
         surfacesS.sidebarRows === 2 && surfacesS.panelRows === 2 && surfacesS.settingsRows === 2 && /^2 agents/.test(surfacesS.panelCount) &&
         // h97m: the FOURTH surface asserts too — the picker's +3 (acp harness
         // rows leaking into the created-agents projection) walked through this
         // check unnoticed until the picker asserted nothing.
         surfacesS.sidepanelRows === 2,
+      {
+        schedPick,
+        schedMinutes,
+        schedName,
+        scheduledAgent,
+        sidebarSched,
+        surfaces: { ...surfacesS, shot: undefined },
+        sidebarDomFailure,
+      },
     );
     // CAP-FB-20260830-USER-VOICE-COPY-01: the hub's and Settings' delete
     // confirmations are ONE shared dialog whose body says what the person
@@ -3134,6 +3506,11 @@ async function main() {
       ],
     });
     let createdAgentId = null;
+    let ledgerCardSeen = false;
+    let ledgerCardTitle = null;
+    let ledgerCardApproved = false;
+    let ledgerCardShot = null;
+    let ledgerCardElapsedMs = null;
     // Hoisted: try/finally are separate lexical blocks — a const inside try is
     // NOT visible in finally.
     let ledgerOptsSession = null;
@@ -3150,17 +3527,80 @@ async function main() {
       // Snapshot BEFORE the click: the terminal wait must bind to THIS run's
       // exact execution (request-count arrival is not settlement).
       const ledgerBeforeIds = await listRunIds(cdp, ledgerOptsSession);
+      // A stale card from a prior turn may still LOOK pending after expiry.
+      // Snapshot existing DOM nodes so this run can approve only its new card.
+      await evalIn(cdp, ntpSession, `(() => {
+        globalThis.__jnyLedgerPriorApprovalCards = new WeakSet(document.querySelectorAll('#thread-conversation approval-card'));
+        globalThis.__jnyLedgerCard = null;
+        return true;
+      })()`);
       await typeInto(cdp, ntpSession, composerInput("hub"), "create the Undo Journey Agent");
       await clickSel(cdp, ntpSession, composerSend("hub"));
-      for (let i = 0; i < 120 && ledgerProvider.requests.length < 3; i++) await sleep(250);
+      // A model-initiated named-agent.create now pays a real owner card. Do
+      // not let an unanswered/expired request look like a completed create:
+      // observe the pending card, capture it for owner-visible evidence, then
+      // issue ONE genuine Allow click for that exact action before reading the
+      // terminal run. A missing card or mismatched title fails the named check.
+      const ledgerApprovalStart = Date.now();
+      for (let i = 0; i < 120 && ledgerProvider.requests.length < 3; i++) {
+        if (!ledgerCardSeen) {
+          const pending = await evalIn(cdp, ntpSession, `(() => {
+            const cards = [...document.querySelectorAll('#thread-conversation approval-card')]
+              .filter((card) => !globalThis.__jnyLedgerPriorApprovalCards.has(card) &&
+                (card.getAttribute('state') || 'pending') === 'pending' &&
+                card.shadowRoot?.querySelector('.title')?.textContent === 'Approve named-agent.create?');
+            if (cards.length !== 1) return null;
+            const card = cards[0];
+            globalThis.__jnyLedgerCard = card;
+            card.scrollIntoView({ block: 'center', inline: 'center' });
+            return { title: card.shadowRoot.querySelector('.title').textContent };
+          })()`).catch(() => null);
+          if (pending) {
+            ledgerCardSeen = true;
+            ledgerCardTitle = String(pending.title ?? "");
+            ledgerCardElapsedMs = Date.now() - ledgerApprovalStart;
+            ledgerCardShot = await captureShot(cdp, ntpSession);
+            if (ledgerCardTitle === "Approve named-agent.create?" && ledgerCardShot?.length > 200) {
+              await writeEvidence("activity-create-approval-pending.png", ledgerCardShot);
+              // clickShadow selects the LAST matching host, not the observed
+              // one. Recheck the saved node and send real CDP mouse events at
+              // THAT button; never approve another run's pending request.
+              const point = await evalIn(cdp, ntpSession, `(() => {
+                const card = globalThis.__jnyLedgerCard;
+                if (!card?.isConnected || (card.getAttribute('state') || 'pending') !== 'pending' ||
+                    card.shadowRoot?.querySelector('.title')?.textContent !== 'Approve named-agent.create?') return null;
+                const button = card.shadowRoot.querySelector('.approve');
+                if (!button) return null;
+                button.scrollIntoView({ block: 'center', inline: 'center' });
+                const r = button.getBoundingClientRect();
+                const x = r.x + r.width / 2, y = r.y + r.height / 2;
+                if (r.width <= 0 || r.height <= 0 || card.shadowRoot.elementFromPoint(x, y) !== button) return null;
+                return { x, y };
+              })()`).catch(() => null);
+              if (point) {
+                await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 }, ntpSession);
+                await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 }, ntpSession);
+                ledgerCardApproved = true;
+              }
+            }
+          }
+        }
+        if (ledgerProvider.requests.length < 3) await sleep(250);
+      }
       const ledgerRun = await awaitNewRunTerminal(cdp, ledgerOptsSession, ledgerBeforeIds, "create the Undo Journey Agent");
       const env = ledgerProvider.requests.length > 0 ? executeEnvelope(ledgerProvider.requests[ledgerProvider.requests.length - 1], "create_named_agent") : null;
       createdAgentId = env?.result?.agent?.id ?? env?.result?.id ?? null;
       check(
         "Activity ledger: a real run creates the agent inside a genuine live run",
-        ledgerProvider.requests.length === 3 && ledgerProvider.overflow === 0 && env?.ok === true && typeof createdAgentId === "string" && createdAgentId.length > 0 &&
+        ledgerCardSeen === true && ledgerCardTitle === "Approve named-agent.create?" && ledgerCardApproved === true &&
+          ledgerCardShot?.length > 200 && ledgerProvider.requests.length === 3 &&
+          ledgerProvider.overflow === 0 && env?.ok === true && env?.result?.approvalDenied !== true &&
+          typeof createdAgentId === "string" && createdAgentId.length > 0 &&
           ledgerRun?.phase === "terminal" && ledgerRun?.terminal?.ok === true,
-        { requests: ledgerProvider.requests.length, overflow: ledgerProvider.overflow, env, runPhase: ledgerRun?.phase ?? null, terminalOk: ledgerRun?.terminal?.ok ?? null },
+        { cardSeen: ledgerCardSeen, cardTitle: ledgerCardTitle, cardApproved: ledgerCardApproved,
+          cardShotBytes: ledgerCardShot?.length ?? 0, cardElapsedMs: ledgerCardElapsedMs,
+          requests: ledgerProvider.requests.length, overflow: ledgerProvider.overflow, env,
+          runPhase: ledgerRun?.phase ?? null, terminalOk: ledgerRun?.terminal?.ok ?? null },
       );
       // The run's durable thread is the owner-visible record of the run's
       // tool calls — the create is recorded there.
@@ -3186,10 +3626,11 @@ async function main() {
     // Seed the ledger row for the run-created agent (the production render +
     // undo path is what this journey exercises; run-driven mutations are
     // recorded in the run thread, not the ledger — see the bead notes).
+    const ledgerRowId = "act-seed-create";
     await msgValue({
       type: "memory.set", origin: "master", key: "cap:action-ledger",
       value: [{
-        id: "act-seed-create", ts: Date.now(), tool: "create_named_agent",
+        id: ledgerRowId, ts: Date.now(), tool: "create_named_agent",
         sentence: "Created the agent Undo Journey Agent", argsDigest: `name=Undo Journey Agent`,
         inverse: createdAgentId ? { tool: "delete_named_agent", args: { id: createdAgentId } } : null,
         source: "hub", undone: false,
@@ -3199,13 +3640,13 @@ async function main() {
     for (let i = 0; i < 24; i++) {
       const r = await msgValue({ type: "actions.list", limit: 20 });
       ledgerRows = Array.isArray(r?.rows) ? r.rows : [];
-      if (ledgerRows.some((row) => row.tool === "create_named_agent")) break;
+      if (ledgerRows.some((row) => row.id === ledgerRowId)) break;
       await sleep(250);
     }
-    const createRow = ledgerRows.find((row) => row.tool === "create_named_agent") ?? null;
+    const createRow = ledgerRows.find((row) => row.id === ledgerRowId) ?? null;
     check(
       "Activity ledger: the ledger row for the run-created agent carries its undo",
-      createRow !== null &&
+      createRow?.id === ledgerRowId && createRow.tool === "create_named_agent" &&
         createRow.sentence === "Created the agent Undo Journey Agent" &&
         createRow.inverse?.tool === "delete_named_agent" &&
         createRow.inverse?.args?.id === createdAgentId &&
@@ -3216,7 +3657,7 @@ async function main() {
     // shadow DOM — the exact production render.
     const ledgerUi = async () => await evalIn(cdp, ntpSession, `(async () => {
       const el = document.getElementById("side-action-ledger");
-      const section = document.getElementById("activity-ledger-section");
+      const section = document.getElementById("activity-section");
       if (!el) return null;
       await el.refresh?.();
       const sr = el.shadowRoot;
@@ -3258,14 +3699,14 @@ async function main() {
     // owner gesture — a genuine click on the summary — then asserts the button
     // is hit-testable before clicking it, so a regression is the click-dead
     // signature again, not a mystery.
-    const summaryClicked = await clickSel(cdp, ntpSession, "#activity-ledger-section > summary");
+    const summaryClicked = await clickSel(cdp, ntpSession, "#activity-section > summary");
     let sectionOpen = false;
     for (let i = 0; i < 12 && !sectionOpen; i++) {
-      sectionOpen = await evalIn(cdp, ntpSession, `document.getElementById("activity-ledger-section")?.open === true`);
+      sectionOpen = await evalIn(cdp, ntpSession, `document.getElementById("activity-section")?.open === true`);
       if (!sectionOpen) await sleep(200);
     }
     const visibility = await evalIn(cdp, ntpSession, `(() => {
-      const section = document.getElementById("activity-ledger-section");
+      const section = document.getElementById("activity-section");
       const el = document.getElementById("side-action-ledger");
       const undo = el?.shadowRoot?.querySelector(".al-undo");
       if (!section || !undo) return null;
@@ -3320,10 +3761,10 @@ async function main() {
     // user sees (co35 re-review, uplift-opus: leaving the disclosure open cost
     // five downstream Thread-view checks). Guarded: only click when the leg
     // actually opened it, so a failed leg is not compounded by opening it.
-    if (await evalIn(cdp, ntpSession, `document.getElementById("activity-ledger-section")?.open === true`)) {
-      await clickSel(cdp, ntpSession, "#activity-ledger-section > summary");
+    if (await evalIn(cdp, ntpSession, `document.getElementById("activity-section")?.open === true`)) {
+      await clickSel(cdp, ntpSession, "#activity-section > summary");
       for (let i = 0; i < 12; i++) {
-        if (await evalIn(cdp, ntpSession, `document.getElementById("activity-ledger-section")?.open !== true`)) break;
+        if (await evalIn(cdp, ntpSession, `document.getElementById("activity-section")?.open !== true`)) break;
         await sleep(200);
       }
     }
@@ -4662,7 +5103,22 @@ async function main() {
     };
     const BUBBLES = `(() => {
       const roots = [document, ...[...document.querySelectorAll('*')].flatMap((e) => e.shadowRoot ? [e.shadowRoot, ...[...e.shadowRoot.querySelectorAll('*')].flatMap((x) => x.shadowRoot ? [x.shadowRoot] : [])] : [])];
-      return roots.flatMap((r) => [...r.querySelectorAll('message-bubble')]).map((b) => ({ role: b.getAttribute('role'), text: ((b.shadowRoot ?? b).querySelector('.body, .msg') ?? b).textContent.replace(/\\s+/g, ' ').trim() }));
+      return roots.flatMap((r) => [...r.querySelectorAll('message-bubble')]).map((b) => {
+        const sr = b.shadowRoot ?? b;
+        const bodyEl = sr.querySelector('.body');
+        let text = '';
+        if (bodyEl) {
+          text = bodyEl.textContent.replace(/\\s+/g, ' ').trim();
+        } else {
+          const clone = (sr.querySelector('.msg') ?? b).cloneNode(true);
+          for (const btn of clone.querySelectorAll?.('.msg-copy-btn') ?? []) btn.remove();
+          text = clone.textContent.replace(/\\s+/g, ' ').trim();
+        }
+        return {
+          role: b.getAttribute('role'),
+          text,
+        };
+      });
     })()`;
     // The thread is opened in a FRESH hub document each time (the established
     // re-open pattern — location.reload()/Page.navigate on a driven session
@@ -4696,6 +5152,16 @@ async function main() {
         persistedAfter.assistant[0] === DEMO_ANSWER &&
         persistedAfter.count === persistedBefore.count && persistedAfter.count > 0 &&
         agentBubblesAfter.length > 0 && agentBubblesAfter[0].text === DEMO_ANSWER,
+      {
+        transcriptRunOk: transcriptRun?.ok,
+        transcriptRunResult: transcriptRun?.result,
+        expectedDemoAnswer: DEMO_ANSWER,
+        persistedBefore,
+        persistedAfter,
+        agentBubblesAfter,
+        bubblesBefore,
+        bubblesAfter,
+      },
     );
     const nudgeSeen = [...persistedBefore.assistant, ...persistedAfter.assistant].some((t) => t.includes(DEMO_NUDGE_REPLY)) ||
       [...bubblesBefore, ...agentBubblesAfter].some((b) => String(b?.text ?? "").includes(DEMO_NUDGE_REPLY));
@@ -4786,9 +5252,46 @@ async function main() {
       // target neither paints nor screenshots, so bring it to the front first.
       await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
       await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});
+      await evalIn(cdp, ntpSession, `(() => {
+        if (location.hash) location.hash = "";
+        const v = document.getElementById("view");
+        if (v) v.hidden = true;
+        const vch = document.getElementById("view-client-host");
+        if (vch) vch.hidden = true;
+        const dv = document.getElementById("directory-view");
+        if (dv) dv.hidden = true;
+        const av = document.getElementById("artifacts-view");
+        if (av) av.hidden = true;
+        const tv = document.getElementById("thread-view");
+        if (tv) tv.hidden = true;
+        document.body.classList.remove("view-open", "full-view-open");
+        return true;
+      })()`).catch(() => {});
+      await sleep(300);
       await clickSel(cdp, ntpSession, "#home").catch(() => false);
       await sleep(600);
+      await evalIn(cdp, ntpSession, `(() => {
+        const el = document.querySelector('${composerInput("hub")}');
+        el?.focus();
+        return true;
+      })()`).catch(() => {});
       await typeInto(cdp, ntpSession, composerInput("hub"), text);
+      let inputVal = await evalIn(cdp, ntpSession, `document.querySelector('${composerInput("hub")}')?.value ?? null`);
+      if (!inputVal) {
+        await evalIn(cdp, ntpSession, `(() => {
+          const c = document.getElementById("composer");
+          if (c && typeof c.setText === "function") {
+            c.setText(${JSON.stringify(text)});
+          } else {
+            const inp = document.querySelector('${composerInput("hub")}');
+            if (inp) {
+              inp.value = ${JSON.stringify(text)};
+              inp.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+          }
+          return true;
+        })()`);
+      }
       await clickSel(cdp, ntpSession, composerSend("hub"));
     };
     const pollThreadError = async (deadlineMs, done) => {
@@ -4802,9 +5305,11 @@ async function main() {
       return { ...last, elapsedMs: Date.now() - t0 };
     };
     // provider.set is Settings-sender-only (requireSettingsSender) — msgOpts.
+    // Use a fresh safeUrl path per run so the SW's deliberate (url,status) deduplication
+    // does not suppress raw console.error logging from a prior 401 on the same origin.
     await msgOpts({
       type: "provider.set",
-      config: { provider: "openai", baseURL: `${RED_ORIGIN}/v1`, apiKey: "sk-journey-invalid-0000", model: "model-one" },
+      config: { provider: "openai", baseURL: `${RED_ORIGIN}/v1-401-${Date.now()}`, apiKey: "sk-journey-invalid-0000", model: "model-one" },
     });
     const swErrorsBefore = cdp.swErrors().length;
     await driveHubTask("provider truth: bad key");
@@ -4824,6 +5329,12 @@ async function main() {
     check(
       "Provider error: SW console recorded the real HTTP 401 from the fixture provider",
       provider401.length >= 1 && provider401.every((e) => !/sk-[A-Za-z0-9]/.test(String(e.detail ?? ""))),
+      {
+        provider401Count: provider401.length,
+        provider401,
+        swErrorsBefore,
+        swErrorsNow,
+      },
     );
     const EXPECTED_SW_NOISE = /\[provider\] HTTP 401|^AI_NoOutputGeneratedError: No output generated|^<redacted:structured>$/;
     for (const e of swErrorsNow) {
@@ -7409,11 +7920,16 @@ async function main() {
     if (frameReadyShot) await writeEvidence("artifact-frame-ready.png", frameReadyShot);
     await evalIn(cdp, ntpSession, `document.querySelector("agent-dialog")?.close?.()`);
 
-    // The PRIMARY Settings entry is the NTP's embedded options iframe. Drive
-    // its navigation and Deny button with genuine CDP clicks (Runtime.evaluate
-    // is used only for coordinate discovery/assertions).
+    // The PRIMARY Settings entry is the NTP's embedded options iframe. Open it
+    // with a genuine CDP click, then resolve the queued request from the
+    // embedded frame's browser-attested Settings execution context.
+    // asset.update is owner-direct from extension documents; it executes with
+    // no pending row. agent.update remains approval-gated from the NTP, so
+    // Settings must genuinely deny this exact request before it can mutate.
+    const approvalTargetOrigin = "https://mgmt.example";
+    const unchangedApprovalTargetName = "renamed-worker";
     const iframeDeniedRequest = await msgValue({
-      type: "asset.update", origin: "master", id: assetId, name: "must-not-apply",
+      type: "agent.update", origin: approvalTargetOrigin, name: "must-not-apply",
     });
     // Keep this acceptance focused on owner input/authority rather than a
     // concurrent ViewTransition lifecycle; reduced-motion is a supported
@@ -7482,7 +7998,9 @@ async function main() {
         cdp.send("Runtime.evaluate", {
           expression: `(async () => {
             const pending = await chrome.runtime.sendMessage({ type: "management.pending-approvals" });
-            const id = pending?.approvals?.[0]?.approvalId;
+            if (pending?.ok !== true || pending.approvals?.length !== 1 ||
+                pending.approvals[0]?.action !== "agent.update") return false;
+            const id = pending.approvals[0].approvalId;
             if (!id) return false;
             const out = await chrome.runtime.sendMessage({ type: "management.resolve-approval", approvalId: id, approve: false });
             return out?.ok === true && out?.decision === "denied";
@@ -7497,28 +8015,27 @@ async function main() {
       iframeDeny = wireValue<any>(denied, "jny.iframe-deny") === true;
     }
     await sleep(250);
-    const iframeAfter = await msgValue({ type: "asset.get", origin: "master", id: assetId });
+    const iframeAfter = await msgValue({ type: "agent.get", origin: approvalTargetOrigin });
     const iframeShot = await captureShot(cdp, ntpSession).catch(() => null);
     if (iframeShot) await writeEvidence("approval-iframe-denied.png", iframeShot);
-    const iframePass = iframeDeniedRequest?.ok === false && iframeNav && iframeDeny &&
-      iframeAfter?.ok === true && iframeAfter.asset?.name === "generated page";
-    console.log(`approval journey (iframe deny): ${JSON.stringify({ deniedRequest: iframeDeniedRequest, settingsFrameId, settingsCtx: !!settingsCtx?.id, iframeNav, iframeDeny, after: iframeAfter?.asset?.name ?? iframeAfter })}`);
+    const iframePass = iframeDeniedRequest?.ok === false &&
+      /requires owner approval/i.test(String(iframeDeniedRequest?.error ?? "")) && iframeNav && iframeDeny &&
+      iframeAfter?.ok === true && iframeAfter.agent?.name === unchangedApprovalTargetName;
+    console.log(`approval journey (iframe deny): ${JSON.stringify({ deniedRequest: iframeDeniedRequest, settingsFrameId, settingsCtx: !!settingsCtx?.id, iframeNav, iframeDeny, after: iframeAfter?.agent?.name ?? iframeAfter })}`);
     check(
       "approval: primary NTP Settings iframe can deny an exact request",
       iframePass,
-      { request: iframeDeniedRequest, iframeNav, iframeDeny, assetName: iframeAfter?.asset?.name },
+      { request: iframeDeniedRequest, iframeNav, iframeDeny, targetName: iframeAfter?.agent?.name },
     );
     await clickSel(cdp, ntpSession, "#view-back").catch(() => false);
 
-    // Exact correlated DENY: one request → one row; neither the raw target,
-    // asset id, digest nor approval id is present in the DOM. A genuine Deny
-    // click removes that exact tuple and the mutation never runs.
-    // `asset.delete` became an OWNER-DIRECT action
-    // (CAP-FB-20260823-ARTIFACT-DELETE-PERMISSION-01), so an owner surface's own
-    // delete no longer queues an approval and cannot exercise the deny path.
-    // `asset.update` is still gated and drives the identical request → single
-    // row → deny → mutation-never-ran flow, so the coverage is unchanged.
-    const denyRequest = await msgValue({ type: "asset.update", origin: "master", id: assetId, name: "deny-must-not-apply" });
+    // Exact correlated DENY: one request → one row. The owner-options payload
+    // exposes an opaque approval id but never the raw target or digest. Denial
+    // of that row removes the exact tuple without running the mutation.
+    // Both asset.delete and asset.update are owner-direct from extension
+    // documents. agent.update still queues an exact ui:-bound approval, unlike
+    // a model/run-bound row that the NTP conversation could itself resolve.
+    const denyRequest = await msgValue({ type: "agent.update", origin: approvalTargetOrigin, name: "deny-must-not-apply" });
     await sleep(250);
     // REPOINTED 2026-08-27: this used to scrape #approval-list's DOM. That list
     // is gone, but the property it protected is not — and asserting it on the
@@ -7537,7 +8054,7 @@ async function main() {
     // created) and is the one capability value the old DOM assertion checked
     // was never rendered as an attribute; here it must be present but opaque.
     // Everything that would let a caller reconstruct the target — the asset
-    // id, a digest, the raw `asset:master` target string — must be absent, and
+    // origin, a digest, the raw target string — must be absent, and
     // targetRef must be the 32-char install-scoped opaque reference.
     const denyDom = {
       count: denyList.length,
@@ -7561,17 +8078,19 @@ async function main() {
     console.log(`approval journey (deny row): ${JSON.stringify({ denyRequest, denyDom: { ...denyDom, text: String(denyDom.text).slice(0, 300) } })}`);
     check(
       "approval: deny row is singular and capability material absent from the payload",
-      denyRequest?.ok === false && denyDom.count === 1 &&
+      denyRequest?.ok === false && /requires owner approval/i.test(String(denyRequest?.error ?? "")) &&
+        denyDom.count === 1 && denyRow.action === "agent.update" &&
         denyDom.fields === "action,approvalId,at,targetRef" &&
         denyDom.hasApprovalId && denyDom.opaqueRef &&
-        !String(denyDom.text).includes(assetId) &&
+        !String(denyDom.text).includes(approvalTargetOrigin) &&
         !String(denyDom.text).includes("digest") &&
-        !String(denyDom.text).includes("asset:master"),
+        !String(denyDom.text).includes("origin:"),
       denyDom,
     );
-    // Assertion-only retrieval from the exact owner surface: the identifier is
-    // then replayed from NTP with every old body bypass flag. The SW must still
-    // reject because sender authority is a separate browser-derived context.
+    // Retrieve the real pending id from the exact Settings surface, then replay
+    // it from NTP with old bypass fields. An empty id/expired-row rejection is
+    // NOT custody evidence: the SW must reject this live ui:-bound row because
+    // sender authority is a separate browser-derived context.
     const pendingForForgery = await evalOpts(`chrome.runtime.sendMessage({type:'management.pending-approvals'}).then(v => v.approvals?.[0]?.approvalId || '')`);
     const forgedResolve = await msgValue({
       type: "management.resolve-approval",
@@ -7582,22 +8101,21 @@ async function main() {
     });
     check(
       "approval: NTP cannot programmatically resolve an owner approval",
-      forgedResolve?.ok === false,
+      typeof pendingForForgery === "string" && pendingForForgery.length > 0 &&
+        forgedResolve?.ok === false && /Settings/.test(String(forgedResolve?.error ?? "")),
     );
     await resolveNextApproval(false);
     await captureApprovalEvidence("approval-deny-resolved.png");
-    const afterDeniedDelete = await msgValue({ type: "asset.get", origin: "master", id: assetId });
+    const afterDeniedAgentEdit = await msgValue({ type: "agent.get", origin: approvalTargetOrigin });
     check(
-      "approval: deny leaves the exact asset unchanged",
-      afterDeniedDelete?.ok === true &&
-        afterDeniedDelete.asset?.content === "<h1>hello</h1>" &&
-        afterDeniedDelete.asset?.name !== "deny-must-not-apply",
+      "approval: deny leaves the exact target unchanged",
+      afterDeniedAgentEdit?.ok === true && afterDeniedAgentEdit.agent?.name === unchangedApprovalTargetName,
     );
 
     // Stable install-scoped target reference across an actual MV3 worker
     // restart. Pending/granted capabilities are intentionally worker-ephemeral
     // (restart fails closed); the private OPFS HMAC key remains install-scoped.
-    await msgValue({ type: "asset.update", origin: "master", id: assetId, name: "restart-must-not-apply" });
+    const restartRequest = await msgValue({ type: "agent.update", origin: approvalTargetOrigin, name: "restart-must-not-apply" });
     await sleep(250);
     const refBeforeRestart = await evalOpts(`chrome.runtime.sendMessage({type:'management.pending-approvals'}).then(v => v.approvals?.[0]?.targetRef || '')`);
     const targetsForApprovalRestart = await cdp.send("Target.getTargets");
@@ -7610,20 +8128,23 @@ async function main() {
       approvalWake = await msgValue({ type: "asset.list", origin: "master" }).catch(() => null);
       if (!approvalWake) await sleep(200);
     }
-    await msgValue({ type: "asset.update", origin: "master", id: assetId, name: "restart-must-not-apply" });
+    const restartAgain = await msgValue({ type: "agent.update", origin: approvalTargetOrigin, name: "restart-must-not-apply" });
     await sleep(250);
     const refAfterRestart = await evalOpts(`chrome.runtime.sendMessage({type:'management.pending-approvals'}).then(v => v.approvals?.[0]?.targetRef || '')`);
+    const restartedTargets = await cdp.send("Target.getTargets");
+    const restartedApprovalWorker = restartedTargets?.result?.targetInfos?.find((t) =>
+      t.type === "service_worker" && t.url.includes(extId));
     check(
       "approval: install-scoped opaque reference survives a worker restart",
-      typeof refBeforeRestart === "string" && refBeforeRestart.length === 32 && refAfterRestart === refBeforeRestart,
+      restartRequest?.ok === false && restartAgain?.ok === false &&
+        !!restartedApprovalWorker?.targetId && restartedApprovalWorker.targetId !== approvalWorker.targetId &&
+        typeof refBeforeRestart === "string" && refBeforeRestart.length === 32 && refAfterRestart === refBeforeRestart,
     );
     await resolveNextApproval(false);
-    const afterRestartDeny = await msgValue({ type: "asset.get", origin: "master", id: assetId });
+    const afterRestartDeny = await msgValue({ type: "agent.get", origin: approvalTargetOrigin });
     check(
-      "approval: post-restart deny leaves the exact asset unchanged",
-      afterRestartDeny?.ok === true &&
-        afterRestartDeny.asset?.content === "<h1>hello</h1>" &&
-        afterRestartDeny.asset?.name !== "restart-must-not-apply",
+      "approval: post-restart deny leaves the exact target unchanged",
+      afterRestartDeny?.ok === true && afterRestartDeny.agent?.name === unchangedApprovalTargetName,
     );
 
     const assetUpdate = await approvedMsg({
@@ -8533,6 +9054,7 @@ async function main() {
       console.error("fixture.shutdown failed:", String(e?.message ?? e));
     });
   } catch (e) {
+    mainException = e;
     // chrome-agent-platform-qk7p: a CDP evaluate that exceeds the budget under
     // concurrent-lane load is an ENVIRONMENTAL verdict (measured: healthy calls
     // <1 s; abort runs show one >30 s call at a varying position), not a
@@ -8556,20 +9078,36 @@ async function main() {
       console.error(`ENVIRONMENT: ${evaluateTimeoutVerdict.environment}`);
       console.error(`evaluate-timeout cause: ${evaluateTimeoutVerdict.cause} — ${evaluateTimeoutVerdict.reason}`);
     }
-    console.error("journey failure:", String(e?.message ?? e));
+    const stopTarget = typeof Deno !== "undefined" ? Deno.env?.get?.("CAP_JOURNEY_STOP_AFTER") : null;
+    if (isIntentionalEarlyStop(e, stopTarget)) {
+      intentionalEarlyStop = true;
+      console.log(`journey early stop: ${String(e?.message ?? e)}`);
+    } else {
+      console.error("journey failure:", String(e?.message ?? e));
+      console.log("journey failure: " + String(e?.message ?? e));
+    }
     try {
-      await withTimeout(fixture.shutdown(), 8000, "fixture.shutdown").catch(
-        () => {
-          fixtureShutdownFailed = true;
-        },
-      );
+      if (fixture) {
+        await withTimeout(fixture.shutdown(), 8000, "fixture.shutdown").catch(
+          () => {
+            fixtureShutdownFailed = true;
+          },
+        );
+      }
     } catch { /* ignore */ }
     try {
       cdp && (cdp.intentionalClose = true);
       ws?.close();
     } catch { /* ignore */ }
   } finally {
-    // ─────────────────────────────────────────────────────────────
+    if (typeof clearWatchdog === "function") clearWatchdog();
+    // Snapshot the frontier BEFORE shutdown or meta-assertions run, so premature
+    // abort diagnostics report the actual check where the journey stopped rather
+    // than the final meta-checks.
+    const frontierSnapshot = {
+      lastCompletedCheck,
+      lastStartedCheck,
+    };
 
     // ─────────────────────────────────────────────────────────────
     // Owner-clean shutdown (fail-closed, bounded, environment-scrubbed).
@@ -8577,12 +9115,18 @@ async function main() {
     let removed = false;
     let clean = true;
     try {
-      if (proc) await teardownJourneyChrome(proc, profile);
-      else await runBounded(RM, ["-rf", profile]);
-      removed = !(await Deno.stat(profile).then(() => true).catch(() => false));
-      if (removed) {
-        await sleep(800);
+      if (profile) {
+        if (proc) await teardownJourneyChrome(proc, profile);
+        else await runBounded(RM, ["-rf", profile]);
+      }
+      if (profile) {
         removed = !(await Deno.stat(profile).then(() => true).catch(() => false));
+        if (removed) {
+          await sleep(800);
+          removed = !(await Deno.stat(profile).then(() => true).catch(() => false));
+        }
+      } else {
+        removed = true;
       }
     } catch (e) {
       clean = false;
@@ -8590,6 +9134,16 @@ async function main() {
     }
     checkShutdown("profile removed (no leak)", removed);
     checkShutdown("cleanup hard-failed on descendants (none survived)", clean);
+
+    if (intentionalEarlyStop) {
+      evaluateJourneyFinalization({
+        intentionalEarlyStop: true,
+        results,
+        missing: [],
+        frontierSnapshot,
+        exitFn: (code) => Deno.exit(code),
+      });
+    }
 
     // Temporary (non-retained) evidence is caller-owned temp output and must NOT
     // be left behind. Retained runs write to test-artifacts/ (kept + committed).
@@ -8641,6 +9195,17 @@ async function main() {
       }
     }
     check("assertion order matches EXPECTED", orderOk);
+
+    evaluateJourneyFinalization({
+      intentionalEarlyStop: false,
+      results,
+      missing,
+      mainException,
+      uncaughtJourneyException,
+      evaluateTimeoutVerdict,
+      cdpFatalEvents: cdp?.fatalEvents,
+      frontierSnapshot,
+    });
 
     const expectedRed = results.filter((r) => r.expectedRed).length;
     const failed = results.filter((r) => !r.pass && !r.expectedRed).length;

@@ -1,7 +1,9 @@
 // scripts/bundle-budget.mjs — the store-target bundle size report + the
 // dependency-integrity gate (CAP-FB-20260830-BUNDLE-BUDGET-01).
 //
-import { lstatSync, readlinkSync } from "node:fs";
+import { lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 // The constitution watches the service-worker bundle (docs/CONSTITUTION.md):
 // unmeasured growth once shipped 4.56 MB against a ~2.5 MB note because
 // nothing in the build NOTICED when it grew. This module keeps every bundle's
@@ -168,6 +170,101 @@ export function zodCjsInputs(metafile) {
     .sort();
 }
 
+// The npm lock is NOT the build resolver: esbuild ships the Deno-store copy.
+// Inspect both locks and the actual metafile inputs for the fast-uri mismatch
+// in lf9xe; also prevent future SDK drift (im9q8's 1.30 report was stale).
+const SECURITY_PACKAGES = Object.freeze([
+  ["fast-uri", "fast-uri"],
+  ["@modelcontextprotocol/sdk", "@modelcontextprotocol+sdk"],
+]);
+
+export function securityDependencyDrift(metafile, npmLock, denoLock) {
+  const paths = Object.keys(metafile?.inputs ?? {});
+  const mismatches = [];
+  for (const [name, storeName] of SECURITY_PACKAGES) {
+    const prefix = `node_modules/.deno/${storeName}@`;
+    const shipped = [...new Set(paths.filter((p) => p.includes(prefix))
+      .map((p) => p.split(prefix, 2)[1]?.split("/", 1)[0]?.split("_", 1)[0]))]
+      .filter(Boolean).sort();
+    if (!shipped.length) continue; // unrelated bundles carry no copy
+    const npmVersion = npmLock?.packages?.[`node_modules/${name}`]?.version;
+    const denoVersions = [...new Set(Object.keys(denoLock?.npm ?? {})
+      .filter((key) => key.startsWith(`${name}@`))
+      .map((key) => key.slice(name.length + 1).split("_", 1)[0]))].sort();
+    if (!npmVersion || shipped.length !== 1 || shipped[0] !== npmVersion ||
+        denoVersions.length !== 1 || denoVersions[0] !== npmVersion) {
+      mismatches.push(`${name}: npm=${npmVersion ?? "missing"}; deno=${denoVersions.join(",") || "missing"}; shipped=${shipped.join(",")}`);
+    }
+    if (name === "fast-uri" && npmVersion && !isPatchedFastUriVersion(npmVersion)) {
+      mismatches.push(`fast-uri ${npmVersion}: GHSA-qw65-cvwx-89v3 / GHSA-58mr-gqgx-xq4g require 3.1.7+ on the 3.x line`);
+    }
+  }
+  return mismatches;
+}
+
+export function isPatchedFastUriVersion(value) {
+  if (typeof value !== "string" || !/^\d+\.\d+\.\d+$/.test(value)) return false;
+  const [major, minor, patch] = value.split(".").map(Number);
+  return major === 3 && (minor > 1 || (minor === 1 && patch >= 7));
+}
+
+/** Fail BEFORE esbuild on the ACTUAL SDK -> AJV -> fast-uri dependency path,
+ * for BOTH developer and store targets. Store dir presence alone is not proof:
+ * AJV may still resolve an older symlink after deno.lock changed (bbz3s). */
+export function assertLiveFastUriResolution({ root, sdkDir }) {
+  const refuse = (reason) => {
+    throw new Error(`cap-security-dependency-resolve: ${reason}. ` +
+      "Run `deno install --frozen-lockfile` in this worktree and retry; if the old link remains, recreate this worktree's local .deno store.");
+  };
+  let npmLock, denoLock;
+  try {
+    npmLock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+    denoLock = JSON.parse(readFileSync(join(root, "deno.lock"), "utf8"));
+  } catch (err) {
+    refuse(`cannot read both dependency locks: ${err?.message ?? err}`);
+  }
+  const fast = npmLock?.packages?.["node_modules/fast-uri"];
+  const fastEntries = Object.entries(denoLock?.npm ?? {}).filter(([key]) => key.startsWith("fast-uri@"));
+  if (!fast?.version || !fast.integrity || !isPatchedFastUriVersion(fast.version) ||
+      fastEntries.length !== 1 || fastEntries[0][0] !== `fast-uri@${fast.version}` ||
+      fastEntries[0][1]?.integrity !== fast.integrity) {
+    refuse(`fast-uri locks disagree or are not patched (npm=${fast?.version ?? "missing"}; ` +
+      `Deno=${fastEntries.map(([key]) => key).join(",") || "missing"})`);
+  }
+  const sdkVersion = npmLock?.packages?.["node_modules/@modelcontextprotocol/sdk"]?.version;
+  const denoSdkVersions = [...new Set(Object.keys(denoLock?.npm ?? {})
+    .filter((key) => key.startsWith("@modelcontextprotocol/sdk@"))
+    .map((key) => key.slice("@modelcontextprotocol/sdk@".length).split("_", 1)[0]))];
+  let sdk, ajvPath, ajvImporter, fastPath, actualPath, actual;
+  try {
+    sdk = JSON.parse(readFileSync(join(sdkDir, "package.json"), "utf8"));
+    ajvPath = createRequire(join(sdkDir, "package.json")).resolve("ajv/package.json");
+    // Ajv imports fast-uri from dist/runtime/uri.js. Resolve FROM THAT FILE,
+    // not package.json: a nested node_modules shadow would otherwise pass.
+    ajvImporter = join(dirname(ajvPath), "dist", "runtime", "uri.js");
+    const importerSource = readFileSync(ajvImporter, "utf8");
+    if (!/\brequire\(["']fast-uri["']\)|\bfrom\s+["']fast-uri["']/.test(importerSource)) {
+      refuse(`AJV URI importer ${ajvImporter} no longer imports fast-uri; review the new resolution path`);
+    }
+    fastPath = createRequire(ajvImporter).resolve("fast-uri/package.json");
+    actualPath = realpathSync(fastPath);
+    actual = JSON.parse(readFileSync(actualPath, "utf8"));
+  } catch (err) {
+    if (err?.message?.startsWith("cap-security-dependency-resolve:")) throw err;
+    refuse(`SDK -> AJV -> fast-uri cannot resolve from ${sdkDir}: ${err?.message ?? err}`);
+  }
+  if (!sdkVersion || denoSdkVersions.length !== 1 || denoSdkVersions[0] !== sdkVersion || sdk?.version !== sdkVersion) {
+    refuse(`MCP SDK lock vs selected Deno-store instance disagrees (npm=${sdkVersion ?? "missing"}; ` +
+      `Deno=${denoSdkVersions.join(",") || "missing"}; live=${sdk?.version ?? "missing"} at ${sdkDir})`);
+  }
+  const expectedPath = join(root, "node_modules", ".deno", `fast-uri@${fast.version}`, "node_modules", "fast-uri", "package.json");
+  if (actual?.version !== fast.version || actualPath !== expectedPath) {
+    refuse(`AJV (${ajvImporter}) resolves fast-uri ${actual?.version ?? "missing"} at ${actualPath}; ` +
+      `npm and Deno locks require fast-uri ${fast.version} at ${expectedPath}`);
+  }
+  return { version: actual.version, path: actualPath, ajvPath };
+}
+
 /** If <root>/node_modules resolves through a symlink, say so in the error —
  * dependency-root layout changes measured bytes (a symlinked root measured
  * 688 bytes over budget with source unchanged, chrome-agent-platform-2eb5),
@@ -233,6 +330,17 @@ export function assertBundleBudget({ label, bytes, budgetBytes = STORE_SW_BUDGET
         `bundle budget: non-Deno-store dependency inputs in ${label} (lockfile drift — run deno install; an npm-era install silently changes the shipped bundle):\n` +
         drifted.map((p) => `  ${p}`).join("\n"),
       );
+    }
+    // A Deno-store input can still carry a vulnerable VERSION even though
+    // nonDenoStoreInputs() passes. Only inspect bundles that ship these deps.
+    if (Object.keys(metafile.inputs ?? {}).some((p) => SECURITY_PACKAGES.some(([, store]) =>
+      p.includes(`node_modules/.deno/${store}@`)))) {
+      const npmLock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+      const denoLock = JSON.parse(readFileSync(join(root, "deno.lock"), "utf8"));
+      const mismatches = securityDependencyDrift(metafile, npmLock, denoLock);
+      if (mismatches.length) {
+        throw new Error(`bundle budget: security dependency lock-to-shipped drift in ${label}:\n${mismatches.join("\n")}`);
+      }
     }
     const cjsZod = zodCjsInputs(metafile);
     if (cjsZod.length) {

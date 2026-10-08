@@ -5108,7 +5108,7 @@ class CodeBlock extends Component {
 }
 customElements.define("code-block", CodeBlock);
 
-/* ── the structured tool-call renderer (UI-FIXES-TRACKER item 4) ─────────
+/* ── the structured tool-call renderer (extension/shared/tool-tree.js) ────
  * Recognizes structured tool inputs/results, parses safely (objects + bounded
  * JSON-string decodes — lib/tool-tree.js), and renders an accessible,
  * collapsible, bounded key/value tree. No unsafe innerHTML (the tree is built
@@ -7235,11 +7235,11 @@ class AgentConversation extends Component {
     const card = document.createElement(actionApproval ? "approval-card" : "permission-approval-card");
     if (actionApproval) {
       card.setAttribute("title", String(m.title ?? `Approve ${req.approvals[0]?.action ?? "this action"}?`).slice(0, 240));
-      if (typeof m.body === "string" && m.body) card.setAttribute("body", m.body.slice(0, 2000));
+      if (typeof m.body === "string" && m.body) card.setAttribute("body", m.body.slice(0, 4000));
       if (typeof m.approveLabel === "string" && m.approveLabel) card.setAttribute("approve-label", m.approveLabel.slice(0, 60));
       if (typeof m.denyLabel === "string" && m.denyLabel) card.setAttribute("deny-label", m.denyLabel.slice(0, 60));
-      // The script source + hosts are a PROPERTY (rendered with textContent
-      // inside the card), never an attribute.
+      // The script source + hosts or registration details are a PROPERTY (rendered
+      // with textContent inside the card), never an attribute.
       if (m.cardDetail && typeof m.cardDetail === "object") card.detail = m.cardDetail;
     } else {
       const toolName = m.tool || req.tool || req.toolName || m.toolName;
@@ -7720,7 +7720,7 @@ class AgentComposer extends Component {
         <textarea data-composer-input id="${this.id ? `${this.id}-input` : `cmp-input-${this._uid}`}" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(label)}"
           aria-describedby="composer-description-${this._uid}" aria-haspopup="listbox" aria-expanded="false"
           aria-controls="popup-${this._uid}" aria-multiline="true" rows="2"></textarea>
-        <div class="popup slash-menu" id="popup-${this._uid}" role="listbox" aria-label="Agent and resource mentions" hidden></div>
+        <div class="popup slash-menu" id="popup-${this._uid}" role="listbox" aria-label="Agent and resource mentions" popover="manual" hidden></div>
         <div class="chips"></div>
         <div class="row">
           <mic-button id="${this.id ? `${this.id}-mic` : `mic-${this._uid}`}"></mic-button>
@@ -7742,16 +7742,20 @@ class AgentComposer extends Component {
          as the blank-toggle bug. Tag-scoping keeps the controls in the LIGHT
          DOM (the CDP journeys hit #task-input/#run-task) while the styles only
          apply within THIS component's subtree. */
-      agent-composer .composer { position:relative; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px; padding:14px; }
+      agent-composer .composer { position:relative; anchor-name: --composer-anchor; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px; padding:14px; }
       agent-composer .composer:focus-within { border-color:var(--accent,#0e6e63); }
       agent-composer .composer.drag-over { outline:2px dashed var(--accent,#0e6e63); background:var(--accent-soft,rgba(14,110,99,0.06)); }
       agent-composer .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
         clip:rect(0,0,0,0); white-space:nowrap; border:0; }
-      agent-composer .popup, agent-composer .slash-menu { position:absolute; inset:auto; margin:0;
-        inset-inline-start:12px; inset-inline-end:auto; left:12px; right:auto;
-        width:min(440px, calc(100% - 24px)); max-width:480px; background:var(--panel,#ffffff);
+      agent-composer .popup, agent-composer .slash-menu { position:absolute; inset:auto; margin:0; box-sizing:border-box;
+        position-anchor:--composer-anchor; position-area:block-end span-inline-end;
+        position-try-fallbacks:flip-block;
+        width:min(440px, anchor-size(width)); max-width:min(480px, calc(100vw - 16px)); background:var(--panel,#ffffff);
         border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:var(--shadow-md, 0 8px 24px rgba(29,27,24,.08));
-        max-height:320px; overflow-y:auto; padding:4px; z-index:40; }
+        max-height:min(320px, calc(100% - 16px)); overflow-y:auto; padding:4px; z-index:40; }
+      @supports not (position-area: top) {
+        agent-composer .popup, agent-composer .slash-menu { position:fixed; inset-inline-start:12px; inset-inline-end:auto; left:12px; right:auto; width:min(440px, calc(100% - 24px)); }
+      }
       agent-composer .popup[hidden], agent-composer .slash-menu[hidden] { display:none; }
       agent-composer .popup .item { display:flex; align-items:baseline; gap:8px; padding:6px 10px; border-radius:6px; cursor:pointer; }
       agent-composer .popup .item:hover, agent-composer .popup .item[data-active="true"] { background:var(--panel-2,#efede8); }
@@ -8957,6 +8961,9 @@ class AgentComposer extends Component {
     this._renderPopupItems();
     if (this._popup) {
       this._popup.hidden = false;
+      if (typeof this._popup.showPopover === "function") {
+        try { this._popup.showPopover(); } catch { /* already shown */ }
+      }
       // Combobox contract (CAP-FB-20260830-SLASH-PALETTE-COMBOBOX-01): the
       // textarea owns the popup listbox while it is open — expanded true,
       // controls the popup, activedescendant the highlighted option.
@@ -8964,28 +8971,48 @@ class AgentComposer extends Component {
       this._input?.setAttribute("aria-controls", `popup-${this._uid}`);
       const active = this._popup.querySelector(`[data-index="${this._popupActive}"]`);
       if (active?.id) this._input?.setAttribute("aria-activedescendant", active.id);
-      // Anchor directly to .composer using position: absolute
-      const composerEl = this._root?.querySelector?.(".composer");
-      if (composerEl) {
-        const rect = composerEl.getBoundingClientRect();
-        const spaceBelow = (typeof window !== "undefined" ? window.innerHeight : 800) - rect.bottom - 12;
-        const spaceAbove = rect.top - 12;
-        const openAbove = spaceBelow < 220 && spaceAbove > spaceBelow;
-        this._popup.style.position = "absolute";
-        if (openAbove) {
-          this._popup.style.bottom = "calc(100% + 6px)";
-          this._popup.style.top = "auto";
-          this._popup.style.maxHeight = `${Math.max(120, Math.min(320, Math.floor(spaceAbove)))}px`;
-        } else {
-          this._popup.style.top = "calc(100% + 6px)";
-          this._popup.style.bottom = "auto";
-          this._popup.style.maxHeight = `${Math.max(120, Math.min(320, Math.floor(spaceBelow)))}px`;
+
+      if (!supportsAnchorPositioning()) {
+        // TODO(baseline/anchor-positioning): Remove position:fixed fallback and getBoundingClientRect viewport math.
+        // Fallback for browsers without CSS anchor positioning:
+        // Position relative to viewport since popover is in the top layer.
+        const composerEl = this._root?.querySelector?.(".composer");
+        if (composerEl) {
+          const rect = composerEl.getBoundingClientRect();
+          const viewportH = (typeof window !== "undefined" && window.innerHeight) ? window.innerHeight : 800;
+          const viewportW = (typeof window !== "undefined" && window.innerWidth) ? window.innerWidth : 1200;
+          const spaceBelow = viewportH - rect.bottom - 12;
+          const spaceAbove = rect.top - 12;
+          const openAbove = spaceBelow < 220 && spaceAbove > spaceBelow;
+          const availableHeight = openAbove ? spaceAbove : spaceBelow;
+          const minW = Math.min(260, Math.max(0, viewportW - 16));
+          const widthVal = rect.width ? Math.min(440, Math.max(minW, Math.floor(rect.width))) : Math.min(360, Math.max(minW, 360));
+          const leftVal = Math.max(8, Math.min(rect.left, Math.max(8, viewportW - widthVal - 8)));
+          this._popup.style.position = "fixed";
+          if (openAbove) {
+            this._popup.style.bottom = `${Math.max(8, viewportH - rect.top + 6)}px`;
+            this._popup.style.top = "auto";
+          } else {
+            this._popup.style.top = `${rect.bottom + 6}px`;
+            this._popup.style.bottom = "auto";
+          }
+          this._popup.style.left = `${leftVal}px`;
+          this._popup.style.right = "auto";
+          this._popup.style.width = `${widthVal}px`;
+          this._popup.style.maxWidth = `${viewportW - 16}px`;
+          this._popup.style.maxHeight = `${Math.min(320, Math.max(0, Math.floor(availableHeight)))}px`;
         }
-        this._popup.style.left = "0px";
-        this._popup.style.right = "auto";
-        const widthVal = rect.width ? Math.min(440, Math.max(260, Math.floor(rect.width))) : 360;
-        this._popup.style.width = `${widthVal}px`;
-        this._popup.style.maxWidth = "100%";
+      } else {
+        // In native anchor positioning, CSS handles position-area, position-try-fallbacks,
+        // sizing, and max-height natively. Clear all inline styles.
+        this._popup.style.position = "";
+        this._popup.style.top = "";
+        this._popup.style.bottom = "";
+        this._popup.style.left = "";
+        this._popup.style.right = "";
+        this._popup.style.width = "";
+        this._popup.style.maxWidth = "";
+        this._popup.style.maxHeight = "";
       }
     }
   }
@@ -9255,7 +9282,11 @@ class AgentComposer extends Component {
 
   _hidePopup() {
     if (this._popup) {
+      if (typeof this._popup.hidePopover === "function") {
+        try { this._popup.hidePopover(); } catch { /* already closed */ }
+      }
       this._popup.hidden = true;
+      if (this._popup.style) this._popup.style.maxHeight = "";
       // Hidden means EMPTY: no-match, Escape, selection and parser-reset paths
       // all converge here, so stale role=option nodes cannot survive in the DOM
       // or Accessibility tree after a prior result set.
@@ -10041,16 +10072,33 @@ class ApprovalCard extends Component {
    * an attribute) rendered with textContent — the source is untrusted text. */
   get detail() { return this._detail ?? null; }
   set detail(value) {
-    this._detail = value && typeof value === "object" && typeof value.source === "string"
-      ? {
+    if (value && typeof value === "object") {
+      if (value.kind === "script-registration" && typeof value.digest === "string") {
+        this._detail = {
+          kind: "script-registration",
+          scriptKind: value.scriptKind === "content_script" ? "content_script" : "user_script",
+          id: typeof value.id === "string" ? value.id.slice(0, 64) : "",
+          digest: value.digest,
+          matches: Array.isArray(value.matches) ? value.matches.filter((m) => typeof m === "string") : [],
+          jsBytes: typeof value.jsBytes === "number" ? value.jsBytes : 0,
+          runAt: typeof value.runAt === "string" ? value.runAt : null,
+          world: typeof value.world === "string" ? value.world : null,
+        };
+      } else if (typeof value.source === "string") {
+        this._detail = {
           source: value.source,
           hosts: Array.isArray(value.hosts) ? value.hosts.filter((h) => typeof h === "string") : [],
           dynamic: value.dynamic === true,
           truncated: value.truncated === true,
           totalSourceChars: typeof value.totalSourceChars === "number" ? value.totalSourceChars : value.source.length,
           sourceDigest: typeof value.sourceDigest === "string" ? value.sourceDigest : null,
-        }
-      : null;
+        };
+      } else {
+        this._detail = null;
+      }
+    } else {
+      this._detail = null;
+    }
     if (this._rendered) { this._render(); this._wire(); }
   }
   _render() {
@@ -10094,11 +10142,22 @@ class ApprovalCard extends Component {
     `, `<div class="card" role="group" aria-label="Approval request">
         <p class="title">${escapeHtml(title)}</p>
         ${body ? `<p class="body">${escapeHtml(body)}</p>` : ""}
-        ${this._detail ? `<span class="source-label" id="source-label">Script source</span>` +
-          (this._detail.truncated
-            ? `<p class="source-notice" role="note"><strong>Preview:</strong> Showing the first 64 KB (${this._detail.source.length.toLocaleString()} characters) of ${this._detail.totalSourceChars.toLocaleString()} total characters. ${this._detail.sourceDigest ? `Full source SHA-256: <code>${escapeHtml(this._detail.sourceDigest.slice(0, 16))}…</code>. ` : ""}The complete script will run if approved.</p>`
-            : "") +
-          `<pre class="source" tabindex="0" role="region" aria-labelledby="source-label"></pre><span class="source-label">Sites it fetches</span><ul class="hosts" aria-label="Sites this script fetches">${this._detail.hosts.length ? this._detail.hosts.map((h) => `<li>${escapeHtml(h)}</li>`).join("") : `<li class="none">none — the script makes no fetch to a listed site</li>`}</ul>${this._detail.dynamic ? `<p class="dynamic" role="note">Builds a URL at run time (unknown hosts) — only the sites listed above will be reachable; localhost and private addresses are always refused.</p>` : ""}` : ""}
+        ${this._detail?.kind === "script-registration"
+          ? `<dl class="registration-detail" style="display:grid;grid-template-columns:auto 1fr;gap:4px 8px;font-size:12px;margin:8px 0;">
+              <dt style="font-weight:600;">Script ID:</dt><dd style="margin:0;"><code>${escapeHtml(this._detail.id)}</code> (${escapeHtml(this._detail.scriptKind)})</dd>
+              <dt style="font-weight:600;">SHA-256:</dt><dd style="margin:0;"><code class="digest">${escapeHtml(this._detail.digest)}</code></dd>
+              <dt style="font-weight:600;">Size:</dt><dd style="margin:0;">${Number(this._detail.jsBytes).toLocaleString()} bytes</dd>
+              ${this._detail.runAt ? `<dt style="font-weight:600;">Run at:</dt><dd style="margin:0;">${escapeHtml(this._detail.runAt)}</dd>` : ""}
+              ${this._detail.world ? `<dt style="font-weight:600;">World:</dt><dd style="margin:0;">${escapeHtml(this._detail.world)}</dd>` : ""}
+              <dt style="font-weight:600;">Matches:</dt><dd style="margin:0;"><ul style="margin:0;padding-left:16px;">${this._detail.matches.map((m) => `<li><code>${escapeHtml(m)}</code></li>`).join("")}</ul></dd>
+            </dl>`
+          : this._detail?.source !== undefined
+            ? `<span class="source-label" id="source-label">Script source</span>` +
+              (this._detail.truncated
+                ? `<p class="source-notice" role="note"><strong>Preview:</strong> Showing the first 64 KB (${this._detail.source.length.toLocaleString()} characters) of ${this._detail.totalSourceChars.toLocaleString()} total characters. ${this._detail.sourceDigest ? `Full source SHA-256: <code>${escapeHtml(this._detail.sourceDigest.slice(0, 16))}…</code>. ` : ""}The complete script will run if approved.</p>`
+                : "") +
+              `<pre class="source" tabindex="0" role="region" aria-labelledby="source-label"></pre><span class="source-label">Sites it fetches</span><ul class="hosts" aria-label="Sites this script fetches">${this._detail.hosts.length ? this._detail.hosts.map((h) => `<li>${escapeHtml(h)}</li>`).join("") : `<li class="none">none — the script makes no fetch to a listed site</li>`}</ul>${this._detail.dynamic ? `<p class="dynamic" role="note">Builds a URL at run time (unknown hosts) — only the sites listed above will be reachable; localhost and private addresses are always refused.</p>` : ""}`
+            : ""}
         <slot name="extra"></slot>
         ${state === "pending"
           ? `<div class="actions"><button type="button" class="approve">${escapeHtml(approveLabel)}</button><button type="button" class="deny">${escapeHtml(denyLabel)}</button></div>`
@@ -10140,16 +10199,21 @@ class PromptBar extends Component {
     const model = this.getAttribute("model") || "demo";
     mountTemplate(this, `
       :host { display:block; }
-      .bar { display:flex; align-items:flex-end; gap:8px; border:1px solid var(--border,#e3e0d9); border-radius:14px; background:var(--panel,#ffffff); padding:8px 10px; }
+      .bar { display:flex; align-items:flex-end; gap:8px; border:1px solid var(--border,#e3e0d9); border-radius:14px; background:var(--panel,#ffffff); padding:8px 10px; position:relative; }
       .bar:focus-within { border-color:var(--accent,#0e6e63); }
-      textarea { flex:1; border:0; background:transparent; resize:none; font:inherit; font-size:14px; line-height:1.5; color:var(--ink,#1d1b18); padding:6px 2px; field-sizing:content; min-height:24px; max-height:180px; outline:none; }
+      textarea { flex:1; border:0; background:transparent; resize:none; font:inherit; font-size:14px; line-height:1.5; color:var(--ink,#1d1b18); padding:6px 2px; field-sizing:content; min-height:24px; max-height:180px; outline:none; anchor-name:--prompt-input-anchor; }
       textarea::placeholder { color:var(--muted,#635e56); }
       .tools { display:flex; align-items:center; gap:4px; flex:0 0 auto; }
-      .model { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border,#e3e0d9); border-radius:999px; padding:4px 12px; font:inherit; font-size:12px; font-weight:600; color:var(--accent,#0e6e63); cursor:pointer; background:var(--panel,#ffffff); }
+      .model { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border,#e3e0d9); border-radius:999px; padding:4px 12px; font:inherit; font-size:12px; font-weight:600; color:var(--accent,#0e6e63); cursor:pointer; background:var(--panel,#ffffff); anchor-name:--prompt-model-anchor; }
       .model:hover { border-color:var(--accent,#0e6e63); }
       .model:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
-      .pop { display:none; position:absolute; z-index:20; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:0 12px 32px rgba(0,0,0,.15); min-width:220px; max-height:260px; overflow:auto; padding:6px; }
+      .pop { display:none; position:absolute; inset:auto; margin:0; box-sizing:border-box; z-index:20; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:0 12px 32px rgba(0,0,0,.15);
+        position-anchor:--prompt-input-anchor; position-area:block-end span-inline-start; position-try-fallbacks:flip-block;
+        width:min(440px, anchor-size(width)); min-width:min(220px, calc(100vw - 16px)); max-width:calc(100vw - 16px); max-height:min(260px, calc(100% - 16px)); overflow:auto; padding:6px; }
       .pop.open { display:block; }
+      @supports not (position-area: top) {
+        .pop { position:fixed; }
+      }
       .pop button { display:block; width:100%; text-align:left; background:transparent; border:0; border-radius:7px; padding:7px 10px; font:inherit; font-size:13px; color:var(--ink,#1d1b18); cursor:pointer; }
       .pop button:hover, .pop button[aria-selected="true"] { background:var(--panel-2,#efede8); }
       .pop .head { font-size:12px; font-weight:600; text-transform:none; color:var(--muted,#635e56); padding:4px 10px 6px; }
@@ -10161,7 +10225,7 @@ class PromptBar extends Component {
           <mic-button label="Dictate" aria-label="Dictate"></mic-button>
           <attach-button label="Attach" aria-label="Attach"></attach-button>
         </div>
-        <div class="pop" id="pb-pop" role="listbox" aria-label="Suggestions"></div>
+        <div class="pop" id="pb-pop" role="listbox" aria-label="Suggestions" popover="manual"></div>
       </div>`);
   }
   _wire() {
@@ -10171,7 +10235,29 @@ class PromptBar extends Component {
     // Auto-grow the textarea.
     ta?.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 160) + "px"; });
     ta?.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && pop?.classList.contains("open")) {
+        e.preventDefault();
+        pop.classList.remove("open");
+        if (typeof pop.hidePopover === "function") {
+          try { pop.hidePopover(); } catch { /* already closed */ }
+        }
+        if (pop.style) pop.style.maxHeight = "";
+        modelBtn?.setAttribute("aria-expanded", "false");
+        return;
+      }
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this._emit("send", { text: ta.value }); ta.value = ""; ta.style.height = "auto"; }
+    });
+    pop?.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        pop.classList.remove("open");
+        if (typeof pop.hidePopover === "function") {
+          try { pop.hidePopover(); } catch { /* already closed */ }
+        }
+        if (pop.style) pop.style.maxHeight = "";
+        modelBtn?.setAttribute("aria-expanded", "false");
+        ta?.focus();
+      }
     });
     // @ sources + / commands: show a small suggestion popup (anchor-positioned,
     // in-bounds). The host wires the real mention/command data; here we surface
@@ -10179,19 +10265,106 @@ class PromptBar extends Component {
     ta?.addEventListener("input", () => {
       const v = ta.value;
       const m = v.match(/(?:^|\s)([@/])([\w-]*)$/);
-      if (!m) { pop.classList.remove("open"); modelBtn.setAttribute("aria-expanded", "false"); return; }
+      if (!m) {
+        pop.classList.remove("open");
+        if (typeof pop.hidePopover === "function") {
+          try { pop.hidePopover(); } catch { /* already closed */ }
+        }
+        if (pop.style) pop.style.maxHeight = "";
+        modelBtn.setAttribute("aria-expanded", "false");
+        return;
+      }
       const trigger = m[1];
       this._emit(trigger === "@" ? "mention" : "command", { query: m[2] });
       pop.classList.add("open");
+      if (typeof pop.showPopover === "function") {
+        try { pop.showPopover(); } catch { /* already shown */ }
+      }
       modelBtn.setAttribute("aria-expanded", "true");
-      const anchor = ta.getBoundingClientRect();
-      pop.style.position = "fixed";
-      pop.style.left = Math.max(8, Math.min(anchor.left, window.innerWidth - 228)) + "px";
-      pop.style.top = (anchor.top - 8) + "px";
+      if (!supportsAnchorPositioning()) {
+        // TODO(baseline/anchor-positioning): Remove position:fixed fallback and getBoundingClientRect viewport math.
+        const anchor = ta.getBoundingClientRect();
+        const viewportH = (typeof window !== "undefined" && window.innerHeight) ? window.innerHeight : 800;
+        const viewportW = (typeof window !== "undefined" && window.innerWidth) ? window.innerWidth : 1200;
+        const spaceBelow = viewportH - anchor.bottom - 12;
+        const spaceAbove = anchor.top - 12;
+        const openAbove = spaceBelow < 180 && spaceAbove > spaceBelow;
+        const availableHeight = openAbove ? spaceAbove : spaceBelow;
+        const minW = Math.min(220, Math.max(0, viewportW - 16));
+        const popW = Math.min(440, Math.max(minW, Math.floor(anchor.width || 220)));
+        const leftVal = Math.max(8, Math.min(anchor.left, Math.max(8, viewportW - popW - 8)));
+        pop.style.position = "fixed";
+        if (openAbove) {
+          pop.style.bottom = `${Math.max(8, viewportH - anchor.top + 6)}px`;
+          pop.style.top = "auto";
+        } else {
+          pop.style.top = `${anchor.bottom + 6}px`;
+          pop.style.bottom = "auto";
+        }
+        pop.style.left = `${leftVal}px`;
+        pop.style.right = "auto";
+        pop.style.width = `${popW}px`;
+        pop.style.maxHeight = `${Math.min(260, Math.max(0, Math.floor(availableHeight)))}px`;
+      } else {
+        pop.style.position = "";
+        pop.style.left = "";
+        pop.style.right = "";
+        pop.style.top = "";
+        pop.style.bottom = "";
+        pop.style.width = "";
+        pop.style.maxHeight = "";
+        pop.style.setProperty("position-anchor", "--prompt-input-anchor");
+        pop.style.setProperty("position-area", "block-end span-inline-start");
+      }
       pop.innerHTML = `<div class="head">${trigger === "@" ? "Mention an agent" : "Commands"}</div>`;
     });
     modelBtn?.addEventListener("click", () => {
       const open = pop.classList.toggle("open");
+      if (open) {
+        if (typeof pop.showPopover === "function") {
+          try { pop.showPopover(); } catch { /* already shown */ }
+        }
+        if (!supportsAnchorPositioning()) {
+          // TODO(baseline/anchor-positioning): Remove position:fixed fallback and getBoundingClientRect viewport math.
+          const anchor = modelBtn.getBoundingClientRect();
+          const viewportH = (typeof window !== "undefined" && window.innerHeight) ? window.innerHeight : 800;
+          const viewportW = (typeof window !== "undefined" && window.innerWidth) ? window.innerWidth : 1200;
+          const spaceBelow = viewportH - anchor.bottom - 12;
+          const spaceAbove = anchor.top - 12;
+          const openAbove = spaceBelow < 180 && spaceAbove > spaceBelow;
+          const availableHeight = openAbove ? spaceAbove : spaceBelow;
+          const minW = Math.min(180, Math.max(0, viewportW - 16));
+          const popW = Math.min(280, Math.max(minW, Math.floor(anchor.width || 180)));
+          const leftVal = Math.max(8, Math.min(anchor.left, Math.max(8, viewportW - popW - 8)));
+          pop.style.position = "fixed";
+          if (openAbove) {
+            pop.style.bottom = `${Math.max(8, viewportH - anchor.top + 6)}px`;
+            pop.style.top = "auto";
+          } else {
+            pop.style.top = `${anchor.bottom + 6}px`;
+            pop.style.bottom = "auto";
+          }
+          pop.style.left = `${leftVal}px`;
+          pop.style.right = "auto";
+          pop.style.width = `${popW}px`;
+          pop.style.maxHeight = `${Math.min(260, Math.max(0, Math.floor(availableHeight)))}px`;
+        } else {
+          pop.style.position = "";
+          pop.style.left = "";
+          pop.style.right = "";
+          pop.style.top = "";
+          pop.style.bottom = "";
+          pop.style.width = "max-content";
+          pop.style.maxHeight = "";
+          pop.style.setProperty("position-anchor", "--prompt-model-anchor");
+          pop.style.setProperty("position-area", "block-end span-inline-start");
+        }
+      } else {
+        if (typeof pop.hidePopover === "function") {
+          try { pop.hidePopover(); } catch { /* already closed */ }
+        }
+        if (pop.style) pop.style.maxHeight = "";
+      }
       modelBtn.setAttribute("aria-expanded", String(open));
       pop.innerHTML = `<div class="head">Model</div>`;
     });

@@ -101,31 +101,81 @@ Deno.test({
       await send("Emulation.setDeviceMetricsOverride", { width: 900, height: 1200, deviceScaleFactor: 1, mobile: false }, sessionId);
 
       const ev = async (expr: string) => {
-        const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId);
-        if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
-        return r.result?.result?.value;
+        let lastErr: any = null;
+        for (let attempt = 0; attempt < 10; attempt++) {
+          try {
+            const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId);
+            if (r.error) {
+              if (String(r.error.message ?? "").includes("Cannot find default execution context") && attempt < 9) {
+                await new Promise((res) => setTimeout(res, 200));
+                continue;
+              }
+              throw new Error(JSON.stringify(r.error));
+            }
+            if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
+            return r.result?.result?.value;
+          } catch (e) {
+            lastErr = e;
+            if (String(e?.message ?? e).includes("Cannot find default execution context") && attempt < 9) {
+              await new Promise((res) => setTimeout(res, 200));
+              continue;
+            }
+            throw e;
+          }
+        }
+        throw lastErr;
       };
 
-      await new Promise((r) => setTimeout(r, 2000));
+      // Bounded wait for the document execution context and #composer host to mount
+      const ntpReadyDeadline = Date.now() + 15000;
+      let ntpReady = false;
+      while (Date.now() < ntpReadyDeadline) {
+        try {
+          const ready = await ev(`Boolean(document.readyState === "complete" && document.getElementById("composer"))`);
+          if (ready) { ntpReady = true; break; }
+        } catch { /* context initializing */ }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      assert(ntpReady, "NTP document and #composer host must mount within deadline");
 
       // Drive the real user path: type a composer command into the hub composer
       // (/tabs always has at least this tab, so the popup really opens).
       const opened = await ev(`(async () => {
-        const host = document.getElementById("composer");
+        const deadline = Date.now() + 10000;
+        let host = null;
+        let root = null;
+        let ta = null;
+        while (Date.now() < deadline) {
+          host = document.getElementById("composer");
+          if (host) {
+            root = host.shadowRoot ?? host;
+            ta = root.querySelector("[data-composer-input]");
+            if (ta) break;
+          }
+          await new Promise((r) => setTimeout(r, 50));
+        }
         if (!host) return { error: "no #composer host" };
         // The composer renders in the LIGHT DOM (measured: shadowRoot is null),
         // so the host itself owns the popup; shadowRoot stays as a fallback in
         // case a later refactor moves it (the selector is the contract).
-        const root = host.shadowRoot ?? host;
-        const ta = root.querySelector("[data-composer-input]");
         if (!ta) return { error: "no [data-composer-input]" };
         ta.focus();
         ta.value = "/tabs";
         ta.dispatchEvent(new Event("input", { bubbles: true }));
-        await new Promise((r) => setTimeout(r, 1500));
-        const popup = root.querySelector(".popup.slash-menu") ?? root.querySelector(".popup");
+
+        const popupDeadline = Date.now() + 10000;
+        let popup = null;
+        let note = null;
+        while (Date.now() < popupDeadline) {
+          popup = root.querySelector(".popup.slash-menu") ?? root.querySelector(".popup");
+          if (popup && (!popup.hidden || popup.matches?.(":popover-open") || popup.classList.contains("open"))) {
+            note = popup.querySelector('[id$="-insertion-note"]');
+            if (note && popup.querySelectorAll(".item").length > 0) break;
+          }
+          await new Promise((r) => setTimeout(r, 50));
+        }
         if (!popup) return { error: "no popup" };
-        const note = popup.querySelector('[id$="-insertion-note"]');
+        note = popup.querySelector('[id$="-insertion-note"]');
         const cs = note ? getComputedStyle(note) : null;
         const rect = note ? note.getBoundingClientRect() : null;
         return {

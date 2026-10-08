@@ -5,10 +5,13 @@
 // authentication is required on EVERY upgrade (chrome-agent-platform-jsjy), so
 // paste the token into the extension's acp.token setting as well as the endpoint.
 //
-//   node scripts/acp-service.mjs install [--harness pi] [--port 3210] [--token SECRET]
+//   node scripts/acp-service.mjs install [--harness pi] [--port 3210] [--token SECRET] [--allow-anonymous-loopback]
 //     --token is optional: without it the bridge GENERATES a secret on first start and
 //     persists it (default $XDG_CONFIG_HOME/cap-acp/bridge-token, mode 0600), and the
-//     status line below says so. There is no unauthenticated mode.
+//     status line below says so.
+//     --allow-anonymous-loopback is an EXPLICIT opt-out (Paul, 2026-10-07): the loopback
+//     bridge then runs with NO token, so any local process can drive the harness. It is
+//     loopback-only — a non-loopback bind refuses to start — and is logged loudly.
 //   node scripts/acp-service.mjs status
 //   node scripts/acp-service.mjs uninstall
 //   node scripts/acp-service.mjs logs        (tail the bridge log)
@@ -42,11 +45,17 @@ const ACTION = args._[0] || "status";
 let HARNESS = String(args.harness || ""); // "" = resolve from what this machine has (never a binary it lacks)
 const PORT = String(args.port || "3210");
 const TOKEN = args.token ? String(args.token) : "";
+/** Explicit opt-out (Paul, 2026-10-07): the loopback bridge runs tokenless on purpose. */
+const ALLOW_ANONYMOUS_LOOPBACK = Boolean(args["allow-anonymous-loopback"]);
 
 /** jsjy: the bridge requires a secret on every upgrade whether or not the operator passed --token —
  *  without one it GENERATES and persists a token, so "no token" no longer means "no auth". Say which
- *  case this install is in, and name the file, so the operator can find the value to paste. */
+ *  case this install is in, and name the file, so the operator can find the value to paste. The ONE
+ *  exception is --allow-anonymous-loopback, which must say so plainly (never claim a token is required). */
 function tokenNote() {
+  if (ALLOW_ANONYMOUS_LOOPBACK) {
+    return " · ANONYMOUS loopback (--allow-anonymous-loopback: NO token required; any local process can drive the harness)";
+  }
   return TOKEN
     ? " · token required (the --token you installed)"
     : " · token required (generated + persisted in $XDG_CONFIG_HOME/cap-acp/bridge-token; paste it into acp.token)";
@@ -109,7 +118,8 @@ function resolveHarnessForInstall() {
 
 function bridgeArgs() {
   const a = ["run", "-A", join(ROOT, "scripts", "acp-bridge.ts"), "--port", PORT, "--harness", HARNESS];
-  if (TOKEN) a.push("--token", TOKEN);
+  if (TOKEN && !ALLOW_ANONYMOUS_LOOPBACK) a.push("--token", TOKEN);
+  if (ALLOW_ANONYMOUS_LOOPBACK) a.push("--allow-anonymous-loopback");
   if (CWD) a.push("--cwd", CWD);
   return a;
 }
@@ -241,27 +251,136 @@ function uninstall() {
   }
 }
 
+function getInstalledUnitPath() {
+  if (UNIT_OVERRIDE) return UNIT_OVERRIDE;
+  if (OS === "darwin") {
+    return join(HOME, "Library", "LaunchAgents", `${LABEL}.plist`);
+  }
+  return join(HOME, ".config", "systemd", "user", "cap-acp-bridge.service");
+}
+
+/** Strip XML comments from a plist fragment. */
+function stripXmlComments(s) {
+  return s.replace(/<!--[\s\S]*?-->/g, "");
+}
+
+/** Decode the five predefined XML entities plus numeric character references. */
+function decodeXmlEntities(s) {
+  return s.replace(/&(amp|lt|gt|quot|apos|#x?[0-9a-fA-F]+);/g, (match, entity) => {
+    switch (entity) {
+      case "amp": return "&";
+      case "lt": return "<";
+      case "gt": return ">";
+      case "quot": return '"';
+      case "apos": return "'";
+    }
+    if (entity[0] === "#") {
+      const code = entity[1] === "x" || entity[1] === "X"
+        ? parseInt(entity.slice(2), 16)
+        : parseInt(entity.slice(1), 10);
+      if (!Number.isNaN(code) && code >= 0 && code <= 0x10ffff) {
+        try { return String.fromCodePoint(code); } catch { /* fall through to raw match */ }
+      }
+    }
+    return match;
+  });
+}
+
+/** Parse the ProgramArguments <array> into its decoded <string> values, or null when absent. */
+function parseLaunchdProgramArguments(content) {
+  const match = content.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/);
+  if (!match) return null;
+  const block = stripXmlComments(match[1]);
+  const args = [];
+  const stringRe = /<string[^>]*>([\s\S]*?)<\/string>/g;
+  let m;
+  while ((m = stringRe.exec(block)) !== null) {
+    args.push(decodeXmlEntities(m[1]));
+  }
+  return args;
+}
+
+function readInstalledServiceUnit(unitPath) {
+  if (!existsSync(unitPath)) return null;
+  try {
+    const content = readFileSync(unitPath, "utf8");
+    const isPlist = content.includes("<?xml") || content.includes("<plist");
+    let isAnonymous = false;
+    let token = "";
+    let port = "";
+    let harness = "";
+
+    if (isPlist) {
+      // Derive arguments SOLELY from the parsed ProgramArguments string values:
+      // strip XML comments and decode entities first, so a commented-out flag
+      // (which launchd ignores) or an entity-encoded flag cannot misreport the mode.
+      const args = parseLaunchdProgramArguments(content);
+      if (args) {
+        isAnonymous = args.includes("--allow-anonymous-loopback");
+        const tokenIdx = args.indexOf("--token");
+        if (tokenIdx !== -1 && args[tokenIdx + 1] !== undefined) token = args[tokenIdx + 1];
+        const portIdx = args.indexOf("--port");
+        if (portIdx !== -1 && args[portIdx + 1] !== undefined) port = args[portIdx + 1];
+        const harnessIdx = args.indexOf("--harness");
+        if (harnessIdx !== -1 && args[harnessIdx + 1] !== undefined) harness = args[harnessIdx + 1];
+      }
+    } else {
+      // Derive arguments SOLELY from the ExecStart line (never comments, descriptions, or working directory)
+      const execMatch = content.match(/^ExecStart=(.*)$/m);
+      const execLine = execMatch ? execMatch[1] : "";
+      isAnonymous = /(?:^|\s)--allow-anonymous-loopback(?:\s|$)/.test(execLine);
+      const tokenMatch = execLine.match(/(?:^|\s)--token(?:\s+|=)([^\s]+)/);
+      if (tokenMatch) token = tokenMatch[1];
+      const portMatch = execLine.match(/(?:^|\s)--port(?:\s+|=)([^\s]+)/);
+      if (portMatch) port = portMatch[1];
+      const harnessMatch = execLine.match(/(?:^|\s)--harness(?:\s+|=)([^\s]+)/);
+      if (harnessMatch) harness = harnessMatch[1];
+    }
+    return { unitPath, isPlist, isAnonymous, token, port, harness };
+  } catch {
+    return null;
+  }
+}
+
 function status() {
-  // jsjy: the bridge requires a secret whether or not the operator passed --token, so `status` must say
-  // where the value the extension needs can be found — /health never discloses it (delta review,
-  // finding 4).
-  console.log(TOKEN
-    ? "auth: token required — the --token you installed"
-    : "auth: token required — the bridge generated one; it is persisted in $XDG_CONFIG_HOME/cap-acp/bridge-token (paste it into acp.token)");
-  const url = `http://127.0.0.1:${PORT}/health`;
+  const unitPath = getInstalledUnitPath();
+  const installed = readInstalledServiceUnit(unitPath);
+
+  // Report the ACTUAL installed configuration from the unit/plist file if installed;
+  // otherwise, explicitly label output as an assumption so we do not claim knowledge
+  // we do not have.
+  if (installed) {
+    if (installed.isAnonymous) {
+      console.log("auth: ANONYMOUS loopback (installed with --allow-anonymous-loopback) — NO token required; any local process can drive the harness");
+    } else if (installed.token) {
+      console.log("auth: token required (installed with explicit --token)");
+    } else {
+      console.log("auth: token required (installed service uses generated token in $XDG_CONFIG_HOME/cap-acp/bridge-token; paste into acp.token)");
+    }
+  } else {
+    if (ALLOW_ANONYMOUS_LOOPBACK) {
+      console.log("auth (assumption from CLI flag --allow-anonymous-loopback; service not installed): ANONYMOUS loopback — NO token required");
+    } else if (TOKEN) {
+      console.log("auth (assumption from CLI flag --token; service not installed): token required — the --token you provided");
+    } else {
+      console.log("auth (assumption; service not installed): token required by default — bridge generates token in $XDG_CONFIG_HOME/cap-acp/bridge-token");
+    }
+  }
+
+  const effectivePort = installed?.port || PORT;
+  const url = `http://127.0.0.1:${effectivePort}/health`;
   fetch(url).then(async (r) => {
     console.log(`bridge: UP at ${url}`);
     console.log(JSON.stringify(await r.json(), null, 2));
   }).catch(() => {
     console.log(`bridge: DOWN at ${url}`);
-    console.log(OS === "darwin"
-      ? "start it in the background with: node scripts/acp-service.mjs install"
-      : "start it in the background with: node scripts/acp-service.mjs install");
+    console.log("start it in the background with: node scripts/acp-service.mjs install");
   });
   if (OS === "darwin") {
-    const plist = join(HOME, "Library", "LaunchAgents", `${LABEL}.plist`);
-    console.log(`launch agent: ${existsSync(plist) ? plist : "(not installed)"}`);
+    console.log(`launch agent: ${installed ? unitPath : "(not installed)"}`);
     if (existsSync(LOG)) console.log(`recent log:\n${readFileSync(LOG, "utf8").split("\n").slice(-8).join("\n")}`);
+  } else {
+    console.log(`systemd unit: ${installed ? unitPath : "(not installed)"}`);
   }
 }
 

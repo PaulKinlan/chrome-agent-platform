@@ -32,9 +32,9 @@ import {
 import { requestProviderHostAccess } from "../lib/provider-gate.js";
 import { declaredManifestOrigins, revokeSiteOrigin, siteAccessLabel, siteAccessScope, siteAccessState } from "../lib/site-access.js";
 import { createOpfsAdapter, createChromeAlarmsAdapter } from "../lib/data-archive.js";
-import { streamExportArchive } from "../lib/backup-export.js";
+import { streamExportArchive, executeOptionsExport } from "../lib/backup-export.js";
 import { vaultPanelRows, resolveSaveAction } from "../lib/secret-vault.js";
-import { streamRestoreArchive } from "../lib/backup-restore.js";
+import { streamRestoreArchive, createOptionsQuiesce } from "../lib/backup-restore.js";
 import { consumeSiteActivityFocus, normalizeSiteActivityFocus, SITE_ACTIVITY_FOCUS_KEY } from "../lib/site-activity-focus.js";
 import {
   USAGE_RANGES,
@@ -1432,7 +1432,8 @@ async function renderSiteToolConsents({ cursor = siteToolConsentView.cursor, sta
 // ── WebMCP discovery status + diagnostics toggle (Paul 2026-08-18) ──
 // A small, honest status surface: when did discovery last run, for which origin,
 // what is the script/injection state, and how many tools were found — plus the
-// diagnostics toggle that gates the [WebMCP] content-script console logs.
+// owner diagnostics toggle for service-worker injection logs. Page-realm logs
+// are intentionally off until separately approved per-origin diagnostics exist.
 let webmcpDiagWired = false;
 async function renderWebmcpStatus() {
   const body = $("#webmcp-status-body");
@@ -1446,7 +1447,7 @@ async function renderWebmcpStatus() {
       await chrome.runtime
         .sendMessage({ type: "webmcp.diagnostics.set", enabled: checked })
         .catch(() => {});
-      saveFlash(checked ? "WebMCP diagnostics logs enabled." : "WebMCP diagnostics logs disabled.");
+      saveFlash(checked ? "WebMCP service-worker diagnostics enabled." : "WebMCP service-worker diagnostics disabled.");
     });
   }
   let diag = { enabled: false };
@@ -3916,7 +3917,6 @@ syncEnclaveToggle();
 
 renderVaultPanel();
 
-/** One-click owner export
 /** One-click owner export — STREAMED (0ymn / 11rm.3): the Options page reads
  * the OPFS tree directly (same extension origin as the service worker) and
  * writes a .tar backup straight to the picked file in 64 KiB chunks — nothing
@@ -3925,57 +3925,18 @@ renderVaultPanel();
  * is the SAME sanitizers collectExportData runs (excluded paths skipped,
  * managed redacted targets sanitized through their registered helper before
  * any byte enters the archive). When the File System Access picker is
- * unavailable, the legacy buffered owner.export.all route is kept as the
- * fallback so the button always works. */
+ * unavailable, export streams to an OPFS temporary file in 64 KiB chunks
+ * before triggering browser download, maintaining O(1) constant memory.
+ * The legacy buffered `owner.export.all` SW route is retained for test/API
+ * compatibility only. */
 exportAllBtn?.addEventListener("click", async () => {
   setBackupStatus("Collecting your agents, memories, artifacts and settings…");
   exportAllBtn.disabled = true;
   try {
-    if (typeof window.showSaveFilePicker === "function") {
-      const when = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-      const handle = await window.showSaveFilePicker({
-        suggestedName: `cap-backup-${when}.tar`,
-        types: [{ description: "CAP backup (TAR)", accept: { "application/x-tar": [".tar"] } }],
-      });
-      const writable = await handle.createWritable();
-      try {
-        const root = await navigator.storage.getDirectory();
-        const adapter = createOpfsAdapter(root);
-        const result = await streamExportArchive({
-          writable,
-          listFiles: () => adapter.listFiles(),
-          open: async (path) => {
-            const file = await (await root.getFileHandle(path, { create: false })).getFile();
-            return { size: file.size, stream: file.stream() };
-          },
-          kvGet: (key) => chrome.storage.local.get(key ?? null),
-          alarms: { getAll: () => chrome.alarms.getAll() },
-          extensionVersion: String(chrome.runtime.getManifest()?.version ?? "unknown"),
-          onProgress: (p) => setBackupStatus(`Exported ${p.bytesSoFar} bytes…`),
-        });
-        setBackupStatus(`Exported ${result.files - 3} stored files, ${result.totalBytes} payload bytes to ${handle.name}. Keep the file safe — it contains your agents' memories.`);
-        return;
-      } finally {
-        try { await writable.close(); } catch { /* already closed on error */ }
-      }
-    }
-    // ── legacy buffered fallback (File System Access unavailable) ──
-    const res = await chrome.runtime.sendMessage({ type: "owner.export.all" });
-    if (!res?.ok || typeof res.bundle !== "string") {
-      throw new Error(res?.error || "Export failed");
-    }
-    const when = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-    const blob = new Blob([res.bundle], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `cap-export-${when}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
-    const m = res.manifest || {};
-    setBackupStatus(`Exported ${m.opfsFiles ?? 0} stored files, ${m.kvKeys ?? 0} settings keys and ${m.alarms ?? 0} schedules. Keep the file safe — it contains your agents' memories.`);
+    await executeOptionsExport({
+      onStatus: (msg) => setBackupStatus(msg),
+      extensionVersion: String(chrome.runtime.getManifest()?.version ?? "unknown"),
+    });
   } catch (err) {
     setBackupStatus(`Export failed: ${err?.message || err}`);
   } finally {
@@ -3983,55 +3944,85 @@ exportAllBtn?.addEventListener("click", async () => {
   }
 });
 
-/** Owner import: pick a bundle, confirm the replacement explicitly, then let
- * the service worker restore it transactionally (validate first, verify every
- * restored byte after). */
+/** Owner import: pick a backup archive (.tar or legacy .json), stage and validate
+ * transactionally in the Options page, confirm with summary counts, and commit with
+ * a durable rollback journal. */
 importAllBtn?.addEventListener("click", () => importAllFile?.click());
 importAllFile?.addEventListener("change", async () => {
   const file = importAllFile?.files?.[0];
   if (!file) return;
   importAllFile.value = "";
+  let restoreCleanOutcome = false;
   try {
-    const isTar = file.name.toLowerCase().endsWith(".tar") || file.type === "application/x-tar";
-    const confirmed = await confirmActionDialog({
-      title: "Import this backup?",
-      body:
-        "Importing replaces your CURRENT profile with the backup's agents, memories, artifacts and settings. Data the backup does not contain will be removed.\n\nProvider API keys and MCP auth headers are never in the file — you will re-enter them in Settings afterwards.\n\nContinue?",
-      confirmLabel: "Replace my data with this backup",
-      destructive: true,
+    setBackupStatus("Validating and staging the backup…");
+    importAllBtn.disabled = true;
+
+    const root = await navigator.storage.getDirectory();
+    const adapter = createOpfsAdapter(root);
+    const res = await streamRestoreArchive({
+      stream: file,
+      opfs: adapter,
+      kvSet: (items) => chrome.storage.local.set(items),
+      kvRemove: (keys) => chrome.storage.local.remove(keys),
+      kvGet: (key) => chrome.storage.local.get(key ?? null),
+      alarms: createChromeAlarmsAdapter(),
+      confirm: async ({ manifest, summary }) => {
+        return await confirmActionDialog({
+          title: "Import this backup?",
+          body:
+            `Importing replaces your CURRENT profile with the backup's agents, memories, artifacts and settings (${summary.opfsFiles} stored files, ${summary.kvKeys} settings keys, ${summary.alarms} schedules).\n\nData the backup does not contain will be removed.\n\nProvider API keys and MCP auth headers are never in the file — you will re-enter them in Settings afterwards.\n\nContinue?`,
+          confirmLabel: "Replace my data with this backup",
+          destructive: true,
+        });
+      },
+      quiesce: createOptionsQuiesce({
+        send,
+        setBackupStatus,
+        setStorage: (items) => chrome.storage.local.set(items),
+      }),
+      onRollback: async () => {
+        const invRes = await send("invalidate-agent");
+        if (invRes?.invalidated !== true) {
+          throw new Error("Worker reported failure during cache invalidation on rollback");
+        }
+        return invRes;
+      },
+      onProgress: (p) => setBackupStatus(`${p.phase === "staging" ? "Staging" : "Restoring"} ${p.path || "data"}…`),
+      postCommit: async () => {
+        let attempts = 0;
+        let lastErr = null;
+        while (attempts < 3) {
+          attempts++;
+          try {
+            const invRes = await send("invalidate-agent");
+            if (invRes && invRes.invalidated === true) {
+              return;
+            }
+            lastErr = new Error(`Worker returned unexpected response: ${JSON.stringify(invRes)}`);
+          } catch (e) {
+            lastErr = e;
+          }
+          await sleep(200);
+        }
+        throw new Error(`Worker cache invalidation failed: ${lastErr?.message || lastErr}`);
+      },
+      overwrite: true,
     });
-    if (!confirmed) {
+
+    restoreCleanOutcome = true;
+    if (res.cancelled) {
       setBackupStatus("Import cancelled — nothing was changed.");
       return;
     }
-    setBackupStatus("Validating and restoring the backup…");
-    importAllBtn.disabled = true;
-
-    if (isTar) {
-      const root = await navigator.storage.getDirectory();
-      const adapter = createOpfsAdapter(root);
-      const res = await streamRestoreArchive({
-        stream: file.stream(),
-        opfs: adapter,
-        kvSet: (items) => chrome.storage.local.set(items),
-        kvRemove: (keys) => chrome.storage.local.remove(keys),
-        kvGet: (key) => chrome.storage.local.get(key ?? null),
-        alarms: createChromeAlarmsAdapter(),
-        onProgress: (p) => setBackupStatus(`Restoring ${p.path || "data"}…`),
-        overwrite: true,
-      });
-      const r = res.report?.restored || res.restored || {};
-      setBackupStatus(`Restored ${r.opfsFiles ?? 0} files, ${r.kvKeys ?? 0} settings keys and ${r.alarms ?? 0} schedules. Re-enter your provider API keys in the Providers section.`);
-      return;
-    }
-
-    const raw = await file.text();
-    const res = await send("owner.import.all", { raw, bundle: raw, overwrite: true });
-    if (!res?.ok) throw new Error(res?.error || "Import failed");
-    const r = res.report?.restored || {};
+    const r = res.report?.restored || res.restored || {};
     setBackupStatus(`Restored ${r.opfsFiles ?? 0} files, ${r.kvKeys ?? 0} settings keys and ${r.alarms ?? 0} schedules. Re-enter your provider API keys in the Providers section.`);
   } catch (err) {
-    setBackupStatus(`Import failed: ${err?.message || err}`);
+    if (err?.message?.includes("Profile restore committed successfully")) {
+      restoreCleanOutcome = true;
+      setBackupStatus(err.message);
+    } else {
+      setBackupStatus(`Import failed: ${err?.message || err}`);
+    }
   } finally {
     importAllBtn.disabled = false;
   }

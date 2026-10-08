@@ -18,7 +18,8 @@ const BRIDGE_SRC = Deno.readTextFileSync(
 
 Deno.test("webmcp diagnostics: PAGE_ALLOWED_ROUTES admits only bridge read/report routes", async () => {
   const mod = await import("../extension/lib/pure.js");
-  assert(mod.PAGE_ALLOWED_ROUTES.has("webmcp.diagnostics.get"));
+  assertEquals(mod.PAGE_ALLOWED_ROUTES.has("webmcp.diagnostics.get"), false,
+    "owner-wide diagnostics is never a page route");
   assert(mod.PAGE_ALLOWED_ROUTES.has("enrollment.status"));
   assert(mod.PAGE_ALLOWED_ROUTES.has("tools.upsert"));
   assertEquals(mod.PAGE_ALLOWED_ROUTES.has("tools.invoke"), false, "owner invocation stays extension-only");
@@ -118,8 +119,21 @@ function makeBridge(swRoutes = {}) {
 
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 const enrolledRoutes = (gen = 7, epoch = 3) => ({
-  "webmcp.diagnostics.get": { enabled: true },
   "enrollment.status": { ok: true, enrolled: true, gen, epoch, nonce: NONCE },
+});
+
+Deno.test("89rk4: enrolled page relay neither reads nor forwards the owner's diagnostics bit", async () => {
+  const bridge = makeBridge({
+    ...enrolledRoutes(),
+    "webmcp.diagnostics.get": { enabled: true }, // adversarial global response if ever requested
+  });
+  await tick();
+  assert(bridge.sent.some((m) => m?.type === "enrollment.status"), "startup enrollment still syncs");
+  assert(!bridge.sent.some((m) => m?.type === "webmcp.diagnostics.get"), "the relay must not request a global owner setting");
+  const lifecycle = bridge.downSince().filter((m) => m.type === "collect" || m.type === "resume");
+  assert(lifecycle.some((m) => m.type === "collect"), "the bridge still discovers page tools");
+  assert(lifecycle.every((m) => !Object.hasOwn(m, "diagnostics")),
+    "neither collect nor resume can ferry the global bit into the page's MAIN world");
 });
 
 Deno.test("webmcp bridge: startup sync arms key + epoch and forwards matching-generation invokes", async () => {

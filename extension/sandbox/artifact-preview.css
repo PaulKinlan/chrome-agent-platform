@@ -1,3 +1,7 @@
+:root {
+  color-scheme: light dark;
+}
+
 html,
 body {
   width: 100%;
@@ -8,11 +12,13 @@ body {
 body {
   overflow: hidden;
   background: transparent;
+  color: var(--text, #1d1b18);
 }
 
 #preview-status {
   margin: 1rem;
   font: 0.875rem/1.4 system-ui, sans-serif;
+  color: var(--text, #1d1b18);
 }
 
 #preview-retry {
@@ -20,15 +26,31 @@ body {
   margin: 0 1rem 1rem;
   font: 0.8125rem/1 system-ui, sans-serif;
   padding: 6px 14px;
-  border: 1px solid #c9c4ba;
-  border-radius: 6px;
-  background: #fff;
+  border: 1px solid var(--border, #c9c4ba);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--panel, #ffffff);
+  color: var(--text, #1d1b18);
   cursor: pointer;
+  transition: border-color 150ms ease, color 150ms ease, background 150ms ease;
 }
 
 #preview-retry:hover {
-  border-color: #0e6e63;
-  color: #0e6e63;
+  border-color: var(--accent, #0e6e63);
+  color: var(--accent, #0e6e63);
+}
+
+#preview-retry:focus-visible {
+  outline: 2px solid var(--accent, #0e6e63);
+  outline-offset: 2px;
+}
+
+#preview-retry:active {
+  background: var(--panel-2, #efede8);
+}
+
+#preview-retry:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 #artifact-preview-content {

@@ -11,7 +11,7 @@
 // extracted with the SYSTEM tar and compared byte-for-byte.
 // @ts-nocheck
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import {
   createTarHeader,
@@ -19,7 +19,7 @@ import {
   sanitizeKvForExport,
 } from "../extension/lib/data-archive.js";
 import { sanitizeRedactedTargetText, isManagedRedactedTarget } from "../extension/lib/logical-site-agent-config.js";
-import { streamExportArchive } from "../extension/lib/backup-export.js";
+import { streamExportArchive, executeOptionsExport } from "../extension/lib/backup-export.js";
 
 const ENCODER = new TextEncoder();
 const DECODER = new TextDecoder();
@@ -311,4 +311,217 @@ Deno.test("0ymn: multi-chunk reads actually stream — the driver never asks for
   const entries = await walkTar(archive);
   const wasm = entries.find((e) => e.name === "opfs/tools/mod.wasm");
   assertEquals(wasm.data.byteLength, 700, "the wasm payload is complete in the archive");
+});
+
+Deno.test("0ymn: options fallback export writes to temp OPFS stream without double-close error", async () => {
+  const profile = fakeProfile();
+  const storage = fakeStorage(profile, KV, ALARMS);
+
+  // Simulate FileSystemWritableFileStream in OPFS
+  let streamClosed = false;
+  const writtenChunks: Uint8Array[] = [];
+  const fakeWritableStream = new WritableStream<Uint8Array>({
+    write(chunk) {
+      writtenChunks.push(chunk);
+    },
+    close() {
+      if (streamClosed) {
+        throw new TypeError("Cannot close an already-closed stream");
+      }
+      streamClosed = true;
+    },
+  });
+
+  // Execute export with the writable stream
+  const result = await streamExportArchive({
+    writable: fakeWritableStream,
+    listFiles: storage.listFiles,
+    open: storage.open,
+    kvGet: storage.kvGet,
+    alarms: storage.alarms,
+    extensionVersion: "test-1.0",
+  });
+
+  // Must close stream cleanly through encodeTarStream
+  assertEquals(streamClosed, true, "stream must be closed once by encodeTarStream");
+  assert(result.archiveBytes > 0n, "archive bytes must be positive");
+  assert(writtenChunks.length > 0, "archive chunks must have been written");
+});
+
+Deno.test("0ymn: options fallback export handler executes download without secondary close failure", async () => {
+  const profile = fakeProfile();
+
+  let streamClosedTimes = 0;
+  let downloadedTriggered = false;
+  let downloadedFilename = "";
+  let downloadedBlob: Blob | null = null;
+  let tempFileCreated = false;
+
+  function makeMockDir(dirName: string) {
+    const files = new Map<string, Uint8Array>();
+    const subdirs = new Map<string, any>();
+    return {
+      kind: "directory",
+      name: dirName,
+      async *values() {
+        for (const d of subdirs.values()) yield d;
+        for (const [fn, bytes] of files.entries()) {
+          yield {
+            kind: "file",
+            name: fn,
+            getFile: async () => new Blob([bytes]),
+          };
+        }
+      },
+      getDirectoryHandle: async (seg: string, _opts?: any) => {
+        if (!subdirs.has(seg)) {
+          subdirs.set(seg, makeMockDir(seg));
+        }
+        return subdirs.get(seg);
+      },
+      getFileHandle: async (fn: string, opts?: any) => {
+        if (opts?.create && fn.startsWith(".staging-export-")) {
+          tempFileCreated = true;
+        }
+        let buf = files.get(fn) ?? new Uint8Array(0);
+        return {
+          name: fn,
+          createWritable: async () => new WritableStream({
+            write(chunk) {
+              const next = new Uint8Array(buf.byteLength + chunk.byteLength);
+              next.set(buf, 0);
+              next.set(chunk, buf.byteLength);
+              buf = next;
+            },
+            close() {
+              streamClosedTimes++;
+              if (streamClosedTimes > 1) {
+                throw new TypeError("Cannot close an already-closed stream");
+              }
+            },
+          }),
+          getFile: async () => new Blob([buf]),
+        };
+      },
+      removeEntry: async (_name: string) => {},
+      _files: files,
+    };
+  }
+
+  const mockRoot = makeMockDir("root");
+  for (const [path, bytes] of profile.files.entries()) {
+    const segs = path.split("/").filter(Boolean);
+    let cur = mockRoot;
+    for (let i = 0; i < segs.length - 1; i++) {
+      cur = await cur.getDirectoryHandle(segs[i], { create: true });
+    }
+    cur._files.set(segs.at(-1)!, bytes);
+  }
+
+  const statusLogs: string[] = [];
+  const result = await executeOptionsExport({
+    storageRoot: mockRoot,
+    showPicker: null, // Force fallback path!
+    createDownloadUrl: (f: Blob) => {
+      downloadedBlob = f;
+      return "blob:chrome-extension://cap-test/123";
+    },
+    revokeDownloadUrl: (_u: string) => {},
+    triggerDownload: (_url: string, filename: string) => {
+      downloadedTriggered = true;
+      downloadedFilename = filename;
+    },
+    onStatus: (msg: string) => statusLogs.push(msg),
+    extensionVersion: "test-options-1.0",
+    kvGet: async () => KV,
+    alarms: { getAll: async () => ALARMS },
+  });
+
+  // Verify full fallback handler execution:
+  assertEquals(tempFileCreated, true, "temporary OPFS file must be created");
+  assertEquals(streamClosedTimes, 1, "writable stream must be closed exactly once");
+  assertEquals(downloadedTriggered, true, "triggerDownload must be called in fallback path");
+  assert(downloadedFilename.startsWith("cap-backup-"), "download filename must match pattern");
+  assert(downloadedFilename.endsWith(".tar"), "download filename must end in .tar");
+  assert(downloadedBlob !== null && downloadedBlob.size > 0, "downloaded blob must have content");
+  assertEquals(result.files, 6, "must export manifest, kv, alarms and 3 OPFS files");
+  assert(statusLogs.length > 0, "status messages must be emitted");
+});
+
+Deno.test("0ymn: options export executes under restore lock and live temp file is not deleted", async () => {
+  let lockRequested = false;
+
+  const mockRoot = {
+    values: async function* () {},
+    getFileHandle: async () => ({
+      createWritable: async () => new WritableStream(),
+      getFile: async () => new Blob([new Uint8Array(512)]),
+    }),
+    removeEntry: async () => {},
+  };
+
+  await executeOptionsExport({
+    storageRoot: mockRoot,
+    showPicker: null,
+    createDownloadUrl: () => "blob:test",
+    revokeDownloadUrl: () => {},
+    triggerDownload: () => {},
+    onStatus: () => {},
+    extensionVersion: "1.0.0",
+    kvGet: async () => ({}),
+    alarms: { getAll: async () => [] },
+    lockAcquirer: async (fn: any) => {
+      lockRequested = true;
+      return await fn();
+    },
+  });
+
+  assertEquals(lockRequested, true, "executeOptionsExport must acquire cap:restoreLock");
+});
+
+Deno.test("0ymn: export refuses when restore fence, journal, or pending invalidation is active", async () => {
+  const mockRoot = {
+    values: async function* () {},
+    getFileHandle: async () => ({
+      createWritable: async () => new WritableStream(),
+      getFile: async () => new Blob([new Uint8Array(512)]),
+    }),
+    removeEntry: async () => {},
+  };
+
+  // 1. Refuse on restore fence
+  await assertRejects(
+    () => executeOptionsExport({
+      storageRoot: mockRoot,
+      kvGet: async () => ({ "cap:restoreFence": Date.now() }),
+      alarms: { getAll: async () => [] },
+      lockAcquirer: async (fn: any) => fn(),
+    }),
+    Error,
+    "Cannot export profile: a profile restore, rollback, or cache invalidation is currently pending",
+  );
+
+  // 2. Refuse on rollback journal
+  await assertRejects(
+    () => executeOptionsExport({
+      storageRoot: mockRoot,
+      kvGet: async () => ({ "cap:importBackup": { ops: [] } }),
+      alarms: { getAll: async () => [] },
+      lockAcquirer: async (fn: any) => fn(),
+    }),
+    Error,
+    "Cannot export profile: a profile restore, rollback, or cache invalidation is currently pending",
+  );
+
+  // 3. Refuse on pending invalidation
+  await assertRejects(
+    () => executeOptionsExport({
+      storageRoot: mockRoot,
+      kvGet: async () => ({ "cap:invalidationPending": Date.now() }),
+      alarms: { getAll: async () => [] },
+      lockAcquirer: async (fn: any) => fn(),
+    }),
+    Error,
+    "Cannot export profile: a profile restore, rollback, or cache invalidation is currently pending",
+  );
 });

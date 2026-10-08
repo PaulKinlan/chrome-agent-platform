@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.3.601] — 2026-10-08
+- Reject a script-registration approval request that arrives without valid bounded detail, so a malformed or mismatched request can never produce an approvable generic card.
+
+## [0.3.600] — 2026-10-08
+- Align the mention popup with the model picker and remove a dead anchor declaration so the composer menu positions consistently.
+
+## [0.3.599] — 2026-10-08
+- Anchor the composer mention and model popups to their triggering controls with no JavaScript geometry, keeping the same keyboard and ARIA behaviour.
+
+## [0.3.598] — 2026-10-08
+- Require owner-visible digest approval before model-authored script registration, and reject scripts that register more tool matches than the documented limit.
+
+## [0.3.597] — 2026-10-08
+- Update the bundled JSON-schema URI dependency to the patched release that fixes two advisories; the shipped bundle now resolves the fixed version.
+
+## [0.3.596] — 2026-10-08
+- Stop page routes from returning the global enrollment state or forwarding it into the page's MAIN-world, and retire the page-console error diagnostic in favour of service-worker injection logs.
+
+## [0.3.595] — 2026-10-08
+- Resolve skill references faster by reading the store concurrently once per batch instead of serially twice on the run-start path.
+
+## [0.3.594] — 2026-10-08
+- Correct outdated documentation cross-references and code comments, and regenerate the docs component mirror.
+
+## [0.3.593] — 2026-10-07
+- Exporting data from Settings now streams standard TAR archives directly without memory buffering or size caps.
+- Profile restore now uses a 3-phase transactional streaming pipeline with rollback journal and legacy backup fallback.
+
+## [0.3.592] — 2026-10-07
+- Add an explicit loopback-only tokenless option for the ACP bridge, correct the ACP token guidance, and show the real bridge-refusal reason.
+
+## [0.3.591] — 2026-10-07
+- The Jobs board now shows new jobs, messages, open counts, and completed results as soon as agents update them.
+- Streamed assistant bubbles properly complete and clear their active streaming state when the final answer settles.
+- Add an explicit loopback-only tokenless option for the ACP bridge, correct the ACP token guidance, and show the real bridge-refusal reason.
+
+## [0.3.590] — 2026-10-07
+- Fix a long cold-boot stall by persisting the run-log WAL marker and letting read paths share the lock.
+
+## [0.3.589] — 2026-10-07
+- Admitted Emscripten packages gain a runtime home: the offscreen document now executes admitted operations in isolated fresh-per-job workers with broker authorization and host-owned deadlines.
+
+## [0.3.588] — 2026-10-07
+- Improve keyboard focus visibility and small-text readability across the Artifacts viewer, New Tab, side panel, and Options.
+
 ## [0.3.587] — 2026-10-07
 - The Settings tool library can now list and structurally validate schema-2 Emscripten packages (validation only — execution is not enabled).
 

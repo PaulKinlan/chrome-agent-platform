@@ -57,6 +57,7 @@ const BASELINE_ROUTES = [
   "tool-catalog.shadow",
   "tool.package.validation-list",
   "tool.package.validate",
+  "tool.package.run",
   "tool.preview.run",
   "agent.run",
   "agent.list",

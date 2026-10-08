@@ -209,8 +209,8 @@
     "message": "Diagnostics logs"
   },
   "options_diagnostics_logs_help": {
-    "message": "Write a $1 line to the page's DevTools console each time a site's tools are checked.",
-    "description": "$1 is the inline code [WebMCP]"
+    "message": "Write $1 injection diagnostics to the extension's service-worker DevTools console. Page-console diagnostics remain off.",
+    "description": "$1 is the inline code webmcp-sw"
   },
   "options_event": {
     "message": "Event"

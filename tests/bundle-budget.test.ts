@@ -27,6 +27,7 @@ import {
   duplicateStoreInputs,
   formatContributors,
   nonDenoStoreInputs,
+  securityDependencyDrift,
   STORE_BUNDLE_BUDGETS,
   STORE_SW_BUDGET_BYTES,
   topContributors,
@@ -97,6 +98,51 @@ Deno.test("bundle budget: build.mjs wires the metafile report, the store gate, a
   assert(scrubAt !== -1 && minifyAt !== -1, "both the scrub and the minify step exist");
   assert(scrubAt < minifyAt, "the eval scrub must run BEFORE minification");
   assertStringIncludes(source, "minified bundle", "the minified bytes are re-scanned for eval sites");
+});
+
+Deno.test("lf9xe: the build rejects a vulnerable Deno-store fast-uri even when npm locks patched", async () => {
+  const npmLock = JSON.parse(await Deno.readTextFile("package-lock.json"));
+  const denoLock = JSON.parse(await Deno.readTextFile("deno.lock"));
+  const npmVersion = npmLock.packages["node_modules/fast-uri"].version;
+  const denoVersions = Object.keys(denoLock.npm).filter((key) => key.startsWith("fast-uri@"))
+    .map((key) => key.slice("fast-uri@".length)).join(",");
+  // Literal 3.1.5 is the historical vulnerable fixture; expectations derive
+  // from the current locks so a later patched-version upgrade remains green.
+  const old = { inputs: {
+    "node_modules/.deno/fast-uri@3.1.5/node_modules/fast-uri/index.js": { bytes: 11 },
+  } };
+  assertEquals(securityDependencyDrift(old, npmLock, denoLock), [
+    `fast-uri: npm=${npmVersion}; deno=${denoVersions}; shipped=3.1.5`,
+  ]);
+  assertThrows(() => assertBundleBudget({ label: "background/service-worker.js", bytes: 100, metafile: old }),
+    Error, "security dependency lock-to-shipped drift");
+  const good = { inputs: {
+    [`node_modules/.deno/fast-uri@${npmVersion}/node_modules/fast-uri/index.js`]: { bytes: 11 },
+  } };
+  assertEquals(securityDependencyDrift(good, npmLock, denoLock), []);
+  assertEquals(assertBundleBudget({ label: "background/service-worker.js", bytes: 100, metafile: good }), 100);
+});
+
+Deno.test("im9q8: build rejects SDK lock-to-bundle drift and ignores dependency-free bundles", async () => {
+  const npmLock = JSON.parse(await Deno.readTextFile("package-lock.json"));
+  const denoLock = JSON.parse(await Deno.readTextFile("deno.lock"));
+  const npmVersion = npmLock.packages["node_modules/@modelcontextprotocol/sdk"].version;
+  const denoVersions = [...new Set(Object.keys(denoLock.npm)
+    .filter((key) => key.startsWith("@modelcontextprotocol/sdk@"))
+    .map((key) => key.slice("@modelcontextprotocol/sdk@".length).split("_", 1)[0]))].join(",");
+  // The old 1.30.0 report belonged to a stale build, not the current tree.
+  // This synthetic input catches any FUTURE drift without claiming it ships.
+  const old = { inputs: {
+    "node_modules/.deno/@modelcontextprotocol+sdk@1.30.0/node_modules/@modelcontextprotocol/sdk/dist/index.js": { bytes: 11 },
+  } };
+  assertEquals(securityDependencyDrift(old, npmLock, denoLock), [
+    `@modelcontextprotocol/sdk: npm=${npmVersion}; deno=${denoVersions}; shipped=1.30.0`,
+  ]);
+  assertThrows(() => assertBundleBudget({ label: "workers/agent-worker.js", bytes: 100, metafile: old }),
+    Error, "security dependency lock-to-shipped drift");
+  assertEquals(securityDependencyDrift({ inputs: { "extension/lib/pure.js": { bytes: 10 } } }, npmLock, denoLock), []);
+  assertEquals(assertBundleBudget({ label: "shared/diff-core.bundle.js", bytes: 10,
+    metafile: { inputs: { "extension/lib/pure.js": { bytes: 10 } } } }), 10);
 });
 
 Deno.test("bundle budget: no shipped source or built bundle references a CDN (Pyodide is bundled+pinned)", async () => {
@@ -832,7 +878,7 @@ Deno.test("9epn.5 self-contained single bundles: zero runtime relative imports t
   }
 });
 
-Deno.test("bd06: build.mjs auto-materializes node_modules/.deno via deno install before resolving canonical dependencies", async () => {
+Deno.test("bd06: build.mjs auto-materializes .deno with a frozen lock before resolving canonical dependencies", async () => {
   const source = await Deno.readTextFile("extension/../build.mjs");
 
   // 1. Order pin: checking/materializing denoStoreDir MUST happen BEFORE
@@ -840,7 +886,7 @@ Deno.test("bd06: build.mjs auto-materializes node_modules/.deno via deno install
   // If npm ci/install wiped node_modules/.deno, resolving before deno install
   // would resolve CANON_* to flat node_modules/ instead of node_modules/.deno/,
   // or readdirSync(denoStoreDir) would throw raw ENOENT.
-  const denoInstallCheck = source.indexOf('execFileSync("deno", ["install"]');
+  const denoInstallCheck = source.indexOf('execFileSync("deno", ["install", "--frozen-lockfile"]');
   const requireFromRootPos = source.indexOf('createRequire(path.join(ROOT, "package.json"))');
   const canonAnthropicPos = source.indexOf('CANON_ANTHROPIC = resolveCanonical("@ai-sdk/anthropic"');
   const canonZodDirPos = source.indexOf('CANON_ZOD_DIR = realpathSync(path.join(ROOT, "node_modules", "zod"))');
@@ -891,7 +937,7 @@ Deno.test("bd06: build.mjs auto-materializes node_modules/.deno via deno install
         entries = fakeReaddir(store);
       } catch (err: any) {
         throw new Error(
-          `cap-deno-store-resolve: ${store} is missing or incomplete and automatic \`deno install\` failed (${err?.message || err}) — run \`deno install\` and retry.`,
+          `cap-deno-store-resolve: ${store} is missing or incomplete and automatic \`deno install --frozen-lockfile\` failed (${err?.message || err}) — run \`deno install --frozen-lockfile\` and retry.`,
         );
       }
     }
@@ -911,7 +957,7 @@ Deno.test("bd06: build.mjs auto-materializes node_modules/.deno via deno install
     )
   );
   assertStringIncludes(err.message, "cap-deno-store-resolve:");
-  assertStringIncludes(err.message, "automatic `deno install` failed");
+  assertStringIncludes(err.message, "automatic `deno install --frozen-lockfile` failed");
 });
 
 

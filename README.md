@@ -53,8 +53,8 @@ isolated OPFS memory, run history, skills, and avatar.
   live `MessagePort` with redacted progress; background agents run with zero visible
   pages. Destructive browser commands are authorised by the owner's browser-control
   grant (checked atomically in the service worker) and fenced to their run.
-- **138 Chrome tools**, every `chrome.*` call audited against the Chromium IDL/JSON
-  schemas (188 capability rows total, `tests/chrome-tool-capabilities.test.ts:71`) — tabs and tab groups, windows, downloads, history, cookies (names and
+- **139 Chrome tools**, every `chrome.*` call audited against the Chromium IDL/JSON
+  schemas (191 capability rows total, `tests/chrome-tool-capabilities.test.ts:68`) — tabs and tab groups, windows, downloads, history, cookies (names and
   metadata only — values are never returned to the model), bookmarks,
   reading list, content settings, MHTML capture, network rules, extension management,
   privacy/proxy/font/power settings, TTS, and user scripts. All grant-gated; the
@@ -77,8 +77,11 @@ isolated OPFS memory, run history, skills, and avatar.
   files locally with a name and description. Upload size and file count have no
   product-imposed caps. Files stream into digest-keyed OPFS storage; identical
   bytes update the existing labels, while different files may share a name.
-  This increment is storage only: uploads are not run or registered as callable
-  tools. See [user-uploaded WebAssembly storage](docs/USER-WASM-STORAGE.md).
+  Storage accepts files without validating that they are executable Wasm.
+  Once a module's digest is allowed for an agent, `user-wasm` tools are adapted
+  into the callable catalog and execute in a fresh `wasm-execution-worker.js`
+  through the offscreen host, with a 15-second deadline. See
+  [user-uploaded WebAssembly storage and execution](docs/USER-WASM-STORAGE.md).
 - **Usage + cost accounting** — per-call token/cost records against the bundled
   llm-prices table, aggregated per run and per agent. Providers that don't report usage
   are recorded as unknown, never faked.
@@ -109,8 +112,8 @@ isolated OPFS memory, run history, skills, and avatar.
 - **No `debugger`.** It was re-declared as an optional permission at `0.2.286` for the
   CDP power tools and **removed again on 2026-08-27** (owner decision): it carries
   Chrome's all-sites permission warning and a persistent "started debugging this
-  browser" bar. The four CDP tools went with it; the browser-tool count is 138
-  (188 capability rows total).
+  browser" bar. The four CDP tools went with it; the browser-tool count is 139
+  (191 capability rows total).
   `tests/chrome-tools-t12.test.ts` guards the removal, so bringing it back has to be a
   deliberate act rather than a side effect of the next tool tranche.
 - **Origin-keyed OPFS** — one agent/origin can never read another's memory.

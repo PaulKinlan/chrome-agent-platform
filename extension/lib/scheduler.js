@@ -151,6 +151,20 @@ function validLock(v) {
 // and the in-flight map, so concurrent schedules/acquisitions cannot lose an
 // update or both acquire the same one-shot.
 let mutex = Promise.resolve();
+async function checkRestoreFence() {
+  if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+    let fenceCheck;
+    try {
+      fenceCheck = await chrome.storage.local.get("cap:restoreFence");
+    } catch (err) {
+      throw new Error(`Failed to verify restore admission fence: ${err?.message || err}`);
+    }
+    if (fenceCheck?.["cap:restoreFence"]) {
+      throw new Error("Cannot mutate scheduled task: profile restore is in progress");
+    }
+  }
+}
+
 function withLock(fn) {
   const run = mutex.then(fn, fn);
   mutex = run.then(() => {}, () => {});
@@ -199,6 +213,7 @@ export async function scheduleTask(
   { task, at, delayMs, periodInMinutes, attachments = [], name: explicitName, scriptId, owner = null },
 ) {
   return withLock(async () => {
+    await checkRestoreFence();
     // Resolve `when` before any persistence so a bad time can't orphan a stored task.
     let when;
     if (typeof at === "number" && Number.isFinite(at) && at > Date.now()) {
@@ -231,6 +246,7 @@ export async function scheduleTask(
     const activeAlarms = await alarms.getAll();
     await assertRunOwned();
     const replacing = activeAlarms.some((alarm) => alarm?.name === name);
+    const previousAlarm = replacing ? await alarms.get(name) : null;
     if (!replacing && activeAlarms.length >= MAX_ACTIVE_ALARMS) {
       logSchedulerDiagnostic({
         event: "schedule_capacity_exceeded",
@@ -248,12 +264,14 @@ export async function scheduleTask(
     // Persist the canonical task payload only after timing, permission, alarm
     // capacity, and run ownership are known valid.
     const store = await kvGet(TASK_KEY);
+    const existingTask = store[TASK_KEY]?.[name] ?? null;
 
     // Re-check the fence AFTER the read await but BEFORE the write: an abort
     // during the kvGet await must reject with NO payload persisted (the
     // round-17 crash-window finding: the old code wrote first, then rolled
     // back, leaving a window where a partial write could survive).
     await assertRunOwned();
+    await checkRestoreFence();
 
     const tasks = { ...(store[TASK_KEY] ?? {}) };
     const boundedScheduleOwner = boundedOwner(owner);
@@ -267,13 +285,21 @@ export async function scheduleTask(
     // after the payload write was not detected until the post-create check.
     try {
       await assertRunOwned();
-    } catch {
+      await checkRestoreFence();
+    } catch (fenceErr) {
       // Roll back the just-persisted payload so an aborted schedule leaves no
       // orphaned task behind.
       const cur = await kvGet(TASK_KEY);
       const rollback = { ...(cur[TASK_KEY] ?? {}) };
-      delete rollback[name];
+      if (existingTask) {
+        rollback[name] = existingTask;
+      } else {
+        delete rollback[name];
+      }
       await kvSet({ [TASK_KEY]: rollback });
+      if (fenceErr?.message?.includes("profile restore is in progress")) {
+        throw fenceErr;
+      }
       throw new Error("run aborted — task not scheduled");
     }
 
@@ -287,6 +313,7 @@ export async function scheduleTask(
       // await must roll back BOTH the now-created alarm AND the persisted
       // payload, and REJECT (never return ok) — the round-18 blocker.
       await assertRunOwned();
+      await checkRestoreFence();
     } catch (e) {
       // Roll back the alarm (if it was created) AND the payload together.
       // `alarms.clear()` returning `false` is AMBIGUOUS: it means BOTH "clear
@@ -311,10 +338,33 @@ export async function scheduleTask(
         state = "unknown"; // cannot determine the alarm's state — fail closed
       }
       if (state === "absent") {
-        // The alarm is confirmed gone → delete the payload (nothing to fire on).
+        // The alarm is confirmed gone → restore prior payload or delete.
         const cur = await kvGet(TASK_KEY);
         const rollback = { ...(cur[TASK_KEY] ?? {}) };
-        delete rollback[name];
+        if (existingTask) {
+          let alarmRestored = false;
+          if (previousAlarm) {
+            try {
+              const prevInfo = {};
+              if (typeof previousAlarm.scheduledTime === "number") prevInfo.when = previousAlarm.scheduledTime;
+              if (typeof previousAlarm.periodInMinutes === "number") prevInfo.periodInMinutes = previousAlarm.periodInMinutes;
+              await alarmsApi()?.create(name, prevInfo);
+              alarmRestored = true;
+            } catch (prevAlarmErr) {
+              // Alarm recreation failed: quarantine the restored task so it is not runnable without an alarm
+              rollback[name] = {
+                ...existingTask,
+                quarantined: true,
+                quarantineReason: `Prior alarm recreation failed during rollback: ${prevAlarmErr?.message || prevAlarmErr}`,
+              };
+            }
+          }
+          if (alarmRestored || !previousAlarm) {
+            rollback[name] = existingTask;
+          }
+        } else {
+          delete rollback[name];
+        }
         await kvSet({ [TASK_KEY]: rollback });
       } else if (state === "unknown") {
         // QUARANTINE: mark the payload non-runnable so reconcileScheduledTasks

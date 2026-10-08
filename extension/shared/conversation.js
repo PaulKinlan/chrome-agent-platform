@@ -296,9 +296,9 @@ export function createStreamProjector(container) {
       const b = bubble;
       bubble = null;
       step = null;
+      b.removeAttribute("streaming");
       if (typeof text === "string" && text) b.setAttribute("content", text);
       else if (text === "") b.remove();
-      else b.removeAttribute("streaming"); // keep what streamed (an aborted run)
       return b;
     },
     get active() { return Boolean(bubble && bubble.isConnected); },
@@ -630,6 +630,18 @@ export function replayPendingApprovalsForThread(container, threadId, executionId
  * labels, the bounded script/site detail), so a card re-mounted in a second tab
  * is the SAME card the first tab shows. Null when the event carries no valid
  * requirement (a forged shape never becomes a card). */
+function scriptRegistrationCardBody(detail) {
+  const parts = [
+    `Script: ${detail.id} (${detail.scriptKind})`,
+    `SHA-256 Digest: ${detail.digest}`,
+    `Size: ${detail.jsBytes} bytes`,
+    ...(detail.runAt ? [`Run at: ${detail.runAt}`] : []),
+    ...(detail.world ? [`World: ${detail.world}`] : []),
+    `Matches: ${detail.matches?.join(", ") || "none"}`,
+  ];
+  return parts.join("\n");
+}
+
 export function approvalCardSpecFromRequest(ev) {
   const result = ev?.result && typeof ev.result === "object"
     ? ev.result
@@ -641,12 +653,15 @@ export function approvalCardSpecFromRequest(ev) {
   const approval = requirement.approvals[0] ?? null;
   if (!approval) return { requirement };
   const siteTool = approval.action === "webmcp.use-tool" && approval.detail?.kind === "webmcp-tool";
+  const scriptReg = approval.detail?.kind === "script-registration";
   return {
     requirement,
     title: approvalCardTitle(approval.action, approval.detail),
     body: siteTool
       ? `Site: ${approval.detail.origin}\nTool: ${approval.detail.tool}\nAllow saves automatic use for this exact site tool in this browser profile. Deny blocks this exact tool on this site until you choose Allow / try again in Settings.`
-      : `Action: ${approval.action}\nTarget reference: ${approval.targetRef || requirement.reason.split(": ").slice(1).join(": ")}`,
+      : scriptReg
+        ? scriptRegistrationCardBody(approval.detail)
+        : `Action: ${approval.action}\nTarget reference: ${approval.targetRef || requirement.reason.split(": ").slice(1).join(": ")}`,
     ...(siteTool ? { approveLabel: "Allow automatically", denyLabel: "Deny" } : {}),
     ...(!siteTool && approval.detail ? { cardDetail: approval.detail } : {}),
   };
@@ -824,6 +839,44 @@ export function boundScriptApprovalDetail(detail) {
   return { source: detail.source.slice(0, SCRIPT_DETAIL_MAX_SOURCE), hosts, dynamic: detail.dynamic === true };
 }
 
+export const SCRIPT_REGISTRATION_APPROVAL_ACTIONS = new Set([
+  "browser.register-user-script",
+  "browser.update-user-script",
+  "browser.register-content-script",
+  "browser.update-content-script",
+]);
+export const SCRIPT_REGISTRATION_ACTION_KINDS = Object.freeze({
+  "browser.register-user-script": "user_script",
+  "browser.update-user-script": "user_script",
+  "browser.register-content-script": "content_script",
+  "browser.update-content-script": "content_script",
+});
+
+export function boundScriptRegistrationApprovalDetail(detail) {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return undefined;
+  if (detail.kind !== "script-registration" && detail.kind !== "user_script" && detail.kind !== "content_script") return undefined;
+  const digest = typeof detail.digest === "string" && /^[0-9a-f]{64}$/.test(detail.digest) ? detail.digest : "";
+  if (!digest) return undefined;
+  const id = typeof detail.id === "string" ? detail.id.slice(0, 64) : "";
+  if (!Array.isArray(detail.matches) || detail.matches.length === 0 || detail.matches.length > 8) {
+    return undefined;
+  }
+  const matches = detail.matches.filter((m) => typeof m === "string" && m.length > 0 && m.length <= 2048);
+  if (matches.length !== detail.matches.length) return undefined;
+  const jsBytes = Number.isSafeInteger(detail.jsBytes) && detail.jsBytes >= 0 ? detail.jsBytes : 0;
+  const scriptKind = detail.scriptKind === "content_script" || detail.kind === "content_script" ? "content_script" : "user_script";
+  return {
+    kind: "script-registration",
+    scriptKind,
+    id,
+    digest,
+    matches,
+    jsBytes,
+    ...(typeof detail.runAt === "string" ? { runAt: detail.runAt.slice(0, 32) } : {}),
+    ...(typeof detail.world === "string" ? { world: detail.world.slice(0, 32) } : {}),
+  };
+}
+
 function visibleSiteToolLabel(value, maxInputChars) {
   if (typeof value !== "string" || !value || value.length > maxInputChars) return "";
   try {
@@ -898,6 +951,19 @@ export function normalizePermissionRequirement(result) {
   // only; the real decision is the owner's card click (P1-3). A malformed
   // entry fails the whole requirement closed (never a card for a forged
   // shape).
+  if (Array.isArray(req.approvals)) {
+    for (const a of req.approvals) {
+      if (!a || typeof a !== "object" || Array.isArray(a)) return null;
+      const isScriptRegAction = SCRIPT_REGISTRATION_APPROVAL_ACTIONS.has(a.action);
+      const isScriptRegDetail = a.detail?.kind === "script-registration" || a.detail?.kind === "user_script" || a.detail?.kind === "content_script";
+      if (isScriptRegAction || isScriptRegDetail) {
+        if (!isScriptRegAction || !isScriptRegDetail) return null;
+        const expectedKind = SCRIPT_REGISTRATION_ACTION_KINDS[a.action];
+        const bounded = boundScriptRegistrationApprovalDetail(a.detail);
+        if (!bounded || bounded.scriptKind !== expectedKind) return null;
+      }
+    }
+  }
   const approvals = Array.isArray(req.approvals)
     ? req.approvals
       .filter((a) => a && typeof a === "object" && !Array.isArray(a)
@@ -905,18 +971,22 @@ export function normalizePermissionRequirement(result) {
         && typeof a.action === "string" && a.action.length > 0 && a.action.length <= 80
         && (a.targetRef === undefined || (typeof a.targetRef === "string" && a.targetRef.length <= 200)))
       .slice(0, 4)
-      .map((a) => ({
-        approvalId: a.approvalId,
-        action: a.action,
-        ...(a.targetRef === undefined ? {} : { targetRef: a.targetRef }),
-        // Script cards carry bounded source; WebMCP cards carry separately
-        // bounded display-only site/tool labels. Neither is grant authority.
-        ...((a.action === "webmcp.use-tool"
-          ? boundSiteToolApprovalDetail(a.detail)
-          : boundScriptApprovalDetail(a.detail))
-          ? { detail: a.action === "webmcp.use-tool" ? boundSiteToolApprovalDetail(a.detail) : boundScriptApprovalDetail(a.detail) }
-          : {}),
-      }))
+      .map((a) => {
+        const isScriptReg = SCRIPT_REGISTRATION_APPROVAL_ACTIONS.has(a.action);
+        const expectedKind = SCRIPT_REGISTRATION_ACTION_KINDS[a.action];
+        const bounded = isScriptReg ? boundScriptRegistrationApprovalDetail(a.detail) : undefined;
+        const detail = isScriptReg
+          ? (bounded && bounded.scriptKind === expectedKind ? bounded : undefined)
+          : a.action === "webmcp.use-tool"
+            ? boundSiteToolApprovalDetail(a.detail)
+            : boundScriptApprovalDetail(a.detail);
+        return {
+          approvalId: a.approvalId,
+          action: a.action,
+          ...(a.targetRef === undefined ? {} : { targetRef: a.targetRef }),
+          ...(detail ? { detail } : {}),
+        };
+      })
     : [];
   if (Array.isArray(req.approvals) && req.approvals.length > 0 && approvals.length === 0) return null;
   if (!permissions.length && !grantOrigins.length && !grantGlobal && !approvals.length && !hostOrigins.length) return null;
@@ -952,6 +1022,10 @@ export function approvalCardTitle(action, detail = null) {
     case "webmcp.use-tool": return detail?.kind === "webmcp-tool"
       ? `Use ${detail.origin}’s ${detail.tool}?`
       : "Use this site tool?";
+    case "browser.register-user-script": return `Register user script "${detail?.id || ""}"?`;
+    case "browser.update-user-script": return `Update user script "${detail?.id || ""}"?`;
+    case "browser.register-content-script": return `Register content script "${detail?.id || ""}"?`;
+    case "browser.update-content-script": return `Update content script "${detail?.id || ""}"?`;
     default: return `Approve ${action}?`;
   }
 }
@@ -2144,10 +2218,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
     if (typeof document !== "undefined" && typeof c.append === "function") {
       card = document.createElement(actionApproval ? "approval-card" : "permission-approval-card");
       if (actionApproval) {
+        const siteTool = approval?.action === "webmcp.use-tool" && approval.detail?.kind === "webmcp-tool";
+        const scriptReg = approval?.detail?.kind === "script-registration";
         card.setAttribute("title", approvalCardTitle(approval.action, approval.detail));
         card.setAttribute("body", siteTool
           ? `Site: ${approval.detail.origin}\nTool: ${approval.detail.tool}\nAllow saves automatic use for this exact site tool in this browser profile. Deny blocks this exact tool on this site until you choose Allow / try again in Settings.`
-          : `Action: ${approval.action}\nTarget reference: ${approval.targetRef || requirement.reason.split(": ").slice(1).join(": ")}`);
+          : scriptReg
+            ? scriptRegistrationCardBody(approval.detail)
+            : `Action: ${approval.action}\nTarget reference: ${approval.targetRef || requirement.reason.split(": ").slice(1).join(": ")}`);
         if (siteTool) {
           card.setAttribute("approve-label", "Allow automatically");
           card.setAttribute("deny-label", "Deny");

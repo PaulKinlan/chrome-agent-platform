@@ -189,7 +189,7 @@ Path-class rights reduction in the WASI runtime (`inputs/` read-only,
 One `chrome.runtime.onMessage` listener
 (`extension/background/service-worker.js:9463`) classifies every sender into a
 principal: `page` (content script — restricted to `PAGE_ALLOWED_ROUTES`, the
-8-route WebMCP/detection allowlist at `extension/lib/pure.js:1120-1130`),
+7-route WebMCP/detection allowlist at `extension/lib/pure.js:1280-1289`),
 `owner-options` (the exact Settings document — the only principal that may
 touch credential-privileged provider routes), `extension` (other extension
 surfaces), and `model` (the run-bound dispatch path used by `execute_tool`).
@@ -208,7 +208,7 @@ auth) merged with fail-closed duplicate detection
 `run-task`, `run.cancel` (service-worker.js:7791, owner/extension principals
 only), `run.resume` (:7802), `run.logs` (:7995), `agent.delegate` — are still
 inline in service-worker.js. routes/ROUTE_MAP.md documents the complete
-287-route population (audited in docs/SW-DISPATCH-AUTHORITY-CENSUS.md).
+288-route population (audited in docs/SW-DISPATCH-AUTHORITY-CENSUS.md).
 
 ### 2.2 The agent-worker protocol
 Per-agent SharedWorkers (hosted by the offscreen doc, §1.3) execute agent loops
@@ -294,9 +294,9 @@ failures hand the use back (retryable), dispatch failures do too; search
 authorizes nothing (docs/tool-platform-architecture.md §"Live bounded lazy
 protocol" — mechanism current).
 Catalog sources (lazy-tool-protocol.js:896-907 summary): builtin, browser,
-management, bundled-wasm, webmcp, provider-server, mcp. All 138 browser tools +
-50 management tools are rows in `CHROME_TOOL_CAPABILITY_TABLE` (188 rows;
-tests/chrome-tool-capabilities.test.ts:67-72).
+management, bundled-wasm, webmcp, provider-server, mcp. All 139 browser tools +
+52 management tools are rows in `CHROME_TOOL_CAPABILITY_TABLE` (191 rows;
+tests/chrome-tool-capabilities.test.ts:68-74).
 
 ### 3.2 Pipelines
 `run_pipeline` (`extension/lib/tool-pipeline.js`) chains up to 200 existing tools

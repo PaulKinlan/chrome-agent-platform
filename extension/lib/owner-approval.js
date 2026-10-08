@@ -90,6 +90,10 @@ export const DESTRUCTIVE_ACTIONS = new Set([
   "browser.remove-bookmark",
   "browser.set-cookie",
   "browser.remove-cookie",
+  "browser.register-user-script",
+  "browser.update-user-script",
+  "browser.register-content-script",
+  "browser.update-content-script",
   // A model-initiated run of a saved workflow's script-js body (workflows-to-
   // memory): the SW's workflow.run route pays the SAME source-digest card as
   // script.run (sandboxed host + fetch-host list on the card), so the action
@@ -726,6 +730,18 @@ export function approvalPendingCount(store) {
 // (and only these) the card carries the bounded source and host list.
 export const SOURCE_DISCLOSING_ACTIONS = new Set(["script.create", "script.run", "task.schedule-script", "workflow.run"]);
 export const SITE_TOOL_APPROVAL_ACTIONS = new Set(["webmcp.use-tool"]);
+export const SCRIPT_REGISTRATION_APPROVAL_ACTIONS = new Set([
+  "browser.register-user-script",
+  "browser.update-user-script",
+  "browser.register-content-script",
+  "browser.update-content-script",
+]);
+export const SCRIPT_REGISTRATION_ACTION_KINDS = Object.freeze({
+  "browser.register-user-script": "user_script",
+  "browser.update-user-script": "user_script",
+  "browser.register-content-script": "content_script",
+  "browser.update-content-script": "content_script",
+});
 export const APPROVAL_DETAIL_BOUNDS = Object.freeze({ maxSourceChars: 64 * 1024, maxHosts: 64, maxHostChars: 253, maxOriginChars: 240, maxToolChars: 128 });
 
 /** Bound a script-approval detail ({ source, hosts, dynamic, sourceDigest }) for the card;
@@ -774,10 +790,55 @@ export function boundSiteToolApprovalDetail(detail) {
   return origin && tool ? Object.freeze({ kind: "webmcp-tool", origin, tool }) : undefined;
 }
 
+export function boundScriptRegistrationApprovalDetail(detail) {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return undefined;
+  const digest = typeof detail.digest === "string" && /^[0-9a-f]{64}$/.test(detail.digest)
+    ? detail.digest
+    : "";
+  if (!digest) return undefined;
+  const id = typeof detail.id === "string" ? detail.id.slice(0, 64) : "";
+  if (!Array.isArray(detail.matches) || detail.matches.length === 0 || detail.matches.length > 8) {
+    return undefined;
+  }
+  const matches = detail.matches.filter((m) => typeof m === "string" && m.length > 0 && m.length <= 2048);
+  if (matches.length !== detail.matches.length) return undefined;
+  const jsBytes = Number.isSafeInteger(detail.jsBytes) && detail.jsBytes >= 0 ? detail.jsBytes : 0;
+  const kind = detail.scriptKind === "content_script" || detail.kind === "content_script" ? "content_script" : "user_script";
+  const runAt = typeof detail.runAt === "string" ? detail.runAt.slice(0, 32) : undefined;
+  const world = typeof detail.world === "string" ? detail.world.slice(0, 32) : undefined;
+  return Object.freeze({
+    kind: "script-registration",
+    scriptKind: kind,
+    id,
+    digest,
+    matches,
+    jsBytes,
+    ...(runAt ? { runAt } : {}),
+    ...(world ? { world } : {}),
+  });
+}
+
 export function approvalCardDenial({ approvalId, action, targetRef, detail }) {
   if (typeof approvalId !== "string" || !approvalId || approvalId.length > 160) return null;
   if (typeof action !== "string" || !DESTRUCTIVE_ACTIONS.has(action)) return null;
   const ref = String(targetRef ?? "").slice(0, 200);
+
+  // Script registration approvals MUST carry valid, consistent bounded detail (fail-closed caller)
+  if (SCRIPT_REGISTRATION_APPROVAL_ACTIONS.has(action) || detail?.kind === "script-registration" || detail?.kind === "user_script" || detail?.kind === "content_script") {
+    if (!SCRIPT_REGISTRATION_APPROVAL_ACTIONS.has(action)) return null;
+    const expectedKind = SCRIPT_REGISTRATION_ACTION_KINDS[action];
+    const bounded = boundScriptRegistrationApprovalDetail(detail);
+    if (!bounded || bounded.scriptKind !== expectedKind) return null;
+    return {
+      ok: false,
+      waitingForPermission: true,
+      permissionRequirement: {
+        reason: `${action}: ${ref}`,
+        approvals: [{ approvalId, action, targetRef: ref, detail: bounded }],
+      },
+    };
+  }
+
   const bounded = SOURCE_DISCLOSING_ACTIONS.has(action)
     ? boundApprovalDetail(detail)
     : SITE_TOOL_APPROVAL_ACTIONS.has(action)

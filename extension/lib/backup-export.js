@@ -15,6 +15,7 @@
 // 512 MiB / 100,000-file cap exists or is consulted.
 
 import {
+  createOpfsAdapter,
   isExcludedOpfsPath,
   sanitizeKvForExport,
   summarizeMcpServers,
@@ -80,16 +81,17 @@ export function rechunk(stream, chunkSize) {
 /** Wrap a body stream with cumulative byte counting + progress reporting.
  * The chunk framing is untouched — counting is a side-effect of the pipe. */
 function countedBody(stream, label, onProgress, counter) {
-  if (typeof onProgress !== "function") return stream;
   return stream.pipeThrough(
     new TransformStream({
       transform(chunk, controller) {
         counter.bytesSoFar += chunk.byteLength;
         controller.enqueue(chunk);
-        try {
-          onProgress({ path: label, fileBytes: chunk.byteLength, bytesSoFar: counter.bytesSoFar });
-        } catch {
-          // a progress observer must never break the export
+        if (typeof onProgress === "function") {
+          try {
+            onProgress({ path: label, fileBytes: chunk.byteLength, bytesSoFar: counter.bytesSoFar });
+          } catch {
+            // a progress observer must never break the export
+          }
         }
       },
     }),
@@ -98,12 +100,13 @@ function countedBody(stream, label, onProgress, counter) {
 
 /** Wrap an in-memory payload with the same progress accounting as a stream. */
 function countedPass(bytes, label, onProgress, counter) {
-  if (typeof onProgress !== "function") return bytes;
   counter.bytesSoFar += bytes.length;
-  try {
-    onProgress({ path: label, fileBytes: bytes.length, bytesSoFar: counter.bytesSoFar });
-  } catch {
-    // never break the export on an observer error
+  if (typeof onProgress === "function") {
+    try {
+      onProgress({ path: label, fileBytes: bytes.length, bytesSoFar: counter.bytesSoFar });
+    } catch {
+      // never break the export on an observer error
+    }
   }
   return bytes;
 }
@@ -153,31 +156,6 @@ export async function streamExportArchive({
   // every path and size is known before the first byte is written — but the
   // PAYLOADS stay lazy (open() hands back a stream, never whole bytes).
   const paths = (await listFiles()).filter((p) => !isExcludedOpfsPath(p));
-  const opfsEntries = [];
-  for (const path of paths) {
-    const handle = await open(path);
-    if (isManagedRedactedTarget(path)) {
-      // Bounded by design: redacted targets are small config JSON documents.
-      // The registered sanitizer runs HERE, before any byte can enter the
-      // archive (the 8fuc property, inherited from collectExportData).
-      const raw = new Uint8Array(await new Response(handle.stream).arrayBuffer());
-      const sanitized = sanitizeRedactedTargetText(path, new TextDecoder("utf-8", { fatal: true }).decode(raw));
-      const sanitizedBytes = ENCODER.encode(JSON.stringify(sanitized));
-      opfsEntries.push({
-        name: `opfs/${path}`,
-        // The declared size belongs to the SANITIZED body — the raw stored
-        // size is irrelevant once the sanitizer has rewritten the document.
-        size: sanitizedBytes.length,
-        body: sanitizedBytes,
-      });
-    } else {
-      opfsEntries.push({
-        name: `opfs/${path}`,
-        size: handle.size,
-        body: rechunk(handle.stream, chunkSize),
-      });
-    }
-  }
 
   const alarmList = ((await alarms.getAll()) || []).filter((a) => a && typeof a.name === "string").map((a) => {
     const rec = { name: a.name };
@@ -197,33 +175,166 @@ export async function streamExportArchive({
     mcpServers,
     manifest: {
       kvKeys: Object.keys(kv).length,
-      opfsFiles: opfsEntries.length,
+      opfsFiles: paths.length,
       alarms: alarmList.length,
     },
   };
 
   const kvBytes = ENCODER.encode(JSON.stringify(kv));
   const alarmsBytes = ENCODER.encode(JSON.stringify(alarmList));
-  manifest.manifest.totalBytes = totalOpfsBytesOf(opfsEntries) + kvBytes.length + alarmsBytes.length;
   const manifestBytes = ENCODER.encode(JSON.stringify(manifest));
 
-  const entries = [
-    { name: "manifest.json", size: manifestBytes.length, body: countedPass(manifestBytes, "manifest.json", onProgress, counter) },
-    { name: "kv.json", size: kvBytes.length, body: countedPass(kvBytes, "kv.json", onProgress, counter) },
-    { name: "alarms.json", size: alarmsBytes.length, body: countedPass(alarmsBytes, "alarms.json", onProgress, counter) },
-    ...opfsEntries.map((e) => ({
-      name: e.name,
-      size: e.size,
-      body: e.body instanceof Uint8Array
-        ? countedPass(e.body, e.name, onProgress, counter) // sanitized redacted target (in-memory by design)
-        : countedBody(e.body, e.name, onProgress, counter),
-    })),
-  ];
+  async function* generateEntries() {
+    yield {
+      name: "manifest.json",
+      size: manifestBytes.length,
+      body: countedPass(manifestBytes, "manifest.json", onProgress, counter),
+    };
+    yield {
+      name: "kv.json",
+      size: kvBytes.length,
+      body: countedPass(kvBytes, "kv.json", onProgress, counter),
+    };
+    yield {
+      name: "alarms.json",
+      size: alarmsBytes.length,
+      body: countedPass(alarmsBytes, "alarms.json", onProgress, counter),
+    };
 
-  const result = await encodeTarStream(entries, writable, {});
+    for (const path of paths) {
+      const handle = await open(path);
+      if (isManagedRedactedTarget(path)) {
+        // Bounded by design: redacted targets are small config JSON documents.
+        // The registered sanitizer runs HERE, before any byte can enter the
+        // archive (the 8fuc property, inherited from collectExportData).
+        const raw = new Uint8Array(await new Response(handle.stream).arrayBuffer());
+        const sanitized = sanitizeRedactedTargetText(path, new TextDecoder("utf-8", { fatal: true }).decode(raw));
+        const sanitizedBytes = ENCODER.encode(JSON.stringify(sanitized));
+        yield {
+          name: `opfs/${path}`,
+          size: sanitizedBytes.length,
+          body: countedPass(sanitizedBytes, `opfs/${path}`, onProgress, counter),
+        };
+      } else {
+        yield {
+          name: `opfs/${path}`,
+          size: handle.size,
+          body: countedBody(rechunk(handle.stream, chunkSize), `opfs/${path}`, onProgress, counter),
+        };
+      }
+    }
+  }
+
+  const result = await encodeTarStream(generateEntries(), writable, {});
   return { files: result.files, totalBytes: BigInt(counter.bytesSoFar), archiveBytes: result.archiveBytes };
 }
 
-function totalOpfsBytesOf(opfsEntries) {
-  return opfsEntries.reduce((a, e) => a + e.size, 0);
+/** One-click owner export driver for Options page — handles File System Access picker
+ * and temporary OPFS fallback stream without double-close errors. */
+export async function executeOptionsExport({
+  storageRoot = null,
+  showPicker = typeof window !== "undefined" && typeof window.showSaveFilePicker === "function" ? window.showSaveFilePicker.bind(window) : null,
+  createDownloadUrl = (f) => URL.createObjectURL(f),
+  revokeDownloadUrl = (u) => URL.revokeObjectURL(u),
+  triggerDownload = (url, filename) => {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  },
+  onStatus = () => {},
+  extensionVersion = "unknown",
+  kvGet = (key) => chrome.storage.local.get(key ?? null),
+  alarms = { getAll: () => chrome.alarms.getAll() },
+  lockAcquirer = null,
+} = {}) {
+  const executeUnderLock = async (fn) => {
+    if (typeof lockAcquirer === "function") {
+      return await lockAcquirer(fn);
+    }
+    if (typeof navigator !== "undefined" && navigator?.locks?.request) {
+      return await navigator.locks.request("cap:restoreLock", fn);
+    }
+    return await fn();
+  };
+
+  return await executeUnderLock(async () => {
+    if (typeof kvGet === "function") {
+      const coordination = await kvGet([
+        "cap:restoreFence",
+        "cap:importBackup",
+        "cap:invalidationPending",
+      ]);
+      if (
+        coordination?.["cap:restoreFence"] ||
+        coordination?.["cap:importBackup"] ||
+        coordination?.["cap:invalidationPending"]
+      ) {
+        throw new Error(
+          "Cannot export profile: a profile restore, rollback, or cache invalidation is currently pending in storage. Wait for recovery or check Settings → Advanced.",
+        );
+      }
+    }
+
+    const root = storageRoot ?? (await navigator.storage.getDirectory());
+    const adapter = createOpfsAdapter(root);
+    const when = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+
+    if (typeof showPicker === "function") {
+      const handle = await showPicker({
+        suggestedName: `cap-backup-${when}.tar`,
+        types: [{ description: "CAP backup (TAR)", accept: { "application/x-tar": [".tar"] } }],
+      });
+      const writable = await handle.createWritable();
+      try {
+        const result = await streamExportArchive({
+          writable,
+          listFiles: () => adapter.listFiles(),
+          open: (path) => adapter.open(path),
+          kvGet,
+          alarms,
+          extensionVersion,
+          onProgress: (p) => onStatus(`Exported ${p.bytesSoFar} bytes…`),
+        });
+        onStatus(`Exported ${result.files - 3} stored files, ${result.totalBytes} payload bytes to ${handle.name}. Keep the file safe — it contains your agents' memories.`);
+        return result;
+      } finally {
+        try { await writable.close(); } catch { /* already closed on error */ }
+      }
+    }
+
+    // ── fallback when showSaveFilePicker is unavailable: stream to an OPFS temp file in Options ──
+    const tempName = `.staging-export-${when}.tar`;
+    const tempHandle = await root.getFileHandle(tempName, { create: true });
+    const writable = await tempHandle.createWritable();
+    let downloaded = false;
+    try {
+      const result = await streamExportArchive({
+        writable,
+        listFiles: () => adapter.listFiles(),
+        open: (path) => adapter.open(path),
+        kvGet,
+        alarms,
+        extensionVersion,
+        onProgress: (p) => onStatus(`Exported ${p.bytesSoFar} bytes…`),
+      });
+      const file = await tempHandle.getFile();
+      const url = createDownloadUrl(file);
+      triggerDownload(url, `cap-backup-${when}.tar`);
+      downloaded = true;
+      setTimeout(async () => {
+        revokeDownloadUrl(url);
+        try { await root.removeEntry(tempName); } catch { /* temp file already cleaned or missing */ }
+      }, 10000);
+      onStatus(`Exported ${result.files - 3} stored files, ${result.totalBytes} payload bytes. Keep the file safe — it contains your agents' memories.`);
+      return result;
+    } finally {
+      try { await writable.close(); } catch { /* writable stream already closed */ }
+      if (!downloaded) {
+        try { await root.removeEntry(tempName); } catch { /* temp file already cleaned or missing */ }
+      }
+    }
+  });
 }

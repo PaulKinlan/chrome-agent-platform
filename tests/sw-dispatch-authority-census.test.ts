@@ -4,7 +4,7 @@
 // Invariants guarded:
 //   1. docs/SW-DISPATCH-AUTHORITY-CENSUS.md exists and is cited in AGENTS.md and routes/ROUTE_MAP.md.
 //   2. Every registered route in handlers (via mergeRouteMaps) is extracted from actual AST composition.
-//   3. The census classification is complete, disjoint, and covers 100% of registered routes (287 total).
+//   3. The census classification is complete, disjoint, and covers 100% of registered routes (288 total).
 //      (l0r: recipe.list catalog fork deleted; wfo5: browser.callTool added;
 //       s7wl: the vault/enclave maps the resolver below used to skip, +9.)
 //   4. Any new route added to mergeRouteMaps without explicit census classification fails RED.
@@ -41,7 +41,7 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 export const CENSUS_CATEGORIES = {
   PAGE_ALLOWED: new Set([
     "webmcp.detect.bootstrap", "webmcp.detect.arm", "webmcp.detected", "tools.list",
-    "tools.upsert", "tools.pending", "webmcp.diagnostics.get", "enrollment.status",
+    "tools.upsert", "tools.pending", "enrollment.status",
   ]),
   SETTINGS_ONLY_DIRECT: new Set([
     "provider.get", "provider.set", "provider.clear-key", "provider.test",
@@ -53,6 +53,8 @@ export const CENSUS_CATEGORIES = {
     // validate), both principal === "owner-options" with the exact-document
     // re-assertion; the broker runs in the options document, never the SW.
     "tool.package.validation-list", "tool.package.validate",
+    // ltkj.3: the Settings-only schema-2 execution surface (tool.package.run).
+    "tool.package.run",
     "management.pending-approvals", "hooks.deny", "tools.policy.set", "webmcp.consent.snapshot",
     "webmcp.consent.tool.set", "webmcp.consent.site.reset", "webmcp.audit.list", "tools.approve",
     "tool-stream.input.create", "tool-stream.input.append", "tool-stream.input.seal", "tool-stream.run",
@@ -142,7 +144,7 @@ export const CENSUS_CATEGORIES = {
     "sidepanel.getTarget", "sidepanel.getTools", "sidepanel.openPage", "site-skills.get",
     "skill.discover", "skill.list", "skills.all", "skills.get", "task.list", "task.nextRun",
     "thread.get", "thread.list", "tools.allOrigins", "tools.consent.states",
-    "tools.policies", "usage.get", "webmcp.status",
+    "tools.policies", "usage.get", "webmcp.diagnostics.get", "webmcp.status",
     "python.network.grants",
     "onDeviceText.summarize", "onDeviceText.detectLanguage", "onDeviceText.translate", "onDeviceText.availability",
     "wheel.list",
@@ -380,6 +382,19 @@ function assertRiskAndThreatPopulation(risks: string, threat: string): void {
     assertEquals(Number(match[1]), expected, `THREAT_MODEL ${place} population`);
     if (place === "dispatch census") assertEquals(Number(match[2]), unclassified.size, "THREAT_MODEL dispatch census gap count");
   }
+  // 5x4iw: two additional mentions were not pinned by the older assertions.
+  // Compare every population mention to the AST-derived route set, so changing
+  // either the component-map pin or the T4 evidence pin turns the gate red.
+  const mapPin = /The dispatch census and `tests\/sw-dispatch-authority-census\.test\.ts` assert (\d+) registered routes/.exec(threat);
+  assert(mapPin, "THREAT_MODEL component-map evidence pin must state a population");
+  assertEquals(Number(mapPin[1]), registered, "THREAT_MODEL component-map evidence pin population");
+  const t4Pin = /The census §4\.9 lists (\d+) unclassified mutations among (\d+) registered routes/.exec(threat);
+  assert(t4Pin, "THREAT_MODEL T4 evidence pin must state its populations");
+  assertEquals(Number(t4Pin[1]), unclassified.size, "THREAT_MODEL T4 evidence pin unclassified count");
+  assertEquals(Number(t4Pin[2]), registered, "THREAT_MODEL T4 evidence pin registered count");
+  const populationMentions = [...threat.matchAll(/\b(\d+)(?:-route dispatch census| registered routes)\b/g)];
+  assertEquals(populationMentions.length, 4, "THREAT_MODEL route-population mentions must be inventoried in this gate");
+  for (const match of populationMentions) assertEquals(Number(match[1]), registered, "THREAT_MODEL route-population mention");
 }
 
 function assertArchitectureAndStrategyPopulation(arch: string, nativePlan: string): void {
@@ -412,37 +427,43 @@ Deno.test("census: companion-doc total and route-name falsifications RED by docu
   const arch = await Deno.readTextFile(`${ROOT}docs/ARCHITECTURE.md`);
   const plan = await Deno.readTextFile(`${ROOT}docs/NATIVE-AGENT-POSITION-PLAN.md`);
 
-  assertThrows(() => assertRouteMap(map.replace("**287**", "**286**")), Error, "ROUTE_MAP total");
+  assertThrows(() => assertRouteMap(map.replace("**288**", "**287**")), Error, "ROUTE_MAP total");
   assertThrows(() => assertRouteMap(map.replace("`enclave.proxy`", "`enclave.proxy-renamed`")), Error, "enclave.proxy-renamed");
   assertThrows(() => assertRiskAndThreatPopulation(risks.replace("37 unclassified mutation routes", "31 unclassified mutation routes"), threat), Error, "RISK-REGISTER R11 risk");
   assertThrows(() => assertRiskAndThreatPopulation(risks.replace("`asset.export-to-folder` writes", "`asset.export-to-folder-renamed` writes"), threat), Error, "asset.export-to-folder-renamed");
+  assertThrows(() => assertRiskAndThreatPopulation(risks,
+    threat.replace("` assert 288 registered routes", "` assert 287 registered routes")),
+    Error, "THREAT_MODEL component-map evidence pin population");
+  assertThrows(() => assertRiskAndThreatPopulation(risks,
+    threat.replace("37 unclassified mutations among 288 registered routes", "37 unclassified mutations among 287 registered routes")),
+    Error, "THREAT_MODEL T4 evidence pin registered count");
 
   // r073 falsification drills:
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch.replace("287-route population", "286-route population"), plan),
+    () => assertArchitectureAndStrategyPopulation(arch.replace("288-route population", "287-route population"), plan),
     Error,
     "ARCHITECTURE.md route count must equal registered population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch.replace("287-route population", "bogus text"), plan),
+    () => assertArchitectureAndStrategyPopulation(arch.replace("288-route population", "bogus text"), plan),
     Error,
     "ARCHITECTURE.md must state the complete route population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("287-route dispatch authority", "286-route dispatch authority")),
+    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("288-route dispatch authority", "287-route dispatch authority")),
     Error,
     "NATIVE-AGENT-POSITION-PLAN.md route count must equal registered population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("287-route dispatch authority", "bogus text")),
+    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("288-route dispatch authority", "bogus text")),
     Error,
     "NATIVE-AGENT-POSITION-PLAN.md must state the dispatch authority route count",
   );
 });
 
-Deno.test("census: all registered routes in handlers are derived via AST and total 287", () => {
+Deno.test("census: all registered routes in handlers are derived via AST and total 288", () => {
   const registered = extractAllRegisteredRoutes();
-  assertEquals(registered.size, 287, `registered routes population must equal 287 (got ${registered.size})`);
+  assertEquals(registered.size, 288, `registered routes population must equal 288 (got ${registered.size})`);
 });
 
 function assertCompleteClassification(registered: Set<string>): void {
@@ -523,8 +544,8 @@ Deno.test("census: named-agent.set-tools is pinned as an unclassified mutation g
 // `enclaveProxyRoutes` and `enclaveStatusRoutes` — 9 routes that landed
 // 2026-10-03 (bd17634f), three days BEFORE the landing that set 276. Evaluating
 // the real composition (`mergeRouteMaps` over the same argument list, factories
-// called with the same stubs) at `origin/main@f507d58f` returns 287. The counts
-// that follow are 287 population, 50 SETTINGS_ONLY_DIRECT, 25
+// called with the same stubs) at `origin/main@f507d58f` returns 288. The counts
+// that follow are 288 population, 51 SETTINGS_ONLY_DIRECT, 25
 // OWNER_EXTENSION_FENCED, 37 UNCLASSIFIED_MUTATIONS (none of the 9 is an
 // unclassified mutation: all are gated).
 //

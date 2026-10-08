@@ -319,6 +319,16 @@ Implemented and verified live (pi-acp 0.0.33 over `npm run acp:bridge`):
   token is refused with 403 even on loopback. The extension side REFUSES a
   non-loopback `acp.endpoint` rather than connecting to it, because the bridge
   speaks plain `ws://`. The Settings UI for these is still pending (bead khkk).
+  **Tokenless loopback is DELIBERATE — an explicit opt-out (Paul, 2026-10-07):**
+  `--allow-anonymous-loopback` makes the loopback bridge tokenless ON PURPOSE, so
+  a local process may drive the harness without a token. It exists for local-only
+  convenience: the bridge binds `127.0.0.1` and the operator explicitly chose it.
+  It is OPT-IN and LOOPBACK-ONLY — the default is unchanged (token required
+  everywhere), a non-loopback bind with the flag REFUSES to start (never
+  anonymous on a routable address), and the bridge logs a loud warning that any
+  local process can drive the harness. Do not "fix" this back to always-auth
+  without knowing it was a choice; that would silently break the documented
+  opt-out contract.
   **Accepted local-server-identity residual (R24 / 6hly):** the persisted token
   authenticates the extension to the bridge, not the bridge to the extension.
   On the WebSocket fallback, a local process that binds `127.0.0.1:3210` first

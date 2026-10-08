@@ -66,6 +66,81 @@ function assertLoopbackEndpoint(url) {
  * @property {any} [transport] - Optional explicit transport (for testing)
  */
 
+/** Derive the bridge's /acp/preflight HTTP URL from an ACP WebSocket endpoint,
+ * carrying the SAME token + harness query so the diagnostic reports THIS
+ * connection's refusal reason (chrome-agent-platform-e25gk). */
+export function acpPreflightUrl(endpoint) {
+  const url = String(endpoint ?? "").trim();
+  if (!url) return "";
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "ws:" && u.protocol !== "wss:") return "";
+    u.protocol = u.protocol === "wss:" ? "https:" : "http:";
+    u.pathname = "/acp/preflight";
+    return u.toString();
+  } catch {
+    return "";
+  }
+}
+
+/** Ask the bridge WHY an ACP connection would be refused. The browser's
+ * WebSocket API hides the HTTP status/body of a refused upgrade (it fires only
+ * an opaque "error" then close 1006), so this plain-HTTP probe is the one way to
+ * learn the real cause. Returns `{ reason, detail }` on a structured refusal,
+ * or null when the bridge admits the connection or cannot be reached. */
+export async function acpProbeConnectionFailure(endpoint) {
+  const url = acpPreflightUrl(endpoint);
+  if (!url) return null;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
+    if (res.ok) return null;
+    let body = null;
+    try { body = await res.json(); } catch { /* non-JSON refusal body */ }
+    if (body && typeof body.reason === "string") {
+      return { reason: body.reason, detail: String(body.detail ?? body.reason) };
+    }
+    return { reason: "refused", detail: `the ACP bridge refused the connection (HTTP ${res.status})` };
+  } catch {
+    return null; // unreachable — the generic "failed to connect" message applies
+  }
+}
+
+/** The user-facing, actionable message for an ACP connection refusal
+ * (chrome-agent-platform-e25gk). Maps the preflight's structured reason to words
+ * that tell the operator WHAT to fix, instead of a generic "failed to connect".
+ * Returns "" when there is nothing more specific to say. */
+export function acpConnectionErrorMessage(refusal) {
+  const reason = refusal?.reason ?? "";
+  // The token field lives at Settings → Agents → External agent harnesses (ACP) →
+  // Token (options.html, wired by renderAcpSettings). The bridge accepts the
+  // secret either pasted there (acp.token) or passed at start-up with --token / a
+  // custom --token-file, so both are named (the token became mandatory on EVERY
+  // connection, loopback included, in 0.3.578). The ONE exception is the explicit
+  // loopback-only opt-out --allow-anonymous-loopback (Paul, 2026-10-07), named as
+  // the alternative when the operator deliberately wants tokenless LOCAL access.
+  const TOKEN_HINT = "Settings → Agents → External agent harnesses (ACP) → Token (the acp.token setting)";
+  const ANON_HINT = "to deliberately allow tokenless LOCAL access, restart the bridge with " +
+    "--allow-anonymous-loopback (loopback only — any local process could then drive the harness)";
+  if (reason === "token-missing") {
+    return "Authentication required: the ACP bridge needs its shared token, but none was provided. " +
+      `Paste the token from $XDG_CONFIG_HOME/cap-acp/bridge-token into ${TOKEN_HINT}, or run the bridge ` +
+      `with --token (or --token-file to name your own file), then retry. Or ${ANON_HINT}.`;
+  }
+  if (reason === "token-invalid") {
+    return "Authentication failed: the token in acp.token does not match the ACP bridge's token. " +
+      `Re-copy it from $XDG_CONFIG_HOME/cap-acp/bridge-token into ${TOKEN_HINT}, or run the bridge ` +
+      `with --token (or --token-file) to pin the secret it expects. Or ${ANON_HINT}.`;
+  }
+  if (reason === "origin-rejected") {
+    return "Origin rejected: the ACP bridge refused a connection from this page's origin. " +
+      "Only extension pages and local scripts may drive the harness.";
+  }
+  if (refusal?.detail) {
+    return `Failed to connect to ACP harness: ${refusal.detail}`;
+  }
+  return "";
+}
+
 /**
  * @typedef {Object} AcpPermissionRequest
  * @property {string} [title]
@@ -151,27 +226,47 @@ export class AcpClient {
     }
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      let connectDeadline = null;
+      const settleFail = (err) => {
+        if (settled) return;
+        settled = true;
+        if (connectDeadline) clearTimeout(connectDeadline);
+        reject(err);
+      };
+      // The browser hides WHY a WebSocket upgrade was refused (it fires an opaque
+      // "error" then close 1006, never the 403 status or body). Probe the bridge's
+      // /acp/preflight so the caller can tell "auth required" from "origin
+      // rejected" (chrome-agent-platform-e25gk). Idempotent via settleFail.
+      const failWithReason = (fallbackMsg) => {
+        acpProbeConnectionFailure(this.url).then((refusal) => {
+          const detail = acpConnectionErrorMessage(refusal);
+          settleFail(new Error(detail || fallbackMsg));
+        });
+      };
+
       try {
         const ws = new WebSocketImpl(this.url);
         this.ws = ws;
 
-        const connectDeadline = setTimeout(() => {
+        connectDeadline = setTimeout(() => {
           if (!this.connected) {
-            ws.close();
-            reject(new Error(`Connection to ACP harness at ${this.url} timed out.`));
+            try { ws.close(); } catch { /* already closing */ }
+            settleFail(new Error(`Connection to ACP harness at ${this.url} timed out.`));
           }
         }, 10_000);
 
         ws.onopen = () => {
-          clearTimeout(connectDeadline);
+          if (connectDeadline) clearTimeout(connectDeadline);
           this.connected = true;
-          resolve();
+          if (!settled) { settled = true; resolve(); }
         };
 
-        ws.onerror = (err) => {
-          clearTimeout(connectDeadline);
-          const msg = `Failed to connect to ACP harness at ${this.url}`;
-          if (!this.connected) reject(new Error(msg));
+        ws.onerror = () => {
+          if (connectDeadline) clearTimeout(connectDeadline);
+          if (!this.connected) {
+            failWithReason(`Failed to connect to ACP harness at ${this.url}`);
+          }
         };
 
         ws.onclose = (event) => {
@@ -180,13 +275,16 @@ export class AcpClient {
           this.connected = false;
           const err = new Error(`ACP harness connection closed (code: ${event.code}, reason: ${event.reason || "none"})`);
           this._abortPending(err);
+          if (!settled) {
+            failWithReason(err.message);
+          }
         };
 
         ws.onmessage = (event) => {
           this._receiveRaw(String(event.data));
         };
       } catch (err) {
-        reject(err);
+        settleFail(err);
       }
     });
   }

@@ -91,7 +91,7 @@ export const I18N_DEFAULT_CATALOGUE = Object.freeze({
   "options_developer_features": "Developer features",
   "options_diagnostics": "Diagnostics",
   "options_diagnostics_logs": "Diagnostics logs",
-  "options_diagnostics_logs_help": "Write a $1 line to the page's DevTools console each time a site's tools are checked.",
+  "options_diagnostics_logs_help": "Write $1 injection diagnostics to the extension's service-worker DevTools console. Page-console diagnostics remain off.",
   "options_event": "Event",
   "options_every_named_agent_and_the_hub_can_post_and_claim_j": "Every named agent and the hub can post and claim jobs on the shared board. A rule blocks one specific edge.",
   "options_every_site_you_allow_keeps_its_own_grant_turn_one_": "Every site you allow keeps its own grant; turn one off without touching the others.",
