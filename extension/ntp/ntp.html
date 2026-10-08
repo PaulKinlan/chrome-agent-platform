@@ -366,9 +366,17 @@
     .harness-list .hq-mark { display: inline-flex; flex: 0 0 auto; }
     .harness-list .hq-mark svg { display: block; width: 16px; height: 16px; }
     .harness-list .hq-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .side-section.side-harness, .side.collapsed .side-section.side-harness { flex: 0 0 auto; }
+    .side-section.side-harness { flex: 0 1 auto; min-block-size: 0; }
     .side-harness[hidden] { display: none; }
-    .side-list.harness-list { flex: 0 0 auto; gap: 4px; padding: 4px 4px 12px; scrollbar-gutter: auto; }
+    .side-list.harness-list {
+      flex: 0 1 auto;
+      flex-direction: column;
+      max-block-size: 240px;
+      overflow-y: auto;
+      gap: 4px;
+      padding: 4px 4px 12px;
+      scrollbar-gutter: auto;
+    }
     .side.collapsed .harness-list { padding-inline: 0; }
     .side.collapsed harness-agent-button::part(name),
     .side.collapsed harness-agent-button::part(open) { display: none; }

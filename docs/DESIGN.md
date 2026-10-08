@@ -42,7 +42,7 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 ## Harness launchers
 - The NTP's Harness agents group is content-sized, not a third equal-height scrolling pane. Its three existing registry choices remain conversation launchers, not selection chips.
 - Shared `<harness-agent-button>` rows use 44px minimum height, 8px internal spacing, a left-aligned name, and an opening chevron. The existing currentColor terminal glyph identifies the harness category; it is not a vendor logo or a redraw of a trademark.
-- The collapsed rail hides the visible name/chevron but retains the native button's full accessible name and title. Focus uses a 2px inset outline so the sidebar cannot clip it; current state uses both a border and heavier text. No new animation, remote assets, dependencies, or harness behavior.
+- The sidebar disclosure (#harness-presence) is content-sized and scrolls (max-block-size 240px, overflow-y: auto) when vertical space is constrained. In the collapsed 56px rail, the disclosure section is hidden like other secondary sections, with a dedicated rail icon button to expand it; within compact containers, the button component hides the visible name/chevron via ::part() while retaining the native button's full accessible name and title. Focus uses a 2px inset outline so the sidebar cannot clip it; current state uses both a border and heavier text. No new animation, remote assets, dependencies, or harness behavior.
 
 ## View-Frame Collapse (Client-Side Hub Views — Stages 1 & 2)
 - In-context surfaces (Directory in Stage 1, Artifacts in Stage 2, followed by Settings) render as native client-side views within the Hub DOM (`#view-client-host`) rather than separate documents inside nested iframes.

@@ -177,21 +177,45 @@ try {
   })()`);
   record("click activation: clicking inner button dispatches click on host", clickResult.clicked, clickResult);
 
-  // ── Drive 4: Narrow Layout (390x800) ────────────────────────────────────────
+  // ── Drive 4: Narrow Layout (390x800) & Rail Expand ─────────────────────────
   await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 800, deviceScaleFactor: 1, mobile: false }, sessionId);
+  await sleep(400);
+
+  // In narrow viewport, rail is collapsed by default
+  const railState = await evalExpr(`(() => {
+    const side = document.querySelector(".side");
+    const railBtn = document.querySelector('.rail-sec-btn[data-rail-target="harness-presence"]');
+    const presence = document.querySelector("#harness-presence");
+    return {
+      sideCollapsed: side ? side.classList.contains("collapsed") : false,
+      railBtnPresent: !!railBtn,
+      presenceHidden: presence ? getComputedStyle(presence).display === "none" : false,
+    };
+  })()`);
+  record("narrow 390: rail collapsed and dedicated rail button present", railState.sideCollapsed && railState.railBtnPresent, railState);
+
+  // Click the rail button to expand harness-presence section in narrow mode
+  await evalExpr(`(() => {
+    const railBtn = document.querySelector('.rail-sec-btn[data-rail-target="harness-presence"]');
+    if (railBtn) railBtn.click();
+  })()`);
   await sleep(400);
 
   const narrowGeo = await evalExpr(`(() => {
     const buttons = Array.from(document.querySelectorAll("#harness-list harness-agent-button"));
     const list = document.querySelector("#harness-list");
     const side = document.querySelector(".side");
+    const presence = document.querySelector("#harness-presence");
+    const listCs = list ? getComputedStyle(list) : null;
     return {
       count: buttons.length,
       listWidth: list ? list.clientWidth : 0,
       listScrollWidth: list ? list.scrollWidth : 0,
       sideWidth: side ? side.clientWidth : 0,
       sideScrollWidth: side ? side.scrollWidth : 0,
-      isCollapsed: side ? side.classList.contains("collapsed") : false,
+      presenceOpen: presence ? presence.hasAttribute("open") : false,
+      listMaxHeight: listCs ? listCs.maxHeight : null,
+      listOverflowY: listCs ? listCs.overflowY : null,
       rows: buttons.map(b => {
         const root = b.shadowRoot;
         const btn = root ? root.querySelector("button") : null;
@@ -200,15 +224,16 @@ try {
         const open = root ? root.querySelector(".open") : null;
         return {
           height: btnRect ? btnRect.height : 0,
-          nameDisplay: name ? getComputedStyle(name).display : null,
-          openDisplay: open ? getComputedStyle(open).display : null,
+          nameVisible: name ? getComputedStyle(name).display !== "none" : false,
+          openVisible: open ? getComputedStyle(open).display !== "none" : false,
           title: btn ? btn.getAttribute("title") : null,
         };
       })
     };
   })()`);
 
-  record("narrow 390: rows fit within container", narrowGeo.count === 3 && narrowGeo.rows.every((r: any) => r.height >= 40), narrowGeo);
+  record("narrow 390: expanded section rows fit within container", narrowGeo.count === 3 && narrowGeo.rows.every((r: any) => r.height >= 40), narrowGeo);
+  record("narrow 390: list has scroll cap and overflow:auto", narrowGeo.listOverflowY === "auto" && narrowGeo.listMaxHeight === "240px", narrowGeo);
   record("narrow 390: no horizontal overflow", narrowGeo.listScrollWidth <= narrowGeo.listWidth + 1 && narrowGeo.sideScrollWidth <= narrowGeo.sideWidth + 1, {
     listWidth: narrowGeo.listWidth, listScrollWidth: narrowGeo.listScrollWidth,
     sideWidth: narrowGeo.sideWidth, sideScrollWidth: narrowGeo.sideScrollWidth,
