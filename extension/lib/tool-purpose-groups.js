@@ -192,6 +192,9 @@ const ROUTE_FAMILY_GROUP = Object.freeze({
   "browser.action": "browser-control",
   "browser.permissions": "browser-control",
   "management.agents": "agents",
+  // The hub wrapper invokes the live site's declared tool only after consent;
+  // it belongs with declared site tools, not generic agent management.
+  "management.webmcp": "site-declared",
   "management.named-agents": "agents",
   "management.board": "agents",
   "management.assets": "assets",
