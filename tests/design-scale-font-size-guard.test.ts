@@ -74,28 +74,27 @@ export function findSub12pxDeclarations(filePaths: string[]): FontSizeViolation[
 }
 
 /**
- * Scan JavaScript source files for direct inline style.fontSize assignments or
- * CSS text assignments declaring sub-12px typography.
- * Documented exclusion: extension/shared/components.js contains shadow-DOM
- * component styles which are explicitly tracked under follow-up bead dz3wi.
+ * Scan JavaScript source files for direct inline style.fontSize assignments,
+ * style.setProperty('font-size', ...), style.cssText = "...font-size:...",
+ * or style object properties declaring sub-12px typography.
+ * Shadow-DOM component styles in extension/shared/components.js are tracked under follow-up bead dz3wi.
  */
 export function findSub12pxJsStyleAssignments(filePaths: string[]): FontSizeViolation[] {
   const violations: FontSizeViolation[] = [];
-  const jsFontSizeRegex = /(?:\.style\.fontSize\s*=\s*|fontSize\s*:\s*)["']([^"']+)["']/gi;
+  const jsFontSizeRegex = /(?:\.style\.fontSize\s*=\s*|\bfontSize\s*:\s*|\.style\.setProperty\(\s*["'`]font-size["'`]\s*,\s*)["'`]?([^"'`;\n\)]+)/gi;
+  const jsCssTextRegex = /(?:\.style\.cssText\s*=\s*|\bcssText\s*[:=]\s*)["'`]((?:[^"'`\\]|\\.)*)["'`]/gi;
+  const sub12PxRegex = /\b(?:font-size|font)\s*:\s*([^;]+);?/gi;
   const pixelValueRegex = /(?<![0-9.])(?:[0-9]|1[01])(?:\.[0-9]+)?px\b/i;
   const remValueRegex = /(?<![0-9.])0?\.(?:[0-6][0-9]*|7(?:[0-4][0-9]*)?)rem\b/i;
 
   for (const file of filePaths) {
-    if (file.endsWith("components.js")) {
-      // Documented allowance: components.js shadow-DOM remainder is tracked in follow-up bead dz3wi
-      continue;
-    }
     const content = readFileSync(file, "utf8");
     const lines = content.split("\n");
     lines.forEach((line, idx) => {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("//")) return;
 
+      // 1. Direct fontSize / style.fontSize / setProperty('font-size')
       let match: RegExpExecArray | null;
       jsFontSizeRegex.lastIndex = 0;
       while ((match = jsFontSizeRegex.exec(line)) !== null) {
@@ -107,6 +106,25 @@ export function findSub12pxJsStyleAssignments(filePaths: string[]): FontSizeViol
             text: trimmed,
             matched: match[0],
           });
+        }
+      }
+
+      // 2. style.cssText / cssText = "..." containing font-size:
+      jsCssTextRegex.lastIndex = 0;
+      while ((match = jsCssTextRegex.exec(line)) !== null) {
+        const cssContent = match[1];
+        sub12PxRegex.lastIndex = 0;
+        let cssMatch: RegExpExecArray | null;
+        while ((cssMatch = sub12PxRegex.exec(cssContent)) !== null) {
+          const val = cssMatch[1];
+          if (pixelValueRegex.test(val) || remValueRegex.test(val)) {
+            violations.push({
+              file,
+              line: idx + 1,
+              text: trimmed,
+              matched: cssMatch[0],
+            });
+          }
         }
       }
     });
@@ -182,7 +200,7 @@ Deno.test("r4xk2: pinned selectors adhere to >= 12px font scale floor", () => {
   assert(optionsJs.includes('statusBadge.style.fontSize = "var(--text-xs, 12px)";'), "options statusBadge must be >= 12px");
 });
 
-Deno.test("r4xk2: shipped extension JS files enforce >= 12px design scale floor (excluding components.js shadow-DOM tracked under dz3wi)", () => {
+Deno.test("r4xk2: shipped extension JS files enforce >= 12px design scale floor", () => {
   const jsFiles = walkFiles("extension", (name) => /\.js$/.test(name));
   assert(jsFiles.length >= 20, `Expected at least 20 JS files in extension/, found ${jsFiles.length}`);
 
@@ -200,6 +218,7 @@ Deno.test("r4xk2: falsification — sub-12px declarations are detected and repor
   try {
     const fixture1 = join(tempDir, "sample.css");
     const fixture2 = join(tempDir, "sample.html");
+    const fixture3 = join(tempDir, "sample.js");
 
     Deno.writeTextFileSync(fixture1, `
       .ok-text { font-size: 12px; }
@@ -219,14 +238,36 @@ Deno.test("r4xk2: falsification — sub-12px declarations are detected and repor
       </style>
     `);
 
-    const violations = findSub12pxDeclarations([fixture1, fixture2]);
-    assertEquals(violations.length, 7, `Expected 7 falsification violations, got ${violations.length}`);
-    const matchedTexts = violations.map((v) => v.matched);
+    Deno.writeTextFileSync(fixture3, `
+      el.style.fontSize = "11px";
+      btn.style.fontSize = \`10.5px\`;
+      const s = { fontSize: '9px' };
+      target.style.setProperty('font-size', '11.5px');
+      node.style.cssText = "display:flex; font-size:10px; color:red;";
+      box.style.cssText = \`margin:0; font-size: 0.65rem;\`;
+      // comment with fontSize = "10px" should be ignored
+      const ok = { fontSize: "12px" };
+      elem.style.cssText = "font-size:12px;";
+    `);
+
+    const violationsCss = findSub12pxDeclarations([fixture1, fixture2]);
+    assertEquals(violationsCss.length, 7, `Expected 7 CSS/HTML falsification violations, got ${violationsCss.length}`);
+    const matchedTexts = violationsCss.map((v) => v.matched);
     assert(matchedTexts.some((m) => m.includes("11px")));
     assert(matchedTexts.some((m) => m.includes("9.5px")));
     assert(matchedTexts.some((m) => m.includes("10px")));
     assert(matchedTexts.some((m) => m.includes("0.65rem")));
     assert(matchedTexts.some((m) => m.includes(".7rem")));
+
+    const violationsJs = findSub12pxJsStyleAssignments([fixture3]);
+    assertEquals(violationsJs.length, 6, `Expected 6 JS falsification violations, got ${violationsJs.length}`);
+    const matchedJsTexts = violationsJs.map((v) => v.matched);
+    assert(matchedJsTexts.some((m) => m.includes("11px")));
+    assert(matchedJsTexts.some((m) => m.includes("10.5px")));
+    assert(matchedJsTexts.some((m) => m.includes("9px")));
+    assert(matchedJsTexts.some((m) => m.includes("11.5px")));
+    assert(matchedJsTexts.some((m) => m.includes("10px")));
+    assert(matchedJsTexts.some((m) => m.includes("0.65rem")));
   } finally {
     try { Deno.removeSync(tempDir, { recursive: true }); } catch { /* ignore */ }
   }
