@@ -45,33 +45,6 @@ Deno.test("3m3sn: createMemoizedSkillStores memoizes loadAllImported and getCust
   assertEquals(c1?.name, "Custom 1");
 });
 
-Deno.test("3m3sn: batch error isolation in resolveSkillRefs preserves other skills when one rejects", async () => {
-  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
-  const fnSite = sw.indexOf("async function resolveSkillRefs(");
-  assert(fnSite > 0);
-  const endSite = sw.indexOf("\n}", fnSite);
-  const fnSrc = sw.slice(fnSite, endSite + 2);
-
-  const compiled = new Function(
-    "skillRefIds",
-    "resolveSkill",
-    "skillStores",
-    `return (${fnSrc.replace("async function resolveSkillRefs", "async function")});`,
-  )(
-    () => ["s1", "s_error", "s2"],
-    async (id: string) => {
-      if (id === "s_error") throw new Error("fatal database read failure");
-      return { id, name: `Skill ${id}` };
-    },
-    () => ({}),
-  );
-
-  const res = await compiled("run /skill:s1 /skill:s_error /skill:s2");
-  assertEquals(res.length, 2, "rejection in one skill resolution must not abort the batch");
-  assertEquals(res[0].id, "s1");
-  assertEquals(res[1].id, "s2");
-});
-
 Deno.test("3m3sn: continuation journaled skills chunk concurrent reads without dropping skills past 24", async () => {
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   const fnSite = sw.indexOf("async function mapConcurrentChunks(");

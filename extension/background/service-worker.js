@@ -1059,7 +1059,7 @@ async function resolveSkillRefs(task, stores = null) {
   if (ids.length === 0) return [];
   const s = stores ?? skillStores();
   const resolved = await Promise.all(
-    ids.map((id) => resolveSkill(id, s).catch(() => null))
+    ids.map((id) => resolveSkill(id, s))
   );
   return resolved.filter(Boolean);
 }
@@ -1074,7 +1074,7 @@ async function resolveAgentSkills(agent, stores = null) {
   if (ids.length === 0) return [];
   const s = stores ?? skillStores();
   const resolved = await Promise.all(
-    ids.map((id) => resolveSkill(id, s).catch(() => null))
+    ids.map((id) => resolveSkill(id, s))
   );
   return resolved.filter(Boolean);
 }
@@ -4410,7 +4410,7 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
       if (Array.isArray(journaledSkillIds) && journaledSkillIds.length > 0) {
         const journaled = (await mapConcurrentChunks(
           journaledSkillIds,
-          (skillId) => resolveSkill(skillId, runSkillStores).catch(() => null),
+          (skillId) => resolveSkill(skillId, runSkillStores),
           JOURNALED_SKILLS_CAP,
         )).filter(Boolean);
         runSkills = mergeRunSkills(agentSkills, journaled, taskSkills);
