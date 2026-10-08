@@ -543,16 +543,31 @@ export async function checkExportReachability({
     }
   }
 
-  // 4. Collect all transitively reached export keys across callers and chained barrels
+  // 4. Helper to credit specifically traversed re-export nodes up to origin (1rusf)
+  function creditTraversedPath(startFile, startExport, reachedSet) {
+    let currFile = startFile;
+    let currName = startExport;
+    const visited = new Set();
+    while (true) {
+      const key = `${currFile}:${currName}`;
+      if (visited.has(key)) break;
+      visited.add(key);
+      reachedSet.add(key);
+      const next = reexportEdges.get(key);
+      if (!next) break;
+      currFile = next.targetFile;
+      currName = next.targetExportName;
+    }
+  }
+
+  // 5. Collect all specifically reached export keys across callers and traversed re-export paths
   const reachedKeys = new Set();
   for (const [file, analysis] of analysesByFile) {
     // A. Internal composition: if this file uses any of its own exports (or local name, P2b)
     for (const [fn, expInfo] of analysis.exportedBindings) {
       const internalName = expInfo.name || fn;
       if ((analysis.useCounts.get(fn) || 0) > 0 || (analysis.useCounts.get(internalName) || 0) > 0) {
-        const canonical = resolveCanonical(file, fn);
-        reachedKeys.add(`${canonical.originFile}:${canonical.originName}`);
-        reachedKeys.add(`${file}:${fn}`);
+        creditTraversedPath(file, fn, reachedKeys);
       }
     }
 
@@ -567,9 +582,7 @@ export async function checkExportReachability({
         for (const ext of ["", ".js", ".mjs", ".ts", ".tsx"]) {
           const tryFile = candidate + ext;
           if (analysesByFile.has(tryFile)) {
-            const canonical = resolveCanonical(tryFile, impInfo.importedName);
-            reachedKeys.add(`${canonical.originFile}:${canonical.originName}`);
-            reachedKeys.add(`${tryFile}:${impInfo.importedName}`);
+            creditTraversedPath(tryFile, impInfo.importedName, reachedKeys);
             break;
           }
         }
@@ -581,16 +594,14 @@ export async function checkExportReachability({
       if (count > 0 && !analysis.importedBindings.has(usedIdent)) {
         for (const [otherFile, otherAnalysis] of analysesByFile) {
           if (otherAnalysis.exportedBindings.has(usedIdent)) {
-            const canonical = resolveCanonical(otherFile, usedIdent);
-            reachedKeys.add(`${canonical.originFile}:${canonical.originName}`);
-            reachedKeys.add(`${otherFile}:${usedIdent}`);
+            creditTraversedPath(otherFile, usedIdent, reachedKeys);
           }
         }
       }
     }
   }
 
-  // 5. Build final report for all callable exported functions
+  // 6. Build final report for all callable exported functions
   const reachedExports = [];
   const unreachedExports = [];
   const staleRetainedExports = [];
@@ -602,10 +613,9 @@ export async function checkExportReachability({
       if (!expInfo.isCallable) continue;
       const exportKey = `${file}:${fn}`;
       allKnownExportKeys.add(exportKey);
-      const canonical = resolveCanonical(file, fn);
-      const canonicalKey = `${canonical.originFile}:${canonical.originName}`;
 
-      const hasCaller = reachedKeys.has(exportKey) || reachedKeys.has(canonicalKey);
+      // Only exports that were directly called or specifically traversed by an import are reached (1rusf)
+      const hasCaller = reachedKeys.has(exportKey);
 
       if (hasCaller) {
         reachedExports.push(exportKey);
