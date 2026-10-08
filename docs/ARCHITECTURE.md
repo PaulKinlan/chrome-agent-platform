@@ -413,13 +413,16 @@ Q2 disclosure of bounded, untrusted *declared* descriptors to the model before
 per-tool approval, never inferred page-JS tools or an execution grant. The
 selected candidate is an internal run-scoped binding of Chrome-attested
 `tabId`, `documentId`, origin, and count; attachment text and URL grant nothing.
-`extension/lib/attached-webmcp-declared.js` is currently an uncalled reader
-library: it accepts only a fresh `document.modelContext.getTools()` result on
-the exact top frame, with Chrome-owned document/origin checks before and after,
-strict descriptor/total caps and a separate untrusted-fence projection. It is
-**not yet wired to the hub model or any invocation route**; no page tool may
-run until per-tool consent and the required WAL row are separately wired and
-verified. The enrolled path's checks remain unchanged.
+`extension/lib/attached-webmcp-declared.js` accepts only a fresh
+`document.modelContext.getTools()` result on the exact top frame, with
+Chrome-owned document/origin and live permission checks before and after. The
+hub-only attached run binds an opaque in-memory token and adds only bounded,
+run-fenced descriptions/schemas to that run's **model context**; the passive
+chip/registry stay count-only and no inferred page-JS tool is disclosed.
+`attached-webmcp-disclosure.js` enforces a second, aggregate run-size cap.
+**No unenrolled tool is callable yet**: no consent card, required WAL append,
+or unenrolled page invocation is wired. Those D1/D3 gates must pass before any
+page tool may run. The enrolled path's checks remain unchanged.
 
 ### 4.5 Fallback paths
 Pages without WebMCP: the six page-action tools (`find_elements`,

@@ -182,6 +182,10 @@ import {
   listKnownWebmcpOrigins,
   reportWebmcpDetection,
 } from "../lib/webmcp-detection-registry.js";
+import { attestCurrentAttachedWebmcpTab } from "../lib/attached-webmcp-attestation.js";
+import { bindAttachedWebmcpRun } from "../lib/attached-webmcp-run.js";
+import { readAttachedDeclaredWebmcpTools, readDeclaredWebmcpFromPage } from "../lib/attached-webmcp-declared.js";
+import { formatAttachedDeclaredContext } from "../lib/attached-webmcp-disclosure.js";
 import { createEphemeralSiteToolConsentStore } from "../lib/ephemeral-site-tool-consent.js";
 import {
   hasPermission,
@@ -4212,6 +4216,8 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
     // slot. This run builds a management toolset that CAPTURES executionId.
     let abortNow = null;
     let orch = null;
+    let ephemeralAttachedRun = null;
+    let ephemeralAttachedRunEpoch = null;
     let heartbeatFailed = false;
     let taskJournalReceipt = null;
     let taskJournalGuard = null;
@@ -4263,6 +4269,38 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
         .map((a) => ({ grantId: a.grantId, name: a.folderName || a.name || "folder" }));
       setRunContext({ threadId, agentRole, agentSurfaceRef, folderGrants: runFolderGrants });
       if (delegationState) activeDelegationRuns.set(executionId, delegationState);
+      // Only a live hub run can bind the owner's /tabs attachment. Capture
+      // Chrome's top-level document AGAIN at run start: a navigation between
+      // owner pick and dispatch fails closed, as does an SW restart (durable
+      // attachment snapshots deliberately omit tabId/documentId). This creates
+      // no worker, model descriptor, siteMemory(origin), or execution grant.
+      if (agentRole === "hub" && !scoped && !scheduled && !harnessId &&
+        Array.isArray(attachments) && attachments.some((a) => a?.kind === "tab" && a.documentId)) {
+        try {
+          const [registry, enrolledOrigins] = await Promise.all([
+            listKnownWebmcpOrigins(), listOrigins(),
+          ]);
+          const runEpoch = siteToolProfileEpoch;
+          ephemeralAttachedRun = await bindAttachedWebmcpRun({
+            attachments, runId: executionId, threadId,
+            consentStore: ephemeralSiteToolConsentStore,
+            attest: (tabId) => attestCurrentAttachedWebmcpTab(tabId, {
+              registry, enrolledOrigins,
+              getTab: (id) => chrome.tabs.get(id),
+              executeTopFrame: (id) => chrome.scripting.executeScript({
+                target: { tabId: id, frameIds: [0] }, world: "ISOLATED", func: () => true,
+              }),
+            }),
+            allowOrigin: (origin) => isWebmcpOriginAllowed(webmcpAllowlistForAgent(agentTools), origin),
+            runActive: () => activeExecutions.has(executionId) &&
+              siteToolResetting === 0 && siteToolProfileEpoch === runEpoch && !fence?.signal?.aborted,
+          });
+          ephemeralAttachedRunEpoch = runEpoch;
+        } catch {
+          // No attached-tool authority is safer than borrowing the model's
+          // ambient browser tools when the browser attestation is unavailable.
+        }
+      }
       if (acpConfig) {
         const ready = await ensureOffscreen();
         if (!ready.ok) throw new Error(ready.error);
@@ -4410,7 +4448,40 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
       await fence?.assertOwned?.();
       // Untrusted (page-derived) attachments are fenced with THIS run's token —
       // the same one the master's untrusted-content policy layer names.
-      const context = attachmentContext(attachments, { untrustedToken: orch?.untrustedToken ?? null });
+      // Q2 permits disclosure of *fenced declared descriptors* to this one
+      // live hub run before per-tool consent. This is model CONTEXT ONLY: it
+      // adds no callable record, owner approval, site store, or page invoke.
+      // The passive registry/chip remain count-only. A failed read supplies no
+      // descriptors, never an inferred page-JS fallback.
+      const attachedRunActive = () => ephemeralAttachedRunEpoch !== null &&
+        activeExecutions.has(executionId) && siteToolResetting === 0 &&
+        siteToolProfileEpoch === ephemeralAttachedRunEpoch && !fence?.signal?.aborted;
+      const attachedDeclaredText = ephemeralAttachedRun ? await formatAttachedDeclaredContext({
+        bindings: ephemeralAttachedRun.bindings,
+        consentStore: ephemeralSiteToolConsentStore,
+        untrustedToken: orch?.untrustedToken ?? null,
+        runActive: attachedRunActive,
+        read: (candidate, token) => readAttachedDeclaredWebmcpTools(candidate, {
+          getTab: (id) => chrome.tabs.get(id),
+          livePermission: (origin) => hasLiveSiteToolHostPermission(origin),
+          executeTopFrame: (id, mode) => chrome.scripting.executeScript({
+            target: { tabId: id, frameIds: [0] },
+            world: mode === "read" ? "MAIN" : "ISOLATED",
+            func: mode === "read" ? readDeclaredWebmcpFromPage : () => true,
+          }),
+          runActive: () => {
+            if (!attachedRunActive()) return false;
+            try {
+              const bound = ephemeralSiteToolConsentStore.binding(token);
+              return bound.runId === executionId && bound.origin === candidate.origin &&
+                bound.tabId === candidate.tabId && bound.documentId === candidate.documentId;
+            } catch { return false; }
+          },
+        }),
+      }) : "";
+      const baseAttachmentContext = attachmentContext(attachments, { untrustedToken: orch?.untrustedToken ?? null });
+      const context = attachedDeclaredText
+        ? `${baseAttachmentContext}\n\n${attachedDeclaredText}` : baseAttachmentContext;
       // Include any /skill:<id> references from the task string: each
       // referenced skill's FULL prompt body is composed into the run's system
       // prompt as a skills layer BEFORE the protected runtime policy (the
