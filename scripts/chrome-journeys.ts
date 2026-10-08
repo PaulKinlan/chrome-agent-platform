@@ -1400,11 +1400,10 @@ async function writeEvidence(name, bytes) {
 }
 
 async function main() {
-  if (typeof resetWatchdog === "function") resetWatchdog();
   if (typeof EXPECTED !== "undefined" && EXPECTED[0]) {
     console.log(`RUN: ${EXPECTED[0]}`);
   }
-  let profile: string | null = null;
+  const profile = homeCacheProfile(`j2-${Date.now()}`);
   let proc: Deno.ChildProcess | null = null;
   let port;
   let ws;
@@ -1416,7 +1415,6 @@ async function main() {
   let fixtureShutdownFailed = false;
 
   try {
-    profile = homeCacheProfile(`j2-${Date.now()}`);
     await Deno.mkdir(EVIDENCE_DIR, { recursive: true }).catch(() => {});
 
     // A local HTTP fixture server (red page + wrong-origin page) for a REAL
@@ -1502,6 +1500,7 @@ async function main() {
     ws = new WebSocket(version.webSocketDebuggerUrl);
     await withTimeout(new Promise((r) => ws.onopen = r), 5000, "ws open");
     cdp = new Cdp(ws);
+    if (typeof resetWatchdog === "function") resetWatchdog();
 
     // Auto-attach to NEW service-worker targets BEFORE they execute (pre-boot
     // audit). waitForDebuggerOnStart pauses a new worker until we enable Runtime
@@ -9066,16 +9065,12 @@ async function main() {
     let removed = false;
     let clean = true;
     try {
-      if (proc && profile) await teardownJourneyChrome(proc, profile);
-      else if (profile) await runBounded(RM, ["-rf", profile]);
-      if (profile) {
+      if (proc) await teardownJourneyChrome(proc, profile);
+      else await runBounded(RM, ["-rf", profile]);
+      removed = !(await Deno.stat(profile).then(() => true).catch(() => false));
+      if (removed) {
+        await sleep(800);
         removed = !(await Deno.stat(profile).then(() => true).catch(() => false));
-        if (removed) {
-          await sleep(800);
-          removed = !(await Deno.stat(profile).then(() => true).catch(() => false));
-        }
-      } else {
-        removed = true;
       }
     } catch (e) {
       clean = false;
