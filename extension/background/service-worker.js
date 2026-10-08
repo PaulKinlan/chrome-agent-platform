@@ -420,7 +420,7 @@ import {
 } from "../lib/browser-tools.js";
 import { getSkill, SKILLS, backgroundSkills, intentOf, agentSkillIds, mergeRunSkills } from "../lib/skill-registry.js";
 import { skillMatchesUrl } from "../shared/match-patterns.js";
-import { resolveSkillRef } from "../lib/skill-resolve.js";
+import { resolveSkillRef, createMemoizedSkillStores } from "../lib/skill-resolve.js";
 import {
   fetchSkillFromUrl,
   installImportedSkill,
@@ -1007,7 +1007,7 @@ const loadAllImported = async () => {
   return rows;
 };
 
-async function resolveSkill(id) {
+async function resolveSkill(id, stores = null) {
   // The REAL resolver lives in lib/skill-resolve.js (CAP-FB-20260831-SKILL-
   // LIST-SYNC-01 r4) so tests exercise the actual resolution logic against
   // real (faked-OPFS) stores. Source-locking: imported:<id> only the imported
@@ -1016,10 +1016,25 @@ async function resolveSkill(id) {
   // duplicated agents).
   return await resolveSkillRef({
     ref: id,
-    stores: { getSkill, getCustomSkills, loadAllImported, readSkillFile },
+    stores: stores ?? { getSkill, getCustomSkills, loadAllImported, readSkillFile },
     bodyBudget: PROMPT_SKILL_BODY_BUDGET,
   });
 }
+
+async function mapConcurrentChunks(items, fn, chunkSize = 24) {
+  const results = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    const chunk = items.slice(i, i + chunkSize);
+    const chunkResults = await Promise.all(chunk.map(fn));
+    results.push(...chunkResults);
+  }
+  return results;
+}
+
+function skillStores() {
+  return createMemoizedSkillStores({ getSkill, getCustomSkills, loadAllImported, readSkillFile });
+}
+
 // ── skill references (a skill is INCLUDED in a task) ─────────────────────
 // The composer can reference a skill ANYWHERE in the string via /skill:<id>.
 // resolveSkillRefs extracts those references + expands each to its prompt, so
@@ -1039,14 +1054,14 @@ function skillRefIds(task) {
   }
   return ids;
 }
-async function resolveSkillRefs(task) {
+async function resolveSkillRefs(task, stores = null) {
   const ids = skillRefIds(task);
-  const out = [];
-  for (const id of ids) {
-    const skill = await resolveSkill(id);
-    if (skill) out.push(skill);
-  }
-  return out;
+  if (ids.length === 0) return [];
+  const s = stores ?? skillStores();
+  const resolved = await Promise.all(
+    ids.map((id) => resolveSkill(id, s).catch(() => null))
+  );
+  return resolved.filter(Boolean);
 }
 
 // An agent's SAVED skills (picked at create/edit, e.g. from a template) ride
@@ -1054,13 +1069,14 @@ async function resolveSkillRefs(task) {
 // and composed into the system prompt (the templates review P1: saved skills
 // were persisted but decorative at execution). Unknown ids resolve to nothing
 // (a deleted skill drops out of the composition honestly).
-async function resolveAgentSkills(agent) {
-  const out = [];
-  for (const id of agentSkillIds(agent)) {
-    const skill = await resolveSkill(id);
-    if (skill) out.push(skill);
-  }
-  return out;
+async function resolveAgentSkills(agent, stores = null) {
+  const ids = agentSkillIds(agent);
+  if (ids.length === 0) return [];
+  const s = stores ?? skillStores();
+  const resolved = await Promise.all(
+    ids.map((id) => resolveSkill(id, s).catch(() => null))
+  );
+  return resolved.filter(Boolean);
 }
 
 // ── agent schedules (ONE agent concept: persona + skills + memory + OPTIONAL
@@ -4388,14 +4404,16 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
       // those skills on resume — a continuation that does not re-mention
       // /skill:x still runs with it. Deleted skills resolve to nothing and are
       // silently skipped (resolveSkill returns null).
-      let runSkills = mergeRunSkills(agentSkills, await resolveSkillRefs(task));
+      const runSkillStores = skillStores();
+      const taskSkills = await resolveSkillRefs(task, runSkillStores);
+      let runSkills = mergeRunSkills(agentSkills, taskSkills);
       if (Array.isArray(journaledSkillIds) && journaledSkillIds.length > 0) {
-        const journaled = [];
-        for (const skillId of journaledSkillIds) {
-          const skill = await resolveSkill(skillId);
-          if (skill) journaled.push(skill);
-        }
-        runSkills = mergeRunSkills(agentSkills, journaled, await resolveSkillRefs(task));
+        const journaled = (await mapConcurrentChunks(
+          journaledSkillIds,
+          (skillId) => resolveSkill(skillId, runSkillStores).catch(() => null),
+          JOURNALED_SKILLS_CAP,
+        )).filter(Boolean);
+        runSkills = mergeRunSkills(agentSkills, journaled, taskSkills);
       }
       // The resolved skill IDs journal onto the terminal thread row so a LATER
       // continuation re-applies them (the same union the caller of a fresh
