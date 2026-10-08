@@ -21,6 +21,7 @@
     "watch": "node build.mjs --watch",
     "test": "node scripts/run-tests.mjs",
     "test:build": "deno run -A scripts/build-gate.ts",
+    "gate": "node scripts/gate.mjs",
     "test:changed": "node scripts/select-tests.mjs",
     "test:fast": "node scripts/select-tests.mjs",
     "test:file": "CAP_TEST_RUNNER=1 deno test -A --config deno.runner.jsonc",
