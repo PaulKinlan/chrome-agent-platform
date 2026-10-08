@@ -162,6 +162,7 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string, r
     [section(model, "### T4.", "### T5."), [allowlist, namedTools, exportFolder]],
     [section(model, "### T6.", "### T7."), [fetchRoute, pythonFetch]],
     [section(model, "### T13.", "### T14."), [hooksSubscribe, backgroundSet, swRoute("dispatchHook")]],
+    [section(model, "### T19.", "## 6."), [swRoute("browser.destructive-action")]],
     [section(model, "**INV-1 —", "**INV-2 —"), [listener, classifier]],
     [section(model, "**INV-2 —", "**INV-3 —"), [pureRoute]],
     [section(model, "**INV-5 —", "**INV-6 —"), [fetchRoute, pythonFetch]],
@@ -241,6 +242,10 @@ Deno.test("5x4iw: page route and dispatcher citations resolve at current source 
     Error, "missing security anchor extension/background/service-worker.js#PAGE_ALLOWED_ROUTES.has", "removing the live allowlist check must fail");
   assertThrows(() => assertLiveRouteCitations(model, pure, worker.replace('async "cap:fetch"(', 'async "retired:fetch"(')),
     Error, "missing security anchor extension/background/service-worker.js#cap:fetch", "removing a cited SW route must fail");
+  assertThrows(() => assertLiveRouteCitations(model, pure,
+    worker.replace('async "browser.destructive-action"(', 'async "retired:destructive-action"(')),
+    Error, "missing security anchor extension/background/service-worker.js#browser.destructive-action",
+    "renaming the newly cited T19 owner-approval route must fail");
   assertThrows(() => assertLiveRouteCitations(model, pure,
     worker.replace("chrome.runtime.onMessage.addListener(", "renamedListener(") +
       "\n// chrome.runtime.onMessage.addListener( is not an executable site\n"),

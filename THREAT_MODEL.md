@@ -459,7 +459,7 @@ consequences are carried by the matching register entry where one exists.
 - **Boundary:** TB2 / TB4. **Evidence:** `extension/lib/browser-tools.js` (`register_user_script`,
   `update_user_script`, `register_content_script`, `update_content_script`),
   `extension/lib/owner-approval.js:90` (`DESTRUCTIVE_ACTIONS`),
-  `extension/background/service-worker.js:10220` (`browser.destructive-action`).
+  `extension/background/service-worker.js#browser.destructive-action`.
 - **Threat:** a model steered by prompt injection or untrusted page content registers
   persistent JavaScript to execute on target web origins across future browsing sessions.
 - **Answer:** the registration path requires host permissions and browser-control grants for
