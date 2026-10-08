@@ -58,6 +58,7 @@ import { SCRIPTED_DUMMY_KEY, executeEnvelope, searchResultNames, selectionRefOf,
 import { composerInput, composerSend, composerPopup } from "./lib/composer-target.ts";
 import { viewEdgeParity } from "./lib/view-edge-parity.ts";
 import { clickVisibleCreateAgent } from "./lib/create-agent-click.ts";
+import { waitForAppReady } from "./lib/app-readiness.ts";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -1663,6 +1664,7 @@ async function main() {
       throw new Error(`${error instanceof Error ? error.message : "journey NTP principal unavailable"}; ` +
         `targetId=${Cdp.diagnosticId(ntpPage.id)} sessionId=${Cdp.diagnosticId(ntpSession)}`);
     }
+    await waitForAppReady((expression) => evalIn(cdp, ntpSession, expression), { surfaceName: "NTP main" });
 
     // sendMsg from the NTP (extension page) — backend message probes.
     const sendMsg = (payload) =>
@@ -1759,6 +1761,7 @@ async function main() {
         await sleep(1800);
         const session = await attachRuntime(cdp, page.id);
         cdp.pageSessions.add(session);
+        await waitForAppReady((expression) => evalIn(cdp, session, expression), { surfaceName: path });
         return session;
       };
       try {
@@ -1767,6 +1770,7 @@ async function main() {
         await evalIn(cdp, opts, `if (location.hash !== '#agents') { location.hash = '#agents'; } true`);
         await sleep(600);
         const sp = await open("sidepanel/sidepanel.html");
+        await waitForAppReady((expression) => evalIn(cdp, sp, expression), { surfaceName: "sidepanel/sidepanel.html" });
         await evalIn(cdp, sp, `document.getElementById('tab-agents')?.click()`);
         await sleep(1200); // the picker's live registry fetch
         const sidebarRows = await evalIn(cdp, hub, `document.querySelectorAll('#side-agents .agent-item').length`);
@@ -2237,8 +2241,9 @@ async function main() {
     const openCreateDialog = async () => {
       // w51r: a geometry click on a hidden/occluded rail button misses silently,
       // then the dialog wait reports a misleading timeout. Refuse before input.
+      await waitForAppReady((expression) => evalIn(cdp, ntpSession, expression), { surfaceName: "NTP Create Dialog" });
       await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});
-      await clickVisibleCreateAgent(cdp, ntpSession, (expression) => evalIn(cdp, ntpSession, expression));
+      await clickVisibleCreateAgent(cdp, ntpSession, (expression) => evalIn(cdp, ntpSession, expression), { waitForReady: true });
       for (let i = 0; i < 30; i++) { if ((await pickerState()).open) break; await sleep(150); }
       await sleep(200);
     };
