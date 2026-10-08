@@ -195,8 +195,18 @@ export function processGroup(pid: number, deps: ProcessTableDeps = {}): ProcessG
     return { state: fields[0], group: Number(fields[2]), startTicks: fields[19] };
   } catch (e) {
     if (e instanceof Deno.errors.NotFound) return null;
+    // gate-speed: a process that exits BETWEEN the open and the read of its stat file makes the read
+    // fail ESRCH ("No such process (os error 3)", a plain Error in Deno) — the same proof of absence
+    // as the missing directory. Measured: liveGroupMembers() threw this out of a full-gate run on a
+    // loaded 2-vCPU VM while walking /proc (tests/jjsz-lifeline-process-table.test.ts, soakA-1).
+    if (isEsrch(e)) return null;
     throw e;
   }
+}
+
+/** ESRCH from a /proc read: the task died after its /proc entry was opened. Exported for its test. */
+export function isEsrch(e: unknown): boolean {
+  return e instanceof Error && /\(os error 3\)/.test(e.message);
 }
 
 // Bind a group to the exact leader observed after setsid exec, not just its PID:
