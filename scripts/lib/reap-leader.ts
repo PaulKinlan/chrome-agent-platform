@@ -24,9 +24,10 @@
 //      that browser starts ends with `pkill -9 -f 'user-data-dir=<profile>( |$)'`, which matches the
 //      second browser's command line and kills it.
 //
-// THE RULE: a runner that kills its leader and then exits or relaunches MUST go through this
-// function, or through `teardownChrome` in scripts/lib/chrome-launch.ts, which owns the cleanup AND
-// the profile. Do not use `teardownChrome` where the profile belongs to someone else:
+// THE RULE: a runner that kills its leader and then relaunches on the same profile, or exits under a
+// supervisor that samples its descendants (case 1 above), MUST go through this function, or through
+// `teardownChrome` in scripts/lib/chrome-launch.ts, which owns the cleanup AND the profile. Do not use
+// `teardownChrome` where the profile belongs to someone else:
 // scripts/security-suite.ts runs on a profile the supervisor issued, and `teardownChrome` deletes it
 // before the supervisor's `cleanupExactProfile` has inspected it. "Relaunches" means a second
 // launch on the same profile, not a second `launchChrome(` call site: scripts/security-injection.ts

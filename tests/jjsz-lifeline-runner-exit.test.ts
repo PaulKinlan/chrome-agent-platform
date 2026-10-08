@@ -52,8 +52,9 @@
 //     other pins, but they are properties of the transform, so the declaration count is its own rule).
 //
 // THE PINS ARE PER-SITE, NOT A RULE. They prove these four scripts go through the helper. The rule ("a runner
-// that kills its leader and then exits or relaunches goes through `reapLeaderAndSettle` or `teardownChrome`")
-// is stated in scripts/lib/reap-leader.ts; proving a RULE needs a fresh-instance mutant (a new runner with the
+// that kills its leader and then relaunches on the same profile, or exits under a supervisor that samples its
+// descendants, goes through `reapLeaderAndSettle` or `teardownChrome`") is stated in scripts/lib/reap-leader.ts;
+// proving a RULE needs a fresh-instance mutant (a new runner with the
 // old shape that the test then has to catch), and this file does not catch one. That is not hypothetical:
 // scripts/security-injection.ts was a fresh instance that every earlier pin missed, and it was found by a
 // reviewer reading the code, not by a gate (bead 80yqb keeps the structural fix open: make `launchChrome`
@@ -713,6 +714,32 @@ function assignedNames(target: Ast | null | undefined): string[] {
   }
 }
 
+/**
+ * Every node that writes the name `name`: an assignment (plain, compound or destructuring), an update (`name++`,
+ * `--name`) and a for-in / for-of head that assigns it (`for (name of xs)`, `for ([name] of xs)`). A head that DECLARES
+ * its own binding (`for (const name of xs)`) is not a write of this one: `assignedNames` yields nothing for a
+ * declaration. A write through a member (`holder.name = 1`, `Object.assign(holder, ...)`) writes a property and is not
+ * read here.
+ */
+function nameWrites(program: Ast, name: string): Ast[] {
+  const writes: Ast[] = [];
+  descend(program, (node) => {
+    switch (node.type) {
+      case "AssignmentExpression":
+        if (assignedNames(node.left).includes(name)) writes.push(node);
+        break;
+      case "UpdateExpression":
+        if (assignedNames(node.argument).includes(name)) writes.push(node);
+        break;
+      case "ForInStatement":
+      case "ForOfStatement":
+        if (assignedNames(node.left).includes(name)) writes.push(node);
+        break;
+    }
+  });
+  return writes;
+}
+
 /** `await <callee>(...)` as a whole statement: the CallExpression, or null. Dropping the `await` returns null. */
 function awaitedCall(statement: Ast, callee: string): Ast | null {
   if (statement.type !== "ExpressionStatement" || statement.expression.type !== "AwaitExpression") return null;
@@ -899,18 +926,21 @@ function injectionViolations(program: Ast): Violations {
   }
   // call, the handle: `proc` is written once, by boot() storing the launch handle (`proc = l.proc`). A second write
   // (`proc = null` ahead of the reap with an alias taken first, or right after boot() stores the handle) or a missing one
-  // leaves the reap reading something that is not the browser. The write forms read are plain, compound and
-  // destructuring assignment.
+  // leaves the reap reading something that is not the browser. The write forms read are the ones `nameWrites` finds:
+  // plain, compound and destructuring assignment, `++` / `--`, and a for-in / for-of head that assigns the name. Not
+  // read, and listed in chrome-agent-platform-t5o2i: a write through a member of the launch result (`l.proc = null`), a
+  // write that never runs or that is not a direct statement of boot(), and a rebinding of `kill` itself. The structural
+  // fix is chrome-agent-platform-80yqb (launchChrome waits for an in-flight sweep).
+  //
+  // Each clause of the check below has a mutant in the table that only that clause rejects: the count alone does not see
+  // one write of the wrong value (`proc = null`) or of the wrong kind (`proc ??= l.proc`).
   //
   // A shadow of `proc` (a parameter or a local in kill()) has no rule of its own: the TypeScript transform renames a
   // nested declaration that collides with the module-level one (`proc` becomes `proc2`), so the reap statement no
   // longer names `proc` and the count above rejects it as a missing reap. That is measured, not assumed: a drill that
   // added a declaration-count rule and then disabled it left the mutant table green (the rule was unreachable), and the
   // `kill()` parameter mutant in the table is what goes red if the transform ever stops renaming.
-  const writes: Ast[] = [];
-  descend(program, (node) => {
-    if (node.type === "AssignmentExpression" && assignedNames(node.left).includes("proc")) writes.push(node);
-  });
+  const writes = nameWrites(program, "proc");
   if (writes.length !== 1 || writes[0].operator !== "=" || dotted(writes[0].right) !== "l.proc") {
     violations.call.push(`\`proc\` must be written exactly once, by boot() storing the launch handle (\`proc = l.proc\`); it is written ${writes.length} time(s)`);
   }
@@ -1083,9 +1113,11 @@ function injectionMutants(source: string): Array<[string, string, Array<keyof Vi
     ["relaunch without awaiting the kill", mutate(source, INJECTION_FIRST_KILL, "  kill();\n  const prefPath"), ["order"]],
     ["delete the kill between the two boots", mutate(source, INJECTION_FIRST_KILL, "  const prefPath"), ["order"]],
     ["the finally stops awaiting kill()", mutate(source, INJECTION_LAST_KILL, "  kill();\n  // Chrome's helpers release"), ["order"]],
-    // The reap has to be able to run. The first six of the eight below keep the helper's import and the statement
-    // `if (proc) await reapLeaderAndSettle(proc)` verbatim, and leave kill() reaping nothing. The first is the
-    // shape the round-5 security review named.
+    // The reap has to be able to run. The rows from here down to the by-pid kill keep the helper's import and the shape
+    // of the statement `if (proc) await reapLeaderAndSettle(proc)` and leave kill() reaping nothing. The first is the
+    // shape the round-5 security review named. Three rows exist because the round-6 review showed that a clause of the
+    // checks was rejected by no mutant: the stored value (`proc = null`), the operator (`proc ??= l.proc`) and the
+    // reaped argument (`undefined`). Each of those is rejected by that one clause alone.
     [
       "kill() nulls the handle before the reap, an alias keeps it",
       mutate(source, INJECTION_REAP, "  const dying = proc;\n  proc = null;\n" + INJECTION_REAP + "  void dying;\n"),
@@ -1099,6 +1131,31 @@ function injectionMutants(source: string): Array<[string, string, Array<keyof Vi
     [
       "boot() nulls the handle through a destructuring assignment",
       mutate(source, INJECTION_BOOT_STORE, INJECTION_BOOT_STORE + "  ({ handle: proc } = { handle: null });\n"),
+      ["call"],
+    ],
+    [
+      "boot() nulls the handle through a for-of head",
+      mutate(source, INJECTION_BOOT_STORE, INJECTION_BOOT_STORE + "  for (proc of [null]) { /* assigns null */ }\n"),
+      ["call"],
+    ],
+    [
+      "boot() spoils the handle with an increment",
+      mutate(source, INJECTION_BOOT_STORE, INJECTION_BOOT_STORE + "  (proc as unknown as number)++;\n"),
+      ["call"],
+    ],
+    [
+      "boot() stores null instead of the launch handle (one write, wrong value)",
+      mutate(source, INJECTION_BOOT_STORE, "  proc = null;\n"),
+      ["call"],
+    ],
+    [
+      "boot() keeps the first handle across the two boots (one write, wrong kind: the second browser is never stored)",
+      mutate(source, INJECTION_BOOT_STORE, "  proc ??= l.proc;\n"),
+      ["call"],
+    ],
+    [
+      "kill() reaps a value that is not the handle (one argument, wrong value)",
+      mutate(source, "reapLeaderAndSettle(proc)", "reapLeaderAndSettle(undefined as unknown as Deno.ChildProcess)"),
       ["call"],
     ],
     ["boot() stops storing the launch handle", mutate(source, INJECTION_BOOT_STORE, ""), ["call"]],
@@ -1132,7 +1189,7 @@ Deno.test("jjsz pin check: every mutant of scripts/security-injection.ts is reje
   }
 });
 
-Deno.test("jjsz pin check: assignedNames reads every form of write to a name and nothing that merely mentions it", async () => {
+Deno.test("jjsz pin check: nameWrites reads every form of write to a name (assignment, update, for-in/of head) and nothing that merely mentions it", async () => {
   const table: Array<[string, string, number]> = [
     ["a plain assignment", "proc = null;", 1],
     ["a compound assignment", "proc ??= null;", 1],
@@ -1141,17 +1198,21 @@ Deno.test("jjsz pin check: assignedNames reads every form of write to a name and
     ["a defaulted destructuring assignment", "({ proc = null } = {});", 1],
     ["an array destructuring assignment", "[proc] = [null];", 1],
     ["a rest assignment", "[...proc] = [];", 1],
+    ["an increment", "proc++;", 1],
+    ["a decrement", "--proc;", 1],
+    ["a for-of head that assigns the name", "for (proc of [null]) {}", 1],
+    ["a for-in head that assigns the name", "for (proc in { a: 1 }) {}", 1],
+    ["a for-of head that destructures into the name", "for ([proc] of [[null]]) {}", 1],
     ["a write through a member is not a write of the name", "proc.handle = null;", 0],
+    ["an increment through a member is not a write of the name", "(proc as any).count++;", 0],
+    ["a for-of head that declares its own binding is not a write of the name", "for (const proc of [1]) { void proc; }", 0],
     ["a read is not a write", "const copy = proc;", 0],
     ["a write to another name is not a write of this one", "other = proc;", 0],
+    ["an increment of another name is not a write of this one", "other++;", 0],
   ];
   for (const [what, statement, expected] of table) {
     const program = await parseTs(`export {};\nlet proc: any = 1;\nlet other: any = 1;\n${statement}`);
-    let writes = 0;
-    descend(program, (node) => {
-      if (node.type === "AssignmentExpression" && assignedNames(node.left).includes("proc")) writes += 1;
-    });
-    assertEquals(writes, expected, `${what}: ${statement}`);
+    assertEquals(nameWrites(program, "proc").length, expected, `${what}: ${statement}`);
   }
 });
 
