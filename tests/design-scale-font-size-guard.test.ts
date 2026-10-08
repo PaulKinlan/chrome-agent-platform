@@ -73,6 +73,47 @@ export function findSub12pxDeclarations(filePaths: string[]): FontSizeViolation[
   return violations;
 }
 
+/**
+ * Scan JavaScript source files for direct inline style.fontSize assignments or
+ * CSS text assignments declaring sub-12px typography.
+ * Documented exclusion: extension/shared/components.js contains shadow-DOM
+ * component styles which are explicitly tracked under follow-up bead dz3wi.
+ */
+export function findSub12pxJsStyleAssignments(filePaths: string[]): FontSizeViolation[] {
+  const violations: FontSizeViolation[] = [];
+  const jsFontSizeRegex = /(?:\.style\.fontSize\s*=\s*|fontSize\s*:\s*)["']([^"']+)["']/gi;
+  const pixelValueRegex = /(?<![0-9.])(?:[0-9]|1[01])(?:\.[0-9]+)?px\b/i;
+  const remValueRegex = /(?<![0-9.])0?\.(?:[0-6][0-9]*|7(?:[0-4][0-9]*)?)rem\b/i;
+
+  for (const file of filePaths) {
+    if (file.endsWith("components.js")) {
+      // Documented allowance: components.js shadow-DOM remainder is tracked in follow-up bead dz3wi
+      continue;
+    }
+    const content = readFileSync(file, "utf8");
+    const lines = content.split("\n");
+    lines.forEach((line, idx) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("//")) return;
+
+      let match: RegExpExecArray | null;
+      jsFontSizeRegex.lastIndex = 0;
+      while ((match = jsFontSizeRegex.exec(line)) !== null) {
+        const val = match[1];
+        if (pixelValueRegex.test(val) || remValueRegex.test(val)) {
+          violations.push({
+            file,
+            line: idx + 1,
+            text: trimmed,
+            matched: match[0],
+          });
+        }
+      }
+    });
+  }
+  return violations;
+}
+
 Deno.test("r4xk2: all shipped extension HTML and CSS surfaces enforce >= 12px design scale floor (0 sub-12px declarations)", () => {
   const surfaces = walkFiles("extension", (name) => /\.(css|html)$/.test(name));
   assert(surfaces.length >= 10, `Expected at least 10 shipped HTML/CSS surfaces in extension/, found ${surfaces.length}`);
@@ -105,6 +146,7 @@ Deno.test("r4xk2: pinned selectors adhere to >= 12px font scale floor", () => {
   assert(/\.artifacts-view \.insp-meta\s*\{[^}]*font-size:\s*var\(--text-xs,\s*12px\)/.test(ntpHtml), "ntp .artifacts-view .insp-meta must be >= 12px");
   assert(/\.artifacts-view \.insp-btn\s*\{[^}]*font-size:\s*var\(--text-xs,\s*12px\)/.test(ntpHtml), "ntp .artifacts-view .insp-btn must be >= 12px");
   assert(/\.pending-chips-label\s*\{[^}]*font-size:\s*var\(--text-xs,\s*12px\)/.test(ntpHtml), "ntp .pending-chips-label must be >= 12px");
+  assert(/#webmcp-hub-status \.webmcp-card-badge\s*\{[^}]*font-size:\s*var\(--text-xs,\s*12px\)/.test(ntpHtml), "ntp #webmcp-hub-status .webmcp-card-badge must be >= 12px");
 
   // options selectors
   assert(/\.usage-axis\s*\{[^}]*font-size:\s*var\(--text-xs,\s*12px\)/.test(optionsCss), "options .usage-axis must be >= 12px");
@@ -128,6 +170,29 @@ Deno.test("r4xk2: pinned selectors adhere to >= 12px font scale floor", () => {
   assert(/\.badge\s*\{[^}]*font-size:\s*var\(--text-xs,\s*12px\)/.test(aboutCss), "about .badge must be >= 12px");
   assert(/\.spdx-badge\s*\{[^}]*font-size:\s*var\(--text-xs,\s*12px\)/.test(aboutCss), "about .spdx-badge must be >= 12px");
   assert(/\.prov-item code\s*\{[^}]*font-size:\s*var\(--text-xs,\s*12px\)/.test(aboutCss), "about .prov-item code must be >= 12px");
+
+  // folder-browser and options JS
+  const folderBrowserJs = readFileSync("extension/lib/folder-browser.js", "utf8");
+  const optionsJs = readFileSync("extension/options/options.js", "utf8");
+  assert(folderBrowserJs.includes('upBtn.style.fontSize = "var(--text-xs, 12px)";'), "folder-browser upBtn must be >= 12px");
+  assert(folderBrowserJs.includes('count.style.fontSize = "var(--text-xs, 12px)";'), "folder-browser count must be >= 12px");
+  assert(folderBrowserJs.includes('viewer.style.fontSize = "var(--text-xs, 12px)";'), "folder-browser viewer must be >= 12px");
+  assert(optionsJs.includes('kindChip.style.fontSize = "var(--text-xs, 12px)";'), "options kindChip must be >= 12px");
+  assert(optionsJs.includes('modeChip.style.fontSize = "var(--text-xs, 12px)";'), "options modeChip must be >= 12px");
+  assert(optionsJs.includes('statusBadge.style.fontSize = "var(--text-xs, 12px)";'), "options statusBadge must be >= 12px");
+});
+
+Deno.test("r4xk2: shipped extension JS files enforce >= 12px design scale floor (excluding components.js shadow-DOM tracked under dz3wi)", () => {
+  const jsFiles = walkFiles("extension", (name) => /\.js$/.test(name));
+  assert(jsFiles.length >= 20, `Expected at least 20 JS files in extension/, found ${jsFiles.length}`);
+
+  const violations = findSub12pxJsStyleAssignments(jsFiles);
+  assertEquals(
+    violations.length,
+    0,
+    `Found ${violations.length} sub-12px JS font-size assignment(s) violating docs/DESIGN.md:103-105 floor:\n` +
+      violations.map((v) => `  ${v.file}:${v.line} -> ${v.text} (matched: ${v.matched})`).join("\n"),
+  );
 });
 
 Deno.test("r4xk2: falsification — sub-12px declarations are detected and reported", () => {

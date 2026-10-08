@@ -1,7 +1,7 @@
 # Changelog
 
 ## [0.3.604] — 2026-10-08
-- Enforce design scale floor of 12px across extension typography.
+- Enforce design scale floor of 12px across extension HTML, CSS, and inline script surfaces (shadow-DOM component styles tracked in follow-up bead dz3wi).
 
 ## [0.3.603] — 2026-10-08
 - Settings, the sidebar and the Agents panel now show the same humanised schedule cadence (weekly, daily, hourly), and the sidebar keeps your rail navigation choice when a late preference restore arrives.
