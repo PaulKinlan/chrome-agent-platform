@@ -1149,6 +1149,49 @@ function printAbnormalExitSummary(context) {
   line("==============================\n");
 }
 
+function evaluateJourneyFinalization({
+  intentionalEarlyStop,
+  results,
+  missing,
+  mainException,
+  uncaughtJourneyException,
+  evaluateTimeoutVerdict,
+  cdpFatalEvents,
+  frontierSnapshot,
+  exitFn,
+}) {
+  if (intentionalEarlyStop) {
+    const failed = (results || []).filter((r) => !r.pass);
+    console.log(`early stop summary: ${(results || []).length} assertions ran, ${failed.length} failed`);
+    if (typeof exitFn === "function") {
+      exitFn(failed.length ? 1 : 0);
+    }
+    return { status: "early_stop", exitCode: failed.length ? 1 : 0 };
+  }
+
+  if (missing && missing.length > 0) {
+    const reason = mainException
+      ? `uncaught exception: ${String(mainException?.message ?? mainException)}`
+      : (uncaughtJourneyException
+        ? `unhandled rejection/error: ${String(uncaughtJourneyException?.message ?? uncaughtJourneyException)}`
+        : (evaluateTimeoutVerdict
+          ? `cdp evaluate timeout: ${evaluateTimeoutVerdict.reason}`
+          : (cdpFatalEvents?.length
+            ? `cdp fatal protocol event: ${cdpFatalEvents.join("; ")}`
+            : "silent premature exit: main() exited before reaching the remaining checks without throwing")));
+    printAbnormalExitSummary({
+      reason,
+      error: mainException ?? uncaughtJourneyException,
+      lastStartedCheck: frontierSnapshot?.lastStartedCheck,
+      lastCompletedCheck: frontierSnapshot?.lastCompletedCheck,
+      missingCount: missing.length,
+    });
+    return { status: "abnormal_exit", reason, missingCount: missing.length };
+  }
+
+  return { status: "clean_pass" };
+}
+
 let uncaughtJourneyException: any = null;
 if (typeof globalThis !== "undefined") {
   globalThis.addEventListener?.("unhandledrejection", (ev: any) => {
@@ -1286,6 +1329,7 @@ async function main() {
   let ws;
   let cdp;
   let mainException: any = null;
+  let intentionalEarlyStop = false;
   // qk7p flagged a CDP evaluate timeout as environmental. 9t1p: that verdict is
   // only true when the BOX says so, so the abort now carries the reading that
   // decided it (null until an evaluate timeout is actually classified).
@@ -8905,6 +8949,7 @@ async function main() {
       console.error(`evaluate-timeout cause: ${evaluateTimeoutVerdict.cause} — ${evaluateTimeoutVerdict.reason}`);
     }
     if (String(e?.message ?? e).includes("CAP_JOURNEY_STOP_AFTER:")) {
+      intentionalEarlyStop = true;
       console.log(`journey early stop: ${String(e?.message ?? e)}`);
     } else {
       console.error("journey failure:", String(e?.message ?? e));
@@ -8950,10 +8995,14 @@ async function main() {
     checkShutdown("profile removed (no leak)", removed);
     checkShutdown("cleanup hard-failed on descendants (none survived)", clean);
 
-    if (typeof Deno !== "undefined" && Deno.env?.get?.("CAP_JOURNEY_STOP_AFTER")) {
-      const failed = results.filter((r) => !r.pass);
-      console.log(`early stop summary: ${results.length} assertions ran, ${failed.length} failed`);
-      Deno.exit(failed.length ? 1 : 0);
+    if (intentionalEarlyStop) {
+      evaluateJourneyFinalization({
+        intentionalEarlyStop: true,
+        results,
+        missing: [],
+        frontierSnapshot,
+        exitFn: (code) => Deno.exit(code),
+      });
     }
 
     // Temporary (non-retained) evidence is caller-owned temp output and must NOT
@@ -9007,24 +9056,16 @@ async function main() {
     }
     check("assertion order matches EXPECTED", orderOk);
 
-    if (missing.length > 0) {
-      const reason = mainException
-        ? `uncaught exception: ${String(mainException?.message ?? mainException)}`
-        : (uncaughtJourneyException
-          ? `unhandled rejection/error: ${String(uncaughtJourneyException?.message ?? uncaughtJourneyException)}`
-          : (evaluateTimeoutVerdict
-            ? `cdp evaluate timeout: ${evaluateTimeoutVerdict.reason}`
-            : (cdp?.fatalEvents?.length
-              ? `cdp fatal protocol event: ${cdp.fatalEvents.join("; ")}`
-              : "silent premature exit: main() exited before reaching the remaining checks without throwing")));
-      printAbnormalExitSummary({
-        reason,
-        error: mainException ?? uncaughtJourneyException,
-        lastStartedCheck: frontierSnapshot.lastStartedCheck,
-        lastCompletedCheck: frontierSnapshot.lastCompletedCheck,
-        missingCount: missing.length,
-      });
-    }
+    evaluateJourneyFinalization({
+      intentionalEarlyStop: false,
+      results,
+      missing,
+      mainException,
+      uncaughtJourneyException,
+      evaluateTimeoutVerdict,
+      cdpFatalEvents: cdp?.fatalEvents,
+      frontierSnapshot,
+    });
 
     const expectedRed = results.filter((r) => r.expectedRed).length;
     const failed = results.filter((r) => !r.pass && !r.expectedRed).length;

@@ -26,6 +26,10 @@ assert(checkBlockMatch, "check block must be found");
 const printMatch = source.match(/function printAbnormalExitSummary\([\s\S]*?\n\}/);
 assert(printMatch, "printAbnormalExitSummary must be found");
 
+// Extract evaluateJourneyFinalization function directly from production source
+const evalFinalizationMatch = source.match(/function evaluateJourneyFinalization\([\s\S]*?\n\}\)\s*\{[\s\S]*?\n\}/);
+assert(evalFinalizationMatch, "evaluateJourneyFinalization must be found");
+
 Deno.test("9ud9e: frontier tracks last-completed and advances last-started to the next EXPECTED assertion", () => {
   const ran = new Set<string>();
   const shutdownRan = new Set<string>();
@@ -148,7 +152,7 @@ Deno.test("9ud9e: meta-checks in finally do not overwrite snapshotted frontier d
   );
 });
 
-Deno.test("9ud9e: clean run and CAP_JOURNEY_STOP_AFTER intentional stop emit zero abnormal exit banners", () => {
+Deno.test("9ud9e: evaluateJourneyFinalization handles clean pass, intentional early stop, and abnormal exit", () => {
   const logs: string[] = [];
   const errors: string[] = [];
   const fakeConsole = {
@@ -156,32 +160,58 @@ Deno.test("9ud9e: clean run and CAP_JOURNEY_STOP_AFTER intentional stop emit zer
     error: (...args: any[]) => errors.push(args.join(" ")),
   };
 
-  // Simulate early-stop call site logic from scripts/chrome-journeys.ts:
-  // When isEarlyStop is truthy, it exits early and never executes the missing checks banner.
-  function simulateFinallyFlow(isEarlyStop: boolean, missingCount: number) {
-    let abnormalBannerPrinted = false;
-    if (isEarlyStop) {
-      // early stop path: exits before missing checks are evaluated
-      return { exitedEarly: true, abnormalBannerPrinted };
-    }
-    if (missingCount > 0) {
-      abnormalBannerPrinted = true;
-    }
-    return { exitedEarly: false, abnormalBannerPrinted };
-  }
+  const harness = new Function(
+    "console",
+    `let abnormalReported = false;
+     let lastCompletedCheck = null;
+     let lastStartedCheck = null;
+     ${printMatch[0]}
+     ${evalFinalizationMatch[0]}
+     return { evaluateJourneyFinalization, isAbnormalReported: () => abnormalReported };`,
+  )(fakeConsole);
 
-  // 1. Clean run (all checks ran, missingCount = 0)
-  const cleanResult = simulateFinallyFlow(false, 0);
-  assertEquals(cleanResult.exitedEarly, false);
-  assertEquals(cleanResult.abnormalBannerPrinted, false);
+  // 1. Clean run (missing = [], intentionalEarlyStop = false)
+  const cleanOutcome = harness.evaluateJourneyFinalization({
+    intentionalEarlyStop: false,
+    results: [{ name: "c1", pass: true }],
+    missing: [],
+    frontierSnapshot: { lastCompletedCheck: "c1", lastStartedCheck: null },
+  });
+  assertEquals(cleanOutcome.status, "clean_pass");
+  assertEquals(harness.isAbnormalReported(), false);
+  assertEquals(logs.length, 0);
 
-  // 2. Early-stop run (CAP_JOURNEY_STOP_AFTER set)
-  const earlyStopResult = simulateFinallyFlow(true, 345);
-  assertEquals(earlyStopResult.exitedEarly, true);
-  assertEquals(earlyStopResult.abnormalBannerPrinted, false);
+  // 2. Intentional early stop (intentionalEarlyStop = true)
+  let exitCodeCalled: number | null = null;
+  const earlyStopOutcome = harness.evaluateJourneyFinalization({
+    intentionalEarlyStop: true,
+    results: [{ name: "c1", pass: true }],
+    missing: ["c2", "c3"],
+    frontierSnapshot: { lastCompletedCheck: "c1", lastStartedCheck: "c2" },
+    exitFn: (code: number) => { exitCodeCalled = code; },
+  });
+  assertEquals(earlyStopOutcome.status, "early_stop");
+  assertEquals(earlyStopOutcome.exitCode, 0);
+  assertEquals(exitCodeCalled, 0);
+  assertEquals(harness.isAbnormalReported(), false);
 
-  // 3. Abnormal premature abort (missingCount > 0, not early stop)
-  const abortResult = simulateFinallyFlow(false, 345);
-  assertEquals(abortResult.exitedEarly, false);
-  assertEquals(abortResult.abnormalBannerPrinted, true);
+  // 3. Finding P1 regression test:
+  // If an abnormal error occurred before reaching the stop target, intentionalEarlyStop is FALSE.
+  // It must report abnormal_exit with the exact frontier check, NOT take early stop.
+  const abortOutcome = harness.evaluateJourneyFinalization({
+    intentionalEarlyStop: false,
+    results: [{ name: "c1", pass: true }],
+    missing: ["c2", "c3"],
+    mainException: new Error("CDP error on click"),
+    frontierSnapshot: { lastCompletedCheck: "c1", lastStartedCheck: "c2" },
+  });
+  assertEquals(abortOutcome.status, "abnormal_exit");
+  assertEquals(abortOutcome.missingCount, 2);
+  assertEquals(harness.isAbnormalReported(), true);
+  const logText = logs.join("\n");
+  assert(logText.includes("=== ABNORMAL JOURNEY EXIT ==="));
+  assert(logText.includes('last completed check:  "c1"'));
+  assert(logText.includes('frontier check:        "c2"'));
+  assert(logText.includes("unreached checks:      2 downstream checks were NOT REACHED"));
+  assert(logText.includes("CDP error on click"));
 });
