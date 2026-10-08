@@ -1690,6 +1690,13 @@ async function main() {
     const footerSettingsShot = await captureShot(cdp, ntpSession);
     if (footerSettingsShot) await writeEvidence("hub-footer-settings-current.png", footerSettingsShot);
     await evalIn(cdp, ntpSession, `document.getElementById('view-back')?.click(); true`);
+    // b7ny0.1: the genuine CDP click on #open-settings parks the pointer ON that
+    // button, so `.foot-btn:hover` (background: var(--panel-2) !important,
+    // ntp.html:1034) still paints it when footerBack is read — aria-current is
+    // correctly null and ghost stays true, but bg reads rgb(239,237,232). Park the
+    // pointer on neutral chrome (top-left) so the idle fill read is not polluted by
+    // a lingering hover. The fill assertion itself is unchanged.
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 1, y: 1 }, ntpSession);
     await sleep(900);
     const footerBack = await footerState();
     console.log("footer states:", JSON.stringify({ footerIdle, footerSettings, footerBack }));
@@ -2573,7 +2580,12 @@ async function main() {
       createdFromCard = (list?.agents ?? []).find((a) => a?.name === "Research Analyst") ?? null;
       if (!createdFromCard) await sleep(200);
     }
-    const namedCount1 = ((await msgValue({ type: "named-agent.list" }))?.agents ?? []).length;
+    // b7ny0.3: listNamedAgents overlays the built-in background seeds under the
+    // persisted records (seedOverlay in extension/lib/named-agents.js:215-223), so
+    // a raw length is 1 + 22 seeds = 23, not 1. Count only the NON-seeded
+    // (persisted/named) records so "yields ONE named agent" stays honest and does
+    // not re-break when the seed set changes.
+    const namedCount1 = ((await msgValue({ type: "named-agent.list" }))?.agents ?? []).filter((a) => !a?.seeded).length;
     const savedSkillIds = (createdFromCard?.skills ?? []).map((s) => (s && typeof s === "object" ? s?.id : s));
     console.log("createdFromCard from card:", JSON.stringify({ id: createdFromCard?.id, role: String(createdFromCard?.role ?? "").slice(0, 40), skills: savedSkillIds, namedCount1 }));
     check(
