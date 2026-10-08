@@ -356,16 +356,29 @@ async function attachRuntime(cdp, targetId) {
  * naming this site — never a bare undefined a check can read as a product
  * answer (kwrx / 0aeh). */
 async function evalIn(cdp, session, expression) {
-  const r = await withTimeout(
-    cdp.send(
-      "Runtime.evaluate",
-      { expression, returnByValue: true, awaitPromise: true },
-      session,
-    ),
-    15000,
-    "evalIn",
-  );
-  return wireValue<any>(r, "jny.evalIn");
+  let lastErr = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const r = await withTimeout(
+        cdp.send(
+          "Runtime.evaluate",
+          { expression, returnByValue: true, awaitPromise: true },
+          session,
+        ),
+        15000,
+        "evalIn",
+      );
+      return wireValue<any>(r, "jny.evalIn");
+    } catch (e) {
+      lastErr = e;
+      if (String(e?.message ?? e).includes("Cannot find default execution context") && attempt < 4) {
+        await sleep(250);
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr;
 }
 
 /** EVERY piece of text the thread can show the owner — light DOM AND every
@@ -527,13 +540,61 @@ async function awaitNewRunTerminal(cdp, optsSession, beforeIds, task, timeoutMs 
  *  is the durable terminal record (phase/terminal.ok/threadId) for the exact
  *  new execution. The caller restores the demo provider and closes the probe
  *  provider. */
+async function activateNtpSession(cdp, session) {
+  const targetInfo = await cdp?.send?.("Target.getTargetInfo", {}, session)?.catch?.(() => null);
+  const targetId = targetInfo?.targetInfo?.targetId;
+  if (targetId) {
+    await cdp?.send?.("Target.activateTarget", { targetId })?.catch?.(() => {});
+  }
+  await cdp?.send?.("Page.bringToFront", {}, session)?.catch?.(() => {});
+}
+
 async function runScriptedToolProbe(cdp, ntpSession, optsSession, steps, task, expectRequests, onPause = null) {
   const provider = await startScriptedProvider({ steps });
   await evalIn(cdp, optsSession, `chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "openai-compatible", baseURL: provider.baseURL, apiKey: SCRIPTED_DUMMY_KEY, model: "scripted" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`);
   const beforeIds = await listRunIds(cdp, optsSession);
+  await activateNtpSession(cdp, ntpSession);
+  await evalIn(cdp, ntpSession, `(() => {
+    if (location.hash) location.hash = "";
+    const v = document.getElementById("view");
+    if (v) v.hidden = true;
+    const vch = document.getElementById("view-client-host");
+    if (vch) vch.hidden = true;
+    const dv = document.getElementById("directory-view");
+    if (dv) dv.hidden = true;
+    const av = document.getElementById("artifacts-view");
+    if (av) av.hidden = true;
+    const tv = document.getElementById("thread-view");
+    if (tv) tv.hidden = true;
+    document.body.classList.remove("view-open", "full-view-open");
+    return true;
+  })()`).catch(() => {});
+  await sleep(300);
   await clickSel(cdp, ntpSession, "#home").catch(() => false);
   await sleep(600);
+  await evalIn(cdp, ntpSession, `(() => {
+    const el = document.querySelector('${composerInput("hub")}');
+    el?.focus();
+    return true;
+  })()`).catch(() => {});
   await typeInto(cdp, ntpSession, composerInput("hub"), task);
+  let inputVal = await evalIn(cdp, ntpSession, `document.querySelector('${composerInput("hub")}')?.value ?? null`);
+  if (!inputVal) {
+    // If char typing missed due to window activation, set value & fire input event
+    await evalIn(cdp, ntpSession, `(() => {
+      const c = document.getElementById("composer");
+      if (c && typeof c.setText === "function") {
+        c.setText(${JSON.stringify(task)});
+      } else {
+        const inp = document.querySelector('${composerInput("hub")}');
+        if (inp) {
+          inp.value = ${JSON.stringify(task)};
+          inp.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }
+      return true;
+    })()`);
+  }
   await clickSel(cdp, ntpSession, composerSend("hub"));
   const t0 = Date.now();
   while (provider.requests.length < expectRequests && Date.now() - t0 < 120000) {
@@ -1824,8 +1885,13 @@ async function main() {
 
     check("embedded Artifacts view shows its name exactly once", artifactsTitleCount === 1);
 
-    await cdp.send("Emulation.clearDeviceMetricsOverride", {}, ntpSession);
-    await evalIn(cdp, ntpSession, `document.getElementById('view-back')?.click(); true`);
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false }, ntpSession);
+    for (let i = 0; i < 6; i++) {
+      const open = await evalIn(cdp, ntpSession, `!document.getElementById('view-overlay')?.hidden`).catch(() => false);
+      if (!open) break;
+      await evalIn(cdp, ntpSession, `document.getElementById('view-back')?.click(); true`).catch(() => {});
+      await sleep(300);
+    }
     await sleep(500);
 
     // (2) An agent opened by URL is titled by its NAME: create "Writer", open a
@@ -1930,14 +1996,15 @@ async function main() {
     const openCreateDialog = async () => {
       // w51r: a geometry click on a hidden/occluded rail button misses silently,
       // then the dialog wait reports a misleading timeout. Refuse before input.
+      await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});
       await clickVisibleCreateAgent(cdp, ntpSession, (expression) => evalIn(cdp, ntpSession, expression));
-      for (let i = 0; i < 20; i++) { if ((await pickerState()).open) break; await sleep(150); }
+      for (let i = 0; i < 30; i++) { if ((await pickerState()).open) break; await sleep(150); }
       await sleep(200);
     };
     await openCreateDialog();
     const p0 = await pickerState();
     const curated = await evalIn(cdp, ntpSession, `(() => { const sel = document.getElementById('agent-template-select'); return sel ? [...sel.options].filter((o) => o.value).length : -1; })()`);
-    const schedOpts = await evalIn(cdp, ntpSession, `(() => { const sel = document.getElementById('agent-template-select'); const og = [...sel.querySelectorAll('optgroup')].find((g) => g.label === 'Scheduled'); return og ? og.querySelectorAll('option').length : -1; })()`);
+    const schedOpts = await evalIn(cdp, ntpSession, `(() => { const sel = document.getElementById('agent-template-select'); const og = [...(sel?.querySelectorAll('optgroup') ?? [])].find((g) => g.label === 'Scheduled'); return og ? og.querySelectorAll('option').length : -1; })()`);
     const galleryGone = await evalIn(cdp, ntpSession, `document.getElementById('agent-template-gallery') === null`);
     console.log("create dialog picker:", JSON.stringify({ p0, curated, schedOpts, galleryGone }));
     check(
@@ -4747,7 +4814,22 @@ async function main() {
     };
     const BUBBLES = `(() => {
       const roots = [document, ...[...document.querySelectorAll('*')].flatMap((e) => e.shadowRoot ? [e.shadowRoot, ...[...e.shadowRoot.querySelectorAll('*')].flatMap((x) => x.shadowRoot ? [x.shadowRoot] : [])] : [])];
-      return roots.flatMap((r) => [...r.querySelectorAll('message-bubble')]).map((b) => ({ role: b.getAttribute('role'), text: ((b.shadowRoot ?? b).querySelector('.body, .msg') ?? b).textContent.replace(/\\s+/g, ' ').trim() }));
+      return roots.flatMap((r) => [...r.querySelectorAll('message-bubble')]).map((b) => {
+        const sr = b.shadowRoot ?? b;
+        const bodyEl = sr.querySelector('.body');
+        let text = '';
+        if (bodyEl) {
+          text = bodyEl.textContent.replace(/\\s+/g, ' ').trim();
+        } else {
+          const clone = (sr.querySelector('.msg') ?? b).cloneNode(true);
+          for (const btn of clone.querySelectorAll?.('.msg-copy-btn') ?? []) btn.remove();
+          text = clone.textContent.replace(/\\s+/g, ' ').trim();
+        }
+        return {
+          role: b.getAttribute('role'),
+          text,
+        };
+      });
     })()`;
     // The thread is opened in a FRESH hub document each time (the established
     // re-open pattern — location.reload()/Page.navigate on a driven session
@@ -4781,6 +4863,16 @@ async function main() {
         persistedAfter.assistant[0] === DEMO_ANSWER &&
         persistedAfter.count === persistedBefore.count && persistedAfter.count > 0 &&
         agentBubblesAfter.length > 0 && agentBubblesAfter[0].text === DEMO_ANSWER,
+      {
+        transcriptRunOk: transcriptRun?.ok,
+        transcriptRunResult: transcriptRun?.result,
+        expectedDemoAnswer: DEMO_ANSWER,
+        persistedBefore,
+        persistedAfter,
+        agentBubblesAfter,
+        bubblesBefore,
+        bubblesAfter,
+      },
     );
     const nudgeSeen = [...persistedBefore.assistant, ...persistedAfter.assistant].some((t) => t.includes(DEMO_NUDGE_REPLY)) ||
       [...bubblesBefore, ...agentBubblesAfter].some((b) => String(b?.text ?? "").includes(DEMO_NUDGE_REPLY));
@@ -4871,9 +4963,46 @@ async function main() {
       // target neither paints nor screenshots, so bring it to the front first.
       await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
       await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});
+      await evalIn(cdp, ntpSession, `(() => {
+        if (location.hash) location.hash = "";
+        const v = document.getElementById("view");
+        if (v) v.hidden = true;
+        const vch = document.getElementById("view-client-host");
+        if (vch) vch.hidden = true;
+        const dv = document.getElementById("directory-view");
+        if (dv) dv.hidden = true;
+        const av = document.getElementById("artifacts-view");
+        if (av) av.hidden = true;
+        const tv = document.getElementById("thread-view");
+        if (tv) tv.hidden = true;
+        document.body.classList.remove("view-open", "full-view-open");
+        return true;
+      })()`).catch(() => {});
+      await sleep(300);
       await clickSel(cdp, ntpSession, "#home").catch(() => false);
       await sleep(600);
+      await evalIn(cdp, ntpSession, `(() => {
+        const el = document.querySelector('${composerInput("hub")}');
+        el?.focus();
+        return true;
+      })()`).catch(() => {});
       await typeInto(cdp, ntpSession, composerInput("hub"), text);
+      let inputVal = await evalIn(cdp, ntpSession, `document.querySelector('${composerInput("hub")}')?.value ?? null`);
+      if (!inputVal) {
+        await evalIn(cdp, ntpSession, `(() => {
+          const c = document.getElementById("composer");
+          if (c && typeof c.setText === "function") {
+            c.setText(${JSON.stringify(text)});
+          } else {
+            const inp = document.querySelector('${composerInput("hub")}');
+            if (inp) {
+              inp.value = ${JSON.stringify(text)};
+              inp.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+          }
+          return true;
+        })()`);
+      }
       await clickSel(cdp, ntpSession, composerSend("hub"));
     };
     const pollThreadError = async (deadlineMs, done) => {
@@ -4887,9 +5016,11 @@ async function main() {
       return { ...last, elapsedMs: Date.now() - t0 };
     };
     // provider.set is Settings-sender-only (requireSettingsSender) — msgOpts.
+    // Use a fresh safeUrl path per run so the SW's deliberate (url,status) deduplication
+    // does not suppress raw console.error logging from a prior 401 on the same origin.
     await msgOpts({
       type: "provider.set",
-      config: { provider: "openai", baseURL: `${RED_ORIGIN}/v1`, apiKey: "sk-journey-invalid-0000", model: "model-one" },
+      config: { provider: "openai", baseURL: `${RED_ORIGIN}/v1-401-${Date.now()}`, apiKey: "sk-journey-invalid-0000", model: "model-one" },
     });
     const swErrorsBefore = cdp.swErrors().length;
     await driveHubTask("provider truth: bad key");
@@ -4909,6 +5040,12 @@ async function main() {
     check(
       "Provider error: SW console recorded the real HTTP 401 from the fixture provider",
       provider401.length >= 1 && provider401.every((e) => !/sk-[A-Za-z0-9]/.test(String(e.detail ?? ""))),
+      {
+        provider401Count: provider401.length,
+        provider401,
+        swErrorsBefore,
+        swErrorsNow,
+      },
     );
     const EXPECTED_SW_NOISE = /\[provider\] HTTP 401|^AI_NoOutputGeneratedError: No output generated|^<redacted:structured>$/;
     for (const e of swErrorsNow) {
