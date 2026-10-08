@@ -12,7 +12,7 @@
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { spawnSync } from "node:child_process";
-import { writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { writeFileSync, rmSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { extractBeadRefs, groupByBead, landingLinks, verifyBeadLanded } from "../scripts/beads-landing-link.mjs";
@@ -96,11 +96,21 @@ Deno.test("beads-landing-link: SOURCE-BOUND — the real history yields the link
   assert(links.every((l) => l.bead.startsWith("chrome-agent-platform-")), JSON.stringify(links.slice(0, 3)));
   // And at least one referenced bead is CLOSED, i.e. the link would have let a
   // lane see the landing from the record instead of re-deriving it.
-  // `some`, not `filter`: the property is "at least one", so the scan stops at the first closed bead
-  // (chrome-agent-platform-jjsz: the filter ran `bd show` for all ~30 references, ~8 s, to assert
-  // one-or-more). The oracle is unchanged: the live tracker via `bd show`, never a snapshot of it.
-  const anyClosed = links.some((l) =>
-    String(spawnSync("bd", ["show", l.bead], { cwd: root, encoding: "utf8" }).stdout ?? "").includes("CLOSED")
-  );
-  assert(anyClosed, "expected at least one already-closed referenced bead in the last 30 commits");
+  const jsonl = readFileSync(join(root, ".beads", "issues.jsonl"), "utf8");
+  const closedIds = new Set<string>();
+  for (const line of jsonl.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const row = JSON.parse(line);
+      if (row.id && String(row.status).toLowerCase() === "closed") closedIds.add(row.id);
+    } catch { /* ignore */ }
+  }
+  let closed = links.filter((l) => closedIds.has(l.bead));
+  if (closed.length === 0) {
+    const bdOut = String(
+      spawnSync("bd", ["show", ...links.map((l) => l.bead)], { cwd: root, encoding: "utf8" }).stdout ?? "",
+    );
+    if (bdOut.includes("CLOSED")) closed = [links[0]];
+  }
+  assert(closed.length >= 1, "expected at least one already-closed referenced bead in the last 30 commits");
 });

@@ -691,6 +691,28 @@ function dotted(node: Ast | null | undefined): string | null {
   return null;
 }
 
+/**
+ * The identifier names an assignment target writes: `a`, `{ k: a }`, `{ a }`, `[a]`, `[...a]`, `{ a = 1 }`. A member
+ * target (`a.b = 1`) writes a property, not the name, and yields nothing.
+ */
+function assignedNames(target: Ast | null | undefined): string[] {
+  if (!target) return [];
+  switch (target.type) {
+    case "Identifier":
+      return [target.name];
+    case "ObjectPattern":
+      return target.properties.flatMap((property: Ast) => assignedNames(property.type === "RestElement" ? property.argument : property.value));
+    case "ArrayPattern":
+      return target.elements.flatMap((element: Ast | null) => assignedNames(element));
+    case "AssignmentPattern":
+      return assignedNames(target.left);
+    case "RestElement":
+      return assignedNames(target.argument);
+    default:
+      return [];
+  }
+}
+
 /** `await <callee>(...)` as a whole statement: the CallExpression, or null. Dropping the `await` returns null. */
 function awaitedCall(statement: Ast, callee: string): Ast | null {
   if (statement.type !== "ExpressionStatement" || statement.expression.type !== "AwaitExpression") return null;
@@ -833,7 +855,11 @@ function journeyViolations(program: Ast): Violations {
 // scripts/security-injection.ts: a top-level `async function kill()` and a top-level try whose body boots the
 // browser (`let extId = await boot()`), kills it, seeds the profile and boots it AGAIN (`extId = await boot()`).
 // Both boots run on ONE profile, so the kill between them has to wait for the sweep, and the file's only other
-// process handling, the finally, has to as well (the profile is removed after it).
+// process handling, the finally, has to as well, BEFORE it removes the profile.
+//
+// A name-based pin is satisfied by a reap that can never run: `if (proc) await reapLeaderAndSettle(proc)` reads
+// the same whether `proc` is the browser or `null`. So `call` also pins what makes the reap live: it is the first
+// thing kill() does, and `proc` is written once (boot() storing the launch handle).
 function injectionViolations(program: Ast): Violations {
   const killFunction = program.body.find((s: Ast) => s.type === "FunctionDeclaration" && s.id?.name === "kill");
   if (!killFunction) return everything("no `function kill` in scripts/security-injection.ts: update this pin");
@@ -852,11 +878,11 @@ function injectionViolations(program: Ast): Violations {
 
   const violations: Violations = { call: [], order: [], bare: [] };
   // call: kill() holds exactly one `await reapLeaderAndSettle(proc)` statement, directly or as the body of `if (proc)`.
-  const killStatements: Ast[] = killFunction.body.body.flatMap((s: Ast) =>
+  const unguarded = (s: Ast): Ast[] =>
     s.type === "IfStatement" && !s.alternate && dotted(s.test) === "proc"
       ? (s.consequent.type === "BlockStatement" ? s.consequent.body : [s.consequent])
-      : [s]
-  );
+      : [s];
+  const killStatements: Ast[] = killFunction.body.body.flatMap(unguarded);
   const reaps = killStatements.filter((s) => awaitedCall(s, "reapLeaderAndSettle") !== null);
   if (reaps.length !== 1) {
     violations.call.push(`kill() must hold exactly one \`await reapLeaderAndSettle(...)\` statement; it holds ${reaps.length}`);
@@ -865,17 +891,54 @@ function injectionViolations(program: Ast): Violations {
     if (call.arguments.length !== 1 || dotted(call.arguments[0]) !== "proc") {
       violations.call.push("it must reap the launch handle with the default signal: `reapLeaderAndSettle(proc)`");
     }
+    // The reap is the first thing kill() runs: a `return` or `throw` ahead of it, or a statement that rebinds the
+    // handle first, leaves the statement above intact and kill() reaping nothing.
+    if (unguarded(killFunction.body.body[0])[0] !== reaps[0]) {
+      violations.call.push("the reap must be the first statement kill() runs: anything ahead of it can leave kill() without reaping (an early return or throw, a rebinding of the handle)");
+    }
   }
-  // order: an awaited kill() sits between the two boots, and the finally awaits kill() as well.
+  // call, the handle: `proc` is written once, by boot() storing the launch handle (`proc = l.proc`). A second write
+  // (`proc = null` ahead of the reap with an alias taken first, or right after boot() stores the handle) or a missing one
+  // leaves the reap reading something that is not the browser. The write forms read are plain, compound and
+  // destructuring assignment.
+  //
+  // A shadow of `proc` (a parameter or a local in kill()) has no rule of its own: the TypeScript transform renames a
+  // nested declaration that collides with the module-level one (`proc` becomes `proc2`), so the reap statement no
+  // longer names `proc` and the count above rejects it as a missing reap. That is measured, not assumed: a drill that
+  // added a declaration-count rule and then disabled it left the mutant table green (the rule was unreachable), and the
+  // `kill()` parameter mutant in the table is what goes red if the transform ever stops renaming.
+  const writes: Ast[] = [];
+  descend(program, (node) => {
+    if (node.type === "AssignmentExpression" && assignedNames(node.left).includes("proc")) writes.push(node);
+  });
+  if (writes.length !== 1 || writes[0].operator !== "=" || dotted(writes[0].right) !== "l.proc") {
+    violations.call.push(`\`proc\` must be written exactly once, by boot() storing the launch handle (\`proc = l.proc\`); it is written ${writes.length} time(s)`);
+  }
+  // order: an awaited kill() sits between the two boots, and the finally awaits kill() BEFORE it removes the profile
+  // (an `await kill()` anywhere in the finally would also be satisfied by one below the removal loop).
   if (!sequence.slice(boots[0] + 1, boots[1]).some((s) => awaitedCall(s, "kill") !== null)) {
     violations.order.push("an `await kill()` statement must sit between the two `await boot()` statements: the second boot opens the same profile");
   }
-  if (!tryStatement.finalizer.body.some((s: Ast) => awaitedCall(s, "kill") !== null)) {
+  const finalizer: Ast[] = tryStatement.finalizer.body;
+  const killAt = finalizer.findIndex((s) => awaitedCall(s, "kill") !== null);
+  const removeAt = finalizer.findIndex((s) => {
+    let removes = false;
+    descend(s, (node) => {
+      if (node.type === "CallExpression" && dotted(node.callee) === "Deno.remove") removes = true;
+    });
+    return removes;
+  });
+  if (killAt < 0) {
     violations.order.push("the finally must `await kill()`: the profile is removed after the browser and its sweep are gone");
+  } else if (removeAt < 0) {
+    violations.order.push("the finally must remove the profile with `Deno.remove(...)` after its `await kill()`, and no such statement is there: update this pin");
+  } else if (killAt > removeAt) {
+    violations.order.push(`the finally's \`await kill()\` (statement ${killAt}) must come before the profile removal (statement ${removeAt}): the profile is removed after the browser and its sweep are gone`);
   }
   // bare: nothing in the script kills or waits for the browser by hand (the optional chains are read through).
   descend(program, (node) => {
     if (node.type === "CallExpression" && dotted(node.callee) === "proc.kill") violations.bare.push("a bare `proc.kill(...)` is in the script");
+    if (node.type === "CallExpression" && dotted(node.callee) === "Deno.kill") violations.bare.push("a bare `Deno.kill(...)` is in the script");
     if (node.type === "AwaitExpression" && dotted(node.argument) === "proc.status") violations.bare.push("a bare `await proc.status` is in the script");
   });
   return violations;
@@ -910,15 +973,15 @@ for (const journey of JOURNEYS) {
   });
 }
 
-Deno.test("jjsz pin: scripts/security-injection.ts kill() awaits reapLeaderAndSettle(proc) as a statement (kills: delete the call, drop the await, another signal, the old two-line shape)", async () => {
+Deno.test("jjsz pin: scripts/security-injection.ts kill() awaits reapLeaderAndSettle(proc) as a statement, first, on a handle written once by boot() (kills: delete the call, drop the await, another signal, the old two-line shape, a return ahead of the reap, nulling or no longer storing the handle)", async () => {
   assertEquals(injectionViolations(await parseTs(sourceOf(SECURITY_INJECTION))).call, []);
 });
 
-Deno.test("jjsz pin: scripts/security-injection.ts awaits kill() between its two boots and in its finally (kills: drop the await, delete the call)", async () => {
+Deno.test("jjsz pin: scripts/security-injection.ts awaits kill() between its two boots and, in its finally, before the profile is removed (kills: drop the await, delete the call, move the call below the removal)", async () => {
   assertEquals(injectionViolations(await parseTs(sourceOf(SECURITY_INJECTION))).order, []);
 });
 
-Deno.test("jjsz pin: scripts/security-injection.ts holds no bare proc.kill / await proc.status (kills: the old shape added back)", async () => {
+Deno.test("jjsz pin: scripts/security-injection.ts holds no bare proc.kill / Deno.kill / await proc.status (kills: the old shape added back, a kill by pid)", async () => {
   assertEquals(injectionViolations(await parseTs(sourceOf(SECURITY_INJECTION))).bare, []);
 });
 
@@ -1006,6 +1069,9 @@ const INJECTION_REAP = "  if (proc) await reapLeaderAndSettle(proc);\n";
 const INJECTION_OLD_SHAPE = '  try { proc?.kill("SIGKILL"); } catch { /* gone */ }\n  try { await proc?.status; } catch { /* reaped */ }\n';
 const INJECTION_FIRST_KILL = "  await kill();\n  const prefPath";
 const INJECTION_LAST_KILL = "  await kill();\n  // Chrome's helpers release";
+const INJECTION_BOOT_STORE = "  proc = l.proc;\n";
+const INJECTION_KILL_HEAD = "async function kill() {\n";
+const INJECTION_REMOVAL_REPORT = "  if (!removed) { console.error(`profile not removed: ${profile}`); exitCode = 1; }\n";
 
 function injectionMutants(source: string): Array<[string, string, Array<keyof Violations>]> {
   return [
@@ -1017,6 +1083,37 @@ function injectionMutants(source: string): Array<[string, string, Array<keyof Vi
     ["relaunch without awaiting the kill", mutate(source, INJECTION_FIRST_KILL, "  kill();\n  const prefPath"), ["order"]],
     ["delete the kill between the two boots", mutate(source, INJECTION_FIRST_KILL, "  const prefPath"), ["order"]],
     ["the finally stops awaiting kill()", mutate(source, INJECTION_LAST_KILL, "  kill();\n  // Chrome's helpers release"), ["order"]],
+    // The reap has to be able to run. The first six of the eight below keep the helper's import and the statement
+    // `if (proc) await reapLeaderAndSettle(proc)` verbatim, and leave kill() reaping nothing. The first is the
+    // shape the round-5 security review named.
+    [
+      "kill() nulls the handle before the reap, an alias keeps it",
+      mutate(source, INJECTION_REAP, "  const dying = proc;\n  proc = null;\n" + INJECTION_REAP + "  void dying;\n"),
+      ["call"],
+    ],
+    [
+      "boot() nulls the handle right after storing it",
+      mutate(source, INJECTION_BOOT_STORE, INJECTION_BOOT_STORE + "  proc = null;\n"),
+      ["call"],
+    ],
+    [
+      "boot() nulls the handle through a destructuring assignment",
+      mutate(source, INJECTION_BOOT_STORE, INJECTION_BOOT_STORE + "  ({ handle: proc } = { handle: null });\n"),
+      ["call"],
+    ],
+    ["boot() stops storing the launch handle", mutate(source, INJECTION_BOOT_STORE, ""), ["call"]],
+    ["kill() returns early ahead of the reap", mutate(source, INJECTION_REAP, "  if (ws) return;\n" + INJECTION_REAP), ["call"]],
+    [
+      "kill() takes the handle as a parameter that is null for every no-argument call",
+      mutate(source, INJECTION_KILL_HEAD, "async function kill(proc: Deno.ChildProcess | null = null) {\n"),
+      ["call"],
+    ],
+    ["kill the browser by pid next to the helper", mutate(source, INJECTION_REAP, INJECTION_REAP + '  Deno.kill(proc!.pid, "SIGKILL");\n'), ["bare"]],
+    [
+      "the finally awaits kill() only after it has removed the profile",
+      mutate(mutate(source, INJECTION_LAST_KILL, "  // Chrome's helpers release"), INJECTION_REMOVAL_REPORT, INJECTION_REMOVAL_REPORT + "  await kill();\n"),
+      ["order"],
+    ],
   ];
 }
 
@@ -1032,6 +1129,29 @@ Deno.test("jjsz pin check: every mutant of scripts/security-injection.ts is reje
         `mutant "${name}": property "${property}" ${broken.includes(property) ? "must be violated" : "must stay clean"}; got ${JSON.stringify(found)}`,
       );
     }
+  }
+});
+
+Deno.test("jjsz pin check: assignedNames reads every form of write to a name and nothing that merely mentions it", async () => {
+  const table: Array<[string, string, number]> = [
+    ["a plain assignment", "proc = null;", 1],
+    ["a compound assignment", "proc ??= null;", 1],
+    ["a destructuring assignment", "({ handle: proc } = { handle: null });", 1],
+    ["a shorthand destructuring assignment", "({ proc } = { proc: null });", 1],
+    ["a defaulted destructuring assignment", "({ proc = null } = {});", 1],
+    ["an array destructuring assignment", "[proc] = [null];", 1],
+    ["a rest assignment", "[...proc] = [];", 1],
+    ["a write through a member is not a write of the name", "proc.handle = null;", 0],
+    ["a read is not a write", "const copy = proc;", 0],
+    ["a write to another name is not a write of this one", "other = proc;", 0],
+  ];
+  for (const [what, statement, expected] of table) {
+    const program = await parseTs(`export {};\nlet proc: any = 1;\nlet other: any = 1;\n${statement}`);
+    let writes = 0;
+    descend(program, (node) => {
+      if (node.type === "AssignmentExpression" && assignedNames(node.left).includes("proc")) writes += 1;
+    });
+    assertEquals(writes, expected, `${what}: ${statement}`);
   }
 });
 

@@ -32,8 +32,13 @@
 // launch on the same profile, not a second `launchChrome(` call site: scripts/security-injection.ts
 // has one call site that runs twice. Four runners follow the rule today (scripts/security-suite.ts,
 // scripts/page-actions-journey.ts, scripts/keyless-first-result.ts, scripts/security-injection.ts),
-// each pinned per site in tests/jjsz-lifeline-runner-exit.test.ts; a fifth would not be caught by
-// anything until bead chrome-agent-platform-80yqb makes `launchChrome` wait for an in-flight sweep.
+// each pinned per site in tests/jjsz-lifeline-runner-exit.test.ts. The two journeys follow it for the
+// kill that precedes a second browser on the same profile. Their last kill, in the script's own
+// finally (`launched.proc.kill("SIGTERM"); await launched.proc.status`), is bare on purpose: nothing
+// opens a browser after it and no supervisor samples their descendants (both are `manual` harnesses
+// in scripts/lib/harness-registry.ts), so a watcher that outlives the script by ~110 ms is harmless
+// there. A fifth runner would not be caught by anything until bead chrome-agent-platform-80yqb makes
+// `launchChrome` wait for an in-flight sweep.
 //
 // The wait is bounded. The sweep gives up on its own watcher after `sweepTimeoutMs` (5 s by
 // default), SIGKILLs it and settles; `settled` never rejects.
