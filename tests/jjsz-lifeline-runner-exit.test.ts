@@ -1160,6 +1160,22 @@ function injectionMutants(source: string): Array<[string, string, Array<keyof Vi
     ],
     ["boot() stops storing the launch handle", mutate(source, INJECTION_BOOT_STORE, ""), ["call"]],
     ["kill() returns early ahead of the reap", mutate(source, INJECTION_REAP, "  if (ws) return;\n" + INJECTION_REAP), ["call"]],
+    // Three more rows exist because the round-7 review showed two further clauses that no mutant isolated. The guard
+    // test of `if (proc)`: a guard on anything else that keeps the right argument and the first-statement position is
+    // accepted when the clause is switched off. The Await test of `awaitedCall`, shared by every pin: a bare call is
+    // also rejected by the next check of that helper, so only a `void` (what a no-floating-promises lint produces)
+    // reaches it.
+    [
+      "kill() guards the reap with a test that is not the handle (right argument, dead guard)",
+      mutate(source, INJECTION_REAP, "  if (ws === undefined) await reapLeaderAndSettle(proc);\n"),
+      ["call"],
+    ],
+    [
+      "kill() voids the reap instead of awaiting it",
+      mutate(source, INJECTION_REAP, "  if (proc) void reapLeaderAndSettle(proc);\n"),
+      ["call"],
+    ],
+    ["relaunch with a voided kill between the boots", mutate(source, INJECTION_FIRST_KILL, "  void kill();\n  const prefPath"), ["order"]],
     [
       "kill() takes the handle as a parameter that is null for every no-argument call",
       mutate(source, INJECTION_KILL_HEAD, "async function kill(proc: Deno.ChildProcess | null = null) {\n"),
@@ -1198,6 +1214,7 @@ Deno.test("jjsz pin check: nameWrites reads every form of write to a name (assig
     ["a defaulted destructuring assignment", "({ proc = null } = {});", 1],
     ["an array destructuring assignment", "[proc] = [null];", 1],
     ["a rest assignment", "[...proc] = [];", 1],
+    ["an object rest assignment", "({ ...proc } = {});", 1],
     ["an increment", "proc++;", 1],
     ["a decrement", "--proc;", 1],
     ["a for-of head that assigns the name", "for (proc of [null]) {}", 1],
@@ -1213,6 +1230,29 @@ Deno.test("jjsz pin check: nameWrites reads every form of write to a name (assig
   for (const [what, statement, expected] of table) {
     const program = await parseTs(`export {};\nlet proc: any = 1;\nlet other: any = 1;\n${statement}`);
     assertEquals(nameWrites(program, "proc").length, expected, `${what}: ${statement}`);
+  }
+});
+
+Deno.test("jjsz pin check: awaitedCall reads exactly `await <callee>(...)` as a whole statement and nothing that resembles it", async () => {
+  const table: Array<[string, string, string, boolean]> = [
+    ["an awaited call", "await kill();", "kill", true],
+    ["an awaited call with an argument", "await kill(1);", "kill", true],
+    ["an awaited dotted call", "await chrome.proc.kill();", "chrome.proc.kill", true],
+    ["a call that is not awaited", "kill();", "kill", false],
+    ["a call whose result is voided (the shape a no-floating-promises lint produces)", "void kill();", "kill", false],
+    ["an awaited call of another callee", "await other();", "kill", false],
+    ["an awaited call through a member of the callee name", "await holder.kill();", "kill", false],
+    ["an awaited call that is not the whole statement", "const done = await kill();", "kill", false],
+    ["an awaited call under a condition", "if (cond) await kill();", "kill", false],
+    ["an await of a value that is not a call", "await kill;", "kill", false],
+    ["an awaited constructor call has a callee and is not a call", "await new kill();", "kill", false],
+  ];
+  for (const [what, statement, callee, expected] of table) {
+    const program = await parseTs(
+      `export {};\nconst kill: any = () => 1, other: any = () => 1, holder: any = { kill: () => 1 }, chrome: any = { proc: { kill: () => 1 } }, cond = true;\n${statement}`,
+    );
+    const last: Ast = program.body[program.body.length - 1];
+    assertEquals(awaitedCall(last, callee) !== null, expected, `${what}: ${statement}`);
   }
 });
 
