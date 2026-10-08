@@ -536,6 +536,8 @@ export async function completeEnrollmentPromotion(origin, gen, { commitGuard = n
 /** Recovery never consumes SW-only run tokens; it sees just bounded
  * origin/generation identifiers while the durable decision copy stays inside
  * the registry. `completeEnrollmentPromotion` revalidates it under the lock.
+ * `promotion-retry` remains readable solely for profiles written by the
+ * earlier D2 checkpoint; current code creates only `promotion-pending`.
  */
 export async function listPendingEnrollmentPromotions() {
   const map = await enrolledMap();
