@@ -684,6 +684,21 @@ function formatCheckDetail(detail) {
   }
   return ` — ${serialized}`;
 }
+
+// Frontier tracking for abnormal exit diagnosis (chrome-agent-platform-9ud9e).
+// Tracks the last completed assertion and the next expected (or active) assertion
+// so any abnormal abort names the exact frontier rather than leaving a bare exit code.
+let lastCompletedCheck = null;
+let lastStartedCheck = null;
+
+function updateFrontier(completedName) {
+  lastCompletedCheck = completedName;
+  if (typeof EXPECTED !== "undefined" && Array.isArray(EXPECTED)) {
+    const idx = EXPECTED.indexOf(completedName);
+    lastStartedCheck = idx >= 0 && idx + 1 < EXPECTED.length ? EXPECTED[idx + 1] : null;
+  }
+}
+
 function checkShutdown(name, cond, detail) {
   // Shutdown checks run in the run's finally block — on an ABORT they fire
   // mid-sequence (out of band), so they report honestly but never enter the
@@ -696,20 +711,24 @@ function checkShutdown(name, cond, detail) {
 }
 function check(name, cond, detail) {
   if (ran.has(name)) throw new Error(`duplicate assertion: ${name}`);
+  lastStartedCheck = name;
   ran.add(name);
   const owner = EXPECTED_RED.get(name);
   if (owner && !cond) {
     results.push(detail === undefined ? { name, pass: false, expectedRed: owner } : { name, pass: false, expectedRed: owner, detail });
     console.log(`EXPECTED-RED (${owner}): ${name}${formatCheckDetail(detail)}`);
+    updateFrontier(name);
     return;
   }
   if (owner && cond) {
     results.push({ name, pass: false, unexpectedGreen: owner });
     console.log(`UNEXPECTED-GREEN: ${name} — now passes; remove it from EXPECTED_RED (${owner})`);
+    updateFrontier(name);
     return;
   }
   results.push(!cond && detail !== undefined ? { name, pass: false, detail } : { name, pass: !!cond });
   console.log(`${cond ? "PASS" : "FAIL"}: ${name}${cond ? "" : formatCheckDetail(detail)}`);
+  updateFrontier(name);
   if (typeof Deno !== "undefined" && Deno.env?.get?.("CAP_JOURNEY_STOP_AFTER") === name) {
     throw new Error(`CAP_JOURNEY_STOP_AFTER: ${name}`);
   }
@@ -1098,6 +1117,56 @@ const EXPECTED = [
 
 const evidenceFiles = [];
 
+// Frontier initialization: the first assertion that will run
+lastStartedCheck = EXPECTED[0] ?? null;
+
+let abnormalReported = false;
+function printAbnormalExitSummary(context) {
+  if (abnormalReported) return;
+  abnormalReported = true;
+  const line = (s) => {
+    console.log(s);
+    try {
+      console.error(s);
+    } catch {
+      // ignore
+    }
+  };
+  const started = context?.lastStartedCheck ?? lastStartedCheck;
+  const completed = context?.lastCompletedCheck ?? lastCompletedCheck;
+  line("\n=== ABNORMAL JOURNEY EXIT ===");
+  line(`reason:                ${context?.reason ?? "unknown"}`);
+  line(`last completed check:  ${completed ? `"${completed}"` : "(none)"}`);
+  line(`frontier check:        ${started ? `"${started}"` : "(none)"}`);
+  if (typeof context?.missingCount === "number" && context.missingCount > 0) {
+    line(`unreached checks:      ${context.missingCount} downstream checks were NOT REACHED`);
+  }
+  if (context?.error !== undefined && context?.error !== null) {
+    const errObj = context.error;
+    const detail = errObj?.stack || String(errObj?.message ?? errObj);
+    line(`error:                 ${detail}`);
+  }
+  line("==============================\n");
+}
+
+let uncaughtJourneyException: any = null;
+if (typeof globalThis !== "undefined") {
+  globalThis.addEventListener?.("unhandledrejection", (ev: any) => {
+    uncaughtJourneyException = ev?.reason ?? ev;
+    printAbnormalExitSummary({
+      reason: `unhandled promise rejection: ${String(uncaughtJourneyException?.message ?? uncaughtJourneyException)}`,
+      error: uncaughtJourneyException,
+    });
+  });
+  globalThis.addEventListener?.("error", (ev: any) => {
+    uncaughtJourneyException = ev?.error ?? ev;
+    printAbnormalExitSummary({
+      reason: `uncaught error event: ${String(uncaughtJourneyException?.message ?? uncaughtJourneyException)}`,
+      error: uncaughtJourneyException,
+    });
+  });
+}
+
 // Minimal PNG decoder (deno): inflate the IDAT and undo the per-scanline
 // filters, returning { width, height, rgba } so the journey can sample the
 // ACTUAL rendered pixels of a region — the honest proof that the open picker
@@ -1222,6 +1291,7 @@ async function main() {
   let port;
   let ws;
   let cdp;
+  let mainException: any = null;
   // qk7p flagged a CDP evaluate timeout as environmental. 9t1p: that verdict is
   // only true when the BOX says so, so the abort now carries the reading that
   // decided it (null until an evaluate timeout is actually classified).
@@ -8816,6 +8886,7 @@ async function main() {
       console.error("fixture.shutdown failed:", String(e?.message ?? e));
     });
   } catch (e) {
+    mainException = e;
     // chrome-agent-platform-qk7p: a CDP evaluate that exceeds the budget under
     // concurrent-lane load is an ENVIRONMENTAL verdict (measured: healthy calls
     // <1 s; abort runs show one >30 s call at a varying position), not a
@@ -8843,6 +8914,7 @@ async function main() {
       console.log(`journey early stop: ${String(e?.message ?? e)}`);
     } else {
       console.error("journey failure:", String(e?.message ?? e));
+      console.log("journey failure: " + String(e?.message ?? e));
     }
     try {
       await withTimeout(fixture.shutdown(), 8000, "fixture.shutdown").catch(
@@ -8934,6 +9006,23 @@ async function main() {
       }
     }
     check("assertion order matches EXPECTED", orderOk);
+
+    if (missing.length > 0) {
+      const reason = mainException
+        ? `uncaught exception: ${String(mainException?.message ?? mainException)}`
+        : (uncaughtJourneyException
+          ? `unhandled rejection/error: ${String(uncaughtJourneyException?.message ?? uncaughtJourneyException)}`
+          : (evaluateTimeoutVerdict
+            ? `cdp evaluate timeout: ${evaluateTimeoutVerdict.reason}`
+            : (cdp?.fatalEvents?.length
+              ? `cdp fatal protocol event: ${cdp.fatalEvents.join("; ")}`
+              : "silent premature exit: main() exited before reaching the remaining checks without throwing")));
+      printAbnormalExitSummary({
+        reason,
+        error: mainException ?? uncaughtJourneyException,
+        missingCount: missing.length,
+      });
+    }
 
     const expectedRed = results.filter((r) => r.expectedRed).length;
     const failed = results.filter((r) => !r.pass && !r.expectedRed).length;
