@@ -172,40 +172,64 @@ try {
   await send("Page.enable", {}, ntpSession);
   await sleep(1500);
 
-  // 3. Execute injected table extractor on fixture page via CDP
-  console.log("[journey] executing injected table extractor on fixture page");
+  // 3. Execute registered extract_tables tool via extension service worker
+  console.log("[journey] executing registered extract_tables tool via browser.callTool");
   const evalResult = await send("Runtime.evaluate", {
-    expression: `(${injectedTableExtractor.toString()})(${JSON.stringify(TABLE_EXTRACTOR_LIMITS)})`,
+    expression: `(async () => {
+      // Find the fixture tab
+      const allTabs = await chrome.tabs.query({});
+      const target = allTabs.find(t => t.url && t.url.includes("127.0.0.1"));
+      if (!target) throw new Error("fixture tab not found");
+
+      // Set browser control grant
+      await chrome.storage.local.set({ "cap:browserControlGrant": { allowed: true } });
+
+      // Call the registered tool via the extension message bus to the service worker
+      const res = await chrome.runtime.sendMessage({
+        type: "browser.callTool",
+        name: "extract_tables",
+        args: { tabId: target.id, asArtifact: true },
+        approved: true,
+      });
+
+      return { tabId: target.id, result: res };
+    })()`,
     awaitPromise: true,
     returnByValue: true,
-  }, fixtureSession);
+  }, ntpSession);
 
   if (evalResult.result?.exceptionDetails) {
     const desc = evalResult.result.exceptionDetails.exception?.description || evalResult.result.exceptionDetails.text;
     throw new Error(`Execution failed: ${desc}`);
   }
 
-  const result = evalResult.result?.result?.value;
-  if (!result || typeof result !== "object") {
+  const evalPayload = evalResult.result?.result?.value;
+  if (!evalPayload || !evalPayload.result) {
     throw new Error(`Unexpected eval response: ${JSON.stringify(evalResult)}`);
   }
+  const { result } = evalPayload;
   console.log("[journey] extract_tables result count:", result.count);
   console.log("[journey] tables found:", result.tables?.map((t: any) => t.caption));
+  console.log("[journey] returned artifactId:", result.artifactId);
 
-  if (result.count !== 3 || result.tables?.length !== 3) {
-    throw new Error(`Unexpected extract_tables count: ${result.count}`);
+  // Assert tool return contract: permission gate passed, executeScript dispatched, artifact created
+  if (!result.untrusted || result.count !== 3 || !result.artifactId || !result.artifact) {
+    throw new Error(`Unexpected extract_tables result: ${JSON.stringify(result)}`);
   }
 
-  // 4. Save extracted table as tabular artifact and render preview in NTP conversation thread
-  console.log("[journey] creating tabular artifact and mounting preview in conversation thread");
+  // 4. Retrieve asset from storage (asserting getAsset success) and render preview in NTP conversation thread
+  console.log("[journey] retrieving asset from storage and mounting preview in conversation thread");
   const mountResult = await send("Runtime.evaluate", {
     expression: `(async () => {
-      const { createTabularArtifact } = await import(chrome.runtime.getURL("lib/table-extractor.js"));
-      const extracted = ${JSON.stringify(result.tables[0])};
-      const artifactRes = await createTabularArtifact(extracted, {
-        name: extracted.caption,
-        origin: "master",
-      });
+      const { getAsset } = await import(chrome.runtime.getURL("lib/artifacts.js"));
+      const assetRes = await getAsset("master", ${JSON.stringify(result.artifactId)});
+      if (!assetRes || !assetRes.ok || !assetRes.asset) {
+        throw new Error("getAsset failed for artifact: " + JSON.stringify(assetRes));
+      }
+      const canonicalData = JSON.parse(assetRes.asset.content);
+      if (!canonicalData || !Array.isArray(canonicalData.rows) || canonicalData.rows.length === 0) {
+        throw new Error("Invalid canonical table content in asset");
+      }
 
       const conv = document.querySelector("agent-conversation") || document.createElement("agent-conversation");
       if (!conv.isConnected) document.body.appendChild(conv);
@@ -219,26 +243,34 @@ try {
       const iconSpan = document.createElement("span");
       iconSpan.textContent = "📊";
       const captionSpan = document.createElement("span");
-      captionSpan.textContent = "Extracted Tabular Artifact: " + extracted.caption;
+      captionSpan.textContent = "Extracted Tabular Artifact: " + (canonicalData.columns[0]?.header || "Table");
       titleDiv.appendChild(iconSpan);
       titleDiv.appendChild(captionSpan);
       card.appendChild(titleDiv);
 
       const metaDiv = document.createElement("div");
       metaDiv.style.cssText = "font-size: 13px; color: #57609a; margin-bottom: 16px;";
-      metaDiv.textContent = "Artifact ID: " + artifactRes.artifactId + " • 3 tables extracted • Accepted directly by table_* tools";
+      metaDiv.textContent = "Artifact ID: " + ${JSON.stringify(result.artifactId)} + " • 3 tables extracted • Accepted directly by table_* tools";
       card.appendChild(metaDiv);
 
       const preview = document.createElement("table-preview");
+      preview.data = canonicalData;
       card.appendChild(preview);
       document.body.prepend(card);
 
-      const { getAsset } = await import(chrome.runtime.getURL("lib/artifacts.js"));
-      const assetRes = await getAsset("master", artifactRes.artifactId);
-      if (assetRes.ok && preview) {
-        preview.data = JSON.parse(assetRes.asset.content);
-      }
-      return { ok: true, artifactId: artifactRes.artifactId };
+      // Frame DOM inspection verifying rendered table elements exist in frame
+      const previewTable = preview.shadowRoot?.querySelector("table") || preview.querySelector("table");
+      const renderedRows = (previewTable?.querySelectorAll("tr") || []).length;
+      const ths = (previewTable?.querySelectorAll("th") || []).length;
+
+      return {
+        ok: true,
+        artifactId: ${JSON.stringify(result.artifactId)},
+        rowCount: canonicalData.rows.length,
+        colCount: canonicalData.columns.length,
+        renderedRows,
+        renderedThs: ths,
+      };
     })()`,
     awaitPromise: true,
     returnByValue: true,
@@ -247,6 +279,12 @@ try {
   if (mountResult.result?.exceptionDetails) {
     const desc = mountResult.result.exceptionDetails.exception?.description || mountResult.result.exceptionDetails.text;
     throw new Error(`Mounting failed: ${desc}`);
+  }
+
+  const mountValue = mountResult.result?.result?.value;
+  console.log("[journey] frame inspection of table-preview:", mountValue);
+  if (!mountValue || !mountValue.ok || mountValue.renderedRows < 2) {
+    throw new Error(`Frame inspection failed: ${JSON.stringify(mountValue)}`);
   }
 
   await sleep(1500);

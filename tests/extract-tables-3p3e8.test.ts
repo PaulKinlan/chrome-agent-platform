@@ -524,6 +524,48 @@ Deno.test("injectedTableExtractor: whole-page table, cell, and time budgets enfo
   const resTimeout = injectedTableExtractor({ customDocument: doc3, maxExecutionTimeMs: 0 });
   assertEquals(resTimeout.pageTruncated, true);
   assertEquals(resTimeout.pageTruncationReason, "timeout");
+
+  // Test 8d: Hostile <thead> with 50 rows capped at maxHeaderRows (20) (P1a item 1)
+  const doc4 = createMockDocument();
+  const tblHostileHead = new MockNode("table");
+  const theadHostile = new MockNode("thead");
+  for (let hr = 0; hr < 50; hr++) {
+    const htr = new MockNode("tr");
+    const th = new MockNode("th"); th.appendChild(new MockNode("#text", 3, `H${hr}`));
+    htr.appendChild(th);
+    theadHostile.appendChild(htr);
+  }
+  tblHostileHead.appendChild(theadHostile);
+  const tbodyHostile = new MockNode("tbody");
+  const dtr = new MockNode("tr");
+  const dtd = new MockNode("td"); dtd.appendChild(new MockNode("#text", 3, "data"));
+  dtr.appendChild(dtd); tbodyHostile.appendChild(dtr);
+  tblHostileHead.appendChild(tbodyHostile);
+  doc4.body.appendChild(tblHostileHead);
+
+  const resHostileHead = injectedTableExtractor({ customDocument: doc4, maxHeaderRows: 20 });
+  assertEquals(resHostileHead.tables.length, 1);
+  assertEquals(resHostileHead.tables[0].truncated, true);
+  assertEquals(resHostileHead.tables[0].truncationReason, "row-limit");
+
+  // Test 8e: Card list byte limit truncation (P1a item 3)
+  const doc5 = createMockDocument();
+  const cardList = new MockNode("div");
+  cardList.setAttribute("class", "cards");
+  for (let c = 0; c < 5; c++) {
+    const cardEl = new MockNode("div");
+    const h2 = new MockNode("h2"); h2.appendChild(new MockNode("#text", 3, `Plan ${c}`));
+    const span = new MockNode("span"); span.setAttribute("class", "price"); span.appendChild(new MockNode("#text", 3, `$${c}0`));
+    cardEl.appendChild(h2);
+    cardEl.appendChild(span);
+    cardList.appendChild(cardEl);
+  }
+  doc5.body.appendChild(cardList);
+
+  const resCardByteLimit = injectedTableExtractor({ customDocument: doc5, maxBytes: 1 });
+  assertEquals(resCardByteLimit.tables.length, 1);
+  assertEquals(resCardByteLimit.tables[0].truncated, true);
+  assertEquals(resCardByteLimit.tables[0].truncationReason, "byte-limit");
 });
 
 // ── 9. DOM-root scope: extractTablesFromDom must not escape root (P2) ───────────

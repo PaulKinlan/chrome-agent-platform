@@ -20,6 +20,7 @@ export const TABLE_EXTRACTOR_LIMITS = Object.freeze({
   maxBytes: 1024 * 1024, // 1 MB per table
   maxCellChars: 2000,    // Truncate cell text length AT SOURCE before copying
   maxCaptionChars: 300,  // Truncate caption text length AT SOURCE
+  maxHeaderRows: 20,     // Bounded header row allocation
   maxTablesPerPage: 50,  // Whole-page table count cap
   maxTotalCellsPerPage: 50000, // Aggregate whole-page cell extraction work budget
   maxExecutionTimeMs: 2500,    // 2.5 second time budget
@@ -140,9 +141,11 @@ export async function createTabularArtifact(tableData, {
  * via chrome.scripting.executeScript.
  *
  * Implements:
- * - Live/bounded collection traversal before materialization.
+ * - Live/bounded collection traversal before materialization (no full Array.from/slice).
+ * - Bounded <thead> collection and allocation.
+ * - Incremental live walks with budget checks for ARIA grids and cards.
  * - Text truncation AT SOURCE (during node walk) for cells and captions.
- * - Accurate UTF-8 byte measurement via TextEncoder, failing closed on overflow.
+ * - Accurate UTF-8 byte measurement via TextEncoder, failing closed on overflow (including card path).
  * - General 2D span-occupancy grid advancing past occupied slots for colspan/rowspan collisions.
  * - Headerless table inference (synthesizes column names when all cells are td).
  * - Scoped DOM root handling (never escapes caller's subtree).
@@ -157,6 +160,7 @@ export function injectedTableExtractor({
   maxBytes = 1024 * 1024,
   maxCellChars = 2000,
   maxCaptionChars = 300,
+  maxHeaderRows = 20,
   maxTablesPerPage = 50,
   maxTotalCellsPerPage = 50000,
   maxExecutionTimeMs = 2500,
@@ -259,6 +263,26 @@ export function injectedTableExtractor({
     return true;
   }
 
+  // Incremental, bounded element finder that avoids full querySelectorAll array allocation
+  function findMatchingElements(root, isMatch, maxCount) {
+    var results = [];
+    function walk(node) {
+      if (results.length >= maxCount) return;
+      if (!checkBudget()) return;
+      if (node !== root && isMatch(node)) {
+        results.push(node);
+        if (results.length >= maxCount) return;
+      }
+      var ch = node.children || [];
+      for (var i = 0; i < ch.length; i++) {
+        walk(ch[i]);
+        if (results.length >= maxCount) break;
+      }
+    }
+    walk(root);
+    return results;
+  }
+
   var tables = [];
   var seen = new Set();
 
@@ -284,7 +308,6 @@ export function injectedTableExtractor({
       list.push(rootNode);
       return list;
     }
-    // Live getElementsByTagName if available, otherwise bounded DFS
     if (rootNode.getElementsByTagName) {
       var liveColl = rootNode.getElementsByTagName("table");
       for (var idx = 0; idx < liveColl.length; idx++) {
@@ -361,33 +384,46 @@ export function injectedTableExtractor({
         }
         dataRows.push(sec);
       } else if (secTag === "THEAD") {
-        for (var thr = 0; thr < (sec.children || []).length; thr++) {
-          if (sec.children[thr].tagName && sec.children[thr].tagName.toUpperCase() === "TR") {
-            theadRows.push(sec.children[thr]);
+        var theadChildren = sec.children || [];
+        for (var thr = 0; thr < theadChildren.length; thr++) {
+          if (theadChildren[thr].tagName && theadChildren[thr].tagName.toUpperCase() === "TR") {
+            if (theadRows.length >= maxHeaderRows) {
+              truncated = true;
+              if (!truncationReason) truncationReason = "row-limit";
+              break;
+            }
+            if (!checkBudget()) {
+              truncated = true;
+              if (!truncationReason) truncationReason = pageTruncationReason;
+              break;
+            }
+            theadRows.push(theadChildren[thr]);
           }
         }
       } else if (secTag === "TBODY" || secTag === "TFOOT") {
-        for (var tbr = 0; tbr < (sec.children || []).length; tbr++) {
-          if (sec.children[tbr].tagName && sec.children[tbr].tagName.toUpperCase() === "TR") {
+        var bodyChildren = sec.children || [];
+        for (var tbr = 0; tbr < bodyChildren.length; tbr++) {
+          if (bodyChildren[tbr].tagName && bodyChildren[tbr].tagName.toUpperCase() === "TR") {
             if (dataRows.length >= maxRows) {
               truncated = true;
               truncationReason = "row-limit";
               break;
             }
-            dataRows.push(sec.children[tbr]);
+            dataRows.push(bodyChildren[tbr]);
           }
         }
       }
-      if (truncated) break;
+      if (dataRows.length >= maxRows) break;
     }
 
     var rawHeaders = [];
 
-    // Header extraction
+    // Header extraction bounded to maxHeaderRows with budget checks
     if (theadRows.length > 0) {
       var headGrid = [];
       var headActiveRowSpans = [];
       for (var hr = 0; hr < theadRows.length; hr++) {
+        if (!checkBudget()) break;
         var htr = theadRows[hr];
         var hrow = new Array(maxColumns).fill(null);
         for (var si = headActiveRowSpans.length - 1; si >= 0; si--) {
@@ -552,14 +588,19 @@ export function injectedTableExtractor({
     }
   }
 
-  // 2. ARIA grids / tables: [role="grid"], [role="table"]
+  // 2. ARIA grids / tables: [role="grid"], [role="table"] (bounded incremental walk)
+  function isAriaGrid(el) {
+    if (!el || el.nodeType !== 1 || el.tagName === "TABLE" || seen.has(el)) return false;
+    var role = el.getAttribute ? el.getAttribute("role") : null;
+    return role === "table" || role === "grid";
+  }
+
+  var remainingGridSlots = Math.max(0, maxTablesPerPage - tables.length);
   var ariaGrids = [];
-  if (scope.getAttribute && (scope.getAttribute("role") === "table" || scope.getAttribute("role") === "grid")) {
-    if (scope.tagName !== "TABLE") ariaGrids.push(scope);
-  } else if (scope.querySelectorAll) {
-    ariaGrids = Array.prototype.slice.call(scope.querySelectorAll('[role="table"], [role="grid"]')).filter(function (el) {
-      return el.tagName !== "TABLE" && !seen.has(el);
-    });
+  if (scope.getAttribute && isAriaGrid(scope)) {
+    ariaGrids.push(scope);
+  } else {
+    ariaGrids = findMatchingElements(scope, isAriaGrid, remainingGridSlots);
   }
 
   for (var g = 0; g < ariaGrids.length; g++) {
@@ -574,10 +615,18 @@ export function injectedTableExtractor({
     }
     if (!caption) caption = headingBefore(grid) || ("Data Grid " + (tables.length + 1));
 
-    var colHeaders = grid.querySelectorAll ? Array.prototype.slice.call(grid.querySelectorAll('[role="columnheader"]')) : [];
-    var rawHeaders = colHeaders.map(function (ch) { return extractBoundedText(ch, maxCellChars, false); }).slice(0, maxColumns);
+    // Incremental walk for column headers bounded to maxColumns
+    function isColumnHeader(el) {
+      return el && el.nodeType === 1 && el.getAttribute && el.getAttribute("role") === "columnheader";
+    }
+    var colHeaders = findMatchingElements(grid, isColumnHeader, maxColumns);
+    var rawHeaders = colHeaders.map(function (ch) { return extractBoundedText(ch, maxCellChars, false); });
 
-    var allRowEls = grid.querySelectorAll ? Array.prototype.slice.call(grid.querySelectorAll('[role="row"]')) : [];
+    // Incremental walk for ARIA rows bounded to maxRows + 20
+    function isAriaRow(el) {
+      return el && el.nodeType === 1 && el.getAttribute && el.getAttribute("role") === "row";
+    }
+    var allRowEls = findMatchingElements(grid, isAriaRow, maxRows + 20);
     var dataRowEls = allRowEls.filter(function (rEl) {
       return !rEl.querySelector || !rEl.querySelector('[role="columnheader"]');
     });
@@ -601,7 +650,12 @@ export function injectedTableExtractor({
       }
 
       var rEl = dataRowEls[r];
-      var cells = rEl.querySelectorAll ? Array.prototype.slice.call(rEl.querySelectorAll('[role="gridcell"], [role="cell"]')) : [];
+      function isAriaCell(el) {
+        if (!el || el.nodeType !== 1 || !el.getAttribute) return false;
+        var rl = el.getAttribute("role");
+        return rl === "gridcell" || rl === "cell";
+      }
+      var cells = findMatchingElements(rEl, isAriaCell, maxColumns + 1);
       if (cells.length === 0) continue;
 
       var row = [];
@@ -657,13 +711,18 @@ export function injectedTableExtractor({
     }
   }
 
-  // 3. Repeated-card lists
-  var listContainers = [];
-  if (scope.querySelectorAll) {
-    listContainers = Array.prototype.slice.call(
-      scope.querySelectorAll('[role="list"], ul, ol, div.cards, div.pricing, div.grid, section.grid, .card-grid, .speaker-list')
-    ).filter(function (c) { return !seen.has(c); });
+  // 3. Repeated-card lists (bounded incremental walk with UTF-8 byte measurement)
+  function isCardContainer(el) {
+    if (!el || el.nodeType !== 1 || seen.has(el)) return false;
+    var role = el.getAttribute ? el.getAttribute("role") : "";
+    var tag = el.tagName ? el.tagName.toUpperCase() : "";
+    var cls = (el.getAttribute ? (el.getAttribute("class") || "") : "").toLowerCase();
+    if (role === "list" || tag === "UL" || tag === "OL") return true;
+    return /\b(?:cards|pricing|grid|card-grid|speaker-list)\b/.test(cls);
   }
+
+  var remainingCardSlots = Math.max(0, maxTablesPerPage - tables.length);
+  var listContainers = findMatchingElements(scope, isCardContainer, remainingCardSlots);
 
   for (var lc = 0; lc < listContainers.length; lc++) {
     if (!checkBudget()) break;
@@ -698,39 +757,62 @@ export function injectedTableExtractor({
       }
 
       var rec = {};
-      var dts = el.querySelectorAll ? Array.prototype.slice.call(el.querySelectorAll("dt")) : [];
-      for (var d = 0; d < dts.length; d++) {
-        var dt = dts[d];
-        var dd = dt.nextElementSibling && dt.nextElementSibling.tagName === "DD" ? dt.nextElementSibling : null;
-        if (dd) {
-          var k = extractBoundedText(dt, 100, false);
-          if (k) { rec[k] = extractBoundedText(dd, maxCellChars, false); addField(k); }
-        }
-      }
-      var h = el.querySelector ? el.querySelector("h2, h3, h4, h5, h6") : null;
-      if (h && !rec["Title"] && !rec["Name"]) {
-        var field = (container.className && container.className.indexOf("speaker") !== -1) ? "Name" : "Title";
-        rec[field] = extractBoundedText(h, maxCellChars, false);
-        addField(field);
-      }
-      var tagged = el.querySelectorAll ? Array.prototype.slice.call(el.querySelectorAll("[data-field], [class]")) : [];
-      for (var tg = 0; tg < tagged.length; tg++) {
-        var tel = tagged[tg];
-        var df = tel.getAttribute ? tel.getAttribute("data-field") : null;
-        if (df) {
-          var k = clean(df).slice(0, 100);
-          if (k && !rec[k]) { rec[k] = extractBoundedText(tel, maxCellChars, false); addField(k); }
-        } else {
-          var cls = String(tel.className || "").split(/\s+/);
-          for (var cl = 0; cl < cls.length; cl++) {
-            var token = cls[cl].toLowerCase();
-            if (["price", "cost", "role", "topic", "time", "date", "status", "category"].indexOf(token) !== -1) {
-              var key = token.charAt(0).toUpperCase() + token.slice(1);
-              if (!rec[key]) { rec[key] = extractBoundedText(tel, maxCellChars, false); addField(key); }
+      var foundFields = 0;
+
+      // Incremental walk of card children to avoid full descendant materialization
+      function walkCardFields(n, depth) {
+        if (depth > 4 || foundFields >= maxColumns) return;
+        if (!checkBudget()) return;
+        var tag = n.tagName ? n.tagName.toUpperCase() : "";
+        if (tag === "DT") {
+          var dd = n.nextElementSibling && n.nextElementSibling.tagName === "DD" ? n.nextElementSibling : null;
+          if (dd) {
+            var k = extractBoundedText(n, 100, false);
+            if (k && !rec[k]) {
+              rec[k] = extractBoundedText(dd, maxCellChars, false);
+              addField(k);
+              foundFields++;
+            }
+          }
+        } else if (/^H[2-6]$/.test(tag) && !rec["Title"] && !rec["Name"]) {
+          var field = (container.className && container.className.indexOf("speaker") !== -1) ? "Name" : "Title";
+          rec[field] = extractBoundedText(n, maxCellChars, false);
+          addField(field);
+          foundFields++;
+        } else if (n.getAttribute) {
+          var df = n.getAttribute("data-field");
+          if (df) {
+            var k = clean(df).slice(0, 100);
+            if (k && !rec[k]) {
+              rec[k] = extractBoundedText(n, maxCellChars, false);
+              addField(k);
+              foundFields++;
+            }
+          } else {
+            var cls = String(n.getAttribute("class") || "").toLowerCase();
+            var tokens = ["price", "cost", "role", "topic", "time", "date", "status", "category"];
+            for (var tki = 0; tki < tokens.length; tki++) {
+              if (cls.indexOf(tokens[tki]) !== -1) {
+                var key = tokens[tki].charAt(0).toUpperCase() + tokens[tki].slice(1);
+                if (!rec[key]) {
+                  rec[key] = extractBoundedText(n, maxCellChars, false);
+                  addField(key);
+                  foundFields++;
+                  break;
+                }
+              }
             }
           }
         }
+        var ch = n.children || [];
+        for (var ci = 0; ci < ch.length; ci++) {
+          walkCardFields(ch[ci], depth + 1);
+          if (foundFields >= maxColumns) break;
+        }
       }
+
+      walkCardFields(el, 0);
+
       if (Object.keys(rec).length > 0) {
         cardRecords.push(rec);
         totalCellsCount += Object.keys(rec).length;
@@ -741,18 +823,34 @@ export function injectedTableExtractor({
       var caption = clean(container.getAttribute ? (container.getAttribute("aria-label") || "") : "").slice(0, maxCaptionChars) ||
                     headingBefore(container) || ("Card List " + (tables.length + 1));
       var headers = fieldOrder.slice(0, maxColumns);
-      var rows = cardRecords.map(function (rec) {
-        return headers.map(function (hdr) { return rec[hdr] || ""; });
-      });
-      tables.push({
-        caption: caption,
-        headers: headers,
-        rows: rows,
-        rowCount: rows.length,
-        columnCount: headers.length,
-        truncated: cardTruncated || fieldOrder.length > maxColumns,
-        truncationReason: cardTruncationReason || (fieldOrder.length > maxColumns ? "column-limit" : null),
-      });
+      var rows = [];
+      var currentBytes = 0;
+
+      // Measure UTF-8 bytes BEFORE retaining card rows (P1a item 3)
+      for (var cri = 0; cri < cardRecords.length; cri++) {
+        var rec = cardRecords[cri];
+        var row = headers.map(function (hdr) { return rec[hdr] || ""; });
+        var rowBytes = measureBytes(row);
+        if (currentBytes + rowBytes > maxBytes) {
+          cardTruncated = true;
+          cardTruncationReason = "byte-limit";
+          break;
+        }
+        rows.push(row);
+        currentBytes += rowBytes;
+      }
+
+      if (rows.length > 0 || cardTruncated) {
+        tables.push({
+          caption: caption,
+          headers: headers,
+          rows: rows,
+          rowCount: rows.length,
+          columnCount: headers.length,
+          truncated: cardTruncated || fieldOrder.length > maxColumns,
+          truncationReason: cardTruncationReason || (fieldOrder.length > maxColumns ? "column-limit" : null),
+        });
+      }
     }
   }
 
