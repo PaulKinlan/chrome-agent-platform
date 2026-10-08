@@ -650,12 +650,16 @@ export async function launchChrome(opts: {
     // child is not a group leader). This makes descendants identifiable even
     // when Chromium rewrites their command line or a wrapper replaces the binary.
     const spec = setsidSpawnSpec(opts.binary ?? resolveChromiumBinary(), [...args, "--remote-debugging-port=0"]);
+    const env = {
+      ...(opts.env ?? {}),
+      ...(resolvedProfile ? { XDG_CONFIG_HOME: `${resolvedProfile}/.config` } : {}),
+    };
     proc = new Deno.Command(spec.command, {
       args: spec.args,
       stdout: opts.stdout ?? "null",
       stderr: "piped",
       ...(opts.clearEnv ? { clearEnv: true } : {}),
-      ...(opts.env ? { env: opts.env } : {}),
+      ...(Object.keys(env).length > 0 ? { env } : {}),
     }).spawn();
   } catch (e) {
     lock.release();
@@ -780,6 +784,82 @@ export async function launchChrome(opts: {
  * If no profile is available, a launched group's members are still killed and
  * verified; a bare process without either group or profile is reaped alone.
  */
+const PGREP = "/usr/bin/pgrep";
+const PKILL = "/usr/bin/pkill";
+
+/**
+ * Reap detached chrome_crashpad_handler processes whose database was isolated
+ * to this profile via XDG_CONFIG_HOME. Fails closed with survivor verification.
+ */
+export async function reapCrashpadHandler(profilePath: string): Promise<void> {
+  if (!profilePath || typeof profilePath !== "string") {
+    return;
+  }
+  const normalized = profilePath.replace(/\/+$/, "");
+  const home = Deno.env.get("HOME");
+  if (
+    !normalized ||
+    normalized.length <= 5 ||
+    normalized.endsWith("/..") ||
+    !normalized.startsWith("/") ||
+    normalized === "/" ||
+    normalized === "/home" ||
+    (home && normalized === home.replace(/\/+$/, ""))
+  ) {
+    return;
+  }
+  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = `chrome_crashpad_handler.*${escaped}(/| |$)`;
+
+  let check: Deno.CommandOutput;
+  try {
+    check = await new Deno.Command(PGREP, {
+      args: ["-f", "--", pattern],
+      stdout: "null",
+      stderr: "null",
+    }).output();
+  } catch (e) {
+    throw new Error(`pgrep failed (${(e as Error)?.message ?? e}) — cannot verify crashpad handlers`);
+  }
+  if (check.code === 1) return;
+  if (check.code !== 0) {
+    throw new Error(`pgrep exited ${check.code} checking for crashpad handler`);
+  }
+
+  let kill: Deno.CommandOutput;
+  try {
+    kill = await new Deno.Command(PKILL, {
+      args: ["-9", "-f", "--", pattern],
+      stdout: "null",
+      stderr: "null",
+    }).output();
+  } catch (e) {
+    throw new Error(`pkill failed (${(e as Error)?.message ?? e}) — cannot reap crashpad handler`);
+  }
+  if (kill.code !== 0 && kill.code !== 1) {
+    throw new Error(`pkill exited ${kill.code} reaping crashpad handler`);
+  }
+
+  for (let i = 0; i < 20; i++) {
+    let poll: Deno.CommandOutput;
+    try {
+      poll = await new Deno.Command(PGREP, {
+        args: ["-f", "--", pattern],
+        stdout: "null",
+        stderr: "null",
+      }).output();
+    } catch (e) {
+      throw new Error(`pgrep failed (${(e as Error)?.message ?? e}) — cannot confirm crashpad cleanup`);
+    }
+    if (poll.code === 1) return;
+    if (poll.code !== 0) {
+      throw new Error(`pgrep exited ${poll.code} confirming crashpad cleanup`);
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`chrome_crashpad_handler survived cleanup matching ${pattern}`);
+}
+
 export async function teardownChrome(
   target: LaunchedChrome | Deno.ChildProcess | { proc?: Deno.ChildProcess | null; profile?: string; processGroup?: number } | null | undefined,
   profile?: string,
@@ -796,6 +876,7 @@ export async function teardownChrome(
     const profilePath = raw.startsWith("user-data-dir=") ? raw.slice("user-data-dir=".length) : raw;
     if (profilePath && typeof profilePath === "string" && profilePath.length > 5 && !profilePath.endsWith("/..")) {
       const normalized = profilePath.replace(/\/+$/, "");
+      await reapCrashpadHandler(normalized);
       const home = Deno.env.get("HOME");
       if (
         normalized.startsWith("/") &&
