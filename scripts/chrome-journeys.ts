@@ -9066,8 +9066,10 @@ async function main() {
     let removed = false;
     let clean = true;
     try {
-      if (proc && profile) await teardownJourneyChrome(proc, profile);
-      else if (profile) await runBounded(RM, ["-rf", profile]);
+      if (profile) {
+        if (proc) await teardownJourneyChrome(proc, profile);
+        else await runBounded(RM, ["-rf", profile]);
+      }
       if (profile) {
         removed = !(await Deno.stat(profile).then(() => true).catch(() => false));
         if (removed) {
