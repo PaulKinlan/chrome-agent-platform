@@ -434,8 +434,13 @@ Deno.test("cfc9c: teardownChrome reaps detached crashpad handlers scoped to prof
 
 Deno.test("cfc9c: reapCrashpadHandler returns cleanly when no handler runs", async () => {
   const { reapCrashpadHandler } = await import("../scripts/lib/chrome-launch.ts");
-  // A non-existent profile path should return cleanly (pgrep exit 1)
-  await reapCrashpadHandler("/tmp/nonexistent-profile-cfc9c-" + Date.now());
+  const tempDir = Deno.makeTempDirSync({ prefix: "cfc9c-nonexistent-" });
+  try {
+    // A non-existent profile path should return cleanly (pgrep exit 1)
+    await reapCrashpadHandler(tempDir + "/nonexistent-profile");
+  } finally {
+    try { Deno.removeSync(tempDir, { recursive: true }); } catch { /* ignore */ }
+  }
 });
 
 Deno.test("cfc9c: reapCrashpadHandler refuses malformed, empty, or root paths and does not kill neighbor handlers", async () => {
