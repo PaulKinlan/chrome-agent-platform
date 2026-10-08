@@ -366,3 +366,48 @@ Deno.test("9ud9e: resetWatchdog arms timer and clearWatchdog cancels it cleanly"
   assertEquals(harness.getTimer(), null, "watchdog timer must be cleared");
   assertEquals(exitCalls, 0, "must not have exited");
 });
+
+Deno.test("9ud9e: process-level unhandledrejection and error events trigger immediate frontier diagnostic", () => {
+  const handlerMatch = source.match(/function computeUnreachedCount\(\) \{[\s\S]*?\n\}\n\n\/\/ Minimal PNG/);
+  assert(handlerMatch, "unhandled handlers must be found");
+
+  const listeners: Record<string, (ev: any) => void> = {};
+  const fakeGlobalThis = {
+    addEventListener: (type: string, fn: any) => { listeners[type] = fn; },
+  };
+
+  const logs: string[] = [];
+  const fakeConsole = {
+    log: (...args: any[]) => logs.push(args.join(" ")),
+    error: (...args: any[]) => logs.push(args.join(" ")),
+  };
+
+  const handlerBody = handlerMatch[0].replace("\n\n// Minimal PNG", "");
+
+  const harness = new Function(
+    "globalThis", "console", "EXPECTED", "listeners",
+    `let abnormalReported = false;
+     let lastCompletedCheck = "after disabling that recipe the four agent surfaces agree (0) again";
+     let lastStartedCheck = "create dialog: the template select is the first step (Custom default; Starter/Other/Scheduled groups; no gallery grid)";
+     let ran = new Set(["after disabling that recipe the four agent surfaces agree (0) again"]);
+     const META_CHECKS = new Set(["assertion set exact (no missing/extra checks)", "assertion order matches EXPECTED"]);
+     ${printMatch[0]}
+     ${handlerBody}
+     return { isAbnormalReported: () => abnormalReported };`,
+  )(fakeGlobalThis, fakeConsole, EXPECTED, listeners);
+
+  assert(listeners["unhandledrejection"], "must attach unhandledrejection listener");
+  assert(listeners["error"], "must attach error listener");
+
+  // Fire an unhandled rejection
+  listeners["unhandledrejection"]({ reason: new Error("Detached promise rejected: CDP target crashed") });
+
+  assertEquals(harness.isAbnormalReported(), true);
+  const logText = logs.join("\n");
+  assert(logText.includes("=== ABNORMAL JOURNEY EXIT ==="));
+  assert(logText.includes("reason:                unhandled promise rejection: Detached promise rejected: CDP target crashed"));
+  assert(logText.includes('last completed check:  "after disabling that recipe the four agent surfaces agree (0) again"'));
+  assert(logText.includes('frontier check:        "create dialog: the template select is the first step (Custom default; Starter/Other/Scheduled groups; no gallery grid)"'));
+  assert(logText.includes("unreached checks:      375 downstream checks were NOT REACHED"));
+  assert(logText.includes("Detached promise rejected: CDP target crashed"));
+});

@@ -1246,15 +1246,36 @@ function evaluateJourneyFinalization({
   return { status: "clean_pass" };
 }
 
-let uncaughtJourneyException: any = null;
+function computeUnreachedCount() {
+  if (typeof EXPECTED !== "undefined" && Array.isArray(EXPECTED) && typeof ran !== "undefined") {
+    return EXPECTED.filter((n) => (typeof META_CHECKS !== "undefined" ? !META_CHECKS.has(n) : true) && !ran.has(n)).length;
+  }
+  return undefined;
+}
+
+let uncaughtJourneyException = null;
 if (typeof globalThis !== "undefined") {
-  globalThis.addEventListener?.("unhandledrejection", (ev: any) => {
+  globalThis.addEventListener?.("unhandledrejection", (ev) => {
     uncaughtJourneyException = ev?.reason ?? ev;
-    console.error(`unhandled promise rejection at frontier "${lastStartedCheck}" (last completed: "${lastCompletedCheck}"):`, uncaughtJourneyException);
+    const missingCount = computeUnreachedCount();
+    printAbnormalExitSummary({
+      reason: `unhandled promise rejection: ${String(uncaughtJourneyException?.message ?? uncaughtJourneyException)}`,
+      error: uncaughtJourneyException,
+      lastStartedCheck,
+      lastCompletedCheck,
+      missingCount,
+    });
   });
-  globalThis.addEventListener?.("error", (ev: any) => {
+  globalThis.addEventListener?.("error", (ev) => {
     uncaughtJourneyException = ev?.error ?? ev;
-    console.error(`uncaught error event at frontier "${lastStartedCheck}" (last completed: "${lastCompletedCheck}"):`, uncaughtJourneyException);
+    const missingCount = computeUnreachedCount();
+    printAbnormalExitSummary({
+      reason: `uncaught error event: ${String(uncaughtJourneyException?.message ?? uncaughtJourneyException)}`,
+      error: uncaughtJourneyException,
+      lastStartedCheck,
+      lastCompletedCheck,
+      missingCount,
+    });
   });
 }
 
