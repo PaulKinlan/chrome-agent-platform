@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.599] — 2026-10-08
+- Anchor the composer mention and model popups to their triggering controls with no JavaScript geometry, keeping the same keyboard and ARIA behaviour.
+
 ## [0.3.598] — 2026-10-08
 - Require owner-visible digest approval before model-authored script registration, and reject scripts that register more tool matches than the documented limit.
 
