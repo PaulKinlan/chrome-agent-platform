@@ -89,6 +89,12 @@ export const RETAINED = {
     "No page mounts the preference bridge (docs/PREFERENCE-PERCOLATION.md describes the design); only tests/security.test.ts imports it to pin the message validation.",
 };
 
+// Exported functions with no caller in reached files that are deliberately kept
+// with an explicit reason (e.g. public API surface, external spec parity, or planned cut).
+// Rot (entry is deleted or becomes reached) is reported as stale.
+export const RETAINED_EXPORTS = {
+};
+
 // Parse the esbuild entries out of build.mjs: `const X = path.join(STAGE, "<dist rel>")`
 // paired with `entryPoints: [path.join(EXT_DIR, "<source rel>")], outfile: X`.
 export function parseBundleMap(buildSource) {
@@ -157,6 +163,237 @@ export function candidateRefs(rel, source) {
   return refs.map((r) => r.split(/[?#]/)[0]).filter((r) => PATH_LIKE.test(r));
 }
 
+/**
+ * Extract exported function and symbol names from a JS/MJS source.
+ * Excludes comments using acorn's tokenizer.
+ */
+export function exportedFunctions(source, file = "<js>") {
+  const exports = new Set();
+  const tokens = [];
+  try {
+    for (const tok of tokenizer(source, { ecmaVersion: "latest", sourceType: "module", allowHashBang: true })) {
+      tokens.push(tok);
+    }
+  } catch (error) {
+    throw new Error(`check-reachability: cannot tokenize ${file} for exports: ${error?.message ?? error}`);
+  }
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.type?.keyword === "export" || t.type?.label === "export") {
+      let j = i + 1;
+      if (j >= tokens.length) break;
+
+      // export default function foo
+      if (tokens[j].type?.keyword === "default") {
+        j++;
+        if (tokens[j]?.type?.keyword === "function") {
+          j++;
+          if (tokens[j]?.type?.label === "name") {
+            exports.add(tokens[j].value);
+          }
+        }
+        continue;
+      }
+
+      // export async function foo
+      if (tokens[j]?.type?.label === "name" && tokens[j]?.value === "async") {
+        j++;
+      }
+
+      // export function foo
+      if (tokens[j]?.type?.keyword === "function" || tokens[j]?.type?.label === "function") {
+        j++;
+        if (tokens[j]?.type?.label === "name") {
+          exports.add(tokens[j].value);
+        }
+        continue;
+      }
+
+      // export const / let / var foo = ...
+      if (
+        ["const", "var"].includes(tokens[j]?.type?.keyword) ||
+        (tokens[j]?.type?.label === "name" && ["let", "const", "var"].includes(tokens[j]?.value))
+      ) {
+        j++;
+        if (tokens[j]?.type?.label === "name") {
+          exports.add(tokens[j].value);
+        }
+        continue;
+      }
+
+      // export { a, b as c }
+      if (tokens[j]?.type?.label === "{") {
+        j++;
+        while (j < tokens.length && tokens[j]?.type?.label !== "}") {
+          if (tokens[j]?.type?.label === "name") {
+            let exportedName = tokens[j].value;
+            if (tokens[j + 1]?.type?.label === "name" && tokens[j + 1]?.value === "as" && tokens[j + 2]?.type?.label === "name") {
+              exportedName = tokens[j + 2].value;
+              j += 2;
+            }
+            exports.add(exportedName);
+          }
+          j++;
+        }
+        continue;
+      }
+    }
+  }
+  return [...exports].sort();
+}
+
+/**
+ * Scan reached modules for exported functions with no callers in reached files.
+ * Policy (CAP-FB-20260922 / kf3h):
+ * - Scans reached JS/MJS modules (RETAINED modules are already tracked at file level).
+ * - A caller in another reached file clears the export.
+ * - An unused `import { fn }` does NOT clear the export (requires actual call/usage beyond import).
+ * - Internal composition (same-file usage beyond declaration) clears the export.
+ * - RETAINED_EXPORTS provides explicit exemption with reasons; rot (stale/reachable) is reported.
+ */
+export async function checkExportReachability({
+  root,
+  reached,
+  io,
+  retainedExports = RETAINED_EXPORTS,
+  strictExports = false,
+}) {
+  const reachedJs = [...reached].filter((f) => f.endsWith(".js") || f.endsWith(".mjs"));
+  const tokenCountsByFile = new Map();
+  const importedIdentsByFile = new Map();
+  const exportsByFile = new Map();
+
+  for (const rel of reachedJs) {
+    const source = await io.readFile(`${root}/${rel}`);
+    const counts = new Map();
+    const imported = new Set();
+    const exported = exportedFunctions(source, rel);
+
+    // Track imported identifiers in this file: import { a, b as c } from "..."
+    for (const m of source.matchAll(/\bimport\s*\{([^}]+)\}\s*from/g)) {
+      for (const item of m[1].split(",")) {
+        const parts = item.trim().split(/\s+as\s+/);
+        const local = (parts[1] || parts[0]).trim();
+        if (local) imported.add(local);
+      }
+    }
+    importedIdentsByFile.set(rel, imported);
+
+    try {
+      for (const tok of tokenizer(source, { ecmaVersion: "latest", sourceType: "module", allowHashBang: true })) {
+        if (tok.type?.label === "name" && typeof tok.value === "string") {
+          counts.set(tok.value, (counts.get(tok.value) || 0) + 1);
+        }
+      }
+    } catch {
+      for (const m of source.matchAll(/[A-Za-z0-9_$]+/g)) {
+        counts.set(m[0], (counts.get(m[0]) || 0) + 1);
+      }
+    }
+
+    tokenCountsByFile.set(rel, counts);
+    exportsByFile.set(rel, exported);
+  }
+
+  // Also count tokens in reached HTML files (inline scripts)
+  for (const rel of reached) {
+    if (reachedJs.includes(rel)) continue;
+    if (rel.endsWith(".html")) {
+      try {
+        const html = await io.readFile(`${root}/${rel}`);
+        const counts = new Map();
+        for (const tok of tokenizer(html, { ecmaVersion: "latest", sourceType: "module", allowHashBang: true })) {
+          if (tok.type?.label === "name" && typeof tok.value === "string") {
+            counts.set(tok.value, (counts.get(tok.value) || 0) + 1);
+          }
+        }
+        tokenCountsByFile.set(rel, counts);
+      } catch {}
+    }
+  }
+
+  const reachedExports = [];
+  const unreachedExports = [];
+  const staleRetainedExports = [];
+  const retainedReachableExports = [];
+  const allKnownExportKeys = new Set();
+
+  for (const [file, funcs] of exportsByFile) {
+    for (const fn of funcs) {
+      const exportKey = `${file}:${fn}`;
+      allKnownExportKeys.add(exportKey);
+      let hasCaller = false;
+
+      // 1. Check other reached files
+      for (const [otherFile, counts] of tokenCountsByFile) {
+        if (otherFile === file) continue;
+        const count = counts.get(fn) || 0;
+        if (count === 0) continue;
+        const importsFn = importedIdentsByFile.get(otherFile)?.has(fn);
+        if (importsFn) {
+          // If imported, count must be >= 2 (import declaration + at least one usage)
+          if (count >= 2) {
+            hasCaller = true;
+            break;
+          }
+        } else {
+          // Not explicitly imported (e.g. called via namespace or global reference)
+          hasCaller = true;
+          break;
+        }
+      }
+
+      // 2. Check internal composition in declaring file (count >= 2: declaration + internal call)
+      if (!hasCaller) {
+        const ownCount = tokenCountsByFile.get(file)?.get(fn) || 0;
+        if (ownCount >= 2) {
+          hasCaller = true;
+        }
+      }
+
+      if (hasCaller) {
+        reachedExports.push(exportKey);
+        if (retainedExports && Object.prototype.hasOwnProperty.call(retainedExports, exportKey)) {
+          retainedReachableExports.push(`${exportKey}: RETAINED_EXPORTS but already reached from a caller — drop the entry`);
+        }
+      } else {
+        if (retainedExports && Object.prototype.hasOwnProperty.call(retainedExports, exportKey)) {
+          const reason = retainedExports[exportKey];
+          if (typeof reason !== "string" || !reason.trim()) {
+            staleRetainedExports.push(`${exportKey}: RETAINED_EXPORTS without a reason`);
+          }
+        } else {
+          unreachedExports.push(`${exportKey}: exported function has no callers in reached files (delete it, or add to RETAINED_EXPORTS in scripts/check-reachability.mjs with a reason)`);
+        }
+      }
+    }
+  }
+
+  // Check for stale retained exports (export key in retainedExports that does not exist)
+  for (const key of Object.keys(retainedExports || {})) {
+    if (!allKnownExportKeys.has(key)) {
+      staleRetainedExports.push(`${key}: RETAINED_EXPORTS but no such export exists in reached files`);
+    }
+  }
+
+  const exportViolations = [
+    ...(strictExports ? unreachedExports : []),
+    ...staleRetainedExports,
+    ...retainedReachableExports,
+  ];
+
+  return {
+    totalExportedFunctions: allKnownExportKeys.size,
+    reachedExports,
+    unreachedExports,
+    retainedExports: new Set(Object.keys(retainedExports || {})),
+    staleRetainedExports,
+    retainedReachableExports,
+    exportViolations,
+  };
+}
+
 function normalize(parts) {
   const out = [];
   for (const part of parts.split("/")) {
@@ -218,7 +455,15 @@ export async function walkShipped(root, { readdir }) {
  * Run the walk. `io.readdir(dir)` returns [{name, isDirectory}], `io.readFile(path)` returns text.
  * Returns { shipped, reached, unreached, staleRetained, retainedReachable, violations }.
  */
-export async function checkReachability({ root, buildSource, manifest, retained = RETAINED, io }) {
+export async function checkReachability({
+  root,
+  buildSource,
+  manifest,
+  retained = RETAINED,
+  retainedExports = RETAINED_EXPORTS,
+  strictExports = false,
+  io,
+}) {
   const shippedList = await walkShipped(root, io);
   const shipped = new Set(shippedList);
   const bundles = parseBundleMap(buildSource);
@@ -273,16 +518,44 @@ export async function checkReachability({ root, buildSource, manifest, retained 
     else if (typeof reason !== "string" || !reason.trim()) staleRetained.push(`${file}: RETAINED without a reason`);
     if (reachedFromEntry.has(file)) retainedReachable.push(`${file}: RETAINED but already reached from an entry point — drop the RETAINED line`);
   }
+
+  // Export reachability scan across reached modules (kf3h)
+  const exportResult = await checkExportReachability({
+    root,
+    reached: reachedFromEntry,
+    io,
+    retainedExports,
+    strictExports,
+  });
+
   const violations = [
     ...unreached.map((f) => `${f}: shipped but nothing reaches it (delete it, or add it to RETAINED in scripts/check-reachability.mjs with a reason)`),
     ...staleRetained,
     ...retainedReachable,
+    ...exportResult.exportViolations,
   ];
-  return { shipped: shippedList, reached, reachedFromEntry, unreached, staleRetained, retainedReachable, violations, retained: retainedSet };
+
+  return {
+    shipped: shippedList,
+    reached,
+    reachedFromEntry,
+    unreached,
+    staleRetained,
+    retainedReachable,
+    violations,
+    retained: retainedSet,
+    // Export reachability outputs
+    unreachedExports: exportResult.unreachedExports,
+    reachedExports: exportResult.reachedExports,
+    retainedExports: exportResult.retainedExports,
+    staleRetainedExports: exportResult.staleRetainedExports,
+    retainedReachableExports: exportResult.retainedReachableExports,
+    exportViolations: exportResult.exportViolations,
+  };
 }
 
 // Node CLI (build.mjs imports and calls `runNode`; `main` is the standalone command).
-export async function runNode({ root, log = console.log } = {}) {
+export async function runNode({ root, log = console.log, strictExports = false } = {}) {
   const { readFile, readdir } = await import("node:fs/promises");
   const path = await import("node:path");
   const ROOT = root ?? fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
@@ -291,6 +564,7 @@ export async function runNode({ root, log = console.log } = {}) {
     root: extRoot,
     buildSource: await readFile(path.join(ROOT, "build.mjs"), "utf8"),
     manifest: JSON.parse(await readFile(path.join(extRoot, "manifest.json"), "utf8")),
+    strictExports,
     io: {
       readFile: (p) => readFile(p, "utf8"),
       readdir: async (d) => (await readdir(d, { withFileTypes: true })).map((e) => ({ name: e.name, isDirectory: e.isDirectory() })),
@@ -303,14 +577,22 @@ export async function runNode({ root, log = console.log } = {}) {
     );
   }
   log(`build assertion: every one of ${result.shipped.length} shipped source files is reached (${result.reachedFromEntry.size} from entry points, ${result.retained.size} RETAINED with a reason)`);
+  if (result.unreachedExports?.length > 0) {
+    log(`reachability report: ${result.unreachedExports.length} exported function(s) with no caller in reached files (${result.retainedExports?.size ?? 0} RETAINED_EXPORTS)`);
+  }
   return result;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const result = await runNode();
+    const isStrict = process.argv.includes("--strict-exports");
+    const result = await runNode({ strictExports: isStrict });
     if (process.argv.includes("--list")) {
       for (const f of result.shipped) console.log(`${result.reachedFromEntry.has(f) ? "reached " : "RETAINED"} ${f}`);
+    }
+    if (process.argv.includes("--exports")) {
+      console.log(`\n--- Unreached exported functions (${result.unreachedExports.length}) ---`);
+      for (const exp of result.unreachedExports) console.log(`  unreached export: ${exp}`);
     }
   } catch (error) {
     console.error(error?.message ?? error);

@@ -9,8 +9,11 @@ import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   checkReachability,
+  checkExportReachability,
   RETAINED,
+  RETAINED_EXPORTS,
   candidateRefs,
+  exportedFunctions,
   parseBundleMap,
   resolveRef,
 } from "../scripts/check-reachability.mjs";
@@ -122,4 +125,110 @@ Deno.test("reachability: edges come from string tokens, never comments; dist bun
   assertEquals(resolveRef("page/p.html", "../dist/options.bundle.js", shipped, bundles), "options/options.js");
   assertEquals(resolveRef("lib/a.js", "./ignored-in-comment.js", shipped, bundles), null);
   assertEquals(candidateRefs("page/p.html", `<script type="module" src="../lib/a.js"></script><link rel="stylesheet" href="./x.css">`), ["../lib/a.js", "./x.css"]);
+});
+
+Deno.test("reachability (kf3h): exportedFunctions extracts declarations and excludes comments", () => {
+  const code = `
+    // export function commentedOut() {}
+    /* export function inBlockComment() {} */
+    export function syncFunc() {}
+    export async function asyncFunc() {}
+    export const arrowFunc = () => 42;
+    export let exprFunc = function() {};
+    export const nonFuncValue = 100;
+    export { localOne, localTwo as renamedTwo };
+  `;
+  const fns = exportedFunctions(code, "test.js");
+  assertEquals(fns, ["arrowFunc", "asyncFunc", "exprFunc", "localOne", "nonFuncValue", "renamedTwo", "syncFunc"]);
+  assert(!fns.includes("commentedOut"), "commented function must not be extracted");
+  assert(!fns.includes("inBlockComment"), "block-commented function must not be extracted");
+});
+
+Deno.test("reachability (kf3h): dead exported functions are caught and genuinely-used exports are cleared", async () => {
+  const fixtureFiles: Record<string, string> = {
+    "lib/provider.js": `
+      export function activelyUsed() { return "active"; }
+      export function internallyUsed() { return "internal"; }
+      export function unusedImported() { return "unused-import"; }
+      export function completelyDead() { return "dead"; }
+      export function retainedExempt() { return "exempt"; }
+
+      // Internal call clears internallyUsed
+      const x = internallyUsed();
+    `,
+    "lib/consumer.js": `
+      // unusedImported is imported but never referenced in an expression/call
+      import { activelyUsed, unusedImported } from "./provider.js";
+      // activelyUsed is actually called
+      console.log(activelyUsed());
+    `,
+  };
+
+  const fixtureIo = {
+    readFile: async (p: string) => {
+      const rel = p.replace(/^mock\//, "");
+      if (fixtureFiles[rel]) return fixtureFiles[rel];
+      throw new Error(`File not found: ${p}`);
+    },
+    readdir: async () => [],
+  };
+
+  const retainedExports = {
+    "lib/provider.js:retainedExempt": "Exempted for test reasons with non-empty justification",
+    "lib/provider.js:activelyUsed": "Already actively used — should be flagged as stale/redundant",
+    "lib/provider.js:nonExistent": "Does not exist — should be flagged as stale",
+  };
+
+  const report = await checkExportReachability({
+    root: "mock",
+    reached: new Set(["lib/provider.js", "lib/consumer.js"]),
+    io: fixtureIo,
+    retainedExports,
+    strictExports: true,
+  });
+
+  // 1. Actively used function is marked reached
+  assert(
+    report.reachedExports.includes("lib/provider.js:activelyUsed"),
+    "activelyUsed must be recognized as reached",
+  );
+
+  // 2. Internally composed function is marked reached
+  assert(
+    report.reachedExports.includes("lib/provider.js:internallyUsed"),
+    "internallyUsed must be recognized as reached via internal composition",
+  );
+
+  // 3. Unused import does NOT clear the export (kf3h F5 falsification)
+  assert(
+    report.unreachedExports.some((e: string) => e.startsWith("lib/provider.js:unusedImported")),
+    "unusedImported must be caught as unreached despite import statement in consumer",
+  );
+
+  // 4. Completely uncalled export is caught
+  assert(
+    report.unreachedExports.some((e: string) => e.startsWith("lib/provider.js:completelyDead")),
+    "completelyDead must be caught as unreached",
+  );
+
+  // 5. Retained export is excused from unreachedExports
+  assert(
+    !report.unreachedExports.some((e: string) => e.includes("retainedExempt")),
+    "retainedExempt must be excused by retainedExports",
+  );
+
+  // 6. Stale retained export (non-existent) is caught
+  assert(
+    report.staleRetainedExports.some((e: string) => e.includes("nonExistent")),
+    "non-existent retained export must be caught in staleRetainedExports",
+  );
+
+  // 7. Retained export that is actually reached is caught
+  assert(
+    report.retainedReachableExports.some((e: string) => e.includes("activelyUsed")),
+    "retained export that is already reached must be caught in retainedReachableExports",
+  );
+
+  // 8. Strict export violations include unreached and stale entries
+  assert(report.exportViolations.length >= 4, "strict violations must include unreached and stale entries");
 });
