@@ -9,6 +9,14 @@ const declared = (name: string, version = 1) => ({
   name, source: "declared", inputSchema: { type: "object", properties: { version: { const: version } } },
 });
 
+Deno.test("ephemeral Q23: management create sees a live attached origin without exposing decisions", () => {
+  const store = createEphemeralSiteToolConsentStore();
+  const token = store.begin(attachment("create-guard"));
+  assertEquals(store.hasLiveOrigin(origin), true);
+  store.end(token);
+  assertEquals(store.hasLiveOrigin(origin), false);
+});
+
 Deno.test("ephemeral Q23: no decision without a run token; Allow is digest-bound and scoped to one run", () => {
   const store = createEphemeralSiteToolConsentStore();
   const first = store.begin(attachment("run-one"));

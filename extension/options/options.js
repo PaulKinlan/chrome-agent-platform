@@ -3395,6 +3395,78 @@ async function renderData() {
     row.appendChild(retry);
     list.appendChild(row);
   }
+  for (const pendingPromotion of (pending?.promotions ?? [])) {
+    const origin = pendingPromotion.origin;
+    if (typeof origin !== "string") continue;
+    const row = document.createElement("div");
+    row.className = "origin-row pending";
+    const label = document.createElement("span");
+    label.className = "origin";
+    label.textContent = `${origin} — ${pendingPromotion.phase === "policy-pending" ? "site policy" : "Site Agent"} promotion pending (tools unavailable)`;
+    row.appendChild(label);
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "btn small retry-promotion";
+    retry.textContent = "Retry promotion";
+    retry.setAttribute("aria-label", `Retry promotion for ${origin}`);
+    retry.addEventListener("click", async () => {
+      let granted = false;
+      try {
+        granted = (await chrome.permissions.request({ permissions: ["scripting"], origins: [`${origin}/*`] })) === true;
+      } catch { /* owner gesture may be refused */ }
+      if (!granted) {
+        saveFlash(`Permission denied; ${origin} remains pending and unable to use tools.`);
+        return;
+      }
+      const res = await chrome.runtime.sendMessage({
+        type: "agent.enroll-origin", origin, ownerGesture: true,
+      }).catch(() => ({ ok: false }));
+      saveFlash(res?.ok ? `Promotion complete for ${origin}.` : `Promotion remains pending for ${origin}; retry from this panel.`);
+      renderData();
+      renderEnrolledSites();
+    });
+    row.appendChild(retry);
+    if (pendingPromotion.phase === "promotion-pending" || pendingPromotion.phase === "promotion-retry") {
+      const abandon = document.createElement("button");
+      abandon.type = "button";
+      abandon.className = "btn small abandon-promotion";
+      abandon.textContent = "Abandon promotion";
+      abandon.setAttribute("aria-label", `Abandon pending promotion for ${origin}`);
+      abandon.addEventListener("click", async () => {
+        const res = await chrome.runtime.sendMessage({
+          type: "agent.enroll-origin", origin, ownerGesture: true, abandonPending: true,
+        }).catch(() => ({ ok: false }));
+        saveFlash(res?.ok ? `Pending promotion abandoned for ${origin}.` : `Could not abandon pending promotion for ${origin}.`);
+        renderData();
+        renderEnrolledSites();
+      });
+      row.appendChild(abandon);
+    }
+    list.appendChild(row);
+  }
+  for (const origin of (pending?.abandoned ?? [])) {
+    if (typeof origin !== "string") continue;
+    const row = document.createElement("div");
+    row.className = "origin-row pending";
+    const label = document.createElement("span");
+    label.className = "origin";
+    label.textContent = `${origin} — abandoned promotion cleanup pending (tools unavailable)`;
+    row.appendChild(label);
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "btn small retry-cleanup";
+    retry.textContent = "Retry cleanup";
+    retry.setAttribute("aria-label", `Retry abandoned promotion cleanup for ${origin}`);
+    retry.addEventListener("click", async () => {
+      const res = await chrome.runtime.sendMessage({
+        type: "agent.enroll-origin", origin, ownerGesture: true, retryAbandonedCleanup: true,
+      }).catch(() => ({ ok: false }));
+      saveFlash(res?.ok ? `Cleanup complete for ${origin}.` : `Cleanup remains pending for ${origin}.`);
+      renderData();
+    });
+    row.appendChild(retry);
+    list.appendChild(row);
+  }
 }
 
 // ── Factory reset / Delete all data (CAP-FB-20260823-FACTORY-RESET-01) ──

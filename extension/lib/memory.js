@@ -1538,7 +1538,7 @@ export async function listOrigins() {
   const s = await kvGet(ENROLL_KEY);
   const map = s[ENROLL_KEY] ?? {};
   return Object.keys(map)
-    .filter((o) => map[o]?.enrolled === true)
+    .filter((o) => map[o]?.enrolled === true && !map[o]?.phase)
     .sort();
 }
 

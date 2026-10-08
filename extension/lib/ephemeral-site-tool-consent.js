@@ -49,6 +49,10 @@ export function createEphemeralSiteToolConsentStore() {
   }
 
   return Object.freeze({
+    hasLiveOrigin(origin) {
+      const canonical = typeof origin === "string" ? canonicalOrigin(origin) : null;
+      return Boolean(canonical && [...entries.values()].some((entry) => entry.origin === canonical && !entry.ended));
+    },
     /** The caller must pass the current top-level document attested by Chrome.
      * @param {{runId: string, threadId?: string | null, origin: string, tabId: number, documentId: string}} binding
      */

@@ -163,6 +163,25 @@ export async function kvSet(obj) {
   });
 }
 
+/** Security-critical registry writes must NEVER enter the SW-only session
+ * fallback: a transient `enrolled:true` session value could authorize a tool
+ * before a failed durable commit is noticed. Storage-mode transitions share
+ * this mutex, so permission removal cannot slip between the check and write.
+ * Unlike kvSet, permission absence rejects WITHOUT mutating the session map.
+ */
+export async function kvSetDurable(obj) {
+  return withStorageModeLock(async () => {
+    await waitForMigration();
+    if (!(await storageAvailable())) throw new StorageBackendError("set", new Error("durable storage permission unavailable"));
+    try {
+      await chrome.storage.local.set(obj);
+      return "durable";
+    } catch (e) {
+      throw new StorageBackendError("set", e);
+    }
+  });
+}
+
 /** Mirror chrome.storage.local.remove(key|array). Fails closed on failure. */
 export async function kvRemove(keys) {
   return withStorageModeLock(async () => {

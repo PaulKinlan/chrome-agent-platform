@@ -16,6 +16,23 @@ class FakeDirHandle {
 }
 const root = dirNode();
 Object.defineProperty(globalThis, "navigator", { value: { storage: { async getDirectory() { return new FakeDirHandle(root); } } }, configurable: true, writable: true });
+// A policy flip is a generation-bound consent migration and must never claim
+// success using the old permissionless session-only KV fallback.
+const durable = new Map();
+Object.defineProperty(globalThis, "chrome", { configurable: true, writable: true, value: {
+  permissions: { contains: async () => true },
+  storage: { local: {
+    get: async (keys) => {
+      const out = {};
+      for (const key of keys == null ? durable.keys() : Array.isArray(keys) ? keys : [keys]) {
+        if (durable.has(key)) out[key] = structuredClone(durable.get(key));
+      }
+      return out;
+    },
+    set: async (values) => { for (const [key, value] of Object.entries(values)) durable.set(key, structuredClone(value)); },
+    remove: async (keys) => { for (const key of Array.isArray(keys) ? keys : [keys]) durable.delete(key); },
+  } },
+} });
 
 import {
   disenrollOrigin,
@@ -41,6 +58,7 @@ import {
 } from "../extension/lib/webmcp-authority.js";
 import { DESTRUCTIVE_ACTIONS, canonicalOperationTarget } from "../extension/lib/owner-approval.js";
 import { PAGE_ALLOWED_ROUTES } from "../extension/lib/pure.js";
+import { siteMemory } from "../extension/lib/memory.js";
 
 const TOOL = { name: "book_table", source: "declared", description: "Book a table", inputSchema: { type: "object" } };
 
@@ -79,7 +97,7 @@ Deno.test("enrollment policy: invalid and non-enrolled mutations reject", async 
   await assertRejects(() => setEnrollmentPolicy("not an origin", "deny"), /invalid origin/);
 });
 
-Deno.test("enrollment policy: re-enrollment resets coarse policy and exact consent generation", async () => {
+Deno.test("enrollment policy: a bare tombstone cannot silently discard old consent; explicit site deletion clears it", async () => {
   const origin = "https://policy-tombstone.example.com";
   await enrollOrigin(origin);
   await replaceTools(origin, [TOOL]);
@@ -87,7 +105,13 @@ Deno.test("enrollment policy: re-enrollment resets coarse policy and exact conse
   await setEnrollmentPolicy(origin, "deny");
   await disenrollOrigin(origin);
   assertEquals(await isEnrolled(origin), false);
+  await assertRejects(() => enrollOrigin(origin), Error, "site_enrollment_existing_consent_requires_review");
+  assertEquals(await isEnrolled(origin), false);
+  // The owner-approved agent.delete route clears the site store AFTER its
+  // tombstone. Model-facing agent.create cannot choose this cleanup itself.
+  await siteMemory(origin).clear();
   await enrollOrigin(origin);
+  await replaceTools(origin, [TOOL]);
   assertEquals(await enrollmentPolicy(origin), "allow");
   assertEquals((await toolConsentSnapshot(origin, TOOL.name)).state, "ask", "old-profile grants cannot cross an enrollment generation");
 });
