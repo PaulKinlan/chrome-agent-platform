@@ -118,6 +118,7 @@ export class ArchiveFormatError extends Error {
 /** The reserved KV key of the import-recovery journal. A bundle writing it
  * could clobber or impersonate a live journal. */
 const IMPORT_SIDECAR_KEY = "cap:importBackup";
+export const RESTORE_RECOVERY_ALARM = "cap-restore-recovery-alarm";
 
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const E_BAD_SHAPE = "archive-bad-shape";
@@ -145,6 +146,10 @@ const EPHEMERAL_KV_KEYS = new Set([
   "cap:webmcpBridgeNonces",
   "cap:webmcpSnapshotGate",
   "cap:importBackup",
+  "cap:restoreFence",
+  "cap:restoreHeartbeat",
+  "cap:restoreClaim",
+  "cap:invalidationPending",
 ]);
 
 /** Keys that must NEVER leave the profile (secret material). The bundle
@@ -162,6 +167,8 @@ export const EXCLUDED_OPFS_PREFIXES = Object.freeze([
   "cache/",
   "chrome-agent-platform-private/",
   "wasm-tool-streams-v1/",
+  ".staging-",
+  ".rollback-",
 ]);
 
 export function isExcludedOpfsPath(path) {
@@ -178,6 +185,10 @@ export function isExcludedOpfsPath(path) {
   if (normalized.includes("owner-approval-hmac")) return true;
   if (normalized.includes("chrome-agent-platform-private")) return true;
   if (normalized.includes("wasm-tool-streams-v1")) return true;
+  if (normalized.startsWith(".staging-") || normalized.startsWith(".rollback-")) return true;
+  for (const seg of normalized.split("/")) {
+    if (seg.startsWith(".staging-") || seg.startsWith(".rollback-")) return true;
+  }
 
   const rootSeg = normalized.split("/")[0];
   if (
@@ -247,9 +258,31 @@ export function createOpfsAdapter(rootHandle) {
       await writable.write(bytes);
       await writable.close();
     },
+    open: async (path) => {
+      const { dir, name } = await resolveParentAndName(path, { create: false });
+      const handle = await dir.getFileHandle(name);
+      const file = await handle.getFile();
+      return { size: file.size, stream: file.stream() };
+    },
+    openStream: async (path) => {
+      const { dir, name } = await resolveParentAndName(path, { create: false });
+      const handle = await dir.getFileHandle(name);
+      const file = await handle.getFile();
+      return file.stream();
+    },
+    writeStream: async (path, stream) => {
+      const { dir, name } = await resolveParentAndName(path, { create: true });
+      const handle = await dir.getFileHandle(name, { create: true });
+      const writable = await handle.createWritable();
+      await stream.pipeTo(writable);
+    },
     removeFile: async (path) => {
       const { dir, name } = await resolveParentAndName(path, { create: false });
       await dir.removeEntry(name);
+    },
+    removeDirectory: async (path, { recursive = true } = {}) => {
+      const { dir, name } = await resolveParentAndName(path, { create: false });
+      await dir.removeEntry(name, { recursive });
     },
   };
 }
@@ -526,29 +559,167 @@ export function parseArchive(text) {
  * import entry AND on every worker boot, so even an MV3 worker death
  * mid-apply cannot expose a mixed profile beyond the next restart/import.
  */
-export async function recoverPendingImport({ kvGet, kvSet, kvRemove, opfs, alarms } = {}) {
+export async function recoverPendingImport({ kvGet, kvSet, kvRemove, opfs, alarms, preserveClaimSessionId = null, onRollback = null } = {}) {
+  if (typeof kvGet !== "function") return false;
   // The injected kvGet mirrors chrome.storage.local.get: a single-key read
   // returns the {key: value} ENVELOPE (lib/kv.js), while test fakes may
   // return the bare value — normalize both.
   const raw = await kvGet(IMPORT_SIDECAR_KEY);
   const journal = raw?.[IMPORT_SIDECAR_KEY] ?? raw;
   if (!journal || typeof journal !== "object" || Array.isArray(journal) || !Array.isArray(journal.ops)) return false;
+  const isV2 = journal.version === 2 || journal.format === "cap:journal:v2";
   // One op per bundled item, in undo order: [kind(0=kv,1=file,2=alarm), id,
   // previous] — previous === null means the bundle CREATED it (undo deletes),
   // otherwise previous is the byte-identical original (undo restores).
   for (const [kind, id, previous] of journal.ops) {
-    if (kind === 0) previous === null ? await kvRemove(id) : await kvSet({ [id]: previous });
-    else if (kind === 1) {
+    if (kind === 0) {
+      if (previous === null) {
+        if (kvRemove) await kvRemove(id);
+      } else if (isV2 && previous && typeof previous === "object" && Object.hasOwn(previous, "__cap_val")) {
+        if (kvSet) await kvSet({ [id]: previous.__cap_val });
+      } else {
+        if (kvSet) await kvSet({ [id]: previous });
+      }
+    } else if (kind === 1) {
       if (previous === null) {
         try {
           await opfs.removeFile(id);
-        } catch {
-          /* the crash happened before this file was written — nothing to undo */
+        } catch (removeErr) {
+          // Propagate immediately unless the error name is strictly NotFoundError (crash preceded file creation)
+          if (removeErr?.name !== "NotFoundError") {
+            throw new Error(`Failed to remove restored file "${id}" during rollback: ${removeErr?.message || removeErr}`);
+          }
+        }
+      } else if (typeof previous === "string" && previous.startsWith("opfs-backup:")) {
+        const backupPath = previous.slice("opfs-backup:".length);
+        if (typeof opfs.openStream === "function" && typeof opfs.writeStream === "function") {
+          await opfs.writeStream(id, await opfs.openStream(backupPath));
+        } else if (typeof opfs.readFile === "function" && typeof opfs.writeFile === "function") {
+          await opfs.writeFile(id, await opfs.readFile(backupPath));
         }
       } else await opfs.writeFile(id, b64Decode(previous));
-    } else previous === null ? await alarms.clear(id) : await alarms.create(id, previous);
+    } else if (kind === 2 && alarms) {
+      if (previous === null) {
+        if (typeof alarms.clear === "function") await alarms.clear(id);
+      } else {
+        if (typeof alarms.create === "function") await alarms.create(id, previous);
+      }
+    }
   }
-  await kvRemove(IMPORT_SIDECAR_KEY);
+
+  // Restore any pre-quiescence backups of cancelled runs if recorded in journal.
+  // Propagate errors so the rollback journal and admission fence are retained if backup restoration fails.
+  if (journal?.quiesceBackupDir && opfs && typeof opfs.listFiles === "function") {
+    const qDir = journal.quiesceBackupDir;
+    const allFiles = await opfs.listFiles();
+    for (const f of allFiles) {
+      if (f.startsWith(`${qDir}/`)) {
+        const origPath = f.slice(qDir.length + 1);
+        try {
+          if (typeof opfs.openStream === "function" && typeof opfs.writeStream === "function") {
+            await opfs.writeStream(origPath, await opfs.openStream(f));
+          } else if (typeof opfs.readFile === "function" && typeof opfs.writeFile === "function") {
+            await opfs.writeFile(origPath, await opfs.readFile(f));
+          }
+        } catch (restoreFileErr) {
+          throw new Error(`Failed to restore pre-quiescence file "${origPath}" from "${f}": ${restoreFileErr?.message || restoreFileErr}`);
+        }
+      }
+    }
+  }
+
+  // Remove any files created during quiescence or restore that were not in preRestoreFiles.
+  // Propagate errors so the rollback journal and admission fence are retained if pruning fails!
+  if (Array.isArray(journal.preRestoreFiles) && opfs && typeof opfs.listFiles === "function" && typeof opfs.removeFile === "function") {
+    const preSet = new Set(journal.preRestoreFiles);
+    const dirs = [];
+    if (journal?.rollbackDir) dirs.push(journal.rollbackDir);
+    if (journal?.stagingDir) dirs.push(journal.stagingDir);
+    const allFiles = await opfs.listFiles();
+    for (const f of allFiles) {
+      let inBackupDir = false;
+      for (const dir of dirs) {
+        if (f === dir || f.startsWith(`${dir}/`)) { inBackupDir = true; break; }
+      }
+      if (!inBackupDir && !isExcludedOpfsPath(f) && !preSet.has(f)) {
+        await opfs.removeFile(f);
+      }
+    }
+  }
+  // Notify worker and drop cached states on rollback completion BEFORE releasing admission fence
+  let invalidated = false;
+  if (typeof onRollback === "function") {
+    try {
+      const res = await onRollback();
+      if (res?.invalidated !== true) {
+        throw new Error("Worker reported unconfirmed or failed cache invalidation on rollback");
+      }
+      invalidated = true;
+    } catch (rbInvErr) {
+      throw new Error(`Rollback succeeded, but cache invalidation failed: ${rbInvErr?.message || rbInvErr}. Admission fence retained.`);
+    }
+  } else if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+    try {
+      const invRes = await chrome.runtime.sendMessage({ type: "invalidate-agent" });
+      if (invRes?.invalidated !== true) {
+        throw new Error("Worker reported unconfirmed or failed cache invalidation on rollback");
+      }
+      invalidated = true;
+    } catch (rbInvErr) {
+      throw new Error(`Rollback succeeded, but cache invalidation failed: ${rbInvErr?.message || rbInvErr}. Admission fence retained.`);
+    }
+  } else {
+    invalidated = true;
+  }
+
+  // The journal deletion is the atomic completion point of recovery
+  if (kvRemove) {
+    const keysToRemove = [IMPORT_SIDECAR_KEY];
+    let removeCoordination = true;
+    if (preserveClaimSessionId && typeof kvGet === "function") {
+      try {
+        const cur = await kvGet("cap:restoreClaim");
+        if (cur?.["cap:restoreClaim"]?.sessionId === preserveClaimSessionId) {
+          removeCoordination = false;
+        }
+      } catch { /* ignore get error */ }
+    }
+    if (removeCoordination && invalidated) {
+      keysToRemove.push("cap:restoreFence", "cap:restoreHeartbeat", "cap:restoreClaim");
+    }
+    for (const k of keysToRemove) {
+      await kvRemove(k);
+    }
+    if (alarms && typeof alarms.clear === "function" && invalidated) {
+      try { await alarms.clear(RESTORE_RECOVERY_ALARM); } catch { /* ignore alarm clear */ }
+    }
+  }
+  // cleanup rollback backup directory and staging directory if recorded
+  if (opfs && typeof opfs.removeDirectory === "function") {
+    const dirs = [];
+    if (journal?.rollbackDir) dirs.push(journal.rollbackDir);
+    if (journal?.stagingDir) dirs.push(journal.stagingDir);
+    if (journal?.quiesceBackupDir) dirs.push(journal.quiesceBackupDir);
+    for (const dir of dirs) {
+      await opfs.removeDirectory(dir, { recursive: true }).catch(() => {});
+    }
+  } else if (opfs && typeof opfs.listFiles === "function" && typeof opfs.removeFile === "function") {
+    try {
+      const dirs = [];
+      if (journal?.rollbackDir) dirs.push(journal.rollbackDir);
+      if (journal?.stagingDir) dirs.push(journal.stagingDir);
+      if (journal?.quiesceBackupDir) dirs.push(journal.quiesceBackupDir);
+      if (dirs.length > 0) {
+        const allFiles = await opfs.listFiles();
+        for (const dir of dirs) {
+          for (const f of allFiles) {
+            if (f === dir || f.startsWith(`${dir}/`)) await opfs.removeFile(f).catch(() => {});
+          }
+        }
+      }
+    } catch { /* best-effort cleanup of fallback files */ }
+  }
+
   return true;
 }
 
@@ -566,6 +737,14 @@ export async function recoverPendingImport({ kvGet, kvSet, kvRemove, opfs, alarm
 export async function importArchive(bundleText, { kvGet, kvSet, kvRemove, opfs, alarms, overwrite = false } = {}) {
   const parsed = parseArchive(bundleText);
 
+  // Check if an active streaming restore is running before self-heal
+  if (typeof kvGet === "function") {
+    const activeFence = await kvGet(["cap:restoreHeartbeat", "cap:restoreClaim"]).catch(() => null);
+    if (activeFence?.["cap:restoreHeartbeat"] && (Date.now() - Number(activeFence["cap:restoreHeartbeat"])) < 30000) {
+      throw new Error("Another restore operation is currently in progress. Please wait for it to complete.");
+    }
+  }
+
   // Self-heal FIRST: a previous import that died mid-apply left a recovery
   // journal — restore the original profile before anything else reads it.
   const backends = { kvGet, kvSet, kvRemove, opfs, alarms };
@@ -575,7 +754,8 @@ export async function importArchive(bundleText, { kvGet, kvSet, kvRemove, opfs, 
   const existingKv = (await kvGet(null)) || {};
   const existingKeys = Object.keys(existingKv);
   const existingFiles = (await opfs.listFiles()).filter((p) => !isExcludedOpfsPath(p));
-  const existingAlarms = (await alarms.getAll()) || [];
+  const rawAlarms = (await alarms.getAll()) || [];
+  const existingAlarms = rawAlarms.filter((a) => a && a.name !== RESTORE_RECOVERY_ALARM);
   if (!overwrite && (existingKeys.length || existingFiles.length || existingAlarms.length)) {
     throw new Error(
       `import refused: the target profile is not empty (${existingKeys.length} settings keys, ${existingFiles.length} stored files, ${existingAlarms.length} alarms) — nothing was touched without the explicit overwrite choice`,
@@ -606,7 +786,7 @@ export async function importArchive(bundleText, { kvGet, kvSet, kvRemove, opfs, 
   }
   for (const [key] of kvEntries) ops.push([0, key, hasOwn(existingKv, key) ? structuredClone(existingKv[key]) : null]);
   try {
-    await kvSet({ [IMPORT_SIDECAR_KEY]: { ops } });
+    await kvSet({ [IMPORT_SIDECAR_KEY]: { ops, timestamp: Date.now() } });
   } catch (err) {
     throw new ArchiveFormatError("import-sidecar-failed", `journal write failed (${err?.message || err})`);
   }
@@ -660,6 +840,9 @@ export async function importArchive(bundleText, { kvGet, kvSet, kvRemove, opfs, 
     if (!hasOwn(parsed.kv, key)) await kvRemove(key);
   }
   await kvRemove(IMPORT_SIDECAR_KEY);
+  if (alarms && typeof alarms.clear === "function") {
+    try { await alarms.clear(RESTORE_RECOVERY_ALARM); } catch { /* ignore alarm clear */ }
+  }
 
   return Object.freeze({
     ok: true,

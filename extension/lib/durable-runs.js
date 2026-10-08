@@ -257,6 +257,7 @@ export function createDurableRunRegistry({
   // without reaching real OPFS (chrome-agent-platform-cejm review).
   purgeStoreDir: purgeStoreDirDep = purgeStoreDirImpl,
   injectFailure = null,
+  fenceCheck = async () => (typeof chrome !== "undefined" && chrome?.storage?.local ? (await chrome.storage.local.get("cap:restoreFence"))?.["cap:restoreFence"] : null),
 } = {}) {
   // ── the record cache (CAP-FB-20260830-RUN-LOG-COMPACTION-01) ──────────
   // Every execution record lives in its OWN OPFS directory, so `list()` and the
@@ -1027,6 +1028,14 @@ export function createDurableRunRegistry({
     return locked(async () => {
       const executionId = String(meta?.executionId ?? "");
       if (!validExecutionId(executionId)) throw new Error("invalid immutable executionId");
+
+      if (typeof fenceCheck === "function") {
+        const fenced = await fenceCheck();
+        if (fenced) {
+          throw new Error("Cannot start durable run: profile restore fence is active");
+        }
+      }
+
       const key = `${RUN_PREFIX}${executionId}`;
       const existing = await readRecord(executionId);
       if (existing) {
@@ -2120,7 +2129,15 @@ export function createDurableRunRegistry({
         const record = await readRecord(executionId);
         if (record) runs.push(publicRecord(record));
       }
-      return { bootId, policy: DURABLE_RUN_POLICY, retentionPolicy: await activeRetentionPolicy(), runs };
+      const writerList = [...new Set([...active, ...cancelling])];
+      return {
+        bootId,
+        policy: DURABLE_RUN_POLICY,
+        retentionPolicy: await activeRetentionPolicy(),
+        runs,
+        activeWritersCount: writerList.length,
+        activeWriters: writerList,
+      };
     });
   }
 
@@ -2403,6 +2420,7 @@ export function createDurableRunRegistry({
     // A cancelling (cancel-authority recorded, not yet terminal) execution is
     // still a live writer for fence purposes (review P1-1).
     isActive: (executionId) => active.has(executionId) || cancelling.has(executionId),
+    activeWriters: () => [...new Set([...active, ...cancelling])],
   };
 }
 

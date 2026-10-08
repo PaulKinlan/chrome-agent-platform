@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.593] — 2026-10-07
+- Exporting data from Settings now streams standard TAR archives directly without memory buffering or size caps.
+- Profile restore now uses a 3-phase transactional streaming pipeline with rollback journal and legacy backup fallback.
+
 ## [0.3.592] — 2026-10-07
 - Add an explicit loopback-only tokenless option for the ACP bridge, correct the ACP token guidance, and show the real bridge-refusal reason.
 
