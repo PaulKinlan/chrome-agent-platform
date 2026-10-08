@@ -22,6 +22,7 @@ import {
   validateSiteToolPromotionRecords,
   verifyPromotedSiteToolConsents,
   snapshotSiteToolConsentForPolicy,
+  storedSiteToolDenyProposals,
   writeAndVerifyPolicyConsent,
   withSiteToolConsentBarrier,
 } from "./site-tool-consent.js";
@@ -469,21 +470,24 @@ export async function prepareEnrollmentPromotion(origin, records, { commitGuard 
     if (map[canonical]?.enrolled === true || map[canonical]?.phase) {
       throw new Error("site_enrollment_promotion_competing");
     }
-    if (commitGuard && commitGuard() !== true) throw new Error("site_enrollment_promotion_cancelled");
-    // A previous enrolled generation can contain a sticky Deny absent from
-    // these live-run decisions. Never overwrite that dossier by treating its
-    // mismatched generation as a blank envelope. Fresh absence is recorded in
-    // the durable pending entry so a failed first OPFS write can be retried.
-    const priorEnvelope = await siteMemory(canonical).getStrict(SITE_TOOL_CONSENT_KEY);
-    if (priorEnvelope !== null) throw new Error("site_enrollment_existing_consent_requires_review");
-    const gen = await nextGeneration({ requireDurable: true });
-    const pending = { enrolled: true, phase: "promotion-pending", gen,
-      at: Date.now(), policy: DEFAULT_SITE_TOOL_POLICY, freshConsentEnvelope: true,
-      promotionPending: decisions };
-    if (commitGuard && commitGuard() !== true) throw new Error("site_enrollment_promotion_cancelled");
-    map[canonical] = pending;
-    if (await kvSetDurable({ [ENROLL_KEY]: map }) !== "durable") throw new Error("site_enrollment_not_durable");
-    return Object.freeze({ origin: canonical, gen, phase: "promotion-pending" });
+    return withSiteToolConsentBarrier(async () => {
+      if (commitGuard && commitGuard() !== true) throw new Error("site_enrollment_promotion_cancelled");
+      // Scripting Disable leaves an old-generation envelope behind. Under
+      // enrollment→consent, fold its sticky Deny by exact name into the durable
+      // intent; a run Allow can NEVER displace that Deny. Old Allow is ASK
+      // after the generation bump. No page-sourced inferred tool is admitted.
+      const folded = new Map(decisions.map((record) => [record.name, record]));
+      for (const denied of await storedSiteToolDenyProposals(canonical)) folded.set(denied.name, denied);
+      const promotionPending = validateSiteToolPromotionRecords([...folded.values()]);
+      const gen = await nextGeneration({ requireDurable: true });
+      const pending = { enrolled: true, phase: "promotion-pending", gen,
+        at: Date.now(), policy: DEFAULT_SITE_TOOL_POLICY, freshConsentEnvelope: true,
+        promotionPending };
+      if (commitGuard && commitGuard() !== true) throw new Error("site_enrollment_promotion_cancelled");
+      map[canonical] = pending;
+      if (await kvSetDurable({ [ENROLL_KEY]: map }) !== "durable") throw new Error("site_enrollment_not_durable");
+      return Object.freeze({ origin: canonical, gen, phase: "promotion-pending" });
+    });
   });
 }
 
@@ -605,25 +609,27 @@ export async function enrollOrigin(origin) {
       // discard a previously sticky Deny in the generation-bound envelope.
       return listOrigins();
     }
-    // Existing management enrollment still creates its own Site Agent, but a
-    // pending owner's promotion must never be overwritten by that pathway.
-    // An old-generation envelope can carry sticky Deny: never overwrite its
-    // generation through direct agent.create without an owner migration.
-    if (await siteMemory(canonical).getStrict(SITE_TOOL_CONSENT_KEY) !== null) {
-      throw new Error("site_enrollment_existing_consent_requires_review");
-    }
-    // No per-origin OPFS `enrolled` key is written on the pending path.
-    await siteMemory(canonical).setTrusted("enrolled", { at: Date.now() });
-    map[canonical] = {
-      enrolled: true,
-      at: Date.now(),
-      gen: await nextGeneration(),
-      // This is the coarse site switch only. Every exact tool still starts at
-      // first-use consent; enrollment never creates an automatic-use grant.
-      policy: DEFAULT_SITE_TOOL_POLICY,
-    };
-    await kvSet({ [ENROLL_KEY]: map });
-    return listOrigins();
+    return withSiteToolConsentBarrier(async () => {
+      // Legacy agent.create is NOT the owner's promotion gesture. It may
+      // re-enroll after Disable if only old Allow remains (new gen re-asks),
+      // but MUST refuse a surviving sticky Deny so it cannot silently erase
+      // the owner's decision. The owner enrollment route migrates that Deny.
+      if ((await storedSiteToolDenyProposals(canonical)).length) {
+        throw new Error("site_enrollment_existing_consent_requires_review");
+      }
+      // No per-origin OPFS `enrolled` key is written on the pending path.
+      await siteMemory(canonical).setTrusted("enrolled", { at: Date.now() });
+      map[canonical] = {
+        enrolled: true,
+        at: Date.now(),
+        gen: await nextGeneration(),
+        // This is the coarse site switch only. Every exact tool still starts
+        // at first-use consent; enrollment never creates an automatic grant.
+        policy: DEFAULT_SITE_TOOL_POLICY,
+      };
+      await kvSet({ [ENROLL_KEY]: map });
+      return listOrigins();
+    });
   });
 }
 
@@ -691,7 +697,7 @@ export async function toolConsentStatesLocked(origin) {
   if (!canonical) return [];
   const map = await enrolledMap();
   const enrollment = map[canonical];
-  if (!enrollment || enrollment.enrolled !== true) return [];
+  if (!enrollment || enrollment.enrolled !== true || enrollment.phase || enrollment.promotionPending) return [];
   const tools = await listTools(canonical);
   return await listSiteToolConsentStates(canonical, tools, enrollment.gen ?? 0);
 }

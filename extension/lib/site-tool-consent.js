@@ -420,8 +420,9 @@ export async function promoteEphemeralSiteToolConsents(origin, enrollmentGen, re
     catch (error) {
       // ONLY the registry-backed owner promotion may recover a corrupt/empty
       // file created by its own failed first write. Its durable pending row
-      // proves the prior file was absent BEFORE the owner gesture. Ordinary
-      // enrolled Q23 reads/writes remain strict and fail closed on corruption.
+      // already contains every surviving old-generation Deny, folded while
+      // enrollment→consent were held. A corrupt OLD file could not pass that
+      // stage. Ordinary enrolled Q23 reads/writes remain strict.
       if (!recoverPending || !consentLockHeld) throw error;
       envelope = blankEnvelope(enrollmentGen);
     }
@@ -469,9 +470,27 @@ export async function promoteEphemeralSiteToolConsents(origin, enrollmentGen, re
   return consentLockHeld ? await write() : await withConsentLock(write);
 }
 
+/** Read a surviving old-generation envelope while enrollment→consent are
+ * held. A scripting Disable tombstones the registry but deliberately leaves
+ * site memory, including sticky Deny, behind. Deny is name-bound irrespective
+ * of descriptor source/digest; normalize its source to `declared` ONLY as an
+ * inert denial proposal for the owner promotion. It cannot create a tool or
+ * grant Allow. Old Allow is intentionally re-asked after Disable/re-enroll.
+ */
+export async function storedSiteToolDenyProposals(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) fail("site_tool_consent_origin");
+  const raw = await siteMemory(canonical).getStrict(SITE_TOOL_CONSENT_KEY);
+  if (raw === null) return Object.freeze([]);
+  if (!Number.isSafeInteger(raw.enrollmentGen) || raw.enrollmentGen < 1) fail("site_tool_consent_corrupt");
+  const envelope = validateEnvelope(raw, raw.enrollmentGen);
+  return Object.freeze(envelope.records.filter((r) => r.state === "denied").map((r) =>
+    Object.freeze({ name: r.name, source: "declared", identityDigest: r.identityDigest, state: "denied" })));
+}
+
 /** Snapshot the WHOLE current envelope while enrollment→consent are held.
- * Policy flips must carry sticky Deny and existing Allow into their new run
- * generation, not interpret an old-generation file as a blank ASK profile.
+ * Policy flips carry sticky Deny only; old Allow is re-asked under the new
+ * generation, not interpreted as an automatic grant after a policy change.
  */
 export async function snapshotSiteToolConsentForPolicy(origin, enrollmentGen) {
   const canonical = canonicalOrigin(origin);

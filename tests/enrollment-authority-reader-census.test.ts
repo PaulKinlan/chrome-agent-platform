@@ -7,6 +7,7 @@ Deno.test("D2: exactly three public active readers and one fenced locked-audit e
   const root = new URL("../extension/", import.meta.url);
   const directReads: string[] = [];
   const keyLiterals: string[] = [];
+  const keyReferences: Record<string, number> = {};
   async function walk(dir: URL) {
     for await (const entry of Deno.readDir(dir)) {
       const child = new URL(entry.name + (entry.isDirectory ? "/" : ""), dir);
@@ -16,7 +17,12 @@ Deno.test("D2: exactly three public active readers and one fenced locked-audit e
         const path = child.pathname.slice(child.pathname.indexOf("/extension/") + 1);
         // Count SITES, not files. A second read beside the existing permitted
         // read must fail, just as a new raw reader in another file would.
-        for (const hit of source.matchAll(/kvGet\s*\(\s*(?:ENROLL_KEY|["']cap:enrollment["'])\s*\)/g)) {
+        // Pin all ENROLL_KEY references as well: `kvGet([ENROLL_KEY])` and
+        // `const K=ENROLL_KEY; kvGet(K)` then fail instead of bypassing this
+        // narrow direct-call matcher. New writes also demand an explicit audit.
+        const references = [...source.matchAll(/\bENROLL_KEY\b/g)].length;
+        if (references) keyReferences[path] = references;
+        for (const hit of source.matchAll(/kvGet\s*\(\s*(?:\[?\s*ENROLL_KEY\b|["']cap:enrollment["'])/g)) {
           directReads.push(`${path}:${source.slice(0, hit.index).split("\n").length}`);
         }
         // Another alias for the enrollment key (including a direct
@@ -32,6 +38,10 @@ Deno.test("D2: exactly three public active readers and one fenced locked-audit e
     "extension/lib/memory.js", // listOrigins: canonical public worker listing
     "extension/lib/tools.js", // enrolledMap: isEnrolled/snapshot + locked tombstone reads
   ]);
+  assertEquals(keyReferences, {
+    "extension/lib/memory.js": 3,
+    "extension/lib/tools.js": 13,
+  });
   assertEquals(keyLiterals.map((p) => p.replace(/:\d+$/, "")).sort(), [
     "extension/lib/archive-target-registry.js", // export authority exclusion, NOT a reader
     "extension/lib/memory.js", // one named registry key
@@ -55,6 +65,10 @@ Deno.test("D2: exactly three public active readers and one fenced locked-audit e
   }
   const generation = functionBody(tools, "export async function enrollmentGeneration(", "export async function enrollmentSnapshot(");
   assert(generation.includes("requireActive") && generation.includes("row?.promotionPending"));
+  const lockedConsent = functionBody(tools, "export async function toolConsentStatesLocked(",
+    "export async function toolConsentStates(");
+  assert(lockedConsent.includes("enrollment.phase || enrollment.promotionPending"),
+    "Disable's consent-state reader must not treat pending enrollment as executable");
   assert(sw.includes("enrollmentGeneration(record?.origin, { requireActive: true })"));
   assert(!sw.includes("{ enrolled: true, gen: await enrollmentGeneration("));
   assert(!tools.includes("Object.keys(map).filter((o) => map[o]?.enrolled === true)"),

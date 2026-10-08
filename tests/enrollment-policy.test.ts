@@ -97,7 +97,7 @@ Deno.test("enrollment policy: invalid and non-enrolled mutations reject", async 
   await assertRejects(() => setEnrollmentPolicy("not an origin", "deny"), /invalid origin/);
 });
 
-Deno.test("enrollment policy: a bare tombstone cannot silently discard old consent; explicit site deletion clears it", async () => {
+Deno.test("enrollment policy: old Allow re-asks on re-enroll, but a surviving Deny needs owner migration", async () => {
   const origin = "https://policy-tombstone.example.com";
   await enrollOrigin(origin);
   await replaceTools(origin, [TOOL]);
@@ -105,15 +105,20 @@ Deno.test("enrollment policy: a bare tombstone cannot silently discard old conse
   await setEnrollmentPolicy(origin, "deny");
   await disenrollOrigin(origin);
   assertEquals(await isEnrolled(origin), false);
+  await enrollOrigin(origin); // old Allow was invalidated by the policy bump
+  await replaceTools(origin, [TOOL]);
+  assertEquals((await toolConsentSnapshot(origin, TOOL.name)).state, "ask");
+  await setToolConsentDecision(origin, TOOL.name, "denied");
+  await disenrollOrigin(origin);
   await assertRejects(() => enrollOrigin(origin), Error, "site_enrollment_existing_consent_requires_review");
   assertEquals(await isEnrolled(origin), false);
-  // The owner-approved agent.delete route clears the site store AFTER its
-  // tombstone. Model-facing agent.create cannot choose this cleanup itself.
+  // Only an explicit owner-approved site deletion clears the old dossier;
+  // model-facing agent.create cannot choose that path to erase sticky Deny.
   await siteMemory(origin).clear();
   await enrollOrigin(origin);
   await replaceTools(origin, [TOOL]);
   assertEquals(await enrollmentPolicy(origin), "allow");
-  assertEquals((await toolConsentSnapshot(origin, TOOL.name)).state, "ask", "old-profile grants cannot cross an enrollment generation");
+  assertEquals((await toolConsentSnapshot(origin, TOOL.name)).state, "ask");
 });
 
 Deno.test("enrollment policy: scripting Disable can read consent under its existing enrollment lock", async () => {

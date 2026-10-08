@@ -4,7 +4,8 @@ import { kvGet } from "../extension/lib/kv.js";
 import { listOrigins, siteMemory } from "../extension/lib/memory.js";
 import {
   abandonEnrollmentPromotion, completeEnrollmentPromotion, disenrollOrigin, enrollOrigin,
-  enrollmentGeneration, enrollmentSnapshot, isEnrolled, prepareEnrollmentPromotion, setEnrollmentPolicy,
+  enrollmentGeneration, enrollmentSnapshot, isEnrolled, prepareEnrollmentPromotion, replaceTools,
+  setEnrollmentPolicy, setToolConsentDecision,
 } from "../extension/lib/tools.js";
 import { SITE_TOOL_CONSENT_KEY, siteToolConsentSnapshot, siteToolIdentity } from "../extension/lib/site-tool-consent.js";
 import { evaluateWebmcpAuthority, siteToolConsentPermissionDigest } from "../extension/lib/webmcp-authority.js";
@@ -179,6 +180,37 @@ Deno.test("D2: owner abandonment tombstones first; stale completion cannot clear
   assertEquals((await abandonEnrollmentPromotion(origin, gen)).abandoned, true);
   await assertRejects(() => complete(origin, gen), Error, "site_enrollment_promotion_stale");
   assertEquals(await isEnrolled(origin), false);
+});
+
+Deno.test("D2: scripting Disable's surviving Deny migrates into the owner retry without a dead-end", async () => {
+  const origin = "https://promotion-disable-retry.example";
+  const { gen } = await prepareEnrollmentPromotion(origin, decisions(origin));
+  await complete(origin, gen);
+  await disenrollOrigin(origin); // capability Disable leaves OPFS consent behind
+  await assertRejects(() => enrollOrigin(origin), Error, "site_enrollment_existing_consent_requires_review");
+  const newer = await prepareEnrollmentPromotion(origin, [decisions(origin)[0]]);
+  const row = await pending(origin);
+  assertEquals(row.promotionPending.map((r) => [r.name, r.state]), [
+    [allowTool.name, "allowed"], [denyTool.name, "denied"],
+  ]);
+  assertEquals(await isEnrolled(origin), false);
+  await complete(origin, newer.gen); // boot or Settings retry from durable copy
+  assertEquals((await siteToolConsentSnapshot(origin, denyTool, newer.gen)).state, "denied");
+  assertEquals((await siteToolConsentSnapshot(origin, allowTool, newer.gen)).state, "allowed");
+  assertEquals(await isEnrolled(origin), true);
+});
+
+Deno.test("D2: a legacy inferred Deny stays a denial after declared-only owner promotion", async () => {
+  const origin = "https://promotion-inferred-deny.example";
+  await enrollOrigin(origin);
+  await replaceTools(origin, [{ ...denyTool, source: "inferred" }]);
+  await setToolConsentDecision(origin, denyTool.name, "denied");
+  await disenrollOrigin(origin);
+  const { gen } = await prepareEnrollmentPromotion(origin, []);
+  assertEquals((await pending(origin)).promotionPending.map((r) => [r.name, r.source, r.state]),
+    [[denyTool.name, "declared", "denied"]]);
+  await complete(origin, gen);
+  assertEquals((await siteToolConsentSnapshot(origin, denyTool, gen)).state, "denied");
 });
 
 Deno.test("D2: missing durable storage permission cannot even stage intent", async () => {
