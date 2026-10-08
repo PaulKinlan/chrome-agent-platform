@@ -1,4 +1,10 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
+import { pathToFileURL } from "node:url";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
+
+async function cleanupFixture(path: string) {
+  await Deno.remove(path, { recursive: true });
+}
 
 // This is the authority-reading budget for cap:enrollment. A new raw read may
 // silently interpret enrolled:true+promotionPending as active; additions need
@@ -16,7 +22,7 @@ async function censusReaders(root: URL) {
       if (entry.isDirectory) await walk(child);
       else if (entry.name.endsWith(".js")) {
         const source = await Deno.readTextFile(child);
-        const path = child.pathname.slice(child.pathname.indexOf("/extension/") + 1);
+        const path = `extension/${child.pathname.slice(root.pathname.length)}`;
         // Count SITES, not files. A second read beside the existing permitted
         // read must fail, just as a new raw reader in another file would.
         // Pin all ENROLL_KEY references as well: `kvGet([ENROLL_KEY])` and
@@ -40,8 +46,10 @@ async function censusReaders(root: URL) {
 }
 
 Deno.test("D2: generated dist-versions and dist cannot impersonate tracked enrollment source", async () => {
-  const temp = await Deno.makeTempDir({ prefix: "d2-source-census-" });
-  const root = new URL(`file://${temp}/extension/`);
+  const temp = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "d2-source-census-" });
+  // A synthetic source tree outside the repo: never create or read shipped paths.
+  const root = new URL("source/", pathToFileURL(`${temp}/`));
+  const sourcePrefix = "extension";
   try {
     for (const path of ["lib", "dist", "dist-versions/0.3.1"]) {
       await Deno.mkdir(new URL(`${path}/`, root), { recursive: true });
@@ -51,10 +59,10 @@ Deno.test("D2: generated dist-versions and dist cannot impersonate tracked enrol
       await Deno.writeTextFile(new URL(path, root), 'const ENROLL_KEY = "cap:enrollment"; kvGet([ENROLL_KEY]);');
     }
     const found = await censusReaders(root);
-    assertEquals(found.directReads.map((p) => p.replace(/:\d+$/, "")), ["extension/lib/tracked.js"]);
-    assertEquals(Object.keys(found.keyReferences), ["extension/lib/tracked.js"]);
-    assertEquals(found.keyLiterals.map((p) => p.replace(/:\d+$/, "")), ["extension/lib/tracked.js"]);
-  } finally { await Deno.remove(temp, { recursive: true }); }
+    assertEquals(found.directReads.map((p) => p.replace(/:\d+$/, "")), [`${sourcePrefix}/lib/tracked.js`]);
+    assertEquals(Object.keys(found.keyReferences), [`${sourcePrefix}/lib/tracked.js`]);
+    assertEquals(found.keyLiterals.map((p) => p.replace(/:\d+$/, "")), [`${sourcePrefix}/lib/tracked.js`]);
+  } finally { await cleanupFixture(temp); }
 });
 
 Deno.test("D2: exactly three public active readers and one fenced locked-audit exception", async () => {
