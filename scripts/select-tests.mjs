@@ -39,6 +39,7 @@ import { fileURLToPath } from "node:url";
 import { tokenizer } from "acorn";
 import { partition } from "./test-partition.mjs";
 import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
+import { isSelectorInfrastructure, mapUncovered, versionOnlyJsonChange } from "./lib/changed-file-mapping.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -233,15 +234,19 @@ export function alwaysOnGuards() {
  * regression test can prove the always-on guard set is SURFACED rather than asserting the shape of a
  * print statement: a lane told only "FULL_SUITE" has no way to learn which guards it just failed to
  * run, which is exactly how the jfbn and fyvc violations reached main.
+ * @param {{ uncovered?: string[], list?: boolean, unmappable?: Array<{ file: string, mechanism: string }> }} [opts]
  * @returns {{ output: string[], action: "list" | "run" }}
  */
-export function failClosedPlan({ uncovered, list }) {
+export function failClosedPlan({ uncovered = [], list = false, unmappable = [] } = {}) {
   const guards = alwaysOnGuards();
+  const fileLines = unmappable.length
+    ? unmappable.map((u) => `  ${u.file}\n      → ${u.mechanism}`)
+    : uncovered.map((f) => `  ${f}`);
   return {
     action: list ? "list" : "run",
     output: [
       `select-tests: FAIL CLOSED — changed file(s) with no reachable test cannot be proved covered by a subset:`,
-      ...uncovered.map((f) => `  ${f}`),
+      ...fileLines,
       `Running the FULL suite (npm test) instead.`,
       `select-tests: THE ALWAYS-ON GUARD SET (${guards.length} files) IS NOT COVERED BY A SUBSET GATE — run these explicitly if you cannot run the full suite:`,
       ...guards.map((f) => `  ${f}`),
@@ -289,8 +294,29 @@ export function isBuildResidue(file) {
   return BUILD_RESIDUE_PREFIXES.some((prefix) => f.startsWith(prefix));
 }
 
+export function mergeBaseOf(base, runGit = git) {
+  try {
+    return runGit(["merge-base", "HEAD", base]).trim() || base;
+  } catch {
+    return base; // unrelated histories / missing ref: diff against it directly
+  }
+}
+
+/** Read a path at `ref` and at the working tree, and ask whether the difference
+ *  is confined to version fields. Any git failure is `false` (fail closed). */
+export function versionOnlyAgainst(ref, rel, runGit = git) {
+  try {
+    const before = runGit(["show", `${ref}:${rel}`]);
+    const abs = join(ROOT, rel);
+    if (!existsSync(abs)) return false;
+    return versionOnlyJsonChange(before, readFileSync(abs, "utf8"), rel);
+  } catch {
+    return false; // new file, unreadable ref, anything unexpected: fail closed
+  }
+}
+
 function changedFiles(base) {
-  const tracked = git(["diff", "--name-only", base]).split("\n").filter(Boolean);
+  const tracked = git(["diff", "--name-only", mergeBaseOf(base)]).split("\n").filter(Boolean);
   const untracked = git(["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean);
   return [...new Set([...tracked, ...untracked])]
     .map((f) => normalize(f))
@@ -437,8 +463,11 @@ function reachableTestFrom(startAbs, reverse, isTest) {
   return false;
 }
 
-export function selectTestFiles(changed, reverse) {
+export function selectTestFiles(changed, reverse, mapped = []) {
   const selected = new Set(ALWAYS_ON.filter((c) => existsSync(join(ROOT, c))));
+  for (const m of mapped) {
+    for (const t of m.tests) if (existsSync(join(ROOT, t))) selected.add(t);
+  }
   const changedAbs = [];
   for (const c of changed) {
     const abs = resolve(ROOT, c);
@@ -631,14 +660,35 @@ async function main() {
   if (!changed.length) console.error(`select-tests: no files changed vs ${base} — running always-on core.`);
   const reverse = changed.length ? buildReverseGraph() : null;
   const uncovered = changed.length ? changedWithoutCoverage(changed, reverse) : [];
-  if (uncovered.length) {
-    const plan = failClosedPlan({ uncovered, list });
+
+  const selfChanged = changed.filter((f) => isSelectorInfrastructure(f));
+  if (selfChanged.length) {
+    console.error(
+      `select-tests: FAIL CLOSED — this change edits the test selector's own machinery ` +
+        `(${selfChanged.join(", ")}), so a subset it chooses cannot validate it.\n` +
+        `Running the FULL suite (npm test) instead.`,
+    );
+    if (list) console.log("FULL_SUITE");
+    else runFullSuite();
+    return;
+  }
+
+  const baseRef = mergeBaseOf(base);
+  const { mapped, unmappable } = uncovered.length
+    ? mapUncovered(uncovered, (rel) => versionOnlyAgainst(baseRef, rel))
+    : { mapped: [], unmappable: [] };
+
+  if (unmappable.length) {
+    const plan = failClosedPlan({ list, unmappable });
     console.error(plan.output.join("\n"));
     if (plan.action === "list") console.log("FULL_SUITE");
     else runFullSuite();
     return;
   }
-  const files = selectTestFiles(changed, reverse);
+  for (const m of mapped) {
+    console.error(`select-tests: ${m.file} has no importer — ${m.mechanism}; selecting its ${m.tests.length} inspecting guard(s).`);
+  }
+  const files = selectTestFiles(changed, reverse, mapped);
   if (list) console.log(files.join("\n"));
   else await runDeno(files);
 }
