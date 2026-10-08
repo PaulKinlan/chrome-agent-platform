@@ -27,6 +27,7 @@ import {
   duplicateStoreInputs,
   formatContributors,
   nonDenoStoreInputs,
+  securityDependencyDrift,
   STORE_BUNDLE_BUDGETS,
   STORE_SW_BUDGET_BYTES,
   topContributors,
@@ -97,6 +98,40 @@ Deno.test("bundle budget: build.mjs wires the metafile report, the store gate, a
   assert(scrubAt !== -1 && minifyAt !== -1, "both the scrub and the minify step exist");
   assert(scrubAt < minifyAt, "the eval scrub must run BEFORE minification");
   assertStringIncludes(source, "minified bundle", "the minified bytes are re-scanned for eval sites");
+});
+
+Deno.test("lf9xe: the build rejects a vulnerable Deno-store fast-uri even when npm locks patched", async () => {
+  const npmLock = JSON.parse(await Deno.readTextFile("package-lock.json"));
+  const denoLock = JSON.parse(await Deno.readTextFile("deno.lock"));
+  const old = { inputs: {
+    "node_modules/.deno/fast-uri@3.1.5/node_modules/fast-uri/index.js": { bytes: 11 },
+  } };
+  assertEquals(securityDependencyDrift(old, npmLock, denoLock), [
+    "fast-uri: npm=3.1.7; deno=3.1.7; shipped=3.1.5",
+  ]);
+  assertThrows(() => assertBundleBudget({ label: "background/service-worker.js", bytes: 100, metafile: old }),
+    Error, "security dependency lock-to-shipped drift");
+  const good = { inputs: {
+    "node_modules/.deno/fast-uri@3.1.7/node_modules/fast-uri/index.js": { bytes: 11 },
+  } };
+  assertEquals(securityDependencyDrift(good, npmLock, denoLock), []);
+  assertEquals(assertBundleBudget({ label: "background/service-worker.js", bytes: 100, metafile: good }), 100);
+});
+
+Deno.test("im9q8: the build rejects a stale SDK and ignores dependency-free bundles", async () => {
+  const npmLock = JSON.parse(await Deno.readTextFile("package-lock.json"));
+  const denoLock = JSON.parse(await Deno.readTextFile("deno.lock"));
+  const old = { inputs: {
+    "node_modules/.deno/@modelcontextprotocol+sdk@1.30.0/node_modules/@modelcontextprotocol/sdk/dist/index.js": { bytes: 11 },
+  } };
+  assertEquals(securityDependencyDrift(old, npmLock, denoLock), [
+    "@modelcontextprotocol/sdk: npm=1.31.0; deno=1.31.0; shipped=1.30.0",
+  ]);
+  assertThrows(() => assertBundleBudget({ label: "workers/agent-worker.js", bytes: 100, metafile: old }),
+    Error, "security dependency lock-to-shipped drift");
+  assertEquals(securityDependencyDrift({ inputs: { "extension/lib/pure.js": { bytes: 10 } } }, npmLock, denoLock), []);
+  assertEquals(assertBundleBudget({ label: "shared/diff-core.bundle.js", bytes: 10,
+    metafile: { inputs: { "extension/lib/pure.js": { bytes: 10 } } } }), 10);
 });
 
 Deno.test("bundle budget: no shipped source or built bundle references a CDN (Pyodide is bundled+pinned)", async () => {
