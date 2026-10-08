@@ -29,6 +29,7 @@ import { BUILD_GATE, SERIAL, partition } from "./test-partition.mjs";
 import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
 import { parallelPlan } from "./lib/parallel-plan.mjs";
+import { loadWeights, parallelJobs, scheduleOrder } from "./lib/parallel-schedule.mjs";
 
 export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
 const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_MS ?? DEFAULT_PARALLEL_TIMEOUT_MS);
@@ -40,11 +41,16 @@ function runParallel(files) {
   // Concurrent scheduling cannot identify the stalled file. Announce every
   // candidate BEFORE spawn so even a mid-phase kill leaves names on both streams.
   announce(`run-tests: parallel phase candidates (${files.length} file(s)):\n${files.map((file) => `  - ${file}`).join("\n")}`);
+  // gate-speed: an explicit worker count and longest-first order (scripts/lib/parallel-schedule.mjs).
+  // The ordered list is a permutation of `files` — the candidates announced above are what runs.
+  const jobs = parallelJobs();
+  const ordered = scheduleOrder(files, loadWeights());
+  console.log(`run-tests: parallel phase runs ${files.length} file(s) on ${jobs} deno worker(s), longest-first (CAP_TEST_JOBS overrides)`);
   const t0 = Date.now();
   return new Promise((resolve) => {
-    const child = spawn("deno", ["test", "-A", "--config", "deno.runner.jsonc", "--parallel", ...files], {
+    const child = spawn("deno", ["test", "-A", "--config", "deno.runner.jsonc", "--parallel", ...ordered], {
       stdio: "inherit",
-      env: { ...process.env, CAP_TEST_RUNNER: "1" },
+      env: { ...process.env, CAP_TEST_RUNNER: "1", DENO_JOBS: String(jobs) },
       detached: true,
     });
 

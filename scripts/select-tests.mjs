@@ -77,6 +77,8 @@ export const SOURCE_INSPECTING_GUARDS = [
   "tests/source-materialization.test.ts",
   "tests/source-inspecting-tests-guard.test.ts",
   "tests/postmessage-wildcard-guard.test.ts",
+  // gate-speed: walks tests/ to prove the test-weights table names only real parallel-phase files.
+  "tests/parallel-schedule.test.ts",
   // chrome-agent-platform-kz27 — tree-walking guards that were MISSING from this list, which is the
   // third shape of the blind spot that bead names: a guard everyone BELIEVES is always-on, simply not
   // in the set. tests/durable-root.test.ts is the measured case, and the cost was concrete: it sat
