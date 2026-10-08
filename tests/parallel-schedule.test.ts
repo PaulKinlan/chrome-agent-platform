@@ -33,11 +33,12 @@ Deno.test("gate-speed: the committed weights table names only real parallel-phas
   for (const n of names) assert(Number.isFinite(weights[n]) && weights[n] > 0, `${n} has a positive measured weight`);
 });
 
-Deno.test("gate-speed: parallelJobs — CAP_TEST_JOBS wins; default is 3 per CPU within [4, 16]", () => {
+Deno.test("gate-speed: parallelJobs — CAP_TEST_JOBS wins; default is 2 per CPU within [4, 16]", () => {
   assertEquals(parallelJobs({ env: { CAP_TEST_JOBS: "7" }, cpus: 2 }), 7);
-  assertEquals(parallelJobs({ env: { CAP_TEST_JOBS: "0" }, cpus: 2 }), 6, "a non-positive override is ignored");
-  assertEquals(parallelJobs({ env: { CAP_TEST_JOBS: "x" }, cpus: 2 }), 6);
+  assertEquals(parallelJobs({ env: { CAP_TEST_JOBS: "0" }, cpus: 2 }), 4, "a non-positive override is ignored");
+  assertEquals(parallelJobs({ env: { CAP_TEST_JOBS: "x" }, cpus: 3 }), 6);
   assertEquals(parallelJobs({ env: {}, cpus: 1 }), 4);
-  assertEquals(parallelJobs({ env: {}, cpus: 2 }), 6);
+  assertEquals(parallelJobs({ env: {}, cpus: 2 }), 4);
+  assertEquals(parallelJobs({ env: {}, cpus: 4 }), 8);
   assertEquals(parallelJobs({ env: {}, cpus: 32 }), 16);
 });

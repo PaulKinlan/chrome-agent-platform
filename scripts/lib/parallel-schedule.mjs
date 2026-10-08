@@ -18,13 +18,15 @@
 import { readFileSync } from "node:fs";
 import os from "node:os";
 
-/** Default deno worker count for the parallel phase: 3 per CPU, at least 4, at most 16.
+/** Default deno worker count for the parallel phase: 2 per CPU, at least 4, at most 16.
+ *  Measured on 2 vCPU (parallel phase alone, longest-first): 2 workers 476 s, 4 workers 312 s,
+ *  6 workers 336 s with load ~10 and a load-sensitive red — so 4, not more.
  *  CAP_TEST_JOBS (a positive integer) wins outright. */
 export function parallelJobs({ env = process.env, cpus = os.availableParallelism?.() ?? os.cpus().length } = {}) {
   const explicit = Number(env?.CAP_TEST_JOBS ?? NaN);
   if (Number.isSafeInteger(explicit) && explicit > 0) return explicit;
   const n = Number.isFinite(cpus) && cpus > 0 ? cpus : 2;
-  return Math.max(4, Math.min(16, n * 3));
+  return Math.max(4, Math.min(16, n * 2));
 }
 
 /** The committed weights table: { "tests/x.test.ts": seconds }. Unreadable → {} (ordering only). */
