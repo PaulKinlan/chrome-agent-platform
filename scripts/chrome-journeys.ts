@@ -710,6 +710,9 @@ function check(name, cond, detail) {
   }
   results.push(!cond && detail !== undefined ? { name, pass: false, detail } : { name, pass: !!cond });
   console.log(`${cond ? "PASS" : "FAIL"}: ${name}${cond ? "" : formatCheckDetail(detail)}`);
+  if (typeof Deno !== "undefined" && Deno.env?.get?.("CAP_JOURNEY_STOP_AFTER") === name) {
+    throw new Error(`CAP_JOURNEY_STOP_AFTER: ${name}`);
+  }
 }
 
 /** The exact, ordered set of assertions this suite must run. */
@@ -8836,7 +8839,11 @@ async function main() {
       console.error(`ENVIRONMENT: ${evaluateTimeoutVerdict.environment}`);
       console.error(`evaluate-timeout cause: ${evaluateTimeoutVerdict.cause} — ${evaluateTimeoutVerdict.reason}`);
     }
-    console.error("journey failure:", String(e?.message ?? e));
+    if (String(e?.message ?? e).includes("CAP_JOURNEY_STOP_AFTER:")) {
+      console.log(`journey early stop: ${String(e?.message ?? e)}`);
+    } else {
+      console.error("journey failure:", String(e?.message ?? e));
+    }
     try {
       await withTimeout(fixture.shutdown(), 8000, "fixture.shutdown").catch(
         () => {
@@ -8870,6 +8877,12 @@ async function main() {
     }
     checkShutdown("profile removed (no leak)", removed);
     checkShutdown("cleanup hard-failed on descendants (none survived)", clean);
+
+    if (typeof Deno !== "undefined" && Deno.env?.get?.("CAP_JOURNEY_STOP_AFTER")) {
+      const failed = results.filter((r) => !r.pass);
+      console.log(`early stop summary: ${results.length} assertions ran, ${failed.length} failed`);
+      Deno.exit(failed.length ? 1 : 0);
+    }
 
     // Temporary (non-retained) evidence is caller-owned temp output and must NOT
     // be left behind. Retained runs write to test-artifacts/ (kept + committed).
