@@ -187,7 +187,8 @@ export class AcpClient {
     /** @type {Map<number, {resolve: (res: any) => void, reject: (err: Error) => void, deadline: any}>} */
     this.pending = new Map();
     /** @type {((event: AcpTurnEvent) => void)|null} */
-    this.activeTurnListener = null;
+    /** @type {Set<(event: any) => void>} */
+    this.activeTurnListeners = new Set();
 
     this.agentInfo = null;
     this.agentCapabilities = null;
@@ -198,6 +199,21 @@ export class AcpClient {
     this.pendingCommands = null;
     this.connected = false;
     this.activeSessionId = null;
+  }
+
+  get activeTurnListener() {
+    return this.activeTurnListeners.size > 0 ? (ev) => this._emitTurnEvent(ev) : null;
+  }
+
+  set activeTurnListener(fn) {
+    this.activeTurnListeners.clear();
+    if (typeof fn === "function") this.activeTurnListeners.add(fn);
+  }
+
+  _emitTurnEvent(event) {
+    for (const listener of this.activeTurnListeners) {
+      try { listener(event); } catch { /* individual listener failures must not abort turn event dispatch */ }
+    }
   }
 
   setExecutionId(id) {
@@ -430,12 +446,13 @@ export class AcpClient {
     }
 
     const collectedText = [];
-    this.activeTurnListener = (event) => {
+    const turnListener = (event) => {
       if (event.kind === "chunk" && event.text) {
         collectedText.push(event.text);
       }
       onEvent?.(event);
     };
+    this.activeTurnListeners.add(turnListener);
 
     try {
       const result = await this.request(
@@ -448,7 +465,7 @@ export class AcpClient {
         text: collectedText.join(""),
       };
     } finally {
-      this.activeTurnListener = null;
+      this.activeTurnListeners.delete(turnListener);
     }
   }
 
@@ -613,7 +630,7 @@ export class AcpClient {
         // DO NOT strip args.id: browser tools (e.g. close_window, remove_bookmark) take an id argument.
         delete args.executionId;
         delete args.approved;
-        this.activeTurnListener?.({ kind: "tool", detail: `browser:${name || "(unnamed)"}`, raw: msg.params });
+        this._emitTurnEvent({ kind: "tool", detail: `browser:${name || "(unnamed)"}`, raw: msg.params });
         // THE SERVICE WORKER RUNS THE TOOL under principal 'model' with this.executionId.
         const reply = await chrome.runtime.sendMessage({
           type: "browser.callTool",
@@ -661,7 +678,7 @@ export class AcpClient {
           : acpAllowOptionId(options);
       }
 
-      this.activeTurnListener?.({
+      this._emitTurnEvent({
         kind: "permission",
         detail: `${msg.params?.toolCall?.title ?? "a tool"} → ${selectedOptionId ?? "denied"}`,
         raw: msg.params,
@@ -715,15 +732,15 @@ export class AcpClient {
 
     if (kind === "agent_message_chunk") {
       const text = String(update.content?.text ?? "");
-      this.activeTurnListener?.({ kind: "chunk", text, raw: update });
+      this._emitTurnEvent({ kind: "chunk", text, raw: update });
     } else if (kind === "agent_thought_chunk") {
       const text = String(update.content?.text ?? "");
-      this.activeTurnListener?.({ kind: "thought", text, raw: update });
+      this._emitTurnEvent({ kind: "thought", text, raw: update });
     } else if (kind === "tool_call" || kind === "tool_call_update") {
       // toolCallId + status travel with the event so a consumer can SETTLE the
       // card a call already created instead of appending a new one per update.
       const detail = String(update.title ?? update.toolCallId ?? update.name ?? "");
-      this.activeTurnListener?.({
+      this._emitTurnEvent({
         kind: "tool",
         detail,
         toolCallId: String(update.toolCallId ?? ""),
@@ -739,12 +756,12 @@ export class AcpClient {
         }
         if (sessionId !== this.activeSessionId) return;
         this._acceptCommands(update.availableCommands);
-        this.activeTurnListener?.({ kind: "commands", detail: `${update.availableCommands.length} commands`, raw: update });
+        this._emitTurnEvent({ kind: "commands", detail: `${update.availableCommands.length} commands`, raw: update });
       }
     } else if (kind === "session_info_update") {
-      this.activeTurnListener?.({ kind: "info", raw: update });
+      this._emitTurnEvent({ kind: "info", raw: update });
     } else {
-      this.activeTurnListener?.({ kind: "other", detail: kind || "", raw: update });
+      this._emitTurnEvent({ kind: "other", detail: kind || "", raw: update });
     }
   }
 

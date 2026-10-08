@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.610] — 2026-10-08
+- Retain active ACP session identity across command discovery and subsequent prompt turns in the offscreen model backend, eliminating redundant connection overhead. Session retention in the task runner remains as an unattached library seam for the test architecture.
+
 ## [0.3.608] — 2026-10-08
 - The New Tab page's agent launcher buttons now show a simple terminal mark with clearer labels and a visible keyboard focus, and the list scrolls when it is long.
 

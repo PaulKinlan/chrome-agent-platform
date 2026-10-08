@@ -4268,6 +4268,8 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
         if (!ready.ok) throw new Error(ready.error);
         modelOverride = createAcpModelProxy({
           ...acpConfig,
+          threadId: threadId || null,
+          executionId: executionId || null,
           permissionHandler: (request) => acpRunPermissions.ask({
             executionId, documentId: approvalResolverDocumentId, harnessId,
             request, emit: journalingProgress, auto: acpConfig.auto,
@@ -8231,7 +8233,7 @@ const handlers = mergeRouteMaps(
     const config = await acpRunConfig(m?.harnessId, async (key) => (await kvGet(key))?.[key], { discovery: true });
     const ready = await ensureOffscreen();
     if (!ready.ok) return { ok: false, error: "Cannot open the harness connection. Try again." };
-    return { ok: true, harnessId: config.harnessId, ...await discoverAcpCommands(config) };
+    return { ok: true, harnessId: config.harnessId, ...await discoverAcpCommands({ ...config, threadId: m?.threadId || null }) };
   },
   async "acp.journal"(m, context) {
     if (m?.action === "open") {

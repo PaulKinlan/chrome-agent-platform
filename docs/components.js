@@ -8974,7 +8974,7 @@ class AgentComposer extends Component {
     show();
     let catalogue;
     try {
-      catalogue = await RUNTIME_SEND?.("acp.commands", { harnessId }, 22000);
+      catalogue = await RUNTIME_SEND?.("acp.commands", { harnessId, threadId: this.getAttribute("thread-id") || null }, 22000);
       if (!catalogue?.ok) catalogue = { error: catalogue?.error || "Cannot load harness commands. Check the bridge and try again." };
     } catch { catalogue = { error: "Cannot load harness commands. Check the bridge and try again." }; }
     if (request !== this._harnessRequest || !this.isConnected || this._harnessId !== harnessId || this._input !== input) return;
