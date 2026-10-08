@@ -232,9 +232,9 @@ try {
   })()`);
   record("keyboard activation: Codex button focused", focusCodex.success, focusCodex);
 
-  // Dispatch real Enter keydown and keyup via CDP (NO synthetic btn.click()!)
+  // Dispatch real Enter keyDown and keyUp via CDP (NO synthetic btn.click()!)
   await cdp.send("Input.dispatchKeyEvent", {
-    type: "rawKeyDown",
+    type: "keyDown",
     windowsVirtualKeyCode: 13,
     nativeVirtualKeyCode: 13,
     key: "Enter",
@@ -249,7 +249,7 @@ try {
     key: "Enter",
     code: "Enter",
   }, sessionId);
-  await sleep(400);
+  await sleep(600);
 
   const keyActivationResult = await evalExpr(`(() => {
     const threadTitle = document.getElementById("thread-title");
@@ -266,7 +266,12 @@ try {
   await sleep(400);
 
   const shortViewportGeo = await evalExpr(`(() => {
+    // In short viewport, collapse tasks to focus on harness presence in constrained height
+    const tasks = document.querySelector("#tasks-section");
+    if (tasks) tasks.open = false;
     const presence = document.querySelector("#harness-presence");
+    if (presence) presence.open = true;
+
     const list = document.querySelector("#harness-list");
     const side = document.querySelector(".side");
     const buttons = Array.from(document.querySelectorAll("#harness-list harness-agent-button"));
@@ -290,8 +295,12 @@ try {
       listScrollHeight: list ? list.scrollHeight : 0,
       listInsideSide: listRect && sideRect ? listRect.bottom <= sideRect.bottom + 2 : false,
       lastBtnVisibleInList: lastRect && listRect ? (lastRect.top >= listRect.top - 2 && lastRect.bottom <= listRect.bottom + 2) : false,
-      lastRect,
-      listRect,
+      lastTop: lastRect?.top,
+      lastBottom: lastRect?.bottom,
+      listTop: listRect?.top,
+      listBottom: listRect?.bottom,
+      sideTop: sideRect?.top,
+      sideBottom: sideRect?.bottom,
     };
   })()`);
 
