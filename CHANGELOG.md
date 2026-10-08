@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.607] — 2026-10-08
+- Harden site-agent enrollment: promotions commit atomically and survive a restart, and enrollment authority reads are fenced to one reviewed path.
+
 ## [0.3.606] — 2026-10-08
 - Extract page tables, ARIA grids and repeated card lists into a tabular artifact that the table tools accept directly.
 
