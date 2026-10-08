@@ -401,10 +401,14 @@ Deno.test("passes immediately after marker", () => {});
 `);
 
   try {
+    // gate-speed: this is the SUCCESS path, so no bound here is the property under test — they only
+    // have to be loose enough never to fire. 5 s each reddened a full gate on a 2-vCPU VM at load ~10
+    // (the fixture's own `deno test` type check + start ran past the bound: 124 instead of 0). The
+    // kill/fail-closed behaviour of these bounds is pinned by the timeout tests above and below.
     const res = runSerialFile(tempTest, {
-      timeoutMs: 5_000,
+      timeoutMs: 60_000,
       readyFile,
-      readyTimeoutMs: 5_000,
+      readyTimeoutMs: 60_000,
       stdio: "pipe",
       cwd: ROOT,
     });
