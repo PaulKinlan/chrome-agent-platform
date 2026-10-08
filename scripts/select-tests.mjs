@@ -428,16 +428,26 @@ export function buildReverseGraph(onLexerFailure) {
   };
   // cap-evidence/ is a durable EVIDENCE tree (bead outputs, screenshots,
   // logs), not tracked source — and it can grow huge. It is intentionally NOT
-  // walked. Reverse edges INTO cap-evidence are still captured: any test that
-  // imports a cap-evidence module is itself walked (tests/ is in the list
-  // below), and importsOf() records the importer side of that edge.
+  // walked wholesale. Instead, any evidence module referenced by tests or code
+  // is traversed dynamically so transitive reverse edges are preserved.
   for (const d of ["extension", "scripts", "lib", "packages", "tests"]) {
     if (existsSync(join(ROOT, d))) walk(join(ROOT, d));
   }
-  for (const f of files) {
+  const queue = [...files];
+  const processed = new Set();
+  while (queue.length) {
+    const f = queue.pop();
+    if (processed.has(f)) continue;
+    processed.add(f);
     for (const imp of importsOf(f, onLexerFailure)) {
       if (!reverse.has(imp)) reverse.set(imp, new Set());
       reverse.get(imp).add(f);
+      // When an explored file imports an evidence module, traverse that evidence
+      // module's own imports transitively so upstream source changes still select
+      // tests that rely on the evidence instrument.
+      if (imp.includes("/cap-evidence/") && !processed.has(imp)) {
+        queue.push(imp);
+      }
     }
   }
   return reverse;

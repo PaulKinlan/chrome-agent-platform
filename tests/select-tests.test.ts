@@ -79,3 +79,14 @@ Deno.test("select-tests: selected files exist and are sorted, no duplicates", ()
     assert(f.endsWith(".test.ts"), `only test files are selected: ${f}`);
   }
 });
+
+Deno.test("select-tests: evidence modules referenced by tests preserve transitive reverse edges", () => {
+  const reverse = buildReverseGraph();
+  // cap-evidence/3yfs-finalizer-matrix.ts is referenced by tests/evidence-instruments.test.ts
+  // and imports scripts/lib/kat-finalizer.ts. Changing kat-finalizer.ts must select evidence-instruments.test.ts!
+  const selected = selectTestFiles(["scripts/lib/kat-finalizer.ts"], reverse);
+  assert(
+    selected.includes("tests/evidence-instruments.test.ts"),
+    "changing scripts/lib/kat-finalizer.ts must select tests/evidence-instruments.test.ts via cap-evidence transitive edge",
+  );
+});
