@@ -238,18 +238,41 @@ Deno.test("mcp-zod-peer-parity: MCP Server tool registration wire schema preserv
   assertEquals(compiledFromWire3.zodSchema.safeParse({ keyword: "key", depth: 1 }).success, true);
 });
 
-Deno.test("mcp-zod-peer-parity: each installed peer-context contributes exactly 177 bytes across 3 converter files", async () => {
-  // Measure the ACTUAL SW bundle, not the dependency's on-disk size. An npm-only
-  // install resolves one converter at node_modules/ (3 files / 177 bytes). The
-  // fleet-deps/Deno installation resolves two locked 3.25.2 peer contexts in
-  // node_modules/.deno (6 files / 354 bytes). Each context must contribute
-  // Options.js=83, index.js=0, parsers/string.js=94 — independently count
-  // installed contexts instead of blessing either arbitrary bundle output.
-  // The azlc audit's earlier 2,460 included scaffold files retained by an old
-  // process.env define; 3337 removed those.
+Deno.test("mcp-zod-peer-parity: shipped SW converter contribution is exactly 177 bytes across 3 files", async () => {
+  // Bundle IN this test, but retain build.mjs's canonical SDK resolution. A
+  // bare esbuild with only browserDependencies silently follows agent-do's
+  // second Deno SDK peer context and reports 6/354, unlike the SHIPPED SW.
+  // build.mjs pins every SDK import to the root zod@3-bound instance and
+  // tests/bundle-budget.test.ts independently guards one instance shipped.
+  // Each emitted converter must be Options.js=83, index.js=0,
+  // parsers/string.js=94; a second SDK/converter copy fails all three pins.
   const { build, stop } = await import("npm:esbuild@0.25.12");
   const path = await import("node:path");
+  const { realpathSync } = await import("node:fs");
+  const { createRequire } = await import("node:module");
   const { browserDependencies, browserProcessEnvOptions } = await import("../scripts/browser-dependencies.mjs");
+  const sdkDir = realpathSync(path.join(Deno.cwd(), "node_modules/@modelcontextprotocol/sdk"));
+  const zodDir = realpathSync(path.join(Deno.cwd(), "node_modules/zod"));
+  const sdkRequire = createRequire(path.join(sdkDir, "package.json"));
+  const sdkZodPeer = realpathSync(path.dirname(sdkRequire.resolve("zod/package.json")));
+  assertEquals(sdkZodPeer, zodDir, "the root SDK must bind the same zod@3 peer as the production build");
+  const sdkPin = "converter-test-sdk-pin";
+  const pinCanonicalSdk = {
+    name: "converter-test-canonical-sdk",
+    setup(b) {
+      b.onResolve({ filter: /^@modelcontextprotocol\/sdk(\/|$)/ }, async (args) => {
+        if (args.pluginData === sdkPin) return undefined;
+        const resolved = await b.resolve(args.path, {
+          kind: args.kind, importer: args.importer, resolveDir: sdkDir, pluginData: sdkPin,
+        });
+        if (resolved.errors.length) return { errors: resolved.errors, warnings: resolved.warnings };
+        if (!resolved.path.startsWith(sdkDir + path.sep)) {
+          return { errors: [{ text: `SDK resolved outside canonical instance: ${resolved.path}` }] };
+        }
+        return { path: resolved.path, sideEffects: resolved.sideEffects };
+      });
+    },
+  };
 
   try {
     const res = await build({
@@ -260,7 +283,8 @@ Deno.test("mcp-zod-peer-parity: each installed peer-context contributes exactly 
       entryPoints: [path.join(Deno.cwd(), "extension/background/service-worker.js")],
       write: false,
       metafile: true,
-      plugins: [browserDependencies],
+      plugins: [browserDependencies, pinCanonicalSdk],
+      nodePaths: [path.dirname(path.dirname(sdkDir))],
       define: {
         ...browserProcessEnvOptions.define,
         __CAP_BUILD_LOG_DEFAULT__: JSON.stringify("off"),
@@ -283,24 +307,14 @@ Deno.test("mcp-zod-peer-parity: each installed peer-context contributes exactly 
       }
     }
 
-    const sdkPath = await Deno.realPath(path.join(Deno.cwd(), "node_modules/@modelcontextprotocol/sdk"));
-    const denoLayout = sdkPath.includes("/node_modules/.deno/");
-    const contextNames = [];
-    if (denoLayout) {
-      for await (const entry of Deno.readDir(path.join(Deno.cwd(), "node_modules/.deno"))) {
-        if (entry.isDirectory && /^zod-to-json-schema@3\.25\.2(?:_\d+)?$/.test(entry.name)) contextNames.push(entry.name);
-      }
-      assertEquals(contextNames.sort(), ["zod-to-json-schema@3.25.2", "zod-to-json-schema@3.25.2_1"],
-        "the locked Deno installation has exactly two converter peer contexts");
-    }
-    const copies = denoLayout ? contextNames.length : 1;
-    // Keep file-count, byte-total AND per-file pins; a changed converter, a
-    // missing context or an extra duplicate cannot hide behind equal totals.
-    assertEquals(emittedFiles, 3 * copies, "exact converter file count for installed peer contexts");
-    assertEquals(emittedBytes, 177 * copies, "exact emitted converter bytes for installed peer contexts");
+    // Hard pin to ONE shipped converter copy, not to the install's two
+    // available peer contexts. Neither equal-and-opposite edits nor a silent
+    // second instance can pass all three independent assertions.
+    assertEquals(emittedFiles, 3, "exactly one shipped converter instance (3 input files)");
+    assertEquals(emittedBytes, 177, "exactly one shipped converter instance (177 emitted bytes)");
     assertEquals(
       contributions.sort((a, b) => a - b),
-      Array.from({ length: copies }, () => [0, 83, 94]).flat().sort((a, b) => a - b),
+      [0, 83, 94],
       "per-file converter contributions (equal-and-opposite edits cannot cancel out)",
     );
   } finally {
