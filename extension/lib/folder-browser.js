@@ -76,12 +76,12 @@ export function mountGrantBrowser({ host, grant, send, rootLabel = null }) {
   upBtn.type = "button";
   upBtn.className = "btn small fs-up";
   upBtn.style.padding = "1px 8px";
-  upBtn.style.fontSize = "11px";
+  upBtn.style.fontSize = "var(--text-xs, 12px)";
   upBtn.textContent = "↑ Up";
 
   const count = document.createElement("div");
   count.className = "fs-count muted";
-  count.style.fontSize = "11px";
+  count.style.fontSize = "var(--text-xs, 12px)";
   count.style.marginBottom = "4px";
 
   const list = document.createElement("div");
@@ -93,7 +93,7 @@ export function mountGrantBrowser({ host, grant, send, rootLabel = null }) {
   const status = document.createElement("div");
   status.className = "fs-status muted";
   status.style.marginTop = "6px";
-  status.style.fontSize = "11px";
+  status.style.fontSize = "var(--text-xs, 12px)";
 
   header.append(crumbs, upBtn);
   host.replaceChildren(header, count, list, status);
@@ -173,7 +173,7 @@ export function mountGrantBrowser({ host, grant, send, rootLabel = null }) {
     viewer.style.borderRadius = "6px";
     viewer.style.background = "var(--bg,#ffffff)";
     viewer.style.border = "1px solid var(--border,#e3e0d9)";
-    viewer.style.fontSize = "11.5px";
+    viewer.style.fontSize = "var(--text-xs, 12px)";
     viewer.style.fontFamily = "monospace";
     viewer.style.width = "100%";
     viewer.style.boxSizing = "border-box";
@@ -250,7 +250,7 @@ export function mountGrantBrowser({ host, grant, send, rootLabel = null }) {
       viewBtn.type = "button";
       viewBtn.className = "btn small fs-view";
       viewBtn.style.padding = "1px 6px";
-      viewBtn.style.fontSize = "11px";
+      viewBtn.style.fontSize = "var(--text-xs, 12px)";
       viewBtn.textContent = "View";
       viewBtn.addEventListener("click", () => openFile(entry, rowWrapper, viewBtn));
       right.append(viewBtn);

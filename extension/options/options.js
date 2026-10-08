@@ -574,7 +574,7 @@ export async function renderLocalFolders() {
 
     const kindChip = document.createElement("span");
     kindChip.className = "chip";
-    kindChip.style.fontSize = "11px";
+    kindChip.style.fontSize = "var(--text-xs, 12px)";
     kindChip.style.padding = "1px 7px";
     kindChip.style.borderRadius = "999px";
     kindChip.style.border = "1px solid var(--border,#e3e0d9)";
@@ -582,7 +582,7 @@ export async function renderLocalFolders() {
 
     const modeChip = document.createElement("span");
     modeChip.className = "chip";
-    modeChip.style.fontSize = "11px";
+    modeChip.style.fontSize = "var(--text-xs, 12px)";
     modeChip.style.padding = "1px 7px";
     modeChip.style.borderRadius = "999px";
     modeChip.style.border = "1px solid var(--border,#e3e0d9)";
@@ -590,7 +590,7 @@ export async function renderLocalFolders() {
 
     const statusBadge = document.createElement("span");
     statusBadge.className = `chip avail-${grant.status === "granted" ? "ready" : grant.status === "prompt" ? "owner-action-required" : "disabled"}`;
-    statusBadge.style.fontSize = "11px";
+    statusBadge.style.fontSize = "var(--text-xs, 12px)";
     statusBadge.style.padding = "1px 7px";
     statusBadge.style.borderRadius = "999px";
     statusBadge.textContent = grant.status === "granted" ? "active" : grant.status === "prompt" ? "needs re-grant" : grant.status;
