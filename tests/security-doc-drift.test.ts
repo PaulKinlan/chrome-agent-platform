@@ -166,7 +166,13 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string, r
     [section(model, "**INV-1 —", "**INV-2 —"), [listener, classifier]],
     [section(model, "**INV-2 —", "**INV-3 —"), [pureRoute]],
     [section(model, "**INV-5 —", "**INV-6 —"), [fetchRoute, pythonFetch]],
+    [section(register, "### R6", "### R7"), [swRoute("withRunLock"), swRoute("runTask")]],
+    [section(register, "### R8", "### R9"), [swRoute("runTask")]],
     [section(register, "### R11", "### R12"), [namedTools, exportFolder, swRoute("background-agent.delete")]],
+    [section(register, "### R12", "### R13"), [swRoute("ensureOffscreen")]],
+    [section(register, "### R13", "### R14"), [swRoute("resumeInterruptedRuns")]],
+    [section(register, "### R19", "### R20"), [swRoute("owner.import.all")]],
+    [section(register, "### R20", "### R21"), [swRoute("readShadowCatalogInputs")]],
     [section(register, "### R22", "### R23"), [pureRoute, listener, allowlist, classifier]],
   ];
   for (const [piece, anchors] of sections) for (const [path, symbol] of anchors) check(piece, path, symbol);
@@ -174,6 +180,14 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string, r
     "THREAT_MODEL must cite service-worker symbols, not drift-prone source lines");
   assert(!/extension\/background\/service-worker\.js:\d+/.test(section(register, "### R22", "### R23")),
     "R22 must cite service-worker symbols, not drift-prone source lines");
+  // R11's concrete locator is required by the register's four-field contract;
+  // R20's 200-origin expression has no unique named AST declaration. Both are
+  // explicitly approximate; no other register SW number may look authoritative.
+  const numericSwRows = register.split("\n").filter((line) => /extension\/background\/service-worker\.js:\d+/.test(line));
+  assert(numericSwRows.length === 2 &&
+    numericSwRows[0].includes("#named-agent.set-tools") && numericSwRows[0].includes("approximate source-line locator") &&
+    numericSwRows[1].includes("#readShadowCatalogInputs") && numericSwRows[1].includes("deliberately approximate"),
+    "register SW numeric locators must be the two labeled approximations (R11/R20), never an unguarded precise-looking citation");
   assert(!/\b287\b/.test(model), "threat model must not reintroduce the historical 287-route count");
   assert(model.includes(`${registeredOffscreenHosts(read("extension/offscreen/offscreen.js")).length} \`register*Host()\` calls`),
     "the component map must use the actual offscreen registration count");
@@ -227,6 +241,24 @@ Deno.test("o75bp: unrelated source-line insertions do not invalidate live securi
   const pure = read("extension/lib/pure.js");
   const worker = read("extension/background/service-worker.js");
   assertLiveRouteCitations(model, pure, `\n`.repeat(45) + worker);
+});
+
+Deno.test("nk7vi: register symbols survive relocation but missing or ambiguous sources fail closed", () => {
+  const model = read("THREAT_MODEL.md");
+  const pure = read("extension/lib/pure.js");
+  const worker = read("extension/background/service-worker.js");
+  assertLiveRouteCitations(model, pure, `\n`.repeat(45) + worker);
+  assertThrows(() => assertLiveRouteCitations(model, pure,
+    worker.replace("async function resumeInterruptedRuns()", "async function retiredInterruptedRuns()")),
+    Error, "missing security anchor extension/background/service-worker.js#resumeInterruptedRuns");
+  assertThrows(() => assertLiveRouteCitations(model, pure,
+    worker.replace('async "owner.import.all"(', 'async "owner.retired-import"(')),
+    Error, "missing security anchor extension/background/service-worker.js#owner.import.all");
+  const ambiguous = assertThrows(() => assertLiveRouteCitations(model, pure,
+    `${worker}\n{ function readShadowCatalogInputs() {} }\n`),
+    Error, "ambiguous security anchor extension/background/service-worker.js#readShadowCatalogInputs");
+  assert(/candidates: (?:extension\/background\/service-worker\.js:\d+, ){1}extension\/background\/service-worker\.js:\d+/.test(ambiguous.message),
+    "duplicate R20 enclosing-function symbols must list both source lines");
 });
 
 Deno.test("5x4iw: page route and dispatcher citations resolve at current source symbols", () => {

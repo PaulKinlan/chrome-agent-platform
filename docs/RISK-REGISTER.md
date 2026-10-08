@@ -55,7 +55,7 @@ Ordered by architectural class; severity is marked H/M/L (likelihood $\times$ bl
 
 ### R6 (M). Run fence is a module-level singleton, safe only under strict serialization
 - **Risk:** `extension/lib/run-fence.js` maintains execution fences via a module-level singleton (`currentFenceToken`). This mechanism relies completely on runs being strictly serialized via `withRunLock`. If any future code path dispatches concurrent tasks within the Service Worker realm, abort signals and mutation fences will cross-wire, causing run A to invalidate or corrupt run B's mutations.
-- **Lives at:** `extension/lib/run-fence.js:10-30` (`currentFenceToken`), `extension/background/service-worker.js:8200` (`withRunLock` in `runTask`).
+- **Lives at:** `extension/lib/run-fence.js:10-30` (`currentFenceToken`); `extension/background/service-worker.js#withRunLock` (the lock declaration) and `extension/background/service-worker.js#runTask` (the run entry point). The anchors establish both declarations, not that every invocation remains locked.
 - **Mitigation:** `withRunLock` serializes interactive and delegated task execution; background workers run in separate SharedWorker contexts.
 - **Open question:** As agent worker offloading expands, should run fence tokens be explicitly threaded through execution context objects rather than stored in module-global singletons?
 
@@ -67,7 +67,7 @@ Ordered by architectural class; severity is marked H/M/L (likelihood $\times$ bl
 
 ### R8 (M). Drift between Service Worker and SharedWorker execution paths
 - **Risk:** The background agent migration is partially complete: interactive runs and alarm routines still run inside the Service Worker (`runTask`), while offscreen sub-agents run in `SharedWorker` contexts (`agent-worker.js`). Features added to one execution engine do not automatically exist in the other, creating subtle behavioral divergence.
-- **Lives at:** `extension/background/routes/agent-worker.js:243` (`agent-worker.run`) vs `extension/background/service-worker.js:8200` (`runTask`).
+- **Lives at:** `extension/background/routes/agent-worker.js:243` (`agent-worker.run`) vs `extension/background/service-worker.js#runTask` (the SW run entry point).
 - **Mitigation:** Shared tool execution bridge: `agent-worker.tool` proxies tool execution back through the Service Worker dispatcher, ensuring identical grant and redaction gates.
 - **Open question:** When will alarm and scheduled routines be migrated to SharedWorkers to retire the legacy SW execution path?
 
@@ -85,7 +85,7 @@ Ordered by architectural class; severity is marked H/M/L (likelihood $\times$ bl
 
 ### R11 (H). Unclassified Service Worker dispatch mutations (ygvt)
 - **Risk:** The executable dispatch census (`docs/SW-DISPATCH-AUTHORITY-CENSUS.md` §4.9) lists 37 unclassified mutation routes without route-local principal checks (`isOwnerPrincipal`) or owner-approval gates (`requireOwnerApproval`). For example, `named-agent.set-tools` mutates agent tool configurations and `asset.export-to-folder` writes an asset to a granted folder. Unclassified does not alone establish exploitability; the central listener still filters page callers.
-- **Lives at:** `extension/background/service-worker.js#named-agent.set-tools` (current source line `extension/background/service-worker.js:8426`), `extension/background/service-worker.js#asset.export-to-folder`, and the other 35 routes in §4.9. `background-agent.delete` (`extension/background/service-worker.js#background-agent.delete`) is now owner-direct approval-gated (§4.3), not part of these 37.
+- **Lives at:** `extension/background/service-worker.js#named-agent.set-tools` (approximate source-line locator `extension/background/service-worker.js:8426`; the symbol, not this moving number, is authoritative), `extension/background/service-worker.js#asset.export-to-folder`, and the other 35 routes in §4.9. `background-agent.delete` (`extension/background/service-worker.js#background-agent.delete`) is now owner-direct approval-gated (§4.3), not part of these 37.
 - **Mitigation:** Central message listener blocks content scripts (`PAGE_ALLOWED_ROUTES`), ensuring external pages cannot invoke these routes.
 - **Open question:** Should all 37 unclassified mutation routes be retrofitted to require `isOwnerPrincipal(context)` or explicit `requireOwnerApproval` gates to ensure non-owner extension contexts cannot trigger unprompted mutations?
 
@@ -95,13 +95,13 @@ Ordered by architectural class; severity is marked H/M/L (likelihood $\times$ bl
 
 ### R12 (H). The offscreen document is a single point of failure for its execution and runtime lanes
 - **Risk:** MV3 Service Workers cannot create DOM or dedicated workers. The single offscreen document (`extension/offscreen/offscreen.html`) registers the host lanes plus script-sandbox and clipboard listeners enumerated in the authoritative **“Offscreen host inventory”** table in `THREAT_MODEL.md` §1 (per-lane executable operation and sender/asset trust boundary); do not maintain a second count or list here. Reclaiming this document can interrupt in-flight work and ports across those lanes together; later re-creation does not retroactively settle a job whose result or external side effect was interrupted. SVG rasterise and on-device text are runtime lanes, not Wasm execution. The NTP can host the on-demand script sandbox separately; it is not a replacement for every offscreen host.
-- **Lives at:** `extension/offscreen/offscreen.js:21-89` (`registerAcpModelHost` through `registerOnDeviceTextHost`, `handleScriptRunMessage`, and `cap:clipboard-write`); `ensureOffscreen` at `extension/background/service-worker.js:520`. Inventory re-read at `origin/main@28c7189d` (v0.3.593), not inferred from the incomplete onMessage-only census §6.2.
+- **Lives at:** `extension/offscreen/offscreen.js:21-89` (`registerAcpModelHost` through `registerOnDeviceTextHost`, `handleScriptRunMessage`, and `cap:clipboard-write`); `ensureOffscreen` at `extension/background/service-worker.js#ensureOffscreen`. Inventory re-read at `origin/main@28c7189d` (v0.3.593), not inferred from the incomplete onMessage-only census §6.2.
 - **Mitigation:** Disposable-by-design worker model; automatic offscreen re-creation on demand; durable run state in OPFS supports reconciliation of interrupted runs. Each lane's sender/asset controls are specified alongside its operation in the `THREAT_MODEL.md` §1 table (`extension/lib/pure.js:959` for the common SW predicate; `extension/lib/acp-model-host.js:5-13` for the ACP port; `extension/lib/emscripten-host.js:110`, `:168` for exact job keys and asset hashes). These controls reduce authority confusion but do not remove the shared lifecycle blast radius.
 - **Open question:** Can Chromium grant extension service workers dedicated background workers directly, eliminating the fragile offscreen multiplexer? A new `register*Host()` must update this inventory and the threat-model INV-15 guard; the present onMessage sender guard does not ensure inventory completeness.
 
 ### R13 (M). MV3 Service Worker lifecycle ephemerality vs long-running tasks
 - **Risk:** Chromium aggressively terminates extension Service Workers after 30 seconds of idle time or under system memory pressure. When the Service Worker is terminated, all volatile execution state (in-memory locks, stream readers, active promises) is destroyed. When a mutating tool call is interrupted mid-flight by SW termination, the recovery sweep on next boot cannot determine if the external mutation completed; it pauses the execution, forcing the user to manually intervene.
-- **Lives at:** `extension/lib/durable-runs.js:1-100` (WAL outbox and recovery), `extension/background/service-worker.js:10740` (`resumeInterruptedRuns`).
+- **Lives at:** `extension/lib/durable-runs.js:1-100` (WAL outbox and recovery), `extension/background/service-worker.js#resumeInterruptedRuns` (the recovery entry point).
 - **Mitigation:** Outbox settlement pattern; write-ahead logging (WAL) of run steps; automatic 15-second alarm pings to extend worker lifetime during active runs.
 - **Open question:** When will the web platform support durable background worker threads for agent extensions without reliance on artificial keep-alive pings?
 
@@ -142,13 +142,13 @@ Ordered by architectural class; severity is marked H/M/L (likelihood $\times$ bl
 
 ### R19 (M). Monolithic data archive 512 MiB / 100k file caps & IPC buffering (2g90)
 - **Risk:** The existing "Export All" and "Import All" features buffer the entire OPFS file tree into in-memory base64 JSON strings transmitted over `chrome.runtime.sendMessage`. Profiles exceeding Chrome's ~64 MiB IPC buffer limit fail immediately, and large profiles risk V8 string allocation errors. Furthermore, `data-archive.js` enforces arbitrary caps of 512 MiB and 100,000 files, preventing backups of large user profiles.
-- **Lives at:** `extension/lib/data-archive.js:104-105` (`MAX_ARCHIVE_OPFS_FILES = 100_000`, `MAX_ARCHIVE_TOTAL_BYTES = 512 * 1024 * 1024`), `extension/background/service-worker.js:7651`, `extension/options/options.js:3184`.
+- **Lives at:** `extension/lib/data-archive.js:104-105` (`MAX_ARCHIVE_OPFS_FILES = 100_000`, `MAX_ARCHIVE_TOTAL_BYTES = 512 * 1024 * 1024`), `extension/background/service-worker.js#owner.import.all` (the buffered import route), `extension/options/options.js:3184`.
 - **Mitigation:** Typed refusal errors (`archive-too-large`); comprehensive architecture designed in `docs/STREAMED-BACKUP-RESTORE-ARCHITECTURE.md` to transition backup/restore to client-side streaming TAR via the File System Access API.
 - **Open question:** Implementation roadmap for the 5-stage streaming backup project (bead `chrome-agent-platform-2g90`).
 
 ### R20 (L). Catalog rebuild per tool search
-- **Risk:** `search_tools` dynamically rebuilds the live capability catalog on every invocation to ensure freshness across enrolled origins and MCP servers. The catalog assembly caps origin inspection at 200 origins (`listOrigins().slice(0, 200)`). A user with more than 200 enrolled origins experiences silent truncation of search results.
-- **Lives at:** `extension/background/service-worker.js:3934` (`listOrigins().slice(0, 200)`).
+- **Risk:** `search_tools` dynamically rebuilds the live capability catalog on every invocation to ensure freshness across enrolled origins and MCP servers. The catalog assembly caps origin inspection at 200 origins (`(await listOrigins()).slice(0, 200)`). A user with more than 200 enrolled origins experiences silent truncation of search results.
+- **Lives at:** `extension/background/service-worker.js#readShadowCatalogInputs` (the enclosing catalog-input function); `extension/background/service-worker.js:5044` is a deliberately approximate source-line locator for its `(await listOrigins()).slice(0, 200)` cap, **not** a unique symbol or a guarded line pin. The symbol guards the function's existence, not the cap itself.
 - **Mitigation:** In-memory caching of provider definitions; 200-origin bound prevents catastrophic search latency.
 - **Open question:** Should the UI surface a notification when the enrolled origin count exceeds the 200-origin search threshold?
 
