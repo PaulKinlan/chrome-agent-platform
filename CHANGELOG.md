@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.600] — 2026-10-08
+- Align the mention popup with the model picker and remove a dead anchor declaration so the composer menu positions consistently.
+
 ## [0.3.599] — 2026-10-08
 - Anchor the composer mention and model popups to their triggering controls with no JavaScript geometry, keeping the same keyboard and ARIA behaviour.
 
