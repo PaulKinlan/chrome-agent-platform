@@ -562,10 +562,45 @@ Deno.test("injectedTableExtractor: whole-page table, cell, and time budgets enfo
   }
   doc5.body.appendChild(cardList);
 
-  const resCardByteLimit = injectedTableExtractor({ customDocument: doc5, maxBytes: 1 });
+  const resCardByteLimit = injectedTableExtractor({ customDocument: doc5, maxBytes: 80 });
   assertEquals(resCardByteLimit.tables.length, 1);
   assertEquals(resCardByteLimit.tables[0].truncated, true);
   assertEquals(resCardByteLimit.tables[0].truncationReason, "byte-limit");
+
+  // Test 8f: Hostile <tr> with 500 cells bounded to maxColumns without allocating all cells (P1a item 2)
+  const doc6 = createMockDocument();
+  const tblWide = new MockNode("table");
+  const wideTr = new MockNode("tr");
+  for (let c = 0; c < 500; c++) {
+    const td = new MockNode("td"); td.appendChild(new MockNode("#text", 3, `cell_${c}`));
+    wideTr.appendChild(td);
+  }
+  tblWide.appendChild(wideTr);
+  doc6.body.appendChild(tblWide);
+
+  const resWide = injectedTableExtractor({ customDocument: doc6, maxColumns: 50 });
+  assertEquals(resWide.tables.length, 1);
+  assertEquals(resWide.tables[0].columnCount, 50);
+  assertEquals(resWide.tables[0].truncated, true);
+  assertEquals(resWide.tables[0].truncationReason, "column-limit");
+
+  // Test 8g: Deeply nested DOM structure triggers depth-limit without stack overflow (P1b)
+  const doc7 = createMockDocument();
+  let curr = doc7.body;
+  for (let d = 0; d < 50; d++) {
+    const nextDiv = new MockNode("div");
+    curr.appendChild(nextDiv);
+    curr = nextDiv;
+  }
+  const deepTable = new MockNode("table");
+  const deepTr = new MockNode("tr");
+  const deepTd = new MockNode("td"); deepTd.appendChild(new MockNode("#text", 3, "deep"));
+  deepTr.appendChild(deepTd); deepTable.appendChild(deepTr);
+  curr.appendChild(deepTable);
+
+  const resDeep = injectedTableExtractor({ customDocument: doc7 });
+  assertEquals(resDeep.pageTruncated, true);
+  assertEquals(resDeep.pageTruncationReason, "depth-limit");
 });
 
 // ── 9. DOM-root scope: extractTablesFromDom must not escape root (P2) ───────────

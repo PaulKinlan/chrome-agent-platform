@@ -192,8 +192,8 @@ export function injectedTableExtractor({
     if (!node) return "";
     var text = "";
 
-    function walk(n) {
-      if (text.length >= maxChars) return;
+    function walk(n, depth) {
+      if (text.length >= maxChars || depth > 20) return;
       if (n.nodeType === 3) {
         var val = n.nodeValue || "";
         var remaining = maxChars - text.length;
@@ -205,13 +205,13 @@ export function injectedTableExtractor({
         if (ignoreNestedTables && tag === "TABLE") return;
         var children = n.childNodes || [];
         for (var i = 0; i < children.length; i++) {
-          walk(children[i]);
+          walk(children[i], depth + 1);
           if (text.length >= maxChars) break;
         }
       }
     }
 
-    walk(node);
+    walk(node, 0);
     return clean(text);
   }
 
@@ -263,23 +263,35 @@ export function injectedTableExtractor({
     return true;
   }
 
-  // Incremental, bounded element finder that avoids full querySelectorAll array allocation
-  function findMatchingElements(root, isMatch, maxCount) {
+  // Iterative bounded element finder that avoids stack overflow and full querySelectorAll array allocation
+  var MAX_WALK_DEPTH = 32;
+  function findMatchingElements(root, isMatch, maxCount, maxDepth) {
+    var depthLimit = typeof maxDepth === "number" ? maxDepth : MAX_WALK_DEPTH;
     var results = [];
-    function walk(node) {
-      if (results.length >= maxCount) return;
-      if (!checkBudget()) return;
+    var stack = [{ node: root, depth: 0 }];
+
+    while (stack.length > 0 && results.length < maxCount) {
+      if (!checkBudget()) break;
+      var item = stack.pop();
+      var node = item.node;
+      var depth = item.depth;
+
       if (node !== root && isMatch(node)) {
         results.push(node);
-        if (results.length >= maxCount) return;
-      }
-      var ch = node.children || [];
-      for (var i = 0; i < ch.length; i++) {
-        walk(ch[i]);
         if (results.length >= maxCount) break;
       }
+
+      if (depth >= depthLimit) {
+        pageTruncated = true;
+        if (!pageTruncationReason) pageTruncationReason = "depth-limit";
+        continue;
+      }
+
+      var ch = node.children || [];
+      for (var i = ch.length - 1; i >= 0; i--) {
+        stack.push({ node: ch[i], depth: depth + 1 });
+      }
     }
-    walk(root);
     return results;
   }
 
@@ -303,13 +315,12 @@ export function injectedTableExtractor({
 
   // 1. Native HTML <table> elements (bounded live enumeration)
   function collectTables(rootNode) {
-    var list = [];
     if (rootNode.tagName && rootNode.tagName.toUpperCase() === "TABLE") {
-      list.push(rootNode);
-      return list;
+      return [rootNode];
     }
     if (rootNode.getElementsByTagName) {
       var liveColl = rootNode.getElementsByTagName("table");
+      var list = [];
       for (var idx = 0; idx < liveColl.length; idx++) {
         if (list.length >= maxTablesPerPage) {
           pageTruncated = true;
@@ -318,34 +329,20 @@ export function injectedTableExtractor({
         }
         list.push(liveColl[idx]);
       }
-      return list;
-    }
-    function walkEl(n) {
-      if (list.length >= maxTablesPerPage) {
+      if (liveColl.length > maxTablesPerPage) {
         pageTruncated = true;
         pageTruncationReason = "table-limit";
-        return;
       }
-      var tag = n.tagName ? n.tagName.toUpperCase() : "";
-      if (tag === "TABLE") {
-        if (list.length >= maxTablesPerPage) {
-          pageTruncated = true;
-          pageTruncationReason = "table-limit";
-          return;
-        }
-        list.push(n);
-      }
-      var ch = n.children || [];
-      for (var c = 0; c < ch.length; c++) {
-        walkEl(ch[c]);
-        if (list.length >= maxTablesPerPage) {
-          pageTruncated = true;
-          pageTruncationReason = "table-limit";
-          break;
-        }
-      }
+      return list;
     }
-    walkEl(rootNode);
+    var list = findMatchingElements(rootNode, function (n) {
+      return n && n.nodeType === 1 && n.tagName && n.tagName.toUpperCase() === "TABLE";
+    }, maxTablesPerPage + 1);
+    if (list.length > maxTablesPerPage) {
+      pageTruncated = true;
+      pageTruncationReason = "table-limit";
+      list = list.slice(0, maxTablesPerPage);
+    }
     return list;
   }
 
@@ -432,18 +429,20 @@ export function injectedTableExtractor({
           sp.remaining--;
           if (sp.remaining <= 0) headActiveRowSpans.splice(si, 1);
         }
-        var hcells = Array.prototype.slice.call(htr.children || []).filter(function (c) {
-          var tg = c.tagName ? c.tagName.toUpperCase() : "";
-          return tg === "TH" || tg === "TD";
-        });
-        for (var hc = 0; hc < hcells.length; hc++) {
-          var hcell = hcells[hc];
+        var htrChildren = htr.children || [];
+        var hcellCount = 0;
+        for (var hc = 0; hc < htrChildren.length && hcellCount < maxColumns; hc++) {
+          if (!checkBudget()) break;
+          var hcell = htrChildren[hc];
+          var tg = hcell.tagName ? hcell.tagName.toUpperCase() : "";
+          if (tg !== "TH" && tg !== "TD") continue;
           var hcs = parseInt(hcell.getAttribute ? (hcell.getAttribute("colspan") || "1") : "1", 10);
           var hrs = parseInt(hcell.getAttribute ? (hcell.getAttribute("rowspan") || "1") : "1", 10);
           var hspan = (Number.isFinite(hcs) && hcs > 1) ? hcs : 1;
           var hrspan = (Number.isFinite(hrs) && hrs > 1) ? hrs : 1;
           var htxt = extractBoundedText(hcell, maxCellChars, true);
           placeCellInGrid(hrow, headActiveRowSpans, htxt, hspan, hrspan, maxColumns, theadRows.length - hr);
+          hcellCount++;
         }
         headGrid.push(hrow);
       }
@@ -461,21 +460,27 @@ export function injectedTableExtractor({
       while (rawHeaders.length > 0 && !rawHeaders[rawHeaders.length - 1]) rawHeaders.pop();
     } else if (dataRows.length > 0) {
       var firstTr = dataRows[0];
-      var firstCells = Array.prototype.slice.call(firstTr.children || []).filter(function (c) {
-        var tg = c.tagName ? c.tagName.toUpperCase() : "";
-        return tg === "TH" || tg === "TD";
-      });
-      var hasTh = firstCells.some(function (c) { return c.tagName && c.tagName.toUpperCase() === "TH"; });
+      var firstChildren = firstTr.children || [];
+      var hasTh = false;
+      for (var fci = 0; fci < firstChildren.length && fci < maxColumns; fci++) {
+        var tg = firstChildren[fci].tagName ? firstChildren[fci].tagName.toUpperCase() : "";
+        if (tg === "TH") { hasTh = true; break; }
+      }
       if (hasTh) {
         dataRows.shift();
         var frow = new Array(maxColumns).fill(null);
         var fActive = [];
-        for (var fc = 0; fc < firstCells.length; fc++) {
-          var fcell = firstCells[fc];
+        var fcCount = 0;
+        for (var fci = 0; fci < firstChildren.length && fcCount < maxColumns; fci++) {
+          if (!checkBudget()) break;
+          var fcell = firstChildren[fci];
+          var tg = fcell.tagName ? fcell.tagName.toUpperCase() : "";
+          if (tg !== "TH" && tg !== "TD") continue;
           var fcs = parseInt(fcell.getAttribute ? (fcell.getAttribute("colspan") || "1") : "1", 10);
           var fspan = (Number.isFinite(fcs) && fcs > 1) ? fcs : 1;
           var ftxt = extractBoundedText(fcell, maxCellChars, true);
           placeCellInGrid(frow, fActive, ftxt, fspan, 1, maxColumns, 1);
+          fcCount++;
         }
         for (var fk = 0; fk < maxColumns; fk++) {
           if (frow[fk] != null) rawHeaders.push(frow[fk]);
@@ -512,14 +517,14 @@ export function injectedTableExtractor({
         if (span.remaining <= 0) activeRowSpans.splice(si, 1);
       }
 
-      // 2. Place direct cells
-      var dcells = Array.prototype.slice.call(tr.children || []).filter(function (c) {
-        var tg = c.tagName ? c.tagName.toUpperCase() : "";
-        return tg === "TD" || tg === "TH";
-      });
-
-      for (var c = 0; c < dcells.length; c++) {
-        var cell = dcells[c];
+      // 2. Place direct cells without array slicing or filtering (P1a)
+      var trChildren = tr.children || [];
+      var cellCount = 0;
+      for (var c = 0; c < trChildren.length && cellCount < maxColumns; c++) {
+        if (!checkBudget()) break;
+        var cell = trChildren[c];
+        var tg = cell.tagName ? cell.tagName.toUpperCase() : "";
+        if (tg !== "TD" && tg !== "TH") continue;
         var cs = parseInt(cell.getAttribute ? (cell.getAttribute("colspan") || "1") : "1", 10);
         var rs = parseInt(cell.getAttribute ? (cell.getAttribute("rowspan") || "1") : "1", 10);
         var cspan = (Number.isFinite(cs) && cs > 1) ? cs : 1;
@@ -532,6 +537,11 @@ export function injectedTableExtractor({
           if (!truncationReason) truncationReason = "column-limit";
           break;
         }
+        cellCount++;
+      }
+      if (trChildren.length > maxColumns) {
+        truncated = true;
+        if (!truncationReason) truncationReason = "column-limit";
       }
 
       var lastFilled = -1;
@@ -735,6 +745,7 @@ export function injectedTableExtractor({
     var seenF = {};
     var cardTruncated = false;
     var cardTruncationReason = null;
+    var cardWorkingBytes = 0;
 
     function addField(f) {
       if (!seenF[f]) { seenF[f] = true; fieldOrder.push(f); }
@@ -750,6 +761,11 @@ export function injectedTableExtractor({
         cardTruncationReason = "row-limit";
         break;
       }
+      if (cardWorkingBytes >= maxBytes) {
+        cardTruncated = true;
+        cardTruncationReason = "byte-limit";
+        break;
+      }
       if (!checkBudget()) {
         cardTruncated = true;
         cardTruncationReason = pageTruncationReason;
@@ -757,37 +773,47 @@ export function injectedTableExtractor({
       }
 
       var rec = {};
+      var recWorkingBytes = 0;
       var foundFields = 0;
+
+      function trySetField(key, val) {
+        if (!key || rec[key]) return;
+        var fBytes = measureBytes(key) + measureBytes(val);
+        if (cardWorkingBytes + recWorkingBytes + fBytes > maxBytes) {
+          cardTruncated = true;
+          cardTruncationReason = "byte-limit";
+          return;
+        }
+        rec[key] = val;
+        recWorkingBytes += fBytes;
+        addField(key);
+        foundFields++;
+      }
 
       // Incremental walk of card children to avoid full descendant materialization
       function walkCardFields(n, depth) {
         if (depth > 4 || foundFields >= maxColumns) return;
         if (!checkBudget()) return;
+        if (cardWorkingBytes + recWorkingBytes >= maxBytes) {
+          cardTruncated = true;
+          cardTruncationReason = "byte-limit";
+          return;
+        }
         var tag = n.tagName ? n.tagName.toUpperCase() : "";
         if (tag === "DT") {
           var dd = n.nextElementSibling && n.nextElementSibling.tagName === "DD" ? n.nextElementSibling : null;
           if (dd) {
             var k = extractBoundedText(n, 100, false);
-            if (k && !rec[k]) {
-              rec[k] = extractBoundedText(dd, maxCellChars, false);
-              addField(k);
-              foundFields++;
-            }
+            if (k) trySetField(k, extractBoundedText(dd, maxCellChars, false));
           }
         } else if (/^H[2-6]$/.test(tag) && !rec["Title"] && !rec["Name"]) {
           var field = (container.className && container.className.indexOf("speaker") !== -1) ? "Name" : "Title";
-          rec[field] = extractBoundedText(n, maxCellChars, false);
-          addField(field);
-          foundFields++;
+          trySetField(field, extractBoundedText(n, maxCellChars, false));
         } else if (n.getAttribute) {
           var df = n.getAttribute("data-field");
           if (df) {
             var k = clean(df).slice(0, 100);
-            if (k && !rec[k]) {
-              rec[k] = extractBoundedText(n, maxCellChars, false);
-              addField(k);
-              foundFields++;
-            }
+            if (k) trySetField(k, extractBoundedText(n, maxCellChars, false));
           } else {
             var cls = String(n.getAttribute("class") || "").toLowerCase();
             var tokens = ["price", "cost", "role", "topic", "time", "date", "status", "category"];
@@ -795,9 +821,7 @@ export function injectedTableExtractor({
               if (cls.indexOf(tokens[tki]) !== -1) {
                 var key = tokens[tki].charAt(0).toUpperCase() + tokens[tki].slice(1);
                 if (!rec[key]) {
-                  rec[key] = extractBoundedText(n, maxCellChars, false);
-                  addField(key);
-                  foundFields++;
+                  trySetField(key, extractBoundedText(n, maxCellChars, false));
                   break;
                 }
               }
@@ -807,7 +831,7 @@ export function injectedTableExtractor({
         var ch = n.children || [];
         for (var ci = 0; ci < ch.length; ci++) {
           walkCardFields(ch[ci], depth + 1);
-          if (foundFields >= maxColumns) break;
+          if (foundFields >= maxColumns || (cardTruncated && cardTruncationReason === "byte-limit")) break;
         }
       }
 
@@ -815,7 +839,11 @@ export function injectedTableExtractor({
 
       if (Object.keys(rec).length > 0) {
         cardRecords.push(rec);
+        cardWorkingBytes += recWorkingBytes;
         totalCellsCount += Object.keys(rec).length;
+      }
+      if (cardTruncated && cardTruncationReason === "byte-limit") {
+        break;
       }
     }
 
@@ -826,7 +854,7 @@ export function injectedTableExtractor({
       var rows = [];
       var currentBytes = 0;
 
-      // Measure UTF-8 bytes BEFORE retaining card rows (P1a item 3)
+      // Retain card rows with safety byte bounding
       for (var cri = 0; cri < cardRecords.length; cri++) {
         var rec = cardRecords[cri];
         var row = headers.map(function (hdr) { return rec[hdr] || ""; });

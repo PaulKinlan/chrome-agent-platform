@@ -283,8 +283,8 @@ try {
 
   const mountValue = mountResult.result?.result?.value;
   console.log("[journey] frame inspection of table-preview:", mountValue);
-  if (!mountValue || !mountValue.ok || mountValue.renderedRows < 2) {
-    throw new Error(`Frame inspection failed: ${JSON.stringify(mountValue)}`);
+  if (!mountValue || !mountValue.ok || mountValue.renderedRows < 2 || (mountValue.renderedThs ?? 0) < 1) {
+    throw new Error(`Frame inspection failed: expected renderedRows >= 2 and renderedThs >= 1, got: ${JSON.stringify(mountValue)}`);
   }
 
   await sleep(1500);
@@ -301,8 +301,8 @@ try {
   await Deno.writeFile(screenshotPath, screenshotBytes);
   console.log(`[journey] saved screenshot evidence to: ${screenshotPath} (${screenshotBytes.byteLength} bytes)`);
 
-  if (screenshotBytes.byteLength < 1000) {
-    throw new Error("Screenshot evidence too small / blank");
+  if (screenshotBytes.byteLength < 50000) {
+    throw new Error(`Screenshot evidence too small (${screenshotBytes.byteLength} bytes < 50000 bytes) — preview failed to render`);
   }
 
   console.log("PASS: extract_tables journey verified with 3 extracted tables and thread artifact screenshot");
