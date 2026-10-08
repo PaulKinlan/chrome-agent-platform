@@ -18,14 +18,20 @@ Deno.test("sidepanel.html: .page-empty-state has flex: 1 to pin composer to bott
   assert(/justify-content:\s*center/.test(rule), ".page-empty-state must have justify-content: center");
 });
 
-Deno.test("components.js: agent-composer CSS does not use invalid span-x-start anchor syntax", async () => {
+Deno.test("components.js: anchor positioning syntax rejects invalid physical span-x/y and enforces valid logical syntax", async () => {
   const src = await Deno.readTextFile("extension/shared/components.js");
-  assert(!src.includes("span-x-start"), "agent-composer must not use invalid span-x-start syntax");
-  assert(!src.includes("position-anchor:--composer-anchor"), "agent-composer must not use broken position-anchor:--composer-anchor");
-  assert(!src.includes("position-anchor: --composer-anchor"), "agent-composer must not use broken position-anchor: --composer-anchor");
+  // Reject invalid non-standard physical syntax (span-x-start, span-y-start, span-x-end, span-y-end)
+  assert(!src.includes("span-x-start"), "components must not use invalid span-x-start syntax");
+  assert(!src.includes("span-y-start"), "components must not use invalid span-y-start syntax");
+  assert(!src.includes("span-x-end"), "components must not use invalid span-x-end syntax");
+  assert(!src.includes("span-y-end"), "components must not use invalid span-y-end syntax");
+
+  // Validate that standard logical syntax (span-inline-start / span-inline-end) is used for anchor positioning
+  assert(src.includes("span-inline-end"), "components must use standard span-inline-end syntax");
+  assert(src.includes("span-inline-start"), "components must use standard span-inline-start syntax");
 });
 
-Deno.test("agent-composer: _showPopup anchors directly to .composer via position: absolute", async () => {
+Deno.test("agent-composer: _showPopup anchors suggestion popover according to anchor contract", async () => {
   const registry = new Map();
   class HTMLElementStub {
     attachShadow() { return { innerHTML: "", querySelector: () => null, querySelectorAll: () => [], appendChild() {} }; }
@@ -115,19 +121,37 @@ Deno.test("agent-composer: _showPopup anchors directly to .composer via position
   composerInstance._popup = popupEl;
   composerInstance._input = new FakeElement("textarea");
 
-  // Show popup near bottom -> should open above
+  // Case 1: In native CSS anchor positioning supported environment
+  globalThis.CSS = {
+    supports: (prop: string, _val: string) => prop === "position-area",
+  } as any;
+
   composerInstance._showPopup([{ id: "s1", label: "Skill 1" }], { type: "mention", start: 0, end: 1 });
-  assertEquals(popupEl.style.position, "absolute");
-  assertEquals(popupEl.style.bottom, "calc(100% + 6px)");
+  assertEquals(popupEl.hidden, false, "popup must be visible");
+  assertEquals(popupEl.style.position, "", "native anchor mode leaves position to CSS");
+  assertEquals(popupEl.style.top, "", "native anchor mode leaves top to CSS position-area");
+  assertEquals(popupEl.style.bottom, "", "native anchor mode leaves bottom to CSS position-area");
+  assertEquals(popupEl.style.width, "", "native anchor mode leaves width to CSS anchor-size");
+
+  // Case 2: In fallback environment without CSS anchor positioning support
+  globalThis.CSS = {
+    supports: () => false,
+  } as any;
+
+  // Near bottom: should flip above
+  composerBox._rect = { top: 540, bottom: 620, left: 14, right: 346, width: 332, height: 80 };
+  composerInstance._showPopup([{ id: "s1", label: "Skill 1" }], { type: "mention", start: 0, end: 1 });
+  assertEquals(popupEl.style.position, "fixed", "fallback mode uses position: fixed for top-layer popover");
+  assertEquals(popupEl.style.bottom, "106px", "fallback opens above anchor when docked near bottom");
   assertEquals(popupEl.style.top, "auto");
-  assertEquals(popupEl.style.left, "0px");
+  assertEquals(popupEl.style.left, "14px");
   assertEquals(popupEl.style.width, "332px");
 
-  // Simulate composer near top of viewport: top 40, bottom 120
+  // Near top: should open below
   composerBox._rect = { top: 40, bottom: 120, left: 14, right: 346, width: 332, height: 80 };
   composerInstance._showPopup([{ id: "s1", label: "Skill 1" }], { type: "mention", start: 0, end: 1 });
-  assertEquals(popupEl.style.position, "absolute");
-  assertEquals(popupEl.style.top, "calc(100% + 6px)");
+  assertEquals(popupEl.style.position, "fixed", "fallback mode uses position: fixed");
+  assertEquals(popupEl.style.top, "126px", "fallback opens below when space permits");
   assertEquals(popupEl.style.bottom, "auto");
 });
 
