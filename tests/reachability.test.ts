@@ -10,6 +10,7 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   checkReachability,
   checkExportReachability,
+  checkScriptsExportReachability,
   RETAINED,
   RETAINED_EXPORTS,
   candidateRefs,
@@ -127,7 +128,7 @@ Deno.test("reachability: edges come from string tokens, never comments; dist bun
   assertEquals(candidateRefs("page/p.html", `<script type="module" src="../lib/a.js"></script><link rel="stylesheet" href="./x.css">`), ["../lib/a.js", "./x.css"]);
 });
 
-Deno.test("reachability (kf3h): exportedFunctions extracts declarations and excludes comments", () => {
+Deno.test("reachability (kf3h / P2): exportedFunctions extracts callables, excludes comments and non-callables", () => {
   const code = `
     // export function commentedOut() {}
     /* export function inBlockComment() {} */
@@ -136,12 +137,153 @@ Deno.test("reachability (kf3h): exportedFunctions extracts declarations and excl
     export const arrowFunc = () => 42;
     export let exprFunc = function() {};
     export const nonFuncValue = 100;
+    export const nonFuncObj = { foo: "bar" };
     export { localOne, localTwo as renamedTwo };
   `;
   const fns = exportedFunctions(code, "test.js");
-  assertEquals(fns, ["arrowFunc", "asyncFunc", "exprFunc", "localOne", "nonFuncValue", "renamedTwo", "syncFunc"]);
+  assertEquals(fns, ["arrowFunc", "asyncFunc", "exprFunc", "localOne", "renamedTwo", "syncFunc"]);
   assert(!fns.includes("commentedOut"), "commented function must not be extracted");
   assert(!fns.includes("inBlockComment"), "block-commented function must not be extracted");
+  assert(!fns.includes("nonFuncValue"), "non-callable constant must not be extracted as function (P2)");
+  assert(!fns.includes("nonFuncObj"), "non-callable object must not be extracted as function (P2)");
+});
+
+Deno.test("reachability (kf3h / P1c): import classification is comment-safe", async () => {
+  const fixtureFiles: Record<string, string> = {
+    "lib/provider.js": `
+      export function commentShadowedFunc() { return "shadowed"; }
+    `,
+    "lib/consumer.js": `
+      // A commented-out import statement must not affect real call counting
+      // import { commentShadowedFunc } from "./provider.js";
+      commentShadowedFunc();
+    `,
+  };
+
+  const fixtureIo = {
+    readFile: async (p: string) => {
+      const rel = p.replace(/^mock\//, "");
+      if (fixtureFiles[rel]) return fixtureFiles[rel];
+      throw new Error(`File not found: ${p}`);
+    },
+    readdir: async () => [],
+  };
+
+  const report = await checkExportReachability({
+    root: "mock",
+    reached: new Set(["lib/provider.js", "lib/consumer.js"]),
+    io: fixtureIo,
+    strictExports: true,
+  });
+
+  assert(
+    report.reachedExports.includes("lib/provider.js:commentShadowedFunc"),
+    "commented-out import must not confuse call counter (kf3h P1c)",
+  );
+});
+
+Deno.test("reachability (kf3h / P1b): aliased imports and re-export barrels", async () => {
+  const fixtureFiles: Record<string, string> = {
+    "lib/provider.js": `
+      export function calledThroughAlias() { return 1; }
+      export function unusedAliased() { return 2; }
+      export function calledThroughBarrel() { return 3; }
+      export function unusedBarrel() { return 4; }
+    `,
+    "lib/barrel.js": `
+      // Barrel re-exports without calling
+      export { calledThroughBarrel, unusedBarrel as barrelUnused } from "./provider.js";
+    `,
+    "lib/consumer.js": `
+      import { calledThroughAlias as myAlias, unusedAliased as deadAlias } from "./provider.js";
+      import { calledThroughBarrel } from "./barrel.js";
+      // myAlias is called; deadAlias is never called
+      myAlias();
+      // calledThroughBarrel is called through barrel
+      calledThroughBarrel();
+    `,
+  };
+
+  const fixtureIo = {
+    readFile: async (p: string) => {
+      const rel = p.replace(/^mock\//, "");
+      if (fixtureFiles[rel]) return fixtureFiles[rel];
+      throw new Error(`File not found: ${p}`);
+    },
+    readdir: async () => [],
+  };
+
+  const report = await checkExportReachability({
+    root: "mock",
+    reached: new Set(["lib/provider.js", "lib/barrel.js", "lib/consumer.js"]),
+    io: fixtureIo,
+    strictExports: true,
+  });
+
+  // calledThroughAlias was called via myAlias -> reached
+  assert(
+    report.reachedExports.includes("lib/provider.js:calledThroughAlias"),
+    "calledThroughAlias must be marked reached via local alias call",
+  );
+
+  // unusedAliased was imported as deadAlias but never called -> unreached
+  assert(
+    report.unreachedExports.some((e: string) => e.startsWith("lib/provider.js:unusedAliased")),
+    "unusedAliased must be caught as unreached (unused alias does not clear)",
+  );
+
+  // calledThroughBarrel was called via barrel import -> reached
+  assert(
+    report.reachedExports.includes("lib/provider.js:calledThroughBarrel"),
+    "calledThroughBarrel must be marked reached via barrel import and call",
+  );
+
+  // unusedBarrel was re-exported in barrel but nobody calls it -> unreached
+  assert(
+    report.unreachedExports.some((e: string) => e.startsWith("lib/provider.js:unusedBarrel")),
+    "unusedBarrel must be caught as unreached (barrel re-export alone does not clear)",
+  );
+});
+
+Deno.test("reachability (kf3h / P1a): TypeScript files and scripts coverage", async () => {
+  const fixtureFiles: Record<string, string> = {
+    "scripts/acp-bridge.ts": `
+      export function activeBridgeTask(): string { return "task"; }
+      export function isBrowserLaunchingMcpServer(): boolean { return false; }
+    `,
+    "scripts/consumer.ts": `
+      import { activeBridgeTask } from "./acp-bridge.ts";
+      console.log(activeBridgeTask());
+    `,
+  };
+
+  const fixtureIo = {
+    readFile: async (p: string) => {
+      const rel = p.replace(/^mock\//, "");
+      if (fixtureFiles[rel]) return fixtureFiles[rel];
+      throw new Error(`File not found: ${p}`);
+    },
+    readdir: async () => [],
+  };
+
+  const report = await checkExportReachability({
+    root: "mock",
+    reached: new Set(["scripts/acp-bridge.ts", "scripts/consumer.ts"]),
+    io: fixtureIo,
+    strictExports: true,
+  });
+
+  // activeBridgeTask called from consumer.ts -> reached
+  assert(
+    report.reachedExports.includes("scripts/acp-bridge.ts:activeBridgeTask"),
+    "activeBridgeTask in TS module must be marked reached",
+  );
+
+  // isBrowserLaunchingMcpServer has zero callers -> unreached (bead motivating case!)
+  assert(
+    report.unreachedExports.some((e: string) => e.startsWith("scripts/acp-bridge.ts:isBrowserLaunchingMcpServer")),
+    "isBrowserLaunchingMcpServer in scripts/acp-bridge.ts must be caught as unreached (kf3h motivating case)",
+  );
 });
 
 Deno.test("reachability (kf3h): dead exported functions are caught and genuinely-used exports are cleared", async () => {
