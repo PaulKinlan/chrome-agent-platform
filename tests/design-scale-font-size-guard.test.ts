@@ -32,18 +32,39 @@ export function walkFiles(dir: string, predicate: (name: string) => boolean): st
   return results;
 }
 
+/** Helper to build line offset table for fast line number lookup. */
+function buildLineOffsets(text: string): number[] {
+  const offsets = [0];
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10) offsets.push(i + 1);
+  }
+  return offsets;
+}
+
+function getLineNumber(offsets: number[], index: number): number {
+  let low = 0, high = offsets.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (offsets[mid] <= index) low = mid + 1;
+    else high = mid - 1;
+  }
+  return high + 1;
+}
+
 /**
  * Scan CSS/HTML stylesheet contents for any declaration declaring sub-12px typography.
+ * Matches across line boundaries while preserving exact reported line numbers.
  * Matches:
  * - font-size: <sub-12>px (e.g. 9px, 10px, 10.5px, 11px, 11.5px)
  * - font: ... <sub-12>px ...
  * - font-size: <sub-0.75>rem (under 12px assuming standard 16px root)
  * - font-size: var(--..., <sub-12>px) fallback
+ * - Multiline declarations like font-size:\n 11px;
  */
 export function findSub12pxDeclarations(filePaths: string[]): FontSizeViolation[] {
   const violations: FontSizeViolation[] = [];
-  // Regex matches font-size or font property declarations with explicit sub-12px lengths
-  const sub12PxRegex = /\b(?:font-size|font)\s*:\s*([^;]+);?/gi;
+  // Regex matches font-size or font property declarations with explicit sub-12px lengths across line boundaries
+  const sub12PxRegex = /\b(?:font-size|font)\s*:\s*([^;{}]+);?/gi;
   const pixelValueRegex = /(?<![0-9.])(?:[0-9]|1[01])(?:\.[0-9]+)?px\b/i;
   const remValueRegex = /(?<![0-9.])0?\.(?:[0-6][0-9]*|7(?:[0-4][0-9]*)?)rem\b/i;
 
@@ -51,25 +72,26 @@ export function findSub12pxDeclarations(filePaths: string[]): FontSizeViolation[
     const rawContent = readFileSync(file, "utf8");
     // Strip /* ... */ comments while preserving line breaks so line numbers remain exact
     const content = rawContent.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
+    const offsets = buildLineOffsets(content);
     const lines = content.split("\n");
-    lines.forEach((line, idx) => {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("//")) return;
 
-      let match: RegExpExecArray | null;
-      sub12PxRegex.lastIndex = 0;
-      while ((match = sub12PxRegex.exec(line)) !== null) {
-        const val = match[1];
-        if (pixelValueRegex.test(val) || remValueRegex.test(val)) {
-          violations.push({
-            file,
-            line: idx + 1,
-            text: trimmed,
-            matched: match[0],
-          });
-        }
+    let match: RegExpExecArray | null;
+    sub12PxRegex.lastIndex = 0;
+    while ((match = sub12PxRegex.exec(content)) !== null) {
+      const val = match[1];
+      if (pixelValueRegex.test(val) || remValueRegex.test(val)) {
+        const lineNum = getLineNumber(offsets, match.index);
+        const lineText = lines[lineNum - 1]?.trim() ?? match[0];
+        if (lineText.startsWith("//")) continue;
+
+        violations.push({
+          file,
+          line: lineNum,
+          text: lineText,
+          matched: match[0].replace(/\s+/g, " ").trim(),
+        });
       }
-    });
+    }
   }
   return violations;
 }
@@ -227,6 +249,10 @@ Deno.test("r4xk2: falsification — sub-12px declarations are detected and repor
       .bad-tiny { font-size: 9.5px; }
       .bad-shorthand { font: 600 10px/1.4 sans-serif; }
       .bad-fallback { font-size: var(--custom, 11px); }
+      .bad-multiline {
+        font-size:
+          11px;
+      }
       * { font-size: 11px; }
     `);
 
@@ -252,11 +278,12 @@ Deno.test("r4xk2: falsification — sub-12px declarations are detected and repor
     `);
 
     const violationsCss = findSub12pxDeclarations([fixture1, fixture2]);
-    assertEquals(violationsCss.length, 7, `Expected 7 CSS/HTML falsification violations, got ${violationsCss.length}`);
+    assertEquals(violationsCss.length, 8, `Expected 8 CSS/HTML falsification violations, got ${violationsCss.length}`);
     const matchedTexts = violationsCss.map((v) => v.matched);
     assert(matchedTexts.some((m) => m.includes("11px")));
     assert(matchedTexts.some((m) => m.includes("9.5px")));
     assert(matchedTexts.some((m) => m.includes("10px")));
+    assert(violationsCss.some((v) => v.text === "font-size:" && v.matched.includes("11px")), "multiline declaration detected with exact line reporting");
     assert(matchedTexts.some((m) => m.includes("0.65rem")));
     assert(matchedTexts.some((m) => m.includes(".7rem")));
 
