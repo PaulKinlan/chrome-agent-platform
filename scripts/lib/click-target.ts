@@ -24,13 +24,15 @@
 //     page-side description. Instrument death is never folded into the
 //     refusal, so a caller can tell "not there yet" from "the harness broke".
 //
-// The ONE retry carried over from the helper this replaces is the
-// not-yet-attached execution context: the same "Cannot find default execution
-// context" message chrome-journeys' evalIn retries. It names a session whose
-// frame has not come up, not a page answer, and it is bounded — anything else
-// surfaces on the first attempt.
+// The ONE retry carried over from the helper this replaces is a TRANSPORT
+// execution-context failure: the same "Cannot find default execution context"
+// message chrome-journeys' evalIn retries, which names a session whose frame
+// has not come up rather than a page answer. It is bounded, and it is decided
+// on the ERROR KIND first — a page throw is tagged `PageThrowError` at the
+// source (openCdp.eval) and is never retried, because a page expression can
+// literally throw that phrase and the retry would swallow it (0lb4 P1).
 import type { CdpClient } from "./chrome-launch.ts";
-import { EvalSurfaceError } from "./cdp-eval.ts";
+import { EvalSurfaceError, PageThrowError } from "./cdp-eval.ts";
 
 const SITE = "click-target";
 const TRANSIENT_CONTEXT = "Cannot find default execution context";
@@ -65,6 +67,10 @@ async function probePoint(cdp: CdpClient, session: string, expr: string): Promis
       return isPoint(value) ? value : null;
     } catch (e) {
       lastErr = e;
+      // A PAGE throw is not a transport failure, whatever its text says: an
+      // expression that itself throws "Cannot find default execution context"
+      // must SURFACE, not be retried into an absence answer (0lb4 P1).
+      if (e instanceof PageThrowError) break;
       const message = String((e as Error)?.message ?? e);
       if (!message.includes(TRANSIENT_CONTEXT) || attempt === CONTEXT_ATTEMPTS - 1) break;
       await new Promise((resolve) => setTimeout(resolve, CONTEXT_RETRY_MS));

@@ -32,6 +32,7 @@ import { resolveChromeForTesting } from "./chrome-for-testing.ts";
 import { isUsableBinary } from "./browser-refusal.ts";
 import { attachProcessLifeline, isolatedProcessGroup, killProcessTree, type ProcessTableDeps, setsidSpawnSpec } from "./process-tree.ts";
 import { chromeProfileDir, isInsideRepo, profileLiveness } from "./chrome-profile-dir.ts";
+import { PageThrowError } from "./cdp-eval.ts";
 
 export interface LaunchedChrome {
   /** The spawned Chrome. The caller owns killing it. */
@@ -922,7 +923,9 @@ export interface CdpClient {
   attach(targetId: string): Promise<string>;
   /** Open a URL in a new target and attach to it; returns the session id. */
   open(url: string): Promise<{ targetId: string; sessionId: string }>;
-  /** `Runtime.evaluate` with awaitPromise + returnByValue; throws on a page exception. */
+  /** `Runtime.evaluate` with awaitPromise + returnByValue; throws a
+   * `PageThrowError` on a page exception (never undefined), so a caller can
+   * tell a page throw from a transport failure. */
   eval(sessionId: string, expression: string): Promise<any>;
   /** Safely capture a screenshot of a target without wedging on quiesced headless frames (f5lb). */
   screenshot(sessionId: string, opts?: ScreenshotOptions): Promise<Uint8Array | null>;
@@ -1002,7 +1005,11 @@ export async function openCdp(wsUrl: string, opts: { timeoutMs?: number } = {}):
       const r = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId);
       const res = r?.result;
       if (res?.exceptionDetails) {
-        throw new Error(res.exceptionDetails.exception?.description ?? res.exceptionDetails.text ?? "evaluate threw");
+        // TAGGED at the source (chrome-agent-platform-0lb4): a page throw is not
+        // a transport failure, and a caller that retries transport transients
+        // must not retry this one — a page expression can throw the very text a
+        // transient uses ("Cannot find default execution context").
+        throw new PageThrowError(res.exceptionDetails.exception?.description ?? res.exceptionDetails.text ?? "evaluate threw");
       }
       return res?.result?.value;
     },

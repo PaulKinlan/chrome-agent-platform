@@ -443,10 +443,12 @@ async function main() {
         console.log(`security-suite: evidence ${dir}/security-suite-approval-card.png`);
       }
     } catch { /* evidence only */ }
-    // Decide "Not now" with a genuine click so the run settles before teardown.
-    // Absence is tolerated here for the same reason as the send click above:
-    // the DENY path is graded by the card/script state below, not by this
-    // return value.
+    // Decide "Not now" with a genuine click so the pending card is settled
+    // before teardown. NOTHING DOWNSTREAM GRADES THIS CLICK: the un-run property
+    // it belongs to was asserted ABOVE, from the script read taken BEFORE the
+    // decision (`lastRunAt == null`), and there is no post-denial check. So a
+    // legitimate ABSENCE is tolerated here — absence only: an instrument throw
+    // still surfaces through clickAt.
     await clickAt(cdp, ntp.sessionId, `(() => { const b = document.querySelector("approval-card")?.shadowRoot?.querySelector(".deny, .not-now, button:not(.approve)"); if (!b) return null; b.scrollIntoView({ block: "center" }); const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
     await sleep(1500);
 

@@ -11,15 +11,23 @@
 // discriminated outcome for absence and lets instrument death through as an
 // error; this file drives the real `openCdp` client over a real WebSocket with
 // Chrome's actual response shapes (the mee3 / 4s4j pattern), never a source
-// regex, so deleting the guard in cdp-eval.ts or re-adding a blanket catch in
-// the helper reddens these tests.
+// regex.
 //
-// Four shapes, one control:
+// WHICH GUARD EACH TEST RIDES: every page throw here arrives through
+// `openCdp(...).eval()`, so it is chrome-launch.ts's own exceptionDetails
+// inspection (:1004-1013) that raises it — that is the guard test (1) reddens if
+// it is deleted (verified as mutant M2). scripts/lib/cdp-eval.ts contributes the
+// error TYPE (`EvalSurfaceError`, `PageThrowError`) and its own helper guards are
+// pinned by tests/cdp-eval.test.ts and tests/cdp-eval-page-exception-honesty.test.ts,
+// not by this file.
+//
+// Six shapes, one control:
 //   (1) a page-side throw            -> EvalSurfaceError naming the site + page text
 //   (2) a resolved null              -> {clicked:false, reason:"absent-target"}
 //   (3) a resolved undefined         -> the same refusal (a VALUE, distinct from (1))
 //   (4) a resolved point             -> real mouse input, {clicked:true, x, y}
-//   (5) the declared transient retry -> bounded, and the only thing retried
+//   (5) the declared transient retry -> bounded, and only for a TRANSPORT failure
+//   (6) a page throw whose TEXT is the retry phrase -> still surfaced, never retried
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert";
 import { openCdp } from "../scripts/lib/chrome-launch.ts";
 import { EvalSurfaceError } from "../scripts/lib/cdp-eval.ts";
@@ -174,6 +182,36 @@ Deno.test("0lb4(5): the not-yet-attached context is the ONLY retried failure, an
       const err = await assertRejects(() => clickAt(cdp, SESSION, EXPR), EvalSurfaceError);
       assertStringIncludes(err.message, "Target closed");
       assertEquals(fake.received.filter((m) => m.method === "Runtime.evaluate").length, 1);
+    },
+  );
+});
+
+Deno.test("0lb4(6): a page throw whose TEXT is the retry phrase still surfaces — it is never retried into an absence", async () => {
+  // P1 of the review: the retry used to be decided on the message alone, and
+  // openCdp.eval turns a page exception into an ordinary Error — so a page
+  // expression throwing the literal transient phrase was retried, and a second
+  // evaluation resolving null was reported as {clicked:false}. The page throw is
+  // now TAGGED at the source (PageThrowError, chrome-launch.ts) and the tag is
+  // checked BEFORE the text.
+  const THROWN = { text: "Uncaught", exception: { description: "Error: Cannot find default execution context" } };
+  let evaluations = 0;
+  await withClient(
+    () => {
+      evaluations++;
+      // Attempt 1: the page throws the retry phrasing. Attempt 2 (which must
+      // never happen): a clean absence, so a text-decided retry would answer
+      // {clicked:false} here instead of surfacing.
+      return evaluations === 1
+        ? { result: { result: {}, exceptionDetails: THROWN } }
+        : { result: { result: { type: "object", subtype: "null", value: null } } };
+    },
+    async (cdp, fake) => {
+      const err = await assertRejects(() => clickAt(cdp, SESSION, EXPR), EvalSurfaceError);
+      assertStringIncludes(err.message, "Cannot find default execution context");
+      assertStringIncludes(err.message, "click-target");
+      // NO RETRY: one evaluation, and nothing was clicked on the strength of it.
+      assertEquals(fake.received.filter((m) => m.method === "Runtime.evaluate").length, 1);
+      assertEquals(fake.received.filter((m) => m.method === "Input.dispatchMouseEvent").length, 0);
     },
   );
 });
