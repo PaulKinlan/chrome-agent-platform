@@ -1,8 +1,8 @@
 // tests/css-padding.test.ts — chrome-agent-platform-rshb
 //
 // The LEFT inset from a CSS `padding` shorthand. Pinned here because the rule
-// previously lived only inside scripts/constrained-width-layout.ts, a NAMED
-// harness that no gate runs — so the same short-hand assumption survived two
+// previously lived only inside scripts/kat-constrained-width-layout.ts, a harness
+// that is now gated via test:kat — so the same short-hand assumption survived two
 // wrong answers (a false red on `padding: 14px`, and a false GREEN on a real
 // 14px-vs-20px left-inset mismatch written as a four-value shorthand).
 import { assert, assertEquals } from "jsr:@std/assert@1";

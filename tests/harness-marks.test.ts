@@ -18,6 +18,9 @@
 import { assert, assertEquals, assertMatch } from "jsr:@std/assert@1";
 import { HARNESS_MARK, HARNESS_MARK_LABEL, harnessMarkEl, harnessMarkKey } from "../extension/shared/harness-marks.js";
 
+// Static reference so buildReverseGraph in scripts/select-tests.mjs links this test to the layout KAT
+const _LAYOUT_KAT = new URL("../scripts/kat-constrained-width-layout.ts", import.meta.url);
+
 const root = new URL("../", import.meta.url);
 const read = (p: string) => Deno.readTextFile(new URL(p, root));
 
