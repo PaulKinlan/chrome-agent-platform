@@ -2,7 +2,9 @@
 // tool. No Site Agent enrollment or origin-keyed site memory is created here.
 // The SW supplies browser attestation and the separately guarded page-effect
 // executor; this module never grants authority from payload origin/name alone.
+import { z } from "zod";
 import { canonicalOrigin } from "./memory.js";
+import { compileSchemaToZod } from "./pure.js";
 import { digestSiteToolArguments } from "./site-tool-audit.js";
 
 const fail = (error) => Object.freeze({ ok: false, error });
@@ -15,6 +17,19 @@ function requestedOrigin(value) {
       url.pathname !== "/" || url.search || url.hash) return null;
     return canonicalOrigin(url.origin);
   } catch { return null; }
+}
+
+// This is the service worker's actual validation path; tests use the same
+// function rather than an always-accepting fake. Unsupported/fatal schemas,
+// invalid arguments and oversized validated payloads fail closed.
+export async function validateAttachedDeclaredArgs(schema, args) {
+  try {
+    const compiled = compileSchemaToZod(z, schema);
+    if (compiled.fatal) return { ok: false };
+    const parsed = compiled.zodSchema.safeParse(args);
+    if (!parsed.success || new TextEncoder().encode(JSON.stringify(parsed.data)).byteLength > 8192) return { ok: false };
+    return { ok: true, data: parsed.data };
+  } catch { return { ok: false }; }
 }
 
 export function createAttachedDeclaredInvoker({
@@ -70,6 +85,7 @@ export function createAttachedDeclaredInvoker({
       argDigest: digest, ephemeral: true, documentId: binding.documentId,
     });
     const append = (record) => audit(token, record);
+    let justAllowedByOwner = false;
     if (consent.state === "ask") {
       try { await append(row("consent-requested", "agent-to-owner", "agent", "pending", "first-use")); }
       catch { return fail("site_tool_audit_unavailable"); }
@@ -90,6 +106,7 @@ export function createAttachedDeclaredInvoker({
       try {
         await append(row("consent-decided", "owner-to-agent", "owner", "allowed", "owner-allowed"));
         consent = consentStore.decide(token, tool, "allowed", { expected: consent });
+        justAllowedByOwner = true;
       } catch { return fail("site_tool_audit_unavailable"); }
     }
     if (!live()) return fail("attached_tool_not_authorized");
@@ -100,8 +117,9 @@ export function createAttachedDeclaredInvoker({
     let validated;
     try { validated = await validateArgs(tool.inputSchema, args); } catch { return fail("attached_tool_invalid_arguments"); }
     if (!live() || validated?.ok !== true) return fail("attached_tool_invalid_arguments");
-    // Consent requested the original model arguments, but the required start
-    // and terminal WAL rows must attest the ACTUAL validated/coerced payload.
+    // The request records original model arguments as audit metadata; consent
+    // approves this tool for the run/document. Start and terminal WAL rows
+    // attest the ACTUAL validated/coerced payload of every invocation.
     let dispatchedArgDigest;
     try { dispatchedArgDigest = digestSiteToolArguments(validated.data); }
     catch { return fail("attached_tool_invalid_arguments"); }
@@ -112,7 +130,8 @@ export function createAttachedDeclaredInvoker({
         token,
         runActive: live,
         requiredAudit: async () => {
-          await append(row("invocation-started", "agent-to-site", "agent", "pending", "cached-allow", consent, dispatchedArgDigest));
+          await append(row("invocation-started", "agent-to-site", "agent", "pending",
+            justAllowedByOwner ? "owner-allowed" : "cached-allow", consent, dispatchedArgDigest));
           auditStarted = true;
         },
       });

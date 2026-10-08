@@ -787,7 +787,9 @@ export function boundSiteToolApprovalDetail(detail) {
     ? detail.origin
     : "";
   const tool = visibleSiteToolLabel(detail.tool, APPROVAL_DETAIL_BOUNDS.maxToolChars);
-  return origin && tool ? Object.freeze({ kind: "webmcp-tool", origin, tool }) : undefined;
+  return origin && tool ? Object.freeze({ kind: "webmcp-tool", origin, tool,
+    ...(detail.scope === "attached-run" ? { scope: "attached-run" } : {}),
+  }) : undefined;
 }
 
 export function boundScriptRegistrationApprovalDetail(detail) {

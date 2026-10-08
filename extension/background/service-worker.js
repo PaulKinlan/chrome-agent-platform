@@ -188,7 +188,7 @@ import { readAttachedDeclaredWebmcpTools, readDeclaredWebmcpFromPage } from "../
 import { formatAttachedDeclaredContext } from "../lib/attached-webmcp-disclosure.js";
 import { createEphemeralSiteToolConsentStore } from "../lib/ephemeral-site-tool-consent.js";
 import { createEphemeralSiteToolAuditPrincipal } from "../lib/ephemeral-site-tool-audit.js";
-import { createAttachedDeclaredInvoker } from "../lib/attached-webmcp-authority.js";
+import { createAttachedDeclaredInvoker, validateAttachedDeclaredArgs } from "../lib/attached-webmcp-authority.js";
 import { auditedAttachedDeclaredCall, invokeAttachedDeclaredFromPage } from "../lib/attached-webmcp-invocation.js";
 import {
   hasPermission,
@@ -1226,7 +1226,6 @@ import {
   planWebmcpInvocationTab,
   syncSnapshotDocument,
   schemaToZod as buildSchema,
-  compileSchemaToZod,
   summarizeInjection,
   isExactOptionsSender,
   KEYBOARD_COMMANDS,
@@ -2010,15 +2009,7 @@ const attachedDeclaredInvoker = createAttachedDeclaredInvoker({
       } catch { return false; }
     },
   }),
-  validateArgs: async (schema, args) => {
-    try {
-      const compiled = compileSchemaToZod(z, schema);
-      if (compiled.fatal) return { ok: false };
-      const parsed = compiled.zodSchema.safeParse(args);
-      if (!parsed.success || new TextEncoder().encode(JSON.stringify(parsed.data)).byteLength > 8192) return { ok: false };
-      return { ok: true, data: parsed.data };
-    } catch { return { ok: false }; }
-  },
+  validateArgs: validateAttachedDeclaredArgs,
   requestApproval: (context, binding, tool, consent, argDigest) => {
     const target = canonicalOperationTarget("webmcp-tool", { origin: binding.origin, name: tool.name });
     if (!target) return { ok: false, approvalDenied: false };
@@ -2029,7 +2020,7 @@ const attachedDeclaredInvoker = createAttachedDeclaredInvoker({
       ["argDigest", argDigest],
     ]);
     return requireOwnerApproval(context, "webmcp.use-tool", target, payload,
-      { origin: binding.origin, tool: tool.name });
+      { origin: binding.origin, tool: tool.name, scope: "attached-run" });
   },
   audit: (token, row) => ephemeralSiteToolAuditPrincipal.append(token, row),
   invoke: (binding, tool, args, { runActive, requiredAudit }) =>

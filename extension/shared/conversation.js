@@ -642,6 +642,19 @@ function scriptRegistrationCardBody(detail) {
   return parts.join("\n");
 }
 
+function siteToolApprovalCopy(detail) {
+  const heading = `Site: ${detail.origin}\nTool: ${detail.tool}\n`;
+  return detail.scope === "attached-run"
+    ? {
+      body: `${heading}Allow lets the agent use this tool again with schema-validated arguments in this run and document. Each call is audited. This does not enroll the site. Deny blocks this tool for this run.`,
+      approveLabel: "Allow for this run",
+    }
+    : {
+      body: `${heading}Allow saves automatic use for this exact site tool in this browser profile. Deny blocks this exact tool on this site until you choose Allow / try again in Settings.`,
+      approveLabel: "Allow automatically",
+    };
+}
+
 export function approvalCardSpecFromRequest(ev) {
   const result = ev?.result && typeof ev.result === "object"
     ? ev.result
@@ -653,16 +666,17 @@ export function approvalCardSpecFromRequest(ev) {
   const approval = requirement.approvals[0] ?? null;
   if (!approval) return { requirement };
   const siteTool = approval.action === "webmcp.use-tool" && approval.detail?.kind === "webmcp-tool";
+  const siteToolCopy = siteTool ? siteToolApprovalCopy(approval.detail) : null;
   const scriptReg = approval.detail?.kind === "script-registration";
   return {
     requirement,
     title: approvalCardTitle(approval.action, approval.detail),
     body: siteTool
-      ? `Site: ${approval.detail.origin}\nTool: ${approval.detail.tool}\nAllow saves automatic use for this exact site tool in this browser profile. Deny blocks this exact tool on this site until you choose Allow / try again in Settings.`
+      ? siteToolCopy.body
       : scriptReg
         ? scriptRegistrationCardBody(approval.detail)
         : `Action: ${approval.action}\nTarget reference: ${approval.targetRef || requirement.reason.split(": ").slice(1).join(": ")}`,
-    ...(siteTool ? { approveLabel: "Allow automatically", denyLabel: "Deny" } : {}),
+    ...(siteTool ? { approveLabel: siteToolCopy.approveLabel, denyLabel: "Deny" } : {}),
     ...(!siteTool && approval.detail ? { cardDetail: approval.detail } : {}),
   };
 }
@@ -902,7 +916,9 @@ export function boundSiteToolApprovalDetail(detail) {
     : "";
   const tool = visibleSiteToolLabel(detail.tool, 1024);
   return detail.kind === "webmcp-tool" && origin && tool
-    ? { kind: "webmcp-tool", origin, tool }
+    ? { kind: "webmcp-tool", origin, tool,
+      ...(detail.scope === "attached-run" ? { scope: "attached-run" } : {}),
+    }
     : undefined;
 }
 
@@ -2218,16 +2234,16 @@ export async function runConversationTurn(container, { text, attachments = [], h
     if (typeof document !== "undefined" && typeof c.append === "function") {
       card = document.createElement(actionApproval ? "approval-card" : "permission-approval-card");
       if (actionApproval) {
-        const siteTool = approval?.action === "webmcp.use-tool" && approval.detail?.kind === "webmcp-tool";
+        const siteToolCopy = siteTool ? siteToolApprovalCopy(approval.detail) : null;
         const scriptReg = approval?.detail?.kind === "script-registration";
         card.setAttribute("title", approvalCardTitle(approval.action, approval.detail));
         card.setAttribute("body", siteTool
-          ? `Site: ${approval.detail.origin}\nTool: ${approval.detail.tool}\nAllow saves automatic use for this exact site tool in this browser profile. Deny blocks this exact tool on this site until you choose Allow / try again in Settings.`
+          ? siteToolCopy.body
           : scriptReg
             ? scriptRegistrationCardBody(approval.detail)
             : `Action: ${approval.action}\nTarget reference: ${approval.targetRef || requirement.reason.split(": ").slice(1).join(": ")}`);
         if (siteTool) {
-          card.setAttribute("approve-label", "Allow automatically");
+          card.setAttribute("approve-label", siteToolCopy.approveLabel);
           card.setAttribute("deny-label", "Deny");
         // The script source + hosts are a PROPERTY (rendered with textContent
         // inside the card), never an attribute.

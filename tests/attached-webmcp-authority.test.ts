@@ -1,6 +1,6 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import { createEphemeralSiteToolConsentStore } from "../extension/lib/ephemeral-site-tool-consent.js";
-import { createAttachedDeclaredInvoker } from "../extension/lib/attached-webmcp-authority.js";
+import { createAttachedDeclaredInvoker, validateAttachedDeclaredArgs } from "../extension/lib/attached-webmcp-authority.js";
 import { digestSiteToolArguments } from "../extension/lib/site-tool-audit.js";
 
 const origin = "https://declared.test";
@@ -45,7 +45,8 @@ Deno.test("ckebt D1/D3: owner Deny is sticky within the run, blocks retry withou
   const s = setup("deny");
   assertEquals((await s.invoke(input, actor)).ok, false);
   assertEquals(s.consentStore.snapshot(s.token, tool).state, "denied");
-  assertEquals((await s.invoke(input, actor)).ok, false);
+  assertEquals((await s.invoke({ ...input, args: { query: "a different request" } }, actor)).ok, false,
+    "Deny remains sticky across different arguments in the same run");
   assertEquals((await s.invoke({ ...input, origin: "HTTPS://DECLARED.TEST/" }, actor)).ok, false,
     "a case-only origin spelling cannot bypass the canonical origin's Deny");
   assertEquals(s.calls.filter((x) => x === "ask").length, 1);
@@ -66,6 +67,49 @@ Deno.test("ckebt D1/D3: owner Allow only after audited decision; required start 
   assertEquals(s.calls.includes("invocation-finished"), true);
   assertEquals(s.calls.includes("consent-requested"), true);
   assertEquals(s.calls.includes("consent-decided"), true);
+});
+
+Deno.test("ckebt Q23: tool-level Allow covers changed args only in the same run; each effect gets its own awaited WAL digest", async () => {
+  const rows: Array<{ event: string; reason: string; argDigest: string }> = [];
+  const dispatched: unknown[] = [];
+  const s = setup("allow", {
+    validateArgs: validateAttachedDeclaredArgs,
+    audit: async (_token: object, row: { event: string; reason: string; argDigest: string }) => { rows.push(row); },
+    invoke: async (_binding: unknown, _tool: unknown, args: unknown,
+      options: { requiredAudit: () => Promise<void> }) => {
+      await options.requiredAudit();
+      dispatched.push(args);
+      return { ok: true, result: "done" };
+    },
+  });
+  const next = { ...input, args: { query: "different" } };
+  assertEquals((await s.invoke(input, actor)).ok, true);
+  assertEquals((await s.invoke(next, actor)).ok, true);
+  assertEquals(s.calls.filter((x) => x === "ask").length, 1, "do not re-ask for each argument set");
+  assertEquals(dispatched, [input.args, next.args]);
+  const started = rows.filter((row) => row.event === "invocation-started");
+  const finished = rows.filter((row) => row.event === "invocation-finished");
+  assertEquals(started.map((row) => row.reason), ["owner-allowed", "cached-allow"]);
+  assertEquals(started.map((row) => row.argDigest), [digestSiteToolArguments(input.args), digestSiteToolArguments(next.args)]);
+  assertEquals(finished.map((row) => row.argDigest), started.map((row) => row.argDigest));
+  assertEquals(started[0].argDigest === started[1].argDigest, false);
+});
+
+Deno.test("ckebt D1/D3: real production schema validation refuses invalid args even after tool consent is cached", async () => {
+  const requiredTool = { ...tool, inputSchema: { ...tool.inputSchema, required: ["query"] } };
+  const s = setup("allow", {
+    readDeclared: async () => [requiredTool],
+    validateArgs: validateAttachedDeclaredArgs,
+  });
+  assertEquals((await s.invoke(input, actor)).ok, true);
+  assertEquals((await s.invoke({ ...input, args: { query: 42 } }, actor)).error, "attached_tool_invalid_arguments");
+  assertEquals((await s.invoke({ ...input, args: {} }, actor)).error, "attached_tool_invalid_arguments");
+  assertEquals(s.consentStore.snapshot(s.token, requiredTool).state, "allowed");
+  assertEquals(s.calls.filter((x) => x === "ask").length, 1);
+  assertEquals(s.calls.filter((x) => x === "invocation-started").length, 1);
+  assertEquals(s.calls.filter((x) => x === "invoke").length, 1, "an invalid cached call cannot reach the page");
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  assertEquals(sw.includes("validateArgs: validateAttachedDeclaredArgs,"), true, "test the actual SW validator, not only a test stub");
 });
 
 Deno.test("ckebt D3: start and terminal WAL digest the VALIDATED page arguments, not raw model args", async () => {
