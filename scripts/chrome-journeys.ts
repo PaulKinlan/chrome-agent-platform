@@ -540,16 +540,20 @@ async function awaitNewRunTerminal(cdp, optsSession, beforeIds, task, timeoutMs 
  *  is the durable terminal record (phase/terminal.ok/threadId) for the exact
  *  new execution. The caller restores the demo provider and closes the probe
  *  provider. */
+async function activateNtpSession(cdp, session) {
+  const targetInfo = await cdp?.send?.("Target.getTargetInfo", {}, session)?.catch?.(() => null);
+  const targetId = targetInfo?.targetInfo?.targetId;
+  if (targetId) {
+    await cdp?.send?.("Target.activateTarget", { targetId })?.catch?.(() => {});
+  }
+  await cdp?.send?.("Page.bringToFront", {}, session)?.catch?.(() => {});
+}
+
 async function runScriptedToolProbe(cdp, ntpSession, optsSession, steps, task, expectRequests, onPause = null) {
   const provider = await startScriptedProvider({ steps });
   await evalIn(cdp, optsSession, `chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "openai-compatible", baseURL: provider.baseURL, apiKey: SCRIPTED_DUMMY_KEY, model: "scripted" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`);
   const beforeIds = await listRunIds(cdp, optsSession);
-  const targetInfo = await cdp.send("Target.getTargetInfo", {}, ntpSession).catch(() => null);
-  const targetId = targetInfo?.targetInfo?.targetId;
-  if (targetId) {
-    await cdp.send("Target.activateTarget", { targetId }).catch(() => {});
-  }
-  await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});
+  await activateNtpSession(cdp, ntpSession);
   await evalIn(cdp, ntpSession, `(() => {
     if (location.hash) location.hash = "";
     const v = document.getElementById("view");

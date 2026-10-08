@@ -47,6 +47,7 @@ const PROBE_COLLABORATORS = [
   "awaitNewRunTerminal",
   "isCdpEvaluateTimeout",
   "SCRIPTED_DUMMY_KEY",
+  "activateNtpSession",
   "Date",
 ] as const;
 
@@ -101,6 +102,7 @@ function build(opts: {
     },
     isCdpEvaluateTimeout,
     SCRIPTED_DUMMY_KEY: "dummy-key",
+    activateNtpSession: () => Promise.resolve(),
     Date: fakeDate,
   };
   const compiled = new Function(
