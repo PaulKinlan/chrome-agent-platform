@@ -185,11 +185,11 @@ function fakeDom() {
 
 Deno.test("i18n: hydrating <p>text <code>x</code> tail</p> keeps the tail AND the inline element (the truncation defect)", () => {
   const { el, text, root } = fakeDom();
-  // options_diagnostics_logs_help: "Write a $1 line to the page's DevTools console each time a site's tools are checked."
-  const code = el("code", {}, [text("[WebMCP]")]);
-  const p = el("span", { "data-i18n": "options_diagnostics_logs_help" }, [text("Write a "), code, text(" line to the page's DevTools console each time a site's tools are checked.")]);
+  // options_diagnostics_logs_help is the owner-only service-worker diagnostics copy.
+  const code = el("code", {}, [text("webmcp-sw")]);
+  const p = el("span", { "data-i18n": "options_diagnostics_logs_help" }, [text("Write "), code, text(" injection diagnostics to the extension's service-worker DevTools console. Page-console diagnostics remain off.")]);
   hydrateI18n(root(p));
-  assertEquals(p.textContent, "Write a [WebMCP] line to the page's DevTools console each time a site's tools are checked.");
+  assertEquals(p.textContent, "Write webmcp-sw injection diagnostics to the extension's service-worker DevTools console. Page-console diagnostics remain off.");
   assert(p.childNodes.includes(code), "the SAME <code> node is placed back — moved, not cloned or re-parsed");
   assertEquals(p.children.length, 1);
   assert(p.childNodes.every((n: any) => n.nodeType === 3 || n === code), "only text nodes and the original child — no markup is created from the catalogue string");

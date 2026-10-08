@@ -61,21 +61,12 @@ let upSeq = -1; // MAIN → isolated (last accepted)
 // scoped by the sender-derived tab/document + the echoed epoch).
 let collectSeq = 0;
 
-// Developer diagnostics (gated): mirrors the MAIN world's [WebMCP] logs from the
-// isolated relay side. Off by default; the SW reports the owner's toggle via
-// `webmcp.diagnostics.get` (see Settings → Site agents → Diagnostics) and the
-// bootstrap delivers it to the MAIN world.
-let diagnostics = false;
+// Page-bound diagnostics must not read the owner's cross-origin toggle. The
+// isolated relay stays quiet; owner-only SW diagnostics remain available.
+const diagnostics = false;
 function log(...args) {
   if (!diagnostics) return;
   try { console.log(TAG, ...args); } catch { /* never throw from a logger */ }
-}
-async function refreshDiagnostics() {
-  try {
-    const r = await chrome.runtime.sendMessage({ type: "webmcp.diagnostics.get" });
-    if (r && typeof r.enabled === "boolean") diagnostics = r.enabled;
-  } catch { /* SW not ready yet — diagnostics stays off */ }
-  return diagnostics;
 }
 
 // The enrollment generation the service worker has told us is CURRENT for this
@@ -135,7 +126,7 @@ function applyEnrollmentSync(gen, via) {
   // (Re-)enrollment clears the MAIN world's cancel state so NEW invokes are
   // allowed again; the MAIN world's immutable epoch fence keeps anything
   // cancelled before this resume permanently cancelled.
-  sendDown({ type: "resume", diagnostics });
+  sendDown({ type: "resume" });
   return null;
 }
 
@@ -397,13 +388,12 @@ function trackTimer(id) {
   return id;
 }
 function collectNow() {
-  sendDown({ type: "collect", diagnostics });
+  sendDown({ type: "collect" });
 }
-const startupSync = Promise.all([syncEnrollmentAtStartup(), refreshDiagnostics()]);
+const startupSync = syncEnrollmentAtStartup();
 startupSync.then(() => {
   // The bridge's own start lifecycle event, logged only when the SW issued a
-  // MAC key (an unarmed bridge is silent) and AFTER the diagnostics gate is
-  // known (the acceptance observes this event).
+  // MAC key (an unarmed bridge is silent). Page-bound diagnostics stay off.
   if (bridgeNonce) {
     log("start", JSON.stringify({ origin: location.origin, role: "isolated-bridge", diagnostics }));
   }

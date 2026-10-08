@@ -207,7 +207,9 @@ Deno.test("the shipped catalogue carries the full sentences the audit saw cut sh
   assert(messages.options_skills_lead.message.includes("task — type $1 anywhere in the composer on the hub"));
   assert(messages.options_skills_lead.message.endsWith("Use one here to start a task with it pre-filled."));
   assert(messages.options_site_agents_host_access.message.startsWith("Chrome grants $1 host access"));
-  assert(messages.options_diagnostics_logs_help.message.startsWith("Write a $1 line to the page's DevTools console"));
+  assert(messages.options_diagnostics_logs_help.message.startsWith("Write $1 injection diagnostics to the extension's service-worker DevTools console"));
+  assert(messages.options_diagnostics_logs_help.message.includes("Page-console diagnostics remain off"),
+    "do not promise page logging of an owner-global diagnostic setting");
   for (const gone of [
     "options_backup_amp_restore", "options_connect_a_remote", "options_chrome_grants", "options_write_a",
     "options_reusable_capabilities_each_documented_below_a_skil", "options_chrome", "options_platform",

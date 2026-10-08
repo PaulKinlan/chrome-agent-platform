@@ -126,3 +126,95 @@ Deno.test("lw6d audit: docs/INTERNAL-SENDER-CONTRACT-AUDIT.md exists and records
   assert(auditDoc.includes("foreign-extension"), "audit doc must cite the synthetic fixture");
   assert(auditDoc.includes("externally_connectable"), "audit doc must cite the external messaging boundary");
 });
+
+// Execute the actual inline SW handlers with controlled collaborators. A test
+// that checks only their argument names misses a global toggle in the result.
+const swSource = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+function inlineHandler(route: string, dependencies: Record<string, unknown>) {
+  const start = swSource.indexOf(`  async "${route}"(`);
+  assert(start >= 0, `find the actual ${route} handler`);
+  const end = swSource.indexOf("\n  },", start);
+  assert(end > start, `find the end of ${route}`);
+  const body = swSource.slice(start, end + "\n  }".length);
+  return new Function(...Object.keys(dependencies), `return ({${body}})[${JSON.stringify(route)}];`)(...Object.values(dependencies));
+}
+
+Deno.test("89rk4: page senders never receive the owner diagnostics toggle from its handler", async () => {
+  const getDiagnostics = inlineHandler("webmcp.diagnostics.get", {
+    isOwnerPrincipal: (context: { principal?: string }) =>
+      context?.principal === "extension" || context?.principal === "owner-options",
+    webmcpDiagnosticsEnabled: async () => true,
+  });
+  for (const origin of ["https://enrolled.example", "https://unenrolled.example"]) {
+    const response = await getDiagnostics({}, {
+      principal: "page",
+      pageSender: { tabId: 7, documentId: `doc-${origin}`, documentLifecycle: "active", url: `${origin}/` },
+    });
+    assertEquals(response, { ok: false, error: "owner_extension_required" }, `page sender at ${origin} must not read the global preference`);
+  }
+  assertEquals(await getDiagnostics({}, { principal: "owner-options" }), { enabled: true },
+    "the owner settings page retains its diagnostics control");
+});
+
+Deno.test("89rk4: enrolled and unenrolled page status returns no global diagnostics and never arms MAIN with it", async () => {
+  let globalReads = 0;
+  const armed: unknown[][] = [];
+  const status = inlineHandler("enrollment.status", {
+    canonicalOrigin: (origin: string) => origin,
+    ERR_INVALID_ORIGIN: { ok: false, error: "invalid_origin" },
+    enrollmentSnapshot: async (origin: string) => ({ enrolled: origin === "https://enrolled.example", gen: 2 }),
+    withEnrollmentLock: async (fn: () => unknown) => await fn(),
+    getSnapshotGateMap: async () => ({ "https://enrolled.example": { epoch: 1 } }),
+    syncSnapshotDocument: () => ({ gate: { epoch: 1 }, bound: true }),
+    setSnapshotGateMap: async () => {},
+    issueBridgeNonce: async (...args: unknown[]) => { armed.push(args); return "bridge-key-1234567890"; },
+    webmcpDiagnosticsEnabled: async () => { globalReads++; return true; },
+  });
+  for (const [origin, enrolled] of [["https://enrolled.example", true], ["https://unenrolled.example", false]] as const) {
+    const response = await status({ origin, __sender: {
+      tabId: 7, documentId: `doc-${origin}`, documentLifecycle: "active",
+    } });
+    assertEquals(response.ok, true);
+    assertEquals(response.enrolled, enrolled);
+    assertEquals(Object.hasOwn(response, "diagnostics"), false,
+      `the ${enrolled ? "enrolled" : "unenrolled"} page must never receive the owner toggle`);
+  }
+  assertEquals(armed.length, 1, "only the enrolled page may receive a bridge nonce");
+  assertEquals(armed[0]?.length, 2, "enrollment cannot supply the owner's global preference to MAIN");
+  assertEquals(globalReads, 0, "a page-facing enrollment request must not read the owner global toggle");
+  assertEquals(PAGE_ALLOWED_ROUTES.has("webmcp.diagnostics.get"), false,
+    "page dispatcher must reject the diagnostics route before the handler");
+  assertEquals(PAGE_ALLOWED_ROUTES.has("webmcp.status"), false,
+    "owner-only status cannot provide a second page route to the global toggle");
+});
+
+Deno.test("89rk4: the real MAIN-world bootstrap receives false, never an owner-global toggle", async () => {
+  const start = swSource.indexOf("async function issueBridgeNonce(");
+  const end = swSource.indexOf("\n// Cached diagnostics toggle", start);
+  assert(start >= 0 && end > start, "find the live MAIN-world bootstrap helper");
+  const scriptCalls: unknown[] = [];
+  const session = new Map<string, unknown>();
+  const key = "cap:webmcpBridgeNonces";
+  const dependencies = {
+    BRIDGE_NONCE_KEY: key,
+    BRIDGE_NONCE_MAX: 256,
+    bridgeNonceMemory: new Map<string, string>(),
+    crypto: { randomUUID: () => "per-document-bridge-key-0123456789" },
+    chrome: {
+      storage: { session: {
+        get: async () => ({ [key]: session.get(key) }),
+        set: async (values: Record<string, unknown>) => { session.set(key, values[key]); },
+      } },
+      scripting: { executeScript: async (options: unknown) => { scriptCalls.push(options); return []; } },
+    },
+  };
+  const issueBridgeNonce = new Function(...Object.keys(dependencies),
+    `${swSource.slice(start, end)}\nreturn issueBridgeNonce;`)(...Object.values(dependencies));
+  const nonce = await issueBridgeNonce(7, "doc-enrolled");
+  assertEquals(nonce, "per-document-bridge-key-0123456789");
+  assertEquals(scriptCalls.length, 1);
+  const call = scriptCalls[0] as { world: string; target: unknown; args: unknown[] };
+  assertEquals(call.world, "MAIN");
+  assertEquals(call.target, { tabId: 7, documentIds: ["doc-enrolled"] });
+  assertEquals(call.args, [nonce, false], "no owner-global boolean enters the page-visible bootstrap");
+});

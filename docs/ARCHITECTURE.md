@@ -189,7 +189,7 @@ Path-class rights reduction in the WASI runtime (`inputs/` read-only,
 One `chrome.runtime.onMessage` listener
 (`extension/background/service-worker.js:9463`) classifies every sender into a
 principal: `page` (content script — restricted to `PAGE_ALLOWED_ROUTES`, the
-8-route WebMCP/detection allowlist at `extension/lib/pure.js:1120-1130`),
+7-route WebMCP/detection allowlist at `extension/lib/pure.js:1280-1289`),
 `owner-options` (the exact Settings document — the only principal that may
 touch credential-privileged provider routes), `extension` (other extension
 surfaces), and `model` (the run-bound dispatch path used by `execute_tool`).

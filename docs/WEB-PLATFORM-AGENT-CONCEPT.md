@@ -75,7 +75,7 @@ principal binding, and attributes no quota per bucket in UI.
 message — including across the page boundary.
 
 **We built:** a single SW router that classifies every sender into principals
-(`page` / `extension` / `owner-options` / `model`), an 8-route allowlist for
+(`page` / `extension` / `owner-options` / `model`), a 7-route allowlist for
 page-originated messages, `__`-key scrubbing at dispatch, browser-attested
 sender identity (`sender.tab.id`/`documentId`) as the only trusted page
 identity, and an HMAC-per-document key handshake so a page cannot forge its

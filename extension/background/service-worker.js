@@ -5160,7 +5160,7 @@ chrome.permissions?.onAdded?.addListener((granted) => {
   })().catch(() => {});
 });
 
-async function issueBridgeNonce(tabId, documentId, diagnostics) {
+async function issueBridgeNonce(tabId, documentId) {
   let nonce = bridgeNonceMemory.get(documentId) ?? null;
   if (!nonce) {
     try {
@@ -5201,7 +5201,7 @@ async function issueBridgeNonce(tabId, documentId, diagnostics) {
         }
         g.capMainWorldPendingBootstrap = { nonce: n, diagnostics: d };
       },
-      args: [nonce, diagnostics === true],
+      args: [nonce, false], // page MAIN world must never receive an owner-global toggle
     });
     return nonce;
   } catch {
@@ -9679,11 +9679,9 @@ const handlers = mergeRouteMaps(
       // (unbound) or a failed arm gets no key — its bridge stays unarmed and
       // every discovery/invocation message fails closed.
       if (snap.enrolled && epoch != null) {
-        nonce = await issueBridgeNonce(
-          __sender.tabId,
-          __sender.documentId,
-          await webmcpDiagnosticsEnabled(),
-        );
+        // MAIN executes in the page realm; the nonce is document-scoped, but
+        // the owner's global diagnostics preference is never delivered there.
+        nonce = await issueBridgeNonce(__sender.tabId, __sender.documentId);
       }
     }
     return { ok: true, enrolled: snap.enrolled, gen: snap.gen, epoch, nonce };
@@ -9704,7 +9702,8 @@ const handlers = mergeRouteMaps(
   async "tools.allOrigins"() {
     return await listOrigins();
   },
-  async "webmcp.diagnostics.get"() {
+  async "webmcp.diagnostics.get"(_message, context) {
+    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
     return { enabled: await webmcpDiagnosticsEnabled() };
   },
   async "webmcp.diagnostics.set"({ enabled }) {

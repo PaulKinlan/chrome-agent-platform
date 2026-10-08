@@ -54,11 +54,9 @@
   // posted, never exposed on any global). null = unarmed: this world stays
   // silent and ignores every inbound message.
   let nonce = null;
-  // Developer diagnostics (gated): when the bootstrap delivers
-  // `diagnostics: true`, emit structured [WebMCP] logs so the discovery
-  // pipeline is observable in the page DevTools console. Off by default (no
-  // console noise); enabled from Settings → Site agents → Diagnostics.
-  let diagnostics = false;
+  // The page's MAIN realm cannot hold an owner-wide diagnostics toggle. Keep
+  // page-console logging off until a separately approved per-origin design.
+  const diagnostics = false;
   function log(...args) {
     if (!diagnostics) return;
     try { console.log(TAG, ...args); } catch { /* never throw from a logger */ }
@@ -610,7 +608,7 @@
   // The instance API the stable bootstrap hook forwards to.
   const instance = {
     dead: false,
-    bootstrap(n, diag) {
+    bootstrap(n, _diagnostics) {
       if (this.dead) return;
       if (typeof n !== "string" || n.length < 16 || n.length > 128) return;
       if (nonce !== n) {
@@ -618,7 +616,8 @@
         upSeq = 0;
         downSeq = -1;
       }
-      diagnostics = diag === true;
+      // Deliberately ignore any diagnostic flag, even if a page pre-seized
+      // the bootstrap hook. The owner's global toggle belongs to the SW.
       // A (re-)arm is an enrollment boundary: NEW invokes are allowed again,
       // and the epoch advances so nothing captured before this arm can post.
       cancelledAll = false;
@@ -686,7 +685,6 @@
     downSeq = opened.seq;
     const msg = opened.msg;
     if (msg.type === "collect") {
-      diagnostics = msg.diagnostics === true;
       collectTools().then((tools) => {
         const declared = tools.filter((t) => t.source === "declared").length;
         const inferred = tools.filter((t) => t.source === "inferred").length;
@@ -700,7 +698,6 @@
         post({ type: "tools", origin: location.origin, tools });
       });
     } else if (msg.type === "resume") {
-      diagnostics = msg.diagnostics === true;
       // Re-enrollment: NEW invokes are allowed again; the epoch advances so
       // invocations captured BEFORE the cancel stay cancelled forever (the
       // round-30 immutable-epoch fix — their results can never resurface).
