@@ -526,3 +526,142 @@ try {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 });
+
+// ── k9i3: clear heavy-gate acquisition timers on success and on error ─────────
+// Every timer the acquisition creates must be cleared on BOTH success and error (clearTimeout
+// in a finally). A standalone Deno subprocess that acquires and releases must exit naturally
+// and promptly without Deno.exit or an outer kill.
+
+Deno.test("k9i3 drill: standalone subprocess acquires and releases promptly without Deno.exit or outer kill", async () => {
+  // Reproduces the exact probe condition: boundMs=10000 prints RELEASED and exits promptly,
+  // never hanging until the bound fires.
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-k9i3-acquire-" });
+  const slotPath = `${dir}/gate.lock`;
+  const script = `${dir}/acquire-drill.mjs`;
+  await Deno.writeTextFile(script, `
+import { acquireHeavyGateSlot } from ${JSON.stringify(`${ROOT}scripts/lib/heavy-gate-slot.ts`)};
+const lease = await acquireHeavyGateSlot({
+  gate: "k9i3-standalone-acquire",
+  kind: "gate",
+  boundMs: 10000,
+  slot: { slotPath: Deno.args[0] },
+  onAcquired: () => {},
+  onWait: () => {},
+});
+lease.release();
+console.log(JSON.stringify({ event: "RELEASED" }));
+// No Deno.exit() — process must exit naturally through unpinned event loop
+`);
+  const t0 = Date.now();
+  try {
+    const child = new Deno.Command(Deno.execPath(), {
+      args: ["run", "-A", "--no-check", script, slotPath],
+      cwd: ROOT,
+      stdout: "piped",
+      stderr: "piped",
+    }).spawn();
+    const { code, stdout } = await child.output();
+    const elapsed = Date.now() - t0;
+    assertEquals(code, 0, "the standalone process exited cleanly");
+    const out = new TextDecoder().decode(stdout);
+    assert(out.includes('"event":"RELEASED"'), `must output RELEASED, got: ${out}`);
+    assert(elapsed < 4000, `the process exited in ${elapsed} ms (< 4000 ms) despite boundMs=10000`);
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("k9i3 drill: a REFUSED acquisition exits promptly, without an outer kill", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-k9i3-refused-" });
+  const slotPath = `${dir}/gate.lock`;
+  const holder = await acquireHeavyGateSlot({
+    gate: "k9i3-holder",
+    kind: "gate",
+    boundMs: 3000,
+    slot: { slotPath },
+    onWait: () => {},
+    onAcquired: () => {},
+  });
+  const script = `${dir}/refused.mjs`;
+  await Deno.writeTextFile(script, `
+import { acquireHeavyGateSlot } from ${JSON.stringify(`${ROOT}scripts/lib/heavy-gate-slot.ts`)};
+const t0 = Date.now();
+let verdict = "acquired";
+try {
+  const lease = await acquireHeavyGateSlot({
+    gate: "k9i3-refused",
+    kind: "gate",
+    boundMs: 800,
+    slot: { slotPath: Deno.args[0] },
+    onWait: () => {},
+    onAcquired: () => {},
+  });
+  lease.release();
+} catch (e) {
+  verdict = e?.name ?? "?";
+}
+console.log(JSON.stringify({ verdict, ms: Date.now() - t0 }));
+`);
+  try {
+    const t0 = Date.now();
+    const child = new Deno.Command(Deno.execPath(), {
+      args: ["run", "-A", "--no-check", script, slotPath],
+      cwd: ROOT,
+      stdout: "piped",
+      stderr: "piped",
+    }).spawn();
+    const { code, stdout } = await child.output();
+    const elapsed = Date.now() - t0;
+    assertEquals(code, 0, "the refused child exited cleanly");
+    const out = JSON.parse(new TextDecoder().decode(stdout).trim().split("\n").pop() ?? "{}");
+    assertEquals(out.verdict, "HeavyGateSlotRefusedError", `the child must report refusal, got ${JSON.stringify(out)}`);
+    assert(elapsed < 4000, `the refused child took ${elapsed} ms to exit — leaked timer must not hold it`);
+  } finally {
+    holder.release();
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("k9i3 drill: a SETUP-FAILED acquisition with a LONG bound exits promptly", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-k9i3-setup-" });
+  const script = `${dir}/setup-fail.mjs`;
+  await Deno.writeTextFile(script, `
+import { acquireHeavyGateSlot } from ${JSON.stringify(`${ROOT}scripts/lib/heavy-gate-slot.ts`)};
+const t0 = Date.now();
+let verdict = "acquired";
+try {
+  const lease = await acquireHeavyGateSlot({
+    gate: "k9i3-setup",
+    kind: "gate",
+    boundMs: 60000,
+    slot: { slotPath: Deno.args[0] },
+    onWait: () => {},
+    onAcquired: () => {},
+  });
+  lease.release();
+} catch (e) {
+  verdict = e?.name ?? "?";
+}
+console.log(JSON.stringify({ verdict, ms: Date.now() - t0 }));
+`);
+  try {
+    const t0 = Date.now();
+    const child = new Deno.Command(Deno.execPath(), {
+      args: ["run", "-A", "--no-check", script, `${dir}/missing/gate.lock`],
+      cwd: ROOT,
+      stdout: "piped",
+      stderr: "piped",
+    }).spawn();
+    const { code, stdout } = await child.output();
+    const elapsed = Date.now() - t0;
+    assertEquals(code, 0, "the setup-failed child exited cleanly");
+    const out = JSON.parse(new TextDecoder().decode(stdout).trim().split("\n").pop() ?? "{}");
+    assertEquals(out.verdict, "HeavyGateSlotSetupError", `the child must report a setup fault, got ${JSON.stringify(out)}`);
+    assert(
+      elapsed < 4000,
+      `the setup-failed child took ${elapsed} ms with a 60 s bound — all timers must be cleared before exit`,
+    );
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
