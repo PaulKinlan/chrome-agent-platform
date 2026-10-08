@@ -81,23 +81,32 @@ class MockNode {
 
   querySelectorAll(selector: string): MockNode[] {
     const results: MockNode[] = [];
-    const lower = selector.toLowerCase().trim();
+    const selectors = selector.split(",").map((s) => s.trim().toLowerCase());
     function match(node: MockNode): boolean {
       if (node.nodeType !== 1) return false;
       const tag = node.tagName.toLowerCase();
-      if (lower === "table" && tag === "table") return true;
-      if (lower === "caption" && tag === "caption") return true;
-      if (lower === "tr" && tag === "tr") return true;
-      if (lower === "th, td" || lower === "td, th") return tag === "th" || tag === "td";
-      if (lower === '[role="table"], [role="grid"]') {
-        const r = node.getAttribute("role");
-        return r === "table" || r === "grid";
-      }
-      if (lower === '[role="columnheader"]' && node.getAttribute("role") === "columnheader") return true;
-      if (lower === '[role="row"]' && node.getAttribute("role") === "row") return true;
-      if (lower === '[role="gridcell"], [role="cell"]') {
-        const r = node.getAttribute("role");
-        return r === "gridcell" || r === "cell";
+      const cls = (node.getAttribute("class") || "").toLowerCase().split(/\s+/);
+      const role = (node.getAttribute("role") || "").toLowerCase();
+      for (const s of selectors) {
+        if (s === "table" && tag === "table") return true;
+        if (s === "caption" && tag === "caption") return true;
+        if (s === "thead tr" && tag === "tr" && node.parentElement?.tagName?.toLowerCase() === "thead") return true;
+        if (s === "tr" && tag === "tr") return true;
+        if ((s === "th" || s === "td") && (tag === "th" || tag === "td")) return true;
+        if (s === "dt" && tag === "dt") return true;
+        if (s === "dd" && tag === "dd") return true;
+        if (["h1", "h2", "h3", "h4", "h5", "h6"].includes(s) && tag === s) return true;
+        if (s === '[role="columnheader"]' && role === "columnheader") return true;
+        if (s === '[role="row"]' && role === "row") return true;
+        if ((s === '[role="gridcell"]' || s === '[role="cell"]') && (role === "gridcell" || role === "cell")) return true;
+        if ((s === '[role="table"]' || s === '[role="grid"]') && (role === "table" || role === "grid")) return true;
+        if (s === '[role="list"]' && role === "list") return true;
+        if (s === "ul" && tag === "ul") return true;
+        if (s === "ol" && tag === "ol") return true;
+        if (s === "[data-field]" && node.getAttribute("data-field")) return true;
+        if (s === "[class]" && node.getAttribute("class")) return true;
+        if (s.startsWith(".") && cls.includes(s.slice(1))) return true;
+        if (s.startsWith("div.") && tag === "div" && cls.includes(s.slice(4))) return true;
       }
       return false;
     }
@@ -183,17 +192,17 @@ Deno.test("table-extractor: fixture page with 3 tables extracts all 3 with heade
         <h2>Hosting Plans</h2>
         <div class="cards" aria-label="Cloud Hosting Tiers">
           <div class="card">
-            <h3>Starter</h3>
+            <h2>Starter</h2>
             <span class="price">$5/mo</span>
             <span class="category">Basic</span>
           </div>
           <div class="card">
-            <h3>Pro</h3>
+            <h2>Pro</h2>
             <span class="price">$25/mo</span>
             <span class="category">Business</span>
           </div>
           <div class="card">
-            <h3>Enterprise</h3>
+            <h2>Enterprise</h2>
             <span class="price">$100/mo</span>
             <span class="category">Scale</span>
           </div>
@@ -206,7 +215,7 @@ Deno.test("table-extractor: fixture page with 3 tables extracts all 3 with heade
   assert(result && Array.isArray(result.tables), "Extractor must return tables array");
   assertEquals(result.tables.length, 3, "Must extract exactly 3 tables from fixture");
 
-  // Table 1 checks
+  // Detailed Table 1 checks (HTML table)
   const t1 = result.tables[0];
   assertEquals(t1.caption, "Fruit Prices and Stock");
   assertEquals(t1.headers, ["Fruit Item", "Unit Price", "In Stock"]);
@@ -215,9 +224,28 @@ Deno.test("table-extractor: fixture page with 3 tables extracts all 3 with heade
   assertEquals(t1.rows[1], ["Organic Banana", "$0.75", "340"]);
   assertEquals(t1.rows[2], ["Valencia Orange", "$1.20", "85"]);
   assertEquals(t1.truncated, false);
+
+  // Detailed Table 2 checks (ARIA grid)
+  const t2 = result.tables[1];
+  assertEquals(t2.caption, "Conference Speakers 2026");
+  assertEquals(t2.headers, ["Speaker Name", "Session Topic", "Time Slot"]);
+  assertEquals(t2.rows.length, 2);
+  assertEquals(t2.rows[0], ["Dr. Alice Chen", "Neural Agents on Edge", "10:00 AM"]);
+  assertEquals(t2.rows[1], ["Bob Builder", "Wasm Sandboxing Architecture", "11:30 AM"]);
+  assertEquals(t2.truncated, false);
+
+  // Detailed Table 3 checks (Repeated-card list)
+  const t3 = result.tables[2];
+  assertEquals(t3.caption, "Cloud Hosting Tiers");
+  assertEquals(t3.headers, ["Title", "Price", "Category"]);
+  assertEquals(t3.rows.length, 3);
+  assertEquals(t3.rows[0], ["Starter", "$5/mo", "Basic"]);
+  assertEquals(t3.rows[1], ["Pro", "$25/mo", "Business"]);
+  assertEquals(t3.rows[2], ["Enterprise", "$100/mo", "Scale"]);
+  assertEquals(t3.truncated, false);
 });
 
-// ── 2. Direct table_filter execution on emitted tabular artifact (Acceptance 2) ─
+// ── 2. Direct runTableArtifactTool execution with emitted artifact ID (Acceptance 2) ─
 Deno.test("table-extractor: table_filter on the emitted artifact works directly with no conversion step (Acceptance 2)", async () => {
   const extractedTable = {
     caption: "Server Cluster Metrics",
@@ -249,14 +277,57 @@ Deno.test("table-extractor: table_filter on the emitted artifact works directly 
   assertEquals(asset.meta.mediaType, TABLE_MEDIA_TYPE);
   assertEquals(asset.meta.schema, TABLE_VERSION);
 
-  const filterResult = filterTable(JSON.parse(asset.content), {
-    predicate: { column: "c2", op: "eq", value: "healthy" },
+  const context = Object.freeze({
+    principal: "model",
+    executionId: "exec:11111111-1111-4111-8111-111111111111",
+    runId: "exec:11111111-1111-4111-8111-111111111111",
+    agentId: "agent-instance-a",
   });
 
-  assert(filterResult && filterResult.table, "Must return filtered table result");
-  assertEquals(filterResult.table.rows.length, 2, "Must filter down to 2 healthy nodes");
-  assertEquals(filterResult.table.rows[0][0], "node-01");
-  assertEquals(filterResult.table.rows[1][0], "node-03");
+  let outputArtifact = null;
+  const toolResult = await runTableArtifactTool(
+    "table_filter",
+    {
+      source: { artifactId: artifactRes.artifactId, format: TABLE_VERSION },
+      predicate: { column: "c2", op: "eq", value: "healthy" },
+    },
+    context,
+    {
+      readAsset: async (_origin, id) => {
+        const a = storedAssets.get(id);
+        if (!a) return { ok: false, error: "not found" };
+        return { ok: true, asset: a };
+      },
+      stageAsset: async (assetToStage) => ({
+        ok: true,
+        inputRef: { id: "s1", kind: "input" },
+        bytes: new TextEncoder().encode(assetToStage.content).byteLength,
+        chained: false,
+      }),
+      discardStream: async () => ({ ok: true }),
+      isRunLive: () => true,
+      runJob: async (job) => {
+        const sourceAsset = storedAssets.get(artifactRes.artifactId);
+        const canonical = JSON.parse(sourceAsset.content);
+        const filtered = filterTable(canonical, { predicate: job.request.predicate });
+        return { ok: true, table: filtered.table, workUnits: 1 };
+      },
+      createArtifact: async (origin, data) => {
+        const id = "art_filtered_result";
+        outputArtifact = { id, origin, ...data };
+        storedAssets.set(id, outputArtifact);
+        return { ok: true, id, asset: outputArtifact };
+      },
+    },
+  );
+
+  assert(toolResult.ok, `Filter execution failed: ${toolResult.error}`);
+  assertEquals(toolResult.rows, 2, "Must return metadata showing 2 rows filtered");
+  assertEquals(toolResult.columns, 3, "Must preserve 3 columns");
+  const filteredOutput = JSON.parse(outputArtifact.content);
+  assertEquals(filteredOutput.rows.length, 2);
+  assertEquals(filteredOutput.rows[0], ["node-01", "healthy", "0.45"]);
+  assertEquals(filteredOutput.rows[1], ["node-03", "healthy", "0.12"]);
 });
 
 // ── 3. 10k-row fixture returning truncated: true (Acceptance 3) ─────────────────
@@ -305,45 +376,33 @@ Deno.test("injectedTableExtractor: headerless data-only table synthesizes header
   assertEquals(t.truncated, false);
 });
 
-// ── 5. Injected production extractor: Rowspan & Colspan (P1c) ────────────────────
-Deno.test("injectedTableExtractor: 2D occupancy grid correctly propagates rowspan and colspan across cells (P1c)", () => {
+// ── 5. Injected production extractor: Rowspan & Colspan with collision (P1c) ────
+Deno.test("injectedTableExtractor: collision fixture advances past occupied slots (col 2 rowspan, new col 1 colspan=2) (P1c)", () => {
   const doc = createMockDocument();
   const tbl = new MockNode("table");
 
-  // Header: 1 single column + 1 spanning column
-  const thead = new MockNode("thead");
-  const htr = new MockNode("tr");
-  const th1 = new MockNode("th"); th1.appendChild(new MockNode("#text", 3, "Region"));
-  const th2 = new MockNode("th"); th2.setAttribute("colspan", "2"); th2.appendChild(new MockNode("#text", 3, "Quarterly Stats"));
-  htr.appendChild(th1); htr.appendChild(th2); thead.appendChild(htr);
-  tbl.appendChild(thead);
+  // Row 0: Cell 0 = "A", Cell 1 = "B" with rowspan=2
+  const r0 = new MockNode("tr");
+  const tdA = new MockNode("td"); tdA.appendChild(new MockNode("#text", 3, "A"));
+  const tdB = new MockNode("td"); tdB.setAttribute("rowspan", "2"); tdB.appendChild(new MockNode("#text", 3, "B"));
+  r0.appendChild(tdA); r0.appendChild(tdB);
+  tbl.appendChild(r0);
 
-  // Body: Row 1 has Region spanning 2 rows
-  const tbody = new MockNode("tbody");
+  // Row 1: Cell 0 = "C" with colspan=2.
+  // Col 0 gets "C". Col 1 is occupied by "B", so second span of "C" must advance to Col 2!
   const r1 = new MockNode("tr");
-  const tdR1 = new MockNode("td"); tdR1.setAttribute("rowspan", "2"); tdR1.appendChild(new MockNode("#text", 3, "North"));
-  const tdQ1 = new MockNode("td"); tdQ1.appendChild(new MockNode("#text", 3, "Q1"));
-  const tdV1 = new MockNode("td"); tdV1.appendChild(new MockNode("#text", 3, "100"));
-  r1.appendChild(tdR1); r1.appendChild(tdQ1); r1.appendChild(tdV1);
-  tbody.appendChild(r1);
+  const tdC = new MockNode("td"); tdC.setAttribute("colspan", "2"); tdC.appendChild(new MockNode("#text", 3, "C"));
+  r1.appendChild(tdC);
+  tbl.appendChild(r1);
 
-  // Row 2: Region is occupied by North; only Q2 and 200 are in HTML
-  const r2 = new MockNode("tr");
-  const tdQ2 = new MockNode("td"); tdQ2.appendChild(new MockNode("#text", 3, "Q2"));
-  const tdV2 = new MockNode("td"); tdV2.appendChild(new MockNode("#text", 3, "200"));
-  r2.appendChild(tdQ2); r2.appendChild(tdV2);
-  tbody.appendChild(r2);
-
-  tbl.appendChild(tbody);
   doc.body.appendChild(tbl);
 
   const res = injectedTableExtractor({ customDocument: doc });
   assertEquals(res.tables.length, 1);
   const t = res.tables[0];
-  assertEquals(t.headers, ["Region", "Quarterly Stats", "Quarterly Stats_2"]);
   assertEquals(t.rows.length, 2);
-  assertEquals(t.rows[0], ["North", "Q1", "100"]);
-  assertEquals(t.rows[1], ["North", "Q2", "200"]);
+  assertEquals(t.rows[0], ["A", "B", ""]);
+  assertEquals(t.rows[1], ["C", "B", "C"], "Colspan must advance past occupied rowspan slot without overwriting");
 });
 
 // ── 6. Injected production extractor: Nested tables (P1a/P1c) ───────────────────
@@ -395,7 +454,7 @@ Deno.test("injectedTableExtractor: nested tables do not pollute parent rows and 
 });
 
 // ── 7. Injected production extractor: Huge cells bounded (P1a) ───────────────────
-Deno.test("injectedTableExtractor: huge cell text bounded to maxCellChars BEFORE copying (P1a)", () => {
+Deno.test("injectedTableExtractor: huge cell text bounded to maxCellChars AT SOURCE (P1a)", () => {
   const doc = createMockDocument();
   const tbl = new MockNode("table");
   const tr = new MockNode("tr");
@@ -413,24 +472,92 @@ Deno.test("injectedTableExtractor: huge cell text bounded to maxCellChars BEFORE
 });
 
 // ── 8. Injected production extractor: Whole-page aggregate limits (P1a) ─────────
-Deno.test("injectedTableExtractor: whole-page table and work budgets enforce truncation with explicit reasons (P1a)", () => {
-  const doc = createMockDocument();
+Deno.test("injectedTableExtractor: whole-page table, cell, and time budgets enforce truncation (P1a)", async () => {
+  // Test 8a: maxTablesPerPage
+  const doc1 = createMockDocument();
   for (let i = 0; i < 5; i++) {
     const tbl = new MockNode("table");
     tbl.setAttribute("aria-label", `Table-${i}`);
     const tr = new MockNode("tr");
     const td = new MockNode("td"); td.appendChild(new MockNode("#text", 3, `val-${i}`));
     tr.appendChild(td); tbl.appendChild(tr);
-    doc.body.appendChild(tbl);
+    doc1.body.appendChild(tbl);
   }
 
-  const res = injectedTableExtractor({ customDocument: doc, maxTablesPerPage: 2 });
-  assertEquals(res.count, 2);
-  assertEquals(res.pageTruncated, true);
-  assertEquals(res.pageTruncationReason, "table-limit");
+  const resTableLimit = injectedTableExtractor({ customDocument: doc1, maxTablesPerPage: 2 });
+  assertEquals(resTableLimit.count, 2);
+  assertEquals(resTableLimit.pageTruncated, true);
+  assertEquals(resTableLimit.pageTruncationReason, "table-limit");
+
+  // Test 8b: maxTotalCellsPerPage budget
+  const doc2 = createMockDocument();
+  const tblBig = new MockNode("table");
+  for (let r = 0; r < 20; r++) {
+    const tr = new MockNode("tr");
+    for (let c = 0; c < 10; c++) {
+      const td = new MockNode("td");
+      td.appendChild(new MockNode("#text", 3, `c${r}_${c}`));
+      tr.appendChild(td);
+    }
+    tblBig.appendChild(tr);
+  }
+  doc2.body.appendChild(tblBig);
+
+  const resCellBudget = injectedTableExtractor({ customDocument: doc2, maxTotalCellsPerPage: 50 });
+  assertEquals(resCellBudget.pageTruncated, true);
+  assertEquals(resCellBudget.pageTruncationReason, "cell-budget");
+  assert(resCellBudget.tables[0].rows.length <= 5, "Must abort row extraction once cell budget is hit");
+
+  // Test 8c: maxExecutionTimeMs timeout
+  const doc3 = createMockDocument();
+  const tblTimed = new MockNode("table");
+  for (let r = 0; r < 100; r++) {
+    const tr = new MockNode("tr");
+    const td = new MockNode("td");
+    td.appendChild(new MockNode("#text", 3, `timed-${r}`));
+    tr.appendChild(td);
+    tblTimed.appendChild(tr);
+  }
+  doc3.body.appendChild(tblTimed);
+
+  // Set timeout to 0ms to immediately trip time budget
+  const resTimeout = injectedTableExtractor({ customDocument: doc3, maxExecutionTimeMs: 0 });
+  assertEquals(resTimeout.pageTruncated, true);
+  assertEquals(resTimeout.pageTruncationReason, "timeout");
 });
 
-// ── 9. Tool capability, permission language, purpose group ───────────────────────
+// ── 9. DOM-root scope: extractTablesFromDom must not escape root (P2) ───────────
+Deno.test("extractTablesFromDom: scoped subtree root does not extract tables outside it (P2)", () => {
+  const doc = createMockDocument();
+
+  const containerA = new MockNode("div");
+  containerA.setAttribute("id", "container-a");
+  const tblInScope = new MockNode("table");
+  tblInScope.setAttribute("aria-label", "Table In Scope");
+  const trA = new MockNode("tr");
+  const tdA = new MockNode("td"); tdA.appendChild(new MockNode("#text", 3, "In Scope"));
+  trA.appendChild(tdA); tblInScope.appendChild(trA);
+  containerA.appendChild(tblInScope);
+  doc.body.appendChild(containerA);
+
+  const containerB = new MockNode("div");
+  containerB.setAttribute("id", "container-b");
+  const tblOutOfScope = new MockNode("table");
+  tblOutOfScope.setAttribute("aria-label", "Table Outside Scope");
+  const trB = new MockNode("tr");
+  const tdB = new MockNode("td"); tdB.appendChild(new MockNode("#text", 3, "Outside Scope"));
+  trB.appendChild(tdB); tblOutOfScope.appendChild(trB);
+  containerB.appendChild(tblOutOfScope);
+  doc.body.appendChild(containerB);
+
+  // Call extractTablesFromDom specifically scoping to containerA
+  const res = extractTablesFromDom(containerA);
+  assertEquals(res.tables.length, 1);
+  assertEquals(res.tables[0].caption, "Table In Scope");
+  assertEquals(res.tables[0].rows[0][0], "In Scope");
+});
+
+// ── 10. Tool capability, permission language, purpose group ──────────────────────
 Deno.test("extract_tables: registration, replay-safety, purpose-groups, and permission language", () => {
   assert(BROWSER_TOOL_NAMES.includes("extract_tables"), "Must be in BROWSER_TOOL_NAMES");
   const cap = chromeToolCapability("extract_tables", "chrome-api");
@@ -444,7 +571,7 @@ Deno.test("extract_tables: registration, replay-safety, purpose-groups, and perm
   assert(browserToolset().extract_tables, "Must be registered in browserToolset");
 });
 
-// ── 10. Refusal of privileged chrome:// URLs ────────────────────────────────────
+// ── 11. Refusal of privileged chrome:// URLs ────────────────────────────────────
 Deno.test("extract_tables: refuses privileged chrome:// URLs before script injection", async () => {
   const previousChrome = (globalThis as any).chrome;
   (globalThis as any).chrome = {

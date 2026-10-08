@@ -18,7 +18,8 @@ export const TABLE_EXTRACTOR_LIMITS = Object.freeze({
   maxRows: 2000,
   maxColumns: 50,
   maxBytes: 1024 * 1024, // 1 MB per table
-  maxCellChars: 2000,    // Truncate cell text length BEFORE copying
+  maxCellChars: 2000,    // Truncate cell text length AT SOURCE before copying
+  maxCaptionChars: 300,  // Truncate caption text length AT SOURCE
   maxTablesPerPage: 50,  // Whole-page table count cap
   maxTotalCellsPerPage: 50000, // Aggregate whole-page cell extraction work budget
   maxExecutionTimeMs: 2500,    // 2.5 second time budget
@@ -139,125 +140,108 @@ export async function createTabularArtifact(tableData, {
  * via chrome.scripting.executeScript.
  *
  * Implements:
- * - Bounded traversal and memory limits BEFORE materialization.
- * - Cell text length truncation before copying.
- * - Bounded 2D span-occupancy grid supporting colspan and rowspan.
+ * - Live/bounded collection traversal before materialization.
+ * - Text truncation AT SOURCE (during node walk) for cells and captions.
+ * - Accurate UTF-8 byte measurement via TextEncoder, failing closed on overflow.
+ * - General 2D span-occupancy grid advancing past occupied slots for colspan/rowspan collisions.
  * - Headerless table inference (synthesizes column names when all cells are td).
- * - Isolation of nested tables from parent rows.
+ * - Scoped DOM root handling (never escapes caller's subtree).
+ * - Isolation of nested tables from parent rows and cell text.
  * - Whole-page aggregate table/cell/time budgets with explicit truncation reasons.
  */
 export function injectedTableExtractor({
   ref = null,
+  targetRoot = null,
   maxRows = 2000,
   maxColumns = 50,
   maxBytes = 1024 * 1024,
   maxCellChars = 2000,
+  maxCaptionChars = 300,
   maxTablesPerPage = 50,
   maxTotalCellsPerPage = 50000,
   maxExecutionTimeMs = 2500,
   customDocument = null,
 } = {}) {
   var doc = customDocument || (typeof document !== "undefined" ? document : null);
-  if (!doc) return { tables: [], count: 0, pageTruncated: false };
+  if (!doc && !targetRoot) return { tables: [], count: 0, pageTruncated: false };
 
   var startTime = Date.now();
   var totalCellsCount = 0;
   var pageTruncated = false;
   var pageTruncationReason = null;
+  var utf8Encoder = typeof TextEncoder !== "undefined" ? new TextEncoder() : null;
+
+  function measureBytes(val) {
+    if (utf8Encoder) {
+      return utf8Encoder.encode(typeof val === "string" ? val : JSON.stringify(val)).byteLength;
+    }
+    return unescape(encodeURIComponent(typeof val === "string" ? val : JSON.stringify(val))).length;
+  }
 
   function clean(s) {
     if (!s) return "";
     return s.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
   }
 
-  function cleanCellText(text) {
-    if (!text) return "";
-    var s = text.length > maxCellChars ? text.slice(0, maxCellChars) : text;
-    return clean(s);
-  }
-
-  function getCellDirectText(cellEl) {
-    if (!cellEl) return "";
+  // Extract text AT SOURCE, truncating during the walk before string concatenation
+  function extractBoundedText(node, maxChars, ignoreNestedTables) {
+    if (!node) return "";
     var text = "";
-    var children = cellEl.childNodes || [];
-    for (var i = 0; i < children.length; i++) {
-      var n = children[i];
+
+    function walk(n) {
+      if (text.length >= maxChars) return;
       if (n.nodeType === 3) {
-        text += n.nodeValue;
-      } else if (n.nodeType === 1) {
+        var val = n.nodeValue || "";
+        var remaining = maxChars - text.length;
+        text += val.slice(0, remaining);
+        return;
+      }
+      if (n.nodeType === 1) {
         var tag = n.tagName ? n.tagName.toUpperCase() : "";
-        if (tag !== "TABLE") {
-          text += (n.innerText || n.textContent || "");
+        if (ignoreNestedTables && tag === "TABLE") return;
+        var children = n.childNodes || [];
+        for (var i = 0; i < children.length; i++) {
+          walk(children[i]);
+          if (text.length >= maxChars) break;
         }
       }
-      if (text.length >= maxCellChars) break;
     }
-    return cleanCellText(text);
+
+    walk(node);
+    return clean(text);
   }
 
   function headingBefore(el) {
     var p = el.previousElementSibling;
     while (p) {
-      if (p.tagName && /^H[1-6]$/i.test(p.tagName)) return clean(p.textContent);
+      if (p.tagName && /^H[1-6]$/i.test(p.tagName)) return extractBoundedText(p, maxCaptionChars, false);
       var inner = p.querySelector ? p.querySelector("h1, h2, h3, h4, h5, h6") : null;
-      if (inner) return clean(inner.textContent);
+      if (inner) return extractBoundedText(inner, maxCaptionChars, false);
       p = p.previousElementSibling;
     }
-    if (el.parentElement && el.parentElement !== doc.body) {
+    if (el.parentElement && el.parentElement !== (doc ? doc.body : null) && el.parentElement !== scope) {
       return headingBefore(el.parentElement);
     }
     return null;
   }
 
   function getScope() {
-    if (ref !== null && ref !== undefined) {
+    if (targetRoot) return targetRoot;
+    if (ref !== null && ref !== undefined && doc) {
       var target = (doc.querySelector && (
         doc.querySelector('[data-cap-ref="' + ref + '"]') ||
         doc.querySelector('[data-ref="' + ref + '"]')
       )) || (doc.getElementById && doc.getElementById(String(ref)));
       if (target) return target;
     }
-    return doc;
-  }
-
-  function getDirectTrs(tableEl, sectionTag) {
-    var trs = [];
-    var children = tableEl.children || [];
-    for (var i = 0; i < children.length; i++) {
-      var child = children[i];
-      var tag = child.tagName ? child.tagName.toUpperCase() : "";
-      if (!sectionTag && tag === "TR") {
-        trs.push(child);
-      } else if (sectionTag && tag === sectionTag) {
-        var secChildren = child.children || [];
-        for (var j = 0; j < secChildren.length; j++) {
-          if (secChildren[j].tagName && secChildren[j].tagName.toUpperCase() === "TR") {
-            trs.push(secChildren[j]);
-          }
-        }
-      }
-    }
-    return trs;
-  }
-
-  function getDirectCells(trEl) {
-    var cells = [];
-    var children = trEl.children || [];
-    for (var i = 0; i < children.length; i++) {
-      var tag = children[i].tagName ? children[i].tagName.toUpperCase() : "";
-      if (tag === "TD" || tag === "TH") {
-        cells.push(children[i]);
-      }
-    }
-    return cells;
+    return doc ? (doc.body || doc) : null;
   }
 
   var scope = getScope();
-  var tables = [];
-  var seen = new Set();
+  if (!scope) return { tables: [], count: 0, pageTruncated: false };
 
   function checkBudget() {
-    if (Date.now() - startTime > maxExecutionTimeMs) {
+    if (Date.now() - startTime >= maxExecutionTimeMs) {
       pageTruncated = true;
       pageTruncationReason = "timeout";
       return false;
@@ -275,13 +259,74 @@ export function injectedTableExtractor({
     return true;
   }
 
-  // 1. Native HTML <table> elements
-  var nativeTables = [];
-  if (scope.tagName && scope.tagName.toUpperCase() === "TABLE") {
-    nativeTables.push(scope);
-  } else if (scope.querySelectorAll) {
-    nativeTables = Array.prototype.slice.call(scope.querySelectorAll("table"));
+  var tables = [];
+  var seen = new Set();
+
+  // Helper: place a cell with colspan & rowspan into the 2D occupancy grid advancing past occupied slots
+  function placeCellInGrid(row, activeSpans, cellText, cs, rs, maxCols, maxRowsRemaining) {
+    var col = 0;
+    for (var s = 0; s < cs; s++) {
+      while (col < maxCols && row[col] !== null) col++;
+      if (col >= maxCols) return false;
+      row[col] = cellText;
+      if (rs > 1) {
+        activeSpans.push({ col: col, remaining: Math.min(rs - 1, maxRowsRemaining), text: cellText });
+      }
+      col++;
+    }
+    return true;
   }
+
+  // 1. Native HTML <table> elements (bounded live enumeration)
+  function collectTables(rootNode) {
+    var list = [];
+    if (rootNode.tagName && rootNode.tagName.toUpperCase() === "TABLE") {
+      list.push(rootNode);
+      return list;
+    }
+    // Live getElementsByTagName if available, otherwise bounded DFS
+    if (rootNode.getElementsByTagName) {
+      var liveColl = rootNode.getElementsByTagName("table");
+      for (var idx = 0; idx < liveColl.length; idx++) {
+        if (list.length >= maxTablesPerPage) {
+          pageTruncated = true;
+          pageTruncationReason = "table-limit";
+          break;
+        }
+        list.push(liveColl[idx]);
+      }
+      return list;
+    }
+    function walkEl(n) {
+      if (list.length >= maxTablesPerPage) {
+        pageTruncated = true;
+        pageTruncationReason = "table-limit";
+        return;
+      }
+      var tag = n.tagName ? n.tagName.toUpperCase() : "";
+      if (tag === "TABLE") {
+        if (list.length >= maxTablesPerPage) {
+          pageTruncated = true;
+          pageTruncationReason = "table-limit";
+          return;
+        }
+        list.push(n);
+      }
+      var ch = n.children || [];
+      for (var c = 0; c < ch.length; c++) {
+        walkEl(ch[c]);
+        if (list.length >= maxTablesPerPage) {
+          pageTruncated = true;
+          pageTruncationReason = "table-limit";
+          break;
+        }
+      }
+    }
+    walkEl(rootNode);
+    return list;
+  }
+
+  var nativeTables = collectTables(scope);
 
   for (var i = 0; i < nativeTables.length; i++) {
     if (!checkBudget()) break;
@@ -290,28 +335,60 @@ export function injectedTableExtractor({
 
     var caption = "";
     var capEl = tbl.querySelector ? tbl.querySelector("caption") : null;
-    if (capEl) caption = clean(capEl.textContent);
-    if (!caption && tbl.getAttribute) caption = clean(tbl.getAttribute("aria-label") || "");
-    if (!caption && tbl.getAttribute && tbl.getAttribute("aria-labelledby") && doc.getElementById) {
+    if (capEl) caption = extractBoundedText(capEl, maxCaptionChars, false);
+    if (!caption && tbl.getAttribute) caption = clean(tbl.getAttribute("aria-label") || "").slice(0, maxCaptionChars);
+    if (!caption && tbl.getAttribute && tbl.getAttribute("aria-labelledby") && doc && doc.getElementById) {
       var lb = doc.getElementById(tbl.getAttribute("aria-labelledby"));
-      if (lb) caption = clean(lb.textContent);
+      if (lb) caption = extractBoundedText(lb, maxCaptionChars, false);
     }
     if (!caption) caption = headingBefore(tbl) || ("Table " + (tables.length + 1));
 
-    var theadTrs = getDirectTrs(tbl, "THEAD");
-    var tbodyTrs = getDirectTrs(tbl, "TBODY");
-    var tfootTrs = getDirectTrs(tbl, "TFOOT");
-    var directTrs = getDirectTrs(tbl, null);
-    var allDataTrs = tbodyTrs.concat(directTrs, tfootTrs);
+    // Bounded live row traversal via direct children (thead, tbody, tfoot, tr)
+    var theadRows = [];
+    var dataRows = [];
+    var tblChildren = tbl.children || [];
+    var truncated = false;
+    var truncationReason = null;
+
+    for (var tc = 0; tc < tblChildren.length; tc++) {
+      var sec = tblChildren[tc];
+      var secTag = sec.tagName ? sec.tagName.toUpperCase() : "";
+      if (secTag === "TR") {
+        if (dataRows.length >= maxRows) {
+          truncated = true;
+          truncationReason = "row-limit";
+          break;
+        }
+        dataRows.push(sec);
+      } else if (secTag === "THEAD") {
+        for (var thr = 0; thr < (sec.children || []).length; thr++) {
+          if (sec.children[thr].tagName && sec.children[thr].tagName.toUpperCase() === "TR") {
+            theadRows.push(sec.children[thr]);
+          }
+        }
+      } else if (secTag === "TBODY" || secTag === "TFOOT") {
+        for (var tbr = 0; tbr < (sec.children || []).length; tbr++) {
+          if (sec.children[tbr].tagName && sec.children[tbr].tagName.toUpperCase() === "TR") {
+            if (dataRows.length >= maxRows) {
+              truncated = true;
+              truncationReason = "row-limit";
+              break;
+            }
+            dataRows.push(sec.children[tbr]);
+          }
+        }
+      }
+      if (truncated) break;
+    }
 
     var rawHeaders = [];
 
     // Header extraction
-    if (theadTrs.length > 0) {
+    if (theadRows.length > 0) {
       var headGrid = [];
       var headActiveRowSpans = [];
-      for (var hr = 0; hr < theadTrs.length; hr++) {
-        var htr = theadTrs[hr];
+      for (var hr = 0; hr < theadRows.length; hr++) {
+        var htr = theadRows[hr];
         var hrow = new Array(maxColumns).fill(null);
         for (var si = headActiveRowSpans.length - 1; si >= 0; si--) {
           var sp = headActiveRowSpans[si];
@@ -319,22 +396,18 @@ export function injectedTableExtractor({
           sp.remaining--;
           if (sp.remaining <= 0) headActiveRowSpans.splice(si, 1);
         }
-        var hcells = getDirectCells(htr);
-        var hcol = 0;
+        var hcells = Array.prototype.slice.call(htr.children || []).filter(function (c) {
+          var tg = c.tagName ? c.tagName.toUpperCase() : "";
+          return tg === "TH" || tg === "TD";
+        });
         for (var hc = 0; hc < hcells.length; hc++) {
-          while (hcol < maxColumns && hrow[hcol] !== null) hcol++;
-          if (hcol >= maxColumns) break;
           var hcell = hcells[hc];
           var hcs = parseInt(hcell.getAttribute ? (hcell.getAttribute("colspan") || "1") : "1", 10);
           var hrs = parseInt(hcell.getAttribute ? (hcell.getAttribute("rowspan") || "1") : "1", 10);
-          var hspan = (Number.isFinite(hcs) && hcs > 1) ? Math.min(hcs, maxColumns - hcol) : 1;
-          var hrspan = (Number.isFinite(hrs) && hrs > 1) ? Math.min(hrs, theadTrs.length - hr) : 1;
-          var htxt = getCellDirectText(hcell);
-          for (var hs = 0; hs < hspan; hs++) {
-            hrow[hcol + hs] = htxt;
-            if (hrspan > 1) headActiveRowSpans.push({ col: hcol + hs, remaining: hrspan - 1, text: htxt });
-          }
-          hcol += hspan;
+          var hspan = (Number.isFinite(hcs) && hcs > 1) ? hcs : 1;
+          var hrspan = (Number.isFinite(hrs) && hrs > 1) ? hrs : 1;
+          var htxt = extractBoundedText(hcell, maxCellChars, true);
+          placeCellInGrid(hrow, headActiveRowSpans, htxt, hspan, hrspan, maxColumns, theadRows.length - hr);
         }
         headGrid.push(hrow);
       }
@@ -350,34 +423,37 @@ export function injectedTableExtractor({
         else if (rawHeaders.length > 0) rawHeaders.push("");
       }
       while (rawHeaders.length > 0 && !rawHeaders[rawHeaders.length - 1]) rawHeaders.pop();
-    } else if (allDataTrs.length > 0) {
-      var firstTr = allDataTrs[0];
-      var firstCells = getDirectCells(firstTr);
+    } else if (dataRows.length > 0) {
+      var firstTr = dataRows[0];
+      var firstCells = Array.prototype.slice.call(firstTr.children || []).filter(function (c) {
+        var tg = c.tagName ? c.tagName.toUpperCase() : "";
+        return tg === "TH" || tg === "TD";
+      });
       var hasTh = firstCells.some(function (c) { return c.tagName && c.tagName.toUpperCase() === "TH"; });
       if (hasTh) {
-        allDataTrs.shift();
-        var fhcol = 0;
+        dataRows.shift();
+        var frow = new Array(maxColumns).fill(null);
+        var fActive = [];
         for (var fc = 0; fc < firstCells.length; fc++) {
-          if (fhcol >= maxColumns) break;
           var fcell = firstCells[fc];
           var fcs = parseInt(fcell.getAttribute ? (fcell.getAttribute("colspan") || "1") : "1", 10);
-          var fspan = (Number.isFinite(fcs) && fcs > 1) ? Math.min(fcs, maxColumns - fhcol) : 1;
-          var ftxt = getCellDirectText(fcell);
-          for (var fs = 0; fs < fspan; fs++) rawHeaders.push(ftxt);
-          fhcol += fspan;
+          var fspan = (Number.isFinite(fcs) && fcs > 1) ? fcs : 1;
+          var ftxt = extractBoundedText(fcell, maxCellChars, true);
+          placeCellInGrid(frow, fActive, ftxt, fspan, 1, maxColumns, 1);
+        }
+        for (var fk = 0; fk < maxColumns; fk++) {
+          if (frow[fk] != null) rawHeaders.push(frow[fk]);
         }
       }
-      // If no <th> in first row and no <thead>, rawHeaders stays empty; first row remains in allDataTrs
     }
 
     var rows = [];
-    var truncated = false;
-    var truncationReason = null;
     var currentBytes = 0;
     var maxDataCols = rawHeaders.length;
     var activeRowSpans = [];
 
-    for (var r = 0; r < allDataTrs.length; r++) {
+    // Row iteration with budget checks and UTF-8 byte bounds
+    for (var r = 0; r < dataRows.length; r++) {
       if (rows.length >= maxRows) {
         truncated = true;
         truncationReason = "row-limit";
@@ -389,9 +465,10 @@ export function injectedTableExtractor({
         break;
       }
 
-      var tr = allDataTrs[r];
+      var tr = dataRows[r];
       var row = new Array(maxColumns).fill(null);
 
+      // 1. Fill active row spans from previous rows
       for (var si = activeRowSpans.length - 1; si >= 0; si--) {
         var span = activeRowSpans[si];
         row[span.col] = span.text;
@@ -399,36 +476,33 @@ export function injectedTableExtractor({
         if (span.remaining <= 0) activeRowSpans.splice(si, 1);
       }
 
-      var cells = getDirectCells(tr);
-      var col = 0;
-      for (var c = 0; c < cells.length; c++) {
-        while (col < maxColumns && row[col] !== null) col++;
-        if (col >= maxColumns) {
+      // 2. Place direct cells
+      var dcells = Array.prototype.slice.call(tr.children || []).filter(function (c) {
+        var tg = c.tagName ? c.tagName.toUpperCase() : "";
+        return tg === "TD" || tg === "TH";
+      });
+
+      for (var c = 0; c < dcells.length; c++) {
+        var cell = dcells[c];
+        var cs = parseInt(cell.getAttribute ? (cell.getAttribute("colspan") || "1") : "1", 10);
+        var rs = parseInt(cell.getAttribute ? (cell.getAttribute("rowspan") || "1") : "1", 10);
+        var cspan = (Number.isFinite(cs) && cs > 1) ? cs : 1;
+        var rspan = (Number.isFinite(rs) && rs > 1) ? rs : 1;
+        var text = extractBoundedText(cell, maxCellChars, true);
+
+        var placed = placeCellInGrid(row, activeRowSpans, text, cspan, rspan, maxColumns, dataRows.length - r);
+        if (!placed) {
           truncated = true;
           if (!truncationReason) truncationReason = "column-limit";
           break;
         }
-        var cell = cells[c];
-        var cs = parseInt(cell.getAttribute ? (cell.getAttribute("colspan") || "1") : "1", 10);
-        var rs = parseInt(cell.getAttribute ? (cell.getAttribute("rowspan") || "1") : "1", 10);
-        var cspan = (Number.isFinite(cs) && cs > 1) ? Math.min(cs, maxColumns - col) : 1;
-        var rspan = (Number.isFinite(rs) && rs > 1) ? Math.min(rs, allDataTrs.length - r) : 1;
-        var text = getCellDirectText(cell);
-
-        for (var csIdx = 0; csIdx < cspan; csIdx++) {
-          row[col + csIdx] = text;
-          if (rspan > 1) {
-            activeRowSpans.push({ col: col + csIdx, remaining: rspan - 1, text: text });
-          }
-        }
-        col += cspan;
       }
 
       var lastFilled = -1;
       for (var f = maxColumns - 1; f >= 0; f--) {
         if (row[f] !== null) { lastFilled = f; break; }
       }
-      if (lastFilled === -1 && cells.length === 0) continue;
+      if (lastFilled === -1 && dcells.length === 0) continue;
 
       var cleanRow = [];
       for (var k = 0; k <= lastFilled; k++) {
@@ -436,14 +510,16 @@ export function injectedTableExtractor({
       }
       if (cleanRow.length > maxDataCols) maxDataCols = cleanRow.length;
 
-      rows.push(cleanRow);
-      totalCellsCount += cleanRow.length;
-      currentBytes += cleanRow.reduce(function (sum, val) { return sum + val.length; }, 0) + 16;
-      if (currentBytes > maxBytes) {
+      var rowBytes = measureBytes(cleanRow);
+      if (currentBytes + rowBytes > maxBytes) {
         truncated = true;
         truncationReason = "byte-limit";
         break;
       }
+
+      rows.push(cleanRow);
+      totalCellsCount += cleanRow.length;
+      currentBytes += rowBytes;
     }
 
     var colCount = Math.max(rawHeaders.length, maxDataCols, 1);
@@ -491,15 +567,15 @@ export function injectedTableExtractor({
     var grid = ariaGrids[g];
     seen.add(grid);
 
-    var caption = clean(grid.getAttribute ? (grid.getAttribute("aria-label") || "") : "");
-    if (!caption && grid.getAttribute && grid.getAttribute("aria-labelledby") && doc.getElementById) {
+    var caption = clean(grid.getAttribute ? (grid.getAttribute("aria-label") || "") : "").slice(0, maxCaptionChars);
+    if (!caption && grid.getAttribute && grid.getAttribute("aria-labelledby") && doc && doc.getElementById) {
       var lb = doc.getElementById(grid.getAttribute("aria-labelledby"));
-      if (lb) caption = clean(lb.textContent);
+      if (lb) caption = extractBoundedText(lb, maxCaptionChars, false);
     }
     if (!caption) caption = headingBefore(grid) || ("Data Grid " + (tables.length + 1));
 
     var colHeaders = grid.querySelectorAll ? Array.prototype.slice.call(grid.querySelectorAll('[role="columnheader"]')) : [];
-    var rawHeaders = colHeaders.map(function (ch) { return cleanCellText(ch.textContent); }).slice(0, maxColumns);
+    var rawHeaders = colHeaders.map(function (ch) { return extractBoundedText(ch, maxCellChars, false); }).slice(0, maxColumns);
 
     var allRowEls = grid.querySelectorAll ? Array.prototype.slice.call(grid.querySelectorAll('[role="row"]')) : [];
     var dataRowEls = allRowEls.filter(function (rEl) {
@@ -530,7 +606,7 @@ export function injectedTableExtractor({
 
       var row = [];
       for (var c = 0; c < Math.min(cells.length, maxColumns); c++) {
-        row.push(cleanCellText(cells[c].textContent));
+        row.push(extractBoundedText(cells[c], maxCellChars, false));
       }
       if (cells.length > maxColumns) {
         truncated = true;
@@ -538,21 +614,24 @@ export function injectedTableExtractor({
       }
 
       if (row.length > maxCols) maxCols = row.length;
-      rows.push(row);
-      totalCellsCount += row.length;
-      currentBytes += row.reduce(function (sum, cellText) { return sum + (cellText ? cellText.length : 0); }, 0) + 16;
-      if (currentBytes > maxBytes) {
+
+      var rowBytes = measureBytes(row);
+      if (currentBytes + rowBytes > maxBytes) {
         truncated = true;
         truncationReason = "byte-limit";
         break;
       }
+
+      rows.push(row);
+      totalCellsCount += row.length;
+      currentBytes += rowBytes;
     }
 
+    var colCount = Math.max(rawHeaders.length, maxCols, 1);
     var headers = [];
     var seenH = {};
-    var colCount = Math.max(rawHeaders.length, maxCols, 1);
-    for (var col = 0; col < colCount; col++) {
-      var name = rawHeaders[col] || ("Column " + (col + 1));
+    for (var colIdx = 0; colIdx < colCount; colIdx++) {
+      var name = rawHeaders[colIdx] || ("Column " + (colIdx + 1));
       var count = seenH[name] || 0;
       seenH[name] = count + 1;
       if (count > 0) name = name + "_" + (count + 1);
@@ -591,12 +670,7 @@ export function injectedTableExtractor({
     var container = listContainers[lc];
     if (container.querySelector && container.querySelector("table, [role='table'], [role='grid']")) continue;
 
-    var items = Array.prototype.slice.call(container.children || []).filter(function (el) {
-      var t = el.tagName ? el.tagName.toUpperCase() : "";
-      return ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "H1", "H2", "H3", "H4", "H5", "H6"].indexOf(t) === -1;
-    });
-    if (items.length < 3) continue;
-
+    var childElements = container.children || [];
     var cardRecords = [];
     var fieldOrder = [];
     var seenF = {};
@@ -607,7 +681,11 @@ export function injectedTableExtractor({
       if (!seenF[f]) { seenF[f] = true; fieldOrder.push(f); }
     }
 
-    for (var it = 0; it < items.length; it++) {
+    for (var it = 0; it < childElements.length; it++) {
+      var el = childElements[it];
+      var t = el.tagName ? el.tagName.toUpperCase() : "";
+      if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "H1", "H2", "H3", "H4", "H5", "H6"].indexOf(t) !== -1) continue;
+
       if (cardRecords.length >= maxRows) {
         cardTruncated = true;
         cardTruncationReason = "row-limit";
@@ -619,37 +697,36 @@ export function injectedTableExtractor({
         break;
       }
 
-      var item = items[it];
       var rec = {};
-      var dts = item.querySelectorAll ? Array.prototype.slice.call(item.querySelectorAll("dt")) : [];
+      var dts = el.querySelectorAll ? Array.prototype.slice.call(el.querySelectorAll("dt")) : [];
       for (var d = 0; d < dts.length; d++) {
         var dt = dts[d];
         var dd = dt.nextElementSibling && dt.nextElementSibling.tagName === "DD" ? dt.nextElementSibling : null;
         if (dd) {
-          var k = cleanCellText(dt.textContent);
-          if (k) { rec[k] = cleanCellText(dd.textContent); addField(k); }
+          var k = extractBoundedText(dt, 100, false);
+          if (k) { rec[k] = extractBoundedText(dd, maxCellChars, false); addField(k); }
         }
       }
-      var h = item.querySelector ? item.querySelector("h2, h3, h4, h5, h6") : null;
+      var h = el.querySelector ? el.querySelector("h2, h3, h4, h5, h6") : null;
       if (h && !rec["Title"] && !rec["Name"]) {
         var field = (container.className && container.className.indexOf("speaker") !== -1) ? "Name" : "Title";
-        rec[field] = cleanCellText(h.textContent);
+        rec[field] = extractBoundedText(h, maxCellChars, false);
         addField(field);
       }
-      var tagged = item.querySelectorAll ? Array.prototype.slice.call(item.querySelectorAll("[data-field], [class]")) : [];
+      var tagged = el.querySelectorAll ? Array.prototype.slice.call(el.querySelectorAll("[data-field], [class]")) : [];
       for (var tg = 0; tg < tagged.length; tg++) {
         var tel = tagged[tg];
         var df = tel.getAttribute ? tel.getAttribute("data-field") : null;
         if (df) {
-          var k = cleanCellText(df);
-          if (k && !rec[k]) { rec[k] = cleanCellText(tel.textContent); addField(k); }
+          var k = clean(df).slice(0, 100);
+          if (k && !rec[k]) { rec[k] = extractBoundedText(tel, maxCellChars, false); addField(k); }
         } else {
           var cls = String(tel.className || "").split(/\s+/);
           for (var cl = 0; cl < cls.length; cl++) {
             var token = cls[cl].toLowerCase();
             if (["price", "cost", "role", "topic", "time", "date", "status", "category"].indexOf(token) !== -1) {
               var key = token.charAt(0).toUpperCase() + token.slice(1);
-              if (!rec[key]) { rec[key] = cleanCellText(tel.textContent); addField(key); }
+              if (!rec[key]) { rec[key] = extractBoundedText(tel, maxCellChars, false); addField(key); }
             }
           }
         }
@@ -661,7 +738,7 @@ export function injectedTableExtractor({
     }
 
     if (fieldOrder.length >= 2 && cardRecords.length >= 3) {
-      var caption = clean(container.getAttribute ? (container.getAttribute("aria-label") || "") : "") ||
+      var caption = clean(container.getAttribute ? (container.getAttribute("aria-label") || "") : "").slice(0, maxCaptionChars) ||
                     headingBefore(container) || ("Card List " + (tables.length + 1));
       var headers = fieldOrder.slice(0, maxColumns);
       var rows = cardRecords.map(function (rec) {
@@ -687,9 +764,9 @@ export function injectedTableExtractor({
   };
 }
 
-/** Extract tables from a DOM root element. */
+/** Extract tables from a DOM root element without escaping into caller document. */
 export function extractTablesFromDom(root, options = {}) {
-  return injectedTableExtractor({ customDocument: root.ownerDocument || root, ref: null, ...options });
+  return injectedTableExtractor({ targetRoot: root, customDocument: root.ownerDocument || root, ...options });
 }
 
 class HtmlMockNode {
@@ -797,7 +874,7 @@ function parseHtmlToDom(html) {
   return root;
 }
 
-/** Simple regex-based fallback extractor for tests/environments without full DOMParser. */
+/** Simple fallback extractor for tests/environments without full DOMParser. */
 export function extractTablesFromHtml(html, options = {}) {
   if (typeof DOMParser !== "undefined") {
     const doc = new DOMParser().parseFromString(html, "text/html");

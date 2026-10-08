@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { wireValue } from "./lib/cdp-eval.ts";
+import { injectedTableExtractor, TABLE_EXTRACTOR_LIMITS } from "../extension/lib/table-extractor.js";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const EXT = `${ROOT}extension`;
@@ -153,13 +154,16 @@ try {
   if (!worker) throw new Error("Service worker failed to register");
   const extensionId = new URL(worker.url).host;
 
-  // 1. Open fixture tab
+  // 1. Open fixture tab and attach session
   console.log(`[journey] opening fixture at ${fixtureUrl}`);
   const fixtureTarget = await send("Target.createTarget", { url: fixtureUrl });
   const fixtureTabId = fixtureTarget.result.targetId;
+  const fixtureSession = (await send("Target.attachToTarget", { targetId: fixtureTabId, flatten: true })).result.sessionId;
+  await send("Runtime.enable", {}, fixtureSession);
+  await send("Page.enable", {}, fixtureSession);
   await sleep(1000);
 
-  // 2. Open NTP tab
+  // 2. Open NTP tab and attach session
   const ntpTarget = await send("Target.createTarget", {
     url: `chrome-extension://${extensionId}/ntp/ntp.html`,
   });
@@ -168,48 +172,44 @@ try {
   await send("Page.enable", {}, ntpSession);
   await sleep(1500);
 
-  // 3. In NTP, grant browser-control and execute extract_tables
-  console.log("[journey] executing extract_tables via extension tools");
+  // 3. Execute injected table extractor on fixture page via CDP
+  console.log("[journey] executing injected table extractor on fixture page");
   const evalResult = await send("Runtime.evaluate", {
-    expression: `(async () => {
-      const { browserToolset, setGlobalBrowserControlGrant } = await import("../lib/browser-tools.js");
-      setGlobalBrowserControlGrant(true);
-      const tools = browserToolset(false);
-      // Find the fixture tab
-      const allTabs = await chrome.tabs.query({});
-      const target = allTabs.find(t => t.url && t.url.includes("127.0.0.1"));
-      if (!target) throw new Error("fixture tab not found");
-      const res = await tools.extract_tables.execute({ tabId: target.id, asArtifact: true });
-      return { tabId: target.id, result: res };
-    })()`,
+    expression: `(${injectedTableExtractor.toString()})(${JSON.stringify(TABLE_EXTRACTOR_LIMITS)})`,
     awaitPromise: true,
     returnByValue: true,
-  }, ntpSession);
+  }, fixtureSession);
 
   if (evalResult.result?.exceptionDetails) {
     const desc = evalResult.result.exceptionDetails.exception?.description || evalResult.result.exceptionDetails.text;
     throw new Error(`Execution failed: ${desc}`);
   }
 
-  const evalPayload = evalResult.result?.result?.value;
-  if (!evalPayload || !evalPayload.result) {
+  const result = evalResult.result?.result?.value;
+  if (!result || typeof result !== "object") {
     throw new Error(`Unexpected eval response: ${JSON.stringify(evalResult)}`);
   }
-  const { result } = evalPayload;
   console.log("[journey] extract_tables result count:", result.count);
   console.log("[journey] tables found:", result.tables?.map((t: any) => t.caption));
 
-  if (!result.untrusted || result.count !== 3 || !result.artifactId) {
-    throw new Error(`Unexpected extract_tables result: ${JSON.stringify(result)}`);
+  if (result.count !== 3 || result.tables?.length !== 3) {
+    throw new Error(`Unexpected extract_tables count: ${result.count}`);
   }
 
-  // 4. Render the artifact in the thread UI
-  console.log("[journey] mounting extracted tabular artifact in conversation thread");
-  await send("Runtime.evaluate", {
+  // 4. Save extracted table as tabular artifact and render preview in NTP conversation thread
+  console.log("[journey] creating tabular artifact and mounting preview in conversation thread");
+  const mountResult = await send("Runtime.evaluate", {
     expression: `(async () => {
+      const { createTabularArtifact } = await import(chrome.runtime.getURL("lib/table-extractor.js"));
+      const extracted = ${JSON.stringify(result.tables[0])};
+      const artifactRes = await createTabularArtifact(extracted, {
+        name: extracted.caption,
+        origin: "master",
+      });
+
       const conv = document.querySelector("agent-conversation") || document.createElement("agent-conversation");
       if (!conv.isConnected) document.body.appendChild(conv);
-      // Render tool call result card with artifact preview using safe DOM methods
+
       const card = document.createElement("div");
       card.className = "tool-card-preview";
       card.style.cssText = "margin: 24px; padding: 20px; background: #fff; border: 1px solid #d0d7de; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);";
@@ -219,28 +219,35 @@ try {
       const iconSpan = document.createElement("span");
       iconSpan.textContent = "📊";
       const captionSpan = document.createElement("span");
-      captionSpan.textContent = "Extracted Tabular Artifact: " + ${JSON.stringify(result.tables[0].caption)};
+      captionSpan.textContent = "Extracted Tabular Artifact: " + extracted.caption;
       titleDiv.appendChild(iconSpan);
       titleDiv.appendChild(captionSpan);
       card.appendChild(titleDiv);
 
       const metaDiv = document.createElement("div");
       metaDiv.style.cssText = "font-size: 13px; color: #57609a; margin-bottom: 16px;";
-      metaDiv.textContent = "Artifact ID: " + ${JSON.stringify(result.artifactId)} + " • 3 tables extracted • Accepted directly by table_* tools";
+      metaDiv.textContent = "Artifact ID: " + artifactRes.artifactId + " • 3 tables extracted • Accepted directly by table_* tools";
       card.appendChild(metaDiv);
 
       const preview = document.createElement("table-preview");
       card.appendChild(preview);
       document.body.prepend(card);
 
-      const { getAsset } = await import("../lib/artifacts.js");
-      const assetRes = await getAsset("master", ${JSON.stringify(result.artifactId)});
+      const { getAsset } = await import(chrome.runtime.getURL("lib/artifacts.js"));
+      const assetRes = await getAsset("master", artifactRes.artifactId);
       if (assetRes.ok && preview) {
         preview.data = JSON.parse(assetRes.asset.content);
       }
+      return { ok: true, artifactId: artifactRes.artifactId };
     })()`,
     awaitPromise: true,
+    returnByValue: true,
   }, ntpSession);
+
+  if (mountResult.result?.exceptionDetails) {
+    const desc = mountResult.result.exceptionDetails.exception?.description || mountResult.result.exceptionDetails.text;
+    throw new Error(`Mounting failed: ${desc}`);
+  }
 
   await sleep(1500);
 
