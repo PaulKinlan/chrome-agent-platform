@@ -19,8 +19,40 @@ import { parseSkillRef, skillResolutionOrder } from "./skill-registry.js";
 const DEFAULT_BODY_BUDGET = 8 * 1024; // PROMPT_SKILL_BODY_BUDGET (small bodies compose)
 
 /**
+ * Reduce an arbitrary rejection reason to a human-readable "<message> (<code>)"
+ * string. Names the cause without assuming it is an Error (OPFS throws
+ * DOMException, stores may reject with strings or plain objects).
+ */
+function describeCause(cause) {
+  if (cause == null) return "unknown error";
+  if (typeof cause === "string") return cause;
+  const message = typeof cause?.message === "string" ? cause.message : String(cause);
+  const code = cause?.code ?? cause?.name ?? "";
+  if (code && code !== "Error") return `${message} (${code})`;
+  return message;
+}
+
+/**
+ * Build a fail-loud error for a skill-store READ failure (chrome-agent-platform-
+ * 5xo59). Names BOTH the store and the underlying cause so a fatal store fault is
+ * diagnosable instead of a bare "failed to load skills". A genuinely absent
+ * optional skill is NOT a read failure — the stores below only throw here when
+ * the store REJECTS (corrupt DB, permission, quota); a store that RESOLVES to an
+ * empty array (no such skill) keeps the normal empty-result path untouched.
+ */
+function storeReadError(store, cause) {
+  const err = new Error(`Failed to read ${store}: ${describeCause(cause)}`);
+  err.store = store;
+  err.cause = cause;
+  return err;
+}
+
+/**
  * Wrap a skill stores collection so that getCustomSkills() and loadAllImported()
  * are only invoked once per batch resolution (chrome-agent-platform-3m3sn).
+ * Read failures PROPAGATE (not swallowed to []) so resolveSkillRef can name the
+ * store and cause; memoization caches the rejection, which keeps a fatal store
+ * fault loud across the whole batch rather than silent per reference.
  *
  * @param {object} baseStores
  * @returns {object}
@@ -35,7 +67,7 @@ export function createMemoizedSkillStores(baseStores) {
       if (!customPromise) {
         customPromise = Promise.resolve(
           typeof baseStores.getCustomSkills === "function" ? baseStores.getCustomSkills() : []
-        ).catch(() => []);
+        );
       }
       return customPromise;
     },
@@ -43,7 +75,7 @@ export function createMemoizedSkillStores(baseStores) {
       if (!importedPromise) {
         importedPromise = Promise.resolve(
           typeof baseStores.loadAllImported === "function" ? baseStores.loadAllImported() : []
-        ).catch(() => []);
+        );
       }
       return importedPromise;
     },
@@ -76,12 +108,16 @@ export async function resolveSkillRef({ ref, stores, bodyBudget = DEFAULT_BODY_B
     if (builtIn) return { ...builtIn, refId: refId ?? `builtin:${rawId}` };
   }
   if (order.includes("custom")) {
-    const custom = await stores.getCustomSkills().catch(() => []);
+    const custom = await stores.getCustomSkills().catch((cause) => {
+      throw storeReadError("custom skills store", cause);
+    });
     const fromCustom = (Array.isArray(custom) ? custom : []).find((r) => r.id === rawId);
     if (fromCustom) return { ...fromCustom, refId: refId ?? `custom:${rawId}` };
   }
   if (order.includes("imported")) {
-    const imported = await stores.loadAllImported().catch(() => []);
+    const imported = await stores.loadAllImported().catch((cause) => {
+      throw storeReadError("imported skills store", cause);
+    });
     const row = (Array.isArray(imported) ? imported : []).find((s) => s.id === rawId);
     if (!row) return null;
     // Index rows carry metadata only (bodies live in OPFS). A SMALL body is
@@ -93,8 +129,8 @@ export async function resolveSkillRef({ ref, stores, bodyBudget = DEFAULT_BODY_B
     if (Number.isInteger(row.promptBytes) && row.promptBytes > 0 && row.promptBytes <= bodyBudget) {
       try {
         return { ...base, prompt: await stores.readSkillFile(row.id, "SKILL.md") };
-      } catch {
-        return { ...base, prompt: "" };
+      } catch (cause) {
+        throw storeReadError(`imported skill file "${row.id}/SKILL.md"`, cause);
       }
     }
     if (!Number.isInteger(row.promptBytes)) {
