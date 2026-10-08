@@ -1,5 +1,13 @@
 import { parse } from "acorn";
 
+// gate-speed (2026-10-08): the node-type tests are Set lookups and the child walk is Object.keys —
+// the same own-enumerable keys in the same order as the Object.entries it replaces, so the walk visits
+// exactly the same nodes; measured ~3.7 s of each store build's main thread was this function's
+// per-node regex/array/entry allocation, and the scope map recorded EVERY node although only call/new
+// sites are ever looked up — it now records exactly those (same filter result).
+const FUNCTION_TYPES = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"]);
+const BLOCK_SCOPE_TYPES = new Set(["BlockStatement", "CatchClause", "ForStatement", "ForOfStatement", "ForInStatement", "SwitchStatement"]);
+
 // Bounded static provenance, NOT arbitrary-JS confinement. Tracks lexical
 // bindings, direct globals, member/destructuring aliases, assignments and
 // sequence/conditional expressions. Does not interpret payloads or functions.
@@ -27,14 +35,15 @@ export function findDynamicEvaluators(ast) {
   }
   function visit(node, env) {
     if (!node?.type) return;
-    if (/^(FunctionDeclaration|FunctionExpression|ArrowFunctionExpression)$/u.test(node.type)) {
+    if (FUNCTION_TYPES.has(node.type)) {
       if (node.type === "FunctionDeclaration") declare(node.id, env, { value: 4 });
       env = scope(env, true); declare(node.id, env, { value: 4 });
       node.params.forEach(p => declare(p, env));
-    } else if (["BlockStatement", "CatchClause", "ForStatement", "ForOfStatement", "ForInStatement", "SwitchStatement"].includes(node.type)) {
+    } else if (BLOCK_SCOPE_TYPES.has(node.type)) {
       env = scope(env); if (node.type === "CatchClause") declare(node.param, env);
     }
-    scopes.set(node, env); nodes.push(node);
+    // Only call/new sites are ever looked up (the final filter), so only they are recorded.
+    if (node.type === "CallExpression" || node.type === "NewExpression") { scopes.set(node, env); nodes.push(node); }
     if (node.type === "VariableDeclaration") {
       let target = env; if (node.kind === "var") while (!target.fn) target = target.parent;
       for (const d of node.declarations) declare(d.id, target, d.init ? { node: d.init, env } : null);
@@ -42,9 +51,10 @@ export function findDynamicEvaluators(ast) {
     if (node.type === "ClassDeclaration") declare(node.id, env, { value: 4 });
     if (node.type === "ImportDeclaration") node.specifiers.forEach(s => declare(s.local, env));
     if (node.type === "AssignmentExpression" && node.operator === "=" && node.left.type === "Identifier") assignments.push({ node, env });
-    for (const [key, child] of Object.entries(node)) {
-      if (["loc", "start", "end"].includes(key)) continue;
-      if (Array.isArray(child)) child.forEach(n => visit(n, env));
+    for (const key of Object.keys(node)) {
+      if (key === "loc" || key === "start" || key === "end") continue;
+      const child = node[key];
+      if (Array.isArray(child)) { for (const n of child) visit(n, env); }
       else if (child?.type) visit(child, env);
     }
   }
@@ -95,7 +105,7 @@ export function findDynamicEvaluators(ast) {
     }
     return 0;
   }
-  return nodes.filter(n => ["CallExpression", "NewExpression"].includes(n.type) && (resolve(n.callee, scopes.get(n)) & 1));
+  return nodes.filter(n => (resolve(n.callee, scopes.get(n)) & 1));
 }
 
 export function assertNoDynamicEvaluators(source, label) {
