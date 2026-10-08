@@ -43,7 +43,7 @@ Component map, with the file that owns each surface:
 
 | Component | Where | Notes |
 |---|---|---|
-| Service worker (the privileged broker) | `extension/background/service-worker.js:12265` (`chrome.runtime.onMessage.addListener`) | the ONE central dispatcher listener; 288 registered routes |
+| Service worker (the privileged broker) | `extension/background/service-worker.js:12283` (`chrome.runtime.onMessage.addListener`) | the ONE central dispatcher listener; 288 registered routes |
 | Route modules | `extension/background/routes/` | dispatched through `mergeRouteMaps` (census §2) |
 | New-tab hub / Settings / side panel | `extension/ntp/`, `extension/options/`, `extension/sidepanel/` | extension documents; principal `extension` / `owner-options` |
 | Offscreen document | `extension/offscreen/offscreen.js` | single runtime host: 11 `register*Host()` calls (ACP model, agent worker, Python, Wasm stream, call-export, Emscripten, WASI job, table worker, owner-uploaded Wasm, SVG rasterise, on-device text), plus the script-sandbox and clipboard listeners; reclaim can interrupt in-flight work across those lanes (R12) |
@@ -101,7 +101,7 @@ inventory and the sender/inventory guard described in INV-15.
   storage, OPFS, providers or browser control directly: the content-script realm may
   reach exactly eight routes (`PAGE_ALLOWED_ROUTES` in `extension/lib/pure.js:1280-1290`),
   and every other route is refused by `chrome.runtime.onMessage.addListener` at
-  `extension/background/service-worker.js:12265` (allowlist check near :12295).
+  `extension/background/service-worker.js:12283` (allowlist check near :12313).
   The receiver derives the origin from the BROWSER-ATTESTED `sender` (near :12274-12308),
   never the message body.
 - **Evidence pin: `origin/main@28c7189d`.** The cited symbols and closed set were re-read at this tree; line numbers are locators.
@@ -194,7 +194,7 @@ should reason about; the threats that use them are in sections 5 and 6.
 
 | ID | Surface | Where it enters | What is hostile about it |
 |---|---|---|---|
-| S1 | Page content and page messages | `chrome.runtime.onMessage.addListener` at `extension/background/service-worker.js:12265`; `PAGE_ALLOWED_ROUTES` at `extension/lib/pure.js:1280` | a page's content script may call only the eight page-allowed routes for its OWN origin, and may put anything in the message body |
+| S1 | Page content and page messages | `chrome.runtime.onMessage.addListener` at `extension/background/service-worker.js:12283`; `PAGE_ALLOWED_ROUTES` at `extension/lib/pure.js:1280` | a page's content script may call only the eight page-allowed routes for its OWN origin, and may put anything in the message body |
 | S2 | WebMCP tool descriptors and tool results | `extension/lib/tools.js:511`, `extension/lib/webmcp-authority.js:68` | a site authors its own tool schema and result text |
 | S3 | Model output (tool calls and prose) | `extension/lib/lazy-tool-protocol.js:1`, `extension/lib/untrusted-fence.js:59` | a steered model calls real tools |
 | S4 | Tool results rendered into the transcript | `extension/shared/components.js:566` (`renderHtmlFrame`) | an artifact body or fetched body is untrusted HTML |
@@ -233,7 +233,7 @@ consequences are carried by the matching register entry where one exists.
 - **Boundary:** TB2. **Evidence:** `authorizeToolReport` at
   `extension/lib/pure.js:912` (the classifier), `PAGE_ALLOWED_ROUTES` at :1280,
   and the central `chrome.runtime.onMessage.addListener` at
-  `extension/background/service-worker.js:12265` (page-route check near :12295,
+  `extension/background/service-worker.js:12283` (page-route check near :12313,
   browser-derived `message.origin` overwrite immediately after). **Answer:** the
   origin comes from the sender, never from the body; a claimed-origin mismatch is
   refused. **Live proof:** `scripts/security-suite.ts:307-308` (a page MAIN world has no
@@ -259,7 +259,7 @@ consequences are carried by the matching register entry where one exists.
   and `asset.export-to-folder` at :10106; `background-agent.delete` is owner-direct,
   not in this 37). **Answer:** the central listener refuses every
   non-page-allowed route to page senders (allowlist check near
-  `extension/background/service-worker.js:12295`),
+  `extension/background/service-worker.js:12313`),
   so the class is reachable only from extension principals. **Register:** R11.
 - **Evidence pin: `origin/main@28c7189d` for the count.** The census §4.9 lists 37 unclassified mutations among 288 registered routes; consult its route rows for locations rather than interpreting older T4 line locators as current.
 
@@ -454,7 +454,7 @@ and each names the executable check that would catch a regression.
 
 - **INV-1 — Authority is derived from the browser-attested sender, never from the body.**
   `authorizeToolReport` at `extension/lib/pure.js:912` and the central listener at
-  `extension/background/service-worker.js:12265` (browser sender classification
+  `extension/background/service-worker.js:12283` (browser sender classification
   near :12274, derived origin at :12302);
   `scripts/security-suite.ts:307-308`. A new route that reads an origin, tab id or
   document id out of the message body breaks this.
