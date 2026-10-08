@@ -6,7 +6,7 @@
 // cross-process coordination files and test fixtures).
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertThrows, assertStringIncludes } from "jsr:@std/assert@1";
-import { isRamBacked, durableRoot, durableDir } from "../scripts/lib/durable-root.mjs";
+import { isRamBacked } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -53,7 +53,7 @@ function probeEnvCases(): Promise<Record<string, Probe>> {
       out.impossible = probe(() => mod.durableDir("probe"));
       console.log("PROBE " + JSON.stringify(out));
     })()`;
-    const { stdout, stderr } = await new Deno.Command(Deno.execPath(), {
+    const { stdout, stderr, success } = await new Deno.Command(Deno.execPath(), {
       args: ["eval", script],
       // Its own environment: the parent's HOME (the default root is asserted
       // against it) and NOTHING else — CAP_DURABLE_ROOT is set only inside the
@@ -64,6 +64,7 @@ function probeEnvCases(): Promise<Record<string, Probe>> {
       stderr: "piped",
     }).output();
     const text = new TextDecoder().decode(stdout) + new TextDecoder().decode(stderr);
+    assert(success, `the child probe failed with non-zero exit; got:\n${text.slice(0, 600)}`);
     const line = text.split("\n").find((l) => l.startsWith("PROBE "));
     assert(line, `the child probe must report; got:\n${text.slice(0, 600)}`);
     return JSON.parse(line.slice("PROBE ".length)) as Record<string, Probe>;
@@ -114,6 +115,53 @@ Deno.test("durableDir fails loudly when the durable location is unavailable", as
   const probed = await probeEnvCases();
   assert(probed.impossible.threw !== undefined, "an unavailable durable root must throw");
   assertStringIncludes(probed.impossible.threw ?? "", "/proc/cap-chp-impossible");
+});
+
+/** Statically detect any parent-process CAP_DURABLE_ROOT mutation (set, delete, assignment). */
+export function detectParentDurableRootEnvMutation(sourceText: string): string[] {
+  const withoutChildScript = sourceText.replace(/const script = `[\s\S]*?`;/g, "");
+  const violations: string[] = [];
+  const lines = withoutChildScript.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Check Deno.env mutation: .set() or .delete()
+    if (/\bDeno\.env\.(?:set|delete)\s*\(\s*["']CAP_DURABLE_ROOT["']/.test(line)) {
+      violations.push(`line ${i + 1}: Deno.env mutation: ${line.trim()}`);
+    }
+    // Check process.env mutation: assignment or delete
+    if (/(?:delete\s+process\.env(?:\.CAP_DURABLE_ROOT|\[["']CAP_DURABLE_ROOT["']\])|process\.env(?:\.CAP_DURABLE_ROOT|\[["']CAP_DURABLE_ROOT["']\])\s*=)/.test(line)) {
+      violations.push(`line ${i + 1}: process.env mutation: ${line.trim()}`);
+    }
+  }
+  return violations;
+}
+
+Deno.test("guard: durable-root test never mutates parent process environment (m3a2/5rwd)", () => {
+  const source = Deno.readTextFileSync(fileURLToPath(import.meta.url));
+  const violations = detectParentDurableRootEnvMutation(source);
+  assertEquals(
+    violations,
+    [],
+    `tests/durable-root.test.ts must never mutate parent CAP_DURABLE_ROOT in-process (races parallel suites; bead m3a2/5rwd):\n${violations.join("\n")}`,
+  );
+
+  // Falsification: test fixtures (assembled at runtime so this file does not match itself)
+  const VAR = ["CAP", "DURABLE", "ROOT"].join("_");
+  const fixtures = [
+    { probe: `Deno.env.set("${VAR}", "/tmp/foo");`, desc: "Deno.env.set" },
+    { probe: `Deno.env.delete("${VAR}");`, desc: "Deno.env.delete" },
+    { probe: `process.env.${VAR} = "/tmp/foo";`, desc: "process.env assignment" },
+    { probe: `process.env["${VAR}"] = "/tmp/foo";`, desc: "process.env bracket assignment" },
+    { probe: `delete process.env.${VAR};`, desc: "delete process.env" },
+    { probe: `delete process.env["${VAR}"];`, desc: "delete process.env bracket" },
+  ];
+
+  for (const { probe, desc } of fixtures) {
+    assert(
+      detectParentDurableRootEnvMutation(probe).length > 0,
+      `guard must catch parent environment mutation: ${desc}`,
+    );
+  }
 });
 
 // --- Static guard (widened): no shipped source materializes evidence/scratch
