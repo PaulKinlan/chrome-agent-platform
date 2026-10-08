@@ -88,6 +88,42 @@ Deno.test("beads-landing-link: a bead with no landing reference is reported as n
   }
 });
 
+Deno.test("beads-landing-link: a merge landing commit that names the bead is a landing reference (w44uj)", () => {
+  const root = Deno.makeTempDirSync({ dir: durableDir("beads-landing-link") });
+  try {
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.email", "landing-link@example.com"]);
+    git(root, ["config", "user.name", "landing link test"]);
+    const commit = (subject: string, file: string) => {
+      writeFileSync(join(root, file), `${subject}\n`, { flag: "a" });
+      git(root, ["add", "-A"]);
+      git(root, ["commit", "-qm", subject]);
+    };
+    commit("base work with no bead id", "state.txt");
+    // A side branch whose own commits name no bead: only the MERGE names it,
+    // which is exactly the landing event the tool must recognise.
+    git(root, ["checkout", "-qb", "fleet/x"]);
+    commit("feature work that names no bead", "feature-x.txt");
+    git(root, ["checkout", "-q", "main"]);
+    commit("mainline work that names no bead", "mainline.txt");
+    git(root, ["merge", "--no-ff", "-m", "Merge fleet/x (chrome-agent-platform-mmmm)", "fleet/x"]);
+
+    const links = landingLinks({ cwd: root, range: "HEAD" });
+    assertEquals(links.map((l) => l.bead), ["chrome-agent-platform-mmmm"], "the merge subject is the landing reference");
+    assertEquals(verifyBeadLanded({ cwd: root, bead: "chrome-agent-platform-mmmm", branch: "HEAD" }).landed, true);
+
+    // Negative: a second merge that names no bead adds no landing reference.
+    git(root, ["checkout", "-qb", "fleet/y"]);
+    commit("more feature work that names no bead", "feature-y.txt");
+    git(root, ["checkout", "-q", "main"]);
+    git(root, ["merge", "--no-ff", "-m", "Merge fleet/y (no bead reference)", "fleet/y"]);
+    assertEquals(landingLinks({ cwd: root, range: "HEAD" }).map((l) => l.bead), ["chrome-agent-platform-mmmm"]);
+    assertEquals(verifyBeadLanded({ cwd: root, bead: "chrome-agent-platform-zzzz", branch: "HEAD" }).landed, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 Deno.test("beads-landing-link: SOURCE-BOUND — the real history yields the links that exist there (j4t1)", async () => {
   const root = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
   const links = landingLinks({ cwd: root, range: "origin/main~30..origin/main" });
