@@ -100,6 +100,17 @@ try {
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false }, sessionId);
   await sleep(400);
 
+  // Ensure the harness disclosure is opened so launchers are visible
+  await evalExpr(`(() => {
+    const presence = document.querySelector("#harness-presence");
+    if (presence && !presence.hasAttribute("open")) {
+      const summary = presence.querySelector("summary");
+      if (summary) summary.click();
+      else presence.setAttribute("open", "");
+    }
+  })()`);
+  await sleep(300);
+
   const wideGeo = await evalExpr(`(() => {
     const buttons = Array.from(document.querySelectorAll("#harness-list harness-agent-button"));
     const list = document.querySelector("#harness-list");
@@ -109,6 +120,7 @@ try {
     const presenceCs = presence ? getComputedStyle(presence) : null;
     return {
       count: buttons.length,
+      presenceOpen: presence ? presence.hasAttribute("open") : false,
       listWidth: list ? list.clientWidth : 0,
       listScrollWidth: list ? list.scrollWidth : 0,
       sideWidth: side ? side.clientWidth : 0,
@@ -128,7 +140,9 @@ try {
         const cs = btn ? getComputedStyle(btn) : null;
         return {
           nameAttr: b.getAttribute("name"),
+          width: rect.width,
           height: rect.height,
+          btnWidth: btnRect ? btnRect.width : 0,
           btnHeight: btnRect ? btnRect.height : 0,
           markPresent: !!mark,
           openPresent: !!open,
@@ -136,12 +150,14 @@ try {
           gap: cs ? cs.gap : null,
           title: btn ? btn.getAttribute("title") : null,
           ariaLabel: btn ? btn.getAttribute("aria-label") : null,
+          inViewport: rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < 800,
         };
       })
     };
   })()`);
 
-  record("wide 1280: 3 harness buttons rendered", wideGeo.count === 3, { count: wideGeo.count });
+  record("wide 1280: disclosure is open", wideGeo.presenceOpen, { presenceOpen: wideGeo.presenceOpen });
+  record("wide 1280: 3 harness buttons rendered with visible nonzero bounds", wideGeo.count === 3 && wideGeo.rows.every((r: any) => r.btnWidth > 0 && r.inViewport), wideGeo.rows);
   record("wide 1280: 44px min touch height", wideGeo.rows.every((r: any) => r.btnHeight >= 44 || r.height >= 44), wideGeo.rows);
   record("wide 1280: neutral terminal mark and chevron present", wideGeo.rows.every((r: any) => r.markPresent && r.openPresent), wideGeo.rows);
   record("wide 1280: names visible in wide mode", wideGeo.rows.every((r: any) => r.nameVisible), wideGeo.rows);
