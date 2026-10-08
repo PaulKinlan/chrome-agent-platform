@@ -819,6 +819,7 @@ const EXPECTED = [
   "in-page browse views share one content left edge at 1024",
   "Settings iframe offset matches its scrollport at 1024",
   "embedded Artifacts view shows its name exactly once",
+  "hub: browse overlay teardown restores hidden #view and clean body (no view-open)",
   "hub: #agent=named:writer reload shows Writer",
   "after enabling one recipe the four agent surfaces agree (1)",
   "after disabling that recipe the four agent surfaces agree (0) again",
@@ -2078,13 +2079,61 @@ async function main() {
     check("embedded Artifacts view shows its name exactly once", artifactsTitleCount === 1);
 
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false }, ntpSession);
-    for (let i = 0; i < 6; i++) {
-      const open = await evalIn(cdp, ntpSession, `!document.getElementById('view-overlay')?.hidden`).catch(() => false);
+    // Return to hub: close the browse overlay and await settlement so subsequent steps see the hub composer
+    await evalIn(cdp, ntpSession, `document.getElementById('view-back')?.click(); true`).catch(() => {});
+    for (let i = 0; i < 30; i++) {
+      const open = await evalIn(cdp, ntpSession, `!document.getElementById('view')?.hidden`).catch(() => false);
       if (!open) break;
-      await evalIn(cdp, ntpSession, `document.getElementById('view-back')?.click(); true`).catch(() => {});
-      await sleep(300);
+      await sleep(100);
     }
-    await sleep(500);
+    // Fail-safe ensure hub view is restored if normal view-back closure was stranded
+    const failSafeReport = await evalIn(cdp, ntpSession, `(() => {
+      const v = document.getElementById('view');
+      if (v && !v.hidden) {
+        if (location.hash) location.hash = '';
+        v.hidden = true;
+        const vch = document.getElementById('view-client-host');
+        if (vch) vch.hidden = true;
+        const dv = document.getElementById('directory-view');
+        if (dv) dv.hidden = true;
+        const av = document.getElementById('artifacts-view');
+        if (av) av.hidden = true;
+        document.body.classList.remove('view-open', 'full-view-open');
+        const side = document.getElementById('side');
+        if (side) { side.inert = false; side.removeAttribute('aria-hidden'); }
+        const footButtons = document.querySelectorAll('.foot-btn, [data-view-route]');
+        footButtons.forEach((b) => b.removeAttribute('aria-current'));
+        return { wasStranded: true, hash: location.hash };
+      }
+      return { wasStranded: false };
+    })()`).catch(() => ({ wasStranded: false }));
+
+    if (failSafeReport?.wasStranded) {
+      console.error(
+        "FAIL: browse-view teardown: #view overlay was stranded (still open after poll) — forcibly reset DOM: " +
+        "hidden=true, hash cleared, view-open/full-view-open removed, side inert cleared",
+        failSafeReport,
+      );
+    }
+
+    const hubSettled = await evalIn(cdp, ntpSession, `(() => {
+      const v = document.getElementById('view');
+      const mc = document.querySelector('main.content');
+      const composer = document.querySelector('#composer') || document.querySelector('agent-composer');
+      return {
+        viewHidden: v?.hidden === true,
+        bodyClean: !document.body.classList.contains('view-open') && !document.body.classList.contains('full-view-open'),
+        mainVisible: mc ? getComputedStyle(mc).display !== 'none' : false,
+        composerInteractive: !!composer && !composer.hasAttribute('disabled') && !composer.hidden,
+      };
+    })()`);
+
+    check(
+      "hub: browse overlay teardown restores hidden #view and clean body (no view-open)",
+      Boolean(!failSafeReport?.wasStranded && hubSettled?.viewHidden && hubSettled?.bodyClean && hubSettled?.mainVisible && hubSettled?.composerInteractive),
+      { failSafeReport, hubSettled },
+    );
+    await sleep(300);
 
     // (2) An agent opened by URL is titled by its NAME: create "Writer", open a
     // fresh hub page at #agent=named:writer (no history.state carries the

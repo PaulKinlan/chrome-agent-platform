@@ -408,7 +408,7 @@ Deno.test("9ud9e: process-level unhandledrejection and error events trigger imme
   assert(logText.includes("reason:                unhandled promise rejection: Detached promise rejected: CDP target crashed"));
   assert(logText.includes('last completed check:  "after disabling that recipe the four agent surfaces agree (0) again"'));
   assert(logText.includes('frontier check:        "create dialog: the template select is the first step (Custom default; Starter/Other/Scheduled groups; no gallery grid)"'));
-  assert(logText.includes("unreached checks:      375 downstream checks were NOT REACHED"));
+  assert(logText.includes(`unreached checks:      ${EXPECTED.length - 2} downstream checks were NOT REACHED`));
   assert(logText.includes("Detached promise rejected: CDP target crashed"));
 });
 
