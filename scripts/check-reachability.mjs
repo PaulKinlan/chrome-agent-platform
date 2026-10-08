@@ -493,9 +493,8 @@ export async function checkExportReachability({
     }
   }
 
-  // Map of re-exports: barrelFile:exportedName -> { targetFile, targetExportName }
-  // Also resolve re-export callability from target declaration (P2a)
-  const reexportMap = new Map();
+  // 1. Build re-export edges map
+  const reexportEdges = new Map();
   for (const [file, analysis] of analysesByFile) {
     const dir = file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "";
     for (const [exportedName, expInfo] of analysis.exportedBindings) {
@@ -507,24 +506,91 @@ export async function checkExportReachability({
         for (const ext of ["", ".js", ".mjs", ".ts", ".tsx"]) {
           const tryFile = candidate + ext;
           if (analysesByFile.has(tryFile)) {
-            const targetAnalysis = analysesByFile.get(tryFile);
-            const targetExp = targetAnalysis.exportedBindings.get(expInfo.originalName);
-            if (targetExp) {
-              expInfo.isCallable = targetExp.isCallable;
-            } else {
-              expInfo.isCallable = false;
-            }
-            reexportMap.set(`${file}:${exportedName}`, { targetFile: tryFile, targetExportName: expInfo.originalName });
+            reexportEdges.set(`${file}:${exportedName}`, { targetFile: tryFile, targetExportName: expInfo.originalName });
             break;
           }
-        }
-        if (expInfo.isCallable === null) {
-          expInfo.isCallable = false;
         }
       }
     }
   }
 
+  // 2. Resolve canonical origin declaration transitively across arbitrary chained barrels (P1)
+  function resolveCanonical(file, exportName) {
+    let currFile = file;
+    let currName = exportName;
+    const visited = new Set();
+    while (true) {
+      const key = `${currFile}:${currName}`;
+      if (visited.has(key)) break;
+      visited.add(key);
+      const next = reexportEdges.get(key);
+      if (!next) break;
+      currFile = next.targetFile;
+      currName = next.targetExportName;
+    }
+    return { originFile: currFile, originName: currName };
+  }
+
+  // 3. Resolve isCallable for every re-export transitively from origin declaration (P2a)
+  for (const [file, analysis] of analysesByFile) {
+    for (const [exportedName, expInfo] of analysis.exportedBindings) {
+      if (expInfo.type === "reexport") {
+        const canonical = resolveCanonical(file, exportedName);
+        const originAnalysis = analysesByFile.get(canonical.originFile);
+        const originExp = originAnalysis?.exportedBindings?.get(canonical.originName);
+        expInfo.isCallable = originExp ? Boolean(originExp.isCallable) : false;
+      }
+    }
+  }
+
+  // 4. Collect all transitively reached export keys across callers and chained barrels
+  const reachedKeys = new Set();
+  for (const [file, analysis] of analysesByFile) {
+    // A. Internal composition: if this file uses any of its own exports (or local name, P2b)
+    for (const [fn, expInfo] of analysis.exportedBindings) {
+      const internalName = expInfo.name || fn;
+      if ((analysis.useCounts.get(fn) || 0) > 0 || (analysis.useCounts.get(internalName) || 0) > 0) {
+        const canonical = resolveCanonical(file, fn);
+        reachedKeys.add(`${canonical.originFile}:${canonical.originName}`);
+        reachedKeys.add(`${file}:${fn}`);
+      }
+    }
+
+    // B. Imported bindings used in this file
+    const dir = file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "";
+    for (const [localName, impInfo] of analysis.importedBindings) {
+      if ((analysis.useCounts.get(localName) || 0) > 0) {
+        let candidate = impInfo.sourceModule;
+        if (candidate && (candidate.startsWith("./") || candidate.startsWith("../"))) {
+          candidate = normalize(`${dir}/${candidate}`);
+        }
+        for (const ext of ["", ".js", ".mjs", ".ts", ".tsx"]) {
+          const tryFile = candidate + ext;
+          if (analysesByFile.has(tryFile)) {
+            const canonical = resolveCanonical(tryFile, impInfo.importedName);
+            reachedKeys.add(`${canonical.originFile}:${canonical.originName}`);
+            reachedKeys.add(`${tryFile}:${impInfo.importedName}`);
+            break;
+          }
+        }
+      }
+    }
+
+    // C. Direct/unimported identifier uses (namespace/global calls)
+    for (const [usedIdent, count] of analysis.useCounts) {
+      if (count > 0 && !analysis.importedBindings.has(usedIdent)) {
+        for (const [otherFile, otherAnalysis] of analysesByFile) {
+          if (otherAnalysis.exportedBindings.has(usedIdent)) {
+            const canonical = resolveCanonical(otherFile, usedIdent);
+            reachedKeys.add(`${canonical.originFile}:${canonical.originName}`);
+            reachedKeys.add(`${otherFile}:${usedIdent}`);
+          }
+        }
+      }
+    }
+  }
+
+  // 5. Build final report for all callable exported functions
   const reachedExports = [];
   const unreachedExports = [];
   const staleRetainedExports = [];
@@ -536,85 +602,10 @@ export async function checkExportReachability({
       if (!expInfo.isCallable) continue;
       const exportKey = `${file}:${fn}`;
       allKnownExportKeys.add(exportKey);
-      let hasCaller = false;
+      const canonical = resolveCanonical(file, fn);
+      const canonicalKey = `${canonical.originFile}:${canonical.originName}`;
 
-      // 1. Internal composition in declaring file (use count > 0 for exported name or local alias, P2b)
-      const internalName = expInfo.name || fn;
-      if ((analysis.useCounts.get(fn) || 0) > 0 || (analysis.useCounts.get(internalName) || 0) > 0) {
-        hasCaller = true;
-      }
-
-      // 2. Cross-file callers
-      if (!hasCaller) {
-        const dir = file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "";
-        for (const [otherFile, otherAnalysis] of analysesByFile) {
-          if (otherFile === file) continue;
-
-          // Check if otherFile uses an imported alias of this export
-          for (const [localName, impInfo] of otherAnalysis.importedBindings) {
-            if (impInfo.importedName === fn) {
-              let candidate = impInfo.sourceModule;
-              if (candidate && (candidate.startsWith("./") || candidate.startsWith("../"))) {
-                const otherDir = otherFile.includes("/") ? otherFile.slice(0, otherFile.lastIndexOf("/")) : "";
-                candidate = normalize(`${otherDir}/${candidate}`);
-              }
-              const matchesSource = candidate && (
-                candidate === file ||
-                candidate === file.replace(/\.[^.]+$/, "") ||
-                normalize(candidate) === file ||
-                normalize(candidate) === file.replace(/\.[^.]+$/, "")
-              );
-              if (matchesSource && (otherAnalysis.useCounts.get(localName) || 0) > 0) {
-                hasCaller = true;
-                break;
-              }
-            }
-          }
-          if (hasCaller) break;
-
-          // Check if otherFile calls/references fn directly (unimported or namespace call, e.g. obj.fn)
-          const uses = otherAnalysis.useCounts.get(fn) || 0;
-          if (uses > 0) {
-            // Ensure fn wasn't an unused local import or shadow
-            const imp = otherAnalysis.importedBindings.get(fn);
-            if (!imp) {
-              hasCaller = true;
-              break;
-            }
-          }
-        }
-      }
-
-      // 3. Re-export barrel propagation: if this export is re-exported and the re-export is used
-      if (!hasCaller) {
-        for (const [reexportKey, target] of reexportMap) {
-          if (target.targetFile === file && target.targetExportName === fn) {
-            const [barrelFile, barrelExport] = reexportKey.split(":");
-            for (const [otherFile, otherAnalysis] of analysesByFile) {
-              if (otherFile === barrelFile) continue;
-              for (const [localName, impInfo] of otherAnalysis.importedBindings) {
-                if (impInfo.importedName === barrelExport) {
-                  let candidate = impInfo.sourceModule;
-                  if (candidate && (candidate.startsWith("./") || candidate.startsWith("../"))) {
-                    const otherDir = otherFile.includes("/") ? otherFile.slice(0, otherFile.lastIndexOf("/")) : "";
-                    candidate = normalize(`${otherDir}/${candidate}`);
-                  }
-                  const matchesBarrel = candidate && (
-                    candidate === barrelFile ||
-                    candidate === barrelFile.replace(/\.[^.]+$/, "")
-                  );
-                  if (matchesBarrel && (otherAnalysis.useCounts.get(localName) || 0) > 0) {
-                    hasCaller = true;
-                    break;
-                  }
-                }
-              }
-              if (hasCaller) break;
-            }
-            if (hasCaller) break;
-          }
-        }
-      }
+      const hasCaller = reachedKeys.has(exportKey) || reachedKeys.has(canonicalKey);
 
       if (hasCaller) {
         reachedExports.push(exportKey);

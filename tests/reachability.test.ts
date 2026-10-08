@@ -247,6 +247,69 @@ Deno.test("reachability (kf3h / P1b): aliased imports and re-export barrels", as
   );
 });
 
+Deno.test("reachability (kf3h / P1-chained-barrels): transitive re-export callability and usage across a.js -> b.js -> c.js", async () => {
+  const fixtureFiles: Record<string, string> = {
+    "lib/c.js": `
+      export function deepOriginLive() { return "live"; }
+      export function deepOriginDead() { return "dead"; }
+    `,
+    "lib/b.js": `
+      export { deepOriginLive, deepOriginDead as bDead } from "./c.js";
+    `,
+    "lib/a.js": `
+      export { deepOriginLive, bDead as aDead } from "./b.js";
+    `,
+    "lib/consumer.js": `
+      import { deepOriginLive } from "./a.js";
+      console.log(deepOriginLive());
+    `,
+  };
+
+  const fixtureIo = {
+    readFile: async (p: string) => {
+      const rel = p.replace(/^mock\//, "");
+      if (fixtureFiles[rel]) return fixtureFiles[rel];
+      throw new Error(`File not found: ${p}`);
+    },
+    readdir: async () => [],
+  };
+
+  const report = await checkExportReachability({
+    root: "mock",
+    reached: new Set(["lib/c.js", "lib/b.js", "lib/a.js", "lib/consumer.js"]),
+    io: fixtureIo,
+    strictExports: true,
+  });
+
+  // deepOriginLive is credited transitively across consumer -> a.js -> b.js -> c.js
+  assert(
+    report.reachedExports.includes("lib/c.js:deepOriginLive"),
+    "origin function deepOriginLive in c.js must be marked reached via chained barrels",
+  );
+  assert(
+    report.reachedExports.includes("lib/b.js:deepOriginLive"),
+    "deepOriginLive in b.js barrel must be marked reached",
+  );
+  assert(
+    report.reachedExports.includes("lib/a.js:deepOriginLive"),
+    "deepOriginLive in a.js barrel must be marked reached",
+  );
+
+  // deepOriginDead is re-exported through b.js and a.js but never called -> all chained exports caught as unreached
+  assert(
+    report.unreachedExports.some((e: string) => e.startsWith("lib/c.js:deepOriginDead")),
+    "deepOriginDead in c.js must be caught as unreached across chained barrels",
+  );
+  assert(
+    report.unreachedExports.some((e: string) => e.startsWith("lib/b.js:bDead")),
+    "bDead in b.js barrel must be caught as unreached",
+  );
+  assert(
+    report.unreachedExports.some((e: string) => e.startsWith("lib/a.js:aDead")),
+    "aDead in a.js barrel must be caught as unreached",
+  );
+});
+
 Deno.test("reachability (kf3h / P1a): checkScriptsExportReachability walks .ts import edges", async () => {
   const fixtureFiles: Record<string, string> = {
     "package.json": JSON.stringify({
