@@ -36,12 +36,14 @@ Deno.test("ephemeral Q23: no decision without a run token; Allow is digest-bound
   assertEquals(store.snapshot(second, tool).state, "ask");
 });
 
-Deno.test("ephemeral Q23: Deny sticks to exact origin and name despite page descriptor changes", () => {
+Deno.test("ephemeral Q23: Deny sticks to canonical origin/name despite page descriptor changes", () => {
   const store = createEphemeralSiteToolConsentStore();
   const token = store.begin(attachment("run-deny"));
   store.decide(token, declared("change-seat"), "denied", { expected: store.snapshot(token, declared("change-seat")) });
   assertEquals(store.snapshot(token, declared("change-seat", 2)).state, "denied");
+  assertEquals(store.snapshot(token, declared("CHANGE-SEAT", 2)).state, "denied");
   assertThrows(() => store.decide(token, declared("change-seat", 2), "allowed"));
+  assertThrows(() => store.decide(token, declared("CHANGE-SEAT", 2), "allowed"));
   assertEquals(store.snapshot(token, declared("other-tool")).state, "ask");
 });
 
@@ -51,7 +53,7 @@ Deno.test("ephemeral Q23: promotion gathers both states across live runs, with D
   const second = store.begin(attachment("run-two", "document-B"));
   store.decide(first, declared("seat"), "allowed");
   store.decide(first, declared("meal"), "allowed");
-  store.decide(second, declared("seat", 2), "denied");
+  store.decide(second, declared("SEAT", 2), "denied");
   let captured: Array<{ name: string; state: string }> = [];
   let release: (() => void) | undefined;
   const pending = store.withPromotionForOrigin(origin, async (records, isCurrent) => {
@@ -65,7 +67,7 @@ Deno.test("ephemeral Q23: promotion gathers both states across live runs, with D
   await Promise.resolve();
   assertThrows(() => store.begin(attachment("run-three")));
   assertThrows(() => store.decide(first, declared("meal"), "denied"));
-  assertEquals(captured.map(({ name, state }) => [name, state]), [["meal", "allowed"], ["seat", "denied"]]);
+  assertEquals(captured.map(({ name, state }) => [name, state]), [["meal", "allowed"], ["SEAT", "denied"]]);
   release?.();
   assertEquals(await pending, "persisted-once");
   assertThrows(() => store.snapshot(first, declared("meal")));

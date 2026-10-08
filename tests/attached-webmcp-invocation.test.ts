@@ -34,7 +34,7 @@ Deno.test("ckebt D3: schema drift or oversized result fails closed with no fallb
   try {
     Object.defineProperty(globalThis, "document", { configurable: true, value: { modelContext: {
       getTools: async () => [{ ...descriptor, inputSchema: { type: "object", properties: { changed: { type: "number" } } },
-        execute: async () => { calls++; return "x".repeat(20000); } }],
+        execute: async () => { calls++; return "é".repeat(9000); } }],
     } } });
     assertEquals(await invokeAttachedDeclaredFromPage(descriptor.name, args, JSON.stringify(descriptor.inputSchema)),
       { ok: false, error: "declared_tool_changed" });
@@ -89,4 +89,8 @@ Deno.test("ckebt D3: navigation, cancelled run, permission loss after WAL, and w
   const navigatedDuringWal = deps({ attestTopFrame: async () => [{ frameId: 0, documentId: ++attestCount > 1 ? "new-document" : binding.documentId, result: true }] });
   assertEquals((await auditedAttachedDeclaredCall(binding, descriptor, args, navigatedDuringWal)).ok, false);
   assertEquals(navigatedDuringWal.calls, ["audit"]); // WAL may append; effect must not run
+  let permissionChecks = 0;
+  const permissionRevokedDuringWal = deps({ livePermission: async () => ++permissionChecks <= 2 });
+  assertEquals((await auditedAttachedDeclaredCall(binding, descriptor, args, permissionRevokedDuringWal)).ok, false);
+  assertEquals(permissionRevokedDuringWal.calls, ["audit"]); // no effect after permission revocation
 });

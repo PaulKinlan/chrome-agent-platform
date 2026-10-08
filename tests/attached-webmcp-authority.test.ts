@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import { createEphemeralSiteToolConsentStore } from "../extension/lib/ephemeral-site-tool-consent.js";
 import { createAttachedDeclaredInvoker } from "../extension/lib/attached-webmcp-authority.js";
+import { digestSiteToolArguments } from "../extension/lib/site-tool-audit.js";
 
 const origin = "https://declared.test";
 const tool = { origin, name: "search_products", source: "declared", description: "Search", inputSchema: { type: "object", properties: { query: { type: "string" } } } };
@@ -45,10 +46,14 @@ Deno.test("ckebt D1/D3: owner Deny is sticky within the run, blocks retry withou
   assertEquals((await s.invoke(input, actor)).ok, false);
   assertEquals(s.consentStore.snapshot(s.token, tool).state, "denied");
   assertEquals((await s.invoke(input, actor)).ok, false);
+  assertEquals((await s.invoke({ ...input, origin: "HTTPS://DECLARED.TEST/" }, actor)).ok, false,
+    "a case-only origin spelling cannot bypass the canonical origin's Deny");
   assertEquals(s.calls.filter((x) => x === "ask").length, 1);
   assertEquals(s.calls.includes("invoke"), false);
   const drifted = { ...tool, inputSchema: { type: "object", properties: { different: { type: "number" } } } };
   assertEquals(s.consentStore.snapshot(s.token, drifted).state, "denied", "Deny survives page descriptor drift");
+  const casingAlias = { ...tool, name: "SEARCH_PRODUCTS" };
+  assertEquals(s.consentStore.snapshot(s.token, casingAlias).state, "denied", "Deny survives case-only page aliases");
 });
 
 Deno.test("ckebt D1/D3: owner Allow only after audited decision; required start WAL precedes effect", async () => {
@@ -61,6 +66,36 @@ Deno.test("ckebt D1/D3: owner Allow only after audited decision; required start 
   assertEquals(s.calls.includes("invocation-finished"), true);
   assertEquals(s.calls.includes("consent-requested"), true);
   assertEquals(s.calls.includes("consent-decided"), true);
+});
+
+Deno.test("ckebt D3: start and terminal WAL digest the VALIDATED page arguments, not raw model args", async () => {
+  const rows: Array<{ event: string; argDigest: string }> = [];
+  const actual = { query: "normalized" };
+  const s = setup("allow", {
+    validateArgs: async () => ({ ok: true, data: actual }),
+    audit: async (_token: object, row: { event: string; argDigest: string }) => { rows.push(row); },
+    invoke: async (_binding: unknown, _tool: unknown, supplied: unknown,
+      options: { requiredAudit: () => Promise<void> }) => {
+      assertEquals(supplied, actual);
+      await options.requiredAudit();
+      return { ok: true, result: "done" };
+    },
+  });
+  assertEquals((await s.invoke(input, actor)).ok, true);
+  assertEquals(rows.find((row) => row.event === "consent-requested")?.argDigest, digestSiteToolArguments(input.args));
+  assertEquals(rows.find((row) => row.event === "invocation-started")?.argDigest, digestSiteToolArguments(actual));
+  assertEquals(rows.find((row) => row.event === "invocation-finished")?.argDigest, digestSiteToolArguments(actual));
+});
+
+Deno.test("ckebt D3: transport failure after start WAL still attempts terminal WAL", async () => {
+  const s = setup("allow", { invoke: async (_binding: unknown, _tool: unknown, _args: unknown,
+    options: { requiredAudit: () => Promise<void> }) => {
+    await options.requiredAudit();
+    throw Error("transport failed after page call");
+  } });
+  assertEquals((await s.invoke(input, actor)).ok, false);
+  assertEquals(s.calls.includes("invocation-started"), true);
+  assertEquals(s.calls.includes("invocation-finished"), true);
 });
 
 Deno.test("ckebt Q2(a): a page global or inferred source cannot become an attached callable", async () => {

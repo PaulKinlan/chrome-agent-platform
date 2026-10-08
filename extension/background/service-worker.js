@@ -2015,7 +2015,7 @@ const attachedDeclaredInvoker = createAttachedDeclaredInvoker({
       const compiled = compileSchemaToZod(z, schema);
       if (compiled.fatal) return { ok: false };
       const parsed = compiled.zodSchema.safeParse(args);
-      if (!parsed.success || JSON.stringify(parsed.data).length > 8192) return { ok: false };
+      if (!parsed.success || new TextEncoder().encode(JSON.stringify(parsed.data)).byteLength > 8192) return { ok: false };
       return { ok: true, data: parsed.data };
     } catch { return { ok: false }; }
   },

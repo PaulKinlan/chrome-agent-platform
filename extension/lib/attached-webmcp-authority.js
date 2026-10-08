@@ -7,6 +7,15 @@ import { digestSiteToolArguments } from "./site-tool-audit.js";
 
 const fail = (error) => Object.freeze({ ok: false, error });
 const NAME_RE = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;
+function requestedOrigin(value) {
+  if (typeof value !== "string" || value.length > 512) return null;
+  try {
+    const url = new URL(value);
+    if (!/^https?:$/.test(url.protocol) || url.username || url.password ||
+      url.pathname !== "/" || url.search || url.hash) return null;
+    return canonicalOrigin(url.origin);
+  } catch { return null; }
+}
 
 export function createAttachedDeclaredInvoker({
   consentStore, findBinding, runActive, readDeclared, validateArgs,
@@ -18,10 +27,10 @@ export function createAttachedDeclaredInvoker({
       .some((f) => typeof f !== "function")) throw new TypeError("attached tool authority dependencies missing");
   return async (payload, context) => {
     const executionId = context?.principal === "model" ? context.executionId : null;
-    const origin = typeof payload?.origin === "string" ? canonicalOrigin(payload.origin) : null;
+    const origin = requestedOrigin(payload?.origin);
     const name = payload?.name;
     const args = payload?.args;
-    if (typeof executionId !== "string" || !executionId || !origin || origin !== payload.origin ||
+    if (typeof executionId !== "string" || !executionId || !origin ||
       typeof name !== "string" || !name || name.length > 128 || !NAME_RE.test(name) ||
       !args || typeof args !== "object" || Array.isArray(args) || !runActive(executionId)) {
       return fail("attached_tool_not_authorized");
@@ -53,12 +62,12 @@ export function createAttachedDeclaredInvoker({
     if (consent.state === "denied") return fail("site_tool_consent_denied");
     let argDigest;
     try { argDigest = digestSiteToolArguments(args); } catch { return fail("attached_tool_invalid_arguments"); }
-    const row = (event, direction, actor, outcome, reason, snapshot = consent) => ({
+    const row = (event, direction, actor, outcome, reason, snapshot = consent, digest = argDigest) => ({
       event, direction, actor, outcome, reason,
       origin, tool: name, source: "declared", identityDigest: snapshot.identityDigest,
       enrollmentGen: 0, consentRevision: snapshot.revision,
       executionId, runId: executionId, agentId: context.agentId ?? null,
-      argDigest, ephemeral: true, documentId: binding.documentId,
+      argDigest: digest, ephemeral: true, documentId: binding.documentId,
     });
     const append = (record) => audit(token, record);
     if (consent.state === "ask") {
@@ -91,6 +100,11 @@ export function createAttachedDeclaredInvoker({
     let validated;
     try { validated = await validateArgs(tool.inputSchema, args); } catch { return fail("attached_tool_invalid_arguments"); }
     if (!live() || validated?.ok !== true) return fail("attached_tool_invalid_arguments");
+    // Consent requested the original model arguments, but the required start
+    // and terminal WAL rows must attest the ACTUAL validated/coerced payload.
+    let dispatchedArgDigest;
+    try { dispatchedArgDigest = digestSiteToolArguments(validated.data); }
+    catch { return fail("attached_tool_invalid_arguments"); }
     let res;
     let auditStarted = false;
     try {
@@ -98,18 +112,24 @@ export function createAttachedDeclaredInvoker({
         token,
         runActive: live,
         requiredAudit: async () => {
-          await append(row("invocation-started", "agent-to-site", "agent", "pending", "cached-allow"));
+          await append(row("invocation-started", "agent-to-site", "agent", "pending", "cached-allow", consent, dispatchedArgDigest));
           auditStarted = true;
         },
       });
-    } catch { return fail("site_tool_audit_unavailable"); }
+    } catch { res = fail("attached_tool_invoke_failed"); }
     if (!auditStarted) return res?.error === "attached_tool_authority_changed"
       ? res : fail("site_tool_audit_unavailable");
-    if (!live()) return fail("attached_tool_authority_changed");
+    const stillLive = live();
+    // Even on post-effect cancellation or a transport failure, ATTEMPT the
+    // terminal row. The audit principal may refuse a now-ended token; do not
+    // report success or reveal the page result in that case.
     try {
       await append(row("invocation-finished", "site-to-agent", "system",
-        res?.ok === true ? "succeeded" : "failed", res?.ok === true ? "page-result" : "page-error"));
+        !stillLive ? "revoked" : res?.ok === true ? "succeeded" : "failed",
+        !stillLive ? "run-not-live" : res?.ok === true ? "page-result" : "page-error",
+        consent, dispatchedArgDigest));
     } catch { return fail("site_tool_audit_unavailable"); }
+    if (!stillLive || !live()) return fail("attached_tool_authority_changed");
     return res && typeof res === "object" && typeof res.ok === "boolean"
       ? res : fail("attached_tool_invoke_failed");
   };

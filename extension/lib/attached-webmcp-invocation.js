@@ -14,7 +14,7 @@ export async function invokeAttachedDeclaredFromPage(name, args, expectedSchemaJ
     if (typeof name !== "string" || name.length > 128 ||
       !/^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/.test(name) ||
       !args || typeof args !== "object" || Array.isArray(args) ||
-      typeof expectedSchemaJson !== "string" || expectedSchemaJson.length > 8192) {
+      typeof expectedSchemaJson !== "string" || new TextEncoder().encode(expectedSchemaJson).byteLength > 8192) {
       return { ok: false, error: "declared_tool_invalid" };
     }
     const mc = document.modelContext;
@@ -44,14 +44,14 @@ export async function invokeAttachedDeclaredFromPage(name, args, expectedSchemaJ
     let schema = tool.inputSchema;
     if (schema == null) schema = { type: "object", properties: {} };
     if (typeof schema === "string") {
-      if (schema.length > 8192) return { ok: false, error: "declared_tool_changed" };
+      if (new TextEncoder().encode(schema).byteLength > 8192) return { ok: false, error: "declared_tool_changed" };
       try { schema = JSON.parse(schema); } catch { return { ok: false, error: "declared_tool_changed" }; }
     }
     if (!schema || typeof schema !== "object" || Array.isArray(schema) ||
       (schema.type !== undefined && schema.type !== "object") ||
       JSON.stringify(schema) !== expectedSchemaJson) return { ok: false, error: "declared_tool_changed" };
     const jsonArgs = JSON.stringify(args);
-    if (typeof jsonArgs !== "string" || jsonArgs.length > 8192) return { ok: false, error: "declared_tool_invalid" };
+    if (typeof jsonArgs !== "string" || new TextEncoder().encode(jsonArgs).byteLength > 8192) return { ok: false, error: "declared_tool_invalid" };
     let value;
     // One attempt ONLY: a thrown page handler may have already produced an
     // effect. The enrolled bridge's accepted retry-on-throw tradeoff must not
@@ -60,7 +60,7 @@ export async function invokeAttachedDeclaredFromPage(name, args, expectedSchemaJ
     else if (typeof tool.execute === "function") value = await tool.execute(args);
     else return { ok: false, error: "declared_tool_unavailable" };
     const serialized = JSON.stringify(value ?? null);
-    if (typeof serialized !== "string" || serialized.length > 16384) {
+    if (typeof serialized !== "string" || new TextEncoder().encode(serialized).byteLength > 16384) {
       return { ok: false, error: "declared_tool_result_unavailable" };
     }
     return { ok: true, result: JSON.parse(serialized) };

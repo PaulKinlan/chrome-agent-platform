@@ -423,11 +423,20 @@ chip/registry stay count-only and no inferred page-JS tool is disclosed.
 **D1/D3 implementation under verification, not yet accepted or landed:** the
 hub-only `use_attached_declared_tool` routes to `attached-webmcp.invoke`, which
 requires the live run's opaque exact-document token and freshly re-reads only
-declared descriptors. `attached-webmcp-authority.js` demands a per-tool owner
-card before granting in-memory run-local consent (Deny is sticky), then awaits
+declared descriptors. The origin is canonicalized to Chrome's selected origin;
+the requested name must match an exact fresh declaration. In the ephemeral
+store a Deny is case-alias-sticky within that run even if the page changes its
+descriptor; Allow is **run-local**, not a persistent enrolled grant. If the
+owner explicitly enrolls during the live run, D2 promotes surviving Allow and
+Deny into the durable enrollment envelope before authority switches; no
+unenrolled tool silently enrolls the site. `attached-webmcp-authority.js`
+demands a per-tool owner card before granting that in-memory consent, then awaits
 an ephemeral required WAL start row before `attached-webmcp-invocation.js`
 injects once into Chrome's exact `documentIds` target. The result is discarded
-on doc/run/permission drift; a terminal WAL write follows. No enrolled
+on doc/run/permission drift; a terminal WAL append is attempted even on a
+post-start transport failure or run cancellation. If the token has ended, that
+append can itself fail, and no page result is returned as success (an already
+started page effect cannot be rolled back). No enrolled
 `enrollment-sync` or content-script `invoke-tool` guard is relaxed. Build,
 browser, full suite and independent code review are still NOT_REACHED.
 
