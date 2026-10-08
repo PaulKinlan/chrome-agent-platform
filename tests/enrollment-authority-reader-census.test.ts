@@ -3,13 +3,15 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 // This is the authority-reading budget for cap:enrollment. A new raw read may
 // silently interpret enrolled:true+promotionPending as active; additions need
 // deliberate audit and this guard must fail on the very next focused test.
-Deno.test("D2: exactly three public active readers and one fenced locked-audit exception", async () => {
-  const root = new URL("../extension/", import.meta.url);
+async function censusReaders(root: URL) {
   const directReads: string[] = [];
   const keyLiterals: string[] = [];
   const keyReferences: Record<string, number> = {};
   async function walk(dir: URL) {
     for await (const entry of Deno.readDir(dir)) {
+      // Build outputs may include generated copies of service-worker.js with
+      // stale/raw enrollment readers. Audit SOURCE only, never generated dist.
+      if (entry.isDirectory && (entry.name === "dist" || entry.name === "dist-versions")) continue;
       const child = new URL(entry.name + (entry.isDirectory ? "/" : ""), dir);
       if (entry.isDirectory) await walk(child);
       else if (entry.name.endsWith(".js")) {
@@ -34,6 +36,29 @@ Deno.test("D2: exactly three public active readers and one fenced locked-audit e
     }
   }
   await walk(root);
+  return { directReads, keyLiterals, keyReferences };
+}
+
+Deno.test("D2: generated dist-versions and dist cannot impersonate tracked enrollment source", async () => {
+  const temp = await Deno.makeTempDir({ prefix: "d2-source-census-" });
+  const root = new URL(`file://${temp}/extension/`);
+  try {
+    for (const path of ["lib", "dist", "dist-versions/0.3.1"]) {
+      await Deno.mkdir(new URL(`${path}/`, root), { recursive: true });
+    }
+    await Deno.writeTextFile(new URL("lib/tracked.js", root), 'const ENROLL_KEY = "cap:enrollment"; kvGet([ENROLL_KEY]);');
+    for (const path of ["dist/service-worker.js", "dist-versions/0.3.1/service-worker.js"]) {
+      await Deno.writeTextFile(new URL(path, root), 'const ENROLL_KEY = "cap:enrollment"; kvGet([ENROLL_KEY]);');
+    }
+    const found = await censusReaders(root);
+    assertEquals(found.directReads.map((p) => p.replace(/:\d+$/, "")), ["extension/lib/tracked.js"]);
+    assertEquals(Object.keys(found.keyReferences), ["extension/lib/tracked.js"]);
+    assertEquals(found.keyLiterals.map((p) => p.replace(/:\d+$/, "")), ["extension/lib/tracked.js"]);
+  } finally { await Deno.remove(temp, { recursive: true }); }
+});
+
+Deno.test("D2: exactly three public active readers and one fenced locked-audit exception", async () => {
+  const { directReads, keyLiterals, keyReferences } = await censusReaders(new URL("../extension/", import.meta.url));
   assertEquals(directReads.map((p) => p.replace(/:\d+$/, "")).sort(), [
     "extension/lib/memory.js", // listOrigins: canonical public worker listing
     "extension/lib/tools.js", // enrolledMap: isEnrolled/snapshot + locked tombstone reads

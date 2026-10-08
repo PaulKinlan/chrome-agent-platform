@@ -107,6 +107,11 @@ Deno.test("schedule.cancelOrphans ROUTE: an unreadable recipe registry refuses t
     notifications: {},
   };
   await import("../extension/background/service-worker.js");
+  // The SW launches recoverOnBoot asynchronously. Wait for its one-time
+  // recipe: -> skill: migration BEFORE seeding this legacy-route fixture;
+  // otherwise it may re-key our just-seeded rows between kv.set and cleanup.
+  const { recoverOnBoot } = await import("../extension/lib/scheduler.js");
+  await recoverOnBoot();
 
   const ownerSender = {
     id: "test-extension-id",
