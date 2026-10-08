@@ -107,10 +107,16 @@ Deno.test("beads-landing-link: SOURCE-BOUND — the real history yields the link
   }
   let closed = links.filter((l) => closedIds.has(l.bead));
   if (closed.length === 0) {
-    const bdOut = String(
-      spawnSync("bd", ["show", ...links.map((l) => l.bead)], { cwd: root, encoding: "utf8" }).stdout ?? "",
-    );
-    if (bdOut.includes("CLOSED")) closed = [links[0]];
+    // The committed export can lag the tracker, so ask bd — one bead at a time, stopping at the
+    // first CLOSED one (gate-speed: `bd show` of all ~50 ids cost ~23 s of the parallel phase on a
+    // 2-vCPU VM; one id costs ~1 s, and the assertion needs only one closed bead).
+    for (const link of links) {
+      const bdOut = String(spawnSync("bd", ["show", link.bead], { cwd: root, encoding: "utf8" }).stdout ?? "");
+      if (bdOut.includes("CLOSED")) {
+        closed = [link];
+        break;
+      }
+    }
   }
   assert(closed.length >= 1, "expected at least one already-closed referenced bead in the last 30 commits");
 });
