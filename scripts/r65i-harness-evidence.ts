@@ -32,6 +32,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const profile = chromeProfileDir("r65i-harness-ui");
 let proc: any = null;
 let cdp: any = null;
+let exitCode = 0;
 
 try {
   console.log("[r65i-evidence] Launching Chrome with loaded extension...");
@@ -412,10 +413,11 @@ try {
 
   const failedCount = results.filter((r) => !r.pass).length;
   if (failedCount > 0) {
-    throw new Error(`[r65i-evidence] FAILED: ${failedCount} check(s) failed`);
+    console.error(`[r65i-evidence] FAILED: ${failedCount} check(s) failed`);
+    exitCode = 1;
+  } else {
+    console.log(`[r65i-evidence] ALL ${results.length} CHECKS PASSED.`);
   }
-  console.log(`[r65i-evidence] ALL ${results.length} CHECKS PASSED.`);
-
 } finally {
   if (cdp) {
     try { await cdp.close(); } catch { /* ignore */ }
@@ -426,3 +428,4 @@ try {
     console.log("[r65i-evidence] Chrome teardown complete.");
   }
 }
+Deno.exit(exitCode);
