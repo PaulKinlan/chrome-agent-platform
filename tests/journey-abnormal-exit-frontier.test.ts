@@ -328,3 +328,41 @@ Deno.test("9ud9e: homeCacheProfile throws error on missing or relative HOME to a
   const profile = fn(fakeDenoValid)("test-profile");
   assertEquals(profile, "/home/user/.cache/cap-review/test-profile");
 });
+
+Deno.test("9ud9e: resetWatchdog arms timer and clearWatchdog cancels it cleanly", () => {
+  const watchdogMatch = source.match(/let watchdogTimer = null;[\s\S]*?function clearWatchdog\(\) \{[\s\S]*?\n\}/);
+  assert(watchdogMatch, "watchdog functions must be found");
+
+  let exitCodeCalled: number | null = null;
+  let exitCalls = 0;
+  const fakeDeno = {
+    env: { get: (k: string) => k === "CAP_JOURNEY_WATCHDOG_MS" ? "50" : undefined },
+    exit: (code: number) => { exitCodeCalled = code; exitCalls++; },
+  };
+
+  const logs: string[] = [];
+  const fakeConsole = {
+    log: (...args: any[]) => logs.push(args.join(" ")),
+    error: (...args: any[]) => logs.push(args.join(" ")),
+  };
+
+  const harness = new Function(
+    "Deno", "console", "EXPECTED",
+    `let abnormalReported = false;
+     let lastCompletedCheck = "check-A";
+     let lastStartedCheck = "check-B";
+     let ran = new Set(["check-A"]);
+     ${printMatch[0]}
+     ${watchdogMatch[0]}
+     return { resetWatchdog, clearWatchdog, getTimer: () => watchdogTimer };`,
+  )(fakeDeno, fakeConsole, EXPECTED);
+
+  // 1. Arm watchdog
+  harness.resetWatchdog();
+  assert(harness.getTimer() !== null, "watchdog timer must be active");
+
+  // 2. Clear watchdog before it fires
+  harness.clearWatchdog();
+  assertEquals(harness.getTimer(), null, "watchdog timer must be cleared");
+  assertEquals(exitCalls, 0, "must not have exited");
+});

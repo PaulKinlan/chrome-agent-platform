@@ -690,12 +690,47 @@ function formatCheckDetail(detail) {
 let lastCompletedCheck = null;
 let lastStartedCheck = null;
 
+let watchdogTimer = null;
+const WATCHDOG_MS = typeof Deno !== "undefined" && Deno.env
+  ? Number(Deno.env.get("CAP_JOURNEY_WATCHDOG_MS") || "90000")
+  : 90000;
+
+function resetWatchdog() {
+  if (typeof Deno === "undefined" || !Deno.env) return;
+  if (watchdogTimer) clearTimeout(watchdogTimer);
+  if (WATCHDOG_MS <= 0) return;
+  watchdogTimer = setTimeout(() => {
+    const reason = `watchdog timeout: no assertion completed for ${WATCHDOG_MS}ms`;
+    console.error(`\n[JOURNEY WATCHDOG TIMEOUT] Hang detected at frontier check: "${lastStartedCheck}" (last completed: "${lastCompletedCheck}") after ${WATCHDOG_MS}ms`);
+    printAbnormalExitSummary({
+      reason,
+      lastStartedCheck,
+      lastCompletedCheck,
+      missingCount: typeof EXPECTED !== "undefined" && Array.isArray(EXPECTED) && typeof ran !== "undefined"
+        ? EXPECTED.length - ran.size
+        : undefined,
+    });
+    Deno.exit(124);
+  }, WATCHDOG_MS);
+  if (typeof watchdogTimer?.unref === "function") {
+    watchdogTimer.unref();
+  }
+}
+
+function clearWatchdog() {
+  if (watchdogTimer) {
+    clearTimeout(watchdogTimer);
+    watchdogTimer = null;
+  }
+}
+
 function updateFrontier(completedName) {
   lastCompletedCheck = completedName;
   if (typeof EXPECTED !== "undefined" && Array.isArray(EXPECTED)) {
     const idx = EXPECTED.indexOf(completedName);
     lastStartedCheck = idx >= 0 && idx + 1 < EXPECTED.length ? EXPECTED[idx + 1] : null;
   }
+  if (typeof resetWatchdog === "function") resetWatchdog();
 }
 
 function checkShutdown(name, cond, detail) {
@@ -727,6 +762,7 @@ function isIntentionalEarlyStop(err, configuredTarget) {
 }
 
 function check(name, cond, detail) {
+  if (typeof resetWatchdog === "function") resetWatchdog();
   if (ran.has(name)) throw new Error(`duplicate assertion: ${name}`);
   lastStartedCheck = name;
   ran.add(name);
@@ -1214,11 +1250,11 @@ let uncaughtJourneyException: any = null;
 if (typeof globalThis !== "undefined") {
   globalThis.addEventListener?.("unhandledrejection", (ev: any) => {
     uncaughtJourneyException = ev?.reason ?? ev;
-    console.error("unhandled promise rejection in journey:", uncaughtJourneyException);
+    console.error(`unhandled promise rejection at frontier "${lastStartedCheck}" (last completed: "${lastCompletedCheck}"):`, uncaughtJourneyException);
   });
   globalThis.addEventListener?.("error", (ev: any) => {
     uncaughtJourneyException = ev?.error ?? ev;
-    console.error("uncaught error event in journey:", uncaughtJourneyException);
+    console.error(`uncaught error event at frontier "${lastStartedCheck}" (last completed: "${lastCompletedCheck}"):`, uncaughtJourneyException);
   });
 }
 
@@ -1340,6 +1376,7 @@ async function writeEvidence(name, bytes) {
 }
 
 async function main() {
+  if (typeof resetWatchdog === "function") resetWatchdog();
   let profile: string | null = null;
   let proc: Deno.ChildProcess | null = null;
   let port;
@@ -8987,6 +9024,7 @@ async function main() {
       ws?.close();
     } catch { /* ignore */ }
   } finally {
+    if (typeof clearWatchdog === "function") clearWatchdog();
     // Snapshot the frontier BEFORE shutdown or meta-assertions run, so premature
     // abort diagnostics report the actual check where the journey stopped rather
     // than the final meta-checks.
