@@ -21,7 +21,7 @@ import { readFile, writeFile, rename, mkdir, rm, readdir, stat, lstat, chmod, ut
 import path, { join, extname } from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { readFileSync, readdirSync, realpathSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { boundedChildTimeoutMs, runBoundedChild } from "./scripts/lib/bounded-child.mjs";
 import { syncGallery } from "./scripts/sync-gallery.mjs";
@@ -390,6 +390,16 @@ try {
     // (e.g. wiped by npm ci or npm install), auto-run frozen `deno install` so that
     // requireFromRoot / CANON_ANTHROPIC / CANON_ZOD_DIR resolve into .deno
     // instead of flat node_modules/ or throwing ENOENT on readdirSync.
+    // chrome-agent-platform-knu79: ALSO heal the npm-flat MIXED layout. When
+    // `npm ci`/`npm install` runs AFTER `deno install`, it flattens the top-level
+    // node_modules/zod into a REAL directory while a stale node_modules/.deno
+    // store survives. In that state `deno install` alone is a no-op (the store
+    // already has SDK entries), so the flat zod is never re-linked and the
+    // dedup guard below fails with an unrecoverable-looking error (Paul hit
+    // this on 2026-10-08). The safe repair deletes ONLY deno's own regenerable
+    // store, then re-runs frozen `deno install`, which re-links node_modules/zod
+    // and node_modules/@modelcontextprotocol/sdk back to their .deno symlinks.
+    // It never deletes npm-owned packages and never weakens the dedup guarantee.
     const denoStoreDir = path.join(ROOT, "node_modules", ".deno");
     let denoEntries = [];
     try {
@@ -397,7 +407,27 @@ try {
     } catch (err) {
       if (err?.code !== "ENOENT") throw err;
     }
-    if (!denoEntries.some((d) => d.startsWith("@modelcontextprotocol+sdk@"))) {
+    const hasSdkEntries = () => denoEntries.some((d) => d.startsWith("@modelcontextprotocol+sdk@"));
+    const zodEntryPath = path.join(ROOT, "node_modules", "zod");
+    let zodReal = null;
+    try { zodReal = realpathSync(zodEntryPath); } catch { /* missing zod — handled by the dedup guard below */ }
+    let denoStoreReal = null;
+    try { denoStoreReal = realpathSync(denoStoreDir); } catch { /* missing .deno — bd06 path below */ }
+    const zodIsFlat = zodReal !== null && (denoStoreReal === null || !zodReal.startsWith(denoStoreReal + path.sep));
+    if (zodIsFlat && hasSdkEntries()) {
+      // Mixed npm-flat layout: real (flat) zod + a stale .deno store with SDK
+      // entries. Repair by removing deno's store and letting a fresh frozen
+      // `deno install` re-link the top-level entries.
+      try {
+        rmSync(denoStoreDir, { recursive: true, force: true });
+        execFileSync("deno", ["install", "--frozen-lockfile"], { cwd: ROOT, stdio: "inherit" });
+        denoEntries = readdirSync(denoStoreDir);
+      } catch (err) {
+        throw new Error(
+          `cap-deno-store-resolve: node_modules/zod is npm-flat (${zodReal}) while a stale ${denoStoreDir} store survived and automatic repair failed (${err?.message || err}) — remove node_modules, run \`npm ci\` then \`deno install\` LAST, and retry.`,
+        );
+      }
+    } else if (!hasSdkEntries()) {
       try {
         execFileSync("deno", ["install", "--frozen-lockfile"], { cwd: ROOT, stdio: "inherit" });
         denoEntries = readdirSync(denoStoreDir);
@@ -451,13 +481,16 @@ try {
 
     let CANON_MCP_SDK_DIR = null;
     let mcpZodPeer = null;
-
+    let rootSdkResolveError = null;
+    const ROOT_SDK_PATH = path.join(ROOT, "node_modules", "@modelcontextprotocol", "sdk");
     try {
-      CANON_MCP_SDK_DIR = realpathSync(path.join(ROOT, "node_modules", "@modelcontextprotocol", "sdk"));
+      CANON_MCP_SDK_DIR = realpathSync(ROOT_SDK_PATH);
       const mcpSdkPkgPath = path.join(CANON_MCP_SDK_DIR, "package.json");
       const mcpSdkReq = createRequire(mcpSdkPkgPath);
       mcpZodPeer = realpathSync(mcpSdkReq.resolve("zod/package.json").replace(/\/package\.json$/, ""));
-    } catch {}
+    } catch (err) {
+      rootSdkResolveError = err;
+    }
 
     if (mcpZodPeer !== CANON_ZOD_DIR) {
       const candidates = denoEntries.filter((d) => d.startsWith("@modelcontextprotocol+sdk@"));
@@ -476,9 +509,28 @@ try {
       }
 
       if (!matchingEntry) {
+        // knu79: name the exact conflict + remediation so the next person is not
+        // guessing. Paul hit this after `npm ci`/`npm install` flattened a
+        // previously-deno-installed node_modules; `deno install` alone does NOT
+        // re-link the flattened zod, hence the "why am I STILL getting this".
+        const sdkState = rootSdkResolveError
+          ? `node_modules/@modelcontextprotocol/sdk is MISSING or unreadable (${rootSdkResolveError?.message || rootSdkResolveError})`
+          : `node_modules/@modelcontextprotocol/sdk is present and binds zod at ${mcpZodPeer}`;
+        const zodDesc = (() => {
+          try {
+            return CANON_ZOD_DIR.startsWith(realpathSync(denoStoreDir) + path.sep)
+              ? `the extension's zod is the Deno store instance at ${CANON_ZOD_DIR}`
+              : `the extension's zod is npm-flat at ${CANON_ZOD_DIR} (npm ci/npm install ran after deno install and flattened it)`;
+          } catch {
+            return `the extension's zod is at ${CANON_ZOD_DIR}`;
+          }
+        })();
         throw new Error(
           `cap-ai-sdk-dedup: no @modelcontextprotocol/sdk instance is bound to the extension's zod (${CANON_ZOD_DIR}). ` +
-          `The SDK must share one zod with lib/mcp-client.js and agent-do; run deno install and retry.`
+          `${sdkState}; ${zodDesc}. The SDK must share one zod with lib/mcp-client.js and agent-do. ` +
+          `Fix in this exact order: rm -rf node_modules && npm ci && deno install ` +
+          `(deno install MUST run LAST — re-running npm ci/npm install after deno install reintroduces this error; ` +
+          `the rm -rf node_modules also removes any stale node_modules/.deno store).`
         );
       }
     }
@@ -934,10 +986,20 @@ try {
     // window (2000 = the previous behaviour, 0 = none). A missing, empty, negative or
     // non-numeric value falls back to the default, never to "no grace" — the policy
     // lives in scripts/lib/build-concurrency.mjs (resolveGcGraceMs) so it is tested.
+    // The grace is paid only when a PRIOR version is being collected: when
+    // dist-versions holds only the live pointer (or residue that is not a version
+    // target — dangling symlinks, .DS_Store/._ metadata), there is no old target a
+    // reader can race and the delay is skipped outright, whatever the setting
+    // (chrome-agent-platform-jjsz, the fleet/jjsz-speed-slice change, merged with
+    // the configurable grace above).
+    const versionEntries = await readdir(VERSIONS, { withFileTypes: true });
+    const hasPriorVersion = versionEntries.some(
+      (d) => d.isDirectory() && path.join(VERSIONS, d.name) !== VERSIONED,
+    );
     const gcGraceMs = resolveGcGraceMs(process.env);
-    if (gcGraceMs > 0) await new Promise((r) => setTimeout(r, gcGraceMs));
+    if (hasPriorVersion && gcGraceMs > 0) await new Promise((r) => setTimeout(r, gcGraceMs));
     try {
-      for (const d of await readdir(VERSIONS, { withFileTypes: true })) {
+      for (const d of versionEntries) {
         if (d.isSymbolicLink()) {
           // Residue from the bootstrap-re-run bug era: dangling v-boot-*
           // symlinks (and any other link) under dist-versions. REMOVED
