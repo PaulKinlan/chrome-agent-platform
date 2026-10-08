@@ -170,8 +170,8 @@ export function zodCjsInputs(metafile) {
 }
 
 // The npm lock is NOT the build resolver: esbuild ships the Deno-store copy.
-// Inspect both locks and the actual metafile inputs for the two security-
-// sensitive dependencies whose mismatch was observed in lf9xe / im9q8.
+// Inspect both locks and the actual metafile inputs for the fast-uri mismatch
+// in lf9xe; also prevent future SDK drift (im9q8's 1.30 report was stale).
 const SECURITY_PACKAGES = Object.freeze([
   ["fast-uri", "fast-uri"],
   ["@modelcontextprotocol/sdk", "@modelcontextprotocol+sdk"],

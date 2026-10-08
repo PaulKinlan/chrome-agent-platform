@@ -103,29 +103,40 @@ Deno.test("bundle budget: build.mjs wires the metafile report, the store gate, a
 Deno.test("lf9xe: the build rejects a vulnerable Deno-store fast-uri even when npm locks patched", async () => {
   const npmLock = JSON.parse(await Deno.readTextFile("package-lock.json"));
   const denoLock = JSON.parse(await Deno.readTextFile("deno.lock"));
+  const npmVersion = npmLock.packages["node_modules/fast-uri"].version;
+  const denoVersions = Object.keys(denoLock.npm).filter((key) => key.startsWith("fast-uri@"))
+    .map((key) => key.slice("fast-uri@".length)).join(",");
+  // Literal 3.1.5 is the historical vulnerable fixture; expectations derive
+  // from the current locks so a later patched-version upgrade remains green.
   const old = { inputs: {
     "node_modules/.deno/fast-uri@3.1.5/node_modules/fast-uri/index.js": { bytes: 11 },
   } };
   assertEquals(securityDependencyDrift(old, npmLock, denoLock), [
-    "fast-uri: npm=3.1.7; deno=3.1.7; shipped=3.1.5",
+    `fast-uri: npm=${npmVersion}; deno=${denoVersions}; shipped=3.1.5`,
   ]);
   assertThrows(() => assertBundleBudget({ label: "background/service-worker.js", bytes: 100, metafile: old }),
     Error, "security dependency lock-to-shipped drift");
   const good = { inputs: {
-    "node_modules/.deno/fast-uri@3.1.7/node_modules/fast-uri/index.js": { bytes: 11 },
+    [`node_modules/.deno/fast-uri@${npmVersion}/node_modules/fast-uri/index.js`]: { bytes: 11 },
   } };
   assertEquals(securityDependencyDrift(good, npmLock, denoLock), []);
   assertEquals(assertBundleBudget({ label: "background/service-worker.js", bytes: 100, metafile: good }), 100);
 });
 
-Deno.test("im9q8: the build rejects a stale SDK and ignores dependency-free bundles", async () => {
+Deno.test("im9q8: build rejects SDK lock-to-bundle drift and ignores dependency-free bundles", async () => {
   const npmLock = JSON.parse(await Deno.readTextFile("package-lock.json"));
   const denoLock = JSON.parse(await Deno.readTextFile("deno.lock"));
+  const npmVersion = npmLock.packages["node_modules/@modelcontextprotocol/sdk"].version;
+  const denoVersions = [...new Set(Object.keys(denoLock.npm)
+    .filter((key) => key.startsWith("@modelcontextprotocol/sdk@"))
+    .map((key) => key.slice("@modelcontextprotocol/sdk@".length).split("_", 1)[0]))].join(",");
+  // The old 1.30.0 report belonged to a stale build, not the current tree.
+  // This synthetic input catches any FUTURE drift without claiming it ships.
   const old = { inputs: {
     "node_modules/.deno/@modelcontextprotocol+sdk@1.30.0/node_modules/@modelcontextprotocol/sdk/dist/index.js": { bytes: 11 },
   } };
   assertEquals(securityDependencyDrift(old, npmLock, denoLock), [
-    "@modelcontextprotocol/sdk: npm=1.31.0; deno=1.31.0; shipped=1.30.0",
+    `@modelcontextprotocol/sdk: npm=${npmVersion}; deno=${denoVersions}; shipped=1.30.0`,
   ]);
   assertThrows(() => assertBundleBudget({ label: "workers/agent-worker.js", bytes: 100, metafile: old }),
     Error, "security dependency lock-to-shipped drift");
