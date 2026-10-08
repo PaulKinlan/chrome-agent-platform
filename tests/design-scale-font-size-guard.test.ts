@@ -5,6 +5,7 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 export interface FontSizeViolation {
   file: string;
@@ -214,7 +215,7 @@ Deno.test("r4xk2: shipped extension JS files enforce >= 12px design scale floor"
 });
 
 Deno.test("r4xk2: falsification — sub-12px declarations are detected and reported", () => {
-  const tempDir = Deno.makeTempDirSync({ prefix: "sub12px-falsify-" });
+  const tempDir = Deno.makeTempDirSync({ dir: durableDir("scratch"), prefix: "sub12px-falsify-" });
   try {
     const fixture1 = join(tempDir, "sample.css");
     const fixture2 = join(tempDir, "sample.html");
