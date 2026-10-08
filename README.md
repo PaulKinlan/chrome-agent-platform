@@ -144,6 +144,21 @@ npm run package        # fresh exact-inventory Store production ZIP
 npm run package:store  # same exact Store boundary (explicit alias)
 ```
 
+**Dependency order (`deno install` runs LAST).** `build.mjs` resolves the AI SDK and
+`@modelcontextprotocol/sdk` from the Deno peer-context store under
+`node_modules/.deno/`, so `deno install` must run AFTER `npm install`/`npm ci`:
+
+```sh
+npm ci && deno install && npm run build
+```
+
+Running `npm ci`/`npm install` AFTER `deno install` flattens `node_modules/zod` into a
+real directory while a stale `node_modules/.deno` store survives; `deno install` alone then
+cannot re-link the flattened zod, and the build fails with
+`cap-ai-sdk-dedup: no @modelcontextprotocol/sdk instance is bound to the extension's zod`.
+If you hit that, recover with `rm -rf node_modules && npm ci && deno install`
+(`deno install` LAST).
+
 Chrome journey CDP timeouts retain their 15-second deadline and method prefix.
 The error also identifies the request number and available target/session IDs;
 only Chrome's 32-hex-character ID format is printed, otherwise `unavailable`.

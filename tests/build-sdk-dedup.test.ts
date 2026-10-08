@@ -23,7 +23,7 @@ import fs from "fs";
 import path from "path";
 import { createRequire } from "module";
 const execFileSync = () => { fs.mkdirSync(denoStoreDir, { recursive: true }); }; // Mock auto-install for tests
-const { readdirSync } = fs;
+const { readdirSync, rmSync } = fs;
 function realpathSync(p) { return fs.realpathSync(p); }
 const ROOT = process.cwd();
 const denoStoreDir = path.join(ROOT, "node_modules", ".deno");
@@ -220,6 +220,46 @@ console.log("GUARD_PASSED");
       const out = new TextDecoder().decode(stdout);
       const err = new TextDecoder().decode(stderr);
       assert(out.includes("GUARD_PASSED"), "Expected guard to PASS when root SDK is already correct\\n" + err);
+    } finally {
+      await Deno.remove(tmp, { recursive: true });
+    }
+  });
+
+  await t.step("npm-flat mixed layout (flat zod + stale .deno SDK) fails loudly with the exact remediation", async () => {
+    const tmp = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-sdkdedup-" });
+    try {
+      await Deno.writeTextFile(path.join(tmp, "package.json"), `{"name":"test"}`);
+      const nm = path.join(tmp, "node_modules");
+      // Flat (npm) zod at the root — the extension's canonical zod. This is the
+      // layout `npm ci`/`npm install` produces when run AFTER `deno install`.
+      await mkPkg(nm, "zod");
+      await Deno.mkdir(path.join(nm, "zod", "v4"));
+      await Deno.writeTextFile(path.join(nm, "zod", "v4", "index.js"), "");
+      await mkPkg(nm, "@ai-sdk/anthropic");
+      await mkPkg(nm, "@ai-sdk/provider-utils");
+      // Flat SDK whose own node_modules pins a DIFFERENT zod, so its zod peer is
+      // not the root zod — mirrors the npm-flat/deno mix Paul hit.
+      await mkPkg(nm, "@modelcontextprotocol/sdk");
+      await mkPkg(path.join(nm, "@modelcontextprotocol", "sdk", "node_modules"), "zod");
+
+      // A stale .deno store that already has SDK entries, so the mixed-layout
+      // auto-heal branch runs (rmSync + `deno install`) rather than plain bd06.
+      const denoStore = path.join(nm, ".deno");
+      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "@modelcontextprotocol"), "sdk");
+      await mkPkg(path.join(denoStore, "zod@3.25.76", "node_modules"), "zod");
+
+      await Deno.writeTextFile(path.join(tmp, "guard.mjs"), guardLogic);
+      const cmd = new Deno.Command("node", { args: ["guard.mjs"], cwd: tmp });
+      const { code, stdout, stderr } = await cmd.output();
+      const out = new TextDecoder().decode(stdout);
+      const err = new TextDecoder().decode(stderr);
+      assert(!out.includes("GUARD_PASSED"), "Expected guard to FAIL on the npm-flat mixed layout\\n" + err);
+      assert(err.includes("no @modelcontextprotocol/sdk instance is bound to the extension's zod"), "Expected the fail-closed anchor\\n" + err);
+      assert(err.includes("npm-flat"), "Expected the failure to name the npm-flat zod\\n" + err);
+      assert(err.includes("rm -rf node_modules && npm ci && deno install"), "Expected the exact remediation order\\n" + err);
+      assert(err.includes("deno install MUST run LAST"), "Expected the LAST-ordering warning\\n" + err);
+      assert(err.includes("re-running npm ci/npm install after deno install"), "Expected the re-introduce warning\\n" + err);
+      assert(err.includes("stale node_modules/.deno"), "Expected the stale .deno warning\\n" + err);
     } finally {
       await Deno.remove(tmp, { recursive: true });
     }
