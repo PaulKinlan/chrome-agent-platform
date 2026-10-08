@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.595] — 2026-10-08
+- Resolve skill references faster by reading the store concurrently once per batch instead of serially twice on the run-start path.
+
 ## [0.3.594] — 2026-10-08
 - Correct outdated documentation cross-references and code comments, and regenerate the docs component mirror.
 
