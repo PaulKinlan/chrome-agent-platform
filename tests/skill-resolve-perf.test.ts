@@ -1,6 +1,6 @@
 // @ts-nocheck
 // tests/skill-resolve-perf.test.ts — Performance & deduplication contract for skill resolution (chrome-agent-platform-3m3sn)
-import { assertEquals, assert } from "jsr:@std/assert@1";
+import { assertEquals, assert, assertRejects } from "jsr:@std/assert@1";
 import { resolveSkillRef, createMemoizedSkillStores } from "../extension/lib/skill-resolve.js";
 
 Deno.test("3m3sn: createMemoizedSkillStores memoizes loadAllImported and getCustomSkills across parallel calls", async () => {
@@ -43,6 +43,44 @@ Deno.test("3m3sn: createMemoizedSkillStores memoizes loadAllImported and getCust
   assertEquals(s2?.name, "Imported 2");
   assertEquals(s3?.name, "Imported 3");
   assertEquals(c1?.name, "Custom 1");
+});
+
+// Pins the NEW contract introduced by the 3m3sn fix (removing the top-level
+// .catch(() => null) wrappers): a rejecting resolveSkill must PROPAGATE out of
+// resolveSkillRefs via Promise.all, not be converted to null and silently
+// filtered out. It replaces the old "batch error isolation" test, which pinned
+// the swallowed behaviour this fix removes.
+Deno.test("3m3sn: resolveSkillRefs propagates a rejecting resolveSkill instead of swallowing it to null", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const fnSite = sw.indexOf("async function resolveSkillRefs(");
+  assert(fnSite > 0, "resolveSkillRefs must exist in service-worker.js");
+  const endSite = sw.indexOf("\n}", fnSite);
+  const fnSrc = sw.slice(fnSite, endSite + 2);
+
+  // Compile the REAL resolveSkillRefs source with a stub resolveSkill that
+  // rejects for one id, mirroring a fatal store read. Against the pre-fix tip
+  // (4e08d050) the `.catch(() => null)` swallows the rejection and this test
+  // FAILS because the promise resolves to [s1, s2] instead of rejecting.
+  const compiled = new Function(
+    "skillRefIds",
+    "resolveSkill",
+    "skillStores",
+    `return (${fnSrc.replace("async function resolveSkillRefs", "async function")});`,
+  )(
+    () => ["s1", "s_error", "s2"],
+    async (id: string) => {
+      if (id === "s_error") throw new Error("fatal database read failure");
+      return { id, name: `Skill ${id}` };
+    },
+    () => ({}),
+  );
+
+  await assertRejects(
+    () => compiled("run /skill:s1 /skill:s_error /skill:s2"),
+    Error,
+    "fatal database read failure",
+    "a rejecting resolveSkill must surface out of resolveSkillRefs, not be dropped as null",
+  );
 });
 
 Deno.test("3m3sn: continuation journaled skills chunk concurrent reads without dropping skills past 24", async () => {
