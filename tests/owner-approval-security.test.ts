@@ -136,6 +136,10 @@ Deno.test("policy: the six destructive browser actions are approvable (in DESTRU
     "browser.remove-bookmark",
     "browser.set-cookie",
     "browser.remove-cookie",
+    "browser.register-user-script",
+    "browser.update-user-script",
+    "browser.register-content-script",
+    "browser.update-content-script",
   ]) {
     assert(DESTRUCTIVE_ACTIONS.has(action), `${action} must be an approvable destructive action`);
     // The action name passes the same audit grammar every approvable action does.

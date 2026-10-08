@@ -7235,11 +7235,11 @@ class AgentConversation extends Component {
     const card = document.createElement(actionApproval ? "approval-card" : "permission-approval-card");
     if (actionApproval) {
       card.setAttribute("title", String(m.title ?? `Approve ${req.approvals[0]?.action ?? "this action"}?`).slice(0, 240));
-      if (typeof m.body === "string" && m.body) card.setAttribute("body", m.body.slice(0, 2000));
+      if (typeof m.body === "string" && m.body) card.setAttribute("body", m.body.slice(0, 4000));
       if (typeof m.approveLabel === "string" && m.approveLabel) card.setAttribute("approve-label", m.approveLabel.slice(0, 60));
       if (typeof m.denyLabel === "string" && m.denyLabel) card.setAttribute("deny-label", m.denyLabel.slice(0, 60));
-      // The script source + hosts are a PROPERTY (rendered with textContent
-      // inside the card), never an attribute.
+      // The script source + hosts or registration details are a PROPERTY (rendered
+      // with textContent inside the card), never an attribute.
       if (m.cardDetail && typeof m.cardDetail === "object") card.detail = m.cardDetail;
     } else {
       const toolName = m.tool || req.tool || req.toolName || m.toolName;
@@ -10041,16 +10041,33 @@ class ApprovalCard extends Component {
    * an attribute) rendered with textContent — the source is untrusted text. */
   get detail() { return this._detail ?? null; }
   set detail(value) {
-    this._detail = value && typeof value === "object" && typeof value.source === "string"
-      ? {
+    if (value && typeof value === "object") {
+      if (value.kind === "script-registration" && typeof value.digest === "string") {
+        this._detail = {
+          kind: "script-registration",
+          scriptKind: value.scriptKind === "content_script" ? "content_script" : "user_script",
+          id: typeof value.id === "string" ? value.id.slice(0, 64) : "",
+          digest: value.digest,
+          matches: Array.isArray(value.matches) ? value.matches.filter((m) => typeof m === "string") : [],
+          jsBytes: typeof value.jsBytes === "number" ? value.jsBytes : 0,
+          runAt: typeof value.runAt === "string" ? value.runAt : null,
+          world: typeof value.world === "string" ? value.world : null,
+        };
+      } else if (typeof value.source === "string") {
+        this._detail = {
           source: value.source,
           hosts: Array.isArray(value.hosts) ? value.hosts.filter((h) => typeof h === "string") : [],
           dynamic: value.dynamic === true,
           truncated: value.truncated === true,
           totalSourceChars: typeof value.totalSourceChars === "number" ? value.totalSourceChars : value.source.length,
           sourceDigest: typeof value.sourceDigest === "string" ? value.sourceDigest : null,
-        }
-      : null;
+        };
+      } else {
+        this._detail = null;
+      }
+    } else {
+      this._detail = null;
+    }
     if (this._rendered) { this._render(); this._wire(); }
   }
   _render() {
@@ -10094,11 +10111,22 @@ class ApprovalCard extends Component {
     `, `<div class="card" role="group" aria-label="Approval request">
         <p class="title">${escapeHtml(title)}</p>
         ${body ? `<p class="body">${escapeHtml(body)}</p>` : ""}
-        ${this._detail ? `<span class="source-label" id="source-label">Script source</span>` +
-          (this._detail.truncated
-            ? `<p class="source-notice" role="note"><strong>Preview:</strong> Showing the first 64 KB (${this._detail.source.length.toLocaleString()} characters) of ${this._detail.totalSourceChars.toLocaleString()} total characters. ${this._detail.sourceDigest ? `Full source SHA-256: <code>${escapeHtml(this._detail.sourceDigest.slice(0, 16))}…</code>. ` : ""}The complete script will run if approved.</p>`
-            : "") +
-          `<pre class="source" tabindex="0" role="region" aria-labelledby="source-label"></pre><span class="source-label">Sites it fetches</span><ul class="hosts" aria-label="Sites this script fetches">${this._detail.hosts.length ? this._detail.hosts.map((h) => `<li>${escapeHtml(h)}</li>`).join("") : `<li class="none">none — the script makes no fetch to a listed site</li>`}</ul>${this._detail.dynamic ? `<p class="dynamic" role="note">Builds a URL at run time (unknown hosts) — only the sites listed above will be reachable; localhost and private addresses are always refused.</p>` : ""}` : ""}
+        ${this._detail?.kind === "script-registration"
+          ? `<dl class="registration-detail" style="display:grid;grid-template-columns:auto 1fr;gap:4px 8px;font-size:12px;margin:8px 0;">
+              <dt style="font-weight:600;">Script ID:</dt><dd style="margin:0;"><code>${escapeHtml(this._detail.id)}</code> (${escapeHtml(this._detail.scriptKind)})</dd>
+              <dt style="font-weight:600;">SHA-256:</dt><dd style="margin:0;"><code class="digest">${escapeHtml(this._detail.digest)}</code></dd>
+              <dt style="font-weight:600;">Size:</dt><dd style="margin:0;">${Number(this._detail.jsBytes).toLocaleString()} bytes</dd>
+              ${this._detail.runAt ? `<dt style="font-weight:600;">Run at:</dt><dd style="margin:0;">${escapeHtml(this._detail.runAt)}</dd>` : ""}
+              ${this._detail.world ? `<dt style="font-weight:600;">World:</dt><dd style="margin:0;">${escapeHtml(this._detail.world)}</dd>` : ""}
+              <dt style="font-weight:600;">Matches:</dt><dd style="margin:0;"><ul style="margin:0;padding-left:16px;">${this._detail.matches.map((m) => `<li><code>${escapeHtml(m)}</code></li>`).join("")}</ul></dd>
+            </dl>`
+          : this._detail?.source !== undefined
+            ? `<span class="source-label" id="source-label">Script source</span>` +
+              (this._detail.truncated
+                ? `<p class="source-notice" role="note"><strong>Preview:</strong> Showing the first 64 KB (${this._detail.source.length.toLocaleString()} characters) of ${this._detail.totalSourceChars.toLocaleString()} total characters. ${this._detail.sourceDigest ? `Full source SHA-256: <code>${escapeHtml(this._detail.sourceDigest.slice(0, 16))}…</code>. ` : ""}The complete script will run if approved.</p>`
+                : "") +
+              `<pre class="source" tabindex="0" role="region" aria-labelledby="source-label"></pre><span class="source-label">Sites it fetches</span><ul class="hosts" aria-label="Sites this script fetches">${this._detail.hosts.length ? this._detail.hosts.map((h) => `<li>${escapeHtml(h)}</li>`).join("") : `<li class="none">none — the script makes no fetch to a listed site</li>`}</ul>${this._detail.dynamic ? `<p class="dynamic" role="note">Builds a URL at run time (unknown hosts) — only the sites listed above will be reachable; localhost and private addresses are always refused.</p>` : ""}`
+            : ""}
         <slot name="extra"></slot>
         ${state === "pending"
           ? `<div class="actions"><button type="button" class="approve">${escapeHtml(approveLabel)}</button><button type="button" class="deny">${escapeHtml(denyLabel)}</button></div>`

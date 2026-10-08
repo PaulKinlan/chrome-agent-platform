@@ -5764,6 +5764,16 @@ const DESTRUCTIVE_BROWSER_ACTIONS = new Set([
   "browser.remove-bookmark",
   "browser.set-cookie",
   "browser.remove-cookie",
+  "browser.register-user-script",
+  "browser.update-user-script",
+  "browser.register-content-script",
+  "browser.update-content-script",
+]);
+const SCRIPT_REGISTRATION_ACTIONS = new Set([
+  "browser.register-user-script",
+  "browser.update-user-script",
+  "browser.register-content-script",
+  "browser.update-content-script",
 ]);
 const DESTRUCTIVE_POLICY_KEY = "cap:destructiveActionPolicy";
 // The owner's Settings choice for the Destructive class: "ask" (default — every
@@ -6044,6 +6054,10 @@ const GATED_WORKER_TOOLS = new Set([
   // write_file pays the diff approval card through the route-bound gate
   // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
   "write_file",
+  // Script registration pays the source-digest approval card
+  // (chrome-agent-platform-oagmf).
+  "register_user_script", "update_user_script",
+  "register_content_script", "update_content_script",
 ]);
 async function executeWorkerTool(toolName, args, context) {
   const name = String(toolName || "").slice(0, 128);
@@ -6808,6 +6822,12 @@ const handlers = mergeRouteMaps(
             return { ok: false, approvalDenied: true, error: `Destructive browser actions are blocked in Settings; ${action} was not performed.` };
           }
           if (isApproved) {
+            if (typeof SCRIPT_REGISTRATION_ACTIONS !== "undefined" && SCRIPT_REGISTRATION_ACTIONS.has(action)) {
+              if (typeof message?.approvedDigest === "string" && message.approvedDigest === payload?.digest && /^[0-9a-f]{64}$/.test(payload?.digest)) {
+                return { ok: true, approvalConsumed: true };
+              }
+              return { ok: false, approvalDenied: true, error: "script registration digest was not approved" };
+            }
             return { ok: true, approvalConsumed: true };
           }
           const res = await dispatchRoute("browser.destructive-action", { action, ...payload }, callContext);
@@ -10231,10 +10251,18 @@ const handlers = mergeRouteMaps(
   // is digest-bound to this precise operation. The Settings policy is consulted
   // first: the owner can set the Destructive class to "never" (block outright);
   // the default is "ask".
-  async "browser.destructive-action"({ action, ref }, context) {
+  async "browser.destructive-action"({ action, ref, digest, ...extra }, context) {
     const act = typeof action === "string" ? action : "";
     if (!DESTRUCTIVE_BROWSER_ACTIONS.has(act)) {
       return ERR_ACTION_NOT_APPROVABLE;
+    }
+    if (SCRIPT_REGISTRATION_ACTIONS.has(act)) {
+      if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest)) {
+        return { ok: false, error: "valid 64-character lowercase hex sha256 digest is required for script registration approval" };
+      }
+      if (!Array.isArray(extra?.matches) || extra.matches.length === 0 || extra.matches.length > 8 || extra.matches.some((m) => typeof m !== "string" || !m || m.length > 2048)) {
+        return { ok: false, error: "script registration approval requires an array of 1 to 8 match patterns" };
+      }
     }
     const policy = await destructiveActionPolicy();
     if (policy === "never") {
@@ -10245,9 +10273,31 @@ const handlers = mergeRouteMaps(
     if (!target) return ERR_ACTION_NOT_APPROVABLE;
     let payload;
     try {
-      payload = payloadFields([["action", act], ["ref", refStr]]);
+      const fields = [["action", act], ["ref", refStr]];
+      if (typeof digest === "string" && digest) {
+        fields.push(["digest", digest]);
+      }
+      if (SCRIPT_REGISTRATION_ACTIONS.has(act)) {
+        const matchesArr = Array.isArray(extra?.matches)
+          ? extra.matches.filter((m) => typeof m === "string").sort().join(",")
+          : "";
+        fields.push(["matches", matchesArr]);
+        if (typeof extra?.runAt === "string" && extra.runAt) {
+          fields.push(["runAt", extra.runAt]);
+        }
+        if (typeof extra?.world === "string" && extra.world) {
+          fields.push(["world", extra.world]);
+        }
+      }
+      payload = payloadFields(fields);
     } catch { return ERR_ACTION_NOT_APPROVABLE; }
-    return await requireOwnerApproval(context, act, target, payload);
+    const detail = {
+      action: act,
+      ref: refStr,
+      ...(typeof digest === "string" ? { digest } : {}),
+      ...(extra && typeof extra === "object" ? extra : {}),
+    };
+    return await requireOwnerApproval(context, act, target, payload, detail);
   },
   async "task.schedule-script"({ scriptId }, context) {
     // The approval leg of schedule_task with a scriptId: the browser tool

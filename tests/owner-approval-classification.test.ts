@@ -27,6 +27,8 @@ const APPROVAL_REQUIRED_ACTIONS = new Set([
   "task.schedule-script", "browser.cookie-value", "webmcp.use-tool", "mcp.use-server",
   "browser.close-foreign-tab", "browser.close-window", "browser.wipe", "browser.remove-bookmark",
   "browser.set-cookie", "browser.remove-cookie", "workflow.run",
+  "browser.register-user-script", "browser.update-user-script",
+  "browser.register-content-script", "browser.update-content-script",
 ]);
 
 function walk(node, visit, ancestors = []) {
@@ -145,18 +147,35 @@ Deno.test("owner-approval classification: every executable approval call has exp
         assertEquals(typeof n.value, "string");
         return n.value;
       }));
+      const scriptRegDecl = ast.body.flatMap((n) => n.declarations ?? []).find((n) => n.id.name === "SCRIPT_REGISTRATION_ACTIONS");
+      assertEquals(scriptRegDecl?.init?.type, "NewExpression");
+      assertEquals(scriptRegDecl.init.callee.name, "Set");
+      assertEquals(scriptRegDecl.init.arguments[0].type, "ArrayExpression");
+      const scriptRegDomain = new Set(scriptRegDecl.init.arguments[0].elements.map((n) => {
+        assertEquals(n.type, "Literal", "script registration domain must be statically enumerable");
+        assertEquals(typeof n.value, "string");
+        return n.value;
+      }));
       const observed = [];
       // Execute the actual dynamic route, not a duplicate of its has() guard.
       const handler = runInNewContext(`({${source.slice(route.start, route.end)}})["browser.destructive-action"]`, {
         ERR_ACTION_NOT_APPROVABLE: Object.freeze({ ok: false, error: "this browser action is not approvable" }),
         DESTRUCTIVE_BROWSER_ACTIONS: domain,
+        SCRIPT_REGISTRATION_ACTIONS: scriptRegDomain,
         destructiveActionPolicy: async () => "ask",
         canonicalOperationTarget: () => "target", payloadFields: () => ({}),
         requireOwnerApproval: async (_context, action) => { observed.push(action); return { ok: true }; },
       });
       for (const action of domain) {
-        assertEquals((await handler({ action, ref: "ref" }, {})).ok, true);
+        const isScriptReg = scriptRegDomain.has(action);
+        const args = isScriptReg
+          ? { action, ref: "ref", digest: "0".repeat(64), matches: ["https://example.com/*"] }
+          : { action, ref: "ref" };
+        assertEquals((await handler(args, {})).ok, true);
         operations.add(action);
+      }
+      for (const action of scriptRegDomain) {
+        assertEquals((await handler({ action, ref: "ref" }, {})).ok, false, "script registration requires digest and matches");
       }
       assertEquals(observed, [...domain], "browser dispatch forwards exactly its enumerated actions");
       for (const action of ["unclassified.owner-mutation", "", null, {}]) {

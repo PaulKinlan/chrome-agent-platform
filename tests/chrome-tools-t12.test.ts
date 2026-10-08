@@ -8,7 +8,7 @@
 // before any Chrome call), host-permission scoping, origin-coverage of every
 // matches pattern, bounded outputs + honest truncation. In-memory chrome shim
 // extended from chrome-tools-t8.test.ts.
-import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertThrows, assertStringIncludes } from "jsr:@std/assert@1";
 import { statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
@@ -25,6 +25,10 @@ import {
 } from "../extension/lib/chrome-tool-capabilities.js";
 import { CAPABILITIES } from "../extension/lib/capabilities.js";
 import { clearRunFence } from "../extension/lib/run-fence.js";
+import { sha256Hex } from "../extension/lib/pure.js";
+import { approvalCardDenial, boundScriptRegistrationApprovalDetail as boundOwnerDetail } from "../extension/lib/owner-approval.js";
+import { approvalCardSpecFromRequest, boundScriptRegistrationApprovalDetail as boundConversationDetail } from "../extension/shared/conversation.js";
+import { formatBrowserToolApproval, requestAcpPermission } from "../extension/lib/acp-runner.js";
 
 // ---- in-memory chrome shim ----
 const store = new Map();
@@ -742,4 +746,677 @@ Deno.test("policy: a denied destructive approval blocks the mutation (close_wind
   assertEquals(denied[0], "browser.close-window");
   // The window's tab is still there — the mutation never ran.
   assertEquals(tabs.length, before, "a denied close_window must not remove any tab");
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// S14 / T19 — Script Registration Owner-Visible Digest Approval (oagmf)
+// ──────────────────────────────────────────────────────────────────────────
+
+Deno.test("oagmf / S14 / T19: register_user_script requires owner approval card bound to exact SHA-256 digest", async () => {
+  reset();
+  grantedPermissions.add("userScripts");
+  grantedOrigins.add("https://a.example/*");
+  await setOriginBrowserControlGrant(["https://a.example"]);
+
+  const gateCalls: any[] = [];
+  let gateResult: any = { ok: false, approvalDenied: true, error: "owner denied script registration" };
+  const gate = (action: string, payload: any) => {
+    gateCalls.push({ action, payload });
+    return gateResult;
+  };
+
+  const t = browserToolset(false, { destructiveActionGate: gate });
+  const scriptJs = "console.log('injected user script payload');";
+  const expectedDigest = sha256Hex(scriptJs);
+
+  // 1. When owner denies: tool returns denial, Chrome API is NEVER reached
+  const denied = await t.register_user_script.execute({
+    id: "s-user-1",
+    js: scriptJs,
+    matches: ["https://a.example/*"],
+    runAt: "document_idle",
+  });
+
+  assertEquals(gateCalls.length, 1);
+  assertEquals(gateCalls[0].action, "browser.register-user-script");
+  assertEquals(gateCalls[0].payload.ref, "user_script:s-user-1");
+  assertEquals(gateCalls[0].payload.kind, "user_script");
+  assertEquals(gateCalls[0].payload.id, "s-user-1");
+  assertEquals(gateCalls[0].payload.matches, ["https://a.example/*"]);
+  assertEquals(gateCalls[0].payload.digest, expectedDigest);
+  assertEquals(gateCalls[0].payload.jsBytes, scriptJs.length);
+  assertEquals(gateCalls[0].payload.runAt, "document_idle");
+
+  assert(denied?.ok !== true, "denied registration must not report ok:true");
+  assertEquals(denied?.approvalDenied, true);
+  assertEquals(scriptCalls.length, 0, "denied registration must not reach Chrome API");
+  assertEquals(userScripts.has("s-user-1"), false);
+
+  // 2. When owner approves: proceeds to Chrome registration
+  gateResult = { ok: true };
+  const approved = await t.register_user_script.execute({
+    id: "s-user-1",
+    js: scriptJs,
+    matches: ["https://a.example/*"],
+    runAt: "document_idle",
+  });
+
+  assertEquals(gateCalls.length, 2);
+  assertRawJsRejected(approved, "userScripts.register", scriptJs);
+  assertEquals(scriptCalls.length, 1, "approved registration reaches Chrome API");
+  assertEquals(scriptCalls[0][1][0].js, scriptJs);
+});
+
+Deno.test("oagmf / S14 / T19: register_content_script requires owner approval card bound to exact SHA-256 digest", async () => {
+  reset();
+  grantedPermissions.add("scripting");
+  grantedOrigins.add("https://b.example/*");
+  await setOriginBrowserControlGrant(["https://b.example"]);
+
+  const gateCalls: any[] = [];
+  let gateResult: any = { ok: false, approvalDenied: true, error: "owner denied content script" };
+  const gate = (action: string, payload: any) => {
+    gateCalls.push({ action, payload });
+    return gateResult;
+  };
+
+  const t = browserToolset(false, { destructiveActionGate: gate });
+  const scriptJs = "document.body.style.border = '2px solid red';";
+  const expectedDigest = sha256Hex(scriptJs);
+
+  // 1. When owner denies: tool returns denial, Chrome API is NEVER reached
+  const denied = await t.register_content_script.execute({
+    id: "cs-1",
+    js: scriptJs,
+    matches: ["https://b.example/*"],
+    runAt: "document_start",
+    world: "MAIN",
+  });
+
+  assertEquals(gateCalls.length, 1);
+  assertEquals(gateCalls[0].action, "browser.register-content-script");
+  assertEquals(gateCalls[0].payload.ref, "content_script:cs-1");
+  assertEquals(gateCalls[0].payload.kind, "content_script");
+  assertEquals(gateCalls[0].payload.id, "cs-1");
+  assertEquals(gateCalls[0].payload.matches, ["https://b.example/*"]);
+  assertEquals(gateCalls[0].payload.digest, expectedDigest);
+  assertEquals(gateCalls[0].payload.jsBytes, scriptJs.length);
+  assertEquals(gateCalls[0].payload.runAt, "document_start");
+  assertEquals(gateCalls[0].payload.world, "MAIN");
+
+  assert(denied?.ok !== true, "denied registration must not report ok:true");
+  assertEquals(denied?.approvalDenied, true);
+  assertEquals(scriptCalls.length, 0, "denied registration must not reach Chrome API");
+
+  // 2. When owner approves: proceeds to Chrome registration
+  gateResult = { ok: true };
+  const approved = await t.register_content_script.execute({
+    id: "cs-1",
+    js: scriptJs,
+    matches: ["https://b.example/*"],
+    runAt: "document_start",
+    world: "MAIN",
+  });
+
+  assertEquals(gateCalls.length, 2);
+  assertRawJsRejected(approved, "scripting.register", scriptJs);
+  assertEquals(scriptCalls.length, 1, "approved registration reaches Chrome API");
+  assertEquals(scriptCalls[0][1][0].js, scriptJs);
+});
+
+Deno.test("oagmf / S14 / T19: update_user_script and update_content_script require fresh approval bound to updated digest", async () => {
+  reset();
+  grantedPermissions.add("userScripts");
+  grantedPermissions.add("scripting");
+  grantedOrigins.add("https://a.example/*");
+  await setOriginBrowserControlGrant(["https://a.example"]);
+
+  const gateCalls: any[] = [];
+  let gateResult: any = { ok: false, approvalDenied: true, error: "denied update" };
+  const gate = (action: string, payload: any) => {
+    gateCalls.push({ action, payload });
+    return gateResult;
+  };
+
+  const t = browserToolset(false, { destructiveActionGate: gate });
+  const updatedUserJs = "console.log('updated v2');";
+  const updatedContentJs = "console.log('updated content v2');";
+
+  // update_user_script denied
+  const deniedUser = await t.update_user_script.execute({
+    id: "s-u1",
+    js: updatedUserJs,
+    matches: ["https://a.example/*"],
+  });
+  assertEquals(deniedUser?.approvalDenied, true);
+  assertEquals(gateCalls[0].action, "browser.update-user-script");
+  assertEquals(gateCalls[0].payload.digest, sha256Hex(updatedUserJs));
+  assertEquals(scriptCalls.length, 0);
+
+  // update_content_script denied
+  const deniedContent = await t.update_content_script.execute({
+    id: "cs-c1",
+    js: updatedContentJs,
+    matches: ["https://a.example/*"],
+  });
+  assertEquals(deniedContent?.approvalDenied, true);
+  assertEquals(gateCalls[1].action, "browser.update-content-script");
+  assertEquals(gateCalls[1].payload.digest, sha256Hex(updatedContentJs));
+  assertEquals(scriptCalls.length, 0);
+
+  // When approved, both proceed
+  gateResult = { ok: true };
+  const approvedUser = await t.update_user_script.execute({
+    id: "s-u1",
+    js: updatedUserJs,
+    matches: ["https://a.example/*"],
+  });
+  assertRawJsRejected(approvedUser, "userScripts.update", updatedUserJs);
+  assertEquals(scriptCalls.length, 1);
+
+  const approvedContent = await t.update_content_script.execute({
+    id: "cs-c1",
+    js: updatedContentJs,
+    matches: ["https://a.example/*"],
+  });
+  assertRawJsRejected(approvedContent, "scripting.update", updatedContentJs);
+  assertEquals(scriptCalls.length, 2);
+});
+
+Deno.test("oagmf / S14 / T19: large script body is untruncated and digest covers complete source", async () => {
+  reset();
+  grantedPermissions.add("userScripts");
+  grantedOrigins.add("https://a.example/*");
+  await setOriginBrowserControlGrant(["https://a.example"]);
+
+  const gateCalls: any[] = [];
+  const gate = (action: string, payload: any) => {
+    gateCalls.push({ action, payload });
+    return { ok: true };
+  };
+
+  const t = browserToolset(false, { destructiveActionGate: gate });
+  // 12 KiB script body
+  const longJs = `/* header */\nconst payload = "${"a".repeat(12000)}";\nconsole.log(payload.length);`;
+  assertEquals(longJs.length > 12000, true);
+  const expectedDigest = sha256Hex(longJs);
+
+  const res = await t.register_user_script.execute({
+    id: "long-script",
+    js: longJs,
+    matches: ["https://a.example/*"],
+  });
+
+  assertEquals(gateCalls.length, 1);
+  assertEquals(gateCalls[0].payload.digest, expectedDigest);
+  assertEquals(gateCalls[0].payload.jsBytes, longJs.length);
+
+  assertRawJsRejected(res, "userScripts.register", longJs);
+  assertEquals(scriptCalls.length, 1);
+  // Entire source reached the registration without truncation
+  assertEquals(scriptCalls[0][1][0].js, longJs);
+  assertEquals(scriptCalls[0][1][0].js.length, longJs.length);
+});
+
+Deno.test("oagmf / S14 / T19: SW browser.destructive-action handler blocks script registration missing digest", async () => {
+  const src = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const site = src.indexOf('async "browser.destructive-action"');
+  assert(site >= 0, "the browser.destructive-action route must exist");
+  const end = src.indexOf("\n  },", site);
+  assert(end > site, "the handler body must be delimited");
+  const handlerSrc = src.slice(site, end + "\n  }".length);
+
+  let capturedApproval: any = null;
+  const compiled = new Function(
+    "DESTRUCTIVE_BROWSER_ACTIONS",
+    "SCRIPT_REGISTRATION_ACTIONS",
+    "destructiveActionPolicy",
+    "canonicalOperationTarget",
+    "payloadFields",
+    "requireOwnerApproval",
+    "ERR_ACTION_NOT_APPROVABLE",
+    `const targetObj = { ${handlerSrc} }; return targetObj["browser.destructive-action"];`,
+  )(
+    new Set([
+      "browser.close-foreign-tab", "browser.close-window", "browser.wipe",
+      "browser.remove-bookmark", "browser.set-cookie", "browser.remove-cookie",
+      "browser.register-user-script", "browser.update-user-script",
+      "browser.register-content-script", "browser.update-content-script",
+    ]),
+    new Set([
+      "browser.register-user-script", "browser.update-user-script",
+      "browser.register-content-script", "browser.update-content-script",
+    ]),
+    () => Promise.resolve("ask"),
+    (kind: string, parts: any) => `${kind}:${parts.action}:${parts.ref}`,
+    (fields: any[]) => Object.fromEntries(fields),
+    (context: any, act: string, target: any, payload: any, detail: any) => {
+      capturedApproval = { context, act, target, payload, detail };
+      return { ok: true };
+    },
+    { ok: false, error: "action not approvable" },
+  );
+
+  const ctx = { principal: "model" };
+
+  // 1. Missing digest must fail closed
+  const noDigest = await compiled(
+    { action: "browser.register-user-script", ref: "user_script:s1" },
+    ctx,
+  );
+  assertEquals(noDigest.ok, false);
+  assertStringIncludes(noDigest.error, "64-character lowercase hex");
+  assertEquals(capturedApproval, null);
+
+  // 1b. Invalid non-hex / short digest must fail closed
+  const shortDigest = await compiled(
+    { action: "browser.register-user-script", ref: "user_script:s1", digest: "invalid-short-digest" },
+    ctx,
+  );
+  assertEquals(shortDigest.ok, false);
+  assertStringIncludes(shortDigest.error, "64-character lowercase hex");
+  assertEquals(capturedApproval, null);
+
+  // 2. Present valid digest must pass through to requireOwnerApproval with matches, digest in payload and detail
+  const validDigest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+  const valid = await compiled(
+    {
+      action: "browser.register-user-script",
+      ref: "user_script:s1",
+      digest: validDigest,
+      matches: ["https://b.example/*", "https://a.example/*"],
+      runAt: "document_idle",
+      jsBytes: 100,
+    },
+    ctx,
+  );
+  assertEquals(valid.ok, true);
+  assertEquals(capturedApproval.act, "browser.register-user-script");
+  assertEquals(capturedApproval.payload.digest, validDigest);
+  // Matches are sorted and canonicalized into payload
+  assertEquals(capturedApproval.payload.matches, "https://a.example/*,https://b.example/*");
+  assertEquals(capturedApproval.payload.runAt, "document_idle");
+  assertEquals(capturedApproval.detail.digest, validDigest);
+});
+
+Deno.test("oagmf / S14 / T19: approvalCardDenial and approvalCardSpecFromRequest render full SHA-256 digest and target matches", () => {
+  const digest = "a".repeat(64);
+  const denial = approvalCardDenial({
+    approvalId: "app-test-123",
+    action: "browser.register-user-script",
+    targetRef: "user_script:my-test-script",
+    detail: {
+      kind: "user_script",
+      id: "my-test-script",
+      matches: ["https://example.com/*"],
+      digest,
+      jsBytes: 420,
+      runAt: "document_end",
+    },
+  });
+
+  assert(denial !== null);
+  assertEquals(denial.waitingForPermission, true);
+  const approval = denial.permissionRequirement.approvals[0];
+  assertEquals(approval.action, "browser.register-user-script");
+  assertEquals(approval.detail?.kind, "script-registration");
+  assertEquals(approval.detail?.digest, digest);
+  assertEquals(approval.detail?.id, "my-test-script");
+  assertEquals(approval.detail?.matches, ["https://example.com/*"]);
+  assertEquals(approval.detail?.jsBytes, 420);
+
+  // Now render card spec from request event
+  const spec = approvalCardSpecFromRequest(denial);
+  assert(spec !== null);
+  assertEquals(spec.title, 'Register user script "my-test-script"?');
+  assertStringIncludes(spec.body, "Script: my-test-script (user_script)");
+  assertStringIncludes(spec.body, "Matches: https://example.com/*");
+  assertStringIncludes(spec.body, "Run at: document_end");
+  assertStringIncludes(spec.body, `SHA-256 Digest: ${digest}`);
+  assertStringIncludes(spec.body, "Size: 420 bytes");
+});
+
+Deno.test("oagmf / S14 / T19: ACP approval verifies exact approvedDigest and completes when valid", async () => {
+  const src = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const site = src.indexOf('"browser.callTool": async');
+  assert(site >= 0, "the browser.callTool route must exist");
+  const end = src.indexOf("\n    },", site);
+  assert(end > site, "the handler body must be delimited");
+  const handlerSrc = src.slice(site + '"browser.callTool":'.length, end + "\n    }".length);
+
+  let receivedGates: any = null;
+
+  const compiled = new Function(
+    "isOwnerPrincipal",
+    "runBrowserToolCall",
+    "dispatchRoute",
+    "developerFeaturesOn",
+    "destructiveActionPolicy",
+    "SCRIPT_REGISTRATION_ACTIONS",
+    `return (${handlerSrc});`,
+  )(
+    (ctx: any) => ctx?.principal === "extension",
+    (_name: string, _args: any, gates: any) => {
+      receivedGates = gates;
+      return { ok: true };
+    },
+    (_route: string, _body: any, _context: any) => {
+      return { ok: true };
+    },
+    () => Promise.resolve(false),
+    () => Promise.resolve("ask"),
+    new Set([
+      "browser.register-user-script", "browser.update-user-script",
+      "browser.register-content-script", "browser.update-content-script",
+    ]),
+  );
+
+  const ctx = { principal: "extension" };
+  const targetDigest = "b".repeat(64);
+
+  // 1. Missing approvedDigest fails closed
+  await compiled({ name: "register_user_script", args: { id: "s1" }, approved: true }, ctx);
+  assert(receivedGates?.destructiveActionGate);
+  const resMissing = await receivedGates.destructiveActionGate("browser.register-user-script", { id: "s1", digest: targetDigest });
+  assertEquals(resMissing.ok, false);
+  assertEquals(resMissing.approvalDenied, true);
+  assertStringIncludes(resMissing.error, "script registration digest was not approved");
+
+  // 2. Mismatched approvedDigest fails closed
+  await compiled({ name: "register_user_script", args: { id: "s1" }, approved: true, approvedDigest: "c".repeat(64) }, ctx);
+  const resMismatched = await receivedGates.destructiveActionGate("browser.register-user-script", { id: "s1", digest: targetDigest });
+  assertEquals(resMismatched.ok, false);
+  assertEquals(resMismatched.approvalDenied, true);
+  assertStringIncludes(resMismatched.error, "script registration digest was not approved");
+
+  // 3. Exact matching approvedDigest succeeds and allows registration to complete
+  await compiled({ name: "register_user_script", args: { id: "s1" }, approved: true, approvedDigest: targetDigest }, ctx);
+  const resValid = await receivedGates.destructiveActionGate("browser.register-user-script", { id: "s1", digest: targetDigest });
+  assertEquals(resValid.ok, true);
+  assertEquals(resValid.approvalConsumed, true);
+});
+
+Deno.test("oagmf / S14 / T19: multibyte UTF-8 script content calculates true byte length, not code units", async () => {
+  reset();
+  grantedPermissions.add("userScripts");
+  grantedOrigins.add("https://a.example/*");
+  await setOriginBrowserControlGrant(["https://a.example"]);
+
+  let capturedPayload: any = null;
+  const approvingGate = (_act: string, payload: any) => {
+    capturedPayload = payload;
+    return { ok: true, approvalConsumed: true };
+  };
+
+  const multibyteJs = "// 🚀🔥 こんにちは世界\nconsole.log('test');";
+  const expectedBytes = new TextEncoder().encode(multibyteJs).byteLength;
+  assert(expectedBytes > multibyteJs.length, "UTF-8 byte length must be greater than string length for multibyte text");
+
+  const t = browserToolset(false, { destructiveActionGate: approvingGate });
+  const res = await t.register_user_script.execute({
+    id: "utf8-script",
+    js: multibyteJs,
+    matches: ["https://a.example/*"],
+  });
+
+  assertRawJsRejected(res, "userScripts.register", multibyteJs);
+  assertEquals(capturedPayload.jsBytes, expectedBytes);
+});
+
+Deno.test("oagmf / S14 / T19: FALSIFICATION - deleting digest check from tool execution permits unapproved registration attempt", async () => {
+  // If requireDestructiveApproval call was omitted from register_user_script,
+  // an unapproved call would proceed to Chrome directly without consulting the gate.
+  // We prove that on the current tree, gate MUST approve for scriptCalls to receive the registration.
+  reset();
+  grantedPermissions.add("userScripts");
+  grantedOrigins.add("https://a.example/*");
+  await setOriginBrowserControlGrant(["https://a.example"]);
+
+  let gateChecked = false;
+  const denyingGate = (_act: string, _p: any) => {
+    gateChecked = true;
+    return { ok: false, approvalDenied: true, error: "owner rejected" };
+  };
+
+  const t = browserToolset(false, { destructiveActionGate: denyingGate });
+  const res = await t.register_user_script.execute({
+    id: "falsify-script",
+    js: "console.log(42);",
+    matches: ["https://a.example/*"],
+  });
+
+  assertEquals(gateChecked, true, "destructive gate must be consulted");
+  assertEquals(res.approvalDenied, true);
+  assertEquals(scriptCalls.length, 0, "unapproved registration must NEVER reach Chrome API");
+});
+
+Deno.test("oagmf / S14 / T19: script registration fails closed on >8 matches before requesting approval", async () => {
+  reset();
+  grantedPermissions.add("userScripts");
+  grantedPermissions.add("scripting");
+  const origins = Array.from({ length: 9 }, (_, i) => `https://site${i}.example/*`);
+  for (const o of origins) {
+    grantedOrigins.add(o);
+  }
+  await setOriginBrowserControlGrant(origins.map((o) => o.replace("/*", "")));
+
+  let gateChecked = false;
+  const approvingGate = () => {
+    gateChecked = true;
+    return { ok: true, approvalConsumed: true };
+  };
+
+  const t = browserToolset(false, { destructiveActionGate: approvingGate });
+
+  // 1. register_user_script with 9 matches must fail closed before approval is requested
+  const resUser = await t.register_user_script.execute({
+    id: "nine-matches",
+    js: "console.log(1);",
+    matches: origins,
+  });
+  assertEquals(gateChecked, false, "gate must NOT be consulted when matches > 8");
+  assert(resUser.error.includes("matches must be a non-empty array of at most 8 single-origin patterns"), resUser.error);
+
+  // 2. register_content_script with 9 matches must fail closed before approval is requested
+  const resContent = await t.register_content_script.execute({
+    id: "nine-matches-cs",
+    js: "console.log(1);",
+    matches: origins,
+  });
+  assertEquals(gateChecked, false, "gate must NOT be consulted when matches > 8");
+  assert(resContent.error.includes("matches must be a non-empty array of at most 8 single-origin patterns"), resContent.error);
+});
+
+Deno.test("oagmf / S14 / T19: boundScriptRegistrationApprovalDetail fails closed on >8 matches without silent truncation", () => {
+  const digest = "a".repeat(64);
+  const safeEight = Array.from({ length: 8 }, (_, i) => `https://site${i}.example/*`);
+  const maliciousNine = [...safeEight, "<all_urls>"];
+
+  const detailEight = {
+    kind: "script-registration",
+    id: "s1",
+    digest,
+    matches: safeEight,
+    jsBytes: 100,
+  };
+
+  const detailNine = {
+    kind: "script-registration",
+    id: "s1",
+    digest,
+    matches: maliciousNine,
+    jsBytes: 100,
+  };
+
+  // Both owner-approval and conversation detail binders must accept 8 matches
+  const ownerEight = boundOwnerDetail(detailEight);
+  assertEquals(ownerEight?.matches?.length, 8);
+  const convEight = boundConversationDetail(detailEight);
+  assertEquals(convEight?.matches?.length, 8);
+
+  // Both MUST FAIL CLOSED (return undefined) on 9 matches — no silent slice(0, 8) truncation!
+  const ownerNine = boundOwnerDetail(detailNine);
+  assertEquals(ownerNine, undefined, "owner-approval binder must return undefined on >8 matches");
+
+  const convNine = boundConversationDetail(detailNine);
+  assertEquals(convNine, undefined, "conversation binder must return undefined on >8 matches");
+
+  // Also fail closed on 0 matches or non-array
+  assertEquals(boundOwnerDetail({ ...detailEight, matches: [] }), undefined);
+  assertEquals(boundConversationDetail({ ...detailEight, matches: [] }), undefined);
+  assertEquals(boundOwnerDetail({ ...detailEight, matches: "not-array" }), undefined);
+  assertEquals(boundConversationDetail({ ...detailEight, matches: "not-array" }), undefined);
+});
+
+Deno.test("oagmf / S14 / T19: approval card spec and replayed card preserve untruncated digest and target matches", () => {
+  const digest = "0123456789abcdef".repeat(4);
+  const longMatches = Array.from({ length: 8 }, (_, i) => `https://subdomain-${i}.very-long-origin-name-for-testing-purposes-${i}.example.org/*`);
+
+  const approvalReq = {
+    approvals: [
+      {
+        approvalId: "appr-123",
+        action: "browser.register-user-script",
+        targetRef: "user_script:test-script",
+        detail: {
+          kind: "script-registration",
+          id: "test-script",
+          digest,
+          matches: longMatches,
+          jsBytes: 4096,
+          runAt: "document_idle",
+        },
+      },
+    ],
+  };
+
+  const spec = approvalCardSpecFromRequest({ permissionRequirement: approvalReq });
+  assert(spec, "spec must be created");
+
+  // 1. In spec.body, the SHA-256 Digest is placed at the top (right after Script ID), NOT pushed out by matches
+  const bodyLines = spec.body.split("\n");
+  assertEquals(bodyLines[0], "Script: test-script (user_script)");
+  assertEquals(bodyLines[1], `SHA-256 Digest: ${digest}`);
+  assertEquals(bodyLines[2], "Size: 4096 bytes");
+  assert(spec.body.includes(digest), "spec.body must contain full digest");
+
+  // 2. cardDetail contains the exact, untruncated structured fields
+  assert(spec.cardDetail, "spec.cardDetail must be provided for script-registration");
+  assertEquals(spec.cardDetail.kind, "script-registration");
+  assertEquals(spec.cardDetail.digest, digest);
+  assertEquals(spec.cardDetail.matches.length, 8);
+  for (let i = 0; i < 8; i++) {
+    assertEquals(spec.cardDetail.matches[i], longMatches[i]);
+  }
+});
+
+Deno.test("oagmf / S14 / T19: ACP approval card creation renders full digest and target matches", () => {
+  const digest = sha256Hex("console.log('acp test');");
+  const approval = formatBrowserToolApproval("register_user_script", {
+    id: "acp-script-1",
+    js: "console.log('acp test');",
+    matches: ["https://example.com/*", "https://api.example.com/*"],
+    runAt: "document_idle",
+  });
+
+  assert(approval.title.includes('Register user script "acp-script-1"'));
+  assert(approval.detail.includes(digest));
+  assert(approval.detail.includes("https://example.com/*, https://api.example.com/*"));
+  assert(approval.detail.includes("Run at: document_idle"));
+});
+
+Deno.test("oagmf / S14 / T19: ACP approval card DOM element is created with full digest and registration detail", async () => {
+  const digest = sha256Hex("console.log('acp dom test');");
+  let createdElement: any = null;
+  const mockDoc = {
+    createElement(tag: string) {
+      const attrs = new Map<string, string>();
+      const listeners = new Map<string, Function[]>();
+      createdElement = {
+        tagName: tag.toUpperCase(),
+        detail: null,
+        setAttribute(k: string, v: string) { attrs.set(k, v); },
+        getAttribute(k: string) { return attrs.get(k); },
+        addEventListener(event: string, fn: Function) {
+          if (!listeners.has(event)) listeners.set(event, []);
+          listeners.get(event)!.push(fn);
+        },
+        removeEventListener(event: string, fn: Function) {
+          const list = listeners.get(event);
+          if (list) {
+            const idx = list.indexOf(fn);
+            if (idx >= 0) list.splice(idx, 1);
+          }
+        },
+        dispatchEvent(event: any) {
+          const list = listeners.get(event.type);
+          if (list) {
+            for (const fn of list) fn(event);
+          }
+        },
+      };
+      return createdElement;
+    },
+  };
+
+  const oldDoc = (globalThis as any).document;
+  try {
+    (globalThis as any).document = mockDoc;
+    let appendedCard: any = null;
+    const mockContainer = {
+      appendTranscript(card: any) {
+        appendedCard = card;
+        return card;
+      },
+    };
+
+    const prompt = {
+      title: 'Register user script "dom-script"',
+      toolCall: {
+        name: "register_user_script",
+        rawInput: {
+          id: "dom-script",
+          js: "console.log('acp dom test');",
+          matches: ["https://dom.example/*"],
+          runAt: "document_idle",
+        },
+        title: 'Register user script "dom-script"',
+        detail: "Some details",
+      },
+      options: [
+        { optionId: "allow_once", name: "Approve" },
+        { optionId: "reject_once", name: "Deny" },
+      ],
+    };
+
+    // Start requestAcpPermission
+    const decisionPromise = requestAcpPermission(prompt, { container: mockContainer });
+
+    // Assert created card element
+    assert(appendedCard, "card must be appended to transcript");
+    assertEquals(appendedCard.tagName, "APPROVAL-CARD");
+    assertEquals(appendedCard.getAttribute("title"), 'Register user script "dom-script"');
+    assertEquals(appendedCard.getAttribute("state"), "pending");
+
+    // Assert detail object attached to property
+    assert(appendedCard.detail, "card.detail must be populated");
+    assertEquals(appendedCard.detail.kind, "script-registration");
+    assertEquals(appendedCard.detail.id, "dom-script");
+    assertEquals(appendedCard.detail.digest, digest);
+    assertEquals(appendedCard.detail.matches, ["https://dom.example/*"]);
+
+    // Assert body attribute contains digest and matches
+    const body = appendedCard.getAttribute("body");
+    assert(body.includes(digest), "body must contain full digest");
+    assert(body.includes("https://dom.example/*"), "body must contain matches");
+
+    // Simulate owner approving the card
+    appendedCard.dispatchEvent({ type: "approve" });
+    const result = await decisionPromise;
+    assertEquals(result.optionId, "allow_once");
+    assertEquals(result.answered, true);
+    assertEquals(appendedCard.getAttribute("state"), "granted");
+  } finally {
+    (globalThis as any).document = oldDoc;
+  }
 });
