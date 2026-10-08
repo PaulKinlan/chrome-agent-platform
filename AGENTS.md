@@ -48,6 +48,15 @@ an exception. These rules make that safe:
    `extension/dist/` artifacts the suite's serial phase reads — it requires the STORE
    target, so the developer-target `npm run build` alone is not enough). A fresh worktree
    has none of the three, and each gap fails somewhere that does not name it.
+   **`deno install` must run LAST, after `npm ci` (chrome-agent-platform-knu79).** Running
+   `npm ci`/`npm install` AFTER `deno install` flattens `node_modules/zod` into a real
+   directory while a stale `node_modules/.deno` store survives; `deno install` alone then
+   cannot re-link the flattened zod, and the build fails with
+   `cap-ai-sdk-dedup: no @modelcontextprotocol/sdk instance is bound to the extension's zod`.
+   If you hit that, recover with `rm -rf node_modules && npm ci && deno install`
+   (`deno install` LAST). `build.mjs` tries to self-heal by re-running a frozen
+   `deno install` when it detects the flat-zod/stale-store mix, but the explicit order is
+   the dependable fix.
    **`extension/dist/dist.complete` binds HEAD, every indexed source byte and the generated
    bundles: ANY commit invalidates the build — including the post-commit hook's own version
    bump and `git commit --amend`.** Rebuild after your LAST commit, before `npm test`
