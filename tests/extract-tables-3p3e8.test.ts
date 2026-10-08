@@ -601,6 +601,45 @@ Deno.test("injectedTableExtractor: whole-page table, cell, and time budgets enfo
   const resDeep = injectedTableExtractor({ customDocument: doc7 });
   assertEquals(resDeep.pageTruncated, true);
   assertEquals(resDeep.pageTruncationReason, "depth-limit");
+
+  // Test 8h: Empty/malformed <tr> does not throw ReferenceError and preserves table (P1a regression fix)
+  const doc8 = createMockDocument();
+  const tblWithEmptyRow = new MockNode("table");
+  tblWithEmptyRow.setAttribute("aria-label", "Table With Empty Row");
+  const trEmpty1 = new MockNode("tr"); // completely empty <tr>
+  const trValid = new MockNode("tr");
+  const tdValid = new MockNode("td"); tdValid.appendChild(new MockNode("#text", 3, "Valid Data"));
+  trValid.appendChild(tdValid);
+  const trEmpty2 = new MockNode("tr"); // another empty <tr>
+  tblWithEmptyRow.appendChild(trEmpty1);
+  tblWithEmptyRow.appendChild(trValid);
+  tblWithEmptyRow.appendChild(trEmpty2);
+  doc8.body.appendChild(tblWithEmptyRow);
+
+  const resEmptyRow = injectedTableExtractor({ customDocument: doc8 });
+  assertEquals(resEmptyRow.tables.length, 1);
+  assertEquals(resEmptyRow.tables[0].caption, "Table With Empty Row");
+  assertEquals(resEmptyRow.tables[0].rows.length, 1);
+  assertEquals(resEmptyRow.tables[0].rows[0][0], "Valid Data");
+
+  // Test 8i: Deeply nested table with no caption falls back to generated caption on ascent bound (P2)
+  const doc9 = createMockDocument();
+  let nestedParent = doc9.body;
+  for (let n = 0; n < 15; n++) {
+    const wrapper = new MockNode("div");
+    nestedParent.appendChild(wrapper);
+    nestedParent = wrapper;
+  }
+  const nestedTbl = new MockNode("table");
+  const nestedTr = new MockNode("tr");
+  const nestedTd = new MockNode("td"); nestedTd.appendChild(new MockNode("#text", 3, "nested cell"));
+  nestedTr.appendChild(nestedTd); nestedTbl.appendChild(nestedTr);
+  nestedParent.appendChild(nestedTbl);
+
+  const resNestedNoCaption = injectedTableExtractor({ customDocument: doc9 });
+  assertEquals(resNestedNoCaption.tables.length, 1);
+  assertEquals(resNestedNoCaption.tables[0].caption, "Table 1"); // fallback generated caption
+  assertEquals(resNestedNoCaption.tables[0].rows[0][0], "nested cell");
 });
 
 // ── 9. DOM-root scope: extractTablesFromDom must not escape root (P2) ───────────

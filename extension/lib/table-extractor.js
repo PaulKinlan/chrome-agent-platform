@@ -215,16 +215,28 @@ export function injectedTableExtractor({
     return clean(text);
   }
 
-  function headingBefore(el) {
+  var MAX_HEADING_ASCENT = 10;
+  var MAX_HEADING_PREV_SIBLINGS = 20;
+
+  function headingBefore(el, ascent) {
+    var curAscent = typeof ascent === "number" ? ascent : 0;
+    if (curAscent >= MAX_HEADING_ASCENT) return null;
+    if (!checkBudget()) return null;
+
     var p = el.previousElementSibling;
-    while (p) {
-      if (p.tagName && /^H[1-6]$/i.test(p.tagName)) return extractBoundedText(p, maxCaptionChars, false);
+    var prevCount = 0;
+    while (p && prevCount < MAX_HEADING_PREV_SIBLINGS) {
+      if (!checkBudget()) return null;
+      var tag = p.tagName ? p.tagName.toUpperCase() : "";
+      if (/^H[1-6]$/.test(tag)) return extractBoundedText(p, maxCaptionChars, false);
       var inner = p.querySelector ? p.querySelector("h1, h2, h3, h4, h5, h6") : null;
       if (inner) return extractBoundedText(inner, maxCaptionChars, false);
       p = p.previousElementSibling;
+      prevCount++;
     }
-    if (el.parentElement && el.parentElement !== (doc ? doc.body : null) && el.parentElement !== scope) {
-      return headingBefore(el.parentElement);
+    var parent = el.parentElement;
+    if (parent && parent !== (doc ? doc.body : null) && parent !== scope && curAscent + 1 < MAX_HEADING_ASCENT) {
+      return headingBefore(parent, curAscent + 1);
     }
     return null;
   }
@@ -263,33 +275,38 @@ export function injectedTableExtractor({
     return true;
   }
 
-  // Iterative bounded element finder that avoids stack overflow and full querySelectorAll array allocation
+  // Bounded per-depth index stack: depth <= MAX_WALK_DEPTH, memory strictly O(MAX_WALK_DEPTH).
+  // Does not enqueue siblings at once, preventing large stack allocations on wide DOM trees.
   var MAX_WALK_DEPTH = 32;
   function findMatchingElements(root, isMatch, maxCount, maxDepth) {
     var depthLimit = typeof maxDepth === "number" ? maxDepth : MAX_WALK_DEPTH;
     var results = [];
-    var stack = [{ node: root, depth: 0 }];
+    var stack = [{ node: root, childIndex: 0 }];
 
     while (stack.length > 0 && results.length < maxCount) {
       if (!checkBudget()) break;
-      var item = stack.pop();
-      var node = item.node;
-      var depth = item.depth;
+      var top = stack[stack.length - 1];
+      var ch = top.node.children || [];
 
-      if (node !== root && isMatch(node)) {
-        results.push(node);
-        if (results.length >= maxCount) break;
-      }
+      if (top.childIndex < ch.length) {
+        var child = ch[top.childIndex];
+        top.childIndex++;
 
-      if (depth >= depthLimit) {
-        pageTruncated = true;
-        if (!pageTruncationReason) pageTruncationReason = "depth-limit";
-        continue;
-      }
+        if (child && child.nodeType === 1 && isMatch(child)) {
+          results.push(child);
+          if (results.length >= maxCount) break;
+        }
 
-      var ch = node.children || [];
-      for (var i = ch.length - 1; i >= 0; i--) {
-        stack.push({ node: ch[i], depth: depth + 1 });
+        if (child && child.nodeType === 1 && (child.children || []).length > 0) {
+          if (stack.length < depthLimit) {
+            stack.push({ node: child, childIndex: 0 });
+          } else {
+            pageTruncated = true;
+            if (!pageTruncationReason) pageTruncationReason = "depth-limit";
+          }
+        }
+      } else {
+        stack.pop();
       }
     }
     return results;
@@ -548,7 +565,7 @@ export function injectedTableExtractor({
       for (var f = maxColumns - 1; f >= 0; f--) {
         if (row[f] !== null) { lastFilled = f; break; }
       }
-      if (lastFilled === -1 && dcells.length === 0) continue;
+      if (lastFilled === -1 && cellCount === 0) continue;
 
       var cleanRow = [];
       for (var k = 0; k <= lastFilled; k++) {
