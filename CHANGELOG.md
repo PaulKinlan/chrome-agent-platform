@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.606] — 2026-10-08
+- Extract page tables, ARIA grids and repeated card lists into a tabular artifact that the table tools accept directly.
+
 ## [0.3.605] — 2026-10-08
 - The extension UI now enforces a 12px minimum design-scale floor across shipped surfaces, including font sizes set from JavaScript.
 
