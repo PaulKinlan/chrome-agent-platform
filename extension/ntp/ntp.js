@@ -5241,7 +5241,9 @@ function initSideRailNav() {
     const btn = e.target?.closest?.(".rail-sec-btn");
     if (!btn) return;
     const targetId = btn.dataset?.railTarget || btn.getAttribute?.("data-rail-target");
-    // Expand the sidebar
+    // A rail navigation click is an explicit persisted choice: a pending
+    // boot kv.get must not restore an older collapsed value over it.
+    sidebarUserToggled = true;
     setSidebarCollapsed(false);
     side?.classList?.remove("collapsed");
     try { localStorage.setItem(SIDE_COLLAPSED_KEY, "0"); } catch { /* best effort */ }
