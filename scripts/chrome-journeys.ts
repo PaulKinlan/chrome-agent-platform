@@ -709,6 +709,24 @@ function checkShutdown(name, cond, detail) {
   results.push(!cond && detail !== undefined ? { name, pass: false, detail } : { name, pass: !!cond });
   console.log(`${cond ? "PASS" : "FAIL"}: ${name} (shutdown)${cond ? "" : formatCheckDetail(detail)}`);
 }
+class JourneyEarlyStopError extends Error {
+  constructor(target) {
+    super(`CAP_JOURNEY_STOP_AFTER: ${target}`);
+    this.name = "JourneyEarlyStopError";
+    this.target = target;
+  }
+}
+
+function isIntentionalEarlyStop(err, configuredTarget) {
+  if (!configuredTarget) return false;
+  if (err instanceof JourneyEarlyStopError && err.target === configuredTarget) {
+    return true;
+  }
+  const msg = String(err?.message ?? err);
+  return msg === `CAP_JOURNEY_STOP_AFTER: ${configuredTarget}` ||
+         msg === `Error: CAP_JOURNEY_STOP_AFTER: ${configuredTarget}`;
+}
+
 function check(name, cond, detail) {
   if (ran.has(name)) throw new Error(`duplicate assertion: ${name}`);
   lastStartedCheck = name;
@@ -729,8 +747,9 @@ function check(name, cond, detail) {
   results.push(!cond && detail !== undefined ? { name, pass: false, detail } : { name, pass: !!cond });
   console.log(`${cond ? "PASS" : "FAIL"}: ${name}${cond ? "" : formatCheckDetail(detail)}`);
   updateFrontier(name);
-  if (typeof Deno !== "undefined" && Deno.env?.get?.("CAP_JOURNEY_STOP_AFTER") === name) {
-    throw new Error(`CAP_JOURNEY_STOP_AFTER: ${name}`);
+  const stopTarget = typeof Deno !== "undefined" ? Deno.env?.get?.("CAP_JOURNEY_STOP_AFTER") : null;
+  if (stopTarget && stopTarget === name) {
+    throw new JourneyEarlyStopError(name);
   }
 }
 
@@ -1323,92 +1342,90 @@ async function writeEvidence(name, bytes) {
 
 async function main() {
   const profile = homeCacheProfile(`j2-${Date.now()}`);
-  await Deno.mkdir(EVIDENCE_DIR, { recursive: true }).catch(() => {});
   let proc: Deno.ChildProcess | null = null;
   let port;
   let ws;
   let cdp;
   let mainException: any = null;
   let intentionalEarlyStop = false;
-  // qk7p flagged a CDP evaluate timeout as environmental. 9t1p: that verdict is
-  // only true when the BOX says so, so the abort now carries the reading that
-  // decided it (null until an evaluate timeout is actually classified).
   let evaluateTimeoutVerdict: EvaluateTimeoutVerdict | null = null;
-
-  // A local HTTP fixture server (red page + wrong-origin page) for a REAL
-  // screenshot target that isn't a chrome-extension:// page.
-  // Every request the fixture receives (the script-fetch journey asserts a
-  // refused loopback fetch never reaches it).
-  const fixtureHits = [];
-  // The /answered provider lane's answer text (the budget-verdict journey
-  // asserts it is the run's result) and its call counter (unique ids per step).
-  const ANSWERED_TEXT = "Every tab is read. Digest: FACT-01 on page 1 reports 37 units (journey answer).";
-  let answeredCalls = 0;
-  const fixture = Deno.serve({ port: 0, hostname: "127.0.0.1" }, (req) => {
-    const u = new URL(req.url);
-    fixtureHits.push(u.pathname + u.search);
-    if (u.pathname === "/red.html") {
-      return new Response(
-        `<html><body style="margin:0;background:#ff0000;width:400px;height:300px"></body></html>`,
-        { headers: { "content-type": "text/html" } },
-      );
-    }
-    if (u.pathname === "/answered/v1/chat/completions") {
-      // CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01: a provider that ANSWERS
-      // while still working — every step streams the answer text AND one tool
-      // call (finish_reason tool_calls), so a bounded run ends only when its
-      // budget runs out, with the answer already written on its last allowed
-      // step. The run's verdict must be ok, never "Budget reached".
-      answeredCalls += 1;
-      const chunk = (delta, finish = null, usage = null) =>
-        `data: ${JSON.stringify({ id: `chatcmpl-answered-${answeredCalls}`, object: "chat.completion.chunk", created: 0, model: "answers-while-working", choices: [{ index: 0, delta, finish_reason: finish }], ...(usage ? { usage } : {}) })}\n\n`;
-      const body = chunk({ role: "assistant", content: ANSWERED_TEXT }) +
-        chunk({ tool_calls: [{ index: 0, id: `call_answered_${answeredCalls}`, type: "function", function: { name: "search_tools", arguments: JSON.stringify({ query: "memory_get", limit: 1 }) } }] }) +
-        chunk({}, "tool_calls", { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }) +
-        "data: [DONE]\n\n";
-      return new Response(body, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } });
-    }
-    if (u.pathname.endsWith("/chat/completions")) {
-      // An OpenAI-shaped 401 for the provider-error-truth journey: the body
-      // echoes a key-shaped token exactly the way OpenAI does, so the journey
-      // also proves the bubble never carries it.
-      return new Response(
-        JSON.stringify({ error: { type: "authentication_error", code: "invalid_api_key", message: "Incorrect API key provided: sk-journey-invalid-0000. You can find your API key at the provider dashboard." } }),
-        { status: 401, headers: { "content-type": "application/json" } },
-      );
-    }
-    // CAP-FB-20260830-SKILLS-UNCAPPED-01: a >64KiB skill fixture (the old cap
-    // rejected anything over 65536 bytes — the owner hit 303729). Served as a
-    // plain SKILL.md URL so the REAL import path (fetchDirectSkill →
-    // readSkillText) must accept it.
-    if (u.pathname === "/big-skill/SKILL.md") {
-      const body =
-        "---\nname: Big Fixture Skill\ndescription: A large multi-file skill fixture (SKILLS-UNCAPPED-01)\n---\n\n# Big Fixture Skill\n\n" +
-        "lorem ipsum dolor sit amet, consectetur adipiscing elit\n".repeat(9000);
-      return new Response(body, { headers: { "content-type": "text/markdown; charset=utf-8" } });
-    }
-    if (u.pathname === "/big-skill/scripts/helper.md") {
-      return new Response("# helper\n\nA supporting file in scripts/.\n", { headers: { "content-type": "text/markdown; charset=utf-8" } });
-    }
-    // CAP-FB-20260831-SKILL-LIST-SYNC-01 r2: an imported skill whose name
-    // slugs to a BUILT-IN BACKGROUND recipe's id (auto-group-by-domain, the
-    // Sorting Hat). The import must be offered as imported:auto-group-by-domain
-    // and never resolve to the background recipe.
-    if (u.pathname === "/collide/SKILL.md") {
-      const body =
-        "---\nname: Auto Group By Domain\ndescription: An imported skill that collides with the Sorting Hat recipe id\n---\n\n# Colliding Import\n\nGroup domains into sets for review. (imported body marker: COLLIDE-IMPORTED-BODY)\n";
-      return new Response(body, { headers: { "content-type": "text/markdown; charset=utf-8" } });
-    }
-    return new Response(`<html><body>fixture ${u.pathname}</body></html>`, {
-      headers: { "content-type": "text/html" },
-    });
-  });
-  const fixturePort = fixture.addr.port;
-  const RED_ORIGIN = `http://127.0.0.1:${fixturePort}`;
-  const RED_URL = `${RED_ORIGIN}/red.html`;
+  let fixture: any = null;
   let fixtureShutdownFailed = false;
 
   try {
+    await Deno.mkdir(EVIDENCE_DIR, { recursive: true }).catch(() => {});
+
+    // A local HTTP fixture server (red page + wrong-origin page) for a REAL
+    // screenshot target that isn't a chrome-extension:// page.
+    // Every request the fixture receives (the script-fetch journey asserts a
+    // refused loopback fetch never reaches it).
+    const fixtureHits = [];
+    // The /answered provider lane's answer text (the budget-verdict journey
+    // asserts it is the run's result) and its call counter (unique ids per step).
+    const ANSWERED_TEXT = "Every tab is read. Digest: FACT-01 on page 1 reports 37 units (journey answer).";
+    let answeredCalls = 0;
+    fixture = Deno.serve({ port: 0, hostname: "127.0.0.1" }, (req) => {
+      const u = new URL(req.url);
+      fixtureHits.push(u.pathname + u.search);
+      if (u.pathname === "/red.html") {
+        return new Response(
+          `<html><body style="margin:0;background:#ff0000;width:400px;height:300px"></body></html>`,
+          { headers: { "content-type": "text/html" } },
+        );
+      }
+      if (u.pathname === "/answered/v1/chat/completions") {
+        // CAP-FB-20260902-BUDGET-VERDICT-ANSWERED-01: a provider that ANSWERS
+        // while still working — every step streams the answer text AND one tool
+        // call (finish_reason tool_calls), so a bounded run ends only when its
+        // budget runs out, with the answer already written on its last allowed
+        // step. The run's verdict must be ok, never "Budget reached".
+        answeredCalls += 1;
+        const chunk = (delta, finish = null, usage = null) =>
+          `data: ${JSON.stringify({ id: `chatcmpl-answered-${answeredCalls}`, object: "chat.completion.chunk", created: 0, model: "answers-while-working", choices: [{ index: 0, delta, finish_reason: finish }], ...(usage ? { usage } : {}) })}\n\n`;
+        const body = chunk({ role: "assistant", content: ANSWERED_TEXT }) +
+          chunk({ tool_calls: [{ index: 0, id: `call_answered_${answeredCalls}`, type: "function", function: { name: "search_tools", arguments: JSON.stringify({ query: "memory_get", limit: 1 }) } }] }) +
+          chunk({}, "tool_calls", { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }) +
+          "data: [DONE]\n\n";
+        return new Response(body, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } });
+      }
+      if (u.pathname.endsWith("/chat/completions")) {
+        // An OpenAI-shaped 401 for the provider-error-truth journey: the body
+        // echoes a key-shaped token exactly the way OpenAI does, so the journey
+        // also proves the bubble never carries it.
+        return new Response(
+          JSON.stringify({ error: { type: "authentication_error", code: "invalid_api_key", message: "Incorrect API key provided: sk-journey-invalid-0000. You can find your API key at the provider dashboard." } }),
+          { status: 401, headers: { "content-type": "application/json" } },
+        );
+      }
+      // CAP-FB-20260830-SKILLS-UNCAPPED-01: a >64KiB skill fixture (the old cap
+      // rejected anything over 65536 bytes — the owner hit 303729). Served as a
+      // plain SKILL.md URL so the REAL import path (fetchDirectSkill →
+      // readSkillText) must accept it.
+      if (u.pathname === "/big-skill/SKILL.md") {
+        const body =
+          "---\nname: Big Fixture Skill\ndescription: A large multi-file skill fixture (SKILLS-UNCAPPED-01)\n---\n\n# Big Fixture Skill\n\n" +
+          "lorem ipsum dolor sit amet, consectetur adipiscing elit\n".repeat(9000);
+        return new Response(body, { headers: { "content-type": "text/markdown; charset=utf-8" } });
+      }
+      if (u.pathname === "/big-skill/scripts/helper.md") {
+        return new Response("# helper\n\nA supporting file in scripts/.\n", { headers: { "content-type": "text/markdown; charset=utf-8" } });
+      }
+      // CAP-FB-20260831-SKILL-LIST-SYNC-01 r2: an imported skill whose name
+      // slugs to a BUILT-IN BACKGROUND recipe's id (auto-group-by-domain, the
+      // Sorting Hat). The import must be offered as imported:auto-group-by-domain
+      // and never resolve to the background recipe.
+      if (u.pathname === "/collide/SKILL.md") {
+        const body =
+          "---\nname: Auto Group By Domain\ndescription: An imported skill that collides with the Sorting Hat recipe id\n---\n\n# Colliding Import\n\nGroup domains into sets for review. (imported body marker: COLLIDE-IMPORTED-BODY)\n";
+        return new Response(body, { headers: { "content-type": "text/markdown; charset=utf-8" } });
+      }
+      return new Response(`<html><body>fixture ${u.pathname}</body></html>`, {
+        headers: { "content-type": "text/html" },
+      });
+    });
+    const fixturePort = fixture.addr.port;
+    const RED_ORIGIN = `http://127.0.0.1:${fixturePort}`;
+    const RED_URL = `${RED_ORIGIN}/red.html`;
     // The launcher bounds both phases itself: the serialized-Chrome lock wait
     // (queued behind another lane's browser, printed when it happens) and the
     // 20 s wait for this child's own DevTools endpoint.
@@ -8948,7 +8965,8 @@ async function main() {
       console.error(`ENVIRONMENT: ${evaluateTimeoutVerdict.environment}`);
       console.error(`evaluate-timeout cause: ${evaluateTimeoutVerdict.cause} — ${evaluateTimeoutVerdict.reason}`);
     }
-    if (String(e?.message ?? e).includes("CAP_JOURNEY_STOP_AFTER:")) {
+    const stopTarget = typeof Deno !== "undefined" ? Deno.env?.get?.("CAP_JOURNEY_STOP_AFTER") : null;
+    if (isIntentionalEarlyStop(e, stopTarget)) {
       intentionalEarlyStop = true;
       console.log(`journey early stop: ${String(e?.message ?? e)}`);
     } else {
@@ -8956,11 +8974,13 @@ async function main() {
       console.log("journey failure: " + String(e?.message ?? e));
     }
     try {
-      await withTimeout(fixture.shutdown(), 8000, "fixture.shutdown").catch(
-        () => {
-          fixtureShutdownFailed = true;
-        },
-      );
+      if (fixture) {
+        await withTimeout(fixture.shutdown(), 8000, "fixture.shutdown").catch(
+          () => {
+            fixtureShutdownFailed = true;
+          },
+        );
+      }
     } catch { /* ignore */ }
     try {
       cdp && (cdp.intentionalClose = true);

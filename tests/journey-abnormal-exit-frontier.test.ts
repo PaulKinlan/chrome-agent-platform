@@ -30,6 +30,12 @@ assert(printMatch, "printAbnormalExitSummary must be found");
 const evalFinalizationMatch = source.match(/function evaluateJourneyFinalization\([\s\S]*?\n\}\)\s*\{[\s\S]*?\n\}/);
 assert(evalFinalizationMatch, "evaluateJourneyFinalization must be found");
 
+// Extract JourneyEarlyStopError class and isIntentionalEarlyStop function
+const earlyStopClassMatch = source.match(/class JourneyEarlyStopError[\s\S]*?\n\}/);
+assert(earlyStopClassMatch, "JourneyEarlyStopError must be found");
+const isEarlyStopMatch = source.match(/function isIntentionalEarlyStop\([\s\S]*?\n\}/);
+assert(isEarlyStopMatch, "isIntentionalEarlyStop must be found");
+
 Deno.test("9ud9e: frontier tracks last-completed and advances last-started to the next EXPECTED assertion", () => {
   const ran = new Set<string>();
   const shutdownRan = new Set<string>();
@@ -214,4 +220,73 @@ Deno.test("9ud9e: evaluateJourneyFinalization handles clean pass, intentional ea
   assert(logText.includes('frontier check:        "c2"'));
   assert(logText.includes("unreached checks:      2 downstream checks were NOT REACHED"));
   assert(logText.includes("CDP error on click"));
+});
+
+Deno.test("9ud9e: isIntentionalEarlyStop accurately distinguishes matching sentinel from substring errors", () => {
+  const harness = new Function(
+    `${earlyStopClassMatch[0]}
+     ${isEarlyStopMatch[0]}
+     return { JourneyEarlyStopError, isIntentionalEarlyStop };`,
+  )();
+
+  const target = "create dialog: template select";
+
+  // 1. Genuine sentinel matching configured target
+  const sentinelErr = new harness.JourneyEarlyStopError(target);
+  assertEquals(harness.isIntentionalEarlyStop(sentinelErr, target), true);
+
+  // 2. Sentinel with wrong target
+  const wrongTargetErr = new harness.JourneyEarlyStopError("other check");
+  assertEquals(harness.isIntentionalEarlyStop(wrongTargetErr, target), false);
+
+  // 3. Exact matching string message
+  const exactMsgErr = new Error(`CAP_JOURNEY_STOP_AFTER: ${target}`);
+  assertEquals(harness.isIntentionalEarlyStop(exactMsgErr, target), true);
+
+  // 4. Substring containing error (the P1 vulnerability)
+  const substringErr = new Error(`Unexpected syntax error near CAP_JOURNEY_STOP_AFTER: ${target} in parser`);
+  assertEquals(harness.isIntentionalEarlyStop(substringErr, target), false);
+
+  // 5. Configured target is missing / null
+  assertEquals(harness.isIntentionalEarlyStop(sentinelErr, null), false);
+  assertEquals(harness.isIntentionalEarlyStop(exactMsgErr, undefined), false);
+});
+
+Deno.test("9ud9e: startup failures before any checks execute report EXPECTED[0] as frontier check", () => {
+  const logs: string[] = [];
+  const fakeConsole = {
+    log: (...args: any[]) => logs.push(args.join(" ")),
+    error: () => {},
+  };
+
+  const harness = new Function(
+    "console", "EXPECTED",
+    `let abnormalReported = false;
+     let lastCompletedCheck = null;
+     let lastStartedCheck = EXPECTED[0];
+     ${printMatch[0]}
+     ${evalFinalizationMatch[0]}
+     return { evaluateJourneyFinalization, isAbnormalReported: () => abnormalReported };`,
+  )(fakeConsole, EXPECTED);
+
+  // Simulate Deno.serve() or launchJourneyChrome() failing during startup:
+  // Zero checks have run. missing = all EXPECTED checks.
+  const startupOutcome = harness.evaluateJourneyFinalization({
+    intentionalEarlyStop: false,
+    results: [],
+    missing: [...EXPECTED],
+    mainException: new Error("Deno.serve failed: address already in use"),
+    frontierSnapshot: { lastCompletedCheck: null, lastStartedCheck: EXPECTED[0] },
+  });
+
+  assertEquals(startupOutcome.status, "abnormal_exit");
+  assertEquals(startupOutcome.missingCount, EXPECTED.length);
+  assertEquals(harness.isAbnormalReported(), true);
+
+  const logText = logs.join("\n");
+  assert(logText.includes("=== ABNORMAL JOURNEY EXIT ==="));
+  assert(logText.includes("last completed check:  (none)"));
+  assert(logText.includes(`frontier check:        "${EXPECTED[0]}"`));
+  assert(logText.includes(`unreached checks:      ${EXPECTED.length} downstream checks were NOT REACHED`));
+  assert(logText.includes("Deno.serve failed: address already in use"));
 });
