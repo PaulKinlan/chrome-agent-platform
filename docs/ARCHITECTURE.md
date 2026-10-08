@@ -406,6 +406,21 @@ sends recheck the live Chrome grant. **No /tabs permission prompt, attached
 run/document binding, model descriptor disclosure or unenrolled invocation is
 part of this D2 landing**; those remain in chrome-agent-platform-ckebt.
 
+### 4.4b Attached-tab descriptor boundary (3p3e.3 / ckebt, partial)
+The enrolled-origin principal retains its existing directory and exact-tool
+consent path. The passive detector and chip remain **count-only**. Paul approved
+Q2 disclosure of bounded, untrusted *declared* descriptors to the model before
+per-tool approval, never inferred page-JS tools or an execution grant. The
+selected candidate is an internal run-scoped binding of Chrome-attested
+`tabId`, `documentId`, origin, and count; attachment text and URL grant nothing.
+`extension/lib/attached-webmcp-declared.js` is currently an uncalled reader
+library: it accepts only a fresh `document.modelContext.getTools()` result on
+the exact top frame, with Chrome-owned document/origin checks before and after,
+strict descriptor/total caps and a separate untrusted-fence projection. It is
+**not yet wired to the hub model or any invocation route**; no page tool may
+run until per-tool consent and the required WAL row are separately wired and
+verified. The enrolled path's checks remain unchanged.
+
 ### 4.5 Fallback paths
 Pages without WebMCP: the six page-action tools (`find_elements`,
 `click_element`, `type_text`, `select_option`, `scroll_page`, `wait_for` —
