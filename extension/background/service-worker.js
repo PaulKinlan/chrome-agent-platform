@@ -183,6 +183,8 @@ import {
   reportWebmcpDetection,
 } from "../lib/webmcp-detection-registry.js";
 import { attestCurrentAttachedWebmcpTab } from "../lib/attached-webmcp-attestation.js";
+import { bindAttachedWebmcpRun } from "../lib/attached-webmcp-run.js";
+import { createEphemeralSiteToolConsentStore } from "../lib/ephemeral-site-tool-consent.js";
 import {
   hasPermission,
   hasCapability,
@@ -1934,6 +1936,8 @@ const trustedSiteToolAuthorizations = new WeakSet();
 // promise }. The record exists before the approval row does, so a Settings
 // reset can fence work even while its required audit write is still queued.
 const pendingSiteToolConsent = new Map();
+// In-memory only: there is no origin site store until an explicit owner enroll.
+const ephemeralSiteToolConsentStore = createEphemeralSiteToolConsentStore();
 const cancellingApprovalExecutions = new Set();
 let siteToolProfileEpoch = 0;
 let siteToolResetting = 0;
@@ -4193,6 +4197,7 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
     // slot. This run builds a management toolset that CAPTURES executionId.
     let abortNow = null;
     let orch = null;
+    let ephemeralAttachedRun = null;
     let heartbeatFailed = false;
     let taskJournalReceipt = null;
     let taskJournalGuard = null;
@@ -4244,6 +4249,37 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
         .map((a) => ({ grantId: a.grantId, name: a.folderName || a.name || "folder" }));
       setRunContext({ threadId, agentRole, agentSurfaceRef, folderGrants: runFolderGrants });
       if (delegationState) activeDelegationRuns.set(executionId, delegationState);
+      // Only a live hub run can bind the owner's /tabs attachment. Capture
+      // Chrome's top-level document AGAIN at run start: a navigation between
+      // owner pick and dispatch fails closed, as does an SW restart (durable
+      // attachment snapshots deliberately omit tabId/documentId). This creates
+      // no worker, model descriptor, siteMemory(origin), or execution grant.
+      if (agentRole === "hub" && !scoped && !scheduled && !harnessId &&
+        Array.isArray(attachments) && attachments.some((a) => a?.kind === "tab" && a.documentId)) {
+        try {
+          const [registry, enrolledOrigins] = await Promise.all([
+            listKnownWebmcpOrigins(), listOrigins(),
+          ]);
+          const runEpoch = siteToolProfileEpoch;
+          ephemeralAttachedRun = await bindAttachedWebmcpRun({
+            attachments, runId: executionId, threadId,
+            consentStore: ephemeralSiteToolConsentStore,
+            attest: (tabId) => attestCurrentAttachedWebmcpTab(tabId, {
+              registry, enrolledOrigins,
+              getTab: (id) => chrome.tabs.get(id),
+              executeTopFrame: (id) => chrome.scripting.executeScript({
+                target: { tabId: id, frameIds: [0] }, world: "ISOLATED", func: () => true,
+              }),
+            }),
+            allowOrigin: (origin) => isWebmcpOriginAllowed(webmcpAllowlistForAgent(agentTools), origin),
+            runActive: () => activeExecutions.has(executionId) &&
+              siteToolResetting === 0 && siteToolProfileEpoch === runEpoch && !fence?.signal?.aborted,
+          });
+        } catch {
+          // No attached-tool authority is safer than borrowing the model's
+          // ambient browser tools when the browser attestation is unavailable.
+        }
+      }
       if (acpConfig) {
         const ready = await ensureOffscreen();
         if (!ready.ok) throw new Error(ready.error);
@@ -4793,6 +4829,7 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
       try { error.executionId = executionId; } catch { /* immutable error */ }
       throw error;
     } finally {
+      ephemeralAttachedRun?.end(); // opaque run tokens die before async cleanup
       if (acpConfig) modelOverride?.close?.();
       acpRunPermissions.cancel(executionId);
       clearInterval(durableHeartbeat);
