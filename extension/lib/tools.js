@@ -349,18 +349,20 @@ export async function isEnrolled(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return false;
   const map = await enrolledMap();
-  return Boolean(map[canonical] && map[canonical].enrolled === true && !map[canonical].phase);
+  return Boolean(map[canonical] && map[canonical].enrolled === true && !map[canonical].phase && !map[canonical].promotionPending);
 }
 
 /** The enrollment GENERATION for an origin — the revocation fence. Every
  * delegation/invocation path revalidates this (see service-worker agent.delegate
  * + invokeSiteTool) so a delete tombstones + bumps the generation atomically, and
  * a stale bridge/worker reference from before the delete is rejected. */
-export async function enrollmentGeneration(origin) {
+export async function enrollmentGeneration(origin, { requireActive = false } = {}) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return 0;
   const map = await enrolledMap();
-  return map[canonical]?.gen ?? 0;
+  const row = map[canonical];
+  if (requireActive && (row?.enrolled !== true || row?.phase || row?.promotionPending)) return 0;
+  return row?.gen ?? 0;
 }
 
 /** An ATOMIC snapshot of an origin's enrollment (enrolled + generation +
@@ -377,7 +379,8 @@ export async function enrollmentSnapshot(origin) {
     const map = await enrolledMap();
     const e = map[canonical];
     return {
-      enrolled: Boolean(e && e.enrolled === true && !e.phase),
+      enrolled: Boolean(e && e.enrolled === true && !e.phase && !e.promotionPending),
+      ...(e?.promotionPending ? { pending: true } : {}),
       gen: e?.gen ?? 0,
       policy: isSiteToolPolicy(e?.policy) ? e.policy : DEFAULT_SITE_TOOL_POLICY,
     };
@@ -410,7 +413,7 @@ export async function setEnrollmentPolicy(origin, policy, { commitGuard = null }
   return withEnrollmentLock(async () => {
     const map = await enrolledMap();
     const entry = map[canonical];
-    if (!entry || entry.enrolled !== true || entry.phase) {
+    if (!entry || entry.enrolled !== true || entry.phase || entry.promotionPending) {
       throw new Error(`origin ${canonical} is not enrolled`);
     }
     if (entry.policy === policy) return policy;
@@ -469,8 +472,9 @@ export async function prepareEnrollmentPromotion(origin, records, { commitGuard 
     const priorEnvelope = await siteMemory(canonical).getStrict(SITE_TOOL_CONSENT_KEY);
     if (priorEnvelope !== null) throw new Error("site_enrollment_existing_consent_requires_review");
     const gen = await nextGeneration({ requireDurable: true });
-    const pending = { enrolled: false, phase: "promotion-pending", gen,
-      at: Date.now(), policy: DEFAULT_SITE_TOOL_POLICY, freshConsentEnvelope: true, decisions };
+    const pending = { enrolled: true, phase: "promotion-pending", gen,
+      at: Date.now(), policy: DEFAULT_SITE_TOOL_POLICY, freshConsentEnvelope: true,
+      promotionPending: decisions };
     if (commitGuard && commitGuard() !== true) throw new Error("site_enrollment_promotion_cancelled");
     map[canonical] = pending;
     if (await kvSetDurable({ [ENROLL_KEY]: map }) !== "durable") throw new Error("site_enrollment_not_durable");
@@ -478,41 +482,42 @@ export async function prepareEnrollmentPromotion(origin, records, { commitGuard 
   });
 }
 
-/** Idempotently write/verify the pending same-generation consent envelope,
- * then make ONE durable enrolled:true registry flip. On any fault the durable
- * pending copy is inert and retryable. Recovery needs no vanished run tokens.
+/** Verify the exact-generation consent envelope and Chrome-owned host/script
+ * preconditions BEFORE clearing promotionPending. That one durable clear is
+ * the sole authority flip; every fault leaves the same registry copy inert.
  */
-export async function completeEnrollmentPromotion(origin, gen, { commitGuard = null } = {}) {
+export async function completeEnrollmentPromotion(origin, gen, { commitGuard = null, beforeFlip = null } = {}) {
   const canonical = canonicalOrigin(origin);
   if (!canonical || !Number.isSafeInteger(gen) || gen < 1 ||
     (commitGuard !== null && typeof commitGuard !== "function")) throw new Error("site_enrollment_promotion_invalid");
   return withEnrollmentLock(async () => {
     const map = await enrolledMap();
     const entry = map[canonical];
-    if (entry?.enrolled !== false || entry.gen !== gen ||
-      (entry.phase !== "promotion-pending" && entry.phase !== "promotion-retry" &&
-        entry.phase !== "policy-pending")) {
+    if (entry?.gen !== gen || (entry.phase !== "promotion-pending" &&
+      entry.phase !== "promotion-retry" && entry.phase !== "policy-pending")) {
       throw new Error("site_enrollment_promotion_stale");
     }
     if (entry.phase === "policy-pending") {
       return withSiteToolConsentBarrier(() => completePolicyPromotionLocked(canonical, map, entry, commitGuard));
     }
-    if (entry.freshConsentEnvelope !== true) throw new Error("site_enrollment_promotion_unverified");
-    const decisions = validateSiteToolPromotionRecords(entry.decisions);
+    if (entry.enrolled !== true || entry.freshConsentEnvelope !== true ||
+      typeof beforeFlip !== "function") throw new Error("site_enrollment_promotion_unverified");
+    const decisions = validateSiteToolPromotionRecords(entry.promotionPending);
     if (commitGuard && commitGuard() !== true) throw new Error("site_enrollment_promotion_cancelled");
     return await withSiteToolConsentBarrier(async () => {
       await promoteEphemeralSiteToolConsents(canonical, gen, decisions, {
         commitGuard, consentLockHeld: true, recoverPending: true,
       });
       await verifyPromotedSiteToolConsents(canonical, gen, decisions);
+      // The callback checks ensureOriginScriptsRegistered AND Chrome-owned host
+      // permission. It runs while origin→enrollment→consent remain held.
+      const ready = await beforeFlip(canonical);
+      if (ready?.scriptsRegistered !== true || ready?.hostGranted !== true) {
+        throw new Error("site_enrollment_promotion_precondition_missing");
+      }
       if (commitGuard && commitGuard() !== true) throw new Error("site_enrollment_promotion_cancelled");
-      // Still under enrollment→consent: no stale consent writer can overwrite
-      // the verified envelope between read-back and the sole authority flip.
-      const { phase: _phase, decisions: _decisions, freshConsentEnvelope: _fresh, ...ready } = entry;
-      // Keep a bounded durable rollback receipt until script registration
-      // succeeds. A failed registration must not lose a sticky Deny or re-ask.
-      map[canonical] = { ...ready, enrolled: true,
-        promotionReceipt: { decisions, freshConsentEnvelope: true } };
+      const { phase: _phase, promotionPending: _pending, freshConsentEnvelope: _fresh, ...authorized } = entry;
+      map[canonical] = { ...authorized, enrolled: true };
       if (await kvSetDurable({ [ENROLL_KEY]: map }) !== "durable") throw new Error("site_enrollment_not_durable");
       return Object.freeze({ origin: canonical, gen, enrolled: true });
     });
@@ -526,51 +531,12 @@ export async function completeEnrollmentPromotion(origin, gen, { commitGuard = n
 export async function listPendingEnrollmentPromotions() {
   const map = await enrolledMap();
   return Object.entries(map)
-    .filter(([, row]) => row?.enrolled === false &&
-      (row.phase === "promotion-pending" || row.phase === "promotion-retry" ||
-        row.phase === "policy-pending") &&
+    .filter(([, row]) => ((row?.enrolled === true &&
+      (row.phase === "promotion-pending" || row.phase === "promotion-retry") &&
+      Array.isArray(row.promotionPending)) ||
+      (row?.enrolled === false && row.phase === "policy-pending")) &&
       Number.isSafeInteger(row.gen) && row.gen > 0)
     .map(([origin, row]) => Object.freeze({ origin, gen: row.gen, phase: row.phase }));
-}
-
-/** Registration failed AFTER the verified authority flip: atomically remove
- * authority FIRST, but keep the durable Allow+Deny receipt for an idempotent
- * retry on a new generation. Cleanup of scripts/host/OPFS follows this write.
- */
-export async function rollbackEnrollmentPromotion(origin, gen) {
-  const canonical = canonicalOrigin(origin);
-  if (!canonical || !Number.isSafeInteger(gen) || gen < 1) throw new Error("site_enrollment_promotion_invalid");
-  return withEnrollmentLock(async () => {
-    const map = await enrolledMap();
-    const entry = map[canonical];
-    if (entry?.enrolled !== true || entry.gen !== gen || !entry.promotionReceipt) {
-      throw new Error("site_enrollment_promotion_stale");
-    }
-    const decisions = validateSiteToolPromotionRecords(entry.promotionReceipt.decisions);
-    const retryGen = await nextGeneration({ requireDurable: true });
-    map[canonical] = { enrolled: false, phase: "promotion-retry", gen: retryGen,
-      at: Date.now(), policy: DEFAULT_SITE_TOOL_POLICY, freshConsentEnvelope: true, decisions };
-    await kvSetDurable({ [ENROLL_KEY]: map });
-    return Object.freeze({ origin: canonical, gen: retryGen, phase: "promotion-retry" });
-  });
-}
-
-/** Remove the rollback receipt only after script registration succeeds. This
- * does not change authority or generation; failure leaves the receipt safe.
- */
-export async function finalizeEnrollmentPromotionReceipt(origin, gen) {
-  const canonical = canonicalOrigin(origin);
-  if (!canonical || !Number.isSafeInteger(gen) || gen < 1) throw new Error("site_enrollment_promotion_invalid");
-  return withEnrollmentLock(async () => {
-    const map = await enrolledMap();
-    const entry = map[canonical];
-    if (entry?.enrolled !== true || entry.gen !== gen) throw new Error("site_enrollment_promotion_stale");
-    if (!entry.promotionReceipt) return true;
-    const { promotionReceipt: _receipt, ...ready } = entry;
-    map[canonical] = ready;
-    await kvSetDurable({ [ENROLL_KEY]: map });
-    return true;
-  });
 }
 
 /** Owner abandonment tombstones the pending authority FIRST. A failed OPFS
@@ -583,7 +549,7 @@ export async function abandonEnrollmentPromotion(origin, gen) {
     const map = await enrolledMap();
     const row = map[canonical];
     if ((row?.phase !== "promotion-pending" && row?.phase !== "promotion-retry") ||
-      row.enrolled !== false || row.gen !== gen) {
+      row.enrolled !== true || !Array.isArray(row.promotionPending) || row.gen !== gen) {
       throw new Error("site_enrollment_promotion_stale");
     }
     map[canonical] = { enrolled: false, at: Date.now(), gen: await nextGeneration({ requireDurable: true }),
@@ -628,11 +594,11 @@ export async function enrollOrigin(origin) {
   if (!canonical) throw new Error(`invalid origin: ${origin}`);
   return withEnrollmentLock(async () => {
     const map = await enrolledMap();
-    if (map[canonical]?.phase) throw new Error("site_enrollment_promotion_pending");
+    if (map[canonical]?.phase || map[canonical]?.promotionPending) throw new Error("site_enrollment_promotion_pending");
     if (map[canonical]?.enrolled === true) {
       // Repeating create/enroll must not bump the generation and silently
       // discard a previously sticky Deny in the generation-bound envelope.
-      return Object.keys(map).filter((o) => map[o]?.enrolled === true);
+      return listOrigins();
     }
     // Existing management enrollment still creates its own Site Agent, but a
     // pending owner's promotion must never be overwritten by that pathway.
@@ -652,7 +618,7 @@ export async function enrollOrigin(origin) {
       policy: DEFAULT_SITE_TOOL_POLICY,
     };
     await kvSet({ [ENROLL_KEY]: map });
-    return Object.keys(map).filter((o) => map[o]?.enrolled === true);
+    return listOrigins();
   });
 }
 
@@ -694,7 +660,7 @@ export async function disenrollOriginLocked(origin) {
     }
     await kvSet({ [ENROLL_KEY]: map });
   }
-  return Object.keys(map).filter((o) => map[o]?.enrolled === true);
+  return listOrigins();
 }
 
 /** Exact-tool consent layered over enrollment. Absence is ASK, Allow is

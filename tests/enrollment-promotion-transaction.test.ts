@@ -1,12 +1,12 @@
 // @ts-nocheck — Chrome/OPFS fault fakes intentionally implement a narrow surface.
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
+import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { kvGet } from "../extension/lib/kv.js";
-import { listOrigins } from "../extension/lib/memory.js";
+import { listOrigins, siteMemory } from "../extension/lib/memory.js";
 import {
-  completeEnrollmentPromotion, disenrollOrigin, enrollOrigin, enrollmentSnapshot,
-  isEnrolled, prepareEnrollmentPromotion, setEnrollmentPolicy,
+  abandonEnrollmentPromotion, completeEnrollmentPromotion, disenrollOrigin, enrollOrigin,
+  enrollmentGeneration, enrollmentSnapshot, isEnrolled, prepareEnrollmentPromotion, setEnrollmentPolicy,
 } from "../extension/lib/tools.js";
-import { siteToolConsentSnapshot, siteToolIdentity } from "../extension/lib/site-tool-consent.js";
+import { SITE_TOOL_CONSENT_KEY, siteToolConsentSnapshot, siteToolIdentity } from "../extension/lib/site-tool-consent.js";
 
 const data = new Map();
 let storageGranted = true;
@@ -24,7 +24,8 @@ Object.defineProperty(globalThis, "chrome", { configurable: true, writable: true
     },
     set: async (values) => {
       const map = values["cap:enrollment"];
-      if (failRegistryFlip && map && Object.values(map).some((entry) => entry?.enrolled === true)) {
+      if (failRegistryFlip && map && Object.values(map).some((entry) =>
+        entry?.enrolled === true && !entry.phase && !entry.promotionPending)) {
         throw new Error("simulated authority flip failure");
       }
       for (const [key, value] of Object.entries(values)) data.set(key, structuredClone(value));
@@ -73,105 +74,121 @@ Object.defineProperty(globalThis, "navigator", { configurable: true, writable: t
 
 const allowTool = { name: "find_items", description: "Find items", source: "declared", inputSchema: { type: "object", properties: {} } };
 const denyTool = { ...allowTool, name: "erase_items" };
+const ready = async () => ({ scriptsRegistered: true, hostGranted: true });
+const complete = (origin: string, gen: number, opts = {}) =>
+  completeEnrollmentPromotion(origin, gen, { beforeFlip: ready, ...opts });
 function decisions(origin) {
   return [
     { name: allowTool.name, source: "declared", identityDigest: siteToolIdentity(origin, allowTool).identityDigest, state: "allowed" },
     { name: denyTool.name, source: "declared", identityDigest: siteToolIdentity(origin, denyTool).identityDigest, state: "denied" },
   ];
 }
+const pending = async (origin: string) => (await kvGet("cap:enrollment"))["cap:enrollment"]?.[origin];
 
-Deno.test("D2: registry contains BOTH decisions before authority; recovery promotes from durable copy", async () => {
+Deno.test("D2: durable enrolled:true+promotionPending carries BOTH decisions but all readers refuse authority", async () => {
   const origin = "https://promotion-recover.example";
-  const prepared = await prepareEnrollmentPromotion(origin, decisions(origin));
-  assertEquals(prepared.phase, "promotion-pending");
+  const { gen } = await prepareEnrollmentPromotion(origin, decisions(origin));
+  assertEquals((await pending(origin)).enrolled, true);
+  assertEquals((await pending(origin)).promotionPending.map((row) => row.state), ["allowed", "denied"]);
   assertEquals(await isEnrolled(origin), false);
+  assertEquals(await enrollmentGeneration(origin, { requireActive: true }), 0,
+    "locked-audit exception must not infer authority from a pending gen");
+  assertEquals(await enrollmentGeneration(origin), gen, "raw generation remains available for tombstone lifecycle");
+  assertEquals((await enrollmentSnapshot(origin)).pending, true);
   assertEquals((await listOrigins()).includes(origin), false);
-  const pending = (await kvGet("cap:enrollment"))["cap:enrollment"][origin];
-  assertEquals(pending.enrolled, false);
-  assertEquals(pending.decisions.map((row) => row.state), ["allowed", "denied"]);
-  // This completion has no ephemeral-run token; it is the worker-restart path.
-  await completeEnrollmentPromotion(origin, prepared.gen);
+  // Worker restart: the durable copy, not a vanished run token, is authoritative.
+  await complete(origin, gen);
   assertEquals(await isEnrolled(origin), true);
-  assertEquals((await enrollmentSnapshot(origin)).gen, prepared.gen);
-  assertEquals((await siteToolConsentSnapshot(origin, allowTool, prepared.gen)).state, "allowed");
-  assertEquals((await siteToolConsentSnapshot(origin, denyTool, prepared.gen)).state, "denied");
+  assertEquals((await pending(origin)).promotionPending, undefined);
+  assertEquals((await siteToolConsentSnapshot(origin, allowTool, gen)).state, "allowed");
+  assertEquals((await siteToolConsentSnapshot(origin, denyTool, gen)).state, "denied");
 });
 
-Deno.test("D2: failed consent write leaves inert durable pending; retry preserves sticky Deny", async () => {
+Deno.test("D2: consent write failure leaves inert registry copy and retry preserves Deny", async () => {
   const origin = "https://promotion-write-fail.example";
   const { gen } = await prepareEnrollmentPromotion(origin, decisions(origin));
   failConsentWrite = true;
-  try { await assertRejects(() => completeEnrollmentPromotion(origin, gen), Error, "simulated consent write failure"); }
+  try { await assertRejects(() => complete(origin, gen), Error, "simulated consent write failure"); }
   finally { failConsentWrite = false; }
+  assertEquals((await pending(origin)).promotionPending.length, 2);
   assertEquals(await isEnrolled(origin), false);
-  assertEquals((await kvGet("cap:enrollment"))["cap:enrollment"][origin].phase, "promotion-pending");
-  await completeEnrollmentPromotion(origin, gen);
+  await complete(origin, gen);
   assertEquals((await siteToolConsentSnapshot(origin, denyTool, gen)).state, "denied");
 });
 
-Deno.test("D2: failure after verified envelope but before registry flip stays pending and retries", async () => {
-  const origin = "https://promotion-flip-fail.example";
+Deno.test("D2: host or either registered script missing keeps pending after verified envelope", async () => {
+  const origin = "https://promotion-script-missing.example";
   const { gen } = await prepareEnrollmentPromotion(origin, decisions(origin));
-  failRegistryFlip = true;
-  try { await assertRejects(() => completeEnrollmentPromotion(origin, gen), Error, "simulated authority flip failure"); }
-  finally { failRegistryFlip = false; }
-  assertEquals(await isEnrolled(origin), false);
-  assertEquals((await kvGet("cap:enrollment"))["cap:enrollment"][origin].phase, "promotion-pending");
-  await completeEnrollmentPromotion(origin, gen);
-  assertEquals((await siteToolConsentSnapshot(origin, denyTool, gen)).state, "denied");
+  for (const result of [
+    { scriptsRegistered: false, hostGranted: true },
+    { scriptsRegistered: true, hostGranted: false },
+  ]) {
+    await assertRejects(() => complete(origin, gen, { beforeFlip: async () => result }), Error,
+      "site_enrollment_promotion_precondition_missing");
+    assertEquals((await pending(origin)).promotionPending.length, 2);
+    assertEquals((await enrollmentSnapshot(origin)).enrolled, false);
+    assertEquals((await listOrigins()).includes(origin), false);
+    assertEquals((await siteMemory(origin).getStrict(SITE_TOOL_CONSENT_KEY)).enrollmentGen, gen);
+  }
+  await complete(origin, gen); // boot retry after scripts + permission become available
+  assertEquals(await isEnrolled(origin), true);
 });
 
-Deno.test("D2: empty owner promotion still writes a same-gen envelope before authority", async () => {
-  const origin = "https://promotion-empty.example";
+Deno.test("D2: absent pre-flip proof cannot clear pending even after valid consent write", async () => {
+  const origin = "https://promotion-no-proof.example";
   const { gen } = await prepareEnrollmentPromotion(origin, []);
-  await completeEnrollmentPromotion(origin, gen);
-  assertEquals(await isEnrolled(origin), true);
-  const { siteMemory } = await import("../extension/lib/memory.js");
-  const { SITE_TOOL_CONSENT_KEY } = await import("../extension/lib/site-tool-consent.js");
+  await assertRejects(() => completeEnrollmentPromotion(origin, gen), Error,
+    "site_enrollment_promotion_unverified");
+  assertEquals(await isEnrolled(origin), false);
+  await complete(origin, gen);
   assertEquals((await siteMemory(origin).getStrict(SITE_TOOL_CONSENT_KEY)).enrollmentGen, gen);
 });
 
-Deno.test("D2: script-registration rollback keeps BOTH decisions in an inert retry row", async () => {
-  const origin = "https://promotion-rollback.example";
-  const proposal = decisions(origin);
-  const { gen } = await prepareEnrollmentPromotion(origin, proposal);
-  await completeEnrollmentPromotion(origin, gen);
-  const { rollbackEnrollmentPromotion, finalizeEnrollmentPromotionReceipt } = await import("../extension/lib/tools.js");
-  const rollback = await rollbackEnrollmentPromotion(origin, gen);
-  assertEquals(rollback.phase, "promotion-retry");
+Deno.test("D2: reset epoch loss after script proof cannot clear pending", async () => {
+  const origin = "https://promotion-reset-race.example";
+  const { gen } = await prepareEnrollmentPromotion(origin, decisions(origin));
+  let current = true;
+  await assertRejects(() => complete(origin, gen, {
+    commitGuard: () => current,
+    beforeFlip: async () => { current = false; return ready(); },
+  }), Error, "site_enrollment_promotion_cancelled");
+  assertEquals((await pending(origin)).promotionPending.length, 2);
   assertEquals(await isEnrolled(origin), false);
-  assertEquals((await kvGet("cap:enrollment"))["cap:enrollment"][origin].decisions, proposal);
-  await assertRejects(() => completeEnrollmentPromotion(origin, gen), Error, "site_enrollment_promotion_stale");
-  // Simulate script/OPFS cleanup and then a new owner gesture or boot retry.
-  const { siteMemory } = await import("../extension/lib/memory.js");
-  await siteMemory(origin).clear();
-  await completeEnrollmentPromotion(origin, rollback.gen);
-  assertEquals((await siteToolConsentSnapshot(origin, denyTool, rollback.gen)).state, "denied");
-  assertEquals((await siteToolConsentSnapshot(origin, allowTool, rollback.gen)).state, "allowed");
-  await finalizeEnrollmentPromotionReceipt(origin, rollback.gen);
-  assertEquals((await kvGet("cap:enrollment"))["cap:enrollment"][origin].promotionReceipt, undefined);
+  // If reset aborts without clearing this pending row, an owner may retry
+  // from the durable copy; a completed reset instead removes the row entirely.
+  await complete(origin, gen);
+  assertEquals((await siteToolConsentSnapshot(origin, denyTool, gen)).state, "denied");
 });
 
-Deno.test("D2: abandonment tombstones before cleanup; a stale completion cannot flip", async () => {
+Deno.test("D2: failed registry clear after verification stays pending and replays idempotently", async () => {
+  const origin = "https://promotion-flip-fail.example";
+  const { gen } = await prepareEnrollmentPromotion(origin, decisions(origin));
+  failRegistryFlip = true;
+  try { await assertRejects(() => complete(origin, gen), Error, "simulated authority flip failure"); }
+  finally { failRegistryFlip = false; }
+  assertEquals((await pending(origin)).promotionPending.length, 2);
+  assertEquals(await isEnrolled(origin), false);
+  await complete(origin, gen);
+  assertEquals((await siteToolConsentSnapshot(origin, denyTool, gen)).state, "denied");
+});
+
+Deno.test("D2: owner abandonment tombstones first; stale completion cannot clear a later generation", async () => {
   const origin = "https://promotion-abandon.example";
   const { gen } = await prepareEnrollmentPromotion(origin, decisions(origin));
-  const { abandonEnrollmentPromotion } = await import("../extension/lib/tools.js");
-  const result = await abandonEnrollmentPromotion(origin, gen);
-  assertEquals(result.abandoned, true);
-  await assertRejects(() => completeEnrollmentPromotion(origin, gen), Error, "site_enrollment_promotion_stale");
+  assertEquals((await abandonEnrollmentPromotion(origin, gen)).abandoned, true);
+  await assertRejects(() => complete(origin, gen), Error, "site_enrollment_promotion_stale");
   assertEquals(await isEnrolled(origin), false);
 });
 
-Deno.test("D2: permissionless storage cannot stage a session-only enrollment or create an OPFS authority", async () => {
+Deno.test("D2: missing durable storage permission cannot even stage intent", async () => {
   const origin = "https://promotion-no-storage.example";
   storageGranted = false;
   try { await assertRejects(() => prepareEnrollmentPromotion(origin, decisions(origin)), Error, "durable storage permission unavailable"); }
   finally { storageGranted = true; }
-  assertEquals(await isEnrolled(origin), false);
-  assertEquals((await kvGet("cap:enrollment"))["cap:enrollment"]?.[origin], undefined);
+  assertEquals(await pending(origin), undefined);
 });
 
-Deno.test("D2: duplicate owner clicks and legacy create/delete cannot overtake pending", async () => {
+Deno.test("D2: duplicate owner clicks and agent.create/delete cannot overtake pending", async () => {
   const origin = "https://promotion-compete.example";
   const proposal = decisions(origin);
   const results = await Promise.allSettled([prepareEnrollmentPromotion(origin, proposal), prepareEnrollmentPromotion(origin, proposal)]);
@@ -181,28 +198,27 @@ Deno.test("D2: duplicate owner clicks and legacy create/delete cannot overtake p
   assertEquals(await isEnrolled(origin), false);
 });
 
-Deno.test("D2: failed policy-envelope write is non-authorizing and restart recovery retains Deny", async () => {
+Deno.test("D2: failed policy envelope leaves inert pending; recovery retains sticky Deny", async () => {
   const origin = "https://promotion-policy-fail.example";
   const { gen } = await prepareEnrollmentPromotion(origin, decisions(origin));
-  await completeEnrollmentPromotion(origin, gen);
+  await complete(origin, gen);
   failConsentWrite = true;
   try { await assertRejects(() => setEnrollmentPolicy(origin, "deny"), Error, "simulated consent write failure"); }
   finally { failConsentWrite = false; }
-  const pending = (await kvGet("cap:enrollment"))["cap:enrollment"][origin];
-  assertEquals(pending.phase, "policy-pending");
-  assertEquals(pending.enrolled, false);
-  assertEquals(await isEnrolled(origin), false);
-  await completeEnrollmentPromotion(origin, pending.gen); // no run token after restart
-  assertEquals((await enrollmentSnapshot(origin)).policy, "deny");
-  assertEquals((await siteToolConsentSnapshot(origin, denyTool, pending.gen)).state, "denied");
+  assertEquals((await pending(origin)).phase, "policy-pending");
+  assertEquals((await pending(origin)).enrolled, false);
+  await complete(origin, (await pending(origin)).gen); // policy's existing durable consent copy
+  const after = await enrollmentSnapshot(origin);
+  assertEquals(after.policy, "deny");
+  assertEquals((await siteToolConsentSnapshot(origin, denyTool, after.gen)).state, "denied");
 });
 
-Deno.test("D2: repeating legacy enroll or flipping site policy must not erase durable sticky Deny", async () => {
+Deno.test("D2: repeated legacy create and policy flip cannot drop sticky Deny", async () => {
   const origin = "https://promotion-policy.example";
   const { gen } = await prepareEnrollmentPromotion(origin, decisions(origin));
-  await completeEnrollmentPromotion(origin, gen);
+  await complete(origin, gen);
   await enrollOrigin(origin);
-  assertEquals((await enrollmentSnapshot(origin)).gen, gen, "duplicate create must not bump generation");
+  assertEquals((await enrollmentSnapshot(origin)).gen, gen);
   await setEnrollmentPolicy(origin, "deny");
   const after = await enrollmentSnapshot(origin);
   assertEquals((await siteToolConsentSnapshot(origin, denyTool, after.gen)).state, "denied");

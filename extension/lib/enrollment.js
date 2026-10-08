@@ -142,6 +142,18 @@ export async function ensureOriginScriptsRegistered(origin) {
   if (toRegister.length > 0) {
     await chrome.scripting.registerContentScripts(toRegister);
   }
+  // A resolved register call is not proof of both dynamic scripts: confirm
+  // the exact script ids and origin patterns before anyone clears the durable
+  // promotionPending fence. A failed confirmation is NOT a pass.
+  const confirmed = await chrome.scripting.getRegisteredContentScripts({ ids });
+  const readyIds = new Set(confirmed.filter((script) => Array.isArray(script.matches) &&
+    script.matches.includes(`${canonical}/*`)).map((script) => script.id));
+  const hostStillGranted = await chrome.permissions.contains({
+    permissions: ["scripting"], origins: matches,
+  });
+  if (ids.some((id) => !readyIds.has(id)) || !hostStillGranted) {
+    return { ok: false, origin: canonical, error: "origin scripts or host permission unverified" };
+  }
   return { ok: true, origin: canonical };
 }
 

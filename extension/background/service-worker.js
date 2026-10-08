@@ -234,8 +234,6 @@ import {
   completeEnrollmentPromotion,
   listPendingEnrollmentPromotions,
   abandonEnrollmentPromotion,
-  rollbackEnrollmentPromotion,
-  finalizeEnrollmentPromotionReceipt,
   retryAbandonedEnrollmentCleanup,
   listAbandonedEnrollmentCleanups,
   getCurrentSiteIdentity,
@@ -2029,8 +2027,9 @@ async function appendRequiredSiteToolAudit(record, { enrollmentLocked = false } 
     // Disable already owns the enrollment lock, so it must use the deliberately
     // unlocked generation read instead of recursively acquiring the mutex.
     const enrollment = enrollmentLocked
-      ? { enrolled: true, gen: await enrollmentGeneration(record?.origin) }
+      ? { gen: await enrollmentGeneration(record?.origin, { requireActive: true }) }
       : await enrollmentSnapshot(record?.origin);
+    if (enrollmentLocked) enrollment.enrolled = enrollment.gen > 0;
     if (
       siteToolResetting > 0 || profileEpoch !== siteToolProfileEpoch || !enrollment.enrolled ||
       enrollment.gen !== record?.enrollmentGen
@@ -11621,7 +11620,9 @@ const handlers = mergeRouteMaps(
             // The same owner Retry completes either inert phase from its
             // durable registry copy; a vanished run token is never needed.
             prepared = prior;
-            await completeEnrollmentPromotion(canonical, prior.gen, { commitGuard: guard });
+            await completeEnrollmentPromotion(canonical, prior.gen, {
+              commitGuard: guard, beforeFlip: verifyOwnerPromotionPreconditions,
+            });
           } else {
             const withRuns = await ephemeralSiteToolConsentStore.withPromotionForOrigin(
               canonical,
@@ -11629,17 +11630,20 @@ const handlers = mergeRouteMaps(
                 prepared = await prepareEnrollmentPromotion(canonical, records, {
                   commitGuard: () => guard() && isCurrent(),
                 });
-                return await completeEnrollmentPromotion(canonical, prepared.gen, { commitGuard: guard });
+                return await completeEnrollmentPromotion(canonical, prepared.gen, {
+                  commitGuard: guard, beforeFlip: verifyOwnerPromotionPreconditions,
+                });
               },
             );
             if (!withRuns) {
               prepared = await prepareEnrollmentPromotion(canonical, [], { commitGuard: guard });
-              await completeEnrollmentPromotion(canonical, prepared.gen, { commitGuard: guard });
+              await completeEnrollmentPromotion(canonical, prepared.gen, {
+                commitGuard: guard, beforeFlip: verifyOwnerPromotionPreconditions,
+              });
             }
           }
-          // The site-memory marker is metadata, NOT enrollment authority.
-          // Do not write it before the verified registry flip.
-          await siteMemory(canonical).setTrusted("enrolled", { at: Date.now() });
+          // The site-memory metadata marker was staged before the sole
+          // registry authority flip; no post-flip write can orphan the origin.
         } catch (error) {
           const snap = await enrollmentSnapshot(canonical).catch(() => ({ enrolled: false }));
           if (!prepared || !snap.enrolled || snap.gen !== prepared.gen) {
@@ -11652,18 +11656,11 @@ const handlers = mergeRouteMaps(
         }
       }
       const snapBefore = await enrollmentSnapshot(canonical);
-      const registered = await ensureOriginScriptsRegistered(canonical).catch(
-        (e) => ({ ok: false, error: String(e?.message ?? e) }),
-      );
-      // A concurrent Scripting Disable holds the GLOBAL enrollment lock across its
-      // whole tombstone→unregister→revoke transition, but it does NOT take the
-      // per-origin lock — so it can land BETWEEN enrollOrigin (which releases the
-      // global lock) and ensureOriginScriptsRegistered above. Revalidate the
-      // snapshot AFTER registration: a changed/absent generation means the origin
-      // was tombstoned (and possibly re-enrolled) mid-transition, so this enroll
-      // must NOT report success against authority it no longer holds (the round-22
-      // scripting-Disable/enroll race). Compensate by removing whatever this
-      // enroll registered.
+      // Exact host permission and BOTH dynamic script ids were confirmed
+      // before promotionPending was cleared in the durable registry.
+      // Scripting Disable holds the global enrollment lock but not this origin
+      // lock. A disable after the verified authority flip must still be seen
+      // before reporting enrollment success to the owner.
       const snapAfter = await enrollmentSnapshot(canonical);
       const transitionLost = !snapAfter.enrolled || snapAfter.gen !== snapBefore.gen;
       // A re-enroll DURING this enroll's transition means the origin is freshly
@@ -11671,22 +11668,7 @@ const handlers = mergeRouteMaps(
       // the new enrollment's authority. Distinguish it from a TOMBSTONE (which
       // must be cleaned up).
       const reEnrolled = snapAfter.enrolled && snapAfter.gen !== snapBefore.gen;
-      if (registered?.ok !== true || transitionLost) {
-        if (snapAfter.enrolled && snapAfter.gen === snapBefore.gen) {
-          // Registration failed: tombstone authority FIRST. A promotion keeps
-          // its Allow+Deny receipt in an inert retry row, so a later owner
-          // gesture never needs to re-ask the sticky Deny.
-          try {
-            await rollbackEnrollmentPromotion(canonical, snapAfter.gen);
-          } catch (error) {
-            if (String(error?.message ?? error) === "site_enrollment_promotion_stale") {
-              await disenrollOrigin(canonical); // previously enrolled; no receipt
-            } else {
-              return { ok: false, origin: canonical, retryable: true,
-                error: `enrollment rollback could not be persisted: ${String(error?.message ?? error)}` };
-            }
-          }
-        }
+      if (transitionLost) {
         if (reEnrolled) {
           // Concurrent re-enrollment — do NOT touch the new enrollment's scripts
           // or OPFS. Report honest failure; the owner retries against the fresh
@@ -11730,27 +11712,18 @@ const handlers = mergeRouteMaps(
         invalidateAgent();
         await recordWebmcpLifecycle(canonical, {
           scriptStatus: "injection-error",
-          error: transitionLost
-            ? "scripting was disabled during enrollment"
-            : (registered?.error ?? "script registration failed"),
+          error: "scripting was disabled during enrollment",
         });
         return {
           ok: false,
           origin: canonical,
-          error: transitionLost
-            ? "scripting was disabled during enrollment"
-            : (registered?.error ?? "script registration failed"),
+          error: "scripting was disabled during enrollment",
           retryable: true,
           scriptsRemoved,
           permissionRemoved,
           cleared,
         };
       }
-      // Script registration is now confirmed. Erase the duplicate durable
-      // decision receipt; a failed receipt cleanup never drops consent or
-      // widens authority and can be retried later.
-      await finalizeEnrollmentPromotionReceipt(canonical, snapAfter.gen).catch((error) =>
-        pushDiagnostic("error", `[promotion] receipt cleanup: ${String(error?.message ?? error).slice(0, 160)}`));
       invalidateAgent();
       // Bind BEFORE immediate injection. The injected bridge's startup
       // enrollment.status call must observe the picker-approved tab binding so
@@ -12912,6 +12885,22 @@ chrome.action?.onClicked?.addListener(async (tab) => {
   }
 });
 
+async function verifyOwnerPromotionPreconditions(origin) {
+  const scripts = await ensureOriginScriptsRegistered(origin).catch(() => ({ ok: false }));
+  const hostGranted = await chrome.permissions.contains({
+    permissions: ["scripting"], origins: [`${origin}/*`],
+  }).catch(() => false);
+  if (scripts?.ok === true && hostGranted) {
+    // This marker is metadata only; the registry still carries the pending
+    // fence until after this write and the Chrome-owned checks above succeed.
+    await siteMemory(origin).setTrusted("enrolled", { at: Date.now() });
+  }
+  const hostStillGranted = hostGranted && await chrome.permissions.contains({
+    permissions: ["scripting"], origins: [`${origin}/*`],
+  }).catch(() => false);
+  return { scriptsRegistered: scripts?.ok === true, hostGranted: hostStillGranted };
+}
+
 // A pending Q1 promotion is durable in cap:enrollment, but inert until its
 // same-generation consent envelope is verified and the single authority bit
 // flips. Reconcile on every worker boot; no vanished SW run token is required.
@@ -12922,6 +12911,11 @@ async function reconcileEnrollmentPromotionsOnBoot() {
   }
   for (const pending of await listPendingEnrollmentPromotions()) {
     await withOriginLock(pending.origin, async () => {
+      // Module-eval and onStartup may both schedule recovery. The first may
+      // have committed while the second waited for this exact origin lock.
+      const live = await enrollmentSnapshot(pending.origin);
+      if (live.gen !== pending.gen ||
+        (pending.phase === "policy-pending" ? live.enrolled : live.pending !== true)) return;
       const epoch = siteToolProfileEpoch;
       const guard = () => siteToolResetting === 0 && siteToolProfileEpoch === epoch;
       try {
@@ -12929,33 +12923,15 @@ async function reconcileEnrollmentPromotionsOnBoot() {
           const host = await chrome.permissions.contains({ origins: [`${pending.origin}/*`] }).catch(() => false);
           if (!host || !guard()) return; // remain inert until an owner retries
         }
-        await completeEnrollmentPromotion(pending.origin, pending.gen, { commitGuard: guard });
-        if (pending.phase === "policy-pending") {
-          invalidateAgent();
-          broadcastRegistryChanged();
-          return;
-        }
-        await siteMemory(pending.origin).setTrusted("enrolled", { at: Date.now() });
-        const registered = await ensureOriginScriptsRegistered(pending.origin);
-        if (registered?.ok !== true) {
-          // Tombstone FIRST with the original Allow+Deny copied into an inert
-          // retry entry; best-effort script/host cleanup follows.
-          await rollbackEnrollmentPromotion(pending.origin, pending.gen);
-          await unregisterOriginScripts(pending.origin).catch(() => markCleanupPending(pending.origin));
-        } else {
-          await finalizeEnrollmentPromotionReceipt(pending.origin, pending.gen).catch(() => {});
-          invalidateAgent();
-          broadcastRegistryChanged();
-        }
+        await completeEnrollmentPromotion(pending.origin, pending.gen, {
+          commitGuard: guard, beforeFlip: verifyOwnerPromotionPreconditions,
+        });
+        invalidateAgent();
+        broadcastRegistryChanged();
       } catch (error) {
-        const live = await enrollmentSnapshot(pending.origin).catch(() => null);
-        if (live?.enrolled && live.gen === pending.gen) {
-          await rollbackEnrollmentPromotion(pending.origin, pending.gen).catch((e) =>
-            pushDiagnostic("error", `[promotion] tombstone failed: ${String(e?.message ?? e).slice(0, 160)}`));
-        }
         pushDiagnostic("error", `[promotion] ${pending.origin}: ${String(error?.message ?? error).slice(0, 160)}`);
-        // An unflipped row stays inert for retry; a post-flip failure must be
-        // tombstoned before any best-effort script or host cleanup.
+        // The registry still carries promotionPending if any precondition or
+        // write failed; no vanished run token is needed to retry next boot.
       }
     });
   }
