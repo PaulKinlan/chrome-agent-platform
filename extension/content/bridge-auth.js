@@ -15,7 +15,7 @@
 // a monotonic per-direction sequence (replay suppression): a page script sees
 // tags it cannot recompute and cannot forge a message without the key.
 //
-// TRUST LIMIT (documented in docs/KNOWN-ISSUES.md): this MAC protects the
+// TRUST LIMIT (documented in THREAT_MODEL.md T11): this MAC protects the
 // cross-world transport against a page script that merely observes/injects
 // postMessage traffic. It does NOT make the MAIN world or its values trusted:
 // MAIN shares the page realm, and the page owns the exposed tools, their side
