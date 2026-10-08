@@ -421,8 +421,11 @@ run-fenced descriptions/schemas to that run's **model context**; the passive
 chip/registry stay count-only and no inferred page-JS tool is disclosed.
 `attached-webmcp-disclosure.js` enforces a second, aggregate run-size cap.
 **No unenrolled tool is callable yet**: no consent card, required WAL append,
-or unenrolled page invocation is wired. Those D1/D3 gates must pass before any
-page tool may run. The enrolled path's checks remain unchanged.
+or unenrolled page invocation is wired. The uncalled
+`attached-webmcp-invocation.js` helper tests an audit-first, exact-document
+MAIN-world injection path that does not arm or relax the enrolled content-script
+bridge; it must not be imported into an executable route until D1/D3 consent
+and audit integration passes. The enrolled path's checks remain unchanged.
 
 ### 4.5 Fallback paths
 Pages without WebMCP: the six page-action tools (`find_elements`,
