@@ -1,13 +1,14 @@
-// scripts/test-partition.mjs — the single source of truth for the two-phase
-// test partition (vj4s; hardened by 76hu). Imported by BOTH runners:
+// scripts/test-partition.mjs — the single source of truth for the ordered
+// test partition (vj4s; hardened by 76hu and o49qg). Imported by BOTH runners:
 //   • scripts/run-tests.mjs (the full-suite merge gate, `npm test`)
 //   • scripts/select-tests.mjs (per-commit subsets) and tests/test-partition-guard.test.ts
 //
-// Phase 1 (serial): tests that BUILD the extension or assert on shared build
-//   artifacts in THIS worktree (extension/dist, dist-versions, bundled-tool
-//   CAS, packages/bundled). They rewrite/verify the same paths; racing them
-//   against each other or against dist readers failed 9 tests (vj4s par1 run).
-// Phase 2 (parallel): everything else, `deno test --parallel`.
+// Phase 1 (serial): shared-artifact writers and process-global hazards. In-place
+//   rebuilds must finish BEFORE any read-only dist consumer runs.
+// Phase 2 (post-build read-only, parallel): reviewed artifact consumers. The full
+//   runner checks the build lock and watches/verifies dist throughout this batch.
+// Phase 3 (parallel): everything else, `deno test --parallel`. The unchanged
+//   per-change runner combines phases 2+3 in ONE parallel process, after serial.
 //   NOTE: Phase 2 includes real-browser execution (tests/chrome-profile-location.test.ts
 //   unconditionally launches Chromium under a unit-scope lockPath; see docs/CHROME-TEST-CONTRACT.md).
 //
@@ -16,8 +17,7 @@
 // (tests/test-partition-guard.test.ts) scans every test file's content and
 // fails RED when a build-artifact hazard (spawning build.mjs or the
 // bundled-tool generator, writing under extension/ or packages/, or reading
-// extension/dist) is NOT in SERIAL (or the reviewed EXEMPTIONS list), so a
-// new hazard can never silently join the parallel phase.
+// extension/dist) is NOT in SERIAL (or the reviewed EXEMPTIONS list).
 
 // SERIAL membership is pinned WITH a reason: adding a file to the serial set
 // means stating why it is a shared-build-artifact hazard. The guard test
@@ -29,9 +29,7 @@ export const SERIAL_REASONS = {
   "tests/store-doc-denial.test.ts": "runs node build.mjs in-place and reads the built extension/dist bundles (shared build artifacts)",
   "tests/build-debug-mode.test.ts": "runs node build.mjs in-place (debug+store bundles)",
   "tests/build-tool-bundling.test.ts": "runs build.mjs / the bundled-tool generator in-place and mutates packages/bundled",
-  "tests/bundled-tool-packages.test.ts": "asserts the shipped CAS bytes (races with rebuilds)",
   "tests/reachability.test.ts": "asserts the repo tree's generated-artifact state",
-  "tests/tool-exec-preview.test.ts": "revalidates the REAL shipped bytes (races with rebuilds)",
   "tests/package-extension-freshness.test.ts": "driver packages dist + writes the dist-complete marker",
   // nz2r: writes a stale build stage dir under extension/ to prove the
   // per-change gate is immune to killed-build residue (swept in its finally).
@@ -44,18 +42,7 @@ export const SERIAL_REASONS = {
   // A kill before finally leaves untracked shipped-path residue that poisons
   // the guard's own allowlist and makes test:changed fail closed to the full suite.
   "tests/requires-owner-gesture-column-allowlist.test.ts": "writes an untracked probe in the real repo extension/lib tree; killed-run residue trips its allowlist and changed-file selection",
-  // 76hu guard caught this post-merge arrival from main (390b2b3a): it stats
-  // the built SW bundle and the dist.complete marker — shared build artifacts.
-  "tests/bundle-budget.test.ts": "reports the built dist bundle sizes + asserts the dist-complete marker integrity (races with rebuilds)",
-  // 76hu: the guard's reads-extension/dist class pins these two (previously
-  // parallel; both consume the built diff-core bundle, a shared artifact).
-  "tests/diff-core.test.ts": "imports/reads the built extension/dist diff-core bundle (shared build artifact)",
-  // cc18: reads the three built page bundles to assert they ship zero
-  // WebAssembly API calls (the j6au tree-shaking property) — a rebuild mid-read
-  // is exactly the race this phase exists to prevent.
-  "tests/wasm-tree-shaking.test.ts": "reads the built extension/dist page bundles (shared build artifacts)",
   "tests/emscripten-abi-loaded-harness.test.ts": "requires current Store dist artifacts and prepares the live extension, briefly creating/removing its reserved probe directory",
-  "tests/owner-approval-security.test.ts": "imports the built extension/dist diff-core bundle (shared build artifact)",
   "tests/chrome-launch-lock.test.ts": "tests process-global Chrome canonical lock and mutates CAP_CHROME_LOCK_PATH (races with other lock tests)",
   "tests/chrome-launch-lock-scope.test.ts": "tests Chrome lock scopes and mutates CAP_CHROME_SLOT_DIR (races with other lock tests)",
   "tests/chrome-slot-semaphore.test.ts": "tests Chrome bounded concurrency semaphore and mutates CAP_CHROME_SLOT_DIR (races with other lock tests)",
@@ -74,6 +61,19 @@ export const SERIAL_REASONS = {
   "tests/serial-phase-timeout.test.ts": "wall-clock kill/survive bounds assertions (declared 5000 ms work vs 4000 ms flat / 12000 ms scaled bounds) race the parallel phase",
 };
 export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
+
+// Reviewed read-only consumers run after all serial rebuilds. Keep these in
+// partition(...).parallel as well: select-tests.mjs consumes only serial/parallel
+// and MUST NOT silently drop the six when it runs a changed-file subset.
+export const READ_ONLY_DIST_REASONS = Object.freeze({
+  "tests/diff-core.test.ts": "imports the built diff-core bundle without writing it",
+  "tests/wasm-tree-shaking.test.ts": "reads three built page bundles without writing them",
+  "tests/bundle-budget.test.ts": "reads the built budget/metafile/marker and build.mjs SOURCE without running a build",
+  "tests/bundled-tool-packages.test.ts": "reads shipped inventory/CAS and generator SOURCE; its only child command is git provenance",
+  "tests/tool-exec-preview.test.ts": "revalidates shipped CAS and manifests without writing them",
+  "tests/owner-approval-security.test.ts": "imports the built diff-core bundle without writing it",
+});
+export const READ_ONLY_DIST = new Set(Object.keys(READ_ONLY_DIST_REASONS));
 
 // Build-behaviour tests moved to the dedicated npm run test:build gate (Option D / chrome-agent-platform-h65e).
 // These files run multiple in-place builds and are partitioned out of standard npm test to eliminate
@@ -129,6 +129,15 @@ export const SERIAL_FILE_TIMEOUTS = Object.freeze({
 // does not apply; the guard test pins the reason. Keep this list tiny —
 // membership is a review-time decision, never a default.
 export const EXEMPTIONS = {
+  // o49qg: these five classify as artifact hazards, but are audited read-only.
+  // The sixth (tool-exec-preview) has no classifier hit and must NOT be given a
+  // dead exemption. Both runners finish SERIAL first; the full runner also
+  // guards the read-only post-build batch against an active/restarted build.
+  "tests/diff-core.test.ts": "reads only the built diff-core bundle; post-build read-only batch follows serial rebuilds",
+  "tests/wasm-tree-shaking.test.ts": "reads only built page bundles; post-build read-only batch follows serial rebuilds",
+  "tests/bundle-budget.test.ts": "reads built bundles and build.mjs text; does not execute its source-string execFileSync snippet; post-build batch follows serial rebuilds",
+  "tests/bundled-tool-packages.test.ts": "reads shipped CAS and generator text; Deno.Command runs git only; post-build batch follows serial rebuilds",
+  "tests/owner-approval-security.test.ts": "imports only built diff-core; post-build read-only batch follows serial rebuilds",
   // chrome-agent-platform-fixn: the drift guard plants mutated about.html / inventory fixtures
   // inside makeTempDir scratch trees to verify drift detection and fail-closed attribution;
   // the real repo tree is read, never written.
@@ -538,6 +547,11 @@ export function unserialisedHazards(entries) {
     const classes = classifyHazards(text);
     if (!classes.length) continue; // safe → defaults to the parallel phase
     if (SERIAL.has(rel)) continue;
+    // A reviewed read-only exemption must never silently become a tree writer.
+    if (READ_ONLY_DIST.has(rel) && classes.includes("writes under extension/ or packages/")) {
+      violations.push(`${rel} — new write hazard in the read-only post-build batch`);
+      continue;
+    }
     const reason = EXEMPTIONS[rel];
     if (typeof reason === "string" && reason.trim().length > 0) continue;
     violations.push(`${rel} — ${classes.join("; ")}`);
@@ -545,9 +559,9 @@ export function unserialisedHazards(entries) {
   return violations;
 }
 
-// Split a list of test files (repo-relative) into the two phases, preserving
-// the full-run invariant: serial hazards first (never parallel), everything
-// else parallel. Deterministic ordering for stable logs.
+// Keep the serial/parallel return shape for the unchanged changed-file runner
+// AND its typed guard. The full runner extracts READ_ONLY_DIST from parallel
+// for its guarded post-build batch. Deterministic ordering and total coverage.
 export function partition(files) {
   const sorted = [...files].sort();
   return {

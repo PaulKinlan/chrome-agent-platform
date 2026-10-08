@@ -18,7 +18,8 @@
 // To preserve diagnostic visibility, the runner does NOT fail-fast: it runs
 // every file in the list and reports all failures.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, watch, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
@@ -29,6 +30,85 @@ import { durableRoot } from "./durable-root.mjs";
 // hand a build-heavy file the base window and kill it. A caller that wants the old behaviour passes
 // `perFileTimeoutMs: null` explicitly.
 import { SERIAL_FILE_TIMEOUTS } from "../test-partition.mjs";
+import { LOCK_DIRNAME } from "./build-lock.mjs";
+
+// o49qg: the serial builder is the only permitted writer before this batch.
+// Build.mjs acquires LOCK_DIRNAME before staging and atomically switches the
+// dist pointer; a watcher catches even a build that finishes between snapshots.
+// The snapshots also validate EVERY marker-pinned output and its inode/ctime,
+// catching transient write-then-restore even when the bytes are identical.
+function distSnapshot(cwd) {
+  if (existsSync(join(cwd, LOCK_DIRNAME))) throw new Error(`build lock ${LOCK_DIRNAME} is present`);
+  const extension = join(cwd, "extension");
+  const dist = join(extension, "dist");
+  const markerText = readFileSync(join(dist, "dist.complete"), "utf8");
+  const marker = JSON.parse(markerText);
+  if (!Array.isArray(marker.outputs) || marker.outputs.length === 0) throw new Error("dist.complete has no pinned outputs");
+  const identity = (path) => {
+    const st = lstatSync(path, { bigint: true });
+    return `${st.dev}:${st.ino}:${st.ctimeNs}:${st.mtimeNs}:${st.size}`;
+  };
+  const outputs = marker.outputs.map(({ path, sha256 }) => {
+    if (typeof path !== "string" || !path.split("/").every((segment) =>
+      segment !== "." && segment !== ".." && /^[a-zA-Z0-9_.-]+$/.test(segment)) || !/^[a-f0-9]{64}$/.test(sha256)) {
+      throw new Error(`invalid pinned dist output: ${String(path)}`);
+    }
+    const name = join(dist, path);
+    const digest = createHash("sha256").update(readFileSync(name)).digest("hex");
+    if (digest !== sha256) throw new Error(`dist output changed: ${path}`);
+    return `${path}:${identity(name)}:${digest}`;
+  });
+  const versions = join(extension, "dist-versions");
+  return {
+    value: JSON.stringify([realpathSync(dist), identity(dist), identity(extension),
+      existsSync(versions) ? identity(versions) : "no-versions", markerText, identity(join(dist, "dist.complete")), ...outputs]),
+    physicalDist: realpathSync(dist),
+  };
+}
+
+/** Run read-only dist consumers after all in-place builders, never alongside
+ * them. A build lock, staging/pointer event, or any marker-pinned byte/metadata
+ * change REFUSES the batch even if the consumer tests themselves exit zero.
+ * `run` is injected so the real full runner and a deterministic external
+ * rebuild-during-read falsifier exercise exactly the same boundary.
+ */
+export async function runReadOnlyDistBatch(files, run, { cwd = process.cwd() } = {}) {
+  if (!files.length) return 0;
+  let before;
+  const watchers = [];
+  let mutation = "";
+  try {
+    before = distSnapshot(cwd);
+    const extension = join(cwd, "extension");
+    watchers.push(watch(cwd, (_event, filename) => {
+      if (String(filename ?? "").startsWith(LOCK_DIRNAME)) mutation ||= `build lock event: ${filename}`;
+    }));
+    watchers.push(watch(extension, (_event, filename) => {
+      const name = String(filename ?? "");
+      if (name === "dist" || name === "dist-versions" || name.startsWith(".dist-stage-")) mutation ||= `extension rebuild event: ${name}`;
+    }));
+    watchers.push(watch(before.physicalDist, { recursive: true }, (_event, filename) => {
+      mutation ||= `dist write event: ${filename ?? "unknown"}`;
+    }));
+    // Close the lock-acquisition gap between the snapshot and watcher setup.
+    if (distSnapshot(cwd).value !== before.value) throw new Error("dist changed while arming read-only watchers");
+    const rc = await run(files);
+    // Let queued fs.watch events (including a write-and-restore) settle before
+    // the final snapshot; stat ctime and hashes independently verify the state.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const after = distSnapshot(cwd);
+    if (mutation || after.value !== before.value) {
+      announce(`run-tests: read-only dist batch REFUSED — ${mutation || "dist snapshot changed during readers"}`);
+      return 1;
+    }
+    return rc;
+  } catch (error) {
+    announce(`run-tests: read-only dist batch REFUSED — ${error?.message ?? error}`);
+    return 1;
+  } finally {
+    for (const watcher of watchers) watcher.close();
+  }
+}
 
 export const DEFAULT_SERIAL_FILE_TIMEOUT_MS = 180_000; // 3 minutes per file ON AN IDLE BOX
 
