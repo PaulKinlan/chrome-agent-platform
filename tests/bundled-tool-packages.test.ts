@@ -367,6 +367,17 @@ import {
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
+// gate-speed: the REAL store package inventory (every shipped file hashed) is read-only input to the
+// two store-map tests below, and it cost ~9 s per call on a 2-vCPU VM — on the serial phase's
+// critical path, twice. Both tests now read ONE collection of the same tree in the same process.
+// collectPackageInventory and assertStoreTargetBoundary never mutate the entries (they read and
+// compare), so sharing it cannot let one test's assertion feed the other's.
+let storeInventoryOnce: Promise<Awaited<ReturnType<typeof collectPackageInventory>>> | undefined;
+function storeInventory() {
+  storeInventoryOnce ??= collectPackageInventory({ root: repoRoot, expectedTarget: "store" });
+  return storeInventoryOnce;
+}
+
 Deno.test("store map: bundle archive map and boundary allowlist cover all 6 surface bundles", () => {
   const expectedSurfaceBundles = [
     ["dist/artifacts.bundle.js", "artifacts/index.js"],
@@ -398,12 +409,12 @@ Deno.test("store map: exact archivePath→executable mapping for ALL 52 shipped 
     assertEquals(archivePath, `wasm/cas/${executable.sha256}.wasm`);
   }
   // integration: the REAL package inventory passes the Store boundary WITH the map
-  const inventory = await collectPackageInventory({ root: repoRoot, expectedTarget: "store" });
+  const inventory = await storeInventory();
   await assertStoreTargetBoundary({ target: "store", inventory, bundledWasmManifestByArchivePath: map });
 });
 
 Deno.test("store map hostile: WITHOUT the map every shipped binary is refused (no silent admission)", async () => {
-  const inventory = await collectPackageInventory({ root: repoRoot, expectedTarget: "store" });
+  const inventory = await storeInventory();
   let caught = null;
   try { await assertStoreTargetBoundary({ target: "store", inventory }); } catch (e) { caught = e; }
   assert(caught, "empty map must fail closed");
