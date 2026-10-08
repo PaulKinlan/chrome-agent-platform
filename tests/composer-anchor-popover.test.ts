@@ -125,7 +125,7 @@ Deno.test("2x5ml: prompt-bar wires anchor tethering and clamps in narrow viewpor
   // Trigger @ from textarea
   inputListeners.forEach((h) => h());
   assertEquals(popEl.style["position-anchor"], "--prompt-input-anchor", "must anchor to textarea");
-  assertEquals(popEl.style["position-area"], "block-end span-inline-end");
+  assertEquals(popEl.style["position-area"], "block-end span-inline-start");
   assertEquals(popEl.style.maxHeight, "", "supported path must NOT set inline maxHeight");
 
   // Trigger from model button

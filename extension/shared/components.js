@@ -10199,7 +10199,7 @@ class PromptBar extends Component {
     const model = this.getAttribute("model") || "demo";
     mountTemplate(this, `
       :host { display:block; }
-      .bar { display:flex; align-items:flex-end; gap:8px; border:1px solid var(--border,#e3e0d9); border-radius:14px; background:var(--panel,#ffffff); padding:8px 10px; position:relative; anchor-name:--prompt-bar-anchor; }
+      .bar { display:flex; align-items:flex-end; gap:8px; border:1px solid var(--border,#e3e0d9); border-radius:14px; background:var(--panel,#ffffff); padding:8px 10px; position:relative; }
       .bar:focus-within { border-color:var(--accent,#0e6e63); }
       textarea { flex:1; border:0; background:transparent; resize:none; font:inherit; font-size:14px; line-height:1.5; color:var(--ink,#1d1b18); padding:6px 2px; field-sizing:content; min-height:24px; max-height:180px; outline:none; anchor-name:--prompt-input-anchor; }
       textarea::placeholder { color:var(--muted,#635e56); }
@@ -10208,7 +10208,7 @@ class PromptBar extends Component {
       .model:hover { border-color:var(--accent,#0e6e63); }
       .model:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .pop { display:none; position:absolute; inset:auto; margin:0; box-sizing:border-box; z-index:20; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:0 12px 32px rgba(0,0,0,.15);
-        position-anchor:--prompt-input-anchor; position-area:block-end span-inline-end; position-try-fallbacks:flip-block;
+        position-anchor:--prompt-input-anchor; position-area:block-end span-inline-start; position-try-fallbacks:flip-block;
         width:min(440px, anchor-size(width)); min-width:min(220px, calc(100vw - 16px)); max-width:calc(100vw - 16px); max-height:min(260px, calc(100% - 16px)); overflow:auto; padding:6px; }
       .pop.open { display:block; }
       @supports not (position-area: top) {
@@ -10314,7 +10314,7 @@ class PromptBar extends Component {
         pop.style.width = "";
         pop.style.maxHeight = "";
         pop.style.setProperty("position-anchor", "--prompt-input-anchor");
-        pop.style.setProperty("position-area", "block-end span-inline-end");
+        pop.style.setProperty("position-area", "block-end span-inline-start");
       }
       pop.innerHTML = `<div class="head">${trigger === "@" ? "Mention an agent" : "Commands"}</div>`;
     });
