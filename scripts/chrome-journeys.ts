@@ -2713,30 +2713,22 @@ async function main() {
       scheduledAgent = (list?.agents ?? []).find((a) => a?.name === schedName) ?? null;
       if (!scheduledAgent) await sleep(200);
     }
-    // b7ny0.4: Bounded poll for the sidebar row to settle. In a clean genuine-UI path,
-    // the sidebar updates via automatic rerenders (+67/+83/+99ms per j5yz diagnosis),
-    // but in the full journey a fixed ~1.5s sleep can hit a transient race between
-    // unawaited renderNamedAgents() and named-agent-changed broadcast. Re-poll boundedly
-    // up to 5s until the scheduled row appears with the agent name and humanised Scheduled marker.
-    // The raw-cadence clause ('every N min') is omitted because the UI humanises weekly schedules
-    // to 'Scheduled · weekly'.
+    // b7ny0.4: Bounded poll for the sidebar row to settle in ntpSession. In a clean genuine-UI path,
+    // the sidebar updates via automatic rerenders (+67/+83/+99ms per j5yz diagnosis; settled by +252ms).
+    // Poll ntpSession's #side-agents boundedly up to 5s in fast 200ms steps.
+    // Note: measureAgentSurfaces() takes ~7.5s, so it must run AFTER this fast poll,
+    // never inside the loop (which would cause a single iteration to exhaust the 5s deadline).
     const READ_SIDEBAR = `[...document.querySelectorAll('#side-agents .agent-item')].map((el) => el.textContent.replace(/\\s+/g, ' ').trim())`;
     let sidebarSched = [];
-    let surfacesS = null;
     const pollStart = Date.now();
     while (Date.now() - pollStart < 5000) {
       sidebarSched = (await evalIn(cdp, ntpSession, READ_SIDEBAR)) ?? [];
-      surfacesS = await measureAgentSurfaces();
-      if (
-        Array.isArray(sidebarSched) &&
-        sidebarSched.some((t) => t.includes(schedName) && /Scheduled ·/.test(t)) &&
-        surfacesS.sidebarRows === 2
-      ) {
+      if (Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && /Scheduled ·/.test(t))) {
         break;
       }
       await sleep(200);
     }
-    if (!surfacesS) surfacesS = await measureAgentSurfaces();
+    const surfacesS = await measureAgentSurfaces();
     if (surfacesS.shot) await writeEvidence("templates-created.png", surfacesS.shot);
 
     // If poll exhausted, capture sidebar DOM for diagnosis
