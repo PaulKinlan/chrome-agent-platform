@@ -1,7 +1,7 @@
 // extension/lib/table-extractor.js — Bounded table and grid extraction from web pages.
 // Part of bead chrome-agent-platform-3p3e.8:
 // Extracts <table>, role="grid" / role="table", and repeated-card lists.
-// Emits CSV-shaped JSON { tables: [{ caption, headers, rows, truncated, rowCount, columnCount }] }
+// Emits CSV-shaped JSON { tables: [{ caption, headers, rows, truncated, truncationReason, rowCount, columnCount }] }
 // and supports promotion to canonical tabular artifacts for table_* tools.
 
 import {
@@ -18,6 +18,10 @@ export const TABLE_EXTRACTOR_LIMITS = Object.freeze({
   maxRows: 2000,
   maxColumns: 50,
   maxBytes: 1024 * 1024, // 1 MB per table
+  maxCellChars: 2000,    // Truncate cell text length BEFORE copying
+  maxTablesPerPage: 50,  // Whole-page table count cap
+  maxTotalCellsPerPage: 50000, // Aggregate whole-page cell extraction work budget
+  maxExecutionTimeMs: 2500,    // 2.5 second time budget
 });
 
 /** Decode common HTML entities. */
@@ -130,723 +134,682 @@ export async function createTabularArtifact(tableData, {
   };
 }
 
-/** Find nearest preceding heading for an element in the DOM. */
-function findPrecedingHeadingDom(el) {
-  let prev = el.previousElementSibling;
-  while (prev) {
-    if (/^H[1-6]$/i.test(prev.tagName)) {
-      const txt = cleanText(prev.textContent);
-      if (txt) return txt;
-    }
-    const innerH = prev.querySelector?.("h1, h2, h3, h4, h5, h6");
-    if (innerH) {
-      const txt = cleanText(innerH.textContent);
-      if (txt) return txt;
-    }
-    prev = prev.previousElementSibling;
-  }
-  if (el.parentElement && el.parentElement !== el.ownerDocument?.body) {
-    return findPrecedingHeadingDom(el.parentElement);
-  }
-  return null;
-}
+/**
+ * Self-contained table extraction function designed for tab execution
+ * via chrome.scripting.executeScript.
+ *
+ * Implements:
+ * - Bounded traversal and memory limits BEFORE materialization.
+ * - Cell text length truncation before copying.
+ * - Bounded 2D span-occupancy grid supporting colspan and rowspan.
+ * - Headerless table inference (synthesizes column names when all cells are td).
+ * - Isolation of nested tables from parent rows.
+ * - Whole-page aggregate table/cell/time budgets with explicit truncation reasons.
+ */
+export function injectedTableExtractor({
+  ref = null,
+  maxRows = 2000,
+  maxColumns = 50,
+  maxBytes = 1024 * 1024,
+  maxCellChars = 2000,
+  maxTablesPerPage = 50,
+  maxTotalCellsPerPage = 50000,
+  maxExecutionTimeMs = 2500,
+  customDocument = null,
+} = {}) {
+  var doc = customDocument || (typeof document !== "undefined" ? document : null);
+  if (!doc) return { tables: [], count: 0, pageTruncated: false };
 
-/** Extract table data from an HTML <table> DOM element. */
-function extractHtmlTableDom(tableEl, limits) {
-  let truncated = false;
-  let caption = "";
-  const captionEl = tableEl.querySelector("caption");
-  if (captionEl) {
-    caption = cleanText(captionEl.textContent);
-  }
-  if (!caption) {
-    caption = cleanText(tableEl.getAttribute("aria-label") || "");
-  }
-  if (!caption && tableEl.getAttribute("aria-labelledby")) {
-    const labelled = tableEl.ownerDocument?.getElementById(tableEl.getAttribute("aria-labelledby"));
-    if (labelled) caption = cleanText(labelled.textContent);
-  }
-  if (!caption) {
-    caption = findPrecedingHeadingDom(tableEl) || "Table";
+  var startTime = Date.now();
+  var totalCellsCount = 0;
+  var pageTruncated = false;
+  var pageTruncationReason = null;
+
+  function clean(s) {
+    if (!s) return "";
+    return s.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
   }
 
-  // Header extraction
-  const theadRows = Array.from(tableEl.querySelectorAll("thead tr"));
-  let headerCells = [];
-  let headerTr = null;
-  if (theadRows.length > 0) {
-    headerTr = theadRows[theadRows.length - 1];
-    headerCells = Array.from(headerTr.querySelectorAll("th, td"));
-  } else {
-    const firstTr = tableEl.querySelector("tr");
-    if (firstTr) {
-      const ths = Array.from(firstTr.querySelectorAll("th"));
-      if (ths.length > 0 || Array.from(firstTr.querySelectorAll("td")).length > 0) {
-        headerTr = firstTr;
-        headerCells = Array.from(firstTr.querySelectorAll("th, td"));
-      }
-    }
+  function cleanCellText(text) {
+    if (!text) return "";
+    var s = text.length > maxCellChars ? text.slice(0, maxCellChars) : text;
+    return clean(s);
   }
 
-  let rawHeaders = headerCells.map((cell) => cleanText(cell.textContent));
-  if (rawHeaders.length > limits.maxColumns) {
-    rawHeaders = rawHeaders.slice(0, limits.maxColumns);
-    truncated = true;
-  }
-
-  // Row extraction
-  const allTrs = Array.from(tableEl.querySelectorAll("tr"));
-  const dataTrs = headerTr ? allTrs.filter((tr) => tr !== headerTr && !theadRows.includes(tr)) : allTrs;
-
-  const rows = [];
-  let currentBytes = 0;
-  let maxColsSeen = rawHeaders.length;
-
-  for (let rIdx = 0; rIdx < dataTrs.length; rIdx++) {
-    if (rows.length >= limits.maxRows) {
-      truncated = true;
-      break;
-    }
-    const tr = dataTrs[rIdx];
-    const cells = Array.from(tr.querySelectorAll("td, th"));
-    if (cells.length === 0) continue;
-
-    const row = [];
-    for (const cell of cells) {
-      if (row.length >= limits.maxColumns) {
-        truncated = true;
-        break;
-      }
-      const val = cleanText(cell.textContent);
-      const colspan = parseInt(cell.getAttribute("colspan") || "1", 10);
-      const span = Number.isSafeInteger(colspan) && colspan > 1 ? Math.min(colspan, limits.maxColumns - row.length) : 1;
-      for (let s = 0; s < span; s++) {
-        row.push(val);
-      }
-    }
-
-    if (row.length > maxColsSeen) maxColsSeen = row.length;
-    rows.push(row);
-
-    // Approximate size check
-    currentBytes += row.reduce((sum, c) => sum + (c ? c.length : 0), 0) + 16;
-    if (currentBytes > limits.maxBytes) {
-      truncated = true;
-      break;
-    }
-  }
-
-  const finalHeaders = sanitizeHeaders(rawHeaders, maxColsSeen);
-  // Normalize row lengths
-  const normalizedRows = rows.map((r) => {
-    const padded = [...r];
-    while (padded.length < finalHeaders.length) padded.push("");
-    return padded.slice(0, finalHeaders.length);
-  });
-
-  return {
-    caption,
-    headers: finalHeaders,
-    rows: normalizedRows,
-    rowCount: normalizedRows.length,
-    columnCount: finalHeaders.length,
-    truncated,
-  };
-}
-
-/** Extract table data from an ARIA grid or table DOM element. */
-function extractAriaGridDom(gridEl, limits) {
-  let truncated = false;
-  let caption = cleanText(gridEl.getAttribute("aria-label") || "");
-  if (!caption && gridEl.getAttribute("aria-labelledby")) {
-    const labelled = gridEl.ownerDocument?.getElementById(gridEl.getAttribute("aria-labelledby"));
-    if (labelled) caption = cleanText(labelled.textContent);
-  }
-  if (!caption) {
-    caption = findPrecedingHeadingDom(gridEl) || "Data Grid";
-  }
-
-  // Look for column headers
-  const headerCells = Array.from(gridEl.querySelectorAll('[role="columnheader"]'));
-  let rawHeaders = headerCells.map((el) => cleanText(el.textContent));
-  if (rawHeaders.length > limits.maxColumns) {
-    rawHeaders = rawHeaders.slice(0, limits.maxColumns);
-    truncated = true;
-  }
-
-  // Find rows
-  const allRowEls = Array.from(gridEl.querySelectorAll('[role="row"]'));
-  const dataRowEls = allRowEls.filter((r) => !r.querySelector('[role="columnheader"]'));
-
-  const rows = [];
-  let currentBytes = 0;
-  let maxColsSeen = rawHeaders.length;
-
-  for (const rowEl of dataRowEls) {
-    if (rows.length >= limits.maxRows) {
-      truncated = true;
-      break;
-    }
-    const cellEls = Array.from(rowEl.querySelectorAll('[role="gridcell"], [role="cell"]'));
-    if (cellEls.length === 0) continue;
-
-    const row = [];
-    for (const cell of cellEls) {
-      if (row.length >= limits.maxColumns) {
-        truncated = true;
-        break;
-      }
-      row.push(cleanText(cell.textContent));
-    }
-
-    if (row.length > maxColsSeen) maxColsSeen = row.length;
-    rows.push(row);
-
-    currentBytes += row.reduce((sum, c) => sum + (c ? c.length : 0), 0) + 16;
-    if (currentBytes > limits.maxBytes) {
-      truncated = true;
-      break;
-    }
-  }
-
-  const finalHeaders = sanitizeHeaders(rawHeaders, maxColsSeen);
-  const normalizedRows = rows.map((r) => {
-    const padded = [...r];
-    while (padded.length < finalHeaders.length) padded.push("");
-    return padded.slice(0, finalHeaders.length);
-  });
-
-  return {
-    caption,
-    headers: finalHeaders,
-    rows: normalizedRows,
-    rowCount: normalizedRows.length,
-    columnCount: finalHeaders.length,
-    truncated,
-  };
-}
-
-/** Extract table data from repeated-card list DOM elements. */
-function extractCardListDom(containerEl, limits) {
-  // Candidate containers must have at least 3 direct children or 3 items
-  const items = Array.from(containerEl.children).filter(
-    (el) => !["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "H1", "H2", "H3", "H4", "H5", "H6"].includes(el.tagName),
-  );
-  if (items.length < 3) return null;
-
-  // Don't extract card lists if container contains a native <table> or ARIA grid
-  if (containerEl.querySelector("table, [role='table'], [role='grid']")) return null;
-
-  const cardRecords = [];
-  const fieldOrder = [];
-  const seenFields = new Set();
-
-  function registerField(key) {
-    if (!seenFields.has(key)) {
-      seenFields.add(key);
-      fieldOrder.push(key);
-    }
-  }
-
-  for (const item of items) {
-    const record = Object.create(null);
-
-    // 1. Definition lists (<dt>/<dd>)
-    const dts = Array.from(item.querySelectorAll("dt"));
-    for (const dt of dts) {
-      const key = cleanText(dt.textContent);
-      const dd = dt.nextElementSibling?.tagName === "DD" ? dt.nextElementSibling : null;
-      if (key && dd) {
-        record[key] = cleanText(dd.textContent);
-        registerField(key);
-      }
-    }
-
-    // 2. Headings as Title/Name if not already captured
-    if (!record["Title"] && !record["Name"]) {
-      const h = item.querySelector("h2, h3, h4, h5, h6");
-      if (h) {
-        const titleText = cleanText(h.textContent);
-        if (titleText) {
-          const fieldName = item.className.includes("speaker") ? "Name" : "Title";
-          record[fieldName] = titleText;
-          registerField(fieldName);
+  function getCellDirectText(cellEl) {
+    if (!cellEl) return "";
+    var text = "";
+    var children = cellEl.childNodes || [];
+    for (var i = 0; i < children.length; i++) {
+      var n = children[i];
+      if (n.nodeType === 3) {
+        text += n.nodeValue;
+      } else if (n.nodeType === 1) {
+        var tag = n.tagName ? n.tagName.toUpperCase() : "";
+        if (tag !== "TABLE") {
+          text += (n.innerText || n.textContent || "");
         }
       }
+      if (text.length >= maxCellChars) break;
     }
+    return cleanCellText(text);
+  }
 
-    // 3. Elements with explicit semantic classes or data attributes
-    const semanticEls = Array.from(item.querySelectorAll("[data-field], [class]"));
-    for (const el of semanticEls) {
-      const fieldAttr = el.getAttribute("data-field");
-      if (fieldAttr) {
-        const key = cleanText(fieldAttr);
-        if (key && !record[key]) {
-          record[key] = cleanText(el.textContent);
-          registerField(key);
-        }
-      } else {
-        const cls = String(el.className || "");
-        for (const token of cls.split(/\s+/)) {
-          if (["price", "cost", "tier", "role", "topic", "time", "date", "status", "category", "author"].includes(token.toLowerCase())) {
-            const key = token.charAt(0).toUpperCase() + token.slice(1).toLowerCase();
-            if (!record[key]) {
-              record[key] = cleanText(el.textContent);
-              registerField(key);
-            }
+  function headingBefore(el) {
+    var p = el.previousElementSibling;
+    while (p) {
+      if (p.tagName && /^H[1-6]$/i.test(p.tagName)) return clean(p.textContent);
+      var inner = p.querySelector ? p.querySelector("h1, h2, h3, h4, h5, h6") : null;
+      if (inner) return clean(inner.textContent);
+      p = p.previousElementSibling;
+    }
+    if (el.parentElement && el.parentElement !== doc.body) {
+      return headingBefore(el.parentElement);
+    }
+    return null;
+  }
+
+  function getScope() {
+    if (ref !== null && ref !== undefined) {
+      var target = (doc.querySelector && (
+        doc.querySelector('[data-cap-ref="' + ref + '"]') ||
+        doc.querySelector('[data-ref="' + ref + '"]')
+      )) || (doc.getElementById && doc.getElementById(String(ref)));
+      if (target) return target;
+    }
+    return doc;
+  }
+
+  function getDirectTrs(tableEl, sectionTag) {
+    var trs = [];
+    var children = tableEl.children || [];
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i];
+      var tag = child.tagName ? child.tagName.toUpperCase() : "";
+      if (!sectionTag && tag === "TR") {
+        trs.push(child);
+      } else if (sectionTag && tag === sectionTag) {
+        var secChildren = child.children || [];
+        for (var j = 0; j < secChildren.length; j++) {
+          if (secChildren[j].tagName && secChildren[j].tagName.toUpperCase() === "TR") {
+            trs.push(secChildren[j]);
           }
         }
       }
     }
+    return trs;
+  }
 
-    // 4. Key: Value text lines
-    const textLines = (item.innerText || item.textContent || "").split("\n");
-    for (const line of textLines) {
-      const m = line.match(/^([A-Za-z0-9 _-]{2,25}):\s*(.+)$/);
-      if (m) {
-        const key = cleanText(m[1]);
-        const val = cleanText(m[2]);
-        if (key && val && !record[key]) {
-          record[key] = val;
-          registerField(key);
+  function getDirectCells(trEl) {
+    var cells = [];
+    var children = trEl.children || [];
+    for (var i = 0; i < children.length; i++) {
+      var tag = children[i].tagName ? children[i].tagName.toUpperCase() : "";
+      if (tag === "TD" || tag === "TH") {
+        cells.push(children[i]);
+      }
+    }
+    return cells;
+  }
+
+  var scope = getScope();
+  var tables = [];
+  var seen = new Set();
+
+  function checkBudget() {
+    if (Date.now() - startTime > maxExecutionTimeMs) {
+      pageTruncated = true;
+      pageTruncationReason = "timeout";
+      return false;
+    }
+    if (totalCellsCount >= maxTotalCellsPerPage) {
+      pageTruncated = true;
+      pageTruncationReason = "cell-budget";
+      return false;
+    }
+    if (tables.length >= maxTablesPerPage) {
+      pageTruncated = true;
+      pageTruncationReason = "table-limit";
+      return false;
+    }
+    return true;
+  }
+
+  // 1. Native HTML <table> elements
+  var nativeTables = [];
+  if (scope.tagName && scope.tagName.toUpperCase() === "TABLE") {
+    nativeTables.push(scope);
+  } else if (scope.querySelectorAll) {
+    nativeTables = Array.prototype.slice.call(scope.querySelectorAll("table"));
+  }
+
+  for (var i = 0; i < nativeTables.length; i++) {
+    if (!checkBudget()) break;
+    var tbl = nativeTables[i];
+    seen.add(tbl);
+
+    var caption = "";
+    var capEl = tbl.querySelector ? tbl.querySelector("caption") : null;
+    if (capEl) caption = clean(capEl.textContent);
+    if (!caption && tbl.getAttribute) caption = clean(tbl.getAttribute("aria-label") || "");
+    if (!caption && tbl.getAttribute && tbl.getAttribute("aria-labelledby") && doc.getElementById) {
+      var lb = doc.getElementById(tbl.getAttribute("aria-labelledby"));
+      if (lb) caption = clean(lb.textContent);
+    }
+    if (!caption) caption = headingBefore(tbl) || ("Table " + (tables.length + 1));
+
+    var theadTrs = getDirectTrs(tbl, "THEAD");
+    var tbodyTrs = getDirectTrs(tbl, "TBODY");
+    var tfootTrs = getDirectTrs(tbl, "TFOOT");
+    var directTrs = getDirectTrs(tbl, null);
+    var allDataTrs = tbodyTrs.concat(directTrs, tfootTrs);
+
+    var rawHeaders = [];
+
+    // Header extraction
+    if (theadTrs.length > 0) {
+      var headGrid = [];
+      var headActiveRowSpans = [];
+      for (var hr = 0; hr < theadTrs.length; hr++) {
+        var htr = theadTrs[hr];
+        var hrow = new Array(maxColumns).fill(null);
+        for (var si = headActiveRowSpans.length - 1; si >= 0; si--) {
+          var sp = headActiveRowSpans[si];
+          hrow[sp.col] = sp.text;
+          sp.remaining--;
+          if (sp.remaining <= 0) headActiveRowSpans.splice(si, 1);
         }
+        var hcells = getDirectCells(htr);
+        var hcol = 0;
+        for (var hc = 0; hc < hcells.length; hc++) {
+          while (hcol < maxColumns && hrow[hcol] !== null) hcol++;
+          if (hcol >= maxColumns) break;
+          var hcell = hcells[hc];
+          var hcs = parseInt(hcell.getAttribute ? (hcell.getAttribute("colspan") || "1") : "1", 10);
+          var hrs = parseInt(hcell.getAttribute ? (hcell.getAttribute("rowspan") || "1") : "1", 10);
+          var hspan = (Number.isFinite(hcs) && hcs > 1) ? Math.min(hcs, maxColumns - hcol) : 1;
+          var hrspan = (Number.isFinite(hrs) && hrs > 1) ? Math.min(hrs, theadTrs.length - hr) : 1;
+          var htxt = getCellDirectText(hcell);
+          for (var hs = 0; hs < hspan; hs++) {
+            hrow[hcol + hs] = htxt;
+            if (hrspan > 1) headActiveRowSpans.push({ col: hcol + hs, remaining: hrspan - 1, text: htxt });
+          }
+          hcol += hspan;
+        }
+        headGrid.push(hrow);
+      }
+      var lastHRow = headGrid[headGrid.length - 1] || [];
+      for (var colI = 0; colI < maxColumns; colI++) {
+        var val = lastHRow[colI];
+        if (val == null && headGrid.length > 1) {
+          for (var gr = headGrid.length - 2; gr >= 0; gr--) {
+            if (headGrid[gr][colI] != null) { val = headGrid[gr][colI]; break; }
+          }
+        }
+        if (val != null) rawHeaders.push(val);
+        else if (rawHeaders.length > 0) rawHeaders.push("");
+      }
+      while (rawHeaders.length > 0 && !rawHeaders[rawHeaders.length - 1]) rawHeaders.pop();
+    } else if (allDataTrs.length > 0) {
+      var firstTr = allDataTrs[0];
+      var firstCells = getDirectCells(firstTr);
+      var hasTh = firstCells.some(function (c) { return c.tagName && c.tagName.toUpperCase() === "TH"; });
+      if (hasTh) {
+        allDataTrs.shift();
+        var fhcol = 0;
+        for (var fc = 0; fc < firstCells.length; fc++) {
+          if (fhcol >= maxColumns) break;
+          var fcell = firstCells[fc];
+          var fcs = parseInt(fcell.getAttribute ? (fcell.getAttribute("colspan") || "1") : "1", 10);
+          var fspan = (Number.isFinite(fcs) && fcs > 1) ? Math.min(fcs, maxColumns - fhcol) : 1;
+          var ftxt = getCellDirectText(fcell);
+          for (var fs = 0; fs < fspan; fs++) rawHeaders.push(ftxt);
+          fhcol += fspan;
+        }
+      }
+      // If no <th> in first row and no <thead>, rawHeaders stays empty; first row remains in allDataTrs
+    }
+
+    var rows = [];
+    var truncated = false;
+    var truncationReason = null;
+    var currentBytes = 0;
+    var maxDataCols = rawHeaders.length;
+    var activeRowSpans = [];
+
+    for (var r = 0; r < allDataTrs.length; r++) {
+      if (rows.length >= maxRows) {
+        truncated = true;
+        truncationReason = "row-limit";
+        break;
+      }
+      if (!checkBudget()) {
+        truncated = true;
+        truncationReason = pageTruncationReason;
+        break;
+      }
+
+      var tr = allDataTrs[r];
+      var row = new Array(maxColumns).fill(null);
+
+      for (var si = activeRowSpans.length - 1; si >= 0; si--) {
+        var span = activeRowSpans[si];
+        row[span.col] = span.text;
+        span.remaining--;
+        if (span.remaining <= 0) activeRowSpans.splice(si, 1);
+      }
+
+      var cells = getDirectCells(tr);
+      var col = 0;
+      for (var c = 0; c < cells.length; c++) {
+        while (col < maxColumns && row[col] !== null) col++;
+        if (col >= maxColumns) {
+          truncated = true;
+          if (!truncationReason) truncationReason = "column-limit";
+          break;
+        }
+        var cell = cells[c];
+        var cs = parseInt(cell.getAttribute ? (cell.getAttribute("colspan") || "1") : "1", 10);
+        var rs = parseInt(cell.getAttribute ? (cell.getAttribute("rowspan") || "1") : "1", 10);
+        var cspan = (Number.isFinite(cs) && cs > 1) ? Math.min(cs, maxColumns - col) : 1;
+        var rspan = (Number.isFinite(rs) && rs > 1) ? Math.min(rs, allDataTrs.length - r) : 1;
+        var text = getCellDirectText(cell);
+
+        for (var csIdx = 0; csIdx < cspan; csIdx++) {
+          row[col + csIdx] = text;
+          if (rspan > 1) {
+            activeRowSpans.push({ col: col + csIdx, remaining: rspan - 1, text: text });
+          }
+        }
+        col += cspan;
+      }
+
+      var lastFilled = -1;
+      for (var f = maxColumns - 1; f >= 0; f--) {
+        if (row[f] !== null) { lastFilled = f; break; }
+      }
+      if (lastFilled === -1 && cells.length === 0) continue;
+
+      var cleanRow = [];
+      for (var k = 0; k <= lastFilled; k++) {
+        cleanRow.push(row[k] === null ? "" : row[k]);
+      }
+      if (cleanRow.length > maxDataCols) maxDataCols = cleanRow.length;
+
+      rows.push(cleanRow);
+      totalCellsCount += cleanRow.length;
+      currentBytes += cleanRow.reduce(function (sum, val) { return sum + val.length; }, 0) + 16;
+      if (currentBytes > maxBytes) {
+        truncated = true;
+        truncationReason = "byte-limit";
+        break;
       }
     }
 
-    if (Object.keys(record).length > 0) {
-      cardRecords.push(record);
+    var colCount = Math.max(rawHeaders.length, maxDataCols, 1);
+    var headers = [];
+    var seenH = {};
+    for (var colIdx = 0; colIdx < colCount; colIdx++) {
+      var name = rawHeaders[colIdx] || ("Column " + (colIdx + 1));
+      var count = seenH[name] || 0;
+      seenH[name] = count + 1;
+      if (count > 0) name = name + "_" + (count + 1);
+      headers.push(name);
+    }
+
+    var normalizedRows = rows.map(function (rowArr) {
+      var padded = rowArr.slice(0, headers.length);
+      while (padded.length < headers.length) padded.push("");
+      return padded;
+    });
+
+    if (normalizedRows.length > 0) {
+      tables.push({
+        caption: caption,
+        headers: headers,
+        rows: normalizedRows,
+        rowCount: normalizedRows.length,
+        columnCount: headers.length,
+        truncated: truncated,
+        truncationReason: truncationReason,
+      });
     }
   }
 
-  // Only qualify as a table if we found at least 2 consistent fields across at least 3 items
-  if (fieldOrder.length < 2 || cardRecords.length < 3) return null;
-
-  let truncated = false;
-  let headers = fieldOrder;
-  if (headers.length > limits.maxColumns) {
-    headers = headers.slice(0, limits.maxColumns);
-    truncated = true;
-  }
-
-  let caption = cleanText(containerEl.getAttribute("aria-label") || "");
-  if (!caption) {
-    caption = findPrecedingHeadingDom(containerEl) || "Card List";
-  }
-
-  const rows = [];
-  let currentBytes = 0;
-  for (const rec of cardRecords) {
-    if (rows.length >= limits.maxRows) {
-      truncated = true;
-      break;
-    }
-    const row = headers.map((h) => rec[h] ?? "");
-    rows.push(row);
-
-    currentBytes += row.reduce((sum, c) => sum + (c ? c.length : 0), 0) + 16;
-    if (currentBytes > limits.maxBytes) {
-      truncated = true;
-      break;
-    }
-  }
-
-  return {
-    caption,
-    headers,
-    rows,
-    rowCount: rows.length,
-    columnCount: headers.length,
-    truncated,
-  };
-}
-
-/**
- * Extract tables from a DOM root element or Document.
- * Searches for:
- * 1) <table> elements
- * 2) role="grid" and role="table" elements
- * 3) Repeated-card lists with structured content
- *
- * @param {Document | Element} root
- * @param {{ ref?: number | string | null, maxRows?: number, maxColumns?: number, maxBytes?: number }} [options]
- * @returns {{ tables: Array<{ caption: string, headers: string[], rows: any[][], rowCount: number, columnCount: number, truncated: boolean }> }}
- */
-export function extractTablesFromDom(root, options = {}) {
-  const limits = {
-    maxRows: options.maxRows ?? TABLE_EXTRACTOR_LIMITS.maxRows,
-    maxColumns: options.maxColumns ?? TABLE_EXTRACTOR_LIMITS.maxColumns,
-    maxBytes: options.maxBytes ?? TABLE_EXTRACTOR_LIMITS.maxBytes,
-  };
-
-  let scope = root;
-  const ref = options.ref;
-  if (ref !== null && ref !== undefined && root.querySelector) {
-    const target = root.querySelector(`[data-cap-ref="${ref}"]`) ||
-                   root.querySelector(`[data-ref="${ref}"]`) ||
-                   root.querySelector(`#${ref}`);
-    if (target) {
-      scope = target;
-    }
-  }
-
-  const extracted = [];
-  const processedElements = new Set();
-
-  // 1. Native HTML tables
-  let tables = [];
-  if (scope.tagName === "TABLE") {
-    tables = [scope];
-  } else if (scope.querySelectorAll) {
-    tables = Array.from(scope.querySelectorAll("table"));
-  }
-
-  for (const tbl of tables) {
-    processedElements.add(tbl);
-    const result = extractHtmlTableDom(tbl, limits);
-    if (result && result.rowCount > 0 && result.columnCount > 0) {
-      extracted.push(result);
-    }
-  }
-
-  // 2. ARIA grids / tables
-  let ariaGrids = [];
+  // 2. ARIA grids / tables: [role="grid"], [role="table"]
+  var ariaGrids = [];
   if (scope.getAttribute && (scope.getAttribute("role") === "table" || scope.getAttribute("role") === "grid")) {
-    if (scope.tagName !== "TABLE") ariaGrids = [scope];
+    if (scope.tagName !== "TABLE") ariaGrids.push(scope);
   } else if (scope.querySelectorAll) {
-    ariaGrids = Array.from(scope.querySelectorAll('[role="table"], [role="grid"]')).filter(
-      (el) => el.tagName !== "TABLE" && !processedElements.has(el),
-    );
+    ariaGrids = Array.prototype.slice.call(scope.querySelectorAll('[role="table"], [role="grid"]')).filter(function (el) {
+      return el.tagName !== "TABLE" && !seen.has(el);
+    });
   }
 
-  for (const grid of ariaGrids) {
-    processedElements.add(grid);
-    const result = extractAriaGridDom(grid, limits);
-    if (result && result.rowCount > 0 && result.columnCount > 0) {
-      extracted.push(result);
+  for (var g = 0; g < ariaGrids.length; g++) {
+    if (!checkBudget()) break;
+    var grid = ariaGrids[g];
+    seen.add(grid);
+
+    var caption = clean(grid.getAttribute ? (grid.getAttribute("aria-label") || "") : "");
+    if (!caption && grid.getAttribute && grid.getAttribute("aria-labelledby") && doc.getElementById) {
+      var lb = doc.getElementById(grid.getAttribute("aria-labelledby"));
+      if (lb) caption = clean(lb.textContent);
+    }
+    if (!caption) caption = headingBefore(grid) || ("Data Grid " + (tables.length + 1));
+
+    var colHeaders = grid.querySelectorAll ? Array.prototype.slice.call(grid.querySelectorAll('[role="columnheader"]')) : [];
+    var rawHeaders = colHeaders.map(function (ch) { return cleanCellText(ch.textContent); }).slice(0, maxColumns);
+
+    var allRowEls = grid.querySelectorAll ? Array.prototype.slice.call(grid.querySelectorAll('[role="row"]')) : [];
+    var dataRowEls = allRowEls.filter(function (rEl) {
+      return !rEl.querySelector || !rEl.querySelector('[role="columnheader"]');
+    });
+
+    var rows = [];
+    var truncated = false;
+    var truncationReason = null;
+    var currentBytes = 0;
+    var maxCols = rawHeaders.length;
+
+    for (var r = 0; r < dataRowEls.length; r++) {
+      if (rows.length >= maxRows) {
+        truncated = true;
+        truncationReason = "row-limit";
+        break;
+      }
+      if (!checkBudget()) {
+        truncated = true;
+        truncationReason = pageTruncationReason;
+        break;
+      }
+
+      var rEl = dataRowEls[r];
+      var cells = rEl.querySelectorAll ? Array.prototype.slice.call(rEl.querySelectorAll('[role="gridcell"], [role="cell"]')) : [];
+      if (cells.length === 0) continue;
+
+      var row = [];
+      for (var c = 0; c < Math.min(cells.length, maxColumns); c++) {
+        row.push(cleanCellText(cells[c].textContent));
+      }
+      if (cells.length > maxColumns) {
+        truncated = true;
+        if (!truncationReason) truncationReason = "column-limit";
+      }
+
+      if (row.length > maxCols) maxCols = row.length;
+      rows.push(row);
+      totalCellsCount += row.length;
+      currentBytes += row.reduce(function (sum, cellText) { return sum + (cellText ? cellText.length : 0); }, 0) + 16;
+      if (currentBytes > maxBytes) {
+        truncated = true;
+        truncationReason = "byte-limit";
+        break;
+      }
+    }
+
+    var headers = [];
+    var seenH = {};
+    var colCount = Math.max(rawHeaders.length, maxCols, 1);
+    for (var col = 0; col < colCount; col++) {
+      var name = rawHeaders[col] || ("Column " + (col + 1));
+      var count = seenH[name] || 0;
+      seenH[name] = count + 1;
+      if (count > 0) name = name + "_" + (count + 1);
+      headers.push(name);
+    }
+
+    var normalizedRows = rows.map(function (rowArr) {
+      var padded = rowArr.slice(0, headers.length);
+      while (padded.length < headers.length) padded.push("");
+      return padded;
+    });
+
+    if (normalizedRows.length > 0) {
+      tables.push({
+        caption: caption,
+        headers: headers,
+        rows: normalizedRows,
+        rowCount: normalizedRows.length,
+        columnCount: headers.length,
+        truncated: truncated,
+        truncationReason: truncationReason,
+      });
     }
   }
 
   // 3. Repeated-card lists
-  let candidateContainers = [];
+  var listContainers = [];
   if (scope.querySelectorAll) {
-    const listLike = Array.from(
-      scope.querySelectorAll('[role="list"], ul, ol, div.cards, div.pricing, div.grid, section.grid, .card-grid, .speaker-list'),
-    );
-    candidateContainers = listLike.filter((c) => !processedElements.has(c));
+    listContainers = Array.prototype.slice.call(
+      scope.querySelectorAll('[role="list"], ul, ol, div.cards, div.pricing, div.grid, section.grid, .card-grid, .speaker-list')
+    ).filter(function (c) { return !seen.has(c); });
   }
 
-  for (const container of candidateContainers) {
-    const result = extractCardListDom(container, limits);
-    if (result && result.rowCount > 0 && result.columnCount > 0) {
-      extracted.push(result);
-    }
-  }
+  for (var lc = 0; lc < listContainers.length; lc++) {
+    if (!checkBudget()) break;
+    var container = listContainers[lc];
+    if (container.querySelector && container.querySelector("table, [role='table'], [role='grid']")) continue;
 
-  return { tables: extracted };
-}
+    var items = Array.prototype.slice.call(container.children || []).filter(function (el) {
+      var t = el.tagName ? el.tagName.toUpperCase() : "";
+      return ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "H1", "H2", "H3", "H4", "H5", "H6"].indexOf(t) === -1;
+    });
+    if (items.length < 3) continue;
 
-/**
- * Pure regex / string tokenizer extractor for HTML strings in non-DOM environments.
- * Extracts <table>, role="grid" / role="table", and repeated-card lists.
- *
- * @param {string} html
- * @param {{ ref?: number | string | null, maxRows?: number, maxColumns?: number, maxBytes?: number }} [options]
- * @returns {{ tables: Array<{ caption: string, headers: string[], rows: any[][], rowCount: number, columnCount: number, truncated: boolean }> }}
- */
-export function extractTablesFromHtml(html, options = {}) {
-  // If a browser/DOM environment is available, use DOMParser
-  if (typeof DOMParser !== "undefined") {
-    try {
-      const doc = new DOMParser().parseFromString(html, "text/html");
-      return extractTablesFromDom(doc, options);
-    } catch {
-      /* fallback to pure string extractor */
-    }
-  }
+    var cardRecords = [];
+    var fieldOrder = [];
+    var seenF = {};
+    var cardTruncated = false;
+    var cardTruncationReason = null;
 
-  const limits = {
-    maxRows: options.maxRows ?? TABLE_EXTRACTOR_LIMITS.maxRows,
-    maxColumns: options.maxColumns ?? TABLE_EXTRACTOR_LIMITS.maxColumns,
-    maxBytes: options.maxBytes ?? TABLE_EXTRACTOR_LIMITS.maxBytes,
-  };
-
-  const cleanHtml = (html || "").replace(/<!--[\s\S]*?-->/g, "");
-
-  const tagRegex = /<(?:(?:\/([a-zA-Z0-9]+))|(?:([a-zA-Z0-9]+)((?:\s+[^>]*)?)\s*(\/?)))>/gi;
-  const stack = [];
-  const blocks = [];
-  let m;
-  while ((m = tagRegex.exec(cleanHtml)) !== null) {
-    const [raw, closeTag, openTag, attrs, selfClosing] = m;
-    if (openTag) {
-      const isSelfClosing = selfClosing === "/" || ["br", "hr", "img", "input", "meta", "link"].includes(openTag.toLowerCase());
-      const isTarget = openTag.toLowerCase() === "table" ||
-                       /role=["'](?:grid|table)["']/i.test(attrs || "") ||
-                       /class=["'][^"']*(?:cards?|pricing|speaker|plans?|grid|list)[^"']*["']/i.test(attrs || "");
-      if (isTarget && stack.length === 0) {
-        stack.push({ tag: openTag.toLowerCase(), attrs: attrs || "", start: m.index, innerStart: tagRegex.lastIndex, depth: 1 });
-      } else if (stack.length > 0 && openTag.toLowerCase() === stack[0].tag) {
-        if (!isSelfClosing) stack[0].depth++;
-      }
-    } else if (closeTag) {
-      if (stack.length > 0 && closeTag.toLowerCase() === stack[0].tag) {
-        stack[0].depth--;
-        if (stack[0].depth === 0) {
-          const top = stack.pop();
-          blocks.push({
-            tag: top.tag,
-            attrs: top.attrs,
-            inner: cleanHtml.slice(top.innerStart, m.index),
-            start: top.start,
-          });
-        }
-      }
-    }
-  }
-
-  const extracted = [];
-  for (const b of blocks) {
-    let caption = "";
-    const capMatch = b.inner.match(/<caption\b[^>]*>([\s\S]*?)<\/caption>/i);
-    if (capMatch) caption = cleanText(capMatch[1]);
-    if (!caption) {
-      const ariaLabel = b.attrs.match(/aria-label=["']([^"']+)["']/i);
-      if (ariaLabel) caption = cleanText(ariaLabel[1]);
-    }
-    if (!caption) {
-      const preceding = cleanHtml.slice(Math.max(0, b.start - 500), b.start);
-      const hMatch = preceding.match(/<h[1-6][^>]*>([^<]+)<\/h[1-6]>[^<]*$/i);
-      if (hMatch) caption = cleanText(hMatch[1]);
+    function addField(f) {
+      if (!seenF[f]) { seenF[f] = true; fieldOrder.push(f); }
     }
 
-    if (b.tag === "table") {
-      let rawHeaders = [];
-      const theadMatch = b.inner.match(/<thead\b[^>]*>([\s\S]*?)<\/thead>/i);
-      const searchHeaderZone = theadMatch ? theadMatch[1] : b.inner;
-      const thRegex = /<th\b[^>]*>([\s\S]*?)<\/th>/gi;
-      let thm;
-      while ((thm = thRegex.exec(searchHeaderZone)) !== null) rawHeaders.push(cleanText(thm[1]));
-
-      const trRegex = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
-      let trm;
-      const rows = [];
-      let isFirst = true;
-      let truncated = false;
-      let currentBytes = 0;
-      let maxCols = rawHeaders.length;
-
-      while ((trm = trRegex.exec(b.inner)) !== null) {
-        if (theadMatch && theadMatch[0].includes(trm[0])) continue;
-        if (rows.length >= limits.maxRows) {
-          truncated = true;
-          break;
-        }
-
-        const cellRegex = /<(?:td|th)\b([^>]*)>([\s\S]*?)<\/(?:td|th)>/gi;
-        let cm;
-        const row = [];
-        while ((cm = cellRegex.exec(trm[1])) !== null) {
-          if (row.length >= limits.maxColumns) {
-            truncated = true;
-            break;
-          }
-          const cellAttrs = cm[1];
-          const cellText = cleanText(cm[2]);
-          const colspanMatch = cellAttrs.match(/colspan=["']?(\d+)["']?/i);
-          const colspan = colspanMatch ? parseInt(colspanMatch[1], 10) : 1;
-          const span = Number.isSafeInteger(colspan) && colspan > 1 ? Math.min(colspan, limits.maxColumns - row.length) : 1;
-          for (let s = 0; s < span; s++) {
-            row.push(cellText);
-          }
-        }
-
-        if (rawHeaders.length === 0 && isFirst) {
-          isFirst = false;
-          rawHeaders = row;
-          continue;
-        }
-        isFirst = false;
-
-        if (row.length > 0) {
-          if (row.length > maxCols) maxCols = row.length;
-          rows.push(row);
-          currentBytes += row.reduce((sum, c) => sum + (c ? c.length : 0), 0) + 16;
-          if (currentBytes > limits.maxBytes) {
-            truncated = true;
-            break;
-          }
-        }
+    for (var it = 0; it < items.length; it++) {
+      if (cardRecords.length >= maxRows) {
+        cardTruncated = true;
+        cardTruncationReason = "row-limit";
+        break;
+      }
+      if (!checkBudget()) {
+        cardTruncated = true;
+        cardTruncationReason = pageTruncationReason;
+        break;
       }
 
-      const headers = sanitizeHeaders(rawHeaders, maxCols);
-      const normalizedRows = rows.map((r) => {
-        const padded = [...r];
-        while (padded.length < headers.length) padded.push("");
-        return padded.slice(0, headers.length);
-      });
-
-      if (normalizedRows.length > 0 && headers.length > 0) {
-        extracted.push({
-          caption: caption || `Table ${extracted.length + 1}`,
-          headers,
-          rows: normalizedRows,
-          rowCount: normalizedRows.length,
-          columnCount: headers.length,
-          truncated,
-        });
-      }
-    } else if (/role=["'](?:grid|table)["']/i.test(b.attrs)) {
-      const headers = [];
-      const chRegex = /<[a-zA-Z0-9]+\b[^>]*role=["']columnheader["'][^>]*>([\s\S]*?)<\/[a-zA-Z0-9]+>/gi;
-      let chm;
-      while ((chm = chRegex.exec(b.inner)) !== null) headers.push(cleanText(chm[1]));
-
-      const rows = [];
-      let truncated = false;
-      let currentBytes = 0;
-      let maxCols = headers.length;
-
-      const rowChunks = b.inner.split(/<[a-zA-Z0-9]+\b[^>]*role=["']row["'][^>]*>/i).slice(1);
-      for (const rc of rowChunks) {
-        if (/role=["']columnheader["']/i.test(rc)) continue;
-        if (rows.length >= limits.maxRows) {
-          truncated = true;
-          break;
-        }
-        const cellRegex = /<[a-zA-Z0-9]+\b[^>]*role=["'](?:gridcell|cell)["'][^>]*>([\s\S]*?)<\/[a-zA-Z0-9]+>/gi;
-        let cm;
-        const row = [];
-        while ((cm = cellRegex.exec(rc)) !== null) {
-          if (row.length >= limits.maxColumns) {
-            truncated = true;
-            break;
-          }
-          row.push(cleanText(cm[1]));
-        }
-        if (row.length > 0) {
-          if (row.length > maxCols) maxCols = row.length;
-          rows.push(row);
-          currentBytes += row.reduce((sum, c) => sum + (c ? c.length : 0), 0) + 16;
-          if (currentBytes > limits.maxBytes) {
-            truncated = true;
-            break;
-          }
+      var item = items[it];
+      var rec = {};
+      var dts = item.querySelectorAll ? Array.prototype.slice.call(item.querySelectorAll("dt")) : [];
+      for (var d = 0; d < dts.length; d++) {
+        var dt = dts[d];
+        var dd = dt.nextElementSibling && dt.nextElementSibling.tagName === "DD" ? dt.nextElementSibling : null;
+        if (dd) {
+          var k = cleanCellText(dt.textContent);
+          if (k) { rec[k] = cleanCellText(dd.textContent); addField(k); }
         }
       }
-
-      const finalHeaders = sanitizeHeaders(headers, maxCols);
-      const normalizedRows = rows.map((r) => {
-        const padded = [...r];
-        while (padded.length < finalHeaders.length) padded.push("");
-        return padded.slice(0, finalHeaders.length);
-      });
-
-      if (normalizedRows.length > 0 && finalHeaders.length > 0) {
-        extracted.push({
-          caption: caption || `Data Grid ${extracted.length + 1}`,
-          headers: finalHeaders,
-          rows: normalizedRows,
-          rowCount: normalizedRows.length,
-          columnCount: finalHeaders.length,
-          truncated,
-        });
+      var h = item.querySelector ? item.querySelector("h2, h3, h4, h5, h6") : null;
+      if (h && !rec["Title"] && !rec["Name"]) {
+        var field = (container.className && container.className.indexOf("speaker") !== -1) ? "Name" : "Title";
+        rec[field] = cleanCellText(h.textContent);
+        addField(field);
       }
-    } else {
-      // Repeated card list
-      const cardChunks = b.inner.split(/<[a-zA-Z0-9]+\b[^>]*class=["'][^"']*(?:card|item|plan|speaker)[^"']*["'][^>]*>/i).slice(1);
-      const cardRecords = [];
-      const fieldOrder = [];
-      const seen = new Set();
-
-      function regField(k) {
-        if (!seen.has(k)) {
-          seen.add(k);
-          fieldOrder.push(k);
-        }
-      }
-
-      for (const cc of cardChunks) {
-        const rec = Object.create(null);
-
-        // 1. Definition lists (<dt>/<dd>)
-        const dlRegex = /<dt\b[^>]*>([\s\S]*?)<\/dt>\s*<dd\b[^>]*>([\s\S]*?)<\/dd>/gi;
-        let dlm;
-        while ((dlm = dlRegex.exec(cc)) !== null) {
-          const k = cleanText(dlm[1]);
-          const v = cleanText(dlm[2]);
-          if (k) {
-            rec[k] = v;
-            regField(k);
-          }
-        }
-
-        // 2. Headings as Title/Name
-        const hMatch = cc.match(/<h[2-6]\b[^>]*>([\s\S]*?)<\/h[2-6]>/i);
-        if (hMatch && !rec["Title"] && !rec["Name"]) {
-          const field = /speaker/i.test(b.attrs) ? "Name" : "Title";
-          rec[field] = cleanText(hMatch[1]);
-          regField(field);
-        }
-
-        // 3. Class-based tokens
-        const spanRegex = /<([a-zA-Z0-9]+)\b[^>]*class=["']([^"']*)["'][^>]*>([\s\S]*?)<\/\1>/gi;
-        let spm;
-        while ((spm = spanRegex.exec(cc)) !== null) {
-          const cls = spm[2];
-          const val = cleanText(spm[3]);
-          for (const token of cls.split(/\s+/)) {
-            if (["price", "cost", "role", "topic", "time", "date", "status", "category"].includes(token.toLowerCase())) {
-              const key = token.charAt(0).toUpperCase() + token.slice(1).toLowerCase();
-              if (!rec[key]) {
-                rec[key] = val;
-                regField(key);
-              }
+      var tagged = item.querySelectorAll ? Array.prototype.slice.call(item.querySelectorAll("[data-field], [class]")) : [];
+      for (var tg = 0; tg < tagged.length; tg++) {
+        var tel = tagged[tg];
+        var df = tel.getAttribute ? tel.getAttribute("data-field") : null;
+        if (df) {
+          var k = cleanCellText(df);
+          if (k && !rec[k]) { rec[k] = cleanCellText(tel.textContent); addField(k); }
+        } else {
+          var cls = String(tel.className || "").split(/\s+/);
+          for (var cl = 0; cl < cls.length; cl++) {
+            var token = cls[cl].toLowerCase();
+            if (["price", "cost", "role", "topic", "time", "date", "status", "category"].indexOf(token) !== -1) {
+              var key = token.charAt(0).toUpperCase() + token.slice(1);
+              if (!rec[key]) { rec[key] = cleanCellText(tel.textContent); addField(key); }
             }
           }
         }
-
-        if (Object.keys(rec).length > 0) {
-          cardRecords.push(rec);
-        }
       }
-
-      if (fieldOrder.length >= 2 && cardRecords.length >= 3) {
-        let truncated = false;
-        let headers = fieldOrder;
-        if (headers.length > limits.maxColumns) {
-          headers = headers.slice(0, limits.maxColumns);
-          truncated = true;
-        }
-
-        const rows = [];
-        let currentBytes = 0;
-        for (const r of cardRecords) {
-          if (rows.length >= limits.maxRows) {
-            truncated = true;
-            break;
-          }
-          const row = headers.map((h) => r[h] ?? "");
-          rows.push(row);
-          currentBytes += row.reduce((sum, c) => sum + (c ? c.length : 0), 0) + 16;
-          if (currentBytes > limits.maxBytes) {
-            truncated = true;
-            break;
-          }
-        }
-
-        if (rows.length > 0) {
-          extracted.push({
-            caption: caption || `Card List ${extracted.length + 1}`,
-            headers,
-            rows,
-            rowCount: rows.length,
-            columnCount: headers.length,
-            truncated,
-          });
-        }
+      if (Object.keys(rec).length > 0) {
+        cardRecords.push(rec);
+        totalCellsCount += Object.keys(rec).length;
       }
+    }
+
+    if (fieldOrder.length >= 2 && cardRecords.length >= 3) {
+      var caption = clean(container.getAttribute ? (container.getAttribute("aria-label") || "") : "") ||
+                    headingBefore(container) || ("Card List " + (tables.length + 1));
+      var headers = fieldOrder.slice(0, maxColumns);
+      var rows = cardRecords.map(function (rec) {
+        return headers.map(function (hdr) { return rec[hdr] || ""; });
+      });
+      tables.push({
+        caption: caption,
+        headers: headers,
+        rows: rows,
+        rowCount: rows.length,
+        columnCount: headers.length,
+        truncated: cardTruncated || fieldOrder.length > maxColumns,
+        truncationReason: cardTruncationReason || (fieldOrder.length > maxColumns ? "column-limit" : null),
+      });
     }
   }
 
-  return { tables: extracted };
+  return {
+    tables: tables,
+    count: tables.length,
+    pageTruncated: pageTruncated,
+    pageTruncationReason: pageTruncationReason,
+  };
+}
+
+/** Extract tables from a DOM root element. */
+export function extractTablesFromDom(root, options = {}) {
+  return injectedTableExtractor({ customDocument: root.ownerDocument || root, ref: null, ...options });
+}
+
+class HtmlMockNode {
+  constructor(tagName, nodeType = 1, text = null) {
+    this.tagName = tagName.toUpperCase();
+    this.nodeType = nodeType;
+    this.nodeValue = text;
+    this.attributes = new Map();
+    this.children = [];
+    this.parentElement = null;
+    this.previousElementSibling = null;
+  }
+  get childNodes() { return this.children; }
+  get textContent() {
+    if (this.nodeType === 3) return this.nodeValue || "";
+    return this.children.map((c) => c.textContent).join("");
+  }
+  get className() { return this.getAttribute("class") || ""; }
+  getAttribute(name) { return this.attributes.get(name.toLowerCase()) ?? null; }
+  setAttribute(name, val) { this.attributes.set(name.toLowerCase(), val); }
+  appendChild(child) {
+    child.parentElement = this;
+    const prev = this.children[this.children.length - 1];
+    if (prev && prev.nodeType === 1) child.previousElementSibling = prev;
+    this.children.push(child);
+    return child;
+  }
+  querySelector(selector) {
+    const all = this.querySelectorAll(selector);
+    return all.length > 0 ? all[0] : null;
+  }
+  querySelectorAll(selector) {
+    const results = [];
+    const selectors = selector.split(",").map((s) => s.trim().toLowerCase());
+    const match = (n) => {
+      if (n.nodeType !== 1) return false;
+      const t = n.tagName.toLowerCase();
+      const cls = (n.getAttribute("class") || "").toLowerCase().split(/\s+/);
+      const role = (n.getAttribute("role") || "").toLowerCase();
+      for (const s of selectors) {
+        if (s === "table" && t === "table") return true;
+        if (s === "caption" && t === "caption") return true;
+        if (s === "thead tr" && t === "tr" && n.parentElement?.tagName?.toLowerCase() === "thead") return true;
+        if (s === "tr" && t === "tr") return true;
+        if ((s === "th" || s === "td") && (t === "th" || t === "td")) return true;
+        if (s === "dt" && t === "dt") return true;
+        if (s === "dd" && t === "dd") return true;
+        if (["h1","h2","h3","h4","h5","h6"].includes(s) && t === s) return true;
+        if (s === '[role="columnheader"]' && role === "columnheader") return true;
+        if (s === '[role="row"]' && role === "row") return true;
+        if ((s === '[role="gridcell"]' || s === '[role="cell"]') && (role === "gridcell" || role === "cell")) return true;
+        if ((s === '[role="table"]' || s === '[role="grid"]') && (role === "table" || role === "grid")) return true;
+        if (s === '[role="list"]' && role === "list") return true;
+        if (s === "ul" && t === "ul") return true;
+        if (s === "ol" && t === "ol") return true;
+        if (s === "[data-field]" && n.getAttribute("data-field")) return true;
+        if (s === "[class]" && n.getAttribute("class")) return true;
+        if (s.startsWith(".") && cls.includes(s.slice(1))) return true;
+        if (s.startsWith("div.") && t === "div" && cls.includes(s.slice(4))) return true;
+      }
+      return false;
+    };
+    const walk = (n) => {
+      for (const c of n.children) {
+        if (match(c)) results.push(c);
+        walk(c);
+      }
+    };
+    walk(this);
+    return results;
+  }
+}
+
+function parseHtmlToDom(html) {
+  const root = new HtmlMockNode("body");
+  let current = root;
+  const tagRe = /<!--[\s\S]*?-->|<(\/)?([a-zA-Z0-9-]+)([^>]*)>|([^<]+)/g;
+  let m;
+  while ((m = tagRe.exec(html)) !== null) {
+    if (m[0].startsWith("<!--")) continue;
+    if (m[4]) {
+      const text = m[4].replace(/[\r\n\t]+/g, " ");
+      if (text.trim()) current.appendChild(new HtmlMockNode("#text", 3, text));
+    } else if (m[2]) {
+      const isClose = !!m[1];
+      const tag = m[2].toLowerCase();
+      if (["meta", "link", "br", "hr", "img", "input"].includes(tag)) {
+        const el = new HtmlMockNode(tag);
+        const attrRe = /([a-zA-Z0-9_-]+)(?:=["']([^"']*)["'])?/g;
+        let am;
+        while ((am = attrRe.exec(m[3])) !== null) el.setAttribute(am[1], am[2] || "");
+        current.appendChild(el);
+      } else if (isClose) {
+        if (current.parentElement) current = current.parentElement;
+      } else {
+        const el = new HtmlMockNode(tag);
+        const attrRe = /([a-zA-Z0-9_-]+)(?:=["']([^"']*)["'])?/g;
+        let am;
+        while ((am = attrRe.exec(m[3])) !== null) el.setAttribute(am[1], am[2] || "");
+        current.appendChild(el);
+        current = el;
+      }
+    }
+  }
+  return root;
+}
+
+/** Simple regex-based fallback extractor for tests/environments without full DOMParser. */
+export function extractTablesFromHtml(html, options = {}) {
+  if (typeof DOMParser !== "undefined") {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    return injectedTableExtractor({ customDocument: doc, ...options });
+  }
+
+  const body = parseHtmlToDom(html);
+  const doc = {
+    body,
+    querySelector(s) { return body.querySelector(s); },
+    querySelectorAll(s) { return body.querySelectorAll(s); },
+    getElementById() { return null; },
+  };
+  return injectedTableExtractor({ customDocument: doc, ...options });
 }

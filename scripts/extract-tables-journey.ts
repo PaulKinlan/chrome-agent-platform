@@ -118,6 +118,7 @@ const fixtureUrl = `http://127.0.0.1:${server.addr.port}/fixture.html`;
 const profile = durableDir(`cap-extract-tables-prof-${Date.now()}`);
 let chrome = null;
 let ws = null;
+let exitCode = 0;
 
 try {
   console.log(`[journey] launching Chrome with profile: ${profile}`);
@@ -186,10 +187,15 @@ try {
   }, ntpSession);
 
   if (evalResult.result?.exceptionDetails) {
-    throw new Error(`Execution failed: ${evalResult.result.exceptionDetails.exception?.description}`);
+    const desc = evalResult.result.exceptionDetails.exception?.description || evalResult.result.exceptionDetails.text;
+    throw new Error(`Execution failed: ${desc}`);
   }
 
-  const { result } = evalResult.result.value;
+  const evalPayload = evalResult.result?.result?.value;
+  if (!evalPayload || !evalPayload.result) {
+    throw new Error(`Unexpected eval response: ${JSON.stringify(evalResult)}`);
+  }
+  const { result } = evalPayload;
   console.log("[journey] extract_tables result count:", result.count);
   console.log("[journey] tables found:", result.tables?.map((t: any) => t.caption));
 
@@ -203,22 +209,30 @@ try {
     expression: `(async () => {
       const conv = document.querySelector("agent-conversation") || document.createElement("agent-conversation");
       if (!conv.isConnected) document.body.appendChild(conv);
-      // Render tool call result card with artifact preview
+      // Render tool call result card with artifact preview using safe DOM methods
       const card = document.createElement("div");
       card.className = "tool-card-preview";
       card.style.cssText = "margin: 24px; padding: 20px; background: #fff; border: 1px solid #d0d7de; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);";
-      card.innerHTML = \`
-        <div style="font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #0969da; display: flex; align-items: center; gap: 8px;">
-          <span>📊</span>
-          <span>Extracted Tabular Artifact: \${${JSON.stringify(result.tables[0].caption)}}</span>
-        </div>
-        <div style="font-size: 13px; color: #57609a; margin-bottom: 16px;">
-          Artifact ID: <code>\${${JSON.stringify(result.artifactId)}}</code> • 3 tables extracted • Accepted directly by table_* tools
-        </div>
-        <table-preview></table-preview>
-      \`;
+
+      const titleDiv = document.createElement("div");
+      titleDiv.style.cssText = "font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #0969da; display: flex; align-items: center; gap: 8px;";
+      const iconSpan = document.createElement("span");
+      iconSpan.textContent = "📊";
+      const captionSpan = document.createElement("span");
+      captionSpan.textContent = "Extracted Tabular Artifact: " + ${JSON.stringify(result.tables[0].caption)};
+      titleDiv.appendChild(iconSpan);
+      titleDiv.appendChild(captionSpan);
+      card.appendChild(titleDiv);
+
+      const metaDiv = document.createElement("div");
+      metaDiv.style.cssText = "font-size: 13px; color: #57609a; margin-bottom: 16px;";
+      metaDiv.textContent = "Artifact ID: " + ${JSON.stringify(result.artifactId)} + " • 3 tables extracted • Accepted directly by table_* tools";
+      card.appendChild(metaDiv);
+
+      const preview = document.createElement("table-preview");
+      card.appendChild(preview);
       document.body.prepend(card);
-      const preview = card.querySelector("table-preview");
+
       const { getAsset } = await import("../lib/artifacts.js");
       const assetRes = await getAsset("master", ${JSON.stringify(result.artifactId)});
       if (assetRes.ok && preview) {
@@ -247,10 +261,9 @@ try {
   }
 
   console.log("PASS: extract_tables journey verified with 3 extracted tables and thread artifact screenshot");
-  Deno.exit(0);
 } catch (e) {
   console.error("FAIL: extract_tables journey failed:", e);
-  Deno.exit(1);
+  exitCode = 1;
 } finally {
   try { await server.shutdown(); } catch {}
   try { if (ws) ws.close(); } catch {}
@@ -258,3 +271,4 @@ try {
     try { await teardownChrome(chrome, profile); } catch {}
   }
 }
+Deno.exit(exitCode);
