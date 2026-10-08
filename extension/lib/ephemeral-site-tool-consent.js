@@ -68,6 +68,17 @@ export function createEphemeralSiteToolConsentStore() {
       return token;
     },
 
+    binding(token) {
+      const entry = live(token);
+      return Object.freeze({
+        origin: entry.origin,
+        tabId: entry.tabId,
+        documentId: entry.documentId,
+        runId: entry.runId,
+        threadId: entry.threadId,
+      });
+    },
+
     snapshot(token, tool) {
       const entry = live(token);
       return current(entry, identityFor(entry, tool));
