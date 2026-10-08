@@ -36,6 +36,13 @@ import { perfSpan } from "./cap-perf.js";
 import { cleanupGuidanceFor } from "./lifecycle-cleanup.js";
 import { extractReadableMarkdown, wrapUntrustedContent } from "./page-reader.js";
 import { createAsset } from "./artifacts.js";
+import {
+  createTabularArtifact,
+  extractTablesFromDom,
+  extractTablesFromHtml,
+  TABLE_EXTRACTOR_LIMITS,
+  toCanonicalTable,
+} from "./table-extractor.js";
 
 const grantLog = capLog("browser:grant");
 const toolDispatchLog = capLog("tool");
@@ -1403,6 +1410,366 @@ export async function capturePage(tabId, { asArtifact = false, includeScreenshot
 export async function capturePageToArtifact({ tabId, asArtifact = true, includeScreenshot = false, screenshot = "none" } = {}) {
   return await capturePage(tabId, { asArtifact, includeScreenshot, screenshot });
 }
+
+/**
+ * Injected script for extracting tables, ARIA grids, and repeated-card lists.
+ * Self-contained for chrome.scripting.executeScript injection into tab page.
+ */
+function injectedTableExtractor({ ref = null, maxRows = 2000, maxColumns = 50, maxBytes = 1024 * 1024 } = {}) {
+  function clean(s) {
+    if (!s) return "";
+    return s.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+  }
+
+  function headingBefore(el) {
+    var p = el.previousElementSibling;
+    while (p) {
+      if (/^H[1-6]$/i.test(p.tagName)) return clean(p.textContent);
+      var inner = p.querySelector ? p.querySelector("h1, h2, h3, h4, h5, h6") : null;
+      if (inner) return clean(inner.textContent);
+      p = p.previousElementSibling;
+    }
+    if (el.parentElement && el.parentElement !== document.body) {
+      return headingBefore(el.parentElement);
+    }
+    return null;
+  }
+
+  function getScope() {
+    if (ref !== null && ref !== undefined) {
+      var target = document.querySelector('[data-cap-ref="' + ref + '"]') ||
+                   document.querySelector('[data-ref="' + ref + '"]') ||
+                   document.getElementById(String(ref));
+      if (target) return target;
+    }
+    return document;
+  }
+
+  var scope = getScope();
+  var tables = [];
+  var seen = new Set();
+
+  // 1. Native HTML <table> elements
+  var nativeTables = [];
+  if (scope.tagName === "TABLE") {
+    nativeTables.push(scope);
+  } else if (scope.querySelectorAll) {
+    nativeTables = Array.prototype.slice.call(scope.querySelectorAll("table"));
+  }
+
+  for (var i = 0; i < nativeTables.length; i++) {
+    var tbl = nativeTables[i];
+    seen.add(tbl);
+    var caption = "";
+    var capEl = tbl.querySelector("caption");
+    if (capEl) caption = clean(capEl.textContent);
+    if (!caption) caption = clean(tbl.getAttribute("aria-label") || "");
+    if (!caption && tbl.getAttribute("aria-labelledby")) {
+      var lb = document.getElementById(tbl.getAttribute("aria-labelledby"));
+      if (lb) caption = clean(lb.textContent);
+    }
+    if (!caption) caption = headingBefore(tbl) || ("Table " + (tables.length + 1));
+
+    var theadRows = Array.prototype.slice.call(tbl.querySelectorAll("thead tr"));
+    var headerTr = theadRows.length > 0 ? theadRows[theadRows.length - 1] : tbl.querySelector("tr");
+    var rawHeaders = [];
+    if (headerTr) {
+      var thCells = Array.prototype.slice.call(headerTr.querySelectorAll("th, td"));
+      for (var h = 0; h < Math.min(thCells.length, maxColumns); h++) {
+        rawHeaders.push(clean(thCells[h].textContent));
+      }
+    }
+
+    var allTrs = Array.prototype.slice.call(tbl.querySelectorAll("tr"));
+    var dataTrs = headerTr ? allTrs.filter(function (tr) { return tr !== headerTr && theadRows.indexOf(tr) === -1; }) : allTrs;
+
+    var rows = [];
+    var truncated = false;
+    var currentBytes = 0;
+    var maxCols = rawHeaders.length;
+
+    for (var r = 0; r < dataTrs.length; r++) {
+      if (rows.length >= maxRows) {
+        truncated = true;
+        break;
+      }
+      var tr = dataTrs[r];
+      var cells = Array.prototype.slice.call(tr.querySelectorAll("td, th"));
+      if (cells.length === 0) continue;
+      var row = [];
+      for (var c = 0; c < cells.length; c++) {
+        if (row.length >= maxColumns) {
+          truncated = true;
+          break;
+        }
+        var cell = cells[c];
+        var text = clean(cell.textContent);
+        var cs = parseInt(cell.getAttribute("colspan") || "1", 10);
+        var span = (Number.isFinite(cs) && cs > 1) ? Math.min(cs, maxColumns - row.length) : 1;
+        for (var s = 0; s < span; s++) row.push(text);
+      }
+      if (row.length > maxCols) maxCols = row.length;
+      rows.push(row);
+      currentBytes += row.reduce(function (sum, cellText) { return sum + (cellText ? cellText.length : 0); }, 0) + 16;
+      if (currentBytes > maxBytes) {
+        truncated = true;
+        break;
+      }
+    }
+
+    var headers = [];
+    var seenH = {};
+    var colCount = Math.max(rawHeaders.length, maxCols, 1);
+    for (var col = 0; col < colCount; col++) {
+      var name = rawHeaders[col] || ("Column " + (col + 1));
+      var count = seenH[name] || 0;
+      seenH[name] = count + 1;
+      if (count > 0) name = name + "_" + (count + 1);
+      headers.push(name);
+    }
+
+    var normalizedRows = rows.map(function (rowArr) {
+      var padded = rowArr.slice(0, headers.length);
+      while (padded.length < headers.length) padded.push("");
+      return padded;
+    });
+
+    if (normalizedRows.length > 0) {
+      tables.push({
+        caption: caption,
+        headers: headers,
+        rows: normalizedRows,
+        rowCount: normalizedRows.length,
+        columnCount: headers.length,
+        truncated: truncated,
+      });
+    }
+  }
+
+  // 2. ARIA grids / tables: [role="grid"], [role="table"]
+  var ariaGrids = [];
+  if (scope.getAttribute && (scope.getAttribute("role") === "table" || scope.getAttribute("role") === "grid")) {
+    if (scope.tagName !== "TABLE") ariaGrids.push(scope);
+  } else if (scope.querySelectorAll) {
+    ariaGrids = Array.prototype.slice.call(scope.querySelectorAll('[role="table"], [role="grid"]')).filter(function (el) {
+      return el.tagName !== "TABLE" && !seen.has(el);
+    });
+  }
+
+  for (var g = 0; g < ariaGrids.length; g++) {
+    var grid = ariaGrids[g];
+    seen.add(grid);
+    var caption = clean(grid.getAttribute("aria-label") || "");
+    if (!caption && grid.getAttribute("aria-labelledby")) {
+      var lb = document.getElementById(grid.getAttribute("aria-labelledby"));
+      if (lb) caption = clean(lb.textContent);
+    }
+    if (!caption) caption = headingBefore(grid) || ("Data Grid " + (tables.length + 1));
+
+    var colHeaders = Array.prototype.slice.call(grid.querySelectorAll('[role="columnheader"]'));
+    var rawHeaders = colHeaders.map(function (ch) { return clean(ch.textContent); }).slice(0, maxColumns);
+
+    var allRowEls = Array.prototype.slice.call(grid.querySelectorAll('[role="row"]'));
+    var dataRowEls = allRowEls.filter(function (rEl) { return !rEl.querySelector('[role="columnheader"]'); });
+
+    var rows = [];
+    var truncated = false;
+    var currentBytes = 0;
+    var maxCols = rawHeaders.length;
+
+    for (var r = 0; r < dataRowEls.length; r++) {
+      if (rows.length >= maxRows) {
+        truncated = true;
+        break;
+      }
+      var rEl = dataRowEls[r];
+      var cells = Array.prototype.slice.call(rEl.querySelectorAll('[role="gridcell"], [role="cell"]'));
+      if (cells.length === 0) continue;
+      var row = [];
+      for (var c = 0; c < Math.min(cells.length, maxColumns); c++) {
+        row.push(clean(cells[c].textContent));
+      }
+      if (row.length > maxCols) maxCols = row.length;
+      rows.push(row);
+      currentBytes += row.reduce(function (sum, cellText) { return sum + (cellText ? cellText.length : 0); }, 0) + 16;
+      if (currentBytes > maxBytes) {
+        truncated = true;
+        break;
+      }
+    }
+
+    var headers = [];
+    var seenH = {};
+    var colCount = Math.max(rawHeaders.length, maxCols, 1);
+    for (var col = 0; col < colCount; col++) {
+      var name = rawHeaders[col] || ("Column " + (col + 1));
+      var count = seenH[name] || 0;
+      seenH[name] = count + 1;
+      if (count > 0) name = name + "_" + (count + 1);
+      headers.push(name);
+    }
+
+    var normalizedRows = rows.map(function (rowArr) {
+      var padded = rowArr.slice(0, headers.length);
+      while (padded.length < headers.length) padded.push("");
+      return padded;
+    });
+
+    if (normalizedRows.length > 0) {
+      tables.push({
+        caption: caption,
+        headers: headers,
+        rows: normalizedRows,
+        rowCount: normalizedRows.length,
+        columnCount: headers.length,
+        truncated: truncated,
+      });
+    }
+  }
+
+  // 3. Repeated-card lists
+  var listContainers = [];
+  if (scope.querySelectorAll) {
+    listContainers = Array.prototype.slice.call(
+      scope.querySelectorAll('[role="list"], ul, ol, div.cards, div.pricing, div.grid, section.grid, .card-grid, .speaker-list')
+    ).filter(function (c) { return !seen.has(c); });
+  }
+
+  for (var lc = 0; lc < listContainers.length; lc++) {
+    var container = listContainers[lc];
+    if (container.querySelector("table, [role='table'], [role='grid']")) continue;
+    var items = Array.prototype.slice.call(container.children).filter(function (el) {
+      return ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "H1", "H2", "H3", "H4", "H5", "H6"].indexOf(el.tagName) === -1;
+    });
+    if (items.length < 3) continue;
+
+    var cardRecords = [];
+    var fieldOrder = [];
+    var seenF = {};
+
+    function addField(f) {
+      if (!seenF[f]) { seenF[f] = true; fieldOrder.push(f); }
+    }
+
+    for (var it = 0; it < items.length; it++) {
+      var item = items[it];
+      var rec = {};
+      var dts = Array.prototype.slice.call(item.querySelectorAll("dt"));
+      for (var d = 0; d < dts.length; d++) {
+        var dt = dts[d];
+        var dd = dt.nextElementSibling && dt.nextElementSibling.tagName === "DD" ? dt.nextElementSibling : null;
+        if (dd) {
+          var k = clean(dt.textContent);
+          if (k) { rec[k] = clean(dd.textContent); addField(k); }
+        }
+      }
+      var h = item.querySelector("h2, h3, h4, h5, h6");
+      if (h && !rec["Title"] && !rec["Name"]) {
+        var field = container.className.indexOf("speaker") !== -1 ? "Name" : "Title";
+        rec[field] = clean(h.textContent);
+        addField(field);
+      }
+      var tagged = Array.prototype.slice.call(item.querySelectorAll("[data-field], [class]"));
+      for (var tg = 0; tg < tagged.length; tg++) {
+        var tel = tagged[tg];
+        var df = tel.getAttribute("data-field");
+        if (df) {
+          var k = clean(df);
+          if (k && !rec[k]) { rec[k] = clean(tel.textContent); addField(k); }
+        } else {
+          var cls = String(tel.className || "").split(/\s+/);
+          for (var cl = 0; cl < cls.length; cl++) {
+            var token = cls[cl].toLowerCase();
+            if (["price", "cost", "role", "topic", "time", "date", "status", "category"].indexOf(token) !== -1) {
+              var key = token.charAt(0).toUpperCase() + token.slice(1);
+              if (!rec[key]) { rec[key] = clean(tel.textContent); addField(key); }
+            }
+          }
+        }
+      }
+      if (Object.keys(rec).length > 0) cardRecords.push(rec);
+    }
+
+    if (fieldOrder.length >= 2 && cardRecords.length >= 3) {
+      var caption = clean(container.getAttribute("aria-label") || "") || headingBefore(container) || ("Card List " + (tables.length + 1));
+      var headers = fieldOrder.slice(0, maxColumns);
+      var rows = cardRecords.slice(0, maxRows).map(function (rec) {
+        return headers.map(function (hdr) { return rec[hdr] || ""; });
+      });
+      tables.push({
+        caption: caption,
+        headers: headers,
+        rows: rows,
+        rowCount: rows.length,
+        columnCount: headers.length,
+        truncated: cardRecords.length > maxRows || fieldOrder.length > maxColumns,
+      });
+    }
+  }
+
+  return { tables: tables };
+}
+
+/**
+ * Extract structured tabular data from a tab (or the active tab).
+ * Injects a bounded extractor into the page, extracting <table>, role="grid"/table,
+ * and repeated card lists (up to 2000 rows × 50 cols, ≤ 1 MB).
+ * Returns CSV-shaped JSON { tables: [{ caption, headers, rows, truncated }] } tagged untrusted.
+ * When asArtifact: true, writes canonical tabular artifact(s) directly usable by table_* tools.
+ */
+export async function extractTables(tabId, { ref = null, asArtifact = false } = {}) {
+  const verb = "extract tables from the page";
+  let origin = null;
+  try {
+    const gate = await pageAccessGate(tabId, verb, { needScripting: true });
+    if (gate.result) return gate.result;
+    origin = gate.origin;
+    const targetTab = gate.target;
+
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: targetTab.id },
+      func: injectedTableExtractor,
+      args: [{ ref, maxRows: TABLE_EXTRACTOR_LIMITS.maxRows, maxColumns: TABLE_EXTRACTOR_LIMITS.maxColumns, maxBytes: TABLE_EXTRACTOR_LIMITS.maxBytes }],
+    });
+    const pageResult = results?.[0]?.result;
+    if (!pageResult || !Array.isArray(pageResult.tables)) {
+      return { untrusted: true, tables: [], count: 0 };
+    }
+
+    const tables = pageResult.tables;
+    if (asArtifact && tables.length > 0) {
+      for (const t of tables) {
+        try {
+          const artifactResult = await createTabularArtifact(t, {
+            name: `${t.caption || "Table"} (${targetTab.title || "extracted"})`,
+            sourceUrl: targetTab.url,
+            createAssetFn: createAsset,
+          });
+          t.artifactId = artifactResult.artifactId;
+          t.artifact = artifactResult.artifact;
+        } catch (e) {
+          t.artifactError = String(e?.message ?? e);
+        }
+      }
+    }
+
+    return {
+      untrusted: true,
+      tables,
+      count: tables.length,
+      ...(asArtifact && tables[0]?.artifactId ? { artifactId: tables[0].artifactId, artifact: tables[0].artifact } : {}),
+    };
+  } catch (e) {
+    return await pageAccessFailure(e, origin, verb);
+  }
+}
+
+export {
+  extractTablesFromDom,
+  extractTablesFromHtml,
+  toCanonicalTable,
+  createTabularArtifact,
+};
 
 // ── CAP-FB-20260830-PAGE-ACTION-TOOLS-01: the minimal page-action family ──────
 // A grant-gated way to act inside a page (click/type/select/scroll/wait) for
@@ -2878,6 +3245,16 @@ export function browserToolset(readOnly = false, {
       }),
       execute: async ({ tabId, asArtifact, includeScreenshot, screenshot }) =>
         capturePage(tabId, { asArtifact, includeScreenshot, screenshot }),
+    }),
+    extract_tables: tool({
+      description:
+        "Extract structured tabular data (HTML <table>, role='grid'/table, and repeated card lists) from a tab (or the active tab). Returns CSV-shaped JSON {tables:[{caption, headers, rows, truncated}]}. Set asArtifact:true to save persistent tabular artifact(s) directly accepted by table_* tools.",
+      inputSchema: z.object({
+        tabId: z.number().optional().describe("tab id to extract tables from (defaults to the active tab)"),
+        ref: z.number().optional().describe("optional snapshot element ref from find_elements to scope extraction"),
+        asArtifact: z.boolean().optional().default(false).describe("when true, saves persistent tabular artifact(s) directly usable by table_* tools"),
+      }),
+      execute: async ({ tabId, ref, asArtifact }) => extractTables(tabId, { ref, asArtifact }),
     }),
     capture_screenshot: tool({
       description:
@@ -6767,6 +7144,7 @@ export function browserToolset(readOnly = false, {
     return wrapToolsetForObservability({
       read_page: all.read_page,
       capture_page: all.capture_page,
+      extract_tables: all.extract_tables,
       capture_screenshot: all.capture_screenshot,
       list_tabs: all.list_tabs,
       recent_browser_events: all.recent_browser_events,

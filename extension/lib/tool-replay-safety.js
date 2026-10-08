@@ -43,6 +43,7 @@ const WORST_ORDER = [REPLAY_UNKNOWN, REPLAY_MUTATING, REPLAY_IDEMPOTENT, REPLAY_
 const BROWSER_READ_TOOLS = new Set([
   "read_page",
   "capture_page",
+  "extract_tables",
   "capture_screenshot",
   "list_tabs",
   "recent_browser_events",
@@ -197,7 +198,7 @@ const BUILT_IN_TOOLS = new Set([
   // again, same trust as the workspace itself).
   "write_file",
   "delete_file",
-  "read_page", "capture_page", "capture_screenshot", "list_tabs", "recent_browser_events",
+  "read_page", "capture_page", "extract_tables", "capture_screenshot", "list_tabs", "recent_browser_events",
   "close_tab", "navigate_tab", "open_tab", "schedule_task",
   // Tranche-1 Chrome API coverage (reads are classified above; ALL are built-ins):
   "list_windows", "get_action_state", "list_commands",
