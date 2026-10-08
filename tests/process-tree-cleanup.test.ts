@@ -12,6 +12,8 @@ import {
   setsidSpawnSpec,
 } from "../scripts/lib/process-tree.ts";
 import { launchChrome, teardownChrome } from "../scripts/lib/chrome-launch.ts";
+import { join } from "node:path";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const PGREP = "/usr/bin/pgrep";
 
@@ -434,18 +436,14 @@ Deno.test("cfc9c: teardownChrome reaps detached crashpad handlers scoped to prof
 
 Deno.test("cfc9c: reapCrashpadHandler returns cleanly when no handler runs", async () => {
   const { reapCrashpadHandler } = await import("../scripts/lib/chrome-launch.ts");
-  const tempDir = Deno.makeTempDirSync({ prefix: "cfc9c-nonexistent-" });
-  try {
-    // A non-existent profile path should return cleanly (pgrep exit 1)
-    await reapCrashpadHandler(tempDir + "/nonexistent-profile");
-  } finally {
-    try { Deno.removeSync(tempDir, { recursive: true }); } catch { /* ignore */ }
-  }
+  // A non-existent profile path should return cleanly (pgrep exit 1)
+  const nonexistent = join(durableDir("scratch"), "nonexistent-profile-cfc9c-" + Date.now());
+  await reapCrashpadHandler(nonexistent);
 });
 
 Deno.test("cfc9c: reapCrashpadHandler refuses malformed, empty, or root paths and does not kill neighbor handlers", async () => {
   const { reapCrashpadHandler } = await import("../scripts/lib/chrome-launch.ts");
-  const baseDir = Deno.makeTempDirSync({ prefix: "cfc9c-malformed-guard-" });
+  const baseDir = Deno.makeTempDirSync({ dir: durableDir("scratch"), prefix: "cfc9c-malformed-guard-" });
   const liveProfile = `${baseDir}/live-profile`;
   Deno.mkdirSync(liveProfile, { recursive: true });
 
