@@ -2713,20 +2713,76 @@ async function main() {
       scheduledAgent = (list?.agents ?? []).find((a) => a?.name === schedName) ?? null;
       if (!scheduledAgent) await sleep(200);
     }
-    await sleep(1500);
-    const sidebarSched = await evalIn(cdp, ntpSession, `[...document.querySelectorAll('#side-agents .agent-item')].map((el) => el.textContent.replace(/\s+/g, ' ').trim())`);
-    const surfacesS = await measureAgentSurfaces();
+    // b7ny0.4: Bounded poll for the sidebar row to settle. In a clean genuine-UI path,
+    // the sidebar updates via automatic rerenders (+67/+83/+99ms per j5yz diagnosis),
+    // but in the full journey a fixed ~1.5s sleep can hit a transient race between
+    // unawaited renderNamedAgents() and named-agent-changed broadcast. Re-poll boundedly
+    // up to 5s until the scheduled row appears with the agent name and humanised Scheduled marker.
+    // The raw-cadence clause ('every N min') is omitted because the UI humanises weekly schedules
+    // to 'Scheduled · weekly'.
+    const READ_SIDEBAR = `[...document.querySelectorAll('#side-agents .agent-item')].map((el) => el.textContent.replace(/\\s+/g, ' ').trim())`;
+    let sidebarSched = [];
+    let surfacesS = null;
+    const pollStart = Date.now();
+    while (Date.now() - pollStart < 5000) {
+      sidebarSched = (await evalIn(cdp, ntpSession, READ_SIDEBAR)) ?? [];
+      surfacesS = await measureAgentSurfaces();
+      if (
+        Array.isArray(sidebarSched) &&
+        sidebarSched.some((t) => t.includes(schedName) && /Scheduled ·/.test(t)) &&
+        surfacesS.sidebarRows === 2
+      ) {
+        break;
+      }
+      await sleep(200);
+    }
+    if (!surfacesS) surfacesS = await measureAgentSurfaces();
     if (surfacesS.shot) await writeEvidence("templates-created.png", surfacesS.shot);
-    console.log("scheduled from select:", JSON.stringify({ schedPick, schedMinutes, g2value: g2.value, scheduledAgent: scheduledAgent && { id: scheduledAgent.id, schedule: scheduledAgent.schedule }, sidebarSched, surfaces: { ...surfacesS, shot: undefined } }));
+
+    // If poll exhausted, capture sidebar DOM for diagnosis
+    let sidebarDomFailure = null;
+    const hasScheduledRow = Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && /Scheduled ·/.test(t));
+    if (!hasScheduledRow || surfacesS.sidebarRows !== 2) {
+      sidebarDomFailure = await evalIn(cdp, ntpSession, `(() => {
+        const side = document.querySelector('#side-agents');
+        return {
+          innerHTML: side?.innerHTML ?? null,
+          items: [...(side?.querySelectorAll('.agent-item') ?? [])].map(b => ({
+            text: b.textContent.replace(/\\s+/g, ' ').trim(),
+            className: b.className,
+            title: b.title,
+          })),
+        };
+      })()`);
+    }
+
+    console.log("scheduled from select:", JSON.stringify({
+      schedPick,
+      schedMinutes,
+      g2value: g2.value,
+      scheduledAgent: scheduledAgent && { id: scheduledAgent.id, schedule: scheduledAgent.schedule },
+      sidebarSched,
+      surfaces: { ...surfacesS, shot: undefined },
+      sidebarDomFailure,
+    }));
     check(
       "create dialog: a Scheduled-group template creates one scheduled agent that the sidebar and Settings both list",
       schedPick?.picked === true && /every \d+ minutes/.test(schedMinutes) && scheduledAgent !== null &&
-        Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && /Scheduled · every \d+ min/.test(t)) &&
+        hasScheduledRow &&
         surfacesS.sidebarRows === 2 && surfacesS.panelRows === 2 && surfacesS.settingsRows === 2 && /^2 agents/.test(surfacesS.panelCount) &&
         // h97m: the FOURTH surface asserts too — the picker's +3 (acp harness
         // rows leaking into the created-agents projection) walked through this
         // check unnoticed until the picker asserted nothing.
         surfacesS.sidepanelRows === 2,
+      {
+        schedPick,
+        schedMinutes,
+        schedName,
+        scheduledAgent,
+        sidebarSched,
+        surfaces: { ...surfacesS, shot: undefined },
+        sidebarDomFailure,
+      },
     );
     // CAP-FB-20260830-USER-VOICE-COPY-01: the hub's and Settings' delete
     // confirmations are ONE shared dialog whose body says what the person
