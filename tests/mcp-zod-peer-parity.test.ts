@@ -238,17 +238,14 @@ Deno.test("mcp-zod-peer-parity: MCP Server tool registration wire schema preserv
   assertEquals(compiledFromWire3.zodSchema.safeParse({ keyword: "key", depth: 1 }).success, true);
 });
 
-Deno.test("mcp-zod-peer-parity: preminify converter contribution is exactly 354 bytes across 6 files in SW bundle (re-derived after 3337)", async () => {
-  // Verify that zod-to-json-schema's actual contribution in the service worker bundle output exactly
-  // matches the figure re-derived after chrome-agent-platform-3337.
-  //
-  // WHY THIS IS 354 AND NOT THE AUDIT'S 2,460: the azlc audit measured while the build injected
-  // esbuild's shared `<define:process.env>` init call into every file that reads process.env. That
-  // carrier kept 78 zod-to-json-schema files in the SW output for their SCAFFOLDING alone (one 27-byte
-  // init call each) and summed to 2,460 bytes. 3337 replaced the object-literal define with an
-  // identifier define + banner (no shared module, no init calls), so tree-shaking now keeps only the 6
-  // files carrying real converter code, 354 bytes. The pin keeps its teeth: a duplicated converter
-  // instance, or any real change to what is emitted, moves BOTH the byte total and the file count.
+Deno.test("mcp-zod-peer-parity: preminify converter contribution is exactly 177 bytes across 3 files in SW bundle (re-derived after ckebt)", async () => {
+  // Measure the ACTUAL service worker bundle output, not the dependency's on-disk size.
+  // The old post-3337 graph emitted two peer-context copies (6 files / 354 bytes).
+  // Moving the attached-declared validator into its shared authority module in ckebt
+  // left just one copy: Options.js=83, index.js=0, parsers/string.js=94.
+  // The azlc audit's earlier 2,460 included scaffold files retained by an old
+  // process.env define; 3337 removed those. A future duplicate converter or
+  // changed emitted code moves the exact file, byte and per-file pins below.
   const { build, stop } = await import("npm:esbuild@0.25.12");
   const path = await import("node:path");
   const { browserDependencies, browserProcessEnvOptions } = await import("../scripts/browser-dependencies.mjs");
@@ -285,15 +282,13 @@ Deno.test("mcp-zod-peer-parity: preminify converter contribution is exactly 354 
       }
     }
 
-    // The measured contribution is exact (see the header for why it moved off the audit's 2,460).
-    assertEquals(emittedFiles, 6, "emitted converter input files is exactly 6");
-    assertEquals(emittedBytes, 354, "emitted converter contribution is exactly 354 bytes");
-    // Per-file contributions too (review P2-2): the two aggregate numbers alone could be held at 6 / 354
-    // by an equal-and-opposite edit between two converter files. Two peer-context copies x
-    // (Options.js 83 + index.js 0 + parsers/string.js 94) = [0,0,83,83,94,94].
+    // Keep all three pins: an equal-and-opposite edit could preserve the byte total
+    // but still change the emitted modules. A second peer-context copy fails here.
+    assertEquals(emittedFiles, 3, "emitted converter input files is exactly 3");
+    assertEquals(emittedBytes, 177, "emitted converter contribution is exactly 177 bytes");
     assertEquals(
       contributions.sort((a, b) => a - b),
-      [0, 0, 83, 83, 94, 94],
+      [0, 83, 94],
       "per-file converter contributions (equal-and-opposite edits cannot cancel out)",
     );
   } finally {
