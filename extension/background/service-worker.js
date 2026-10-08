@@ -1944,7 +1944,9 @@ const trustedSiteToolAuthorizations = new WeakSet();
 // promise }. The record exists before the approval row does, so a Settings
 // reset can fence work even while its required audit write is still queued.
 const pendingSiteToolConsent = new Map();
-// In-memory only: there is no origin site store until an explicit owner enroll.
+// ckebt's hub attachment supplies live run tokens, not execution authority.
+// D2 owner enrollment also supports NO token: it promotes an empty same-gen
+// envelope, while any surviving old Deny is folded into the durable intent.
 const ephemeralSiteToolConsentStore = createEphemeralSiteToolConsentStore();
 const cancellingApprovalExecutions = new Set();
 let siteToolProfileEpoch = 0;
