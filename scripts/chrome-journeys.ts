@@ -2654,11 +2654,7 @@ async function main() {
     check(
       "create dialog: a Scheduled-group template creates one scheduled agent that the sidebar and Settings both list",
       schedPick?.picked === true && /every \d+ minutes/.test(schedMinutes) && scheduledAgent !== null &&
-        // b7ny0.4: the sidebar chip renders the HUMANISED cadence via
-        // formatCadenceMinutes (10080 -> "weekly"), not the raw "every N min" form.
-        // Assert the name + the "Scheduled" marker, not the cadence wording, so this
-        // cannot drift again when the humanisation changes.
-        Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && t.includes("Scheduled")) &&
+        Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && /Scheduled · every \d+ min/.test(t)) &&
         surfacesS.sidebarRows === 2 && surfacesS.panelRows === 2 && surfacesS.settingsRows === 2 && /^2 agents/.test(surfacesS.panelCount) &&
         // h97m: the FOURTH surface asserts too — the picker's +3 (acp harness
         // rows leaking into the created-agents projection) walked through this
