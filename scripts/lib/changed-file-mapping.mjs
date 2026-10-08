@@ -45,7 +45,7 @@ export const HARNESS_TREE_GUARDS = Object.freeze([
   "tests/durable-root.test.ts",
   "tests/quiet-window.test.ts",
   "tests/chrome-profile-isolation.test.ts",
-  "tests/chrome-profile-location.test.ts",
+  "tests/chrome-profile-static.test.ts",
   "tests/machine-path-honesty.test.ts",
   "tests/harness-debug-port.test.ts",
   "tests/test-partition-guard.test.ts",
@@ -60,6 +60,7 @@ export const BOOKKEEPING_GUARDS = Object.freeze([
   "tests/changelog.test.ts",
   "tests/bump-version-sanitize.test.ts",
   "tests/bundled-tool-packages.test.ts",
+  "tests/first-run-onboarding-composition.test.ts",
 ]);
 
 /** The three files the post-commit version hook rewrites. */

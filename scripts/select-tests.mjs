@@ -234,18 +234,19 @@ export function alwaysOnGuards() {
  * regression test can prove the always-on guard set is SURFACED rather than asserting the shape of a
  * print statement: a lane told only "FULL_SUITE" has no way to learn which guards it just failed to
  * run, which is exactly how the jfbn and fyvc violations reached main.
- * @param {{ uncovered?: string[], list?: boolean, unmappable?: Array<{ file: string, mechanism: string }> }} [opts]
+ * @param {{ uncovered?: string[], list?: boolean, unmappable?: Array<{ file: string, mechanism: string }>, header?: string }} [opts]
  * @returns {{ output: string[], action: "list" | "run" }}
  */
-export function failClosedPlan({ uncovered = [], list = false, unmappable = [] } = {}) {
+export function failClosedPlan({ uncovered = [], list = false, unmappable = [], header } = {}) {
   const guards = alwaysOnGuards();
   const fileLines = unmappable.length
     ? unmappable.map((u) => `  ${u.file}\n      → ${u.mechanism}`)
     : uncovered.map((f) => `  ${f}`);
+  const headerLine = header ?? `select-tests: FAIL CLOSED — changed file(s) with no reachable test cannot be proved covered by a subset:`;
   return {
     action: list ? "list" : "run",
     output: [
-      `select-tests: FAIL CLOSED — changed file(s) with no reachable test cannot be proved covered by a subset:`,
+      headerLine,
       ...fileLines,
       `Running the FULL suite (npm test) instead.`,
       `select-tests: THE ALWAYS-ON GUARD SET (${guards.length} files) IS NOT COVERED BY A SUBSET GATE — run these explicitly if you cannot run the full suite:`,
@@ -663,12 +664,17 @@ async function main() {
 
   const selfChanged = changed.filter((f) => isSelectorInfrastructure(f));
   if (selfChanged.length) {
-    console.error(
-      `select-tests: FAIL CLOSED — this change edits the test selector's own machinery ` +
-        `(${selfChanged.join(", ")}), so a subset it chooses cannot validate it.\n` +
-        `Running the FULL suite (npm test) instead.`,
-    );
-    if (list) console.log("FULL_SUITE");
+    const unmappable = selfChanged.map((file) => ({
+      file,
+      mechanism: "the test selector's own machinery — a subset chosen by the thing under test cannot validate it",
+    }));
+    const plan = failClosedPlan({
+      list,
+      unmappable,
+      header: `select-tests: FAIL CLOSED — this change edits the test selector's own machinery, so a subset it chooses cannot validate it:`,
+    });
+    console.error(plan.output.join("\n"));
+    if (plan.action === "list") console.log("FULL_SUITE");
     else runFullSuite();
     return;
   }

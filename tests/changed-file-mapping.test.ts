@@ -268,6 +268,19 @@ Deno.test("nco2: mapUncovered splits mapped from unmappable and carries the reas
 });
 
 Deno.test("nco2: every declared guard EXISTS and actually reads the tree it guards", () => {
+  assert(
+    BOOKKEEPING_GUARDS.includes("tests/first-run-onboarding-composition.test.ts"),
+    "BOOKKEEPING_GUARDS must include tests/first-run-onboarding-composition.test.ts to catch cross-file version skew",
+  );
+  assert(
+    !HARNESS_TREE_GUARDS.includes("tests/chrome-profile-location.test.ts"),
+    "HARNESS_TREE_GUARDS must NOT include tests/chrome-profile-location.test.ts (real-browser test must not be launched by generic harness changes)",
+  );
+  assert(
+    HARNESS_TREE_GUARDS.includes("tests/chrome-profile-static.test.ts"),
+    "HARNESS_TREE_GUARDS must include tests/chrome-profile-static.test.ts (browser-free static scan)",
+  );
+
   for (const rel of HARNESS_TREE_GUARDS) {
     const src = Deno.readTextFileSync(`${ROOT}${rel}`);
     assert(/scripts/.test(src), `${rel} must reference the scripts/ tree it is claimed to guard`);
@@ -315,6 +328,10 @@ Deno.test("nco2/R1b: the selector's OWN machinery can never be subset-mapped", (
   assert(
     /changed\.filter\(\(f\) => isSelectorInfrastructure\(f\)\)/.test(src),
     "select-tests.mjs must test the CHANGED set for infrastructure, not the uncovered set",
+  );
+  assert(
+    /failClosedPlan\({\s*list,\s*unmappable,\s*header:/.test(src),
+    "select-tests.mjs must route infrastructure fail-closed through failClosedPlan",
   );
 });
 
