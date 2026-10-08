@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.605] — 2026-10-08
+- The extension UI now enforces a 12px minimum design-scale floor across shipped surfaces, including font sizes set from JavaScript.
+
 ## [0.3.604] — 2026-10-08
 - About page hover states are clearer and both light and dark reading modes are accessibility-audited.
 
