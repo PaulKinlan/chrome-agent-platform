@@ -96,6 +96,28 @@ Deno.test("site tool audit: awaited concurrent appends serialize and survive res
   assertEquals(page.records.map((row) => row.at), [103, 102, 101]);
 });
 
+Deno.test("site tool audit: ephemeral run/document row shares the WAL without changing legacy V1 bytes", async () => {
+  const directory = new FakeDirectory();
+  const create = () => createSiteToolAuditStore({ openDirectory: async () => directory, now: () => 42 });
+  const first = create();
+  await first.append(record(1));
+  const oldBytes = new TextDecoder().decode([...directory.nodes.values()][0].bytes);
+  const ephemeral = { ...record(2), enrollmentGen: 0, consentRevision: 1, ephemeral: true, documentId: "document-42" };
+  await first.append(ephemeral);
+  const rows = (await create().list({ limit: 10 })).records;
+  assertEquals(rows.map((row) => row.seq), [2, 1]);
+  assertEquals(rows[0].ephemeral, true);
+  assertEquals(rows[0].documentId, "document-42");
+  assertEquals(rows[1].ephemeral, undefined);
+  assertEquals(rows[1].documentId, undefined);
+  const afterBytes = new TextDecoder().decode([...directory.nodes.values()][0].bytes);
+  assertEquals(afterBytes.slice(0, oldBytes.length), oldBytes, "pre-existing rows retain their exact original serialization");
+  await assertRejects(() => first.append({ ...ephemeral, documentId: undefined }), Error, "site_tool_audit_record");
+  await assertRejects(() => first.append({ ...ephemeral, ephemeral: false }), Error, "site_tool_audit_record");
+  await assertRejects(() => first.append({ ...ephemeral, runId: null }), Error, "site_tool_audit_record");
+  await assertRejects(() => first.append({ ...record(3), enrollmentGen: 0 }), Error, "site_tool_audit_record");
+});
+
 Deno.test("site tool audit: stable older/newer cursors traverse without gaps", async () => {
   const directory = new FakeDirectory();
   let clock = 0;
