@@ -238,14 +238,15 @@ Deno.test("mcp-zod-peer-parity: MCP Server tool registration wire schema preserv
   assertEquals(compiledFromWire3.zodSchema.safeParse({ keyword: "key", depth: 1 }).success, true);
 });
 
-Deno.test("mcp-zod-peer-parity: preminify converter contribution is exactly 177 bytes across 3 files in SW bundle (re-derived after ckebt)", async () => {
-  // Measure the ACTUAL service worker bundle output, not the dependency's on-disk size.
-  // The old post-3337 graph emitted two peer-context copies (6 files / 354 bytes).
-  // Moving the attached-declared validator into its shared authority module in ckebt
-  // left just one copy: Options.js=83, index.js=0, parsers/string.js=94.
+Deno.test("mcp-zod-peer-parity: each installed peer-context contributes exactly 177 bytes across 3 converter files", async () => {
+  // Measure the ACTUAL SW bundle, not the dependency's on-disk size. An npm-only
+  // install resolves one converter at node_modules/ (3 files / 177 bytes). The
+  // fleet-deps/Deno installation resolves two locked 3.25.2 peer contexts in
+  // node_modules/.deno (6 files / 354 bytes). Each context must contribute
+  // Options.js=83, index.js=0, parsers/string.js=94 — independently count
+  // installed contexts instead of blessing either arbitrary bundle output.
   // The azlc audit's earlier 2,460 included scaffold files retained by an old
-  // process.env define; 3337 removed those. A future duplicate converter or
-  // changed emitted code moves the exact file, byte and per-file pins below.
+  // process.env define; 3337 removed those.
   const { build, stop } = await import("npm:esbuild@0.25.12");
   const path = await import("node:path");
   const { browserDependencies, browserProcessEnvOptions } = await import("../scripts/browser-dependencies.mjs");
@@ -282,13 +283,24 @@ Deno.test("mcp-zod-peer-parity: preminify converter contribution is exactly 177 
       }
     }
 
-    // Keep all three pins: an equal-and-opposite edit could preserve the byte total
-    // but still change the emitted modules. A second peer-context copy fails here.
-    assertEquals(emittedFiles, 3, "emitted converter input files is exactly 3");
-    assertEquals(emittedBytes, 177, "emitted converter contribution is exactly 177 bytes");
+    const sdkPath = await Deno.realPath(path.join(Deno.cwd(), "node_modules/@modelcontextprotocol/sdk"));
+    const denoLayout = sdkPath.includes("/node_modules/.deno/");
+    const contextNames = [];
+    if (denoLayout) {
+      for await (const entry of Deno.readDir(path.join(Deno.cwd(), "node_modules/.deno"))) {
+        if (entry.isDirectory && /^zod-to-json-schema@3\.25\.2(?:_\d+)?$/.test(entry.name)) contextNames.push(entry.name);
+      }
+      assertEquals(contextNames.sort(), ["zod-to-json-schema@3.25.2", "zod-to-json-schema@3.25.2_1"],
+        "the locked Deno installation has exactly two converter peer contexts");
+    }
+    const copies = denoLayout ? contextNames.length : 1;
+    // Keep file-count, byte-total AND per-file pins; a changed converter, a
+    // missing context or an extra duplicate cannot hide behind equal totals.
+    assertEquals(emittedFiles, 3 * copies, "exact converter file count for installed peer contexts");
+    assertEquals(emittedBytes, 177 * copies, "exact emitted converter bytes for installed peer contexts");
     assertEquals(
       contributions.sort((a, b) => a - b),
-      [0, 83, 94],
+      Array.from({ length: copies }, () => [0, 83, 94]).flat().sort((a, b) => a - b),
       "per-file converter contributions (equal-and-opposite edits cannot cancel out)",
     );
   } finally {
