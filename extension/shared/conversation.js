@@ -630,6 +630,18 @@ export function replayPendingApprovalsForThread(container, threadId, executionId
  * labels, the bounded script/site detail), so a card re-mounted in a second tab
  * is the SAME card the first tab shows. Null when the event carries no valid
  * requirement (a forged shape never becomes a card). */
+function scriptRegistrationCardBody(detail) {
+  const parts = [
+    `Script: ${detail.id} (${detail.scriptKind})`,
+    `SHA-256 Digest: ${detail.digest}`,
+    `Size: ${detail.jsBytes} bytes`,
+    ...(detail.runAt ? [`Run at: ${detail.runAt}`] : []),
+    ...(detail.world ? [`World: ${detail.world}`] : []),
+    `Matches: ${detail.matches?.join(", ") || "none"}`,
+  ];
+  return parts.join("\n");
+}
+
 export function approvalCardSpecFromRequest(ev) {
   const result = ev?.result && typeof ev.result === "object"
     ? ev.result
@@ -641,12 +653,15 @@ export function approvalCardSpecFromRequest(ev) {
   const approval = requirement.approvals[0] ?? null;
   if (!approval) return { requirement };
   const siteTool = approval.action === "webmcp.use-tool" && approval.detail?.kind === "webmcp-tool";
+  const scriptReg = approval.detail?.kind === "script-registration";
   return {
     requirement,
     title: approvalCardTitle(approval.action, approval.detail),
     body: siteTool
       ? `Site: ${approval.detail.origin}\nTool: ${approval.detail.tool}\nAllow saves automatic use for this exact site tool in this browser profile. Deny blocks this exact tool on this site until you choose Allow / try again in Settings.`
-      : `Action: ${approval.action}\nTarget reference: ${approval.targetRef || requirement.reason.split(": ").slice(1).join(": ")}`,
+      : scriptReg
+        ? scriptRegistrationCardBody(approval.detail)
+        : `Action: ${approval.action}\nTarget reference: ${approval.targetRef || requirement.reason.split(": ").slice(1).join(": ")}`,
     ...(siteTool ? { approveLabel: "Allow automatically", denyLabel: "Deny" } : {}),
     ...(!siteTool && approval.detail ? { cardDetail: approval.detail } : {}),
   };
@@ -824,6 +839,31 @@ export function boundScriptApprovalDetail(detail) {
   return { source: detail.source.slice(0, SCRIPT_DETAIL_MAX_SOURCE), hosts, dynamic: detail.dynamic === true };
 }
 
+export function boundScriptRegistrationApprovalDetail(detail) {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return undefined;
+  if (detail.kind !== "script-registration") return undefined;
+  const digest = typeof detail.digest === "string" && /^[0-9a-f]{64}$/.test(detail.digest) ? detail.digest : "";
+  if (!digest) return undefined;
+  const id = typeof detail.id === "string" ? detail.id.slice(0, 64) : "";
+  if (!Array.isArray(detail.matches) || detail.matches.length === 0 || detail.matches.length > 8) {
+    return undefined;
+  }
+  const matches = detail.matches.filter((m) => typeof m === "string" && m.length > 0 && m.length <= 2048);
+  if (matches.length !== detail.matches.length) return undefined;
+  const jsBytes = Number.isSafeInteger(detail.jsBytes) && detail.jsBytes >= 0 ? detail.jsBytes : 0;
+  const scriptKind = detail.scriptKind === "content_script" ? "content_script" : "user_script";
+  return {
+    kind: "script-registration",
+    scriptKind,
+    id,
+    digest,
+    matches,
+    jsBytes,
+    ...(typeof detail.runAt === "string" ? { runAt: detail.runAt.slice(0, 32) } : {}),
+    ...(typeof detail.world === "string" ? { world: detail.world.slice(0, 32) } : {}),
+  };
+}
+
 function visibleSiteToolLabel(value, maxInputChars) {
   if (typeof value !== "string" || !value || value.length > maxInputChars) return "";
   try {
@@ -909,12 +949,18 @@ export function normalizePermissionRequirement(result) {
         approvalId: a.approvalId,
         action: a.action,
         ...(a.targetRef === undefined ? {} : { targetRef: a.targetRef }),
-        // Script cards carry bounded source; WebMCP cards carry separately
-        // bounded display-only site/tool labels. Neither is grant authority.
         ...((a.action === "webmcp.use-tool"
           ? boundSiteToolApprovalDetail(a.detail)
-          : boundScriptApprovalDetail(a.detail))
-          ? { detail: a.action === "webmcp.use-tool" ? boundSiteToolApprovalDetail(a.detail) : boundScriptApprovalDetail(a.detail) }
+          : a.detail?.kind === "script-registration"
+            ? boundScriptRegistrationApprovalDetail(a.detail)
+            : boundScriptApprovalDetail(a.detail))
+          ? {
+              detail: a.action === "webmcp.use-tool"
+                ? boundSiteToolApprovalDetail(a.detail)
+                : a.detail?.kind === "script-registration"
+                  ? boundScriptRegistrationApprovalDetail(a.detail)
+                  : boundScriptApprovalDetail(a.detail),
+            }
           : {}),
       }))
     : [];
@@ -952,6 +998,10 @@ export function approvalCardTitle(action, detail = null) {
     case "webmcp.use-tool": return detail?.kind === "webmcp-tool"
       ? `Use ${detail.origin}’s ${detail.tool}?`
       : "Use this site tool?";
+    case "browser.register-user-script": return `Register user script "${detail?.id || ""}"?`;
+    case "browser.update-user-script": return `Update user script "${detail?.id || ""}"?`;
+    case "browser.register-content-script": return `Register content script "${detail?.id || ""}"?`;
+    case "browser.update-content-script": return `Update content script "${detail?.id || ""}"?`;
     default: return `Approve ${action}?`;
   }
 }
@@ -2144,10 +2194,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
     if (typeof document !== "undefined" && typeof c.append === "function") {
       card = document.createElement(actionApproval ? "approval-card" : "permission-approval-card");
       if (actionApproval) {
+        const siteTool = approval?.action === "webmcp.use-tool" && approval.detail?.kind === "webmcp-tool";
+        const scriptReg = approval?.detail?.kind === "script-registration";
         card.setAttribute("title", approvalCardTitle(approval.action, approval.detail));
         card.setAttribute("body", siteTool
           ? `Site: ${approval.detail.origin}\nTool: ${approval.detail.tool}\nAllow saves automatic use for this exact site tool in this browser profile. Deny blocks this exact tool on this site until you choose Allow / try again in Settings.`
-          : `Action: ${approval.action}\nTarget reference: ${approval.targetRef || requirement.reason.split(": ").slice(1).join(": ")}`);
+          : scriptReg
+            ? scriptRegistrationCardBody(approval.detail)
+            : `Action: ${approval.action}\nTarget reference: ${approval.targetRef || requirement.reason.split(": ").slice(1).join(": ")}`);
         if (siteTool) {
           card.setAttribute("approve-label", "Allow automatically");
           card.setAttribute("deny-label", "Deny");

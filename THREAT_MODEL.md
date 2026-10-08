@@ -43,7 +43,7 @@ Component map, with the file that owns each surface:
 
 | Component | Where | Notes |
 |---|---|---|
-| Service worker (the privileged broker) | `extension/background/service-worker.js:12283` (`chrome.runtime.onMessage.addListener`) | the ONE central dispatcher listener; 288 registered routes |
+| Service worker (the privileged broker) | `extension/background/service-worker.js:12332` (`chrome.runtime.onMessage.addListener`) | the ONE central dispatcher listener; 288 registered routes |
 | Route modules | `extension/background/routes/` | dispatched through `mergeRouteMaps` (census §2) |
 | New-tab hub / Settings / side panel | `extension/ntp/`, `extension/options/`, `extension/sidepanel/` | extension documents; principal `extension` / `owner-options` |
 | Offscreen document | `extension/offscreen/offscreen.js` | single runtime host: 11 `register*Host()` calls (ACP model, agent worker, Python, Wasm stream, call-export, Emscripten, WASI job, table worker, owner-uploaded Wasm, SVG rasterise, on-device text), plus the script-sandbox and clipboard listeners; reclaim can interrupt in-flight work across those lanes (R12) |
@@ -101,8 +101,8 @@ inventory and the sender/inventory guard described in INV-15.
   storage, OPFS, providers or browser control directly: the content-script realm may
   reach exactly seven routes (`PAGE_ALLOWED_ROUTES` in `extension/lib/pure.js:1280-1289`),
   and every other route is refused by `chrome.runtime.onMessage.addListener` at
-  `extension/background/service-worker.js:12283` (allowlist check near :12313).
-  The receiver derives the origin from the BROWSER-ATTESTED `sender` (near :12274-12308),
+  `extension/background/service-worker.js:12332` (allowlist check near :12362).
+  The receiver derives the origin from the BROWSER-ATTESTED `sender` (near :12323-12357),
   never the message body.
 - **Evidence pin: `origin/main@28c7189d`.** The cited symbols and closed set were re-read at this tree; line numbers are locators.
 - **TB3 — The two provider paths.** Path A sends the conversation from the service
@@ -194,7 +194,7 @@ should reason about; the threats that use them are in sections 5 and 6.
 
 | ID | Surface | Where it enters | What is hostile about it |
 |---|---|---|---|
-| S1 | Page content and page messages | `chrome.runtime.onMessage.addListener` at `extension/background/service-worker.js:12283`; `PAGE_ALLOWED_ROUTES` at `extension/lib/pure.js:1280` | a page's content script may call only the seven page-allowed routes for its OWN origin, and may put anything in the message body |
+| S1 | Page content and page messages | `chrome.runtime.onMessage.addListener` at `extension/background/service-worker.js:12332`; `PAGE_ALLOWED_ROUTES` at `extension/lib/pure.js:1280` | a page's content script may call only the seven page-allowed routes for its OWN origin, and may put anything in the message body |
 | S2 | WebMCP tool descriptors and tool results | `extension/lib/tools.js:511`, `extension/lib/webmcp-authority.js:68` | a site authors its own tool schema and result text |
 | S3 | Model output (tool calls and prose) | `extension/lib/lazy-tool-protocol.js:1`, `extension/lib/untrusted-fence.js:59` | a steered model calls real tools |
 | S4 | Tool results rendered into the transcript | `extension/shared/components.js:566` (`renderHtmlFrame`) | an artifact body or fetched body is untrusted HTML |
@@ -211,6 +211,7 @@ should reason about; the threats that use them are in sections 5 and 6.
 | S10 | Host-side ACP WebSocket clients | `scripts/acp-bridge.ts:859-867` | a local client with the token (or unauthenticated under --allow-anonymous-loopback) can drive a shell-capable agent; a web page without an approved Origin and token is refused |
 | S11 | Owner-supplied local folders (fs grants) | `extension/lib/fs-grants.js:47`, `:130` | path strings the owner grants are still resolved by the extension |
 | S12 | Hook event payloads | `extension/lib/hooks.js:494`, `:550` | a hook body is serialized into a model INSTRUCTION position |
+| S14 | Model-authored user-script and content-script registration | `extension/lib/browser-tools.js:6345`, `:6484` | a model registers persistent JavaScript (up to 32 KiB) to execute across web origins via chrome.userScripts.register or chrome.scripting.registerContentScripts |
 
 ---
 
@@ -233,7 +234,7 @@ consequences are carried by the matching register entry where one exists.
 - **Boundary:** TB2. **Evidence:** `authorizeToolReport` at
   `extension/lib/pure.js:912` (the classifier), `PAGE_ALLOWED_ROUTES` at :1280,
   and the central `chrome.runtime.onMessage.addListener` at
-  `extension/background/service-worker.js:12283` (page-route check near :12313,
+  `extension/background/service-worker.js:12332` (page-route check near :12362,
   browser-derived `message.origin` overwrite immediately after). **Answer:** the
   origin comes from the sender, never from the body; a claimed-origin mismatch is
   refused. **Live proof:** `scripts/security-suite.ts:307-308` (a page MAIN world has no
@@ -445,6 +446,18 @@ consequences are carried by the matching register entry where one exists.
   A new host must be reviewed for sender and envelope authority, not inferred
   safe from another host's guard. **Register:** R12/R14/R15.
 
+### T19. Persistent model-authored script registration without owner-visible digest approval
+
+- **Boundary:** TB2 / TB4. **Evidence:** `extension/lib/browser-tools.js` (`register_user_script`,
+  `update_user_script`, `register_content_script`, `update_content_script`),
+  `extension/lib/owner-approval.js:90` (`DESTRUCTIVE_ACTIONS`),
+  `extension/background/service-worker.js:10220` (`browser.destructive-action`).
+- **Threat:** a model steered by prompt injection or untrusted page content registers
+  persistent JavaScript to execute on target web origins across future browsing sessions.
+- **Answer:** the registration path requires host permissions and browser-control grants for
+  every target origin, asserts run ownership, and enforces an owner-visible approval card
+  bound to the canonical SHA-256 digest of the complete, untruncated script source (INV-8).
+
 ---
 
 ## 6. Security Invariants for Auditors
@@ -454,8 +467,8 @@ and each names the executable check that would catch a regression.
 
 - **INV-1 — Authority is derived from the browser-attested sender, never from the body.**
   `authorizeToolReport` at `extension/lib/pure.js:912` and the central listener at
-  `extension/background/service-worker.js:12283` (browser sender classification
-  near :12274, derived origin at :12302);
+  `extension/background/service-worker.js:12332` (browser sender classification
+  near :12323, derived origin at :12351);
   `scripts/security-suite.ts:307-308`. A new route that reads an origin, tab id or
   document id out of the message body breaks this.
 - **Evidence pin: `origin/main@28c7189d` for INV-1/2.** The sender/allowlist symbols were re-read at this tree; other invariant citations retain their own historical context.
@@ -484,7 +497,9 @@ and each names the executable check that would catch a regression.
   boundary, and the model is told that fenced text is data.**
   `extension/lib/untrusted-fence.js:46-96`; `extension/lib/system-prompts.js:763-773`.
 - **INV-8 — Destructive actions require an approval bound to the exact action, target and
-  payload digest, and expiring.** `extension/lib/owner-approval.js:23`, `:533`, `:634`.
+  payload digest, and expiring.** `extension/lib/owner-approval.js:23`, `:533`, `:634`;
+  `extension/lib/browser-tools.js` (`register_user_script`, `update_user_script`,
+  `register_content_script`, `update_content_script` digest approval via `browser.destructive-action`).
 - **INV-9 — Origin-keyed isolation is injective and reserved namespaces are fenced.**
   `extension/lib/memory.js:227`, `:262`, `:308`.
 - **INV-10 — Imported archives strip `__proto__` and the credential keys TOGETHER in every

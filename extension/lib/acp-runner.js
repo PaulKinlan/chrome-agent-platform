@@ -7,6 +7,7 @@
 import { AcpClient, acpAllowOptionId, acpDenyOptionId } from "./acp-client.js";
 import { AcpNativeTransport, DEFAULT_NATIVE_HOST } from "./acp-native.js";
 import { acpExecutionId } from "./acp-thread-journal.js";
+import { sha256Hex } from "./pure.js";
 
 
 // ── CAP skill context on the harness turn (chrome-agent-platform-etdn) ──────
@@ -198,6 +199,10 @@ export const ACP_GATED_BROWSER_TOOLS = new Set([
   "write_file",
   "schedule_task",
   "get_cookie",
+  "register_user_script",
+  "update_user_script",
+  "register_content_script",
+  "update_content_script",
 ]);
 
 /** Format the human-readable approval title and detail for an in-conversation approval card. */
@@ -248,6 +253,44 @@ export function formatBrowserToolApproval(name, args = {}) {
         title: `Read cookie "${args.name ?? ""}" value`,
         detail: `The external agent requested to reveal cookie value on ${args.origin ?? ""}.`,
       };
+    case "register_user_script": {
+      const digest = typeof args.js === "string" ? sha256Hex(args.js) : "";
+      const bytes = typeof args.js === "string" ? new TextEncoder().encode(args.js).byteLength : 0;
+      const runAt = typeof args.runAt === "string" ? `\nRun at: ${args.runAt}` : "";
+      return {
+        title: `Register user script "${args.id ?? ""}"`,
+        detail: `The external agent requested to register user script "${args.id ?? ""}".\nMatches: ${Array.isArray(args.matches) ? args.matches.join(", ") : "none"}${runAt}\nSHA-256 Digest: ${digest || "unknown"}\nSize: ${bytes} bytes`,
+      };
+    }
+    case "update_user_script": {
+      const digest = typeof args.js === "string" ? sha256Hex(args.js) : "";
+      const bytes = typeof args.js === "string" ? new TextEncoder().encode(args.js).byteLength : 0;
+      const runAt = typeof args.runAt === "string" ? `\nRun at: ${args.runAt}` : "";
+      return {
+        title: `Update user script "${args.id ?? ""}"`,
+        detail: `The external agent requested to update user script "${args.id ?? ""}".\nMatches: ${Array.isArray(args.matches) ? args.matches.join(", ") : "none"}${runAt}\nSHA-256 Digest: ${digest || "unknown"}\nSize: ${bytes} bytes`,
+      };
+    }
+    case "register_content_script": {
+      const digest = typeof args.js === "string" ? sha256Hex(args.js) : "";
+      const bytes = typeof args.js === "string" ? new TextEncoder().encode(args.js).byteLength : 0;
+      const runAt = typeof args.runAt === "string" ? `\nRun at: ${args.runAt}` : "";
+      const world = typeof args.world === "string" ? `\nWorld: ${args.world}` : "";
+      return {
+        title: `Register content script "${args.id ?? ""}"`,
+        detail: `The external agent requested to register dynamic content script "${args.id ?? ""}".\nMatches: ${Array.isArray(args.matches) ? args.matches.join(", ") : "none"}${runAt}${world}\nSHA-256 Digest: ${digest || "unknown"}\nSize: ${bytes} bytes`,
+      };
+    }
+    case "update_content_script": {
+      const digest = typeof args.js === "string" ? sha256Hex(args.js) : "";
+      const bytes = typeof args.js === "string" ? new TextEncoder().encode(args.js).byteLength : 0;
+      const runAt = typeof args.runAt === "string" ? `\nRun at: ${args.runAt}` : "";
+      const world = typeof args.world === "string" ? `\nWorld: ${args.world}` : "";
+      return {
+        title: `Update content script "${args.id ?? ""}"`,
+        detail: `The external agent requested to update dynamic content script "${args.id ?? ""}".\nMatches: ${Array.isArray(args.matches) ? args.matches.join(", ") : "none"}${runAt}${world}\nSHA-256 Digest: ${digest || "unknown"}\nSize: ${bytes} bytes`,
+      };
+    }
     default:
       return {
         title: `Execute browser tool "${name}"`,
@@ -461,13 +504,52 @@ function createAcpPermissionCard(container, { title, toolCall, acpOptions }) {
   try {
     if (typeof document === "undefined" || typeof document.createElement !== "function") return null;
     if (!container || typeof container.appendTranscript !== "function") return null;
+
+    const isScriptReg = toolCall?.name && [
+      "register_user_script", "update_user_script",
+      "register_content_script", "update_content_script",
+    ].includes(toolCall.name);
+
+    if (isScriptReg && toolCall?.rawInput) {
+      const args = toolCall.rawInput;
+      const digest = typeof args.js === "string" ? sha256Hex(args.js) : "";
+      const jsBytes = typeof args.js === "string" ? new TextEncoder().encode(args.js).byteLength : 0;
+      const card = document.createElement("approval-card");
+      card.setAttribute("title", String(title || `Approve ${toolCall.name}?`).slice(0, 240));
+      card.setAttribute("approve-label", "Approve");
+      card.setAttribute("deny-label", "Deny");
+      card.setAttribute("state", "pending");
+      const detailObj = {
+        kind: "script-registration",
+        scriptKind: toolCall.name.includes("content_script") ? "content_script" : "user_script",
+        id: typeof args.id === "string" ? args.id : "",
+        digest,
+        matches: Array.isArray(args.matches) ? args.matches.filter((m) => typeof m === "string") : [],
+        jsBytes,
+        ...(typeof args.runAt === "string" ? { runAt: args.runAt } : {}),
+        ...(typeof args.world === "string" ? { world: args.world } : {}),
+      };
+      card.detail = detailObj;
+      card.setAttribute("body", [
+        `Script: ${detailObj.id} (${detailObj.scriptKind})`,
+        `SHA-256 Digest: ${detailObj.digest}`,
+        `Size: ${detailObj.jsBytes} bytes`,
+        ...(detailObj.runAt ? [`Run at: ${detailObj.runAt}`] : []),
+        ...(detailObj.world ? [`World: ${detailObj.world}`] : []),
+        `Matches: ${detailObj.matches.join(", ") || "none"}`,
+      ].join("\n"));
+      return container.appendTranscript(card);
+    }
+
     const card = document.createElement("permission-approval-card");
     card.setAttribute("reason", String(title || "run a tool").slice(0, 240));
-    const detail = (Array.isArray(acpOptions) ? acpOptions : [])
-      .map((o) => String(o?.name || o?.optionId || "").trim())
-      .filter(Boolean)
-      .join(" · ");
-    if (detail) card.setAttribute("detail", detail.slice(0, 240));
+    const detail = toolCall?.detail
+      ? String(toolCall.detail)
+      : (Array.isArray(acpOptions) ? acpOptions : [])
+          .map((o) => String(o?.name || o?.optionId || "").trim())
+          .filter(Boolean)
+          .join(" · ");
+    if (detail) card.setAttribute("detail", detail.slice(0, 4000));
     card.setAttribute("state", "pending");
     return container.appendTranscript(card);
   } catch {
@@ -904,7 +986,12 @@ export async function runAcpTaskTurn(options) {
           const approvalInfo = formatBrowserToolApproval(call.name, call.args);
           const prompt = {
             title: approvalInfo.title,
-            toolCall: { title: approvalInfo.title, detail: approvalInfo.detail },
+            toolCall: {
+              name: call.name,
+              rawInput: call.args,
+              title: approvalInfo.title,
+              detail: approvalInfo.detail,
+            },
             options: [
               { optionId: "allow_once", name: "Approve", kind: "allow_once" },
               { optionId: "deny", name: "Deny", kind: "deny" },
@@ -948,10 +1035,11 @@ export async function runAcpTaskTurn(options) {
 
         let reply;
         try {
+          const approvedDigest = wasApproved && typeof call.args?.js === "string" ? sha256Hex(call.args.js) : undefined;
           reply = await send("browser.callTool", {
             name: call.name,
             args: call.args,
-            ...(wasApproved ? { approved: true } : {}),
+            ...(wasApproved ? { approved: true, ...(approvedDigest ? { approvedDigest } : {}) } : {}),
           });
         } catch (err) {
           reply = { ok: false, error: String(err?.message ?? err) };
