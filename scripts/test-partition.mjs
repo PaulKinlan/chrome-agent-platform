@@ -75,6 +75,22 @@ export const SERIAL_REASONS = {
 };
 export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
 
+// gate-speed (2026-10-08): the TIMING LANE. These serial files are serial because their wall-clock /
+// lock assertions flake under the parallel phase's load — NOT because they touch build artifacts
+// (classifyHazards finds no hazard class in any of them, and tests/test-partition-guard.test.ts keeps
+// it that way). run-tests.mjs therefore runs them as a second serial lane, one file at a time, BESIDE
+// the artifact lane, and both lanes finish before the parallel phase starts. Each file still runs in
+// its own process with its own window. Measured on the 2-vCPU hub (3/3 green): artifact lane 39 s,
+// timing lane 36 s concurrently, against 68 s back to back.
+export const SERIAL_TIMING_LANE_REASONS = {
+  "tests/chrome-launch-lock.test.ts": "canonical-lock assertions on a REDIRECTED lock path (fake binary); no build artifact",
+  "tests/chrome-launch-lock-scope.test.ts": "lock-scope assertions on a private slot dir and redirected lock path (fake binary); no build artifact",
+  "tests/chrome-slot-semaphore.test.ts": "semaphore assertions on a private slot dir (fake binary); no build artifact",
+  "tests/chrome-slot-semaphore-honesty.test.ts": "wall-clock queueing bounds on a private slot dir (fake binary); no build artifact",
+  "tests/serial-phase-timeout.test.ts": "wall-clock kill/survive bounds on durable scratch fixtures; no build artifact",
+};
+export const SERIAL_TIMING_LANE = new Set(Object.keys(SERIAL_TIMING_LANE_REASONS));
+
 // Build-behaviour tests moved to the dedicated npm run test:build gate (Option D / chrome-agent-platform-h65e).
 // These files run multiple in-place builds and are partitioned out of standard npm test to eliminate
 // load variance and save ~8 minutes on every lane's gate.

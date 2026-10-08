@@ -29,6 +29,8 @@ import {
   SERIAL,
   SERIAL_FILE_TIMEOUTS,
   SERIAL_REASONS,
+  SERIAL_TIMING_LANE,
+  SERIAL_TIMING_LANE_REASONS,
   unserialisedHazards,
 } from "../scripts/test-partition.mjs";
 
@@ -613,4 +615,24 @@ Deno.test("h65e: fast smoke assertion remains in SERIAL to catch broken builds i
   assert(SERIAL.has(smoke), `${smoke} must be declared in SERIAL_REASONS`);
   assert(!BUILD_GATE.has(smoke), `${smoke} must stay in npm test, not in BUILD_GATE`);
   assert(Deno.statSync(`${ROOT}${smoke}`).isFile, `${smoke} must exist on disk`);
+});
+
+// gate-speed (2026-10-08): the timing lane runs BESIDE the artifact lane, so membership must never
+// admit a build-artifact hazard — a file that builds, writes extension/ or packages/, or reads
+// extension/dist would race the artifact lane exactly the way the vj4s par1 run raced the parallel phase.
+Deno.test("gate-speed: every SERIAL_TIMING_LANE file is SERIAL, reasoned, outside the build gate, and hazard-free", async () => {
+  assert(SERIAL_TIMING_LANE.size > 0, "the timing lane exists");
+  for (const file of SERIAL_TIMING_LANE) {
+    assert(SERIAL.has(file), `${file} is in the timing lane but not SERIAL`);
+    assert(!BUILD_GATE.has(file), `${file} is in the timing lane but belongs to the build gate`);
+    const reason = (SERIAL_TIMING_LANE_REASONS as Record<string, string>)[file];
+    assert(typeof reason === "string" && reason.trim().length > 0, `${file} needs a timing-lane reason`);
+    const text = await contentWithDrivers(file);
+    assertEquals(classifyHazards(text), [], `${file} carries a build-artifact hazard and cannot run beside the artifact lane`);
+  }
+});
+
+Deno.test("gate-speed: the timing-lane guard is falsifiable — a hazard text is NOT hazard-free", () => {
+  const probe = ["await Deno.readTextFile(", "\"extension/", "dist/x.js\");"].join("");
+  assert(classifyHazards(probe).length > 0, "the classifier must flag a dist read, or the guard above proves nothing");
 });

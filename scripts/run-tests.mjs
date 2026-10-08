@@ -25,7 +25,7 @@ import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath } from "node:path";
-import { BUILD_GATE, SERIAL, partition } from "./test-partition.mjs";
+import { BUILD_GATE, SERIAL, SERIAL_TIMING_LANE, partition } from "./test-partition.mjs";
 import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
 import { parallelPlan } from "./lib/parallel-plan.mjs";
@@ -160,6 +160,31 @@ function runParallel(files, { noCheck = false } = {}) {
   });
 }
 
+/** Start the timing lane as a child (scripts/lib/serial-lane.mjs). Its output goes straight to this
+ *  process's stdout/stderr (inherited fds, not a pipe: the artifact lane blocks the event loop in
+ *  spawnSync), so each of its lines — headers, failures, its own phase summary — appears live. */
+function startSerialLane(files) {
+  if (!files.length) return { done: Promise.resolve(0) };
+  console.log(`run-tests: serial TIMING lane (${files.length} file(s)) runs beside the artifact lane: ${files.join(", ")}`);
+  const child = spawn(process.execPath, [fileURLToPath(new URL("./lib/serial-lane.mjs", import.meta.url)), "--no-check", ...files], {
+    stdio: "inherit",
+    env: process.env,
+  });
+  const kill = () => { try { child.kill("SIGKILL"); } catch { /* gone */ } };
+  process.on("exit", kill);
+  const done = new Promise((resolve) => {
+    child.on("error", (error) => {
+      announce(`run-tests: serial TIMING lane failed to start: ${error?.message ?? error}`);
+      resolve(1);
+    });
+    child.on("close", (code, signal) => {
+      process.removeListener("exit", kill);
+      resolve(code ?? (signal ? 128 + 15 : 1));
+    });
+  });
+  return { done };
+}
+
 // Keep the audit's executable-test policy tied to the runner's actual recursive
 // discovery. The optional names make the policy falsifiable in memory without
 // writing transient *.test.ts files during the parallel suite.
@@ -208,7 +233,14 @@ export async function main(args = process.argv.slice(2)) {
   const killCheck = () => { try { typeCheck.child?.kill("SIGKILL"); } catch { /* gone */ } };
   process.on("exit", killCheck);
   console.log(`run-tests: type-checking ${checked.length} file(s) up front, beside the serial phase (log: ${typeCheck.log})`);
-  const serialRc = serialFiles.length ? runSerialFiles(serialFiles, { noCheck: true }) : 0;
+  // gate-speed: the timing lane (SERIAL_TIMING_LANE — wall-clock/lock files with no build-artifact
+  // hazard) runs in a child beside the artifact lane; both finish before the parallel phase.
+  const timingLane = serialFiles.filter((f) => SERIAL_TIMING_LANE.has(f));
+  const artifactLane = serialFiles.filter((f) => !SERIAL_TIMING_LANE.has(f));
+  const lane = startSerialLane(timingLane);
+  const artifactRc = artifactLane.length ? runSerialFiles(artifactLane, { noCheck: true }) : 0;
+  const timingRc = await lane.done;
+  const serialRc = artifactRc !== 0 ? artifactRc : timingRc;
   const check = await typeCheck.done;
   process.removeListener("exit", killCheck);
   const checkRc = check.code === 0 ? 0 : (check.code || 1);
