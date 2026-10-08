@@ -1,6 +1,7 @@
 // @ts-nocheck — Chrome/OPFS fault fakes intentionally implement a narrow surface.
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { kvGet } from "../extension/lib/kv.js";
+import { createEphemeralSiteToolConsentStore } from "../extension/lib/ephemeral-site-tool-consent.js";
 import { listOrigins, siteMemory } from "../extension/lib/memory.js";
 import {
   abandonEnrollmentPromotion, completeEnrollmentPromotion, disenrollOrigin, enrollOrigin,
@@ -104,6 +105,20 @@ Deno.test("D2: durable enrolled:true+promotionPending carries BOTH decisions but
   assertEquals((await pending(origin)).promotionPending, undefined);
   assertEquals((await siteToolConsentSnapshot(origin, allowTool, gen)).state, "allowed");
   assertEquals((await siteToolConsentSnapshot(origin, denyTool, gen)).state, "denied");
+});
+
+Deno.test("D2 split: owner enrollment with no attached run writes and verifies an empty same-gen envelope", async () => {
+  const origin = "https://promotion-no-tab-binding.example";
+  const store = createEphemeralSiteToolConsentStore();
+  assertEquals(await store.withPromotionForOrigin(origin, async () => { throw Error("must not run without a token"); }), null);
+  const { gen } = await prepareEnrollmentPromotion(origin, []);
+  assertEquals(await isEnrolled(origin), false);
+  await complete(origin, gen);
+  assertEquals(await isEnrolled(origin), true);
+  assertEquals((await listOrigins()).includes(origin), true);
+  const envelope = await siteMemory(origin).getStrict(SITE_TOOL_CONSENT_KEY);
+  assertEquals(envelope?.enrollmentGen, gen);
+  assertEquals(envelope?.records, []);
 });
 
 Deno.test("D2: consent write failure leaves inert registry copy and retry preserves Deny", async () => {

@@ -29,7 +29,7 @@ section 9 and is marked as an open question — it is not asserted as a threat.
 | [`docs/RISK-REGISTER.md`](docs/RISK-REGISTER.md) | the architectural risk register (R1–R21 + the withheld decisions) |
 | [`docs/CONSTITUTION.md`](docs/CONSTITUTION.md) §1 | the security vector list every change is reviewed against |
 | [`docs/INTERNAL-SENDER-CONTRACT-AUDIT.md`](docs/INTERNAL-SENDER-CONTRACT-AUDIT.md) | the sender-classifier adjudication (bead `lw6d`) |
-| [`docs/SW-DISPATCH-AUTHORITY-CENSUS.md`](docs/SW-DISPATCH-AUTHORITY-CENSUS.md) | the 289-route dispatch census and its 37 unclassified mutations |
+| [`docs/SW-DISPATCH-AUTHORITY-CENSUS.md`](docs/SW-DISPATCH-AUTHORITY-CENSUS.md) | the 288-route dispatch census and its 37 unclassified mutations |
 | [`docs/CHROME-TEST-CONTRACT.md`](docs/CHROME-TEST-CONTRACT.md) | which gate runs a real browser, and why a subset gate cannot see a cross-cutting guard |
 | [`docs/STREAMING-CREDENTIAL-FILTER-RESERVED-MEMBERS.md`](docs/STREAMING-CREDENTIAL-FILTER-RESERVED-MEMBERS.md) | the archive credential/`__proto__` filter parity contract |
 | [`docs/PERMISSION-MATRIX.md`](docs/PERMISSION-MATRIX.md) | the permission-state mechanism classes and their headless acceptance |
@@ -45,11 +45,11 @@ http(s) page) and it acts on two different untrusted feeds at once: web page con
 and model output.
 
 Component map, with the file that owns each surface:
-- **Offscreen-inventory evidence pin: `origin/main@28c7189d`.** The dispatch census and `tests/sw-dispatch-authority-census.test.ts` assert 289 registered routes on this branch; that earlier main pin had fewer routes. The offscreen host inventory below is taken from the actual `register*Host()` calls and listeners in `extension/offscreen/offscreen.js`, not inferred from the incomplete onMessage-only census §6.2. Re-read named symbols at a newer tree; line numbers are locators.
+- **Evidence pin: `origin/main@28c7189d`.** The dispatch census and `tests/sw-dispatch-authority-census.test.ts` assert 288 registered routes. The offscreen host inventory below is taken from the actual `register*Host()` calls and listeners in `extension/offscreen/offscreen.js`, not inferred from the incomplete onMessage-only census §6.2. Re-read named symbols at a newer tree; line numbers are locators.
 
 | Component | Where | Notes |
 |---|---|---|
-| Service worker (the privileged broker) | `extension/background/service-worker.js#chrome.runtime.onMessage.addListener` | the ONE central dispatcher listener; 289 registered routes |
+| Service worker (the privileged broker) | `extension/background/service-worker.js#chrome.runtime.onMessage.addListener` | the ONE central dispatcher listener; 288 registered routes |
 | Route modules | `extension/background/routes/` | dispatched through `mergeRouteMaps` (census §2) |
 | New-tab hub / Settings / side panel | `extension/ntp/`, `extension/options/`, `extension/sidepanel/` | extension documents; principal `extension` / `owner-options` |
 | Offscreen document | `extension/offscreen/offscreen.js` | single runtime host: 11 `register*Host()` calls (ACP model, agent worker, Python, Wasm stream, call-export, Emscripten, WASI job, table worker, owner-uploaded Wasm, SVG rasterise, on-device text), plus the script-sandbox and clipboard listeners; reclaim can interrupt in-flight work across those lanes (R12) |
@@ -270,7 +270,7 @@ consequences are carried by the matching register entry where one exists.
   non-page-allowed route to page senders (allowlist check at
   `extension/background/service-worker.js#PAGE_ALLOWED_ROUTES.has`),
   so the class is reachable only from extension principals. **Register:** R11.
-- **The executable census pins the current count.** The census §4.9 lists 37 unclassified mutations among 289 registered routes on this branch; consult its route rows for locations rather than interpreting older T4 line locators as current.
+- **Evidence pin: `origin/main@28c7189d` for the count.** The census §4.9 lists 37 unclassified mutations among 288 registered routes; consult its route rows for locations rather than interpreting older T4 line locators as current.
 
 ### T5. Sandbox escape and network egress from the script sandbox
 

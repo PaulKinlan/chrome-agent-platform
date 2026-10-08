@@ -29,13 +29,18 @@ Deno.test("D2: owner route delegates Chrome host/script proof BEFORE registry pe
   assert(envelope > 0 && chromeProof > envelope && clear > chromeProof && flip > clear);
 });
 
-Deno.test("D2: boot retries from durable pending and model create refuses live attached runs", async () => {
+Deno.test("D2: boot retries from durable pending and model create retains enrollment fences", async () => {
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const tools = await Deno.readTextFile(new URL("../extension/lib/tools.js", import.meta.url));
   assert(sw.includes("reconcileEnrollmentPromotionsOnBoot().catch"));
   const boot = sw.slice(sw.indexOf("async function reconcileEnrollmentPromotionsOnBoot("),
     sw.indexOf("// Recover stale in-flight locks", sw.indexOf("async function reconcileEnrollmentPromotionsOnBoot(")));
   assert(boot.includes("beforeFlip: verifyOwnerPromotionPreconditions"));
   const start = sw.indexOf('async "agent.create"(');
   const end = sw.indexOf('async "agent.enroll-origin"(', start);
-  assert(start > 0 && end > start && sw.slice(start, end).includes("ephemeralSiteToolConsentStore.hasLiveOrigin(canonical)"));
+  assert(start > 0 && end > start && sw.slice(start, end).includes("await enrollOrigin(canonical)"));
+  const enroll = tools.slice(tools.indexOf("export async function enrollOrigin("),
+    tools.indexOf("export async function disenrollOrigin(", tools.indexOf("export async function enrollOrigin(")));
+  assert(enroll.includes("map[canonical]?.phase || map[canonical]?.promotionPending"),
+    "agent.create must be unable to clobber a staged owner promotion");
 });

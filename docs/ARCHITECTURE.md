@@ -208,7 +208,7 @@ auth) merged with fail-closed duplicate detection
 `run-task`, `run.cancel` (service-worker.js:7791, owner/extension principals
 only), `run.resume` (:7802), `run.logs` (:7995), `agent.delegate` — are still
 inline in service-worker.js. routes/ROUTE_MAP.md documents the complete
-289-route population (audited in docs/SW-DISPATCH-AUTHORITY-CENSUS.md).
+288-route population (audited in docs/SW-DISPATCH-AUTHORITY-CENSUS.md).
 
 ### 2.2 The agent-worker protocol
 Per-agent SharedWorkers (hosted by the offscreen doc, §1.3) execute agent loops
@@ -392,18 +392,19 @@ use (owner decision Q23, 2026-09-05; `docs/OPEN-QUESTIONS.md` Q23).
 `tool-consent-denied`, `tool-consent-required`, and `tool-consent-generation-stale`.
 Allow persists for the browser profile; Deny is sticky until reset in Settings.
 
-### 4.4a Attached-tab descriptor boundary (3p3e.3, policy pending)
-Who sees the descriptor, and under what principal: the enrolled-origin principal
-may use the existing directory and exact-tool consent path. For an unenrolled
-attached tab, the passive detector shares a **count only**; neither the model
-nor the hub UI receives tool names, descriptions, schemas, or invocable handles
-before the owner's still-pending Q2 disclosure decision. A selected candidate
-is merely an internal run-scoped binding of the browser-attested top-level
-`tabId`, `documentId`, origin, and declared-tool count. Attachment text and URL
-are never authority. No code should construct a model-visible worker or run a
-page tool from that candidate until descriptor disclosure, per-tool owner
-consent, and a required audit row all have a complete, separately reviewed
-run-scoped authority path. The enrolled path's checks remain unchanged.
+### 4.4a Owner enrollment promotion (3p3e.3 D2 preparatory slice)
+An explicit owner Add as Site Agent gesture stages a durable, **non-authorizing**
+registry row containing a same-generation Allow/Deny decision copy. The consent
+envelope must be written and strictly read back, with live Chrome scripting and
+host permission plus both registered content-script IDs confirmed, before the
+single durable clear of `promotionPending` makes the origin enrolled. Boot retry
+uses only this durable pending row; pending/abandoned rows are invisible to all
+enrollment authority readers. Policy changes bump the generation, keep Deny,
+and re-ask Allow. A surviving old-generation Deny also migrates on owner
+re-enrollment; legacy model create cannot erase it. Already-enrolled page-effect
+sends recheck the live Chrome grant. **No /tabs permission prompt, attached
+run/document binding, model descriptor disclosure or unenrolled invocation is
+part of this D2 landing**; those remain in chrome-agent-platform-ckebt.
 
 ### 4.5 Fallback paths
 Pages without WebMCP: the six page-action tools (`find_elements`,

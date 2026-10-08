@@ -182,10 +182,7 @@ import {
   listKnownWebmcpOrigins,
   reportWebmcpDetection,
 } from "../lib/webmcp-detection-registry.js";
-import { attestCurrentAttachedWebmcpTab } from "../lib/attached-webmcp-attestation.js";
-import { bindAttachedWebmcpRun } from "../lib/attached-webmcp-run.js";
 import { createEphemeralSiteToolConsentStore } from "../lib/ephemeral-site-tool-consent.js";
-import { createEphemeralSiteToolAuditPrincipal } from "../lib/ephemeral-site-tool-audit.js";
 import {
   hasPermission,
   hasCapability,
@@ -1948,31 +1945,6 @@ const ephemeralSiteToolConsentStore = createEphemeralSiteToolConsentStore();
 const cancellingApprovalExecutions = new Set();
 let siteToolProfileEpoch = 0;
 let siteToolResetting = 0;
-// A separate WAL principal for an exact, live, unenrolled run/document. No
-// caller is given this privileged closure until a post-Q2 invocation seam can
-// require and await its row BEFORE page code. Enrolled Q23 remains unchanged.
-const ephemeralSiteToolAuditPrincipal = createEphemeralSiteToolAuditPrincipal({
-  consentStore: ephemeralSiteToolConsentStore,
-  attest: async (tabId) => {
-    try {
-      const [registry, enrolledOrigins] = await Promise.all([
-        listKnownWebmcpOrigins(), listOrigins(),
-      ]);
-      return await attestCurrentAttachedWebmcpTab(tabId, {
-        registry, enrolledOrigins,
-        getTab: (id) => chrome.tabs.get(id),
-        executeTopFrame: (id) => chrome.scripting.executeScript({
-          target: { tabId: id, frameIds: [0] }, world: "ISOLATED", func: () => true,
-        }),
-      });
-    } catch { return null; }
-  },
-  runActive: (runId) => activeExecutions.has(runId),
-  append: (row) => appendSiteToolAudit(row),
-  profileEpoch: () => siteToolProfileEpoch,
-  resetting: () => siteToolResetting > 0,
-});
-
 function siteToolRunIdentity(context = {}) {
   const executionId = typeof context.executionId === "string"
     ? context.executionId
@@ -4240,7 +4212,6 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
     // slot. This run builds a management toolset that CAPTURES executionId.
     let abortNow = null;
     let orch = null;
-    let ephemeralAttachedRun = null;
     let heartbeatFailed = false;
     let taskJournalReceipt = null;
     let taskJournalGuard = null;
@@ -4292,37 +4263,6 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
         .map((a) => ({ grantId: a.grantId, name: a.folderName || a.name || "folder" }));
       setRunContext({ threadId, agentRole, agentSurfaceRef, folderGrants: runFolderGrants });
       if (delegationState) activeDelegationRuns.set(executionId, delegationState);
-      // Only a live hub run can bind the owner's /tabs attachment. Capture
-      // Chrome's top-level document AGAIN at run start: a navigation between
-      // owner pick and dispatch fails closed, as does an SW restart (durable
-      // attachment snapshots deliberately omit tabId/documentId). This creates
-      // no worker, model descriptor, siteMemory(origin), or execution grant.
-      if (agentRole === "hub" && !scoped && !scheduled && !harnessId &&
-        Array.isArray(attachments) && attachments.some((a) => a?.kind === "tab" && a.documentId)) {
-        try {
-          const [registry, enrolledOrigins] = await Promise.all([
-            listKnownWebmcpOrigins(), listOrigins(),
-          ]);
-          const runEpoch = siteToolProfileEpoch;
-          ephemeralAttachedRun = await bindAttachedWebmcpRun({
-            attachments, runId: executionId, threadId,
-            consentStore: ephemeralSiteToolConsentStore,
-            attest: (tabId) => attestCurrentAttachedWebmcpTab(tabId, {
-              registry, enrolledOrigins,
-              getTab: (id) => chrome.tabs.get(id),
-              executeTopFrame: (id) => chrome.scripting.executeScript({
-                target: { tabId: id, frameIds: [0] }, world: "ISOLATED", func: () => true,
-              }),
-            }),
-            allowOrigin: (origin) => isWebmcpOriginAllowed(webmcpAllowlistForAgent(agentTools), origin),
-            runActive: () => activeExecutions.has(executionId) &&
-              siteToolResetting === 0 && siteToolProfileEpoch === runEpoch && !fence?.signal?.aborted,
-          });
-        } catch {
-          // No attached-tool authority is safer than borrowing the model's
-          // ambient browser tools when the browser attestation is unavailable.
-        }
-      }
       if (acpConfig) {
         const ready = await ensureOffscreen();
         if (!ready.ok) throw new Error(ready.error);
@@ -4872,7 +4812,6 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
       try { error.executionId = executionId; } catch { /* immutable error */ }
       throw error;
     } finally {
-      ephemeralAttachedRun?.end(); // opaque run tokens die before async cleanup
       if (acpConfig) modelOverride?.close?.();
       acpRunPermissions.cancel(executionId);
       clearInterval(durableHeartbeat);
@@ -8926,30 +8865,6 @@ const handlers = mergeRouteMaps(
     return { ok: true, tabs: out };
   },
 
-  // The /tabs owner's pick obtains Chrome's CURRENT top-frame document identity.
-  // A passive count report is only an internal candidate — not a descriptor,
-  // model disclosure, consent grant, Site Agent, or invocation authority.
-  async "agent.attached-webmcp-document"({ tabId }, context) {
-    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
-    if (!Number.isSafeInteger(tabId) || tabId < 0) return { ok: false, error: "invalid tab ID" };
-    const hasScripting = await chrome.permissions.contains({ permissions: ["scripting"] }).catch(() => false);
-    if (!hasScripting) return { ok: false, needScripting: true, error: "scripting permission needed to verify this page" };
-    try {
-      const [registry, enrolledOrigins] = await Promise.all([listKnownWebmcpOrigins(), listOrigins()]);
-      const candidate = await attestCurrentAttachedWebmcpTab(tabId, {
-        registry, enrolledOrigins,
-        getTab: (id) => chrome.tabs.get(id),
-        executeTopFrame: (id) => chrome.scripting.executeScript({
-          target: { tabId: id, frameIds: [0] }, world: "ISOLATED", func: () => true,
-        }),
-      });
-      if (!candidate) return { ok: false, error: "current declared-tool document unavailable" };
-      return { ok: true, ...candidate }; // count + browser document only; no descriptors
-    } catch {
-      return { ok: false, error: "current declared-tool document unavailable" };
-    }
-  },
-
   // `agent.tool-offers` — the OPEN tabs whose page reported tools through the
   // PASSIVE detector, for the hub's composer chip ("<host> offers N tools —
   // use them?"; CAP-FB-20260825-SITE-AGENT-SHOWCASE-01). Unlike
@@ -11550,10 +11465,6 @@ const handlers = mergeRouteMaps(
     if (!canonical) return ERR_INVALID_ORIGIN;
     // Serialized per origin: create/delete/registration never interleave.
     return await withOriginLock(canonical, async () => {
-      if (ephemeralSiteToolConsentStore.hasLiveOrigin(canonical)) {
-        return { ok: false, origin: canonical,
-          error: "an attached run requires explicit owner enrollment before Site Agent creation" };
-      }
       // Enroll creates the site's OPFS store directory (so listOrigins()
       // discovers the worker) AND the master-memory origins list — both, never
       // just one. The CONTENT-SCRIPT host permission is a SEPARATE owner-driven
