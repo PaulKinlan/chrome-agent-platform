@@ -369,6 +369,77 @@ export async function withSiteToolConsentBarrier(operation) {
   return await withConsentLock(operation);
 }
 
+/** Copy all live run-scoped Allow AND Deny decisions into ONE enrolled envelope.
+ * Call only from the owner's explicit enrollment route after enrollment; this
+ * function intentionally does not create a per-origin store on its own for an
+ * unenrolled page. The caller must hold the enrollment lock, validate the new
+ * generation, and pass a synchronous guard for reset/run invalidation.
+ */
+export async function promoteEphemeralSiteToolConsents(origin, enrollmentGen, records, {
+  expectedProfileEpoch = null,
+  commitGuard = null,
+  now = Date.now(),
+} = {}) {
+  const canonical = typeof origin === "string" ? canonicalOrigin(origin) : null;
+  if (!canonical || !Number.isSafeInteger(enrollmentGen) || enrollmentGen < 1 ||
+    (commitGuard !== null && typeof commitGuard !== "function")) fail("site_tool_consent_promotion_invalid");
+  const proposed = strictArrayValues(records, MAX_TOOLS, "site_tool_consent_promotion_invalid");
+  const names = new Set();
+  const validated = proposed.map((record) => {
+    const fields = strictDataObject(record,
+      ["name", "source", "identityDigest", "state"], "site_tool_consent_promotion_invalid");
+    const name = fields.name.value;
+    const source = fields.source.value;
+    const identityDigest = fields.identityDigest.value;
+    const state = fields.state.value;
+    if (typeof name !== "string" || !name || name.length > MAX_TOOL_NAME || names.has(name) ||
+      source !== "declared" || typeof identityDigest !== "string" ||
+      !/^[0-9a-f]{64}$/.test(identityDigest) || (state !== "allowed" && state !== "denied")) {
+      fail("site_tool_consent_promotion_invalid");
+    }
+    names.add(name);
+    return { name, source, identityDigest, state };
+  });
+  return await withConsentLock(async () => {
+    if (expectedProfileEpoch !== null && expectedProfileEpoch !== consentProfileEpoch) {
+      fail("site_tool_consent_profile_changed");
+    }
+    if (commitGuard && commitGuard() !== true) fail("site_tool_consent_run_cancelled");
+    const envelope = await readEnvelope(canonical, enrollmentGen);
+    if (!validated.length) return Object.freeze({ origin: canonical, enrollmentGen, revision: envelope.revision, migrated: 0 });
+    const revision = envelope.revision + 1;
+    if (!Number.isSafeInteger(revision)) fail("site_tool_consent_revision");
+    const merged = new Map(envelope.records.map((record) => [record.name, record]));
+    let migrated = 0;
+    for (const proposal of validated) {
+      const prior = merged.get(proposal.name);
+      // A persisted Deny always wins. A run-local Deny may revoke a persisted
+      // Allow, but a run-local Allow cannot displace an already durable choice.
+      if (prior?.state === "denied" || (prior && proposal.state === "allowed")) continue;
+      merged.set(proposal.name, {
+        ...proposal,
+        revision,
+        decidedAt: Number.isSafeInteger(now) && now >= 0 ? now : Date.now(),
+      });
+      migrated++;
+    }
+    if (merged.size > MAX_TOOLS) fail("site_tool_consent_capacity");
+    if (expectedProfileEpoch !== null && expectedProfileEpoch !== consentProfileEpoch) {
+      fail("site_tool_consent_profile_changed");
+    }
+    if (commitGuard && commitGuard() !== true) fail("site_tool_consent_run_cancelled");
+    // One trusted OPFS write, never a per-tool loop: failure cannot persist
+    // Allow while silently dropping a Deny (or vice versa).
+    await siteMemory(canonical).setTrusted(SITE_TOOL_CONSENT_KEY, {
+      version: SITE_TOOL_CONSENT_VERSION,
+      enrollmentGen,
+      revision,
+      records: [...merged.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    });
+    return Object.freeze({ origin: canonical, enrollmentGen, revision, migrated });
+  });
+}
+
 export async function listSiteToolConsentStates(origin, tools, enrollmentGen) {
   const canonical = typeof origin === "string" ? canonicalOrigin(origin) : null;
   if (!canonical || !Array.isArray(tools)) return [];
