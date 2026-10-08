@@ -13,10 +13,12 @@ import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
-const OUT = durableDir("r65i-harness-ui");
+const runTag = new Date().toISOString().replace(/[:.]/g, "-");
+const BASE_OUT = durableDir("r65i-harness-ui");
+const OUT = `${BASE_OUT}/${runTag}`;
 const CHROMIUM = resolveChromiumBinary();
 
-console.log(`[r65i-evidence] Output directory: ${OUT}`);
+console.log(`[r65i-evidence] Run output directory: ${OUT}`);
 await Deno.mkdir(OUT, { recursive: true });
 
 const results: { name: string; pass: boolean; detail?: any }[] = [];
@@ -77,12 +79,13 @@ try {
 
   const captureShot = async (filename: string) => {
     const bytes = await safeCaptureScreenshot(cdp.send, sessionId, { timeoutMs: 8000 });
-    if (bytes) {
-      await Deno.writeFile(`${OUT}/${filename}`, bytes);
-      console.log(`[r65i-evidence] Screenshot saved: ${OUT}/${filename}`);
-    } else {
-      console.warn(`[r65i-evidence] Screenshot capture returned null for ${filename}`);
+    if (!bytes || bytes.length === 0) {
+      record(`screenshot ${filename} captured`, false, { error: "safeCaptureScreenshot returned empty or null" });
+      throw new Error(`Screenshot ${filename} capture failed`);
     }
+    await Deno.writeFile(`${OUT}/${filename}`, bytes);
+    record(`screenshot ${filename} captured`, true, { path: `${OUT}/${filename}`, bytes: bytes.length });
+    console.log(`[r65i-evidence] Screenshot saved: ${OUT}/${filename} (${bytes.length} bytes)`);
   };
 
   // Wait for NTP to render and populate harness-list
@@ -149,18 +152,38 @@ try {
 
   await captureShot("1280.png");
 
-  // ── Drive 2: Hover State ───────────────────────────────────────────────────
-  const hoverResult = await evalExpr(`(() => {
+  // ── Drive 2: Hover State via real CDP mouseMoved ───────────────────────────
+  const center = await evalExpr(`(() => {
     const first = document.querySelector("#harness-list harness-agent-button");
-    const btn = first && first.shadowRoot ? first.shadowRoot.querySelector("button") : null;
-    if (!btn) return { success: false };
-    const beforeBg = getComputedStyle(btn).backgroundColor;
-    btn.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
-    btn.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
-    const afterBg = getComputedStyle(btn).backgroundColor;
-    return { success: true, beforeBg, afterBg };
+    const btn = first?.shadowRoot?.querySelector("button");
+    if (!btn) return null;
+    const r = btn.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
   })()`);
-  record("hover: button dispatches mouse events cleanly", hoverResult.success, hoverResult);
+
+  if (!center) {
+    record("hover: button target resolved", false, { error: "button not found in DOM" });
+  } else {
+    // Reset mouse to outside the element
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 0, y: 0 }, sessionId);
+    await sleep(150);
+    const beforeHover = await evalExpr(`(() => {
+      const btn = document.querySelector("#harness-list harness-agent-button")?.shadowRoot?.querySelector("button");
+      return btn ? { bg: getComputedStyle(btn).backgroundColor, color: getComputedStyle(btn).color } : null;
+    })()`);
+
+    // Move mouse over the button
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: center.x, y: center.y }, sessionId);
+    await sleep(250);
+
+    const afterHover = await evalExpr(`(() => {
+      const btn = document.querySelector("#harness-list harness-agent-button")?.shadowRoot?.querySelector("button");
+      return btn ? { bg: getComputedStyle(btn).backgroundColor, color: getComputedStyle(btn).color } : null;
+    })()`);
+
+    const hoverChanged = beforeHover?.bg !== afterHover?.bg;
+    record("hover: mouseMoved over button updates computed hover style", hoverChanged, { before: beforeHover, after: afterHover });
+  }
 
   // ── Drive 3: Keyboard Focus Outline ────────────────────────────────────────
   const focusResult = await evalExpr(`(() => {
@@ -178,49 +201,81 @@ try {
     };
   })()`);
 
-  record("keyboard focus: button receives focus with 2px visible outline", focusResult.success && focusResult.outlineWidth !== "0px", focusResult);
+  record("keyboard focus: button receives focus with visible inset outline", focusResult.success && focusResult.outlineWidth !== "0px", focusResult);
   await captureShot("focus.png");
 
-  // ── Drive 4: Keyboard Activation & Conversation Routing ────────────────────
-  const keyActivationResult = await evalExpr(`(() => {
-    const codexBtn = Array.from(document.querySelectorAll("#harness-list harness-agent-button")).find(
-      b => b.getAttribute("name") === "Codex"
-    );
-    if (!codexBtn || !codexBtn.shadowRoot) return { success: false, reason: "no codex button" };
-    const btn = codexBtn.shadowRoot.querySelector("button");
+  // ── Drive 4: Real Keyboard Enter Activation & Conversation Route ───────────
+  const focusCodex = await evalExpr(`(() => {
+    const buttons = Array.from(document.querySelectorAll("#harness-list harness-agent-button"));
+    const codex = buttons.find(b => b.getAttribute("name") === "Codex");
+    if (!codex || !codex.shadowRoot) return { success: false };
+    const btn = codex.shadowRoot.querySelector("button");
+    if (!btn) return { success: false };
     btn.focus();
-    // Dispatch Enter keydown and click
-    btn.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
-    btn.click();
+    return { success: true, focused: document.activeElement === codex };
+  })()`);
+  record("keyboard activation: Codex button focused", focusCodex.success, focusCodex);
+
+  // Dispatch real Enter keydown and keyup via CDP (NO synthetic btn.click()!)
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "rawKeyDown",
+    windowsVirtualKeyCode: 13,
+    nativeVirtualKeyCode: 13,
+    key: "Enter",
+    code: "Enter",
+    text: "\r",
+    unmodifiedText: "\r",
+  }, sessionId);
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    windowsVirtualKeyCode: 13,
+    nativeVirtualKeyCode: 13,
+    key: "Enter",
+    code: "Enter",
+  }, sessionId);
+  await sleep(400);
+
+  const keyActivationResult = await evalExpr(`(() => {
     const threadTitle = document.getElementById("thread-title");
     return {
-      success: true,
       titleText: threadTitle ? threadTitle.textContent : null,
       hash: window.location.hash,
     };
   })()`);
-  record(
-    "conversation route: activating Codex button routes to conversation surface",
-    keyActivationResult.success && (keyActivationResult.titleText === "Codex" || keyActivationResult.hash.includes("codex")),
-    keyActivationResult,
-  );
+  const routedToCodex = keyActivationResult.titleText === "Codex" || keyActivationResult.hash.includes("codex");
+  record("keyboard activation: Enter key activates native button and routes to Codex conversation", routedToCodex, keyActivationResult);
 
-  // ── Drive 5: Short Viewport (1280x350) & List Scroll Cap ───────────────────
+  // ── Drive 5: Short Viewport (1280x350) Scrolling & Reachability ────────────
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 350, deviceScaleFactor: 1, mobile: false }, sessionId);
   await sleep(400);
 
   const shortViewportGeo = await evalExpr(`(() => {
     const presence = document.querySelector("#harness-presence");
     const list = document.querySelector("#harness-list");
+    const side = document.querySelector(".side");
+    const buttons = Array.from(document.querySelectorAll("#harness-list harness-agent-button"));
+    const lastBtn = buttons[buttons.length - 1];
+
     const presenceCs = presence ? getComputedStyle(presence) : null;
     const listCs = list ? getComputedStyle(list) : null;
+
+    // Scroll list to reveal the last launcher
+    if (lastBtn) lastBtn.scrollIntoView();
+
+    const listRect = list ? list.getBoundingClientRect() : null;
+    const sideRect = side ? side.getBoundingClientRect() : null;
+    const lastRect = lastBtn ? lastBtn.getBoundingClientRect() : null;
+
     return {
       presenceFlexShrink: presenceCs ? presenceCs.flexShrink : null,
-      presenceMinHeight: presenceCs ? presenceCs.minHeight : null,
       listMaxHeight: listCs ? listCs.maxHeight : null,
       listOverflowY: listCs ? listCs.overflowY : null,
       listHeight: list ? list.clientHeight : 0,
       listScrollHeight: list ? list.scrollHeight : 0,
+      listInsideSide: listRect && sideRect ? listRect.bottom <= sideRect.bottom + 2 : false,
+      lastBtnVisibleInList: lastRect && listRect ? (lastRect.top >= listRect.top - 2 && lastRect.bottom <= listRect.bottom + 2) : false,
+      lastRect,
+      listRect,
     };
   })()`);
 
@@ -229,6 +284,12 @@ try {
     shortViewportGeo.presenceFlexShrink === "1" && shortViewportGeo.listOverflowY === "auto" && shortViewportGeo.listMaxHeight === "240px",
     shortViewportGeo,
   );
+  record(
+    "short viewport (1280x350): list stays within sidebar and last launcher scrolls into view",
+    shortViewportGeo.listInsideSide && shortViewportGeo.lastBtnVisibleInList,
+    shortViewportGeo,
+  );
+  await captureShot("short-350.png");
 
   // ── Drive 6: Narrow Viewport (390x800) & Rail Expand ───────────────────────
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 800, deviceScaleFactor: 1, mobile: false }, sessionId);
@@ -311,8 +372,9 @@ try {
   // Save structured report
   const report = {
     timestamp: new Date().toISOString(),
+    runDir: OUT,
     wide: wideGeo,
-    hover: hoverResult,
+    hover: { before: center ? "tested" : "missing" },
     focus: focusResult,
     activation: keyActivationResult,
     shortViewport: shortViewportGeo,
@@ -325,8 +387,7 @@ try {
 
   const failedCount = results.filter((r) => !r.pass).length;
   if (failedCount > 0) {
-    console.error(`[r65i-evidence] FAILED: ${failedCount} check(s) failed`);
-    Deno.exit(1);
+    throw new Error(`[r65i-evidence] FAILED: ${failedCount} check(s) failed`);
   }
   console.log(`[r65i-evidence] ALL ${results.length} CHECKS PASSED.`);
 
