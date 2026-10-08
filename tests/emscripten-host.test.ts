@@ -193,14 +193,21 @@ Deno.test("emscripten host: one in-flight job per package — the second refuses
   installStubs();
   try {
     let firstPosted = null;
+    // Wait for the POST itself, not for one macrotask: the host fetches and SHA-256-verifies three
+    // assets before it posts, and crypto.subtle.digest settles on a thread pool, so under a loaded
+    // parallel phase a single setTimeout(0) can fire first (gate-speed: measured red on a 2-vCPU
+    // full run, and the still-in-flight first job then reddened the NEXT test with emscripten_busy).
+    let markPosted;
+    const posted = new Promise((resolve) => { markPosted = resolve; });
     class HangingWorker {
-      postMessage(message) { firstPosted = message; /* never answers */ }
+      postMessage(message) { firstPosted = message; markPosted(); /* never answers */ }
       terminate() {}
     }
     const first = executeEmscriptenRunRequest(await request({
       lifecycle: { startupMs: 25, callMs: 25 },
     }), { createWorker: () => new HangingWorker() });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Bounded by the first run itself: if it settles without ever posting, the assertion below names it.
+    await Promise.race([posted, first]);
     assert(firstPosted, "the first job posted");
     let code = null;
     try { await executeEmscriptenRunRequest(await request()); }
