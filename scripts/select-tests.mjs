@@ -426,7 +426,12 @@ export function buildReverseGraph(onLexerFailure) {
       else if (/\.(js|ts|mjs)$/.test(ent.name)) files.add(p);
     }
   };
-  for (const d of ["extension", "scripts", "lib", "packages", "tests", "cap-evidence"]) {
+  // cap-evidence/ is a durable EVIDENCE tree (bead outputs, screenshots,
+  // logs), not tracked source — and it can grow huge. It is intentionally NOT
+  // walked. Reverse edges INTO cap-evidence are still captured: any test that
+  // imports a cap-evidence module is itself walked (tests/ is in the list
+  // below), and importsOf() records the importer side of that edge.
+  for (const d of ["extension", "scripts", "lib", "packages", "tests"]) {
     if (existsSync(join(ROOT, d))) walk(join(ROOT, d));
   }
   for (const f of files) {
