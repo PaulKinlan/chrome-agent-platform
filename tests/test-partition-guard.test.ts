@@ -27,6 +27,7 @@ import {
   PRODUCTION_BUILD_TIMEOUT_MS,
   READ_ONLY_DIST,
   READ_ONLY_DIST_REASONS,
+  READ_ONLY_DIST_UNRELATED_SPAWN_ALLOWLIST,
   realDriverRefs,
   SERIAL,
   SERIAL_FILE_TIMEOUTS,
@@ -170,14 +171,33 @@ Deno.test("partition guard: SERIAL membership is pinned with reasons and exists 
   }
 });
 
+// Pinned literal list of reviewed READ_ONLY_DIST files (P1a: 323kf).
+// Prevents silent removal of readers from the post-build batch.
+const EXPECTED_READ_ONLY_DIST = [
+  "tests/diff-core.test.ts",
+  "tests/wasm-tree-shaking.test.ts",
+  "tests/bundle-budget.test.ts",
+  "tests/bundled-tool-packages.test.ts",
+  "tests/tool-exec-preview.test.ts",
+  "tests/owner-approval-security.test.ts",
+];
+
 Deno.test("partition guard: READ_ONLY_DIST membership is pinned with reasons, exists on disk, and is disjoint from SERIAL", async () => {
+  assertEquals(
+    new Set(EXPECTED_READ_ONLY_DIST),
+    READ_ONLY_DIST,
+    "READ_ONLY_DIST must match the reviewed pinned list of read-only dist consumers",
+  );
   assertEquals(new Set(Object.keys(READ_ONLY_DIST_REASONS)), READ_ONLY_DIST, "READ_ONLY_DIST is exactly the reasoned set");
-  assert(READ_ONLY_DIST.size > 0, "READ_ONLY_DIST must not be empty");
+  assert(READ_ONLY_DIST.size === 6, "READ_ONLY_DIST must contain exactly 6 reviewed files");
   for (const [rel, reason] of Object.entries(READ_ONLY_DIST_REASONS)) {
     assert(reason.trim().length > 0, `${rel}: every read-only dist entry states why it runs in the post-build batch`);
     const st = await Deno.stat(`${ROOT}${rel}`).catch(() => null);
     assert(st !== null, `${rel}: read-only dist entry must exist on disk`);
     assert(!SERIAL.has(rel), `${rel}: read-only dist entry must be disjoint from SERIAL`);
+  }
+  for (const allow of READ_ONLY_DIST_UNRELATED_SPAWN_ALLOWLIST) {
+    assert(READ_ONLY_DIST.has(allow), `${allow}: unrelated spawn allowlist must only contain READ_ONLY_DIST files`);
   }
 });
 
@@ -223,6 +243,43 @@ Deno.test("323kf: build.mjs spawn or tree write in an exempted READ_ONLY_DIST fi
     writeViolations,
     [`${target} — new write hazard in the read-only post-build batch`],
     "write under extension/ in a READ_ONLY_DIST file must be flagged",
+  );
+
+  // 4. Preceding variable binding for build.mjs must also be flagged (P1b)
+  const precedingBinding = [
+    [
+      target,
+      `
+      const bundle = await Deno.readTextFile("extension/dist/diff-core.js");
+      const builder = "scripts/build.mjs";
+      new Deno.Command("node", { args: [builder] }).output();
+      `,
+    ],
+  ] as [string, string][];
+  const bindingViolations = unserialisedHazards(precedingBinding);
+  assertEquals(
+    bindingViolations,
+    [`${target} — new build-spawn hazard in the read-only post-build batch`],
+    "spawn of bound builder variable in a READ_ONLY_DIST file must be flagged",
+  );
+
+  // 5. Unresolved spawn combined with build reference in READ_ONLY_DIST must be flagged (P1b)
+  const unresolvedSpawn = [
+    [
+      target,
+      `
+      const bundle = await Deno.readTextFile("extension/dist/diff-core.js");
+      const ref = "scripts/build.mjs";
+      const runner = getRunner();
+      runner.spawn();
+      `,
+    ],
+  ] as [string, string][];
+  const unresolvedViolations = unserialisedHazards(unresolvedSpawn);
+  assertEquals(
+    unresolvedViolations,
+    [`${target} — build reference combined with spawn in the read-only post-build batch`],
+    "unresolved spawn combined with build reference in a READ_ONLY_DIST file must be flagged",
   );
 });
 
