@@ -8,7 +8,16 @@ Deno.test("cap-ai-sdk-dedup layout behaviors", async (t) => {
   const buildScript = await Deno.readTextFile("build.mjs");
   const extractMatch = buildScript.match(/let denoEntries = \[\];[\s\S]*?(?=const isStoreBuild =)/);
   if (!extractMatch) throw new Error("Could not extract guard logic");
-  
+  // These pre-existing fixtures exercise ONLY canonical SDK/zod peer selection,
+  // including a legacy flat Mac layout. The separate bbz3s fixture suite tests
+  // the live AJV -> fast-uri dependency guard with actual .deno paths/locks.
+  // Require the production check to remain in the build before excluding its
+  // call from this SDK-only scratch extraction (never bypass it in build.mjs).
+  const dependencyCheck = "assertLiveFastUriResolution({ root: ROOT, sdkDir: CANON_MCP_SDK_DIR });";
+  assert(extractMatch[0].split(dependencyCheck).length === 2,
+    "live dependency check must appear once after canonical SDK selection and before bundling");
+  const sdkSelectionLogic = extractMatch[0].replace(dependencyCheck, "/* dependency check separately covered by bbz3s fixtures */");
+
   const guardLogic = `
 import fs from "fs";
 import path from "path";
@@ -19,7 +28,7 @@ function realpathSync(p) { return fs.realpathSync(p); }
 const ROOT = process.cwd();
 const denoStoreDir = path.join(ROOT, "node_modules", ".deno");
 let BUILD_TARGET = "developer";
-${extractMatch[0]}
+${sdkSelectionLogic}
 console.log("GUARD_PASSED");
 `;
 
