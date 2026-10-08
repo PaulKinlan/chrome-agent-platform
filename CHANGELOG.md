@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.603] — 2026-10-08
+- Settings, the sidebar and the Agents panel now show the same humanised schedule cadence (weekly, daily, hourly), and the sidebar keeps your rail navigation choice when a late preference restore arrives.
+
 ## [0.3.602] — 2026-10-08
 - Skill resolution now reports the store and the cause when a skill store cannot be read, instead of silently continuing as if the skill were absent.
 
