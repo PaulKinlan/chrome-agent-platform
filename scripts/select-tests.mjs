@@ -58,6 +58,9 @@ export const CORE = [
 export const SOURCE_INSPECTING_GUARDS = [
   "tests/sw-dispatch-authority-census.test.ts",
   "tests/sw-route-modularization.test.ts",
+  // o75bp: source/document security anchors have no static import edge from the SW;
+  // a SW-only edit must still run their symbol-existence guard in test:changed.
+  "tests/security-doc-drift.test.ts",
   "tests/file-url-root-guard.test.ts",
   "tests/docs-process-truth.test.ts",
   "tests/wasm-catalogue-status-truth.test.ts",

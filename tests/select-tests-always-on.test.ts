@@ -25,6 +25,7 @@ Deno.test("kz27: the tree-walking guards are IN the always-on list, and every en
       "tests/durable-root.test.ts",
       "tests/dialog-confirm-modernization.test.ts",
       "tests/single-source-helpers.test.ts",
+      "tests/security-doc-drift.test.ts", // o75bp: SW-only changes must recheck cited symbols
     ]
   ) {
     assert(

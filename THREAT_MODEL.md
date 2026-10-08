@@ -7,6 +7,12 @@ component map, TB2, S1/S6, T2/T4/T11/T18 and INV-1/2/4/15 revised here.
 Other threat and register entries retain their own historical pins until separately
 re-read; named symbols are anchors and line numbers are locators, not authority.
 `docs/RISK-REGISTER.md` uses the same convention for entries it added after its base pin.
+Broker citations use `path#symbol` (for example
+`extension/background/service-worker.js#PAGE_ALLOWED_ROUTES.has`):
+`tests/security-doc-drift.test.ts` resolves the named declaration, call or route
+method in the live source AST and fails if it disappears or is ambiguous. No
+renumbering is needed when unrelated code moves. Remaining `path:line`
+citations outside the broker inventory are historical locators, not live pins.
 
 This document is the entry point an audit or scanning agent reads BEFORE it reports a
 finding. It exists for one reason: a scan that does not know what this project has
@@ -43,7 +49,7 @@ Component map, with the file that owns each surface:
 
 | Component | Where | Notes |
 |---|---|---|
-| Service worker (the privileged broker) | `extension/background/service-worker.js:12332` (`chrome.runtime.onMessage.addListener`) | the ONE central dispatcher listener; 288 registered routes |
+| Service worker (the privileged broker) | `extension/background/service-worker.js#chrome.runtime.onMessage.addListener` | the ONE central dispatcher listener; 288 registered routes |
 | Route modules | `extension/background/routes/` | dispatched through `mergeRouteMaps` (census §2) |
 | New-tab hub / Settings / side panel | `extension/ntp/`, `extension/options/`, `extension/sidepanel/` | extension documents; principal `extension` / `owner-options` |
 | Offscreen document | `extension/offscreen/offscreen.js` | single runtime host: 11 `register*Host()` calls (ACP model, agent worker, Python, Wasm stream, call-export, Emscripten, WASI job, table worker, owner-uploaded Wasm, SVG rasterise, on-device text), plus the script-sandbox and clipboard listeners; reclaim can interrupt in-flight work across those lanes (R12) |
@@ -99,10 +105,11 @@ inventory and the sender/inventory guard described in INV-15.
   sandbox page list at `extension/manifest.json:108-113`.
 - **TB2 — The service worker is the privileged broker.** No other component may reach
   storage, OPFS, providers or browser control directly: the content-script realm may
-  reach exactly seven routes (`PAGE_ALLOWED_ROUTES` in `extension/lib/pure.js:1280-1289`),
+  reach exactly seven routes (`PAGE_ALLOWED_ROUTES` in `extension/lib/pure.js#PAGE_ALLOWED_ROUTES`),
   and every other route is refused by `chrome.runtime.onMessage.addListener` at
-  `extension/background/service-worker.js:12332` (allowlist check near :12362).
-  The receiver derives the origin from the BROWSER-ATTESTED `sender` (near :12323-12357),
+  `extension/background/service-worker.js#chrome.runtime.onMessage.addListener`
+  (check: `extension/background/service-worker.js#PAGE_ALLOWED_ROUTES.has`).
+  The receiver derives the origin from the BROWSER-ATTESTED `sender` in that listener,
   never the message body.
 - **Evidence pin: `origin/main@28c7189d`.** The cited symbols and closed set were re-read at this tree; line numbers are locators.
 - **TB3 — The two provider paths.** Path A sends the conversation from the service
@@ -115,8 +122,8 @@ inventory and the sender/inventory guard described in INV-15.
 - **TB4 — Brokered fetch egress.** A sandboxed script and the Python worker never fetch
   directly. Their fetch is bridged to the service worker, which fetches from the user's
   network position with the extension's host permission — `cap:fetch` at
-  `extension/background/service-worker.js:6882` and `python.fetch` at
-  `extension/background/service-worker.js:6955`, both applying
+  `extension/background/service-worker.js#cap:fetch` and `python.fetch` at
+  `extension/background/service-worker.js#python.fetch`, both applying
   `extension/lib/fetch-policy.js:135`.
 - **TB5 — The ACP bridge.** A loopback WebSocket on the host in front of an agent
   harness that can run shell commands and write files
@@ -194,7 +201,7 @@ should reason about; the threats that use them are in sections 5 and 6.
 
 | ID | Surface | Where it enters | What is hostile about it |
 |---|---|---|---|
-| S1 | Page content and page messages | `chrome.runtime.onMessage.addListener` at `extension/background/service-worker.js:12332`; `PAGE_ALLOWED_ROUTES` at `extension/lib/pure.js:1280` | a page's content script may call only the seven page-allowed routes for its OWN origin, and may put anything in the message body |
+| S1 | Page content and page messages | `chrome.runtime.onMessage.addListener` at `extension/background/service-worker.js#chrome.runtime.onMessage.addListener`; `PAGE_ALLOWED_ROUTES` at `extension/lib/pure.js#PAGE_ALLOWED_ROUTES` | a page's content script may call only the seven page-allowed routes for its OWN origin, and may put anything in the message body |
 | S2 | WebMCP tool descriptors and tool results | `extension/lib/tools.js:511`, `extension/lib/webmcp-authority.js:68` | a site authors its own tool schema and result text |
 | S3 | Model output (tool calls and prose) | `extension/lib/lazy-tool-protocol.js:1`, `extension/lib/untrusted-fence.js:59` | a steered model calls real tools |
 | S4 | Tool results rendered into the transcript | `extension/shared/components.js:566` (`renderHtmlFrame`) | an artifact body or fetched body is untrusted HTML |
@@ -232,9 +239,10 @@ consequences are carried by the matching register entry where one exists.
 ### T2. Sender-origin spoofing by a content script
 
 - **Boundary:** TB2. **Evidence:** `authorizeToolReport` at
-  `extension/lib/pure.js:912` (the classifier), `PAGE_ALLOWED_ROUTES` at :1280,
-  and the central `chrome.runtime.onMessage.addListener` at
-  `extension/background/service-worker.js:12332` (page-route check near :12362,
+  `extension/lib/pure.js#authorizeToolReport` (the classifier), `PAGE_ALLOWED_ROUTES` at
+  `extension/lib/pure.js#PAGE_ALLOWED_ROUTES`, and the central listener at
+  `extension/background/service-worker.js#chrome.runtime.onMessage.addListener`
+  (page-route check: `extension/background/service-worker.js#PAGE_ALLOWED_ROUTES.has`;
   browser-derived `message.origin` overwrite immediately after). **Answer:** the
   origin comes from the sender, never from the body; a claimed-origin mismatch is
   refused. **Live proof:** `scripts/security-suite.ts:307-308` (a page MAIN world has no
@@ -256,11 +264,11 @@ consequences are carried by the matching register entry where one exists.
 
 - **Boundary:** TB2. **Evidence:** `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` §4.9 — 37
   routes mutate persistent state with no route-local principal check and no approval
-  gate (for example `named-agent.set-tools` at `extension/background/service-worker.js:8388`
-  and `asset.export-to-folder` at :10106; `background-agent.delete` is owner-direct,
+  gate (for example `named-agent.set-tools` at `extension/background/service-worker.js#named-agent.set-tools`
+  and `asset.export-to-folder` at `extension/background/service-worker.js#asset.export-to-folder`; `background-agent.delete` is owner-direct,
   not in this 37). **Answer:** the central listener refuses every
-  non-page-allowed route to page senders (allowlist check near
-  `extension/background/service-worker.js:12313`),
+  non-page-allowed route to page senders (allowlist check at
+  `extension/background/service-worker.js#PAGE_ALLOWED_ROUTES.has`),
   so the class is reachable only from extension principals. **Register:** R11.
 - **Evidence pin: `origin/main@28c7189d` for the count.** The census §4.9 lists 37 unclassified mutations among 288 registered routes; consult its route rows for locations rather than interpreting older T4 line locators as current.
 
@@ -281,8 +289,8 @@ consequences are carried by the matching register entry where one exists.
   (`extractFetchHosts`); shared by `checkPythonNetworkRequest`
   (`extension/lib/python-network.js:183`) and the enclave proxy
   (`extension/background/routes/enclave-proxy.js:348`); SW routes at
-  `extension/background/service-worker.js:6882` (`cap:fetch`) and `:6958`
-  (`python.fetch`). **Tests:** `tests/cap-fetch-deny.test.ts`; live SSRF probe at
+  `extension/background/service-worker.js#cap:fetch` (`cap:fetch`) and
+  `extension/background/service-worker.js#python.fetch` (`python.fetch`). **Tests:** `tests/cap-fetch-deny.test.ts`; live SSRF probe at
   `scripts/security-suite.ts:389`. **Residual, stated in the source:** DNS rebinding of a
   listed host is not covered (`extension/lib/fetch-policy.js:21`). **Register:** R23
   (adjudicated and withheld in §7 item 9).
@@ -366,9 +374,9 @@ consequences are carried by the matching register entry where one exists.
   model-authored `promptTemplate` can no longer reach the instruction position either: the
   model-callable tool carries no template field (`extension/lib/management-tools.js:459-463`,
   its call at `:466`), and the route forces a model principal's template to empty
-  (`extension/background/service-worker.js:10918`, the route member at `:10911`) — which
-  matters because `dispatchHook` executes that template verbatim as the recurring run's
-  task (`:12155-12156`).
+  (`extension/background/service-worker.js#hooks.subscribe`, the route's owner gate) — which
+  matters because `dispatchHook` (`extension/background/service-worker.js#dispatchHook`)
+  executes that template verbatim as the recurring run's task.
 - **Falsifiable, not prose:** `tests/hook-subscribe-approval.test.ts` drives the REAL route
   through the MODEL path with the real approval store and asserts that a first-time
   subscribe publishes one approval card and leaves exactly one pending row, that nothing
@@ -379,7 +387,7 @@ consequences are carried by the matching register entry where one exists.
   tests RED. Those assertions, not this paragraph, are what would catch a regression.
 - **Residual, to re-read at audit time:** the seam stays OPTIONAL in `hooks.js` by design —
   internal seed callers pass no gate (`extension/lib/agent-seeds.js:164` and
-  `extension/background/service-worker.js:10590` for agent seeds and skill enable/disable) —
+  `extension/background/service-worker.js#background-agent.set` for skill enable/disable) —
   so the control lives in the ROUTE, and a change to who may call `subscribeHook` directly
   reopens it.
 - **Register:** no entry — an ENFORCED decision is a delivered control, not a withheld one,
@@ -466,14 +474,14 @@ These are the properties a change must not break. Each is stated so it can be fa
 and each names the executable check that would catch a regression.
 
 - **INV-1 — Authority is derived from the browser-attested sender, never from the body.**
-  `authorizeToolReport` at `extension/lib/pure.js:912` and the central listener at
-  `extension/background/service-worker.js:12332` (browser sender classification
-  near :12323, derived origin at :12351);
+  `authorizeToolReport` at `extension/lib/pure.js#authorizeToolReport` and the central listener at
+  `extension/background/service-worker.js#chrome.runtime.onMessage.addListener`
+  (browser sender classification and derived-origin overwrite inside that listener);
   `scripts/security-suite.ts:307-308`. A new route that reads an origin, tab id or
   document id out of the message body breaks this.
 - **Evidence pin: `origin/main@28c7189d` for INV-1/2.** The sender/allowlist symbols were re-read at this tree; other invariant citations retain their own historical context.
 - **INV-2 — The page-reachable route set is closed and tiny.**
-  `PAGE_ALLOWED_ROUTES` at `extension/lib/pure.js:1280-1289`, pinned by
+  `PAGE_ALLOWED_ROUTES` at `extension/lib/pure.js#PAGE_ALLOWED_ROUTES`, pinned by
   `tests/internal-sender-contract-audit.test.ts` (closed-page-route assertion).
   An admin route appearing in that set breaks this.
 - **INV-3 — No external messaging channel exists.** No `externally_connectable`, no
@@ -488,8 +496,8 @@ and each names the executable check that would catch a regression.
   lanes in S6–S6d. A new JS-eval site in `extension/lib/` breaks the invariant.
 - **INV-5 — Every broker-mediated fetch applies the private-address deny list AND the
   per-run host allow-list, with no credentials and no redirect following.**
-  `extension/lib/fetch-policy.js:135`; `extension/background/service-worker.js:6882`,
-  `:6955`. A new egress helper that calls `fetch` directly breaks this.
+  `extension/lib/fetch-policy.js:135`; `extension/background/service-worker.js#cap:fetch`,
+  `extension/background/service-worker.js#python.fetch`. A new egress helper that calls `fetch` directly breaks this.
 - **INV-6 — A credential-shaped key never reaches a prompt, a log, a receipt or an error
   string.** `extension/lib/pure.js:959`, `:1114`; `tests/security.test.ts:79-99`,
   `tests/secret-redaction.test.ts`.
