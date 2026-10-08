@@ -94,27 +94,86 @@ function section(text: string, start: string, end: string): string {
   return text.slice(from, to);
 }
 
-function assertLiveRouteCitations(model: string, pure: string, worker: string): void {
-  const pureLine = pure.split("\n").findIndex((line) => /^export const PAGE_ALLOWED_ROUTES =/.test(line)) + 1;
-  const workerLine = worker.split("\n").findIndex((line) => /^chrome\.runtime\.onMessage\.addListener\(/.test(line)) + 1;
-  assert(pureLine > 0 && workerLine > 0, "route or listener symbol missing in code");
-  const pieces = [
-    section(model, "**TB2 —", "**TB3 —"),
-    section(model, "| S1 |", "| S2 |"),
-    section(model, "**INV-2 —", "**INV-3 —"),
+// Resolve source AST nodes, not text occurrences: a comment or a second copy
+// must not satisfy a missing security check (o75bp; 5x4iw's line pins drifted).
+function sourceAnchorLines(ast: unknown, symbol: string): number[] {
+  const lines: number[] = [];
+  const memberPath = (node: unknown): string | null => {
+    if (node?.type === "Identifier") return node.name;
+    if (node?.type !== "MemberExpression" || node.computed || node.property?.type !== "Identifier") return null;
+    const object = memberPath(node.object);
+    return object ? `${object}.${node.property.name}` : null;
+  };
+  const visit = (node: unknown) => {
+    if (!node || typeof node !== "object") return;
+    if ((node.type === "VariableDeclarator" || node.type === "FunctionDeclaration" || node.type === "ClassDeclaration") &&
+        node.id?.type === "Identifier" && node.id.name === symbol) lines.push(node.id.loc.start.line);
+    if (node.type === "CallExpression" && symbol.includes(".") && memberPath(node.callee) === symbol) {
+      lines.push(node.loc.start.line); // bare names must resolve to declarations, not callers
+    }
+    if (node.type === "Property" && node.method && node.key?.type === "Literal" && node.key.value === symbol) {
+      lines.push(node.key.loc.start.line); // quoted SW route method, not a comment/string use
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "start" || key === "end" || key === "loc") continue;
+      if (Array.isArray(value)) value.forEach(visit);
+      else if (value && typeof value === "object") visit(value);
+    }
+  };
+  visit(ast);
+  return lines.sort((a, b) => a - b);
+}
+
+function assertLiveRouteCitations(model: string, pure: string, worker: string, register = read("docs/RISK-REGISTER.md")): void {
+  const sources = new Map([
+    ["extension/lib/pure.js", pure],
+    ["extension/background/service-worker.js", worker],
+  ]);
+  const parsed = new Map<string, unknown>();
+  const check = (piece: string, path: string, symbol: string) => {
+    const anchor = `${path}#${symbol}`;
+    assert(piece.includes(`\`${anchor}\``), `missing security anchor ${anchor} in documented section`);
+    const source = sources.get(path);
+    assert(source, `unregistered security anchor source ${path}`);
+    if (!parsed.has(path)) parsed.set(path, acorn.parse(source, {
+      ecmaVersion: "latest", sourceType: "module", locations: true,
+    }));
+    const lines = sourceAnchorLines(parsed.get(path), symbol);
+    assert(lines.length === 1, `${lines.length ? "ambiguous" : "missing"} security anchor ${anchor}; ` +
+      `candidates: ${lines.map((line) => `${path}:${line}`).join(", ") || "none"}`);
+  };
+  const pureRoute = ["extension/lib/pure.js", "PAGE_ALLOWED_ROUTES"];
+  const listener = ["extension/background/service-worker.js", "chrome.runtime.onMessage.addListener"];
+  const allowlist = ["extension/background/service-worker.js", "PAGE_ALLOWED_ROUTES.has"];
+  const classifier = ["extension/lib/pure.js", "authorizeToolReport"];
+  const swRoute = (name: string) => ["extension/background/service-worker.js", name];
+  const fetchRoute = swRoute("cap:fetch");
+  const pythonFetch = swRoute("python.fetch");
+  const namedTools = swRoute("named-agent.set-tools");
+  const exportFolder = swRoute("asset.export-to-folder");
+  const hooksSubscribe = swRoute("hooks.subscribe");
+  const backgroundSet = swRoute("background-agent.set");
+  const sections: Array<[string, string[][]]> = [
+    [section(model, "## 1. System Overview", "## 2. Trust Boundaries"), [listener]],
+    [section(model, "**TB2 —", "**TB3 —"), [pureRoute, listener, allowlist]],
+    [section(model, "**TB4 —", "**TB5 —"), [fetchRoute, pythonFetch]],
+    [section(model, "| S1 |", "| S2 |"), [pureRoute, listener]],
+    [section(model, "### T2.", "### T3."), [pureRoute, listener, allowlist, classifier]],
+    [section(model, "### T4.", "### T5."), [allowlist, namedTools, exportFolder]],
+    [section(model, "### T6.", "### T7."), [fetchRoute, pythonFetch]],
+    [section(model, "### T13.", "### T14."), [hooksSubscribe, backgroundSet, swRoute("dispatchHook")]],
+    [section(model, "### T19.", "## 6."), [swRoute("browser.destructive-action")]],
+    [section(model, "**INV-1 —", "**INV-2 —"), [listener, classifier]],
+    [section(model, "**INV-2 —", "**INV-3 —"), [pureRoute]],
+    [section(model, "**INV-5 —", "**INV-6 —"), [fetchRoute, pythonFetch]],
+    [section(register, "### R11", "### R12"), [namedTools, exportFolder, swRoute("background-agent.delete")]],
+    [section(register, "### R22", "### R23"), [pureRoute, listener, allowlist, classifier]],
   ];
-  for (const piece of pieces) {
-    assert(piece.includes("PAGE_ALLOWED_ROUTES"), "section must name its page route symbol");
-    const match = /extension\/lib\/pure\.js:(\d+)/.exec(piece);
-    assert(match, "section must cite the pure.js route symbol's locator");
-    assert(Math.abs(Number(match[1]) - pureLine) <= 2,
-      `PAGE_ALLOWED_ROUTES citation at ${match[1]} does not resolve near the actual line ${pureLine}`);
-  }
-  for (const piece of pieces.slice(0, 2)) {
-    const match = /extension\/background\/service-worker\.js:(\d+)/.exec(piece);
-    assert(match && Math.abs(Number(match[1]) - workerLine) <= 2,
-      `central SW listener citation does not resolve near the actual line ${workerLine}`);
-  }
+  for (const [piece, anchors] of sections) for (const [path, symbol] of anchors) check(piece, path, symbol);
+  assert(!/extension\/background\/service-worker\.js:\d+/.test(model),
+    "THREAT_MODEL must cite service-worker symbols, not drift-prone source lines");
+  assert(!/extension\/background\/service-worker\.js:\d+/.test(section(register, "### R22", "### R23")),
+    "R22 must cite service-worker symbols, not drift-prone source lines");
   assert(!/\b287\b/.test(model), "threat model must not reintroduce the historical 287-route count");
   assert(model.includes(`${registeredOffscreenHosts(read("extension/offscreen/offscreen.js")).length} \`register*Host()\` calls`),
     "the component map must use the actual offscreen registration count");
@@ -163,11 +222,39 @@ Deno.test("xbjki: shipped and generated JS cite live authority; new retired poin
     Error, "live threat-model/tool-tree", "the original generated renderer citation must fail");
 });
 
+Deno.test("o75bp: unrelated source-line insertions do not invalidate live security citations", () => {
+  const model = read("THREAT_MODEL.md");
+  const pure = read("extension/lib/pure.js");
+  const worker = read("extension/background/service-worker.js");
+  assertLiveRouteCitations(model, pure, `\n`.repeat(45) + worker);
+});
+
 Deno.test("5x4iw: page route and dispatcher citations resolve at current source symbols", () => {
   const model = read("THREAT_MODEL.md");
   const pure = read("extension/lib/pure.js");
   const worker = read("extension/background/service-worker.js");
   assertLiveRouteCitations(model, pure, worker);
-  assertThrows(() => assertLiveRouteCitations(model.replaceAll("extension/lib/pure.js:1280", "extension/lib/pure.js:1178"),
-    pure, worker), Error, "PAGE_ALLOWED_ROUTES", "the historical wrong citation must fail");
+  assertThrows(() => assertLiveRouteCitations(model.replaceAll("extension/lib/pure.js#PAGE_ALLOWED_ROUTES", "extension/lib/pure.js#ABSENT_ROUTE_SET"),
+    pure, worker), Error, "missing security anchor", "a citation to a missing symbol must fail");
+  assertThrows(() => assertLiveRouteCitations(model, pure.replace("export const PAGE_ALLOWED_ROUTES =", "export const REMOVED_ROUTES ="), worker),
+    Error, "missing security anchor extension/lib/pure.js#PAGE_ALLOWED_ROUTES", "removing a cited declaration must fail");
+  assertThrows(() => assertLiveRouteCitations(model, pure, worker.replace("!PAGE_ALLOWED_ROUTES.has(message.type)", "true")),
+    Error, "missing security anchor extension/background/service-worker.js#PAGE_ALLOWED_ROUTES.has", "removing the live allowlist check must fail");
+  assertThrows(() => assertLiveRouteCitations(model, pure, worker.replace('async "cap:fetch"(', 'async "retired:fetch"(')),
+    Error, "missing security anchor extension/background/service-worker.js#cap:fetch", "removing a cited SW route must fail");
+  assertThrows(() => assertLiveRouteCitations(model, pure,
+    worker.replace('async "browser.destructive-action"(', 'async "retired:destructive-action"(')),
+    Error, "missing security anchor extension/background/service-worker.js#browser.destructive-action",
+    "renaming the newly cited T19 owner-approval route must fail");
+  assertThrows(() => assertLiveRouteCitations(model, pure,
+    worker.replace("chrome.runtime.onMessage.addListener(", "renamedListener(") +
+      "\n// chrome.runtime.onMessage.addListener( is not an executable site\n"),
+    Error, "missing security anchor extension/background/service-worker.js#chrome.runtime.onMessage.addListener",
+    "deleting the cited listener must fail even when a comment shadows its spelling");
+  const ambiguous = assertThrows(() => assertLiveRouteCitations(model, pure,
+    worker + "\nchrome.runtime.onMessage.addListener(() => {});\n"),
+    Error, "ambiguous security anchor extension/background/service-worker.js#chrome.runtime.onMessage.addListener",
+    "duplicating the listener must fail");
+  assert(/candidates: (?:extension\/background\/service-worker\.js:\d+, ){1}extension\/background\/service-worker\.js:\d+/.test(ambiguous.message),
+    "ambiguity diagnostic must list both newly resolved source lines for a mechanical retarget");
 });
