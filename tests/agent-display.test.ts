@@ -3,7 +3,7 @@ import {
   backgroundAgentsForDisplay,
 } from "../extension/shared/agent-display.js";
 import { projectUnifiedAgents } from "../extension/lib/named-agents.js";
-import { assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals } from "jsr:@std/assert@1";
 
 Deno.test("agent display lists include disabled background agents unless explicitly active-only", () => {
   const agents = [
@@ -22,8 +22,32 @@ Deno.test("agent schedule markers distinguish on-demand, running, and disabled s
   );
   assertEquals(
     agentScheduleMarker({ kind: "background", enabled: false, schedule: { periodInMinutes: 60 } }),
-    "Schedule off · every 60 min",
+    "Schedule off · hourly",
   );
+  // Humanised cadence — the SAME formatter the sidebar uses (10080 → weekly).
+  assertEquals(
+    agentScheduleMarker({ kind: "named", schedule: { periodInMinutes: 10080 } }),
+    "Scheduled · weekly",
+  );
+  assertEquals(
+    agentScheduleMarker({ kind: "background", enabled: true, schedule: { periodInMinutes: 1440 } }),
+    "Scheduled · daily",
+  );
+});
+
+Deno.test("Settings and the hub sidebar both render the schedule marker through the ONE shared humanising helper", async () => {
+  const options = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
+  const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
+  const agentDisplay = await Deno.readTextFile(new URL("../extension/shared/agent-display.js", import.meta.url));
+  // The marker is built in ONE place, and that place humanises via the shared formatter.
+  assert(agentDisplay.includes("formatCadenceMinutes"), "agentScheduleMarker must use the shared cadence formatter");
+  assert(!agentDisplay.includes("every ${minutes} min"), "the shared marker must not hard-code the raw 'every N min' cadence");
+  // Settings and the hub sidebar both CALL the shared helper, so neither surface
+  // can re-introduce a raw cadence reading on its own.
+  assert(options.includes("agentScheduleMarker("), "Settings must render the schedule marker through the shared helper");
+  assert(ntp.includes("agentScheduleMarker("), "the hub sidebar must render the schedule marker through the shared helper");
+  // The sidebar must not keep a second, hand-rolled cadence formatter.
+  assert(!ntp.includes("formatCadenceMinutes"), "the hub sidebar must not keep a duplicate cadence formatter");
 });
 
 Deno.test("sidebar projection: disabled background agents are excluded, enabled ones and named agents are kept", () => {

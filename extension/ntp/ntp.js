@@ -38,7 +38,6 @@ import { runStagedBoot } from "./ntp-boot-scheduler.js";
 import { formatSidebarAgentRole, sleep, timeAgo } from "../lib/pure.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
 import { agentScheduleMarker, backgroundAgentsForDisplay } from "../shared/agent-display.js";
-import { formatCadenceMinutes } from "../lib/next-run-label.js";
 import { buildTemplateSelect } from "../lib/agent-template-select.js";
 import { handleScriptRunMessage } from "../lib/script-host.js";
 import { initialAvatar } from "../lib/avatar.js";
@@ -1362,10 +1361,7 @@ async function renderSidebarAgents(agents) {
   }
   for (const a of rows) {
     const isBackground = a.kind === "background";
-    const cadence = a.schedule?.periodInMinutes ? formatCadenceMinutes(a.schedule.periodInMinutes) : "";
-    const scheduleMarker = a.schedule?.periodInMinutes
-      ? (isBackground && a.enabled !== true ? `Schedule off · ${cadence}` : `Scheduled · ${cadence}`)
-      : agentScheduleMarker(a);
+    const scheduleMarker = agentScheduleMarker(a);
     const item = document.createElement("button");
     item.type = "button";
     item.className = "agent-item";

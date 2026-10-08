@@ -5,17 +5,21 @@
 // create dialog and Settings' "Configure" picker (the un-filtered list is for
 // those template pickers only). Execution pickers use agent-registry.isCallable.
 
+import { formatCadenceMinutes } from "../lib/next-run-label.js";
+
 /** Return the background agents a display surface should show. */
 export function backgroundAgentsForDisplay(agents = [], { activeOnly = false } = {}) {
   const rows = Array.isArray(agents) ? agents.filter(Boolean) : [];
   return activeOnly ? rows.filter((agent) => agent.enabled === true) : rows;
 }
 
-/** A short, plain-language marker shared by Settings and the task sidebar. */
+/** A short, plain-language marker shared by Settings and the task sidebar.
+ * The cadence is humanised by the ONE shared formatter (formatCadenceMinutes)
+ * so the sidebar and Settings never read the same schedule differently. */
 export function agentScheduleMarker(agent) {
   const minutes = Number(agent?.schedule?.periodInMinutes);
   if (!Number.isFinite(minutes) || minutes <= 0) return "On demand";
-  const cadence = `every ${minutes} min`;
+  const cadence = formatCadenceMinutes(minutes);
   return agent?.kind === "background" && agent?.enabled !== true
     ? `Schedule off · ${cadence}`
     : `Scheduled · ${cadence}`;

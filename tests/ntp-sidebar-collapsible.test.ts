@@ -137,10 +137,11 @@ Deno.test("5vk4: action button stopPropagation in ntp.js", async () => {
     "#new-agent click listener must call stopPropagation()",
   );
 
-  // ntp.js must import and use formatCadenceMinutes
+  // ntp.js must render agent cadence through the shared humanising helper
+  // (agentScheduleMarker), not a hand-rolled formatter.
   assert(
-    ntpJs.includes("formatCadenceMinutes"),
-    "ntp.js must import formatCadenceMinutes to format agent cadence",
+    ntpJs.includes("agentScheduleMarker("),
+    "ntp.js must render agent cadence through the shared agentScheduleMarker helper",
   );
 
   // ntp.js must persist side disclosures in localStorage under cap:ntp:side-disclosures

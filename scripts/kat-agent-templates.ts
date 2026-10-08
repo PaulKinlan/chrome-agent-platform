@@ -378,8 +378,8 @@ const chipRow = await ev(`(() => {
   return row ? { status: row.querySelector('.status')?.textContent ?? '' } : null;
 })()`);
 // The row's chip is the product's own schedule marker (lib/agent-display.js
-// agentScheduleMarker): a scheduled agent reads "Scheduled · every N min".
-check("the agents list shows the schedule chip ('Scheduled · every 120 min') with no background segregation", chipRow?.status === "Scheduled · every 120 min", chipRow);
+// agentScheduleMarker): a scheduled agent reads "Scheduled · <humanised cadence>".
+check("the agents list shows the schedule chip ('Scheduled · every 2 hours') with no background segregation", chipRow?.status === "Scheduled · every 2 hours", chipRow);
 
 // 6b. P1-b: REOPENING the scheduled agent's edit dialog shows the real
 //     schedule (named-agent.get shares the list's enrichment). The create
@@ -493,7 +493,7 @@ const collision = await ev(`(() => {
 })()`);
 check("a same-id record in BOTH stores renders exactly ONCE in the main list", collision?.mainRows === 1, collision);
 check("the collision row is the NAMED agent (avatar + its own 60-min schedule chip beats the recipe's 360)",
-  collision?.mainHasAvatar === true && collision?.mainChip === "Scheduled · every 60 min", collision);
+  collision?.mainHasAvatar === true && collision?.mainChip === "Scheduled · hourly", collision);
 check("the sidebar renders the collision once, with no 'background' label",
   collision?.sideRows === 1 && collision?.sideHasBackgroundLabel === false, collision);
 const bothAlarms = (await alarms()).filter((a: any) => a.name === "agent:price-watcher" || a.name === "skill:price-watcher" || a.name === "recipe:price-watcher");
