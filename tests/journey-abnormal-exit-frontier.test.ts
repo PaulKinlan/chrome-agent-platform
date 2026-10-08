@@ -411,3 +411,25 @@ Deno.test("9ud9e: process-level unhandledrejection and error events trigger imme
   assert(logText.includes("unreached checks:      375 downstream checks were NOT REACHED"));
   assert(logText.includes("Detached promise rejected: CDP target crashed"));
 });
+
+Deno.test("9ud9e: frontier transitions log RUN: <name> at the start of each check", () => {
+  const ran = new Set<string>();
+  const shutdownRan = new Set<string>();
+  const results: any[] = [];
+  const EXPECTED_RED = new Map<string, string>();
+  const logs: string[] = [];
+  const fakeConsole = { log: (...args: any[]) => logs.push(args.join(" ")), error: () => {} };
+
+  const harness = new Function(
+    "ran", "shutdownRan", "results", "EXPECTED_RED", "console", "EXPECTED",
+    `${checkBlockMatch[0].replace("\n/** The exact, ordered set", "")}
+     return { check };`,
+  )(ran, shutdownRan, results, EXPECTED_RED, fakeConsole, EXPECTED);
+
+  // When check 0 completes, it logs PASS: EXPECTED[0], and updateFrontier logs RUN: EXPECTED[1]
+  harness.check(EXPECTED[0], true);
+  assertEquals(logs, [
+    `PASS: ${EXPECTED[0]}`,
+    `RUN: ${EXPECTED[1]}`,
+  ]);
+});

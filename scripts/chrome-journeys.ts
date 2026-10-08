@@ -729,6 +729,9 @@ function updateFrontier(completedName) {
   if (typeof EXPECTED !== "undefined" && Array.isArray(EXPECTED)) {
     const idx = EXPECTED.indexOf(completedName);
     lastStartedCheck = idx >= 0 && idx + 1 < EXPECTED.length ? EXPECTED[idx + 1] : null;
+    if (lastStartedCheck && (typeof META_CHECKS === "undefined" || !META_CHECKS.has(lastStartedCheck))) {
+      console.log(`RUN: ${lastStartedCheck}`);
+    }
   }
   if (typeof resetWatchdog === "function") resetWatchdog();
 }
@@ -1398,6 +1401,9 @@ async function writeEvidence(name, bytes) {
 
 async function main() {
   if (typeof resetWatchdog === "function") resetWatchdog();
+  if (typeof EXPECTED !== "undefined" && EXPECTED[0]) {
+    console.log(`RUN: ${EXPECTED[0]}`);
+  }
   let profile: string | null = null;
   let proc: Deno.ChildProcess | null = null;
   let port;
