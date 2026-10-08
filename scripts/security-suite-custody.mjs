@@ -193,6 +193,51 @@ export async function readProcIdentity(pid, deps = {}) {
   return { ...parseProcStat(raw), uid: procInfo.uid };
 }
 
+/** True only when the error is a /proc entry DISAPPEARING, i.e. the process
+ *  exited between the group-alive check and the identity read. Distinguished
+ *  from every other read failure, which must stay fail-closed: an unreadable
+ *  /proc for a process that still exists is not the same fact as a vanished one.
+ *  chrome-agent-platform-8ixk. */
+export function isVanishedProcError(error) {
+  return error?.code === "ENOENT";
+}
+
+/** True only when a signal found NO SUCH PROCESS GROUP — the group finished dying
+ *  between the alive check and the kill. Distinguished from every other kill
+ *  failure (EPERM, EINVAL), which must still propagate: refusing to signal a group
+ *  we are not allowed to touch is a real custody finding, not a benign exit.
+ *  chrome-agent-platform-8ixk. */
+export function isVanishedGroupError(error) {
+  return error?.code === "ESRCH";
+}
+
+/** The run's custody finding, derived in ONE place because the ORDER is the
+ *  semantics: severe findings displace benign ones, and a benign teardown marker
+ *  must never be the reason a receipt reports when something real went wrong.
+ *  Precedence, most severe first: descendant residue, then an owned group that
+ *  survived, then a cleanup refusal, then a teardown that threw, then the two
+ *  benign races. The first three match the supervisor's pre-8ixk behaviour exactly
+ *  (residue overwrote survived; cleanup only filled an empty reason); the benign
+ *  markers are new and go last. chrome-agent-platform-8ixk. */
+export function custodyReasonFor({
+  survived = false,
+  residueCount = 0,
+  cleanupOk = true,
+  cleanupReason = "",
+  leaderExited = false,
+  groupGoneBeforeSignal = false,
+  teardownThrew = "",
+} = {}) {
+  let reason = "";
+  if (survived) reason = "owned-group-survived";
+  if (residueCount > 0) reason = "descendant-residue";
+  if (!cleanupOk) reason ||= `cleanup-refused:${cleanupReason}`;
+  if (teardownThrew) reason ||= `teardown-threw:${teardownThrew}`;
+  if (leaderExited) reason ||= "leader-exited-before-identity-read";
+  if (groupGoneBeforeSignal) reason ||= "group-gone-before-signal";
+  return reason;
+}
+
 export async function sha256File(file) {
   return createHash("sha256").update(await readFile(file)).digest("hex");
 }
@@ -638,10 +683,12 @@ export async function terminateAttestedGroup({
   killWaitMs,
   readIdentity = readProcIdentity,
   listIdentities = procIdentities,
+  isAlive = groupAlive,
+  kill = process.kill,
 }) {
   const pgid = attestation.identity.pgid;
   const leaderStart = attestation.identity.starttime;
-  if (!groupAlive(pgid)) {
+  if (!isAlive(pgid)) {
     return { termSent: false, killSent: false, survived: false };
   }
   try {
@@ -652,6 +699,25 @@ export async function terminateAttestedGroup({
       current.uid !== attestation.identity.uid
     ) throw new Error("owned process-group identity changed");
   } catch (error) {
+    // A leader whose /proc entry has VANISHED while the group is also gone is the
+    // BENIGN case, not an attestation failure: termination wanted the process
+    // gone, and an absent /proc/<pid> plus a dead group is the strongest evidence
+    // that it is. Rethrowing this ENOENT used to escape the supervisor as an
+    // uncaught rejection, so the run wrote NO receipt at all — no
+    // CAP_SECURITY_RESULT, no verdict — and a death this way got attributed to the
+    // environment because there was nothing left to read (8ixk).
+    // BOTH conditions are required, and that is the fail-closed boundary: an
+    // unreadable /proc for a group that is STILL ALIVE falls through to the
+    // ownership check below and can still throw. Only ENOENT qualifies, and the
+    // only ENOENT source inside this try is the /proc read.
+    if (isVanishedProcError(error) && !isAlive(pgid)) {
+      return {
+        termSent: false,
+        killSent: false,
+        survived: false,
+        leaderExited: true,
+      };
+    }
     // The leader may exit while owned descendants remain. In that case every
     // currently live group member must have been observed as this runner's
     // exact pid/starttime/uid descendant before any negative-PGID signal.
@@ -674,12 +740,89 @@ export async function terminateAttestedGroup({
     ) throw error;
   }
 
-  process.kill(-pgid, "SIGTERM");
-  const termGone = await waitUntil(() => groupAlive(pgid), termWaitMs);
+  // The group can vanish between the alive check above and this signal — which is
+  // the outcome termination WANTED, not an error. ESRCH here used to escape as an
+  // uncaught rejection, so the run left NO receipt at all and its death read as
+  // environmental (8ixk; reproduced independently in review with a live owned
+  // fixture: both identity reads complete, the child then dies before completion
+  // is delivered, process.kill throws killESRCH, Node exits 1, no result).
+  try {
+    kill(-pgid, "SIGTERM");
+  } catch (error) {
+    if (!isVanishedGroupError(error)) throw error;
+    return {
+      termSent: false,
+      killSent: false,
+      survived: false,
+      groupGoneBeforeSignal: true,
+    };
+  }
+  const termGone = await waitUntil(() => isAlive(pgid), termWaitMs);
   if (termGone) return { termSent: true, killSent: false, survived: false };
-  process.kill(-pgid, "SIGKILL");
-  const killGone = await waitUntil(() => groupAlive(pgid), killWaitMs);
+  // Same race on the escalation: the group can finish dying during the SIGTERM
+  // wait, so SIGKILL can also find nothing to signal.
+  try {
+    kill(-pgid, "SIGKILL");
+  } catch (error) {
+    if (!isVanishedGroupError(error)) throw error;
+    return {
+      termSent: true,
+      killSent: false,
+      survived: false,
+      groupGoneBeforeSignal: true,
+    };
+  }
+  const killGone = await waitUntil(() => isAlive(pgid), killWaitMs);
   return { termSent: true, killSent: true, survived: !killGone };
+}
+
+// A teardown that throws must NOT take the receipt with it. The whole point of the
+// custody chain is that every run leaves an attested verdict; an uncaught rejection
+// from here leaves an evidence directory with no CAP_SECURITY_RESULT, and a death
+// with no receipt gets attributed to the environment because there is nothing left
+// to read (8ixk). The known races are now handled inside terminateAttestedGroup, but
+// the guarantee is structural rather than an enumeration: whatever throws, the
+// receipt is still written and says what happened.
+/**
+ * @typedef {{
+ *   termSent: boolean;
+ *   killSent: boolean;
+ *   survived: boolean;
+ *   leaderExited?: boolean;
+ *   groupGoneBeforeSignal?: boolean;
+ *   teardownThrew?: string;
+ * }} AttestedTermination
+ */
+
+/**
+ * @param {Record<string, unknown>} args
+ * @returns {Promise<AttestedTermination>}
+ */
+export async function terminateAttestedGroupSafely(args) {
+  try {
+    return await terminateAttestedGroup(args);
+  } catch (error) {
+    let reason = "";
+    try {
+      if (error && typeof error === "object") {
+        if ("message" in error && typeof error.message === "string") {
+          reason = error.message.trim();
+        }
+      }
+      if (!reason) {
+        reason = String(error ?? "").trim();
+      }
+    } catch {
+      reason = "teardown-failed-unstringable";
+    }
+    if (!reason) reason = "teardown-failed";
+    return {
+      termSent: false,
+      killSent: false,
+      survived: false,
+      teardownThrew: reason.slice(0, 200),
+    };
+  }
 }
 
 export async function resolveSupervisorConfig({
@@ -699,6 +842,7 @@ export async function resolveSupervisorConfig({
       env.CAP_SECURITY_TEST_STUBBORN_BOOT_DELAY_MS !== undefined ||
       env.CAP_SECURITY_TEST_STUBBORN_CHILD_FAIL !== undefined ||
       env.CAP_SECURITY_TEST_ESCAPE_CHILD_FAIL !== undefined ||
+      env.CAP_SECURITY_TEST_SIMULATE_VANISHED_LEADER !== undefined ||
       env.CAP_SECURITY_TEST_SCENARIO
     ) throw new Error("self-test-only override refused in production mode");
     if (!env.HOME || !path.isAbsolute(env.HOME)) {
@@ -798,6 +942,7 @@ export async function resolveSupervisorConfig({
     profileRoot: PROFILE_ROOT,
     forceAttestationMismatch: scenario === "pgid-mismatch" &&
       env.CAP_SECURITY_TEST_FORCE_ATTEST_MISMATCH === "1",
+    simulateVanishedLeader: env.CAP_SECURITY_TEST_SIMULATE_VANISHED_LEADER === "1",
     scenario,
   };
 }
