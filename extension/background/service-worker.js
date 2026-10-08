@@ -185,6 +185,7 @@ import {
 import { attestCurrentAttachedWebmcpTab } from "../lib/attached-webmcp-attestation.js";
 import { bindAttachedWebmcpRun } from "../lib/attached-webmcp-run.js";
 import { createEphemeralSiteToolConsentStore } from "../lib/ephemeral-site-tool-consent.js";
+import { createEphemeralSiteToolAuditPrincipal } from "../lib/ephemeral-site-tool-audit.js";
 import {
   hasPermission,
   hasCapability,
@@ -1941,6 +1942,30 @@ const ephemeralSiteToolConsentStore = createEphemeralSiteToolConsentStore();
 const cancellingApprovalExecutions = new Set();
 let siteToolProfileEpoch = 0;
 let siteToolResetting = 0;
+// A separate WAL principal for an exact, live, unenrolled run/document. No
+// caller is given this privileged closure until a post-Q2 invocation seam can
+// require and await its row BEFORE page code. Enrolled Q23 remains unchanged.
+const ephemeralSiteToolAuditPrincipal = createEphemeralSiteToolAuditPrincipal({
+  consentStore: ephemeralSiteToolConsentStore,
+  attest: async (tabId) => {
+    try {
+      const [registry, enrolledOrigins] = await Promise.all([
+        listKnownWebmcpOrigins(), listOrigins(),
+      ]);
+      return await attestCurrentAttachedWebmcpTab(tabId, {
+        registry, enrolledOrigins,
+        getTab: (id) => chrome.tabs.get(id),
+        executeTopFrame: (id) => chrome.scripting.executeScript({
+          target: { tabId: id, frameIds: [0] }, world: "ISOLATED", func: () => true,
+        }),
+      });
+    } catch { return null; }
+  },
+  runActive: (runId) => activeExecutions.has(runId),
+  append: (row) => appendSiteToolAudit(row),
+  profileEpoch: () => siteToolProfileEpoch,
+  resetting: () => siteToolResetting > 0,
+});
 
 function siteToolRunIdentity(context = {}) {
   const executionId = typeof context.executionId === "string"
