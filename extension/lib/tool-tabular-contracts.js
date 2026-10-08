@@ -43,6 +43,14 @@ export {
   TableError,
 };
 
+export {
+  extractTablesFromDom,
+  extractTablesFromHtml,
+  toCanonicalTable,
+  createTabularArtifact,
+  TABLE_EXTRACTOR_LIMITS,
+} from "./table-extractor.js";
+
 // Compatibility name retained for the landed Pillar-3 and Unix-isolation KATs.
 export const TABULAR_LIMITS = TABLE_LIMITS;
 

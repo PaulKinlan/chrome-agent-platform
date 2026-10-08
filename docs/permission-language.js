@@ -89,6 +89,7 @@ export function siteLabel(origin) {
  * snake_case tool identifiers to readable actions. */
 export const TOOL_USER_LANGUAGE = Object.freeze({
   capture_page: "Save page as readable note",
+  extract_tables: "Extract tables from page",
   summarize_text: "summarise text on-device",
   detect_language: "detect language on-device",
   translate_text: "translate text on-device",

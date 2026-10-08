@@ -36,6 +36,14 @@ import { perfSpan } from "./cap-perf.js";
 import { cleanupGuidanceFor } from "./lifecycle-cleanup.js";
 import { extractReadableMarkdown, wrapUntrustedContent } from "./page-reader.js";
 import { createAsset } from "./artifacts.js";
+import {
+  createTabularArtifact,
+  extractTablesFromDom,
+  extractTablesFromHtml,
+  injectedTableExtractor,
+  TABLE_EXTRACTOR_LIMITS,
+  toCanonicalTable,
+} from "./table-extractor.js";
 
 const grantLog = capLog("browser:grant");
 const toolDispatchLog = capLog("tool");
@@ -1403,6 +1411,70 @@ export async function capturePage(tabId, { asArtifact = false, includeScreenshot
 export async function capturePageToArtifact({ tabId, asArtifact = true, includeScreenshot = false, screenshot = "none" } = {}) {
   return await capturePage(tabId, { asArtifact, includeScreenshot, screenshot });
 }
+
+/**
+ * Extract structured tabular data from a tab (or the active tab).
+ * Injects a bounded extractor into the page, extracting <table>, role="grid"/table,
+ * and repeated card lists (up to 2000 rows × 50 cols, ≤ 1 MB).
+ * Returns CSV-shaped JSON { tables: [{ caption, headers, rows, truncated, truncationReason }] } tagged untrusted.
+ * When asArtifact: true, writes canonical tabular artifact(s) directly usable by table_* tools.
+ */
+export async function extractTables(tabId, { ref = null, asArtifact = false } = {}) {
+  const verb = "extract tables from the page";
+  let origin = null;
+  try {
+    const gate = await pageAccessGate(tabId, verb, { needScripting: true });
+    if (gate.result) return gate.result;
+    origin = gate.origin;
+    const targetTab = gate.target;
+
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: targetTab.id },
+      func: injectedTableExtractor,
+      args: [{ ref, ...TABLE_EXTRACTOR_LIMITS }],
+    });
+    const pageResult = results?.[0]?.result;
+    if (!pageResult || !Array.isArray(pageResult.tables)) {
+      return { untrusted: true, tables: [], count: 0, pageTruncated: false };
+    }
+
+    const tables = pageResult.tables;
+    if (asArtifact && tables.length > 0) {
+      for (const t of tables) {
+        try {
+          const artifactResult = await createTabularArtifact(t, {
+            name: `${t.caption || "Table"} (${targetTab.title || "extracted"})`,
+            sourceUrl: targetTab.url,
+            createAssetFn: createAsset,
+          });
+          t.artifactId = artifactResult.artifactId;
+          t.artifact = artifactResult.artifact;
+        } catch (e) {
+          t.artifactError = String(e?.message ?? e);
+        }
+      }
+    }
+
+    return {
+      untrusted: true,
+      tables,
+      count: tables.length,
+      pageTruncated: pageResult.pageTruncated || false,
+      pageTruncationReason: pageResult.pageTruncationReason || undefined,
+      ...(asArtifact && tables[0]?.artifactId ? { artifactId: tables[0].artifactId, artifact: tables[0].artifact } : {}),
+    };
+  } catch (e) {
+    return await pageAccessFailure(e, origin, verb);
+  }
+}
+
+export {
+  extractTablesFromDom,
+  extractTablesFromHtml,
+  injectedTableExtractor,
+  toCanonicalTable,
+  createTabularArtifact,
+};
 
 // ── CAP-FB-20260830-PAGE-ACTION-TOOLS-01: the minimal page-action family ──────
 // A grant-gated way to act inside a page (click/type/select/scroll/wait) for
@@ -2878,6 +2950,16 @@ export function browserToolset(readOnly = false, {
       }),
       execute: async ({ tabId, asArtifact, includeScreenshot, screenshot }) =>
         capturePage(tabId, { asArtifact, includeScreenshot, screenshot }),
+    }),
+    extract_tables: tool({
+      description:
+        "Extract structured tabular data (HTML <table>, role='grid'/table, and repeated card lists) from a tab (or the active tab). Returns CSV-shaped JSON {tables:[{caption, headers, rows, truncated}]}. Set asArtifact:true to save persistent tabular artifact(s) directly accepted by table_* tools.",
+      inputSchema: z.object({
+        tabId: z.number().optional().describe("tab id to extract tables from (defaults to the active tab)"),
+        ref: z.number().optional().describe("optional snapshot element ref from find_elements to scope extraction"),
+        asArtifact: z.boolean().optional().default(false).describe("when true, saves persistent tabular artifact(s) directly usable by table_* tools"),
+      }),
+      execute: async ({ tabId, ref, asArtifact }) => extractTables(tabId, { ref, asArtifact }),
     }),
     capture_screenshot: tool({
       description:
@@ -6767,6 +6849,7 @@ export function browserToolset(readOnly = false, {
     return wrapToolsetForObservability({
       read_page: all.read_page,
       capture_page: all.capture_page,
+      extract_tables: all.extract_tables,
       capture_screenshot: all.capture_screenshot,
       list_tabs: all.list_tabs,
       recent_browser_events: all.recent_browser_events,
