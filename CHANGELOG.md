@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.602] — 2026-10-08
+- Skill resolution now reports the store and the cause when a skill store cannot be read, instead of silently continuing as if the skill were absent.
+
 ## [0.3.601] — 2026-10-08
 - Reject a script-registration approval request that arrives without valid bounded detail, so a malformed or mismatched request can never produce an approvable generic card.
 
