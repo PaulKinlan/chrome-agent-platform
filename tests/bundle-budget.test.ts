@@ -395,7 +395,10 @@ Deno.test("9epn.3 assertBundleBudget fails closed on a duplicated NON-AI-SDK pac
 });
 
 /** Read a .build metafile the production build wrote, or refuse. */
-async function readBuildReport(name: string): Promise<{ inputs: Record<string, { bytes: number; imports?: { path: string; original?: string }[] }> }> {
+async function readBuildReport(name: string): Promise<{
+  inputs: Record<string, { bytes: number; imports?: { path: string; original?: string }[] }>;
+  outputs: Record<string, { inputs?: Record<string, { bytesInOutput: number }> }>;
+}> {
   const repo = fileURLToPath(new URL("../", import.meta.url));
   const report = join(repo, ".build", name);
   let metafile;
@@ -426,6 +429,19 @@ for (const report of ["bundle-report.json", "bundle-report-worker.json"]) {
     assertEquals(sdk.length, 1, `${report}: one SDK instance (got ${sdk.join(", ") || "none"})`);
     const z2j = storeInstances(metafile, "zod-to-json-schema");
     assertEquals(z2j.length, 1, `${report}: one zod-to-json-schema instance (got ${z2j.join(", ") || "none"})`);
+    if (report === "bundle-report.json") {
+      // The shipped SW's production-build metafile must agree with the
+      // hermetic canonical-SDK converter pin in mcp-zod-peer-parity.test.ts.
+      // The SDK dedup plugin lives inside build.mjs's build flow, so importing
+      // it here would run a build; this post-build read checks the actual output.
+      const converterBytes = Object.values(metafile.outputs ?? {}).flatMap((output) =>
+        Object.entries(output.inputs ?? {})
+          .filter(([input]) => input.includes("zod-to-json-schema"))
+          .map(([, data]) => data.bytesInOutput)
+      ).sort((a, b) => a - b);
+      assertEquals(converterBytes, [0, 83, 94],
+        `${report}: shipped SW has exactly one 177-byte converter copy`);
+    }
     // The package-wide invariant on the real bundle — the gate the build runs.
     assertEquals(duplicateStoreInputs(metafile), {}, `${report}: no same-version duplicate of ANY package`);
   });
