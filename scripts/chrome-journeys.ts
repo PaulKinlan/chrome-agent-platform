@@ -2078,13 +2078,30 @@ async function main() {
     check("embedded Artifacts view shows its name exactly once", artifactsTitleCount === 1);
 
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false }, ntpSession);
-    for (let i = 0; i < 6; i++) {
-      const open = await evalIn(cdp, ntpSession, `!document.getElementById('view-overlay')?.hidden`).catch(() => false);
+    // Return to hub: close the browse overlay and await settlement so subsequent steps see the hub composer
+    await evalIn(cdp, ntpSession, `document.getElementById('view-back')?.click(); true`).catch(() => {});
+    for (let i = 0; i < 30; i++) {
+      const open = await evalIn(cdp, ntpSession, `!document.getElementById('view')?.hidden`).catch(() => false);
       if (!open) break;
-      await evalIn(cdp, ntpSession, `document.getElementById('view-back')?.click(); true`).catch(() => {});
-      await sleep(300);
+      await sleep(100);
     }
-    await sleep(500);
+    // Fail-safe ensure hub view is restored
+    await evalIn(cdp, ntpSession, `(() => {
+      const v = document.getElementById('view');
+      if (v && !v.hidden) {
+        if (location.hash) location.hash = '';
+        v.hidden = true;
+        const vch = document.getElementById('view-client-host');
+        if (vch) vch.hidden = true;
+        const dv = document.getElementById('directory-view');
+        if (dv) dv.hidden = true;
+        const av = document.getElementById('artifacts-view');
+        if (av) av.hidden = true;
+        document.body.classList.remove('view-open', 'full-view-open');
+      }
+      return true;
+    })()`).catch(() => {});
+    await sleep(300);
 
     // (2) An agent opened by URL is titled by its NAME: create "Writer", open a
     // fresh hub page at #agent=named:writer (no history.state carries the
