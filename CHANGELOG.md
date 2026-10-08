@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.597] — 2026-10-08
+- Update the bundled JSON-schema URI dependency to the patched release that fixes two advisories; the shipped bundle now resolves the fixed version.
+
 ## [0.3.596] — 2026-10-08
 - Stop page routes from returning the global enrollment state or forwarding it into the page's MAIN-world, and retire the page-console error diagnostic in favour of service-worker injection logs.
 
