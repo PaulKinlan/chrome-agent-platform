@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.604] — 2026-10-08
+- About page hover states are clearer and both light and dark reading modes are accessibility-audited.
+
 ## [0.3.603] — 2026-10-08
 - Settings, the sidebar and the Agents panel now show the same humanised schedule cadence (weekly, daily, hourly), and the sidebar keeps your rail navigation choice when a late preference restore arrives.
 
