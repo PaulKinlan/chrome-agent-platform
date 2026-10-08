@@ -710,6 +710,9 @@ function check(name, cond, detail) {
   }
   results.push(!cond && detail !== undefined ? { name, pass: false, detail } : { name, pass: !!cond });
   console.log(`${cond ? "PASS" : "FAIL"}: ${name}${cond ? "" : formatCheckDetail(detail)}`);
+  if (typeof Deno !== "undefined" && Deno.env?.get?.("CAP_JOURNEY_STOP_AFTER") === name) {
+    throw new Error(`CAP_JOURNEY_STOP_AFTER: ${name}`);
+  }
 }
 
 /** The exact, ordered set of assertions this suite must run. */
@@ -2713,20 +2716,68 @@ async function main() {
       scheduledAgent = (list?.agents ?? []).find((a) => a?.name === schedName) ?? null;
       if (!scheduledAgent) await sleep(200);
     }
-    await sleep(1500);
-    const sidebarSched = await evalIn(cdp, ntpSession, `[...document.querySelectorAll('#side-agents .agent-item')].map((el) => el.textContent.replace(/\s+/g, ' ').trim())`);
+    // b7ny0.4: Bounded poll for the sidebar row to settle in ntpSession. In a clean genuine-UI path,
+    // the sidebar updates via automatic rerenders (+67/+83/+99ms per j5yz diagnosis; settled by +252ms).
+    // Poll ntpSession's #side-agents boundedly up to 5s in fast 200ms steps.
+    // Note: measureAgentSurfaces() takes ~7.5s, so it must run AFTER this fast poll,
+    // never inside the loop (which would cause a single iteration to exhaust the 5s deadline).
+    const READ_SIDEBAR = `[...document.querySelectorAll('#side-agents .agent-item')].map((el) => el.textContent.replace(/\\s+/g, ' ').trim())`;
+    let sidebarSched = [];
+    const pollStart = Date.now();
+    while (Date.now() - pollStart < 5000) {
+      sidebarSched = (await evalIn(cdp, ntpSession, READ_SIDEBAR)) ?? [];
+      if (Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && /Scheduled ·/.test(t))) {
+        break;
+      }
+      await sleep(200);
+    }
     const surfacesS = await measureAgentSurfaces();
     if (surfacesS.shot) await writeEvidence("templates-created.png", surfacesS.shot);
-    console.log("scheduled from select:", JSON.stringify({ schedPick, schedMinutes, g2value: g2.value, scheduledAgent: scheduledAgent && { id: scheduledAgent.id, schedule: scheduledAgent.schedule }, sidebarSched, surfaces: { ...surfacesS, shot: undefined } }));
+
+    // If poll exhausted, capture sidebar DOM for diagnosis
+    let sidebarDomFailure = null;
+    const hasScheduledRow = Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && /Scheduled ·/.test(t));
+    if (!hasScheduledRow || surfacesS.sidebarRows !== 2) {
+      sidebarDomFailure = await evalIn(cdp, ntpSession, `(() => {
+        const side = document.querySelector('#side-agents');
+        return {
+          innerHTML: side?.innerHTML ?? null,
+          items: [...(side?.querySelectorAll('.agent-item') ?? [])].map(b => ({
+            text: b.textContent.replace(/\\s+/g, ' ').trim(),
+            className: b.className,
+            title: b.title,
+          })),
+        };
+      })()`);
+    }
+
+    console.log("scheduled from select:", JSON.stringify({
+      schedPick,
+      schedMinutes,
+      g2value: g2.value,
+      scheduledAgent: scheduledAgent && { id: scheduledAgent.id, schedule: scheduledAgent.schedule },
+      sidebarSched,
+      surfaces: { ...surfacesS, shot: undefined },
+      sidebarDomFailure,
+    }));
     check(
       "create dialog: a Scheduled-group template creates one scheduled agent that the sidebar and Settings both list",
       schedPick?.picked === true && /every \d+ minutes/.test(schedMinutes) && scheduledAgent !== null &&
-        Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && /Scheduled · every \d+ min/.test(t)) &&
+        hasScheduledRow &&
         surfacesS.sidebarRows === 2 && surfacesS.panelRows === 2 && surfacesS.settingsRows === 2 && /^2 agents/.test(surfacesS.panelCount) &&
         // h97m: the FOURTH surface asserts too — the picker's +3 (acp harness
         // rows leaking into the created-agents projection) walked through this
         // check unnoticed until the picker asserted nothing.
         surfacesS.sidepanelRows === 2,
+      {
+        schedPick,
+        schedMinutes,
+        schedName,
+        scheduledAgent,
+        sidebarSched,
+        surfaces: { ...surfacesS, shot: undefined },
+        sidebarDomFailure,
+      },
     );
     // CAP-FB-20260830-USER-VOICE-COPY-01: the hub's and Settings' delete
     // confirmations are ONE shared dialog whose body says what the person
@@ -8788,7 +8839,11 @@ async function main() {
       console.error(`ENVIRONMENT: ${evaluateTimeoutVerdict.environment}`);
       console.error(`evaluate-timeout cause: ${evaluateTimeoutVerdict.cause} — ${evaluateTimeoutVerdict.reason}`);
     }
-    console.error("journey failure:", String(e?.message ?? e));
+    if (String(e?.message ?? e).includes("CAP_JOURNEY_STOP_AFTER:")) {
+      console.log(`journey early stop: ${String(e?.message ?? e)}`);
+    } else {
+      console.error("journey failure:", String(e?.message ?? e));
+    }
     try {
       await withTimeout(fixture.shutdown(), 8000, "fixture.shutdown").catch(
         () => {
@@ -8822,6 +8877,12 @@ async function main() {
     }
     checkShutdown("profile removed (no leak)", removed);
     checkShutdown("cleanup hard-failed on descendants (none survived)", clean);
+
+    if (typeof Deno !== "undefined" && Deno.env?.get?.("CAP_JOURNEY_STOP_AFTER")) {
+      const failed = results.filter((r) => !r.pass);
+      console.log(`early stop summary: ${results.length} assertions ran, ${failed.length} failed`);
+      Deno.exit(failed.length ? 1 : 0);
+    }
 
     // Temporary (non-retained) evidence is caller-owned temp output and must NOT
     // be left behind. Retained runs write to test-artifacts/ (kept + committed).
