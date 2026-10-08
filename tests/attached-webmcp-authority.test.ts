@@ -98,6 +98,23 @@ Deno.test("ckebt D3: transport failure after start WAL still attempts terminal W
   assertEquals(s.calls.includes("invocation-finished"), true);
 });
 
+Deno.test("ckebt D3: post-WAL navigation without a page effect audits authority change, not page error", async () => {
+  const rows: Array<{ event: string; outcome: string; reason: string }> = [];
+  const s = setup("allow", {
+    audit: async (_token: object, row: { event: string; outcome: string; reason: string }) => { rows.push(row); },
+    invoke: async (_binding: unknown, _tool: unknown, _args: unknown,
+      options: { requiredAudit: () => Promise<void> }) => {
+      await options.requiredAudit();
+      return { ok: false, error: "attached_tool_authority_changed" };
+    },
+  });
+  assertEquals((await s.invoke(input, actor)).ok, false);
+  assertEquals(rows.find((row) => row.event === "invocation-started")?.outcome, "pending");
+  const terminal = rows.find((row) => row.event === "invocation-finished");
+  assertEquals({ outcome: terminal?.outcome, reason: terminal?.reason },
+    { outcome: "failed", reason: "authority-changed" });
+});
+
 Deno.test("ckebt Q2(a): a page global or inferred source cannot become an attached callable", async () => {
   const s = setup("allow", { readDeclared: async () => [{ ...tool, source: "inferred" }] });
   assertEquals((await s.invoke(input, actor)).ok, false);

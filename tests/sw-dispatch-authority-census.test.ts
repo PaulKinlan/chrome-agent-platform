@@ -125,7 +125,7 @@ export const CENSUS_CATEGORIES = {
   ]),
   READ_ONLY_STATUS_TELEMETRY: new Set([
     "actions.list", "activity.list", "agent-workspace.usage", "agent.directory",
-    "agent.discoverable-tabs", "agent.get", "agent.history-view", "agent.list",
+    "agent.attached-webmcp-document", "agent.discoverable-tabs", "agent.get", "agent.history-view", "agent.list",
     "agent.listAll", "agent.orchestrator", "agent.registry", "agent.tool-offers",
     "alarms.permission-granted", "asset.capacity", "asset.get", "asset.list",
     "asset.version-get", "asset.versions", "background-agent.history", "background-agent.list",

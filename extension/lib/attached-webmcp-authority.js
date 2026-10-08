@@ -126,7 +126,8 @@ export function createAttachedDeclaredInvoker({
     try {
       await append(row("invocation-finished", "site-to-agent", "system",
         !stillLive ? "revoked" : res?.ok === true ? "succeeded" : "failed",
-        !stillLive ? "run-not-live" : res?.ok === true ? "page-result" : "page-error",
+        !stillLive ? "run-not-live" : res?.ok === true ? "page-result" :
+          res?.error === "attached_tool_authority_changed" ? "authority-changed" : "page-error",
         consent, dispatchedArgDigest));
     } catch { return fail("site_tool_audit_unavailable"); }
     if (!stillLive || !live()) return fail("attached_tool_authority_changed");

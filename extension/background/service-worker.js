@@ -9049,6 +9049,30 @@ const handlers = mergeRouteMaps(
     return { ok: true, tabs: out };
   },
 
+  // The /tabs owner's pick obtains Chrome's CURRENT top-frame document identity.
+  // A passive count report is only an internal candidate — not a descriptor,
+  // model disclosure, consent grant, Site Agent, or invocation authority.
+  async "agent.attached-webmcp-document"({ tabId }, context) {
+    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
+    if (!Number.isSafeInteger(tabId) || tabId < 0) return { ok: false, error: "invalid tab ID" };
+    const hasScripting = await chrome.permissions.contains({ permissions: ["scripting"] }).catch(() => false);
+    if (!hasScripting) return { ok: false, needScripting: true, error: "scripting permission needed to verify this page" };
+    try {
+      const [registry, enrolledOrigins] = await Promise.all([listKnownWebmcpOrigins(), listOrigins()]);
+      const candidate = await attestCurrentAttachedWebmcpTab(tabId, {
+        registry, enrolledOrigins,
+        getTab: (id) => chrome.tabs.get(id),
+        executeTopFrame: (id) => chrome.scripting.executeScript({
+          target: { tabId: id, frameIds: [0] }, world: "ISOLATED", func: () => true,
+        }),
+      });
+      if (!candidate) return { ok: false, error: "current declared-tool document unavailable" };
+      return { ok: true, ...candidate }; // count + browser document only; no descriptors
+    } catch {
+      return { ok: false, error: "current declared-tool document unavailable" };
+    }
+  },
+
   // `agent.tool-offers` — the OPEN tabs whose page reported tools through the
   // PASSIVE detector, for the hub's composer chip ("<host> offers N tools —
   // use them?"; CAP-FB-20260825-SITE-AGENT-SHOWCASE-01). Unlike
@@ -11655,6 +11679,10 @@ const handlers = mergeRouteMaps(
     if (!canonical) return ERR_INVALID_ORIGIN;
     // Serialized per origin: create/delete/registration never interleave.
     return await withOriginLock(canonical, async () => {
+      if (ephemeralSiteToolConsentStore.hasLiveOrigin(canonical)) {
+        return { ok: false, origin: canonical,
+          error: "an attached run requires explicit owner enrollment before Site Agent creation" };
+      }
       // Enroll creates the site's OPFS store directory (so listOrigins()
       // discovers the worker) AND the master-memory origins list — both, never
       // just one. The CONTENT-SCRIPT host permission is a SEPARATE owner-driven
