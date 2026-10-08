@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.596] — 2026-10-08
+- Stop page routes from returning the global enrollment state or forwarding it into the page's MAIN-world, and retire the page-console error diagnostic in favour of service-worker injection logs.
+
 ## [0.3.595] — 2026-10-08
 - Resolve skill references faster by reading the store concurrently once per batch instead of serially twice on the run-start path.
 
