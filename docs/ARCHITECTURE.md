@@ -392,6 +392,19 @@ use (owner decision Q23, 2026-09-05; `docs/OPEN-QUESTIONS.md` Q23).
 `tool-consent-denied`, `tool-consent-required`, and `tool-consent-generation-stale`.
 Allow persists for the browser profile; Deny is sticky until reset in Settings.
 
+### 4.4a Attached-tab descriptor boundary (3p3e.3, policy pending)
+Who sees the descriptor, and under what principal: the enrolled-origin principal
+may use the existing directory and exact-tool consent path. For an unenrolled
+attached tab, the passive detector shares a **count only**; neither the model
+nor the hub UI receives tool names, descriptions, schemas, or invocable handles
+before the owner's still-pending Q2 disclosure decision. A selected candidate
+is merely an internal run-scoped binding of the browser-attested top-level
+`tabId`, `documentId`, origin, and declared-tool count. Attachment text and URL
+are never authority. No code should construct a model-visible worker or run a
+page tool from that candidate until descriptor disclosure, per-tool owner
+consent, and a required audit row all have a complete, separately reviewed
+run-scoped authority path. The enrolled path's checks remain unchanged.
+
 ### 4.5 Fallback paths
 Pages without WebMCP: the six page-action tools (`find_elements`,
 `click_element`, `type_text`, `select_option`, `scroll_page`, `wait_for` —
