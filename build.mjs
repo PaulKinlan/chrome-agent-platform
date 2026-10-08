@@ -16,6 +16,7 @@
 import { build, transform } from "esbuild";
 import { browserDependencies, browserProcessEnvOptions } from './scripts/browser-dependencies.mjs';
 import { createRequire } from "node:module";
+import { assertLiveFastUriResolution } from "./scripts/bundle-budget.mjs";
 import { readFile, writeFile, rename, mkdir, rm, readdir, stat, lstat, chmod, utimes, symlink, readlink, copyFile } from "node:fs/promises";
 import path, { join, extname } from "node:path";
 import { createHash } from "node:crypto";
@@ -382,7 +383,7 @@ try {
     // 9epn.3) + lockfile-drift guard in scripts/bundle-budget.mjs
     // (assertBundleBudget) are the tripwires.
     // chrome-agent-platform-bd06: if node_modules/.deno is absent or incomplete
-    // (e.g. wiped by npm ci or npm install), auto-run `deno install` so that
+    // (e.g. wiped by npm ci or npm install), auto-run frozen `deno install` so that
     // requireFromRoot / CANON_ANTHROPIC / CANON_ZOD_DIR resolve into .deno
     // instead of flat node_modules/ or throwing ENOENT on readdirSync.
     const denoStoreDir = path.join(ROOT, "node_modules", ".deno");
@@ -394,11 +395,11 @@ try {
     }
     if (!denoEntries.some((d) => d.startsWith("@modelcontextprotocol+sdk@"))) {
       try {
-        execFileSync("deno", ["install"], { cwd: ROOT, stdio: "inherit" });
+        execFileSync("deno", ["install", "--frozen-lockfile"], { cwd: ROOT, stdio: "inherit" });
         denoEntries = readdirSync(denoStoreDir);
       } catch (err) {
         throw new Error(
-          `cap-deno-store-resolve: ${denoStoreDir} is missing or incomplete and automatic \`deno install\` failed (${err?.message || err}) — run \`deno install\` and retry.`,
+          `cap-deno-store-resolve: ${denoStoreDir} is missing or incomplete and automatic \`deno install --frozen-lockfile\` failed (${err?.message || err}) — run \`deno install --frozen-lockfile\` and retry.`,
         );
       }
     }
@@ -477,6 +478,11 @@ try {
         );
       }
     }
+    // bbz3s: an existing .deno directory can still have AJV linked to an old
+    // fast-uri even when both locks and a new store directory are correct.
+    // Check the LIVE SDK -> AJV -> fast-uri graph before either build target
+    // starts esbuild; the store-target metafile guard remains defense in depth.
+    assertLiveFastUriResolution({ root: ROOT, sdkDir: CANON_MCP_SDK_DIR });
     // Marker for the re-entrant resolve below: esbuild hands pluginData back
     // to onResolve, so the pin can tell its own lookup from an importer's.
     const MCP_SDK_PIN = "cap-mcp-sdk-pin";

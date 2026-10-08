@@ -6,8 +6,8 @@ const npmLock = JSON.parse(await Deno.readTextFile(new URL("../package-lock.json
 const denoLock = JSON.parse(await Deno.readTextFile(new URL("../deno.lock", import.meta.url)));
 
 Deno.test("lf9xe: Deno and npm agree on an advisory-patched fast-uri tarball", () => {
-  // GHSA-qw65-cvwx-89v3 and GHSA-58mr-gqgx-xq4g affect 3.0.0–3.1.6;
-  // 3.1.7 is the first patched release on the 3.x line.
+  // GHSA-qw65-cvwx-89v3 affects 3.0.0–3.1.6; GHSA-58mr-gqgx-xq4g
+  // affects only 3.1.6 on the 3.x line. Both are patched in 3.1.7.
   const npm = npmLock.packages["node_modules/fast-uri"];
   assert(npm?.version && npm?.integrity, "npm must lock fast-uri with an integrity hash");
   const parts = npm.version.split(".").map(Number);
