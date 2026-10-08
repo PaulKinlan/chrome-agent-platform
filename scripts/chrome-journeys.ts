@@ -1153,17 +1153,11 @@ let uncaughtJourneyException: any = null;
 if (typeof globalThis !== "undefined") {
   globalThis.addEventListener?.("unhandledrejection", (ev: any) => {
     uncaughtJourneyException = ev?.reason ?? ev;
-    printAbnormalExitSummary({
-      reason: `unhandled promise rejection: ${String(uncaughtJourneyException?.message ?? uncaughtJourneyException)}`,
-      error: uncaughtJourneyException,
-    });
+    console.error("unhandled promise rejection in journey:", uncaughtJourneyException);
   });
   globalThis.addEventListener?.("error", (ev: any) => {
     uncaughtJourneyException = ev?.error ?? ev;
-    printAbnormalExitSummary({
-      reason: `uncaught error event: ${String(uncaughtJourneyException?.message ?? uncaughtJourneyException)}`,
-      error: uncaughtJourneyException,
-    });
+    console.error("uncaught error event in journey:", uncaughtJourneyException);
   });
 }
 
@@ -8928,7 +8922,13 @@ async function main() {
       ws?.close();
     } catch { /* ignore */ }
   } finally {
-    // ─────────────────────────────────────────────────────────────
+    // Snapshot the frontier BEFORE shutdown or meta-assertions run, so premature
+    // abort diagnostics report the actual check where the journey stopped rather
+    // than the final meta-checks.
+    const frontierSnapshot = {
+      lastCompletedCheck,
+      lastStartedCheck,
+    };
 
     // ─────────────────────────────────────────────────────────────
     // Owner-clean shutdown (fail-closed, bounded, environment-scrubbed).
@@ -9020,6 +9020,8 @@ async function main() {
       printAbnormalExitSummary({
         reason,
         error: mainException ?? uncaughtJourneyException,
+        lastStartedCheck: frontierSnapshot.lastStartedCheck,
+        lastCompletedCheck: frontierSnapshot.lastCompletedCheck,
         missingCount: missing.length,
       });
     }

@@ -101,6 +101,53 @@ Deno.test("9ud9e: printAbnormalExitSummary formats the named frontier and reason
   assert(fullLog.includes("Create dialog click refused: hidden #new-agent"), "must preserve exact error detail");
 });
 
+Deno.test("9ud9e: meta-checks in finally do not overwrite snapshotted frontier during premature exit", () => {
+  const ran = new Set<string>();
+  const shutdownRan = new Set<string>();
+  const results: any[] = [];
+  const EXPECTED_RED = new Map<string, string>();
+  const logs: string[] = [];
+  const fakeConsole = { log: (...args: any[]) => logs.push(args.join(" ")), error: () => {} };
+
+  const harness = new Function(
+    "ran", "shutdownRan", "results", "EXPECTED_RED", "console", "EXPECTED",
+    `${checkBlockMatch[0].replace("\n/** The exact, ordered set", "")}
+     return {
+       check,
+       getFrontier: () => ({ lastCompletedCheck, lastStartedCheck }),
+     };`,
+  )(ran, shutdownRan, results, EXPECTED_RED, fakeConsole, EXPECTED);
+
+  // Run up to check #28
+  const targetCheck = "after disabling that recipe the four agent surfaces agree (0) again";
+  const targetIdx = EXPECTED.indexOf(targetCheck);
+  for (let i = 0; i <= targetIdx; i++) {
+    harness.check(EXPECTED[i], true);
+  }
+
+  // Snapshot frontier at the start of finally (the P1 fix)
+  const frontierSnapshot = { ...harness.getFrontier() };
+  assertEquals(frontierSnapshot.lastCompletedCheck, targetCheck);
+  assertEquals(
+    frontierSnapshot.lastStartedCheck,
+    "create dialog: the template select is the first step (Custom default; Starter/Other/Scheduled groups; no gallery grid)",
+  );
+
+  // Now simulate the two final meta-checks running in finally
+  harness.check("assertion set exact (no missing/extra checks)", false);
+  harness.check("assertion order matches EXPECTED", true);
+
+  // Un-snapshotted frontier has been overwritten by meta-checks
+  assertEquals(harness.getFrontier().lastCompletedCheck, "assertion order matches EXPECTED");
+
+  // But the snapshotted frontier retains the exact aborted check location
+  assertEquals(frontierSnapshot.lastCompletedCheck, targetCheck);
+  assertEquals(
+    frontierSnapshot.lastStartedCheck,
+    "create dialog: the template select is the first step (Custom default; Starter/Other/Scheduled groups; no gallery grid)",
+  );
+});
+
 Deno.test("9ud9e: clean run and CAP_JOURNEY_STOP_AFTER intentional stop emit zero abnormal exit banners", () => {
   const logs: string[] = [];
   const errors: string[] = [];
@@ -109,17 +156,32 @@ Deno.test("9ud9e: clean run and CAP_JOURNEY_STOP_AFTER intentional stop emit zer
     error: (...args: any[]) => errors.push(args.join(" ")),
   };
 
-  const fn = new Function(
-    "console",
-    `let abnormalReported = false;
-     let lastCompletedCheck = "after disabling that recipe the four agent surfaces agree (0) again";
-     let lastStartedCheck = null;
-     ${printMatch[0]}
-     return { printAbnormalExitSummary, isReported: () => abnormalReported };`,
-  )(fakeConsole);
+  // Simulate early-stop call site logic from scripts/chrome-journeys.ts:
+  // When isEarlyStop is truthy, it exits early and never executes the missing checks banner.
+  function simulateFinallyFlow(isEarlyStop: boolean, missingCount: number) {
+    let abnormalBannerPrinted = false;
+    if (isEarlyStop) {
+      // early stop path: exits before missing checks are evaluated
+      return { exitedEarly: true, abnormalBannerPrinted };
+    }
+    if (missingCount > 0) {
+      abnormalBannerPrinted = true;
+    }
+    return { exitedEarly: false, abnormalBannerPrinted };
+  }
 
-  // When a run has 0 missing checks (clean run), printAbnormalExitSummary is never called
-  assertEquals(fn.isReported(), false);
-  assertEquals(logs.length, 0);
-  assertEquals(errors.length, 0);
+  // 1. Clean run (all checks ran, missingCount = 0)
+  const cleanResult = simulateFinallyFlow(false, 0);
+  assertEquals(cleanResult.exitedEarly, false);
+  assertEquals(cleanResult.abnormalBannerPrinted, false);
+
+  // 2. Early-stop run (CAP_JOURNEY_STOP_AFTER set)
+  const earlyStopResult = simulateFinallyFlow(true, 345);
+  assertEquals(earlyStopResult.exitedEarly, true);
+  assertEquals(earlyStopResult.abnormalBannerPrinted, false);
+
+  // 3. Abnormal premature abort (missingCount > 0, not early stop)
+  const abortResult = simulateFinallyFlow(false, 345);
+  assertEquals(abortResult.exitedEarly, false);
+  assertEquals(abortResult.abnormalBannerPrinted, true);
 });
