@@ -310,6 +310,75 @@ Deno.test("reachability (kf3h / P1-chained-barrels): transitive re-export callab
   );
 });
 
+Deno.test("reachability (1rusf): directly-used origin does not credit unused sibling barrels", async () => {
+  const fixtureFiles: Record<string, string> = {
+    "lib/origin.js": `
+      export function sharedUtil() { return "origin"; }
+    `,
+    "lib/sibling-barrel.js": `
+      // Unused sibling barrel re-exports sharedUtil with zero consumers
+      export { sharedUtil } from "./origin.js";
+    `,
+    "lib/consumer.js": `
+      // Consumer calls origin directly, never importing through sibling-barrel
+      import { sharedUtil } from "./origin.js";
+      console.log(sharedUtil());
+    `,
+  };
+
+  const fixtureIo = {
+    readFile: async (p: string) => {
+      const rel = p.replace(/^mock\//, "");
+      if (fixtureFiles[rel]) return fixtureFiles[rel];
+      throw new Error(`File not found: ${p}`);
+    },
+    readdir: async () => [],
+  };
+
+  const retainedExports = {
+    "lib/sibling-barrel.js:sharedUtil": "Deliberately kept barrel re-export",
+  };
+
+  const report = await checkExportReachability({
+    root: "mock",
+    reached: new Set(["lib/origin.js", "lib/sibling-barrel.js", "lib/consumer.js"]),
+    io: fixtureIo,
+    retainedExports,
+    strictExports: false,
+  });
+
+  // 1. Direct call credits origin
+  assert(
+    report.reachedExports.includes("lib/origin.js:sharedUtil"),
+    "origin.js:sharedUtil must be marked reached via direct consumer call",
+  );
+
+  // 2. Unused sibling barrel must NOT be marked reached (1rusf false negative fix)
+  assert(
+    !report.reachedExports.includes("lib/sibling-barrel.js:sharedUtil"),
+    "sibling-barrel.js:sharedUtil must NOT be marked reached when only origin is called",
+  );
+
+  // 3. Sibling barrel retained entry must NOT be marked as redundantly reachable
+  assert(
+    !report.retainedReachableExports.some((e: string) => e.includes("sibling-barrel.js:sharedUtil")),
+    "valid retained entry on sibling barrel must not be reported as redundantly reachable",
+  );
+
+  // 4. Without retained entry, sibling barrel is reported unreached
+  const reportNoRetained = await checkExportReachability({
+    root: "mock",
+    reached: new Set(["lib/origin.js", "lib/sibling-barrel.js", "lib/consumer.js"]),
+    io: fixtureIo,
+    retainedExports: {},
+    strictExports: true,
+  });
+  assert(
+    reportNoRetained.unreachedExports.some((e: string) => e.startsWith("lib/sibling-barrel.js:sharedUtil")),
+    "sibling-barrel.js:sharedUtil must be caught in unreachedExports when not retained",
+  );
+});
+
 Deno.test("reachability (kf3h / P1a): checkScriptsExportReachability walks .ts import edges", async () => {
   const fixtureFiles: Record<string, string> = {
     "package.json": JSON.stringify({
