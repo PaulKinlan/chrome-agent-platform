@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.598] — 2026-10-08
+- Require owner-visible digest approval before model-authored script registration, and reject scripts that register more tool matches than the documented limit.
+
 ## [0.3.597] — 2026-10-08
 - Update the bundled JSON-schema URI dependency to the patched release that fixes two advisories; the shipped bundle now resolves the fixed version.
 
