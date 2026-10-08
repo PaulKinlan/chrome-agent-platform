@@ -18,6 +18,7 @@ import { leftInsetFromPaddingShorthand } from "./lib/css-padding.ts";
 import { launchChrome, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 import { durableDir, isRamBacked } from "./lib/durable-root.mjs";
+import { waitForAppReady } from "./lib/app-readiness.ts";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
@@ -214,16 +215,8 @@ const HUB_PROBE = `(() => {
 const HUB_WIDTHS = [1440, 1280, 1100, 900];
 const hubResults: Record<string, any> = {};
 const wsHub = await openPage(`chrome-extension://${extId}/ntp/ntp.html`, 1440);
-// Wait for ntp.js stage2B to mount jobs-board
-const jobsBoardDeadline = Date.now() + 10000;
-while (Date.now() < jobsBoardDeadline) {
-  const ready = await evaluate(wsHub, `(() => {
-    const board = document.querySelector('#jobs-board-host jobs-board');
-    return !!board;
-  })()`).catch(() => false);
-  if (ready) break;
-  await sleep(200);
-}
+// Wait for ntp.js stage2B to mount jobs-board and complete app hydration
+await waitForAppReady(async (expr) => evaluate(wsHub, expr), { surfaceName: "NTP constrained-width-layout" });
 for (const w of HUB_WIDTHS) {
   await send("Emulation.setDeviceMetricsOverride", { width: w, height: 1000, deviceScaleFactor: 1, mobile: false }, wsHub);
   await sleep(400);

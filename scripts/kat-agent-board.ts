@@ -16,6 +16,7 @@ import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
+import { waitForAppReady } from "./lib/app-readiness.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -74,7 +75,7 @@ try {
   // A laptop-sized viewport (the headless default is 800x600, which squeezes
   // the sidebar to ~200px and hides most of the Board box behind its scroll).
   await cdp("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }, page);
-  await sleep(1500);
+  await waitForAppReady(async (expr) => evaluate(expr, page), { surfaceName: "NTP kat-agent-board" });
 
   // ── CAP-FB-20260831-BOARD-VISIBILITY-01 — the MAIN, always-visible board ──
   // Reads the owner-facing <jobs-board> in the hub's #jobs-section (the peer
@@ -374,7 +375,7 @@ try {
   const { result: { targetId: optTarget } } = await cdp("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html#board-permissions` });
   const { result: { sessionId: opts } } = await cdp("Target.attachToTarget", { targetId: optTarget, flatten: true });
   await cdp("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }, opts);
-  await sleep(1500);
+  await waitForAppReady(async (expr) => evaluate(expr, opts), { surfaceName: "Options kat-agent-board" });
   const research = await evaluate(sendExpr("named-agent.create", { name: "Research", role: "You research and report back." }), page);
   const researchId = research?.agent?.id ?? "research";
   const optionAppeared = await waitFor(async () =>

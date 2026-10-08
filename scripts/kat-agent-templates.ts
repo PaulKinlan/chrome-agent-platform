@@ -16,6 +16,7 @@ import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
+import { waitForAppReady } from "./lib/app-readiness.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -80,7 +81,7 @@ try {
 }
 
 await Deno.mkdir(OUT, { recursive: true });
-await sleep(3200); // first-run surfaces settle
+await waitForAppReady(ev, { surfaceName: "NTP kat-agent-templates" });
 
 // The create/edit dialogs PERSIST as light DOM in the page, so after several
 // opens (this harness opens one per seeded starter plus the edit dialog)
