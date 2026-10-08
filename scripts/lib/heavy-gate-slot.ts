@@ -322,12 +322,14 @@ export async function acquireHeavyGateSlot(opts: AcquireHeavyGateOptions): Promi
     // said: 66 + 'cannot open lock file' is a SETUP fault; 1 (or still running
     // when our backstop deadline passed) is genuine contention.
     let exitCode: number | null = null;
+    let backstop: ReturnType<typeof setTimeout> | undefined;
     try {
-      const timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* gone */ } }, 1500);
+      backstop = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* gone */ } }, 1500);
       const status = await child.status;
-      clearTimeout(timer);
       exitCode = status.code;
-    } catch { /* reaped */ }
+    } catch { /* reaped */ } finally {
+      if (backstop !== undefined) clearTimeout(backstop);
+    }
     let errText = "";
     try {
       errText = (await new Response(child.stderr).text()).trim();
