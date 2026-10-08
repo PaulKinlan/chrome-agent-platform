@@ -20,6 +20,7 @@ import { launchChrome, openCdp, SW_MATCH, teardownChrome } from "./lib/chrome-la
 import { chromeProfileDir, profileLiveness, pruneChromeProfileDirs } from "./lib/chrome-profile-dir.ts";
 import { composerInput, composerPopup } from "./lib/composer-target.ts";
 import { makeChecker } from "./lib/expected-red.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -666,15 +667,43 @@ async function main() {
     const shape = JSON.parse(String(privacyShape ?? "{}"));
     check("privacy: exactly one h1 and every list section is labelled by its heading", shape.h1 === 1 && shape.sections >= 5, shape);
 
-    // ── the about page (chrome-agent-platform-fixn) ──
+    // ── the about page (chrome-agent-platform-fixn, 2beq) ──
     page = await openPage(cdp, `chrome-extension://${id}/about/about.html`);
-    a = await analyze(cdp, page.sessionId, "about");
-    check("about: no unlabeled interactive controls", (a.unlabeled || []).length === 0, a.unlabeled);
-    check("about: main landmark present", a.landmarks.main === true, a.landmarks);
-    check("about: at least one heading present", a.landmarks.heading === true, a.landmarks);
-    check("about: contrast — no AA failures", (a.contrastFails || []).length === 0, a.contrastFails);
-    check("about: has focusable elements + first is not body", a.focus.total > 0 && a.focus.first !== "none", a.focus);
-    check("about: no interactive element under 24x24 px", (a.smallTargets || []).length === 0, a.smallTargets);
+    const aboutEvidence = durableDir("about-a11y", `${Date.now()}-${Deno.pid}`);
+    const aboutSchemes: Record<string, { bg: string; fg: string }> = {};
+    for (const scheme of ["light", "dark"]) {
+      // Audit the ACTUAL extension document after emulating each scheme, not
+      // an assertion about the token strings. A vacuous contrast pass is RED.
+      await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: scheme }] }, page.sessionId);
+      const appearance = JSON.parse(String(await cdp.evl(page.sessionId, `JSON.stringify({
+        dark: matchMedia("(prefers-color-scheme: dark)").matches,
+        bg: getComputedStyle(document.body).backgroundColor,
+        fg: getComputedStyle(document.body).color,
+      })`)));
+      check(`about (${scheme}): emulated scheme reached the page`, appearance.dark === (scheme === "dark"), appearance);
+      aboutSchemes[scheme] = appearance;
+      a = await analyze(cdp, page.sessionId, `about:${scheme}`);
+      check(`about (${scheme}): no unlabeled interactive controls`, (a.unlabeled || []).length === 0, a.unlabeled);
+      check(`about (${scheme}): main landmark present`, a.landmarks.main === true, a.landmarks);
+      check(`about (${scheme}): at least one heading present`, a.landmarks.heading === true, a.landmarks);
+      check(`about (${scheme}): contrast — no AA failures (${a.contrastChecked ?? 0} checked)`,
+        (a.contrastFails || []).length === 0 && (a.contrastChecked ?? 0) > 0, a.contrastFails);
+      check(`about (${scheme}): has focusable elements + first is not body`, a.focus.total > 0 && a.focus.first !== "none", a.focus);
+      check(`about (${scheme}): no interactive element under 24x24 px`, (a.smallTargets || []).length === 0, a.smallTargets);
+      try {
+        const shot = await cdp.send("Page.captureScreenshot", { format: "png" }, page.sessionId);
+        const data = shot?.data ?? shot?.result?.data;
+        if (!data) throw new Error("CDP returned no screenshot bytes");
+        const png = Uint8Array.from(atob(data), (char) => char.charCodeAt(0));
+        const path = `${aboutEvidence}/about-${scheme}.png`;
+        await Deno.writeFile(path, png);
+        check(`about (${scheme}): screenshot captured`, true, path);
+      } catch (error) {
+        check(`about (${scheme}): screenshot captured`, false, String(error));
+      }
+    }
+    check("about: light and dark have distinct canvas and text colors",
+      aboutSchemes.light?.bg !== aboutSchemes.dark?.bg && aboutSchemes.light?.fg !== aboutSchemes.dark?.fg, aboutSchemes);
 
     // ── the component gallery: the <artifact-diff> specimen, both schemes ──
     // (CAP-FB-20260830-ARTIFACT-DIFF-COMPONENT-01) zero unlabeled controls and
