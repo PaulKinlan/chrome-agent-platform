@@ -28,6 +28,16 @@ Deno.test("management: MANAGEMENT_TOOL_NAMES exactly equals the callable toolset
   }
 });
 
+Deno.test("management: attached declared tool is a model route request, not an enrollment or browser shortcut", async () => {
+  const { toolset, calls } = makeTools();
+  const input = { origin: "https://declared.test", name: "search_products", args: { query: "pie" } };
+  assertEquals(toolset.use_attached_declared_tool.inputSchema.safeParse(input).success, true);
+  assertEquals(toolset.use_attached_declared_tool.inputSchema.safeParse({ ...input, name: "bad name" }).success, false);
+  assertEquals(toolset.use_attached_declared_tool.inputSchema.safeParse({ ...input, source: "inferred" }).success, false);
+  await toolset.use_attached_declared_tool.execute(input);
+  assertEquals(calls, [{ type: "attached-webmcp.invoke", args: input }]);
+});
+
 Deno.test("management: the all-name × all-surface forbidden-tool matrix is standalone-clean", async () => {
   const { toolset } = makeTools();
   const FORBIDDEN = ["enroll_origin", "grant_capability", "revoke_capability"];

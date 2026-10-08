@@ -208,7 +208,7 @@ auth) merged with fail-closed duplicate detection
 `run-task`, `run.cancel` (service-worker.js:7791, owner/extension principals
 only), `run.resume` (:7802), `run.logs` (:7995), `agent.delegate` — are still
 inline in service-worker.js. routes/ROUTE_MAP.md documents the complete
-288-route population (audited in docs/SW-DISPATCH-AUTHORITY-CENSUS.md).
+290-route population (audited in docs/SW-DISPATCH-AUTHORITY-CENSUS.md).
 
 ### 2.2 The agent-worker protocol
 Per-agent SharedWorkers (hosted by the offscreen doc, §1.3) execute agent loops
@@ -420,12 +420,16 @@ hub-only attached run binds an opaque in-memory token and adds only bounded,
 run-fenced descriptions/schemas to that run's **model context**; the passive
 chip/registry stay count-only and no inferred page-JS tool is disclosed.
 `attached-webmcp-disclosure.js` enforces a second, aggregate run-size cap.
-**No unenrolled tool is callable yet**: no consent card, required WAL append,
-or unenrolled page invocation is wired. The uncalled
-`attached-webmcp-invocation.js` helper tests an audit-first, exact-document
-MAIN-world injection path that does not arm or relax the enrolled content-script
-bridge; it must not be imported into an executable route until D1/D3 consent
-and audit integration passes. The enrolled path's checks remain unchanged.
+**D1/D3 implementation under verification, not yet accepted or landed:** the
+hub-only `use_attached_declared_tool` routes to `attached-webmcp.invoke`, which
+requires the live run's opaque exact-document token and freshly re-reads only
+declared descriptors. `attached-webmcp-authority.js` demands a per-tool owner
+card before granting in-memory run-local consent (Deny is sticky), then awaits
+an ephemeral required WAL start row before `attached-webmcp-invocation.js`
+injects once into Chrome's exact `documentIds` target. The result is discarded
+on doc/run/permission drift; a terminal WAL write follows. No enrolled
+`enrollment-sync` or content-script `invoke-tool` guard is relaxed. Build,
+browser, full suite and independent code review are still NOT_REACHED.
 
 ### 4.5 Fallback paths
 Pages without WebMCP: the six page-action tools (`find_elements`,

@@ -176,6 +176,7 @@ const BASELINE_ROUTES = [
   "webmcp.consent.site.reset",
   "webmcp.audit.list",
   "webmcp.use-tool",
+  "attached-webmcp.invoke",
   "webmcp.diagnostics.get",
   "webmcp.diagnostics.set",
   "webmcp.status",

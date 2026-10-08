@@ -187,6 +187,9 @@ import { bindAttachedWebmcpRun } from "../lib/attached-webmcp-run.js";
 import { readAttachedDeclaredWebmcpTools, readDeclaredWebmcpFromPage } from "../lib/attached-webmcp-declared.js";
 import { formatAttachedDeclaredContext } from "../lib/attached-webmcp-disclosure.js";
 import { createEphemeralSiteToolConsentStore } from "../lib/ephemeral-site-tool-consent.js";
+import { createEphemeralSiteToolAuditPrincipal } from "../lib/ephemeral-site-tool-audit.js";
+import { createAttachedDeclaredInvoker } from "../lib/attached-webmcp-authority.js";
+import { auditedAttachedDeclaredCall, invokeAttachedDeclaredFromPage } from "../lib/attached-webmcp-invocation.js";
 import {
   hasPermission,
   hasCapability,
@@ -1223,6 +1226,7 @@ import {
   planWebmcpInvocationTab,
   syncSnapshotDocument,
   schemaToZod as buildSchema,
+  compileSchemaToZod,
   summarizeInjection,
   isExactOptionsSender,
   KEYBOARD_COMMANDS,
@@ -1948,9 +1952,109 @@ const pendingSiteToolConsent = new Map();
 // D2 owner enrollment also supports NO token: it promotes an empty same-gen
 // envelope, while any surviving old Deny is folded into the durable intent.
 const ephemeralSiteToolConsentStore = createEphemeralSiteToolConsentStore();
+// Only owner-attached hub runs populate this map; the model sees no token.
+// Every lookup also rechecks the run's captured reset epoch and abort signal.
+const activeAttachedWebmcpRuns = new Map();
 const cancellingApprovalExecutions = new Set();
 let siteToolProfileEpoch = 0;
 let siteToolResetting = 0;
+// A separate WAL principal for an exact, live, unenrolled run/document.
+// Only attachedDeclaredInvoker below may await its start row before invoking
+// page code; the enrolled Q23 principal and bridge remain unchanged.
+const ephemeralSiteToolAuditPrincipal = createEphemeralSiteToolAuditPrincipal({
+  consentStore: ephemeralSiteToolConsentStore,
+  attest: async (tabId) => {
+    try {
+      const [registry, enrolledOrigins] = await Promise.all([
+        listKnownWebmcpOrigins(), listOrigins(),
+      ]);
+      return await attestCurrentAttachedWebmcpTab(tabId, {
+        registry, enrolledOrigins,
+        getTab: (id) => chrome.tabs.get(id),
+        executeTopFrame: (id) => chrome.scripting.executeScript({
+          target: { tabId: id, frameIds: [0] }, world: "ISOLATED", func: () => true,
+        }),
+      });
+    } catch { return null; }
+  },
+  runActive: (runId) => activeExecutions.has(runId) &&
+    !cancellingApprovalExecutions.has(runId) && !endedExecutions.has(runId),
+  append: (row) => appendSiteToolAudit(row),
+  profileEpoch: () => siteToolProfileEpoch,
+  resetting: () => siteToolResetting > 0,
+});
+
+// This is a separate model-only UNENROLLED path, not an exception to the
+// enrolled content-script's numeric enrollment-generation/bridge checks.
+const attachedDeclaredInvoker = createAttachedDeclaredInvoker({
+  consentStore: ephemeralSiteToolConsentStore,
+  findBinding: (runId, origin) => {
+    const row = activeAttachedWebmcpRuns.get(runId);
+    const match = row?.bindings.find(({ candidate }) => candidate.origin === origin);
+    return match ? { binding: match.candidate, token: match.token } : null;
+  },
+  runActive: attachedDeclaredInvokerRunActive,
+  readDeclared: (binding, token) => readAttachedDeclaredWebmcpTools(binding, {
+    getTab: (id) => chrome.tabs.get(id),
+    livePermission: (origin) => hasLiveSiteToolHostPermission(origin),
+    executeTopFrame: (id, mode) => chrome.scripting.executeScript({
+      target: { tabId: id, frameIds: [0] },
+      world: mode === "read" ? "MAIN" : "ISOLATED",
+      func: mode === "read" ? readDeclaredWebmcpFromPage : () => true,
+    }),
+    runActive: () => {
+      try {
+        const live = ephemeralSiteToolConsentStore.binding(token);
+        return live.tabId === binding.tabId && live.documentId === binding.documentId &&
+          live.origin === binding.origin && attachedDeclaredInvokerRunActive(live.runId);
+      } catch { return false; }
+    },
+  }),
+  validateArgs: async (schema, args) => {
+    try {
+      const compiled = compileSchemaToZod(z, schema);
+      if (compiled.fatal) return { ok: false };
+      const parsed = compiled.zodSchema.safeParse(args);
+      if (!parsed.success || JSON.stringify(parsed.data).length > 8192) return { ok: false };
+      return { ok: true, data: parsed.data };
+    } catch { return { ok: false }; }
+  },
+  requestApproval: (context, binding, tool, consent, argDigest) => {
+    const target = canonicalOperationTarget("webmcp-tool", { origin: binding.origin, name: tool.name });
+    if (!target) return { ok: false, approvalDenied: false };
+    const payload = payloadFields([
+      ["origin", binding.origin], ["name", tool.name], ["source", "declared"],
+      ["identityDigest", consent.identityDigest], ["consentRevision", consent.revision],
+      ["runId", context.executionId], ["documentId", binding.documentId],
+      ["argDigest", argDigest],
+    ]);
+    return requireOwnerApproval(context, "webmcp.use-tool", target, payload,
+      { origin: binding.origin, tool: tool.name });
+  },
+  audit: (token, row) => ephemeralSiteToolAuditPrincipal.append(token, row),
+  invoke: (binding, tool, args, { runActive, requiredAudit }) =>
+    auditedAttachedDeclaredCall(binding, tool, args, {
+      runActive,
+      livePermission: (origin) => hasLiveSiteToolHostPermission(origin),
+      getTab: (id) => chrome.tabs.get(id),
+      attestTopFrame: (id) => chrome.scripting.executeScript({
+        target: { tabId: id, frameIds: [0] }, world: "ISOLATED", func: () => true,
+      }),
+      requiredAudit,
+      executeExactDocument: (tabId, documentId, name, validatedArgs, schemaJson) =>
+        chrome.scripting.executeScript({
+          target: { tabId, documentIds: [documentId] }, world: "MAIN",
+          func: invokeAttachedDeclaredFromPage, args: [name, validatedArgs, schemaJson],
+        }),
+    }),
+});
+function attachedDeclaredInvokerRunActive(runId) {
+  const row = activeAttachedWebmcpRuns.get(runId);
+  return Boolean(row && row.epoch === siteToolProfileEpoch && siteToolResetting === 0 &&
+    !row.signal?.aborted && activeExecutions.has(runId) &&
+    !cancellingApprovalExecutions.has(runId) && !endedExecutions.has(runId));
+}
+
 function siteToolRunIdentity(context = {}) {
   const executionId = typeof context.executionId === "string"
     ? context.executionId
@@ -4298,6 +4402,9 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
               siteToolResetting === 0 && siteToolProfileEpoch === runEpoch && !fence?.signal?.aborted,
           });
           ephemeralAttachedRunEpoch = runEpoch;
+          if (ephemeralAttachedRun.bindings.length) activeAttachedWebmcpRuns.set(executionId, {
+            bindings: ephemeralAttachedRun.bindings, epoch: runEpoch, signal: fence?.signal,
+          });
         } catch {
           // No attached-tool authority is safer than borrowing the model's
           // ambient browser tools when the browser attestation is unavailable.
@@ -4887,6 +4994,8 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
       try { error.executionId = executionId; } catch { /* immutable error */ }
       throw error;
     } finally {
+      activeAttachedWebmcpRuns.delete(executionId);
+      ephemeralAttachedRun?.end(); // opaque run tokens die before async cleanup
       if (acpConfig) modelOverride?.close?.();
       acpRunPermissions.cancel(executionId);
       clearInterval(durableHeartbeat);
@@ -9581,6 +9690,12 @@ const handlers = mergeRouteMaps(
     } catch (error) {
       return errCodeOrMessage(error);
     }
+  },
+  // An owner-/tabs-attached, UNENROLLED declared tool. The caller supplies
+  // only origin/name/arguments; a live hub execution + opaque exact-document
+  // binding supplies authority. This is NOT the enrolled invoke-tool bridge.
+  async "attached-webmcp.invoke"(payload, context) {
+    return await attachedDeclaredInvoker(payload, context);
   },
   // The first-use consent leg for the exact model-selected site tool. It
   // re-reads descriptor and durable state; neither the page nor model supplies

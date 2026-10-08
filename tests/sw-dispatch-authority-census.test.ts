@@ -4,7 +4,7 @@
 // Invariants guarded:
 //   1. docs/SW-DISPATCH-AUTHORITY-CENSUS.md exists and is cited in AGENTS.md and routes/ROUTE_MAP.md.
 //   2. Every registered route in handlers (via mergeRouteMaps) is extracted from actual AST composition.
-//   3. The census classification is complete, disjoint, and covers 100% of registered routes (288 total).
+//   3. The census classification is complete, disjoint, and covers 100% of registered routes (290 total).
 //      (l0r: recipe.list catalog fork deleted; wfo5: browser.callTool added;
 //       s7wl: the vault/enclave maps the resolver below used to skip, +9.)
 //   4. Any new route added to mergeRouteMaps without explicit census classification fails RED.
@@ -79,7 +79,7 @@ export const CENSUS_CATEGORIES = {
     "asset.update", "asset.patch", "asset.append", "script.update", "script.delete",
     "browser.cookie-value", "browser.destructive-action", "task.schedule-script",
     "workflow.run", "hooks.subscribe", "hooks.unsubscribe", "fs-grant.write-file-approved",
-    "webmcp.use-tool",
+    "webmcp.use-tool", "attached-webmcp.invoke",
   ]),
   OWNER_EXTENSION_FENCED: new Set([
     "acp.commands",
@@ -427,43 +427,43 @@ Deno.test("census: companion-doc total and route-name falsifications RED by docu
   const arch = await Deno.readTextFile(`${ROOT}docs/ARCHITECTURE.md`);
   const plan = await Deno.readTextFile(`${ROOT}docs/NATIVE-AGENT-POSITION-PLAN.md`);
 
-  assertThrows(() => assertRouteMap(map.replace("**288**", "**287**")), Error, "ROUTE_MAP total");
+  assertThrows(() => assertRouteMap(map.replace("**290**", "**289**")), Error, "ROUTE_MAP total");
   assertThrows(() => assertRouteMap(map.replace("`enclave.proxy`", "`enclave.proxy-renamed`")), Error, "enclave.proxy-renamed");
   assertThrows(() => assertRiskAndThreatPopulation(risks.replace("37 unclassified mutation routes", "31 unclassified mutation routes"), threat), Error, "RISK-REGISTER R11 risk");
   assertThrows(() => assertRiskAndThreatPopulation(risks.replace("`asset.export-to-folder` writes", "`asset.export-to-folder-renamed` writes"), threat), Error, "asset.export-to-folder-renamed");
   assertThrows(() => assertRiskAndThreatPopulation(risks,
-    threat.replace("` assert 288 registered routes", "` assert 287 registered routes")),
+    threat.replace("` assert 290 registered routes", "` assert 289 registered routes")),
     Error, "THREAT_MODEL component-map evidence pin population");
   assertThrows(() => assertRiskAndThreatPopulation(risks,
-    threat.replace("37 unclassified mutations among 288 registered routes", "37 unclassified mutations among 287 registered routes")),
+    threat.replace("37 unclassified mutations among 290 registered routes", "37 unclassified mutations among 289 registered routes")),
     Error, "THREAT_MODEL T4 evidence pin registered count");
 
   // r073 falsification drills:
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch.replace("288-route population", "287-route population"), plan),
+    () => assertArchitectureAndStrategyPopulation(arch.replace("290-route population", "289-route population"), plan),
     Error,
     "ARCHITECTURE.md route count must equal registered population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch.replace("288-route population", "bogus text"), plan),
+    () => assertArchitectureAndStrategyPopulation(arch.replace("290-route population", "bogus text"), plan),
     Error,
     "ARCHITECTURE.md must state the complete route population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("288-route dispatch authority", "287-route dispatch authority")),
+    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("290-route dispatch authority", "289-route dispatch authority")),
     Error,
     "NATIVE-AGENT-POSITION-PLAN.md route count must equal registered population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("288-route dispatch authority", "bogus text")),
+    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("290-route dispatch authority", "bogus text")),
     Error,
     "NATIVE-AGENT-POSITION-PLAN.md must state the dispatch authority route count",
   );
 });
 
-Deno.test("census: all registered routes in handlers are derived via AST and total 288", () => {
+Deno.test("census: all registered routes in handlers are derived via AST and total 290", () => {
   const registered = extractAllRegisteredRoutes();
-  assertEquals(registered.size, 288, `registered routes population must equal 288 (got ${registered.size})`);
+  assertEquals(registered.size, 290, `registered routes population must equal 290 (got ${registered.size})`);
 });
 
 function assertCompleteClassification(registered: Set<string>): void {
@@ -544,8 +544,8 @@ Deno.test("census: named-agent.set-tools is pinned as an unclassified mutation g
 // `enclaveProxyRoutes` and `enclaveStatusRoutes` — 9 routes that landed
 // 2026-10-03 (bd17634f), three days BEFORE the landing that set 276. Evaluating
 // the real composition (`mergeRouteMaps` over the same argument list, factories
-// called with the same stubs) at `origin/main@f507d58f` returns 288. The counts
-// that follow are 288 population, 51 SETTINGS_ONLY_DIRECT, 25
+// called with the same stubs) at `origin/main@f507d58f` returned 288 at that historical pin. The counts
+// that follow are 290 population, 51 SETTINGS_ONLY_DIRECT, 25
 // OWNER_EXTENSION_FENCED, 37 UNCLASSIFIED_MUTATIONS (none of the 9 is an
 // unclassified mutation: all are gated).
 //
@@ -704,6 +704,7 @@ const APPROVAL_ACTION_ALIASES: Record<string, { action: string; reason: string }
   "asset.append": { action: "asset.update", reason: "an append pays the asset.update card" },
   "fs-grant.write-file-approved": { action: "fs.write", reason: "model file writes use the fs.write card" },
   "browser.destructive-action": { action: "<DESTRUCTIVE_BROWSER_ACTIONS>", reason: "validated browser action chooses one of the declared destructive actions" },
+  "attached-webmcp.invoke": { action: "webmcp.use-tool", reason: "run-local attached tool uses the existing per-tool owner card with an exact run/document digest" },
 };
 
 function approvalHandlerNodes(swAst: any): Map<string, { node: any; module?: string }> {
@@ -753,7 +754,7 @@ function approvalFindings(swSource: string): string[] {
     ...CENSUS_CATEGORIES.OWNER_APPROVAL_REQUIRED,
   ]);
   const findings: string[] = [];
-  if (expected.size !== 30) findings.push(`approval census population drift: expected 30, found ${expected.size}`);
+  if (expected.size !== 31) findings.push(`approval census population drift: expected 31, found ${expected.size}`);
 
   const approvalBridge = approvalFunction(swAst, "requireOwnerApproval");
   const entersOwnerDirectPath = approvalCalls(approvalBridge?.body, "isOwnerDirectApproval")
@@ -763,6 +764,18 @@ function approvalFindings(swSource: string): string[] {
     approvalCalls(scriptBridge.body, "requireOwnerApproval")
       .some((call) => call.arguments[0]?.name === "context" && call.arguments[1]?.name === "action");
   const siteToolBridge = approvalFunction(swAst, "requestSiteToolFirstUse");
+  // The unenrolled route delegates to a factory: inspect its injected callback
+  // rather than blessing the route name alone. It must retain BOTH the model
+  // approval card and the separate required WAL/page-effect executor.
+  const attachedFactory = swAst.body.flatMap((statement: any) =>
+    statement.type === "VariableDeclaration" ? statement.declarations : [])
+    .find((part: any) => part.id?.name === "attachedDeclaredInvoker" &&
+      part.init?.callee?.name === "createAttachedDeclaredInvoker");
+  const attachedDeps = attachedFactory?.init?.arguments?.[0]?.properties ?? [];
+  const attachedDep = (name: string) => attachedDeps.find((part: any) => part.key?.name === name)?.value;
+  const attachedApproval = attachedDep("requestApproval")?.body;
+  const attachedAudit = attachedDep("audit")?.body;
+  const attachedInvoke = attachedDep("invoke")?.body;
   const agentScheduleAst = acorn.parse(
     Deno.readTextFileSync(`${ROOT}extension/background/routes/agent-schedule.js`),
     { ecmaVersion: "latest", sourceType: "module" },
@@ -811,6 +824,18 @@ function approvalFindings(swSource: string): string[] {
       if (approvalCalls(siteToolBridge?.body, "requireOwnerApproval").some((call) => call.arguments[1]?.value === route)) {
         actions.add(route);
       }
+    }
+    if (route === "attached-webmcp.invoke" && approvalCalls(entry.node, "attachedDeclaredInvoker").length) {
+      const card = approvalCalls(attachedApproval, "requireOwnerApproval")
+        .some((call) => call.arguments[1]?.value === "webmcp.use-tool");
+      let wal = false;
+      walkApprovalAst(attachedAudit, (part) => {
+        if (part.type === "CallExpression" && part.callee?.object?.name === "ephemeralSiteToolAuditPrincipal" &&
+          part.callee?.property?.name === "append") wal = true;
+      });
+      const effect = approvalCalls(attachedInvoke, "auditedAttachedDeclaredCall").length > 0;
+      if (card && wal && effect) actions.add("webmcp.use-tool");
+      else findings.push(`route "${route}" lost a model approval, required WAL, or audited exact-document invoke seam`);
     }
     if (route === "named-agent.delete" && approvalCalls(entry.node, "createNamedAgentDeleteGate").length) {
       const hookCall = approvalCalls(entry.node, "createNamedAgentDeleteGate")[0];

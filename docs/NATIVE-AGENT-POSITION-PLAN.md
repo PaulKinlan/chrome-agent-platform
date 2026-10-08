@@ -34,7 +34,7 @@ We distinguish three tiers of platform status with strict checkability:
 ### Position 1: DO NOT re-architect around speculative native "Agent Principals" (`chrome.agents`); maintain the Service Worker as the Single Dispatch Authority.
 - **The Stance:** CAP must treat the Service Worker as the authoritative security boundary and continue managing logical agent principals via software dispatch fences.
 - **The Rationale & Evidence:** Chromium's security architecture is strictly anchored to the process/site-isolation boundary (the Origin) and the Extension boundary. There is zero upstream movement toward a 4th principal (`chrome.agents`). Even if Chrome were to introduce an agent identity, platform-level permissions would likely be coarse, prompt-heavy, and disruptive to cross-agent workflows (`delegate_to_agent`).
-- **Trade-off:** We maintain a 288-route dispatch authority (`docs/SW-DISPATCH-AUTHORITY-CENSUS.md`) and custom credential sanitizers (`archive-target-registry.js`), but we retain full control over fine-grained execution fences and inter-agent delegation without platform prompts.
+- **Trade-off:** We maintain a 290-route dispatch authority (`docs/SW-DISPATCH-AUTHORITY-CENSUS.md`) and custom credential sanitizers (`archive-target-registry.js`), but we retain full control over fine-grained execution fences and inter-agent delegation without platform prompts.
 
 ### Position 2: DO NOT adopt Chrome's Built-in AI (`window.ai` / Gemini Nano) for the core agent loop or tool orchestration.
 - **The Stance:** Confine Built-in AI strictly to zero-cost peripheral tasks (e.g. classification, search indexing, title generation). Never allow it to execute the primary agent tool-calling loop.
