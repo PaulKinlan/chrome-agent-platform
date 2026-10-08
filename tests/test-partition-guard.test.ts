@@ -323,12 +323,69 @@ Deno.test("323kf: build.mjs spawn or tree write in an exempted READ_ONLY_DIST fi
     "unreviewed spawn in tests/bundled-tool-packages.test.ts must be flagged",
   );
 
-  // 8. Real tests/bundled-tool-packages.test.ts on disk has only the reviewed git provenance spawn and no violations
+  // 8. Spoofed-signature unreviewed spawn in bundled-tool-packages.test.ts must be flagged
+  const spoofedSpawn = [
+    [
+      "tests/bundled-tool-packages.test.ts",
+      `
+      const baseline = JSON.parse(await Deno.readTextFile("./fixtures/bundled-inventory-baseline.json"));
+      const provenance = await new Deno.Command("git", {
+        args: ["cat-file", "-e", \`\${baseline.takenAt}^{commit}\`],
+        cwd: repoRoot, stdout: "null", stderr: "piped",
+      }).output();
+
+      // Spoofed signature in unrelated argument text (env var)
+      new Deno.Command("node", {
+        env: { SPOOF: '"git", { args: ["cat-file", "-e"' },
+        args: ["worker.js"],
+      }).output();
+      `,
+    ],
+  ] as [string, string][];
+  const spoofedViolations = unserialisedHazards(spoofedSpawn);
+  assertEquals(
+    spoofedViolations,
+    ["tests/bundled-tool-packages.test.ts — unreviewed spawn in the read-only post-build batch"],
+    "spawn with spoofed git-cat-file signature in unrelated argument text must be flagged",
+  );
+
+  // 9. Real tests/bundled-tool-packages.test.ts on disk has only the reviewed git provenance spawn and no violations
   const realBundledContent = await Deno.readTextFile(`${ROOT}tests/bundled-tool-packages.test.ts`);
   assertEquals(
     unserialisedHazards([["tests/bundled-tool-packages.test.ts", realBundledContent]]),
     [],
     "real tests/bundled-tool-packages.test.ts on disk must pass with only its reviewed git provenance spawn",
+  );
+});
+
+Deno.test("partition guard: isReviewedReadOnlySpawn requires anchored executable and rejects spoofed arg text", () => {
+  assert(
+    isReviewedReadOnlySpawn(
+      "tests/bundled-tool-packages.test.ts",
+      `"git", { args: ["cat-file", "-e", "sha"], cwd: repoRoot }`,
+    ),
+    "exact git cat-file invocation must be accepted",
+  );
+  assert(
+    !isReviewedReadOnlySpawn(
+      "tests/bundled-tool-packages.test.ts",
+      `"node", { env: { FAKE: '"git", { args: ["cat-file", "-e"' }, args: ["run.js"] }`,
+    ),
+    "spoofed signature in env var must be rejected",
+  );
+  assert(
+    !isReviewedReadOnlySpawn(
+      "tests/bundled-tool-packages.test.ts",
+      `"sh", { args: ["-c", 'echo "git", { args: ["cat-file", "-e"'] }`,
+    ),
+    "spoofed signature in shell args must be rejected",
+  );
+  assert(
+    !isReviewedReadOnlySpawn(
+      "tests/other-file.test.ts",
+      `"git", { args: ["cat-file", "-e", "sha"] }`,
+    ),
+    "other files must be rejected even with exact git cat-file invocation",
   );
 });
 

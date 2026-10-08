@@ -524,9 +524,14 @@ function getCallArgs(text, startIndex) {
 // In READ_ONLY_DIST, the ONLY permitted child process execution is the reviewed
 // git provenance check in tests/bundled-tool-packages.test.ts (lines 563-566).
 // Enumerated strictly by call-site signature, not merely by file path.
+// The check is anchored to the actual first invocation argument (the invoked executable):
+// it requires the invoked command to be "git" (or 'git') and its args to start with
+// ["cat-file", "-e"]. A spoofed signature in unrelated argument text (e.g. an env var)
+// will not match.
 export function isReviewedReadOnlySpawn(rel, argsSnippet) {
   if (rel !== "tests/bundled-tool-packages.test.ts") return false;
-  return /["']git["']\s*,\s*\{[^}]*args:\s*\[\s*["']cat-file["']\s*,\s*["']-e["']/.test(argsSnippet);
+  if (typeof argsSnippet !== "string") return false;
+  return /^\s*["']git["']\s*,\s*\{[^}]*?\bargs:\s*\[\s*["']cat-file["']\s*,\s*["']-e["']/.test(argsSnippet);
 }
 
 // Spawn hazard = a process spawn call whose invocation arguments target
