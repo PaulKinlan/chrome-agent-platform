@@ -23,11 +23,11 @@ import {
   BUILD_GATE_REASONS,
   classifyHazards,
   EXEMPTIONS,
+  isReviewedReadOnlySpawn,
   partition,
   PRODUCTION_BUILD_TIMEOUT_MS,
   READ_ONLY_DIST,
   READ_ONLY_DIST_REASONS,
-  READ_ONLY_DIST_UNRELATED_SPAWN_ALLOWLIST,
   realDriverRefs,
   SERIAL,
   SERIAL_FILE_TIMEOUTS,
@@ -196,12 +196,9 @@ Deno.test("partition guard: READ_ONLY_DIST membership is pinned with reasons, ex
     assert(st !== null, `${rel}: read-only dist entry must exist on disk`);
     assert(!SERIAL.has(rel), `${rel}: read-only dist entry must be disjoint from SERIAL`);
   }
-  for (const allow of READ_ONLY_DIST_UNRELATED_SPAWN_ALLOWLIST) {
-    assert(READ_ONLY_DIST.has(allow), `${allow}: unrelated spawn allowlist must only contain READ_ONLY_DIST files`);
-  }
 });
 
-Deno.test("323kf: build.mjs spawn or tree write in an exempted READ_ONLY_DIST file is flagged as an unserialised hazard", () => {
+Deno.test("323kf: build.mjs spawn or tree write in an exempted READ_ONLY_DIST file is flagged as an unserialised hazard", async () => {
   const target = "tests/diff-core.test.ts";
   assert(READ_ONLY_DIST.has(target), "target must be in READ_ONLY_DIST");
 
@@ -263,13 +260,12 @@ Deno.test("323kf: build.mjs spawn or tree write in an exempted READ_ONLY_DIST fi
     "spawn of bound builder variable in a READ_ONLY_DIST file must be flagged",
   );
 
-  // 5. Unresolved spawn combined with build reference in READ_ONLY_DIST must be flagged (P1b)
+  // 5. Unresolved spawn in a READ_ONLY_DIST file must be flagged
   const unresolvedSpawn = [
     [
       target,
       `
       const bundle = await Deno.readTextFile("extension/dist/diff-core.js");
-      const ref = "scripts/build.mjs";
       const runner = getRunner();
       runner.spawn();
       `,
@@ -278,8 +274,61 @@ Deno.test("323kf: build.mjs spawn or tree write in an exempted READ_ONLY_DIST fi
   const unresolvedViolations = unserialisedHazards(unresolvedSpawn);
   assertEquals(
     unresolvedViolations,
-    [`${target} — build reference combined with spawn in the read-only post-build batch`],
-    "unresolved spawn combined with build reference in a READ_ONLY_DIST file must be flagged",
+    [`${target} — unreviewed spawn in the read-only post-build batch`],
+    "unresolved spawn in a READ_ONLY_DIST file must be flagged",
+  );
+
+  // 6. Array-join build spawn in bundled-tool-packages.test.ts must be flagged (P1: 323kf)
+  const arrayJoinBuild = [
+    [
+      "tests/bundled-tool-packages.test.ts",
+      `
+      const baseline = JSON.parse(await Deno.readTextFile("./fixtures/bundled-inventory-baseline.json"));
+      const provenance = await new Deno.Command("git", {
+        args: ["cat-file", "-e", \`\${baseline.takenAt}^{commit}\`],
+        cwd: repoRoot, stdout: "null", stderr: "piped",
+      }).output();
+
+      const selected = ["scripts/", "build.mjs"].join("");
+      new Deno.Command("node", { args: [selected] }).output();
+      `,
+    ],
+  ] as [string, string][];
+  const arrayJoinViolations = unserialisedHazards(arrayJoinBuild);
+  assertEquals(
+    arrayJoinViolations,
+    ["tests/bundled-tool-packages.test.ts — new build-spawn hazard in the read-only post-build batch"],
+    "array-join build spawn in tests/bundled-tool-packages.test.ts must be flagged",
+  );
+
+  // 7. Any other unreviewed spawn in bundled-tool-packages.test.ts must be flagged
+  const unreviewedSpawn = [
+    [
+      "tests/bundled-tool-packages.test.ts",
+      `
+      const baseline = JSON.parse(await Deno.readTextFile("./fixtures/bundled-inventory-baseline.json"));
+      const provenance = await new Deno.Command("git", {
+        args: ["cat-file", "-e", \`\${baseline.takenAt}^{commit}\`],
+        cwd: repoRoot, stdout: "null", stderr: "piped",
+      }).output();
+
+      new Deno.Command("ls", { args: ["-la"] }).output();
+      `,
+    ],
+  ] as [string, string][];
+  const unreviewedViolations = unserialisedHazards(unreviewedSpawn);
+  assertEquals(
+    unreviewedViolations,
+    ["tests/bundled-tool-packages.test.ts — unreviewed spawn in the read-only post-build batch"],
+    "unreviewed spawn in tests/bundled-tool-packages.test.ts must be flagged",
+  );
+
+  // 8. Real tests/bundled-tool-packages.test.ts on disk has only the reviewed git provenance spawn and no violations
+  const realBundledContent = await Deno.readTextFile(`${ROOT}tests/bundled-tool-packages.test.ts`);
+  assertEquals(
+    unserialisedHazards([["tests/bundled-tool-packages.test.ts", realBundledContent]]),
+    [],
+    "real tests/bundled-tool-packages.test.ts on disk must pass with only its reviewed git provenance spawn",
   );
 });
 

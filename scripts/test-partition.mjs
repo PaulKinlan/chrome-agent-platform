@@ -75,12 +75,6 @@ export const READ_ONLY_DIST_REASONS = Object.freeze({
 });
 export const READ_ONLY_DIST = new Set(Object.keys(READ_ONLY_DIST_REASONS));
 
-// Explicitly reviewed exception in READ_ONLY_DIST where child commands are strictly
-// unrelated to build.mjs/generators (bundled-tool-packages spawns only git for provenance).
-export const READ_ONLY_DIST_UNRELATED_SPAWN_ALLOWLIST = new Set([
-  "tests/bundled-tool-packages.test.ts",
-]);
-
 // Build-behaviour tests moved to the dedicated npm run test:build gate (Option D / chrome-agent-platform-h65e).
 // These files run multiple in-place builds and are partitioned out of standard npm test to eliminate
 // load variance and save ~8 minutes on every lane's gate.
@@ -512,14 +506,32 @@ const TREE_LITERAL_RE = /["'`][^"'`\n]*(?:extension|packages)\/[^"'`\n]*["'`]/;
 const READ_RE = /readTextFile|readFile|readFileSync|readDir|readdir|import\s*\(|\bfrom\s*["']/i;
 const DIST_LITERAL_RE = /extension\/dist/;
 
-const BUILD_BINDING_RE = /(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*["'`][^"'`\n]*(?:build\.mjs|build-bundled-tool-packages)[^"'`\n]*["'`]/g;
-const REAL_SPAWN_CALL_RE = /(?<!['"`])\b(?:Deno\.Command|spawnSync|execFileSync|execSync|\.spawn|\bspawn)\s*\(/;
+const BUILD_BINDING_RE = /(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=[^;\n]*(?:build\.mjs|build-bundled-tool-packages)/g;
+
+// Extract invocation arguments inside matching parentheses
+function getCallArgs(text, startIndex) {
+  let depth = 1;
+  let i = startIndex;
+  while (i < text.length && depth > 0 && (i - startIndex) < 500) {
+    const ch = text[i];
+    if (ch === "(" || ch === "{" || ch === "[") depth++;
+    else if (ch === ")" || ch === "}" || ch === "]") depth--;
+    i++;
+  }
+  return text.slice(startIndex, i > startIndex ? i - 1 : startIndex);
+}
+
+// In READ_ONLY_DIST, the ONLY permitted child process execution is the reviewed
+// git provenance check in tests/bundled-tool-packages.test.ts (lines 563-566).
+// Enumerated strictly by call-site signature, not merely by file path.
+export function isReviewedReadOnlySpawn(rel, argsSnippet) {
+  if (rel !== "tests/bundled-tool-packages.test.ts") return false;
+  return /["']git["']\s*,\s*\{[^}]*args:\s*\[\s*["']cat-file["']\s*,\s*["']-e["']/.test(argsSnippet);
+}
 
 // Spawn hazard = a process spawn call whose invocation arguments target
-// build.mjs or the bundled-tool generator directly or via simple argument bindings.
-// Looking within 400 characters following the spawn invocation matches the spawn's
-// arguments while ensuring unrelated spawns in a file that merely reads build.mjs
-// source are not falsely classified.
+// build.mjs or the bundled-tool generator directly or via simple argument bindings
+// (including arrays, concatenations, and joins).
 function spawnsBuild(text) {
   const boundVars = [];
   for (const m of text.matchAll(BUILD_BINDING_RE)) {
@@ -533,8 +545,8 @@ function spawnsBuild(text) {
 
   const spawnCallRe = /(?<!['"`])\b(?:Deno\.Command|spawnSync|execFileSync|execSync|\.spawn|\bspawn)\s*\(/g;
   for (const m of text.matchAll(spawnCallRe)) {
-    const after = text.slice(m.index, m.index + 400);
-    if (targetPattern.test(after)) return true;
+    const args = getCallArgs(text, m.index + m[0].length);
+    if (targetPattern.test(args)) return true;
   }
   return false;
 }
@@ -578,9 +590,8 @@ export function unserialisedHazards(entries) {
   const violations = [];
   for (const [rel, text] of entries) {
     const classes = classifyHazards(text);
-    if (!classes.length) continue; // safe → defaults to the parallel phase
-    if (SERIAL.has(rel)) continue;
-    // A reviewed read-only exemption must never silently become a tree writer or spawn a build.
+
+    // A reviewed read-only exemption must never silently become a tree writer or spawn a build/unreviewed process.
     if (READ_ONLY_DIST.has(rel)) {
       if (classes.includes("writes under extension/ or packages/")) {
         violations.push(`${rel} — new write hazard in the read-only post-build batch`);
@@ -590,17 +601,27 @@ export function unserialisedHazards(entries) {
         violations.push(`${rel} — new build-spawn hazard in the read-only post-build batch`);
         continue;
       }
-      // Reviewer P1b: Flag a build-name reference combined with any spawn in READ_ONLY_DIST,
-      // with an explicit reviewed exception for genuinely unrelated child commands (bundled-tool-packages git provenance).
-      if (
-        classes.includes("names build.mjs or the bundled-tool generator (a load hazard whatever the syntax)") &&
-        REAL_SPAWN_CALL_RE.test(stripComments(text)) &&
-        !READ_ONLY_DIST_UNRELATED_SPAWN_ALLOWLIST.has(rel)
-      ) {
-        violations.push(`${rel} — build reference combined with spawn in the read-only post-build batch`);
+      // Inspect every spawn call in a READ_ONLY_DIST file. Only the reviewed git provenance
+      // signature in bundled-tool-packages is permitted; any other spawn — or any spawn whose
+      // arguments cannot be resolved — in a READ_ONLY_DIST file must be flagged.
+      const code = stripComments(text);
+      const spawnCallRe = /(?<!['"`])\b(?:Deno\.Command|spawnSync|execFileSync|execSync|\.spawn|\bspawn)\s*\(/g;
+      let hasUnreviewedSpawn = false;
+      for (const m of code.matchAll(spawnCallRe)) {
+        const args = getCallArgs(code, m.index + m[0].length);
+        if (!isReviewedReadOnlySpawn(rel, args)) {
+          hasUnreviewedSpawn = true;
+          break;
+        }
+      }
+      if (hasUnreviewedSpawn) {
+        violations.push(`${rel} — unreviewed spawn in the read-only post-build batch`);
         continue;
       }
     }
+
+    if (!classes.length) continue; // safe → defaults to the parallel phase
+    if (SERIAL.has(rel)) continue;
     const reason = EXEMPTIONS[rel];
     if (typeof reason === "string" && reason.trim().length > 0) continue;
     violations.push(`${rel} — ${classes.join("; ")}`);
