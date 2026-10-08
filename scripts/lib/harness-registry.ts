@@ -239,6 +239,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "unix-tools-streaming-acceptance.ts": { class: "manual", reason: "long-form release evidence: loads the exact extension and drives all nine streamed Unix tools over one 100 MiB owner-bound OPFS fixture, including receipt hashes and reference chaining" },
   "validate-package-load.ts": { class: "manual", reason: "loads the PACKAGED build (scripts/evidence-runner.sh gate 18 after gate 17 packages it)" },
   "verify-script-run.ts": { class: "manual", reason: "a verification probe for the script-run path; evidence only" },
+  "verify-v05y-session-retention.ts": { class: "manual", reason: "chrome-agent-platform-v05y evidence driver: measures ACP wire frames, startup latency, and session retention across discovery and subsequent turns against loopback mock ACP server", noVerdict: "evidence driver only: generates empirical measurement report and wire frame captures in cap-evidence/v05y-session-retention/, not a pass/fail assertion suite" },
 
   // ── helpers ─────────────────────────────────────────────────────────────
   "acp-bridge.ts": { class: "helper", reason: "a loopback WebSocket→stdio bridge the ACP client connects to; a server, not a harness" },

@@ -391,6 +391,233 @@ const threadSessions = new Map();
 const activeTurns = new Map();
 
 /**
+ * In-memory map of retained active ACP sessions across turns and discovery (chrome-agent-platform-v05y).
+ * Unifies pre-prompt command discovery and turn execution onto a single retained session lifecycle.
+ * Map<sessionKey, {
+ *   client: AcpClient,
+ *   sessionId: string,
+ *   harnessId: string,
+ *   endpoint: string,
+ *   cwd: string,
+ *   availableCommands: any[],
+ *   agentInfo: any,
+ *   nativeTransport: any,
+ *   createdAt: number,
+ *   lastActiveAt: number,
+ * }>
+ */
+const retainedSessions = new Map();
+
+/** Get active retained session record if connected and valid. Pure. */
+export function getRetainedAcpSession(sessionKey) {
+  const rec = retainedSessions.get(sessionKey);
+  if (!rec) return null;
+  if (!rec.client?.connected) {
+    retainedSessions.delete(sessionKey);
+    try { rec.client?.close(); } catch { /* already closed or terminating */ }
+    try { rec.nativeTransport?.close(); } catch { /* transport already dropped */ }
+    return null;
+  }
+  return rec;
+}
+
+/** Close and prune a retained ACP session. */
+export function closeRetainedAcpSession(sessionKey, { closeClient = true, clearSessionHint = false } = {}) {
+  const rec = retainedSessions.get(sessionKey);
+  if (rec) {
+    retainedSessions.delete(sessionKey);
+    if (closeClient && rec.client) {
+      try { rec.client.close(); } catch { /* best-effort client teardown */ }
+      try { rec.nativeTransport?.close(); } catch { /* best-effort transport teardown */ }
+    }
+  }
+  if (clearSessionHint) {
+    threadSessions.delete(sessionKey);
+  }
+}
+
+/** Close all retained ACP sessions. */
+export function clearAllRetainedAcpSessions() {
+  for (const [key] of retainedSessions) {
+    closeRetainedAcpSession(key);
+  }
+  retainedSessions.clear();
+  threadSessions.clear();
+}
+
+/** Total active retained sessions count. */
+export function retainedSessionsCount() {
+  for (const [key, rec] of retainedSessions) {
+    if (!rec?.client?.connected) retainedSessions.delete(key);
+  }
+  return retainedSessions.size;
+}
+
+/**
+ * ARCHITECTURAL SEAM NOTE (chrome-agent-platform-v05y):
+ * Session retention in `acp-runner.js` (`getOrDiscoverAcpSession`, `runAcpTaskTurn`)
+ * is maintained as an unattached library seam for the test architecture and future UI runner integrations.
+ * The shipped Chrome extension AI SDK model execution path runs through `acp-model.js` and
+ * `acp-model-host.js` inside the offscreen document.
+ *
+ * Discover harness capabilities/commands or retrieve an existing retained session (chrome-agent-platform-v05y).
+ * If an active retained session exists for this conversation, reuses it without re-opening.
+ * Otherwise, establishes connection, initializes, creates session/new or loads session,
+ * and retains it so subsequent prompt turns reuse the exact same session with 0 startup cost.
+ *
+ * @param {Object} options
+ * @param {string|null} [options.threadId]
+ * @param {string} [options.harnessId]
+ * @param {string} [options.endpoint]
+ * @param {string} [options.cwd]
+ * @param {{get: (k: string) => Promise<string|null>}} [options.settings]
+ * @param {{get: (k: string) => Promise<string|null>, set: (k: string, v: string) => Promise<void>}} [options.sessionStore]
+ * @param {Function} [options.clientFactory]
+ * @param {Function} [options.onCommands]
+ * @returns {Promise<{sessionId: string, availableCommands: any[], agentInfo: any, resumed: boolean}>}
+ */
+export async function getOrDiscoverAcpSession(options = {}) {
+  const {
+    threadId = null,
+    harnessId = "pi",
+    endpoint = DEFAULT_ACP_ENDPOINT,
+    cwd = DEFAULT_ACP_CWD,
+    executionId = null,
+    settings = null,
+    sessionStore = null,
+    onCommands = null,
+  } = options;
+
+  let effectiveEndpoint = endpoint;
+  let effectiveCwd = cwd;
+  if (typeof settings?.get === "function") {
+    try {
+      const configuredEndpoint = await settings.get("acp.endpoint");
+      if (typeof configuredEndpoint === "string" && configuredEndpoint.trim()) effectiveEndpoint = configuredEndpoint.trim();
+      const token = await settings.get("acp.token");
+      effectiveEndpoint = acpEndpointWithToken(effectiveEndpoint, token);
+      const configuredCwd = await settings.get("acp.cwd");
+      if (!effectiveCwd && typeof configuredCwd === "string" && configuredCwd.trim()) effectiveCwd = configuredCwd.trim();
+    } catch { /* settings lookup is best-effort; defaults apply */ }
+  }
+  effectiveEndpoint = acpEndpointWithHarness(effectiveEndpoint, harnessId);
+
+  const sessionKey = acpSessionKey(threadId, harnessId);
+
+  // Check if an existing connected session can be reused (must match harness, endpoint, AND cwd unconditionally)
+  const existing = getRetainedAcpSession(sessionKey);
+  if (
+    existing &&
+    existing.harnessId === harnessId &&
+    existing.endpoint === effectiveEndpoint &&
+    (existing.cwd || "") === (effectiveCwd || "")
+  ) {
+    if (typeof existing.client?.setExecutionId === "function") {
+      existing.client.setExecutionId(executionId);
+    }
+    onCommands?.(existing.availableCommands ?? []);
+    return {
+      sessionId: existing.sessionId,
+      availableCommands: existing.availableCommands ?? [],
+      agentInfo: existing.agentInfo ?? null,
+      resumed: true,
+      client: existing.client,
+    };
+  }
+
+  let transportMode = "";
+  if (typeof settings?.get === "function") {
+    try { transportMode = String(await settings.get("acp.transport") || ""); } catch { transportMode = ""; }
+  }
+  let nativeTransport = null;
+  if (transportMode !== "ws") {
+    nativeTransport = new AcpNativeTransport({ hostName: DEFAULT_NATIVE_HOST });
+    try {
+      await nativeTransport.connect();
+    } catch {
+      nativeTransport = null;
+    }
+  }
+
+  const client = (typeof options.clientFactory === "function")
+    ? options.clientFactory({ url: effectiveEndpoint, defaultCwd: effectiveCwd, transport: nativeTransport || null, executionId })
+    : new AcpClient({
+      url: effectiveEndpoint,
+      defaultCwd: effectiveCwd,
+      transport: nativeTransport || null,
+      onCommands,
+      executionId,
+    });
+  if (typeof client.setExecutionId === "function") {
+    client.setExecutionId(executionId);
+  }
+
+  if (nativeTransport) {
+    nativeTransport.onMessage = (raw) => client._receiveRaw(raw);
+    nativeTransport.onClose = (reason) => { client.connected = false; client._abortPending(new Error(reason)); };
+  }
+
+  await client.connect();
+  const initRes = await client.initialize();
+
+  let sessionId = threadSessions.get(sessionKey) ?? null;
+  if (!sessionId && typeof sessionStore?.get === "function") {
+    try { sessionId = await sessionStore.get(sessionKey) ?? null; } catch { sessionId = null; }
+  }
+
+  let resumed = false;
+  let availableCommands = [];
+  if (sessionId) {
+    try {
+      await client.loadSession({ sessionId, cwd: effectiveCwd });
+      resumed = true;
+      availableCommands = client.availableCommands ?? [];
+    } catch {
+      sessionId = null;
+    }
+  }
+
+  if (!sessionId) {
+    const sess = await client.newSession({ cwd: effectiveCwd });
+    sessionId = sess.sessionId;
+    availableCommands = sess.availableCommands ?? client.availableCommands ?? [];
+  }
+
+  threadSessions.set(sessionKey, sessionId);
+  if (typeof sessionStore?.set === "function") {
+    try { await sessionStore.set(sessionKey, sessionId); } catch { /* optional hint cache failure is not fatal */ }
+  }
+
+  const rec = {
+    client,
+    sessionId,
+    harnessId,
+    endpoint: effectiveEndpoint,
+    cwd: effectiveCwd,
+    availableCommands,
+    agentInfo: initRes?.agentInfo ?? client.agentInfo ?? null,
+    nativeTransport,
+    createdAt: Date.now(),
+    lastActiveAt: Date.now(),
+  };
+  const oldRec = retainedSessions.get(sessionKey);
+  if (oldRec && oldRec.client && oldRec.client !== client) {
+    try { oldRec.client.close(); } catch { /* best-effort cleanup of superseded client */ }
+    try { oldRec.nativeTransport?.close(); } catch { /* best-effort cleanup of superseded transport */ }
+  }
+  retainedSessions.set(sessionKey, rec);
+  onCommands?.(availableCommands);
+
+  return {
+    sessionId,
+    availableCommands,
+    agentInfo: rec.agentInfo,
+    resumed,
+    client,
+  };
+}
+
+/**
  * Cancel an in-flight ACP turn for a conversation.
  * Sends `session/cancel` with the active sessionId over the wire to the harness,
  * marks the turn as stopped by the owner, and settles the turn.
@@ -649,22 +876,6 @@ export async function runAcpTaskTurn(options) {
     try { transportMode = String(await settings.get("acp.transport") || ""); } catch { transportMode = ""; }
     try { permissionsMode = acpPermissionMode(await settings.get("acp.permissions")); } catch { permissionsMode = "ask"; }
   }
-  const nativeHost = DEFAULT_NATIVE_HOST;
-  let nativeTransport = null;
-  let nativeError = "";
-  if (transportMode !== "ws") {
-    nativeTransport = new AcpNativeTransport({ hostName: nativeHost });
-    try {
-      await nativeTransport.connect();
-    } catch (err) {
-      nativeError = String(err?.message ?? err);
-      nativeTransport = null; // not installed — the WebSocket bridge may be
-    }
-  }
-
-  if (nativeTransport) {
-    status({ state: "running", activity: `Connecting to the local ${harnessId} host…` });
-  }
 
   // THE OWNER GATE, scoped honestly (hcj9): in "ask" (the default) every
   // session/request_permission the harness EMITS is rendered as an inline
@@ -695,15 +906,39 @@ export async function runAcpTaskTurn(options) {
         return typeof decision?.optionId === "string" && decision.optionId ? decision.optionId : null;
       };
 
-  const client = (typeof options.clientFactory === "function")
-    ? options.clientFactory({ url: effectiveEndpoint, defaultCwd: cwd, transport: nativeTransport || null, executionId: currentExecutionId })
-    : new AcpClient({
-      url: effectiveEndpoint,
-      defaultCwd: cwd,
-      transport: nativeTransport || null,
-      ...(permissionHandler ? { permissionHandler } : {}),
-      executionId: currentExecutionId,
-    });
+  // chrome-agent-platform-v05y: check for active retained session across turns/discovery
+  const retained = getRetainedAcpSession(sessionKey);
+  let client = null;
+  let nativeTransport = null;
+  let nativeError = "";
+  let sessionId = null;
+  let resumed = false;
+  let fromRetained = false;
+  let resumeFailed = false;
+  let resumeError = null;
+
+  if (
+    retained &&
+    retained.harnessId === harnessId &&
+    retained.endpoint === effectiveEndpoint &&
+    (retained.cwd || "") === (effectiveCwd || "")
+  ) {
+    client = retained.client;
+    sessionId = retained.sessionId;
+    nativeTransport = retained.nativeTransport;
+    resumed = true;
+    fromRetained = true;
+    if (typeof client.setExecutionId === "function") {
+      client.setExecutionId(currentExecutionId);
+    } else {
+      client.executionId = currentExecutionId;
+    }
+    if (permissionsMode === "auto") {
+      client.permissionHandler = null;
+    } else if (permissionHandler) {
+      client.permissionHandler = permissionHandler;
+    }
+  }
 
   // CLAIM the conversation BEFORE ANY await — synchronously. A second (or
   // third) send while this turn is still connecting has to SEE this turn and
@@ -711,7 +946,13 @@ export async function runAcpTaskTurn(options) {
   // a third send would still read the OLD claim and overwrite the second one,
   // leaving two turns unnotified and both prompting. `cancelled` makes the
   // newer turn's intent visible even before this turn reaches the wire.
-  const claim = { client: null, sessionId: null, cancelled: false, stoppedByOwner: false, executionId: currentExecutionId };
+  const claim = {
+    client: fromRetained ? client : null,
+    sessionId: fromRetained ? sessionId : null,
+    cancelled: false,
+    stoppedByOwner: false,
+    executionId: currentExecutionId,
+  };
   const prior = activeTurns.get(sessionKey);
   if (prior) prior.cancelled = true;
   activeTurns.set(sessionKey, claim);
@@ -722,103 +963,152 @@ export async function runAcpTaskTurn(options) {
   // can see whether this turn still owns the conversation.
   permissionCancelled = superseded;
 
-  // The prior turn's host prompt is stopped after the claim is installed (the
-  // claim is what makes a LATER send able to stop US).
-  if (prior?.client) {
+  // The prior turn's host prompt is stopped after the claim is installed on EVERY turn
+  // (both retained and newly connected). If the prior turn shared the same retained client,
+  // cancel the prompt on the wire but DO NOT close the shared client.
+  if (prior?.client && prior.client !== client) {
     try { await prior.client.cancel(prior.sessionId); } catch { /* best effort */ }
     try { prior.client.close(); } catch { /* best effort */ }
+  } else if (prior?.client && prior.sessionId) {
+    try { await prior.client.cancel(prior.sessionId); } catch { /* best effort */ }
   }
 
-  if (nativeTransport) {
-    nativeTransport.onMessage = (raw) => client._receiveRaw(raw);
-    nativeTransport.onClose = (reason) => { client.connected = false; client._abortPending(new Error(reason)); };
-  }
-
-  try {
-    await client.connect();
-  } catch (err) {
-    releaseClaim();
-    const errorMsg = `Cannot connect to ACP harness (${harnessId}) at ${effectiveEndpoint}.`;
-    // Name EVERY transport that was unavailable, so the fix is one command away
-    // whichever way the operator wants to run it.
-    const fixes = [];
-    if (nativeError) fixes.push("install the local host: npm run acp:native:install");
-    else if (nativeTransport) fixes.push("the local host is not answering: npm run acp:native:install");
-    fixes.push("or run the bridge: npm run acp:bridge");
-    const actionMsg = `${fixes.join(" — ")} (both in the CAP repo)`;
-    if (!stale()) {
-      if (typeof container.appendError === "function") {
-        container.appendError(errorMsg, {
-          reason: String(err?.message ?? err),
-          action: actionMsg,
-          category: "harness-connection",
-          requestedHarness: harnessId,
-        });
-      } else if (typeof container.appendSystem === "function") {
-        container.appendSystem(`${errorMsg} ${actionMsg}`);
+  if (!fromRetained) {
+    const nativeHost = DEFAULT_NATIVE_HOST;
+    if (transportMode !== "ws") {
+      nativeTransport = new AcpNativeTransport({ hostName: nativeHost });
+      try {
+        await nativeTransport.connect();
+      } catch (err) {
+        nativeError = String(err?.message ?? err);
+        nativeTransport = null; // not installed — the WebSocket bridge may be
       }
-      status({ state: "failed", errorReason: errorMsg, errorAction: actionMsg });
     }
-    return { ok: false, error: `${errorMsg} ${actionMsg}`, requestedHarness: harnessId };
+
+    if (nativeTransport) {
+      status({ state: "running", activity: `Connecting to the local ${harnessId} host…` });
+    }
+
+    client = (typeof options.clientFactory === "function")
+      ? options.clientFactory({ url: effectiveEndpoint, defaultCwd: cwd, transport: nativeTransport || null, executionId: currentExecutionId })
+      : new AcpClient({
+        url: effectiveEndpoint,
+        defaultCwd: cwd,
+        transport: nativeTransport || null,
+        ...(permissionHandler ? { permissionHandler } : {}),
+        executionId: currentExecutionId,
+      });
+
+    if (nativeTransport) {
+      nativeTransport.onMessage = (raw) => client._receiveRaw(raw);
+      nativeTransport.onClose = (reason) => { client.connected = false; client._abortPending(new Error(reason)); };
+    }
+
+    try {
+      await client.connect();
+      claim.client = client;
+    } catch (err) {
+      releaseClaim();
+      if (superseded()) {
+        return { ok: false, error: "Task was superseded" };
+      }
+      const errorMsg = `Cannot connect to ACP harness (${harnessId}) at ${effectiveEndpoint}.`;
+      // Name EVERY transport that was unavailable, so the fix is one command away
+      // whichever way the operator wants to run it.
+      const fixes = [];
+      if (nativeError) fixes.push("install the local host: npm run acp:native:install");
+      else if (nativeTransport) fixes.push("the local host is not answering: npm run acp:native:install");
+      fixes.push("or run the bridge: npm run acp:bridge");
+      const actionMsg = `${fixes.join(" — ")} (both in the CAP repo)`;
+      if (!stale()) {
+        if (typeof container?.appendError === "function") {
+          container.appendError(errorMsg, {
+            reason: String(err?.message ?? err),
+            action: actionMsg,
+            category: "harness-connection",
+            requestedHarness: harnessId,
+          });
+        } else if (typeof container?.appendSystem === "function") {
+          container.appendSystem(`${errorMsg} ${actionMsg}`);
+        }
+        status({ state: "failed", errorReason: errorMsg, errorAction: actionMsg });
+      }
+      return { ok: false, error: `${errorMsg} ${actionMsg}`, requestedHarness: harnessId };
+    }
   }
 
   if (superseded()) {
     releaseClaim();
-    client.close();
+    if (!fromRetained && options.retainSession !== true && !activeTurns.has(sessionKey)) client?.close();
     return { ok: false, error: "Task was superseded" };
   }
 
-  // Resume bookkeeping lives OUTSIDE the try: the turn's catch has to report
-  // whether this turn already fell back to a fresh session (u0cc).
-  let resumed = false;
-  // A failed session/load falls back to a fresh session — a dead adapter must
-  // not block the turn — but the fallback is NEVER silent: the user is told the
-  // previous conversation could not be restored (and why), and the result marks
-  // it so a surface can tell a restored conversation from a new one.
-  // `resumeFailed` stays false when there was nothing to resume: a first turn is
-  // not a failure.
-  let resumeFailed = false;
-  let resumeError = null;
-
   try {
-    status({ state: "running", activity: `Initializing ${harnessId}…` });
-    await client.initialize();
-    if (superseded()) {
-      return { ok: false, error: "Task was superseded" };
-    }
-
-    // Session resolution: resume the conversation this surface/harness owns.
-    // Keyed by threadId+harness inside a persisted thread, else by harness
-    // identity — the pi surface and hub @pi delegations are one continuous
-    // conversation. A reload recovers the session id from the caller's
-    // sessionStore (kv), so continuity survives the page.
-    let sessionId = threadSessions.get(sessionKey) ?? null;
-    if (!sessionId && typeof sessionStore?.get === "function") {
-      try { sessionId = await sessionStore.get(sessionKey) ?? null; } catch { sessionId = null; }
-    }
-
-    if (sessionId) {
-      try {
-        await client.loadSession({ sessionId, cwd: effectiveCwd });
-        resumed = true;
-      } catch (err) {
-        // Fall back to new session if resume fails
-        sessionId = null;
-        resumeFailed = true;
-        resumeError = String(err?.message ?? err).replace(/\s+/gu, " ").trim().slice(0, 240)
-          || "the harness did not say why";
+    if (!fromRetained) {
+      status({ state: "running", activity: `Initializing ${harnessId}…` });
+      await client.initialize();
+      if (superseded()) {
+        return { ok: false, error: "Task was superseded" };
       }
-    }
 
-    if (!sessionId) {
-      const sess = await client.newSession({ cwd: effectiveCwd });
-      sessionId = sess.sessionId;
-    }
-    threadSessions.set(sessionKey, sessionId);
-    claim.client = client;
-    claim.sessionId = sessionId;
-    if (typeof sessionStore?.set === "function") {
-      try { await sessionStore.set(sessionKey, sessionId); } catch { /* resume hint only */ }
+      // Session resolution: resume the conversation this surface/harness owns.
+      // Keyed by threadId+harness inside a persisted thread, else by harness
+      // identity — the pi surface and hub @pi delegations are one continuous
+      // conversation. A reload recovers the session id from the caller's
+      // sessionStore (kv), so continuity survives the page.
+      sessionId = threadSessions.get(sessionKey) ?? null;
+      if (!sessionId && typeof sessionStore?.get === "function") {
+        try { sessionId = await sessionStore.get(sessionKey) ?? null; } catch { sessionId = null; }
+      }
+
+      if (sessionId) {
+        try {
+          await client.loadSession({ sessionId, cwd: effectiveCwd });
+          resumed = true;
+        } catch (err) {
+          // Fall back to new session if resume fails
+          sessionId = null;
+          resumeFailed = true;
+          resumeError = String(err?.message ?? err).replace(/\s+/gu, " ").trim().slice(0, 240)
+            || "the harness did not say why";
+        }
+      }
+
+      if (!sessionId) {
+        const sess = await client.newSession({ cwd: effectiveCwd });
+        sessionId = sess.sessionId;
+      }
+      threadSessions.set(sessionKey, sessionId);
+      claim.client = client;
+      claim.sessionId = sessionId;
+      if (typeof sessionStore?.set === "function") {
+        try { await sessionStore.set(sessionKey, sessionId); } catch { /* resume hint only */ }
+      }
+
+      if (options.retainSession === true) {
+        const rec = {
+          client,
+          sessionId,
+          harnessId,
+          endpoint: effectiveEndpoint,
+          cwd: effectiveCwd,
+          availableCommands: client.availableCommands ?? [],
+          agentInfo: client.agentInfo ?? null,
+          nativeTransport,
+          createdAt: Date.now(),
+          lastActiveAt: Date.now(),
+        };
+        const oldRec = retainedSessions.get(sessionKey);
+        if (oldRec && oldRec.client && oldRec.client !== client) {
+          try { oldRec.client.close(); } catch { /* best-effort cleanup of superseded client */ }
+          try { oldRec.nativeTransport?.close(); } catch { /* best-effort cleanup of superseded transport */ }
+        }
+        retainedSessions.set(sessionKey, rec);
+      }
+    } else {
+      claim.client = client;
+      claim.sessionId = sessionId;
+      threadSessions.set(sessionKey, sessionId);
     }
 
     // Tell the surface BEFORE this fresh conversation streams: the owner must
@@ -836,12 +1126,13 @@ export async function runAcpTaskTurn(options) {
     // chrome-agent-platform-etdn: forward CAP skill context. The owner's own
     // text stays the conversation surface; the harness payload carries the
     // skill definitions the prompt references (or the caller supplied).
-    let harnessPrompt = task;
+    const effectiveTask = task || options.prompt || "";
+    let harnessPrompt = effectiveTask;
     try {
       const ctx = Array.isArray(skills) && skills.length
         ? skills
-        : await resolveSkillContext(task, { runtimeSend });
-      harnessPrompt = buildPromptWithSkillContext(task, ctx);
+        : await resolveSkillContext(effectiveTask, { runtimeSend });
+      harnessPrompt = buildPromptWithSkillContext(effectiveTask, ctx);
     } catch { /* a context failure never blocks the turn */ }
 
     // chrome-agent-platform-2amt: in-turn browser tool execution loop.
@@ -860,7 +1151,9 @@ export async function runAcpTaskTurn(options) {
 
     while (hops++ < MAX_TOOL_HOPS) {
       if (superseded()) {
-        client.close();
+        if (!fromRetained && options.retainSession !== true && !activeTurns.has(sessionKey)) {
+          client.close();
+        }
         if (claim.stoppedByOwner) status({ state: "cancelled" });
         return { ok: false, error: "Task was cancelled", stopReason: "cancelled", sessionId, resumed, resumeFailed, resumeError };
       }
@@ -877,14 +1170,14 @@ export async function runAcpTaskTurn(options) {
           try { onEvent?.(ev); } catch { /* a consumer's error never fails the turn */ }
 
           if (ev.kind === "thought" && ev.text) {
-            if (typeof container.thinkingDelta === "function") {
+            if (typeof container?.thinkingDelta === "function") {
               container.thinkingDelta({ delta: ev.text, start: !thinkingStarted });
               thinkingStarted = true;
             }
           } else if (ev.kind === "tool") {
             const cardId = ev.toolCallId || ev.detail || "tool";
             const toolStatus = acpToolStatusUi(ev.status);
-            if (typeof container.appendTool === "function") {
+            if (typeof container?.appendTool === "function") {
               const existing = toolCards.get(cardId);
               if (existing) {
                 // The same call progressing: settle the card it already has.
@@ -903,12 +1196,12 @@ export async function runAcpTaskTurn(options) {
             }
             if (ev.detail) status({ state: "running", activity: `${harnessId}: ${String(ev.detail).slice(0, 40)}…` });
           } else if (ev.kind === "chunk" && ev.text) {
-            if (thinkingStarted && typeof container.collapseThinkingTrace === "function") {
+            if (thinkingStarted && typeof container?.collapseThinkingTrace === "function") {
               container.collapseThinkingTrace();
             }
             streamedText += ev.text;
             if (!streamedAgentBubble) {
-              if (typeof container.appendAgent === "function") {
+              if (typeof container?.appendAgent === "function") {
                 streamedAgentBubble = container.appendAgent(streamedText);
               }
             } else {
@@ -920,7 +1213,7 @@ export async function runAcpTaskTurn(options) {
           } else if (ev.kind === "permission") {
             // Honest, in the owner's words: what the harness asked for and what it
             // was told. A denial reads as a denial, never as an ambiguous line.
-            if (typeof container.appendSystem === "function") {
+            if (typeof container?.appendSystem === "function") {
               const detail = String(ev.detail ?? "");
               const denied = /deny|declined|not allowed|no\b/i.test(detail);
               container.appendSystem(
@@ -934,7 +1227,9 @@ export async function runAcpTaskTurn(options) {
       );
 
       if (superseded()) {
-        client.close();
+        if (!fromRetained && options.retainSession !== true && !activeTurns.has(sessionKey)) {
+          client.close();
+        }
         if (claim.stoppedByOwner) status({ state: "cancelled" });
         return { ok: false, error: "Task was cancelled", stopReason: "cancelled", sessionId, resumed, resumeFailed, resumeError };
       }
@@ -953,7 +1248,7 @@ export async function runAcpTaskTurn(options) {
         finalText = cleanText;
         if (streamedAgentBubble && typeof streamedAgentBubble.setAttribute === "function") {
           streamedAgentBubble.setAttribute("content", cleanText);
-        } else if (!streamedAgentBubble && typeof container.appendAgent === "function") {
+        } else if (!streamedAgentBubble && typeof container?.appendAgent === "function") {
           streamedAgentBubble = container.appendAgent(cleanText);
         }
       } else if (streamedAgentBubble && calls.length > 0) {
@@ -1007,7 +1302,7 @@ export async function runAcpTaskTurn(options) {
           const approved = decision && typeof decision.optionId === "string" && /allow/i.test(decision.optionId);
 
           if (!approved) {
-            if (typeof container.appendTool === "function") {
+            if (typeof container?.appendTool === "function") {
               const card = container.appendTool({
                 name: `browser:${call.name}`,
                 status: "error",
@@ -1025,7 +1320,7 @@ export async function runAcpTaskTurn(options) {
 
         // Append tool card in container
         let card = null;
-        if (typeof container.appendTool === "function") {
+        if (typeof container?.appendTool === "function") {
           card = container.appendTool({
             name: `browser:${call.name}`,
             status: "running",
@@ -1118,7 +1413,7 @@ export async function runAcpTaskTurn(options) {
       return { ok: false, error: "Task was superseded" };
     }
     if (!stale()) {
-      if (typeof container.appendError === "function") {
+      if (typeof container?.appendError === "function") {
         container.appendError(`ACP turn error: ${errorDetail}`, {
           category: "harness-error",
           reason: errorDetail,
@@ -1141,7 +1436,20 @@ export async function runAcpTaskTurn(options) {
     // This turn is no longer the active one for the key (a newer turn may own
     // it already — never clear a successor's registration).
     releaseClaim();
-    client.close();
-    try { nativeTransport?.close(); } catch { /* already gone */ }
+    const isSuperseded = superseded();
+    const shouldRetain = (options.retainSession === true || fromRetained === true)
+      && !claim.stoppedByOwner
+      && client?.connected === true;
+
+    if (isSuperseded && activeTurns.has(sessionKey)) {
+      // Predecessor superseded while successor holds active turn; do not destroy shared client or record
+    } else if (!shouldRetain) {
+      closeRetainedAcpSession(sessionKey);
+      client?.close();
+      try { nativeTransport?.close(); } catch { /* already gone */ }
+    } else {
+      const rec = retainedSessions.get(sessionKey);
+      if (rec) rec.lastActiveAt = Date.now();
+    }
   }
 }
