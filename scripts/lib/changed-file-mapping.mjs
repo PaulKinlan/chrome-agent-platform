@@ -43,7 +43,7 @@ export const HARNESS_TREE_GUARDS = Object.freeze([
   "tests/scripts-exit-codes.test.ts",
   "tests/substring-pin-honesty.test.ts",
   "tests/durable-root.test.ts",
-  "tests/quiet-window.test.ts",
+  "tests/quiet-window-static.test.ts",
   "tests/chrome-profile-isolation.test.ts",
   "tests/chrome-profile-static.test.ts",
   "tests/machine-path-honesty.test.ts",
