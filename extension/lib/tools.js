@@ -424,10 +424,15 @@ export async function setEnrollmentPolicy(origin, policy, { commitGuard = null }
       const previous = await snapshotSiteToolConsentForPolicy(canonical, entry.gen);
       const revision = previous.revision + 1;
       if (!Number.isSafeInteger(revision)) throw new Error("site_tool_consent_revision");
+      // The policy flip MUST advance the generation to revoke in-flight Allow.
+      // Only sticky Deny is carried into the pending copy and new-gen envelope;
+      // prior Allow returns to ASK because the owner changed coarse policy.
+      // Full profile reset (including Deny) is a separate, explicit decision.
+      const carriedDeny = previous.records.filter((record) => record.state === "denied");
       if (commitGuard && commitGuard() !== true) throw new Error("site_policy_promotion_cancelled");
       const gen = await nextGeneration({ requireDurable: true });
       const pending = { enrolled: false, phase: "policy-pending", gen, at: Date.now(), policy,
-        consentCopy: { revision, records: previous.records } };
+        consentCopy: { revision, records: carriedDeny } };
       map[canonical] = pending;
       await kvSetDurable({ [ENROLL_KEY]: map });
       await completePolicyPromotionLocked(canonical, map, pending, commitGuard);

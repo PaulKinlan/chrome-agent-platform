@@ -7,6 +7,7 @@ import {
   enrollmentGeneration, enrollmentSnapshot, isEnrolled, prepareEnrollmentPromotion, setEnrollmentPolicy,
 } from "../extension/lib/tools.js";
 import { SITE_TOOL_CONSENT_KEY, siteToolConsentSnapshot, siteToolIdentity } from "../extension/lib/site-tool-consent.js";
+import { evaluateWebmcpAuthority, siteToolConsentPermissionDigest } from "../extension/lib/webmcp-authority.js";
 
 const data = new Map();
 let storageGranted = true;
@@ -207,10 +208,13 @@ Deno.test("D2: failed policy envelope leaves inert pending; recovery retains sti
   finally { failConsentWrite = false; }
   assertEquals((await pending(origin)).phase, "policy-pending");
   assertEquals((await pending(origin)).enrolled, false);
-  await complete(origin, (await pending(origin)).gen); // policy's existing durable consent copy
+  assertEquals((await pending(origin)).consentCopy.records.map((r) => r.state), ["denied"]);
+  assertEquals(await isEnrolled(origin), false);
+  await complete(origin, (await pending(origin)).gen); // policy's durable Deny-only copy
   const after = await enrollmentSnapshot(origin);
   assertEquals(after.policy, "deny");
   assertEquals((await siteToolConsentSnapshot(origin, denyTool, after.gen)).state, "denied");
+  assertEquals((await siteToolConsentSnapshot(origin, allowTool, after.gen)).state, "ask");
 });
 
 Deno.test("D2: repeated legacy create and policy flip cannot drop sticky Deny", async () => {
@@ -221,5 +225,19 @@ Deno.test("D2: repeated legacy create and policy flip cannot drop sticky Deny", 
   assertEquals((await enrollmentSnapshot(origin)).gen, gen);
   await setEnrollmentPolicy(origin, "deny");
   const after = await enrollmentSnapshot(origin);
+  assertEquals(after.gen > gen, true, "policy flip revokes in-flight grants");
   assertEquals((await siteToolConsentSnapshot(origin, denyTool, after.gen)).state, "denied");
+  const allowedAfter = await siteToolConsentSnapshot(origin, allowTool, after.gen);
+  assertEquals(allowedAfter.state, "ask");
+  // Even if a NEW owner card later re-allows the descriptor, the old run's
+  // immutable generation cannot borrow that new Allow.
+  const freshPermission = siteToolConsentPermissionDigest({
+    identityDigest: allowedAfter.identityDigest, enrollmentGen: after.gen,
+    revision: allowedAfter.revision, state: "allowed",
+  });
+  assertEquals(evaluateWebmcpAuthority({ enrolled: true, enrollmentGen: after.gen,
+    policy: "allow", toolPresent: true, consentState: "allowed", consentEnrollmentGen: after.gen,
+    consentRevision: allowedAfter.revision, identityDigest: allowedAfter.identityDigest,
+    runGen: gen, descriptorInput: { permissionDigest: freshPermission },
+  }).reason, "run-generation-stale");
 });

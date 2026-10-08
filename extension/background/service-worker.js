@@ -3262,6 +3262,15 @@ async function bindSnapshotGate(canonical, pickedTabId) {
   });
 }
 
+// A Chrome grant is external to cap:enrollment's durable write and may be
+// revoked after promotion. Check it again at EACH page-effect dispatch edge;
+// the registry flip proves consistency at promotion, not perpetual permission.
+async function hasLiveSiteToolHostPermission(origin) {
+  return await chrome.permissions.contains({
+    permissions: ["scripting"], origins: [`${origin}/*`],
+  }).catch(() => false);
+}
+
 async function invokeSiteTool(
   origin,
   name,
@@ -3567,8 +3576,9 @@ async function invokeSiteToolCore(
     let currentTabOrigin = null;
     try { currentTabOrigin = currentTab?.url ? canonicalOrigin(currentTab.url) : null; } catch { currentTabOrigin = null; }
     const liveAuthority = await verifySiteToolAuthorization(authorization, currentDescriptor);
+    const hostReady = await hasLiveSiteToolHostPermission(canonical);
     if (
-      !currentDescriptor || !currentBinding || currentBinding.tabId !== tab.id ||
+      !hostReady || !currentDescriptor || !currentBinding || currentBinding.tabId !== tab.id ||
       currentBinding.documentId !== resolvedBinding.documentId || currentTabOrigin !== canonical ||
       !liveAuthority.ok
     ) {
@@ -3576,7 +3586,7 @@ async function invokeSiteToolCore(
         ok: false,
         authorityRevoked: true,
         error: `site tool authority changed before ${name} could run`,
-        reason: liveAuthority.reason ?? "authority-changed",
+        reason: !hostReady ? "host-permission-revoked" : (liveAuthority.reason ?? "authority-changed"),
       };
     }
   }
@@ -3678,8 +3688,9 @@ async function invokeSiteToolCore(
     let recoveryOrigin = null;
     try { recoveryOrigin = recoveryTab?.url ? canonicalOrigin(recoveryTab.url) : null; } catch { recoveryOrigin = null; }
     const recoveryAuthority = await verifySiteToolAuthorization(authorization, stillThere);
+    const recoveryHostReady = await hasLiveSiteToolHostPermission(canonical);
     if (
-      runAborted() || !recoveryEnrollment.enrolled || recoveryEnrollment.gen !== gen ||
+      !recoveryHostReady || runAborted() || !recoveryEnrollment.enrolled || recoveryEnrollment.gen !== gen ||
       recoveryEnrollment.policy === "deny" || !recoveryBinding ||
       recoveryBinding.tabId !== recoverTabId || recoveryBinding.documentId !== freshBinding.documentId ||
       recoveryOrigin !== canonical || !recoveryAuthority.ok
@@ -3688,7 +3699,7 @@ async function invokeSiteToolCore(
         ok: false,
         authorityRevoked: true,
         error: `site tool authority changed before ${name} recovery could run`,
-        reason: recoveryAuthority.reason ?? "authority-changed",
+        reason: !recoveryHostReady ? "host-permission-revoked" : (recoveryAuthority.reason ?? "authority-changed"),
       };
     }
     try {
