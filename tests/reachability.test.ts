@@ -138,6 +138,8 @@ Deno.test("reachability (kf3h / P2): exportedFunctions extracts callables, exclu
     export let exprFunc = function() {};
     export const nonFuncValue = 100;
     export const nonFuncObj = { foo: "bar" };
+    function localOne() {}
+    const localTwo = () => {};
     export { localOne, localTwo as renamedTwo };
   `;
   const fns = exportedFunctions(code, "test.js");
@@ -245,15 +247,102 @@ Deno.test("reachability (kf3h / P1b): aliased imports and re-export barrels", as
   );
 });
 
-Deno.test("reachability (kf3h / P1a): TypeScript files and scripts coverage", async () => {
+Deno.test("reachability (kf3h / P1a): checkScriptsExportReachability walks .ts import edges", async () => {
   const fixtureFiles: Record<string, string> = {
+    "package.json": JSON.stringify({
+      scripts: {
+        "acp:bridge": "deno run -A scripts/acp-bridge.ts",
+      },
+    }),
     "scripts/acp-bridge.ts": `
-      export function activeBridgeTask(): string { return "task"; }
+      import { liveSubHelper, isBrowserLaunchingMcpServer } from "./lib/acp-tools.ts";
+      console.log(liveSubHelper());
+    `,
+    "scripts/lib/acp-tools.ts": `
+      export function liveSubHelper(): string { return "live"; }
       export function isBrowserLaunchingMcpServer(): boolean { return false; }
     `,
-    "scripts/consumer.ts": `
-      import { activeBridgeTask } from "./acp-bridge.ts";
-      console.log(activeBridgeTask());
+  };
+
+  const fixtureIo = {
+    readFile: async (p: string) => {
+      const rel = p.replace(/^mock\//, "");
+      if (fixtureFiles[rel]) return fixtureFiles[rel];
+      throw new Error(`File not found: ${p}`);
+    },
+    readdir: async () => [],
+  };
+
+  // Run actual checkScriptsExportReachability without injecting reached
+  const report = await checkScriptsExportReachability({
+    repoRoot: "mock",
+    io: fixtureIo,
+    strictExports: true,
+  });
+
+  // liveSubHelper reached through TS walk
+  assert(
+    report.reachedExports.includes("scripts/lib/acp-tools.ts:liveSubHelper"),
+    "liveSubHelper reached through TS import walk must be marked reached",
+  );
+
+  // isBrowserLaunchingMcpServer imported but never called -> caught as unreached!
+  assert(
+    report.unreachedExports.some((e: string) => e.startsWith("scripts/lib/acp-tools.ts:isBrowserLaunchingMcpServer")),
+    "isBrowserLaunchingMcpServer must be caught by scripts TS walk as unreached (kf3h P1a)",
+  );
+});
+
+Deno.test("reachability (kf3h / P1b-new): cross-scan RETAINED_EXPORTS keys do not collide", async () => {
+  const combinedRetainedExports = {
+    "scripts/acp-tools.ts:isBrowserLaunchingMcpServer": "Roadmap adoption bead",
+    "lib/provider.js:completelyDead": "Exempted extension function with reason",
+  };
+
+  const fixtureFiles: Record<string, string> = {
+    "package.json": JSON.stringify({
+      scripts: { "tool": "deno run -A scripts/tool.ts" },
+    }),
+    "scripts/tool.ts": `
+      export function liveTool(): string { return "ok"; }
+      liveTool();
+    `,
+  };
+
+  const fixtureIo = {
+    readFile: async (p: string) => {
+      const rel = p.replace(/^mock\//, "");
+      if (fixtureFiles[rel]) return fixtureFiles[rel];
+      throw new Error(`File not found: ${p}`);
+    },
+    readdir: async () => [],
+  };
+
+  const scriptsReport = await checkScriptsExportReachability({
+    repoRoot: "mock",
+    io: fixtureIo,
+    retainedExports: combinedRetainedExports,
+    strictExports: false,
+  });
+
+  // The scripts scan must NOT flag "lib/provider.js:completelyDead" as stale!
+  assert(
+    !scriptsReport.staleRetainedExports.some((e: string) => e.includes("lib/provider.js")),
+    "scripts scan must not collide with or flag extension retained exports (P1b new)",
+  );
+});
+
+Deno.test("reachability (kf3h / P2a): re-exports of non-callable objects are not classified callable", async () => {
+  const fixtureFiles: Record<string, string> = {
+    "lib/enclave.js": `
+      export const DEFAULT_SERVICES = { timeout: 5000, secure: true };
+    `,
+    "lib/index.js": `
+      export { DEFAULT_SERVICES } from "./enclave.js";
+    `,
+    "lib/consumer.js": `
+      import { DEFAULT_SERVICES } from "./index.js";
+      console.log(DEFAULT_SERVICES.timeout);
     `,
   };
 
@@ -268,21 +357,56 @@ Deno.test("reachability (kf3h / P1a): TypeScript files and scripts coverage", as
 
   const report = await checkExportReachability({
     root: "mock",
-    reached: new Set(["scripts/acp-bridge.ts", "scripts/consumer.ts"]),
+    reached: new Set(["lib/enclave.js", "lib/index.js", "lib/consumer.js"]),
     io: fixtureIo,
     strictExports: true,
   });
 
-  // activeBridgeTask called from consumer.ts -> reached
+  // DEFAULT_SERVICES is an object, not a function; must not appear in exported function reports
   assert(
-    report.reachedExports.includes("scripts/acp-bridge.ts:activeBridgeTask"),
-    "activeBridgeTask in TS module must be marked reached",
+    !report.reachedExports.some((e: string) => e.includes("DEFAULT_SERVICES")),
+    "non-callable re-exported object must not appear in reachedExports",
   );
-
-  // isBrowserLaunchingMcpServer has zero callers -> unreached (bead motivating case!)
   assert(
-    report.unreachedExports.some((e: string) => e.startsWith("scripts/acp-bridge.ts:isBrowserLaunchingMcpServer")),
-    "isBrowserLaunchingMcpServer in scripts/acp-bridge.ts must be caught as unreached (kf3h motivating case)",
+    !report.unreachedExports.some((e: string) => e.includes("DEFAULT_SERVICES")),
+    "non-callable re-exported object must not appear in unreachedExports (P2a)",
+  );
+});
+
+Deno.test("reachability (kf3h / P2b): local-alias internal-usage clears export", async () => {
+  const fixtureFiles: Record<string, string> = {
+    "lib/aliased.js": `
+      function localWorkhorse() { return 42; }
+      export { localWorkhorse as publicWorkhorse };
+
+      // Self-used via local name in internal composition
+      const r = localWorkhorse();
+    `,
+  };
+
+  const fixtureIo = {
+    readFile: async (p: string) => {
+      const rel = p.replace(/^mock\//, "");
+      if (fixtureFiles[rel]) return fixtureFiles[rel];
+      throw new Error(`File not found: ${p}`);
+    },
+    readdir: async () => [],
+  };
+
+  const report = await checkExportReachability({
+    root: "mock",
+    reached: new Set(["lib/aliased.js"]),
+    io: fixtureIo,
+    strictExports: true,
+  });
+
+  assert(
+    report.reachedExports.includes("lib/aliased.js:publicWorkhorse"),
+    "local-alias internal-usage via localWorkhorse must clear publicWorkhorse (P2b)",
+  );
+  assert(
+    !report.unreachedExports.some((e: string) => e.includes("publicWorkhorse")),
+    "publicWorkhorse must not be reported unreached when local alias is called internally",
   );
 });
 

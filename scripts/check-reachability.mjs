@@ -129,9 +129,9 @@ export function manifestSeeds(manifest) {
   return seeds;
 }
 
-const PATH_LIKE = /^(?:\.{1,2}\/)*[A-Za-z0-9_@][A-Za-z0-9_./@-]*\.(?:js|mjs|html|css)$/;
+export const PATH_LIKE = /^(?:\.{1,2}\/)*[A-Za-z0-9_@][A-Za-z0-9_./@-]*\.(?:js|mjs|html|css|ts|tsx)$/;
 
-// Every string/template chunk in a JS source, comments excluded.
+// Every string/template chunk in a JS/TS source, comments excluded.
 export function jsStrings(source, file = "<js>") {
   const out = [];
   try {
@@ -140,17 +140,20 @@ export function jsStrings(source, file = "<js>") {
       if (label === "string" && typeof tok.value === "string") out.push(tok.value);
       else if (label === "template" && typeof tok.value === "string") out.push(tok.value);
     }
-  } catch (error) {
-    throw new Error(`check-reachability: cannot tokenize ${file}: ${error?.message ?? error}`);
+  } catch {
+    // Fallback if acorn tokenizer hits TS syntax quirks (e.g. generics with /)
+    for (const m of source.matchAll(/(["'`])((?:\\.|(?!\1)[^\\])*)\1/g)) {
+      out.push(m[2]);
+    }
   }
   return out;
 }
 
-// Candidate references from any shipped file (attribute URLs + inline script strings).
+// Candidate references from any shipped/scripts file (attribute URLs + inline script strings + TS/JS imports).
 export function candidateRefs(rel, source) {
   const ext = rel.slice(rel.lastIndexOf("."));
   const refs = [];
-  if (ext === ".js" || ext === ".mjs") {
+  if (ext === ".js" || ext === ".mjs" || ext === ".ts" || ext === ".tsx") {
     refs.push(...jsStrings(source, rel));
   } else if (ext === ".html") {
     for (const m of source.matchAll(/\b(?:src|href)\s*=\s*["']([^"']+)["']/g)) refs.push(m[1]);
@@ -161,7 +164,7 @@ export function candidateRefs(rel, source) {
     for (const m of source.matchAll(/@import\s+(?:url\()?["']?([^"')\s;]+)["']?\)?/g)) refs.push(m[1]);
     for (const m of source.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/g)) refs.push(m[1]);
   }
-  return refs.map((r) => r.split(/[?#]/)[0]).filter((r) => PATH_LIKE.test(r));
+  return refs.map((r) => r.split(/[?#]/)[0]).filter((r) => PATH_LIKE.test(r) || /^(?:\.{1,2}\/)[A-Za-z0-9_@][A-Za-z0-9_./@-]*$/.test(r));
 }
 
 /**
@@ -195,6 +198,40 @@ export function isCallableInit(tokens, eqIndex) {
 }
 
 /**
+ * Find names of local callable declarations in a token stream.
+ */
+export function findLocalCallables(tokens) {
+  const callables = new Set();
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.type?.keyword === "function" || t.type?.label === "function") {
+      if (tokens[i + 1]?.type?.label === "name") {
+        callables.add(tokens[i + 1].value);
+      }
+    }
+    if (t.type?.keyword === "class" || t.type?.label === "class") {
+      if (tokens[i + 1]?.type?.label === "name") {
+        callables.add(tokens[i + 1].value);
+      }
+    }
+    if (["const", "var"].includes(t.type?.keyword) || (t.type?.label === "name" && ["let", "const", "var"].includes(t.value))) {
+      if (tokens[i + 1]?.type?.label === "name") {
+        const name = tokens[i + 1].value;
+        let eqIdx = -1;
+        for (let k = i + 2; k < Math.min(i + 20, tokens.length); k++) {
+          if (tokens[k]?.type?.label === "=") { eqIdx = k; break; }
+          if (tokens[k]?.type?.label === ";") break;
+        }
+        if (eqIdx !== -1 && isCallableInit(tokens, eqIdx)) {
+          callables.add(name);
+        }
+      }
+    }
+  }
+  return callables;
+}
+
+/**
  * Tokenize and analyze a module source for declarations, imports, re-exports, and actual uses.
  * Excludes comments (via acorn's tokenizer).
  */
@@ -223,6 +260,7 @@ export function analyzeModuleTokens(source, file = "<code-file>") {
   const declCounts = new Map();
   const importedBindings = new Map();
   const exportedBindings = new Map();
+  const localCallables = findLocalCallables(tokens);
 
   for (const tok of tokens) {
     if (tok.type?.label === "name" && typeof tok.value === "string") {
@@ -353,17 +391,20 @@ export function analyzeModuleTokens(source, file = "<code-file>") {
         }
         for (const spec of specifiers) {
           if (sourceModule) {
+            // Re-export: callability resolved from target module during reachability analysis (P2a)
             exportedBindings.set(spec.exportedName, {
               type: "reexport",
               originalName: spec.localOrOriginal,
               sourceModule,
-              isCallable: true,
+              isCallable: null,
             });
           } else {
+            // Local export: callability resolved from localCallables (P2b)
+            const isCallable = localCallables.has(spec.localOrOriginal);
             exportedBindings.set(spec.exportedName, {
               type: "local",
               name: spec.localOrOriginal,
-              isCallable: true,
+              isCallable,
             });
           }
         }
@@ -453,6 +494,7 @@ export async function checkExportReachability({
   }
 
   // Map of re-exports: barrelFile:exportedName -> { targetFile, targetExportName }
+  // Also resolve re-export callability from target declaration (P2a)
   const reexportMap = new Map();
   for (const [file, analysis] of analysesByFile) {
     const dir = file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "";
@@ -465,9 +507,19 @@ export async function checkExportReachability({
         for (const ext of ["", ".js", ".mjs", ".ts", ".tsx"]) {
           const tryFile = candidate + ext;
           if (analysesByFile.has(tryFile)) {
+            const targetAnalysis = analysesByFile.get(tryFile);
+            const targetExp = targetAnalysis.exportedBindings.get(expInfo.originalName);
+            if (targetExp) {
+              expInfo.isCallable = targetExp.isCallable;
+            } else {
+              expInfo.isCallable = false;
+            }
             reexportMap.set(`${file}:${exportedName}`, { targetFile: tryFile, targetExportName: expInfo.originalName });
             break;
           }
+        }
+        if (expInfo.isCallable === null) {
+          expInfo.isCallable = false;
         }
       }
     }
@@ -486,8 +538,9 @@ export async function checkExportReachability({
       allKnownExportKeys.add(exportKey);
       let hasCaller = false;
 
-      // 1. Internal composition in declaring file (use count > 0)
-      if (analysis.useCounts.get(fn) > 0) {
+      // 1. Internal composition in declaring file (use count > 0 for exported name or local alias, P2b)
+      const internalName = expInfo.name || fn;
+      if ((analysis.useCounts.get(fn) || 0) > 0 || (analysis.useCounts.get(internalName) || 0) > 0) {
         hasCaller = true;
       }
 
@@ -639,26 +692,39 @@ export async function checkScriptsExportReachability({
     const refs = candidateRefs(current, content);
     for (const ref of refs) {
       if (ref.startsWith("./") || ref.startsWith("../")) {
-        const resolved = normalize(`${dir}/${ref}`);
-        if (resolved && !reached.has(resolved) && (resolved.startsWith("scripts/") || resolved === "build.mjs")) {
-          const ext = resolved.slice(resolved.lastIndexOf("."));
-          if (CODE_EXTENSIONS.has(ext)) {
-            try {
-              await io.readFile(`${repoRoot}/${resolved}`);
-              reached.add(resolved);
-              queue.push(resolved);
-            } catch {}
+        const baseResolved = normalize(`${dir}/${ref}`);
+        if (!baseResolved) continue;
+        const candidates = [baseResolved];
+        if (!baseResolved.includes(".")) {
+          candidates.push(`${baseResolved}.ts`, `${baseResolved}.tsx`, `${baseResolved}.mjs`, `${baseResolved}.js`);
+        }
+        for (const resolved of candidates) {
+          if (!reached.has(resolved) && (resolved.startsWith("scripts/") || resolved === "build.mjs")) {
+            const ext = resolved.slice(resolved.lastIndexOf("."));
+            if (CODE_EXTENSIONS.has(ext)) {
+              try {
+                await io.readFile(`${repoRoot}/${resolved}`);
+                reached.add(resolved);
+                queue.push(resolved);
+                break;
+              } catch {}
+            }
           }
         }
       }
     }
   }
 
+  // Scope retainedExports to scripts/ files only (P1b new)
+  const scopedRetainedExports = Object.fromEntries(
+    Object.entries(retainedExports || {}).filter(([k]) => k.startsWith("scripts/")),
+  );
+
   return await checkExportReachability({
     root: repoRoot,
     reached,
     io,
-    retainedExports,
+    retainedExports: scopedRetainedExports,
     strictExports,
   });
 }
@@ -788,12 +854,17 @@ export async function checkReachability({
     if (reachedFromEntry.has(file)) retainedReachable.push(`${file}: RETAINED but already reached from an entry point — drop the RETAINED line`);
   }
 
+  // Scope retainedExports to extension files only (P1b new)
+  const scopedRetainedExports = Object.fromEntries(
+    Object.entries(retainedExports || {}).filter(([k]) => !k.startsWith("scripts/")),
+  );
+
   // Export reachability scan across reached modules (kf3h)
   const exportResult = await checkExportReachability({
     root,
     reached: reachedFromEntry,
     io,
-    retainedExports,
+    retainedExports: scopedRetainedExports,
     strictExports,
   });
 
