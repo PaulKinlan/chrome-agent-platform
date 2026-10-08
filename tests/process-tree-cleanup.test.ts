@@ -15,8 +15,13 @@ import { launchChrome, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 
 const PGREP = "/usr/bin/pgrep";
 
-async function survivors(marker: string): Promise<string[]> {
-  const out = await new Deno.Command(PGREP, { args: ["-f", marker], stdout: "piped", stderr: "piped", clearEnv: true }).output();
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function survivors(marker: string, { exactBoundary = false }: { exactBoundary?: boolean } = {}): Promise<string[]> {
+  const pattern = exactBoundary ? `${escapeRegex(marker)}(/| |$)` : marker;
+  const out = await new Deno.Command(PGREP, { args: ["-f", "--", pattern], stdout: "piped", stderr: "piped", clearEnv: true }).output();
   if (out.code === 1) return [];
   if (out.code !== 0) throw new Error(`pgrep exited ${out.code}`);
   return new TextDecoder().decode(out.stdout).trim().split("\n").filter(Boolean);
@@ -345,4 +350,130 @@ Deno.test("jjsz N8: the cleanup helper never throws, runs every later step after
     }
   });
   assertStrictEquals(surfaced, own, "a failing cleanup must not replace the error that was already propagating");
+});
+
+Deno.test("cfc9c: launchChrome sets XDG_CONFIG_HOME inside profile for crashpad database isolation", async () => {
+  const root = Deno.makeTempDirSync({ prefix: "cfc9c-launch-env-" });
+  const fake = `${root}/fake-browser`;
+  const profile = `${root}/profile`;
+  const lockPath = `${root}/scope`;
+  const envFile = `${root}/env.txt`;
+  Deno.writeTextFileSync(
+    fake,
+    `#!/bin/sh
+echo "$XDG_CONFIG_HOME" > "${envFile}"
+echo 'DevTools listening on ws://127.0.0.1:31337/devtools/browser/abc' >&2
+sleep 300 & wait
+`,
+  );
+  Deno.chmodSync(fake, 0o755);
+  let launched: any;
+  try {
+    launched = await launchChrome({
+      binary: fake,
+      lockPath,
+      timeoutMs: 5000,
+      args: [`--user-data-dir=${profile}`, "about:blank"],
+      env: { XDG_CONFIG_HOME: "/some/ambient/xdg" },
+    });
+    const capturedEnv = Deno.readTextFileSync(envFile).trim();
+    assertEquals(capturedEnv, `${profile}/.config`, "XDG_CONFIG_HOME must point to .config inside profile even if caller passes ambient XDG_CONFIG_HOME");
+  } finally {
+    if (launched) {
+      await teardownChrome(launched, profile);
+    }
+    try { Deno.removeSync(root, { recursive: true }); } catch { /* ignore */ }
+  }
+});
+
+Deno.test("cfc9c: teardownChrome reaps detached crashpad handlers scoped to profile without touching neighbor profiles", async () => {
+  const baseDir = Deno.makeTempDirSync({ prefix: "cfc9c-reap-test-" });
+  const profileA = `${baseDir}/profile.a`;
+  const profileB = `${baseDir}/profile.a-neighbor`;
+  Deno.mkdirSync(profileA, { recursive: true });
+  Deno.mkdirSync(profileB, { recursive: true });
+
+  const handlerMarkerA = `chrome_crashpad_handler --database=${profileA}/.config/Crashpad`;
+  const handlerMarkerB = `chrome_crashpad_handler --database=${profileB}/.config/Crashpad`;
+  const specA = setsidSpawnSpec("/bin/bash", ["-c", `exec -a "${handlerMarkerA}" sleep 300`]);
+  const specB = setsidSpawnSpec("/bin/bash", ["-c", `exec -a "${handlerMarkerB}" sleep 300`]);
+
+  let childA: Deno.ChildProcess | null = null;
+  let childB: Deno.ChildProcess | null = null;
+  try {
+    childA = new Deno.Command(specA.command, { args: specA.args, stdout: "null", stderr: "null", clearEnv: true }).spawn();
+    childB = new Deno.Command(specB.command, { args: specB.args, stdout: "null", stderr: "null", clearEnv: true }).spawn();
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Confirm both are alive
+    assertEquals((await survivors(handlerMarkerA)).length, 1, "handler A is running");
+    assertEquals((await survivors(handlerMarkerB)).length, 1, "handler B is running");
+
+    // teardownChrome for profileA must reap handler A but leave handler B running
+    await teardownChrome(null, profileA);
+    assertEquals((await survivors(handlerMarkerA)).length, 0, "handler A reaped");
+    assertEquals((await survivors(handlerMarkerB)).length, 1, "neighbor handler B survived unharmed");
+
+    // teardownChrome for profileB
+    await teardownChrome(null, profileB);
+    assertEquals((await survivors(handlerMarkerB)).length, 0, "handler B reaped");
+  } finally {
+    for (const child of [childA, childB]) {
+      if (child) {
+        try { child.kill("SIGKILL"); } catch { /* ignore */ }
+        try { await child.status; } catch { /* ignore */ }
+      }
+    }
+    try {
+      const p = new Deno.Command("pkill", { args: ["-9", "-f", `chrome_crashpad_handler.*${baseDir}`] }).spawn();
+      await p.status;
+    } catch { /* clean */ }
+    try { Deno.removeSync(baseDir, { recursive: true }); } catch { /* ignore */ }
+  }
+});
+
+Deno.test("cfc9c: reapCrashpadHandler returns cleanly when no handler runs", async () => {
+  const { reapCrashpadHandler } = await import("../scripts/lib/chrome-launch.ts");
+  // A non-existent profile path should return cleanly (pgrep exit 1)
+  await reapCrashpadHandler("/tmp/nonexistent-profile-cfc9c-" + Date.now());
+});
+
+Deno.test("cfc9c: reapCrashpadHandler refuses malformed, empty, or root paths and does not kill neighbor handlers", async () => {
+  const { reapCrashpadHandler } = await import("../scripts/lib/chrome-launch.ts");
+  const baseDir = Deno.makeTempDirSync({ prefix: "cfc9c-malformed-guard-" });
+  const liveProfile = `${baseDir}/live-profile`;
+  Deno.mkdirSync(liveProfile, { recursive: true });
+
+  const handlerMarker = `chrome_crashpad_handler --database=${liveProfile}/.config/Crashpad`;
+  const spec = setsidSpawnSpec("/bin/bash", ["-c", `exec -a "${handlerMarker}" sleep 300`]);
+  let child: Deno.ChildProcess | null = null;
+  try {
+    child = new Deno.Command(spec.command, { args: spec.args, stdout: "null", stderr: "null", clearEnv: true }).spawn();
+    await new Promise((r) => setTimeout(r, 200));
+    assertEquals((await survivors(handlerMarker)).length, 1, "handler is running");
+
+    // All malformed/degenerate paths must safely no-op without killing the running handler
+    for (const unsafePath of ["//////", "/", "/home", "", "relative/path", "abc", "/a/.."]) {
+      await reapCrashpadHandler(unsafePath);
+      assertEquals((await survivors(handlerMarker)).length, 1, `handler survived unsafe path '${unsafePath}'`);
+    }
+
+    // Teardown with malformed path must also leave handler alive
+    await teardownChrome(null, "//////");
+    assertEquals((await survivors(handlerMarker)).length, 1, "handler survived teardownChrome with '//////'");
+
+    // Real path reaps the handler
+    await reapCrashpadHandler(liveProfile);
+    assertEquals((await survivors(handlerMarker)).length, 0, "handler reaped with valid profile path");
+  } finally {
+    if (child) {
+      try { child.kill("SIGKILL"); } catch { /* clean */ }
+      try { await child.status; } catch { /* clean */ }
+    }
+    try {
+      const p = new Deno.Command("pkill", { args: ["-9", "-f", `chrome_crashpad_handler.*${baseDir}`] }).spawn();
+      await p.status;
+    } catch { /* clean */ }
+    try { Deno.removeSync(baseDir, { recursive: true }); } catch { /* ignore */ }
+  }
 });
