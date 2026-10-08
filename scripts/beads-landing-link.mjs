@@ -8,7 +8,10 @@
 // worse: beads CLOSED whose work never landed. Ancestry proves nothing in either
 // direction (a merged re-implementation leaves the originating branch unmerged;
 // an ancestor branch can contain zero commits), so the durable link is the
-// commit-message reference itself — which every lane already writes.
+// commit-message reference itself — which every lane already writes. A MERGE
+// commit that names the bead counts too: in this repo the landing event is
+// frequently the merge itself, so the scan includes merges rather than only
+// non-merge commits (chrome-agent-platform-w44uj).
 //
 // Usage:
 //   node scripts/beads-landing-link.mjs <range>              # report
@@ -82,7 +85,7 @@ function bd(cwd, args) {
  */
 export function landingLinks({ cwd = process.cwd(), range, prefix = DEFAULT_PREFIX } = {}) {
   if (!range) throw new Error("landingLinks: a git range is required");
-  const log = git(cwd, ["log", "--no-merges", "--format=%H%x1f%s%x1f%b%x1e", range]);
+  const log = git(cwd, ["log", "--format=%H%x1f%s%x1f%b%x1e", range]);
   return groupByBead(extractBeadRefs(log, { prefix }));
 }
 
@@ -92,7 +95,7 @@ export function landingLinks({ cwd = process.cwd(), range, prefix = DEFAULT_PREF
  */
 export function verifyBeadLanded({ cwd = process.cwd(), bead, branch = "origin/main" } = {}) {
   if (!bead) throw new Error("verifyBeadLanded: a bead id is required");
-  const log = git(cwd, ["log", "--no-merges", "--format=%H%x1f%s%x1f%b%x1e", branch]);
+  const log = git(cwd, ["log", "--format=%H%x1f%s%x1f%b%x1e", branch]);
   const commits = extractBeadRefs(log).filter((ref) => ref.bead === bead);
   return { bead, branch, landed: commits.length > 0, commits };
 }
