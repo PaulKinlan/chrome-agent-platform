@@ -12,7 +12,7 @@
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { classifyReadyMarkerTimeout, runSerialFile } from "../scripts/lib/serial-phase.mjs";
+import { classifyReadyMarkerTimeout, currentLoadPerCpu, runSerialFile, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -471,10 +471,22 @@ Deno.test("passes immediately after marker", () => {});
 `);
 
   try {
+    // This positive fixture boots another Deno runtime under the 2-vCPU
+    // parallel gate. A flat 5s boot deadline produced a false 124 in the
+    // 051b972d5 gate; it is not the fail-closed missing-marker fixture below.
+    // Give the positive fixture a 15–20s soft ready bound: the 15s floor matches
+    // the delayed-ready fixture above, and serialFileTimeoutMs caps 5s x load
+    // at 20s. xy6n2 may add one measured-load grace after that soft deadline
+    // (up to 60–80s hard), but still refuses an absent marker; its fail-closed
+    // missing-marker fixtures above retain their own short bounds.
+    const bootBudgetMs = Math.max(15_000, serialFileTimeoutMs({
+      base: 5_000,
+      loadPerCpu: currentLoadPerCpu(),
+    }));
     const res = runSerialFile(tempTest, {
-      timeoutMs: 5_000,
+      timeoutMs: bootBudgetMs,
       readyFile,
-      readyTimeoutMs: 5_000,
+      readyTimeoutMs: bootBudgetMs,
       stdio: "pipe",
       cwd: ROOT,
     });
