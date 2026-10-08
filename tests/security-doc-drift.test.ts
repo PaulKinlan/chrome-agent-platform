@@ -73,6 +73,19 @@ function assertNoRetiredSourcePointer(path: string, source: string): void {
   assert(!RETIRED_SOURCE_POINTER.test(source), `${path} points at a retired tracker instead of live security authority`);
 }
 
+function assertLiveBridgePointers(bridge: string, shipped: string, generated: string): void {
+  const bridgePointer = "TRUST LIMIT (documented in THREAT_MODEL.md T11)";
+  const rendererPointer = "the structured tool-call renderer (extension/shared/tool-tree.js)";
+  assert(bridge.includes(bridgePointer) && shipped.includes(rendererPointer) && generated.includes(rendererPointer),
+    "shipped and generated comments must carry the live threat-model/tool-tree pointers");
+  assert(Deno.statSync(`${ROOT}THREAT_MODEL.md`).isFile &&
+    Deno.statSync(`${ROOT}extension/shared/tool-tree.js`).isFile,
+    "the cited live documents/source must exist");
+  assertNoRetiredSourcePointer("extension/content/bridge-auth.js", bridge);
+  assertNoRetiredSourcePointer("extension/shared/components.js", shipped);
+  assertNoRetiredSourcePointer("docs/components.js", generated);
+}
+
 function section(text: string, start: string, end: string): string {
   const from = text.indexOf(start);
   assert(from >= 0, `missing documented section: ${start}`);
@@ -131,12 +144,23 @@ Deno.test("em71i: owner Wasm README must reflect the callable catalog and worker
     Error, "catalog", "an executable-source removal must invalidate the capability claim");
 });
 
-Deno.test("xbjki: shipped extension JS cannot cite retired task trackers", () => {
+Deno.test("xbjki: shipped and generated JS cite live authority; new retired pointers fail", () => {
   for (const path of trackedExtensionJs()) assertNoRetiredSourcePointer(path, read(path));
+  const bridge = read("extension/content/bridge-auth.js");
+  const shipped = read("extension/shared/components.js");
+  const generated = read("docs/components.js");
+  assertLiveBridgePointers(bridge, shipped, generated);
   assertThrows(() => assertNoRetiredSourcePointer("extension/new-host.js", "// authority: docs/KNOWN-ISSUES.md"),
     Error, "retired tracker", "a fresh source-file citation must fail");
-  assertThrows(() => assertNoRetiredSourcePointer("extension/new-host.js", "// UI-FIXES-TRACKER item 4"),
-    Error, "retired tracker", "the second historical citation must also fail");
+  assertThrows(() => assertLiveBridgePointers(
+    bridge.replace("THREAT_MODEL.md T11", "docs/KNOWN-ISSUES.md"), shipped, generated),
+    Error, "live threat-model/tool-tree", "the original bridge citation must fail");
+  assertThrows(() => assertLiveBridgePointers(
+    bridge, shipped.replace("extension/shared/tool-tree.js", "UI-FIXES-TRACKER item 4"), generated),
+    Error, "live threat-model/tool-tree", "the original shipped renderer citation must fail");
+  assertThrows(() => assertLiveBridgePointers(
+    bridge, shipped, generated.replace("extension/shared/tool-tree.js", "UI-FIXES-TRACKER item 4")),
+    Error, "live threat-model/tool-tree", "the original generated renderer citation must fail");
 });
 
 Deno.test("5x4iw: page route and dispatcher citations resolve at current source symbols", () => {

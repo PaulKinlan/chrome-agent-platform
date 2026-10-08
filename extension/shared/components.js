@@ -5108,7 +5108,7 @@ class CodeBlock extends Component {
 }
 customElements.define("code-block", CodeBlock);
 
-/* ── the structured tool-call renderer (shared/tool-tree.js) ──────────────
+/* ── the structured tool-call renderer (extension/shared/tool-tree.js) ────
  * Recognizes structured tool inputs/results, parses safely (objects + bounded
  * JSON-string decodes — lib/tool-tree.js), and renders an accessible,
  * collapsible, bounded key/value tree. No unsafe innerHTML (the tree is built
