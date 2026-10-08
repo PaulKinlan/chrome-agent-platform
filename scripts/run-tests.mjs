@@ -30,13 +30,14 @@ import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
 import { parallelPlan } from "./lib/parallel-plan.mjs";
 import { loadWeights, parallelJobs, scheduleOrder } from "./lib/parallel-schedule.mjs";
+import { startTypeCheck } from "./lib/type-check.mjs";
 
 export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
 const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_MS ?? DEFAULT_PARALLEL_TIMEOUT_MS);
 const PARALLEL_READY_FILE = process.env.CAP_PARALLEL_READY_FILE;
 const PARALLEL_READY_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_READY_TIMEOUT_MS ?? 60_000);
 
-function runParallel(files) {
+function runParallel(files, { noCheck = false } = {}) {
   if (!files || files.length === 0) return Promise.resolve(0);
   // Concurrent scheduling cannot identify the stalled file. Announce every
   // candidate BEFORE spawn so even a mid-phase kill leaves names on both streams.
@@ -48,7 +49,7 @@ function runParallel(files) {
   console.log(`run-tests: parallel phase runs ${files.length} file(s) on ${jobs} deno worker(s), longest-first (CAP_TEST_JOBS overrides)`);
   const t0 = Date.now();
   return new Promise((resolve) => {
-    const child = spawn("deno", ["test", "-A", "--config", "deno.runner.jsonc", "--parallel", ...ordered], {
+    const child = spawn("deno", ["test", "-A", ...(noCheck ? ["--no-check"] : []), "--config", "deno.runner.jsonc", "--parallel", ...ordered], {
       stdio: "inherit",
       env: { ...process.env, CAP_TEST_RUNNER: "1", DENO_JOBS: String(jobs) },
       detached: true,
@@ -199,11 +200,29 @@ export async function main(args = process.argv.slice(2)) {
   // guards green, because they never ran. The plan is pure and lives in scripts/lib/parallel-plan.mjs;
   // here we only print what it decides and let the serial failure still decide the exit code.
   const t0 = Date.now();
-  const serialRc = serialFiles.length ? runSerialFiles(serialFiles) : 0;
+  // gate-speed: ONE type check of every file this run executes, beside the serial phase (see
+  // scripts/lib/type-check.mjs). Files run with --no-check only under a GREEN check; a red check
+  // fails the run and the parallel phase falls back to checking itself, exactly as before.
+  const checked = [...serialFiles, ...parallel];
+  const typeCheck = startTypeCheck(checked);
+  const killCheck = () => { try { typeCheck.child?.kill("SIGKILL"); } catch { /* gone */ } };
+  process.on("exit", killCheck);
+  console.log(`run-tests: type-checking ${checked.length} file(s) up front, beside the serial phase (log: ${typeCheck.log})`);
+  const serialRc = serialFiles.length ? runSerialFiles(serialFiles, { noCheck: true }) : 0;
+  const check = await typeCheck.done;
+  process.removeListener("exit", killCheck);
+  const checkRc = check.code === 0 ? 0 : (check.code || 1);
+  if (checkRc === 0) {
+    console.log(`run-tests: type check GREEN (${checked.length} file(s)) in ${check.secs.toFixed(0)}s`);
+  } else {
+    announce(`\nrun-tests: TYPE CHECK FAILED (exit ${check.code}) for this run's ${checked.length} file(s) — log: ${typeCheck.log}`);
+    if (check.output.trim()) console.error(check.output.replace(/\n$/, ""));
+    announce("run-tests: the serial phase ran unchecked; the parallel phase runs WITH its own check, and the run FAILS.");
+  }
   const plan = parallelPlan({ serialRc, parallel, alwaysOn: ALWAYS_ON });
   if (plan.announce) console.error(`\n${plan.announce}`);
-  const parallelRc = await runParallel(plan.files);
-  const rc = serialRc === 0 ? parallelRc : serialRc;
+  const parallelRc = await runParallel(plan.files, { noCheck: checkRc === 0 });
+  const rc = serialRc !== 0 ? serialRc : checkRc !== 0 ? checkRc : parallelRc;
   const deferredCount = cliFiles.length === 0 ? all.length - (serialFiles.length + parallel.length) : 0;
   console.log(
     `run-tests: ${serialFiles.length + parallel.length} files total, ${plan.skipped} skipped` +

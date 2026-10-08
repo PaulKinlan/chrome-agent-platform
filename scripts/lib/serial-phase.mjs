@@ -89,7 +89,9 @@ export function defaultSerialTimeoutMs(env = process.env) {
 
 /**
  * @param {string} file
- * @param {{ timeoutMs?: number, readyFile?: string, readyTimeoutMs?: number, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
+ * @param {{ timeoutMs?: number, readyFile?: string, readyTimeoutMs?: number, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv, noCheck?: boolean }} [options]
+ *   noCheck — gate-speed: pass --no-check because the CALLER already type-checked this file in a
+ *   green up-front `deno check` (scripts/lib/type-check.mjs). Never set it otherwise.
  * @returns {{ code: number, timedOut: boolean, error?: Error, stdout?: Buffer|null, stderr?: Buffer|null }}
  */
 export function runSerialFile(file, {
@@ -99,6 +101,7 @@ export function runSerialFile(file, {
   stdio = "inherit",
   cwd = undefined,
   env = process.env,
+  noCheck = false,
 } = {}) {
   const targetReadyFile = readyFile ?? env?.CAP_SERIAL_READY_FILE;
   if (targetReadyFile) {
@@ -117,7 +120,7 @@ export function runSerialFile(file, {
     return { code: r.status ?? 1, timedOut: false, error: r.error, stdout: r.stdout, stderr: r.stderr };
   }
 
-  const r = spawnSync("deno", ["test", "-A", "--config", "deno.runner.jsonc", file], {
+  const r = spawnSync("deno", ["test", "-A", ...(noCheck ? ["--no-check"] : []), "--config", "deno.runner.jsonc", file], {
     stdio,
     cwd,
     env: { ...env, CAP_TEST_RUNNER: "1" },
@@ -197,7 +200,7 @@ let SERIAL_RUN_SEQ = 0;
 
 /**
  * @param {string[]} files
- * @param {{ timeoutMs?: number, perFileTimeoutMs?: Record<string, number> | null, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
+ * @param {{ timeoutMs?: number, perFileTimeoutMs?: Record<string, number> | null, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv, noCheck?: boolean }} [options]
  * @returns {number}
  *
  * chrome-agent-platform-dsoq: this used to print only a COUNT — "serial phase (19 build/artifact
@@ -221,6 +224,7 @@ export function runSerialFiles(files, {
   stdio = "pipe",
   cwd = undefined,
   env = process.env,
+  noCheck = false,
 } = {}) {
   const t0 = Date.now();
   /** @type {{ file: string, code: number, timedOut: boolean, secs: string, log: string|null }[]} */
@@ -243,7 +247,7 @@ export function runSerialFiles(files, {
     // a reader never has to guess which bound a file ran under.
     const fileTimeoutMs = perFileTimeoutMs?.[file] ?? timeoutMs;
     console.log(`run-tests: serial file ${file}${fileTimeoutMs !== timeoutMs ? ` (per-file bound ${fileTimeoutMs / 1000}s)` : ""}`);
-    const result = runSerialFile(file, { timeoutMs: fileTimeoutMs, stdio, cwd, env });
+    const result = runSerialFile(file, { timeoutMs: fileTimeoutMs, stdio, cwd, env, noCheck });
     const secs = ((Date.now() - started) / 1000).toFixed(1);
     // (1) chrome-agent-platform-grj9: an OS-level spawnSync failure (ENOENT when the runtime is
     // missing, EACCES, ENOBUFS when maxBuffer is exceeded) carries NO stdout and NO stderr — the
