@@ -25,11 +25,10 @@ const RUN_ID = `cap-${Date.now()}`;
  *  a literal home path, which names exactly one machine's layout and dies on every
  *  other checkout (chrome-agent-platform-3khn, the machine-path rule). A missing or
  *  relative HOME is a broken environment: fail loudly, never guess. */
-function homeCacheProfile(name: string): string {
+function homeCacheProfile(name) {
   const home = Deno.env.get("HOME");
   if (!home || !home.startsWith("/")) {
-    console.log(`FAIL: HOME must be an absolute path to build the journey profile root — got ${JSON.stringify(home)}`);
-    Deno.exit(1);
+    throw new Error(`HOME must be an absolute path to build the journey profile root — got ${JSON.stringify(home)}`);
   }
   return `${home}/.cache/cap-review/${name}`;
 }
@@ -1341,7 +1340,7 @@ async function writeEvidence(name, bytes) {
 }
 
 async function main() {
-  const profile = homeCacheProfile(`j2-${Date.now()}`);
+  let profile: string | null = null;
   let proc: Deno.ChildProcess | null = null;
   let port;
   let ws;
@@ -1353,6 +1352,7 @@ async function main() {
   let fixtureShutdownFailed = false;
 
   try {
+    profile = homeCacheProfile(`j2-${Date.now()}`);
     await Deno.mkdir(EVIDENCE_DIR, { recursive: true }).catch(() => {});
 
     // A local HTTP fixture server (red page + wrong-origin page) for a REAL
@@ -9001,12 +9001,16 @@ async function main() {
     let removed = false;
     let clean = true;
     try {
-      if (proc) await teardownJourneyChrome(proc, profile);
-      else await runBounded(RM, ["-rf", profile]);
-      removed = !(await Deno.stat(profile).then(() => true).catch(() => false));
-      if (removed) {
-        await sleep(800);
+      if (proc && profile) await teardownJourneyChrome(proc, profile);
+      else if (profile) await runBounded(RM, ["-rf", profile]);
+      if (profile) {
         removed = !(await Deno.stat(profile).then(() => true).catch(() => false));
+        if (removed) {
+          await sleep(800);
+          removed = !(await Deno.stat(profile).then(() => true).catch(() => false));
+        }
+      } else {
+        removed = true;
       }
     } catch (e) {
       clean = false;

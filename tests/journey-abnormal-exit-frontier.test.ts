@@ -290,3 +290,41 @@ Deno.test("9ud9e: startup failures before any checks execute report EXPECTED[0] 
   assert(logText.includes(`unreached checks:      ${EXPECTED.length} downstream checks were NOT REACHED`));
   assert(logText.includes("Deno.serve failed: address already in use"));
 });
+
+Deno.test("9ud9e: homeCacheProfile throws error on missing or relative HOME to allow guarded diagnosis", () => {
+  const homeCacheMatch = source.match(/function homeCacheProfile\([\s\S]*?\n\}/);
+  assert(homeCacheMatch, "homeCacheProfile must be found");
+
+  const fn = new Function(
+    "Deno",
+    `${homeCacheMatch[0]}
+     return homeCacheProfile;`,
+  );
+
+  // Missing HOME
+  const fakeDenoMissing = { env: { get: () => undefined } };
+  let threw = false;
+  try {
+    fn(fakeDenoMissing)("test");
+  } catch (err: any) {
+    threw = true;
+    assert(err.message.includes("HOME must be an absolute path"));
+  }
+  assertEquals(threw, true, "must throw on missing HOME");
+
+  // Relative HOME
+  const fakeDenoRelative = { env: { get: () => "relative/path" } };
+  threw = false;
+  try {
+    fn(fakeDenoRelative)("test");
+  } catch (err: any) {
+    threw = true;
+    assert(err.message.includes("HOME must be an absolute path"));
+  }
+  assertEquals(threw, true, "must throw on relative HOME");
+
+  // Valid HOME
+  const fakeDenoValid = { env: { get: () => "/home/user" } };
+  const profile = fn(fakeDenoValid)("test-profile");
+  assertEquals(profile, "/home/user/.cache/cap-review/test-profile");
+});
