@@ -159,6 +159,9 @@ export const EXEMPTIONS = {
   // here until o4m2 stripped comments before scanning; with comment prose no longer classified as
   // a hazard, both files classify with NO hazard classes and their dead exemptions were retired.)
   "tests/changelog-shipping.test.ts": "reads ../build.mjs as TEXT to check what the changelog ships; never loads or runs it",
+  // bbz3s: the driver mention is a textual call-order assertion, like changelog-shipping;
+  // the resolver itself reads only per-case durable scratch stores/locks.
+  "tests/security-dependency-resolution.test.ts": "reads build.mjs only as TEXT for pre-bundle call order and tests the imported pure resolver against isolated durable scratch stores; never loads/spawns a build or writes shared node_modules/dist",
   "tests/file-url-root-guard.test.ts": "lists ROOT/build.mjs as a path to scan and pins the generator path as a STRING; no import, require or execution",
   "tests/package-scripts-exist.test.ts": "asserts a package.json script REFERENCE to build.mjs resolves; it never imports the generator",
   "tests/risk-register-contract.test.ts": "asserts the risk register CITES build.mjs for the bundle budget; documentation text only",

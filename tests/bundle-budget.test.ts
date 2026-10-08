@@ -878,7 +878,7 @@ Deno.test("9epn.5 self-contained single bundles: zero runtime relative imports t
   }
 });
 
-Deno.test("bd06: build.mjs auto-materializes node_modules/.deno via deno install before resolving canonical dependencies", async () => {
+Deno.test("bd06: build.mjs auto-materializes .deno with a frozen lock before resolving canonical dependencies", async () => {
   const source = await Deno.readTextFile("extension/../build.mjs");
 
   // 1. Order pin: checking/materializing denoStoreDir MUST happen BEFORE
@@ -886,7 +886,7 @@ Deno.test("bd06: build.mjs auto-materializes node_modules/.deno via deno install
   // If npm ci/install wiped node_modules/.deno, resolving before deno install
   // would resolve CANON_* to flat node_modules/ instead of node_modules/.deno/,
   // or readdirSync(denoStoreDir) would throw raw ENOENT.
-  const denoInstallCheck = source.indexOf('execFileSync("deno", ["install"]');
+  const denoInstallCheck = source.indexOf('execFileSync("deno", ["install", "--frozen-lockfile"]');
   const requireFromRootPos = source.indexOf('createRequire(path.join(ROOT, "package.json"))');
   const canonAnthropicPos = source.indexOf('CANON_ANTHROPIC = resolveCanonical("@ai-sdk/anthropic"');
   const canonZodDirPos = source.indexOf('CANON_ZOD_DIR = realpathSync(path.join(ROOT, "node_modules", "zod"))');
@@ -937,7 +937,7 @@ Deno.test("bd06: build.mjs auto-materializes node_modules/.deno via deno install
         entries = fakeReaddir(store);
       } catch (err: any) {
         throw new Error(
-          `cap-deno-store-resolve: ${store} is missing or incomplete and automatic \`deno install\` failed (${err?.message || err}) — run \`deno install\` and retry.`,
+          `cap-deno-store-resolve: ${store} is missing or incomplete and automatic \`deno install --frozen-lockfile\` failed (${err?.message || err}) — run \`deno install --frozen-lockfile\` and retry.`,
         );
       }
     }
@@ -957,7 +957,7 @@ Deno.test("bd06: build.mjs auto-materializes node_modules/.deno via deno install
     )
   );
   assertStringIncludes(err.message, "cap-deno-store-resolve:");
-  assertStringIncludes(err.message, "automatic `deno install` failed");
+  assertStringIncludes(err.message, "automatic `deno install --frozen-lockfile` failed");
 });
 
 
