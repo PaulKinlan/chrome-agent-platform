@@ -129,12 +129,15 @@ Deno.test("lazyauth: a DISENROLLED origin fails closed (reason: not-enrolled)", 
   assertEquals(denied.reason, "not-enrolled");
 });
 
-Deno.test("lazyauth: a mid-run re-enrollment (gen bump) fails the STALE run closed (run-generation-stale)", async () => {
+Deno.test("lazyauth: a mid-run revoke then re-enrollment fails the STALE run closed (run-generation-stale)", async () => {
   const origin = "https://lazyauth-c.example.com";
   await enrollOrigin(origin);
   await replaceTools(origin, [TOOL]);
   const runGen = (await enrollmentSnapshot(origin)).gen;
-  // Re-enroll MID-RUN: the enrollment generation bumps; the run's captured gen is stale.
+  // A duplicate enroll is intentionally idempotent. A REAL revocation must
+  // tombstone and bump the generation before a new enrollment can stale the
+  // run's immutable generation.
+  await disenrollOrigin(origin);
   await enrollOrigin(origin);
   await setToolConsentDecision(origin, TOOL.name, "allowed");
   const { exec, denials, dispatched } = await drive(origin, { get: () => runGen });

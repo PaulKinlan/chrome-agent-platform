@@ -18,7 +18,9 @@ import {
   invalidateSiteToolConsentWriters,
   SITE_TOOL_CONSENT_KEY,
   siteToolIdentity,
+  promoteEphemeralSiteToolConsents,
 } from "../extension/lib/site-tool-consent.js";
+import { createEphemeralSiteToolConsentStore } from "../extension/lib/ephemeral-site-tool-consent.js";
 
 function dirNode() { return { kind: "directory", children: new Map() }; }
 function fileNode(content) { return { kind: "file", content }; }
@@ -233,6 +235,46 @@ Deno.test("first-use consent: a cancelled run guard blocks its late durable Allo
     "site_tool_consent_run_cancelled",
   );
   assertEquals((await toolConsentSnapshot(origin, BOOK.name)).state, "ask");
+});
+
+Deno.test("attached Q23: explicit enrollment atomically migrates Allow AND sticky Deny without a pre-enrollment site store", async () => {
+  const origin = "https://attached-promotion.example.com";
+  const store = createEphemeralSiteToolConsentStore();
+  const token = store.begin({ origin, tabId: 71, documentId: "doc-promotion", runId: "run-promotion", threadId: "thread-promotion" });
+  const denyTool = { ...BOOK, name: "cancel_reservation" };
+  store.decide(token, BOOK, "allowed");
+  store.decide(token, denyTool, "denied");
+  const { listOrigins } = await import("../extension/lib/memory.js");
+  assertEquals((await listOrigins()).includes(origin), false, "unenrolled decisions did not create a Site Agent store");
+  await enrollOrigin(origin); // only the owner's explicit enrollment path may promote
+  await replaceTools(origin, [BOOK, denyTool]);
+  const gen = (await toolConsentSnapshot(origin, BOOK.name)).enrollmentGen;
+  await store.withPromotionForOrigin(origin, (records, isCurrent) =>
+    promoteEphemeralSiteToolConsents(origin, gen, records, { commitGuard: isCurrent }));
+  assertEquals((await toolConsentSnapshot(origin, BOOK.name)).state, "allowed");
+  await replaceTools(origin, [BOOK, { ...denyTool, inputSchema: { type: "string" } }]);
+  assertEquals((await toolConsentSnapshot(origin, denyTool.name)).state, "denied", "Deny survives descriptor drift");
+  assertThrows(() => store.snapshot(token, BOOK), Error, "ephemeral_site_tool_run_not_live");
+});
+
+Deno.test("attached Q23: migration failure leaves no partial Allow or Deny, and the live run can retry", async () => {
+  const origin = "https://attached-promotion-retry.example.com";
+  const store = createEphemeralSiteToolConsentStore();
+  const token = store.begin({ origin, tabId: 72, documentId: "doc-retry", runId: "run-retry" });
+  store.decide(token, BOOK, "allowed");
+  store.decide(token, { ...BOOK, name: "cancel_reservation" }, "denied");
+  await enrollOrigin(origin);
+  await replaceTools(origin, [BOOK, { ...BOOK, name: "cancel_reservation" }]);
+  const gen = (await toolConsentSnapshot(origin, BOOK.name)).enrollmentGen;
+  await assertRejects(() => store.withPromotionForOrigin(origin, (records) =>
+    promoteEphemeralSiteToolConsents(origin, gen, records, { commitGuard: () => false })), Error);
+  assertEquals((await toolConsentSnapshot(origin, BOOK.name)).state, "ask");
+  assertEquals((await toolConsentSnapshot(origin, "cancel_reservation")).state, "ask");
+  assertEquals(store.snapshot(token, BOOK).state, "allowed");
+  await store.withPromotionForOrigin(origin, (records, isCurrent) =>
+    promoteEphemeralSiteToolConsents(origin, gen, records, { commitGuard: isCurrent }));
+  assertEquals((await toolConsentSnapshot(origin, BOOK.name)).state, "allowed");
+  assertEquals((await toolConsentSnapshot(origin, "cancel_reservation")).state, "denied");
 });
 
 Deno.test("first-use consent: descriptor identity rejects hostile outer shapes without invoking accessors", () => {

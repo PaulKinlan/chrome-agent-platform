@@ -369,6 +369,180 @@ export async function withSiteToolConsentBarrier(operation) {
   return await withConsentLock(operation);
 }
 
+/** Validate/copy the complete Allow+Deny proposal BEFORE it is placed in the
+ * durable, non-authorizing enrollment-pending registry entry. On recovery this
+ * same validator rejects tampered or partial pending state before any flip.
+ */
+export function validateSiteToolPromotionRecords(records) {
+  const proposed = strictArrayValues(records, MAX_TOOLS, "site_tool_consent_promotion_invalid");
+  const names = new Set();
+  return proposed.map((record) => {
+    const fields = strictDataObject(record,
+      ["name", "source", "identityDigest", "state"], "site_tool_consent_promotion_invalid");
+    const name = fields.name.value;
+    const source = fields.source.value;
+    const identityDigest = fields.identityDigest.value;
+    const state = fields.state.value;
+    if (typeof name !== "string" || !name || name.length > MAX_TOOL_NAME || names.has(name) ||
+      source !== "declared" || typeof identityDigest !== "string" ||
+      !/^[0-9a-f]{64}$/.test(identityDigest) || (state !== "allowed" && state !== "denied")) {
+      fail("site_tool_consent_promotion_invalid");
+    }
+    names.add(name);
+    return Object.freeze({ name, source, identityDigest, state });
+  });
+}
+
+/** Copy all live run-scoped Allow AND Deny decisions into ONE enrolled envelope.
+ * Call only from the owner's explicit enrollment route after enrollment; this
+ * function intentionally does not create a per-origin store on its own for an
+ * unenrolled page. The caller must hold the enrollment lock, validate the new
+ * generation, and pass a synchronous guard for reset/run invalidation.
+ */
+export async function promoteEphemeralSiteToolConsents(origin, enrollmentGen, records, {
+  expectedProfileEpoch = null,
+  commitGuard = null,
+  consentLockHeld = false,
+  recoverPending = false,
+  now = Date.now(),
+} = {}) {
+  const canonical = typeof origin === "string" ? canonicalOrigin(origin) : null;
+  if (!canonical || !Number.isSafeInteger(enrollmentGen) || enrollmentGen < 1 ||
+    (commitGuard !== null && typeof commitGuard !== "function")) fail("site_tool_consent_promotion_invalid");
+  const validated = validateSiteToolPromotionRecords(records);
+  const write = async () => {
+    if (expectedProfileEpoch !== null && expectedProfileEpoch !== consentProfileEpoch) {
+      fail("site_tool_consent_profile_changed");
+    }
+    if (commitGuard && commitGuard() !== true) fail("site_tool_consent_run_cancelled");
+    let envelope;
+    try { envelope = await readEnvelope(canonical, enrollmentGen); }
+    catch (error) {
+      // ONLY the registry-backed owner promotion may recover a corrupt/empty
+      // file created by its own failed first write. Its durable pending row
+      // already contains every surviving old-generation Deny, folded while
+      // enrollment→consent were held. A corrupt OLD file could not pass that
+      // stage. Ordinary enrolled Q23 reads/writes remain strict.
+      if (!recoverPending || !consentLockHeld) throw error;
+      envelope = blankEnvelope(enrollmentGen);
+    }
+    if (!validated.length) {
+      // A no-candidate owner enrollment uses the SAME write-before-flip gate:
+      // durable read-back must see a real envelope, not the implicit ASK blank.
+      if (expectedProfileEpoch !== null && expectedProfileEpoch !== consentProfileEpoch) fail("site_tool_consent_profile_changed");
+      if (commitGuard && commitGuard() !== true) fail("site_tool_consent_run_cancelled");
+      await siteMemory(canonical).setTrusted(SITE_TOOL_CONSENT_KEY, envelope);
+      return Object.freeze({ origin: canonical, enrollmentGen, revision: envelope.revision, migrated: 0 });
+    }
+    const revision = envelope.revision + 1;
+    if (!Number.isSafeInteger(revision)) fail("site_tool_consent_revision");
+    const merged = new Map(envelope.records.map((record) => [record.name, record]));
+    let migrated = 0;
+    for (const proposal of validated) {
+      const prior = merged.get(proposal.name);
+      // A persisted Deny always wins. A run-local Deny may revoke a persisted
+      // Allow, but a run-local Allow cannot displace an already durable choice.
+      if (prior?.state === "denied" || (prior && proposal.state === "allowed")) continue;
+      merged.set(proposal.name, {
+        ...proposal,
+        revision,
+        decidedAt: Number.isSafeInteger(now) && now >= 0 ? now : Date.now(),
+      });
+      migrated++;
+    }
+    if (merged.size > MAX_TOOLS) fail("site_tool_consent_capacity");
+    if (expectedProfileEpoch !== null && expectedProfileEpoch !== consentProfileEpoch) {
+      fail("site_tool_consent_profile_changed");
+    }
+    if (commitGuard && commitGuard() !== true) fail("site_tool_consent_run_cancelled");
+    // One trusted OPFS write, never a per-tool loop: failure cannot persist
+    // Allow while silently dropping a Deny (or vice versa).
+    await siteMemory(canonical).setTrusted(SITE_TOOL_CONSENT_KEY, {
+      version: SITE_TOOL_CONSENT_VERSION,
+      enrollmentGen,
+      revision,
+      records: [...merged.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    });
+    return Object.freeze({ origin: canonical, enrollmentGen, revision, migrated });
+  };
+  // A trusted enrollment transaction holds enrollment→consent across the
+  // verification AND authority flip. Standalone callers still acquire it here.
+  return consentLockHeld ? await write() : await withConsentLock(write);
+}
+
+/** Read a surviving old-generation envelope while enrollment→consent are
+ * held. A scripting Disable tombstones the registry but deliberately leaves
+ * site memory, including sticky Deny, behind. Deny is name-bound irrespective
+ * of descriptor source/digest; normalize its source to `declared` ONLY as an
+ * inert denial proposal for the owner promotion. It cannot create a tool or
+ * grant Allow. Old Allow is intentionally re-asked after Disable/re-enroll.
+ */
+export async function storedSiteToolDenyProposals(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) fail("site_tool_consent_origin");
+  const raw = await siteMemory(canonical).getStrict(SITE_TOOL_CONSENT_KEY);
+  if (raw === null) return Object.freeze([]);
+  if (!Number.isSafeInteger(raw.enrollmentGen) || raw.enrollmentGen < 1) fail("site_tool_consent_corrupt");
+  const envelope = validateEnvelope(raw, raw.enrollmentGen);
+  return Object.freeze(envelope.records.filter((r) => r.state === "denied").map((r) =>
+    Object.freeze({ name: r.name, source: "declared", identityDigest: r.identityDigest, state: "denied" })));
+}
+
+/** Snapshot the WHOLE current envelope while enrollment→consent are held.
+ * Policy flips carry sticky Deny only; old Allow is re-asked under the new
+ * generation, not interpreted as an automatic grant after a policy change.
+ */
+export async function snapshotSiteToolConsentForPolicy(origin, enrollmentGen) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical || !Number.isSafeInteger(enrollmentGen) || enrollmentGen < 1) fail("site_tool_consent_generation");
+  const raw = await siteMemory(canonical).getStrict(SITE_TOOL_CONSENT_KEY);
+  if (raw !== null && raw.enrollmentGen !== enrollmentGen) fail("site_tool_consent_generation_mismatch");
+  return validateEnvelope(raw, enrollmentGen);
+}
+
+/** Called ONLY while the durable policy-pending registry entry is inert and
+ * enrollment→consent are held. Rebuild the one generation-bound file entirely
+ * from the registry's captured copy; a partial prior write is never authority.
+ */
+export async function writeAndVerifyPolicyConsent(origin, enrollmentGen, captured) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical || !Number.isSafeInteger(enrollmentGen) || enrollmentGen < 1) fail("site_tool_consent_generation");
+  const raw = { version: SITE_TOOL_CONSENT_VERSION, enrollmentGen,
+    revision: captured?.revision, records: captured?.records };
+  const envelope = validateEnvelope(raw, enrollmentGen);
+  await siteMemory(canonical).setTrusted(SITE_TOOL_CONSENT_KEY, envelope);
+  const persisted = await siteMemory(canonical).getStrict(SITE_TOOL_CONSENT_KEY);
+  if (!persisted || persisted.enrollmentGen !== enrollmentGen) fail("site_tool_consent_policy_unverified");
+  const verified = validateEnvelope(persisted, enrollmentGen);
+  if (verified.revision !== envelope.revision ||
+    JSON.stringify(verified.records) !== JSON.stringify(envelope.records)) fail("site_tool_consent_policy_unverified");
+  return Object.freeze({ origin: canonical, enrollmentGen, revision: verified.revision });
+}
+
+/** Strict durable read-back before the registry's SOLE enrolled:true flip.
+ * Even an empty proposal requires a real same-generation envelope; the normal
+ * readEnvelope helper intentionally treats missing/old generations as blank
+ * for first-use ASK, which would be unsafe as proof of a promotion commit.
+ */
+export async function verifyPromotedSiteToolConsents(origin, enrollmentGen, records) {
+  const canonical = typeof origin === "string" ? canonicalOrigin(origin) : null;
+  const proposed = validateSiteToolPromotionRecords(records);
+  if (!canonical || !Number.isSafeInteger(enrollmentGen) || enrollmentGen < 1) fail("site_tool_consent_promotion_invalid");
+  const raw = await siteMemory(canonical).getStrict(SITE_TOOL_CONSENT_KEY);
+  if (!raw || raw.enrollmentGen !== enrollmentGen) fail("site_tool_consent_promotion_unverified");
+  const envelope = validateEnvelope(raw, enrollmentGen);
+  const stored = new Map(envelope.records.map((record) => [record.name, record]));
+  for (const proposal of proposed) {
+    const current = stored.get(proposal.name);
+    if (!current || (proposal.state === "denied" && current.state !== "denied") ||
+      (proposal.state === "allowed" && current.state !== "denied" &&
+        (current.state !== "allowed" || current.identityDigest !== proposal.identityDigest))) {
+      fail("site_tool_consent_promotion_unverified");
+    }
+  }
+  return Object.freeze({ origin: canonical, enrollmentGen, revision: envelope.revision, verified: proposed.length });
+}
+
 export async function listSiteToolConsentStates(origin, tools, enrollmentGen) {
   const canonical = typeof origin === "string" ? canonicalOrigin(origin) : null;
   if (!canonical || !Array.isArray(tools)) return [];

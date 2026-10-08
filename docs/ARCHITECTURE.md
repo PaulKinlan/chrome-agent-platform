@@ -392,6 +392,20 @@ use (owner decision Q23, 2026-09-05; `docs/OPEN-QUESTIONS.md` Q23).
 `tool-consent-denied`, `tool-consent-required`, and `tool-consent-generation-stale`.
 Allow persists for the browser profile; Deny is sticky until reset in Settings.
 
+### 4.4a Owner enrollment promotion (3p3e.3 D2 preparatory slice)
+An explicit owner Add as Site Agent gesture stages a durable, **non-authorizing**
+registry row containing a same-generation Allow/Deny decision copy. The consent
+envelope must be written and strictly read back, with live Chrome scripting and
+host permission plus both registered content-script IDs confirmed, before the
+single durable clear of `promotionPending` makes the origin enrolled. Boot retry
+uses only this durable pending row; pending/abandoned rows are invisible to all
+enrollment authority readers. Policy changes bump the generation, keep Deny,
+and re-ask Allow. A surviving old-generation Deny also migrates on owner
+re-enrollment; legacy model create cannot erase it. Already-enrolled page-effect
+sends recheck the live Chrome grant. **No /tabs permission prompt, attached
+run/document binding, model descriptor disclosure or unenrolled invocation is
+part of this D2 landing**; those remain in chrome-agent-platform-ckebt.
+
 ### 4.5 Fallback paths
 Pages without WebMCP: the six page-action tools (`find_elements`,
 `click_element`, `type_text`, `select_option`, `scroll_page`, `wait_for` —
