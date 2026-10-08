@@ -490,10 +490,10 @@ export function stripComments(text) {
   return stripCodeRange(text, 0, false).out;
 }
 
-const SPAWN_RE = /Deno\.Command\s*\(|spawnSync\s*\(|execFileSync\s*\(|execSync\s*\(|\.spawn\s*\(|\bspawn\s*\(/;
+const SPAWN_CALL_RE = /(?:Deno\.Command|spawnSync|execFileSync|execSync|\.spawn|\bspawn)\s*\(/g;
 const BUILD_REF_RE = /build\.mjs|build-bundled-tool-packages/;
 // 4lc0 + o4m2: a test that IMPORTS or SPAWNS a build module runs it — module side effects are the
-// same hazard as spawning it, and the SPAWN_RE rule above cannot see an import/re-export/require
+// same hazard as spawning it, and the SPAWN_CALL_RE rule above cannot see an import/re-export/require
 // (including a no-substitution template specifier `import(`../scripts/build-bundled-tool-packages.mjs`)`).
 // Rather than modelling every JS import syntax, any CODE reference to `build.mjs` or
 // `build-bundled-tool-packages` (after stripping comments via `stripComments(text)`) is flagged and
@@ -505,6 +505,18 @@ const WRITE_CALL_RE = /(?:writeTextFile|writeFileSync|writeFile|mkdirSync|mkdir|
 const TREE_LITERAL_RE = /["'`][^"'`\n]*(?:extension|packages)\/[^"'`\n]*["'`]/;
 const READ_RE = /readTextFile|readFile|readFileSync|readDir|readdir|import\s*\(|\bfrom\s*["']/i;
 const DIST_LITERAL_RE = /extension\/dist/;
+
+// Spawn hazard = a process spawn call whose invocation arguments target
+// build.mjs or the bundled-tool generator. Looking within 400 characters following
+// the spawn invocation matches the spawn's arguments while ensuring unrelated
+// spawns in a file that merely reads build.mjs source are not falsely classified.
+function spawnsBuild(text) {
+  for (const m of text.matchAll(SPAWN_CALL_RE)) {
+    const after = text.slice(m.index, m.index + 400);
+    if (BUILD_REF_RE.test(after)) return true;
+  }
+  return false;
+}
 
 // Write hazard = a write/remove call with a tree literal NEAR the call site
 // (same statement or the assignment feeding it). A file that merely mentions
@@ -526,7 +538,7 @@ function writesTree(text) {
 export function classifyHazards(text) {
   const code = stripComments(text);
   const classes = [];
-  if (SPAWN_RE.test(code) && BUILD_REF_RE.test(code)) classes.push("spawns build.mjs or the bundled-tool generator");
+  if (spawnsBuild(code)) classes.push("spawns build.mjs or the bundled-tool generator");
   if (GENERATOR_NAME_RE.test(code)) classes.push("names build.mjs or the bundled-tool generator (a load hazard whatever the syntax)");
   if (writesTree(code)) classes.push("writes under extension/ or packages/");
   if (READ_RE.test(code) && DIST_LITERAL_RE.test(code)) classes.push("reads extension/dist");
@@ -547,10 +559,16 @@ export function unserialisedHazards(entries) {
     const classes = classifyHazards(text);
     if (!classes.length) continue; // safe → defaults to the parallel phase
     if (SERIAL.has(rel)) continue;
-    // A reviewed read-only exemption must never silently become a tree writer.
-    if (READ_ONLY_DIST.has(rel) && classes.includes("writes under extension/ or packages/")) {
-      violations.push(`${rel} — new write hazard in the read-only post-build batch`);
-      continue;
+    // A reviewed read-only exemption must never silently become a tree writer or spawn a build.
+    if (READ_ONLY_DIST.has(rel)) {
+      if (classes.includes("writes under extension/ or packages/")) {
+        violations.push(`${rel} — new write hazard in the read-only post-build batch`);
+        continue;
+      }
+      if (classes.includes("spawns build.mjs or the bundled-tool generator")) {
+        violations.push(`${rel} — new build-spawn hazard in the read-only post-build batch`);
+        continue;
+      }
     }
     const reason = EXEMPTIONS[rel];
     if (typeof reason === "string" && reason.trim().length > 0) continue;

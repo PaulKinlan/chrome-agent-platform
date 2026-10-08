@@ -25,6 +25,8 @@ import {
   EXEMPTIONS,
   partition,
   PRODUCTION_BUILD_TIMEOUT_MS,
+  READ_ONLY_DIST,
+  READ_ONLY_DIST_REASONS,
   realDriverRefs,
   SERIAL,
   SERIAL_FILE_TIMEOUTS,
@@ -166,6 +168,62 @@ Deno.test("partition guard: SERIAL membership is pinned with reasons and exists 
       `${rel}: exemption is DEAD — the file classifies with no hazard classes and no driver refs; delete the entry`,
     );
   }
+});
+
+Deno.test("partition guard: READ_ONLY_DIST membership is pinned with reasons, exists on disk, and is disjoint from SERIAL", async () => {
+  assertEquals(new Set(Object.keys(READ_ONLY_DIST_REASONS)), READ_ONLY_DIST, "READ_ONLY_DIST is exactly the reasoned set");
+  assert(READ_ONLY_DIST.size > 0, "READ_ONLY_DIST must not be empty");
+  for (const [rel, reason] of Object.entries(READ_ONLY_DIST_REASONS)) {
+    assert(reason.trim().length > 0, `${rel}: every read-only dist entry states why it runs in the post-build batch`);
+    const st = await Deno.stat(`${ROOT}${rel}`).catch(() => null);
+    assert(st !== null, `${rel}: read-only dist entry must exist on disk`);
+    assert(!SERIAL.has(rel), `${rel}: read-only dist entry must be disjoint from SERIAL`);
+  }
+});
+
+Deno.test("323kf: build.mjs spawn or tree write in an exempted READ_ONLY_DIST file is flagged as an unserialised hazard", () => {
+  const target = "tests/diff-core.test.ts";
+  assert(READ_ONLY_DIST.has(target), "target must be in READ_ONLY_DIST");
+
+  // 1. Normal read-only usage (reading dist) is exempted
+  const normalUsage = [
+    [target, `const bundle = await Deno.readTextFile("extension/dist/diff-core.js");`],
+  ] as [string, string][];
+  assertEquals(unserialisedHazards(normalUsage), [], "normal read-only dist access is exempted");
+
+  // 2. Gaining a build.mjs spawn must be flagged, not forgiven by EXEMPTIONS
+  const spawnBuild = [
+    [
+      target,
+      `
+      const bundle = await Deno.readTextFile("extension/dist/diff-core.js");
+      new Deno.Command("deno", { args: ["run", "-A", "scripts/build.mjs"] }).output();
+      `,
+    ],
+  ] as [string, string][];
+  const spawnViolations = unserialisedHazards(spawnBuild);
+  assertEquals(
+    spawnViolations,
+    [`${target} — new build-spawn hazard in the read-only post-build batch`],
+    "spawn of build.mjs in a READ_ONLY_DIST file must be flagged",
+  );
+
+  // 3. Gaining a write under extension/ must also be flagged
+  const writeExtension = [
+    [
+      target,
+      `
+      const bundle = await Deno.readTextFile("extension/dist/diff-core.js");
+      await Deno.writeTextFile("extension/dist/temp.js", "foo");
+      `,
+    ],
+  ] as [string, string][];
+  const writeViolations = unserialisedHazards(writeExtension);
+  assertEquals(
+    writeViolations,
+    [`${target} — new write hazard in the read-only post-build batch`],
+    "write under extension/ in a READ_ONLY_DIST file must be flagged",
+  );
 });
 
 // hso8: content hazards are re-derived from the tree by the detectors above; a wall-clock
