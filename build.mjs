@@ -918,12 +918,22 @@ try {
     }
     // Success: garbage-collect every version EXCEPT the live one, with
     // verification (a GC failure is FATAL — unbounded version growth is a
-    // real leak, not a note). A 2s grace delay lets any reader that resolved
-    // the PREVIOUS link mid-open complete (the pointer swap is atomic; this
-    // covers the open-then-read window on the old target).
-    await new Promise((r) => setTimeout(r, 2_000));
+    // real leak, not a note). When a PRIOR version is being collected, a 2s
+    // grace delay lets any reader that resolved the PREVIOUS link mid-open
+    // complete (the pointer swap is atomic; this covers the open-then-read
+    // window on the old target). When dist-versions holds only the live
+    // pointer (or residue that is not a version target — dangling symlinks,
+    // .DS_Store/._ metadata), there is no old target a reader can race and
+    // the delay is skipped.
+    const versionEntries = await readdir(VERSIONS, { withFileTypes: true });
+    const hasPriorVersion = versionEntries.some(
+      (d) => d.isDirectory() && path.join(VERSIONS, d.name) !== VERSIONED,
+    );
+    if (hasPriorVersion) {
+      await new Promise((r) => setTimeout(r, 2_000));
+    }
     try {
-      for (const d of await readdir(VERSIONS, { withFileTypes: true })) {
+      for (const d of versionEntries) {
         if (d.isSymbolicLink()) {
           // Residue from the bootstrap-re-run bug era: dangling v-boot-*
           // symlinks (and any other link) under dist-versions. REMOVED
