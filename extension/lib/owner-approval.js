@@ -736,6 +736,12 @@ export const SCRIPT_REGISTRATION_APPROVAL_ACTIONS = new Set([
   "browser.register-content-script",
   "browser.update-content-script",
 ]);
+export const SCRIPT_REGISTRATION_ACTION_KINDS = Object.freeze({
+  "browser.register-user-script": "user_script",
+  "browser.update-user-script": "user_script",
+  "browser.register-content-script": "content_script",
+  "browser.update-content-script": "content_script",
+});
 export const APPROVAL_DETAIL_BOUNDS = Object.freeze({ maxSourceChars: 64 * 1024, maxHosts: 64, maxHostChars: 253, maxOriginChars: 240, maxToolChars: 128 });
 
 /** Bound a script-approval detail ({ source, hosts, dynamic, sourceDigest }) for the card;
@@ -797,7 +803,7 @@ export function boundScriptRegistrationApprovalDetail(detail) {
   const matches = detail.matches.filter((m) => typeof m === "string" && m.length > 0 && m.length <= 2048);
   if (matches.length !== detail.matches.length) return undefined;
   const jsBytes = Number.isSafeInteger(detail.jsBytes) && detail.jsBytes >= 0 ? detail.jsBytes : 0;
-  const kind = detail.kind === "content_script" ? "content_script" : "user_script";
+  const kind = detail.scriptKind === "content_script" || detail.kind === "content_script" ? "content_script" : "user_script";
   const runAt = typeof detail.runAt === "string" ? detail.runAt.slice(0, 32) : undefined;
   const world = typeof detail.world === "string" ? detail.world.slice(0, 32) : undefined;
   return Object.freeze({
@@ -816,13 +822,28 @@ export function approvalCardDenial({ approvalId, action, targetRef, detail }) {
   if (typeof approvalId !== "string" || !approvalId || approvalId.length > 160) return null;
   if (typeof action !== "string" || !DESTRUCTIVE_ACTIONS.has(action)) return null;
   const ref = String(targetRef ?? "").slice(0, 200);
+
+  // Script registration approvals MUST carry valid, consistent bounded detail (fail-closed caller)
+  if (SCRIPT_REGISTRATION_APPROVAL_ACTIONS.has(action) || detail?.kind === "script-registration" || detail?.kind === "user_script" || detail?.kind === "content_script") {
+    if (!SCRIPT_REGISTRATION_APPROVAL_ACTIONS.has(action)) return null;
+    const expectedKind = SCRIPT_REGISTRATION_ACTION_KINDS[action];
+    const bounded = boundScriptRegistrationApprovalDetail(detail);
+    if (!bounded || bounded.scriptKind !== expectedKind) return null;
+    return {
+      ok: false,
+      waitingForPermission: true,
+      permissionRequirement: {
+        reason: `${action}: ${ref}`,
+        approvals: [{ approvalId, action, targetRef: ref, detail: bounded }],
+      },
+    };
+  }
+
   const bounded = SOURCE_DISCLOSING_ACTIONS.has(action)
     ? boundApprovalDetail(detail)
     : SITE_TOOL_APPROVAL_ACTIONS.has(action)
       ? boundSiteToolApprovalDetail(detail)
-      : SCRIPT_REGISTRATION_APPROVAL_ACTIONS.has(action)
-        ? boundScriptRegistrationApprovalDetail(detail)
-        : undefined;
+      : undefined;
   return {
     ok: false,
     waitingForPermission: true,

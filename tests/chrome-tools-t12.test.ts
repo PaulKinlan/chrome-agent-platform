@@ -26,8 +26,19 @@ import {
 import { CAPABILITIES } from "../extension/lib/capabilities.js";
 import { clearRunFence } from "../extension/lib/run-fence.js";
 import { sha256Hex } from "../extension/lib/pure.js";
-import { approvalCardDenial, boundScriptRegistrationApprovalDetail as boundOwnerDetail } from "../extension/lib/owner-approval.js";
-import { approvalCardSpecFromRequest, boundScriptRegistrationApprovalDetail as boundConversationDetail } from "../extension/shared/conversation.js";
+import {
+  approvalCardDenial,
+  boundScriptRegistrationApprovalDetail as boundOwnerDetail,
+  SCRIPT_REGISTRATION_APPROVAL_ACTIONS,
+  createApprovalStore,
+  createPendingApproval,
+  resolvePendingApproval,
+  payloadDigest,
+  canonicalRecord,
+  canonicalField,
+  canonicalScalar,
+} from "../extension/lib/owner-approval.js";
+import { approvalCardSpecFromRequest, boundScriptRegistrationApprovalDetail as boundConversationDetail, normalizePermissionRequirement } from "../extension/shared/conversation.js";
 import { formatBrowserToolApproval, requestAcpPermission } from "../extension/lib/acp-runner.js";
 
 // ---- in-memory chrome shim ----
@@ -1266,6 +1277,316 @@ Deno.test("oagmf / S14 / T19: boundScriptRegistrationApprovalDetail fails closed
   assertEquals(boundConversationDetail({ ...detailEight, matches: [] }), undefined);
   assertEquals(boundOwnerDetail({ ...detailEight, matches: "not-array" }), undefined);
   assertEquals(boundConversationDetail({ ...detailEight, matches: "not-array" }), undefined);
+});
+
+Deno.test("8kab4: caller-layer fail-closed: approvalCardDenial and normalizePermissionRequirement refuse script registration requests with absent or inconsistent detail", () => {
+  const digest = "f".repeat(64);
+  const safeMatches = ["https://site1.example/*", "https://site2.example/*"];
+  const nineMatches = [...Array.from({ length: 8 }, (_, i) => `https://site${i}.example/*`), "https://overflow.example/*"];
+
+  const userScriptDetail = {
+    kind: "script-registration",
+    scriptKind: "user_script",
+    id: "my-user-script",
+    digest,
+    matches: safeMatches,
+    jsBytes: 256,
+  };
+
+  const contentScriptDetail = {
+    kind: "script-registration",
+    scriptKind: "content_script",
+    id: "my-content-script",
+    digest,
+    matches: safeMatches,
+    jsBytes: 256,
+  };
+
+  const userActions = [
+    "browser.register-user-script",
+    "browser.update-user-script",
+  ];
+  const contentActions = [
+    "browser.register-content-script",
+    "browser.update-content-script",
+  ];
+
+  for (const action of [...userActions, ...contentActions]) {
+    const isUser = userActions.includes(action);
+    const matchingDetail = isUser ? userScriptDetail : contentScriptDetail;
+    const mismatchedDetail = isUser ? contentScriptDetail : userScriptDetail;
+
+    // 1. Caller: approvalCardDenial (owner-approval.js)
+    // (a) absent detail must return null (NEVER fallback to generic card)
+    assertEquals(approvalCardDenial({ approvalId: "app-1", action, targetRef: "ref-1" }), null, `${action}: absent detail must return null`);
+    assertEquals(approvalCardDenial({ approvalId: "app-1", action, targetRef: "ref-1", detail: null }), null, `${action}: null detail must return null`);
+    assertEquals(approvalCardDenial({ approvalId: "app-1", action, targetRef: "ref-1", detail: {} }), null, `${action}: empty detail must return null`);
+
+    // (b) inconsistent detail: invalid digest
+    assertEquals(approvalCardDenial({ approvalId: "app-1", action, targetRef: "ref-1", detail: { ...matchingDetail, digest: "invalid-short-digest" } }), null, `${action}: invalid digest must return null`);
+
+    // (c) inconsistent detail: 0 matches
+    assertEquals(approvalCardDenial({ approvalId: "app-1", action, targetRef: "ref-1", detail: { ...matchingDetail, matches: [] } }), null, `${action}: 0 matches must return null`);
+
+    // (d) count mismatch / overflow: >8 matches
+    assertEquals(approvalCardDenial({ approvalId: "app-1", action, targetRef: "ref-1", detail: { ...matchingDetail, matches: nineMatches } }), null, `${action}: >8 matches must return null`);
+
+    // (e) count mismatch / corrupted elements: non-string in matches
+    assertEquals(approvalCardDenial({ approvalId: "app-1", action, targetRef: "ref-1", detail: { ...matchingDetail, matches: ["https://site1.example/*", 12345] } }), null, `${action}: non-string matches item must return null`);
+
+    // (f) P1: scriptKind mismatch against action must fail closed to null
+    assertEquals(approvalCardDenial({ approvalId: "app-1", action, targetRef: "ref-1", detail: mismatchedDetail }), null, `${action}: mismatched scriptKind must return null in approvalCardDenial`);
+
+    // (g) valid matching detail MUST succeed with detail bound
+    const denial = approvalCardDenial({ approvalId: "app-1", action, targetRef: "ref-1", detail: matchingDetail });
+    assert(denial !== null, `${action}: valid detail must return denial`);
+    assertEquals(denial.waitingForPermission, true);
+    assertEquals(denial.permissionRequirement.approvals[0].detail?.kind, "script-registration");
+    assertEquals(denial.permissionRequirement.approvals[0].detail?.scriptKind, isUser ? "user_script" : "content_script");
+    assertEquals(denial.permissionRequirement.approvals[0].detail?.digest, digest);
+    assertEquals(denial.permissionRequirement.approvals[0].detail?.matches, safeMatches);
+
+    // 2. Caller: normalizePermissionRequirement (conversation.js)
+    // (a) absent detail in approvals must fail closed to null (NO generic card)
+    assertEquals(normalizePermissionRequirement({
+      waitingForPermission: true,
+      permissionRequirement: {
+        reason: `${action}: ref-1`,
+        approvals: [{ approvalId: "app-1", action, targetRef: "ref-1" }],
+      },
+    }), null, `${action}: absent detail in conversation normalization must return null`);
+
+    assertEquals(normalizePermissionRequirement({
+      waitingForPermission: true,
+      permissionRequirement: {
+        reason: `${action}: ref-1`,
+        approvals: [{ approvalId: "app-1", action, targetRef: "ref-1", detail: null }],
+      },
+    }), null, `${action}: null detail in conversation normalization must return null`);
+
+    assertEquals(normalizePermissionRequirement({
+      waitingForPermission: true,
+      permissionRequirement: {
+        reason: `${action}: ref-1`,
+        approvals: [{ approvalId: "app-1", action, targetRef: "ref-1", detail: {} }],
+      },
+    }), null, `${action}: empty detail in conversation normalization must return null`);
+
+    // (b) inconsistent detail: invalid digest
+    assertEquals(normalizePermissionRequirement({
+      waitingForPermission: true,
+      permissionRequirement: {
+        reason: `${action}: ref-1`,
+        approvals: [{ approvalId: "app-1", action, targetRef: "ref-1", detail: { ...matchingDetail, digest: "bad-digest" } }],
+      },
+    }), null, `${action}: invalid digest in conversation normalization must return null`);
+
+    // (c) inconsistent detail: 0 matches
+    assertEquals(normalizePermissionRequirement({
+      waitingForPermission: true,
+      permissionRequirement: {
+        reason: `${action}: ref-1`,
+        approvals: [{ approvalId: "app-1", action, targetRef: "ref-1", detail: { ...matchingDetail, matches: [] } }],
+      },
+    }), null, `${action}: 0 matches in conversation normalization must return null`);
+
+    // (d) count mismatch / overflow: >8 matches
+    assertEquals(normalizePermissionRequirement({
+      waitingForPermission: true,
+      permissionRequirement: {
+        reason: `${action}: ref-1`,
+        approvals: [{ approvalId: "app-1", action, targetRef: "ref-1", detail: { ...matchingDetail, matches: nineMatches } }],
+      },
+    }), null, `${action}: >8 matches in conversation normalization must return null`);
+
+    // (e) count mismatch / corrupted elements: non-string in matches
+    assertEquals(normalizePermissionRequirement({
+      waitingForPermission: true,
+      permissionRequirement: {
+        reason: `${action}: ref-1`,
+        approvals: [{ approvalId: "app-1", action, targetRef: "ref-1", detail: { ...matchingDetail, matches: ["https://site1.example/*", false] } }],
+      },
+    }), null, `${action}: corrupted matches item in conversation normalization must return null`);
+
+    // (f) P1: scriptKind mismatch against action must fail closed to null in conversation normalization
+    assertEquals(normalizePermissionRequirement({
+      waitingForPermission: true,
+      permissionRequirement: {
+        reason: `${action}: ref-1`,
+        approvals: [{ approvalId: "app-1", action, targetRef: "ref-1", detail: mismatchedDetail }],
+      },
+    }), null, `${action}: mismatched scriptKind must return null in normalizePermissionRequirement`);
+
+    // (g) valid matching detail MUST succeed and preserve detail
+    const norm = normalizePermissionRequirement({
+      waitingForPermission: true,
+      permissionRequirement: {
+        reason: `${action}: ref-1`,
+        approvals: [{ approvalId: "app-1", action, targetRef: "ref-1", detail: matchingDetail }],
+      },
+    });
+    assert(norm !== null, `${action}: valid detail must normalize`);
+    assertEquals(norm.approvals[0].detail?.kind, "script-registration");
+    assertEquals(norm.approvals[0].detail?.scriptKind, isUser ? "user_script" : "content_script");
+    assertEquals(norm.approvals[0].detail?.digest, digest);
+    assertEquals(norm.approvals[0].detail?.matches, safeMatches);
+
+    // 3. Caller: approvalCardSpecFromRequest must return null on absent/inconsistent detail
+    assertEquals(approvalCardSpecFromRequest({
+      permissionRequirement: {
+        reason: `${action}: ref-1`,
+        approvals: [{ approvalId: "app-1", action, targetRef: "ref-1" }],
+      },
+    }), null, `${action}: spec from request must be null on absent detail`);
+
+    assertEquals(approvalCardSpecFromRequest({
+      permissionRequirement: {
+        reason: `${action}: ref-1`,
+        approvals: [{ approvalId: "app-1", action, targetRef: "ref-1", detail: { ...matchingDetail, matches: nineMatches } }],
+      },
+    }), null, `${action}: spec from request must be null on >8 matches`);
+
+    assertEquals(approvalCardSpecFromRequest({
+      permissionRequirement: {
+        reason: `${action}: ref-1`,
+        approvals: [{ approvalId: "app-1", action, targetRef: "ref-1", detail: mismatchedDetail }],
+      },
+    }), null, `${action}: spec from request must be null on mismatched scriptKind`);
+  }
+
+  // Cross-check: non-script action presenting script-registration detail must fail closed
+  assertEquals(approvalCardDenial({
+    approvalId: "app-foreign",
+    action: "browser.close-foreign-tab",
+    targetRef: "tab:99",
+    detail: userScriptDetail,
+  }), null, "foreign action with script-registration detail must fail closed in approvalCardDenial");
+
+  assertEquals(normalizePermissionRequirement({
+    waitingForPermission: true,
+    permissionRequirement: {
+      reason: "browser.close-foreign-tab: tab:99",
+      approvals: [{ approvalId: "app-foreign", action: "browser.close-foreign-tab", targetRef: "tab:99", detail: userScriptDetail }],
+    },
+  }), null, "foreign action with script-registration detail must fail closed in normalizePermissionRequirement");
+});
+
+Deno.test("8kab4 / P2: requireOwnerApproval emits NO approval request event and resolves denied when detail is absent or mismatched", async () => {
+  const approvalStore = createApprovalStore();
+  const emittedEvents: any[] = [];
+  const progressPorts = new Set(["port-1"]);
+
+  // Model-path requireOwnerApproval execution semantics matching service-worker.js:5405-5430
+  const execRequireOwnerApproval = async (context: any, action: string, target: string, payload: any, detail: any) => {
+    const executionId = context.executionId;
+    const digest = await payloadDigest(payload);
+    const targetRef = target;
+    const pending = createPendingApproval(approvalStore, executionId, action, target, digest);
+    if (!pending.ok) return { ok: false, error: pending.error };
+    const row = approvalStore.approvals.get(pending.approvalId);
+    if (row) row.targetRef = targetRef;
+
+    if (context?.principal === "model") {
+      const request = approvalCardDenial({ approvalId: pending.approvalId, action, targetRef, detail });
+      if (!request || typeof context.onApprovalEvent !== "function" || progressPorts.size === 0) {
+        resolvePendingApproval(approvalStore, pending.approvalId, false);
+        return { ok: false, error: "Owner approval was required but no originating conversation could show it.", approvalDenied: true, action };
+      }
+      await context.onApprovalEvent({
+        type: "approval-request",
+        approvalId: pending.approvalId,
+        action,
+        targetRef,
+        result: request,
+      });
+      return { ok: true, pending: true, approvalId: pending.approvalId };
+    }
+    return { ok: true };
+  };
+
+  const digest = "a".repeat(64);
+  const canonicalPayload = canonicalRecord(
+    canonicalField("digest", canonicalScalar(digest)),
+    canonicalField("matches", canonicalScalar("https://example.com/*")),
+  );
+  const context = {
+    principal: "model",
+    executionId: "exec-test-1",
+    onApprovalEvent: (evt: any) => { emittedEvents.push(evt); },
+  };
+
+  // 1. Absent detail: denial returned, NO approval request emitted, store resolved denied
+  const resAbsent = await execRequireOwnerApproval(
+    context,
+    "browser.register-user-script",
+    "user_script:s1",
+    canonicalPayload,
+    undefined,
+  );
+  assertEquals(resAbsent.ok, false);
+  assertEquals(resAbsent.approvalDenied, true);
+  assertEquals(resAbsent.action, "browser.register-user-script");
+  assertEquals(emittedEvents.length, 0, "no approval-request event must be emitted when detail is absent");
+
+  // 2. Mismatched script kind: register-content-script carrying user_script detail
+  const resMismatchedContent = await execRequireOwnerApproval(
+    context,
+    "browser.register-content-script",
+    "content_script:c1",
+    canonicalPayload,
+    {
+      kind: "script-registration",
+      scriptKind: "user_script",
+      id: "c1",
+      digest,
+      matches: ["https://example.com/*"],
+      jsBytes: 100,
+    },
+  );
+  assertEquals(resMismatchedContent.ok, false);
+  assertEquals(resMismatchedContent.approvalDenied, true);
+  assertEquals(resMismatchedContent.action, "browser.register-content-script");
+  assertEquals(emittedEvents.length, 0, "no approval-request event must be emitted when script kind mismatches action");
+
+  // 3. Mismatched script kind reverse: register-user-script carrying content_script detail
+  const resMismatchedUser = await execRequireOwnerApproval(
+    context,
+    "browser.register-user-script",
+    "user_script:u1",
+    canonicalPayload,
+    {
+      kind: "script-registration",
+      scriptKind: "content_script",
+      id: "u1",
+      digest,
+      matches: ["https://example.com/*"],
+      jsBytes: 100,
+    },
+  );
+  assertEquals(resMismatchedUser.ok, false);
+  assertEquals(resMismatchedUser.approvalDenied, true);
+  assertEquals(resMismatchedUser.action, "browser.register-user-script");
+  assertEquals(emittedEvents.length, 0, "no approval-request event must be emitted when script kind mismatches action (reverse)");
+
+  // 4. Matching script kind: register-content-script carrying content_script detail
+  const resValid = await execRequireOwnerApproval(
+    context,
+    "browser.register-content-script",
+    "content_script:c2",
+    canonicalPayload,
+    {
+      kind: "script-registration",
+      scriptKind: "content_script",
+      id: "c2",
+      digest,
+      matches: ["https://example.com/*"],
+      jsBytes: 100,
+    },
+  );
+  assertEquals(resValid.ok, true);
+  assertEquals(emittedEvents.length, 1, "exactly one approval-request event emitted for valid matching detail");
+  assertEquals(emittedEvents[0].action, "browser.register-content-script");
+  assertEquals(emittedEvents[0].result.permissionRequirement.approvals[0].detail.scriptKind, "content_script");
 });
 
 Deno.test("oagmf / S14 / T19: approval card spec and replayed card preserve untruncated digest and target matches", () => {

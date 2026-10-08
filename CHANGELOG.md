@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.601] — 2026-10-08
+- Reject a script-registration approval request that arrives without valid bounded detail, so a malformed or mismatched request can never produce an approvable generic card.
+
 ## [0.3.600] — 2026-10-08
 - Align the mention popup with the model picker and remove a dead anchor declaration so the composer menu positions consistently.
 
