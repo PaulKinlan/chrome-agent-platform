@@ -4801,12 +4801,17 @@ async function main() {
       return roots.flatMap((r) => [...r.querySelectorAll('message-bubble')]).map((b) => {
         const sr = b.shadowRoot ?? b;
         const bodyEl = sr.querySelector('.body');
-        const msgEl = sr.querySelector('.msg');
+        let text = '';
+        if (bodyEl) {
+          text = bodyEl.textContent.replace(/\\s+/g, ' ').trim();
+        } else {
+          const clone = (sr.querySelector('.msg') ?? b).cloneNode(true);
+          for (const btn of clone.querySelectorAll?.('.msg-copy-btn') ?? []) btn.remove();
+          text = clone.textContent.replace(/\\s+/g, ' ').trim();
+        }
         return {
           role: b.getAttribute('role'),
-          text: (bodyEl ?? msgEl ?? b).textContent.replace(/\\s+/g, ' ').trim(),
-          rawMsgText: msgEl ? msgEl.textContent.replace(/\\s+/g, ' ').trim() : null,
-          hasCopyBtn: !!sr.querySelector('.msg-copy-btn'),
+          text,
         };
       });
     })()`;
@@ -4835,10 +4840,6 @@ async function main() {
     const persistedAfter = await readThreadTexts();
     const bubblesAfter = await openThreadDoc("transcript-after-reload.png");
     const agentBubblesAfter = (Array.isArray(bubblesAfter) ? bubblesAfter : []).filter((b) => b?.role === "agent");
-    console.log("OBSERVED .16 transcriptRun:", JSON.stringify(transcriptRun));
-    console.log("OBSERVED .16 persistedBefore:", JSON.stringify(persistedBefore));
-    console.log("OBSERVED .16 persistedAfter:", JSON.stringify(persistedAfter));
-    console.log("OBSERVED .16 agentBubblesAfter:", JSON.stringify(agentBubblesAfter));
     check(
       "Transcript: 'list my open tabs' survives a reload at full length",
       transcriptRun?.ok === true && transcriptRun?.result === DEMO_ANSWER &&
@@ -4999,9 +5000,11 @@ async function main() {
       return { ...last, elapsedMs: Date.now() - t0 };
     };
     // provider.set is Settings-sender-only (requireSettingsSender) — msgOpts.
+    // Use a fresh safeUrl path per run so the SW's deliberate (url,status) deduplication
+    // does not suppress raw console.error logging from a prior 401 on the same origin.
     await msgOpts({
       type: "provider.set",
-      config: { provider: "openai", baseURL: `${RED_ORIGIN}/v1`, apiKey: "sk-journey-invalid-0000", model: "model-one" },
+      config: { provider: "openai", baseURL: `${RED_ORIGIN}/v1-401-${Date.now()}`, apiKey: "sk-journey-invalid-0000", model: "model-one" },
     });
     const swErrorsBefore = cdp.swErrors().length;
     await driveHubTask("provider truth: bad key");
@@ -5018,18 +5021,6 @@ async function main() {
     // guarding everything else.
     const swErrorsNow = cdp.swErrors().slice(swErrorsBefore);
     const provider401 = swErrorsNow.filter((e) => /\[provider\] HTTP 401/.test(String(e.detail ?? "")));
-    const allConsoleErrorsNow = cdp.consoleErrors.slice(swErrorsBefore);
-    const allSessionErrors = cdp.consoleErrors.map((e) => ({
-      sessionId: e.sessionId,
-      isSw: cdp.swSessions.has(e.sessionId),
-      isPage: cdp.pageSessions.has(e.sessionId),
-      detail: e.detail,
-    }));
-    console.log("OBSERVED .17 provider401:", JSON.stringify(provider401));
-    console.log("OBSERVED .17 swErrorsNow:", JSON.stringify(swErrorsNow));
-    console.log("OBSERVED .17 allConsoleErrorsNow:", JSON.stringify(allConsoleErrorsNow));
-    console.log("OBSERVED .17 swSessions:", JSON.stringify([...cdp.swSessions]));
-    console.log("OBSERVED .17 pageSessions:", JSON.stringify([...cdp.pageSessions]));
     check(
       "Provider error: SW console recorded the real HTTP 401 from the fixture provider",
       provider401.length >= 1 && provider401.every((e) => !/sk-[A-Za-z0-9]/.test(String(e.detail ?? ""))),
@@ -5038,10 +5029,6 @@ async function main() {
         provider401,
         swErrorsBefore,
         swErrorsNow,
-        allConsoleErrorsNow,
-        allSessionErrors,
-        swSessions: [...cdp.swSessions],
-        pageSessions: [...cdp.pageSessions],
       },
     );
     const EXPECTED_SW_NOISE = /\[provider\] HTTP 401|^AI_NoOutputGeneratedError: No output generated|^<redacted:structured>$/;
