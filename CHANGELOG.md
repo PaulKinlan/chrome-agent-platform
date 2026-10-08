@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.608] — 2026-10-08
+- The New Tab page's agent launcher buttons now show a simple terminal mark with clearer labels and a visible keyboard focus, and the list scrolls when it is long.
+
 ## [0.3.607] — 2026-10-08
 - Harden site-agent enrollment: promotions commit atomically and survive a restart, and enrollment authority reads are fenced to one reviewed path.
 
