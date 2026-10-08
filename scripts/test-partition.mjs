@@ -490,10 +490,10 @@ export function stripComments(text) {
   return stripCodeRange(text, 0, false).out;
 }
 
-const SPAWN_RE = /Deno\.Command\s*\(|spawnSync\s*\(|execFileSync\s*\(|execSync\s*\(|\.spawn\s*\(|\bspawn\s*\(/;
+const SPAWN_CALL_RE = /(?:Deno\.Command|spawnSync|execFileSync|execSync|\.spawn|\bspawn)\s*\(/g;
 const BUILD_REF_RE = /build\.mjs|build-bundled-tool-packages/;
 // 4lc0 + o4m2: a test that IMPORTS or SPAWNS a build module runs it — module side effects are the
-// same hazard as spawning it, and the SPAWN_RE rule above cannot see an import/re-export/require
+// same hazard as spawning it, and the SPAWN_CALL_RE rule above cannot see an import/re-export/require
 // (including a no-substitution template specifier `import(`../scripts/build-bundled-tool-packages.mjs`)`).
 // Rather than modelling every JS import syntax, any CODE reference to `build.mjs` or
 // `build-bundled-tool-packages` (after stripping comments via `stripComments(text)`) is flagged and
@@ -505,6 +505,57 @@ const WRITE_CALL_RE = /(?:writeTextFile|writeFileSync|writeFile|mkdirSync|mkdir|
 const TREE_LITERAL_RE = /["'`][^"'`\n]*(?:extension|packages)\/[^"'`\n]*["'`]/;
 const READ_RE = /readTextFile|readFile|readFileSync|readDir|readdir|import\s*\(|\bfrom\s*["']/i;
 const DIST_LITERAL_RE = /extension\/dist/;
+
+const BUILD_BINDING_RE = /(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=[^;\n]*(?:build\.mjs|build-bundled-tool-packages)/g;
+
+// Extract invocation arguments inside matching parentheses
+function getCallArgs(text, startIndex) {
+  let depth = 1;
+  let i = startIndex;
+  while (i < text.length && depth > 0 && (i - startIndex) < 500) {
+    const ch = text[i];
+    if (ch === "(" || ch === "{" || ch === "[") depth++;
+    else if (ch === ")" || ch === "}" || ch === "]") depth--;
+    i++;
+  }
+  return text.slice(startIndex, i > startIndex ? i - 1 : startIndex);
+}
+
+// In READ_ONLY_DIST, the ONLY permitted child process execution is the reviewed
+// git provenance check in tests/bundled-tool-packages.test.ts (lines 563-566).
+// Enumerated strictly by call-site signature, not merely by file path.
+// The check is anchored to the actual first invocation argument (the invoked executable):
+// it requires the invoked command to be "git" (or 'git') and its args to match the exact
+// reviewed provenance check: ["cat-file", "-e", `${baseline.takenAt}^{commit}`].
+// Any other arguments, different executable, or spoofed signature in unrelated argument
+// text will not match.
+export function isReviewedReadOnlySpawn(rel, argsSnippet) {
+  if (rel !== "tests/bundled-tool-packages.test.ts") return false;
+  if (typeof argsSnippet !== "string") return false;
+  return /^\s*["']git["']\s*,\s*\{[^}]*?\bargs:\s*\[\s*["']cat-file["']\s*,\s*["']-e["']\s*,\s*`\$\{baseline\.takenAt\}\^\{commit\}`\s*\]/.test(argsSnippet);
+}
+
+// Spawn hazard = a process spawn call whose invocation arguments target
+// build.mjs or the bundled-tool generator directly or via simple argument bindings
+// (including arrays, concatenations, and joins).
+function spawnsBuild(text) {
+  const boundVars = [];
+  for (const m of text.matchAll(BUILD_BINDING_RE)) {
+    boundVars.push(m[1]);
+  }
+  let targetPattern = BUILD_REF_RE;
+  if (boundVars.length > 0) {
+    const escaped = boundVars.map((v) => v.replace(/[$]/g, "\\$")).join("|");
+    targetPattern = new RegExp(`(?:build\\.mjs|build-bundled-tool-packages|\\b(?:${escaped})\\b)`);
+  }
+
+  const spawnCallRe = /(?<!['"`])\b(?:Deno\.Command|spawnSync|execFileSync|execSync|\.spawn|\bspawn)\s*\(/g;
+  for (const m of text.matchAll(spawnCallRe)) {
+    const args = getCallArgs(text, m.index + m[0].length);
+    if (targetPattern.test(args)) return true;
+  }
+  return false;
+}
 
 // Write hazard = a write/remove call with a tree literal NEAR the call site
 // (same statement or the assignment feeding it). A file that merely mentions
@@ -526,7 +577,7 @@ function writesTree(text) {
 export function classifyHazards(text) {
   const code = stripComments(text);
   const classes = [];
-  if (SPAWN_RE.test(code) && BUILD_REF_RE.test(code)) classes.push("spawns build.mjs or the bundled-tool generator");
+  if (spawnsBuild(code)) classes.push("spawns build.mjs or the bundled-tool generator");
   if (GENERATOR_NAME_RE.test(code)) classes.push("names build.mjs or the bundled-tool generator (a load hazard whatever the syntax)");
   if (writesTree(code)) classes.push("writes under extension/ or packages/");
   if (READ_RE.test(code) && DIST_LITERAL_RE.test(code)) classes.push("reads extension/dist");
@@ -545,13 +596,46 @@ export function unserialisedHazards(entries) {
   const violations = [];
   for (const [rel, text] of entries) {
     const classes = classifyHazards(text);
+
+    // A reviewed read-only exemption must never silently become a tree writer or spawn a build/unreviewed process.
+    if (READ_ONLY_DIST.has(rel)) {
+      if (classes.includes("writes under extension/ or packages/")) {
+        violations.push(`${rel} — new write hazard in the read-only post-build batch`);
+        continue;
+      }
+      if (classes.includes("spawns build.mjs or the bundled-tool generator")) {
+        violations.push(`${rel} — new build-spawn hazard in the read-only post-build batch`);
+        continue;
+      }
+      // Inspect every spawn call in a READ_ONLY_DIST file. Only the single reviewed git provenance
+      // signature in bundled-tool-packages is permitted (exactly 1 occurrence); any other spawn,
+      // any duplicate reviewed spawn, or any spawn whose arguments cannot be resolved in a
+      // READ_ONLY_DIST file must be flagged.
+      const code = stripComments(text);
+      const spawnCallRe = /(?<!['"`])\b(?:Deno\.Command|spawnSync|execFileSync|execSync|\.spawn|\bspawn)\s*\(/g;
+      let hasUnreviewedSpawn = false;
+      let reviewedSpawnCount = 0;
+      for (const m of code.matchAll(spawnCallRe)) {
+        const args = getCallArgs(code, m.index + m[0].length);
+        if (isReviewedReadOnlySpawn(rel, args)) {
+          reviewedSpawnCount++;
+        } else {
+          hasUnreviewedSpawn = true;
+          break;
+        }
+      }
+      if (
+        hasUnreviewedSpawn ||
+        (rel === "tests/bundled-tool-packages.test.ts" && reviewedSpawnCount !== 1) ||
+        (rel !== "tests/bundled-tool-packages.test.ts" && reviewedSpawnCount > 0)
+      ) {
+        violations.push(`${rel} — unreviewed spawn in the read-only post-build batch`);
+        continue;
+      }
+    }
+
     if (!classes.length) continue; // safe → defaults to the parallel phase
     if (SERIAL.has(rel)) continue;
-    // A reviewed read-only exemption must never silently become a tree writer.
-    if (READ_ONLY_DIST.has(rel) && classes.includes("writes under extension/ or packages/")) {
-      violations.push(`${rel} — new write hazard in the read-only post-build batch`);
-      continue;
-    }
     const reason = EXEMPTIONS[rel];
     if (typeof reason === "string" && reason.trim().length > 0) continue;
     violations.push(`${rel} — ${classes.join("; ")}`);
