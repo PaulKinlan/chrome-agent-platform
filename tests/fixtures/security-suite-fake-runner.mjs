@@ -9,12 +9,22 @@ import { verifyRunnerGuard } from "../../scripts/security-suite-custody.mjs";
 const state = process.env.CAP_SECURITY_TEST_STATE;
 const record = (event, extra = {}) => {
   if (!state) return;
-  appendFileSync(
-    state,
-    `${
-      JSON.stringify({ event, pid: process.pid, ppid: process.ppid, ...extra })
-    }\n`,
-  );
+  try {
+    appendFileSync(
+      state,
+      `${
+        JSON.stringify({ event, pid: process.pid, ppid: process.ppid, ...extra })
+      }\n`,
+    );
+  } catch (error) {
+    // gate-speed: the supervisor SEALS the state file (chmod 0400) when it finishes, and the test then
+    // removes the evidence. A deliberately LEAKED descendant (--escape-child) can still be booting at
+    // that point on a loaded box, and its first record() then threw EACCES/ENOENT, the uncaught throw
+    // killed it, and the escape test failed verifying a child that was alive when the supervisor saw it
+    // ("ENOENT ... /proc/<pid>/stat"; 2 of 7 full gates on a 2-vCPU VM). A write after the seal records
+    // nothing the test could still read, so it is dropped; any OTHER failure still throws.
+    if (error?.code !== "EACCES" && error?.code !== "ENOENT") throw error;
+  }
 };
 // Bound fixture lifetime (chrome-agent-platform-pozs): unref'd safety exit
 // ensures a leaked descendant (e.g. --escape-child or --stubborn-child) can
