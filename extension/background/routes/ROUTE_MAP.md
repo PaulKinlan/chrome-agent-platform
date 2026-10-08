@@ -7,9 +7,9 @@ This document records the assignment of service-worker message routes to their o
 2. **Central Dispatcher (`dispatchRoute`)**: Performs route handler lookup, `__`-prefix / `userActivation` body parameter scrubbing, and `__sender` injection.
 3. **Route Modules (`extension/background/routes/*.js`)**: Export frozen route maps containing pure handler functions. Modules never duplicate the central dispatcher, listener, or allowlist seams.
 
-## Route Map Inventory (Comprehensive Census — 288 Routes)
+## Route Map Inventory (Comprehensive Census — 289 Routes)
 
-See `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` for the exhaustive authority classification across all 288 routes. Argument indexes below are zero-based positions in `service-worker.js`'s `mergeRouteMaps`; `tests/sw-dispatch-authority-census.test.ts` checks them against the executable composition.
+See `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` for the exhaustive authority classification across all 289 routes. Argument indexes below are zero-based positions in `service-worker.js`'s `mergeRouteMaps`; `tests/sw-dispatch-authority-census.test.ts` checks them against the executable composition.
 
 | Module / Scope | Route Count | Routes Included | Gating / Authority Model |
 |---|---|---|---|
@@ -30,5 +30,5 @@ See `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` for the exhaustive authority classifi
 | `service-worker.js` (`enclaveStatusRoutes`, arg[2]) | 1 | `enclave.status` | Settings-only |
 | `service-worker.js` (inline arg[3]) | 7 | `browser.callTool`, `onDeviceText.summarize`, `onDeviceText.detectLanguage`, `onDeviceText.translate`, `onDeviceText.availability`, `clipboard.write`, `write_clipboard` | See census for per-route authority |
 | `service-worker.js` (inline arg[12]) | 24 | `table.run`, `tool-stream.input.create`, `tool-stream.input.append`, `tool-stream.input.seal`, `tool-stream.run`, `tool-stream.output.read`, `tool-stream.output.receipt`, `tool-stream.remove`, `actions.list`, `actions.undo`, `cap:fetch`, `python.fetch`, `python.network.grants`, `python.network.grant`, `python.network.revoke`, `wheel.list`, `wheel.put`, `wheel.delete`, `capabilities.status`, `notifications.list`, `notification.get`, `notification.dismiss`, `alarms.permission-granted`, `capability.revoke` | Mixed authority; see census for each route |
-| `service-worker.js` (inline arg[17]) | 184 | Approval-gated mutations (agent/asset/script/browser/hooks/workflows), Settings-only routes, extension-only management, task execution, WebMCP, and query routes | See `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` for per-route classification |
-| **Total Registered Routes** | **288** | Complete population verified by `tests/sw-dispatch-authority-census.test.ts` | Complete census |
+| `service-worker.js` (inline arg[17]) | 185 | Approval-gated mutations (agent/asset/script/browser/hooks/workflows), Settings-only routes, extension-only management, task execution, WebMCP, and query routes | See `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` for per-route classification |
+| **Total Registered Routes** | **289** | Complete population verified by `tests/sw-dispatch-authority-census.test.ts` | Complete census |

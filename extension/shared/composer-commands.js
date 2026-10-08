@@ -479,18 +479,43 @@ function utf8DataUrl(type, content) {
 /**
  * Turn a picked row into the text reference + pending attachment sent to the agent.
  * @param {any} item
- * @param {{ runtimeSend?: ((type: string, payload?: Record<string, unknown>) => Promise<any>) | null }} deps
- * @returns {Promise<{ text: string, attachment: any } | null>}
+ * @param {{ runtimeSend?: ((type: string, payload?: Record<string, unknown>) => Promise<any>) | null, chromeApi?: any }} deps
+ * @returns {Promise<{ text: string, attachment: any, notice?: string } | null>}
  */
 export async function resolveComposerCommandSelection(
   item,
-  { runtimeSend = null } = {},
+  { runtimeSend = null, chromeApi = globalThis.chrome } = {},
 ) {
   if (!item) return null;
   if (item.kind === "command") {
     return {
       text: item.insertText || item.prompt || `/${item.id}`,
       attachment: null,
+    };
+  }
+  if (item.kind === "tab" && runtimeSend && Number.isSafeInteger(item.attachment?.tabId)) {
+    const tabId = item.attachment.tabId;
+    let attested = await runtimeSend("agent.attached-webmcp-document", { tabId }).catch(() => null);
+    let notice;
+    if (attested?.needScripting === true) {
+      // Only the owner's explicit /tabs pick may request the optional API.
+      // The SW never prompts during a model run or treats a denial as consent.
+      let granted = false;
+      try { granted = (await chromeApi?.permissions?.request?.({ permissions: ["scripting"] })) === true; }
+      catch { /* owner refused or Chrome could not prompt */ }
+      if (granted) {
+        attested = await runtimeSend("agent.attached-webmcp-document", { tabId }).catch(() => null);
+      } else {
+        notice = "Scripting permission denied; tab attached as context only.";
+      }
+    }
+    const documentId = attested?.ok === true && attested.tabId === tabId &&
+      typeof attested.documentId === "string" && attested.documentId.length > 0 && attested.documentId.length <= 200
+      ? attested.documentId : null;
+    return {
+      text: item.insertText || `/${item.id}`,
+      attachment: documentId ? { ...item.attachment, documentId } : (item.attachment ?? null),
+      ...(notice ? { notice } : {}),
     };
   }
   if (item.kind !== "artifact") {
