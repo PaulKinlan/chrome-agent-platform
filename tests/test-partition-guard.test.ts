@@ -349,7 +349,53 @@ Deno.test("323kf: build.mjs spawn or tree write in an exempted READ_ONLY_DIST fi
     "spawn with spoofed git-cat-file signature in unrelated argument text must be flagged",
   );
 
-  // 9. Real tests/bundled-tool-packages.test.ts on disk has only the reviewed git provenance spawn and no violations
+  // 9. A second git cat-file call in bundled-tool-packages.test.ts must be rejected (single reviewed site only)
+  const duplicateGitSpawn = [
+    [
+      "tests/bundled-tool-packages.test.ts",
+      `
+      const baseline = JSON.parse(await Deno.readTextFile("./fixtures/bundled-inventory-baseline.json"));
+      const provenance = await new Deno.Command("git", {
+        args: ["cat-file", "-e", \`\${baseline.takenAt}^{commit}\`],
+        cwd: repoRoot, stdout: "null", stderr: "piped",
+      }).output();
+
+      // Second git cat-file call (must be rejected - only exactly one reviewed spawn permitted)
+      const secondCall = await new Deno.Command("git", {
+        args: ["cat-file", "-e", \`\${baseline.takenAt}^{commit}\`],
+        cwd: repoRoot, stdout: "null", stderr: "piped",
+      }).output();
+      `,
+    ],
+  ] as [string, string][];
+  const duplicateViolations = unserialisedHazards(duplicateGitSpawn);
+  assertEquals(
+    duplicateViolations,
+    ["tests/bundled-tool-packages.test.ts — unreviewed spawn in the read-only post-build batch"],
+    "second git-cat-file call in tests/bundled-tool-packages.test.ts must be flagged",
+  );
+
+  // 10. git cat-file with different args (e.g. HEAD instead of baseline commit) must be rejected
+  const differentArgsGitSpawn = [
+    [
+      "tests/bundled-tool-packages.test.ts",
+      `
+      const baseline = JSON.parse(await Deno.readTextFile("./fixtures/bundled-inventory-baseline.json"));
+      const provenance = await new Deno.Command("git", {
+        args: ["cat-file", "-e", "HEAD"],
+        cwd: repoRoot, stdout: "null", stderr: "piped",
+      }).output();
+      `,
+    ],
+  ] as [string, string][];
+  const differentArgsViolations = unserialisedHazards(differentArgsGitSpawn);
+  assertEquals(
+    differentArgsViolations,
+    ["tests/bundled-tool-packages.test.ts — unreviewed spawn in the read-only post-build batch"],
+    "git-cat-file call with unreviewed args (HEAD) must be flagged",
+  );
+
+  // 11. Real tests/bundled-tool-packages.test.ts on disk has only the reviewed git provenance spawn and no violations
   const realBundledContent = await Deno.readTextFile(`${ROOT}tests/bundled-tool-packages.test.ts`);
   assertEquals(
     unserialisedHazards([["tests/bundled-tool-packages.test.ts", realBundledContent]]),
@@ -358,18 +404,25 @@ Deno.test("323kf: build.mjs spawn or tree write in an exempted READ_ONLY_DIST fi
   );
 });
 
-Deno.test("partition guard: isReviewedReadOnlySpawn requires anchored executable and rejects spoofed arg text", () => {
+Deno.test("partition guard: isReviewedReadOnlySpawn requires anchored executable, pinned args, and rejects spoofed arg text", () => {
   assert(
     isReviewedReadOnlySpawn(
       "tests/bundled-tool-packages.test.ts",
-      `"git", { args: ["cat-file", "-e", "sha"], cwd: repoRoot }`,
+      `"git", { args: ["cat-file", "-e", \`\${baseline.takenAt}^{commit}\`], cwd: repoRoot }`,
     ),
-    "exact git cat-file invocation must be accepted",
+    "exact git cat-file invocation with baseline commit must be accepted",
   );
   assert(
     !isReviewedReadOnlySpawn(
       "tests/bundled-tool-packages.test.ts",
-      `"node", { env: { FAKE: '"git", { args: ["cat-file", "-e"' }, args: ["run.js"] }`,
+      `"git", { args: ["cat-file", "-e", "HEAD"], cwd: repoRoot }`,
+    ),
+    "git cat-file invocation with different args (HEAD) must be rejected",
+  );
+  assert(
+    !isReviewedReadOnlySpawn(
+      "tests/bundled-tool-packages.test.ts",
+      `"node", { env: { FAKE: '"git", { args: ["cat-file", "-e", \`\${baseline.takenAt}^{commit}\`]' }, args: ["run.js"] }`,
     ),
     "spoofed signature in env var must be rejected",
   );
@@ -383,7 +436,7 @@ Deno.test("partition guard: isReviewedReadOnlySpawn requires anchored executable
   assert(
     !isReviewedReadOnlySpawn(
       "tests/other-file.test.ts",
-      `"git", { args: ["cat-file", "-e", "sha"] }`,
+      `"git", { args: ["cat-file", "-e", \`\${baseline.takenAt}^{commit}\`] }`,
     ),
     "other files must be rejected even with exact git cat-file invocation",
   );

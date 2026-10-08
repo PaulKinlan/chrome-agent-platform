@@ -525,13 +525,14 @@ function getCallArgs(text, startIndex) {
 // git provenance check in tests/bundled-tool-packages.test.ts (lines 563-566).
 // Enumerated strictly by call-site signature, not merely by file path.
 // The check is anchored to the actual first invocation argument (the invoked executable):
-// it requires the invoked command to be "git" (or 'git') and its args to start with
-// ["cat-file", "-e"]. A spoofed signature in unrelated argument text (e.g. an env var)
-// will not match.
+// it requires the invoked command to be "git" (or 'git') and its args to match the exact
+// reviewed provenance check: ["cat-file", "-e", `${baseline.takenAt}^{commit}`].
+// Any other arguments, different executable, or spoofed signature in unrelated argument
+// text will not match.
 export function isReviewedReadOnlySpawn(rel, argsSnippet) {
   if (rel !== "tests/bundled-tool-packages.test.ts") return false;
   if (typeof argsSnippet !== "string") return false;
-  return /^\s*["']git["']\s*,\s*\{[^}]*?\bargs:\s*\[\s*["']cat-file["']\s*,\s*["']-e["']/.test(argsSnippet);
+  return /^\s*["']git["']\s*,\s*\{[^}]*?\bargs:\s*\[\s*["']cat-file["']\s*,\s*["']-e["']\s*,\s*`\$\{baseline\.takenAt\}\^\{commit\}`\s*\]/.test(argsSnippet);
 }
 
 // Spawn hazard = a process spawn call whose invocation arguments target
@@ -606,20 +607,28 @@ export function unserialisedHazards(entries) {
         violations.push(`${rel} — new build-spawn hazard in the read-only post-build batch`);
         continue;
       }
-      // Inspect every spawn call in a READ_ONLY_DIST file. Only the reviewed git provenance
-      // signature in bundled-tool-packages is permitted; any other spawn — or any spawn whose
-      // arguments cannot be resolved — in a READ_ONLY_DIST file must be flagged.
+      // Inspect every spawn call in a READ_ONLY_DIST file. Only the single reviewed git provenance
+      // signature in bundled-tool-packages is permitted (exactly 1 occurrence); any other spawn,
+      // any duplicate reviewed spawn, or any spawn whose arguments cannot be resolved in a
+      // READ_ONLY_DIST file must be flagged.
       const code = stripComments(text);
       const spawnCallRe = /(?<!['"`])\b(?:Deno\.Command|spawnSync|execFileSync|execSync|\.spawn|\bspawn)\s*\(/g;
       let hasUnreviewedSpawn = false;
+      let reviewedSpawnCount = 0;
       for (const m of code.matchAll(spawnCallRe)) {
         const args = getCallArgs(code, m.index + m[0].length);
-        if (!isReviewedReadOnlySpawn(rel, args)) {
+        if (isReviewedReadOnlySpawn(rel, args)) {
+          reviewedSpawnCount++;
+        } else {
           hasUnreviewedSpawn = true;
           break;
         }
       }
-      if (hasUnreviewedSpawn) {
+      if (
+        hasUnreviewedSpawn ||
+        (rel === "tests/bundled-tool-packages.test.ts" && reviewedSpawnCount !== 1) ||
+        (rel !== "tests/bundled-tool-packages.test.ts" && reviewedSpawnCount > 0)
+      ) {
         violations.push(`${rel} — unreviewed spawn in the read-only post-build batch`);
         continue;
       }
