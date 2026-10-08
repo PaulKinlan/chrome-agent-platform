@@ -1966,3 +1966,26 @@ Deno.test("wp6u: gallery specimen headings (h3.spec) are sentence-case, not uppe
   }
 });
 
+Deno.test("harness-agent-button: renders a named native action, escapes names, and reflects current", async () => {
+  await import("../extension/shared/components.js");
+  const Klass = registry.get("harness-agent-button");
+  if (!Klass) throw new Error("Harness launcher component is not registered");
+  const element = new Klass();
+  let rendered = "";
+  element._root = { set innerHTML(value) { rendered = value; } };
+  element.setAttribute("name", '<img src=x onerror="alert(1)">');
+  element.connectedCallback();
+  if (!rendered.includes('<button type="button"')) throw new Error("Launcher must use a native button");
+  if (rendered.includes('<img')) throw new Error("Harness name rendered as markup");
+  if (!rendered.includes('aria-label="Open the &lt;img')) throw new Error("Escaped accessible name missing");
+  if (!rendered.includes('class="mark" aria-hidden="true"')) throw new Error("Neutral mark must not duplicate the name");
+  if (rendered.includes('title="&lt;img') === false) throw new Error("Collapsed launcher must retain its title");
+  if (/<button[^>]*aria-current/.test(rendered)) throw new Error("Idle launcher marked current");
+  element.setAttribute("current", "");
+  element.attributeChangedCallback("current", null, "");
+  if (!/<button[^>]*aria-current="true"/.test(rendered)) throw new Error("Current launcher state missing");
+  element.removeAttribute("current");
+  element.attributeChangedCallback("current", "", null);
+  if (/<button[^>]*aria-current/.test(rendered)) throw new Error("Current state did not clear");
+});
+
