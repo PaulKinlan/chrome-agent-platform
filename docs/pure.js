@@ -1284,7 +1284,6 @@ export const PAGE_ALLOWED_ROUTES = new Set([
   "tools.list",
   "tools.upsert",
   "tools.pending",
-  "webmcp.diagnostics.get", // read-only owner toggle (a page's script may read its own diagnostics gate)
   "enrollment.status", // read-only: a freshly-injected bridge syncs the enrollment generation for ITS OWN origin (sender-derived)
 ]);
 

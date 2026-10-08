@@ -99,7 +99,7 @@ inventory and the sender/inventory guard described in INV-15.
   sandbox page list at `extension/manifest.json:108-113`.
 - **TB2 — The service worker is the privileged broker.** No other component may reach
   storage, OPFS, providers or browser control directly: the content-script realm may
-  reach exactly eight routes (`PAGE_ALLOWED_ROUTES` in `extension/lib/pure.js:1280-1290`),
+  reach exactly seven routes (`PAGE_ALLOWED_ROUTES` in `extension/lib/pure.js:1280-1289`),
   and every other route is refused by `chrome.runtime.onMessage.addListener` at
   `extension/background/service-worker.js:12265` (allowlist check near :12295).
   The receiver derives the origin from the BROWSER-ATTESTED `sender` (near :12274-12308),
@@ -194,7 +194,7 @@ should reason about; the threats that use them are in sections 5 and 6.
 
 | ID | Surface | Where it enters | What is hostile about it |
 |---|---|---|---|
-| S1 | Page content and page messages | `chrome.runtime.onMessage.addListener` at `extension/background/service-worker.js:12265`; `PAGE_ALLOWED_ROUTES` at `extension/lib/pure.js:1280` | a page's content script may call only the eight page-allowed routes for its OWN origin, and may put anything in the message body |
+| S1 | Page content and page messages | `chrome.runtime.onMessage.addListener` at `extension/background/service-worker.js:12265`; `PAGE_ALLOWED_ROUTES` at `extension/lib/pure.js:1280` | a page's content script may call only the seven page-allowed routes for its OWN origin, and may put anything in the message body |
 | S2 | WebMCP tool descriptors and tool results | `extension/lib/tools.js:511`, `extension/lib/webmcp-authority.js:68` | a site authors its own tool schema and result text |
 | S3 | Model output (tool calls and prose) | `extension/lib/lazy-tool-protocol.js:1`, `extension/lib/untrusted-fence.js:59` | a steered model calls real tools |
 | S4 | Tool results rendered into the transcript | `extension/shared/components.js:566` (`renderHtmlFrame`) | an artifact body or fetched body is untrusted HTML |
@@ -460,7 +460,7 @@ and each names the executable check that would catch a regression.
   document id out of the message body breaks this.
 - **Evidence pin: `origin/main@28c7189d` for INV-1/2.** The sender/allowlist symbols were re-read at this tree; other invariant citations retain their own historical context.
 - **INV-2 — The page-reachable route set is closed and tiny.**
-  `PAGE_ALLOWED_ROUTES` at `extension/lib/pure.js:1280-1290`, pinned by
+  `PAGE_ALLOWED_ROUTES` at `extension/lib/pure.js:1280-1289`, pinned by
   `tests/internal-sender-contract-audit.test.ts` (closed-page-route assertion).
   An admin route appearing in that set breaks this.
 - **INV-3 — No external messaging channel exists.** No `externally_connectable`, no

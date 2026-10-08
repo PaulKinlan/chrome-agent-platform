@@ -1432,7 +1432,8 @@ async function renderSiteToolConsents({ cursor = siteToolConsentView.cursor, sta
 // ── WebMCP discovery status + diagnostics toggle (Paul 2026-08-18) ──
 // A small, honest status surface: when did discovery last run, for which origin,
 // what is the script/injection state, and how many tools were found — plus the
-// diagnostics toggle that gates the [WebMCP] content-script console logs.
+// owner diagnostics toggle for service-worker injection logs. Page-realm logs
+// are intentionally off until separately approved per-origin diagnostics exist.
 let webmcpDiagWired = false;
 async function renderWebmcpStatus() {
   const body = $("#webmcp-status-body");
@@ -1446,7 +1447,7 @@ async function renderWebmcpStatus() {
       await chrome.runtime
         .sendMessage({ type: "webmcp.diagnostics.set", enabled: checked })
         .catch(() => {});
-      saveFlash(checked ? "WebMCP diagnostics logs enabled." : "WebMCP diagnostics logs disabled.");
+      saveFlash(checked ? "WebMCP service-worker diagnostics enabled." : "WebMCP service-worker diagnostics disabled.");
     });
   }
   let diag = { enabled: false };

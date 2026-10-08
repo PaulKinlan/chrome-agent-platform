@@ -450,11 +450,14 @@ Deno.test("webmcp invoke: a bare DOMException is reported as exactly that — no
   assertEquals(results[0].errorDetail?.message, "");
 });
 
-Deno.test("webmcp invoke: UnknownError now carries the cause honestly; page diagnostics keep the raw object (ajcc)", async () => {
+Deno.test("webmcp invoke: UnknownError retains its labelled cause without page-console diagnostics (ajcc / 89rk4)", async () => {
   const thrown = new DOMException("database shard customer-42 failed", "UnknownError");
   function lookup() { throw thrown; }
   const world = makeWorld({ pageGlobals: { webmcpExpose: [lookup], DOMException: globalThis.DOMException } });
-  world.arm(true);
+  // Intentional privacy change (89rk4): even if the owner's global toggle is
+  // enabled, the actual SW bootstrap delivers false to the page's MAIN realm.
+  // The production argument is pinned by internal-sender-contract-audit.test.ts.
+  world.arm(false);
   await new Promise((r) => setTimeout(r, 30));
   const results = await invokeTool(world, {
     name: "lookup",
@@ -466,10 +469,14 @@ Deno.test("webmcp invoke: UnknownError now carries the cause honestly; page diag
   assert(err.includes("DOMException: UnknownError"), `name surfaced: ${err}`);
   assert(err.includes("database shard customer-42 failed"), `the underlying cause crosses (bounded, page-controlled): ${err}`);
   assertEquals(results[0].errorDetail?.pageControlled, true, "the cause is LABELLED page-controlled (untrusted, like any tool result)");
-  assertEquals(world.warnings.length, 1, "the page console receives one full failure diagnostic");
-  assertEquals(world.warnings[0][0], "[WebMCP:main]");
-  assertEquals(world.warnings[0][2], { tool: "lookup", argsShape: "{ accountId, options }" });
-  assertEquals(world.warnings[0][3], thrown, "the page's original error object preserves message and stack detail page-locally");
+  assertEquals(world.warnings, [], "no raw failure diagnostic reaches the page's DevTools console");
+  // A forged/legacy true argument must not silently restore the retired page
+  // logger. Owner diagnostics remain in the extension's service-worker console.
+  const legacy = makeWorld({ pageGlobals: { webmcpExpose: [lookup], DOMException: globalThis.DOMException } });
+  legacy.arm(true);
+  await new Promise((r) => setTimeout(r, 30));
+  await invokeTool(legacy, { name: "lookup", source: "inferred" });
+  assertEquals(legacy.warnings, [], "even a true bootstrap flag cannot revive owner-global page logging");
 });
 
 Deno.test("webmcp invoke: redaction parity with pure.js — keyword assignments, userinfo URLs, fragments (ajcc review P1)", async () => {

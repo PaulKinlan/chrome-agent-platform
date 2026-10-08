@@ -41,7 +41,7 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 export const CENSUS_CATEGORIES = {
   PAGE_ALLOWED: new Set([
     "webmcp.detect.bootstrap", "webmcp.detect.arm", "webmcp.detected", "tools.list",
-    "tools.upsert", "tools.pending", "webmcp.diagnostics.get", "enrollment.status",
+    "tools.upsert", "tools.pending", "enrollment.status",
   ]),
   SETTINGS_ONLY_DIRECT: new Set([
     "provider.get", "provider.set", "provider.clear-key", "provider.test",
@@ -144,7 +144,7 @@ export const CENSUS_CATEGORIES = {
     "sidepanel.getTarget", "sidepanel.getTools", "sidepanel.openPage", "site-skills.get",
     "skill.discover", "skill.list", "skills.all", "skills.get", "task.list", "task.nextRun",
     "thread.get", "thread.list", "tools.allOrigins", "tools.consent.states",
-    "tools.policies", "usage.get", "webmcp.status",
+    "tools.policies", "usage.get", "webmcp.diagnostics.get", "webmcp.status",
     "python.network.grants",
     "onDeviceText.summarize", "onDeviceText.detectLanguage", "onDeviceText.translate", "onDeviceText.availability",
     "wheel.list",
