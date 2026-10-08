@@ -77,8 +77,11 @@ isolated OPFS memory, run history, skills, and avatar.
   files locally with a name and description. Upload size and file count have no
   product-imposed caps. Files stream into digest-keyed OPFS storage; identical
   bytes update the existing labels, while different files may share a name.
-  This increment is storage only: uploads are not run or registered as callable
-  tools. See [user-uploaded WebAssembly storage](docs/USER-WASM-STORAGE.md).
+  Storage accepts files without validating that they are executable Wasm.
+  Once a module's digest is allowed for an agent, `user-wasm` tools are adapted
+  into the callable catalog and execute in a fresh `wasm-execution-worker.js`
+  through the offscreen host, with a 15-second deadline. See
+  [user-uploaded WebAssembly storage and execution](docs/USER-WASM-STORAGE.md).
 - **Usage + cost accounting** — per-call token/cost records against the bundled
   llm-prices table, aggregated per run and per agent. Providers that don't report usage
   are recorded as unknown, never faked.

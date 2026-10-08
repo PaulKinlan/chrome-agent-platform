@@ -4,7 +4,7 @@
 // Invariants guarded:
 //   1. docs/SW-DISPATCH-AUTHORITY-CENSUS.md exists and is cited in AGENTS.md and routes/ROUTE_MAP.md.
 //   2. Every registered route in handlers (via mergeRouteMaps) is extracted from actual AST composition.
-//   3. The census classification is complete, disjoint, and covers 100% of registered routes (287 total).
+//   3. The census classification is complete, disjoint, and covers 100% of registered routes (288 total).
 //      (l0r: recipe.list catalog fork deleted; wfo5: browser.callTool added;
 //       s7wl: the vault/enclave maps the resolver below used to skip, +9.)
 //   4. Any new route added to mergeRouteMaps without explicit census classification fails RED.
@@ -382,6 +382,19 @@ function assertRiskAndThreatPopulation(risks: string, threat: string): void {
     assertEquals(Number(match[1]), expected, `THREAT_MODEL ${place} population`);
     if (place === "dispatch census") assertEquals(Number(match[2]), unclassified.size, "THREAT_MODEL dispatch census gap count");
   }
+  // 5x4iw: two additional mentions were not pinned by the older assertions.
+  // Compare every population mention to the AST-derived route set, so changing
+  // either the component-map pin or the T4 evidence pin turns the gate red.
+  const mapPin = /The dispatch census and `tests\/sw-dispatch-authority-census\.test\.ts` assert (\d+) registered routes/.exec(threat);
+  assert(mapPin, "THREAT_MODEL component-map evidence pin must state a population");
+  assertEquals(Number(mapPin[1]), registered, "THREAT_MODEL component-map evidence pin population");
+  const t4Pin = /The census §4\.9 lists (\d+) unclassified mutations among (\d+) registered routes/.exec(threat);
+  assert(t4Pin, "THREAT_MODEL T4 evidence pin must state its populations");
+  assertEquals(Number(t4Pin[1]), unclassified.size, "THREAT_MODEL T4 evidence pin unclassified count");
+  assertEquals(Number(t4Pin[2]), registered, "THREAT_MODEL T4 evidence pin registered count");
+  const populationMentions = [...threat.matchAll(/\b(\d+)(?:-route dispatch census| registered routes)\b/g)];
+  assertEquals(populationMentions.length, 4, "THREAT_MODEL route-population mentions must be inventoried in this gate");
+  for (const match of populationMentions) assertEquals(Number(match[1]), registered, "THREAT_MODEL route-population mention");
 }
 
 function assertArchitectureAndStrategyPopulation(arch: string, nativePlan: string): void {
@@ -418,6 +431,12 @@ Deno.test("census: companion-doc total and route-name falsifications RED by docu
   assertThrows(() => assertRouteMap(map.replace("`enclave.proxy`", "`enclave.proxy-renamed`")), Error, "enclave.proxy-renamed");
   assertThrows(() => assertRiskAndThreatPopulation(risks.replace("37 unclassified mutation routes", "31 unclassified mutation routes"), threat), Error, "RISK-REGISTER R11 risk");
   assertThrows(() => assertRiskAndThreatPopulation(risks.replace("`asset.export-to-folder` writes", "`asset.export-to-folder-renamed` writes"), threat), Error, "asset.export-to-folder-renamed");
+  assertThrows(() => assertRiskAndThreatPopulation(risks,
+    threat.replace("` assert 288 registered routes", "` assert 287 registered routes")),
+    Error, "THREAT_MODEL component-map evidence pin population");
+  assertThrows(() => assertRiskAndThreatPopulation(risks,
+    threat.replace("37 unclassified mutations among 288 registered routes", "37 unclassified mutations among 287 registered routes")),
+    Error, "THREAT_MODEL T4 evidence pin registered count");
 
   // r073 falsification drills:
   assertThrows(
@@ -442,7 +461,7 @@ Deno.test("census: companion-doc total and route-name falsifications RED by docu
   );
 });
 
-Deno.test("census: all registered routes in handlers are derived via AST and total 287", () => {
+Deno.test("census: all registered routes in handlers are derived via AST and total 288", () => {
   const registered = extractAllRegisteredRoutes();
   assertEquals(registered.size, 288, `registered routes population must equal 288 (got ${registered.size})`);
 });

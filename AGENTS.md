@@ -391,10 +391,14 @@ read in run 2.
   `npm run test:file -- tests/x.test.ts`. Do not add `--config deno.runner.jsonc`
   to a sweep by hand; that is the runner's job.
   **Real browser requirement:** `npm test` is NOT a pure in-memory test run.
-  While all 19 serial files and 480+ parallel files are in-memory unit tests or use
-  fake-runner probes (`binary: fake`), `tests/chrome-profile-location.test.ts:115`
-  unconditionally launches a REAL Chromium instance to test live profile mutation
-  during whole-tree copies. It requires `/usr/bin/chromium` (or Chrome binary).
+  Most serial and parallel files are in-memory tests or fake-runner probes (`binary: fake`),
+  but `tests/chrome-profile-location.test.ts` (the “a REAL browser holds its profile” test,
+  near line 97) checks live profile mutation during whole-tree copies. Its
+  `browserRefusal(...)` guard (near line 119) declines the launch (near line 130)
+  when no executable Chromium resolves. The final guard in that file calls
+  `refuseWithoutBrowser(...)`: `npm test` then refuses with a named, counted
+  environmental exit **75** via `scripts/lib/browser-refusal.ts` — neither a pass
+  nor a product failure. With a browser present, the test launches real Chrome.
   See `docs/CHROME-TEST-CONTRACT.md` for the full contract.
 - **A suite must not depend on ambient state it does not create** (chrome-agent-platform-p15i,
   fleet convention 2026-09-18). One property, three live instances: another lane's
