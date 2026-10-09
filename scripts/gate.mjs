@@ -148,19 +148,27 @@ function run(step, { cwd = ROOT, env = process.env, log = null } = {}) {
   });
 }
 
-/** The QUIET HEAD files this tree's partition declares, read from the partition module (one source). */
-function quietHeadFiles() {
-  const listed = spawnSync(process.execPath, [
-    "-e",
-    "import('./scripts/test-partition.mjs').then(m=>console.log([...m.QUIET_HEAD].join('\n')))",
-  ], { cwd: ROOT, encoding: "utf8" });
-  return String(listed.stdout ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+/**
+ * The QUIET HEAD files this tree's partition declares.
+ *
+ * A DIRECT import, not a child process: an earlier version asked `node -e "import(...)"` and passed the
+ * separator as an escaped newline, which node parsed as a broken one-liner — the listing came back empty
+ * and the phase was SKIPPED in silence, which is exactly the defect class this repo bans (a gate that
+ * cannot tell you what it did not run). The import cannot fail softly: if scripts/test-partition.mjs is
+ * unreadable the gate dies before any step runs.
+ */
+export async function quietHeadFiles() {
+  const { QUIET_HEAD } = await import("./test-partition.mjs");
+  return [...QUIET_HEAD];
 }
 
 /** Run the quiet-head phase for this tree (0 when there is nothing to run). Refuses (75) if it cannot
  *  get a quiet window; a refusal is the repo's third verdict, never a pass and never a product red. */
 async function runQuietHeadPhase() {
-  const files = quietHeadFiles();
+  const files = await quietHeadFiles();
+  // Say it even when there is nothing to run: a phase that silently does nothing is how the listing
+  // bug above went unnoticed through two full gates.
+  console.log(`gate: QUIET HEAD — ${files.length} file(s) to measure first: ${files.length ? files.join(", ") : "(none declared)"}`);
   if (!files.length) return 0;
   return await run({ name: "quiet head", cmd: "deno", args: ["run", "-A", "scripts/lib/quiet-head.ts", ...files] });
 }

@@ -2,7 +2,7 @@
 // gate's commands (same files, same assertions), fall back to the sequential chain rather than skip
 // test:build, and never leak a sibling worktree.
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { gateSteps, resolveSiblingRoot, sequentialReason, siblingOwnerPid, sweepStaleSiblings } from "../scripts/gate.mjs";
+import { gateSteps, quietHeadFiles, resolveSiblingRoot, sequentialReason, siblingOwnerPid, sweepStaleSiblings } from "../scripts/gate.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const pkg = JSON.parse(await Deno.readTextFile(new URL("../package.json", import.meta.url)));
@@ -81,4 +81,14 @@ Deno.test("gate: against the REAL durable root the sibling root resolves and is 
   const real = resolveSiblingRoot();
   assertEquals(real.reason, null, String(real.reason));
   assert(real.parent?.endsWith("gate-build"), String(real.parent));
+});
+
+// gate-speed: the gate must SEE the quiet-head files. An earlier version listed them through
+// `node -e "import(...)"` with an escaped-newline separator, which node parsed as a broken one-liner:
+// the listing came back empty and the phase was skipped in silence for two full gates. Non-empty is the
+// property; it is asserted against the partition module's own set so the two cannot drift.
+Deno.test("gate: the quiet-head file list is read from the partition module and is never silently empty", async () => {
+  const { QUIET_HEAD } = await import("../scripts/test-partition.mjs");
+  assert(QUIET_HEAD.size > 0, "the partition declares quiet-head files");
+  assertEquals(await quietHeadFiles(), [...QUIET_HEAD]);
 });
