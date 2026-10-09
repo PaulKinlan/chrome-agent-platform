@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.612] — 2026-10-09
+- Newly created agents now appear promptly in the live sidebar.
+
 ## [0.3.611] — 2026-10-09
 - Concurrent requests to one connected agent now show a clear refusal instead of running twice.
 
