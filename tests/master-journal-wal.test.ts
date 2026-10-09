@@ -875,6 +875,11 @@ Deno.test("durable exact compaction issuance claim survives restart and stays ou
     "future-retired");
 });
 
+Deno.test("compaction is internal to the frame runner so claim retirement cannot be bypassed", async () => {
+  const wal = await import("../extension/lib/master-journal-wal.js");
+  assertEquals("stageMasterJournalCompaction" in wal, false);
+});
+
 Deno.test("failed claim retirement preserves acknowledged append then blocks the next mutation", async () => {
   const faults = {};
   const { master, allocateVersion, readGeneration } = await legacyFixture(faults);
@@ -924,11 +929,14 @@ Deno.test("complete claim and archive without checkpoint retry with the exact cl
   assertEquals(wal.children.has("checkpoint-18-129.json"), false);
   const claimVersion = (await unsealMasterJournalRecord(
     (await wal.getFileHandle("claim-18-129.json")).bytes, "claim")).version;
+  const generationBeforeRetry = await readGeneration();
   faults.create = null;
   const recovered = await stageMasterJournalFrame(master,
     { operation: "append", row: { id: 628 } },
     createMasterJournalIssuer(master, { issueVersion: allocateVersion, readGeneration }));
   assertEquals(recovered.checkpointSequence, 129);
+  assertEquals(await readGeneration(), generationBeforeRetry + 1,
+    "the recovered append issues one frame token and no second compaction token");
   assertEquals((await unsealMasterJournalRecord(
     (await wal.getFileHandle("checkpoint-18-129.json")).bytes, "checkpoint")).version, claimVersion);
   assertEquals((await readMasterJournalProjection(master, { includeArchive: true })).archive, seed.slice(0, 129));

@@ -312,7 +312,9 @@ async function writeOrReuseCompactionRecord(directory, name, kind, payload, sour
  * remain available until a later publication advances it; export includes
  * the union of both slots in the meantime. This is test-only until the WAL
  * writer, receipt/CAS and clear paths are wired as one authority. */
-export async function stageMasterJournalCompaction(master, {
+// Internal only: a direct compaction could leave a claim older than the
+// current checkpoint without the frame runner's retirement/preflight hooks.
+async function stageMasterJournalCompaction(master, {
   allocateVersion, readIssuedVersion, projection = null,
 } = {}) {
   if (typeof allocateVersion !== "function") throw new Error("master journal compaction requires a durable version issuer");
