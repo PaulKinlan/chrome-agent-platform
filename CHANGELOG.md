@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.615] — 2026-10-09
+- Faster New Tab Hub boot coalescing eliminates duplicate tool-offers queries.
+
 ## [0.3.614] — 2026-10-09
 - All design-system shadow-DOM components enforce a 12px font scale floor via var(--text-xs, 12px) tokens and verified computed styles.
 

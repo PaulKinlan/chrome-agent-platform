@@ -1238,7 +1238,8 @@ import {
   normalizeDurableToolCall,
   normalizeDurableToolResult,
   normalizeDurableLog,
-  redactToolArgs
+  redactToolArgs,
+  createTabChangeNotifier
 } from "../lib/pure.js";
 import { redactToolResult, toolResultFullJson } from "../lib/tool-summary.js";
 import {
@@ -5354,20 +5355,18 @@ async function armDetectionProbe(tabId, documentId, hookName) {
 // changed with them (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01). Tell the open
 // hub(s) once, debounced — they re-read `agent.tool-offers`; this carries no
 // URL or title. Registered at top level so a restarted worker keeps it.
-let openTabsChangedTimer = null;
-function noteOpenTabsChanged() {
-  clearTimeout(openTabsChangedTimer);
-  openTabsChangedTimer = setTimeout(() => {
-    openTabsChangedTimer = null;
-    broadcastProgress({ type: "open-tabs-changed" });
-  }, 300);
-}
-chrome.tabs?.onCreated?.addListener(() => noteOpenTabsChanged());
-chrome.tabs?.onUpdated?.addListener((_tabId, info) => {
-  if (info?.status === "complete" || typeof info?.url === "string") noteOpenTabsChanged();
+const tabChangeNotifier = createTabChangeNotifier({
+  notify: () => broadcastProgress({ type: "open-tabs-changed" }),
+  chromeTabs: typeof chrome !== "undefined" ? chrome.tabs : undefined,
+  debounceMs: 300,
 });
-chrome.tabs?.onRemoved?.addListener(() => noteOpenTabsChanged());
-chrome.tabs?.onActivated?.addListener(() => noteOpenTabsChanged());
+function noteOpenTabsChanged() {
+  tabChangeNotifier.noteChange();
+}
+chrome.tabs?.onCreated?.addListener(tabChangeNotifier.handleCreated);
+chrome.tabs?.onUpdated?.addListener(tabChangeNotifier.handleUpdated);
+chrome.tabs?.onActivated?.addListener(tabChangeNotifier.handleActivated);
+chrome.tabs?.onRemoved?.addListener(tabChangeNotifier.handleRemoved);
 
 chrome.permissions?.onAdded?.addListener((granted) => {
   if (!granted?.permissions?.includes("scripting")) return;

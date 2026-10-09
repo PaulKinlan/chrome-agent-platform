@@ -123,7 +123,9 @@ Deno.test({
 
       // Check 1: NTP cold boot total <= 22 (measured at exactly 22 in zdaj:
       // coalesced artifacts.list, agent.directory, agent.tool-offers, board.messages
-      // so all 22 routes are asked exactly once).
+      // so all 22 routes are asked exactly once). With concurrent Promise.all in
+      // renderSiteAgents and web-only tab change filtering in service-worker, duplicate
+      // agent.tool-offers calls on cold boot are deterministically eliminated.
       assert(
         bootCensus.total <= 22,
         `Boot RPC count ${bootCensus.total} must be <= 22 (was 26 before zdaj coalescing, 54 before 9epn.1); by type: ` +
