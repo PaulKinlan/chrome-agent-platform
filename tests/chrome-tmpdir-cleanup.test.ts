@@ -2,6 +2,7 @@
 // Fake shell browser: no Chromium process or browser slot is consumed.
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { launchChrome, teardownChrome, type LaunchedChrome } from "../scripts/lib/chrome-launch.ts";
 
@@ -89,8 +90,8 @@ Deno.test("gfxoc: browser startup refusal cleans the newly allocated scratch bef
       console.log(JSON.stringify({ refused, before, after: names() }));
     `;
     const child = await new Deno.Command(Deno.execPath(), {
-      args: ["eval", "-A", "--config", new URL("../deno.runner.jsonc", import.meta.url).pathname, program],
-      cwd: new URL("..", import.meta.url).pathname,
+      args: ["eval", "-A", "--config", fileURLToPath(new URL("../deno.runner.jsonc", import.meta.url)), program],
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
       stdout: "piped", stderr: "piped",
     }).output();
     assertEquals(child.code, 0, new TextDecoder().decode(child.stderr));
