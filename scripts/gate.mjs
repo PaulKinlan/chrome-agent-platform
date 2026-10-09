@@ -101,12 +101,12 @@ export function sweepStaleSiblings(parent, { isLive = (pid) => pidRuns(pid, "gat
  * fallback does not need a "plan only, run nothing" knob that could weaken the gate.
  * @returns {{ parent: string|null, reason: string|null }}
  */
-export function resolveSiblingRoot({ mk = durableDir, sweep = sweepStaleSiblings, report = (line) => say(line) } = {}) {
+export function resolveSiblingRoot({ name = "gate-build", mk = durableDir, sweep = sweepStaleSiblings, report = (line) => say(line) } = {}) {
   let parent;
   try {
-    parent = mk("gate-build");
+    parent = mk(name);
   } catch (e) {
-    return { parent: null, reason: `the sibling root could not be created (${e?.message ?? e})` };
+    return { parent: null, reason: `the ${name} sibling root could not be created (${e?.message ?? e})` };
   }
   try {
     const swept = sweep(parent);

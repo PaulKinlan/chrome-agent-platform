@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { runSerialFiles } from "./lib/serial-phase.mjs";
 import { durableDir } from "./lib/durable-root.mjs";
 import { BUILD_GATE_FILES } from "./test-partition.mjs";
-import { pidRuns, removeSibling, sweepStaleSiblings } from "./gate.mjs";
+import { pidRuns, removeSibling, resolveSiblingRoot, sweepStaleSiblings } from "./gate.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -51,10 +51,15 @@ export function oneTreeReason(
 
 /** null = the sibling ran (its exit code is in `rc`); a string = it could not be created, run here instead. */
 async function siblingRun(files: string[]): Promise<{ rc: number; unavailable: string | null }> {
-  const parent = durableDir("build-gate");
-  // A SIGKILLed gate cannot remove its sibling; the next one does (owner pid gone or not a build gate).
-  const swept = sweepStaleSiblings(parent, { isLive: (pid: number) => pidRuns(pid, "build-gate.ts") });
-  if (swept.length) console.log(`build-gate: removed ${swept.length} sibling(s) left by dead gates: ${swept.join(", ")}`);
+  // A root that cannot be created, or a sweep that fails, is an unavailable sibling: this file runs HERE
+  // (the caller falls back), never a crash and never a skipped file. One tested helper does both modes.
+  const root = resolveSiblingRoot({
+    name: "build-gate",
+    sweep: (parent: string) => sweepStaleSiblings(parent, { isLive: (pid: number) => pidRuns(pid, "build-gate.ts") }),
+    report: (line: string) => console.log(line),
+  });
+  if (root.reason) return { rc: 1, unavailable: root.reason };
+  const parent = root.parent as string;
   const sha = git(["rev-parse", "HEAD"]).out;
   const dir = `${parent}/${sha.slice(0, 12)}-${Deno.pid}`;
   const add = git(["worktree", "add", "--detach", "--quiet", dir, sha]);

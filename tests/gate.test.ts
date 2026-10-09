@@ -58,6 +58,9 @@ Deno.test("gate: an unusable sibling root or a failing sweep is a named sequenti
   const noRoot = resolveSiblingRoot({ mk: () => { throw boom; } });
   assertEquals(noRoot.parent, null);
   assert(noRoot.reason?.includes("could not be created") && noRoot.reason.includes("ENOSPC"), String(noRoot.reason));
+  // The build-gate lane uses the same helper with its own root name, so its fallback says which root failed.
+  const named = resolveSiblingRoot({ name: "build-gate", mk: () => { throw boom; } });
+  assert(named.reason?.includes("build-gate sibling root"), String(named.reason));
 
   const noSweep = resolveSiblingRoot({ mk: () => "/tmp/x", sweep: () => { throw new Error("EACCES: denied"); } });
   assertEquals(noSweep.parent, null);
