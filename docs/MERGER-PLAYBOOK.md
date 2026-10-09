@@ -36,13 +36,26 @@ Every landing on `origin/main` must follow this procedure. A merger lane does no
 
 ## 2. Environmental Reds Classification: Mechanisms vs Mood
 
-When a test run fails, never guess and never blame ambient load without mechanism proof. Only three known environmental failure modes may be classified as environmental; all others are product stops:
+When a test run fails, never guess and never blame ambient load without mechanism proof. The three named signatures below have their own discriminators. For a failure matching none of them, the **only** load exception is the evidence-gated rule below; otherwise it is a product stop:
 
 | Name | Trigger / Symptom | Phase | Mechanism & Discriminator |
 |---|---|---|---|
 | **`fnmr` futex hang** | `build-bundled-tool-packages.mjs --verify` hangs > 120s (wchan `futex_do_wait` ≤6.6, `futex_wait_queue` ≥6.7 — i0u7) | Dedicated build gate / serial (`tests/build-tool-bundling.test.ts:136`) | Rare Node/Deno futex deadlock in child process. **Discriminator**: Runs in ~1–2s when executed in isolation (`npm run test:file -- tests/build-tool-bundling.test.ts`). |
 | **`m3a2` env race** | `ENOENT: mkdir '/proc/cap-chp-impossible/...'` | Parallel (`tests/dist-staleness-note.test.ts`) | `tests/durable-root.test.ts:69` mutates process-global `CAP_DURABLE_ROOT` in the shared parallel test process. **Discriminator**: Passes 100% in isolation; fails only when racing `durable-root.test.ts`. |
 | **`4vfj` stale selector** | 4 combobox checks fail on `#task-input` | Standalone (`npm run test:a11y`) | Pre-existing selector drift on unmodified main prior to composer-target migration. |
+
+### Non-signature load reds: a narrow, evidence-gated exception (chrome-agent-platform-m9g43)
+
+A failing gate with **no matching named signature** is environmental **only when BOTH** of these independent facts are in the landing bead, tied to the **same exact tree**:
+
+1. **Isolation:** every test that failed in the gate passes when run alone on that same tree. Record each command, tree SHA and verdict; a green subset or a different commit is not the discriminator.
+2. **Named overlap:** the failing gate's contemporaneous log names a concurrent heavy job (including a live or orphaned builder), with its **PID, kind and overlap with the gate window** recorded. Quote the log lines and the gate start/end times. Load average, elapsed time, an unrelated job observed only afterwards, or an assertion that the box was busy is not a substitute for a named overlapping process.
+
+The timeout rule below still applies: an earlier failed assertion is a PRODUCT FAILURE even if both load discriminators happen to hold.
+
+If isolation passes but the log does **not** name an overlapping heavy job, the result remains a **PRODUCT RED**: no load-classified retry and no landing. The `xy6n2` union red at `af43d57dc` prompted this rule: two untouched-file reds coincided with the `mwj7v` fast job (reported PID `1202953`), but coincidence and isolation alone cannot classify that gate. The gate log must itself name the overlapping PID/kind in its window before this exception applies; otherwise even this example stays a PRODUCT RED. If both facts hold, preserve the red log and cache verdict, remove only the failing **exact-tree gate cache** so the next invocation really executes, end the named competing job (or wait for it to exit), and permit **one** quiet re-run of the same full gate/tree. Record its counts, ignored count, exit and overlap check. A repeated red is a hard stop as a PRODUCT RED; **no third attempt** and no retry-until-green. Only a green quiet full gate plus the usual remaining gates can permit landing. That green does not erase the first red or prove a fix; both attempts and the reason for this narrow exception stay on the bead.
+
+**Preemption is not a load-red signature** (`fleet-uhxq`). The hub now prints `[preempted by a priority job]` for a preempted job and automatically retries that job **once**. Check the exit status **against that marker** before calling it preempted: an exit 124 without the marker is a bound timeout, not evidence of preemption, and a marker without the matching exit is not a clean verdict. Preserve the preemption record and judge the retry's actual test verdict under the rules above; never relabel a hang as a preemption or launch another manual retry merely because the marker appeared.
 
 ### The Timeout Classification Rule (chrome-agent-platform-im52)
 
@@ -66,7 +79,7 @@ A timeout that follows a failed assertion is a **PRODUCT FAILURE**, and the prec
 - Authors must explicitly disclose environment caveats in handoffs (e.g. "symlinked dep root can distort measurements"). A disclosed caveat in an author report protects reviewers from filing false reds against sound code.
 - When a reviewer observes a failure absent from the author's report, verify whether the failure persists under a pristine, fully-isolated checkout (`npm ci` + `deno install` + real dependencies) before rejecting a candidate.
 
-**Rule**: If a failure does not match one of these three exact signatures with its isolation discriminator proven, it is a **PRODUCT RED** and the branch must NOT land.
+**Rule**: A failure that matches neither a named signature with its discriminator nor **both** non-signature load discriminators above is a **PRODUCT RED**; the branch must NOT land. An environmental classification only authorizes the single quiet, cache-invalidated full re-run, never a landing on a red verdict.
 
 ---
 
