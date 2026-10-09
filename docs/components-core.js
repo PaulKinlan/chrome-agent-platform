@@ -110,7 +110,7 @@ export function placeFloating(
 }
 
 /** Inject a <style> once (idempotent, id-keyed) — used by light-DOM components. */
-function ensureStyle(styleId, css) {
+export function ensureStyle(styleId, css) {
   if (document.getElementById(styleId)) return;
   const st = document.createElement("style");
   st.id = styleId;
@@ -1676,7 +1676,7 @@ export function getRuntimeSend() {
 
 export const RUNTIME_SEND = getRuntimeSend();
 
-function backend(type, payload = {}) {
+export function backend(type, payload = {}) {
   const send = getRuntimeSend() ?? RUNTIME_SEND;
   return send ? send(type, payload) : Promise.resolve({});
 }
@@ -1693,7 +1693,7 @@ export function backendBounded(type, payload = {}, timeoutMs = 12000) {
   ]);
 }
 
-function fmtTime(ts) {
+export function fmtTime(ts) {
   try {
     return new Date(ts).toLocaleTimeString([], { hour12: false });
   } catch {

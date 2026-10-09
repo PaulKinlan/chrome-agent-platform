@@ -2006,3 +2006,118 @@ Deno.test("harness-agent-button: renders a named native action, escapes names, a
   if (/<button[^>]*aria-current/.test(rendered)) throw new Error("Current state did not clear");
 });
 
+Deno.test("2y7qe recurrence guard: every cross-module call to components-core is imported and exported", async () => {
+  const acorn = await import("npm:acorn@8.18.0");
+
+  for (const baseDir of ["extension/shared", "docs"]) {
+    const coreCode = await Deno.readTextFile(`${baseDir}/components-core.js`);
+    const coreAst = acorn.parse(coreCode, { sourceType: "module", ecmaVersion: "latest" });
+
+    const coreSymbols = new Map<string, boolean>();
+    for (const node of (coreAst.body as any[])) {
+      if (node.type === "FunctionDeclaration") {
+        coreSymbols.set(node.id.name, false);
+      } else if (node.type === "VariableDeclaration") {
+        for (const d of node.declarations) coreSymbols.set(d.id.name, false);
+      } else if (node.type === "ClassDeclaration") {
+        coreSymbols.set(node.id.name, false);
+      } else if (node.type === "ExportNamedDeclaration") {
+        if (node.declaration?.id) coreSymbols.set(node.declaration.id.name, true);
+        if (node.declaration?.declarations) {
+          for (const d of node.declaration.declarations) coreSymbols.set(d.id.name, true);
+        }
+        if (node.specifiers) {
+          for (const s of node.specifiers) coreSymbols.set(s.exported.name, true);
+        }
+      }
+    }
+
+    const otherFiles = [
+      "components-conversation.js",
+      "components-hub.js",
+      "components-settings.js",
+      "components-artifacts.js",
+      "components-directory.js",
+      "components-privacy.js",
+    ];
+
+    const violations: string[] = [];
+
+    for (const f of otherFiles) {
+      const code = await Deno.readTextFile(`${baseDir}/${f}`);
+      const ast = acorn.parse(code, { sourceType: "module", ecmaVersion: "latest" });
+
+      const allImported = new Set<string>();
+      const fileDeclared = new Set<string>();
+
+      for (const node of (ast.body as any[])) {
+        if (node.type === "ImportDeclaration") {
+          for (const s of node.specifiers) allImported.add(s.local.name);
+        } else if (node.type === "FunctionDeclaration" && node.id) {
+          fileDeclared.add(node.id.name);
+        } else if (node.type === "ClassDeclaration" && node.id) {
+          fileDeclared.add(node.id.name);
+        } else if (node.type === "VariableDeclaration") {
+          for (const d of node.declarations) if (d.id?.name) fileDeclared.add(d.id.name);
+        }
+      }
+
+      function walk(node: any, scope = new Set<string>()) {
+        if (!node) return;
+        const currentScope = new Set(scope);
+        if (node.type === "FunctionDeclaration" || node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression") {
+          if (node.id?.name) currentScope.add(node.id.name);
+          for (const p of node.params ?? []) {
+            if (p.type === "Identifier") currentScope.add(p.name);
+            else if (p.type === "AssignmentPattern" && p.left?.type === "Identifier") currentScope.add(p.left.name);
+          }
+        }
+        if (node.type === "VariableDeclaration") {
+          for (const d of node.declarations ?? []) if (d.id?.type === "Identifier") currentScope.add(d.id.name);
+        }
+        if (node.type === "CatchClause" && node.param?.type === "Identifier") {
+          currentScope.add(node.param.name);
+        }
+        if (node.type === "CallExpression" && node.callee.type === "Identifier") {
+          const name = node.callee.name;
+          if (coreSymbols.has(name) && !allImported.has(name) && !fileDeclared.has(name) && !currentScope.has(name)) {
+            const isExported = coreSymbols.get(name);
+            violations.push(`${baseDir}/${f}: calls ${name}() which is defined in components-core.js (exported: ${isExported}) but not imported`);
+          }
+        }
+        for (const key of Object.keys(node)) {
+          if (key === "callee" && node.type === "CallExpression" && node.callee.type === "Identifier") continue;
+          const child = node[key];
+          if (Array.isArray(child)) {
+            for (const c of child) if (c && typeof c.type === "string") walk(c, currentScope);
+          } else if (child && typeof child.type === "string") {
+            walk(child, currentScope);
+          }
+        }
+      }
+
+      walk(ast, new Set());
+    }
+
+    if (violations.length > 0) {
+      throw new Error(`2y7qe static recurrence guard failed:\n${violations.join("\n")}`);
+    }
+  }
+});
+
+Deno.test("2y7qe recurrence guard: agent-conversation connectedCallback executes ensureStyle without ReferenceError", async () => {
+  await import("../extension/shared/components.js");
+  const restoreDoc = installFakeDocument();
+  try {
+    const Klass = registry.get("agent-conversation");
+    if (!Klass) throw new Error("agent-conversation is not registered");
+    const element = new Klass();
+    element.connectedCallback();
+    const styleInjected = (globalThis.document as any).head.children.some((c: any) => c.id === "sc-agent-conversation-style");
+    if (!styleInjected) throw new Error("ensureStyle did not append sc-agent-conversation-style to document.head");
+  } finally {
+    restoreDoc();
+  }
+});
+
+

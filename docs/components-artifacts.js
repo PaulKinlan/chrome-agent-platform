@@ -15,6 +15,7 @@ import {
   wireHtmlFramePreference,
   currentFramePreference,
   injectFrameGuards,
+  parseJSONAttr,
   prefersReducedMotion,
   RUNTIME_SEND,
 } from "./components-core.js";

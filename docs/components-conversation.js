@@ -68,8 +68,12 @@ import {
   SITE_ACTIVITY_FOCUS_KEY,
   isHtmlDocument,
   renderHtmlFrame,
+  wireHtmlFrameContent,
+  wireHtmlFramePreference,
   renderInline,
   adoptOrInjectStyle,
+  ensureStyle,
+  sleep,
   toolResultSignalsError,
   prefersReducedMotion,
 } from "./components-core.js";

@@ -1,0 +1,100 @@
+[2y7qe-smoke] Starting comprehensive real-Chrome verification for 2y7qe regression fix
+[2y7qe-smoke] Profile: /home/exedev/cap-evidence/cap-chrome-profiles/2y7qe-browser-smoke-1967844-1791573174421-f6fb
+[2y7qe-smoke] Evidence dir: /home/exedev/cap-evidence/2y7qe-browser-smoke/1791573174421-1967844
+[2y7qe-smoke] Chrome launched at ws://127.0.0.1:37069/devtools/browser/3c62f6b8-e779-4aa6-b006-6415b31f7e66
+[2y7qe-smoke] Connected to browser CDP
+[2y7qe-smoke] Extension loaded with ID: kjlafalcfhkeaehmliplpgilgidgohjn
+
+[2y7qe-smoke] Testing chrome-extension://kjlafalcfhkeaehmliplpgilgidgohjn/ntp/ntp.html...
+  PASS: ntp: customElements.get('agent-conversation') registered
+  PASS: ntp: agent-conversation connectedCallback succeeds without throwing
+  PASS: ntp: ensureStyle injected sc-agent-conversation-style into head
+  PASS: ntp/ntp.html: No ReferenceError: ensureStyle (clean)
+  PASS: ntp/ntp.html: No ReferenceError: normalizeSiteActivity (clean)
+  PASS: ntp/ntp.html: No ReferenceError: fmtTime (clean)
+  PASS: ntp/ntp.html: No ReferenceError: backend (clean)
+  PASS: ntp/ntp.html: No ReferenceError: parseJSONAttr (clean)
+  PASS: ntp/ntp.html: No ReferenceError: wireHtmlFrame* (clean)
+  PASS: ntp/ntp.html: Zero ReferenceErrors of any kind (clean)
+  PASS: ntp/ntp.html: Zero exceptionThrown events (clean)
+
+[2y7qe-smoke] Testing chrome-extension://kjlafalcfhkeaehmliplpgilgidgohjn/sidepanel/sidepanel.html...
+  PASS: sidepanel: agent-conversation element upgraded in DOM
+  PASS: sidepanel: sc-agent-conversation-style injected into head via ensureStyle
+  PASS: sidepanel/sidepanel.html: No ReferenceError: ensureStyle (clean)
+  PASS: sidepanel/sidepanel.html: No ReferenceError: normalizeSiteActivity (clean)
+  PASS: sidepanel/sidepanel.html: No ReferenceError: fmtTime (clean)
+  PASS: sidepanel/sidepanel.html: No ReferenceError: backend (clean)
+  PASS: sidepanel/sidepanel.html: No ReferenceError: parseJSONAttr (clean)
+  PASS: sidepanel/sidepanel.html: No ReferenceError: wireHtmlFrame* (clean)
+  PASS: sidepanel/sidepanel.html: Zero ReferenceErrors of any kind (clean)
+  PASS: sidepanel/sidepanel.html: Zero exceptionThrown events (clean)
+
+[2y7qe-smoke] Testing chrome-extension://kjlafalcfhkeaehmliplpgilgidgohjn/options/options.html...
+  PASS: options: webmcp-consent-manager and normalizeSiteActivity execute cleanly
+  PASS: options/options.html: No ReferenceError: ensureStyle (clean)
+  PASS: options/options.html: No ReferenceError: normalizeSiteActivity (clean)
+  PASS: options/options.html: No ReferenceError: fmtTime (clean)
+  PASS: options/options.html: No ReferenceError: backend (clean)
+  PASS: options/options.html: No ReferenceError: parseJSONAttr (clean)
+  PASS: options/options.html: No ReferenceError: wireHtmlFrame* (clean)
+  PASS: options/options.html: Zero ReferenceErrors of any kind (clean)
+  PASS: options/options.html: Zero exceptionThrown events (clean)
+
+[2y7qe-smoke] Testing chrome-extension://kjlafalcfhkeaehmliplpgilgidgohjn/artifacts/index.html...
+  PASS: artifacts/index.html: artifact components registered and clean
+  PASS: artifacts/index.html: No ReferenceError: ensureStyle (clean)
+  PASS: artifacts/index.html: No ReferenceError: normalizeSiteActivity (clean)
+  PASS: artifacts/index.html: No ReferenceError: fmtTime (clean)
+  PASS: artifacts/index.html: No ReferenceError: backend (clean)
+  PASS: artifacts/index.html: No ReferenceError: parseJSONAttr (clean)
+  PASS: artifacts/index.html: No ReferenceError: wireHtmlFrame* (clean)
+  PASS: artifacts/index.html: Zero ReferenceErrors of any kind (clean)
+  PASS: artifacts/index.html: Zero exceptionThrown events (clean)
+
+[2y7qe-smoke] Testing chrome-extension://kjlafalcfhkeaehmliplpgilgidgohjn/artifact/artifact.html...
+  PASS: artifact/artifact.html: loaded cleanly
+  PASS: artifact/artifact.html: No ReferenceError: ensureStyle (clean)
+  PASS: artifact/artifact.html: No ReferenceError: normalizeSiteActivity (clean)
+  PASS: artifact/artifact.html: No ReferenceError: fmtTime (clean)
+  PASS: artifact/artifact.html: No ReferenceError: backend (clean)
+  PASS: artifact/artifact.html: No ReferenceError: parseJSONAttr (clean)
+  PASS: artifact/artifact.html: No ReferenceError: wireHtmlFrame* (clean)
+  PASS: artifact/artifact.html: Zero ReferenceErrors of any kind (clean)
+  PASS: artifact/artifact.html: Zero exceptionThrown events (clean)
+
+[2y7qe-smoke] Testing chrome-extension://kjlafalcfhkeaehmliplpgilgidgohjn/directory/directory.html...
+  PASS: directory/directory.html: tool-directory-card registered and clean
+  PASS: directory/directory.html: No ReferenceError: ensureStyle (clean)
+  PASS: directory/directory.html: No ReferenceError: normalizeSiteActivity (clean)
+  PASS: directory/directory.html: No ReferenceError: fmtTime (clean)
+  PASS: directory/directory.html: No ReferenceError: backend (clean)
+  PASS: directory/directory.html: No ReferenceError: parseJSONAttr (clean)
+  PASS: directory/directory.html: No ReferenceError: wireHtmlFrame* (clean)
+  PASS: directory/directory.html: Zero ReferenceErrors of any kind (clean)
+  PASS: directory/directory.html: Zero exceptionThrown events (clean)
+
+[2y7qe-smoke] Testing chrome-extension://kjlafalcfhkeaehmliplpgilgidgohjn/privacy/privacy.html...
+  PASS: privacy/privacy.html: privacy-statement registered and clean
+  PASS: privacy/privacy.html: No ReferenceError: ensureStyle (clean)
+  PASS: privacy/privacy.html: No ReferenceError: normalizeSiteActivity (clean)
+  PASS: privacy/privacy.html: No ReferenceError: fmtTime (clean)
+  PASS: privacy/privacy.html: No ReferenceError: backend (clean)
+  PASS: privacy/privacy.html: No ReferenceError: parseJSONAttr (clean)
+  PASS: privacy/privacy.html: No ReferenceError: wireHtmlFrame* (clean)
+  PASS: privacy/privacy.html: Zero ReferenceErrors of any kind (clean)
+  PASS: privacy/privacy.html: Zero exceptionThrown events (clean)
+
+[2y7qe-smoke] Testing chrome-extension://kjlafalcfhkeaehmliplpgilgidgohjn/about/about.html...
+  PASS: about/about.html: loaded cleanly
+  PASS: about/about.html: No ReferenceError: ensureStyle (clean)
+  PASS: about/about.html: No ReferenceError: normalizeSiteActivity (clean)
+  PASS: about/about.html: No ReferenceError: fmtTime (clean)
+  PASS: about/about.html: No ReferenceError: backend (clean)
+  PASS: about/about.html: No ReferenceError: parseJSONAttr (clean)
+  PASS: about/about.html: No ReferenceError: wireHtmlFrame* (clean)
+  PASS: about/about.html: Zero ReferenceErrors of any kind (clean)
+  PASS: about/about.html: Zero exceptionThrown events (clean)
+[2y7qe-smoke] Tearing down Chrome...
+
+[2y7qe-smoke] COMPREHENSIVE SUMMARY: 75 passed, 0 failed
