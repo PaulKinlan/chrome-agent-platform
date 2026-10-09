@@ -2,6 +2,11 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { dumpLogBuffer } from "../extension/lib/cap-log.js";
 import {
+  appendMasterJournalWithReceipt,
+  compensateMasterJournalReceipt,
+  cancelMasterJournalExecution,
+} from "../extension/lib/master-journal-transaction.js";
+import {
   readMasterJournalHead,
   readMasterJournalProjection,
   sealMasterJournalRecord,
@@ -546,6 +551,102 @@ Deno.test("compaction faults before publication retain old authority; torn head 
       assertEquals((await readMasterJournalProjection(master)).head.sequence, 128);
     }
   }
+});
+
+Deno.test("staged WAL receipt compensation preserves absent vs present-empty existence", async () => {
+  for (const exists of [false, true]) {
+    const { master, allocateVersion, readIssuedVersion } = await legacyFixture();
+    await stageMasterJournalCutover(master, { journalExists: exists, journal: [], archive: [], allocateVersion });
+    const receipt = await appendMasterJournalWithReceipt(master, {
+      type: "task", executionId: `receipt-${exists}`,
+    }, { allocateVersion, readIssuedVersion });
+    assertEquals(receipt.wal.epoch, receipt.preState.epoch);
+    assertEquals(receipt.wal.sequence, 1);
+    assertEquals(receipt.wal.operationId, `${receipt.wal.epoch}:1`);
+    const result = await compensateMasterJournalReceipt(master, receipt, { allocateVersion, readIssuedVersion });
+    assertEquals(result.ok, true);
+    const after = await readMasterJournalProjection(master);
+    assertEquals(after.exists, exists);
+    assertEquals(after.live, []);
+  }
+});
+
+Deno.test("staged WAL receipt compensation survives compaction and preserves foreign rows", async () => {
+  const { master, allocateVersion, readIssuedVersion } = await legacyFixture();
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await stageMasterJournalCutover(master, { journalExists: true, journal: seed, archive: [], allocateVersion });
+  const receipt = await appendMasterJournalWithReceipt(master, {
+    type: "task", executionId: "receipt-target",
+  }, { allocateVersion, readIssuedVersion });
+  assertEquals(receipt.wal.eviction, [seed[0]]);
+  for (let i = 0; i < 127; i++) {
+    await stageMasterJournalFrame(master, {
+      operation: "append", row: { type: "foreign", executionId: `foreign-${i}` },
+    }, { allocateVersion, readIssuedVersion });
+  }
+  const result = await compensateMasterJournalReceipt(master, receipt, { allocateVersion, readIssuedVersion });
+  assertEquals(result.ok, true);
+  assertEquals(result.concurrentRowsPreserved, true);
+  const after = await readMasterJournalProjection(master, { includeArchive: true });
+  assertEquals(after.live, [...seed.slice(127), ...Array.from({ length: 127 }, (_, i) => ({ type: "foreign", executionId: `foreign-${i}` }))]);
+  assertEquals(after.archive, seed.slice(0, 128), "archived evictions remain history, not a set of current live rows");
+});
+
+Deno.test("staged WAL receipt refuses same-value ABA and guard undo retains historical eviction", async () => {
+  const { master, allocateVersion, readIssuedVersion } = await legacyFixture();
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await stageMasterJournalCutover(master, { journalExists: true, journal: seed, archive: [], allocateVersion });
+  const receipt = await appendMasterJournalWithReceipt(master, {
+    type: "task", executionId: "receipt-aba",
+  }, { allocateVersion, readIssuedVersion });
+  await stageMasterJournalFrame(master, { operation: "replace", rows: receipt.postState }, { allocateVersion });
+  const stale = await compensateMasterJournalReceipt(master, receipt, { allocateVersion, readIssuedVersion });
+  assertEquals(stale.reason, "journal_version_mismatch");
+  assertEquals((await readMasterJournalProjection(master)).live.at(-1).executionId, "receipt-aba");
+
+  let calls = 0;
+  await assertRejects(() => appendMasterJournalWithReceipt(master, {
+    type: "task", executionId: "forbidden",
+  }, { allocateVersion, readIssuedVersion, guard: async () => {
+    if (++calls === 2) throw new Error("lost ownership");
+  } }), Error, "lost ownership");
+  const after = await readMasterJournalProjection(master, { includeArchive: true });
+  assertEquals(after.live.some((row) => row.executionId === "forbidden"), false);
+  assertEquals(after.archive.length, 2, "the forbidden append's eviction remains historical residue");
+});
+
+Deno.test("staged WAL cancellation commits a single bounded replacement with its eviction", async () => {
+  const { master, allocateVersion, readIssuedVersion } = await legacyFixture();
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await stageMasterJournalCutover(master, { journalExists: true, journal: seed, archive: [], allocateVersion });
+  const rows = await cancelMasterJournalExecution(master, {
+    result: "cancelled",
+  }, "cancel-exec", { allocateVersion, readIssuedVersion });
+  assertEquals(rows.length, 500);
+  const after = await readMasterJournalProjection(master, { includeArchive: true });
+  assertEquals(after.live, rows);
+  assertEquals(after.live.at(-1).type, "cancelled");
+  assertEquals(after.archive, [seed[0]]);
+  assertEquals(after.head.sequence, 1);
+});
+
+Deno.test("cancellation replacement archives its eviction in the same published frame", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await stageMasterJournalCutover(master, { journalExists: true, journal: seed, archive: [], allocateVersion });
+  const old = await readMasterJournalProjection(master);
+  await assertRejects(() => stageMasterJournalFrame(master, {
+    operation: "replace", rows: [...seed.slice(1), { type: "cancelled" }], evicted: [{ id: "not-the-oldest" }],
+  }, { allocateVersion, expectedVersion: old.version, expectedEpoch: old.head.epoch }),
+  Error, "does not match the current oldest");
+  assertEquals((await readMasterJournalProjection(master)).version, old.version, "invalid eviction cannot issue a token");
+  await stageMasterJournalFrame(master, {
+    operation: "replace", rows: [...seed.slice(1), { type: "cancelled" }], evicted: [seed[0]],
+  }, { allocateVersion, expectedVersion: old.version, expectedEpoch: old.head.epoch });
+  const projected = await readMasterJournalProjection(master, { includeArchive: true });
+  assertEquals(projected.live, [...seed.slice(1), { type: "cancelled" }]);
+  assertEquals(projected.archive, [seed[0]]);
+  assertEquals(projected.head.sequence, old.head.sequence + 1);
 });
 
 Deno.test("post-compaction compensation preserves the archive history log and later foreign appends", async () => {

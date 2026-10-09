@@ -563,6 +563,9 @@ live state from archive history. On a post-commit guard failure, a replace or
 delete frame removes the forbidden appended row from live, but its already
 recorded eviction remains in pending overflow or the sealed archive as
 historical residue; no tombstone or retract operation exists in this bead.
+A cancellation's bounded replace frame can carry at most one checked oldest
+live-row eviction, atomically updating live and pending archive history with
+one head publication; unrelated replace/delete frames do not retract history.
 The frame grammar still needs exact receipt, CAS and cancellation evidence
 before enabling mutation; physical power-loss
 recovery, real Chrome cross-context proof and safe on-disk retirement also

@@ -249,7 +249,11 @@ export async function readMasterJournalProjection(master, { includeArchive = fal
       result.live.push(structuredClone(frame.row));
       if (result.live.length > 500) overflow.push(...result.live.splice(0, result.live.length - 500));
       result.exists = true;
-    } else if (frame.operation === "replace" && Array.isArray(frame.rows) && frame.rows.length <= 500) {
+    } else if (frame.operation === "replace" && Array.isArray(frame.rows) && frame.rows.length <= 500 &&
+        (frame.evicted === undefined || (Array.isArray(frame.evicted) && frame.evicted.length <= 1 &&
+          frame.evicted.every((row) => row && typeof row === "object" && !Array.isArray(row)) &&
+          JSON.stringify(frame.evicted) === JSON.stringify(result.live.slice(0, frame.evicted.length))))) {
+      if (frame.evicted?.length) overflow.push(...structuredClone(frame.evicted));
       result.live = structuredClone(frame.rows);
       result.exists = true;
     } else if (frame.operation === "delete") {
@@ -402,8 +406,11 @@ export async function stageMasterJournalFrame(master, operation, {
   if (!operation || typeof operation !== "object" || Array.isArray(operation) ||
       !["append", "replace", "delete", "clear"].includes(operation.operation) ||
       (operation.operation === "append" && (!operation.row || typeof operation.row !== "object" || Array.isArray(operation.row))) ||
-      (operation.operation === "replace" && (!Array.isArray(operation.rows) || operation.rows.length > 500)) ||
-      Object.keys(operation).some((key) => !["operation", "row", "rows"].includes(key))) {
+      (operation.operation === "replace" && (!Array.isArray(operation.rows) || operation.rows.length > 500 ||
+        (operation.evicted !== undefined && (!Array.isArray(operation.evicted) || operation.evicted.length > 1 ||
+          operation.evicted.some((row) => !row || typeof row !== "object" || Array.isArray(row)))))) ||
+      (operation.operation !== "replace" && "evicted" in operation) ||
+      Object.keys(operation).some((key) => !["operation", "row", "rows", "evicted"].includes(key))) {
     throw new Error("invalid master journal frame operation");
   }
   let before = await readMasterJournalProjection(master);
@@ -416,6 +423,10 @@ export async function stageMasterJournalFrame(master, operation, {
   }
   if (expectedVersion !== undefined && before.head.version !== expectedVersion) {
     throw new Error("master journal CAS version mismatch");
+  }
+  if (operation.operation === "replace" && operation.evicted?.length &&
+      JSON.stringify(operation.evicted) !== JSON.stringify(before.live.slice(0, operation.evicted.length))) {
+    throw new Error("master journal replacement eviction does not match the current oldest live rows");
   }
   if (before.head.sequence - before.head.checkpointSequence >= 128) {
     await stageMasterJournalCompaction(master, { allocateVersion, readIssuedVersion, projection: before });
