@@ -153,6 +153,33 @@ export function currentLoadPerCpu() {
   }
 }
 
+/** A ready-marker deadline may use load only when it can actually be measured. */
+export function measuredReadyLoadPerCpu() {
+  try {
+    const cpus = os.cpus?.().length;
+    const load = os.loadavg?.()[0];
+    return Number.isFinite(cpus) && cpus > 0 && Number.isFinite(load) && load >= 0
+      ? load / cpus : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Classify the first ready-marker deadline, not the child result. A loaded
+ * machine earns one bounded grace window; absent markers still time out.
+ * Unmeasurable load is NOT assumed loaded. The same x4 ceiling as the serial
+ * execution timeout applies, but only after observing load at the deadline.
+ */
+export function classifyReadyMarkerTimeout({ baseMs, loadPerCpu } = {}) {
+  const measured = Number.isFinite(loadPerCpu) && loadPerCpu >= 0;
+  const loaded = measured && loadPerCpu > 1;
+  return {
+    cause: !measured ? "unmeasurable" : loaded ? "loaded" : "idle-never-settled",
+    loadPerCpu: measured ? loadPerCpu : null,
+    hardTimeoutMs: loaded ? serialFileTimeoutMs({ base: baseMs, loadPerCpu }) : baseMs,
+  };
+}
+
 /** The default timeout for this run, with the reason printed when it is scaled.
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {number}
@@ -169,13 +196,14 @@ export function defaultSerialTimeoutMs(env = process.env) {
 
 /**
  * @param {string} file
- * @param {{ timeoutMs?: number, readyFile?: string, readyTimeoutMs?: number, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
+ * @param {{ timeoutMs?: number, readyFile?: string, readyTimeoutMs?: number, readyLoadPerCpu?: number, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
  * @returns {{ code: number, timedOut: boolean, error?: Error, stdout?: Buffer|null, stderr?: Buffer|null }}
  */
 export function runSerialFile(file, {
   timeoutMs = defaultSerialTimeoutMs(),
   readyFile = undefined,
   readyTimeoutMs = 60_000,
+  readyLoadPerCpu = undefined, // explicit test seam; otherwise measure at the soft deadline
   stdio = "inherit",
   cwd = undefined,
   env = process.env,
@@ -183,7 +211,9 @@ export function runSerialFile(file, {
   const targetReadyFile = readyFile ?? env?.CAP_SERIAL_READY_FILE;
   if (targetReadyFile) {
     const runnerScript = fileURLToPath(new URL("serial-runner.mjs", import.meta.url));
-    const r = spawnSync(process.execPath, [runnerScript, file, targetReadyFile, String(timeoutMs), String(readyTimeoutMs)], {
+    const args = [runnerScript, file, targetReadyFile, String(timeoutMs), String(readyTimeoutMs)];
+    if (readyLoadPerCpu !== undefined) args.push(String(readyLoadPerCpu));
+    const r = spawnSync(process.execPath, args, {
       stdio,
       cwd,
       env: { ...env, CAP_TEST_RUNNER: "1" },
@@ -191,7 +221,7 @@ export function runSerialFile(file, {
       maxBuffer: 64 * 1024 * 1024,
     });
     if (r.status === 124) {
-      announce(`\nrun-tests: serial file ${file} TIMED OUT after ${timeoutMs / 1000}s`);
+      announce(`\nrun-tests: serial file ${file} TIMED OUT (ready base ${readyTimeoutMs / 1000}s; execution ${timeoutMs / 1000}s after readiness; see runner cause)`);
       return { code: 124, timedOut: true, error: r.error, stdout: r.stdout, stderr: r.stderr };
     }
     return { code: r.status ?? 1, timedOut: false, error: r.error, stdout: r.stdout, stderr: r.stderr };
