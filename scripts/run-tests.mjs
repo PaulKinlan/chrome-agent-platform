@@ -24,7 +24,7 @@ import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath } from "node:path";
-import { BUILD_GATE, READ_ONLY_DIST, SERIAL, SERIAL_TIMING_LANE, partition } from "./test-partition.mjs";
+import { BUILD_GATE, QUIET_TAIL, READ_ONLY_DIST, SERIAL, SERIAL_TIMING_LANE, partition } from "./test-partition.mjs";
 import { announce, runReadOnlyDistBatch, runSerialFiles } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
 import { parallelPlan } from "./lib/parallel-plan.mjs";
@@ -319,17 +319,24 @@ export async function main(args = process.argv.slice(2)) {
   // In the unchanged per-change runner both subsets still share its one
   // parallel process AFTER serial (partition(...).parallel is intentionally total).
   const readOnly = plan.files.filter((file) => READ_ONLY_DIST.has(file));
-  const other = plan.files.filter((file) => !READ_ONLY_DIST.has(file));
+  // gate-speed: QUIET_TAIL files run after the parallel phase, one at a time (see test-partition.mjs).
+  const quietTail = plan.files.filter((file) => QUIET_TAIL.has(file) && !READ_ONLY_DIST.has(file));
+  const other = plan.files.filter((file) => !READ_ONLY_DIST.has(file) && !QUIET_TAIL.has(file));
   const readOnlyRc = await runReadOnlyDistBatch(readOnly,
     (files) => runParallel(files, "post-build read-only phase", { noCheck }));
   // Preserve kz27: a failed builder OR read-only guard must not hide the
   // independent parallel guards; both phases run and the first failure wins.
   const parallelRc = await runParallel(other, "parallel phase", { noCheck });
-  const rc = serialRc || checkRc || readOnlyRc || parallelRc;
+  let quietRc = 0;
+  if (quietTail.length) {
+    console.log(`run-tests: QUIET TAIL (${quietTail.length} file(s)) runs after the parallel phase, one at a time: ${quietTail.join(", ")}`);
+    quietRc = runSerialFiles(quietTail, { noCheck });
+  }
+  const rc = serialRc || checkRc || readOnlyRc || parallelRc || quietRc;
   const deferredCount = cliFiles.length === 0 ? all.length - (serialFiles.length + parallel.length) : 0;
   console.log(
     `run-tests: ${serialFiles.length + parallel.length} files total, ${plan.skipped} skipped` +
-      ` (${serialFiles.length} serial, ${readOnly.length} post-build read-only, ${parallel.length - readOnly.length} other parallel` +
+      ` (${serialFiles.length} serial, ${readOnly.length} post-build read-only, ${parallel.length - readOnly.length - quietTail.length} other parallel, ${quietTail.length} quiet tail` +
       `${deferredCount ? `, ${deferredCount} deferred to npm run test:build` : ""}), wall ${((Date.now() - t0) / 1000).toFixed(0)}s`,
   );
   process.exit(rc);
