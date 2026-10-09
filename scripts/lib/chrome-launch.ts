@@ -26,7 +26,14 @@
 
 import { crypto } from "jsr:@std/crypto@1";
 import { acquireChromeSlot } from "./chrome-slots.ts";
-import { requireQuietWindow, type QuietSpec } from "./quiet-window.ts";
+import {
+  requireQuietWindow,
+  type QuietSpec,
+  readLoadSample,
+  classifyEvaluateTimeout,
+  measureEvaluateTimeout,
+  type EvaluateTimeoutVerdict,
+} from "./quiet-window.ts";
 import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, type HeavyGateLease } from "./heavy-gate-slot.ts";
 import { resolveChromeForTesting } from "./chrome-for-testing.ts";
 import { isUsableBinary } from "./browser-refusal.ts";
@@ -1057,33 +1064,219 @@ export const SW_MATCH = (t: any): boolean =>
   Boolean(t && t.type === "service_worker" && String(t.url ?? "").includes("dist/background"));
 
 /**
+ * Identify terminal transport failures where the CDP socket is closed or broken.
+ * A closed transport cannot recover on subsequent calls and must not be retried
+ * or misclassified as a host-load timeout.
+ */
+export function isTerminalTransportError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return (
+    msg.includes("cdp websocket closed") ||
+    msg.includes("cdp websocket error") ||
+    msg.includes("connection closed") ||
+    msg.includes("connection refused") ||
+    msg.includes("socket closed")
+  );
+}
+
+/**
+ * Count the number of live Chrome/Chromium processes currently running on this host.
+ * Inspects /proc on Linux; falls back to pgrep on macOS / non-/proc hosts.
+ * Never throws: fails closed to 0.
+ */
+export function countLiveChromeProcesses(): number {
+  try {
+    let count = 0;
+    for (const entry of Deno.readDirSync("/proc")) {
+      if (!/^\d+$/.test(entry.name)) continue;
+      try {
+        const comm = Deno.readTextFileSync(`/proc/${entry.name}/comm`).trim();
+        if (/chrome|chromium/i.test(comm)) count++;
+      } catch {
+        // process exited or permission restricted
+      }
+    }
+    return count;
+  } catch {
+    // macOS / non-/proc fallback
+    try {
+      const cmd = new Deno.Command("/usr/bin/pgrep", {
+        args: ["-c", "-f", "chrome|chromium"],
+        stdout: "piped",
+        stderr: "null",
+      });
+      const out = cmd.outputSync();
+      if (out.code === 0) {
+        const n = parseInt(new TextDecoder().decode(out.stdout).trim(), 10);
+        if (Number.isSafeInteger(n) && n >= 0) return n;
+      }
+    } catch {
+      // pgrep failed or not found
+    }
+    return 0;
+  }
+}
+
+/**
+ * Thrown by waitForServiceWorker when Target.getTargets calls stall or time out
+ * past the overall deadline. Carries the host load verdict and live Chrome count.
+ */
+export class ServiceWorkerTargetTimeoutError extends Error {
+  readonly totalTimeoutMs: number;
+  readonly callTimeoutMs: number;
+  readonly attempts: number;
+  readonly timedOutCalls: number;
+  readonly liveChrome: number;
+  readonly verdict: EvaluateTimeoutVerdict;
+  readonly lastError: Error | null;
+
+  constructor(
+    message: string,
+    details: {
+      totalTimeoutMs: number;
+      callTimeoutMs: number;
+      attempts: number;
+      timedOutCalls: number;
+      liveChrome: number;
+      verdict: EvaluateTimeoutVerdict;
+      lastError: Error | null;
+    },
+  ) {
+    super(message);
+    this.name = "ServiceWorkerTargetTimeoutError";
+    this.totalTimeoutMs = details.totalTimeoutMs;
+    this.callTimeoutMs = details.callTimeoutMs;
+    this.attempts = details.attempts;
+    this.timedOutCalls = details.timedOutCalls;
+    this.liveChrome = details.liveChrome;
+    this.verdict = details.verdict;
+    this.lastError = details.lastError;
+  }
+}
+
+export interface WaitForServiceWorkerOpts {
+  /** Overall deadline budget for the service worker discovery loop (default 15000ms). */
+  timeoutMs?: number;
+  /** Per-call timeout for each Target.getTargets CDP call (default 5000ms or totalTimeoutMs if smaller). */
+  callTimeoutMs?: number;
+  /** Polling interval between attempts (default 250ms). */
+  intervalMs?: number;
+  /** Target matching predicate (default SW_MATCH). */
+  match?: (t: any) => boolean;
+  /** Test seam: override load measurement verdict. */
+  measureVerdict?: () => Promise<EvaluateTimeoutVerdict>;
+  /** Test seam: override live Chrome process count. */
+  countLiveChrome?: () => number;
+}
+
+/**
  * Wait for the loaded extension's service-worker target to appear.
  *
- * Harnesses used to call `Target.getTargets` once, immediately after the CDP
- * handshake, and it worked only because polling a fixed port for
- * `/json/version` burned enough wall-clock for MV3 to register the worker.
- * Reading the endpoint off stderr removes that accidental delay, so the wait
- * has to be explicit — otherwise the harness reports "no service worker
- * target" for a browser that was merely still starting.
+ * Stated per-call timeout policy (chrome-agent-platform-3nurz):
+ * Rather than allowing a single `Target.getTargets` to stall for the entire 30s
+ * CDP connection budget under parallel launch load, each call is bounded by
+ * `callTimeoutMs` (default 5000ms, or `timeoutMs` if shorter).
  *
- * Defaults to `SW_MATCH` so harnesses target our extension's worker specifically
- * rather than any component extension worker (e.g. thunk.js) Chrome might register first.
+ * If a single call times out while the overall deadline has not yet expired,
+ * the transient stall is caught and retried on the next poll. If `Target.getTargets`
+ * calls continue timing out until the overall deadline is exhausted, the failure
+ * is classified via `measureEvaluateTimeout` / `classifyEvaluateTimeout`, logs the
+ * host load and live Chrome count, and throws `ServiceWorkerTargetTimeoutError`
+ * with a classified message instead of an opaque "Target.getTargets: deadline".
  *
- * Returns the target info, or null if it never registered within the deadline.
+ * If calls succeed but no worker matches within the deadline, returns null.
  */
 export async function waitForServiceWorker(
   send: CdpSend,
-  opts: { timeoutMs?: number; match?: (t: any) => boolean } = {},
+  opts: WaitForServiceWorkerOpts = {},
 ): Promise<any | null> {
-  const deadline = Date.now() + (opts.timeoutMs ?? 15000);
+  const totalTimeoutMs = opts.timeoutMs ?? 15000;
+  const callTimeoutMs = opts.callTimeoutMs ?? Math.min(5000, totalTimeoutMs);
+  const intervalMs = opts.intervalMs ?? 250;
+  const deadline = Date.now() + totalTimeoutMs;
   const match = opts.match ?? SW_MATCH;
+
+  let attempts = 0;
+  let lastError: Error | null = null;
+  let timedOutCalls = 0;
+
   for (;;) {
-    const res = await send("Target.getTargets");
-    const found = (res?.result?.targetInfos ?? []).find(match);
-    if (found) return found;
-    if (Date.now() >= deadline) return null;
-    await new Promise((r) => setTimeout(r, 250));
+    attempts++;
+    const now = Date.now();
+    if (now >= deadline) break;
+    const remaining = deadline - now;
+    const thisCallBudget = Math.min(callTimeoutMs, Math.max(1, remaining));
+
+    let res: any = null;
+    let callFailed = false;
+    try {
+      const callPromise = send("Target.getTargets");
+      // Prevent unhandled rejection if callPromise times out and later rejects
+      callPromise.catch(() => {});
+      res = await withTimeout(callPromise, thisCallBudget);
+    } catch (err) {
+      if (isTerminalTransportError(err)) {
+        // A closed CDP socket cannot recover on subsequent calls; fail immediately
+        // rather than spinning until deadline and misclassifying as a load timeout.
+        throw err;
+      }
+      const isTimeout =
+        err instanceof Error &&
+        (err.message === "deadline" ||
+          err.message.includes("deadline") ||
+          err.message.toLowerCase().includes("timeout"));
+
+      if (!isTimeout) {
+        // Non-timeout protocol or fatal error — fail fast
+        throw err;
+      }
+
+      callFailed = true;
+      lastError = err instanceof Error ? err : new Error(String(err));
+      timedOutCalls++;
+    }
+
+    if (!callFailed && res) {
+      const targets = res?.result?.targetInfos ?? res?.targetInfos ?? [];
+      const found = targets.find(match);
+      if (found) return found;
+    }
+
+    if (Date.now() >= deadline) break;
+    await new Promise((r) => setTimeout(r, intervalMs));
   }
+
+  // If deadline was exhausted and we encountered any call timeouts / errors:
+  if (timedOutCalls > 0 || lastError !== null) {
+    const verdict = opts.measureVerdict
+      ? await opts.measureVerdict()
+      : await measureEvaluateTimeout().catch(async () => {
+          const sample = await readLoadSample().catch(() => null);
+          return classifyEvaluateTimeout(sample);
+        });
+    const liveChrome = opts.countLiveChrome
+      ? opts.countLiveChrome()
+      : countLiveChromeProcesses();
+
+    const evidence = `[waitForServiceWorker] Target.getTargets: deadline exceeded (${totalTimeoutMs}ms total budget, ${callTimeoutMs}ms per-call budget, ${attempts} attempts, ${timedOutCalls} timed out) under ${verdict.cause}: live-chrome=${liveChrome} ${verdict.environment} (${verdict.reason})`;
+    console.error(evidence);
+
+    throw new ServiceWorkerTargetTimeoutError(
+      `waitForServiceWorker: Target.getTargets: deadline exceeded (${totalTimeoutMs}ms total budget, ${callTimeoutMs}ms per-call budget, ${attempts} attempts) [${verdict.cause}] live-chrome=${liveChrome} ${verdict.environment}`,
+      {
+        totalTimeoutMs,
+        callTimeoutMs,
+        attempts,
+        timedOutCalls,
+        liveChrome,
+        verdict,
+        lastError,
+      },
+    );
+  }
+
+  return null;
 }
 
 export interface ScreenshotOptions {
