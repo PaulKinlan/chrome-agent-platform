@@ -40,8 +40,10 @@ function replacement(exists, rows) {
 export async function appendMasterJournalWithReceipt(master, entry, {
   allocateVersion, readIssuedVersion, guard = null, idempotencyExecutionId = null,
 } = {}) {
-  if (!entry || typeof entry !== "object" || Array.isArray(entry) || !entry.executionId) {
-    throw new Error("master journal receipt append requires executionId");
+  if (!entry || typeof entry !== "object" || Array.isArray(entry) ||
+      typeof entry.executionId !== "string" || !entry.executionId ||
+      (idempotencyExecutionId !== null && idempotencyExecutionId !== entry.executionId)) {
+    throw new Error("master journal receipt append requires its actual executionId");
   }
   const issuer = { allocateVersion, readIssuedVersion };
   const before = await currentProjection(master);
@@ -97,10 +99,20 @@ export async function compensateMasterJournalReceipt(master, receipt, {
   allocateVersion, readIssuedVersion, guard = null,
 } = {}) {
   if (!receipt || receipt.schemaVersion !== 1 || receipt.key !== "journal" ||
-      !receipt.executionId || !receipt.wal || !Number.isSafeInteger(receipt.wal.epoch) ||
+      typeof receipt.executionId !== "string" || !receipt.executionId || !receipt.wal ||
+      !Number.isSafeInteger(receipt.wal.epoch) || receipt.wal.epoch < 1 ||
+      !Number.isSafeInteger(receipt.wal.sequence) || receipt.wal.sequence < 0 ||
+      !Number.isSafeInteger(receipt.wal.checkpointSequenceAtAppend) ||
+      receipt.wal.checkpointSequenceAtAppend > receipt.wal.sequence ||
+      receipt.wal.checkpointSequenceAtAppend < 0 ||
+      receipt.wal.operationId !== (receipt.appended === false ? null :
+        `${receipt.wal.epoch}:${receipt.wal.sequence}`) ||
+      (receipt.appended !== false && receipt.wal.sequence < 1) ||
+      !Array.isArray(receipt.wal.eviction) || receipt.wal.eviction.length > 1 ||
       receipt.wal.writeVersion !== receipt.writeVersion ||
       !Array.isArray(receipt.postState) ||
-      !receipt.preState || (receipt.preState.exists && !Array.isArray(receipt.preState.value))) {
+      !receipt.preState || receipt.preState.epoch !== receipt.wal.epoch ||
+      (receipt.preState.exists && !Array.isArray(receipt.preState.value))) {
     throw new Error("invalid master journal compensation receipt");
   }
   const issuer = { allocateVersion, readIssuedVersion };
@@ -161,7 +173,8 @@ export async function compensateMasterJournalReceipt(master, receipt, {
       return { ok: false, compensated: false, preserved: true, reason: "journal_version_mismatch" };
     }
     const foreignLater = later.filter((row) => row?.executionId !== receipt.executionId);
-    next = bound([...(pre.exists ? pre.value : []), ...foreignLater]);
+    next = !pre.exists && foreignLater.length === 0
+      ? undefined : bound([...(pre.exists ? pre.value : []), ...foreignLater]);
   }
   const preCommitRefusal = await fence();
   if (preCommitRefusal) return preCommitRefusal;

@@ -566,6 +566,10 @@ historical residue; no tombstone or retract operation exists in this bead.
 A cancellation's bounded replace frame can carry at most one checked oldest
 live-row eviction, atomically updating live and pending archive history with
 one head publication; unrelated replace/delete frames do not retract history.
+The staged receipt records an `epoch:sequence` operation coordinate and
+validates that coordinate's shape before compensation. It is descriptive,
+not a cryptographic frame proof: exact epoch/version CAS plus the checked
+projection and live-ring suffix lineage are the actual compensation authority.
 The frame grammar still needs exact receipt, CAS and cancellation evidence
 before enabling mutation; physical power-loss
 recovery, real Chrome cross-context proof and safe on-disk retirement also

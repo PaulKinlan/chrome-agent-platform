@@ -638,6 +638,34 @@ Deno.test("receipt compensation exports and restores both head slots and later c
   await snapshot();
 });
 
+Deno.test("absent receipt plus same-execution later rows restores absence, not present-empty", async () => {
+  const { master, allocateVersion, readIssuedVersion } = await legacyFixture();
+  await stageMasterJournalCutover(master, { journalExists: false, journal: [], archive: [], allocateVersion });
+  const receipt = await appendMasterJournalWithReceipt(master,
+    { type: "task", executionId: "same-exec" }, { allocateVersion, readIssuedVersion });
+  await stageMasterJournalFrame(master, { operation: "append", row: {
+    type: "prompt-attestation", executionId: "same-exec", receipt: "redacted",
+  } }, { allocateVersion });
+  assertEquals((await compensateMasterJournalReceipt(master, receipt,
+    { allocateVersion, readIssuedVersion })).ok, true);
+  const after = await readMasterJournalProjection(master);
+  assertEquals(after.exists, false, "same-execution-only rows must not turn an absent key into present-empty");
+  assertEquals(after.live, []);
+});
+
+Deno.test("receipt operation identity mismatch cannot authorize compensation", async () => {
+  const { master, allocateVersion, readIssuedVersion } = await legacyFixture();
+  await stageMasterJournalCutover(master, { journalExists: false, journal: [], archive: [], allocateVersion });
+  const receipt = await appendMasterJournalWithReceipt(master,
+    { type: "task", executionId: "identity-pinned" }, { allocateVersion, readIssuedVersion });
+  const forged = structuredClone(receipt);
+  forged.wal.operationId = `${forged.wal.epoch}:${forged.wal.sequence + 1}`;
+  await assertRejects(() => compensateMasterJournalReceipt(master, forged, {
+    allocateVersion, readIssuedVersion,
+  }), Error, "invalid master journal compensation receipt");
+  assertEquals((await readMasterJournalProjection(master)).version, receipt.writeVersion);
+});
+
 Deno.test("stale receipt from a replaced WAL epoch refuses before mutation", async () => {
   const { master, allocateVersion, readIssuedVersion } = await legacyFixture();
   await stageMasterJournalCutover(master, { journalExists: false, journal: [], archive: [], allocateVersion });
