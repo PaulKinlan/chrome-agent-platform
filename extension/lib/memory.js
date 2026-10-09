@@ -1664,6 +1664,9 @@ export function durableRunMemory() {
     isMaster: false,
     origin: "durable-runs",
     async get(key) { return await (await readStore(key)).get(key); },
+    // A cutover fence must not interpret a damaged run or outbox file as an
+    // absent key. Route the strict read to the same owning store as get().
+    async getStrict(key) { return await (await readStore(key)).getStrict(key); },
     async has(key) { return await (await readStore(key)).has(key); },
     async snapshot(key) { return await (await readStore(key)).snapshot(key); },
     async getVersion(key) { return await (await readStore(key)).getVersion(key); },

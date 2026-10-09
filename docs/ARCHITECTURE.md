@@ -581,14 +581,14 @@ stale legacy rows; a generation behind the checked WAL head or a torn file
 also refuses. This callback
 is not a product write route and does not enable cutover. Master store
 transactions also expose staged receipt/compensation/cancellation WAL verbs
-using the lock they already hold; they never nest a second Web Lock. Sibling
-Staged `frameIfCurrent` prepares exact-epoch/version-checked replace/delete/
-clear frames for future direct store routes. Staged `append` shares the same
-pre/post-guard publication and live undo as receipt append without inventing
-an execution ID for ordinary rows; exact replay identity is optional and
-checked when supplied. Neither is invoked by a product journal writer while
-the one-authority cutover is incomplete.
-WAL verbs and master key mutations within one transaction serialize, because
+using the lock they already hold; they never nest a second Web Lock. Staged
+`frameIfCurrent` prepares exact-epoch/version-checked replace/delete/clear
+frames for future direct store routes. Staged `append` shares the same pre/post-
+guard publication and live undo as receipt append without inventing an
+execution ID for ordinary rows; exact replay identity is optional and checked
+when supplied. Neither is invoked by a product journal writer while the
+one-authority cutover is incomplete. Sibling WAL verbs and master key mutations
+within one transaction serialize, because
 the outer lock excludes other transactions but not concurrent promises in the
 same callback. A guard must not await ANY promise from its transaction, even
 one that was queued earlier, or it can wait on itself. Guards may read KV or
@@ -602,7 +602,17 @@ calls the adapter yet: master append and cancellation refuse immediately when
 a checked head exists; a legacy-shape compensation receipt returns an explicit
 `legacy_receipt_after_cutover` preservation refusal rather than appearing to
 undo a row on the wrong authority. A WAL-shaped receipt likewise returns
-`master_wal_writer_disabled` until every product route is migrated. Even the
+`master_wal_writer_disabled` until every product route is migrated. A staged
+`durableRuns.withMasterJournalCutoverFence` holds the registry write chain
+through a future publication callback and refuses active writers, pending
+master outboxes, unreadable registry entries and master cancel-requested
+records. Its callback has no product caller. The lock-free writer count alone
+is insufficient: quota rollback retires its writer before compensating a
+legacy receipt but holds the registry write chain throughout. Any future
+owner cutover additionally requires a separately durable admission fence
+(not the boot-auto-cleared `cap:restoreFence`), quiescence before the master
+Web Lock, factory-reset exclusion, and every product writer route enabled
+atomically with publication. No cutover is published by this staged fence. Even the
 Deno-only unregistered-store test seam reads the physical master head when a
 wrapped master store has no transaction facade. Torn, non-equal or source-mismatched
 immutable records, damaged head slots, and pre-head cutover residue (a

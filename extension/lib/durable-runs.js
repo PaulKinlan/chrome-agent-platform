@@ -1628,6 +1628,59 @@ export function createDurableRunRegistry({
     });
   }
 
+  /** Staged only: hold the registry write chain through a future owner cutover's
+   * master-lock publication. No product route calls this while the WAL writer
+   * is OFF. A lock-free activeWriters() poll is insufficient: quota rollback
+   * retires its writer BEFORE compensating its in-memory legacy receipt, but
+   * keeps this write chain held through that compensation. The callback must
+   * never re-enter this registry or wait for a writer to quiesce; the caller
+   * must separately arm a durable admission fence and quiesce first. */
+  async function withMasterJournalCutoverFence(publish) {
+    if (typeof publish !== "function") throw new TypeError("master journal cutover requires a publication callback");
+    return locked(async () => {
+      // Conservatively fence site writers too: the origin-filtered projection
+      // itself re-enters locked() and cannot safely be awaited here.
+      if (active.size || cancelling.size) return { ok: false, reason: "active_run_writer" };
+      let keys;
+      try { keys = await store.keys(); } catch { return { ok: false, reason: "run_store_unreadable" }; }
+      if (!Array.isArray(keys) || keys.some((key) => typeof key !== "string")) {
+        return { ok: false, reason: "run_store_unreadable" };
+      }
+      for (const key of keys.filter((name) => name.startsWith(OUTBOX_PREFIX))) {
+        let outbox;
+        try { outbox = await store.getStrict(key); } catch { return { ok: false, reason: "unreadable_outbox" }; }
+        if (!outbox || typeof outbox !== "object" || Array.isArray(outbox) ||
+            typeof outbox.journalTarget !== "string" || !outbox.journalTarget.trim()) {
+          return { ok: false, reason: "unreadable_outbox" };
+        }
+        if (outbox.journalTarget === "master") return { ok: false, reason: "pending_master_outbox" };
+        // A site-labelled outbox cannot hide a master record, and recovery
+        // would refuse an orphan outbox before any journal publication.
+        let owner;
+        try { owner = await store.getStrict(`${RUN_PREFIX}${key.slice(OUTBOX_PREFIX.length)}`); }
+        catch { return { ok: false, reason: "unreadable_run_record" }; }
+        if (!owner || typeof owner !== "object" || Array.isArray(owner) ||
+            owner.journalTarget !== outbox.journalTarget) {
+          return { ok: false, reason: "outbox_target_mismatch" };
+        }
+      }
+      // Recovery can manufacture a cancellation outbox from a record that has
+      // no outbox yet. Inspect the stored records, not the possibly stale cache.
+      for (const key of keys.filter((name) => name.startsWith(RUN_PREFIX))) {
+        let record;
+        try { record = await store.getStrict(key); } catch { return { ok: false, reason: "unreadable_run_record" }; }
+        if (!record || typeof record !== "object" || Array.isArray(record) ||
+            typeof record.journalTarget !== "string" || !record.journalTarget.trim()) {
+          return { ok: false, reason: "unreadable_run_record" };
+        }
+        if (record.phase === "cancel-requested" && record.journalTarget === "master") {
+          return { ok: false, reason: "cancel_requested_record" };
+        }
+      }
+      return { ok: true, result: await publish() };
+    });
+  }
+
   async function cancel(executionId, { reason = "explicit owner cancellation", requestId = null, onAuthorityPersisted = null } = {}) {
     const authority = await locked(async () => {
       let record = await readRecord(executionId);
@@ -2415,6 +2468,7 @@ export function createDurableRunRegistry({
     recover,
     list,
     activeByJournalTarget,
+    withMasterJournalCutoverFence,
     attachPort,
     subscribe,
     // A cancelling (cancel-authority recorded, not yet terminal) execution is

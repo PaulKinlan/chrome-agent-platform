@@ -18,6 +18,7 @@ class FakeStore {
   isMaster = true;
   origin = "master";
   async get(key) { return structuredClone(this.values.get(key) ?? null); }
+  async getStrict(key) { return await this.get(key); }
   async has(key) { return this.values.has(key); }
   async getVersion(key) { return this.versions.get(key) ?? 0; }
   async snapshot(key) {
@@ -319,6 +320,107 @@ Deno.test("durable runs: journal compensation failure preserves authority and re
   assertEquals(retried.ok, true);
   assertEquals(await store.has(`run:${executionId}`), false);
   assertEquals(await store.has("run-registry"), false);
+});
+
+Deno.test("master WAL cutover fence refuses active writers, outboxes, unreadable entries, and pending cancellation", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  let publications = 0;
+  const publish = async () => ++publications;
+  const clear = { ok: true, result: 1 };
+  assertEquals(await registry.withMasterJournalCutoverFence(publish), clear);
+  await begin(registry);
+  assertEquals((await registry.withMasterJournalCutoverFence(publish)).reason, "active_run_writer");
+  assertEquals(publications, 1);
+
+  const emptyStore = new FakeStore();
+  const empty = harness(emptyStore).registry;
+  await emptyStore.setTrusted("run-outbox:orphan", { journalTarget: "master", kind: "terminal" });
+  assertEquals((await empty.withMasterJournalCutoverFence(publish)).reason, "pending_master_outbox");
+  await emptyStore.setTrusted("run-outbox:orphan", { journalTarget: "site:https://example.test", kind: "terminal" });
+  assertEquals((await empty.withMasterJournalCutoverFence(publish)).reason, "outbox_target_mismatch",
+    "an orphan site outbox cannot authorize cutover");
+  await emptyStore.setTrusted("run:orphan", { journalTarget: "master", phase: "terminal" });
+  assertEquals((await empty.withMasterJournalCutoverFence(publish)).reason, "outbox_target_mismatch",
+    "a master record cannot be hidden by a mismatched site outbox");
+  await emptyStore.setTrusted("run:orphan", { journalTarget: "site:https://example.test", phase: "terminal" });
+  assertEquals(await empty.withMasterJournalCutoverFence(publish), { ok: true, result: 2 });
+  const readable = emptyStore.getStrict.bind(emptyStore);
+  emptyStore.getStrict = async (key) => {
+    if (key === "run-outbox:orphan") throw new Error("injected unreadable outbox");
+    return await readable(key);
+  };
+  assertEquals((await empty.withMasterJournalCutoverFence(publish)).reason, "unreadable_outbox");
+  emptyStore.getStrict = readable;
+  await emptyStore.delete("run-outbox:orphan");
+  await emptyStore.setTrusted("run:cancelled-pending", { phase: "cancel-requested", journalTarget: "master" });
+  assertEquals((await empty.withMasterJournalCutoverFence(publish)).reason, "cancel_requested_record");
+  assertEquals(publications, 2, "no rejected fence may publish");
+});
+
+Deno.test("master WAL cutover fence waits for retired writer receipt compensation under registry write chain", async () => {
+  const store = new FakeStore();
+  let compensationEntered;
+  let releaseCompensation;
+  const entered = new Promise((resolve) => { compensationEntered = resolve; });
+  const held = new Promise((resolve) => { releaseCompensation = resolve; });
+  const registry = createDurableRunRegistry({
+    store,
+    logHandleFor: createMemoryRunLogHandles(),
+    bootId: "boot-cutover-receipt",
+    compensateJournal: async () => {
+      compensationEntered();
+      await held;
+      return { ok: true, compensated: true };
+    },
+  });
+  await begin(registry);
+  const rollback = registry.rollbackUnprogressedQuota(executionId, quotaError(), {
+    journalReceipt: { schemaVersion: 1, executionId }, journalStore: {},
+  });
+  await entered;
+  assertEquals(registry.activeWriters(), [], "quota rollback retires before its receipt compensation");
+  let published = false;
+  const fence = registry.withMasterJournalCutoverFence(async () => { published = true; return "published"; });
+  await Promise.resolve();
+  assertEquals(published, false, "an empty writer set cannot bypass the still-locked compensation");
+  releaseCompensation();
+  assertEquals((await rollback).ok, true);
+  assertEquals(await fence, { ok: true, result: "published" });
+  assertEquals(published, true);
+});
+
+Deno.test("master WAL cutover fence keeps new admission behind publication callback", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  let enteredPublication;
+  let releasePublication;
+  const entered = new Promise((resolve) => { enteredPublication = resolve; });
+  const held = new Promise((resolve) => { releasePublication = resolve; });
+  let insidePublication = false;
+  const originalSet = store.setTrusted.bind(store);
+  store.setTrusted = async (key, value) => {
+    if (insidePublication && String(key).startsWith("run:")) {
+      throw new Error("run admission interleaved with master publication");
+    }
+    return await originalSet(key, value);
+  };
+  const fenced = registry.withMasterJournalCutoverFence(async () => {
+    insidePublication = true;
+    enteredPublication();
+    try { await held; return "head published"; }
+    finally { insidePublication = false; }
+  });
+  await entered;
+  const start = registry.start({ executionId: "exec_fence_later_01", journalTarget: "master" });
+  // A new admission may queue, but its record write cannot overlap publication.
+  assertEquals(await Promise.race([
+    start.then(() => true, () => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 20)),
+  ]), false, "run admission must remain pending while publication holds the registry chain");
+  releasePublication();
+  assertEquals(await fenced, { ok: true, result: "head published" });
+  assertEquals((await start).executionId, "exec_fence_later_01");
 });
 
 Deno.test("durable runs: progressed quota execution is preserved for explicit recovery", async () => {

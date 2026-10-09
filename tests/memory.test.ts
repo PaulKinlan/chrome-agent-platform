@@ -1149,6 +1149,20 @@ Deno.test("durable authority migrates out of master store without eviction and n
   assertEquals((await master.keys()).some((key) => key.startsWith("run:")), false, "new runs consume zero master keys");
 });
 
+Deno.test("durable-run routed strict reads expose run and outbox bytes for a cutover fence", async () => {
+  root.children.clear();
+  const durable = durableRunMemory();
+  const id = "exec:22222222-2222-4222-8222-222222222222";
+  const record = { executionId: id, journalTarget: "master", phase: "cancel-requested" };
+  const outbox = { executionId: id, journalTarget: "master", kind: "cancellation" };
+  await durable.setTrusted(`run:${id}`, record);
+  await durable.setTrusted(`run-outbox:${id}`, outbox);
+  assertEquals(await durable.getStrict(`run:${id}`), record);
+  assertEquals(await durable.getStrict(`run-outbox:${id}`), outbox);
+  assertEquals(await durable.getStrict("run-outbox:exec:33333333-3333-4333-8333-333333333333"), null);
+  assert((await durable.keys()).includes(`run-outbox:${id}`));
+});
+
 Deno.test("stores allow >500 tiny keys per execution with NO key count or byte limits (dptw)", async () => {
   root.children.clear();
   const durable = durableRunMemory();
