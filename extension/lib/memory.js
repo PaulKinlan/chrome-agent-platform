@@ -791,6 +791,11 @@ function withWriteLock(pathOrFn, maybeFn) {
   // journal's future checkpoint/head are shared with the owner Options page:
   // serialize ALL master writes (including unrelated __gen issuers) against
   // raw journal export across contexts. Non-master stores are unaffected.
+  // Compound journal guards run INSIDE this non-reentrant lock: they may read
+  // chrome.storage/KV, but must NOT await a master-store write/snapshot or
+  // acquire an enrollment/storage mutex whose owner awaits master writes.
+  // A realm-global "already held" flag would wrongly reject legitimate
+  // concurrent writers, so it is not a safe reentrancy detector.
   const execute = key === `${ROOT}/${MASTER}` ? () => withMasterJournalWebLock(fn) : fn;
   const run = prev.then(execute, execute);
   const next = run.then(() => {}, () => {});
@@ -990,7 +995,11 @@ const storeTransactions = new WeakMap();
 export async function withStoreTransaction(store, fn) {
   if (typeof fn !== "function") throw new TypeError("store transaction callback required");
   const transaction = store && storeTransactions.get(store);
-  return transaction ? transaction(fn) : await fn(store);
+  if (transaction) return await transaction(fn);
+  // Test-only seam for spread-proxy race fakes. Never silently run a foreign
+  // store without a transaction in the browser's production path.
+  if (typeof Deno === "undefined") throw new Error("unregistered store transaction refused");
+  return await fn(store);
 }
 
 /** A single origin-scoped store. `origin` is a canonical origin string or "master". */
@@ -1869,8 +1878,10 @@ export async function journalCompensateExecution(store, receipt, guard = null) {
 
     const postCommitRefusal = await fence();
     if (postCommitRefusal) {
-      // Undo only this compensation; a concurrent append makes the CAS refuse.
-      await store.compareAndRestore("journal", current.version + 1, current.value).catch(() => false);
+      // Undo only this compensation using its ACTUAL issued generation. Other
+      // master keys may have advanced __gen since current.version, so +1 is
+      // not the write's receipt even while the journal transaction is locked.
+      await store.compareAndRestore("journal", swapped, current.value).catch(() => false);
       return postCommitRefusal;
     }
     const after = await exactStoreSnapshot(store, "journal");

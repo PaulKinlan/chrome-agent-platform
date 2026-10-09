@@ -690,6 +690,19 @@ Deno.test("journal quota compensation fails closed on ABA and generation mismatc
   assertEquals((await mem.get("journal")).some((row) => row.executionId === fenced.executionId), true);
 });
 
+Deno.test("post-compensation fence undo CAS uses its actual issued token, not journal version plus one", async () => {
+  const mem = masterMemory();
+  await mem.setTrusted("journal", [{ id: "before" }]);
+  const receipt = await journalAppendWithReceipt(mem, { type: "task", executionId: "exec-undo-actual-token" });
+  await mem.setTrusted("other-key-before-compensation", { changed: true });
+  let calls = 0;
+  const result = await journalCompensateExecution(mem, receipt, async () => {
+    if (++calls === 3) throw new Error("ownership lost after compensation");
+  });
+  assertEquals(result.reason, "journal_fence_failed");
+  assertEquals(await mem.get("journal"), receipt.postState, "failed compensation must undo itself");
+});
+
 Deno.test("global generation bootstraps above legacy envelope and sidecar tokens", async () => {
   const memoryRoot = root.children.get("memory") ?? dirNode();
   root.children.set("memory", memoryRoot);
