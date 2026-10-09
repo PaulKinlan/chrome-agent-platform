@@ -1,6 +1,6 @@
 // gfxoc: Chrome-internal temp dirs must belong to the launch, not the host /tmp.
 // Fake shell browser: no Chromium process or browser slot is consumed.
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
+import { assert, assertEquals } from "jsr:@std/assert@1";
 import { join } from "node:path";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { launchChrome, teardownChrome, type LaunchedChrome } from "../scripts/lib/chrome-launch.ts";
@@ -31,11 +31,11 @@ function exists(path: string): boolean {
 
 Deno.test("gfxoc: profile launch passes a short private TMPDIR and raw-proc teardown reaps Chrome residue idempotently", async () => {
   const dir = root(), profile = join(dir, "profile"), output = join(dir, "child-tmpdir.txt");
-  const binary = fakeBrowser(dir);
+  const fake = fakeBrowser(dir);
   let launched: LaunchedChrome | undefined;
   try {
     Deno.mkdirSync(profile);
-    launched = await launchChrome({ binary, profile, lockPath: join(dir, "fixture.lock"),
+    launched = await launchChrome({ binary: fake, profile, lockPath: join(dir, "fixture.lock"),
       clearEnv: true, env: { CAP_GFXOC_OUT: output, TMPDIR: join(dir, "unowned") }, timeoutMs: 6000 });
     const scratch = launched.scratchDir;
     assert(typeof scratch === "string" && scratch.startsWith(`/tmp/cap-${Deno.pid}-`),
@@ -56,10 +56,10 @@ Deno.test("gfxoc: profile launch passes a short private TMPDIR and raw-proc tear
 });
 
 Deno.test("gfxoc: no-profile launch keeps caller TMPDIR and creates no owned scratch", async () => {
-  const dir = root(), output = join(dir, "child-tmpdir.txt"), binary = fakeBrowser(dir);
+  const dir = root(), output = join(dir, "child-tmpdir.txt"), fake = fakeBrowser(dir);
   let launched: LaunchedChrome | undefined;
   try {
-    launched = await launchChrome({ binary, lockPath: join(dir, "fixture.lock"), clearEnv: true,
+    launched = await launchChrome({ binary: fake, lockPath: join(dir, "fixture.lock"), clearEnv: true,
       env: { CAP_GFXOC_OUT: output, TMPDIR: dir }, timeoutMs: 6000 });
     assertEquals(launched.scratchDir, undefined);
     assertEquals(Deno.readTextFileSync(output), dir);
@@ -73,12 +73,30 @@ Deno.test("gfxoc: no-profile launch keeps caller TMPDIR and creates no owned scr
 
 Deno.test("gfxoc: browser startup refusal cleans the newly allocated scratch before returning", async () => {
   const dir = root(), profile = join(dir, "profile"), fake = join(dir, "missing-binary");
-  const before = new Set([...Deno.readDirSync("/tmp")].map((x) => x.name).filter((name) => name.startsWith(`cap-${Deno.pid}-`)));
   try {
-    await assertRejects(() => launchChrome({ binary: fake, profile,
-      lockPath: join(dir, "fixture.lock"), timeoutMs: 3000 }));
-    const after = [...Deno.readDirSync("/tmp")].map((x) => x.name).filter((name) => name.startsWith(`cap-${Deno.pid}-`));
-    assertEquals(new Set(after), before, "startup refusal must not leak this process's Chrome scratch");
+    // The parallel runner shares Deno.pid across test files. An isolated child
+    // owns this prefix, so a different test's concurrent launch cannot change
+    // the before/after set and falsely redden our startup-refusal assertion.
+    const program = `
+      import { launchChrome } from ${JSON.stringify(new URL("../scripts/lib/chrome-launch.ts", import.meta.url).href)};
+      const names = () => [...Deno.readDirSync("/tmp")].map((e) => e.name)
+        .filter((name) => name.startsWith(\`cap-\${Deno.pid}-\`)).sort();
+      const before = names();
+      let refused = false;
+      try { await launchChrome({ binary: ${JSON.stringify(fake)}, profile: ${JSON.stringify(profile)},
+        lockPath: ${JSON.stringify(join(dir, "fixture.lock"))}, timeoutMs: 3000 }); }
+      catch { refused = true; }
+      console.log(JSON.stringify({ refused, before, after: names() }));
+    `;
+    const child = await new Deno.Command(Deno.execPath(), {
+      args: ["eval", "-A", "--config", new URL("../deno.runner.jsonc", import.meta.url).pathname, program],
+      cwd: new URL("..", import.meta.url).pathname,
+      stdout: "piped", stderr: "piped",
+    }).output();
+    assertEquals(child.code, 0, new TextDecoder().decode(child.stderr));
+    const result = JSON.parse(new TextDecoder().decode(child.stdout).trim());
+    assertEquals(result.refused, true, "missing browser must fail to start");
+    assertEquals(result.after, result.before, "startup refusal must not leak its own Chrome scratch");
   } finally {
     Deno.removeSync(dir, { recursive: true });
   }
