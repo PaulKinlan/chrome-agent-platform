@@ -173,7 +173,7 @@ Deno.test("side panel: the Agents tab is a container context, so the collapsed r
 // 4. The hub layout: one long token must not win a column.
 // ---------------------------------------------------------------------------
 const ntpHtml = await read("./extension/ntp/ntp.html");
-const componentsJs = await read("./extension/shared/components.js");
+const componentsJs = await read("./extension/shared/components-hub.js");
 
 /** The first `len` characters of a rule whose selector starts with `selector`. */
 function ruleSlice(css: string, selector: string, len = 400): string {

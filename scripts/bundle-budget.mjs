@@ -42,9 +42,9 @@ export const STORE_SW_BUDGET_BYTES = 3_000_000;
 export const STORE_BUNDLE_BUDGETS = Object.freeze({
   "background/service-worker.js": STORE_SW_BUDGET_BYTES,
   "workers/agent-worker.js": 2_000_000,
-  "options.bundle.js": 900_000,
-  "ntp.bundle.js": 920_000,
-  "sidepanel.bundle.js": 700_000,
+  "options.bundle.js": 600_000,
+  "ntp.bundle.js": 850_000,
+  "sidepanel.bundle.js": 450_000,
   "shared/diff-core.bundle.js": 17_000,
   // chrome-agent-platform-o2t3: the six SECONDARY surface bundles declare a budget
   // in build.mjs SURFACE_BUNDLES but were in neither this table nor
@@ -58,10 +58,11 @@ export const STORE_BUNDLE_BUDGETS = Object.freeze({
   // states under the 2026-10-05 owner decision (measured and reported, not enforced).
   // The ceilings below are build.mjs's, and tests/bundle-budget.test.ts pins this
   // table against build.mjs's declarations so the two cannot drift apart again.
-  "artifacts.bundle.js": 600_000,
-  "artifact.bundle.js": 600_000,
-  "directory.bundle.js": 600_000,
-  "privacy.bundle.js": 600_000,
+  // Ratcheted down under 9epn.6 with components modularization.
+  "artifacts.bundle.js": 200_000,
+  "artifact.bundle.js": 200_000,
+  "directory.bundle.js": 65_000,
+  "privacy.bundle.js": 65_000,
   "offscreen.bundle.js": 250_000,
   "user-wasm-store-client.bundle.js": 10_000,
 });

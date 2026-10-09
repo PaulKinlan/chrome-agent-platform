@@ -43,7 +43,7 @@ globalThis.document = globalThis.document || {
 globalThis.matchMedia = globalThis.matchMedia || (() => ({ matches: false }));
 
 Deno.test("artifact source view: the inspector renders the COMPLETE body, never a 64 KiB slice (p45y source guard)", () => {
-  const raw = Deno.readTextFileSync(`${ROOT}extension/shared/components.js`);
+  const raw = Deno.readTextFileSync(`${ROOT}extension/shared/components-artifacts.js`);
   const inspector = raw.slice(raw.indexOf("/* <artifact-inspector>"), raw.indexOf("customElements.define(\"artifact-inspector\""));
   // The fix: the code element is filled with the whole `content` value.
   assert(

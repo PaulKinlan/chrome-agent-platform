@@ -29,10 +29,23 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   Theme switcher UI was removed in `v0.2.301` to maintain a single quiet design system.
 
 ## Component stylesheet sharing (constructable stylesheets)
-- Shadow-DOM Web Components in `extension/shared/components.js` use constructable stylesheets (`adoptedStyleSheets`) via `adoptOrInjectStyle` and `mountTemplate`.
+- Shadow-DOM Web Components in `extension/shared/components-core.js` and modular slices use constructable stylesheets (`adoptedStyleSheets`) via `adoptOrInjectStyle` and `mountTemplate`.
 - Stylesheets are parsed once per unique CSS text and memoized (`getConstructableSheet`), allowing hundreds of component instances (e.g. `<message-bubble>`, `<task-row>`, `<capability-row>`, `<artifact-card>`) to share a single in-memory `CSSStyleSheet` object.
 - This eliminates thousands of redundant `<style>` DOM nodes in shadow roots, lowers style recalc overhead, and maintains standard CSS variable inheritance for light/dark theme cascading.
 - Environments lacking `CSSStyleSheet.prototype.replaceSync` or `adoptedStyleSheets` (e.g. unit test DOM stubs) transparently fall back to inline `<style>` injection.
+
+## Component Modularization & Per-Surface Bundling (9epn.6)
+- The legacy monolithic `extension/shared/components.js` has been decomposed into cohesive domain modules:
+  - `components-core.js`: Base `Component` class, `PanelButton`, stylesheet caching, DOM helpers, dialog helpers, and foundational UI primitives (`<run-task-button>`, `<cap-logo>`, `<empty-state>`, `<switch-toggle>`, `<capability-row>`, `<segmented-control>`, `<loading-state>`).
+  - `components-conversation.js`: Chat and composer surfaces (`<agent-composer>`, `<agent-conversation>`, `<message-bubble>`, `<mic-button>`, `<attach-button>`, `<tool-tree>`, `<plan-strip>`, `<thinking-trace>`, `<task-row>`, `<approval-card>`, `<prompt-bar>`, `<agent-picker>`).
+  - `components-hub.js`: New Tab page hub widgets (`<first-run-guide>`, `<example-chips>`, `<site-agent-card>`, `<next-run>`, `<security-shield>`, `<diagnostics-panel>`, `<activity-explorer>`, `<action-ledger>`, `<agent-timeline>`, `<jobs-board>`, `<durable-run-registry>`).
+  - `components-settings.js`: Configuration and management panels (`<theme-picker>`, `<permission-row>`, `<origin-grant-row>`, `<agent-template-card>`, `<agent-template-gallery>`, `<webmcp-consent-manager>`, `<agent-config-form>`, `<provider-select>`, `<model-picker>`, `<agent-nav>`, `<error-console>`, `<system-prompt-editor>`, `<tool-library>`, `<user-wasm-manager>`).
+  - `components-artifacts.js`: Artifact inspection and previews (`<artifact-card>`, `<artifact-inspector>`, `<artifact-diff>`, `<table-preview>`, `<asset-quick-drawer>`, `<code-block>`).
+  - `components-directory.js`: Tool discovery cards (`<tool-directory-card>`).
+  - `components-privacy.js`: Privacy statement views (`<privacy-statement>`).
+  - `components.js`: Aggregating barrel re-exporting all submodules to maintain 100% backward compatibility for the docs gallery showcase (`docs/components.html`) and existing test suites.
+- **Per-Surface Targeted Imports**: Individual extension entry points (`sidepanel.js`, `ntp.js`, `options.js`, etc.) import only their required component submodules directly, preventing unused component definitions (such as `<tool-library>` on NTP boot) from registering eagerly.
+- **Architectural Deviation (12-Bundle Authority vs. esbuild splitting)**: While code splitting with `splitting: true` generates separate chunk files, this conflicts with the extension manifest and the strict 12-bundle authority schema enforced by `dist.complete` and `dist-complete.mjs` (`DIST_COMPLETE_OUTPUTS`). Instead, modularization is achieved via manual domain decomposition and targeted per-surface bundling, preserving the deterministic 12-bundle contract with zero unmanifested chunk files. Minified bundle sizes after modularization: sidepanel 413.9 KB, NTP 818.3 KB, options 543.7 KB, artifacts 143.9 KB, artifact 127.2 KB, directory 61.4 KB, privacy 63.5 KB.
 
 ## Directory function cards
 - A function is one semantic unit in source order: name, truthful bounded registry description (or “No description provided”), site/schema metadata, then its own source and approval states.

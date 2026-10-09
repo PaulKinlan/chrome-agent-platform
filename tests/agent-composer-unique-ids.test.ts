@@ -20,7 +20,7 @@ async function read(path: string): Promise<string> {
 }
 
 Deno.test("sndb: AgentComposer renders dynamic per-instance IDs and no fixed task-input", async () => {
-  const js = await read("../extension/shared/components.js");
+  const js = await read("../extension/shared/components-conversation.js");
 
   // 1. Fixed id="task-input" and id="run-task" must NOT be hardcoded in the template
   assert(

@@ -189,8 +189,8 @@ Deno.test("artifact body: edits and version restore still work on an append-grow
 
 // ---- P2: the artifact inspector never size-refuses; only tokenizing is bounded ----
 Deno.test("artifact inspector: bodies render complete at any size (no mount refusal), with highlighting bounded to the sync-tokenize budget", () => {
-  const raw = Deno.readTextFileSync(new URL("../extension/shared/components.js", import.meta.url));
-  const docs = Deno.readTextFileSync(new URL("../docs/components.js", import.meta.url));
+  const raw = Deno.readTextFileSync(new URL("../extension/shared/components-artifacts.js", import.meta.url));
+  const docs = Deno.readTextFileSync(new URL("../docs/components-artifacts.js", import.meta.url));
   const inspector = raw.slice(raw.indexOf("/* <artifact-inspector>"), raw.indexOf('customElements.define("artifact-inspector"'));
   const docInspector = docs.slice(docs.indexOf("/* <artifact-inspector>"), docs.indexOf('customElements.define("artifact-inspector"'));
   for (const [label, text] of [["components.js", inspector], ["docs/components.js", docInspector]]) {

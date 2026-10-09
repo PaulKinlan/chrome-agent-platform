@@ -306,7 +306,7 @@ Deno.test("streaming-dom-perf: buildToolCardDom builds .tt-row elements immediat
 
 Deno.test("streaming-dom-perf: AgentConversation stylesheet contains content-visibility: auto for .run-group", async () => {
   // Read components.js source or inspect stylesheet constant to verify rule is present
-  const componentsText = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const componentsText = await Deno.readTextFile(new URL("../extension/shared/components-conversation.js", import.meta.url));
   assert(
     componentsText.includes("content-visibility: auto") && componentsText.includes("contain-intrinsic-size: auto 64px"),
     "AgentConversation style must include content-visibility: auto and contain-intrinsic-size: auto 64px for .run-group",

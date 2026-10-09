@@ -296,6 +296,6 @@ Deno.test("webmcp hub status: the shared .hub-row class is applied directly + th
   if (hubRowAt < 0) throw new Error(".hub-row inline-padding rule missing");
   if (!(hubRowAt > panelBodyAt)) throw new Error("the .hub-row rule must be declared after .panel-body for the cascade to win");
   // The sibling capability-row hosts carry 14px inline — the shared 14px must match.
-  const components = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const components = await Deno.readTextFile(new URL("../extension/shared/components-core.js", import.meta.url));
   if (!/padding:12px 14px/.test(components)) throw new Error("the sibling capability-row inline padding is not 14px — the shared rule must match it");
 });

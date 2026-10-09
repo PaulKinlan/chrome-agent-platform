@@ -1,9 +1,13 @@
 # Changelog
 
+## [0.3.618] — 2026-10-09
+- Modularize shared/components.js into domain-scoped modules with components.js as an aggregating barrel, reducing UI bundle sizes across all surfaces while preserving the 12-bundle authority contract.
+
 ## [0.3.617] — 2026-10-09
 - Group tabs opened or attached by a task into a named tab group, restorable on task open, closable with Undo
 
 ## [0.3.616] — 2026-10-09
+- Modularize shared/components.js into domain-scoped modules (components-core.js, components-conversation.js, components-hub.js, components-settings.js, components-artifacts.js, components-directory.js, components-privacy.js) with components.js as an aggregating barrel. Target per-surface component imports and keep strict 12-bundle authority intact without unmanifested chunk files.
 - admit blake3-wasm v3.0.0 as an Emscripten glue class managed Wasm tool for 256-bit cryptographic hashing
 
 ## [0.3.615] — 2026-10-09

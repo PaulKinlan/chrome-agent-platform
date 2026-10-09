@@ -128,7 +128,7 @@ Deno.test("genui-error: unwrapping is depth-bounded (pathological nesting is not
 });
 
 Deno.test("genui-error: MessageBubble wires generated frames inside its Shadow DOM", async () => {
-  const source = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const source = await Deno.readTextFile(new URL("../extension/shared/components-conversation.js", import.meta.url));
   const start = source.indexOf("class MessageBubble extends Component");
   const end = source.indexOf('customElements.define("message-bubble"', start);
   const bubble = source.slice(start, end);
@@ -242,7 +242,7 @@ Deno.test("genui-error: the LIVE tool-result path wires summary+detail so the er
 
 // ── Source pins: the falsification gate (each FAILS on the pre-fix tree) ─────
 
-const COMPONENTS_SRC = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+const COMPONENTS_SRC = await Deno.readTextFile(new URL("../extension/shared/components-conversation.js", import.meta.url));
 const PREVIEW_SRC = await Deno.readTextFile(new URL("../extension/sandbox/artifact-preview.js", import.meta.url));
 
 Deno.test("genui-error: the tool branch consults toolResultSignalsError BEFORE mounting the preview frame", () => {

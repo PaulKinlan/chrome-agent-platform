@@ -66,7 +66,7 @@ Deno.test("approvalCardDenial: propagates honest truncation metadata in permissi
 });
 
 Deno.test("ApprovalCard component: renders honest preview notice and source truncation marker for over-cap scripts", async () => {
-  const components = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const components = await Deno.readTextFile(new URL("../extension/shared/components-conversation.js", import.meta.url));
 
   // 1. Template CSS defines .source-notice
   assertStringIncludes(components, ".source-notice");
@@ -84,7 +84,7 @@ Deno.test("ApprovalCard component: renders honest preview notice and source trun
 });
 
 Deno.test("ArtifactInspector component: renders honest preview notice and copy button for file-backed stream artifacts", async () => {
-  const componentsPath = fileURLToPath(new URL("../extension/shared/components.js", import.meta.url));
+  const componentsPath = fileURLToPath(new URL("../extension/shared/components-artifacts.js", import.meta.url));
   const components = await Deno.readTextFile(componentsPath);
 
   // Verifies fileBacked and contentIncomplete checks

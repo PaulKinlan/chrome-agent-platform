@@ -32,7 +32,10 @@ import {
   currentFramePreference,
   deleteAgentDialog,
   flushDeferredComponents,
-} from "../shared/components.js";
+} from "../shared/components-core.js";
+import "../shared/components-hub.js";
+import "../shared/components-conversation.js";
+import "../shared/components-artifacts.js";
 import { runStagedBoot } from "./ntp-boot-scheduler.js";
 import { formatSidebarAgentRole, sleep, timeAgo } from "../lib/pure.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";

@@ -52,6 +52,9 @@ export const SKIPPED_DIRS = new Set(["dist", "dist-versions", "dist-archives", "
 //     tests so the follow-up is a mechanical delete.
 export const RETAINED = {
 
+  "shared/components.js":
+    "Aggregating barrel for the design-system components (9epn.6): re-exports all modular component slices for docs/components.html gallery showcase, tests, and backward-compatible consumers.",
+
   "lib/code-mode-sandbox.js":
     "The code-mode sandbox bounds + tool-call SDK configuration (jao1.4, CAP-SECURE-ENCLAVE Stage 4): the SW wiring (script-host integration + tool-call bridging) is the NEXT slice; tests/code-mode-sandbox.test.ts pins the bounds and isolation contract meanwhile.",
   // (lib/service-tools.js was RETAINED at jao1.3; jao1.5's wiring merged the

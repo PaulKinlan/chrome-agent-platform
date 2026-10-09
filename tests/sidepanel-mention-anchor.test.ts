@@ -19,7 +19,7 @@ Deno.test("sidepanel.html: .page-empty-state has flex: 1 to pin composer to bott
 });
 
 Deno.test("components.js: anchor positioning syntax rejects invalid physical span-x/y and enforces valid logical syntax", async () => {
-  const src = await Deno.readTextFile("extension/shared/components.js");
+  const src = await Deno.readTextFile("extension/shared/components-conversation.js");
   // Reject invalid non-standard physical syntax (span-x-start, span-y-start, span-x-end, span-y-end)
   assert(!src.includes("span-x-start"), "components must not use invalid span-x-start syntax");
   assert(!src.includes("span-y-start"), "components must not use invalid span-y-start syntax");
@@ -156,8 +156,8 @@ Deno.test("agent-composer: _showPopup anchors suggestion popover according to an
 });
 
 Deno.test("placeFloating: self-corrects coordinate shift when containing block is offset", async () => {
-  // Read placeFloating definition from components.js to evaluate it directly
-  const src = await Deno.readTextFile("extension/shared/components.js");
+  // Read placeFloating definition from components-core.js to evaluate it directly
+  const src = await Deno.readTextFile("extension/shared/components-core.js");
   const fnMatch = src.match(/function placeFloating\([\s\S]*?\n\}/);
   assert(fnMatch, "placeFloating function must exist");
 

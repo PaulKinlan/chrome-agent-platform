@@ -191,7 +191,7 @@ Deno.test("table-preview: custom element registration and structural accessibili
   const TablePreviewCls = registry.get("table-preview");
   assert(TablePreviewCls !== undefined, "<table-preview> must be registered in customElements");
 
-  const componentsSrc = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const componentsSrc = await Deno.readTextFile(new URL("../extension/shared/components-artifacts.js", import.meta.url));
 
   // 1. Accessibility semantics: scope="col", <caption>, aria-live="polite", role="region"
   assertStringIncludes(componentsSrc, '<th scope="col"');

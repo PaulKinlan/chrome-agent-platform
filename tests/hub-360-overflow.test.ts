@@ -8,7 +8,7 @@ import { assert } from "jsr:@std/assert@1";
 Deno.test("hub 360 overflow: narrow media query wraps the composer row + shrinks the textarea + reclaims gutters", async () => {
   const root = new URL("..", import.meta.url);
   const html = await Deno.readTextFile(new URL("extension/ntp/ntp.html", root));
-  const components = await Deno.readTextFile(new URL("extension/shared/components.js", root));
+  const components = await Deno.readTextFile(new URL("extension/shared/components-conversation.js", root));
 
   // The composer row must be allowed to wrap at narrow widths.
   assert(

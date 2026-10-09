@@ -50,7 +50,7 @@ Deno.test("Assets dialog lifecycle composes with no-argument follow-up focus neu
 Deno.test("Assets composition ships the stable nested sandbox without false navigation authority", async () => {
   const manifest = JSON.parse(await read("extension/manifest.json"));
   const host = await read("extension/sandbox/artifact-preview.js");
-  const components = await read("extension/shared/components.js");
+  const components = await read("extension/shared/components-core.js");
   const worker = await read("extension/background/service-worker.js");
 
   assert(manifest.sandbox.pages.includes("sandbox/artifact-preview.html"));

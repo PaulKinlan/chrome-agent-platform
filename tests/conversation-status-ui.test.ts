@@ -37,7 +37,7 @@ Deno.test("conversation run status: waiting for permission is an explicit paused
 });
 
 Deno.test("hard stop: live conversation and scheduled-task surfaces expose one-click keyboard buttons", async () => {
-  const components = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const components = await Deno.readTextFile(new URL("../extension/shared/components-conversation.js", import.meta.url));
   const statusStart = components.indexOf("class ConversationRunStatus");
   const statusEnd = components.indexOf('customElements.define("conversation-run-status"', statusStart);
   const status = components.slice(statusStart, statusEnd);
@@ -153,7 +153,7 @@ Deno.test("conversation run status: the live status is the conversation's own in
   const composer = thread.indexOf("<agent-composer");
   assertEquals(transcript > -1 && transcript < composer, true,
     "the conversation (which owns the inline status row) sits above the composer");
-  const components = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const components = await Deno.readTextFile(new URL("../extension/shared/components-conversation.js", import.meta.url));
   assert(components.includes("setLiveStatus(status)"), "agent-conversation exposes the inline live-status API");
   // Still sticky at the bottom — offset by the docked composer's height so the
   // row pins just above it (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
@@ -388,7 +388,7 @@ Deno.test("thread view: turnTime yields an ISO datetime and a short local label"
 });
 
 Deno.test("thread view: assistant turns carry an <agent-identity> header, the composer docks, the title focus is quiet", async () => {
-  const components = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const components = await Deno.readTextFile(new URL("../extension/shared/components-conversation.js", import.meta.url));
   assert(components.includes('customElements.define("agent-identity"'), "the identity header is a reusable component");
   const bubbleStart = components.indexOf("class MessageBubble");
   const bubbleEnd = components.indexOf('customElements.define("message-bubble"', bubbleStart);

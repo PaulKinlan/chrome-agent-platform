@@ -333,23 +333,23 @@ export const ALLOWED_WILDCARD_CHANNELS: Array<{
     reason: "The sandbox's own origin is opaque, so no targetOrigin can name it; the envelope carries type/runId/nonce.",
   },
   {
-    file: "extension/shared/components.js",
+    file: "extension/shared/components-core.js",
     fingerprint: '{ type: "cap:artifact-preview-open", nonce: n, html: guarded }',
     count: 1,
-    reason: "Extension page -> sandboxed preview frame: the frame's origin is opaque, and the nonce + guarded html are the guard.",
+    reason: "Extension page -> sandboxed preview frame: the frame's origin is opaque, and the nonce + guarded html are the guard (moved to components-core.js under 9epn.6).",
   },
   {
-    file: "extension/shared/components.js",
+    file: "extension/shared/components-core.js",
     fingerprint: '{ type: FRAME_PREFERENCE_TYPE, nonce: n, preference: pref }',
     count: 1,
-    reason: "As above, the preference channel into the same opaque-origin frame, guarded by its nonce.",
+    reason: "As above, the preference channel into the same opaque-origin frame, guarded by its nonce (moved to components-core.js under 9epn.6).",
   },
   {
-    file: "extension/shared/components.js",
+    file: "extension/shared/components-core.js",
     fingerprint: "{type:'cap:preference-ready',nonce:nonce}",
     count: 1,
     reason:
-      "A srcdoc frame -> its parent. An srcdoc frame's origin is opaque, so it cannot be named as a target; the nonce is the guard.",
+      "A srcdoc frame -> its parent. An srcdoc frame's origin is opaque, so it cannot be named as a target; the nonce is the guard (moved to components-core.js under 9epn.6).",
   },
   {
     file: "extension/skills/skills-panel.js",
@@ -375,7 +375,7 @@ export const GUARDED_WILDCARD_CHANNELS_BY_FILE: Record<string, number> = {
   "extension/options/options.js": 1,
   "extension/sandbox/artifact-preview.js": 2,
   "extension/sandbox/script-sandbox.js": 1,
-  "extension/shared/components.js": 3,
+  "extension/shared/components-core.js": 3,
   "extension/skills/skills-panel.js": 1,
 };
 

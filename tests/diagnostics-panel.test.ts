@@ -14,7 +14,7 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 
 const NTP_HTML = await Deno.readTextFile(new URL("../extension/ntp/ntp.html", import.meta.url));
 const CLIENT_JS = await Deno.readTextFile(new URL("../extension/shared/diagnostics-client.js", import.meta.url));
-const COMPONENTS_JS = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+const COMPONENTS_JS = await Deno.readTextFile(new URL("../extension/shared/components-hub.js", import.meta.url));
 
 Deno.test("diagnostics-panel: custom element is defined and registered in components.js", () => {
   assert(COMPONENTS_JS.includes('customElements.define("diagnostics-panel", DiagnosticsPanel);'), "diagnostics-panel must be registered");

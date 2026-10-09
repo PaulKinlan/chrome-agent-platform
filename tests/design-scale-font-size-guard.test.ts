@@ -237,13 +237,22 @@ Deno.test("r4xk2: pinned selectors adhere to >= 12px font scale floor", () => {
   assert(optionsJs.includes('statusBadge.style.fontSize = "var(--text-xs, 12px)";'), "options statusBadge must be >= 12px");
 });
 
-Deno.test("dz3wi: extension/shared/components.js shadow-DOM styles enforce >= 12px floor (0 sub-12px declarations)", () => {
-  const shadowDomFile = join("extension", "shared", "components.js");
-  const violations = findSub12pxDeclarations([shadowDomFile]);
+Deno.test("dz3wi: extension/shared/components*.js shadow-DOM styles enforce >= 12px floor (0 sub-12px declarations)", () => {
+  const shadowDomFiles = [
+    join("extension", "shared", "components.js"),
+    join("extension", "shared", "components-core.js"),
+    join("extension", "shared", "components-conversation.js"),
+    join("extension", "shared", "components-hub.js"),
+    join("extension", "shared", "components-settings.js"),
+    join("extension", "shared", "components-artifacts.js"),
+    join("extension", "shared", "components-directory.js"),
+    join("extension", "shared", "components-privacy.js"),
+  ];
+  const violations = findSub12pxDeclarations(shadowDomFiles);
   assertEquals(
     violations.length,
     0,
-    `Found ${violations.length} sub-12px font-size declaration(s) in components.js shadow-DOM violating docs/DESIGN.md:103-105 floor:\n` +
+    `Found ${violations.length} sub-12px font-size declaration(s) in components*.js shadow-DOM violating docs/DESIGN.md:103-105 floor:\n` +
       violations.map((v) => `  ${v.file}:${v.line} -> ${v.text} (matched: ${v.matched})`).join("\n"),
   );
 });
