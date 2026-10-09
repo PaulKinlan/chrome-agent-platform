@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 
 Deno.test("716s.11: SwitchToggle in components.js and .switch in theme.css are 40x24 with 18x18 knob", async () => {
-  const compSrc = await Deno.readTextFile(`${ROOT}/extension/shared/components.js`);
+  const compSrc = await Deno.readTextFile(`${ROOT}/extension/shared/components-core.js`);
   const themeSrc = await Deno.readTextFile(`${ROOT}/extension/shared/theme.css`);
 
   // SwitchToggle component in components.js
@@ -162,7 +162,12 @@ Deno.test("716s.11: Sidepanel interactive controls meet hit target floor", async
 });
 
 Deno.test("716s.11: Shared components meet hit target floor", async () => {
-  const compSrc = await Deno.readTextFile(`${ROOT}/extension/shared/components.js`);
+  const compSrc = [
+    await Deno.readTextFile(`${ROOT}/extension/shared/components-core.js`),
+    await Deno.readTextFile(`${ROOT}/extension/shared/components-conversation.js`),
+    await Deno.readTextFile(`${ROOT}/extension/shared/components-hub.js`),
+    await Deno.readTextFile(`${ROOT}/extension/shared/components-artifacts.js`),
+  ].join("\n");
 
   // agent-composer chips: min-height: 32px
   assert(

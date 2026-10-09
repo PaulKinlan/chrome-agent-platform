@@ -35,7 +35,8 @@ import {
 import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
 import { BUDGET_CONTINUE_TASK } from "../lib/run-budget.js";
 import { findAgentByRef } from "../shared/agent-registry.js";
-import { deleteAgentDialog, renderAgentPermissionsPanel } from "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
+import { deleteAgentDialog, renderAgentPermissionsPanel } from "../shared/components-core.js";
+import "../shared/components-conversation.js";
 import { harnessMarkEl } from "../shared/harness-marks.js";
 import { capLog } from "../lib/cap-log.js";
 import { actionableRunsForSurface, runSurfaceIdentity } from "../lib/run-scope.js";

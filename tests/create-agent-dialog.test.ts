@@ -7,7 +7,7 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 
 Deno.test("AgentDialog: components.js enforces overscroll containment and non-clipped flex column layout", async () => {
   const componentsJs = await Deno.readTextFile(
-    new URL("../extension/shared/components.js", import.meta.url),
+    new URL("../extension/shared/components-core.js", import.meta.url),
   );
 
   // .dialog must have overscroll-behavior: contain and overflow: hidden

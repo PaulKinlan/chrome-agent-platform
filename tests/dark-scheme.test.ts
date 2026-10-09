@@ -55,7 +55,7 @@ Deno.test("dark-scheme: the on-accent ink aliases route through --btn-fg", () =>
 
 Deno.test("dark-scheme: user message surface resolves through the scheme-aware panel chain", () => {
   const css = read("extension/shared/theme.css");
-  const components = read("extension/shared/components.js");
+  const components = read("extension/shared/components-conversation.js");
   assert(
     /--secondary-layer:\s*var\(--panel-2\)/.test(css),
     "--secondary-layer must alias --panel-2 instead of falling back to a light surface inside message-bubble",
@@ -69,7 +69,7 @@ Deno.test("dark-scheme: user message surface resolves through the scheme-aware p
 
 Deno.test("dark-scheme: JSON tree preview text resolves through scheme-aware ink", () => {
   const css = read("extension/shared/theme.css");
-  const components = read("extension/shared/components.js");
+  const components = read("extension/shared/components-conversation.js");
   assert(
     /--fg:\s*var\(--text\)/.test(css),
     "--fg must alias --text instead of falling back to near-black inside the dark JSON tree",
@@ -101,8 +101,11 @@ Deno.test("dark-scheme: no hardcoded ink/canvas left on dynamic surfaces", () =>
   const ntp = read("extension/ntp/ntp.js");
   assert(!ntp.includes('frame.style.background = "#fff"'), "panel frame background must be var(--panel)");
   assert(!ntp.includes('b.style.color = "#fff"'), "primary button ink must be var(--btn-fg)");
-  // components.js: the preview panel canvas and the count badge.
-  const components = read("extension/shared/components.js");
+  // components: the preview panel canvas and the count badge.
+  const components = [
+    read("extension/shared/components-core.js"),
+    read("extension/shared/components-artifacts.js"),
+  ].join("\n");
   assert(
     components.includes("overflow:hidden; background:var(--panel,#fff); }"),
     "preview canvas must be var(--panel)",

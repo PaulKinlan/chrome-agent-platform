@@ -1033,3 +1033,46 @@ Deno.test("o2t3: the declared budgets and the reported/marked bundle sets cannot
     "every bundle the store archives must be recorded in the dist marker (a shipped bundle with no recorded size or hash is the o2t3 gap)",
   );
 });
+
+// ── chrome-agent-platform-9epn.6: UI modularization and budget targets ───
+
+Deno.test("9epn.6 bundle budget: sidepanel <= 450 KB, ntp <= 850 KB, options <= 600 KB", async () => {
+  const repo = fileURLToPath(new URL("../", import.meta.url));
+  const sidepanelBundle = join(repo, "extension", "dist", "sidepanel.bundle.js");
+  const ntpBundle = join(repo, "extension", "dist", "ntp.bundle.js");
+  const optionsBundle = join(repo, "extension", "dist", "options.bundle.js");
+
+  const spStat = await Deno.stat(sidepanelBundle);
+  assert(
+    spStat.size <= 450_000,
+    `sidepanel.bundle.js must be <= 450 KB minified (actual: ${spStat.size} bytes)`,
+  );
+
+  const ntpStat = await Deno.stat(ntpBundle);
+  assert(
+    ntpStat.size <= 850_000,
+    `ntp.bundle.js must be <= 850 KB minified (actual: ${ntpStat.size} bytes)`,
+  );
+
+  const optStat = await Deno.stat(optionsBundle);
+  assert(
+    optStat.size <= 600_000,
+    `options.bundle.js must be <= 600 KB minified (actual: ${optStat.size} bytes)`,
+  );
+});
+
+Deno.test("9epn.6 tool-library NTP acceptance: tool-library registration is isolated to settings and omitted from NTP boot", async () => {
+  const ntpJs = await Deno.readTextFile("extension/ntp/ntp.js");
+  assert(
+    !ntpJs.includes("components-settings.js") && !ntpJs.includes("tool-library"),
+    "ntp.js must not eagerly import components-settings.js or reference tool-library",
+  );
+  // In a clean environment without components-settings.js loaded, tool-library is not registered
+  // Check the module AST exports to ensure tool-library is only in components-settings.js
+  const coreSrc = await Deno.readTextFile("extension/shared/components-core.js");
+  const convSrc = await Deno.readTextFile("extension/shared/components-conversation.js");
+  const hubSrc = await Deno.readTextFile("extension/shared/components-hub.js");
+  assert(!coreSrc.includes('define("tool-library"'), "components-core must not register tool-library");
+  assert(!convSrc.includes('define("tool-library"'), "components-conversation must not register tool-library");
+  assert(!hubSrc.includes('define("tool-library"'), "components-hub must not register tool-library");
+});

@@ -174,7 +174,7 @@ Deno.test("716s.8: category headers suppress when only a single group matches", 
 });
 
 Deno.test("716s.8: slash autocomplete CSS constrains width <= 480px, anchors to inline-start, and description is adjacent", async () => {
-  const src = await Deno.readTextFile("extension/shared/components.js");
+  const src = await Deno.readTextFile("extension/shared/components-conversation.js");
   
   // Constrain width and anchor to inline-start
   assert(
@@ -211,7 +211,7 @@ Deno.test("716s.8: attach menu drops Choose agent, removes border, and uses var(
   assert(!html.includes("multimodal where the provider supports it"), "attach menu note must not contain multimodal technical jargon");
 
   // Source test: no hardcoded rgba(0,0,0,.25) in attach menu
-  const src = await Deno.readTextFile("extension/shared/components.js");
+  const src = await Deno.readTextFile("extension/shared/components-conversation.js");
   const attachMenuSlice = src.slice(src.indexOf("class AttachButton"), src.indexOf("class AttachButton") + 2500);
   assert(!attachMenuSlice.includes("rgba(0,0,0,.25)"), "AttachButton styles must not contain hardcoded rgba(0,0,0,.25)");
   assert(!attachMenuSlice.includes("rgba(0, 0, 0, 0.45)"), "AttachButton styles must not contain hardcoded rgba(0, 0, 0, 0.45)");

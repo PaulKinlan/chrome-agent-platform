@@ -41,7 +41,10 @@ Deno.test("716s.5: jobs / work-col expands to full width or collapses when empty
 });
 
 Deno.test("716s.5: single primary CTA on first run — composer send button demoted when disabled/empty", async () => {
-  const componentsJs = await read("./extension/shared/components.js");
+  const componentsJs = [
+    await read("./extension/shared/components-hub.js"),
+    await read("./extension/shared/components-conversation.js"),
+  ].join("\n");
 
   // FirstRunGuide must have onboarding card and onboarding-cta / onboarding-settings identifiers
   assert(componentsJs.includes("onboarding-card"), "first-run-guide must include onboarding-card");

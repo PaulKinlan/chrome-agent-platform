@@ -309,7 +309,7 @@ Deno.test("/bookmarks and /history expose an honest Settings grant state when au
 
 Deno.test("the live composer opens exact Chrome-deep commands and attaches picked context", async () => {
   const source = await Deno.readTextFile(
-    new URL("../extension/shared/components.js", import.meta.url),
+    new URL("../extension/shared/components-conversation.js", import.meta.url),
   );
   assertMatch(source, /item\.direct && item\.id === ns/);
   assertMatch(source, /resolveComposerCommandSelection\(item/);

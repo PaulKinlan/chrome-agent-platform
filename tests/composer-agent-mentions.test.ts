@@ -74,7 +74,7 @@ Deno.test("composer mention routing rejects malformed or kind/id-confused candid
 
 Deno.test("shipped composer copy and accessible description promise any agent, never site-only replies", async () => {
   const root = new URL("../", import.meta.url);
-  const components = await Deno.readTextFile(new URL("extension/shared/components.js", root));
+  const components = await Deno.readTextFile(new URL("extension/shared/components-conversation.js", root));
   const ntp = await Deno.readTextFile(new URL("extension/ntp/ntp.html", root));
   const shipped = [components, ntp].join("\n");
 

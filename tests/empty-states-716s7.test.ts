@@ -5,7 +5,7 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 const read = (p: string) => Deno.readTextFile(p);
 
 Deno.test("716s.7: <empty-state> web component is defined and exported in components.js", async () => {
-  const componentsSrc = await read("extension/shared/components.js");
+  const componentsSrc = await read("extension/shared/components-core.js");
   assert(componentsSrc.includes('customElements.define("empty-state", EmptyState);'), "components.js must define empty-state");
   assert(componentsSrc.includes('class EmptyState extends Component'), "components.js must declare EmptyState");
 });

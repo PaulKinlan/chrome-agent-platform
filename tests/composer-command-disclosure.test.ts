@@ -36,7 +36,7 @@ if (BROWSER_BINARY === null) {
 }
 
 Deno.test("fwf6 source pin: the picker note is rendered from the registry constant", async () => {
-  const source = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const source = await Deno.readTextFile(new URL("../extension/shared/components-conversation.js", import.meta.url));
   // The sentence is imported, never re-typed: a second literal would drift.
   assert(
     /note\.textContent = COMMAND_INSERTION_DISCLOSURE;/.test(source),

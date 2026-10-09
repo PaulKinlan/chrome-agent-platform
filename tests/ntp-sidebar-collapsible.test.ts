@@ -393,7 +393,7 @@ Deno.test("kr97: formatSidebarAgentRole strips markdown headings, extracts role,
 
 Deno.test("kr97: ghost button styling, footer padding fix, and quick drawer icon", async () => {
   const html = await Deno.readTextFile(`${ROOT}/extension/ntp/ntp.html`);
-  const components = await Deno.readTextFile(`${ROOT}/extension/shared/components.js`);
+  const components = await Deno.readTextFile(`${ROOT}/extension/shared/components-artifacts.js`);
 
   // .side-toggle and .new-task borderless ghost button
   assert(

@@ -698,7 +698,7 @@ Deno.test("7spn pins: projectSurfaceRunTranscript avoids double-subscription; sc
   const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
   assert(ntp.includes("liveClientRunId && run?.clientCorrelationId === liveClientRunId"), "projectSurfaceRunTranscript avoids double-subscribing live run");
 
-  const comp = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const comp = await Deno.readTextFile(new URL("../extension/shared/components-conversation.js", import.meta.url));
   const stripSrc = comp.slice(comp.indexOf("class ScreenshotStrip"), comp.indexOf("customElements.define(\"screenshot-strip\""));
   assert(stripSrc.includes("decoding=\"async\""), "screenshot-strip uses async decoding");
   assert(!stripSrc.includes("loading=\"lazy\""), "screenshot-strip avoids lazy loading that defers dimensions in headless");

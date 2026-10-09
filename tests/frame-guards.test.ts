@@ -14,7 +14,7 @@
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
-const COMPONENTS_PATH = fileURLToPath(new URL("../extension/shared/components.js", import.meta.url));
+const COMPONENTS_PATH = fileURLToPath(new URL("../extension/shared/components-core.js", import.meta.url));
 
 /** Extract the string-fragment array of `function <fnName>` from the shipped
  * source and join it into the exact script string the extension emits.

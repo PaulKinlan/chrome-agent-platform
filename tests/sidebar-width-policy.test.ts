@@ -87,7 +87,7 @@ Deno.test("ntp surface: the overlay layout is policy-sanctioned at narrow width 
 
 Deno.test("first-run banner: one real action, no aria-disabled gate, dismiss last", () => {
   const components = readFileSync(
-    new URL("../extension/shared/components.js", import.meta.url),
+    new URL("../extension/shared/components-hub.js", import.meta.url),
     "utf8",
   );
   const guideStart = components.indexOf("class FirstRunGuide extends Component");

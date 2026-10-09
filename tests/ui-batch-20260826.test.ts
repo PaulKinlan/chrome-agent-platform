@@ -28,7 +28,7 @@ Deno.test("Tool library: per-source row bound covers the full browser registry (
   const bound = Number(m[1]);
   assert(bound >= 130, `bound ${bound} must be >= the 130 browser tools so count == rendered rows`);
   // the component renders up to the same bound (no hidden 64-cap mismatch)
-  const comp = read("../extension/shared/components.js");
+  const comp = read("../extension/shared/components-settings.js");
   assertMatch(comp, /slice\(0, 256\)/, "component row slice aligned to the 256 bound");
 });
 

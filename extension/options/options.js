@@ -75,7 +75,8 @@ import { createNavigationController } from "../lib/navigation-controller.js";
 // permission-row, capability-row, …) so the settings page uses the SAME
 // design-system components as the hub + the docs showcase (one component,
 // everywhere — no hand-rolled duplicates).
-import { confirmActionDialog, deleteAgentDialog, escapeHtml } from "../shared/components.js";
+import { confirmActionDialog, deleteAgentDialog, escapeHtml } from "../shared/components-core.js";
+import "../shared/components-settings.js";
 import { refreshDiagnostics, subscribeDiagnosticsRevision } from "../shared/diagnostics-client.js";
 import { saveFsGrant, wireLocalFolderPickers, regrantFsGrantAccess } from "../lib/fs-grants.js";
 import { mountGrantBrowser } from "../lib/folder-browser.js";
