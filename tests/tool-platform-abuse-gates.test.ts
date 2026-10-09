@@ -7,15 +7,22 @@ import {
   createStreamQuotaTracker,
   gcOrphanStreams,
   runManagedStreamJob,
+  promoteWasmStreamToArtifact,
 } from "../extension/lib/tool-stream-platform.js";
 import {
   createWasmStreamInput,
+  createWasmStreamOutput,
   appendWasmStreamInput,
   sealWasmStreamInput,
+  sealWasmStreamOutput,
   validateSealedWasmStream,
   validateWasmStreamRef,
   discardWasmStream,
 } from "../extension/lib/wasm-stream-files.js";
+import {
+  sanitizeFormulaCell,
+  parseTableBytes,
+} from "../extension/lib/table-core.js";
 
 // In-memory OPFS fake
 function dirNode() { return { kind: "directory", children: new Map() }; }
@@ -86,9 +93,15 @@ class FakeDirHandle {
 
 function makeStorage() {
   const root = dirNode();
-  return {
+  const storage = {
     async getDirectory() { return new FakeDirHandle(root); }
   };
+  Object.defineProperty(globalThis.navigator, "storage", {
+    value: storage,
+    configurable: true,
+    writable: true,
+  });
+  return storage;
 }
 
 Deno.test("abuse gate 1: infinite loop / hang watchdog terminates worker and cleans up output", async () => {
@@ -286,4 +299,104 @@ Deno.test("abuse gate 7: concurrent appends serialize cleanly via appendLock", a
   const sealed = await sealWasmStreamInput({ ref: stream, owner, storage });
   assertEquals(sealed.ok, true);
   assertEquals(sealed.bytes, chunks.reduce((sum, c) => sum + c.length, 0));
+});
+
+Deno.test("abuse gate 8: unsealed or discarded stream promotion is rejected", async () => {
+  const storage = makeStorage();
+  const owner = "agent:run-alpha:origin-a";
+
+  // 1. Unsealed stream promotion attempt -> fails closed with wasm_stream_authority
+  const unsealedStream = await createWasmStreamOutput({ owner, storage });
+  await assertRejects(
+    async () => promoteWasmStreamToArtifact(unsealedStream, { owner, storage, force: true }),
+    Error,
+    "wasm_stream_authority",
+  );
+
+  // 2. Discarded stream promotion attempt -> fails closed (stream directory missing)
+  const discardedStream = await createWasmStreamOutput({ owner, storage });
+  await discardWasmStream({ ref: discardedStream, owner, storage });
+  await assertRejects(
+    async () => promoteWasmStreamToArtifact(discardedStream, { owner, storage, force: true }),
+    Error,
+  );
+});
+
+Deno.test("abuse gate 9: cross-owner stream promotion hijacking fails closed", async () => {
+  const storage = makeStorage();
+  const ownerVictim = "agent:run-alpha:victim";
+  const ownerAttacker = "agent:run-beta:attacker";
+
+  const stream = await createWasmStreamOutput({ owner: ownerVictim, storage });
+  const dir = await storage.getDirectory();
+  const streams = await dir.getDirectoryHandle("wasm-tool-streams-v1");
+  const streamDir = await streams.getDirectoryHandle(stream.id);
+  const stdoutFile = await streamDir.getFileHandle("stdout.bin");
+  const writer = await stdoutFile.createWritable();
+  await writer.write("Victim confidential output");
+  await writer.close();
+
+  await sealWasmStreamOutput({
+    ref: stream,
+    owner: ownerVictim,
+    bytes: 26,
+    receipt: { toolId: "grep", exitCode: 0 },
+    storage,
+  });
+
+  // Unauthorized attacker attempts to promote victim's sealed stream -> REJECTED with wasm_stream_authority
+  await assertRejects(
+    async () => promoteWasmStreamToArtifact(stream, { owner: ownerAttacker, storage, force: true }),
+    Error,
+    "wasm_stream_authority",
+  );
+
+  // Legitimate owner promotion succeeds
+  const res = await promoteWasmStreamToArtifact(stream, { owner: ownerVictim, storage, force: true });
+  assertEquals(res.ok, true);
+  assertEquals(res.promoted, true);
+});
+
+Deno.test("abuse gate 10: adversarial tabular formula injection with Unicode separators and chunk overflows fail closed", () => {
+  // 1. Formula injection neutralization with Unicode line separators, whitespace, and tabs
+  const hostileFormulas = [
+    "\u2028=1+1",
+    "\u2029-SUM(A1:B10)",
+    "\t=CMD()",
+    "\r\n+42",
+    "   @MACRO",
+    " \t |malicious_pipe",
+    "\uFEFF=100+200",
+  ];
+
+  for (const hostile of hostileFormulas) {
+    const sanitized = sanitizeFormulaCell(hostile);
+    assert(sanitized.startsWith("'"), `formula injection "${hostile}" must be neutralized with leading apostrophe`);
+  }
+
+  // Benign values must remain untouched
+  assertEquals(sanitizeFormulaCell("Hello world"), "Hello world");
+  assertEquals(sanitizeFormulaCell("2026-09-05"), "2026-09-05");
+  assertEquals(sanitizeFormulaCell(12345), 12345);
+
+  // 2. Tabular row overflow attack: rows wider than declared width fail closed
+  const wideCsv = "c1,c2\nv1,v2,v3_unexpected\n";
+  let wideThrew = false;
+  try {
+    parseTableBytes(new TextEncoder().encode(wideCsv), { format: "csv" });
+  } catch (err) {
+    if (err.code === "table_row_width") wideThrew = true;
+  }
+  assertEquals(wideThrew, true, "row wider than header must fail closed with table_row_width");
+
+  // 3. Tabular cell byte overflow attack: cell exceeding maxCellBytes fails closed
+  const oversizedCell = "a".repeat(17 * 1024); // 17 KiB > 16 KiB limit
+  const oversizedCsv = `c1\n"${oversizedCell}"\n`;
+  let cellThrew = false;
+  try {
+    parseTableBytes(new TextEncoder().encode(oversizedCsv), { format: "csv" });
+  } catch (err) {
+    if (err.code === "table_cell_bound") cellThrew = true;
+  }
+  assertEquals(cellThrew, true, "cell exceeding maxCellBytes must fail closed with table_cell_bound");
 });
