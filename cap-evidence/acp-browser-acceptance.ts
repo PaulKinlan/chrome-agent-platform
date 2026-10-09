@@ -97,6 +97,12 @@ browserArgs.push("--enable-automation", "--enable-logging", `--log-file=${EVIDEN
 const chrome = await launchChrome({
   args: browserArgs,
   clearEnv: true,
+  extension: EXT,
+  profile,
+  // f51b27c8a: the composer's send handler awaits chrome.permissions.request({tabGroups,tabs})
+  // first, so pre-grant those OPTIONAL permissions in the profile before Chrome
+  // starts — otherwise the headless run stalls before the turn reaches the bridge.
+  grantPermissions: ["tabGroups", "tabs"],
   ...(Object.keys(extraEnv).length ? { env: { PATH: Deno.env.get("PATH") ?? "", HOME: Deno.env.get("HOME") ?? "", ...extraEnv } } : {}),
 });
 const port = chrome.port;

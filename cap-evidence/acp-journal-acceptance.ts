@@ -35,7 +35,10 @@ const bridge = createAcpServer(3210, FAKE_ADAPTER, {}, "", BRIDGE_TOKEN);
 
 await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
 const profile = durableDir(`cap-acp-journal-profile-${Date.now()}`);
-const chrome = await launchChrome({ extension: EXT, profile, windowSize: "1400,2000", clearEnv: true });
+// f51b27c8a: the composer's send handler awaits chrome.permissions.request({tabGroups,tabs})
+// first, so pre-grant those OPTIONAL permissions in the profile before Chrome
+// starts — otherwise the headless run stalls before the turn reaches the bridge.
+const chrome = await launchChrome({ extension: EXT, profile, windowSize: "1400,2000", clearEnv: true, grantPermissions: ["tabGroups", "tabs"] });
 const port = chrome.port;
 
 const ws = new WebSocket(chrome.wsUrl);
