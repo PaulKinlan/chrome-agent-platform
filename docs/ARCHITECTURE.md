@@ -509,6 +509,19 @@ stricter marker-before-removal GC in `opfs-tool-workspace.js` is the
 unwired successor — §1.5.) Run-log compaction runs from terminal commits,
 never timers (docs/DURABLE-RUN-ARCHITECTURE.md §"OPFS records").
 
+**Journal-scoped export consistency (jw7wf workstream):** Master-store writes
+share the cross-context `cap:master-journal` Web Lock with the owner Options
+streaming export (held from raw file inventory through the final TAR byte) and
+the legacy service-worker buffered export. The journal's checkpoint, head,
+frames and archive must travel as one coherent generation once its WAL writer
+is enabled; until that cutover is fully wired, the legacy `journal.json` remains
+authoritative. This lock does **not** make the entire profile a point-in-time
+snapshot: other store writers retain their existing semantics. The broader
+whole-profile consistency requirement is a separate follow-up, not a claim of
+this journal workstream. Within an actual extension context, a missing Web
+Locks API refuses unprotected master writes/exports; Deno storage fakes are
+the only fallback.
+
 **Backup & restore (implemented vs designed):**
 - **Shipped implementation** (`extension/lib/data-archive.js:104-105`): uses a
   monolithic in-memory JSON/Base64 archive bounded by legacy caps

@@ -149,6 +149,25 @@ Deno.test("memory.has distinguishes a stored null from an absent key (round-22 n
   assertEquals(await mem.has(key), false, "deleted key must report has=false");
 });
 
+Deno.test("master writes share the journal Web Lock; site stores keep their own lock", async () => {
+  const previous = navigator.locks;
+  const names = [];
+  navigator.locks = {
+    request: async (name, options, fn) => {
+      names.push({ name, mode: options.mode });
+      return await fn();
+    },
+  };
+  try {
+    await masterMemory().setTrusted("journal", []);
+    await siteMemory("https://journal-lock.example").set("site-key", "site-value");
+    assertEquals(names, [{ name: "cap:master-journal", mode: "exclusive" }]);
+  } finally {
+    if (previous === undefined) delete navigator.locks;
+    else navigator.locks = previous;
+  }
+});
+
 Deno.test("journalAppendOnce commits exactly one terminal row per immutable executionId", async () => {
   const mem = masterMemory();
   await mem.delete("journal");
