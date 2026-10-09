@@ -212,6 +212,7 @@ async function currentVersion(dir, key) {
 
 import { kvGet } from "./kv.js";
 import { withMasterJournalWebLock } from "./master-journal-lock.js";
+import { readMasterJournalHead, readMasterJournalProjection } from "./master-journal-wal.js";
 import { fnv1a, newId } from "./pure.js";
 
 const ENROLL_KEY = "cap:enrollment";
@@ -819,6 +820,29 @@ function utf8Bytes(str) {
   return new TextEncoder().encode(str).byteLength;
 }
 
+function isMasterJournalKey(isMaster, key) {
+  return isMaster && (key === "journal" || key === "journal-archive");
+}
+
+async function checkedMasterJournalValue(path, isMaster, key) {
+  if (!isMasterJournalKey(isMaster, key)) return null;
+  const dir = await openDirOptional(path);
+  if (!dir) return null;
+  const projection = await readMasterJournalProjection(dir, { includeArchive: key === "journal-archive" });
+  if (!projection) return null; // no cutover: preserve the legacy store
+  return key === "journal"
+    ? { exists: projection.exists, value: projection.live, version: projection.version }
+    : { exists: projection.archiveExists, value: projection.archive, version: projection.version };
+}
+
+async function assertLegacyMasterJournalWriteAllowed(dir, isMaster, key) {
+  if (isMasterJournalKey(isMaster, key) && await readMasterJournalHead(dir)) {
+    // Production WAL writes remain DISABLED. A restored cut-over profile is
+    // readable but must never silently create a conflicting journal.json.
+    throw new Error("master journal WAL writer is not enabled; legacy write refused");
+  }
+}
+
 /** The LOCKED body of setValue (no lock acquisition). Exported so callers that
  * ALREADY hold the global write mutex (saveScreenshot) can perform a nested
  * write without re-acquiring the same non-reentrant mutex (the round-19
@@ -850,6 +874,7 @@ async function setValueInner(path, key, value, { isMaster, trusted = false, stor
   }
   const newBytes = utf8Bytes(serialized);
   const dir = await openDir(path);
+  await assertLegacyMasterJournalWriteAllowed(dir, isMaster, key);
   await ledgerEnsure();
   // The OLD value's file bytes come from the ledger (the same unit — UTF-8
   // file bytes — the walk measured in) so the delta needs no extra handle I/O.
@@ -899,6 +924,7 @@ async function setValue(path, key, value, { isMaster, trusted = false, storeBoun
 async function compareAndSet(path, key, expectedVersion, nextValue, { isMaster }) {
   return withWriteLock(path, async () => {
     const dir = await openDirOptional(path);
+    if (dir) await assertLegacyMasterJournalWriteAllowed(dir, isMaster, key);
     const cur = dir ? await currentVersion(dir, key) : 0;
     if (cur !== expectedVersion) {
       // Idempotent delete: retrying an already-tombstoned delete returns the
@@ -960,6 +986,8 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
       if (/^(?:__gen|__tx|__wal|__epoch|__tombs|profile:|profile$|cap:board-)/.test(String(key))) {
         throw new Error(`key "${key}" is reserved on this store`);
       }
+      const wal = await checkedMasterJournalValue(path, isMaster, key);
+      if (wal) return wal.exists ? wal.value : null;
       const dir = await openDirOptional(path);
       if (!dir) return null;
       // The TOMBSTONE authority is honored: a deleted key reads as absent even
@@ -973,6 +1001,8 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
      * tombstone exists), but THROWS on a real read/corruption failure (never
      * silently treats an unreadable store as empty). */
     async getStrict(key) {
+      const wal = await checkedMasterJournalValue(path, isMaster, key);
+      if (wal) return wal.exists ? wal.value : null;
       const dir = await openDirOptional(path);
       if (!dir) return null;
       const tombs = await readTombs(dir);
@@ -985,6 +1015,8 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
      * must not conflate them). Honors the tombstone authority (a tombstoned key
      * with a live orphan file is ABSENT). */
     async has(key) {
+      const wal = await checkedMasterJournalValue(path, isMaster, key);
+      if (wal) return wal.exists;
       const dir = await openDirOptional(path);
       if (!dir) return false;
       const tombs = await readTombs(dir);
@@ -1000,6 +1032,8 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
      * all trusted writes and CAS compensation. */
     async snapshot(key) {
       return await withWriteLock(path, async () => {
+        const wal = await checkedMasterJournalValue(path, isMaster, key);
+        if (wal) return { exists: wal.exists, value: wal.exists ? structuredClone(wal.value) : null, version: wal.version };
         const dir = await openDirOptional(path);
         if (!dir) return { exists: false, value: null, version: 0 };
         const tombs = await readTombs(dir);
@@ -1014,6 +1048,8 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
     },
     /** The key's current durable token; deleted keys retain a tombstone token. */
     async getVersion(key) {
+      const wal = await checkedMasterJournalValue(path, isMaster, key);
+      if (wal) return wal.version;
       const dir = await openDirOptional(path);
       if (!dir) return 0;
       return await currentVersion(dir, key);
@@ -1056,13 +1092,27 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
       // The FULL internal namespace is hidden from logical enumeration (the
       // reviewer's finding: __tx/assetRepair/assets/asset:/__epoch were
       // listed).
-      return out.filter((k) => !INTERNAL_KEY_RE.test(k)).sort();
+      const visible = out.filter((k) => !INTERNAL_KEY_RE.test(k));
+      if (isMaster) {
+        const journal = await checkedMasterJournalValue(path, true, "journal");
+        if (journal) {
+          const archive = await checkedMasterJournalValue(path, true, "journal-archive");
+          for (const key of ["journal", "journal-archive"]) {
+            const index = visible.indexOf(key);
+            if (index >= 0) visible.splice(index, 1);
+          }
+          if (journal.exists) visible.push("journal");
+          if (archive?.exists) visible.push("journal-archive");
+        }
+      }
+      return visible.sort();
     },
     async delete(key) {
       // Plain delete is serialized and publishes the durable tombstone before
       // removing the value. A tombstone failure therefore leaves the live value.
       await withWriteLock(path, async () => {
         const dir = await openDir(path);
+        await assertLegacyMasterJournalWriteAllowed(dir, isMaster, key);
         const deletedGen = await issueVersion(dir);
         const tombs = await readTombs(dir);
         tombs.map.set(key, deletedGen);
@@ -1079,6 +1129,9 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
       // finding: clear reopened expected-0).
       await withWriteLock(path, async () => {
         const dir = await openDir(path);
+        if (isMaster && await readMasterJournalHead(dir)) {
+          throw new Error("master journal WAL writer is not enabled; master clear refused");
+        }
         let genRaw = null;
         const dirKey = getDirKey(dir);
         if (dirKey && genCache.has(dirKey)) {

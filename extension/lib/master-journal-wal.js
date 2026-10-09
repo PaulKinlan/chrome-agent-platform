@@ -178,6 +178,7 @@ export async function readMasterJournalProjection(master, { includeArchive = fal
       throw new Error("master journal archive is missing or corrupt");
     }
     result.archive = archiveCleared ? overflow : [...structuredClone(archive.rows), ...overflow];
+    result.archiveExists = archiveCleared ? overflow.length > 0 : (archive.exists === true || result.archive.length > 0);
   }
   return result;
 }
@@ -223,9 +224,11 @@ export async function stageMasterJournalCutover(master, {
   journalExists,
   journal,
   archive,
+  archiveExists = archive?.length > 0,
   allocateVersion,
 }) {
-  if (typeof journalExists !== "boolean" || !Array.isArray(journal) || !Array.isArray(archive) ||
+  if (typeof journalExists !== "boolean" || typeof archiveExists !== "boolean" ||
+      !Array.isArray(journal) || !Array.isArray(archive) ||
       typeof allocateVersion !== "function") throw new Error("invalid legacy master journal cutover input");
   if (await readMasterJournalHead(master)) throw new Error("master journal is already cut over");
   const epoch = await allocateVersion();
@@ -236,7 +239,9 @@ export async function stageMasterJournalCutover(master, {
   const checkpoint = `checkpoint-${epoch}-0.json`;
   const archiveFile = `archive-${epoch}-0.json`;
   await writeCheckedRecord(directory, checkpoint, "checkpoint", { epoch, sequence: 0, exists: journalExists, live });
-  await writeCheckedRecord(directory, archiveFile, "archive", { epoch, rows: [...archive, ...overflow] });
+  await writeCheckedRecord(directory, archiveFile, "archive", {
+    epoch, exists: archiveExists || overflow.length > 0, rows: [...archive, ...overflow],
+  });
   const lastHash = await hash(JSON.stringify({ epoch, sequence: 0, checkpoint, archive: archiveFile }));
   const head = validateHead({ epoch, sequence: 0, checkpointSequence: 0, checkpoint, archive: archiveFile, lastHash, version: epoch });
   // SINGLE PUBLICATION POINT: all earlier files were staged and read back;

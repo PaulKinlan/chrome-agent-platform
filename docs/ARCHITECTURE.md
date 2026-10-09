@@ -537,8 +537,13 @@ compaction must retain every dependency referenced by EITHER head slot until
 both slots have published and readback-verified the new checkpoint; then it
 may retire the superseded frames. Export selects both chains, and restore
 refuses a missing dependency in either, so early frame deletion is a hard red.
-Until cutover, the legacy `journal.json` remains authoritative. This lock does **not** make the entire profile a point-in-time
-snapshot: other store writers retain their existing semantics. The broader
+Before a checked head exists, legacy `journal.json` remains authoritative.
+After a checked cutover (including a restored WAL bundle), master journal and
+archive reads, snapshots, versions and key enumeration use its projection;
+legacy writes/CAS/delete/master-clear REFUSE rather than shadowing that head.
+The production WAL mutation path is still DISABLED, so this is a deliberately
+non-shippable intermediate state. This lock does **not** make the entire
+profile a point-in-time snapshot: other store writers retain their existing semantics. The broader
 whole-profile consistency requirement is a separate follow-up, not a claim of
 this journal workstream. Within an actual extension context, a missing Web
 Locks API refuses unprotected master writes/exports; Deno storage fakes are

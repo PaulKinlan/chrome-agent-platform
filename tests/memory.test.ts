@@ -7,6 +7,7 @@
 
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { createMemoryRunLogHandles } from "./fixtures/run-log-wal-memory.js";
+import { stageMasterJournalCutover } from "../extension/lib/master-journal-wal.js";
 import { masterMemory, siteMemory, MemoryStoreQuotaError, usageLedgerInspector, saveScreenshot, listScreenshots, journalAppend, journalAppendWithReceipt, journalCompensateExecution, journalAppendOnce, journalCommitCancellation, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds, durableRunMemory, migrateLegacyDurableRunMemory, forgetDurableThread } from "../extension/lib/memory.js";
 import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
 import { createThread, deleteThread } from "../extension/lib/threads.js";
@@ -56,6 +57,9 @@ class FakeFileHandle {
       async text() {
         return node.content ?? "";
       },
+      async arrayBuffer() {
+        return new TextEncoder().encode(node.content ?? "").buffer;
+      },
     };
   }
   async createWritable() {
@@ -71,14 +75,14 @@ class FakeDirHandle {
   }
   async getDirectoryHandle(name, opts = {}) {
     if (!this.node.children.has(name)) {
-      if (!opts.create) throw new Error(`not found: ${name}`);
+      if (!opts.create) throw new DOMException(`not found: ${name}`, "NotFoundError");
       this.node.children.set(name, dirNode());
     }
     return new FakeDirHandle(this.node.children.get(name));
   }
   async getFileHandle(name, opts = {}) {
     if (!this.node.children.has(name)) {
-      if (!opts.create) throw new Error(`not found: ${name}`);
+      if (!opts.create) throw new DOMException(`not found: ${name}`, "NotFoundError");
       this.node.children.set(name, fileNode(""));
     }
     return new FakeFileHandle(this.node.children.get(name), name);
@@ -233,6 +237,65 @@ Deno.test("journalCommitCancellation replaces a partial result with one cancella
   assertEquals(rows.filter((row) => row.executionId === "exec-cancel-001").length, 1);
   assertEquals(rows[0].type, "cancelled");
   assertEquals(rows[0].cancelled, true);
+});
+
+Deno.test("master journal readers use a checked cutover rather than stale legacy values", async () => {
+  const mem = masterMemory();
+  const legacyVersion = await mem.setTrusted("journal", [{ id: "stale-legacy" }]);
+  const storage = new FakeDirHandle(root);
+  const memory = await storage.getDirectoryHandle("memory", { create: true });
+  const master = await memory.getDirectoryHandle("master", { create: true });
+  try {
+    await stageMasterJournalCutover(master, {
+      journalExists: true, journal: [{ id: "checked-wal" }], archive: [{ id: "archived" }],
+      allocateVersion: async () => legacyVersion + 1,
+    });
+    assertEquals(await mem.get("journal"), [{ id: "checked-wal" }]);
+    assertEquals(await mem.getStrict("journal"), [{ id: "checked-wal" }]);
+    assertEquals(await mem.has("journal"), true);
+    assertEquals(await mem.getVersion("journal"), legacyVersion + 1);
+    assertEquals(await mem.snapshot("journal"), {
+      exists: true, value: [{ id: "checked-wal" }], version: legacyVersion + 1,
+    });
+    assertEquals(await mem.getStrict("journal-archive"), [{ id: "archived" }]);
+    assertEquals((await mem.keys()).includes("journal"), true);
+    await assertRejects(() => mem.setTrusted("journal", [{ id: "must-not-shadow-wal" }]), Error, "WAL");
+    await assertRejects(() => mem.set("journal", [{ id: "untrusted-shadow" }]), Error, "WAL");
+    await assertRejects(() => mem.setTrusted("journal-archive", []), Error, "WAL");
+    await assertRejects(() => mem.compareAndRestore("journal", legacyVersion + 1, []), Error, "WAL");
+    await assertRejects(() => mem.compareAndDelete("journal", legacyVersion + 1), Error, "WAL");
+    await assertRejects(() => mem.delete("journal"), Error, "WAL");
+    await assertRejects(() => mem.clear(), Error, "WAL");
+    const head = await (await master.getDirectoryHandle("journal-wal")).getFileHandle("head-a.json");
+    const published = head.node.content;
+    head.node.content = "{\"torn\":";
+    try {
+      for (const read of [() => mem.get("journal"), () => mem.getStrict("journal"),
+        () => mem.has("journal"), () => mem.snapshot("journal"),
+        () => mem.getVersion("journal"), () => mem.keys()]) {
+        await assertRejects(read, Error, "corrupt");
+      }
+    } finally {
+      head.node.content = published;
+    }
+    await master.removeEntry("journal-wal", { recursive: true });
+    await stageMasterJournalCutover(master, {
+      journalExists: false, journal: [], archiveExists: true, archive: [],
+      allocateVersion: async () => legacyVersion + 2,
+    });
+    assertEquals(await mem.get("journal"), null, "a stale legacy row cannot resurrect an absent WAL key");
+    assertEquals(await mem.getStrict("journal"), null);
+    assertEquals(await mem.has("journal"), false);
+    assertEquals(await mem.snapshot("journal"), { exists: false, value: null, version: legacyVersion + 2 });
+    assertEquals((await mem.keys()).includes("journal"), false);
+    assertEquals(await mem.has("journal-archive"), true, "present-empty archive stays distinct from absence");
+    assertEquals(await mem.getStrict("journal-archive"), []);
+    assertEquals((await mem.keys()).includes("journal-archive"), true);
+    await assertRejects(() => mem.delete("journal-archive"), Error, "WAL");
+  } finally {
+    await master.removeEntry("journal-wal", { recursive: true });
+  }
+  assertEquals(await mem.get("journal"), [{ id: "stale-legacy" }], "test fixture removal restores the old authority");
 });
 
 Deno.test("journal cancellation archives overflow and keeps the live 500-row boundary", async () => {
