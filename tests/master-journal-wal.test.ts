@@ -875,6 +875,24 @@ Deno.test("durable exact compaction issuance claim survives restart and stays ou
     "future-retired");
 });
 
+Deno.test("staged receipt append and cancellation forward claim retirement hooks", async () => {
+  for (const mode of ["append", "cancel"]) {
+    const { master, allocateVersion, readGeneration } = await legacyFixture();
+    await stageMasterJournalCutover(master, { journalExists: true,
+      journal: Array.from({ length: 500 }, (_, id) => ({ id })), archive: [], allocateVersion });
+    const issuer = createMasterJournalIssuer(master, { issueVersion: allocateVersion, readGeneration });
+    for (let id = 500; id < 628; id++) await stageMasterJournalFrame(master,
+      { operation: "append", row: { id } }, issuer);
+    if (mode === "append") await appendMasterJournalWithReceipt(master,
+      { type: "task", executionId: "claim-append" }, issuer);
+    else await cancelMasterJournalExecution(master,
+      { type: "cancelled", executionId: "claim-cancel" }, "claim-cancel", issuer);
+    const wal = await master.getDirectoryHandle("journal-wal");
+    assertEquals(wal.children.has("claim-18-129.json"), false,
+      `${mode}: compaction claim must retire after the transaction's frame advances both heads`);
+  }
+});
+
 Deno.test("compaction is internal to the frame runner so claim retirement cannot be bypassed", async () => {
   const wal = await import("../extension/lib/master-journal-wal.js");
   assertEquals("stageMasterJournalCompaction" in wal, false);

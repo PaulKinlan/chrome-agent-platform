@@ -27,6 +27,8 @@ function frameOptions(issuer, projection) {
   return {
     allocateVersion: issuer.allocateVersion,
     readIssuedVersion: issuer.readIssuedVersion,
+    preflightClaims: issuer.preflightClaims,
+    retireClaims: issuer.retireClaims,
     expectedVersion: projection.version,
     expectedEpoch: projection.head.epoch,
   };
@@ -38,14 +40,15 @@ function replacement(exists, rows) {
 
 /** One append, one published head; eviction belongs to the same frame. */
 export async function appendMasterJournalWithReceipt(master, entry, {
-  allocateVersion, readIssuedVersion, guard = null, idempotencyExecutionId = null,
+  allocateVersion, readIssuedVersion, preflightClaims, retireClaims,
+  guard = null, idempotencyExecutionId = null,
 } = {}) {
   if (!entry || typeof entry !== "object" || Array.isArray(entry) ||
       typeof entry.executionId !== "string" || !entry.executionId ||
       (idempotencyExecutionId !== null && idempotencyExecutionId !== entry.executionId)) {
     throw new Error("master journal receipt append requires its actual executionId");
   }
-  const issuer = { allocateVersion, readIssuedVersion };
+  const issuer = { allocateVersion, readIssuedVersion, preflightClaims, retireClaims };
   const before = await currentProjection(master);
   const pre = stateOf(before);
   const original = before.exists ? before.live : [];
@@ -96,7 +99,7 @@ export async function appendMasterJournalWithReceipt(master, entry, {
 /** Restore the live ring by the legacy suffix-lineage proof, never retracting
  * archived evictions. A changed epoch/version fails BEFORE any issued token. */
 export async function compensateMasterJournalReceipt(master, receipt, {
-  allocateVersion, readIssuedVersion, guard = null,
+  allocateVersion, readIssuedVersion, preflightClaims, retireClaims, guard = null,
 } = {}) {
   if (!receipt || receipt.schemaVersion !== 1 || receipt.key !== "journal" ||
       typeof receipt.executionId !== "string" || !receipt.executionId || !receipt.wal ||
@@ -115,7 +118,7 @@ export async function compensateMasterJournalReceipt(master, receipt, {
       (receipt.preState.exists && !Array.isArray(receipt.preState.value))) {
     throw new Error("invalid master journal compensation receipt");
   }
-  const issuer = { allocateVersion, readIssuedVersion };
+  const issuer = { allocateVersion, readIssuedVersion, preflightClaims, retireClaims };
   const fence = async () => {
     if (!guard) return null;
     try { await guard(); return null; }
@@ -200,7 +203,7 @@ export async function compensateMasterJournalReceipt(master, receipt, {
 /** One replacement frame carries both the cancellation row and at most one
  * oldest-row eviction. No separate archive key write can race the head. */
 export async function cancelMasterJournalExecution(master, entry, executionId = entry?.executionId, {
-  allocateVersion, readIssuedVersion,
+  allocateVersion, readIssuedVersion, preflightClaims, retireClaims,
 } = {}) {
   if (!executionId) throw new Error("master journal cancellation requires executionId");
   const before = await currentProjection(master);
@@ -211,6 +214,6 @@ export async function cancelMasterJournalExecution(master, entry, executionId = 
   const evicted = kept.length > MAX_LIVE ? kept.slice(0, kept.length - MAX_LIVE) : [];
   const rows = bound(kept);
   await stageMasterJournalFrame(master, { operation: "replace", rows, evicted },
-    frameOptions({ allocateVersion, readIssuedVersion }, before));
+    frameOptions({ allocateVersion, readIssuedVersion, preflightClaims, retireClaims }, before));
   return rows;
 }
