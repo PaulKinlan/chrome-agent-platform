@@ -240,6 +240,62 @@ Deno.test("jjsz F5: the PGID/SID attestation proves only pgid and uid on the no-
 });
 
 // ---------------------------------------------------------------------------------------------
+// The Linux /proc session-id refusal with a REAL process (macOS ps cannot report SID).
+// ---------------------------------------------------------------------------------------------
+
+Deno.test({
+  name: "mwj7v/jjsz F5 Linux /proc: a real group leader without a new session is refused [macOS has no SID]",
+  // This branch does not exist on macOS: its ps identity synthesises sid = pgid.
+  // The seam test above runs on every host; the real /proc refusal must run on Linux.
+  ignore: Deno.build.os !== "linux",
+  fn: async () => {
+    // The child changes ONLY its process group, not its session. Unlike a
+    // detached/setsid child (whose sid == pgid == pid), this makes the SID
+    // comparison the sole reason custody must refuse it. No descendant is born.
+    const child = new Deno.Command("/usr/bin/perl", {
+      args: ["-MPOSIX", "-e", 'POSIX::setpgid(0, 0) == 0 or die "setpgid: $!"; sleep 60;'],
+      stdout: "null",
+      stderr: "null",
+    }).spawn();
+    try {
+      const deadline = Date.now() + 15_000;
+      let identity: Awaited<ReturnType<typeof readProcIdentity>> | null = null;
+      while (Date.now() < deadline) {
+        identity = await readProcIdentity(child.pid);
+        if (identity.pgid === child.pid) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert(identity !== null, "fixture: the real /proc identity must be readable");
+      // Independent kernel oracle, not the parser under test: a mutant that
+      // copies pgid into sid must fail even though its fabricated row looks
+      // internally consistent. The test owns and reaps this exact pid.
+      const raw = await new Deno.Command("/bin/ps", {
+        args: ["-o", "pid=,pgid=,sid=", "-p", String(child.pid)],
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      assertEquals(raw.code, 0, `fixture: ps failed: ${new TextDecoder().decode(raw.stderr)}`);
+      const columns = new TextDecoder().decode(raw.stdout).trim().split(/\s+/u).map(Number);
+      assertEquals(columns.length, 3, "fixture: ps must report pid, group and session");
+      const [rawPid, rawPgid, rawSid] = columns;
+      assertEquals([rawPid, rawPgid], [child.pid, child.pid], "fixture: setpgid made this child its own group leader");
+      assertNotEquals(rawSid, child.pid, "fixture: setpgid did NOT make it a session leader");
+      assertEquals(identity.pid, rawPid);
+      assertEquals(identity.pgid, rawPgid);
+      assertEquals(identity.sid, rawSid, "the /proc reader must preserve the kernel's independent session id");
+      assertEquals(identity.uid, UID, "fixture: the child belongs to this test's uid");
+
+      const verdict = await attestOwnedGroup(child.pid, { expectedUid: UID });
+      assertEquals(verdict.ok, false, "custody must refuse a real group leader in a foreign session");
+      assertMatch(String(verdict.reason), new RegExp(`sid=${identity.sid}(\\D|$)`, "u"));
+    } finally {
+      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      await child.status;
+    }
+  },
+});
+
+// ---------------------------------------------------------------------------------------------
 // liveObservedResidue
 // ---------------------------------------------------------------------------------------------
 
