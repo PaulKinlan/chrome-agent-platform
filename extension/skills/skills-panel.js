@@ -360,7 +360,10 @@ export function mountSkillsSection(sectionEl, { send: sendFn = send } = {}) {
   const refreshAll = () => { refresh(); renderCommands(); };
   sectionEl._refreshSkills = refreshAll;
 
-  urlInput?.addEventListener("keydown", (e) => { if (e.key === "Enter") doImport(); });
+  urlInput?.addEventListener("keydown", (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === "Enter") doImport();
+  });
 
   refresh();
   renderCommands();
