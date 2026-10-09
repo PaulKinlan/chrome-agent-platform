@@ -76,8 +76,14 @@ function filePin(p) { keys(p, "path sha256 size"); assertRelativePath(p.path, "p
 export function validateEmscriptenManifest(m) {
   const r = m.runtime;
   keys(r, "kind abi compiler glue features profileDigest");
-  if (r.kind !== "emscripten-module-v1" || r.abi !== "emscripten-6.0.0-thin-native-v1") fail("runtime_unsupported");
-  if (!eq(r.compiler, { version: "6.0.0", emsdkCommit: "d223ae73c6998296e3ab27cf81dc2c2c9fd383de", emscriptenCommit: "afa15e0c56d1292e073c2c91bafc1d5e0cdf0dd3" })) fail("compiler_profile_unsupported");
+  if (r.kind !== "emscripten-module-v1") fail("runtime_unsupported");
+  if (r.abi === "emscripten-6.0.0-thin-native-v1") {
+    if (!eq(r.compiler, { version: "6.0.0", emsdkCommit: "d223ae73c6998296e3ab27cf81dc2c2c9fd383de", emscriptenCommit: "afa15e0c56d1292e073c2c91bafc1d5e0cdf0dd3" })) fail("compiler_profile_unsupported");
+  } else if (r.abi === "emscripten-glue-v1") {
+    keys(r.compiler, "version package"); text(r.compiler.version); text(r.compiler.package);
+  } else {
+    fail("runtime_unsupported");
+  }
   if (!eq(r.glue, { format: "es-module-factory", environment: "worker", dynamicExecution: false, filesystem: false })) fail("glue_profile_unsupported");
   ordered(r.features);
   if (r.features.some(f => !["mutable-globals", "sign-extension", "nontrapping-fptoint", "bulk-memory", "reference-types", "simd128", "exception-tags"].includes(f))) fail("runtime_feature_unsupported");
@@ -94,10 +100,16 @@ export function validateEmscriptenManifest(m) {
   ordered(e.operations, op => op.id); const tools = new Set();
   for (const op of e.operations) {
     keys(op, "id toolId kind exportName params result capabilities replayClass io"); id(op.id); id(op.toolId);
-    if (op.kind !== "native-scalar-v1" || !/^[A-Za-z0-9_.$-]{1,64}$/u.test(op.exportName) || !["i32", "f64"].includes(op.result)) fail("operation_invalid");
+    if (!["native-scalar-v1", "native-buffer-v1"].includes(op.kind) || !/^[A-Za-z0-9_.$-]{1,64}$/u.test(op.exportName) || !["i32", "f64", "string", "buffer"].includes(op.result)) fail("operation_invalid");
     if (!eq(op.io, { kind: "none" })) fail("operation_io_unsupported");
     const names = new Set();
-    for (const p of list(op.params)) { keys(p, "name type minimum maximum"); id(p.name); if (names.has(p.name)) fail("parameter_duplicate"); names.add(p.name); if (!["i32", "f64"].includes(p.type) || typeof p.minimum !== "number" || typeof p.maximum !== "number" || !Number.isFinite(p.minimum) || !Number.isFinite(p.maximum) || p.minimum > p.maximum) fail("parameter_invalid"); if (p.type === "i32" && (!Number.isInteger(p.minimum) || !Number.isInteger(p.maximum) || p.minimum < -2147483648 || p.maximum > 2147483647)) fail("parameter_invalid"); }
+    for (const p of list(op.params)) {
+      keys(p, "name type minimum maximum"); id(p.name); if (names.has(p.name)) fail("parameter_duplicate"); names.add(p.name);
+      if (!["i32", "f64", "string", "buffer"].includes(p.type)) fail("parameter_invalid");
+      if ((p.type === "i32" || p.type === "f64") && (typeof p.minimum !== "number" || typeof p.maximum !== "number" || !Number.isFinite(p.minimum) || !Number.isFinite(p.maximum) || p.minimum > p.maximum)) fail("parameter_invalid");
+      if (p.type === "i32" && (!Number.isInteger(p.minimum) || !Number.isInteger(p.maximum) || p.minimum < -2147483648 || p.maximum > 2147483647)) fail("parameter_invalid");
+      if ((p.type === "string" || p.type === "buffer") && (typeof p.minimum !== "number" || typeof p.maximum !== "number" || p.minimum < 0 || p.minimum > p.maximum)) fail("parameter_invalid");
+    }
     const tool = m.tools.find(t => t.toolId === op.toolId);
     if (!tool || tools.has(op.toolId) || tool.digest !== hash(op) || !eq(tool.capabilities, op.capabilities) || tool.replayClass !== op.replayClass) fail("operation_tool_mismatch"); tools.add(op.toolId);
   }
@@ -165,4 +177,19 @@ export function assertEmscriptenNumericEligibility(m, graph) {
   const op = m.entry.operations[0];
   if (m.entry.adapterId !== "cap-a0-numeric-v1" || m.entry.operations.length !== 1 || !eq(op.params, ["value", "weight", "bias"].map(name => ({ name, type: "f64", minimum: -1000000, maximum: 1000000 }))) || op.exportName !== "cap_weighted_sum" || op.result !== "f64" || !eq(op.capabilities, ["compute"]) || op.replayClass !== "read-only") fail("operation_profile_unsupported");
   if (!main.exports.some(e => e.name === op.exportName && e.kind === "function" && eq(e.type, { params: ["f64", "f64", "f64"], results: ["f64"] }))) fail("operation_export_mismatch");
+}
+
+export function assertEmscriptenBlake3Eligibility(m, graph) {
+  if (m.linkGraph.policy !== "none") fail("link_runtime_unsupported");
+  if (m.assets.some(a => a.role === "pthread-bootstrap")) fail("threads_unsupported");
+  if (m.assets.length !== 3 || m.modules.length !== 1) fail("blake3_graph_unsupported");
+  if (!eq(graph.features, m.runtime.features)) fail("runtime_feature_mismatch");
+  const main = graph.modules[0];
+  if (main.asset !== m.entry.mainAsset || main.tags.length || main.start !== null || main.dylink !== null) fail("blake3_abi_unsupported");
+  if (main.imports.length !== 3) fail("blake3_imports_mismatch");
+  if (!eq(main.memories, [{ index: 0, type: { address: "i32", shared: false, min: 256, max: 256 } }]) || !eq(main.tables, [{ index: 0, type: { element: "funcref", min: 1, max: 1 } }])) fail("resource_profile_unsupported");
+  if (!eq(m.resources.memory, { owner: main.asset, index: 0, initialPages: 256, maxPages: 256, growth: false }) || !eq(m.resources.table, { owner: main.asset, index: 0, initialElements: 1, maxElements: 1, growth: false })) fail("resource_profile_unsupported");
+  const op = m.entry.operations[0];
+  if (m.entry.adapterId !== "cap-blake3-wasm-v1" || m.entry.operations.length !== 1 || !eq(op.params, [{ name: "data", type: "string", minimum: 0, maximum: 4194304 }]) || (op.exportName !== "hash_oneshot" && op.exportName !== "f") || op.result !== "string" || !eq(op.capabilities, ["compute", "crypto"]) || op.replayClass !== "read-only") fail("operation_profile_unsupported");
+  if (!main.exports.some(e => (e.name === op.exportName || e.name === "f" || e.name === "_hash_oneshot" || e.name === "hash_oneshot") && e.kind === "function")) fail("operation_export_mismatch");
 }

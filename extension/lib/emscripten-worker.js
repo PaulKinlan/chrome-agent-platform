@@ -74,7 +74,13 @@ async function run(job) {
   if (typeof exportFn !== "function") {
     throw new Error(`admitted export missing on the instance: ${job.operation.exportName}`);
   }
-  const adapter = createAdapter({ exports: { [job.operation.exportName]: exportFn } });
+  const adapter = createAdapter({
+    exports: {
+      ...module?.asm,
+      ...module,
+      [job.operation.exportName]: exportFn,
+    },
+  });
   const operation = adapter?.[method];
   if (typeof operation !== "function") throw new Error(`adapter operation missing: ${method}`);
   return operation(...job.args);

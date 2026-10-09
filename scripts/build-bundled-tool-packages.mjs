@@ -77,6 +77,10 @@ const VERIFY = args.includes("--verify");
 const ACCEPTANCE_NUMERIC =
   args.includes("--acceptance-emscripten-numeric") ||
   process.env.CAP_ACCEPTANCE_EMSCRIPTEN_NUMERIC === "1";
+// fh9k managed Wasm tool admission target (BUILD-TIME ONLY):
+const ADMISSION_BLAKE3 =
+  args.includes("--admission-emscripten-blake3") ||
+  process.env.CAP_ADMISSION_EMSCRIPTEN_BLAKE3 === "1";
 const emitted = new Map(); // verify mode only: repo-relative path -> bytes
 function emit(abs, bytes) {
   if (VERIFY) { emitted.set(abs.slice(REPO.length + 1), Buffer.from(bytes)); return; }
@@ -909,6 +913,15 @@ const acceptance = await buildNumericAcceptancePackage();
 for (const file of acceptance.files) ship(file.rel, file.bytes);
 inventoryManifests.push(acceptance.inventoryManifestRow);
 console.log(`acceptance: emitted ${acceptance.files.length} schema-2 fixture files (manifest ${acceptance.manifestDigest})`);
+}
+
+// ── fh9k blake3-wasm managed tool admission (see ADMISSION_BLAKE3) ──
+if (ADMISSION_BLAKE3) {
+const { buildBlake3AdmissionPackage } = await import("./lib/emscripten-blake3-admission.mjs");
+const admission = await buildBlake3AdmissionPackage();
+for (const file of admission.files) ship(file.rel, file.bytes);
+inventoryManifests.push(admission.inventoryManifestRow);
+console.log(`admission: emitted ${admission.files.length} schema-2 blake3 tool files (manifest ${admission.manifestDigest})`);
 }
 
 // ── Generated data modules ──────────────────────────────────────────────────
