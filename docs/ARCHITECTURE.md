@@ -555,7 +555,12 @@ when its checked canonical bytes equal a freshly derived payload from the
 validated current head's checkpoint, frame range and archive chain, and the
 caller supplies an exact checkpoint+source-specific durable issuance witness
 for its generation (a global issued-version floor is insufficient); reuse is
-logged. Torn, non-equal or source-mismatched immutable records and damaged
+logged. The staged issuer writes a checked `claim-<epoch>-<sequence>.json`
+record after durable version issuance and BEFORE derived compaction records.
+A complete matching claim can be adopted across a restart; torn, changed or
+unwitnessed claims refuse. Claims are retry evidence, not journal authority:
+raw export excludes them after head publication, and an imported published
+checkpoint needs no old claim. Product wiring of this issuer remains disabled. Torn, non-equal or source-mismatched immutable records and damaged
 head slots remain fail-closed pending explicit owner repair. Archive rows are
 an append-only HISTORY LOG, not a set of currently evicted rows: a compensated
 row may legitimately exist in both live and archive. Readers must not infer

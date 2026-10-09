@@ -72,14 +72,14 @@ Deno.test("memory stores are FLAT per store; reserved leaves carry their class",
 Deno.test("master journal WAL records have an exact portable grammar; residue refuses classification", () => {
   for (const leaf of [
     "head-a.json", "head-b.json", "checkpoint-1-0.json", "archive-32-0.json",
-    "frame-32-127.json", "checkpoint-32-128.json", "archive-32-128.json",
+    "frame-32-127.json", "checkpoint-32-128.json", "archive-32-128.json", "claim-32-128.json",
   ]) {
     assertEquals(classifyOpfsPath(`memory/master/journal-wal/${leaf}`).cls, TERMINAL, leaf);
   }
   for (const leaf of [
     "head-c.json", "head-a.json.bak", "frame-0-1.json", "frame-01-1.json",
     "frame-1-01.json", "checkpoint-9007199254740992-0.json", "frame-1-9007199254740992.json",
-    "frame-1-1.json.tomb", "random.json", "../head-a.json",
+    "frame-1-1.json.tomb", "claim-1-0.json", "claim-0-129.json", "random.json", "../head-a.json",
   ]) {
     assertEquals(classifyOpfsPath(`memory/master/journal-wal/${leaf}`).cls, "unclassified", leaf);
   }

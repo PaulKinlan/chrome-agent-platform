@@ -1,6 +1,7 @@
 // @ts-nocheck — injected OPFS handles are deliberately minimal and faultable.
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { dumpLogBuffer } from "../extension/lib/cap-log.js";
+import { createMasterJournalIssuer } from "../extension/lib/master-journal-issuer.js";
 import {
   selectPublishedMasterJournalBackupPaths,
   validateStagedMasterJournalBackup,
@@ -78,7 +79,8 @@ async function legacyFixture(faults = {}) {
     const version = ++generation;
     if (claim) issued.set(claimKey(claim), version); // fake durable claim authority
     return version;
-  }, readIssuedVersion: async (claim) => issued.get(claimKey(claim)) ?? null };
+  }, readIssuedVersion: async (claim) => issued.get(claimKey(claim)) ?? null,
+    readGeneration: async () => generation };
 }
 
 Deno.test("master journal cutover stages and verifies whole live/archive rows before publishing one checked head", async () => {
@@ -817,6 +819,73 @@ Deno.test("post-commit guard undo restores live rows but keeps the eviction as h
   assertEquals(projection.head.checkpointSequence, 129);
   assertEquals(projection.live, seed);
   assertEquals(projection.archive, [seed[0]], "compaction seals, but must not resurrect, the historical eviction");
+});
+
+Deno.test("durable exact compaction issuance claim survives restart and stays out of backups", async () => {
+  const faults = {};
+  const { master, allocateVersion, readGeneration } = await legacyFixture(faults);
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await stageMasterJournalCutover(master, { journalExists: true, journal: seed,
+    archive: [], allocateVersion });
+  const issuer = createMasterJournalIssuer(master, { issueVersion: allocateVersion, readGeneration });
+  for (let i = 0; i < 128; i++) {
+    await stageMasterJournalFrame(master, { operation: "append", row: { id: i } }, issuer);
+  }
+  faults.write = "head-b.json";
+  await assertRejects(() => stageMasterJournalFrame(master,
+    { operation: "append", row: { id: "after-compaction" } }, issuer), Error, "injected write");
+  const wal = await master.getDirectoryHandle("journal-wal");
+  const claim = await wal.getFileHandle("claim-18-129.json");
+  assertEquals(claim.bytes.byteLength > 0, true);
+  assertEquals((await readMasterJournalProjection(master)).head.sequence, 128);
+  faults.write = null;
+  const restartedIssuer = createMasterJournalIssuer(master, { issueVersion: allocateVersion, readGeneration });
+  await stageMasterJournalFrame(master,
+    { operation: "append", row: { id: "after-compaction" } }, restartedIssuer);
+  const after = await readMasterJournalProjection(master, { includeArchive: true });
+  assertEquals(after.head.checkpointSequence, 129);
+  assertEquals(after.live.at(-1).id, "after-compaction");
+  assertEquals(after.archive, seed.slice(0, 129), "both sealed and pending evictions survive exact claim adoption");
+  const prefix = "memory/master/journal-wal/";
+  const paths = new Map([...wal.children].map(([name, file]) => [prefix + name, file.bytes]));
+  const selected = await selectPublishedMasterJournalBackupPaths([...paths.keys()], async (path) => ({
+    size: paths.get(path).length, stream: new Blob([paths.get(path)]).stream(),
+  }));
+  assertEquals(selected.includes(prefix + "claim-18-129.json"), false,
+    "a claim is retry evidence, never published journal/backup authority");
+});
+
+Deno.test("altered or torn durable compaction issuance claim refuses auto-repair", async () => {
+  for (const mutant of ["wrong-version", "wrong-source", "torn", "torn-close"]) {
+    const faults = {};
+    const { master, allocateVersion, readGeneration } = await legacyFixture(faults);
+    await stageMasterJournalCutover(master, { journalExists: true, journal: [{ id: "base" }],
+      archive: [], allocateVersion });
+    const issuer = createMasterJournalIssuer(master, { issueVersion: allocateVersion, readGeneration });
+    for (let id = 0; id < 128; id++) await stageMasterJournalFrame(master,
+      { operation: "append", row: { id } }, issuer);
+    faults.write = mutant === "torn-close" ? null : "head-b.json";
+    if (mutant === "torn-close") faults.close = "claim-18-129.json";
+    await assertRejects(() => stageMasterJournalFrame(master,
+      { operation: "append", row: { id: 128 } }, issuer), Error, mutant === "torn-close" ? "injected close" : "injected write");
+    const claim = await (await master.getDirectoryHandle("journal-wal")).getFileHandle("claim-18-129.json");
+    if (mutant === "wrong-version") await allocateVersion(); // a different master key advanced the global floor
+    if (mutant === "wrong-version" || mutant === "wrong-source") {
+      const payload = await unsealMasterJournalRecord(claim.bytes, "claim");
+      claim.bytes = encoder.encode(await sealMasterJournalRecord("claim", mutant === "wrong-version"
+        ? { ...payload, version: payload.version + 1 }
+        : { ...payload, source: { ...payload.source, throughFrame: 127 } }));
+    } else if (mutant === "torn") {
+      claim.bytes = claim.bytes.slice(0, Math.floor(claim.bytes.length / 2));
+    }
+    faults.write = null;
+    faults.close = null;
+    await assertRejects(() => stageMasterJournalFrame(master,
+      { operation: "append", row: { id: 128 } }, createMasterJournalIssuer(master,
+        { issueVersion: allocateVersion, readGeneration })), Error,
+      mutant === "wrong-version" ? "issued version mismatch" : "claim");
+    assertEquals((await readMasterJournalProjection(master)).head.sequence, 128);
+  }
 });
 
 Deno.test("complete equal compaction artifacts can be re-used only after verified pre-head crash", async () => {

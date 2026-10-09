@@ -37,7 +37,7 @@ const OPFS_ROOTS = new Map([
 // The master-only journal WAL adds checked immutable records and two head
 // slots. Exact names alone are not import validation: backup/restore must
 // verify the head, checkpoint, frames and archive as one generation.
-const MASTER_JOURNAL_WAL_RECORD = /^(?:head-[ab]|(?:checkpoint|archive|frame)-([1-9]\d*)-(0|[1-9]\d*))\.json$/u;
+const MASTER_JOURNAL_WAL_RECORD = /^(?:head-[ab]|(?:checkpoint|archive|frame|claim)-([1-9]\d*)-(0|[1-9]\d*))\.json$/u;
 const INTEGRITY_LEAF = /^(?:__gen|__tombs|__epoch)\.json$/u;
 const TOMB_LEAF = /^[^/]+\.tomb$/u;
 const LEGACY_VERSION_LEAF = /^\.[^/]+\.version$/u;
@@ -196,7 +196,9 @@ function classifyMemory(segments) {
     if (segments.length === 4 && segments[2] === "journal-wal") {
       const match = MASTER_JOURNAL_WAL_RECORD.exec(segments[3]);
       return match && (!match[1] || (Number.isSafeInteger(Number(match[1])) &&
-        Number.isSafeInteger(Number(match[2])))) ? TERMINAL : "unclassified";
+        Number.isSafeInteger(Number(match[2])) &&
+        !(segments[3].startsWith("claim-") && Number(match[2]) === 0)))
+        ? TERMINAL : "unclassified";
     }
     // The original nested family: master screenshots.
     if (segments.length === 4 && segments[2] === "screenshots") {

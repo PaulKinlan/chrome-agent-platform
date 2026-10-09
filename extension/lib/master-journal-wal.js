@@ -24,7 +24,7 @@ async function hash(text) {
 
 /** The hash covers the *canonical JSON body*, not the outer envelope. */
 export async function sealMasterJournalRecord(kind, payload) {
-  if (!["head", "checkpoint", "archive", "frame"].includes(kind)) throw new Error("unknown journal record kind");
+  if (!["head", "checkpoint", "archive", "frame", "claim"].includes(kind)) throw new Error("unknown journal record kind");
   const body = JSON.stringify({ magic: MAGIC, kind, payload });
   if (typeof body !== "string") throw new Error("journal record cannot be serialized");
   return JSON.stringify({ body, sha256: await hash(body) });
