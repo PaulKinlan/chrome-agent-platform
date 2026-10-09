@@ -107,12 +107,16 @@ async function readDurableGeneration(dir) {
   let raw;
   try { raw = await readJsonStrict(dir, GEN_FILE, { allowAbsent: true }); }
   catch { throw new Error("the durable generation authority is corrupt"); }
-  if (raw == null && getDirKey(dir) === `${ROOT}/${MASTER}` && await readMasterJournalHead(dir)) {
+  const head = getDirKey(dir) === `${ROOT}/${MASTER}` ? await readMasterJournalHead(dir) : null;
+  if (raw == null && head) {
     throw new Error("the master journal generation authority is missing after cutover");
   }
   const gen = raw == null ? await legacyGenerationFloor(dir) : raw.gen;
   if (!Number.isSafeInteger(gen) || gen < 0) {
     throw new Error("the durable generation authority is corrupt");
+  }
+  if (head && gen < head.version) {
+    throw new Error("the durable generation authority is behind checked master journal head");
   }
   return gen;
 }

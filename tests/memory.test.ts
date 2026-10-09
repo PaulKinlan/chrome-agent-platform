@@ -805,6 +805,10 @@ Deno.test("staged master issuer uses the real durable generation under one lock"
     });
     assertEquals(await memoryApi.masterJournalReadGeneration(), published + 1);
     await assertRejects(async () => escapedIssuer.allocateVersion(), Error, "expired");
+    master.children.get("__gen.json").content = JSON.stringify({ gen: published - 1 });
+    await assertRejects(() => memoryApi.masterJournalReadGeneration(), Error,
+      "behind checked master journal head");
+    master.children.get("__gen.json").content = JSON.stringify({ gen: published + 1 });
     master.children.delete("__gen.json");
     await assertRejects(() => memoryApi.masterJournalReadGeneration(), Error,
       "missing after cutover");
