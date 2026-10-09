@@ -208,7 +208,7 @@ auth) merged with fail-closed duplicate detection
 `run-task`, `run.cancel` (service-worker.js:7791, owner/extension principals
 only), `run.resume` (:7802), `run.logs` (:7995), `agent.delegate` — are still
 inline in service-worker.js. routes/ROUTE_MAP.md documents the complete
-288-route population (audited in docs/SW-DISPATCH-AUTHORITY-CENSUS.md).
+290-route population (audited in docs/SW-DISPATCH-AUTHORITY-CENSUS.md).
 
 ### 2.2 The agent-worker protocol
 Per-agent SharedWorkers (hosted by the offscreen doc, §1.3) execute agent loops
@@ -294,9 +294,11 @@ failures hand the use back (retryable), dispatch failures do too; search
 authorizes nothing (docs/tool-platform-architecture.md §"Live bounded lazy
 protocol" — mechanism current).
 Catalog sources (lazy-tool-protocol.js:896-907 summary): builtin, browser,
-management, bundled-wasm, webmcp, provider-server, mcp. All 139 browser tools +
-52 management tools are rows in `CHROME_TOOL_CAPABILITY_TABLE` (191 rows;
-tests/chrome-tool-capabilities.test.ts:68-74).
+management, bundled-wasm, webmcp, provider-server, mcp. All 140 browser tools +
+53 management tools are rows in `CHROME_TOOL_CAPABILITY_TABLE` (193 rows;
+tests/chrome-tool-capabilities.test.ts). The attached declared-tool wrapper is
+classified unknown for replay because its page-owned effects cannot be assumed
+idempotent; capability metadata is descriptive, never invocation authority.
 
 ### 3.2 Pipelines
 `run_pipeline` (`extension/lib/tool-pipeline.js`) chains up to 200 existing tools
@@ -405,6 +407,40 @@ re-enrollment; legacy model create cannot erase it. Already-enrolled page-effect
 sends recheck the live Chrome grant. **No /tabs permission prompt, attached
 run/document binding, model descriptor disclosure or unenrolled invocation is
 part of this D2 landing**; those remain in chrome-agent-platform-ckebt.
+
+### 4.4b Attached-tab descriptor boundary (3p3e.3 / ckebt, partial)
+The enrolled-origin principal retains its existing directory and exact-tool
+consent path. The passive detector and chip remain **count-only**. Paul approved
+Q2 disclosure of bounded, untrusted *declared* descriptors to the model before
+per-tool approval, never inferred page-JS tools or an execution grant. The
+selected candidate is an internal run-scoped binding of Chrome-attested
+`tabId`, `documentId`, origin, and count; attachment text and URL grant nothing.
+`extension/lib/attached-webmcp-declared.js` accepts only a fresh
+`document.modelContext.getTools()` result on the exact top frame, with
+Chrome-owned document/origin and live permission checks before and after. The
+hub-only attached run binds an opaque in-memory token and adds only bounded,
+run-fenced descriptions/schemas to that run's **model context**; the passive
+chip/registry stay count-only and no inferred page-JS tool is disclosed.
+`attached-webmcp-disclosure.js` enforces a second, aggregate run-size cap.
+**D1/D3 implementation under verification, not yet accepted or landed:** the
+hub-only `use_attached_declared_tool` routes to `attached-webmcp.invoke`, which
+requires the live run's opaque exact-document token and freshly re-reads only
+declared descriptors. The origin is canonicalized to Chrome's selected origin;
+the requested name must match an exact fresh declaration. In the ephemeral
+store a Deny is case-alias-sticky within that run even if the page changes its
+descriptor; Allow is **run-local**, not a persistent enrolled grant. If the
+owner explicitly enrolls during the live run, D2 promotes surviving Allow and
+Deny into the durable enrollment envelope before authority switches; no
+unenrolled tool silently enrolls the site. `attached-webmcp-authority.js`
+demands a per-tool owner card before granting that in-memory consent, then awaits
+an ephemeral required WAL start row before `attached-webmcp-invocation.js`
+injects once into Chrome's exact `documentIds` target. The result is discarded
+on doc/run/permission drift; a terminal WAL append is attempted even on a
+post-start transport failure or run cancellation. If the token has ended, that
+append can itself fail, and no page result is returned as success (an already
+started page effect cannot be rolled back). No enrolled
+`enrollment-sync` or content-script `invoke-tool` guard is relaxed. Build,
+browser, full suite and independent code review are still NOT_REACHED.
 
 ### 4.5 Fallback paths
 Pages without WebMCP: the six page-action tools (`find_elements`,

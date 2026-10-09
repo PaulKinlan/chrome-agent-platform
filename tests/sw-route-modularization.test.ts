@@ -127,6 +127,7 @@ const BASELINE_ROUTES = [
   "activity.list",
   "actions.list",
   "actions.undo",
+  "agent.attached-webmcp-document",
   "agent.discoverable-tabs",
   // The hub's composer chip reads this permission-free offer listing
   // (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01).
@@ -176,6 +177,7 @@ const BASELINE_ROUTES = [
   "webmcp.consent.site.reset",
   "webmcp.audit.list",
   "webmcp.use-tool",
+  "attached-webmcp.invoke",
   "webmcp.diagnostics.get",
   "webmcp.diagnostics.set",
   "webmcp.status",

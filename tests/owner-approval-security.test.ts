@@ -401,6 +401,11 @@ Deno.test("WebMCP card detail is display-only, bounded, spoof-resistant, and exa
   assertEquals(approvalCardTitle("webmcp.use-tool", bounded), "Use https://shop.example’s checkout\\u{202E}evil?");
   assertEquals(boundSiteToolApprovalDetail({ origin: "javascript:alert(1)", tool: "x" }), undefined);
   assertEquals(boundSiteToolApprovalDetail({ origin: "https://shop.example", tool: "" }), undefined);
+  const attached = approvalCardDenial({ approvalId: "approval-run", action: "webmcp.use-tool", targetRef: "run-ref",
+    detail: { origin: "https://shop.example", tool: "checkout", scope: "attached-run", argDigest: "private-args" } });
+  assertEquals(normalizePermissionRequirement(attached).approvals[0].detail,
+    { kind: "webmcp-tool", origin: "https://shop.example", tool: "checkout", scope: "attached-run" },
+    "only bounded tool and run scope reach the card, never arguments");
 
   const row = { runId: "run-1", resolverDocumentId: "conversation-doc" };
   assertEquals(mayResolveApproval(row, "extension", "conversation-doc"), true);

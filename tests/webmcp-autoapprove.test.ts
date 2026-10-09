@@ -237,7 +237,7 @@ Deno.test("first-use consent: a cancelled run guard blocks its late durable Allo
   assertEquals((await toolConsentSnapshot(origin, BOOK.name)).state, "ask");
 });
 
-Deno.test("attached Q23: explicit enrollment atomically migrates Allow AND sticky Deny without a pre-enrollment site store", async () => {
+Deno.test("consent migration primitive: owner enrollment carries Allow AND sticky Deny without a pre-enrollment site store", async () => {
   const origin = "https://attached-promotion.example.com";
   const store = createEphemeralSiteToolConsentStore();
   const token = store.begin({ origin, tabId: 71, documentId: "doc-promotion", runId: "run-promotion", threadId: "thread-promotion" });
@@ -257,7 +257,7 @@ Deno.test("attached Q23: explicit enrollment atomically migrates Allow AND stick
   assertThrows(() => store.snapshot(token, BOOK), Error, "ephemeral_site_tool_run_not_live");
 });
 
-Deno.test("attached Q23: migration failure leaves no partial Allow or Deny, and the live run can retry", async () => {
+Deno.test("consent migration primitive: failed copy leaves no partial Allow or Deny and a live run may retry", async () => {
   const origin = "https://attached-promotion-retry.example.com";
   const store = createEphemeralSiteToolConsentStore();
   const token = store.begin({ origin, tabId: 72, documentId: "doc-retry", runId: "run-retry" });

@@ -303,7 +303,7 @@ Deno.test("T12: browserToolset has exactly 138 tools matching BROWSER_TOOL_NAMES
   // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01); python_execute then joined the
   // management set (CAP-FB-20260823-PYODIDE-PYTHON-01), delete_file joined the
   // browser set (+ capture_page + write_clipboard) plus the complete management catalog → totalTools 191.
-  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 192);
+  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 193);
   for (const name of [
     "register_user_script", "update_user_script", "unregister_user_script", "list_user_scripts",
     "register_content_script", "update_content_script", "unregister_content_script", "list_content_scripts",

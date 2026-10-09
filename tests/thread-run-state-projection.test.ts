@@ -193,7 +193,7 @@ Deno.test("card spec: a permission request yields the normalized requirement (de
   assertEquals(approvalCardSpecFromRequest({ type: "approval-request", result: { waitingForPermission: true, permissionRequirement: { permissions: [] } } }), null);
 });
 
-Deno.test("card spec: an owner-approval action yields the live card's title/body/labels so a second tab shows the same card", () => {
+Deno.test("card spec: an owner-approval action yields the live card's title/body/labels so a second tab shows the same card", async () => {
   const script = approvalCardSpecFromRequest({
     type: "approval-request", approvalId: "ap_s", executionId: "e",
     result: { ok: false, waitingForPermission: true, permissionRequirement: { reason: "script.run: ref-1", approvals: [{ approvalId: "ap_s", action: "script.run", targetRef: "ref-1", detail: { source: "console.log(1)", hosts: [], dynamic: false } }] } },
@@ -209,6 +209,21 @@ Deno.test("card spec: an owner-approval action yields the live card's title/body
   assertEquals(site.approveLabel, "Allow automatically");
   assertEquals(site.denyLabel, "Deny");
   assertEquals(site.cardDetail, undefined);
+  const attached = approvalCardSpecFromRequest({
+    type: "approval-request", approvalId: "ap_attached", executionId: "e",
+    result: { ok: false, waitingForPermission: true, permissionRequirement: { reason: "webmcp.use-tool: attached", approvals: [{
+      approvalId: "ap_attached", action: "webmcp.use-tool", targetRef: "attached", detail: {
+        kind: "webmcp-tool", scope: "attached-run", origin: "https://shop.example", tool: "add_to_cart",
+      },
+    }] } },
+  });
+  assertEquals(attached.approveLabel, "Allow for this run");
+  assertEquals(attached.body.includes("this run and document"), true);
+  assertEquals(attached.body.includes("does not enroll"), true);
+  assertEquals(attached.body.includes("browser profile"), false);
+  const conversation = await Deno.readTextFile(new URL("../extension/shared/conversation.js", import.meta.url));
+  assertEquals(conversation.match(/siteToolApprovalCopy\(approval\.detail\)/g)?.length, 2,
+    "the live and re-mounted card use one scope-aware copy source");
   // the projection names the site tool in the status row the same way
   const p = projectThreadRunState({ run: { phase: "running", executionId: "e" }, pendingApprovals: [{ type: "approval-request", approvalId: "ap_w", executionId: "e", result: { waitingForPermission: true, permissionRequirement: { reason: "webmcp.use-tool: x", approvals: [{ approvalId: "ap_w", action: "webmcp.use-tool", detail: { kind: "webmcp-tool", origin: "https://shop.example", tool: "add_to_cart" } }] } } }] });
   assertEquals(p.status.errorReason, "the agent needs approval to use add_to_cart on https://shop.example");

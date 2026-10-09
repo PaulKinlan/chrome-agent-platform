@@ -238,20 +238,41 @@ Deno.test("mcp-zod-peer-parity: MCP Server tool registration wire schema preserv
   assertEquals(compiledFromWire3.zodSchema.safeParse({ keyword: "key", depth: 1 }).success, true);
 });
 
-Deno.test("mcp-zod-peer-parity: preminify converter contribution is exactly 354 bytes across 6 files in SW bundle (re-derived after 3337)", async () => {
-  // Verify that zod-to-json-schema's actual contribution in the service worker bundle output exactly
-  // matches the figure re-derived after chrome-agent-platform-3337.
-  //
-  // WHY THIS IS 354 AND NOT THE AUDIT'S 2,460: the azlc audit measured while the build injected
-  // esbuild's shared `<define:process.env>` init call into every file that reads process.env. That
-  // carrier kept 78 zod-to-json-schema files in the SW output for their SCAFFOLDING alone (one 27-byte
-  // init call each) and summed to 2,460 bytes. 3337 replaced the object-literal define with an
-  // identifier define + banner (no shared module, no init calls), so tree-shaking now keeps only the 6
-  // files carrying real converter code, 354 bytes. The pin keeps its teeth: a duplicated converter
-  // instance, or any real change to what is emitted, moves BOTH the byte total and the file count.
+Deno.test("mcp-zod-peer-parity: shipped SW converter contribution is exactly 177 bytes across 3 files", async () => {
+  // Bundle IN this test, but retain build.mjs's canonical SDK resolution. A
+  // bare esbuild with only browserDependencies silently follows agent-do's
+  // second Deno SDK peer context and reports 6/354, unlike the SHIPPED SW.
+  // build.mjs pins every SDK import to the root zod@3-bound instance and
+  // tests/bundle-budget.test.ts independently guards one instance shipped.
+  // Each emitted converter must be Options.js=83, index.js=0,
+  // parsers/string.js=94; a second SDK/converter copy fails all three pins.
   const { build, stop } = await import("npm:esbuild@0.25.12");
   const path = await import("node:path");
+  const { realpathSync } = await import("node:fs");
+  const { createRequire } = await import("node:module");
   const { browserDependencies, browserProcessEnvOptions } = await import("../scripts/browser-dependencies.mjs");
+  const sdkDir = realpathSync(path.join(Deno.cwd(), "node_modules/@modelcontextprotocol/sdk"));
+  const zodDir = realpathSync(path.join(Deno.cwd(), "node_modules/zod"));
+  const sdkRequire = createRequire(path.join(sdkDir, "package.json"));
+  const sdkZodPeer = realpathSync(path.dirname(sdkRequire.resolve("zod/package.json")));
+  assertEquals(sdkZodPeer, zodDir, "the root SDK must bind the same zod@3 peer as the production build");
+  const sdkPin = "converter-test-sdk-pin";
+  const pinCanonicalSdk = {
+    name: "converter-test-canonical-sdk",
+    setup(b) {
+      b.onResolve({ filter: /^@modelcontextprotocol\/sdk(\/|$)/ }, async (args) => {
+        if (args.pluginData === sdkPin) return undefined;
+        const resolved = await b.resolve(args.path, {
+          kind: args.kind, importer: args.importer, resolveDir: sdkDir, pluginData: sdkPin,
+        });
+        if (resolved.errors.length) return { errors: resolved.errors, warnings: resolved.warnings };
+        if (!resolved.path.startsWith(sdkDir + path.sep)) {
+          return { errors: [{ text: `SDK resolved outside canonical instance: ${resolved.path}` }] };
+        }
+        return { path: resolved.path, sideEffects: resolved.sideEffects };
+      });
+    },
+  };
 
   try {
     const res = await build({
@@ -262,7 +283,8 @@ Deno.test("mcp-zod-peer-parity: preminify converter contribution is exactly 354 
       entryPoints: [path.join(Deno.cwd(), "extension/background/service-worker.js")],
       write: false,
       metafile: true,
-      plugins: [browserDependencies],
+      plugins: [browserDependencies, pinCanonicalSdk],
+      nodePaths: [path.dirname(path.dirname(sdkDir))],
       define: {
         ...browserProcessEnvOptions.define,
         __CAP_BUILD_LOG_DEFAULT__: JSON.stringify("off"),
@@ -285,15 +307,14 @@ Deno.test("mcp-zod-peer-parity: preminify converter contribution is exactly 354 
       }
     }
 
-    // The measured contribution is exact (see the header for why it moved off the audit's 2,460).
-    assertEquals(emittedFiles, 6, "emitted converter input files is exactly 6");
-    assertEquals(emittedBytes, 354, "emitted converter contribution is exactly 354 bytes");
-    // Per-file contributions too (review P2-2): the two aggregate numbers alone could be held at 6 / 354
-    // by an equal-and-opposite edit between two converter files. Two peer-context copies x
-    // (Options.js 83 + index.js 0 + parsers/string.js 94) = [0,0,83,83,94,94].
+    // Hard pin to ONE shipped converter copy, not to the install's two
+    // available peer contexts. Neither equal-and-opposite edits nor a silent
+    // second instance can pass all three independent assertions.
+    assertEquals(emittedFiles, 3, "exactly one shipped converter instance (3 input files)");
+    assertEquals(emittedBytes, 177, "exactly one shipped converter instance (177 emitted bytes)");
     assertEquals(
       contributions.sort((a, b) => a - b),
-      [0, 0, 83, 83, 94, 94],
+      [0, 83, 94],
       "per-file converter contributions (equal-and-opposite edits cannot cancel out)",
     );
   } finally {

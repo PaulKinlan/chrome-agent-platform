@@ -77,6 +77,7 @@ const INPUT_KEYS = new Set([
   "event", "direction", "actor", "origin", "tool", "source",
   "identityDigest", "enrollmentGen", "consentRevision", "executionId",
   "runId", "agentId", "argDigest", "outcome", "reason",
+  "ephemeral", "documentId",
 ]);
 const encoder = new TextEncoder();
 
@@ -193,12 +194,20 @@ function normalizeInput(input) {
   const argDigest = ownData(input, "argDigest");
   const outcome = ownData(input, "outcome");
   const reason = ownData(input, "reason");
+  const ephemeral = ownData(input, "ephemeral");
+  const documentId = ownData(input, "documentId");
+  if (ephemeral !== undefined && ephemeral !== true) fail("site_tool_audit_record");
+  if (ephemeral === true
+    ? !boundedId(ownData(input, "runId")) || !ownData(input, "runId") ||
+      !boundedId(documentId) || !documentId || source !== "declared"
+    : documentId !== undefined
+  ) fail("site_tool_audit_record");
   if (
     !EVENTS.has(event) || !DIRECTIONS.has(direction) || !ACTORS.has(actor) || !origin ||
     typeof tool !== "string" || !tool || tool.length > 128 ||
     (source !== "declared" && source !== "inferred") ||
     typeof identityDigest !== "string" || !/^[0-9a-f]{64}$/.test(identityDigest) ||
-    !Number.isSafeInteger(enrollmentGen) || enrollmentGen < 1 ||
+    !Number.isSafeInteger(enrollmentGen) || (ephemeral === true ? enrollmentGen !== 0 : enrollmentGen < 1) ||
     !Number.isSafeInteger(consentRevision) || consentRevision < 0 ||
     !(argDigest === null || (typeof argDigest === "string" && /^[0-9a-f]{64}$/.test(argDigest))) ||
     !OUTCOMES.has(outcome) || !REASONS.has(reason)
@@ -219,6 +228,10 @@ function normalizeInput(input) {
     argDigest,
     outcome,
     reason,
+    // Preserve the EXACT old V1 JSON shape on existing rows. Optional fields
+    // only exist on the separately authorized run-scoped principal, never on
+    // the enrolled write path or its stored rows.
+    ...(ephemeral === true ? { ephemeral: true, documentId } : {}),
   };
 }
 

@@ -1,0 +1,185 @@
+import { assertEquals } from "jsr:@std/assert@1";
+import { createEphemeralSiteToolConsentStore } from "../extension/lib/ephemeral-site-tool-consent.js";
+import { createAttachedDeclaredInvoker, validateAttachedDeclaredArgs } from "../extension/lib/attached-webmcp-authority.js";
+import { digestSiteToolArguments } from "../extension/lib/site-tool-audit.js";
+
+const origin = "https://declared.test";
+const tool = { origin, name: "search_products", source: "declared", description: "Search", inputSchema: { type: "object", properties: { query: { type: "string" } } } };
+function setup(decision: "allow" | "deny" = "allow", overrides: Record<string, unknown> = {}) {
+  const consentStore = createEphemeralSiteToolConsentStore();
+  const token = consentStore.begin({ runId: "run1", origin, tabId: 7, documentId: "doc1" });
+  const binding = { origin, tabId: 7, documentId: "doc1" };
+  const calls: string[] = [];
+  const deps = {
+    consentStore,
+    findBinding: () => ({ binding, token }),
+    runActive: () => true,
+    readDeclared: async () => { calls.push("read"); return [tool]; },
+    validateArgs: async (_schema: unknown, args: unknown) => ({ ok: true, data: args }),
+    requestApproval: async () => { calls.push("ask"); return { ok: decision === "allow", approvalDenied: decision === "deny" }; },
+    audit: async (_token: object, row: { event: string }) => { calls.push(row.event); },
+    invoke: async (_binding: unknown, _tool: unknown, _args: unknown, options: { requiredAudit: () => Promise<void> }) => {
+      await options.requiredAudit();
+      calls.push("invoke");
+      return { ok: true, result: "done" };
+    },
+    ...overrides,
+  };
+  return { consentStore, token, binding, calls, invoke: createAttachedDeclaredInvoker(deps) };
+}
+const input = { origin, name: tool.name, args: { query: "pie" } };
+const actor = { principal: "model", executionId: "run1" };
+
+Deno.test("ckebt D1/D3: only live model run bound to exact document may ask or dispatch", async () => {
+  const s = setup();
+  for (const bad of [{ principal: "extension", executionId: "run1" }, { principal: "model", executionId: "other" }]) {
+    assertEquals((await s.invoke(input, bad)).ok, false);
+  }
+  assertEquals(s.calls, []);
+  s.consentStore.end(s.token);
+  assertEquals((await s.invoke(input, actor)).ok, false);
+  assertEquals(s.calls, []);
+});
+
+Deno.test("ckebt D1/D3: owner Deny is sticky within the run, blocks retry without another card/effect", async () => {
+  const s = setup("deny");
+  assertEquals((await s.invoke(input, actor)).ok, false);
+  assertEquals(s.consentStore.snapshot(s.token, tool).state, "denied");
+  assertEquals((await s.invoke({ ...input, args: { query: "a different request" } }, actor)).ok, false,
+    "Deny remains sticky across different arguments in the same run");
+  assertEquals((await s.invoke({ ...input, origin: "HTTPS://DECLARED.TEST/" }, actor)).ok, false,
+    "a case-only origin spelling cannot bypass the canonical origin's Deny");
+  assertEquals(s.calls.filter((x) => x === "ask").length, 1);
+  assertEquals(s.calls.includes("invoke"), false);
+  const drifted = { ...tool, inputSchema: { type: "object", properties: { different: { type: "number" } } } };
+  assertEquals(s.consentStore.snapshot(s.token, drifted).state, "denied", "Deny survives page descriptor drift");
+  const casingAlias = { ...tool, name: "SEARCH_PRODUCTS" };
+  assertEquals(s.consentStore.snapshot(s.token, casingAlias).state, "denied", "Deny survives case-only page aliases");
+});
+
+Deno.test("ckebt D1/D3: owner Allow only after audited decision; required start WAL precedes effect", async () => {
+  const s = setup();
+  assertEquals(await s.invoke(input, actor), { ok: true, result: "done" });
+  assertEquals(s.consentStore.snapshot(s.token, tool).state, "allowed");
+  const start = s.calls.indexOf("invocation-started");
+  const effect = s.calls.indexOf("invoke");
+  assertEquals(start >= 0 && effect > start, true);
+  assertEquals(s.calls.includes("invocation-finished"), true);
+  assertEquals(s.calls.includes("consent-requested"), true);
+  assertEquals(s.calls.includes("consent-decided"), true);
+});
+
+Deno.test("ckebt Q23: tool-level Allow covers changed args only in the same run; each effect gets its own awaited WAL digest", async () => {
+  const rows: Array<{ event: string; reason: string; argDigest: string }> = [];
+  const dispatched: unknown[] = [];
+  const s = setup("allow", {
+    validateArgs: validateAttachedDeclaredArgs,
+    audit: async (_token: object, row: { event: string; reason: string; argDigest: string }) => { rows.push(row); },
+    invoke: async (_binding: unknown, _tool: unknown, args: unknown,
+      options: { requiredAudit: () => Promise<void> }) => {
+      await options.requiredAudit();
+      dispatched.push(args);
+      return { ok: true, result: "done" };
+    },
+  });
+  const next = { ...input, args: { query: "different" } };
+  assertEquals((await s.invoke(input, actor)).ok, true);
+  assertEquals((await s.invoke(next, actor)).ok, true);
+  assertEquals(s.calls.filter((x) => x === "ask").length, 1, "do not re-ask for each argument set");
+  assertEquals(dispatched, [input.args, next.args]);
+  const started = rows.filter((row) => row.event === "invocation-started");
+  const finished = rows.filter((row) => row.event === "invocation-finished");
+  assertEquals(started.map((row) => row.reason), ["owner-allowed", "cached-allow"]);
+  assertEquals(started.map((row) => row.argDigest), [digestSiteToolArguments(input.args), digestSiteToolArguments(next.args)]);
+  assertEquals(finished.map((row) => row.argDigest), started.map((row) => row.argDigest));
+  assertEquals(started[0].argDigest === started[1].argDigest, false);
+});
+
+Deno.test("ckebt D1/D3: real production schema validation refuses invalid args even after tool consent is cached", async () => {
+  const requiredTool = { ...tool, inputSchema: { ...tool.inputSchema, required: ["query"] } };
+  const s = setup("allow", {
+    readDeclared: async () => [requiredTool],
+    validateArgs: validateAttachedDeclaredArgs,
+  });
+  assertEquals((await s.invoke(input, actor)).ok, true);
+  assertEquals((await s.invoke({ ...input, args: { query: 42 } }, actor)).error, "attached_tool_invalid_arguments");
+  assertEquals((await s.invoke({ ...input, args: {} }, actor)).error, "attached_tool_invalid_arguments");
+  assertEquals(s.consentStore.snapshot(s.token, requiredTool).state, "allowed");
+  assertEquals(s.calls.filter((x) => x === "ask").length, 1);
+  assertEquals(s.calls.filter((x) => x === "invocation-started").length, 1);
+  assertEquals(s.calls.filter((x) => x === "invoke").length, 1, "an invalid cached call cannot reach the page");
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  assertEquals(sw.includes("validateArgs: validateAttachedDeclaredArgs,"), true, "test the actual SW validator, not only a test stub");
+});
+
+Deno.test("ckebt D3: start and terminal WAL digest the VALIDATED page arguments, not raw model args", async () => {
+  const rows: Array<{ event: string; argDigest: string }> = [];
+  const actual = { query: "normalized" };
+  const s = setup("allow", {
+    validateArgs: async () => ({ ok: true, data: actual }),
+    audit: async (_token: object, row: { event: string; argDigest: string }) => { rows.push(row); },
+    invoke: async (_binding: unknown, _tool: unknown, supplied: unknown,
+      options: { requiredAudit: () => Promise<void> }) => {
+      assertEquals(supplied, actual);
+      await options.requiredAudit();
+      return { ok: true, result: "done" };
+    },
+  });
+  assertEquals((await s.invoke(input, actor)).ok, true);
+  assertEquals(rows.find((row) => row.event === "consent-requested")?.argDigest, digestSiteToolArguments(input.args));
+  assertEquals(rows.find((row) => row.event === "invocation-started")?.argDigest, digestSiteToolArguments(actual));
+  assertEquals(rows.find((row) => row.event === "invocation-finished")?.argDigest, digestSiteToolArguments(actual));
+});
+
+Deno.test("ckebt D3: transport failure after start WAL still attempts terminal WAL", async () => {
+  const s = setup("allow", { invoke: async (_binding: unknown, _tool: unknown, _args: unknown,
+    options: { requiredAudit: () => Promise<void> }) => {
+    await options.requiredAudit();
+    throw Error("transport failed after page call");
+  } });
+  assertEquals((await s.invoke(input, actor)).ok, false);
+  assertEquals(s.calls.includes("invocation-started"), true);
+  assertEquals(s.calls.includes("invocation-finished"), true);
+});
+
+Deno.test("ckebt D3: post-WAL navigation without a page effect audits authority change, not page error", async () => {
+  const rows: Array<{ event: string; outcome: string; reason: string }> = [];
+  const s = setup("allow", {
+    audit: async (_token: object, row: { event: string; outcome: string; reason: string }) => { rows.push(row); },
+    invoke: async (_binding: unknown, _tool: unknown, _args: unknown,
+      options: { requiredAudit: () => Promise<void> }) => {
+      await options.requiredAudit();
+      return { ok: false, error: "attached_tool_authority_changed" };
+    },
+  });
+  assertEquals((await s.invoke(input, actor)).ok, false);
+  assertEquals(rows.find((row) => row.event === "invocation-started")?.outcome, "pending");
+  const terminal = rows.find((row) => row.event === "invocation-finished");
+  assertEquals({ outcome: terminal?.outcome, reason: terminal?.reason },
+    { outcome: "failed", reason: "authority-changed" });
+});
+
+Deno.test("ckebt Q2(a): a page global or inferred source cannot become an attached callable", async () => {
+  const s = setup("allow", { readDeclared: async () => [{ ...tool, source: "inferred" }] });
+  assertEquals((await s.invoke(input, actor)).ok, false);
+  assertEquals(s.calls, []);
+});
+
+Deno.test("ckebt D1/D3: failed required WAL, cancellation, or descriptor drift cannot invoke", async () => {
+  const wal = setup("allow", { audit: async (_token: object, row: { event: string }) => {
+    if (row.event === "invocation-started") throw Error("OPFS unavailable");
+  } });
+  assertEquals((await wal.invoke(input, actor)).ok, false);
+  assertEquals(wal.calls.includes("invoke"), false);
+  let live = true;
+  const cancelled = setup("allow", { runActive: () => live, requestApproval: async () => { live = false; return { ok: true }; } });
+  assertEquals((await cancelled.invoke(input, actor)).ok, false);
+  assertEquals(cancelled.calls.includes("invoke"), false);
+  let reads = 0;
+  const changed = setup("allow", { readDeclared: async () => {
+    reads++;
+    return [{ ...tool, inputSchema: reads > 1 ? { type: "object", properties: { changed: { type: "boolean" } } } : tool.inputSchema }];
+  } });
+  assertEquals((await changed.invoke(input, actor)).ok, false);
+  assertEquals(changed.calls.includes("invoke"), false);
+});

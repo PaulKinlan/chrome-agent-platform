@@ -14,6 +14,9 @@ function fail(code) {
 function boundedId(value) {
   return typeof value === "string" && value.length > 0 && value.length <= 200;
 }
+// Declared names are ASCII identifiers; case-only re-registration cannot
+// re-ask around a run-local Deny. Dispatch still uses the EXACT live name.
+function nameKey(name) { return name.toLowerCase(); }
 
 /** Each store is owned by one service-worker process, not durable across restart. */
 export function createEphemeralSiteToolConsentStore() {
@@ -34,7 +37,7 @@ export function createEphemeralSiteToolConsentStore() {
   }
 
   function current(entry, identity) {
-    const record = entry.records.get(identity.name);
+    const record = entry.records.get(nameKey(identity.name));
     return Object.freeze({
       ...identity,
       runId: entry.runId,
@@ -107,8 +110,8 @@ export function createEphemeralSiteToolConsentStore() {
       const revision = entry.revision + 1;
       if (!Number.isSafeInteger(revision)) fail("ephemeral_site_tool_revision");
       entry.revision = revision;
-      if (state === "ask") entry.records.delete(identity.name);
-      else entry.records.set(identity.name, Object.freeze({ ...identity, state, revision }));
+      if (state === "ask") entry.records.delete(nameKey(identity.name));
+      else entry.records.set(nameKey(identity.name), Object.freeze({ ...identity, state, revision }));
       return current(entry, identity);
     },
 
@@ -143,9 +146,10 @@ export function createEphemeralSiteToolConsentStore() {
         const byName = new Map();
         for (const [, entry] of candidates) {
           for (const record of entry.records.values()) {
-            const prior = byName.get(record.name);
+            const key = nameKey(record.name);
+            const prior = byName.get(key);
             if (prior?.state !== "denied" && (record.state === "denied" || !prior)) {
-              byName.set(record.name, Object.freeze({
+              byName.set(key, Object.freeze({
                 name: record.name, source: record.source,
                 identityDigest: record.identityDigest, state: record.state,
               }));

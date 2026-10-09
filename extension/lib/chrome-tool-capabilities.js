@@ -8,8 +8,8 @@ import { permissionUserLanguage, siteLabel } from "./permission-language.js";
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
   browserTools: 140,
-  managementTools: 52,
-  totalTools: 192,
+  managementTools: 53,
+  totalTools: 193,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -174,6 +174,7 @@ export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
   "get_agent",
   "list_agents",
   "disenroll_origin",
+  "use_attached_declared_tool",
   "create_asset",
   "update_asset",
   "patch_asset",
@@ -507,6 +508,9 @@ const rows = [
   record("get_agent", "management", ["management.agent.get"], [], "none", "read-only", "read", "management.agents"),
   record("list_agents", "management", ["management.agent.list"], [], "none", "read-only", "read", "management.agents"),
   record("disenroll_origin", "management", ["management.origin.disenroll"], [], "none", "mutating", "mutating", "management.agents"),
+  // Only a live owner-attached hub run may use an exact declared tool after
+  // per-tool consent and awaited WAL; metadata does not authorize invocation.
+  record("use_attached_declared_tool", "management", ["chrome.host.exact-origin", "chrome.scripting.execute.main", "management.webmcp.declared.invoke"], ["scripting"], "tab-scoped", "unknown", "mutating", "management.webmcp"),
   record("create_asset", "management", ["management.asset.create"], [], "none", "mutating", "mutating", "management.assets"),
   record("update_asset", "management", ["management.asset.update"], [], "none", "mutating", "mutating", "management.assets"),
   record("patch_asset", "management", ["management.asset.patch"], [], "none", "mutating", "mutating", "management.assets"),

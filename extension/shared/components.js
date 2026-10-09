@@ -9274,6 +9274,7 @@ class AgentComposer extends Component {
           // COMMANDS-01): the composer tracks the spans the parser gates on.
           this._recordResolvedSpan(token.start, token.start + finalText.length, finalText);
           if (selection.attachment) this._attachMedia(selection.attachment);
+          if (selection.notice) this.setStatus(selection.notice, false);
           this._autoGrow();
         })
         .catch((error) => this.setStatus(`couldn't attach ${item.kind}: ${error?.message ?? error}`, false));

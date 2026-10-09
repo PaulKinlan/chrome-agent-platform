@@ -49,7 +49,7 @@ function refFactory() {
   return () => `sel_${(++value).toString(16).padStart(36, "0")}`;
 }
 
-Deno.test("chrome capability table is exact and complete for 140 browser + 52 management tools", () => {
+Deno.test("chrome capability table is exact and complete for 140 browser + 53 management tools", () => {
   // The capability table describes the SHIPPED inventory, which is the
   // developer build: the developer-only tools keep their rows because the
   // build genuinely contains them (CAP-FB-20260830-COOKIE-TOOLS-CUT-01).
@@ -65,13 +65,13 @@ Deno.test("chrome capability table is exact and complete for 140 browser + 52 ma
   assertEquals(DEVELOPER_ONLY_TOOL_NAMES, ["get_cookie", "set_cookie", "remove_cookie"]);
   assertEquals(MANAGEMENT_TOOL_NAMES, MANAGEMENT_CAPABILITY_TOOL_NAMES);
   assertEquals(Object.keys(management).sort(), [...MANAGEMENT_CAPABILITY_TOOL_NAMES].sort());
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 192);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 193);
   assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "chrome-api").length, 140);
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "management").length, 52);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "management").length, 53);
   assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS, {
     browserTools: 140,
-    managementTools: 52,
-    totalTools: 192,
+    managementTools: 53,
+    totalTools: 193,
     maxCapabilityTokens: 4,
     maxCapabilityTokenBytes: 96,
     maxPermissions: 8,
@@ -82,6 +82,17 @@ Deno.test("chrome capability table is exact and complete for 140 browser + 52 ma
   assertEquals(unknown.code, "unknown_capability_entry");
   const mismatch = assertThrows(() => capabilitiesByTool({ ...browser, injected: {} }, "chrome-api"));
   assertEquals(mismatch.code, "capability_table_inventory_mismatch");
+});
+
+Deno.test("attached declared tool capability metadata names its page effect but is not an execution grant", () => {
+  const row = chromeToolCapability("use_attached_declared_tool", "management");
+  assertEquals(row.capabilityTokens, ["chrome.host.exact-origin", "chrome.scripting.execute.main", "management.webmcp.declared.invoke"]);
+  assertEquals(row.optionalPermissions, ["scripting"]);
+  assertEquals(row.productGrantScopeKind, "tab-scoped");
+  assertEquals(row.mutationClass, "mutating");
+  assertEquals(row.replayClass, "unknown", "page-controlled effects cannot auto-resume after interruption");
+  assertEquals(row.routeFamily, "management.webmcp");
+  assertEquals("execute" in row, false);
 });
 
 Deno.test("chrome capability metadata is bounded, canonical data only, and namespaced", () => {
@@ -188,7 +199,7 @@ Deno.test("catalog descriptors consume exact canonical capabilities and capabili
     ...adaptManagementTools(management, { ...context(), capabilitiesByTool: capabilitiesByTool(management, "management") }),
   ];
   const catalog = buildToolCatalog(inputs);
-  assertEquals(catalog.descriptors.length, 192);
+  assertEquals(catalog.descriptors.length, 193);
   for (const descriptor of catalog.descriptors) {
     const row = chromeToolCapability(descriptor.name, descriptor.sourceKind);
     assertEquals(descriptor.capabilities, row.capabilityTokens);
@@ -208,7 +219,7 @@ Deno.test("unbound lazy browser/management records preserve source closure and v
   const browserRecords = executableBrowserToolRecords(browser, { ...context(), capabilitiesByTool: capabilitiesByTool(browser, "chrome-api") });
   const managementRecords = executableManagementToolRecords(management, { ...context(), capabilitiesByTool: capabilitiesByTool(management, "management") });
   assertEquals(browserRecords.length, 140);
-  assertEquals(managementRecords.length, 52);
+  assertEquals(managementRecords.length, 53);
   for (const record of [...browserRecords, ...managementRecords]) {
     const name = record.descriptorInput.toolId;
     const sourceMap = record.descriptorInput.sourceKind === "chrome-api" ? browser : management;
@@ -251,7 +262,7 @@ Deno.test("shadow capture discloses bounded selected capability summaries and on
   assertEquals(capture.canExecute, false);
   assertEquals(capture.canGrant, false);
   assertEquals(capture.selectedCount, capture.selectedDescriptors.length);
-  assertEquals(capture.nonSelectedCount, 192 - capture.selectedCount);
+  assertEquals(capture.nonSelectedCount, 193 - capture.selectedCount);
   assertEquals(capture.omittedNonSelected, true);
   assert(capture.selectedCount > 0 && capture.selectedCount <= 2);
   for (const selected of capture.selectedDescriptors) {
@@ -285,27 +296,27 @@ Deno.test("selected capability summary is bounded for non-Chrome catalog sources
   assertEquals(summary.replayClass, "unknown");
 });
 
-Deno.test("unsafe-for-cutover list remains policy metadata and does not filter the 192-record catalog", () => {
+Deno.test("unsafe-for-cutover list remains policy metadata and does not filter the 193-record catalog", () => {
   for (const name of ["run_script", "schedule_task", "set_agent_provider", "capture_screenshot"]) {
     assert(FLAGGED_FOR_LATER_PROVIDER_CUTOVER.includes(name));
   }
   // open_side_panel was removed 2026-08-30 (CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01),
   // so it is gone from the cutover list as well as the catalog.
   assert(!FLAGGED_FOR_LATER_PROVIDER_CUTOVER.includes("open_side_panel"));
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 192);
-  assertEquals(new Set(CHROME_TOOL_CAPABILITY_TABLE.map((row) => row.toolName)).size, 192);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 193);
+  assertEquals(new Set(CHROME_TOOL_CAPABILITY_TABLE.map((row) => row.toolName)).size, 193);
 });
 
 // chrome-agent-platform-yx2h: `requiresOwnerGesture` was a DEAD AUTHORITY COLUMN
 // (originally deprecated in chrome-agent-platform-4h47). It has been completely
-// removed from record(), validateRow, all 192 row definitions, and capability summaries.
-// All 192 rows remain intact with their 9-parameter signatures.
+// removed from record(), validateRow, all 193 row definitions, and capability summaries.
+// All 193 rows remain intact with their 9-parameter signatures.
 Deno.test("requiresOwnerGesture has been retired and removed from all capability table rows (yx2h)", () => {
   for (const row of CHROME_TOOL_CAPABILITY_TABLE) {
     assert(!("requiresOwnerGesture" in row), `row "${row.toolName}" must not have requiresOwnerGesture`);
   }
   // The count is re-asserted here so this pin cannot be satisfied by an empty table.
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 192, "all 192 tools remain in table");
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 193, "all 193 tools remain in table");
 
   // Also assert that selectedCapabilitySummary does not include requiresOwnerGesture
   const summary = selectedCapabilitySummary("open_tab", "chrome-api");
@@ -339,7 +350,7 @@ Deno.test("the capability table's positional record() arguments still line up wi
     }
   };
   walk(ast);
-  assertEquals(calls.length, 192, "every catalogue row is built through record()");
+  assertEquals(calls.length, 193, "every catalogue row is built through record()");
   for (const call of calls) {
     const mutationClass = call.arguments[6];
     assert(
