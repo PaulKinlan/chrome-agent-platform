@@ -62,17 +62,17 @@ Deno.test("gate: an unusable sibling root or a failing sweep is a named sequenti
   const named = resolveSiblingRoot({ name: "build-gate", mk: () => { throw boom; } });
   assert(named.reason?.includes("build-gate sibling root"), String(named.reason));
 
-  const noSweep = resolveSiblingRoot({ mk: () => "/tmp/x", sweep: () => { throw new Error("EACCES: denied"); } });
+  const noSweep = resolveSiblingRoot({ mk: () => "/sibling-root-that-is-not-real", sweep: () => { throw new Error("EACCES: denied"); } });
   assertEquals(noSweep.parent, null);
   assert(noSweep.reason?.includes("could not be swept") && noSweep.reason.includes("EACCES"), String(noSweep.reason));
 
   const lines: string[] = [];
   const ok = resolveSiblingRoot({
-    mk: () => "/tmp/x",
+    mk: () => "/sibling-root-that-is-not-real",
     sweep: () => ["0123456789ab-1", "0123456789ab-1.log"],
     report: (l) => lines.push(l),
   });
-  assertEquals(ok, { parent: "/tmp/x", reason: null });
+  assertEquals(ok, { parent: "/sibling-root-that-is-not-real", reason: null });
   assertEquals(lines.length, 1);
   assert(lines[0].includes("removed 2 sibling(s)"), lines[0]);
 });
