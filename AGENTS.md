@@ -681,7 +681,11 @@ damage in this canon was done:
   `tests/security-suite-custody.test.ts` for everyone; measured 5/5 green at rest and
   2/2 green under each mutant in isolation, i.e. load-induced. The same applies to a
   build failure, a type-check-only failure, an errored suite and a timeout: report
-  INCONCLUSIVE. Never green, never a kill.
+  INCONCLUSIVE **as mutation-kill evidence**. Never green, never a kill. This is
+  not a merger waiver: a failing landing gate without a named §2 signature
+  remains a PRODUCT RED unless **both** same-tree isolation passes and the
+  failing gate log names an overlapping heavy-job PID/kind (see
+  `docs/MERGER-PLAYBOOK.md` §2). Isolation alone never authorizes a retry.
 - **ABSENCE VIA FIND IS VACUOUS (chrome-agent-platform-p4tf, GLM 2026-10-05).** A command like
   `find . -name "*.map"` or `find . -name "*<marker>*"` returning 0 files is NOT proof of absence:
   on some fleet VMs `/usr/bin/find` silently filters gitignored paths. Use
