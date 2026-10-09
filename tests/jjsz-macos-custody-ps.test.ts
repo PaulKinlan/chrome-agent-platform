@@ -7,8 +7,8 @@
 //   - readProcIdentity: ONLY `ps` exiting 1 with an EMPTY stdout and an EMPTY stderr (what `ps -p <absent
 //     pid>` prints, measured on macOS 15.8) is a ProcessGoneError. Every other outcome is a
 //     ProcessUnreadableError, which never carries the `ENOENT` code (a missing /bin/ps has its own).
-//   - liveObservedResidue: on the no-/proc branch only a ProcessGoneError is clean; anything else is
-//     residue marked `unverified`. The /proc branch keeps its swallow-all answer (Linux is unchanged).
+//   - liveObservedResidue: a successful absence (ProcessGoneError, or Linux ENOENT) is clean;
+//     EMFILE/EACCES on either platform is residue marked `unverified` (yuu9s).
 //   - procIdentities / observeDescendants: a failed or empty `ps` table REJECTS (it used to become `[]`,
 //     "no descendants"), and a failed sample leaves the observed map untouched.
 //   - terminateAttestedGroup: an unreadable table still refuses to signal, with the ORIGINAL error.
@@ -312,11 +312,18 @@ Deno.test("jjsz F2: liveObservedResidue — a mixed table reports exactly the un
   assertMatch(String(residue[0].unverifiedReason), /ETIMEDOUT/u, "the typed error's own detail is what is reported");
 });
 
-Deno.test("jjsz F2: liveObservedResidue on a /proc platform keeps its swallow-all answer (Linux behaviour unchanged)", async () => {
+Deno.test("yuu9s: Linux /proc EMFILE/EACCES is unverified residue; only a vanished pid is gone", async () => {
   const observed = observedOf(ident(11));
-  for (const failure of [new Error("boom"), new ProcessUnreadableError(11, "x"), Object.assign(new Error("ENOENT"), { code: "ENOENT" })]) {
+  const coded = (code: string) => Object.assign(new Error(code), { code });
+  for (const failure of [coded("EMFILE"), coded("EACCES"), new ProcessUnreadableError(11, "ps unreadable")]) {
     const residue = await liveObservedResidue(observed, { hasProc: true, readIdentity: () => Promise.reject(failure) });
-    assertEquals(residue, [], `the /proc branch reads ${failure.message} as gone, exactly as before`);
+    assertEquals(residue.length, 1, `${failure.message} must never mean gone`);
+    assertEquals(residue[0].unverified, true);
+    assertMatch(String(residue[0].unverifiedReason), new RegExp(failure.message));
+  }
+  for (const failure of [coded("ENOENT"), new ProcessGoneError(11)]) {
+    assertEquals(await liveObservedResidue(observed, { hasProc: true, readIdentity: () => Promise.reject(failure) }), [],
+      "an actual vanished process remains clean");
   }
 });
 
@@ -395,14 +402,42 @@ Deno.test("jjsz F2: procIdentities picks its branch by hasProc, and the /proc br
     calls.push(file);
     return Promise.reject(psFailure({ code: 2 }));
   };
-  // /proc branch: ps is never consulted. Without a /proc it is an empty table (unchanged), on Linux the
-  // real one; either way it does not reject.
-  const viaProc = await procIdentities({ hasProc: true, run });
-  assert(Array.isArray(viaProc));
+  // Inject a real-looking /proc row so this branch works on hosts without /proc too.
+  const viaProc = await procIdentities({ hasProc: true, run,
+    listProcNames: async () => ["11"], readIdentity: async () => ident(11) });
+  assertEquals(viaProc.map((row: { pid: number }) => row.pid), [11]);
   assertEquals(calls, []);
   // ps branch: the same runner IS consulted, and its failure now rejects.
   await assertRejects(() => procIdentities({ hasProc: false, run }), ProcessUnreadableError);
   assertEquals(calls, ["/bin/ps"]);
+});
+
+Deno.test("yuu9s: readable Linux kernel threads with group/session zero do not poison custody sampling", async () => {
+  const raw = (pid: number, ppid: number) =>
+    `${pid} (kernel thread) ${["I", String(ppid), "0", "0", ...Array(15).fill("0"), "1000"].join(" ")}`;
+  assertEquals(parseProcStat(raw(2, 0)).pgid, 0, "kthreadd has no userspace process group");
+  assertEquals(parseProcStat(raw(100, 2)).sid, 0, "a direct kernel-thread child has no session");
+  if (Deno.build.os === "linux") {
+    const rows = await procIdentities();
+    assert(rows.length > 0, "a readable real /proc must produce a process table, not an empty answer");
+  }
+});
+
+Deno.test("yuu9s: Linux table listing or identity EMFILE rejects, while per-pid ENOENT is normal churn", async () => {
+  const coded = (code: string) => Object.assign(new Error(code), { code });
+  const listed = { hasProc: true, listProcNames: async () => ["11", "12"],
+    readIdentity: async (pid: number) => pid === 11 ? ident(11) : Promise.reject(coded("EMFILE")) };
+  const unreadable = await assertRejects(() => procIdentities(listed), ProcessUnreadableError);
+  assertMatch(unreadable.message, /EMFILE/);
+  const observed = observedOf(ident(555));
+  await assertRejects(() => observeDescendants(11, observed, listed), ProcessUnreadableError);
+  assertEquals([...observed.keys()], [555], "a failed scan must not change the observed set");
+  const listing = await assertRejects(() => procIdentities({ hasProc: true,
+    listProcNames: async () => Promise.reject(coded("EMFILE")) }), ProcessUnreadableError);
+  assertMatch(listing.message, /EMFILE/);
+  const churn = await procIdentities({ ...listed,
+    readIdentity: async (pid: number) => pid === 11 ? ident(11) : Promise.reject(coded("ENOENT")) });
+  assertEquals(churn.map((row: { pid: number }) => row.pid), [11]);
 });
 
 Deno.test("jjsz F2: observeDescendants rejects on an unreadable table and leaves `observed` untouched", async () => {
