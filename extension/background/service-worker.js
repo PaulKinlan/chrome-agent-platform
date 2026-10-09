@@ -9320,14 +9320,17 @@ const handlers = mergeRouteMaps(
     return await executeWithLock(async () => {
       try {
         const root = await navigator.storage.getDirectory();
-        const report = await importArchive(bundle, {
+        // Lock order matches Options export/restore: restoreLock (outer) then
+        // master-journal. Recovery, live-file swap and rollback must exclude
+        // concurrent service-worker journal writes as one operation.
+        const report = await withMasterJournalWebLock(() => importArchive(bundle, {
           kvGet,
           kvSet,
           kvRemove,
           opfs: createOpfsAdapter(root),
           alarms: createChromeAlarmsAdapter(),
           overwrite: overwrite === true,
-        });
+        }));
         // The restored profile changes provider config, agents and durable runs
         // under this worker's feet — drop cached state the way factory reset
         // does, so the next run reads the restored stores, not a stale cache.

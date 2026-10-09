@@ -317,6 +317,22 @@ Deno.test("buffered backup excludes stale legacy and unpublished master WAL resi
   ].sort());
 });
 
+Deno.test("buffered import refuses a torn master WAL archive before live mutation", async () => {
+  const bundle = buildArchive({
+    kv: {}, files: [{ path: "memory/master/journal-wal/head-a.json", bytes: new TextEncoder().encode("{\"torn\":") }],
+    totalBytes: 8, alarms: [], configuredProviders: [], mcpServers: [],
+  });
+  const kv = mockKv();
+  const opfs = mockOpfs({ "memory/master/journal.json": "owner old journal" });
+  await assertRejects(() => importArchive(bundle, {
+    kvGet: kv.kvGet, kvSet: kv.kvSet, kvRemove: kv.kvRemove,
+    opfs, alarms: mockAlarms(), overwrite: true,
+  }), Error, "master journal");
+  assertEquals(new TextDecoder().decode(opfs.map.get("memory/master/journal.json")), "owner old journal");
+  assertEquals(opfs.map.has("memory/master/journal-wal/head-a.json"), false);
+  assertEquals(kv.store.has("cap:importBackup"), false);
+});
+
 Deno.test("export is re-runnable (SW-restart safe) and a failing backend emits NOTHING", async () => {
   const b = fixtureBackends();
   const first = await runExport(b);

@@ -523,9 +523,16 @@ as one archive-staged generation before owner confirmation, refusing torn or
 unpublished WAL leaves; legacy backups with no WAL remain accepted. Streaming
 and buffered exports now select only files referenced by checked head slots,
 excluding unpublished WAL residue and stale legacy journal values while the
-master Web Lock is held. Restore still needs a master lock around live-file
-replacement and rollback; prevalidation and filtered export alone are not a
-complete backup/restore safety proof.
+master Web Lock is held. Both buffered and streamed import paths now reject
+incomplete WAL generations; the legacy buffered service-worker import takes
+`cap:restoreLock` then the master Web Lock around recovery, swap and rollback.
+The Options streaming restore still needs that master lock after quiescence
+through its live-file replacement and rollback; prevalidation and filtered
+export alone are not a complete backup/restore safety proof. Future WAL
+compaction must retain every dependency referenced by EITHER head slot until
+both slots have published and readback-verified the new checkpoint; then it
+may retire the superseded frames. Export selects both chains, and restore
+refuses a missing dependency in either, so early frame deletion is a hard red.
 Until cutover, the legacy `journal.json` remains authoritative. This lock does **not** make the entire profile a point-in-time
 snapshot: other store writers retain their existing semantics. The broader
 whole-profile consistency requirement is a separate follow-up, not a claim of

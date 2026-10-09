@@ -405,7 +405,7 @@ export async function streamRestoreArchive({
     // A raw WAL archive is a unit: reject torn heads, absent dependencies and
     // unpublished frames BEFORE owner confirmation or any live-file mutation.
     // Legacy profiles (no WAL records) retain their existing import path.
-    await validateStagedMasterJournalBackup(stagedEntries, opfs?.readFile);
+    await validateStagedMasterJournalBackup(stagedEntries, opfs?.readFile?.bind(opfs));
   } catch (err) {
     if (typeof opfs?.removeDirectory === "function") {
       await opfs.removeDirectory(stagingDir, { recursive: true }).catch(() => {});

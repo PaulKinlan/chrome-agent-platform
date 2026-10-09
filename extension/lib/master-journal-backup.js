@@ -60,13 +60,17 @@ export async function validateStagedMasterJournalBackup(entries, readFile) {
   try {
     // The combined read detects conflicting slots; per-slot projections verify
     // both generations even if compaction gave them different checkpoints.
-    await readMasterJournalProjection(master(), { includeArchive: true });
+    const selected = (await readMasterJournalProjection(master(), { includeArchive: true })).head;
     const referenced = new Set();
     for (const name of HEADS) {
       if (!files.has(name)) continue;
-      await readMasterJournalProjection(master(name), { includeArchive: true });
       const bytes = await readFile(files.get(name));
       const head = await unsealMasterJournalRecord(bytes, "head");
+      // The combined read already verified the selected generation; replay
+      // only a distinct older slot (possibly referencing another checkpoint).
+      if (JSON.stringify(head) !== JSON.stringify(selected)) {
+        await readMasterJournalProjection(master(name), { includeArchive: true });
+      }
       referenced.add(name);
       referenced.add(head.checkpoint);
       referenced.add(head.archive);

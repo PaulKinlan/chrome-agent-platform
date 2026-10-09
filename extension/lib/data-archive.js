@@ -50,7 +50,10 @@
 // possibly stale extras — loss-free, cleaned by the next import.
 
 import { isManagedRedactedTarget, sanitizeRedactedTargetText } from "./logical-site-agent-config.js";
-import { selectPublishedMasterJournalBackupPaths } from "./master-journal-backup.js";
+import {
+  selectPublishedMasterJournalBackupPaths,
+  validateStagedMasterJournalBackup,
+} from "./master-journal-backup.js";
 
 const ENCODER = new TextEncoder();
 const FATAL_DECODER = new TextDecoder("utf-8", { fatal: true });
@@ -754,6 +757,15 @@ export async function importArchive(bundleText, { kvGet, kvSet, kvRemove, opfs, 
   // journal — restore the original profile before anything else reads it.
   const backends = { kvGet, kvSet, kvRemove, opfs, alarms };
   await recoverPendingImport(backends);
+
+  // Legacy buffered imports and streaming imports share the WAL generation
+  // validator. After any pending self-heal, refuse a torn or incomplete WAL
+  // bundle before touching the live profile for THIS import.
+  const byPath = new Map(parsed.opfs.map((entry) => [entry.path, entry._bytes]));
+  await validateStagedMasterJournalBackup(
+    parsed.opfs.map((entry) => ({ relPath: entry.path, stagedPath: entry.path })),
+    async (path) => byPath.get(path),
+  );
 
   // Phase 1 — target state check BEFORE any mutation.
   const existingKv = (await kvGet(null)) || {};
