@@ -81,6 +81,25 @@ Deno.test("master journal cutover stages and verifies whole live/archive rows be
   }), Error, "already cut over");
 });
 
+Deno.test("cutover retains an unbounded legacy archive in bounded immutable segments", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  const archived = Array.from({ length: 1_201 }, (_, id) => ({ id, text: `whole-archived-${id}-🚀` }));
+  await stageMasterJournalCutover(master, {
+    journalExists: true, journal: [{ id: "live" }], archiveExists: true, archive: archived, allocateVersion,
+  });
+  const wal = await master.getDirectoryHandle("journal-wal");
+  const segments = [...wal.children.entries()]
+    .filter(([name]) => /^archive-\d+-\d+\.json$/.test(name))
+    .map(([, file]) => file);
+  assertEquals(segments.length, 3, "a 1,201-row legacy archive must not become one giant record");
+  for (const segment of segments) {
+    const record = await unsealMasterJournalRecord(segment.bytes, "archive");
+    assertEquals(record.rows.length <= 500, true, "each immutable segment has at most 500 whole rows");
+  }
+  const projection = await readMasterJournalProjection(master, { includeArchive: true });
+  assertEquals(projection.archive, archived, "no row is dropped or clipped by segmentation");
+});
+
 Deno.test("master journal cutover preserves absent versus present-empty", async () => {
   const absent = await legacyFixture();
   await stageMasterJournalCutover(absent.master, { journalExists: false, journal: [], archive: [], allocateVersion: absent.allocateVersion });
