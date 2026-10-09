@@ -63,11 +63,24 @@ function mutationClassOf(name) {
 const INVERSE_BUILDERS = Object.freeze({
   close_tab(args, result, extra) {
     const recent = Array.isArray(extra?.recentlyClosed) ? extra.recentlyClosed[0] : null;
-    const title = result?.closed?.title || recent?.title || "a tab";
+    const title = result?.title || result?.closed?.title || recent?.title || args?.title || "a tab";
     const sessionId = result?.closed?.sessionId || recent?.sessionId || null;
+    const url = result?.url || result?.closed?.url || recent?.url || args?.url || null;
+    if (sessionId) {
+      return {
+        sentence: `Closed ${title}`,
+        inverse: { tool: "restore_closed", args: { sessionId } },
+      };
+    }
+    if (url) {
+      return {
+        sentence: `Closed ${title}`,
+        inverse: { tool: "open_tab", args: { url } },
+      };
+    }
     return {
       sentence: `Closed ${title}`,
-      inverse: sessionId ? { tool: "restore_closed", args: { sessionId } } : null,
+      inverse: null,
     };
   },
   open_tab(args, result) {

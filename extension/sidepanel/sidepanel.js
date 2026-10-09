@@ -453,6 +453,11 @@ pageHistory?.addEventListener("stop", async (ev) => {
 // page-action tools default to the active tab, so the run reads/acts on the
 // page in front of the owner. An @mention chip routes the turn to that agent.
 pageComposer?.addEventListener("send", async (ev) => {
+  if (typeof chrome !== "undefined" && chrome?.permissions?.request) {
+    try {
+      await chrome.permissions.request({ permissions: ["tabGroups", "tabs"] }).catch(() => false);
+    } catch { /* best effort */ }
+  }
   const { text, attachments, agent } = ev.detail ?? {};
   const mention = agent?.ref ? { kind: agent.kind, id: agent.id, name: agent.name || agent.id } : null;
   await runPageTurn(text, attachments, mention);

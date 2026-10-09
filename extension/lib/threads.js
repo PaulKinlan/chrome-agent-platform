@@ -20,6 +20,17 @@
 import { masterMemory, forgetDurableThread } from "./memory.js";
 import { sanitizeAttachments } from "./attachments.js";
 import { isPromptApiAvailable, createPromptApiModel } from "./models/prompt-api-model.js";
+import {
+  createWorkingSet,
+  addTabToWorkingSet,
+  removeTabFromWorkingSet,
+  setWorkingSetGroup,
+  reconcileWorkingSet,
+  closeWorkingSet,
+  restoreWorkingSetPlan,
+  groupTitleForThread,
+  syncWorkingSetTabGroup,
+} from "./working-set.js";
 
 const INDEX_KEY = "threads";
 // dptw: no thread count, per-thread message count, message-byte, thread-byte,
@@ -190,7 +201,12 @@ export async function listThreads() {
 export async function getThread(id) {
   if (!id) return null;
   const mem = masterMemory();
-  return (await mem.get(`thread:${id}`)) ?? null;
+  const thread = await mem.get(`thread:${id}`);
+  if (!thread) return null;
+  return {
+    ...thread,
+    workingSet: createWorkingSet(thread.workingSet),
+  };
 }
 
 // A per-thread mutex serializes EVERY index/body read-modify-write. The old
@@ -200,6 +216,11 @@ export async function getThread(id) {
 // messages overwritten). All thread mutations run under this lock (the
 // wider-goal review's thread-race finding).
 let threadMutex = Promise.resolve();
+/**
+ * @template T
+ * @param {() => Promise<T> | T} fn
+ * @returns {Promise<T>}
+ */
 function withThreadLock(fn) {
   const run = threadMutex.then(fn, fn);
   threadMutex = run.then(() => {}, () => {});
@@ -257,11 +278,33 @@ export async function createThread(task, attachments, harnessId = null) {
   const id = newThreadId();
   const now = Date.now();
   const fallbackName = boundText(previewOf(task) || "New task");
+  let initialWs = createWorkingSet();
+  if (Array.isArray(attachments)) {
+    for (const a of attachments) {
+      if (a?.kind === "tab" && typeof a?.url === "string") {
+        initialWs = addTabToWorkingSet(initialWs, {
+          tabId: typeof a.tabId === "number" && a.tabId > 0 ? a.tabId : undefined,
+          url: a.url,
+          title: a.name || a.title,
+        });
+      }
+    }
+  }
+  if (typeof chrome !== "undefined" && chrome?.tabs?.group && initialWs.tabIds.length > 0) {
+    try {
+      const synced = await syncWorkingSetTabGroup(initialWs, {
+        title: fallbackName,
+        chromeApi: chrome,
+      });
+      initialWs = synced.nextWorkingSet;
+    } catch { /* best effort tab group sync */ }
+  }
   const thread = {
     id,
     name: fallbackName,
     ...(harnessId ? { harnessId } : {}),
     messages: [{ role: "user", content: boundText(task), ts: now, ...(sanitizeAttachments(attachments) ? { attachments: sanitizeAttachments(attachments) } : {}) }],
+    workingSet: initialWs,
     createdAt: now,
     updatedAt: now,
     status: "running",
@@ -276,6 +319,7 @@ export async function createThread(task, attachments, harnessId = null) {
     updatedAt: now,
     status: "running",
     count: 1,
+    tabCount: initialWs.tabIds.length || initialWs.urls.length,
   });
   await writeIndex(index);
   return thread;
@@ -300,6 +344,9 @@ export async function nameThreadAsync(id, task) {
       const thread = (await mem.get(`thread:${id}`)) ?? null;
       if (!thread) return;
       thread.name = name;
+      if (typeof thread.workingSet?.groupId === "number" && typeof chrome !== "undefined" && chrome?.tabGroups?.update) {
+        chrome.tabGroups.update(thread.workingSet.groupId, { title: groupTitleForThread(name) }).catch(() => {});
+      }
       await mem.setTrusted(`thread:${id}`, thread);
       const index = (await mem.get(INDEX_KEY)) ?? [];
       const row = index.find((r) => r.id === id);
@@ -319,7 +366,12 @@ export async function renameThread(id, name) {
     const mem = masterMemory();
     const thread = (await mem.get(`thread:${id}`)) ?? null;
     if (!thread) return false;
-    thread.name = trimmed;
+    if (thread.name !== trimmed) {
+      thread.name = trimmed;
+      if (typeof thread.workingSet?.groupId === "number" && typeof chrome !== "undefined" && chrome?.tabGroups?.update) {
+        chrome.tabGroups.update(thread.workingSet.groupId, { title: groupTitleForThread(trimmed) }).catch(() => {});
+      }
+    }
     await mem.setTrusted(`thread:${id}`, thread);
     const index = (await mem.get(INDEX_KEY)) ?? [];
     const row = index.find((r) => r.id === id);
@@ -608,6 +660,32 @@ export async function continueThread(id, task, attachments, harnessId = null) {
       ...(att ? { attachments: att } : {}),
     });
     thread.messages = trimMessages(thread.messages);
+    if (Array.isArray(attachments)) {
+      let ws = createWorkingSet(thread.workingSet);
+      let changed = false;
+      for (const a of attachments) {
+        if (a?.kind === "tab" && typeof a?.url === "string") {
+          ws = addTabToWorkingSet(ws, {
+            tabId: typeof a.tabId === "number" && a.tabId > 0 ? a.tabId : undefined,
+            url: a.url,
+            title: a.name || a.title,
+          });
+          changed = true;
+        }
+      }
+      if (changed) {
+        if (typeof chrome !== "undefined" && chrome?.tabs?.group && ws.tabIds.length > 0) {
+          try {
+            const synced = await syncWorkingSetTabGroup(ws, {
+              title: thread.name || "Task",
+              chromeApi: chrome,
+            });
+            ws = synced.nextWorkingSet;
+          } catch { /* best effort tab group sync */ }
+        }
+        thread.workingSet = ws;
+      }
+    }
     thread.updatedAt = Date.now();
     thread.status = "running";
     await mem.setTrusted(`thread:${id}`, thread);
@@ -618,6 +696,7 @@ export async function continueThread(id, task, attachments, harnessId = null) {
       row.updatedAt = thread.updatedAt;
       row.status = thread.status;
       row.count = thread.messages.length;
+      row.tabCount = thread.workingSet?.tabIds?.length || thread.workingSet?.urls?.length || 0;
       await writeIndex(index);
     }
     return { thread, history, skills };
@@ -757,4 +836,46 @@ export async function deleteThread(id) {
     await forgetDurableThread(id).catch(() => false);
     return true;
   });
+}
+
+/**
+ * Get a thread's working set.
+ */
+export async function getThreadWorkingSet(id) {
+  const thread = await getThread(id);
+  return thread ? thread.workingSet : null;
+}
+
+/**
+ * Updates a thread's working set atomically under the thread lock.
+ */
+export async function updateThreadWorkingSet(id, updater) {
+  return withThreadLock(async () => {
+    const mem = masterMemory();
+    const thread = await mem.get(`thread:${id}`);
+    if (!thread) return null;
+
+    const currentWs = createWorkingSet(thread.workingSet);
+    const nextWs = createWorkingSet(typeof updater === "function" ? updater(currentWs) : updater);
+    const now = Date.now();
+    thread.workingSet = nextWs;
+    thread.updatedAt = now;
+    await mem.setTrusted(`thread:${id}`, thread);
+
+    const index = (await mem.get(INDEX_KEY)) ?? [];
+    const idx = index.findIndex((t) => t.id === id);
+    if (idx !== -1) {
+      index[idx].tabCount = nextWs.tabIds.length;
+      index[idx].updatedAt = now;
+      await writeIndex(index);
+    }
+    return thread;
+  });
+}
+
+/**
+ * Records an attached or opened tab into a thread's working set.
+ */
+export async function attachTabToThreadWorkingSet(id, { tabId, url } = {}) {
+  return updateThreadWorkingSet(id, (ws) => addTabToWorkingSet(ws, { tabId, url }));
 }

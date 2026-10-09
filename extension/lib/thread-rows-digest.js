@@ -23,6 +23,7 @@ export function threadRowsDigest(threads, dotOf = () => "") {
       typeof t?.preview === "string" ? t.preview : "",
       timeAgo(t?.updatedAt),
       String(dotOf?.(t) ?? ""),
+      String(t?.tabCount ?? 0),
     ].join("\u0000");
   }
   return parts.join("|");
