@@ -11,6 +11,18 @@ boundaries for the Co-do-style tool operating layer are recorded in
 shadow slice has no UI or provider cutover; future Tool Library UI must use the
 shared component and visual rules below.
 
+## Master-journal archive contract (not a visual feature)
+The append-only master-journal archive is a **history log**, never the live
+journal's current state or a set of currently evicted rows. Compensation may
+restore an evicted row to the live ring while retaining its earlier eviction in
+history. If an append is undone after its post-commit guard fails, the forbidden
+appended row is removed from live, but its eviction effect remains as historical
+residue, even across compaction. Do not present that history as a current task
+or re-enrollment authority. This is an accepted parity/undo boundary, **not** a
+new tombstone or archive-retraction promise. The WAL product writer remains
+**disabled** pending full one-authority integration and review; see
+[ARCHITECTURE.md](ARCHITECTURE.md) for the storage invariants.
+
 ## Direction — "Quiet instrument"
 A calm technical command center. The surface is a precise instrument: quiet,
 measured, exact. Restrained palette, hairline borders, one confident accent,

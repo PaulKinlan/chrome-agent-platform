@@ -548,6 +548,45 @@ Deno.test("compaction faults before publication retain old authority; torn head 
   }
 });
 
+Deno.test("post-compaction compensation preserves the archive history log and later foreign appends", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await stageMasterJournalCutover(master, { journalExists: true, journal: seed, archive: [], allocateVersion });
+  await stageMasterJournalFrame(master, { operation: "append", row: { id: "target" } }, { allocateVersion });
+  const postAppend = (await readMasterJournalProjection(master)).live;
+  for (let i = 0; i < 127; i++) {
+    await stageMasterJournalFrame(master, { operation: "replace", rows: postAppend }, { allocateVersion });
+  }
+  await stageMasterJournalFrame(master, { operation: "replace", rows: seed }, { allocateVersion });
+  let projection = await readMasterJournalProjection(master, { includeArchive: true });
+  assertEquals(projection.head.checkpointSequence, 129);
+  assertEquals(projection.live, seed, "the evicted row is restored live after compaction");
+  assertEquals(projection.archive, [seed[0]], "the same row remains in append-only history");
+  await stageMasterJournalFrame(master, { operation: "append", row: { id: "foreign" } }, { allocateVersion });
+  projection = await readMasterJournalProjection(master, { includeArchive: true });
+  assertEquals(projection.live, [...seed.slice(1), { id: "foreign" }]);
+  assertEquals(projection.archive, [seed[0], seed[0]], "a later re-eviction is a second history event");
+});
+
+Deno.test("post-commit guard undo restores live rows but keeps the eviction as history across compaction", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await stageMasterJournalCutover(master, { journalExists: true, journal: seed, archive: [], allocateVersion });
+  await stageMasterJournalFrame(master, { operation: "append", row: { id: "forbidden" } }, { allocateVersion });
+  await stageMasterJournalFrame(master, { operation: "replace", rows: seed }, { allocateVersion });
+  let projection = await readMasterJournalProjection(master, { includeArchive: true });
+  assertEquals(projection.live, seed, "the forbidden row must not remain live");
+  assertEquals(projection.archive, [seed[0]], "the abandoned eviction remains as archive history");
+  for (let i = 0; i < 126; i++) {
+    await stageMasterJournalFrame(master, { operation: "replace", rows: seed }, { allocateVersion });
+  }
+  await stageMasterJournalFrame(master, { operation: "replace", rows: seed }, { allocateVersion });
+  projection = await readMasterJournalProjection(master, { includeArchive: true });
+  assertEquals(projection.head.checkpointSequence, 129);
+  assertEquals(projection.live, seed);
+  assertEquals(projection.archive, [seed[0]], "compaction seals, but must not resurrect, the historical eviction");
+});
+
 Deno.test("complete equal compaction artifacts can be re-used only after verified pre-head crash", async () => {
   for (const tamper of [null, "checkpoint-rows", "checkpoint-source", "archive-rows", "unissued", "wrong-claimed", "no-witness"]) {
     const faults = {};

@@ -554,10 +554,17 @@ rows. A complete orphaned compaction segment/checkpoint may be reused only
 when its checked canonical bytes equal a freshly derived payload from the
 validated current head's checkpoint, frame range and archive chain, and the
 caller supplies an exact checkpoint+source-specific durable issuance witness
-for its generation (a global issued-version floor is insufficient); reuse is logged. Torn,
-non-equal or source-mismatched immutable records and damaged head slots remain
-fail-closed pending explicit owner repair. The frame grammar still needs exact receipt,
-CAS and cancellation evidence before enabling mutation; physical power-loss
+for its generation (a global issued-version floor is insufficient); reuse is
+logged. Torn, non-equal or source-mismatched immutable records and damaged
+head slots remain fail-closed pending explicit owner repair. Archive rows are
+an append-only HISTORY LOG, not a set of currently evicted rows: a compensated
+row may legitimately exist in both live and archive. Readers must not infer
+live state from archive history. On a post-commit guard failure, a replace or
+delete frame removes the forbidden appended row from live, but its already
+recorded eviction remains in pending overflow or the sealed archive as
+historical residue; no tombstone or retract operation exists in this bead.
+The frame grammar still needs exact receipt, CAS and cancellation evidence
+before enabling mutation; physical power-loss
 recovery, real Chrome cross-context proof and safe on-disk retirement also
 remain outstanding.
 Before a checked head exists, legacy `journal.json` remains authoritative.

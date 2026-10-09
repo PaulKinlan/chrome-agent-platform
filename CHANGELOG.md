@@ -1,5 +1,8 @@
 # Changelog
 
+### Unreleased design note — master journal WAL (writer disabled)
+- The planned WAL retains the master-journal archive as an append-only history log, not a set of current rows. Undoing a guarded append removes its forbidden row from the live journal but retains its earlier eviction as historical residue, including after compaction. This is intentional, tested, and not a shipped writer change; no archive retraction is promised.
+
 ## [0.3.616] — 2026-10-09
 - admit blake3-wasm v3.0.0 as an Emscripten glue class managed Wasm tool for 256-bit cryptographic hashing
 
