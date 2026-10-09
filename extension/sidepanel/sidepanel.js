@@ -246,7 +246,10 @@ async function go() {
 }
 
 goBtn.addEventListener("click", go);
-urlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+urlInput.addEventListener("keydown", (e) => {
+  if (e.isComposing || e.keyCode === 229) return;
+  if (e.key === "Enter") go();
+});
 
 /* ──────────────────────────────────────────────────────────────────────────
  * The COMPANION: the Page view follows the active tab. It shows that tab's

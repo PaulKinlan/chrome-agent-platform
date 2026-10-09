@@ -3929,7 +3929,7 @@ export class AgentComposer extends Component {
     });
 
     this._input?.addEventListener("keydown", (e) => {
-      if (e.isComposing) return;
+      if (e.isComposing || e.keyCode === 229) return;
       // The /agent slash picker: the composer text is the query source, so the
       // navigation keys are FORWARDED to the shared <agent-picker> (its one
       // keyboard contract) while ordinary typing flows through the input event.
@@ -6046,6 +6046,7 @@ export class PromptBar extends Component {
     // Auto-grow the textarea.
     ta?.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 160) + "px"; });
     ta?.addEventListener("keydown", (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
       if (e.key === "Escape" && pop?.classList.contains("open")) {
         e.preventDefault();
         pop.classList.remove("open");
@@ -6681,6 +6682,7 @@ export class AgentPicker extends Component {
       this._renderList();
     });
     this._search?.addEventListener("keydown", (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
       if (e.key === "ArrowDown") { e.preventDefault(); this._setActive(this._active + 1); }
       else if (e.key === "ArrowUp") { e.preventDefault(); this._setActive(this._active - 1); }
       else if (e.key === "Home") { e.preventDefault(); this._setActive(0); }

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.621] — 2026-10-09
+- Add IME isComposing and keyCode 229 guards to prevent accidental submission of unconfirmed compositions on Enter and navigation keys across task rename, python network origin, sidepanel URL, skills import, prompt-bar, and agent-picker.
+
 ## [0.3.620] — 2026-10-09
 - Admit shared UI chunks to dist.complete and package inventory, reducing sidepanel bundle to 19.8 KB and meeting all primary surface size targets.
 
