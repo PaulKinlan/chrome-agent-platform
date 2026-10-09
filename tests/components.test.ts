@@ -2008,6 +2008,7 @@ Deno.test("harness-agent-button: renders a named native action, escapes names, a
 
 Deno.test("2y7qe recurrence guard: every cross-module call to components-core is imported and exported", async () => {
   const acorn = await import("npm:acorn@8.18.0");
+  const path = await import("node:path");
 
   function extractBindings(pattern: any, out: Set<string>) {
     if (!pattern) return;
@@ -2027,46 +2028,79 @@ Deno.test("2y7qe recurrence guard: every cross-module call to components-core is
     }
   }
 
-  for (const baseDir of ["extension/shared", "docs"]) {
-    const coreCode = await Deno.readTextFile(`${baseDir}/components-core.js`);
-    const coreAst = acorn.parse(coreCode, { sourceType: "module", ecmaVersion: "latest" });
+  async function fileExists(p: string): Promise<boolean> {
+    try {
+      const stat = await Deno.stat(p);
+      return stat.isFile;
+    } catch {
+      return false;
+    }
+  }
 
-    const coreDefinedSymbols = new Set<string>();
-    const coreExportedSymbols = new Set<string>();
+  const moduleExportsCache = new Map<string, { exports: Set<string>; defined: Set<string> }>();
 
-    for (const node of (coreAst.body as any[])) {
+  async function getModuleExports(filePath: string): Promise<{ exports: Set<string>; defined: Set<string> }> {
+    const cached = moduleExportsCache.get(filePath);
+    if (cached) return cached;
+
+    const code = await Deno.readTextFile(filePath);
+    const ast = acorn.parse(code, { sourceType: "module", ecmaVersion: "latest" });
+    const exports = new Set<string>();
+    const defined = new Set<string>();
+
+    for (const node of (ast.body as any[])) {
       if (node.type === "FunctionDeclaration" && node.id?.name) {
-        coreDefinedSymbols.add(node.id.name);
+        defined.add(node.id.name);
       } else if (node.type === "ClassDeclaration" && node.id?.name) {
-        coreDefinedSymbols.add(node.id.name);
+        defined.add(node.id.name);
       } else if (node.type === "VariableDeclaration") {
-        for (const d of node.declarations ?? []) extractBindings(d.id, coreDefinedSymbols);
+        for (const d of node.declarations ?? []) extractBindings(d.id, defined);
       } else if (node.type === "ExportNamedDeclaration") {
         if (node.declaration) {
           if (node.declaration.type === "FunctionDeclaration" && node.declaration.id?.name) {
-            coreDefinedSymbols.add(node.declaration.id.name);
-            coreExportedSymbols.add(node.declaration.id.name);
+            defined.add(node.declaration.id.name);
+            exports.add(node.declaration.id.name);
           } else if (node.declaration.type === "ClassDeclaration" && node.declaration.id?.name) {
-            coreDefinedSymbols.add(node.declaration.id.name);
-            coreExportedSymbols.add(node.declaration.id.name);
+            defined.add(node.declaration.id.name);
+            exports.add(node.declaration.id.name);
           } else if (node.declaration.type === "VariableDeclaration") {
             const declNames = new Set<string>();
             for (const d of node.declaration.declarations ?? []) extractBindings(d.id, declNames);
             for (const name of declNames) {
-              coreDefinedSymbols.add(name);
-              coreExportedSymbols.add(name);
+              defined.add(name);
+              exports.add(name);
             }
           }
         }
         if (node.specifiers) {
           for (const s of node.specifiers) {
             const exp = s.exported?.name ?? s.local?.name;
-            if (exp) coreExportedSymbols.add(exp);
-            if (!node.source && s.local?.name) coreDefinedSymbols.add(s.local.name);
+            if (exp) exports.add(exp);
+            if (!node.source && s.local?.name) defined.add(s.local.name);
+          }
+        }
+      } else if (node.type === "ExportDefaultDeclaration") {
+        exports.add("default");
+      } else if (node.type === "ExportAllDeclaration" && node.source?.value) {
+        const subSpec = node.source.value;
+        if (typeof subSpec === "string" && (subSpec.startsWith("./") || subSpec.startsWith("../"))) {
+          const subResolved = path.resolve(path.dirname(filePath), subSpec);
+          if (await fileExists(subResolved)) {
+            const sub = await getModuleExports(subResolved);
+            for (const e of sub.exports) exports.add(e);
           }
         }
       }
     }
+
+    const res = { exports, defined };
+    moduleExportsCache.set(filePath, res);
+    return res;
+  }
+
+  for (const baseDir of ["extension/shared", "docs"]) {
+    const coreFilePath = path.resolve(baseDir, "components-core.js");
+    const { exports: coreExportedSymbols, defined: coreDefinedSymbols } = await getModuleExports(coreFilePath);
 
     const otherFiles: string[] = [];
     for await (const entry of Deno.readDir(baseDir)) {
@@ -2082,39 +2116,107 @@ Deno.test("2y7qe recurrence guard: every cross-module call to components-core is
       const code = await Deno.readTextFile(`${baseDir}/${f}`);
       const ast = acorn.parse(code, { sourceType: "module", ecmaVersion: "latest" });
 
-      const allImported = new Set<string>();
+      interface ImportedSymbol {
+        localName: string;
+        importedName: string;
+        specifier: string;
+        resolvedPath: string;
+        kind: "named" | "default";
+      }
+
+      interface ImportedNamespace {
+        localName: string;
+        specifier: string;
+        resolvedPath: string;
+        kind: "namespace";
+      }
+
+      const fileImports = new Map<string, ImportedSymbol>();
+      const fileNamespaces = new Map<string, ImportedNamespace>();
       const fileDeclared = new Set<string>();
 
       for (const node of (ast.body as any[])) {
         if (node.type === "ImportDeclaration") {
-          const isCoreImport = typeof node.source?.value === "string" && (
-            node.source.value === "./components-core.js" ||
-            node.source.value.endsWith("/components-core.js")
-          );
-          for (const s of node.specifiers ?? []) {
-            const localName = s.local?.name;
-            const importedName = s.imported?.name ?? localName;
-            if (localName) allImported.add(localName);
+          const specifier = node.source?.value;
+          if (typeof specifier !== "string") continue;
 
-            // Direction (2): any core symbol imported must actually be exported in the corresponding components-core.js
-            if (isCoreImport) {
-              if (!coreExportedSymbols.has(importedName)) {
-                violations.push(`${baseDir}/${f}: imports '${importedName}' from ${node.source.value}, but it is not exported by ${baseDir}/components-core.js`);
+          let resolvedPath: string | null = null;
+          if (specifier.startsWith("./") || specifier.startsWith("../")) {
+            resolvedPath = path.resolve(baseDir, specifier);
+          } else {
+            console.warn(`[skip-and-report] ${baseDir}/${f}: non-relative import specifier: ${specifier}`);
+          }
+
+          let targetExports: Set<string> | null = null;
+          const relTarget = resolvedPath ? path.relative(".", resolvedPath) : specifier;
+          if (resolvedPath) {
+            if (await fileExists(resolvedPath)) {
+              const mod = await getModuleExports(resolvedPath);
+              targetExports = mod.exports;
+            } else {
+              violations.push(`${baseDir}/${f}: imports from '${specifier}', but module file cannot be resolved at ${relTarget}`);
+            }
+          }
+
+          for (const s of node.specifiers ?? []) {
+            if (s.type === "ImportSpecifier") {
+              const localName = s.local?.name;
+              const importedName = s.imported?.name ?? localName;
+              if (localName && resolvedPath) {
+                fileImports.set(localName, { localName, importedName, specifier, resolvedPath, kind: "named" });
               }
-            } else if (coreDefinedSymbols.has(importedName) && !coreExportedSymbols.has(importedName)) {
-              violations.push(`${baseDir}/${f}: imports '${importedName}' which is defined in ${baseDir}/components-core.js but not exported`);
+
+              // Validate that the target module actually exports the imported symbol
+              if (targetExports && !targetExports.has(importedName)) {
+                violations.push(`${baseDir}/${f}: imports '${importedName}' from ${specifier}, but it is not exported by ${relTarget}`);
+              }
+
+              // Validate origin: if importedName is a core symbol, it must come from components-core.js
+              const isCoreSymbol = coreDefinedSymbols.has(importedName) || coreExportedSymbols.has(importedName);
+              if (isCoreSymbol && resolvedPath && resolvedPath !== coreFilePath) {
+                violations.push(`${baseDir}/${f}: wrong-origin import: '${importedName}' is a core symbol in ${baseDir}/components-core.js, but is imported from ${specifier} (${relTarget})`);
+              }
+            } else if (s.type === "ImportDefaultSpecifier") {
+              const localName = s.local?.name;
+              if (localName && resolvedPath) {
+                fileImports.set(localName, { localName, importedName: "default", specifier, resolvedPath, kind: "default" });
+              }
+              if (targetExports && !targetExports.has("default")) {
+                violations.push(`${baseDir}/${f}: imports default from ${specifier}, but default is not exported by ${relTarget}`);
+              }
+            } else if (s.type === "ImportNamespaceSpecifier") {
+              const localName = s.local?.name;
+              if (localName && resolvedPath) {
+                fileNamespaces.set(localName, { localName, specifier, resolvedPath, kind: "namespace" });
+              }
+            } else {
+              console.warn(`[skip-and-report] ${baseDir}/${f}: unsupported import specifier type: ${s.type}`);
             }
           }
         } else if (node.type === "ExportNamedDeclaration" && node.source) {
-          const isCoreImport = typeof node.source?.value === "string" && (
-            node.source.value === "./components-core.js" ||
-            node.source.value.endsWith("/components-core.js")
-          );
-          if (isCoreImport && node.specifiers) {
+          const specifier = node.source.value;
+          const resolvedPath = (typeof specifier === "string" && (specifier.startsWith("./") || specifier.startsWith("../")))
+            ? path.resolve(baseDir, specifier)
+            : null;
+          const relTarget = resolvedPath ? path.relative(".", resolvedPath) : String(specifier);
+          let targetExports: Set<string> | null = null;
+          if (resolvedPath) {
+            if (await fileExists(resolvedPath)) {
+              const mod = await getModuleExports(resolvedPath);
+              targetExports = mod.exports;
+            } else {
+              violations.push(`${baseDir}/${f}: re-exports from '${specifier}', but module file cannot be resolved at ${relTarget}`);
+            }
+          }
+          if (node.specifiers) {
             for (const s of node.specifiers) {
               const importedName = s.local?.name ?? s.exported?.name;
-              if (!coreExportedSymbols.has(importedName)) {
-                violations.push(`${baseDir}/${f}: re-exports '${importedName}' from ${node.source.value}, but it is not exported by ${baseDir}/components-core.js`);
+              if (targetExports && !targetExports.has(importedName)) {
+                violations.push(`${baseDir}/${f}: re-exports '${importedName}' from ${specifier}, but it is not exported by ${relTarget}`);
+              }
+              const isCoreSymbol = coreDefinedSymbols.has(importedName) || coreExportedSymbols.has(importedName);
+              if (isCoreSymbol && resolvedPath && resolvedPath !== coreFilePath) {
+                violations.push(`${baseDir}/${f}: wrong-origin re-export: '${importedName}' is a core symbol in ${baseDir}/components-core.js, but is re-exported from ${specifier} (${relTarget})`);
               }
             }
           }
@@ -2146,20 +2248,72 @@ Deno.test("2y7qe recurrence guard: every cross-module call to components-core is
         if (node.type === "CatchClause" && node.param) {
           extractBindings(node.param, currentScope);
         }
-        if ((node.type === "CallExpression" || node.type === "NewExpression") && node.callee?.type === "Identifier") {
-          const name = node.callee.name;
-          const isCoreSymbol = coreDefinedSymbols.has(name) || coreExportedSymbols.has(name);
-          if (isCoreSymbol && !fileDeclared.has(name) && !currentScope.has(name)) {
-            // Direction (1): any core symbol called but not imported must fail
-            if (!allImported.has(name)) {
-              violations.push(`${baseDir}/${f}: calls ${name}() which is a core symbol in ${baseDir}/components-core.js (exported: ${coreExportedSymbols.has(name)}) but not imported`);
-            } else if (!coreExportedSymbols.has(name)) {
-              violations.push(`${baseDir}/${f}: calls ${name}() which is imported but not exported by ${baseDir}/components-core.js`);
+
+        if (node.type === "CallExpression" || node.type === "NewExpression") {
+          if (node.callee?.type === "Identifier") {
+            const name = node.callee.name;
+            if (!fileDeclared.has(name) && !currentScope.has(name)) {
+              const imp = fileImports.get(name);
+              if (imp) {
+                const importedSymbol = imp.importedName;
+                const isCore = coreDefinedSymbols.has(importedSymbol) || coreExportedSymbols.has(importedSymbol) ||
+                               coreDefinedSymbols.has(name) || coreExportedSymbols.has(name);
+                const relTarget = path.relative(".", imp.resolvedPath);
+                if (isCore) {
+                  // Verify origin: core symbol must come from components-core.js
+                  if (imp.resolvedPath !== coreFilePath) {
+                    violations.push(`${baseDir}/${f}: calls ${name}() which is a core symbol in ${baseDir}/components-core.js, but was imported from wrong-origin module '${imp.specifier}' (${relTarget}) instead of ${baseDir}/components-core.js`);
+                  }
+                  // Verify export from components-core.js
+                  if (!coreExportedSymbols.has(importedSymbol)) {
+                    violations.push(`${baseDir}/${f}: calls ${name}() which is imported from ${imp.specifier}, but not exported by ${baseDir}/components-core.js`);
+                  }
+                }
+                // Verify that the module it was actually imported from exports it
+                const targetMod = moduleExportsCache.get(imp.resolvedPath);
+                if (targetMod && imp.kind === "named" && !targetMod.exports.has(importedSymbol)) {
+                  violations.push(`${baseDir}/${f}: calls ${name}() which is imported from ${imp.specifier}, but '${importedSymbol}' is not exported by ${relTarget}`);
+                }
+              } else {
+                // Not imported
+                const isCore = coreDefinedSymbols.has(name) || coreExportedSymbols.has(name);
+                if (isCore) {
+                  violations.push(`${baseDir}/${f}: calls ${name}() which is a core symbol in ${baseDir}/components-core.js (exported: ${coreExportedSymbols.has(name)}) but not imported`);
+                }
+              }
+            }
+          } else if (node.callee?.type === "MemberExpression" &&
+                     node.callee.object?.type === "Identifier" &&
+                     node.callee.property?.type === "Identifier") {
+            const nsName = node.callee.object.name;
+            const propName = node.callee.property.name;
+            const ns = fileNamespaces.get(nsName);
+            if (ns) {
+              const isCore = coreDefinedSymbols.has(propName) || coreExportedSymbols.has(propName);
+              const relTarget = path.relative(".", ns.resolvedPath);
+              if (isCore) {
+                if (ns.resolvedPath !== coreFilePath) {
+                  violations.push(`${baseDir}/${f}: calls ${nsName}.${propName}() which is a core symbol in ${baseDir}/components-core.js, but namespace ${nsName} was imported from wrong-origin namespace '${ns.specifier}' (${relTarget}) instead of ${baseDir}/components-core.js`);
+                }
+                if (!coreExportedSymbols.has(propName)) {
+                  violations.push(`${baseDir}/${f}: calls ${nsName}.${propName}() which is imported from ${ns.specifier}, but not exported by ${baseDir}/components-core.js`);
+                }
+              }
+              const targetMod = moduleExportsCache.get(ns.resolvedPath);
+              if (targetMod && !targetMod.exports.has(propName)) {
+                violations.push(`${baseDir}/${f}: calls ${nsName}.${propName}(), but '${propName}' is not exported by ${relTarget}`);
+              }
             }
           }
         }
+
         for (const key of Object.keys(node)) {
-          if (key === "callee" && (node.type === "CallExpression" || node.type === "NewExpression") && node.callee?.type === "Identifier") continue;
+          if (key === "callee" && (node.type === "CallExpression" || node.type === "NewExpression")) {
+            if (node.callee?.type === "Identifier") continue;
+            if (node.callee?.type === "MemberExpression" &&
+                node.callee.object?.type === "Identifier" &&
+                fileNamespaces.has(node.callee.object.name)) continue;
+          }
           const child = node[key];
           if (Array.isArray(child)) {
             for (const c of child) if (c && typeof c.type === "string") walk(c, currentScope);
@@ -2172,8 +2326,9 @@ Deno.test("2y7qe recurrence guard: every cross-module call to components-core is
       walk(ast, new Set());
     }
 
-    if (violations.length > 0) {
-      throw new Error(`2y7qe static recurrence guard failed:\n${violations.join("\n")}`);
+    const uniqueViolations = [...new Set(violations)];
+    if (uniqueViolations.length > 0) {
+      throw new Error(`2y7qe static recurrence guard failed:\n${uniqueViolations.join("\n")}`);
     }
   }
 });
