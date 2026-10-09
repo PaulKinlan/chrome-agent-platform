@@ -29,7 +29,6 @@ export const ACP_PROMPT_ENVELOPE =
  *   availableCommands: any[],
  *   inFlightTurn: boolean,
  *   currentTurnOwnerToken: string|null,
- *   activeExecutionId: string|null,
  *   lastActiveAt: number,
  * }>
  */
@@ -78,6 +77,9 @@ export function clearAllRetainedAcpModelSessions() {
     closeRetainedAcpModelSession(key);
   }
   retainedAcpModelSessions.clear();
+  // Test reset also drops waiters' shared connect promise. This does not
+  // cancel an already-started transport; the helper is never a runtime revoke.
+  connectingAcpModelSessions.clear();
 }
 
 /** Total active retained model sessions count. */
@@ -120,6 +122,16 @@ export function createAcpModel({
     controller.close();
     controller = null;
   }
+  function claimTurn(rec) {
+    if (rec.inFlightTurn) {
+      throw new Error("ACP session currently owns an active turn; cannot start concurrent turn");
+    }
+    // Claim BEFORE yielding to another shared-connect waiter, and before
+    // changing the retained client's execution identity or tool handler.
+    rec.inFlightTurn = true;
+    rec.currentTurnOwnerToken = instanceOwnerToken;
+    rec.lastActiveAt = Date.now();
+  }
   function fail(error) {
     if (closed) return;
     closed = true;
@@ -127,7 +139,6 @@ export function createAcpModel({
     if (rec && rec.currentTurnOwnerToken === instanceOwnerToken) {
       rec.inFlightTurn = false;
       rec.currentTurnOwnerToken = null;
-      rec.activeExecutionId = null;
       rec.lastActiveAt = Date.now();
     }
     pending?.reject(error); pending = null;
@@ -176,6 +187,7 @@ export function createAcpModel({
           }
           throw new Error("ACP session currently owns an active turn; cannot start concurrent turn");
         }
+        if (capTools) claimTurn(existing);
         client = existing.client;
         activeSessionId = existing.sessionId;
         fromRetained = true;
@@ -214,7 +226,7 @@ export function createAcpModel({
         if (old && old.client && old.client !== client) {
           try { old.client.close(); } catch { /* best-effort cleanup of superseded client */ }
         }
-        retainedAcpModelSessions.set(sessionKey, {
+        const rec = {
           client,
           sessionId: sess.sessionId,
           threadId,
@@ -224,9 +236,10 @@ export function createAcpModel({
           availableCommands: client.availableCommands || [],
           inFlightTurn: false,
           currentTurnOwnerToken: null,
-          activeExecutionId: null,
           lastActiveAt: Date.now(),
-        });
+        };
+        if (capTools) claimTurn(rec); // cold turn claims before the shared promise resolves
+        retainedAcpModelSessions.set(sessionKey, rec);
       }
 
       return { sessionId: sess.sessionId, resumed: false };
@@ -238,19 +251,18 @@ export function createAcpModel({
     try {
       return await connectPromise;
     } finally {
-      if (retainSession) {
+      // A test reset can replace this key with a newer connect. The old
+      // completion must not erase the replacement's cold-start fence.
+      if (retainSession && connectingAcpModelSessions.get(sessionKey) === connectPromise) {
         connectingAcpModelSessions.delete(sessionKey);
       }
     }
   }
   async function start(prompt) {
     const session = await connectSession(true);
-    const rec = retainedAcpModelSessions.get(sessionKey);
-    if (rec) {
-      rec.inFlightTurn = true;
-      rec.currentTurnOwnerToken = instanceOwnerToken;
-      rec.activeExecutionId = executionId;
-      rec.lastActiveAt = Date.now();
+    const rec = retainSession ? getRetainedAcpModelSession(sessionKey) : null;
+    if (retainSession && (!rec || !rec.inFlightTurn || rec.currentTurnOwnerToken !== instanceOwnerToken)) {
+      throw new Error("ACP session currently owns an active turn; cannot start concurrent turn");
     }
     try {
       // ACP has no system-prompt setter. Pass the complete CAP prompt, including
@@ -269,7 +281,6 @@ export function createAcpModel({
       if (rec && rec.currentTurnOwnerToken === instanceOwnerToken) {
         rec.inFlightTurn = false;
         rec.currentTurnOwnerToken = null;
-        rec.activeExecutionId = null;
         rec.lastActiveAt = Date.now();
       }
     }
@@ -330,7 +341,6 @@ export function createAcpModel({
         try { client?.cancel?.(activeSessionId); } catch { /* cancel is best-effort when closing */ }
         rec.inFlightTurn = false;
         rec.currentTurnOwnerToken = null;
-        rec.activeExecutionId = null;
         rec.lastActiveAt = Date.now();
       }
       if (!retainSession && !fromRetained) {

@@ -38,6 +38,18 @@ connection-owned endpoint only when the client opts in and the adapter advertise
 HTTP tool support. Closing the connection revokes it and rejects pending requests.
 Endpoints reject web Origin requests and supply no CORS grants.
 
+For the v05y retained model session, pre-prompt `acp.commands` discovery and a
+subsequent turn reuse one client only when their thread, harness, endpoint and
+working directory match. **The composer's `thread-id` attribute must equal the
+`threadId` dispatched by `agent.run`**; the hub supplies it, but the sidepanel
+composer currently omits the attribute even when `runTask` has a thread ID.
+That can establish two short-lived sessions (discovery keyed `global`, turn keyed
+to the run's thread) and lose reuse, not cross an authority boundary. Do not
+copy a guessed thread ID into the composer: the sidepanel's catalogue cache
+would also need invalidation when its thread changes. ACP permits one in-flight
+prompt turn per retained session, while command discovery observes cached
+commands without stealing a live turn's execution identity.
+
 Native harness permission requests reuse `requestAcpPermission`. The card title
 names the harness; the SW binds answers to the live execution and original document.
 No answer, expiry, missing surface or cancellation denies. Explicit `acp.permissions`
@@ -74,7 +86,7 @@ All bundle budgets pass without relaxing ceilings.
 
 ## Operational boundaries
 
-1. Each ACP turn creates a fresh harness session and carries CAP's conversation history.
+1. Sequential ACP turns may reuse the same retained harness session; CAP still carries its conversation history, and overlapping prompt turns on one session are refused.
 2. In-flight tool calls run through the standard approval gates: gated tools (`close_tab`, `wipe_browsing_data`, `write_file`) raise the in-conversation live approval/diff card before executing.
 3. If an owner denies a requested tool mutation, the denial error is returned verbatim to the harness so it can plan its next step.
 4. Legacy `browser/call_tool` is refused with `-32601` when `toolHandler` is active, ensuring all tool calls route through the authenticated run-bound executor.

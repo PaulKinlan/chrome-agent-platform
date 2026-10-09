@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.610] — 2026-10-09
+- Concurrent requests to one connected agent now show a clear refusal instead of running twice.
+
 ## [0.3.610] — 2026-10-08
 - Clarify the scope of attached site-tool approval for a run and document.
 
