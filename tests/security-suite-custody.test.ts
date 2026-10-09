@@ -13,8 +13,10 @@ import {
   isVanishedGroupError,
   isVanishedProcError,
   pidAlive,
+  ProcessGoneError,
   PROFILE_ROOT,
   readProcIdentity,
+  residueForReceipt,
   resolveSupervisorConfig,
   SELF_TEST_TOKEN,
   terminateAttestedGroup,
@@ -186,30 +188,36 @@ async function verifyLiveProcOwnership(
   pid: number,
   expectedStart: string,
   timeoutMs = 2_000,
-): Promise<{ starttime: string; uid: number }> {
+  readIdentity = readProcIdentity,
+): Promise<{ status: "live"; starttime: string; uid: number } | {
+  status: "vanished"; reason: "pid-vanished-during-ownership-inspection";
+}> {
   const deadline = Date.now() + timeoutMs;
-  let lastError: Error | null = null;
   while (Date.now() < deadline) {
+    let id;
     try {
-      const id = await readProcIdentity(pid);
-      if (id.state !== "Z") {
-        if (id.starttime !== expectedStart) {
-          throw new Error(
-            `proc ${pid} starttime mismatch: expected ${expectedStart}, got ${id.starttime}`,
-          );
-        }
-        return id;
+      id = await readIdentity(pid);
+    } catch (error) {
+      const failure = error as { code?: string; path?: string; message?: string };
+      // This read is INSIDE the live-ownership check, not the earlier dead-pid
+      // pre-check. Only absence of this exact pid's /proc entry is "vanished".
+      const procPath = `/proc/${pid}`;
+      if (error instanceof ProcessGoneError ||
+          (isVanishedProcError(failure) &&
+           (failure.path === procPath || failure.path === `${procPath}/stat`))) {
+        return { status: "vanished", reason: "pid-vanished-during-ownership-inspection" };
       }
-    } catch (err) {
-      lastError = err as Error;
+      throw new Error(`custody ownership unverified for pid ${pid}: ${failure.code ?? failure.message ?? "unknown"}`);
+    }
+    if (id.state !== "Z") {
+      if (id.starttime !== expectedStart) {
+        throw new Error(`custody ownership unverified for pid ${pid}: starttime mismatch (expected ${expectedStart}, got ${id.starttime})`);
+      }
+      return { status: "live", starttime: id.starttime, uid: id.uid };
     }
     await new Promise((r) => setTimeout(r, 20));
   }
-  throw new Error(
-    `custody verification failed for pid ${pid} (expected start ${expectedStart}): ${
-      lastError?.message ?? "process not live"
-    }`,
-  );
+  throw new Error(`custody ownership unverified for pid ${pid}: process not live (zombie)`);
 }
 
 Deno.test("security-suite custody: production mode is immutable and fake runners are hash-pinned", async () => {
@@ -225,6 +233,8 @@ Deno.test("security-suite custody: production mode is immutable and fake runners
   assertEquals(production.timeoutMs, 120_000);
   assertEquals(production.attestDeadlineMs, 2_000, "production keeps the old attestation clock");
   assertEquals(production.sampleFreezeMs, 0, "production keeps zero sample freeze");
+  assertEquals(production.forceObservationUnreadable, false);
+  assertEquals(production.forceResidueUnreadable, false);
   assertEquals(production.runner, RUNNER);
 
   await assertRejects(
@@ -292,6 +302,13 @@ Deno.test("security-suite custody: production mode is immutable and fake runners
     Error,
     "self-test-only override refused in production mode",
   );
+
+  for (const name of ["CAP_SECURITY_TEST_FORCE_OBSERVATION_UNREADABLE", "CAP_SECURITY_TEST_FORCE_RESIDUE_UNREADABLE"]) {
+    await assertRejects(() => resolveSupervisorConfig({
+      env: { HOME: Deno.env.get("HOME") ?? "", [name]: "1" },
+      repoRoot: ROOT, expectedFixtureHash: "unused-in-production",
+    }), Error, "self-test-only override refused in production mode");
+  }
 
   const fake = await Deno.makeTempFile({ prefix: "cap-hostile-runner-" });
   await Deno.writeTextFile(fake, "process.exit(0);\n");
@@ -640,6 +657,8 @@ Deno.test("security-suite custody: exit 37 and runner signal propagate exactly",
   try {
     assertEquals(nonzero.code, 37);
     assertEquals(nonzero.receipt?.exit, 37);
+    assertEquals(nonzero.receipt?.observationUnverifiedReason, undefined,
+      "healthy sampling adds no receipt field");
   } finally {
     await removeEvidence(nonzero);
   }
@@ -652,6 +671,58 @@ Deno.test("security-suite custody: exit 37 and runner signal propagate exactly",
   } finally {
     await removeEvidence(signaled);
   }
+});
+
+Deno.test("yuu9s: persistently unreadable process table exits 70 with an empty observed set and a named receipt", async () => {
+  const result = await runSupervisor("exit37", 2_000, { CAP_SECURITY_TEST_FORCE_OBSERVATION_UNREADABLE: "1" });
+  try {
+    assertEquals(result.code, 70, "custody failure overrides a runner's exit 37");
+    assertEquals(result.receipt?.exit, 70);
+    assertEquals(result.receipt?.result, "FAIL");
+    assertEquals(result.receipt?.residue, [], "no invented pid: the observation itself was unverified");
+    assert(String(result.receipt?.observationUnverifiedReason).includes("EMFILE"));
+    assert(String(result.receipt?.custodyReason).includes("observation-unverified:"));
+    assertEquals(result.receipt?.cleaned, true);
+  } finally {
+    await removeEvidence(result);
+  }
+});
+
+Deno.test("yuu9s: supervisor receipt retains the reason for an unverified escape identity", async () => {
+  const result = await runSupervisor("escape", ESCAPE_SELF_TEST_BUDGET_MS, {
+    CAP_SECURITY_TEST_ACK_DEADLINE_MS: String(ESCAPE_ACK_DEADLINE_MS),
+    CAP_SECURITY_TEST_FORCE_RESIDUE_UNREADABLE: "1",
+  });
+  let escapedPid = 0;
+  let escapedStart = "";
+  try {
+    assertEquals(result.code, 70);
+    const recorded = result.state.find((row) => row.event === "escape-child-spawned");
+    escapedPid = Number(recorded?.childPid ?? await escapeChildPidFrom(`${result.receipt?.evidence}/self-test-state.jsonl`));
+    assert(Number.isSafeInteger(escapedPid) && escapedPid > 0, "the fixture must name its escape child");
+    const row = matchEscapeResidueByIdentity(
+      (result.receipt?.residue as Array<Record<string, unknown>>) ?? [], escapedPid);
+    escapedStart = String(row.starttime);
+    assertEquals(row.unverified, true, "the receipt must not present this identity as verified");
+    assert(String(row.unverifiedReason).includes("EMFILE"), `missing reason: ${JSON.stringify(row)}`);
+    assertEquals(result.receipt?.custodyReason, "descendant-residue");
+  } finally {
+    if (!escapedPid) {
+      const recorded = result.state.find((row) => row.event === "escape-child-spawned");
+      if (typeof recorded?.childPid === "number") escapedPid = recorded.childPid;
+    }
+    if (escapedPid > 0) {
+      try {
+        const current = await readProcIdentity(escapedPid);
+        if (!escapedStart || (current.starttime === escapedStart && current.uid === Deno.uid())) {
+          Deno.kill(escapedPid, "SIGKILL");
+        }
+      } catch { /* already gone */ }
+      await waitUntil(() => pidAlive(escapedPid), REAP_SETTLE_TIMEOUT_MS);
+    }
+    await removeEvidence(result);
+  }
+  assertEquals(pidAlive(escapedPid), false);
 });
 
 Deno.test("security-suite custody: live cleanup helper refuses real symlink/wrong-prefix and injected wrong owner", async () => {
@@ -744,9 +815,16 @@ Deno.test("security-suite custody: escaped descendant fails THIS run (exit 70) a
     );
     escapedPid = Number(matchingResidue.pid);
     escapedStart = String(matchingResidue.starttime);
-    const live = await verifyLiveProcOwnership(escapedPid, escapedStart);
-    assertEquals(live.starttime, escapedStart);
-    assertEquals(live.uid, Deno.uid());
+    assert(escapedStart.length > 0, "the receipt must retain the sampled escape identity");
+    const inspected = await verifyLiveProcOwnership(escapedPid, escapedStart);
+    if (inspected.status === "live") {
+      assertEquals(inspected.starttime, escapedStart);
+      assertEquals(inspected.uid, Deno.uid());
+    } else {
+      assertEquals(inspected.reason, "pid-vanished-during-ownership-inspection");
+      // Receipt + fixture still prove the child was seen; its later exit is not
+      // a process-table failure or a reason to discard this run's exit 70.
+    }
     // uzik: the finding is this run's own (receipt + exit code). It must NOT be
     // smeared onto every later run on the box via a shared marker — that was
     // yr6e, a full-suite red caused by another lane's transient file.
@@ -885,9 +963,16 @@ Deno.test(
       );
       escapedPid = Number(matchingResidue.pid);
       escapedStart = String(matchingResidue.starttime);
-      const live = await verifyLiveProcOwnership(escapedPid, escapedStart);
-      assertEquals(live.starttime, escapedStart);
-      assertEquals(live.uid, Deno.uid());
+      assert(escapedStart.length > 0, "the receipt must retain the sampled escape identity");
+      const inspected = await verifyLiveProcOwnership(escapedPid, escapedStart);
+      if (inspected.status === "live") {
+        assertEquals(inspected.starttime, escapedStart);
+        assertEquals(inspected.uid, Deno.uid());
+      } else {
+        assertEquals(inspected.reason, "pid-vanished-during-ownership-inspection");
+        // Receipt + ACK prove the recorded child existed even though this later
+        // read found that its exact pid vanished before inspection finished.
+      }
       /**
        * d2vz: 70/residue is only HALF the guard. The handshake's other half is
        * that the runner CONSUMED the supervisor's ACK for its real child — the
@@ -1031,14 +1116,45 @@ Deno.test("security-suite custody: residue matching selects escape child by iden
   assertEquals(match.starttime, "67890");
 });
 
-// chrome-agent-platform-wtjz: verifyLiveProcOwnership fails with named reason rather than raw ENOENT for non-existent pid
-Deno.test("security-suite custody: verifyLiveProcOwnership fails with named reason rather than raw ENOENT for non-existent pid", async () => {
-  const deadPid = 999999999;
+Deno.test("yuu9s: a pid vanishing MID ownership inspection is a named absence, not a raw /proc throw", async () => {
+  const pid = 424242;
+  let reads = 0;
+  const result = await verifyLiveProcOwnership(pid, "1000", 100, async () => {
+    reads++;
+    if (reads === 1) return { pid, ppid: 1, pgid: pid, sid: pid, state: "Z", starttime: "1000", uid: Deno.uid() ?? 0 };
+    throw Object.assign(new Error(`ENOENT: stat /proc/${pid}`), {
+      code: "ENOENT", path: `/proc/${pid}`, sysCall: "stat",
+    });
+  });
+  assertEquals(reads, 2, "failure must be on the second read INSIDE the ownership inspection");
+  assertEquals((result as unknown as { status?: string }).status, "vanished");
+  assertEquals((result as unknown as { reason?: string }).reason, "pid-vanished-during-ownership-inspection");
+});
+
+Deno.test("yuu9s: unreadable /proc identity is named unverified, never a vanished pid", async () => {
+  const pid = 424243;
   await assertRejects(
-    () => verifyLiveProcOwnership(deadPid, "12345", 50),
+    () => verifyLiveProcOwnership(pid, "1000", 100, async () => {
+      throw Object.assign(new Error("EMFILE: /proc exhausted"), { code: "EMFILE", path: `/proc/${pid}/stat` });
+    }),
     Error,
-    `custody verification failed for pid ${deadPid}`,
+    `custody ownership unverified for pid ${pid}: EMFILE`,
   );
+  await assertRejects(
+    () => verifyLiveProcOwnership(pid, "1000", 100, async () => {
+      throw Object.assign(new Error("ENOENT: unrelated path"), { code: "ENOENT", path: "/tmp/unrelated" });
+    }),
+    Error,
+    `custody ownership unverified for pid ${pid}: ENOENT`,
+  );
+});
+
+// wtjz and yuu9s: a dead pid is a named absence; unreadable is NOT dead.
+Deno.test("security-suite custody: verifyLiveProcOwnership names an absent pid rather than leaking raw ENOENT", async () => {
+  const deadPid = 999999999;
+  assertEquals(await verifyLiveProcOwnership(deadPid, "12345", 50), {
+    status: "vanished", reason: "pid-vanished-during-ownership-inspection",
+  });
 });
 
 // ── chrome-agent-platform-8ixk ─────────────────────────────────────────────
@@ -1340,6 +1456,16 @@ Deno.test("8ixk: a clean run records no custody reason", () => {
 Deno.test("8ixk: each finding records its own reason", () => {
   assertEquals(custodyReasonFor({ survived: true }), "owned-group-survived");
   assertEquals(custodyReasonFor({ residueCount: 2 }), "descendant-residue");
+  assertEquals(custodyReasonFor({ observationUnverifiedReason: "EMFILE", leaderExited: true }),
+    "observation-unverified:EMFILE", "unverified outranks benign teardown markers");
+  assertEquals(custodyReasonFor({ observationUnverifiedReason: "EMFILE", residueCount: 1 }),
+    "descendant-residue", "a specific observed residue outranks a failed sample");
+  assertEquals(residueForReceipt([{ pid: 9, starttime: "1", pgid: 9, sid: 9 }]),
+    [{ pid: 9, starttime: "1", pgid: 9, sid: 9 }], "verified residue keeps its exact receipt shape");
+  assertEquals(residueForReceipt([{
+    pid: 9, starttime: "1", pgid: 9, sid: 9, unverified: true, unverifiedReason: "EMFILE",
+  }]), [{ pid: 9, starttime: "1", pgid: 9, sid: 9, unverified: true, unverifiedReason: "EMFILE" }],
+    "unverified identity reason survives the receipt mapping");
   assertEquals(
     custodyReasonFor({ cleanupOk: false, cleanupReason: "profile is not an owned regular directory" }),
     "cleanup-refused:profile is not an owned regular directory",

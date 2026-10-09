@@ -18,6 +18,8 @@ import {
   liveObservedResidue,
   makeReadOnly,
   observeDescendants,
+  ProcessUnreadableError,
+  residueForReceipt,
   pidAlive,
   PROFILE_ROOT,
   readProcIdentity,
@@ -137,6 +139,8 @@ if (config.selfTest) {
 delete childEnv.CAP_SECURITY_TEST_ATTEST_DEADLINE_MS;
 delete childEnv.CAP_SECURITY_TEST_FORCE_ATTEST_UNSETTLED;
 delete childEnv.CAP_SECURITY_TEST_SAMPLE_FREEZE_MS;
+delete childEnv.CAP_SECURITY_TEST_FORCE_OBSERVATION_UNREADABLE;
+delete childEnv.CAP_SECURITY_TEST_FORCE_RESIDUE_UNREADABLE;
 
 const stdio = ["ignore", runnerHandle.fd, runnerHandle.fd];
 while (stdio.length < 9) stdio.push("ignore");
@@ -269,9 +273,24 @@ const sampleFreezeMs = config.sampleFreezeMs ?? 0;
 if (sampleFreezeMs > 0) {
   await new Promise((resolve) => setTimeout(resolve, sampleFreezeMs));
 }
-// Observation is best-effort sampling: one failed sample must never crash the
-// supervisor (an unhandled rejection in the interval callback did, under
-// process churn — CAP-FB-20260830-SUITE-HONESTY-01).
+// Observation is best-effort sampling: a failed sample must not crash this
+// supervisor, but it also cannot prove the process table was empty. Retain a
+// failure after the last success and any failure before a descendant was ever
+// seen (that blind window cannot be repaired by a later scan).
+let observationFailure = "";
+let emptyObservationFailure = "";
+const observationDeps = config.forceObservationUnreadable
+  ? { hasProc: false, run: async () => { throw Object.assign(new Error("self-test: process table unreadable"), { code: "EMFILE" }); } }
+  : {};
+async function sampleObserved() {
+  try {
+    await observeDescendants(child.pid, observed, observationDeps);
+    observationFailure = "";
+  } catch (error) {
+    observationFailure = String(error?.message ?? error).slice(0, 200);
+    if (observed.size === 0) emptyObservationFailure ||= observationFailure;
+  }
+}
 const ackPath = path.join(out, "sample-ack.json");
 let ackedPids = "";
 async function ackSample() {
@@ -292,16 +311,14 @@ async function ackSample() {
     // wait then refuses loudly rather than passing silently.
   }
 }
-await observeDescendants(child.pid, observed).catch(() => {});
+await sampleObserved();
 await ackSample();
 const monitor = setInterval(async () => {
   if (sampling) return;
   sampling = true;
   try {
-    await observeDescendants(child.pid, observed);
+    await sampleObserved();
     await ackSample();
-  } catch {
-    // A missed sample; the next tick samples again.
   } finally {
     sampling = false;
   }
@@ -417,9 +434,9 @@ if (
   ]);
 }
 
-await observeDescendants(child.pid, observed).catch(() => {});
 clearInterval(monitor);
 while (sampling) await new Promise((resolve) => setTimeout(resolve, 5));
+await sampleObserved();
 
 if (groupAlive(attestation.identity.pgid)) {
   const extra = await terminateAttestedGroupSafely({
@@ -441,7 +458,10 @@ if (groupAlive(attestation.identity.pgid)) {
   };
 }
 
-const residue = await liveObservedResidue(observed);
+const residue = await liveObservedResidue(observed, config.forceResidueUnreadable
+  ? { readIdentity: async (pid) => { throw new ProcessUnreadableError(pid, "self-test: identity unreadable (EMFILE)"); } }
+  : {});
+const observationUnverifiedReason = emptyObservationFailure || observationFailure;
 // This run's own custody finding. It is NOT written to a shared marker any
 // more (uzik): the exit code and the receipt carry it, so a residue escape
 // fails THIS run loudly without poisoning the next lane's browser gate.
@@ -456,6 +476,7 @@ const cleanup = await cleanupExactProfile({ profile, root: PROFILE_ROOT });
 let custodyReason = custodyReasonFor({
   survived: termination.survived,
   residueCount: residue.length,
+  observationUnverifiedReason,
   cleanupOk: cleanup.ok,
   cleanupReason: cleanup.reason ?? "",
   leaderExited: termination.leaderExited === true,
@@ -484,7 +505,7 @@ if (interruptedSignal) {
   exitCode = 124;
 }
 if (termination.survived) exitCode = 72;
-if (residue.length > 0) exitCode = 70;
+if (residue.length > 0 || observationUnverifiedReason) exitCode = 70;
 if (!cleanup.ok) exitCode = 71;
 // A teardown that THREW is a genuine custody refusal (EPERM, an identity change),
 // not one of the two benign races. Before 8ixk it escaped as an uncaught rejection:
@@ -515,12 +536,8 @@ const receipt = {
   termSent: termination.termSent,
   killSent: termination.killSent,
   groupSurvived: termination.survived,
-  residue: residue.map(({ pid, starttime, pgid, sid }) => ({
-    pid,
-    starttime,
-    pgid,
-    sid,
-  })),
+  residue: residueForReceipt(residue),
+  ...(observationUnverifiedReason ? { observationUnverifiedReason } : {}),
   custodyReason,
   cleaned: cleanup.ok && cleanup.removed,
 };
