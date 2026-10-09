@@ -12,7 +12,7 @@
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { runSerialFile } from "../scripts/lib/serial-phase.mjs";
+import { classifyReadyMarkerTimeout, runSerialFile } from "../scripts/lib/serial-phase.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -384,6 +384,70 @@ Deno.test("passes immediately without marker", () => {
       cwd: ROOT,
     });
     assertEquals(res.code, 124, "exiting without ready marker must fail closed with exit 124");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("xy6n2: a marker after the 5s soft deadline succeeds only when load is named and bounded", async () => {
+  const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-late-ready-" });
+  const readyFile = `${tempDir}/late.marker`;
+  const tempTest = `${tempDir}/late-ready.test.ts`;
+  await Deno.writeTextFile(tempTest, `
+await new Promise((resolve) => setTimeout(resolve, 6000));
+await Deno.writeTextFile(${JSON.stringify(readyFile)}, "ready");
+Deno.test("passes after late marker", () => {});
+`);
+  try {
+    const res = runSerialFile(tempTest, {
+      timeoutMs: 2_000,
+      readyFile,
+      readyTimeoutMs: 5_000,
+      readyLoadPerCpu: 4, // deterministic injected reading, never manufacture system load
+      stdio: "pipe",
+      cwd: ROOT,
+    } as Parameters<typeof runSerialFile>[1]);
+    assertEquals(res.code, 0, `late marker must not be killed by the soft bound: ${res.stderr?.toString()}`);
+    assertEquals(res.timedOut, false);
+    assert((res.stderr?.toString() ?? "").includes("READY_MARKER_LOADED_GRACE"),
+      "the extension must name its measured/injected load and hard bound");
+    assertEquals(await Deno.readTextFile(readyFile), "ready", "fixture must write the marker event");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("xy6n2: ready timeout classification has an idle bound, measured x4 load cap, and unmeasurable refusal", () => {
+  assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 1 }),
+    { cause: "idle-never-settled", loadPerCpu: 1, hardTimeoutMs: 5_000 });
+  assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 2.5 }),
+    { cause: "loaded", loadPerCpu: 2.5, hardTimeoutMs: 12_500 });
+  assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 99 }),
+    { cause: "loaded", loadPerCpu: 99, hardTimeoutMs: 20_000 });
+  assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: null }),
+    { cause: "unmeasurable", loadPerCpu: null, hardTimeoutMs: 5_000 });
+});
+
+Deno.test("xy6n2: loaded grace still refuses a genuinely absent marker by a named hard bound", async () => {
+  const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-loaded-no-marker-" });
+  const readyFile = `${tempDir}/missing.marker`;
+  const tempTest = `${tempDir}/hangs-without-marker.test.ts`;
+  await Deno.writeTextFile(tempTest, `Deno.test("never writes marker", () => new Promise(() => {}));\n`);
+  try {
+    const res = runSerialFile(tempTest, {
+      timeoutMs: 1_000,
+      readyFile,
+      readyTimeoutMs: 500,
+      readyLoadPerCpu: 4,
+      stdio: "pipe",
+      cwd: ROOT,
+    });
+    assertEquals(res.code, 124, "loaded grace must not turn an absent marker into a pass");
+    assertEquals(res.timedOut, true);
+    const reason = res.stderr?.toString() ?? "";
+    assert(reason.includes("READY_MARKER_LOADED_GRACE"), `missing load attribution: ${reason}`);
+    assert(reason.includes("READY_MARKER_TIMEOUT_LOADED"), `missing hard-bound classification: ${reason}`);
+    assertEquals(await Deno.stat(readyFile).then(() => true).catch(() => false), false);
   } finally {
     await Deno.remove(tempDir, { recursive: true }).catch(() => {});
   }
