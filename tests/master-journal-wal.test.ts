@@ -5,6 +5,7 @@ import {
   readMasterJournalProjection,
   sealMasterJournalRecord,
   stageMasterJournalCutover,
+  stageMasterJournalFrame,
   unsealMasterJournalRecord,
 } from "../extension/lib/master-journal-wal.js";
 
@@ -130,7 +131,48 @@ Deno.test("published but missing or changed checkpoint fails closed; incomplete 
   }));
   const newer = { ...head, sequence: 1, version: 19 };
   (await wal.getFileHandle("head-b.json", { create: true })).bytes = encoder.encode(await sealMasterJournalRecord("head", newer));
-  await assertRejects(() => readMasterJournalProjection(master), Error, "frame replay is not enabled");
+  await assertRejects(() => readMasterJournalProjection(master), Error, "frame 1 is missing");
+});
+
+Deno.test("immutable checked frames replay without changing raw legacy; missing acknowledged frame refuses", async () => {
+  const { master, legacy, allocateVersion } = await legacyFixture();
+  await stageMasterJournalCutover(master, { journalExists: true, journal: [{ id: 1 }], archive: [], allocateVersion });
+  const head = await stageMasterJournalFrame(master, { operation: "append", row: { id: 2 } }, { allocateVersion });
+  assertEquals(head.sequence, 1);
+  assertEquals((await readMasterJournalProjection(master)).live, [{ id: 1 }, { id: 2 }]);
+  assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy);
+  const wal = await master.getDirectoryHandle("journal-wal");
+  const frame = await wal.getFileHandle(`frame-${head.epoch}-1.json`);
+  frame.bytes = encoder.encode("{\"torn\":");
+  await assertRejects(() => readMasterJournalProjection(master), Error, "corrupt");
+});
+
+Deno.test("failed immutable frame close is not published, failed head close refuses rather than falling back", async () => {
+  const faults = {};
+  const { master, allocateVersion } = await legacyFixture(faults);
+  const head = await stageMasterJournalCutover(master, { journalExists: true, journal: [], archive: [], allocateVersion });
+  faults.close = `frame-${head.epoch}-1.json`;
+  await assertRejects(() => stageMasterJournalFrame(master, { operation: "append", row: { id: 1 } }, { allocateVersion }), Error, "injected close");
+  assertEquals((await readMasterJournalProjection(master)).live, [], "unpublished frame is not authority");
+  faults.close = "head-b.json";
+  await assertRejects(() => stageMasterJournalFrame(master, { operation: "append", row: { id: 1 } }, { allocateVersion }), Error, "injected close");
+  await assertRejects(() => readMasterJournalProjection(master), Error, "corrupt");
+});
+
+Deno.test("checked frame chain applies 500 cap, preserves overflow and fences clear", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  const live = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await stageMasterJournalCutover(master, { journalExists: true, journal: live, archive: [], allocateVersion });
+  await stageMasterJournalFrame(master, { operation: "append", row: { id: 500 } }, { allocateVersion });
+  const grown = await readMasterJournalProjection(master, { includeArchive: true });
+  assertEquals(grown.live.length, 500);
+  assertEquals(grown.live[0].id, 1);
+  assertEquals(grown.archive, [{ id: 0 }]);
+  await stageMasterJournalFrame(master, { operation: "clear" }, { allocateVersion });
+  const cleared = await readMasterJournalProjection(master, { includeArchive: true });
+  assertEquals(cleared.exists, false);
+  assertEquals(cleared.live, []);
+  assertEquals(cleared.archive, []);
 });
 
 Deno.test("checksum, kind and UTF-8 corruption are refused rather than silently skipped", async () => {

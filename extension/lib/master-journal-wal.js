@@ -102,6 +102,9 @@ export async function readMasterJournalHead(master) {
     if (head) heads.push(validateHead(head));
   }
   if (heads.length === 0) return null;
+  if (heads.length === 1 && !(await optionalFile(directory, HEADS[0]))) {
+    throw new Error("master journal cutover head is missing");
+  }
   if (heads.length === 2 && heads[0].epoch !== heads[1].epoch) throw new Error("master journal head epochs disagree");
   if (heads.length === 2 && heads[0].sequence === heads[1].sequence && JSON.stringify(heads[0]) !== JSON.stringify(heads[1])) {
     throw new Error("master journal heads fork at the same sequence");
@@ -126,20 +129,87 @@ export async function readMasterJournalProjection(master, { includeArchive = fal
       typeof checkpoint.exists !== "boolean" || !Array.isArray(checkpoint.live)) {
     throw new Error("master journal checkpoint is missing or corrupt");
   }
-  if (head.sequence !== head.checkpointSequence) {
-    // Replay is enabled only when the full framed writer and versioned CAS
-    // adapter are installed together. Refuse rather than fall back to stale JSON.
-    throw new Error("master journal frame replay is not enabled");
-  }
+  // A checkpoint can contain up to 500 WHOLE rows. A different limit here
+  // would let a malformed export bypass the bounded live view.
+  if (checkpoint.live.length > 500) throw new Error("master journal checkpoint is unbounded");
   const result = { exists: checkpoint.exists, live: structuredClone(checkpoint.live), version: head.version, head };
+  let previousHash = expectedHeadHash;
+  let previousVersion = head.epoch;
+  const overflow = [];
+  let archiveCleared = false;
+  for (let sequence = head.checkpointSequence + 1; sequence <= head.sequence; sequence++) {
+    if (sequence - head.checkpointSequence > 128) throw new Error("master journal replay exceeds the checkpoint bound");
+    const file = await optionalFile(directory, `frame-${head.epoch}-${sequence}.json`);
+    if (!file) throw new Error(`master journal frame ${sequence} is missing`);
+    const serialized = DECODER.decode(await (await file.getFile()).arrayBuffer());
+    const frame = await unsealMasterJournalRecord(serialized, "frame");
+    if (frame.epoch !== head.epoch || frame.sequence !== sequence || frame.previousHash !== previousHash ||
+        !safeInteger(frame.version, previousVersion + 1)) {
+      throw new Error("master journal frame chain or version is corrupt");
+    }
+    if (frame.operation === "append" && frame.row && typeof frame.row === "object" && !Array.isArray(frame.row)) {
+      result.live.push(structuredClone(frame.row));
+      if (result.live.length > 500) overflow.push(...result.live.splice(0, result.live.length - 500));
+      result.exists = true;
+    } else if (frame.operation === "replace" && Array.isArray(frame.rows) && frame.rows.length <= 500) {
+      result.live = structuredClone(frame.rows);
+      result.exists = true;
+    } else if (frame.operation === "delete") {
+      result.live = [];
+      result.exists = false;
+    } else if (frame.operation === "clear") {
+      result.live = [];
+      result.exists = false;
+      overflow.length = 0;
+      archiveCleared = true;
+    } else throw new Error("master journal frame operation is corrupt");
+    previousVersion = frame.version;
+    previousHash = await hash(serialized);
+  }
+  if (head.lastHash !== previousHash || (head.sequence > head.checkpointSequence && head.version !== previousVersion)) {
+    throw new Error("master journal terminal head does not match its checked frame chain");
+  }
   if (includeArchive) {
     const archive = await readRecord(directory, head.archive, "archive");
     if (!archive || archive.epoch !== head.epoch || !Array.isArray(archive.rows)) {
       throw new Error("master journal archive is missing or corrupt");
     }
-    result.archive = structuredClone(archive.rows);
+    result.archive = archiveCleared ? overflow : [...structuredClone(archive.rows), ...overflow];
   }
   return result;
+}
+
+/** Writes a checked immutable operation frame then publishes one alternating
+ * checked head slot. Test-only until the master store's *every* mutation and
+ * export path use a single lock + projection. A failed head close is NOT an
+ * acknowledgement; recovery fails closed on a corrupt present head. */
+export async function stageMasterJournalFrame(master, operation, { allocateVersion } = {}) {
+  if (typeof allocateVersion !== "function") throw new Error("master journal frame requires a durable version issuer");
+  if (!operation || typeof operation !== "object" || Array.isArray(operation) ||
+      !["append", "replace", "delete", "clear"].includes(operation.operation) ||
+      (operation.operation === "append" && (!operation.row || typeof operation.row !== "object" || Array.isArray(operation.row))) ||
+      (operation.operation === "replace" && (!Array.isArray(operation.rows) || operation.rows.length > 500)) ||
+      Object.keys(operation).some((key) => !["operation", "row", "rows"].includes(key))) {
+    throw new Error("invalid master journal frame operation");
+  }
+  const before = await readMasterJournalProjection(master);
+  if (!before) throw new Error("master journal must be cut over before framing a write");
+  const { head } = before;
+  if (head.sequence - head.checkpointSequence >= 128) throw new Error("master journal needs verified compaction before another frame");
+  const sequence = head.sequence + 1;
+  const version = await allocateVersion();
+  if (!safeInteger(version, head.version + 1)) throw new Error("master journal version must increase");
+  const payload = { ...operation, epoch: head.epoch, sequence, previousHash: head.lastHash, version };
+  const directory = await optionalDirectory(master);
+  const frameName = `frame-${head.epoch}-${sequence}.json`;
+  await writeCheckedRecord(directory, frameName, "frame", payload);
+  // Bind the published head to the exact bytes read back, not a filename alone.
+  const frame = await directory.getFileHandle(frameName);
+  const serialized = DECODER.decode(await (await frame.getFile()).arrayBuffer());
+  await unsealMasterJournalRecord(serialized, "frame");
+  const next = validateHead({ ...head, sequence, version, lastHash: await hash(serialized) });
+  await writeCheckedRecord(directory, HEADS[sequence % 2], "head", next);
+  return next;
 }
 
 /** Testable crash-safe cutover primitive; NOT invoked by the product until all
