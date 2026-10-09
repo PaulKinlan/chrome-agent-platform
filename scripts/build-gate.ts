@@ -15,7 +15,6 @@
 
 import { fileURLToPath } from "node:url";
 import { runSerialFiles } from "./lib/serial-phase.mjs";
-import { durableDir } from "./lib/durable-root.mjs";
 import { BUILD_GATE_FILES } from "./test-partition.mjs";
 import { pidRuns, removeSibling, resolveSiblingRoot, sweepStaleSiblings } from "./gate.mjs";
 
