@@ -4,9 +4,26 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker, teardownChrome, SW_MATCH } from "./lib/chrome-launch.ts";
+import {
+  launchChrome,
+  waitForServiceWorker,
+  teardownChrome,
+  SW_MATCH,
+  ServiceWorkerTargetTimeoutError,
+} from "./lib/chrome-launch.ts";
 import { textToDataUrl } from "../extension/lib/attachments.js";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
+import {
+  createClassifiedCdpClient,
+  CdpEvaluateLoadTimeoutError,
+  CdpEvaluateIdleTimeoutError,
+  evaluateTimeoutReport,
+} from "./lib/kat-evaluate.ts";
+import {
+  classifyEvaluateTimeout,
+  measureEvaluateTimeout,
+  readLoadSample,
+} from "./lib/quiet-window.ts";
 
 const EXT = fileURLToPath(new URL("../extension", import.meta.url));
 const profile = chromeProfileDir("kat-site-delegate");
@@ -22,30 +39,47 @@ const { proc, wsUrl } = await launchChrome({
   ],
 });
 
-const HARD_TIMEOUT_MS = 35_000;
+const HARD_TIMEOUT_MS = 60_000;
+let client: ReturnType<typeof createClassifiedCdpClient> | null = null;
+let ws: WebSocket | null = null;
+
 const hardTimer = setTimeout(async () => {
-  console.error(`kat-site-delegation-attachments: timed out after ${HARD_TIMEOUT_MS} ms`);
+  console.error(`kat-site-delegation-attachments: hard timeout reached (${HARD_TIMEOUT_MS}ms) — measuring host load...`);
+  let exitCode = 1;
+  let line: string | null = null;
+  try {
+    const verdict = await measureEvaluateTimeout().catch(async () => {
+      const sample = await readLoadSample().catch(() => null);
+      return classifyEvaluateTimeout(sample);
+    });
+    const report = evaluateTimeoutReport(verdict);
+    exitCode = report.exitCode;
+    line = report.line;
+  } catch (e) {
+    line = `kat-site-delegation-attachments: timed out after ${HARD_TIMEOUT_MS} ms (measurement threw: ${e})`;
+  }
+  if (line) console.error(line);
+  try { client?.close(); } catch {}
+  try { ws?.close(); } catch {}
   await teardownChrome(proc, profile).catch(() => {});
-  Deno.exit(1);
+  await Deno.remove(profile, { recursive: true }).catch(() => {});
+  Deno.exit(exitCode);
 }, HARD_TIMEOUT_MS);
 
-const ws = new WebSocket(wsUrl);
+ws = new WebSocket(wsUrl);
 await new Promise((r) => { ws.onopen = r; });
-let id = 0;
-const pending = new Map<number, (v: any) => void>();
+client = createClassifiedCdpClient((msg) => ws?.send(msg), {
+  baseTimeoutMs: 10_000,
+  starvationTimeoutMs: 30_000,
+});
 ws.onmessage = (e) => {
-  const d = JSON.parse(e.data as string);
-  if (d.id && pending.has(d.id)) { pending.get(d.id)!(d); pending.delete(d.id); }
+  client?.onMessage(e.data as string);
 };
-const send = (m: string, p: any = {}, s?: string) =>
-  new Promise<any>((res, rej) => {
-    const i = ++id;
-    const t = setTimeout(() => { pending.delete(i); rej(new Error(`CDP ${m} timed out`)); }, 10_000);
-    pending.set(i, (val) => { clearTimeout(t); res(val); });
-    ws.send(JSON.stringify({ id: i, method: m, params: p, sessionId: s }));
-  });
+const send = (m: string, p: any = {}, s?: string) => client!.send(m, p, s);
 
 let failed = 0;
+let exitCode = 0;
+let exitLine: string | null = null;
 
 try {
   const sw = await waitForServiceWorker(send, {
@@ -148,11 +182,31 @@ try {
   failed = results.filter((r) => r.startsWith("FAIL")).length;
   console.log(`\nsite delegation acceptance: ${results.length - failed}/${results.length} passed`);
 
+} catch (err: any) {
+  if (err instanceof CdpEvaluateLoadTimeoutError) {
+    const report = evaluateTimeoutReport(err.verdict);
+    exitCode = report.exitCode;
+    exitLine = report.line;
+  } else if (err instanceof CdpEvaluateIdleTimeoutError) {
+    const report = evaluateTimeoutReport(err.verdict);
+    exitCode = report.exitCode;
+    exitLine = report.line;
+  } else if (err instanceof ServiceWorkerTargetTimeoutError) {
+    const report = evaluateTimeoutReport(err.verdict);
+    exitCode = report.exitCode;
+    exitLine = report.line;
+  } else {
+    exitCode = 1;
+    exitLine = `kat-site-delegation-attachments: failure — ${err?.stack ?? err?.message ?? err}`;
+  }
 } finally {
   clearTimeout(hardTimer);
-  try { ws.close(); } catch {}
+  try { client?.close(); } catch {}
+  try { ws?.close(); } catch {}
   await teardownChrome(proc, profile);
   await Deno.remove(profile, { recursive: true }).catch(() => {});
 }
 
-Deno.exit(failed ? 1 : 0);
+if (exitLine) console.error(exitLine);
+if (exitCode === 0 && failed > 0) exitCode = 1;
+Deno.exit(exitCode);
