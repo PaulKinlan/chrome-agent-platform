@@ -412,7 +412,7 @@ const HOSTILE: Array<Record<string, string>> = HAS_PROC || !isFile("/bin/ps") ||
   });
 
 Deno.test({
-  name: "jjsz F6: REAL ps under a hostile locale and zone still sees a real builder (the old walk dropped every row)",
+  name: "jjsz F6: REAL ps under a hostile locale and zone sees a builder [requires no-/proc, hostile locale, /bin/sleep]",
   ignore: HOSTILE.length === 0 || !isFile("/bin/sleep"),
   fn: async () => {
     const dir = durableDir("jjsz-macos-quiet-window", `${Deno.pid}-${crypto.randomUUID().slice(0, 8)}`);
