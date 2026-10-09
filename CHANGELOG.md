@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.619] — 2026-10-09
+- Fix split component cross-module imports and exports (ensureStyle, normalizeSiteActivity, fmtTime, backend, parseJSONAttr, wireHtmlFrame*) preventing ReferenceErrors on extension pages.
+
 ## [0.3.618] — 2026-10-09
 - Modularize shared/components.js into domain-scoped modules with components.js as an aggregating barrel, reducing UI bundle sizes across all surfaces while preserving the 12-bundle authority contract.
 

@@ -8,6 +8,8 @@ import { permissionUserLanguage, siteLabel } from "./permission-language.js";
 import {
   Component,
   PanelButton,
+  backend,
+  fmtTime,
   mountTemplate,
   ICONS,
   escapeHtml,
@@ -15,6 +17,7 @@ import {
   parseJSONAttr,
   summarizeInputSchema,
   placeFloating,
+  normalizeSiteActivity,
   visibleSiteActivityLabel,
   SITE_ACTIVITY_FOCUS_KEY,
 } from "./components-core.js";
