@@ -698,6 +698,7 @@ Deno.test("journal quota receipt restores absent vs empty and is idempotent", as
 Deno.test("journal quota compensation removes task/prompt rows and preserves foreign append + ring eviction", async () => {
   const mem = masterMemory();
   const seed = Array.from({ length: 500 }, (_, i) => ({ ts: i, type: "history", id: `old-${i}` }));
+  await mem.setTrusted("journal-archive", []);
   await mem.setTrusted("journal", seed);
   const receipt = await journalAppendWithReceipt(mem, { type: "task", executionId: "exec_receipt_rows", task: "x" });
   await journalAppend(mem, { type: "prompt-attestation", executionId: "exec_receipt_rows", receipt: "opaque" });
@@ -710,6 +711,8 @@ Deno.test("journal quota compensation removes task/prompt rows and preserves for
   assertEquals(rows.at(-1).executionId, "exec_foreign_later");
   assertEquals(rows.length, 500);
   assertEquals(rows[0].id, "old-1", "target eviction is restored; only the foreign append evicts old-0");
+  assertEquals((await mem.get("journal-archive")).map((row) => row.id), ["old-0", "old-1", "old-2", "old-3"],
+    "legacy archive is an append-only HISTORY LOG: compensation restores live rows without retracting prior evictions");
 });
 
 Deno.test("journal quota compensation fails closed on ABA and generation mismatch", async () => {
