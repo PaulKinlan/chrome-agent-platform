@@ -3,6 +3,7 @@
 // An old backup without WAL files keeps the legacy journal.json authority.
 import { classifyOpfsPath } from "./archive-target-registry.js";
 import {
+  readMasterJournalArchiveChain,
   readMasterJournalHead,
   readMasterJournalProjection,
   unsealMasterJournalRecord,
@@ -60,7 +61,8 @@ export async function validateStagedMasterJournalBackup(entries, readFile) {
   try {
     // The combined read detects conflicting slots; per-slot projections verify
     // both generations even if compaction gave them different checkpoints.
-    const selected = (await readMasterJournalProjection(master(), { includeArchive: true })).head;
+    const selectedProjection = await readMasterJournalProjection(master());
+    const selected = selectedProjection.head;
     const referenced = new Set();
     for (const name of HEADS) {
       if (!files.has(name)) continue;
@@ -69,11 +71,12 @@ export async function validateStagedMasterJournalBackup(entries, readFile) {
       // The combined read already verified the selected generation; replay
       // only a distinct older slot (possibly referencing another checkpoint).
       if (JSON.stringify(head) !== JSON.stringify(selected)) {
-        await readMasterJournalProjection(master(name), { includeArchive: true });
+        await readMasterJournalProjection(master(name));
       }
+      const chain = await readMasterJournalArchiveChain(master(name), head, { includeRows: false });
       referenced.add(name);
       referenced.add(head.checkpoint);
-      referenced.add(head.archive);
+      for (const archive of chain.names) referenced.add(archive);
       for (let sequence = head.checkpointSequence + 1; sequence <= head.sequence; sequence++) {
         referenced.add(`frame-${head.epoch}-${sequence}.json`);
       }
@@ -89,11 +92,11 @@ export async function validateStagedMasterJournalBackup(entries, readFile) {
 
 // Head slots are small checked metadata, unlike potentially large whole-row
 // checkpoints and archives. Bound an untrusted head before materializing it.
-async function readHeadBytes(open, path) {
+async function readHeadBytes(open, path, maxBytes = 65536, kind = "head") {
   const source = await open(path);
-  if (!Number.isSafeInteger(source?.size) || source.size < 1 || source.size > 65536 ||
+  if (!Number.isSafeInteger(source?.size) || source.size < 1 || source.size > maxBytes ||
       typeof source.stream?.getReader !== "function") {
-    throw new Error("master journal export head is missing, unbounded or unreadable");
+    throw new Error(`master journal export ${kind} is missing, unbounded or unreadable`);
   }
   const reader = source.stream.getReader();
   const bytes = new Uint8Array(source.size);
@@ -103,7 +106,7 @@ async function readHeadBytes(open, path) {
       const { done, value } = await reader.read();
       if (done) break;
       if (!(value instanceof Uint8Array) || size + value.byteLength > bytes.byteLength) {
-        throw new Error("master journal export head exceeds its declared size");
+        throw new Error(`master journal export ${kind} exceeds its declared size`);
       }
       bytes.set(value, size);
       size += value.byteLength;
@@ -114,7 +117,7 @@ async function readHeadBytes(open, path) {
   } finally {
     reader.releaseLock();
   }
-  if (size !== bytes.byteLength) throw new Error("master journal export head is incomplete");
+  if (size !== bytes.byteLength) throw new Error(`master journal export ${kind} is incomplete`);
   return bytes;
 }
 
@@ -150,12 +153,25 @@ export async function selectPublishedMasterJournalBackupPaths(paths, open) {
     if (name !== "journal-wal") throw absent(name);
     return headDirectory;
   } });
+  const archiveMaster = { async getDirectoryHandle(name) {
+    if (name !== "journal-wal") throw absent(name);
+    return { async getFileHandle(leaf) {
+      const path = wal.get(leaf);
+      if (!path) throw absent(leaf);
+      // Materialize only ONE bounded segment at a time; do not cache the
+      // entire unbounded archive chain in export process memory.
+      return { async getFile() { return { async arrayBuffer() {
+        return (await readHeadBytes(open, path, 512 * 1024 * 1024, "archive segment")).buffer;
+      } }; } };
+    } };
+  } };
   const published = new Set();
   for (const [name, bytes] of headBytes) {
     const head = await unsealMasterJournalRecord(bytes, "head");
     published.add(name);
     published.add(head.checkpoint);
-    published.add(head.archive);
+    const chain = await readMasterJournalArchiveChain(archiveMaster, head, { includeRows: false });
+    for (const archive of chain.names) published.add(archive);
     for (let sequence = head.checkpointSequence + 1; sequence <= head.sequence; sequence++) {
       if (sequence - head.checkpointSequence > 128) {
         throw new Error("master journal export head exceeds the bounded replay window");

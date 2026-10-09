@@ -540,6 +540,13 @@ compaction must retain every dependency referenced by EITHER head slot until
 both slots have published and readback-verified the new checkpoint; then it
 may retire the superseded frames. Export selects both chains, and restore
 refuses a missing dependency in either, so early frame deletion is a hard red.
+The disabled-writer cutover codec now splits a legacy unbounded archive into
+immutable checked segments of at most 500 whole rows. A constant-size head
+points to the terminal segment and binds its bytes; each segment hashes its
+predecessor. Both raw backup selectors walk all reachable segments, rejecting
+missing or changed interiors and excluding unpublished residue. Compaction and
+post-cutover archive rollover are NOT implemented; the staged frame writer
+still refuses at its 128-frame bound rather than silently losing rows.
 Before a checked head exists, legacy `journal.json` remains authoritative.
 After a checked cutover (including a restored WAL bundle), master journal and
 archive reads, snapshots, versions and key enumeration use its projection;

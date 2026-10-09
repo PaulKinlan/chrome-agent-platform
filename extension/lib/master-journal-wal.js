@@ -6,6 +6,7 @@
 const DIRECTORY = "journal-wal";
 const HEADS = ["head-a.json", "head-b.json"];
 const MAGIC = "cap-master-journal-wal-v1";
+const MAX_ARCHIVE_SEGMENT_ROWS = 500;
 const ENCODER = new TextEncoder();
 const DECODER = new TextDecoder("utf-8", { fatal: true });
 
@@ -86,6 +87,7 @@ function validateHead(head) {
       head.checkpointSequence > head.sequence ||
       typeof head.checkpoint !== "string" || !/^checkpoint-[1-9]\d*-[0-9]+\.json$/.test(head.checkpoint) ||
       typeof head.archive !== "string" || !/^archive-[1-9]\d*-[0-9]+\.json$/.test(head.archive) ||
+      (head.archiveHash !== undefined && !/^[0-9a-f]{64}$/.test(head.archiveHash)) ||
       typeof head.lastHash !== "string" || !/^[0-9a-f]{64}$/.test(head.lastHash)) {
     throw new Error("master journal head is corrupt");
   }
@@ -115,15 +117,71 @@ export async function readMasterJournalHead(master) {
   return heads.sort((a, b) => b.sequence - a.sequence)[0];
 }
 
+/** Follow immutable bounded archive records from a published terminal leaf.
+ * The old single-record fixture is accepted as a root, but new cutovers
+ * always bind the terminal record bytes in their head. A missing, changed,
+ * cyclic or forward-pointing predecessor fails closed. */
+export async function readMasterJournalArchiveChain(master, head, { includeRows = true } = {}) {
+  validateHead(head);
+  const directory = await optionalDirectory(master);
+  if (!directory) throw new Error("master journal archive directory is missing");
+  const names = [];
+  const segments = includeRows ? [] : null;
+  let exists = false;
+  const seen = new Set();
+  let leaf = head.archive;
+  let expectedHash = head.archiveHash ?? null;
+  while (leaf !== null) {
+    const match = /^archive-([1-9]\d*)-(0|[1-9]\d*)\.json$/.exec(leaf);
+    if (!match || Number(match[1]) !== head.epoch || seen.has(leaf)) {
+      throw new Error("master journal archive segment chain is corrupt");
+    }
+    seen.add(leaf);
+    const file = await optionalFile(directory, leaf);
+    if (!file) throw new Error(`master journal archive segment ${leaf} is missing`);
+    const serialized = DECODER.decode(await (await file.getFile()).arrayBuffer());
+    if (expectedHash && await hash(serialized) !== expectedHash) {
+      throw new Error("master journal archive segment chain hash mismatch");
+    }
+    const segment = await unsealMasterJournalRecord(serialized, "archive");
+    if (segment.epoch !== head.epoch || !Array.isArray(segment.rows) ||
+        segment.rows.length > MAX_ARCHIVE_SEGMENT_ROWS ||
+        (segment.exists !== undefined && typeof segment.exists !== "boolean") ||
+        (segment.exists === false && segment.rows.length > 0) ||
+        (segment.index !== undefined && segment.index !== Number(match[2]))) {
+      throw new Error("master journal archive segment is corrupt or unbounded");
+    }
+    const previous = segment.previous === undefined ? null : segment.previous;
+    if (previous !== null) {
+      const prior = /^archive-([1-9]\d*)-(0|[1-9]\d*)\.json$/.exec(previous);
+      if (!prior || Number(prior[1]) !== head.epoch || Number(prior[2]) >= Number(match[2]) ||
+          !/^[0-9a-f]{64}$/.test(segment.previousHash)) {
+        throw new Error("master journal archive segment predecessor is corrupt");
+      }
+    } else if (segment.previousHash !== undefined && segment.previousHash !== null) {
+      throw new Error("master journal archive root hash is corrupt");
+    }
+    names.push(leaf);
+    exists ||= segment.exists === true || segment.rows.length > 0;
+    if (includeRows) segments.push(segment);
+    leaf = previous;
+    expectedHash = previous === null ? null : segment.previousHash;
+  }
+  const rows = includeRows ? segments.reverse().flatMap((segment) => structuredClone(segment.rows)) : null;
+  return { names, rows, exists };
+}
+
 /** Reads only a fully published, checked checkpoint; no staged file is authority. */
 export async function readMasterJournalProjection(master, { includeArchive = false } = {}) {
   const head = await readMasterJournalHead(master);
   if (!head) return null; // old profile: ordinary journal.json remains authoritative
   const directory = await optionalDirectory(master);
-  const expectedHeadHash = await hash(JSON.stringify({
+  const binding = {
     epoch: head.epoch, sequence: head.checkpointSequence,
     checkpoint: head.checkpoint, archive: head.archive,
-  }));
+  };
+  if (head.archiveHash) binding.archiveHash = head.archiveHash;
+  const expectedHeadHash = await hash(JSON.stringify(binding));
   if (head.sequence === head.checkpointSequence && head.lastHash !== expectedHeadHash) {
     throw new Error("master journal head/checkpoint binding is corrupt");
   }
@@ -173,16 +231,10 @@ export async function readMasterJournalProjection(master, { includeArchive = fal
     throw new Error("master journal terminal head does not match its checked frame chain");
   }
   if (includeArchive) {
-    const archive = await readRecord(directory, head.archive, "archive");
-    if (!archive || archive.epoch !== head.epoch || !Array.isArray(archive.rows)) {
-      throw new Error("master journal archive is missing or corrupt");
-    }
-    if ((archive.exists !== undefined && typeof archive.exists !== "boolean") ||
-        (archive.exists === false && archive.rows.length > 0)) {
-      throw new Error("master journal archive existence is corrupt");
-    }
-    result.archive = archiveCleared ? overflow : [...structuredClone(archive.rows), ...overflow];
-    result.archiveExists = archiveCleared ? overflow.length > 0 : (archive.exists === true || result.archive.length > 0);
+    const archive = await readMasterJournalArchiveChain(master, head);
+    result.archive = archiveCleared ? overflow : [...archive.rows, ...overflow];
+    result.archiveExists = archiveCleared ? overflow.length > 0 : (archive.exists || result.archive.length > 0);
+    result.archivePaths = archive.names;
   }
   return result;
 }
@@ -242,13 +294,27 @@ export async function stageMasterJournalCutover(master, {
   const overflow = journal.slice(0, Math.max(0, journal.length - 500));
   const live = journal.slice(-500);
   const checkpoint = `checkpoint-${epoch}-0.json`;
-  const archiveFile = `archive-${epoch}-0.json`;
   await writeCheckedRecord(directory, checkpoint, "checkpoint", { epoch, sequence: 0, exists: journalExists, live });
-  await writeCheckedRecord(directory, archiveFile, "archive", {
-    epoch, exists: archiveExists || overflow.length > 0, rows: [...archive, ...overflow],
-  });
-  const lastHash = await hash(JSON.stringify({ epoch, sequence: 0, checkpoint, archive: archiveFile }));
-  const head = validateHead({ epoch, sequence: 0, checkpointSequence: 0, checkpoint, archive: archiveFile, lastHash, version: epoch });
+  const archivedRows = [...archive, ...overflow];
+  let previous = null;
+  let previousHash = null;
+  let archiveFile = null;
+  let archiveHash = null;
+  for (let index = 0; index < Math.max(1, Math.ceil(archivedRows.length / MAX_ARCHIVE_SEGMENT_ROWS)); index++) {
+    const name = `archive-${epoch}-${index}.json`;
+    await writeCheckedRecord(directory, name, "archive", {
+      epoch, index, previous, previousHash,
+      exists: archiveExists || overflow.length > 0,
+      rows: archivedRows.slice(index * MAX_ARCHIVE_SEGMENT_ROWS, (index + 1) * MAX_ARCHIVE_SEGMENT_ROWS),
+    });
+    const file = await directory.getFileHandle(name);
+    archiveHash = await hash(DECODER.decode(await (await file.getFile()).arrayBuffer()));
+    previous = name;
+    previousHash = archiveHash;
+    archiveFile = name;
+  }
+  const lastHash = await hash(JSON.stringify({ epoch, sequence: 0, checkpoint, archive: archiveFile, archiveHash }));
+  const head = validateHead({ epoch, sequence: 0, checkpointSequence: 0, checkpoint, archive: archiveFile, archiveHash, lastHash, version: epoch });
   // SINGLE PUBLICATION POINT: all earlier files were staged and read back;
   // legacy journal.json remains intact even if publication fails. A present
   // corrupt head fails closed; it is never silently treated as pre-cutover.

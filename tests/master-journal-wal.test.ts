@@ -100,6 +100,35 @@ Deno.test("cutover retains an unbounded legacy archive in bounded immutable segm
   assertEquals(projection.archive, archived, "no row is dropped or clipped by segmentation");
 });
 
+Deno.test("checked archive chain rejects changed tail, missing interior and re-sealed interior", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  const archived = Array.from({ length: 1_201 }, (_, id) => ({ id }));
+  const head = await stageMasterJournalCutover(master, {
+    journalExists: true, journal: [], archive: archived, allocateVersion,
+  });
+  const wal = await master.getDirectoryHandle("journal-wal");
+  const tail = await wal.getFileHandle(head.archive);
+  const originalTail = tail.bytes.slice();
+  const newTail = await unsealMasterJournalRecord(tail.bytes, "archive");
+  tail.bytes = encoder.encode(await sealMasterJournalRecord("archive", {
+    ...newTail, rows: [{ id: "same-epoch-swapped-tail" }],
+  }));
+  await assertRejects(() => readMasterJournalProjection(master, { includeArchive: true }), Error, "chain hash mismatch");
+  tail.bytes = originalTail;
+  const middle = wal.children.get(`archive-${head.epoch}-1.json`);
+  wal.children.delete(`archive-${head.epoch}-1.json`);
+  await assertRejects(() => readMasterJournalProjection(master, { includeArchive: true }), Error, "segment archive-");
+  wal.children.set(`archive-${head.epoch}-1.json`, middle);
+  const originalMiddle = middle.bytes.slice();
+  const prior = await unsealMasterJournalRecord(middle.bytes, "archive");
+  middle.bytes = encoder.encode(await sealMasterJournalRecord("archive", {
+    ...prior, rows: [{ id: "re-sealed-interior" }],
+  }));
+  await assertRejects(() => readMasterJournalProjection(master, { includeArchive: true }), Error, "chain hash mismatch");
+  middle.bytes = originalMiddle;
+  assertEquals((await readMasterJournalProjection(master, { includeArchive: true })).archive, archived);
+});
+
 Deno.test("master journal cutover preserves absent versus present-empty", async () => {
   const absent = await legacyFixture();
   await stageMasterJournalCutover(absent.master, { journalExists: false, journal: [], archive: [], allocateVersion: absent.allocateVersion });
@@ -123,10 +152,20 @@ Deno.test("archive existence is checked and cannot contradict retained whole row
     allocateVersion: valid.allocateVersion,
   });
   const wal = await valid.master.getDirectoryHandle("journal-wal");
-  (await wal.getFileHandle(head.archive)).bytes = encoder.encode(await sealMasterJournalRecord("archive", {
+  const malformed = await sealMasterJournalRecord("archive", {
     epoch: head.epoch, exists: "yes", rows: [],
+  });
+  (await wal.getFileHandle(head.archive)).bytes = encoder.encode(malformed);
+  const hex = async (text) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(text)))]
+    .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const archiveHash = await hex(malformed);
+  const lastHash = await hex(JSON.stringify({
+    epoch: head.epoch, sequence: 0, checkpoint: head.checkpoint, archive: head.archive, archiveHash,
   }));
-  await assertRejects(() => readMasterJournalProjection(valid.master, { includeArchive: true }), Error, "archive existence");
+  (await wal.getFileHandle("head-a.json")).bytes = encoder.encode(await sealMasterJournalRecord("head", {
+    ...head, archiveHash, lastHash,
+  }));
+  await assertRejects(() => readMasterJournalProjection(valid.master, { includeArchive: true }), Error, "archive segment is corrupt");
 });
 
 Deno.test("failed archive publication cannot select staged checkpoint or displace legacy journal", async () => {
