@@ -1756,6 +1756,12 @@ async function main() {
       if (!bootObserved) await sleep(250);
     }
     check("initial SW boot observed via pre-attached restart", bootObserved);
+    // Snapshot the actual fresh-profile permission baseline BEFORE any owner
+    // action can JIT-grant an optional capability (notably a /tabs pick).
+    // The later Settings assertion checks this start state, not a post-gesture
+    // state; retain its full strict ungranted predicate and log the raw map.
+    const capState0 = await msgValue({ type: "capabilities.status" });
+    console.log("permissions baseline raw:", JSON.stringify(capState0));
     // The marker demo model (@demo-tools, @demo-board, …) is the suite's test
     // seam and sits behind the developer flag; a default profile runs the
     // local assistant instead (CAP-FB-20260830-KEYLESS-FIRST-RESULT-01). The
@@ -3959,13 +3965,9 @@ async function main() {
       "approval: forged NTP owner/activation fields are refused",
       forgedOwner?.ok === false && !Array.isArray(forgedOwner?.approvals),
     );
-    // The authoritative capability map from the worker, keyed by id. The DOM
-    // scrape this replaced carried no ids, so it could not tell you WHICH
-    // capability was granted — only how many rows looked green.
-    const capState0 = await msgValue({ type: "capabilities.status" });
-    // Report the actual worker state before diagnosing an optional-permission
-    // failure: an earlier owner-driven journey may already have requested it.
-    console.log(`permissions baseline raw: ${JSON.stringify(capState0)}`);
+    // The authoritative capability map was captured above at fresh-profile
+    // boot, before the owner's /tabs gesture could legitimately JIT-grant
+    // scripting. A DOM scrape here would not identify which grant changed.
     // A hard-coded count here silently rots every time a tool tranche adds a
     // capability — which is exactly what happened between 0.2.278 and 0.2.290
     // (7 -> 18) and left this assertion red for days. But simply deriving the
