@@ -156,7 +156,7 @@ Deno.test("site-agent basic surfaces contain no diagnostic status row or old sca
   const ntpHtml = await Deno.readTextFile("extension/ntp/ntp.html");
   const ntpJs = await Deno.readTextFile("extension/ntp/ntp.js");
   const optionsJs = await Deno.readTextFile("extension/options/options.js");
-  const componentsJs = await Deno.readTextFile("extension/shared/components.js");
+  const componentsJs = await Deno.readTextFile("extension/shared/components-core.js");
   const sidepanelHtml = await Deno.readTextFile("extension/sidepanel/sidepanel.html");
   const sidepanelJs = await Deno.readTextFile("extension/sidepanel/sidepanel.js");
   const basicCopy = `${ntpHtml}\n${sidepanelHtml}\n${sidepanelJs}`;

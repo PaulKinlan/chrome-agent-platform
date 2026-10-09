@@ -1,4 +1,4 @@
-import { confirmActionDialog } from "../shared/components.js";
+import { confirmActionDialog } from "../shared/components-core.js";
 
 // Keep the reviewed Worker constructor in its canonical packaged source file,
 // not duplicated inside the options bundle (same pattern as the runtime hosts).

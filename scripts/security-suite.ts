@@ -46,6 +46,10 @@ import { SCRIPTED_DUMMY_KEY, executeEnvelope, selectionRefOf, startScriptedProvi
 // [data-composer-input] resolves to whichever comes first in document order —
 // the bug sndb removed the fixed ids to prevent (chrome-agent-platform-4vfj).
 import { composerInput, composerSend } from "./lib/composer-target.ts";
+// The point-click itself lives in one guarded helper: an absent target and a
+// page-side THROW must not both read as `false` (chrome-agent-platform-0lb4 —
+// this file's own `composer:false` was the second case presented as the first).
+import { clickAt } from "./lib/click-target.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
@@ -199,14 +203,6 @@ async function sendFrom(cdp: CdpClient, session: string, payload: unknown): Prom
   ).then((r) => (r && typeof r === "object" && "v" in r) ? r.v : r);
 }
 
-/** A genuine CDP click on an element (coordinates discovered, input real). */
-async function clickAt(cdp: CdpClient, session: string, expr: string): Promise<boolean> {
-  const b = await cdp.eval(session, expr).catch(() => null);
-  if (!b || typeof b.x !== "number") return false;
-  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: b.x, y: b.y, button: "left", buttons: 1, clickCount: 1 }, session);
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: b.x, y: b.y, button: "left", buttons: 0, clickCount: 1 }, session);
-  return true;
-}
 const centerOf = (selector: string) =>
   `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; el.scrollIntoView({ block: "center", inline: "center" }); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`;
 
@@ -404,7 +400,7 @@ async function main() {
     await cdp.send("Page.bringToFront", {}, ntp.sessionId).catch(() => {});
     let composer = false;
     for (let i = 0; i < 20 && !composer; i++) {
-      composer = await clickAt(cdp, ntp.sessionId, centerOf(composerInput("hub")));
+      composer = (await clickAt(cdp, ntp.sessionId, centerOf(composerInput("hub")))).clicked;
       if (!composer) await sleep(250);
     }
     if (composer) {
@@ -412,6 +408,10 @@ async function main() {
       for (const ch of "run the gate probe script") {
         await cdp.send("Input.dispatchKeyEvent", { type: "char", text: ch, unmodifiedText: ch }, ntp.sessionId);
       }
+      // Outcome discarded on purpose: the composer existed a line above, and
+      // the checks below grade the APPROVAL CARD this click opens — a missed
+      // send button reddens them by name. Only a THROW may not be silent here,
+      // and clickAt no longer gives it one.
       await clickAt(cdp, ntp.sessionId, centerOf(composerSend("hub")));
     }
     const readCard = () => cdp.eval(
@@ -443,7 +443,12 @@ async function main() {
         console.log(`security-suite: evidence ${dir}/security-suite-approval-card.png`);
       }
     } catch { /* evidence only */ }
-    // Decide "Not now" with a genuine click so the run settles before teardown.
+    // Decide "Not now" with a genuine click so the pending card is settled
+    // before teardown. NOTHING DOWNSTREAM GRADES THIS CLICK: the un-run property
+    // it belongs to was asserted ABOVE, from the script read taken BEFORE the
+    // decision (`lastRunAt == null`), and there is no post-denial check. So a
+    // legitimate ABSENCE is tolerated here — absence only: an instrument throw
+    // still surfaces through clickAt.
     await clickAt(cdp, ntp.sessionId, `(() => { const b = document.querySelector("approval-card")?.shadowRoot?.querySelector(".deny, .not-now, button:not(.approve)"); if (!b) return null; b.scrollIntoView({ block: "center" }); const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
     await sleep(1500);
 
@@ -495,7 +500,7 @@ async function main() {
       await cdp.eval(ntp.sessionId, `document.querySelector("#home")?.click(); "home"`).catch(() => null);
       await sleep(700);
       for (let i = 0; i < 20 && !cookieComposer; i++) {
-        cookieComposer = await clickAt(cdp, ntp.sessionId, centerOf(composerInput("hub")));
+        cookieComposer = (await clickAt(cdp, ntp.sessionId, centerOf(composerInput("hub")))).clicked;
         if (!cookieComposer) await sleep(250);
       }
       let cookieRunClicked = false;
@@ -504,7 +509,7 @@ async function main() {
           await cdp.send("Input.dispatchKeyEvent", { type: "char", text: ch, unmodifiedText: ch }, ntp.sessionId);
         }
         await sleep(300);
-        cookieRunClicked = await clickAt(cdp, ntp.sessionId, `(() => { const b = document.querySelector("${composerSend("hub")}"); if (!b || b.disabled) return null; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+        cookieRunClicked = (await clickAt(cdp, ntp.sessionId, `(() => { const b = document.querySelector("${composerSend("hub")}"); if (!b || b.disabled) return null; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`)).clicked;
       }
       // The cookies capability was seeded into the profile before launch —
       // assert the grant is live, then the run's list_cookies executes with no

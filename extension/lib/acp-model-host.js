@@ -29,6 +29,7 @@ export function registerAcpModelHost(runtime = chrome.runtime, createModel = cre
             : undefined;
           model = createModel({
             ...message.config,
+            retainSession: message.config?.retainSession ?? true,
             ...(clientFactory ? { clientFactory } : {}),
             permissionHandler: (request) => new Promise((resolve) => {
               const id = crypto.randomUUID(); permissions.set(id, resolve);

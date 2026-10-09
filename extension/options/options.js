@@ -75,7 +75,8 @@ import { createNavigationController } from "../lib/navigation-controller.js";
 // permission-row, capability-row, …) so the settings page uses the SAME
 // design-system components as the hub + the docs showcase (one component,
 // everywhere — no hand-rolled duplicates).
-import { confirmActionDialog, deleteAgentDialog, escapeHtml } from "../shared/components.js";
+import { confirmActionDialog, deleteAgentDialog, escapeHtml } from "../shared/components-core.js";
+import "../shared/components-settings.js";
 import { refreshDiagnostics, subscribeDiagnosticsRevision } from "../shared/diagnostics-client.js";
 import { saveFsGrant, wireLocalFolderPickers, regrantFsGrantAccess } from "../lib/fs-grants.js";
 import { mountGrantBrowser } from "../lib/folder-browser.js";
@@ -574,7 +575,7 @@ export async function renderLocalFolders() {
 
     const kindChip = document.createElement("span");
     kindChip.className = "chip";
-    kindChip.style.fontSize = "11px";
+    kindChip.style.fontSize = "var(--text-xs, 12px)";
     kindChip.style.padding = "1px 7px";
     kindChip.style.borderRadius = "999px";
     kindChip.style.border = "1px solid var(--border,#e3e0d9)";
@@ -582,7 +583,7 @@ export async function renderLocalFolders() {
 
     const modeChip = document.createElement("span");
     modeChip.className = "chip";
-    modeChip.style.fontSize = "11px";
+    modeChip.style.fontSize = "var(--text-xs, 12px)";
     modeChip.style.padding = "1px 7px";
     modeChip.style.borderRadius = "999px";
     modeChip.style.border = "1px solid var(--border,#e3e0d9)";
@@ -590,7 +591,7 @@ export async function renderLocalFolders() {
 
     const statusBadge = document.createElement("span");
     statusBadge.className = `chip avail-${grant.status === "granted" ? "ready" : grant.status === "prompt" ? "owner-action-required" : "disabled"}`;
-    statusBadge.style.fontSize = "11px";
+    statusBadge.style.fontSize = "var(--text-xs, 12px)";
     statusBadge.style.padding = "1px 7px";
     statusBadge.style.borderRadius = "999px";
     statusBadge.textContent = grant.status === "granted" ? "active" : grant.status === "prompt" ? "needs re-grant" : grant.status;
@@ -3390,6 +3391,78 @@ async function renderData() {
       } else {
         saveFlash(`Cleanup still incomplete: ${res?.error ?? "unknown"}.`);
       }
+      renderData();
+    });
+    row.appendChild(retry);
+    list.appendChild(row);
+  }
+  for (const pendingPromotion of (pending?.promotions ?? [])) {
+    const origin = pendingPromotion.origin;
+    if (typeof origin !== "string") continue;
+    const row = document.createElement("div");
+    row.className = "origin-row pending";
+    const label = document.createElement("span");
+    label.className = "origin";
+    label.textContent = `${origin} — ${pendingPromotion.phase === "policy-pending" ? "site policy" : "Site Agent"} promotion pending (tools unavailable)`;
+    row.appendChild(label);
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "btn small retry-promotion";
+    retry.textContent = "Retry promotion";
+    retry.setAttribute("aria-label", `Retry promotion for ${origin}`);
+    retry.addEventListener("click", async () => {
+      let granted = false;
+      try {
+        granted = (await chrome.permissions.request({ permissions: ["scripting"], origins: [`${origin}/*`] })) === true;
+      } catch { /* owner gesture may be refused */ }
+      if (!granted) {
+        saveFlash(`Permission denied; ${origin} remains pending and unable to use tools.`);
+        return;
+      }
+      const res = await chrome.runtime.sendMessage({
+        type: "agent.enroll-origin", origin, ownerGesture: true,
+      }).catch(() => ({ ok: false }));
+      saveFlash(res?.ok ? `Promotion complete for ${origin}.` : `Promotion remains pending for ${origin}; retry from this panel.`);
+      renderData();
+      renderEnrolledSites();
+    });
+    row.appendChild(retry);
+    if (pendingPromotion.phase === "promotion-pending" || pendingPromotion.phase === "promotion-retry") {
+      const abandon = document.createElement("button");
+      abandon.type = "button";
+      abandon.className = "btn small abandon-promotion";
+      abandon.textContent = "Abandon promotion";
+      abandon.setAttribute("aria-label", `Abandon pending promotion for ${origin}`);
+      abandon.addEventListener("click", async () => {
+        const res = await chrome.runtime.sendMessage({
+          type: "agent.enroll-origin", origin, ownerGesture: true, abandonPending: true,
+        }).catch(() => ({ ok: false }));
+        saveFlash(res?.ok ? `Pending promotion abandoned for ${origin}.` : `Could not abandon pending promotion for ${origin}.`);
+        renderData();
+        renderEnrolledSites();
+      });
+      row.appendChild(abandon);
+    }
+    list.appendChild(row);
+  }
+  for (const origin of (pending?.abandoned ?? [])) {
+    if (typeof origin !== "string") continue;
+    const row = document.createElement("div");
+    row.className = "origin-row pending";
+    const label = document.createElement("span");
+    label.className = "origin";
+    label.textContent = `${origin} — abandoned promotion cleanup pending (tools unavailable)`;
+    row.appendChild(label);
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "btn small retry-cleanup";
+    retry.textContent = "Retry cleanup";
+    retry.setAttribute("aria-label", `Retry abandoned promotion cleanup for ${origin}`);
+    retry.addEventListener("click", async () => {
+      const res = await chrome.runtime.sendMessage({
+        type: "agent.enroll-origin", origin, ownerGesture: true, retryAbandonedCleanup: true,
+      }).catch(() => ({ ok: false }));
+      saveFlash(res?.ok ? `Cleanup complete for ${origin}.` : `Cleanup remains pending for ${origin}.`);
       renderData();
     });
     row.appendChild(retry);

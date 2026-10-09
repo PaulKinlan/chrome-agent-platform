@@ -55,7 +55,7 @@ const READ_ONLY_ROUTES = new Set([
 // Write routes that explicitly invalidate related cache entries.
 const WRITE_INVALIDATIONS = [
   { match: /^(?:settings\.|setting\.|kv\.set)/, prefixes: ["settings.", "kv."] },
-  { match: /^(?:agents?\.(?:save|delete|enroll|create)|named-agent\.(?:save|delete)|background-agent\.(?:save|delete))/, prefixes: ["agent.", "named-agent.", "background-agent.", "agents."] },
+  { match: /^(?:agents?\.(?:save|delete|enroll|create)|named-agent\.(?:create|save|delete)|background-agent\.(?:save|delete))/, prefixes: ["agent.", "named-agent.", "background-agent.", "agents."] },
   { match: /^(?:skills?\.(?:save|delete))/, prefixes: ["skills.", "skill."] },
   { match: /^(?:permissions?\.(?:grant|revoke|request))/, prefixes: ["permissions.", "permission.", "provider.permission"] },
   { match: /^(?:threads?\.(?:create|delete|append))/, prefixes: ["threads.", "thread."] },
@@ -73,7 +73,7 @@ const BROADCAST_INVALIDATIONS = {
   "named-agent-changed": ["agent.", "named-agent.", "background-agent.", "agents."],
   "background-agent-changed": ["agent.", "named-agent.", "background-agent.", "agents."],
   "site-tools-detected": ["agent.tool-offers", "webmcp.status"],
-  "open-tabs-changed": ["webmcp.status"],
+  "open-tabs-changed": ["webmcp.status", "agent.tool-offers", "agent.discoverable-tabs"],
   "provider-changed": ["provider."],
   "asset-changed": ["asset.", "artifacts."],
   "asset-created": ["asset.", "artifacts."],

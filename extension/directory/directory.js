@@ -7,7 +7,8 @@
 
 import { send } from "../lib/messages.js";
 import { discoveredOnly } from "../lib/pure.js";
-import "../shared/components.js";
+import "../shared/components-core.js";
+import "../shared/components-directory.js";
 import { t, hydrateI18n } from "../shared/i18n.js";
 
 /** Discovered-but-not-enrolled pages (chrome-agent-platform-cthe): the

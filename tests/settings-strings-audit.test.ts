@@ -214,7 +214,7 @@ Deno.test("bug 7 sweep: the inline approval card remains the runtime-grantable p
   const conversation = sources.get([...sources.keys()].find((p) => p.endsWith("shared/conversation.js"))!)!;
   assertStringIncludes(conversation, "permission-approval-card", "the in-context approval card still renders");
   assertStringIncludes(conversation, "approvePermissionRequirement", "the approval executor is intact");
-  const card = sources.get([...sources.keys()].find((p) => p.endsWith("shared/components.js"))!)!;
+  const card = sources.get([...sources.keys()].find((p) => p.endsWith("shared/components-conversation.js") || p.endsWith("shared/components.js"))!)!;
   assertStringIncludes(card, '"approve"', "the card offers Allow (approve) inline");
   assertStringIncludes(card, '"deny"', "the card offers Deny inline");
 });

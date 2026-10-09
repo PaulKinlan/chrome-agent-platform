@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.3.618] — 2026-10-09
+- Modularize shared/components.js into domain-scoped modules with components.js as an aggregating barrel, reducing UI bundle sizes across all surfaces while preserving the 12-bundle authority contract.
+
+## [0.3.617] — 2026-10-09
+- Group tabs opened or attached by a task into a named tab group, restorable on task open, closable with Undo
+
+## [0.3.616] — 2026-10-09
+- Modularize shared/components.js into domain-scoped modules (components-core.js, components-conversation.js, components-hub.js, components-settings.js, components-artifacts.js, components-directory.js, components-privacy.js) with components.js as an aggregating barrel. Target per-surface component imports and keep strict 12-bundle authority intact without unmanifested chunk files.
+- admit blake3-wasm v3.0.0 as an Emscripten glue class managed Wasm tool for 256-bit cryptographic hashing
+
+## [0.3.615] — 2026-10-09
+- Faster New Tab Hub boot coalescing eliminates duplicate tool-offers queries.
+
+## [0.3.614] — 2026-10-09
+- All design-system shadow-DOM components enforce a 12px font scale floor via var(--text-xs, 12px) tokens and verified computed styles.
+
+## [0.3.613] — 2026-10-09
+- WebMCP fixtures defensively shadow document.modelContext via Object.defineProperty to support prototype accessors; tool approvals correlate by exact call and approval IDs with single-use consumption and durable logs enforce bounded, redacted persistence across all metadata fields.
+
+## [0.3.612] — 2026-10-09
+- Newly created agents now appear promptly in the live sidebar.
+
+## [0.3.611] — 2026-10-09
+- Concurrent requests to one connected agent now show a clear refusal instead of running twice.
+
+## [0.3.610] — 2026-10-08
+- Clarify the scope of attached site-tool approval for a run and document.
+
+## [0.3.609] — 2026-10-08
+- Retain active ACP session identity across command discovery and subsequent prompt turns in the offscreen model backend, eliminating redundant connection overhead. Session retention in the task runner remains as an unattached library seam for the test architecture.
+
+## [0.3.608] — 2026-10-08
+- The New Tab page's agent launcher buttons now show a simple terminal mark with clearer labels and a visible keyboard focus, and the list scrolls when it is long.
+
+## [0.3.607] — 2026-10-08
+- Harden site-agent enrollment: promotions commit atomically and survive a restart, and enrollment authority reads are fenced to one reviewed path.
+
+## [0.3.606] — 2026-10-08
+- Extract page tables, ARIA grids and repeated card lists into a tabular artifact that the table tools accept directly.
+
+## [0.3.605] — 2026-10-08
+- The extension UI now enforces a 12px minimum design-scale floor across shipped surfaces, including font sizes set from JavaScript.
+
+## [0.3.604] — 2026-10-08
+- About page hover states are clearer and both light and dark reading modes are accessibility-audited.
+
 ## [0.3.603] — 2026-10-08
 - Settings, the sidebar and the Agents panel now show the same humanised schedule cadence (weekly, daily, hourly), and the sidebar keeps your rail navigation choice when a late preference restore arrives.
 

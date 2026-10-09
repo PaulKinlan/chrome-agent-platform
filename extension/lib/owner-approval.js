@@ -522,7 +522,13 @@ export function createApprovalStore() {
   // approvalId, it lives exactly as long as its approval row — removeApproval /
   // sweep / consumeApproved evict it — and never reaches the model
   // (EDIT-APPROVAL-SHOWS-DIFF-01).
-  return { approvals: new Map(), byTuple: new Map(), waiters: new Map(), details: new Map() };
+  return {
+    approvals: new Map(),
+    byTuple: new Map(),
+    waiters: new Map(),
+    details: new Map(),
+    executionApprovals: createExecutionApprovalStore(64),
+  };
 }
 
 function approvalKey(runId, action, target, digest) {
@@ -787,7 +793,9 @@ export function boundSiteToolApprovalDetail(detail) {
     ? detail.origin
     : "";
   const tool = visibleSiteToolLabel(detail.tool, APPROVAL_DETAIL_BOUNDS.maxToolChars);
-  return origin && tool ? Object.freeze({ kind: "webmcp-tool", origin, tool }) : undefined;
+  return origin && tool ? Object.freeze({ kind: "webmcp-tool", origin, tool,
+    ...(detail.scope === "attached-run" ? { scope: "attached-run" } : {}),
+  }) : undefined;
 }
 
 export function boundScriptRegistrationApprovalDetail(detail) {
@@ -934,3 +942,82 @@ export function mayResolveApproval(row, principal, documentId = "") {
   }
   return false;
 }
+
+/** Execution approval store: maps canonical approval IDs and explicit aliases
+ * (e.g. callId) to a single approval record. Consuming any ID deletes the
+ * matched record AND all of its aliases atomically. */
+export function createExecutionApprovalStore(maxRecords = 64) {
+  const records = new Map(); // canonicalId -> record
+  const aliases = new Map(); // alias -> canonicalId
+
+  return {
+    register({ canonicalId, aliases: aliasList = [], requirement, decision, tool, executionId }) {
+      if (!canonicalId) return null;
+      if (records.has(canonicalId)) {
+        this.consume(canonicalId);
+      }
+      const allAliases = new Set([canonicalId, ...(Array.isArray(aliasList) ? aliasList : [])].filter(Boolean));
+      const record = {
+        canonicalId,
+        aliases: allAliases,
+        requirement,
+        decision,
+        tool,
+        executionId,
+        createdAt: Date.now(),
+      };
+      records.set(canonicalId, record);
+      for (const a of allAliases) {
+        aliases.set(a, canonicalId);
+      }
+      while (records.size > maxRecords) {
+        const oldestId = records.keys().next().value;
+        this.consume(oldestId);
+      }
+      return record;
+    },
+
+    get(id) {
+      if (!id) return null;
+      const canonicalId = aliases.get(id) ?? (records.has(id) ? id : null);
+      if (!canonicalId) return null;
+      return records.get(canonicalId) ?? null;
+    },
+
+    consume(id) {
+      if (!id) return null;
+      const canonicalId = aliases.get(id) ?? (records.has(id) ? id : null);
+      if (!canonicalId) return null;
+      const record = records.get(canonicalId);
+      if (!record) return null;
+      for (const a of record.aliases) {
+        aliases.delete(a);
+      }
+      records.delete(canonicalId);
+      return record;
+    },
+
+    has(id) {
+      return aliases.has(id) || records.has(id);
+    },
+
+    cleanupExecution(execId) {
+      if (!execId) return;
+      for (const [canonicalId, rec] of records.entries()) {
+        if (rec?.executionId === execId) {
+          this.consume(canonicalId);
+        }
+      }
+    },
+
+    clear() {
+      records.clear();
+      aliases.clear();
+    },
+
+    get size() {
+      return records.size;
+    },
+  };
+}
+

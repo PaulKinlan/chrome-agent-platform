@@ -18,12 +18,15 @@ import {
   liveObservedResidue,
   makeReadOnly,
   observeDescendants,
+  ProcessUnreadableError,
+  residueForReceipt,
   pidAlive,
   PROFILE_ROOT,
   readProcIdentity,
   resolveSupervisorConfig,
   SELF_TEST_TOKEN,
-  terminateAttestedGroup,
+  custodyReasonFor,
+  terminateAttestedGroupSafely,
   verifyInheritedCanonicalLock,
   waitUntil,
 } from "./security-suite-custody.mjs";
@@ -136,6 +139,8 @@ if (config.selfTest) {
 delete childEnv.CAP_SECURITY_TEST_ATTEST_DEADLINE_MS;
 delete childEnv.CAP_SECURITY_TEST_FORCE_ATTEST_UNSETTLED;
 delete childEnv.CAP_SECURITY_TEST_SAMPLE_FREEZE_MS;
+delete childEnv.CAP_SECURITY_TEST_FORCE_OBSERVATION_UNREADABLE;
+delete childEnv.CAP_SECURITY_TEST_FORCE_RESIDUE_UNREADABLE;
 
 const stdio = ["ignore", runnerHandle.fd, runnerHandle.fd];
 while (stdio.length < 9) stdio.push("ignore");
@@ -268,9 +273,24 @@ const sampleFreezeMs = config.sampleFreezeMs ?? 0;
 if (sampleFreezeMs > 0) {
   await new Promise((resolve) => setTimeout(resolve, sampleFreezeMs));
 }
-// Observation is best-effort sampling: one failed sample must never crash the
-// supervisor (an unhandled rejection in the interval callback did, under
-// process churn — CAP-FB-20260830-SUITE-HONESTY-01).
+// Observation is best-effort sampling: a failed sample must not crash this
+// supervisor, but it also cannot prove the process table was empty. Retain a
+// failure after the last success and any failure before a descendant was ever
+// seen (that blind window cannot be repaired by a later scan).
+let observationFailure = "";
+let emptyObservationFailure = "";
+const observationDeps = config.forceObservationUnreadable
+  ? { hasProc: false, run: async () => { throw Object.assign(new Error("self-test: process table unreadable"), { code: "EMFILE" }); } }
+  : {};
+async function sampleObserved() {
+  try {
+    await observeDescendants(child.pid, observed, observationDeps);
+    observationFailure = "";
+  } catch (error) {
+    observationFailure = String(error?.message ?? error).slice(0, 200);
+    if (observed.size === 0) emptyObservationFailure ||= observationFailure;
+  }
+}
 const ackPath = path.join(out, "sample-ack.json");
 let ackedPids = "";
 async function ackSample() {
@@ -291,16 +311,14 @@ async function ackSample() {
     // wait then refuses loudly rather than passing silently.
   }
 }
-await observeDescendants(child.pid, observed).catch(() => {});
+await sampleObserved();
 await ackSample();
 const monitor = setInterval(async () => {
   if (sampling) return;
   sampling = true;
   try {
-    await observeDescendants(child.pid, observed);
+    await sampleObserved();
     await ackSample();
-  } catch {
-    // A missed sample; the next tick samples again.
   } finally {
     sampling = false;
   }
@@ -375,16 +393,38 @@ if (earlyTrigger) {
 }
 const timedOut = trigger.kind === "timeout";
 let outcome = trigger;
-let termination = { termSent: false, killSent: false, survived: false };
+let termination = {
+  termSent: false,
+  killSent: false,
+  survived: false,
+  leaderExited: false,
+  groupGoneBeforeSignal: false,
+  teardownThrew: "",
+};
+
+let teardownReadIdentity = readProcIdentity;
+let teardownIsAlive = groupAlive;
+if (config.simulateVanishedLeader) {
+  let aliveCalls = 0;
+  teardownReadIdentity = async () => {
+    const err = new Error("ENOENT: simulated vanished leader /proc/<pid>/stat");
+    err.code = "ENOENT";
+    throw err;
+  };
+  teardownIsAlive = () => aliveCalls++ === 0;
+}
+
 if (
   trigger.kind === "timeout" || trigger.kind === "supervisor-signal" ||
   trigger.kind === "readiness-timeout"
 ) {
-  termination = await terminateAttestedGroup({
+  termination = await terminateAttestedGroupSafely({
     attestation,
     observed,
     termWaitMs: config.termWaitMs,
     killWaitMs: config.killWaitMs,
+    readIdentity: teardownReadIdentity,
+    isAlive: teardownIsAlive,
   });
   outcome = await Promise.race([
     exitPromise,
@@ -394,34 +434,55 @@ if (
   ]);
 }
 
-await observeDescendants(child.pid, observed).catch(() => {});
 clearInterval(monitor);
 while (sampling) await new Promise((resolve) => setTimeout(resolve, 5));
+await sampleObserved();
 
 if (groupAlive(attestation.identity.pgid)) {
-  const extra = await terminateAttestedGroup({
+  const extra = await terminateAttestedGroupSafely({
     attestation,
     observed,
     termWaitMs: config.termWaitMs,
     killWaitMs: config.killWaitMs,
+    readIdentity: teardownReadIdentity,
+    isAlive: teardownIsAlive,
   });
   termination = {
     termSent: termination.termSent || extra.termSent,
     killSent: termination.killSent || extra.killSent,
     survived: termination.survived || extra.survived,
+    leaderExited: termination.leaderExited || extra.leaderExited === true,
+    groupGoneBeforeSignal:
+      termination.groupGoneBeforeSignal || extra.groupGoneBeforeSignal === true,
+    teardownThrew: termination.teardownThrew || extra.teardownThrew || "",
   };
 }
 
-const residue = await liveObservedResidue(observed);
+const residue = await liveObservedResidue(observed, config.forceResidueUnreadable
+  ? { readIdentity: async (pid) => { throw new ProcessUnreadableError(pid, "self-test: identity unreadable (EMFILE)"); } }
+  : {});
+const observationUnverifiedReason = emptyObservationFailure || observationFailure;
 // This run's own custody finding. It is NOT written to a shared marker any
 // more (uzik): the exit code and the receipt carry it, so a residue escape
 // fails THIS run loudly without poisoning the next lane's browser gate.
-let custodyReason = "";
-if (termination.survived) custodyReason = "owned-group-survived";
-if (residue.length > 0) custodyReason = "descendant-residue";
-
 const cleanup = await cleanupExactProfile({ profile, root: PROFILE_ROOT });
-if (!cleanup.ok) custodyReason ||= `cleanup-refused:${cleanup.reason}`;
+// Derived by one pure, unit-tested function rather than by ordered mutations of a
+// local, because the ORDER is the semantics. Assigning the benign teardown markers
+// BEFORE the cleanup check made `||=` unable to replace them, so a run with both a
+// benign leader exit and a cleanup refusal reported the benign reason while the exit
+// code correctly failed closed at 71 — found in review by cap-astra with a live
+// owned fixture (receipt b21e2e6180fb0ca9 against control d09361b8bf36e32c, which
+// reported the proper cleanup-refused:profile is not an owned regular directory).
+let custodyReason = custodyReasonFor({
+  survived: termination.survived,
+  residueCount: residue.length,
+  observationUnverifiedReason,
+  cleanupOk: cleanup.ok,
+  cleanupReason: cleanup.reason ?? "",
+  leaderExited: termination.leaderExited === true,
+  groupGoneBeforeSignal: termination.groupGoneBeforeSignal === true,
+  teardownThrew: termination.teardownThrew || "",
+});
 
 let exitCode;
 let runnerSignal = null;
@@ -444,8 +505,19 @@ if (interruptedSignal) {
   exitCode = 124;
 }
 if (termination.survived) exitCode = 72;
-if (residue.length > 0) exitCode = 70;
+if (residue.length > 0 || observationUnverifiedReason) exitCode = 70;
 if (!cleanup.ok) exitCode = 71;
+// A teardown that THREW is a genuine custody refusal (EPERM, an identity change),
+// not one of the two benign races. Before 8ixk it escaped as an uncaught rejection:
+// the supervisor exited 1 and wrote no receipt. terminateAttestedGroupSafely now
+// keeps the receipt, so the non-zero exit has to be restored explicitly — otherwise
+// a real refusal becomes a pass-with-a-note, which is a LOOSENING of a fail-closed
+// path that no reviewer or owner approved. Prior behaviour is preserved verbatim
+// rather than re-decided here; whether a dedicated code in the 70/71/72 family is
+// better than 1 is a desk/owner decision, not an inference from this change.
+// Only applied when the run would otherwise have passed, so a runner's own failure
+// code is never masked.
+if (termination.teardownThrew && exitCode === 0) exitCode = 1;
 
 const receipt = {
   schemaVersion: 1,
@@ -464,12 +536,8 @@ const receipt = {
   termSent: termination.termSent,
   killSent: termination.killSent,
   groupSurvived: termination.survived,
-  residue: residue.map(({ pid, starttime, pgid, sid }) => ({
-    pid,
-    starttime,
-    pgid,
-    sid,
-  })),
+  residue: residueForReceipt(residue),
+  ...(observationUnverifiedReason ? { observationUnverifiedReason } : {}),
   custodyReason,
   cleaned: cleanup.ok && cleanup.removed,
 };

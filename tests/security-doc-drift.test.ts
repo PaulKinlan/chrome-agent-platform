@@ -82,8 +82,8 @@ function assertLiveBridgePointers(bridge: string, shipped: string, generated: st
     Deno.statSync(`${ROOT}extension/shared/tool-tree.js`).isFile,
     "the cited live documents/source must exist");
   assertNoRetiredSourcePointer("extension/content/bridge-auth.js", bridge);
-  assertNoRetiredSourcePointer("extension/shared/components.js", shipped);
-  assertNoRetiredSourcePointer("docs/components.js", generated);
+  assertNoRetiredSourcePointer("extension/shared/components-conversation.js", shipped);
+  assertNoRetiredSourcePointer("docs/components-conversation.js", generated);
 }
 
 function section(text: string, start: string, end: string): string {
@@ -220,8 +220,8 @@ Deno.test("em71i: owner Wasm README must reflect the callable catalog and worker
 Deno.test("xbjki: shipped and generated JS cite live authority; new retired pointers fail", () => {
   for (const path of trackedExtensionJs()) assertNoRetiredSourcePointer(path, read(path));
   const bridge = read("extension/content/bridge-auth.js");
-  const shipped = read("extension/shared/components.js");
-  const generated = read("docs/components.js");
+  const shipped = read("extension/shared/components-conversation.js");
+  const generated = read("docs/components-conversation.js");
   assertLiveBridgePointers(bridge, shipped, generated);
   assertThrows(() => assertNoRetiredSourcePointer("extension/new-host.js", "// authority: docs/KNOWN-ISSUES.md"),
     Error, "retired tracker", "a fresh source-file citation must fail");

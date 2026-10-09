@@ -34,13 +34,23 @@ if (!globalThis.customElements) {
 
 import { runStagedBoot } from "../extension/ntp/ntp-boot-scheduler.js";
 const { NON_HUB_ELEMENTS, flushDeferredComponents } = await import("../extension/shared/components.js");
-import { launchChrome, openCdp, waitForServiceWorker, teardownChrome } from "../scripts/lib/chrome-launch.ts";
+import { launchChrome, openCdp, waitForServiceWorker, teardownChrome, resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
+import {
+  getLongTaskObserverSource,
+  getBootMetricsExtractionSource,
+  attributeBootRun,
+  evaluateBootStagingPolicy,
+  formatTaskAttribution,
+  failedSample,
+  ENVIRONMENTAL_REFUSAL_MARKER,
+  ENVIRONMENTAL_REFUSAL_EXIT,
+} from "../scripts/lib/ntp-boot-attribution.ts";
+import { readLoadSample, type LoadSample } from "../scripts/lib/quiet-window.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT_DIR = `${ROOT}/extension`;
-const CHROME_BIN = Deno.env.get("CAP_BIN") ||
-  "/Users/paulkinlan/.cache/puppeteer/chrome/mac_arm-149.0.7827.22/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
+const { binary: RESOLVED_BIN, tried: TRIED_BINS } = resolveChromiumBinaryReport();
 
 Deno.test("ntp-boot-staging: runStagedBoot executes Stage 1 before Stage 2 and yields between batches", async () => {
   const log: string[] = [];
@@ -116,12 +126,12 @@ Deno.test("ntp-boot-staging: non-hub custom elements set contains heavy componen
   assert(!NON_HUB_ELEMENTS.has("task-row"), "task-row must be hub element");
 });
 
-Deno.test("ntp-boot-staging: headless Chrome for Testing boots ntp.html with 0 long tasks across 3 runs", async () => {
-  const hasBinary = await Deno.stat(CHROME_BIN).then(() => true).catch(() => false);
-  if (!hasBinary) {
-    console.warn(`Skipping browser test: ${CHROME_BIN} not found`);
+Deno.test("ntp-boot-staging: headless Chrome for Testing boots ntp.html with 0 long tasks across 5 runs", async () => {
+  if (RESOLVED_BIN === null) {
+    console.warn(`Skipping browser test: no Chrome resolvable on host (tried: ${TRIED_BINS.join("; ")})`);
     return;
   }
+  const CHROME_BIN = RESOLVED_BIN;
 
   const tmp = durableDir(`cap-ntp-boot-${Date.now()}`);
   const lockPath = `${tmp}/chrome.lock`;
@@ -145,64 +155,81 @@ Deno.test("ntp-boot-staging: headless Chrome for Testing boots ntp.html with 0 l
     assert(sw, "Service worker must start");
     const extId = sw.url.split("/")[2];
 
-    for (let run = 1; run <= 3; run++) {
+    const runResults = [];
+    for (let run = 1; run <= 5; run++) {
       const openTarget = await client.open("about:blank");
       const { targetId, sessionId } = openTarget;
 
       await client.send("Runtime.enable", {}, sessionId);
       await client.send("Page.enable", {}, sessionId);
 
-      // Register PerformanceObserver before any document script executes
+      // Register PerformanceObserver before any document script executes (longtask + loaf)
       await client.send("Page.addScriptToEvaluateOnNewDocument", {
-        source: `
-          window.__capLongTasks = [];
-          try {
-            new PerformanceObserver((list) => {
-              for (const entry of list.getEntries()) {
-                window.__capLongTasks.push({ duration: entry.duration, startTime: entry.startTime, name: entry.name });
-              }
-            }).observe({ entryTypes: ['longtask'] });
-          } catch {}
-        `,
+        source: getLongTaskObserverSource(),
       }, sessionId);
 
-      const navStart = Date.now();
-      await client.send("Page.navigate", { url: `chrome-extension://${extId}/ntp/ntp.html` }, sessionId);
+      // 1. Establish baseline CPU map so pre-existing parked builders are known and not misclassified as active
+      const baselineSample = await readLoadSample().catch(failedSample);
+      await new Promise((r) => setTimeout(r, 60)); // short baseline delta for tick comparison
+      let currentSample = await readLoadSample(baselineSample.cpu ?? null).catch(failedSample);
+      const intervalSamples = [currentSample];
+      if (!baselineSample.measurable) intervalSamples.unshift(baselineSample);
 
-      // Wait for document to load completely
-      await client.eval(sessionId, `new Promise(r => { if (document.readyState === 'complete') r(); else addEventListener('load', r, { once: true }); })`);
-      // Let microtasks and staged batches settle
-      await new Promise((r) => setTimeout(r, 600));
+      let samplingActive = true;
+      let sampleInFlight = Promise.resolve();
 
-      const metrics = await client.eval(sessionId, `(() => {
-        const measures = performance.getEntriesByType("measure");
-        const boot = measures.find(m => m.name.includes("composer-ready"));
-        const thread = measures.find(m => m.name.includes("thread-list-hydrated"));
-        const obsTasks = Array.isArray(window.__capLongTasks) ? window.__capLongTasks : [];
-        const perfTasks = performance.getEntriesByType("longtask") || [];
-        const allTasks = [...obsTasks, ...perfTasks];
-        const severeTasks = allTasks.filter(t => t.duration > 50);
+      // Serialized async sampling loop started BEFORE navigation to bracket the full boot interval
+      const samplingLoop = (async () => {
+        while (samplingActive) {
+          await new Promise((r) => setTimeout(r, 200));
+          if (!samplingActive) break;
+          sampleInFlight = (async () => {
+            const s = await readLoadSample(currentSample.cpu ?? null).catch(failedSample);
+            currentSample = s;
+            intervalSamples.push(s);
+          })();
+          await sampleInFlight;
+        }
+      })();
 
-        return {
-          composerReadyMs: boot ? Math.round(boot.duration) : null,
-          threadListHydratedMs: thread ? Math.round(thread.duration) : null,
-          longTasksCount: severeTasks.length,
-          longTasks: severeTasks.map(t => ({ duration: Math.round(t.duration), startTime: Math.round(t.startTime) })),
-          measureNames: measures.map(m => m.name),
-        };
-      })()`);
+      try {
+        await client.send("Page.navigate", { url: `chrome-extension://${extId}/ntp/ntp.html` }, sessionId);
 
-      console.log(`[ntp-boot-staging] Run ${run}: longTasksCount=${metrics.longTasksCount}, composerReadyMs=${metrics.composerReadyMs}, threadListHydratedMs=${metrics.threadListHydratedMs}, longTasks=${JSON.stringify(metrics.longTasks)}`);
-
-      assertEquals(metrics.longTasksCount, 0, `Run ${run}: ntp.html must have 0 long tasks > 50ms (got ${metrics.longTasksCount}: ${JSON.stringify(metrics.longTasks)})`);
-      if (metrics.composerReadyMs != null) {
-        assert(metrics.composerReadyMs < 150, `Run ${run}: composer-ready must be < 150ms (got ${metrics.composerReadyMs}ms)`);
+        // Wait for document to load completely
+        await client.eval(sessionId, `new Promise(r => { if (document.readyState === 'complete') r(); else addEventListener('load', r, { once: true }); })`);
+        // Let microtasks and staged batches settle
+        await new Promise((r) => setTimeout(r, 600));
+      } finally {
+        samplingActive = false;
+        await samplingLoop;
+        await sampleInFlight;
       }
-      if (metrics.threadListHydratedMs != null) {
-        assert(metrics.threadListHydratedMs <= 250, `Run ${run}: thread-list-hydrated must be <= 250ms (got ${metrics.threadListHydratedMs}ms)`);
-      }
+
+      const rawMetrics = await client.eval(sessionId, getBootMetricsExtractionSource());
+      // Final sample after boot settling
+      const postSample = await readLoadSample(currentSample.cpu ?? null).catch(failedSample);
+      intervalSamples.push(postSample);
+
+      const runResult = attributeBootRun(run, rawMetrics, intervalSamples);
+      runResults.push(runResult);
+
+      console.log(`[ntp-boot-staging] Run ${run}: longTasksCount=${runResult.longTasks.length}, composerReadyMs=${runResult.composerReadyMs}, threadListHydratedMs=${runResult.threadListHydratedMs}, validMeasurement=${runResult.validMeasurement}, longTasks=${runResult.longTasks.map(formatTaskAttribution).join("; ") || "none"}`);
 
       await client.send("Target.closeTarget", { targetId }).catch(() => {});
+      await new Promise((r) => setTimeout(r, 150));
+    }
+
+    const policy = evaluateBootStagingPolicy(runResults);
+    for (const w of policy.warnings) console.warn(w);
+    if (!policy.ok) {
+      if (policy.environmentalRefusal) {
+        console.error(
+          `${ENVIRONMENTAL_REFUSAL_MARKER} ${JSON.stringify({ reason: "boot-staging-contended", runs: runResults.length, error: policy.error })}`,
+        );
+        console.error(policy.error);
+        throw (policy.refusalError ?? new Error(policy.error));
+      }
+      assert(policy.ok, policy.error);
     }
   } finally {
     if (client) client.close();

@@ -26,12 +26,28 @@
 
 import { crypto } from "jsr:@std/crypto@1";
 import { acquireChromeSlot } from "./chrome-slots.ts";
-import { requireQuietWindow, type QuietSpec } from "./quiet-window.ts";
+import {
+  requireQuietWindow,
+  type QuietSpec,
+  readLoadSample,
+  classifyEvaluateTimeout,
+  measureEvaluateTimeout,
+  type EvaluateTimeoutVerdict,
+} from "./quiet-window.ts";
 import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, type HeavyGateLease } from "./heavy-gate-slot.ts";
 import { resolveChromeForTesting } from "./chrome-for-testing.ts";
 import { isUsableBinary } from "./browser-refusal.ts";
-import { attachProcessLifeline, isolatedProcessGroup, killProcessTree, type ProcessTableDeps, setsidSpawnSpec } from "./process-tree.ts";
+import {
+  attachProcessLifeline,
+  isolatedProcessGroup,
+  killProcessTree,
+  processGroup,
+  recordLeaderStartTicks,
+  type ProcessTableDeps,
+  setsidSpawnSpec,
+} from "./process-tree.ts";
 import { chromeProfileDir, isInsideRepo, profileLiveness } from "./chrome-profile-dir.ts";
+import { PageThrowError } from "./cdp-eval.ts";
 
 export interface LaunchedChrome {
   /** The spawned Chrome. The caller owns killing it. */
@@ -58,6 +74,8 @@ export interface LaunchedChrome {
   fleetSlotWaitMs?: number;
   /** The profile directory used for this launch, if any. */
   profile?: string;
+  /** Short per-launch TMPDIR for Chrome-internal scratch; teardown removes it. */
+  scratchDir?: string;
   /** Dedicated process group created by setsid for this launch. */
   processGroup?: number;
   /** Cleanly tear down this Chrome instance and all its child processes. */
@@ -67,6 +85,8 @@ export interface LaunchedChrome {
 const TAIL_LIMIT = 8192;
 // Raw ChildProcess callers must retain their isolated group at teardown too.
 const procGroups = new WeakMap<Deno.ChildProcess, number>();
+// Destructured callers also use teardownChrome(proc, profile), not just launched.close().
+const procScratchDirs = new WeakMap<Deno.ChildProcess, string>();
 
 /** The browser every harness drives. */
 export async function computeUnpackedExtensionId(path: string): Promise<string> {
@@ -518,11 +538,22 @@ export async function launchChrome(opts: {
    *  released when the browser exits, and by the kernel if this process dies.
    *  Refusal THROWS HeavyGateSlotRefusedError: the harness turns it into its
    *  environmental verdict (exit 75 + the holder named), never a product red. */
-  fleetSlot?: boolean | { gate?: string; kind?: string; boundMs?: number };
+  fleetSlot?: boolean | { gate?: string; kind?: string; boundMs?: number; slotPath?: string };
   /** Test seam (chrome-agent-platform-jjsz): the process-table reader behind the isolated-group
    *  probe. Production never sets it; tests inject a failing `ps` to prove an unreadable table
    *  FAILS THE LAUNCH CLOSED (teardown + rethrow) rather than running an unprotected browser. */
   processTable?: ProcessTableDeps;
+  /** Test seam (chrome-agent-platform-5fh6a): override teardownChrome to simulate teardown
+   *  failures during launch abort. Production never sets it. */
+  teardown?: (
+    target:
+      | LaunchedChrome
+      | Deno.ChildProcess
+      | { proc?: Deno.ChildProcess | null; profile?: string; processGroup?: number }
+      | null
+      | undefined,
+    profile?: string,
+  ) => Promise<void>;
 }): Promise<LaunchedChrome> {
   // chrome-agent-platform-ryrr: NEVER take the fleet turn while this process
   // already holds the canonical serialized-Chrome lock. The custody supervisor
@@ -560,6 +591,7 @@ export async function launchChrome(opts: {
       gate: spec.gate ?? "gate",
       kind: spec.kind ?? "gate",
       boundMs: spec.boundMs,
+      slot: spec.slotPath ? { slotPath: spec.slotPath } : undefined,
     });
     fleetSlotWaitMs = fleetLease.waitedMs;
   }
@@ -645,21 +677,34 @@ export async function launchChrome(opts: {
     throw e;
   }
   let proc: Deno.ChildProcess;
+  let scratchDir: string | undefined;
   try {
     // setsid execs the browser in a new process group (without -f, the spawned
     // child is not a group leader). This makes descendants identifiable even
     // when Chromium rewrites their command line or a wrapper replaces the binary.
     const spec = setsidSpawnSpec(opts.binary ?? resolveChromiumBinary(), [...args, "--remote-debugging-port=0"]);
+    // Chrome's long-profile SingletonSocket fallback and component updater use
+    // TMPDIR. Keep it short for Unix socket limits, isolated, and disposable.
+    scratchDir = resolvedProfile ? Deno.makeTempDirSync({ dir: "/tmp", prefix: `cap-${Deno.pid}-` }) : undefined;
+    const env = {
+      ...(opts.env ?? {}),
+      ...(resolvedProfile ? { XDG_CONFIG_HOME: `${resolvedProfile}/.config`, TMPDIR: scratchDir! } : {}),
+    };
     proc = new Deno.Command(spec.command, {
       args: spec.args,
       stdout: opts.stdout ?? "null",
       stderr: "piped",
       ...(opts.clearEnv ? { clearEnv: true } : {}),
-      ...(opts.env ? { env: opts.env } : {}),
+      ...(Object.keys(env).length > 0 ? { env } : {}),
     }).spawn();
+    if (scratchDir) procScratchDirs.set(proc, scratchDir);
   } catch (e) {
-    lock.release();
-    fleetLease?.release();
+    if (scratchDir) await Deno.remove(scratchDir, { recursive: true }).catch(() => {});
+    try {
+      lock.release();
+    } finally {
+      fleetLease?.release();
+    }
     throw e;
   }
   let group: number | undefined;
@@ -671,9 +716,64 @@ export async function launchChrome(opts: {
       treeMatch: resolvedProfile ? `user-data-dir=${resolvedProfile}` : undefined,
     });
   } catch (e) {
-    await teardownChrome(proc, resolvedProfile);
-    lock.release();
-    fleetLease?.release();
+    // chrome-agent-platform-5fh6a: when isolatedProcessGroup throws (e.g. unreadable table),
+    // check if the table has become readable and confirms setsid's group (proc.pid).
+    // If not, teardown falls back to leader-plus-profile kill as the accepted fallback.
+    let fallbackGroup: number | undefined;
+    try {
+      const stat = processGroup(proc.pid, opts.processTable);
+      if (stat?.group === proc.pid && stat.startTicks) {
+        fallbackGroup = proc.pid;
+        recordLeaderStartTicks(proc, stat.startTicks);
+      }
+    } catch {
+      // Table still unreadable: leader-plus-profile kill is the documented fallback.
+    }
+    try {
+      await (opts.teardown ?? teardownChrome)({
+        proc,
+        profile: resolvedProfile,
+        processGroup: fallbackGroup,
+        deps: opts.processTable,
+      });
+    } catch (teardownErr) {
+      if (fallbackGroup !== undefined) {
+        // The recovered group teardown failed (e.g. table became unreadable again).
+        // Fall back to leader-plus-profile cleanup so the browser and profile processes
+        // are never left alive in the background!
+        try {
+          await (opts.teardown ?? teardownChrome)({
+            proc,
+            profile: resolvedProfile,
+            processGroup: undefined,
+          });
+        } catch (fallbackErr) {
+          console.error(
+            `launchChrome: fallback leader-plus-profile teardown failed: ${
+              fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)
+            }`,
+          );
+        }
+      }
+      console.error(
+        `launchChrome: teardown failed while aborting launch: ${
+          teardownErr instanceof Error ? teardownErr.message : String(teardownErr)
+        }`,
+      );
+      if (e instanceof Error && !e.cause) {
+        try { (e as any).cause = teardownErr; } catch {}
+      }
+      if (scratchDir) {
+        try { await Deno.remove(scratchDir, { recursive: true }); } catch {}
+        if (proc) procScratchDirs.delete(proc);
+      }
+    } finally {
+      try {
+        lock.release();
+      } finally {
+        fleetLease?.release();
+      }
+    }
     throw e;
   }
   // The slot (or exclusive lock) lives exactly as long as this browser does.
@@ -697,33 +797,76 @@ export async function launchChrome(opts: {
   const deadline = Date.now() + (opts.timeoutMs ?? 20000);
   let seen = "";
   let wsUrl = "";
-  while (!wsUrl && Date.now() < deadline) {
-    let value: Uint8Array | undefined, done = false;
-    try {
-      ({ value, done } = await withTimeout(reader.read(), deadline - Date.now()));
-    } catch {
-      break; // read deadline — fall through to the honest error below
-    }
-    if (done) break;
-    const text = decoder.decode(value, { stream: true });
-    append(text);
-    seen += text;
-    const m = seen.match(/DevTools listening on (ws:\/\/\S+)/);
-    if (m) wsUrl = m[1];
-  }
 
-  if (!wsUrl) {
+  try {
+    while (!wsUrl && Date.now() < deadline) {
+      let value: Uint8Array | undefined, done = false;
+      try {
+        ({ value, done } = await withTimeout(reader.read(), deadline - Date.now()));
+      } catch {
+        break; // read deadline — fall through to the honest error below
+      }
+      if (done) break;
+      const text = decoder.decode(value, { stream: true });
+      append(text);
+      seen += text;
+      const m = seen.match(/DevTools listening on (ws:\/\/\S+)/);
+      if (m) wsUrl = m[1];
+    }
+
+    if (!wsUrl) {
+      throw new Error(
+        `launchChrome: Chrome never printed a DevTools endpoint (${opts.binary}). stderr tail: ${tail.slice(-600)}`,
+      );
+    }
+  } catch (e) {
     try { reader.releaseLock(); } catch { /* already released */ }
-    await teardownChrome({ proc, profile: resolvedProfile, processGroup: group });
-    lock.release();
-    fleetLease?.release();
-    // The browser never came up: give the FLEET turn back too. Without this, a
-    // startup failure kept the fleet-wide slot held by a live process that owns
-    // no browser — the one leak the crash-safe stdin pattern cannot cover, since
-    // the holder is still alive (review 2026-09-23, defect 1).
-    throw new Error(
-      `launchChrome: Chrome never printed a DevTools endpoint (${opts.binary}). stderr tail: ${tail.slice(-600)}`,
-    );
+    try {
+      await (opts.teardown ?? teardownChrome)({
+        proc,
+        profile: resolvedProfile,
+        processGroup: group,
+        deps: opts.processTable,
+      });
+    } catch (teardownErr) {
+      if (group !== undefined) {
+        // Group teardown failed (e.g. process table became unreadable during teardown).
+        // Fall back to leader-plus-profile cleanup so the browser and profile processes
+        // are never left alive in the background!
+        try {
+          await (opts.teardown ?? teardownChrome)({
+            proc,
+            profile: resolvedProfile,
+            processGroup: undefined,
+          });
+        } catch (fallbackErr) {
+          console.error(
+            `launchChrome: fallback leader-plus-profile teardown failed: ${
+              fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)
+            }`,
+          );
+        }
+      }
+      console.error(
+        `launchChrome: teardown failed while aborting launch: ${
+          teardownErr instanceof Error ? teardownErr.message : String(teardownErr)
+        }`,
+      );
+      if (e instanceof Error && !e.cause) {
+        try { (e as any).cause = teardownErr; } catch {}
+      }
+      if (scratchDir) {
+        try { await Deno.remove(scratchDir, { recursive: true }); } catch {}
+        if (proc) procScratchDirs.delete(proc);
+      }
+    } finally {
+      try {
+        lock.release();
+      } finally {
+        fleetLease?.release();
+      }
+    }
+    throw e;
   }
 
   // Keep draining stderr in the background. An undrained pipe eventually fills
@@ -755,9 +898,15 @@ export async function launchChrome(opts: {
     quietWaitMs,
     fleetSlotWaitMs,
     profile: resolvedProfile,
+    scratchDir,
     processGroup: group,
     close: async () => {
-      await teardownChrome({ proc, profile: resolvedProfile, processGroup: group });
+      await (opts.teardown ?? teardownChrome)({
+        proc,
+        profile: resolvedProfile,
+        processGroup: group,
+        deps: opts.processTable,
+      });
     },
   };
   return launched;
@@ -780,22 +929,121 @@ export async function launchChrome(opts: {
  * If no profile is available, a launched group's members are still killed and
  * verified; a bare process without either group or profile is reaped alone.
  */
+const PGREP = "/usr/bin/pgrep";
+const PKILL = "/usr/bin/pkill";
+
+/**
+ * Reap detached chrome_crashpad_handler processes whose database was isolated
+ * to this profile via XDG_CONFIG_HOME. Fails closed with survivor verification.
+ */
+export async function reapCrashpadHandler(profilePath: string): Promise<void> {
+  if (!profilePath || typeof profilePath !== "string") {
+    return;
+  }
+  const normalized = profilePath.replace(/\/+$/, "");
+  const home = Deno.env.get("HOME");
+  if (
+    !normalized ||
+    normalized.length <= 5 ||
+    normalized.endsWith("/..") ||
+    !normalized.startsWith("/") ||
+    normalized === "/" ||
+    normalized === "/home" ||
+    (home && normalized === home.replace(/\/+$/, ""))
+  ) {
+    return;
+  }
+  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = `chrome_crashpad_handler.*${escaped}(/| |$)`;
+
+  let check: Deno.CommandOutput;
+  try {
+    check = await new Deno.Command(PGREP, {
+      args: ["-f", "--", pattern],
+      stdout: "null",
+      stderr: "null",
+    }).output();
+  } catch (e) {
+    throw new Error(`pgrep failed (${(e as Error)?.message ?? e}) — cannot verify crashpad handlers`);
+  }
+  if (check.code === 1) return;
+  if (check.code !== 0) {
+    throw new Error(`pgrep exited ${check.code} checking for crashpad handler`);
+  }
+
+  let kill: Deno.CommandOutput;
+  try {
+    kill = await new Deno.Command(PKILL, {
+      args: ["-9", "-f", "--", pattern],
+      stdout: "null",
+      stderr: "null",
+    }).output();
+  } catch (e) {
+    throw new Error(`pkill failed (${(e as Error)?.message ?? e}) — cannot reap crashpad handler`);
+  }
+  if (kill.code !== 0 && kill.code !== 1) {
+    throw new Error(`pkill exited ${kill.code} reaping crashpad handler`);
+  }
+
+  for (let i = 0; i < 20; i++) {
+    let poll: Deno.CommandOutput;
+    try {
+      poll = await new Deno.Command(PGREP, {
+        args: ["-f", "--", pattern],
+        stdout: "null",
+        stderr: "null",
+      }).output();
+    } catch (e) {
+      throw new Error(`pgrep failed (${(e as Error)?.message ?? e}) — cannot confirm crashpad cleanup`);
+    }
+    if (poll.code === 1) return;
+    if (poll.code !== 0) {
+      throw new Error(`pgrep exited ${poll.code} confirming crashpad cleanup`);
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`chrome_crashpad_handler survived cleanup matching ${pattern}`);
+}
+
 export async function teardownChrome(
-  target: LaunchedChrome | Deno.ChildProcess | { proc?: Deno.ChildProcess | null; profile?: string; processGroup?: number } | null | undefined,
+  target:
+    | LaunchedChrome
+    | Deno.ChildProcess
+    | {
+      proc?: Deno.ChildProcess | null;
+      profile?: string;
+      processGroup?: number;
+      deps?: ProcessTableDeps;
+    }
+    | null
+    | undefined,
   profile?: string,
 ): Promise<void> {
   if (!target && !profile) return;
   const proc = target ? ("proc" in target ? (target.proc ?? null) : (target instanceof Deno.ChildProcess ? target : null)) : null;
   const matchedProfile = profile ?? (target && "profile" in target ? target.profile : undefined);
-  const group = (target && "processGroup" in target ? target.processGroup : undefined) ??
-    (proc ? procGroups.get(proc) : undefined);
+  const group = (target && typeof target === "object" && "processGroup" in target)
+    ? target.processGroup
+    : (proc ? procGroups.get(proc) : undefined);
+  const deps = target && "deps" in target ? target.deps : undefined;
+  // Only paths created by this launcher are eligible; never trust a caller's
+  // scratchDir property as authority to recursively remove an arbitrary path.
+  const removeScratch = async () => {
+    if (!proc) return;
+    const scratch = procScratchDirs.get(proc);
+    if (!scratch) return;
+    try { await Deno.remove(scratch, { recursive: true }); }
+    catch (e) { if (!(e instanceof Deno.errors.NotFound)) throw e; }
+    procScratchDirs.delete(proc);
+  };
   if (matchedProfile) {
     const raw = matchedProfile.replace(/^--/, "");
     const match = raw.startsWith("user-data-dir=") ? raw : `user-data-dir=${raw}`;
-    await killProcessTree(proc, match, { group });
+    await killProcessTree(proc, match, { group, deps });
     const profilePath = raw.startsWith("user-data-dir=") ? raw.slice("user-data-dir=".length) : raw;
     if (profilePath && typeof profilePath === "string" && profilePath.length > 5 && !profilePath.endsWith("/..")) {
       const normalized = profilePath.replace(/\/+$/, "");
+      await reapCrashpadHandler(normalized);
       const home = Deno.env.get("HOME");
       if (
         normalized.startsWith("/") &&
@@ -815,18 +1063,22 @@ export async function teardownChrome(
           console.error(
             `teardownChrome: refusing to delete ${normalized} — SingletonLock still reads live (never-delete-live rule)`,
           );
+          return; // Keep this run's scratch too while the profile is live.
         }
       }
     }
+    await removeScratch(); // killProcessTree verified no survivors before either removal.
     return;
   }
   if (proc) {
     if (group !== undefined) {
-      await killProcessTree(proc, `chrome-group-${group}-no-profile-${crypto.randomUUID()}`, { group });
+      await killProcessTree(proc, `chrome-group-${group}-no-profile-${crypto.randomUUID()}`, { group, deps });
+      await removeScratch();
       return;
     }
     try { proc.kill("SIGKILL"); } catch { /* already gone */ }
     try { await proc.status; } catch { /* reaped */ }
+    await removeScratch();
   }
 }
 
@@ -841,7 +1093,9 @@ export interface CdpClient {
   attach(targetId: string): Promise<string>;
   /** Open a URL in a new target and attach to it; returns the session id. */
   open(url: string): Promise<{ targetId: string; sessionId: string }>;
-  /** `Runtime.evaluate` with awaitPromise + returnByValue; throws on a page exception. */
+  /** `Runtime.evaluate` with awaitPromise + returnByValue; throws a
+   * `PageThrowError` on a page exception (never undefined), so a caller can
+   * tell a page throw from a transport failure. */
   eval(sessionId: string, expression: string): Promise<any>;
   /** Safely capture a screenshot of a target without wedging on quiesced headless frames (f5lb). */
   screenshot(sessionId: string, opts?: ScreenshotOptions): Promise<Uint8Array | null>;
@@ -921,7 +1175,11 @@ export async function openCdp(wsUrl: string, opts: { timeoutMs?: number } = {}):
       const r = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId);
       const res = r?.result;
       if (res?.exceptionDetails) {
-        throw new Error(res.exceptionDetails.exception?.description ?? res.exceptionDetails.text ?? "evaluate threw");
+        // TAGGED at the source (chrome-agent-platform-0lb4): a page throw is not
+        // a transport failure, and a caller that retries transport transients
+        // must not retry this one — a page expression can throw the very text a
+        // transient uses ("Cannot find default execution context").
+        throw new PageThrowError(res.exceptionDetails.exception?.description ?? res.exceptionDetails.text ?? "evaluate threw");
       }
       return res?.result?.value;
     },
@@ -944,33 +1202,219 @@ export const SW_MATCH = (t: any): boolean =>
   Boolean(t && t.type === "service_worker" && String(t.url ?? "").includes("dist/background"));
 
 /**
+ * Identify terminal transport failures where the CDP socket is closed or broken.
+ * A closed transport cannot recover on subsequent calls and must not be retried
+ * or misclassified as a host-load timeout.
+ */
+export function isTerminalTransportError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return (
+    msg.includes("cdp websocket closed") ||
+    msg.includes("cdp websocket error") ||
+    msg.includes("connection closed") ||
+    msg.includes("connection refused") ||
+    msg.includes("socket closed")
+  );
+}
+
+/**
+ * Count the number of live Chrome/Chromium processes currently running on this host.
+ * Inspects /proc on Linux; falls back to pgrep on macOS / non-/proc hosts.
+ * Never throws: fails closed to 0.
+ */
+export function countLiveChromeProcesses(): number {
+  try {
+    let count = 0;
+    for (const entry of Deno.readDirSync("/proc")) {
+      if (!/^\d+$/.test(entry.name)) continue;
+      try {
+        const comm = Deno.readTextFileSync(`/proc/${entry.name}/comm`).trim();
+        if (/chrome|chromium/i.test(comm)) count++;
+      } catch {
+        // process exited or permission restricted
+      }
+    }
+    return count;
+  } catch {
+    // macOS / non-/proc fallback
+    try {
+      const cmd = new Deno.Command("/usr/bin/pgrep", {
+        args: ["-c", "-f", "chrome|chromium"],
+        stdout: "piped",
+        stderr: "null",
+      });
+      const out = cmd.outputSync();
+      if (out.code === 0) {
+        const n = parseInt(new TextDecoder().decode(out.stdout).trim(), 10);
+        if (Number.isSafeInteger(n) && n >= 0) return n;
+      }
+    } catch {
+      // pgrep failed or not found
+    }
+    return 0;
+  }
+}
+
+/**
+ * Thrown by waitForServiceWorker when Target.getTargets calls stall or time out
+ * past the overall deadline. Carries the host load verdict and live Chrome count.
+ */
+export class ServiceWorkerTargetTimeoutError extends Error {
+  readonly totalTimeoutMs: number;
+  readonly callTimeoutMs: number;
+  readonly attempts: number;
+  readonly timedOutCalls: number;
+  readonly liveChrome: number;
+  readonly verdict: EvaluateTimeoutVerdict;
+  readonly lastError: Error | null;
+
+  constructor(
+    message: string,
+    details: {
+      totalTimeoutMs: number;
+      callTimeoutMs: number;
+      attempts: number;
+      timedOutCalls: number;
+      liveChrome: number;
+      verdict: EvaluateTimeoutVerdict;
+      lastError: Error | null;
+    },
+  ) {
+    super(message);
+    this.name = "ServiceWorkerTargetTimeoutError";
+    this.totalTimeoutMs = details.totalTimeoutMs;
+    this.callTimeoutMs = details.callTimeoutMs;
+    this.attempts = details.attempts;
+    this.timedOutCalls = details.timedOutCalls;
+    this.liveChrome = details.liveChrome;
+    this.verdict = details.verdict;
+    this.lastError = details.lastError;
+  }
+}
+
+export interface WaitForServiceWorkerOpts {
+  /** Overall deadline budget for the service worker discovery loop (default 15000ms). */
+  timeoutMs?: number;
+  /** Per-call timeout for each Target.getTargets CDP call (default 5000ms or totalTimeoutMs if smaller). */
+  callTimeoutMs?: number;
+  /** Polling interval between attempts (default 250ms). */
+  intervalMs?: number;
+  /** Target matching predicate (default SW_MATCH). */
+  match?: (t: any) => boolean;
+  /** Test seam: override load measurement verdict. */
+  measureVerdict?: () => Promise<EvaluateTimeoutVerdict>;
+  /** Test seam: override live Chrome process count. */
+  countLiveChrome?: () => number;
+}
+
+/**
  * Wait for the loaded extension's service-worker target to appear.
  *
- * Harnesses used to call `Target.getTargets` once, immediately after the CDP
- * handshake, and it worked only because polling a fixed port for
- * `/json/version` burned enough wall-clock for MV3 to register the worker.
- * Reading the endpoint off stderr removes that accidental delay, so the wait
- * has to be explicit — otherwise the harness reports "no service worker
- * target" for a browser that was merely still starting.
+ * Stated per-call timeout policy (chrome-agent-platform-3nurz):
+ * Rather than allowing a single `Target.getTargets` to stall for the entire 30s
+ * CDP connection budget under parallel launch load, each call is bounded by
+ * `callTimeoutMs` (default 5000ms, or `timeoutMs` if shorter).
  *
- * Defaults to `SW_MATCH` so harnesses target our extension's worker specifically
- * rather than any component extension worker (e.g. thunk.js) Chrome might register first.
+ * If a single call times out while the overall deadline has not yet expired,
+ * the transient stall is caught and retried on the next poll. If `Target.getTargets`
+ * calls continue timing out until the overall deadline is exhausted, the failure
+ * is classified via `measureEvaluateTimeout` / `classifyEvaluateTimeout`, logs the
+ * host load and live Chrome count, and throws `ServiceWorkerTargetTimeoutError`
+ * with a classified message instead of an opaque "Target.getTargets: deadline".
  *
- * Returns the target info, or null if it never registered within the deadline.
+ * If calls succeed but no worker matches within the deadline, returns null.
  */
 export async function waitForServiceWorker(
   send: CdpSend,
-  opts: { timeoutMs?: number; match?: (t: any) => boolean } = {},
+  opts: WaitForServiceWorkerOpts = {},
 ): Promise<any | null> {
-  const deadline = Date.now() + (opts.timeoutMs ?? 15000);
+  const totalTimeoutMs = opts.timeoutMs ?? 15000;
+  const callTimeoutMs = opts.callTimeoutMs ?? Math.min(5000, totalTimeoutMs);
+  const intervalMs = opts.intervalMs ?? 250;
+  const deadline = Date.now() + totalTimeoutMs;
   const match = opts.match ?? SW_MATCH;
+
+  let attempts = 0;
+  let lastError: Error | null = null;
+  let timedOutCalls = 0;
+
   for (;;) {
-    const res = await send("Target.getTargets");
-    const found = (res?.result?.targetInfos ?? []).find(match);
-    if (found) return found;
-    if (Date.now() >= deadline) return null;
-    await new Promise((r) => setTimeout(r, 250));
+    attempts++;
+    const now = Date.now();
+    if (now >= deadline) break;
+    const remaining = deadline - now;
+    const thisCallBudget = Math.min(callTimeoutMs, Math.max(1, remaining));
+
+    let res: any = null;
+    let callFailed = false;
+    try {
+      const callPromise = send("Target.getTargets");
+      // Prevent unhandled rejection if callPromise times out and later rejects
+      callPromise.catch(() => {});
+      res = await withTimeout(callPromise, thisCallBudget);
+    } catch (err) {
+      if (isTerminalTransportError(err)) {
+        // A closed CDP socket cannot recover on subsequent calls; fail immediately
+        // rather than spinning until deadline and misclassifying as a load timeout.
+        throw err;
+      }
+      const isTimeout =
+        err instanceof Error &&
+        (err.message === "deadline" ||
+          err.message.includes("deadline") ||
+          err.message.toLowerCase().includes("timeout"));
+
+      if (!isTimeout) {
+        // Non-timeout protocol or fatal error — fail fast
+        throw err;
+      }
+
+      callFailed = true;
+      lastError = err instanceof Error ? err : new Error(String(err));
+      timedOutCalls++;
+    }
+
+    if (!callFailed && res) {
+      const targets = res?.result?.targetInfos ?? res?.targetInfos ?? [];
+      const found = targets.find(match);
+      if (found) return found;
+    }
+
+    if (Date.now() >= deadline) break;
+    await new Promise((r) => setTimeout(r, intervalMs));
   }
+
+  // If deadline was exhausted and we encountered any call timeouts / errors:
+  if (timedOutCalls > 0 || lastError !== null) {
+    const verdict = opts.measureVerdict
+      ? await opts.measureVerdict()
+      : await measureEvaluateTimeout().catch(async () => {
+          const sample = await readLoadSample().catch(() => null);
+          return classifyEvaluateTimeout(sample);
+        });
+    const liveChrome = opts.countLiveChrome
+      ? opts.countLiveChrome()
+      : countLiveChromeProcesses();
+
+    const evidence = `[waitForServiceWorker] Target.getTargets: deadline exceeded (${totalTimeoutMs}ms total budget, ${callTimeoutMs}ms per-call budget, ${attempts} attempts, ${timedOutCalls} timed out) under ${verdict.cause}: live-chrome=${liveChrome} ${verdict.environment} (${verdict.reason})`;
+    console.error(evidence);
+
+    throw new ServiceWorkerTargetTimeoutError(
+      `waitForServiceWorker: Target.getTargets: deadline exceeded (${totalTimeoutMs}ms total budget, ${callTimeoutMs}ms per-call budget, ${attempts} attempts) [${verdict.cause}] live-chrome=${liveChrome} ${verdict.environment}`,
+      {
+        totalTimeoutMs,
+        callTimeoutMs,
+        attempts,
+        timedOutCalls,
+        liveChrome,
+        verdict,
+        lastError,
+      },
+    );
+  }
+
+  return null;
 }
 
 export interface ScreenshotOptions {

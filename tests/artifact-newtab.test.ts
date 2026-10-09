@@ -216,6 +216,8 @@ Deno.test("Artifact viewer security (B1): hostile ID in URL query renders as ine
   };
 
   // Simulating the viewer error rendering logic in artifact.js
+  const artifactSource = await Deno.readTextFile(new URL("../extension/artifact/artifact.js", import.meta.url));
+  assert(artifactSource.includes("Artifact not found"), "artifact.js viewer error logic");
   function renderError(message) {
     const err = {
       className: "error",

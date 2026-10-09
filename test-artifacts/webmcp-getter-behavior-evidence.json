@@ -1,0 +1,54 @@
+{
+  "ts": "2026-10-09T03:35:23.555Z",
+  "testedAgainst": "Chrome/154.0.8037.92",
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+  "nativeProtoCheck": {
+    "inDocumentProto": false,
+    "typeofDocMC": "undefined",
+    "desc": null,
+    "assessment": "not-present-on-clean-headless-page (defensive shadowing applies)"
+  },
+  "redCondition": {
+    "mechanism": "Page.addScriptToEvaluateOnNewDocument injected Document.prototype getter + bare assignment (document.modelContext = polyfill)",
+    "outcome": {
+      "hasProtoGetter": true,
+      "modelContextTypeAfterBareAssign": "undefined",
+      "modelContextValue": "undefined",
+      "toolsDiscoveredCount": 0
+    },
+    "behaviorVerdict": "PASS_CONFIRMED_RED"
+  },
+  "greenCondition": {
+    "mechanism": "Page.addScriptToEvaluateOnNewDocument injected Document.prototype getter + real fixture fixtures/webmcp-fixture.html Object.defineProperty shadowing",
+    "fixture": "fixtures/webmcp-fixture.html",
+    "outcome": {
+      "hasProtoGetter": true,
+      "hasModelContext": true,
+      "isOwnProperty": true,
+      "ownDescriptorConfigurable": true,
+      "ownDescriptorWritable": true,
+      "declaredToolCount": 3,
+      "toolNames": [
+        "shop.total",
+        "shop.catalog",
+        "shop.coupon"
+      ]
+    },
+    "behaviorVerdict": "PASS_CONFIRMED_GREEN"
+  },
+  "showcaseShopFixture": {
+    "fixture": "fixtures/showcase-shop.html",
+    "outcome": {
+      "isOwnProperty": true,
+      "declaredToolCount": 5,
+      "toolNames": [
+        "list_products",
+        "search_products",
+        "add_to_cart",
+        "remove_from_cart",
+        "cart_total"
+      ]
+    },
+    "behaviorVerdict": "PASS_CONFIRMED_GREEN"
+  }
+}

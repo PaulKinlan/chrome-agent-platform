@@ -46,6 +46,24 @@ export class EvalSurfaceError extends Error {
   }
 }
 
+/** A PAGE-SIDE throw surfaced by a transport's `Runtime.evaluate` (Chrome's
+ * `exceptionDetails`). Thrown by `openCdp(...).eval()` where the exception is
+ * unwrapped, so the detail is the page's own description.
+ *
+ * DISTINCT FROM A TRANSPORT FAILURE, and the distinction is load-bearing for
+ * every caller that retries: a transport failure means the instrument could
+ * not RUN the expression, while this means the page RAN it and threw. A page
+ * expression can literally throw "Cannot find default execution context", so a
+ * retry decided on the message text alone would retry it and swallow it into
+ * an `undefined`/absent read — the exact conversion this module exists to end
+ * (chrome-agent-platform-0lb4). Retry TRANSPORT failures; surface this. */
+export class PageThrowError extends Error {
+  constructor(detail: string) {
+    super(detail);
+    this.name = "PageThrowError";
+  }
+}
+
 /** Wire envelope: what a `resolve(d)` CDP wrapper hands back. */
 export interface WireEvaluateMessage {
   id?: number;

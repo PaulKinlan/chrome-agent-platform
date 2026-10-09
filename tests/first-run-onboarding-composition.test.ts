@@ -126,7 +126,10 @@ Deno.test("first-run composition preserves transaction and provider boundaries",
   assert(options.includes("blockSessionOnlyCredentialSave"));
 
   const [components, manifest] = await Promise.all([
-    text("../extension/shared/components.js"),
+    Promise.all([
+      text("../extension/shared/components-core.js"),
+      text("../extension/shared/components-artifacts.js"),
+    ]).then((parts) => parts.join("\n")),
     text("../extension/manifest.json").then(JSON.parse),
   ]);
   assert(

@@ -12,7 +12,7 @@ async function text(path: string) {
 
 // The exact component block (from its banner comment to its define call).
 async function componentSource() {
-  const source = await text("../extension/shared/components.js");
+  const source = await text("../extension/shared/components-settings.js");
   const start = source.indexOf("<tool-library> — READ-ONLY owner diagnostics");
   const end = source.indexOf('customElements.define("tool-library"');
   assert(start > 0 && end > start, "the tool-library component block must exist");
@@ -177,7 +177,7 @@ Deno.test("tool-library: gallery specimens exercise every state without a backen
 });
 
 Deno.test("tool-library: the component registers with the design system", async () => {
-  const source = await text("../extension/shared/components.js");
+  const source = await text("../extension/shared/components-settings.js");
   assertMatch(source, /customElements\.define\("tool-library", ToolLibrary\)/, "registered");
 });
 

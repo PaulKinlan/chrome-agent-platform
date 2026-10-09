@@ -5,7 +5,7 @@ import { formatCadenceMinutes } from "../extension/lib/next-run-label.js";
 const HTML = await Deno.readTextFile(new URL("../extension/options/options.html", import.meta.url));
 const CSS = await Deno.readTextFile(new URL("../extension/options/options.css", import.meta.url));
 const JS = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
-const COMPONENTS_JS = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+const COMPONENTS_JS = await Deno.readTextFile(new URL("../extension/shared/components-settings.js", import.meta.url));
 
 Deno.test("716s.4 cadence formatter: humanises period in minutes to plain English labels", () => {
   assertEquals(formatCadenceMinutes(1440), "daily");

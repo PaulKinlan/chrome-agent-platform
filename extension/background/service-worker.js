@@ -182,6 +182,14 @@ import {
   listKnownWebmcpOrigins,
   reportWebmcpDetection,
 } from "../lib/webmcp-detection-registry.js";
+import { attestCurrentAttachedWebmcpTab } from "../lib/attached-webmcp-attestation.js";
+import { bindAttachedWebmcpRun } from "../lib/attached-webmcp-run.js";
+import { readAttachedDeclaredWebmcpTools, readDeclaredWebmcpFromPage } from "../lib/attached-webmcp-declared.js";
+import { formatAttachedDeclaredContext } from "../lib/attached-webmcp-disclosure.js";
+import { createEphemeralSiteToolConsentStore } from "../lib/ephemeral-site-tool-consent.js";
+import { createEphemeralSiteToolAuditPrincipal } from "../lib/ephemeral-site-tool-audit.js";
+import { createAttachedDeclaredInvoker, validateAttachedDeclaredArgs } from "../lib/attached-webmcp-authority.js";
+import { auditedAttachedDeclaredCall, invokeAttachedDeclaredFromPage } from "../lib/attached-webmcp-invocation.js";
 import {
   hasPermission,
   hasCapability,
@@ -226,6 +234,13 @@ import {
   enrollmentPolicy,
   enrollmentSnapshot,
   enrollOrigin,
+  reEnrollOrigin,
+  prepareEnrollmentPromotion,
+  completeEnrollmentPromotion,
+  listPendingEnrollmentPromotions,
+  abandonEnrollmentPromotion,
+  retryAbandonedEnrollmentCleanup,
+  listAbandonedEnrollmentCleanups,
   getCurrentSiteIdentity,
   invalidateSiteToolConsentWriters,
   isApproved,
@@ -311,7 +326,14 @@ import {
   listThreads,
   nameThreadAsync,
   renameThread,
+  updateThreadWorkingSet,
 } from "../lib/threads.js";
+import {
+  createWorkingSet,
+  addTabToWorkingSet,
+  setWorkingSetGroup,
+  reconcileWorkingSet,
+} from "../lib/working-set.js";
 import {
   buildThreadRunView,
   buildAgentRunView,
@@ -1218,7 +1240,13 @@ import {
   hubUrlForCommand,
   newId,
   sleep,
-  redactToolArgs
+  redactSecretText,
+  boundedAndRedacted,
+  normalizeDurableToolCall,
+  normalizeDurableToolResult,
+  normalizeDurableLog,
+  redactToolArgs,
+  createTabChangeNotifier
 } from "../lib/pure.js";
 import { redactToolResult, toolResultFullJson } from "../lib/tool-summary.js";
 import {
@@ -1245,6 +1273,7 @@ import {
   stageApprovalDetail,
   getStagedApprovalDetail,
   mayReadApprovalDetail,
+  createExecutionApprovalStore,
 } from "../lib/owner-approval.js";
 import { lineDiffSummary } from "../shared/diff-core.js";
 import { bridgeAndAuditApprovalBindings } from "../lib/approval-bridge-audit.js";
@@ -1863,9 +1892,9 @@ chrome.permissions?.onAdded?.addListener((perms) => {
   // probe showed the provider resetting to demo on storage grant). A failed
   // migration is logged, never silently dropped.
   if (perms?.permissions?.includes("storage")) {
-    migrateSessionToStorage().catch((e) =>
-      swLog.error("migrateSessionToStorage:", e?.message ?? e)
-    );
+    migrateSessionToStorage()
+      .then(() => reconcileEnrollmentPromotionsOnBoot())
+      .catch((e) => swLog.error("migrateSessionToStorage/reconcilePromotion:", e?.message ?? e));
   }
 });
 chrome.permissions?.onRemoved?.addListener((perms) => {
@@ -1933,9 +1962,105 @@ const trustedSiteToolAuthorizations = new WeakSet();
 // promise }. The record exists before the approval row does, so a Settings
 // reset can fence work even while its required audit write is still queued.
 const pendingSiteToolConsent = new Map();
+// ckebt's hub attachment supplies live run tokens, not execution authority.
+// D2 owner enrollment also supports NO token: it promotes an empty same-gen
+// envelope, while any surviving old Deny is folded into the durable intent.
+const ephemeralSiteToolConsentStore = createEphemeralSiteToolConsentStore();
+// Only owner-attached hub runs populate this map; the model sees no token.
+// Every lookup also rechecks the run's captured reset epoch and abort signal.
+const activeAttachedWebmcpRuns = new Map();
 const cancellingApprovalExecutions = new Set();
+const executionApprovals = createExecutionApprovalStore(64);
 let siteToolProfileEpoch = 0;
 let siteToolResetting = 0;
+// A separate WAL principal for an exact, live, unenrolled run/document.
+// Only attachedDeclaredInvoker below may await its start row before invoking
+// page code; the enrolled Q23 principal and bridge remain unchanged.
+const ephemeralSiteToolAuditPrincipal = createEphemeralSiteToolAuditPrincipal({
+  consentStore: ephemeralSiteToolConsentStore,
+  attest: async (tabId) => {
+    try {
+      const [registry, enrolledOrigins] = await Promise.all([
+        listKnownWebmcpOrigins(), listOrigins(),
+      ]);
+      return await attestCurrentAttachedWebmcpTab(tabId, {
+        registry, enrolledOrigins,
+        getTab: (id) => chrome.tabs.get(id),
+        executeTopFrame: (id) => chrome.scripting.executeScript({
+          target: { tabId: id, frameIds: [0] }, world: "ISOLATED", func: () => true,
+        }),
+      });
+    } catch { return null; }
+  },
+  runActive: (runId) => activeExecutions.has(runId) &&
+    !cancellingApprovalExecutions.has(runId) && !endedExecutions.has(runId),
+  append: (row) => appendSiteToolAudit(row),
+  profileEpoch: () => siteToolProfileEpoch,
+  resetting: () => siteToolResetting > 0,
+});
+
+// This is a separate model-only UNENROLLED path, not an exception to the
+// enrolled content-script's numeric enrollment-generation/bridge checks.
+const attachedDeclaredInvoker = createAttachedDeclaredInvoker({
+  consentStore: ephemeralSiteToolConsentStore,
+  findBinding: (runId, origin) => {
+    const row = activeAttachedWebmcpRuns.get(runId);
+    const match = row?.bindings.find(({ candidate }) => candidate.origin === origin);
+    return match ? { binding: match.candidate, token: match.token } : null;
+  },
+  runActive: attachedDeclaredInvokerRunActive,
+  readDeclared: (binding, token) => readAttachedDeclaredWebmcpTools(binding, {
+    getTab: (id) => chrome.tabs.get(id),
+    livePermission: (origin) => hasLiveSiteToolHostPermission(origin),
+    executeTopFrame: (id, mode) => chrome.scripting.executeScript({
+      target: { tabId: id, frameIds: [0] },
+      world: mode === "read" ? "MAIN" : "ISOLATED",
+      func: mode === "read" ? readDeclaredWebmcpFromPage : () => true,
+    }),
+    runActive: () => {
+      try {
+        const live = ephemeralSiteToolConsentStore.binding(token);
+        return live.tabId === binding.tabId && live.documentId === binding.documentId &&
+          live.origin === binding.origin && attachedDeclaredInvokerRunActive(live.runId);
+      } catch { return false; }
+    },
+  }),
+  validateArgs: validateAttachedDeclaredArgs,
+  requestApproval: (context, binding, tool, consent, argDigest) => {
+    const target = canonicalOperationTarget("webmcp-tool", { origin: binding.origin, name: tool.name });
+    if (!target) return { ok: false, approvalDenied: false };
+    const payload = payloadFields([
+      ["origin", binding.origin], ["name", tool.name], ["source", "declared"],
+      ["identityDigest", consent.identityDigest], ["consentRevision", consent.revision],
+      ["runId", context.executionId], ["documentId", binding.documentId],
+      ["argDigest", argDigest],
+    ]);
+    return requireOwnerApproval(context, "webmcp.use-tool", target, payload,
+      { origin: binding.origin, tool: tool.name, scope: "attached-run" });
+  },
+  audit: (token, row) => ephemeralSiteToolAuditPrincipal.append(token, row),
+  invoke: (binding, tool, args, { runActive, requiredAudit }) =>
+    auditedAttachedDeclaredCall(binding, tool, args, {
+      runActive,
+      livePermission: (origin) => hasLiveSiteToolHostPermission(origin),
+      getTab: (id) => chrome.tabs.get(id),
+      attestTopFrame: (id) => chrome.scripting.executeScript({
+        target: { tabId: id, frameIds: [0] }, world: "ISOLATED", func: () => true,
+      }),
+      requiredAudit,
+      executeExactDocument: (tabId, documentId, name, validatedArgs, schemaJson) =>
+        chrome.scripting.executeScript({
+          target: { tabId, documentIds: [documentId] }, world: "MAIN",
+          func: invokeAttachedDeclaredFromPage, args: [name, validatedArgs, schemaJson],
+        }),
+    }),
+});
+function attachedDeclaredInvokerRunActive(runId) {
+  const row = activeAttachedWebmcpRuns.get(runId);
+  return Boolean(row && row.epoch === siteToolProfileEpoch && siteToolResetting === 0 &&
+    !row.signal?.aborted && activeExecutions.has(runId) &&
+    !cancellingApprovalExecutions.has(runId) && !endedExecutions.has(runId));
+}
 
 function siteToolRunIdentity(context = {}) {
   const executionId = typeof context.executionId === "string"
@@ -1991,8 +2116,9 @@ async function appendRequiredSiteToolAudit(record, { enrollmentLocked = false } 
     // Disable already owns the enrollment lock, so it must use the deliberately
     // unlocked generation read instead of recursively acquiring the mutex.
     const enrollment = enrollmentLocked
-      ? { enrolled: true, gen: await enrollmentGeneration(record?.origin) }
+      ? { gen: await enrollmentGeneration(record?.origin, { requireActive: true }) }
       : await enrollmentSnapshot(record?.origin);
+    if (enrollmentLocked) enrollment.enrolled = enrollment.gen > 0;
     if (
       siteToolResetting > 0 || profileEpoch !== siteToolProfileEpoch || !enrollment.enrolled ||
       enrollment.gen !== record?.enrollmentGen
@@ -2084,6 +2210,8 @@ function finalizeExecution(execId) {
   // by the caller's finally. The recorded events stay readable.
   activeExecutions.delete(execId);
   cancellingApprovalExecutions.delete(execId);
+  const execApprovals = ownerApprovalStore?.executionApprovals || (typeof executionApprovals !== "undefined" ? executionApprovals : null);
+  execApprovals?.cleanupExecution(execId);
   const slot = recentRunAttestations.get(execId);
   if (slot) slot.finalized = true;
 }
@@ -3225,6 +3353,15 @@ async function bindSnapshotGate(canonical, pickedTabId) {
   });
 }
 
+// A Chrome grant is external to cap:enrollment's durable write and may be
+// revoked after promotion. Check it again at EACH page-effect dispatch edge;
+// the registry flip proves consistency at promotion, not perpetual permission.
+async function hasLiveSiteToolHostPermission(origin) {
+  return await chrome.permissions.contains({
+    permissions: ["scripting"], origins: [`${origin}/*`],
+  }).catch(() => false);
+}
+
 async function invokeSiteTool(
   origin,
   name,
@@ -3530,8 +3667,9 @@ async function invokeSiteToolCore(
     let currentTabOrigin = null;
     try { currentTabOrigin = currentTab?.url ? canonicalOrigin(currentTab.url) : null; } catch { currentTabOrigin = null; }
     const liveAuthority = await verifySiteToolAuthorization(authorization, currentDescriptor);
+    const hostReady = await hasLiveSiteToolHostPermission(canonical);
     if (
-      !currentDescriptor || !currentBinding || currentBinding.tabId !== tab.id ||
+      !hostReady || !currentDescriptor || !currentBinding || currentBinding.tabId !== tab.id ||
       currentBinding.documentId !== resolvedBinding.documentId || currentTabOrigin !== canonical ||
       !liveAuthority.ok
     ) {
@@ -3539,7 +3677,7 @@ async function invokeSiteToolCore(
         ok: false,
         authorityRevoked: true,
         error: `site tool authority changed before ${name} could run`,
-        reason: liveAuthority.reason ?? "authority-changed",
+        reason: !hostReady ? "host-permission-revoked" : (liveAuthority.reason ?? "authority-changed"),
       };
     }
   }
@@ -3641,8 +3779,9 @@ async function invokeSiteToolCore(
     let recoveryOrigin = null;
     try { recoveryOrigin = recoveryTab?.url ? canonicalOrigin(recoveryTab.url) : null; } catch { recoveryOrigin = null; }
     const recoveryAuthority = await verifySiteToolAuthorization(authorization, stillThere);
+    const recoveryHostReady = await hasLiveSiteToolHostPermission(canonical);
     if (
-      runAborted() || !recoveryEnrollment.enrolled || recoveryEnrollment.gen !== gen ||
+      !recoveryHostReady || runAborted() || !recoveryEnrollment.enrolled || recoveryEnrollment.gen !== gen ||
       recoveryEnrollment.policy === "deny" || !recoveryBinding ||
       recoveryBinding.tabId !== recoverTabId || recoveryBinding.documentId !== freshBinding.documentId ||
       recoveryOrigin !== canonical || !recoveryAuthority.ok
@@ -3651,7 +3790,7 @@ async function invokeSiteToolCore(
         ok: false,
         authorityRevoked: true,
         error: `site tool authority changed before ${name} recovery could run`,
-        reason: recoveryAuthority.reason ?? "authority-changed",
+        reason: !recoveryHostReady ? "host-permission-revoked" : (recoveryAuthority.reason ?? "authority-changed"),
       };
     }
     try {
@@ -4088,10 +4227,13 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
         // canonical redactor strips credential-shaped keys/values FIRST
         // (nothing secret-shaped reaches the serializer), then journalJson
         // emits valid bounded JSON (redactSecretText covers bare strings).
-        const args = event.toolArgs != null ? journalJson(redactSecrets(event.toolArgs)) : "";
+        let args = "";
+        if (event.toolArgs != null) {
+          try { args = journalJson(redactSecrets(event.toolArgs)); } catch { args = "\"[unserializable]\""; }
+        }
         const log = { type: "tool-call", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", args };
         journalAppend(mem, log).catch(() => {});
-        durableRuns.appendLog(executionId, log, `tool-call:${callId}`).catch(() => {});
+        durableRuns.appendLog(executionId, normalizeDurableToolCall(log), `tool-call:${callId}`).catch(() => {});
       } else if (type === "tool-result") {
         let result;
         if (event.result == null) result = "";
@@ -4104,7 +4246,7 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
           const d = redactToolResult(event.result);
           // journalJson (not a mid-string slice) bounds the persisted text —
           // a sliced payload corrupted the replay's structured render.
-          try { result = journalJson(d); } catch { result = String(d ?? event.result); }
+          try { result = journalJson(d); } catch { result = "\"[unserializable]\""; }
         }
         // Match the OLDEST pending callId for this tool name (FIFO — parallel
         // same-name calls pair in order) + persist the ok flag so a replay can
@@ -4115,7 +4257,7 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
         orphanSeq.set(event.toolName, orphanN);
         // An unmatched result gets a UNIQUE id (never a repeated ":1" that
         // would collapse multiple orphan results into one card).
-        const callId = q.shift() ?? `${taskId}:${runInstance}:${event.toolName ?? "tool"}:orphan:${orphanN}`;
+        const callId = event.callId || event.toolCallId || (q.shift() ?? `${taskId}:${runInstance}:${event.toolName ?? "tool"}:orphan:${orphanN}`);
         // Continuation fidelity: the compact tool summary (name + ok only —
         // never args or result bodies) rides the settle payload -> terminal
         // thread row so a resumed run knows which tools ran.
@@ -4124,20 +4266,31 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
         // (bounded: the same shape normalizePermissionRequirement accepts) so
         // a reopened thread can render the grant card, not prose (§2b).
         const ownerSiteActivity = boundedOwnerSiteActivity(event.siteActivity);
-        const pr = event.permissionRequirement;
+        const reqApprovals = Array.isArray(event.permissionRequirement?.approvals)
+          ? event.permissionRequirement.approvals
+          : [];
+        let settledApp = null;
+        const execApprovals = ownerApprovalStore?.executionApprovals || (typeof executionApprovals !== "undefined" ? executionApprovals : null);
+        if (execApprovals) {
+          for (const a of reqApprovals) {
+            if (a?.approvalId && execApprovals.has(a.approvalId)) {
+              settledApp = execApprovals.consume(a.approvalId);
+              break;
+            }
+          }
+          if (!settledApp && typeof event.approvalId === "string" && event.approvalId && execApprovals.has(event.approvalId)) {
+            settledApp = execApprovals.consume(event.approvalId);
+          }
+          if (!settledApp && callId && execApprovals.has(callId)) {
+            settledApp = execApprovals.consume(callId);
+          }
+        }
+        const pr = event.permissionRequirement ?? settledApp?.requirement;
+        const permDecision = (typeof event.permissionDecision === "string" ? event.permissionDecision : null) ?? settledApp?.decision ?? (settledApp ? "approved" : null);
         const permissionReq = pr && typeof pr === "object" && !Array.isArray(pr)
           ? {
-            permissionRequirement: {
-              reason: String(pr.reason ?? "").slice(0, 240),
-              permissions: (Array.isArray(pr.permissions) ? pr.permissions : []).filter((x) => typeof x === "string").slice(0, 8),
-              grantOrigins: (Array.isArray(pr.grantOrigins) ? pr.grantOrigins : []).filter((x) => typeof x === "string").slice(0, 50),
-              grantGlobal: pr.grantGlobal === true,
-              // Site access asks survive the reload too (READ-PAGE-HOST-GRANT-01).
-              ...(Array.isArray(pr.hostOrigins) && pr.hostOrigins.length
-                ? { hostOrigins: pr.hostOrigins.filter((x) => typeof x === "string").slice(0, 50) }
-                : {}),
-            },
-            permissionDecision: typeof event.permissionDecision === "string" ? event.permissionDecision.slice(0, 16) : null,
+            permissionRequirement: pr,
+            permissionDecision: typeof permDecision === "string" ? permDecision.slice(0, 16) : null,
             // Approved, then re-run by the runtime — the reopened card says so
             // (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01).
             ...(event.reexecuted === true ? { reexecuted: true } : {}),
@@ -4155,7 +4308,7 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
         const durableLog = typeof event.resultFull === "string" && event.resultFull
           ? { ...log, resultFull: event.resultFull, resultFullTruncated: event.resultFullTruncated === true, resultFullBytes: Number(event.resultFullBytes) || 0 }
           : log;
-        durableRuns.appendLog(executionId, durableLog, `tool-result:${callId}`).catch(() => {});
+        durableRuns.appendLog(executionId, normalizeDurableToolResult(durableLog), `tool-result:${callId}`).catch(() => {});
         durableRuns.heartbeat(executionId, { progressed: true }).catch(() => {
           heartbeatFailed = true;
           try { orch?.abort?.(); } catch { /* already stopped */ }
@@ -4192,6 +4345,8 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
     // slot. This run builds a management toolset that CAPTURES executionId.
     let abortNow = null;
     let orch = null;
+    let ephemeralAttachedRun = null;
+    let ephemeralAttachedRunEpoch = null;
     let heartbeatFailed = false;
     let taskJournalReceipt = null;
     let taskJournalGuard = null;
@@ -4243,11 +4398,48 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
         .map((a) => ({ grantId: a.grantId, name: a.folderName || a.name || "folder" }));
       setRunContext({ threadId, agentRole, agentSurfaceRef, folderGrants: runFolderGrants });
       if (delegationState) activeDelegationRuns.set(executionId, delegationState);
+      // Only a live hub run can bind the owner's /tabs attachment. Capture
+      // Chrome's top-level document AGAIN at run start: a navigation between
+      // owner pick and dispatch fails closed, as does an SW restart (durable
+      // attachment snapshots deliberately omit tabId/documentId). This creates
+      // no worker, model descriptor, siteMemory(origin), or execution grant.
+      if (agentRole === "hub" && !scoped && !scheduled && !harnessId &&
+        Array.isArray(attachments) && attachments.some((a) => a?.kind === "tab" && a.documentId)) {
+        try {
+          const [registry, enrolledOrigins] = await Promise.all([
+            listKnownWebmcpOrigins(), listOrigins(),
+          ]);
+          const runEpoch = siteToolProfileEpoch;
+          ephemeralAttachedRun = await bindAttachedWebmcpRun({
+            attachments, runId: executionId, threadId,
+            consentStore: ephemeralSiteToolConsentStore,
+            attest: (tabId) => attestCurrentAttachedWebmcpTab(tabId, {
+              registry, enrolledOrigins,
+              getTab: (id) => chrome.tabs.get(id),
+              executeTopFrame: (id) => chrome.scripting.executeScript({
+                target: { tabId: id, frameIds: [0] }, world: "ISOLATED", func: () => true,
+              }),
+            }),
+            allowOrigin: (origin) => isWebmcpOriginAllowed(webmcpAllowlistForAgent(agentTools), origin),
+            runActive: () => activeExecutions.has(executionId) &&
+              siteToolResetting === 0 && siteToolProfileEpoch === runEpoch && !fence?.signal?.aborted,
+          });
+          ephemeralAttachedRunEpoch = runEpoch;
+          if (ephemeralAttachedRun.bindings.length) activeAttachedWebmcpRuns.set(executionId, {
+            bindings: ephemeralAttachedRun.bindings, epoch: runEpoch, signal: fence?.signal,
+          });
+        } catch {
+          // No attached-tool authority is safer than borrowing the model's
+          // ambient browser tools when the browser attestation is unavailable.
+        }
+      }
       if (acpConfig) {
         const ready = await ensureOffscreen();
         if (!ready.ok) throw new Error(ready.error);
         modelOverride = createAcpModelProxy({
           ...acpConfig,
+          threadId: threadId || null,
+          executionId: executionId || null,
           permissionHandler: (request) => acpRunPermissions.ask({
             executionId, documentId: approvalResolverDocumentId, harnessId,
             request, emit: journalingProgress, auto: acpConfig.auto,
@@ -4388,7 +4580,40 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
       await fence?.assertOwned?.();
       // Untrusted (page-derived) attachments are fenced with THIS run's token —
       // the same one the master's untrusted-content policy layer names.
-      const context = attachmentContext(attachments, { untrustedToken: orch?.untrustedToken ?? null });
+      // Q2 permits disclosure of *fenced declared descriptors* to this one
+      // live hub run before per-tool consent. This is model CONTEXT ONLY: it
+      // adds no callable record, owner approval, site store, or page invoke.
+      // The passive registry/chip remain count-only. A failed read supplies no
+      // descriptors, never an inferred page-JS fallback.
+      const attachedRunActive = () => ephemeralAttachedRunEpoch !== null &&
+        activeExecutions.has(executionId) && siteToolResetting === 0 &&
+        siteToolProfileEpoch === ephemeralAttachedRunEpoch && !fence?.signal?.aborted;
+      const attachedDeclaredText = ephemeralAttachedRun ? await formatAttachedDeclaredContext({
+        bindings: ephemeralAttachedRun.bindings,
+        consentStore: ephemeralSiteToolConsentStore,
+        untrustedToken: orch?.untrustedToken ?? null,
+        runActive: attachedRunActive,
+        read: (candidate, token) => readAttachedDeclaredWebmcpTools(candidate, {
+          getTab: (id) => chrome.tabs.get(id),
+          livePermission: (origin) => hasLiveSiteToolHostPermission(origin),
+          executeTopFrame: (id, mode) => chrome.scripting.executeScript({
+            target: { tabId: id, frameIds: [0] },
+            world: mode === "read" ? "MAIN" : "ISOLATED",
+            func: mode === "read" ? readDeclaredWebmcpFromPage : () => true,
+          }),
+          runActive: () => {
+            if (!attachedRunActive()) return false;
+            try {
+              const bound = ephemeralSiteToolConsentStore.binding(token);
+              return bound.runId === executionId && bound.origin === candidate.origin &&
+                bound.tabId === candidate.tabId && bound.documentId === candidate.documentId;
+            } catch { return false; }
+          },
+        }),
+      }) : "";
+      const baseAttachmentContext = attachmentContext(attachments, { untrustedToken: orch?.untrustedToken ?? null });
+      const context = attachedDeclaredText
+        ? `${baseAttachmentContext}\n\n${attachedDeclaredText}` : baseAttachmentContext;
       // Include any /skill:<id> references from the task string: each
       // referenced skill's FULL prompt body is composed into the run's system
       // prompt as a skills layer BEFORE the protected runtime policy (the
@@ -4792,6 +5017,8 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
       try { error.executionId = executionId; } catch { /* immutable error */ }
       throw error;
     } finally {
+      activeAttachedWebmcpRuns.delete(executionId);
+      ephemeralAttachedRun?.end(); // opaque run tokens die before async cleanup
       if (acpConfig) modelOverride?.close?.();
       acpRunPermissions.cancel(executionId);
       clearInterval(durableHeartbeat);
@@ -5135,19 +5362,18 @@ async function armDetectionProbe(tabId, documentId, hookName) {
 // changed with them (CAP-FB-20260825-SITE-AGENT-SHOWCASE-01). Tell the open
 // hub(s) once, debounced — they re-read `agent.tool-offers`; this carries no
 // URL or title. Registered at top level so a restarted worker keeps it.
-let openTabsChangedTimer = null;
-function noteOpenTabsChanged() {
-  clearTimeout(openTabsChangedTimer);
-  openTabsChangedTimer = setTimeout(() => {
-    openTabsChangedTimer = null;
-    broadcastProgress({ type: "open-tabs-changed" });
-  }, 300);
-}
-chrome.tabs?.onUpdated?.addListener((_tabId, info) => {
-  if (info?.status === "complete" || typeof info?.url === "string") noteOpenTabsChanged();
+const tabChangeNotifier = createTabChangeNotifier({
+  notify: () => broadcastProgress({ type: "open-tabs-changed" }),
+  chromeTabs: typeof chrome !== "undefined" ? chrome.tabs : undefined,
+  debounceMs: 300,
 });
-chrome.tabs?.onRemoved?.addListener(() => noteOpenTabsChanged());
-chrome.tabs?.onActivated?.addListener(() => noteOpenTabsChanged());
+function noteOpenTabsChanged() {
+  tabChangeNotifier.noteChange();
+}
+chrome.tabs?.onCreated?.addListener(tabChangeNotifier.handleCreated);
+chrome.tabs?.onUpdated?.addListener(tabChangeNotifier.handleUpdated);
+chrome.tabs?.onActivated?.addListener(tabChangeNotifier.handleActivated);
+chrome.tabs?.onRemoved?.addListener(tabChangeNotifier.handleRemoved);
 
 chrome.permissions?.onAdded?.addListener((granted) => {
   if (!granted?.permissions?.includes("scripting")) return;
@@ -5271,6 +5497,7 @@ async function recordWebmcpPageReport(origin, acceptedTools) {
 
 // ── owner-bound destructive-operation approvals ──────────────────────────
 const ownerApprovalStore = createApprovalStore();
+ownerApprovalStore.executionApprovals = executionApprovals;
 const inlinePermissionWaiters = new Map();
 const acpRunPermissions = createAcpRunPermissions({ isActive: (id) => activeExecutions.has(id) });
 const INLINE_PERMISSION_TTL_MS = 60_000;
@@ -5444,14 +5671,41 @@ async function requireOwnerApproval(context, action, target, payload, detail = u
     ]).finally(() => { if (decisionTimer) clearTimeout(decisionTimer); });
     if (!decision || decision.decision !== "approved") {
       resolvePendingApproval(ownerApprovalStore, pending.approvalId, false);
-      return { ok: false, error: decision?.decision === "timeout" ? `Owner approval for ${action} timed out after 60s.` : "Owner denied approval for this operation.", approvalDenied: true, action };
+      const settledState = decision?.decision === "cancelled" ? "cancelled" : decision?.decision === "timeout" ? "expired" : "denied";
+      if (pending?.approvalId) {
+        const callId = context?.callId || detail?.callId || null;
+        const execApprovals = ownerApprovalStore?.executionApprovals || (typeof executionApprovals !== "undefined" ? executionApprovals : null);
+        execApprovals?.register({
+          canonicalId: pending.approvalId,
+          aliases: callId ? [callId] : [],
+          requirement: request.permissionRequirement,
+          decision: settledState,
+          tool: detail?.tool,
+          executionId,
+        });
+      }
+      context.onApprovalEvent?.({ type: "approval-settled", approvalId: pending.approvalId, state: settledState });
+      return { ok: false, error: decision?.decision === "timeout" ? `Owner approval for ${action} timed out after 60s.` : decision?.decision === "cancelled" ? (decision.error || "Invocation cancelled.") : "Owner denied approval for this operation.", approvalDenied: true, action };
     }
     if (!activeExecutions.has(executionId) || cancellingApprovalExecutions.has(executionId) || endedExecutions.has(executionId)) {
+      context.onApprovalEvent?.({ type: "approval-settled", approvalId: pending.approvalId, state: "cancelled" });
       return { ok: false, error: "The run was cancelled before approval could be applied.", approvalDenied: true, action };
     }
     const exact = consumeApproved(ownerApprovalStore, executionId, action, target, digest);
     if (exact.ok) {
       securityApprovalEvent("consumed", action, targetRef);
+      if (pending?.approvalId) {
+        const callId = context?.callId || detail?.callId || null;
+        const execApprovals = ownerApprovalStore?.executionApprovals || (typeof executionApprovals !== "undefined" ? executionApprovals : null);
+        execApprovals?.register({
+          canonicalId: pending.approvalId,
+          aliases: callId ? [callId] : [],
+          requirement: request.permissionRequirement,
+          decision: "approved",
+          tool: detail?.tool,
+          executionId,
+        });
+      }
       context.onApprovalEvent({ type: "approval-settled", approvalId: pending.approvalId, state: "granted" });
       return { ok: true };
     }
@@ -8190,9 +8444,15 @@ const handlers = mergeRouteMaps(
           const execs = new Set(execList.map((e) => e.executionId));
           const pending = [];
           for (const [approvalId, app] of ownerApprovalStore.approvals.entries()) {
-            if (app?.status === "pending" && execs.has(app.runId)) {
+            if (execs.has(app.runId)) {
               const req = approvalCardDenial({ approvalId, action: app.action, targetRef: app.targetRef, detail: app.detail })?.permissionRequirement;
-              if (req) pending.push({ role: "approval", requirement: req, executionId: app.runId, ts: app.createdAt ?? Date.now() });
+              if (req) pending.push({
+                role: "approval",
+                requirement: req,
+                executionId: app.runId,
+                ts: app.createdAt ?? Date.now(),
+                state: app.status ?? "pending",
+              });
             }
           }
           if (pending.length && Array.isArray(view?.messages)) view.messages = [...view.messages, ...pending];
@@ -8211,7 +8471,7 @@ const handlers = mergeRouteMaps(
     const config = await acpRunConfig(m?.harnessId, async (key) => (await kvGet(key))?.[key], { discovery: true });
     const ready = await ensureOffscreen();
     if (!ready.ok) return { ok: false, error: "Cannot open the harness connection. Try again." };
-    return { ok: true, harnessId: config.harnessId, ...await discoverAcpCommands(config) };
+    return { ok: true, harnessId: config.harnessId, ...await discoverAcpCommands({ ...config, threadId: m?.threadId || null }) };
   },
   async "acp.journal"(m, context) {
     if (m?.action === "open") {
@@ -8267,11 +8527,138 @@ const handlers = mergeRouteMaps(
     }
     return { ok: false, error: "invalid acp.journal action" };
   },
+
   async "thread.delete"(m) {
     const removed = await deleteThread(m?.id);
     return removed ? { ok: true } : { ok: false, error: "thread not found" };
   },
   async "thread.rename"(m) {
+    if (m?.id && (m?.closeTabIds || m?.attachTabs || m?.restoreTabs || m?.workingSet || m?.reconcileTabs || m?.staleTabIds || m?.updatedTabs || typeof m?.groupId === "number" || m?.groupId === null)) {
+      const updated = await updateThreadWorkingSet(m.id, (currentWs) => {
+        let ws = createWorkingSet(currentWs);
+        const staleIds = Array.isArray(m.staleTabIds) ? m.staleTabIds : (Array.isArray(m.closeTabIds) ? m.closeTabIds : null);
+        if (staleIds && staleIds.length > 0) {
+          const toClose = new Set(staleIds);
+          const liveUrlMap = new Map();
+          if (Array.isArray(m.closedTabs)) {
+            for (const ct of m.closedTabs) {
+              if (ct?.tabId != null && ct?.url) liveUrlMap.set(ct.tabId, ct.url);
+            }
+          }
+          const nextTabs = ws.tabs.map((t) => {
+            if (t.tabId != null && toClose.has(t.tabId)) {
+              const liveUrl = liveUrlMap.get(t.tabId);
+              return { url: liveUrl || t.url, title: t.title };
+            }
+            return t;
+          });
+          const stillOpen = nextTabs.some((t) => t.tabId != null);
+          ws = createWorkingSet({
+            groupId: stillOpen ? ws.groupId : null,
+            groupNamed: stillOpen ? ws.groupNamed : false,
+            tabs: nextTabs,
+            preserveInactiveCount: nextTabs.length,
+          });
+        }
+        if (Array.isArray(m.updatedTabs) && m.updatedTabs.length > 0) {
+          const updateMap = new Map();
+          for (const u of m.updatedTabs) {
+            if (typeof u?.tabId === "number") updateMap.set(u.tabId, u);
+          }
+          const nextTabs = ws.tabs.map((t) => {
+            if (t.tabId != null && updateMap.has(t.tabId)) {
+              const u = updateMap.get(t.tabId);
+              return Object.freeze({
+                tabId: t.tabId,
+                url: u.url || t.url,
+                title: u.title !== undefined ? u.title : t.title,
+              });
+            }
+            return t;
+          });
+          ws = createWorkingSet({
+            groupId: ws.groupId,
+            groupNamed: ws.groupNamed,
+            tabs: nextTabs,
+            preserveInactiveCount: ws.preserveInactiveCount,
+          });
+        }
+        if (Array.isArray(m.restoreTabs) && m.restoreTabs.length > 0) {
+          const nextTabs = [...ws.tabs];
+          for (const restored of m.restoreTabs) {
+            if (typeof restored?.tabId === "number" && restored.url) {
+              const idx = nextTabs.findIndex((t) => !t.tabId && t.url === restored.url);
+              if (idx !== -1) {
+                nextTabs[idx] = Object.freeze({
+                  tabId: restored.tabId,
+                  url: restored.url,
+                  title: restored.title !== undefined ? restored.title : nextTabs[idx].title,
+                });
+              } else {
+                nextTabs.push(Object.freeze({
+                  tabId: restored.tabId,
+                  url: restored.url,
+                  ...(restored.title ? { title: restored.title } : {}),
+                }));
+              }
+            }
+          }
+          ws = createWorkingSet({
+            groupId: typeof m.groupId === "number" && m.groupId >= 0 ? m.groupId : ws.groupId,
+            groupNamed: m.groupNamed !== undefined ? m.groupNamed === true : ws.groupNamed,
+            tabs: nextTabs,
+            preserveInactiveCount: ws.preserveInactiveCount,
+          });
+        }
+        if (Array.isArray(m.attachTabs) && m.attachTabs.length > 0) {
+          for (const tab of m.attachTabs) {
+            ws = addTabToWorkingSet(ws, tab);
+          }
+          if (typeof m.groupId === "number" && m.groupId >= 0) {
+            ws = setWorkingSetGroup(ws, m.groupId, m.groupNamed === true);
+          }
+        }
+        if (m.groupId === null) {
+          ws = setWorkingSetGroup(ws, null, false);
+        } else if (typeof m.groupId === "number" && !m.attachTabs) {
+          const nextNamed = m.groupNamed !== undefined ? m.groupNamed === true : (m.groupId === ws.groupId ? ws.groupNamed : false);
+          ws = setWorkingSetGroup(ws, m.groupId >= 0 ? m.groupId : null, nextNamed);
+        }
+        if (Array.isArray(m.reconcileTabs)) {
+          const queriedIdSet = new Set(m.reconcileKnownTabIds || ws.tabIds);
+          const activeTabIdSet = new Set(
+            m.reconcileTabs
+              .map((t) => (typeof t === "number" ? t : t?.id))
+              .filter((id) => typeof id === "number" && id > 0),
+          );
+          const nextTabs = ws.tabs.map((t) => {
+            if (t.tabId != null && queriedIdSet.has(t.tabId) && !activeTabIdSet.has(t.tabId)) {
+              return { url: t.url, title: t.title };
+            }
+            return t;
+          });
+          let nextGroupId = ws.groupId;
+          let nextGroupNamed = ws.groupNamed;
+          if (Array.isArray(m.activeGroupIds) && ws.groupId != null) {
+            if (!m.activeGroupIds.includes(ws.groupId)) {
+              nextGroupId = null;
+              nextGroupNamed = false;
+            }
+          }
+          ws = createWorkingSet({
+            groupId: nextGroupId,
+            groupNamed: nextGroupNamed,
+            tabs: nextTabs,
+            preserveInactiveCount: ws.preserveInactiveCount,
+          });
+        }
+        if (m.workingSet && !staleIds && !m.attachTabs && !m.reconcileTabs && m.groupId === undefined) {
+          ws = createWorkingSet(m.workingSet);
+        }
+        return ws;
+      });
+      if (!m?.name) return updated ? { ok: true, workingSet: updated.workingSet } : { ok: false, error: "thread not found" };
+    }
     const renamed = await renameThread(m?.id, m?.name);
     return renamed ? { ok: true } : { ok: false, error: "thread not found or empty name" };
   },
@@ -8845,6 +9232,30 @@ const handlers = mergeRouteMaps(
     return { ok: true, tabs: out };
   },
 
+  // The /tabs owner's pick obtains Chrome's CURRENT top-frame document identity.
+  // A passive count report is only an internal candidate — not a descriptor,
+  // model disclosure, consent grant, Site Agent, or invocation authority.
+  async "agent.attached-webmcp-document"({ tabId }, context) {
+    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
+    if (!Number.isSafeInteger(tabId) || tabId < 0) return { ok: false, error: "invalid tab ID" };
+    const hasScripting = await chrome.permissions.contains({ permissions: ["scripting"] }).catch(() => false);
+    if (!hasScripting) return { ok: false, needScripting: true, error: "scripting permission needed to verify this page" };
+    try {
+      const [registry, enrolledOrigins] = await Promise.all([listKnownWebmcpOrigins(), listOrigins()]);
+      const candidate = await attestCurrentAttachedWebmcpTab(tabId, {
+        registry, enrolledOrigins,
+        getTab: (id) => chrome.tabs.get(id),
+        executeTopFrame: (id) => chrome.scripting.executeScript({
+          target: { tabId: id, frameIds: [0] }, world: "ISOLATED", func: () => true,
+        }),
+      });
+      if (!candidate) return { ok: false, error: "current declared-tool document unavailable" };
+      return { ok: true, ...candidate }; // count + browser document only; no descriptors
+    } catch {
+      return { ok: false, error: "current declared-tool document unavailable" };
+    }
+  },
+
   // `agent.tool-offers` — the OPEN tabs whose page reported tools through the
   // PASSIVE detector, for the hub's composer chip ("<host> offers N tools —
   // use them?"; CAP-FB-20260825-SITE-AGENT-SHOWCASE-01). Unlike
@@ -9366,7 +9777,9 @@ const handlers = mergeRouteMaps(
       if (siteToolResetting > 0 || mutationEpoch !== siteToolProfileEpoch) {
         throw new Error("site_tool_profile_reset");
       }
-      const applied = await setEnrollmentPolicy(canonical, requested);
+      const applied = await setEnrollmentPolicy(canonical, requested, {
+        commitGuard: () => siteToolResetting === 0 && mutationEpoch === siteToolProfileEpoch,
+      });
       await invalidateSiteToolWork(canonical);
       const snap = await enrollmentSnapshot(canonical);
       if (applied === "allow") {
@@ -9484,6 +9897,12 @@ const handlers = mergeRouteMaps(
     } catch (error) {
       return errCodeOrMessage(error);
     }
+  },
+  // An owner-/tabs-attached, UNENROLLED declared tool. The caller supplies
+  // only origin/name/arguments; a live hub execution + opaque exact-document
+  // binding supplies authority. This is NOT the enrolled invoke-tool bridge.
+  async "attached-webmcp.invoke"(payload, context) {
+    return await attachedDeclaredInvoker(payload, context);
   },
   // The first-use consent leg for the exact model-selected site tool. It
   // re-reads descriptor and durable state; neither the page nor model supplies
@@ -11443,6 +11862,10 @@ const handlers = mergeRouteMaps(
     if (!canonical) return ERR_INVALID_ORIGIN;
     // Serialized per origin: create/delete/registration never interleave.
     return await withOriginLock(canonical, async () => {
+      if (ephemeralSiteToolConsentStore.hasLiveOrigin(canonical)) {
+        return { ok: false, origin: canonical,
+          error: "an attached run requires explicit owner enrollment before Site Agent creation" };
+      }
       // Enroll creates the site's OPFS store directory (so listOrigins()
       // discovers the worker) AND the master-memory origins list — both, never
       // just one. The CONTENT-SCRIPT host permission is a SEPARATE owner-driven
@@ -11456,7 +11879,7 @@ const handlers = mergeRouteMaps(
       return { ok: true, origin: canonical, name };
     });
   },
-  async "agent.enroll-origin"({ origin, ownerGesture = false, tabId = null }) {
+  async "agent.enroll-origin"({ origin, ownerGesture = false, tabId = null, abandonPending = false, retryAbandonedCleanup = false }) {
     // ENROLLMENT IS OWNER-ONLY (the wider-goal review's finding: the
     // model-facing enroll_origin could activate any origin when broad host
     // access was granted, without a fresh exact-origin gesture). The Settings
@@ -11472,6 +11895,19 @@ const handlers = mergeRouteMaps(
     // route registers the discovery scripts for the now-granted origin.
     const canonical = canonicalOrigin(origin);
     if (!canonical) return ERR_INVALID_ORIGIN;
+    if (abandonPending === true || retryAbandonedCleanup === true) {
+      return withOriginLock(canonical, async () => {
+        if (retryAbandonedCleanup === true) {
+          const result = await retryAbandonedEnrollmentCleanup(canonical);
+          return { ok: result.cleaned, origin: canonical, ...result };
+        }
+        const pending = (await listPendingEnrollmentPromotions()).find((row) =>
+          row.origin === canonical && (row.phase === "promotion-pending" || row.phase === "promotion-retry"));
+        if (!pending) return { ok: false, error: "no pending owner enrollment to abandon" };
+        const result = await abandonEnrollmentPromotion(canonical, pending.gen);
+        return { ok: true, origin: canonical, ...result };
+      });
+    }
     // The hub's tab picker threads the EXACT tab the owner chose (the
     // exact-tab-identity finding: the flow must never silently act on a
     // different page than the one picked). Validate it matches the origin.
@@ -11490,26 +11926,66 @@ const handlers = mergeRouteMaps(
       pickedTab = t.id;
     }
     return await withOriginLock(canonical, async () => {
-      // TRANSACTIONAL: enroll the origin, then register its scripts. If
-      // registration FAILS (permission absent or registerContentScripts error),
-      // ROLL BACK the enrollment AND remove the host permission the Settings page
-      // granted, so the UI never reports "Enrolled" while scriptsRegistered is
-      // false and never leaves a dangling host permission behind (the round-14
-      // transactional finding).
-      await enrollOrigin(canonical);
+      // Q1/D2: the owner's gesture first persists the complete run-local
+      // Allow+Deny copy as NON-AUTHORIZING promotion-pending. One strict OPFS
+      // envelope write/read-back precedes the SOLE enrolled:true registry flip.
+      // Never call legacy enrollOrigin here: it publishes before migration.
+      const existing = await enrollmentSnapshot(canonical);
+      const profileEpoch = siteToolProfileEpoch;
+      const guard = () => siteToolResetting === 0 && siteToolProfileEpoch === profileEpoch;
+      if (!existing.enrolled) {
+        const hostGranted = await chrome.permissions.contains({ origins: [`${canonical}/*`] }).catch(() => false);
+        if (!hostGranted) return { ok: false, error: "host permission is required for this owner enrollment" };
+        let prepared = null;
+        try {
+          const prior = (await listPendingEnrollmentPromotions()).find((row) => row.origin === canonical);
+          if (prior) {
+            // The same owner Retry completes either inert phase from its
+            // durable registry copy; a vanished run token is never needed.
+            prepared = prior;
+            await completeEnrollmentPromotion(canonical, prior.gen, {
+              commitGuard: guard, beforeFlip: verifyOwnerPromotionPreconditions,
+            });
+          } else {
+            const withRuns = await ephemeralSiteToolConsentStore.withPromotionForOrigin(
+              canonical,
+              async (records, isCurrent) => {
+                prepared = await prepareEnrollmentPromotion(canonical, records, {
+                  commitGuard: () => guard() && isCurrent(),
+                });
+                return await completeEnrollmentPromotion(canonical, prepared.gen, {
+                  commitGuard: guard, beforeFlip: verifyOwnerPromotionPreconditions,
+                });
+              },
+            );
+            if (!withRuns) {
+              prepared = await prepareEnrollmentPromotion(canonical, [], { commitGuard: guard });
+              await completeEnrollmentPromotion(canonical, prepared.gen, {
+                commitGuard: guard, beforeFlip: verifyOwnerPromotionPreconditions,
+              });
+            }
+          }
+          // The site-memory metadata marker was staged before the sole
+          // registry authority flip; no post-flip write can orphan the origin.
+        } catch (error) {
+          const snap = await enrollmentSnapshot(canonical).catch(() => ({ enrolled: false }));
+          if (!prepared || !snap.enrolled || snap.gen !== prepared.gen) {
+            return { ok: false, origin: canonical, retryable: true,
+              promotionPending: !!prepared,
+              error: `enrollment is inert until consent promotion finishes: ${String(error?.message ?? error)}` };
+          }
+          // A run can settle just after the durable flip; its token dies, but
+          // the verified, enrolled generation is already the authority.
+        }
+      } else {
+        await reEnrollOrigin(canonical, { commitGuard: guard });
+      }
       const snapBefore = await enrollmentSnapshot(canonical);
-      const registered = await ensureOriginScriptsRegistered(canonical).catch(
-        (e) => ({ ok: false, error: String(e?.message ?? e) }),
-      );
-      // A concurrent Scripting Disable holds the GLOBAL enrollment lock across its
-      // whole tombstone→unregister→revoke transition, but it does NOT take the
-      // per-origin lock — so it can land BETWEEN enrollOrigin (which releases the
-      // global lock) and ensureOriginScriptsRegistered above. Revalidate the
-      // snapshot AFTER registration: a changed/absent generation means the origin
-      // was tombstoned (and possibly re-enrolled) mid-transition, so this enroll
-      // must NOT report success against authority it no longer holds (the round-22
-      // scripting-Disable/enroll race). Compensate by removing whatever this
-      // enroll registered.
+      // Exact host permission and BOTH dynamic script ids were confirmed
+      // before promotionPending was cleared in the durable registry.
+      // Scripting Disable holds the global enrollment lock but not this origin
+      // lock. A disable after the verified authority flip must still be seen
+      // before reporting enrollment success to the owner.
       const snapAfter = await enrollmentSnapshot(canonical);
       const transitionLost = !snapAfter.enrolled || snapAfter.gen !== snapBefore.gen;
       // A re-enroll DURING this enroll's transition means the origin is freshly
@@ -11517,12 +11993,7 @@ const handlers = mergeRouteMaps(
       // the new enrollment's authority. Distinguish it from a TOMBSTONE (which
       // must be cleaned up).
       const reEnrolled = snapAfter.enrolled && snapAfter.gen !== snapBefore.gen;
-      if (registered?.ok !== true || transitionLost) {
-        if (snapAfter.enrolled && snapAfter.gen === snapBefore.gen) {
-          // Registration itself failed while the enrollment is still current —
-          // tombstone it so the UI never reports "Enrolled" with scripts absent.
-          await disenrollOrigin(canonical);
-        }
+      if (transitionLost) {
         if (reEnrolled) {
           // Concurrent re-enrollment — do NOT touch the new enrollment's scripts
           // or OPFS. Report honest failure; the owner retries against the fresh
@@ -11566,16 +12037,12 @@ const handlers = mergeRouteMaps(
         invalidateAgent();
         await recordWebmcpLifecycle(canonical, {
           scriptStatus: "injection-error",
-          error: transitionLost
-            ? "scripting was disabled during enrollment"
-            : (registered?.error ?? "script registration failed"),
+          error: "scripting was disabled during enrollment",
         });
         return {
           ok: false,
           origin: canonical,
-          error: transitionLost
-            ? "scripting was disabled during enrollment"
-            : (registered?.error ?? "script registration failed"),
+          error: "scripting was disabled during enrollment",
           retryable: true,
           scriptsRemoved,
           permissionRemoved,
@@ -11786,7 +12253,13 @@ const handlers = mergeRouteMaps(
     });
   },
   async "agent.pending-cleanup"() {
-    return { origins: await listPendingCleanup() };
+    // Reuse the existing Settings maintenance surface; never put pending
+    // origins into agent.list or worker discovery before the authority flip.
+    return {
+      origins: await listPendingCleanup(),
+      promotions: await listPendingEnrollmentPromotions(),
+      abandoned: await listAbandonedEnrollmentCleanups(),
+    };
   },
   async "agent.delegate"({ origin, task, threadId = null, attachments = [], _executionId = null, _resumeGeneration = null, _resumeToken = null, _allowProviderChange = false, uiRunId: callerUiRunId = null, runId = null }, routeContext) {
     // Direct, observable fan-out: run a WORKER agent (not the hub) for an
@@ -11821,6 +12294,22 @@ const handlers = mergeRouteMaps(
         validAttachments.push(a);
       }
     }
+    let liveThreadId = threadId;
+    if (liveThreadId) {
+      const cont = await continueThread(liveThreadId, task, validAttachments).catch((e) => {
+        pushDiagnostic("error", `[thread] delegate continueThread failed: ${String(e?.message ?? e).slice(0, 200)}`);
+        return null;
+      });
+      if (cont?.thread) liveThreadId = cont.thread.id;
+    } else {
+      const thread = await createThread(task, validAttachments).catch((e) => {
+        pushDiagnostic("error", `[thread] delegate createThread failed: ${String(e?.message ?? e).slice(0, 200)}`);
+        return null;
+      });
+      liveThreadId = thread?.id ?? null;
+      if (liveThreadId) nameThreadAsync(liveThreadId, task).catch(() => {});
+    }
+
     // Capture the provider config once. The durable resume request, gate, pause,
     // and eventual dispatch are all bound to this exact non-secret identity and
     // requested host scope.
@@ -11841,7 +12330,7 @@ const handlers = mergeRouteMaps(
       // never recreate a site store after disenrollment. The per-site audit row
       // below remains generation-fenced telemetry.
       journalTarget: "master",
-      resumeRequest: { route: "agent.delegate", origin: canonical, task: String(task ?? ""), attachments: sanitizeAttachments(validAttachments) ?? [], generation: gen, threadId: threadId ?? null, uiRunId, approvalResolverDocumentId, providerBinding: delegateProviderBinding, idempotencyKey: execId, replaySafety: { classification: "unknown-until-tool-progress", automaticReplayBeforeProgress: true } },
+      resumeRequest: { route: "agent.delegate", origin: canonical, task: String(task ?? ""), attachments: sanitizeAttachments(validAttachments) ?? [], generation: gen, threadId: liveThreadId ?? null, uiRunId, approvalResolverDocumentId, providerBinding: delegateProviderBinding, idempotencyKey: execId, replaySafety: { classification: "unknown-until-tool-progress", automaticReplayBeforeProgress: true } },
     });
     // Failed admission was already compensated by start(); no readable
     // authority exists, so rollback would be both unnecessary and unsafe.
@@ -11963,6 +12452,81 @@ const handlers = mergeRouteMaps(
           recordRunAttestation(bound);
         });
         a.setProgress?.((event) => {
+          if (event && (event.type === "tool-call" || event.type === "tool-result")) {
+            try {
+              const callId = event.callId || event.toolCallId || newId();
+              if (event.type === "tool-call") {
+                let args = "";
+                if (event.toolArgs != null) {
+                  try { args = journalJson(redactSecrets(event.toolArgs)); } catch { args = "\"[unserializable]\""; }
+                }
+                const log = { type: "tool-call", id: logicalId, executionId: execId, callId, tool: boundedAndRedacted(event.toolName ?? "tool", 128), args, at: Date.now() };
+                durableRuns.appendLog(execId, normalizeDurableToolCall(log), `tool-call:${callId}`).catch(() => {});
+              } else if (event.type === "tool-result") {
+                const ownerSiteActivity = boundedOwnerSiteActivity(event.siteActivity) || (canonical ? { origin: canonical, tool: event.selectedTool ?? event.toolName } : null);
+                if (ownerSiteActivity && !event.siteActivity) event = { ...event, siteActivity: ownerSiteActivity };
+                const reqApprovals = Array.isArray(event.permissionRequirement?.approvals)
+                  ? event.permissionRequirement.approvals
+                  : [];
+                let settledApp = null;
+                const execApprovals = ownerApprovalStore?.executionApprovals || (typeof executionApprovals !== "undefined" ? executionApprovals : null);
+                if (execApprovals) {
+                  for (const a of reqApprovals) {
+                    if (a?.approvalId && execApprovals.has(a.approvalId)) {
+                      settledApp = execApprovals.consume(a.approvalId);
+                      break;
+                    }
+                  }
+                  if (!settledApp && typeof event.approvalId === "string" && event.approvalId && execApprovals.has(event.approvalId)) {
+                    settledApp = execApprovals.consume(event.approvalId);
+                  }
+                  if (!settledApp && callId && execApprovals.has(callId)) {
+                    settledApp = execApprovals.consume(callId);
+                  }
+                }
+                const selectedTool = (typeof event.selectedTool === "string" && event.selectedTool) ? event.selectedTool : (settledApp?.tool ?? null);
+                const pr = event.permissionRequirement ?? settledApp?.requirement;
+                const permDecision = (typeof event.permissionDecision === "string" ? event.permissionDecision : null) ?? settledApp?.decision ?? (settledApp ? "approved" : null);
+                const permissionReq = pr && typeof pr === "object" && !Array.isArray(pr)
+                  ? {
+                    permissionRequirement: pr,
+                    permissionDecision: typeof permDecision === "string" ? permDecision.slice(0, 16) : null,
+                    ...(event.reexecuted === true ? { reexecuted: true } : {}),
+                  }
+                  : {};
+                let result = "";
+                if (event.result != null) {
+                  const d = redactToolResult(event.result);
+                  try { result = journalJson(d); } catch { result = "\"[unserializable]\""; }
+                }
+                const log = {
+                  type: "tool-result",
+                  id: logicalId,
+                  executionId: execId,
+                  callId,
+                  tool: event.toolName ?? "tool",
+                  result,
+                  ok: event.ok ?? null,
+                  ...(selectedTool ? { selectedTool } : {}),
+                  ...(ownerSiteActivity ? { siteActivity: ownerSiteActivity } : {}),
+                  ...permissionReq,
+                  at: Date.now(),
+                };
+                let resultFull;
+                if (typeof event.resultFull === "string" && event.resultFull) {
+                  try {
+                    resultFull = journalJson(redactToolResult(event.resultFull), { maxBytes: 65536 });
+                  } catch {
+                    resultFull = "\"[unserializable]\"";
+                  }
+                }
+                const durableLog = resultFull
+                  ? { ...log, resultFull, resultFullTruncated: event.resultFullTruncated === true, resultFullBytes: Number(event.resultFullBytes) || 0 }
+                  : log;
+                durableRuns.appendLog(execId, normalizeDurableToolResult(durableLog), `tool-result:${callId}`).catch(() => {});
+              }
+            } catch { /* best effort */ }
+          }
           // UI broadcasts ride the UI correlation id when one was supplied
           // (the conversation fences on the UI attempt's runId); execId stays
           // the durable authority everywhere else.
@@ -12068,11 +12632,21 @@ const handlers = mergeRouteMaps(
           );
         }
       });
+      if (liveThreadId && typeof commitThreadTerminal === "function") {
+        await commitThreadTerminal(liveThreadId, execId, {
+          role: (delegatedAborted || !delegatedOk) ? "error" : "assistant",
+          content: delegatedAborted
+            ? "delegation aborted"
+            : !delegatedOk
+              ? String(outcome?.error ?? "delegation failed")
+              : (typeof result === "string" ? result : JSON.stringify(result ?? "")),
+        }).catch(() => {});
+      }
       return delegatedAborted
-        ? { ok: false, aborted: true, executionId: execId, error: "delegation aborted", errorReason: "the delegated worker was aborted", errorAction: "the delegated run stopped before completing", errorCategory: "aborted", ...(dropped.length ? { droppedAttachments: dropped } : {}) }
+        ? { ok: false, aborted: true, executionId: execId, threadId: liveThreadId, error: "delegation aborted", errorReason: "the delegated worker was aborted", errorAction: "the delegated run stopped before completing", errorCategory: "aborted", ...(dropped.length ? { droppedAttachments: dropped } : {}) }
         : delegatedOk
-          ? { ok: true, origin: canonical, result, executionId: execId, ...(dropped.length ? { droppedAttachments: dropped } : {}) }
-          : { ok: false, error: String(outcome?.error ?? "delegation failed"), executionId: execId, ...(dropped.length ? { droppedAttachments: dropped } : {}) };
+          ? { ok: true, origin: canonical, result, executionId: execId, threadId: liveThreadId, ...(dropped.length ? { droppedAttachments: dropped } : {}) }
+          : { ok: false, error: String(outcome?.error ?? "delegation failed"), executionId: execId, threadId: liveThreadId, ...(dropped.length ? { droppedAttachments: dropped } : {}) };
         });
       },
     });
@@ -12737,6 +13311,58 @@ chrome.action?.onClicked?.addListener(async (tab) => {
   }
 });
 
+async function verifyOwnerPromotionPreconditions(origin) {
+  const scripts = await ensureOriginScriptsRegistered(origin).catch(() => ({ ok: false }));
+  const hostGranted = await chrome.permissions.contains({
+    permissions: ["scripting"], origins: [`${origin}/*`],
+  }).catch(() => false);
+  if (scripts?.ok === true && hostGranted) {
+    // This marker is metadata only; the registry still carries the pending
+    // fence until after this write and the Chrome-owned checks above succeed.
+    await siteMemory(origin).setTrusted("enrolled", { at: Date.now() });
+  }
+  const hostStillGranted = hostGranted && await chrome.permissions.contains({
+    permissions: ["scripting"], origins: [`${origin}/*`],
+  }).catch(() => false);
+  return { scriptsRegistered: scripts?.ok === true, hostGranted: hostStillGranted };
+}
+
+// A pending Q1 promotion is durable in cap:enrollment, but inert until its
+// same-generation consent envelope is verified and the single authority bit
+// flips. Reconcile on every worker boot; no vanished SW run token is required.
+async function reconcileEnrollmentPromotionsOnBoot() {
+  for (const origin of await listAbandonedEnrollmentCleanups()) {
+    await withOriginLock(origin, () => retryAbandonedEnrollmentCleanup(origin)).catch((e) =>
+      pushDiagnostic("error", `[promotion] abandoned cleanup ${origin}: ${String(e?.message ?? e).slice(0, 160)}`));
+  }
+  for (const pending of await listPendingEnrollmentPromotions()) {
+    await withOriginLock(pending.origin, async () => {
+      // Module-eval and onStartup may both schedule recovery. The first may
+      // have committed while the second waited for this exact origin lock.
+      const live = await enrollmentSnapshot(pending.origin);
+      if (live.gen !== pending.gen ||
+        (pending.phase === "policy-pending" ? live.enrolled : live.pending !== true)) return;
+      const epoch = siteToolProfileEpoch;
+      const guard = () => siteToolResetting === 0 && siteToolProfileEpoch === epoch;
+      try {
+        if (pending.phase === "promotion-pending" || pending.phase === "promotion-retry") {
+          const host = await chrome.permissions.contains({ origins: [`${pending.origin}/*`] }).catch(() => false);
+          if (!host || !guard()) return; // remain inert until an owner retries
+        }
+        await completeEnrollmentPromotion(pending.origin, pending.gen, {
+          commitGuard: guard, beforeFlip: verifyOwnerPromotionPreconditions,
+        });
+        invalidateAgent();
+        broadcastRegistryChanged();
+      } catch (error) {
+        pushDiagnostic("error", `[promotion] ${pending.origin}: ${String(error?.message ?? error).slice(0, 160)}`);
+        // The registry still carries promotionPending if any precondition or
+        // write failed; no vanished run token is needed to retry next boot.
+      }
+    });
+  }
+}
+
 // Recover stale in-flight locks on every worker boot so a crashed task doesn't
 // permanently block its alarm. Reconciliation failures are surfaced (logged),
 // not silently discarded.
@@ -12751,6 +13377,9 @@ chrome.runtime.onStartup?.addListener(() => {
   reconcileEnrolledOriginScriptsOnBoot().catch((e) =>
     swLog.error("reconcileEnrolledOriginScriptsOnBoot:", e?.message ?? e)
   );
+  reconcileEnrollmentPromotionsOnBoot().catch((e) =>
+    swLog.error("reconcileEnrollmentPromotionsOnBoot:", e?.message ?? e)
+  );
   // chrome-agent-platform-afiu: an SW stop can orphan a queue CLAIM (the
   // follow-up was fired but never durably admitted, or its run settled while
   // the SW was down). Reconcile AFTER recoverOnBoot so stale-boot run rows
@@ -12761,6 +13390,9 @@ chrome.runtime.onStartup?.addListener(() => {
 });
 recoverOnBoot().catch((e) =>
   swLog.error("recoverOnBoot:", e?.message ?? e)
+);
+reconcileEnrollmentPromotionsOnBoot().catch((e) =>
+  swLog.error("reconcileEnrollmentPromotionsOnBoot:", e?.message ?? e)
 );
 // wz6i: re-key legacy `recipe:<id>` schedules for BUILT-IN background agents
 // onto the unified `agent:<id>` path, AFTER recoverOnBoot cleared stale

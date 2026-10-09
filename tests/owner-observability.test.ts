@@ -40,7 +40,7 @@ Deno.test("owner observability: settled conversation/background runs retain a re
 
   const ntp = read("../extension/ntp/ntp.js");
   const html = read("../extension/ntp/ntp.html");
-  const components = read("../extension/shared/components.js");
+  const components = read("../extension/shared/components-hub.js");
   const sw = read("../extension/background/service-worker.js");
   assertStringIncludes(ntp, "runsForSurface(latestDurableRuns");
   assertStringIncludes(html, "View run logs");

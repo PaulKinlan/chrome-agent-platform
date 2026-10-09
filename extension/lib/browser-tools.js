@@ -13,6 +13,19 @@ import { assertRunOwned } from "./run-fence.js";
 import { currentRunContext } from "./run-context.js";
 import { createSplitAware } from "./split-view.js";
 import {
+  attachTabToThreadWorkingSet,
+  getThread,
+  getThreadWorkingSet,
+  updateThreadWorkingSet,
+} from "./threads.js";
+import {
+  syncWorkingSetTabGroup,
+  groupTitleForThread,
+  setWorkingSetGroup,
+  removeTabFromWorkingSet,
+  purgeTabFromWorkingSet,
+} from "./working-set.js";
+import {
   listFsGrants,
   getFsGrant,
   queryFsGrantStatus,
@@ -36,6 +49,14 @@ import { perfSpan } from "./cap-perf.js";
 import { cleanupGuidanceFor } from "./lifecycle-cleanup.js";
 import { extractReadableMarkdown, wrapUntrustedContent } from "./page-reader.js";
 import { createAsset } from "./artifacts.js";
+import {
+  createTabularArtifact,
+  extractTablesFromDom,
+  extractTablesFromHtml,
+  injectedTableExtractor,
+  TABLE_EXTRACTOR_LIMITS,
+  toCanonicalTable,
+} from "./table-extractor.js";
 
 const grantLog = capLog("browser:grant");
 const toolDispatchLog = capLog("tool");
@@ -1404,6 +1425,70 @@ export async function capturePageToArtifact({ tabId, asArtifact = true, includeS
   return await capturePage(tabId, { asArtifact, includeScreenshot, screenshot });
 }
 
+/**
+ * Extract structured tabular data from a tab (or the active tab).
+ * Injects a bounded extractor into the page, extracting <table>, role="grid"/table,
+ * and repeated card lists (up to 2000 rows × 50 cols, ≤ 1 MB).
+ * Returns CSV-shaped JSON { tables: [{ caption, headers, rows, truncated, truncationReason }] } tagged untrusted.
+ * When asArtifact: true, writes canonical tabular artifact(s) directly usable by table_* tools.
+ */
+export async function extractTables(tabId, { ref = null, asArtifact = false } = {}) {
+  const verb = "extract tables from the page";
+  let origin = null;
+  try {
+    const gate = await pageAccessGate(tabId, verb, { needScripting: true });
+    if (gate.result) return gate.result;
+    origin = gate.origin;
+    const targetTab = gate.target;
+
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: targetTab.id },
+      func: injectedTableExtractor,
+      args: [{ ref, ...TABLE_EXTRACTOR_LIMITS }],
+    });
+    const pageResult = results?.[0]?.result;
+    if (!pageResult || !Array.isArray(pageResult.tables)) {
+      return { untrusted: true, tables: [], count: 0, pageTruncated: false };
+    }
+
+    const tables = pageResult.tables;
+    if (asArtifact && tables.length > 0) {
+      for (const t of tables) {
+        try {
+          const artifactResult = await createTabularArtifact(t, {
+            name: `${t.caption || "Table"} (${targetTab.title || "extracted"})`,
+            sourceUrl: targetTab.url,
+            createAssetFn: createAsset,
+          });
+          t.artifactId = artifactResult.artifactId;
+          t.artifact = artifactResult.artifact;
+        } catch (e) {
+          t.artifactError = String(e?.message ?? e);
+        }
+      }
+    }
+
+    return {
+      untrusted: true,
+      tables,
+      count: tables.length,
+      pageTruncated: pageResult.pageTruncated || false,
+      pageTruncationReason: pageResult.pageTruncationReason || undefined,
+      ...(asArtifact && tables[0]?.artifactId ? { artifactId: tables[0].artifactId, artifact: tables[0].artifact } : {}),
+    };
+  } catch (e) {
+    return await pageAccessFailure(e, origin, verb);
+  }
+}
+
+export {
+  extractTablesFromDom,
+  extractTablesFromHtml,
+  injectedTableExtractor,
+  toCanonicalTable,
+  createTabularArtifact,
+};
+
 // ── CAP-FB-20260830-PAGE-ACTION-TOOLS-01: the minimal page-action family ──────
 // A grant-gated way to act inside a page (click/type/select/scroll/wait) for
 // sites that ship NO WebMCP tools, executed through the SAME
@@ -2761,6 +2846,37 @@ export function browserToolset(readOnly = false, {
           // the Act class (no destructive card); a tab the run did NOT open is
           // Destructive (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
           if (typeof tab?.id === "number") openedTabIds.add(tab.id);
+
+          const runCtx = currentRunContext();
+          if (runCtx?.threadId && typeof tab?.id === "number") {
+            try {
+              await attachTabToThreadWorkingSet(runCtx.threadId, { tabId: tab.id, url });
+              const ws = await getThreadWorkingSet(runCtx.threadId);
+              if (ws) {
+                const thread = await getThread(runCtx.threadId);
+                const title = groupTitleForThread(thread?.name);
+                const syncRes = await syncWorkingSetTabGroup(ws, { title });
+                if (syncRes?.groupId != null) {
+                  await updateThreadWorkingSet(runCtx.threadId, (w) => setWorkingSetGroup(w, syncRes.groupId, syncRes.groupNamed));
+                }
+              }
+            } catch { /* best-effort working set tracking */ }
+          }
+
+          try {
+            await assertRunOwned();
+          } catch {
+            try {
+              await chrome.tabs.remove(tab.id);
+            } catch { /* best-effort compensation */ }
+            if (runCtx?.threadId && typeof tab?.id === "number") {
+              try {
+                await updateThreadWorkingSet(runCtx.threadId, (w) => purgeTabFromWorkingSet(w, tab.id));
+              } catch { /* best effort */ }
+            }
+            return { error: "run aborted — tab opened then closed" };
+          }
+
           return { ok: true, tabId: tab.id, url, ...splitInfo, ...(keep === true ? { keep: true } : {}) };
         });
       },
@@ -2879,6 +2995,16 @@ export function browserToolset(readOnly = false, {
       execute: async ({ tabId, asArtifact, includeScreenshot, screenshot }) =>
         capturePage(tabId, { asArtifact, includeScreenshot, screenshot }),
     }),
+    extract_tables: tool({
+      description:
+        "Extract structured tabular data (HTML <table>, role='grid'/table, and repeated card lists) from a tab (or the active tab). Returns CSV-shaped JSON {tables:[{caption, headers, rows, truncated}]}. Set asArtifact:true to save persistent tabular artifact(s) directly accepted by table_* tools.",
+      inputSchema: z.object({
+        tabId: z.number().optional().describe("tab id to extract tables from (defaults to the active tab)"),
+        ref: z.number().optional().describe("optional snapshot element ref from find_elements to scope extraction"),
+        asArtifact: z.boolean().optional().default(false).describe("when true, saves persistent tabular artifact(s) directly usable by table_* tools"),
+      }),
+      execute: async ({ tabId, ref, asArtifact }) => extractTables(tabId, { ref, asArtifact }),
+    }),
     capture_screenshot: tool({
       description:
         "Capture a PNG screenshot of the requested tab (or the active tab). Requires browser-control permission (scoped + expiring).",
@@ -2981,12 +3107,23 @@ export function browserToolset(readOnly = false, {
           // (no other await between this check and tabs.remove) — the round-21
           // finding that close asserted ownership before an awaited second
           // identity read, not adjacent to the mutation.
+          const closedTabUrl = bound?.url || "";
+          const closedTabTitle = bound?.title || "";
           try {
             await assertRunOwned();
           } catch {
             return { error: "run aborted — tab not closed" };
           }
           await chrome.tabs.remove(tabId);
+          const runCtx = currentRunContext();
+          if (runCtx?.threadId) {
+            try {
+              await updateThreadWorkingSet(runCtx.threadId, (w) => removeTabFromWorkingSet(w, tabId, {
+                liveUrl: closedTabUrl,
+                liveTitle: closedTabTitle,
+              }));
+            } catch { /* best effort */ }
+          }
           // Re-check the fence AFTER the await: an abort/ownership loss during
           // tabs.remove must not report success (the round-18 finding + round-19
           // durable ownership).
@@ -2995,7 +3132,12 @@ export function browserToolset(readOnly = false, {
           } catch {
             return { error: "run aborted — tab closed then aborted" };
           }
-          return { ok: true, tabId };
+          return {
+            ok: true,
+            tabId,
+            ...(closedTabUrl ? { url: closedTabUrl } : {}),
+            ...(closedTabTitle ? { title: closedTabTitle } : {}),
+          };
         });
       },
     }),
@@ -4274,10 +4416,45 @@ export function browserToolset(readOnly = false, {
       execute: async ({ tabId, keep }) =>
         t13MutateTabWithGrant(tabId, "duplicated", async () => {
           const copy = await chrome.tabs.duplicate(tabId);
+          const runCtx = currentRunContext();
           // The copy is a NEW tab this run created — closing it is Act (no
           // destructive card), exactly like a tab this run opened via open_tab
           // (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
-          if (typeof copy?.id === "number") openedTabIds.add(copy.id);
+          if (typeof copy?.id === "number") {
+            openedTabIds.add(copy.id);
+            if (runCtx?.threadId) {
+              try {
+                const url = copy.url || "";
+                await attachTabToThreadWorkingSet(runCtx.threadId, {
+                  tabId: copy.id,
+                  url,
+                  title: copy.title,
+                });
+                const ws = await getThreadWorkingSet(runCtx.threadId);
+                if (ws) {
+                  const thread = await getThread(runCtx.threadId);
+                  const title = groupTitleForThread(thread?.name);
+                  const syncRes = await syncWorkingSetTabGroup(ws, { title });
+                  if (syncRes?.groupId != null) {
+                    await updateThreadWorkingSet(runCtx.threadId, (w) => setWorkingSetGroup(w, syncRes.groupId, syncRes.groupNamed));
+                  }
+                }
+              } catch { /* best-effort working set tracking */ }
+            }
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            try {
+              if (typeof copy?.id === "number") await chrome.tabs.remove(copy.id);
+            } catch { /* best-effort compensation */ }
+            if (runCtx?.threadId && typeof copy?.id === "number") {
+              try {
+                await updateThreadWorkingSet(runCtx.threadId, (w) => purgeTabFromWorkingSet(w, copy.id));
+              } catch { /* best effort */ }
+            }
+            return { error: "run aborted — tab duplicated then closed" };
+          }
           return { ok: true, tabId, newTabId: copy?.id ?? null, ...(keep === true ? { keep: true } : {}) };
         }, "duplicate_tab"),
     }),
@@ -6767,6 +6944,7 @@ export function browserToolset(readOnly = false, {
     return wrapToolsetForObservability({
       read_page: all.read_page,
       capture_page: all.capture_page,
+      extract_tables: all.extract_tables,
       capture_screenshot: all.capture_screenshot,
       list_tabs: all.list_tabs,
       recent_browser_events: all.recent_browser_events,

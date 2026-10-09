@@ -62,6 +62,10 @@ export interface HarnessEntry {
    *  without re-pointing this field is not a way to drop the responsibility
    *  silently. A gate-class entry without `loadSensitive` may carry one too
    *  (see chrome-agent-platform-ryrr for the rest of the gate class). */
+  /** Browser or platform version the entry or its last-asserted verdict was verified against. */
+  testedAgainst?: string;
+  /** Semver or build string of the verified browser (e.g. "154.0.8037.92"). */
+  chromeVersion?: string;
   owner?: string;
 }
 
@@ -107,7 +111,13 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "read-page-host-grant-acceptance.ts": { class: "named", npm: "test:read-page-host-grant", reason: "11/11 at the re-inventory (14 s); run on demand — promotion is the owner's call" },
   "sidebar-parity.ts": { class: "named", npm: "test:sidebar", reason: "19/1 after the cwy2 instrument repair (2026-09-22). It had been crashing on main with an uncaught TypeError and running ZERO of its checks: drifted #task-input/#run-task composer selectors (the component's stable hooks are [data-composer-input]/[data-composer-send]), a .threads.length read off the dispatcher's {ok:false,error} reply, a dark step driving the removed cap:theme/data-theme mechanism, and an inherited colour scheme that resolves dark on this box. The one red is a PRODUCT finding owned by chrome-agent-platform-o1y1 — the Site tools panel states one instruction three ways, all three lines measured visible; promote once o1y1 lands" },
   "ui-integration.ts": { class: "named", npm: "test:ui", reason: "58/0 on lx6b (2026-10-06): current 56px in-flow rail, five named 36px nav controls, hidden Create, real Agents pointer route, in-rail toggle hit-test/Tab/Enter/Space, thread-overlay pointer and RTL/narrow/reduced-motion; screenshot evidence; 29s; 6-min watchdog still bounds a hang, not a cure; run on demand — promotion is the owner's call" },
-  "webmcp-acceptance.ts": { class: "named", npm: "test:webmcp", reason: "82/0 at the re-inventory (after its stderr-reader crash was removed by the launcher migration); the WebMCP lane's acceptance, run on demand with its fresh-profile picker proof" },
+  "webmcp-acceptance.ts": {
+    class: "named",
+    npm: "test:webmcp",
+    reason: "82/0 at the re-inventory (after its stderr-reader crash was removed by the launcher migration); the WebMCP lane's acceptance, run on demand with its fresh-profile picker proof",
+    testedAgainst: "Google Chrome for Testing 154.0.8037.92",
+    chromeVersion: "154.0.8037.92",
+  },
   "webmcp-realsite-probe.ts": { class: "manual", reason: "network-dependent diagnostic (chrome-agent-platform-ajcc): drives the REAL search_docs on beads.gascity.com through production enrollment + invocation with the diagnostics channel on, capturing the raw page-side error the bridge redaction strips; run by hand when the dispatch path changes" },
   "report-chrome-profiles.ts": { class: "manual", reason: "vk1t read-only on-demand inventory of the shared Chrome profile root; reports admission headroom and dead/unknown/live lock evidence without pruning any profile. Not a browser gate or an automated cleanup job", noVerdict: "inventory only: reports observations, not a pass/fail assertion; an admission-cap warning is not a defect in the inventory" },
 
@@ -220,6 +230,8 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "emscripten-abi-loaded.ts": { class: "manual", reason: "ltkj.1 A0 evidence: after explicit coordinator browser-slot authorization, loads a durable byte-identical production extension copy plus hash-pinned test-only native fixtures; never a product runtime or admission gate" },
   "emscripten-admission-loaded.ts": { class: "manual", reason: "ltkj.2 acceptance: after explicit coordinator browser-slot authorization, regenerates the inventory with the build-time-only numeric acceptance target in a disposable durable copy, REBUNDLES it, and drives the real Settings validation flow (positive + one-byte-mutation negatives); never a product runtime gate and never writes the reviewed tree" },
   "emscripten-runtime-loaded.ts": { class: "manual", reason: "ltkj.3 acceptance: after explicit coordinator browser-slot authorization, loads a durable copy with the acceptance target, validates through Settings, and verifies native operation execution from both call paths (Settings tool.package.run + SW broker dispatchEmscriptenRun) and runtime falsifications; never a product runtime gate and never writes the reviewed tree" },
+  "extract-tables-journey.ts": { class: "manual", reason: "extract_tables journey and thread artifact screenshot evidence (chrome-agent-platform-3p3e.8)" },
+  "r65i-harness-evidence.ts": { class: "manual", reason: "NTP agent-launcher polish: real-browser loaded-extension evidence and screenshots (chrome-agent-platform-r65i)" },
   "flake-evidence.ts": { class: "manual", reason: "a bisect tool: runs the journey suite N times on a branch and its base and compares failure sets; exits 1 only for a branch-only failure" },
   "focus-shots.ts": { class: "manual", reason: "a screenshot generator for focus-ring evidence (3/0 at the re-inventory: the Tab walk reaches the control, the ring is present, the shot is written)" },
   "keyless-first-result.ts": { class: "manual", reason: "green at the re-inventory (16 s); the behaviour is journey 2k in chrome-journeys.ts (KEYLESS-FIRST-RESULT-01) — kept as the standalone repro" },
@@ -237,6 +249,9 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "unix-tools-streaming-acceptance.ts": { class: "manual", reason: "long-form release evidence: loads the exact extension and drives all nine streamed Unix tools over one 100 MiB owner-bound OPFS fixture, including receipt hashes and reference chaining" },
   "validate-package-load.ts": { class: "manual", reason: "loads the PACKAGED build (scripts/evidence-runner.sh gate 18 after gate 17 packages it)" },
   "verify-script-run.ts": { class: "manual", reason: "a verification probe for the script-run path; evidence only" },
+  "verify-fixture-getter-behavior.ts": { class: "manual", reason: "chrome-agent-platform-40vf4 evidence: drives real headless Chrome to record behavioral RED (bare assignment to getter-only accessor) and GREEN (Object.defineProperty shadowing) execution evidence in test-artifacts/webmcp-getter-behavior-evidence.json", noVerdict: "evidence generator only: outputs empirical RED/GREEN browser execution records, not an automated test suite" },
+  "verify-v05y-session-retention.ts": { class: "manual", reason: "chrome-agent-platform-v05y evidence driver: measures ACP wire frames, startup latency, and session retention across discovery and subsequent turns against loopback mock ACP server", noVerdict: "evidence driver only: generates empirical measurement report and wire frame captures in cap-evidence/v05y-session-retention/, not a pass/fail assertion suite" },
+  "verify-components-computed-font-size.ts": { class: "manual", reason: "chrome-agent-platform-dz3wi evidence: drives real headless Chrome to assert computed font-size >= 12px across all shadow DOM surfaces in components.js", noVerdict: "evidence driver only: measures computed font-size across rendered component shadow DOMs, not a unit test" },
 
   // ── helpers ─────────────────────────────────────────────────────────────
   "acp-bridge.ts": { class: "helper", reason: "a loopback WebSocket→stdio bridge the ACP client connects to; a server, not a harness" },

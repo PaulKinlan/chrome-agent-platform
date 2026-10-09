@@ -1,0 +1,64 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:7bc38ed8-b469-4170-89b4-3ab04c70b2a5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "library",
+      "bom-ref": "blake3-wasm@3.0.0",
+      "name": "blake3-wasm",
+      "version": "3.0.0",
+      "description": "BLAKE3 hashing for JavaScript: WebAssembly bindings only (Emscripten glue class)",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7bc38ed8b469117059b43ab04c70b2a5506ab313a9ae2926dd338f072dbd310d"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/connor4312/blake3"
+        },
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/blake3-wasm/-/blake3-wasm-3.0.0.tgz"
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "file",
+      "bom-ref": "binaries/blake3.wasm",
+      "name": "binaries/blake3.wasm",
+      "version": "3.0.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7bc38ed8b469117059b43ab04c70b2a5506ab313a9ae2926dd338f072dbd310d"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "glue/blake3.mjs",
+      "name": "glue/blake3.mjs",
+      "version": "3.0.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7d03777d994e39a8a619a8c9fe20c1bcb11710b114fc2f280022a2a103052878"
+        }
+      ]
+    }
+  ]
+}

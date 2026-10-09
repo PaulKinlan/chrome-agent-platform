@@ -113,6 +113,8 @@ Deno.test("boundary WIRING (source pins): the composer keeps the hub task; the S
   assert(sw.includes('async "background-agent.run"({ id, task, attachments, runId, threadId = null'), "background-agent.run accepts threadId");
   const threadIdAdmission = sw.match(/kind: "delegate",[\s\S]{0,400}?threadId: threadId \?\? null/);
   assert(threadIdAdmission, "the delegate durable admission carries threadId (outbox → thread terminal)");
+  assert(sw.includes('route: "agent.delegate"') && sw.includes("threadId: liveThreadId ?? null"),
+    "delegate resumeRequest carries liveThreadId so replay restores newly created thread");
   assert(sw.includes("resumeRouteArgs: { id, runId: runTag, threadId: threadId ?? null }"), "named/background resume args carry threadId");
   assertEquals((sw.match(/threadId: request.threadId \?\? null/g) ?? []).length, 2, "BOTH resume replay sites restore threadId");
   // The pre-admission refusal fallback (never stuck running) — generalized by

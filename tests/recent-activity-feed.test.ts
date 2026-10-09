@@ -201,7 +201,7 @@ Deno.test("recent-activity: JSON objects with no readable scalar take honest ref
 });
 
 Deno.test("recent-activity: CSS rules for .tl-row and .aex-entry summary specifically enforce minmax(0,1fr)", async () => {
-  const components = await Deno.readTextFile("extension/shared/components.js");
+  const components = await Deno.readTextFile("extension/shared/components-hub.js");
 
   function extractRule(source, selector) {
     const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

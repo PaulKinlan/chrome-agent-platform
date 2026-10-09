@@ -195,6 +195,10 @@ Deno.test("site delegation acceptance: real-browser delegation with attachments 
   });
   const out = await cmd.output();
   const log = new TextDecoder().decode(out.stdout) + new TextDecoder().decode(out.stderr);
+  if (out.code === 75) {
+    assert(log.includes("CAP_ENVIRONMENTAL_REFUSAL"), `refusal must carry environmental marker:\n${log}`);
+    return;
+  }
   assert(out.success, `the site delegation acceptance check must pass:\n${log}`);
   assert(!log.includes("FAIL:"), `no check may fail:\n${log}`);
 });

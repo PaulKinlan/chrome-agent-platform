@@ -76,6 +76,7 @@ Deno.test("purpose taxonomy: the split families land where the product judgement
   assertEquals(toolPurposeGroup("schedule_task", "chrome-api"), "automation");
   // Site tools keep the declared/inferred honesty split.
   assertEquals(toolPurposeGroup("anything", "webmcp-declared"), "site-declared");
+  assertEquals(toolPurposeGroup("use_attached_declared_tool", "management"), "site-declared");
   assertEquals(toolPurposeGroup("anything", "webmcp-inferred"), "site-inferred");
   // An unknown tool with an unknown source resolves to null (never guessed).
   assertEquals(toolPurposeGroup("no_such_tool", "chrome-api"), null);

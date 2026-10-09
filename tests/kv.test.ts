@@ -12,13 +12,13 @@ import { freshKv } from "./test-hooks.js";
 // test re-imports a FRESH module instance (cache-busted) rather than mutating
 // shipped state. The bindings below are re-bound to the fresh instance's
 // exports, so the bare `kvGet`/`kvSet`/... references below stay stable.
-let kvGet, kvSet, kvRemove, storageAvailable, StorageBackendError,
+let kvGet, kvSet, kvSetDurable, kvRemove, storageAvailable, StorageBackendError,
   migrateSessionToStorage, snapshotPersistentToSession,
   snapshotPersistentToSessionLocked, onStoragePermissionTransition, withStorageModeLock;
 async function resetKv() {
   const m = await freshKv();
   ({
-    kvGet, kvSet, kvRemove, storageAvailable, StorageBackendError,
+    kvGet, kvSet, kvSetDurable, kvRemove, storageAvailable, StorageBackendError,
     migrateSessionToStorage, snapshotPersistentToSession,
     snapshotPersistentToSessionLocked, onStoragePermissionTransition, withStorageModeLock,
   } = m);
@@ -66,6 +66,17 @@ Deno.test("kvSet falls back to session ONLY when the backend is absent", async (
   makeChrome({ present: false });
   await kvSet({ "cap:x": 1 });
   assertEquals((await kvGet("cap:x"))["cap:x"], 1);
+});
+
+Deno.test("promotion: a durable-only registry write never falls back to session authority", async () => {
+  await resetKv();
+  store.clear();
+  makeChrome({ present: false });
+  await assertRejects(() => kvSetDurable({ "cap:enrollment": { risky: { enrolled: true } } }), StorageBackendError);
+  assertEquals((await kvGet("cap:enrollment"))["cap:enrollment"], undefined);
+  makeChrome({ present: true });
+  assertEquals(await kvSetDurable({ "cap:enrollment": { safe: { enrolled: false } } }), "durable");
+  assertEquals(store.get("cap:enrollment"), { safe: { enrolled: false } });
 });
 
 Deno.test("kvSet REJECTS on a backend failure (fail closed)", async () => {

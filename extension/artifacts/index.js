@@ -18,9 +18,11 @@ import {
   isHtmlDocument,
   wireHtmlFrameContent,
   confirmActionDialog,
+} from "../shared/components-core.js";
+import {
   formatArtifactSize,
   formatArtifactType,
-} from "../shared/components.js";
+} from "../shared/components-artifacts.js";
 import { t, hydrateI18n } from "../shared/i18n.js";
 import { createSearchDebounce } from "./search-debounce.js";
 

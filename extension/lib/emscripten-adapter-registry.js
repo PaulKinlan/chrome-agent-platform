@@ -10,6 +10,12 @@ export const EMSCRIPTEN_ADAPTER_CONTRACTS = Object.freeze({
       "weighted_sum": "weightedSum",
     }),
   }),
+  "cap-blake3-wasm-v1": Object.freeze({
+    factoryExport: "createBlake3Adapter",
+    operations: Object.freeze({
+      "hash": "hash",
+    }),
+  }),
 });
 
 export function adapterContractFor(adapterId) {

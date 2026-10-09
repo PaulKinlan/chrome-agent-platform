@@ -560,6 +560,9 @@ Deno.test("mkax: the REAL journey gate refuses with exit 75 while a REAL compile
       stderr: "piped",
       env: {
         CAP_QUIET_WAIT_MS: "800",
+        // cec16: admission is allowed longer than the no-assertion watchdog.
+        // The watchdog must not pre-empt the honest quiet refusal with 124.
+        CAP_JOURNEY_WATCHDOG_MS: "250",
         CAP_QUIET_SAMPLE_MS: "150",
         CAP_QUIET_MAX_COMPILERS: "1",
         CAP_QUIET_SUSTAINED: "2",
@@ -596,6 +599,7 @@ Deno.test("mkax: the REAL journey gate refuses with exit 75 while a REAL compile
     );
     assertEquals(refusal.measurable, true);
     assert(out.includes("quiet-window: waiting"), "the wait was printed while it lasted");
+    assert(!out.includes("[JOURNEY WATCHDOG TIMEOUT]"), "a quiet refusal must not be reported as a watchdog kill");
     // It never got as far as a browser: no DevTools endpoint, no journey checks.
     assertEquals(out.includes("DevTools listening"), false, "no browser was started");
   } finally {

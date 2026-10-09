@@ -59,6 +59,21 @@ const { ensureOriginScriptsRegistered, unregisterOriginScripts, reconcileEnrolle
 const { enrollOrigin, isEnrolled } = await import("../extension/lib/tools.js");
 const { siteMemory } = await import("../extension/lib/memory.js");
 
+Deno.test("D2: resolved script registration is not authority until both ids and host are confirmed", async () => {
+  const origin = "https://promotion-script-confirm.example";
+  grantedOrigins.add(`${origin}/*`);
+  const original = chrome.scripting.registerContentScripts;
+  try {
+    chrome.scripting.registerContentScripts = async (scripts) => { registeredScripts.push(scripts[0]); };
+    const result = await ensureOriginScriptsRegistered(origin);
+    assertEquals(result.ok, false, "Chrome confirming one script is not proof of both");
+  } finally {
+    chrome.scripting.registerContentScripts = original;
+  }
+  assertEquals((await ensureOriginScriptsRegistered(origin)).ok, true, "idempotent retry registers the missing script");
+  grantedOrigins.delete(`${origin}/*`);
+});
+
 Deno.test("site discovery PROBE (a): content scripts are absent on un-enrolled origins and require permission", async () => {
   registeredScripts = [];
   grantedOrigins.clear();

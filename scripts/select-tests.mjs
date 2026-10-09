@@ -57,6 +57,9 @@ export const CORE = [
 // root-path guards) have no static import edges in the dependency graph.
 // They must be in the always-on set so test:changed cannot pass silently green.
 export const SOURCE_INSPECTING_GUARDS = [
+  // D2 scans tracked extension JS for every cap:enrollment authority reader.
+  // A tools.js / memory.js / SW change has no import edge into that scan.
+  "tests/enrollment-authority-reader-census.test.ts",
   "tests/sw-dispatch-authority-census.test.ts",
   "tests/sw-route-modularization.test.ts",
   // o75bp: source/document security anchors have no static import edge from the SW;

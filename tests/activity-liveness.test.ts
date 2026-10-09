@@ -173,14 +173,14 @@ Deno.test("redactToolResult: non-secret values pass through unchanged", async ()
 });
 
 Deno.test("activity explorer: summary + detail/copy route tool RESULTS through redactToolResult", () => {
-  const src = Deno.readTextFileSync(fileURLToPath(new URL("../extension/shared/components.js", import.meta.url)));
+  const src = Deno.readTextFileSync(fileURLToPath(new URL("../extension/shared/components-hub.js", import.meta.url)));
   assert(src.includes("redactToolResult(raw)"), "the collapsed-row summary must redact the decoded result");
   assert(src.includes('addBlock("result", redactToolResult(e.result))'), "the detail tree + copy must render the redacted decoded view");
   assert(!/const d = _unwrap\(raw\)/.test(src), "the raw _unwrap interpolation seam must be gone");
 });
 
 Deno.test("activity explorer redacts historical values before render + copy", () => {
-  const src = Deno.readTextFileSync(fileURLToPath(new URL("../extension/shared/components.js", import.meta.url)));
+  const src = Deno.readTextFileSync(fileURLToPath(new URL("../extension/shared/components-hub.js", import.meta.url)));
   const clean = src.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
   const specifiers = [...clean.matchAll(/import\s*\{([^}]+)\}\s*from\s*["']\.\.\/lib\/pure\.js["']/g)]
     .flatMap((m) => m[1].split(","))

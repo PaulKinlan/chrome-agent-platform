@@ -213,6 +213,10 @@ export function isEsrch(e: unknown): boolean {
 // Linux may reuse a reaped leader's PID for an unrelated process group.
 const leaderStartTicks = new WeakMap<Deno.ChildProcess, string>();
 
+export function recordLeaderStartTicks(proc: Deno.ChildProcess, ticks: string): void {
+  leaderStartTicks.set(proc, ticks);
+}
+
 /** Why `group` may not be signalled as `proc`'s isolated group, or null when it may.
  *  Shared by `killProcessTree` and `attachProcessLifeline`: `kill -TERM -1 1` (group 1,
  *  0 or a negative) addresses everything the caller may signal. */

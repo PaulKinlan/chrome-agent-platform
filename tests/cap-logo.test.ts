@@ -56,15 +56,15 @@ Deno.test("manifest: all icon resolutions (16, 32, 48, 128) are declared and val
 });
 
 Deno.test("components: ICONS.cap and <cap-logo> web component are defined and exported", async () => {
-  const componentsSource = await Deno.readTextFile(new URL("extension/shared/components.js", root));
+  const componentsSource = await Deno.readTextFile(new URL("extension/shared/components-core.js", root));
 
   assertStringIncludes(componentsSource, "cap: '<svg viewBox=\"0 0 24 24\"");
   assertStringIncludes(componentsSource, 'aria-hidden="true"');
   assertStringIncludes(componentsSource, 'class CapLogo extends Component');
   assertStringIncludes(componentsSource, 'customElements.define("cap-logo", CapLogo)');
 
-  // Ensure docs/components.js contains cap-logo as well
-  const docsComponents = await Deno.readTextFile(new URL("docs/components.js", root));
+  // Ensure docs/components-core.js contains cap-logo as well
+  const docsComponents = await Deno.readTextFile(new URL("docs/components-core.js", root));
   assertStringIncludes(docsComponents, "cap: '<svg viewBox=\"0 0 24 24\"");
   assertStringIncludes(docsComponents, 'customElements.define("cap-logo", CapLogo)');
 });

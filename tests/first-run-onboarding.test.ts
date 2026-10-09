@@ -177,9 +177,10 @@ Deno.test("first run: permissionless storage is informational, not an error-cons
 });
 
 Deno.test("first run: shared setup components use native labelled controls and restore the next action", async () => {
-  const source = await Deno.readTextFile(
-    new URL("../extension/shared/components.js", import.meta.url),
-  );
+  const source = [
+    await Deno.readTextFile(new URL("../extension/shared/components-hub.js", import.meta.url)),
+    await Deno.readTextFile(new URL("../extension/shared/components-settings.js", import.meta.url)),
+  ].join("\n");
   for (
     const marker of [
       'customElements.define("first-run-guide"',
@@ -314,7 +315,7 @@ Deno.test("first run: browser control consent state reflects granted, declined, 
 
 Deno.test("first run: the guide asks for ONE thing (a model); browser control is asked for in context, not up front", async () => {
   const source = await Deno.readTextFile(
-    new URL("../extension/shared/components.js", import.meta.url),
+    new URL("../extension/shared/components-hub.js", import.meta.url),
   );
   const conversation = await Deno.readTextFile(
     new URL("../extension/shared/conversation.js", import.meta.url),

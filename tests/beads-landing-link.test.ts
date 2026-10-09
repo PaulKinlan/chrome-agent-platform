@@ -6,14 +6,14 @@
 // so the durable link is the commit-message reference the fleet already writes:
 // 28 of the last 30 commits on main name a bead.
 //
-// Hermetic cases build their own scratch git repo under the durable root; the
-// last case is SOURCE-BOUND: it runs the real extractor over the real history
-// and requires it to find the links that exist there.
+// Hermetic cases build their own scratch git repo under the durable root;
+// the SOURCE-BOUND case pins a historic range so its result cannot drift with
+// new landings or depend on a host's live Beads tracker.
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { spawnSync } from "node:child_process";
-import { writeFileSync, rmSync, mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { extractBeadRefs, groupByBead, landingLinks, verifyBeadLanded } from "../scripts/beads-landing-link.mjs";
 
@@ -88,35 +88,90 @@ Deno.test("beads-landing-link: a bead with no landing reference is reported as n
   }
 });
 
+Deno.test("beads-landing-link: --verify distinguishes closed, open and closed-without-landing using a fixed tracker (e9m0t)", () => {
+  const root = scratchRepo();
+  try {
+    git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    const bin = join(root, "fixture-bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "bd"), `#!/bin/sh
+if [ "$1" != show ]; then exit 2; fi
+case "$2" in
+  chrome-agent-platform-aaaa|chrome-agent-platform-zzzz) echo CLOSED ;;
+  chrome-agent-platform-bbbb) echo OPEN ;;
+  *) echo 'not found' ;;
+esac
+`, { mode: 0o755 });
+    const script = Deno.env.get("CAP_BEADS_LINK_TEST_TOOL") ||
+      fileURLToPath(new URL("../scripts/beads-landing-link.mjs", import.meta.url));
+    const verify = (bead: string) => {
+      const result = spawnSync("node", [script, "--verify", bead], {
+        cwd: root, encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` },
+      });
+      assertEquals(result.error, undefined, String(result.error));
+      assert(result.stdout?.trim(), `--verify produced no JSON: ${result.stderr}`);
+      const row = JSON.parse(result.stdout);
+      return { status: result.status, state: row.beadState,
+        landed: row.landed, stderr: result.stderr };
+    };
+    const closed = verify("chrome-agent-platform-aaaa");
+    assertEquals([closed.status, closed.state, closed.landed], [0, "CLOSED", true], "referenced closed bead must stay CLOSED");
+    const open = verify("chrome-agent-platform-bbbb");
+    assertEquals([open.status, open.state, open.landed], [0, "OPEN", true], "referenced open bead must stay OPEN");
+    const unlanded = verify("chrome-agent-platform-zzzz");
+    assertEquals([unlanded.status, unlanded.state, unlanded.landed], [1, "CLOSED", false],
+      "a closed bead with no reference must fail closed as not landed");
+    assert(unlanded.stderr.includes("CLOSED but no commit"), unlanded.stderr);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+Deno.test("beads-landing-link: a merge landing commit that names the bead is a landing reference (w44uj)", () => {
+  const root = Deno.makeTempDirSync({ dir: durableDir("beads-landing-link") });
+  try {
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.email", "landing-link@example.com"]);
+    git(root, ["config", "user.name", "landing link test"]);
+    const commit = (subject: string, file: string) => {
+      writeFileSync(join(root, file), `${subject}\n`, { flag: "a" });
+      git(root, ["add", "-A"]);
+      git(root, ["commit", "-qm", subject]);
+    };
+    commit("base work with no bead id", "state.txt");
+    // A side branch whose own commits name no bead: only the MERGE names it,
+    // which is exactly the landing event the tool must recognise.
+    git(root, ["checkout", "-qb", "fleet/x"]);
+    commit("feature work that names no bead", "feature-x.txt");
+    git(root, ["checkout", "-q", "main"]);
+    commit("mainline work that names no bead", "mainline.txt");
+    git(root, ["merge", "--no-ff", "-m", "Merge fleet/x (chrome-agent-platform-mmmm)", "fleet/x"]);
+
+    const links = landingLinks({ cwd: root, range: "HEAD" });
+    assertEquals(links.map((l) => l.bead), ["chrome-agent-platform-mmmm"], "the merge subject is the landing reference");
+    assertEquals(verifyBeadLanded({ cwd: root, bead: "chrome-agent-platform-mmmm", branch: "HEAD" }).landed, true);
+
+    // Negative: a second merge that names no bead adds no landing reference.
+    git(root, ["checkout", "-qb", "fleet/y"]);
+    commit("more feature work that names no bead", "feature-y.txt");
+    git(root, ["checkout", "-q", "main"]);
+    git(root, ["merge", "--no-ff", "-m", "Merge fleet/y (no bead reference)", "fleet/y"]);
+    assertEquals(landingLinks({ cwd: root, range: "HEAD" }).map((l) => l.bead), ["chrome-agent-platform-mmmm"]);
+    assertEquals(verifyBeadLanded({ cwd: root, bead: "chrome-agent-platform-zzzz", branch: "HEAD" }).landed, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 Deno.test("beads-landing-link: SOURCE-BOUND — the real history yields the links that exist there (j4t1)", async () => {
   const root = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
-  const links = landingLinks({ cwd: root, range: "origin/main~30..origin/main" });
-  // The measured fact that motivated the tool: most recent commits name a bead.
-  assert(links.length >= 15, `expected the real history to reference many beads, got ${links.length}`);
+  // w44uj's merge is an immutable anchor: no moving origin/main~30 window,
+  // no .beads export or live bd state. The CLI fixture above owns status truth.
+  const links = landingLinks({ cwd: root, range: "71bc5d389~30..71bc5d389" });
+  assert(links.length >= 15, `expected the pinned real history to reference many beads, got ${links.length}`);
   assert(links.every((l) => l.bead.startsWith("chrome-agent-platform-")), JSON.stringify(links.slice(0, 3)));
-  // And at least one referenced bead is CLOSED, i.e. the link would have let a
-  // lane see the landing from the record instead of re-deriving it.
-  const jsonl = readFileSync(join(root, ".beads", "issues.jsonl"), "utf8");
-  const closedIds = new Set<string>();
-  for (const line of jsonl.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const row = JSON.parse(line);
-      if (row.id && String(row.status).toLowerCase() === "closed") closedIds.add(row.id);
-    } catch { /* ignore */ }
-  }
-  let closed = links.filter((l) => closedIds.has(l.bead));
-  if (closed.length === 0) {
-    // The committed export can lag the tracker, so ask bd — one bead at a time, stopping at the
-    // first CLOSED one (gate-speed: `bd show` of all ~50 ids cost ~23 s of the parallel phase on a
-    // 2-vCPU VM; one id costs ~1 s, and the assertion needs only one closed bead).
-    for (const link of links) {
-      const bdOut = String(spawnSync("bd", ["show", link.bead], { cwd: root, encoding: "utf8" }).stdout ?? "");
-      if (bdOut.includes("CLOSED")) {
-        closed = [link];
-        break;
-      }
-    }
-  }
-  assert(closed.length >= 1, "expected at least one already-closed referenced bead in the last 30 commits");
+  const merge = links.find((l) => l.bead === "chrome-agent-platform-w44uj");
+  assert(merge?.commits.some((c: { sha: string }) => c.sha.startsWith("71bc5d389")),
+    "the pinned real merge must still yield its bead link");
 });

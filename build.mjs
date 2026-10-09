@@ -643,7 +643,7 @@ try {
     const swInject = [];
     if (DEBUG_BUILD) swInject.push(path.join(ROOT, "scripts/mcp-probe-entry.js"));
 
-    // chrome-agent-platform-9epn.5 + jjsz: build all 12 bundles concurrently. settleAll, not
+    // chrome-agent-platform-9epn.5 + jjsz + 9epn.6: build all 12 bundles concurrently. settleAll, not
     // Promise.all: esbuild writes into STAGE, so every bundle must finish (or fail) before a
     // failure reaches the rollback that removes STAGE.
     const [
@@ -667,29 +667,30 @@ try {
         inject: swInject,
         metafile: true,
       }),
-      build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT }),
-      build({ ...shared, entryPoints: [path.join(EXT_DIR, "ntp/ntp.js")], outfile: NTP_BUNDLE }),
-      build({ ...shared, entryPoints: [path.join(EXT_DIR, "sidepanel/sidepanel.js")], outfile: SIDEPANEL_BUNDLE }),
-      build({ ...shared, entryPoints: [path.join(EXT_DIR, "artifacts/index.js")], outfile: ARTIFACTS_BUNDLE }),
-      build({ ...shared, entryPoints: [path.join(EXT_DIR, "artifact/artifact.js")], outfile: ARTIFACT_BUNDLE }),
-      build({ ...shared, entryPoints: [path.join(EXT_DIR, "directory/directory.js")], outfile: DIRECTORY_BUNDLE }),
-      build({ ...shared, entryPoints: [path.join(EXT_DIR, "privacy/privacy.js")], outfile: PRIVACY_BUNDLE }),
-      build({ ...shared, entryPoints: [path.join(EXT_DIR, "offscreen/offscreen.js")], outfile: OFFSCREEN_BUNDLE }),
-      build({ ...shared, entryPoints: [path.join(EXT_DIR, "lib/user-wasm-store-client.js")], outfile: USER_WASM_STORE_CLIENT_BUNDLE }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT, metafile: true }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "ntp/ntp.js")], outfile: NTP_BUNDLE, metafile: true }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "sidepanel/sidepanel.js")], outfile: SIDEPANEL_BUNDLE, metafile: true }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "artifacts/index.js")], outfile: ARTIFACTS_BUNDLE, metafile: true }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "artifact/artifact.js")], outfile: ARTIFACT_BUNDLE, metafile: true }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "directory/directory.js")], outfile: DIRECTORY_BUNDLE, metafile: true }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "privacy/privacy.js")], outfile: PRIVACY_BUNDLE, metafile: true }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "offscreen/offscreen.js")], outfile: OFFSCREEN_BUNDLE, metafile: true }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "lib/user-wasm-store-client.js")], outfile: USER_WASM_STORE_CLIENT_BUNDLE, metafile: true }),
       build({ ...shared, entryPoints: [path.join(EXT_DIR, "shared/diff-core.js")], outfile: DIFF_CORE }),
       build({
         ...shared,
         entryPoints: [path.join(EXT_DIR, "workers/agent-worker.js")],
         outfile: WORKER,
         format: "esm",
+        metafile: true,
       }),
     ]);
 
     const SURFACE_BUNDLES = [
-      { name: "artifacts", entry: "artifacts/index.js", out: "artifacts.bundle.js", path: ARTIFACTS_BUNDLE, result: artifactsResult, budget: 600_000 },
-      { name: "artifact", entry: "artifact/artifact.js", out: "artifact.bundle.js", path: ARTIFACT_BUNDLE, result: artifactResult, budget: 600_000 },
-      { name: "directory", entry: "directory/directory.js", out: "directory.bundle.js", path: DIRECTORY_BUNDLE, result: directoryResult, budget: 600_000 },
-      { name: "privacy", entry: "privacy/privacy.js", out: "privacy.bundle.js", path: PRIVACY_BUNDLE, result: privacyResult, budget: 600_000 },
+      { name: "artifacts", entry: "artifacts/index.js", out: "artifacts.bundle.js", path: ARTIFACTS_BUNDLE, result: artifactsResult, budget: 200_000 },
+      { name: "artifact", entry: "artifact/artifact.js", out: "artifact.bundle.js", path: ARTIFACT_BUNDLE, result: artifactResult, budget: 200_000 },
+      { name: "directory", entry: "directory/directory.js", out: "directory.bundle.js", path: DIRECTORY_BUNDLE, result: directoryResult, budget: 65_000 },
+      { name: "privacy", entry: "privacy/privacy.js", out: "privacy.bundle.js", path: PRIVACY_BUNDLE, result: privacyResult, budget: 65_000 },
       { name: "offscreen", entry: "offscreen/offscreen.js", out: "offscreen.bundle.js", path: OFFSCREEN_BUNDLE, result: offscreenResult, budget: 250_000 },
       { name: "user-wasm-store-client", entry: "lib/user-wasm-store-client.js", out: "user-wasm-store-client.bundle.js", path: USER_WASM_STORE_CLIENT_BUNDLE, result: userWasmClientResult, budget: 10_000 },
     ];

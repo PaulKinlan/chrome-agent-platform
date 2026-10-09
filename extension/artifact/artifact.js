@@ -17,8 +17,10 @@ import {
   wireHtmlFrameContent,
   wireHtmlFramePreference,
   currentFramePreference,
+} from "../shared/components-core.js";
+import {
   inferSourceLanguage,
-} from "../shared/components.js";
+} from "../shared/components-artifacts.js";
 
 const params = new URLSearchParams(location.search);
 const id = params.get("id") ?? "";

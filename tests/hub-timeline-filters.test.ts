@@ -575,7 +575,7 @@ Deno.test("djft: SegmentedControl supports role=toolbar with roving tabindex", a
 });
 
 Deno.test("djft: SegmentedControl button min-block-size is var(--control, 36px)", async () => {
-  const componentsJs = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const componentsJs = await Deno.readTextFile(new URL("../extension/shared/components-core.js", import.meta.url));
   const scBlock = componentsJs.slice(
     componentsJs.indexOf("class SegmentedControl"),
     componentsJs.indexOf("customElements.define(\"segmented-control\"", componentsJs.indexOf("class SegmentedControl")),

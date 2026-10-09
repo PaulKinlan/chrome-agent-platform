@@ -60,11 +60,17 @@ export function parseProcStat(raw) {
     sid: Number(fields[3]),
     starttime: fields[19] ?? "",
   };
+  // Linux kernel threads have no userspace process group/session (both 0).
+  // kthreadd (pid 2, parent 0) and its direct children (parent 2) cannot
+  // descend from our positive-pid runner, but their rows are readable and
+  // must not make a healthy /proc scan look unreadable.
+  const kernelThread = identity.pgid === 0 && identity.sid === 0 &&
+    (identity.pid === 2 && identity.ppid === 0 || identity.ppid === 2);
   if (
     !Number.isSafeInteger(identity.pid) || identity.pid <= 0 ||
     !Number.isSafeInteger(identity.ppid) || identity.ppid < 0 ||
-    !Number.isSafeInteger(identity.pgid) || identity.pgid <= 0 ||
-    !Number.isSafeInteger(identity.sid) || identity.sid <= 0 ||
+    (!kernelThread && (!Number.isSafeInteger(identity.pgid) || identity.pgid <= 0 ||
+      !Number.isSafeInteger(identity.sid) || identity.sid <= 0)) ||
     !/^\d+$/u.test(identity.starttime)
   ) throw new Error("invalid proc identity");
   return identity;
@@ -186,11 +192,66 @@ export async function readProcIdentity(pid, deps = {}) {
     if (!parsed) throw new ProcessUnreadableError(pid, "ps exited 0 with no parseable row");
     return parsed;
   }
-  const [raw, procInfo] = await Promise.all([
-    readFile(`/proc/${pid}/stat`, "utf8"),
-    stat(`/proc/${pid}`),
-  ]);
+  // Do not race the two reads in Promise.all: an EMFILE from one and ENOENT
+  // from the other can otherwise report whichever rejection settles first.
+  const procInfo = await stat(`/proc/${pid}`);
+  const raw = await readFile(`/proc/${pid}/stat`, "utf8");
   return { ...parseProcStat(raw), uid: procInfo.uid };
+}
+
+/** True only when the error is a /proc entry DISAPPEARING, i.e. the process
+ *  exited between the group-alive check and the identity read. Distinguished
+ *  from every other read failure, which must stay fail-closed: an unreadable
+ *  /proc for a process that still exists is not the same fact as a vanished one.
+ *  chrome-agent-platform-8ixk. */
+export function isVanishedProcError(error) {
+  return error?.code === "ENOENT";
+}
+
+/** True only when a signal found NO SUCH PROCESS GROUP — the group finished dying
+ *  between the alive check and the kill. Distinguished from every other kill
+ *  failure (EPERM, EINVAL), which must still propagate: refusing to signal a group
+ *  we are not allowed to touch is a real custody finding, not a benign exit.
+ *  chrome-agent-platform-8ixk. */
+export function isVanishedGroupError(error) {
+  return error?.code === "ESRCH";
+}
+
+/** The run's custody finding, derived in ONE place because the ORDER is the
+ *  semantics: severe findings displace benign ones, and a benign teardown marker
+ *  must never be the reason a receipt reports when something real went wrong.
+ *  Precedence, most severe first: descendant residue, then an unverified
+ *  process-table observation, then an owned group that survived, followed by
+ *  cleanup refusal, teardown throw, and finally benign races. The established
+ *  residue-over-survived ordering remains; unverified observation cannot be
+ *  displaced by a benign marker. chrome-agent-platform-8ixk / yuu9s. */
+export function custodyReasonFor({
+  survived = false,
+  residueCount = 0,
+  observationUnverifiedReason = "",
+  cleanupOk = true,
+  cleanupReason = "",
+  leaderExited = false,
+  groupGoneBeforeSignal = false,
+  teardownThrew = "",
+} = {}) {
+  let reason = "";
+  if (survived) reason = "owned-group-survived";
+  if (observationUnverifiedReason) reason = `observation-unverified:${observationUnverifiedReason}`;
+  if (residueCount > 0) reason = "descendant-residue";
+  if (!cleanupOk) reason ||= `cleanup-refused:${cleanupReason}`;
+  if (teardownThrew) reason ||= `teardown-threw:${teardownThrew}`;
+  if (leaderExited) reason ||= "leader-exited-before-identity-read";
+  if (groupGoneBeforeSignal) reason ||= "group-gone-before-signal";
+  return reason;
+}
+
+/** Keep verified receipt bytes unchanged; only an unreadable identity adds evidence. */
+export function residueForReceipt(residue) {
+  return residue.map(({ pid, starttime, pgid, sid, unverified, unverifiedReason }) => ({
+    pid, starttime, pgid, sid,
+    ...(unverified ? { unverified: true, unverifiedReason } : {}),
+  }));
 }
 
 export async function sha256File(file) {
@@ -497,8 +558,9 @@ export async function waitUntil(predicate, timeoutMs, intervalMs = 20) {
 }
 
 /**
- * Every process on the box as an identity row. On `/proc` platforms a row that cannot be read is a
- * process that exited mid-sample, and an unreadable `/proc` is an empty table (unchanged).
+ * Every process on the box as an identity row. On `/proc` platforms only ENOENT for an individual
+ * vanished process is skipped. An unreadable table or a non-ENOENT identity failure cannot
+ * silently become an empty/partial table: custody cannot infer that no descendants remain.
  *
  * The no-/proc branch (macOS) does NOT turn a failed `ps` into an empty table (chrome-agent-platform-jjsz
  * F2): an empty table reads as "no descendants" and "no group members", which custody treats as clean,
@@ -508,13 +570,15 @@ export async function waitUntil(predicate, timeoutMs, intervalMs = 20) {
  * for the `nobody` account and the uid group is digits-only), and none of those can be this runner's
  * descendant. Only a table with NO parseable row is refused.
  *
- * `deps` is a test seam, defaults = today's behaviour: `hasProc` selects the branch and `run(file, args)`
- * stands in for the promisified execFile.
+ * `deps` selects the branch and permits deterministic failures of the Linux listing/identity read.
  *
- * @param {{hasProc?: boolean, run?: (file: string, args: string[]) => Promise<{stdout: string, stderr: string}>}} [deps]
+ * @param {{hasProc?: boolean, run?: (file: string, args: string[]) => Promise<{stdout: string, stderr: string}>, listProcNames?: () => Promise<string[]>, readIdentity?: (pid: number) => Promise<any>}} [deps]
  */
 export async function procIdentities(deps = {}) {
-  const { hasProc = HAS_PROC, run = defaultPsRun } = deps;
+  const {
+    hasProc = HAS_PROC, run = defaultPsRun,
+    listProcNames = () => readdir("/proc"), readIdentity = readProcIdentity,
+  } = deps;
   const rows = [];
   if (!hasProc) {
     let stdout;
@@ -547,25 +611,34 @@ export async function procIdentities(deps = {}) {
   // process directories, so no type check is needed.
   let names;
   try {
-    names = await readdir("/proc");
-  } catch {
-    return rows;
+    names = await listProcNames();
+  } catch (error) {
+    throw new ProcessUnreadableError(null, `proc table listing failed (${error?.code ?? error?.message ?? "unknown"})`, error);
   }
+  let unreadable = 0;
+  let firstError;
   for (const name of names) {
     if (!/^\d+$/u.test(name)) continue;
     try {
-      rows.push(await readProcIdentity(Number(name)));
-    } catch {
-      // Process exited while /proc was sampled.
+      rows.push(await readIdentity(Number(name)));
+    } catch (error) {
+      if (isVanishedProcError(error)) continue; // Normal /proc process churn.
+      unreadable++;
+      firstError ??= error;
     }
+  }
+  if (unreadable || rows.length === 0) {
+    throw new ProcessUnreadableError(null,
+      `proc table has ${unreadable} unreadable identity row(s) (${firstError?.code ?? firstError?.message ?? "no readable rows"})`,
+      firstError);
   }
   return rows;
 }
 
 /**
  * Walk the ppid chain from `rootPid` over ONE process-table sample and record every descendant in
- * `observed`. It rejects when the table cannot be read (no-/proc: a ProcessUnreadableError, see
- * procIdentities) and leaves `observed` untouched, so a failed sample can never read as "no
+ * `observed`. It rejects when the table cannot be read (ProcessUnreadableError on either
+ * platform, see procIdentities) and leaves `observed` untouched, so a failed sample cannot read as "no
  * descendants". `deps` is procIdentities' test seam.
  *
  * @param {number} rootPid
@@ -595,20 +668,18 @@ export async function observeDescendants(rootPid, observed = new Map(), deps = {
 /**
  * The observed descendants that are still live: same pid, starttime and uid, and not a zombie.
  *
- * "Gone is clean" holds only when we KNOW it is gone. On the no-/proc branch (macOS) a `ps` that failed,
- * timed out or printed nothing for a pid says nothing about that pid, and counting it clean reported a
- * quiet machine exactly when the process table could not be read (chrome-agent-platform-jjsz F2). There
- * only a ProcessGoneError (`ps` ran and the pid is not there) is clean; any other error is RESIDUE, the
- * observed row marked `unverified: true` with the reason. The `/proc` branch is unchanged: every error
- * there still reads as gone (known, left alone: that can hide an EMFILE-style failure on Linux).
+ * "Gone is clean" holds only when we KNOW it is gone. ProcessGoneError (a successful `ps` absence)
+ * and raw ENOENT from a vanished /proc entry are clean; EMFILE/EACCES or an unreadable `ps` are
+ * unverified residue, with a bounded reason. A failed observation never proves the pid exited.
  *
- * `deps` is a test seam, defaults = today's behaviour: `readIdentity(pid)` and `hasProc`.
+ * `readIdentity(pid)` is a test seam; legacy `hasProc` callers remain accepted but
+ * the gone/unreadable rule no longer varies by platform.
  *
  * @param {Map<number, any>} observed
  * @param {{readIdentity?: (pid: number) => Promise<any>, hasProc?: boolean}} [deps]
  */
 export async function liveObservedResidue(observed, deps = {}) {
-  const { readIdentity = readProcIdentity, hasProc = HAS_PROC } = deps;
+  const { readIdentity = readProcIdentity } = deps;
   const residue = [];
   for (const expected of observed.values()) {
     try {
@@ -620,7 +691,7 @@ export async function liveObservedResidue(observed, deps = {}) {
       ) residue.push(current);
     } catch (error) {
       // Gone is clean.
-      if (hasProc || error instanceof ProcessGoneError) continue;
+      if (error instanceof ProcessGoneError || isVanishedProcError(error)) continue;
       residue.push({
         ...expected,
         unverified: true,
@@ -638,10 +709,12 @@ export async function terminateAttestedGroup({
   killWaitMs,
   readIdentity = readProcIdentity,
   listIdentities = procIdentities,
+  isAlive = groupAlive,
+  kill = process.kill,
 }) {
   const pgid = attestation.identity.pgid;
   const leaderStart = attestation.identity.starttime;
-  if (!groupAlive(pgid)) {
+  if (!isAlive(pgid)) {
     return { termSent: false, killSent: false, survived: false };
   }
   try {
@@ -652,6 +725,25 @@ export async function terminateAttestedGroup({
       current.uid !== attestation.identity.uid
     ) throw new Error("owned process-group identity changed");
   } catch (error) {
+    // A leader whose /proc entry has VANISHED while the group is also gone is the
+    // BENIGN case, not an attestation failure: termination wanted the process
+    // gone, and an absent /proc/<pid> plus a dead group is the strongest evidence
+    // that it is. Rethrowing this ENOENT used to escape the supervisor as an
+    // uncaught rejection, so the run wrote NO receipt at all — no
+    // CAP_SECURITY_RESULT, no verdict — and a death this way got attributed to the
+    // environment because there was nothing left to read (8ixk).
+    // BOTH conditions are required, and that is the fail-closed boundary: an
+    // unreadable /proc for a group that is STILL ALIVE falls through to the
+    // ownership check below and can still throw. Only ENOENT qualifies, and the
+    // only ENOENT source inside this try is the /proc read.
+    if (isVanishedProcError(error) && !isAlive(pgid)) {
+      return {
+        termSent: false,
+        killSent: false,
+        survived: false,
+        leaderExited: true,
+      };
+    }
     // The leader may exit while owned descendants remain. In that case every
     // currently live group member must have been observed as this runner's
     // exact pid/starttime/uid descendant before any negative-PGID signal.
@@ -674,12 +766,89 @@ export async function terminateAttestedGroup({
     ) throw error;
   }
 
-  process.kill(-pgid, "SIGTERM");
-  const termGone = await waitUntil(() => groupAlive(pgid), termWaitMs);
+  // The group can vanish between the alive check above and this signal — which is
+  // the outcome termination WANTED, not an error. ESRCH here used to escape as an
+  // uncaught rejection, so the run left NO receipt at all and its death read as
+  // environmental (8ixk; reproduced independently in review with a live owned
+  // fixture: both identity reads complete, the child then dies before completion
+  // is delivered, process.kill throws killESRCH, Node exits 1, no result).
+  try {
+    kill(-pgid, "SIGTERM");
+  } catch (error) {
+    if (!isVanishedGroupError(error)) throw error;
+    return {
+      termSent: false,
+      killSent: false,
+      survived: false,
+      groupGoneBeforeSignal: true,
+    };
+  }
+  const termGone = await waitUntil(() => isAlive(pgid), termWaitMs);
   if (termGone) return { termSent: true, killSent: false, survived: false };
-  process.kill(-pgid, "SIGKILL");
-  const killGone = await waitUntil(() => groupAlive(pgid), killWaitMs);
+  // Same race on the escalation: the group can finish dying during the SIGTERM
+  // wait, so SIGKILL can also find nothing to signal.
+  try {
+    kill(-pgid, "SIGKILL");
+  } catch (error) {
+    if (!isVanishedGroupError(error)) throw error;
+    return {
+      termSent: true,
+      killSent: false,
+      survived: false,
+      groupGoneBeforeSignal: true,
+    };
+  }
+  const killGone = await waitUntil(() => isAlive(pgid), killWaitMs);
   return { termSent: true, killSent: true, survived: !killGone };
+}
+
+// A teardown that throws must NOT take the receipt with it. The whole point of the
+// custody chain is that every run leaves an attested verdict; an uncaught rejection
+// from here leaves an evidence directory with no CAP_SECURITY_RESULT, and a death
+// with no receipt gets attributed to the environment because there is nothing left
+// to read (8ixk). The known races are now handled inside terminateAttestedGroup, but
+// the guarantee is structural rather than an enumeration: whatever throws, the
+// receipt is still written and says what happened.
+/**
+ * @typedef {{
+ *   termSent: boolean;
+ *   killSent: boolean;
+ *   survived: boolean;
+ *   leaderExited?: boolean;
+ *   groupGoneBeforeSignal?: boolean;
+ *   teardownThrew?: string;
+ * }} AttestedTermination
+ */
+
+/**
+ * @param {Record<string, unknown>} args
+ * @returns {Promise<AttestedTermination>}
+ */
+export async function terminateAttestedGroupSafely(args) {
+  try {
+    return await terminateAttestedGroup(args);
+  } catch (error) {
+    let reason = "";
+    try {
+      if (error && typeof error === "object") {
+        if ("message" in error && typeof error.message === "string") {
+          reason = error.message.trim();
+        }
+      }
+      if (!reason) {
+        reason = String(error ?? "").trim();
+      }
+    } catch {
+      reason = "teardown-failed-unstringable";
+    }
+    if (!reason) reason = "teardown-failed";
+    return {
+      termSent: false,
+      killSent: false,
+      survived: false,
+      teardownThrew: reason.slice(0, 200),
+    };
+  }
 }
 
 export async function resolveSupervisorConfig({
@@ -699,6 +868,9 @@ export async function resolveSupervisorConfig({
       env.CAP_SECURITY_TEST_STUBBORN_BOOT_DELAY_MS !== undefined ||
       env.CAP_SECURITY_TEST_STUBBORN_CHILD_FAIL !== undefined ||
       env.CAP_SECURITY_TEST_ESCAPE_CHILD_FAIL !== undefined ||
+      env.CAP_SECURITY_TEST_SIMULATE_VANISHED_LEADER !== undefined ||
+      env.CAP_SECURITY_TEST_FORCE_OBSERVATION_UNREADABLE !== undefined ||
+      env.CAP_SECURITY_TEST_FORCE_RESIDUE_UNREADABLE !== undefined ||
       env.CAP_SECURITY_TEST_SCENARIO
     ) throw new Error("self-test-only override refused in production mode");
     if (!env.HOME || !path.isAbsolute(env.HOME)) {
@@ -712,6 +884,8 @@ export async function resolveSupervisorConfig({
       timeoutMs: PRODUCTION_TIMEOUT_MS,
       attestDeadlineMs: 2_000,
       forceAttestationUnsettled: false,
+      forceObservationUnreadable: false,
+      forceResidueUnreadable: false,
       sampleFreezeMs: 0,
       termWaitMs: 5_000,
       killWaitMs: 5_000,
@@ -777,6 +951,9 @@ export async function resolveSupervisorConfig({
       env.CAP_SECURITY_TEST_FORCE_ATTEST_UNSETTLED !== "1") {
     throw new Error("CAP_SECURITY_TEST_FORCE_ATTEST_UNSETTLED must be 1");
   }
+  for (const name of ["CAP_SECURITY_TEST_FORCE_OBSERVATION_UNREADABLE", "CAP_SECURITY_TEST_FORCE_RESIDUE_UNREADABLE"]) {
+    if (env[name] !== undefined && env[name] !== "1") throw new Error(`${name} must be 1`);
+  }
   // a6x5: the third, SAMPLING-DELAY handshake clock. Preserve 0 ms default,
   // but ensure any declared test freeze is bounded and integer.
   const sampleFreezeMs = Number(env.CAP_SECURITY_TEST_SAMPLE_FREEZE_MS ?? "0");
@@ -791,6 +968,8 @@ export async function resolveSupervisorConfig({
     timeoutMs,
     attestDeadlineMs,
     forceAttestationUnsettled: env.CAP_SECURITY_TEST_FORCE_ATTEST_UNSETTLED === "1",
+    forceObservationUnreadable: env.CAP_SECURITY_TEST_FORCE_OBSERVATION_UNREADABLE === "1",
+    forceResidueUnreadable: env.CAP_SECURITY_TEST_FORCE_RESIDUE_UNREADABLE === "1",
     sampleFreezeMs,
     termWaitMs: 250,
     killWaitMs: 1_000,
@@ -798,6 +977,7 @@ export async function resolveSupervisorConfig({
     profileRoot: PROFILE_ROOT,
     forceAttestationMismatch: scenario === "pgid-mismatch" &&
       env.CAP_SECURITY_TEST_FORCE_ATTEST_MISMATCH === "1",
+    simulateVanishedLeader: env.CAP_SECURITY_TEST_SIMULATE_VANISHED_LEADER === "1",
     scenario,
   };
 }

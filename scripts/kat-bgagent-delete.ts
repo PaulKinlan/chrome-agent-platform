@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker, resolveChromiumBinaryReport, teardownChrome, withTimeout } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 import { parseHardTimeout } from "./lib/hard-timeout.ts";
+import { waitForAppReady } from "./lib/app-readiness.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -237,7 +238,7 @@ check("journey: the alarms capability is granted via the real Settings UI", alar
 await send("Target.closeTarget", { targetId: opts.targetId });
 
 const ntp = await newView(`chrome-extension://${extId}/ntp/ntp.html`);
-await sleep(2500); // first paint + registry hydration
+await waitForAppReady(ntp.ev, { surfaceName: "NTP kat-bgagent-delete" });
 
 const seed = await ntp.ev(`(async () => {
   const msg = (m) => new Promise((res) => {

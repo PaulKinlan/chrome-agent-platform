@@ -25,6 +25,7 @@ export const MANAGEMENT_TOOL_NAMES = [
   "get_agent",
   "list_agents",
   "disenroll_origin",
+  "use_attached_declared_tool",
   "create_asset",
   "update_asset",
   "patch_asset",
@@ -188,6 +189,15 @@ export function managementToolset({ callRoute }) {
       description: "Remove an origin's host access + injected scripts.",
       inputSchema: z.object({ origin: z.string() }),
       execute: ({ origin }) => call("agent.delete", { origin }),
+    }),
+    use_attached_declared_tool: tool({
+      description: "Use ONE declared WebMCP tool from a tab the owner attached with /tabs to THIS live hub run. Use only the origin/tool names listed in the run's fenced attached-tool context. An exact per-tool owner approval and required audit occur before any page effect. No inferred page-JS functions, no background runs and no silent Site Agent enrollment.",
+      inputSchema: z.object({
+        origin: z.string().max(512).describe("Exact origin from the attached declared-tool context"),
+        name: z.string().min(1).max(128).regex(/^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/).describe("Exact declared tool name"),
+        args: z.record(z.unknown()).describe("Tool arguments matching its fenced input schema"),
+      }).strict(),
+      execute: async ({ origin, name, args }) => tagUntrusted(await call("attached-webmcp.invoke", { origin, name, args })),
     }),
 
     // ---- artifacts ----

@@ -58,6 +58,7 @@ import { SCRIPTED_DUMMY_KEY, executeEnvelope, searchResultNames, selectionRefOf,
 import { composerInput, composerSend, composerPopup } from "./lib/composer-target.ts";
 import { viewEdgeParity } from "./lib/view-edge-parity.ts";
 import { clickVisibleCreateAgent } from "./lib/create-agent-click.ts";
+import { waitForAppReady } from "./lib/app-readiness.ts";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -128,6 +129,10 @@ async function sha256Hex(bytes) {
  * CAP browsers, NOT other lanes' compilers — a quiet box is still what this
  * suite needs, and this opt-in only stops our own gates from eating it. */
 function launchJourneyChrome(profile: string) {
+  // The fleet-slot and quiet-window admission have their own bounded refusal
+  // verdicts (75), and can legitimately outlast the 90s assertion watchdog.
+  // Suspend it for EVERY launch, including the demo and reset profiles.
+  beginLaunchAdmission();
   // clearEnv prevents ambient variables reaching Chrome, but the fleet's
   // non-secret lane identifier must survive into detached crashpad helpers.
   // The reaper uses this inherited marker to recognize a live lane; it does
@@ -164,6 +169,9 @@ function launchJourneyChrome(profile: string) {
     clearEnv: true,
     env: fleetLane ? { FLEET_LANE: fleetLane } : {},
     timeoutMs: 20000,
+  }).then((launched) => {
+    endLaunchAdmission(); // A live browser starts a fresh assertion budget.
+    return launched;
   }).catch((e) => {
     // An environmental refusal is a THIRD verdict. It must never be re-read as
     // a product red (exit 1) and never as a pass (exit 0).
@@ -189,6 +197,7 @@ function launchJourneyChrome(profile: string) {
       console.error(`${ENVIRONMENTAL_REFUSAL_MARKER} ${JSON.stringify(heavyGateSetupFailurePayload(e))}`);
       Deno.exit(ENVIRONMENTAL_REFUSAL_EXIT);
     }
+    endLaunchAdmission(); // An unexpected launch error must not leave a surviving journey unwatched.
     throw e;
   });
 }
@@ -691,6 +700,7 @@ let lastCompletedCheck = null;
 let lastStartedCheck = null;
 
 let watchdogTimer = null;
+let launchAdmissionPending = false;
 const WATCHDOG_MS = typeof Deno !== "undefined" && Deno.env
   ? Number(Deno.env.get("CAP_JOURNEY_WATCHDOG_MS") || "90000")
   : 90000;
@@ -698,7 +708,7 @@ const WATCHDOG_MS = typeof Deno !== "undefined" && Deno.env
 function resetWatchdog() {
   if (typeof Deno === "undefined" || !Deno.env) return;
   if (watchdogTimer) clearTimeout(watchdogTimer);
-  if (WATCHDOG_MS <= 0) return;
+  if (launchAdmissionPending || WATCHDOG_MS <= 0) return;
   watchdogTimer = setTimeout(() => {
     const reason = `watchdog timeout: no assertion completed for ${WATCHDOG_MS}ms`;
     console.error(`\n[JOURNEY WATCHDOG TIMEOUT] Hang detected at frontier check: "${lastStartedCheck}" (last completed: "${lastCompletedCheck}") after ${WATCHDOG_MS}ms`);
@@ -715,6 +725,16 @@ function resetWatchdog() {
   if (typeof watchdogTimer?.unref === "function") {
     watchdogTimer.unref();
   }
+}
+
+function beginLaunchAdmission() {
+  launchAdmissionPending = true;
+  clearWatchdog();
+}
+
+function endLaunchAdmission() {
+  launchAdmissionPending = false;
+  resetWatchdog();
 }
 
 function clearWatchdog() {
@@ -1401,6 +1421,8 @@ async function writeEvidence(name, bytes) {
 }
 
 async function main() {
+  // Bound pre-launch setup too; beginLaunchAdmission cancels this timer only
+  // when the separately bounded fleet-slot/quiet admission actually starts.
   if (typeof resetWatchdog === "function") resetWatchdog();
   if (typeof EXPECTED !== "undefined" && EXPECTED[0]) {
     console.log(`RUN: ${EXPECTED[0]}`);
@@ -1663,6 +1685,7 @@ async function main() {
       throw new Error(`${error instanceof Error ? error.message : "journey NTP principal unavailable"}; ` +
         `targetId=${Cdp.diagnosticId(ntpPage.id)} sessionId=${Cdp.diagnosticId(ntpSession)}`);
     }
+    await waitForAppReady((expression) => evalIn(cdp, ntpSession, expression), { surfaceName: "NTP main" });
 
     // sendMsg from the NTP (extension page) — backend message probes.
     const sendMsg = (payload) =>
@@ -1733,6 +1756,12 @@ async function main() {
       if (!bootObserved) await sleep(250);
     }
     check("initial SW boot observed via pre-attached restart", bootObserved);
+    // Snapshot the actual fresh-profile permission baseline BEFORE any owner
+    // action can JIT-grant an optional capability (notably a /tabs pick).
+    // The later Settings assertion checks this start state, not a post-gesture
+    // state; retain its full strict ungranted predicate and log the raw map.
+    const capState0 = await msgValue({ type: "capabilities.status" });
+    console.log("permissions baseline raw:", JSON.stringify(capState0));
     // The marker demo model (@demo-tools, @demo-board, …) is the suite's test
     // seam and sits behind the developer flag; a default profile runs the
     // local assistant instead (CAP-FB-20260830-KEYLESS-FIRST-RESULT-01). The
@@ -1759,6 +1788,7 @@ async function main() {
         await sleep(1800);
         const session = await attachRuntime(cdp, page.id);
         cdp.pageSessions.add(session);
+        await waitForAppReady((expression) => evalIn(cdp, session, expression), { surfaceName: path });
         return session;
       };
       try {
@@ -1767,6 +1797,7 @@ async function main() {
         await evalIn(cdp, opts, `if (location.hash !== '#agents') { location.hash = '#agents'; } true`);
         await sleep(600);
         const sp = await open("sidepanel/sidepanel.html");
+        await waitForAppReady((expression) => evalIn(cdp, sp, expression), { surfaceName: "sidepanel/sidepanel.html" });
         await evalIn(cdp, sp, `document.getElementById('tab-agents')?.click()`);
         await sleep(1200); // the picker's live registry fetch
         const sidebarRows = await evalIn(cdp, hub, `document.querySelectorAll('#side-agents .agent-item').length`);
@@ -2237,8 +2268,9 @@ async function main() {
     const openCreateDialog = async () => {
       // w51r: a geometry click on a hidden/occluded rail button misses silently,
       // then the dialog wait reports a misleading timeout. Refuse before input.
+      await waitForAppReady((expression) => evalIn(cdp, ntpSession, expression), { surfaceName: "NTP Create Dialog" });
       await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});
-      await clickVisibleCreateAgent(cdp, ntpSession, (expression) => evalIn(cdp, ntpSession, expression));
+      await clickVisibleCreateAgent(cdp, ntpSession, (expression) => evalIn(cdp, ntpSession, expression), { waitForReady: true });
       for (let i = 0; i < 30; i++) { if ((await pickerState()).open) break; await sleep(150); }
       await sleep(200);
     };
@@ -2906,8 +2938,25 @@ async function main() {
     );
     // CAP-FB-20260831-AGENT-PRIVATE-FS-01 — the edit dialog shows the agent's
     // PRIVATE WORKSPACE row (usage + owner Clear). Creating an agent opens its
-    // thread, where the Edit button lives.
-    const wsRowSeen = await evalIn(cdp, ntpSession, `(async () => {
+    // thread, where the Edit button lives. named-agent.list can see the new
+    // record before onSaved finishes opening its surface; wait for the ACTUAL
+    // visible Edit affordance rather than racing that page-side continuation.
+    let editView = null;
+    for (let i = 0; i < 25; i++) {
+      editView = await evalIn(cdp, ntpSession, `(() => {
+        const edit = document.getElementById('edit-agent');
+        return {
+          visible: !!edit && !edit.hidden && edit.getClientRects().length > 0,
+          editHidden: edit?.hidden ?? null,
+          threadViewHidden: document.getElementById('thread-view')?.hidden ?? null,
+          title: document.getElementById('thread-title')?.textContent?.slice(0, 100) ?? null,
+          hash: location.hash,
+        };
+      })()`);
+      if (editView?.visible) break;
+      if (i < 24) await sleep(200);
+    }
+    const wsRowSeen = editView?.visible ? await evalIn(cdp, ntpSession, `(async () => {
       const edit = document.getElementById('edit-agent');
       if (!edit || edit.hidden) return { ready: false, why: 'no-edit-button' };
       edit.click();
@@ -2918,7 +2967,7 @@ async function main() {
       if (!row) return { ready: true, hasRow: false };
       const text = row.textContent.replace(/\s+/g, ' ').trim();
       return { ready: true, hasRow: true, hasClear: !!row.querySelector('button'), text: text.slice(0, 120) };
-    })()`);
+    })()`) : { ready: false, why: "no-edit-button", ...editView };
     console.log("edit dialog workspace row:", JSON.stringify(wsRowSeen));
     check(
       "edit dialog: the agent's Private workspace row renders with usage and a Clear button",
@@ -3916,10 +3965,9 @@ async function main() {
       "approval: forged NTP owner/activation fields are refused",
       forgedOwner?.ok === false && !Array.isArray(forgedOwner?.approvals),
     );
-    // The authoritative capability map from the worker, keyed by id. The DOM
-    // scrape this replaced carried no ids, so it could not tell you WHICH
-    // capability was granted — only how many rows looked green.
-    const capState0 = await msgValue({ type: "capabilities.status" });
+    // The authoritative capability map was captured above at fresh-profile
+    // boot, before the owner's /tabs gesture could legitimately JIT-grant
+    // scripting. A DOM scrape here would not identify which grant changed.
     // A hard-coded count here silently rots every time a tool tranche adds a
     // capability — which is exactly what happened between 0.2.278 and 0.2.290
     // (7 -> 18) and left this assertion red for days. But simply deriving the

@@ -8,7 +8,6 @@
 import { send } from "../lib/messages.js";
 import { handleBroadcastEvent, invalidateRpcCache } from "../shared/rpc-cache.js";
 import { saveArtifactToDisk } from "../lib/artifact-export.js";
-import { harnessMarkEl } from "../shared/harness-marks.js";
 import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, skillAsTemplate, templatePrefill } from "../lib/agent-templates.js";
 import { buildAgentSkillRows } from "../lib/agent-skill-rows.js";
 import { projectUnifiedAgents, slugifyAgentId } from "../lib/agent-projection.js";
@@ -33,7 +32,10 @@ import {
   currentFramePreference,
   deleteAgentDialog,
   flushDeferredComponents,
-} from "../shared/components.js";
+} from "../shared/components-core.js";
+import "../shared/components-hub.js";
+import "../shared/components-conversation.js";
+import "../shared/components-artifacts.js";
 import { runStagedBoot } from "./ntp-boot-scheduler.js";
 import { formatSidebarAgentRole, sleep, timeAgo } from "../lib/pure.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
@@ -45,6 +47,14 @@ import { renderDurabilityState } from "../lib/durability-ui.js";
 import { createTaskSidebarLifecycle, loadThreadsWithOneRestartRetry } from "../lib/task-sidebar-lifecycle.js";
 import { threadRowsDigest } from "../lib/thread-rows-digest.js";
 import { createTerminalThreadProjectionLifecycle } from "../lib/terminal-thread-projection-lifecycle.js";
+import {
+  createWorkingSet,
+  reconcileWorkingSet,
+  closeWorkingSetTabs,
+  restoreWorkingSetTabs,
+  restoreWorkingSetPlan,
+  syncWorkingSetTabGroup,
+} from "../lib/working-set.js";
 import {
   clearAuthoritativeThreadProjection,
   projectThreadRunState,
@@ -776,7 +786,10 @@ const runRouteUpdate = createRouteUpdateRunner();
 async function renderSiteAgents() {
   const el = document.getElementById("site-agents");
   if (!el) return;
-  const res = await send("agent.directory").catch(() => ({ agents: [] }));
+  const [res, discoverable] = await Promise.all([
+    send("agent.directory").catch(() => ({ agents: [] })),
+    send("agent.tool-offers").catch(() => ({ ok: false })),
+  ]);
   // Item 44: a site with ZERO tools is not an agent (paul.kinlan.me with no
   // WebMCP/inferred tools must not appear as a Site Agent). Only origins that
   // actually expose tools are listed here.
@@ -795,7 +808,6 @@ async function renderSiteAgents() {
   // intersected with the open tabs; the click still walks the owner-gesture
   // enrollment that reattests the exact tab before acting on it.
   const enrolledOrigins = new Set((Array.isArray(res.agents) ? res.agents : []).map((a) => a.origin));
-  const discoverable = await send("agent.tool-offers").catch(() => ({ ok: false }));
   const unenrolledTabs = (discoverable?.ok && Array.isArray(discoverable.offers))
     ? discoverable.offers.filter((t) => t.enrolled !== true && !enrolledOrigins.has(t.origin))
     : [];
@@ -1786,31 +1798,10 @@ async function renderSidebarHarnessRows() {
   if (section) section.hidden = harnesses.length === 0;
   if (countEl) countEl.textContent = harnesses.length ? `(${harnesses.length})` : "";
   for (const a of harnesses) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "harness-pill";
+    const btn = document.createElement("harness-agent-button");
     btn.dataset.ref = a.ref ?? `acp:${a.id}`;
-    // THE OWNER ASKED FOR ICONS AND THE ROWS WERE PLAIN TEXT (Paul, 2026-09-23:
-    // "you haven't landed my icons for the harnesses in the ntp sidepanel").
-    // The rows were reachable and unmarked. This is the mark: one glyph per
-    // harness, the same shape the site-agent buttons use, so a harness is
-    // recognisable at a glance in a list of them.
-    // THE SAME SVG MARK THE SIDE PANEL'S QUICK LIST USES (Paul, 2026-09-23:
-    // "you haven't landed my icons for the harnesses in the ntp sidepanel").
-    // The module and its test already existed; these rows were the surface that
-    // never called them, so a harness was recognisable in one list and plain
-    // text in the other.
-    const mark = harnessMarkEl(document, a.id, a.name || a.id);
-    const label = document.createElement("span");
-    label.className = "hq-label";
-    label.textContent = a.name || a.id;
-    btn.replaceChildren(mark, label);
-    btn.setAttribute("aria-label", `Open the ${a.name || a.id} harness conversation`);
-    // The collapsed rail hides the label (and clips nothing: the chip becomes an
-    // icon-only row), so the full harness name stays reachable on hover — the same
-    // convention the rail's task rows use for their own collapsed state.
-    btn.title = a.name || a.id;
-    if (currentAgentKind === "acp" && currentAgentId === a.id) btn.setAttribute("aria-current", "true");
+    btn.setAttribute("name", a.name || a.id);
+    if (currentAgentKind === "acp" && currentAgentId === a.id) btn.setAttribute("current", "");
     btn.addEventListener("click", () => {
       openAgentSurface?.({ kind: "acp", id: a.id, name: a.name || a.id });
     });
@@ -2540,7 +2531,16 @@ function renderTaskRows(threads, activeId = null, meta = null) {
     name.append(dot, title);
     const meta = document.createElement("span");
     meta.className = "t-meta";
-    meta.textContent = timeAgo(t.updatedAt);
+    if (typeof t.tabCount === "number" && t.tabCount > 0) {
+      const tabsBadge = document.createElement("span");
+      tabsBadge.className = "t-tabs-badge";
+      tabsBadge.textContent = `${t.tabCount} tab${t.tabCount === 1 ? "" : "s"}`;
+      meta.append(tabsBadge);
+    }
+    const timeSpan = document.createElement("span");
+    timeSpan.className = "t-time";
+    timeSpan.textContent = timeAgo(t.updatedAt);
+    meta.append(timeSpan);
     headRow.append(name, meta);
     const preview = document.createElement("span");
     preview.className = "t-preview";
@@ -2677,6 +2677,77 @@ if (threadConversation) {
 const editAgentBtn = document.getElementById("edit-agent");
 const shareAgentBtn = document.getElementById("share-agent");
 const deleteAgentBtn = document.getElementById("delete-agent");
+const threadWorkingSetActions = document.getElementById("thread-working-set-actions");
+const threadGroupTabsBtn = document.getElementById("thread-group-tabs");
+const threadRestoreTabsBtn = document.getElementById("thread-restore-tabs");
+const threadCloseTabsBtn = document.getElementById("thread-close-tabs");
+const threadUndoCloseBtn = document.getElementById("thread-undo-close");
+
+function updateWorkingSetButtons(workingSet) {
+  if (!threadWorkingSetActions) return;
+  if (!currentThreadId || currentAgentId !== null) {
+    threadWorkingSetActions.hidden = true;
+    if (threadGroupTabsBtn) threadGroupTabsBtn.hidden = true;
+    if (threadRestoreTabsBtn) threadRestoreTabsBtn.hidden = true;
+    if (threadCloseTabsBtn) threadCloseTabsBtn.hidden = true;
+    if (threadUndoCloseBtn) threadUndoCloseBtn.hidden = true;
+    return;
+  }
+  const ws = createWorkingSet(workingSet);
+  const openCount = ws.tabIds.length;
+  const missingCount = ws.tabs.filter((t) => t.tabId == null && t.url).length;
+
+  if (openCount === 0 && missingCount === 0) {
+    threadWorkingSetActions.hidden = true;
+    if (threadGroupTabsBtn) threadGroupTabsBtn.hidden = true;
+    if (threadRestoreTabsBtn) threadRestoreTabsBtn.hidden = true;
+    if (threadCloseTabsBtn) threadCloseTabsBtn.hidden = true;
+    if (threadUndoCloseBtn) threadUndoCloseBtn.hidden = true;
+    return;
+  }
+
+  threadWorkingSetActions.hidden = false;
+
+  if (threadUndoCloseBtn) {
+    const hasMatchingUndo = lastClosedWorkingSetState && lastClosedWorkingSetState.threadId === currentThreadId && Array.isArray(lastClosedWorkingSetState.closedUrls) && lastClosedWorkingSetState.closedUrls.length > 0;
+    threadUndoCloseBtn.hidden = !hasMatchingUndo;
+    if (hasMatchingUndo) {
+      threadUndoCloseBtn.textContent = "Undo";
+      threadUndoCloseBtn.setAttribute("aria-label", `Undo closing ${lastClosedWorkingSetState.closedUrls.length} tabs`);
+    }
+  }
+
+  // Group tabs button: recovery path when tabs are open but not yet grouped OR not yet named
+  if (threadGroupTabsBtn) {
+    const needsGroupingOrNaming = openCount >= 1 && (ws.groupId == null || ws.groupNamed === false);
+    threadGroupTabsBtn.hidden = !needsGroupingOrNaming;
+    if (needsGroupingOrNaming) {
+      const label = ws.groupId != null && ws.groupNamed === false ? "Name tab group" : "Group tabs";
+      threadGroupTabsBtn.textContent = label;
+      threadGroupTabsBtn.setAttribute("aria-label", `${label} for task`);
+    }
+  }
+
+  if (missingCount > 0) {
+    if (threadRestoreTabsBtn) {
+      threadRestoreTabsBtn.hidden = false;
+      threadRestoreTabsBtn.textContent = `Restore tabs (${missingCount})`;
+      threadRestoreTabsBtn.setAttribute("aria-label", `Restore ${missingCount} task tabs`);
+    }
+  } else {
+    if (threadRestoreTabsBtn) threadRestoreTabsBtn.hidden = true;
+  }
+
+  if (openCount > 0) {
+    if (threadCloseTabsBtn) {
+      threadCloseTabsBtn.hidden = false;
+      threadCloseTabsBtn.textContent = `Close tabs (${openCount})`;
+      threadCloseTabsBtn.setAttribute("aria-label", `Close ${openCount} task tabs`);
+    }
+  } else {
+    if (threadCloseTabsBtn) threadCloseTabsBtn.hidden = true;
+  }
+}
 // Current conversation identity is declared before the run-registry subscription
 // so even an immediate snapshot is projected into the correct surface.
 let activeViewRoute = VIEW_ROUTE.HUB;
@@ -2755,6 +2826,11 @@ function hideThreadViewInner() {
   threadTitle.removeAttribute("role");
   threadTitle.removeAttribute("title");
   threadTitle.removeAttribute("aria-label");
+  if (threadWorkingSetActions) threadWorkingSetActions.hidden = true;
+  if (threadGroupTabsBtn) threadGroupTabsBtn.hidden = true;
+  if (threadRestoreTabsBtn) threadRestoreTabsBtn.hidden = true;
+  if (threadCloseTabsBtn) threadCloseTabsBtn.hidden = true;
+  if (threadUndoCloseBtn) threadUndoCloseBtn.hidden = true;
   threadView.hidden = true;
   currentThreadId = null;
   currentAgentId = null;
@@ -2860,6 +2936,7 @@ const terminalThreadProjectionLifecycle = createTerminalThreadProjectionLifecycl
   loadThread: (id) => send("thread.get", { id }),
   commitThread: (thread, _run, owner) => {
     renderThreadProjection(thread, owner);
+    updateWorkingSetButtons(thread?.workingSet);
     const run = projectSurfaceRunTranscript({ force: true });
     replayPendingApprovalsForThread(threadConversation, thread?.id ?? currentThreadId, run?.executionId ?? null);
   },
@@ -2876,8 +2953,61 @@ async function refreshOpenThreadFromStore(id) {
   if (!res?.ok || !res.thread) return;
   if (!runSurfaceOwner.owns(owner) || currentThreadId !== id || currentAgentId !== null) return;
   renderThreadProjection(res.thread, owner);
+  updateWorkingSetButtons(res.thread.workingSet);
   const run = projectSurfaceRunTranscript({ force: true });
   replayPendingApprovalsForThread(threadConversation, id, run?.executionId ?? null);
+}
+
+if (typeof chrome !== "undefined" && chrome?.tabs?.onCreated) {
+  const refreshActiveWorkingSet = async () => {
+    if (!threadView?.hidden && currentThreadId && currentAgentId === null) {
+      const owner = runSurfaceOwner.current();
+      const res = await send("thread.get", { id: currentThreadId }).catch(() => null);
+      if (res?.ok && res.thread && runSurfaceOwner.owns(owner)) {
+        let ws = createWorkingSet(res.thread.workingSet);
+        if (typeof chrome !== "undefined" && chrome?.tabs?.query) {
+          try {
+            const activeTabs = await chrome.tabs.query({});
+            if (Array.isArray(activeTabs)) {
+              const activeGroups = typeof chrome.tabGroups?.query === "function"
+                ? (await chrome.tabGroups.query({}).catch(() => null))?.map((g) => g.id)
+                : undefined;
+              const reconciledResult = reconcileWorkingSet(ws, activeTabs, activeGroups);
+              if (reconciledResult.closedCount > 0 || reconciledResult.staleGroup || reconciledResult.urlsChanged) {
+                ws = reconciledResult.reconciled;
+                if (runSurfaceOwner.owns(owner)) {
+                  await send("thread.rename", {
+                    id: currentThreadId,
+                    staleTabIds: reconciledResult.staleTabIds,
+                    updatedTabs: reconciledResult.updatedTabs,
+                    groupId: reconciledResult.reconciled.groupId,
+                    groupNamed: reconciledResult.reconciled.groupNamed,
+                  }).catch(() => {});
+                  res.thread.workingSet = ws;
+                }
+              }
+            }
+          } catch { /* best effort */ }
+        }
+        if (runSurfaceOwner.owns(owner)) {
+          updateWorkingSetButtons(ws);
+        }
+      }
+    }
+  };
+  let refreshTimer = null;
+  const debouncedRefresh = () => {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null;
+      refreshActiveWorkingSet();
+    }, 500);
+  };
+  chrome.tabs.onCreated.addListener(debouncedRefresh);
+  chrome.tabs.onRemoved.addListener(debouncedRefresh);
+  chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
+    if (changeInfo?.url) debouncedRefresh();
+  });
 }
 
 async function openThread(id) {
@@ -2955,6 +3085,42 @@ async function openThread(id) {
   }
   const thread = res.ok ? res.thread : null;
   renderThreadProjection(thread, owner);
+  if (thread?.workingSet) {
+    let ws = createWorkingSet(thread.workingSet);
+    if (typeof chrome !== "undefined" && chrome?.tabs?.query) {
+      try {
+        const activeTabs = await chrome.tabs.query({});
+        if (Array.isArray(activeTabs)) {
+          const activeGroups = typeof chrome.tabGroups?.query === "function"
+            ? (await chrome.tabGroups.query({}).catch(() => null))?.map((g) => g.id)
+            : undefined;
+          const reconciledResult = reconcileWorkingSet(ws, activeTabs, activeGroups);
+          if (reconciledResult.closedCount > 0 || reconciledResult.staleGroup || reconciledResult.urlsChanged) {
+            ws = reconciledResult.reconciled;
+            if (runSurfaceOwner.owns(owner) && currentThreadId === id) {
+              await send("thread.rename", {
+                id,
+                staleTabIds: reconciledResult.staleTabIds,
+                updatedTabs: reconciledResult.updatedTabs,
+                groupId: reconciledResult.reconciled.groupId,
+                groupNamed: reconciledResult.reconciled.groupNamed,
+              }).catch(() => {});
+              thread.workingSet = ws;
+            }
+          }
+        }
+      } catch { /* query failed; leave working set untouched */ }
+    }
+    if (runSurfaceOwner.owns(owner) && currentThreadId === id) {
+      updateWorkingSetButtons(ws);
+    }
+  } else {
+    updateWorkingSetButtons(null);
+  }
+  if (!runSurfaceOwner.owns(owner) || currentThreadId !== id || currentAgentId !== null) {
+    openSpan.end("superseded");
+    return;
+  }
   // Restore the run view for a task that was executing (or terminally settled)
   // while the owner was away (CAP-FB-20260823-DURABLE-TASK-RESTORE-01):
   // re-attach the live projection for THIS thread's latest run. The thread
@@ -4584,6 +4750,11 @@ composer.addEventListener("send", async (ev) => {
   const sendSpan = perfSpan("ntp:send");
   try {
   const { text: task, attachments, agent } = ev.detail;
+  if (typeof chrome !== "undefined" && chrome?.permissions?.request) {
+    try {
+      await chrome.permissions.request({ permissions: ["tabGroups", "tabs"] }).catch(() => false);
+    } catch { /* best effort */ }
+  }
   // TASK-LIFECYCLE-CONTRACT §2: a send must land in the conversation the user
   // is looking at. If a task view is open, this send CONTINUES that thread —
   // it may never silently fork a visible conversation into a new task (the
@@ -4637,6 +4808,11 @@ composer.addEventListener("status", (ev) => {
 
 threadComposer.addEventListener("send", async (ev) => {
   const { text, attachments, agent } = ev.detail;
+  if (typeof chrome !== "undefined" && chrome?.permissions?.request) {
+    try {
+      await chrome.permissions.request({ permissions: ["tabGroups", "tabs"] }).catch(() => false);
+    } catch { /* best effort */ }
+  }
   // chrome-agent-platform-afiu: steer / queue / send-now while the open task
   // runs (the task composer's explicit affordances — plain text only).
   if (runControlBar && !runControlBar.hidden && liveSurfaceRun) {
@@ -4738,6 +4914,199 @@ deleteAgentBtn?.addEventListener("click", async () => {
   } else {
     setStatus(`Could not delete ${agentName}: ${out?.error ?? "failed"}.`, false);
   }
+});
+
+// ── thread working-set tab management ─────────────────────────────────────
+let lastClosedWorkingSetState = null;
+let workingSetActionInFlight = false;
+
+async function executeRestoreTabs(targetThreadId, options = {}) {
+  if (!targetThreadId || workingSetActionInFlight) return;
+  workingSetActionInFlight = true;
+
+  const doRestore = async () => {
+    try {
+      const owner = runSurfaceOwner.current();
+
+      let tabGroupsPermitted = false;
+      if (typeof chrome !== "undefined" && chrome?.permissions?.request) {
+        try {
+          tabGroupsPermitted = await chrome.permissions.request({ permissions: ["tabGroups", "tabs"] }).catch(() => false);
+        } catch { /* best effort */ }
+      }
+
+      const threadRes = await send("thread.get", { id: targetThreadId }).catch(() => null);
+      if (!runSurfaceOwner.owns(owner) || currentThreadId !== targetThreadId) return;
+      const thread = threadRes?.thread;
+      if (!thread?.workingSet) return;
+
+      const currentWs = createWorkingSet(thread.workingSet);
+      const plan = restoreWorkingSetPlan(currentWs, { onlyMissing: true });
+      if (plan.urlsToOpen.length === 0) return;
+
+      const chromeApi = typeof chrome !== "undefined" ? chrome : null;
+      const { nextWorkingSet, openedTabIds } = await restoreWorkingSetTabs(currentWs, {
+        title: thread.name || "Task",
+        onlyMissing: true,
+        targetUrls: options.exactUrls || null,
+        chromeApi,
+      });
+
+      // Always persist opened tabs to targetThreadId under the SW thread lock,
+      // even if the user switched visible surfaces during the browser open await.
+      const restoredEntries = nextWorkingSet.tabs.filter((t) => openedTabIds.includes(t.tabId));
+      const updateRes = await send("thread.rename", {
+        id: targetThreadId,
+        restoreTabs: restoredEntries,
+        groupId: nextWorkingSet.groupId,
+        groupNamed: nextWorkingSet.groupNamed,
+      }).catch(() => null);
+
+      // Fence visible surface UI updates
+      if (!runSurfaceOwner.owns(owner) || currentThreadId !== targetThreadId) return;
+
+      if (threadUndoCloseBtn) threadUndoCloseBtn.hidden = true;
+      lastClosedWorkingSetState = null;
+
+      const updatedWs = updateRes?.workingSet ? createWorkingSet(updateRes.workingSet) : nextWorkingSet;
+      updateWorkingSetButtons(updatedWs);
+
+      if (openedTabIds.length > 0) {
+        if (tabGroupsPermitted === false && typeof chrome !== "undefined" && !chrome?.tabGroups?.update) {
+          setStatus(`Restored ${openedTabIds.length} tab${openedTabIds.length === 1 ? "" : "s"}. Enable tab groups permission in Settings for named grouping.`, false);
+        } else {
+          setStatus(`Restored ${openedTabIds.length} tab${openedTabIds.length === 1 ? "" : "s"} in tab group.`);
+        }
+      }
+      await renderTasks(targetThreadId);
+    } finally {
+      workingSetActionInFlight = false;
+    }
+  };
+
+  if (typeof navigator !== "undefined" && navigator?.locks?.request) {
+    await navigator.locks.request(`cap:thread-restore:${targetThreadId}`, { ifAvailable: true }, async (lock) => {
+      if (!lock) {
+        workingSetActionInFlight = false;
+        return;
+      }
+      await doRestore();
+    }).catch(doRestore);
+  } else {
+    await doRestore();
+  }
+}
+
+threadCloseTabsBtn?.addEventListener("click", async () => {
+  const targetThreadId = currentThreadId;
+  if (!targetThreadId || workingSetActionInFlight) return;
+  workingSetActionInFlight = true;
+  try {
+    const owner = runSurfaceOwner.current();
+
+    const threadRes = await send("thread.get", { id: targetThreadId }).catch(() => null);
+    if (!runSurfaceOwner.owns(owner) || currentThreadId !== targetThreadId) return;
+    const thread = threadRes?.thread;
+    if (!thread?.workingSet) return;
+
+    const currentWs = createWorkingSet(thread.workingSet);
+    if (currentWs.tabIds.length === 0) return;
+
+    const chromeApi = typeof chrome !== "undefined" ? chrome : null;
+    const { nextWorkingSet, closedTabIds, closedTabs } = await closeWorkingSetTabs(currentWs, { chromeApi });
+
+    // Always persist the close delta to the service worker under the thread lock,
+    // including live closedTabs URLs, even if the user switched visible surfaces.
+    const updateRes = await send("thread.rename", {
+      id: targetThreadId,
+      closeTabIds: closedTabIds,
+      closedTabs,
+    }).catch(() => null);
+
+    // Record closed entries scoped to targetThreadId for Undo
+    lastClosedWorkingSetState = {
+      threadId: targetThreadId,
+      closedUrls: (closedTabs || []).map((t) => t.url).filter(Boolean),
+    };
+
+    // Fence visible surface UI updates
+    if (!runSurfaceOwner.owns(owner) || currentThreadId !== targetThreadId) return;
+
+    const updatedWs = updateRes?.workingSet ? createWorkingSet(updateRes.workingSet) : nextWorkingSet;
+    updateWorkingSetButtons(updatedWs);
+
+    if (closedTabIds.length > 0) {
+      if (threadUndoCloseBtn) {
+        threadUndoCloseBtn.hidden = false;
+        threadUndoCloseBtn.textContent = "Undo";
+        threadUndoCloseBtn.setAttribute("aria-label", `Undo closing ${closedTabIds.length} tabs`);
+      }
+      setStatus(`Closed ${closedTabIds.length} tab${closedTabIds.length === 1 ? "" : "s"} for task.`);
+    }
+    await renderTasks(targetThreadId);
+  } finally {
+    workingSetActionInFlight = false;
+  }
+});
+
+threadUndoCloseBtn?.addEventListener("click", async () => {
+  const targetThreadId = currentThreadId;
+  if (!targetThreadId || !lastClosedWorkingSetState || lastClosedWorkingSetState.threadId !== targetThreadId) return;
+  const exactUrls = lastClosedWorkingSetState.closedUrls;
+  await executeRestoreTabs(targetThreadId, { exactUrls });
+});
+
+threadRestoreTabsBtn?.addEventListener("click", async () => {
+  const targetThreadId = currentThreadId;
+  if (!targetThreadId) return;
+  await executeRestoreTabs(targetThreadId);
+});
+
+threadGroupTabsBtn?.addEventListener("click", async () => {
+  const targetThreadId = currentThreadId;
+  if (!targetThreadId) return;
+  const owner = runSurfaceOwner.current();
+
+  let tabGroupsPermitted = false;
+  if (typeof chrome !== "undefined" && chrome?.permissions?.request) {
+    try {
+      tabGroupsPermitted = await chrome.permissions.request({ permissions: ["tabGroups"] }).catch(() => false);
+    } catch { /* best effort */ }
+  }
+
+  const threadRes = await send("thread.get", { id: targetThreadId }).catch(() => null);
+  if (!runSurfaceOwner.owns(owner) || currentThreadId !== targetThreadId) return;
+  const thread = threadRes?.thread;
+  if (!thread?.workingSet) return;
+
+  const currentWs = createWorkingSet(thread.workingSet);
+  if (currentWs.tabIds.length === 0) return;
+
+  const chromeApi = typeof chrome !== "undefined" ? chrome : null;
+  const synced = await syncWorkingSetTabGroup(currentWs, {
+    title: thread.name || "Task",
+    chromeApi,
+  });
+
+  if (!runSurfaceOwner.owns(owner) || currentThreadId !== targetThreadId) return;
+
+  const updateRes = await send("thread.rename", {
+    id: targetThreadId,
+    groupId: synced.groupId,
+    groupNamed: synced.groupNamed,
+  }).catch(() => null);
+
+  const updatedWs = updateRes?.workingSet ? createWorkingSet(updateRes.workingSet) : synced.nextWorkingSet;
+  updateWorkingSetButtons(updatedWs);
+
+  if (synced.groupNamed) {
+    setStatus(`Grouped and named tabs under "${thread.name || "Task"}".`);
+  } else if (synced.groupId != null) {
+    setStatus(`Tabs grouped. Enable tabGroups permission in Settings to name the group.`, false);
+  } else if (!tabGroupsPermitted) {
+    setStatus("Tab grouping requires tabGroups permission. Enable it in Settings.", false);
+  }
+  await renderTasks(targetThreadId);
 });
 
 // ── edit the thread title (item 47): click the title → rename in place.

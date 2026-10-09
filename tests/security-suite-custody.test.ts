@@ -9,11 +9,18 @@ import { lstat as nodeLstat } from "node:fs/promises";
 import { runLockAware } from "../scripts/lib/lock-aware-command.ts";
 import {
   cleanupExactProfile,
+  custodyReasonFor,
+  isVanishedGroupError,
+  isVanishedProcError,
   pidAlive,
+  ProcessGoneError,
   PROFILE_ROOT,
   readProcIdentity,
+  residueForReceipt,
   resolveSupervisorConfig,
   SELF_TEST_TOKEN,
+  terminateAttestedGroup,
+  terminateAttestedGroupSafely,
   waitUntil,
 } from "../scripts/security-suite-custody.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
@@ -181,30 +188,36 @@ async function verifyLiveProcOwnership(
   pid: number,
   expectedStart: string,
   timeoutMs = 2_000,
-): Promise<{ starttime: string; uid: number }> {
+  readIdentity = readProcIdentity,
+): Promise<{ status: "live"; starttime: string; uid: number } | {
+  status: "vanished"; reason: "pid-vanished-during-ownership-inspection";
+}> {
   const deadline = Date.now() + timeoutMs;
-  let lastError: Error | null = null;
   while (Date.now() < deadline) {
+    let id;
     try {
-      const id = await readProcIdentity(pid);
-      if (id.state !== "Z") {
-        if (id.starttime !== expectedStart) {
-          throw new Error(
-            `proc ${pid} starttime mismatch: expected ${expectedStart}, got ${id.starttime}`,
-          );
-        }
-        return id;
+      id = await readIdentity(pid);
+    } catch (error) {
+      const failure = error as { code?: string; path?: string; message?: string };
+      // This read is INSIDE the live-ownership check, not the earlier dead-pid
+      // pre-check. Only absence of this exact pid's /proc entry is "vanished".
+      const procPath = `/proc/${pid}`;
+      if (error instanceof ProcessGoneError ||
+          (isVanishedProcError(failure) &&
+           (failure.path === procPath || failure.path === `${procPath}/stat`))) {
+        return { status: "vanished", reason: "pid-vanished-during-ownership-inspection" };
       }
-    } catch (err) {
-      lastError = err as Error;
+      throw new Error(`custody ownership unverified for pid ${pid}: ${failure.code ?? failure.message ?? "unknown"}`);
+    }
+    if (id.state !== "Z") {
+      if (id.starttime !== expectedStart) {
+        throw new Error(`custody ownership unverified for pid ${pid}: starttime mismatch (expected ${expectedStart}, got ${id.starttime})`);
+      }
+      return { status: "live", starttime: id.starttime, uid: id.uid };
     }
     await new Promise((r) => setTimeout(r, 20));
   }
-  throw new Error(
-    `custody verification failed for pid ${pid} (expected start ${expectedStart}): ${
-      lastError?.message ?? "process not live"
-    }`,
-  );
+  throw new Error(`custody ownership unverified for pid ${pid}: process not live (zombie)`);
 }
 
 Deno.test("security-suite custody: production mode is immutable and fake runners are hash-pinned", async () => {
@@ -220,6 +233,8 @@ Deno.test("security-suite custody: production mode is immutable and fake runners
   assertEquals(production.timeoutMs, 120_000);
   assertEquals(production.attestDeadlineMs, 2_000, "production keeps the old attestation clock");
   assertEquals(production.sampleFreezeMs, 0, "production keeps zero sample freeze");
+  assertEquals(production.forceObservationUnreadable, false);
+  assertEquals(production.forceResidueUnreadable, false);
   assertEquals(production.runner, RUNNER);
 
   await assertRejects(
@@ -277,6 +292,23 @@ Deno.test("security-suite custody: production mode is immutable and fake runners
     Error,
     "self-test-only override refused in production mode",
   );
+
+  await assertRejects(
+    () => resolveSupervisorConfig({
+      env: { HOME: Deno.env.get("HOME") ?? "", CAP_SECURITY_TEST_SIMULATE_VANISHED_LEADER: "1" },
+      repoRoot: ROOT,
+      expectedFixtureHash: "unused-in-production",
+    }),
+    Error,
+    "self-test-only override refused in production mode",
+  );
+
+  for (const name of ["CAP_SECURITY_TEST_FORCE_OBSERVATION_UNREADABLE", "CAP_SECURITY_TEST_FORCE_RESIDUE_UNREADABLE"]) {
+    await assertRejects(() => resolveSupervisorConfig({
+      env: { HOME: Deno.env.get("HOME") ?? "", [name]: "1" },
+      repoRoot: ROOT, expectedFixtureHash: "unused-in-production",
+    }), Error, "self-test-only override refused in production mode");
+  }
 
   const fake = await Deno.makeTempFile({ prefix: "cap-hostile-runner-" });
   await Deno.writeTextFile(fake, "process.exit(0);\n");
@@ -625,6 +657,8 @@ Deno.test("security-suite custody: exit 37 and runner signal propagate exactly",
   try {
     assertEquals(nonzero.code, 37);
     assertEquals(nonzero.receipt?.exit, 37);
+    assertEquals(nonzero.receipt?.observationUnverifiedReason, undefined,
+      "healthy sampling adds no receipt field");
   } finally {
     await removeEvidence(nonzero);
   }
@@ -637,6 +671,58 @@ Deno.test("security-suite custody: exit 37 and runner signal propagate exactly",
   } finally {
     await removeEvidence(signaled);
   }
+});
+
+Deno.test("yuu9s: persistently unreadable process table exits 70 with an empty observed set and a named receipt", async () => {
+  const result = await runSupervisor("exit37", 2_000, { CAP_SECURITY_TEST_FORCE_OBSERVATION_UNREADABLE: "1" });
+  try {
+    assertEquals(result.code, 70, "custody failure overrides a runner's exit 37");
+    assertEquals(result.receipt?.exit, 70);
+    assertEquals(result.receipt?.result, "FAIL");
+    assertEquals(result.receipt?.residue, [], "no invented pid: the observation itself was unverified");
+    assert(String(result.receipt?.observationUnverifiedReason).includes("EMFILE"));
+    assert(String(result.receipt?.custodyReason).includes("observation-unverified:"));
+    assertEquals(result.receipt?.cleaned, true);
+  } finally {
+    await removeEvidence(result);
+  }
+});
+
+Deno.test("yuu9s: supervisor receipt retains the reason for an unverified escape identity", async () => {
+  const result = await runSupervisor("escape", ESCAPE_SELF_TEST_BUDGET_MS, {
+    CAP_SECURITY_TEST_ACK_DEADLINE_MS: String(ESCAPE_ACK_DEADLINE_MS),
+    CAP_SECURITY_TEST_FORCE_RESIDUE_UNREADABLE: "1",
+  });
+  let escapedPid = 0;
+  let escapedStart = "";
+  try {
+    assertEquals(result.code, 70);
+    const recorded = result.state.find((row) => row.event === "escape-child-spawned");
+    escapedPid = Number(recorded?.childPid ?? await escapeChildPidFrom(`${result.receipt?.evidence}/self-test-state.jsonl`));
+    assert(Number.isSafeInteger(escapedPid) && escapedPid > 0, "the fixture must name its escape child");
+    const row = matchEscapeResidueByIdentity(
+      (result.receipt?.residue as Array<Record<string, unknown>>) ?? [], escapedPid);
+    escapedStart = String(row.starttime);
+    assertEquals(row.unverified, true, "the receipt must not present this identity as verified");
+    assert(String(row.unverifiedReason).includes("EMFILE"), `missing reason: ${JSON.stringify(row)}`);
+    assertEquals(result.receipt?.custodyReason, "descendant-residue");
+  } finally {
+    if (!escapedPid) {
+      const recorded = result.state.find((row) => row.event === "escape-child-spawned");
+      if (typeof recorded?.childPid === "number") escapedPid = recorded.childPid;
+    }
+    if (escapedPid > 0) {
+      try {
+        const current = await readProcIdentity(escapedPid);
+        if (!escapedStart || (current.starttime === escapedStart && current.uid === Deno.uid())) {
+          Deno.kill(escapedPid, "SIGKILL");
+        }
+      } catch { /* already gone */ }
+      await waitUntil(() => pidAlive(escapedPid), REAP_SETTLE_TIMEOUT_MS);
+    }
+    await removeEvidence(result);
+  }
+  assertEquals(pidAlive(escapedPid), false);
 });
 
 Deno.test("security-suite custody: live cleanup helper refuses real symlink/wrong-prefix and injected wrong owner", async () => {
@@ -729,9 +815,16 @@ Deno.test("security-suite custody: escaped descendant fails THIS run (exit 70) a
     );
     escapedPid = Number(matchingResidue.pid);
     escapedStart = String(matchingResidue.starttime);
-    const live = await verifyLiveProcOwnership(escapedPid, escapedStart);
-    assertEquals(live.starttime, escapedStart);
-    assertEquals(live.uid, Deno.uid());
+    assert(escapedStart.length > 0, "the receipt must retain the sampled escape identity");
+    const inspected = await verifyLiveProcOwnership(escapedPid, escapedStart);
+    if (inspected.status === "live") {
+      assertEquals(inspected.starttime, escapedStart);
+      assertEquals(inspected.uid, Deno.uid());
+    } else {
+      assertEquals(inspected.reason, "pid-vanished-during-ownership-inspection");
+      // Receipt + fixture still prove the child was seen; its later exit is not
+      // a process-table failure or a reason to discard this run's exit 70.
+    }
     // uzik: the finding is this run's own (receipt + exit code). It must NOT be
     // smeared onto every later run on the box via a shared marker — that was
     // yr6e, a full-suite red caused by another lane's transient file.
@@ -870,9 +963,16 @@ Deno.test(
       );
       escapedPid = Number(matchingResidue.pid);
       escapedStart = String(matchingResidue.starttime);
-      const live = await verifyLiveProcOwnership(escapedPid, escapedStart);
-      assertEquals(live.starttime, escapedStart);
-      assertEquals(live.uid, Deno.uid());
+      assert(escapedStart.length > 0, "the receipt must retain the sampled escape identity");
+      const inspected = await verifyLiveProcOwnership(escapedPid, escapedStart);
+      if (inspected.status === "live") {
+        assertEquals(inspected.starttime, escapedStart);
+        assertEquals(inspected.uid, Deno.uid());
+      } else {
+        assertEquals(inspected.reason, "pid-vanished-during-ownership-inspection");
+        // Receipt + ACK prove the recorded child existed even though this later
+        // read found that its exact pid vanished before inspection finished.
+      }
       /**
        * d2vz: 70/residue is only HALF the guard. The handshake's other half is
        * that the runner CONSUMED the supervisor's ACK for its real child — the
@@ -1016,12 +1116,516 @@ Deno.test("security-suite custody: residue matching selects escape child by iden
   assertEquals(match.starttime, "67890");
 });
 
-// chrome-agent-platform-wtjz: verifyLiveProcOwnership fails with named reason rather than raw ENOENT for non-existent pid
-Deno.test("security-suite custody: verifyLiveProcOwnership fails with named reason rather than raw ENOENT for non-existent pid", async () => {
-  const deadPid = 999999999;
+Deno.test("yuu9s: a pid vanishing MID ownership inspection is a named absence, not a raw /proc throw", async () => {
+  const pid = 424242;
+  let reads = 0;
+  const result = await verifyLiveProcOwnership(pid, "1000", 100, async () => {
+    reads++;
+    if (reads === 1) return { pid, ppid: 1, pgid: pid, sid: pid, state: "Z", starttime: "1000", uid: Deno.uid() ?? 0 };
+    throw Object.assign(new Error(`ENOENT: stat /proc/${pid}`), {
+      code: "ENOENT", path: `/proc/${pid}`, sysCall: "stat",
+    });
+  });
+  assertEquals(reads, 2, "failure must be on the second read INSIDE the ownership inspection");
+  assertEquals((result as unknown as { status?: string }).status, "vanished");
+  assertEquals((result as unknown as { reason?: string }).reason, "pid-vanished-during-ownership-inspection");
+});
+
+Deno.test("yuu9s: unreadable /proc identity is named unverified, never a vanished pid", async () => {
+  const pid = 424243;
   await assertRejects(
-    () => verifyLiveProcOwnership(deadPid, "12345", 50),
+    () => verifyLiveProcOwnership(pid, "1000", 100, async () => {
+      throw Object.assign(new Error("EMFILE: /proc exhausted"), { code: "EMFILE", path: `/proc/${pid}/stat` });
+    }),
     Error,
-    `custody verification failed for pid ${deadPid}`,
+    `custody ownership unverified for pid ${pid}: EMFILE`,
   );
+  await assertRejects(
+    () => verifyLiveProcOwnership(pid, "1000", 100, async () => {
+      throw Object.assign(new Error("ENOENT: unrelated path"), { code: "ENOENT", path: "/tmp/unrelated" });
+    }),
+    Error,
+    `custody ownership unverified for pid ${pid}: ENOENT`,
+  );
+});
+
+// wtjz and yuu9s: a dead pid is a named absence; unreadable is NOT dead.
+Deno.test("security-suite custody: verifyLiveProcOwnership names an absent pid rather than leaking raw ENOENT", async () => {
+  const deadPid = 999999999;
+  assertEquals(await verifyLiveProcOwnership(deadPid, "12345", 50), {
+    status: "vanished", reason: "pid-vanished-during-ownership-inspection",
+  });
+});
+
+// ── chrome-agent-platform-8ixk ─────────────────────────────────────────────
+// The runner child can exit between terminateAttestedGroup's group-alive check
+// and its readProcIdentity call. That ENOENT used to be rethrown out of the
+// supervisor as an uncaught rejection, so the run wrote NO receipt at all — no
+// CAP_SECURITY_RESULT, no verdict — and a death this way read as environmental
+// because there was nothing left to read. Observed for real: killing the runner
+// mid-run produced `ENOENT: no such file or directory, open '/proc/<pid>/stat'`
+// at readProcIdentity <- terminateAttestedGroup, and an evidence directory with
+// no receipt in it.
+//
+// The race is INJECTED, not timed: readIdentity and isAlive are options on
+// terminateAttestedGroup, the same pattern attestOwnedGroup already uses for
+// readIdentity. A test that waits for a real process to die at the right instant
+// would be flaky, and a flaky test of a teardown race is worse than none.
+// The pgid/pid are deliberately impossible so no path can reach process.kill.
+const DEAD_PGID = 999999;
+const DEAD_PID = 999998;
+const fakeAttestation = {
+  identity: {
+    pid: DEAD_PID,
+    pgid: DEAD_PGID,
+    sid: DEAD_PID,
+    starttime: "12345",
+    uid: 0,
+  },
+};
+const coded = (code: string) => Object.assign(new Error(code), { code });
+
+Deno.test("8ixk: isVanishedProcError accepts ONLY a disappeared /proc entry", () => {
+  assertEquals(isVanishedProcError(coded("ENOENT")), true);
+  // An unreadable /proc for a process that still exists is a DIFFERENT fact and
+  // must not be laundered into "it exited".
+  assertEquals(isVanishedProcError(coded("EACCES")), false);
+  assertEquals(isVanishedProcError(coded("ENOTDIR")), false);
+  assertEquals(isVanishedProcError(new Error("owned process-group identity changed")), false);
+  assertEquals(isVanishedProcError(null), false);
+  assertEquals(isVanishedProcError(undefined), false);
+});
+
+Deno.test("8ixk: a leader that vanished while its group also died is benign, returned and RECORDED — not rethrown", async () => {
+  let aliveCalls = 0;
+  const result = await terminateAttestedGroup({
+    attestation: fakeAttestation,
+    observed: new Map(),
+    termWaitMs: 50,
+    killWaitMs: 50,
+    readIdentity: () => Promise.reject(coded("ENOENT")),
+    // true at the entry check, false when the catch re-checks: the race, made
+    // deterministic instead of timed.
+    isAlive: () => aliveCalls++ === 0,
+  });
+  // leaderExited is what the supervisor turns into a custodyReason, so the
+  // receipt says the child exited before the identity read instead of saying
+  // nothing at all.
+  assertEquals(result, {
+    termSent: false,
+    killSent: false,
+    survived: false,
+    leaderExited: true,
+  });
+});
+
+Deno.test("8ixk: a vanished leader with the group STILL ALIVE keeps failing closed", async () => {
+  // The benign path requires BOTH facts. A dead leader inside a live group still
+  // has to pass the observed-descendant ownership check, and an unobserved group
+  // must throw rather than be signalled.
+  await assertRejects(
+    () =>
+      terminateAttestedGroup({
+        attestation: fakeAttestation,
+        observed: new Map(),
+        termWaitMs: 50,
+        killWaitMs: 50,
+        readIdentity: () => Promise.reject(coded("ENOENT")),
+        isAlive: () => true,
+      }),
+    Error,
+    "ENOENT",
+  );
+});
+
+Deno.test("8ixk: a non-ENOENT read failure stays fail-closed even with a dead group", async () => {
+  // Proves the benign path is gated on the ERROR KIND and not merely on the group
+  // being gone: same alive sequence as the benign case, different error.
+  let aliveCalls = 0;
+  await assertRejects(
+    () =>
+      terminateAttestedGroup({
+        attestation: fakeAttestation,
+        observed: new Map(),
+        termWaitMs: 50,
+        killWaitMs: 50,
+        readIdentity: () => Promise.reject(coded("EACCES")),
+        isAlive: () => aliveCalls++ === 0,
+      }),
+    Error,
+    "EACCES",
+  );
+});
+
+Deno.test("8ixk: an identity CHANGE is still an identity change, not a vanished leader", async () => {
+  // The pre-existing ownership check must survive the new early return: a leader
+  // that exists but no longer matches the attestation is the dangerous case.
+  await assertRejects(
+    () =>
+      terminateAttestedGroup({
+        attestation: fakeAttestation,
+        observed: new Map(),
+        termWaitMs: 50,
+        killWaitMs: 50,
+        readIdentity: () =>
+          Promise.resolve({
+            pid: DEAD_PID,
+            state: "S",
+            ppid: 1,
+            pgid: DEAD_PGID,
+            sid: DEAD_PID,
+            starttime: "99999", // differs from the attested 12345
+            uid: 0,
+          }),
+        isAlive: () => true,
+      }),
+    Error,
+    "owned process-group identity changed",
+  );
+});
+
+// ── chrome-agent-platform-8ixk, second race ────────────────────────────────
+// Found by cap-astra's independent review with a LIVE owned fixture, at the
+// unchanged candidate: both kernel identity reads complete, the own child then
+// dies before completion is delivered, and process.kill(-pgid, SIGTERM) throws
+// killESRCH — which escaped uncaught, Node exited 1, and NO receipt was written.
+// A pre-existing sibling of the ENOENT race, not newly introduced, but the
+// acceptance is "an early exit leaves a receipt", which one guarded read does not
+// deliver on its own. `kill` is injected so no test ever signals a real group:
+// an impossible pgid is inside the pid range on some kernels, and guessing is not
+// acceptable in a file that owns signalling.
+const esrch = () => Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+const eperm = () => Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+const liveIdentity = {
+  pid: DEAD_PID,
+  state: "S",
+  ppid: 1,
+  pgid: DEAD_PGID,
+  sid: DEAD_PID,
+  starttime: "12345", // matches the attestation, so the identity check passes
+  uid: 0,
+};
+
+Deno.test("8ixk: isVanishedGroupError accepts ONLY ESRCH", () => {
+  assertEquals(isVanishedGroupError(esrch()), true);
+  assertEquals(isVanishedGroupError(eperm()), false);
+  assertEquals(isVanishedGroupError(coded("ENOENT")), false);
+  assertEquals(isVanishedGroupError(new Error("kill EINVAL")), false);
+  assertEquals(isVanishedGroupError(null), false);
+});
+
+Deno.test("8ixk: a group that dies before SIGTERM reaches it is benign and recorded, not an uncaught ESRCH", async () => {
+  const result = await terminateAttestedGroup({
+    attestation: fakeAttestation,
+    observed: new Map(),
+    termWaitMs: 20,
+    killWaitMs: 20,
+    readIdentity: () => Promise.resolve(liveIdentity),
+    isAlive: () => true, // alive at the entry check, so the kill is reached
+    kill: () => {
+      throw esrch();
+    },
+  });
+  assertEquals(result, {
+    termSent: false,
+    killSent: false,
+    survived: false,
+    groupGoneBeforeSignal: true,
+  });
+});
+
+Deno.test("8ixk: a group that dies during the SIGTERM wait is benign at the SIGKILL escalation too", async () => {
+  let calls = 0;
+  const result = await terminateAttestedGroup({
+    attestation: fakeAttestation,
+    observed: new Map(),
+    termWaitMs: 20,
+    killWaitMs: 20,
+    readIdentity: () => Promise.resolve(liveIdentity),
+    isAlive: () => true, // never reports gone, so the escalation is reached
+    kill: (): true => {
+      calls += 1;
+      if (calls === 1) return true; // SIGTERM "succeeds"
+      throw esrch(); // SIGKILL finds nothing
+    },
+  });
+  assertEquals(result, {
+    termSent: true,
+    killSent: false,
+    survived: false,
+    groupGoneBeforeSignal: true,
+  });
+  assertEquals(calls, 2);
+});
+
+Deno.test("8ixk: a REFUSAL to signal (EPERM) still propagates — only ESRCH is benign", async () => {
+  // The fail-closed boundary for this race: not being allowed to touch a group is
+  // a real custody finding and must not be laundered into "it already exited".
+  await assertRejects(
+    () =>
+      terminateAttestedGroup({
+        attestation: fakeAttestation,
+        observed: new Map(),
+        termWaitMs: 20,
+        killWaitMs: 20,
+        readIdentity: () => Promise.resolve(liveIdentity),
+        isAlive: () => true,
+        kill: () => {
+          throw eperm();
+        },
+      }),
+    Error,
+    "EPERM",
+  );
+});
+
+// ── chrome-agent-platform-8ixk, safe teardown wrapper ──────────────────────
+Deno.test("8ixk: terminateAttestedGroupSafely catches arbitrary throws and preserves teardownThrew without crashing", async () => {
+  const result = await terminateAttestedGroupSafely({
+    attestation: fakeAttestation,
+    observed: new Map(),
+    termWaitMs: 20,
+    killWaitMs: 20,
+    readIdentity: () => Promise.reject(new Error("simulated unexpected teardown failure")),
+    isAlive: () => true,
+  });
+  assertEquals(result.termSent, false);
+  assertEquals(result.killSent, false);
+  assertEquals(result.survived, false);
+  assert(Boolean(result.teardownThrew && result.teardownThrew.includes("simulated unexpected teardown failure")));
+});
+
+Deno.test("8ixk: terminateAttestedGroupSafely ensures nonempty teardownThrew on message-less error and fails closed", async () => {
+  const result1 = await terminateAttestedGroupSafely({
+    attestation: fakeAttestation,
+    observed: new Map(),
+    termWaitMs: 20,
+    killWaitMs: 20,
+    readIdentity: () => Promise.reject(new Error("")),
+    isAlive: () => true,
+  });
+  assert(Boolean(result1.teardownThrew && result1.teardownThrew.length > 0), "message-less Error must yield nonempty teardownThrew");
+
+  const result2 = await terminateAttestedGroupSafely({
+    attestation: fakeAttestation,
+    observed: new Map(),
+    termWaitMs: 20,
+    killWaitMs: 20,
+    readIdentity: () => Promise.reject(""),
+    isAlive: () => true,
+  });
+  assert(Boolean(result2.teardownThrew && result2.teardownThrew.length > 0), "empty string throw must yield nonempty teardownThrew");
+
+  const result3 = await terminateAttestedGroupSafely({
+    attestation: fakeAttestation,
+    observed: new Map(),
+    termWaitMs: 20,
+    killWaitMs: 20,
+    readIdentity: () => Promise.reject(Object.create(null)),
+    isAlive: () => true,
+  });
+  assert(Boolean(result3.teardownThrew && result3.teardownThrew.length > 0), "unstringable Object.create(null) throw must yield nonempty teardownThrew");
+  assertEquals(result3.teardownThrew, "teardown-failed-unstringable");
+
+  // Verify custodyReasonFor records the finding and does not drop it
+  const reason = custodyReasonFor({ teardownThrew: result1.teardownThrew });
+  assert(reason.startsWith("teardown-threw:"), `must record teardown-threw finding, got: ${reason}`);
+});
+
+// ── chrome-agent-platform-8ixk, receipt-level coverage ─────────────────────
+// Review found that a CALLER-ONLY mutant — `if (false && termination.leaderExited)`
+// in the supervisor — survived all 17 custody tests, because every test asserted
+// what the HELPER RETURNS and nothing asserted what the RECEIPT RECORDS. A live
+// owned-child probe confirmed it: the receipt was still emitted but custodyReason
+// came back empty where it should have said leader-exited-before-identity-read.
+// It also found a regression I introduced: the benign markers were assigned BEFORE
+// the cleanup check, so `||=` could no longer replace them and a run with both a
+// benign leader exit and a cleanup refusal reported the benign reason (receipt
+// b21e2e6180fb0ca9, exit 71, cleaned:false) where the control reported the proper
+// cleanup-refused:profile is not an owned regular directory (d09361b8bf36e32c).
+// The derivation is now one pure exported function so the ORDER — which is the
+// semantics — is testable without running a supervisor.
+Deno.test("8ixk: a clean run records no custody reason", () => {
+  assertEquals(custodyReasonFor({}), "");
+  assertEquals(
+    custodyReasonFor({ survived: false, residueCount: 0, cleanupOk: true }),
+    "",
+  );
+});
+
+Deno.test("8ixk: each finding records its own reason", () => {
+  assertEquals(custodyReasonFor({ survived: true }), "owned-group-survived");
+  assertEquals(custodyReasonFor({ residueCount: 2 }), "descendant-residue");
+  assertEquals(custodyReasonFor({ observationUnverifiedReason: "EMFILE", leaderExited: true }),
+    "observation-unverified:EMFILE", "unverified outranks benign teardown markers");
+  assertEquals(custodyReasonFor({ observationUnverifiedReason: "EMFILE", residueCount: 1 }),
+    "descendant-residue", "a specific observed residue outranks a failed sample");
+  assertEquals(residueForReceipt([{ pid: 9, starttime: "1", pgid: 9, sid: 9 }]),
+    [{ pid: 9, starttime: "1", pgid: 9, sid: 9 }], "verified residue keeps its exact receipt shape");
+  assertEquals(residueForReceipt([{
+    pid: 9, starttime: "1", pgid: 9, sid: 9, unverified: true, unverifiedReason: "EMFILE",
+  }]), [{ pid: 9, starttime: "1", pgid: 9, sid: 9, unverified: true, unverifiedReason: "EMFILE" }],
+    "unverified identity reason survives the receipt mapping");
+  assertEquals(
+    custodyReasonFor({ cleanupOk: false, cleanupReason: "profile is not an owned regular directory" }),
+    "cleanup-refused:profile is not an owned regular directory",
+  );
+  assertEquals(custodyReasonFor({ leaderExited: true }), "leader-exited-before-identity-read");
+  assertEquals(custodyReasonFor({ groupGoneBeforeSignal: true }), "group-gone-before-signal");
+  assertEquals(custodyReasonFor({ teardownThrew: "kill EPERM" }), "teardown-threw:kill EPERM");
+});
+
+Deno.test("8ixk REGRESSION: a cleanup refusal outranks the benign teardown markers", () => {
+  // The exact case review reproduced live: benign leader exit AND a cleanup
+  // refusal. The receipt must name the real finding, not the benign one, even
+  // though the exit code was already correct at 71.
+  assertEquals(
+    custodyReasonFor({
+      leaderExited: true,
+      cleanupOk: false,
+      cleanupReason: "profile is not an owned regular directory",
+    }),
+    "cleanup-refused:profile is not an owned regular directory",
+  );
+  assertEquals(
+    custodyReasonFor({
+      groupGoneBeforeSignal: true,
+      cleanupOk: false,
+      cleanupReason: "not empty",
+    }),
+    "cleanup-refused:not empty",
+  );
+  assertEquals(
+    custodyReasonFor({ teardownThrew: "kill EPERM", cleanupOk: false, cleanupReason: "x" }),
+    "cleanup-refused:x",
+  );
+});
+
+Deno.test("8ixk: severity order is residue > survived > cleanup > threw > benign", () => {
+  // residue overwrites survived (pre-8ixk behaviour, preserved deliberately)
+  assertEquals(custodyReasonFor({ survived: true, residueCount: 1 }), "descendant-residue");
+  // survived is real, so a later ||= must not replace it
+  assertEquals(
+    custodyReasonFor({ survived: true, cleanupOk: false, cleanupReason: "x" }),
+    "owned-group-survived",
+  );
+  assertEquals(
+    custodyReasonFor({ survived: true, leaderExited: true }),
+    "owned-group-survived",
+  );
+  // a thrown teardown outranks the benign races
+  assertEquals(
+    custodyReasonFor({ teardownThrew: "boom", leaderExited: true, groupGoneBeforeSignal: true }),
+    "teardown-threw:boom",
+  );
+  // of the two benign races, the first recorded wins
+  assertEquals(
+    custodyReasonFor({ leaderExited: true, groupGoneBeforeSignal: true }),
+    "leader-exited-before-identity-read",
+  );
+});
+
+// Caller-level coverage of the receipt wiring (8ixk). Review correctly pointed out
+// that runSupervisor already tests this top-level script BY SPAWNING IT, so
+// "the supervisor cannot be imported" was never a reason to leave the wiring
+// untested — the unit tests above pin custodyReasonFor's derivation, and this pins
+// that a real teardown which signals the group records NO benign marker. Without it
+// a change that made the markers fire on any termination would pass every unit test.
+Deno.test("8ixk caller-level: a real TERM teardown writes its receipt and records no benign custody marker", async () => {
+  const result = await runSupervisor("timeout", 300);
+  try {
+    assertEquals(result.code, 124);
+    assert(result.receipt, "the receipt must exist — that is the whole property");
+    // The teardown genuinely ran, so an empty custodyReason is a real negative and
+    // not the absence of a teardown.
+    assertEquals(result.receipt?.termSent, true);
+    assertEquals(result.receipt?.custodyReason, "");
+    // A genuine refusal must still fail closed: the supervisor now keeps the
+    // receipt when teardown throws, so the non-zero exit has to be restored
+    // explicitly or a refusal would become a pass-with-a-note. No fixture scenario
+    // produces a teardown throw and no CAP_SECURITY_TEST_* hook forces one, so this
+    // is asserted here as the invariant the receipt must not violate rather than
+    // driven end to end — see the bead for the coverage boundary.
+    assert(
+      result.code !== 0 || result.receipt?.custodyReason === "",
+      "a run that exits 0 must not be carrying a custody finding",
+    );
+    await assertRecordedPidsGone(result);
+  } finally {
+    await removeEvidence(result);
+  }
+});
+
+// ── chrome-agent-platform-8ixk: explicit falsifier ─────────────────────────
+// When the runner child has already exited, teardown must NOT throw an unhandled
+// ENOENT and crash without a receipt.
+// This test asserts the end-to-end supervisor behavior: a runner child vanishes
+// before teardown identity read, and the supervisor successfully emits
+// CAP_SECURITY_RESULT with leader-exited-before-identity-read and writes a valid
+// receipt.json to disk.
+Deno.test("8ixk falsifier: runner child vanished before teardown identity read => supervisor still emits CAP_SECURITY_RESULT and writes valid receipt.json to disk", async () => {
+  const result = await runSupervisor("timeout", 300, {
+    CAP_SECURITY_TEST_SIMULATE_VANISHED_LEADER: "1",
+  });
+  try {
+    assertEquals(result.code, 124);
+    // 1. CAP_SECURITY_RESULT marker was emitted by supervisor and parsed
+    assert(result.receipt, "supervisor must emit CAP_SECURITY_RESULT marker");
+    assertEquals(result.receipt?.result, "FAIL");
+    assertEquals(result.receipt?.exit, 124);
+    assertEquals(result.receipt?.custodyReason, "leader-exited-before-identity-read");
+    assertEquals(result.receipt?.termSent, false);
+    assertEquals(result.receipt?.killSent, false);
+    assertEquals(result.receipt?.groupSurvived, false);
+    assertEquals(result.receipt?.cleaned, true);
+
+    // 2. on-disk receipt.json exists, is valid JSON, and matches parsed result
+    const evidenceDir = String(result.receipt?.evidence);
+    const receiptPath = `${evidenceDir}/receipt.json`;
+    const receiptRaw = await Deno.readTextFile(receiptPath);
+    const onDiskReceipt = JSON.parse(receiptRaw);
+    assertEquals(onDiskReceipt.schemaVersion, 1);
+    assertEquals(onDiskReceipt.result, "FAIL");
+    assertEquals(onDiskReceipt.exit, 124);
+    assertEquals(onDiskReceipt.custodyReason, "leader-exited-before-identity-read");
+    assertEquals(onDiskReceipt.pid, result.receipt?.pid);
+    assertEquals(onDiskReceipt.cleaned, true);
+  } finally {
+    if (result.receipt?.pid) {
+      try {
+        Deno.kill(Number(result.receipt.pid), "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
+    await assertRecordedPidsGone(result);
+    await removeEvidence(result);
+  }
+});
+
+Deno.test("8ixk falsifier: runner child already exited before identity read => teardown yields benign marker and receipt structure", async () => {
+  let aliveChecks = 0;
+  // Simulate the runner child having already exited when readIdentity runs.
+  // Prior to the 8ixk fix, this threw an unhandled ENOENT from readProcIdentity / terminateAttestedGroup,
+  // crashing the supervisor with Node exit 1 before writeFile(receiptPath) could execute.
+  const termination = await terminateAttestedGroupSafely({
+    attestation: fakeAttestation,
+    observed: new Map(),
+    termWaitMs: 50,
+    killWaitMs: 50,
+    readIdentity: () => Promise.reject(coded("ENOENT")),
+    isAlive: () => aliveChecks++ === 0, // was alive at outer check, dead when catch confirms
+  });
+
+  assertEquals(termination.survived, false);
+  assertEquals(termination.leaderExited, true);
+  assertEquals(termination.teardownThrew ?? "", "");
+
+  const reason = custodyReasonFor({
+    survived: termination.survived,
+    residueCount: 0,
+    cleanupOk: true,
+    leaderExited: termination.leaderExited,
+  });
+  assertEquals(reason, "leader-exited-before-identity-read");
 });

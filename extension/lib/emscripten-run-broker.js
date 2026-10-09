@@ -27,7 +27,7 @@ export function emscriptenCatalogRows(packages) {
     const operations = pkg.manifest?.entry?.operations;
     if (!Array.isArray(operations)) continue;
     for (const op of operations) {
-      if (op?.kind !== "native-scalar-v1" || typeof op?.toolId !== "string" || !op.toolId) continue;
+      if ((op?.kind !== "native-scalar-v1" && op?.kind !== "native-buffer-v1") || typeof op?.toolId !== "string" || !op.toolId) continue;
       rows.push(Object.freeze({
         packageId: pkg.packageId,
         version: pkg.version,
@@ -48,12 +48,26 @@ function inputSchemaFor(op) {
   const properties = {};
   const required = [];
   for (const param of op.params ?? []) {
-    properties[param.name] = {
-      type: "number",
-      minimum: param.minimum,
-      maximum: param.maximum,
-      description: `${param.type} scalar in [${param.minimum}, ${param.maximum}]`,
-    };
+    if (param.type === "i32" || param.type === "f64") {
+      properties[param.name] = {
+        type: "number",
+        minimum: param.minimum,
+        maximum: param.maximum,
+        description: `${param.type} scalar in [${param.minimum}, ${param.maximum}]`,
+      };
+    } else if (param.type === "string") {
+      properties[param.name] = {
+        type: "string",
+        maxLength: param.maximum,
+        description: `string data (UTF-8 byte length in [${param.minimum}, ${param.maximum}])`,
+      };
+    } else if (param.type === "buffer") {
+      properties[param.name] = {
+        type: "string",
+        contentEncoding: "base64",
+        description: `base64 binary buffer (bytes in [${param.minimum}, ${param.maximum}])`,
+      };
+    }
     required.push(param.name);
   }
   return Object.freeze({
@@ -82,14 +96,31 @@ export function validateEmscriptenOperationArgs(row, rawArgs) {
   const args = [];
   for (const param of params) {
     const value = rawArgs[param.name];
-    if (typeof value !== "number" || !Number.isFinite(value)) {
-      return { ok: false, error: `invalid_arguments: ${param.name} must be a finite number` };
-    }
-    if (param.type === "i32" && !Number.isSafeInteger(value)) {
-      return { ok: false, error: `invalid_arguments: ${param.name} must be a safe integer` };
-    }
-    if (value < param.minimum || value > param.maximum) {
-      return { ok: false, error: `invalid_arguments: ${param.name} outside [${param.minimum}, ${param.maximum}]` };
+    if (param.type === "i32" || param.type === "f64") {
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        return { ok: false, error: `invalid_arguments: ${param.name} must be a finite number` };
+      }
+      if (param.type === "i32" && !Number.isSafeInteger(value)) {
+        return { ok: false, error: `invalid_arguments: ${param.name} must be a safe integer` };
+      }
+      if (value < param.minimum || value > param.maximum) {
+        return { ok: false, error: `invalid_arguments: ${param.name} outside [${param.minimum}, ${param.maximum}]` };
+      }
+    } else if (param.type === "string") {
+      if (typeof value !== "string") {
+        return { ok: false, error: `invalid_arguments: ${param.name} must be a string` };
+      }
+      const utf8Len = new TextEncoder().encode(value).byteLength;
+      if (utf8Len < param.minimum || utf8Len > param.maximum) {
+        return { ok: false, error: `invalid_arguments: ${param.name} UTF-8 byte length outside [${param.minimum}, ${param.maximum}]` };
+      }
+    } else if (param.type === "buffer") {
+      if (!(value instanceof Uint8Array)) {
+        return { ok: false, error: `invalid_arguments: ${param.name} must be a Uint8Array` };
+      }
+      if (value.byteLength < param.minimum || value.byteLength > param.maximum) {
+        return { ok: false, error: `invalid_arguments: ${param.name} size outside [${param.minimum}, ${param.maximum}]` };
+      }
     }
     args.push(value);
   }
@@ -104,7 +135,7 @@ export function buildEmscriptenRunEnvelope({ record, operationId, args, authorit
   if (!manifest || typeof operationId !== "string") return null;
   const operations = manifest?.entry?.operations;
   const op = Array.isArray(operations) ? operations.find((candidate) => candidate?.id === operationId) : null;
-  if (!op || op.kind !== "native-scalar-v1") return null;
+  if (!op || (op.kind !== "native-scalar-v1" && op.kind !== "native-buffer-v1")) return null;
   const assets = (manifest.assets ?? [])
     .filter((asset) => asset && (asset.role === "adapter" || asset.role === "glue" || asset.role === "main-wasm"))
     .map((asset) => ({
@@ -152,8 +183,8 @@ export function executableEmscriptenToolRecords(packages, context = {}) {
       aliases: [],
       description:
         `${row.toolId} — admitted Emscripten operation ${row.operationId} of ${row.packageId} v${row.version}. ` +
-        `In: named scalar arguments (${(row.params ?? []).map((param) => param.name).join(", ")}). ` +
-        "Out: a single scalar result. Runs in a fresh worker with a host-owned deadline; validated-not-persistent.",
+        `In: named arguments (${(row.params ?? []).map((param) => param.name).join(", ")}). ` +
+        `Out: a ${row.result} result. Runs in a fresh worker with a host-owned deadline; validated-not-persistent.`,
       inputSchema: inputSchemaFor({ params: row.params }),
       outputSchema: undefined,
       capabilities: [],

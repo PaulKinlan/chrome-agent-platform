@@ -5,7 +5,7 @@
 // component); these pins stop a silent regression of the wiring.
 
 const src = await Deno.readTextFile(
-  new URL("../extension/shared/components.js", import.meta.url),
+  new URL("../extension/shared/components-conversation.js", import.meta.url),
 );
 
 Deno.test("composer-grow: the textarea auto-grows on input (the _onComposerInput path)", () => {

@@ -51,7 +51,7 @@ Deno.test("provider Save UI: only a trusted active owner click can confirm the m
   // call site would let the flag become a no-op, and asserting only the
   // component would let this call site quietly stop passing it.
   const options = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
-  const components = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const components = await Deno.readTextFile(new URL("../extension/shared/components-core.js", import.meta.url));
 
   // -- the call site asks for it, and is a real approval dialog --
   assert(

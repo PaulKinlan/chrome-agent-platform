@@ -45,7 +45,7 @@ Deno.test("etdn: the /skill palette lists CAP skills from the store with query f
 Deno.test("etdn: the @ picker surfaces skills as mention candidates", async () => {
   // The @ picker (components.js mentionCandidates) reads the SAME skill.list
   // route; pinned structurally so the two entry points cannot drift apart.
-  const src = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const src = await Deno.readTextFile(new URL("../extension/shared/components-conversation.js", import.meta.url));
   assert(/RUNTIME_SEND\("skill\.list"\)/.test(src), "the @ picker must read skill.list");
   assert(/kind: "skill", group: "Skills"/.test(src), "skills must be their own mention group");
 });

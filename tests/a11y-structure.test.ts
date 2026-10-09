@@ -33,7 +33,7 @@ Deno.test("a11y: ntp + sidepanel have a level-one heading (UX-007)", async () =>
 });
 
 Deno.test("a11y: the composer textarea is a textbox-with-popup (CAP-FB-20260830-SLASH-PALETTE-COMBOBOX-01)", async () => {
-  const js = await read("./extension/shared/components.js");
+  const js = await read("./extension/shared/components-conversation.js");
   const m = js.match(/<textarea\b[^>]*data-composer-input[^>]*>/);
   assert(m, "data-composer-input textarea not found");
   // The multiline textarea KEEPS textbox semantics — the ARIA 1.2 combobox
@@ -56,7 +56,7 @@ Deno.test("a11y: the composer textarea is a textbox-with-popup (CAP-FB-20260830-
 });
 
 Deno.test("a11y: role=switch never carries aria-pressed (aria-allowed-attr)", async () => {
-  const js = await read("./extension/shared/components.js");
+  const js = await read("./extension/shared/components-core.js");
   const switches = js.match(/<button[^>]*role="switch"[^>]*>/g) ?? [];
   assert(switches.length > 0, "no switch buttons found (template drifted?)");
   for (const s of switches) {
@@ -103,7 +103,7 @@ Deno.test("a11y: ntp task rows are non-interactive wrappers with an explicit ope
 });
 
 Deno.test("a11y: <task-row> row is not a focusable button; open is an explicit sibling button", async () => {
-  const js = await read("./extension/shared/components.js");
+  const js = await read("./extension/shared/components-conversation.js");
   // Slice to the TaskRow region — other components share class/template names.
   const start = js.indexOf("class TaskRow");
   const end = js.indexOf("customElements.define(\"task-row\"");

@@ -140,30 +140,33 @@ Deno.test("about-page drift guard: falsification — syncAboutPage({ check: true
   }
 });
 
-Deno.test("about-page drift guard: falsification — card-presence verification fails when tool card is missing from HTML", async () => {
-  const htmlPath = join(ROOT, "extension/about/about.html");
-  const html = await Deno.readTextFile(htmlPath);
-  const pkgId = "cap.bundled.sqlite3.query.bounded";
-
-  // Strip a tool card from the real HTML
-  const strippedHtml = html.replace(
-    new RegExp(`<article class="tool-card"[^>]*data-package-id="${pkgId.replaceAll(".", "\\.")}"[\\s\\S]*?</article>`),
-    "",
-  );
-  assert(strippedHtml !== html, `Failed to strip card for ${pkgId}`);
-
-  // The drift verification loop must detect that the card is missing
-  let detected = false;
+Deno.test("about-page drift guard: falsification — shipped-card omission is detected by the real generator", async () => {
+  // Unlike an assertion over a local string copy, check:true must compare the
+  // candidate file on disk against the real generator's output. The writable
+  // fixture is isolated: symlinks point only to READ-ONLY product inputs.
+  const tmp = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-about-card-" });
   try {
-    const cardAttr = 'data-package-id="' + pkgId + '"';
-    assert(
-      strippedHtml.includes(cardAttr),
-      `about.html must render card for package '${pkgId}'`,
+    await Deno.mkdir(join(tmp, "extension/about"), { recursive: true });
+    await Deno.symlink(join(ROOT, "extension/lib"), join(tmp, "extension/lib"));
+    await Deno.symlink(join(ROOT, "extension/wasm"), join(tmp, "extension/wasm"));
+    const htmlPath = join(tmp, "extension/about/about.html");
+    const html = await Deno.readTextFile(join(ROOT, "extension/about/about.html"));
+    const pkgId = "cap.bundled.sqlite3.query.bounded";
+    const strippedHtml = html.replace(
+      new RegExp(`<article class="tool-card"[^>]*data-package-id="${pkgId.replaceAll(".", "\\.")}"[\\s\\S]*?</article>`),
+      "",
     );
-  } catch (_e) {
-    detected = true;
+    assert(strippedHtml !== html, `Failed to strip card for ${pkgId}`);
+    await Deno.writeTextFile(htmlPath, strippedHtml);
+    assertEquals(await syncAboutPage({ root: tmp, check: true }), false,
+      `real drift check must reject candidate HTML missing ${pkgId}`);
+    // Re-generating the candidate restores the very card we removed.
+    assertEquals(await syncAboutPage({ root: tmp, check: false }), true);
+    assert((await Deno.readTextFile(htmlPath)).includes(`data-package-id="${pkgId}"`));
+    assertEquals(await syncAboutPage({ root: tmp, check: true }), true);
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
   }
-  assertEquals(detected, true, `Verification loop must throw when package '${pkgId}' card is removed`);
 });
 
 Deno.test("about-page drift guard: all inventory manifests have explicit UPSTREAM_MAP entries and fail-closed on unknown", async () => {

@@ -15,6 +15,13 @@ import { pathToFileURL } from "node:url";
 
 // src (canonical) → dst (generated deploy copy), both relative to the repo root.
 const FILES = [
+  ["extension/shared/components-core.js", "docs/components-core.js"],
+  ["extension/shared/components-conversation.js", "docs/components-conversation.js"],
+  ["extension/shared/components-hub.js", "docs/components-hub.js"],
+  ["extension/shared/components-settings.js", "docs/components-settings.js"],
+  ["extension/shared/components-artifacts.js", "docs/components-artifacts.js"],
+  ["extension/shared/components-directory.js", "docs/components-directory.js"],
+  ["extension/shared/components-privacy.js", "docs/components-privacy.js"],
   ["extension/shared/components.js", "docs/components.js"],
   ["extension/shared/rpc-cache.js", "docs/rpc-cache.js"],
   // The i18n lookup seam + embedded default catalogue (components.js imports
@@ -96,31 +103,18 @@ export async function syncGallery({ check = false } = {}) {
     if (dst === "docs/thread-view.js") {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/permission-language.js', './permission-language.js'));
     }
-    if (dst === "docs/components.js") {
-      expected = Buffer.from(expected.toString("utf8").replace('../lib/tool-summary.js', './tool-summary.js'));
-      expected = Buffer.from(expected.toString("utf8").replace('../lib/attachments.js', './attachments.js'));
-      // components.js imports lib/pure.js MORE than once (the pinned redactor
-      // import, the single-sourced helpers, and the escapeHtml re-export), so
-      // every occurrence is rewritten — a first-match replace left the later
-      // ones escaping docs/ (tests/gallery-imports.test.ts).
-      expected = Buffer.from(expected.toString("utf8").replaceAll('../lib/pure.js', './pure.js'));
-      // The activity-kinds allowlist sits in lib/; the gallery copy is beside components.js.
-      expected = Buffer.from(expected.toString("utf8").replace('../lib/activity-kinds.js', './activity-kinds.js'));
-      // The jobs-board projection sits in lib/; the gallery copy is beside components.js.
-      expected = Buffer.from(expected.toString("utf8").replace('../lib/board-view-model.js', './board-view-model.js'));
-      // The "Next run" projector sits in lib/; the gallery copy is beside components.js.
-      expected = Buffer.from(expected.toString("utf8").replace('../lib/next-run-label.js', './next-run-label.js'));
-      // The permission user-language table sits in lib/; the gallery copy is beside components.js.
-      expected = Buffer.from(expected.toString("utf8").replace('../lib/permission-language.js', './permission-language.js'));
-      // The hub timeline projection sits in lib/; the gallery copy is beside components.js.
-      expected = Buffer.from(expected.toString("utf8").replace('../lib/hub-timeline.js', './hub-timeline.js'));
-      // Diagnostics badge helpers sit in lib/; the gallery copy is beside components.js.
-      expected = Buffer.from(expected.toString("utf8").replace('../lib/diagnostics-badge.js', './diagnostics-badge.js'));
-      // Clipboard tools sits in lib/; the gallery copy is beside components.js.
-      expected = Buffer.from(expected.toString("utf8").replace('../lib/clipboard-tools.js', './clipboard-tools.js'));
-      // <artifact-diff> imports the diff core by its dist path; the gallery
-      // copy of the bundle sits beside components.js.
-      expected = Buffer.from(expected.toString("utf8").replace('../dist/shared/diff-core.bundle.js', './diff-core.bundle.js'));
+    if (dst.startsWith("docs/components-") || dst === "docs/components.js") {
+      expected = Buffer.from(expected.toString("utf8").replace("../lib/tool-summary.js", "./tool-summary.js"));
+      expected = Buffer.from(expected.toString("utf8").replace("../lib/attachments.js", "./attachments.js"));
+      expected = Buffer.from(expected.toString("utf8").replaceAll("../lib/pure.js", "./pure.js"));
+      expected = Buffer.from(expected.toString("utf8").replace("../lib/activity-kinds.js", "./activity-kinds.js"));
+      expected = Buffer.from(expected.toString("utf8").replace("../lib/board-view-model.js", "./board-view-model.js"));
+      expected = Buffer.from(expected.toString("utf8").replace("../lib/next-run-label.js", "./next-run-label.js"));
+      expected = Buffer.from(expected.toString("utf8").replace("../lib/permission-language.js", "./permission-language.js"));
+      expected = Buffer.from(expected.toString("utf8").replace("../lib/hub-timeline.js", "./hub-timeline.js"));
+      expected = Buffer.from(expected.toString("utf8").replace("../lib/diagnostics-badge.js", "./diagnostics-badge.js"));
+      expected = Buffer.from(expected.toString("utf8").replace("../lib/clipboard-tools.js", "./clipboard-tools.js"));
+      expected = Buffer.from(expected.toString("utf8").replace("../dist/shared/diff-core.bundle.js", "./diff-core.bundle.js"));
     }
     if (dst === "docs/diff-core.bundle.js") {
       // Developer builds append a sourceMappingURL; the gallery copy carries no

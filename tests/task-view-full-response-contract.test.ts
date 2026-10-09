@@ -273,7 +273,7 @@ Deno.test("znx9: redaction occurs before outbox and thread storage", async () =>
 });
 
 Deno.test("znx9: message bubble long-response collapsing threshold and copy fidelity", async () => {
-  const components = await Deno.readTextFile("extension/shared/components.js");
+  const components = await Deno.readTextFile("extension/shared/components-conversation.js");
 
   // Threshold check: 4000 characters
   assert(components.includes("LONG_PREVIEW_CHARS = 4000") || components.includes("4000"), "threshold is 4000 chars");

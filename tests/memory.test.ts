@@ -20,21 +20,29 @@ function fileNode(content) {
   return { kind: "file", content };
 }
 
+// Count bytes ACTUALLY submitted to the journal value writer, not calls to
+// setTrusted or the final file size. A 300-row whole-value rewrite is quadratic
+// even though journal.json ends at only ~300 rows; the WAL must remove this cost.
+let journalValueBytesWritten = 0;
 class FakeWritable {
-  constructor(node) {
+  constructor(node, name = "") {
     this.node = node;
+    this.name = name;
     this.parts = [];
   }
   async write(s) {
-    this.parts.push(typeof s === "string" ? s : new TextDecoder().decode(s));
+    const text = typeof s === "string" ? s : new TextDecoder().decode(s);
+    this.parts.push(text);
+    if (this.name === "journal.json") journalValueBytesWritten += new TextEncoder().encode(text).byteLength;
   }
   async close() {
     this.node.content = this.parts.join("");
   }
 }
 class FakeFileHandle {
-  constructor(node) {
+  constructor(node, name = "") {
     this.node = node;
+    this.name = name;
   }
   get kind() {
     return "file";
@@ -51,7 +59,7 @@ class FakeFileHandle {
     };
   }
   async createWritable() {
-    return new FakeWritable(this.node);
+    return new FakeWritable(this.node, this.name);
   }
 }
 class FakeDirHandle {
@@ -73,7 +81,7 @@ class FakeDirHandle {
       if (!opts.create) throw new Error(`not found: ${name}`);
       this.node.children.set(name, fileNode(""));
     }
-    return new FakeFileHandle(this.node.children.get(name));
+    return new FakeFileHandle(this.node.children.get(name), name);
   }
   async removeEntry(name, opts = {}) {
     this.node.children.delete(name);
@@ -149,6 +157,51 @@ Deno.test("journalAppendOnce commits exactly one terminal row per immutable exec
   const rows = await mem.get("journal");
   assertEquals(rows.filter((row) => row.executionId === "exec-journal-001").length, 1);
   assertEquals(rows[0].result, "first");
+});
+
+Deno.test("9epn.10: measure 300 master-journal appends and pin zero keys() walks", async () => {
+  const raw = masterMemory();
+  await raw.delete("journal");
+  let keysCalls = 0;
+  const store = new Proxy(raw, {
+    get(target, key) {
+      if (key === "keys") return async () => { keysCalls++; return await target.keys(); };
+      const value = target[key];
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const encoder = new TextEncoder();
+  let rowBytes = 0;
+  let at100 = 0;
+  let at200 = 0;
+  journalValueBytesWritten = 0;
+  for (let i = 0; i < 300; i++) {
+    const entry = { type: "result", executionId: `exec_journal_scale_${i}`, result: "x".repeat(64) };
+    rowBytes += encoder.encode(JSON.stringify({ ts: Date.now(), ...entry })).byteLength;
+    await journalAppend(store, entry);
+    if (i === 99) at100 = journalValueBytesWritten;
+    if (i === 199) at200 = journalValueBytesWritten;
+  }
+  const total = journalValueBytesWritten;
+  const second100 = at200 - at100;
+  const third100 = total - at200;
+  assertEquals(keysCalls, 0, "zero store.keys() calls is already true on main; keep it pinned, not claimed as a RED");
+  assertEquals((await raw.get("journal")).length, 300, "all measured appends remain readable");
+  console.log(`9epn.10 journal.json bytes: first100=${at100} second100=${second100} third100=${third100} total=${total} rowBytes=${rowBytes}`);
+
+  // This bead lands a GREEN baseline characterization plus an executable RED
+  // for the dedicated WAL workstream. Opt in to the future budget on the SAME
+  // unmodified tree: it MUST fail until WAL/compaction replaces whole rewrites.
+  // jw7wf will make the bounded budget unconditional after its reader/receipt/
+  // backup cutover is safe; do not turn an expected baseline RED into a gate RED.
+  if (Deno.env.get("CAP_JOURNAL_WAL_EXPECT_BOUNDED") === "1") {
+    assert(total <= 4 * rowBytes,
+      `WAL byte budget exceeded: journal.json wrote ${total} bytes for ${rowBytes} row bytes`);
+  } else {
+    assert(total > 8 * rowBytes, "baseline must expose whole-value rewrite amplification");
+    assert(second100 > 2 * at100, "the second hundred writes ~3x the first hundred on main");
+    assert(third100 > 1.4 * second100, "the third hundred must still grow with row count");
+  }
 });
 
 Deno.test("journalCommitCancellation replaces a partial result with one cancellation row", async () => {

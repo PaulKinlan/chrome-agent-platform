@@ -137,16 +137,25 @@
         }
       }
 
+      function parseArgs(args) {
+        if (typeof args === "string") {
+          try { return JSON.parse(args); } catch { return {}; }
+        }
+        return args && typeof args === "object" ? args : {};
+      }
+
       // ── the five tools ──────────────────────────────────────────────────
       function listProducts() {
         return { products: PRODUCTS.map((p) => ({ ...p })) };
       }
-      function searchProducts(args) {
+      function searchProducts(rawArgs) {
+        const args = parseArgs(rawArgs);
         const q = String(args?.query ?? "").trim().toLowerCase();
         const hits = PRODUCTS.filter((p) => !q || p.name.toLowerCase().includes(q) || p.category.includes(q) || p.sku.includes(q));
         return { query: q, products: hits.map((p) => ({ ...p })) };
       }
-      function addToCart(args) {
+      function addToCart(rawArgs) {
+        const args = parseArgs(rawArgs);
         const sku = String(args?.sku ?? "");
         const product = PRODUCTS.find((p) => p.sku === sku);
         if (!product) return { ok: false, error: `unknown sku ${sku}` };
@@ -156,7 +165,8 @@
         note(`Added ${product.name} × ${quantity}.`);
         return { ok: true, added: { sku, name: product.name, quantity, unitPrice: product.price }, cart: cartRows(), total: Math.round(total() * 100) / 100, currency: "USD" };
       }
-      function removeFromCart(args) {
+      function removeFromCart(rawArgs) {
+        const args = parseArgs(rawArgs);
         const sku = String(args?.sku ?? "");
         if (!cart.has(sku)) return { ok: false, error: `${sku} is not in the cart` };
         const product = PRODUCTS.find((p) => p.sku === sku);
@@ -184,7 +194,7 @@
       define("remove_from_cart", "Remove a product from the cart by sku; returns the updated cart and total", { type: "object", properties: { sku: { type: "string" } }, required: ["sku"] }, removeFromCart);
       define("cart_total", "Return the cart's items and total (USD)", { type: "object", properties: {} }, cartTotal);
 
-      document.modelContext = {
+      const polyfill = {
         getTools: async () => Array.from(tools.values()).map((t) => ({
           name: t.name,
           description: t.description,
@@ -196,12 +206,23 @@
           return t;
         },
         executeTool: async (tool, args) => {
+          const parsed = parseArgs(args);
           const known = tools.get(tool?.name);
-          if (known?.execute) return known.execute(args);
-          if (tool?.execute) return tool.execute(args);
+          if (known?.execute) return known.execute(parsed);
+          if (tool?.execute) return tool.execute(parsed);
           return { ok: false, error: "unknown tool" };
         },
       };
+
+      try {
+        Object.defineProperty(document, "modelContext", {
+          value: polyfill,
+          configurable: true,
+          writable: true,
+        });
+      } catch {
+        document.modelContext = polyfill;
+      }
 
       renderProducts();
       renderCart();

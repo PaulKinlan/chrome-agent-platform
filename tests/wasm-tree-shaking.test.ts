@@ -126,14 +126,15 @@ Deno.test("cc18: the page bundles ship ZERO WebAssembly API calls (j6au tree-sha
     const source = await Deno.readTextFile(`${ROOT}${rel}`);
     const sites = wasmApiCalls(source);
     if (sites.length > 0) failures.push(formatWasmCallSites(rel, sites));
-    // The word itself is expected (UI copy) — asserting its presence keeps this
-    // honest about WHAT is being counted, so a bundle that lost the wasm UI
-    // entirely cannot read as a tree-shaking pass.
-    assert(
-      source.includes("WebAssembly"),
-      `${rel} carries no "WebAssembly" text at all — the bundle shape changed; ` +
-        `re-derive what this guard should count before trusting a zero`,
-    );
+    // The word itself is expected in options.bundle.js (UI copy in ToolLibrary and UserWasmManager).
+    // Following 9epn.6 modularization, ntp and sidepanel omit settings/Wasm components,
+    // so they contain zero Wasm UI copy and zero Wasm API calls.
+    if (rel.includes("options")) {
+      assert(
+        source.includes("WebAssembly"),
+        `${rel} carries no "WebAssembly" text at all — options must retain Wasm management UI`,
+      );
+    }
   }
   assertEquals(
     failures.length,

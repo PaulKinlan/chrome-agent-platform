@@ -178,7 +178,7 @@ Deno.test("noun discipline: Artifacts is the sidebar destination, and it has ONE
 });
 
 Deno.test("noun discipline: the quick drawer speaks artifacts (element, events, exports)", async () => {
-  const components = await Deno.readTextFile("extension/shared/components.js");
+  const components = await Deno.readTextFile("extension/shared/components-artifacts.js");
   assert(
     components.includes('customElements.define("artifact-quick-drawer", ArtifactQuickDrawer)'),
     "the element is registered as artifact-quick-drawer",

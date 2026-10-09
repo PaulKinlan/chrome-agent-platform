@@ -23,8 +23,11 @@ import {
   BUILD_GATE_REASONS,
   classifyHazards,
   EXEMPTIONS,
+  isReviewedReadOnlySpawn,
   partition,
   PRODUCTION_BUILD_TIMEOUT_MS,
+  READ_ONLY_DIST,
+  READ_ONLY_DIST_REASONS,
   realDriverRefs,
   SERIAL,
   SERIAL_FILE_TIMEOUTS,
@@ -168,6 +171,277 @@ Deno.test("partition guard: SERIAL membership is pinned with reasons and exists 
       `${rel}: exemption is DEAD — the file classifies with no hazard classes and no driver refs; delete the entry`,
     );
   }
+});
+
+// Pinned literal list of reviewed READ_ONLY_DIST files (P1a: 323kf).
+// Prevents silent removal of readers from the post-build batch.
+const EXPECTED_READ_ONLY_DIST = [
+  "tests/diff-core.test.ts",
+  "tests/wasm-tree-shaking.test.ts",
+  "tests/bundle-budget.test.ts",
+  "tests/bundled-tool-packages.test.ts",
+  "tests/tool-exec-preview.test.ts",
+  "tests/owner-approval-security.test.ts",
+];
+
+Deno.test("partition guard: READ_ONLY_DIST membership is pinned with reasons, exists on disk, and is disjoint from SERIAL", async () => {
+  assertEquals(
+    new Set(EXPECTED_READ_ONLY_DIST),
+    READ_ONLY_DIST,
+    "READ_ONLY_DIST must match the reviewed pinned list of read-only dist consumers",
+  );
+  assertEquals(new Set(Object.keys(READ_ONLY_DIST_REASONS)), READ_ONLY_DIST, "READ_ONLY_DIST is exactly the reasoned set");
+  assert(READ_ONLY_DIST.size === 6, "READ_ONLY_DIST must contain exactly 6 reviewed files");
+  for (const [rel, reason] of Object.entries(READ_ONLY_DIST_REASONS)) {
+    assert(reason.trim().length > 0, `${rel}: every read-only dist entry states why it runs in the post-build batch`);
+    const st = await Deno.stat(`${ROOT}${rel}`).catch(() => null);
+    assert(st !== null, `${rel}: read-only dist entry must exist on disk`);
+    assert(!SERIAL.has(rel), `${rel}: read-only dist entry must be disjoint from SERIAL`);
+  }
+});
+
+Deno.test("323kf: build.mjs spawn or tree write in an exempted READ_ONLY_DIST file is flagged as an unserialised hazard", async () => {
+  const target = "tests/diff-core.test.ts";
+  assert(READ_ONLY_DIST.has(target), "target must be in READ_ONLY_DIST");
+
+  // 1. Normal read-only usage (reading dist) is exempted
+  const normalUsage = [
+    [target, `const bundle = await Deno.readTextFile("extension/dist/diff-core.js");`],
+  ] as [string, string][];
+  assertEquals(unserialisedHazards(normalUsage), [], "normal read-only dist access is exempted");
+
+  // 2. Gaining a build.mjs spawn must be flagged, not forgiven by EXEMPTIONS
+  const spawnBuild = [
+    [
+      target,
+      `
+      const bundle = await Deno.readTextFile("extension/dist/diff-core.js");
+      new Deno.Command("deno", { args: ["run", "-A", "scripts/build.mjs"] }).output();
+      `,
+    ],
+  ] as [string, string][];
+  const spawnViolations = unserialisedHazards(spawnBuild);
+  assertEquals(
+    spawnViolations,
+    [`${target} — new build-spawn hazard in the read-only post-build batch`],
+    "spawn of build.mjs in a READ_ONLY_DIST file must be flagged",
+  );
+
+  // 3. Gaining a write under extension/ must also be flagged
+  const writeExtension = [
+    [
+      target,
+      `
+      const bundle = await Deno.readTextFile("extension/dist/diff-core.js");
+      await Deno.writeTextFile("extension/dist/temp.js", "foo");
+      `,
+    ],
+  ] as [string, string][];
+  const writeViolations = unserialisedHazards(writeExtension);
+  assertEquals(
+    writeViolations,
+    [`${target} — new write hazard in the read-only post-build batch`],
+    "write under extension/ in a READ_ONLY_DIST file must be flagged",
+  );
+
+  // 4. Preceding variable binding for build.mjs must also be flagged (P1b)
+  const precedingBinding = [
+    [
+      target,
+      `
+      const bundle = await Deno.readTextFile("extension/dist/diff-core.js");
+      const builder = "scripts/build.mjs";
+      new Deno.Command("node", { args: [builder] }).output();
+      `,
+    ],
+  ] as [string, string][];
+  const bindingViolations = unserialisedHazards(precedingBinding);
+  assertEquals(
+    bindingViolations,
+    [`${target} — new build-spawn hazard in the read-only post-build batch`],
+    "spawn of bound builder variable in a READ_ONLY_DIST file must be flagged",
+  );
+
+  // 5. Unresolved spawn in a READ_ONLY_DIST file must be flagged
+  const unresolvedSpawn = [
+    [
+      target,
+      `
+      const bundle = await Deno.readTextFile("extension/dist/diff-core.js");
+      const runner = getRunner();
+      runner.spawn();
+      `,
+    ],
+  ] as [string, string][];
+  const unresolvedViolations = unserialisedHazards(unresolvedSpawn);
+  assertEquals(
+    unresolvedViolations,
+    [`${target} — unreviewed spawn in the read-only post-build batch`],
+    "unresolved spawn in a READ_ONLY_DIST file must be flagged",
+  );
+
+  // 6. Array-join build spawn in bundled-tool-packages.test.ts must be flagged (P1: 323kf)
+  const arrayJoinBuild = [
+    [
+      "tests/bundled-tool-packages.test.ts",
+      `
+      const baseline = JSON.parse(await Deno.readTextFile("./fixtures/bundled-inventory-baseline.json"));
+      const provenance = await new Deno.Command("git", {
+        args: ["cat-file", "-e", \`\${baseline.takenAt}^{commit}\`],
+        cwd: repoRoot, stdout: "null", stderr: "piped",
+      }).output();
+
+      const selected = ["scripts/", "build.mjs"].join("");
+      new Deno.Command("node", { args: [selected] }).output();
+      `,
+    ],
+  ] as [string, string][];
+  const arrayJoinViolations = unserialisedHazards(arrayJoinBuild);
+  assertEquals(
+    arrayJoinViolations,
+    ["tests/bundled-tool-packages.test.ts — new build-spawn hazard in the read-only post-build batch"],
+    "array-join build spawn in tests/bundled-tool-packages.test.ts must be flagged",
+  );
+
+  // 7. Any other unreviewed spawn in bundled-tool-packages.test.ts must be flagged
+  const unreviewedSpawn = [
+    [
+      "tests/bundled-tool-packages.test.ts",
+      `
+      const baseline = JSON.parse(await Deno.readTextFile("./fixtures/bundled-inventory-baseline.json"));
+      const provenance = await new Deno.Command("git", {
+        args: ["cat-file", "-e", \`\${baseline.takenAt}^{commit}\`],
+        cwd: repoRoot, stdout: "null", stderr: "piped",
+      }).output();
+
+      new Deno.Command("ls", { args: ["-la"] }).output();
+      `,
+    ],
+  ] as [string, string][];
+  const unreviewedViolations = unserialisedHazards(unreviewedSpawn);
+  assertEquals(
+    unreviewedViolations,
+    ["tests/bundled-tool-packages.test.ts — unreviewed spawn in the read-only post-build batch"],
+    "unreviewed spawn in tests/bundled-tool-packages.test.ts must be flagged",
+  );
+
+  // 8. Spoofed-signature unreviewed spawn in bundled-tool-packages.test.ts must be flagged
+  const spoofedSpawn = [
+    [
+      "tests/bundled-tool-packages.test.ts",
+      `
+      const baseline = JSON.parse(await Deno.readTextFile("./fixtures/bundled-inventory-baseline.json"));
+      const provenance = await new Deno.Command("git", {
+        args: ["cat-file", "-e", \`\${baseline.takenAt}^{commit}\`],
+        cwd: repoRoot, stdout: "null", stderr: "piped",
+      }).output();
+
+      // Spoofed signature in unrelated argument text (env var)
+      new Deno.Command("node", {
+        env: { SPOOF: '"git", { args: ["cat-file", "-e"' },
+        args: ["worker.js"],
+      }).output();
+      `,
+    ],
+  ] as [string, string][];
+  const spoofedViolations = unserialisedHazards(spoofedSpawn);
+  assertEquals(
+    spoofedViolations,
+    ["tests/bundled-tool-packages.test.ts — unreviewed spawn in the read-only post-build batch"],
+    "spawn with spoofed git-cat-file signature in unrelated argument text must be flagged",
+  );
+
+  // 9. A second git cat-file call in bundled-tool-packages.test.ts must be rejected (single reviewed site only)
+  const duplicateGitSpawn = [
+    [
+      "tests/bundled-tool-packages.test.ts",
+      `
+      const baseline = JSON.parse(await Deno.readTextFile("./fixtures/bundled-inventory-baseline.json"));
+      const provenance = await new Deno.Command("git", {
+        args: ["cat-file", "-e", \`\${baseline.takenAt}^{commit}\`],
+        cwd: repoRoot, stdout: "null", stderr: "piped",
+      }).output();
+
+      // Second git cat-file call (must be rejected - only exactly one reviewed spawn permitted)
+      const secondCall = await new Deno.Command("git", {
+        args: ["cat-file", "-e", \`\${baseline.takenAt}^{commit}\`],
+        cwd: repoRoot, stdout: "null", stderr: "piped",
+      }).output();
+      `,
+    ],
+  ] as [string, string][];
+  const duplicateViolations = unserialisedHazards(duplicateGitSpawn);
+  assertEquals(
+    duplicateViolations,
+    ["tests/bundled-tool-packages.test.ts — unreviewed spawn in the read-only post-build batch"],
+    "second git-cat-file call in tests/bundled-tool-packages.test.ts must be flagged",
+  );
+
+  // 10. git cat-file with different args (e.g. HEAD instead of baseline commit) must be rejected
+  const differentArgsGitSpawn = [
+    [
+      "tests/bundled-tool-packages.test.ts",
+      `
+      const baseline = JSON.parse(await Deno.readTextFile("./fixtures/bundled-inventory-baseline.json"));
+      const provenance = await new Deno.Command("git", {
+        args: ["cat-file", "-e", "HEAD"],
+        cwd: repoRoot, stdout: "null", stderr: "piped",
+      }).output();
+      `,
+    ],
+  ] as [string, string][];
+  const differentArgsViolations = unserialisedHazards(differentArgsGitSpawn);
+  assertEquals(
+    differentArgsViolations,
+    ["tests/bundled-tool-packages.test.ts — unreviewed spawn in the read-only post-build batch"],
+    "git-cat-file call with unreviewed args (HEAD) must be flagged",
+  );
+
+  // 11. Real tests/bundled-tool-packages.test.ts on disk has only the reviewed git provenance spawn and no violations
+  const realBundledContent = await Deno.readTextFile(`${ROOT}tests/bundled-tool-packages.test.ts`);
+  assertEquals(
+    unserialisedHazards([["tests/bundled-tool-packages.test.ts", realBundledContent]]),
+    [],
+    "real tests/bundled-tool-packages.test.ts on disk must pass with only its reviewed git provenance spawn",
+  );
+});
+
+Deno.test("partition guard: isReviewedReadOnlySpawn requires anchored executable, pinned args, and rejects spoofed arg text", () => {
+  assert(
+    isReviewedReadOnlySpawn(
+      "tests/bundled-tool-packages.test.ts",
+      `"git", { args: ["cat-file", "-e", \`\${baseline.takenAt}^{commit}\`], cwd: repoRoot }`,
+    ),
+    "exact git cat-file invocation with baseline commit must be accepted",
+  );
+  assert(
+    !isReviewedReadOnlySpawn(
+      "tests/bundled-tool-packages.test.ts",
+      `"git", { args: ["cat-file", "-e", "HEAD"], cwd: repoRoot }`,
+    ),
+    "git cat-file invocation with different args (HEAD) must be rejected",
+  );
+  assert(
+    !isReviewedReadOnlySpawn(
+      "tests/bundled-tool-packages.test.ts",
+      `"node", { env: { FAKE: '"git", { args: ["cat-file", "-e", \`\${baseline.takenAt}^{commit}\`]' }, args: ["run.js"] }`,
+    ),
+    "spoofed signature in env var must be rejected",
+  );
+  assert(
+    !isReviewedReadOnlySpawn(
+      "tests/bundled-tool-packages.test.ts",
+      `"sh", { args: ["-c", 'echo "git", { args: ["cat-file", "-e"'] }`,
+    ),
+    "spoofed signature in shell args must be rejected",
+  );
+  assert(
+    !isReviewedReadOnlySpawn(
+      "tests/other-file.test.ts",
+      `"git", { args: ["cat-file", "-e", \`\${baseline.takenAt}^{commit}\`] }`,
+    ),
+    "other files must be rejected even with exact git cat-file invocation",
+  );
 });
 
 // hso8: content hazards are re-derived from the tree by the detectors above; a wall-clock

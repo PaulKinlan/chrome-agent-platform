@@ -81,7 +81,7 @@ function exactKeys(value, keys) {
 function validateParam(param) {
   if (!exactKeys(param, PARAM_KEYS) || typeof param.name !== "string" ||
       param.name.length === 0 || param.name.length > 64 ||
-      (param.type !== "i32" && param.type !== "f64") ||
+      (!["i32", "f64", "string", "buffer"].includes(param.type)) ||
       typeof param.minimum !== "number" || !Number.isFinite(param.minimum) ||
       typeof param.maximum !== "number" || !Number.isFinite(param.maximum) ||
       param.minimum > param.maximum) {
@@ -90,9 +90,9 @@ function validateParam(param) {
 }
 
 function validateArg(param, value) {
-  if (typeof value !== "number" || !Number.isFinite(value)) fail("emscripten_run_args");
-  if (param.type === "i32" && !Number.isSafeInteger(value)) fail("emscripten_run_args");
-  if (value < param.minimum || value > param.maximum) fail("emscripten_run_args");
+  if (param.type === "i32" || param.type === "f64") {
+    if (typeof value !== "number" || !Number.isFinite(value) || (param.type === "i32" && !Number.isSafeInteger(value)) || value < param.minimum || value > param.maximum) fail("emscripten_run_args");
+  } else if (param.type === "string") { const len = typeof value === "string" ? new TextEncoder().encode(value).byteLength : -1; if (len < param.minimum || len > param.maximum) fail("emscripten_run_args"); } else if (param.type === "buffer") { if (!(value instanceof Uint8Array) || value.byteLength < param.minimum || value.byteLength > param.maximum) fail("emscripten_run_args"); } else fail("emscripten_run_args");
 }
 
 function validateAsset(asset) {
@@ -120,7 +120,7 @@ function validateRequest(raw) {
       typeof operation.adapterId !== "string" || operation.adapterId.length === 0 ||
       operation.adapterId.length > 128 ||
       typeof operation.exportName !== "string" || !/^_[A-Za-z0-9_]+$|^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(operation.exportName) ||
-      (operation.result !== "i32" && operation.result !== "f64") ||
+      (!["i32", "f64", "string", "buffer"].includes(operation.result)) ||
       !Array.isArray(operation.params) || operation.params.length > 16) {
     fail("emscripten_run_operation");
   }
@@ -284,6 +284,14 @@ function validateWorkerResult(result, request) {
   }
   if (request.operation.result === "f64" &&
       (typeof result.result !== "number" || !Number.isFinite(result.result))) {
+    fail("emscripten_worker_result");
+  }
+  if (request.operation.result === "string" &&
+      typeof result.result !== "string") {
+    fail("emscripten_worker_result");
+  }
+  if (request.operation.result === "buffer" &&
+      !(result.result instanceof Uint8Array)) {
     fail("emscripten_worker_result");
   }
   return Object.freeze({ ...result });

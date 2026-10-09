@@ -42,6 +42,23 @@ globalThis.CustomEvent = class CustomEvent {
 };
 globalThis.matchMedia = () => ({ matches: false });
 
+const COMPONENT_FILES = [
+  "components.js",
+  "components-core.js",
+  "components-conversation.js",
+  "components-hub.js",
+  "components-settings.js",
+  "components-artifacts.js",
+  "components-directory.js",
+  "components-privacy.js",
+];
+
+async function readAllComponentsSource(): Promise<string> {
+  const root = new URL("../extension/shared/", import.meta.url);
+  const parts = await Promise.all(COMPONENT_FILES.map((f) => Deno.readTextFile(new URL(f, root))));
+  return parts.join("\n");
+}
+
 // Minimal fake DOM node for driving renderers that build elements with
 // document.createElement + textContent (never innerHTML). Matches the subset
 // the composer popup renderer and the agent picker touch.
@@ -251,7 +268,7 @@ Deno.test("durable run registry: exact-ID dispatch suppresses duplicates and exp
   element._emitAction("run-logs", element._runs[0], "View logs");
   events[1].detail.complete({ ok: true, logs: [{ type: "terminal" }] });
   if (!element._message.includes("succeeded") || element._logs.get("exec_exact_0001").length !== 1) throw new Error("success/log completion failed");
-  const source = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const source = await readAllComponentsSource();
   for (const marker of ['<button type="button"', ":focus-visible", "disabled", "role=\"status\""]) if (!source.includes(marker)) throw new Error(`native/a11y marker missing: ${marker}`);
 });
 
@@ -259,7 +276,7 @@ Deno.test("task-row exposes the owner retry affordance for storage-blocked sched
   await import("../extension/shared/components.js");
   const Klass = registry.get("task-row");
   if (!Klass.observedAttributes.includes("retryable")) throw new Error("task-row retryable state is not reactive");
-  const source = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const source = await readAllComponentsSource();
   for (const token of ['class="retry"', 'this._emit("retry")', "Retry ${escapeHtml(name)}"]) {
     if (!source.includes(token)) throw new Error(`task-row retry contract missing ${token}`);
   }
@@ -270,7 +287,7 @@ Deno.test("screenshot-strip: kind/max/overflow contract with total-aware, escape
   const Klass = registry.get("screenshot-strip");
   if (!Klass) throw new Error("screenshot-strip is not registered");
   if (!Klass.observedAttributes.includes("max")) throw new Error("screenshot-strip max is not reactive");
-  const source = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const source = await readAllComponentsSource();
   const strip = source.slice(source.indexOf("class ScreenshotStrip"), source.indexOf("customElements.define(\"screenshot-strip\""));
   for (const token of [
     "Open ${kind} ${i + 1} of ${total}", // the accessible label names kind + place in the set
@@ -901,7 +918,7 @@ Deno.test("task-row: pause and retry are DISTINCT controls — exactly one dispa
   }
   // Source pin: the pause button must NOT carry the retry class (the r1 defect
   // was `class="retry psep"` — one click fired both handlers).
-  const source = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const source = await readAllComponentsSource();
   if (source.includes('class="retry psep"')) throw new Error("the pause button still carries the retry class");
   if (!source.includes('class="psep"')) throw new Error("the pause button lost its own class");
 });
@@ -952,7 +969,7 @@ Deno.test("jobs-board: a structured {ok:false} route response renders the error 
 // and proves it never touches innerHTML / template-interpolates a row.
 const ARTIFACT_DIFF_SRC = new URL("../extension/shared/components.js", import.meta.url);
 async function artifactDiffSlice(): Promise<string> {
-  const src = await Deno.readTextFile(ARTIFACT_DIFF_SRC);
+  const src = await readAllComponentsSource();
   const start = src.indexOf("class ArtifactDiff extends Component");
   const end = src.indexOf('customElements.define("artifact-diff"');
   if (start < 0 || end < 0 || end < start) throw new Error("ArtifactDiff class not found in components.js");
@@ -1468,7 +1485,7 @@ Deno.test("activity-explorer: the user-visible allowlist excludes system rows an
   }
 });
 Deno.test("activity-explorer: the two empty-state strings are distinct (zero vs filtered-empty)", async () => {
-  const source = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const source = await readAllComponentsSource();
   const explorerRegion = source.slice(source.indexOf("class ActivityExplorer"), source.indexOf("customElements.define(\"activity-explorer\""));
   const zero = explorerRegion.includes("Nothing has happened yet.");
   const filtered = explorerRegion.includes("No activity matches this filter.");
@@ -1814,7 +1831,7 @@ Deno.test("capability-row renders a switch-toggle when action-state is on and a 
 // measured 0 px wide and 3,599 px tall). The host rule must declare an
 // inline-size beside the container-type so the card always takes its row.
 Deno.test("webmcp-consent-manager uses semantic controls, live states and text-only rendering", async () => {
-  const src = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const src = await readAllComponentsSource();
   const start = src.indexOf("class WebmcpConsentManager");
   const end = src.indexOf('customElements.define("webmcp-consent-manager"');
   if (!(start >= 0 && end > start)) throw new Error("webmcp-consent-manager class missing");
@@ -1830,7 +1847,7 @@ Deno.test("webmcp-consent-manager uses semantic controls, live states and text-o
 });
 
 Deno.test("tool-directory-card host declares inline-size 100% alongside container-type", async () => {
-  const src = await Deno.readTextFile(ARTIFACT_DIFF_SRC);
+  const src = await readAllComponentsSource();
   const start = src.indexOf("class ToolDirectoryCard extends Component");
   const end = src.indexOf('customElements.define("tool-directory-card"');
   if (start < 0 || end < 0 || end < start) throw new Error("ToolDirectoryCard class not found in components.js");
@@ -1843,7 +1860,7 @@ Deno.test("tool-directory-card host declares inline-size 100% alongside containe
 });
 
 Deno.test("composer local files (dptw R2): no 1 MiB gate — text files attach as text at any size", async () => {
-  const src = await Deno.readTextFile("extension/shared/components.js");
+  const src = await readAllComponentsSource();
   const fn = src.match(/async _attachLocalFile\(file\) \{[\s\S]*?\n  \}/);
   if (!fn) throw new Error("_attachLocalFile not found");
   const body = fn[0];
@@ -1855,7 +1872,7 @@ Deno.test("composer local files (dptw R2): no 1 MiB gate — text files attach a
 });
 
 Deno.test("attach menu (dptw D1 + review P1): no 8 MiB refuse — a generous transport ceiling with an HONEST refusal, and read failures surface", async () => {
-  const src = await Deno.readTextFile("extension/shared/components.js");
+  const src = await readAllComponentsSource();
   // The old arbitrary 8 MiB cap stays gone.
   if (src.includes("MAX_RAW_BYTES")) throw new Error("the 8 MiB raw-file bound is back");
   if (src.includes("is over the 8 MiB limit")) throw new Error("the 8 MiB status copy is back");
@@ -1964,5 +1981,28 @@ Deno.test("wp6u: gallery specimen headings (h3.spec) are sentence-case, not uppe
       throw new Error(`h3.spec heading contains uppercase kicker wording: ${h}`);
     }
   }
+});
+
+Deno.test("harness-agent-button: renders a named native action, escapes names, and reflects current", async () => {
+  await import("../extension/shared/components.js");
+  const Klass = registry.get("harness-agent-button");
+  if (!Klass) throw new Error("Harness launcher component is not registered");
+  const element = new Klass();
+  let rendered = "";
+  element._root = { set innerHTML(value) { rendered = value; } };
+  element.setAttribute("name", '<img src=x onerror="alert(1)">');
+  element.connectedCallback();
+  if (!rendered.includes('<button type="button"')) throw new Error("Launcher must use a native button");
+  if (rendered.includes('<img')) throw new Error("Harness name rendered as markup");
+  if (!rendered.includes('aria-label="Open the &lt;img')) throw new Error("Escaped accessible name missing");
+  if (!rendered.includes('class="mark" aria-hidden="true"')) throw new Error("Neutral mark must not duplicate the name");
+  if (rendered.includes('title="&lt;img') === false) throw new Error("Collapsed launcher must retain its title");
+  if (/<button[^>]*aria-current/.test(rendered)) throw new Error("Idle launcher marked current");
+  element.setAttribute("current", "");
+  element.attributeChangedCallback("current", null, "");
+  if (!/<button[^>]*aria-current="true"/.test(rendered)) throw new Error("Current launcher state missing");
+  element.removeAttribute("current");
+  element.attributeChangedCallback("current", "", null);
+  if (/<button[^>]*aria-current/.test(rendered)) throw new Error("Current state did not clear");
 });
 

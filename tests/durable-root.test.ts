@@ -6,7 +6,7 @@
 // cross-process coordination files and test fixtures).
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertThrows, assertStringIncludes } from "jsr:@std/assert@1";
-import { isRamBacked, durableRoot, durableDir } from "../scripts/lib/durable-root.mjs";
+import { isRamBacked } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -53,7 +53,7 @@ function probeEnvCases(): Promise<Record<string, Probe>> {
       out.impossible = probe(() => mod.durableDir("probe"));
       console.log("PROBE " + JSON.stringify(out));
     })()`;
-    const { stdout, stderr } = await new Deno.Command(Deno.execPath(), {
+    const { stdout, stderr, success } = await new Deno.Command(Deno.execPath(), {
       args: ["eval", script],
       // Its own environment: the parent's HOME (the default root is asserted
       // against it) and NOTHING else — CAP_DURABLE_ROOT is set only inside the
@@ -64,6 +64,7 @@ function probeEnvCases(): Promise<Record<string, Probe>> {
       stderr: "piped",
     }).output();
     const text = new TextDecoder().decode(stdout) + new TextDecoder().decode(stderr);
+    assert(success, `the child probe failed with non-zero exit; got:\n${text.slice(0, 600)}`);
     const line = text.split("\n").find((l) => l.startsWith("PROBE "));
     assert(line, `the child probe must report; got:\n${text.slice(0, 600)}`);
     return JSON.parse(line.slice("PROBE ".length)) as Record<string, Probe>;
@@ -114,6 +115,88 @@ Deno.test("durableDir fails loudly when the durable location is unavailable", as
   const probed = await probeEnvCases();
   assert(probed.impossible.threw !== undefined, "an unavailable durable root must throw");
   assertStringIncludes(probed.impossible.threw ?? "", "/proc/cap-chp-impossible");
+});
+
+/** Statically detect any parent-process CAP_DURABLE_ROOT mutation (set, delete, assignment). */
+export function detectParentDurableRootEnvMutation(sourceText: string, filename = ""): string[] {
+  let text = sourceText.replace(/const script = `[\s\S]*?`;/g, "");
+  // Allowlist detector test fixtures in machine-path-honesty and durable-root
+  if (filename.endsWith("machine-path-honesty.test.ts")) {
+    text = text.replace(/detect\(`Deno\.env\.set\("CAP_DURABLE_ROOT"[\s\S]*?`,\s*"tests\/probe\.test\.ts"\)/g, "");
+  }
+  if (filename.endsWith("durable-root.test.ts")) {
+    text = text.replace(/const fixtures = \[[\s\S]*?\];/g, "");
+  }
+  // Strip block and single-line comments so comments never trigger multiline regexes
+  const withoutComments = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+
+  const violations: string[] = [];
+
+  // Match Deno.env.(set|delete) across line breaks
+  const denoEnvRegex = /\bDeno\.env\.(?:set|delete)\s*\(\s*["']CAP_DURABLE_ROOT["']/g;
+  let match: RegExpExecArray | null;
+  while ((match = denoEnvRegex.exec(withoutComments)) !== null) {
+    const lineNum = withoutComments.slice(0, match.index).split("\n").length;
+    violations.push(`${filename ? `${filename}:` : ""}line ${lineNum}: Deno.env mutation: ${match[0]}`);
+  }
+
+  // Match process.env mutation across line breaks
+  const processEnvRegex = /(?:delete\s+process\.env(?:\.CAP_DURABLE_ROOT|\[\s*["']CAP_DURABLE_ROOT["']\s*\])|process\.env(?:\.CAP_DURABLE_ROOT|\[\s*["']CAP_DURABLE_ROOT["']\s*\])\s*=)/g;
+  while ((match = processEnvRegex.exec(withoutComments)) !== null) {
+    const lineNum = withoutComments.slice(0, match.index).split("\n").length;
+    violations.push(`${filename ? `${filename}:` : ""}line ${lineNum}: process.env mutation: ${match[0]}`);
+  }
+
+  return violations;
+}
+
+Deno.test("guard: durable-root test never mutates parent process environment (m3a2/5rwd)", () => {
+  const source = Deno.readTextFileSync(fileURLToPath(import.meta.url));
+  const violations = detectParentDurableRootEnvMutation(source, "tests/durable-root.test.ts");
+  assertEquals(
+    violations,
+    [],
+    `tests/durable-root.test.ts must never mutate parent CAP_DURABLE_ROOT in-process (races parallel suites; bead m3a2/5rwd):\n${violations.join("\n")}`,
+  );
+
+  // Falsification: test fixtures (assembled at runtime so this file does not match itself)
+  const VAR = ["CAP", "DURABLE", "ROOT"].join("_");
+  const fixtures = [
+    { probe: `Deno.env.set("${VAR}", "/tmp/foo");`, desc: "Deno.env.set" },
+    { probe: `Deno.env.set(\n  "${VAR}",\n  "/tmp/foo"\n);`, desc: "multiline Deno.env.set" },
+    { probe: `Deno.env.delete("${VAR}");`, desc: "Deno.env.delete" },
+    { probe: `process.env.${VAR} = "/tmp/foo";`, desc: "process.env assignment" },
+    { probe: `process.env["${VAR}"] = "/tmp/foo";`, desc: "process.env bracket assignment" },
+    { probe: `process.env[\n  "${VAR}"\n] = "/tmp/foo";`, desc: "multiline process.env bracket assignment" },
+    { probe: `delete process.env.${VAR};`, desc: "delete process.env" },
+    { probe: `delete process.env["${VAR}"];`, desc: "delete process.env bracket" },
+  ];
+
+  for (const { probe, desc } of fixtures) {
+    assert(
+      detectParentDurableRootEnvMutation(probe).length > 0,
+      `guard must catch parent environment mutation: ${desc}`,
+    );
+  }
+});
+
+Deno.test("zuo0i: no test file across tests/*.test.ts mutates parent CAP_DURABLE_ROOT in-process", () => {
+  const testsDir = fileURLToPath(new URL(".", import.meta.url));
+  const violations: string[] = [];
+
+  for (const entry of Deno.readDirSync(testsDir)) {
+    if (!entry.isFile || !entry.name.endsWith(".test.ts")) continue;
+    const path = `${testsDir}/${entry.name}`;
+    const source = Deno.readTextFileSync(path);
+    const fileViolations = detectParentDurableRootEnvMutation(source, `tests/${entry.name}`);
+    violations.push(...fileViolations);
+  }
+
+  assertEquals(
+    violations,
+    [],
+    `no test in tests/*.test.ts may mutate parent CAP_DURABLE_ROOT in-process (bead zuo0i):\n${violations.join("\n")}`,
+  );
 });
 
 // --- Static guard (widened): no shipped source materializes evidence/scratch
@@ -217,6 +300,8 @@ const ALLOWED_FILES = new Set([
   "tests/changelog-delta.test.ts",
   "tests/chrome-for-testing.test.ts",
   "tests/chrome-launch-lock-scope.test.ts",
+  // gfxoc: fake-browser unit fixtures assert their short per-run tmpdir is reaped.
+  "tests/chrome-tmpdir-cleanup.test.ts",
   "tests/chrome-lock-fixture-scope.test.ts",
   "tests/chrome-profile-isolation.test.ts",
   "tests/chrome-profile-location.test.ts",
@@ -254,6 +339,9 @@ const ALLOWED_FILES = new Set([
 // guard. Kept tighter than ALLOWED_FILES on purpose: these files once held
 // /tmp evidence literals, and they must never quietly grow one back.
 const ALLOWED_CALLS_ONLY = new Set([
+  // gfxoc: Chrome-internal TMPDIR must be short (Unix socket limit), ephemeral,
+  // per launch, and removed after process-tree verification; never retained evidence.
+  "scripts/lib/chrome-launch.ts",
   "scripts/evidence-runner.sh",
   "scripts/kat-exec-build-flag.ts",
   "scripts/kat-mcp-agent-ui.ts",

@@ -28,7 +28,17 @@ export function createAcpModelProxy(config, connect = (name) => chrome.runtime.c
             if (message.part.type === "finish") { controller?.close(); controller = null; }
           }
         });
-        port.postMessage({ type: "open", config: { url: config.url, cwd: config.cwd, harnessId: config.harnessId } });
+        port.postMessage({
+          type: "open",
+          config: {
+            url: config.url,
+            cwd: config.cwd,
+            harnessId: config.harnessId,
+            threadId: config.threadId || null,
+            executionId: config.executionId,
+            retainSession: config.retainSession ?? true,
+          },
+        });
       }
       abortCleanup();
       options.abortSignal?.addEventListener("abort", close, {once:true});
@@ -56,7 +66,16 @@ export async function discoverAcpCommands(config, connect = (name) => chrome.run
         else if (message.type === "error") reject(new Error("Harness command discovery failed. Check the bridge working directory and authentication, then try again."));
         else if (message.type === "permission") port.postMessage({ type: "permission-result", id: message.id, optionId: null });
       });
-      port.postMessage({ type: "open", config: { url: config.url, cwd: config.cwd, harnessId: config.harnessId } });
+      port.postMessage({
+        type: "open",
+        config: {
+          url: config.url,
+          cwd: config.cwd,
+          harnessId: config.harnessId,
+          threadId: config.threadId || null,
+          retainSession: config.retainSession ?? true,
+        },
+      });
       port.postMessage({ type: "catalogue" });
     });
   } finally { clearTimeout(timer); port.disconnect(); }

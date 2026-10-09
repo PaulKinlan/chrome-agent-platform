@@ -11,7 +11,8 @@
 
 import { buildPrivacyStatement } from "../lib/privacy-statement.js";
 import { send } from "../lib/messages.js";
-import "../shared/components.js";
+import "../shared/components-core.js";
+import "../shared/components-privacy.js";
 import { hydrateI18n } from "../shared/i18n.js";
 
 const statementEl = document.getElementById("statement");
