@@ -37,7 +37,15 @@ import {
 import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, type HeavyGateLease } from "./heavy-gate-slot.ts";
 import { resolveChromeForTesting } from "./chrome-for-testing.ts";
 import { isUsableBinary } from "./browser-refusal.ts";
-import { attachProcessLifeline, isolatedProcessGroup, killProcessTree, type ProcessTableDeps, setsidSpawnSpec } from "./process-tree.ts";
+import {
+  attachProcessLifeline,
+  isolatedProcessGroup,
+  killProcessTree,
+  processGroup,
+  recordLeaderStartTicks,
+  type ProcessTableDeps,
+  setsidSpawnSpec,
+} from "./process-tree.ts";
 import { chromeProfileDir, isInsideRepo, profileLiveness } from "./chrome-profile-dir.ts";
 import { PageThrowError } from "./cdp-eval.ts";
 
@@ -530,11 +538,22 @@ export async function launchChrome(opts: {
    *  released when the browser exits, and by the kernel if this process dies.
    *  Refusal THROWS HeavyGateSlotRefusedError: the harness turns it into its
    *  environmental verdict (exit 75 + the holder named), never a product red. */
-  fleetSlot?: boolean | { gate?: string; kind?: string; boundMs?: number };
+  fleetSlot?: boolean | { gate?: string; kind?: string; boundMs?: number; slotPath?: string };
   /** Test seam (chrome-agent-platform-jjsz): the process-table reader behind the isolated-group
    *  probe. Production never sets it; tests inject a failing `ps` to prove an unreadable table
    *  FAILS THE LAUNCH CLOSED (teardown + rethrow) rather than running an unprotected browser. */
   processTable?: ProcessTableDeps;
+  /** Test seam (chrome-agent-platform-5fh6a): override teardownChrome to simulate teardown
+   *  failures during launch abort. Production never sets it. */
+  teardown?: (
+    target:
+      | LaunchedChrome
+      | Deno.ChildProcess
+      | { proc?: Deno.ChildProcess | null; profile?: string; processGroup?: number }
+      | null
+      | undefined,
+    profile?: string,
+  ) => Promise<void>;
 }): Promise<LaunchedChrome> {
   // chrome-agent-platform-ryrr: NEVER take the fleet turn while this process
   // already holds the canonical serialized-Chrome lock. The custody supervisor
@@ -572,6 +591,7 @@ export async function launchChrome(opts: {
       gate: spec.gate ?? "gate",
       kind: spec.kind ?? "gate",
       boundMs: spec.boundMs,
+      slot: spec.slotPath ? { slotPath: spec.slotPath } : undefined,
     });
     fleetSlotWaitMs = fleetLease.waitedMs;
   }
@@ -680,8 +700,11 @@ export async function launchChrome(opts: {
     if (scratchDir) procScratchDirs.set(proc, scratchDir);
   } catch (e) {
     if (scratchDir) await Deno.remove(scratchDir, { recursive: true }).catch(() => {});
-    lock.release();
-    fleetLease?.release();
+    try {
+      lock.release();
+    } finally {
+      fleetLease?.release();
+    }
     throw e;
   }
   let group: number | undefined;
@@ -693,9 +716,64 @@ export async function launchChrome(opts: {
       treeMatch: resolvedProfile ? `user-data-dir=${resolvedProfile}` : undefined,
     });
   } catch (e) {
-    await teardownChrome(proc, resolvedProfile);
-    lock.release();
-    fleetLease?.release();
+    // chrome-agent-platform-5fh6a: when isolatedProcessGroup throws (e.g. unreadable table),
+    // check if the table has become readable and confirms setsid's group (proc.pid).
+    // If not, teardown falls back to leader-plus-profile kill as the accepted fallback.
+    let fallbackGroup: number | undefined;
+    try {
+      const stat = processGroup(proc.pid, opts.processTable);
+      if (stat?.group === proc.pid && stat.startTicks) {
+        fallbackGroup = proc.pid;
+        recordLeaderStartTicks(proc, stat.startTicks);
+      }
+    } catch {
+      // Table still unreadable: leader-plus-profile kill is the documented fallback.
+    }
+    try {
+      await (opts.teardown ?? teardownChrome)({
+        proc,
+        profile: resolvedProfile,
+        processGroup: fallbackGroup,
+        deps: opts.processTable,
+      });
+    } catch (teardownErr) {
+      if (fallbackGroup !== undefined) {
+        // The recovered group teardown failed (e.g. table became unreadable again).
+        // Fall back to leader-plus-profile cleanup so the browser and profile processes
+        // are never left alive in the background!
+        try {
+          await (opts.teardown ?? teardownChrome)({
+            proc,
+            profile: resolvedProfile,
+            processGroup: undefined,
+          });
+        } catch (fallbackErr) {
+          console.error(
+            `launchChrome: fallback leader-plus-profile teardown failed: ${
+              fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)
+            }`,
+          );
+        }
+      }
+      console.error(
+        `launchChrome: teardown failed while aborting launch: ${
+          teardownErr instanceof Error ? teardownErr.message : String(teardownErr)
+        }`,
+      );
+      if (e instanceof Error && !e.cause) {
+        try { (e as any).cause = teardownErr; } catch {}
+      }
+      if (scratchDir) {
+        try { await Deno.remove(scratchDir, { recursive: true }); } catch {}
+        if (proc) procScratchDirs.delete(proc);
+      }
+    } finally {
+      try {
+        lock.release();
+      } finally {
+        fleetLease?.release();
+      }
+    }
     throw e;
   }
   // The slot (or exclusive lock) lives exactly as long as this browser does.
@@ -719,33 +797,76 @@ export async function launchChrome(opts: {
   const deadline = Date.now() + (opts.timeoutMs ?? 20000);
   let seen = "";
   let wsUrl = "";
-  while (!wsUrl && Date.now() < deadline) {
-    let value: Uint8Array | undefined, done = false;
-    try {
-      ({ value, done } = await withTimeout(reader.read(), deadline - Date.now()));
-    } catch {
-      break; // read deadline — fall through to the honest error below
-    }
-    if (done) break;
-    const text = decoder.decode(value, { stream: true });
-    append(text);
-    seen += text;
-    const m = seen.match(/DevTools listening on (ws:\/\/\S+)/);
-    if (m) wsUrl = m[1];
-  }
 
-  if (!wsUrl) {
+  try {
+    while (!wsUrl && Date.now() < deadline) {
+      let value: Uint8Array | undefined, done = false;
+      try {
+        ({ value, done } = await withTimeout(reader.read(), deadline - Date.now()));
+      } catch {
+        break; // read deadline — fall through to the honest error below
+      }
+      if (done) break;
+      const text = decoder.decode(value, { stream: true });
+      append(text);
+      seen += text;
+      const m = seen.match(/DevTools listening on (ws:\/\/\S+)/);
+      if (m) wsUrl = m[1];
+    }
+
+    if (!wsUrl) {
+      throw new Error(
+        `launchChrome: Chrome never printed a DevTools endpoint (${opts.binary}). stderr tail: ${tail.slice(-600)}`,
+      );
+    }
+  } catch (e) {
     try { reader.releaseLock(); } catch { /* already released */ }
-    await teardownChrome({ proc, profile: resolvedProfile, processGroup: group });
-    lock.release();
-    fleetLease?.release();
-    // The browser never came up: give the FLEET turn back too. Without this, a
-    // startup failure kept the fleet-wide slot held by a live process that owns
-    // no browser — the one leak the crash-safe stdin pattern cannot cover, since
-    // the holder is still alive (review 2026-09-23, defect 1).
-    throw new Error(
-      `launchChrome: Chrome never printed a DevTools endpoint (${opts.binary}). stderr tail: ${tail.slice(-600)}`,
-    );
+    try {
+      await (opts.teardown ?? teardownChrome)({
+        proc,
+        profile: resolvedProfile,
+        processGroup: group,
+        deps: opts.processTable,
+      });
+    } catch (teardownErr) {
+      if (group !== undefined) {
+        // Group teardown failed (e.g. process table became unreadable during teardown).
+        // Fall back to leader-plus-profile cleanup so the browser and profile processes
+        // are never left alive in the background!
+        try {
+          await (opts.teardown ?? teardownChrome)({
+            proc,
+            profile: resolvedProfile,
+            processGroup: undefined,
+          });
+        } catch (fallbackErr) {
+          console.error(
+            `launchChrome: fallback leader-plus-profile teardown failed: ${
+              fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)
+            }`,
+          );
+        }
+      }
+      console.error(
+        `launchChrome: teardown failed while aborting launch: ${
+          teardownErr instanceof Error ? teardownErr.message : String(teardownErr)
+        }`,
+      );
+      if (e instanceof Error && !e.cause) {
+        try { (e as any).cause = teardownErr; } catch {}
+      }
+      if (scratchDir) {
+        try { await Deno.remove(scratchDir, { recursive: true }); } catch {}
+        if (proc) procScratchDirs.delete(proc);
+      }
+    } finally {
+      try {
+        lock.release();
+      } finally {
+        fleetLease?.release();
+      }
+    }
+    throw e;
   }
 
   // Keep draining stderr in the background. An undrained pipe eventually fills
@@ -780,7 +901,12 @@ export async function launchChrome(opts: {
     scratchDir,
     processGroup: group,
     close: async () => {
-      await teardownChrome({ proc, profile: resolvedProfile, processGroup: group });
+      await (opts.teardown ?? teardownChrome)({
+        proc,
+        profile: resolvedProfile,
+        processGroup: group,
+        deps: opts.processTable,
+      });
     },
   };
   return launched;
@@ -880,14 +1006,26 @@ export async function reapCrashpadHandler(profilePath: string): Promise<void> {
 }
 
 export async function teardownChrome(
-  target: LaunchedChrome | Deno.ChildProcess | { proc?: Deno.ChildProcess | null; profile?: string; processGroup?: number } | null | undefined,
+  target:
+    | LaunchedChrome
+    | Deno.ChildProcess
+    | {
+      proc?: Deno.ChildProcess | null;
+      profile?: string;
+      processGroup?: number;
+      deps?: ProcessTableDeps;
+    }
+    | null
+    | undefined,
   profile?: string,
 ): Promise<void> {
   if (!target && !profile) return;
   const proc = target ? ("proc" in target ? (target.proc ?? null) : (target instanceof Deno.ChildProcess ? target : null)) : null;
   const matchedProfile = profile ?? (target && "profile" in target ? target.profile : undefined);
-  const group = (target && "processGroup" in target ? target.processGroup : undefined) ??
-    (proc ? procGroups.get(proc) : undefined);
+  const group = (target && typeof target === "object" && "processGroup" in target)
+    ? target.processGroup
+    : (proc ? procGroups.get(proc) : undefined);
+  const deps = target && "deps" in target ? target.deps : undefined;
   // Only paths created by this launcher are eligible; never trust a caller's
   // scratchDir property as authority to recursively remove an arbitrary path.
   const removeScratch = async () => {
@@ -901,7 +1039,7 @@ export async function teardownChrome(
   if (matchedProfile) {
     const raw = matchedProfile.replace(/^--/, "");
     const match = raw.startsWith("user-data-dir=") ? raw : `user-data-dir=${raw}`;
-    await killProcessTree(proc, match, { group });
+    await killProcessTree(proc, match, { group, deps });
     const profilePath = raw.startsWith("user-data-dir=") ? raw.slice("user-data-dir=".length) : raw;
     if (profilePath && typeof profilePath === "string" && profilePath.length > 5 && !profilePath.endsWith("/..")) {
       const normalized = profilePath.replace(/\/+$/, "");
@@ -934,7 +1072,7 @@ export async function teardownChrome(
   }
   if (proc) {
     if (group !== undefined) {
-      await killProcessTree(proc, `chrome-group-${group}-no-profile-${crypto.randomUUID()}`, { group });
+      await killProcessTree(proc, `chrome-group-${group}-no-profile-${crypto.randomUUID()}`, { group, deps });
       await removeScratch();
       return;
     }
