@@ -118,27 +118,41 @@ Deno.test("durableDir fails loudly when the durable location is unavailable", as
 });
 
 /** Statically detect any parent-process CAP_DURABLE_ROOT mutation (set, delete, assignment). */
-export function detectParentDurableRootEnvMutation(sourceText: string): string[] {
-  const withoutChildScript = sourceText.replace(/const script = `[\s\S]*?`;/g, "");
-  const violations: string[] = [];
-  const lines = withoutChildScript.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    // Check Deno.env mutation: .set() or .delete()
-    if (/\bDeno\.env\.(?:set|delete)\s*\(\s*["']CAP_DURABLE_ROOT["']/.test(line)) {
-      violations.push(`line ${i + 1}: Deno.env mutation: ${line.trim()}`);
-    }
-    // Check process.env mutation: assignment or delete
-    if (/(?:delete\s+process\.env(?:\.CAP_DURABLE_ROOT|\[["']CAP_DURABLE_ROOT["']\])|process\.env(?:\.CAP_DURABLE_ROOT|\[["']CAP_DURABLE_ROOT["']\])\s*=)/.test(line)) {
-      violations.push(`line ${i + 1}: process.env mutation: ${line.trim()}`);
-    }
+export function detectParentDurableRootEnvMutation(sourceText: string, filename = ""): string[] {
+  let text = sourceText.replace(/const script = `[\s\S]*?`;/g, "");
+  // Allowlist detector test fixtures in machine-path-honesty and durable-root
+  if (filename.endsWith("machine-path-honesty.test.ts")) {
+    text = text.replace(/detect\(`Deno\.env\.set\("CAP_DURABLE_ROOT"[\s\S]*?`,\s*"tests\/probe\.test\.ts"\)/g, "");
   }
+  if (filename.endsWith("durable-root.test.ts")) {
+    text = text.replace(/const fixtures = \[[\s\S]*?\];/g, "");
+  }
+  // Strip block and single-line comments so comments never trigger multiline regexes
+  const withoutComments = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+
+  const violations: string[] = [];
+
+  // Match Deno.env.(set|delete) across line breaks
+  const denoEnvRegex = /\bDeno\.env\.(?:set|delete)\s*\(\s*["']CAP_DURABLE_ROOT["']/g;
+  let match: RegExpExecArray | null;
+  while ((match = denoEnvRegex.exec(withoutComments)) !== null) {
+    const lineNum = withoutComments.slice(0, match.index).split("\n").length;
+    violations.push(`${filename ? `${filename}:` : ""}line ${lineNum}: Deno.env mutation: ${match[0]}`);
+  }
+
+  // Match process.env mutation across line breaks
+  const processEnvRegex = /(?:delete\s+process\.env(?:\.CAP_DURABLE_ROOT|\[\s*["']CAP_DURABLE_ROOT["']\s*\])|process\.env(?:\.CAP_DURABLE_ROOT|\[\s*["']CAP_DURABLE_ROOT["']\s*\])\s*=)/g;
+  while ((match = processEnvRegex.exec(withoutComments)) !== null) {
+    const lineNum = withoutComments.slice(0, match.index).split("\n").length;
+    violations.push(`${filename ? `${filename}:` : ""}line ${lineNum}: process.env mutation: ${match[0]}`);
+  }
+
   return violations;
 }
 
 Deno.test("guard: durable-root test never mutates parent process environment (m3a2/5rwd)", () => {
   const source = Deno.readTextFileSync(fileURLToPath(import.meta.url));
-  const violations = detectParentDurableRootEnvMutation(source);
+  const violations = detectParentDurableRootEnvMutation(source, "tests/durable-root.test.ts");
   assertEquals(
     violations,
     [],
@@ -149,9 +163,11 @@ Deno.test("guard: durable-root test never mutates parent process environment (m3
   const VAR = ["CAP", "DURABLE", "ROOT"].join("_");
   const fixtures = [
     { probe: `Deno.env.set("${VAR}", "/tmp/foo");`, desc: "Deno.env.set" },
+    { probe: `Deno.env.set(\n  "${VAR}",\n  "/tmp/foo"\n);`, desc: "multiline Deno.env.set" },
     { probe: `Deno.env.delete("${VAR}");`, desc: "Deno.env.delete" },
     { probe: `process.env.${VAR} = "/tmp/foo";`, desc: "process.env assignment" },
     { probe: `process.env["${VAR}"] = "/tmp/foo";`, desc: "process.env bracket assignment" },
+    { probe: `process.env[\n  "${VAR}"\n] = "/tmp/foo";`, desc: "multiline process.env bracket assignment" },
     { probe: `delete process.env.${VAR};`, desc: "delete process.env" },
     { probe: `delete process.env["${VAR}"];`, desc: "delete process.env bracket" },
   ];
@@ -162,6 +178,25 @@ Deno.test("guard: durable-root test never mutates parent process environment (m3
       `guard must catch parent environment mutation: ${desc}`,
     );
   }
+});
+
+Deno.test("zuo0i: no test file across tests/*.test.ts mutates parent CAP_DURABLE_ROOT in-process", () => {
+  const testsDir = fileURLToPath(new URL(".", import.meta.url));
+  const violations: string[] = [];
+
+  for (const entry of Deno.readDirSync(testsDir)) {
+    if (!entry.isFile || !entry.name.endsWith(".test.ts")) continue;
+    const path = `${testsDir}/${entry.name}`;
+    const source = Deno.readTextFileSync(path);
+    const fileViolations = detectParentDurableRootEnvMutation(source, `tests/${entry.name}`);
+    violations.push(...fileViolations);
+  }
+
+  assertEquals(
+    violations,
+    [],
+    `no test in tests/*.test.ts may mutate parent CAP_DURABLE_ROOT in-process (bead zuo0i):\n${violations.join("\n")}`,
+  );
 });
 
 // --- Static guard (widened): no shipped source materializes evidence/scratch

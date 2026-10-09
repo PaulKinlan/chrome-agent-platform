@@ -51,18 +51,34 @@ Deno.test("vk1t: dead-lock evidence names creator, owner PID and age but never d
   }
 });
 
-Deno.test("vk1t: trailing-slash durable-root override still admits under the normalized profile root", () => {
+Deno.test("vk1t: trailing-slash durable-root override still admits under the normalized profile root", async () => {
   const base = `${durableRoot()}/vk1t-durable-override-fixture-${Deno.pid}-${Date.now()}`;
-  const previous = Deno.env.get("CAP_DURABLE_ROOT");
   Deno.mkdirSync(base, { recursive: true });
   try {
-    Deno.env.set("CAP_DURABLE_ROOT", `${base}/`);
-    const created = chromeProfileDir("override");
+    const moduleUrl = new URL("../scripts/lib/chrome-profile-dir.ts", import.meta.url).href;
+    const script = `(async () => {
+      const { chromeProfileDir } = await import(${JSON.stringify(moduleUrl)});
+      const created = chromeProfileDir("override");
+      console.log("CREATED " + created);
+    })()`;
+    const { stdout, stderr, success } = await new Deno.Command(Deno.execPath(), {
+      args: ["eval", script],
+      clearEnv: true,
+      env: {
+        HOME: Deno.env.get("HOME") ?? "/home/paulkinlan",
+        CAP_DURABLE_ROOT: `${base}/`,
+      },
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    const text = new TextDecoder().decode(stdout) + new TextDecoder().decode(stderr);
+    assert(success, `the child probe failed with non-zero exit; got:\n${text.slice(0, 600)}`);
+    const line = text.split("\n").find((l) => l.startsWith("CREATED "));
+    assert(line, `the child probe must report CREATED; got:\n${text.slice(0, 600)}`);
+    const created = line.slice("CREATED ".length).trim();
     assert(created.startsWith(`${base}/${PROFILE_ROOT_NAME}/`), `normalized profile path: ${created}`);
     assertEquals(Deno.statSync(created).isDirectory, true);
   } finally {
-    if (previous === undefined) Deno.env.delete("CAP_DURABLE_ROOT");
-    else Deno.env.set("CAP_DURABLE_ROOT", previous);
     Deno.removeSync(base, { recursive: true }); // isolated fixture only
   }
 });
