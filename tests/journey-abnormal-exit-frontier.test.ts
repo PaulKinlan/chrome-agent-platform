@@ -367,6 +367,62 @@ Deno.test("9ud9e: resetWatchdog arms timer and clearWatchdog cancels it cleanly"
   assertEquals(exitCalls, 0, "must not have exited");
 });
 
+Deno.test("cec16: pre-launch setup stays watchdog-bounded until launch admission actually begins", () => {
+  const main = source.match(/async function main\(\) \{[\s\S]*?const launched = await launchJourneyChrome\(profile\);/);
+  assert(main, "main setup and first Chrome launch must be present");
+  const arm = main[0].indexOf('if (typeof resetWatchdog === "function") resetWatchdog();');
+  const mkdir = main[0].indexOf('await Deno.mkdir(EVIDENCE_DIR');
+  const launch = main[0].indexOf('await launchJourneyChrome(profile)');
+  assert(arm >= 0 && mkdir > arm && launch > mkdir,
+    "the pre-launch mkdir and fixture setup must remain under the initial watchdog until the bounded launch takes ownership");
+  assert(!main[0].includes("beginLaunchAdmission(") && !main[0].includes("clearWatchdog("),
+    "neither admission suspension nor clearing the watchdog may occur in main's pre-launch setup");
+});
+
+Deno.test("cec16: launch admission suspends the watchdog, then restores its post-launch assertion budget", () => {
+  const watchdogMatch = source.match(/let watchdogTimer = null;[\s\S]*?function clearWatchdog\(\) \{[\s\S]*?\n\}/);
+  assert(watchdogMatch, "watchdog functions must be found");
+  const timers: Array<{ callback: () => void; cleared: boolean }> = [];
+  const exits: number[] = [];
+  const logs: string[] = [];
+  const harness = new Function(
+    "Deno", "console", "EXPECTED", "setTimeout", "clearTimeout",
+    `let abnormalReported = false;
+     let lastCompletedCheck = "check-A";
+     let lastStartedCheck = "check-B";
+     let ran = new Set(["check-A"]);
+     ${printMatch[0]}
+     ${watchdogMatch[0]}
+     return { resetWatchdog, beginLaunchAdmission, endLaunchAdmission, getTimer: () => watchdogTimer };`,
+  )(
+    { env: { get: (key: string) => key === "CAP_JOURNEY_WATCHDOG_MS" ? "50" : undefined }, exit: (code: number) => exits.push(code) },
+    { log: (...parts: unknown[]) => logs.push(parts.join(" ")), error: (...parts: unknown[]) => logs.push(parts.join(" ")) },
+    EXPECTED,
+    (callback: () => void) => {
+      const timer = { callback, cleared: false, unref() {} };
+      timers.push(timer);
+      return timer;
+    },
+    (timer: { cleared: boolean }) => { timer.cleared = true; },
+  );
+
+  harness.resetWatchdog();
+  assertEquals(timers.length, 1, "the prior assertion had an active watchdog");
+  harness.beginLaunchAdmission();
+  assertEquals(timers[0].cleared, true, "the prior assertion budget must be cancelled before admission");
+  assertEquals(harness.getTimer(), null);
+  harness.resetWatchdog();
+  assertEquals(timers.length, 1, "no assertion callback may re-arm a watchdog during admission");
+  assertEquals(exits, []);
+
+  harness.endLaunchAdmission();
+  assertEquals(timers.length, 2, "the browser-live boundary begins a fresh assertion budget");
+  assertEquals(timers[1].cleared, false);
+  timers[1].callback();
+  assertEquals(exits, [124], "a stalled post-admission assertion remains a watchdog failure");
+  assert(logs.join("\n").includes("[JOURNEY WATCHDOG TIMEOUT]"));
+});
+
 Deno.test("9ud9e: process-level unhandledrejection and error events trigger immediate frontier diagnostic", () => {
   const handlerMatch = source.match(/function computeUnreachedCount\(\) \{[\s\S]*?\n\}\n\n\/\/ Minimal PNG/);
   assert(handlerMatch, "unhandled handlers must be found");

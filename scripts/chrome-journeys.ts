@@ -129,6 +129,10 @@ async function sha256Hex(bytes) {
  * CAP browsers, NOT other lanes' compilers — a quiet box is still what this
  * suite needs, and this opt-in only stops our own gates from eating it. */
 function launchJourneyChrome(profile: string) {
+  // The fleet-slot and quiet-window admission have their own bounded refusal
+  // verdicts (75), and can legitimately outlast the 90s assertion watchdog.
+  // Suspend it for EVERY launch, including the demo and reset profiles.
+  beginLaunchAdmission();
   // clearEnv prevents ambient variables reaching Chrome, but the fleet's
   // non-secret lane identifier must survive into detached crashpad helpers.
   // The reaper uses this inherited marker to recognize a live lane; it does
@@ -165,6 +169,9 @@ function launchJourneyChrome(profile: string) {
     clearEnv: true,
     env: fleetLane ? { FLEET_LANE: fleetLane } : {},
     timeoutMs: 20000,
+  }).then((launched) => {
+    endLaunchAdmission(); // A live browser starts a fresh assertion budget.
+    return launched;
   }).catch((e) => {
     // An environmental refusal is a THIRD verdict. It must never be re-read as
     // a product red (exit 1) and never as a pass (exit 0).
@@ -190,6 +197,7 @@ function launchJourneyChrome(profile: string) {
       console.error(`${ENVIRONMENTAL_REFUSAL_MARKER} ${JSON.stringify(heavyGateSetupFailurePayload(e))}`);
       Deno.exit(ENVIRONMENTAL_REFUSAL_EXIT);
     }
+    endLaunchAdmission(); // An unexpected launch error must not leave a surviving journey unwatched.
     throw e;
   });
 }
@@ -692,6 +700,7 @@ let lastCompletedCheck = null;
 let lastStartedCheck = null;
 
 let watchdogTimer = null;
+let launchAdmissionPending = false;
 const WATCHDOG_MS = typeof Deno !== "undefined" && Deno.env
   ? Number(Deno.env.get("CAP_JOURNEY_WATCHDOG_MS") || "90000")
   : 90000;
@@ -699,7 +708,7 @@ const WATCHDOG_MS = typeof Deno !== "undefined" && Deno.env
 function resetWatchdog() {
   if (typeof Deno === "undefined" || !Deno.env) return;
   if (watchdogTimer) clearTimeout(watchdogTimer);
-  if (WATCHDOG_MS <= 0) return;
+  if (launchAdmissionPending || WATCHDOG_MS <= 0) return;
   watchdogTimer = setTimeout(() => {
     const reason = `watchdog timeout: no assertion completed for ${WATCHDOG_MS}ms`;
     console.error(`\n[JOURNEY WATCHDOG TIMEOUT] Hang detected at frontier check: "${lastStartedCheck}" (last completed: "${lastCompletedCheck}") after ${WATCHDOG_MS}ms`);
@@ -716,6 +725,16 @@ function resetWatchdog() {
   if (typeof watchdogTimer?.unref === "function") {
     watchdogTimer.unref();
   }
+}
+
+function beginLaunchAdmission() {
+  launchAdmissionPending = true;
+  clearWatchdog();
+}
+
+function endLaunchAdmission() {
+  launchAdmissionPending = false;
+  resetWatchdog();
 }
 
 function clearWatchdog() {
@@ -1402,6 +1421,8 @@ async function writeEvidence(name, bytes) {
 }
 
 async function main() {
+  // Bound pre-launch setup too; beginLaunchAdmission cancels this timer only
+  // when the separately bounded fleet-slot/quiet admission actually starts.
   if (typeof resetWatchdog === "function") resetWatchdog();
   if (typeof EXPECTED !== "undefined" && EXPECTED[0]) {
     console.log(`RUN: ${EXPECTED[0]}`);
