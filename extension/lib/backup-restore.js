@@ -7,6 +7,7 @@
 
 import { decodeTarStream } from "./tar-stream.js";
 import { newId, sleep } from "./pure.js";
+import { validateStagedMasterJournalBackup } from "./master-journal-backup.js";
 import {
   createOpfsAdapter,
   createChromeAlarmsAdapter,
@@ -401,6 +402,10 @@ export async function streamRestoreArchive({
     if (typeof counts.opfsFiles === "number" && counts.opfsFiles !== stagedEntries.length) {
       throw new Error(`Invalid backup archive: manifest opfsFiles mismatch (${counts.opfsFiles} vs ${stagedEntries.length})`);
     }
+    // A raw WAL archive is a unit: reject torn heads, absent dependencies and
+    // unpublished frames BEFORE owner confirmation or any live-file mutation.
+    // Legacy profiles (no WAL records) retain their existing import path.
+    await validateStagedMasterJournalBackup(stagedEntries, opfs?.readFile);
   } catch (err) {
     if (typeof opfs?.removeDirectory === "function") {
       await opfs.removeDirectory(stagingDir, { recursive: true }).catch(() => {});
