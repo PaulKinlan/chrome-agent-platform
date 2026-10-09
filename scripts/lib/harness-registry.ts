@@ -148,7 +148,14 @@ export const HARNESSES: Record<string, HarnessEntry> = {
     // child would wait on its own runner's lock until the bound expired. A declaration nobody can honour is
     // the thing both set-tests exist to refuse, so it is not declared here; the KAT's own runs are covered by
     // the runner's lease.
+    //
+    // gafh OWNER DUTY: re-verify the load note above when the browser pin moves. The two
+    // fields below are the pin this entry's verdict was last measured against — the harness
+    // ran 24/0 on 2026-10-09 against the browser launchChrome resolves today (CfT from the
+    // puppeteer cache), which is exactly the duty's trigger.
     owner: "chrome-agent-platform-gafh",
+    testedAgainst: "Google Chrome for Testing 154.0.8037.92",
+    chromeVersion: "154.0.8037.92",
   },
   "kat-artifact-library-capacity.ts": { class: "kat" },
   // CLEARED 2026-09-23 (chrome-agent-platform-l3ts family, by the lane that measured it):
