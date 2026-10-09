@@ -2,7 +2,7 @@
 // gate's commands (same files, same assertions), fall back to the sequential chain rather than skip
 // test:build, and never leak a sibling worktree.
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { gateSteps, sequentialReason, siblingOwnerPid, sweepStaleSiblings } from "../scripts/gate.mjs";
+import { gateSteps, resolveSiblingRoot, sequentialReason, siblingOwnerPid, sweepStaleSiblings } from "../scripts/gate.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const pkg = JSON.parse(await Deno.readTextFile(new URL("../package.json", import.meta.url)));
@@ -48,4 +48,34 @@ Deno.test("gate: sibling names are parsed strictly", () => {
   assertEquals(siblingOwnerPid("0123456789ab-42x"), null);
   assertEquals(siblingOwnerPid("../0123456789ab-42"), null);
   assertEquals(siblingOwnerPid("scratch"), null);
+});
+
+// gate-speed: a sibling root that cannot be created (disk, permissions) is the SEQUENTIAL fallback, not a
+// crash and never a skipped test:build. resolveSiblingRoot is driven directly so the assertion needs no
+// "plan only, run nothing" knob — a gate that could be told to skip its suite would be worse than slow.
+Deno.test("gate: an unusable sibling root or a failing sweep is a named sequential fallback, never a crash", () => {
+  const boom = new Error("ENOSPC: no space left on device");
+  const noRoot = resolveSiblingRoot({ mk: () => { throw boom; } });
+  assertEquals(noRoot.parent, null);
+  assert(noRoot.reason?.includes("could not be created") && noRoot.reason.includes("ENOSPC"), String(noRoot.reason));
+
+  const noSweep = resolveSiblingRoot({ mk: () => "/tmp/x", sweep: () => { throw new Error("EACCES: denied"); } });
+  assertEquals(noSweep.parent, null);
+  assert(noSweep.reason?.includes("could not be swept") && noSweep.reason.includes("EACCES"), String(noSweep.reason));
+
+  const lines: string[] = [];
+  const ok = resolveSiblingRoot({
+    mk: () => "/tmp/x",
+    sweep: () => ["0123456789ab-1", "0123456789ab-1.log"],
+    report: (l) => lines.push(l),
+  });
+  assertEquals(ok, { parent: "/tmp/x", reason: null });
+  assertEquals(lines.length, 1);
+  assert(lines[0].includes("removed 2 sibling(s)"), lines[0]);
+});
+
+Deno.test("gate: against the REAL durable root the sibling root resolves and is swept", () => {
+  const real = resolveSiblingRoot();
+  assertEquals(real.reason, null, String(real.reason));
+  assert(real.parent?.endsWith("gate-build"), String(real.parent));
 });

@@ -94,6 +94,29 @@ export function sweepStaleSiblings(parent, { isLive = (pid) => pidRuns(pid, "gat
   return swept;
 }
 
+/**
+ * The directory stale siblings live in, or the reason the overlapped mode cannot use one. A durable root
+ * that cannot be created (disk full, permissions) is an UNAVAILABLE sibling — the announced sequential
+ * fallback — never a crash and never a gate that skips test:build. Pure enough to test directly, so the
+ * fallback does not need a "plan only, run nothing" knob that could weaken the gate.
+ * @returns {{ parent: string|null, reason: string|null }}
+ */
+export function resolveSiblingRoot({ mk = durableDir, sweep = sweepStaleSiblings, report = (line) => say(line) } = {}) {
+  let parent;
+  try {
+    parent = mk("gate-build");
+  } catch (e) {
+    return { parent: null, reason: `the sibling root could not be created (${e?.message ?? e})` };
+  }
+  try {
+    const swept = sweep(parent);
+    if (swept.length) report(`gate: removed ${swept.length} sibling(s) left by gate(s) that no longer run: ${swept.join(", ")}`);
+  } catch (e) {
+    return { parent: null, reason: `stale siblings could not be swept (${e?.message ?? e})` };
+  }
+  return { parent, reason: null };
+}
+
 function say(line) {
   console.log(line);
   console.error(line);
@@ -138,15 +161,15 @@ export async function main(env = process.env) {
   const t0 = Date.now();
   const secs = () => `${((Date.now() - t0) / 1000).toFixed(0)}s`;
   const [build, test, buildGate] = gateSteps();
-  const parent = durableDir("gate-build");
-  const swept = sweepStaleSiblings(parent);
-  if (swept.length) say(`gate: removed ${swept.length} sibling(s) left by gate(s) that no longer run: ${swept.join(", ")}`);
-
   const sha = git(["rev-parse", "HEAD"]).out;
   const status = git(["status", "--porcelain", "--untracked-files=no"]);
   let reason = status.ok ? sequentialReason({ dirty: status.out, env }) : `git status failed: ${status.out}`;
 
-  const sibling = join(parent, `${sha.slice(0, 12)}-${process.pid}`);
+  const root = resolveSiblingRoot();
+  const parent = root.parent;
+  if (root.reason) reason ??= root.reason;
+
+  const sibling = parent ? join(parent, `${sha.slice(0, 12)}-${process.pid}`) : "";
   const log = `${sibling}.log`;
   let siblingCreated = false;
   const cleanup = () => {
