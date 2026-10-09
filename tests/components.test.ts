@@ -2009,37 +2009,72 @@ Deno.test("harness-agent-button: renders a named native action, escapes names, a
 Deno.test("2y7qe recurrence guard: every cross-module call to components-core is imported and exported", async () => {
   const acorn = await import("npm:acorn@8.18.0");
 
+  function extractBindings(pattern: any, out: Set<string>) {
+    if (!pattern) return;
+    if (pattern.type === "Identifier") {
+      out.add(pattern.name);
+    } else if (pattern.type === "ObjectPattern") {
+      for (const p of pattern.properties ?? []) {
+        if (p.type === "Property") extractBindings(p.value, out);
+        else if (p.type === "RestElement") extractBindings(p.argument, out);
+      }
+    } else if (pattern.type === "ArrayPattern") {
+      for (const el of pattern.elements ?? []) if (el) extractBindings(el, out);
+    } else if (pattern.type === "AssignmentPattern") {
+      extractBindings(pattern.left, out);
+    } else if (pattern.type === "RestElement") {
+      extractBindings(pattern.argument, out);
+    }
+  }
+
   for (const baseDir of ["extension/shared", "docs"]) {
     const coreCode = await Deno.readTextFile(`${baseDir}/components-core.js`);
     const coreAst = acorn.parse(coreCode, { sourceType: "module", ecmaVersion: "latest" });
 
-    const coreSymbols = new Map<string, boolean>();
+    const coreDefinedSymbols = new Set<string>();
+    const coreExportedSymbols = new Set<string>();
+
     for (const node of (coreAst.body as any[])) {
-      if (node.type === "FunctionDeclaration") {
-        coreSymbols.set(node.id.name, false);
+      if (node.type === "FunctionDeclaration" && node.id?.name) {
+        coreDefinedSymbols.add(node.id.name);
+      } else if (node.type === "ClassDeclaration" && node.id?.name) {
+        coreDefinedSymbols.add(node.id.name);
       } else if (node.type === "VariableDeclaration") {
-        for (const d of node.declarations) coreSymbols.set(d.id.name, false);
-      } else if (node.type === "ClassDeclaration") {
-        coreSymbols.set(node.id.name, false);
+        for (const d of node.declarations ?? []) extractBindings(d.id, coreDefinedSymbols);
       } else if (node.type === "ExportNamedDeclaration") {
-        if (node.declaration?.id) coreSymbols.set(node.declaration.id.name, true);
-        if (node.declaration?.declarations) {
-          for (const d of node.declaration.declarations) coreSymbols.set(d.id.name, true);
+        if (node.declaration) {
+          if (node.declaration.type === "FunctionDeclaration" && node.declaration.id?.name) {
+            coreDefinedSymbols.add(node.declaration.id.name);
+            coreExportedSymbols.add(node.declaration.id.name);
+          } else if (node.declaration.type === "ClassDeclaration" && node.declaration.id?.name) {
+            coreDefinedSymbols.add(node.declaration.id.name);
+            coreExportedSymbols.add(node.declaration.id.name);
+          } else if (node.declaration.type === "VariableDeclaration") {
+            const declNames = new Set<string>();
+            for (const d of node.declaration.declarations ?? []) extractBindings(d.id, declNames);
+            for (const name of declNames) {
+              coreDefinedSymbols.add(name);
+              coreExportedSymbols.add(name);
+            }
+          }
         }
         if (node.specifiers) {
-          for (const s of node.specifiers) coreSymbols.set(s.exported.name, true);
+          for (const s of node.specifiers) {
+            const exp = s.exported?.name ?? s.local?.name;
+            if (exp) coreExportedSymbols.add(exp);
+            if (!node.source && s.local?.name) coreDefinedSymbols.add(s.local.name);
+          }
         }
       }
     }
 
-    const otherFiles = [
-      "components-conversation.js",
-      "components-hub.js",
-      "components-settings.js",
-      "components-artifacts.js",
-      "components-directory.js",
-      "components-privacy.js",
-    ];
+    const otherFiles: string[] = [];
+    for await (const entry of Deno.readDir(baseDir)) {
+      if (entry.isFile && entry.name.startsWith("components-") && entry.name.endsWith(".js") && entry.name !== "components-core.js") {
+        otherFiles.push(entry.name);
+      }
+    }
+    otherFiles.sort();
 
     const violations: string[] = [];
 
@@ -2052,13 +2087,49 @@ Deno.test("2y7qe recurrence guard: every cross-module call to components-core is
 
       for (const node of (ast.body as any[])) {
         if (node.type === "ImportDeclaration") {
-          for (const s of node.specifiers) allImported.add(s.local.name);
-        } else if (node.type === "FunctionDeclaration" && node.id) {
+          const isCoreImport = typeof node.source?.value === "string" && (
+            node.source.value === "./components-core.js" ||
+            node.source.value.endsWith("/components-core.js")
+          );
+          for (const s of node.specifiers ?? []) {
+            const localName = s.local?.name;
+            const importedName = s.imported?.name ?? localName;
+            if (localName) allImported.add(localName);
+
+            // Direction (2): any core symbol imported must actually be exported in the corresponding components-core.js
+            if (isCoreImport) {
+              if (!coreExportedSymbols.has(importedName)) {
+                violations.push(`${baseDir}/${f}: imports '${importedName}' from ${node.source.value}, but it is not exported by ${baseDir}/components-core.js`);
+              }
+            } else if (coreDefinedSymbols.has(importedName) && !coreExportedSymbols.has(importedName)) {
+              violations.push(`${baseDir}/${f}: imports '${importedName}' which is defined in ${baseDir}/components-core.js but not exported`);
+            }
+          }
+        } else if (node.type === "ExportNamedDeclaration" && node.source) {
+          const isCoreImport = typeof node.source?.value === "string" && (
+            node.source.value === "./components-core.js" ||
+            node.source.value.endsWith("/components-core.js")
+          );
+          if (isCoreImport && node.specifiers) {
+            for (const s of node.specifiers) {
+              const importedName = s.local?.name ?? s.exported?.name;
+              if (!coreExportedSymbols.has(importedName)) {
+                violations.push(`${baseDir}/${f}: re-exports '${importedName}' from ${node.source.value}, but it is not exported by ${baseDir}/components-core.js`);
+              }
+            }
+          }
+        } else if (node.type === "FunctionDeclaration" && node.id?.name) {
           fileDeclared.add(node.id.name);
-        } else if (node.type === "ClassDeclaration" && node.id) {
+        } else if (node.type === "ClassDeclaration" && node.id?.name) {
           fileDeclared.add(node.id.name);
         } else if (node.type === "VariableDeclaration") {
-          for (const d of node.declarations) if (d.id?.name) fileDeclared.add(d.id.name);
+          for (const d of node.declarations ?? []) extractBindings(d.id, fileDeclared);
+        } else if (node.type === "ExportNamedDeclaration" && node.declaration) {
+          if (node.declaration.id?.name) {
+            fileDeclared.add(node.declaration.id.name);
+          } else if (node.declaration.declarations) {
+            for (const d of node.declaration.declarations ?? []) extractBindings(d.id, fileDeclared);
+          }
         }
       }
 
@@ -2067,26 +2138,28 @@ Deno.test("2y7qe recurrence guard: every cross-module call to components-core is
         const currentScope = new Set(scope);
         if (node.type === "FunctionDeclaration" || node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression") {
           if (node.id?.name) currentScope.add(node.id.name);
-          for (const p of node.params ?? []) {
-            if (p.type === "Identifier") currentScope.add(p.name);
-            else if (p.type === "AssignmentPattern" && p.left?.type === "Identifier") currentScope.add(p.left.name);
-          }
+          for (const p of node.params ?? []) extractBindings(p, currentScope);
         }
         if (node.type === "VariableDeclaration") {
-          for (const d of node.declarations ?? []) if (d.id?.type === "Identifier") currentScope.add(d.id.name);
+          for (const d of node.declarations ?? []) extractBindings(d.id, currentScope);
         }
-        if (node.type === "CatchClause" && node.param?.type === "Identifier") {
-          currentScope.add(node.param.name);
+        if (node.type === "CatchClause" && node.param) {
+          extractBindings(node.param, currentScope);
         }
-        if (node.type === "CallExpression" && node.callee.type === "Identifier") {
+        if ((node.type === "CallExpression" || node.type === "NewExpression") && node.callee?.type === "Identifier") {
           const name = node.callee.name;
-          if (coreSymbols.has(name) && !allImported.has(name) && !fileDeclared.has(name) && !currentScope.has(name)) {
-            const isExported = coreSymbols.get(name);
-            violations.push(`${baseDir}/${f}: calls ${name}() which is defined in components-core.js (exported: ${isExported}) but not imported`);
+          const isCoreSymbol = coreDefinedSymbols.has(name) || coreExportedSymbols.has(name);
+          if (isCoreSymbol && !fileDeclared.has(name) && !currentScope.has(name)) {
+            // Direction (1): any core symbol called but not imported must fail
+            if (!allImported.has(name)) {
+              violations.push(`${baseDir}/${f}: calls ${name}() which is a core symbol in ${baseDir}/components-core.js (exported: ${coreExportedSymbols.has(name)}) but not imported`);
+            } else if (!coreExportedSymbols.has(name)) {
+              violations.push(`${baseDir}/${f}: calls ${name}() which is imported but not exported by ${baseDir}/components-core.js`);
+            }
           }
         }
         for (const key of Object.keys(node)) {
-          if (key === "callee" && node.type === "CallExpression" && node.callee.type === "Identifier") continue;
+          if (key === "callee" && (node.type === "CallExpression" || node.type === "NewExpression") && node.callee?.type === "Identifier") continue;
           const child = node[key];
           if (Array.isArray(child)) {
             for (const c of child) if (c && typeof c.type === "string") walk(c, currentScope);
