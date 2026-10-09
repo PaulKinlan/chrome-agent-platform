@@ -163,6 +163,41 @@ Deno.test("rpc-cache: write RPC invalidates corresponding read caches", async ()
   assertEquals(readCalls, 2);
 });
 
+Deno.test("8xhq7: creating a named agent evicts the same page's pre-create roster before repaint", async () => {
+  clearRpcCache();
+  const names = ["Research Analyst"];
+  let rosterReads = 0;
+  let unrelatedReads = 0;
+  const send = async (type: string, payload: { name?: string } = {}) => {
+    if (type === "named-agent.list") {
+      rosterReads++;
+      return { ok: true, agents: [...names] };
+    }
+    if (type === "named-agent.create") {
+      names.push(payload.name!);
+      return { ok: true };
+    }
+    if (type === "provider.status") {
+      unrelatedReads++;
+      return { ok: true, provider: "demo" };
+    }
+    throw new Error(`unexpected RPC: ${type}`);
+  };
+
+  // The create dialog warms this read when building its delegation choices.
+  assertEquals((await cachedRpc("named-agent.list", {}, { send })).agents, ["Research Analyst"]);
+  await cachedRpc("provider.status", {}, { send });
+  await cachedRpc("named-agent.create", { name: "Bookmark Librarian" }, { send });
+
+  // onSaved renders immediately; it must not reuse the roster from before create
+  // even if the SW's separate named-agent-changed broadcast has not arrived.
+  assertEquals((await cachedRpc("named-agent.list", {}, { send })).agents,
+    ["Research Analyst", "Bookmark Librarian"]);
+  assertEquals(rosterReads, 2, "the live page must request the new roster after its own write");
+  await cachedRpc("provider.status", {}, { send });
+  assertEquals(unrelatedReads, 1, "agent writes must not evict unrelated provider reads");
+});
+
 Deno.test("rpc-cache: broadcast events invalidate corresponding cached routes", async () => {
   clearRpcCache();
   let dirCalls = 0;
