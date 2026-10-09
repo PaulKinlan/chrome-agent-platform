@@ -92,7 +92,10 @@ function validateHead(head) {
   return head;
 }
 
-/** A corrupt present head is never silently ignored in favor of an older one. */
+/** A corrupt present head is never silently ignored in favor of an older one.
+ * Even a lone torn head-a with head-b absent may have been valid and
+ * acknowledged BEFORE later corruption: without an independent cutover
+ * witness, its shape cannot prove it was merely a failed first publication. */
 export async function readMasterJournalHead(master) {
   const directory = await optionalDirectory(master);
   if (!directory) return null;

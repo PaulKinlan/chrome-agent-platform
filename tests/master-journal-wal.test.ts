@@ -115,6 +115,20 @@ Deno.test("failed terminal head close is not acknowledged and a corrupt present 
   await assertRejects(() => readMasterJournalProjection(master), Error, "corrupt");
 });
 
+Deno.test("one corrupt head and one absent is not proof of a never-published cutover", async () => {
+  const { master, legacy, allocateVersion } = await legacyFixture();
+  await stageMasterJournalCutover(master, {
+    journalExists: true, journal: [{ type: "acknowledged", id: 2 }], archive: [], allocateVersion,
+  });
+  assertEquals((await readMasterJournalProjection(master)).live, [{ type: "acknowledged", id: 2 }]);
+  const wal = await master.getDirectoryHandle("journal-wal");
+  const published = await wal.getFileHandle("head-a.json");
+  published.bytes = published.bytes.slice(0, 9); // corruption AFTER successful publication
+  await assertRejects(() => readMasterJournalProjection(master), Error, "corrupt");
+  assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy,
+    "the stale legacy journal still exists but cannot be trusted as recovery authority");
+});
+
 Deno.test("published but missing or changed checkpoint fails closed; incomplete frame suffix is not replayed", async () => {
   const { master, allocateVersion } = await legacyFixture();
   const head = await stageMasterJournalCutover(master, {
