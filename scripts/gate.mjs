@@ -1,142 +1,231 @@
 #!/usr/bin/env node
-// scripts/gate.mjs — the FULL landing gate in one command, with the build-behaviour gate OVERLAPPED
-// (gate-speed, 2026-10-08). `npm run gate` runs exactly what
+// scripts/gate.mjs — the FULL landing gate in one command (gate-speed, 2026-10-08/09). `npm run gate` runs
+// exactly what the sequential command runs:
+//
 //   npm run build:production && npm test && npm run test:build
-// runs — the same files, the same runners, nothing skipped — but test:build runs in a throwaway
-// sibling worktree of the SAME commit, concurrently with npm test, instead of after it.
+//   (= node build.mjs --target=store; node scripts/run-tests.mjs; deno run -A scripts/build-gate.ts)
 //
-// WHY: test:build is 3 files of real in-place production builds (~120 s) and each build uses about
-// ONE core; npm test's phases cannot share a tree with it (it rewrites extension/dist in place). In
-// its own checkout of HEAD it can run beside npm test, so the gate's wall time is roughly
-// max(npm test, test:build) on a box that was otherwise leaving a core idle during the builds.
+// — the same three commands, no arguments added or removed, so the same files and the same assertions
+// (gateSteps() below is the single list of commands; tests/gate.test.ts pins that both modes run exactly
+// it). The one difference is WHERE test:build runs:
 //
-// HOW (each step fails the gate loudly; nothing is retried):
-//   1. node build.mjs --target=store in THIS tree (the npm test serial phase requires a current
-//      store dist) — exactly `npm run build:production`.
-//   2. git worktree add --detach <durable>/gate-build/<sha>-<pid> HEAD; node_modules is COPIED
-//      (cp -a, ~110 MB — never symlinked or hard-linked: a symlinked node_modules measurably moved a
-//      bundle size, and a hard link would let the sibling's build write through into this tree).
-//   3. Concurrently: `node scripts/run-tests.mjs` here, and in the sibling
-//      `node build.mjs --target=store && deno run -A scripts/build-gate.ts` (the same steady state
-//      test:build finds after npm test today: a store dist built from HEAD).
-//   4. Both are awaited; the gate exits non-zero if either failed, naming which. The sibling's whole
-//      output is replayed (and kept in a durable log) so its attribution is not lost.
-//   5. The sibling worktree is removed (git worktree remove --force) in a finally.
-// A DIRTY tree is refused up front: the sibling can only test committed bytes, so a gate over a
-// dirty tree would test two different trees.
+// OVERLAPPED mode (the default): after build:production, test:build runs in a throwaway sibling
+// worktree of the SAME commit, concurrently with npm test in this tree. test:build rewrites
+// extension/dist in place, so it can never share npm test's tree, but in its own checkout it can run
+// beside it. Measured on the 2-vCPU fleet hub (2026-10-08, branch fleet/gate-speed at fe8a7d74, nice
+// 10, hub otherwise lightly loaded): 443 s overlapped vs ~500 s for the sequential command on the same
+// commit (496/501/521 s in three runs). Under heavy ambient load (2026-10-09, load 9-14 from fleet
+// syncs) the overlap still won (640 s vs 802 s) but test:build itself slowed to ~490 s.
+//
+// SEQUENTIAL mode (the fallback, announced, never silent): the exact && chain above, in this tree.
+// Used when the tree has uncommitted changes to tracked files (a sibling of HEAD would test other
+// bytes), when the sibling cannot be created (git worktree add or the node_modules copy fails — disk,
+// permissions, anything), or when CAP_GATE_SEQUENTIAL=1. A gate can therefore never pass with the build
+// gate skipped: either the sibling ran it, or this tree does.
+//
+// CLEANUP: the sibling (<durable>/gate-build/<sha12>-<pid>, ~270 MB with its node_modules COPY — never
+// a link: a linked node_modules measurably moved a bundle size and would let the sibling's build write
+// through into this tree) is removed in a finally, on SIGTERM/SIGINT/SIGHUP (after killing both child
+// process groups), and — for the one case no handler can catch, SIGKILL — by the NEXT gate, which
+// sweeps every sibling whose owning gate process is gone before it starts (sweepStaleSiblings).
 import { spawn, spawnSync } from "node:child_process";
-import { createWriteStream, existsSync, readFileSync, realpathSync } from "node:fs";
+import { createWriteStream, existsSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
-function git(args, cwd = ROOT) {
-  const r = spawnSync("git", args, { cwd, encoding: "utf8" });
-  if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr || r.stdout}`);
-  return r.stdout.trim();
+/** The three commands of the full gate, in order. Both modes run exactly these, with these arguments. */
+export function gateSteps() {
+  return [
+    { name: "build:production", cmd: "node", args: ["build.mjs", "--target=store"] },
+    { name: "npm test", cmd: "node", args: ["scripts/run-tests.mjs"] },
+    { name: "test:build", cmd: "deno", args: ["run", "-A", "scripts/build-gate.ts"] },
+  ];
 }
 
-// Children to kill if the gate itself is signalled (a killed gate must not orphan a build or a suite).
-const children = new Set();
+/** Why this run is SEQUENTIAL, or null for the overlapped mode (pure; pinned by tests/gate.test.ts). */
+export function sequentialReason({ dirty, env }) {
+  if (env.CAP_GATE_SEQUENTIAL === "1") return "CAP_GATE_SEQUENTIAL=1";
+  if (dirty) return "the tree has uncommitted changes to tracked files (a sibling of HEAD would test other bytes)";
+  return null;
+}
+
+/** The gate pid a sibling directory name records, or null for a name this gate did not create. */
+export function siblingOwnerPid(name) {
+  const m = /^[0-9a-f]{12}-(\d+)$/.exec(name);
+  return m ? Number(m[1]) : null;
+}
+
+/** Is `pid` a live process whose command line names `needle` (pid reuse cannot fake an owner)? */
+export function pidRuns(pid, needle) {
+  try {
+    return readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(needle);
+  } catch {
+    // No /proc (macOS) or no such process. Without /proc fall back to signal-0 liveness.
+    if (existsSync("/proc/self")) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  }
+}
+
+function git(args, cwd = ROOT) {
+  const r = spawnSync("git", args, { cwd, encoding: "utf8" });
+  return { ok: r.status === 0, out: (r.status === 0 ? r.stdout : (r.stderr || r.stdout || String(r.error ?? ""))).trim() };
+}
+
+export function removeSibling(dir) {
+  git(["worktree", "remove", "--force", dir]);
+  if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+  git(["worktree", "prune"]);
+}
+
+/** Remove siblings left by gates that no longer exist (a SIGKILLed gate cannot clean up after itself). */
+export function sweepStaleSiblings(parent, { isLive = (pid) => pidRuns(pid, "gate.mjs"), remove = removeSibling } = {}) {
+  const swept = [];
+  for (const name of existsSync(parent) ? readdirSync(parent) : []) {
+    const pid = siblingOwnerPid(name.replace(/\.log$/, ""));
+    if (pid === null || pid === process.pid || isLive(pid)) continue;
+    const path = join(parent, name);
+    if (name.endsWith(".log")) rmSync(path, { force: true });
+    else remove(path);
+    swept.push(name);
+  }
+  return swept;
+}
 
 function say(line) {
   console.log(line);
   console.error(line);
 }
 
-/** Run a command, inheriting stdio; resolves its exit code. */
-function run(cmd, args, { cwd = ROOT, env = process.env, stdio = "inherit" } = {}) {
+// Children to kill if the gate itself is signalled (a killed gate must not orphan a build or a suite).
+const children = new Set();
+
+/** Run a command in its own process group, stdio inherited (or to a log); resolves its exit code. */
+function run(step, { cwd = ROOT, env = process.env, log = null } = {}) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd, env, stdio, detached: true });
+    const out = log ? createWriteStream(log) : null;
+    const child = spawn(step.cmd, step.args, { cwd, env, stdio: log ? ["ignore", "pipe", "pipe"] : "inherit", detached: true });
     children.add(child);
-    child.on("close", () => children.delete(child));
-    child.on("error", (e) => { say(`gate: ${cmd} failed to start: ${e.message}`); resolve(1); });
-    child.on("close", (code, signal) => resolve(code ?? (signal ? 128 + 15 : 1)));
+    if (out) {
+      child.stdout.pipe(out, { end: false });
+      child.stderr.pipe(out, { end: false });
+    }
+    let settled = false;
+    const finish = (rc) => {
+      if (settled) return;
+      settled = true;
+      children.delete(child);
+      if (out) out.end();
+      resolve(rc);
+    };
+    child.on("error", (e) => { say(`gate: ${step.name} failed to start: ${e.message}`); finish(1); });
+    child.on("close", (code, signal) => finish(code ?? (signal ? 128 + 15 : 1)));
   });
 }
 
-/** The sibling's build gate, output captured to a durable log (replayed at the end). */
-function runSibling(dir, log) {
-  return new Promise((resolve) => {
-    const out = createWriteStream(log);
-    const script = "node build.mjs --target=store && deno run -A scripts/build-gate.ts";
-    const child = spawn("bash", ["-c", script], { cwd: dir, env: process.env, stdio: ["ignore", "pipe", "pipe"], detached: true });
-    children.add(child);
-    child.on("close", () => children.delete(child));
-    child.stdout.pipe(out, { end: false });
-    child.stderr.pipe(out, { end: false });
-    child.on("error", (e) => { out.end(`\ngate: sibling failed to start: ${e.message}\n`); resolve(1); });
-    child.on("close", (code, signal) => { out.end(); resolve(code ?? (signal ? 128 + 15 : 1)); });
-  });
+/** Run steps in order, stopping at the first failure (the && chain). */
+async function chain(steps, opts) {
+  for (const step of steps) {
+    const rc = await run(step, opts);
+    if (rc !== 0) return { rc, failed: step.name };
+  }
+  return { rc: 0, failed: null };
 }
 
-export async function main() {
+export async function main(env = process.env) {
   const t0 = Date.now();
   const secs = () => `${((Date.now() - t0) / 1000).toFixed(0)}s`;
-  const dirty = git(["status", "--porcelain", "--untracked-files=no"]);
-  if (dirty) {
-    say(`gate: REFUSED — the tree has uncommitted changes to tracked files; the overlapped build gate can only test COMMITTED bytes:\n${dirty}`);
-    return 2;
-  }
-  const sha = git(["rev-parse", "HEAD"]);
-  say(`gate: ${sha} — build:production, then npm test here BESIDE test:build in a sibling worktree of the same commit`);
-
-  const buildRc = await run("node", ["build.mjs", "--target=store"]);
-  if (buildRc !== 0) {
-    say(`gate: FAILED — build:production exit ${buildRc} (${secs()})`);
-    return buildRc;
-  }
-  say(`gate: build:production GREEN (${secs()})`);
-
+  const [build, test, buildGate] = gateSteps();
   const parent = durableDir("gate-build");
+  const swept = sweepStaleSiblings(parent);
+  if (swept.length) say(`gate: removed ${swept.length} sibling(s) left by gate(s) that no longer run: ${swept.join(", ")}`);
+
+  const sha = git(["rev-parse", "HEAD"]).out;
+  const status = git(["status", "--porcelain", "--untracked-files=no"]);
+  let reason = status.ok ? sequentialReason({ dirty: status.out, env }) : `git status failed: ${status.out}`;
+
   const sibling = join(parent, `${sha.slice(0, 12)}-${process.pid}`);
-  // A signalled gate kills both process GROUPS (the suite and the sibling build each lead their own),
-  // removes the sibling worktree, and dies of the same signal.
+  const log = `${sibling}.log`;
+  let siblingCreated = false;
+  const cleanup = () => {
+    if (siblingCreated) {
+      removeSibling(sibling);
+      siblingCreated = false;
+    }
+  };
   const onSignal = (sig) => {
     for (const child of children) {
-      // SIGTERM, not SIGKILL: run-tests.mjs handles SIGTERM by killing its own detached parallel phase.
+      // SIGTERM first: run-tests.mjs handles it by killing its own detached parallel phase.
       try { process.kill(-child.pid, "SIGTERM"); } catch { /* gone */ }
     }
-    spawnSync("git", ["worktree", "remove", "--force", sibling], { cwd: ROOT });
-    spawnSync("git", ["worktree", "prune"], { cwd: ROOT });
-    process.removeListener("SIGTERM", onSignal);
-    process.removeListener("SIGINT", onSignal);
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && [...children].some((c) => { try { process.kill(-c.pid, 0); return true; } catch { return false; } })) {
+      spawnSync("sleep", ["0.1"]);
+    }
+    for (const child of children) {
+      try { process.kill(-child.pid, "SIGKILL"); } catch { /* gone */ }
+    }
+    cleanup();
+    for (const s of ["SIGTERM", "SIGINT", "SIGHUP"]) process.removeAllListeners(s);
     process.kill(process.pid, sig);
   };
-  process.on("SIGTERM", onSignal);
-  process.on("SIGINT", onSignal);
-  const log = `${sibling}.log`;
-  let siblingRc = 1;
-  let testRc = 1;
+  for (const s of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(s, onSignal);
+  process.on("exit", cleanup);
+
   try {
-    git(["worktree", "add", "--detach", "--quiet", sibling, sha]);
-    const cp = spawnSync("cp", ["-a", join(ROOT, "node_modules"), join(sibling, "node_modules")], { encoding: "utf8" });
-    if (cp.status !== 0) throw new Error(`copying node_modules into the sibling failed: ${cp.stderr}`);
-    say(`gate: test:build runs in ${sibling} (log: ${log})`);
-    const siblingDone = runSibling(sibling, log).then((rc) => {
-      say(`gate: test:build (sibling) ${rc === 0 ? "GREEN" : `FAILED exit ${rc}`} at ${secs()}`);
-      return rc;
-    });
-    testRc = await run("node", ["scripts/run-tests.mjs"]);
-    say(`gate: npm test ${testRc === 0 ? "GREEN" : `FAILED exit ${testRc}`} at ${secs()}`);
-    siblingRc = await siblingDone;
-    say(`\ngate: ---- test:build output (sibling worktree, ${log}) ----`);
+    say(`gate: ${sha} — ${gateSteps().map((s) => s.name).join(" + ")}`);
+    const buildRc = await run(build);
+    if (buildRc !== 0) {
+      say(`gate: FAILED — build:production exit ${buildRc} (${secs()})`);
+      return buildRc;
+    }
+    say(`gate: build:production GREEN (${secs()})`);
+
+    if (!reason) {
+      const add = git(["worktree", "add", "--detach", "--quiet", sibling, sha]);
+      siblingCreated = add.ok || existsSync(sibling);
+      if (!add.ok) {
+        reason = `the sibling worktree could not be created (${add.out})`;
+      } else {
+        const cp = spawnSync("cp", ["-a", join(ROOT, "node_modules"), join(sibling, "node_modules")], { encoding: "utf8" });
+        if (cp.status !== 0) reason = `node_modules could not be copied into the sibling (${(cp.stderr || String(cp.error ?? "")).trim()})`;
+      }
+      if (reason) cleanup();
+    }
+
+    if (reason) {
+      say(`gate: SEQUENTIAL mode — ${reason}. Running npm test then test:build in this tree.`);
+      const r = await chain([test, buildGate]);
+      say(`gate: ${r.rc === 0 ? "GREEN" : `FAILED at ${r.failed} (exit ${r.rc})`} — sequential, wall ${secs()}`);
+      return r.rc;
+    }
+
+    say(`gate: OVERLAPPED mode — test:build runs in ${sibling} (log ${log}) beside npm test here`);
+    // The sibling reproduces this tree's state before test:build (a store build of the same commit), then
+    // runs test:build ONE tree at a time: it already runs beside npm test, and a second sibling would
+    // only add contention on a 2-vCPU box.
+    const siblingDone = chain([build, buildGate], { cwd: sibling, env: { ...env, CAP_BUILD_GATE_ONE_TREE: "1" }, log })
+      .then((r) => {
+        say(`gate: test:build (sibling) ${r.rc === 0 ? "GREEN" : `FAILED at ${r.failed} (exit ${r.rc})`} at ${secs()}`);
+        return r.rc;
+      });
+    const testRc = await run(test);
+    say(`gate: npm test ${testRc === 0 ? "GREEN" : `FAILED (exit ${testRc})`} at ${secs()}`);
+    const siblingRc = await siblingDone;
+    say(`\ngate: ---- test:build output (sibling worktree; log ${log}) ----`);
     if (existsSync(log)) process.stdout.write(readFileSync(log, "utf8"));
-    say(`gate: ---- end of test:build output ----`);
-  } catch (e) {
-    say(`gate: FAILED to set up the sibling worktree: ${e?.message ?? e}`);
-    siblingRc = siblingRc || 1;
+    say("gate: ---- end of test:build output ----");
+    const rc = testRc !== 0 ? testRc : siblingRc;
+    say(`gate: ${rc === 0 ? "GREEN" : "FAILED"} — npm test exit ${testRc}, test:build exit ${siblingRc}, overlapped, wall ${secs()}`);
+    return rc;
   } finally {
-    spawnSync("git", ["worktree", "remove", "--force", sibling], { cwd: ROOT });
-    spawnSync("git", ["worktree", "prune"], { cwd: ROOT });
+    cleanup();
+    process.removeListener("exit", cleanup);
   }
-  process.removeListener("SIGTERM", onSignal);
-  process.removeListener("SIGINT", onSignal);
-  const rc = testRc !== 0 ? testRc : siblingRc;
-  say(`gate: ${rc === 0 ? "GREEN" : "FAILED"} — npm test exit ${testRc}, test:build exit ${siblingRc}, wall ${secs()}`);
-  return rc;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) process.exit(await main());
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+  process.exit(await main());
+}

@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { runSerialFiles } from "./lib/serial-phase.mjs";
 import { durableDir } from "./lib/durable-root.mjs";
 import { BUILD_GATE_FILES } from "./test-partition.mjs";
+import { pidRuns, removeSibling, sweepStaleSiblings } from "./gate.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -48,19 +49,26 @@ export function oneTreeReason(
   return null;
 }
 
-async function siblingRun(files: string[]): Promise<number> {
+/** null = the sibling ran (its exit code is in `rc`); a string = it could not be created, run here instead. */
+async function siblingRun(files: string[]): Promise<{ rc: number; unavailable: string | null }> {
+  const parent = durableDir("build-gate");
+  // A SIGKILLed gate cannot remove its sibling; the next one does (owner pid gone or not a build gate).
+  const swept = sweepStaleSiblings(parent, { isLive: (pid: number) => pidRuns(pid, "build-gate.ts") });
+  if (swept.length) console.log(`build-gate: removed ${swept.length} sibling(s) left by dead gates: ${swept.join(", ")}`);
   const sha = git(["rev-parse", "HEAD"]).out;
-  const dir = `${durableDir("build-gate")}/${sha.slice(0, 12)}-${Deno.pid}`;
+  const dir = `${parent}/${sha.slice(0, 12)}-${Deno.pid}`;
   const add = git(["worktree", "add", "--detach", "--quiet", dir, sha]);
   if (add.code !== 0) {
-    console.error(`build-gate: sibling worktree could not be created: ${add.out}`);
-    return 1;
+    removeSibling(dir);
+    return { rc: 1, unavailable: `the sibling worktree could not be created (${add.out})` };
   }
+  // No signal handler on purpose: this thread blocks in spawnSync while the files here run, so a handler
+  // could not run until they finished and would only delay a kill. A gate killed mid-run leaves the
+  // sibling to the NEXT gate's sweep above (the owner pid is gone).
   try {
     const cp = new Deno.Command("cp", { args: ["-a", `${ROOT}node_modules`, `${dir}/node_modules`] }).outputSync();
     if (cp.code !== 0) {
-      console.error(`build-gate: copying node_modules into the sibling failed: ${new TextDecoder().decode(cp.stderr)}`);
-      return 1;
+      return { rc: 1, unavailable: `node_modules could not be copied into the sibling (${new TextDecoder().decode(cp.stderr).trim()})` };
     }
     console.log(`build-gate: sibling tree ${dir} runs ${files.join(", ")} beside this tree`);
     // The sibling runs ITS OWN copy of the lane runner (same commit), so its windows and attribution are
@@ -75,10 +83,9 @@ async function siblingRun(files: string[]): Promise<number> {
     globalThis.addEventListener("unload", killChild);
     const status = await child.status;
     globalThis.removeEventListener("unload", killChild);
-    return status.code;
+    return { rc: status.code, unavailable: null };
   } finally {
-    git(["worktree", "remove", "--force", dir]);
-    git(["worktree", "prune"]);
+    removeSibling(dir);
   }
 }
 
@@ -98,13 +105,19 @@ export async function main(args = Deno.args): Promise<number> {
   } else {
     const sibling = files.filter((f) => SIBLING_FILES.includes(f));
     const here = files.filter((f) => !SIBLING_FILES.includes(f));
-    const siblingDone = sibling.length ? siblingRun(sibling) : Promise.resolve(0);
-    // runSerialFiles blocks this thread in spawnSync; the sibling child runs meanwhile on its own.
-    // Yield once so the sibling's spawn happens BEFORE the blocking lane starts.
-    await new Promise((r) => setTimeout(r, 0));
+    // siblingRun spawns its child synchronously before its first await, so the sibling is already running
+    // when runSerialFiles blocks this thread in spawnSync.
+    const siblingDone = sibling.length ? siblingRun(sibling) : Promise.resolve({ rc: 0, unavailable: null });
     const hereRc = here.length ? runSerialFiles(here, { cwd: ROOT }) : 0;
-    const siblingRc = await siblingDone;
-    if (siblingRc !== 0) console.error(`build-gate: sibling tree FAILED (exit ${siblingRc}): ${sibling.join(", ")}`);
+    const s = await siblingDone;
+    let siblingRc = s.rc;
+    if (s.unavailable) {
+      // Never skip: a sibling that cannot exist means its files run HERE, after the others.
+      console.log(`build-gate: ${s.unavailable} — running ${sibling.join(", ")} in this tree instead`);
+      siblingRc = runSerialFiles(sibling, { cwd: ROOT });
+    } else if (siblingRc !== 0) {
+      console.error(`build-gate: sibling tree FAILED (exit ${siblingRc}): ${sibling.join(", ")}`);
+    }
     rc = hereRc !== 0 ? hereRc : siblingRc;
   }
   if (rc === 0) {
