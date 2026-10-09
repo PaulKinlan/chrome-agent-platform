@@ -59,6 +59,8 @@ export interface LaunchedChrome {
   fleetSlotWaitMs?: number;
   /** The profile directory used for this launch, if any. */
   profile?: string;
+  /** Short per-launch TMPDIR for Chrome-internal scratch; teardown removes it. */
+  scratchDir?: string;
   /** Dedicated process group created by setsid for this launch. */
   processGroup?: number;
   /** Cleanly tear down this Chrome instance and all its child processes. */
@@ -68,6 +70,8 @@ export interface LaunchedChrome {
 const TAIL_LIMIT = 8192;
 // Raw ChildProcess callers must retain their isolated group at teardown too.
 const procGroups = new WeakMap<Deno.ChildProcess, number>();
+// Destructured callers also use teardownChrome(proc, profile), not just launched.close().
+const procScratchDirs = new WeakMap<Deno.ChildProcess, string>();
 
 /** The browser every harness drives. */
 export async function computeUnpackedExtensionId(path: string): Promise<string> {
@@ -646,14 +650,18 @@ export async function launchChrome(opts: {
     throw e;
   }
   let proc: Deno.ChildProcess;
+  let scratchDir: string | undefined;
   try {
     // setsid execs the browser in a new process group (without -f, the spawned
     // child is not a group leader). This makes descendants identifiable even
     // when Chromium rewrites their command line or a wrapper replaces the binary.
     const spec = setsidSpawnSpec(opts.binary ?? resolveChromiumBinary(), [...args, "--remote-debugging-port=0"]);
+    // Chrome's long-profile SingletonSocket fallback and component updater use
+    // TMPDIR. Keep it short for Unix socket limits, isolated, and disposable.
+    scratchDir = resolvedProfile ? Deno.makeTempDirSync({ dir: "/tmp", prefix: `cap-${Deno.pid}-` }) : undefined;
     const env = {
       ...(opts.env ?? {}),
-      ...(resolvedProfile ? { XDG_CONFIG_HOME: `${resolvedProfile}/.config` } : {}),
+      ...(resolvedProfile ? { XDG_CONFIG_HOME: `${resolvedProfile}/.config`, TMPDIR: scratchDir! } : {}),
     };
     proc = new Deno.Command(spec.command, {
       args: spec.args,
@@ -662,7 +670,9 @@ export async function launchChrome(opts: {
       ...(opts.clearEnv ? { clearEnv: true } : {}),
       ...(Object.keys(env).length > 0 ? { env } : {}),
     }).spawn();
+    if (scratchDir) procScratchDirs.set(proc, scratchDir);
   } catch (e) {
+    if (scratchDir) await Deno.remove(scratchDir, { recursive: true }).catch(() => {});
     lock.release();
     fleetLease?.release();
     throw e;
@@ -760,6 +770,7 @@ export async function launchChrome(opts: {
     quietWaitMs,
     fleetSlotWaitMs,
     profile: resolvedProfile,
+    scratchDir,
     processGroup: group,
     close: async () => {
       await teardownChrome({ proc, profile: resolvedProfile, processGroup: group });
@@ -870,6 +881,16 @@ export async function teardownChrome(
   const matchedProfile = profile ?? (target && "profile" in target ? target.profile : undefined);
   const group = (target && "processGroup" in target ? target.processGroup : undefined) ??
     (proc ? procGroups.get(proc) : undefined);
+  // Only paths created by this launcher are eligible; never trust a caller's
+  // scratchDir property as authority to recursively remove an arbitrary path.
+  const removeScratch = async () => {
+    if (!proc) return;
+    const scratch = procScratchDirs.get(proc);
+    if (!scratch) return;
+    try { await Deno.remove(scratch, { recursive: true }); }
+    catch (e) { if (!(e instanceof Deno.errors.NotFound)) throw e; }
+    procScratchDirs.delete(proc);
+  };
   if (matchedProfile) {
     const raw = matchedProfile.replace(/^--/, "");
     const match = raw.startsWith("user-data-dir=") ? raw : `user-data-dir=${raw}`;
@@ -897,18 +918,22 @@ export async function teardownChrome(
           console.error(
             `teardownChrome: refusing to delete ${normalized} — SingletonLock still reads live (never-delete-live rule)`,
           );
+          return; // Keep this run's scratch too while the profile is live.
         }
       }
     }
+    await removeScratch(); // killProcessTree verified no survivors before either removal.
     return;
   }
   if (proc) {
     if (group !== undefined) {
       await killProcessTree(proc, `chrome-group-${group}-no-profile-${crypto.randomUUID()}`, { group });
+      await removeScratch();
       return;
     }
     try { proc.kill("SIGKILL"); } catch { /* already gone */ }
     try { await proc.status; } catch { /* reaped */ }
+    await removeScratch();
   }
 }
 

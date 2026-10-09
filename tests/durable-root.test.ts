@@ -265,6 +265,8 @@ const ALLOWED_FILES = new Set([
   "tests/changelog-delta.test.ts",
   "tests/chrome-for-testing.test.ts",
   "tests/chrome-launch-lock-scope.test.ts",
+  // gfxoc: fake-browser unit fixtures assert their short per-run tmpdir is reaped.
+  "tests/chrome-tmpdir-cleanup.test.ts",
   "tests/chrome-lock-fixture-scope.test.ts",
   "tests/chrome-profile-isolation.test.ts",
   "tests/chrome-profile-location.test.ts",
@@ -302,6 +304,9 @@ const ALLOWED_FILES = new Set([
 // guard. Kept tighter than ALLOWED_FILES on purpose: these files once held
 // /tmp evidence literals, and they must never quietly grow one back.
 const ALLOWED_CALLS_ONLY = new Set([
+  // gfxoc: Chrome-internal TMPDIR must be short (Unix socket limit), ephemeral,
+  // per launch, and removed after process-tree verification; never retained evidence.
+  "scripts/lib/chrome-launch.ts",
   "scripts/evidence-runner.sh",
   "scripts/kat-exec-build-flag.ts",
   "scripts/kat-mcp-agent-ui.ts",
