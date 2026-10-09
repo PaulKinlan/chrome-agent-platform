@@ -1832,6 +1832,9 @@ async function exactStoreSnapshot(store, key) {
 
 async function journalAppendInternal(store, entry, guard, idempotencyExecutionId, receiptCapable) {
   return withJournalLock(() => withStoreTransaction(store, async (store) => {
+  if (store.isMaster && await store.masterJournal?.head()) {
+    throw new Error("master journal WAL writer is not enabled; append refused");
+  }
   // Capture the exact value, existence and version as one stable receipt.
   const pre = await exactStoreSnapshot(store, "journal");
   const original = pre.exists ? pre.value : [];
@@ -1961,6 +1964,13 @@ export async function journalCompensateExecution(store, receipt, guard = null) {
     if (!receipt || receipt.schemaVersion !== 1 || receipt.key !== "journal" || !receipt.executionId) {
       throw new Error("invalid journal compensation receipt");
     }
+    // No partial authority switch: an in-flight legacy receipt is NOT a WAL
+    // receipt and must never report a successful compensation after cutover.
+    // The staged WAL transaction verbs are not product-routed yet.
+    if (store.isMaster && await store.masterJournal?.head()) {
+      return { ok: false, compensated: false, preserved: true,
+        reason: receipt.wal ? "master_wal_writer_disabled" : "legacy_receipt_after_cutover" };
+    }
     const fence = async () => {
       if (!guard) return null;
       try { await guard(); return null; } catch (error) {
@@ -2048,6 +2058,9 @@ export async function journalAppendOnce(store, entry, guard = null, executionId 
 export async function journalCommitCancellation(store, entry, executionId = entry?.executionId) {
   if (!executionId) throw new Error("journalCommitCancellation requires executionId");
   return withJournalLock(() => withStoreTransaction(store, async (store) => {
+    if (store.isMaster && await store.masterJournal?.head()) {
+      throw new Error("master journal WAL writer is not enabled; cancellation refused");
+    }
     const pre = await exactStoreSnapshot(store, "journal");
     const original = pre.exists ? pre.value : [];
     if (!Array.isArray(original)) throw new Error("journal is not an array");

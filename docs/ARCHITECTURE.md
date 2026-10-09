@@ -592,7 +592,10 @@ transaction operation invoked WHILE a guard is in flight, including an
 unrelated sibling; callers should await guarded writes before issuing the
 next transaction operation. Raw `masterMemory()` writes in a guard still
 re-enter the non-reentrant lock and are forbidden. No product journal verb
-calls the adapter yet. Torn, non-equal or source-mismatched
+calls the adapter yet: master append and cancellation refuse immediately when
+a checked head exists; a legacy-shape compensation receipt returns an explicit
+`legacy_receipt_after_cutover` preservation refusal rather than appearing to
+undo a row on the wrong authority. Torn, non-equal or source-mismatched
 immutable records and damaged head slots remain fail-closed
 pending explicit owner repair. Archive rows are an append-only HISTORY LOG,
 not a set of currently evicted rows: a compensated

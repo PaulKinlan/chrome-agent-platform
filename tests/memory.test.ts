@@ -431,6 +431,15 @@ Deno.test("master journal readers use a checked cutover rather than stale legacy
     });
     assertEquals(await mem.getStrict("journal-archive"), [{ id: "archived" }]);
     assertEquals((await mem.keys()).includes("journal"), true);
+    const oldReceipt = { schemaVersion: 1, key: "journal", executionId: "legacy-receipt",
+      preState: { exists: false, value: null, version: 0 },
+      postState: [{ id: "checked-wal" }], writeVersion: legacyVersion + 1, appended: true };
+    assertEquals((await journalCompensateExecution(mem, oldReceipt)).reason,
+      "legacy_receipt_after_cutover", "a legacy receipt must explicitly refuse on checked WAL authority");
+    await assertRejects(() => journalAppendWithReceipt(mem,
+      { type: "task", executionId: "wal-off" }), Error, "append refused");
+    await assertRejects(() => journalCommitCancellation(mem,
+      { type: "cancelled", executionId: "wal-off" }, "wal-off"), Error, "cancellation refused");
     await assertRejects(() => mem.setTrusted("journal", [{ id: "must-not-shadow-wal" }]), Error, "WAL");
     await assertRejects(() => mem.set("journal", [{ id: "untrusted-shadow" }]), Error, "WAL");
     await assertRejects(() => mem.setTrusted("journal-archive", []), Error, "WAL");
