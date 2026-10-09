@@ -579,8 +579,13 @@ lock; uncached reads alone cannot serialize their concurrent issuers. A
 missing generation file after cutover refuses instead of bootstrapping from
 stale legacy rows; a generation behind the checked WAL head or a torn file
 also refuses. This callback
-is not a product write route and does not enable cutover. Torn, non-equal or
-source-mismatched immutable records and damaged head slots remain fail-closed
+is not a product write route and does not enable cutover. Master store
+transactions also expose staged receipt/compensation/cancellation WAL verbs
+using the lock they already hold; they never nest a second Web Lock. Sibling
+WAL verbs within one transaction serialize, because the outer lock excludes
+other transactions but not concurrent promises in the same callback. No
+product journal verb calls them yet. Torn, non-equal or source-mismatched
+immutable records and damaged head slots remain fail-closed
 pending explicit owner repair. Archive rows are an append-only HISTORY LOG,
 not a set of currently evicted rows: a compensated
 row may legitimately exist in both live and archive. Readers must not infer

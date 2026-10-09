@@ -745,6 +745,51 @@ Deno.test("post-compensation fence undo CAS uses its actual issued token, not jo
   assertEquals(await mem.get("journal"), receipt.postState, "failed compensation must undo itself");
 });
 
+Deno.test("staged master transaction exposes WAL verbs without re-entering the master lock", async () => {
+  const isolated = dirNode();
+  const previousNavigator = globalThis.navigator;
+  Object.defineProperty(globalThis, "navigator", {
+    value: { storage: { async getDirectory() { return new FakeDirHandle(isolated); } } },
+    configurable: true, writable: true,
+  });
+  try {
+    const api = await import("../extension/lib/memory.js");
+    await api.withMasterJournalIssuer(async (master, issuer) => {
+      await stageMasterJournalCutover(master, { journalExists: false,
+        journal: [], archive: [], allocateVersion: issuer.allocateVersion });
+    });
+    let expired;
+    const receipt = await withStoreTransaction(api.masterMemory(), async (tx) => {
+      assertEquals(typeof tx.masterJournal?.appendWithReceipt, "function");
+      assertEquals(typeof tx.masterJournal?.compensate, "function");
+      assertEquals(typeof tx.masterJournal?.cancel, "function");
+      expired = tx.masterJournal;
+      return await tx.masterJournal.appendWithReceipt({ type: "task", executionId: "tx-authority" });
+    });
+    assertEquals(receipt.wal.operationId, "1:1");
+    assertEquals((await api.masterMemory().get("journal"))[0].executionId, "tx-authority");
+    const concurrent = await withStoreTransaction(api.masterMemory(), async (tx) =>
+      Promise.all([
+        tx.masterJournal.appendWithReceipt({ type: "task", executionId: "tx-concurrent-a" }),
+        tx.masterJournal.appendWithReceipt({ type: "task", executionId: "tx-concurrent-b" }),
+      ]));
+    assertEquals(new Set(concurrent.map((r) => r.writeVersion)).size, 2,
+      "two concurrent operations inside one transaction still issue distinct versions");
+    assertEquals((await api.masterMemory().get("journal")).map((r) => r.executionId),
+      ["tx-authority", "tx-concurrent-a", "tx-concurrent-b"]);
+    assertEquals(isolated.children.get("memory").children.get("master").children.has("journal.json"), false);
+    await assertRejects(async () => expired.appendWithReceipt(
+      { type: "task", executionId: "after-scope" }), Error, "expired");
+    await withStoreTransaction(api.siteMemory("https://site.test"), async (tx) => {
+      assertEquals(tx.masterJournal, undefined, "site stores have no master authority");
+    });
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      value: previousNavigator, configurable: true, writable: true,
+    });
+  }
+});
+
 Deno.test("master clear epoch reads the durable generation after a foreign realm writes", async () => {
   const isolated = dirNode();
   const previousNavigator = globalThis.navigator;

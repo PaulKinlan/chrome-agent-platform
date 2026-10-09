@@ -263,6 +263,11 @@ async function currentVersion(dir, key) {
 import { kvGet } from "./kv.js";
 import { withMasterJournalWebLock } from "./master-journal-lock.js";
 import { createMasterJournalIssuer } from "./master-journal-issuer.js";
+import {
+  appendMasterJournalWithReceipt,
+  compensateMasterJournalReceipt,
+  cancelMasterJournalExecution,
+} from "./master-journal-transaction.js";
 import { readMasterJournalHead, readMasterJournalProjection } from "./master-journal-wal.js";
 import { fnv1a, newId } from "./pure.js";
 
@@ -1246,8 +1251,49 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
       run.catch(() => {}); // the caller still receives the rejection
       return run;
     };
+    // These verbs use the ALREADY-HELD master write/Web Lock. Calling
+    // withMasterJournalIssuer() from here would re-enter both locks and hang.
+    // Keep the directory + issuer private and scoped to this transaction;
+    // there is still NO product call site or enabled WAL write route.
+    let journalAuthority = null;
+    const authority = () => {
+      if (!isMaster) throw new Error("master journal authority requires master store");
+      return journalAuthority ??= (async () => {
+        const master = await openDir(path);
+        return { master, issuer: createMasterJournalIssuer(master, {
+          issueVersion: () => issueVersion(master),
+          readGeneration: () => readDurableGeneration(master),
+        }) };
+      })();
+    };
+    // The outer lock excludes OTHER transactions, not sibling promises in the
+    // same callback. Serialise WAL verbs here or two concurrent appends could
+    // derive the same next sequence and race the same immutable frame name.
+    let journalTail = Promise.resolve();
+    const ordered = (op) => scoped((...args) => {
+      const run = journalTail.then(() => op(...args));
+      journalTail = run.then(() => {}, () => {});
+      return run;
+    });
+    const masterJournal = isMaster ? Object.freeze({
+      head: ordered(async () => readMasterJournalHead((await authority()).master)),
+      appendWithReceipt: ordered(async (entry, { guard = null, idempotencyExecutionId = null } = {}) => {
+        const { master, issuer } = await authority();
+        return await appendMasterJournalWithReceipt(master, entry,
+          { ...issuer, guard, idempotencyExecutionId });
+      }),
+      compensate: ordered(async (receipt, { guard = null } = {}) => {
+        const { master, issuer } = await authority();
+        return await compensateMasterJournalReceipt(master, receipt, { ...issuer, guard });
+      }),
+      cancel: ordered(async (entry, executionId = entry?.executionId) => {
+        const { master, issuer } = await authority();
+        return await cancelMasterJournalExecution(master, entry, executionId, issuer);
+      }),
+    }) : null;
     const tx = Object.freeze({
       isMaster,
+      ...(isMaster ? { masterJournal } : {}),
       get: scoped((key) => store.get(key)),
       getStrict: scoped((key) => store.getStrict(key)),
       has: scoped((key) => store.has(key)),
