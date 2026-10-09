@@ -60,6 +60,7 @@ class MemoryDir {
     return this.children.get(name);
   }
   async getFileHandle(name, { create = false } = {}) {
+    if (create && this.faults?.create === name) throw new Error(`injected create ${name}`);
     if (!this.children.has(name)) {
       if (!create) throw missing(name);
       this.children.set(name, new MemoryFile(name, this.faults));
@@ -853,6 +854,34 @@ Deno.test("durable exact compaction issuance claim survives restart and stays ou
   }));
   assertEquals(selected.includes(prefix + "claim-18-129.json"), false,
     "a claim is retry evidence, never published journal/backup authority");
+});
+
+Deno.test("complete claim and archive without checkpoint retry with the exact claimed version", async () => {
+  const faults = {};
+  const { master, allocateVersion, readGeneration } = await legacyFixture(faults);
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await stageMasterJournalCutover(master, { journalExists: true, journal: seed,
+    archive: [], allocateVersion });
+  const issuer = createMasterJournalIssuer(master, { issueVersion: allocateVersion, readGeneration });
+  for (let id = 500; id < 628; id++) await stageMasterJournalFrame(master,
+    { operation: "append", row: { id } }, issuer);
+  faults.create = "checkpoint-18-129.json";
+  await assertRejects(() => stageMasterJournalFrame(master,
+    { operation: "append", row: { id: 628 } }, issuer), Error, "injected create");
+  const wal = await master.getDirectoryHandle("journal-wal");
+  assertEquals(wal.children.has("claim-18-129.json"), true);
+  assertEquals(wal.children.has("archive-18-1.json"), true);
+  assertEquals(wal.children.has("checkpoint-18-129.json"), false);
+  const claimVersion = (await unsealMasterJournalRecord(
+    (await wal.getFileHandle("claim-18-129.json")).bytes, "claim")).version;
+  faults.create = null;
+  const recovered = await stageMasterJournalFrame(master,
+    { operation: "append", row: { id: 628 } },
+    createMasterJournalIssuer(master, { issueVersion: allocateVersion, readGeneration }));
+  assertEquals(recovered.checkpointSequence, 129);
+  assertEquals((await unsealMasterJournalRecord(
+    (await wal.getFileHandle("checkpoint-18-129.json")).bytes, "checkpoint")).version, claimVersion);
+  assertEquals((await readMasterJournalProjection(master, { includeArchive: true })).archive, seed.slice(0, 129));
 });
 
 Deno.test("altered or torn durable compaction issuance claim refuses auto-repair", async () => {
