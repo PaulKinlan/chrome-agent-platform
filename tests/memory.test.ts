@@ -235,6 +235,47 @@ Deno.test("journalCommitCancellation replaces a partial result with one cancella
   assertEquals(rows[0].cancelled, true);
 });
 
+Deno.test("journal cancellation archives overflow and keeps the live 500-row boundary", async () => {
+  const mem = masterMemory();
+  const seed = Array.from({ length: 500 }, (_, i) => ({ ts: i, type: "history", id: `cancel-old-${i}` }));
+  await mem.setTrusted("journal", seed);
+  const rows = await journalCommitCancellation(mem, { result: "cancelled" }, "exec-cancel-overflow");
+  assertEquals(rows.length, 500);
+  assertEquals(rows[0].id, "cancel-old-1");
+  assertEquals(rows.at(-1).executionId, "exec-cancel-overflow");
+  const archive = await mem.get("journal-archive");
+  assertEquals(archive.at(-1).id, "cancel-old-0", "the evicted whole row must remain in the archive");
+});
+
+Deno.test("journal cancellation refuses a stale snapshot without erasing a foreign append", async () => {
+  const mem = masterMemory();
+  await mem.setTrusted("journal", [{ type: "history", id: "original" }]);
+  let injected = false;
+  const inject = async (value) => {
+    if (!injected) {
+      injected = true;
+      await mem.setTrusted("journal", [...value, { type: "foreign", id: "later" }]);
+    }
+  };
+  const racing = {
+    ...mem,
+    async snapshot(key) {
+      const state = await mem.snapshot(key);
+      if (key === "journal") await inject(state.value);
+      return state;
+    },
+    async get(key) {
+      const value = await mem.get(key);
+      if (key === "journal") await inject(value ?? []);
+      return value;
+    },
+  };
+  await assertRejects(() => journalCommitCancellation(racing, { result: "cancelled" }, "exec-cancel-race"), Error, "concurrent");
+  const rows = await mem.get("journal");
+  assertEquals(rows.map((row) => row.id), ["original", "later"]);
+  assertEquals(rows.some((row) => row.executionId === "exec-cancel-race"), false);
+});
+
 Deno.test("journalAppend compensation restores the EXACT pre-append state at the 500-entry cap (round-23)", async () => {
   const mem = masterMemory();
   // Seed a FULL 500-entry journal so the append would evict old-0 via the ring cap.

@@ -1793,13 +1793,25 @@ export async function journalAppendOnce(store, entry, guard = null, executionId 
 export async function journalCommitCancellation(store, entry, executionId = entry?.executionId) {
   if (!executionId) throw new Error("journalCommitCancellation requires executionId");
   return withJournalLock(async () => {
-    const original = (await store.get("journal")) ?? [];
+    const pre = await exactStoreSnapshot(store, "journal");
+    const original = pre.exists ? pre.value : [];
+    if (!Array.isArray(original)) throw new Error("journal is not an array");
     const kept = original.filter((row) => !(
       row?.executionId === executionId && ["result", "cancelled"].includes(row?.type)
     ));
     kept.push({ ts: Date.now(), ...entry, type: "cancelled", executionId, cancelled: true });
-    await store.setTrusted("journal", kept);
-    return kept;
+    const overflow = journalOverflow(kept);
+    if (overflow.length > 0) {
+      const archive = (await store.get(JOURNAL_ARCHIVE_KEY)) ?? [];
+      if (!Array.isArray(archive)) throw new Error("journal archive is not an array");
+      await store.setTrusted(JOURNAL_ARCHIVE_KEY, archive.concat(overflow));
+    }
+    const bounded = boundJournal(kept);
+    // A different realm can append after our snapshot: refuse instead of
+    // blindly replacing its row with a stale cancellation projection.
+    const swapped = await store.compareAndRestore("journal", pre.version, bounded);
+    if (!swapped) throw new Error("journal cancellation lost a concurrent write");
+    return bounded;
   });
 }
 

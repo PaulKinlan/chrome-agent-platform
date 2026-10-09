@@ -512,7 +512,10 @@ never timers (docs/DURABLE-RUN-ARCHITECTURE.md §"OPFS records").
 **Journal-scoped export consistency (jw7wf workstream):** Master-store writes
 share the cross-context `cap:master-journal` Web Lock with the owner Options
 streaming export (held from raw file inventory through the final TAR byte) and
-the legacy service-worker buffered export. The journal's checkpoint, head,
+the legacy service-worker buffered export. Today that lock spans each master
+primitive, not an entire multi-step legacy journal transaction; cancellation
+now snapshots the journal and CAS-refuses an intervening write, but append and
+archive are not yet one WAL transaction. The journal's checkpoint, head,
 frames and archive must travel as one coherent generation once its WAL writer
 is enabled; until that cutover is fully wired, the legacy `journal.json` remains
 authoritative. This lock does **not** make the entire profile a point-in-time
