@@ -91,49 +91,92 @@ function getDirKey(dirOrPath) {
   return null;
 }
 
-let genCache = new Map();
 let tombsCache = new Map();
 
 function invalidateDirCache(pathOrKey) {
   const key = typeof pathOrKey === "string" ? pathOrKey : getDirKey(pathOrKey);
   if (!key) return;
-  for (const k of genCache.keys()) {
-    if (k === key || k.startsWith(`${key}/`)) genCache.delete(k);
-  }
   for (const k of tombsCache.keys()) {
     if (k === key || k.startsWith(`${key}/`)) tombsCache.delete(k);
   }
 }
 
+/** No realm-local generation cache can witness a cross-context Web Lock.
+ * Read the on-disk token even after this realm previously issued a version. */
+async function readDurableGeneration(dir) {
+  let raw;
+  try { raw = await readJsonStrict(dir, GEN_FILE, { allowAbsent: true }); }
+  catch { throw new Error("the durable generation authority is corrupt"); }
+  if (raw == null && getDirKey(dir) === `${ROOT}/${MASTER}` && await readMasterJournalHead(dir)) {
+    throw new Error("the master journal generation authority is missing after cutover");
+  }
+  const gen = raw == null ? await legacyGenerationFloor(dir) : raw.gen;
+  if (!Number.isSafeInteger(gen) || gen < 0) {
+    throw new Error("the durable generation authority is corrupt");
+  }
+  return gen;
+}
+
 /** Issue the next durable generation for a store directory. The caller holds
  * the write mutex (atomic). Returns the generation. */
 async function issueVersion(dir) {
-  const dirKey = getDirKey(dir);
-  let prev;
-  if (dirKey && genCache.has(dirKey)) {
-    prev = genCache.get(dirKey);
-  } else {
-    let genRaw;
-    try {
-      genRaw = await readJsonStrict(dir, GEN_FILE, { allowAbsent: true });
-    } catch {
-      // The authority file is corrupt — fail closed, never reset the sequence.
-      throw new Error("the durable generation authority is corrupt");
-    }
-    prev = genRaw == null ? await legacyGenerationFloor(dir) : genRaw.gen;
-    if (!Number.isSafeInteger(prev) || prev < 0) {
-      throw new Error("the durable generation authority is corrupt");
-    }
-  }
+  // The Web Lock is cross-context; a realm-local cache is NOT. Re-read on
+  // every issuance or an Options/SW writer could reuse a stale version.
+  const prev = await readDurableGeneration(dir);
   if (prev >= Number.MAX_SAFE_INTEGER) {
     throw new Error("the durable generation authority is exhausted");
   }
   const gen = prev + 1;
   await writeJson(dir, GEN_FILE, { gen });
-  if (dirKey) {
-    genCache.set(dirKey, gen);
-  }
   return gen;
+}
+
+/** Non-creating, uncached observation of the real master generation. Another
+ * extension realm may have just issued a token. */
+export async function masterJournalReadGeneration() {
+  let dir = await rootDir();
+  for (const segment of [ROOT, MASTER]) {
+    try { dir = await dir.getDirectoryHandle(segment); }
+    catch (error) {
+      if (error?.name === "NotFoundError") return 0;
+      throw error;
+    }
+  }
+  return await readDurableGeneration(tagDir(dir, [ROOT, MASTER]));
+}
+
+/** Staged lock-scoped WAL issuer. No product call site or writer cutover is
+ * enabled. The callback must await every frame before leaving this lock. */
+export async function withMasterJournalIssuer(fn) {
+  if (typeof fn !== "function") throw new Error("master journal issuer requires a callback");
+  return await withWriteLock([ROOT, MASTER], async () => {
+    const master = await openDir([ROOT, MASTER]);
+    const issuer = createMasterJournalIssuer(master, {
+      issueVersion: () => issueVersion(master),
+      readGeneration: () => readDurableGeneration(master),
+    });
+    let active = true;
+    const pending = new Set();
+    const scoped = Object.fromEntries(Object.entries(issuer).map(([name, op]) =>
+      [name, (...args) => {
+        if (!active) throw new Error("master journal issuer has expired");
+        const run = Promise.resolve().then(() => op(...args));
+        pending.add(run);
+        run.then(() => pending.delete(run), () => pending.delete(run));
+        run.catch(() => {}); // caller still receives the same rejection
+        return run;
+      }]));
+    let result;
+    let callbackError;
+    try { result = await fn(master, Object.freeze(scoped)); }
+    catch (error) { callbackError = error; }
+    active = false;
+    const unsettled = await Promise.allSettled([...pending]);
+    if (callbackError) throw callbackError;
+    const failed = unsettled.find((entry) => entry.status === "rejected");
+    if (failed) throw new Error(`unawaited master journal issuance failed: ${failed.reason?.message ?? failed.reason}`);
+    return result;
+  });
 }
 
 /** Read the bounded tombstone authority: { map: {key→gen}, floor } or null. */
@@ -212,6 +255,7 @@ async function currentVersion(dir, key) {
 
 import { kvGet } from "./kv.js";
 import { withMasterJournalWebLock } from "./master-journal-lock.js";
+import { createMasterJournalIssuer } from "./master-journal-issuer.js";
 import { readMasterJournalHead, readMasterJournalProjection } from "./master-journal-wal.js";
 import { fnv1a, newId } from "./pure.js";
 
@@ -753,7 +797,6 @@ async function assertQuota(storeDir, grow, storeBoundBytes = null) {
 export const usageLedgerInspector = {
   reset: () => {
     ledgerInvalidate();
-    genCache.clear();
     tombsCache.clear();
   },
   seed: ledgerSeed,
@@ -814,7 +857,6 @@ export async function resetAllStores() {
     await Promise.allSettled(active);
   }
   writeMutexes.clear();
-  genCache.clear();
   tombsCache.clear();
   ledgerInvalidate();
 }
@@ -1153,12 +1195,12 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
         if (isMaster && await readMasterJournalHead(dir)) {
           throw new Error("master journal WAL writer is not enabled; master clear refused");
         }
-        let genRaw = null;
-        const dirKey = getDirKey(dir);
-        if (dirKey && genCache.has(dirKey)) {
-          genRaw = { gen: genCache.get(dirKey) };
-        } else {
-          try { genRaw = await readJsonStrict(dir, GEN_FILE, { allowAbsent: true }); } catch { genRaw = null; }
+        // Another extension realm can advance __gen while this realm retains
+        // a cached token. Clear must preserve the real durable epoch; a corrupt
+        // authority cannot be treated as absent and reset to an older value.
+        const genRaw = await readJsonStrict(dir, GEN_FILE, { allowAbsent: true });
+        if (genRaw !== null && (!Number.isSafeInteger(genRaw.gen) || genRaw.gen < 0)) {
+          throw new Error("the durable generation authority is corrupt");
         }
         const removedKeys = [];
         for await (const [name] of dir.entries()) {

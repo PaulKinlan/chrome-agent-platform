@@ -569,9 +569,16 @@ global generation floor. This detects accidental corruption, not an OPFS
 writer that re-seals a modified claim: without a staged checkpoint, that floor
 cannot independently bind a token to a request. No cryptographic attestation
 against a malicious local OPFS writer is claimed. Product wiring of this
-issuer remains disabled. Torn, non-equal or source-mismatched immutable
-records and damaged head slots remain fail-closed pending explicit owner repair. Archive rows are
-an append-only HISTORY LOG, not a set of currently evicted rows: a compensated
+issuer remains disabled. A staged `withMasterJournalIssuer()` callback now
+binds the real on-disk master `__gen.json` issuer and its uncached witness
+under the existing master Web Lock. Issuance always rereads `__gen.json` under
+that lock: a SW or Options writer cannot overwrite another realm's token with
+a stale JS cache. A missing generation file after cutover refuses instead of
+bootstrapping from stale legacy rows; a torn file also refuses. This callback
+is not a product write route and does not enable cutover. Torn, non-equal or
+source-mismatched immutable records and damaged head slots remain fail-closed
+pending explicit owner repair. Archive rows are an append-only HISTORY LOG,
+not a set of currently evicted rows: a compensated
 row may legitimately exist in both live and archive. Readers must not infer
 live state from archive history. On a post-commit guard failure, a replace or
 delete frame removes the forbidden appended row from live, but its already

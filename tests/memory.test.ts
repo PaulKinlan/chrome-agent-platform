@@ -7,7 +7,7 @@
 
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { createMemoryRunLogHandles } from "./fixtures/run-log-wal-memory.js";
-import { stageMasterJournalCutover } from "../extension/lib/master-journal-wal.js";
+import { stageMasterJournalCutover, stageMasterJournalFrame } from "../extension/lib/master-journal-wal.js";
 import { withMasterJournalWebLock } from "../extension/lib/master-journal-lock.js";
 import { masterMemory, siteMemory, MemoryStoreQuotaError, usageLedgerInspector, saveScreenshot, listScreenshots, journalAppend, journalAppendWithReceipt, journalCompensateExecution, journalAppendOnce, journalCommitCancellation, withStoreTransaction, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds, durableRunMemory, migrateLegacyDurableRunMemory, forgetDurableThread } from "../extension/lib/memory.js";
 import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
@@ -743,6 +743,90 @@ Deno.test("post-compensation fence undo CAS uses its actual issued token, not jo
   });
   assertEquals(result.reason, "journal_fence_failed");
   assertEquals(await mem.get("journal"), receipt.postState, "failed compensation must undo itself");
+});
+
+Deno.test("master clear epoch reads the durable generation after a foreign realm writes", async () => {
+  const isolated = dirNode();
+  const previousNavigator = globalThis.navigator;
+  Object.defineProperty(globalThis, "navigator", {
+    value: { storage: { async getDirectory() { return new FakeDirHandle(isolated); } } },
+    configurable: true, writable: true,
+  });
+  try {
+    const realmA = await import("../extension/lib/memory.js?wal-clear-realm-a");
+    const realmB = await import("../extension/lib/memory.js?wal-clear-realm-b");
+    const a = realmA.masterMemory();
+    const first = await a.setTrusted("first", true);
+    const second = await realmB.masterMemory().setTrusted("second", true);
+    assert(second > first);
+    await a.clear();
+    const master = isolated.children.get("memory").children.get("master");
+    const epoch = JSON.parse(master.children.get("__epoch.json").content).gen;
+    assert(epoch >= second, "clear must not publish a stale epoch after another realm advanced __gen");
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      value: previousNavigator, configurable: true, writable: true,
+    });
+  }
+});
+
+Deno.test("staged master issuer uses the real durable generation under one lock", async () => {
+  const isolated = dirNode();
+  const previousNavigator = globalThis.navigator;
+  Object.defineProperty(globalThis, "navigator", {
+    value: { storage: { async getDirectory() { return new FakeDirHandle(isolated); } } },
+    configurable: true, writable: true,
+  });
+  try {
+    const memoryApi = await import("../extension/lib/memory.js");
+    assertEquals(typeof memoryApi.masterJournalReadGeneration, "function");
+    assertEquals(typeof memoryApi.withMasterJournalIssuer, "function");
+    assertEquals(await memoryApi.masterJournalReadGeneration(), 0);
+    assertEquals(isolated.children.has("memory"), false, "a read must not create a master store");
+    const published = await memoryApi.withMasterJournalIssuer(async (master, issuer) => {
+      await stageMasterJournalCutover(master, {
+        journalExists: true, journal: [{ id: "seed" }], archive: [],
+        allocateVersion: issuer.allocateVersion,
+      });
+      for (let id = 0; id < 129; id++) await stageMasterJournalFrame(master,
+        { operation: "append", row: { id } }, issuer);
+      return (await memoryApi.masterJournalReadGeneration());
+    });
+    assert(published > 129);
+    assertEquals(await memoryApi.masterJournalReadGeneration(), published);
+    const master = isolated.children.get("memory").children.get("master");
+    assertEquals(master.children.has("journal.json"), false, "the staged issuer never mirrors legacy journal.json");
+    assertEquals(master.children.get("journal-wal").children.has("claim-1-129.json"), false,
+      "real generation compaction claim retires after both checked heads advance");
+    let escapedIssuer;
+    await memoryApi.withMasterJournalIssuer(async (_master, issuer) => {
+      escapedIssuer = issuer;
+      void issuer.allocateVersion(); // the lock must outlive this unawaited issuance
+    });
+    assertEquals(await memoryApi.masterJournalReadGeneration(), published + 1);
+    await assertRejects(async () => escapedIssuer.allocateVersion(), Error, "expired");
+    master.children.delete("__gen.json");
+    await assertRejects(() => memoryApi.masterJournalReadGeneration(), Error,
+      "missing after cutover");
+    await assertRejects(() => memoryApi.withMasterJournalIssuer(async (_master, issuer) =>
+      issuer.allocateVersion()), Error, "missing after cutover");
+    master.children.set("__gen.json", fileNode("{torn:"));
+    await assertRejects(() => memoryApi.masterJournalReadGeneration(), Error, "corrupt");
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      value: previousNavigator, configurable: true, writable: true,
+    });
+  }
+});
+
+Deno.test("master generation remains monotonic across independent extension realms", async () => {
+  const firstRealm = masterMemory();
+  const first = await firstRealm.setTrusted("wal-realm-token-first", "first");
+  const secondModule = await import("../extension/lib/memory.js?wal-independent-realm");
+  const second = await secondModule.masterMemory().setTrusted("wal-realm-token-second", "second");
+  const third = await firstRealm.setTrusted("wal-realm-token-third", "third");
+  assert(second > first, "another realm must read the previously issued durable token");
+  assert(third > second, "a cached local token must not overwrite another realm's issued version");
 });
 
 Deno.test("global generation bootstraps above legacy envelope and sidecar tokens", async () => {
