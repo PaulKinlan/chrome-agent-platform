@@ -57,7 +57,14 @@ if (EXPECT_MISSING && (!HEADED || NO_LOCAL_BRIDGE)) throw new Error("missing-hos
 const ADAPTER = Deno.env.get("CAP_ACCEPTANCE_ADAPTER") ?? "";
 const PERMISSION_RUN = Deno.env.get("CAP_ACCEPTANCE_PERMISSION") === "1";
 if (PERMISSION_RUN) Deno.env.set("CAP_ACP_FIXTURE_ASK_PERMISSION", "1");
-const bridge = NO_LOCAL_BRIDGE ? null : (ADAPTER ? createAcpServer(3210, ADAPTER) : createAcpServer(3210));
+// jsjy: the LOCAL bridge (3210) now REQUIRES a shared secret on every upgrade.
+// This run names one, starts the bridge WITH it, and seeds the SAME token into
+// the extension's acp.token (below) so the authenticated path is exercised —
+// never the anonymous-loopback bypass.
+const LOCAL_BRIDGE_TOKEN = "cap-acp-browser-acceptance-token";
+const bridge = NO_LOCAL_BRIDGE ? null : (ADAPTER
+  ? createAcpServer(3210, ADAPTER, {}, "", LOCAL_BRIDGE_TOKEN)
+  : createAcpServer(3210, undefined, {}, "", LOCAL_BRIDGE_TOKEN));
 
 await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
 const profile = durableDir(`cap-acp-browser-profile-${Date.now()}`);
@@ -90,6 +97,12 @@ browserArgs.push("--enable-automation", "--enable-logging", `--log-file=${EVIDEN
 const chrome = await launchChrome({
   args: browserArgs,
   clearEnv: true,
+  extension: EXT,
+  profile,
+  // f51b27c8a: the composer's send handler awaits chrome.permissions.request({tabGroups,tabs})
+  // first, so pre-grant those OPTIONAL permissions in the profile before Chrome
+  // starts — otherwise the headless run stalls before the turn reaches the bridge.
+  grantPermissions: ["tabGroups", "tabs"],
   ...(Object.keys(extraEnv).length ? { env: { PATH: Deno.env.get("PATH") ?? "", HOME: Deno.env.get("HOME") ?? "", ...extraEnv } } : {}),
 });
 const port = chrome.port;
@@ -204,7 +217,7 @@ try {
   let sw: any = null;
   for (let i = 0; i < 60 && !sw; i++) {
     const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-    sw = targets.find((t: any) => t.type === "service_worker");
+    sw = targets.find((t: any) => t.type === "service_worker" && String(t.url ?? "").includes("dist/background"));
     if (!sw) await sleep(200);
   }
   check("extension loaded (service worker registered)", !!sw);
@@ -217,6 +230,14 @@ try {
   await sleep(2000);
 
   check("hub composer rendered", (await evl(ntp, `!!${NTP_INPUT}`)) === true);
+
+  // jsjy: the LOCAL bridge requires its shared secret. Seed acp.token so the
+  // extension's own acpRunConfig appends ?token=… to the default endpoint.
+  if (!NO_LOCAL_BRIDGE) {
+    const seeded = await evl(ntp, `chrome.runtime.sendMessage({ type: "kv.set", values: { "acp.token": ${JSON.stringify(LOCAL_BRIDGE_TOKEN)} } }).then(r => r, e => ({ err: String(e) }))`);
+    console.log(`  kv acp.token seeded for LOCAL bridge: ${JSON.stringify(seeded).slice(0, 160)}`);
+    check("seeded acp.token for the LOCAL bridge (authenticated path)", seeded?.ok === true, seeded);
+  }
 
   // The owner's ask (hub sidebar): harness rows visible where he works, and the
   // activity ledger folded rather than competing for the pane.
