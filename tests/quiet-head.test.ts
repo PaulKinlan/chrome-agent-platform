@@ -6,7 +6,8 @@
 // exactly once, through the same runner as every other phase; and (c) is a no-op when the caller has
 // already run it (npm run gate does, before its overlapped sibling build starts).
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { ENVIRONMENTAL_REFUSAL_MARKER } from "../scripts/lib/quiet-window.ts";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
+import { awaitQuietWindow, ENVIRONMENTAL_REFUSAL_MARKER, type LoadSample } from "../scripts/lib/quiet-window.ts";
 import { headSpec, main, QUIET_HEAD_DONE_ENV } from "../scripts/lib/quiet-head.ts";
 import { QUIET_HEAD } from "../scripts/test-partition.mjs";
 
@@ -27,33 +28,58 @@ Deno.test("gate-speed: when the caller already ran the phase, it does not run ag
 });
 
 Deno.test("gate-speed: a box that never quiets REFUSES with exit 75 and the environmental marker (never a pass)", async () => {
-  // Bound 0 with the box never quiet: the real sampler sees SOME load; a 0 ms bound means the first
-  // sample decides. Force the unquiet reading with a sustained sample (the module's own injected
-  // sampler seam is not exposed here, so this drives the real one with a zero bound — the assertion is
-  // about the VERDICT wire, not the sampler, which tests/quiet-window.test.ts owns).
-  const dir = await Deno.makeTempDir({ dir: (await import("../scripts/lib/durable-root.mjs")).durableDir("scratch"), prefix: "quiet-head-" });
-  const probe = `${dir}/zz-quiet-head-probe.test.ts`;
-  await Deno.writeTextFile(probe, `Deno.test("probe", () => {});\n`);
+  // The sampler is INJECTED (the same seam tests/quiet-window.test.ts uses): a refusal that depends on the
+  // box being loaded is a test that passes or fails with the machine, and an earlier version of this test
+  // was exactly that — it refused on a loaded box and returned 0 inside a quiet gate. The property is the
+  // VERDICT WIRE: no quiet window => exit 75 + the marker + the ENVIRONMENT line, and no file is run.
+  const heavy = {
+    at: Date.now(), load1: 9, load5: 9, load15: 9, cores: 2, loadPerCore: 4.5,
+    compilers: 0, compilerNames: [], activeCompilers: 0, activeCompilerNames: [], measurable: true, cpu: null,
+  } as unknown as LoadSample;
+  const lines: string[] = [];
+  const originalError = console.error;
+  const originalLog = console.log;
+  console.error = (...a: unknown[]) => { lines.push(a.join(" ")); };
+  console.log = (...a: unknown[]) => { lines.push(a.join(" ")); };
   try {
-    const { code, stdout, stderr } = await new Deno.Command(Deno.execPath(), {
-      args: ["run", "-A", "scripts/lib/quiet-head.ts", probe],
-      cwd: new URL("..", import.meta.url).pathname,
-      env: {
-        ...Deno.env.toObject(),
-        CAP_QUIET_HEAD_MAX_WAIT_MS: "0",
-        CAP_QUIET_MAX_LOAD_PER_CORE: "0", // an unbeatable bar: load/core can never be <= 0
-      },
-      stdout: "piped",
-      stderr: "piped",
-    }).output();
-    const out = new TextDecoder().decode(stdout) + new TextDecoder().decode(stderr);
-    assertEquals(code, 75, `expected the environmental refusal:\\n${out}`);
-    assert(out.includes(ENVIRONMENTAL_REFUSAL_MARKER), `the refusal must carry the marker:\\n${out}`);
-    assert(out.includes("ENVIRONMENT:"), `the refusal must carry the ENVIRONMENT line:\\n${out}`);
-    assert(out.includes("quiet-head"), out);
+    // A 1 ms bound: the injected sampler is permanently loaded, so the FIRST sample decides. Without
+    // this the wait runs its full 5-minute default and the test itself takes minutes.
+    const rc = await main(["tests/zz-file-that-must-not-run.test.ts"], { CAP_QUIET_HEAD_MAX_WAIT_MS: "1" }, {
+      sample: async () => heavy,
+      sleep: async () => {},
+      now: () => Date.now(),
+    });
+    assertEquals(rc, 75, `a saturated box must refuse, not measure:\n${lines.join("\n")}`);
   } finally {
+    console.error = originalError;
+    console.log = originalLog;
+  }
+  const out = lines.join("\n");
+  assert(out.includes(ENVIRONMENTAL_REFUSAL_MARKER), `the refusal must carry the marker:\n${out}`);
+  assert(out.includes("ENVIRONMENT:"), `the refusal must carry the ENVIRONMENT line:\n${out}`);
+  assert(out.includes("no quiet window"), out);
+  assert(!out.includes("measuring now"), "a refused run must not go on to measure anything");
+});
+
+Deno.test("gate-speed: with a quiet window the phase runs its files, once (and reports the wait)", async () => {
+  const quiet = {
+    at: Date.now(), load1: 0.1, load5: 0.1, load15: 0.1, cores: 2, loadPerCore: 0.05,
+    compilers: 0, compilerNames: [], activeCompilers: 0, activeCompilerNames: [], measurable: true, cpu: null,
+  } as unknown as LoadSample;
+  const dir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "quiet-head-ok-" });
+  const probe = `${dir}/zz-quiet-head-ok.test.ts`;
+  await Deno.writeTextFile(probe, `Deno.test("runs", () => {});\n`);
+  const lines: string[] = [];
+  const originalLog = console.log;
+  console.log = (...a: unknown[]) => { lines.push(a.join(" ")); };
+  try {
+    const rc = await main([probe], { CAP_QUIET_HEAD_MAX_WAIT_MS: "1" }, { sample: async () => quiet, sleep: async () => {} });
+    assertEquals(rc, 0, `a quiet window runs the file:\n${lines.join("\n")}`);
+  } finally {
+    console.log = originalLog;
     await Deno.remove(dir, { recursive: true });
   }
+  assert(lines.join("\n").includes("measuring now"), lines.join("\n"));
 });
 
 Deno.test("gate-speed: the phase's real file list is the partition's QUIET_HEAD set", () => {

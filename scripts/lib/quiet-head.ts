@@ -21,7 +21,13 @@
 //
 // The files themselves run through the SAME runner as every other phase
 // (scripts/lib/serial-lane.mjs → runSerialFiles: own process, per-file window, attribution).
+import { fileURLToPath } from "node:url";
 import { awaitQuietWindow, ENVIRONMENTAL_REFUSAL_MARKER, formatSpec, environmentLine, resolveSpec } from "./quiet-window.ts";
+
+// The repo root as a filesystem path. fileURLToPath, never `.pathname`: a pathname keeps percent-encoding
+// (a checkout under a directory with a space comes back as `%20`), which tests/file-url-root-guard.test.ts
+// (e273) fails on — it caught this line in a full gate.
+const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
 /** The environment variable a caller sets once it has run this phase itself (so it never runs twice). */
 export const QUIET_HEAD_DONE_ENV = "CAP_QUIET_HEAD_DONE";
@@ -40,13 +46,17 @@ export function headSpec(env: Record<string, string | undefined> = Deno.env.toOb
   };
 }
 
-export async function main(args = Deno.args, env: Record<string, string | undefined> = Deno.env.toObject()): Promise<number> {
+export async function main(
+  args = Deno.args,
+  env: Record<string, string | undefined> = Deno.env.toObject(),
+  hooks: Parameters<typeof awaitQuietWindow>[1] = {},
+): Promise<number> {
   const files = args.filter((a) => !a.startsWith("-"));
   if (files.length === 0) return 0;
   if (env[QUIET_HEAD_DONE_ENV] === "1") return 0;
   const spec = headSpec(env);
   console.log(`quiet-head: waiting for a quiet window (load/core <= ${spec.maxLoadPerCore}, no active heavy builder, up to ${spec.maxWaitMs / 1000}s) before measuring: ${files.join(", ")}`);
-  const verdict = await awaitQuietWindow(spec);
+  const verdict = await awaitQuietWindow(spec, hooks);
   if (!verdict.ok) {
     const line = environmentLine(verdict.last, resolveSpec(spec));
     console.error(`ENVIRONMENT: no quiet window for the load-sensitive measurement after ${Math.round(verdict.waitedMs / 1000)}s — ${verdict.reason}. ${line}`);
@@ -56,7 +66,7 @@ export async function main(args = Deno.args, env: Record<string, string | undefi
   console.log(`quiet-head: quiet window after ${Math.round(verdict.waitedMs / 1000)}s (${formatSpec(verdict.spec)}); measuring now`);
   const lane = new Deno.Command("node", {
     args: ["scripts/lib/serial-lane.mjs", ...files],
-    cwd: new URL("../..", import.meta.url).pathname,
+    cwd: ROOT,
     stdout: "inherit",
     stderr: "inherit",
   });
