@@ -20,11 +20,66 @@ import {
 } from "../extension/lib/data-archive.js";
 import { sanitizeRedactedTargetText, isManagedRedactedTarget } from "../extension/lib/logical-site-agent-config.js";
 import { streamExportArchive, executeOptionsExport } from "../extension/lib/backup-export.js";
+import { sealMasterJournalRecord } from "../extension/lib/master-journal-wal.js";
+import { streamRestoreArchive } from "../extension/lib/backup-restore.js";
 
 const ENCODER = new TextEncoder();
 const DECODER = new TextDecoder();
 
 const REDACTED_PATH = "memory/origins/https_example.com/agentConfig.json";
+
+Deno.test("raw streaming backup exports only checked published master WAL files", async () => {
+  const prefix = "memory/master/journal-wal/";
+  const epoch = 18;
+  const checkpoint = `checkpoint-${epoch}-0.json`;
+  const archive = `archive-${epoch}-0.json`;
+  const bound = JSON.stringify({ epoch, sequence: 0, checkpoint, archive });
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", ENCODER.encode(bound)));
+  const lastHash = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const head = await sealMasterJournalRecord("head", {
+    epoch, sequence: 0, checkpointSequence: 0, checkpoint, archive, lastHash, version: epoch,
+  });
+  const files = new Map([
+    [`${prefix}head-a.json`, ENCODER.encode(head)],
+    [`${prefix}${checkpoint}`, ENCODER.encode(await sealMasterJournalRecord("checkpoint", {
+      epoch, sequence: 0, exists: true, live: [{ id: "new" }],
+    }))],
+    [`${prefix}${archive}`, ENCODER.encode(await sealMasterJournalRecord("archive", { epoch, rows: [] }))],
+    [`${prefix}frame-${epoch}-1.json`, ENCODER.encode("unpublished frame residue")],
+    ["memory/master/journal.json", ENCODER.encode("stale legacy view")],
+  ]);
+  const opened = [];
+  const chunks = [];
+  const result = await streamExportArchive({
+    writable: new WritableStream({ write: (chunk) => { chunks.push(chunk); } }),
+    listFiles: async () => [...files.keys()],
+    open: async (path) => {
+      opened.push(path);
+      return { size: files.get(path).length, stream: new Blob([files.get(path)]).stream() };
+    },
+    kvGet: async () => ({}), alarms: { getAll: async () => [] },
+  });
+  assertEquals(result.files, 6, "3 metadata entries plus only the 3 published WAL records");
+  assertEquals(opened.includes(`${prefix}frame-${epoch}-1.json`), false);
+  assertEquals(opened.includes("memory/master/journal.json"), false,
+    "a cut-over backup must not include the stale legacy projection");
+  const tar = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0));
+  let cursor = 0;
+  for (const chunk of chunks) { tar.set(chunk, cursor); cursor += chunk.length; }
+  const restored = new Map();
+  const imported = await streamRestoreArchive({
+    stream: new Blob([tar]).stream(),
+    opfs: {
+      listFiles: async () => [...restored.keys()],
+      readFile: async (path) => restored.get(path),
+      writeFile: async (path, bytes) => { restored.set(path, bytes); },
+      removeFile: async (path) => { restored.delete(path); },
+    }, overwrite: true,
+  });
+  assertEquals(imported.ok, true, "filtered export must pass the restore generation validator");
+  assertEquals([...restored.keys()].sort(), [...files.keys()].filter((path) =>
+    path.startsWith(prefix) && !path.includes("frame-")).sort());
+});
 const EXCLUDED_PATH = "chrome-agent-platform-private/owner-approval-hmac";
 
 /** The fake profile: name -> bytes. The wasm file is served in THREE chunks to

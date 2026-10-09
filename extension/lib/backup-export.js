@@ -24,6 +24,7 @@ import {
 import { isManagedRedactedTarget, sanitizeRedactedTargetText } from "./logical-site-agent-config.js";
 import { encodeTarStream } from "./tar-stream.js";
 import { withMasterJournalWebLock } from "./master-journal-lock.js";
+import { selectPublishedMasterJournalBackupPaths } from "./master-journal-backup.js";
 
 const ENCODER = new TextEncoder();
 
@@ -156,7 +157,9 @@ export async function streamExportArchive({
   // Classify the tree up front: a TAR header declares the payload size, so
   // every path and size is known before the first byte is written — but the
   // PAYLOADS stay lazy (open() hands back a stream, never whole bytes).
-  const paths = (await listFiles()).filter((p) => !isExcludedOpfsPath(p));
+  const paths = await selectPublishedMasterJournalBackupPaths(
+    (await listFiles()).filter((p) => !isExcludedOpfsPath(p)), open,
+  );
 
   const alarmList = ((await alarms.getAll()) || []).filter((a) => a && typeof a.name === "string").map((a) => {
     const rec = { name: a.name };

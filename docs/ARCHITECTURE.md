@@ -520,10 +520,12 @@ frames and archive must travel as one coherent generation once its WAL writer
 is enabled. The target registry now recognizes exact master-only WAL record
 names. Restore now validates both checked heads and their referenced records
 as one archive-staged generation before owner confirmation, refusing torn or
-unpublished WAL leaves; legacy backups with no WAL remain accepted. Raw export
-still needs to exclude unpublished staging residue, and restore still needs a
-master lock around live-file replacement and rollback. Import prevalidation
-alone is not a complete backup/restore safety proof.
+unpublished WAL leaves; legacy backups with no WAL remain accepted. Streaming
+and buffered exports now select only files referenced by checked head slots,
+excluding unpublished WAL residue and stale legacy journal values while the
+master Web Lock is held. Restore still needs a master lock around live-file
+replacement and rollback; prevalidation and filtered export alone are not a
+complete backup/restore safety proof.
 Until cutover, the legacy `journal.json` remains authoritative. This lock does **not** make the entire profile a point-in-time
 snapshot: other store writers retain their existing semantics. The broader
 whole-profile consistency requirement is a separate follow-up, not a claim of

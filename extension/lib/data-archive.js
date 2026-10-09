@@ -50,6 +50,7 @@
 // possibly stale extras — loss-free, cleaned by the next import.
 
 import { isManagedRedactedTarget, sanitizeRedactedTargetText } from "./logical-site-agent-config.js";
+import { selectPublishedMasterJournalBackupPaths } from "./master-journal-backup.js";
 
 const ENCODER = new TextEncoder();
 const FATAL_DECODER = new TextDecoder("utf-8", { fatal: true });
@@ -363,7 +364,11 @@ export async function collectExportData({ kvGet, opfs, alarms, maxOpfsFiles = MA
 
   const files = [];
   let totalBytes = 0;
-  for (const path of await opfs.listFiles()) {
+  const paths = await selectPublishedMasterJournalBackupPaths(await opfs.listFiles(), async (path) => {
+    const bytes = await opfs.readFile(path);
+    return { size: bytes.byteLength, stream: new Blob([bytes]).stream() };
+  });
+  for (const path of paths) {
     if (isExcludedOpfsPath(path)) continue;
     let bytes = await opfs.readFile(path);
     if (isManagedRedactedTarget(path)) {
