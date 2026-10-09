@@ -18,7 +18,7 @@ Deno.test("gate: its three steps ARE the package scripts of the sequential gate,
 
 Deno.test("gate: sequential fallback for a dirty tree or on request; overlapped only for a clean tree", () => {
   assertEquals(sequentialReason({ dirty: "", env: {} }), null);
-  assert(sequentialReason({ dirty: " M build.mjs", env: {} }));
+  assert(sequentialReason({ dirty: " M scripts/x.mjs", env: {} }));
   assert(sequentialReason({ dirty: "", env: { CAP_GATE_SEQUENTIAL: "1" } }));
 });
 

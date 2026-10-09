@@ -16,7 +16,7 @@ Deno.test("build-gate: two-tree mode only for a full run of a clean tree; every 
   const { oneTreeReason, SIBLING_FILES } = await import("../scripts/build-gate.ts");
   assertEquals(oneTreeReason({ cliFiles: [], dirty: "", env: {} }), null);
   assert(oneTreeReason({ cliFiles: ["tests/build-bootstrap.test.ts"], dirty: "", env: {} }));
-  assert(oneTreeReason({ cliFiles: [], dirty: " M build.mjs", env: {} }));
+  assert(oneTreeReason({ cliFiles: [], dirty: " M scripts/x.mjs", env: {} }));
   assert(oneTreeReason({ cliFiles: [], dirty: "", env: { CAP_BUILD_GATE_ONE_TREE: "1" } }));
   // The sibling runs a SUBSET of the gate's own files; nothing outside the gate can be routed there.
   for (const f of SIBLING_FILES) assert(BUILD_GATE_FILES.includes(f), `${f} is not a build-gate file`);
