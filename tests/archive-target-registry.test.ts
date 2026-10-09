@@ -69,6 +69,24 @@ Deno.test("memory stores are FLAT per store; reserved leaves carry their class",
   assertEquals(classifyOpfsPath("memory/origins/https%3A%2F%2Fexample.com/profile:work_history.json").cls, PORTABLE);
 });
 
+Deno.test("master journal WAL records have an exact portable grammar; residue refuses classification", () => {
+  for (const leaf of [
+    "head-a.json", "head-b.json", "checkpoint-1-0.json", "archive-32-0.json",
+    "frame-32-127.json", "checkpoint-32-128.json", "archive-32-128.json",
+  ]) {
+    assertEquals(classifyOpfsPath(`memory/master/journal-wal/${leaf}`).cls, TERMINAL, leaf);
+  }
+  for (const leaf of [
+    "head-c.json", "head-a.json.bak", "frame-0-1.json", "frame-01-1.json",
+    "frame-1-01.json", "checkpoint-9007199254740992-0.json", "frame-1-9007199254740992.json",
+    "frame-1-1.json.tomb", "random.json", "../head-a.json",
+  ]) {
+    assertEquals(classifyOpfsPath(`memory/master/journal-wal/${leaf}`).cls, "unclassified", leaf);
+  }
+  assertEquals(classifyOpfsPath("memory/agents/a/journal-wal/head-a.json").cls, "unclassified");
+  assertEquals(classifyOpfsPath("memory/origins/https%3A%2F%2Fexample.com/journal-wal/head-a.json").cls, "unclassified");
+});
+
 Deno.test("site authority leaves: consent/enrollment/approvals; journal terminal-validated", () => {
   for (const leaf of ["profile:webmcp-tool-consent-v1.json", "enrolled.json", "approvals.json"]) {
     assertEquals(classifyOpfsPath(`memory/origins/https%3A%2F%2Fexample.com/${leaf}`).cls, "authority", leaf);

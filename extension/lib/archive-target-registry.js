@@ -32,8 +32,12 @@ const OPFS_ROOTS = new Map([
 //
 // A MemoryStore is FLAT: files are exactly `<key>.json` (nonempty key) plus
 // `__gen.json`/`__tombs.json`/`__epoch.json` integrity files, direct
-// `*.tomb` and legacy dot-`*.version` sidecars, and the one nested family
-// `memory/master/screenshots/shot_<32hex>.json` (memory.js:1705-1721).
+// `*.tomb` and legacy dot-`*.version` sidecars, plus the nested master-only
+// `screenshots/shot_<32hex>.json` and `journal-wal/` record families.
+// The master-only journal WAL adds checked immutable records and two head
+// slots. Exact names alone are not import validation: backup/restore must
+// verify the head, checkpoint, frames and archive as one generation.
+const MASTER_JOURNAL_WAL_RECORD = /^(?:head-[ab]|(?:checkpoint|archive|frame)-([1-9]\d*)-(0|[1-9]\d*))\.json$/u;
 const INTEGRITY_LEAF = /^(?:__gen|__tombs|__epoch)\.json$/u;
 const TOMB_LEAF = /^[^/]+\.tomb$/u;
 const LEGACY_VERSION_LEAF = /^\.[^/]+\.version$/u;
@@ -189,7 +193,12 @@ function classifyMemory(segments) {
       if (kind !== "key") return "unclassified";
       return masterKeyClass(segments[2]);
     }
-    // The one nested family: master screenshots.
+    if (segments.length === 4 && segments[2] === "journal-wal") {
+      const match = MASTER_JOURNAL_WAL_RECORD.exec(segments[3]);
+      return match && (!match[1] || (Number.isSafeInteger(Number(match[1])) &&
+        Number.isSafeInteger(Number(match[2])))) ? TERMINAL : "unclassified";
+    }
+    // The original nested family: master screenshots.
     if (segments.length === 4 && segments[2] === "screenshots") {
       return SCREENSHOT_LEAF.test(segments[3]) ? TERMINAL : "unclassified";
     }

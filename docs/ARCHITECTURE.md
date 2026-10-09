@@ -517,8 +517,10 @@ primitive, not an entire multi-step legacy journal transaction; cancellation
 now snapshots the journal and CAS-refuses an intervening write, but append and
 archive are not yet one WAL transaction. The journal's checkpoint, head,
 frames and archive must travel as one coherent generation once its WAL writer
-is enabled; until that cutover is fully wired, the legacy `journal.json` remains
-authoritative. This lock does **not** make the entire profile a point-in-time
+is enabled. The target registry now recognizes exact master-only WAL record
+names, but it does not yet validate an imported generation or exclude staged
+residue from the raw export walker; that is not a backup/restore safety proof.
+Until cutover, the legacy `journal.json` remains authoritative. This lock does **not** make the entire profile a point-in-time
 snapshot: other store writers retain their existing semantics. The broader
 whole-profile consistency requirement is a separate follow-up, not a claim of
 this journal workstream. Within an actual extension context, a missing Web
