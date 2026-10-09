@@ -1278,9 +1278,13 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
         return run;
       });
       return (...args) => {
-        // A guard awaiting another queued WAL/store mutation or head read
-        // would wait on itself forever. Refuse synchronously instead.
-        if (guardActive) throw new Error("reentrant master journal transaction call from guard refused");
+        // A guard awaiting another queued operation would wait on itself.
+        // We cannot identify the async caller in a browser, so conservatively
+        // reject ALL transaction operations invoked while a guard is in flight
+        // (including unrelated siblings). Callers must await guarded writes.
+        if (guardActive) {
+          return Promise.reject(new Error("master journal transaction call refused while guard is in flight"));
+        }
         return tracked(...args);
       };
     };

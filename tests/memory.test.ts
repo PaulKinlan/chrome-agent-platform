@@ -779,42 +779,75 @@ Deno.test("staged master transaction exposes WAL verbs without re-entering the m
       "two concurrent operations inside one transaction still issue distinct versions");
     assertEquals((await api.masterMemory().get("journal")).map((r) => r.executionId),
       ["tx-authority", "tx-concurrent-a", "tx-concurrent-b"]);
-    let releaseGenerationWrites;
-    const generationBarrier = new Promise((resolve) => { releaseGenerationWrites = resolve; });
-    let waitingGenerationWrites = 0;
-    generationWriteGate = async () => {
-      if (++waitingGenerationWrites === 2) releaseGenerationWrites();
-      await generationBarrier;
+    const withGenerationBarrier = async (fn) => {
+      let releaseGenerationWrites;
+      const generationBarrier = new Promise((resolve) => { releaseGenerationWrites = resolve; });
+      let waitingGenerationWrites = 0;
+      generationWriteGate = async () => {
+        if (++waitingGenerationWrites === 2) releaseGenerationWrites();
+        await generationBarrier;
+      };
+      // Old parallel issuers both read before either write closes. On the fixed
+      // queue, the first issuer advances after this bounded one-writer release.
+      const gateTimer = setTimeout(releaseGenerationWrites, 80);
+      try { return await fn(); }
+      finally { generationWriteGate = null; clearTimeout(gateTimer); }
     };
-    // On the old adapter both issuers read the same token and reach write()
-    // before either closes. On the fixed shared queue the first advances,
-    // then the second proceeds when the bounded one-writer timer releases it.
-    const gateTimer = setTimeout(releaseGenerationWrites, 80);
-    let keyVersion, mixedReceipt;
-    try {
-      [keyVersion, mixedReceipt] = await withStoreTransaction(api.masterMemory(), async (tx) =>
-        Promise.all([
-          tx.setTrusted("mixed-master-key", "value"),
-          tx.masterJournal.appendWithReceipt({ type: "task", executionId: "tx-mixed-version" }),
-        ]));
-    } finally {
-      generationWriteGate = null;
-      clearTimeout(gateTimer);
-    }
+    const [keyVersion, mixedReceipt] = await withGenerationBarrier(() =>
+      withStoreTransaction(api.masterMemory(), async (tx) => Promise.all([
+        tx.setTrusted("mixed-master-key", "value"),
+        tx.masterJournal.appendWithReceipt({ type: "task", executionId: "tx-mixed-version" }),
+      ])));
     assertEquals(keyVersion !== mixedReceipt.writeVersion, true,
       "a key write and WAL frame inside one transaction cannot issue the same version");
+    const expectedKeyVersion = await api.masterMemory().getVersion("mixed-master-key");
+    const [restoredVersion, restoredReceipt] = await withGenerationBarrier(() =>
+      withStoreTransaction(api.masterMemory(), async (tx) => Promise.all([
+        tx.compareAndRestore("mixed-master-key", expectedKeyVersion, "restored"),
+        tx.masterJournal.appendWithReceipt({ type: "task", executionId: "tx-mixed-cas" }),
+      ])));
+    assertEquals(restoredVersion !== false && restoredVersion !== restoredReceipt.writeVersion, true,
+      "a matching CAS restore and WAL frame cannot issue the same version");
     const beforeGuard = (await api.masterMemory().get("journal")).length;
     await withStoreTransaction(api.masterMemory(), async (tx) => {
       const prior = await tx.masterJournal.head();
       const guardedReceipt = await tx.masterJournal.appendWithReceipt(
         { type: "task", executionId: "guard-boundary" }, { guard: async () => {
-          await assertRejects(async () => tx.masterJournal.head(), Error, "reentrant");
-          await assertRejects(async () => tx.setTrusted("guard-unexpected", true), Error, "reentrant");
+          await assertRejects(() => tx.masterJournal.head(), Error, "guard is in flight");
+          await assertRejects(() => tx.setTrusted("guard-unexpected", true), Error, "guard is in flight");
         } });
       assertEquals(guardedReceipt.wal.sequence, prior.sequence + 1);
     });
     assertEquals((await api.masterMemory().get("journal")).length, beforeGuard + 1);
     assertEquals(isolated.children.get("memory").children.get("master").children.has("guard-unexpected.json"), false);
+    let guardEntered;
+    let releaseGuard;
+    const entered = new Promise((resolve) => { guardEntered = resolve; });
+    const holdGuard = new Promise((resolve) => { releaseGuard = resolve; });
+    const sibling = await withStoreTransaction(api.masterMemory(), async (tx) => {
+      const pending = tx.masterJournal.appendWithReceipt(
+        { type: "task", executionId: "guard-held-sibling" }, { guard: async () => {
+          guardEntered();
+          await holdGuard;
+        } });
+      await entered;
+      try {
+        await assertRejects(() => tx.setTrusted("sibling-during-guard", true), Error,
+          "guard is in flight");
+      } finally { releaseGuard(); }
+      return await pending;
+    });
+    assertEquals(sibling.appended, true,
+      "the refused sibling cannot make an already pending append look uncommitted");
+    assertEquals(isolated.children.get("memory").children.get("master").children.has("sibling-during-guard.json"), false);
+    const recoveredTail = await withStoreTransaction(api.masterMemory(), async (tx) => {
+      await assertRejects(() => tx.masterJournal.appendWithReceipt(
+        { type: "task", executionId: "guard-denied" }, { guard: async () => { throw new Error("deny guard"); } }),
+      Error, "deny guard");
+      return await tx.masterJournal.appendWithReceipt(
+        { type: "task", executionId: "after-denied-guard" });
+    });
+    assertEquals(recoveredTail.appended, true, "a failed queued operation cannot poison the transaction tail");
     const routed = await withStoreTransaction(api.masterMemory(), async (tx) => {
       const before = await tx.masterJournal.head();
       const receipt = await tx.masterJournal.appendWithReceipt(

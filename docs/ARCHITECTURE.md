@@ -584,11 +584,15 @@ transactions also expose staged receipt/compensation/cancellation WAL verbs
 using the lock they already hold; they never nest a second Web Lock. Sibling
 WAL verbs and master key mutations within one transaction serialize, because
 the outer lock excludes other transactions but not concurrent promises in the
-same callback. Guards may read KV/storage, but must not request another
-master write or journal read: the adapter rejects reentrant transaction calls
-rather than waiting on its own queue. Calls to raw `masterMemory()` writes
-inside a guard still re-enter the non-reentrant lock and are forbidden. No
-product journal verb calls the adapter yet. Torn, non-equal or source-mismatched
+same callback. A guard must not await ANY promise from its transaction, even
+one that was queued earlier, or it can wait on itself. Guards may read KV or
+storage, but must not request a master write or journal read. Because the
+browser cannot identify an async guard caller, the adapter refuses every
+transaction operation invoked WHILE a guard is in flight, including an
+unrelated sibling; callers should await guarded writes before issuing the
+next transaction operation. Raw `masterMemory()` writes in a guard still
+re-enter the non-reentrant lock and are forbidden. No product journal verb
+calls the adapter yet. Torn, non-equal or source-mismatched
 immutable records and damaged head slots remain fail-closed
 pending explicit owner repair. Archive rows are an append-only HISTORY LOG,
 not a set of currently evicted rows: a compensated
