@@ -2,6 +2,10 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { dumpLogBuffer } from "../extension/lib/cap-log.js";
 import {
+  selectPublishedMasterJournalBackupPaths,
+  validateStagedMasterJournalBackup,
+} from "../extension/lib/master-journal-backup.js";
+import {
   appendMasterJournalWithReceipt,
   compensateMasterJournalReceipt,
   cancelMasterJournalExecution,
@@ -592,6 +596,85 @@ Deno.test("staged WAL receipt compensation survives compaction and preserves for
   assertEquals(after.archive, seed.slice(0, 128), "archived evictions remain history, not a set of current live rows");
 });
 
+Deno.test("receipt compensation exports and restores both head slots and later compacted history", async () => {
+  const { master, allocateVersion, readIssuedVersion } = await legacyFixture();
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await stageMasterJournalCutover(master, { journalExists: true, journal: seed, archive: [], allocateVersion });
+  const receipt = await appendMasterJournalWithReceipt(master, { type: "task", executionId: "exported-compensation" },
+    { allocateVersion, readIssuedVersion });
+  for (let i = 0; i < 127; i++) await stageMasterJournalFrame(master, {
+    operation: "append", row: { id: `foreign-${i}`, executionId: `foreign-${i}` },
+  }, { allocateVersion });
+  assertEquals((await compensateMasterJournalReceipt(master, receipt, { allocateVersion, readIssuedVersion })).ok, true);
+  const snapshot = async () => {
+    const wal = await master.getDirectoryHandle("journal-wal");
+    const prefix = "memory/master/journal-wal/";
+    const paths = new Map([...wal.children].map(([name, file]) => [prefix + name, file.bytes]));
+    const selected = await selectPublishedMasterJournalBackupPaths([...paths.keys()], async (path) => ({
+      size: paths.get(path).length, stream: new Blob([paths.get(path)]).stream(),
+    }));
+    assertEquals(await validateStagedMasterJournalBackup(
+      selected.map((relPath) => ({ relPath, stagedPath: relPath })), async (path) => paths.get(path),
+    ), true);
+    const restored = new MemoryDir();
+    const restoredWal = await restored.getDirectoryHandle("journal-wal", { create: true });
+    for (const path of selected) {
+      const name = path.slice(prefix.length);
+      (await restoredWal.getFileHandle(name, { create: true })).bytes = paths.get(path).slice();
+    }
+    const expected = await readMasterJournalProjection(master, { includeArchive: true });
+    const actual = await readMasterJournalProjection(restored, { includeArchive: true });
+    assertEquals({ exists: actual.exists, live: actual.live, archive: actual.archive },
+      { exists: expected.exists, live: expected.live, archive: expected.archive });
+    return selected;
+  };
+  const first = await snapshot();
+  assertEquals(first.some((path) => path.endsWith("frame-18-130.json")), true,
+    "the post-compensation slot references its frame while the other slot retains the prior checkpoint");
+  const rows = (await readMasterJournalProjection(master)).live;
+  for (let i = 0; i < 127; i++) await stageMasterJournalFrame(master,
+    { operation: "replace", rows }, { allocateVersion, readIssuedVersion });
+  await stageMasterJournalFrame(master, { operation: "replace", rows }, { allocateVersion, readIssuedVersion });
+  await snapshot();
+});
+
+Deno.test("stale receipt from a replaced WAL epoch refuses before mutation", async () => {
+  const { master, allocateVersion, readIssuedVersion } = await legacyFixture();
+  await stageMasterJournalCutover(master, { journalExists: false, journal: [], archive: [], allocateVersion });
+  const receipt = await appendMasterJournalWithReceipt(master, {
+    type: "task", executionId: "old-enrollment",
+  }, { allocateVersion, readIssuedVersion });
+  master.children.delete("journal-wal"); // simulate owner-restored replacement generation, not ordinary clear
+  await stageMasterJournalCutover(master, { journalExists: true, journal: [{ id: "new-enrollment" }],
+    archive: [], allocateVersion });
+  const before = await readMasterJournalProjection(master);
+  const refused = await compensateMasterJournalReceipt(master, receipt, { allocateVersion, readIssuedVersion });
+  assertEquals(refused.reason, "generation_mismatch");
+  assertEquals((await readMasterJournalProjection(master)).version, before.version);
+  assertEquals((await readMasterJournalProjection(master)).live, [{ id: "new-enrollment" }]);
+});
+
+Deno.test("compensation frame and head faults never acknowledge partial mutation", async () => {
+  for (const fault of ["frame-18-2.json", "head-a.json"]) {
+    const faults = {};
+    const { master, allocateVersion, readIssuedVersion } = await legacyFixture(faults);
+    await stageMasterJournalCutover(master, { journalExists: false, journal: [], archive: [], allocateVersion });
+    const receipt = await appendMasterJournalWithReceipt(master, {
+      type: "task", executionId: "crash-compensate",
+    }, { allocateVersion, readIssuedVersion });
+    faults.close = fault;
+    await assertRejects(() => compensateMasterJournalReceipt(master, receipt,
+      { allocateVersion, readIssuedVersion }), Error, "injected close");
+    if (fault.startsWith("frame")) {
+      const projection = await readMasterJournalProjection(master);
+      assertEquals(projection.head.sequence, 1);
+      assertEquals(projection.live.at(-1).executionId, "crash-compensate");
+    } else {
+      await assertRejects(() => readMasterJournalProjection(master), Error, "corrupt");
+    }
+  }
+});
+
 Deno.test("staged WAL receipt refuses same-value ABA and guard undo retains historical eviction", async () => {
   const { master, allocateVersion, readIssuedVersion } = await legacyFixture();
   const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
@@ -613,6 +696,26 @@ Deno.test("staged WAL receipt refuses same-value ABA and guard undo retains hist
   const after = await readMasterJournalProjection(master, { includeArchive: true });
   assertEquals(after.live.some((row) => row.executionId === "forbidden"), false);
   assertEquals(after.archive.length, 2, "the forbidden append's eviction remains historical residue");
+});
+
+Deno.test("post-compensation fence undo targets its actual issued token", async () => {
+  const { master, allocateVersion, readIssuedVersion } = await legacyFixture();
+  await stageMasterJournalCutover(master, { journalExists: true, journal: [{ id: "pre" }],
+    archive: [], allocateVersion });
+  const receipt = await appendMasterJournalWithReceipt(master, {
+    type: "task", executionId: "undo-compensation",
+  }, { allocateVersion, readIssuedVersion });
+  let calls = 0;
+  const refused = await compensateMasterJournalReceipt(master, receipt, {
+    allocateVersion, readIssuedVersion, guard: async () => {
+      if (++calls === 2) await allocateVersion(); // unrelated master key issues a token
+      if (calls === 3) throw new Error("lost fence after compensation");
+    },
+  });
+  assertEquals(refused.reason, "journal_fence_failed");
+  const after = await readMasterJournalProjection(master);
+  assertEquals(after.live, receipt.postState, "failed compensation undoes only its own write");
+  assertEquals(receipt.compensatedState, undefined, "failed compensation is not marked idempotent");
 });
 
 Deno.test("staged WAL cancellation commits a single bounded replacement with its eviction", async () => {
