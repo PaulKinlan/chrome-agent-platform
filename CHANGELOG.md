@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.617] — 2026-10-09
+- Group tabs opened or attached by a task into a named tab group, restorable on task open, closable with Undo
+
 ## [0.3.616] — 2026-10-09
 - admit blake3-wasm v3.0.0 as an Emscripten glue class managed Wasm tool for 256-bit cryptographic hashing
 

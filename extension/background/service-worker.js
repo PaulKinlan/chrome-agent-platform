@@ -326,7 +326,14 @@ import {
   listThreads,
   nameThreadAsync,
   renameThread,
+  updateThreadWorkingSet,
 } from "../lib/threads.js";
+import {
+  createWorkingSet,
+  addTabToWorkingSet,
+  setWorkingSetGroup,
+  reconcileWorkingSet,
+} from "../lib/working-set.js";
 import {
   buildThreadRunView,
   buildAgentRunView,
@@ -8520,11 +8527,138 @@ const handlers = mergeRouteMaps(
     }
     return { ok: false, error: "invalid acp.journal action" };
   },
+
   async "thread.delete"(m) {
     const removed = await deleteThread(m?.id);
     return removed ? { ok: true } : { ok: false, error: "thread not found" };
   },
   async "thread.rename"(m) {
+    if (m?.id && (m?.closeTabIds || m?.attachTabs || m?.restoreTabs || m?.workingSet || m?.reconcileTabs || m?.staleTabIds || m?.updatedTabs || typeof m?.groupId === "number" || m?.groupId === null)) {
+      const updated = await updateThreadWorkingSet(m.id, (currentWs) => {
+        let ws = createWorkingSet(currentWs);
+        const staleIds = Array.isArray(m.staleTabIds) ? m.staleTabIds : (Array.isArray(m.closeTabIds) ? m.closeTabIds : null);
+        if (staleIds && staleIds.length > 0) {
+          const toClose = new Set(staleIds);
+          const liveUrlMap = new Map();
+          if (Array.isArray(m.closedTabs)) {
+            for (const ct of m.closedTabs) {
+              if (ct?.tabId != null && ct?.url) liveUrlMap.set(ct.tabId, ct.url);
+            }
+          }
+          const nextTabs = ws.tabs.map((t) => {
+            if (t.tabId != null && toClose.has(t.tabId)) {
+              const liveUrl = liveUrlMap.get(t.tabId);
+              return { url: liveUrl || t.url, title: t.title };
+            }
+            return t;
+          });
+          const stillOpen = nextTabs.some((t) => t.tabId != null);
+          ws = createWorkingSet({
+            groupId: stillOpen ? ws.groupId : null,
+            groupNamed: stillOpen ? ws.groupNamed : false,
+            tabs: nextTabs,
+            preserveInactiveCount: nextTabs.length,
+          });
+        }
+        if (Array.isArray(m.updatedTabs) && m.updatedTabs.length > 0) {
+          const updateMap = new Map();
+          for (const u of m.updatedTabs) {
+            if (typeof u?.tabId === "number") updateMap.set(u.tabId, u);
+          }
+          const nextTabs = ws.tabs.map((t) => {
+            if (t.tabId != null && updateMap.has(t.tabId)) {
+              const u = updateMap.get(t.tabId);
+              return Object.freeze({
+                tabId: t.tabId,
+                url: u.url || t.url,
+                title: u.title !== undefined ? u.title : t.title,
+              });
+            }
+            return t;
+          });
+          ws = createWorkingSet({
+            groupId: ws.groupId,
+            groupNamed: ws.groupNamed,
+            tabs: nextTabs,
+            preserveInactiveCount: ws.preserveInactiveCount,
+          });
+        }
+        if (Array.isArray(m.restoreTabs) && m.restoreTabs.length > 0) {
+          const nextTabs = [...ws.tabs];
+          for (const restored of m.restoreTabs) {
+            if (typeof restored?.tabId === "number" && restored.url) {
+              const idx = nextTabs.findIndex((t) => !t.tabId && t.url === restored.url);
+              if (idx !== -1) {
+                nextTabs[idx] = Object.freeze({
+                  tabId: restored.tabId,
+                  url: restored.url,
+                  title: restored.title !== undefined ? restored.title : nextTabs[idx].title,
+                });
+              } else {
+                nextTabs.push(Object.freeze({
+                  tabId: restored.tabId,
+                  url: restored.url,
+                  ...(restored.title ? { title: restored.title } : {}),
+                }));
+              }
+            }
+          }
+          ws = createWorkingSet({
+            groupId: typeof m.groupId === "number" && m.groupId >= 0 ? m.groupId : ws.groupId,
+            groupNamed: m.groupNamed !== undefined ? m.groupNamed === true : ws.groupNamed,
+            tabs: nextTabs,
+            preserveInactiveCount: ws.preserveInactiveCount,
+          });
+        }
+        if (Array.isArray(m.attachTabs) && m.attachTabs.length > 0) {
+          for (const tab of m.attachTabs) {
+            ws = addTabToWorkingSet(ws, tab);
+          }
+          if (typeof m.groupId === "number" && m.groupId >= 0) {
+            ws = setWorkingSetGroup(ws, m.groupId, m.groupNamed === true);
+          }
+        }
+        if (m.groupId === null) {
+          ws = setWorkingSetGroup(ws, null, false);
+        } else if (typeof m.groupId === "number" && !m.attachTabs) {
+          const nextNamed = m.groupNamed !== undefined ? m.groupNamed === true : (m.groupId === ws.groupId ? ws.groupNamed : false);
+          ws = setWorkingSetGroup(ws, m.groupId >= 0 ? m.groupId : null, nextNamed);
+        }
+        if (Array.isArray(m.reconcileTabs)) {
+          const queriedIdSet = new Set(m.reconcileKnownTabIds || ws.tabIds);
+          const activeTabIdSet = new Set(
+            m.reconcileTabs
+              .map((t) => (typeof t === "number" ? t : t?.id))
+              .filter((id) => typeof id === "number" && id > 0),
+          );
+          const nextTabs = ws.tabs.map((t) => {
+            if (t.tabId != null && queriedIdSet.has(t.tabId) && !activeTabIdSet.has(t.tabId)) {
+              return { url: t.url, title: t.title };
+            }
+            return t;
+          });
+          let nextGroupId = ws.groupId;
+          let nextGroupNamed = ws.groupNamed;
+          if (Array.isArray(m.activeGroupIds) && ws.groupId != null) {
+            if (!m.activeGroupIds.includes(ws.groupId)) {
+              nextGroupId = null;
+              nextGroupNamed = false;
+            }
+          }
+          ws = createWorkingSet({
+            groupId: nextGroupId,
+            groupNamed: nextGroupNamed,
+            tabs: nextTabs,
+            preserveInactiveCount: ws.preserveInactiveCount,
+          });
+        }
+        if (m.workingSet && !staleIds && !m.attachTabs && !m.reconcileTabs && m.groupId === undefined) {
+          ws = createWorkingSet(m.workingSet);
+        }
+        return ws;
+      });
+      if (!m?.name) return updated ? { ok: true, workingSet: updated.workingSet } : { ok: false, error: "thread not found" };
+    }
     const renamed = await renameThread(m?.id, m?.name);
     return renamed ? { ok: true } : { ok: false, error: "thread not found or empty name" };
   },
