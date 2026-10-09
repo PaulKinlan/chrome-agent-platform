@@ -2050,3 +2050,180 @@ export function formatSidebarAgentRole(raw) {
 
   return cleaned;
 }
+
+/**
+ * Determines whether a URL represents an internal extension surface or blank tab
+ * created during cold boot. These surfaces never host site tools and must not
+ * broadcast open-tabs-changed during boot.
+ *
+ * @param {string | undefined | null} url
+ * @returns {boolean}
+ */
+export function isInternalExtensionUrl(url) {
+  if (!url || typeof url !== "string") return true;
+  if (url === "about:blank") return true;
+  if (url.startsWith("chrome-extension://")) return true;
+  return false;
+}
+
+export function isWebTabUrl(url) {
+  return typeof url === "string" && /^https?:/.test(url);
+}
+
+export function createTabChangeNotifier({ notify, chromeTabs, debounceMs = 300 }) {
+  let timer = null;
+  const knownWebTabs = new Set();
+  const createdInternalTabs = new Set();
+  let baselinePending = false;
+  const pendingUpdatesDuringBaseline = new Map(); // tabId -> url
+
+  function noteChange() {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      notify();
+    }, debounceMs);
+  }
+
+  function handleCreated(tab) {
+    const url = tab?.url || tab?.pendingUrl;
+    const tabId = tab?.id;
+    if (tabId != null) {
+      if (isWebTabUrl(url)) {
+        knownWebTabs.add(tabId);
+        createdInternalTabs.delete(tabId);
+        noteChange();
+      } else {
+        // Tab was created as an internal/blank surface during this worker session
+        createdInternalTabs.add(tabId);
+      }
+    }
+  }
+
+  function handleUpdated(tabId, info, tab) {
+    const url = info?.url || tab?.url || tab?.pendingUrl;
+    const id = tabId ?? tab?.id;
+
+    if (id != null && knownWebTabs.has(id) && !isWebTabUrl(url)) {
+      // Known web tab transitioned to non-web (about:blank, chrome://, or extension page):
+      // immediately purge from known web tabs and notify so stale tool offers are cleared.
+      knownWebTabs.delete(id);
+      if (baselinePending) pendingUpdatesDuringBaseline.delete(id);
+      noteChange();
+      return;
+    }
+
+    if (isWebTabUrl(url)) {
+      if (id != null) {
+        knownWebTabs.add(id);
+        createdInternalTabs.delete(id);
+        if (baselinePending) pendingUpdatesDuringBaseline.delete(id);
+      }
+      if (info?.status === "complete" || typeof info?.url === "string") {
+        noteChange();
+      }
+    } else if (id != null) {
+      if (baselinePending) {
+        // While baseline query is pending, buffer non-web update
+        pendingUpdatesDuringBaseline.set(id, url);
+      }
+    }
+  }
+
+  function handleActivated(activeInfo) {
+    const id = activeInfo?.tabId;
+    if (id != null && chromeTabs?.get) {
+      try {
+        chromeTabs.get(id, (tab) => {
+          const url = tab?.url || tab?.pendingUrl;
+          if (!isInternalExtensionUrl(url) && isWebTabUrl(url)) {
+            knownWebTabs.add(id);
+            createdInternalTabs.delete(id);
+            noteChange();
+          }
+        });
+      } catch {
+        // Safe fail-closed
+      }
+    }
+  }
+
+  function handleRemoved(tabId) {
+    if (tabId != null) {
+      knownWebTabs.delete(tabId);
+      createdInternalTabs.delete(tabId);
+      if (baselinePending) pendingUpdatesDuringBaseline.delete(tabId);
+    }
+    noteChange();
+  }
+
+  function initBaseline(initialTabs) {
+    if (Array.isArray(initialTabs)) {
+      for (const t of initialTabs) {
+        const url = t?.url || t?.pendingUrl;
+        if (t?.id != null && isWebTabUrl(url)) {
+          knownWebTabs.add(t.id);
+        }
+      }
+      return;
+    }
+    if (chromeTabs?.query) {
+      baselinePending = true;
+      try {
+        chromeTabs.query({}, (tabs) => {
+          baselinePending = false;
+          let transitionedDuringBaseline = false;
+          for (const t of tabs ?? []) {
+            const id = t?.id;
+            if (id == null) continue;
+            const url = t?.url || t?.pendingUrl;
+            if (isWebTabUrl(url)) {
+              if (pendingUpdatesDuringBaseline.has(id)) {
+                // Tab was web in snapshot but updated to non-web while query was pending
+                knownWebTabs.delete(id);
+                transitionedDuringBaseline = true;
+              } else {
+                knownWebTabs.add(id);
+              }
+            } else {
+              // Tab in query result is non-web.
+              // If a live web update already confirmed this tab is web (newer than snapshot),
+              // do NOT overwrite it!
+              if (!knownWebTabs.has(id)) {
+                if (pendingUpdatesDuringBaseline.has(id)) {
+                  // If this was an uncertain pre-existing tab (not created as internal during boot),
+                  // its navigation away to non-web transitions!
+                  if (!createdInternalTabs.has(id)) {
+                    transitionedDuringBaseline = true;
+                  }
+                }
+              }
+            }
+          }
+          pendingUpdatesDuringBaseline.clear();
+          if (transitionedDuringBaseline) {
+            noteChange();
+          }
+        });
+      } catch {
+        baselinePending = false;
+        pendingUpdatesDuringBaseline.clear();
+      }
+    }
+  }
+
+  initBaseline();
+
+  return {
+    noteChange,
+    handleCreated,
+    handleUpdated,
+    handleActivated,
+    handleRemoved,
+    initBaseline,
+    knownWebTabs,
+    createdInternalTabs,
+    isBaselinePending: () => baselinePending,
+  };
+}
+

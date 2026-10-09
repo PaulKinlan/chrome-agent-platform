@@ -775,7 +775,10 @@ const runRouteUpdate = createRouteUpdateRunner();
 async function renderSiteAgents() {
   const el = document.getElementById("site-agents");
   if (!el) return;
-  const res = await send("agent.directory").catch(() => ({ agents: [] }));
+  const [res, discoverable] = await Promise.all([
+    send("agent.directory").catch(() => ({ agents: [] })),
+    send("agent.tool-offers").catch(() => ({ ok: false })),
+  ]);
   // Item 44: a site with ZERO tools is not an agent (paul.kinlan.me with no
   // WebMCP/inferred tools must not appear as a Site Agent). Only origins that
   // actually expose tools are listed here.
@@ -794,7 +797,6 @@ async function renderSiteAgents() {
   // intersected with the open tabs; the click still walks the owner-gesture
   // enrollment that reattests the exact tab before acting on it.
   const enrolledOrigins = new Set((Array.isArray(res.agents) ? res.agents : []).map((a) => a.origin));
-  const discoverable = await send("agent.tool-offers").catch(() => ({ ok: false }));
   const unenrolledTabs = (discoverable?.ok && Array.isArray(discoverable.offers))
     ? discoverable.offers.filter((t) => t.enrolled !== true && !enrolledOrigins.has(t.origin))
     : [];
