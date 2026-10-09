@@ -432,7 +432,13 @@ Deno.test("xy6n2: loaded grace still refuses a genuinely absent marker by a name
   const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-loaded-no-marker-" });
   const readyFile = `${tempDir}/missing.marker`;
   const tempTest = `${tempDir}/hangs-without-marker.test.ts`;
-  await Deno.writeTextFile(tempTest, `Deno.test("never writes marker", () => new Promise(() => {}));\n`);
+  // Keep the child alive beyond the hard ready bound. Deno treats an unresolved
+  // test promise as a failed test and exits early, which would exercise the
+  // separate child-exit refusal rather than the hard-deadline classifier.
+  await Deno.writeTextFile(tempTest, `
+await new Promise((resolve) => setTimeout(resolve, 60_000));
+Deno.test("never writes marker", () => {});
+`);
   try {
     const res = runSerialFile(tempTest, {
       timeoutMs: 1_000,
