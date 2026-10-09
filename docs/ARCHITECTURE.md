@@ -512,10 +512,13 @@ never timers (docs/DURABLE-RUN-ARCHITECTURE.md §"OPFS records").
 **Journal-scoped export consistency (jw7wf workstream):** Master-store writes
 share the cross-context `cap:master-journal` Web Lock with the owner Options
 streaming export (held from raw file inventory through the final TAR byte) and
-the legacy service-worker buffered export. Today that lock spans each master
-primitive, not an entire multi-step legacy journal transaction; cancellation
-now snapshots the journal and CAS-refuses an intervening write, but append and
-archive are not yet one WAL transaction. The journal's checkpoint, head,
+the legacy service-worker buffered export. The legacy append, receipt
+compensation and cancellation paths now hold ONE master lock across their
+compound snapshot/archive/live commit/guard/CAS operations. Clean guard
+failures CAS-compensate archived overflow using its exact version; re-enrollment
+deletes rather than restoring old archive secrets. This still is NOT a unified
+WAL transaction: a failed/ambiguous legacy journal-file close lacks a reliable
+write receipt, and a power loss between the two legacy files is not atomic. The journal's checkpoint, head,
 frames and archive must travel as one coherent generation once its WAL writer
 is enabled. The target registry now recognizes exact master-only WAL record
 names. Restore now validates both checked heads and their referenced records

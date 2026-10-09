@@ -1730,19 +1730,37 @@ async function journalAppendInternal(store, entry, guard, idempotencyExecutionId
   // dptw: the entry is stored WHOLE — no result/task text clipping.
   journal.push({ ts: Date.now(), ...entry });
   const entries = boundJournal(journal);
-  // Archive BEFORE the live commit: a failed archive aborts the append with
-  // the live journal untouched (nothing lost); a failed commit after a
-  // successful archive leaves an archive duplicate — harmless, archive rows
-  // are immutable records readers dedupe by executionId/ts.
+  // Archive BEFORE the live commit: a failed archive aborts without evicting
+  // any row. The same transaction lock covers both values and the guard/CAS
+  // compensation, including the absent-vs-present-empty archive receipt.
+  // A failed journal write with no issued version remains an ambiguous legacy
+  // OPFS close boundary; only a unified WAL frame can remove that last gap.
   const overflow = journalOverflow(journal);
+  let archiveReceipt = null;
   if (overflow.length > 0) {
-    const archive = (await store.get(JOURNAL_ARCHIVE_KEY)) ?? [];
+    const preArchive = await exactStoreSnapshot(store, JOURNAL_ARCHIVE_KEY);
+    const archive = preArchive.exists ? preArchive.value : [];
     if (!Array.isArray(archive)) throw new Error("journal archive is not an array");
-    await store.setTrusted(JOURNAL_ARCHIVE_KEY, archive.concat(overflow));
+    const writeVersion = await store.setTrusted(JOURNAL_ARCHIVE_KEY, archive.concat(overflow));
+    archiveReceipt = { preArchive, writeVersion };
   }
-  // Re-check the caller's fence IMMEDIATELY before the commit (no other await
-  // between this check and setTrusted).
-  if (guard) await guard();
+  const undoArchive = async (discardOldEnrollment = false) => {
+    if (!archiveReceipt) return;
+    const { preArchive, writeVersion } = archiveReceipt;
+    const undone = discardOldEnrollment || !preArchive.exists
+      ? await store.compareAndDelete(JOURNAL_ARCHIVE_KEY, writeVersion)
+      : await store.compareAndRestore(JOURNAL_ARCHIVE_KEY, writeVersion, preArchive.value);
+    if (!undone) throw new Error("journal archive compensation CAS refused");
+  };
+  // Re-check the caller's fence IMMEDIATELY before the commit. If it fails,
+  // remove only our archive write with its exact issued generation.
+  if (guard) {
+    try { await guard(); } catch (error) {
+      try { await undoArchive(error?.genMismatch === true); }
+      catch (undoError) { throw new AggregateError([error, undoError], "journal pre-commit fence failed; archive compensation unverified"); }
+      throw error;
+    }
+  }
   // `setTrusted` returns the durable VERSION TOKEN for THIS write (the round-27
   // value-CAS ABA blocker). Capture it so compensation below targets this exact
   // write, never a same-value write made under a different enrollment.
@@ -1771,12 +1789,17 @@ async function journalAppendInternal(store, entry, guard, idempotencyExecutionId
       //   2. abort/ownership loss (same enrollment): restore the EXACT pre-append
       //      state, CAS-scoped (only if the version is still `wroteVersion`).
       try {
-        if (e?.genMismatch === true) {
-          await store.compareAndDelete("journal", wroteVersion);
-        } else {
-          await store.compareAndRestore("journal", wroteVersion, original);
-        }
-      } catch { /* best-effort compensation */ }
+        const journalUndone = e?.genMismatch === true
+          ? await store.compareAndDelete("journal", wroteVersion)
+          : await store.compareAndRestore("journal", wroteVersion, original);
+        // Never remove overflow while the live append could still be present.
+        // On re-enrollment, delete our archive write but do not restore old
+        // enrollment content into the newly reused master directory.
+        if (!journalUndone) throw new Error("journal compensation CAS refused");
+        await undoArchive(e?.genMismatch === true);
+      } catch (undoError) {
+        throw new AggregateError([e, undoError], "journal post-commit fence failed; compensation unverified");
+      }
       throw e;
     }
   }

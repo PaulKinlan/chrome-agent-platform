@@ -268,6 +268,45 @@ Deno.test("master 500-row append plus failed guard compensates inside one non-re
   }
 });
 
+Deno.test("failed pre-commit append does not retain an absent archive overflow", async () => {
+  const mem = masterMemory();
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await mem.setTrusted("journal", seed);
+  await mem.delete("journal-archive");
+  await assertRejects(() => journalAppend(mem, { executionId: "exec-failed-precommit" }, async () => {
+    throw new Error("owner fence lost before commit");
+  }), Error, "owner fence lost before commit");
+  assertEquals(await mem.get("journal"), seed);
+  assertEquals(await mem.has("journal-archive"), false);
+});
+
+Deno.test("failed post-commit append restores a present-empty archive as well as the live ring", async () => {
+  const mem = masterMemory();
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await mem.setTrusted("journal", seed);
+  await mem.setTrusted("journal-archive", []);
+  let calls = 0;
+  await assertRejects(() => journalAppend(mem, { executionId: "exec-failed-postcommit" }, async () => {
+    if (++calls === 2) throw new Error("owner fence lost after commit");
+  }), Error, "owner fence lost after commit");
+  assertEquals(await mem.get("journal"), seed);
+  assertEquals(await mem.has("journal-archive"), true);
+  assertEquals(await mem.get("journal-archive"), []);
+});
+
+Deno.test("re-enrollment compensation deletes only its archived write, never restores old archive secrets", async () => {
+  const mem = masterMemory();
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await mem.setTrusted("journal", seed);
+  await mem.setTrusted("journal-archive", [{ text: "prior-enrollment-private" }]);
+  let calls = 0;
+  await assertRejects(() => journalAppend(mem, { executionId: "exec-reenrolled-overflow" }, async () => {
+    if (++calls === 2) throw Object.assign(new Error("re-enrolled"), { genMismatch: true });
+  }), Error, "re-enrolled");
+  assertEquals(await mem.has("journal"), false);
+  assertEquals(await mem.has("journal-archive"), false);
+});
+
 Deno.test("an escaped transaction facade cannot write after its master lock is released", async () => {
   const mem = masterMemory();
   let escaped;
