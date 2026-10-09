@@ -196,16 +196,42 @@ Deno.test({
       }, resolve))`);
       assertEquals(updated?.ok, true, "Named agent update must succeed");
 
-      // Assert stale-name state remains the reload precondition
-      const stateBeforeReload = await ev("window.history?.state?.name");
-      assertEquals(stateBeforeReload, "ZZZ Original Name", "Stale name must remain in history.state prior to reload");
+      // Deterministically reproduce the gate's winning async refresh: the old
+      // document now carries the fresh name, whether or not revalidateOpenAgent
+      // happened to finish before this CDP turn. The old assertion that it must
+      // still be stale failed twice under full-gate load (xlr1i RED control).
+      const stateBeforeReload = await ev(`(() => {
+        window.history.replaceState({ ...window.history.state, name: "ZZZ Renamed Name" }, "", location.href);
+        return window.history.state?.name;
+      })()`);
+      assertEquals(stateBeforeReload, "ZZZ Renamed Name", "Race control must start from the already-synced entry");
 
-      // 4. Real reload of the page (preserving session history with the stale history.state precondition)
+      // Restore the stale entry at the start of the NEW document, before the
+      // app boots. A write followed by a separate Page.reload CDP call would
+      // race the old document's async list refresh again. This one-shot script
+      // only changes the reload entry; post-reload app writes remain untouched.
+      const injection = await send("Page.addScriptToEvaluateOnNewDocument", { source: `(() => {
+        const state = window.history.state;
+        if (state?.route !== "agent" || state?.kind !== "named" || state?.id !== "agent-7zf0-browser") return;
+        window.history.replaceState({ ...state, name: "ZZZ Original Name" }, "", location.href);
+        window.__xlr1iStaleAtDocumentStart = window.history.state?.name;
+      })();` }, sessionId);
+      assert(injection.result?.identifier, "Pre-boot stale-state injection must register before reload");
+
+      // 4. Real reload: the persisted name is new, but the route entry is stale.
       await send("Page.reload", {}, sessionId);
-      await new Promise((r) => setTimeout(r, 2000));
-
-      const titleAfter = await ev("document.getElementById('thread-title')?.textContent");
-      const stateAfter = await ev("window.history?.state?.name");
+      const deadline = Date.now() + 15000;
+      let after;
+      do {
+        after = await ev(`({ stale: window.__xlr1iStaleAtDocumentStart,
+          title: document.getElementById("thread-title")?.textContent,
+          name: window.history?.state?.name })`);
+        if (after?.stale === "ZZZ Original Name" && after?.title === "ZZZ Renamed Name" && after?.name === "ZZZ Renamed Name") break;
+        if (Date.now() < deadline) await new Promise((r) => setTimeout(r, 150));
+      } while (Date.now() < deadline);
+      assertEquals(after?.stale, "ZZZ Original Name", "Reload must start from the deliberately stale history entry");
+      const titleAfter = after?.title;
+      const stateAfter = after?.name;
       const controlGet = await ev(`new Promise((resolve) => chrome.runtime.sendMessage({ type: "named-agent.get", id: "agent-7zf0-browser" }, (res) => resolve(res?.agent?.name)))`);
 
       // Control check: storage holds the new name in both runs
