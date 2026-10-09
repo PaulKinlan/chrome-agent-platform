@@ -2911,8 +2911,25 @@ async function main() {
     );
     // CAP-FB-20260831-AGENT-PRIVATE-FS-01 — the edit dialog shows the agent's
     // PRIVATE WORKSPACE row (usage + owner Clear). Creating an agent opens its
-    // thread, where the Edit button lives.
-    const wsRowSeen = await evalIn(cdp, ntpSession, `(async () => {
+    // thread, where the Edit button lives. named-agent.list can see the new
+    // record before onSaved finishes opening its surface; wait for the ACTUAL
+    // visible Edit affordance rather than racing that page-side continuation.
+    let editView = null;
+    for (let i = 0; i < 25; i++) {
+      editView = await evalIn(cdp, ntpSession, `(() => {
+        const edit = document.getElementById('edit-agent');
+        return {
+          visible: !!edit && !edit.hidden && edit.getClientRects().length > 0,
+          editHidden: edit?.hidden ?? null,
+          threadViewHidden: document.getElementById('thread-view')?.hidden ?? null,
+          title: document.getElementById('thread-title')?.textContent?.slice(0, 100) ?? null,
+          hash: location.hash,
+        };
+      })()`);
+      if (editView?.visible) break;
+      if (i < 24) await sleep(200);
+    }
+    const wsRowSeen = editView?.visible ? await evalIn(cdp, ntpSession, `(async () => {
       const edit = document.getElementById('edit-agent');
       if (!edit || edit.hidden) return { ready: false, why: 'no-edit-button' };
       edit.click();
@@ -2923,7 +2940,7 @@ async function main() {
       if (!row) return { ready: true, hasRow: false };
       const text = row.textContent.replace(/\s+/g, ' ').trim();
       return { ready: true, hasRow: true, hasClear: !!row.querySelector('button'), text: text.slice(0, 120) };
-    })()`);
+    })()`) : { ready: false, why: "no-edit-button", ...editView };
     console.log("edit dialog workspace row:", JSON.stringify(wsRowSeen));
     check(
       "edit dialog: the agent's Private workspace row renders with usage and a Clear button",
