@@ -148,6 +148,23 @@ function run(step, { cwd = ROOT, env = process.env, log = null } = {}) {
   });
 }
 
+/** The QUIET HEAD files this tree's partition declares, read from the partition module (one source). */
+function quietHeadFiles() {
+  const listed = spawnSync(process.execPath, [
+    "-e",
+    "import('./scripts/test-partition.mjs').then(m=>console.log([...m.QUIET_HEAD].join('\n')))",
+  ], { cwd: ROOT, encoding: "utf8" });
+  return String(listed.stdout ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
+/** Run the quiet-head phase for this tree (0 when there is nothing to run). Refuses (75) if it cannot
+ *  get a quiet window; a refusal is the repo's third verdict, never a pass and never a product red. */
+async function runQuietHeadPhase() {
+  const files = quietHeadFiles();
+  if (!files.length) return 0;
+  return await run({ name: "quiet head", cmd: "deno", args: ["run", "-A", "scripts/lib/quiet-head.ts", ...files] });
+}
+
 /** Run steps in order, stopping at the first failure (the && chain). */
 async function chain(steps, opts) {
   for (const step of steps) {
@@ -225,6 +242,17 @@ export async function main(env = process.env) {
       return r.rc;
     }
 
+    // gate-speed: the QUIET HEAD (files whose assertion is a timing contract of the PRODUCT — e.g. 0 long
+    // tasks while the built extension boots) runs HERE, before the sibling's build starts, because this is
+    // the only moment in an overlapped gate when the box is otherwise idle. npm test is told it is done
+    // (CAP_QUIET_HEAD_DONE=1) so the file never runs twice. A refusal (75) is the repo's third verdict:
+    // the gate stops and reports it, rather than measuring a saturated box.
+    const quietHeadRc = await runQuietHeadPhase();
+    if (quietHeadRc !== 0) {
+      say(`gate: ${quietHeadRc === 75 ? "ENVIRONMENTAL REFUSAL (exit 75) — the quiet-window measurement could not run on a saturated box; re-run" : `FAILED at quiet head (exit ${quietHeadRc})`} — wall ${secs()}`);
+      return quietHeadRc;
+    }
+
     say(`gate: OVERLAPPED mode — test:build runs in ${sibling} (log ${log}) beside npm test here`);
     // The sibling reproduces this tree's state before test:build (a store build of the same commit), then
     // runs test:build ONE tree at a time: it already runs beside npm test, and a second sibling would
@@ -234,7 +262,7 @@ export async function main(env = process.env) {
         say(`gate: test:build (sibling) ${r.rc === 0 ? "GREEN" : `FAILED at ${r.failed} (exit ${r.rc})`} at ${secs()}`);
         return r.rc;
       });
-    const testRc = await run(test);
+    const testRc = await run(test, { env: { ...env, CAP_QUIET_HEAD_DONE: "1" } });
     say(`gate: npm test ${testRc === 0 ? "GREEN" : `FAILED (exit ${testRc})`} at ${secs()}`);
     const siblingRc = await siblingDone;
     say(`\ngate: ---- test:build output (sibling worktree; log ${log}) ----`);

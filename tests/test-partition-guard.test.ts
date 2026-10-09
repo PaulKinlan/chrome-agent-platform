@@ -34,8 +34,8 @@ import {
   SERIAL_REASONS,
   SERIAL_TIMING_LANE,
   SERIAL_TIMING_LANE_REASONS,
-  QUIET_TAIL,
-  QUIET_TAIL_REASONS,
+  QUIET_HEAD,
+  QUIET_HEAD_REASONS,
   unserialisedHazards,
 } from "../scripts/test-partition.mjs";
 
@@ -913,18 +913,19 @@ Deno.test("gate-speed: the timing-lane guard is falsifiable — a hazard text is
   assert(classifyHazards(probe).length > 0, "the classifier must flag a dist read, or the guard above proves nothing");
 });
 
-// gate-speed: QUIET_TAIL files are moved AFTER the parallel phase by the full runner only. They must stay
-// in partition(...).parallel (so the per-change runner keeps running them) and must not be serial,
-// build-gate or read-only-dist members (each of those is a different, stricter placement).
-Deno.test("gate-speed: every QUIET_TAIL file is a reasoned parallel-partition file and nothing stricter", async () => {
+// gate-speed: QUIET_HEAD files are moved to the FRONT of the full run (in a waited-for quiet window) by
+// the full runner only. They must stay in partition(...).parallel (so the per-change runner keeps running
+// them) and must not be serial, build-gate or read-only-dist members (each of those is a stricter or
+// different placement).
+Deno.test("gate-speed: every QUIET_HEAD file is a reasoned parallel-partition file and nothing stricter", async () => {
   const all = await allTestFiles();
   const parallel = new Set(partition(all).parallel);
-  assert(QUIET_TAIL.size > 0, "the quiet tail exists");
-  for (const file of QUIET_TAIL) {
+  assert(QUIET_HEAD.size > 0, "the quiet head exists");
+  for (const file of QUIET_HEAD) {
     assert(all.includes(file), `${file} does not exist`);
     assert(parallel.has(file), `${file} must stay in partition(...).parallel`);
-    assert(!SERIAL.has(file) && !BUILD_GATE.has(file), `${file} is serial or build-gate, not quiet tail`);
-    const reason = (QUIET_TAIL_REASONS as Record<string, string>)[file];
-    assert(typeof reason === "string" && reason.trim().length > 0, `${file} needs a quiet-tail reason`);
+    assert(!SERIAL.has(file) && !BUILD_GATE.has(file), `${file} is serial or build-gate, not quiet head`);
+    const reason = (QUIET_HEAD_REASONS as Record<string, string>)[file];
+    assert(typeof reason === "string" && reason.trim().length > 0, `${file} needs a quiet-head reason`);
   }
 });

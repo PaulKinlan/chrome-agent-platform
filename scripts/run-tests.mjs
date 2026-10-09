@@ -24,7 +24,7 @@ import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath } from "node:path";
-import { BUILD_GATE, QUIET_TAIL, READ_ONLY_DIST, SERIAL, SERIAL_TIMING_LANE, partition } from "./test-partition.mjs";
+import { BUILD_GATE, QUIET_HEAD, READ_ONLY_DIST, SERIAL, SERIAL_TIMING_LANE, partition } from "./test-partition.mjs";
 import { announce, runReadOnlyDistBatch, runSerialFiles } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
 import { parallelPlan } from "./lib/parallel-plan.mjs";
@@ -220,6 +220,21 @@ function runParallel(files, phase = "parallel phase", { noCheck = false } = {}) 
   });
 }
 
+/** Run the QUIET HEAD phase (scripts/lib/quiet-head.ts) and say what it does with the files it owns. */
+function runQuietHead(files) {
+  if (!files.length) return 0;
+  if (process.env.CAP_QUIET_HEAD_DONE === "1") {
+    console.log(`run-tests: QUIET HEAD (${files.length} file(s)) already measured by the caller (CAP_QUIET_HEAD_DONE=1): ${files.join(", ")}`);
+    return 0;
+  }
+  console.log(`run-tests: QUIET HEAD (${files.length} file(s)) runs first, in a quiet window, one at a time: ${files.join(", ")}`);
+  const r = spawnSync("deno", ["run", "-A", "scripts/lib/quiet-head.ts", ...files], {
+    stdio: "inherit",
+    env: process.env,
+  });
+  return r.status ?? 1;
+}
+
 /** Start the timing lane as a child (scripts/lib/serial-lane.mjs). Its output goes straight to this
  *  process's stdout/stderr (inherited fds, not a pipe: the artifact lane blocks the event loop in
  *  spawnSync), so each of its lines — headers, failures, its own phase summary — appears live. */
@@ -286,6 +301,14 @@ export async function main(args = process.argv.slice(2)) {
   // guards green, because they never ran. The plan is pure and lives in scripts/lib/parallel-plan.mjs;
   // here we only print what it decides and let the serial failure still decide the exit code.
   const t0 = Date.now();
+  // gate-speed: the QUIET HEAD runs FIRST, while the box is otherwise idle: a file whose assertion is a
+  // timing contract of the product (not of the suite) can only measure the product here. It waits
+  // (bounded) for a quiet window and REFUSES with exit 75 rather than measure a saturated box;
+  // see scripts/lib/quiet-head.ts. A caller that already ran this phase (npm run gate does, before it
+  // starts its overlapped sibling build) sets CAP_QUIET_HEAD_DONE=1 and owns the exit code.
+  const quietHead = parallel.filter((f) => QUIET_HEAD.has(f));
+  const quietRc = runQuietHead(quietHead);
+  if (quietRc !== 0) console.error(`run-tests: QUIET HEAD phase exited ${quietRc}${quietRc === 75 ? " (ENVIRONMENTAL refusal — not a product red; re-run on a quiet box)" : ""}`);
   // gate-speed: ONE type check of every file this run executes, beside the serial phase (see
   // scripts/lib/type-check.mjs). Files run with --no-check only under a GREEN check; a red check
   // fails the run and the parallel phases fall back to checking themselves, exactly as before.
@@ -319,24 +342,17 @@ export async function main(args = process.argv.slice(2)) {
   // In the unchanged per-change runner both subsets still share its one
   // parallel process AFTER serial (partition(...).parallel is intentionally total).
   const readOnly = plan.files.filter((file) => READ_ONLY_DIST.has(file));
-  // gate-speed: QUIET_TAIL files run after the parallel phase, one at a time (see test-partition.mjs).
-  const quietTail = plan.files.filter((file) => QUIET_TAIL.has(file) && !READ_ONLY_DIST.has(file));
-  const other = plan.files.filter((file) => !READ_ONLY_DIST.has(file) && !QUIET_TAIL.has(file));
+  const other = plan.files.filter((file) => !READ_ONLY_DIST.has(file) && !QUIET_HEAD.has(file));
   const readOnlyRc = await runReadOnlyDistBatch(readOnly,
     (files) => runParallel(files, "post-build read-only phase", { noCheck }));
   // Preserve kz27: a failed builder OR read-only guard must not hide the
   // independent parallel guards; both phases run and the first failure wins.
   const parallelRc = await runParallel(other, "parallel phase", { noCheck });
-  let quietRc = 0;
-  if (quietTail.length) {
-    console.log(`run-tests: QUIET TAIL (${quietTail.length} file(s)) runs after the parallel phase, one at a time: ${quietTail.join(", ")}`);
-    quietRc = runSerialFiles(quietTail, { noCheck });
-  }
-  const rc = serialRc || checkRc || readOnlyRc || parallelRc || quietRc;
+  const rc = quietRc || serialRc || checkRc || readOnlyRc || parallelRc;
   const deferredCount = cliFiles.length === 0 ? all.length - (serialFiles.length + parallel.length) : 0;
   console.log(
     `run-tests: ${serialFiles.length + parallel.length} files total, ${plan.skipped} skipped` +
-      ` (${serialFiles.length} serial, ${readOnly.length} post-build read-only, ${parallel.length - readOnly.length - quietTail.length} other parallel, ${quietTail.length} quiet tail` +
+      ` (${serialFiles.length} serial, ${readOnly.length} post-build read-only, ${parallel.length - readOnly.length - quietHead.length} other parallel, ${quietHead.length} quiet head` +
       `${deferredCount ? `, ${deferredCount} deferred to npm run test:build` : ""}), wall ${((Date.now() - t0) / 1000).toFixed(0)}s`,
   );
   process.exit(rc);

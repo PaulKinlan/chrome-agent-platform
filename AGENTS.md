@@ -464,6 +464,27 @@ read in run 2.
   registers its service worker a beat after the browser is reachable, so wait
   for it with `waitForServiceWorker()` rather than relying on how long a
   handshake happens to take.
+- **The full gate's phase order, and `npm run gate` (gate-speed).** `npm test`
+  runs, in this order: the **QUIET HEAD** (files whose assertion is a timing
+  CONTRACT of the product — today only `tests/ntp-boot-staging.test.ts`, "0 long
+  tasks while the built extension boots" — which waits, bounded, for a quiet
+  window and REFUSES with exit 75 rather than measure a saturated box; see
+  `scripts/lib/quiet-head.ts` and `QUIET_HEAD` in `scripts/test-partition.mjs`),
+  then ONE up-front `deno check` of every file the run executes
+  (`scripts/lib/type-check.mjs`; the phases below run `--no-check` only under a
+  GREEN check, and a red check fails the run), then the serial ARTIFACT lane
+  beside the serial TIMING lane (`SERIAL_TIMING_LANE`: wall-clock/lock files with
+  no build-artifact hazard), then the post-build read-only phase, then the
+  parallel phase (longest-first, `DENO_JOBS` = 2 per CPU;
+  `scripts/lib/parallel-schedule.mjs` + `scripts/lib/test-weights.json`).
+  `npm run gate` (`scripts/gate.mjs`) runs exactly the three commands of the
+  sequential gate — build:production, npm test, test:build — with test:build in a
+  throwaway sibling worktree of the SAME commit beside npm test, and falls back to
+  the sequential chain (announced, with the reason) when the tree is dirty or the
+  sibling cannot be created: it never skips test:build. It runs the quiet head
+  BEFORE it starts the sibling (the only idle moment in that mode) and tells
+  npm test so, and it sweeps siblings left by a SIGKILLed gate before it starts.
+
 - **Three verdicts for a load-sensitive gate (chrome-agent-platform-mkax).**
   `0` = it ran and the tree passed. `1` = it ran and the tree failed (a product
   red). `75` (EX_TEMPFAIL) = it REFUSED to run because the box was not quiet —

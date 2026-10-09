@@ -90,16 +90,18 @@ export const READ_ONLY_DIST_REASONS = Object.freeze({
 });
 export const READ_ONLY_DIST = new Set(Object.keys(READ_ONLY_DIST_REASONS));
 
-// gate-speed: the QUIET TAIL. Files whose assertion is a timing CONTRACT of the product under a real
-// browser (0 long tasks during NTP boot) — not of the suite — run AFTER the parallel phase, one at a
-// time, so the measurement sees the product and not the suite's own CPU saturation. They stay in
-// partition(...).parallel (select-tests.mjs keeps running them in its subsets unchanged); only the
-// full runner moves them. Measured: ntp-boot-staging redded 2 of 2 full runs at 4 parallel workers
-// (median 1 long task, all runs "valid"), and is green solo.
-export const QUIET_TAIL_REASONS = Object.freeze({
-  "tests/ntp-boot-staging.test.ts": "asserts 0 long tasks (>50 ms) during a real-Chrome NTP boot; the suite's own saturation of the CPUs produces long tasks that are not the product's",
+// gate-speed: the QUIET HEAD. Files whose assertion is a timing CONTRACT of the product under a real
+// browser (0 long tasks during an NTP boot) — not of the suite — run FIRST, in a quiet window, one at a
+// time, so the measurement sees the product and not the box's CPU saturation. They stay in
+// partition(...).parallel (select-tests.mjs keeps running them in its subsets unchanged); only the full
+// runner moves them. Measured on the 2-vCPU hub: green on a quiet box (2/2), red 3/3 with three CPU
+// burners running, because the suite's own saturation produces the long tasks the test reads as the
+// product's — and its policy deliberately does not count the suite itself as contention. See
+// scripts/lib/quiet-head.ts for the wait/refuse rule, and SERIAL_TIMING_LANE for the wall-clock lane.
+export const QUIET_HEAD_REASONS = Object.freeze({
+  "tests/ntp-boot-staging.test.ts": "asserts 0 long tasks (>50 ms) during a real-Chrome NTP boot; the box's saturation produces long tasks that are not the product's",
 });
-export const QUIET_TAIL = new Set(Object.keys(QUIET_TAIL_REASONS));
+export const QUIET_HEAD = new Set(Object.keys(QUIET_HEAD_REASONS));
 
 // Build-behaviour tests moved to the dedicated npm run test:build gate (Option D / chrome-agent-platform-h65e).
 // These files run multiple in-place builds and are partitioned out of standard npm test to eliminate
