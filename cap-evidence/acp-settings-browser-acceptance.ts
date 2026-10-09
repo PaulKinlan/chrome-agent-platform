@@ -110,7 +110,7 @@ try {
   let sw: any = null;
   for (let i = 0; i < 60 && !sw; i++) {
     const targets = await (await fetch(`http://127.0.0.1:${chrome.port}/json/list`)).json();
-    sw = targets.find((t: any) => t.type === "service_worker");
+    sw = targets.find((t: any) => t.type === "service_worker" && String(t.url ?? "").includes("dist/background"));
     if (!sw) await sleep(200);
   }
   check("Extension service worker registered", !!sw);
@@ -223,7 +223,7 @@ try {
   console.log("Verifying acp-runner derives effectiveCwd from acp.cwd setting...");
   // Connect to the extension's background service worker to check storage directly
   const swTarget = (await (await fetch(`http://127.0.0.1:${chrome.port}/json/list`)).json())
-    .find((t: any) => t.type === "service_worker");
+    .find((t: any) => t.type === "service_worker" && String(t.url ?? "").includes("dist/background"));
   const swAttach = await send("Target.attachToTarget", { targetId: swTarget.id, flatten: true });
   await send("Runtime.enable", {}, swAttach.sessionId);
 

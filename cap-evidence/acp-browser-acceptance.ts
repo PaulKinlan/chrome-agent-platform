@@ -211,7 +211,7 @@ try {
   let sw: any = null;
   for (let i = 0; i < 60 && !sw; i++) {
     const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-    sw = targets.find((t: any) => t.type === "service_worker");
+    sw = targets.find((t: any) => t.type === "service_worker" && String(t.url ?? "").includes("dist/background"));
     if (!sw) await sleep(200);
   }
   check("extension loaded (service worker registered)", !!sw);
