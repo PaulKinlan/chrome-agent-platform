@@ -7,6 +7,7 @@ import {
   validateStagedMasterJournalBackup,
 } from "../extension/lib/master-journal-backup.js";
 import {
+  appendMasterJournalRow,
   appendMasterJournalWithReceipt,
   compensateMasterJournalReceipt,
   cancelMasterJournalExecution,
@@ -747,6 +748,39 @@ Deno.test("staged WAL receipt refuses same-value ABA and guard undo retains hist
   const after = await readMasterJournalProjection(master, { includeArchive: true });
   assertEquals(after.live.some((row) => row.executionId === "forbidden"), false);
   assertEquals(after.archive.length, 2, "the forbidden append's eviction remains historical residue");
+});
+
+Deno.test("ordinary no-receipt WAL append shares guarded live undo and historical eviction", async () => {
+  const { master, allocateVersion, readIssuedVersion } = await legacyFixture();
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await stageMasterJournalCutover(master, { journalExists: true, journal: seed, archive: [], allocateVersion });
+  let calls = 0;
+  await assertRejects(() => appendMasterJournalRow(master,
+    { type: "prompt-attestation", note: "forbidden" },
+    { allocateVersion, readIssuedVersion, guard: async () => {
+      if (++calls === 2) throw new Error("no-receipt guard refused");
+    } }), Error, "no-receipt guard refused");
+  const after = await readMasterJournalProjection(master, { includeArchive: true });
+  assertEquals(after.head.sequence, 2);
+  assertEquals(after.live, seed, "the forbidden ordinary row is absent from the live projection");
+  assertEquals(after.archive, [seed[0]], "its eviction remains immutable archive history");
+  assertEquals(calls, 2);
+});
+
+Deno.test("ordinary WAL replay idempotency requires exact actual execution identity", async () => {
+  const { master, allocateVersion, readIssuedVersion } = await legacyFixture();
+  await stageMasterJournalCutover(master, { journalExists: false, journal: [], archive: [], allocateVersion });
+  const issuer = { allocateVersion, readIssuedVersion, idempotencyExecutionId: "replayed" };
+  const first = await appendMasterJournalRow(master,
+    { type: "result", executionId: "replayed", result: "first" }, issuer);
+  const before = await readMasterJournalHead(master);
+  const repeated = await appendMasterJournalRow(master,
+    { type: "result", executionId: "replayed", result: "changed" }, issuer);
+  assertEquals(repeated, first, "replay cannot publish a second result frame");
+  assertEquals(await readMasterJournalHead(master), before);
+  await assertRejects(() => appendMasterJournalRow(master,
+    { type: "result", executionId: "wrong" }, issuer), Error, "idempotency identity");
+  assertEquals(await readMasterJournalHead(master), before);
 });
 
 Deno.test("post-compensation fence undo targets its actual issued token", async () => {

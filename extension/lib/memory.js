@@ -264,11 +264,12 @@ import { kvGet } from "./kv.js";
 import { withMasterJournalWebLock } from "./master-journal-lock.js";
 import { createMasterJournalIssuer } from "./master-journal-issuer.js";
 import {
+  appendMasterJournalRow,
   appendMasterJournalWithReceipt,
   compensateMasterJournalReceipt,
   cancelMasterJournalExecution,
 } from "./master-journal-transaction.js";
-import { readMasterJournalHead, readMasterJournalProjection } from "./master-journal-wal.js";
+import { readMasterJournalHead, readMasterJournalProjection, stageMasterJournalFrame } from "./master-journal-wal.js";
 import { fnv1a, newId } from "./pure.js";
 
 const ENROLL_KEY = "cap:enrollment";
@@ -1302,6 +1303,24 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
     const masterJournal = isMaster ? Object.freeze({
 
       head: ordered(async () => readMasterJournalHead((await authority()).master)),
+      // For future direct store replace/delete/clear routing only. A caller
+      // MUST capture the published epoch+version before requesting this frame;
+      // omitting either token cannot turn a stale mutation into a blind write.
+      // No product call site enables this staged writer yet.
+      frameIfCurrent: ordered(async (operation, { expectedEpoch, expectedVersion } = {}) => {
+        if (!Number.isSafeInteger(expectedEpoch) || expectedEpoch < 1 ||
+            !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+          throw new Error("master journal frame requires exact epoch and version");
+        }
+        const { master, issuer } = await authority();
+        return await stageMasterJournalFrame(master, operation,
+          { ...issuer, expectedEpoch, expectedVersion });
+      }),
+      append: ordered(async (entry, { guard = null, idempotencyExecutionId = null } = {}) => {
+        const { master, issuer } = await authority();
+        return await appendMasterJournalRow(master, entry,
+          { ...issuer, guard: guarded(guard), idempotencyExecutionId });
+      }),
       appendWithReceipt: ordered(async (entry, { guard = null, idempotencyExecutionId = null } = {}) => {
         const { master, issuer } = await authority();
         return await appendMasterJournalWithReceipt(master, entry,

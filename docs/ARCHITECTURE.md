@@ -582,6 +582,12 @@ also refuses. This callback
 is not a product write route and does not enable cutover. Master store
 transactions also expose staged receipt/compensation/cancellation WAL verbs
 using the lock they already hold; they never nest a second Web Lock. Sibling
+Staged `frameIfCurrent` prepares exact-epoch/version-checked replace/delete/
+clear frames for future direct store routes. Staged `append` shares the same
+pre/post-guard publication and live undo as receipt append without inventing
+an execution ID for ordinary rows; exact replay identity is optional and
+checked when supplied. Neither is invoked by a product journal writer while
+the one-authority cutover is incomplete.
 WAL verbs and master key mutations within one transaction serialize, because
 the outer lock excludes other transactions but not concurrent promises in the
 same callback. A guard must not await ANY promise from its transaction, even

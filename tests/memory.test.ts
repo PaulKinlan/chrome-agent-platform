@@ -916,6 +916,31 @@ Deno.test("staged master transaction exposes WAL verbs without re-entering the m
     assertEquals(routed.compensation.ok, true);
     assertEquals(routed.cancelled.at(-1).executionId, "cancelled-tx");
     assertEquals(routed.after.sequence, routed.before.sequence + 3);
+    const framed = await withStoreTransaction(api.masterMemory(), async (tx) => {
+      const prior = await tx.masterJournal.head();
+      await assertRejects(() => tx.masterJournal.frameIfCurrent({ operation: "delete" }),
+        Error, "requires exact epoch and version");
+      const replaced = await tx.masterJournal.frameIfCurrent({ operation: "replace", rows: [{ id: "framed" }] },
+        { expectedEpoch: prior.epoch, expectedVersion: prior.version });
+      await assertRejects(() => tx.masterJournal.frameIfCurrent({ operation: "delete" },
+        { expectedEpoch: prior.epoch, expectedVersion: prior.version }), Error, "CAS version mismatch");
+      const deleted = await tx.masterJournal.frameIfCurrent({ operation: "delete" },
+        { expectedEpoch: replaced.epoch, expectedVersion: replaced.version });
+      const cleared = await tx.masterJournal.frameIfCurrent({ operation: "clear" },
+        { expectedEpoch: deleted.epoch, expectedVersion: deleted.version });
+      return { prior, replaced, deleted, cleared };
+    });
+    assertEquals(framed.replaced.sequence, framed.prior.sequence + 1);
+    assertEquals(framed.deleted.sequence, framed.replaced.sequence + 1);
+    assertEquals(framed.cleared.sequence, framed.deleted.sequence + 1);
+    assertEquals(await api.masterMemory().has("journal"), false);
+    assertEquals(await api.masterMemory().has("journal-archive"), false,
+      "clear is an epoch-local WAL reset, not a stale legacy file write");
+    const noReceipt = await withStoreTransaction(api.masterMemory(), async (tx) =>
+      tx.masterJournal.append({ type: "prompt-attestation", note: "no execution id" }));
+    assertEquals(noReceipt.at(-1).note, "no execution id");
+    assertEquals(noReceipt.at(-1).executionId, undefined,
+      "fire-and-forget rows must not gain invented execution identity");
     assertEquals(isolated.children.get("memory").children.get("master").children.has("journal.json"), false);
     await assertRejects(async () => expired.appendWithReceipt(
       { type: "task", executionId: "after-scope" }), Error, "expired");
