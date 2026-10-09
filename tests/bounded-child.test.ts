@@ -24,9 +24,12 @@ import { join } from "node:path";
 import {
   boundedChildTimeoutMs,
   DEFAULT_BOUNDED_CHILD_TIMEOUT_MS,
+  isVerifyTeardownWedge,
   MAX_TIMER_MS,
+  PACKAGES_COMPLETION_SENTINEL,
   REPORT_GRACE_MS,
   runBoundedChild,
+  VERIFY_COMPLETION_SENTINEL,
 } from "../scripts/lib/bounded-child.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
@@ -235,4 +238,104 @@ Deno.test("bounded child: a command that cannot start is FAILED TO START, never 
   // BEFORE the hang bound would have fired, not at or after it. The stopwatch is
   // the assertion, exactly as for the futex case above.
   assert(s.ms < TIMEOUT_MS, `a start failure must report before the bound fires (got ${s.ms}ms, bound ${TIMEOUT_MS}ms); sample=${report}`);
+});
+
+Deno.test("bounded child: isVerifyTeardownWedge unit contract — sentinels and --verify flags (ahiq)", () => {
+  const completeTail = "VERIFY OK: 141 generated files byte-identical to the committed tree ⏎ OK: 38 packages, 111 shipped files, 38 manifest identities";
+  const incompleteTail = "Checking packages... ⏎ Processing sqlite3";
+  const emptyTail = "";
+
+  // Positive: --verify in args + sentinels in tail
+  assertEquals(isVerifyTeardownWedge(completeTail, ["--verify"]), true);
+  assertEquals(isVerifyTeardownWedge(completeTail, ["foo", "--verify", "bar"]), true);
+
+  // Negative 1: sentinels in tail but NO --verify flag
+  assertEquals(isVerifyTeardownWedge(completeTail, ["--regen-tools"]), false);
+  assertEquals(isVerifyTeardownWedge(completeTail, []), false);
+
+  // Negative 2: --verify present but incomplete tail (mid-work hang)
+  assertEquals(isVerifyTeardownWedge(incompleteTail, ["--verify"]), false);
+  assertEquals(isVerifyTeardownWedge(emptyTail, ["--verify"]), false);
+  assertEquals(isVerifyTeardownWedge("(stdout not captured)", ["--verify"]), false);
+
+  // Negative 3: only one of the two sentinels present
+  assertEquals(isVerifyTeardownWedge("VERIFY OK: 141 files ⏎ Exiting...", ["--verify"]), false);
+  assertEquals(isVerifyTeardownWedge("Processing... ⏎ OK: 38 packages", ["--verify"]), false);
+});
+
+Deno.test("bounded child: a teardown-only hang with completion sentinels under --verify is accepted (ahiq)", async () => {
+  const recordDir = freshRecordDir();
+  // Simulates a child that completed verification and then wedged during isolate shutdown / futex park
+  const TEARDOWN_WEDGE = 'process.stdout.write("VERIFY OK: 141 generated files byte-identical to the committed tree\\nOK: 38 packages, 111 shipped files, 38 manifest identities\\n"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);';
+  const started = Date.now();
+  const r = await runBoundedChild("node", ["-e", TEARDOWN_WEDGE, "--", "--verify"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    timeoutMs: 1_000,
+    label: "verify teardown probe",
+    recordDir,
+  });
+  const elapsed = Date.now() - started;
+  // Bound fired and process was killed, but since verification completed, status is 0
+  assertEquals(r.status, 0, "status must be 0 for accepted teardown wedge");
+  assertEquals(r.teardownWedge, true, "teardownWedge property must be true");
+  assert(r.stdout?.includes("VERIFY OK:"), "stdout must be preserved");
+  assert(r.stdout?.includes("OK: 38 packages"), "stdout must include packages ok");
+  assert(elapsed >= 750, `the bound must have elapsed, got ${elapsed}ms`);
+
+  // Verify durable record was written with teardownWedge: true
+  const rows = records(recordDir);
+  assertEquals(rows.length, 1, "durable record must be written");
+  assertEquals(rows[0].teardownWedge, true, "record must mark teardownWedge true");
+  assertEquals(rows[0].accepted, true, "record must mark accepted true");
+  rmSync(recordDir, { recursive: true, force: true });
+});
+
+Deno.test("bounded child: a mid-work hang under --verify is NOT accepted and throws HUNG (ahiq)", async () => {
+  const recordDir = freshRecordDir();
+  // Simulates a child that wedged mid-work (no completion sentinels)
+  const MID_WORK_WEDGE = 'process.stdout.write("Checking drift on sqlite3...\\n"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);';
+  let threw = false;
+  let errMsg = "";
+  try {
+    await runBoundedChild("node", ["-e", MID_WORK_WEDGE, "--", "--verify"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeoutMs: 1_000,
+      label: "verify mid-work probe",
+      recordDir,
+    });
+  } catch (e) {
+    threw = true;
+    errMsg = (e as Error).message;
+  }
+  assert(threw, "mid-work hang must throw");
+  assert(errMsg.includes("HUNG:"), `error must be HUNG, got: ${errMsg}`);
+
+  // Verify durable record was written with teardownWedge: false
+  const rows = records(recordDir);
+  assertEquals(rows.length, 1, "durable record must be written");
+  assertEquals(rows[0].teardownWedge, false, "record must mark teardownWedge false");
+  assertEquals(rows[0].accepted, false, "record must mark accepted false");
+  rmSync(recordDir, { recursive: true, force: true });
+});
+
+Deno.test("bounded child: completion sentinels without --verify are NOT accepted and throw HUNG (ahiq)", async () => {
+  const recordDir = freshRecordDir();
+  // Has sentinels in stdout, but was NOT run with --verify (e.g. non-verify mode)
+  const TEARDOWN_WEDGE = 'process.stdout.write("VERIFY OK: 141 generated files byte-identical to the committed tree\\nOK: 38 packages, 111 shipped files, 38 manifest identities\\n"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);';
+  let threw = false;
+  let errMsg = "";
+  try {
+    await runBoundedChild("node", ["-e", TEARDOWN_WEDGE], {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeoutMs: 1_000,
+      label: "no-verify probe",
+      recordDir,
+    });
+  } catch (e) {
+    threw = true;
+    errMsg = (e as Error).message;
+  }
+  assert(threw, "completion sentinels without --verify must still throw");
+  assert(errMsg.includes("HUNG:"), `error must be HUNG, got: ${errMsg}`);
+  rmSync(recordDir, { recursive: true, force: true });
 });
