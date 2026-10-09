@@ -3925,6 +3925,9 @@ async function main() {
     // scrape this replaced carried no ids, so it could not tell you WHICH
     // capability was granted — only how many rows looked green.
     const capState0 = await msgValue({ type: "capabilities.status" });
+    // Report the actual worker state before diagnosing an optional-permission
+    // failure: an earlier owner-driven journey may already have requested it.
+    console.log(`permissions baseline raw: ${JSON.stringify(capState0)}`);
     // A hard-coded count here silently rots every time a tool tranche adds a
     // capability — which is exactly what happened between 0.2.278 and 0.2.290
     // (7 -> 18) and left this assertion red for days. But simply deriving the
