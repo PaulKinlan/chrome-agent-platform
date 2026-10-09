@@ -191,7 +191,10 @@ Deno.test("archive bytes never contain credential material; the bundle records W
 
 Deno.test("sanitizeKvForExport strips ephemeral keys and never leaks providerConfig", () => {
   const { kv } = fixtureBackends();
+  kv.store.set("cap:masterJournalCutoverFence", { schemaVersion: 1, phase: "armed" });
   const out = sanitizeKvForExport(Object.fromEntries(kv.store));
+  assertEquals(out["cap:masterJournalCutoverFence"], undefined,
+    "a local owner cutover fence must never travel in an export");
   assertEquals(out.providerConfig, undefined);
   assertEquals(out["cap:webmcpBridgeNonces"], undefined);
   assertEquals(out["cap:namedAgents"].length, 2);

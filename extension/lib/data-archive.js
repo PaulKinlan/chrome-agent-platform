@@ -151,6 +151,7 @@ const EPHEMERAL_KV_KEYS = new Set([
   "cap:webmcpSnapshotGate",
   "cap:importBackup",
   "cap:restoreFence",
+  "cap:masterJournalCutoverFence",
   "cap:restoreHeartbeat",
   "cap:restoreClaim",
   "cap:invalidationPending",

@@ -115,7 +115,7 @@ import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "../lib/bundled-tool-packages.data.js";
 import { NATIVE_OFFSCREEN_TOOL_ROWS, nativeOffscreenLazyRecords, parseSvgRasteriseArgs } from "../lib/lazy-tool-protocol.js";
 import { SVG_RASTERISE_RUN_TYPE } from "../lib/svg-rasterise-host.js";
-import { executeFactoryReset, enumerateStorageTargets } from "../lib/factory-reset.js";
+import { executeFactoryReset, enumerateStorageTargets, withFactoryResetIsolation } from "../lib/factory-reset.js";
 import {
   collectExportData,
   buildArchive,
@@ -126,6 +126,7 @@ import {
   createChromeAlarmsAdapter,
 } from "../lib/data-archive.js";
 import { withMasterJournalWebLock } from "../lib/master-journal-lock.js";
+import { readJournalAdmissionFence } from "../lib/master-journal-cutover-admission.js";
 import { createSecretVault, createServiceWorkerAccess } from "../lib/secret-vault.js";
 import { synthesizeServiceTools, SERVICE_DESCRIPTORS, enclaveToolsForRun } from "../lib/service-tools.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
@@ -9220,9 +9221,16 @@ const handlers = mergeRouteMaps(
       }
       const origins = await listOrigins();
       await Promise.all(origins.map((origin) => invalidateSiteToolWork(origin)));
-      const result = await withEnrollmentLock(() =>
-        withSiteToolAuditBarrier(() =>
-          withSiteToolConsentBarrier(() => executeFactoryReset())));
+      const result = await withFactoryResetIsolation(
+        () => executeFactoryReset(),
+        {
+          // Drain audit/consent work BEFORE taking the master Web Lock: a
+          // pending site-tool writer might need that lock to finish.
+          withEnrollmentLock: (operation) => withEnrollmentLock(() =>
+            withSiteToolAuditBarrier(() => withSiteToolConsentBarrier(operation))),
+          withMasterJournalWebLock,
+        },
+      );
       // The reset wipes OPFS without restarting this worker, so the durable-run
       // registry's in-memory record cache would still describe runs that no
       // longer exist. Go cold (CAP-FB-20260830-RUN-LOG-COMPACTION-01).
@@ -10800,13 +10808,16 @@ const handlers = mergeRouteMaps(
   async "register-task"(m) {
     if (typeof chrome !== "undefined" && chrome?.storage?.local) {
       try {
-        const fenceCheck = await chrome.storage.local.get("cap:restoreFence");
-        if (fenceCheck?.["cap:restoreFence"]) {
+        const fence = await readJournalAdmissionFence(chrome.storage.local);
+        if (fence === "master_journal_cutover") {
+          throw new Error("Cannot register task: master journal cutover requires owner repair");
+        }
+        if (fence === "restore") {
           throw new Error("Cannot register task: profile restore is in progress");
         }
       } catch (err) {
-        if (err?.message?.includes("profile restore is in progress")) throw err;
-        throw new Error(`Failed to verify restore admission fence: ${err?.message || err}`);
+        if (err?.message?.startsWith("Cannot register task:")) throw err;
+        throw new Error(`Failed to verify journal admission fence: ${err?.message || err}`);
       }
     }
     const { name, when } = await registerAlarm(m.task);

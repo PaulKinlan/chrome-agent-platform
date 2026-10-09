@@ -30,6 +30,7 @@ const RESTORE_RECOVERY_ALARM = "cap-restore-recovery-alarm";
 const INTERNAL_RESTORE_KEYS = new Set([
   IMPORT_SIDECAR_KEY,
   RESTORE_FENCE_KEY,
+  "cap:masterJournalCutoverFence", // owner-local coordination, never imported from a backup
   RESTORE_HEARTBEAT_KEY,
   RESTORE_CLAIM_KEY,
   RESTORE_INVALIDATION_KEY,

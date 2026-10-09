@@ -21,6 +21,7 @@ import { REPLAY_MUTATING, perCallIdempotencyKey, worstSafety } from "./tool-repl
 import { newId, redactSecretText } from "./pure.js";
 import { commitThreadCancellation, commitThreadTerminal, boundResponseDigest, boundTerminalEnvelope } from "./threads.js";
 import { isNativeQuotaExceededError } from "./storage-errors.js";
+import { readJournalAdmissionFence } from "./master-journal-cutover-admission.js";
 import {
   appendRecords as walAppend,
   readAll as walReadAll,
@@ -257,7 +258,8 @@ export function createDurableRunRegistry({
   // without reaching real OPFS (chrome-agent-platform-cejm review).
   purgeStoreDir: purgeStoreDirDep = purgeStoreDirImpl,
   injectFailure = null,
-  fenceCheck = async () => (typeof chrome !== "undefined" && chrome?.storage?.local ? (await chrome.storage.local.get("cap:restoreFence"))?.["cap:restoreFence"] : null),
+  fenceCheck = async () => (typeof chrome !== "undefined" && chrome?.storage?.local
+    ? await readJournalAdmissionFence(chrome.storage.local) : null),
 } = {}) {
   // ── the record cache (CAP-FB-20260830-RUN-LOG-COMPACTION-01) ──────────
   // Every execution record lives in its OWN OPFS directory, so `list()` and the
@@ -1032,7 +1034,9 @@ export function createDurableRunRegistry({
       if (typeof fenceCheck === "function") {
         const fenced = await fenceCheck();
         if (fenced) {
-          throw new Error("Cannot start durable run: profile restore fence is active");
+          throw new Error(fenced === "master_journal_cutover"
+            ? "Cannot start durable run: master journal cutover fence is active"
+            : "Cannot start durable run: profile restore fence is active");
         }
       }
 

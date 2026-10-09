@@ -7,6 +7,7 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { INFLIGHT_LEASE_MS, MAX_ACTIVE_ALARMS } from "../extension/lib/scheduler.js";
 import { freshScheduler } from "./test-hooks.js";
 import { isMemoryKeyQuotaError } from "../extension/lib/storage-errors.js";
+import { MASTER_JOURNAL_CUTOVER_FENCE_KEY } from "../extension/lib/master-journal-cutover-admission.js";
 
 // Module isolation: scheduler.js owns `activeRuns` + `BOOT_AT` in CLOSURE, so a
 // simulated worker restart is a FRESH module instance (cache-busted), not a
@@ -79,6 +80,18 @@ Deno.test("scheduler reports Chrome's 500-active-alarm limit before persistence"
   } finally {
     Object.assign(chrome.alarms, original);
     store.delete("cap:scheduledTasks");
+  }
+});
+
+Deno.test("scheduler refuses a present owner WAL cutover fence before persisting an alarm", async () => {
+  store.delete("cap:scheduledTasks");
+  store.set(MASTER_JOURNAL_CUTOVER_FENCE_KEY, false);
+  try {
+    await assertRejects(() => scheduleTask({ task: "must not be scheduled", delayMs: 1000 }),
+      Error, "master journal cutover");
+    assertEquals(store.has("cap:scheduledTasks"), false);
+  } finally {
+    store.delete(MASTER_JOURNAL_CUTOVER_FENCE_KEY);
   }
 });
 

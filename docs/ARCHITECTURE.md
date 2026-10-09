@@ -609,16 +609,20 @@ master outboxes, unreadable registry entries and master cancel-requested
 records. Its callback has no product caller. The lock-free writer count alone
 is insufficient: quota rollback retires its writer before compensating a
 legacy receipt but holds the registry write chain throughout. Any future
-owner cutover additionally requires a separately durable admission fence
-(not the boot-auto-cleared `cap:restoreFence`), quiescence before the master
-Web Lock, factory-reset exclusion, and every product writer route enabled
-atomically with publication. No cutover is published by this staged fence. Even the
-Deno-only unregistered-store test seam reads the physical master head when a
+owner cutover additionally requires quiescence before the master Web Lock
+and every product writer route enabled atomically with publication. A
+separate `cap:masterJournalCutoverFence` key is now checked at run admission,
+scheduled-task admission, and `register-task`; a present but malformed key
+refuses too. Unlike `cap:restoreFence`, boot recovery does not auto-clear it,
+and backups exclude it. No product code arms/disarms this owner fence yet.
+Factory reset now holds `cap:restoreLock`, the SW enrollment/audit/consent
+barriers, and then `cap:master-journal` around its wipe; a future SW cutover
+must take those locks in compatible order. No cutover is published by these
+staged gates. Even the Deno-only unregistered-store test seam reads the physical head when a
 wrapped master store has no transaction facade. Torn, non-equal or source-mismatched
 immutable records, damaged head slots, and pre-head cutover residue (a
 nonempty WAL directory with no published head) remain fail-closed until
-explicit owner repair; none selects the stale legacy journal
-pending explicit owner repair. Archive rows are an append-only HISTORY LOG,
+explicit owner repair; none selects the stale legacy journal automatically. Archive rows are an append-only HISTORY LOG,
 not a set of currently evicted rows: a compensated
 row may legitimately exist in both live and archive. Readers must not infer
 live state from archive history. On a post-commit guard failure, a replace or

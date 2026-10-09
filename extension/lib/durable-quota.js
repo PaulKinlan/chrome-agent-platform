@@ -1,5 +1,6 @@
 import { describeError } from "./error-report.js";
 import { isNativeQuotaExceededError } from "./storage-errors.js";
+import { readJournalAdmissionFence } from "./master-journal-cutover-admission.js";
 
 /**
  * Convert a native storage-quota failure into the stable route response used by
@@ -28,13 +29,15 @@ export function durableQuotaResponse(error, executionId) {
 export async function admitDurableRun(durableRuns, meta) {
   if (typeof chrome !== "undefined" && chrome.storage?.local?.get) {
     try {
-      const fence = await chrome.storage.local.get("cap:restoreFence");
-      if (fence?.["cap:restoreFence"]) {
+      const fence = await readJournalAdmissionFence(chrome.storage.local);
+      if (fence) {
         return {
           ok: false,
           error: "admission_fenced",
-          code: "restore_in_progress",
-          message: "Profile restore in progress; new runs cannot be admitted",
+          code: fence === "master_journal_cutover" ? "master_journal_cutover_in_progress" : "restore_in_progress",
+          message: fence === "master_journal_cutover"
+            ? "Master journal cutover requires owner repair; new runs cannot be admitted"
+            : "Profile restore in progress; new runs cannot be admitted",
           executionId: meta?.executionId ?? null,
         };
       }
@@ -43,7 +46,7 @@ export async function admitDurableRun(durableRuns, meta) {
         ok: false,
         error: "storage_unreadable",
         code: "fence_check_failed",
-        message: `Failed to verify restore admission fence: ${fenceErr?.message || fenceErr}`,
+        message: `Failed to verify restore admission fence (including master journal cutover): ${fenceErr?.message || fenceErr}`,
         executionId: meta?.executionId ?? null,
       };
     }
@@ -61,6 +64,15 @@ export async function admitDurableRun(durableRuns, meta) {
     await durableRuns.start(normalizedMeta);
     return null;
   } catch (error) {
+    if (error?.message?.includes("master journal cutover fence is active")) {
+      return {
+        ok: false,
+        error: "admission_fenced",
+        code: "master_journal_cutover_in_progress",
+        message: "Master journal cutover requires owner repair; new runs cannot be admitted",
+        executionId: meta?.executionId ?? null,
+      };
+    }
     if (error?.message?.includes("profile restore fence is active")) {
       return {
         ok: false,

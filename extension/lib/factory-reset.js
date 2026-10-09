@@ -99,6 +99,29 @@ export async function enumerateStorageTargets({
   return Object.freeze(result);
 }
 
+/** The owner reset must not delete the master OPFS root during a cutover,
+ * export, restore, or journal write. Keep restoreLock outermost (Options uses
+ * restoreLock → master), then the SW enrollment/audit/consent barriers, then
+ * the master Web Lock through the actual wipe and verification. The caller's
+ * enrollment wrapper drains audit/consent work before acquiring the master
+ * lock so a pending writer cannot be blocked from finishing. Never fall back to an
+ * unlocked destructive reset when Web Locks are unavailable. */
+export async function withFactoryResetIsolation(wipe, {
+  locks = globalThis.navigator?.locks,
+  withEnrollmentLock,
+  withMasterJournalWebLock,
+} = {}) {
+  if (typeof wipe !== "function" || typeof withEnrollmentLock !== "function" ||
+      typeof withMasterJournalWebLock !== "function") {
+    throw new TypeError("factory reset requires the wipe and both authority locks");
+  }
+  if (!locks?.request) throw new Error("restore Web Lock is unavailable; factory reset refused");
+  return await locks.request("cap:restoreLock", { mode: "exclusive" }, async (lock) => {
+    if (!lock) throw new Error("restore Web Lock is unavailable; factory reset refused");
+    return await withEnrollmentLock(() => withMasterJournalWebLock(wipe));
+  });
+}
+
 /**
  * Execute an all-or-nothing transactional wipe across all storage classes.
  */
