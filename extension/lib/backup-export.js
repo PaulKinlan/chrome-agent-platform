@@ -23,6 +23,7 @@ import {
 } from "./data-archive.js";
 import { isManagedRedactedTarget, sanitizeRedactedTargetText } from "./logical-site-agent-config.js";
 import { encodeTarStream } from "./tar-stream.js";
+import { withMasterJournalWebLock } from "./master-journal-lock.js";
 
 const ENCODER = new TextEncoder();
 
@@ -289,7 +290,11 @@ export async function executeOptionsExport({
       });
       const writable = await handle.createWritable();
       try {
-        const result = await streamExportArchive({
+        // The journal writer takes this same cross-context lock. Hold it from
+        // inventory through the last streamed byte, but not while the owner is
+        // deciding in the save picker. Other profile stores keep their existing
+        // (not globally point-in-time) backup semantics.
+        const result = await withMasterJournalWebLock(() => streamExportArchive({
           writable,
           listFiles: () => adapter.listFiles(),
           open: (path) => adapter.open(path),
@@ -297,7 +302,7 @@ export async function executeOptionsExport({
           alarms,
           extensionVersion,
           onProgress: (p) => onStatus(`Exported ${p.bytesSoFar} bytes…`),
-        });
+        }));
         onStatus(`Exported ${result.files - 3} stored files, ${result.totalBytes} payload bytes to ${handle.name}. Keep the file safe — it contains your agents' memories.`);
         return result;
       } finally {
@@ -311,7 +316,7 @@ export async function executeOptionsExport({
     const writable = await tempHandle.createWritable();
     let downloaded = false;
     try {
-      const result = await streamExportArchive({
+      const result = await withMasterJournalWebLock(() => streamExportArchive({
         writable,
         listFiles: () => adapter.listFiles(),
         open: (path) => adapter.open(path),
@@ -319,7 +324,7 @@ export async function executeOptionsExport({
         alarms,
         extensionVersion,
         onProgress: (p) => onStatus(`Exported ${p.bytesSoFar} bytes…`),
-      });
+      }));
       const file = await tempHandle.getFile();
       const url = createDownloadUrl(file);
       triggerDownload(url, `cap-backup-${when}.tar`);

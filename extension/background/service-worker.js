@@ -125,6 +125,7 @@ import {
   createOpfsAdapter,
   createChromeAlarmsAdapter,
 } from "../lib/data-archive.js";
+import { withMasterJournalWebLock } from "../lib/master-journal-lock.js";
 import { createSecretVault, createServiceWorkerAccess } from "../lib/secret-vault.js";
 import { synthesizeServiceTools, SERVICE_DESCRIPTORS, enclaveToolsForRun } from "../lib/service-tools.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
@@ -9266,11 +9267,14 @@ const handlers = mergeRouteMaps(
     }
     try {
       const root = await navigator.storage.getDirectory();
-      const snapshot = await collectExportData({
+      // Keep the master journal's raw checkpoint/head/frames coherent with
+      // Options streaming export. This does not promise an atomic snapshot of
+      // other profile stores, whose existing writers use different locks.
+      const snapshot = await withMasterJournalWebLock(() => collectExportData({
         kvGet,
         opfs: createOpfsAdapter(root),
         alarms: createChromeAlarmsAdapter(),
-      });
+      }));
       const bundle = buildArchive(snapshot, {
         extensionVersion: String(chrome.runtime.getManifest()?.version ?? "unknown"),
       });

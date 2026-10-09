@@ -211,6 +211,7 @@ async function currentVersion(dir, key) {
 }
 
 import { kvGet } from "./kv.js";
+import { withMasterJournalWebLock } from "./master-journal-lock.js";
 import { fnv1a, newId } from "./pure.js";
 
 const ENROLL_KEY = "cap:enrollment";
@@ -785,7 +786,12 @@ function withWriteLock(pathOrFn, maybeFn) {
   const path = typeof pathOrFn === "function" ? "global" : pathOrFn;
   const key = dirMutexKey(path);
   const prev = writeMutexes.get(key) || Promise.resolve();
-  const run = prev.then(fn, fn);
+  // The legacy mutex is confined to one JS realm. Master generations and the
+  // journal's future checkpoint/head are shared with the owner Options page:
+  // serialize ALL master writes (including unrelated __gen issuers) against
+  // raw journal export across contexts. Non-master stores are unaffected.
+  const execute = key === `${ROOT}/${MASTER}` ? () => withMasterJournalWebLock(fn) : fn;
+  const run = prev.then(execute, execute);
   const next = run.then(() => {}, () => {});
   writeMutexes.set(key, next);
   next.finally(() => {
