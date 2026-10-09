@@ -44,6 +44,16 @@ async function chainFixture() {
   return { paths, archives: archives.map((name) => `${PREFIX}${name}`), residue };
 }
 
+Deno.test("export refuses pre-head WAL residue instead of selecting legacy journal", async () => {
+  const { paths } = await chainFixture();
+  paths.delete(`${PREFIX}head-a.json`);
+  await assertRejects(() => selectPublishedMasterJournalBackupPaths(
+    [...paths.keys()], async (path) => ({
+      size: paths.get(path).length, stream: new Blob([paths.get(path)]).stream(),
+    }),
+  ), Error, "missing its cutover head");
+});
+
 Deno.test("two head slots retain the union of old and compacted checkpoint/archive chains", async () => {
   const { paths, archives } = await chainFixture();
   paths.delete(`${PREFIX}frame-41-1.json`); // unpublished residue is not a head dependency

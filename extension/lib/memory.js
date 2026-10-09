@@ -1799,6 +1799,17 @@ function withJournalLock(fn) {
   return run;
 }
 
+async function masterJournalHeadInTransaction(tx) {
+  if (!tx.isMaster) return null;
+  if (tx.masterJournal) return await tx.masterJournal.head();
+  // withStoreTransaction refuses unregistered stores in the extension. Deno's
+  // test-only wrapped-store fallback must still read the physical master WAL:
+  // an absent transaction facade is NOT evidence of legacy authority.
+  if (typeof Deno === "undefined") throw new Error("unregistered master journal transaction refused");
+  const master = await openDirOptional([ROOT, MASTER]);
+  return master ? await readMasterJournalHead(master) : null;
+}
+
 // The live journal ring keeps the latest 500 entries; everything older is
 // archived (dptw owner-steer: archive-to-file, never evict).
 const JOURNAL_LIVE_ENTRIES = 500;
@@ -1832,7 +1843,7 @@ async function exactStoreSnapshot(store, key) {
 
 async function journalAppendInternal(store, entry, guard, idempotencyExecutionId, receiptCapable) {
   return withJournalLock(() => withStoreTransaction(store, async (store) => {
-  if (store.isMaster && await store.masterJournal?.head()) {
+  if (await masterJournalHeadInTransaction(store)) {
     throw new Error("master journal WAL writer is not enabled; append refused");
   }
   // Capture the exact value, existence and version as one stable receipt.
@@ -1967,7 +1978,7 @@ export async function journalCompensateExecution(store, receipt, guard = null) {
     // No partial authority switch: an in-flight legacy receipt is NOT a WAL
     // receipt and must never report a successful compensation after cutover.
     // The staged WAL transaction verbs are not product-routed yet.
-    if (store.isMaster && await store.masterJournal?.head()) {
+    if (await masterJournalHeadInTransaction(store)) {
       return { ok: false, compensated: false, preserved: true,
         reason: receipt.wal ? "master_wal_writer_disabled" : "legacy_receipt_after_cutover" };
     }
@@ -2058,7 +2069,7 @@ export async function journalAppendOnce(store, entry, guard = null, executionId 
 export async function journalCommitCancellation(store, entry, executionId = entry?.executionId) {
   if (!executionId) throw new Error("journalCommitCancellation requires executionId");
   return withJournalLock(() => withStoreTransaction(store, async (store) => {
-    if (store.isMaster && await store.masterJournal?.head()) {
+    if (await masterJournalHeadInTransaction(store)) {
       throw new Error("master journal WAL writer is not enabled; cancellation refused");
     }
     const pre = await exactStoreSnapshot(store, "journal");

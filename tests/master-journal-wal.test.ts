@@ -71,6 +71,9 @@ class MemoryDir {
     }
     return this.children.get(name);
   }
+  async *entries() {
+    yield* this.children.entries();
+  }
 }
 
 async function legacyFixture(faults = {}) {
@@ -108,6 +111,17 @@ Deno.test("master journal cutover stages and verifies whole live/archive rows be
   await assertRejects(() => stageMasterJournalCutover(master, {
     journalExists: true, journal: [], archive: [], allocateVersion,
   }), Error, "already cut over");
+});
+
+Deno.test("cutover pre-head residue refuses stale legacy reads until explicit owner repair", async () => {
+  const { master, allocateVersion } = await legacyFixture({ close: "checkpoint-18-0.json" });
+  await assertRejects(() => stageMasterJournalCutover(master, {
+    journalExists: true, journal: [{ id: "legacy" }], archive: [], allocateVersion,
+  }), Error, "injected close");
+  await assertRejects(() => readMasterJournalHead(master), Error, "pre-head residue");
+  await assertRejects(() => readMasterJournalProjection(master), Error, "pre-head residue");
+  assertEquals((await master.getDirectoryHandle("journal-wal")).children.has("checkpoint-18-0.json"), true,
+    "a failed cutover retains immutable evidence, not a legacy fallback decision");
 });
 
 Deno.test("cutover retains an unbounded legacy archive in bounded immutable segments", async () => {
@@ -276,17 +290,19 @@ Deno.test("archive existence is checked and cannot contradict retained whole row
   await assertRejects(() => readMasterJournalProjection(valid.master, { includeArchive: true }), Error, "archive segment is corrupt");
 });
 
-Deno.test("failed archive publication cannot select staged checkpoint or displace legacy journal", async () => {
+Deno.test("failed archive publication preserves legacy bytes but refuses all pre-head progress", async () => {
   const faults = { close: "archive-18-0.json" };
   const { master, legacy, allocateVersion } = await legacyFixture(faults);
   await assertRejects(() => stageMasterJournalCutover(master, {
     journalExists: true, journal: [{ id: 1 }], archive: [], allocateVersion,
   }), Error, "injected close");
-  assertEquals(await readMasterJournalHead(master), null);
-  assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy);
+  assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy,
+    "legacy bytes survive for explicit owner repair, not automatic fallback");
+  await assertRejects(() => readMasterJournalHead(master), Error, "pre-head residue");
   faults.close = null;
-  await stageMasterJournalCutover(master, { journalExists: true, journal: [{ id: 1 }], archive: [], allocateVersion });
-  assertEquals((await readMasterJournalProjection(master)).version, 19, "retry uses a new generation");
+  await assertRejects(() => stageMasterJournalCutover(master,
+    { journalExists: true, journal: [{ id: 1 }], archive: [], allocateVersion }),
+  Error, "pre-head residue");
 });
 
 Deno.test("failed terminal head close is not acknowledged and a corrupt present head fails closed", async () => {

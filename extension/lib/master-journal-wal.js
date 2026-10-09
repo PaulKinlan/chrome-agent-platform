@@ -117,7 +117,17 @@ export async function readMasterJournalHead(master) {
     const head = await readRecord(directory, slot, "head");
     if (head) heads.push(validateHead(head));
   }
-  if (heads.length === 0) return null;
+  if (heads.length === 0) {
+    // A cutover may crash after staging its first immutable checkpoint or
+    // archive but BEFORE publishing head-a. Without a separate durable
+    // cutover witness, those bytes cannot prove a safe retry or that legacy
+    // remains authoritative. Preserve them and require explicit owner repair;
+    // never silently select the legacy journal or export it as pre-cutover.
+    for await (const _ of directory.entries()) {
+      throw new Error("master journal pre-head residue requires explicit owner repair");
+    }
+    return null; // An empty directory has no cutover evidence.
+  }
   if (heads.length === 1 && !(await optionalFile(directory, HEADS[0]))) {
     throw new Error("master journal cutover head is missing");
   }

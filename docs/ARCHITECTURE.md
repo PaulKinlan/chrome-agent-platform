@@ -595,8 +595,13 @@ re-enter the non-reentrant lock and are forbidden. No product journal verb
 calls the adapter yet: master append and cancellation refuse immediately when
 a checked head exists; a legacy-shape compensation receipt returns an explicit
 `legacy_receipt_after_cutover` preservation refusal rather than appearing to
-undo a row on the wrong authority. Torn, non-equal or source-mismatched
-immutable records and damaged head slots remain fail-closed
+undo a row on the wrong authority. A WAL-shaped receipt likewise returns
+`master_wal_writer_disabled` until every product route is migrated. Even the
+Deno-only unregistered-store test seam reads the physical master head when a
+wrapped master store has no transaction facade. Torn, non-equal or source-mismatched
+immutable records, damaged head slots, and pre-head cutover residue (a
+nonempty WAL directory with no published head) remain fail-closed until
+explicit owner repair; none selects the stale legacy journal
 pending explicit owner repair. Archive rows are an append-only HISTORY LOG,
 not a set of currently evicted rows: a compensated
 row may legitimately exist in both live and archive. Readers must not infer

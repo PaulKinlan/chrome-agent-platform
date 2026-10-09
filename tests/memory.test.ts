@@ -436,6 +436,15 @@ Deno.test("master journal readers use a checked cutover rather than stale legacy
       postState: [{ id: "checked-wal" }], writeVersion: legacyVersion + 1, appended: true };
     assertEquals((await journalCompensateExecution(mem, oldReceipt)).reason,
       "legacy_receipt_after_cutover", "a legacy receipt must explicitly refuse on checked WAL authority");
+    // Deno's registered-transaction fallback accepts wrapped test stores.
+    // They must still inspect the physical master WAL, not treat the absent
+    // tx.masterJournal facade as evidence that legacy is authoritative.
+    const wrappedMaster = new Proxy(mem, { get(target, key) {
+      const value = target[key];
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+    assertEquals((await journalCompensateExecution(wrappedMaster, oldReceipt)).reason,
+      "legacy_receipt_after_cutover", "wrapped Deno stores cannot bypass checked WAL refusal");
     await assertRejects(() => journalAppendWithReceipt(mem,
       { type: "task", executionId: "wal-off" }), Error, "append refused");
     await assertRejects(() => journalCommitCancellation(mem,
@@ -451,10 +460,13 @@ Deno.test("master journal readers use a checked cutover rather than stale legacy
     const published = head.node.content;
     head.node.content = "{\"torn\":";
     try {
-      for (const read of [() => mem.get("journal"), () => mem.getStrict("journal"),
+      for (const readOrMutation of [() => mem.get("journal"), () => mem.getStrict("journal"),
         () => mem.has("journal"), () => mem.snapshot("journal"),
-        () => mem.getVersion("journal"), () => mem.keys()]) {
-        await assertRejects(read, Error, "corrupt");
+        () => mem.getVersion("journal"), () => mem.keys(),
+        () => journalAppendWithReceipt(mem, { type: "task", executionId: "torn-writer" }),
+        () => journalCommitCancellation(mem, { type: "cancelled" }, "torn-writer"),
+        () => journalCompensateExecution(mem, oldReceipt)]) {
+        await assertRejects(readOrMutation, Error, "corrupt");
       }
     } finally {
       head.node.content = published;
@@ -754,6 +766,41 @@ Deno.test("post-compensation fence undo CAS uses its actual issued token, not jo
   });
   assertEquals(result.reason, "journal_fence_failed");
   assertEquals(await mem.get("journal"), receipt.postState, "failed compensation must undo itself");
+});
+
+Deno.test("pre-head cutover residue refuses master readers and writes without legacy fallback", async () => {
+  const isolated = dirNode();
+  const previousNavigator = globalThis.navigator;
+  Object.defineProperty(globalThis, "navigator", {
+    value: { storage: { async getDirectory() { return new FakeDirHandle(isolated); } } },
+    configurable: true, writable: true,
+  });
+  try {
+    const mem = masterMemory();
+    await mem.setTrusted("journal", [{ id: "legacy" }]);
+    const master = await (await new FakeDirHandle(isolated).getDirectoryHandle("memory", { create: true }))
+      .getDirectoryHandle("master", { create: true });
+    const wal = await master.getDirectoryHandle("journal-wal", { create: true });
+    assertEquals(await mem.get("journal"), [{ id: "legacy" }],
+      "an empty WAL directory alone is not cutover evidence");
+    const checkpoint = await wal.getFileHandle("checkpoint-2-0.json", { create: true });
+    const writable = await checkpoint.createWritable();
+    await writable.write("{\"torn\":");
+    await writable.close();
+    for (const operation of [
+      () => mem.get("journal"), () => mem.getStrict("journal"), () => mem.keys(),
+      () => mem.setTrusted("journal", [{ id: "shadow" }]),
+      () => journalAppendWithReceipt(mem, { type: "task", executionId: "pre-head" }),
+    ]) {
+      await assertRejects(operation, Error, "pre-head residue");
+    }
+    assertEquals((await master.getFileHandle("journal.json")).node.content.includes("legacy"), true,
+      "the old bytes are preserved for owner repair, not selected as live authority");
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      value: previousNavigator, configurable: true, writable: true,
+    });
+  }
 });
 
 Deno.test("staged master transaction exposes WAL verbs without re-entering the master lock", async () => {
