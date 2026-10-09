@@ -34,6 +34,32 @@ const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_M
 const PARALLEL_READY_FILE = process.env.CAP_PARALLEL_READY_FILE;
 const PARALLEL_READY_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_READY_TIMEOUT_MS ?? 60_000);
 
+export function areAllFailuresEnvironmental(cleanOutput) {
+  const errorsIndex = cleanOutput.indexOf(" ERRORS ");
+  if (errorsIndex === -1) return false;
+
+  const failuresIndex = cleanOutput.indexOf(" FAILURES ", errorsIndex);
+  const errorsText = failuresIndex !== -1
+    ? cleanOutput.slice(errorsIndex, failuresIndex)
+    : cleanOutput.slice(errorsIndex);
+
+  // Each failure in Deno test error output starts with "\n\n<test_name> =>" or "\n<test_name> =>"
+  const errorBlocks = errorsText.split(/\n+(?=[^\s\n].*?=>\s*)/).slice(1);
+  if (errorBlocks.length === 0) return false;
+
+  for (const block of errorBlocks) {
+    const isRefusal =
+      block.includes("CAP_ENVIRONMENTAL_REFUSAL") ||
+      block.includes("BootStagingEnvironmentalRefusalError") ||
+      block.includes("ENVIRONMENT: ntp-boot-staging refusal");
+    if (!isRefusal) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function runParallel(files, phase = "parallel phase") {
   if (!files || files.length === 0) return Promise.resolve(0);
   // Concurrent scheduling cannot identify the stalled file. Announce every
@@ -41,11 +67,24 @@ function runParallel(files, phase = "parallel phase") {
   announce(`run-tests: ${phase} candidates (${files.length} file(s)):\n${files.map((file) => `  - ${file}`).join("\n")}`);
   const t0 = Date.now();
   return new Promise((resolve) => {
+    let capturedOutput = "";
     const child = spawn("deno", ["test", "-A", "--config", "deno.runner.jsonc", "--parallel", ...files], {
-      stdio: "inherit",
+      stdio: ["inherit", "pipe", "pipe"],
       env: { ...process.env, CAP_TEST_RUNNER: "1" },
       detached: true,
     });
+    if (child.stdout) {
+      child.stdout.on("data", (chunk) => {
+        capturedOutput += chunk.toString();
+        process.stdout.write(chunk);
+      });
+    }
+    if (child.stderr) {
+      child.stderr.on("data", (chunk) => {
+        capturedOutput += chunk.toString();
+        process.stderr.write(chunk);
+      });
+    }
 
     let timedOut = false;
     let timer = null;
@@ -139,9 +178,31 @@ function runParallel(files, phase = "parallel phase") {
         resolve(124);
         return;
       }
+      let effectiveCode = code ?? (signal ? 128 + 15 : 1);
+      if (effectiveCode !== 0 && capturedOutput.includes("CAP_ENVIRONMENTAL_REFUSAL")) {
+        // Finding P1 (Round 4 review): A passing test emitting a marker must NOT allow a
+        // failing product test to exit 75. Every failed test under ERRORS must carry
+        // verified environmental refusal evidence.
+        const clean = capturedOutput.replace(/\x1b\[[0-9;]*[mGKH]/gu, "");
+        const summaryMatch = /FAILED\b[\s\S]*?\|\s*(\d+)\s*failed/i.exec(clean);
+
+        if (summaryMatch) {
+          const failCount = Number(summaryMatch[1]);
+          const allEnvironmental = areAllFailuresEnvironmental(clean);
+          if (failCount > 0 && allEnvironmental) {
+            effectiveCode = 75;
+          } else {
+            announce(`\nrun-tests: ${phase} contains non-environmental failure(s) — preserving PRODUCT RED (exit 1)`);
+          }
+        } else {
+          announce(`\nrun-tests: ${phase} exited non-zero with refusal marker but missing test summary — preserving exit ${effectiveCode}`);
+        }
+      }
       const secs = ((Date.now() - t0) / 1000).toFixed(0);
-      console.log(`\nrun-tests: ${phase} (${files.length} files) ${code === 0 ? "GREEN" : "FAILED"} in ${secs}s`);
-      resolve(code ?? (signal ? 128 + 15 : 1));
+      const isRefusal = effectiveCode === 75;
+      const statusText = effectiveCode === 0 ? "GREEN" : isRefusal ? "REFUSED (environmental verdict, exit 75)" : "FAILED";
+      console.log(`\nrun-tests: ${phase} (${files.length} files) ${statusText} in ${secs}s`);
+      resolve(effectiveCode);
     });
 
     child.on("error", (err) => {
