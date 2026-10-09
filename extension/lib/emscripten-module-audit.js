@@ -199,7 +199,7 @@ export function auditEmscriptenModule(input) {
   while (r.remaining) {
     const id = r.byte(), s = new Reader(r.take(r.u32()));
     if (id === 0) {
-      if (s.name() !== "dylink.0") fail("custom_section_unsupported");
+      const n = s.name(); if (n === "name" || n === "producers") continue; if (n !== "dylink.0") fail("custom_section_unsupported");
       if (result.dylink) fail("dylink_duplicate_section"); result.dylink = dylink(s); continue;
     }
     const rank = ORDER.indexOf(id);
@@ -289,13 +289,27 @@ export function compatibleEmscriptenType(kind, required, supplied) {
 // identify unchanged A0 glue; no function is imported or looked up reflectively.
 const IMAGE_GLUE = "3c1c0e4381fe914b33dd554905d28e8dc777f1bda4bd42dcf05edd1380d7bea0";
 const LINK_GLUE = "bcddb43afe69fc2fb90102bf3ab0fcf83395177098ce647659bf1ee707292d76";
+const BLAKE3_GLUE = "7d03777d994e39a8a619a8c9fe20c1bcb11710b114fc2f280022a2a103052878";
 function reviewedGlueProvider(asset, imported, provider) {
-  if (imported.module !== "env" || imported.kind !== "function") return false;
-  const resize = imported.symbol === "emscripten_resize_heap" && provider.binding === "_emscripten_resize_heap" &&
+  if ((imported.module !== "env" && imported.module !== "a") || imported.kind !== "function") return false;
+  const resize = (imported.symbol === "emscripten_resize_heap" || imported.symbol === "a") &&
+    (provider.binding === "_emscripten_resize_heap" || provider.binding === "a") &&
     canonicalJson(imported.type) === canonicalJson({ params: ["i32"], results: ["i32"] });
   if (asset.sha256 === LINK_GLUE) return resize;
-  return asset.sha256 === IMAGE_GLUE && (resize || (imported.symbol === "__assert_fail" && provider.binding === "___assert_fail" &&
-    canonicalJson(imported.type) === canonicalJson({ params: ["i32", "i32", "i32", "i32"], results: [] })));
+  if (asset.sha256 === IMAGE_GLUE) {
+    return resize || (imported.symbol === "__assert_fail" && provider.binding === "___assert_fail" &&
+      canonicalJson(imported.type) === canonicalJson({ params: ["i32", "i32", "i32", "i32"], results: [] }));
+  }
+  if (asset.sha256 === BLAKE3_GLUE) {
+    const memcpy = (imported.symbol === "emscripten_memcpy_big" || imported.symbol === "b") &&
+      (provider.binding === "_emscripten_memcpy_big" || provider.binding === "b") &&
+      canonicalJson(imported.type) === canonicalJson({ params: ["i32", "i32", "i32"], results: [] });
+    const assertFail = (imported.symbol === "__assert_fail" || imported.symbol === "c") &&
+      (provider.binding === "___assert_fail" || provider.binding === "c") &&
+      canonicalJson(imported.type) === canonicalJson({ params: ["i32", "i32", "i32", "i32"], results: [] });
+    return resize || memcpy || assertFail;
+  }
+  return false;
 }
 
 /**

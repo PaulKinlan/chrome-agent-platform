@@ -19,6 +19,7 @@ import {
   validateEmscriptenManifest,
   validateEmscriptenProvenance,
   assertEmscriptenNumericEligibility,
+  assertEmscriptenBlake3Eligibility,
   emscriptenIdentity,
 } from "./emscripten-manifest.js";
 import {
@@ -34,6 +35,7 @@ registerSchema2Surface({
   validateManifest: validateEmscriptenManifest,
   validateProvenance: validateEmscriptenProvenance,
   assertNumericEligibility: assertEmscriptenNumericEligibility,
+  assertBlake3Eligibility: assertEmscriptenBlake3Eligibility,
   identity: emscriptenIdentity,
   auditGraph: auditEmscriptenGraph,
   auditModule: auditEmscriptenModule,

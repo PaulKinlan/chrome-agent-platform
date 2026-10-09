@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.616] — 2026-10-09
+- admit blake3-wasm v3.0.0 as an Emscripten glue class managed Wasm tool for 256-bit cryptographic hashing
+
 ## [0.3.615] — 2026-10-09
 - Faster New Tab Hub boot coalescing eliminates duplicate tool-offers queries.
 

@@ -725,7 +725,13 @@ export class WasmPackageAuthority {
       if (!provenanceBytes || provenanceBytes.length !== pin.size || await sha256HexBytes(provenanceBytes) !== pin.sha256) fail("provenance_mismatch");
       schema2OrFail().validateProvenance(decoder.decode(provenanceBytes), manifest);
       graph = await schema2OrFail().auditGraph({ assets: manifest.assets, modules: manifest.modules, linkGraph: manifest.linkGraph }, files);
-      schema2OrFail().assertNumericEligibility(manifest, graph);
+      if (manifest.entry.adapterId === "cap-a0-numeric-v1") {
+        schema2OrFail().assertNumericEligibility(manifest, graph);
+      } else if (manifest.entry.adapterId === "cap-blake3-wasm-v1") {
+        schema2OrFail().assertBlake3Eligibility(manifest, graph);
+      } else {
+        fail("adapter_unsupported", manifest.entry.adapterId);
+      }
       for (const module of graph.modules) {
         const asset = manifest.assets.find(a => a.id === module.asset);
         measured.push({ id: asset.id, sha256: asset.sha256, size: asset.size, ...module });
