@@ -553,7 +553,8 @@ explicit reset marker; contiguous predecessors cannot silently skip archived
 rows. A complete orphaned compaction segment/checkpoint may be reused only
 when its checked canonical bytes equal a freshly derived payload from the
 validated current head's checkpoint, frame range and archive chain, and the
-checkpoint's issued version is durably witnessed; reuse is logged. Torn,
+caller supplies an exact checkpoint+source-specific durable issuance witness
+for its generation (a global issued-version floor is insufficient); reuse is logged. Torn,
 non-equal or source-mismatched immutable records and damaged head slots remain
 fail-closed pending explicit owner repair. The frame grammar still needs exact receipt,
 CAS and cancellation evidence before enabling mutation; physical power-loss

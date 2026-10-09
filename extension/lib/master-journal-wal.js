@@ -1,3 +1,5 @@
+import { capLog } from "./cap-log.js";
+
 // Master-only journal authority. A legacy journal remains authoritative until
 // the first checked head is published; staged files are never treated as rows.
 // The writer is deliberately NOT enabled by this module: all master mutation,
@@ -9,6 +11,7 @@ const MAGIC = "cap-master-journal-wal-v1";
 const MAX_ARCHIVE_SEGMENT_ROWS = 500;
 const ENCODER = new TextEncoder();
 const DECODER = new TextDecoder("utf-8", { fatal: true });
+const WAL_LOG = capLog("master-journal-wal");
 
 function safeInteger(value, minimum = 0) {
   return Number.isSafeInteger(value) && value >= minimum;
@@ -294,7 +297,9 @@ async function writeOrReuseCompactionRecord(directory, name, kind, payload, sour
       serialized !== await sealMasterJournalRecord(kind, payload)) {
     throw new Error(`master journal unpublished ${kind} ${name} source or payload mismatch requires explicit owner repair`);
   }
-  console.info(`master journal verified compaction reuse: ${kind} ${name} source ${source.epoch}:${source.fromCheckpoint}-${source.throughFrame}`);
+  WAL_LOG.info("verified compaction reuse", {
+    kind, name, epoch: source.epoch, fromCheckpoint: source.fromCheckpoint, throughFrame: source.throughFrame,
+  });
   return checked;
 }
 
@@ -338,12 +343,15 @@ export async function stageMasterJournalCompaction(master, {
     if (JSON.stringify(prior.source) !== JSON.stringify(source) ||
         !safeInteger(prior.version, head.version + 1) ||
         typeof readIssuedVersion !== "function" ||
-        !safeInteger(await readIssuedVersion(), prior.version)) {
+        await readIssuedVersion({ checkpoint, source }) !== prior.version) {
       throw new Error(`master journal unpublished checkpoint ${checkpoint} source or issued version mismatch requires explicit owner repair`);
     }
     version = prior.version;
   } else {
-    version = await allocateVersion();
+    // The caller must persist a checkpoint+source-specific issuance claim
+    // before returning this generation. A global __gen floor cannot prove
+    // that a self-consistent orphan owns THIS token on crash retry.
+    version = await allocateVersion({ checkpoint, source });
   }
   if (!safeInteger(version, head.version + 1)) throw new Error("master journal compaction version must increase");
   let archive = head.archive;

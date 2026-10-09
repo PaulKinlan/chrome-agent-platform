@@ -1,5 +1,6 @@
 // @ts-nocheck — injected OPFS handles are deliberately minimal and faultable.
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
+import { dumpLogBuffer } from "../extension/lib/cap-log.js";
 import {
   readMasterJournalHead,
   readMasterJournalProjection,
@@ -62,8 +63,13 @@ async function legacyFixture(faults = {}) {
   const legacy = JSON.stringify({ __v: 17, __value: [{ type: "old", id: 1 }] });
   (await master.getFileHandle("journal.json", { create: true })).bytes = encoder.encode(legacy);
   let generation = 17;
-  return { master, legacy, allocateVersion: async () => ++generation,
-    readIssuedVersion: async () => generation };
+  const issued = new Map();
+  const claimKey = ({ checkpoint, source }) => `${checkpoint}:${JSON.stringify(source)}`;
+  return { master, legacy, allocateVersion: async (claim = null) => {
+    const version = ++generation;
+    if (claim) issued.set(claimKey(claim), version); // fake durable claim authority
+    return version;
+  }, readIssuedVersion: async (claim) => issued.get(claimKey(claim)) ?? null };
 }
 
 Deno.test("master journal cutover stages and verifies whole live/archive rows before publishing one checked head", async () => {
@@ -543,7 +549,7 @@ Deno.test("compaction faults before publication retain old authority; torn head 
 });
 
 Deno.test("complete equal compaction artifacts can be re-used only after verified pre-head crash", async () => {
-  for (const tamper of [null, "checkpoint-rows", "checkpoint-source", "archive-rows", "unissued", "no-witness"]) {
+  for (const tamper of [null, "checkpoint-rows", "checkpoint-source", "archive-rows", "unissued", "wrong-claimed", "no-witness"]) {
     const faults = {};
     const { master, allocateVersion, readIssuedVersion } = await legacyFixture(faults);
     const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
@@ -559,6 +565,8 @@ Deno.test("complete equal compaction artifacts can be re-used only after verifie
     const archive = await wal.getFileHandle("archive-18-1.json");
     const checkpoint = await wal.getFileHandle("checkpoint-18-129.json");
     assertEquals(archive.bytes.byteLength > 0 && checkpoint.bytes.byteLength > 0, true);
+    const claim = { checkpoint: "checkpoint-18-129.json",
+      source: (await unsealMasterJournalRecord(checkpoint.bytes, "checkpoint")).source };
     assertEquals((await readMasterJournalProjection(master)).head.sequence, 128);
     if (tamper === "checkpoint-rows" || tamper === "checkpoint-source") {
       const original = await unsealMasterJournalRecord(checkpoint.bytes, "checkpoint");
@@ -574,17 +582,23 @@ Deno.test("complete equal compaction artifacts can be re-used only after verifie
     faults.write = null;
     if (tamper) {
       const proof = tamper === "unissued" ? async () => 18
+        : tamper === "wrong-claimed" ? async () => (await readIssuedVersion(claim)) + 1
         : tamper === "no-witness" ? undefined : readIssuedVersion;
       await assertRejects(() => stageMasterJournalFrame(master, {
         operation: "append", row: { id: 628 },
       }, { allocateVersion, readIssuedVersion: proof }), Error, "unpublished");
       assertEquals((await readMasterJournalProjection(master)).head.sequence, 128);
     } else {
+      const beforeLog = dumpLogBuffer().entries.length;
       const next = await stageMasterJournalFrame(master, {
         operation: "append", row: { id: 628 },
       }, { allocateVersion, readIssuedVersion });
       assertEquals(next.checkpointSequence, 129);
       assertEquals((await readMasterJournalProjection(master, { includeArchive: true })).archive, seed.slice(0, 129));
+      const adoptionLog = dumpLogBuffer().entries.slice(beforeLog)
+        .filter((entry) => entry.ns === "master-journal-wal" && entry.msg.includes("verified compaction reuse"));
+      assertEquals(adoptionLog.length, 2, "both adopted records appear in the bounded, redacted trace ring");
+      assertEquals(adoptionLog.every((entry) => !entry.msg.includes("whole-archived")), true);
     }
   }
 });
