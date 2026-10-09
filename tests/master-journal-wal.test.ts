@@ -62,7 +62,8 @@ async function legacyFixture(faults = {}) {
   const legacy = JSON.stringify({ __v: 17, __value: [{ type: "old", id: 1 }] });
   (await master.getFileHandle("journal.json", { create: true })).bytes = encoder.encode(legacy);
   let generation = 17;
-  return { master, legacy, allocateVersion: async () => ++generation };
+  return { master, legacy, allocateVersion: async () => ++generation,
+    readIssuedVersion: async () => generation };
 }
 
 Deno.test("master journal cutover stages and verifies whole live/archive rows before publishing one checked head", async () => {
@@ -532,6 +533,58 @@ Deno.test("compaction faults before publication retain old authority; torn head 
       assertEquals(old.head.sequence, 128, `${phase} must leave old head authoritative`);
       assertEquals(old.live[0].id, 128);
       assertEquals(old.archive, live.slice(0, 128));
+      faults.close = null;
+      await assertRejects(() => stageMasterJournalFrame(master, {
+        operation: "append", row: { id: "no-silent-torn-repair" },
+      }, { allocateVersion, readIssuedVersion: async () => 999 }), Error, "unpublished");
+      assertEquals((await readMasterJournalProjection(master)).head.sequence, 128);
+    }
+  }
+});
+
+Deno.test("complete equal compaction artifacts can be re-used only after verified pre-head crash", async () => {
+  for (const tamper of [null, "checkpoint-rows", "checkpoint-source", "archive-rows", "unissued", "no-witness"]) {
+    const faults = {};
+    const { master, allocateVersion, readIssuedVersion } = await legacyFixture(faults);
+    const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+    await stageMasterJournalCutover(master, { journalExists: true, journal: seed, archive: [], allocateVersion });
+    for (let id = 500; id < 628; id++) {
+      await stageMasterJournalFrame(master, { operation: "append", row: { id } }, { allocateVersion });
+    }
+    faults.write = "head-b.json"; // old head-b exists; do not touch it before close
+    await assertRejects(() => stageMasterJournalFrame(master, {
+      operation: "append", row: { id: 628 },
+    }, { allocateVersion, readIssuedVersion }), Error, "injected write");
+    const wal = await master.getDirectoryHandle("journal-wal");
+    const archive = await wal.getFileHandle("archive-18-1.json");
+    const checkpoint = await wal.getFileHandle("checkpoint-18-129.json");
+    assertEquals(archive.bytes.byteLength > 0 && checkpoint.bytes.byteLength > 0, true);
+    assertEquals((await readMasterJournalProjection(master)).head.sequence, 128);
+    if (tamper === "checkpoint-rows" || tamper === "checkpoint-source") {
+      const original = await unsealMasterJournalRecord(checkpoint.bytes, "checkpoint");
+      checkpoint.bytes = encoder.encode(await sealMasterJournalRecord("checkpoint", tamper === "checkpoint-rows"
+        ? { ...original, live: [{ id: "different-but-checksummed" }, ...original.live.slice(1)] }
+        : { ...original, source: { ...original.source, throughFrame: original.source.throughFrame - 1 } }));
+    } else if (tamper === "archive-rows") {
+      const original = await unsealMasterJournalRecord(archive.bytes, "archive");
+      archive.bytes = encoder.encode(await sealMasterJournalRecord("archive", {
+        ...original, rows: [{ id: "different-but-checksummed" }],
+      }));
+    }
+    faults.write = null;
+    if (tamper) {
+      const proof = tamper === "unissued" ? async () => 18
+        : tamper === "no-witness" ? undefined : readIssuedVersion;
+      await assertRejects(() => stageMasterJournalFrame(master, {
+        operation: "append", row: { id: 628 },
+      }, { allocateVersion, readIssuedVersion: proof }), Error, "unpublished");
+      assertEquals((await readMasterJournalProjection(master)).head.sequence, 128);
+    } else {
+      const next = await stageMasterJournalFrame(master, {
+        operation: "append", row: { id: 628 },
+      }, { allocateVersion, readIssuedVersion });
+      assertEquals(next.checkpointSequence, 129);
+      assertEquals((await readMasterJournalProjection(master, { includeArchive: true })).archive, seed.slice(0, 129));
     }
   }
 });

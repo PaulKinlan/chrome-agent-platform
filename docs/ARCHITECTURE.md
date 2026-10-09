@@ -550,8 +550,12 @@ checkpoint plus one bounded archive segment, then publishes the new head last.
 The other head's dependencies stay reachable for export until that slot also
 advances. Clear resets the chain at the next unused segment index with an
 explicit reset marker; contiguous predecessors cannot silently skip archived
-rows. A torn unpublished immutable record blocks retry until explicit repair
-rather than being overwritten. The frame grammar still needs exact receipt,
+rows. A complete orphaned compaction segment/checkpoint may be reused only
+when its checked canonical bytes equal a freshly derived payload from the
+validated current head's checkpoint, frame range and archive chain, and the
+checkpoint's issued version is durably witnessed; reuse is logged. Torn,
+non-equal or source-mismatched immutable records and damaged head slots remain
+fail-closed pending explicit owner repair. The frame grammar still needs exact receipt,
 CAS and cancellation evidence before enabling mutation; physical power-loss
 recovery, real Chrome cross-context proof and safe on-disk retirement also
 remain outstanding.

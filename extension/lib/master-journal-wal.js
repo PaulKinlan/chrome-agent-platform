@@ -275,12 +275,37 @@ export async function readMasterJournalProjection(master, { includeArchive = fal
   return result;
 }
 
+/** Only compaction's pure derived records may reuse an orphan. The source
+ * range is already re-read and checked against the current published head;
+ * compare the complete canonical sealed bytes, never repair a torn record.
+ * Frames, head slots, and non-equal/source-mismatched orphans remain strict. */
+async function writeOrReuseCompactionRecord(directory, name, kind, payload, source) {
+  const existing = await optionalFile(directory, name);
+  if (!existing) return await writeCheckedRecord(directory, name, kind, payload);
+  let serialized;
+  let checked;
+  try {
+    serialized = DECODER.decode(await (await existing.getFile()).arrayBuffer());
+    checked = await unsealMasterJournalRecord(serialized, kind);
+  } catch (error) {
+    throw new Error(`master journal unpublished ${kind} ${name} requires explicit owner repair`, { cause: error });
+  }
+  if (JSON.stringify(checked.source) !== JSON.stringify(source) ||
+      serialized !== await sealMasterJournalRecord(kind, payload)) {
+    throw new Error(`master journal unpublished ${kind} ${name} source or payload mismatch requires explicit owner repair`);
+  }
+  console.info(`master journal verified compaction reuse: ${kind} ${name} source ${source.epoch}:${source.fromCheckpoint}-${source.throughFrame}`);
+  return checked;
+}
+
 /** Fold at most 128 replayed frames into a <=500-row checkpoint and a
  * bounded immutable archive segment. The other head slot and its whole chain
  * remain available until a later publication advances it; export includes
  * the union of both slots in the meantime. This is test-only until the WAL
  * writer, receipt/CAS and clear paths are wired as one authority. */
-export async function stageMasterJournalCompaction(master, { allocateVersion, projection = null } = {}) {
+export async function stageMasterJournalCompaction(master, {
+  allocateVersion, readIssuedVersion, projection = null,
+} = {}) {
   if (typeof allocateVersion !== "function") throw new Error("master journal compaction requires a durable version issuer");
   const before = projection ?? await readMasterJournalProjection(master);
   if (!before) throw new Error("master journal must be cut over before compaction");
@@ -289,12 +314,38 @@ export async function stageMasterJournalCompaction(master, { allocateVersion, pr
   // Verify the entire previous archive chain before publishing a successor;
   // this is an integrity guard, not a way to compute existence. It reads
   // historic segments once per <=128-frame compaction, never per append.
-  await readMasterJournalArchiveChain(master, head, { includeRows: false });
+  const chain = await readMasterJournalArchiveChain(master, head, { includeRows: false });
+  const source = {
+    epoch: head.epoch, fromCheckpoint: head.checkpointSequence, throughFrame: head.sequence,
+    version: head.version, checkpoint: head.checkpoint,
+    checkpointHash: head.checkpointHash ?? null,
+    archive: head.archive, archiveHash: head.archiveHash ?? null,
+    archiveRoot: chain.names.at(-1), archiveCount: chain.names.length,
+    archiveRangeHash: await hash(JSON.stringify(chain.names)), lastHash: head.lastHash,
+  };
   const sequence = head.sequence + 1;
   if (!safeInteger(sequence, 1)) throw new Error("master journal compaction sequence is unbounded");
-  const version = await allocateVersion();
-  if (!safeInteger(version, head.version + 1)) throw new Error("master journal compaction version must increase");
   const directory = await optionalDirectory(master);
+  const checkpoint = `checkpoint-${head.epoch}-${sequence}.json`;
+  let version;
+  const staged = await optionalFile(directory, checkpoint);
+  if (staged) {
+    let prior;
+    try { prior = await readRecord(directory, checkpoint, "checkpoint"); }
+    catch (error) {
+      throw new Error(`master journal unpublished checkpoint ${checkpoint} requires explicit owner repair`, { cause: error });
+    }
+    if (JSON.stringify(prior.source) !== JSON.stringify(source) ||
+        !safeInteger(prior.version, head.version + 1) ||
+        typeof readIssuedVersion !== "function" ||
+        !safeInteger(await readIssuedVersion(), prior.version)) {
+      throw new Error(`master journal unpublished checkpoint ${checkpoint} source or issued version mismatch requires explicit owner repair`);
+    }
+    version = prior.version;
+  } else {
+    version = await allocateVersion();
+  }
+  if (!safeInteger(version, head.version + 1)) throw new Error("master journal compaction version must increase");
   let archive = head.archive;
   let archiveHash = head.archiveHash;
   if (before.pendingOverflow.length > 0 || before.archiveCleared) {
@@ -306,11 +357,11 @@ export async function stageMasterJournalCompaction(master, { allocateVersion, pr
     const previousHash = previous
       ? await hash(DECODER.decode(await (await tail.getFile()).arrayBuffer())) : null;
     archive = `archive-${head.epoch}-${index}.json`;
-    await writeCheckedRecord(directory, archive, "archive", {
+    await writeOrReuseCompactionRecord(directory, archive, "archive", {
       epoch: head.epoch, index, previous, previousHash, reset: before.archiveCleared,
       exists: before.pendingOverflow.length > 0,
-      rows: before.pendingOverflow,
-    });
+      rows: before.pendingOverflow, source,
+    }, source);
     const segment = await directory.getFileHandle(archive);
     archiveHash = await hash(DECODER.decode(await (await segment.getFile()).arrayBuffer()));
   }
@@ -318,10 +369,9 @@ export async function stageMasterJournalCompaction(master, { allocateVersion, pr
     const tail = await directory.getFileHandle(archive);
     archiveHash = await hash(DECODER.decode(await (await tail.getFile()).arrayBuffer()));
   }
-  const checkpoint = `checkpoint-${head.epoch}-${sequence}.json`;
-  await writeCheckedRecord(directory, checkpoint, "checkpoint", {
-    epoch: head.epoch, sequence, version, exists: before.exists, live: before.live,
-  });
+  await writeOrReuseCompactionRecord(directory, checkpoint, "checkpoint", {
+    epoch: head.epoch, sequence, version, exists: before.exists, live: before.live, source,
+  }, source);
   const checkpointFile = await directory.getFileHandle(checkpoint);
   const checkpointHash = await hash(DECODER.decode(await (await checkpointFile.getFile()).arrayBuffer()));
   const lastHash = await hash(JSON.stringify({ epoch: head.epoch, sequence, checkpoint, archive, archiveHash, checkpointHash }));
@@ -338,7 +388,7 @@ export async function stageMasterJournalCompaction(master, { allocateVersion, pr
  * export path use a single lock + projection. A failed head close is NOT an
  * acknowledgement; recovery fails closed on a corrupt present head. */
 export async function stageMasterJournalFrame(master, operation, {
-  allocateVersion, expectedVersion, expectedEpoch,
+  allocateVersion, readIssuedVersion, expectedVersion, expectedEpoch,
 } = {}) {
   if (typeof allocateVersion !== "function") throw new Error("master journal frame requires a durable version issuer");
   if (!operation || typeof operation !== "object" || Array.isArray(operation) ||
@@ -360,7 +410,7 @@ export async function stageMasterJournalFrame(master, operation, {
     throw new Error("master journal CAS version mismatch");
   }
   if (before.head.sequence - before.head.checkpointSequence >= 128) {
-    await stageMasterJournalCompaction(master, { allocateVersion, projection: before });
+    await stageMasterJournalCompaction(master, { allocateVersion, readIssuedVersion, projection: before });
     before = await readMasterJournalProjection(master);
   }
   const { head } = before;
