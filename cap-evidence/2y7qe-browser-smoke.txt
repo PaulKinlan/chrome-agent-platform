@@ -1,7 +1,7 @@
 [2y7qe-smoke] Starting comprehensive real-Chrome verification for 2y7qe regression fix
-[2y7qe-smoke] Profile: /home/exedev/cap-evidence/cap-chrome-profiles/2y7qe-browser-smoke-1967844-1791573174421-f6fb
-[2y7qe-smoke] Evidence dir: /home/exedev/cap-evidence/2y7qe-browser-smoke/1791573174421-1967844
-[2y7qe-smoke] Chrome launched at ws://127.0.0.1:37069/devtools/browser/3c62f6b8-e779-4aa6-b006-6415b31f7e66
+[2y7qe-smoke] Profile: /home/exedev/cap-evidence/cap-chrome-profiles/2y7qe-browser-smoke-1973651-1791573290789-8eb6
+[2y7qe-smoke] Evidence dir: /home/exedev/cap-evidence/2y7qe-browser-smoke/1791573290789-1973651
+[2y7qe-smoke] Chrome launched at ws://127.0.0.1:35327/devtools/browser/99d4138d-c2ef-4bb2-a4fd-2c8031099e17
 [2y7qe-smoke] Connected to browser CDP
 [2y7qe-smoke] Extension loaded with ID: kjlafalcfhkeaehmliplpgilgidgohjn
 
