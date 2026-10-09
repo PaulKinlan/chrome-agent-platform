@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.622] — 2026-10-09
+- Sandboxed scripts can no longer send ambient audio or video requests to the network; generated playback from in-memory data still works.
+
 ## [0.3.621] — 2026-10-09
 - Add IME isComposing and keyCode 229 guards to prevent accidental submission of unconfirmed compositions on Enter and navigation keys across task rename, python network origin, sidepanel URL, skills import, prompt-bar, and agent-picker.
 
