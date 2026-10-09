@@ -69,7 +69,12 @@ Deno.test("master journal cutover stages and verifies whole live/archive rows be
   const { master, legacy, allocateVersion } = await legacyFixture();
   const journal = Array.from({ length: 501 }, (_, i) => ({ id: i, result: `whole-${i}-🚀` }));
   assertEquals(await readMasterJournalHead(master), null);
-  await stageMasterJournalCutover(master, { journalExists: true, journal, archive: [{ id: "archived" }], allocateVersion });
+  const cutover = await stageMasterJournalCutover(master, {
+    journalExists: true, journal, archive: [{ id: "archived" }], allocateVersion,
+  });
+  for (const digest of [cutover.archiveHash, cutover.checkpointHash]) {
+    assertEquals(/^[0-9a-f]{64}$/.test(digest), true, "new heads bind both immutable record bytes");
+  }
   const projection = await readMasterJournalProjection(master, { includeArchive: true });
   assertEquals(projection.version, 18);
   assertEquals(projection.live.length, 500);
@@ -169,6 +174,35 @@ Deno.test("re-sealed archive chain cannot skip an acknowledged interior segment"
   (await wal.getFileHandle("head-a.json")).bytes = encoder.encode(await sealMasterJournalRecord("head", {
     ...head, archiveHash, lastHash,
   }));
+  await assertRejects(() => readMasterJournalProjection(master, { includeArchive: true }), Error, "predecessor");
+});
+
+Deno.test("nonzero archive root requires an explicit reset witness, and linked segments cannot claim reset", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  const head = await stageMasterJournalCutover(master, {
+    journalExists: true, journal: [],
+    archive: Array.from({ length: 501 }, (_, id) => ({ id })), allocateVersion,
+  });
+  const wal = await master.getDirectoryHandle("journal-wal");
+  const leaf = await wal.getFileHandle(head.archive);
+  const original = await unsealMasterJournalRecord(leaf.bytes, "archive");
+  const digest = async (text) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(text)))]
+    .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const rebind = async (altered) => {
+    const sealed = await sealMasterJournalRecord("archive", altered);
+    leaf.bytes = encoder.encode(sealed);
+    const archiveHash = await digest(sealed);
+    const lastHash = await digest(JSON.stringify({
+      epoch: head.epoch, sequence: 0, checkpoint: head.checkpoint, archive: head.archive,
+      archiveHash, checkpointHash: head.checkpointHash,
+    }));
+    (await wal.getFileHandle("head-a.json")).bytes = encoder.encode(await sealMasterJournalRecord("head", {
+      ...head, archiveHash, lastHash,
+    }));
+  };
+  await rebind({ ...original, previous: null, previousHash: null });
+  await assertRejects(() => readMasterJournalProjection(master, { includeArchive: true }), Error, "reset witness");
+  await rebind({ ...original, reset: true });
   await assertRejects(() => readMasterJournalProjection(master, { includeArchive: true }), Error, "predecessor");
 });
 
@@ -364,6 +398,9 @@ Deno.test("after 128 frames a verified compaction rolls overflow into bounded se
     head = await stageMasterJournalFrame(master, { operation: "append", row: { id } }, { allocateVersion });
   }
   assertEquals(head.checkpointSequence > 0, true, "the 129th append must not exceed the 128-frame replay bound");
+  for (const digest of [head.archiveHash, head.checkpointHash]) {
+    assertEquals(/^[0-9a-f]{64}$/.test(digest), true, "compacted framed heads retain both byte hashes");
+  }
   const projection = await readMasterJournalProjection(master, { includeArchive: true });
   assertEquals(projection.live.length, 500);
   assertEquals(projection.live[0].id, 129);
@@ -390,11 +427,21 @@ Deno.test("300 framed appends write only one frame and head except at bounded co
     const compaction = step === 128 || step === 256;
     assertEquals(archived.length, compaction ? 1 : 0,
       `append ${step}: no separate archive write outside verified compaction`);
-    assertEquals(written.filter(({ name }) => name.startsWith("frame-")).length, 1);
-    assertEquals(written.filter(({ name }) => name.startsWith("head-")).length, compaction ? 2 : 1);
+    const frames = written.filter(({ name }) => name.startsWith("frame-"));
+    assertEquals(frames.length, 1);
+    const rowBytes = encoder.encode(JSON.stringify({ id: step + 500 })).byteLength;
+    assertEquals(frames[0].bytes <= 512 + 4 * rowBytes, true,
+      `append ${step}: the frame must not copy the live ring`);
+    const heads = written.filter(({ name }) => name.startsWith("head-"));
+    assertEquals(heads.length, compaction ? 2 : 1);
+    assertEquals(heads.every(({ bytes }) => bytes < 1024), true, "heads stay small");
     assertEquals(written.every(({ name }) => name !== "journal.json"), true);
     assertEquals(written.length <= 5, true, `append ${step}: bounded explicit file writes`);
   }
+  const cumulativeBytes = faults.writes.reduce((sum, { bytes }) => sum + bytes, 0);
+  const boundedBytes = 300 * (512 + 4 * 32 + 1024) +
+    2 * (1024 + 4 * 32 * 500) + 2 * (1024 + 4 * 32 * 128);
+  assertEquals(cumulativeBytes <= boundedBytes, true, "300 appends have a finite constant-size write budget");
   assertEquals((await readMasterJournalProjection(master, { includeArchive: true })).archive.length, 300);
 });
 
@@ -447,6 +494,34 @@ Deno.test("compaction faults before publication retain old authority; torn head 
       assertEquals(old.archive, live.slice(0, 128));
     }
   }
+});
+
+Deno.test("even a re-bound checkpoint must carry an in-range, matching durable generation", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  const head = await stageMasterJournalCutover(master, {
+    journalExists: true, journal: [{ id: 1 }], archive: [], allocateVersion,
+  });
+  const wal = await master.getDirectoryHandle("journal-wal");
+  const checkpoint = await wal.getFileHandle(head.checkpoint);
+  const original = await unsealMasterJournalRecord(checkpoint.bytes, "checkpoint");
+  const digest = async (text) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(text)))]
+    .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const rebind = async (version) => {
+    const sealed = await sealMasterJournalRecord("checkpoint", { ...original, version });
+    checkpoint.bytes = encoder.encode(sealed);
+    const checkpointHash = await digest(sealed);
+    const lastHash = await digest(JSON.stringify({
+      epoch: head.epoch, sequence: head.checkpointSequence, checkpoint: head.checkpoint,
+      archive: head.archive, archiveHash: head.archiveHash, checkpointHash,
+    }));
+    (await wal.getFileHandle("head-a.json")).bytes = encoder.encode(await sealMasterJournalRecord("head", {
+      ...head, checkpointHash, lastHash,
+    }));
+  };
+  await rebind(head.epoch - 1);
+  await assertRejects(() => readMasterJournalProjection(master), Error, "checkpoint version is corrupt");
+  await rebind(head.version + 1);
+  await assertRejects(() => readMasterJournalProjection(master), Error, "checkpoint version is corrupt");
 });
 
 Deno.test("frame after compaction cannot roll its version below the checkpoint generation", async () => {

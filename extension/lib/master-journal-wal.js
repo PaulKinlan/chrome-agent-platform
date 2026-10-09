@@ -286,7 +286,10 @@ export async function stageMasterJournalCompaction(master, { allocateVersion, pr
   if (!before) throw new Error("master journal must be cut over before compaction");
   const { head } = before;
   if (before.pendingOverflow.length > 128) throw new Error("master journal compaction overflow exceeds bounded replay");
-  const chain = await readMasterJournalArchiveChain(master, head, { includeRows: false });
+  // Verify the entire previous archive chain before publishing a successor;
+  // this is an integrity guard, not a way to compute existence. It reads
+  // historic segments once per <=128-frame compaction, never per append.
+  await readMasterJournalArchiveChain(master, head, { includeRows: false });
   const sequence = head.sequence + 1;
   if (!safeInteger(sequence, 1)) throw new Error("master journal compaction sequence is unbounded");
   const version = await allocateVersion();
@@ -305,7 +308,7 @@ export async function stageMasterJournalCompaction(master, { allocateVersion, pr
     archive = `archive-${head.epoch}-${index}.json`;
     await writeCheckedRecord(directory, archive, "archive", {
       epoch: head.epoch, index, previous, previousHash, reset: before.archiveCleared,
-      exists: before.archiveCleared ? before.pendingOverflow.length > 0 : chain.exists || before.pendingOverflow.length > 0,
+      exists: before.pendingOverflow.length > 0,
       rows: before.pendingOverflow,
     });
     const segment = await directory.getFileHandle(archive);

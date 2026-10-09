@@ -80,6 +80,51 @@ Deno.test("two head slots retain the union of old and compacted checkpoint/archi
   ), Error, "missing");
 });
 
+Deno.test("clear reset keeps old-slot chain only until both head slots advance", async () => {
+  const { paths, archives } = await chainFixture();
+  const epoch = 41;
+  const newRoot = `archive-${epoch}-3.json`;
+  const rootText = await sealMasterJournalRecord("archive", {
+    epoch, index: 3, previous: null, previousHash: null, reset: true,
+    exists: false, rows: [],
+  });
+  paths.set(`${PREFIX}${newRoot}`, ENCODER.encode(rootText));
+  const archiveHash = await hash(rootText);
+  const publish = async (slot, sequence) => {
+    const checkpoint = `checkpoint-${epoch}-${sequence}.json`;
+    const text = await sealMasterJournalRecord("checkpoint", {
+      epoch, sequence, version: epoch + sequence, exists: false, live: [],
+    });
+    paths.set(`${PREFIX}${checkpoint}`, ENCODER.encode(text));
+    const checkpointHash = await hash(text);
+    const lastHash = await hash(JSON.stringify({
+      epoch, sequence, checkpoint, archive: newRoot, archiveHash, checkpointHash,
+    }));
+    paths.set(`${PREFIX}${slot}`, ENCODER.encode(await sealMasterJournalRecord("head", {
+      epoch, sequence, version: epoch + sequence, checkpointSequence: sequence,
+      checkpoint, archive: newRoot, archiveHash, checkpointHash, lastHash,
+    })));
+  };
+  const exportPaths = () => selectPublishedMasterJournalBackupPaths([...paths.keys()], async (path) => ({
+    size: paths.get(path).length, stream: new Blob([paths.get(path)]).stream(),
+  }));
+  await publish("head-b.json", 1);
+  const mixed = await exportPaths();
+  for (const prior of archives) assertEquals(mixed.includes(prior), true, "old slot still owns prior archive");
+  assertEquals(mixed.includes(`${PREFIX}${newRoot}`), true);
+  assertEquals(await validateStagedMasterJournalBackup(
+    mixed.map((relPath) => ({ relPath, stagedPath: relPath })), async (path) => paths.get(path),
+  ), true);
+  await publish("head-a.json", 2);
+  const advanced = await exportPaths();
+  for (const prior of archives) assertEquals(advanced.includes(prior), false, "retired chain is not exported");
+  assertEquals(advanced.includes(`${PREFIX}checkpoint-${epoch}-0.json`), false);
+  assertEquals(advanced.includes(`${PREFIX}${newRoot}`), true);
+  assertEquals(await validateStagedMasterJournalBackup(
+    advanced.map((relPath) => ({ relPath, stagedPath: relPath })), async (path) => paths.get(path),
+  ), true);
+});
+
 Deno.test("raw export selects every chained archive segment and restore checks the exact generation", async () => {
   const { paths, archives, residue } = await chainFixture();
   const selected = await selectPublishedMasterJournalBackupPaths([...paths.keys()], async (path) => ({
