@@ -23,7 +23,9 @@ export function walkFiles(dir: string, predicate: (name: string) => boolean): st
   for (const entry of entries) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name.startsWith("dist") || entry.name === "node_modules" || entry.name === ".git") continue;
+      // Hidden directories are not shipped surfaces; in particular, .dist-stage-*
+      // is a concurrent build's scratch copy and must never enter this census.
+      if (entry.name.startsWith(".") || entry.name.startsWith("dist") || entry.name === "node_modules") continue;
       results = results.concat(walkFiles(full, predicate));
     } else if (predicate(entry.name)) {
       results.push(full);
@@ -49,6 +51,29 @@ function getLineNumber(offsets: number[], index: number): number {
     else high = mid - 1;
   }
   return high + 1;
+}
+
+/** Mask JS comments without changing offsets or masking // inside strings/URLs. */
+function maskJsComments(source: string): string {
+  const chars = source.split("");
+  let quote: "'" | '"' | "`" | null = null;
+  for (let i = 0; i < chars.length; i++) {
+    const ch = source[i];
+    if (quote) {
+      if (ch === "\\") { i++; continue; }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") { quote = ch; continue; }
+    if (ch !== "/" || (source[i + 1] !== "/" && source[i + 1] !== "*")) continue;
+    const lineComment = source[i + 1] === "/";
+    let j = i + 2;
+    while (j < chars.length && (lineComment ? source[j] !== "\n" : !(source[j] === "*" && source[j + 1] === "/"))) j++;
+    if (!lineComment && j < chars.length) j += 2;
+    for (let k = i; k < j; k++) if (chars[k] !== "\n") chars[k] = " ";
+    i = j - 1;
+  }
+  return chars.join("");
 }
 
 /**
@@ -100,57 +125,46 @@ export function findSub12pxDeclarations(filePaths: string[]): FontSizeViolation[
  * Scan JavaScript source files for direct inline style.fontSize assignments,
  * style.setProperty('font-size', ...), style.cssText = "...font-size:...",
  * or style object properties declaring sub-12px typography.
- * Shadow-DOM component styles in extension/shared/components.js are tracked under follow-up bead dz3wi.
+ * Literal-only scan: computed/interpolated JS values are not statically decidable.
+ * Shadow-DOM component styles in extension/shared/components.js are exempt here and tracked under dz3wi.
  */
 export function findSub12pxJsStyleAssignments(filePaths: string[]): FontSizeViolation[] {
   const violations: FontSizeViolation[] = [];
-  const jsFontSizeRegex = /(?:\.style\.fontSize\s*=\s*|\bfontSize\s*:\s*|\.style\.setProperty\(\s*["'`]font-size["'`]\s*,\s*)["'`]?([^"'`;\n\)]+)/gi;
-  const jsCssTextRegex = /(?:\.style\.cssText\s*=\s*|\bcssText\s*[:=]\s*)["'`]((?:[^"'`\\]|\\.)*)["'`]/gi;
+  // Back-referenced quotes prevent an inner CSS quote from ending a JS literal;
+  // [\s\S] also covers genuine newlines in template literals and call arguments.
+  const jsFontSizeRegex = /(?:\.style\.fontSize\s*=|\bfontSize\s*:|["'`]font-size["'`]\s*:|\.setProperty\(\s*["'`]font-size["'`]\s*,)\s*(["'`])((?:\\[\s\S]|(?!\1)[\s\S])*?)\1/gi;
+  const jsCssTextRegex = /\b(?:cssText\s*(?:[:=]|\+=)|textContent\s*(?:=|\+=))\s*(["'`])((?:\\[\s\S]|(?!\1)[\s\S])*?)\1/gi;
   const sub12PxRegex = /\b(?:font-size|font)\s*:\s*([^;]+);?/gi;
   const pixelValueRegex = /(?<![0-9.])(?:[0-9]|1[01])(?:\.[0-9]+)?px\b/i;
   const remValueRegex = /(?<![0-9.])0?\.(?:[0-6][0-9]*|7(?:[0-4][0-9]*)?)rem\b/i;
 
   for (const file of filePaths) {
-    const content = readFileSync(file, "utf8");
+    const content = maskJsComments(readFileSync(file, "utf8"));
     const lines = content.split("\n");
-    lines.forEach((line, idx) => {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("//")) return;
+    const offsets = buildLineOffsets(content);
+    let match: RegExpExecArray | null;
 
-      // 1. Direct fontSize / style.fontSize / setProperty('font-size')
-      let match: RegExpExecArray | null;
-      jsFontSizeRegex.lastIndex = 0;
-      while ((match = jsFontSizeRegex.exec(line)) !== null) {
-        const val = match[1];
-        if (pixelValueRegex.test(val) || remValueRegex.test(val)) {
-          violations.push({
-            file,
-            line: idx + 1,
-            text: trimmed,
-            matched: match[0],
-          });
-        }
-      }
+    jsFontSizeRegex.lastIndex = 0;
+    while ((match = jsFontSizeRegex.exec(content)) !== null) {
+      if (!pixelValueRegex.test(match[2]) && !remValueRegex.test(match[2])) continue;
+      const line = getLineNumber(offsets, match.index);
+      violations.push({ file, line, text: lines[line - 1]?.trim() ?? "", matched: match[0] });
+    }
 
-      // 2. style.cssText / cssText = "..." containing font-size:
-      jsCssTextRegex.lastIndex = 0;
-      while ((match = jsCssTextRegex.exec(line)) !== null) {
-        const cssContent = match[1];
-        sub12PxRegex.lastIndex = 0;
-        let cssMatch: RegExpExecArray | null;
-        while ((cssMatch = sub12PxRegex.exec(cssContent)) !== null) {
-          const val = cssMatch[1];
-          if (pixelValueRegex.test(val) || remValueRegex.test(val)) {
-            violations.push({
-              file,
-              line: idx + 1,
-              text: trimmed,
-              matched: cssMatch[0],
-            });
-          }
-        }
+    // CSS strings can span lines; report the declaration line, not the line
+    // where style.cssText or style.textContent was assigned.
+    jsCssTextRegex.lastIndex = 0;
+    while ((match = jsCssTextRegex.exec(content)) !== null) {
+      const cssContent = match[2];
+      const valueOffset = match.index + match[0].length - cssContent.length - 1;
+      sub12PxRegex.lastIndex = 0;
+      let cssMatch: RegExpExecArray | null;
+      while ((cssMatch = sub12PxRegex.exec(cssContent)) !== null) {
+        if (!pixelValueRegex.test(cssMatch[1]) && !remValueRegex.test(cssMatch[1])) continue;
+        const line = getLineNumber(offsets, valueOffset + cssMatch.index);
+        violations.push({ file, line, text: lines[line - 1]?.trim() ?? "", matched: cssMatch[0] });
       }
-    });
+    }
   }
   return violations;
 }
@@ -223,11 +237,14 @@ Deno.test("r4xk2: pinned selectors adhere to >= 12px font scale floor", () => {
   assert(optionsJs.includes('statusBadge.style.fontSize = "var(--text-xs, 12px)";'), "options statusBadge must be >= 12px");
 });
 
-Deno.test("r4xk2: shipped extension JS files enforce >= 12px design scale floor", () => {
+Deno.test("r4xk2: shipped extension JS literal styles enforce >= 12px (shadow-DOM components.js excluded under dz3wi)", () => {
   const jsFiles = walkFiles("extension", (name) => /\.js$/.test(name));
   assert(jsFiles.length >= 20, `Expected at least 20 JS files in extension/, found ${jsFiles.length}`);
-
-  const violations = findSub12pxJsStyleAssignments(jsFiles);
+  const shadowDomFile = join("extension", "shared", "components.js");
+  assert(jsFiles.includes(shadowDomFile), "dz3wi shadow-DOM exclusion must name a real shipped file");
+  // Do not silently turn this exemption into an all-extension claim: qazo owns
+  // components.js and dz3wi tracks its existing sub-12px shadow stylesheet.
+  const violations = findSub12pxJsStyleAssignments(jsFiles.filter((file) => file !== shadowDomFile));
   assertEquals(
     violations.length,
     0,
@@ -272,6 +289,21 @@ Deno.test("r4xk2: falsification — sub-12px declarations are detected and repor
       target.style.setProperty('font-size', '11.5px');
       node.style.cssText = "display:flex; font-size:10px; color:red;";
       box.style.cssText = \`margin:0; font-size: 0.65rem;\`;
+      panel.style.cssText = \`display:flex;
+        font-size:10.25px;\`;
+      const sheet = document.createElement("style");
+      sheet.textContent = \`.badge { font-size:9px; }\`;
+      sheet.textContent = \`.label {
+        font-size:11.25px;
+      }\`;
+      target2.style.setProperty(
+        "font-size",
+        "10.75px"
+      );
+      select.style.cssText += "font-size:11.5px;";
+      const cssObject = { "font-size": "10.3px" };
+      /* fontSize: "9px" is only a comment */
+      const safe = "text"; // fontSize: "9.5px" must not count
       // comment with fontSize = "10px" should be ignored
       const ok = { fontSize: "12px" };
       elem.style.cssText = "font-size:12px;";
@@ -288,7 +320,8 @@ Deno.test("r4xk2: falsification — sub-12px declarations are detected and repor
     assert(matchedTexts.some((m) => m.includes(".7rem")));
 
     const violationsJs = findSub12pxJsStyleAssignments([fixture3]);
-    assertEquals(violationsJs.length, 6, `Expected 6 JS falsification violations, got ${violationsJs.length}`);
+    assertEquals(violationsJs.length, 12,
+      `Expected 12 JS falsification violations (including multiline cssText/textContent/setProperty, +=, and quoted key), got ${violationsJs.length}: ${JSON.stringify(violationsJs)}`);
     const matchedJsTexts = violationsJs.map((v) => v.matched);
     assert(matchedJsTexts.some((m) => m.includes("11px")));
     assert(matchedJsTexts.some((m) => m.includes("10.5px")));
@@ -296,7 +329,37 @@ Deno.test("r4xk2: falsification — sub-12px declarations are detected and repor
     assert(matchedJsTexts.some((m) => m.includes("11.5px")));
     assert(matchedJsTexts.some((m) => m.includes("10px")));
     assert(matchedJsTexts.some((m) => m.includes("0.65rem")));
+    assert(violationsJs.some((v) => v.text.startsWith("font-size:10.25px;") && v.matched.includes("10.25px")),
+      "multiline cssText template must report the declaration line");
+    assert(violationsJs.some((v) => v.text.includes(".badge { font-size:9px;") && v.matched.includes("9px")),
+      "style.textContent template must be scanned");
+    assert(violationsJs.some((v) => v.text.startsWith("font-size:11.25px;") && v.matched.includes("11.25px")),
+      "multiline style.textContent must report the declaration line");
+    assert(violationsJs.some((v) => v.text.includes("target2.style.setProperty(") && v.matched.includes("10.75px")),
+      "multiline setProperty must be scanned");
+    assert(violationsJs.some((v) => v.text.includes("select.style.cssText +=") && v.matched.includes("11.5px")),
+      "cssText += must be scanned");
+    assert(violationsJs.some((v) => v.text.includes("const cssObject") && v.matched.includes("10.3px")),
+      "quoted font-size object key must be scanned");
+    assert(!violationsJs.some((v) => v.text.includes("only a comment") || v.text.includes("must not count")),
+      "JS block and trailing line comments must not create false positives");
   } finally {
     try { Deno.removeSync(tempDir, { recursive: true }); } catch { /* ignore */ }
+  }
+});
+
+Deno.test("g8d21: the shipped-file walk excludes build staging and other dot-prefixed directories", () => {
+  const root = Deno.makeTempDirSync({ dir: durableDir("scratch"), prefix: "font-walk-falsify-" });
+  try {
+    const staged = join(root, ".dist-stage-123");
+    const shipped = join(root, "shipped");
+    Deno.mkdirSync(staged);
+    Deno.mkdirSync(shipped);
+    Deno.writeTextFileSync(join(staged, "bad.css"), ".bad { font-size:9px; }");
+    Deno.writeTextFileSync(join(shipped, "good.css"), ".good { font-size:12px; }");
+    assertEquals(walkFiles(root, (name) => name.endsWith(".css")), [join(shipped, "good.css")],
+      "a concurrent .dist-stage-* build is not a shipped extension surface");
+  } finally {
+    Deno.removeSync(root, { recursive: true });
   }
 });
