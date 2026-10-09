@@ -91,7 +91,7 @@ function ipv6IsPrivate(literal) {
 /** True when `host` (a URL hostname, no port) is loopback / private /
  * link-local / unspecified — or malformed (fail closed). */
 export function isPrivateOrLoopbackHost(host) {
-  const h = String(host ?? "").trim().toLowerCase().replace(/\.$/, "");
+  const h = String(host ?? "").trim().toLowerCase().replace(/\.+$/, "");
   if (!h) return true;
   if (h === "localhost" || h.endsWith(".localhost")) return true;
   if (h.startsWith("[") && h.endsWith("]")) return ipv6IsPrivate(h.slice(1, -1));

@@ -284,16 +284,27 @@ consequences are carried by the matching register entry where one exists.
 
 ### T6. SSRF and URL-channel exfiltration through the brokered fetch
 
-- **Boundary:** TB4. **Evidence:** `extension/lib/fetch-policy.js:93`
-  (`isPrivateOrLoopbackHost`), `:118` / `:136` (`checkFetchPolicy`), `:156`
-  (`extractFetchHosts`); shared by `checkPythonNetworkRequest`
-  (`extension/lib/python-network.js:183`) and the enclave proxy
-  (`extension/background/routes/enclave-proxy.js:348`); SW routes at
-  `extension/background/service-worker.js#cap:fetch` (`cap:fetch`) and
-  `extension/background/service-worker.js#python.fetch` (`python.fetch`). **Tests:** `tests/cap-fetch-deny.test.ts`; live SSRF probe at
-  `scripts/security-suite.ts:389`. **Residual, stated in the source:** DNS rebinding of a
-  listed host is not covered (`extension/lib/fetch-policy.js:21`). **Register:** R23
-  (adjudicated and withheld in §7 item 9).
+- **Boundary:** TB4. **Evidence:** `extension/lib/fetch-policy.js#isPrivateOrLoopbackHost`,
+  `#checkFetchPolicy`, `#extractFetchHosts`; shared by `checkPythonNetworkRequest`
+  (`extension/lib/python-network.js#checkPythonNetworkRequest`), the enclave proxy
+  (`extension/background/routes/enclave-proxy.js#enclaveProxy`), and skill import
+  (`extension/lib/skill-import.js#validateHttpUrl`, `#fetchWithSafeRedirects`, `#fetchGitHubSkill`,
+  `#discoverRepoSkillsAndCommands`, `#installBatchSkillsAndCommands`); SW routes at
+  `extension/background/service-worker.js#cap:fetch` (`cap:fetch`),
+  `extension/background/service-worker.js#python.fetch` (`python.fetch`), and
+  `extension/background/service-worker.js#skill.import` (`skill.import` / `skill.discover` / `skill.importBatch`).
+  All skill-import remote fetches enforce `redirect: "manual"` via `fetchWithSafeRedirects`: uninspectable
+  `opaqueredirect` responses are refused fail-closed (the live enforcement in browser environments), while
+  inspectable 3xx responses re-validate each `Location` hop against `checkFetchTarget` up to a bounded hop count
+  (`MAX_REDIRECT_HOPS = 5`) as defense-in-depth where `Location` is inspectable, closing open-redirect
+  SSRF into private or metadata addresses. Direct GitHub raw links (`github.com/<owner>/<repo>/raw/...`) are
+  pre-normalized to `raw.githubusercontent.com` to prevent browser redirect failures. Discovery paths validate
+  repository trees, marketplace files (`.claude-plugin/marketplace.json`), and command/skill download URLs
+  through the same predicate. **Tests:** `tests/cap-fetch-deny.test.ts`, `tests/skill-import-ssrf.test.ts`; live SSRF
+  probe at `scripts/security-suite.ts:389`. **Residual, stated in the source:** DNS-to-private/rebinding of a public hostname
+  remains out of scope without a resolving DNS-pinning proxy (`extension/lib/fetch-policy.js:21`); unlike sandboxed script
+  runs (`checkFetchPolicy`), skill-import fetches do not enforce an approved-host allowlist because the owner directly supplies
+  the target URL. **Register:** R23 (adjudicated and withheld in §7 item 9).
 
 ### T7. Credential exfiltration into hook prompts, logs and errors
 
@@ -578,8 +589,9 @@ decision and, where one exists, the trigger that would reopen it.
    private/loopback deny list on the URL host string and cannot resolve DNS or pin
    socket destination IPs within the MV3 platform. Bounded by the owner-approved
    per-run host allowlist (`checkFetchPolicy` for script fetch), per-origin grants
-   (`python.fetch`), and frozen service allowlists (enclave proxy). **Owning register
-   entry: R23, including its reopen trigger.**
+   (`python.fetch`), frozen service allowlists (enclave proxy), and owner-supplied
+   source URLs with manual redirect controls (`skill.import` / `skill.discover` / `skill.importBatch`).
+   **Owning register entry: R23, including its reopen trigger.**
 10. **ACP loopback server-identity bind race (T15 / 6hly).** ADJUDICATED AND
     WITHHELD by the operator on 2026-10-06 under the single-user development-
     machine assumption. By default, a local process that wins the `127.0.0.1:3210` bind
