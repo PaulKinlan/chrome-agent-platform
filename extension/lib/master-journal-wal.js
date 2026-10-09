@@ -400,7 +400,8 @@ export async function stageMasterJournalCompaction(master, {
  * export path use a single lock + projection. A failed head close is NOT an
  * acknowledgement; recovery fails closed on a corrupt present head. */
 export async function stageMasterJournalFrame(master, operation, {
-  allocateVersion, readIssuedVersion, expectedVersion, expectedEpoch,
+  allocateVersion, readIssuedVersion, preflightClaims, retireClaims,
+  expectedVersion, expectedEpoch,
 } = {}) {
   if (typeof allocateVersion !== "function") throw new Error("master journal frame requires a durable version issuer");
   if (!operation || typeof operation !== "object" || Array.isArray(operation) ||
@@ -428,6 +429,9 @@ export async function stageMasterJournalFrame(master, operation, {
       JSON.stringify(operation.evicted) !== JSON.stringify(before.live.slice(0, operation.evicted.length))) {
     throw new Error("master journal replacement eviction does not match the current oldest live rows");
   }
+  // Never acknowledge another append if an eligible old claim could not be
+  // retired. This is AFTER the caller CAS gate but BEFORE any mutation.
+  if (preflightClaims) await preflightClaims(before.head);
   if (before.head.sequence - before.head.checkpointSequence >= 128) {
     await stageMasterJournalCompaction(master, { allocateVersion, readIssuedVersion, projection: before });
     before = await readMasterJournalProjection(master);
@@ -446,6 +450,16 @@ export async function stageMasterJournalFrame(master, operation, {
   await unsealMasterJournalRecord(serialized, "frame");
   const next = validateHead({ ...head, sequence, version, lastHash: await hash(serialized) });
   await writeCheckedRecord(directory, HEADS[sequence % 2], "head", next);
+  if (retireClaims) {
+    try { await retireClaims(next); }
+    catch (error) {
+      // Head publication already happened. Throwing now would make a successful
+      // append look unacknowledged and allow its caller to retry a duplicate.
+      WAL_LOG.warn("compaction claim retirement deferred; next write will refuse", {
+        epoch: next.epoch, checkpointSequence: next.checkpointSequence, error,
+      });
+    }
+  }
   return next;
 }
 

@@ -2,7 +2,7 @@
 // compaction records are written. The caller holds the master Web Lock for the
 // entire transaction. Product WAL writes remain OFF until all routes are wired.
 import { capLog } from "./cap-log.js";
-import { sealMasterJournalRecord, unsealMasterJournalRecord } from "./master-journal-wal.js";
+import { readMasterJournalHead, sealMasterJournalRecord, unsealMasterJournalRecord } from "./master-journal-wal.js";
 
 const DECODER = new TextDecoder("utf-8", { fatal: true });
 const ENCODER = new TextEncoder();
@@ -19,6 +19,10 @@ async function optionalFile(directory, name) {
 function checkedName({ checkpoint, source }) {
   const matched = /^checkpoint-([1-9]\d*)-([1-9]\d*)\.json$/u.exec(checkpoint ?? "");
   if (!matched || !source || typeof source !== "object" ||
+      !Number.isSafeInteger(source.version) || source.version < source.epoch ||
+      !Number.isSafeInteger(source.fromCheckpoint) || source.fromCheckpoint < 0 ||
+      !Number.isSafeInteger(source.throughFrame) ||
+      source.throughFrame < source.fromCheckpoint ||
       Number(matched[1]) !== source.epoch ||
       Number(matched[2]) !== source.throughFrame + 1) {
     throw new Error("invalid master journal compaction issuance claim");
@@ -66,7 +70,44 @@ export function createMasterJournalIssuer(master, { issueVersion, readGeneration
     return payload.version;
   }
 
+  async function retirePublishedClaim(head) {
+    // A claim is retry evidence for a newly staged checkpoint, never a reader
+    // dependency. Retain it while either old head slot predates that checkpoint.
+    if (!Number.isSafeInteger(head?.checkpointSequence) || head.checkpointSequence < 1) return false;
+    const name = `claim-${head.epoch}-${head.checkpointSequence}.json`;
+    let directory;
+    try { directory = await master.getDirectoryHandle(CLAIM_DIRECTORY); }
+    catch (error) { if (isMissing(error)) return false; throw error; }
+    const file = await optionalFile(directory, name);
+    if (!file) return false;
+    const selected = await readMasterJournalHead(master); // strict pair/fork check
+    if (!selected || selected.epoch !== head.epoch || selected.sequence !== head.sequence) {
+      throw new Error("master journal head changed before claim retirement");
+    }
+    for (const slot of ["head-a.json", "head-b.json"]) {
+      const headFile = await optionalFile(directory, slot);
+      if (!headFile) return false;
+      const other = await unsealMasterJournalRecord(
+        await (await headFile.getFile()).arrayBuffer(), "head");
+      if (other.epoch !== head.epoch || other.sequence < head.checkpointSequence) return false;
+    }
+    let payload;
+    try { payload = await unsealMasterJournalRecord(await (await file.getFile()).arrayBuffer(), "claim"); }
+    catch (error) {
+      throw new Error(`master journal unpublished claim ${name} requires explicit owner repair`, { cause: error });
+    }
+    if (checkedName(payload) !== name || await readClaim(payload) !== payload.version) {
+      throw new Error(`master journal unpublished claim ${name} requires explicit owner repair`);
+    }
+    await directory.removeEntry(name);
+    LOG.info("verified compaction claim retirement", { name, epoch: head.epoch,
+      checkpointSequence: head.checkpointSequence });
+    return true;
+  }
+
   return Object.freeze({
+    async preflightClaims(head) { await retirePublishedClaim(head); },
+    async retireClaims(head) { await retirePublishedClaim(head); },
     async allocateVersion(claim = null) {
       if (!claim) return await issueVersion(); // ordinary frame / cutover
       const name = checkedName(claim);

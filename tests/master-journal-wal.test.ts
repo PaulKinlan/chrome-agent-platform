@@ -59,6 +59,10 @@ class MemoryDir {
     }
     return this.children.get(name);
   }
+  async removeEntry(name) {
+    if (this.faults?.remove === name) throw new Error(`injected remove ${name}`);
+    if (!this.children.delete(name)) throw missing(name);
+  }
   async getFileHandle(name, { create = false } = {}) {
     if (create && this.faults?.create === name) throw new Error(`injected create ${name}`);
     if (!this.children.has(name)) {
@@ -847,6 +851,8 @@ Deno.test("durable exact compaction issuance claim survives restart and stays ou
   assertEquals(after.head.checkpointSequence, 129);
   assertEquals(after.live.at(-1).id, "after-compaction");
   assertEquals(after.archive, seed.slice(0, 129), "both sealed and pending evictions survive exact claim adoption");
+  assertEquals(wal.children.has("claim-18-129.json"), false,
+    "once both checked heads pass the claim's sequence, retry evidence retires without removing journal authority");
   const prefix = "memory/master/journal-wal/";
   const paths = new Map([...wal.children].map(([name, file]) => [prefix + name, file.bytes]));
   const selected = await selectPublishedMasterJournalBackupPaths([...paths.keys()], async (path) => ({
@@ -854,6 +860,50 @@ Deno.test("durable exact compaction issuance claim survives restart and stays ou
   }));
   assertEquals(selected.includes(prefix + "claim-18-129.json"), false,
     "a claim is retry evidence, never published journal/backup authority");
+  for (let id = 0; id < 127; id++) await stageMasterJournalFrame(master,
+    { operation: "append", row: { id: `future-${id}` } }, restartedIssuer);
+  assertEquals((await readMasterJournalProjection(master)).head.sequence, 257);
+  await stageMasterJournalFrame(master,
+    { operation: "append", row: { id: "future-compaction" } }, restartedIssuer);
+  assertEquals(wal.children.has("claim-18-258.json"), false,
+    "the second compaction claim retires once its subsequent frame advances the other head");
+  const latest = await stageMasterJournalFrame(master,
+    { operation: "append", row: { id: "future-retired" } }, restartedIssuer);
+  assertEquals(latest.sequence, 260);
+  assertEquals(wal.children.has("claim-18-258.json"), false);
+  assertEquals((await readMasterJournalProjection(master, { includeArchive: true })).live.at(-1).id,
+    "future-retired");
+});
+
+Deno.test("failed claim retirement preserves acknowledged append then blocks the next mutation", async () => {
+  const faults = {};
+  const { master, allocateVersion, readGeneration } = await legacyFixture(faults);
+  await stageMasterJournalCutover(master, { journalExists: true, journal: [{ id: "base" }],
+    archive: [], allocateVersion });
+  const issuer = createMasterJournalIssuer(master, { issueVersion: allocateVersion, readGeneration });
+  for (let id = 0; id < 128; id++) await stageMasterJournalFrame(master,
+    { operation: "append", row: { id } }, issuer);
+  faults.remove = "claim-18-129.json";
+  const acknowledged = await stageMasterJournalFrame(master,
+    { operation: "append", row: { id: 128 } }, issuer);
+  assertEquals(acknowledged.sequence, 130, "retirement failure cannot make a published append look unacknowledged");
+  assertEquals((await readMasterJournalProjection(master)).live.at(-1).id, 128);
+  await assertRejects(() => stageMasterJournalFrame(master,
+    { operation: "append", row: { id: 129 } }, issuer), Error, "injected remove");
+  assertEquals((await readMasterJournalProjection(master)).head.sequence, 130);
+  faults.remove = null;
+  assertEquals((await stageMasterJournalFrame(master,
+    { operation: "append", row: { id: 129 } }, issuer)).sequence, 131);
+  assertEquals((await master.getDirectoryHandle("journal-wal")).children.has("claim-18-129.json"), false);
+});
+
+Deno.test("issuance refuses an incomplete source before burning a generation", async () => {
+  const { master, allocateVersion, readGeneration } = await legacyFixture();
+  const issuer = createMasterJournalIssuer(master, { issueVersion: allocateVersion, readGeneration });
+  await assertRejects(() => issuer.allocateVersion({
+    checkpoint: "checkpoint-18-1.json", source: { epoch: 18, throughFrame: 0 },
+  }), Error, "invalid master journal compaction issuance claim");
+  assertEquals(await readGeneration(), 17, "a malformed claim must not consume a durable token");
 });
 
 Deno.test("complete claim and archive without checkpoint retry with the exact claimed version", async () => {

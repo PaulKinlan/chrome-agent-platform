@@ -560,8 +560,17 @@ record after durable version issuance and BEFORE derived compaction records.
 A complete matching claim can be adopted across a restart; torn, changed or
 unwitnessed claims refuse. Claims are retry evidence, not journal authority:
 raw export excludes them after head publication, and an imported published
-checkpoint needs no old claim. Product wiring of this issuer remains disabled. Torn, non-equal or source-mismatched immutable records and damaged
-head slots remain fail-closed pending explicit owner repair. Archive rows are
+checkpoint needs no old claim. The staged issuer retires a claim only after
+both checked head slots advance past its checkpoint. Retirement failure after
+head publication cannot turn an acknowledged append into an apparent failure;
+the next append retries retirement before mutation and refuses if it fails.
+The claim self-asserts its issued version and checks it against the durable
+global generation floor. This detects accidental corruption, not an OPFS
+writer that re-seals a modified claim: without a staged checkpoint, that floor
+cannot independently bind a token to a request. No cryptographic attestation
+against a malicious local OPFS writer is claimed. Product wiring of this
+issuer remains disabled. Torn, non-equal or source-mismatched immutable
+records and damaged head slots remain fail-closed pending explicit owner repair. Archive rows are
 an append-only HISTORY LOG, not a set of currently evicted rows: a compensated
 row may legitimately exist in both live and archive. Readers must not infer
 live state from archive history. On a post-commit guard failure, a replace or
