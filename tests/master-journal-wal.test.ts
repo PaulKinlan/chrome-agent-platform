@@ -875,19 +875,62 @@ Deno.test("durable exact compaction issuance claim survives restart and stays ou
     "future-retired");
 });
 
+Deno.test("compensation forwards claim retirement and next-transaction preflight", async () => {
+  const faults = {};
+  const { master, allocateVersion, readGeneration } = await legacyFixture(faults);
+  await stageMasterJournalCutover(master, { journalExists: true,
+    journal: Array.from({ length: 500 }, (_, id) => ({ id })), archive: [], allocateVersion });
+  const baseIssuer = createMasterJournalIssuer(master, { issueVersion: allocateVersion, readGeneration });
+  let retirementAttempts = 0;
+  const issuer = { ...baseIssuer, async retireClaims(head) {
+    retirementAttempts++;
+    return await baseIssuer.retireClaims(head);
+  } };
+  const receipt = await appendMasterJournalWithReceipt(master,
+    { type: "task", executionId: "compensate-claim" }, issuer);
+  for (let id = 500; id < 627; id++) await stageMasterJournalFrame(master,
+    { operation: "append", row: { id, executionId: `foreign-${id}` } }, issuer);
+  assertEquals((await readMasterJournalProjection(master)).head.sequence, 128);
+  faults.remove = "claim-18-129.json";
+  const attemptsBefore = retirementAttempts;
+  assertEquals((await compensateMasterJournalReceipt(master, receipt, issuer)).ok, true,
+    "compensation publishes once even when post-commit claim retirement fails");
+  assertEquals(retirementAttempts, attemptsBefore + 1,
+    "the compensation adapter must forward the issuer's post-publish retirement hook");
+  const wal = await master.getDirectoryHandle("journal-wal");
+  assertEquals(wal.children.has("claim-18-129.json"), true);
+  const acknowledged = (await readMasterJournalProjection(master)).head.sequence;
+  await assertRejects(() => appendMasterJournalWithReceipt(master,
+    { type: "task", executionId: "later-claim" }, issuer), Error, "injected remove");
+  assertEquals((await readMasterJournalProjection(master)).head.sequence, acknowledged);
+  faults.remove = null;
+  await cancelMasterJournalExecution(master,
+    { type: "cancelled", executionId: "cancel-after-claim" }, "cancel-after-claim", issuer);
+  assertEquals(wal.children.has("claim-18-129.json"), false);
+});
+
 Deno.test("staged receipt append and cancellation forward claim retirement hooks", async () => {
   for (const mode of ["append", "cancel"]) {
     const { master, allocateVersion, readGeneration } = await legacyFixture();
     await stageMasterJournalCutover(master, { journalExists: true,
       journal: Array.from({ length: 500 }, (_, id) => ({ id })), archive: [], allocateVersion });
-    const issuer = createMasterJournalIssuer(master, { issueVersion: allocateVersion, readGeneration });
+    const baseIssuer = createMasterJournalIssuer(master, { issueVersion: allocateVersion, readGeneration });
+    const wal = await master.getDirectoryHandle("journal-wal");
+    let claimSeenBeforeRetirement = false;
+    const issuer = { ...baseIssuer, async retireClaims(head) {
+      if (head.checkpointSequence === 129 && head.sequence === 130) {
+        claimSeenBeforeRetirement = wal.children.has("claim-18-129.json");
+      }
+      return await baseIssuer.retireClaims(head);
+    } };
     for (let id = 500; id < 628; id++) await stageMasterJournalFrame(master,
       { operation: "append", row: { id } }, issuer);
     if (mode === "append") await appendMasterJournalWithReceipt(master,
       { type: "task", executionId: "claim-append" }, issuer);
     else await cancelMasterJournalExecution(master,
       { type: "cancelled", executionId: "claim-cancel" }, "claim-cancel", issuer);
-    const wal = await master.getDirectoryHandle("journal-wal");
+    assertEquals(claimSeenBeforeRetirement, true,
+      `${mode}: the claim must exist before the transaction retires it`);
     assertEquals(wal.children.has("claim-18-129.json"), false,
       `${mode}: compaction claim must retire after the transaction's frame advances both heads`);
   }

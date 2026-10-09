@@ -124,8 +124,9 @@ async function readDurableGeneration(dir) {
 /** Issue the next durable generation for a store directory. The caller holds
  * the write mutex (atomic). Returns the generation. */
 async function issueVersion(dir) {
-  // The Web Lock is cross-context; a realm-local cache is NOT. Re-read on
-  // every issuance or an Options/SW writer could reuse a stale version.
+  // Only the MASTER has a cross-context Web Lock; no realm-local cache can
+  // witness it. Re-read on every issuance, including non-master stores, to
+  // avoid a stale token (this alone does not serialize non-master realms).
   const prev = await readDurableGeneration(dir);
   if (prev >= Number.MAX_SAFE_INTEGER) {
     throw new Error("the durable generation authority is exhausted");
@@ -135,8 +136,9 @@ async function issueVersion(dir) {
   return gen;
 }
 
-/** Non-creating, uncached observation of the real master generation. Another
- * extension realm may have just issued a token. */
+/** Non-creating, uncached OBSERVATION of the real master generation. It is
+ * not a CAS precondition outside the master Web Lock: another realm may issue
+ * a token immediately after this read. */
 export async function masterJournalReadGeneration() {
   let dir = await rootDir();
   for (const segment of [ROOT, MASTER]) {
@@ -150,7 +152,8 @@ export async function masterJournalReadGeneration() {
 }
 
 /** Staged lock-scoped WAL issuer. No product call site or writer cutover is
- * enabled. The callback must await every frame before leaving this lock. */
+ * enabled. Await every frame before leaving. Never await a masterMemory()
+ * write/clear inside this callback: the master mutex/Web Lock is non-reentrant. */
 export async function withMasterJournalIssuer(fn) {
   if (typeof fn !== "function") throw new Error("master journal issuer requires a callback");
   return await withWriteLock([ROOT, MASTER], async () => {
