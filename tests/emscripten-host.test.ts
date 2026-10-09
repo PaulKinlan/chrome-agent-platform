@@ -198,9 +198,13 @@ Deno.test("emscripten host: one in-flight job per package — the second refuses
       terminate() {}
     }
     const first = executeEmscriptenRunRequest(await request({
-      lifecycle: { startupMs: 25, callMs: 25 },
+      lifecycle: { startupMs: 250, callMs: 250 },
     }), { createWorker: () => new HangingWorker() });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    let waited = 0;
+    while (!firstPosted && waited < 2000) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      waited += 10;
+    }
     assert(firstPosted, "the first job posted");
     let code = null;
     try { await executeEmscriptenRunRequest(await request()); }

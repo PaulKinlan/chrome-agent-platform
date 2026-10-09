@@ -52,6 +52,7 @@ import { readClipboardOnGesture } from "../lib/clipboard-tools.js";
 import {
   Component,
   mountTemplate,
+  ensureStyle,
   ICONS,
   escapeHtml,
   timeAgo,
@@ -72,7 +73,6 @@ import {
   wireHtmlFramePreference,
   renderInline,
   adoptOrInjectStyle,
-  ensureStyle,
   sleep,
   toolResultSignalsError,
   prefersReducedMotion,

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.620] — 2026-10-09
+- Admit shared UI chunks to dist.complete and package inventory, reducing sidepanel bundle to 19.8 KB and meeting all primary surface size targets.
+
 ## [0.3.619] — 2026-10-09
 - Fix split component cross-module imports and exports (ensureStyle, normalizeSiteActivity, fmtTime, backend, parseJSONAttr, wireHtmlFrame*) preventing ReferenceErrors on extension pages.
 

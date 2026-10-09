@@ -28,6 +28,16 @@ export const STORE_SANDBOX_CSP =
 export const STORE_WASM_LANE = "bundled-reviewed-only";
 export const STORE_ALLOWED_WORKER_LITERALS = Object.freeze([]);
 
+/**
+ * Static entry point bundle-to-source mapping for the 11 primary entry bundles.
+ *
+ * NOTE on authority scope: BUNDLE_ARCHIVE_MAP establishes source provenance
+ * for static entry bundles only. Dynamic ES-module chunks (dist/chunks/*.js) are
+ * generated via esbuild code-splitting and do not have 1:1 author source files;
+ * their exact, fail-closed authority is established and verified bijectively via
+ * dist.complete (createDistCompleteMarker / validateDistCompleteMarker) and bound
+ * to marker.outputs in package-archive.mjs.
+ */
 export const BUNDLE_ARCHIVE_MAP = Object.freeze(new Map([
   ["dist/background/service-worker.js", "background/service-worker.js"],
   ["dist/options.bundle.js", "options/options.js"],

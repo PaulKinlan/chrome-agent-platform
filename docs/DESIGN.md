@@ -45,7 +45,16 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   - `components-privacy.js`: Privacy statement views (`<privacy-statement>`).
   - `components.js`: Aggregating barrel re-exporting all submodules to maintain 100% backward compatibility for the docs gallery showcase (`docs/components.html`) and existing test suites.
 - **Per-Surface Targeted Imports**: Individual extension entry points (`sidepanel.js`, `ntp.js`, `options.js`, etc.) import only their required component submodules directly, preventing unused component definitions (such as `<tool-library>` on NTP boot) from registering eagerly.
-- **Architectural Deviation (12-Bundle Authority vs. esbuild splitting)**: While code splitting with `splitting: true` generates separate chunk files, this conflicts with the extension manifest and the strict 12-bundle authority schema enforced by `dist.complete` and `dist-complete.mjs` (`DIST_COMPLETE_OUTPUTS`). Instead, modularization is achieved via manual domain decomposition and targeted per-surface bundling, preserving the deterministic 12-bundle contract with zero unmanifested chunk files. Minified bundle sizes after modularization: sidepanel 413.9 KB, NTP 818.3 KB, options 543.7 KB, artifacts 143.9 KB, artifact 127.2 KB, directory 61.4 KB, privacy 63.5 KB.
+- **Shared UI Chunk Authority & Code Splitting (20e2u)**: Building on 9epn.6's domain decomposition, `chrome-agent-platform-20e2u` extends the build authority (`scripts/dist-complete.mjs` and `scripts/package-archive.mjs`) to admit verified, manifest-tracked dynamic chunks (`dist/chunks/*.js`).
+  - The 12 primary entry points remain fixed at the head of `DIST_COMPLETE_OUTPUTS` and `dist.complete`.
+  - Dynamic chunks emitted by esbuild code splitting are bounded (count ≤ 10, size ≤ 500 KB per chunk, aggregate chunk size ≤ 750 KB), recorded with exact SHA-256 and byte sizes in `dist.complete`, and enforced via exact bijection (zero unmanifested files permitted in `dist/`, sourcemaps strictly rejected in store mode). Static entry bundles are mapped via `BUNDLE_ARCHIVE_MAP`, while dynamic chunks are authorized and bijectively bound via `dist.complete` and package inventory.
+  - Every emitted chunk is subject to identical security gates in `scanShippedJs` (zero `eval`, zero `new Function`, zero unapproved worker or Wasm APIs, and zero forbidden audit markers).
+  - All primary size targets are now fully **MET**:
+    - `sidepanel.bundle.js`: 19.8 KB (target ≤ 250 KB, **MET**)
+    - `ntp.bundle.js`: 343.6 KB (target ≤ 500 KB, **MET**)
+    - `options.bundle.js`: 429.3 KB (target ≤ 450 KB, **MET**)
+    - Aggregate chunks: 528.3 KB across 6 chunks (budget ≤ 750 KB, **MET**).
+  - Real browser proof (`tests/chunk-resolution-browser.test.ts`) verifies that in headless Chrome, `ntp.html`, `sidepanel.html`, and `options.html` resolve all dynamic chunks cleanly with zero 404s, zero CSP errors, and zero runtime exceptions.
 
 ## Directory function cards
 - A function is one semantic unit in source order: name, truthful bounded registry description (or “No description provided”), site/schema metadata, then its own source and approval states.

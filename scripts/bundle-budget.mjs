@@ -21,44 +21,21 @@ import { dirname, join } from "node:path";
 /** Store-target service-worker budget: 3.0 MB minified. */
 export const STORE_SW_BUDGET_BYTES = 3_000_000;
 
+export const STORE_AGGREGATE_CHUNKS_BUDGET_BYTES = 750_000;
+
 /**
  * Store-target reference sizes for EVERY generated bundle (minified bytes),
  * keyed by dist-relative path (chrome-agent-platform-9epn.4, perf audit #5).
- * Before this table only the SW and the agent worker had a number; ntp /
- * sidepanel / options / diff-core grew unobserved (832 867 / 635 119 /
- * 841 261 B in the 2026-10-01 audit). The UI numbers were measured on the
- * store build of the tree that introduced them (ntp 830 013, sidepanel
- * 633 728, options 839 829, diff-core 16 611 B) and set at that size + 5 %
- * headroom, rounded DOWN to the nearest 10 kB (1 kB for diff-core).
- *
- * OWNER DECISION (Paul, 2026-10-05): these numbers no longer BLOCK the store
- * build. They are the reporting baseline the build prints per bundle and
- * that dist/dist.complete records; a bundle over its reference size is
- * REPORTED (bundleBudgetReport) with its top contributors, never fatal.
- * build.mjs → assertBundleBudget still enforces the dependency-integrity
- * invariants; tests/bundle-budget.test.ts holds the recorded sizes against
- * this same table, report-only.
+ * Ratcheted down to the bead targets in 20e2u with code splitting and
+ * shared chunk extraction (sidepanel <=250KB, ntp <=500KB, options <=450KB).
  */
 export const STORE_BUNDLE_BUDGETS = Object.freeze({
   "background/service-worker.js": STORE_SW_BUDGET_BYTES,
   "workers/agent-worker.js": 2_000_000,
-  "options.bundle.js": 600_000,
-  "ntp.bundle.js": 850_000,
-  "sidepanel.bundle.js": 450_000,
+  "options.bundle.js": 450_000,
+  "ntp.bundle.js": 500_000,
+  "sidepanel.bundle.js": 250_000,
   "shared/diff-core.bundle.js": 17_000,
-  // chrome-agent-platform-o2t3: the six SECONDARY surface bundles declare a budget
-  // in build.mjs SURFACE_BUNDLES but were in neither this table nor
-  // DIST_COMPLETE_OUTPUTS, so the build's budget loop (which iterates this table)
-  // never reported them and the marker never recorded their size or hash. They are
-  // shipped artifacts — five are loaded by shipped pages (artifacts/index.html,
-  // artifact/artifact.html, directory/directory.html, privacy/privacy.html,
-  // offscreen/offscreen.html) and user-wasm-store-client.bundle.js is dynamically
-  // imported by options/user-wasm-panel.js — and BUNDLE_ARCHIVE_MAP already maps all
-  // six into the store archive, so "measured by nothing" was the worst of the three
-  // states under the 2026-10-05 owner decision (measured and reported, not enforced).
-  // The ceilings below are build.mjs's, and tests/bundle-budget.test.ts pins this
-  // table against build.mjs's declarations so the two cannot drift apart again.
-  // Ratcheted down under 9epn.6 with components modularization.
   "artifacts.bundle.js": 200_000,
   "artifact.bundle.js": 200_000,
   "directory.bundle.js": 65_000,

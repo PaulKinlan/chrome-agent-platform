@@ -112,6 +112,10 @@ export function parseBundleMap(buildSource) {
     if (!distRel) throw new Error(`check-reachability: build.mjs outfile ${m[2]} has no STAGE path`);
     bundles.set(`dist/${distRel}`, m[1]);
   }
+  for (const m of buildSource.matchAll(/"([^"]+)":\s*path\.join\(EXT_DIR,\s*"([^"]+)"\)/g)) {
+    const bundleName = m[1].endsWith(".js") ? m[1] : `${m[1]}.js`;
+    bundles.set(`dist/${bundleName}`, m[2]);
+  }
   if (bundles.size === 0) throw new Error("check-reachability: no esbuild entries found in build.mjs");
   return bundles;
 }

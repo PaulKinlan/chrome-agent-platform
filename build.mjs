@@ -644,14 +644,12 @@ try {
     const swInject = [];
     if (DEBUG_BUILD) swInject.push(path.join(ROOT, "scripts/mcp-probe-entry.js"));
 
-    // chrome-agent-platform-9epn.5 + jjsz + 9epn.6: build all 12 bundles concurrently. settleAll, not
-    // Promise.all: esbuild writes into STAGE, so every bundle must finish (or fail) before a
-    // failure reaches the rollback that removes STAGE.
+    // chrome-agent-platform-9epn.5 + jjsz + 9epn.6 + 20e2u: build SW, diff-core,
+    // workers, and offscreen standalone; build UI surfaces with esbuild splitting:true
+    // so shared chat machinery and core components extract into admitted chunks/.
     const [
       swResult,
-      optResult,
-      ntpResult,
-      sidepanelResult,
+      uiResult,
       artifactsResult,
       artifactResult,
       directoryResult,
@@ -668,9 +666,18 @@ try {
         inject: swInject,
         metafile: true,
       }),
-      build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT, metafile: true }),
-      build({ ...shared, entryPoints: [path.join(EXT_DIR, "ntp/ntp.js")], outfile: NTP_BUNDLE, metafile: true }),
-      build({ ...shared, entryPoints: [path.join(EXT_DIR, "sidepanel/sidepanel.js")], outfile: SIDEPANEL_BUNDLE, metafile: true }),
+      build({
+        ...shared,
+        entryPoints: {
+          "options.bundle": path.join(EXT_DIR, "options/options.js"),
+          "ntp.bundle": path.join(EXT_DIR, "ntp/ntp.js"),
+          "sidepanel.bundle": path.join(EXT_DIR, "sidepanel/sidepanel.js"),
+        },
+        outdir: STAGE,
+        splitting: true,
+        chunkNames: "chunks/[name]-[hash]",
+        metafile: true,
+      }),
       build({ ...shared, entryPoints: [path.join(EXT_DIR, "artifacts/index.js")], outfile: ARTIFACTS_BUNDLE, metafile: true }),
       build({ ...shared, entryPoints: [path.join(EXT_DIR, "artifact/artifact.js")], outfile: ARTIFACT_BUNDLE, metafile: true }),
       build({ ...shared, entryPoints: [path.join(EXT_DIR, "directory/directory.js")], outfile: DIRECTORY_BUNDLE, metafile: true }),
@@ -687,6 +694,15 @@ try {
       }),
     ]);
 
+    const chunksDir = path.join(STAGE, "chunks");
+    let emittedChunks = [];
+    try {
+      const chunkEntries = await readdir(chunksDir);
+      emittedChunks = chunkEntries.filter((f) => f.endsWith(".js")).map((f) => path.join(chunksDir, f)).sort();
+    } catch {
+      // no chunks directory
+    }
+
     const SURFACE_BUNDLES = [
       { name: "artifacts", entry: "artifacts/index.js", out: "artifacts.bundle.js", path: ARTIFACTS_BUNDLE, result: artifactsResult, budget: 200_000 },
       { name: "artifact", entry: "artifact/artifact.js", out: "artifact.bundle.js", path: ARTIFACT_BUNDLE, result: artifactResult, budget: 200_000 },
@@ -696,7 +712,7 @@ try {
       { name: "user-wasm-store-client", entry: "lib/user-wasm-store-client.js", out: "user-wasm-store-client.bundle.js", path: USER_WASM_STORE_CLIENT_BUNDLE, result: userWasmClientResult, budget: 10_000 },
     ];
     const SURFACE_BUNDLE_PATHS = SURFACE_BUNDLES.map((s) => s.path);
-    const ALL_BUNDLE_PATHS = [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE, ...SURFACE_BUNDLE_PATHS];
+    const ALL_BUNDLE_PATHS = [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE, ...SURFACE_BUNDLE_PATHS, ...emittedChunks];
 
     {
       // The budget report NEVER lands in dist/: the shipped package must not
@@ -707,10 +723,11 @@ try {
       await settleAll([
         writeFile(path.join(ROOT, ".build", "bundle-report.json"), JSON.stringify(swResult.metafile)),
         writeFile(path.join(ROOT, ".build", "bundle-report-worker.json"), JSON.stringify(workerResult.metafile)),
-        writeFile(path.join(ROOT, ".build", "bundle-report-options.json"), JSON.stringify(optResult.metafile)),
-        writeFile(path.join(ROOT, ".build", "bundle-report-ntp.json"), JSON.stringify(ntpResult.metafile)),
-        writeFile(path.join(ROOT, ".build", "bundle-report-sidepanel.json"), JSON.stringify(sidepanelResult.metafile)),
+        writeFile(path.join(ROOT, ".build", "bundle-report-options.json"), JSON.stringify(uiResult.metafile)),
+        writeFile(path.join(ROOT, ".build", "bundle-report-ntp.json"), JSON.stringify(uiResult.metafile)),
+        writeFile(path.join(ROOT, ".build", "bundle-report-sidepanel.json"), JSON.stringify(uiResult.metafile)),
         writeFile(path.join(ROOT, ".build", "bundle-report-diff-core.json"), JSON.stringify(diffCoreResult.metafile)),
+        writeFile(path.join(ROOT, ".build", "bundle-report-ui.json"), JSON.stringify(uiResult.metafile)),
         ...SURFACE_BUNDLES.map((s) =>
           writeFile(path.join(ROOT, ".build", `bundle-report-${s.name}.json`), JSON.stringify(s.result.metafile))
         ),
@@ -808,13 +825,13 @@ try {
     // contributors instead of failing the build. The developer build notes
     // its unminified bytes (larger by design).
     {
-      const { assertBundleBudget, bundleBudgetReport, STORE_BUNDLE_BUDGETS, STORE_SW_BUDGET_BYTES } = await import("./scripts/bundle-budget.mjs");
+      const { assertBundleBudget, bundleBudgetReport, STORE_BUNDLE_BUDGETS, STORE_SW_BUDGET_BYTES, STORE_AGGREGATE_CHUNKS_BUDGET_BYTES } = await import("./scripts/bundle-budget.mjs");
       const metafileFor = {
         "background/service-worker.js": swResult.metafile,
         "workers/agent-worker.js": workerResult.metafile,
-        "options.bundle.js": optResult.metafile,
-        "ntp.bundle.js": ntpResult.metafile,
-        "sidepanel.bundle.js": sidepanelResult.metafile,
+        "options.bundle.js": uiResult.metafile,
+        "ntp.bundle.js": uiResult.metafile,
+        "sidepanel.bundle.js": uiResult.metafile,
         "shared/diff-core.bundle.js": diffCoreResult.metafile,
         "artifacts.bundle.js": artifactsResult.metafile,
         "artifact.bundle.js": artifactResult.metafile,
@@ -838,6 +855,15 @@ try {
           if (over) console.log(over);
           else console.log(`bundle budget: store ${rel} ${size} bytes <= ${budgetBytes} budget`);
         }
+        let aggregateChunkBytes = 0;
+        for (const chunkPath of emittedChunks) {
+          const sz = (await stat(chunkPath)).size;
+          aggregateChunkBytes += sz;
+        }
+        if (aggregateChunkBytes > STORE_AGGREGATE_CHUNKS_BUDGET_BYTES) {
+          throw new Error(`bundle budget: aggregate chunks ${aggregateChunkBytes} bytes > ${STORE_AGGREGATE_CHUNKS_BUDGET_BYTES} budget`);
+        }
+        console.log(`bundle budget: store chunks aggregate ${aggregateChunkBytes} bytes <= ${STORE_AGGREGATE_CHUNKS_BUDGET_BYTES} budget (${emittedChunks.length} chunks)`);
       }
     }
 

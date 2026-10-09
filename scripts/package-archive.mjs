@@ -249,6 +249,20 @@ export async function collectPackageInventory({
       );
     }
   }
+  const expectedDistArchivePaths = new Set(
+    marker.outputs.map((o) => `${GENERATED_DIST}/${o.path}`),
+  );
+  expectedDistArchivePaths.add(`${GENERATED_DIST}/dist.complete`);
+  for (const generated of generatedEntries) {
+    if (
+      generated.archivePath.startsWith(`${GENERATED_DIST}/wasm-tools/python/`)
+    ) continue;
+    if (!expectedDistArchivePaths.has(generated.archivePath)) {
+      throw packageError(
+        `unmanifested generated file in package inventory: ${generated.archivePath}`,
+      );
+    }
+  }
   // Revalidate after inventory hashing. copyInventoryToStage subsequently
   // compares every copied byte with this inventory, closing the remaining
   // read/copy race without weakening fresh-archive atomicity.
