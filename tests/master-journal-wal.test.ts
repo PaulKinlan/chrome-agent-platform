@@ -371,6 +371,46 @@ Deno.test("an unpublished torn immutable frame blocks retry until explicit repai
   assertEquals((await readMasterJournalProjection(master)).live, []);
 });
 
+Deno.test("WAL frame CAS refuses a stale same-value token and wrong epoch before allocating a write", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  const cutover = await stageMasterJournalCutover(master, {
+    journalExists: true, journal: [{ id: "same" }], archive: [], allocateVersion,
+  });
+  const next = await stageMasterJournalFrame(master, {
+    operation: "replace", rows: [{ id: "same" }],
+  }, { allocateVersion, expectedVersion: cutover.version, expectedEpoch: cutover.epoch });
+  assertEquals(next.version > cutover.version, true, "same-value writes must consume a fresh token");
+  await assertRejects(() => stageMasterJournalFrame(master, {
+    operation: "replace", rows: [{ id: "stale" }],
+  }, { allocateVersion, expectedVersion: cutover.version, expectedEpoch: cutover.epoch }), Error, "CAS version mismatch");
+  await assertRejects(() => stageMasterJournalFrame(master, {
+    operation: "append", row: { id: "wrong-epoch" },
+  }, { allocateVersion, expectedVersion: next.version, expectedEpoch: cutover.epoch + 1 }), Error, "epoch mismatch");
+  assertEquals((await readMasterJournalProjection(master)).live, [{ id: "same" }]);
+  const wal = await master.getDirectoryHandle("journal-wal");
+  assertEquals(wal.children.has(`frame-${cutover.epoch}-2.json`), false,
+    "refused CAS must not leave an unpublished immutable frame");
+});
+
+Deno.test("stale WAL CAS cannot trigger compaction side effects at the 128-frame boundary", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  const cutover = await stageMasterJournalCutover(master, {
+    journalExists: true, journal: Array.from({ length: 500 }, (_, id) => ({ id })),
+    archive: [], allocateVersion,
+  });
+  let head;
+  for (let id = 500; id < 628; id++) {
+    head = await stageMasterJournalFrame(master, { operation: "append", row: { id } }, { allocateVersion });
+  }
+  const wal = await master.getDirectoryHandle("journal-wal");
+  await assertRejects(() => stageMasterJournalFrame(master, {
+    operation: "append", row: { id: "stale-CAS" },
+  }, { allocateVersion, expectedEpoch: cutover.epoch, expectedVersion: head.version - 1 }), Error, "CAS version mismatch");
+  assertEquals(wal.children.has(`archive-${head.epoch}-1.json`), false);
+  assertEquals(wal.children.has(`checkpoint-${head.epoch}-129.json`), false);
+  assertEquals((await readMasterJournalProjection(master)).head.version, head.version);
+});
+
 Deno.test("checked frame chain applies 500 cap, preserves overflow and fences clear", async () => {
   const { master, allocateVersion } = await legacyFixture();
   const live = Array.from({ length: 500 }, (_, id) => ({ id }));

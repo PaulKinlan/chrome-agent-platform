@@ -337,7 +337,9 @@ export async function stageMasterJournalCompaction(master, { allocateVersion, pr
  * checked head slot. Test-only until the master store's *every* mutation and
  * export path use a single lock + projection. A failed head close is NOT an
  * acknowledgement; recovery fails closed on a corrupt present head. */
-export async function stageMasterJournalFrame(master, operation, { allocateVersion } = {}) {
+export async function stageMasterJournalFrame(master, operation, {
+  allocateVersion, expectedVersion, expectedEpoch,
+} = {}) {
   if (typeof allocateVersion !== "function") throw new Error("master journal frame requires a durable version issuer");
   if (!operation || typeof operation !== "object" || Array.isArray(operation) ||
       !["append", "replace", "delete", "clear"].includes(operation.operation) ||
@@ -348,6 +350,15 @@ export async function stageMasterJournalFrame(master, operation, { allocateVersi
   }
   let before = await readMasterJournalProjection(master);
   if (!before) throw new Error("master journal must be cut over before framing a write");
+  // The caller already holds the master Web Lock. Compare the exact published
+  // token BEFORE compaction so a stale CAS never stages a checkpoint or burns
+  // a generation. Compaction is an internal part of this same requested write.
+  if (expectedEpoch !== undefined && before.head.epoch !== expectedEpoch) {
+    throw new Error("master journal epoch mismatch");
+  }
+  if (expectedVersion !== undefined && before.head.version !== expectedVersion) {
+    throw new Error("master journal CAS version mismatch");
+  }
   if (before.head.sequence - before.head.checkpointSequence >= 128) {
     await stageMasterJournalCompaction(master, { allocateVersion, projection: before });
     before = await readMasterJournalProjection(master);
