@@ -67,6 +67,13 @@ async function readRecord(directory, name, kind) {
 }
 
 async function writeCheckedRecord(directory, name, kind, payload) {
+  // A failed immutable close can leave a torn unpublished file. Never reuse
+  // its name and erase the evidence on retry: only an explicit, separately
+  // verified repair may quarantine/remove such an orphan. Heads intentionally
+  // alternate in fixed slots and are the sole mutable records.
+  if (kind !== "head" && await optionalFile(directory, name)) {
+    throw new Error(`master journal unpublished immutable record ${name} requires explicit repair`);
+  }
   const handle = await directory.getFileHandle(name, { create: true });
   const writable = await handle.createWritable();
   try {
@@ -114,6 +121,10 @@ export async function readMasterJournalHead(master) {
   if (heads.length === 2 && heads[0].sequence === heads[1].sequence && JSON.stringify(heads[0]) !== JSON.stringify(heads[1])) {
     throw new Error("master journal heads fork at the same sequence");
   }
+  if (heads.length === 2 && heads[0].sequence !== heads[1].sequence) {
+    const [older, newer] = heads.sort((a, b) => a.sequence - b.sequence);
+    if (newer.version <= older.version) throw new Error("master journal head version has regressed");
+  }
   return heads.sort((a, b) => b.sequence - a.sequence)[0];
 }
 
@@ -148,18 +159,23 @@ export async function readMasterJournalArchiveChain(master, head, { includeRows 
         segment.rows.length > MAX_ARCHIVE_SEGMENT_ROWS ||
         (segment.exists !== undefined && typeof segment.exists !== "boolean") ||
         (segment.exists === false && segment.rows.length > 0) ||
-        (segment.index !== undefined && segment.index !== Number(match[2]))) {
+        (segment.index !== undefined && segment.index !== Number(match[2])) ||
+        (segment.reset !== undefined && typeof segment.reset !== "boolean")) {
       throw new Error("master journal archive segment is corrupt or unbounded");
     }
     const previous = segment.previous === undefined ? null : segment.previous;
     if (previous !== null) {
       const prior = /^archive-([1-9]\d*)-(0|[1-9]\d*)\.json$/.exec(previous);
-      if (!prior || Number(prior[1]) !== head.epoch || Number(prior[2]) >= Number(match[2]) ||
-          !/^[0-9a-f]{64}$/.test(segment.previousHash)) {
-        throw new Error("master journal archive segment predecessor is corrupt");
+      if (!prior || Number(prior[1]) !== head.epoch || Number(prior[2]) !== Number(match[2]) - 1 ||
+          segment.reset === true || !/^[0-9a-f]{64}$/.test(segment.previousHash)) {
+        throw new Error("master journal archive segment predecessor is corrupt or skips a segment");
       }
-    } else if (segment.previousHash !== undefined && segment.previousHash !== null) {
-      throw new Error("master journal archive root hash is corrupt");
+    } else if ((segment.previousHash !== undefined && segment.previousHash !== null) ||
+               (Number(match[2]) > 0 && segment.reset !== true)) {
+      // A clear may start a new root at the NEXT unused index while the other
+      // head still references the old chain. Such a root carries an explicit
+      // reset witness; an accidentally missing predecessor is not a reset.
+      throw new Error("master journal archive root reset witness is corrupt");
     }
     names.push(leaf);
     exists ||= segment.exists === true || segment.rows.length > 0;
@@ -193,9 +209,18 @@ export async function readMasterJournalProjection(master, { includeArchive = fal
   // A checkpoint can contain up to 500 WHOLE rows. A different limit here
   // would let a malformed export bypass the bounded live view.
   if (checkpoint.live.length > 500) throw new Error("master journal checkpoint is unbounded");
+  // Version belongs to the checkpoint generation, not necessarily the epoch:
+  // compaction consumes a new durable token even when it does not add a row.
+  // The absent version is accepted only for original seq-0 fixtures.
+  const checkpointVersion = checkpoint.version === undefined && checkpoint.sequence === 0
+    ? head.epoch : checkpoint.version;
+  if (!safeInteger(checkpointVersion, head.epoch) ||
+      (head.sequence === head.checkpointSequence && head.version !== checkpointVersion)) {
+    throw new Error("master journal checkpoint version is corrupt");
+  }
   const result = { exists: checkpoint.exists, live: structuredClone(checkpoint.live), version: head.version, head };
   let previousHash = expectedHeadHash;
-  let previousVersion = head.epoch;
+  let previousVersion = checkpointVersion;
   const overflow = [];
   let archiveCleared = false;
   for (let sequence = head.checkpointSequence + 1; sequence <= head.sequence; sequence++) {
@@ -230,6 +255,8 @@ export async function readMasterJournalProjection(master, { includeArchive = fal
   if (head.lastHash !== previousHash || (head.sequence > head.checkpointSequence && head.version !== previousVersion)) {
     throw new Error("master journal terminal head does not match its checked frame chain");
   }
+  result.pendingOverflow = overflow;
+  result.archiveCleared = archiveCleared;
   if (includeArchive) {
     const archive = await readMasterJournalArchiveChain(master, head);
     result.archive = archiveCleared ? overflow : [...archive.rows, ...overflow];
@@ -237,6 +264,59 @@ export async function readMasterJournalProjection(master, { includeArchive = fal
     result.archivePaths = archive.names;
   }
   return result;
+}
+
+/** Fold at most 128 replayed frames into a <=500-row checkpoint and a
+ * bounded immutable archive segment. The other head slot and its whole chain
+ * remain available until a later publication advances it; export includes
+ * the union of both slots in the meantime. This is test-only until the WAL
+ * writer, receipt/CAS and clear paths are wired as one authority. */
+export async function stageMasterJournalCompaction(master, { allocateVersion, projection = null } = {}) {
+  if (typeof allocateVersion !== "function") throw new Error("master journal compaction requires a durable version issuer");
+  const before = projection ?? await readMasterJournalProjection(master);
+  if (!before) throw new Error("master journal must be cut over before compaction");
+  const { head } = before;
+  if (before.pendingOverflow.length > 128) throw new Error("master journal compaction overflow exceeds bounded replay");
+  const chain = await readMasterJournalArchiveChain(master, head, { includeRows: false });
+  const sequence = head.sequence + 1;
+  if (!safeInteger(sequence, 1)) throw new Error("master journal compaction sequence is unbounded");
+  const version = await allocateVersion();
+  if (!safeInteger(version, head.version + 1)) throw new Error("master journal compaction version must increase");
+  const directory = await optionalDirectory(master);
+  let archive = head.archive;
+  let archiveHash = head.archiveHash;
+  if (before.pendingOverflow.length > 0 || before.archiveCleared) {
+    const match = /^archive-([1-9]\d*)-(0|[1-9]\d*)\.json$/.exec(head.archive);
+    const index = Number(match[2]) + 1;
+    if (!safeInteger(index, 1)) throw new Error("master journal archive segment sequence is unbounded");
+    const previous = before.archiveCleared ? null : head.archive;
+    const tail = await directory.getFileHandle(head.archive);
+    const previousHash = previous
+      ? await hash(DECODER.decode(await (await tail.getFile()).arrayBuffer())) : null;
+    archive = `archive-${head.epoch}-${index}.json`;
+    await writeCheckedRecord(directory, archive, "archive", {
+      epoch: head.epoch, index, previous, previousHash, reset: before.archiveCleared,
+      exists: before.archiveCleared ? before.pendingOverflow.length > 0 : chain.exists || before.pendingOverflow.length > 0,
+      rows: before.pendingOverflow,
+    });
+    const segment = await directory.getFileHandle(archive);
+    archiveHash = await hash(DECODER.decode(await (await segment.getFile()).arrayBuffer()));
+  }
+  if (!archiveHash) {
+    const tail = await directory.getFileHandle(archive);
+    archiveHash = await hash(DECODER.decode(await (await tail.getFile()).arrayBuffer()));
+  }
+  const checkpoint = `checkpoint-${head.epoch}-${sequence}.json`;
+  await writeCheckedRecord(directory, checkpoint, "checkpoint", {
+    epoch: head.epoch, sequence, version, exists: before.exists, live: before.live,
+  });
+  const lastHash = await hash(JSON.stringify({ epoch: head.epoch, sequence, checkpoint, archive, archiveHash }));
+  const next = validateHead({
+    epoch: head.epoch, sequence, version, checkpointSequence: sequence,
+    checkpoint, archive, archiveHash, lastHash,
+  });
+  await writeCheckedRecord(directory, HEADS[sequence % 2], "head", next);
+  return next;
 }
 
 /** Writes a checked immutable operation frame then publishes one alternating
@@ -252,10 +332,13 @@ export async function stageMasterJournalFrame(master, operation, { allocateVersi
       Object.keys(operation).some((key) => !["operation", "row", "rows"].includes(key))) {
     throw new Error("invalid master journal frame operation");
   }
-  const before = await readMasterJournalProjection(master);
+  let before = await readMasterJournalProjection(master);
   if (!before) throw new Error("master journal must be cut over before framing a write");
+  if (before.head.sequence - before.head.checkpointSequence >= 128) {
+    await stageMasterJournalCompaction(master, { allocateVersion, projection: before });
+    before = await readMasterJournalProjection(master);
+  }
   const { head } = before;
-  if (head.sequence - head.checkpointSequence >= 128) throw new Error("master journal needs verified compaction before another frame");
   const sequence = head.sequence + 1;
   const version = await allocateVersion();
   if (!safeInteger(version, head.version + 1)) throw new Error("master journal version must increase");
@@ -294,7 +377,7 @@ export async function stageMasterJournalCutover(master, {
   const overflow = journal.slice(0, Math.max(0, journal.length - 500));
   const live = journal.slice(-500);
   const checkpoint = `checkpoint-${epoch}-0.json`;
-  await writeCheckedRecord(directory, checkpoint, "checkpoint", { epoch, sequence: 0, exists: journalExists, live });
+  await writeCheckedRecord(directory, checkpoint, "checkpoint", { epoch, sequence: 0, version: epoch, exists: journalExists, live });
   const archivedRows = [...archive, ...overflow];
   let previous = null;
   let previousHash = null;

@@ -544,9 +544,17 @@ The disabled-writer cutover codec now splits a legacy unbounded archive into
 immutable checked segments of at most 500 whole rows. A constant-size head
 points to the terminal segment and binds its bytes; each segment hashes its
 predecessor. Both raw backup selectors walk all reachable segments, rejecting
-missing or changed interiors and excluding unpublished residue. Compaction and
-post-cutover archive rollover are NOT implemented; the staged frame writer
-still refuses at its 128-frame bound rather than silently losing rows.
+missing or changed interiors and excluding unpublished residue. The disabled-
+writer codec now folds at most 128 immutable frames into a checked <=500-row
+checkpoint plus one bounded archive segment, then publishes the new head last.
+The other head's dependencies stay reachable for export until that slot also
+advances. Clear resets the chain at the next unused segment index with an
+explicit reset marker; contiguous predecessors cannot silently skip archived
+rows. A torn unpublished immutable record blocks retry until explicit repair
+rather than being overwritten. The frame grammar still needs exact receipt,
+CAS and cancellation evidence before enabling mutation; physical power-loss
+recovery, real Chrome cross-context proof and safe on-disk retirement also
+remain outstanding.
 Before a checked head exists, legacy `journal.json` remains authoritative.
 After a checked cutover (including a restored WAL bundle), master journal and
 archive reads, snapshots, versions and key enumeration use its projection;
