@@ -503,6 +503,23 @@ Deno.test("backup-restore accepts a fully checked master WAL generation and reje
   assertEquals(confirmations, 0);
   assertEquals(DECODER.decode(restored.get(`${walPrefix}head-a.json`)), headBody,
     "a rejected archive must not alter the live published head");
+
+  // An owner-directed overwrite with a legacy-only bundle must remove EVERY
+  // published WAL record. This is a restore, not an automatic torn-head
+  // fallback: legacy data is authority only after the checked swap commits.
+  const legacyJournal = JSON.stringify([{ id: "restored-legacy" }]);
+  const legacyGen = JSON.stringify({ gen: 42 });
+  const legacy = await streamRestoreArchive({
+    stream: bundle([
+      { path: "memory/master/journal.json", encoding: "utf8", data: legacyJournal },
+      { path: "memory/master/__gen.json", encoding: "utf8", data: legacyGen },
+    ]), opfs, overwrite: true,
+  });
+  assertEquals(legacy.ok, true);
+  assertEquals(DECODER.decode(restored.get("memory/master/journal.json")), legacyJournal);
+  assertEquals(DECODER.decode(restored.get("memory/master/__gen.json")), legacyGen);
+  assertEquals([...restored.keys()].some((path) => path.startsWith(walPrefix)), false,
+    "legacy-only owner restore cannot retain a stale WAL head or frame as a second authority");
 });
 
 Deno.test("backup-restore: rejection of invalid archives (missing manifest, reserved keys, unsafe paths)", async () => {
