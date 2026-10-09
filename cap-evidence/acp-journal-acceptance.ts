@@ -27,7 +27,11 @@ function check(name: string, cond: boolean, detail: unknown = "") {
 
 // The bridge on the endpoint the extension defaults to, running the fixture
 // adapter so this costs no harness tokens.
-const bridge = createAcpServer(3210, FAKE_ADAPTER);
+// jsjy: the bridge requires a shared secret on every upgrade. Name one, start
+// the bridge WITH it, and seed the SAME token into the extension's acp.token so
+// the authenticated path is exercised (never the anonymous-loopback bypass).
+const BRIDGE_TOKEN = "cap-acp-journal-acceptance-token";
+const bridge = createAcpServer(3210, FAKE_ADAPTER, {}, "", BRIDGE_TOKEN);
 
 await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
 const profile = durableDir(`cap-acp-journal-profile-${Date.now()}`);
@@ -106,6 +110,11 @@ try {
   const extId = sw.url.split("/")[2];
   let ntp = await openPage(`chrome-extension://${extId}/ntp/ntp.html`);
   await sleep(2000);
+
+  // jsjy: seed acp.token so the extension's own acpRunConfig appends ?token=…
+  // to the default endpoint (the authenticated path, not a bypass).
+  const seeded = await msg(ntp, { type: "kv.set", values: { "acp.token": BRIDGE_TOKEN } });
+  check("seeded acp.token for the authenticated bridge", seeded?.ok === true, seeded);
 
   const threadsBefore = await msg(ntp, { type: "thread.list" });
   const beforeCount = Array.isArray(threadsBefore?.threads) ? threadsBefore.threads.length : -1;

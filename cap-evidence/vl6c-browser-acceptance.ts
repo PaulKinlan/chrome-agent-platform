@@ -22,11 +22,15 @@ import { durableDir } from "../scripts/lib/durable-root.mjs";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const PORT = 3298;
+// jsjy: the bridge requires a shared secret on every upgrade. Name one, start
+// the bridge WITH it, and seed the SAME token into the extension's acp.token so
+// the authenticated path is exercised (never the anonymous-loopback bypass).
+const BRIDGE_TOKEN = "cap-vl6c-acceptance-token";
 const EVIDENCE_DIR = durableDir(`cap-vl6c-acceptance-${Date.now()}`);
 await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
 
-console.log(`[acceptance] Starting ACP bridge on port ${PORT}...`);
-const bridge = createAcpServer(PORT);
+console.log(`[acceptance] Starting ACP bridge on port ${PORT} (token required)...`);
+const bridge = createAcpServer(PORT, undefined, {}, "", BRIDGE_TOKEN);
 
 console.log(`[acceptance] Launching headless Chrome with extension at ${EXT}...`);
 const profile = durableDir(`cap-vl6c-profile-${Date.now()}`);
@@ -133,18 +137,18 @@ try {
   // Wait for NTP to initialize
   await new Promise((r) => setTimeout(r, 1500));
 
-  // 4. Configure acp.endpoint in extension storage to point to our isolated bridge
-  console.log(`[acceptance] Configuring acp.endpoint to ws://127.0.0.1:${PORT}/acp...`);
+  // 4. Configure acp.endpoint + acp.token in extension storage to point to our isolated bridge
+  console.log(`[acceptance] Configuring acp.endpoint to ws://127.0.0.1:${PORT}/acp with acp.token (authenticated path)...`);
   await evalInSession(ntpSession, `
     chrome.runtime.sendMessage({
       type: "kv.set",
       values: {
         "acp.endpoint": "ws://127.0.0.1:${PORT}/acp",
-        "acp.token": ""
+        "acp.token": ${JSON.stringify(BRIDGE_TOKEN)}
       }
     })
   `);
-  check("Configured bridge endpoint in storage", true);
+  check("Configured bridge endpoint + token in storage", true);
 
   // 5. TEST 1: Run Codex to list open tabs via CAP's real lazy toolset
   console.log("\n[test 1] Driving Codex through extension to list real open tabs...");

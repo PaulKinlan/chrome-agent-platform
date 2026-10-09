@@ -20,9 +20,13 @@ import { runAcpTaskTurn } from "../extension/lib/acp-runner.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}/extension`;
-const EVIDENCE_DIR = "/home/paulkinlan/cap-evidence/khkk-settings";
+const EVIDENCE_DIR = durableDir(`cap-acp-settings-${Date.now()}`);
 const FAKE_ADAPTER = `${ROOT}/tests/fixtures/acp-fake-adapter.mjs`;
 const TEST_PORT = 41235;
+// jsjy: the bridge requires a shared secret on every upgrade. This run names one,
+// starts the bridge WITH it, and types the SAME token into the real Settings page
+// (which reads acp.endpoint/acp.token) so the authenticated path is exercised.
+const BRIDGE_TOKEN = "cap-acp-settings-acceptance-token";
 
 await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
 
@@ -153,7 +157,7 @@ try {
     ep.value = "ws://127.0.0.1:${TEST_PORT}/acp";
     ep.dispatchEvent(new Event('change'));
 
-    tok.value = "test-token-khkk-secret";
+    tok.value = ${JSON.stringify(BRIDGE_TOKEN)};
     tok.dispatchEvent(new Event('change'));
 
     cwd.value = "/tmp/khkk-custom-cwd";
@@ -197,14 +201,14 @@ try {
   })()`);
 
   check("ACP endpoint persisted across reload", reloadedValues.endpoint === `ws://127.0.0.1:${TEST_PORT}/acp`, reloadedValues);
-  check("ACP token persisted across reload", reloadedValues.token === "test-token-khkk-secret", reloadedValues);
+  check("ACP token persisted across reload", reloadedValues.token === BRIDGE_TOKEN, reloadedValues);
   check("ACP working directory persisted across reload", reloadedValues.cwd === "/tmp/khkk-custom-cwd", reloadedValues);
   check("ACP permissions mode persisted across reload", reloadedValues.permissions === "auto", reloadedValues);
   check("ACP transport mode persisted across reload", reloadedValues.transport === "ws", reloadedValues);
 
   // 5. Start ACP loopback bridge and test connection button again
-  console.log(`Starting loopback ACP bridge on port ${TEST_PORT} with fake adapter...`);
-  bridge = createAcpServer(TEST_PORT, FAKE_ADAPTER);
+  console.log(`Starting loopback ACP bridge on port ${TEST_PORT} with fake adapter (token required)...`);
+  bridge = createAcpServer(TEST_PORT, FAKE_ADAPTER, {}, "", BRIDGE_TOKEN);
   await sleep(500);
 
   console.log("Clicking Test connection with bridge running...");
@@ -283,11 +287,12 @@ try {
 console.log(`\nResults: ${pass} passed, ${fail} failed.`);
 
 // Write report
+const gitHead = new TextDecoder().decode((await new Deno.Command("git", { args: ["-C", ROOT, "rev-parse", "HEAD"], stdout: "piped" }).output()).stdout).trim();
 const markdownReport = `# Chrome Agent Platform — ACP Settings Browser Acceptance Report (khkk)
 
 - Date: ${new Date().toISOString()}
-- Worktree: /home/paulkinlan/worktrees/cap-khkk-acp-settings
-- Commit: bbfe30fe (cap/khkk-acp-settings)
+- Worktree: ${ROOT}
+- Commit: ${gitHead}
 - Result: **${fail === 0 ? "PASSED" : "FAILED"}** (${pass} passed, ${fail} failed)
 
 ## Verification Highlights
@@ -300,7 +305,7 @@ const markdownReport = `# Chrome Agent Platform — ACP Settings Browser Accepta
    - Transport mode (\`#acp-transport\`)
    - Test connection button (\`#acp-test-btn\`) & status (\`#acp-status\`)
 3. **User Interaction & Persistence**:
-   - Set values via DOM input events: \`endpoint=ws://127.0.0.1:41235/acp\`, \`token=test-token-khkk-secret\`, \`cwd=/tmp/khkk-custom-cwd\`, \`permissions=auto\`, \`transport=ws\`.
+   - Set values via DOM input events: \`endpoint=ws://127.0.0.1:41235/acp\`, \`token=${BRIDGE_TOKEN}\`, \`cwd=/tmp/khkk-custom-cwd\`, \`permissions=auto\`, \`transport=ws\`.
    - Reloaded options page via CDP \`Page.reload\`.
    - All 5 settings persisted across reload, confirming bidirectional KV storage bindings.
 4. **Test Connection Behavior**:
