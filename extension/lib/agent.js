@@ -1602,6 +1602,7 @@ export function createAgent({
         const toolKey = `${e.step}:${toolName}`;
         const queue = toolSpans.get(toolKey) ?? [];
         const observed = queue.shift() ?? { callId: `${toolKey}#orphan`, span: null };
+        const callId = e.toolCallId || observed.callId;
         if (queue.length) toolSpans.set(toolKey, queue);
         else toolSpans.delete(toolKey);
         const tspan = observed.span;
@@ -1698,6 +1699,8 @@ export function createAgent({
           const full = toolResultFullJson(e.result);
           progressCb?.({
             type: "tool-result",
+            callId,
+            toolCallId: callId,
             toolName: e.toolName,
             selectedTool: selectedToolFromResult(e.result) ?? selectedBeforeRewrite,
             step: e.step,

@@ -2258,9 +2258,13 @@ class SwitchToggle extends Component {
     this._btn = this._root.querySelector(".sw");
   }
   _wire() {
-    this._btn?.addEventListener("click", () => {
+    const handle = () => {
       this.toggleAttribute("checked");
       this._emit("toggle", { checked: this.hasAttribute("checked") });
+    };
+    this._btn?.addEventListener("click", handle);
+    this.addEventListener("click", (e) => {
+      if (e.target === this) handle();
     });
   }
   get checked() { return this.hasAttribute("checked"); }
@@ -7266,13 +7270,25 @@ class AgentConversation extends Component {
     const actionApproval = Array.isArray(req.approvals) && req.approvals.length > 0;
     const card = document.createElement(actionApproval ? "approval-card" : "permission-approval-card");
     if (actionApproval) {
-      card.setAttribute("title", String(m.title ?? `Approve ${req.approvals[0]?.action ?? "this action"}?`).slice(0, 240));
-      if (typeof m.body === "string" && m.body) card.setAttribute("body", m.body.slice(0, 4000));
-      if (typeof m.approveLabel === "string" && m.approveLabel) card.setAttribute("approve-label", m.approveLabel.slice(0, 60));
-      if (typeof m.denyLabel === "string" && m.denyLabel) card.setAttribute("deny-label", m.denyLabel.slice(0, 60));
+      const app = req.approvals[0];
+      const siteTool = app?.action === "webmcp.use-tool" && app?.detail?.kind === "webmcp-tool";
+      const derivedTitle = siteTool
+        ? `Use ${app.detail.origin}’s ${app.detail.tool}?`
+        : `Approve ${app?.action ?? "this action"}?`;
+      card.setAttribute("title", String(m.title ?? derivedTitle).slice(0, 240));
+      const derivedBody = siteTool
+        ? `Site: ${app.detail.origin}\nTool: ${app.detail.tool}\nAllow saves automatic use for this exact site tool in this browser profile. Deny blocks this exact tool on this site until you choose Allow / try again in Settings.`
+        : (app ? `Action: ${app.action}\nTarget reference: ${app.targetRef || req.reason?.split(": ").slice(1).join(": ") || ""}` : "");
+      const body = m.body ?? derivedBody;
+      if (typeof body === "string" && body) card.setAttribute("body", body.slice(0, 4000));
+      const approveLabel = m.approveLabel ?? (siteTool ? "Allow automatically" : "");
+      if (typeof approveLabel === "string" && approveLabel) card.setAttribute("approve-label", approveLabel.slice(0, 60));
+      const denyLabel = m.denyLabel ?? (siteTool ? "Deny" : "");
+      if (typeof denyLabel === "string" && denyLabel) card.setAttribute("deny-label", denyLabel.slice(0, 60));
       // The script source + hosts or registration details are a PROPERTY (rendered
       // with textContent inside the card), never an attribute.
       if (m.cardDetail && typeof m.cardDetail === "object") card.detail = m.cardDetail;
+      else if (!siteTool && app?.detail) card.detail = app.detail;
     } else {
       const toolName = m.tool || req.tool || req.toolName || m.toolName;
       if (toolName) card.setAttribute("tool", toolName);
@@ -7301,7 +7317,16 @@ class AgentConversation extends Component {
     card.addEventListener("deny", (ev) => emit(false, ev));
     if (typeof m.ts === "number") this._maybeTsGap(m.ts);
     this._approvalKeys.set(key, card);
-    return this.appendTranscript(card);
+    const appended = this.appendTranscript(card);
+    const active = document.activeElement;
+    const midEdit = active && (active.tagName === "TEXTAREA" || active.tagName === "INPUT") &&
+      typeof active.value === "string" && active.value.length > 0;
+    if (!midEdit && (!m.state || m.state === "pending")) {
+      const focusAllow = () => (typeof card.focusApprove === "function" ? card.focusApprove() : card.shadowRoot?.querySelector?.("button")?.focus?.());
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(focusAllow);
+      else focusAllow();
+    }
+    return appended;
   }
   clear() { this._clearLiveStatusRow(); this.replaceChildren(); this._lastTs = null; this._approvalKeys = new Map(); }
 
@@ -7780,7 +7805,7 @@ class AgentComposer extends Component {
       agent-composer .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
         clip:rect(0,0,0,0); white-space:nowrap; border:0; }
       agent-composer .popup, agent-composer .slash-menu { position:absolute; inset:auto; margin:0; box-sizing:border-box;
-        position-anchor:--composer-anchor; position-area:block-end span-inline-end;
+        position-anchor:--composer-anchor; position-area:block-start span-inline-end;
         position-try-fallbacks:flip-block;
         width:min(440px, anchor-size(width)); max-width:min(480px, calc(100vw - 16px)); background:var(--panel,#ffffff);
         border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:var(--shadow-md, 0 8px 24px rgba(29,27,24,.08));

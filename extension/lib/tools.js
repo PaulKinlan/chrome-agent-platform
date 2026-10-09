@@ -600,6 +600,40 @@ export async function retryAbandonedEnrollmentCleanup(origin) {
   });
 }
 
+export async function reEnrollOrigin(origin, { commitGuard = null } = {}) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) throw new Error(`invalid origin: ${origin}`);
+  if (commitGuard !== null && typeof commitGuard !== "function") throw new Error("site_enrollment_guard_invalid");
+  return withEnrollmentLock(async () => {
+    const map = await enrolledMap();
+    const entry = map[canonical];
+    if (!entry || entry.enrolled !== true || entry.phase || entry.promotionPending) {
+      throw new Error(`origin ${canonical} is not enrolled`);
+    }
+    return withSiteToolConsentBarrier(async () => {
+      if (commitGuard && commitGuard() !== true) throw new Error("site_enrollment_cancelled");
+      const previous = await snapshotSiteToolConsentForPolicy(canonical, entry.gen);
+      const revision = (previous?.revision ?? 0) + 1;
+      if (!Number.isSafeInteger(revision)) throw new Error("site_tool_consent_revision");
+      // The generation bump revokes prior in-flight Allow (reverting to ASK),
+      // but sticky Deny must be migrated forward so an owner's explicit refusal
+      // is never silently erased by re-enrollment.
+      const carriedDeny = (previous?.records || []).filter((record) => record.state === "denied");
+      const gen = await nextGeneration();
+      await writeAndVerifyPolicyConsent(canonical, gen, { revision, records: carriedDeny });
+      if (commitGuard && commitGuard() !== true) throw new Error("site_enrollment_cancelled");
+      map[canonical] = {
+        ...entry,
+        enrolled: true,
+        gen,
+        at: Date.now(),
+      };
+      await kvSet({ [ENROLL_KEY]: map });
+      return Object.freeze({ origin: canonical, gen, enrolled: true });
+    });
+  });
+}
+
 export async function enrollOrigin(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) throw new Error(`invalid origin: ${origin}`);

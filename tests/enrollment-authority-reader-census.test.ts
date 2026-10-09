@@ -73,7 +73,7 @@ Deno.test("D2: exactly three public active readers and one fenced locked-audit e
   ]);
   assertEquals(keyReferences, {
     "extension/lib/memory.js": 3,
-    "extension/lib/tools.js": 13,
+    "extension/lib/tools.js": 14,
   });
   assertEquals(keyLiterals.map((p) => p.replace(/:\d+$/, "")).sort(), [
     "extension/lib/archive-target-registry.js", // export authority exclusion, NOT a reader

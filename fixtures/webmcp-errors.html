@@ -81,7 +81,7 @@
         return { node: document.body, callback: () => 1, ok: true };
       });
 
-      document.modelContext = {
+      const polyfill = {
         getTools: async () => Array.from(tools.values()).map((t) => ({
           name: t.name,
           description: t.description,
@@ -99,10 +99,23 @@
           if (typeof tool?.name === "string" && tool.name.startsWith("dispatch_broken")) {
             throw new DOMException("", "UnknownError");
           }
-          if (tool?.execute) return tool.execute(args);
+          const parsed = typeof args === "string" ? (() => { try { return JSON.parse(args); } catch { return args; } })() : args;
+          const known = tools.get(tool?.name);
+          if (known?.execute) return known.execute(parsed);
+          if (tool?.execute) return tool.execute(parsed);
           return "executed";
         },
       };
+
+      try {
+        Object.defineProperty(document, "modelContext", {
+          value: polyfill,
+          configurable: true,
+          writable: true,
+        });
+      } catch {
+        document.modelContext = polyfill;
+      }
     })();
   </script>
 </head>

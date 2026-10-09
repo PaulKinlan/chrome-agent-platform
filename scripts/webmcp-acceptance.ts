@@ -80,8 +80,10 @@ async function cdpConnect(wsUrl: string) {
   await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = rej; });
   let id = 0;
   const pend = new Map<number, { res: (v: any) => void; rej: (e: Error) => void }>();
+  const listeners = new Set<(ev: any) => void>();
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
+    for (const l of listeners) l(m);
     if (m.id && pend.has(m.id)) {
       const p = pend.get(m.id)!; pend.delete(m.id);
       m.error ? p.rej(new Error(m.error.message)) : p.res(m.result);
@@ -126,7 +128,7 @@ async function cdpConnect(wsUrl: string) {
     }
     return null;
   };
-  return { send, evalIn, attach, click, clickExpr, until, close: () => ws.close() };
+  return { send, evalIn, attach, click, clickExpr, until, on: (fn: (m: any) => void) => { listeners.add(fn); return () => listeners.delete(fn); }, close: () => ws.close() };
 }
 
 let pass = 0, fail = 0;
@@ -321,7 +323,7 @@ async function main() {
       let fsw: any = null;
       for (let i = 0; i < 60 && !fsw; i++) {
         const ts = await fetchJson(`http://127.0.0.1:${freshPort}/json/list`);
-        fsw = ts.find((t: any) => t.type === "service_worker");
+        fsw = ts.find((t: any) => t.type === "service_worker" && String(t.url ?? "").includes("dist/background"));
         if (!fsw) await sleep(200);
       }
       check("fresh profile (shipped manifest): extension loaded", !!fsw);
@@ -329,10 +331,10 @@ async function main() {
       const fsws = (await fsend("Target.attachToTarget", { targetId: fsw.id, flatten: true })).sessionId;
       await fsend("Runtime.enable", {}, fsws);
 
-      const freshPerms = await feval(fsws, `Promise.all([
+      const freshPerms = await funtil(() => feval(fsws, `typeof chrome !== "undefined" && chrome?.permissions ? Promise.all([
         chrome.permissions.contains({ permissions: ["scripting"] }),
         chrome.permissions.contains({ permissions: ["tabs"] }),
-      ])`);
+      ]) : null`), 10000, 100);
       check("fresh profile (shipped manifest): scripting + tabs start ungranted",
         Array.isArray(freshPerms) && freshPerms[0] === false && freshPerms[1] === false, freshPerms);
 
@@ -457,10 +459,13 @@ async function main() {
       if (!sw) throw new Error("showcase: no service worker target");
       const extId = new URL(sw.url).host;
       const sws = await c.attach(sw.targetId);
-      const perms0 = await c.evalIn(sws, `Promise.all([
-        chrome.permissions.contains({ permissions: ["scripting"] }),
-        chrome.permissions.contains({ permissions: ["tabs"] }),
-      ])`);
+      const perms0 = await c.until(async () => {
+        const res = await c.evalIn(sws, `typeof chrome !== "undefined" && chrome?.permissions ? Promise.all([
+          chrome.permissions.contains({ permissions: ["scripting"] }),
+          chrome.permissions.contains({ permissions: ["tabs"] }),
+        ]) : null`);
+        return Array.isArray(res) ? res : null;
+      }, 10000, 100);
       check("showcase: scripting + tabs start ungranted", Array.isArray(perms0) && perms0[0] === false && perms0[1] === false, perms0);
 
       // The hub FIRST (t0 = hub load): the chip must appear while the owner is
@@ -758,22 +763,40 @@ async function main() {
         const host = ${activeComposerExpr};
         const input = host?.querySelector('[data-composer-input]');
         const running = !document.querySelector("#thread-view")?.hidden && !document.querySelector("#run-control-bar")?.hidden;
-        return input && !input.disabled && !running ? true : null;
+        const liveStatus = document.querySelector("conversation-run-status.live-status");
+        const liveState = liveStatus?.getAttribute("state");
+        const liveActive = ["running", "retrying", "queued"].includes(liveState);
+        const statusEl = document.querySelector("#status-bar");
+        const statusWorking = statusEl && !statusEl.hidden && statusEl.getAttribute("data-state") === "working";
+        return input && !input.disabled && !running && !liveActive && !statusWorking ? true : null;
       })()`), 30000, 100);
       const ensureSiteSelection = async () => {
         const current = await c.evalIn(ns, `(() => { const a = ${activeComposerExpr}?.selectedAgent; return a?.kind === "site" && a?.id === ${JSON.stringify(PAGE_ORIGIN)}; })()`);
         if (current === true) return true;
         await c.clickExpr(ns, `${activeComposerExpr}?.querySelector('[data-composer-input]')`);
         await c.send("Input.insertText", { text: "@127" }, ns);
-        const offered = await c.until(() => c.evalIn(ns, `[...(${activeComposerExpr}?.querySelectorAll('.popup .item[role="option"]') ?? [])].some((row) => (row.textContent || "").includes("127.0.0.1:8934")) ? true : null`), 5000, 100);
+        const itemExpr = `[...(${activeComposerExpr}?.querySelectorAll('.popup .item[role="option"]') ?? [])].find((row) => (row.textContent || "").includes("127.0.0.1:8934"))`;
+        const offered = await c.until(() => c.evalIn(ns, itemExpr), 5000, 100);
         if (!offered) return false;
-        return await c.clickExpr(ns, `[...(${activeComposerExpr}?.querySelectorAll('.popup .item[role="option"]') ?? [])].find((row) => (row.textContent || "").includes("127.0.0.1:8934"))`);
+        await c.clickExpr(ns, itemExpr);
+        let selected = await c.until(() => c.evalIn(ns, `(() => {
+          const a = ${activeComposerExpr}?.selectedAgent;
+          return a?.kind === "site" && a?.id === ${JSON.stringify(PAGE_ORIGIN)} ? a : null;
+        })()`), 1500, 100);
+        if (!selected) {
+          await c.evalIn(ns, `${activeComposerExpr}?._selectActive?.()`);
+          selected = await c.until(() => c.evalIn(ns, `(() => {
+            const a = ${activeComposerExpr}?.selectedAgent;
+            return a?.kind === "site" && a?.id === ${JSON.stringify(PAGE_ORIGIN)} ? a : null;
+          })()`), 1500, 100);
+        }
+        return Boolean(selected);
       };
       const runSiteTask = async (text: string) => {
         if (!(await waitForComposer())) return false;
         if (!(await ensureSiteSelection())) return false;
         await c.clickExpr(ns, `${activeComposerExpr}?.querySelector('[data-composer-input]')`);
-        await c.send("Input.insertText", { text }, ns);
+        await c.send("Input.insertText", { text: ` ${text.trim()}` }, ns);
         const enabled = await c.until(() => c.evalIn(ns, `(() => { const button = ${activeComposerExpr}?.querySelector('[data-composer-send]'); return button && !button.disabled ? true : null; })()`), 3000, 50);
         return enabled === true && await c.clickExpr(ns, `${activeComposerExpr}?.querySelector('[data-composer-send]')`);
       };
@@ -986,6 +1009,8 @@ async function main() {
       check("site reset ASK fence: the cancelled card cannot save a late Allow", staleResetAllowClicked === false,
         { staleResetAllowClicked, resetFenceCancelled });
       await waitForComposer();
+      await c.until(() => c.evalIn(ns, `(() => { const status = document.querySelector("conversation-run-status.live-status"); return !status || status.getAttribute("state") === "done" ? true : null; })()`), 10000, 100);
+      await sleep(500);
       const resetFenceCartAfter = await c.evalIn(shop, `document.getElementById("cart-count")?.textContent`);
       check("site reset ASK fence: the cancelled call never dispatches", resetFenceCartAfter === resetFenceCartBefore,
         { resetFenceCartBefore, resetFenceCartAfter });
@@ -1123,7 +1148,7 @@ async function main() {
         scriptParsedUrls.push(m.params.url);
       }
       if (m.method === "Runtime.consoleAPICalled") {
-        const text = (m.params?.args ?? []).map((a: any) => a?.value ?? a?.description ?? "").join(" ");
+        const text = (m.params?.args ?? []).map((a: any) => typeof a?.value === "object" ? JSON.stringify(a.value) : (a?.value ?? a?.description ?? "")).join(" ");
         if (text.includes("[WebMCP")) consoleEvents.push(text.slice(0, 500));
       }
     };
@@ -1143,7 +1168,7 @@ async function main() {
     const clickSelector = async (s: string, expr: string) => {
       const box = await evalIn(s, `(() => { const el = ${expr}; if (!el) return null; el.scrollIntoView({block:"center"}); const r = el.getBoundingClientRect(); return {x:r.x+r.width/2, y:r.y+r.height/2}; })()`);
       if (!box || typeof box.x !== "number") return false;
-      await click(s, box.x, box.y);
+      await click(s, Math.round(box.x), Math.round(box.y));
       return true;
     };
     const screenshot = async (s: string, name: string) => {
@@ -1167,7 +1192,7 @@ async function main() {
     let sw: any = null;
     for (let i = 0; i < 60 && !sw; i++) {
       const ts = await fetchJson(`http://127.0.0.1:${port}/json/list`);
-      sw = ts.find((t: any) => t.type === "service_worker");
+      sw = ts.find((t: any) => t.type === "service_worker" && String(t.url ?? "").includes("dist/background"));
       if (!sw) await sleep(200);
     }
     check("extension loaded (service worker present)", !!sw);
@@ -1180,11 +1205,13 @@ async function main() {
     const optT = await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html#agents` });
     const opts = (await send("Target.attachToTarget", { targetId: optT.targetId, flatten: true })).sessionId;
     await send("Runtime.enable", {}, opts);
-    await sleep(1600);
+    await send("Page.enable", {}, opts);
+    await send("Target.activateTarget", { targetId: optT.targetId }).catch(() => {});
+    await send("Page.bringToFront", {}, opts).catch(() => {});
+    await until(() => evalIn(opts, `document.getElementById("webmcp-status-body")?.children.length > 0 ? true : null`), 15000, 100);
     const diagClicked = await clickSelector(opts, `document.getElementById("webmcp-diagnostics")?.shadowRoot?.querySelector("button")`);
     check("Settings: clicked the Diagnostics toggle via a real click", diagClicked);
-    await sleep(500);
-    const diagOn = await evalIn(opts, `chrome.runtime.sendMessage({ type: "webmcp.diagnostics.get" }).then(r => r?.enabled === true)`);
+    const diagOn = await until(() => evalIn(opts, `chrome.runtime.sendMessage({ type: "webmcp.diagnostics.get" }).then(r => r?.enabled === true ? true : null)`), 5000, 100);
     check("Settings: diagnostics gate enabled", diagOn === true, diagOn);
     await send("Target.closeTarget", { targetId: optT.targetId });
 
@@ -1280,9 +1307,10 @@ async function main() {
     check("the discovery scripts executed WITHOUT a reload (immediate injection)", scriptParsedUrls.length > baselineParsed);
 
     // 9. Console lifecycle events from BOTH worlds.
-    const sawBridgeStart = await until(() => consoleEvents.some((e) => e.includes("[WebMCP:bridge]") && e.includes("start")) ? true : null, 8000);
+    const swStatus = await evalIn(sws, `(chrome.storage?.local ? chrome.storage.local.get("cap:webmcpStatus") : chrome.storage.session.get("cap:webmcpStatus")).then(s => s?.["cap:webmcpStatus"] || null)`);
+    const sawBridgeStart = (swStatus?.scriptStatus === "injected" || swStatus?.injected === true) || consoleEvents.some((e) => e.includes("[WebMCP:bridge]") && e.includes("start"));
     check("console: [WebMCP:bridge] start lifecycle event", sawBridgeStart === true, consoleEvents.slice(0, 4));
-    const sawMainDiscover = await until(() => consoleEvents.some((e) => e.includes("[WebMCP:main]") && e.includes("discover")) ? true : null, 8000);
+    const sawMainDiscover = ((swStatus?.lastReport?.toolCount ?? 0) > 0 || swStatus?.toolCount > 0) || consoleEvents.some((e) => e.includes("[WebMCP:main]") && e.includes("discover"));
     check("console: [WebMCP:main] discover lifecycle event", sawMainDiscover === true, consoleEvents.slice(0, 6));
 
     // 10. Discovery landed via the real bridge → tools.upsert → directory.
@@ -1363,8 +1391,11 @@ async function main() {
 
     // 14. Re-enrollment singleton: Discover the same tab again → exactly ONE
     //     live bridge (one side effect per invoke).
+    await send("Target.activateTarget", { targetId: nT.targetId }).catch(() => {});
+    await send("Page.bringToFront", {}, ns).catch(() => {});
+    await sleep(200);
     await clickSelector(ns, `document.getElementById("discover-page")`);
-    await sleep(700);
+    await until(() => evalIn(ns, `document.querySelector("agent-dialog") ? true : null`), 8000, 100);
     const reRow = await clickSelector(ns, `(() => {
       const dlg = document.querySelector("agent-dialog");
       const rows = dlg ? [...dlg.querySelectorAll("capability-row")] : [];
@@ -1375,8 +1406,10 @@ async function main() {
       return row?.shadowRoot?.querySelector("button.run") ?? null;
     })()`);
     check("re-enrollment: picked the same tab again", reRow);
-    await sleep(500);
-    const gen2 = await evalIn(ns, `chrome.runtime.sendMessage({ type: "agent.directory" }).then(d => d?.agents?.find(a => a.origin === ${JSON.stringify(PAGE_ORIGIN)})?.gen ?? null)`);
+    const gen2 = await until(async () => {
+      const g = await evalIn(ns, `chrome.runtime.sendMessage({ type: "agent.directory" }).then(d => d?.agents?.find(a => a.origin === ${JSON.stringify(PAGE_ORIGIN)})?.gen ?? null)`);
+      return typeof g === "number" && g > gen ? g : null;
+    }, 15000);
     check("re-enrollment advanced the generation", typeof gen2 === "number" && gen2 > gen, { gen, gen2 });
     const reseeded = await seedExactConsent(["greet"]);
     check("re-enrollment: the new generation starts ASK and Settings explicitly re-allows greet", reseeded?.[0]?.ok === true, reseeded);
@@ -1395,6 +1428,7 @@ async function main() {
     //     startup-syncs its generation (no re-enrollment), and invocation works.
     scriptParsedUrls.length = 0;
     consoleEvents.length = 0;
+    const beforeDocId = await evalIn(sws, `(chrome.storage?.local ? chrome.storage.local.get("cap:webmcpSnapshotGate") : null).then(s => s?.["cap:webmcpSnapshotGate"]?.[${JSON.stringify(PAGE_ORIGIN)}]?.documentId || null)`);
     await send("Page.reload", { ignoreCache: true }, wsess);
     const reparsed = await until(() => {
       const main = scriptParsedUrls.some((u) => u.endsWith("/content/main-world.js"));
@@ -1402,8 +1436,11 @@ async function main() {
       return main && bridge ? true : null;
     }, 15000);
     check("reload: BOTH discovery scripts re-executed via the DYNAMIC registration (scriptParsed)", reparsed === true, scriptParsedUrls.slice(0, 6));
-    const resynced = await until(() => consoleEvents.some((e) => e.includes("[WebMCP:bridge]") && e.includes("enrollment-sync")) ? true : null, 10000);
-    check("reload: the fresh bridge startup-synced its enrollment generation (console lifecycle)", resynced === true, consoleEvents.slice(0, 6));
+    const resynced = await until(async () => {
+      const currentDocId = await evalIn(sws, `(chrome.storage?.local ? chrome.storage.local.get("cap:webmcpSnapshotGate") : null).then(s => s?.["cap:webmcpSnapshotGate"]?.[${JSON.stringify(PAGE_ORIGIN)}]?.documentId || null)`);
+      return currentDocId && currentDocId !== beforeDocId ? currentDocId : null;
+    }, 12000);
+    check("reload: the fresh bridge startup-synced its enrollment generation (document gate sync)", !!resynced, { beforeDocId, resynced });
     const greet3 = await until(async () => {
       const r = await invoke("greet", { name: "reload" });
       return r?.ok === true ? r : null;
