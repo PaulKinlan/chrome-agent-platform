@@ -582,9 +582,13 @@ also refuses. This callback
 is not a product write route and does not enable cutover. Master store
 transactions also expose staged receipt/compensation/cancellation WAL verbs
 using the lock they already hold; they never nest a second Web Lock. Sibling
-WAL verbs within one transaction serialize, because the outer lock excludes
-other transactions but not concurrent promises in the same callback. No
-product journal verb calls them yet. Torn, non-equal or source-mismatched
+WAL verbs and master key mutations within one transaction serialize, because
+the outer lock excludes other transactions but not concurrent promises in the
+same callback. Guards may read KV/storage, but must not request another
+master write or journal read: the adapter rejects reentrant transaction calls
+rather than waiting on its own queue. Calls to raw `masterMemory()` writes
+inside a guard still re-enter the non-reentrant lock and are forbidden. No
+product journal verb calls the adapter yet. Torn, non-equal or source-mismatched
 immutable records and damaged head slots remain fail-closed
 pending explicit owner repair. Archive rows are an append-only HISTORY LOG,
 not a set of currently evicted rows: a compensated

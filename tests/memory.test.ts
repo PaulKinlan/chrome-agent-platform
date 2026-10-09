@@ -26,6 +26,7 @@ function fileNode(content) {
 // setTrusted or the final file size. A 300-row whole-value rewrite is quadratic
 // even though journal.json ends at only ~300 rows; the WAL must remove this cost.
 let journalValueBytesWritten = 0;
+let generationWriteGate = null;
 class FakeWritable {
   constructor(node, name = "") {
     this.node = node;
@@ -33,6 +34,7 @@ class FakeWritable {
     this.parts = [];
   }
   async write(s) {
+    if (this.name === "__gen.json" && generationWriteGate) await generationWriteGate();
     const text = typeof s === "string" ? s : new TextDecoder().decode(s);
     this.parts.push(text);
     if (this.name === "journal.json") journalValueBytesWritten += new TextEncoder().encode(text).byteLength;
@@ -777,6 +779,54 @@ Deno.test("staged master transaction exposes WAL verbs without re-entering the m
       "two concurrent operations inside one transaction still issue distinct versions");
     assertEquals((await api.masterMemory().get("journal")).map((r) => r.executionId),
       ["tx-authority", "tx-concurrent-a", "tx-concurrent-b"]);
+    let releaseGenerationWrites;
+    const generationBarrier = new Promise((resolve) => { releaseGenerationWrites = resolve; });
+    let waitingGenerationWrites = 0;
+    generationWriteGate = async () => {
+      if (++waitingGenerationWrites === 2) releaseGenerationWrites();
+      await generationBarrier;
+    };
+    // On the old adapter both issuers read the same token and reach write()
+    // before either closes. On the fixed shared queue the first advances,
+    // then the second proceeds when the bounded one-writer timer releases it.
+    const gateTimer = setTimeout(releaseGenerationWrites, 80);
+    let keyVersion, mixedReceipt;
+    try {
+      [keyVersion, mixedReceipt] = await withStoreTransaction(api.masterMemory(), async (tx) =>
+        Promise.all([
+          tx.setTrusted("mixed-master-key", "value"),
+          tx.masterJournal.appendWithReceipt({ type: "task", executionId: "tx-mixed-version" }),
+        ]));
+    } finally {
+      generationWriteGate = null;
+      clearTimeout(gateTimer);
+    }
+    assertEquals(keyVersion !== mixedReceipt.writeVersion, true,
+      "a key write and WAL frame inside one transaction cannot issue the same version");
+    const beforeGuard = (await api.masterMemory().get("journal")).length;
+    await withStoreTransaction(api.masterMemory(), async (tx) => {
+      const prior = await tx.masterJournal.head();
+      const guardedReceipt = await tx.masterJournal.appendWithReceipt(
+        { type: "task", executionId: "guard-boundary" }, { guard: async () => {
+          await assertRejects(async () => tx.masterJournal.head(), Error, "reentrant");
+          await assertRejects(async () => tx.setTrusted("guard-unexpected", true), Error, "reentrant");
+        } });
+      assertEquals(guardedReceipt.wal.sequence, prior.sequence + 1);
+    });
+    assertEquals((await api.masterMemory().get("journal")).length, beforeGuard + 1);
+    assertEquals(isolated.children.get("memory").children.get("master").children.has("guard-unexpected.json"), false);
+    const routed = await withStoreTransaction(api.masterMemory(), async (tx) => {
+      const before = await tx.masterJournal.head();
+      const receipt = await tx.masterJournal.appendWithReceipt(
+        { type: "task", executionId: "compensated-tx" });
+      const compensation = await tx.masterJournal.compensate(receipt);
+      const cancelled = await tx.masterJournal.cancel(
+        { executionId: "cancelled-tx", type: "cancelled" }, "cancelled-tx");
+      return { before, compensation, cancelled, after: await tx.masterJournal.head() };
+    });
+    assertEquals(routed.compensation.ok, true);
+    assertEquals(routed.cancelled.at(-1).executionId, "cancelled-tx");
+    assertEquals(routed.after.sequence, routed.before.sequence + 3);
     assertEquals(isolated.children.get("memory").children.get("master").children.has("journal.json"), false);
     await assertRejects(async () => expired.appendWithReceipt(
       { type: "task", executionId: "after-scope" }), Error, "expired");

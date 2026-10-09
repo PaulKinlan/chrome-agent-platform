@@ -1270,21 +1270,43 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
     // same callback. Serialise WAL verbs here or two concurrent appends could
     // derive the same next sequence and race the same immutable frame name.
     let journalTail = Promise.resolve();
-    const ordered = (op) => scoped((...args) => {
-      const run = journalTail.then(() => op(...args));
-      journalTail = run.then(() => {}, () => {});
-      return run;
-    });
+    let guardActive = false;
+    const ordered = (op) => {
+      const tracked = scoped((...args) => {
+        const run = journalTail.then(() => op(...args));
+        journalTail = run.then(() => {}, () => {});
+        return run;
+      });
+      return (...args) => {
+        // A guard awaiting another queued WAL/store mutation or head read
+        // would wait on itself forever. Refuse synchronously instead.
+        if (guardActive) throw new Error("reentrant master journal transaction call from guard refused");
+        return tracked(...args);
+      };
+    };
+    const guarded = (guard) => {
+      if (guard == null) return null;
+      if (typeof guard !== "function") throw new Error("master journal guard must be a function");
+      return async () => {
+        if (guardActive) throw new Error("nested master journal guard refused");
+        guardActive = true;
+        try { return await guard(); }
+        finally { guardActive = false; }
+      };
+    };
+    const mutationScoped = isMaster ? ordered : scoped;
     const masterJournal = isMaster ? Object.freeze({
+
       head: ordered(async () => readMasterJournalHead((await authority()).master)),
       appendWithReceipt: ordered(async (entry, { guard = null, idempotencyExecutionId = null } = {}) => {
         const { master, issuer } = await authority();
         return await appendMasterJournalWithReceipt(master, entry,
-          { ...issuer, guard, idempotencyExecutionId });
+          { ...issuer, guard: guarded(guard), idempotencyExecutionId });
       }),
       compensate: ordered(async (receipt, { guard = null } = {}) => {
         const { master, issuer } = await authority();
-        return await compensateMasterJournalReceipt(master, receipt, { ...issuer, guard });
+        return await compensateMasterJournalReceipt(master, receipt,
+          { ...issuer, guard: guarded(guard) });
       }),
       cancel: ordered(async (entry, executionId = entry?.executionId) => {
         const { master, issuer } = await authority();
@@ -1299,9 +1321,9 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
       has: scoped((key) => store.has(key)),
       getVersion: scoped((key) => store.getVersion(key)),
       snapshot: scoped((key) => snapshotInner(path, isMaster, key)),
-      setTrusted: scoped((key, value) => setValueInner(path, key, value, { isMaster, trusted: true, storeBoundBytes })),
-      compareAndDelete: scoped((key, version) => compareAndSetInner(path, key, version, undefined, { isMaster })),
-      compareAndRestore: scoped((key, version, value) => compareAndSetInner(path, key, version, value, { isMaster })),
+      setTrusted: mutationScoped((key, value) => setValueInner(path, key, value, { isMaster, trusted: true, storeBoundBytes })),
+      compareAndDelete: mutationScoped((key, version) => compareAndSetInner(path, key, version, undefined, { isMaster })),
+      compareAndRestore: mutationScoped((key, version, value) => compareAndSetInner(path, key, version, value, { isMaster })),
     });
     let result;
     let callbackError;
