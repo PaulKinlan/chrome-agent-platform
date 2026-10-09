@@ -52,6 +52,9 @@ export const SKIPPED_DIRS = new Set(["dist", "dist-versions", "dist-archives", "
 //     tests so the follow-up is a mechanical delete.
 export const RETAINED = {
 
+  "lib/acp-port.js":
+    "Streaming MessageChannel transport for the in-browser sandboxed ACP harness (qnd4, cap-k3 design): the options.js wiring + sandbox harness page are the NEXT slice on the branch; tests/acp-port.test.ts pins the handshake/framing contract meanwhile.",
+
   "shared/components.js":
     "Aggregating barrel for the design-system components (9epn.6): re-exports all modular component slices for docs/components.html gallery showcase, tests, and backward-compatible consumers.",
 
