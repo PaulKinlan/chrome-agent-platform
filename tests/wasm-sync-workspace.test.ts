@@ -26,7 +26,10 @@ function valid(rows) {
 }
 
 const row = (path, bytes) => ({ path, bytes });
-const dense = (length, value = 1) => Array.from({ length }, () => value);
+// gate-speed: new Array(n).fill(v) builds the same dense array (every index an own, enumerable, writable
+// data property holding v; same length; Array.prototype) as Array.from({ length }, () => v), in ~0.1 s
+// instead of ~1 s per 10 MiB seed. The validator under test is unchanged; it still walks every byte.
+const dense = (length, value = 1) => new Array(length).fill(value);
 
 Deno.test("S1 seed: inputs predecessor matrix is byte-identical to the 13936ec validator output", () => {
   // The tree/stat/du-style seeds: order, exact paths, exact bytes preserved.
