@@ -93,6 +93,7 @@ function validateHead(head) {
       !safeInteger(head.version, 1) || !safeInteger(head.checkpointSequence) ||
       head.checkpointSequence > head.sequence ||
       typeof head.checkpoint !== "string" || !/^checkpoint-[1-9]\d*-[0-9]+\.json$/.test(head.checkpoint) ||
+      (head.checkpointHash !== undefined && !/^[0-9a-f]{64}$/.test(head.checkpointHash)) ||
       typeof head.archive !== "string" || !/^archive-[1-9]\d*-[0-9]+\.json$/.test(head.archive) ||
       (head.archiveHash !== undefined && !/^[0-9a-f]{64}$/.test(head.archiveHash)) ||
       typeof head.lastHash !== "string" || !/^[0-9a-f]{64}$/.test(head.lastHash)) {
@@ -197,18 +198,26 @@ export async function readMasterJournalProjection(master, { includeArchive = fal
     checkpoint: head.checkpoint, archive: head.archive,
   };
   if (head.archiveHash) binding.archiveHash = head.archiveHash;
+  if (head.checkpointHash) binding.checkpointHash = head.checkpointHash;
   const expectedHeadHash = await hash(JSON.stringify(binding));
   if (head.sequence === head.checkpointSequence && head.lastHash !== expectedHeadHash) {
     throw new Error("master journal head/checkpoint binding is corrupt");
   }
-  const checkpoint = await readRecord(directory, head.checkpoint, "checkpoint");
-  if (!checkpoint || checkpoint.epoch !== head.epoch || checkpoint.sequence !== head.checkpointSequence ||
+  const checkpointFile = await optionalFile(directory, head.checkpoint);
+  if (!checkpointFile) throw new Error("master journal checkpoint is missing");
+  const checkpointText = DECODER.decode(await (await checkpointFile.getFile()).arrayBuffer());
+  if (head.checkpointHash && await hash(checkpointText) !== head.checkpointHash) {
+    throw new Error("master journal checkpoint hash mismatch");
+  }
+  const checkpoint = await unsealMasterJournalRecord(checkpointText, "checkpoint");
+  if (checkpoint.epoch !== head.epoch || checkpoint.sequence !== head.checkpointSequence ||
       typeof checkpoint.exists !== "boolean" || !Array.isArray(checkpoint.live)) {
     throw new Error("master journal checkpoint is missing or corrupt");
   }
   // A checkpoint can contain up to 500 WHOLE rows. A different limit here
   // would let a malformed export bypass the bounded live view.
   if (checkpoint.live.length > 500) throw new Error("master journal checkpoint is unbounded");
+  if (!checkpoint.exists && checkpoint.live.length > 0) throw new Error("master journal checkpoint existence contradicts retained rows");
   // Version belongs to the checkpoint generation, not necessarily the epoch:
   // compaction consumes a new durable token even when it does not add a row.
   // The absent version is accepted only for original seq-0 fixtures.
@@ -310,10 +319,12 @@ export async function stageMasterJournalCompaction(master, { allocateVersion, pr
   await writeCheckedRecord(directory, checkpoint, "checkpoint", {
     epoch: head.epoch, sequence, version, exists: before.exists, live: before.live,
   });
-  const lastHash = await hash(JSON.stringify({ epoch: head.epoch, sequence, checkpoint, archive, archiveHash }));
+  const checkpointFile = await directory.getFileHandle(checkpoint);
+  const checkpointHash = await hash(DECODER.decode(await (await checkpointFile.getFile()).arrayBuffer()));
+  const lastHash = await hash(JSON.stringify({ epoch: head.epoch, sequence, checkpoint, archive, archiveHash, checkpointHash }));
   const next = validateHead({
     epoch: head.epoch, sequence, version, checkpointSequence: sequence,
-    checkpoint, archive, archiveHash, lastHash,
+    checkpoint, archive, archiveHash, checkpointHash, lastHash,
   });
   await writeCheckedRecord(directory, HEADS[sequence % 2], "head", next);
   return next;
@@ -369,6 +380,7 @@ export async function stageMasterJournalCutover(master, {
   if (typeof journalExists !== "boolean" || typeof archiveExists !== "boolean" ||
       !Array.isArray(journal) || !Array.isArray(archive) ||
       typeof allocateVersion !== "function") throw new Error("invalid legacy master journal cutover input");
+  if (!journalExists && journal.length > 0) throw new Error("master journal existence contradicts retained rows");
   if (!archiveExists && archive.length > 0) throw new Error("master journal archive existence contradicts retained rows");
   if (await readMasterJournalHead(master)) throw new Error("master journal is already cut over");
   const epoch = await allocateVersion();
@@ -378,6 +390,8 @@ export async function stageMasterJournalCutover(master, {
   const live = journal.slice(-500);
   const checkpoint = `checkpoint-${epoch}-0.json`;
   await writeCheckedRecord(directory, checkpoint, "checkpoint", { epoch, sequence: 0, version: epoch, exists: journalExists, live });
+  const checkpointFile = await directory.getFileHandle(checkpoint);
+  const checkpointHash = await hash(DECODER.decode(await (await checkpointFile.getFile()).arrayBuffer()));
   const archivedRows = [...archive, ...overflow];
   let previous = null;
   let previousHash = null;
@@ -396,8 +410,8 @@ export async function stageMasterJournalCutover(master, {
     previousHash = archiveHash;
     archiveFile = name;
   }
-  const lastHash = await hash(JSON.stringify({ epoch, sequence: 0, checkpoint, archive: archiveFile, archiveHash }));
-  const head = validateHead({ epoch, sequence: 0, checkpointSequence: 0, checkpoint, archive: archiveFile, archiveHash, lastHash, version: epoch });
+  const lastHash = await hash(JSON.stringify({ epoch, sequence: 0, checkpoint, archive: archiveFile, archiveHash, checkpointHash }));
+  const head = validateHead({ epoch, sequence: 0, checkpointSequence: 0, checkpoint, archive: archiveFile, archiveHash, checkpointHash, lastHash, version: epoch });
   // SINGLE PUBLICATION POINT: all earlier files were staged and read back;
   // legacy journal.json remains intact even if publication fails. A present
   // corrupt head fails closed; it is never silently treated as pre-cutover.

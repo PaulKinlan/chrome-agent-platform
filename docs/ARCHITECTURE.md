@@ -542,7 +542,7 @@ may retire the superseded frames. Export selects both chains, and restore
 refuses a missing dependency in either, so early frame deletion is a hard red.
 The disabled-writer cutover codec now splits a legacy unbounded archive into
 immutable checked segments of at most 500 whole rows. A constant-size head
-points to the terminal segment and binds its bytes; each segment hashes its
+binds the exact checkpoint and terminal segment bytes; each segment hashes its
 predecessor. Both raw backup selectors walk all reachable segments, rejecting
 missing or changed interiors and excluding unpublished residue. The disabled-
 writer codec now folds at most 128 immutable frames into a checked <=500-row

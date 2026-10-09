@@ -130,6 +130,20 @@ Deno.test("checked archive chain rejects changed tail, missing interior and re-s
   assertEquals((await readMasterJournalProjection(master, { includeArchive: true })).archive, archived);
 });
 
+Deno.test("published head binds exact checkpoint bytes, not only a reusable filename", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  const head = await stageMasterJournalCutover(master, {
+    journalExists: true, journal: [{ id: "acknowledged" }], archive: [], allocateVersion,
+  });
+  const wal = await master.getDirectoryHandle("journal-wal");
+  const checkpoint = await wal.getFileHandle(head.checkpoint);
+  const original = await unsealMasterJournalRecord(checkpoint.bytes, "checkpoint");
+  checkpoint.bytes = encoder.encode(await sealMasterJournalRecord("checkpoint", {
+    ...original, live: [{ id: "different-but-resealed" }],
+  }));
+  await assertRejects(() => readMasterJournalProjection(master), Error, "checkpoint hash mismatch");
+});
+
 Deno.test("re-sealed archive chain cannot skip an acknowledged interior segment", async () => {
   const { master, allocateVersion } = await legacyFixture();
   const rows = Array.from({ length: 1_201 }, (_, id) => ({ id }));
@@ -150,6 +164,7 @@ Deno.test("re-sealed archive chain cannot skip an acknowledged interior segment"
   const archiveHash = await hash(altered);
   const lastHash = await hash(JSON.stringify({
     epoch: head.epoch, sequence: 0, checkpoint: head.checkpoint, archive: head.archive, archiveHash,
+    checkpointHash: head.checkpointHash,
   }));
   (await wal.getFileHandle("head-a.json")).bytes = encoder.encode(await sealMasterJournalRecord("head", {
     ...head, archiveHash, lastHash,
@@ -164,6 +179,13 @@ Deno.test("master journal cutover preserves absent versus present-empty", async 
   const empty = await legacyFixture();
   await stageMasterJournalCutover(empty.master, { journalExists: true, journal: [], archive: [], allocateVersion: empty.allocateVersion });
   assertEquals((await readMasterJournalProjection(empty.master)).exists, true);
+});
+
+Deno.test("absent journal cannot cut over while retaining live rows", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  await assertRejects(() => stageMasterJournalCutover(master, {
+    journalExists: false, journal: [{ id: "unacknowledged" }], archive: [], allocateVersion,
+  }), Error, "journal existence contradicts");
 });
 
 Deno.test("archive existence is checked and cannot contradict retained whole rows", async () => {
@@ -189,6 +211,7 @@ Deno.test("archive existence is checked and cannot contradict retained whole row
   const archiveHash = await hex(malformed);
   const lastHash = await hex(JSON.stringify({
     epoch: head.epoch, sequence: 0, checkpoint: head.checkpoint, archive: head.archive, archiveHash,
+    checkpointHash: head.checkpointHash,
   }));
   (await wal.getFileHandle("head-a.json")).bytes = encoder.encode(await sealMasterJournalRecord("head", {
     ...head, archiveHash, lastHash,
@@ -242,13 +265,12 @@ Deno.test("published but missing or changed checkpoint fails closed; incomplete 
   });
   const wal = await master.getDirectoryHandle("journal-wal");
   const checkpoint = await wal.getFileHandle(head.checkpoint);
+  const originalCheckpoint = checkpoint.bytes.slice();
   checkpoint.bytes = checkpoint.bytes.slice(0, 8);
-  await assertRejects(() => readMasterJournalProjection(master), Error, "corrupt");
+  await assertRejects(() => readMasterJournalProjection(master), Error, "checkpoint hash mismatch");
   // A syntactically valid head at a newer sequence cannot be treated as an
   // old checkpoint when the framed writer has not been installed yet.
-  checkpoint.bytes = encoder.encode(await sealMasterJournalRecord("checkpoint", {
-    epoch: head.epoch, sequence: 0, exists: true, live: [{ id: 1 }],
-  }));
+  checkpoint.bytes = originalCheckpoint;
   const newer = { ...head, sequence: 1, version: 19 };
   (await wal.getFileHandle("head-b.json", { create: true })).bytes = encoder.encode(await sealMasterJournalRecord("head", newer));
   await assertRejects(() => readMasterJournalProjection(master), Error, "frame 1 is missing");
