@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.610] — 2026-10-09
+- Concurrent requests to one connected agent now show a clear refusal instead of running twice.
+
 ## [0.3.609] — 2026-10-08
 - Retain active ACP session identity across command discovery and subsequent prompt turns in the offscreen model backend, eliminating redundant connection overhead. Session retention in the task runner remains as an unattached library seam for the test architecture.
 

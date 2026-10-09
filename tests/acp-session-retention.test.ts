@@ -12,7 +12,7 @@
 //      cleanly re-established via loadSession.
 //   6. Explicit cleanup: closeRetainedAcpSession and clearAllRetainedAcpSessions.
 // @ts-nocheck
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import {
   acpSessionKey,
   clearAllRetainedAcpSessions,
@@ -994,6 +994,92 @@ Deno.test("v05y N1(b): cold-start overlap synchronizes on single connect without
   assertEquals(mockClient.connected, true, "client must remain connected (never overwrite-closed)");
 
   clearAllRetainedAcpModelSessions();
+});
+
+Deno.test("9ql81: two cold turns in the same task fence one prompt before either backend can overwrite the owner", async () => {
+  clearAllRetainedAcpModelSessions();
+  let connects = 0;
+  let prompts = 0;
+  let activeExecutionId: string | null = null;
+  let releaseFirst!: () => void;
+  let firstStarted!: () => void;
+  const firstPending = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const firstPromptStarted = new Promise<void>((resolve) => { firstStarted = resolve; });
+  const mockClient = {
+    connected: false,
+    availableCommands: [],
+    commandsReceived: true,
+    setExecutionId(id: string | null) { activeExecutionId = id; },
+    async connect() { connects++; mockClient.connected = true; },
+    async initialize() {},
+    async newSession() { return { sessionId: "sess-same-task" }; },
+    async prompt() {
+      prompts++;
+      if (prompts === 1) { firstStarted(); await firstPending; }
+    },
+    close() { mockClient.connected = false; },
+  };
+  const common = { threadId: "thread-same-task", harnessId: "pi", url: "ws://127.0.0.1/acp", cwd: "/work", retainSession: true };
+  const first = createAcpModel({ ...common, executionId: "exec-first", clientFactory: () => mockClient });
+  const second = createAcpModel({ ...common, executionId: "exec-second", clientFactory: () => { throw Error("second turn must reuse the client"); } });
+  const options = { prompt: [{ role: "user", content: "start" }], tools: [{ type: "function", name: "toolA" }] };
+  // Both calls start before an await drains the microtask queue: exactly the
+  // shared cold-connection window that serial message-per-task tests miss.
+  const [one, two] = await Promise.all([first.model.doStream(options), second.model.doStream(options)]);
+  const drainFirst = (async () => { for await (const _ of one.stream) { /* drain */ } })();
+  try {
+    await firstPromptStarted;
+    await assertRejects(async () => { for await (const _ of two.stream) { /* refuse */ } }, Error,
+      "ACP session currently owns an active turn; cannot start concurrent turn");
+    assertEquals(prompts, 1, "one client.prompt for both same-task turns");
+    assertEquals(connects, 1);
+    assertEquals(activeExecutionId, "exec-first", "refused turn never overwrites the live client's identity");
+    const rec = getRetainedAcpModelSession("thread-same-task:pi:ws://127.0.0.1/acp:/work");
+    assertEquals(rec?.inFlightTurn, true);
+  } finally {
+    releaseFirst();
+    await drainFirst;
+    first.close();
+    second.close();
+    clearAllRetainedAcpModelSessions();
+  }
+});
+
+Deno.test("9ql81: clear-all drops a pending connection map entry before a new session connects", async () => {
+  clearAllRetainedAcpModelSessions();
+  let releaseConnect!: () => void;
+  const connecting = new Promise<void>((resolve) => { releaseConnect = resolve; });
+  let freshConnects = 0;
+  const firstClient = {
+    connected: false, availableCommands: [], commandsReceived: true,
+    setExecutionId() {},
+    async connect() { await connecting; firstClient.connected = true; },
+    async initialize() {}, async newSession() { return { sessionId: "old" }; },
+    close() { firstClient.connected = false; },
+  };
+  const freshClient = {
+    connected: false, availableCommands: [], commandsReceived: true,
+    setExecutionId() {},
+    async connect() { freshConnects++; freshClient.connected = true; },
+    async initialize() {}, async newSession() { return { sessionId: "fresh" }; },
+    close() { freshClient.connected = false; },
+  };
+  const common = { threadId: "thread-reset", harnessId: "pi", url: "ws://127.0.0.1/acp", cwd: "/work", retainSession: true };
+  const old = createAcpModel({ ...common, clientFactory: () => firstClient });
+  const oldCall = old.discoverCommands();
+  clearAllRetainedAcpModelSessions();
+  const fresh = createAcpModel({ ...common, clientFactory: () => freshClient });
+  const freshCall = fresh.discoverCommands();
+  try {
+    assertEquals(freshConnects, 1, "fresh call does not await a stale shared connect promise");
+    assertEquals((await freshCall).sessionId, "fresh");
+  } finally {
+    old.close();
+    releaseConnect();
+    await Promise.allSettled([oldCall, freshCall]);
+    fresh.close();
+    clearAllRetainedAcpModelSessions();
+  }
 });
 
 Deno.test("v05y N1: cross-thread model sessions remain isolated without collision", async () => {
