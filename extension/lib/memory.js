@@ -921,8 +921,7 @@ async function setValue(path, key, value, { isMaster, trusted = false, storeBoun
  * never recreates a directory that cleanup just removed (the round-27 cleanup-
  * recreation blocker). A write that DOES land creates the directory only for the
  * actual mutation. */
-async function compareAndSet(path, key, expectedVersion, nextValue, { isMaster }) {
-  return withWriteLock(path, async () => {
+async function compareAndSetInner(path, key, expectedVersion, nextValue, { isMaster }) {
     const dir = await openDirOptional(path);
     if (dir) await assertLegacyMasterJournalWriteAllowed(dir, isMaster, key);
     const cur = dir ? await currentVersion(dir, key) : 0;
@@ -965,7 +964,33 @@ async function compareAndSet(path, key, expectedVersion, nextValue, { isMaster }
       await writeTombs(targetDir, tombs);
     }
     return version; // exact token of this write
-  });
+}
+
+async function compareAndSet(path, key, expectedVersion, nextValue, options) {
+  return withWriteLock(path, () => compareAndSetInner(path, key, expectedVersion, nextValue, options));
+}
+
+async function snapshotInner(path, isMaster, key) {
+  const wal = await checkedMasterJournalValue(path, isMaster, key);
+  if (wal) return { exists: wal.exists, value: wal.exists ? structuredClone(wal.value) : null, version: wal.version };
+  const dir = await openDirOptional(path);
+  if (!dir) return { exists: false, value: null, version: 0 };
+  const tombs = await readTombs(dir);
+  const entry = tombs.map.has(key) ? null : await readEntry(dir, `${key}.json`, true);
+  const version = await currentVersion(dir, key);
+  return entry
+    ? { exists: true, value: structuredClone(entry.value), version }
+    : { exists: false, value: null, version };
+}
+
+// Own-store identity is not copied by object spread (unlike an enumerable
+// Symbol), so test proxies that override get/snapshot keep their injection
+// seams instead of accidentally inheriting the real store's transaction.
+const storeTransactions = new WeakMap();
+export async function withStoreTransaction(store, fn) {
+  if (typeof fn !== "function") throw new TypeError("store transaction callback required");
+  const transaction = store && storeTransactions.get(store);
+  return transaction ? transaction(fn) : await fn(store);
 }
 
 /** A single origin-scoped store. `origin` is a canonical origin string or "master". */
@@ -974,7 +999,7 @@ async function compareAndSet(path, key, expectedVersion, nextValue, { isMaster }
  * (named agents) both build their store through here so every store gets the
  * same bounds, version tokens, and CAS semantics. */
 function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
-  return {
+  const store = {
     isMaster,
     origin,
     async get(key) {
@@ -1031,20 +1056,7 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
     /** Atomic value/existence/version receipt under the same write mutex used by
      * all trusted writes and CAS compensation. */
     async snapshot(key) {
-      return await withWriteLock(path, async () => {
-        const wal = await checkedMasterJournalValue(path, isMaster, key);
-        if (wal) return { exists: wal.exists, value: wal.exists ? structuredClone(wal.value) : null, version: wal.version };
-        const dir = await openDirOptional(path);
-        if (!dir) return { exists: false, value: null, version: 0 };
-        const tombs = await readTombs(dir);
-        const entry = tombs.map.has(key)
-          ? null
-          : await readEntry(dir, `${key}.json`, true);
-        const version = await currentVersion(dir, key);
-        return entry
-          ? { exists: true, value: structuredClone(entry.value), version }
-          : { exists: false, value: null, version };
-      });
+      return await withWriteLock(path, () => snapshotInner(path, isMaster, key));
     },
     /** The key's current durable token; deleted keys retain a tombstone token. */
     async getVersion(key) {
@@ -1165,6 +1177,41 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
       });
     },
   };
+  storeTransactions.set(store, (fn) => withWriteLock(path, async () => {
+    let active = true;
+    const pending = new Set();
+    const scoped = (op) => (...args) => {
+      if (!active) throw new Error("store transaction has expired");
+      const run = Promise.resolve().then(() => op(...args));
+      pending.add(run);
+      run.then(() => pending.delete(run), () => pending.delete(run));
+      run.catch(() => {}); // the caller still receives the rejection
+      return run;
+    };
+    const tx = Object.freeze({
+      isMaster,
+      get: scoped((key) => store.get(key)),
+      getStrict: scoped((key) => store.getStrict(key)),
+      has: scoped((key) => store.has(key)),
+      getVersion: scoped((key) => store.getVersion(key)),
+      snapshot: scoped((key) => snapshotInner(path, isMaster, key)),
+      setTrusted: scoped((key, value) => setValueInner(path, key, value, { isMaster, trusted: true, storeBoundBytes })),
+      compareAndDelete: scoped((key, version) => compareAndSetInner(path, key, version, undefined, { isMaster })),
+      compareAndRestore: scoped((key, version, value) => compareAndSetInner(path, key, version, value, { isMaster })),
+    });
+    let result;
+    let callbackError;
+    try { result = await fn(tx); } catch (error) { callbackError = error; }
+    active = false;
+    // An accidentally unawaited operation must finish while this lock is
+    // still held; it cannot leak an unlocked write after callback return.
+    const unsettled = await Promise.allSettled([...pending]);
+    if (callbackError) throw callbackError;
+    const failed = unsettled.find((entry) => entry.status === "rejected");
+    if (failed) throw new Error(`unawaited store transaction operation failed: ${failed.reason?.message ?? failed.reason}`);
+    return result;
+  }));
+  return store;
 }
 
 export function memoryStore(origin) {
@@ -1654,7 +1701,7 @@ async function exactStoreSnapshot(store, key) {
 }
 
 async function journalAppendInternal(store, entry, guard, idempotencyExecutionId, receiptCapable) {
-  return withJournalLock(async () => {
+  return withJournalLock(() => withStoreTransaction(store, async (store) => {
   // Capture the exact value, existence and version as one stable receipt.
   const pre = await exactStoreSnapshot(store, "journal");
   const original = pre.exists ? pre.value : [];
@@ -1738,7 +1785,7 @@ async function journalAppendInternal(store, entry, guard, idempotencyExecutionId
     writeVersion: wroteVersion,
     appended: true,
   };
-  });
+  }));
 }
 
 export async function journalAppend(store, entry, guard = null, idempotencyExecutionId = null) {
@@ -1757,7 +1804,7 @@ function sameJson(a, b) {
 
 /** Version/fence-scoped removal of one execution's journal rows. */
 export async function journalCompensateExecution(store, receipt, guard = null) {
-  return withJournalLock(async () => {
+  return withJournalLock(() => withStoreTransaction(store, async (store) => {
     if (!receipt || receipt.schemaVersion !== 1 || receipt.key !== "journal" || !receipt.executionId) {
       throw new Error("invalid journal compensation receipt");
     }
@@ -1829,7 +1876,7 @@ export async function journalCompensateExecution(store, receipt, guard = null) {
     const after = await exactStoreSnapshot(store, "journal");
     receipt.compensatedState = structuredClone(after);
     return { ok: true, compensated: true, idempotent: false, concurrentRowsPreserved: current.version !== receipt.writeVersion };
-  });
+  }));
 }
 
 /** Append one journal row for an immutable execution, or return the existing
@@ -1845,7 +1892,7 @@ export async function journalAppendOnce(store, entry, guard = null, executionId 
  * make the durable tombstone win without producing two terminal outcomes. */
 export async function journalCommitCancellation(store, entry, executionId = entry?.executionId) {
   if (!executionId) throw new Error("journalCommitCancellation requires executionId");
-  return withJournalLock(async () => {
+  return withJournalLock(() => withStoreTransaction(store, async (store) => {
     const pre = await exactStoreSnapshot(store, "journal");
     const original = pre.exists ? pre.value : [];
     if (!Array.isArray(original)) throw new Error("journal is not an array");
@@ -1865,7 +1912,7 @@ export async function journalCommitCancellation(store, entry, executionId = entr
     const swapped = await store.compareAndRestore("journal", pre.version, bounded);
     if (!swapped) throw new Error("journal cancellation lost a concurrent write");
     return bounded;
-  });
+  }));
 }
 
 // Screenshots are LARGE media stored as SEPARATE OPFS files under

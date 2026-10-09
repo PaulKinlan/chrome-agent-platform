@@ -8,7 +8,8 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { createMemoryRunLogHandles } from "./fixtures/run-log-wal-memory.js";
 import { stageMasterJournalCutover } from "../extension/lib/master-journal-wal.js";
-import { masterMemory, siteMemory, MemoryStoreQuotaError, usageLedgerInspector, saveScreenshot, listScreenshots, journalAppend, journalAppendWithReceipt, journalCompensateExecution, journalAppendOnce, journalCommitCancellation, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds, durableRunMemory, migrateLegacyDurableRunMemory, forgetDurableThread } from "../extension/lib/memory.js";
+import { withMasterJournalWebLock } from "../extension/lib/master-journal-lock.js";
+import { masterMemory, siteMemory, MemoryStoreQuotaError, usageLedgerInspector, saveScreenshot, listScreenshots, journalAppend, journalAppendWithReceipt, journalCompensateExecution, journalAppendOnce, journalCommitCancellation, withStoreTransaction, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds, durableRunMemory, migrateLegacyDurableRunMemory, forgetDurableThread } from "../extension/lib/memory.js";
 import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
 import { createThread, deleteThread } from "../extension/lib/threads.js";
 
@@ -166,6 +167,136 @@ Deno.test("master writes share the journal Web Lock; site stores keep their own 
     await masterMemory().setTrusted("journal", []);
     await siteMemory("https://journal-lock.example").set("site-key", "site-value");
     assertEquals(names, [{ name: "cap:master-journal", mode: "exclusive" }]);
+  } finally {
+    if (previous === undefined) delete navigator.locks;
+    else navigator.locks = previous;
+  }
+});
+
+Deno.test("master journal append holds one non-reentrant cross-context lock across its transaction", async () => {
+  const mem = masterMemory();
+  await mem.setTrusted("journal", []);
+  const previous = navigator.locks;
+  const names = [];
+  let held = false;
+  navigator.locks = {
+    request: async (name, options, fn) => {
+      if (held) throw new Error("nested master journal Web Lock acquisition");
+      names.push({ name, mode: options.mode });
+      held = true;
+      try { return await fn(); } finally { held = false; }
+    },
+  };
+  try {
+    await journalAppend(mem, { type: "result", executionId: "exec-single-lock" });
+    assertEquals(names, [{ name: "cap:master-journal", mode: "exclusive" }]);
+    assertEquals((await mem.get("journal")).at(-1).executionId, "exec-single-lock");
+  } finally {
+    if (previous === undefined) delete navigator.locks;
+    else navigator.locks = previous;
+  }
+});
+
+Deno.test("owner export cannot interleave a master append between its snapshot and commit", async () => {
+  const mem = masterMemory();
+  await mem.setTrusted("journal", []);
+  const previous = navigator.locks;
+  let last = Promise.resolve();
+  navigator.locks = {
+    request: (_name, _options, fn) => {
+      const run = last.then(fn);
+      last = run.then(() => {}, () => {});
+      return run;
+    },
+  };
+  let enterGuard;
+  let releaseGuard;
+  const inGuard = new Promise((resolve) => { enterGuard = resolve; });
+  const proceed = new Promise((resolve) => { releaseGuard = resolve; });
+  try {
+    let calls = 0;
+    const append = journalAppend(mem, { executionId: "exec-export-no-interleave" }, async () => {
+      if (++calls === 1) { enterGuard(); await proceed; }
+    });
+    await inGuard;
+    let exportEntered = false;
+    const exportRead = withMasterJournalWebLock(async () => {
+      exportEntered = true;
+      return await mem.get("journal");
+    });
+    // Advance the promise queue without timing assumptions: an unrelated
+    // microtask cannot make a queued Web Lock enter until append releases it.
+    await Promise.resolve();
+    await Promise.resolve();
+    assertEquals(exportEntered, false);
+    releaseGuard();
+    await append;
+    const exported = await exportRead;
+    assertEquals(exported.at(-1).executionId, "exec-export-no-interleave");
+  } finally {
+    releaseGuard();
+    if (previous === undefined) delete navigator.locks;
+    else navigator.locks = previous;
+  }
+});
+
+Deno.test("master 500-row append plus failed guard compensates inside one non-reentrant lock", async () => {
+  const mem = masterMemory();
+  const seed = Array.from({ length: 500 }, (_, i) => ({ id: `single-lock-old-${i}` }));
+  await mem.setTrusted("journal", seed);
+  const previous = navigator.locks;
+  const names = [];
+  let held = false;
+  navigator.locks = {
+    request: async (name, options, fn) => {
+      if (held) throw new Error("nested master journal Web Lock acquisition");
+      names.push({ name, mode: options.mode });
+      held = true;
+      try { return await fn(); } finally { held = false; }
+    },
+  };
+  try {
+    let calls = 0;
+    await assertRejects(() => journalAppend(mem, { executionId: "exec-single-lock-compensation" }, async () => {
+      if (++calls > 1) throw new Error("ownership lost after commit");
+    }), Error, "ownership lost after commit");
+    assertEquals(names, [{ name: "cap:master-journal", mode: "exclusive" }]);
+    assertEquals(await mem.get("journal"), seed, "the ring eviction must be compensated exactly");
+  } finally {
+    if (previous === undefined) delete navigator.locks;
+    else navigator.locks = previous;
+  }
+});
+
+Deno.test("an escaped transaction facade cannot write after its master lock is released", async () => {
+  const mem = masterMemory();
+  let escaped;
+  await withStoreTransaction(mem, async (tx) => { escaped = tx; });
+  await assertRejects(async () => await escaped.setTrusted("journal", [{ id: "unlocked-write" }]), Error, "expired");
+  assertEquals(((await mem.get("journal")) ?? []).some((row) => row.id === "unlocked-write"), false);
+});
+
+Deno.test("master cancellation with archived overflow holds one cross-context lock", async () => {
+  const mem = masterMemory();
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await mem.setTrusted("journal", seed);
+  const previous = navigator.locks;
+  const names = [];
+  let held = false;
+  navigator.locks = {
+    request: async (name, options, fn) => {
+      if (held) throw new Error("nested master journal Web Lock acquisition");
+      names.push({ name, mode: options.mode });
+      held = true;
+      try { return await fn(); } finally { held = false; }
+    },
+  };
+  try {
+    const rows = await journalCommitCancellation(mem, { result: "stopped" }, "exec-single-lock-cancel");
+    assertEquals(names, [{ name: "cap:master-journal", mode: "exclusive" }]);
+    assertEquals(rows.length, 500);
+    assertEquals(rows.at(-1).type, "cancelled");
+    assertEquals((await mem.get("journal-archive")).at(-1).id, 0);
   } finally {
     if (previous === undefined) delete navigator.locks;
     else navigator.locks = previous;
