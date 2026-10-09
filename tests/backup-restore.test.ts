@@ -135,6 +135,78 @@ Deno.test("backup-restore: streamExportArchive -> streamRestoreArchive round-tri
   assert(progressReports.length >= 2, "progress reports recorded for each file");
 });
 
+Deno.test("streamed restore holds the master journal lock only after quiescence through live swap", async () => {
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  let restoreHeld = false;
+  let masterHeld = false;
+  let quiesced = false;
+  let liveWrites = 0;
+  const names = [];
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: {
+    locks: { request: async (name, options, fn) => {
+      names.push(name);
+      assertEquals(name, "cap:master-journal");
+      assertEquals(restoreHeld, true, "master lock follows restoreLock");
+      assertEquals(options.mode, "exclusive");
+      assertEquals(masterHeld, false, "nested master lock would deadlock in Chrome");
+      masterHeld = true;
+      try { return await fn(); } finally { masterHeld = false; }
+    } },
+  } });
+  try {
+    const livePath = "memory/master/journal.json";
+    const oldPath = "memory/master/old.json";
+    const files = new Map([[livePath, ENCODER.encode("old")], [oldPath, ENCODER.encode("retired")]]);
+    const kv = {};
+    const next = ENCODER.encode("new");
+    const bundle = buildArchive({
+      kv: {}, files: [{ path: livePath, bytes: next }], totalBytes: next.byteLength,
+      alarms: [], configuredProviders: [], mcpServers: [],
+    });
+    const result = await streamRestoreArchive({
+      stream: bundle, overwrite: true,
+      lockAcquirer: async (name, fn) => {
+        assertEquals(name, "cap:restoreLock");
+        restoreHeld = true;
+        try { return await fn(); } finally { restoreHeld = false; }
+      },
+      confirm: async () => { assertEquals(masterHeld, false); return true; },
+      quiesce: async () => { assertEquals(masterHeld, false); quiesced = true; },
+      opfs: {
+        listFiles: async () => [...files.keys()],
+        readFile: async (path) => files.get(path),
+        writeFile: async (path, bytes) => {
+          if (path === livePath) {
+            assertEquals(quiesced, true);
+            assertEquals(masterHeld, true);
+            liveWrites++;
+          }
+          files.set(path, bytes);
+        },
+        removeFile: async (path) => {
+          if (path === oldPath) assertEquals(masterHeld, true, "prune must stay inside the master lock");
+          files.delete(path);
+        },
+      },
+      kvGet: async (keys) => keys === null ? kv : Array.isArray(keys)
+        ? Object.fromEntries(keys.filter((key) => Object.hasOwn(kv, key)).map((key) => [key, kv[key]]))
+        : Object.hasOwn(kv, keys) ? { [keys]: kv[keys] } : {},
+      kvSet: async (items) => { Object.assign(kv, items); },
+      kvRemove: async (keys) => { for (const key of (Array.isArray(keys) ? keys : [keys])) delete kv[key]; },
+      alarms: { getAll: async () => [], create: async () => {}, clear: async () => {} },
+    });
+    assertEquals(result.ok, true);
+    assertEquals(liveWrites, 1);
+    assertEquals(DECODER.decode(files.get(livePath)), "new");
+    assertEquals(files.has(oldPath), false);
+    assertEquals(masterHeld, false);
+    assert(names.length >= 2, "pending recovery and live swap both require the master lock");
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
+    else delete globalThis.navigator;
+  }
+});
+
 Deno.test("backup-restore: options.html controls have correct accept attribute and classes", async () => {
   const html = await Deno.readTextFile("extension/options/options.html");
 

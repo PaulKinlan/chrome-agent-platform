@@ -526,9 +526,13 @@ excluding unpublished WAL residue and stale legacy journal values while the
 master Web Lock is held. Both buffered and streamed import paths now reject
 incomplete WAL generations; the legacy buffered service-worker import takes
 `cap:restoreLock` then the master Web Lock around recovery, swap and rollback.
-The Options streaming restore still needs that master lock after quiescence
-through its live-file replacement and rollback; prevalidation and filtered
-export alone are not a complete backup/restore safety proof. Future WAL
+Options streaming restore now takes `cap:restoreLock` first, validates the
+staged generation, waits for owner confirmation and run quiescence WITHOUT the
+master lock, then holds that lock across the existing-file snapshot, live-file
+replacement, rollback and cache invalidation. A prior abandoned-import
+self-heal separately holds the master lock under `cap:restoreLock`. These lock
+fakes are not yet real-Chrome cross-context proof; neither import prevalidation
+nor filtered export alone is a complete backup/restore safety proof. Future WAL
 compaction must retain every dependency referenced by EITHER head slot until
 both slots have published and readback-verified the new checkpoint; then it
 may retire the superseded frames. Export selects both chains, and restore
