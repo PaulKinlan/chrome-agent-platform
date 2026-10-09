@@ -59,6 +59,8 @@ export const SERIAL_REASONS = {
   // loaded fleet machine. cihz made the kill structural and the survive margin wide, but the
   // assertions are still real elapsed time, so the declaration stands.
   "tests/serial-phase-timeout.test.ts": "wall-clock kill/survive bounds assertions (declared 5000 ms work vs 4000 ms flat / 12000 ms scaled bounds) race the parallel phase",
+  // 20e2u: launches real Chrome to load extension/dist bundles and verify dynamic chunk resolution.
+  "tests/chunk-resolution-browser.test.ts": "launches Chrome to load extension/dist bundles and verify dynamic chunk resolution; races serial builds mutating dist/",
 };
 export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
 

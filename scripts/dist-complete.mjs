@@ -7,8 +7,13 @@
 
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { lstat, readFile, readlink, writeFile } from "node:fs/promises";
+import { lstat, readFile, readlink, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { PYTHON_RUNTIME_PIN } from "../extension/lib/python-runtime.js";
+
+const ADMITTED_PYTHON_FILES = new Set(
+  Object.keys(PYTHON_RUNTIME_PIN.files).map((f) => `wasm-tools/python/${f}`),
+);
 
 export const DIST_COMPLETE_SCHEMA = "cap-dist-complete-v2";
 export const LEGACY_DIST_COMPLETE_SCHEMA = "cap-dist-complete-v1";
@@ -48,6 +53,10 @@ export const DIST_COMPLETE_OUTPUTS = Object.freeze([
 export const INDEXED_SOURCE_EXCLUDED_PATHS = Object.freeze(new Set([
   "docs/diff-core.bundle.js",
 ]));
+
+export const MAX_CHUNK_COUNT = 10;
+export const MAX_CHUNK_FILE_BYTES = 500 * 1024;
+export const CHUNK_PATH_RE = /^chunks\/[a-zA-Z0-9._-]+\.js$/u;
 
 const SHA256_RE = /^[0-9a-f]{64}$/u;
 const COMMIT_RE = /^[0-9a-f]{40,64}$/u;
@@ -273,8 +282,35 @@ export async function computeIndexedSourceAuthority({ root, observe = null }) {
   });
 }
 
-async function outputAuthority(distRoot) {
-  const outputs = await Promise.all(DIST_COMPLETE_OUTPUTS.map(async (outputPath) => {
+async function walkDistFiles(root, prefix = "", output = []) {
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (err) {
+    if (err?.code === "ENOENT") return output;
+    throw err;
+  }
+  entries.sort((a, b) => a.name.localeCompare(b.name, "en"));
+  for (const entry of entries) {
+    const file = path.join(root, entry.name);
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    const info = await lstat(file);
+    if (info.isSymbolicLink()) {
+      throw markerError(`generated symlink rejected: ${relative}`);
+    }
+    if (info.isDirectory()) {
+      await walkDistFiles(file, relative, output);
+    } else if (info.isFile()) {
+      output.push({ file, relative, size: info.size });
+    } else {
+      throw markerError(`generated special file rejected: ${relative}`);
+    }
+  }
+  return output;
+}
+
+async function outputAuthority(distRoot, target = null) {
+  const staticOutputs = await Promise.all(DIST_COMPLETE_OUTPUTS.map(async (outputPath) => {
     const file = path.join(distRoot, ...outputPath.split("/"));
     const info = await lstat(file).catch(() => null);
     if (!info?.isFile() || info.isSymbolicLink()) {
@@ -294,7 +330,69 @@ async function outputAuthority(distRoot) {
       size: bytes.length,
     });
   }));
-  return Object.freeze(outputs);
+
+  const chunksDir = path.join(distRoot, "chunks");
+  const chunksDirExists = await lstat(chunksDir).then((s) => s.isDirectory()).catch(() => false);
+  const chunkOutputs = [];
+  if (chunksDirExists) {
+    const chunkFiles = (await readdir(chunksDir, { withFileTypes: true }))
+      .filter((e) => e.isFile() && !e.isSymbolicLink() && e.name.endsWith(".js"))
+      .map((e) => `chunks/${e.name}`)
+      .sort();
+
+    if (chunkFiles.length > MAX_CHUNK_COUNT) {
+      throw markerError(`chunk count exceeds bound: ${chunkFiles.length} > ${MAX_CHUNK_COUNT}`);
+    }
+
+    for (const chunkPath of chunkFiles) {
+      if (!CHUNK_PATH_RE.test(chunkPath)) {
+        throw markerError(`invalid chunk path format: ${chunkPath}`);
+      }
+      const file = path.join(distRoot, ...chunkPath.split("/"));
+      const info = await lstat(file).catch(() => null);
+      if (!info?.isFile() || info.isSymbolicLink()) {
+        throw markerError(`chunk file missing or special: ${chunkPath}`);
+      }
+      if (info.size <= 0 || info.size > MAX_CHUNK_FILE_BYTES) {
+        throw markerError(`chunk size exceeds bound: ${chunkPath} (${info.size} > ${MAX_CHUNK_FILE_BYTES})`);
+      }
+      const bytes = await readFile(file);
+      chunkOutputs.push(Object.freeze({
+        path: chunkPath,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        size: bytes.length,
+      }));
+    }
+  }
+
+  const allOutputs = Object.freeze([...staticOutputs, ...chunkOutputs]);
+
+  const allDistFiles = await walkDistFiles(distRoot);
+  const expectedPaths = new Set(allOutputs.map((o) => o.path));
+  for (const { relative } of allDistFiles) {
+    if (relative === "dist.complete") continue;
+    // 1. Case-insensitive sourcemap rule applied BEFORE ANY exemption:
+    // Matches .map, .MAP, .map.gz, etc. (case-insensitive)
+    if (/\.map(?:\..*)?$/iu.test(relative)) {
+      if (target === "store") {
+        throw markerError(`unmanifested sourcemap file in store dist: ${relative}`);
+      }
+      // Developer builds emit sourcemaps for in-place debugging
+      continue;
+    }
+    // 2. Python runtime members: admit ONLY pinned Python-runtime members
+    if (relative.startsWith("wasm-tools/python/")) {
+      if (!ADMITTED_PYTHON_FILES.has(relative)) {
+        throw markerError(`unexpected member in python runtime dist: ${relative}`);
+      }
+      continue;
+    }
+    if (!expectedPaths.has(relative)) {
+      throw markerError(`unmanifested file in dist/: ${relative}`);
+    }
+  }
+
+  return allOutputs;
 }
 
 function validTarget(value) {
@@ -315,7 +413,7 @@ export async function createDistCompleteMarker({ root, distRoot, target, source:
   if (!validTarget(target)) throw markerError("marker target is invalid");
   const [source, outputs] = await Promise.all([
     precomputedSource ?? computeIndexedSourceAuthority({ root }),
-    outputAuthority(distRoot),
+    outputAuthority(distRoot, target),
   ]);
   // The key order is part of the canonical v2 byte contract. `target` is an
   // intent/mismatch declaration, not independent proof of output content; the
@@ -404,9 +502,9 @@ export async function validateDistCompleteMarker({
   ) throw markerError("marker source authority is invalid");
   if (
     !Array.isArray(marker.outputs) ||
-    marker.outputs.length !== DIST_COMPLETE_OUTPUTS.length
+    marker.outputs.length < DIST_COMPLETE_OUTPUTS.length
   ) throw markerError("marker output inventory is invalid");
-  for (let index = 0; index < marker.outputs.length; index++) {
+  for (let index = 0; index < DIST_COMPLETE_OUTPUTS.length; index++) {
     const output = marker.outputs[index];
     if (
       !exactObject(output, ["path", "sha256", "size"]) ||
@@ -415,13 +513,25 @@ export async function validateDistCompleteMarker({
       output.size <= 0 || output.size > MAX_SOURCE_FILE_BYTES
     ) throw markerError("marker output authority is invalid");
   }
+  const chunkOutputs = marker.outputs.slice(DIST_COMPLETE_OUTPUTS.length);
+  if (chunkOutputs.length > MAX_CHUNK_COUNT) {
+    throw markerError(`chunk count exceeds bound: ${chunkOutputs.length} > ${MAX_CHUNK_COUNT}`);
+  }
+  for (const chunk of chunkOutputs) {
+    if (
+      !exactObject(chunk, ["path", "sha256", "size"]) ||
+      !CHUNK_PATH_RE.test(chunk.path) ||
+      !SHA256_RE.test(chunk.sha256) || !Number.isSafeInteger(chunk.size) ||
+      chunk.size <= 0 || chunk.size > MAX_CHUNK_FILE_BYTES
+    ) throw markerError("marker chunk output authority is invalid");
+  }
   if (!bytes.equals(Buffer.from(canonicalJson(marker), "utf8"))) {
     throw markerError("marker JSON is not canonical");
   }
 
   const [source, outputs] = await Promise.all([
     computeIndexedSourceAuthority({ root }),
-    outputAuthority(distRoot),
+    outputAuthority(distRoot, expectedTarget ?? marker.target),
   ]);
   if (marker.commit !== gitCommit(root)) {
     throw markerError(`marker commit is stale${STALE_REBUILD_GUIDANCE}`);
@@ -430,6 +540,9 @@ export async function validateDistCompleteMarker({
     marker.source.digest !== source.digest ||
     marker.source.files !== source.files
   ) throw markerError(`marker indexed source authority is stale${STALE_REBUILD_GUIDANCE}`);
+  if (marker.outputs.length !== outputs.length) {
+    throw markerError(`marker output count mismatch: expected ${outputs.length}, got ${marker.outputs.length}`);
+  }
   for (let index = 0; index < outputs.length; index++) {
     if (
       marker.outputs[index].path !== outputs[index].path ||

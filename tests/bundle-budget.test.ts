@@ -29,6 +29,7 @@ import {
   nonDenoStoreInputs,
   securityDependencyDrift,
   STORE_BUNDLE_BUDGETS,
+  STORE_AGGREGATE_CHUNKS_BUDGET_BYTES,
   STORE_SW_BUDGET_BYTES,
   topContributors,
   zodCjsInputs,
@@ -256,10 +257,17 @@ Deno.test("9epn.4 bundle budget: dist.complete records every generated bundle, r
   }
   const recorded = Array.isArray(marker?.outputs) ? marker.outputs : [];
   assertEquals(
-    recorded.map((o) => o.path),
+    recorded.map((o) => o.path).slice(0, DIST_COMPLETE_OUTPUTS.length),
     [...DIST_COMPLETE_OUTPUTS],
     "dist.complete lists every generated bundle in the marker's fixed order",
   );
+  const recordedChunks = recorded.slice(DIST_COMPLETE_OUTPUTS.length);
+  for (const chunk of recordedChunks) {
+    assert(
+      chunk.path.startsWith("chunks/") && chunk.path.endsWith(".js"),
+      `${chunk.path} must be a valid chunk in chunks/`,
+    );
+  }
   const sizeOf = new Map(recorded.map((o) => [o.path, o.size]));
   for (const [path, size] of sizeOf) {
     assert(Number.isSafeInteger(size) && size > 0, `${path}: the marker records a positive byte size (got ${size})`);
@@ -1034,9 +1042,9 @@ Deno.test("o2t3: the declared budgets and the reported/marked bundle sets cannot
   );
 });
 
-// ── chrome-agent-platform-9epn.6: UI modularization and budget targets ───
+// ── chrome-agent-platform-20e2u: UI shared chunks and ratcheted budget targets ───
 
-Deno.test("9epn.6 bundle budget: sidepanel <= 450 KB, ntp <= 850 KB, options <= 600 KB", async () => {
+Deno.test("20e2u bundle budget: sidepanel <= 250 KB, ntp <= 500 KB, options <= 450 KB, chunks <= 750 KB", async () => {
   const repo = fileURLToPath(new URL("../", import.meta.url));
   const sidepanelBundle = join(repo, "extension", "dist", "sidepanel.bundle.js");
   const ntpBundle = join(repo, "extension", "dist", "ntp.bundle.js");
@@ -1044,20 +1052,29 @@ Deno.test("9epn.6 bundle budget: sidepanel <= 450 KB, ntp <= 850 KB, options <= 
 
   const spStat = await Deno.stat(sidepanelBundle);
   assert(
-    spStat.size <= 450_000,
-    `sidepanel.bundle.js must be <= 450 KB minified (actual: ${spStat.size} bytes)`,
+    spStat.size <= 250_000,
+    `sidepanel.bundle.js must be <= 250 KB minified (actual: ${spStat.size} bytes)`,
   );
 
   const ntpStat = await Deno.stat(ntpBundle);
   assert(
-    ntpStat.size <= 850_000,
-    `ntp.bundle.js must be <= 850 KB minified (actual: ${ntpStat.size} bytes)`,
+    ntpStat.size <= 500_000,
+    `ntp.bundle.js must be <= 500 KB minified (actual: ${ntpStat.size} bytes)`,
   );
 
   const optStat = await Deno.stat(optionsBundle);
   assert(
-    optStat.size <= 600_000,
-    `options.bundle.js must be <= 600 KB minified (actual: ${optStat.size} bytes)`,
+    optStat.size <= 450_000,
+    `options.bundle.js must be <= 450 KB minified (actual: ${optStat.size} bytes)`,
+  );
+
+  const markerPath = join(repo, "extension", "dist", "dist.complete");
+  const marker = JSON.parse(await Deno.readTextFile(markerPath));
+  const chunks = (marker.outputs || []).filter((o: any) => o.path.startsWith("chunks/"));
+  const aggregateChunkBytes = chunks.reduce((acc: number, c: any) => acc + c.size, 0);
+  assert(
+    aggregateChunkBytes <= STORE_AGGREGATE_CHUNKS_BUDGET_BYTES,
+    `aggregate chunk size must be <= ${STORE_AGGREGATE_CHUNKS_BUDGET_BYTES} bytes (actual: ${aggregateChunkBytes} bytes across ${chunks.length} chunks)`,
   );
 });
 
