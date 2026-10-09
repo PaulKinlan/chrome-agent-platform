@@ -1119,6 +1119,331 @@ export function safeProviderError(text, knownSecrets = []) {
   return boundErrorText(redactSecretText(text, knownSecrets));
 }
 
+export const BARE_SECRET_SHAPES = [
+  /(?<![a-zA-Z0-9])(?:sk|rk|pk|key|tok)[-_][A-Za-z0-9_-]{8,}/g,
+  /(?<![a-zA-Z0-9])AKIA[0-9A-Z]{16}\b/g,
+  /(?<![a-zA-Z0-9])(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}/g,
+  /(?<![a-zA-Z0-9])xox[baprs]-[A-Za-z0-9-]{8,}/g,
+  /(?<![a-zA-Z0-9])AIza[0-9A-Za-z_-]{20,}/g,
+  /(?<![a-zA-Z0-9])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}/g,
+];
+
+/** Convert an arbitrary value to string safely without throwing, even for Object.create(null),
+ * symbols, throwing valueOf/toString, or non-primitive objects. */
+export function safeString(value, fallback = "") {
+  if (value == null) return fallback;
+  try {
+    if (typeof value === "string") return value;
+    if (typeof value === "symbol") return fallback;
+    return String(value);
+  } catch {
+    try {
+      if (typeof value?.toString === "function") {
+        return String(value.toString());
+      }
+    } catch { /* ignore */ }
+    return fallback;
+  }
+}
+
+/** Bound and redact an arbitrary string or string array/object for durable log storage.
+ * Every string passes through redactSecretText + bare credential scrub and is sliced to maxChars.
+ * Protected against circular references, throwing getters, throwing coercions, and unbounded depth/keys. */
+export function boundedAndRedacted(value, maxChars = 240, seen = new WeakSet(), depth = 0) {
+  try {
+    if (value == null) return "";
+    if (depth > 4) return "[depth-exceeded]";
+    if (typeof value === "string") {
+      let out = "";
+      try { out = redactSecretText(value); } catch { out = value; }
+      for (const re of BARE_SECRET_SHAPES) {
+        try { out = out.replace(re, "[REDACTED]"); } catch { /* ignore */ }
+      }
+      return out.slice(0, maxChars);
+    }
+    if (typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+    if (typeof value === "object") {
+      try {
+        if (seen.has(value)) return "[circular]";
+        seen.add(value);
+      } catch { /* e.g. non-extensible or foreign proxy */ }
+
+      if (Array.isArray(value)) {
+        const out = [];
+        let len = 0;
+        try { len = Math.min(value.length, 32); } catch { len = 0; }
+        for (let i = 0; i < len; i++) {
+          try {
+            out.push(boundedAndRedacted(value[i], maxChars, seen, depth + 1));
+          } catch {
+            out.push("[unserializable]");
+          }
+        }
+        return out;
+      }
+
+      const out = {};
+      let keys = [];
+      try {
+        keys = Object.keys(value).slice(0, 32);
+      } catch {
+        try {
+          keys = Object.getOwnPropertyNames(value).slice(0, 32);
+        } catch {
+          keys = [];
+        }
+      }
+
+      for (const k of keys) {
+        let cleanKey = "";
+        try {
+          cleanKey = boundedAndRedacted(safeString(k, "key"), 64, seen, depth + 1);
+        } catch {
+          cleanKey = "key";
+        }
+        let propVal;
+        try {
+          propVal = value[k];
+        } catch {
+          propVal = "[unserializable]";
+        }
+        try {
+          out[cleanKey] = propVal === "[unserializable]"
+            ? "[unserializable]"
+            : boundedAndRedacted(propVal, maxChars, seen, depth + 1);
+        } catch {
+          out[cleanKey] = "[unserializable]";
+        }
+      }
+      return out;
+    }
+    const str = safeString(value, "[unserializable]");
+    if (str === "[unserializable]") return "[unserializable]";
+    return boundedAndRedacted(str, maxChars, seen, depth + 1);
+  } catch {
+    return "[unserializable]";
+  }
+}
+
+/** Canonical durable log normalizer for tool-call entries: constructs a strictly
+ * allowlisted object with only known keys, bounding and redacting every string.
+ * Completely guarded against throwing getters and coercion failures. */
+export function normalizeDurableToolCall(log) {
+  try {
+    if (!log || typeof log !== "object") {
+      return {
+        type: "tool-call",
+        id: "",
+        executionId: "",
+        callId: "",
+        tool: "tool",
+        args: "",
+        at: Date.now(),
+      };
+    }
+    let rawId, rawExecId, rawCallId, rawTool, rawArgs, rawRun, rawAt;
+    try { rawId = log.id; } catch { rawId = "[unserializable]"; }
+    try { rawExecId = log.executionId; } catch { rawExecId = "[unserializable]"; }
+    try { rawCallId = log.callId; } catch { rawCallId = "[unserializable]"; }
+    try { rawTool = log.tool; } catch { rawTool = "[unserializable]"; }
+    try { rawArgs = log.args; } catch { rawArgs = "[unserializable]"; }
+    try { rawRun = log.run; } catch { rawRun = null; }
+    try { rawAt = log.at; } catch { rawAt = null; }
+
+    const out = {
+      type: "tool-call",
+      id: boundedAndRedacted(safeString(rawId, ""), 64),
+      executionId: boundedAndRedacted(safeString(rawExecId, ""), 128),
+      callId: boundedAndRedacted(safeString(rawCallId, ""), 128),
+      tool: boundedAndRedacted(safeString(rawTool, "tool"), 128),
+      args: boundedAndRedacted(safeString(rawArgs, ""), 65536),
+    };
+    if (rawRun != null) {
+      try { out.run = Number(rawRun) || 0; } catch { out.run = 0; }
+    }
+    try {
+      out.at = Number.isFinite(Number(rawAt)) ? Number(rawAt) : Date.now();
+    } catch {
+      out.at = Date.now();
+    }
+    return out;
+  } catch {
+    return {
+      type: "tool-call",
+      id: "[unserializable]",
+      executionId: "[unserializable]",
+      callId: "[unserializable]",
+      tool: "tool",
+      args: "[unserializable]",
+      at: Date.now(),
+    };
+  }
+}
+
+/** Canonical durable log normalizer for tool-result entries: enforces structural bounds,
+ * strict allowlisting (no object spreading), and credential redaction at the persistence chokepoint.
+ * Completely guarded against throwing getters and coercion failures. */
+export function normalizeDurableToolResult(log) {
+  try {
+    if (!log || typeof log !== "object") {
+      return {
+        type: "tool-result",
+        id: "",
+        executionId: "",
+        callId: "",
+        tool: "tool",
+        result: "",
+        ok: null,
+        at: Date.now(),
+      };
+    }
+    let rawId, rawExecId, rawCallId, rawTool, rawResult, rawOk, rawRun, rawSelTool, rawSiteAct, rawPr, rawPermDec, rawReexec, rawResFull, rawResTrunc, rawResBytes, rawAt;
+    try { rawId = log.id; } catch { rawId = "[unserializable]"; }
+    try { rawExecId = log.executionId; } catch { rawExecId = "[unserializable]"; }
+    try { rawCallId = log.callId; } catch { rawCallId = "[unserializable]"; }
+    try { rawTool = log.tool; } catch { rawTool = "[unserializable]"; }
+    try { rawResult = log.result; } catch { rawResult = "[unserializable]"; }
+    try { rawOk = log.ok; } catch { rawOk = null; }
+    try { rawRun = log.run; } catch { rawRun = null; }
+    try { rawSelTool = log.selectedTool; } catch { rawSelTool = null; }
+    try { rawSiteAct = log.siteActivity; } catch { rawSiteAct = null; }
+    try { rawPr = log.permissionRequirement; } catch { rawPr = null; }
+    try { rawPermDec = log.permissionDecision; } catch { rawPermDec = null; }
+    try { rawReexec = log.reexecuted; } catch { rawReexec = false; }
+    try { rawResFull = log.resultFull; } catch { rawResFull = null; }
+    try { rawResTrunc = log.resultFullTruncated; } catch { rawResTrunc = false; }
+    try { rawResBytes = log.resultFullBytes; } catch { rawResBytes = 0; }
+    try { rawAt = log.at; } catch { rawAt = null; }
+
+    const out = {
+      type: "tool-result",
+      id: boundedAndRedacted(safeString(rawId, ""), 64),
+      executionId: boundedAndRedacted(safeString(rawExecId, ""), 128),
+      callId: boundedAndRedacted(safeString(rawCallId, ""), 128),
+      tool: boundedAndRedacted(safeString(rawTool, "tool"), 128),
+      result: boundedAndRedacted(safeString(rawResult, ""), 65536),
+      ok: typeof rawOk === "boolean" ? rawOk : (rawOk == null ? null : Boolean(rawOk)),
+    };
+    if (rawRun != null) {
+      try { out.run = Number(rawRun) || 0; } catch { out.run = 0; }
+    }
+    if (rawSelTool != null) {
+      out.selectedTool = boundedAndRedacted(safeString(rawSelTool, "tool"), 128);
+    }
+    if (rawSiteAct && typeof rawSiteAct === "object" && !Array.isArray(rawSiteAct)) {
+      let actOrigin, actTool;
+      try { actOrigin = rawSiteAct.origin; } catch { actOrigin = "[unserializable]"; }
+      try { actTool = rawSiteAct.tool; } catch { actTool = "[unserializable]"; }
+      out.siteActivity = {
+        origin: boundedAndRedacted(safeString(actOrigin, ""), 240),
+        tool: boundedAndRedacted(safeString(actTool, ""), 128),
+      };
+    }
+    if (rawPr && typeof rawPr === "object" && !Array.isArray(rawPr)) {
+      let prReason, prPerms, prGrantOrigins, prGrantGlobal, prHostOrigins, prApprovals;
+      try { prReason = rawPr.reason; } catch { prReason = "[unserializable]"; }
+      try { prPerms = rawPr.permissions; } catch { prPerms = []; }
+      try { prGrantOrigins = rawPr.grantOrigins; } catch { prGrantOrigins = []; }
+      try { prGrantGlobal = rawPr.grantGlobal; } catch { prGrantGlobal = false; }
+      try { prHostOrigins = rawPr.hostOrigins; } catch { prHostOrigins = []; }
+      try { prApprovals = rawPr.approvals; } catch { prApprovals = []; }
+
+      const req = {
+        reason: boundedAndRedacted(safeString(prReason, ""), 240),
+        permissions: Array.isArray(prPerms)
+          ? prPerms.slice(0, 8).map((p) => {
+              try { return boundedAndRedacted(safeString(p, ""), 64); } catch { return "[unserializable]"; }
+            })
+          : [],
+        grantOrigins: Array.isArray(prGrantOrigins)
+          ? prGrantOrigins.slice(0, 50).map((o) => {
+              try { return boundedAndRedacted(safeString(o, ""), 240); } catch { return "[unserializable]"; }
+            })
+          : [],
+        grantGlobal: prGrantGlobal === true,
+      };
+      if (Array.isArray(prHostOrigins) && prHostOrigins.length) {
+        req.hostOrigins = prHostOrigins.slice(0, 50).map((h) => {
+          try { return boundedAndRedacted(safeString(h, ""), 240); } catch { return "[unserializable]"; }
+        });
+      }
+      if (Array.isArray(prApprovals) && prApprovals.length) {
+        req.approvals = prApprovals.slice(0, 10).map((a) => {
+          if (!a || typeof a !== "object" || Array.isArray(a)) return null;
+          let aId, aAct, aTgt, aDetail;
+          try { aId = a.approvalId; } catch { aId = "[unserializable]"; }
+          try { aAct = a.action; } catch { aAct = "[unserializable]"; }
+          try { aTgt = a.targetRef; } catch { aTgt = "[unserializable]"; }
+          try { aDetail = a.detail; } catch { aDetail = null; }
+
+          const app = {
+            approvalId: boundedAndRedacted(safeString(aId, ""), 64),
+            action: boundedAndRedacted(safeString(aAct, ""), 64),
+            targetRef: boundedAndRedacted(safeString(aTgt, ""), 240),
+          };
+          if (aDetail && typeof aDetail === "object" && !Array.isArray(aDetail)) {
+            let dKind, dOrig, dTool, dScope;
+            try { dKind = aDetail.kind; } catch { dKind = "[unserializable]"; }
+            try { dOrig = aDetail.origin; } catch { dOrig = "[unserializable]"; }
+            try { dTool = aDetail.tool; } catch { dTool = "[unserializable]"; }
+            try { dScope = aDetail.scope; } catch { dScope = null; }
+
+            app.detail = {
+              kind: boundedAndRedacted(safeString(dKind, "webmcp-tool"), 32),
+              origin: boundedAndRedacted(safeString(dOrig, ""), 240),
+              tool: boundedAndRedacted(safeString(dTool, ""), 1024),
+            };
+            if (dScope != null) {
+              app.detail.scope = boundedAndRedacted(safeString(dScope, ""), 32);
+            }
+          }
+          return app;
+        }).filter(Boolean);
+      }
+      out.permissionRequirement = req;
+    }
+    if (rawPermDec != null) {
+      out.permissionDecision = boundedAndRedacted(safeString(rawPermDec, ""), 16);
+    }
+    if (rawReexec === true) {
+      out.reexecuted = true;
+    }
+    if (rawResFull != null && typeof rawResFull === "string" && rawResFull) {
+      out.resultFull = boundedAndRedacted(safeString(rawResFull, ""), 65536);
+      out.resultFullTruncated = rawResTrunc === true;
+      try { out.resultFullBytes = Number(rawResBytes) || 0; } catch { out.resultFullBytes = 0; }
+    }
+    try {
+      out.at = Number.isFinite(Number(rawAt)) ? Number(rawAt) : Date.now();
+    } catch {
+      out.at = Date.now();
+    }
+    return out;
+  } catch {
+    return {
+      type: "tool-result",
+      id: "[unserializable]",
+      executionId: "[unserializable]",
+      callId: "[unserializable]",
+      tool: "tool",
+      result: "[unserializable]",
+      ok: null,
+      at: Date.now(),
+    };
+  }
+}
+
+/** Normalize any durable log entry (tool-call or tool-result) via allowlisting. */
+export function normalizeDurableLog(log) {
+  if (!log || typeof log !== "object") return log;
+  if (log.type === "tool-call") return normalizeDurableToolCall(log);
+  if (log.type === "tool-result") return normalizeDurableToolResult(log);
+  return log;
+}
+
+
 /**
  * Deep-redact secret VALUES from an arbitrary payload (pure, dependency-free).
  * Every object key matching SECRET_KEY_RE is replaced with "[REDACTED]"; arrays

@@ -915,7 +915,8 @@ export function boundSiteToolApprovalDetail(detail) {
     ? detail.origin
     : "";
   const tool = visibleSiteToolLabel(detail.tool, 1024);
-  return detail.kind === "webmcp-tool" && origin && tool
+  const kindValid = !detail.kind || detail.kind === "webmcp-tool" || detail.kind === "site";
+  return kindValid && origin && tool
     ? { kind: "webmcp-tool", origin, tool,
       ...(detail.scope === "attached-run" ? { scope: "attached-run" } : {}),
     }
@@ -1696,7 +1697,7 @@ export function toolRowsFromRunLog(executionId, logs) {
     const requirement = (p.permissionRequirement
       ? normalizePermissionRequirement({ waitingForPermission: true, permissionRequirement: p.permissionRequirement })
       : null) ?? approvalRequirementFromToolResult(fullResult);
-    if (requirement && !requirement.approvals.length && !seenApprovals.has(requirement.key)) {
+    if (requirement && !seenApprovals.has(requirement.key)) {
       seenApprovals.add(requirement.key);
       // The owner's recorded decision is the card's state — approved reopens
       // granted, declined stays declined (deny is sticky: a re-projection must
@@ -1710,7 +1711,9 @@ export function toolRowsFromRunLog(executionId, logs) {
           ? { state: "denied" }
           : decision === "expired"
             ? { state: "expired", detail: "The request expired. The action was not performed." }
-            : {};
+            : decision === "cancelled"
+              ? { state: "cancelled", detail: "The run was cancelled. The action was not performed." }
+              : {};
       out.push({
         role: "approval",
         requirement,

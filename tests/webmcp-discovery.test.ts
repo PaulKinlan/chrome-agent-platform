@@ -553,3 +553,102 @@ Deno.test("webmcp invoke: a non-cloneable result reports phase=result-serializat
   assertEquals(results[0].errorDetail?.phase, "result-serialization");
   assertEquals(results[0].errorDetail?.pageControlled, false);
 });
+
+Deno.test("40vf4: all three WebMCP fixtures shadow document.modelContext using Object.defineProperty", () => {
+  const fixturePaths = [
+    "../fixtures/webmcp-fixture.html",
+    "../fixtures/webmcp-errors.html",
+    "../fixtures/showcase-shop.html",
+  ];
+  for (const rel of fixturePaths) {
+    const text = Deno.readTextFileSync(fileURLToPath(new URL(rel, import.meta.url)));
+    assert(
+      text.includes('Object.defineProperty(document, "modelContext"') ||
+      text.includes("Object.defineProperty(document, 'modelContext'"),
+      `${rel} must shadow document.modelContext via Object.defineProperty for injected/defensive prototype getter shadowing`,
+    );
+    assert(
+      !/document\.modelContext\s*=\s*\{/.test(text),
+      `${rel} must not use bare document.modelContext = { ... } assignment`,
+    );
+  }
+});
+
+Deno.test("40vf4: Object.defineProperty on document shadows inherited prototype getter-only accessor", async () => {
+  // Injected/defensive simulation of Document.prototype.modelContext getter-only accessor
+  class FakeDocumentProto {}
+  Object.defineProperty(FakeDocumentProto.prototype, "modelContext", {
+    get() { return undefined; },
+    configurable: true,
+    enumerable: true,
+  });
+
+  const doc = Object.create(FakeDocumentProto.prototype);
+
+  // In strict mode a bare assignment throws TypeError; in sloppy mode it silently no-ops.
+  try {
+    doc.modelContext = { test: 123 };
+  } catch {
+    // Expected TypeError in strict mode
+  }
+  assertEquals(doc.modelContext, undefined, "bare assignment cannot set value on getter-only accessor");
+
+  // Object.defineProperty successfully shadows the accessor
+  const polyfill = { test: 123, getTools: async () => [{ name: "tool1" }] };
+  Object.defineProperty(doc, "modelContext", {
+    value: polyfill,
+    configurable: true,
+    writable: true,
+  });
+  assertEquals(doc.modelContext.test, 123, "Object.defineProperty shadows the getter");
+  const tools = await doc.modelContext.getTools();
+  assertEquals(tools.length, 1);
+});
+
+Deno.test("40vf4: executing fixture against simulated Chrome 154 Document.prototype getter discovers declared tools", async () => {
+  // Simulate the Chrome 154 Document.prototype.modelContext getter-only accessor
+  class NativeDocumentProto {}
+  Object.defineProperty(NativeDocumentProto.prototype, "modelContext", {
+    get() { return undefined; },
+    configurable: true,
+    enumerable: true,
+  });
+
+  // Verify counter-factual: bare assignment on an instance is silently discarded in sloppy mode
+  const sloppyDoc = Object.create(NativeDocumentProto.prototype);
+  const bareAssignmentCode = "document.modelContext = { test: 123 };";
+  (new Function("document", bareAssignmentCode))(sloppyDoc);
+  assertEquals(sloppyDoc.modelContext, undefined, "counter-factual: bare assignment fails to set modelContext against native prototype getter");
+
+  // Execute the actual script from fixtures/webmcp-fixture.html against NativeDocumentProto instance
+  const fixtureHtml = Deno.readTextFileSync(fileURLToPath(new URL("../fixtures/webmcp-fixture.html", import.meta.url)));
+  const scriptMatches = [...fixtureHtml.matchAll(/<script>([\s\S]*?)<\/script>/gi)];
+  assert(scriptMatches.length > 0, "fixture contains script blocks");
+
+  const doc = Object.create(NativeDocumentProto.prototype);
+  doc.readyState = "complete";
+  const win = {
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  for (const match of scriptMatches) {
+    const scriptBody = match[1];
+    const runScript = new Function("window", "document", "setTimeout", scriptBody);
+    runScript(win, doc, (cb) => { cb(); return 0; });
+  }
+
+  assert(doc.modelContext != null, "fixture execution set own document.modelContext despite prototype getter");
+  const polyTools = await doc.modelContext.getTools();
+  const polyNames = polyTools.map((t) => t.name);
+  assert(polyNames.includes("shop.total"), "fixture registered shop.total");
+  assert(polyNames.includes("shop.catalog"), "fixture registered shop.catalog");
+
+  // Run the real MAIN-world content script discovery pipeline on this document
+  const { tools } = await collectTools(doc.modelContext, win);
+  const declared = tools.filter((t) => t.source === "declared");
+  const discoveredNames = declared.map((t) => t.name);
+  assert(discoveredNames.includes("shop.total"), "shop.total discoverable by main-world discovery");
+  assert(discoveredNames.includes("shop.catalog"), "shop.catalog discoverable by main-world discovery");
+});
+

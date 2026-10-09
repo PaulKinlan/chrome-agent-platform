@@ -73,7 +73,7 @@ const BROADCAST_INVALIDATIONS = {
   "named-agent-changed": ["agent.", "named-agent.", "background-agent.", "agents."],
   "background-agent-changed": ["agent.", "named-agent.", "background-agent.", "agents."],
   "site-tools-detected": ["agent.tool-offers", "webmcp.status"],
-  "open-tabs-changed": ["webmcp.status"],
+  "open-tabs-changed": ["webmcp.status", "agent.tool-offers", "agent.discoverable-tabs"],
   "provider-changed": ["provider."],
   "asset-changed": ["asset.", "artifacts."],
   "asset-created": ["asset.", "artifacts."],

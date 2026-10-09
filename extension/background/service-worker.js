@@ -234,6 +234,7 @@ import {
   enrollmentPolicy,
   enrollmentSnapshot,
   enrollOrigin,
+  reEnrollOrigin,
   prepareEnrollmentPromotion,
   completeEnrollmentPromotion,
   listPendingEnrollmentPromotions,
@@ -1232,6 +1233,11 @@ import {
   hubUrlForCommand,
   newId,
   sleep,
+  redactSecretText,
+  boundedAndRedacted,
+  normalizeDurableToolCall,
+  normalizeDurableToolResult,
+  normalizeDurableLog,
   redactToolArgs
 } from "../lib/pure.js";
 import { redactToolResult, toolResultFullJson } from "../lib/tool-summary.js";
@@ -1259,6 +1265,7 @@ import {
   stageApprovalDetail,
   getStagedApprovalDetail,
   mayReadApprovalDetail,
+  createExecutionApprovalStore,
 } from "../lib/owner-approval.js";
 import { lineDiffSummary } from "../shared/diff-core.js";
 import { bridgeAndAuditApprovalBindings } from "../lib/approval-bridge-audit.js";
@@ -1955,6 +1962,7 @@ const ephemeralSiteToolConsentStore = createEphemeralSiteToolConsentStore();
 // Every lookup also rechecks the run's captured reset epoch and abort signal.
 const activeAttachedWebmcpRuns = new Map();
 const cancellingApprovalExecutions = new Set();
+const executionApprovals = createExecutionApprovalStore(64);
 let siteToolProfileEpoch = 0;
 let siteToolResetting = 0;
 // A separate WAL principal for an exact, live, unenrolled run/document.
@@ -2194,6 +2202,8 @@ function finalizeExecution(execId) {
   // by the caller's finally. The recorded events stay readable.
   activeExecutions.delete(execId);
   cancellingApprovalExecutions.delete(execId);
+  const execApprovals = ownerApprovalStore?.executionApprovals || (typeof executionApprovals !== "undefined" ? executionApprovals : null);
+  execApprovals?.cleanupExecution(execId);
   const slot = recentRunAttestations.get(execId);
   if (slot) slot.finalized = true;
 }
@@ -4209,10 +4219,13 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
         // canonical redactor strips credential-shaped keys/values FIRST
         // (nothing secret-shaped reaches the serializer), then journalJson
         // emits valid bounded JSON (redactSecretText covers bare strings).
-        const args = event.toolArgs != null ? journalJson(redactSecrets(event.toolArgs)) : "";
+        let args = "";
+        if (event.toolArgs != null) {
+          try { args = journalJson(redactSecrets(event.toolArgs)); } catch { args = "\"[unserializable]\""; }
+        }
         const log = { type: "tool-call", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", args };
         journalAppend(mem, log).catch(() => {});
-        durableRuns.appendLog(executionId, log, `tool-call:${callId}`).catch(() => {});
+        durableRuns.appendLog(executionId, normalizeDurableToolCall(log), `tool-call:${callId}`).catch(() => {});
       } else if (type === "tool-result") {
         let result;
         if (event.result == null) result = "";
@@ -4225,7 +4238,7 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
           const d = redactToolResult(event.result);
           // journalJson (not a mid-string slice) bounds the persisted text —
           // a sliced payload corrupted the replay's structured render.
-          try { result = journalJson(d); } catch { result = String(d ?? event.result); }
+          try { result = journalJson(d); } catch { result = "\"[unserializable]\""; }
         }
         // Match the OLDEST pending callId for this tool name (FIFO — parallel
         // same-name calls pair in order) + persist the ok flag so a replay can
@@ -4236,7 +4249,7 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
         orphanSeq.set(event.toolName, orphanN);
         // An unmatched result gets a UNIQUE id (never a repeated ":1" that
         // would collapse multiple orphan results into one card).
-        const callId = q.shift() ?? `${taskId}:${runInstance}:${event.toolName ?? "tool"}:orphan:${orphanN}`;
+        const callId = event.callId || event.toolCallId || (q.shift() ?? `${taskId}:${runInstance}:${event.toolName ?? "tool"}:orphan:${orphanN}`);
         // Continuation fidelity: the compact tool summary (name + ok only —
         // never args or result bodies) rides the settle payload -> terminal
         // thread row so a resumed run knows which tools ran.
@@ -4245,20 +4258,31 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
         // (bounded: the same shape normalizePermissionRequirement accepts) so
         // a reopened thread can render the grant card, not prose (§2b).
         const ownerSiteActivity = boundedOwnerSiteActivity(event.siteActivity);
-        const pr = event.permissionRequirement;
+        const reqApprovals = Array.isArray(event.permissionRequirement?.approvals)
+          ? event.permissionRequirement.approvals
+          : [];
+        let settledApp = null;
+        const execApprovals = ownerApprovalStore?.executionApprovals || (typeof executionApprovals !== "undefined" ? executionApprovals : null);
+        if (execApprovals) {
+          for (const a of reqApprovals) {
+            if (a?.approvalId && execApprovals.has(a.approvalId)) {
+              settledApp = execApprovals.consume(a.approvalId);
+              break;
+            }
+          }
+          if (!settledApp && typeof event.approvalId === "string" && event.approvalId && execApprovals.has(event.approvalId)) {
+            settledApp = execApprovals.consume(event.approvalId);
+          }
+          if (!settledApp && callId && execApprovals.has(callId)) {
+            settledApp = execApprovals.consume(callId);
+          }
+        }
+        const pr = event.permissionRequirement ?? settledApp?.requirement;
+        const permDecision = (typeof event.permissionDecision === "string" ? event.permissionDecision : null) ?? settledApp?.decision ?? (settledApp ? "approved" : null);
         const permissionReq = pr && typeof pr === "object" && !Array.isArray(pr)
           ? {
-            permissionRequirement: {
-              reason: String(pr.reason ?? "").slice(0, 240),
-              permissions: (Array.isArray(pr.permissions) ? pr.permissions : []).filter((x) => typeof x === "string").slice(0, 8),
-              grantOrigins: (Array.isArray(pr.grantOrigins) ? pr.grantOrigins : []).filter((x) => typeof x === "string").slice(0, 50),
-              grantGlobal: pr.grantGlobal === true,
-              // Site access asks survive the reload too (READ-PAGE-HOST-GRANT-01).
-              ...(Array.isArray(pr.hostOrigins) && pr.hostOrigins.length
-                ? { hostOrigins: pr.hostOrigins.filter((x) => typeof x === "string").slice(0, 50) }
-                : {}),
-            },
-            permissionDecision: typeof event.permissionDecision === "string" ? event.permissionDecision.slice(0, 16) : null,
+            permissionRequirement: pr,
+            permissionDecision: typeof permDecision === "string" ? permDecision.slice(0, 16) : null,
             // Approved, then re-run by the runtime — the reopened card says so
             // (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01).
             ...(event.reexecuted === true ? { reexecuted: true } : {}),
@@ -4276,7 +4300,7 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
         const durableLog = typeof event.resultFull === "string" && event.resultFull
           ? { ...log, resultFull: event.resultFull, resultFullTruncated: event.resultFullTruncated === true, resultFullBytes: Number(event.resultFullBytes) || 0 }
           : log;
-        durableRuns.appendLog(executionId, durableLog, `tool-result:${callId}`).catch(() => {});
+        durableRuns.appendLog(executionId, normalizeDurableToolResult(durableLog), `tool-result:${callId}`).catch(() => {});
         durableRuns.heartbeat(executionId, { progressed: true }).catch(() => {
           heartbeatFailed = true;
           try { orch?.abort?.(); } catch { /* already stopped */ }
@@ -5338,6 +5362,7 @@ function noteOpenTabsChanged() {
     broadcastProgress({ type: "open-tabs-changed" });
   }, 300);
 }
+chrome.tabs?.onCreated?.addListener(() => noteOpenTabsChanged());
 chrome.tabs?.onUpdated?.addListener((_tabId, info) => {
   if (info?.status === "complete" || typeof info?.url === "string") noteOpenTabsChanged();
 });
@@ -5466,6 +5491,7 @@ async function recordWebmcpPageReport(origin, acceptedTools) {
 
 // ── owner-bound destructive-operation approvals ──────────────────────────
 const ownerApprovalStore = createApprovalStore();
+ownerApprovalStore.executionApprovals = executionApprovals;
 const inlinePermissionWaiters = new Map();
 const acpRunPermissions = createAcpRunPermissions({ isActive: (id) => activeExecutions.has(id) });
 const INLINE_PERMISSION_TTL_MS = 60_000;
@@ -5639,14 +5665,41 @@ async function requireOwnerApproval(context, action, target, payload, detail = u
     ]).finally(() => { if (decisionTimer) clearTimeout(decisionTimer); });
     if (!decision || decision.decision !== "approved") {
       resolvePendingApproval(ownerApprovalStore, pending.approvalId, false);
-      return { ok: false, error: decision?.decision === "timeout" ? `Owner approval for ${action} timed out after 60s.` : "Owner denied approval for this operation.", approvalDenied: true, action };
+      const settledState = decision?.decision === "cancelled" ? "cancelled" : decision?.decision === "timeout" ? "expired" : "denied";
+      if (pending?.approvalId) {
+        const callId = context?.callId || detail?.callId || null;
+        const execApprovals = ownerApprovalStore?.executionApprovals || (typeof executionApprovals !== "undefined" ? executionApprovals : null);
+        execApprovals?.register({
+          canonicalId: pending.approvalId,
+          aliases: callId ? [callId] : [],
+          requirement: request.permissionRequirement,
+          decision: settledState,
+          tool: detail?.tool,
+          executionId,
+        });
+      }
+      context.onApprovalEvent?.({ type: "approval-settled", approvalId: pending.approvalId, state: settledState });
+      return { ok: false, error: decision?.decision === "timeout" ? `Owner approval for ${action} timed out after 60s.` : decision?.decision === "cancelled" ? (decision.error || "Invocation cancelled.") : "Owner denied approval for this operation.", approvalDenied: true, action };
     }
     if (!activeExecutions.has(executionId) || cancellingApprovalExecutions.has(executionId) || endedExecutions.has(executionId)) {
+      context.onApprovalEvent?.({ type: "approval-settled", approvalId: pending.approvalId, state: "cancelled" });
       return { ok: false, error: "The run was cancelled before approval could be applied.", approvalDenied: true, action };
     }
     const exact = consumeApproved(ownerApprovalStore, executionId, action, target, digest);
     if (exact.ok) {
       securityApprovalEvent("consumed", action, targetRef);
+      if (pending?.approvalId) {
+        const callId = context?.callId || detail?.callId || null;
+        const execApprovals = ownerApprovalStore?.executionApprovals || (typeof executionApprovals !== "undefined" ? executionApprovals : null);
+        execApprovals?.register({
+          canonicalId: pending.approvalId,
+          aliases: callId ? [callId] : [],
+          requirement: request.permissionRequirement,
+          decision: "approved",
+          tool: detail?.tool,
+          executionId,
+        });
+      }
       context.onApprovalEvent({ type: "approval-settled", approvalId: pending.approvalId, state: "granted" });
       return { ok: true };
     }
@@ -8385,9 +8438,15 @@ const handlers = mergeRouteMaps(
           const execs = new Set(execList.map((e) => e.executionId));
           const pending = [];
           for (const [approvalId, app] of ownerApprovalStore.approvals.entries()) {
-            if (app?.status === "pending" && execs.has(app.runId)) {
+            if (execs.has(app.runId)) {
               const req = approvalCardDenial({ approvalId, action: app.action, targetRef: app.targetRef, detail: app.detail })?.permissionRequirement;
-              if (req) pending.push({ role: "approval", requirement: req, executionId: app.runId, ts: app.createdAt ?? Date.now() });
+              if (req) pending.push({
+                role: "approval",
+                requirement: req,
+                executionId: app.runId,
+                ts: app.createdAt ?? Date.now(),
+                state: app.status ?? "pending",
+              });
             }
           }
           if (pending.length && Array.isArray(view?.messages)) view.messages = [...view.messages, ...pending];
@@ -11739,11 +11798,11 @@ const handlers = mergeRouteMaps(
       // envelope write/read-back precedes the SOLE enrolled:true registry flip.
       // Never call legacy enrollOrigin here: it publishes before migration.
       const existing = await enrollmentSnapshot(canonical);
+      const profileEpoch = siteToolProfileEpoch;
+      const guard = () => siteToolResetting === 0 && siteToolProfileEpoch === profileEpoch;
       if (!existing.enrolled) {
         const hostGranted = await chrome.permissions.contains({ origins: [`${canonical}/*`] }).catch(() => false);
         if (!hostGranted) return { ok: false, error: "host permission is required for this owner enrollment" };
-        const profileEpoch = siteToolProfileEpoch;
-        const guard = () => siteToolResetting === 0 && siteToolProfileEpoch === profileEpoch;
         let prepared = null;
         try {
           const prior = (await listPendingEnrollmentPromotions()).find((row) => row.origin === canonical);
@@ -11785,6 +11844,8 @@ const handlers = mergeRouteMaps(
           // A run can settle just after the durable flip; its token dies, but
           // the verified, enrolled generation is already the authority.
         }
+      } else {
+        await reEnrollOrigin(canonical, { commitGuard: guard });
       }
       const snapBefore = await enrollmentSnapshot(canonical);
       // Exact host permission and BOTH dynamic script ids were confirmed
@@ -12100,6 +12161,22 @@ const handlers = mergeRouteMaps(
         validAttachments.push(a);
       }
     }
+    let liveThreadId = threadId;
+    if (liveThreadId) {
+      const cont = await continueThread(liveThreadId, task, validAttachments).catch((e) => {
+        pushDiagnostic("error", `[thread] delegate continueThread failed: ${String(e?.message ?? e).slice(0, 200)}`);
+        return null;
+      });
+      if (cont?.thread) liveThreadId = cont.thread.id;
+    } else {
+      const thread = await createThread(task, validAttachments).catch((e) => {
+        pushDiagnostic("error", `[thread] delegate createThread failed: ${String(e?.message ?? e).slice(0, 200)}`);
+        return null;
+      });
+      liveThreadId = thread?.id ?? null;
+      if (liveThreadId) nameThreadAsync(liveThreadId, task).catch(() => {});
+    }
+
     // Capture the provider config once. The durable resume request, gate, pause,
     // and eventual dispatch are all bound to this exact non-secret identity and
     // requested host scope.
@@ -12120,7 +12197,7 @@ const handlers = mergeRouteMaps(
       // never recreate a site store after disenrollment. The per-site audit row
       // below remains generation-fenced telemetry.
       journalTarget: "master",
-      resumeRequest: { route: "agent.delegate", origin: canonical, task: String(task ?? ""), attachments: sanitizeAttachments(validAttachments) ?? [], generation: gen, threadId: threadId ?? null, uiRunId, approvalResolverDocumentId, providerBinding: delegateProviderBinding, idempotencyKey: execId, replaySafety: { classification: "unknown-until-tool-progress", automaticReplayBeforeProgress: true } },
+      resumeRequest: { route: "agent.delegate", origin: canonical, task: String(task ?? ""), attachments: sanitizeAttachments(validAttachments) ?? [], generation: gen, threadId: liveThreadId ?? null, uiRunId, approvalResolverDocumentId, providerBinding: delegateProviderBinding, idempotencyKey: execId, replaySafety: { classification: "unknown-until-tool-progress", automaticReplayBeforeProgress: true } },
     });
     // Failed admission was already compensated by start(); no readable
     // authority exists, so rollback would be both unnecessary and unsafe.
@@ -12242,6 +12319,81 @@ const handlers = mergeRouteMaps(
           recordRunAttestation(bound);
         });
         a.setProgress?.((event) => {
+          if (event && (event.type === "tool-call" || event.type === "tool-result")) {
+            try {
+              const callId = event.callId || event.toolCallId || newId();
+              if (event.type === "tool-call") {
+                let args = "";
+                if (event.toolArgs != null) {
+                  try { args = journalJson(redactSecrets(event.toolArgs)); } catch { args = "\"[unserializable]\""; }
+                }
+                const log = { type: "tool-call", id: logicalId, executionId: execId, callId, tool: boundedAndRedacted(event.toolName ?? "tool", 128), args, at: Date.now() };
+                durableRuns.appendLog(execId, normalizeDurableToolCall(log), `tool-call:${callId}`).catch(() => {});
+              } else if (event.type === "tool-result") {
+                const ownerSiteActivity = boundedOwnerSiteActivity(event.siteActivity) || (canonical ? { origin: canonical, tool: event.selectedTool ?? event.toolName } : null);
+                if (ownerSiteActivity && !event.siteActivity) event = { ...event, siteActivity: ownerSiteActivity };
+                const reqApprovals = Array.isArray(event.permissionRequirement?.approvals)
+                  ? event.permissionRequirement.approvals
+                  : [];
+                let settledApp = null;
+                const execApprovals = ownerApprovalStore?.executionApprovals || (typeof executionApprovals !== "undefined" ? executionApprovals : null);
+                if (execApprovals) {
+                  for (const a of reqApprovals) {
+                    if (a?.approvalId && execApprovals.has(a.approvalId)) {
+                      settledApp = execApprovals.consume(a.approvalId);
+                      break;
+                    }
+                  }
+                  if (!settledApp && typeof event.approvalId === "string" && event.approvalId && execApprovals.has(event.approvalId)) {
+                    settledApp = execApprovals.consume(event.approvalId);
+                  }
+                  if (!settledApp && callId && execApprovals.has(callId)) {
+                    settledApp = execApprovals.consume(callId);
+                  }
+                }
+                const selectedTool = (typeof event.selectedTool === "string" && event.selectedTool) ? event.selectedTool : (settledApp?.tool ?? null);
+                const pr = event.permissionRequirement ?? settledApp?.requirement;
+                const permDecision = (typeof event.permissionDecision === "string" ? event.permissionDecision : null) ?? settledApp?.decision ?? (settledApp ? "approved" : null);
+                const permissionReq = pr && typeof pr === "object" && !Array.isArray(pr)
+                  ? {
+                    permissionRequirement: pr,
+                    permissionDecision: typeof permDecision === "string" ? permDecision.slice(0, 16) : null,
+                    ...(event.reexecuted === true ? { reexecuted: true } : {}),
+                  }
+                  : {};
+                let result = "";
+                if (event.result != null) {
+                  const d = redactToolResult(event.result);
+                  try { result = journalJson(d); } catch { result = "\"[unserializable]\""; }
+                }
+                const log = {
+                  type: "tool-result",
+                  id: logicalId,
+                  executionId: execId,
+                  callId,
+                  tool: event.toolName ?? "tool",
+                  result,
+                  ok: event.ok ?? null,
+                  ...(selectedTool ? { selectedTool } : {}),
+                  ...(ownerSiteActivity ? { siteActivity: ownerSiteActivity } : {}),
+                  ...permissionReq,
+                  at: Date.now(),
+                };
+                let resultFull;
+                if (typeof event.resultFull === "string" && event.resultFull) {
+                  try {
+                    resultFull = journalJson(redactToolResult(event.resultFull), { maxBytes: 65536 });
+                  } catch {
+                    resultFull = "\"[unserializable]\"";
+                  }
+                }
+                const durableLog = resultFull
+                  ? { ...log, resultFull, resultFullTruncated: event.resultFullTruncated === true, resultFullBytes: Number(event.resultFullBytes) || 0 }
+                  : log;
+                durableRuns.appendLog(execId, normalizeDurableToolResult(durableLog), `tool-result:${callId}`).catch(() => {});
+              }
+            } catch { /* best effort */ }
+          }
           // UI broadcasts ride the UI correlation id when one was supplied
           // (the conversation fences on the UI attempt's runId); execId stays
           // the durable authority everywhere else.
@@ -12347,11 +12499,21 @@ const handlers = mergeRouteMaps(
           );
         }
       });
+      if (liveThreadId && typeof commitThreadTerminal === "function") {
+        await commitThreadTerminal(liveThreadId, execId, {
+          role: (delegatedAborted || !delegatedOk) ? "error" : "assistant",
+          content: delegatedAborted
+            ? "delegation aborted"
+            : !delegatedOk
+              ? String(outcome?.error ?? "delegation failed")
+              : (typeof result === "string" ? result : JSON.stringify(result ?? "")),
+        }).catch(() => {});
+      }
       return delegatedAborted
-        ? { ok: false, aborted: true, executionId: execId, error: "delegation aborted", errorReason: "the delegated worker was aborted", errorAction: "the delegated run stopped before completing", errorCategory: "aborted", ...(dropped.length ? { droppedAttachments: dropped } : {}) }
+        ? { ok: false, aborted: true, executionId: execId, threadId: liveThreadId, error: "delegation aborted", errorReason: "the delegated worker was aborted", errorAction: "the delegated run stopped before completing", errorCategory: "aborted", ...(dropped.length ? { droppedAttachments: dropped } : {}) }
         : delegatedOk
-          ? { ok: true, origin: canonical, result, executionId: execId, ...(dropped.length ? { droppedAttachments: dropped } : {}) }
-          : { ok: false, error: String(outcome?.error ?? "delegation failed"), executionId: execId, ...(dropped.length ? { droppedAttachments: dropped } : {}) };
+          ? { ok: true, origin: canonical, result, executionId: execId, threadId: liveThreadId, ...(dropped.length ? { droppedAttachments: dropped } : {}) }
+          : { ok: false, error: String(outcome?.error ?? "delegation failed"), executionId: execId, threadId: liveThreadId, ...(dropped.length ? { droppedAttachments: dropped } : {}) };
         });
       },
     });

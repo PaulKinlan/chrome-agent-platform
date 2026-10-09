@@ -20,7 +20,7 @@
         define("shop.coupon", "Check a coupon code", { type: "object", properties: { code: { type: "string" } } }, (args) => ({ valid: args?.code === "SAVE10" }));
       }, 700);
 
-      document.modelContext = {
+      const polyfill = {
         getTools: async () => Array.from(tools.values()).map((t) => ({
           name: t.name,
           description: t.description,
@@ -32,10 +32,23 @@
           return t;
         },
         executeTool: async (tool, args) => {
-          if (tool?.execute) return tool.execute(args);
+          const parsed = typeof args === "string" ? (() => { try { return JSON.parse(args); } catch { return args; } })() : args;
+          const known = tools.get(tool?.name);
+          if (known?.execute) return known.execute(parsed);
+          if (tool?.execute) return tool.execute(parsed);
           return "executed";
         },
       };
+
+      try {
+        Object.defineProperty(document, "modelContext", {
+          value: polyfill,
+          configurable: true,
+          writable: true,
+        });
+      } catch {
+        document.modelContext = polyfill;
+      }
     })();
 
     // A collision DECOY: a page global with the SAME name as a declared WebMCP

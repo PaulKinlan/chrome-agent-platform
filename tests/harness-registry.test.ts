@@ -245,3 +245,16 @@ Deno.test("ryrr: every gate-class harness either TAKES the fleet turn or says wh
   assertEquals(silent, [], "gate-class entries must take the fleet turn or record why they do not (HarnessEntry.reason)");
   assertEquals(mismatched, [], "a gate-class entry with a 'does not take the turn' reason must NOT pass fleetSlot/acquireHeavyGateSlot in its source");
 });
+
+Deno.test("40vf4: webmcp-acceptance.ts harness-registry entry records the tested browser version", () => {
+  const entry = HARNESSES["webmcp-acceptance.ts"];
+  assert(entry, "webmcp-acceptance.ts must be registered");
+  assert(
+    typeof entry.testedAgainst === "string" && entry.testedAgainst.includes("154"),
+    `webmcp-acceptance.ts must record testedAgainst with Chrome 154: got ${entry.testedAgainst}`,
+  );
+  assert(
+    typeof entry.chromeVersion === "string" && entry.chromeVersion.startsWith("154"),
+    `webmcp-acceptance.ts must record chromeVersion 154: got ${entry.chromeVersion}`,
+  );
+});

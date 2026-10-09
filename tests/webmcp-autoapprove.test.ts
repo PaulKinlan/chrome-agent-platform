@@ -4,6 +4,7 @@ import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/asse
 import {
   disenrollOrigin,
   enrollOrigin,
+  reEnrollOrigin,
   isApproved,
   listTools,
   pendingApprovals,
@@ -299,6 +300,32 @@ Deno.test("first-use consent: descriptor identity rejects hostile outer shapes w
   );
 });
 
+Deno.test("first-use consent: re-enrollment preserves sticky Deny while reverting Allow to ASK", async () => {
+  const origin = "https://re-enroll-sticky.example.com";
+  await enrollOrigin(origin);
+  await replaceTools(origin, [
+    { ...BOOK, name: "tool_allow" },
+    { ...BOOK, name: "tool_deny" },
+  ]);
+  const s1 = await toolConsentSnapshot(origin, "tool_allow");
+  await setToolConsentDecision(origin, "tool_allow", "allowed");
+  const s2 = await toolConsentSnapshot(origin, "tool_deny");
+  await setToolConsentDecision(origin, "tool_deny", "denied");
+
+  assertEquals((await toolConsentSnapshot(origin, "tool_allow")).state, "allowed");
+  assertEquals((await toolConsentSnapshot(origin, "tool_deny")).state, "denied");
+
+  // Re-enroll origin advances generation
+  const re = await reEnrollOrigin(origin);
+  assertEquals(re.enrolled, true);
+  assert(re.gen > s1.enrollmentGen);
+
+  // tool_allow must revert to ASK in the new generation
+  assertEquals((await toolConsentSnapshot(origin, "tool_allow")).state, "ask");
+  // tool_deny must remain sticky DENIED in the new generation!
+  assertEquals((await toolConsentSnapshot(origin, "tool_deny")).state, "denied");
+});
+
 Deno.test("first-use consent SW wiring: exact state drives availability, guard, card and audit", async () => {
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   assert(sw.includes("initialConsentByTool"));
@@ -320,4 +347,481 @@ Deno.test("first-use consent SW wiring: exact state drives availability, guard, 
   assert(!sw.includes("if (affected.length) await invalidateSiteToolWork(canonical);"));
   assert(!sw.includes("if (enrolled) return true;"), "enrollment blanket approval is gone");
   assertEquals((await listTools("https://consent-a.example.com")).length, 1);
+});
+
+Deno.test("T1 out-of-order: two calls to the SAME tool in ONE execution whose results arrive B-then-A receive own decisions and consume aliases once", async () => {
+  const { createExecutionApprovalStore } = await import("../extension/lib/owner-approval.js");
+  const store = createExecutionApprovalStore(64);
+
+  // Two calls to SAME tool in one execution
+  // Call A: callId "call-A", approvalId "ap-A", decision "approved"
+  store.register({
+    canonicalId: "ap-A",
+    aliases: ["call-A"],
+    requirement: { reason: "Call A" },
+    decision: "approved",
+    tool: "remove_from_cart",
+    executionId: "exec-1",
+  });
+
+  // Call B: callId "call-B", approvalId "ap-B", decision "denied"
+  store.register({
+    canonicalId: "ap-B",
+    aliases: ["call-B"],
+    requirement: { reason: "Call B" },
+    decision: "denied",
+    tool: "remove_from_cart",
+    executionId: "exec-1",
+  });
+
+  // Both records and all aliases exist before consumption
+  assertEquals(store.size, 2);
+  assert(store.has("ap-A"));
+  assert(store.has("call-A"));
+  assert(store.has("ap-B"));
+  assert(store.has("call-B"));
+
+  // Out of order arrival: B arrives FIRST
+  const consumedB = store.consume("call-B");
+  assert(consumedB != null, "Result B must match its exact call ID");
+  assertEquals(consumedB.decision, "denied");
+  assertEquals(consumedB.canonicalId, "ap-B");
+
+  // Assert B and ALL its aliases are atomically deleted
+  assertEquals(store.has("call-B"), false, "call-B must be deleted");
+  assertEquals(store.has("ap-B"), false, "ap-B alias must be deleted atomically with call-B");
+
+  // Assert A's record and aliases are completely untouched
+  assertEquals(store.size, 1);
+  assert(store.has("call-A"), "call-A must remain intact");
+  assert(store.has("ap-A"), "ap-A must remain intact");
+
+  // Assert second consume on B returns null (no double consumption)
+  assertEquals(store.consume("call-B"), null, "call-B cannot be consumed twice");
+  assertEquals(store.consume("ap-B"), null, "ap-B cannot be consumed twice");
+
+  // Now result A arrives
+  const consumedA = store.consume("call-A");
+  assert(consumedA != null, "Result A must match its exact call ID");
+  assertEquals(consumedA.decision, "approved");
+  assertEquals(consumedA.canonicalId, "ap-A");
+
+  // Assert A and ALL its aliases are atomically deleted
+  assertEquals(store.has("call-A"), false, "call-A must be deleted");
+  assertEquals(store.has("ap-A"), false, "ap-A alias must be deleted atomically with call-A");
+  assertEquals(store.size, 0, "No records or aliases survive in the store");
+  assertEquals(store.consume("call-A"), null);
+  assertEquals(store.consume("ap-A"), null);
+});
+
+Deno.test("T2 persistence: every field reaching the durable log bounds and redacts long and secret inputs at the persisted value", async () => {
+  const {
+    boundedAndRedacted,
+    normalizeDurableToolCall,
+    normalizeDurableToolResult,
+  } = await import("../extension/lib/pure.js");
+
+  const longTail = "x".repeat(1000);
+  const secretApiKey = "sk-proj-1234567890abcdef1234567890abcdef";
+  const secretGitHub = "ghp_1234567890abcdefghijklmnopqrstuvwxyz";
+
+  const rawDurableLog = {
+    type: "tool-result",
+    id: "task-1",
+    executionId: "exec-1",
+    callId: "call-1",
+    tool: `tool_name_${secretApiKey}_${longTail}`,
+    selectedTool: `selected_${secretGitHub}_${longTail}`,
+    siteActivity: {
+      origin: `https://user:password123@example.com/api?token=${secretApiKey}&other=val#${longTail}`,
+      tool: `site_tool_${secretGitHub}_${longTail}`,
+    },
+    permissionRequirement: {
+      reason: `Blocked due to api_key=${secretApiKey} and secret=${secretGitHub} ${longTail}`,
+      permissions: [`perm_${secretApiKey}_${longTail}`],
+      grantOrigins: [`https://secret:auth@grant.com?key=${secretApiKey}&tail=${longTail}`],
+      hostOrigins: [`https://admin:pass@host.com?token=${secretGitHub}&tail=${longTail}`],
+      approvals: [
+        {
+          approvalId: `ap_${secretApiKey}_${longTail}`,
+          action: `action_${secretApiKey}_${longTail}`,
+          targetRef: `https://ref.com?secret=${secretApiKey}&tail=${longTail}`,
+          detail: {
+            kind: `kind_${secretApiKey}_${longTail}`,
+            origin: `https://user:secret@detail.com?key=${secretApiKey}&tail=${longTail}`,
+            tool: `detail_tool_${secretGitHub}_${longTail}`,
+            scope: `scope_${secretApiKey}_${longTail}`,
+          },
+        },
+      ],
+    },
+    result: '{"ok":true}',
+  };
+
+  const normalized = normalizeDurableToolResult(rawDurableLog);
+
+  // 1. Assert bounded limits
+  assert(normalized.tool.length <= 128, `tool length ${normalized.tool.length} exceeds 128`);
+  assert(normalized.selectedTool.length <= 128, `selectedTool length ${normalized.selectedTool.length} exceeds 128`);
+  assert(normalized.siteActivity.origin.length <= 240, `siteActivity.origin length ${normalized.siteActivity.origin.length} exceeds 240`);
+  assert(normalized.siteActivity.tool.length <= 128, `siteActivity.tool length ${normalized.siteActivity.tool.length} exceeds 128`);
+  assert(normalized.permissionRequirement.reason.length <= 240, `reason length ${normalized.permissionRequirement.reason.length} exceeds 240`);
+  assert(normalized.permissionRequirement.permissions[0].length <= 64, `permissions length exceeds 64`);
+  assert(normalized.permissionRequirement.grantOrigins[0].length <= 240, `grantOrigins length exceeds 240`);
+  assert(normalized.permissionRequirement.hostOrigins[0].length <= 240, `hostOrigins length exceeds 240`);
+
+  const app = normalized.permissionRequirement.approvals[0];
+  assert(app.approvalId.length <= 64, `approvalId length exceeds 64`);
+  assert(app.action.length <= 64, `action length exceeds 64`);
+  assert(app.targetRef.length <= 240, `targetRef length exceeds 240`);
+  assert(app.detail.kind.length <= 32, `detail.kind length exceeds 32`);
+  assert(app.detail.origin.length <= 240, `detail.origin length exceeds 240`);
+  assert(app.detail.tool.length <= 1024, `detail.tool length exceeds 1024`);
+  assert(app.detail.scope.length <= 32, `detail.scope length exceeds 32`);
+
+  // 2. Assert no secret pattern survived anywhere in the normalized entry
+  const json = JSON.stringify(normalized);
+  assert(!json.includes(secretApiKey), "secretApiKey must be redacted from durable log");
+  assert(!json.includes(secretGitHub), "secretGitHub must be redacted from durable log");
+  assert(!json.includes("password123"), "userinfo password must be redacted from durable log");
+  assert(!json.includes("user:secret@"), "user:secret must be redacted from durable log");
+  assert(!json.includes("secret:auth@"), "secret:auth must be redacted from durable log");
+  assert(!json.includes("admin:pass@"), "admin:pass must be redacted from durable log");
+  assert(!json.includes("?token="), "URL token query must be stripped from durable log");
+  assert(!json.includes("?key="), "URL key query must be stripped from durable log");
+});
+
+Deno.test("T3 durable append: actual appendLog path allowlists, bounds, and redacts adversarial input without throwing", async () => {
+  const {
+    normalizeDurableToolCall,
+    normalizeDurableToolResult,
+  } = await import("../extension/lib/pure.js");
+  const { createDurableRunRegistry } = await import("../extension/lib/durable-runs.js");
+  const { createMemoryRunLogHandles } = await import("./fixtures/run-log-wal-memory.js");
+
+  class MemoryStore {
+    values = new Map();
+    versions = new Map();
+    async get(k) { return structuredClone(this.values.get(k) ?? null); }
+    async has(k) { return this.values.has(k); }
+    async getVersion(k) { return this.versions.get(k) ?? 0; }
+    async snapshot(k) {
+      return { exists: this.values.has(k), value: this.values.has(k) ? structuredClone(this.values.get(k)) : null, version: this.versions.get(k) ?? 0 };
+    }
+    async setTrusted(k, v) {
+      const ver = (this.versions.get(k) ?? 0) + 1;
+      this.values.set(k, structuredClone(v));
+      this.versions.set(k, ver);
+      return ver;
+    }
+    async keys() { return [...this.values.keys()]; }
+    async compareAndDelete(k, expectedVersion) {
+      if ((this.versions.get(k) ?? 0) !== expectedVersion) return false;
+      this.values.delete(k);
+      this.versions.delete(k);
+      return true;
+    }
+    async compareAndRestore(key, expected, value) {
+      if ((this.versions.get(key) ?? 0) !== expected) return false;
+      await this.setTrusted(key, value);
+      return true;
+    }
+  }
+
+  const store = new MemoryStore();
+  const registry = createDurableRunRegistry({
+    store,
+    logHandleFor: createMemoryRunLogHandles(),
+  });
+
+  const executionId = "exec_adversarial_t3_12345678";
+  await registry.start({
+    executionId,
+    clientCorrelationId: "client-corr-1",
+    threadId: "thread-t3",
+    kind: "task",
+    taskPreview: "adversarial durable run",
+    journalTarget: "master",
+    resumeRequest: { id: "task-t3", task: "adversarial test", memoryOrigin: "master", providerBinding: { schemaVersion: 1, provider: "demo", model: "demo", requestedScope: null, local: true }, idempotencyKey: executionId },
+  });
+
+  // Construct adversarial inputs:
+  const secret100k = "sk-ant-api03-" + "A".repeat(100000);
+  const thousandItemArray = Array.from({ length: 1000 }, (_, i) => `item_${i}_${secret100k.slice(0, 30)}`);
+  const circularObj = { name: "circular-root" };
+  circularObj.self = circularObj;
+
+  // 1. Tool-Call entry with adversarial inputs & unknown extra fields
+  const rawToolCall = {
+    type: "tool-call",
+    id: "task-call-1",
+    executionId,
+    callId: "call-1",
+    tool: `tool_${secret100k}`,
+    args: JSON.stringify({ argKey: secret100k.slice(0, 500) }),
+    unknownExtraFieldOnCall: "should_be_dropped",
+    hostileNestedObject: circularObj,
+    unboundedArray: thousandItemArray,
+  };
+
+  // 2. Tool-Result entry with adversarial inputs, non-array grantOrigins, unknown extra fields, circular object, 100k secret, 1000-item array
+  const rawToolResult = {
+    type: "tool-result",
+    id: "task-result-1",
+    executionId,
+    callId: "call-1",
+    tool: `tool_${secret100k}`,
+    result: JSON.stringify({ output: "done" }),
+    ok: true,
+    unknownExtraFieldOnResult: "should_be_dropped",
+    circularField: circularObj,
+    siteActivity: {
+      origin: `https://user:password123@example.com?secret=${secret100k}`,
+      tool: `site_tool_${secret100k}`,
+      extraSiteActivityField: "dropped",
+    },
+    permissionRequirement: {
+      reason: `Blocked reason containing secret ${secret100k}`,
+      permissions: thousandItemArray,
+      grantOrigins: "not-an-array-origin-hostile-input", // NON-ARRAY grantOrigins
+      grantGlobal: false,
+      hostOrigins: thousandItemArray,
+      extraPermissionField: "dropped",
+      approvals: [
+        {
+          approvalId: `app_${secret100k}`,
+          action: `act_${secret100k}`,
+          targetRef: `https://ref.com?key=${secret100k}`,
+          detail: {
+            kind: `kind_${secret100k}`,
+            origin: `https://detail.com?token=${secret100k}`,
+            tool: `detail_tool_${secret100k}`,
+            scope: `scope_${secret100k}`,
+            circularDetail: circularObj,
+            extraDetailField: "dropped",
+          },
+          extraApprovalField: "dropped",
+        },
+      ],
+    },
+  };
+
+  // Verify falsification: raw adversarial input with circular references throws in appendLog
+  let rawAppendFailed = false;
+  try {
+    await registry.appendLog(executionId, rawToolResult, "tool-result:unnormalized");
+  } catch {
+    rawAppendFailed = true;
+  }
+  assertEquals(rawAppendFailed, true, "unnormalized adversarial input with circular structure must fail appendLog");
+
+  // Drive through the ACTUAL durable append path using the normalizers
+  // Must NOT throw
+  let callAppendErr = null;
+  let resultAppendErr = null;
+  try {
+    await registry.appendLog(executionId, normalizeDurableToolCall(rawToolCall), "tool-call:call-1");
+  } catch (err) {
+    callAppendErr = err;
+  }
+  try {
+    await registry.appendLog(executionId, normalizeDurableToolResult(rawToolResult), "tool-result:call-1");
+  } catch (err) {
+    resultAppendErr = err;
+  }
+
+  assertEquals(callAppendErr, null, "tool-call appendLog must not throw on adversarial/circular/huge input");
+  assertEquals(resultAppendErr, null, "tool-result appendLog must not throw on adversarial/circular/huge input");
+
+  // Read back the persisted records from durable storage
+  const persistedLogs = await registry.listLogs(executionId);
+  const persistedCall = persistedLogs.find((r) => r.type === "tool-call");
+  const persistedResult = persistedLogs.find((r) => r.type === "tool-result");
+
+  assert(persistedCall, "tool-call log must be persisted and readable");
+  assert(persistedResult, "tool-result log must be persisted and readable");
+
+  // Verify allowlisting and bounds on persisted tool-call:
+  assertEquals(persistedCall.unknownExtraFieldOnCall, undefined, "extra unknown field must be dropped from tool-call");
+  assertEquals(persistedCall.hostileNestedObject, undefined, "extra nested object must be dropped from tool-call");
+  assertEquals(persistedCall.unboundedArray, undefined, "extra array must be dropped from tool-call");
+  assert(persistedCall.tool.length <= 128, "persisted tool name must be bounded <= 128");
+  assert(persistedCall.tool.includes("[REDACTED]"), "persisted tool name must be redacted");
+  assert(!persistedCall.tool.includes("AAAAA"), "100k secret must not survive in persisted tool name");
+
+  // Verify allowlisting and bounds on persisted tool-result:
+  assertEquals(persistedResult.unknownExtraFieldOnResult, undefined, "extra unknown field must be dropped from tool-result");
+  assertEquals(persistedResult.circularField, undefined, "circular field must be dropped from tool-result");
+  assert(persistedResult.tool.length <= 128, "persisted tool name on result must be bounded <= 128");
+
+  // Verify non-array grantOrigins was coerced to empty array [] (no leak/raw value)
+  assert(Array.isArray(persistedResult.permissionRequirement.grantOrigins), "non-array grantOrigins must be coerced to array");
+  assertEquals(persistedResult.permissionRequirement.grantOrigins.length, 0, "non-array grantOrigins must become empty array");
+
+  // Verify permissionRequirement extra fields dropped
+  assertEquals(persistedResult.permissionRequirement.extraPermissionField, undefined, "extra field on permissionRequirement must be dropped");
+  assert(persistedResult.permissionRequirement.reason.length <= 240, "reason must be bounded <= 240");
+  assert(!persistedResult.permissionRequirement.reason.includes("AAAAA"), "100k secret must not survive in reason");
+  assert(persistedResult.permissionRequirement.reason.includes("[REDACTED]"), "secret must be redacted in reason");
+
+  // Verify array capping (thousandItemArray capped)
+  assert(persistedResult.permissionRequirement.permissions.length <= 8, "permissions array must be capped at 8");
+  assert(persistedResult.permissionRequirement.hostOrigins.length <= 50, "hostOrigins array must be capped at 50");
+
+  // Verify approval allowlisting & detail bounds
+  const app = persistedResult.permissionRequirement.approvals[0];
+  assert(app, "approval must be present in permissionRequirement");
+  assertEquals(app.extraApprovalField, undefined, "extraApprovalField must be dropped");
+  assertEquals(app.detail.extraDetailField, undefined, "extraDetailField must be dropped");
+  assertEquals(app.detail.circularDetail, undefined, "circularDetail must be dropped from detail");
+  assert(app.approvalId.length <= 64, "approvalId length <= 64");
+  assert(app.detail.origin.length <= 240, "detail.origin length <= 240");
+  assert(!app.detail.origin.includes("AAAAA"), "100k secret must not survive in detail.origin");
+  assert(app.detail.origin.includes("[REDACTED]") || app.detail.origin.includes("[query redacted]"), "secret must be redacted in detail.origin");
+
+  // Verify siteActivity allowlisting & bounds
+  assertEquals(persistedResult.siteActivity.extraSiteActivityField, undefined, "extraSiteActivityField must be dropped");
+  assert(persistedResult.siteActivity.origin.length <= 240, "siteActivity.origin length <= 240");
+  assert(!persistedResult.siteActivity.origin.includes("password123"), "userinfo password must be redacted from siteActivity");
+
+  // 3. Falsify and verify throwing getters on ALLOWLISTED fields
+  const throwingCall = {
+    type: "tool-call",
+    id: "task-call-2",
+    executionId,
+    callId: "call-throwing-2",
+  };
+  Object.defineProperty(throwingCall, "tool", {
+    get() { throw new Error("tool getter bomb"); },
+    enumerable: true,
+  });
+  Object.defineProperty(throwingCall, "args", {
+    get() { throw new Error("args getter bomb"); },
+    enumerable: true,
+  });
+
+  const throwingResult = {
+    type: "tool-result",
+    id: "task-result-2",
+    executionId,
+    callId: "call-throwing-2",
+    ok: true,
+  };
+  Object.defineProperty(throwingResult, "tool", {
+    get() { throw new Error("result tool getter bomb"); },
+    enumerable: true,
+  });
+  Object.defineProperty(throwingResult, "result", {
+    get() { throw new Error("result getter bomb"); },
+    enumerable: true,
+  });
+  const throwingSite = {};
+  Object.defineProperty(throwingSite, "origin", {
+    get() { throw new Error("origin getter bomb"); },
+    enumerable: true,
+  });
+  Object.defineProperty(throwingSite, "tool", {
+    get() { throw new Error("site tool getter bomb"); },
+    enumerable: true,
+  });
+  throwingResult.siteActivity = throwingSite;
+
+  const throwingPr = {};
+  Object.defineProperty(throwingPr, "reason", {
+    get() { throw new Error("reason getter bomb"); },
+    enumerable: true,
+  });
+  throwingResult.permissionRequirement = throwingPr;
+
+  // Confirm falsification: reading throwingCall.tool directly throws
+  assertThrows(() => { const _ = throwingCall.tool; }, Error, "tool getter bomb");
+  assertThrows(() => { const _ = throwingResult.result; }, Error, "result getter bomb");
+
+  // Normalizer and appendLog must NOT throw on throwing getters
+  let throwingCallErr = null;
+  let throwingResultErr = null;
+  try {
+    await registry.appendLog(executionId, normalizeDurableToolCall(throwingCall), "tool-call:call-throwing-2");
+  } catch (err) {
+    throwingCallErr = err;
+  }
+  try {
+    await registry.appendLog(executionId, normalizeDurableToolResult(throwingResult), "tool-result:call-throwing-2");
+  } catch (err) {
+    throwingResultErr = err;
+  }
+  assertEquals(throwingCallErr, null, "tool-call with throwing getter must not throw in appendLog");
+  assertEquals(throwingResultErr, null, "tool-result with throwing getter must not throw in appendLog");
+
+  // Read back throwing records from storage: must show bounded placeholder, not throw
+  const throwingLogs = await registry.listLogs(executionId);
+  const pThrowCall = throwingLogs.find((r) => r.idempotencyKey === "tool-call:call-throwing-2");
+  const pThrowResult = throwingLogs.find((r) => r.idempotencyKey === "tool-result:call-throwing-2");
+  assert(pThrowCall, "persisted throwing tool-call must be readable");
+  assert(pThrowResult, "persisted throwing tool-result must be readable");
+  assertEquals(pThrowCall.tool, "[unserializable]", "throwing tool getter must become [unserializable]");
+  assertEquals(pThrowCall.args, "[unserializable]", "throwing args getter must become [unserializable]");
+  assertEquals(pThrowResult.tool, "[unserializable]", "throwing result tool getter must become [unserializable]");
+  assertEquals(pThrowResult.result, "[unserializable]", "throwing result getter must become [unserializable]");
+  assertEquals(pThrowResult.siteActivity.origin, "[unserializable]", "throwing site origin getter must become [unserializable]");
+  assertEquals(pThrowResult.permissionRequirement.reason, "[unserializable]", "throwing reason getter must become [unserializable]");
+
+  // 4. Falsify and verify Object.create(null) on ALLOWLISTED fields
+  // Confirm falsification: String(Object.create(null)) throws TypeError in JavaScript
+  assertThrows(() => { String(Object.create(null)); }, TypeError);
+
+  const nullProtoCall = {
+    type: "tool-call",
+    id: "task-call-3",
+    executionId,
+    callId: "call-null-3",
+    tool: Object.create(null),
+    args: Object.create(null),
+  };
+
+  const nullProtoResult = {
+    type: "tool-result",
+    id: "task-result-3",
+    executionId,
+    callId: "call-null-3",
+    tool: Object.create(null),
+    result: Object.create(null),
+    ok: true,
+    siteActivity: {
+      origin: Object.create(null),
+      tool: Object.create(null),
+    },
+    permissionRequirement: {
+      reason: Object.create(null),
+      grantOrigins: [Object.create(null)],
+      permissions: [Object.create(null)],
+    },
+  };
+
+  let nullCallErr = null;
+  let nullResultErr = null;
+  try {
+    await registry.appendLog(executionId, normalizeDurableToolCall(nullProtoCall), "tool-call:call-null-3");
+  } catch (err) {
+    nullCallErr = err;
+  }
+  try {
+    await registry.appendLog(executionId, normalizeDurableToolResult(nullProtoResult), "tool-result:call-null-3");
+  } catch (err) {
+    nullResultErr = err;
+  }
+  assertEquals(nullCallErr, null, "tool-call with Object.create(null) must not throw in appendLog");
+  assertEquals(nullResultErr, null, "tool-result with Object.create(null) must not throw in appendLog");
+
+  const nullLogs = await registry.listLogs(executionId);
+  const pNullCall = nullLogs.find((r) => r.idempotencyKey === "tool-call:call-null-3");
+  const pNullResult = nullLogs.find((r) => r.idempotencyKey === "tool-result:call-null-3");
+  assert(pNullCall, "persisted null-proto call must be readable");
+  assert(pNullResult, "persisted null-proto result must be readable");
+  assert(typeof pNullCall.tool === "string", "null-proto tool must resolve to string");
+  assert(typeof pNullCall.args === "string", "null-proto args must resolve to string");
+  assert(typeof pNullResult.tool === "string", "null-proto result tool must resolve to string");
+  assert(typeof pNullResult.result === "string", "null-proto result must resolve to string");
+  assert(typeof pNullResult.siteActivity.origin === "string", "null-proto origin must resolve to string");
+  assert(typeof pNullResult.permissionRequirement.reason === "string", "null-proto reason must resolve to string");
 });
