@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.614] — 2026-10-09
+- All design-system shadow-DOM components enforce a 12px font scale floor via var(--text-xs, 12px) tokens and verified computed styles.
+
 ## [0.3.613] — 2026-10-09
 - WebMCP fixtures defensively shadow document.modelContext via Object.defineProperty to support prototype accessors; tool approvals correlate by exact call and approval IDs with single-use consumption and durable logs enforce bounded, redacted persistence across all metadata fields.
 

@@ -237,14 +237,55 @@ Deno.test("r4xk2: pinned selectors adhere to >= 12px font scale floor", () => {
   assert(optionsJs.includes('statusBadge.style.fontSize = "var(--text-xs, 12px)";'), "options statusBadge must be >= 12px");
 });
 
-Deno.test("r4xk2: shipped extension JS literal styles enforce >= 12px (shadow-DOM components.js excluded under dz3wi)", () => {
+Deno.test("dz3wi: extension/shared/components.js shadow-DOM styles enforce >= 12px floor (0 sub-12px declarations)", () => {
+  const shadowDomFile = join("extension", "shared", "components.js");
+  const violations = findSub12pxDeclarations([shadowDomFile]);
+  assertEquals(
+    violations.length,
+    0,
+    `Found ${violations.length} sub-12px font-size declaration(s) in components.js shadow-DOM violating docs/DESIGN.md:103-105 floor:\n` +
+      violations.map((v) => `  ${v.file}:${v.line} -> ${v.text} (matched: ${v.matched})`).join("\n"),
+  );
+});
+
+Deno.test("dz3wi: theme.css --text-* tokens are pinned to >= 12px floor", () => {
+  const themeCss = readFileSync("extension/shared/theme.css", "utf8");
+  assert(/--text-xs:\s*12px/.test(themeCss), "theme.css --text-xs must be pinned to 12px");
+  assert(/--text-sm:\s*13px/.test(themeCss), "theme.css --text-sm must be >= 12px");
+  assert(/--text-base:\s*14px/.test(themeCss), "theme.css --text-base must be >= 12px");
+});
+
+Deno.test("dz3wi: SVG font-size attributes in shipped JS enforce >= 12px floor", () => {
+  const jsFiles = walkFiles("extension", (name) => /\.js$/.test(name));
+  const svgFontSizeRegex = /\bfont-size\s*=\s*["']([0-9]+(?:\.[0-9]+)?)(?:px)?["']/gi;
+  const violations: Array<{ file: string; line: number; matched: string; val: number }> = [];
+  for (const file of jsFiles) {
+    const content = readFileSync(file, "utf8");
+    const lines = content.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      let match;
+      svgFontSizeRegex.lastIndex = 0;
+      while ((match = svgFontSizeRegex.exec(line)) !== null) {
+        const val = parseFloat(match[1]);
+        if (val < 12) {
+          violations.push({ file, line: i + 1, matched: match[0], val });
+        }
+      }
+    }
+  }
+  assertEquals(
+    violations.length,
+    0,
+    `Found ${violations.length} sub-12px SVG font-size attribute(s):\n` +
+      violations.map((v) => `  ${v.file}:${v.line} -> ${v.matched}`).join("\n"),
+  );
+});
+
+Deno.test("r4xk2: shipped extension JS literal styles enforce >= 12px", () => {
   const jsFiles = walkFiles("extension", (name) => /\.js$/.test(name));
   assert(jsFiles.length >= 20, `Expected at least 20 JS files in extension/, found ${jsFiles.length}`);
-  const shadowDomFile = join("extension", "shared", "components.js");
-  assert(jsFiles.includes(shadowDomFile), "dz3wi shadow-DOM exclusion must name a real shipped file");
-  // Do not silently turn this exemption into an all-extension claim: qazo owns
-  // components.js and dz3wi tracks its existing sub-12px shadow stylesheet.
-  const violations = findSub12pxJsStyleAssignments(jsFiles.filter((file) => file !== shadowDomFile));
+  const violations = findSub12pxJsStyleAssignments(jsFiles);
   assertEquals(
     violations.length,
     0,
