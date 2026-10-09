@@ -177,6 +177,10 @@ export async function readMasterJournalProjection(master, { includeArchive = fal
     if (!archive || archive.epoch !== head.epoch || !Array.isArray(archive.rows)) {
       throw new Error("master journal archive is missing or corrupt");
     }
+    if ((archive.exists !== undefined && typeof archive.exists !== "boolean") ||
+        (archive.exists === false && archive.rows.length > 0)) {
+      throw new Error("master journal archive existence is corrupt");
+    }
     result.archive = archiveCleared ? overflow : [...structuredClone(archive.rows), ...overflow];
     result.archiveExists = archiveCleared ? overflow.length > 0 : (archive.exists === true || result.archive.length > 0);
   }
@@ -230,6 +234,7 @@ export async function stageMasterJournalCutover(master, {
   if (typeof journalExists !== "boolean" || typeof archiveExists !== "boolean" ||
       !Array.isArray(journal) || !Array.isArray(archive) ||
       typeof allocateVersion !== "function") throw new Error("invalid legacy master journal cutover input");
+  if (!archiveExists && archive.length > 0) throw new Error("master journal archive existence contradicts retained rows");
   if (await readMasterJournalHead(master)) throw new Error("master journal is already cut over");
   const epoch = await allocateVersion();
   if (!safeInteger(epoch, 1)) throw new Error("invalid master journal cutover generation");

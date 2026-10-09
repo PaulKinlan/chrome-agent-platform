@@ -90,6 +90,26 @@ Deno.test("master journal cutover preserves absent versus present-empty", async 
   assertEquals((await readMasterJournalProjection(empty.master)).exists, true);
 });
 
+Deno.test("archive existence is checked and cannot contradict retained whole rows", async () => {
+  const invalid = await legacyFixture();
+  await assertRejects(() => stageMasterJournalCutover(invalid.master, {
+    journalExists: true, journal: [], archiveExists: false, archive: [{ id: "old" }],
+    allocateVersion: invalid.allocateVersion,
+  }), Error, "archive existence");
+  assertEquals(await readMasterJournalHead(invalid.master), null);
+
+  const valid = await legacyFixture();
+  const head = await stageMasterJournalCutover(valid.master, {
+    journalExists: true, journal: [], archiveExists: true, archive: [],
+    allocateVersion: valid.allocateVersion,
+  });
+  const wal = await valid.master.getDirectoryHandle("journal-wal");
+  (await wal.getFileHandle(head.archive)).bytes = encoder.encode(await sealMasterJournalRecord("archive", {
+    epoch: head.epoch, exists: "yes", rows: [],
+  }));
+  await assertRejects(() => readMasterJournalProjection(valid.master, { includeArchive: true }), Error, "archive existence");
+});
+
 Deno.test("failed archive publication cannot select staged checkpoint or displace legacy journal", async () => {
   const faults = { close: "archive-18-0.json" };
   const { master, legacy, allocateVersion } = await legacyFixture(faults);
