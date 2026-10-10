@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.652] — 2026-10-10
+- Sanitize parameter query strings in ACP bridge health checks
+
 ## [0.3.651] — 2026-10-10
 - Suppress ambiguous stderr after an unterminated terminal escape and report how many lines were discarded.
 

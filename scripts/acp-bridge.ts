@@ -969,21 +969,22 @@ export function createAcpServer(
     }
 
     if (url.pathname === "/health") {
-      const probeHarness = url.searchParams.get("harness")?.trim() || HARNESS;
+      const rawProbeHarness = url.searchParams.get("harness")?.trim() || HARNESS;
+      const probeHarness = sanitizeLogString(rawProbeHarness).slice(0, 128) || HARNESS;
       let defaultCwdValue = hostCwdDefault;
       let adapterDescribe = "";
       let adapterPresent = false;
       let error = "";
       try { defaultCwdValue = defaultCwd(); } catch { defaultCwdValue = ""; }
       try {
-        const resolved = resolveAdapter(probeHarness, adapterPathOverride);
+        const resolved = resolveAdapter(rawProbeHarness, adapterPathOverride);
         adapterDescribe = resolved.describe;
         // For an explicit --adapter (a file) we can say whether it exists; for
         // a registry package npx resolves (and if needed downloads) it at run
         // time, so "present" is not knowable here and is not claimed.
         adapterPresent = resolved.cmd === "node" ? Deno.statSync(resolved.args[0]).isFile : true;
       } catch (e) {
-        error = String((e as Error)?.message ?? e);
+        error = sanitizeLogString(String((e as Error)?.message ?? e));
       }
       // `ok` is the BRIDGE being up. A readiness probe would need a turn, so
       // this endpoint never pretends to know more than it does.
@@ -998,8 +999,8 @@ export function createAcpServer(
           adapterPresent,
           defaultCwd: defaultCwdValue,
           knownHarnesses: Object.keys(HARNESS_ADAPTERS),
-          harnessCli: HARNESS_CLI[probeHarness]?.cli ?? null,
-          harnessCliPath: HARNESS_CLI[probeHarness] ? (resolveCliOnPath(HARNESS_CLI[probeHarness].cli, Deno.env.get("PATH") ?? "") || null) : null,
+          harnessCli: HARNESS_CLI[rawProbeHarness]?.cli ?? null,
+          harnessCliPath: HARNESS_CLI[rawProbeHarness] ? (resolveCliOnPath(HARNESS_CLI[rawProbeHarness].cli, Deno.env.get("PATH") ?? "") || null) : null,
           ...(error ? { error } : {}),
         }),
         { headers: { "Content-Type": "application/json" } },
