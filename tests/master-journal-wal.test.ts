@@ -3,6 +3,7 @@ import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { dumpLogBuffer } from "../extension/lib/cap-log.js";
 import { createMasterJournalIssuer } from "../extension/lib/master-journal-issuer.js";
 import { inspectMasterJournalForOwner, snapshotMasterJournalRepairEvidence } from "../extension/lib/master-journal-owner-inspection.js";
+import { inspectIntactMasterJournalPrefixesForOwner } from "../extension/lib/master-journal-repair-prefix.js";
 import {
   selectPublishedMasterJournalBackupPaths,
   validateStagedMasterJournalBackup,
@@ -133,6 +134,45 @@ Deno.test("durable repair-intent witness refuses missing or unmatched head witho
   wal.children.delete("repair-intent-1.json");
   await assertRejects(() => readMasterJournalHead(master), Error, "repair witness is missing",
     "a checked head cannot discharge a removed witness by omission");
+});
+
+Deno.test("owner prefix inspection isolates an intact older head without selecting legacy authority", async () => {
+  const { master, legacy, allocateVersion } = await legacyFixture();
+  await stageMasterJournalCutover(master, { journalExists: true, journal: [{ id: "owned" }],
+    archive: [], allocateVersion });
+  await stageMasterJournalFrame(master, { operation: "append", row: { id: "newer" } },
+    { allocateVersion });
+  const wal = await master.getDirectoryHandle("journal-wal");
+  (await wal.getFileHandle("head-b.json")).bytes = encoder.encode("{ torn");
+  await assertRejects(() => readMasterJournalHead(master), Error);
+  const report = await inspectIntactMasterJournalPrefixesForOwner(master);
+  assertEquals(report.actionable, false);
+  assertEquals(report.candidates, []);
+  assertEquals(report.heads.find((entry) => entry.slot === "head-a.json")?.checked, true);
+  assertEquals(report.heads.find((entry) => entry.slot === "head-a.json")?.sequence, 0);
+  assertEquals(report.heads.find((entry) => entry.slot === "head-b.json")?.checked, false);
+  assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy,
+    "inspection never rewrites or selects legacy bytes");
+  await assertRejects(() => readMasterJournalProjection(master), Error); // not authority
+});
+
+Deno.test("owner prefix inspection refuses missing checked prefix or oversized evidence", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  await stageMasterJournalCutover(master, { journalExists: true, journal: [{ id: "owned" }],
+    archive: [], allocateVersion });
+  const wal = await master.getDirectoryHandle("journal-wal");
+  (await wal.getFileHandle("head-a.json")).bytes = encoder.encode("{ torn");
+  const damaged = await inspectIntactMasterJournalPrefixesForOwner(master);
+  assertEquals(damaged.actionable, false);
+  assertEquals(damaged.candidates, []);
+  assertEquals(damaged.heads.some((entry) => entry.checked), false,
+    "no intact prefix exists; legacy must not become a candidate");
+  for (let i = 0; i < 257; i++) {
+    (await wal.getFileHandle(`residue-${i}.json`, { create: true })).bytes = encoder.encode("x");
+  }
+  const bounded = await inspectIntactMasterJournalPrefixesForOwner(master);
+  assertEquals(bounded.state, "inspection_refused");
+  assertEquals(bounded.candidates, []);
 });
 
 Deno.test("a newer immutable repair intent cannot be discharged by an older signed head", async () => {
