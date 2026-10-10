@@ -20,17 +20,26 @@ import { DEFAULT_PARALLEL_TIMEOUT_MS as SELECT_PARALLEL_TIMEOUT_MS } from "../sc
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/u, "");
 
 /**
+ * Pure scale factor calculation given machine load and CPU count (chrome-agent-platform-v6kut).
+ * Caps strictly at maxScale (default 4x) regardless of ambient load spikes.
+ */
+export function computeLoadScale(load: number, cpus: number, maxScale = 4): number {
+  if (Number.isNaN(load) || !Number.isFinite(cpus) || cpus <= 0 || load <= 0) return 1;
+  const ratio = Math.max(1, load / cpus);
+  return Math.min(maxScale, ratio);
+}
+
+/**
  * Computes a load-scaled timeout for resilience tests (chrome-agent-platform-ln7uw).
  * Under gate load, Deno process initialization + TypeScript compilation can take
  * several seconds before line 1 of a test probe executes. Sizing the ready-marker
  * timeout with load (min 15s, ceiling 60s) prevents false-124 flakes on busy heavy slots.
  */
-export function loadScaledTimeout(baseMs = 15_000, maxScale = 4): number {
+export function loadScaledTimeout(baseMs = 15_000, maxScale = 4, load?: number, cpus?: number): number {
   try {
-    const load = Deno.loadavg()[0];
-    const cpus = navigator.hardwareConcurrency || 1;
-    const ratio = Math.max(1, load / cpus);
-    const scale = Math.min(maxScale, ratio);
+    const l = typeof load === "number" && !Number.isNaN(load) ? load : Deno.loadavg()[0];
+    const c = typeof cpus === "number" && !Number.isNaN(cpus) && cpus > 0 ? cpus : (navigator.hardwareConcurrency || 1);
+    const scale = computeLoadScale(l, c, maxScale);
     return Math.round(baseMs * scale);
   } catch {
     return baseMs;
@@ -316,10 +325,26 @@ Deno.test("passes immediately after marker", () => {});
   }
 });
 
-Deno.test("ln7uw: loadScaledTimeout is bounded and deterministic under varying load ratios", () => {
-  const tQuiet = loadScaledTimeout(15_000);
-  assert(tQuiet >= 15_000, `quiet timeout must be at least base 15s, got ${tQuiet}`);
-  assert(tQuiet <= 60_000, `quiet timeout must be capped at 4x ceiling, got ${tQuiet}`);
+Deno.test("v6kut: computeLoadScale and loadScaledTimeout are bounded, load-responsive, and capped at maxScale independent of ambient load", () => {
+  // Pure scale calculation across load spectrum (test-honesty: proven without ambient box state)
+  assertEquals(computeLoadScale(0, 1), 1, "zero/idle load returns floor scale 1");
+  assertEquals(computeLoadScale(1, 1), 1, "load equal to CPUs returns scale 1");
+  assertEquals(computeLoadScale(2, 1), 2, "load 2x CPUs returns scale 2");
+  assertEquals(computeLoadScale(3, 1), 3, "load 3x CPUs returns scale 3");
+  assertEquals(computeLoadScale(4, 1), 4, "load 4x CPUs returns maxScale 4");
+  assertEquals(computeLoadScale(100, 1), 4, "extreme load caps at maxScale 4");
+  assertEquals(computeLoadScale(Infinity, 1), 4, "infinite load caps strictly at maxScale 4");
+
+  // Non-finite or negative inputs fail safe to floor 1
+  assertEquals(computeLoadScale(NaN, 1), 1);
+  assertEquals(computeLoadScale(1, 0), 1);
+  assertEquals(computeLoadScale(-5, 1), 1);
+
+  // Injected load tests for loadScaledTimeout proving 60s ceiling on any box
+  assertEquals(loadScaledTimeout(15_000, 4, 0, 1), 15_000, "floor is 15s");
+  assertEquals(loadScaledTimeout(15_000, 4, 2, 1), 30_000, "2x load gives 30s");
+  assertEquals(loadScaledTimeout(15_000, 4, 100, 1), 60_000, "100x load capped at 60s ceiling");
+  assertEquals(loadScaledTimeout(15_000, 4, Infinity, 1), 60_000, "Infinity load capped at 60s ceiling");
 });
 
 Deno.test("1k2a: passing parallel test that leaves an orphan process has orphan reaped on exit", async () => {
