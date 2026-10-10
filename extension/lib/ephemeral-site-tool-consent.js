@@ -2,7 +2,7 @@
 // No siteMemory call, OPFS origin directory, or Site Agent is created here.
 // Only the service worker may hold a minted token; attachment text is not one.
 import { canonicalOrigin } from "./memory.js";
-import { siteToolIdentity } from "./site-tool-consent.js";
+import { siteToolIdentity, nameKey } from "./site-tool-consent.js";
 
 function fail(code) {
   const error = new Error(code);
@@ -14,9 +14,6 @@ function fail(code) {
 function boundedId(value) {
   return typeof value === "string" && value.length > 0 && value.length <= 200;
 }
-// Declared names are ASCII identifiers; case-only re-registration cannot
-// re-ask around a run-local Deny. Dispatch still uses the EXACT live name.
-function nameKey(name) { return name.toLowerCase(); }
 
 /** Each store is owned by one service-worker process, not durable across restart. */
 export function createEphemeralSiteToolConsentStore() {

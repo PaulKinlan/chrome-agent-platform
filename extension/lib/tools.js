@@ -25,6 +25,7 @@ import {
   storedSiteToolDenyProposals,
   writeAndVerifyPolicyConsent,
   withSiteToolConsentBarrier,
+  nameKey,
 } from "./site-tool-consent.js";
 
 export {
@@ -473,11 +474,20 @@ export async function prepareEnrollmentPromotion(origin, records, { commitGuard 
     return withSiteToolConsentBarrier(async () => {
       if (commitGuard && commitGuard() !== true) throw new Error("site_enrollment_promotion_cancelled");
       // Scripting Disable leaves an old-generation envelope behind. Under
-      // enrollment→consent, fold its sticky Deny by exact name into the durable
-      // intent; a run Allow can NEVER displace that Deny. Old Allow is ASK
-      // after the generation bump. No page-sourced inferred tool is admitted.
-      const folded = new Map(decisions.map((record) => [record.name, record]));
-      for (const denied of await storedSiteToolDenyProposals(canonical)) folded.set(denied.name, denied);
+      // enrollment→consent, fold its sticky Deny into the durable intent;
+      // a run Allow can NEVER displace that Deny across casing variants (Q23 / n6c31).
+      // Old Allow is ASK after the generation bump. No page-sourced inferred tool is admitted.
+      const folded = new Map();
+      const deniedList = await storedSiteToolDenyProposals(canonical);
+      const deniedKeys = new Set(deniedList.map((d) => nameKey(d.name)));
+      for (const record of decisions) {
+        if (!deniedKeys.has(nameKey(record.name))) {
+          folded.set(record.name, record);
+        }
+      }
+      for (const denied of deniedList) {
+        folded.set(denied.name, denied);
+      }
       const promotionPending = validateSiteToolPromotionRecords([...folded.values()]);
       const gen = await nextGeneration({ requireDurable: true });
       const pending = { enrolled: true, phase: "promotion-pending", gen,
