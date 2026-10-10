@@ -123,6 +123,7 @@ export async function readMasterJournalHead(master) {
   const validateIntent = (intent, sequence) => {
     if (!intent || intent.schemaVersion !== 1 || intent.sequence !== sequence ||
         !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(intent.id) ||
+        !/^[0-9a-f]{64}$/.test(intent.evidenceSha256) ||
         !["pre-head-residue", "torn-head", "orphan-record", "owner-repair"].includes(intent.reason) ||
         (sequence > 1 && (!intent.previousHead ||
           !safeInteger(intent.previousHead.epoch, 1) ||
@@ -230,7 +231,7 @@ export async function stageMasterJournalRepairIntent(master, { id, reason, expec
     previousId = head.repairIntentId;
   }
   return await writeCheckedRecord(directory, `repair-intent-${sequence}.json`, "repair-intent",
-    { schemaVersion: 1, sequence, id, reason,
+    { schemaVersion: 1, sequence, id, reason, evidenceSha256: expectedEvidenceSha256,
       ...(previousHead ? { previousHead, previousId } : {}) });
 }
 

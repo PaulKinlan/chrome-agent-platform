@@ -120,6 +120,8 @@ Deno.test("durable repair-intent witness refuses missing or unmatched head witho
     id: witnessId, reason: "pre-head-residue", expectedEvidenceSha256: firstEvidence.sha256,
   });
   assertEquals(staged.id, witnessId);
+  assertEquals(staged.evidenceSha256, firstEvidence.sha256,
+    "durable witness must retain the exact owner-observed source fingerprint");
   const witness = await wal.getFileHandle("repair-intent-1.json");
   const witnessBytes = witness.bytes.slice();
   const pendingEvidence = await fingerprintMasterJournalRepairEvidence(master);
