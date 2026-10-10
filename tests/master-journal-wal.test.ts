@@ -318,6 +318,34 @@ Deno.test("a newer immutable repair intent cannot be discharged by an older sign
     "a forged same-sequence head cannot discharge the newer intent");
 });
 
+Deno.test("reader refuses a forged checked re-repair chain that reuses an older witness ID", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  const head = await stageMasterJournalCutover(master, { journalExists: true,
+    journal: [{ id: "owned" }], archive: [], allocateVersion });
+  const wal = await master.getDirectoryHandle("journal-wal");
+  const id = "11111111-2222-4333-8444-555555555555";
+  (await wal.getFileHandle("repair-intent-1.json", { create: true })).bytes =
+    encoder.encode(await sealMasterJournalRecord("repair-intent", {
+      schemaVersion: 1, sequence: 1, id, reason: "pre-head-residue",
+      evidenceSha256: "a".repeat(64), requestedRepairRecords: [],
+    }));
+  (await wal.getFileHandle("repair-intent-2.json", { create: true })).bytes =
+    encoder.encode(await sealMasterJournalRecord("repair-intent", {
+      schemaVersion: 1, sequence: 2, id, reason: "owner-repair",
+      evidenceSha256: "b".repeat(64), requestedRepairRecords: [], previousId: id,
+      previousHead: { epoch: head.epoch, sequence: head.sequence, version: head.version },
+    }));
+  (await wal.getFileHandle("head-a.json")).bytes = encoder.encode(await sealMasterJournalRecord("head", {
+    ...head, repairIntentSequence: 1, repairIntentId: id,
+  }));
+  (await wal.getFileHandle("head-b.json", { create: true })).bytes =
+    encoder.encode(await sealMasterJournalRecord("head", {
+      ...head, sequence: head.sequence + 1, version: head.version + 1,
+      repairIntentSequence: 2, repairIntentId: id,
+    }));
+  await assertRejects(() => readMasterJournalHead(master), Error, "repair intent chain or ID is reused");
+});
+
 Deno.test("failed repair-intent close leaves non-overwritable fail-closed evidence", async () => {
   const { master, legacy } = await legacyFixture({ close: "repair-intent-1.json" });
   const input = { id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", reason: "pre-head-residue",
