@@ -2,7 +2,7 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { dumpLogBuffer } from "../extension/lib/cap-log.js";
 import { createMasterJournalIssuer } from "../extension/lib/master-journal-issuer.js";
-import { inspectMasterJournalForOwner } from "../extension/lib/master-journal-owner-inspection.js";
+import { inspectMasterJournalForOwner, snapshotMasterJournalRepairEvidence } from "../extension/lib/master-journal-owner-inspection.js";
 import {
   selectPublishedMasterJournalBackupPaths,
   validateStagedMasterJournalBackup,
@@ -92,6 +92,47 @@ async function legacyFixture(faults = {}) {
   }, readIssuedVersion: async (claim) => issued.get(claimKey(claim)) ?? null,
     readGeneration: async () => generation };
 }
+
+Deno.test("read-only owner repair evidence preserves pre-head residue and bounds its manifest", async () => {
+  const { master, legacy, allocateVersion } = await legacyFixture();
+  const wal = await master.getDirectoryHandle("journal-wal", { create: true });
+  const residue = await wal.getFileHandle("checkpoint-18-0.json", { create: true });
+  residue.bytes = encoder.encode("{torn");
+  const before = residue.bytes.slice();
+  const evidence = await snapshotMasterJournalRepairEvidence(master);
+  assertEquals(evidence.state, "requires_explicit_owner_repair");
+  assertEquals(evidence.authorityOutcomeRequired, true);
+  assertEquals(evidence.actionable, false);
+  assertEquals(evidence.candidates, []);
+  assertEquals(evidence.records.map((r) => r.name), ["checkpoint-18-0.json"]);
+  assertEquals(evidence.records[0].bytes, before.byteLength);
+  assertEquals(/^[0-9a-f]{64}$/.test(evidence.records[0].sha256), true);
+  assertEquals(residue.bytes, before, "planning cannot alter a torn record");
+  assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy);
+  await assertRejects(() => readMasterJournalHead(master), Error, "pre-head residue");
+  const limited = await snapshotMasterJournalRepairEvidence(master, { maxRecords: 0 });
+  assertEquals(limited.records, []);
+  assertEquals(limited.refusals.includes("master journal repair evidence record count exceeds limit"), true);
+  const tooLarge = await snapshotMasterJournalRepairEvidence(master, { maxRecordBytes: 2 });
+  assertEquals(tooLarge.records, []);
+  assertEquals(tooLarge.refusals.includes("master journal repair evidence record exceeds byte limit"), true);
+  const tooMuch = await snapshotMasterJournalRepairEvidence(master, { maxTotalBytes: 2 });
+  assertEquals(tooMuch.records, []);
+  assertEquals(tooMuch.refusals.includes("master journal repair evidence total bytes exceed limit"), true);
+  await wal.getDirectoryHandle("unclassified", { create: true });
+  const nested = await snapshotMasterJournalRepairEvidence(master);
+  assertEquals(nested.records, []);
+  assertEquals(nested.refusals.includes("master journal repair evidence has an unclassified directory or leaf"), true);
+  await wal.removeEntry("unclassified"); // fake-only cleanup, planning itself never removes
+  await wal.removeEntry("checkpoint-18-0.json"); // explicit fake-only cleanup
+  await stageMasterJournalCutover(master, { journalExists: true, journal: [{ id: "live" }],
+    archive: [], allocateVersion });
+  const published = await snapshotMasterJournalRepairEvidence(master);
+  assertEquals(published.state, "current_head_checked");
+  assertEquals(published.actionable, false,
+    "a metadata snapshot cannot authorize quarantine of either published head's dependencies");
+  assertEquals(published.candidates, []);
+});
 
 Deno.test("owner journal inspection describes corruption without selecting legacy fallback", async () => {
   const { master, allocateVersion } = await legacyFixture();
