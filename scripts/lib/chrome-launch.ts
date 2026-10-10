@@ -24,6 +24,7 @@
 // stderr; it is strictly weaker (probe-then-bind still races) and should not
 // be reached for by default.
 
+import { join } from "node:path";
 import { crypto } from "jsr:@std/crypto@1";
 import { acquireChromeSlot } from "./chrome-slots.ts";
 import {
@@ -482,6 +483,85 @@ export function chromeBaseArgs(opts: {
 }
 
 /**
+ * Validate that an unpacked extension directory is built and ready to load in Chrome.
+ * Fails loud and early if the directory, manifest.json, or declared build artifacts
+ * (e.g. extension/dist or background service worker) are missing, avoiding cryptic
+ * downstream page eval crashes.
+ */
+export function assertExtensionBuilt(extPath: string): void {
+  let st: Deno.FileInfo;
+  try {
+    st = Deno.statSync(extPath);
+  } catch (e) {
+    if (e instanceof Deno.errors.NotFound) {
+      throw new Error(
+        `launchChrome: the extension at ${extPath} does not exist — extension/dist not built - run npm run build:production`,
+      );
+    }
+    throw e;
+  }
+  if (!st.isDirectory) {
+    throw new Error(`launchChrome: extension path ${extPath} is not a directory`);
+  }
+
+  const manifestPath = join(extPath, "manifest.json");
+  let manifestText: string;
+  try {
+    manifestText = Deno.readTextFileSync(manifestPath);
+  } catch (e) {
+    if (e instanceof Deno.errors.NotFound) {
+      throw new Error(
+        `launchChrome: the extension at ${extPath} did not load: ${manifestPath} is missing — extension/dist not built - run npm run build:production`,
+      );
+    }
+    throw e;
+  }
+
+  let manifest: any;
+  try {
+    manifest = JSON.parse(manifestText);
+  } catch (e) {
+    throw new Error(
+      `launchChrome: the extension at ${extPath} did not load: manifest.json is invalid: ${(e as Error).message}`,
+    );
+  }
+
+  if (manifest.background && typeof manifest.background.service_worker === "string") {
+    const swRel = manifest.background.service_worker;
+    const swPath = join(extPath, swRel);
+    try {
+      Deno.statSync(swPath);
+    } catch (e) {
+      if (e instanceof Deno.errors.NotFound) {
+        throw new Error(
+          `launchChrome: the extension at ${extPath} did not load: ${swPath} is missing — extension/dist not built - run npm run build:production`,
+        );
+      }
+      throw e;
+    }
+  }
+
+  if (manifestText.includes("dist/") || extPath.replace(/[\/\\]$/, "").endsWith("extension")) {
+    const distPath = join(extPath, "dist");
+    try {
+      const distStat = Deno.statSync(distPath);
+      if (!distStat.isDirectory) {
+        throw new Error(
+          `launchChrome: the extension at ${extPath} did not load: ${distPath} is not a directory — extension/dist not built - run npm run build:production`,
+        );
+      }
+    } catch (e) {
+      if (e instanceof Deno.errors.NotFound) {
+        throw new Error(
+          `launchChrome: the extension at ${extPath} did not load: ${distPath} is missing — extension/dist not built - run npm run build:production`,
+        );
+      }
+      throw e;
+    }
+  }
+}
+
+/**
  * Spawn Chrome with a kernel-assigned debugging port and return its real
  * DevTools endpoint. `args` must NOT contain `--remote-debugging-port`; a
  * fixed port is the defect this module exists to remove, so passing one is a
@@ -555,6 +635,31 @@ export async function launchChrome(opts: {
     profile?: string,
   ) => Promise<void>;
 }): Promise<LaunchedChrome> {
+  const extras = opts.args ?? [];
+  const extPaths: string[] = [];
+  if (opts.extension) {
+    extPaths.push(opts.extension);
+  }
+  for (let i = 0; i < extras.length; i++) {
+    const arg = extras[i];
+    if (arg.startsWith("--load-extension=")) {
+      const raw = arg.slice("--load-extension=".length).replace(/^["']|["']$/g, "");
+      for (const p of raw.split(",")) {
+        const trimmed = p.trim();
+        if (trimmed) extPaths.push(trimmed);
+      }
+    } else if (arg === "--load-extension" && i + 1 < extras.length) {
+      const raw = extras[i + 1].replace(/^["']|["']$/g, "");
+      for (const p of raw.split(",")) {
+        const trimmed = p.trim();
+        if (trimmed) extPaths.push(trimmed);
+      }
+    }
+  }
+  for (const extPath of extPaths) {
+    assertExtensionBuilt(extPath);
+  }
+
   // chrome-agent-platform-ryrr: NEVER take the fleet turn while this process
   // already holds the canonical serialized-Chrome lock. The custody supervisor
   // (scripts/security-suite-supervisor.sh) holds that lock on fd 9 for its whole
@@ -623,7 +728,6 @@ export async function launchChrome(opts: {
       throw e;
     }
   }
-  const extras = opts.args ?? [];
   const fixed = extras.find((a) => a.startsWith("--remote-debugging-port"));
   if (fixed) {
     fleetLease?.release();
