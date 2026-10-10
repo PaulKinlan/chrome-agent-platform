@@ -150,6 +150,8 @@ Deno.test("owner prefix inspection isolates an intact older head without selecti
   assertEquals(report.candidates, []);
   assertEquals(report.heads.find((entry) => entry.slot === "head-a.json")?.checked, true);
   assertEquals(report.heads.find((entry) => entry.slot === "head-a.json")?.sequence, 0);
+  assertEquals(/^[0-9a-f]{64}$/.test(report.heads.find((entry) => entry.slot === "head-a.json")?.sha256 ?? ""), true,
+    "diagnostic metadata must bind the exact fingerprinted head bytes");
   assertEquals(report.heads.find((entry) => entry.slot === "head-b.json")?.checked, false);
   assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy,
     "inspection never rewrites or selects legacy bytes");

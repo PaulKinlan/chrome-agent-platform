@@ -41,7 +41,13 @@ export async function inspectIntactMasterJournalPrefixesForOwner(master) {
     try {
       const file = await handle.getFile();
       if (file.size > 65536) throw new Error("head exceeds owner diagnostic byte bound");
-      const selected = await unsealMasterJournalRecord(await file.arrayBuffer(), "head");
+      const bytes = await file.arrayBuffer();
+      const sha256 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+        .map((value) => value.toString(16).padStart(2, "0")).join("");
+      if (sha256 !== evidence.records.find((record) => record.name === slot)?.sha256) {
+        throw new Error("head changed after bounded owner evidence snapshot");
+      }
+      const selected = await unsealMasterJournalRecord(bytes, "head");
       const repairThrough = selected.repairIntentSequence ?? 0;
       const historicalDirectory = {
         async getFileHandle(name) {
@@ -62,7 +68,7 @@ export async function inspectIntactMasterJournalPrefixesForOwner(master) {
       if (!projection) throw new Error("diagnostic head is absent");
       const archive = await readMasterJournalArchiveChain(historicalMaster, projection.head,
         { includeRows: false });
-      heads.push({ slot, checked: true, epoch: projection.head.epoch,
+      heads.push({ slot, checked: true, sha256, epoch: projection.head.epoch,
         sequence: projection.head.sequence, version: projection.head.version,
         checkpointSequence: projection.head.checkpointSequence,
         archiveSegments: archive.names.length });
