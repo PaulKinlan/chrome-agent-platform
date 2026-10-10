@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.628] — 2026-10-10
+- Honor sticky tool consent Deny across name casing variants.
+
 ## [0.3.627] — 2026-10-10
 - Bound site documentation discovery parsing to prevent service worker stalls.
 - Harden third-party skill import boundary against forged fences.
