@@ -21,7 +21,7 @@ import { readFile, writeFile, rename, mkdir, rm, readdir, stat, lstat, chmod, ut
 import path, { join, extname } from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { boundedChildTimeoutMs, runBoundedChild } from "./scripts/lib/bounded-child.mjs";
 import { syncGallery } from "./scripts/sync-gallery.mjs";
@@ -401,7 +401,32 @@ try {
     // store, then re-runs frozen `deno install`, which re-links node_modules/zod
     // and node_modules/@modelcontextprotocol/sdk back to their .deno symlinks.
     // It never deletes npm-owned packages and never weakens the dedup guarantee.
+    const nmDir = path.join(ROOT, "node_modules");
     const denoStoreDir = path.join(ROOT, "node_modules", ".deno");
+    try {
+      if (lstatSync(nmDir).isSymbolicLink()) {
+        const target = readlinkSync(nmDir);
+        throw new Error(
+          `cap-security-dependency-resolve: ${nmDir} is a SYMLINK → ${target}. ` +
+          `A symlinked node_modules resolves dependencies into the shared target store rather than this worktree, ` +
+          `causing resolution mismatches and cross-lane store mutation. ` +
+          `Safe recovery in this worktree: rm -rf node_modules && npm ci && deno install, ` +
+          `never run deno install alone against a symlinked store.`
+        );
+      }
+      if (lstatSync(denoStoreDir).isSymbolicLink()) {
+        const target = readlinkSync(denoStoreDir);
+        throw new Error(
+          `cap-security-dependency-resolve: ${denoStoreDir} is a SYMLINK → ${target}. ` +
+          `A symlinked .deno store resolves dependencies into the shared target store rather than this worktree, ` +
+          `causing resolution mismatches and cross-lane store mutation. ` +
+          `Safe recovery in this worktree: rm -rf node_modules && npm ci && deno install, ` +
+          `never run deno install alone against a symlinked store.`
+        );
+      }
+    } catch (err) {
+      if (err?.message?.startsWith("cap-security-dependency-resolve:")) throw err;
+    }
     let denoEntries = [];
     try {
       denoEntries = readdirSync(denoStoreDir);

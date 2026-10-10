@@ -93,3 +93,99 @@ Deno.test("bbz3s: stale, mixed, flat and dangling AJV links fail closed against 
     for (const root of roots) Deno.removeSync(root, { recursive: true });
   }
 });
+
+Deno.test("c1e3s: symlinked node_modules or .deno store fails with actionable recovery message", () => {
+  const root = Deno.makeTempDirSync({ dir: durableDir("bbz3s-live-resolution"), prefix: "symlink-root-" });
+  const realStore = Deno.makeTempDirSync({ dir: durableDir("bbz3s-live-resolution"), prefix: "real-store-" });
+  try {
+    // Case 1: root/node_modules is a symlink to realStore
+    Deno.symlinkSync(realStore, join(root, "node_modules"));
+    const err = assertThrows(
+      () => assertLiveFastUriResolution({ root, sdkDir: join(realStore, "sdk") }),
+      Error,
+      "cap-security-dependency-resolve:",
+    );
+    assertStringIncludes(err.message, "is a SYMLINK →");
+    assertStringIncludes(err.message, "rm -rf node_modules && npm ci && deno install");
+    assertStringIncludes(err.message, "never run deno install alone against a symlinked store");
+
+    // Case 2: root/node_modules is real dir, but root/node_modules/.deno is a symlink
+    Deno.removeSync(join(root, "node_modules"));
+    Deno.mkdirSync(join(root, "node_modules"), { recursive: true });
+    Deno.symlinkSync(realStore, join(root, "node_modules", ".deno"));
+    const err2 = assertThrows(
+      () => assertLiveFastUriResolution({ root, sdkDir: join(realStore, "sdk") }),
+      Error,
+      "cap-security-dependency-resolve:",
+    );
+    assertStringIncludes(err2.message, "is a SYMLINK →");
+    assertStringIncludes(err2.message, "rm -rf node_modules && npm ci && deno install");
+    assertStringIncludes(err2.message, "never run deno install alone against a symlinked store");
+  } finally {
+    Deno.removeSync(root, { recursive: true });
+    Deno.removeSync(realStore, { recursive: true });
+  }
+});
+
+Deno.test("c1e3s: build.mjs refuses symlinked node_modules and .deno store BEFORE automatic deno install repair", async () => {
+  const buildScript = await Deno.readTextFile(new URL("../build.mjs", import.meta.url));
+  const preRepairBlock = buildScript.match(/const nmDir = path\.join\(ROOT, "node_modules"\);[\s\S]*?(?=let denoEntries = \[\];)/);
+  assert(preRepairBlock, "build.mjs must contain pre-repair symlink guard before let denoEntries");
+  assertStringIncludes(preRepairBlock[0], 'lstatSync(nmDir).isSymbolicLink()', "pre-repair guard must check nmDir");
+  assertStringIncludes(preRepairBlock[0], 'lstatSync(denoStoreDir).isSymbolicLink()', "pre-repair guard must check denoStoreDir");
+  const repairCallIndex = buildScript.indexOf('execFileSync("deno", ["install", "--frozen-lockfile"]');
+  assert(repairCallIndex > 0, "build.mjs must contain repair call");
+  assert(buildScript.indexOf('const nmDir = path.join(ROOT, "node_modules");') < repairCallIndex,
+    "pre-repair symlink check must execute before any repair execFileSync call");
+
+  // Dynamic execution test: run the pre-repair logic against mock layouts
+  const tmp = Deno.makeTempDirSync({ dir: durableDir("bbz3s-live-resolution"), prefix: "build-guard-" });
+  const realStore = Deno.makeTempDirSync({ dir: durableDir("bbz3s-live-resolution"), prefix: "real-store-" });
+  try {
+    const testRunner = `
+import fs, { lstatSync, readlinkSync } from "node:fs";
+import path from "node:path";
+const ROOT = process.argv[2];
+${preRepairBlock[0]}
+console.log("GUARD_PASSED");
+`;
+    const runnerScript = join(tmp, "runner.mjs");
+    Deno.writeTextFileSync(runnerScript, testRunner);
+
+    // Test 1: symlinked node_modules
+    const worktree1 = join(tmp, "wt1");
+    Deno.mkdirSync(worktree1, { recursive: true });
+    Deno.symlinkSync(realStore, join(worktree1, "node_modules"));
+    const p1 = await new Deno.Command("node", { args: [runnerScript, worktree1] }).output();
+    assertEquals(p1.code, 1);
+    const err1 = new TextDecoder().decode(p1.stderr);
+    assertStringIncludes(err1, "cap-security-dependency-resolve:");
+    assertStringIncludes(err1, "is a SYMLINK →");
+    assertStringIncludes(err1, "rm -rf node_modules && npm ci && deno install");
+
+    // Test 2: real node_modules, symlinked .deno
+    const worktree2 = join(tmp, "wt2");
+    Deno.mkdirSync(join(worktree2, "node_modules"), { recursive: true });
+    Deno.symlinkSync(realStore, join(worktree2, "node_modules", ".deno"));
+    const p2 = await new Deno.Command("node", { args: [runnerScript, worktree2] }).output();
+    assertEquals(p2.code, 1);
+    const err2 = new TextDecoder().decode(p2.stderr);
+    assertStringIncludes(err2, "cap-security-dependency-resolve:");
+    assertStringIncludes(err2, "is a SYMLINK →");
+    assertStringIncludes(err2, "rm -rf node_modules && npm ci && deno install");
+
+    // Test 3: verify remediation command applicability on both layout shapes
+    const pRm1 = await new Deno.Command("sh", { args: ["-c", "rm -rf node_modules"], cwd: worktree1 }).output();
+    assertEquals(pRm1.code, 0);
+    assertThrows(() => Deno.lstatSync(join(worktree1, "node_modules")), Deno.errors.NotFound);
+    assertEquals(Deno.statSync(realStore).isDirectory, true, "realStore must not be deleted by symlink removal");
+
+    const pRm2 = await new Deno.Command("sh", { args: ["-c", "rm -rf node_modules"], cwd: worktree2 }).output();
+    assertEquals(pRm2.code, 0);
+    assertThrows(() => Deno.lstatSync(join(worktree2, "node_modules")), Deno.errors.NotFound);
+    assertEquals(Deno.statSync(realStore).isDirectory, true, "realStore must not be deleted by directory removal");
+  } finally {
+    Deno.removeSync(tmp, { recursive: true });
+    Deno.removeSync(realStore, { recursive: true });
+  }
+});
