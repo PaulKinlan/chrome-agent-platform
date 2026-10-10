@@ -13,7 +13,7 @@
 // 8. Isolated severe breach (> 500.0ms) in ANY run fails immediately, even under host load.
 // 9. Persistent breach across runs (median > 0 across valid runs) fails as contract breach.
 
-import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStrictEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { classifyActiveBuilders, isHeavyProcessName, type ProcCpuMap } from "../scripts/lib/quiet-window.ts";
 import {
@@ -25,6 +25,7 @@ import {
   hasActiveBuilder,
   formatActiveBuilders,
   ZERO_TICK_ACTIVE_BUILDERS,
+  isZeroTickActiveBuilder,
   type RawBootPageMetrics,
   type RawLongTaskEntry,
   type RawLoafEntry,
@@ -1115,4 +1116,1078 @@ Deno.test("slzv6: multi-run staging policy excludes rustc-contended runs from me
   assertEquals(policy.validRuns.length, 2);
   assertEquals(policy.contendedRuns.length, 1);
   assertEquals(policy.medianTaskCount, 0);
+});
+
+Deno.test("0om0o: interval samples with unbaselined initial sample seeing parked esbuild daemons (flat CPU ticks) is admitted as valid", () => {
+  // Simulates live boot sampling where initial sample (run without prior baseline, prev = null)
+  // treats pre-existing parked esbuild daemons as newly seen / active (dnop artifact).
+  // Later sample taken against previous CPU map proves 0 CPU tick accumulation (parked daemon).
+  const baselineCpu: ProcCpuMap = new Map([
+    ["1285365", { name: "esbuild", startTicks: "5000", cpuTicks: 120 }],
+    ["3569751", { name: "esbuild", startTicks: "6000", cpuTicks: 450 }],
+  ]);
+
+  const initialSample: any = {
+    measurable: true,
+    load1: 3.60,
+    load5: 2.84,
+    cores: 2,
+    loadPerCore: 1.80,
+    compilers: 2,
+    compilerNames: ["esbuild"],
+    activeCompilers: 2, // newly seen via prev=null
+    activeCompilerNames: ["esbuild"],
+    cpu: baselineCpu,
+  };
+
+  const settledCpu: ProcCpuMap = new Map([
+    ["1285365", { name: "esbuild", startTicks: "5000", cpuTicks: 120 }], // identical ticks -> parked!
+    ["3569751", { name: "esbuild", startTicks: "6000", cpuTicks: 450 }], // identical ticks -> parked!
+  ]);
+
+  const settledSample: any = {
+    measurable: true,
+    load1: 3.40,
+    load5: 2.80,
+    cores: 2,
+    loadPerCore: 1.70,
+    compilers: 2,
+    compilerNames: ["esbuild"],
+    activeCompilers: 0, // proven 0 ticks advance
+    activeCompilerNames: [],
+    cpu: settledCpu,
+  };
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 42, threadListHydratedEndMs: 85, longTasks: [] },
+    [initialSample, settledSample],
+  );
+
+  assertEquals(run.validMeasurement, true, "parked daemons with flat CPU across interval must be admitted as valid");
+  assertEquals(run.invalidReason, undefined);
+  assertEquals(run.hostLoaded, false);
+});
+
+Deno.test("0om0o: interval samples where an esbuild daemon genuinely advances CPU ticks is excluded as invalid contention", () => {
+  const initialCpu: ProcCpuMap = new Map([
+    ["1285365", { name: "esbuild", startTicks: "5000", cpuTicks: 120 }],
+  ]);
+
+  const initialSample: any = {
+    measurable: true,
+    load1: 2.0,
+    load5: 1.5,
+    cores: 2,
+    loadPerCore: 1.0,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 1,
+    activeCompilerNames: ["esbuild"],
+    cpu: initialCpu,
+  };
+
+  const compilingCpu: ProcCpuMap = new Map([
+    ["1285365", { name: "esbuild", startTicks: "5000", cpuTicks: 175 }], // 55 ticks advanced!
+  ]);
+
+  const compilingSample: any = {
+    measurable: true,
+    load1: 2.5,
+    load5: 1.8,
+    cores: 2,
+    loadPerCore: 1.25,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 1,
+    activeCompilerNames: ["esbuild"],
+    cpu: compilingCpu,
+  };
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 42, threadListHydratedEndMs: 85, longTasks: [] },
+    [initialSample, compilingSample],
+  );
+
+  assertEquals(run.validMeasurement, false, "actively compiling esbuild must be detected as contention");
+  assertStringIncludes(run.invalidReason!, "concurrent heavy builder detected during boot: [esbuild]");
+});
+
+Deno.test("0om0o: two-sample { pre, post } with parked esbuild daemon is admitted as valid measurement", () => {
+  const sharedCpu: ProcCpuMap = new Map([
+    ["1285365", { name: "esbuild", startTicks: "5000", cpuTicks: 120 }],
+  ]);
+
+  const pre: any = {
+    measurable: true,
+    load1: 1.0,
+    load5: 0.8,
+    cores: 2,
+    loadPerCore: 0.5,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 1, // unbaselined pre-sample
+    activeCompilerNames: ["esbuild"],
+    cpu: sharedCpu,
+  };
+
+  const post: any = {
+    measurable: true,
+    load1: 1.0,
+    load5: 0.8,
+    cores: 2,
+    loadPerCore: 0.5,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 0, // baselined post-sample proves 0 tick advance
+    activeCompilerNames: [],
+    cpu: sharedCpu,
+  };
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    { pre, post },
+  );
+
+  assertEquals(run.validMeasurement, true, "two-sample { pre, post } with parked esbuild must be valid");
+  assertEquals(run.invalidReason, undefined);
+});
+
+Deno.test("0om0o: intermediate sample with activeCompilers > 0 seeing parked esbuild daemon (0 tick advance across interval) is admitted as valid", () => {
+  // Production caller scenario (tests/ntp-boot-staging.test.ts):
+  // s0: pre-navigation sample, esbuild daemon parked at cpuTicks 100
+  // s1: intermediate sample in samplingLoop where esbuild was flagged activeCompilers 1 (newly seen PID / transient sampling artifact)
+  // s2: post-navigation settling sample, esbuild daemon parked at cpuTicks 100 (activeCompilers 0)
+  // Across the entire boot run [s0, s1, s2], PID 1285365 accumulated ZERO CPU ticks (100 === 100).
+  // Must be admitted as a valid measurement.
+  const sharedCpu: ProcCpuMap = new Map([
+    ["1285365", { name: "esbuild", startTicks: "5000", cpuTicks: 100 }],
+  ]);
+
+  const s0: any = {
+    measurable: true,
+    load1: 1.0,
+    load5: 0.8,
+    cores: 2,
+    loadPerCore: 0.5,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    cpu: sharedCpu,
+    unbaselined: false,
+  };
+
+  const s1: any = {
+    measurable: true,
+    load1: 1.2,
+    load5: 0.9,
+    cores: 2,
+    loadPerCore: 0.6,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 1, // transiently flagged active
+    activeCompilerNames: ["esbuild"],
+    cpu: sharedCpu,
+    unbaselined: false,
+  };
+
+  const s2: any = {
+    measurable: true,
+    load1: 1.1,
+    load5: 0.8,
+    cores: 2,
+    loadPerCore: 0.55,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    cpu: sharedCpu,
+    unbaselined: false,
+  };
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    [s0, s1, s2],
+  );
+
+  assertEquals(run.validMeasurement, true, "intermediate sample with parked esbuild daemon (0 tick advance) must be valid");
+  assertEquals(run.hostLoaded, false);
+  assertEquals(run.invalidReason, undefined);
+});
+
+Deno.test("0om0o falsifier: compiled-then-parked daemon (ticks advance mid-interval, parked at settling) is detected as contention", () => {
+  // Coord P1 falsifier:
+  // s0: pre-navigation sample, esbuild daemon at cpuTicks 50
+  // s1: mid-interval compile, esbuild daemon at cpuTicks 120, activeCompilers 1
+  // s2: post-navigation settling, esbuild finished compiling and parked at cpuTicks 120, activeCompilers 0
+  // Even though it is parked at settling (activeCompilers 0), it ADVANCED CPU TICKS (120 > 50) during the boot interval!
+  // It MUST be classified as contention.
+  const s0Cpu: ProcCpuMap = new Map([
+    ["1001", { name: "esbuild", startTicks: "1000", cpuTicks: 50 }],
+  ]);
+  const s1Cpu: ProcCpuMap = new Map([
+    ["1001", { name: "esbuild", startTicks: "1000", cpuTicks: 120 }],
+  ]);
+  const s2Cpu: ProcCpuMap = new Map([
+    ["1001", { name: "esbuild", startTicks: "1000", cpuTicks: 120 }],
+  ]);
+
+  const s0: any = {
+    measurable: true,
+    load1: 1.0,
+    load5: 0.8,
+    cores: 2,
+    loadPerCore: 0.5,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    cpu: s0Cpu,
+  };
+
+  const s1: any = {
+    measurable: true,
+    load1: 2.5,
+    load5: 1.8,
+    cores: 2,
+    loadPerCore: 1.25,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 1,
+    activeCompilerNames: ["esbuild"],
+    cpu: s1Cpu,
+  };
+
+  const s2: any = {
+    measurable: true,
+    load1: 1.8,
+    load5: 1.4,
+    cores: 2,
+    loadPerCore: 0.9,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    cpu: s2Cpu,
+  };
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    [s0, s1, s2],
+  );
+
+  assertEquals(run.validMeasurement, false, "compiled-then-parked daemon must be detected as contention");
+  assertEquals(run.hostLoaded, true);
+  assertStringIncludes(run.invalidReason!, "concurrent heavy builder detected during boot: [esbuild]");
+});
+
+Deno.test("0om0o falsifier: restarted daemon / PID reuse (startTicks changes between boot start and settling) is detected as contention", () => {
+  // Coord P2 falsifier:
+  // s0: pre-navigation sample, PID 1001 has startTicks "1000", cpuTicks 50
+  // s1: mid-interval, PID 1001 was restarted / reused with startTicks "2000", cpuTicks 50, activeCompilers 1
+  // s2: post-navigation settling, PID 1001 has startTicks "2000", cpuTicks 50, activeCompilers 0
+  // startTicks changed ("2000" !== "1000"), so this is a different process instance!
+  // Must NOT be suppressed as the same parked daemon; must fail closed as contention.
+  const s0Cpu: ProcCpuMap = new Map([
+    ["1001", { name: "esbuild", startTicks: "1000", cpuTicks: 50 }],
+  ]);
+  const s1Cpu: ProcCpuMap = new Map([
+    ["1001", { name: "esbuild", startTicks: "2000", cpuTicks: 50 }],
+  ]);
+  const s2Cpu: ProcCpuMap = new Map([
+    ["1001", { name: "esbuild", startTicks: "2000", cpuTicks: 50 }],
+  ]);
+
+  const s0: any = {
+    measurable: true,
+    load1: 1.0,
+    load5: 0.8,
+    cores: 2,
+    loadPerCore: 0.5,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    cpu: s0Cpu,
+  };
+
+  const s1: any = {
+    measurable: true,
+    load1: 1.5,
+    load5: 1.1,
+    cores: 2,
+    loadPerCore: 0.75,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 1,
+    activeCompilerNames: ["esbuild"],
+    cpu: s1Cpu,
+  };
+
+  const s2: any = {
+    measurable: true,
+    load1: 1.2,
+    load5: 1.0,
+    cores: 2,
+    loadPerCore: 0.6,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    cpu: s2Cpu,
+  };
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    [s0, s1, s2],
+  );
+
+  assertEquals(run.validMeasurement, false, "restarted daemon (startTicks change) must be detected as contention");
+  assertEquals(run.hostLoaded, true);
+  assertStringIncludes(run.invalidReason!, "concurrent heavy builder detected during boot: [esbuild]");
+});
+
+Deno.test("0om0o falsifier: mid-interval active build [100, 150, 150] with activity [0, 1, 0] is detected as contention", () => {
+  // Reviewer P1 falsifier:
+  // s0: ticks 100, activeCompilers 0
+  // s1: ticks 150, activeCompilers 1 (active mid-interval compilation during boot!)
+  // s2: ticks 150, activeCompilers 0 (settled, but ticks advanced during boot)
+  // Must NOT be dismissed as a parked daemon.
+  const s0Cpu: ProcCpuMap = new Map([
+    ["1285365", { name: "esbuild", startTicks: "5000", cpuTicks: 100 }],
+  ]);
+  const s1Cpu: ProcCpuMap = new Map([
+    ["1285365", { name: "esbuild", startTicks: "5000", cpuTicks: 150 }],
+  ]);
+  const s2Cpu: ProcCpuMap = new Map([
+    ["1285365", { name: "esbuild", startTicks: "5000", cpuTicks: 150 }],
+  ]);
+
+  const s0: any = {
+    measurable: true,
+    load1: 1.0,
+    load5: 0.8,
+    cores: 2,
+    loadPerCore: 0.5,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    cpu: s0Cpu,
+  };
+
+  const s1: any = {
+    measurable: true,
+    load1: 1.8,
+    load5: 1.2,
+    cores: 2,
+    loadPerCore: 0.9,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 1,
+    activeCompilerNames: ["esbuild"],
+    cpu: s1Cpu,
+  };
+
+  const s2: any = {
+    measurable: true,
+    load1: 1.5,
+    load5: 1.0,
+    cores: 2,
+    loadPerCore: 0.75,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    cpu: s2Cpu,
+  };
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    [s0, s1, s2],
+  );
+
+  assertEquals(run.validMeasurement, false, "mid-interval active build must be classified as contended measurement");
+  assertStringIncludes(run.invalidReason!, "concurrent heavy builder detected during boot: [esbuild]");
+});
+
+Deno.test("0om0o falsifier: baselined initial sample (unbaselined: false) with active esbuild is detected as contention", () => {
+  // Reviewer P1 falsifier:
+  // Initial sample had a real predecessor comparison (unbaselined: false) and recorded activeCompilers > 0.
+  // Its activity is real compilation, not a missing-baseline artifact; it must NOT be suppressed.
+  const baselineCpu: ProcCpuMap = new Map([
+    ["1285365", { name: "esbuild", startTicks: "5000", cpuTicks: 100 }],
+  ]);
+  const activeCpu: ProcCpuMap = new Map([
+    ["1285365", { name: "esbuild", startTicks: "5000", cpuTicks: 150 }],
+  ]);
+
+  const initialSample: any = {
+    measurable: true,
+    load1: 2.0,
+    load5: 1.5,
+    cores: 2,
+    loadPerCore: 1.0,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 1,
+    activeCompilerNames: ["esbuild"],
+    cpu: activeCpu,
+    unbaselined: false, // explicitly baselined!
+  };
+
+  const settledSample: any = {
+    measurable: true,
+    load1: 1.8,
+    load5: 1.3,
+    cores: 2,
+    loadPerCore: 0.9,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    cpu: activeCpu,
+  };
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    [initialSample, settledSample],
+  );
+
+  assertEquals(run.validMeasurement, false, "baselined initial sample with real active compilation must be contention");
+  assertStringIncludes(run.invalidReason!, "concurrent heavy builder detected during boot: [esbuild]");
+});
+
+Deno.test("0om0o falsifier: unbaselined initial sample with active non-parkable builder (gcc) and parked esbuild is detected as contention", () => {
+  // Reviewer P1 falsifier:
+  // Initial sample has parked esbuild AND active gcc.
+  // gcc exits before final sample.
+  // Must NOT be suppressed as a parked daemon.
+  const initialCpu: ProcCpuMap = new Map([
+    ["1001", { name: "esbuild", startTicks: "1000", cpuTicks: 50 }],
+    ["1002", { name: "gcc", startTicks: "1005", cpuTicks: 30 }],
+  ]);
+
+  const initialSample: any = {
+    measurable: true,
+    load1: 2.5,
+    load5: 1.8,
+    cores: 2,
+    loadPerCore: 1.25,
+    compilers: 2,
+    compilerNames: ["esbuild", "gcc"],
+    activeCompilers: 2,
+    activeCompilerNames: ["esbuild", "gcc"],
+    cpu: initialCpu,
+    unbaselined: true,
+  };
+
+  // Final sample: gcc exited, only esbuild remains
+  const finalCpu: ProcCpuMap = new Map([
+    ["1001", { name: "esbuild", startTicks: "1000", cpuTicks: 50 }],
+  ]);
+
+  const finalSample: any = {
+    measurable: true,
+    load1: 1.5,
+    load5: 1.2,
+    cores: 2,
+    loadPerCore: 0.75,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    cpu: finalCpu,
+  };
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    [initialSample, finalSample],
+  );
+
+  assertEquals(run.validMeasurement, false, "non-parkable builder (gcc) must never be suppressed");
+  assertStringIncludes(run.invalidReason!, "gcc");
+});
+
+Deno.test("0om0o falsifier: unbaselined initial sample with disappearing esbuild daemon PID mid-interval is detected as contention", () => {
+  // Reviewer P1 falsifier:
+  // Initial sample had 2 esbuild daemons (PID 1001 and PID 1002).
+  // PID 1002 was actually a short-lived compilation that exited before the final sample.
+  // Must fail closed because PID 1002 disappeared.
+  const initialCpu: ProcCpuMap = new Map([
+    ["1001", { name: "esbuild", startTicks: "1000", cpuTicks: 50 }],
+    ["1002", { name: "esbuild", startTicks: "1005", cpuTicks: 30 }],
+  ]);
+
+  const initialSample: any = {
+    measurable: true,
+    load1: 2.0,
+    load5: 1.5,
+    cores: 2,
+    loadPerCore: 1.0,
+    compilers: 2,
+    compilerNames: ["esbuild"],
+    activeCompilers: 2,
+    activeCompilerNames: ["esbuild"],
+    cpu: initialCpu,
+    unbaselined: true,
+  };
+
+  // Final sample: PID 1002 exited!
+  const finalCpu: ProcCpuMap = new Map([
+    ["1001", { name: "esbuild", startTicks: "1000", cpuTicks: 50 }],
+  ]);
+
+  const finalSample: any = {
+    measurable: true,
+    load1: 1.5,
+    load5: 1.2,
+    cores: 2,
+    loadPerCore: 0.75,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    cpu: finalCpu,
+  };
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    [initialSample, finalSample],
+  );
+
+  assertEquals(run.validMeasurement, false, "disappearing esbuild daemon mid-interval must fail closed as contention");
+  assertStringIncludes(run.invalidReason!, "concurrent heavy builder detected during boot: [esbuild]");
+});
+
+Deno.test("0om0o falsifier: valid empty baseline (prev.size === 0, unbaselined: false) with newly spawned esbuild PID is detected as contention", () => {
+  // Reviewer P1 falsifier:
+  // Baseline was taken on a quiet box with 0 heavy builders (empty predecessor map).
+  // unbaselined is false (prev != null).
+  // A newly spawned esbuild PID appears in the initial boot sample.
+  // Even if its ticks remain flat in the next sample, it was spawned after the baseline!
+  // It is real active contention and must NOT be suppressed as a pre-existing parked daemon.
+  const newProcessCpu: ProcCpuMap = new Map([
+    ["1001", { name: "esbuild", startTicks: "2000", cpuTicks: 40 }],
+  ]);
+
+  const initialSample: any = {
+    measurable: true,
+    load1: 1.5,
+    load5: 1.2,
+    cores: 2,
+    loadPerCore: 0.75,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 1,
+    activeCompilerNames: ["esbuild"],
+    cpu: newProcessCpu,
+    unbaselined: false, // baselined against empty baseline!
+  };
+
+  const finalSample: any = {
+    measurable: true,
+    load1: 1.5,
+    load5: 1.2,
+    cores: 2,
+    loadPerCore: 0.75,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    cpu: newProcessCpu,
+  };
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    [initialSample, finalSample],
+  );
+
+  assertEquals(run.validMeasurement, false, "newly spawned esbuild after empty baseline must be contention");
+  assertStringIncludes(run.invalidReason!, "concurrent heavy builder detected during boot: [esbuild]");
+});
+
+Deno.test("0om0o falsifier: incomplete per-PID CPU evidence (compilers: 2 but 1 cpu entry) with disappearing builder fails closed as contention", () => {
+  // Reviewer P1 falsifier:
+  // Initial sample counted 2 esbuild processes (compilers: 2), but /proc stat read failed/skipped for one,
+  // leaving only 1 entry in the cpu Map.
+  // Final sample has 1 process (the untracked one disappeared mid-run).
+  // Without complete per-PID CPU evidence for all observed builders, the suppression must NOT run.
+  const partialCpu: ProcCpuMap = new Map([
+    ["1001", { name: "esbuild", startTicks: "1000", cpuTicks: 50 }],
+  ]);
+
+  const initialSample: any = {
+    measurable: true,
+    load1: 2.0,
+    load5: 1.5,
+    cores: 2,
+    loadPerCore: 1.0,
+    compilers: 2, // 2 compilers observed, but only 1 in cpu map!
+    compilerNames: ["esbuild"],
+    activeCompilers: 2,
+    activeCompilerNames: ["esbuild"],
+    cpu: partialCpu,
+    unbaselined: true,
+  };
+
+  const finalCpu: ProcCpuMap = new Map([
+    ["1001", { name: "esbuild", startTicks: "1000", cpuTicks: 50 }],
+  ]);
+
+  const finalSample: any = {
+    measurable: true,
+    load1: 1.5,
+    load5: 1.2,
+    cores: 2,
+    loadPerCore: 0.75,
+    compilers: 1, // 1 compiler at end (the other disappeared)
+    compilerNames: ["esbuild"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    cpu: finalCpu,
+  };
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    [initialSample, finalSample],
+  );
+
+  assertEquals(run.validMeasurement, false, "incomplete CPU evidence with disappearing builder must fail closed");
+  assertStringIncludes(run.invalidReason!, "concurrent heavy builder detected during boot: [esbuild]");
+});
+
+Deno.test("0om0o falsifier: incomplete CPU map (compilers: 2, cpu.size: 1) with matching compiler counts fails closed as contention", () => {
+  // Reviewer P2 falsifier:
+  // Both samples report compilers: 2, but initialSample only has 1 CPU entry in cpu Map (e.g. unreadable stat).
+  // Even though compiler counts match between samples (compilers: 2 === compilers: 2),
+  // incomplete per-PID CPU evidence must fail closed.
+  const partialCpu: ProcCpuMap = new Map([
+    ["1001", { name: "esbuild", startTicks: "1000", cpuTicks: 50 }],
+  ]);
+
+  const initialSample: any = {
+    measurable: true,
+    load1: 2.0,
+    load5: 1.5,
+    cores: 2,
+    loadPerCore: 1.0,
+    compilers: 2, // 2 compilers observed, but only 1 in cpu map!
+    compilerNames: ["esbuild"],
+    activeCompilers: 2,
+    activeCompilerNames: ["esbuild"],
+    cpu: partialCpu,
+    unbaselined: true,
+  };
+
+  const finalSample: any = {
+    measurable: true,
+    load1: 1.5,
+    load5: 1.2,
+    cores: 2,
+    loadPerCore: 0.75,
+    compilers: 2, // matching count!
+    compilerNames: ["esbuild"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    cpu: partialCpu,
+  };
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    [initialSample, finalSample],
+  );
+
+  assertEquals(run.validMeasurement, false, "incomplete CPU evidence even with matching counts must fail closed");
+  assertStringIncludes(run.invalidReason!, "concurrent heavy builder detected during boot: [esbuild]");
+});
+
+Deno.test("0om0o falsifier: missing CPU maps fail closed as contention even if names and counts match", () => {
+  // Reviewer P2 falsifier:
+  // Initial and final samples have parked esbuild names and matching counts,
+  // but lack CPU tick maps (cpu is undefined).
+  // Without per-PID CPU maps, unchanged PID identity and 0 tick advance cannot be proved.
+  // Must fail closed as contention.
+  const initialSample: any = {
+    measurable: true,
+    load1: 1.5,
+    load5: 1.2,
+    cores: 2,
+    loadPerCore: 0.75,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 1,
+    activeCompilerNames: ["esbuild"],
+    unbaselined: true,
+  };
+
+  const finalSample: any = {
+    measurable: true,
+    load1: 1.5,
+    load5: 1.2,
+    cores: 2,
+    loadPerCore: 0.75,
+    compilers: 1,
+    compilerNames: ["esbuild"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+  };
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    [initialSample, finalSample],
+  );
+
+  assertEquals(run.validMeasurement, false, "missing CPU map must fail closed as contention");
+  assertEquals(run.hostLoaded, true);
+  assertStringIncludes(run.invalidReason!, "concurrent heavy builder detected during boot: [esbuild]");
+});
+
+Deno.test("0om0o unit: readLoadSample with empty Map predecessor returns unbaselined: false, while null returns unbaselined: true", async () => {
+  // Unit test verifying quiet-window's unbaselined flag behavior
+  const { readLoadSample } = await import("../scripts/lib/quiet-window.ts");
+  const nullSample = await readLoadSample(null, { budget: { entries: 10, ms: 50 } });
+  assertEquals(nullSample.unbaselined, true);
+
+  const emptyMapSample = await readLoadSample(new Map(), { budget: { entries: 10, ms: 50 } });
+  assertEquals(emptyMapSample.unbaselined, false);
+});
+
+Deno.test("kjfza: ZERO_TICK_ACTIVE_BUILDERS is deduplicated and matches quiet-window canonical set", async () => {
+  const quietWindow = await import("../scripts/lib/quiet-window.ts");
+  const ntpAttribution = await import("../scripts/lib/ntp-boot-attribution.ts");
+
+  // Canonical identity: re-exported set references the exact same Set instance
+  assertStrictEquals(
+    quietWindow.ZERO_TICK_ACTIVE_BUILDERS,
+    ntpAttribution.ZERO_TICK_ACTIVE_BUILDERS,
+    "ZERO_TICK_ACTIVE_BUILDERS must be the exact same Set instance between quiet-window and ntp-boot-attribution",
+  );
+
+  assert(ntpAttribution.ZERO_TICK_ACTIVE_BUILDERS.has("rustc"));
+  assert(ntpAttribution.ZERO_TICK_ACTIVE_BUILDERS.has("cargo"));
+  assert(ntpAttribution.ZERO_TICK_ACTIVE_BUILDERS.has("rust-lld"));
+  assert(ntpAttribution.ZERO_TICK_ACTIVE_BUILDERS.has("cargo-build"));
+  assert(ntpAttribution.ZERO_TICK_ACTIVE_BUILDERS.has("cargo-check"));
+  assert(ntpAttribution.ZERO_TICK_ACTIVE_BUILDERS.has("cargo-clippy"));
+  assert(ntpAttribution.ZERO_TICK_ACTIVE_BUILDERS.has("cargo-test"));
+  assert(ntpAttribution.ZERO_TICK_ACTIVE_BUILDERS.has("rustup"));
+  assertEquals(ntpAttribution.ZERO_TICK_ACTIVE_BUILDERS.has("esbuild"), false);
+});
+
+Deno.test("nffa7: parked watcher (cargo-watch/esbuild/tsc, 0 ticks) is never treated as an active builder", () => {
+  // Requirement (a):
+  // Verify that parked watchers with 0 CPU tick advance are admitted as valid measurements
+  // and never classified as active builders.
+  for (const watcher of ["cargo-watch", "esbuild", "tsc"]) {
+    const sample: any = {
+      measurable: true,
+      load1: 1.0,
+      load5: 0.8,
+      cores: 2,
+      loadPerCore: 0.5,
+      compilers: 1,
+      compilerNames: [watcher],
+      activeCompilers: 0,
+      activeCompilerNames: [],
+    };
+
+    assertEquals(isZeroTickActiveBuilder(watcher), false, `${watcher} must NOT be in zero-tick active builders`);
+    assertEquals(hasActiveBuilder(sample), false, `parked ${watcher} with 0 ticks must NOT be an active builder`);
+
+    const run = attributeBootRun(
+      1,
+      { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+      sample,
+    );
+
+    assertEquals(run.validMeasurement, true, `run under parked ${watcher} must be admitted as valid measurement`);
+    assertEquals(run.hostLoaded, false);
+    assertEquals(run.invalidReason, undefined);
+  }
+});
+
+Deno.test("nffa7: multiple parked watchers concurrently with 0 ticks are never active builders", () => {
+  // All three watchers running concurrently parked on the host
+  const sample: any = {
+    measurable: true,
+    load1: 1.5,
+    load5: 1.2,
+    cores: 2,
+    loadPerCore: 0.75,
+    compilers: 3,
+    compilerNames: ["cargo-watch", "esbuild", "tsc"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+  };
+
+  assertEquals(hasActiveBuilder(sample), false);
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    sample,
+  );
+
+  assertEquals(run.validMeasurement, true);
+  assertEquals(run.hostLoaded, false);
+  assertEquals(run.invalidReason, undefined);
+});
+
+Deno.test("nffa7: parked watcher under elevated self-load (loadPerCore: 2.5, activeCompilers: 0) is admitted as valid", () => {
+  // Parked watcher on a loaded host where elevated load is from test suite workers, not the watcher
+  const sample: any = {
+    measurable: true,
+    load1: 5.0,
+    load5: 4.0,
+    cores: 2,
+    loadPerCore: 2.5,
+    compilers: 1,
+    compilerNames: ["cargo-watch"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+  };
+
+  assertEquals(hasActiveBuilder(sample), false);
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    sample,
+  );
+
+  assertEquals(run.validMeasurement, true);
+  assertEquals(run.hostLoaded, false);
+});
+
+Deno.test("nffa7 falsifier: cargo-watch with actively advancing CPU ticks IS detected as contention", () => {
+  // When cargo-watch triggers a rebuild and its CPU ticks advance, activeCompilers > 0 must catch it
+  const sample: any = {
+    measurable: true,
+    load1: 2.5,
+    load5: 1.8,
+    cores: 2,
+    loadPerCore: 1.25,
+    compilers: 1,
+    compilerNames: ["cargo-watch"],
+    activeCompilers: 1,
+    activeCompilerNames: ["cargo-watch"],
+  };
+
+  assertEquals(hasActiveBuilder(sample), true);
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    sample,
+  );
+
+  assertEquals(run.validMeasurement, false);
+  assertEquals(run.hostLoaded, true);
+  assertStringIncludes(run.invalidReason!, "concurrent heavy builder detected during boot: [cargo-watch]");
+});
+
+Deno.test("nffa7: build with >8 distinct compiler names still invalidates measurement (discrete builder cap bypass)", () => {
+  // Requirement (b):
+  // 8 parked daemons saturate the diagnostic compilerNames cap (size 8).
+  // A 9th distinct compiler (rustc, discrete) is present on the host.
+  // The 8-name cap must NOT bypass contention detection.
+  const cappedSample: any = {
+    measurable: true,
+    load1: 2.5,
+    load5: 1.8,
+    cores: 2,
+    loadPerCore: 1.25,
+    compilers: 12, // 12 distinct compilers
+    compilerNames: ["esbuild", "tsc", "cargo-watch", "daemon4", "daemon5", "daemon6", "daemon7", "daemon8"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    hasDiscreteBuilder: true, // unbounded evidence from sampler
+  };
+
+  assertEquals(hasActiveBuilder(cappedSample), true, "hasDiscreteBuilder must invalidate measurement regardless of 8-name cap");
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    cappedSample,
+  );
+
+  assertEquals(run.validMeasurement, false, "run must be invalidated when discrete builder exists beyond 8-name cap");
+  assertEquals(run.hostLoaded, true);
+  assertStringIncludes(run.invalidReason!, "concurrent heavy builder detected during boot: [discrete builder (name omitted by diagnostic limit)]");
+});
+
+Deno.test("nffa7: build with >8 distinct compiler names still invalidates measurement (actively compiling cap bypass)", () => {
+  // Requirement (b):
+  // 12 distinct heavy compilers on the box, with multiple actively compiling processes.
+  // compilerNames is capped at 8 names, but activeCompilers > 0 triggers contention.
+  const sample: any = {
+    measurable: true,
+    load1: 3.5,
+    load5: 2.5,
+    cores: 2,
+    loadPerCore: 1.75,
+    compilers: 12,
+    compilerNames: ["esbuild", "tsc", "cargo-watch", "daemon4", "daemon5", "daemon6", "daemon7", "daemon8"],
+    activeCompilers: 3,
+    activeCompilerNames: ["clang", "gcc", "ninja"],
+  };
+
+  assertEquals(hasActiveBuilder(sample), true, "actively compiling builders must invalidate measurement regardless of 8-name cap");
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    sample,
+  );
+
+  assertEquals(run.validMeasurement, false);
+  assertEquals(run.hostLoaded, true);
+  assertStringIncludes(run.invalidReason!, "clang,gcc,ninja");
+});
+
+Deno.test("nffa7: build with >8 distinct compiler names in legacy mock (activity unknown) still invalidates measurement", () => {
+  // Legacy mock where activeCompilers is undefined and compilers > 8
+  const sample: any = {
+    measurable: true,
+    load1: 2.0,
+    load5: 1.5,
+    cores: 2,
+    loadPerCore: 1.0,
+    compilers: 10,
+    compilerNames: ["b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8"],
+    activeCompilers: undefined,
+  };
+
+  assertEquals(hasActiveBuilder(sample), true, "activity-unknown mock with >8 compilers must fail closed");
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    sample,
+  );
+
+  assertEquals(run.validMeasurement, false);
+  assertEquals(run.hostLoaded, true);
+});
+
+Deno.test("nffa7 end-to-end: readLoadSample with 12 distinct processes preserves discrete builder and invalidates boot measurement", async () => {
+  // End-to-end verification through quiet-window's readLoadSample sampler seam.
+  // Simulate ps output containing 12 distinct heavy processes:
+  // 8 parked daemons + 4 discrete builders (rustc, cargo, rust-lld, cargo-build).
+  const { readLoadSample } = await import("../scripts/lib/quiet-window.ts");
+
+  const mockPsOutput = [
+    "  101 00:00:00 Wed Oct  7 12:00:00 2026 /usr/bin/esbuild",
+    "  102 00:00:00 Wed Oct  7 12:00:00 2026 /usr/bin/tsc",
+    "  103 00:00:00 Wed Oct  7 12:00:00 2026 /usr/bin/cargo-watch",
+    "  104 00:00:00 Wed Oct  7 12:00:00 2026 /usr/bin/cc1",
+    "  105 00:00:00 Wed Oct  7 12:00:00 2026 /usr/bin/cc1plus",
+    "  106 00:00:00 Wed Oct  7 12:00:00 2026 /usr/bin/ld",
+    "  107 00:00:00 Wed Oct  7 12:00:00 2026 /usr/bin/lld",
+    "  108 00:00:00 Wed Oct  7 12:00:00 2026 /usr/bin/gold",
+    "  109 00:00:00 Wed Oct  7 12:00:00 2026 /usr/bin/rustc",
+    "  110 00:00:00 Wed Oct  7 12:00:00 2026 /usr/bin/cargo",
+    "  111 00:00:00 Wed Oct  7 12:00:00 2026 /usr/bin/rust-lld",
+    "  112 00:00:00 Wed Oct  7 12:00:00 2026 /usr/bin/cargo-build",
+  ].join("\n");
+
+  const sample = await readLoadSample(null, {
+    hasProc: false,
+    runPs: async () => ({ code: 0, stdout: mockPsOutput }),
+    loadavg: () => [1.5, 1.2, 1.0],
+  });
+
+  assertEquals(sample.measurable, true);
+  assertEquals(sample.compilers, 12, "compilers count must reflect all 12 processes (not capped at 8)");
+  assertEquals(sample.compilerNames.length, 8, "compilerNames array must be capped at 8 entries for diagnostics");
+  assertEquals(sample.hasDiscreteBuilder, true, "hasDiscreteBuilder must be true because rustc/cargo were present");
+
+  // Discrete builders must have evicted non-discrete daemons from compilerNames
+  assert(sample.compilerNames.includes("rustc"), "rustc must be in compilerNames");
+  assert(sample.compilerNames.includes("cargo"), "cargo must be in compilerNames");
+
+  // Attribution must invalidate the boot run
+  assertEquals(hasActiveBuilder(sample), true);
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    sample,
+  );
+  assertEquals(run.validMeasurement, false, "measurement must be invalidated by discrete builder presence");
+  assertEquals(run.hostLoaded, true);
+});
+
+Deno.test("nffa7 end-to-end: readLoadSample with 10 distinct actively compiling processes preserves active count and invalidates boot measurement", async () => {
+  // End-to-end verification through quiet-window's readLoadSample sampler seam.
+  // 10 distinct compilers with CPU advance between sample 1 and sample 2.
+  const { readLoadSample } = await import("../scripts/lib/quiet-window.ts");
+
+  const psSample1 = [
+    "  201 00:00:01 Wed Oct  7 12:00:00 2026 /usr/bin/esbuild",
+    "  202 00:00:01 Wed Oct  7 12:00:00 2026 /usr/bin/tsc",
+    "  203 00:00:01 Wed Oct  7 12:00:00 2026 /usr/bin/clang",
+    "  204 00:00:01 Wed Oct  7 12:00:00 2026 /usr/bin/clang++",
+    "  205 00:00:01 Wed Oct  7 12:00:00 2026 /usr/bin/gcc",
+    "  206 00:00:01 Wed Oct  7 12:00:00 2026 /usr/bin/g++",
+    "  207 00:00:01 Wed Oct  7 12:00:00 2026 /usr/bin/ninja",
+    "  208 00:00:01 Wed Oct  7 12:00:00 2026 /usr/bin/make",
+    "  209 00:00:01 Wed Oct  7 12:00:00 2026 /usr/bin/wasm-ld",
+    "  210 00:00:01 Wed Oct  7 12:00:00 2026 /usr/bin/wasm-opt",
+  ].join("\n");
+
+  const psSample2 = [
+    "  201 00:00:05 Wed Oct  7 12:00:00 2026 /usr/bin/esbuild",
+    "  202 00:00:05 Wed Oct  7 12:00:00 2026 /usr/bin/tsc",
+    "  203 00:00:05 Wed Oct  7 12:00:00 2026 /usr/bin/clang",
+    "  204 00:00:05 Wed Oct  7 12:00:00 2026 /usr/bin/clang++",
+    "  205 00:00:05 Wed Oct  7 12:00:00 2026 /usr/bin/gcc",
+    "  206 00:00:05 Wed Oct  7 12:00:00 2026 /usr/bin/g++",
+    "  207 00:00:05 Wed Oct  7 12:00:00 2026 /usr/bin/ninja",
+    "  208 00:00:05 Wed Oct  7 12:00:00 2026 /usr/bin/make",
+    "  209 00:00:05 Wed Oct  7 12:00:00 2026 /usr/bin/wasm-ld",
+    "  210 00:00:05 Wed Oct  7 12:00:00 2026 /usr/bin/wasm-opt",
+  ].join("\n");
+
+  const sample1 = await readLoadSample(null, {
+    hasProc: false,
+    runPs: async () => ({ code: 0, stdout: psSample1 }),
+    loadavg: () => [2.0, 1.8, 1.5],
+  });
+
+  const sample2 = await readLoadSample(sample1.cpu, {
+    hasProc: false,
+    runPs: async () => ({ code: 0, stdout: psSample2 }),
+    loadavg: () => [2.5, 2.0, 1.7],
+  });
+
+  assertEquals(sample2.measurable, true);
+  assertEquals(sample2.compilers, 10, "compilers count must reflect all 10 processes");
+  assertEquals(sample2.activeCompilers, 10, "activeCompilers must count all 10 processes that advanced CPU ticks");
+  assertEquals(sample2.compilerNames.length, 8, "compilerNames array must be capped at 8");
+  assertEquals(sample2.activeCompilerNames?.length, 8, "activeCompilerNames array must be capped at 8");
+
+  assertEquals(hasActiveBuilder(sample2), true);
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    sample2,
+  );
+  assertEquals(run.validMeasurement, false, "measurement must be invalidated by actively compiling builders");
+  assertEquals(run.hostLoaded, true);
 });

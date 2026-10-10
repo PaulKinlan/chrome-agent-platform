@@ -93,6 +93,17 @@ export const ZERO_TICK_ACTIVE_BUILDERS = new Set([
   "rustup",
 ]);
 
+/**
+ * Tests whether a process command name is an active builder even with 0 CPU ticks advance.
+ * Deliberately excludes background daemons and watchers (cargo-watch, esbuild, tsc).
+ */
+export function isZeroTickActiveBuilder(comm: string): boolean {
+  if (ZERO_TICK_ACTIVE_BUILDERS.has(comm)) return true;
+  if (comm.startsWith("cargo-") && comm !== "cargo-watch") return true;
+  if (comm.startsWith("rustc") || comm.startsWith("rust-lld")) return true;
+  return false;
+}
+
 /** How many /proc entries one sample will inspect, and for how long. A sample
  *  must stay cheap: it runs every CAP_QUIET_SAMPLE_MS while a gate waits.
  *  Env-overridable so a TRUNCATED walk can be driven in a test
@@ -141,6 +152,9 @@ export interface LoadSample {
   hasDiscreteBuilder?: boolean;
   /** Per-pid CPU snapshot, for the next sample's activity comparison. */
   cpu?: ProcCpuMap;
+  /** True when this sample was read without a predecessor CPU map (prev == null),
+   *  causing classifyActiveBuilders to treat all existing heavy processes as active. */
+  unbaselined?: boolean;
   /** True when the sample could not be read; a refusal follows, never a pass. */
   measurable: boolean;
   /** Why it was not measurable. */
@@ -419,6 +433,7 @@ async function readLoadSampleOnce(
     return {
       at, load1: 0, load5: 0, load15: 0, cores, loadPerCore: Infinity,
       compilers: 0, compilerNames: [], measurable: false,
+      unbaselined: prev == null,
       error: String((e as Error)?.message ?? e),
     };
   }
@@ -478,14 +493,14 @@ async function readLoadSampleOnce(
         const comm = m[4].trim().split("/").pop() ?? "";
         if (isHeavyProcessName(comm)) {
           compilers++;
-          if (ZERO_TICK_ACTIVE_BUILDERS.has(comm)) {
+          if (isZeroTickActiveBuilder(comm)) {
             hasDiscreteBuilder = true;
           }
           if (names.size < 8) {
             names.add(comm);
-          } else if (ZERO_TICK_ACTIVE_BUILDERS.has(comm)) {
+          } else if (isZeroTickActiveBuilder(comm)) {
             for (const existing of names) {
-              if (!ZERO_TICK_ACTIVE_BUILDERS.has(existing)) {
+              if (!isZeroTickActiveBuilder(existing)) {
                 names.delete(existing);
                 names.add(comm);
                 break;
@@ -511,14 +526,14 @@ async function readLoadSampleOnce(
           const comm = (await Deno.readTextFile(`/proc/${entry.name}/comm`)).trim();
           if (isHeavyProcessName(comm)) {
             compilers++;
-            if (ZERO_TICK_ACTIVE_BUILDERS.has(comm)) {
+            if (isZeroTickActiveBuilder(comm)) {
               hasDiscreteBuilder = true;
             }
             if (names.size < 8) {
               names.add(comm);
-            } else if (ZERO_TICK_ACTIVE_BUILDERS.has(comm)) {
+            } else if (isZeroTickActiveBuilder(comm)) {
               for (const existing of names) {
-                if (!ZERO_TICK_ACTIVE_BUILDERS.has(existing)) {
+                if (!isZeroTickActiveBuilder(existing)) {
                   names.delete(existing);
                   names.add(comm);
                   break;
@@ -537,6 +552,7 @@ async function readLoadSampleOnce(
         // The partial counts stay as evidence: a reader can see what the walk did
         // reach before it was cut off.
         compilers, compilerNames: [...names], measurable: false,
+        unbaselined: prev == null,
         error: `proc scan truncated after ${seen} entries in ${Date.now() - startedAt} ms ` +
           `(budget ${budget.entries} entries / ${budget.ms} ms) — the builder count is INCOMPLETE, ` +
           `so this sample is NOT a quiet verdict; raise CAP_QUIET_MAX_PROC_SCAN(_MS) deliberately ` +
@@ -553,6 +569,7 @@ async function readLoadSampleOnce(
       return {
         at, load1, load5, load15, cores, loadPerCore: load1 / cores,
         compilers, compilerNames: [...names], measurable: false,
+        unbaselined: prev == null,
         error: `${why} — the builder count is INCOMPLETE, so this sample is NOT a quiet verdict ` +
           `(expected "pid time lstart comm" rows; chrome-agent-platform-jjsz)`,
       };
@@ -561,9 +578,11 @@ async function readLoadSampleOnce(
     return {
       at, load1, load5, load15, cores, loadPerCore: load1 / cores,
       compilers: 0, compilerNames: [], measurable: false,
+      unbaselined: prev == null,
       error: `proc scan: ${String((e as Error)?.message ?? e)}`,
     };
   }
+  const unbaselined = prev == null;
   const activePids = classifyActiveBuilders(prev ?? null, cpu);
   const activeNames = [...new Set(activePids.map((pid) => cpu.get(pid)?.name ?? "").filter(Boolean))];
   return {
@@ -573,6 +592,7 @@ async function readLoadSampleOnce(
     activeCompilerNames: activeNames.slice(0, 8),
     hasDiscreteBuilder,
     cpu,
+    unbaselined,
   };
 }
 

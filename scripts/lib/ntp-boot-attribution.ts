@@ -7,9 +7,30 @@ import {
   type LoadSample,
   ENVIRONMENTAL_REFUSAL_EXIT,
   ENVIRONMENTAL_REFUSAL_MARKER,
+  ZERO_TICK_ACTIVE_BUILDERS,
+  isZeroTickActiveBuilder,
 } from "./quiet-window.ts";
 
-export { ENVIRONMENTAL_REFUSAL_EXIT, ENVIRONMENTAL_REFUSAL_MARKER };
+export {
+  ENVIRONMENTAL_REFUSAL_EXIT,
+  ENVIRONMENTAL_REFUSAL_MARKER,
+  ZERO_TICK_ACTIVE_BUILDERS,
+  isZeroTickActiveBuilder,
+};
+
+/**
+ * Known background services and watchers that run as idle daemons and accumulate 0 CPU ticks
+ * when not actively serving requests or compiling changes (chrome-agent-platform-0om0o).
+ *
+ * Parked-daemon suppression across boot intervals is strictly restricted to this set.
+ * One-off or discrete build invocations (gcc, clang, rustc, cargo, make, ninja) can never
+ * be suppressed as parked services.
+ */
+export const KNOWN_PARKABLE_BUILDERS = new Set([
+  "esbuild",
+  "tsc",
+  "cargo-watch",
+]);
 
 export class BootStagingEnvironmentalRefusalError extends Error {
   readonly exitCode = ENVIRONMENTAL_REFUSAL_EXIT;
@@ -315,6 +336,7 @@ export function failedSample(err: any): LoadSample {
   return {
     at: Date.now(),
     measurable: false,
+    unbaselined: true,
     error: err instanceof Error ? err.message : String(err ?? "sample read failed"),
     load1: 0,
     load5: 0,
@@ -335,26 +357,6 @@ export type BootStagingSampleInput =
   | null;
 
 /**
- * Processes whose mere presence indicates active build contention, even if individual
- * process CPU ticks did not advance in a short sampling interval (e.g. cargo waiting
- * on rustc child processes, or rustc waiting on disk I/O / thread locks).
- *
- * Parked background services and idle watchers (esbuild dev-server daemons, tsc --watch,
- * cargo-watch) are deliberately NOT in this set; they are admitted when their ticks are flat
- * (activeCompilers = 0) and only detected when actively compiling (activeCompilers > 0).
- */
-export const ZERO_TICK_ACTIVE_BUILDERS = new Set([
-  "rustc",
-  "cargo",
-  "rust-lld",
-  "cargo-build",
-  "cargo-check",
-  "cargo-clippy",
-  "cargo-test",
-  "rustup",
-]);
-
-/**
  * Checks whether a load sample contains positive evidence of an active external builder.
  * - Any sample with activeCompilers > 0 (CPU ticks advanced or newly appeared builder).
  * - Discrete compilers/orchestrators (e.g. rustc, cargo) present in compilerNames,
@@ -362,34 +364,128 @@ export const ZERO_TICK_ACTIVE_BUILDERS = new Set([
  * - Parked background services and watchers (esbuild, tsc, cargo-watch) with 0 CPU ticks are admitted.
  * - Test suite self-load (compilers = 0, activeCompilers = 0, elevated load/core) remains admitted.
  * - Legacy hand-built mocks with compilers > 0 and activeCompilers undefined fail closed.
+ * - Multi-sample interval awareness: if an initial sample flagged a background daemon (like esbuild)
+ *   merely because it was newly seen without a baseline (prev = null), but later samples or interval
+ *   CPU tracking confirm the daemon's CPU ticks never advanced (0 tick advance / final active=0),
+ *   the parked daemon is recognized as idle and does not invalidate the run (chrome-agent-platform-0om0o).
  */
-export function hasActiveBuilder(sample: LoadSample): boolean {
+export function hasActiveBuilder(sample: LoadSample, allSamples?: LoadSample[]): boolean {
   if (!sample || !sample.measurable) return false;
 
-  // 1. Any compiler whose CPU ticks advanced since previous sample (or newly appeared)
-  if ((sample.activeCompilers ?? 0) > 0) return true;
-
-  // 2. Unbounded boolean evidence from sampler indicating a discrete builder was seen
+  // 1. Unbounded boolean evidence from sampler indicating a discrete builder was seen
   if (sample.hasDiscreteBuilder) return true;
 
-  // 3. Discrete compilers/orchestrators whose presence alone indicates build contention (rustc, cargo)
-  if ((sample.compilers ?? 0) > 0) {
-    if (Array.isArray(sample.compilerNames) && sample.compilerNames.length > 0) {
-      if (sample.compilerNames.some((name) => ZERO_TICK_ACTIVE_BUILDERS.has(name))) {
-        return true;
-      }
-    } else if (sample.activeCompilers === undefined) {
-      // Legacy hand-built mock with compilers > 0 and no names/activity: fail closed
+  // 2. Discrete compilers/orchestrators whose presence alone indicates build contention (rustc, cargo)
+  if ((sample.compilers ?? 0) > 0 && Array.isArray(sample.compilerNames)) {
+    if (sample.compilerNames.some((name) => isZeroTickActiveBuilder(name))) {
       return true;
     }
   }
 
-  // 4. Fallback for legacy mocks where activeCompilers is undefined and compilers > 0
+  // 3. Fallback for legacy mocks where activeCompilers is undefined and compilers > 0
   if (sample.activeCompilers === undefined && (sample.compilers ?? 0) > 0) {
     return true;
   }
 
-  return false;
+  // 4. If activeCompilers is 0 or undefined, no active builder
+  if ((sample.activeCompilers ?? 0) <= 0) return false;
+
+  // 5. Active compilers > 0: check if these are background services/watchers (e.g. esbuild, tsc, cargo-watch)
+  // that were flagged merely due to lack of predecessor baseline in an initial sample (prev === null)
+  // or newly-seen PID, but were actually parked throughout the boot interval (chrome-agent-platform-0om0o).
+  //
+  // Strict invariants (reviewer P1/P2, coord bcliu/onix1):
+  // - Applies across the boot interval for pre-existing daemons that remained parked from boot start to settling.
+  // - All active builders in the sample must be in KNOWN_PARKABLE_BUILDERS (esbuild, tsc, cargo-watch).
+  //   Discrete and non-parkable compilers (gcc, clang, rustc, cargo, make, ninja) are NEVER suppressed.
+  // - The daemon must exist in allSamples[0].cpu (running before boot started) AND finalSample.cpu (persisted through settling).
+  // - The daemon must NOT have compiled mid-interval: startTicks must match, and cpuTicks at settling must equal
+  //   cpuTicks before boot (compiled-then-parked fails closed as contention).
+  // - At settling (finalSample), activeCompilers must be 0 (daemon is not actively compiling).
+  // - Complete per-PID CPU evidence is strictly required (unrecorded PIDs or disappearing builders fail closed).
+  if (allSamples && allSamples.length > 1) {
+    // If the initial sample was explicitly baselined (unbaselined === false) and recorded activeCompilers > 0,
+    // its activity came from an actual predecessor baseline comparison and represents real compilation.
+    if (sample === allSamples[0] && sample.unbaselined === false) {
+      return true;
+    }
+
+    const activeNames = sample.activeCompilerNames && sample.activeCompilerNames.length > 0
+      ? sample.activeCompilerNames
+      : sample.compilerNames ?? [];
+
+    const allKnownParkable = activeNames.length > 0 &&
+      activeNames.every((name) => KNOWN_PARKABLE_BUILDERS.has(name));
+
+    if (allKnownParkable) {
+      const initialSample = allSamples[0];
+      const finalSample = allSamples[allSamples.length - 1];
+
+      // Final sample must be measurable and have 0 active compilers (parked at settling)
+      if (initialSample?.measurable && finalSample?.measurable && (finalSample.activeCompilers ?? 0) === 0) {
+        const firstCpu = initialSample.cpu;
+        const lastCpu = finalSample.cpu;
+
+        if (firstCpu && lastCpu) {
+          // Complete CPU evidence required:
+          // 1. Initial sample recorded CPU for all observed compilers
+          // 2. Final sample recorded CPU for all observed compilers
+          // 3. No compilers disappeared between initial and final sample
+          if (
+            (initialSample.compilers ?? 0) > firstCpu.size ||
+            (finalSample.compilers ?? 0) > lastCpu.size ||
+            (initialSample.compilers ?? 0) !== (finalSample.compilers ?? 0)
+          ) {
+            return true;
+          }
+
+          let allPersistedAndIdle = true;
+          let checkedPids = 0;
+
+          // Check every active process in this sample:
+          // It must have been running before boot started (in firstCpu),
+          // still running at boot settling (in lastCpu),
+          // with unchanged process identity (startTicks),
+          // and with ZERO CPU tick advancement across the entire boot interval!
+          for (const [pid, currProc] of (sample.cpu ?? firstCpu)) {
+            if (activeNames.includes(currProc.name)) {
+              checkedPids++;
+              const firstProc = firstCpu.get(pid);
+              const lastProc = lastCpu.get(pid);
+
+              if (!firstProc || !lastProc) {
+                // Newly spawned mid-interval or exited mid-interval!
+                allPersistedAndIdle = false;
+                break;
+              }
+
+              if (lastProc.startTicks !== firstProc.startTicks) {
+                // Process restarted or PID reused!
+                allPersistedAndIdle = false;
+                break;
+              }
+
+              if (lastProc.cpuTicks !== firstProc.cpuTicks) {
+                // Process consumed CPU ticks during the boot interval (compiled-then-parked)!
+                allPersistedAndIdle = false;
+                break;
+              }
+            }
+          }
+
+          if (allPersistedAndIdle && checkedPids > 0) {
+            // Verified: all active daemons existed at boot start and boot finish with ZERO tick accumulation.
+            // They were parked throughout the entire boot run!
+            return false;
+          }
+        }
+        // If firstCpu or lastCpu is missing, per-PID tick evidence is incomplete;
+        // fail closed as contention (reviewer P2).
+      }
+    }
+  }
+
+  return true;
 }
 
 /** Formats the active/contending builder names for diagnostic invalidReason strings. */
@@ -407,7 +503,7 @@ export function formatActiveBuilders(sample: LoadSample): string {
   // 2. Add zero-tick inferred builders (e.g. rustc, cargo) from compilerNames
   if (sample.compilerNames && sample.compilerNames.length > 0) {
     for (const n of sample.compilerNames) {
-      if (ZERO_TICK_ACTIVE_BUILDERS.has(n)) {
+      if (isZeroTickActiveBuilder(n)) {
         names.add(n);
       }
     }
@@ -467,7 +563,7 @@ export function attributeBootRun(
     // Parked esbuild services (0 CPU tick accumulation) do NOT cause contention refusals.
     // The suite's own parallel-phase self-load (compilers=0, activeCompilers=0, elevated load/core)
     // is admitted as valid.
-    const activeSample = samples.find(hasActiveBuilder);
+    const activeSample = samples.find((s) => hasActiveBuilder(s, samples));
 
     if (activeSample) {
       validMeasurement = false;
