@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.630] — 2026-10-10
+- Support bracketed URLs and titles (e.g. Wikipedia /wiki/Foo_[bar], IPv6 hosts, bracketed titles) in site documentation link extraction.
+
 ## [0.3.629] — 2026-10-10
 - Invalidate cached agent rosters immediately upon agent updates
 
