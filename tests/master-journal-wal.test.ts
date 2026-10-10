@@ -9,6 +9,7 @@ import {
   snapshotMasterJournalRepairEvidence,
 } from "../extension/lib/master-journal-owner-inspection.js";
 import { inspectIntactMasterJournalPrefixesForOwner } from "../extension/lib/master-journal-repair-prefix.js";
+import { deriveMasterJournalQuarantineManifest } from "../extension/lib/master-journal-quarantine-manifest.js";
 import {
   selectPublishedMasterJournalBackupPaths,
   validateStagedMasterJournalBackup,
@@ -99,6 +100,54 @@ async function legacyFixture(faults = {}) {
   }, readIssuedVersion: async (claim) => issued.get(claimKey(claim)) ?? null,
     readGeneration: async () => generation };
 }
+
+Deno.test("quarantine retention manifest derives distinct immutable names without copying bytes", async () => {
+  const sourceSha256 = "a".repeat(64);
+  const intent = { schemaVersion: 1, sequence: 2,
+    id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", evidenceSha256: "b".repeat(64),
+    requestedRepairRecords: [
+      { name: "frame-1-2.json", bytes: 8, sha256: sourceSha256 },
+      { name: "head-a.json", bytes: 8, sha256: sourceSha256 },
+    ] };
+  const manifest = await deriveMasterJournalQuarantineManifest(intent);
+  assertEquals(manifest.actionable, false);
+  assertEquals(manifest.candidates, []);
+  assertEquals(manifest.entries.length, 2);
+  assertEquals(manifest.entries[0].quarantineLeaf === manifest.entries[1].quarantineLeaf, false,
+    "equal raw content at two source names must never collide");
+  assertEquals(manifest.entries.every((entry) => /^quarantine-2-[0-9a-f]{64}\.json$/.test(entry.quarantineLeaf)), true);
+  assertEquals(/^[0-9a-f]{64}$/.test(manifest.sha256), true);
+  assertEquals((await deriveMasterJournalQuarantineManifest(intent)).sha256, manifest.sha256);
+  assertEquals((await deriveMasterJournalQuarantineManifest({ ...intent,
+    requestedRepairRecords: [{ ...intent.requestedRepairRecords[0], sha256: "c".repeat(64) },
+      intent.requestedRepairRecords[1]],
+  })).sha256 === manifest.sha256, false);
+  await assertRejects(() => deriveMasterJournalQuarantineManifest({ ...intent,
+    requestedRepairRecords: [intent.requestedRepairRecords[1], intent.requestedRepairRecords[0]],
+  }), Error, "sorted");
+});
+
+Deno.test("nonempty repair witness cannot discharge without a checked quarantine retention manifest", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  const head = await stageMasterJournalCutover(master, { journalExists: true,
+    journal: [{ id: "owned" }], archive: [], allocateVersion });
+  const wal = await master.getDirectoryHandle("journal-wal");
+  const torn = `frame-${head.epoch}-1.json`;
+  (await wal.getFileHandle(torn, { create: true })).bytes = encoder.encode("{ torn");
+  const plan = await fingerprintRequestedMasterJournalRepairLeaves(master, [torn]);
+  const id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  await stageMasterJournalRepairIntent(master, {
+    id, reason: "orphan-record", expectedEvidenceSha256: plan.evidenceSha256,
+    requestedRepairLeaves: [torn],
+  });
+  (await wal.getFileHandle("head-a.json")).bytes = encoder.encode(await sealMasterJournalRecord("head", {
+    ...head, repairIntentSequence: 1, repairIntentId: id,
+  }));
+  await assertRejects(() => readMasterJournalHead(master), Error,
+    "quarantine retention manifest not yet verified");
+  await assertRejects(() => readMasterJournalProjection(master), Error,
+    "quarantine retention manifest not yet verified");
+});
 
 Deno.test("requested quarantine evidence is fingerprinted but cannot authorize moving bytes", async () => {
   const { master, legacy } = await legacyFixture();

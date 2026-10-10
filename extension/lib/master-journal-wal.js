@@ -183,6 +183,12 @@ export async function readMasterJournalHead(master) {
       }
       ids.add(intent.id);
       previousId = intent.id;
+      // A name/digest request is NOT an approved, checked quarantine copy.
+      // Do not logically discharge even an exact-ID head until immutable copy
+      // readback and both-head backup retention are implemented together.
+      if (intent.requestedRepairRecords.length > 0) {
+        throw new Error("master journal quarantine retention manifest not yet verified");
+      }
       if (sequence === selected.repairIntentSequence && sequence > 1 &&
           (selected.epoch !== intent.previousHead.epoch ||
             selected.sequence <= intent.previousHead.sequence ||

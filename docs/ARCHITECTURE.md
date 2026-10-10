@@ -649,7 +649,12 @@ Each immutable witness stores the exact pre-issuance bounded evidence SHA-256
 and any explicitly requested WAL leaf names/sizes/digests, rechecked under the
 master lock. `fingerprintRequestedMasterJournalRepairLeaves` only returns
 forensic evidence; it does NOT decide that any leaf can be quarantined or that
-an owner approved moving it.
+an owner approved moving it. `deriveMasterJournalQuarantineManifest` only
+maps the checked requested names/digests to collision-resistant immutable
+quarantine leaf names and a manifest hash; it copies no bytes. A witness with
+ANY requested leaves remains fail-closed even under an exact-ID signed head
+until checked quarantine copies, head binding and backup retention are
+implemented together.
 Witnesses remain append-only (bounded to 32 per profile). The exact intent
 leaf grammar now participates in backup export/import: both head slots retain
 their own witness-prefix dependencies, a pending newer OR skipped orphan
