@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.637] — 2026-10-10
+- Reroute scheduled agent alarms through worker execution with decomposed service-worker callbacks.
+
 ## [0.3.636] — 2026-10-10
 - Move WASM and heavy binary fixture tests into dedicated test:heavy tier
 
