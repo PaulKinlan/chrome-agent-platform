@@ -647,8 +647,9 @@ the newer file blocks the older signed head immediately, and its eventual
 selected head must advance the previous checked epoch's sequence/version.
 Witnesses remain append-only (bounded to 32 per profile). The exact intent
 leaf grammar now participates in backup export/import: both head slots retain
-their own witness-prefix dependencies, a pending newer intent refuses export,
-and an import missing an older signed witness refuses. No product route
+their own witness-prefix dependencies, a pending newer OR skipped orphan
+intent refuses export rather than disappearing, and an import missing an older
+signed witness refuses. No product route
 approves a repair head. The reserved flat `quarantine-<intent-sequence>-<sha256>.json`
 WAL-root grammar is recognized but export AND restore deliberately refuse any
 such file until an owner-approved head binds its exact retention manifest;

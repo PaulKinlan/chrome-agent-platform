@@ -204,6 +204,12 @@ export async function selectPublishedMasterJournalBackupPaths(paths, open) {
   if ([...published].some((name) => !wal.has(name))) {
     throw new Error("master journal export is missing a published WAL record");
   }
+  // Staged frames can be omitted, but an append-only owner witness may NEVER
+  // disappear from a backup merely because its sequence has a gap. Refuse
+  // rather than manufacturing a profile with less repair evidence.
+  if ([...wal.keys()].some((name) => name.startsWith("repair-intent-") && !published.has(name))) {
+    throw new Error("master journal export contains unbound repair intent residue");
+  }
   return paths.filter((path) => {
     if (path === "memory/master/journal.json" || path === "memory/master/journal-archive.json") return false;
     return !path.startsWith(PREFIX) || published.has(path.slice(PREFIX.length));

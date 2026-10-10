@@ -73,6 +73,11 @@ Deno.test("backup retains and validates a head-bound append-only repair witness"
   await assertRejects(() => selectPublishedMasterJournalBackupPaths([...paths.keys()], async (path) => ({
     size: paths.get(path).byteLength, stream: new Blob([paths.get(path)]).stream(),
   })), Error, "newer repair intent pending");
+  paths.delete(nextIntent);
+  paths.set(`${PREFIX}repair-intent-3.json`, ENCODER.encode("orphan repair intent evidence"));
+  await assertRejects(() => selectPublishedMasterJournalBackupPaths([...paths.keys()], async (path) => ({
+    size: paths.get(path).byteLength, stream: new Blob([paths.get(path)]).stream(),
+  })), Error, "unbound repair intent residue");
 });
 
 Deno.test("backup validates an older discharged witness beside a newer checked repair head", async () => {
