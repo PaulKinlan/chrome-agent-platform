@@ -626,6 +626,7 @@ Deno.test("SW fire: routes through agent-worker.dispatch when offscreen host is 
     }
   });
 
+  let ensureShouldFail = false;
   globalThis.chrome = {
     runtime: {
       id: "test-extension-id",
@@ -636,7 +637,10 @@ Deno.test("SW fire: routes through agent-worker.dispatch when offscreen host is 
       onInstalled: noopListener,
       sendMessage: async (m) => {
         hostMessages.push(m);
-        if (m.type === "agent-worker-host:ensure") return { ok: true };
+        if (m.type === "agent-worker-host:ensure") {
+          if (ensureShouldFail) return { ok: false, error: "worker_crash" };
+          return { ok: true };
+        }
         if (m.type === "agent-worker-host:post") {
           if (m.msg?.scheduleName === "task_fail_dispatch") {
             // Simulate worker host rejecting the dispatch kick (8ivme):
@@ -787,7 +791,7 @@ Deno.test("SW fire: routes through agent-worker.dispatch when offscreen host is 
   // Assert one-shot schedule was marked done
   assertEquals(swStore.get("cap:scheduledTasks")?.[schedName], undefined, "one-shot schedule payload was consumed");
 
-  // ── Falsifier 8ivme: worker dispatch failure falls back to SW runTask with zero phantom runs ──
+  // ── Falsifier 4b066: worker dispatch kick refusal settles admitted run as failed and preserves schedule without falling back to SW runTask ──
   const failSched = "task_fail_dispatch";
   swStore.set("cap:scheduledTasks", {
     [failSched]: {
@@ -803,9 +807,33 @@ Deno.test("SW fire: routes through agent-worker.dispatch when offscreen host is 
 
   const afterFailRuns = await dispatch({ type: "run.list" });
   const matchingRuns = (afterFailRuns?.runs ?? []).filter((r) => r.scheduleName === failSched);
-  assertEquals(matchingRuns.length, 1, "Fallback run must be the ONLY run admitted (zero phantom runs)");
-  assertEquals(matchingRuns[0].phase, "terminal", "Fallback run completes on SW runTask path");
-  assert(!matchingRuns.some((r) => r.phase === "failed"), "No phantom failed run in durable registry");
+  assertEquals(matchingRuns.length, 1, "Only the pre-dispatched worker run exists in durable registry");
+  assertEquals(matchingRuns[0].phase, "terminal", "Admitted run settled upon kick refusal");
+  assert(swStore.get("cap:scheduledTasks")?.[failSched] !== undefined, "Schedule token preserved for retry when worker dispatch kick is refused (no SW runTask fallback)");
+  const failLogs = await dispatch({ type: "run.logs", executionId: matchingRuns[0].executionId });
+  assert(!failLogs?.logs?.some((r) => r?.type === "tool-result"), "SW runTask was not invoked; zero tool rows executed");
+
+  // ── Real product-path falsifier: preflight worker-unavailability (ensure failure) falls back to SW runTask and consumes schedule ──
+  ensureShouldFail = true;
+  const ensureFailSched = "task_ensure_fail";
+  swStore.set("cap:scheduledTasks", {
+    [ensureFailSched]: {
+      name: ensureFailSched,
+      task: "test ensure failure SW fallback",
+      at: Date.now() - 1000,
+      owner: { threadId: "thread-ensure-fail", agentRole: "hub" },
+    },
+  });
+  alarms.set(ensureFailSched, { when: Date.now() - 1000 });
+
+  await Promise.all(alarmListeners.map((fn) => fn({ name: ensureFailSched })));
+
+  ensureShouldFail = false;
+  const afterEnsureFailRuns = await dispatch({ type: "run.list" });
+  const ensureMatchingRuns = (afterEnsureFailRuns?.runs ?? []).filter((r) => r.scheduleName === ensureFailSched);
+  assertEquals(ensureMatchingRuns.length, 1, "Fallback run must be the ONLY run admitted on preflight failure");
+  assertEquals(ensureMatchingRuns[0].phase, "terminal", "Fallback run completes on SW runTask path");
+  assertEquals(swStore.get("cap:scheduledTasks")?.[ensureFailSched], undefined, "One-shot schedule payload was consumed by fallback runTask");
 
   // ── Falsifier gj6kn: synchronous result race does NOT trigger 120s timeout ──
   const syncSched = "task_sync_result_race";

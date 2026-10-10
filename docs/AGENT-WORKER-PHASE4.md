@@ -76,11 +76,15 @@ to SW `runTask` whenever developer features are off or the active provider is no
 Decomposition into SW-side callbacks:
 1. **Attribution & Admission**: SW pre-checks `cap:restoreFence` before dispatch (skipping dispatch if
    profile restore is in progress). It admits the durable run in `durableRuns` (`admitDurableRun`)
-   with `threadId`, `scheduleName`, `kind`, and `agentSurfaceRef` after successful worker dispatch
-   kick, ensuring that dispatch failures fall back to SW `runTask` with zero phantom durable runs
-   or duplicate task journal entries. If post-dispatch admission rejects (quota/fence), the SW immediately
-   steers `mode: "stop-run"` to prevent untracked worker execution. Unnamed schedules use the `"default"`
-   background worker identity to prevent alive-set bloat.
+   with `threadId`, `scheduleName`, `kind`, and `agentSurfaceRef` *before* worker dispatch so fast worker
+   progress and completions can never arrive before the run is admitted (gj6kn). If pre-dispatch admission
+   fails (e.g. quota/fence), dispatch is skipped and the schedule is preserved for retry (f3zyj).
+   If the subsequent worker dispatch kick is refused by the worker host (`!dispatchRes?.ok`), the admitted
+   run is settled as `phase: "failed"`, and `{ ok: false, error: dispatchRes?.error, skipped: true }` is returned
+   to preserve the scheduled task for retry without falling back to SW `runTask` (4b066). Real fallback to
+   SW `runTask` is reserved for worker-unavailability conditions evaluated during preflight (offscreen host
+   unavailable, developer features off, non-demo provider, multimodal attachments, or `agent-worker.ensure` failure).
+   Unnamed schedules use the `"default"` background worker identity to prevent alive-set bloat.
 2. **Initial Task Row**: SW logs the task row to the agent's memory journal and `durableRuns.appendLog`.
 3. **Fence & Heartbeat**: SW maintains the in-flight lock and heartbeat interval. If heartbeat fails
    or lock ownership is lost, `fence.signal` fires, revokes `runControl` immediately, and steers
