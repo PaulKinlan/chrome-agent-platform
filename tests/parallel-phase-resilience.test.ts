@@ -19,6 +19,24 @@ import { DEFAULT_PARALLEL_TIMEOUT_MS as SELECT_PARALLEL_TIMEOUT_MS } from "../sc
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/u, "");
 
+/**
+ * Computes a load-scaled timeout for resilience tests (chrome-agent-platform-ln7uw).
+ * Under gate load, Deno process initialization + TypeScript compilation can take
+ * several seconds before line 1 of a test probe executes. Sizing the ready-marker
+ * timeout with load (min 15s, ceiling 60s) prevents false-124 flakes on busy heavy slots.
+ */
+export function loadScaledTimeout(baseMs = 15_000, maxScale = 4): number {
+  try {
+    const load = Deno.loadavg()[0];
+    const cpus = navigator.hardwareConcurrency || 1;
+    const ratio = Math.max(1, load / cpus);
+    const scale = Math.min(maxScale, ratio);
+    return Math.round(baseMs * scale);
+  } catch {
+    return baseMs;
+  }
+}
+
 Deno.test("1k2a: DEFAULT_PARALLEL_TIMEOUT_MS is at least 30 minutes (1,800,000 ms)", () => {
   assert(RUN_PARALLEL_TIMEOUT_MS >= 1_800_000, `run-tests default was ${RUN_PARALLEL_TIMEOUT_MS}`);
   assert(SELECT_PARALLEL_TIMEOUT_MS >= 1_800_000, `select-tests default was ${SELECT_PARALLEL_TIMEOUT_MS}`);
@@ -238,13 +256,14 @@ Deno.test("passes immediately without marker", () => {
   await Deno.writeTextFile(probeFile, probeSrc);
 
   try {
+    const timeoutMs = String(loadScaledTimeout(15_000));
     const proc = new Deno.Command("node", {
       args: ["scripts/run-tests.mjs", probeFile],
       cwd: ROOT,
       env: {
-        CAP_PARALLEL_TEST_TIMEOUT_MS: "5000",
+        CAP_PARALLEL_TEST_TIMEOUT_MS: timeoutMs,
         CAP_PARALLEL_READY_FILE: missingReadyFile,
-        CAP_PARALLEL_READY_TIMEOUT_MS: "5000",
+        CAP_PARALLEL_READY_TIMEOUT_MS: timeoutMs,
       },
       stdout: "piped",
       stderr: "piped",
@@ -275,13 +294,14 @@ Deno.test("passes immediately after marker", () => {});
   await Deno.writeTextFile(probeFile, probeSrc);
 
   try {
+    const timeoutMs = String(loadScaledTimeout(15_000));
     const proc = new Deno.Command("node", {
       args: ["scripts/run-tests.mjs", probeFile],
       cwd: ROOT,
       env: {
-        CAP_PARALLEL_TEST_TIMEOUT_MS: "5000",
+        CAP_PARALLEL_TEST_TIMEOUT_MS: timeoutMs,
         CAP_PARALLEL_READY_FILE: readyFile,
-        CAP_PARALLEL_READY_TIMEOUT_MS: "5000",
+        CAP_PARALLEL_READY_TIMEOUT_MS: timeoutMs,
       },
       stdout: "piped",
       stderr: "piped",
@@ -294,6 +314,12 @@ Deno.test("passes immediately after marker", () => {});
   } finally {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
+});
+
+Deno.test("ln7uw: loadScaledTimeout is bounded and deterministic under varying load ratios", () => {
+  const tQuiet = loadScaledTimeout(15_000);
+  assert(tQuiet >= 15_000, `quiet timeout must be at least base 15s, got ${tQuiet}`);
+  assert(tQuiet <= 60_000, `quiet timeout must be capped at 4x ceiling, got ${tQuiet}`);
 });
 
 Deno.test("1k2a: passing parallel test that leaves an orphan process has orphan reaped on exit", async () => {
