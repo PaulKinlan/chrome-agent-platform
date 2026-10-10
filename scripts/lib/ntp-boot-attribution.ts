@@ -335,6 +335,94 @@ export type BootStagingSampleInput =
   | null;
 
 /**
+ * Processes whose mere presence indicates active build contention, even if individual
+ * process CPU ticks did not advance in a short sampling interval (e.g. cargo waiting
+ * on rustc child processes, or rustc waiting on disk I/O / thread locks).
+ *
+ * Parked background services and idle watchers (esbuild dev-server daemons, tsc --watch,
+ * cargo-watch) are deliberately NOT in this set; they are admitted when their ticks are flat
+ * (activeCompilers = 0) and only detected when actively compiling (activeCompilers > 0).
+ */
+export const ZERO_TICK_ACTIVE_BUILDERS = new Set([
+  "rustc",
+  "cargo",
+  "rust-lld",
+  "cargo-build",
+  "cargo-check",
+  "cargo-clippy",
+  "cargo-test",
+  "rustup",
+]);
+
+/**
+ * Checks whether a load sample contains positive evidence of an active external builder.
+ * - Any sample with activeCompilers > 0 (CPU ticks advanced or newly appeared builder).
+ * - Discrete compilers/orchestrators (e.g. rustc, cargo) present in compilerNames,
+ *   even if zero CPU ticks advanced in the sample window.
+ * - Parked background services and watchers (esbuild, tsc, cargo-watch) with 0 CPU ticks are admitted.
+ * - Test suite self-load (compilers = 0, activeCompilers = 0, elevated load/core) remains admitted.
+ * - Legacy hand-built mocks with compilers > 0 and activeCompilers undefined fail closed.
+ */
+export function hasActiveBuilder(sample: LoadSample): boolean {
+  if (!sample || !sample.measurable) return false;
+
+  // 1. Any compiler whose CPU ticks advanced since previous sample (or newly appeared)
+  if ((sample.activeCompilers ?? 0) > 0) return true;
+
+  // 2. Unbounded boolean evidence from sampler indicating a discrete builder was seen
+  if (sample.hasDiscreteBuilder) return true;
+
+  // 3. Discrete compilers/orchestrators whose presence alone indicates build contention (rustc, cargo)
+  if ((sample.compilers ?? 0) > 0) {
+    if (Array.isArray(sample.compilerNames) && sample.compilerNames.length > 0) {
+      if (sample.compilerNames.some((name) => ZERO_TICK_ACTIVE_BUILDERS.has(name))) {
+        return true;
+      }
+    } else if (sample.activeCompilers === undefined) {
+      // Legacy hand-built mock with compilers > 0 and no names/activity: fail closed
+      return true;
+    }
+  }
+
+  // 4. Fallback for legacy mocks where activeCompilers is undefined and compilers > 0
+  if (sample.activeCompilers === undefined && (sample.compilers ?? 0) > 0) {
+    return true;
+  }
+
+  return false;
+}
+
+/** Formats the active/contending builder names for diagnostic invalidReason strings. */
+export function formatActiveBuilders(sample: LoadSample): string {
+  const names = new Set<string>();
+
+  // 1. If explicit activeCompilerNames is provided, use those actively compiling processes
+  if (sample.activeCompilerNames && sample.activeCompilerNames.length > 0) {
+    for (const n of sample.activeCompilerNames) names.add(n);
+  } else if ((sample.activeCompilers ?? 0) > 0 && sample.compilerNames && sample.compilerNames.length > 0) {
+    // When activeCompilers > 0 without a distinct activeCompilerNames list, all compilerNames are considered active
+    for (const n of sample.compilerNames) names.add(n);
+  }
+
+  // 2. Add zero-tick inferred builders (e.g. rustc, cargo) from compilerNames
+  if (sample.compilerNames && sample.compilerNames.length > 0) {
+    for (const n of sample.compilerNames) {
+      if (ZERO_TICK_ACTIVE_BUILDERS.has(n)) {
+        names.add(n);
+      }
+    }
+  }
+
+  if (names.size > 0) {
+    return [...names].join(",");
+  }
+  if (sample.hasDiscreteBuilder) {
+    return "discrete builder (name omitted by diagnostic limit)";
+  }
+  return `${sample.activeCompilers ?? sample.compilers ?? 1} compilers`;
+}
+
+/**
  * Attributes all long tasks in a boot staging run, classifying marginal vs severe breaches.
  * Unrounded durations are checked against 50.0 ms strictly.
  * Measurement validity is established across the boot interval (pre, post, and intermediate samples).
@@ -375,20 +463,15 @@ export function attributeBootRun(
     invalidReason = `unmeasurable host load (${err}) [${hostEnvironment}]`;
   } else {
     // A run is contended/excluded ONLY with positive evidence of an EXTERNAL heavy builder
-    // (activeCompilers > 0, or legacy hand-built mock with compilers > 0 and activeCompilers undefined).
+    // (activeCompilers > 0, non-parked builders like rustc/cargo present, or legacy mock with compilers > 0).
     // Parked esbuild services (0 CPU tick accumulation) do NOT cause contention refusals.
-    const activeSample = samples.find((s) => {
-      const active = s.activeCompilers !== undefined ? s.activeCompilers : s.compilers;
-      return (active ?? 0) > 0;
-    });
+    // The suite's own parallel-phase self-load (compilers=0, activeCompilers=0, elevated load/core)
+    // is admitted as valid.
+    const activeSample = samples.find(hasActiveBuilder);
 
     if (activeSample) {
       validMeasurement = false;
-      const comps = (activeSample.activeCompilerNames && activeSample.activeCompilerNames.length > 0)
-        ? activeSample.activeCompilerNames.join(",")
-        : (activeSample.compilerNames && activeSample.compilerNames.length > 0)
-          ? activeSample.compilerNames.join(",")
-          : `${activeSample.activeCompilers ?? activeSample.compilers} compilers`;
+      const comps = formatActiveBuilders(activeSample);
       invalidReason = `concurrent heavy builder detected during boot: [${comps}] (${hostEnvironment})`;
     }
   }

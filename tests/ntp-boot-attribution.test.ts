@@ -15,13 +15,16 @@
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
-import { classifyActiveBuilders, type ProcCpuMap } from "../scripts/lib/quiet-window.ts";
+import { classifyActiveBuilders, isHeavyProcessName, type ProcCpuMap } from "../scripts/lib/quiet-window.ts";
 import {
   correlateLongTask,
   attributeBootRun,
   evaluateBootStagingPolicy,
   formatTaskAttribution,
   failedSample,
+  hasActiveBuilder,
+  formatActiveBuilders,
+  ZERO_TICK_ACTIVE_BUILDERS,
   type RawBootPageMetrics,
   type RawLongTaskEntry,
   type RawLoafEntry,
@@ -849,4 +852,267 @@ Deno.test("mujlt runner boundary: passing test emitting marker does NOT convert 
   } finally {
     try { Deno.removeSync(scratch, { recursive: true }); } catch {}
   }
+});
+
+// ── slzv6: detection of rustc and cargo builders as active contention ────────
+
+Deno.test("slzv6: external rustc builder is detected as contention even with 0 activeCompilers ticks", () => {
+  const rustcSample: any = {
+    measurable: true,
+    load1: 1.2,
+    load5: 0.8,
+    cores: 2,
+    loadPerCore: 0.6,
+    compilers: 1,
+    compilerNames: ["rustc"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+  };
+
+  assertEquals(hasActiveBuilder(rustcSample), true, "hasActiveBuilder must detect rustc even with 0 active ticks");
+  assertEquals(formatActiveBuilders(rustcSample), "rustc");
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    rustcSample,
+  );
+
+  assertEquals(run.validMeasurement, false, "external rustc must be classified as contended measurement");
+  assertEquals(run.hostLoaded, true);
+  assertStringIncludes(run.invalidReason!, "concurrent heavy builder detected during boot: [rustc]");
+});
+
+Deno.test("slzv6: external cargo builder (waiting on child / 0 tick advance) is detected as contention", () => {
+  const cargoSample: any = {
+    measurable: true,
+    load1: 2.1,
+    load5: 1.5,
+    cores: 2,
+    loadPerCore: 1.05,
+    compilers: 1,
+    compilerNames: ["cargo"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+  };
+
+  assertEquals(hasActiveBuilder(cargoSample), true, "hasActiveBuilder must detect cargo");
+  assertEquals(formatActiveBuilders(cargoSample), "cargo");
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    cargoSample,
+  );
+
+  assertEquals(run.validMeasurement, false, "external cargo must be classified as contended measurement");
+  assertEquals(run.hostLoaded, true);
+  assertStringIncludes(run.invalidReason!, "concurrent heavy builder detected during boot: [cargo]");
+});
+
+Deno.test("slzv6: mixed parked esbuild and external rustc detects rustc as active contention", () => {
+  const mixedSample: any = {
+    measurable: true,
+    load1: 1.8,
+    load5: 1.1,
+    cores: 2,
+    loadPerCore: 0.9,
+    compilers: 2,
+    compilerNames: ["esbuild", "rustc"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+  };
+
+  assertEquals(hasActiveBuilder(mixedSample), true);
+  assertEquals(formatActiveBuilders(mixedSample), "rustc", "formatActiveBuilders must omit parked esbuild");
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    mixedSample,
+  );
+
+  assertEquals(run.validMeasurement, false, "presence of non-parked builder must invalidate run despite parked esbuild");
+  assertEquals(run.hostLoaded, true);
+  assertStringIncludes(run.invalidReason!, "concurrent heavy builder detected during boot: [rustc]");
+});
+
+Deno.test("slzv6: parked esbuild is omitted from diagnostics when another process has advanced ticks", () => {
+  const sampleWithActiveRustc: any = {
+    measurable: true,
+    load1: 2.0,
+    load5: 1.5,
+    cores: 2,
+    loadPerCore: 1.0,
+    compilers: 2,
+    compilerNames: ["esbuild", "rustc"],
+    activeCompilers: 1,
+    activeCompilerNames: ["rustc"],
+  };
+
+  assertEquals(hasActiveBuilder(sampleWithActiveRustc), true);
+  assertEquals(formatActiveBuilders(sampleWithActiveRustc), "rustc", "formatActiveBuilders must not include parked esbuild when activeCompilers > 0");
+});
+
+Deno.test("slzv6: parked watchers (tsc, cargo-watch) with 0 activeCompilers remain admitted as valid", () => {
+  for (const name of ["tsc", "cargo-watch"]) {
+    const watcherSample: any = {
+      measurable: true,
+      load1: 0.3,
+      load5: 0.2,
+      cores: 2,
+      loadPerCore: 0.15,
+      compilers: 1,
+      compilerNames: [name],
+      activeCompilers: 0,
+      activeCompilerNames: [],
+    };
+
+    assertEquals(hasActiveBuilder(watcherSample), false, `idle ${name} watcher must not trigger active builder detection`);
+
+    const run = attributeBootRun(
+      1,
+      { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+      watcherSample,
+    );
+
+    assertEquals(run.validMeasurement, true, `idle ${name} watcher must be admitted as valid measurement`);
+    assertEquals(run.hostLoaded, false);
+    assertEquals(run.invalidReason, undefined);
+  }
+});
+
+Deno.test("slzv6: active tsc and cargo-watch processes are detected as contention via activeCompilers", () => {
+  for (const name of ["tsc", "cargo-watch"]) {
+    const activeWatcherSample: any = {
+      measurable: true,
+      load1: 1.8,
+      load5: 1.2,
+      cores: 2,
+      loadPerCore: 0.9,
+      compilers: 1,
+      compilerNames: [name],
+      activeCompilers: 1,
+      activeCompilerNames: [name],
+    };
+
+    assertEquals(hasActiveBuilder(activeWatcherSample), true);
+    assertEquals(formatActiveBuilders(activeWatcherSample), name);
+
+    const run = attributeBootRun(
+      1,
+      { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+      activeWatcherSample,
+    );
+
+    assertEquals(run.validMeasurement, false, `active ${name} compilation must invalidate run`);
+    assertEquals(run.hostLoaded, true);
+    assertStringIncludes(run.invalidReason!, `concurrent heavy builder detected during boot: [${name}]`);
+  }
+});
+
+Deno.test("slzv6: hasDiscreteBuilder boolean preserves contention detection even if compilerNames is capped at 8 parked daemons", () => {
+  // Simulates 8 parked esbuild/watcher daemons filling the 8-name diagnostic cap,
+  // while a 9th process was rustc with flat ticks.
+  const cappedSample: any = {
+    measurable: true,
+    load1: 2.5,
+    load5: 1.8,
+    cores: 2,
+    loadPerCore: 1.25,
+    compilers: 9,
+    // 8 distinct parked names filling the array:
+    compilerNames: ["esbuild", "tsc", "cargo-watch", "daemon4", "daemon5", "daemon6", "daemon7", "daemon8"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    hasDiscreteBuilder: true,
+  };
+
+  assertEquals(hasActiveBuilder(cappedSample), true, "hasDiscreteBuilder must trigger contention detection even if rustc was not in capped compilerNames array");
+
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+    cappedSample,
+  );
+
+  assertEquals(run.validMeasurement, false, "run must be invalidated by hasDiscreteBuilder evidence");
+  assertEquals(run.hostLoaded, true);
+  assertStringIncludes(run.invalidReason!, "concurrent heavy builder detected during boot: [discrete builder (name omitted by diagnostic limit)]");
+});
+
+Deno.test("slzv6: rust toolchain variants (rust-lld, cargo-build) are detected as active builders", () => {
+  for (const name of ["rust-lld", "cargo-build", "cargo-clippy", "cargo-check", "cargo-test", "rustup"]) {
+    const sample: any = {
+      measurable: true,
+      load1: 1.0,
+      load5: 0.5,
+      cores: 2,
+      loadPerCore: 0.5,
+      compilers: 1,
+      compilerNames: [name],
+      activeCompilers: 0,
+      activeCompilerNames: [],
+    };
+    assertEquals(hasActiveBuilder(sample), true, `${name} must be recognized by hasActiveBuilder`);
+    assertEquals(formatActiveBuilders(sample), name);
+    const run = attributeBootRun(
+      1,
+      { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] },
+      sample,
+    );
+    assertEquals(run.validMeasurement, false, `${name} must be detected as contention`);
+    assertStringIncludes(run.invalidReason!, `concurrent heavy builder detected during boot: [${name}]`);
+  }
+});
+
+Deno.test("slzv6: isHeavyProcessName recognizes rustc, cargo, rust-lld, and cargo-* variants (including cargo-watch)", () => {
+  for (const name of ["rustc", "cargo", "rust-lld", "cargo-build", "cargo-clippy", "cargo-check", "cargo-test", "cargo-watch", "rustup"]) {
+    assert(isHeavyProcessName(name), `${name} must be recognized as heavy process`);
+  }
+  for (const name of ["deno", "node", "chrome", "chromium", "bash", "flock"]) {
+    assertEquals(isHeavyProcessName(name), false, `${name} must NOT be recognized as heavy process`);
+  }
+});
+
+Deno.test("slzv6: multi-run staging policy excludes rustc-contended runs from median calculation", () => {
+  const cleanSample: any = {
+    measurable: true,
+    load1: 0.2,
+    load5: 0.1,
+    cores: 2,
+    loadPerCore: 0.1,
+    compilers: 0,
+    compilerNames: [],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+  };
+  const rustcSample: any = {
+    measurable: true,
+    load1: 2.0,
+    load5: 1.5,
+    cores: 2,
+    loadPerCore: 1.0,
+    compilers: 1,
+    compilerNames: ["rustc"],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+  };
+
+  // Run 1: clean, 0 long tasks
+  const run1 = attributeBootRun(1, { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] }, cleanSample);
+  // Run 2: clean, 0 long tasks
+  const run2 = attributeBootRun(2, { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] }, cleanSample);
+  // Run 3: rustc contended with a 75ms long task
+  const run3 = attributeBootRun(3, { composerReadyEndMs: 70, threadListHydratedEndMs: 90, longTasks: [{ duration: 75, startTime: 150 }] }, rustcSample);
+
+  assertEquals(run1.validMeasurement, true);
+  assertEquals(run2.validMeasurement, true);
+  assertEquals(run3.validMeasurement, false, "run 3 under rustc must be classified as contended measurement");
+
+  const policy = evaluateBootStagingPolicy([run1, run2, run3]);
+  assertEquals(policy.ok, true, "contended run 3 with long task must be excluded from median");
+  assertEquals(policy.validRuns.length, 2);
+  assertEquals(policy.contendedRuns.length, 1);
+  assertEquals(policy.medianTaskCount, 0);
 });

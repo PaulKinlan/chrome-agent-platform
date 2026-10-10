@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.632] — 2026-10-10
+- Contention detection in NTP boot staging now recognizes rustc and cargo builders to avoid false contract breaches under concurrent build load.
+
 ## [0.3.631] — 2026-10-10
 - Keep agent tasks starting reliably while a page is still loading, and fix a rare crash when the WebAssembly host starts.
 
