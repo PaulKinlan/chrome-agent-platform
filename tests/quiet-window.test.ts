@@ -553,17 +553,30 @@ Deno.test("mkax: the REAL journey gate refuses with exit 75 while a REAL compile
     }).spawn();
     burners.push(burn(0), burn(1));
     await new Promise((r) => setTimeout(r, 1500));
+    // cec16 / vqwpr: admission is allowed longer than the no-assertion watchdog.
+    // The watchdog must not pre-empt the honest quiet refusal with 124.
+    // Under parallel suite load, pre-launch setup (profile dir, evidence dir, fixture
+    // server) can exceed a tight 250ms before launchJourneyChrome() suspends the watchdog
+    // via beginLaunchAdmission(). Scale the watchdog and quiet-wait proportionally based
+    // on ambient load, strictly preserving CAP_QUIET_WAIT_MS > CAP_JOURNEY_WATCHDOG_MS
+    // (the cec16 invariant: admission wait outlasts the watchdog, proving beginLaunchAdmission
+    // protects admission from being pre-empted).
+    const [load1] = Deno.loadavg();
+    const loadScale = Math.max(1, Math.min(5, Math.ceil(load1 / 2)));
+    const watchdogMs = String(1000 * loadScale);
+    const quietWaitMs = String(2500 * loadScale);
+    const gateBoundMs = String(4000 * loadScale);
+    const sampleMs = String(150 * loadScale);
+
     const run = await new Deno.Command(Deno.execPath(), {
       args: ["run", "-A", "--no-check", `${ROOT}scripts/chrome-journeys.ts`],
       cwd: ROOT,
       stdout: "piped",
       stderr: "piped",
       env: {
-        CAP_QUIET_WAIT_MS: "800",
-        // cec16: admission is allowed longer than the no-assertion watchdog.
-        // The watchdog must not pre-empt the honest quiet refusal with 124.
-        CAP_JOURNEY_WATCHDOG_MS: "250",
-        CAP_QUIET_SAMPLE_MS: "150",
+        CAP_QUIET_WAIT_MS: quietWaitMs,
+        CAP_JOURNEY_WATCHDOG_MS: watchdogMs,
+        CAP_QUIET_SAMPLE_MS: sampleMs,
         CAP_QUIET_MAX_COMPILERS: "1",
         CAP_QUIET_SUSTAINED: "2",
         // zeew — TWO ambient assumptions removed, and the FIRST is the real one:
@@ -581,7 +594,7 @@ Deno.test("mkax: the REAL journey gate refuses with exit 75 while a REAL compile
         //    can cause this refusal is the test's own compiler (the
         //    startup-failure drill above pins it the same way).
         CAP_HEAVY_GATE_SLOT: `${dir}/gate.lock`,
-        CAP_HEAVY_GATE_BOUND_MS: "1200",
+        CAP_HEAVY_GATE_BOUND_MS: gateBoundMs,
         CAP_QUIET_MAX_LOAD_PER_CORE: "100",
       },
     }).output();
