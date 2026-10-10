@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.646] — 2026-10-10
+- Keep the security suite's own checks from failing spuriously on a busier machine.
+
 ## [0.3.645] — 2026-10-10
 - Redact adapter error details and sanitise ACP bridge error logging so secrets never reach the log.
 
