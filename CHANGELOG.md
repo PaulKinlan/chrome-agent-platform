@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.655] — 2026-10-10
+- Keep the Create-click readiness test tied to the real scaling helper it guards.
+
 ## [0.3.654] — 2026-10-10
 - Keep the quiet-window test's documentation of its load-scaled timing bound accurate.
 
