@@ -957,8 +957,20 @@ export function createAcpServer(
                   try {
                     const frame = JSON.parse(trimmed);
                     if (frame?.error) {
-                      const msg = typeof frame.error?.message === "string" ? frame.error.message : JSON.stringify(frame.error);
-                      console.error(`[acp-bridge] adapter error for harness "${connectionHarness}" (id ${frame.id ?? "none"}): ${msg} (code ${frame.error?.code ?? "unknown"})`);
+                      const rawMsg = typeof frame.error?.message === "string"
+                        ? frame.error.message
+                        : "(non-string error message)";
+                      const sanitizedMsg = rawMsg.replace(/[\r\n]+/g, " ");
+                      const msg = sanitizedMsg.length > 500
+                        ? `${sanitizedMsg.slice(0, 500)}… [truncated]`
+                        : sanitizedMsg;
+                      const code = (typeof frame.error?.code === "number" || typeof frame.error?.code === "string")
+                        ? frame.error.code
+                        : "unknown";
+                      const frameId = (typeof frame.id === "string" || typeof frame.id === "number")
+                        ? frame.id
+                        : (frame.id ?? "none");
+                      console.error(`[acp-bridge] adapter error for harness "${connectionHarness}" (id ${frameId}): ${msg} (code ${code})`);
                     }
                     if (frame?.method === "_auth/status_update" && frame.params?.authStatus?.kind === "none") {
                       console.error(`[acp-bridge] adapter auth status for harness "${connectionHarness}": ${frame.params.authStatus?.label || "Not logged in"}`);
