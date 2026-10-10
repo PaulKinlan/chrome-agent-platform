@@ -1287,3 +1287,44 @@ rl.on("line", (line) => {
     await server.shutdown();
   }
 });
+
+Deno.test("acp-bridge /health sanitizes client-supplied ?harness= query parameter and reflected error", async () => {
+  const server = createAcpServer(0, undefined, {}, undefined, TEST_BRIDGE_TOKEN);
+  const port = (server as any).addr.port;
+
+  // 1. Attack payload with 7-bit OSC, C1 CSI, and C1 OSC sequences
+  const attackHarness = "\x1b]0;HEALTH_OSC_PWN\u0007\u009b31mbad_\u009dHEALTH_C1_PWN\u009c";
+
+  // 2. Exact bead repro with C1 CSI + BEL + CSI color (chrome-agent-platform-5dez3)
+  const reproHarness = "\u009b]0;HEALTH_RAW_C1\u0007\u001b[31mX";
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/health?harness=${encodeURIComponent(attackHarness)}`);
+    assertEquals(res.status, 200, "/health should answer with 200");
+    const rawText = await res.text();
+    // Raw response text should not contain unescaped C1 control characters (0x7F - 0x9F)
+    assert(!/[\x7f-\x9f]/.test(rawText), `Found C1 control characters in /health response: "${rawText}"`);
+    assert(!rawText.includes("HEALTH_OSC_PWN"), `OSC payload leaked in /health response: "${rawText}"`);
+    assert(!rawText.includes("HEALTH_C1_PWN"), `C1 OSC payload leaked in /health response: "${rawText}"`);
+
+    const json = JSON.parse(rawText);
+    assertEquals(json.ok, true);
+    assertEquals(json.probeHarness, "bad_");
+    assert(!/[\x00-\x1f\x7f-\x9f]/.test(json.probeHarness), `probeHarness contains control characters: "${json.probeHarness}"`);
+    assert(typeof json.error === "string", "Unknown harness probe must produce an error field in /health response");
+    assert(!/[\x00-\x1f\x7f-\x9f]/.test(json.error), `error contains control characters: "${json.error}"`);
+    assert(!json.error.includes("HEALTH_OSC_PWN"), `OSC payload leaked in error field: "${json.error}"`);
+    assert(!json.error.includes("HEALTH_C1_PWN"), `C1 OSC payload leaked in error field: "${json.error}"`);
+
+    // Test exact bead repro: C1 CSI byte is stripped, never emitted verbatim
+    const resRepro = await fetch(`http://127.0.0.1:${port}/health?harness=${encodeURIComponent(reproHarness)}`);
+    assertEquals(resRepro.status, 200);
+    const rawReproText = await resRepro.text();
+    assert(!/[\x7f-\x9f]/.test(rawReproText), `C1 control bytes found in /health repro response: "${rawReproText}"`);
+    assert(!rawReproText.includes("\u009b"), `Raw U+009B leaked in response`);
+    assert(!rawReproText.includes("\u0007"), `Raw BEL leaked in response`);
+    assert(!rawReproText.includes("\x1b"), `Raw ESC leaked in response`);
+  } finally {
+    await server.shutdown();
+  }
+});
