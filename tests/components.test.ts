@@ -2006,101 +2006,455 @@ Deno.test("harness-agent-button: renders a named native action, escapes names, a
   if (/<button[^>]*aria-current/.test(rendered)) throw new Error("Current state did not clear");
 });
 
-Deno.test("2y7qe recurrence guard: every cross-module call to components-core is imported and exported", async () => {
-  const acorn = await import("npm:acorn@8.18.0");
-  const path = await import("node:path");
+function extractBindings(pattern: any, out: Set<string>) {
+  if (!pattern) return;
+  if (pattern.type === "Identifier") {
+    out.add(pattern.name);
+  } else if (pattern.type === "ObjectPattern") {
+    for (const p of pattern.properties ?? []) {
+      if (p.type === "Property") extractBindings(p.value, out);
+      else if (p.type === "RestElement") extractBindings(p.argument, out);
+    }
+  } else if (pattern.type === "ArrayPattern") {
+    for (const el of pattern.elements ?? []) if (el) extractBindings(el, out);
+  } else if (pattern.type === "AssignmentPattern") {
+    extractBindings(pattern.left, out);
+  } else if (pattern.type === "RestElement") {
+    extractBindings(pattern.argument, out);
+  }
+}
 
-  function extractBindings(pattern: any, out: Set<string>) {
-    if (!pattern) return;
-    if (pattern.type === "Identifier") {
-      out.add(pattern.name);
-    } else if (pattern.type === "ObjectPattern") {
-      for (const p of pattern.properties ?? []) {
-        if (p.type === "Property") extractBindings(p.value, out);
-        else if (p.type === "RestElement") extractBindings(p.argument, out);
+async function fileExists(p: string): Promise<boolean> {
+  try {
+    const stat = await Deno.stat(p);
+    return stat.isFile;
+  } catch {
+    return false;
+  }
+}
+
+async function getModuleExports(
+  filePath: string,
+  acorn: any,
+  path: any,
+  moduleExportsCache: Map<string, { exports: Set<string>; defined: Set<string> }>,
+): Promise<{ exports: Set<string>; defined: Set<string> }> {
+  const cached = moduleExportsCache.get(filePath);
+  if (cached) return cached;
+
+  const code = await Deno.readTextFile(filePath);
+  const ast = acorn.parse(code, { sourceType: "module", ecmaVersion: "latest" });
+  const exports = new Set<string>();
+  const defined = new Set<string>();
+
+  for (const node of (ast.body as any[])) {
+    if (node.type === "FunctionDeclaration" && node.id?.name) {
+      defined.add(node.id.name);
+    } else if (node.type === "ClassDeclaration" && node.id?.name) {
+      defined.add(node.id.name);
+    } else if (node.type === "VariableDeclaration") {
+      for (const d of node.declarations ?? []) extractBindings(d.id, defined);
+    } else if (node.type === "ExportNamedDeclaration") {
+      if (node.declaration) {
+        if (node.declaration.type === "FunctionDeclaration" && node.declaration.id?.name) {
+          defined.add(node.declaration.id.name);
+          exports.add(node.declaration.id.name);
+        } else if (node.declaration.type === "ClassDeclaration" && node.declaration.id?.name) {
+          defined.add(node.declaration.id.name);
+          exports.add(node.declaration.id.name);
+        } else if (node.declaration.type === "VariableDeclaration") {
+          const declNames = new Set<string>();
+          for (const d of node.declaration.declarations ?? []) extractBindings(d.id, declNames);
+          for (const name of declNames) {
+            defined.add(name);
+            exports.add(name);
+          }
+        }
       }
-    } else if (pattern.type === "ArrayPattern") {
-      for (const el of pattern.elements ?? []) if (el) extractBindings(el, out);
-    } else if (pattern.type === "AssignmentPattern") {
-      extractBindings(pattern.left, out);
-    } else if (pattern.type === "RestElement") {
-      extractBindings(pattern.argument, out);
+      if (node.specifiers) {
+        for (const s of node.specifiers) {
+          const exp = s.exported?.name ?? s.local?.name;
+          if (exp) exports.add(exp);
+          if (!node.source && s.local?.name) defined.add(s.local.name);
+        }
+      }
+    } else if (node.type === "ExportDefaultDeclaration") {
+      exports.add("default");
+    } else if (node.type === "ExportAllDeclaration" && node.source?.value) {
+      const subSpec = node.source.value;
+      if (typeof subSpec === "string" && (subSpec.startsWith("./") || subSpec.startsWith("../"))) {
+        const subResolved = path.resolve(path.dirname(filePath), subSpec);
+        if (await fileExists(subResolved)) {
+          const sub = await getModuleExports(subResolved, acorn, path, moduleExportsCache);
+          for (const e of sub.exports) exports.add(e);
+        }
+      }
     }
   }
 
-  async function fileExists(p: string): Promise<boolean> {
-    try {
-      const stat = await Deno.stat(p);
-      return stat.isFile;
-    } catch {
-      return false;
+  const res = { exports, defined };
+  moduleExportsCache.set(filePath, res);
+  return res;
+}
+
+interface AuditOptions {
+  f: string;
+  baseDir: string;
+  code: string;
+  coreFilePath: string;
+  coreExportedSymbols: Set<string>;
+  coreDefinedSymbols: Set<string>;
+  moduleExportsCache: Map<string, { exports: Set<string>; defined: Set<string> }>;
+  reports?: string[];
+  acorn: any;
+  path: any;
+}
+
+async function auditModuleAst(options: AuditOptions): Promise<string[]> {
+  const { f, baseDir, code, coreFilePath, coreExportedSymbols, coreDefinedSymbols, moduleExportsCache, reports, acorn, path } = options;
+  const ast = acorn.parse(code, { sourceType: "module", ecmaVersion: "latest" });
+  const violations: string[] = [];
+
+  interface ImportedSymbol {
+    localName: string;
+    importedName: string;
+    specifier: string;
+    resolvedPath: string;
+    kind: "named" | "default";
+  }
+
+  interface ImportedNamespace {
+    localName: string;
+    specifier: string;
+    resolvedPath: string;
+    kind: "namespace";
+  }
+
+  const fileImports = new Map<string, ImportedSymbol>();
+  const fileNamespaces = new Map<string, ImportedNamespace>();
+  const fileDeclared = new Set<string>();
+
+  for (const node of (ast.body as any[])) {
+    if (node.type === "ImportDeclaration") {
+      const specifier = node.source?.value;
+      if (typeof specifier !== "string") continue;
+
+      let resolvedPath: string | null = null;
+      if (specifier.startsWith("./") || specifier.startsWith("../")) {
+        resolvedPath = path.resolve(baseDir, specifier);
+      } else {
+        const msg = `[skip-and-report] ${baseDir}/${f}: non-relative import specifier: ${specifier}`;
+        console.warn(msg);
+        reports?.push(msg);
+      }
+
+      let targetExports: Set<string> | null = null;
+      const relTarget = resolvedPath ? path.relative(".", resolvedPath) : specifier;
+      if (resolvedPath) {
+        if (moduleExportsCache.has(resolvedPath)) {
+          targetExports = moduleExportsCache.get(resolvedPath)!.exports;
+        } else if (await fileExists(resolvedPath)) {
+          const mod = await getModuleExports(resolvedPath, acorn, path, moduleExportsCache);
+          targetExports = mod.exports;
+        } else {
+          violations.push(`${baseDir}/${f}: imports from '${specifier}', but module file cannot be resolved at ${relTarget}`);
+        }
+      }
+
+      for (const s of node.specifiers ?? []) {
+        if (s.type === "ImportSpecifier") {
+          const localName = s.local?.name;
+          const importedName = s.imported?.name ?? localName;
+          if (localName && resolvedPath) {
+            fileImports.set(localName, { localName, importedName, specifier, resolvedPath, kind: "named" });
+          }
+
+          if (targetExports && !targetExports.has(importedName)) {
+            violations.push(`${baseDir}/${f}: imports '${importedName}' from ${specifier}, but it is not exported by ${relTarget}`);
+          }
+
+          const isCoreSymbol = coreDefinedSymbols.has(importedName) || coreExportedSymbols.has(importedName);
+          if (isCoreSymbol && resolvedPath && resolvedPath !== coreFilePath) {
+            violations.push(`${baseDir}/${f}: wrong-origin import: '${importedName}' is a core symbol in ${baseDir}/components-core.js, but is imported from ${specifier} (${relTarget})`);
+          }
+        } else if (s.type === "ImportDefaultSpecifier") {
+          const localName = s.local?.name;
+          if (localName && resolvedPath) {
+            fileImports.set(localName, { localName, importedName: "default", specifier, resolvedPath, kind: "default" });
+          }
+          if (targetExports && !targetExports.has("default")) {
+            violations.push(`${baseDir}/${f}: imports default from ${specifier}, but default is not exported by ${relTarget}`);
+          }
+        } else if (s.type === "ImportNamespaceSpecifier") {
+          const localName = s.local?.name;
+          if (localName && resolvedPath) {
+            fileNamespaces.set(localName, { localName, specifier, resolvedPath, kind: "namespace" });
+          }
+        } else {
+          const msg = `[skip-and-report] ${baseDir}/${f}: unsupported import specifier type: ${s.type}`;
+          console.warn(msg);
+          reports?.push(msg);
+        }
+      }
+    } else if (node.type === "ExportNamedDeclaration" && node.source) {
+      const specifier = node.source.value;
+      const resolvedPath = (typeof specifier === "string" && (specifier.startsWith("./") || specifier.startsWith("../")))
+        ? path.resolve(baseDir, specifier)
+        : null;
+      const relTarget = resolvedPath ? path.relative(".", resolvedPath) : String(specifier);
+      let targetExports: Set<string> | null = null;
+      if (resolvedPath) {
+        if (moduleExportsCache.has(resolvedPath)) {
+          targetExports = moduleExportsCache.get(resolvedPath)!.exports;
+        } else if (await fileExists(resolvedPath)) {
+          const mod = await getModuleExports(resolvedPath, acorn, path, moduleExportsCache);
+          targetExports = mod.exports;
+        } else {
+          violations.push(`${baseDir}/${f}: re-exports from '${specifier}', but module file cannot be resolved at ${relTarget}`);
+        }
+      }
+      if (node.specifiers) {
+        for (const s of node.specifiers) {
+          const importedName = s.local?.name ?? s.exported?.name;
+          if (targetExports && !targetExports.has(importedName)) {
+            violations.push(`${baseDir}/${f}: re-exports '${importedName}' from ${specifier}, but it is not exported by ${relTarget}`);
+          }
+          const isCoreSymbol = coreDefinedSymbols.has(importedName) || coreExportedSymbols.has(importedName);
+          if (isCoreSymbol && resolvedPath && resolvedPath !== coreFilePath) {
+            violations.push(`${baseDir}/${f}: wrong-origin re-export: '${importedName}' is a core symbol in ${baseDir}/components-core.js, but is re-exported from ${specifier} (${relTarget})`);
+          }
+        }
+      }
+    } else if (node.type === "FunctionDeclaration" && node.id?.name) {
+      fileDeclared.add(node.id.name);
+    } else if (node.type === "ClassDeclaration" && node.id?.name) {
+      fileDeclared.add(node.id.name);
+    } else if (node.type === "VariableDeclaration") {
+      for (const d of node.declarations ?? []) extractBindings(d.id, fileDeclared);
+    } else if (node.type === "ExportNamedDeclaration" && node.declaration) {
+      if (node.declaration.id?.name) {
+        fileDeclared.add(node.declaration.id.name);
+      } else if (node.declaration.declarations) {
+        for (const d of node.declaration.declarations ?? []) extractBindings(d.id, fileDeclared);
+      }
     }
   }
 
-  const moduleExportsCache = new Map<string, { exports: Set<string>; defined: Set<string> }>();
+  function walk(node: any, scope: Set<string>) {
+    if (!node) return;
 
-  async function getModuleExports(filePath: string): Promise<{ exports: Set<string>; defined: Set<string> }> {
-    const cached = moduleExportsCache.get(filePath);
-    if (cached) return cached;
+    // (b) Dynamic import detection: ImportExpression or CallExpression where callee is Import
+    if (node.type === "ImportExpression" || (node.type === "CallExpression" && node.callee?.type === "Import")) {
+      const sourceNode = node.source ?? node.arguments?.[0];
+      let spec: string | null = null;
+      if (sourceNode?.type === "Literal" && typeof sourceNode.value === "string") {
+        spec = sourceNode.value;
+      } else if (sourceNode?.type === "TemplateLiteral" && (!sourceNode.expressions || sourceNode.expressions.length === 0)) {
+        spec = sourceNode.quasis?.[0]?.value?.cooked ?? null;
+      }
 
-    const code = await Deno.readTextFile(filePath);
-    const ast = acorn.parse(code, { sourceType: "module", ecmaVersion: "latest" });
-    const exports = new Set<string>();
-    const defined = new Set<string>();
+      if (spec) {
+        const msg = `[skip-and-report] ${baseDir}/${f}: dynamic import: '${spec}'`;
+        console.warn(msg);
+        reports?.push(msg);
+      } else {
+        const msg = `[skip-and-report] ${baseDir}/${f}: dynamic import with non-literal specifier`;
+        console.warn(msg);
+        reports?.push(msg);
+      }
+    }
 
-    for (const node of (ast.body as any[])) {
-      if (node.type === "FunctionDeclaration" && node.id?.name) {
-        defined.add(node.id.name);
-      } else if (node.type === "ClassDeclaration" && node.id?.name) {
-        defined.add(node.id.name);
-      } else if (node.type === "VariableDeclaration") {
-        for (const d of node.declarations ?? []) extractBindings(d.id, defined);
-      } else if (node.type === "ExportNamedDeclaration") {
-        if (node.declaration) {
-          if (node.declaration.type === "FunctionDeclaration" && node.declaration.id?.name) {
-            defined.add(node.declaration.id.name);
-            exports.add(node.declaration.id.name);
-          } else if (node.declaration.type === "ClassDeclaration" && node.declaration.id?.name) {
-            defined.add(node.declaration.id.name);
-            exports.add(node.declaration.id.name);
-          } else if (node.declaration.type === "VariableDeclaration") {
-            const declNames = new Set<string>();
-            for (const d of node.declaration.declarations ?? []) extractBindings(d.id, declNames);
-            for (const name of declNames) {
-              defined.add(name);
-              exports.add(name);
+    if (node.type === "CallExpression" || node.type === "NewExpression") {
+      if (node.callee?.type === "Identifier") {
+        const name = node.callee.name;
+        // (c) Local shadow check: if declared at file level or in current lexical scope, it's local
+        if (!fileDeclared.has(name) && !scope.has(name)) {
+          const imp = fileImports.get(name);
+          if (imp) {
+            const importedSymbol = imp.importedName;
+            const isCore = coreDefinedSymbols.has(importedSymbol) || coreExportedSymbols.has(importedSymbol) ||
+                           coreDefinedSymbols.has(name) || coreExportedSymbols.has(name);
+            const relTarget = path.relative(".", imp.resolvedPath);
+            if (isCore) {
+              if (imp.resolvedPath !== coreFilePath) {
+                violations.push(`${baseDir}/${f}: calls ${name}() which is a core symbol in ${baseDir}/components-core.js, but was imported from wrong-origin module '${imp.specifier}' (${relTarget}) instead of ${baseDir}/components-core.js`);
+              }
+              if (!coreExportedSymbols.has(importedSymbol)) {
+                violations.push(`${baseDir}/${f}: calls ${name}() which is imported from ${imp.specifier}, but not exported by ${baseDir}/components-core.js`);
+              }
+            }
+            const targetMod = moduleExportsCache.get(imp.resolvedPath);
+            if (targetMod && imp.kind === "named" && !targetMod.exports.has(importedSymbol)) {
+              violations.push(`${baseDir}/${f}: calls ${name}() which is imported from ${imp.specifier}, but '${importedSymbol}' is not exported by ${relTarget}`);
+            }
+          } else {
+            const isCore = coreDefinedSymbols.has(name) || coreExportedSymbols.has(name);
+            if (isCore) {
+              violations.push(`${baseDir}/${f}: calls ${name}() which is a core symbol in ${baseDir}/components-core.js (exported: ${coreExportedSymbols.has(name)}) but not imported`);
             }
           }
         }
-        if (node.specifiers) {
-          for (const s of node.specifiers) {
-            const exp = s.exported?.name ?? s.local?.name;
-            if (exp) exports.add(exp);
-            if (!node.source && s.local?.name) defined.add(s.local.name);
-          }
-        }
-      } else if (node.type === "ExportDefaultDeclaration") {
-        exports.add("default");
-      } else if (node.type === "ExportAllDeclaration" && node.source?.value) {
-        const subSpec = node.source.value;
-        if (typeof subSpec === "string" && (subSpec.startsWith("./") || subSpec.startsWith("../"))) {
-          const subResolved = path.resolve(path.dirname(filePath), subSpec);
-          if (await fileExists(subResolved)) {
-            const sub = await getModuleExports(subResolved);
-            for (const e of sub.exports) exports.add(e);
+      } else if (node.callee?.type === "MemberExpression" && node.callee.object?.type === "Identifier") {
+        const nsName = node.callee.object.name;
+        // (c) Local shadow check for namespace: if nsName is declared in local scope or at file level,
+        // it is shadowing the namespace import and refers to a local object/variable
+        if (!fileDeclared.has(nsName) && !scope.has(nsName)) {
+          const ns = fileNamespaces.get(nsName);
+          if (ns) {
+            // (a) Computed and non-computed namespace access
+            let propName: string | null = null;
+            if (!node.callee.computed && node.callee.property?.type === "Identifier") {
+              propName = node.callee.property.name;
+            } else if (node.callee.computed) {
+              if (node.callee.property?.type === "Literal" && typeof node.callee.property.value === "string") {
+                propName = node.callee.property.value;
+              } else if (node.callee.property?.type === "TemplateLiteral" && (!node.callee.property.expressions || node.callee.property.expressions.length === 0)) {
+                propName = node.callee.property.quasis?.[0]?.value?.cooked ?? null;
+              }
+            }
+
+            if (propName !== null) {
+              const isCore = coreDefinedSymbols.has(propName) || coreExportedSymbols.has(propName);
+              const relTarget = path.relative(".", ns.resolvedPath);
+              const accessRepr = node.callee.computed ? `['${propName}']` : `.${propName}`;
+              if (isCore) {
+                if (ns.resolvedPath !== coreFilePath) {
+                  violations.push(`${baseDir}/${f}: calls ${nsName}${accessRepr}() which is a core symbol in ${baseDir}/components-core.js, but namespace ${nsName} was imported from wrong-origin namespace '${ns.specifier}' (${relTarget}) instead of ${baseDir}/components-core.js`);
+                }
+                if (!coreExportedSymbols.has(propName)) {
+                  violations.push(`${baseDir}/${f}: calls ${nsName}${accessRepr}() which is imported from ${ns.specifier}, but not exported by ${baseDir}/components-core.js`);
+                }
+              }
+              const targetMod = moduleExportsCache.get(ns.resolvedPath);
+              if (targetMod && !targetMod.exports.has(propName)) {
+                violations.push(`${baseDir}/${f}: calls ${nsName}${accessRepr}(), but '${propName}' is not exported by ${relTarget}`);
+              }
+            } else if (node.callee.computed) {
+              // Dynamic unresolvable computed property on an imported namespace
+              const relTarget = path.relative(".", ns.resolvedPath);
+              const msg = `[skip-and-report] ${baseDir}/${f}: dynamic computed property access on namespace '${nsName}' imported from '${ns.specifier}' (${relTarget})`;
+              console.warn(msg);
+              reports?.push(msg);
+            }
           }
         }
       }
     }
 
-    const res = { exports, defined };
-    moduleExportsCache.set(filePath, res);
-    return res;
+    // AST children and scope propagation
+    if (node.type === "FunctionDeclaration" || node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression") {
+      const fnScope = new Set(scope);
+      if (node.id?.name) fnScope.add(node.id.name);
+      for (const p of node.params ?? []) extractBindings(p, fnScope);
+      walk(node.body, fnScope);
+      return;
+    }
+
+    if (node.type === "BlockStatement") {
+      const blockScope = new Set(scope);
+      for (const stmt of node.body ?? []) {
+        if (stmt.type === "FunctionDeclaration" && stmt.id?.name) {
+          blockScope.add(stmt.id.name);
+        }
+      }
+      for (const stmt of node.body ?? []) {
+        walk(stmt, blockScope);
+        if (stmt.type === "VariableDeclaration") {
+          for (const d of stmt.declarations ?? []) extractBindings(d.id, blockScope);
+        } else if (stmt.type === "ClassDeclaration" && stmt.id?.name) {
+          blockScope.add(stmt.id.name);
+        }
+      }
+      return;
+    }
+
+    if (node.type === "ForStatement") {
+      const loopScope = new Set(scope);
+      if (node.init?.type === "VariableDeclaration") {
+        for (const d of node.init.declarations ?? []) extractBindings(d.id, loopScope);
+        walk(node.init, loopScope);
+      } else if (node.init) {
+        walk(node.init, scope);
+      }
+      if (node.test) walk(node.test, loopScope);
+      if (node.update) walk(node.update, loopScope);
+      walk(node.body, loopScope);
+      return;
+    }
+
+    if (node.type === "ForInStatement" || node.type === "ForOfStatement") {
+      const loopScope = new Set(scope);
+      if (node.left?.type === "VariableDeclaration") {
+        for (const d of node.left.declarations ?? []) extractBindings(d.id, loopScope);
+        walk(node.left, loopScope);
+      } else if (node.left) {
+        walk(node.left, scope);
+      }
+      if (node.right) walk(node.right, scope);
+      walk(node.body, loopScope);
+      return;
+    }
+
+    if (node.type === "CatchClause") {
+      const catchScope = new Set(scope);
+      if (node.param) extractBindings(node.param, catchScope);
+      walk(node.body, catchScope);
+      return;
+    }
+
+    if (node.type === "SwitchStatement") {
+      const switchScope = new Set(scope);
+      walk(node.discriminant, scope);
+      for (const sc of node.cases ?? []) {
+        if (sc.test) walk(sc.test, switchScope);
+        for (const stmt of sc.consequent ?? []) {
+          walk(stmt, switchScope);
+          if (stmt.type === "VariableDeclaration") {
+            for (const d of stmt.declarations ?? []) extractBindings(d.id, switchScope);
+          } else if (stmt.type === "ClassDeclaration" && stmt.id?.name) {
+            switchScope.add(stmt.id.name);
+          }
+        }
+      }
+      return;
+    }
+
+    // Default recursive traversal
+    for (const key of Object.keys(node)) {
+      if (key === "callee" && (node.type === "CallExpression" || node.type === "NewExpression")) {
+        if (node.callee?.type === "Identifier") continue;
+        if (node.callee?.type === "MemberExpression" &&
+            node.callee.object?.type === "Identifier" &&
+            !scope.has(node.callee.object.name) &&
+            !fileDeclared.has(node.callee.object.name) &&
+            fileNamespaces.has(node.callee.object.name)) {
+          if (node.callee.computed && node.callee.property) {
+            walk(node.callee.property, scope);
+          }
+          continue;
+        }
+      }
+      const child = node[key];
+      if (Array.isArray(child)) {
+        for (const c of child) if (c && typeof c.type === "string") walk(c, scope);
+      } else if (child && typeof child.type === "string") {
+        walk(child, scope);
+      }
+    }
   }
+
+  walk(ast, new Set());
+  return violations;
+}
+
+Deno.test("2y7qe recurrence guard: every cross-module call to components-core is imported and exported", async () => {
+  const acorn = await import("npm:acorn@8.18.0");
+  const path = await import("node:path");
+  const moduleExportsCache = new Map<string, { exports: Set<string>; defined: Set<string> }>();
 
   for (const baseDir of ["extension/shared", "docs"]) {
     const coreFilePath = path.resolve(baseDir, "components-core.js");
-    const { exports: coreExportedSymbols, defined: coreDefinedSymbols } = await getModuleExports(coreFilePath);
+    const { exports: coreExportedSymbols, defined: coreDefinedSymbols } = await getModuleExports(coreFilePath, acorn, path, moduleExportsCache);
 
     const otherFiles: string[] = [];
     for await (const entry of Deno.readDir(baseDir)) {
@@ -2114,222 +2468,196 @@ Deno.test("2y7qe recurrence guard: every cross-module call to components-core is
 
     for (const f of otherFiles) {
       const code = await Deno.readTextFile(`${baseDir}/${f}`);
-      const ast = acorn.parse(code, { sourceType: "module", ecmaVersion: "latest" });
-
-      interface ImportedSymbol {
-        localName: string;
-        importedName: string;
-        specifier: string;
-        resolvedPath: string;
-        kind: "named" | "default";
-      }
-
-      interface ImportedNamespace {
-        localName: string;
-        specifier: string;
-        resolvedPath: string;
-        kind: "namespace";
-      }
-
-      const fileImports = new Map<string, ImportedSymbol>();
-      const fileNamespaces = new Map<string, ImportedNamespace>();
-      const fileDeclared = new Set<string>();
-
-      for (const node of (ast.body as any[])) {
-        if (node.type === "ImportDeclaration") {
-          const specifier = node.source?.value;
-          if (typeof specifier !== "string") continue;
-
-          let resolvedPath: string | null = null;
-          if (specifier.startsWith("./") || specifier.startsWith("../")) {
-            resolvedPath = path.resolve(baseDir, specifier);
-          } else {
-            console.warn(`[skip-and-report] ${baseDir}/${f}: non-relative import specifier: ${specifier}`);
-          }
-
-          let targetExports: Set<string> | null = null;
-          const relTarget = resolvedPath ? path.relative(".", resolvedPath) : specifier;
-          if (resolvedPath) {
-            if (await fileExists(resolvedPath)) {
-              const mod = await getModuleExports(resolvedPath);
-              targetExports = mod.exports;
-            } else {
-              violations.push(`${baseDir}/${f}: imports from '${specifier}', but module file cannot be resolved at ${relTarget}`);
-            }
-          }
-
-          for (const s of node.specifiers ?? []) {
-            if (s.type === "ImportSpecifier") {
-              const localName = s.local?.name;
-              const importedName = s.imported?.name ?? localName;
-              if (localName && resolvedPath) {
-                fileImports.set(localName, { localName, importedName, specifier, resolvedPath, kind: "named" });
-              }
-
-              // Validate that the target module actually exports the imported symbol
-              if (targetExports && !targetExports.has(importedName)) {
-                violations.push(`${baseDir}/${f}: imports '${importedName}' from ${specifier}, but it is not exported by ${relTarget}`);
-              }
-
-              // Validate origin: if importedName is a core symbol, it must come from components-core.js
-              const isCoreSymbol = coreDefinedSymbols.has(importedName) || coreExportedSymbols.has(importedName);
-              if (isCoreSymbol && resolvedPath && resolvedPath !== coreFilePath) {
-                violations.push(`${baseDir}/${f}: wrong-origin import: '${importedName}' is a core symbol in ${baseDir}/components-core.js, but is imported from ${specifier} (${relTarget})`);
-              }
-            } else if (s.type === "ImportDefaultSpecifier") {
-              const localName = s.local?.name;
-              if (localName && resolvedPath) {
-                fileImports.set(localName, { localName, importedName: "default", specifier, resolvedPath, kind: "default" });
-              }
-              if (targetExports && !targetExports.has("default")) {
-                violations.push(`${baseDir}/${f}: imports default from ${specifier}, but default is not exported by ${relTarget}`);
-              }
-            } else if (s.type === "ImportNamespaceSpecifier") {
-              const localName = s.local?.name;
-              if (localName && resolvedPath) {
-                fileNamespaces.set(localName, { localName, specifier, resolvedPath, kind: "namespace" });
-              }
-            } else {
-              console.warn(`[skip-and-report] ${baseDir}/${f}: unsupported import specifier type: ${s.type}`);
-            }
-          }
-        } else if (node.type === "ExportNamedDeclaration" && node.source) {
-          const specifier = node.source.value;
-          const resolvedPath = (typeof specifier === "string" && (specifier.startsWith("./") || specifier.startsWith("../")))
-            ? path.resolve(baseDir, specifier)
-            : null;
-          const relTarget = resolvedPath ? path.relative(".", resolvedPath) : String(specifier);
-          let targetExports: Set<string> | null = null;
-          if (resolvedPath) {
-            if (await fileExists(resolvedPath)) {
-              const mod = await getModuleExports(resolvedPath);
-              targetExports = mod.exports;
-            } else {
-              violations.push(`${baseDir}/${f}: re-exports from '${specifier}', but module file cannot be resolved at ${relTarget}`);
-            }
-          }
-          if (node.specifiers) {
-            for (const s of node.specifiers) {
-              const importedName = s.local?.name ?? s.exported?.name;
-              if (targetExports && !targetExports.has(importedName)) {
-                violations.push(`${baseDir}/${f}: re-exports '${importedName}' from ${specifier}, but it is not exported by ${relTarget}`);
-              }
-              const isCoreSymbol = coreDefinedSymbols.has(importedName) || coreExportedSymbols.has(importedName);
-              if (isCoreSymbol && resolvedPath && resolvedPath !== coreFilePath) {
-                violations.push(`${baseDir}/${f}: wrong-origin re-export: '${importedName}' is a core symbol in ${baseDir}/components-core.js, but is re-exported from ${specifier} (${relTarget})`);
-              }
-            }
-          }
-        } else if (node.type === "FunctionDeclaration" && node.id?.name) {
-          fileDeclared.add(node.id.name);
-        } else if (node.type === "ClassDeclaration" && node.id?.name) {
-          fileDeclared.add(node.id.name);
-        } else if (node.type === "VariableDeclaration") {
-          for (const d of node.declarations ?? []) extractBindings(d.id, fileDeclared);
-        } else if (node.type === "ExportNamedDeclaration" && node.declaration) {
-          if (node.declaration.id?.name) {
-            fileDeclared.add(node.declaration.id.name);
-          } else if (node.declaration.declarations) {
-            for (const d of node.declaration.declarations ?? []) extractBindings(d.id, fileDeclared);
-          }
-        }
-      }
-
-      function walk(node: any, scope = new Set<string>()) {
-        if (!node) return;
-        const currentScope = new Set(scope);
-        if (node.type === "FunctionDeclaration" || node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression") {
-          if (node.id?.name) currentScope.add(node.id.name);
-          for (const p of node.params ?? []) extractBindings(p, currentScope);
-        }
-        if (node.type === "VariableDeclaration") {
-          for (const d of node.declarations ?? []) extractBindings(d.id, currentScope);
-        }
-        if (node.type === "CatchClause" && node.param) {
-          extractBindings(node.param, currentScope);
-        }
-
-        if (node.type === "CallExpression" || node.type === "NewExpression") {
-          if (node.callee?.type === "Identifier") {
-            const name = node.callee.name;
-            if (!fileDeclared.has(name) && !currentScope.has(name)) {
-              const imp = fileImports.get(name);
-              if (imp) {
-                const importedSymbol = imp.importedName;
-                const isCore = coreDefinedSymbols.has(importedSymbol) || coreExportedSymbols.has(importedSymbol) ||
-                               coreDefinedSymbols.has(name) || coreExportedSymbols.has(name);
-                const relTarget = path.relative(".", imp.resolvedPath);
-                if (isCore) {
-                  // Verify origin: core symbol must come from components-core.js
-                  if (imp.resolvedPath !== coreFilePath) {
-                    violations.push(`${baseDir}/${f}: calls ${name}() which is a core symbol in ${baseDir}/components-core.js, but was imported from wrong-origin module '${imp.specifier}' (${relTarget}) instead of ${baseDir}/components-core.js`);
-                  }
-                  // Verify export from components-core.js
-                  if (!coreExportedSymbols.has(importedSymbol)) {
-                    violations.push(`${baseDir}/${f}: calls ${name}() which is imported from ${imp.specifier}, but not exported by ${baseDir}/components-core.js`);
-                  }
-                }
-                // Verify that the module it was actually imported from exports it
-                const targetMod = moduleExportsCache.get(imp.resolvedPath);
-                if (targetMod && imp.kind === "named" && !targetMod.exports.has(importedSymbol)) {
-                  violations.push(`${baseDir}/${f}: calls ${name}() which is imported from ${imp.specifier}, but '${importedSymbol}' is not exported by ${relTarget}`);
-                }
-              } else {
-                // Not imported
-                const isCore = coreDefinedSymbols.has(name) || coreExportedSymbols.has(name);
-                if (isCore) {
-                  violations.push(`${baseDir}/${f}: calls ${name}() which is a core symbol in ${baseDir}/components-core.js (exported: ${coreExportedSymbols.has(name)}) but not imported`);
-                }
-              }
-            }
-          } else if (node.callee?.type === "MemberExpression" &&
-                     node.callee.object?.type === "Identifier" &&
-                     node.callee.property?.type === "Identifier") {
-            const nsName = node.callee.object.name;
-            const propName = node.callee.property.name;
-            const ns = fileNamespaces.get(nsName);
-            if (ns) {
-              const isCore = coreDefinedSymbols.has(propName) || coreExportedSymbols.has(propName);
-              const relTarget = path.relative(".", ns.resolvedPath);
-              if (isCore) {
-                if (ns.resolvedPath !== coreFilePath) {
-                  violations.push(`${baseDir}/${f}: calls ${nsName}.${propName}() which is a core symbol in ${baseDir}/components-core.js, but namespace ${nsName} was imported from wrong-origin namespace '${ns.specifier}' (${relTarget}) instead of ${baseDir}/components-core.js`);
-                }
-                if (!coreExportedSymbols.has(propName)) {
-                  violations.push(`${baseDir}/${f}: calls ${nsName}.${propName}() which is imported from ${ns.specifier}, but not exported by ${baseDir}/components-core.js`);
-                }
-              }
-              const targetMod = moduleExportsCache.get(ns.resolvedPath);
-              if (targetMod && !targetMod.exports.has(propName)) {
-                violations.push(`${baseDir}/${f}: calls ${nsName}.${propName}(), but '${propName}' is not exported by ${relTarget}`);
-              }
-            }
-          }
-        }
-
-        for (const key of Object.keys(node)) {
-          if (key === "callee" && (node.type === "CallExpression" || node.type === "NewExpression")) {
-            if (node.callee?.type === "Identifier") continue;
-            if (node.callee?.type === "MemberExpression" &&
-                node.callee.object?.type === "Identifier" &&
-                fileNamespaces.has(node.callee.object.name)) continue;
-          }
-          const child = node[key];
-          if (Array.isArray(child)) {
-            for (const c of child) if (c && typeof c.type === "string") walk(c, currentScope);
-          } else if (child && typeof child.type === "string") {
-            walk(child, currentScope);
-          }
-        }
-      }
-
-      walk(ast, new Set());
+      const fileViolations = await auditModuleAst({
+        f,
+        baseDir,
+        code,
+        coreFilePath,
+        coreExportedSymbols,
+        coreDefinedSymbols,
+        moduleExportsCache,
+        acorn,
+        path,
+      });
+      violations.push(...fileViolations);
     }
 
     const uniqueViolations = [...new Set(violations)];
     if (uniqueViolations.length > 0) {
       throw new Error(`2y7qe static recurrence guard failed:\n${uniqueViolations.join("\n")}`);
     }
+  }
+});
+
+Deno.test("yxith recurrence guard: catches computed namespace access, dynamic imports, and local shadowing", async () => {
+  const acorn = await import("npm:acorn@8.18.0");
+  const path = await import("node:path");
+
+  const baseDir = "extension/shared";
+  const coreFilePath = path.resolve(baseDir, "components-core.js");
+  const fakeSettingsPath = path.resolve(baseDir, "components-settings.js");
+
+  const coreExportedSymbols = new Set(["ensureStyle", "Component"]);
+  const coreDefinedSymbols = new Set(["ensureStyle", "Component"]);
+
+  const moduleExportsCache = new Map<string, { exports: Set<string>; defined: Set<string> }>();
+  moduleExportsCache.set(coreFilePath, {
+    exports: coreExportedSymbols,
+    defined: coreDefinedSymbols,
+  });
+  moduleExportsCache.set(fakeSettingsPath, {
+    exports: new Set(["renderSettings"]),
+    defined: new Set(["renderSettings"]),
+  });
+
+  // 1. (a) Computed namespace access with literal string from wrong-origin module MUST fail
+  const computedLiteralCode = `
+    import * as wrong from "./components-settings.js";
+    wrong["ensureStyle"]();
+  `;
+  const v1 = await auditModuleAst({
+    f: "test-computed-literal.js",
+    baseDir,
+    code: computedLiteralCode,
+    coreFilePath,
+    coreExportedSymbols,
+    coreDefinedSymbols,
+    moduleExportsCache,
+    acorn,
+    path,
+  });
+  if (v1.length === 0 || !v1[0].includes("calls wrong['ensureStyle']() which is a core symbol")) {
+    throw new Error(`Expected wrong-origin violation for computed literal namespace call, got: ${JSON.stringify(v1)}`);
+  }
+
+  // 2. (a) Computed namespace access with template literal from wrong-origin module MUST fail
+  const computedTemplateCode = "import * as wrong from './components-settings.js';\nwrong[`ensureStyle`]();";
+  const v2 = await auditModuleAst({
+    f: "test-computed-template.js",
+    baseDir,
+    code: computedTemplateCode,
+    coreFilePath,
+    coreExportedSymbols,
+    coreDefinedSymbols,
+    moduleExportsCache,
+    acorn,
+    path,
+  });
+  if (v2.length === 0 || !v2[0].includes("calls wrong['ensureStyle']() which is a core symbol")) {
+    throw new Error(`Expected wrong-origin violation for computed template namespace call, got: ${JSON.stringify(v2)}`);
+  }
+
+  // 3. (a) Dynamic computed property on namespace MUST be skipped and reported
+  const dynamicReports: string[] = [];
+  const computedDynamicCode = `
+    import * as wrong from "./components-settings.js";
+    const key = "ensureStyle";
+    wrong[key]();
+  `;
+  await auditModuleAst({
+    f: "test-computed-dynamic.js",
+    baseDir,
+    code: computedDynamicCode,
+    coreFilePath,
+    coreExportedSymbols,
+    coreDefinedSymbols,
+    moduleExportsCache,
+    reports: dynamicReports,
+    acorn,
+    path,
+  });
+  if (!dynamicReports.some((r) => r.includes("dynamic computed property access on namespace 'wrong'"))) {
+    throw new Error(`Expected skip-and-report for dynamic computed namespace property, got reports: ${JSON.stringify(dynamicReports)}`);
+  }
+
+  // 4. (b) Dynamic import MUST be skipped and reported
+  const importReports: string[] = [];
+  const dynamicImportCode = `
+    async function load() {
+      const mod = await import("./components-core.js");
+    }
+  `;
+  await auditModuleAst({
+    f: "test-dynamic-import.js",
+    baseDir,
+    code: dynamicImportCode,
+    coreFilePath,
+    coreExportedSymbols,
+    coreDefinedSymbols,
+    moduleExportsCache,
+    reports: importReports,
+    acorn,
+    path,
+  });
+  if (!importReports.some((r) => r.includes("dynamic import: './components-core.js'"))) {
+    throw new Error(`Expected skip-and-report for dynamic import, got reports: ${JSON.stringify(importReports)}`);
+  }
+
+  // 5. (c) Local shadow: parameter shadowing imported wrong-origin namespace
+  const shadowParamNamespaceCode = `
+    import * as wrong from "./components-settings.js";
+    function render(wrong) {
+      wrong.ensureStyle();
+    }
+  `;
+  const v5 = await auditModuleAst({
+    f: "test-shadow-param.js",
+    baseDir,
+    code: shadowParamNamespaceCode,
+    coreFilePath,
+    coreExportedSymbols,
+    coreDefinedSymbols,
+    moduleExportsCache,
+    acorn,
+    path,
+  });
+  if (v5.length > 0) {
+    throw new Error(`Expected zero violations when namespace is shadowed by parameter, got: ${JSON.stringify(v5)}`);
+  }
+
+  // 6. (c) Local shadow: block variable shadowing imported wrong-origin namespace
+  const shadowVarNamespaceCode = `
+    import * as wrong from "./components-settings.js";
+    function render() {
+      const wrong = { ensureStyle() {} };
+      wrong.ensureStyle();
+    }
+  `;
+  const v6 = await auditModuleAst({
+    f: "test-shadow-var.js",
+    baseDir,
+    code: shadowVarNamespaceCode,
+    coreFilePath,
+    coreExportedSymbols,
+    coreDefinedSymbols,
+    moduleExportsCache,
+    acorn,
+    path,
+  });
+  if (v6.length > 0) {
+    throw new Error(`Expected zero violations when namespace is shadowed by local variable, got: ${JSON.stringify(v6)}`);
+  }
+
+  // 7. (c) Local shadow: block variable shadowing unimported core symbol
+  const shadowVarIdentifierCode = `
+    function render() {
+      const ensureStyle = () => {};
+      ensureStyle();
+    }
+  `;
+  const v7 = await auditModuleAst({
+    f: "test-shadow-ident.js",
+    baseDir,
+    code: shadowVarIdentifierCode,
+    coreFilePath,
+    coreExportedSymbols,
+    coreDefinedSymbols,
+    moduleExportsCache,
+    acorn,
+    path,
+  });
+  if (v7.length > 0) {
+    throw new Error(`Expected zero violations when identifier is declared in local scope, got: ${JSON.stringify(v7)}`);
   }
 });
 
