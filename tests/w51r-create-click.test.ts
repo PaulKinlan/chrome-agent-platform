@@ -65,13 +65,15 @@ Deno.test("w51r / qwrur: clickVisibleCreateAgent with waitForReady awaits app re
 
   // 1. Negative path: when app readiness throws/refuses, zero CDP mouse events are dispatched (fail-closed)
   let readinessError: Error | undefined;
+  let readinessEvaluations = 0;
   try {
     await clickVisibleCreateAgent(
       cdp,
       "test",
       async (expr: string) => {
-        if (expr.includes("__capAppReady") || expr.includes("document.readyState")) {
-          throw new Error("app readiness timeout");
+        if (expr.includes("data-cap-app-ready") || expr.includes("location.pathname")) {
+          readinessEvaluations++;
+          throw new Error("injected readiness failure");
         }
         return { ok: true, x: 28, y: 80 };
       },
@@ -80,7 +82,9 @@ Deno.test("w51r / qwrur: clickVisibleCreateAgent with waitForReady awaits app re
   } catch (e) {
     readinessError = e as Error;
   }
+  assert(readinessEvaluations > 0, "injected throw branch must actually execute during readiness probe");
   assert(readinessError?.message.includes("app never became ready"));
+  assert(readinessError?.message.includes("injected readiness failure"), "readiness failure detail must include injected error");
   assertEquals(sent, [], "app readiness failure must dispatch zero CDP mouse events");
 
   // 2. Positive path: when app readiness succeeds, readiness check precedes target evaluation
