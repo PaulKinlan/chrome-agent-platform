@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.626] — 2026-10-10
+- Harden third-party skill import boundary against forged fences
+
 ## [0.3.625] — 2026-10-10
 - Fence imported third-party skills and commands as untrusted content.
 

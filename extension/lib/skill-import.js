@@ -10,15 +10,27 @@ import {
   wrapUntrustedContent,
   tagUntrusted,
   UNTRUSTED_TOKEN_PLACEHOLDER,
+  isWellFormedFence,
+  isWellFormedFenceWithToken,
 } from "./untrusted-fence.js";
+
+export { isWellFormedFence, isWellFormedFenceWithToken };
 
 /** Wrap an imported skill or command body in the untrusted-instruction fence
  * so remote content cannot silently elevate to trusted standing instructions (INV-5, t045y).
- * Idempotent: does not double-fence if already fenced. */
-export function fenceSkillBody(text, token = UNTRUSTED_TOKEN_PLACEHOLDER) {
+ * Does not rely on vulnerable string sniffing: requires explicit provenance or a
+ * strictly well-formed full fence with no trailing instructions before skipping (tos4l). */
+export function fenceSkillBody(text, token = UNTRUSTED_TOKEN_PLACEHOLDER, options = {}) {
   const str = String(text ?? "");
   if (!str.trim()) return str;
-  if (str.startsWith("<<<UNTRUSTED") && str.includes("<<<END")) return str;
+  // If explicitly flagged as already fenced and structurally sound:
+  if (options.alreadyFenced === true && isWellFormedFence(str)) {
+    return str;
+  }
+  // If a well-formed fence matching the requested token with no trailing text already exists:
+  if (isWellFormedFenceWithToken(str, token)) {
+    return str;
+  }
   return wrapUntrustedContent(str, token);
 }
 
@@ -373,9 +385,12 @@ export async function installImportedSkill(memory, fetched, fileStore = null) {
     fetched.files && typeof fetched.files === "object" && !Array.isArray(fetched.files)
       ? fetched.files
       : { "SKILL.md": fetched.files?.["SKILL.md"] ?? "" };
+  const isAlreadyFenced = Boolean(fetched.fenced);
   const files = {};
   for (const [key, val] of Object.entries(rawFiles)) {
-    files[key] = fenceSkillBody(val);
+    files[key] = isAlreadyFenced && isWellFormedFence(val)
+      ? val
+      : fenceSkillBody(val, UNTRUSTED_TOKEN_PLACEHOLDER);
   }
   const promptBytes = new TextEncoder().encode(String(files["SKILL.md"] ?? "")).byteLength;
   const store = fileStore ?? (await import("./skill-files.js"));
@@ -665,7 +680,10 @@ export async function installImportedCommand(memory, cmd) {
   const name = cmd.name || cmd.meta?.name || "command";
   const id = cmd.id || slugifySkillId(name);
   const rawPrompt = typeof cmd.prompt === "string" ? cmd.prompt : (cmd.body || cmd.template || "");
-  const prompt = fenceSkillBody(rawPrompt);
+  const isAlreadyFenced = Boolean(cmd.fenced);
+  const prompt = isAlreadyFenced && isWellFormedFence(rawPrompt)
+    ? rawPrompt
+    : fenceSkillBody(rawPrompt, UNTRUSTED_TOKEN_PLACEHOLDER);
   const record = {
     id,
     name,

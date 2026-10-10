@@ -42,6 +42,27 @@ export function untrustedClose(token) {
   return `<<<END run:${token}>>>`;
 }
 
+/** Check whether text is a structurally well-formed, fully closed untrusted fence
+ * with matching open and close delimiters and nothing trailing after the close (tos4l). */
+export function isWellFormedFenceWithToken(text, token = UNTRUSTED_TOKEN_PLACEHOLDER) {
+  if (typeof text !== "string") return false;
+  const trimmed = text.trim();
+  const open = untrustedOpen(token);
+  const close = untrustedClose(token);
+  if (!trimmed.startsWith(open) || !trimmed.endsWith(close)) return false;
+  const firstClose = trimmed.indexOf(close);
+  return firstClose === trimmed.length - close.length;
+}
+
+/** Check whether text is a well-formed fence with any valid matching token (tos4l). */
+export function isWellFormedFence(text) {
+  if (typeof text !== "string") return false;
+  const trimmed = text.trim();
+  const m = trimmed.match(/^<<<UNTRUSTED run:([A-Za-z0-9<>-]+)>>>/);
+  if (!m) return false;
+  return isWellFormedFenceWithToken(trimmed, m[1]);
+}
+
 /** Wrap one string in the boundary. */
 export function fenceUntrustedText(text, token) {
   return `${untrustedOpen(token)}\n${String(text ?? "")}\n${untrustedClose(token)}`;
