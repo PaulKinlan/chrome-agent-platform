@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.659] — 2026-10-10
+- Count suppressed stderr lines correctly when an unterminated terminal escape is immediately followed by a newline.
+
 ## [0.3.658] — 2026-10-10
 - Keep Create-button click check tied directly to real load-scaling helper via executable timeout seam
 
