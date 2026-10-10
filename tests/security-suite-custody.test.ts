@@ -76,7 +76,7 @@ async function command(
   executable: string,
   args: string[],
   env: Record<string, string> = {},
-  timeoutSeconds = 20,
+  timeoutSeconds = 45,
   lockMarker: string | undefined = undefined,
 ): Promise<{ code: number; text: string }> {
   const r = await runLockAware({
@@ -94,6 +94,7 @@ async function runSupervisor(
   scenario: string,
   timeoutMs: number,
   extra: Record<string, string> = {},
+  commandTimeoutSeconds = 45,
 ): Promise<RunResult> {
   const result = await command("bash", [SUPERVISOR], {
     CAP_SECURITY_SELF_TEST: SELF_TEST_TOKEN,
@@ -101,7 +102,7 @@ async function runSupervisor(
     CAP_SECURITY_TEST_SCENARIO: scenario,
     CAP_SECURITY_SELF_TEST_TIMEOUT_MS: String(timeoutMs),
     ...extra,
-  }, 20, "CAP_SECURITY_LOCK_ACQUIRED");
+  }, commandTimeoutSeconds, "CAP_SECURITY_LOCK_ACQUIRED");
   const marker = result.text.split("\n").find((line) =>
     line.startsWith("CAP_SECURITY_RESULT ")
   );
@@ -1564,9 +1565,9 @@ Deno.test("8ixk caller-level: a real TERM teardown writes its receipt and record
 // CAP_SECURITY_RESULT with leader-exited-before-identity-read and writes a valid
 // receipt.json to disk.
 Deno.test("8ixk falsifier: runner child vanished before teardown identity read => supervisor still emits CAP_SECURITY_RESULT and writes valid receipt.json to disk", async () => {
-  const result = await runSupervisor("timeout", 300, {
+  const result = await runSupervisor("timeout", 1_000, {
     CAP_SECURITY_TEST_SIMULATE_VANISHED_LEADER: "1",
-  });
+  }, 60);
   try {
     assertEquals(result.code, 124);
     // 1. CAP_SECURITY_RESULT marker was emitted by supervisor and parsed

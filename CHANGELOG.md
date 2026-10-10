@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.645] — 2026-10-10
+- Scale test timing budgets in security-suite custody tests under load
+
 ## [0.3.644] — 2026-10-10
 - Keep the site documentation scanning self-check accurate as the scanner evolves.
 
