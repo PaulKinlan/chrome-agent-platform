@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.657] — 2026-10-10
+- Fix transient custody exit 70 flakes under concurrent process churn by recognizing kernel ESRCH as vanished process
+
 ## [0.3.656] — 2026-10-10
 - Report the correct number of discarded stderr lines when an unterminated terminal escape ends at the end of output.
 

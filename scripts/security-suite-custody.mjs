@@ -199,13 +199,40 @@ export async function readProcIdentity(pid, deps = {}) {
   return { ...parseProcStat(raw), uid: procInfo.uid };
 }
 
-/** True only when the error is a /proc entry DISAPPEARING, i.e. the process
- *  exited between the group-alive check and the identity read. Distinguished
- *  from every other read failure, which must stay fail-closed: an unreadable
- *  /proc for a process that still exists is not the same fact as a vanished one.
- *  chrome-agent-platform-8ixk. */
-export function isVanishedProcError(error) {
-  return error?.code === "ENOENT";
+/**
+ * True only when the error is a /proc entry DISAPPEARING, i.e. the process
+ * exited between directory listing/group-alive check and the identity read.
+ * In the Linux kernel (fs/proc/base.c: get_proc_task returns NULL), opening or
+ * reading /proc/<pid>/stat for a process terminating concurrently returns ENOENT
+ * (directory unlinked) or ESRCH (task struct detached/freed).
+ *
+ * SECURITY INVARIANT (chrome-agent-platform-arch-wd6gc / coord 2026-10-10):
+ * ESRCH is NEVER accepted blindly. An error with code ESRCH is classified as
+ * vanished ONLY when the exact PID is confirmed absent in the OS process table
+ * via process.kill(pid, 0) throwing ESRCH. If process.kill(pid, 0) succeeds (PID
+ * is alive), throws EPERM (foreign process), or throws any unexpected error, the
+ * error is NOT vanished (returns false) and fails closed (exit 70).
+ * Every other error (EACCES, EPERM, EMFILE, ENOTDIR) strictly fails closed.
+ * chrome-agent-platform-8ixk / chrome-agent-platform-wd6gc.
+ *
+ * @param {any} error
+ * @param {number} [pid]
+ * @returns {boolean}
+ */
+export function isVanishedProcError(error, pid = 0) {
+  if (error?.code === "ENOENT") return true;
+  if (error?.code === "ESRCH" && typeof pid === "number" && pid > 0) {
+    try {
+      process.kill(pid, 0);
+      return false; // process is ALIVE -> not vanished (fail closed)
+    } catch (killError) {
+      if (killError?.code === "ESRCH") {
+        return true; // PID confirmed absent from OS process table -> vanished
+      }
+      return false; // kill threw EPERM or unexpected -> fail closed
+    }
+  }
+  return false;
 }
 
 /** True only when a signal found NO SUCH PROCESS GROUP — the group finished dying
@@ -619,10 +646,11 @@ export async function procIdentities(deps = {}) {
   let firstError;
   for (const name of names) {
     if (!/^\d+$/u.test(name)) continue;
+    const pid = Number(name);
     try {
-      rows.push(await readIdentity(Number(name)));
+      rows.push(await readIdentity(pid));
     } catch (error) {
-      if (isVanishedProcError(error)) continue; // Normal /proc process churn.
+      if (isVanishedProcError(error, pid)) continue; // Normal /proc process churn.
       unreadable++;
       firstError ??= error;
     }
@@ -691,7 +719,7 @@ export async function liveObservedResidue(observed, deps = {}) {
       ) residue.push(current);
     } catch (error) {
       // Gone is clean.
-      if (error instanceof ProcessGoneError || isVanishedProcError(error)) continue;
+      if (error instanceof ProcessGoneError || isVanishedProcError(error, expected.pid)) continue;
       residue.push({
         ...expected,
         unverified: true,
@@ -736,7 +764,7 @@ export async function terminateAttestedGroup({
     // unreadable /proc for a group that is STILL ALIVE falls through to the
     // ownership check below and can still throw. Only ENOENT qualifies, and the
     // only ENOENT source inside this try is the /proc read.
-    if (isVanishedProcError(error) && !isAlive(pgid)) {
+    if (isVanishedProcError(error, attestation.identity.pid) && !isAlive(pgid)) {
       return {
         termSent: false,
         killSent: false,
