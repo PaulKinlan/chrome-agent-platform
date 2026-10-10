@@ -5299,7 +5299,7 @@ async function main() {
       // The NTP is a background tab after the Settings journey; a background
       // target neither paints nor screenshots, so bring it to the front first.
       await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
-      await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});
+      await cdp.send("Page.bringToFront", {}, ntpSession);
       await evalIn(cdp, ntpSession, `(() => {
         if (location.hash) location.hash = "";
         const v = document.getElementById("view");
