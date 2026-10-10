@@ -166,7 +166,7 @@ Deno.test("iksuc: clickVisibleCreateAgent with { waitForReady: true } refuses un
   assertEquals(sent.length, 0, "zero mouse clicks dispatched when readiness check fails");
 });
 
-Deno.test("iksuc: waitForAppReady bounds wait when evaluator stalls or never resolves", async () => {
+Deno.test("iksuc / pew31: waitForAppReady bounds wait and fails closed when evaluator stalls or never resolves", async () => {
   // Evaluator that hangs indefinitely
   const evaluate = () => new Promise(() => {});
 
@@ -180,8 +180,86 @@ Deno.test("iksuc: waitForAppReady bounds wait when evaluator stalls or never res
   const elapsed = Date.now() - start;
 
   assert(caught !== null, "must time out when evaluator hangs");
-  assert(caught.message.startsWith(APP_NEVER_BECAME_READY), `must report named failure, got ${caught.message}`);
-  assert(elapsed >= 250 && elapsed < 800, `must bound wait within expected range (elapsed: ${elapsed}ms)`);
+  assert(
+    isCdpEvaluateTimeout(caught.message),
+    `must fail closed with classified CDP evaluate timeout, got: ${caught.message}`,
+  );
+  assert(
+    isTransportOrEvaluateTimeoutError(caught),
+    `must match isTransportOrEvaluateTimeoutError, got: ${caught.message}`,
+  );
+  assert(
+    !caught.message.startsWith(APP_NEVER_BECAME_READY),
+    `must NOT launder into app never became ready, got: ${caught.message}`,
+  );
+  assert(elapsed >= 80 && elapsed < 250, `must fail fast within probe bound (elapsed: ${elapsed}ms)`);
+});
+
+Deno.test("pew31: falsifier — hanging CDP Runtime.evaluate propagates classified timeout without laundering or unhandled rejections", async () => {
+  let probeCalls = 0;
+  let backgroundSettled = false;
+  let unhandledRejectionCaught = false;
+
+  const unhandledHandler = (e: any) => {
+    unhandledRejectionCaught = true;
+    e.preventDefault?.();
+  };
+  globalThis.addEventListener?.("unhandledrejection", unhandledHandler);
+
+  try {
+    // Evaluator that simulates the real journey bug:
+    // Cdp.send has a 15s timeout, but probe timer is 50ms.
+    const evaluate = (_expr: string) => {
+      probeCalls++;
+      return new Promise((_, reject) => {
+        setTimeout(() => {
+          backgroundSettled = true;
+          reject(new Error("cdp timeout: Runtime.evaluate (requestId=99, targetId=page-1)"));
+        }, 150);
+      });
+    };
+
+    let caught: any = null;
+    const start = Date.now();
+    try {
+      await waitForAppReady(evaluate, {
+        timeoutMs: 1000,
+        probeTimeoutMs: 50,
+        pollIntervalMs: 20,
+        surfaceName: "NTP main",
+      });
+    } catch (e) {
+      caught = e;
+    }
+    const elapsed = Date.now() - start;
+
+    assert(caught !== null, "must throw when evaluator hangs");
+    assertEquals(probeCalls, 1, "must fail fast on first hanging probe without polling repeated evaluates");
+    assert(elapsed < 200, `must fail fast within probe limit (took ${elapsed}ms)`);
+    assert(
+      isCdpEvaluateTimeout(caught.message),
+      `must be classified by isCdpEvaluateTimeout, got: ${caught.message}`,
+    );
+    assert(
+      isTransportOrEvaluateTimeoutError(caught),
+      `must match isTransportOrEvaluateTimeoutError, got: ${caught.message}`,
+    );
+    assert(
+      !caught.message.startsWith(APP_NEVER_BECAME_READY),
+      `must NOT launder into app never became ready, got: ${caught.message}`,
+    );
+    assert(
+      caught.message.includes("probe evaluation timed out after 50ms for NTP main"),
+      `must report exact probe timeout detail and surface, got: ${caught.message}`,
+    );
+
+    // Wait for the simulated background 15s (here 150ms) Cdp.send timeout to fire
+    await new Promise((r) => setTimeout(r, 200));
+    assertEquals(backgroundSettled, true, "simulated CDP timeout must have fired in background");
+    assertEquals(unhandledRejectionCaught, false, "background rejection must NOT cause an unhandled promise rejection");
+  } finally {
+    globalThis.removeEventListener?.("unhandledrejection", unhandledHandler);
+  }
 });
 
 Deno.test("iksuc: APP_READY_EXPRESSION evaluates NTP DOM readiness accurately", () => {

@@ -136,6 +136,7 @@ export function isTransportOrEvaluateTimeoutError(e: any): boolean {
   if (isCdpEvaluateTimeout(msg)) return true;
   if (/^cdp timeout: Runtime\.evaluate/i.test(msg)) return true;
   if (/Target closed|Session (?:closed|with given id not found)|WebSocket (?:closed|is not open)|Connection closed/i.test(msg)) return true;
+  if (/probe evaluation timed out/i.test(msg)) return true;
   return false;
 }
 
@@ -162,12 +163,29 @@ export async function waitForAppReady(
     if (remainingMs <= 0) break;
     const probeLimit = Math.min(remainingMs, options.probeTimeoutMs ?? 2000);
 
+    let evalPromise: Promise<any>;
+    try {
+      evalPromise = Promise.resolve(evaluate(expr));
+    } catch (err) {
+      if (isTransportOrEvaluateTimeoutError(err)) {
+        throw err;
+      }
+      lastProbe = { error: String(err) };
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+      continue;
+    }
+    // Prevent unhandled promise rejection if probe timer fires before evaluate settles (pew31)
+    evalPromise.catch(() => {});
+
     let probeTimer: any;
     try {
       const probe = await Promise.race([
-        evaluate(expr),
+        evalPromise,
         new Promise((_, reject) => {
-          probeTimer = setTimeout(() => reject(new Error("probe evaluation timed out")), probeLimit);
+          probeTimer = setTimeout(
+            () => reject(new Error(`cdp timeout: Runtime.evaluate (probe evaluation timed out after ${probeLimit}ms${surface})`)),
+            probeLimit,
+          );
         }),
       ]);
       clearTimeout(probeTimer);
