@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.645] — 2026-10-10
+- Redact adapter error details and sanitise ACP bridge error logging so secrets never reach the log.
+
 ## [0.3.644] — 2026-10-10
 - Keep the site documentation scanning self-check accurate as the scanner evolves.
 
