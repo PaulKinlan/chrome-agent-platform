@@ -447,11 +447,14 @@ Deno.test("j2vok falsification: negative mutant reproducing pre-e7gwq quadratic 
 });
 
 /**
- * Independent complexity guard that instruments String.prototype access during execution
- * to measure total character inspections, backward reads, and backward rescan method calls.
- * Fails closed without relying on wall-clock timing budgets (uil17).
+ * Independent complexity guard that instruments String.prototype and string proxy access
+ * during execution to measure total character inspections, backward reads, and backward rescan method calls.
+ * Covers charCodeAt, charAt, codePointAt, at, lastIndexOf, and bracket indexing input[j] (uil17, otqr7).
+ * Fails closed without relying on wall-clock timing budgets.
  */
-function measureCharacterInspections<T>(fn: () => T): {
+function measureCharacterInspections<T>(
+  fn: (wrapString: (s: string) => string) => T,
+): {
   result: T;
   charReads: number;
   backwardReads: number;
@@ -462,29 +465,121 @@ function measureCharacterInspections<T>(fn: () => T): {
   let lastIndexOfCalls = 0;
   let maxIndexSeen = -1;
 
+  const trackIndex = (idx: number) => {
+    if (idx < 0) return;
+    charReads++;
+    if (idx < maxIndexSeen) {
+      backwardReads++;
+    } else if (idx > maxIndexSeen) {
+      maxIndexSeen = idx;
+    }
+  };
+
   const origCharCodeAt = String.prototype.charCodeAt;
+  const origCharAt = String.prototype.charAt;
+  const origCodePointAt = String.prototype.codePointAt;
+  const origAt = String.prototype.at;
   const origLastIndexOf = String.prototype.lastIndexOf;
+
+  function createTrackedString(rawStr: string, baseOffset = 0): string {
+    const target = new String(rawStr);
+    return new Proxy(target, {
+      get(t, prop, receiver) {
+        if (typeof prop === "string" && /^[0-9]+$/.test(prop)) {
+          const idx = Number(prop) + baseOffset;
+          trackIndex(idx);
+          return rawStr[Number(prop)];
+        }
+        if (prop === "charCodeAt") {
+          return function (idx: number) {
+            trackIndex(idx + baseOffset);
+            return origCharCodeAt.call(rawStr, idx);
+          };
+        }
+        if (prop === "charAt") {
+          return function (idx: number) {
+            trackIndex(idx + baseOffset);
+            return origCharAt.call(rawStr, idx);
+          };
+        }
+        if (prop === "codePointAt") {
+          return function (idx: number) {
+            trackIndex(idx + baseOffset);
+            return origCodePointAt.call(rawStr, idx);
+          };
+        }
+        if (prop === "at") {
+          return function (idx: number) {
+            const actual = idx >= 0 ? idx : rawStr.length + idx;
+            trackIndex(actual + baseOffset);
+            return origAt ? origAt.call(rawStr, idx) : origCharAt.call(rawStr, actual);
+          };
+        }
+        if (prop === "lastIndexOf") {
+          return function (...args: any[]) {
+            lastIndexOfCalls++;
+            return origLastIndexOf.apply(rawStr, args);
+          };
+        }
+        if (prop === "slice") {
+          return function (start = 0, end = rawStr.length) {
+            const actualStart = start < 0 ? Math.max(0, rawStr.length + start) : Math.min(rawStr.length, start);
+            const actualEnd = end < 0 ? Math.max(0, rawStr.length + end) : Math.min(rawStr.length, end);
+            const sliced = rawStr.slice(start, end);
+            return createTrackedString(sliced, baseOffset + actualStart);
+          };
+        }
+        if (prop === "indexOf") {
+          return function (...args: any[]) {
+            return (rawStr as any).indexOf(...args);
+          };
+        }
+        if (prop === "length") return rawStr.length;
+        if (prop === Symbol.toPrimitive) return () => rawStr;
+        if (prop === "toString" || prop === "valueOf") return () => rawStr;
+        const val = Reflect.get(t, prop, t);
+        if (typeof val === "function") return val.bind(rawStr);
+        return val;
+      },
+    }) as unknown as string;
+  }
 
   try {
     String.prototype.charCodeAt = function (idx: number) {
-      charReads++;
-      if (idx < maxIndexSeen) {
-        backwardReads++;
-      } else if (idx > maxIndexSeen) {
-        maxIndexSeen = idx;
-      }
+      trackIndex(idx);
       return origCharCodeAt.call(this, idx);
     };
+
+    String.prototype.charAt = function (idx: number) {
+      trackIndex(idx);
+      return origCharAt.call(this, idx);
+    };
+
+    String.prototype.codePointAt = function (idx: number) {
+      trackIndex(idx);
+      return origCodePointAt.call(this, idx);
+    };
+
+    if (origAt) {
+      String.prototype.at = function (idx: number) {
+        const actual = idx >= 0 ? idx : (this.length + idx);
+        trackIndex(actual);
+        return origAt.call(this, idx);
+      };
+    }
 
     String.prototype.lastIndexOf = function (...args: any[]) {
       lastIndexOfCalls++;
       return origLastIndexOf.apply(this, args);
     };
 
-    const result = fn();
+    const result = fn(createTrackedString);
     return { result, charReads, backwardReads, lastIndexOfCalls };
   } finally {
     String.prototype.charCodeAt = origCharCodeAt;
+    String.prototype.charAt = origCharAt;
+    String.prototype.codePointAt = origCodePointAt;
+    if (origAt) String.prototype.at = origAt;
     String.prototype.lastIndexOf = origLastIndexOf;
   }
 }
@@ -530,7 +625,7 @@ function mutantVoya0BackwardLoopScan(
   text: string,
   { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS, stats = null }: any = {},
 ): string[] {
-  const input = typeof text === "string" ? text.slice(0, maxBytes) : "";
+  const input = (typeof text === "string" || text instanceof String) ? text.slice(0, maxBytes) : "";
   const urls: string[] = [];
   const len = input.length;
   const openStack: number[] = [];
@@ -557,16 +652,120 @@ function mutantVoya0BackwardLoopScan(
   return urls;
 }
 
-Deno.test("uil17 acceptance: independent complexity guard deterministically catches un-bookkept backward-rescan mutants without relying on timing", () => {
-  // Acceptance criterion for chrome-agent-platform-uil17:
+/**
+ * Mutant C: Reintroduces backward scan via charAt(j) loop on every closing bracket ']'.
+ */
+function mutantVoya0CharAtScan(
+  text: string,
+  { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS, stats = null }: any = {},
+): string[] {
+  const input = (typeof text === "string" || text instanceof String) ? text.slice(0, maxBytes) : "";
+  const urls: string[] = [];
+  const len = input.length;
+  const openStack: number[] = [];
+
+  for (let i = 0; i < len && urls.length < maxLinks; i++) {
+    if (stats) stats.steps = (stats.steps || 0) + 1;
+    const code = input.charCodeAt(i);
+    if (code === 91 /* [ */) {
+      if (openStack.length < 32) openStack.push(i);
+    } else if (code === 93 /* ] */) {
+      for (let j = i - 1; j >= 0; j--) {
+        if (input.charAt(j) === "[") break;
+      }
+      const openBracket = openStack.pop();
+      if (openBracket !== undefined && i + 1 < len && input.charCodeAt(i + 1) === 40 /* ( */) {
+        const closeParen = input.indexOf(")", i + 2);
+        if (closeParen === -1) break;
+        i = closeParen;
+        openStack.length = 0;
+      }
+    }
+  }
+  return urls;
+}
+
+/**
+ * Mutant D: Reintroduces backward scan via codePointAt(j) loop on every closing bracket ']'.
+ */
+function mutantVoya0CodePointAtScan(
+  text: string,
+  { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS, stats = null }: any = {},
+): string[] {
+  const input = (typeof text === "string" || text instanceof String) ? text.slice(0, maxBytes) : "";
+  const urls: string[] = [];
+  const len = input.length;
+  const openStack: number[] = [];
+
+  for (let i = 0; i < len && urls.length < maxLinks; i++) {
+    if (stats) stats.steps = (stats.steps || 0) + 1;
+    const code = input.charCodeAt(i);
+    if (code === 91 /* [ */) {
+      if (openStack.length < 32) openStack.push(i);
+    } else if (code === 93 /* ] */) {
+      for (let j = i - 1; j >= 0; j--) {
+        if (input.codePointAt(j) === 91) break;
+      }
+      const openBracket = openStack.pop();
+      if (openBracket !== undefined && i + 1 < len && input.charCodeAt(i + 1) === 40 /* ( */) {
+        const closeParen = input.indexOf(")", i + 2);
+        if (closeParen === -1) break;
+        i = closeParen;
+        openStack.length = 0;
+      }
+    }
+  }
+  return urls;
+}
+
+/**
+ * Mutant E: Reintroduces backward scan via bracket indexing input[j] loop on every closing bracket ']'.
+ */
+function mutantVoya0BracketIndexScan(
+  text: string,
+  { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS, stats = null }: any = {},
+): string[] {
+  const input = (typeof text === "string" || text instanceof String) ? text.slice(0, maxBytes) : "";
+  const urls: string[] = [];
+  const len = input.length;
+  const openStack: number[] = [];
+
+  for (let i = 0; i < len && urls.length < maxLinks; i++) {
+    if (stats) stats.steps = (stats.steps || 0) + 1;
+    const code = input.charCodeAt(i);
+    if (code === 91 /* [ */) {
+      if (openStack.length < 32) openStack.push(i);
+    } else if (code === 93 /* ] */) {
+      for (let j = i - 1; j >= 0; j--) {
+        if (input[j] === "[") break;
+      }
+      const openBracket = openStack.pop();
+      if (openBracket !== undefined && i + 1 < len && input.charCodeAt(i + 1) === 40 /* ( */) {
+        const closeParen = input.indexOf(")", i + 2);
+        if (closeParen === -1) break;
+        i = closeParen;
+        openStack.length = 0;
+      }
+    }
+  }
+  return urls;
+}
+
+Deno.test("uil17 / otqr7 acceptance: independent complexity guard deterministically catches un-bookkept backward-rescan mutants across all access patterns without timing", () => {
+  // Acceptance criterion for chrome-agent-platform-uil17 and chrome-agent-platform-otqr7:
   // Verify that an independent guard observing character inspections fails closed against
-  // un-bookkept backward rescan regressions (both lastIndexOf and explicit loop variants)
+  // un-bookkept backward rescan regressions across all access patterns:
+  // - lastIndexOf
+  // - charCodeAt(j) loop
+  // - charAt(j) loop
+  // - codePointAt(j) loop
+  // - bracket indexing input[j] loop
   // without relying on wall-clock timing budgets.
   const sampleSize = 1_000;
   const sample = "]".repeat(sampleSize);
+  const expectedBackwardReads = (sampleSize * (sampleSize - 1)) / 2;
 
-  // 1. Real production extractMarkdownLinks:
-  // Strictly forward single-pass scanner.
+  // 1. Real production extractMarkdownLinks on primitive string:
   const realMeasurement = measureCharacterInspections(() => {
     return extractMarkdownLinks(sample);
   });
@@ -579,50 +778,93 @@ Deno.test("uil17 acceptance: independent complexity guard deterministically catc
     `character inspections (${realMeasurement.charReads}) must not exceed input length (${sample.length})`,
   );
 
-  // 2. Mutant A: un-bookkept lastIndexOf backward scan
+  // 2. Real production extractMarkdownLinks on tracked string proxy:
+  const realTrackedMeasurement = measureCharacterInspections((wrap) => {
+    return extractMarkdownLinks(wrap(sample));
+  });
+  assertEquals(realTrackedMeasurement.result, []);
+  assertEquals(realTrackedMeasurement.lastIndexOfCalls, 0, "tracked production code must never call lastIndexOf");
+  assertEquals(realTrackedMeasurement.backwardReads, 0, "tracked production code must never read characters backward");
+  assertEquals(realTrackedMeasurement.charReads, sampleSize, "tracked production code reads each character once");
+  assert(
+    realTrackedMeasurement.charReads <= sample.length,
+    `tracked character inspections (${realTrackedMeasurement.charReads}) must not exceed input length (${sample.length})`,
+  );
+
+  // 3. Mutant A: un-bookkept lastIndexOf backward scan
   const mutantAMeasurement = measureCharacterInspections(() => {
     return mutantVoya0LastIndexOfScan(sample);
   });
-  // The independent guard catches lastIndexOf calls immediately:
   assertEquals(mutantAMeasurement.lastIndexOfCalls, sampleSize, "mutant A makes lastIndexOf call for every closing bracket");
   assert(mutantAMeasurement.lastIndexOfCalls > 0, "independent guard catches backward scan method calls");
 
-  // 3. Mutant B: un-bookkept backward loop scan
+  // 4. Mutant B: un-bookkept charCodeAt backward loop scan
   const mutantBMeasurement = measureCharacterInspections(() => {
     return mutantVoya0BackwardLoopScan(sample);
   });
-  // The independent guard catches backward character reads immediately:
-  const expectedBackwardReads = (sampleSize * (sampleSize - 1)) / 2;
   assertEquals(mutantBMeasurement.backwardReads, expectedBackwardReads, "mutant B backward reads match O(N^2) backward scan");
   assertEquals(mutantBMeasurement.charReads, sampleSize + expectedBackwardReads, "mutant B total char reads are quadratic");
-  assert(
-    mutantBMeasurement.charReads > sample.length,
-    `mutant B violates deterministic linear complexity: ${mutantBMeasurement.charReads} > ${sample.length}`,
-  );
+  assert(mutantBMeasurement.charReads > sample.length, "mutant B violates deterministic linear complexity");
 
-  // Verify that the linear complexity assertions fail closed on both mutants without timing:
+  // 5. Mutant C: un-bookkept charAt backward loop scan (otqr7)
+  const mutantCMeasurement = measureCharacterInspections(() => {
+    return mutantVoya0CharAtScan(sample);
+  });
+  assertEquals(mutantCMeasurement.backwardReads, expectedBackwardReads, "mutant C backward reads match O(N^2) backward scan");
+  assertEquals(mutantCMeasurement.charReads, sampleSize + expectedBackwardReads, "mutant C total char reads are quadratic");
+  assert(mutantCMeasurement.charReads > sample.length, "mutant C violates deterministic linear complexity");
+
+  // 6. Mutant D: un-bookkept codePointAt backward loop scan (otqr7)
+  const mutantDMeasurement = measureCharacterInspections(() => {
+    return mutantVoya0CodePointAtScan(sample);
+  });
+  assertEquals(mutantDMeasurement.backwardReads, expectedBackwardReads, "mutant D backward reads match O(N^2) backward scan");
+  assertEquals(mutantDMeasurement.charReads, sampleSize + expectedBackwardReads, "mutant D total char reads are quadratic");
+  assert(mutantDMeasurement.charReads > sample.length, "mutant D violates deterministic linear complexity");
+
+  // 7. Mutant E: un-bookkept bracket indexing input[j] backward loop scan (otqr7)
+  const mutantEMeasurement = measureCharacterInspections((wrap) => {
+    return mutantVoya0BracketIndexScan(wrap(sample));
+  });
+  assertEquals(mutantEMeasurement.backwardReads, expectedBackwardReads, "mutant E backward reads match O(N^2) backward scan");
+  assertEquals(mutantEMeasurement.charReads, sampleSize + expectedBackwardReads, "mutant E total char reads are quadratic");
+  assert(mutantEMeasurement.charReads > sample.length, "mutant E violates deterministic linear complexity");
+
+  // Verify that the linear complexity assertions fail closed on ALL 5 mutants without timing:
   assertThrows(
-    () => {
-      assert(mutantAMeasurement.lastIndexOfCalls === 0, "backward scan detected via lastIndexOf");
-    },
+    () => { assert(mutantAMeasurement.lastIndexOfCalls === 0, "backward scan detected via lastIndexOf"); },
     Error,
     "backward scan detected via lastIndexOf",
   );
 
   assertThrows(
-    () => {
-      assert(mutantBMeasurement.backwardReads === 0, "backward scan detected via backward char reads");
-    },
+    () => { assert(mutantBMeasurement.backwardReads === 0, "backward scan detected via backward charCodeAt reads"); },
     Error,
-    "backward scan detected via backward char reads",
+    "backward scan detected via backward charCodeAt reads",
   );
 
   assertThrows(
-    () => {
-      assert(mutantBMeasurement.charReads <= sample.length, "linear complexity bound exceeded");
-    },
+    () => { assert(mutantCMeasurement.backwardReads === 0, "backward scan detected via backward charAt reads"); },
     Error,
-    "linear complexity bound exceeded",
+    "backward scan detected via backward charAt reads",
+  );
+
+  assertThrows(
+    () => { assert(mutantDMeasurement.backwardReads === 0, "backward scan detected via backward codePointAt reads"); },
+    Error,
+    "backward scan detected via backward codePointAt reads",
+  );
+
+  assertThrows(
+    () => { assert(mutantEMeasurement.backwardReads === 0, "backward scan detected via backward bracket indexing reads"); },
+    Error,
+    "backward scan detected via backward bracket indexing reads",
+  );
+
+  assertThrows(
+    () => { assert(mutantEMeasurement.charReads <= sample.length, "linear complexity bound exceeded on bracket indexing"); },
+    Error,
+    "linear complexity bound exceeded on bracket indexing",
   );
 });
 
