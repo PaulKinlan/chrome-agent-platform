@@ -649,8 +649,14 @@ Both present head slots are checked against their own historical exact witness
 IDs; a forged older slot cannot hide behind a valid newer slot.
 Each immutable witness stores the exact pre-issuance bounded evidence SHA-256
 and any explicitly requested WAL leaf names/sizes/digests, rechecked under the
-master lock. `fingerprintRequestedMasterJournalRepairLeaves` only returns
-forensic evidence; it does NOT decide that any leaf can be quarantined or that
+master lock. Bounded byte collection and requested-leaf hashing live in
+`master-journal-repair-evidence.js`, which imports no WAL reader: WAL issuance
+imports only this collector while owner inspection layers strict projection
+checks on top, avoiding a WAL↔owner-inspection ESM cycle. The re-read prevents
+cooperating master-lock writers from changing evidence between owner observation
+and intent issuance; it is not a power-loss guarantee, a lock of unrelated
+profile storage, or a defense against code that bypasses the master lock.
+`fingerprintRequestedMasterJournalRepairLeaves` only returns forensic evidence; it does NOT decide that any leaf can be quarantined or that
 an owner approved moving it. `deriveMasterJournalQuarantineManifest` only
 maps the checked requested names/digests to collision-resistant immutable
 quarantine leaf names and a manifest hash; it copies no bytes. A witness with

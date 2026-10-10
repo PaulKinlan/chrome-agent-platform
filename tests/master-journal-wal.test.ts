@@ -10,6 +10,7 @@ import {
 } from "../extension/lib/master-journal-owner-inspection.js";
 import { inspectIntactMasterJournalPrefixesForOwner } from "../extension/lib/master-journal-repair-prefix.js";
 import { deriveMasterJournalQuarantineManifest } from "../extension/lib/master-journal-quarantine-manifest.js";
+import { collectMasterJournalRepairEvidenceInventory } from "../extension/lib/master-journal-repair-evidence.js";
 import {
   inspectMasterJournalQuarantineRetentionForOwner,
   stageMasterJournalQuarantineCopy,
@@ -321,6 +322,24 @@ Deno.test("durable repair-intent witness refuses missing or unmatched head witho
   wal.children.delete("repair-intent-1.json");
   await assertRejects(() => readMasterJournalHead(master), Error, "repair witness is missing",
     "a checked head cannot discharge a removed witness by omission");
+});
+
+Deno.test("cycle-free raw repair inventory preserves the owner snapshot fingerprint", async () => {
+  const { master } = await legacyFixture();
+  const wal = await master.getDirectoryHandle("journal-wal", { create: true });
+  (await wal.getFileHandle("head-a.json", { create: true })).bytes = encoder.encode("{ torn");
+  const raw = await collectMasterJournalRepairEvidenceInventory(master);
+  const owner = await snapshotMasterJournalRepairEvidence(master);
+  assertEquals(raw.walPresent, owner.walPresent);
+  assertEquals(raw.records, owner.records);
+  assertEquals(raw.legacy, owner.legacy);
+  assertEquals(raw.actionable, false);
+  assertEquals(raw.candidates, []);
+  assertEquals(owner.state, "requires_explicit_owner_repair");
+  const requested = await fingerprintRequestedMasterJournalRepairLeaves(master, ["head-a.json"]);
+  const whole = await fingerprintMasterJournalRepairEvidence(master);
+  assertEquals(requested.evidenceSha256, whole.sha256,
+    "detached raw inventory must preserve the old evidence identity");
 });
 
 Deno.test("bounded owner evidence inventories 300 small staged frame-shaped leaves", async () => {

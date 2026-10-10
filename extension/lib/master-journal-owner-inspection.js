@@ -6,92 +6,24 @@ import {
   readMasterJournalHead,
   readMasterJournalProjection,
 } from "./master-journal-wal.js";
+import {
+  collectMasterJournalRepairEvidenceInventory,
+  hashMasterJournalRepairEvidenceInventory,
+} from "./master-journal-repair-evidence.js";
+export { fingerprintRequestedMasterJournalRepairLeaves } from "./master-journal-repair-evidence.js";
 
-// Evidence inventory only: never a quarantine instruction. The hard limits
-// cap a single explicit owner inspection, not the size of legitimate history.
-// Oversized/unknown records refuse rather than being silently omitted.
-export async function snapshotMasterJournalRepairEvidence(master, {
-  maxRecords = 1024, maxRecordBytes = 8 * 1024 * 1024,
-  maxTotalBytes = 16 * 1024 * 1024,
-} = {}) {
-  if (!Number.isSafeInteger(maxRecords) || maxRecords < 0 || maxRecords > 4096 ||
-      !Number.isSafeInteger(maxRecordBytes) || maxRecordBytes < 0 || maxRecordBytes > 32 * 1024 * 1024 ||
-      !Number.isSafeInteger(maxTotalBytes) || maxTotalBytes < 0 || maxTotalBytes > 64 * 1024 * 1024) {
-    throw new Error("master journal repair evidence limits are invalid");
-  }
-  const refuse = (reason) => ({ state: "inspection_refused", actionable: false,
-    authorityOutcomeRequired: true, candidates: [], records: [], refusals: [reason] });
-  let directory;
-  try { directory = await master.getDirectoryHandle("journal-wal"); }
-  catch (error) {
-    if (error?.name !== "NotFoundError") return refuse(`master journal repair evidence unreadable: ${error?.message ?? error}`);
-    directory = null;
-  }
-  const records = [];
-  let totalBytes = 0;
-  try {
-    for await (const [name, handle] of directory?.entries() ?? []) {
-      if (records.length >= maxRecords) return refuse("master journal repair evidence record count exceeds limit");
-      if (typeof name !== "string" || !name || typeof handle?.getFile !== "function") {
-        return refuse("master journal repair evidence has an unclassified directory or leaf");
-      }
-      const file = await handle.getFile();
-      if (!Number.isSafeInteger(file?.size) || file.size < 0 || file.size > maxRecordBytes) {
-        return refuse("master journal repair evidence record exceeds byte limit");
-      }
-      if (totalBytes + file.size > maxTotalBytes) {
-        return refuse("master journal repair evidence total bytes exceed limit");
-      }
-      totalBytes += file.size;
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      if (bytes.byteLength !== file.size) return refuse("master journal repair evidence record changed during read");
-      const digest = await crypto.subtle.digest("SHA-256", bytes);
-      records.push({ name, bytes: file.size,
-        sha256: [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("") });
-    }
-  } catch (error) { return refuse(`master journal repair evidence unreadable: ${error?.message ?? error}`); }
-  // These are only fingerprints, never a second source of authority. A
-  // pre-head directory must keep refusing even when legacy bytes look valid.
-  const legacy = {};
-  try {
-    for (const [key, filename] of [["journal", "journal.json"], ["archive", "journal-archive.json"]]) {
-      let handle;
-      try { handle = await master.getFileHandle(filename); }
-      catch (error) {
-        if (error?.name !== "NotFoundError") throw error;
-        legacy[key] = { present: false };
-        continue;
-      }
-      const file = await handle.getFile();
-      if (!Number.isSafeInteger(file?.size) || file.size < 0 || file.size > maxRecordBytes) {
-        return refuse("master journal repair evidence record exceeds byte limit");
-      }
-      if (totalBytes + file.size > maxTotalBytes) {
-        return refuse("master journal repair evidence total bytes exceed limit");
-      }
-      totalBytes += file.size;
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      if (bytes.byteLength !== file.size) return refuse("master journal repair evidence record changed during read");
-      const digest = await crypto.subtle.digest("SHA-256", bytes);
-      legacy[key] = { present: true, bytes: file.size,
-        sha256: [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("") };
-    }
-  } catch (error) { return refuse(`master journal repair evidence unreadable: ${error?.message ?? error}`); }
-  records.sort((a, b) => a.name.localeCompare(b.name));
+// The raw bounded inventory cannot decide authority. This owner-facing view
+// adds the strict WAL inspection after collecting fingerprints. The WAL issuer
+// imports only the independent inventory module, so there is no ESM cycle.
+export async function snapshotMasterJournalRepairEvidence(master, limits = {}) {
+  const evidence = await collectMasterJournalRepairEvidenceInventory(master, limits);
+  if (evidence.state === "inspection_refused") return evidence;
   const inspection = await inspectMasterJournalForOwner(master);
-  return { ...inspection, walPresent: directory !== null, actionable: false,
+  return { ...inspection, ...evidence,
     authorityOutcomeRequired: inspection.state === "requires_explicit_owner_repair",
-    candidates: [], records, legacy,
     refusals: inspection.state === "requires_explicit_owner_repair" ? [inspection.reason] :
       inspection.state === "current_head_checked" ? ["older-head reachability not verified for repair"] : [],
   };
-}
-
-async function hashRepairEvidence(evidence) {
-  const body = JSON.stringify({ schemaVersion: 1, walPresent: evidence.walPresent,
-    records: evidence.records, legacy: evidence.legacy });
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /** Exact bounded evidence identity for a later explicit owner repair request.
@@ -103,32 +35,9 @@ export async function fingerprintMasterJournalRepairEvidence(master) {
     throw new Error(`master journal repair evidence fingerprint refused: ${evidence.refusals[0]}`);
   }
   return { schemaVersion: 1, walPresent: evidence.walPresent,
-    sha256: await hashRepairEvidence(evidence),
+    sha256: await hashMasterJournalRepairEvidenceInventory(evidence),
     recordCount: evidence.records.length, actionable: false,
     authorityOutcomeRequired: evidence.authorityOutcomeRequired, candidates: [] };
-}
-
-/** Owner-requested forensic names, not an authorization to quarantine them.
- * Only fingerprints already within the bounded snapshot may be reported. A
- * later publisher must separately prove both-head reachability and approval. */
-export async function fingerprintRequestedMasterJournalRepairLeaves(master, names) {
-  if (!Array.isArray(names) || names.length > 32 ||
-      names.some((name) => typeof name !== "string" || !name || name.length > 128 ||
-        name.includes("/") || name.startsWith("repair-intent-") || name.startsWith("quarantine-")) ||
-      new Set(names).size !== names.length) {
-    throw new Error("master journal requested repair leaves are invalid or repeated");
-  }
-  const evidence = await snapshotMasterJournalRepairEvidence(master);
-  if (evidence.state === "inspection_refused") {
-    throw new Error(`master journal requested repair evidence refused: ${evidence.refusals[0]}`);
-  }
-  const requestedRecords = names.map((name) => {
-    const record = evidence.records.find((row) => row.name === name);
-    if (!record) throw new Error(`master journal requested repair leaf ${name} is missing`);
-    return record;
-  }).sort((a, b) => a.name.localeCompare(b.name));
-  return { schemaVersion: 1, evidenceSha256: await hashRepairEvidence(evidence),
-    actionable: false, authorityOutcomeRequired: true, candidates: [], requestedRecords };
 }
 
 export async function inspectMasterJournalForOwner(master) {

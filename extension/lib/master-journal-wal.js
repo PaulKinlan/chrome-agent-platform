@@ -1,5 +1,5 @@
 import { capLog } from "./cap-log.js";
-import { fingerprintRequestedMasterJournalRepairLeaves } from "./master-journal-owner-inspection.js";
+import { fingerprintRequestedMasterJournalRepairLeaves } from "./master-journal-repair-evidence.js";
 
 // Master-only journal authority. A legacy journal remains authoritative until
 // the first checked head is published; staged files are never treated as rows.
