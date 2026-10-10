@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.661] — 2026-10-10
+- Prevent premature model ID commit and option navigation during IME text composition in model picker combobox
+
 ## [0.3.660] — 2026-10-10
 - Remove unused internal state in ACP adapter stderr sanitizer
 

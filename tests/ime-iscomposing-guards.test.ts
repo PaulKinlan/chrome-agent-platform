@@ -68,6 +68,23 @@ Deno.test("bmkv9: static check: all 6 audited surfaces carry e.isComposing || e.
     docsConvSrc.includes("if (e.isComposing || e.keyCode === 229) return;"),
     "docs/components-conversation.js must carry the isComposing guard in sync",
   );
+
+  // Surface 7 (kital): <model-picker> combobox keydown in extension/shared/components-settings.js
+  const settingsSrc = await Deno.readTextFile(`${ROOT}extension/shared/components-settings.js`);
+  const mpMatch = settingsSrc.match(/_onKey\(e\)\s*\{([\s\S]*?)\}/);
+  assert(mpMatch, "ModelPicker._onKey handler must exist");
+  assert(
+    mpMatch[1].trim().startsWith("if (e.isComposing || e.keyCode === 229) return;"),
+    "ModelPicker._onKey handler must start with e.isComposing || e.keyCode === 229 guard",
+  );
+
+  const docsSettingsSrc = await Deno.readTextFile(`${ROOT}docs/components-settings.js`);
+  const docsMpMatch = docsSettingsSrc.match(/_onKey\(e\)\s*\{([\s\S]*?)\}/);
+  assert(docsMpMatch, "docs/components-settings.js ModelPicker._onKey handler must exist");
+  assert(
+    docsMpMatch[1].trim().startsWith("if (e.isComposing || e.keyCode === 229) return;"),
+    "docs/components-settings.js ModelPicker._onKey handler must start with e.isComposing || e.keyCode === 229 guard",
+  );
 });
 
 // ── 2. Behavioral Falsification: PromptBar (#pb-input) ──────────────────────
@@ -429,4 +446,108 @@ Deno.test("bmkv9: falsification: Sidepanel #url input ignores Enter when isCompo
   went = false;
   handler({ key: "Enter", isComposing: false, keyCode: 13 });
   assertEquals(went, true, "sidepanel go must fire on plain Enter");
+});
+
+// ── 8. Behavioral Falsification: ModelPicker Combobox (kital) ────────────────
+
+Deno.test("kital: real module: <model-picker> _onKey ignores Enter, ArrowDown, ArrowUp when isComposing or keyCode 229; plain Enter commits once", async () => {
+  const prevCustomElements = (globalThis as any).customElements;
+  const prevHTMLElement = (globalThis as any).HTMLElement;
+  const prevDocument = (globalThis as any).document;
+  const prevWindow = (globalThis as any).window;
+
+  try {
+    (globalThis as any).HTMLElement = class {
+      attachShadow() { return { innerHTML: "", querySelector: () => null, querySelectorAll: () => [], appendChild() {}, addEventListener() {} }; }
+      getAttribute() { return null; }
+      setAttribute() {}
+      hasAttribute() { return false; }
+      dispatchEvent() { return true; }
+      addEventListener() {}
+    };
+    (globalThis as any).customElements = { define() {}, get() { return undefined; } };
+    (globalThis as any).document = { addEventListener: () => {}, createElement: () => ({ style: {}, setAttribute() {} }) };
+    (globalThis as any).window = { addEventListener: () => {} };
+
+    const { ModelPicker } = await import(`${ROOT}extension/shared/components-settings.js`);
+    const picker: any = new ModelPicker();
+    picker._visibleOptions = [{ id: "m1" }, { id: "m2" }, { id: "m3" }];
+    picker._open = true;
+    picker._activeIndex = 0;
+    picker._input = { value: "custom-model" };
+    picker._root = { querySelector: () => null };
+    picker._setOpen = (val: boolean) => { picker._open = val; };
+    picker._renderList = () => {};
+    picker._moveActive = (delta: number) => { picker._activeIndex += delta; };
+
+    let commits = 0;
+    let committedValue = "";
+    picker._commitInput = () => { commits++; committedValue = picker._input.value; };
+    picker._commit = (o: any) => { commits++; committedValue = String(o?.id ?? o); };
+
+    let prevented = false;
+    const ev = (key: string, isComposing: boolean, keyCode: number) => ({
+      key,
+      isComposing,
+      keyCode,
+      preventDefault: () => { prevented = true; },
+    });
+
+    // 1. Enter while isComposing: true -> NO commit, list stays open, no preventDefault
+    prevented = false;
+    picker._onKey(ev("Enter", true, 13));
+    assertEquals(commits, 0, "Enter during isComposing must NOT commit");
+    assertEquals(picker._open, true, "list must remain open during composition");
+    assertEquals(prevented, false, "composing Enter must not prevent default");
+
+    // 2. Enter with keyCode 229 (Safari confirming keydown) -> NO commit
+    prevented = false;
+    picker._onKey(ev("Enter", false, 229));
+    assertEquals(commits, 0, "Enter with keyCode 229 must NOT commit");
+    assertEquals(picker._open, true, "list must remain open during keyCode 229");
+    assertEquals(prevented, false, "keyCode 229 must not prevent default");
+
+    // 3. ArrowDown while isComposing: true -> activeIndex unchanged (0)
+    prevented = false;
+    picker._onKey(ev("ArrowDown", true, 40));
+    assertEquals(picker._activeIndex, 0, "ArrowDown during composition must NOT move active index");
+    assertEquals(prevented, false, "composing ArrowDown must not prevent default");
+
+    // 4. ArrowDown with keyCode 229 -> activeIndex unchanged (0)
+    prevented = false;
+    picker._onKey(ev("ArrowDown", false, 229));
+    assertEquals(picker._activeIndex, 0, "ArrowDown with keyCode 229 must NOT move active index");
+    assertEquals(prevented, false, "keyCode 229 ArrowDown must not prevent default");
+
+    // 5. ArrowUp while isComposing: true -> activeIndex unchanged (0)
+    prevented = false;
+    picker._onKey(ev("ArrowUp", true, 38));
+    assertEquals(picker._activeIndex, 0, "ArrowUp during composition must NOT move active index");
+    assertEquals(prevented, false, "composing ArrowUp must not prevent default");
+
+    // 6. ArrowUp with keyCode 229 -> activeIndex unchanged (0)
+    prevented = false;
+    picker._onKey(ev("ArrowUp", false, 229));
+    assertEquals(picker._activeIndex, 0, "ArrowUp with keyCode 229 must NOT move active index");
+    assertEquals(prevented, false, "keyCode 229 ArrowUp must not prevent default");
+
+    // 7. Non-composing ArrowDown -> moves activeIndex from 0 to 1 and calls preventDefault
+    prevented = false;
+    picker._onKey(ev("ArrowDown", false, 40));
+    assertEquals(picker._activeIndex, 1, "non-composing ArrowDown must move active index");
+    assertEquals(prevented, true, "non-composing ArrowDown must prevent default");
+
+    // 8. Non-composing Enter -> commits active option ("m2"), closes list, calls preventDefault
+    prevented = false;
+    picker._onKey(ev("Enter", false, 13));
+    assertEquals(commits, 1, "non-composing Enter must commit exactly once");
+    assertEquals(committedValue, "m2", "committed value must match active option");
+    assertEquals(picker._open, false, "list must close after commit");
+    assertEquals(prevented, true, "non-composing Enter must prevent default");
+  } finally {
+    (globalThis as any).customElements = prevCustomElements;
+    (globalThis as any).HTMLElement = prevHTMLElement;
+    (globalThis as any).document = prevDocument;
+    (globalThis as any).window = prevWindow;
+  }
 });
