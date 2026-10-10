@@ -2269,7 +2269,7 @@ async function main() {
       // w51r: a geometry click on a hidden/occluded rail button misses silently,
       // then the dialog wait reports a misleading timeout. Refuse before input.
       await waitForAppReady((expression) => evalIn(cdp, ntpSession, expression), { surfaceName: "NTP Create Dialog" });
-      await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});
+      await cdp.send("Page.bringToFront", {}, ntpSession);
       await clickVisibleCreateAgent(cdp, ntpSession, (expression) => evalIn(cdp, ntpSession, expression), { waitForReady: true });
       for (let i = 0; i < 30; i++) { if ((await pickerState()).open) break; await sleep(150); }
       await sleep(200);
@@ -4835,7 +4835,7 @@ async function main() {
     const keylessBefore = await msgValue({ type: "thread.list" });
     const keylessThreadsBefore = new Set((keylessBefore?.threads ?? []).map((t) => t?.id));
     await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
-    await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});
+    await cdp.send("Page.bringToFront", {}, ntpSession);
     await clickSel(cdp, ntpSession, "#home").catch(() => false);
     await sleep(600);
     check("keyless: typed 'group my tabs by topic' into the hub composer", await typeInto(cdp, ntpSession, composerInput("hub"), "group my tabs by topic"));
