@@ -61,6 +61,12 @@ export const SERIAL_REASONS = {
   "tests/serial-phase-timeout.test.ts": "wall-clock kill/survive bounds assertions (declared 5000 ms work vs 4000 ms flat / 12000 ms scaled bounds) race the parallel phase",
   // 20e2u: launches real Chrome to load extension/dist bundles and verify dynamic chunk resolution.
   "tests/chunk-resolution-browser.test.ts": "launches Chrome to load extension/dist bundles and verify dynamic chunk resolution; races serial builds mutating dist/",
+  // chrome-agent-platform-jdgjy: boots ntp.html in real headless Chrome and asserts on
+  // median long task count (0) and stage1-composer latency (<150ms). Concurrent load in the
+  // 32-worker parallel phase causes CPU starvation during boot, failing full gates with
+  // median long tasks 1 vs 0 and composer latency up to 383ms, while passing 4/0 in isolation.
+  // Running serially before the parallel phase removes the concurrent load.
+  "tests/ntp-boot-staging.test.ts": "median-long-task (0) and stage1-composer (<150ms) boot assertions race the parallel phase under concurrent load (failed union-gate full runs; passes 4/0 in isolation)",
 };
 export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
 
