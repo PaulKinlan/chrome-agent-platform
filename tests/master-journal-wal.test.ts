@@ -17,6 +17,7 @@ import {
   readMasterJournalHead,
   readMasterJournalProjection,
   sealMasterJournalRecord,
+  stageMasterJournalRepairIntent,
   stageMasterJournalCutover,
   stageMasterJournalFrame,
   unsealMasterJournalRecord,
@@ -97,10 +98,16 @@ Deno.test("durable repair-intent witness refuses missing or unmatched head witho
   const { master, allocateVersion } = await legacyFixture();
   const wal = await master.getDirectoryHandle("journal-wal", { create: true });
   const witnessId = "11111111-2222-4333-8444-555555555555";
-  const witness = await wal.getFileHandle("repair-intent.json", { create: true });
-  witness.bytes = encoder.encode(await sealMasterJournalRecord("repair-intent", {
-    schemaVersion: 1, id: witnessId, reason: "explicit owner repair",
-  }));
+  const staged = await stageMasterJournalRepairIntent(master, {
+    id: witnessId, reason: "pre-head-residue",
+  });
+  assertEquals(staged.id, witnessId);
+  const witness = await wal.getFileHandle("repair-intent.json");
+  const witnessBytes = witness.bytes.slice();
+  await assertRejects(() => stageMasterJournalRepairIntent(master, {
+    id: witnessId, reason: "pre-head-residue",
+  }), Error, "unpublished immutable record");
+  assertEquals(witness.bytes, witnessBytes, "an exact retry must not overwrite append-only repair evidence");
   await assertRejects(() => readMasterJournalHead(master), Error, "repair intent");
   await assertRejects(() => readMasterJournalProjection(master), Error, "repair intent",
     "a missing head cannot reactivate legacy when durable repair is pending");
@@ -109,9 +116,6 @@ Deno.test("durable repair-intent witness refuses missing or unmatched head witho
   wal.children.delete("repair-intent.json");
   const first = await stageMasterJournalCutover(master, { journalExists: true,
     journal: [{ id: "owned" }], archive: [], allocateVersion });
-  witness.bytes = encoder.encode(await sealMasterJournalRecord("repair-intent", {
-    schemaVersion: 1, id: witnessId, reason: "explicit owner repair",
-  }));
   wal.children.set("repair-intent.json", witness);
   await assertRejects(() => readMasterJournalHead(master), Error, "repair intent",
     "an older intact head without the witness cannot silently win");
@@ -129,6 +133,16 @@ Deno.test("durable repair-intent witness refuses missing or unmatched head witho
   wal.children.delete("repair-intent.json");
   await assertRejects(() => readMasterJournalHead(master), Error, "repair witness is missing",
     "a checked head cannot discharge a removed witness by omission");
+});
+
+Deno.test("failed repair-intent close leaves non-overwritable fail-closed evidence", async () => {
+  const { master, legacy } = await legacyFixture({ close: "repair-intent.json" });
+  const input = { id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", reason: "pre-head-residue" };
+  await assertRejects(() => stageMasterJournalRepairIntent(master, input), Error, "injected close");
+  await assertRejects(() => readMasterJournalHead(master), Error); // never activate stale legacy bytes
+  await assertRejects(() => stageMasterJournalRepairIntent(master, input), Error,
+    "unpublished immutable record");
+  assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy);
 });
 
 Deno.test("read-only owner repair evidence preserves pre-head residue and bounds its manifest", async () => {

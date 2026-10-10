@@ -640,7 +640,9 @@ A staged checked `repair-intent.json` witness now makes head absence or an
 unmatched/torn head refuse even when legacy bytes exist. Logical discharge
 requires a sealed selected head binding its exact intent ID; the witness
 bytes remain append-only, and frame rotation/compaction retain that binding.
-This is a reader invariant ONLY: no product route writes or approves an
+The staged lock-scoped `stageMasterJournalRepairIntent` can now seal and
+readback-verify one immutable witness, refusing an exact retry rather than
+overwriting even a torn file. No product route writes or approves an
 intent/head, no quarantine namespace or backup grammar handles it yet, and
 the fixed witness name is not a complete multi-repair lifecycle. Production
 WAL writes are still OFF. The

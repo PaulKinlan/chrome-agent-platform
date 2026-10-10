@@ -160,6 +160,20 @@ export async function readMasterJournalHead(master) {
   return selected;
 }
 
+/** Staged, lock-scoped repair witness only. The owner route does not exist yet.
+ * Publishing this immutable checked intent deliberately freezes journal reads
+ * until a separately owner-approved head binds its exact identity. A failed
+ * close leaves evidence; retry may NOT erase the same immutable name. */
+export async function stageMasterJournalRepairIntent(master, { id, reason } = {}) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id) ||
+      !["pre-head-residue", "torn-head", "orphan-record", "owner-repair"].includes(reason)) {
+    throw new Error("master journal repair intent requires an exact ID and bounded reason");
+  }
+  const directory = await master.getDirectoryHandle(DIRECTORY, { create: true });
+  return await writeCheckedRecord(directory, "repair-intent.json", "repair-intent",
+    { schemaVersion: 1, id, reason });
+}
+
 /** Follow immutable bounded archive records from a published terminal leaf.
  * The old single-record fixture is accepted as a root, but new cutovers
  * always bind the terminal record bytes in their head. A missing, changed,
