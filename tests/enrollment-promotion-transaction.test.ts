@@ -288,3 +288,27 @@ Deno.test("D2: repeated legacy create and policy flip cannot drop sticky Deny", 
     runGen: gen, descriptorInput: { permissionDigest: freshPermission },
   }).reason, "run-generation-stale");
 });
+
+Deno.test("D2 n6c31: an old-generation Deny cannot be bypassed by promoting a differently-cased Allow", async () => {
+  const origin = "https://promotion-casing-deny.example";
+  // Old generation has Deny on "BookTable"
+  const { gen: gen1 } = await prepareEnrollmentPromotion(origin, [
+    { name: "BookTable", source: "declared", identityDigest: "a".repeat(64), state: "denied" },
+  ]);
+  await complete(origin, gen1);
+  await disenrollOrigin(origin); // leaves OPFS consent with "BookTable" denied
+
+  // New run decision attempts to promote an Allow for lowercase "booktable"
+  const newer = await prepareEnrollmentPromotion(origin, [
+    { name: "booktable", source: "declared", identityDigest: "b".repeat(64), state: "allowed" },
+  ]);
+  const row = await pending(origin);
+
+  // The sticky Deny on "BookTable" must displace the run Allow for "booktable" across casing variants
+  assertEquals(row.promotionPending.map((r) => [r.name, r.state]), [
+    ["BookTable", "denied"],
+  ]);
+  await complete(origin, newer.gen);
+  assertEquals((await siteToolConsentSnapshot(origin, { name: "booktable", source: "declared" }, newer.gen)).state, "denied");
+  assertEquals((await siteToolConsentSnapshot(origin, { name: "BookTable", source: "declared" }, newer.gen)).state, "denied");
+});

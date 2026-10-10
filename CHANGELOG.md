@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.627] — 2026-10-10
+- Honor sticky tool consent Deny across name casing variants
+
 ## [0.3.626] — 2026-10-10
 - Upgrade fast-uri dependency to 3.1.8 to patch the host-normalization advisory.
 

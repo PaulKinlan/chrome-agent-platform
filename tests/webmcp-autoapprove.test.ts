@@ -139,6 +139,58 @@ Deno.test("first-use consent: descriptor drift rearms Allow but cannot evade sti
   assertEquals((await toolConsentSnapshot(origin, BOOK.name)).state, "denied", "same exact name cannot mutate around Deny");
 });
 
+Deno.test("Q23 n6c31: enrolled consent Deny is sticky across tool name casing variants", async () => {
+  const origin = "https://consent-casing.example.com";
+  const tool = { name: "BookTable", source: "declared", description: "Book a table", inputSchema: { type: "object" } };
+  await enrollOrigin(origin);
+  await replaceTools(origin, [tool]);
+
+  // Starts in ASK
+  assertEquals((await toolConsentSnapshot(origin, "BookTable")).state, "ask");
+
+  // Owner denies "BookTable"
+  await setToolConsentDecision(origin, "BookTable", "denied");
+  assertEquals((await toolConsentSnapshot(origin, "BookTable")).state, "denied");
+
+  // Page re-registers tool under different casing: lowercase "booktable"
+  await replaceTools(origin, [{ ...tool, name: "booktable" }]);
+  assertEquals(
+    (await toolConsentSnapshot(origin, "booktable")).state,
+    "denied",
+    "lowercase re-registration must honor sticky Deny",
+  );
+  assertEquals(await isApproved(origin, "booktable"), false);
+
+  // Page re-registers tool under different casing: uppercase "BOOKTABLE"
+  await replaceTools(origin, [{ ...tool, name: "BOOKTABLE" }]);
+  assertEquals(
+    (await toolConsentSnapshot(origin, "BOOKTABLE")).state,
+    "denied",
+    "uppercase re-registration must honor sticky Deny",
+  );
+  assertEquals(await isApproved(origin, "BOOKTABLE"), false);
+
+  // Mixed casing "bookTable"
+  await replaceTools(origin, [{ ...tool, name: "bookTable" }]);
+  assertEquals(
+    (await toolConsentSnapshot(origin, "bookTable")).state,
+    "denied",
+    "mixed-case re-registration must honor sticky Deny",
+  );
+
+  // Unrelated tool remains ASK
+  await replaceTools(origin, [{ ...tool, name: "other_tool" }]);
+  assertEquals((await toolConsentSnapshot(origin, "other_tool")).state, "ask", "unrelated tool remains ask");
+
+  // Re-register "booktable" so it is declared on the site
+  await replaceTools(origin, [{ ...tool, name: "booktable" }]);
+
+  // Owner explicitly changes consent in Settings: Allow replaces Deny
+  await setToolConsentDecision(origin, "booktable", "allowed");
+  assertEquals((await toolConsentSnapshot(origin, "booktable")).state, "allowed");
+  assertEquals(await isApproved(origin, "booktable"), true);
+});
+
 Deno.test("first-use consent: re-enrollment generation cannot resurrect an old grant", async () => {
   const origin = "https://consent-e.example.com";
   await enrollOrigin(origin);

@@ -239,11 +239,21 @@ async function readEnvelope(origin, enrollmentGen) {
   return validateEnvelope(raw, enrollmentGen);
 }
 
+// Declared names are ASCII identifiers; case-only re-registration cannot
+// re-ask around a sticky Deny (Q23 / n6c31). Dispatch still uses the EXACT live name.
+export function nameKey(name) {
+  return typeof name === "string" ? name.toLowerCase() : "";
+}
+
 function snapshotFrom(envelope, identity) {
-  const record = envelope.records.find((candidate) => candidate.name === identity.name) ?? null;
-  // Deny is deliberately sticky by exact origin/name. A page cannot make the
-  // owner see another card simply by changing source or schema after Deny.
-  const state = record?.state === "denied"
+  const exact = envelope.records.find((candidate) => candidate.name === identity.name) ?? null;
+  // Deny is sticky across casing variants (Q23 / n6c31) so re-registering
+  // 'Foo' as 'foo' cannot re-ask the owner.
+  const denied = envelope.records.find(
+    (candidate) => candidate.state === "denied" && nameKey(candidate.name) === nameKey(identity.name),
+  ) ?? null;
+  const record = denied ?? exact;
+  const state = denied
     ? "denied"
     : record?.state === "allowed" && record.identityDigest === identity.identityDigest
       ? "allowed"
@@ -297,7 +307,7 @@ export async function setSiteToolConsent(origin, tool, enrollmentGen, state, {
     }
     const revision = envelope.revision + 1;
     if (!Number.isSafeInteger(revision)) fail("site_tool_consent_revision");
-    const records = envelope.records.filter((record) => record.name !== identity.name);
+    const records = envelope.records.filter((record) => nameKey(record.name) !== nameKey(identity.name));
     if (state !== "ask") {
       records.push({
         name: identity.name,
@@ -440,9 +450,20 @@ export async function promoteEphemeralSiteToolConsents(origin, enrollmentGen, re
     let migrated = 0;
     for (const proposal of validated) {
       const prior = merged.get(proposal.name);
-      // A persisted Deny always wins. A run-local Deny may revoke a persisted
-      // Allow, but a run-local Allow cannot displace an already durable choice.
-      if (prior?.state === "denied" || (prior && proposal.state === "allowed")) continue;
+      const priorDenied = [...merged.values()].find(
+        (r) => r.state === "denied" && nameKey(r.name) === nameKey(proposal.name),
+      );
+      // A persisted Deny always wins across casing variants (Q23 / n6c31).
+      // A run-local Deny may revoke a persisted Allow, but a run-local Allow
+      // cannot displace an already durable Deny.
+      if (priorDenied || prior?.state === "denied" || (prior && proposal.state === "allowed")) continue;
+      if (proposal.state === "denied") {
+        for (const [k, r] of merged.entries()) {
+          if (nameKey(r.name) === nameKey(proposal.name)) {
+            merged.delete(k);
+          }
+        }
+      }
       merged.set(proposal.name, {
         ...proposal,
         revision,
