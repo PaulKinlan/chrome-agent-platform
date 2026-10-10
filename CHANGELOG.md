@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.636] — 2026-10-10
+- Reroute scheduled agent alarms through worker execution with decomposed SW callbacks
+
 ## [0.3.635] — 2026-10-10
 - Recognise rustc/cargo build contention more reliably during NTP boot staging, including when the CPU map is unavailable (fail closed)
 

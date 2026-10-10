@@ -141,6 +141,19 @@ async function handleRun(port, msg) {
     if (record?.type === "steer") broadcast("steer", { runId, mode: record.mode, text: record.text });
     broadcast("progress", { runId, ...record });
     try { port.postMessage({ type: "agent-worker:progress", runId, ...record }); } catch { /* ignore */ }
+    try {
+      const callId = record?.callId ? String(record.callId) : (record?.id ? String(record.id) : "");
+      const logKey = callId ? `${record?.type || "progress"}:${callId}` : undefined;
+      const pMsg = chrome.runtime?.sendMessage?.({
+        type: "agent-worker.progress",
+        executionId: runId,
+        agentId: AGENT_ID,
+        journalTarget: msg?.journalTarget,
+        logKey,
+        event: record,
+      });
+      if (pMsg && typeof pMsg?.catch === "function") pMsg.catch(() => {});
+    } catch { /* best effort */ }
   };
 
   let terminal = null; // { ok, result } | { ok:false, aborted, error }
@@ -181,6 +194,9 @@ async function handleRun(port, msg) {
           executionId: runId,
           agentId: AGENT_ID,
           ok: terminal.ok === true,
+          ...(msg?.scheduleName ? { scheduleName: msg.scheduleName } : {}),
+          ...(msg?.scheduleToken ? { scheduleToken: msg.scheduleToken } : {}),
+          ...(msg?.logicalId ? { logicalId: msg.logicalId } : {}),
         };
         if (terminal.ok === true) {
           relay.result = String(terminal.result ?? "").slice(0, 65536);
@@ -220,6 +236,9 @@ function handleMessage(port, msg) {
             agentId: AGENT_ID,
             ok: false,
             error,
+            ...(msg?.scheduleName ? { scheduleName: msg.scheduleName } : {}),
+            ...(msg?.scheduleToken ? { scheduleToken: msg.scheduleToken } : {}),
+            ...(msg?.logicalId ? { logicalId: msg.logicalId } : {}),
           });
           if (reply && typeof reply?.catch === "function") reply.catch(() => {});
         } catch { /* SW gone — best effort */ }

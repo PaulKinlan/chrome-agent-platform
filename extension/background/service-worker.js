@@ -540,7 +540,7 @@ const broadcastNamedAgentChanged = () => broadcastProgress({ type: "named-agent-
 // `script.run` route sends the source over + awaits the result.
 let offscreenCreating = null;
 async function ensureOffscreen() {
-  if (typeof chrome === "undefined" || !chrome.offscreen) {
+  if (typeof chrome === "undefined" || !chrome.offscreen || typeof chrome.offscreen.createDocument !== "function") {
     return { ok: false, error: "chrome.offscreen unavailable" };
   }
   try {
@@ -587,7 +587,55 @@ async function runOffscreenTableJob(job, { runId, timeoutMs } = {}) {
   }
 }
 
+// ── Worker Run Completion Tracking (chrome-agent-platform-mxu5) ─────────────
+// Scheduled tasks routed to the worker host must hold the in-flight lock and
+// heartbeat in the SW until the worker completes. The worker notifies completion
+// via agent-worker.result, which invokes onRunSettled and resolves this promise.
+// State machine / latch (gj6kn): handles results that arrive before or during
+// dispatch registration so early worker completion never triggers false 120s timeout.
+const pendingWorkerRuns = new Map();
+
+function registerPendingWorkerRun(executionId) {
+  const existing = pendingWorkerRuns.get(executionId);
+  if (existing && existing.settled) {
+    return Promise.resolve(existing.result);
+  }
+  let resolve;
+  const promise = new Promise((r) => { resolve = r; });
+  if (existing) {
+    existing.resolvers.add(resolve);
+  } else {
+    pendingWorkerRuns.set(executionId, {
+      settled: false,
+      result: undefined,
+      resolvers: new Set([resolve]),
+    });
+  }
+  return promise;
+}
+
+function resolvePendingWorkerRun(executionId, result) {
+  const entry = pendingWorkerRuns.get(executionId);
+  if (!entry) {
+    // Early arrival: latch the terminal result before registerPendingWorkerRun (gj6kn)
+    pendingWorkerRuns.set(executionId, {
+      settled: true,
+      result,
+      resolvers: new Set(),
+    });
+    return;
+  }
+  if (entry.settled) return;
+  entry.settled = true;
+  entry.result = result;
+  for (const resolve of entry.resolvers) {
+    try { resolve(result); } catch { /* best effort callback notification */ }
+  }
+  entry.resolvers.clear();
+}
+
 function cancelTableExecution(runId) {
+  resolvePendingWorkerRun(runId, { ok: true });
   const cancelled = cancelTableRun(runId);
   try {
     chrome.runtime.sendMessage({ type: TABLE_WORKER_CANCEL_TYPE, runId }).catch(() => {});
@@ -1563,6 +1611,253 @@ async function registerAlarm(task) {
   });
 }
 
+/**
+ * Dispatches a scheduled agent task to the worker host (chrome-agent-platform-mxu5).
+ * Phase 4 divergence record: handleAlarm was never wired to the worker in Phase 4
+ * (documented as the NEXT increment in AGENT-WORKER-PHASE4.md pending decomposition
+ * of runTask's fence, journal, and attribution into SW-side callbacks).
+ *
+ * This function decomposes runTask's responsibilities:
+ * 1. Attribution: admits the durable run in durableRuns with threadId, scheduleName, and surface.
+ * 2. Initial Task Log: appends the task row to the agent's memory journal and durable log.
+ * 3. Fence & Heartbeat: attaches fence abort listener to steer stop-run to the worker while the SW keeps in-flight lock.
+ * 4. Tool & Progress Bridge: tool calls route through agent-worker.tool, and progress events commit via agent-worker.progress.
+ * 5. Settlement: agent-worker.result settles durable runs, cleans up live control, and calls markScheduledDone.
+ */
+async function dispatchScheduledWorkerTask({ alarm, task, token, fence, agent, fireOwner }) {
+  if (alarm.name.startsWith("agent:") && !agent) {
+    return { ok: false, orphaned: true };
+  }
+
+  // Preflight check: worker host (offscreen document) must be available.
+  // If unavailable (e.g. headless unit testing without offscreen docs), fall back to SW runTask.
+  const offscreen = await ensureOffscreen();
+  if (!offscreen?.ok) {
+    swLog.warn(`worker offscreen host unavailable for ${alarm.name} (${offscreen?.error}) — falling back to SW runTask`);
+    return null;
+  }
+
+  // P0 / axi8h finding: The worker host currently only implements the keyless demo model
+  // (createDemoModel), which is active ONLY when developer features are enabled.
+  // When developer features are off (the shipped default), provider 'demo' resolves to
+  // createLocalAssistant() in SW runTask. Keyed providers (google, anthropic, openai) also
+  // require the SW model proxy (Phase 3).
+  // Therefore, fall back to SW runTask unless developer features are ON and provider is 'demo'.
+  if (!await developerFeaturesOn()) {
+    return null;
+  }
+  let providerConfig = null;
+  try {
+    providerConfig = await getProviderConfig();
+  } catch (err) {
+    swLog.warn(`failed to read provider config for ${alarm.name} (${err?.message || err}) — falling back to SW runTask`);
+    return null;
+  }
+  const activeProvider = providerConfig?.provider || "demo";
+  if (activeProvider !== "demo") {
+    return null;
+  }
+  if (agent?.provider) {
+    const overrideProvider = typeof agent.provider === "string" ? agent.provider : agent.provider?.provider;
+    if (overrideProvider && overrideProvider !== "demo") {
+      return null;
+    }
+  }
+  // P2-1: Attachments require multimodal handling in SW runTask; worker does not support them
+  if (task.attachments && task.attachments.length > 0) {
+    return null;
+  }
+
+  const taskId = alarm.name;
+  const taskPrompt = task.task ?? alarm.name;
+  const executionId = newExecutionId();
+  const slug = alarm.name.startsWith("agent:") ? alarm.name.slice("agent:".length) : null;
+  // Use "default" for unnamed background scheduled tasks to prevent alive-set bloat
+  const agentId = slug ? (agent?.instanceId || slug) : "default";
+  const agentRole = agent?.role ?? fireOwner?.agentRole ?? "";
+  const agentSurfaceRef = agent?.surfaceRef ?? fireOwner?.agentSurfaceRef ?? (slug ? `named:${slug}` : null);
+  const threadId = fireOwner?.threadId ?? null;
+  const kind = slug ? "agent" : "scheduled";
+  const mem = slug
+    ? (agent?.memoryKey ? backgroundAgentMemory(agent.memoryKey) : namedAgentMemory(agent?.instanceId || slug))
+    : backgroundAgentMemory(alarm.name);
+
+  // Preflight check: worker must be available.
+  // If unavailable (e.g. headless unit testing without offscreen docs), fall back cleanly to SW runTask.
+  const ensured = await dispatchRoute("agent-worker.ensure", { agentId }, { principal: "extension" });
+  if (!ensured?.ok) {
+    swLog.warn(`worker unavailable for ${alarm.name} (${ensured?.error}) — falling back to SW runTask`);
+    return null;
+  }
+
+  // Pre-check restore fence before worker dispatch (f3zyj):
+  // Profile restore in progress denies all new run admissions.
+  // Fail closed without kicking the worker or dropping the schedule.
+  try {
+    const rf = await chrome?.storage?.local?.get?.("cap:restoreFence");
+    if (rf?.["cap:restoreFence"]) {
+      swLog.warn(`profile restore in progress — skipping scheduled task ${alarm.name} until restore completes`);
+      return { ok: false, error: "admission_fenced", skipped: true };
+    }
+  } catch { /* best-effort preflight check */ }
+
+  // 1. Attribution: admit the durable run BEFORE dispatching so fast worker progress
+  // and terminal results never arrive before admission (gj6kn).
+  const resumeRequest = {
+    id: taskId,
+    task: String(taskPrompt),
+    scheduled: true,
+    attachments: structuredClone(Array.isArray(task.attachments) ? task.attachments : []),
+    history: [],
+    route: "agent-worker.dispatch",
+    promptScope: slug ? `agent:${slug}` : null,
+    agentRole: String(agentRole ?? ""),
+    agentSurfaceRef: agentSurfaceRef == null ? null : String(agentSurfaceRef),
+    providerServerAgentId: fireOwner ? null : "hub",
+    threadId,
+    scheduleName: alarm.name,
+    runKind: kind,
+    memoryOrigin: mem.origin ?? "master",
+  };
+
+  const admissionFailure = await admitDurableRun(durableRuns, {
+    executionId,
+    clientCorrelationId: null,
+    threadId,
+    scheduleName: alarm.name,
+    kind,
+    agentId: agentSurfaceRef || null,
+    taskPreview: taskPrompt,
+    journalTarget: mem.origin,
+    resumeRequest,
+  });
+  if (admissionFailure) {
+    swLog.warn(`durable admission failed for worker task ${alarm.name} (${admissionFailure.error || admissionFailure.code}) — skipping run`);
+    return { ok: false, error: admissionFailure.error || "admission_failed", skipped: true };
+  }
+
+  // 2. Initial task row in memory journal and durable log
+  const taskLog = {
+    type: "task",
+    id: taskId,
+    task: taskPrompt,
+    scheduled: true,
+    attachmentCount: task.attachments?.length ?? 0,
+    executionId,
+  };
+  journalAppend(mem, taskLog).catch(() => {});
+  durableRuns.appendLog(executionId, taskLog, `task:${taskId}`).catch(() => {});
+
+  // 3. Prompt attestation slot binding
+  beginExecution(executionId, taskId);
+
+  // 4. Armed completion latch (gj6kn): register BEFORE dispatch so fast worker
+  // terminal results or synchronous mock completions never drop the completion signal.
+  const completionPromise = registerPendingWorkerRun(executionId);
+
+  // 5. Fence: forward abort to worker steer (mode: stop-run) and revoke live control
+  const onAbort = () => {
+    runControl?.unregister?.(executionId);
+    dispatchRoute("agent-worker.steer", {
+      agentId,
+      runId: executionId,
+      mode: "stop-run",
+    }, { principal: "extension" }).catch(() => {});
+  };
+  fence?.signal?.addEventListener("abort", onAbort, { once: true });
+
+  // 6. Gather tool specs for worker proxy
+  let toolSpecs = [];
+  try {
+    const developerFeatures = await developerFeaturesOn();
+    const browserTools = workerBrowserTools(developerFeatures);
+    const mgmtTools = managementToolset({ callRoute: (t, b) => dispatchRoute(t, b, { principal: "extension" }) });
+    const allWorkerTools = { ...browserTools, ...mgmtTools };
+    toolSpecs = Object.keys(allWorkerTools).map((name) => ({
+      name,
+      description: allWorkerTools[name]?.description || name,
+    }));
+  } catch {
+    toolSpecs = [];
+  }
+
+  const isOneShot = !task.periodInMinutes;
+
+  // 7. Dispatch to worker.
+  const dispatchRes = await dispatchRoute("agent-worker.dispatch", {
+    agentId,
+    runId: executionId,
+    task: taskPrompt,
+    system: agentRole,
+    modelKind: "demo",
+    journalTarget: mem.origin,
+    toolSpecs,
+    scheduleName: isOneShot ? alarm.name : undefined,
+    scheduleToken: isOneShot ? token : undefined,
+    logicalId: isOneShot ? taskId : undefined,
+  }, { principal: "extension" });
+
+  if (!dispatchRes?.ok) {
+    fence?.signal?.removeEventListener("abort", onAbort);
+    runControl?.unregister?.(executionId);
+    await durableRuns.settle(executionId, {
+      ok: false,
+      phase: "failed",
+      error: dispatchRes?.error || "worker_dispatch_failed",
+    });
+    finalizeExecution(executionId);
+    pendingWorkerRuns.delete(executionId);
+    swLog.warn(`worker dispatch failed for ${alarm.name} (${dispatchRes?.error})`);
+    return { ok: false, error: dispatchRes?.error, skipped: true };
+  }
+
+  const live = runControl?.get?.(executionId);
+  if (live) {
+    live.isFencedOut = () => Boolean(fence?.signal?.aborted);
+  }
+
+  // 8. Await worker completion under the in-flight lock (up to 120s timeout)
+  let timer = null;
+  try {
+    const timeoutPromise = new Promise((resolve) => {
+      timer = setTimeout(() => resolve({ timedOut: true }), 120_000);
+    });
+    const winner = await Promise.race([completionPromise, timeoutPromise]);
+    if (winner?.timedOut) {
+      try { fence?.abort?.("worker_timeout"); } catch (_) { /* Best-effort fence abort on timeout */ }
+      try {
+        await dispatchRoute("agent-worker.steer", {
+          agentId,
+          runId: executionId,
+          mode: "stop-run",
+        }, { principal: "extension" });
+      } catch (_) { /* Best-effort stop-run steering on timeout */ }
+      try {
+        await durableRuns.settle(executionId, {
+          ok: false,
+          phase: "timeout",
+          error: "worker_run_timeout_120s",
+        });
+      } catch (_) { /* Best-effort settlement on timeout */ }
+      if (isOneShot && alarm.name && token) {
+        try {
+          await markScheduledDone(alarm.name, token, { ok: false, error: "worker_run_timeout_120s" });
+        } catch (_) { /* Best-effort one-shot consumption on timeout */ }
+      }
+      resolvePendingWorkerRun(executionId, { ok: false, error: "worker_run_timeout_120s" });
+      swLog.warn(`worker run timed out after 120s for ${alarm.name} (${executionId})`);
+      return { ok: false, error: "worker_run_timeout_120s", executionId };
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
+    fence?.signal?.removeEventListener("abort", onAbort);
+    runControl?.unregister?.(executionId);
+    pendingWorkerRuns.delete(executionId);
+    finalizeExecution(executionId);
+  }
+  return { ok: true, executionId };
+}
+
 async function handleAlarm(alarm) {
   // The board's own periodic alarm carries no task payload BY DESIGN (its
   // listener lives beside the board routes) — never a scheduler orphan.
@@ -1607,6 +1902,9 @@ async function handleAlarm(alarm) {
   // is threaded into runTask so the RUNNING agent/tools also stop.
   const fence = {
     signal: lock.signal,
+    abort(reason) {
+      lock.controller?.abort(reason);
+    },
     async assertOwned() {
       if (heartbeatFailed || lock.signal?.aborted) {
         throw new Error("heartbeat renewal failed — aborting run");
@@ -1620,6 +1918,7 @@ async function handleAlarm(alarm) {
   // run inside try/finally so a read/validation rejection still releases the
   // in-flight lock (otherwise future firings block forever).
   try {
+    let workerDispatched = null;
     const store = await kvGet(TASK_KEY);
     const task = store[TASK_KEY]?.[alarm.name];
     if (!task) {
@@ -1770,28 +2069,32 @@ async function handleAlarm(alarm) {
         swLog.warn(`orphaned agent schedule ${alarm.name} — the agent is gone; cancel it from Tasks`);
       } else {
         await fence.assertOwned();
-        await runTask({
-          id: alarm.name,
-          task: task.task ?? alarm.name,
-          scheduled: true,
-          scheduleName: alarm.name,
-          runKind: "agent",
-          attachments: task.attachments ?? [],
-          fence,
-          promptScope: `agent:${slug}`,
-          agentRole: agent.role ?? "",
-          agentSkills: await resolveAgentSkills(agent),
-          // wz6i: a seeded built-in background agent keeps its LEGACY runtime
-          // identity — the same `background:<id>` surface attribution and the
-          // same OPFS tier (`recipe:<id>`) its runs have always written —
-          // until e5oe's physical migration. Persisted agents are unaffected.
-          agentSurfaceRef: agent.surfaceRef ?? `named:${slug}`,
-          // Match runNamedAgentTask + named-agent.history: the immutable
-          // instance namespace, never the reusable/legacy slug directory.
-          memory: agent.memoryKey
-            ? backgroundAgentMemory(agent.memoryKey)
-            : namedAgentMemory(agent.instanceId || slug),
-        });
+        // Route through worker (chrome-agent-platform-mxu5):
+        workerDispatched = await dispatchScheduledWorkerTask({ alarm, task, token, fence, agent, fireOwner: null });
+        if (!workerDispatched) {
+          await runTask({
+            id: alarm.name,
+            task: task.task ?? alarm.name,
+            scheduled: true,
+            scheduleName: alarm.name,
+            runKind: "agent",
+            attachments: task.attachments ?? [],
+            fence,
+            promptScope: `agent:${slug}`,
+            agentRole: agent.role ?? "",
+            agentSkills: await resolveAgentSkills(agent),
+            // wz6i: a seeded built-in background agent keeps its LEGACY runtime
+            // identity — the same `background:<id>` surface attribution and the
+            // same OPFS tier (`recipe:<id>`) its runs have always written —
+            // until e5oe's physical migration. Persisted agents are unaffected.
+            agentSurfaceRef: agent.surfaceRef ?? `named:${slug}`,
+            // Match runNamedAgentTask + named-agent.history: the immutable
+            // instance namespace, never the reusable/legacy slug directory.
+            memory: agent.memoryKey
+              ? backgroundAgentMemory(agent.memoryKey)
+              : namedAgentMemory(agent.instanceId || slug),
+          });
+        }
       }
     } else {
       // Surface attribution for the fired run: the owner captured at schedule
@@ -1812,26 +2115,31 @@ async function handleAlarm(alarm) {
       const fireOwner = task.owner ?? (legacySkillId
         ? { agentRole: `background:${legacySkillId}`, agentSurfaceRef: `background:${legacySkillId}` }
         : null);
-      await runTask({
-        id: alarm.name,
-        task: task.task ?? alarm.name,
-        scheduled: true,
-        scheduleName: alarm.name,
-        runKind: "scheduled",
-        attachments: task.attachments ?? [],
-        fence,
-        threadId: fireOwner?.threadId ?? null,
-        agentRole: fireOwner?.agentRole ?? "",
-        agentSurfaceRef: fireOwner?.agentSurfaceRef ?? null,
-        // Unattended agent fires have no immutable named-agent identity in the
-        // schedule payload, so paid provider tools fail closed (never hub).
-        providerServerAgentId: fireOwner ? null : "hub",
-        // A background/scheduled agent gets its OWN OPFS (memory + run log),
-        // keyed by the schedule name — never the master's memory.
-        memory: backgroundAgentMemory(alarm.name),
-      });
+      await fence.assertOwned();
+      // Route through worker (chrome-agent-platform-mxu5):
+      workerDispatched = await dispatchScheduledWorkerTask({ alarm, task, token, fence, agent: null, fireOwner });
+      if (!workerDispatched) {
+        await runTask({
+          id: alarm.name,
+          task: task.task ?? alarm.name,
+          scheduled: true,
+          scheduleName: alarm.name,
+          runKind: "scheduled",
+          attachments: task.attachments ?? [],
+          fence,
+          threadId: fireOwner?.threadId ?? null,
+          agentRole: fireOwner?.agentRole ?? "",
+          agentSurfaceRef: fireOwner?.agentSurfaceRef ?? null,
+          // Unattended agent fires have no immutable named-agent identity in the
+          // schedule payload, so paid provider tools fail closed (never hub).
+          providerServerAgentId: fireOwner ? null : "hub",
+          // A background/scheduled agent gets its OWN OPFS (memory + run log),
+          // keyed by the schedule name — never the master's memory.
+          memory: backgroundAgentMemory(alarm.name),
+        });
+      }
     }
-    if (!task.periodInMinutes) {
+    if (!task.periodInMinutes && !workerDispatched?.ok && !workerDispatched?.skipped) {
       await fence.assertOwned();
       await markScheduledDone(alarm.name, token);
     }
@@ -7172,7 +7480,20 @@ const handlers = mergeRouteMaps(
     durableRegistry: durableRuns,
     broadcastProgress,
     markScheduledDone,
-    resolveJournalStore: resolveMemory,
+    resolveJournalStore: async (target) => {
+      if (!target) return masterMemory();
+      if (typeof target === "string" && (target.startsWith("agent:") || target.startsWith("background:") || target === "master")) {
+        return resolveMemory(target);
+      }
+      try {
+        const mem = namedAgentMemory(target);
+        if (mem) return mem;
+      } catch { /* best effort */ }
+      try {
+        return backgroundAgentMemory(target);
+      } catch { /* best effort */ }
+      return resolveMemory(target);
+    },
     journalAppend,
   }),
   {

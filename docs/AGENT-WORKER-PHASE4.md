@@ -47,7 +47,7 @@ and no `leaseId` in the run descriptor. `tests/chrome-tools-t12.test.ts`
 
 ### 3. The dispatch seam (`agent-worker.dispatch`)
 A validated route that ensures the worker + posts the run descriptor. This is
-the seam the alarm path will call.
+the seam called by the scheduled-run alarm path (`handleAlarm`).
 
 ## What STAYS on the SW path (by design, forever)
 
@@ -56,17 +56,46 @@ for: message routing + auth, the browser-control grant lock + permissions, alarm
 scheduling, the durable-runs journal, provider/credential resolution, the run
 fence, and the alive-set.
 
-**The full `handleAlarm → worker` reroute is NOT yet flipped.** The scheduled-run
-path still calls `runTask(...)` in the SW because `runTask` carries the SW-authority
-machinery the worker must NOT reimplement: the in-flight lock + heartbeat, the
-run fence (round-26 abort semantics), the durable-run admission/journal commit,
-and attribution. Ripping it out in one shot would risk the exact "one bad move
-kills every background agent" fault the migration exists to avoid. The reroute is
-the NEXT increment: decompose `runTask`'s fence/journal/attribution into
-SW-side callbacks the worker's loop already targets (via the P3 routes
-`agent-worker.progress/result/journal-append`), then point `handleAlarm` at
-`agent-worker.dispatch`. The dispatch route + lease + progress routes are proven
-and are the wire-ready seam.
+**The full `handleAlarm → worker` reroute is FLIPPED (chrome-agent-platform-mxu5).**
+Scheduled tasks in `handleAlarm` route through `agent-worker.dispatch` when
+the worker host is available and developer features are enabled with the keyless demo model,
+falling back cleanly to SW `runTask` if developer features are disabled (the shipped default,
+where provider 'demo' resolves to the real `createLocalAssistant()`), or if keyed model providers
+(anthropic, google, openai, custom) or multimodal attachments are configured (which require future
+SW model proxy P3).
+
+Divergence record: Phase 4 implemented the worker infrastructure, tool bridge,
+and P3 routes, but `handleAlarm` was left on `runTask` as the documented "NEXT increment"
+pending decomposition of `runTask`'s fence, journal, and attribution into SW-side callbacks.
+The worker host currently only implements `createDemoModel()` (the developer/test marker model).
+When developer features are off (the default for fresh user profiles), provider 'demo' resolves
+to `createLocalAssistant()` in the service worker. To preserve real local assistant and keyed provider
+inference until the Phase 3 worker model proxy is wired, `dispatchScheduledWorkerTask` falls back
+to SW `runTask` whenever developer features are off or the active provider is not demo.
+
+Decomposition into SW-side callbacks:
+1. **Attribution & Admission**: SW pre-checks `cap:restoreFence` before dispatch (skipping dispatch if
+   profile restore is in progress). It admits the durable run in `durableRuns` (`admitDurableRun`)
+   with `threadId`, `scheduleName`, `kind`, and `agentSurfaceRef` after successful worker dispatch
+   kick, ensuring that dispatch failures fall back to SW `runTask` with zero phantom durable runs
+   or duplicate task journal entries. If post-dispatch admission rejects (quota/fence), the SW immediately
+   steers `mode: "stop-run"` to prevent untracked worker execution. Unnamed schedules use the `"default"`
+   background worker identity to prevent alive-set bloat.
+2. **Initial Task Row**: SW logs the task row to the agent's memory journal and `durableRuns.appendLog`.
+3. **Fence & Heartbeat**: SW maintains the in-flight lock and heartbeat interval. If heartbeat fails
+   or lock ownership is lost, `fence.signal` fires, revokes `runControl` immediately, and steers
+   `mode: "stop-run"` (`agent-worker:abort`) to the worker. Tool execution in the SW via `agent-worker.tool`
+   asserts `isFencedOut()` and fails closed with `run_fenced_out` if the fence is aborted.
+4. **Progress & Journaling**: Worker streams step/tool events via `agent-worker.progress`. SW updates
+   the execution heartbeat in `durableRuns`, normalizes tool rows into canonical `normalizeDurableLog` shapes,
+   logs tool activity to the agent's memory journal via `resolveJournalStore`, and broadcasts to UI ports.
+   Log keys use callId/nonce suffixing to prevent same-millisecond deduplication loss.
+5. **Settlement**: Worker relays terminal status via `agent-worker.result`. SW settles `durableRuns`,
+   unregisters from live run control, completes one-shot scheduled tasks via `markScheduledDone`,
+   and resolves the pending run completion promise. The completion latch is armed before dispatch
+   and latches early arrivals, ensuring fast worker completions never trigger false timeouts.
+   On 120s worker timeout, the SW aborts the fence, steers `mode: "stop-run"`, settles the durable
+   run as timeout, consumes one-shot payloads, and cleans up.
 
 ## Security invariants (unchanged)
 - The worker holds NO authority (no storage/credential/fetch; tools are SW RPC only).
