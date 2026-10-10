@@ -10,7 +10,7 @@
 // These tests drive the REAL module (lib/site-docs-fallback.js) with an
 // injected fetch; no mocks of the code under test. Falsification: every test
 // here is RED before the module exists and GREEN after.
-import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes, assertThrows, AssertionError } from "jsr:@std/assert@1";
 import {
   extractMarkdownLinks,
   extractSameOriginHrefs,
@@ -187,7 +187,7 @@ Deno.test("withSiteDocsFallback: no discoverable docs → the ORIGINAL honest er
 Deno.test("fetchSiteDocs: a docs URL that redirects CROSS-ORIGIN is refused honestly (skipped, not ingested, not a crash)", async () => {
   const fetchImpl = async (url) => {
     const u = String(url);
-    if (u === `${ORIGIN}/llms.txt`) return { ok: true, url: u, text: async () => LLMS };
+    if (u === `${ORIGIN}/llms.txt`) return { ok: true, url: u, body: new Response(LLMS).body, text: async () => LLMS };
     if (u === `${ORIGIN}/docs/install`) {
       // The enrolled origin's page 302s to a third party — must be refused.
       return { ok: true, url: "https://evil.example.net/harvested", text: async () => PAGE("EVIL-CROSS-ORIGIN-MARKER") };
@@ -206,7 +206,7 @@ Deno.test("fetchSiteDocs: a docs URL that redirects CROSS-ORIGIN is refused hone
 Deno.test("fetchSiteDocs: a docs URL that redirects SAME-ORIGIN still works", async () => {
   const fetchImpl = async (url) => {
     const u = String(url);
-    if (u === `${ORIGIN}/llms.txt`) return { ok: true, url: u, text: async () => LLMS };
+    if (u === `${ORIGIN}/llms.txt`) return { ok: true, url: u, body: new Response(LLMS).body, text: async () => LLMS };
     if (u === `${ORIGIN}/docs/install`) {
       // Same-origin redirect (e.g. trailing-slash canonicalization) — fine.
       return { ok: true, url: `${ORIGIN}/docs/install/`, text: async () => PAGE("INSTALL-MARKER-922q") };
@@ -1047,4 +1047,318 @@ Deno.test("e7gwq (9yx7a): general documentation content is not truncated, honori
   assertEquals(docs.pagesUsed, 1);
   assert(docs.content.length > MAX_DISCOVERY_DOC_BYTES, "doc content must not be truncated to discovery cap");
   assertStringIncludes(docs.content, "Hello docs world!");
+});
+
+Deno.test("kiyap: discovery document response bodies are stream-bounded to MAX_DISCOVERY_DOC_BYTES on the wire", async () => {
+  // A 32 MiB stream of 64 KiB chunks
+  let bytesPulled = 0;
+  let cancelCalled = false;
+  let cancelReason = "";
+  const totalChunks = 512; // 512 * 64 KiB = 32 MiB
+  let chunkIdx = 0;
+
+  const stream = new ReadableStream({
+    pull(controller) {
+      if (chunkIdx >= totalChunks) {
+        controller.close();
+        return;
+      }
+      const chunk = new Uint8Array(64 * 1024).fill(65);
+      chunkIdx++;
+      bytesPulled += chunk.byteLength;
+      controller.enqueue(chunk);
+    },
+    cancel(reason) {
+      cancelCalled = true;
+      cancelReason = String(reason);
+    },
+  });
+
+  const fetchImpl = (url: string) => {
+    if (url.endsWith("/llms.txt")) {
+      return Promise.resolve(new Response(stream, { status: 200 }));
+    }
+    return Promise.resolve(new Response("Not found", { status: 404 }));
+  };
+
+  const docs = await fetchSiteDocs({ origin: ORIGIN, queryTerms: [], fetchImpl });
+  // The stream must be aborted and cancelled once MAX_DISCOVERY_DOC_BYTES is reached
+  assert(cancelCalled, "reader.cancel() must be called when maxBytes is reached");
+  assertEquals(cancelReason, "maxBytes exceeded");
+  // Total bytes pulled must not exceed MAX_DISCOVERY_DOC_BYTES plus at most one in-flight chunk (512 KiB + 64 KiB = 576 KiB)
+  const maxAllowedPulled = MAX_DISCOVERY_DOC_BYTES + 64 * 1024;
+  assert(
+    bytesPulled <= maxAllowedPulled,
+    `bytes pulled (${bytesPulled}) must be bounded to <= ${maxAllowedPulled} (preventing 32 MiB pull)`,
+  );
+  // Exactly 9 chunks of 64 KiB (589,824 bytes) were pulled, saving 31.5 MiB of network/memory transfer
+  assertEquals(bytesPulled, 589824);
+  assertEquals(chunkIdx, 9);
+});
+
+Deno.test("kiyap: exact cap arithmetic handles uneven chunks (100K + 400K + 12K = 512K) without premature cancel", async () => {
+  let bytesPulled = 0;
+  let chunk4Read = false;
+  const chunk1 = new Uint8Array(100 * 1024).fill(65);
+  const chunk2 = new Uint8Array(400 * 1024).fill(66);
+  const chunk3 = new Uint8Array(12 * 1024).fill(67);
+  const chunk4 = new Uint8Array(50 * 1024).fill(68);
+
+  const chunks = [chunk1, chunk2, chunk3, chunk4];
+  let idx = 0;
+  const stream = new ReadableStream({
+    pull(controller) {
+      if (idx >= chunks.length) {
+        controller.close();
+        return;
+      }
+      if (idx === 3) chunk4Read = true;
+      const c = chunks[idx++];
+      bytesPulled += c.byteLength;
+      controller.enqueue(c);
+    },
+  }, new ByteLengthQueuingStrategy({ highWaterMark: 0 }));
+
+  const fetchImpl = (url: string) => {
+    if (url.endsWith("/llms.txt")) {
+      return Promise.resolve(new Response(stream, { status: 200 }));
+    }
+    return Promise.resolve(new Response("Not found", { status: 404 }));
+  };
+
+  await fetchSiteDocs({ origin: ORIGIN, queryTerms: [], fetchImpl });
+  assertEquals(bytesPulled, 524288, "must pull exactly 524288 bytes to reach 512 KiB cap");
+  assertEquals(chunk4Read, false, "chunk 4 past 512 KiB must never be pulled");
+});
+
+Deno.test("kiyap: adversarial single huge chunk (32 MiB) is sliced before string decoding (documented one-chunk overshoot)", async () => {
+  // A single huge chunk: Web Streams delivers the whole chunk when read() resolves,
+  // so wire/memory ceiling is maxBytes + max_single_chunk_size (32 MiB in memory).
+  // But subarray(0, remaining) slices the Uint8Array down to 512 KiB before string decoding.
+  const huge = new Uint8Array(32 * 1024 * 1024).fill(65);
+  let cancelled = false;
+  const stream = new ReadableStream({
+    pull(controller) {
+      controller.enqueue(huge);
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+
+  const fetchImpl = (url: string) => {
+    if (url.endsWith("/llms.txt")) {
+      return Promise.resolve(new Response(stream, { status: 200 }));
+    }
+    return Promise.resolve(new Response("Not found", { status: 404 }));
+  };
+
+  await fetchSiteDocs({ origin: ORIGIN, queryTerms: [], fetchImpl });
+  assert(cancelled, "stream must be cancelled after slicing huge chunk");
+});
+
+Deno.test("kiyap: streaming TextDecoder handles UTF-8 split across chunks and cap-cut without errors", async () => {
+  const enc = new TextEncoder();
+
+  // 1. 3-byte Euro sign split across chunks in llms.txt markdown link:
+  const euroLink = enc.encode("- [Euro Doc](https://docs.example.com/pricing-€-plans)\n");
+  const euroIdx = euroLink.indexOf(0xE2); // start of 3-byte € sequence [0xE2, 0x82, 0xAC]
+  assert(euroIdx > 0, "euro character must exist in encoded test fixture");
+  const part1 = euroLink.subarray(0, euroIdx + 2); // includes first 2 bytes of €
+  const part2 = euroLink.subarray(euroIdx + 2);     // remaining byte of € and rest of line
+  const splitStream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(part1);
+      controller.enqueue(part2);
+      controller.close();
+    },
+  });
+
+  const fetchImpl1 = (url: string) => {
+    if (url.endsWith("/llms.txt")) {
+      return Promise.resolve(new Response(splitStream, { status: 200 }));
+    }
+    if (url.includes("pricing-")) {
+      return Promise.resolve(new Response("<html><body>Pricing in Euros: €50</body></html>", { status: 200 }));
+    }
+    return Promise.resolve(new Response("Not found", { status: 404 }));
+  };
+
+  const docs1 = await fetchSiteDocs({ origin: ORIGIN, queryTerms: [], fetchImpl: fetchImpl1 });
+  assert(docs1, "must parse split-UTF8 llms.txt");
+  assert(
+    docs1.urls.some((u) => decodeURIComponent(u).includes("pricing-€-plans")),
+    "must discover URL containing cleanly decoded UTF-8 Euro symbol",
+  );
+  assertStringIncludes(docs1.content, "Pricing in Euros: €50");
+
+  // 2. Multi-byte cut at 512 KiB cap:
+  const head = enc.encode("- [Cut Doc](https://docs.example.com/cut-doc)\n");
+  const padding = new Uint8Array(524287 - head.byteLength).fill(32); // spaces
+  const euro = enc.encode("€"); // [0xE2, 0x82, 0xAC]
+  const cutPayload = new Uint8Array(524287 + 3);
+  cutPayload.set(head, 0);
+  cutPayload.set(padding, head.byteLength);
+  cutPayload.set(euro, 524287); // euro starts at 524287, cap cuts after 1 byte of euro at 524288
+
+  const cutStream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(cutPayload);
+      controller.close();
+    },
+  });
+
+  const fetchImpl2 = (url: string) => {
+    if (url.endsWith("/llms.txt")) {
+      return Promise.resolve(new Response(cutStream, { status: 200 }));
+    }
+    if (url.endsWith("/cut-doc")) {
+      return Promise.resolve(new Response("<html><body>Safe cut content</body></html>", { status: 200 }));
+    }
+    return Promise.resolve(new Response("Not found", { status: 404 }));
+  };
+
+  const docs2 = await fetchSiteDocs({ origin: ORIGIN, queryTerms: [], fetchImpl: fetchImpl2 });
+  assert(docs2, "cap cut must succeed without throwing");
+  assert(docs2.urls.includes("https://docs.example.com/cut-doc"), "doc before cap-cut boundary must be discovered");
+});
+
+Deno.test("kiyap: discovery doc with null/missing body fails closed without res.text() fallback", async () => {
+  let fallbackTextCalled = false;
+  const mockRes = {
+    ok: true,
+    url: `${ORIGIN}/llms.txt`,
+    body: null,
+    text: async () => {
+      fallbackTextCalled = true;
+      return "Dangerously buffered body";
+    },
+  };
+
+  const fetchImpl = (url: string) => {
+    if (url.endsWith("/llms.txt")) {
+      return Promise.resolve(mockRes as any);
+    }
+    return Promise.resolve(new Response("Not found", { status: 404 }));
+  };
+
+  const docs = await fetchSiteDocs({ origin: ORIGIN, queryTerms: [], fetchImpl });
+  assertEquals(docs, null, "null body discovery doc must fail closed");
+  assertEquals(fallbackTextCalled, false, "res.text() must NEVER be called as fallback on discovery path");
+});
+
+Deno.test("kiyap: never-resolving reader.cancel settles within bounded timeout and fails closed", async () => {
+  const t0 = Date.now();
+  const stream = new ReadableStream({
+    pull(controller) {
+      controller.enqueue(new Uint8Array(600 * 1024).fill(65));
+    },
+    cancel() {
+      // Returns a promise that NEVER resolves
+      return new Promise(() => {});
+    },
+  });
+
+  const fetchImpl = (url: string) => {
+    if (url.endsWith("/llms.txt")) {
+      return Promise.resolve(new Response(stream, { status: 200 }));
+    }
+    return Promise.resolve(new Response("Not found", { status: 404 }));
+  };
+
+  const docs = await fetchSiteDocs({ origin: ORIGIN, queryTerms: [], fetchImpl });
+  const elapsed = Date.now() - t0;
+  assert(elapsed < 1000, `never-resolving cancel must settle boundedly (took ${elapsed}ms, expected < 1000ms)`);
+  assertEquals(docs, null, "never-resolving cancel must fail closed without returning partial discovery doc");
+});
+
+Deno.test("kiyap: rejecting reader.cancel fails closed without returning partial discovery doc", async () => {
+  const stream = new ReadableStream({
+    pull(controller) {
+      controller.enqueue(new Uint8Array(600 * 1024).fill(65));
+    },
+    cancel() {
+      return Promise.reject(new Error("socket destroyed"));
+    },
+  });
+
+  const fetchImpl = (url: string) => {
+    if (url.endsWith("/llms.txt")) {
+      return Promise.resolve(new Response(stream, { status: 200 }));
+    }
+    return Promise.resolve(new Response("Not found", { status: 404 }));
+  };
+
+  const docs = await fetchSiteDocs({ origin: ORIGIN, queryTerms: [], fetchImpl });
+  assertEquals(docs, null, "rejecting cancel must fail closed without returning partial discovery doc");
+});
+
+Deno.test("kiyap: advisory Content-Length header lie cannot bypass streaming byte cap", async () => {
+  let bytesPulled = 0;
+  let cancelCalled = false;
+  let cancelReason = "";
+  const stream = new ReadableStream({
+    pull(controller) {
+      const chunk = new Uint8Array(64 * 1024).fill(65);
+      bytesPulled += chunk.byteLength;
+      controller.enqueue(chunk);
+    },
+    cancel(reason) {
+      cancelCalled = true;
+      cancelReason = String(reason);
+    },
+  });
+
+  const headers = new Headers({ "content-length": "100" }); // Lying Content-Length: claims 100 bytes, streams 32 MiB
+  const fetchImpl = (url: string) => {
+    if (url.endsWith("/llms.txt")) {
+      return Promise.resolve(new Response(stream, { status: 200, headers }));
+    }
+    return Promise.resolve(new Response("Not found", { status: 404 }));
+  };
+
+  await fetchSiteDocs({ origin: ORIGIN, queryTerms: [], fetchImpl });
+  assert(cancelCalled, "stream must be cancelled despite lying Content-Length header");
+  assertEquals(cancelReason, "maxBytes exceeded");
+  assert(
+    bytesPulled <= MAX_DISCOVERY_DOC_BYTES + 64 * 1024,
+    `bytes pulled (${bytesPulled}) must be bounded to <= 576 KiB despite lying Content-Length header`,
+  );
+});
+
+Deno.test("kiyap falsification: pre-kiyap res.text() regression pulls 32 MiB and fails byte assertion", async () => {
+  // Model the exact pre-kiyap fetchText behavior (await res.text() then slice)
+  const legacyFetchText = async (res: Response, maxBytes: number | null) => {
+    const text = await res.text();
+    return typeof maxBytes === "number" && maxBytes > 0 ? text.slice(0, maxBytes) : text;
+  };
+
+  let legacyBytesPulled = 0;
+  const stream = new ReadableStream({
+    pull(controller) {
+      if (legacyBytesPulled >= 32 * 1024 * 1024) {
+        controller.close();
+        return;
+      }
+      const chunk = new Uint8Array(64 * 1024).fill(65);
+      legacyBytesPulled += chunk.byteLength;
+      controller.enqueue(chunk);
+    },
+  });
+
+  const res = new Response(stream, { status: 200 });
+  await legacyFetchText(res, MAX_DISCOVERY_DOC_BYTES);
+
+  // Under the legacy implementation, all 32 MiB (33,554,432 bytes) was pulled into memory
+  assertEquals(legacyBytesPulled, 33554432, "legacy res.text() pulled full 32 MiB body");
+
+  // Prove that the streaming gate assertion (bytesPulled <= 576 KiB) fails closed RED on the legacy implementation
+  const bound = MAX_DISCOVERY_DOC_BYTES + 64 * 1024;
+  assertThrows(
+    () => {
+      assert(legacyBytesPulled <= bound, `bytes pulled must be <= ${bound}`);
+    },
+    AssertionError,
+    "bytes pulled must be <=",
+  );
 });
