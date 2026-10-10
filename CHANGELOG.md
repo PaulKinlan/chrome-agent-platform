@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.641] — 2026-10-10
+- Report a distinct, clearer error when a page probe times out instead of blaming the app for never becoming ready.
+
 ## [0.3.640] — 2026-10-10
 - Strengthen the agent worker's abort-handling test coverage so a regression cannot slip through.
 
