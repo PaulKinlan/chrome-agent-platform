@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.658] — 2026-10-10
+- Verify Create click browser check invokes computeCreateClickTimeoutScale
+
 ## [0.3.657] — 2026-10-10
 - Fix transient custody exit 70 flakes under concurrent process churn by recognizing kernel ESRCH as vanished process
 
