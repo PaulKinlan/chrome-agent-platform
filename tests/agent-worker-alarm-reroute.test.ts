@@ -625,38 +625,117 @@ Deno.test("Falsifier axi8h (model parity): provider 'demo' with developerFeature
   assert(swResolved.modelId !== "demo-local", "Must NOT resolve to marker demo-local model when dev flag is off");
 });
 
-Deno.test("Falsifier gj6kn: production completion latch in service-worker.js handles early arrivals without timeout", async () => {
+Deno.test("Falsifier gj6kn / zxylu: production completion latch in service-worker.js delivers latched early result", async () => {
   const swSrc = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   const swAst = acorn.parse(swSrc, { ecmaVersion: "latest", sourceType: "module" });
 
-  let regFn = null;
-  let resolveFn = null;
-  walkAst(swAst, (n) => {
-    if (n.type === "FunctionDeclaration") {
-      if (n.id?.name === "registerPendingWorkerRun") regFn = n;
-      if (n.id?.name === "resolvePendingWorkerRun") resolveFn = n;
+  const inspectCompletionLatch = (ast: any): {
+    hasRegisterFn: boolean;
+    hasResolveFn: boolean;
+    checksSettled: boolean;
+    returnsPromiseResolveResult: boolean;
+    latchesEarlyResult: boolean;
+  } => {
+    let regFn: any = null;
+    let resolveFn: any = null;
+    walkAst(ast, (n) => {
+      if (n.type === "FunctionDeclaration") {
+        if (n.id?.name === "registerPendingWorkerRun") regFn = n;
+        if (n.id?.name === "resolvePendingWorkerRun") resolveFn = n;
+      }
+    });
+    if (!regFn || !resolveFn) {
+      return {
+        hasRegisterFn: !!regFn,
+        hasResolveFn: !!resolveFn,
+        checksSettled: false,
+        returnsPromiseResolveResult: false,
+        latchesEarlyResult: false,
+      };
     }
-  });
-  assert(regFn, "registerPendingWorkerRun must exist in service-worker.js");
-  assert(resolveFn, "resolvePendingWorkerRun must exist in service-worker.js");
 
-  let checksSettled = false;
-  let returnsPromiseResolve = false;
-  walkAst(regFn, (n) => {
-    if (n.type === "MemberExpression" && n.property?.name === "settled") checksSettled = true;
-    if (n.type === "MemberExpression" && n.object?.name === "Promise" && n.property?.name === "resolve") returnsPromiseResolve = true;
-  });
-  assert(checksSettled, "registerPendingWorkerRun must check existing.settled (gj6kn)");
-  assert(returnsPromiseResolve, "registerPendingWorkerRun must return Promise.resolve(existing.result) for early results (gj6kn)");
+    let checksSettled = false;
+    let returnsPromiseResolveResult = false;
+    walkAst(regFn, (n) => {
+      if (n.type === "MemberExpression" && n.property?.name === "settled") checksSettled = true;
+      if (n.type === "ReturnStatement" && n.argument?.type === "CallExpression") {
+        const callee = n.argument.callee;
+        if (
+          callee.type === "MemberExpression" &&
+          callee.object?.name === "Promise" &&
+          callee.property?.name === "resolve"
+        ) {
+          const arg = n.argument.arguments?.[0];
+          // Assert argument is specifically existing.result (zxylu)
+          if (
+            arg?.type === "MemberExpression" &&
+            arg.object?.name === "existing" &&
+            arg.property?.name === "result"
+          ) {
+            returnsPromiseResolveResult = true;
+          }
+        }
+      }
+    });
 
-  let setsSettled = false;
-  let setsResult = false;
-  walkAst(resolveFn, (n) => {
-    if (n.type === "AssignmentExpression" && n.left?.property?.name === "settled") setsSettled = true;
-    if (n.type === "AssignmentExpression" && n.left?.property?.name === "result") setsResult = true;
-  });
-  assert(setsSettled, "resolvePendingWorkerRun must set entry.settled = true (gj6kn)");
-  assert(setsResult, "resolvePendingWorkerRun must store result on entry (gj6kn)");
+    let latchesEarlyResult = false;
+    walkAst(resolveFn, (n) => {
+      if (n.type === "CallExpression") {
+        const callee = n.callee;
+        if (
+          callee.type === "MemberExpression" &&
+          callee.object?.name === "pendingWorkerRuns" &&
+          callee.property?.name === "set"
+        ) {
+          const valObj = n.arguments?.[1];
+          if (valObj?.type === "ObjectExpression") {
+            const settledProp = valObj.properties?.find((p: any) => p.key?.name === "settled");
+            const resultProp = valObj.properties?.find((p: any) => p.key?.name === "result");
+            if (
+              settledProp?.value?.value === true &&
+              resultProp?.value?.name === "result"
+            ) {
+              latchesEarlyResult = true;
+            }
+          }
+        }
+      }
+    });
+
+    return {
+      hasRegisterFn: true,
+      hasResolveFn: true,
+      checksSettled,
+      returnsPromiseResolveResult,
+      latchesEarlyResult,
+    };
+  };
+
+  const prodResult = inspectCompletionLatch(swAst);
+  assert(prodResult.hasRegisterFn, "registerPendingWorkerRun must exist in service-worker.js");
+  assert(prodResult.hasResolveFn, "resolvePendingWorkerRun must exist in service-worker.js");
+  assert(prodResult.checksSettled, "registerPendingWorkerRun must check existing.settled (gj6kn)");
+  assert(prodResult.returnsPromiseResolveResult, "registerPendingWorkerRun must return Promise.resolve(existing.result) for early results (gj6kn, zxylu)");
+  assert(prodResult.latchesEarlyResult, "resolvePendingWorkerRun must latch early arrival result (gj6kn)");
+
+  // Mutation-sensitivity verification: dropping existing.result MUST fail the assertion (zxylu)
+  assert(swSrc.includes("return Promise.resolve(existing.result);"), "service-worker.js must contain expected return statement");
+  const mutatedSwSrc = swSrc.replace(
+    "return Promise.resolve(existing.result);",
+    "return Promise.resolve(undefined);",
+  );
+  assert(mutatedSwSrc !== swSrc, "mutation must successfully replace return statement");
+  const mutatedAst = acorn.parse(mutatedSwSrc, { ecmaVersion: "latest", sourceType: "module" });
+  const mutantResult = inspectCompletionLatch(mutatedAst);
+  assertEquals(mutantResult.returnsPromiseResolveResult, false, "mutant dropping existing.result must NOT pass returnsPromiseResolveResult");
+
+  assertThrows(
+    () => {
+      assert(mutantResult.returnsPromiseResolveResult, "registerPendingWorkerRun must return Promise.resolve(existing.result)");
+    },
+    Error,
+    "registerPendingWorkerRun must return Promise.resolve(existing.result)",
+  );
 });
 
 Deno.test("Falsifier f3zyj: restore fence check and durable run admission precede worker dispatch in service-worker.js", async () => {
