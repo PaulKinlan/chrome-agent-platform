@@ -19,8 +19,8 @@ function absent(name) {
  * actionable quarantine list or authority selection leave this diagnostic.
  * At most 1024 WAL leaves / 16 MiB total by default; explicit bounded limits
  * may be tighter or admit up to 4096 leaves. */
-export async function inspectIntactMasterJournalPrefixesForOwner(master) {
-  const evidence = await snapshotMasterJournalRepairEvidence(master);
+export async function inspectIntactMasterJournalPrefixesForOwner(master, evidenceLimits = {}) {
+  const evidence = await snapshotMasterJournalRepairEvidence(master, evidenceLimits);
   const base = { actionable: false, authoritySelected: false, candidates: [], heads: [],
     highestVerifiedHistoricalPrefix: null };
   if (evidence.state === "inspection_refused") {

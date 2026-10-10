@@ -309,6 +309,11 @@ Deno.test("owner prefix inspection refuses missing checked prefix or oversized e
   const bounded = await inspectIntactMasterJournalPrefixesForOwner(master);
   assertEquals(bounded.state, "inspection_refused");
   assertEquals(bounded.candidates, []);
+  const ownerExpanded = await inspectIntactMasterJournalPrefixesForOwner(master, { maxRecords: 2048 });
+  assertEquals(ownerExpanded.state, "historical_prefix_diagnostic");
+  assertEquals(ownerExpanded.highestVerifiedHistoricalPrefix, null);
+  assertEquals(ownerExpanded.candidates, []);
+  assertEquals(ownerExpanded.authoritySelected, false);
 });
 
 Deno.test("historical prefix diagnostic orders two checked heads without selecting authority", async () => {
@@ -423,6 +428,29 @@ Deno.test("failed repair-intent close leaves non-overwritable fail-closed eviden
   assertEquals((await (await master.getDirectoryHandle("journal-wal"))
     .getFileHandle("repair-intent-1.json")).bytes, torn, "retry cannot overwrite torn witness bytes");
   assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy);
+});
+
+Deno.test("legacy journal and archive evidence each enforce the per-file byte cap without WAL", async () => {
+  const { master } = await legacyFixture();
+  const journal = await master.getFileHandle("journal.json");
+  const originalJournal = journal.bytes.slice();
+  journal.bytes = encoder.encode("j".repeat(33));
+  const tooLargeJournal = await snapshotMasterJournalRepairEvidence(master,
+    { maxRecordBytes: 32, maxTotalBytes: 128 });
+  assertEquals(tooLargeJournal.state, "inspection_refused");
+  assertEquals(tooLargeJournal.refusals.includes("master journal repair evidence record exceeds byte limit"), true);
+  assertEquals(journal.bytes.byteLength, 33);
+  assertEquals(master.children.has("journal-wal"), false);
+  journal.bytes = originalJournal;
+  const archive = await master.getFileHandle("journal-archive.json", { create: true });
+  archive.bytes = encoder.encode("a".repeat(33));
+  const tooLargeArchive = await snapshotMasterJournalRepairEvidence(master,
+    { maxRecordBytes: 32, maxTotalBytes: 128 });
+  assertEquals(tooLargeArchive.state, "inspection_refused");
+  assertEquals(tooLargeArchive.refusals.includes("master journal repair evidence record exceeds byte limit"), true);
+  assertEquals(archive.bytes.byteLength, 33);
+  assertEquals(journal.bytes, originalJournal);
+  assertEquals(master.children.has("journal-wal"), false);
 });
 
 Deno.test("read-only owner repair evidence preserves pre-head residue and bounds its manifest", async () => {

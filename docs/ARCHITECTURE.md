@@ -677,8 +677,9 @@ fingerprint and rereads under the caller's master lock before creating WAL
 evidence; a changed source refuses without creating the WAL directory. It is
 an inspection identity, NOT owner approval or a product CAS.
 The separate `inspectIntactMasterJournalPrefixesForOwner` can replay each head
-slot independently behind those evidence bounds, including an older intact
-prefix beside a torn latest slot; each checked slot binds the SHA-256 of its
+slot independently behind those evidence bounds (an explicit owner call may
+raise the leaf count within the hard cap), including an older intact prefix
+beside a torn latest slot; each checked slot binds the SHA-256 of its
 snapshot bytes. It may identify the highest verified *historical* prefix
 only when ordering is unambiguous; equal/forked slots produce no tip. It
 never selects authority or a republish candidate. No intact slot means no
