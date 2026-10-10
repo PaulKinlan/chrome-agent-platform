@@ -649,8 +649,10 @@ Witnesses remain append-only (bounded to 32 per profile). The exact intent
 leaf grammar now participates in backup export/import: both head slots retain
 their own witness-prefix dependencies, a pending newer intent refuses export,
 and an import missing an older signed witness refuses. No product route
-approves a repair head, no quarantine record grammar exists yet, and no owner
-repair is enabled. Production WAL writes are still OFF. The read-only `inspectMasterJournalForOwner` helper classifies empty/absent WAL,
+approves a repair head. The reserved flat `quarantine-<intent-sequence>-<sha256>.json`
+WAL-root grammar is recognized but export AND restore deliberately refuse any
+such file until an owner-approved head binds its exact retention manifest;
+there is no quarantine writer, and no owner repair is enabled. Production WAL writes are still OFF. The read-only `inspectMasterJournalForOwner` helper classifies empty/absent WAL,
 pre-head/torn repair needs, or a checked *current* projection and archive
 chain, without switching authority or editing any record. The separate
 `snapshotMasterJournalRepairEvidence` lists bounded WAL names, sizes and

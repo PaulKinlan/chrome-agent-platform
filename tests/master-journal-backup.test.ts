@@ -113,6 +113,19 @@ Deno.test("backup validates an older discharged witness beside a newer checked r
     "older-slot validation must see its own intent prefix, not the newer pending witness");
 });
 
+Deno.test("classified quarantine leaves refuse export and import until head-bound retention exists", async () => {
+  const { paths, residue } = await chainFixture();
+  paths.delete(residue);
+  const quarantine = `${PREFIX}quarantine-1-${"a".repeat(64)}.json`;
+  paths.set(quarantine, ENCODER.encode("checked quarantined bytes require an owner manifest"));
+  await assertRejects(() => selectPublishedMasterJournalBackupPaths([...paths.keys()], async (path) => ({
+    size: paths.get(path).byteLength, stream: new Blob([paths.get(path)]).stream(),
+  })), Error, "quarantine manifest is not yet bound");
+  await assertRejects(() => validateStagedMasterJournalBackup(
+    [...paths.keys()].map((relPath) => ({ relPath, stagedPath: relPath })),
+    async (path) => paths.get(path)), Error, "quarantine manifest is not yet bound");
+});
+
 Deno.test("export refuses pre-head WAL residue instead of selecting legacy journal", async () => {
   const { paths } = await chainFixture();
   paths.delete(`${PREFIX}head-a.json`);

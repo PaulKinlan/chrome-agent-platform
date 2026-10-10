@@ -32,6 +32,9 @@ export async function validateStagedMasterJournalBackup(entries, readFile) {
     }
     files.set(leaf, entry.stagedPath);
   }
+  if ([...files.keys()].some((leaf) => leaf.startsWith("quarantine-"))) {
+    throw new Error("master journal quarantine manifest is not yet bound to an owner-approved head");
+  }
   if (files.size === 0) return false;
   if (typeof readFile !== "function") throw new Error("master journal backup requires staged file reads");
   if (!files.has(HEADS[0])) throw new Error("master journal backup has no cutover head");
@@ -143,6 +146,9 @@ export async function selectPublishedMasterJournalBackupPaths(paths, open) {
       throw new Error("master journal export contains an unclassified or repeated WAL record");
     }
     wal.set(leaf, path);
+  }
+  if ([...wal.keys()].some((leaf) => leaf.startsWith("quarantine-"))) {
+    throw new Error("master journal quarantine manifest is not yet bound to an owner-approved head");
   }
   if (wal.size === 0) return paths;
   if (!wal.has(HEADS[0])) throw new Error("master journal export is missing its cutover head");

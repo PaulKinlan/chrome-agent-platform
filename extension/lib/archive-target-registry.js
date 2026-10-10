@@ -39,6 +39,9 @@ const OPFS_ROOTS = new Map([
 // verify the head, checkpoint, frames and archive as one generation.
 const MASTER_JOURNAL_WAL_RECORD = /^(?:head-[ab]|(?:checkpoint|archive|frame|claim)-([1-9]\d*)-(0|[1-9]\d*))\.json$/u;
 const MASTER_REPAIR_INTENT_LEAF = /^repair-intent-([1-9]\d*)\.json$/u;
+// Flat append-only quarantine record family under the WAL authority root.
+// Backup/restore still refuse it until an owner head binds retention.
+const MASTER_QUARANTINE_LEAF = /^quarantine-([1-9]\d*)-[0-9a-f]{64}\.json$/u;
 const INTEGRITY_LEAF = /^(?:__gen|__tombs|__epoch)\.json$/u;
 const TOMB_LEAF = /^[^/]+\.tomb$/u;
 const LEGACY_VERSION_LEAF = /^\.[^/]+\.version$/u;
@@ -195,7 +198,8 @@ function classifyMemory(segments) {
       return masterKeyClass(segments[2]);
     }
     if (segments.length === 4 && segments[2] === "journal-wal") {
-      const repair = MASTER_REPAIR_INTENT_LEAF.exec(segments[3]);
+      const repair = MASTER_REPAIR_INTENT_LEAF.exec(segments[3]) ||
+        MASTER_QUARANTINE_LEAF.exec(segments[3]);
       if (repair) return Number.isSafeInteger(Number(repair[1])) && Number(repair[1]) <= 32
         ? TERMINAL : "unclassified";
       const match = MASTER_JOURNAL_WAL_RECORD.exec(segments[3]);
