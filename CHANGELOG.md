@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.642] — 2026-10-10
+- Allow app readiness polling to recover from transient probe timeouts within the overall timeout budget
+
 ## [0.3.641] — 2026-10-10
 - Report a distinct, clearer error when a page probe times out instead of blaming the app for never becoming ready.
 

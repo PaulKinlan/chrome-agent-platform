@@ -195,20 +195,49 @@ Deno.test("iksuc / pew31 / w7mv6: waitForAppReady bounds wait and fails closed w
     `must NOT launder into app never became ready, got: ${caught.message}`,
   );
   assert(
-    caught.message.includes("probe evaluation timed out after 100ms"),
+    /probe evaluation timed out after \d+ms/.test(caught.message),
     `must report distinct probe timeout message, got: ${caught.message}`,
   );
-  assert(elapsed >= 80 && elapsed < 250, `must fail fast within probe bound (elapsed: ${elapsed}ms)`);
+  assert(elapsed >= 250 && elapsed < 550, `must wait across timeoutMs budget (elapsed: ${elapsed}ms)`);
 });
 
-Deno.test("pew31 / w7mv6: falsifier — hung probe fails fast with distinct probe provenance and cannot exit 75 environmental", async () => {
+Deno.test("p2aki: transient probe timeout retries within caller timeoutMs budget and succeeds when subsequent probe settles", async () => {
+  let probeCalls = 0;
+  // Evaluator where call 1 times out (takes 100ms with probeTimeoutMs=40), but call 2 settles in 10ms with {ready: true}
+  const evaluate = (_expr: string) => {
+    probeCalls++;
+    if (probeCalls === 1) {
+      return new Promise((resolve) => {
+        setTimeout(() => resolve({ ready: false }), 120);
+      });
+    }
+    return new Promise((resolve) => {
+      setTimeout(() => resolve({ ready: true, signal: "ntp-hydrated" }), 10);
+    });
+  };
+
+  const start = Date.now();
+  const res = await waitForAppReady(evaluate, {
+    timeoutMs: 600,
+    probeTimeoutMs: 40,
+    pollIntervalMs: 15,
+    surfaceName: "NTP main",
+  });
+  const elapsed = Date.now() - start;
+
+  assertEquals(res.ready, true);
+  assertEquals(res.signal, "ntp-hydrated");
+  assertEquals(probeCalls, 2, "must retry on second probe after first probe timed out");
+  assert(elapsed >= 45 && elapsed < 400, `must succeed promptly once second probe settles (elapsed: ${elapsed}ms)`);
+});
+
+Deno.test("p2aki / pew31 / w7mv6: persistent hung probe exhausts timeoutMs budget and throws distinct probe timeout provenance", async () => {
   let probeCalls = 0;
 
-  // Evaluator that hangs (e.g. Service Worker deadlocks and never answers Runtime.evaluate)
+  // Evaluator that hangs on every call
   const evaluate = (_expr: string) => {
     probeCalls++;
     return new Promise((_, reject) => {
-      // Simulate slow/hanging evaluate that would eventually reject with CDP timeout at 150ms
       setTimeout(() => {
         reject(new Error("cdp timeout: Runtime.evaluate (requestId=99, targetId=page-1)"));
       }, 150);
@@ -219,9 +248,9 @@ Deno.test("pew31 / w7mv6: falsifier — hung probe fails fast with distinct prob
   const start = Date.now();
   try {
     await waitForAppReady(evaluate, {
-      timeoutMs: 1000,
+      timeoutMs: 180,
       probeTimeoutMs: 50,
-      pollIntervalMs: 20,
+      pollIntervalMs: 15,
       surfaceName: "NTP main",
     });
   } catch (e) {
@@ -230,8 +259,8 @@ Deno.test("pew31 / w7mv6: falsifier — hung probe fails fast with distinct prob
   const elapsed = Date.now() - start;
 
   assert(caught !== null, "must throw when evaluator hangs");
-  assertEquals(probeCalls, 1, "must fail fast on first hanging probe without polling repeated evaluates");
-  assert(elapsed < 140, `must fail fast within probe limit (took ${elapsed}ms)`);
+  assert(probeCalls >= 2, `must poll multiple times within timeoutMs budget (got ${probeCalls} calls)`);
+  assert(elapsed >= 150 && elapsed < 350, `must exhaust timeoutMs budget (took ${elapsed}ms)`);
   assert(
     isTransportOrEvaluateTimeoutError(caught),
     `must match isTransportOrEvaluateTimeoutError, got: ${caught.message}`,
@@ -247,10 +276,9 @@ Deno.test("pew31 / w7mv6: falsifier — hung probe fails fast with distinct prob
     !caught.message.startsWith(APP_NEVER_BECAME_READY),
     `must NOT launder into app never became ready, got: ${caught.message}`,
   );
-  assertEquals(
-    caught.message,
-    "probe evaluation timed out after 50ms for NTP main",
-    "must preserve distinct probe timeout provenance without forging cdp timeout: Runtime.evaluate",
+  assert(
+    /^probe evaluation timed out after \d+ms for NTP main$/.test(caught.message),
+    `must preserve distinct probe timeout provenance without forging cdp timeout: Runtime.evaluate, got: ${caught.message}`,
   );
 });
 
@@ -466,6 +494,28 @@ Deno.test("u7p0b: waitForAppReady propagates CDP transport disconnect errors imm
   assertEquals(caught, disconnectError, "must rethrow transport disconnect immediately");
   assertEquals(callCount, 1, "must NOT retry across a closed target/session");
   assert(elapsed < 500, `must fail fast on disconnect (took ${elapsed}ms)`);
+});
+
+Deno.test("p2aki: compound transport error mentioning probe timeout still fails fast by reference identity", async () => {
+  const compoundTransportError = new Error("Protocol error: Target closed (probe evaluation timed out during evaluate)");
+  let callCount = 0;
+  const evaluate = async (_expr: string) => {
+    callCount++;
+    throw compoundTransportError;
+  };
+
+  let caught: any = null;
+  const start = Date.now();
+  try {
+    await waitForAppReady(evaluate, { timeoutMs: 3000, probeTimeoutMs: 100, pollIntervalMs: 20 });
+  } catch (e) {
+    caught = e;
+  }
+  const elapsed = Date.now() - start;
+
+  assertEquals(caught, compoundTransportError, "must rethrow compound transport error immediately");
+  assertEquals(callCount, 1, "must NOT retry across a closed transport despite compound message");
+  assert(elapsed < 200, `must fail fast on transport error (took ${elapsed}ms)`);
 });
 
 Deno.test("u7p0b: waitForAppReady still reports named app-never-became-ready on genuine DOM unreadiness", async () => {
