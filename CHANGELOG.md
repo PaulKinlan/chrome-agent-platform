@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.650] — 2026-10-10
+- Suppress ambiguous stderr after unterminated OSC and report discarded-line count
+
 ## [0.3.649] — 2026-10-10
 - Sanitise parameter query strings in ACP bridge logging so credential-like values never reach the log.
 

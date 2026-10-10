@@ -461,7 +461,7 @@ Deno.test("sanitizeLogString strips ANSI CSI/OSC sequences, collapses C0/C1 cont
   );
 });
 
-Deno.test("StderrSanitizer discards split OSC, multi-line OSC, split ST, and C1 sequences while bounding memory", () => {
+Deno.test("StderrSanitizer discards split OSC, split ST, and C1 sequences while suppressing unterminated OSC across newlines and bounding memory", () => {
   const sanitizer = new StderrSanitizer();
   const logged: string[] = [];
   const onLine = (l: string) => logged.push(l);
@@ -470,11 +470,19 @@ Deno.test("StderrSanitizer discards split OSC, multi-line OSC, split ST, and C1 
   sanitizer.processChunk("Prefix \x1b]52;c;", onLine);
   sanitizer.processChunk("c2VjcmV0\x07 Suffix\n", onLine);
 
-  // 2. Split ST (\x1b and \) across chunk reads with embedded newline inside OSC
+  // 2. Multiline OSC sequence spanning a newline and split ST across chunks
   sanitizer.processChunk("Start \x1b]52;c;LINE1_SECRET\nLINE2_SECRET\x1b", onLine);
   sanitizer.processChunk("\\ End\n", onLine);
 
-  // 3. C1 8-bit OSC sequence
+  // 2b. Multiline OSC sequence spanning two newlines terminated by ST (Finding P1)
+  sanitizer.processChunk("Start2 \x1b]52;c;L1_SECRET\nL2_SECRET\nL3_SECRET\x1b\\ End2\n", onLine);
+
+  // 3. Unterminated OSC unclosed before newline suppresses ambiguous text fail-closed (chrome-agent-platform-l5rup)
+  sanitizer.processChunk("Before \x1b]0;MALFORMED_TITLE_SECRET", onLine);
+  sanitizer.processChunk("\nERROR: real adapter failure, exit 17\n", onLine);
+  sanitizer.flush(onLine);
+
+  // 4. C1 8-bit OSC sequence
   sanitizer.processChunk("C1Start \u009d52;c;C1_SECRET\u009c C1End\n", onLine);
 
   // 4. CSI color and cursor sequences
@@ -488,36 +496,224 @@ Deno.test("StderrSanitizer discards split OSC, multi-line OSC, split ST, and C1 
   sanitizer.processChunk("SplitCSI \x1b[31\x1b", onLine);
   sanitizer.processChunk("]52;c;SPLIT_CSI_SECRET\x07 Done\n", onLine);
 
-  // 7. CSI sequence with private parameter character (e.g. > in DA2)
-  sanitizer.processChunk("Before \x1b[>0c After\n", onLine);
+  // 8. CSI sequence with private parameter character (e.g. > in DA2)
+  sanitizer.processChunk("BeforeCSI \x1b[>0c AfterCSI\n", onLine);
 
-  // 8. Oversized line bounding (> 4096 chars without newline flushes bounded chunk)
+  // 9. Oversized line bounding (> 4096 chars without newline flushes bounded chunk)
   const hugeChunk = "HugeHeader " + "A".repeat(5000) + "\n";
   sanitizer.processChunk(hugeChunk, onLine);
+
+  // 10. Repeated non-ST escape pairs inside candidate continuation bounded at 4096 chars (Finding P2)
+  sanitizer.processChunk("PrefixEsc \x1b]0;x\n" + "\x1bX".repeat(3000) + "\x1b\\ SuffixEsc\n", onLine);
+
+  // 11. Multiline OSC payload spanning beyond continuation line limit terminated by ST (Finding P1)
+  sanitizer.processChunk("StartBeyond \x1b]52;c;first\nSECOND_SECRET\nthird\nfourth\n\x1b\\ EndBeyond\n", onLine);
 
   sanitizer.flush(onLine);
 
   // Assertions:
   assertEquals(logged[0], "Prefix Suffix");
   assertEquals(logged[1], "Start End");
-  assertEquals(logged[2], "C1Start C1End");
-  assertEquals(logged[3], "Color RedText Done");
-  assertEquals(logged[4], "Embedded Suffix");
-  assertEquals(logged[5], "Prefix Suffix");
-  assertEquals(logged[6], "SplitCSI Done");
-  assertEquals(logged[7], "Before After");
+  assertEquals(logged[2], "Start2 End2");
+  assertEquals(logged[3], "Before");
+  assertEquals(logged[4], "C1Start C1End");
+  assertEquals(logged[5], "Color RedText Done");
+  assertEquals(logged[6], "Embedded Suffix");
+  assertEquals(logged[7], "Prefix Suffix");
+  assertEquals(logged[8], "SplitCSI Done");
+  assertEquals(logged[9], "BeforeCSI AfterCSI");
+  assertEquals(logged[11], "PrefixEsc SuffixEsc");
+  assertEquals(logged[12], "StartBeyond EndBeyond");
 
   // Ensure secrets were never added to lines
   assert(!logged.some((l) => l.includes("c2VjcmV0")));
   assert(!logged.some((l) => l.includes("LINE1_SECRET")));
   assert(!logged.some((l) => l.includes("LINE2_SECRET")));
+  assert(!logged.some((l) => l.includes("L1_SECRET")));
+  assert(!logged.some((l) => l.includes("L2_SECRET")));
+  assert(!logged.some((l) => l.includes("L3_SECRET")));
+  assert(!logged.some((l) => l.includes("MALFORMED_TITLE_SECRET")));
   assert(!logged.some((l) => l.includes("C1_SECRET")));
   assert(!logged.some((l) => l.includes("EMBEDDED_SECRET")));
   assert(!logged.some((l) => l.includes("CSI_INTERRUPT_SECRET")));
   assert(!logged.some((l) => l.includes("SPLIT_CSI_SECRET")));
+  assert(!logged.some((l) => l.includes("SECOND_SECRET")));
 
   // Verify huge line was bounded and split into chunks
   assert(logged.some((l) => l.startsWith("HugeHeader A")));
+  assert(logged.some((l) => l.includes("SuffixEsc")));
+});
+
+Deno.test("StderrSanitizer defers candidate diagnostic release until untermination established and retains discard state beyond limits", () => {
+  // 1. Limit abort retains payload-discard state until ST/BEL (Finding P1)
+  {
+    const s = new StderrSanitizer();
+    const out: string[] = [];
+    s.processChunk("Start \x1b]52;c;x\na\nb\nc\nTAIL_SECRET\x1b\\ Suffix\n", (l) => out.push(l));
+    s.flush((l) => out.push(l));
+    assertEquals(out, ["Start Suffix"]);
+    assert(!out.some((l) => l.includes("TAIL_SECRET")));
+  }
+
+  // 1b. Byte bound (>4096 bytes) retains payload-discard state until ST/BEL (Finding P2)
+  {
+    const s = new StderrSanitizer();
+    const out: string[] = [];
+    s.processChunk("Start \x1b]52;c;x\n" + "A".repeat(5000) + "\nTAIL_4096\x1b\\ Suffix\n", (l) => out.push(l));
+    s.flush((l) => out.push(l));
+    assertEquals(out, ["Start Suffix"]);
+    assert(!out.some((l) => l.includes("TAIL_4096")));
+  }
+
+  // 1c. Candidate bound (>8 candidates) retains payload-discard state until ST/BEL (Finding P2)
+  {
+    const s = new StderrSanitizer();
+    const out: string[] = [];
+    s.processChunk("Start \x1b]52;c;x\n" + Array.from({ length: 12 }, (_, i) => "ERROR: candidate " + i).join("\n") + "\nTAIL_8CAND\x1b\\ Suffix\n", (l) => out.push(l));
+    s.flush((l) => out.push(l));
+    assertEquals(out, ["Start Suffix"]);
+    assert(!out.some((l) => l.includes("TAIL_8CAND")));
+  }
+
+  // 1d. Byte bound overrun (>4096 bytes) latches discard-only state through EOF without terminator or trailing newline (Finding P1)
+  {
+    const s = new StderrSanitizer();
+    const out: string[] = [];
+    s.processChunk("Start \x1b]52;c;x\n" + "A".repeat(5000) + "\nERROR: SECRET_AFTER_BYTE_LIMIT", (l) => out.push(l));
+    s.flush((l) => out.push(l));
+    assertEquals(out, ["Start"]);
+    assert(!out.some((l) => l.includes("SECRET_AFTER_BYTE_LIMIT")));
+  }
+
+  // 1e. Candidate bound overrun (>8 candidates) latches discard-only state through EOF without terminator (Finding P1)
+  {
+    const s = new StderrSanitizer();
+    const out: string[] = [];
+    s.processChunk("Start \x1b]52;c;x\n" + Array.from({ length: 12 }, (_, i) => "ERROR: secret candidate " + i).join("\n") + "\n", (l) => out.push(l));
+    s.flush((l) => out.push(l));
+    assertEquals(out, ["Start"]);
+    assert(!out.some((l) => l.includes("secret candidate")));
+  }
+
+  // 1f. Cumulative byte bound across newlines without trailing newline latches discard-only state (Finding P1)
+  {
+    const s = new StderrSanitizer();
+    const out: string[] = [];
+    s.processChunk("Start \x1b]0;x\n" + "A".repeat(3000) + "\nERROR: " + "B".repeat(1500), (l) => out.push(l));
+    s.flush((l) => out.push(l));
+    assertEquals(out, ["Start"]);
+  }
+
+  // 1g. Exactly nine candidates with ninth candidate unterminated at EOF latches discard-only state (Finding P1)
+  {
+    const s = new StderrSanitizer();
+    const out: string[] = [];
+    s.processChunk("Start \x1b]52;c;x\n" + Array.from({ length: 8 }, (_, i) => "ERROR: candidate " + i).join("\n") + "\nERROR: candidate 9", (l) => out.push(l));
+    s.flush((l) => out.push(l));
+    assertEquals(out, ["Start"]);
+    assert(!out.some((l) => l.includes("candidate")));
+  }
+
+  // 2. Diagnostic-looking payload inside terminated OSC is discarded when ST arrives (Finding P1)
+  {
+    const s = new StderrSanitizer();
+    const out: string[] = [];
+    s.processChunk("Start \x1b]52;c;x\nERROR: SECRET_DIAGNOSTIC\n\x1b\\ Suffix\n", (l) => out.push(l));
+    s.flush((l) => out.push(l));
+    assertEquals(out, ["Start Suffix"]);
+    assert(!out.some((l) => l.includes("SECRET_DIAGNOSTIC")));
+  }
+
+  // 2b. Discard unverified continuation (including diagnostic-looking payload) at C1 OSC boundary (Finding P1)
+  {
+    const s = new StderrSanitizer();
+    const out: string[] = [];
+    s.processChunk("\x1b]52;c;secret\nTAIL_SECRET\u009d0;title\x07 Suffix\n", (l) => out.push(l));
+    s.flush((l) => out.push(l));
+    assertEquals(out, ["Suffix"]);
+    assert(!out.some((l) => l.includes("TAIL_SECRET")));
+  }
+  {
+    const s = new StderrSanitizer();
+    const out: string[] = [];
+    s.processChunk("\x1b]52;c;secret\nERROR: SECRET_VALUE\u009d0;title\x07 Suffix\n", (l) => out.push(l));
+    s.flush((l) => out.push(l));
+    assertEquals(out, ["Suffix"]);
+    assert(!out.some((l) => l.includes("SECRET_VALUE")));
+  }
+
+  // 2c. Interrupted unclosed OSC with diagnostic discarded across new 7-bit OSC (Finding P1)
+  {
+    const s = new StderrSanitizer();
+    const out: string[] = [];
+    s.processChunk("\x1b]0;broken\nFATAL: crash\n\x1b]0;title\x07 Suffix\n", (l) => out.push(l));
+    s.flush((l) => out.push(l));
+    assertEquals(out, ["Suffix"]);
+    assert(!out.some((l) => l.includes("broken")));
+    assert(!out.some((l) => l.includes("title")));
+    assert(!out.some((l) => l.includes("FATAL: crash")));
+  }
+
+  // 3. Pre-OSC text is flushed at EOF even if unclosed OSC follows (Finding P2)
+  {
+    const s = new StderrSanitizer();
+    const out: string[] = [];
+    s.processChunk("FATAL: crash \x1b]0;x\ncontinuation", (l) => out.push(l));
+    s.flush((l) => out.push(l));
+    assertEquals(out, ["FATAL: crash"]);
+  }
+
+  // 4. Terminated OSC sequence with real diagnostic afterwards emits the diagnostic
+  {
+    const s = new StderrSanitizer();
+    const out: string[] = [];
+    s.processChunk("\u001b]0;my-title\x07", (l) => out.push(l));
+    s.processChunk("ERROR: real adapter failure, exit 17\n", (l) => out.push(l));
+    s.flush((l) => out.push(l));
+    assertEquals(out, ["ERROR: real adapter failure, exit 17"]);
+    assert(!out.some((l) => l.includes("my-title")));
+  }
+
+  // 5. Unterminated title OSC 0/1/2 continuation refuses replay even if matching allowlist (Finding vpo4n)
+  {
+    const s = new StderrSanitizer();
+    const out: string[] = [];
+    s.processChunk("\u001b]0;broken-title", (l) => out.push(l));
+    s.processChunk("\nAPI_KEY=sk-ant-SECRET-CANARY", (l) => out.push(l));
+    s.processChunk("\nERROR: spoofed diagnostic from untrusted payload\n", (l) => out.push(l));
+    s.processChunk("SUFFIX\n", (l) => out.push(l));
+    s.flush((l) => out.push(l));
+    assertEquals(out, []);
+    assertEquals(s.droppedLinesCount, 4);
+    assert(!out.some((l) => l.includes("SECRET-CANARY")));
+    assert(!out.some((l) => l.includes("spoofed diagnostic")));
+  }
+
+  // 6. Unterminated OSC 52 clipboard continuation refuses replay even if matching allowlist (Finding vpo4n)
+  {
+    const s = new StderrSanitizer();
+    const out: string[] = [];
+    s.processChunk("\u001b]52;c;clipboard-copy", (l) => out.push(l));
+    s.processChunk("\nAPI_KEY=sk-ant-SECRET-CANARY", (l) => out.push(l));
+    s.processChunk("\nERROR: spoofed diagnostic from untrusted payload\n", (l) => out.push(l));
+    s.processChunk("SUFFIX\n", (l) => out.push(l));
+    s.flush((l) => out.push(l));
+    assertEquals(out, []);
+    assertEquals(s.droppedLinesCount, 4);
+    assert(!out.some((l) => l.includes("SECRET-CANARY")));
+    assert(!out.some((l) => l.includes("spoofed diagnostic")));
+  }
+
+  // 7. Non-allowlisted stderr lines after malformed OSC track dropped lines count (Finding h1r6b)
+  {
+    const s = new StderrSanitizer();
+    const out: string[] = [];
+    s.processChunk("\u001b]0;broken-title", (l) => out.push(l));
+    s.processChunk("\nserver listening on 127.0.0.1:7788\nturn rejected: policy\ndone\n", (l) => out.push(l));
+    s.flush((l) => out.push(l));
+    assertEquals(out, []);
+    assertEquals(s.droppedLinesCount, 4);
+  }
 });
 
 Deno.test("acp-bridge retains split incomplete OSC and CSI sequences across stderr chunks without leaking payloads", async () => {
@@ -571,6 +767,12 @@ rl.on("line", async (line) => {
       process.stderr.write("UnfinishedCSI \u001b[31\u001b");
       await new Promise((r) => setTimeout(r, 60));
       process.stderr.write("]52;c;UNFINISHED_CSI_SECRET\u0007 FinishedCSI\\n");
+      await new Promise((r) => setTimeout(r, 60));
+
+      // Chunk 10 (chrome-agent-platform-l5rup): Terminated OSC followed by real error
+      process.stderr.write("PreUnterminated \u001b]0;OSC_PAYLOAD_SECRET\u0007");
+      await new Promise((r) => setTimeout(r, 60));
+      process.stderr.write("\\nERROR: real adapter diagnostic after terminated OSC\\n");
 
       process.stdout.write(JSON.stringify({
         jsonrpc: "2.0",
@@ -638,6 +840,14 @@ rl.on("line", async (line) => {
     assert(!loggedErrors.some((l) => l.includes("C1_SECRET")), "C1_SECRET leaked from C1 OSC sequence");
     assert(!loggedErrors.some((l) => l.includes("EMBEDDED_SECRET")), "EMBEDDED_SECRET leaked from embedded CSI");
     assert(!loggedErrors.some((l) => l.includes("UNFINISHED_CSI_SECRET")), "UNFINISHED_CSI_SECRET leaked from interrupted CSI");
+    assert(!loggedErrors.some((l) => l.includes("UNTERMINATED_OSC_SECRET")), "UNTERMINATED_OSC_SECRET leaked across newline");
+
+    // Verify real adapter diagnostic after terminated OSC is preserved
+    assert(
+      loggedErrors.some((l) => l.includes("ERROR: real adapter diagnostic after terminated OSC")),
+      `Expected real diagnostic after terminated OSC to be preserved in stderr, got: ${JSON.stringify(loggedErrors)}`,
+    );
+    assert(!loggedErrors.some((l) => l.includes("OSC_PAYLOAD_SECRET")), "OSC_PAYLOAD_SECRET leaked");
 
     const hasSplitClean = loggedErrors.some((l) => l.includes("SplitStart SplitEnd"));
     assert(hasSplitClean, `Expected "SplitStart SplitEnd" logged, got: ${JSON.stringify(loggedErrors)}`);
@@ -812,6 +1022,268 @@ Deno.test("acp-bridge rejects unknown harness with sanitized 400 error when --ad
     assert(!body.includes("\u0007"), `Found raw BEL in response body: "${body}"`);
     assert(!body.includes("TITLE"), `OSC payload leaked into response body: "${body}"`);
   } finally {
+    await server.shutdown();
+  }
+});
+
+Deno.test("acp-bridge preserves exit diagnostics when adapter emits an unterminated OSC followed by error text and exits", async () => {
+  const dir = durableDir("acp-logging-unterminated-osc");
+  const adapterPath = `${dir}/adapter-unterminated-osc-mock.mjs`;
+
+  Deno.writeTextFileSync(
+    adapterPath,
+    `import readline from "node:readline";
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  try {
+    const msg = JSON.parse(line);
+    if (msg.method === "initialize") {
+      process.stderr.write("\\u001b]0;UNTERMINATED_TITLE_PWN\\nFATAL: adapter crash on boot\\n");
+      setTimeout(() => process.exit(17), 50);
+    }
+  } catch {}
+});
+`,
+  );
+
+  const loggedErrors: string[] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    loggedErrors.push(args.map(String).join(" "));
+  };
+
+  const server = createAcpServer(0, adapterPath, {}, undefined, TEST_BRIDGE_TOKEN);
+  const port = (server as any).addr.port;
+
+  try {
+    let closeReason = "";
+    await new Promise<void>((resolve) => {
+      const ws = new WebSocket(authedEndpoint(port, "codex"));
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1 } }));
+      };
+      ws.onclose = (ev) => {
+        closeReason = ev.reason;
+        resolve();
+      };
+      ws.onerror = () => resolve();
+    });
+
+    const exitLog = loggedErrors.find((l) => l.includes("adapter for harness \"codex\" exited"));
+    assert(exitLog, `Expected exit log in logged errors, got: ${JSON.stringify(loggedErrors)}`);
+    assert(
+      exitLog.includes("stderr suppressed after unterminated OSC (2 lines dropped)"),
+      `Expected exit log to report suppressed diagnostics, got: ${exitLog}`,
+    );
+    assert(
+      closeReason.includes("stderr suppressed after unterminated OSC (2 lines dropped)"),
+      `Expected socket close reason to report suppressed diagnostics, got: "${closeReason}"`,
+    );
+    assert(!exitLog.includes("UNTERMINATED_TITLE_PWN"), `OSC payload leaked into exit log: ${exitLog}`);
+    assert(!closeReason.includes("UNTERMINATED_TITLE_PWN"), `OSC payload leaked into close reason: "${closeReason}"`);
+    assert(!exitLog.includes("FATAL: adapter crash on boot"), `Ambiguous post-OSC line leaked into exit log: ${exitLog}`);
+    assert(!closeReason.includes("FATAL: adapter crash on boot"), `Ambiguous post-OSC line leaked into close reason: "${closeReason}"`);
+    assert(!exitLog.includes("\u001b"), `Found raw ESC in exit log: ${exitLog}`);
+    assert(!closeReason.includes("\u001b"), `Found raw ESC in close reason: "${closeReason}"`);
+  } finally {
+    console.error = originalConsoleError;
+    await server.shutdown();
+  }
+});
+
+Deno.test("acp-bridge reports suppressed lines in exit diagnostic when adapter emits an unterminated OSC followed only by un-allowlisted lines", async () => {
+  const dir = durableDir("acp-logging-suppressed-exit");
+  const adapterPath = `${dir}/adapter-suppressed-mock.mjs`;
+
+  Deno.writeTextFileSync(
+    adapterPath,
+    `import readline from "node:readline";
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", async (line) => {
+  try {
+    const msg = JSON.parse(line);
+    if (msg.method === "initialize") {
+      process.stderr.write("\\u001b]0;broken-title\\nserver listening on 127.0.0.1:7788\\nturn rejected: policy\\ndone\\n");
+      setTimeout(() => process.exit(1), 50);
+    }
+  } catch {}
+});
+`,
+  );
+
+  const loggedErrors: string[] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    loggedErrors.push(args.map(String).join(" "));
+  };
+
+  const server = createAcpServer(0, adapterPath, {}, undefined, TEST_BRIDGE_TOKEN);
+  const port = (server as any).addr.port;
+
+  try {
+    let closeReason = "";
+    await new Promise<void>((resolve) => {
+      const ws = new WebSocket(authedEndpoint(port, "codex"));
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1 } }));
+      };
+      ws.onclose = (ev) => {
+        closeReason = ev.reason;
+        resolve();
+      };
+      ws.onerror = () => resolve();
+    });
+
+    const exitLog = loggedErrors.find((l) => l.includes("adapter for harness \"codex\" exited"));
+    assert(exitLog, `Expected exit log in logged errors, got: ${JSON.stringify(loggedErrors)}`);
+    assert(
+      exitLog.includes("stderr suppressed after unterminated OSC (4 lines dropped)"),
+      `Expected exit log to report suppressed diagnostics, got: ${exitLog}`,
+    );
+    assert(
+      closeReason.includes("stderr suppressed after unterminated OSC (4 lines dropped)"),
+      `Expected close reason to report suppressed diagnostics, got: "${closeReason}"`,
+    );
+  } finally {
+    console.error = originalConsoleError;
+    await server.shutdown();
+  }
+});
+
+Deno.test("acp-bridge refuses unterminated OSC 52 clipboard payload in real adapter stderr stream even when matching diagnostic allowlist (Finding vpo4n)", async () => {
+  const dir = durableDir("acp-logging-osc52-refusal");
+  const adapterPath = `${dir}/adapter-osc52-mock.mjs`;
+
+  Deno.writeTextFileSync(
+    adapterPath,
+    `import readline from "node:readline";
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", async (line) => {
+  try {
+    const msg = JSON.parse(line);
+    if (msg.method === "initialize") {
+      process.stderr.write("\\u001b]52;c;clipboard-data\\nAPI_KEY=sk-ant-SECRET-CANARY\\nERROR: spoofed diagnostic from untrusted payload\\n");
+      setTimeout(() => process.exit(1), 50);
+    }
+  } catch {}
+});
+`,
+  );
+
+  const loggedErrors: string[] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    loggedErrors.push(args.map(String).join(" "));
+  };
+
+  const server = createAcpServer(0, adapterPath, {}, undefined, TEST_BRIDGE_TOKEN);
+  const port = (server as any).addr.port;
+
+  try {
+    let closeReason = "";
+    await new Promise<void>((resolve) => {
+      const ws = new WebSocket(authedEndpoint(port, "codex"));
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1 } }));
+      };
+      ws.onclose = (ev) => {
+        closeReason = ev.reason;
+        resolve();
+      };
+      ws.onerror = () => resolve();
+    });
+
+    // 1. Verify unverified OSC 52 payload lines NEVER reached console.error or [adapter-stderr]
+    assert(!loggedErrors.some((l) => l.includes("SECRET-CANARY")), `Canary leaked into stderr logs: ${JSON.stringify(loggedErrors)}`);
+    assert(!loggedErrors.some((l) => l.includes("spoofed diagnostic")), `Spoofed diagnostic leaked into stderr logs: ${JSON.stringify(loggedErrors)}`);
+
+    // 2. Verify unverified OSC 52 payload lines NEVER reached WebSocket close reason
+    assert(!closeReason.includes("SECRET-CANARY"), `Canary leaked into close reason: "${closeReason}"`);
+    assert(!closeReason.includes("spoofed diagnostic"), `Spoofed diagnostic leaked into close reason: "${closeReason}"`);
+
+    // 3. Verify exit diagnostic cleanly notes suppressed stderr lines
+    const exitLog = loggedErrors.find((l) => l.includes("adapter for harness \"codex\" exited"));
+    assert(exitLog, `Expected exit log in logged errors, got: ${JSON.stringify(loggedErrors)}`);
+    assert(
+      exitLog.includes("stderr suppressed after unterminated OSC (3 lines dropped)"),
+      `Expected exit log to report suppressed diagnostics, got: ${exitLog}`,
+    );
+    assert(
+      closeReason.includes("stderr suppressed after unterminated OSC (3 lines dropped)"),
+      `Expected close reason to report suppressed diagnostics, got: "${closeReason}"`,
+    );
+  } finally {
+    console.error = originalConsoleError;
+    await server.shutdown();
+  }
+});
+
+Deno.test("acp-bridge refuses unterminated title OSC payload in real adapter stderr stream even when matching diagnostic allowlist (Finding vpo4n)", async () => {
+  const dir = durableDir("acp-logging-title-refusal");
+  const adapterPath = `${dir}/adapter-title-refusal-mock.mjs`;
+
+  Deno.writeTextFileSync(
+    adapterPath,
+    `import readline from "node:readline";
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  try {
+    const msg = JSON.parse(line);
+    if (msg.method === "initialize") {
+      process.stderr.write("\\u001b]0;UNTERMINATED_TITLE\\nAPI_KEY=sk-ant-TITLE-INTEGRATION-CANARY\\nERROR: forged integration diagnostic\\n");
+      setTimeout(() => process.exit(17), 50);
+    }
+  } catch {}
+});
+`,
+  );
+
+  const loggedErrors: string[] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    loggedErrors.push(args.map(String).join(" "));
+  };
+
+  const server = createAcpServer(0, adapterPath, {}, undefined, TEST_BRIDGE_TOKEN);
+  const port = (server as any).addr.port;
+
+  try {
+    let closeReason = "";
+    await new Promise<void>((resolve) => {
+      const ws = new WebSocket(authedEndpoint(port, "codex"));
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1 } }));
+      };
+      ws.onclose = (ev) => {
+        closeReason = ev.reason;
+        resolve();
+      };
+      ws.onerror = () => resolve();
+    });
+
+    // 1. Verify unverified title OSC payload lines NEVER reached console.error or [adapter-stderr]
+    assert(!loggedErrors.some((l) => l.includes("TITLE-INTEGRATION-CANARY")), `Canary leaked into stderr logs: ${JSON.stringify(loggedErrors)}`);
+    assert(!loggedErrors.some((l) => l.includes("forged integration diagnostic")), `Forged diagnostic leaked into stderr logs: ${JSON.stringify(loggedErrors)}`);
+    assert(!loggedErrors.some((l) => l.includes("UNTERMINATED_TITLE")), `Title leaked into stderr logs: ${JSON.stringify(loggedErrors)}`);
+
+    // 2. Verify unverified title OSC payload lines NEVER reached WebSocket close reason
+    assert(!closeReason.includes("TITLE-INTEGRATION-CANARY"), `Canary leaked into close reason: "${closeReason}"`);
+    assert(!closeReason.includes("forged integration diagnostic"), `Forged diagnostic leaked into close reason: "${closeReason}"`);
+    assert(!closeReason.includes("UNTERMINATED_TITLE"), `Title leaked into close reason: "${closeReason}"`);
+
+    // 3. Verify exit diagnostic cleanly notes suppressed stderr lines
+    const exitLog = loggedErrors.find((l) => l.includes("adapter for harness \"codex\" exited"));
+    assert(exitLog, `Expected exit log in logged errors, got: ${JSON.stringify(loggedErrors)}`);
+    assert(
+      exitLog.includes("stderr suppressed after unterminated OSC (3 lines dropped)"),
+      `Expected exit log to report suppressed diagnostics, got: ${exitLog}`,
+    );
+    assert(
+      closeReason.includes("stderr suppressed after unterminated OSC (3 lines dropped)"),
+      `Expected close reason to report suppressed diagnostics, got: "${closeReason}"`,
+    );
+  } finally {
+    console.error = originalConsoleError;
     await server.shutdown();
   }
 });
