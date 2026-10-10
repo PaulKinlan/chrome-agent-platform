@@ -157,6 +157,7 @@ export async function waitForAppReady(
   const deadline = Date.now() + timeoutMs;
   const start = Date.now();
   let lastProbe: any = null;
+  let lastTimeoutError: Error | null = null;
 
   while (Date.now() < deadline) {
     const remainingMs = deadline - Date.now();
@@ -164,18 +165,20 @@ export async function waitForAppReady(
     const probeLimit = Math.min(remainingMs, options.probeTimeoutMs ?? 2000);
 
     let probeTimer: any;
+    let localProbeTimeoutError: Error | null = null;
     try {
       const probe = await Promise.race([
         evaluate(expr),
         new Promise((_, reject) => {
-          probeTimer = setTimeout(
-            () => reject(new Error(`probe evaluation timed out after ${probeLimit}ms${surface}`)),
-            probeLimit,
-          );
+          probeTimer = setTimeout(() => {
+            localProbeTimeoutError = new Error(`probe evaluation timed out after ${probeLimit}ms${surface}`);
+            reject(localProbeTimeoutError);
+          }, probeLimit);
         }),
       ]);
       clearTimeout(probeTimer);
       lastProbe = probe;
+      lastTimeoutError = null;
       if (Date.now() <= deadline && probe && typeof probe === "object" && probe.ready === true) {
         return {
           ready: true,
@@ -183,16 +186,24 @@ export async function waitForAppReady(
           elapsedMs: Date.now() - start,
         };
       }
-    } catch (e) {
+    } catch (e: any) {
       clearTimeout(probeTimer);
-      if (isTransportOrEvaluateTimeoutError(e)) {
+      if (localProbeTimeoutError && e === localProbeTimeoutError) {
+        lastTimeoutError = e;
+        lastProbe = { error: String(e) };
+      } else if (isTransportOrEvaluateTimeoutError(e)) {
         throw e;
+      } else {
+        lastTimeoutError = null;
+        lastProbe = { error: String(e) };
       }
-      lastProbe = { error: String(e) };
     }
     await new Promise((r) => setTimeout(r, pollIntervalMs));
   }
 
+  if (lastTimeoutError) {
+    throw lastTimeoutError;
+  }
   const detail = lastProbe ? ` (last probe: ${JSON.stringify(lastProbe)})` : "";
   throw new Error(`${APP_NEVER_BECAME_READY}${surface} within ${timeoutMs}ms${detail}`);
 }
