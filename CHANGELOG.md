@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.631] — 2026-10-10
+- Keep agent tasks starting reliably while a page is still loading, and fix a rare crash when the WebAssembly host starts.
+
 ## [0.3.630] — 2026-10-10
 - Support bracketed URLs and titles (e.g. Wikipedia /wiki/Foo_[bar], IPv6 hosts, bracketed titles) in site documentation link extraction.
 
