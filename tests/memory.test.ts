@@ -803,6 +803,84 @@ Deno.test("pre-head cutover residue refuses master readers and writes without le
   }
 });
 
+Deno.test("staged master clear preserves WAL authority and generation while product clear stays OFF", async () => {
+  const isolated = dirNode();
+  const previousNavigator = globalThis.navigator;
+  Object.defineProperty(globalThis, "navigator", {
+    value: { storage: { async getDirectory() { return new FakeDirHandle(isolated); } } },
+    configurable: true, writable: true,
+  });
+  try {
+    const api = await import("../extension/lib/memory.js");
+    const mem = api.masterMemory();
+    await mem.setTrusted("owner-key", { untouched: false });
+    await mem.setTrusted("journal", [{ type: "task", id: "before" }]);
+    await api.withMasterJournalIssuer(async (master, issuer) => {
+      await stageMasterJournalCutover(master, { journalExists: true,
+        journal: [{ type: "task", id: "before" }], archive: [{ type: "evicted", id: "history" }],
+        allocateVersion: issuer.allocateVersion });
+    });
+    const before = await withStoreTransaction(mem, async (tx) => await tx.masterJournal.head());
+    assertEquals((await mem.get("journal-archive"))[0]?.id, "history");
+    await assertRejects(() => mem.clear(), Error, "WAL writer is not enabled",
+      "a published test head must not silently enable the product clear path");
+    generationWriteGate = async () => { throw new Error("injected clear issuance failure"); };
+    try {
+      await assertRejects(() => withStoreTransaction(mem, async (tx) =>
+        tx.masterJournal.clearIfCurrent({ expectedEpoch: before.epoch, expectedVersion: before.version })),
+      Error, "injected clear issuance failure");
+    } finally { generationWriteGate = null; }
+    assertEquals(await mem.get("owner-key"), { untouched: false },
+      "failed frame publication cannot remove unrelated master keys");
+    assertEquals(await withStoreTransaction(mem, async (tx) => tx.masterJournal.head()), before);
+    const cleared = await withStoreTransaction(mem, async (tx) => await tx.masterJournal.clearIfCurrent({
+      expectedEpoch: before.epoch, expectedVersion: before.version,
+    }));
+    assertEquals(cleared.ok, true);
+    assertEquals(cleared.head.sequence, before.sequence + 1);
+    assertEquals(await mem.has("journal"), false);
+    assertEquals(await mem.has("journal-archive"), false);
+    assertEquals(await mem.get("owner-key"), null);
+    assert((await mem.getVersion("owner-key")) > cleared.head.version,
+      "owner key gets a fresh tombstone after WAL clear, not a reused generation");
+    const after = await withStoreTransaction(mem, async (tx) => await tx.masterJournal.head());
+    assertEquals(after, cleared.head, "the checked WAL authority remains published");
+    const stale = await withStoreTransaction(mem, async (tx) => await tx.masterJournal.clearIfCurrent({
+      expectedEpoch: before.epoch, expectedVersion: before.version,
+    }));
+    assertEquals(stale.ok, false, "an old head cannot clear a newer generation");
+    assertEquals(await withStoreTransaction(mem, async (tx) => await tx.masterJournal.head()), after);
+    await mem.setTrusted("owner-after", { keepUntilConfirmed: true });
+    const masterNode = isolated.children.get("memory").children.get("master");
+    const originalRemove = FakeDirHandle.prototype.removeEntry;
+    FakeDirHandle.prototype.removeEntry = async function (name, opts) {
+      if (this.node === masterNode && name === "owner-after.json") {
+        throw new Error("injected owner-key delete failure");
+      }
+      return await originalRemove.call(this, name, opts);
+    };
+    try {
+      await assertRejects(() => withStoreTransaction(mem, async (tx) =>
+        tx.masterJournal.clearIfCurrent({ expectedEpoch: after.epoch, expectedVersion: after.version })),
+      Error, "injected owner-key delete failure");
+    } finally { FakeDirHandle.prototype.removeEntry = originalRemove; }
+    const partial = await withStoreTransaction(mem, async (tx) => tx.masterJournal.head());
+    assertEquals(partial.sequence, after.sequence + 1,
+      "a published clear frame is not rolled back when a later key removal fails");
+    assertEquals(await mem.get("owner-after"), { keepUntilConfirmed: true },
+      "the failed owner deletion is reported, not mislabelled as an acknowledged clear");
+    const repaired = await withStoreTransaction(mem, async (tx) => tx.masterJournal.clearIfCurrent({
+      expectedEpoch: partial.epoch, expectedVersion: partial.version,
+    }));
+    assertEquals(repaired.ok, true, "an explicit retry at the new head can finish the partial clear");
+    assertEquals(await mem.get("owner-after"), null);
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      value: previousNavigator, configurable: true, writable: true,
+    });
+  }
+});
+
 Deno.test("staged master transaction exposes WAL verbs without re-entering the master lock", async () => {
   const isolated = dirNode();
   const previousNavigator = globalThis.navigator;

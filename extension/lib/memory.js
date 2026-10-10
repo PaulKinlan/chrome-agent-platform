@@ -1057,11 +1057,43 @@ export async function withStoreTransaction(store, fn) {
   return await fn(store);
 }
 
-/** A single origin-scoped store. `origin` is a canonical origin string or "master". */
-/** The shared store body: a path + a label, with the origin/master reserved-key
- * semantics. `memoryStore` (master + site origins) and `namedAgentMemory`
- * (named agents) both build their store through here so every store gets the
- * same bounds, version tokens, and CAS semantics. */
+// Caller already holds this store's write mutex. The ordinary master clear
+// still REFUSES on a WAL head; only the staged tx verb can call this with
+// preserveWal after publishing a checked clear-reset frame.
+async function clearStoreDirectory(dir, { preserveWal = false, strictRemovals = false } = {}) {
+  const genRaw = await readJsonStrict(dir, GEN_FILE, { allowAbsent: true });
+  if (genRaw !== null && (!Number.isSafeInteger(genRaw.gen) || genRaw.gen < 0)) {
+    throw new Error("the durable generation authority is corrupt");
+  }
+  const removedKeys = [];
+  for await (const [name] of dir.entries()) {
+    if (name === GEN_FILE || name === TOMBS_FILE || name === "__epoch.json" ||
+        (preserveWal && name === "journal-wal")) continue;
+    if (name.endsWith(".json")) {
+      const key = name.slice(0, -5);
+      if (!INTERNAL_KEY_RE.test(key)) removedKeys.push(key);
+    }
+    try { await removeTracked(dir, name, { recursive: true }); }
+    catch (error) {
+      // Legacy clear preserves its historical best-effort cleanup. A staged
+      // WAL clear must never ACK a partial profile deletion as successful.
+      if (strictRemovals) throw error;
+    }
+  }
+  const tombs = await readTombs(dir);
+  for (const key of removedKeys) {
+    const deletedGen = await issueVersion(dir);
+    tombs.map.set(key, deletedGen);
+  }
+  await writeTombs(dir, tombs);
+  if (genRaw && typeof genRaw.gen === "number") {
+    await writeJson(dir, "__epoch.json", { gen: genRaw.gen });
+  }
+}
+
+/** A single origin-scoped store. `origin` is a canonical origin string or "master".
+ * `memoryStore` (master + site origins) and `namedAgentMemory` both build the
+ * same path-scoped body so they share bounds, version tokens and CAS semantics. */
 function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
   const store = {
     isMaster,
@@ -1208,36 +1240,9 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
         if (isMaster && await readMasterJournalHead(dir)) {
           throw new Error("master journal WAL writer is not enabled; master clear refused");
         }
-        // Another extension realm can advance __gen while this realm retains
-        // a cached token. Clear must preserve the real durable epoch; a corrupt
-        // authority cannot be treated as absent and reset to an older value.
-        const genRaw = await readJsonStrict(dir, GEN_FILE, { allowAbsent: true });
-        if (genRaw !== null && (!Number.isSafeInteger(genRaw.gen) || genRaw.gen < 0)) {
-          throw new Error("the durable generation authority is corrupt");
-        }
-        const removedKeys = [];
-        for await (const [name] of dir.entries()) {
-          if (name === GEN_FILE || name === TOMBS_FILE || name === "__epoch.json") continue;
-          if (name.endsWith(".json")) {
-            const key = name.slice(0, -5);
-            if (!INTERNAL_KEY_RE.test(key)) removedKeys.push(key);
-          }
-          try {
-            await removeTracked(dir, name, { recursive: true });
-          } catch { /* absent */ }
-        }
-        // Every removed logical value gets a tombstone. Legacy `.version`
-        // sidecars and internal transaction files are removed but never exposed
-        // as user keys in the new authority.
-        const tombs = await readTombs(dir);
-        for (const key of removedKeys) {
-          const deletedGen = await issueVersion(dir);
-          tombs.map.set(key, deletedGen);
-        }
-        await writeTombs(dir, tombs);
-        if (genRaw && typeof genRaw.gen === "number") {
-          await writeJson(dir, "__epoch.json", { gen: genRaw.gen });
-        }
+        // The generation authority and per-key tombstones survive. The
+        // product path still refuses on a WAL head; no writer is enabled here.
+        await clearStoreDirectory(dir);
       });
     },
   };
@@ -1315,6 +1320,26 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
         const { master, issuer } = await authority();
         return await stageMasterJournalFrame(master, operation,
           { ...issuer, expectedEpoch, expectedVersion });
+      }),
+      // Staged only. A clear-reset frame publishes first so a failed frame
+      // cannot delete unrelated master keys. The WAL directory and __gen must
+      // survive later key tombstoning. This is journal authority consistency,
+      // NOT a whole-profile point-in-time atomic clear on interruption.
+      clearIfCurrent: ordered(async ({ expectedEpoch, expectedVersion } = {}) => {
+        if (!Number.isSafeInteger(expectedEpoch) || expectedEpoch < 1 ||
+            !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+          throw new Error("master journal clear requires exact epoch and version");
+        }
+        const { master, issuer } = await authority();
+        const before = await readMasterJournalHead(master);
+        if (!before) throw new Error("master journal clear requires a published head");
+        if (before.epoch !== expectedEpoch || before.version !== expectedVersion) {
+          return { ok: false, reason: "stale_master_journal_head" };
+        }
+        const head = await stageMasterJournalFrame(master, { operation: "clear" },
+          { ...issuer, expectedEpoch, expectedVersion });
+        await clearStoreDirectory(master, { preserveWal: true, strictRemovals: true });
+        return { ok: true, head };
       }),
       append: ordered(async (entry, { guard = null, idempotencyExecutionId = null } = {}) => {
         const { master, issuer } = await authority();

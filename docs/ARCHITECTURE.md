@@ -583,7 +583,11 @@ is not a product write route and does not enable cutover. Master store
 transactions also expose staged receipt/compensation/cancellation WAL verbs
 using the lock they already hold; they never nest a second Web Lock. Staged
 `frameIfCurrent` prepares exact-epoch/version-checked replace/delete/clear
-frames for future direct store routes. Staged `append` shares the same pre/post-
+frames for future direct store routes. The separate staged `clearIfCurrent`
+checks the same head tokens, publishes a clear-reset frame first, then removes
+non-WAL master keys with fresh tombstones while retaining `journal-wal/` and
+`__gen.json`; interruption is not a whole-profile atomic clear. Product
+`masterMemory().clear()` still refuses on a WAL head. Staged `append` shares the same pre/post-
 guard publication and live undo as receipt append without inventing an
 execution ID for ordinary rows; exact replay identity is optional and checked
 when supplied. Neither is invoked by a product journal writer while the
