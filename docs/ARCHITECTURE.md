@@ -658,6 +658,12 @@ The frame grammar still needs exact receipt, CAS and cancellation evidence
 before enabling mutation; physical power-loss
 recovery, real Chrome cross-context proof and safe on-disk retirement also
 remain outstanding.
+Generic model-facing `memory.set` can no longer replace master `journal` or
+`journal-archive`, including on legacy profiles: both are reserved authority
+keys. A product caller census found no legitimate literal `.set("journal")`
+or `.set("journal-archive")` call; trusted append and compensation use
+`setTrusted` and dedicated verbs. This user-visible tightening does not
+implicitly enable the WAL writer or create a generic model WAL replace route.
 Before a checked head exists, legacy `journal.json` remains authoritative.
 After a checked cutover (including a restored WAL bundle), master journal and
 archive reads, snapshots, versions and key enumeration use its projection;

@@ -284,6 +284,10 @@ const ENROLL_KEY = "cap:enrollment";
 // forged `threads` index could be written through `masterMemory().set` and
 // `listThreads()` returned it. Internal thread code uses `setTrusted`.
 const MASTER_RESERVED_KEYS = new Set([
+  // A generic model-facing memory.set must not replace WAL or legacy master
+  // history. Trusted append/receipt/cancellation routes own these keys.
+  "journal",
+  "journal-archive",
   "origins",
   "enrolled",
   "assets",

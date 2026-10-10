@@ -157,6 +157,18 @@ Deno.test("memory.has distinguishes a stored null from an absent key (round-22 n
   assertEquals(await mem.has(key), false, "deleted key must report has=false");
 });
 
+Deno.test("generic master memory cannot forge journal or archive while trusted append remains available", async () => {
+  const mem = masterMemory();
+  for (const key of ["journal", "journal-archive"]) {
+    await assertRejects(() => mem.set(key, [{ type: "forged" }]), Error, "reserved");
+  }
+  const site = siteMemory("https://journal-reservation.example");
+  await assertRejects(() => site.set("journal", [{ type: "forged" }]), Error, "reserved");
+  const legacy = await journalAppend(mem, { type: "note", message: "trusted route" });
+  assertEquals(legacy.at(-1).message, "trusted route",
+    "the generic master restriction must not disable the trusted legacy append before cutover");
+});
+
 Deno.test("master writes share the journal Web Lock; site stores keep their own lock", async () => {
   const previous = navigator.locks;
   const names = [];
@@ -451,7 +463,8 @@ Deno.test("master journal readers use a checked cutover rather than stale legacy
     await assertRejects(() => journalCommitCancellation(mem,
       { type: "cancelled", executionId: "wal-off" }, "wal-off"), Error, "cancellation refused");
     await assertRejects(() => mem.setTrusted("journal", [{ id: "must-not-shadow-wal" }]), Error, "WAL");
-    await assertRejects(() => mem.set("journal", [{ id: "untrusted-shadow" }]), Error, "WAL");
+    await assertRejects(() => mem.set("journal", [{ id: "untrusted-shadow" }]), Error, "reserved");
+    await assertRejects(() => mem.set("journal-archive", []), Error, "reserved");
     await assertRejects(() => mem.setTrusted("journal-archive", []), Error, "WAL");
     await assertRejects(() => mem.compareAndRestore("journal", legacyVersion + 1, []), Error, "WAL");
     await assertRejects(() => mem.compareAndDelete("journal", legacyVersion + 1), Error, "WAL");
