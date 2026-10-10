@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.665] — 2026-10-10
+- Fail closed on browser tab focus failures during task automation
+
 ## [0.3.664] — 2026-10-10
 - Report unknown presence status for registry packages in ACP bridge health checks
 
