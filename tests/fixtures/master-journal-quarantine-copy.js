@@ -1,9 +1,10 @@
-// TEST/OWNER-REPAIR STAGING ONLY. Never imported by a product route. The caller
-// must hold the master journal Web Lock and admission/restore fence; this helper
-// neither obtains owner approval nor publishes a head or enables backup export.
-// It makes an append-only byte-for-byte OPFS evidence copy. Original bytes stay.
-import { deriveMasterJournalQuarantineManifest } from "./master-journal-quarantine-manifest.js";
-import { unsealMasterJournalRecord } from "./master-journal-wal.js";
+// TEST FIXTURE ONLY. This is intentionally outside extension/lib: no product
+// byte-copy or export of quarantined raw evidence is allowed before Paul rules
+// the arbitrary-secrets export policy. The caller's test must model the master
+// Web Lock and admission/restore fence; this fixture does not obtain approval,
+// publish a head or authorize backup. Original source bytes stay untouched.
+import { deriveMasterJournalQuarantineManifest } from "../../extension/lib/master-journal-quarantine-manifest.js";
+import { unsealMasterJournalRecord } from "../../extension/lib/master-journal-wal.js";
 
 const MAX_INTENT_BYTES = 64 * 1024;
 const MAX_SOURCE_BYTES = 32 * 1024 * 1024;

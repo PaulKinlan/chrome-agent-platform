@@ -662,16 +662,14 @@ maps the checked requested names/digests to collision-resistant immutable
 quarantine leaf names and a manifest hash; it copies no bytes. A witness with
 ANY requested leaves remains fail-closed even under an exact-ID signed head
 until checked quarantine copies, head binding and backup retention are
-implemented together. The test/owner-repair-only `stageMasterJournalQuarantineCopy`
-can preserve source-equal raw bytes under deterministic immutable WAL-root names:
-it readback-checks the copy, leaves the source untouched, allows only an exact
-completed retry, and refuses a torn destination without overwriting it. It does
-NOT acquire admission/approval or publish a head. The read-only
-`inspectMasterJournalQuarantineRetentionForOwner` checks the exact witness chain,
-all copied byte digests and unbound quarantine leaves within explicit count/byte
-limits; its digest is only forensic evidence, not a permit. Backup export/import
-still refuse quarantine until a checked head binds retention and export privacy
-policy is settled.
+implemented together. The **test fixture** in
+`tests/fixtures/master-journal-quarantine-copy.js` models an append-only
+source-equal raw copy and a bounded read-only retention inspection, including
+torn-copy retry refusal and unbound-leaf detection. This fixture is deliberately
+outside the extension: it cannot be imported by a product route without a
+visible new product change. No real owner publisher or product byte-copy/export
+exists. Backup export/import still refuse quarantine; Paul's arbitrary-secrets
+export policy must be ruled before any production quarantine byte-copy path.
 Witnesses remain append-only (bounded to 32 per profile). The exact intent
 leaf grammar now participates in backup export/import: both head slots retain
 their own witness-prefix dependencies, a pending newer OR skipped orphan

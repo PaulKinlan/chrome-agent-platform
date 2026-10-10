@@ -14,7 +14,7 @@ import { collectMasterJournalRepairEvidenceInventory } from "../extension/lib/ma
 import {
   inspectMasterJournalQuarantineRetentionForOwner,
   stageMasterJournalQuarantineCopy,
-} from "../extension/lib/master-journal-quarantine-copy.js";
+} from "./fixtures/master-journal-quarantine-copy.js";
 import {
   selectPublishedMasterJournalBackupPaths,
   validateStagedMasterJournalBackup,
