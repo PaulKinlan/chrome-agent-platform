@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.666] — 2026-10-10
+- Fail closed on browser tab focus failures during hub task automation
+
 ## [0.3.665] — 2026-10-10
 - Fail closed on browser tab focus failures during task automation
 
