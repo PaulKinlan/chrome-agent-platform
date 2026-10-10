@@ -404,14 +404,12 @@ export class StderrSanitizer {
   private inEsc = false;
   private lineBuffer = "";
   private hasOscLineContent = false;
-  public inOscDiscardOnly = false;
   public unterminatedOscSeen = false;
   public droppedLinesCount = 0;
 
   private resetOsc(): void {
     this.inOsc = false;
     this.inOscEsc = false;
-    this.inOscDiscardOnly = false;
     this.hasOscLineContent = false;
   }
 
@@ -479,7 +477,6 @@ export class StderrSanitizer {
         }
         if (char === "\n") {
           // Newline inside OSC: track as potential dropped lines if unterminated
-          this.inOscDiscardOnly = true;
           this.droppedLinesCount++;
           this.hasOscLineContent = false;
           continue;
