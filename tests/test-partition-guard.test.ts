@@ -451,6 +451,7 @@ Deno.test("partition guard: isReviewedReadOnlySpawn requires anchored executable
 const WALL_CLOCK_FLAKE_SERIAL = [
   "tests/serial-phase-timeout.test.ts", // 3vi7 + cihz: declared 5000 ms work vs 4000 ms flat / 12000 ms scaled bounds
   "tests/chrome-slot-semaphore-honesty.test.ts", // mee3: 1.5 s skip bound vs 2 s marker window
+  "tests/ntp-boot-staging.test.ts", // jdgjy: median-long-task(0)/stage1-composer(<150ms) boot assertions race the parallel phase
 ];
 
 Deno.test("partition guard: reviewed wall-clock flake declarations are pinned by name", () => {
