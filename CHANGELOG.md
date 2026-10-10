@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.647] — 2026-10-10
+- Sanitise control characters in ACP bridge logging so terminal escapes cannot forge log lines.
+
 ## [0.3.646] — 2026-10-10
 - Keep the security suite's own checks from failing spuriously on a busier machine.
 
