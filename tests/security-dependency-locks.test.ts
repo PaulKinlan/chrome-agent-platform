@@ -23,16 +23,37 @@ Deno.test("lf9xe / 7jv95: Deno and npm agree on an advisory-patched fast-uri tar
     "Deno ships the npm-locked patched version and the same verified tarball, not an older .deno copy");
 });
 
-Deno.test("7jv95 falsification: isPatchedFastUriVersion rejects vulnerable 3.1.7 and earlier versions", () => {
-  // GHSA-hrr3-gc8f-f4qj makes 3.1.7 vulnerable to host-normalization confusion
+Deno.test("7jv95 / vb4c4 falsification: isPatchedFastUriVersion accepts advisory-patched lines and rejects vulnerable/unsupported versions", () => {
+  // Advisory GHSA-hrr3-gc8f-f4qj (CVE-2026-86472) fixed lines:
+  // 1. Accepted: patched versions on supported lines (2.x, 3.x, 4.x)
+  assertEquals(isPatchedFastUriVersion("2.4.7"), true, "2.4.7 is patched under GHSA-hrr3-gc8f-f4qj");
+  assertEquals(isPatchedFastUriVersion("2.4.8"), true, "2.4.8+ is patched");
+  assertEquals(isPatchedFastUriVersion("2.5.0"), true, "2.5.0+ is patched");
+  assertEquals(isPatchedFastUriVersion("3.1.8"), true, "3.1.8 is patched");
+  assertEquals(isPatchedFastUriVersion("3.1.9"), true, "3.1.9+ is patched");
+  assertEquals(isPatchedFastUriVersion("3.2.0"), true, "3.2.0+ is patched");
+  assertEquals(isPatchedFastUriVersion("4.1.5"), true, "4.1.5 is patched under GHSA-hrr3-gc8f-f4qj");
+  assertEquals(isPatchedFastUriVersion("4.1.6"), true, "4.1.6+ is patched");
+  assertEquals(isPatchedFastUriVersion("4.2.0"), true, "4.2.0+ is patched");
+
+  // 2. Refused: vulnerable versions immediately prior to patches and earlier
+  assertEquals(isPatchedFastUriVersion("2.4.6"), false, "2.4.6 must be rejected (< 2.4.7 affected)");
+  assertEquals(isPatchedFastUriVersion("2.3.9"), false, "2.3.9 must be rejected (< 2.4.7 affected)");
   assertEquals(isPatchedFastUriVersion("3.1.7"), false, "3.1.7 must be rejected under GHSA-hrr3-gc8f-f4qj");
   assertEquals(isPatchedFastUriVersion("3.1.6"), false, "3.1.6 must be rejected under GHSA-58mr-gqgx-xq4g");
   assertEquals(isPatchedFastUriVersion("3.1.5"), false, "3.1.5 must be rejected under GHSA-qw65-cvwx-89v3");
   assertEquals(isPatchedFastUriVersion("3.0.0"), false, "3.0.0 must be rejected");
-  assertEquals(isPatchedFastUriVersion("2.4.7"), false, "2.x line must be rejected");
-  assertEquals(isPatchedFastUriVersion("3.1.8"), true, "3.1.8 is patched");
-  assertEquals(isPatchedFastUriVersion("3.1.9"), true, "3.1.9+ is patched");
-  assertEquals(isPatchedFastUriVersion("3.2.0"), true, "3.2.0+ is patched");
+  assertEquals(isPatchedFastUriVersion("4.1.4"), false, "4.1.4 must be rejected (>=4.0.0 <4.1.5 affected)");
+  assertEquals(isPatchedFastUriVersion("4.0.0"), false, "4.0.0 must be rejected");
+
+  // 3. Fail-closed: prereleases, non-semver, unknown majors
+  assertEquals(isPatchedFastUriVersion("1.0.0"), false, "1.x must be rejected (fail-closed)");
+  assertEquals(isPatchedFastUriVersion("5.0.0"), false, "unknown major 5.x must fail closed");
+  assertEquals(isPatchedFastUriVersion("3.1.8-alpha.1"), false, "prereleases must fail closed");
+  assertEquals(isPatchedFastUriVersion("4.1.5-beta"), false, "prereleases must fail closed");
+  assertEquals(isPatchedFastUriVersion(""), false, "empty string must fail closed");
+  assertEquals(isPatchedFastUriVersion(null), false, "null must fail closed");
+  assertEquals(isPatchedFastUriVersion(undefined), false, "undefined must fail closed");
 });
 
 Deno.test("im9q8: MCP SDK resolution matches the npm runtime lock in every Deno peer context", () => {

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.662] — 2026-10-10
+- Accept advisory-patched security releases across supported dependency lines
+
 ## [0.3.661] — 2026-10-10
 - Prevent premature model ID commit and option navigation during IME text composition in model picker combobox
 
