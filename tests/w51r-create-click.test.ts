@@ -7,6 +7,7 @@ import { launchChrome, openCdp, resolveChromiumBinaryReport, teardownChrome } fr
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
 import { isUsableBinary } from "../scripts/lib/browser-refusal.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
+import { waitForAppReady } from "../scripts/lib/app-readiness.ts";
 
 const EXT = fileURLToPath(new URL("../extension/", import.meta.url)).replace(/\/$/, "");
 const RESOLUTION = resolveChromiumBinaryReport();
@@ -60,6 +61,14 @@ Deno.test({
     const profile = chromeProfileDir("w51r-create-click");
     const evidence = durableDir("w51r-create-click", `${Date.now()}-${Deno.pid}`);
     await Deno.mkdir(evidence, { recursive: true });
+    // rbd84: under concurrent suite load (full gate with parallel workers), ambient
+    // CPU contention stretches app hydration and service worker IPC (skill.list /
+    // background-agent.list). Scale timeouts with load average while preserving fast
+    // baselines on idle runs.
+    const [load1] = (typeof Deno?.loadavg === "function" ? Deno.loadavg() : [1]);
+    const loadScale = Math.max(1, Math.min(5, Math.ceil((load1 ?? 1) / 2)));
+    const openTimeoutMs = 12000 * loadScale;
+    const readyTimeoutMs = 10000 * loadScale;
     let chrome, cdp;
     try {
       chrome = await launchChrome({ binary: BINARY!, args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
@@ -70,6 +79,10 @@ Deno.test({
       assert(sw, "the current extension service worker must register");
       const id = new URL(sw.url).host;
       const wide = await cdp.open(`chrome-extension://${id}/ntp/ntp.html`);
+      // Bring tab to front so Chromium routes input events to an active, focused viewport
+      await cdp.send("Page.bringToFront", {}, wide.sessionId).catch(() => {});
+      // Wait for app hydration so staged boot (Stage 1, 2A, 2B) and event listeners settle
+      await waitForAppReady((expr) => cdp!.eval(wide.sessionId, expr), { surfaceName: "NTP Hub", timeoutMs: readyTimeoutMs });
       const state = `(() => { const b=document.getElementById('new-agent'); const h=[...document.querySelectorAll('body > agent-dialog')].find(h=>h.getAttribute('title')==='Create an agent');
         return { ready: document.readyState==='complete', buttonDisplay: b ? getComputedStyle(b).display : null, open: h?.open===true,
           nativeOpen: h?.shadowRoot?.querySelector('dialog')?.open===true, status: document.getElementById('status')?.textContent??null,
@@ -81,10 +94,10 @@ Deno.test({
         do { value = await read(sid); if (predicate(value)) return value; await new Promise((r) => setTimeout(r, 100)); } while (Date.now() < deadline);
         throw new Error(`w51r state did not arrive in ${ms}ms: ${JSON.stringify(value)}`);
       };
-      await waitFor(wide.sessionId, (s) => s.ready && s.buttonDisplay !== null);
+      await waitFor(wide.sessionId, (s) => s.ready && s.buttonDisplay !== null, readyTimeoutMs);
       await cdp.eval(wide.sessionId, `document.addEventListener('click', e => { if (e.composedPath().includes(document.getElementById('new-agent'))) window.__w51rClicks=(window.__w51rClicks||0)+1 }, true); true`);
-      await clickVisibleCreateAgent(cdp, wide.sessionId, (expr) => cdp!.eval(wide.sessionId, expr));
-      const opened = await waitFor(wide.sessionId, (s) => s.open, 12000);
+      await clickVisibleCreateAgent(cdp, wide.sessionId, (expr) => cdp!.eval(wide.sessionId, expr), { waitForReady: true, timeoutMs: readyTimeoutMs });
+      const opened = await waitFor(wide.sessionId, (s) => s.open, openTimeoutMs);
       assertEquals(opened.nativeOpen, true, "the actual shadow-root dialog must be open");
       assertEquals(opened.clicks, 1, "the real mouse event must reach #new-agent once");
       const image = await cdp.screenshot(wide.sessionId, { fromSurface: false, timeoutMs: 6000 });
@@ -92,9 +105,10 @@ Deno.test({
       await Deno.writeFile(`${evidence}/wide-open.png`, image);
 
       const narrow = await cdp.open("about:blank");
+      await cdp.send("Page.bringToFront", {}, narrow.sessionId).catch(() => {});
       await cdp.send("Emulation.setDeviceMetricsOverride", { width: 500, height: 900, deviceScaleFactor: 1, mobile: false }, narrow.sessionId);
       await cdp.send("Page.navigate", { url: `chrome-extension://${id}/ntp/ntp.html` }, narrow.sessionId);
-      await waitFor(narrow.sessionId, (s) => s.ready && s.buttonDisplay === "none");
+      await waitFor(narrow.sessionId, (s) => s.ready && s.buttonDisplay === "none", readyTimeoutMs);
       await cdp.eval(narrow.sessionId, `document.addEventListener('click', e => { if (e.composedPath().includes(document.getElementById('new-agent'))) window.__w51rClicks=(window.__w51rClicks||0)+1 }, true); true`);
       let refusal: Error | undefined;
       try { await clickVisibleCreateAgent(cdp, narrow.sessionId, (expr) => cdp!.eval(narrow.sessionId, expr)); }
