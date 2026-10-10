@@ -480,6 +480,9 @@ function measureCharacterInspections<T>(
   const origCodePointAt = String.prototype.codePointAt;
   const origAt = String.prototype.at;
   const origLastIndexOf = String.prototype.lastIndexOf;
+  const origSubstring = String.prototype.substring;
+  const origSubstr = (String.prototype as any).substr;
+  const origSlice = String.prototype.slice;
 
   function createTrackedString(rawStr: string, baseOffset = 0): string {
     const target = new String(rawStr);
@@ -521,10 +524,34 @@ function measureCharacterInspections<T>(
             return origLastIndexOf.apply(rawStr, args);
           };
         }
+        if (prop === "substring") {
+          return function (start = 0, end = rawStr.length) {
+            const to = typeof end === "number" ? end : rawStr.length;
+            const low = Math.max(0, Math.min(rawStr.length, Math.min(start, to)));
+            const high = Math.max(0, Math.min(rawStr.length, Math.max(start, to)));
+            if (high > low) {
+              trackIndex(baseOffset + low);
+            }
+            return origSubstring.call(rawStr, start, end);
+          };
+        }
+        if (prop === "substr") {
+          return function (start = 0, length?: number) {
+            const len = typeof length === "number" ? length : rawStr.length;
+            const actualStart = start < 0 ? Math.max(0, rawStr.length + start) : Math.min(rawStr.length, start);
+            if (len > 0 && actualStart < rawStr.length) {
+              trackIndex(baseOffset + actualStart);
+            }
+            return origSubstr ? origSubstr.call(rawStr, start, length) : origSubstring.call(rawStr, start, start + len);
+          };
+        }
         if (prop === "slice") {
           return function (start = 0, end = rawStr.length) {
             const actualStart = start < 0 ? Math.max(0, rawStr.length + start) : Math.min(rawStr.length, start);
             const actualEnd = end < 0 ? Math.max(0, rawStr.length + end) : Math.min(rawStr.length, end);
+            if (actualEnd > actualStart && actualStart < maxIndexSeen && maxIndexSeen >= 0) {
+              trackIndex(baseOffset + actualStart);
+            }
             const sliced = rawStr.slice(start, end);
             return createTrackedString(sliced, baseOffset + actualStart);
           };
@@ -573,6 +600,31 @@ function measureCharacterInspections<T>(
       return origLastIndexOf.apply(this, args);
     };
 
+    String.prototype.substring = function (start: number, end?: number) {
+      if (typeof start === "number") {
+        const to = typeof end === "number" ? end : this.length;
+        const low = Math.max(0, Math.min(this.length, Math.min(start, to)));
+        const high = Math.max(0, Math.min(this.length, Math.max(start, to)));
+        if (high > low) {
+          trackIndex(low);
+        }
+      }
+      return origSubstring.call(this, start, end);
+    };
+
+    if (origSubstr) {
+      (String.prototype as any).substr = function (start: number, length?: number) {
+        if (typeof start === "number") {
+          const len = typeof length === "number" ? length : this.length;
+          const actualStart = start < 0 ? Math.max(0, this.length + start) : Math.min(this.length, start);
+          if (len > 0 && actualStart < this.length) {
+            trackIndex(actualStart);
+          }
+        }
+        return origSubstr.call(this, start, length);
+      };
+    }
+
     const result = fn(createTrackedString);
     return { result, charReads, backwardReads, lastIndexOfCalls };
   } finally {
@@ -581,6 +633,8 @@ function measureCharacterInspections<T>(
     String.prototype.codePointAt = origCodePointAt;
     if (origAt) String.prototype.at = origAt;
     String.prototype.lastIndexOf = origLastIndexOf;
+    String.prototype.substring = origSubstring;
+    if (origSubstr) (String.prototype as any).substr = origSubstr;
   }
 }
 
@@ -751,16 +805,52 @@ function mutantVoya0BracketIndexScan(
   return urls;
 }
 
-Deno.test("uil17 / otqr7 acceptance: independent complexity guard deterministically catches un-bookkept backward-rescan mutants across all access patterns without timing", () => {
-  // Acceptance criterion for chrome-agent-platform-uil17 and chrome-agent-platform-otqr7:
+/**
+ * Mutant F: Reintroduces backward scan via substring(j, j + 1) loop on every closing bracket ']' (0zj6g).
+ */
+function mutantVoya0SubstringScan(
+  text: string,
+  { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS, stats = null }: any = {},
+): string[] {
+  const input = (typeof text === "string" || text instanceof String) ? text.slice(0, maxBytes) : "";
+  const urls: string[] = [];
+  const len = input.length;
+  const openStack: number[] = [];
+
+  for (let i = 0; i < len && urls.length < maxLinks; i++) {
+    if (stats) stats.steps = (stats.steps || 0) + 1;
+    const code = input.charCodeAt(i);
+    if (code === 91 /* [ */) {
+      if (openStack.length < 32) openStack.push(i);
+    } else if (code === 93 /* ] */) {
+      for (let j = i - 1; j >= 0; j--) {
+        if (input.substring(j, j + 1) === "[") break;
+      }
+      const openBracket = openStack.pop();
+      if (openBracket !== undefined && i + 1 < len && input.charCodeAt(i + 1) === 40 /* ( */) {
+        const closeParen = input.indexOf(")", i + 2);
+        if (closeParen === -1) break;
+        i = closeParen;
+        openStack.length = 0;
+      }
+    }
+  }
+  return urls;
+}
+
+Deno.test("uil17 / otqr7 / 0zj6g acceptance: independent complexity guard deterministically catches un-bookkept backward-rescan mutants across indexed and substring access patterns without timing", () => {
+  // Acceptance criterion for chrome-agent-platform-uil17, otqr7, and 0zj6g:
   // Verify that an independent guard observing character inspections fails closed against
-  // un-bookkept backward rescan regressions across all access patterns:
+  // un-bookkept backward rescan regressions across enumerated indexed/sliced access patterns:
   // - lastIndexOf
   // - charCodeAt(j) loop
   // - charAt(j) loop
   // - codePointAt(j) loop
   // - bracket indexing input[j] loop
+  // - substring(j, j + 1) loop
   // without relying on wall-clock timing budgets.
+  // Note on scope honesty (0zj6g): Non-character-indexed string operations (e.g. un-anchored regex
+  // search or split) are not character accessors and are bounded by the execution step and time limits.
   const sampleSize = 1_000;
   const sample = "]".repeat(sampleSize);
   const expectedBackwardReads = (sampleSize * (sampleSize - 1)) / 2;
@@ -830,7 +920,23 @@ Deno.test("uil17 / otqr7 acceptance: independent complexity guard deterministica
   assertEquals(mutantEMeasurement.charReads, sampleSize + expectedBackwardReads, "mutant E total char reads are quadratic");
   assert(mutantEMeasurement.charReads > sample.length, "mutant E violates deterministic linear complexity");
 
-  // Verify that the linear complexity assertions fail closed on ALL 5 mutants without timing:
+  // 8. Mutant F: un-bookkept substring(j, j + 1) backward loop scan (0zj6g)
+  const mutantFMeasurement = measureCharacterInspections(() => {
+    return mutantVoya0SubstringScan(sample);
+  });
+  assertEquals(mutantFMeasurement.backwardReads, expectedBackwardReads, "mutant F backward reads match O(N^2) backward scan");
+  assertEquals(mutantFMeasurement.charReads, sampleSize + expectedBackwardReads, "mutant F total char reads are quadratic");
+  assert(mutantFMeasurement.charReads > sample.length, "mutant F violates deterministic linear complexity");
+
+  // 9. Mutant F on tracked proxy: un-bookkept substring on tracked string proxy (0zj6g)
+  const mutantFTrackedMeasurement = measureCharacterInspections((wrap) => {
+    return mutantVoya0SubstringScan(wrap(sample));
+  });
+  assertEquals(mutantFTrackedMeasurement.backwardReads, expectedBackwardReads, "mutant F tracked backward reads match O(N^2) scan");
+  assertEquals(mutantFTrackedMeasurement.charReads, sampleSize + expectedBackwardReads, "mutant F tracked total char reads are quadratic");
+  assert(mutantFTrackedMeasurement.charReads > sample.length, "mutant F tracked violates deterministic linear complexity");
+
+  // Verify that the linear complexity assertions fail closed on ALL 6 mutants without timing:
   assertThrows(
     () => { assert(mutantAMeasurement.lastIndexOfCalls === 0, "backward scan detected via lastIndexOf"); },
     Error,
@@ -865,6 +971,18 @@ Deno.test("uil17 / otqr7 acceptance: independent complexity guard deterministica
     () => { assert(mutantEMeasurement.charReads <= sample.length, "linear complexity bound exceeded on bracket indexing"); },
     Error,
     "linear complexity bound exceeded on bracket indexing",
+  );
+
+  assertThrows(
+    () => { assert(mutantFMeasurement.backwardReads === 0, "backward scan detected via backward substring reads"); },
+    Error,
+    "backward scan detected via backward substring reads",
+  );
+
+  assertThrows(
+    () => { assert(mutantFTrackedMeasurement.backwardReads === 0, "backward scan detected via backward tracked substring reads"); },
+    Error,
+    "backward scan detected via backward tracked substring reads",
   );
 });
 
