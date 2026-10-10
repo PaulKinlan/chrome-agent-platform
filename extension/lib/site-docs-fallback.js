@@ -64,9 +64,17 @@ function sameOriginOnly(urls, origin, maxUrls = MAX_DISCOVERED_LINKS) {
  * Supports URLs and titles containing literal square brackets (e.g. Wikipedia /wiki/Foo_[bar],
  * IPv6 addresses, and titles with brackets), while rejecting multiline links and nested link syntax (z3xx4).
  * Bounded by maxBytes (input slice) and maxLinks (stop early).
- * Optional stats object receives outer-loop step count for linear scan verification.
+ * Optional stats object receives step count covering outer-loop progression and forward inner scan progression
+ * for linear scan verification (j2vok, uil17).
  */
-export function extractMarkdownLinks(text, { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS, stats = null } = {}) {
+export function extractMarkdownLinks(
+  text,
+  {
+    maxBytes = MAX_DISCOVERY_DOC_BYTES,
+    maxLinks = MAX_DISCOVERED_LINKS,
+    stats = null,
+  } = {},
+) {
   const input = typeof text === "string" ? text.slice(0, maxBytes) : "";
   const urls = [];
   const len = input.length;
@@ -81,7 +89,11 @@ export function extractMarkdownLinks(text, { maxBytes = MAX_DISCOVERY_DOC_BYTES,
       const openBracket = openStack.pop();
       if (openBracket !== undefined && i + 1 < len && input.charCodeAt(i + 1) === 40 /* ( */) {
         const closeParen = input.indexOf(")", i + 2);
-        if (closeParen === -1) break;
+        if (closeParen === -1) {
+          if (stats) stats.steps = (stats.steps || 0) + Math.max(0, len - (i + 2));
+          break;
+        }
+        if (stats) stats.steps = (stats.steps || 0) + Math.max(0, closeParen - (i + 2));
         const inside = input.slice(i + 2, closeParen).trim();
         if (inside && !inside.includes("\n")) {
           const spaceIdx = inside.search(/\s/);
@@ -104,8 +116,20 @@ export function extractMarkdownLinks(text, { maxBytes = MAX_DISCOVERY_DOC_BYTES,
 
 // Mintlify (and a growing set of docs platforms) publish /llms.txt: markdown
 // with one link per docs page. Extract markdown link targets with linear single-pass scan (e7gwq).
-export function parseLlmsTxt(text, origin, { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS, stats = null } = {}) {
-  const rawUrls = extractMarkdownLinks(text, { maxBytes, maxLinks, stats });
+export function parseLlmsTxt(
+  text,
+  origin,
+  {
+    maxBytes = MAX_DISCOVERY_DOC_BYTES,
+    maxLinks = MAX_DISCOVERED_LINKS,
+    stats = null,
+  } = {},
+) {
+  const rawUrls = extractMarkdownLinks(text, {
+    maxBytes,
+    maxLinks,
+    stats,
+  });
   return sameOriginOnly(rawUrls, origin, maxLinks);
 }
 

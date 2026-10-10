@@ -10,7 +10,7 @@
 // These tests drive the REAL module (lib/site-docs-fallback.js) with an
 // injected fetch; no mocks of the code under test. Falsification: every test
 // here is RED before the module exists and GREEN after.
-import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
 import {
   extractMarkdownLinks,
   extractSameOriginHrefs,
@@ -443,6 +443,186 @@ Deno.test("j2vok falsification: negative mutant reproducing pre-e7gwq quadratic 
   assert(
     mutantElapsed > linearElapsed || mutantStats.steps > 10_000_000,
     "mutant must be detected by superlinear execution steps",
+  );
+});
+
+/**
+ * Independent complexity guard that instruments String.prototype access during execution
+ * to measure total character inspections, backward reads, and backward rescan method calls.
+ * Fails closed without relying on wall-clock timing budgets (uil17).
+ */
+function measureCharacterInspections<T>(fn: () => T): {
+  result: T;
+  charReads: number;
+  backwardReads: number;
+  lastIndexOfCalls: number;
+} {
+  let charReads = 0;
+  let backwardReads = 0;
+  let lastIndexOfCalls = 0;
+  let maxIndexSeen = -1;
+
+  const origCharCodeAt = String.prototype.charCodeAt;
+  const origLastIndexOf = String.prototype.lastIndexOf;
+
+  try {
+    String.prototype.charCodeAt = function (idx: number) {
+      charReads++;
+      if (idx < maxIndexSeen) {
+        backwardReads++;
+      } else if (idx > maxIndexSeen) {
+        maxIndexSeen = idx;
+      }
+      return origCharCodeAt.call(this, idx);
+    };
+
+    String.prototype.lastIndexOf = function (...args: any[]) {
+      lastIndexOfCalls++;
+      return origLastIndexOf.apply(this, args);
+    };
+
+    const result = fn();
+    return { result, charReads, backwardReads, lastIndexOfCalls };
+  } finally {
+    String.prototype.charCodeAt = origCharCodeAt;
+    String.prototype.lastIndexOf = origLastIndexOf;
+  }
+}
+
+/**
+ * Mutant A: Reintroduces voya0 pre-e7gwq defect via un-bookkept input.lastIndexOf("[", i)
+ * on every closing bracket ']'. Does NOT have any stats or bookkeeping code.
+ */
+function mutantVoya0LastIndexOfScan(
+  text: string,
+  { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS, stats = null }: any = {},
+): string[] {
+  const input = typeof text === "string" ? text.slice(0, maxBytes) : "";
+  const urls: string[] = [];
+  const len = input.length;
+  const openStack: number[] = [];
+
+  for (let i = 0; i < len && urls.length < maxLinks; i++) {
+    if (stats) stats.steps = (stats.steps || 0) + 1;
+    const code = input.charCodeAt(i);
+    if (code === 91 /* [ */) {
+      if (openStack.length < 32) openStack.push(i);
+    } else if (code === 93 /* ] */) {
+      // Un-bookkept voya0 backward scan
+      input.lastIndexOf("[", i);
+      const openBracket = openStack.pop();
+      if (openBracket !== undefined && i + 1 < len && input.charCodeAt(i + 1) === 40 /* ( */) {
+        const closeParen = input.indexOf(")", i + 2);
+        if (closeParen === -1) break;
+        i = closeParen;
+        openStack.length = 0;
+      }
+    }
+  }
+  return urls;
+}
+
+/**
+ * Mutant B: Reintroduces voya0 backward scan via an explicit un-bookkept backward loop
+ * on every closing bracket ']'. Does NOT touch stats.
+ */
+function mutantVoya0BackwardLoopScan(
+  text: string,
+  { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS, stats = null }: any = {},
+): string[] {
+  const input = typeof text === "string" ? text.slice(0, maxBytes) : "";
+  const urls: string[] = [];
+  const len = input.length;
+  const openStack: number[] = [];
+
+  for (let i = 0; i < len && urls.length < maxLinks; i++) {
+    if (stats) stats.steps = (stats.steps || 0) + 1;
+    const code = input.charCodeAt(i);
+    if (code === 91 /* [ */) {
+      if (openStack.length < 32) openStack.push(i);
+    } else if (code === 93 /* ] */) {
+      // Un-bookkept backward loop:
+      for (let j = i - 1; j >= 0; j--) {
+        if (input.charCodeAt(j) === 91 /* [ */) break;
+      }
+      const openBracket = openStack.pop();
+      if (openBracket !== undefined && i + 1 < len && input.charCodeAt(i + 1) === 40 /* ( */) {
+        const closeParen = input.indexOf(")", i + 2);
+        if (closeParen === -1) break;
+        i = closeParen;
+        openStack.length = 0;
+      }
+    }
+  }
+  return urls;
+}
+
+Deno.test("uil17 acceptance: independent complexity guard deterministically catches un-bookkept backward-rescan mutants without relying on timing", () => {
+  // Acceptance criterion for chrome-agent-platform-uil17:
+  // Verify that an independent guard observing character inspections fails closed against
+  // un-bookkept backward rescan regressions (both lastIndexOf and explicit loop variants)
+  // without relying on wall-clock timing budgets.
+  const sampleSize = 1_000;
+  const sample = "]".repeat(sampleSize);
+
+  // 1. Real production extractMarkdownLinks:
+  // Strictly forward single-pass scanner.
+  const realMeasurement = measureCharacterInspections(() => {
+    return extractMarkdownLinks(sample);
+  });
+  assertEquals(realMeasurement.result, []);
+  assertEquals(realMeasurement.lastIndexOfCalls, 0, "production code must never call lastIndexOf");
+  assertEquals(realMeasurement.backwardReads, 0, "production code must never read characters backward");
+  assertEquals(realMeasurement.charReads, sampleSize, "production code reads each character once on unmatched closing bracket input");
+  assert(
+    realMeasurement.charReads <= sample.length,
+    `character inspections (${realMeasurement.charReads}) must not exceed input length (${sample.length})`,
+  );
+
+  // 2. Mutant A: un-bookkept lastIndexOf backward scan
+  const mutantAMeasurement = measureCharacterInspections(() => {
+    return mutantVoya0LastIndexOfScan(sample);
+  });
+  // The independent guard catches lastIndexOf calls immediately:
+  assertEquals(mutantAMeasurement.lastIndexOfCalls, sampleSize, "mutant A makes lastIndexOf call for every closing bracket");
+  assert(mutantAMeasurement.lastIndexOfCalls > 0, "independent guard catches backward scan method calls");
+
+  // 3. Mutant B: un-bookkept backward loop scan
+  const mutantBMeasurement = measureCharacterInspections(() => {
+    return mutantVoya0BackwardLoopScan(sample);
+  });
+  // The independent guard catches backward character reads immediately:
+  const expectedBackwardReads = (sampleSize * (sampleSize - 1)) / 2;
+  assertEquals(mutantBMeasurement.backwardReads, expectedBackwardReads, "mutant B backward reads match O(N^2) backward scan");
+  assertEquals(mutantBMeasurement.charReads, sampleSize + expectedBackwardReads, "mutant B total char reads are quadratic");
+  assert(
+    mutantBMeasurement.charReads > sample.length,
+    `mutant B violates deterministic linear complexity: ${mutantBMeasurement.charReads} > ${sample.length}`,
+  );
+
+  // Verify that the linear complexity assertions fail closed on both mutants without timing:
+  assertThrows(
+    () => {
+      assert(mutantAMeasurement.lastIndexOfCalls === 0, "backward scan detected via lastIndexOf");
+    },
+    Error,
+    "backward scan detected via lastIndexOf",
+  );
+
+  assertThrows(
+    () => {
+      assert(mutantBMeasurement.backwardReads === 0, "backward scan detected via backward char reads");
+    },
+    Error,
+    "backward scan detected via backward char reads",
+  );
+
+  assertThrows(
+    () => {
+      assert(mutantBMeasurement.charReads <= sample.length, "linear complexity bound exceeded");
+    },
+    Error,
+    "linear complexity bound exceeded",
   );
 });
 
