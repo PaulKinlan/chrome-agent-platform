@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.664] — 2026-10-10
+- Report unknown presence status for registry packages in ACP bridge health checks
+
 ## [0.3.663] — 2026-10-10
 - Accept advisory-patched security releases across supported dependency lines
 

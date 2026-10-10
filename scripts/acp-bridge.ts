@@ -991,16 +991,17 @@ export function createAcpServer(
       const probeHarness = sanitizeLogString(rawProbeHarness).slice(0, 128) || HARNESS;
       let defaultCwdValue = hostCwdDefault;
       let adapterDescribe = "";
-      let adapterPresent = false;
+      let adapterPresent: boolean | null = false;
       let error = "";
       try { defaultCwdValue = defaultCwd(); } catch { defaultCwdValue = ""; }
       try {
         const resolved = resolveAdapter(rawProbeHarness, adapterPathOverride);
         adapterDescribe = resolved.describe;
-        // For an explicit --adapter (a file) we can say whether it exists; for
-        // a registry package npx resolves (and if needed downloads) it at run
-        // time, so "present" is not knowable here and is not claimed.
-        adapterPresent = resolved.cmd === "node" ? Deno.statSync(resolved.args[0]).isFile : true;
+        // For an explicit --adapter or local install (a file on disk) we can say
+        // whether it exists; for a registry package npx resolves (and if needed
+        // downloads) it at run time, so "present" is not knowable here and is
+        // reported as null (unknown, not false).
+        adapterPresent = resolved.cmd === "node" ? Deno.statSync(resolved.args[0]).isFile : null;
       } catch (e) {
         error = sanitizeLogString(String((e as Error)?.message ?? e));
       }

@@ -222,18 +222,21 @@ Deno.test("acp harness selection (legibility): /health endpoint reports default 
     assertEquals(defaultHealth.harness, "pi");
     assertEquals(defaultHealth.supportsHarnessSelection, true);
     assertEquals(defaultHealth.knownHarnesses, ["pi", "claude-code", "codex"]);
+    assertEquals(defaultHealth.adapterPresent, null);
 
     const claudeHealth = await probeAcpBridgeHealth(authedEndpoint(port), "claude-code");
     assertEquals(claudeHealth.ok, true);
     assertEquals(claudeHealth.harness, "pi");
     assertEquals(claudeHealth.probeHarness, "claude-code");
     assertEquals(claudeHealth.harnessCli, "claude");
+    assertEquals(claudeHealth.adapterPresent, null);
 
     const codexHealth = await probeAcpBridgeHealth(authedEndpoint(port), "codex");
     assertEquals(codexHealth.ok, true);
     assertEquals(codexHealth.harness, "pi");
     assertEquals(codexHealth.probeHarness, "codex");
     assertEquals(codexHealth.harnessCli, "codex");
+    assertEquals(codexHealth.adapterPresent, null);
   } finally {
     await server.shutdown();
   }
@@ -265,5 +268,68 @@ Deno.test("57g6b: prototype-key ?harness= names (constructor/toString/hasOwnProp
     }
   } finally {
     await server.shutdown();
+  }
+});
+
+Deno.test("akodp: /health adapterPresent distinguishes npx registry packages (null) from node adapters (boolean)", async () => {
+  // 1. Unpinned bridge: npx registry packages (pi, claude-code, codex) report adapterPresent: null
+  // because availability is determined at run time by npx, not claimed by the bridge at boot.
+  const server = createAcpServer(0);
+  const port = (server as any).addr.port;
+  try {
+    for (const harness of ["pi", "claude-code", "codex"]) {
+      const res = await fetch(`http://127.0.0.1:${port}/health?harness=${harness}`);
+      assertEquals(res.status, 200);
+      const json = await res.json();
+      assertEquals(json.ok, true);
+      assertEquals(json.probeHarness, harness);
+      assertEquals(json.adapterPresent, null, `adapterPresent must be null for npx harness ${harness}`);
+      assert(typeof json.adapter === "string" && json.adapter.includes("via"), `adapter describe must name npx resolver for ${harness}`);
+      assertEquals(json.error, undefined);
+    }
+
+    // Invalid harness probe: adapterPresent must be false, error must be set
+    const badRes = await fetch(`http://127.0.0.1:${port}/health?harness=not-a-real-harness`);
+    assertEquals(badRes.status, 200);
+    const badJson = await badRes.json();
+    assertEquals(badJson.ok, true);
+    assertEquals(badJson.adapterPresent, false);
+    assertEquals(badJson.adapter, "(unresolved)");
+    assert(badJson.error?.includes('unknown harness "not-a-real-harness"'));
+  } finally {
+    await server.shutdown();
+  }
+
+  // 2. Bridge pinned to existing node adapter file: reports adapterPresent: true
+  const existingPath = fromFileUrl(new URL("./fixtures/acp-fake-adapter.mjs", import.meta.url));
+  const pinnedServer = createAcpServer(0, existingPath);
+  const pinnedPort = (pinnedServer as any).addr.port;
+  try {
+    const res = await fetch(`http://127.0.0.1:${pinnedPort}/health`);
+    assertEquals(res.status, 200);
+    const json = await res.json();
+    assertEquals(json.ok, true);
+    assertEquals(json.pinnedAdapter, true);
+    assertEquals(json.adapterPresent, true, "adapterPresent must be true when node adapter file exists");
+    assertEquals(json.adapter, existingPath);
+    assertEquals(json.error, undefined);
+  } finally {
+    await pinnedServer.shutdown();
+  }
+
+  // 3. Bridge pinned to missing node adapter file: reports adapterPresent: false with error
+  const missingPath = fromFileUrl(new URL("./fixtures/non-existent-adapter-missing.mjs", import.meta.url));
+  const missingServer = createAcpServer(0, missingPath);
+  const missingPort = (missingServer as any).addr.port;
+  try {
+    const res = await fetch(`http://127.0.0.1:${missingPort}/health`);
+    assertEquals(res.status, 200);
+    const json = await res.json();
+    assertEquals(json.ok, true);
+    assertEquals(json.pinnedAdapter, true);
+    assertEquals(json.adapterPresent, false, "adapterPresent must be false when node adapter file is missing");
+    assert(json.error?.length > 0, "error must report stat failure for missing adapter file");
+  } finally {
+    await missingServer.shutdown();
   }
 });
