@@ -529,7 +529,8 @@ Deno.test("mkax: the REAL journey gate refuses with exit 75 while a REAL compile
   // Blast radius, stated: the compile lives for a couple of seconds, so another
   // lane's quiet-window gate running in that window waits a little longer. It
   // cannot fail one — that wait is bounded and only ever ends in a refusal at
-  // the END of a bound, and this test's own bound is 800 ms.
+  // the END of a bound, and this test's own quiet-wait bound is 2500 ms x load-scale
+  // (2500 ms base at load1<=2, up to 12500 ms at load1>=10; gate bound is 4000 ms x load-scale).
   const dir = await Deno.makeTempDir({ prefix: "cap-mkax-load-" });
   const burners: Deno.ChildProcess[] = [];
   try {

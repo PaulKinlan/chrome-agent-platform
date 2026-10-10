@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.653] — 2026-10-10
+- Update quiet-window test comment to describe load-scaled bound
+
 ## [0.3.652] — 2026-10-10
 - Sanitize parameter query strings in ACP bridge health checks
 
