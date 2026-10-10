@@ -233,3 +233,13 @@ Deno.test("error-report: an empty HTTP 200 stream (no providerError) still says 
   const d2 = describeError(e, { model: "gpt-5.6-sol", providerError: { status: 200, message: "" } });
   assertEquals(d2.category, ERROR_CATEGORY.NO_OUTPUT);
 });
+
+Deno.test("error-report: maps pi-acp tool mount refusal to harness-config with honest action (w48gp)", () => {
+  const piErrMsg = "pi-acp 0.0.33 does not mount CAP tools. Use Claude Code or Codex until Pi tool registration is available.";
+  const d = describeError(new Error(piErrMsg));
+  assertEquals(d.category, ERROR_CATEGORY.HARNESS_CONFIG);
+  assertEquals(d.category, "harness-config");
+  assertEquals(d.action, "Use Claude Code or Codex until Pi tool registration is available.");
+  assertStringIncludes(d.reason, "does not mount CAP tools");
+  assertEquals(d.message, piErrMsg);
+});

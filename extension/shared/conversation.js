@@ -1933,6 +1933,19 @@ export async function runConversationTurn(container, { text, attachments = [], h
   // and pauses on the in-context card below.
   try {
     const summary = await send("provider.permission-summary", harnessId ? { harnessId } : {});
+    if (summary && (summary.ok === false || summary.error)) {
+      const summaryMsg = String(summary.error || summary.errorReason || summary.reason || "provider permission preflight failed");
+      const isHarnessProblem = summary.errorCategory === "harness-config" ||
+        Boolean(harnessId && /does not mount CAP tools|unknown acp harness|acp endpoint must be/i.test(summaryMsg));
+      const isTimeout = summary.errorCategory === "timeout" || /didn't answer|busy|timed out|timeout/i.test(summaryMsg);
+      const err = new Error(summaryMsg);
+      err.errorCategory = summary.errorCategory || (isHarnessProblem ? "harness-config" : (isTimeout ? "timeout" : null));
+      err.errorReason = summary.errorReason || summary.reason || err.message;
+      err.errorAction = summary.errorAction || (isHarnessProblem ? "Use Claude Code or Codex until Pi tool registration is available." : (isTimeout ? "Wait a moment and run this task again." : null));
+      err.errorDetail = summary.errorDetail;
+      if (summary.errorCategory === "provider-config") err.providerConfigProblem = true;
+      throw err;
+    }
     if (!summary?.local) {
       if (!summary?.origin) {
         // The gate's own reason (a missing vs an invalid base URL) is the
@@ -1966,18 +1979,27 @@ export async function runConversationTurn(container, { text, attachments = [], h
     // configuration problem, not a host-permission one.
     const detail = String(e?.message ?? e ?? "unknown");
     const configProblem = e?.providerConfigProblem === true || /origin is invalid/i.test(detail);
+    const isHarnessProblem = e?.errorCategory === "harness-config" || (Boolean(harnessId) && /does not mount CAP tools|Unknown ACP harness|ACP endpoint must be/i.test(detail));
+    const isTimeout = e?.errorCategory === "timeout" || /didn't answer|busy|timed out|timeout/i.test(detail);
+    const hasCategory = Boolean(e?.errorCategory && e.errorCategory !== "host-permission");
     const err = {
       ok: false,
       failed: true,
       error: configProblem
         ? `the provider endpoint is not configured — ${detail} — the run did not start`
+        : (hasCategory || isHarnessProblem)
+        ? detail
         : `provider permission preflight failed closed: ${detail}`,
-      errorCategory: configProblem ? "provider-config" : "host-permission",
+      errorCategory: configProblem ? "provider-config" : (e?.errorCategory || (isHarnessProblem ? "harness-config" : (isTimeout ? "timeout" : "host-permission"))),
       // The gate's reason IS the message (a missing vs an invalid base URL).
-      errorReason: detail,
+      errorReason: e?.errorReason || detail,
       errorAction: configProblem
         ? "Set the provider endpoint in Settings → Providers (choose a preset or enter a valid base URL), then run the task again."
-        : "grant the exact provider origin in Settings, then run this task again",
+        : isHarnessProblem
+        ? (e?.errorAction || "Use Claude Code or Codex until Pi tool registration is available.")
+        : isTimeout
+        ? (e?.errorAction || "Wait a moment and run this task again.")
+        : (e?.errorAction || "grant the exact provider origin in Settings, then run this task again"),
     };
     if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
     status({ state: "failed", message: err.errorReason, errorReason: err.errorReason, errorAction: err.errorAction, errorCategory: err.errorCategory });
@@ -2011,7 +2033,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
     }
     let summary = null;
     try { summary = await send("provider.permission-summary", harnessId ? { harnessId } : {}); } catch { summary = null; }
-    if (!summary || summary.local || !summary.origin) {
+    if (!summary || summary.ok === false || summary.local || !summary.origin) {
       // Nothing a card can grant (local/demo provider, or a configuration
       // problem): Settings remains the right surface, and the text says so.
       appendBubble(c, "system", "Provider access is missing or was revoked. Open Settings → Providers to approve the exact origin, then run the task again.");
