@@ -65,9 +65,32 @@
  *  is NOT heavy in the sense that starves CDP — compilers and image pipelines
  *  are what eo4d.1 measured. */
 export const HEAVY_PROCESS_NAMES = new Set([
-  "rustc", "cargo", "cc1", "cc1plus", "gcc", "g++", "clang", "clang++",
+  "rustc", "cargo", "rust-lld", "cargo-build", "cargo-check", "cargo-clippy", "cargo-test", "rustup",
+  "cc1", "cc1plus", "gcc", "g++", "clang", "clang++",
   "ld", "ld.lld", "lld", "gold", "wasm-ld", "wasm-opt", "wasm-mutate",
   "esbuild", "ninja", "make", "magick", "convert", "ffmpeg", "tsc",
+]);
+
+/** Pure helper to test if a process command name matches a heavy compiler or build orchestrator. */
+export function isHeavyProcessName(comm: string): boolean {
+  if (HEAVY_PROCESS_NAMES.has(comm)) return true;
+  if (comm.startsWith("cargo-") || comm.startsWith("rustc") || comm.startsWith("rust-lld")) {
+    return true;
+  }
+  return false;
+}
+
+/** Processes whose mere presence indicates active build contention (e.g. rustc, cargo),
+ *  even if individual process CPU ticks did not advance in a short sampling interval. */
+export const ZERO_TICK_ACTIVE_BUILDERS = new Set([
+  "rustc",
+  "cargo",
+  "rust-lld",
+  "cargo-build",
+  "cargo-check",
+  "cargo-clippy",
+  "cargo-test",
+  "rustup",
 ]);
 
 /** How many /proc entries one sample will inspect, and for how long. A sample
@@ -113,6 +136,9 @@ export interface LoadSample {
   activeCompilers?: number;
   /** Names of the active builders (bounded, de-duplicated). */
   activeCompilerNames?: string[];
+  /** True when at least one discrete builder (rustc, cargo, rust-lld) was seen,
+   *  unbounded by the 8-entry compilerNames diagnostic cap. */
+  hasDiscreteBuilder?: boolean;
   /** Per-pid CPU snapshot, for the next sample's activity comparison. */
   cpu?: ProcCpuMap;
   /** True when the sample could not be read; a refusal follows, never a pass. */
@@ -401,6 +427,7 @@ async function readLoadSampleOnce(
   // just a count. For a name match we also read the accumulated CPU, so the
   // threshold can count what is COMPILING rather than what is merely named (dnop).
   let compilers = 0;
+  let hasDiscreteBuilder = false;
   const names = new Set<string>();
   const cpu: ProcCpuMap = new Map();
   const selfPid = String(Deno.pid);
@@ -449,9 +476,22 @@ async function readLoadSampleOnce(
         if (pid === selfPid) continue;
         seen++;
         const comm = m[4].trim().split("/").pop() ?? "";
-        if (HEAVY_PROCESS_NAMES.has(comm)) {
+        if (isHeavyProcessName(comm)) {
           compilers++;
-          if (names.size < 8) names.add(comm);
+          if (ZERO_TICK_ACTIVE_BUILDERS.has(comm)) {
+            hasDiscreteBuilder = true;
+          }
+          if (names.size < 8) {
+            names.add(comm);
+          } else if (ZERO_TICK_ACTIVE_BUILDERS.has(comm)) {
+            for (const existing of names) {
+              if (!ZERO_TICK_ACTIVE_BUILDERS.has(existing)) {
+                names.delete(existing);
+                names.add(comm);
+                break;
+              }
+            }
+          }
           cpu.set(pid, {
             name: comm,
             startTicks: m[3].replace(/\s+/gu, " "),
@@ -469,9 +509,22 @@ async function readLoadSampleOnce(
         seen++;
         try {
           const comm = (await Deno.readTextFile(`/proc/${entry.name}/comm`)).trim();
-          if (HEAVY_PROCESS_NAMES.has(comm)) {
+          if (isHeavyProcessName(comm)) {
             compilers++;
-            if (names.size < 8) names.add(comm);
+            if (ZERO_TICK_ACTIVE_BUILDERS.has(comm)) {
+              hasDiscreteBuilder = true;
+            }
+            if (names.size < 8) {
+              names.add(comm);
+            } else if (ZERO_TICK_ACTIVE_BUILDERS.has(comm)) {
+              for (const existing of names) {
+                if (!ZERO_TICK_ACTIVE_BUILDERS.has(existing)) {
+                  names.delete(existing);
+                  names.add(comm);
+                  break;
+                }
+              }
+            }
             const parsed = parseProcStatCpu(await Deno.readTextFile(`/proc/${entry.name}/stat`), comm);
             if (parsed) cpu.set(entry.name, parsed);
           }
@@ -518,6 +571,7 @@ async function readLoadSampleOnce(
     compilers, compilerNames: [...names], measurable: true,
     activeCompilers: activePids.length,
     activeCompilerNames: activeNames.slice(0, 8),
+    hasDiscreteBuilder,
     cpu,
   };
 }
