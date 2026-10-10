@@ -2,7 +2,11 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { dumpLogBuffer } from "../extension/lib/cap-log.js";
 import { createMasterJournalIssuer } from "../extension/lib/master-journal-issuer.js";
-import { inspectMasterJournalForOwner, snapshotMasterJournalRepairEvidence } from "../extension/lib/master-journal-owner-inspection.js";
+import {
+  fingerprintMasterJournalRepairEvidence,
+  inspectMasterJournalForOwner,
+  snapshotMasterJournalRepairEvidence,
+} from "../extension/lib/master-journal-owner-inspection.js";
 import { inspectIntactMasterJournalPrefixesForOwner } from "../extension/lib/master-journal-repair-prefix.js";
 import {
   selectPublishedMasterJournalBackupPaths,
@@ -134,6 +138,26 @@ Deno.test("durable repair-intent witness refuses missing or unmatched head witho
   wal.children.delete("repair-intent-1.json");
   await assertRejects(() => readMasterJournalHead(master), Error, "repair witness is missing",
     "a checked head cannot discharge a removed witness by omission");
+});
+
+Deno.test("read-only repair plan fingerprint distinguishes absent WAL, empty WAL and changed legacy bytes", async () => {
+  const { master } = await legacyFixture();
+  const absent = await fingerprintMasterJournalRepairEvidence(master);
+  assertEquals(absent.walPresent, false);
+  assertEquals(/^[0-9a-f]{64}$/.test(absent.sha256), true);
+  const wal = await master.getDirectoryHandle("journal-wal", { create: true });
+  const empty = await fingerprintMasterJournalRepairEvidence(master);
+  assertEquals(empty.walPresent, true);
+  assertEquals(empty.sha256 === absent.sha256, false,
+    "empty-directory authority state must not share an absent-directory fingerprint");
+  (await wal.getFileHandle("checkpoint-1-0.json", { create: true })).bytes = encoder.encode("{ partial");
+  const residue = await fingerprintMasterJournalRepairEvidence(master);
+  assertEquals(residue.sha256 === empty.sha256, false);
+  (await master.getFileHandle("journal.json")).bytes = encoder.encode(JSON.stringify([{ id: "other" }]));
+  const changedLegacy = await fingerprintMasterJournalRepairEvidence(master);
+  assertEquals(changedLegacy.sha256 === residue.sha256, false);
+  assertEquals(changedLegacy.actionable, false);
+  assertEquals(changedLegacy.candidates, []);
 });
 
 Deno.test("owner prefix inspection isolates an intact older head without selecting legacy authority", async () => {

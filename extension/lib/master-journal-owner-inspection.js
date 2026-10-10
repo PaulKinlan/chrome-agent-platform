@@ -79,12 +79,29 @@ export async function snapshotMasterJournalRepairEvidence(master, {
   } catch (error) { return refuse(`master journal repair evidence unreadable: ${error?.message ?? error}`); }
   records.sort((a, b) => a.name.localeCompare(b.name));
   const inspection = await inspectMasterJournalForOwner(master);
-  return { ...inspection, actionable: false,
+  return { ...inspection, walPresent: directory !== null, actionable: false,
     authorityOutcomeRequired: inspection.state === "requires_explicit_owner_repair",
     candidates: [], records, legacy,
     refusals: inspection.state === "requires_explicit_owner_repair" ? [inspection.reason] :
       inspection.state === "current_head_checked" ? ["older-head reachability not verified for repair"] : [],
   };
+}
+
+/** Exact bounded evidence identity for a later explicit owner repair request.
+ * This is NOT an approval token, lock, write permit, quarantine candidate or
+ * substitute for repeating the snapshot under the master authority lock. */
+export async function fingerprintMasterJournalRepairEvidence(master) {
+  const evidence = await snapshotMasterJournalRepairEvidence(master);
+  if (evidence.state === "inspection_refused") {
+    throw new Error(`master journal repair evidence fingerprint refused: ${evidence.refusals[0]}`);
+  }
+  const body = JSON.stringify({ schemaVersion: 1, walPresent: evidence.walPresent,
+    records: evidence.records, legacy: evidence.legacy });
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
+  return { schemaVersion: 1, walPresent: evidence.walPresent,
+    sha256: [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join(""),
+    recordCount: evidence.records.length, actionable: false,
+    authorityOutcomeRequired: evidence.authorityOutcomeRequired, candidates: [] };
 }
 
 export async function inspectMasterJournalForOwner(master) {

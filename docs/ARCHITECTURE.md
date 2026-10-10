@@ -659,8 +659,11 @@ chain, without switching authority or editing any record. The separate
 `snapshotMasterJournalRepairEvidence` lists bounded WAL names, sizes and
 SHA-256 digests plus digest-only metadata for legacy journal/archive files
 for owner inspection (at most 256 WAL leaves, 8 MiB per file and 16 MiB
-combined by default), but emits NO actionable quarantine candidates. The
-separate `inspectIntactMasterJournalPrefixesForOwner` can replay each head
+combined by default), but emits NO actionable quarantine candidates.
+`fingerprintMasterJournalRepairEvidence` hashes this bounded manifest plus
+legacy fingerprints and WAL-directory presence, distinguishing absent from
+present-empty; it is an inspection identity, NOT owner approval or a CAS.
+The separate `inspectIntactMasterJournalPrefixesForOwner` can replay each head
 slot independently behind those evidence bounds, including an older intact
 prefix beside a torn latest slot; each checked slot binds the SHA-256 of its
 snapshot bytes. It may identify the highest verified *historical* prefix
