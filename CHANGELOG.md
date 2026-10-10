@@ -1,7 +1,7 @@
 # Changelog
 
 ## [0.3.658] — 2026-10-10
-- Verify Create click browser check invokes computeCreateClickTimeoutScale
+- Keep Create-button click check tied directly to real load-scaling helper via executable timeout seam
 
 ## [0.3.657] — 2026-10-10
 - Fix transient custody exit 70 flakes under concurrent process churn by recognizing kernel ESRCH as vanished process

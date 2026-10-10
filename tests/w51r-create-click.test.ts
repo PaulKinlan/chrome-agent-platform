@@ -8,7 +8,7 @@ import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
 import { isUsableBinary } from "../scripts/lib/browser-refusal.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { waitForAppReady } from "../scripts/lib/app-readiness.ts";
-import { currentLoadPerCpu, MAX_LOAD_SCALE, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
+import { currentLoadPerCpu, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
 
 const EXT = fileURLToPath(new URL("../extension/", import.meta.url)).replace(/\/$/, "");
 const RESOLUTION = resolveChromiumBinaryReport();
