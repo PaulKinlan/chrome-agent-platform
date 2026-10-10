@@ -99,7 +99,9 @@ function validateHead(head) {
       (head.checkpointHash !== undefined && !/^[0-9a-f]{64}$/.test(head.checkpointHash)) ||
       typeof head.archive !== "string" || !/^archive-[1-9]\d*-[0-9]+\.json$/.test(head.archive) ||
       (head.archiveHash !== undefined && !/^[0-9a-f]{64}$/.test(head.archiveHash)) ||
-      (head.repairIntentId !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(head.repairIntentId)) ||
+      ((head.repairIntentId !== undefined || head.repairIntentSequence !== undefined) &&
+        (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(head.repairIntentId) ||
+          !safeInteger(head.repairIntentSequence, 1) || head.repairIntentSequence > 32)) ||
       typeof head.lastHash !== "string" || !/^[0-9a-f]{64}$/.test(head.lastHash)) {
     throw new Error("master journal head is corrupt");
   }
@@ -116,19 +118,27 @@ export async function readMasterJournalHead(master) {
   // An immutable owner repair intent is a fail-closed authority witness, not
   // a boot-recovered coordination key. Even when every head is absent, its
   // presence must NEVER make the old journal.json authoritative again.
-  const intent = await readRecord(directory, "repair-intent.json", "repair-intent");
-  if (intent && (intent.schemaVersion !== 1 ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(intent.id) ||
-      typeof intent.reason !== "string" || !intent.reason || intent.reason.length > 200)) {
-    throw new Error("master journal repair intent is corrupt");
-  }
+  const firstIntent = await readRecord(directory, "repair-intent-1.json", "repair-intent");
+  const validateIntent = (intent, sequence) => {
+    if (!intent || intent.schemaVersion !== 1 || intent.sequence !== sequence ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(intent.id) ||
+        !["pre-head-residue", "torn-head", "orphan-record", "owner-repair"].includes(intent.reason) ||
+        (sequence > 1 && (!intent.previousHead ||
+          !safeInteger(intent.previousHead.epoch, 1) ||
+          !safeInteger(intent.previousHead.sequence) ||
+          !safeInteger(intent.previousHead.version, 1) ||
+          typeof intent.previousId !== "string"))) {
+      throw new Error("master journal repair intent is corrupt");
+    }
+  };
+  if (firstIntent) validateIntent(firstIntent, 1);
   const heads = [];
   for (const slot of HEADS) {
     const head = await readRecord(directory, slot, "head");
     if (head) heads.push(validateHead(head));
   }
   if (heads.length === 0) {
-    if (intent) throw new Error("master journal repair intent requires an owner-approved checked head");
+    if (firstIntent) throw new Error("master journal repair intent requires an owner-approved checked head");
     // A cutover may crash after staging its first immutable checkpoint or
     // archive but BEFORE publishing head-a. Without a separate durable
     // cutover witness, those bytes cannot prove a safe retry or that legacy
@@ -151,11 +161,35 @@ export async function readMasterJournalHead(master) {
     if (newer.version <= older.version) throw new Error("master journal head version has regressed");
   }
   const selected = heads.sort((a, b) => b.sequence - a.sequence)[0];
-  if (intent && selected.repairIntentId !== intent.id) {
+  if (selected.repairIntentSequence !== undefined) {
+    if (!firstIntent) throw new Error("master journal repair witness is missing");
+    const ids = new Set();
+    let previousId = null;
+    for (let sequence = 1; sequence <= selected.repairIntentSequence; sequence++) {
+      const intent = sequence === 1 ? firstIntent :
+        await readRecord(directory, `repair-intent-${sequence}.json`, "repair-intent");
+      if (!intent) throw new Error("master journal repair witness is missing");
+      validateIntent(intent, sequence);
+      if (ids.has(intent.id) || (sequence > 1 && intent.previousId !== previousId)) {
+        throw new Error("master journal repair intent chain or ID is reused");
+      }
+      ids.add(intent.id);
+      previousId = intent.id;
+      if (sequence === selected.repairIntentSequence && sequence > 1 &&
+          (selected.epoch !== intent.previousHead.epoch ||
+            selected.sequence <= intent.previousHead.sequence ||
+            selected.version <= intent.previousHead.version)) {
+        throw new Error("master journal repair head did not advance beyond the prior checked head");
+      }
+      if (sequence === selected.repairIntentSequence && selected.repairIntentId !== intent.id) {
+        throw new Error("master journal repair intent is not discharged by the selected checked head");
+      }
+    }
+    if (await optionalFile(directory, `repair-intent-${selected.repairIntentSequence + 1}.json`)) {
+      throw new Error("master journal newer repair intent pending");
+    }
+  } else if (firstIntent) {
     throw new Error("master journal repair intent is not discharged by the selected checked head");
-  }
-  if (!intent && heads.some((head) => head.repairIntentId !== undefined)) {
-    throw new Error("master journal repair witness is missing");
   }
   return selected;
 }
@@ -170,8 +204,24 @@ export async function stageMasterJournalRepairIntent(master, { id, reason } = {}
     throw new Error("master journal repair intent requires an exact ID and bounded reason");
   }
   const directory = await master.getDirectoryHandle(DIRECTORY, { create: true });
-  return await writeCheckedRecord(directory, "repair-intent.json", "repair-intent",
-    { schemaVersion: 1, id, reason });
+  let sequence = 1;
+  let previousHead = null;
+  let previousId = null;
+  if (await optionalFile(directory, "repair-intent-1.json")) {
+    // A newer witness may only follow an already checked, discharged one.
+    // Never silently skip a torn/pending earlier intent or reuse its ID.
+    const head = await readMasterJournalHead(master);
+    if (!head?.repairIntentSequence || head.repairIntentId === id) {
+      throw new Error("master journal re-repair requires a discharged older intent and new ID");
+    }
+    sequence = head.repairIntentSequence + 1;
+    if (sequence > 32) throw new Error("master journal repair intent sequence is exhausted");
+    previousHead = { epoch: head.epoch, sequence: head.sequence, version: head.version };
+    previousId = head.repairIntentId;
+  }
+  return await writeCheckedRecord(directory, `repair-intent-${sequence}.json`, "repair-intent",
+    { schemaVersion: 1, sequence, id, reason,
+      ...(previousHead ? { previousHead, previousId } : {}) });
 }
 
 /** Follow immutable bounded archive records from a published terminal leaf.

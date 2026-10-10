@@ -102,26 +102,26 @@ Deno.test("durable repair-intent witness refuses missing or unmatched head witho
     id: witnessId, reason: "pre-head-residue",
   });
   assertEquals(staged.id, witnessId);
-  const witness = await wal.getFileHandle("repair-intent.json");
+  const witness = await wal.getFileHandle("repair-intent-1.json");
   const witnessBytes = witness.bytes.slice();
   await assertRejects(() => stageMasterJournalRepairIntent(master, {
     id: witnessId, reason: "pre-head-residue",
-  }), Error, "unpublished immutable record");
+  }), Error, "repair intent");
   assertEquals(witness.bytes, witnessBytes, "an exact retry must not overwrite append-only repair evidence");
   await assertRejects(() => readMasterJournalHead(master), Error, "repair intent");
   await assertRejects(() => readMasterJournalProjection(master), Error, "repair intent",
     "a missing head cannot reactivate legacy when durable repair is pending");
   // Simulate a separately owner-approved, readback-verified publication in
   // this fake only; the product still has NO repair publisher or live writer.
-  wal.children.delete("repair-intent.json");
+  wal.children.delete("repair-intent-1.json");
   const first = await stageMasterJournalCutover(master, { journalExists: true,
     journal: [{ id: "owned" }], archive: [], allocateVersion });
-  wal.children.set("repair-intent.json", witness);
+  wal.children.set("repair-intent-1.json", witness);
   await assertRejects(() => readMasterJournalHead(master), Error, "repair intent",
     "an older intact head without the witness cannot silently win");
   const signedHead = await wal.getFileHandle("head-a.json");
   signedHead.bytes = encoder.encode(await sealMasterJournalRecord("head", {
-    ...first, repairIntentId: witnessId,
+    ...first, repairIntentId: witnessId, repairIntentSequence: 1,
   }));
   assertEquals((await readMasterJournalHead(master)).repairIntentId, witnessId);
   for (let i = 0; i < 129; i++) {
@@ -130,18 +130,56 @@ Deno.test("durable repair-intent witness refuses missing or unmatched head witho
   }
   assertEquals((await readMasterJournalHead(master)).repairIntentId, witnessId,
     "compaction and head-slot rotation must retain the exact repair witness identity");
-  wal.children.delete("repair-intent.json");
+  wal.children.delete("repair-intent-1.json");
   await assertRejects(() => readMasterJournalHead(master), Error, "repair witness is missing",
     "a checked head cannot discharge a removed witness by omission");
 });
 
+Deno.test("a newer immutable repair intent cannot be discharged by an older signed head", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  const firstId = "11111111-2222-4333-8444-555555555555";
+  const nextId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const wal = await master.getDirectoryHandle("journal-wal", { create: true });
+  await stageMasterJournalRepairIntent(master, { id: firstId, reason: "pre-head-residue" });
+  const firstFile = await wal.getFileHandle("repair-intent-1.json");
+  const firstBytes = firstFile.bytes.slice();
+  // Simulate only a separately approved, checked head publication in a fake.
+  wal.children.delete("repair-intent-1.json");
+  const head = await stageMasterJournalCutover(master, { journalExists: true,
+    journal: [{ id: "owned" }], archive: [], allocateVersion });
+  wal.children.set("repair-intent-1.json", firstFile);
+  (await wal.getFileHandle("head-a.json")).bytes = encoder.encode(await sealMasterJournalRecord("head", {
+    ...head, repairIntentId: firstId, repairIntentSequence: 1,
+  }));
+  assertEquals((await readMasterJournalHead(master)).repairIntentId, firstId);
+  await stageMasterJournalRepairIntent(master, { id: nextId, reason: "owner-repair" });
+  assertEquals(firstFile.bytes, firstBytes, "old checked witness bytes stay append-only");
+  assertEquals(wal.children.has("repair-intent-2.json"), true);
+  await assertRejects(() => readMasterJournalHead(master), Error, "newer repair intent pending",
+    "the old signed head cannot discharge the newer ID or reactivate legacy");
+  await assertRejects(() => stageMasterJournalRepairIntent(master, {
+    id: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff", reason: "owner-repair",
+  }), Error, "newer repair intent pending");
+  assertEquals(wal.children.has("repair-intent-3.json"), false,
+    "a pending re-repair cannot skip to another witness");
+  const oldHead = await wal.getFileHandle("head-a.json");
+  oldHead.bytes = encoder.encode(await sealMasterJournalRecord("head", {
+    ...head, repairIntentId: nextId, repairIntentSequence: 2,
+  }));
+  await assertRejects(() => readMasterJournalHead(master), Error, "repair head did not advance",
+    "a forged same-sequence head cannot discharge the newer intent");
+});
+
 Deno.test("failed repair-intent close leaves non-overwritable fail-closed evidence", async () => {
-  const { master, legacy } = await legacyFixture({ close: "repair-intent.json" });
+  const { master, legacy } = await legacyFixture({ close: "repair-intent-1.json" });
   const input = { id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", reason: "pre-head-residue" };
   await assertRejects(() => stageMasterJournalRepairIntent(master, input), Error, "injected close");
   await assertRejects(() => readMasterJournalHead(master), Error); // never activate stale legacy bytes
-  await assertRejects(() => stageMasterJournalRepairIntent(master, input), Error,
-    "unpublished immutable record");
+  const torn = (await (await master.getDirectoryHandle("journal-wal"))
+    .getFileHandle("repair-intent-1.json")).bytes.slice();
+  await assertRejects(() => stageMasterJournalRepairIntent(master, input), Error);
+  assertEquals((await (await master.getDirectoryHandle("journal-wal"))
+    .getFileHandle("repair-intent-1.json")).bytes, torn, "retry cannot overwrite torn witness bytes");
   assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy);
 });
 
