@@ -163,27 +163,13 @@ export async function waitForAppReady(
     if (remainingMs <= 0) break;
     const probeLimit = Math.min(remainingMs, options.probeTimeoutMs ?? 2000);
 
-    let evalPromise: Promise<any>;
-    try {
-      evalPromise = Promise.resolve(evaluate(expr));
-    } catch (err) {
-      if (isTransportOrEvaluateTimeoutError(err)) {
-        throw err;
-      }
-      lastProbe = { error: String(err) };
-      await new Promise((r) => setTimeout(r, pollIntervalMs));
-      continue;
-    }
-    // Prevent unhandled promise rejection if probe timer fires before evaluate settles (pew31)
-    evalPromise.catch(() => {});
-
     let probeTimer: any;
     try {
       const probe = await Promise.race([
-        evalPromise,
+        evaluate(expr),
         new Promise((_, reject) => {
           probeTimer = setTimeout(
-            () => reject(new Error(`cdp timeout: Runtime.evaluate (probe evaluation timed out after ${probeLimit}ms${surface})`)),
+            () => reject(new Error(`probe evaluation timed out after ${probeLimit}ms${surface}`)),
             probeLimit,
           );
         }),

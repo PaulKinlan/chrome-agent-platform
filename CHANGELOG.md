@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.640] — 2026-10-10
+- Fix app-readiness probe timeout to fail closed with distinct probe provenance
+
 ## [0.3.639] — 2026-10-10
 - Harden markdown link extraction complexity guard against backward rescans across all string access patterns
 
