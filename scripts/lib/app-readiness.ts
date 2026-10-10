@@ -136,6 +136,7 @@ export function isTransportOrEvaluateTimeoutError(e: any): boolean {
   if (isCdpEvaluateTimeout(msg)) return true;
   if (/^cdp timeout: Runtime\.evaluate/i.test(msg)) return true;
   if (/Target closed|Session (?:closed|with given id not found)|WebSocket (?:closed|is not open)|Connection closed/i.test(msg)) return true;
+  if (/probe evaluation timed out/i.test(msg)) return true;
   return false;
 }
 
@@ -167,7 +168,10 @@ export async function waitForAppReady(
       const probe = await Promise.race([
         evaluate(expr),
         new Promise((_, reject) => {
-          probeTimer = setTimeout(() => reject(new Error("probe evaluation timed out")), probeLimit);
+          probeTimer = setTimeout(
+            () => reject(new Error(`probe evaluation timed out after ${probeLimit}ms${surface}`)),
+            probeLimit,
+          );
         }),
       ]);
       clearTimeout(probeTimer);

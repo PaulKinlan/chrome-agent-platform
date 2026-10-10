@@ -166,7 +166,7 @@ Deno.test("iksuc: clickVisibleCreateAgent with { waitForReady: true } refuses un
   assertEquals(sent.length, 0, "zero mouse clicks dispatched when readiness check fails");
 });
 
-Deno.test("iksuc: waitForAppReady bounds wait when evaluator stalls or never resolves", async () => {
+Deno.test("iksuc / pew31 / w7mv6: waitForAppReady bounds wait and fails closed when evaluator stalls or never resolves", async () => {
   // Evaluator that hangs indefinitely
   const evaluate = () => new Promise(() => {});
 
@@ -180,8 +180,108 @@ Deno.test("iksuc: waitForAppReady bounds wait when evaluator stalls or never res
   const elapsed = Date.now() - start;
 
   assert(caught !== null, "must time out when evaluator hangs");
-  assert(caught.message.startsWith(APP_NEVER_BECAME_READY), `must report named failure, got ${caught.message}`);
-  assert(elapsed >= 250 && elapsed < 800, `must bound wait within expected range (elapsed: ${elapsed}ms)`);
+  assert(
+    isTransportOrEvaluateTimeoutError(caught),
+    `must match isTransportOrEvaluateTimeoutError to fail fast, got: ${caught.message}`,
+  );
+  // w7mv6: probe timeout must NOT match isCdpEvaluateTimeout so caller does not exit 75 environmental
+  assertEquals(
+    isCdpEvaluateTimeout(caught.message),
+    false,
+    "probe timeout must NOT match isCdpEvaluateTimeout (must preserve distinct probe provenance)",
+  );
+  assert(
+    !caught.message.startsWith(APP_NEVER_BECAME_READY),
+    `must NOT launder into app never became ready, got: ${caught.message}`,
+  );
+  assert(
+    caught.message.includes("probe evaluation timed out after 100ms"),
+    `must report distinct probe timeout message, got: ${caught.message}`,
+  );
+  assert(elapsed >= 80 && elapsed < 250, `must fail fast within probe bound (elapsed: ${elapsed}ms)`);
+});
+
+Deno.test("pew31 / w7mv6: falsifier — hung probe fails fast with distinct probe provenance and cannot exit 75 environmental", async () => {
+  let probeCalls = 0;
+
+  // Evaluator that hangs (e.g. Service Worker deadlocks and never answers Runtime.evaluate)
+  const evaluate = (_expr: string) => {
+    probeCalls++;
+    return new Promise((_, reject) => {
+      // Simulate slow/hanging evaluate that would eventually reject with CDP timeout at 150ms
+      setTimeout(() => {
+        reject(new Error("cdp timeout: Runtime.evaluate (requestId=99, targetId=page-1)"));
+      }, 150);
+    });
+  };
+
+  let caught: any = null;
+  const start = Date.now();
+  try {
+    await waitForAppReady(evaluate, {
+      timeoutMs: 1000,
+      probeTimeoutMs: 50,
+      pollIntervalMs: 20,
+      surfaceName: "NTP main",
+    });
+  } catch (e) {
+    caught = e;
+  }
+  const elapsed = Date.now() - start;
+
+  assert(caught !== null, "must throw when evaluator hangs");
+  assertEquals(probeCalls, 1, "must fail fast on first hanging probe without polling repeated evaluates");
+  assert(elapsed < 140, `must fail fast within probe limit (took ${elapsed}ms)`);
+  assert(
+    isTransportOrEvaluateTimeoutError(caught),
+    `must match isTransportOrEvaluateTimeoutError, got: ${caught.message}`,
+  );
+  // w7mv6: probe evaluation timed out must NOT match isCdpEvaluateTimeout so a hung SW is a product red (exit 1)
+  // and cannot exit 75 (environmental refusal) even if the box measures loaded.
+  assertEquals(
+    isCdpEvaluateTimeout(caught.message),
+    false,
+    "must NOT match isCdpEvaluateTimeout so caller's environmental branch does not trigger",
+  );
+  assert(
+    !caught.message.startsWith(APP_NEVER_BECAME_READY),
+    `must NOT launder into app never became ready, got: ${caught.message}`,
+  );
+  assertEquals(
+    caught.message,
+    "probe evaluation timed out after 50ms for NTP main",
+    "must preserve distinct probe timeout provenance without forging cdp timeout: Runtime.evaluate",
+  );
+});
+
+Deno.test("pew31 / w7mv6: actual CDP Runtime.evaluate timeout propagates with full CDP evaluate provenance", async () => {
+  // Evaluator rejects with actual CDP evaluate timeout (e.g. 15s Cdp.send budget)
+  const actualCdpTimeout = new Error("cdp timeout: Runtime.evaluate (requestId=99, targetId=page-1, sessionId=sess-1)");
+  let probeCalls = 0;
+  const evaluate = (_expr: string) => {
+    probeCalls++;
+    return Promise.reject(actualCdpTimeout);
+  };
+
+  let caught: any = null;
+  try {
+    await waitForAppReady(evaluate, { timeoutMs: 1000, probeTimeoutMs: 500, surfaceName: "NTP main" });
+  } catch (e) {
+    caught = e;
+  }
+
+  assert(caught !== null, "must throw when evaluator rejects");
+  assertEquals(probeCalls, 1);
+  assertEquals(caught, actualCdpTimeout, "must rethrow exact actual CDP timeout without wrapping");
+  assert(
+    isTransportOrEvaluateTimeoutError(caught),
+    "actual CDP timeout must match isTransportOrEvaluateTimeoutError",
+  );
+  assertEquals(
+    isCdpEvaluateTimeout(caught.message),
+    true,
+    "actual CDP timeout MUST match isCdpEvaluateTimeout so caller's environmental branch can measure the box",
+  );
 });
 
 Deno.test("iksuc: APP_READY_EXPRESSION evaluates NTP DOM readiness accurately", () => {
