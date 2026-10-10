@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.634] — 2026-10-10
+- Catch hidden slowdowns in site documentation scanning with a stricter linear-time guard.
+
 ## [0.3.633] — 2026-10-10
 - Make site documentation scanning deterministic so a busy machine no longer reports a false stall.
 
