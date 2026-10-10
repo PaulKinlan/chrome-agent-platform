@@ -190,9 +190,44 @@ export function isPatchedFastUriVersion(value) {
  * for BOTH developer and store targets. Store dir presence alone is not proof:
  * AJV may still resolve an older symlink after deno.lock changed (bbz3s). */
 export function assertLiveFastUriResolution({ root, sdkDir }) {
+  const nmPath = join(root, "node_modules");
+  try {
+    if (lstatSync(nmPath).isSymbolicLink()) {
+      const target = readlinkSync(nmPath);
+      throw new Error(
+        `cap-security-dependency-resolve: ${nmPath} is a SYMLINK → ${target}. ` +
+        `A symlinked node_modules resolves dependencies into the shared target store rather than this worktree, ` +
+        `causing resolution mismatches and cross-lane store mutation. ` +
+        `Safe recovery in this worktree: rm -rf node_modules && npm ci && deno install, ` +
+        `never run deno install alone against a symlinked store.`
+      );
+    }
+    const denoStorePath = join(root, "node_modules", ".deno");
+    if (lstatSync(denoStorePath).isSymbolicLink()) {
+      const target = readlinkSync(denoStorePath);
+      throw new Error(
+        `cap-security-dependency-resolve: ${denoStorePath} is a SYMLINK → ${target}. ` +
+        `A symlinked .deno store resolves dependencies into the shared target store rather than this worktree, ` +
+        `causing resolution mismatches and cross-lane store mutation. ` +
+        `Safe recovery in this worktree: rm -rf node_modules && npm ci && deno install, ` +
+        `never run deno install alone against a symlinked store.`
+      );
+    }
+  } catch (err) {
+    if (err?.message?.startsWith("cap-security-dependency-resolve:")) throw err;
+  }
   const refuse = (reason) => {
-    throw new Error(`cap-security-dependency-resolve: ${reason}. ` +
-      "Run `deno install --frozen-lockfile` in this worktree and retry; if the old link remains, recreate this worktree's local .deno store.");
+    let advice = "Run `deno install --frozen-lockfile` in this worktree and retry; if the old link remains, recreate this worktree's local .deno store.";
+    try {
+      if (lstatSync(nmPath).isSymbolicLink()) {
+        const target = readlinkSync(nmPath);
+        advice = `${nmPath} is a SYMLINK → ${target}. Safe recovery in this worktree: rm -rf node_modules && npm ci && deno install, never run deno install alone against a symlinked store.`;
+      } else if (lstatSync(join(root, "node_modules", ".deno")).isSymbolicLink()) {
+        const target = readlinkSync(join(root, "node_modules", ".deno"));
+        advice = `${join(root, "node_modules", ".deno")} is a SYMLINK → ${target}. Safe recovery in this worktree: rm -rf node_modules && npm ci && deno install, never run deno install alone against a symlinked store.`;
+      }
+    } catch {}
+    throw new Error(`cap-security-dependency-resolve: ${reason}. ${advice}`);
   };
   let npmLock, denoLock;
   try {
