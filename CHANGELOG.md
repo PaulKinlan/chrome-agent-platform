@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.640] — 2026-10-10
+- Strengthen the agent worker's abort-handling test coverage so a regression cannot slip through.
+
 ## [0.3.639] — 2026-10-10
 - Harden markdown link extraction complexity guard against backward rescans across all string access patterns
 
