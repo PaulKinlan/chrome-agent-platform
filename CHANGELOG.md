@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.633] — 2026-10-10
+- Make site documentation scanning deterministic so a busy machine no longer reports a false stall.
+
 ## [0.3.632] — 2026-10-10
 - Contention detection in NTP boot staging now recognizes rustc and cargo builders to avoid false contract breaches under concurrent build load.
 
