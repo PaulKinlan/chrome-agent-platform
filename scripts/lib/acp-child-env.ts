@@ -103,6 +103,29 @@ export function acpChildEnvNote({ bridgedAuthVars }: AcpChildEnvResult, harness:
 }
 
 /**
+ * Sanitize untrusted adapter strings (error messages, exit diagnostics, auth labels) before logging
+ * or propagating in close reasons, preventing ANSI/C0/C1/OSC escape injection
+ * (clear screen, terminal title overwrite, OSC 52 clipboard hijacking, log line forging).
+ */
+export function sanitizeLogString(raw: string): string {
+  if (typeof raw !== "string") return "";
+  return raw
+    // 0. Strip aborted CSI sequences interrupted by another ESC
+    .replace(/(?:\x1b\[|\u009b)[0-?]*[ -/]*(?=\x1b|$)/g, "")
+    // 1. Strip ANSI OSC sequences: ESC ] or C1 OSC (\u009d) ... (BEL \x07 | ESC \ \x1b\\ | C1 ST \u009c)
+    .replace(/(?:\x1b\]|\u009d)[\s\S]*?(?:\x07|\x1b\\|\u009c|$)/g, "")
+    // 2. Strip complete ANSI CSI sequences: ESC [ or C1 CSI (\u009b) ... [@-~]
+    .replace(/(?:\x1b\[|\u009b)[0-?]*[ -/]*[@-~]/g, "")
+    // 3. Strip any residual single ESC sequences: ESC [@-Z\\-_]
+    .replace(/\x1b[@-Z\\-_]/g, "")
+    // 4. Replace remaining C0/C1 control characters (including CR, LF, DEL, NULL) with spaces
+    .replace(/[\x00-\x1f\x7f-\x9f]+/g, " ")
+    // 5. Collapse multiple whitespace and trim
+    .replace(/ {2,}/g, " ")
+    .trim();
+}
+
+/**
  * Turn an adapter's auth-precedence warning into an actionable line, or null if this line is not one.
  *
  * The adapter warns on stderr that an auth source overrode the login; that is exactly the case a user
@@ -111,8 +134,9 @@ export function acpChildEnvNote({ bridgedAuthVars }: AcpChildEnvResult, harness:
 export function actionableAuthWarning(line: string): string | null {
   if (!/takes precedence over|overrides|or another auth source is set/i.test(line)) return null;
   if (!/api[_-]?key|auth|login|credential|connector/i.test(line)) return null;
+  const cleanLine = sanitizeLogString(line);
   return (
-    `[acp-bridge] the harness reported an auth precedence problem: ${line.trim()} — ` +
+    `[acp-bridge] the harness reported an auth precedence problem: ${cleanLine} — ` +
     `CAP scopes ANTHROPIC_API_KEY out of the adapter child unless CAP_ACP_KEEP_API_KEY=1 is set in ` +
     `the environment that started CAP; if you already set it, the key is being passed through ` +
     `deliberately and this warning is the key taking precedence — unset the variable there to use the ` +

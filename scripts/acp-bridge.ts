@@ -11,7 +11,8 @@
 // extension would be wrong on every other machine (3khn/evidence-durable).
 
 import { parseArgs } from "jsr:@std/cli@1/parse-args";
-import { acpChildEnvFor, acpChildEnvNote, acpChildSpawnOptions, actionableAuthWarning } from "./lib/acp-child-env.ts";
+import { acpChildEnvFor, acpChildEnvNote, acpChildSpawnOptions, actionableAuthWarning, sanitizeLogString } from "./lib/acp-child-env.ts";
+export { sanitizeLogString } from "./lib/acp-child-env.ts";
 import { existsSync } from "node:fs";
 // jsjy review F2: crypto.subtle.timingSafeEqual does NOT exist in this Deno
 // (verified: `typeof crypto.subtle.timingSafeEqual === "undefined"`), so the
@@ -377,6 +378,140 @@ export function clipCloseReason(reason: string, limit = 123): string {
   while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
   const clipped = new TextDecoder().decode(bytes.subarray(0, end)).trimEnd();
   return clipped.length > 0 ? clipped : "adapter error";
+}
+
+/**
+ * Streaming sanitizer for untrusted stderr from adapter processes.
+ *
+ * Implements an explicit state machine that discards ANSI CSI and OSC sequences
+ * (including their payloads, even when payloads contain newlines or are split
+ * across chunk boundaries or split String Terminators).
+ * Line buffering is strictly bounded to 4096 characters per line to prevent
+ * unbounded memory accumulation under arbitrary adapter output.
+ */
+export class StderrSanitizer {
+  private inOsc = false;
+  private inOscEsc = false;
+  private inCsi = false;
+  private inEsc = false;
+  private lineBuffer = "";
+
+  public processChunk(chunk: string, onLine: (line: string) => void): void {
+    if (typeof chunk !== "string" || !chunk) return;
+    for (let i = 0; i < chunk.length; i++) {
+      const char = chunk[i];
+      const code = char.charCodeAt(0);
+
+      // 8-bit C1 control characters (OSC: \u009d, CSI: \u009b)
+      if (char === "\u009d") {
+        this.inOsc = true;
+        this.inOscEsc = false;
+        this.inEsc = false;
+        this.inCsi = false;
+        continue;
+      }
+      if (char === "\u009b") {
+        if (!this.inOsc) {
+          this.inCsi = true;
+          this.inEsc = false;
+        }
+        continue;
+      }
+
+      if (this.inOsc) {
+        if (this.inOscEsc) {
+          this.inOscEsc = false;
+          if (char === "\\") {
+            // ST complete (\x1b\\)
+            this.inOsc = false;
+            continue;
+          }
+          if (char === "\x1b") {
+            this.inOscEsc = true;
+            continue;
+          }
+          continue;
+        }
+        if (char === "\x07" || char === "\u009c") {
+          this.inOsc = false;
+          continue;
+        }
+        if (char === "\x1b") {
+          this.inOscEsc = true;
+          continue;
+        }
+        // Inside OSC, all characters (including newlines and payloads) are discarded
+        continue;
+      }
+
+      if (this.inEsc) {
+        this.inEsc = false;
+        if (char === "]") {
+          this.inOsc = true;
+          this.inCsi = false;
+          continue;
+        }
+        if (char === "[") {
+          this.inCsi = true;
+          this.inOsc = false;
+          continue;
+        }
+        if (char === "\x1b") {
+          this.inEsc = true;
+          this.inCsi = false;
+          continue;
+        }
+        continue;
+      }
+
+      if (char === "\x1b") {
+        this.inEsc = true;
+        this.inCsi = false;
+        continue;
+      }
+
+      if (this.inCsi) {
+        // CSI final character is in the range 0x40-0x7E (@-~)
+        if (code >= 0x40 && code <= 0x7e) {
+          this.inCsi = false;
+        }
+        continue;
+      }
+
+      if (char === "\n") {
+        const clean = this.lineBuffer
+          .replace(/[\x00-\x1f\x7f-\x9f]+/g, " ")
+          .replace(/ {2,}/g, " ")
+          .trim();
+        this.lineBuffer = "";
+        if (clean) onLine(clean);
+        continue;
+      }
+
+      if (this.lineBuffer.length < 4096) {
+        this.lineBuffer += char;
+      } else {
+        const clean = this.lineBuffer
+          .replace(/[\x00-\x1f\x7f-\x9f]+/g, " ")
+          .replace(/ {2,}/g, " ")
+          .trim();
+        this.lineBuffer = "";
+        if (clean) onLine(clean);
+        this.lineBuffer = char;
+      }
+    }
+  }
+
+  public flush(onLine: (line: string) => void): void {
+    if (this.lineBuffer.trim()) {
+      const clean = this.lineBuffer
+        .replace(/[\x00-\x1f\x7f-\x9f]+/g, " ")
+        .replace(/ {2,}/g, " ")
+        .trim();
+      this.lineBuffer = "";
+      if (clean) onLine(clean);
+    }
+  }
 }
 
 /** The working directory a session request without one gets (host-side default).
@@ -923,13 +1058,42 @@ export function createAcpServer(
         writer = proc.stdin.getWriter();
         lastStderr = "";
 
+        // Relay stderr to console and remember its tail for the exit reason
+        const stderrDrained = (async () => {
+          const reader = proc.stderr.getReader();
+          const decoder = new TextDecoder();
+          const sanitizer = new StderrSanitizer();
+          const onLine = (cleanLine: string) => {
+            lastStderr = (lastStderr ? `${lastStderr} | ${cleanLine}` : cleanLine).slice(-2000);
+            console.error(`[adapter-stderr] ${cleanLine}`);
+            // 5f5u: an auth-precedence warning only visible in a child's stderr is invisible in
+            // the surface the user is watching — say it host-side, with the way to change it.
+            const authNote = actionableAuthWarning(cleanLine);
+            if (authNote) console.error(sanitizeLogString(authNote));
+          };
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              const text = decoder.decode(value, { stream: true });
+              if (text) {
+                sanitizer.processChunk(text, onLine);
+              }
+            }
+            sanitizer.flush(onLine);
+          } catch { /* stream closed */ }
+        })();
+
         // A dead adapter must FAIL THE TURN, not hang it: when the child exits
         // (crash, missing module, bad flags) close the socket with its exit
         // status and the last stderr lines, so a client's pending requests
         // reject at once instead of waiting out the request timeout.
         (async () => {
           const exitStatus = await proc.status;
-          const detail = lastStderr.trim().split("\n").slice(-3).join(" | ") || "no stderr";
+          try {
+            await Promise.race([stderrDrained, new Promise((r) => setTimeout(r, 200))]);
+          } catch { /* ignore drain timeout */ }
+          const detail = lastStderr ? sanitizeLogString(lastStderr) : "no stderr";
           console.error(`[acp-bridge] adapter for harness "${connectionHarness}" exited (code ${exitStatus.code}, signal ${exitStatus.signal}): ${detail}`);
           if (socket.readyState === WebSocket.OPEN) {
             try { socket.close(1011, clipCloseReason(`adapter for harness "${connectionHarness}" exited: ${detail}`)); } catch { /* already closed */ }
@@ -960,20 +1124,23 @@ export function createAcpServer(
                       const rawMsg = typeof frame.error?.message === "string"
                         ? frame.error.message
                         : "(non-string error message)";
-                      const sanitizedMsg = rawMsg.replace(/[\r\n]+/g, " ");
+                      const sanitizedMsg = sanitizeLogString(rawMsg);
                       const msg = sanitizedMsg.length > 500
                         ? `${sanitizedMsg.slice(0, 500)}… [truncated]`
                         : sanitizedMsg;
-                      const code = (typeof frame.error?.code === "number" || typeof frame.error?.code === "string")
-                        ? frame.error.code
+                      const rawCode = (typeof frame.error?.code === "number" || typeof frame.error?.code === "string")
+                        ? String(frame.error.code)
                         : "unknown";
-                      const frameId = (typeof frame.id === "string" || typeof frame.id === "number")
-                        ? frame.id
-                        : (frame.id ?? "none");
+                      const code = sanitizeLogString(rawCode) || "unknown";
+                      const rawFrameId = (typeof frame.id === "string" || typeof frame.id === "number")
+                        ? String(frame.id)
+                        : (frame.id !== undefined && frame.id !== null ? String(frame.id) : "none");
+                      const frameId = sanitizeLogString(rawFrameId) || "none";
                       console.error(`[acp-bridge] adapter error for harness "${connectionHarness}" (id ${frameId}): ${msg} (code ${code})`);
                     }
                     if (frame?.method === "_auth/status_update" && frame.params?.authStatus?.kind === "none") {
-                      console.error(`[acp-bridge] adapter auth status for harness "${connectionHarness}": ${frame.params.authStatus?.label || "Not logged in"}`);
+                      const authLabel = sanitizeLogString(frame.params.authStatus?.label || "Not logged in");
+                      console.error(`[acp-bridge] adapter auth status for harness "${connectionHarness}": ${authLabel}`);
                     }
                     // N2: Drop adapter-originated frames that target private _cap/* namespace
                     if (typeof frame?.method === "string" && frame.method.startsWith("_cap/")) {
@@ -994,26 +1161,7 @@ export function createAcpServer(
           }
         })();
 
-        // Relay stderr to console and remember its tail for the exit reason
-        (async () => {
-          const reader = proc.stderr.getReader();
-          const decoder = new TextDecoder();
-          try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              const text = decoder.decode(value, { stream: true });
-              if (text.trim()) {
-                lastStderr = (lastStderr + text).slice(-2000);
-                console.error(`[adapter-stderr] ${text.trim()}`);
-                // 5f5u: an auth-precedence warning only visible in a child's stderr is invisible in
-                // the surface the user is watching — say it host-side, with the way to change it.
-                const authNote = actionableAuthWarning(text);
-                if (authNote) console.error(authNote);
-              }
-            }
-          } catch { /* stream closed */ }
-        })();
+
       } catch (err) {
         console.error(`[acp-bridge] Failed to spawn adapter for harness "${connectionHarness}":`, err);
         // A close reason is capped at 123 BYTES — an unbounded one throws

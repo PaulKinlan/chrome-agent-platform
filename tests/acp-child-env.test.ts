@@ -109,3 +109,14 @@ Deno.test("5f5u: SCOPING REQUIRES clearEnv — omitting a variable from env does
     "with the default the child inherits the parent's key DESPITE it being absent from `env`; clearEnv:true is what scopes it",
   );
 });
+
+Deno.test("actionableAuthWarning strips ANSI/CSI/OSC escapes including private parameter bytes from input", () => {
+  const rawWithEscapes =
+    "⚠ \x1b[31mclaude.ai connectors are disabled\x1b[0m because \x1b[>0cANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · \x1b]52;c;SECRET\x07Unset it";
+  const line = actionableAuthWarning(rawWithEscapes);
+  assert(line, "must produce warning line");
+  assertStringIncludes(line as string, "claude.ai connectors are disabled because ANTHROPIC_API_KEY");
+  assertEquals((line as string).includes("\x1b"), false, "must not contain ESC");
+  assertEquals((line as string).includes(">0c"), false, "must strip private parameter CSI >0c");
+  assertEquals((line as string).includes("SECRET"), false, "must strip OSC payload");
+});
