@@ -43,7 +43,7 @@ Deno.test("bbz3s: stale, mixed, flat and dangling AJV links fail closed against 
     const flat = join(root, "node_modules", "fast-uri");
     if (target === "flat") {
       Deno.mkdirSync(flat, { recursive: true });
-      Deno.writeTextFileSync(join(flat, "package.json"), JSON.stringify({ name: "fast-uri", version: "3.1.7" }));
+      Deno.writeTextFileSync(join(flat, "package.json"), JSON.stringify({ name: "fast-uri", version: "3.1.8" }));
     }
     Deno.symlinkSync(target === "flat" ? flat : store(target), join(ajvDir, "node_modules", "fast-uri"));
     if (options.shadow) {
@@ -52,43 +52,43 @@ Deno.test("bbz3s: stale, mixed, flat and dangling AJV links fail closed against 
       Deno.symlinkSync(store(options.shadow), join(nested, "fast-uri"));
     }
     Deno.writeTextFileSync(join(root, "package-lock.json"), JSON.stringify({ packages: {
-      "node_modules/fast-uri": { version: "3.1.7", integrity: "sha512-test" },
+      "node_modules/fast-uri": { version: "3.1.8", integrity: "sha512-test" },
       "node_modules/@modelcontextprotocol/sdk": { version: "1.31.0" },
     } }));
     Deno.writeTextFileSync(join(root, "deno.lock"), JSON.stringify({ npm: {
-      [`fast-uri@${options.deno ?? "3.1.7"}`]: { integrity: options.deno ? "sha512-old" : "sha512-test" },
+      [`fast-uri@${options.deno ?? "3.1.8"}`]: { integrity: options.deno ? "sha512-old" : "sha512-test" },
       "@modelcontextprotocol/sdk@1.31.0_zod@3.25.76": { integrity: "sha512-sdk" },
       "@modelcontextprotocol/sdk@1.31.0_zod@4.4.3": { integrity: "sha512-sdk" },
     } }));
-    return { root, sdkDir, expected: join(store("3.1.7"), "package.json") };
+    return { root, sdkDir, expected: join(store("3.1.8"), "package.json") };
   };
   try {
     // Old store ONLY: both locks are patched but AJV resolves vulnerable bytes.
     const stale = assertThrows(() => assertLiveFastUriResolution(fixture(["3.1.5"], "3.1.5")),
       Error, "cap-security-dependency-resolve:");
     assertStringIncludes(stale.message, "fast-uri 3.1.5");
-    assertStringIncludes(stale.message, "fast-uri 3.1.7");
+    assertStringIncludes(stale.message, "fast-uri 3.1.8");
     // Both directories present: checking for patched-dir PRESENCE would pass.
-    assertStringIncludes(assertThrows(() => assertLiveFastUriResolution(fixture(["3.1.5", "3.1.7"], "3.1.5"))).message,
+    assertStringIncludes(assertThrows(() => assertLiveFastUriResolution(fixture(["3.1.5", "3.1.8"], "3.1.5"))).message,
       "fast-uri 3.1.5");
     // The actual importer is Ajv dist/runtime/uri.js, not Ajv package.json:
     // even a correct package-root link can be shadowed by a nested old copy.
     assertStringIncludes(assertThrows(() => assertLiveFastUriResolution(
-      fixture(["3.1.5", "3.1.7"], "3.1.7", { shadow: "3.1.5" }))).message, "fast-uri 3.1.5");
-    const good = fixture(["3.1.7"], "3.1.7");
+      fixture(["3.1.5", "3.1.8"], "3.1.8", { shadow: "3.1.5" }))).message, "fast-uri 3.1.5");
+    const good = fixture(["3.1.8"], "3.1.8");
     const current = assertLiveFastUriResolution(good);
-    assertEquals(current.version, "3.1.7");
+    assertEquals(current.version, "3.1.8");
     assertEquals(current.path, good.expected);
     // Same version in FLAT npm copy is not the Deno-store copy esbuild expects.
-    assertStringIncludes(assertThrows(() => assertLiveFastUriResolution(fixture(["3.1.7"], "flat"))).message,
+    assertStringIncludes(assertThrows(() => assertLiveFastUriResolution(fixture(["3.1.8"], "flat"))).message,
       "npm and Deno locks require");
-    const dangling = assertThrows(() => assertLiveFastUriResolution(fixture(["3.1.7"], "3.1.6")),
+    const dangling = assertThrows(() => assertLiveFastUriResolution(fixture(["3.1.8"], "3.1.6")),
       Error, "cap-security-dependency-resolve:");
     assertStringIncludes(dangling.message, "SDK -> AJV -> fast-uri cannot resolve");
     assertStringIncludes(assertThrows(() => assertLiveFastUriResolution(
-      fixture(["3.1.7"], "3.1.7", { deno: "3.1.5" }))).message, "fast-uri locks disagree");
+      fixture(["3.1.8"], "3.1.8", { deno: "3.1.5" }))).message, "fast-uri locks disagree");
     assertStringIncludes(assertThrows(() => assertLiveFastUriResolution(
-      fixture(["3.1.7"], "3.1.7", { sdk: "1.30.0" }))).message, "MCP SDK lock vs selected Deno-store instance");
+      fixture(["3.1.8"], "3.1.8", { sdk: "1.30.0" }))).message, "MCP SDK lock vs selected Deno-store instance");
   } finally {
     for (const root of roots) Deno.removeSync(root, { recursive: true });
   }

@@ -174,7 +174,7 @@ export function securityDependencyDrift(metafile, npmLock, denoLock) {
       mismatches.push(`${name}: npm=${npmVersion ?? "missing"}; deno=${denoVersions.join(",") || "missing"}; shipped=${shipped.join(",")}`);
     }
     if (name === "fast-uri" && npmVersion && !isPatchedFastUriVersion(npmVersion)) {
-      mismatches.push(`fast-uri ${npmVersion}: GHSA-qw65-cvwx-89v3 / GHSA-58mr-gqgx-xq4g require 3.1.7+ on the 3.x line`);
+      mismatches.push(`fast-uri ${npmVersion}: GHSA-qw65-cvwx-89v3 / GHSA-58mr-gqgx-xq4g / GHSA-hrr3-gc8f-f4qj require 3.1.8+ on the 3.x line`);
     }
   }
   return mismatches;
@@ -183,7 +183,7 @@ export function securityDependencyDrift(metafile, npmLock, denoLock) {
 export function isPatchedFastUriVersion(value) {
   if (typeof value !== "string" || !/^\d+\.\d+\.\d+$/.test(value)) return false;
   const [major, minor, patch] = value.split(".").map(Number);
-  return major === 3 && (minor > 1 || (minor === 1 && patch >= 7));
+  return major === 3 && (minor > 1 || (minor === 1 && patch >= 8));
 }
 
 /** Fail BEFORE esbuild on the ACTUAL SDK -> AJV -> fast-uri dependency path,

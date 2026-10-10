@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.625] — 2026-10-10
+- Upgrade fast-uri dependency to 3.1.8 to patch host normalization advisory
+
 ## [0.3.624] — 2026-10-10
 - Clear error message when an ACP agent cannot mount browser tools
 
