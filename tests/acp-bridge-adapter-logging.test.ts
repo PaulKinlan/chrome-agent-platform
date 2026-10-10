@@ -714,6 +714,41 @@ Deno.test("StderrSanitizer defers candidate diagnostic release until unterminati
     assertEquals(out, []);
     assertEquals(s.droppedLinesCount, 4);
   }
+
+  // 8. Unterminated OSC without trailing newlines accurately counts dropped lines (chrome-agent-platform-cploc)
+  {
+    // 8a. No newlines at all: 1 line suppressed (repro from cploc)
+    const s = new StderrSanitizer();
+    s.processChunk("\u001b]0;SECRET_PAYLOAD", () => {});
+    s.flush(() => {});
+    assertEquals(s.droppedLinesCount, 1);
+    assertEquals(s.unterminatedOscSeen, true);
+
+    // 8b. Trailing line without newline: 2 lines suppressed (repro from cploc)
+    const s2 = new StderrSanitizer();
+    s2.processChunk("\u001b]0;a\nTAIL", () => {});
+    s2.flush(() => {});
+    assertEquals(s2.droppedLinesCount, 2);
+    assertEquals(s2.unterminatedOscSeen, true);
+
+    // 8c. Chunk boundaries across partial unterminated lines: 2 lines suppressed
+    const s3 = new StderrSanitizer();
+    s3.processChunk("\u001b]0;first_", () => {});
+    s3.processChunk("half\nsecond_", () => {});
+    s3.processChunk("half", () => {});
+    s3.flush(() => {});
+    assertEquals(s3.droppedLinesCount, 2);
+    assertEquals(s3.unterminatedOscSeen, true);
+
+    // 8d. Clean terminated OSC with partial lines does NOT increment dropped count
+    const s4 = new StderrSanitizer();
+    const out: string[] = [];
+    s4.processChunk("\u001b]0;title\x07hello", (l) => out.push(l));
+    s4.flush((l) => out.push(l));
+    assertEquals(s4.droppedLinesCount, 0);
+    assertEquals(s4.unterminatedOscSeen, false);
+    assertEquals(out, ["hello"]);
+  }
 });
 
 Deno.test("acp-bridge retains split incomplete OSC and CSI sequences across stderr chunks without leaking payloads", async () => {
@@ -1282,6 +1317,68 @@ rl.on("line", (line) => {
       closeReason.includes("stderr suppressed after unterminated OSC (3 lines dropped)"),
       `Expected close reason to report suppressed diagnostics, got: "${closeReason}"`,
     );
+  } finally {
+    console.error = originalConsoleError;
+    await server.shutdown();
+  }
+});
+
+Deno.test("acp-bridge reports honest dropped line count when adapter stderr has unterminated OSC without trailing newline (chrome-agent-platform-cploc)", async () => {
+  const dir = durableDir("acp-logging-cploc-newline");
+  const adapterPath = `${dir}/adapter-cploc-mock.mjs`;
+
+  // Adapter writes an unterminated title OSC without ANY newline before exit
+  Deno.writeTextFileSync(
+    adapterPath,
+    `import readline from "node:readline";
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", async (line) => {
+  try {
+    const msg = JSON.parse(line);
+    if (msg.method === "initialize") {
+      process.stderr.write("\\u001b]0;SECRET_PAYLOAD_WITHOUT_NEWLINE");
+      setTimeout(() => process.exit(17), 50);
+    }
+  } catch {}
+});
+`,
+  );
+
+  const loggedErrors: string[] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    loggedErrors.push(args.map(String).join(" "));
+  };
+
+  const server = createAcpServer(0, adapterPath, {}, undefined, TEST_BRIDGE_TOKEN);
+  const port = (server as any).addr.port;
+
+  try {
+    let closeReason = "";
+    await new Promise<void>((resolve) => {
+      const ws = new WebSocket(authedEndpoint(port, "codex"));
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1 } }));
+      };
+      ws.onclose = (ev) => {
+        closeReason = ev.reason;
+        resolve();
+      };
+      ws.onerror = () => resolve();
+    });
+
+    const exitLog = loggedErrors.find((l) => l.includes("adapter for harness \"codex\" exited"));
+    assert(exitLog, `Expected exit log in logged errors, got: ${JSON.stringify(loggedErrors)}`);
+    assert(
+      exitLog.includes("stderr suppressed after unterminated OSC (1 line dropped)"),
+      `Expected exit log to report 1 line dropped, got: ${exitLog}`,
+    );
+    assert(
+      closeReason.includes("stderr suppressed after unterminated OSC (1 line dropped)"),
+      `Expected close reason to report 1 line dropped, got: "${closeReason}"`,
+    );
+    assert(!exitLog.includes("SECRET_PAYLOAD_WITHOUT_NEWLINE"), `Payload leaked into exit log: ${exitLog}`);
+    assert(!closeReason.includes("SECRET_PAYLOAD_WITHOUT_NEWLINE"), `Payload leaked into close reason: "${closeReason}"`);
   } finally {
     console.error = originalConsoleError;
     await server.shutdown();
