@@ -27,6 +27,7 @@ export const ERROR_CATEGORY = {
   TIMEOUT: "timeout",
   ABORTED: "aborted",
   STORAGE: "storage",
+  HARNESS_CONFIG: "harness-config",
   // The run's step budget ran out with work still to do — not a failure of
   // anything; the recovery is one Continue (lib/run-budget.js).
   BUDGET: "budget",
@@ -59,6 +60,8 @@ const ACTION = {
     "The run was cancelled.",
   [ERROR_CATEGORY.STORAGE]:
     "Free browser storage, then retry. Progressed or uncertain runs remain available for explicit recovery.",
+  [ERROR_CATEGORY.HARNESS_CONFIG]:
+    "Use Claude Code or Codex until Pi tool registration is available.",
   [ERROR_CATEGORY.BUDGET]:
     "Continue",
   [ERROR_CATEGORY.UNKNOWN]:
@@ -286,6 +289,20 @@ export function describeError(error, context = {}) {
     );
   }
 
+  // 0d. ACP harness tool mounting or configuration problem (chrome-agent-platform-w48gp).
+  if (/does not mount CAP tools|unknown acp harness|acp endpoint must be/i.test(raw)) {
+    const isPiToolProblem = /does not mount CAP tools/i.test(raw);
+    return build(
+      ERROR_CATEGORY.HARNESS_CONFIG,
+      raw,
+      isPiToolProblem
+        ? "Use Claude Code or Codex until Pi tool registration is available."
+        : "Check the ACP harness configuration in Settings → Providers.",
+      raw,
+      detailParts,
+    );
+  }
+
   // 1. Host-permission / network (the "Failed to fetch" class).
   if (/failed to fetch/i.test(raw + " " + cause) || /networkerror/i.test(raw + " " + cause)) {
     const reason = provider
@@ -401,11 +418,14 @@ function build(category, reason, action, message, detailParts) {
     .join(" · ");
   const safeReason = safe(reason || "");
   const safeAction = action || ACTION[ERROR_CATEGORY.UNKNOWN];
+  const combinedMessage = safeReason && safeAction && safeReason.includes(safeAction)
+    ? safeReason
+    : `${safeReason} — ${safeAction}`;
   return {
     category,
     reason: safeReason || "unknown",
     action: safeAction,
-    message: safe(`${safeReason} — ${safeAction}`),
+    message: safe(combinedMessage),
     detail,
   };
 }

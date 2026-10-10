@@ -9,7 +9,7 @@
 // in-memory session store outside a browser — no chrome stub is needed).
 
 // @ts-nocheck — dynamic route doubles (no types in Deno).
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertNotEquals } from "jsr:@std/assert@1";
 import { createProviderRoutes } from "../extension/background/routes/provider.js";
 
 const SETTINGS = { principal: "owner-options" };
@@ -73,4 +73,43 @@ Deno.test("provider.set rejects an unknown provider id", async () => {
   // The previous, valid config is untouched.
   const stored = await routes["provider.get"]({}, SETTINGS);
   assertEquals(stored.provider, "openai");
+});
+
+Deno.test("provider.permission-summary catches harnessConfig error and reports honest harness-config payload (w48gp)", async () => {
+  const piErrMsg = "pi-acp 0.0.33 does not mount CAP tools. Use Claude Code or Codex until Pi tool registration is available.";
+  const routes = createProviderRoutes({
+    harnessConfig: async (id) => {
+      if (id === "pi") throw new Error(piErrMsg);
+      return { provider: "acp", model: id, baseURL: "http://127.0.0.1:3210/" };
+    },
+  });
+
+  // 1. Successful harness config passes through.
+  const codexSummary = await routes["provider.permission-summary"]({ harnessId: "codex" });
+  assertEquals(codexSummary.provider, "acp");
+  assertEquals(codexSummary.origin, "http://127.0.0.1:3210/*");
+  assertEquals(codexSummary.reason, "");
+
+  // 2. Erroneous harness config (e.g. pi) catches throw and returns structured failure.
+  const piSummary = await routes["provider.permission-summary"]({ harnessId: "pi" });
+  assertEquals(piSummary.ok, false);
+  assertEquals(piSummary.error, piErrMsg);
+  assertEquals(piSummary.reason, piErrMsg);
+  assertEquals(piSummary.errorCategory, "harness-config");
+  assertEquals(piSummary.errorAction, "Use Claude Code or Codex until Pi tool registration is available.");
+});
+
+Deno.test("provider.permission-summary without harnessId does not route through harnessConfig or misclassify (P2)", async () => {
+  let harnessConfigCalled = false;
+  const routes = createProviderRoutes({
+    harnessConfig: async () => {
+      harnessConfigCalled = true;
+      throw new Error("should not be called without harnessId");
+    },
+  });
+
+  const summary = await routes["provider.permission-summary"]({});
+  assertEquals(harnessConfigCalled, false, "harnessConfig must not be called without harnessId");
+  assertNotEquals(summary.errorCategory, "harness-config");
+  assertEquals(summary.provider, "openai");
 });

@@ -56,9 +56,24 @@ export function createProviderRoutes({ invalidateAgent = () => {}, harnessConfig
       // invalid" for a config that simply has no base URL
       // (CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01). The preset base URL is
       // resolved inside providerOriginPattern itself.
-      const cfg = message.harnessId && harnessConfig
-        ? await harnessConfig(message.harnessId)
-        : await getProviderConfig();
+      let cfg;
+      if (message.harnessId && harnessConfig) {
+        try {
+          cfg = await harnessConfig(message.harnessId);
+        } catch (e) {
+          return {
+            ok: false,
+            error: String(e?.message ?? e),
+            reason: String(e?.message ?? e),
+            errorCategory: "harness-config",
+            errorAction: /does not mount CAP tools/i.test(String(e?.message ?? ""))
+              ? "Use Claude Code or Codex until Pi tool registration is available."
+              : "Check the ACP harness configuration in Settings → Providers.",
+          };
+        }
+      } else {
+        cfg = await getProviderConfig();
+      }
       const problem = providerEndpointProblem(cfg);
       return {
         provider: String(cfg.provider ?? ""),
