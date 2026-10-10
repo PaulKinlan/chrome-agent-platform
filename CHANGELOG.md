@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.629] — 2026-10-10
+- Invalidate cached agent rosters immediately upon agent updates
+
 ## [0.3.628] — 2026-10-10
 - Honor sticky tool consent Deny across name casing variants.
 
