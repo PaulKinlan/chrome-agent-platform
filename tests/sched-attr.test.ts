@@ -849,4 +849,54 @@ Deno.test("SW fire: routes through agent-worker.dispatch when offscreen host is 
   assertEquals(restorePost, undefined, "Worker host must NOT be kicked when cap:restoreFence is active");
   assert(swStore.get("cap:scheduledTasks")?.[restoreSched] !== undefined, "Scheduled task must NOT be deleted when restore is in progress");
   swStore.delete("cap:restoreFence");
+
+  // ── Falsifier 9j0x2: default profile scheduled fire does NOT create an offscreen document ──
+  const offscreenCreateCalls = [];
+  const origCreateDocument = globalThis.chrome.offscreen.createDocument;
+  const origGetContexts = globalThis.chrome.offscreen.getContexts;
+  globalThis.chrome.offscreen.createDocument = async () => {
+    offscreenCreateCalls.push(1);
+    return {};
+  };
+  globalThis.chrome.offscreen.getContexts = async () => [];
+
+  // Disable developer features to simulate the shipped default profile
+  swStore.delete("cap:developerFeatures");
+
+  const defaultSched = "task_default_profile_no_offscreen";
+  swStore.set("cap:scheduledTasks", {
+    [defaultSched]: {
+      name: defaultSched,
+      task: "scheduled task on default profile",
+      at: Date.now() - 1000,
+      owner: { threadId: "thread-default-test", agentRole: "hub" },
+    },
+  });
+  alarms.set(defaultSched, { when: Date.now() - 1000 });
+
+  await Promise.all(alarmListeners.map((fn) => fn({ name: defaultSched })));
+
+  assertEquals(offscreenCreateCalls.length, 0, "Default profile must NEVER call chrome.offscreen.createDocument on scheduled fire");
+
+  // Re-enable developer features, but fire a task with attachments (multimodal)
+  swStore.set("cap:developerFeatures", true);
+  const attachSched = "task_attach_no_offscreen";
+  swStore.set("cap:scheduledTasks", {
+    [attachSched]: {
+      name: attachSched,
+      task: "scheduled task with attachments",
+      attachments: [{ mimeType: "image/png", data: "base64..." }],
+      at: Date.now() - 1000,
+      owner: { threadId: "thread-attach-test", agentRole: "hub" },
+    },
+  });
+  alarms.set(attachSched, { when: Date.now() - 1000 });
+
+  await Promise.all(alarmListeners.map((fn) => fn({ name: attachSched })));
+
+  assertEquals(offscreenCreateCalls.length, 0, "Task with attachments must NEVER call chrome.offscreen.createDocument on scheduled fire");
+
+  // Restore offscreen mocks
+  globalThis.chrome.offscreen.createDocument = origCreateDocument;
+  globalThis.chrome.offscreen.getContexts = origGetContexts;
 });
