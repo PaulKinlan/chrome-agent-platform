@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.654] — 2026-10-10
+- Link w51r load-scaling unit test directly to exported scaling helper
+
 ## [0.3.653] — 2026-10-10
 - Reuse sanctioned load-per-CPU helper for w51r test timeout scaling
 
