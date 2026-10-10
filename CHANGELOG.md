@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.626] — 2026-10-10
+- Upgrade fast-uri dependency to 3.1.8 to patch the host-normalization advisory.
+
 ## [0.3.625] — 2026-10-10
 - Fence imported third-party skills and commands as untrusted content.
 
