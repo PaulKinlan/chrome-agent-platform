@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.653] — 2026-10-10
+- Reuse sanctioned load-per-CPU helper for w51r test timeout scaling
+
 ## [0.3.652] — 2026-10-10
 - Sanitize parameter query strings in ACP bridge health checks
 

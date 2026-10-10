@@ -8,6 +8,7 @@ import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
 import { isUsableBinary } from "../scripts/lib/browser-refusal.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { waitForAppReady } from "../scripts/lib/app-readiness.ts";
+import { currentLoadPerCpu, MAX_LOAD_SCALE } from "../scripts/lib/serial-phase.mjs";
 
 const EXT = fileURLToPath(new URL("../extension/", import.meta.url)).replace(/\/$/, "");
 const RESOLUTION = resolveChromiumBinaryReport();
@@ -54,6 +55,23 @@ Deno.test("w51r: refusing a hidden button sends no CDP input; a visible button s
   assertEquals(createAgentClickTarget(doc(button)), { ok: true, x: 16, y: 16 });
 });
 
+Deno.test("w51r: load scaling uses load-per-CPU without hardcoded core count or integer rounding", () => {
+  const computeScale = (loadPerCpu: number) => Math.min(MAX_LOAD_SCALE, Math.max(1, loadPerCpu));
+  // 1. Idle or negative load gives 1x baseline
+  assertEquals(computeScale(0), 1);
+  assertEquals(computeScale(0.5), 1);
+  assertEquals(computeScale(1), 1);
+  // 2. Fractional load scales smoothly without integer ceil jumps (e.g. 1.5x, not jumping to 2x)
+  assertEquals(computeScale(1.5), 1.5);
+  assertEquals(computeScale(2.25), 2.25);
+  // 3. High load caps strictly at MAX_LOAD_SCALE (4x)
+  assertEquals(computeScale(4), 4);
+  assertEquals(computeScale(10), 4);
+  // 4. Ambient helper returns valid finite number
+  const live = currentLoadPerCpu();
+  assert(Number.isFinite(live) && live >= 0, `currentLoadPerCpu must be finite, got ${live}`);
+});
+
 Deno.test({
   name: "w51r: real Create button clicks at wide width; collapsed narrow rail fails BEFORE a click",
   ignore: !BINARY,
@@ -61,14 +79,14 @@ Deno.test({
     const profile = chromeProfileDir("w51r-create-click");
     const evidence = durableDir("w51r-create-click", `${Date.now()}-${Deno.pid}`);
     await Deno.mkdir(evidence, { recursive: true });
-    // rbd84: under concurrent suite load (full gate with parallel workers), ambient
+    // spqxp: under concurrent suite load (full gate with parallel workers), ambient
     // CPU contention stretches app hydration and service worker IPC (skill.list /
-    // background-agent.list). Scale timeouts with load average while preserving fast
-    // baselines on idle runs.
-    const [load1] = (typeof Deno?.loadavg === "function" ? Deno.loadavg() : [1]);
-    const loadScale = Math.max(1, Math.min(5, Math.ceil((load1 ?? 1) / 2)));
-    const openTimeoutMs = 12000 * loadScale;
-    const readyTimeoutMs = 10000 * loadScale;
+    // background-agent.list). Scale timeouts using sanctioned load-per-CPU helper
+    // rather than hardcoding 2 CPUs or using integer ceiling. Caps at MAX_LOAD_SCALE (4x).
+    const loadPerCpu = currentLoadPerCpu();
+    const loadScale = Math.min(MAX_LOAD_SCALE, Math.max(1, loadPerCpu));
+    const openTimeoutMs = Math.round(12000 * loadScale);
+    const readyTimeoutMs = Math.round(10000 * loadScale);
     let chrome, cdp;
     try {
       chrome = await launchChrome({ binary: BINARY!, args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
