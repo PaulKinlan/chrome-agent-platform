@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.625] — 2026-10-10
+- Bound site documentation discovery parsing to prevent service worker stalls
+
 ## [0.3.624] — 2026-10-10
 - Clear error message when an ACP agent cannot mount browser tools
 
