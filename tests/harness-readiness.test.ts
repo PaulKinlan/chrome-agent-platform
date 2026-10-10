@@ -17,8 +17,15 @@ import {
   APP_READY_ATTR,
   APP_READY_EXPRESSION,
   interactWhenReady,
+  isTransportOrEvaluateTimeoutError,
   waitForAppReady,
 } from "../scripts/lib/app-readiness.ts";
+import { isCdpEvaluateTimeout } from "../scripts/lib/quiet-window.ts";
+import {
+  CdpEvaluateLoadTimeoutError,
+  CdpEvaluateIdleTimeoutError,
+  type EvaluateTimeoutVerdict,
+} from "../scripts/lib/kat-evaluate.ts";
 import { clickVisibleCreateAgent } from "../scripts/lib/create-agent-click.ts";
 
 Deno.test("iksuc: pre-hydration click silently no-ops on unhydrated fixture (reproducing the gap)", async () => {
@@ -263,4 +270,120 @@ Deno.test("iksuc: APP_READY_EXPRESSION evaluates Sidepanel DOM readiness accurat
   const res = runExpression(hydratedSidepanel);
   assertEquals(res.ready, true);
   assertEquals(res.signal, "sidepanel-hydrated");
+});
+
+Deno.test("u7p0b: waitForAppReady propagates cdp evaluate timeout without laundering into app-never-became-ready", async () => {
+  // Evaluator rejects with standard CDP evaluate timeout
+  const timeoutError = new Error("cdp timeout: Runtime.evaluate exceeded 30000ms");
+  const evaluate = async (_expr: string) => {
+    throw timeoutError;
+  };
+
+  let caught: any = null;
+  try {
+    await waitForAppReady(evaluate, { timeoutMs: 1000, pollIntervalMs: 20 });
+  } catch (e) {
+    caught = e;
+  }
+
+  assert(caught !== null, "must throw when evaluator fails");
+  assertEquals(caught, timeoutError, "must rethrow the exact evaluate timeout error without laundering");
+  assert(
+    isCdpEvaluateTimeout(caught.message),
+    "the escaped error must be classified by isCdpEvaluateTimeout in the journey catch",
+  );
+  assert(
+    !caught.message.startsWith(APP_NEVER_BECAME_READY),
+    "must NOT replace CDP timeout with app-never-became-ready",
+  );
+});
+
+Deno.test("u7p0b: waitForAppReady propagates CdpEvaluateLoadTimeoutError and CdpEvaluateIdleTimeoutError with verdict preserved", async () => {
+  const dummyVerdict: EvaluateTimeoutVerdict = {
+    cause: "loaded",
+    environmental: true,
+    reason: "heavy rustc compilation under test",
+    environment: "load/core 3.5, activeCompilers 2",
+    sample: null,
+  };
+
+  const loadError = new CdpEvaluateLoadTimeoutError("Runtime.evaluate", dummyVerdict, 1000, 3000);
+  const evaluateLoad = async (_expr: string) => {
+    throw loadError;
+  };
+
+  let caughtLoad: any = null;
+  try {
+    await waitForAppReady(evaluateLoad, { timeoutMs: 1000, pollIntervalMs: 20 });
+  } catch (e) {
+    caughtLoad = e;
+  }
+
+  assert(caughtLoad instanceof CdpEvaluateLoadTimeoutError, "must propagate CdpEvaluateLoadTimeoutError");
+  assertEquals(caughtLoad.verdict.cause, "loaded");
+  assertEquals(caughtLoad.totalTimeoutMs, 3000);
+
+  const idleVerdict: EvaluateTimeoutVerdict = {
+    cause: "idle-never-settled",
+    environmental: false,
+    reason: "service worker deadlocked while box idle",
+    environment: "load/core 0.1, activeCompilers 0",
+    sample: null,
+  };
+  const idleError = new CdpEvaluateIdleTimeoutError("Runtime.evaluate", idleVerdict, 1000);
+  const evaluateIdle = async (_expr: string) => {
+    throw idleError;
+  };
+
+  let caughtIdle: any = null;
+  try {
+    await waitForAppReady(evaluateIdle, { timeoutMs: 1000, pollIntervalMs: 20 });
+  } catch (e) {
+    caughtIdle = e;
+  }
+
+  assert(caughtIdle instanceof CdpEvaluateIdleTimeoutError, "must propagate CdpEvaluateIdleTimeoutError");
+  assertEquals(caughtIdle.verdict.cause, "idle-never-settled");
+});
+
+Deno.test("u7p0b: waitForAppReady propagates CDP transport disconnect errors immediately", async () => {
+  const disconnectError = new Error("Protocol error: Target closed");
+  let callCount = 0;
+  const evaluate = async (_expr: string) => {
+    callCount++;
+    throw disconnectError;
+  };
+
+  let caught: any = null;
+  const start = Date.now();
+  try {
+    await waitForAppReady(evaluate, { timeoutMs: 5000, pollIntervalMs: 50 });
+  } catch (e) {
+    caught = e;
+  }
+  const elapsed = Date.now() - start;
+
+  assertEquals(caught, disconnectError, "must rethrow transport disconnect immediately");
+  assertEquals(callCount, 1, "must NOT retry across a closed target/session");
+  assert(elapsed < 500, `must fail fast on disconnect (took ${elapsed}ms)`);
+});
+
+Deno.test("u7p0b: waitForAppReady still reports named app-never-became-ready on genuine DOM unreadiness", async () => {
+  // Evaluator returns unready DOM response
+  const evaluate = async (_expr: string) => ({ ready: false, reason: "still mounting stage2B" });
+
+  let caught: any = null;
+  try {
+    await waitForAppReady(evaluate, { timeoutMs: 200, pollIntervalMs: 30, surfaceName: "Test Page" });
+  } catch (e) {
+    caught = e;
+  }
+
+  assert(caught !== null);
+  assert(
+    caught.message.startsWith(APP_NEVER_BECAME_READY),
+    `must report named failure '${APP_NEVER_BECAME_READY}', got: '${caught.message}'`,
+  );
+  assert(caught.message.includes("Test Page"));
+  assert(caught.message.includes("still mounting stage2B"));
 });
