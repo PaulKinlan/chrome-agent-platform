@@ -82,6 +82,27 @@ Deno.test("backup retains and validates a head-bound append-only repair witness"
   })), Error, "unbound repair intent residue");
 });
 
+Deno.test("backup refuses an exact-ID head while requested quarantine bytes lack retention proof", async () => {
+  const { paths, residue } = await chainFixture();
+  const id = "11111111-2222-4333-8444-555555555555";
+  const original = await unsealMasterJournalRecord(paths.get(`${PREFIX}head-a.json`), "head");
+  paths.set(`${PREFIX}repair-intent-1.json`, ENCODER.encode(await sealMasterJournalRecord("repair-intent", {
+    schemaVersion: 1, sequence: 1, id, reason: "orphan-record", evidenceSha256: "a".repeat(64),
+    requestedRepairRecords: [{ name: residue.slice(PREFIX.length), bytes: paths.get(residue).byteLength,
+      sha256: await hash(new TextDecoder().decode(paths.get(residue))) }],
+  })));
+  paths.set(`${PREFIX}head-a.json`, ENCODER.encode(await sealMasterJournalRecord("head", {
+    ...original, repairIntentSequence: 1, repairIntentId: id,
+  })));
+  await assertRejects(() => selectPublishedMasterJournalBackupPaths([...paths.keys()], async (path) => ({
+    size: paths.get(path).byteLength, stream: new Blob([paths.get(path)]).stream(),
+  })), Error, "quarantine retention manifest not yet verified");
+  const staged = [...paths.keys()].filter((path) => path !== residue)
+    .map((relPath) => ({ relPath, stagedPath: relPath }));
+  await assertRejects(() => validateStagedMasterJournalBackup(staged,
+    async (path) => paths.get(path)), Error, "quarantine retention manifest not yet verified");
+});
+
 Deno.test("backup validates an older discharged witness beside a newer checked repair head", async () => {
   const { paths, residue } = await chainFixture();
   paths.delete(residue);
