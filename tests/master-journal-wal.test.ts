@@ -415,6 +415,28 @@ Deno.test("reader refuses a forged checked re-repair chain that reuses an older 
   await assertRejects(() => readMasterJournalHead(master), Error, "repair intent chain or ID is reused");
 });
 
+Deno.test("a forged older head witness mismatch cannot hide behind a valid newer head", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  const first = await stageMasterJournalCutover(master, { journalExists: true,
+    journal: [{ id: "owned" }], archive: [], allocateVersion });
+  const next = await stageMasterJournalFrame(master, { operation: "append", row: { id: "newer" } },
+    { allocateVersion });
+  const id = "11111111-2222-4333-8444-555555555555";
+  await stageMasterJournalRepairIntent(master, { id, reason: "owner-repair",
+    expectedEvidenceSha256: (await fingerprintMasterJournalRepairEvidence(master)).sha256 });
+  const wal = await master.getDirectoryHandle("journal-wal");
+  (await wal.getFileHandle("head-b.json")).bytes = encoder.encode(await sealMasterJournalRecord("head", {
+    ...next, repairIntentSequence: 1, repairIntentId: id,
+  }));
+  (await wal.getFileHandle("head-a.json")).bytes = encoder.encode(await sealMasterJournalRecord("head", {
+    ...first, repairIntentSequence: 1,
+    repairIntentId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+  }));
+  await assertRejects(() => readMasterJournalHead(master), Error, "older head repair witness mismatch");
+  await assertRejects(() => readMasterJournalProjection(master), Error,
+    "older head repair witness mismatch", "both present head slots must preserve exact identity");
+});
+
 Deno.test("failed repair-intent close leaves non-overwritable fail-closed evidence", async () => {
   const { master, legacy } = await legacyFixture({ close: "repair-intent-1.json" });
   const input = { id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", reason: "pre-head-residue",

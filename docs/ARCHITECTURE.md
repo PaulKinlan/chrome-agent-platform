@@ -645,6 +645,8 @@ The staged lock-scoped `stageMasterJournalRepairIntent` seals each immutable
 A re-repair may append a fresh ID only after the previous intent is discharged;
 the newer file blocks the older signed head immediately, and its eventual
 selected head must advance the previous checked epoch's sequence/version.
+Both present head slots are checked against their own historical exact witness
+IDs; a forged older slot cannot hide behind a valid newer slot.
 Each immutable witness stores the exact pre-issuance bounded evidence SHA-256
 and any explicitly requested WAL leaf names/sizes/digests, rechecked under the
 master lock. `fingerprintRequestedMasterJournalRepairLeaves` only returns

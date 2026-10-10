@@ -205,6 +205,23 @@ export async function readMasterJournalHead(master) {
   } else if (firstIntent) {
     throw new Error("master journal repair intent is not discharged by the selected checked head");
   }
+  // The non-selected slot is historical, not permission to fall back. When
+  // that slot claims an earlier repair, its own exact witness must still be
+  // present and equal; otherwise a forged older slot could be exported later
+  // despite current reads appearing sound. Pre-repair heads carry no ID.
+  for (const older of heads) {
+    if (older === selected || older.repairIntentSequence === undefined) continue;
+    if (older.repairIntentSequence > (selected.repairIntentSequence ?? 0)) {
+      throw new Error("master journal older head repair witness is ahead of selected head");
+    }
+    const historical = await readRecord(directory,
+      `repair-intent-${older.repairIntentSequence}.json`, "repair-intent");
+    if (!historical) throw new Error("master journal older head repair witness is missing");
+    validateIntent(historical, older.repairIntentSequence);
+    if (older.repairIntentId !== historical.id) {
+      throw new Error("master journal older head repair witness mismatch");
+    }
+  }
   return selected;
 }
 
