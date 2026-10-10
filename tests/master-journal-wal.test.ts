@@ -292,6 +292,11 @@ Deno.test("a newer immutable repair intent cannot be discharged by an older sign
     ...head, repairIntentId: firstId, repairIntentSequence: 1,
   }));
   assertEquals((await readMasterJournalHead(master)).repairIntentId, firstId);
+  const sameIdPlan = await fingerprintMasterJournalRepairEvidence(master);
+  await assertRejects(() => stageMasterJournalRepairIntent(master, {
+    id: firstId, reason: "owner-repair", expectedEvidenceSha256: sameIdPlan.sha256,
+  }), Error, "new ID", "a discharged ID may not be minted again for re-repair");
+  assertEquals(wal.children.has("repair-intent-2.json"), false);
   await stageMasterJournalRepairIntent(master, { id: nextId, reason: "owner-repair",
     expectedEvidenceSha256: (await fingerprintMasterJournalRepairEvidence(master)).sha256 });
   assertEquals(firstFile.bytes, firstBytes, "old checked witness bytes stay append-only");
