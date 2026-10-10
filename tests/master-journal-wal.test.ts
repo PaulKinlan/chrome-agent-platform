@@ -562,6 +562,18 @@ Deno.test("failed repair-intent close leaves non-overwritable fail-closed eviden
   assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy);
 });
 
+Deno.test("owner evidence rejects every hard limit override before reading bytes", async () => {
+  const { master, legacy } = await legacyFixture();
+  await assertRejects(() => snapshotMasterJournalRepairEvidence(master,
+    { maxRecords: 4097 }), Error, "limits are invalid");
+  await assertRejects(() => snapshotMasterJournalRepairEvidence(master,
+    { maxRecordBytes: 32 * 1024 * 1024 + 1 }), Error, "limits are invalid");
+  await assertRejects(() => snapshotMasterJournalRepairEvidence(master,
+    { maxTotalBytes: 64 * 1024 * 1024 + 1 }), Error, "limits are invalid");
+  assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy);
+  assertEquals(master.children.has("journal-wal"), false);
+});
+
 Deno.test("legacy journal and archive evidence each enforce the per-file byte cap without WAL", async () => {
   const { master } = await legacyFixture();
   const journal = await master.getFileHandle("journal.json");
