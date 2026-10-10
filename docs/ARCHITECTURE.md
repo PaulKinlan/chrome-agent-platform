@@ -660,9 +660,12 @@ implemented together. The test/owner-repair-only `stageMasterJournalQuarantineCo
 can preserve source-equal raw bytes under deterministic immutable WAL-root names:
 it readback-checks the copy, leaves the source untouched, allows only an exact
 completed retry, and refuses a torn destination without overwriting it. It does
-NOT acquire admission/approval or publish a head; backup export/import still
-refuse quarantine until a checked head binds retention and export privacy policy
-is settled.
+NOT acquire admission/approval or publish a head. The read-only
+`inspectMasterJournalQuarantineRetentionForOwner` checks the exact witness chain,
+all copied byte digests and unbound quarantine leaves within explicit count/byte
+limits; its digest is only forensic evidence, not a permit. Backup export/import
+still refuse quarantine until a checked head binds retention and export privacy
+policy is settled.
 Witnesses remain append-only (bounded to 32 per profile). The exact intent
 leaf grammar now participates in backup export/import: both head slots retain
 their own witness-prefix dependencies, a pending newer OR skipped orphan

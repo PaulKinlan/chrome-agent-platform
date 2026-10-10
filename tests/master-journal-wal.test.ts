@@ -10,7 +10,10 @@ import {
 } from "../extension/lib/master-journal-owner-inspection.js";
 import { inspectIntactMasterJournalPrefixesForOwner } from "../extension/lib/master-journal-repair-prefix.js";
 import { deriveMasterJournalQuarantineManifest } from "../extension/lib/master-journal-quarantine-manifest.js";
-import { stageMasterJournalQuarantineCopy } from "../extension/lib/master-journal-quarantine-copy.js";
+import {
+  inspectMasterJournalQuarantineRetentionForOwner,
+  stageMasterJournalQuarantineCopy,
+} from "../extension/lib/master-journal-quarantine-copy.js";
 import {
   selectPublishedMasterJournalBackupPaths,
   validateStagedMasterJournalBackup,
@@ -153,6 +156,40 @@ Deno.test("test-only quarantine copy retains exact raw bytes and refuses changed
   assertEquals((await wal.getFileHandle(copied.quarantineLeaf)).bytes, original);
   await assertRejects(() => readMasterJournalHead(master), Error);
   assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy);
+});
+
+Deno.test("read-only owner retention inspection verifies all copies and refuses orphan bytes", async () => {
+  const { master } = await legacyFixture();
+  const wal = await master.getDirectoryHandle("journal-wal", { create: true });
+  const source = "head-a.json";
+  (await wal.getFileHandle(source, { create: true })).bytes = encoder.encode("{ torn and retained");
+  const plan = await fingerprintRequestedMasterJournalRepairLeaves(master, [source]);
+  const intent = await stageMasterJournalRepairIntent(master, {
+    id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", reason: "torn-head",
+    expectedEvidenceSha256: plan.evidenceSha256, requestedRepairLeaves: [source],
+  });
+  await assertRejects(() => inspectMasterJournalQuarantineRetentionForOwner(master,
+    { lastIntentSequence: 1 }), Error, "missing");
+  const copy = await stageMasterJournalQuarantineCopy(master,
+    { intentSequence: 1, sourceName: source });
+  const beforeInspect = [...wal.children].map(([name, handle]) => [name, handle.bytes.slice()]);
+  const inspected = await inspectMasterJournalQuarantineRetentionForOwner(master,
+    { lastIntentSequence: 1 });
+  assertEquals([...wal.children].map(([name, handle]) => [name, handle.bytes]), beforeInspect,
+    "forensic inspection must not alter any WAL leaf");
+  assertEquals(inspected.manifestSha256, (await deriveMasterJournalQuarantineManifest(intent)).sha256);
+  assertEquals(inspected.copyCount, 1);
+  assertEquals(inspected.actionable, false);
+  assertEquals(inspected.candidates, []);
+  (await wal.getFileHandle(copy.quarantineLeaf)).bytes = encoder.encode("{ altered copy");
+  await assertRejects(() => inspectMasterJournalQuarantineRetentionForOwner(master,
+    { lastIntentSequence: 1 }), Error, "mismatched");
+  (await wal.getFileHandle(copy.quarantineLeaf)).bytes = (await wal.getFileHandle(source)).bytes.slice();
+  const orphan = `quarantine-1-${"f".repeat(64)}.json`;
+  (await wal.getFileHandle(orphan, { create: true })).bytes = encoder.encode("orphan");
+  await assertRejects(() => inspectMasterJournalQuarantineRetentionForOwner(master,
+    { lastIntentSequence: 1 }), Error, "unbound");
+  await assertRejects(() => readMasterJournalHead(master), Error);
 });
 
 Deno.test("torn quarantine copy never overwrites source or repairs itself on retry", async () => {
