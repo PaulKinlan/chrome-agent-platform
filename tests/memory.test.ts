@@ -160,7 +160,7 @@ Deno.test("memory.has distinguishes a stored null from an absent key (round-22 n
 
 Deno.test("generic master memory cannot forge journal or archive while trusted append remains available", async () => {
   const mem = masterMemory();
-  for (const key of ["journal", "journal-archive"]) {
+  for (const key of ["journal", "journal-archive", "journal-wal", "journal-wal/quarantine/repair-attempt"]) {
     await assertRejects(() => mem.set(key, [{ type: "forged" }]), Error, "reserved");
   }
   const site = siteMemory("https://journal-reservation.example");

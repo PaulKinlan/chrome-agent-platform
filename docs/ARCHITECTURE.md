@@ -673,7 +673,9 @@ recovery, real Chrome cross-context proof and safe on-disk retirement also
 remain outstanding.
 Generic model-facing `memory.set` can no longer replace master `journal` or
 `journal-archive`, including on legacy profiles: both are reserved authority
-keys. A product caller census found no legitimate literal `.set("journal")`
+keys. The `journal-wal` stem and `journal-wal/quarantine/` namespace are also
+reserved from generic master memory writes before any quarantine publisher is
+implemented. A product caller census found no legitimate literal `.set("journal")`
 or `.set("journal-archive")` call; trusted append and compensation use
 `setTrusted` and dedicated verbs. This user-visible tightening does not
 implicitly enable the WAL writer or create a generic model WAL replace route.

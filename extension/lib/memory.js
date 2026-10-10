@@ -288,6 +288,10 @@ const MASTER_RESERVED_KEYS = new Set([
   // history. Trusted append/receipt/cancellation routes own these keys.
   "journal",
   "journal-archive",
+  // WAL repair/quarantine is a nested authority namespace, never a generic
+  // model key (even if a flat key with this stem would otherwise be legal).
+  "journal-wal",
+  "journal-wal/quarantine",
   "origins",
   "enrolled",
   "assets",
@@ -919,6 +923,7 @@ async function setValueInner(path, key, value, { isMaster, trusted = false, stor
   // forged `thread:t_...` body must be as unreachable as a forged `threads`
   // index (the wider-goal review's thread-authority finding).
   const trustedPrefix = isMaster && (
+    k.startsWith("journal-wal/") ||
     k.startsWith("thread:") || k.startsWith("run:") ||
     k.startsWith("run-outbox:") || k.startsWith("run-log:") ||
     k.startsWith("run-resume:") || k.startsWith("run-payload:")
