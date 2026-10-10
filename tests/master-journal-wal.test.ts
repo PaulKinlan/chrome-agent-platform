@@ -2,6 +2,7 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { dumpLogBuffer } from "../extension/lib/cap-log.js";
 import { createMasterJournalIssuer } from "../extension/lib/master-journal-issuer.js";
+import { inspectMasterJournalForOwner } from "../extension/lib/master-journal-owner-inspection.js";
 import {
   selectPublishedMasterJournalBackupPaths,
   validateStagedMasterJournalBackup,
@@ -91,6 +92,41 @@ async function legacyFixture(faults = {}) {
   }, readIssuedVersion: async (claim) => issued.get(claimKey(claim)) ?? null,
     readGeneration: async () => generation };
 }
+
+Deno.test("owner journal inspection describes corruption without selecting legacy fallback", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  assertEquals((await inspectMasterJournalForOwner(master)).state, "legacy_empty_or_absent_wal");
+  const wal = await master.getDirectoryHandle("journal-wal", { create: true });
+  assertEquals((await inspectMasterJournalForOwner(master)).state, "legacy_empty_or_absent_wal");
+  await wal.getFileHandle("checkpoint-1-0.json", { create: true });
+  const preHead = await inspectMasterJournalForOwner(master);
+  assertEquals(preHead.state, "requires_explicit_owner_repair");
+  assertEquals(preHead.reason.includes("pre-head residue"), true);
+  await assertRejects(() => readMasterJournalHead(master), Error, "pre-head residue",
+    "owner inspection must not change the product's fail-closed authority reader");
+  await wal.removeEntry("checkpoint-1-0.json"); // explicit isolated-test repair, never an inspector side effect
+  assertEquals((await inspectMasterJournalForOwner(master)).state, "legacy_empty_or_absent_wal");
+  await stageMasterJournalCutover(master, { journalExists: true, journal: [{ id: "owned" }],
+    archive: [{ id: "historic" }], allocateVersion });
+  const checked = await inspectMasterJournalForOwner(master);
+  assertEquals(checked.state, "current_head_checked");
+  assertEquals(checked.liveRows, 1);
+  assertEquals(checked.archiveSegments, 1);
+  assertEquals(checked.head.sequence, 0);
+  assertEquals(checked.olderHeadReplayVerified, false,
+    "inspection is not a full two-head export or restore validation");
+  const archiveName = (await readMasterJournalHead(master)).archive;
+  const archive = await wal.getFileHandle(archiveName);
+  const archivedBytes = archive.bytes.slice();
+  archive.bytes = encoder.encode("{torn");
+  assertEquals((await inspectMasterJournalForOwner(master)).state, "requires_explicit_owner_repair",
+    "a current archive-chain failure cannot be reported as a checked projection");
+  archive.bytes = archivedBytes;
+  assertEquals((await inspectMasterJournalForOwner(master)).state, "current_head_checked");
+  (await wal.getFileHandle("head-b.json", { create: true })).bytes = encoder.encode("{torn");
+  assertEquals((await inspectMasterJournalForOwner(master)).state, "requires_explicit_owner_repair");
+  await assertRejects(() => readMasterJournalHead(master), Error);
+});
 
 Deno.test("master journal cutover stages and verifies whole live/archive rows before publishing one checked head", async () => {
   const { master, legacy, allocateVersion } = await legacyFixture();

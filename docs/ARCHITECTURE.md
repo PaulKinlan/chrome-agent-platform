@@ -635,7 +635,12 @@ staged gates. Even the Deno-only unregistered-store test seam reads the physical
 wrapped master store has no transaction facade. Torn, non-equal or source-mismatched
 immutable records, damaged head slots, and pre-head cutover residue (a
 nonempty WAL directory with no published head) remain fail-closed until
-explicit owner repair; none selects the stale legacy journal automatically. Archive rows are an append-only HISTORY LOG,
+explicit owner repair; none selects the stale legacy journal automatically. The
+read-only `inspectMasterJournalForOwner` helper classifies empty/absent WAL,
+pre-head/torn repair needs, or a checked *current* projection and archive
+chain, without switching authority or editing any record. It does not replay
+an older head slot, perform full backup validation, quarantine, or repair;
+those remain separate owner-gated work. Archive rows are an append-only HISTORY LOG,
 not a set of currently evicted rows: a compensated
 row may legitimately exist in both live and archive. Readers must not infer
 live state from archive history. On a post-commit guard failure, a replace or
