@@ -61,6 +61,8 @@ function sameOriginOnly(urls, origin, maxUrls = MAX_DISCOVERED_LINKS) {
 /**
  * Linear single-pass scanner for markdown link URLs [label](url).
  * Strictly O(N) forward-only scanning: no regex backtracking, no backward rescans (e7gwq voya0).
+ * Supports URLs and titles containing literal square brackets (e.g. Wikipedia /wiki/Foo_[bar],
+ * IPv6 addresses, and titles with brackets), while rejecting multiline links and nested link syntax (z3xx4).
  * Bounded by maxBytes (input slice) and maxLinks (stop early).
  */
 export function extractMarkdownLinks(text, { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS } = {}) {
@@ -79,13 +81,13 @@ export function extractMarkdownLinks(text, { maxBytes = MAX_DISCOVERY_DOC_BYTES,
         const closeParen = input.indexOf(")", i + 2);
         if (closeParen === -1) break;
         const inside = input.slice(i + 2, closeParen).trim();
-        if (inside && !inside.includes("\n") && !inside.includes("[") && !inside.includes("]")) {
+        if (inside && !inside.includes("\n")) {
           const spaceIdx = inside.search(/\s/);
           let urlCandidate = spaceIdx !== -1 ? inside.slice(0, spaceIdx) : inside;
           if (urlCandidate.startsWith("<") && urlCandidate.endsWith(">")) {
             urlCandidate = urlCandidate.slice(1, -1).trim();
           }
-          if (urlCandidate) {
+          if (urlCandidate && !urlCandidate.includes("](")) {
             urls.push(urlCandidate);
           }
         }

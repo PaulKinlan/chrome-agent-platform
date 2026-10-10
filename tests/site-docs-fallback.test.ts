@@ -245,6 +245,40 @@ Deno.test("extractMarkdownLinks: parses standard markdown links, links with titl
   ]);
 });
 
+Deno.test("z3xx4: extractMarkdownLinks extracts bracketed URLs and titles matching base regex behavior", () => {
+  const md = [
+    "- [Wiki bracketed URL](https://docs.example.com/wiki/Foo_[bar])",
+    '- [Title with brackets](https://docs.example.com/clean "Title [with] brackets")',
+    "- [Single-quoted title with brackets](https://docs.example.com/clean2 'Section [1]')",
+    "- [Angle brackets with inner brackets](<https://docs.example.com/wiki/Baz_[qux]>)",
+    "- [IPv6 address](http://[::1]:8080/docs)",
+    '- [Both URL and title have brackets](https://docs.example.com/a_[b] "Title [c]")',
+    "- [Malformed nested link]([nested](https://docs.example.com/bad))",
+  ].join("\n");
+
+  const urls = extractMarkdownLinks(md);
+  assertEquals(urls, [
+    "https://docs.example.com/wiki/Foo_[bar]",
+    "https://docs.example.com/clean",
+    "https://docs.example.com/clean2",
+    "https://docs.example.com/wiki/Baz_[qux]",
+    "http://[::1]:8080/docs",
+    "https://docs.example.com/a_[b]",
+  ]);
+
+  // Also verify parseLlmsTxt preserves same-origin bracketed doc URLs
+  const llmsTxt = [
+    "# Docs",
+    "- [Wiki](https://docs.example.com/wiki/Foo_[bar])",
+    '- [Guide](https://docs.example.com/guide "Guide [2026]")',
+  ].join("\n");
+  const parsed = parseLlmsTxt(llmsTxt, "https://docs.example.com");
+  assertEquals(parsed, [
+    "https://docs.example.com/wiki/Foo_[bar]",
+    "https://docs.example.com/guide",
+  ]);
+});
+
 Deno.test("e7gwq falsification: crafted adversarial inputs finish in linear time without stalling the service worker", () => {
   // 1. 100,000 unclosed opening brackets that would cause catastrophic scan/regex times
   const unclosedBrackets = "[".repeat(100_000);
