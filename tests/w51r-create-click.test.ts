@@ -80,7 +80,7 @@ Deno.test({
       const id = new URL(sw.url).host;
       const wide = await cdp.open(`chrome-extension://${id}/ntp/ntp.html`);
       // Bring tab to front so Chromium routes input events to an active, focused viewport
-      await cdp.send("Page.bringToFront", {}, wide.sessionId).catch(() => {});
+      await cdp.send("Page.bringToFront", {}, wide.sessionId);
       // Wait for app hydration so staged boot (Stage 1, 2A, 2B) and event listeners settle
       await waitForAppReady((expr) => cdp!.eval(wide.sessionId, expr), { surfaceName: "NTP Hub", timeoutMs: readyTimeoutMs });
       const state = `(() => { const b=document.getElementById('new-agent'); const h=[...document.querySelectorAll('body > agent-dialog')].find(h=>h.getAttribute('title')==='Create an agent');
@@ -105,7 +105,7 @@ Deno.test({
       await Deno.writeFile(`${evidence}/wide-open.png`, image);
 
       const narrow = await cdp.open("about:blank");
-      await cdp.send("Page.bringToFront", {}, narrow.sessionId).catch(() => {});
+      await cdp.send("Page.bringToFront", {}, narrow.sessionId);
       await cdp.send("Emulation.setDeviceMetricsOverride", { width: 500, height: 900, deviceScaleFactor: 1, mobile: false }, narrow.sessionId);
       await cdp.send("Page.navigate", { url: `chrome-extension://${id}/ntp/ntp.html` }, narrow.sessionId);
       await waitFor(narrow.sessionId, (s) => s.ready && s.buttonDisplay === "none", readyTimeoutMs);
