@@ -929,10 +929,11 @@ export function createAcpServer(
         // reject at once instead of waiting out the request timeout.
         (async () => {
           const exitStatus = await proc.status;
-          if (socket.readyState !== WebSocket.OPEN) return;
           const detail = lastStderr.trim().split("\n").slice(-3).join(" | ") || "no stderr";
           console.error(`[acp-bridge] adapter for harness "${connectionHarness}" exited (code ${exitStatus.code}, signal ${exitStatus.signal}): ${detail}`);
-          try { socket.close(1011, clipCloseReason(`adapter for harness "${connectionHarness}" exited: ${detail}`)); } catch { /* already closed */ }
+          if (socket.readyState === WebSocket.OPEN) {
+            try { socket.close(1011, clipCloseReason(`adapter for harness "${connectionHarness}" exited: ${detail}`)); } catch { /* already closed */ }
+          }
         })();
 
         // Stream stdout from adapter to WebSocket client
@@ -949,19 +950,30 @@ export function createAcpServer(
               while ((nl = buffer.indexOf("\n")) >= 0) {
                 const line = buffer.slice(0, nl);
                 buffer = buffer.slice(nl + 1);
-                if (line.trim() && socket.readyState === WebSocket.OPEN) {
-                  adapterName = adapterNameFromInitialize(line, initializeId, adapterName);
+                const trimmed = line.trim();
+                if (trimmed) {
+                  adapterName = adapterNameFromInitialize(trimmed, initializeId, adapterName);
+                  let dropFrame = false;
                   try {
-                    const frame = JSON.parse(line);
+                    const frame = JSON.parse(trimmed);
+                    if (frame?.error) {
+                      const msg = typeof frame.error?.message === "string" ? frame.error.message : JSON.stringify(frame.error);
+                      console.error(`[acp-bridge] adapter error for harness "${connectionHarness}" (id ${frame.id ?? "none"}): ${msg} (code ${frame.error?.code ?? "unknown"})`);
+                    }
+                    if (frame?.method === "_auth/status_update" && frame.params?.authStatus?.kind === "none") {
+                      console.error(`[acp-bridge] adapter auth status for harness "${connectionHarness}": ${frame.params.authStatus?.label || "Not logged in"}`);
+                    }
                     // N2: Drop adapter-originated frames that target private _cap/* namespace
                     if (typeof frame?.method === "string" && frame.method.startsWith("_cap/")) {
-                      continue;
+                      dropFrame = true;
                     }
                     if (frame.id === initializeId && frame.result) {
                       httpToolsSupported = frame.result.agentCapabilities?.mcpCapabilities?.http === true;
                     }
                   } catch { /* ACP framing errors are handled by the client */ }
-                  socket.send(line);
+                  if (!dropFrame && socket.readyState === WebSocket.OPEN) {
+                    socket.send(trimmed);
+                  }
                 }
               }
             }
