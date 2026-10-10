@@ -899,6 +899,7 @@ Deno.test("staged master clear preserves WAL authority and generation while prod
     }));
     assertEquals(stale.ok, false, "an old head cannot clear a newer generation");
     assertEquals(await withStoreTransaction(mem, async (tx) => await tx.masterJournal.head()), after);
+    await mem.setTrusted("before-failure", { mustBeTombstoned: true });
     await mem.setTrusted("owner-after", { keepUntilConfirmed: true });
     const masterNode = isolated.children.get("memory").children.get("master");
     const originalRemove = FakeDirHandle.prototype.removeEntry;
@@ -916,8 +917,15 @@ Deno.test("staged master clear preserves WAL authority and generation while prod
     const partial = await withStoreTransaction(mem, async (tx) => tx.masterJournal.head());
     assertEquals(partial.sequence, after.sequence + 1,
       "a published clear frame is not rolled back when a later key removal fails");
+    assertEquals(masterNode.children.has("owner-after.json"), true,
+      "the failed physical removal is reported, not mislabelled as an acknowledged clear");
+    assertEquals(await mem.has("before-failure"), false);
+    assert((await mem.getVersion("before-failure")) > partial.version,
+      "a deletion preceding the failure must retain a positive issued tombstone");
+    assertEquals(await mem.compareAndRestore("before-failure", 0, { stale: true }), false,
+      "negative absence already rejects stale expected-zero CAS; preserve that protection");
     assertEquals(await mem.get("owner-after"), { keepUntilConfirmed: true },
-      "the failed owner deletion is reported, not mislabelled as an acknowledged clear");
+      "the failed physical removal must not expose a tombstoned live envelope");
     const repaired = await withStoreTransaction(mem, async (tx) => tx.masterJournal.clearIfCurrent({
       expectedEpoch: partial.epoch, expectedVersion: partial.version,
     }));

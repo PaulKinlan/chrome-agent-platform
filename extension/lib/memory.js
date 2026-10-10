@@ -1066,26 +1066,39 @@ async function clearStoreDirectory(dir, { preserveWal = false, strictRemovals = 
     throw new Error("the durable generation authority is corrupt");
   }
   const removedKeys = [];
+  let tombs = strictRemovals ? await readTombs(dir) : null;
   for await (const [name] of dir.entries()) {
     if (name === GEN_FILE || name === TOMBS_FILE || name === "__epoch.json" ||
         (preserveWal && name === "journal-wal")) continue;
-    if (name.endsWith(".json")) {
-      const key = name.slice(0, -5);
-      if (!INTERNAL_KEY_RE.test(key)) removedKeys.push(key);
-    }
+    const key = name.endsWith(".json") ? name.slice(0, -5) : null;
+    const logicalKey = key !== null && !INTERNAL_KEY_RE.test(key) ? key : null;
+    // Keep the legacy clear's existing best-effort tombstoning even when a
+    // physical removal fails. The staged strict path never acknowledges one.
+    if (!strictRemovals && logicalKey !== null) removedKeys.push(logicalKey);
     try { await removeTracked(dir, name, { recursive: true }); }
     catch (error) {
       // Legacy clear preserves its historical best-effort cleanup. A staged
       // WAL clear must never ACK a partial profile deletion as successful.
       if (strictRemovals) throw error;
+      continue;
     }
-  }
-  const tombs = await readTombs(dir);
-  for (const key of removedKeys) {
+    if (!strictRemovals || logicalKey === null) continue;
+    // A later removal may fail. Persist this successful deletion's version
+    // before advancing, or a retry cannot discover its absent key. Do NOT
+    // tombstone before unlink: currentVersion prefers a live envelope while
+    // get/has prefer a tombstone, so a failed unlink would split authority.
     const deletedGen = await issueVersion(dir);
-    tombs.map.set(key, deletedGen);
+    tombs.map.set(logicalKey, deletedGen);
+    tombs = await writeTombs(dir, tombs);
   }
-  await writeTombs(dir, tombs);
+  if (!strictRemovals) {
+    tombs = await readTombs(dir);
+    for (const key of removedKeys) {
+      const deletedGen = await issueVersion(dir);
+      tombs.map.set(key, deletedGen);
+    }
+    await writeTombs(dir, tombs);
+  }
   if (genRaw && typeof genRaw.gen === "number") {
     await writeJson(dir, "__epoch.json", { gen: genRaw.gen });
   }

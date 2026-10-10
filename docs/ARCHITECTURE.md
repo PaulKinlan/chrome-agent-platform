@@ -586,7 +586,11 @@ using the lock they already hold; they never nest a second Web Lock. Staged
 frames for future direct store routes. The separate staged `clearIfCurrent`
 checks the same head tokens, publishes a clear-reset frame first, then removes
 non-WAL master keys with fresh tombstones while retaining `journal-wal/` and
-`__gen.json`; interruption is not a whole-profile atomic clear. Product
+`__gen.json`; each successful strict-path key unlink receives its own
+persisted generation tombstone before the next removal, so a later removal
+failure cannot make earlier versions revert to derived negative absence.
+Failure issuing that tombstone after an unlink still requires explicit owner
+repair; interruption is not a whole-profile atomic clear. Product
 `masterMemory().clear()` still refuses on a WAL head. Staged `append` shares the same pre/post-
 guard publication and live undo as receipt append without inventing an
 execution ID for ordinary rows; exact replay identity is optional and checked
