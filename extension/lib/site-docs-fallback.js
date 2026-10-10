@@ -21,16 +21,25 @@
 // The fetch-count window per fallback: a TIME/REQUEST budget (each page is a
 // network round-trip inside a tool call the owner is waiting on), not a size
 // cap. The window is always reported ("fetched N of M"), so nothing is hidden.
-const DOCS_FETCH_WINDOW = 8;
-const PER_FETCH_TIMEOUT_MS = 10_000;
+export const DOCS_FETCH_WINDOW = 8;
+export const PER_FETCH_TIMEOUT_MS = 10_000;
+
+// Maximum byte size of page-controlled discovery documents (llms.txt / sitemap.xml / root HTML).
+// Prevents superlinear or memory-exhausting scans on oversized documents (e7gwq).
+export const MAX_DISCOVERY_DOC_BYTES = 512 * 1024; // 512 KiB
+
+// Maximum candidate URLs discovered per index before filtering and ranking.
+// Bounds memory allocation and prevents link-flooding DoS on the service worker (e7gwq).
+export const MAX_DISCOVERED_LINKS = 256;
 
 // Asset-ish paths are never documentation.
 const ASSET_PATH_RE = /\.(?:png|jpe?g|gif|webp|svg|ico|css|js|mjs|map|json|xml|woff2?|ttf|otf|eot|mp[34]|webm|pdf|zip|tar|gz)$/i;
 
-function sameOriginOnly(urls, origin) {
+function sameOriginOnly(urls, origin, maxUrls = MAX_DISCOVERED_LINKS) {
   const out = [];
   const seen = new Set();
   for (const raw of urls) {
+    if (out.length >= maxUrls) break;
     let u;
     try {
       u = new URL(String(raw ?? ""), origin);
@@ -49,31 +58,76 @@ function sameOriginOnly(urls, origin) {
   return out;
 }
 
-// Mintlify (and a growing set of docs platforms) publish /llms.txt: markdown
-// with one link per docs page. Extract every markdown link target.
-export function parseLlmsTxt(text, origin) {
+/**
+ * Linear single-pass scanner for markdown link URLs [label](url).
+ * Strictly O(N) forward-only scanning: no regex backtracking, no backward rescans (e7gwq voya0).
+ * Bounded by maxBytes (input slice) and maxLinks (stop early).
+ */
+export function extractMarkdownLinks(text, { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS } = {}) {
+  const input = typeof text === "string" ? text.slice(0, maxBytes) : "";
   const urls = [];
-  const re = /\[[^\]]*\]\(([^)\s]+)[^)]*\)/g;
-  let m;
-  while ((m = re.exec(String(text ?? ""))) !== null) urls.push(m[1]);
-  return sameOriginOnly(urls, origin);
+  const len = input.length;
+  const openStack = [];
+
+  for (let i = 0; i < len && urls.length < maxLinks; i++) {
+    const code = input.charCodeAt(i);
+    if (code === 91 /* [ */) {
+      if (openStack.length < 32) openStack.push(i);
+    } else if (code === 93 /* ] */) {
+      const openBracket = openStack.pop();
+      if (openBracket !== undefined && i + 1 < len && input.charCodeAt(i + 1) === 40 /* ( */) {
+        const closeParen = input.indexOf(")", i + 2);
+        if (closeParen === -1) break;
+        const inside = input.slice(i + 2, closeParen).trim();
+        if (inside && !inside.includes("\n") && !inside.includes("[") && !inside.includes("]")) {
+          const spaceIdx = inside.search(/\s/);
+          let urlCandidate = spaceIdx !== -1 ? inside.slice(0, spaceIdx) : inside;
+          if (urlCandidate.startsWith("<") && urlCandidate.endsWith(">")) {
+            urlCandidate = urlCandidate.slice(1, -1).trim();
+          }
+          if (urlCandidate) {
+            urls.push(urlCandidate);
+          }
+        }
+        i = closeParen;
+        openStack.length = 0;
+      }
+    }
+  }
+
+  return urls;
 }
 
-export function parseSitemapXml(text, origin) {
+// Mintlify (and a growing set of docs platforms) publish /llms.txt: markdown
+// with one link per docs page. Extract markdown link targets with linear single-pass scan (e7gwq).
+export function parseLlmsTxt(text, origin, { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS } = {}) {
+  const rawUrls = extractMarkdownLinks(text, { maxBytes, maxLinks });
+  return sameOriginOnly(rawUrls, origin, maxLinks);
+}
+
+export function parseSitemapXml(text, origin, { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS } = {}) {
+  const input = typeof text === "string" ? text.slice(0, maxBytes) : "";
   const urls = [];
   const re = /<loc>\s*([^<]+?)\s*<\/loc>/gi;
   let m;
-  while ((m = re.exec(String(text ?? ""))) !== null) urls.push(m[1]);
-  return sameOriginOnly(urls, origin);
+  while (urls.length < maxLinks && (m = re.exec(input)) !== null) {
+    const raw = m[1]?.trim();
+    if (raw) urls.push(raw);
+  }
+  return sameOriginOnly(urls, origin, maxLinks);
 }
 
 // Last resort: the site's root page. Same-origin hrefs in document order.
-export function extractSameOriginHrefs(html, origin) {
+export function extractSameOriginHrefs(html, origin, { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS } = {}) {
+  const input = typeof html === "string" ? html.slice(0, maxBytes) : "";
   const urls = [];
   const re = /href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
   let m;
-  while ((m = re.exec(String(html ?? ""))) !== null) urls.push(m[1] ?? m[2] ?? m[3]);
-  return sameOriginOnly(urls, origin).filter((u) => {
+  while (urls.length < maxLinks * 2 && (m = re.exec(input)) !== null) {
+    const raw = m[1] ?? m[2] ?? m[3];
+    if (raw) urls.push(raw);
+  }
+  return sameOriginOnly(urls, origin, maxLinks).filter((u) => {
     // A bare fragment or the root itself carries no documentation.
     let p;
     try {
@@ -127,7 +181,7 @@ export function htmlToText(html) {
 // discovered URL strings, not where they land). res.url is the post-redirect
 // URL; when the platform doesn't report it (empty string) there is nothing
 // to verify and the enrolled-origin request stands on its own.
-async function fetchText(fetchImpl, url, timeoutMs, origin) {
+async function fetchText(fetchImpl, url, timeoutMs, origin, maxBytes = null) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -142,7 +196,9 @@ async function fetchText(fetchImpl, url, timeoutMs, origin) {
       }
       if (finalOrigin !== origin) return null; // redirected off-origin — refused
     }
-    return await res.text();
+    const text = await res.text();
+    if (typeof text !== "string") return null;
+    return typeof maxBytes === "number" && maxBytes > 0 ? text.slice(0, maxBytes) : text;
   } catch {
     return null;
   } finally {
@@ -157,14 +213,14 @@ export async function fetchSiteDocs({ origin, queryTerms = [], fetchImpl }) {
   const f = fetchImpl ?? globalThis.fetch?.bind(globalThis);
   if (typeof f !== "function") return null;
   let candidates = [];
-  const llms = await fetchText(f, `${origin}/llms.txt`, PER_FETCH_TIMEOUT_MS, origin);
+  const llms = await fetchText(f, `${origin}/llms.txt`, PER_FETCH_TIMEOUT_MS, origin, MAX_DISCOVERY_DOC_BYTES);
   if (llms) candidates = parseLlmsTxt(llms, origin);
   if (!candidates.length) {
-    const sitemap = await fetchText(f, `${origin}/sitemap.xml`, PER_FETCH_TIMEOUT_MS, origin);
+    const sitemap = await fetchText(f, `${origin}/sitemap.xml`, PER_FETCH_TIMEOUT_MS, origin, MAX_DISCOVERY_DOC_BYTES);
     if (sitemap) candidates = parseSitemapXml(sitemap, origin);
   }
   if (!candidates.length) {
-    const root = await fetchText(f, `${origin}/`, PER_FETCH_TIMEOUT_MS, origin);
+    const root = await fetchText(f, `${origin}/`, PER_FETCH_TIMEOUT_MS, origin, MAX_DISCOVERY_DOC_BYTES);
     if (root) candidates = extractSameOriginHrefs(root, origin);
   }
   if (!candidates.length) return null;
@@ -172,7 +228,7 @@ export async function fetchSiteDocs({ origin, queryTerms = [], fetchImpl }) {
   const window_ = ranked.slice(0, DOCS_FETCH_WINDOW);
   const pages = [];
   for (const url of window_) {
-    const html = await fetchText(f, url, PER_FETCH_TIMEOUT_MS, origin);
+    const html = await fetchText(f, url, PER_FETCH_TIMEOUT_MS, origin, null);
     if (html == null) continue; // a page that 404s/dies is skipped, not fatal
     const text = htmlToText(html);
     if (!text) continue;
