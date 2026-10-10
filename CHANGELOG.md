@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.663] — 2026-10-10
+- Accept advisory-patched security releases across supported dependency lines
+
 ## [0.3.662] — 2026-10-10
 - Accept advisory-patched security releases across supported dependency lines
 

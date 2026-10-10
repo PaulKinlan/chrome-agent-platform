@@ -6,18 +6,20 @@ import { isPatchedFastUriVersion } from "../scripts/bundle-budget.mjs";
 const npmLock = JSON.parse(await Deno.readTextFile(new URL("../package-lock.json", import.meta.url)));
 const denoLock = JSON.parse(await Deno.readTextFile(new URL("../deno.lock", import.meta.url)));
 
-Deno.test("lf9xe / 7jv95: Deno and npm agree on an advisory-patched fast-uri tarball (>= 3.1.8)", () => {
-  // GHSA-qw65-cvwx-89v3 affects 3.0.0–3.1.6; GHSA-58mr-gqgx-xq4g
-  // affects only 3.1.6 on the 3.x line; GHSA-hrr3-gc8f-f4qj affects 3.0.0–3.1.7.
-  // All three are patched in 3.1.8.
+Deno.test("lf9xe / 7jv95 / vb4c4: Deno and npm agree on an advisory-patched fast-uri tarball (>= 2.4.7, >= 3.1.8, or >= 4.1.5)", () => {
+  // GHSA-qw65-cvwx-89v3 affects 3.0.0–3.1.6; GHSA-58mr-gqgx-xq4g affects 3.1.6;
+  // GHSA-hrr3-gc8f-f4qj affects < 2.4.7, 3.0.0–3.1.7, and 4.0.0–4.1.4.
+  // Patched versions are >= 2.4.7 on 2.x, >= 3.1.8 on 3.x, or >= 4.1.5 on 4.x.
   const npm = npmLock.packages["node_modules/fast-uri"];
   assert(npm?.version && npm?.integrity, "npm must lock fast-uri with an integrity hash");
   assert(isPatchedFastUriVersion(npm.version),
-    `fast-uri ${npm.version} is not verified patched on the 3.x advisory line (require >= 3.1.8)`);
+    `fast-uri ${npm.version} is not verified patched against advisories (require >= 2.4.7 on 2.x, >= 3.1.8 on 3.x, or >= 4.1.5 on 4.x)`);
   const parts = npm.version.split(".").map(Number);
-  assert(parts.length === 3 && parts.every(Number.isInteger) && parts[0] === 3 &&
-    (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 8)),
-  `fast-uri ${npm.version} is not verified patched on the 3.x advisory line (require >= 3.1.8)`);
+  const isPatchedLine = (parts[0] === 2 && (parts[1] > 4 || (parts[1] === 4 && parts[2] >= 7))) ||
+    (parts[0] === 3 && (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 8))) ||
+    (parts[0] === 4 && (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 5)));
+  assert(parts.length === 3 && parts.every(Number.isInteger) && isPatchedLine,
+    `fast-uri ${npm.version} is not verified patched against advisories (require >= 2.4.7 on 2.x, >= 3.1.8 on 3.x, or >= 4.1.5 on 4.x)`);
   const entries = Object.entries(denoLock.npm).filter(([name]) => name.startsWith("fast-uri@"));
   assertEquals(entries, [[`fast-uri@${npm.version}`, { integrity: npm.integrity }]],
     "Deno ships the npm-locked patched version and the same verified tarball, not an older .deno copy");
