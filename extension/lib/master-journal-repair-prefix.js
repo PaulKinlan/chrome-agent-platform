@@ -20,7 +20,8 @@ function absent(name) {
  * At most 256 WAL leaves / 16 MiB total are inspected by the evidence gate. */
 export async function inspectIntactMasterJournalPrefixesForOwner(master) {
   const evidence = await snapshotMasterJournalRepairEvidence(master);
-  const base = { actionable: false, authoritySelected: false, candidates: [], heads: [] };
+  const base = { actionable: false, authoritySelected: false, candidates: [], heads: [],
+    highestVerifiedHistoricalPrefix: null };
   if (evidence.state === "inspection_refused") {
     return { ...base, state: "inspection_refused", reason: evidence.refusals[0] };
   }
@@ -76,5 +77,17 @@ export async function inspectIntactMasterJournalPrefixesForOwner(master) {
       heads.push({ slot, checked: false, reason: String(error?.message ?? error) });
     }
   }
-  return { ...base, state: "historical_prefix_diagnostic", heads };
+  const checked = heads.filter((entry) => entry.checked);
+  let highestVerifiedHistoricalPrefix = null;
+  if (checked.length === 1) {
+    highestVerifiedHistoricalPrefix = checked[0];
+  } else if (checked.length === 2) {
+    const [older, newer] = checked.sort((a, b) => a.sequence - b.sequence);
+    // Never manufacture an ordering between a fork/equal slots. An intact
+    // historical prefix is NOT an acknowledgement or repair authorization.
+    if (older.epoch === newer.epoch && newer.sequence === older.sequence + 1 &&
+        newer.version > older.version) highestVerifiedHistoricalPrefix = newer;
+  }
+  return { ...base, state: "historical_prefix_diagnostic", heads,
+    highestVerifiedHistoricalPrefix };
 }

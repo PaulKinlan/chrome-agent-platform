@@ -153,6 +153,8 @@ Deno.test("owner prefix inspection isolates an intact older head without selecti
   assertEquals(/^[0-9a-f]{64}$/.test(report.heads.find((entry) => entry.slot === "head-a.json")?.sha256 ?? ""), true,
     "diagnostic metadata must bind the exact fingerprinted head bytes");
   assertEquals(report.heads.find((entry) => entry.slot === "head-b.json")?.checked, false);
+  assertEquals(report.highestVerifiedHistoricalPrefix?.slot, "head-a.json");
+  assertEquals(report.highestVerifiedHistoricalPrefix?.sequence, 0);
   assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy,
     "inspection never rewrites or selects legacy bytes");
   await assertRejects(() => readMasterJournalProjection(master), Error); // not authority
@@ -169,12 +171,40 @@ Deno.test("owner prefix inspection refuses missing checked prefix or oversized e
   assertEquals(damaged.candidates, []);
   assertEquals(damaged.heads.some((entry) => entry.checked), false,
     "no intact prefix exists; legacy must not become a candidate");
+  assertEquals(damaged.highestVerifiedHistoricalPrefix, null);
   for (let i = 0; i < 257; i++) {
     (await wal.getFileHandle(`residue-${i}.json`, { create: true })).bytes = encoder.encode("x");
   }
   const bounded = await inspectIntactMasterJournalPrefixesForOwner(master);
   assertEquals(bounded.state, "inspection_refused");
   assertEquals(bounded.candidates, []);
+});
+
+Deno.test("historical prefix diagnostic orders two checked heads without selecting authority", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  await stageMasterJournalCutover(master, { journalExists: true, journal: [{ id: "owned" }],
+    archive: [], allocateVersion });
+  await stageMasterJournalFrame(master, { operation: "append", row: { id: "newer" } },
+    { allocateVersion });
+  const report = await inspectIntactMasterJournalPrefixesForOwner(master);
+  assertEquals(report.heads.filter((entry) => entry.checked).length, 2);
+  assertEquals(report.highestVerifiedHistoricalPrefix?.slot, "head-b.json");
+  assertEquals(report.highestVerifiedHistoricalPrefix?.sequence, 1);
+  assertEquals(report.authoritySelected, false);
+  assertEquals(report.candidates, []);
+});
+
+Deno.test("historical prefix diagnostic never chooses between equal head slots", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  await stageMasterJournalCutover(master, { journalExists: true, journal: [{ id: "owned" }],
+    archive: [], allocateVersion });
+  const wal = await master.getDirectoryHandle("journal-wal");
+  (await wal.getFileHandle("head-b.json", { create: true })).bytes =
+    (await wal.getFileHandle("head-a.json")).bytes.slice();
+  const report = await inspectIntactMasterJournalPrefixesForOwner(master);
+  assertEquals(report.heads.filter((entry) => entry.checked).length, 2);
+  assertEquals(report.highestVerifiedHistoricalPrefix, null);
+  assertEquals(report.actionable, false);
 });
 
 Deno.test("a newer immutable repair intent cannot be discharged by an older signed head", async () => {

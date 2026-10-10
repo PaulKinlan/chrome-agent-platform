@@ -663,8 +663,10 @@ combined by default), but emits NO actionable quarantine candidates. The
 separate `inspectIntactMasterJournalPrefixesForOwner` can replay each head
 slot independently behind those evidence bounds, including an older intact
 prefix beside a torn latest slot; each checked slot binds the SHA-256 of its
-snapshot bytes. It reports metadata only, never selects an
-authority or republish candidate. No intact slot means no prefix to publish.
+snapshot bytes. It may identify the highest verified *historical* prefix
+only when ordering is unambiguous; equal/forked slots produce no tip. It
+never selects authority or a republish candidate. No intact slot means no
+prefix to publish.
 Oversized or
 unclassified leaves refuse the manifest; its unlocked hashes are not a
 durable removal CAS. Neither helper replays an older head slot, performs
