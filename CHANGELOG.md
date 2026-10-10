@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.643] — 2026-10-10
+- Let app readiness polling recover from transient probe timeouts while still failing fast on a real connection loss.
+
 ## [0.3.642] — 2026-10-10
 - Harden site-docs fallback complexity guard against backward rescans via substring
 
