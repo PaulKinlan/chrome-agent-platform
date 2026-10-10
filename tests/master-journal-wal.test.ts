@@ -95,6 +95,11 @@ async function legacyFixture(faults = {}) {
 
 Deno.test("read-only owner repair evidence preserves pre-head residue and bounds its manifest", async () => {
   const { master, legacy, allocateVersion } = await legacyFixture();
+  const absent = await snapshotMasterJournalRepairEvidence(master);
+  assertEquals(absent.state, "legacy_empty_or_absent_wal");
+  assertEquals(absent.legacy.journal.present, true);
+  assertEquals(master.children.has("journal-wal"), false,
+    "owner evidence reads must not create a missing WAL directory");
   const wal = await master.getDirectoryHandle("journal-wal", { create: true });
   const residue = await wal.getFileHandle("checkpoint-18-0.json", { create: true });
   residue.bytes = encoder.encode("{torn");
@@ -107,6 +112,13 @@ Deno.test("read-only owner repair evidence preserves pre-head residue and bounds
   assertEquals(evidence.records.map((r) => r.name), ["checkpoint-18-0.json"]);
   assertEquals(evidence.records[0].bytes, before.byteLength);
   assertEquals(/^[0-9a-f]{64}$/.test(evidence.records[0].sha256), true);
+  assertEquals(evidence.legacy.journal.present, true);
+  assertEquals(evidence.legacy.archive.present, false);
+  assertEquals(evidence.legacy.journal.bytes, encoder.encode(legacy).byteLength);
+  const legacyDigest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(legacy)))]
+    .map((b) => b.toString(16).padStart(2, "0")).join("");
+  assertEquals(evidence.legacy.journal.sha256, legacyDigest,
+    "legacy evidence is a digest, never the raw row contents or an authority fallback");
   assertEquals(residue.bytes, before, "planning cannot alter a torn record");
   assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy);
   await assertRejects(() => readMasterJournalHead(master), Error, "pre-head residue");

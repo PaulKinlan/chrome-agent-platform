@@ -25,13 +25,12 @@ export async function snapshotMasterJournalRepairEvidence(master, {
   try { directory = await master.getDirectoryHandle("journal-wal"); }
   catch (error) {
     if (error?.name !== "NotFoundError") return refuse(`master journal repair evidence unreadable: ${error?.message ?? error}`);
-    return { state: "legacy_empty_or_absent_wal", actionable: false,
-      authorityOutcomeRequired: false, candidates: [], records: [], refusals: [] };
+    directory = null;
   }
   const records = [];
   let totalBytes = 0;
   try {
-    for await (const [name, handle] of directory.entries()) {
+    for await (const [name, handle] of directory?.entries() ?? []) {
       if (records.length >= maxRecords) return refuse("master journal repair evidence record count exceeds limit");
       if (typeof name !== "string" || !name || typeof handle?.getFile !== "function") {
         return refuse("master journal repair evidence has an unclassified directory or leaf");
@@ -51,11 +50,38 @@ export async function snapshotMasterJournalRepairEvidence(master, {
         sha256: [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("") });
     }
   } catch (error) { return refuse(`master journal repair evidence unreadable: ${error?.message ?? error}`); }
+  // These are only fingerprints, never a second source of authority. A
+  // pre-head directory must keep refusing even when legacy bytes look valid.
+  const legacy = {};
+  try {
+    for (const [key, filename] of [["journal", "journal.json"], ["archive", "journal-archive.json"]]) {
+      let handle;
+      try { handle = await master.getFileHandle(filename); }
+      catch (error) {
+        if (error?.name !== "NotFoundError") throw error;
+        legacy[key] = { present: false };
+        continue;
+      }
+      const file = await handle.getFile();
+      if (!Number.isSafeInteger(file?.size) || file.size < 0 || file.size > maxRecordBytes) {
+        return refuse("master journal repair evidence record exceeds byte limit");
+      }
+      if (totalBytes + file.size > maxTotalBytes) {
+        return refuse("master journal repair evidence total bytes exceed limit");
+      }
+      totalBytes += file.size;
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (bytes.byteLength !== file.size) return refuse("master journal repair evidence record changed during read");
+      const digest = await crypto.subtle.digest("SHA-256", bytes);
+      legacy[key] = { present: true, bytes: file.size,
+        sha256: [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("") };
+    }
+  } catch (error) { return refuse(`master journal repair evidence unreadable: ${error?.message ?? error}`); }
   records.sort((a, b) => a.name.localeCompare(b.name));
   const inspection = await inspectMasterJournalForOwner(master);
   return { ...inspection, actionable: false,
     authorityOutcomeRequired: inspection.state === "requires_explicit_owner_repair",
-    candidates: [], records,
+    candidates: [], records, legacy,
     refusals: inspection.state === "requires_explicit_owner_repair" ? [inspection.reason] :
       inspection.state === "current_head_checked" ? ["older-head reachability not verified for repair"] : [],
   };

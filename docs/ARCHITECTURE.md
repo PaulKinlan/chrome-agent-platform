@@ -639,9 +639,10 @@ explicit owner repair; none selects the stale legacy journal automatically. The
 read-only `inspectMasterJournalForOwner` helper classifies empty/absent WAL,
 pre-head/torn repair needs, or a checked *current* projection and archive
 chain, without switching authority or editing any record. The separate
-`snapshotMasterJournalRepairEvidence` lists bounded names, sizes and SHA-256
-digests for owner inspection (at most 256 leaves, 8 MiB each and 16 MiB total
-by default), but emits NO actionable quarantine candidates. Oversized or
+`snapshotMasterJournalRepairEvidence` lists bounded WAL names, sizes and
+SHA-256 digests plus digest-only metadata for legacy journal/archive files
+for owner inspection (at most 256 WAL leaves, 8 MiB per file and 16 MiB
+combined by default), but emits NO actionable quarantine candidates. Oversized or
 unclassified leaves refuse the manifest; its unlocked hashes are not a
 durable removal CAS. Neither helper replays an older head slot, performs
 full backup validation, quarantine, or repair; those remain owner-gated work. Archive rows are an append-only HISTORY LOG,
