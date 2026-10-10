@@ -609,3 +609,244 @@ Deno.test("SW fire: a legacy recipe:<id> payload with NO owner still attributes 
     "the legacy recipe alarm attributes to its background agent (agentId = agentSurfaceRef)");
   assertEquals(fired.phase, "terminal", `the legacy run settles (phase=${fired.phase})`);
 });
+
+Deno.test("SW fire: routes through agent-worker.dispatch when offscreen host is available (chrome-agent-platform-mxu5)", async () => {
+  const swStore = new Map();
+  // the marker demo model sits behind the developer flag (CAP-FB-20260830-KEYLESS-FIRST-RESULT-01)
+  swStore.set("cap:developerFeatures", true);
+  const alarms = new Map();
+  const alarmListeners = [];
+  const noopListener = { addListener: () => {}, removeListener: () => {} };
+  const hostMessages = [];
+
+  const onMessageListeners = [];
+  const dispatch = (msg) => new Promise((resolve) => {
+    for (const fn of [...onMessageListeners]) {
+      try { fn(msg, { id: "test-extension-id", url: "chrome-extension://test-extension-id/options/options.html", documentId: "doc-1", documentLifecycle: "active" }, resolve); } catch { /* another listener */ }
+    }
+  });
+
+  globalThis.chrome = {
+    runtime: {
+      id: "test-extension-id",
+      getURL: (p) => `chrome-extension://test-extension-id/${p}`,
+      getManifest: () => ({ version: "0.0.0-test" }),
+      onMessage: { addListener: (fn) => onMessageListeners.push(fn) },
+      onConnect: noopListener,
+      onInstalled: noopListener,
+      sendMessage: async (m) => {
+        hostMessages.push(m);
+        if (m.type === "agent-worker-host:ensure") return { ok: true };
+        if (m.type === "agent-worker-host:post") {
+          if (m.msg?.scheduleName === "task_fail_dispatch") {
+            // Simulate worker host rejecting the dispatch kick (8ivme):
+            return { ok: false, error: "host_refusal" };
+          }
+          if (m.msg?.scheduleName === "task_sync_result_race") {
+            // Falsifier gj6kn: simulate worker result arriving synchronously BEFORE post handler returns:
+            await dispatch({
+              type: "agent-worker.result",
+              executionId: m.msg?.runId,
+              agentId: m.agentId,
+              ok: true,
+              result: "synchronous race result",
+              scheduleName: m.msg?.scheduleName,
+              scheduleToken: m.msg?.scheduleToken,
+              logicalId: m.msg?.logicalId,
+            });
+            return { ok: true };
+          }
+          // Asynchronously simulate worker execution:
+          setTimeout(async () => {
+            const runId = m.msg?.runId;
+            // 1. Worker sends progress
+            await dispatch({
+              type: "agent-worker.progress",
+              executionId: runId,
+              agentId: m.agentId,
+              event: {
+                type: "tool-result",
+                toolName: "list_tabs",
+                selectedTool: "list_tabs",
+                toolArgs: {},
+                result: [{ id: 1, url: "https://example.com" }],
+                ok: true,
+              },
+              logKey: "tool-result:call_1",
+            });
+            // 2. Worker sends terminal result
+            await dispatch({
+              type: "agent-worker.result",
+              executionId: runId,
+              agentId: m.agentId,
+              ok: true,
+              result: "tabs listed successfully",
+              scheduleName: m.msg?.scheduleName,
+              scheduleToken: m.msg?.scheduleToken,
+              logicalId: m.msg?.logicalId,
+            });
+          }, 10);
+          return { ok: true };
+        }
+        return { ok: true };
+      },
+    },
+    storage: {
+      local: {
+        get: async (key) => {
+          const out = {};
+          for (const k of Array.isArray(key) ? key : [key]) {
+            if (swStore.has(k)) out[k] = clone(swStore.get(k));
+          }
+          return out;
+        },
+        set: async (obj) => {
+          for (const [k, v] of Object.entries(obj)) {
+            if (v === undefined) swStore.delete(k);
+            else swStore.set(k, clone(v));
+          }
+        },
+      },
+      session: { get: async () => ({}), set: async () => {} },
+    },
+    permissions: {
+      contains: async ({ permissions: perms }) =>
+        Array.isArray(perms) && perms.length === 1 && perms[0] === "storage",
+      onAdded: noopListener,
+      onRemoved: noopListener,
+    },
+    alarms: {
+      onAlarm: { addListener: (fn) => alarmListeners.push(fn), hasListener: (fn) => alarmListeners.includes(fn) },
+      create: async (name, info) => { alarms.set(name, info); return true; },
+      clear: async (name) => { const had = alarms.has(name); alarms.delete(name); return had; },
+      get: async (name) => alarms.get(name),
+      getAll: async () => [...alarms.entries()].map(([name, info]) => ({ name, ...info })),
+    },
+    tabs: { onCreated: noopListener, onActivated: noopListener, onUpdated: noopListener, onRemoved: noopListener, onAttached: noopListener, onZoomChange: noopListener, query: async () => [], sendMessage: async () => {}, create: async () => ({ id: 1 }), update: async () => ({}), remove: async () => {} },
+    windows: { onCreated: noopListener, onRemoved: noopListener, onFocusChanged: noopListener },
+    scripting: { executeScript: async () => [], getRegisteredContentScripts: async () => [], registerContentScripts: async () => {} },
+    offscreen: {
+      createDocument: async () => ({}),
+      closeDocument: async () => {},
+      getContexts: async () => [{ contextType: "OFFSCREEN_DOCUMENT" }],
+    },
+    contextMenus: { onClicked: noopListener },
+    webNavigation: {},
+    notifications: {},
+  };
+  const opfsRoot = dirNode();
+  installFakeIndexedDB();
+  const realNavigator = globalThis.navigator;
+  Object.defineProperty(globalThis, "navigator", {
+    value: {
+      locks: realNavigator?.locks,
+      userAgent: realNavigator?.userAgent ?? "deno-test",
+      storage: { async getDirectory() { return new FakeDirHandle(opfsRoot); } },
+    },
+    configurable: true,
+  });
+
+  await import(`../extension/background/service-worker.js?worker_reroute=${Date.now()}`);
+
+  const schedName = "task_worker_reroute_test";
+  const threadId = "thread-worker-test";
+  swStore.set("cap:scheduledTasks", {
+    [schedName]: {
+      name: schedName,
+      task: "list tabs in worker",
+      at: Date.now() - 1000,
+      owner: { threadId, agentRole: "hub" },
+    },
+  });
+  alarms.set(schedName, { when: Date.now() - 1000 });
+
+  await Promise.all(alarmListeners.map((fn) => fn({ name: schedName })));
+
+  // Assert worker host received the dispatch
+  const ensureMsg = hostMessages.find((m) => m.type === "agent-worker-host:ensure");
+  assert(ensureMsg, "worker host was ensured");
+  const postMsg = hostMessages.find((m) => m.type === "agent-worker-host:post");
+  assert(postMsg, "run was posted to worker host");
+  assertEquals(postMsg.msg?.scheduleName, schedName);
+  assert(postMsg.msg?.scheduleToken, "scheduleToken was passed to worker run");
+
+  // Assert durable run was settled
+  const runs = await dispatch({ type: "run.list" });
+  const fired = (runs?.runs ?? []).find((r) => r.scheduleName === schedName);
+  assert(fired, "the worker run is registered in durable registry");
+  assertEquals(fired.threadId, threadId, "attributed to scheduling thread");
+  assertEquals(fired.kind, "scheduled");
+  assertEquals(fired.phase, "terminal", "run settled to terminal phase");
+
+  // Assert logs include progress event
+  const logs = await dispatch({ type: "run.logs", executionId: fired.executionId });
+  const rows = logs?.logs ?? [];
+  assert(rows.some((r) => r?.type === "task"), "log contains task row");
+  assert(rows.some((r) => r?.type === "tool-result" && r?.toolName === "list_tabs"), "log contains worker progress tool row");
+
+  // Assert one-shot schedule was marked done
+  assertEquals(swStore.get("cap:scheduledTasks")?.[schedName], undefined, "one-shot schedule payload was consumed");
+
+  // ── Falsifier 8ivme: worker dispatch failure falls back to SW runTask with zero phantom runs ──
+  const failSched = "task_fail_dispatch";
+  swStore.set("cap:scheduledTasks", {
+    [failSched]: {
+      name: failSched,
+      task: "test dispatch fail fallback",
+      at: Date.now() - 1000,
+      owner: { threadId: "thread-fail-test", agentRole: "hub" },
+    },
+  });
+  alarms.set(failSched, { when: Date.now() - 1000 });
+
+  await Promise.all(alarmListeners.map((fn) => fn({ name: failSched })));
+
+  const afterFailRuns = await dispatch({ type: "run.list" });
+  const matchingRuns = (afterFailRuns?.runs ?? []).filter((r) => r.scheduleName === failSched);
+  assertEquals(matchingRuns.length, 1, "Fallback run must be the ONLY run admitted (zero phantom runs)");
+  assertEquals(matchingRuns[0].phase, "terminal", "Fallback run completes on SW runTask path");
+  assert(!matchingRuns.some((r) => r.phase === "failed"), "No phantom failed run in durable registry");
+
+  // ── Falsifier gj6kn: synchronous result race does NOT trigger 120s timeout ──
+  const syncSched = "task_sync_result_race";
+  swStore.set("cap:scheduledTasks", {
+    [syncSched]: {
+      name: syncSched,
+      task: "fast synchronous worker run",
+      at: Date.now() - 1000,
+      owner: { threadId: "thread-sync-test", agentRole: "hub" },
+    },
+  });
+  alarms.set(syncSched, { when: Date.now() - 1000 });
+
+  const startMs = Date.now();
+  await Promise.all(alarmListeners.map((fn) => fn({ name: syncSched })));
+  const elapsedMs = Date.now() - startMs;
+
+  assert(elapsedMs < 5000, `Synchronous result must resolve promptly without 120s timeout (took ${elapsedMs}ms)`);
+  assertEquals(swStore.get("cap:scheduledTasks")?.[syncSched], undefined, "One-shot sync task consumed");
+  const syncRuns = await dispatch({ type: "run.list" });
+  const syncFired = (syncRuns?.runs ?? []).find((r) => r.scheduleName === syncSched);
+  assert(syncFired, "Synchronous worker run was registered and settled");
+  assertEquals(syncFired.phase, "terminal");
+
+  // ── Falsifier f3zyj: restore fence blocks dispatch and preserves schedule ──
+  swStore.set("cap:restoreFence", true);
+  const restoreSched = "task_restore_fenced";
+  swStore.set("cap:scheduledTasks", {
+    [restoreSched]: {
+      name: restoreSched,
+      task: "test restore fence protection",
+      at: Date.now() - 1000,
+      owner: { threadId: "thread-restore-test", agentRole: "hub" },
+    },
+  });
+  alarms.set(restoreSched, { when: Date.now() - 1000 });
+
+  await Promise.all(alarmListeners.map((fn) => fn({ name: restoreSched })));
+
+  const restorePost = hostMessages.find((m) => m.type === "agent-worker-host:post" && m.msg?.scheduleName === restoreSched);
+  assertEquals(restorePost, undefined, "Worker host must NOT be kicked when cap:restoreFence is active");
+  assert(swStore.get("cap:scheduledTasks")?.[restoreSched] !== undefined, "Scheduled task must NOT be deleted when restore is in progress");
+  swStore.delete("cap:restoreFence");
+});

@@ -17,7 +17,7 @@
 
 import { capLog } from "../../lib/cap-log.js";
 import { journalJson } from "../../shared/tool-tree.js";
-import { redactSecretText } from "../../lib/pure.js";
+import { normalizeDurableLog, redactSecretText } from "../../lib/pure.js";
 import { RUN_BUDGET_BOUNDS, RUN_BUDGET_DEFAULTS } from "../../lib/run-budget.js";
 
 const ALIVE_KEY = "cap:agent-workers:alive";
@@ -258,6 +258,10 @@ export function createAgentWorkerRoutes({
         modelKind: String(m?.modelKind ?? "demo").slice(0, 32),
         maxIterations: Math.min(Number(m?.maxIterations ?? RUN_BUDGET_DEFAULTS.maxIterations) || RUN_BUDGET_DEFAULTS.maxIterations, RUN_BUDGET_BOUNDS.maxIterations),
         toolSpecs: Array.isArray(m?.toolSpecs) ? m.toolSpecs.slice(0, 200) : [],
+        journalTarget: m?.journalTarget ? String(m.journalTarget).slice(0, 200) : undefined,
+        scheduleName: m?.scheduleName ? String(m.scheduleName).slice(0, 200) : undefined,
+        scheduleToken: m?.scheduleToken ? String(m.scheduleToken).slice(0, 200) : undefined,
+        logicalId: m?.logicalId ? String(m.logicalId).slice(0, 200) : undefined,
       };
       // Review r6 P1-1: register BEFORE the host post (kickWorkerRun owns the
       // order) — see the helper's comment for the race it closes.
@@ -290,6 +294,10 @@ export function createAgentWorkerRoutes({
         modelKind: String(m?.modelKind ?? "demo").slice(0, 32),
         maxIterations: Math.min(Number(m?.maxIterations ?? RUN_BUDGET_DEFAULTS.maxIterations) || RUN_BUDGET_DEFAULTS.maxIterations, RUN_BUDGET_BOUNDS.maxIterations),
         toolSpecs: Array.isArray(m?.toolSpecs) ? m.toolSpecs.slice(0, 200) : [],
+        journalTarget: m?.journalTarget ? String(m.journalTarget).slice(0, 200) : undefined,
+        scheduleName: m?.scheduleName ? String(m.scheduleName).slice(0, 200) : undefined,
+        scheduleToken: m?.scheduleToken ? String(m.scheduleToken).slice(0, 200) : undefined,
+        logicalId: m?.logicalId ? String(m.logicalId).slice(0, 200) : undefined,
       };
       // Review r6 P1-1: same register-before-post discipline as agent-worker.run.
       const kicked = await kickWorkerRun({ runId, identity, descriptor, runControl });
@@ -319,6 +327,9 @@ export function createAgentWorkerRoutes({
       const live = runControl.get(runId);
       if (!live || live.kind !== "worker" || live.surface !== `agent-worker:${identity}`) {
         return { ok: false, error: "run_not_live" };
+      }
+      if (typeof live.isFencedOut === "function" && live.isFencedOut()) {
+        return { ok: false, error: "run_fenced_out" };
       }
       // The live run-control record, not body fields alone, authorizes and
       // binds the model identity used by management/table routes.
@@ -449,15 +460,58 @@ export function createAgentWorkerRoutes({
 
       const sanitized = sanitizeProgressEvent(event);
       const rawType = sanitized.type || "progress";
+      const callId = event?.callId ? String(event.callId).slice(0, 128) : "";
 
       if (durableRegistry) {
         try {
           await durableRegistry.heartbeat(executionId, { progressed: true });
-          const logKey = m?.logKey ? String(m.logKey).slice(0, 128) : `${rawType}:${Date.now()}`;
-          await durableRegistry.appendLog(executionId, sanitized, logKey);
+          const nonce = Math.random().toString(36).slice(2, 8);
+          const logKey = m?.logKey
+            ? String(m.logKey).slice(0, 128)
+            : (callId ? `${rawType}:${callId}` : `${rawType}:${Date.now()}:${nonce}`);
+
+          let durableLog = sanitized;
+          if (sanitized.type === "tool-call" || sanitized.type === "tool-result") {
+            const canonical = normalizeDurableLog({
+              ...sanitized,
+              id: executionId,
+              executionId,
+              callId,
+              tool: sanitized.toolName || "tool",
+              args: sanitized.toolArgs,
+              result: sanitized.result,
+              at: Date.now(),
+            });
+            durableLog = { ...canonical, toolName: sanitized.toolName || "tool" };
+          }
+          await durableRegistry.appendLog(executionId, durableLog, logKey);
         } catch (err) {
           log.warn("progress log append failed", { executionId, error: err?.message ?? err });
         }
+      }
+
+      // Decomposed journal append for worker tool events (Phase 4):
+      if (typeof journalAppend === "function" && typeof resolveJournalStore === "function" && (sanitized.type === "tool-result" || sanitized.type === "tool-call")) {
+        try {
+          const target = m?.journalTarget
+            ? String(m.journalTarget)
+            : (m?.agentId ? String(m.agentId) : "master");
+          const store = await resolveJournalStore(target);
+          if (store) {
+            await journalAppend(store, {
+              type: sanitized.type,
+              id: executionId,
+              executionId,
+              callId,
+              tool: sanitized.toolName || "tool",
+              selectedTool: sanitized.selectedTool,
+              args: sanitized.toolArgs,
+              result: sanitized.result,
+              ok: sanitized.ok,
+              at: Date.now(),
+            });
+          }
+        } catch { /* best effort */ }
       }
 
       if (typeof broadcastProgress === "function") {
@@ -485,9 +539,11 @@ export function createAgentWorkerRoutes({
       // worker relays the SAME id it was given). A worker run that finishes
       // must never stay steerable / consume a 64-slot live-registry seat
       // because its id was not exec:-shaped.
-      try { onRunSettled?.(executionId); } catch { /* best-effort local worker cleanup */ }
       runControl?.unregister(executionId);
-      if (!validExecutionId(executionId)) return { ok: false, error: "invalid executionId" };
+      if (!validExecutionId(executionId)) {
+        try { onRunSettled?.(executionId); } catch { /* best-effort local worker cleanup */ }
+        return { ok: false, error: "invalid executionId" };
+      }
 
       const ok = m?.ok === true;
       // dptw: the result passes through WHOLE — the old 64 KiB bound here
@@ -501,6 +557,7 @@ export function createAgentWorkerRoutes({
       const errorAction = m?.errorAction ? bounded(m.errorAction, 512) : undefined;
       const logicalId = m?.logicalId ? bounded(m.logicalId, 200) : undefined;
       const scheduleName = m?.scheduleName ? bounded(m.scheduleName, 200) : undefined;
+      const scheduleToken = m?.scheduleToken ? bounded(m.scheduleToken, 200) : undefined;
       const aborted = m?.aborted === true;
 
       let terminal = null;
@@ -517,14 +574,15 @@ export function createAgentWorkerRoutes({
         });
       }
 
-      if ((scheduleName || logicalId) && typeof markScheduledDone === "function") {
+      if (scheduleName && scheduleToken && typeof markScheduledDone === "function") {
         try {
-          const schedId = scheduleName || logicalId;
-          await markScheduledDone(schedId, m?.scheduleToken ?? executionId);
+          await markScheduledDone(scheduleName, scheduleToken);
         } catch (err) {
           log.warn("markScheduledDone failed", { executionId, scheduleName, error: err?.message ?? err });
         }
       }
+
+      try { onRunSettled?.(executionId); } catch { /* best-effort local worker cleanup */ }
 
       return {
         ok: true,
