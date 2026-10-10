@@ -403,6 +403,7 @@ export class StderrSanitizer {
   private inCsi = false;
   private inEsc = false;
   private lineBuffer = "";
+  private hasOscLineContent = false;
   public inOscDiscardOnly = false;
   public unterminatedOscSeen = false;
   public droppedLinesCount = 0;
@@ -411,6 +412,7 @@ export class StderrSanitizer {
     this.inOsc = false;
     this.inOscEsc = false;
     this.inOscDiscardOnly = false;
+    this.hasOscLineContent = false;
   }
 
   public processChunk(chunk: string, onLine: (line: string) => void): void {
@@ -425,6 +427,7 @@ export class StderrSanitizer {
         this.inOscEsc = false;
         this.inEsc = false;
         this.inCsi = false;
+        this.hasOscLineContent = true;
         continue;
       }
       if (char === "\u009b") {
@@ -449,12 +452,14 @@ export class StderrSanitizer {
             this.resetOsc();
             this.inOsc = true;
             this.inCsi = false;
+            this.hasOscLineContent = true;
             continue;
           }
           if (char === "\x1b") {
             this.inOscEsc = true;
             continue;
           }
+          this.hasOscLineContent = true;
           continue;
         }
         if (char === "\x07" || char === "\u009c") {
@@ -471,9 +476,11 @@ export class StderrSanitizer {
           // Newline inside OSC: track as potential dropped lines if unterminated
           this.inOscDiscardOnly = true;
           this.droppedLinesCount++;
+          this.hasOscLineContent = false;
           continue;
         }
         // Inside OSC or in post-unterminated discard mode: discard characters
+        this.hasOscLineContent = true;
         continue;
       }
 
@@ -483,6 +490,7 @@ export class StderrSanitizer {
           this.resetOsc();
           this.inOsc = true;
           this.inCsi = false;
+          this.hasOscLineContent = true;
           continue;
         }
         if (char === "[") {
@@ -553,6 +561,10 @@ export class StderrSanitizer {
   public flush(onLine: (line: string) => void): void {
     if (this.inOsc) {
       this.unterminatedOscSeen = true;
+      if (this.hasOscLineContent) {
+        this.droppedLinesCount++;
+        this.hasOscLineContent = false;
+      }
     }
     if (this.lineBuffer.trim()) {
       const clean = this.cleanLine(this.lineBuffer);
@@ -1146,7 +1158,9 @@ export function createAcpServer(
             await Promise.race([stderrDrained, new Promise((r) => setTimeout(r, 200))]);
           } catch { /* ignore drain timeout */ }
           const exitDetail = sanitizer.droppedLinesCount > 0 || sanitizer.unterminatedOscSeen
-            ? `stderr suppressed after unterminated OSC (${sanitizer.droppedLinesCount} line${sanitizer.droppedLinesCount === 1 ? "" : "s"} dropped)`
+            ? (sanitizer.droppedLinesCount > 0
+                ? `stderr suppressed after unterminated OSC (${sanitizer.droppedLinesCount} line${sanitizer.droppedLinesCount === 1 ? "" : "s"} dropped)`
+                : "stderr suppressed after unterminated OSC")
             : "";
           const detail = lastStderr
             ? (exitDetail ? `${sanitizeLogString(lastStderr)} | ${exitDetail}` : sanitizeLogString(lastStderr))

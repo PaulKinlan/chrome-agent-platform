@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.655] — 2026-10-10
+- Accurately count dropped lines in ACP bridge exit diagnostics when unterminated OSC lacks trailing newline
+
 ## [0.3.654] — 2026-10-10
 - Keep the quiet-window test's documentation of its load-scaled timing bound accurate.
 
