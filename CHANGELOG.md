@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.651] — 2026-10-10
+- Suppress ambiguous stderr after an unterminated terminal escape and report how many lines were discarded.
+
 ## [0.3.650] — 2026-10-10
 - Scale quiet-window check test timing under suite load
 
