@@ -387,3 +387,165 @@ Deno.test("u7p0b: waitForAppReady still reports named app-never-became-ready on 
   assert(caught.message.includes("Test Page"));
   assert(caught.message.includes("still mounting stage2B"));
 });
+
+Deno.test("z4tzw: APP_READY_EXPRESSION refuses static unhydrated Options DOM (reproducing the gap)", () => {
+  const runExpression = (mockWindow: any) => {
+    const fn = new Function("window", "document", "location", "customElements", `return ${APP_READY_EXPRESSION}`);
+    return fn(mockWindow, mockWindow.document, mockWindow.location, mockWindow.customElements);
+  };
+
+  // Reproduction from bead z4tzw:
+  // Static options.html has loaded (readyState: complete) and has static sidebar nav header buttons.
+  // Neither settings-form nor board-deny-agent has been hydrated yet.
+  const staticUnhydratedOptions = {
+    location: { pathname: "/options/options.html", hash: "#board-permissions" },
+    document: {
+      readyState: "complete",
+      documentElement: {},
+      getElementById: (id: string) => null,
+      querySelector: (sel: string) => {
+        if (sel === "input, select, button") {
+          // Static nav header button in options.html <aside class="side">
+          return { tagName: "BUTTON", className: "nav-group-header" };
+        }
+        return null;
+      },
+      querySelectorAll: () => [],
+    },
+  };
+
+  const unreadyRes = runExpression(staticUnhydratedOptions);
+  assertEquals(unreadyRes.ready, false, "must NOT certify unhydrated Options DOM ready just because static buttons exist");
+  assertEquals(unreadyRes.reason, "options board permissions hydration pending");
+  assertEquals(unreadyRes.agentSelect, false);
+  assertEquals(unreadyRes.addBtn, false);
+});
+
+Deno.test("z4tzw: APP_READY_EXPRESSION certifies Options board-permissions once controls and providers hydrate", () => {
+  const runExpression = (mockWindow: any) => {
+    const fn = new Function("window", "document", "location", "customElements", `return ${APP_READY_EXPRESSION}`);
+    return fn(mockWindow, mockWindow.document, mockWindow.location, mockWindow.customElements);
+  };
+
+  // 1. Controls present with real <provider-select> default (providers: []) before populateBoardDenyAgents runs
+  const unpopulatedBoard = {
+    location: { pathname: "/options/options.html", hash: "#board-permissions" },
+    document: {
+      readyState: "complete",
+      documentElement: {},
+      getElementById: (id: string) => {
+        if (id === "board-permissions") return { classList: { contains: (c: string) => c === "active" }, dataset: { active: "true" } };
+        // Real <provider-select>.providers getter returns [] when unpopulated (kki80)
+        if (id === "board-deny-agent") return { tagName: "PROVIDER-SELECT", id: "board-deny-agent", providers: [] };
+        if (id === "board-deny-add-btn") return { tagName: "BUTTON", id: "board-deny-add-btn" };
+        return null;
+      },
+      querySelector: () => null,
+      querySelectorAll: () => [],
+    },
+  };
+  const unpopRes = runExpression(unpopulatedBoard);
+  assertEquals(unpopRes.ready, false);
+  assertEquals(unpopRes.reason, "options board permissions hydration pending");
+  assertEquals(unpopRes.providersHydrated, false);
+
+  // 2. Fully hydrated board-permissions (panel active, controls present, providers array populated)
+  const hydratedBoard = {
+    location: { pathname: "/options/options.html", hash: "#board-permissions" },
+    document: {
+      readyState: "complete",
+      documentElement: {},
+      getElementById: (id: string) => {
+        if (id === "board-permissions") return { classList: { contains: (c: string) => c === "active" }, dataset: { active: "true" } };
+        if (id === "board-deny-agent") return {
+          tagName: "PROVIDER-SELECT",
+          id: "board-deny-agent",
+          providers: [{ id: "hub", name: "Hub", icon: "terminal" }],
+        };
+        if (id === "board-deny-add-btn") return { tagName: "BUTTON", id: "board-deny-add-btn" };
+        return null;
+      },
+      querySelector: () => null,
+      querySelectorAll: () => [],
+    },
+  };
+  const readyRes = runExpression(hydratedBoard);
+  assertEquals(readyRes.ready, true);
+  assertEquals(readyRes.signal, "options-hydrated");
+});
+
+Deno.test("z4tzw: APP_READY_EXPRESSION tests default providers section hydration against rendered cards", () => {
+  const runExpression = (mockWindow: any) => {
+    const fn = new Function("window", "document", "location", "customElements", `return ${APP_READY_EXPRESSION}`);
+    return fn(mockWindow, mockWindow.document, mockWindow.location, mockWindow.customElements);
+  };
+
+  // Unhydrated providers (static divs empty)
+  const unhydratedProviders = {
+    location: { pathname: "/options/options.html", hash: "" },
+    document: {
+      readyState: "complete",
+      documentElement: {},
+      getElementById: (id: string) => {
+        if (id === "providers") return { classList: { contains: (c: string) => c === "active" }, dataset: { active: "true" } };
+        return null;
+      },
+      querySelector: (sel: string) => {
+        if (sel === "#provider-panels") return { children: [] };
+        return null;
+      },
+      querySelectorAll: () => [],
+    },
+  };
+  const unreadyRes = runExpression(unhydratedProviders);
+  assertEquals(unreadyRes.ready, false);
+  assertEquals(unreadyRes.reason, "options providers hydration pending");
+
+  // Error/retry state: provider-panels has retry button, no .provider-card (97qd6)
+  const errorProviders = {
+    location: { pathname: "/options/options.html", hash: "#providers" },
+    document: {
+      readyState: "complete",
+      documentElement: {},
+      getElementById: (id: string) => {
+        if (id === "providers") return { classList: { contains: (c: string) => c === "active" }, dataset: { active: "true" } };
+        return null;
+      },
+      querySelector: (sel: string) => {
+        if (sel === "#provider-panels") return { children: [{ id: "retry-providers" }] };
+        return null;
+      },
+      querySelectorAll: (sel: string) => {
+        // No .provider-card elements rendered in error state
+        return [];
+      },
+    },
+  };
+  const errorRes = runExpression(errorProviders);
+  assertEquals(errorRes.ready, false, "error/retry state must NOT certify readiness as cards");
+  assertEquals(errorRes.reason, "options providers hydration pending");
+
+  // Hydrated providers (rendered cards in provider-panels)
+  const hydratedProviders = {
+    location: { pathname: "/options/options.html", hash: "#providers" },
+    document: {
+      readyState: "complete",
+      documentElement: {},
+      getElementById: (id: string) => {
+        if (id === "providers") return { classList: { contains: (c: string) => c === "active" }, dataset: { active: "true" } };
+        return null;
+      },
+      querySelector: (sel: string) => {
+        if (sel === "#provider-panels") return { children: [{ id: "panel-gemini" }] };
+        return null;
+      },
+      querySelectorAll: (sel: string) => {
+        if (sel.includes(".provider-card")) return [{ id: "gemini-card" }];
+        return [];
+      },
+    },
+  };
+  const readyRes = runExpression(hydratedProviders);
+  assertEquals(readyRes.ready, true);
+  assertEquals(readyRes.signal, "options-hydrated");
+});

@@ -53,13 +53,52 @@ export const APP_READY_EXPRESSION = `(() => {
       return { ready: false, reason: "sidepanel hydration pending", composer: !!composer, tabAgents: !!tabAgents, customElementsReady };
     }
 
-    // Options: interactive once form / inputs exist and document is complete
+    // Options: interactive once document is complete, active section is mounted,
+    // and target controls for that section have hydrated (not just static nav header buttons; z4tzw).
     if (path.includes("/options/options.html") || path.endsWith("/options.html")) {
-      const form = doc.getElementById("settings-form") || doc.querySelector("input, select, button");
-      if (form && doc.readyState === "complete") {
+      if (doc.readyState !== "complete") {
+        return { ready: false, reason: "options document not complete", readyState: doc.readyState };
+      }
+      const rawHash = (location.hash || "").replace(/^#/, "").toLowerCase();
+      const targetSection = rawHash || "providers";
+      const targetPanel = doc.getElementById(targetSection) || (doc.querySelector && doc.querySelector("section#" + targetSection));
+
+      if (targetSection === "board-permissions") {
+        const agentSelect = doc.getElementById("board-deny-agent");
+        const addBtn = doc.getElementById("board-deny-add-btn");
+        const panelActive = !!targetPanel && (targetPanel.classList?.contains?.("active") || targetPanel.dataset?.active === "true");
+        // Populated once populateBoardDenyAgents sets agentSelect.providers array with at least Hub and agent entries
+        const providersHydrated = !!agentSelect && (Array.isArray(agentSelect.providers) ? agentSelect.providers.length > 0 : ((agentSelect.getAttribute?.("providers") || "").length > 2));
+        if (agentSelect && addBtn && panelActive && providersHydrated) {
+          return { ready: true, signal: "options-hydrated" };
+        }
+        return {
+          ready: false,
+          reason: "options board permissions hydration pending",
+          agentSelect: !!agentSelect,
+          addBtn: !!addBtn,
+          panelActive,
+          providersHydrated,
+        };
+      }
+
+      if (targetSection === "providers") {
+        // Must find genuinely rendered provider cards, never just the error/retry button or dead selectors (97qd6)
+        const hasCards = (doc.querySelectorAll?.("#provider-panels .provider-card")?.length ?? 0) > 0;
+        if (hasCards) {
+          return { ready: true, signal: "options-hydrated" };
+        }
+        return { ready: false, reason: "options providers hydration pending" };
+      }
+
+      // Generic options section: target panel must be active and have internal controls
+      const panelActive = !!targetPanel && (targetPanel.classList?.contains?.("active") || targetPanel.dataset?.active === "true");
+      const hasPanelControls = !!targetPanel && !!targetPanel.querySelector?.("input, select, button, [role=tab], [role=radio], provider-select, switch-toggle");
+      const legacyForm = doc.getElementById("settings-form");
+      if ((panelActive && hasPanelControls) || legacyForm) {
         return { ready: true, signal: "options-hydrated" };
       }
-      return { ready: false, reason: "options hydration pending" };
+      return { ready: false, reason: "options section hydration pending", targetSection, panelActive, hasPanelControls };
     }
 
     if (doc.readyState === "complete") {
