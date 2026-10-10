@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.648] — 2026-10-10
+- Sanitize parameter query strings in ACP bridge adapter logging
+
 ## [0.3.647] — 2026-10-10
 - Sanitise control characters in ACP bridge logging so terminal escapes cannot forge log lines.
 

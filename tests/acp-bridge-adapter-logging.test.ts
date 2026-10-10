@@ -703,3 +703,115 @@ process.exit(1);
     await server.shutdown();
   }
 });
+
+Deno.test("acp-bridge preserves raw harness in child environment while sanitizing operator logs and close reasons", async () => {
+  const dir = durableDir("acp-logging-harness-sanitization");
+  const adapterPath = `${dir}/adapter-harness-mock.mjs`;
+  const echoFile = `${dir}/harness-echo.txt`;
+
+  Deno.writeTextFileSync(
+    adapterPath,
+    `import readline from "node:readline";
+import fs from "node:fs";
+try { fs.writeFileSync(${JSON.stringify(echoFile)}, process.env.PI_ACP_HARNESS ?? ""); } catch {}
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  try {
+    const msg = JSON.parse(line);
+    if (msg.method === "initialize") {
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0",
+        id: msg.id,
+        error: { code: -32000, message: "boom" }
+      }) + "\\n");
+      setTimeout(() => process.exit(0), 50);
+    }
+  } catch {}
+});
+`,
+  );
+
+  const loggedMessages: string[] = [];
+  const originalConsoleLog = console.log;
+  const originalConsoleError = console.error;
+  console.log = (...args: unknown[]) => {
+    loggedMessages.push(args.map(String).join(" "));
+  };
+  console.error = (...args: unknown[]) => {
+    loggedMessages.push(args.map(String).join(" "));
+  };
+
+  const prevKey = Deno.env.get("ANTHROPIC_API_KEY");
+  const prevKeep = Deno.env.get("CAP_ACP_KEEP_API_KEY");
+  Deno.env.set("ANTHROPIC_API_KEY", "sk-ant-test-5f5u");
+  Deno.env.delete("CAP_ACP_KEEP_API_KEY");
+
+  let server: Awaited<ReturnType<typeof createAcpServer>> | null = null;
+  const attackHarness = "\u001b]0;REV_HARNESS_TITLE_PWN\u0007\u001b[31mH\u001b[0m";
+
+  try {
+    server = createAcpServer(0, adapterPath, {}, undefined, TEST_BRIDGE_TOKEN);
+    const port = (server as any).addr.port;
+
+    let closeReason = "";
+    await new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/acp?token=${TEST_BRIDGE_TOKEN}&harness=${encodeURIComponent(attackHarness)}`);
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1 } }));
+      };
+      ws.onclose = (ev) => {
+        closeReason = ev.reason;
+        resolve();
+      };
+      ws.onerror = (e) => reject(e);
+    });
+
+    // 1. Verify child environment received the EXACT raw harness without mutation
+    const echoedHarness = Deno.readTextFileSync(echoFile);
+    assertEquals(echoedHarness, attackHarness, "Child process PI_ACP_HARNESS must retain exact raw harness string");
+
+    // 2. Verify no raw ESC or BEL in any operator log lines
+    assert(!loggedMessages.some((l) => l.includes("\u001b")), `Found raw ESC in logs: ${JSON.stringify(loggedMessages)}`);
+    assert(!loggedMessages.some((l) => l.includes("\u0007")), `Found raw BEL in logs: ${JSON.stringify(loggedMessages)}`);
+    assert(!loggedMessages.some((l) => l.includes("REV_HARNESS_TITLE_PWN")), `OSC title payload leaked into logs: ${JSON.stringify(loggedMessages)}`);
+
+    // 3. Verify sanitized harness "H" was logged cleanly across connection, env note, error, and exit logs
+    assert(loggedMessages.some((l) => l.includes("(harness: H)")), `Expected sanitized connection log, got: ${JSON.stringify(loggedMessages)}`);
+    assert(loggedMessages.some((l) => l.includes("[acp-bridge] H: ANTHROPIC_API_KEY is set in this environment")), `Expected sanitized child env note, got: ${JSON.stringify(loggedMessages)}`);
+    assert(loggedMessages.some((l) => l.includes('adapter error for harness "H"')), `Expected sanitized error log, got: ${JSON.stringify(loggedMessages)}`);
+    assert(loggedMessages.some((l) => l.includes('adapter for harness "H" exited')), `Expected sanitized exit log, got: ${JSON.stringify(loggedMessages)}`);
+
+    // 4. Verify close reason was sanitized and names the sanitized harness
+    assert(!closeReason.includes("\u001b"), `Found raw ESC in close reason: "${closeReason}"`);
+    assert(!closeReason.includes("\u0007"), `Found raw BEL in close reason: "${closeReason}"`);
+    assert(!closeReason.includes("REV_HARNESS_TITLE_PWN"), `OSC title payload in close reason: "${closeReason}"`);
+    assert(closeReason.includes('adapter for harness "H" exited'), `Expected close reason to name sanitized harness, got: "${closeReason}"`);
+  } finally {
+    if (prevKey !== undefined) Deno.env.set("ANTHROPIC_API_KEY", prevKey);
+    else Deno.env.delete("ANTHROPIC_API_KEY");
+    if (prevKeep !== undefined) Deno.env.set("CAP_ACP_KEEP_API_KEY", prevKeep);
+    else Deno.env.delete("CAP_ACP_KEEP_API_KEY");
+    console.log = originalConsoleLog;
+    console.error = originalConsoleError;
+    if (server) await server.shutdown();
+  }
+});
+
+Deno.test("acp-bridge rejects unknown harness with sanitized 400 error when --adapter is NOT pinned", async () => {
+  const server = createAcpServer(0, undefined, {}, undefined, TEST_BRIDGE_TOKEN);
+  const port = (server as any).addr.port;
+
+  const attackHarness = "bad_\u001b]0;TITLE\u0007\u001b[31mharness\u001b[0m";
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/acp?token=${TEST_BRIDGE_TOKEN}&harness=${encodeURIComponent(attackHarness)}`);
+    assertEquals(res.status, 400, "Unknown harness must reject with 400");
+    const body = await res.text();
+    assert(body.includes('unknown harness "bad_harness"'), `Expected sanitized bad harness in response, got: "${body}"`);
+    assert(!body.includes("\u001b"), `Found raw ESC in response body: "${body}"`);
+    assert(!body.includes("\u0007"), `Found raw BEL in response body: "${body}"`);
+    assert(!body.includes("TITLE"), `OSC payload leaked into response body: "${body}"`);
+  } finally {
+    await server.shutdown();
+  }
+});

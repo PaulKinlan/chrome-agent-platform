@@ -966,12 +966,14 @@ export function createAcpServer(
     // configured default harness.
     const requestedHarness = url.searchParams.get("harness")?.trim();
     if (!adapterPathOverride && requestedHarness && !HARNESS_ADAPTERS[requestedHarness]) {
+      const displayBad = sanitizeLogString(requestedHarness);
       return new Response(
-        `ACP Bridge: unknown harness "${requestedHarness}" — known harnesses: ${Object.keys(HARNESS_ADAPTERS).join(", ")}`,
+        `ACP Bridge: unknown harness "${displayBad}" — known harnesses: ${Object.keys(HARNESS_ADAPTERS).join(", ")}`,
         { status: 400 },
       );
     }
     const connectionHarness = requestedHarness || HARNESS;
+    const displayHarness = sanitizeLogString(connectionHarness);
 
     // /acp/preflight — the same origin + token guards as the upgrade, but as a
     // plain HTTP probe (no upgrade header) whose JSON reason the extension can
@@ -1022,7 +1024,7 @@ export function createAcpServer(
     let disconnected = false;
 
     socket.onopen = async () => {
-      console.log(`[acp-bridge] Client connected from ${clientOrigin || "local script"} (harness: ${connectionHarness})`);
+      console.log(`[acp-bridge] Client connected from ${clientOrigin || "local script"} (harness: ${displayHarness})`);
       try {
         const resolved = resolveAdapter(connectionHarness, adapterPathOverride);
         adapterName = resolved.adapterName;
@@ -1035,7 +1037,7 @@ export function createAcpServer(
         // even when the adapter dies later (5f5u). The HOST layer is scoped first and the caller's
         // explicit childEnv is merged on top, so an explicitly pinned key is never deleted.
         const acpChildEnvResult = acpChildEnvFor(childEnv);
-        const acpChildEnvNoteText = acpChildEnvNote(acpChildEnvResult, connectionHarness);
+        const acpChildEnvNoteText = acpChildEnvNote(acpChildEnvResult, displayHarness);
         if (acpChildEnvNoteText) console.error(acpChildEnvNoteText);
         const cmd = new Deno.Command(resolved.cmd, acpChildSpawnOptions({
           args: resolved.args,
@@ -1094,9 +1096,9 @@ export function createAcpServer(
             await Promise.race([stderrDrained, new Promise((r) => setTimeout(r, 200))]);
           } catch { /* ignore drain timeout */ }
           const detail = lastStderr ? sanitizeLogString(lastStderr) : "no stderr";
-          console.error(`[acp-bridge] adapter for harness "${connectionHarness}" exited (code ${exitStatus.code}, signal ${exitStatus.signal}): ${detail}`);
+          console.error(`[acp-bridge] adapter for harness "${displayHarness}" exited (code ${exitStatus.code}, signal ${exitStatus.signal}): ${detail}`);
           if (socket.readyState === WebSocket.OPEN) {
-            try { socket.close(1011, clipCloseReason(`adapter for harness "${connectionHarness}" exited: ${detail}`)); } catch { /* already closed */ }
+            try { socket.close(1011, clipCloseReason(`adapter for harness "${displayHarness}" exited: ${detail}`)); } catch { /* already closed */ }
           }
         })();
 
@@ -1136,11 +1138,11 @@ export function createAcpServer(
                         ? String(frame.id)
                         : (frame.id !== undefined && frame.id !== null ? String(frame.id) : "none");
                       const frameId = sanitizeLogString(rawFrameId) || "none";
-                      console.error(`[acp-bridge] adapter error for harness "${connectionHarness}" (id ${frameId}): ${msg} (code ${code})`);
+                      console.error(`[acp-bridge] adapter error for harness "${displayHarness}" (id ${frameId}): ${msg} (code ${code})`);
                     }
                     if (frame?.method === "_auth/status_update" && frame.params?.authStatus?.kind === "none") {
                       const authLabel = sanitizeLogString(frame.params.authStatus?.label || "Not logged in");
-                      console.error(`[acp-bridge] adapter auth status for harness "${connectionHarness}": ${authLabel}`);
+                      console.error(`[acp-bridge] adapter auth status for harness "${displayHarness}": ${authLabel}`);
                     }
                     // N2: Drop adapter-originated frames that target private _cap/* namespace
                     if (typeof frame?.method === "string" && frame.method.startsWith("_cap/")) {
@@ -1163,11 +1165,11 @@ export function createAcpServer(
 
 
       } catch (err) {
-        console.error(`[acp-bridge] Failed to spawn adapter for harness "${connectionHarness}":`, err);
+        console.error(`[acp-bridge] Failed to spawn adapter for harness "${displayHarness}":`, err);
         // A close reason is capped at 123 BYTES — an unbounded one throws
         // (seen live: a long adapter path turned this into an uncaught
         // SyntaxError instead of a clean, reported failure).
-        socket.close(1011, clipCloseReason(`Failed to spawn adapter for harness "${connectionHarness}": ${err}`));
+        socket.close(1011, clipCloseReason(`Failed to spawn adapter for harness "${displayHarness}": ${err}`));
       }
     };
 

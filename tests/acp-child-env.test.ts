@@ -37,6 +37,17 @@ Deno.test("5f5u: the host-side note names the VARIABLE and the way to reverse it
   assertEquals(acpChildEnvNote(acpChildEnv({ PATH: "/usr/bin" }), "claude"), null, "nothing scoped out, nothing said");
 });
 
+Deno.test("acpChildEnvNote sanitizes harness name against ANSI/OSC injection", () => {
+  const result = acpChildEnv({ ANTHROPIC_API_KEY: FAKE_KEY });
+  const attackHarness = "\u001b]0;ATTACK_TITLE\u0007\u001b[31mclaude\u001b[0m";
+  const note = acpChildEnvNote(result, attackHarness);
+  assert(note, "must produce note");
+  assertStringIncludes(note as string, "[acp-bridge] claude: ANTHROPIC_API_KEY is set");
+  assertEquals((note as string).includes("\u001b"), false, "must not contain ESC");
+  assertEquals((note as string).includes("\u0007"), false, "must not contain BEL");
+  assertEquals((note as string).includes("ATTACK_TITLE"), false, "must not contain OSC payload");
+});
+
 Deno.test("5f5u: the adapter's auth-precedence warning becomes an actionable line, and ordinary stderr does not", () => {
   // The EXACT sentence from the o7v2 drive's stderr (their evidence, claude-first/stderr.txt).
   const theirWarning =

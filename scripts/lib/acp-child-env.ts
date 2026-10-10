@@ -95,8 +95,9 @@ export function acpChildEnvFor(
 /** The host-side line for what was scoped out, or null when there was nothing to say. */
 export function acpChildEnvNote({ bridgedAuthVars }: AcpChildEnvResult, harness: string): string | null {
   if (bridgedAuthVars.length === 0) return null;
+  const displayHarness = sanitizeLogString(harness);
   return (
-    `[acp-bridge] ${harness}: ${bridgedAuthVars.join(", ")} is set in this environment and takes precedence ` +
+    `[acp-bridge] ${displayHarness}: ${bridgedAuthVars.join(", ")} is set in this environment and takes precedence ` +
     `over a claude.ai login, so CAP scopes it out of the adapter child (your environment is unchanged). ` +
     `Set CAP_ACP_KEEP_API_KEY=1 to pass it through instead.`
   );
