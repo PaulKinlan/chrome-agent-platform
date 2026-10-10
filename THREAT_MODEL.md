@@ -516,7 +516,9 @@ and each names the executable check that would catch a regression.
   boundary, and the model is told that fenced text is data.**
   `extension/lib/untrusted-fence.js:46-96`; `extension/lib/system-prompts.js:763-773`;
   `extension/lib/skill-import.js` (imported third-party skill and command bodies are fenced
-  with `wrapUntrustedContent` at import time; finding `tm-unfenced-imported-instructions`).
+  with `wrapUntrustedContent` at import time as defense-in-depth; live model execution paths
+  in `system-prompts.js` and `acp-model.js` apply the unguessable per-assembly random token;
+  finding `tm-unfenced-imported-instructions`).
 - **INV-8 — Destructive actions require an approval bound to the exact action, target and
   payload digest, and expiring.** `extension/lib/owner-approval.js:23`, `:533`, `:634`;
   `extension/lib/browser-tools.js` (`register_user_script`, `update_user_script`,
@@ -604,12 +606,13 @@ decision and, where one exists, the trigger that would reopen it.
 11. **Third-party skill instruction injection (t045y / tm-unfenced-imported-instructions).**
     CLOSED by `extension/lib/skill-import.js` and `extension/skills/skills-panel.js`.
     Third-party skill bodies (SKILL.md, supporting files) and commands imported from
-    external URLs are piped through `wrapUntrustedContent` at import time and persisted
-    with untrusted-fence metadata (`untrusted: true`, `fenced: true`, `sourceUrl`). When
-    delivered to the model (in system prompt boundary skills or via ACP skill context),
-    the imported content is fenced as untrusted data rather than trusted instructions,
-    preventing prompt injection from elevating to standing instructions. Provenance is
-    surfaced in the skills UI.
+    external URLs are piped through `wrapUntrustedContent` at import time as defense-in-depth
+    and persisted with untrusted-fence metadata (`untrusted: true`, `fenced: true`, `sourceUrl`).
+    The primary protection is enforced at model execution time: live turn prompts in `system-prompts.js`
+    (`renderBoundarySkills`) and ACP execution in `acp-model.js` (which carries the complete CAP
+    system prompt) wrap imported skills in an unguessable per-assembly random token (`mintUntrustedToken`),
+    telling the model that fenced text is untrusted data. `acp-runner.js` provides an unattached library
+    seam for tests and future integrations with optional run-token fencing. Provenance is surfaced in the skills UI.
 
 ---
 

@@ -8,7 +8,11 @@ import { AcpClient, acpAllowOptionId, acpDenyOptionId } from "./acp-client.js";
 import { AcpNativeTransport, DEFAULT_NATIVE_HOST } from "./acp-native.js";
 import { acpExecutionId } from "./acp-thread-journal.js";
 import { sha256Hex } from "./pure.js";
-import { wrapUntrustedContent } from "./untrusted-fence.js";
+import {
+  wrapUntrustedContent,
+  isWellFormedFenceWithToken,
+  UNTRUSTED_TOKEN_PLACEHOLDER,
+} from "./untrusted-fence.js";
 
 
 // ── CAP skill context on the harness turn (chrome-agent-platform-etdn) ──────
@@ -62,14 +66,15 @@ export async function resolveSkillContext(text, { runtimeSend = null } = {}) {
 
 /** The harness turn payload: the skill context block, then the owner's own
  *  text. Unchanged when there is nothing to inject. Pure. */
-export function buildPromptWithSkillContext(task, skills) {
+export function buildPromptWithSkillContext(task, skills, runToken = null) {
   const list = Array.isArray(skills) ? skills.filter((s) => s && (s.prompt || s.description)) : [];
   if (!list.length) return String(task ?? "");
+  const token = typeof runToken === "string" && runToken ? runToken : UNTRUSTED_TOKEN_PLACEHOLDER;
   const block = list.map((s) => {
     const isImported = s.source === "imported" || s.untrusted === true || String(s.refId ?? "").startsWith("imported:");
     const promptText = String(s.prompt ?? "");
-    const safePrompt = isImported && promptText && !promptText.includes("<<<UNTRUSTED")
-      ? wrapUntrustedContent(promptText)
+    const safePrompt = isImported && promptText && !isWellFormedFenceWithToken(promptText, token)
+      ? wrapUntrustedContent(promptText, token)
       : promptText;
     return (
       `<cap-skill ref="${s.refId}" name="${s.name}">\n` +
