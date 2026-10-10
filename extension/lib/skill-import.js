@@ -5,16 +5,70 @@
 // is installed as a reusable skill the owner can then /skill:<id> into any task
 // or attach to any agent. Skills are DATA (a prompt + files), never eval'd.
 
+import { checkFetchTarget } from "./fetch-policy.js";
+
 const rateLimitErr = (status, action) =>
   new Error(`GitHub API rate-limited (HTTP ${status}) while ${action}; wait and retry, or use a raw.githubusercontent.com URL`);
 
 function validateHttpUrl(url) {
   const u = String(url ?? "").trim();
   if (!u) throw new Error("no skill URL provided");
-  let p;
-  try { p = new URL(u); } catch { throw new Error("invalid skill URL"); }
-  if (p.protocol !== "http:" && p.protocol !== "https:") throw new Error("skill URL must be http(s)");
+  const target = checkFetchTarget(u);
+  if (!target.ok) {
+    if (target.error === "invalid URL") throw new Error("invalid skill URL");
+    if (target.error.startsWith("protocol ")) throw new Error("skill URL must be http(s)");
+    throw new Error(target.error);
+  }
   return u;
+}
+
+export const MAX_REDIRECT_HOPS = 5;
+
+/** Rewrite github.com/<owner>/<repo>/raw/<branch>/<path> and gist.github.com
+ * direct links to their CDN equivalents to avoid redirecting in browser environments. */
+export function normalizeDirectSkillUrl(url) {
+  const u = String(url ?? "").trim();
+  const mGist = u.match(/^https?:\/\/gist\.github\.com\/([^/]+)\/([^/]+)\/raw\/(.+)$/i);
+  if (mGist) {
+    return `https://gist.githubusercontent.com/${mGist[1]}/${mGist[2]}/raw/${mGist[3]}`;
+  }
+  const m = u.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/raw\/(.+)$/i);
+  if (m) {
+    return `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3]}`;
+  }
+  return u;
+}
+
+/**
+ * Fetch a target URL with redirect: "manual", re-checking every hop's Location
+ * header against checkFetchTarget so a public URL cannot redirect into private,
+ * loopback, or metadata addresses.
+ */
+export async function fetchWithSafeRedirects(url, init = {}, fetcher = globalThis.fetch, maxHops = MAX_REDIRECT_HOPS) {
+  let currentUrl = url;
+  for (let hop = 0; hop <= maxHops; hop++) {
+    const target = checkFetchTarget(currentUrl);
+    if (!target.ok) {
+      throw new Error(`fetch to ${currentUrl} refused: ${target.error}`);
+    }
+    const resp = await fetcher(target.url.href, { ...init, redirect: "manual" });
+    if (resp?.type === "opaqueredirect") {
+      throw new Error(`fetch to ${currentUrl} refused: redirected to an opaque destination; uninspectable redirects are refused on external imports to prevent SSRF bypasses. Provide the destination URL directly.`);
+    }
+    const status = resp?.status ?? 0;
+    if (status >= 300 && status < 400) {
+      const location = resp.headers?.get?.("location") ?? resp.headers?.get?.("Location");
+      if (!location) {
+        throw new Error(`fetch to ${currentUrl} refused: redirect response (${status}) missing inspectable Location header; redirects are refused on external imports to prevent SSRF bypasses.`);
+      }
+      if (hop === maxHops) {
+        throw new Error(`fetch to ${url} refused: redirect hop count exceeded bound (${maxHops})`);
+      }
+      currentUrl = new URL(location, target.url.href).href;
+      continue;
+    }
+    return resp;
+  }
 }
 
 /** Parse minimal YAML frontmatter (name/description/author/version). */
@@ -101,7 +155,7 @@ export async function fetchSkillFromUrl(url) {
   const isGithubPage = /github\.com\/[^/]+\/[^/]+\/(blob|tree)\//.test(u);
   const isGithubRaw =
     u.includes("raw.githubusercontent.com") || /github\.com\/[^/]+\/[^/]+\/raw\//.test(u);
-  if (isGithubRaw) return fetchDirectSkill(u);
+  if (isGithubRaw) return fetchDirectSkill(normalizeDirectSkillUrl(u));
   if (!isGithubPage && /\.md(?:\?.*)?$/.test(u)) {
     return fetchDirectSkill(u);
   }
@@ -119,11 +173,12 @@ export async function fetchSkillFromUrl(url) {
 }
 
 async function fetchDirectSkill(url) {
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`failed to fetch ${url} (${resp.status})`);
+  const targetUrl = normalizeDirectSkillUrl(url);
+  const resp = await fetchWithSafeRedirects(targetUrl);
+  if (!resp.ok) throw new Error(`failed to fetch ${targetUrl} (${resp.status})`);
   const content = await readSkillText(resp);
   const { meta } = parseFrontmatter(content);
-  const urlName = url.split("/").pop().replace(/\.md$/i, "") || "imported-skill";
+  const urlName = targetUrl.split("/").pop().replace(/\.md$/i, "") || "imported-skill";
   return {
     files: { "SKILL.md": content },
     meta: {
@@ -162,8 +217,9 @@ async function fetchGitHubSkill(url) {
   const files = {};
 
   const contents = async (p) => {
-    const resp = await fetch(
-      `https://api.github.com/repos/${owner}/${repo}/contents/${p}?ref=${branch}`,
+    const contentsUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${p}?ref=${branch}`;
+    const resp = await fetchWithSafeRedirects(
+      contentsUrl,
       { headers: { Accept: "application/vnd.github.v3+json" } },
     );
     if (resp.status === 403 || resp.status === 429) {
@@ -178,7 +234,7 @@ async function fetchGitHubSkill(url) {
 
   const fetchFileBody = async (file) => {
     if (!file?.download_url) return null;
-    const fr = await fetch(file.download_url);
+    const fr = await fetchWithSafeRedirects(file.download_url);
     if (!fr.ok) return null;
     const label = `${owner}/${repo} ${file.path ?? file.name}`;
     return await readSkillText(fr, label);
@@ -211,7 +267,7 @@ async function fetchGitHubSkill(url) {
 
   if (!skillContent) {
     const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path ? path + "/" : ""}SKILL.md`;
-    const resp = await fetch(rawUrl);
+    const resp = await fetchWithSafeRedirects(rawUrl);
     if (!resp.ok) return null;
     skillContent = await readSkillText(resp, `${owner}/${repo} SKILL.md`);
   }
@@ -250,11 +306,11 @@ async function fetchGitHubSkill(url) {
     };
     await walk(skillParent);
   } catch (e) {
-    // Physical-budget violations (per-file / total) are REAL failures — the
-    // importer must not silently drop the offending file(s). Transient API
-    // errors (rate limit mid-walk, missing dir) keep the SKILL.md-only fallback.
+    // Physical-budget violations (per-file / total) and SSRF/private-address refusals
+    // are REAL failures — the importer must not silently drop the offending file(s).
+    // Transient API errors (rate limit mid-walk, missing dir) keep the SKILL.md-only fallback.
     const msg = String(e?.message ?? "");
-    if (msg.includes("per-file budget") || msg.includes("total budget")) throw e;
+    if (msg.includes("per-file budget") || msg.includes("total budget") || msg.includes("refused:")) throw e;
     /* transient — best-effort */
   }
 
@@ -391,7 +447,8 @@ async function crawlContents(owner, repo, branch, dir, fetcher, maxWalk = MAX_DI
   while (q.length && walked < maxWalk) {
     const cur = q.shift();
     walked++;
-    const res = await fetcher(`https://api.github.com/repos/${owner}/${repo}/contents${cur ? `/${cur}` : ""}?ref=${branch}`, { headers: { Accept: "application/vnd.github.v3+json" } });
+    const contentsUrl = `https://api.github.com/repos/${owner}/${repo}/contents${cur ? `/${cur}` : ""}?ref=${branch}`;
+    const res = await fetchWithSafeRedirects(contentsUrl, { headers: { Accept: "application/vnd.github.v3+json" } }, fetcher);
     if (res.status === 403 || res.status === 429) throw rateLimitErr(res.status, `walking ${owner}/${repo}`);
     if (!res.ok) continue;
     const items = await res.json();
@@ -416,9 +473,10 @@ export async function discoverRepoSkillsAndCommands(url, options = {}) {
 
   let tree = null, usedTreesApi = false;
   try {
-    const resp = await fetcher(`https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`, {
+    const treesUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`;
+    const resp = await fetchWithSafeRedirects(treesUrl, {
       headers: { Accept: "application/vnd.github.v3+json", ...(options.headers ?? {}) },
-    });
+    }, fetcher);
     if (resp.status === 403 || resp.status === 429) {
       throw rateLimitErr(resp.status, `discovering skills in ${owner}/${repo}`);
     }
@@ -447,12 +505,15 @@ export async function discoverRepoSkillsAndCommands(url, options = {}) {
   if (marketplaceItem && fetchContent) {
     try {
       const mUrl = marketplaceItem.download_url || `${rawBase}${marketplaceItem.path}`;
-      const resp = await fetcher(mUrl);
+      const resp = await fetchWithSafeRedirects(mUrl, {}, fetcher);
       if (resp.ok) {
         marketplace = JSON.parse(await readSkillText(resp, "marketplace.json"));
         if (Array.isArray(marketplace?.plugins)) plugins = marketplace.plugins;
       }
-    } catch { /* best effort */ }
+    } catch (e) {
+      if (String(e?.message ?? "").includes("refused:")) throw e;
+      /* best effort */
+    }
   }
 
   if (plugins.length === 0) {
@@ -505,10 +566,12 @@ export async function discoverRepoSkillsAndCommands(url, options = {}) {
 
   if (fetchContent) {
     const enrich = async (item, isCmd) => {
+      if (!item?.downloadUrl) return;
       let resp;
       try {
-        resp = await fetcher(item.downloadUrl);
+        resp = await fetchWithSafeRedirects(item.downloadUrl, {}, fetcher);
       } catch (e) {
+        if (String(e?.message ?? "").includes("refused:")) throw e;
         if (String(e?.message ?? "").includes("rate-limited")) throw e;
         return;
       }
@@ -602,7 +665,8 @@ export async function installBatchSkillsAndCommands(memory, batch = {}, fileStor
   const errors = [];
 
   const fetchBody = async (item) => {
-    const resp = await fetcher(item.downloadUrl);
+    if (!item?.downloadUrl) throw new Error("no download URL provided");
+    const resp = await fetchWithSafeRedirects(item.downloadUrl, {}, fetcher);
     if (!resp.ok) throw new Error(`failed to fetch ${item.name} (${resp.status})`);
     return parseFrontmatter(await readSkillText(resp, item.name));
   };
