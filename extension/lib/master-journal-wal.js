@@ -24,7 +24,7 @@ async function hash(text) {
 
 /** The hash covers the *canonical JSON body*, not the outer envelope. */
 export async function sealMasterJournalRecord(kind, payload) {
-  if (!["head", "checkpoint", "archive", "frame", "claim"].includes(kind)) throw new Error("unknown journal record kind");
+  if (!["head", "checkpoint", "archive", "frame", "claim", "repair-intent"].includes(kind)) throw new Error("unknown journal record kind");
   const body = JSON.stringify({ magic: MAGIC, kind, payload });
   if (typeof body !== "string") throw new Error("journal record cannot be serialized");
   return JSON.stringify({ body, sha256: await hash(body) });
@@ -99,6 +99,7 @@ function validateHead(head) {
       (head.checkpointHash !== undefined && !/^[0-9a-f]{64}$/.test(head.checkpointHash)) ||
       typeof head.archive !== "string" || !/^archive-[1-9]\d*-[0-9]+\.json$/.test(head.archive) ||
       (head.archiveHash !== undefined && !/^[0-9a-f]{64}$/.test(head.archiveHash)) ||
+      (head.repairIntentId !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(head.repairIntentId)) ||
       typeof head.lastHash !== "string" || !/^[0-9a-f]{64}$/.test(head.lastHash)) {
     throw new Error("master journal head is corrupt");
   }
@@ -112,12 +113,22 @@ function validateHead(head) {
 export async function readMasterJournalHead(master) {
   const directory = await optionalDirectory(master);
   if (!directory) return null;
+  // An immutable owner repair intent is a fail-closed authority witness, not
+  // a boot-recovered coordination key. Even when every head is absent, its
+  // presence must NEVER make the old journal.json authoritative again.
+  const intent = await readRecord(directory, "repair-intent.json", "repair-intent");
+  if (intent && (intent.schemaVersion !== 1 ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(intent.id) ||
+      typeof intent.reason !== "string" || !intent.reason || intent.reason.length > 200)) {
+    throw new Error("master journal repair intent is corrupt");
+  }
   const heads = [];
   for (const slot of HEADS) {
     const head = await readRecord(directory, slot, "head");
     if (head) heads.push(validateHead(head));
   }
   if (heads.length === 0) {
+    if (intent) throw new Error("master journal repair intent requires an owner-approved checked head");
     // A cutover may crash after staging its first immutable checkpoint or
     // archive but BEFORE publishing head-a. Without a separate durable
     // cutover witness, those bytes cannot prove a safe retry or that legacy
@@ -139,7 +150,14 @@ export async function readMasterJournalHead(master) {
     const [older, newer] = heads.sort((a, b) => a.sequence - b.sequence);
     if (newer.version <= older.version) throw new Error("master journal head version has regressed");
   }
-  return heads.sort((a, b) => b.sequence - a.sequence)[0];
+  const selected = heads.sort((a, b) => b.sequence - a.sequence)[0];
+  if (intent && selected.repairIntentId !== intent.id) {
+    throw new Error("master journal repair intent is not discharged by the selected checked head");
+  }
+  if (!intent && heads.some((head) => head.repairIntentId !== undefined)) {
+    throw new Error("master journal repair witness is missing");
+  }
+  return selected;
 }
 
 /** Follow immutable bounded archive records from a published terminal leaf.
@@ -400,7 +418,7 @@ async function stageMasterJournalCompaction(master, {
   const checkpointHash = await hash(DECODER.decode(await (await checkpointFile.getFile()).arrayBuffer()));
   const lastHash = await hash(JSON.stringify({ epoch: head.epoch, sequence, checkpoint, archive, archiveHash, checkpointHash }));
   const next = validateHead({
-    epoch: head.epoch, sequence, version, checkpointSequence: sequence,
+    ...head, epoch: head.epoch, sequence, version, checkpointSequence: sequence,
     checkpoint, archive, archiveHash, checkpointHash, lastHash,
   });
   await writeCheckedRecord(directory, HEADS[sequence % 2], "head", next);

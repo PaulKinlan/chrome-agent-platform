@@ -93,6 +93,44 @@ async function legacyFixture(faults = {}) {
     readGeneration: async () => generation };
 }
 
+Deno.test("durable repair-intent witness refuses missing or unmatched head without legacy fallback", async () => {
+  const { master, allocateVersion } = await legacyFixture();
+  const wal = await master.getDirectoryHandle("journal-wal", { create: true });
+  const witnessId = "11111111-2222-4333-8444-555555555555";
+  const witness = await wal.getFileHandle("repair-intent.json", { create: true });
+  witness.bytes = encoder.encode(await sealMasterJournalRecord("repair-intent", {
+    schemaVersion: 1, id: witnessId, reason: "explicit owner repair",
+  }));
+  await assertRejects(() => readMasterJournalHead(master), Error, "repair intent");
+  await assertRejects(() => readMasterJournalProjection(master), Error, "repair intent",
+    "a missing head cannot reactivate legacy when durable repair is pending");
+  // Simulate a separately owner-approved, readback-verified publication in
+  // this fake only; the product still has NO repair publisher or live writer.
+  wal.children.delete("repair-intent.json");
+  const first = await stageMasterJournalCutover(master, { journalExists: true,
+    journal: [{ id: "owned" }], archive: [], allocateVersion });
+  witness.bytes = encoder.encode(await sealMasterJournalRecord("repair-intent", {
+    schemaVersion: 1, id: witnessId, reason: "explicit owner repair",
+  }));
+  wal.children.set("repair-intent.json", witness);
+  await assertRejects(() => readMasterJournalHead(master), Error, "repair intent",
+    "an older intact head without the witness cannot silently win");
+  const signedHead = await wal.getFileHandle("head-a.json");
+  signedHead.bytes = encoder.encode(await sealMasterJournalRecord("head", {
+    ...first, repairIntentId: witnessId,
+  }));
+  assertEquals((await readMasterJournalHead(master)).repairIntentId, witnessId);
+  for (let i = 0; i < 129; i++) {
+    await stageMasterJournalFrame(master, { operation: "append", row: { id: `after-repair-${i}` } },
+      { allocateVersion });
+  }
+  assertEquals((await readMasterJournalHead(master)).repairIntentId, witnessId,
+    "compaction and head-slot rotation must retain the exact repair witness identity");
+  wal.children.delete("repair-intent.json");
+  await assertRejects(() => readMasterJournalHead(master), Error, "repair witness is missing",
+    "a checked head cannot discharge a removed witness by omission");
+});
+
 Deno.test("read-only owner repair evidence preserves pre-head residue and bounds its manifest", async () => {
   const { master, legacy, allocateVersion } = await legacyFixture();
   const absent = await snapshotMasterJournalRepairEvidence(master);

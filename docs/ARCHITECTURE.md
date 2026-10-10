@@ -635,7 +635,15 @@ staged gates. Even the Deno-only unregistered-store test seam reads the physical
 wrapped master store has no transaction facade. Torn, non-equal or source-mismatched
 immutable records, damaged head slots, and pre-head cutover residue (a
 nonempty WAL directory with no published head) remain fail-closed until
-explicit owner repair; none selects the stale legacy journal automatically. The
+explicit owner repair; none selects the stale legacy journal automatically.
+A staged checked `repair-intent.json` witness now makes head absence or an
+unmatched/torn head refuse even when legacy bytes exist. Logical discharge
+requires a sealed selected head binding its exact intent ID; the witness
+bytes remain append-only, and frame rotation/compaction retain that binding.
+This is a reader invariant ONLY: no product route writes or approves an
+intent/head, no quarantine namespace or backup grammar handles it yet, and
+the fixed witness name is not a complete multi-repair lifecycle. Production
+WAL writes are still OFF. The
 read-only `inspectMasterJournalForOwner` helper classifies empty/absent WAL,
 pre-head/torn repair needs, or a checked *current* projection and archive
 chain, without switching authority or editing any record. The separate
