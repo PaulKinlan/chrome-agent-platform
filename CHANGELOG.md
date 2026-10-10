@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.639] — 2026-10-10
+- Harden service worker fence.abort AST test falsifier against receiver swap regressions
+
 ## [0.3.638] — 2026-10-10
 - Keep scheduled agent tasks from opening a background page unless developer features and a provider are enabled.
 
