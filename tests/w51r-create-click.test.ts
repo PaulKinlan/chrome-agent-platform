@@ -55,6 +55,53 @@ Deno.test("w51r: refusing a hidden button sends no CDP input; a visible button s
   assertEquals(createAgentClickTarget(doc(button)), { ok: true, x: 16, y: 16 });
 });
 
+Deno.test("w51r / qwrur: clickVisibleCreateAgent with waitForReady awaits app readiness; readiness throw emits zero mouse events", async () => {
+  const sent: Array<{ method: string; type: string; x: number; y: number; session: string }> = [];
+  const cdp = {
+    send: async (method: string, params: any, session: string) => {
+      sent.push({ method, type: params.type, x: params.x, y: params.y, session });
+    },
+  };
+
+  // 1. Negative path: when app readiness throws/refuses, zero CDP mouse events are dispatched (fail-closed)
+  let readinessError: Error | undefined;
+  try {
+    await clickVisibleCreateAgent(
+      cdp,
+      "test",
+      async (expr: string) => {
+        if (expr.includes("__capAppReady") || expr.includes("document.readyState")) {
+          throw new Error("app readiness timeout");
+        }
+        return { ok: true, x: 28, y: 80 };
+      },
+      { waitForReady: true, timeoutMs: 100 },
+    );
+  } catch (e) {
+    readinessError = e as Error;
+  }
+  assert(readinessError?.message.includes("app never became ready"));
+  assertEquals(sent, [], "app readiness failure must dispatch zero CDP mouse events");
+
+  // 2. Positive path: when app readiness succeeds, readiness check precedes target evaluation
+  const callSequence: string[] = [];
+  await clickVisibleCreateAgent(
+    cdp,
+    "test",
+    async (expr: string) => {
+      if (expr.includes("data-cap-app-ready") || expr.includes("location.pathname")) {
+        callSequence.push("readinessCheck");
+        return { ready: true };
+      }
+      callSequence.push("targetEvaluation");
+      return { ok: true, x: 28, y: 80 };
+    },
+    { waitForReady: true, timeoutMs: 1000 },
+  );
+  assertEquals(callSequence, ["readinessCheck", "targetEvaluation"], "readiness check must precede target evaluation");
+  assertEquals(sent.map((s) => s.type), ["mousePressed", "mouseReleased"]);
+});
+
 export type TimeoutComputer = (options: { base: number; loadPerCpu: number }) => number;
 
 /**
@@ -66,6 +113,7 @@ export async function runW51rCreateClickJourney(options: {
   computeTimeout?: TimeoutComputer;
   loadPerCpu?: number;
   launch?: (timeouts: { openTimeoutMs: number; readyTimeoutMs: number }) => Promise<void>;
+  cdp?: any;
 } = {}): Promise<void> {
   const compute: TimeoutComputer = options.computeTimeout ?? ((opts) => serialFileTimeoutMs(opts));
   const load = options.loadPerCpu ?? currentLoadPerCpu();
@@ -78,15 +126,17 @@ export async function runW51rCreateClickJourney(options: {
     return;
   }
 
-  const profile = chromeProfileDir("w51r-create-click");
+  const profile = options.cdp ? "" : chromeProfileDir("w51r-create-click");
   const evidence = durableDir("w51r-create-click", `${Date.now()}-${Deno.pid}`);
-  await Deno.mkdir(evidence, { recursive: true });
-  let chrome, cdp;
+  if (!options.cdp) await Deno.mkdir(evidence, { recursive: true });
+  let chrome, cdp = options.cdp;
   try {
-    chrome = await launchChrome({ binary: BINARY!, args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
-      `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--remote-allow-origins=*",
-      `--user-data-dir=${profile}`, "--window-size=1440,900", "about:blank"] });
-    cdp = await openCdp(chrome.wsUrl, { timeoutMs: 15000 });
+    if (!cdp) {
+      chrome = await launchChrome({ binary: BINARY!, args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
+        `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--remote-allow-origins=*",
+        `--user-data-dir=${profile}`, "--window-size=1440,900", "about:blank"] });
+      cdp = await openCdp(chrome.wsUrl, { timeoutMs: 15000 });
+    }
     const sw = await cdp.serviceWorker({ timeoutMs: 15000 });
     assert(sw, "the current extension service worker must register");
     const id = new URL(sw.url).host;
@@ -134,8 +184,10 @@ export async function runW51rCreateClickJourney(options: {
     await Deno.writeFile(`${evidence}/narrow-refused.png`, narrowImage);
     console.log(`w51r browser evidence: ${evidence}`);
   } finally {
-    cdp?.close();
-    if (chrome) await teardownChrome(chrome, profile);
+    if (!options.cdp) {
+      cdp?.close();
+      if (chrome) await teardownChrome(chrome, profile);
+    }
   }
 }
 
@@ -225,6 +277,99 @@ Deno.test("w51r: journey entrypoint derives timeouts via computeTimeout seam", a
     { openTimeoutMs: 48000, readyTimeoutMs: 40000 },
     "Default timeout computation must scale via serialFileTimeoutMs (4x cap under high load)",
   );
+});
+
+Deno.test("w51r / qwrur: journey flow executes Page.bringToFront and waitForAppReady before target eval and click", async () => {
+  const cdpEvents: string[] = [];
+  let clicksDispatched = 0;
+  let hubReadinessEvaluated = false;
+
+  const fakeCdp = {
+    serviceWorker: async () => ({ url: "chrome-extension://test-ext-id/sw.js" }),
+    open: async (url: string) => {
+      const isWide = url.includes("ntp.html");
+      cdpEvents.push(`open:${isWide ? "wide" : "narrow"}`);
+      return { sessionId: isWide ? "wide-session" : "narrow-session" };
+    },
+    send: async (method: string, params: any, sessionId: string) => {
+      cdpEvents.push(`${sessionId}:${method}`);
+      if (method === "Input.dispatchMouseEvent" && params?.type === "mouseReleased") {
+        clicksDispatched++;
+      }
+    },
+    eval: async (sessionId: string, expr: string) => {
+      if (sessionId === "wide-session") {
+        if (expr.includes("data-cap-app-ready") || expr.includes("location.pathname")) {
+          if (!hubReadinessEvaluated) {
+            hubReadinessEvaluated = true;
+            cdpEvents.push("wide:hubAppReady");
+          } else {
+            cdpEvents.push("wide:dialogAppReady");
+          }
+          return { ready: true, signal: "ntp-hydrated" };
+        }
+        if (expr.includes("createAgentClickTarget")) {
+          cdpEvents.push("wide:evalTarget");
+          return { ok: true, x: 28, y: 80 };
+        }
+        if (expr.includes("addEventListener('click'")) {
+          cdpEvents.push("wide:installClickListener");
+          return true;
+        }
+        cdpEvents.push("wide:readState");
+        return {
+          ready: true,
+          buttonDisplay: "flex",
+          open: clicksDispatched > 0,
+          nativeOpen: clicksDispatched > 0,
+          status: "",
+          clicks: clicksDispatched,
+        };
+      } else {
+        // Narrow session
+        if (expr.includes("createAgentClickTarget")) {
+          cdpEvents.push("narrow:evalTarget");
+          return { ok: false, reason: "hidden #new-agent" };
+        }
+        return {
+          ready: true,
+          buttonDisplay: "none",
+          open: false,
+          nativeOpen: false,
+          status: "",
+          clicks: 0,
+        };
+      }
+    },
+    screenshot: async () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+  };
+
+  await runW51rCreateClickJourney({ cdp: fakeCdp });
+
+  // Assert execution order:
+  const wideOpenIdx = cdpEvents.indexOf("open:wide");
+  const bringToFrontIdx = cdpEvents.indexOf("wide-session:Page.bringToFront");
+  const hubAppReadyIdx = cdpEvents.indexOf("wide:hubAppReady");
+  const readStateIdx = cdpEvents.indexOf("wide:readState");
+  const dialogAppReadyIdx = cdpEvents.indexOf("wide:dialogAppReady");
+  const evalTargetIdx = cdpEvents.indexOf("wide:evalTarget");
+  const clickIdx = cdpEvents.indexOf("wide-session:Input.dispatchMouseEvent");
+
+  assert(wideOpenIdx !== -1, "wide tab must be opened");
+  assert(bringToFrontIdx !== -1, "Page.bringToFront must be sent for wide tab");
+  assert(hubAppReadyIdx !== -1, "waitForAppReady for NTP Hub must be executed");
+  assert(readStateIdx !== -1, "state read must occur");
+  assert(dialogAppReadyIdx !== -1, "waitForAppReady for Create agent dialog must be executed");
+  assert(evalTargetIdx !== -1, "target must be evaluated");
+  assert(clickIdx !== -1, "Input.dispatchMouseEvent must be dispatched");
+
+  assert(wideOpenIdx < bringToFrontIdx, "Page.bringToFront must follow tab open");
+  assert(bringToFrontIdx < hubAppReadyIdx, "Page.bringToFront must precede hub waitForAppReady");
+  assert(hubAppReadyIdx < readStateIdx, "hub waitForAppReady must precede pre-click state wait");
+  assert(readStateIdx < dialogAppReadyIdx, "pre-click state wait must precede click dialog readiness wait");
+  assert(dialogAppReadyIdx < evalTargetIdx, "dialog readiness wait must precede target evaluation");
+  assert(evalTargetIdx < clickIdx, "target evaluation must precede click dispatch");
+  assertEquals(clicksDispatched, 1, "exactly one mouse click should be registered");
 });
 
 Deno.test({

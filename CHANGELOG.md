@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.661] — 2026-10-10
+- Add executable ordering and negative-path falsifiers for Create click readiness and tab focus gates
+
 ## [0.3.660] — 2026-10-10
 - Remove unused internal state in ACP adapter stderr sanitizer
 
