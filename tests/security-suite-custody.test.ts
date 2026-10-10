@@ -12,6 +12,7 @@ import {
   custodyReasonFor,
   isVanishedGroupError,
   isVanishedProcError,
+  liveObservedResidue,
   pidAlive,
   ProcessGoneError,
   PROFILE_ROOT,
@@ -204,7 +205,7 @@ async function verifyLiveProcOwnership(
       // pre-check. Only absence of this exact pid's /proc entry is "vanished".
       const procPath = `/proc/${pid}`;
       if (error instanceof ProcessGoneError ||
-          (isVanishedProcError(failure) &&
+          (isVanishedProcError(failure, pid) &&
            (failure.path === procPath || failure.path === `${procPath}/stat`))) {
         return { status: "vanished", reason: "pid-vanished-during-ownership-inspection" };
       }
@@ -493,7 +494,11 @@ Deno.test("security-suite custody: stubborn owned group receives TERM then KILL 
     CAP_SECURITY_TEST_ACK_DEADLINE_MS: String(STUBBORN_ACK_DEADLINE_MS),
   });
   try {
-    assertEquals(result.code, 124);
+    assertEquals(
+      result.code,
+      124,
+      `stubborn scenario must exit 124 (timeout), got ${result.code}: custodyReason=${result.receipt?.custodyReason} observationUnverifiedReason=${result.receipt?.observationUnverifiedReason}`,
+    );
     assertEquals(result.receipt?.termSent, true);
     assertEquals(result.receipt?.killSent, true);
     assertEquals(result.receipt?.groupSurvived, false);
@@ -640,7 +645,11 @@ Deno.test("security-suite custody: stubborn readiness deadline expiry produces l
     CAP_SECURITY_TEST_ACK_DEADLINE_MS: "100",
   });
   try {
-    assertEquals(result.code, 97, "readiness expiry must be a loud refusal (exit 97), never a false scenario timeout (124)");
+    assertEquals(
+      result.code,
+      97,
+      `readiness expiry must be a loud refusal (exit 97), got ${result.code}: custodyReason=${result.receipt?.custodyReason} observationUnverifiedReason=${result.receipt?.observationUnverifiedReason}`,
+    );
     assertEquals(result.receipt?.result, "FAIL");
     assert(
       result.state.some((r) => r.event === "stubborn-unconfirmed") ||
@@ -1186,15 +1195,87 @@ const fakeAttestation = {
 };
 const coded = (code: string) => Object.assign(new Error(code), { code });
 
-Deno.test("8ixk: isVanishedProcError accepts ONLY a disappeared /proc entry", () => {
+Deno.test("8ixk / wd6gc: isVanishedProcError accepts ONLY confirmed disappeared /proc entry", () => {
+  // Find a verified non-existent PID in the OS process table
+  let deadPid = 999_999;
+  while (deadPid > 1000) {
+    try {
+      (globalThis as any).process.kill(deadPid, 0);
+      deadPid--;
+    } catch (e: any) {
+      if (e?.code === "ESRCH") break;
+      deadPid--;
+    }
+  }
+  const livePid = Deno.pid;
+
+  // 1. ENOENT is vanished with or without PID
   assertEquals(isVanishedProcError(coded("ENOENT")), true);
-  // An unreadable /proc for a process that still exists is a DIFFERENT fact and
-  // must not be laundered into "it exited".
-  assertEquals(isVanishedProcError(coded("EACCES")), false);
-  assertEquals(isVanishedProcError(coded("ENOTDIR")), false);
+  assertEquals(isVanishedProcError(coded("ENOENT"), deadPid), true);
+  assertEquals(isVanishedProcError(coded("ENOENT"), livePid), true);
+
+  // 2. ESRCH without valid PID fails closed (false)
+  assertEquals(isVanishedProcError(coded("ESRCH")), false);
+  assertEquals(isVanishedProcError(coded("ESRCH"), 0), false);
+  assertEquals(isVanishedProcError(coded("ESRCH"), -1), false);
+
+  // 3. ESRCH on a LIVE PID fails closed (process exists -> NOT vanished)
+  assertEquals(isVanishedProcError(coded("ESRCH"), livePid), false, "live PID throwing ESRCH must NOT be classified as vanished");
+
+  // 4. ESRCH on a DEAD PID is confirmed vanished
+  assertEquals(isVanishedProcError(coded("ESRCH"), deadPid), true, "dead PID confirmed absent via kill(0) ESRCH is vanished");
+
+  // 5. Unreadable permission/descriptor errors ALWAYS fail closed regardless of liveness
+  for (const errCode of ["EACCES", "EPERM", "EMFILE", "ENOTDIR"]) {
+    assertEquals(isVanishedProcError(coded(errCode)), false);
+    assertEquals(isVanishedProcError(coded(errCode), deadPid), false);
+    assertEquals(isVanishedProcError(coded(errCode), livePid), false);
+  }
   assertEquals(isVanishedProcError(new Error("owned process-group identity changed")), false);
   assertEquals(isVanishedProcError(null), false);
   assertEquals(isVanishedProcError(undefined), false);
+});
+
+Deno.test("wd6gc falsifier: live PID with synthetic injected ESRCH fails closed in liveObservedResidue; dead PID discharges cleanly", async () => {
+  // Spawn a real, live child process
+  const child = new Deno.Command("sleep", { args: ["10"] }).spawn();
+  const childPid = child.pid;
+  try {
+    const observed = new Map();
+    observed.set(childPid, {
+      pid: childPid,
+      starttime: "12345",
+      uid: Deno.uid(),
+    });
+
+    // 1. Injected ESRCH on LIVE child: liveObservedResidue MUST NOT discharge the live process!
+    const liveResidue = await liveObservedResidue(observed, {
+      readIdentity: () => Promise.reject(coded("ESRCH")),
+    });
+    assertEquals(liveResidue.length, 1, "Live process must NOT be discharged on synthetic ESRCH");
+    assertEquals(liveResidue[0]?.unverified, true);
+    assertEquals(custodyReasonFor({ residueCount: liveResidue.length }), "descendant-residue");
+
+    // 2. Now kill child and wait until kill(childPid, 0) throws ESRCH
+    child.kill("SIGKILL");
+    await child.status;
+    await waitUntil(() => {
+      try {
+        (globalThis as any).process.kill(childPid, 0);
+        return true;
+      } catch (e: any) {
+        return e?.code !== "ESRCH";
+      }
+    }, 5000);
+
+    // 3. Injected ESRCH on CONFIRMED DEAD child: liveObservedResidue discharges cleanly!
+    const deadResidue = await liveObservedResidue(observed, {
+      readIdentity: () => Promise.reject(coded("ESRCH")),
+    });
+    assertEquals(deadResidue.length, 0, "Confirmed dead process must discharge cleanly on ESRCH");
+  } finally {
+    try { child.kill("SIGKILL"); } catch {}
+  }
 });
 
 Deno.test("8ixk: a leader that vanished while its group also died is benign, returned and RECORDED — not rethrown", async () => {
@@ -1569,7 +1650,11 @@ Deno.test("8ixk falsifier: runner child vanished before teardown identity read =
     CAP_SECURITY_TEST_SIMULATE_VANISHED_LEADER: "1",
   }, 60);
   try {
-    assertEquals(result.code, 124);
+    assertEquals(
+      result.code,
+      124,
+      `8ixk falsifier must exit 124 (timeout), got ${result.code}: custodyReason=${result.receipt?.custodyReason} observationUnverifiedReason=${result.receipt?.observationUnverifiedReason}`,
+    );
     // 1. CAP_SECURITY_RESULT marker was emitted by supervisor and parsed
     assert(result.receipt, "supervisor must emit CAP_SECURITY_RESULT marker");
     assertEquals(result.receipt?.result, "FAIL");
