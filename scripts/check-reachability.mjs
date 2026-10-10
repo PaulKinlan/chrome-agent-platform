@@ -68,8 +68,16 @@ export const RETAINED = {
     "Owner directive 2026-08-30: the WASI bundled-package inventory API must not change; tests/bundled-tool-packages.test.ts pins it (the service worker reads the generated *.data.js modules directly).",
   // (lib/bundled-inventory.js was RETAINED here; ltkj.2 reachable now via lib/wasm-package-admission.js)
   // ── surfaces or modules another OPEN entry owns ──
-  "lib/archive-target-registry.js":
-    "CAP-FB-20260905-UNBOUNDED-DATA-ARCHIVE-01 (11rm / qcuf): classification authority for durable targets. Its sanitizer family stayed tests-only; 8wbb shipped the agentConfig authority separately (lib/logical-site-agent-config.js) — this module ships when the 11rm streaming converter lands.",
+  // (lib/archive-target-registry.js is now REACHED by WAL backup/restore
+  // classification; its formerly staged RETAINED entry was removed.)
+  "lib/master-journal-owner-inspection.js":
+    "chrome-agent-platform-jw7wf: bounded owner forensic diagnostics are staged for the explicit owner-approved WAL repair route; tests/master-journal-wal.test.ts pins fail-closed evidence without enabling a product publisher.",
+  "lib/master-journal-product-routes.js":
+    "chrome-agent-platform-jw7wf: complete one-authority product routing is staged behind the writer-disabled WAL cutover; tests/memory.test.ts pins the facade until all master mutation paths are ready.",
+  "lib/master-journal-quarantine-manifest.js":
+    "chrome-agent-platform-jw7wf: metadata-only quarantine retention commitment is staged; raw byte copy exists only in tests/fixtures and production export remains refused pending 3p3e.12.",
+  "lib/master-journal-repair-prefix.js":
+    "chrome-agent-platform-jw7wf: read-only checked historical-prefix diagnostic awaits an explicit owner-approved repair route; never selects authority or republishes a head.",
   "lib/tabular-diff-artifacts.js":
     "CAP-FB-20260822-TABULAR-DIFF-ARTIFACTS-01 is OPEN, not ABANDONED; the adapter and lib/tabular-diff-artifacts-core.js stay until it lands or closes (tests/tabular-diff-artifacts.test.ts).",
   "lib/code-diff-artifacts.js":
