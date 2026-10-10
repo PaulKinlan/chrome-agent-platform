@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.660] — 2026-10-10
+- Remove unused internal state in ACP adapter stderr sanitizer
+
 ## [0.3.659] — 2026-10-10
 - Count suppressed stderr lines correctly when an unterminated terminal escape is immediately followed by a newline.
 
