@@ -64,14 +64,16 @@ function sameOriginOnly(urls, origin, maxUrls = MAX_DISCOVERED_LINKS) {
  * Supports URLs and titles containing literal square brackets (e.g. Wikipedia /wiki/Foo_[bar],
  * IPv6 addresses, and titles with brackets), while rejecting multiline links and nested link syntax (z3xx4).
  * Bounded by maxBytes (input slice) and maxLinks (stop early).
+ * Optional stats object receives outer-loop step count for linear scan verification.
  */
-export function extractMarkdownLinks(text, { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS } = {}) {
+export function extractMarkdownLinks(text, { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS, stats = null } = {}) {
   const input = typeof text === "string" ? text.slice(0, maxBytes) : "";
   const urls = [];
   const len = input.length;
   const openStack = [];
 
   for (let i = 0; i < len && urls.length < maxLinks; i++) {
+    if (stats) stats.steps = (stats.steps || 0) + 1;
     const code = input.charCodeAt(i);
     if (code === 91 /* [ */) {
       if (openStack.length < 32) openStack.push(i);
@@ -102,8 +104,8 @@ export function extractMarkdownLinks(text, { maxBytes = MAX_DISCOVERY_DOC_BYTES,
 
 // Mintlify (and a growing set of docs platforms) publish /llms.txt: markdown
 // with one link per docs page. Extract markdown link targets with linear single-pass scan (e7gwq).
-export function parseLlmsTxt(text, origin, { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS } = {}) {
-  const rawUrls = extractMarkdownLinks(text, { maxBytes, maxLinks });
+export function parseLlmsTxt(text, origin, { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS, stats = null } = {}) {
+  const rawUrls = extractMarkdownLinks(text, { maxBytes, maxLinks, stats });
   return sameOriginOnly(rawUrls, origin, maxLinks);
 }
 

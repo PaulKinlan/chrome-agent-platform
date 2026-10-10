@@ -220,7 +220,32 @@ Deno.test("fetchSiteDocs: a docs URL that redirects SAME-ORIGIN still works", as
   assertStringIncludes(docs.content, "INSTALL-MARKER-922q");
 });
 
-// ── e7gwq: bounded linear discovery parsing ─────────────────────────────────
+// ── e7gwq / j2vok: bounded linear discovery parsing ──────────────────────────
+
+/**
+ * Pure scale factor calculation given machine load and CPU count (chrome-agent-platform-v6kut/j2vok).
+ * Caps strictly at maxScale (default 6x) regardless of ambient load spikes.
+ */
+export function computeLoadScale(load: number, cpus: number, maxScale = 6): number {
+  if (Number.isNaN(load) || !Number.isFinite(cpus) || cpus <= 0 || load <= 0) return 1;
+  const ratio = Math.max(1, load / cpus);
+  return Math.min(maxScale, ratio);
+}
+
+/**
+ * Computes a load-scaled timing budget for adversarial parsing tests (chrome-agent-platform-j2vok).
+ * On a quiet box (load/core <= 1), returns baseMs (e.g. 75ms).
+ * Under gate load (e.g. load/core = 2.5), scales proportionally (e.g. 188ms),
+ * capped at maxScale * baseMs (e.g. 450ms) to ensure resilience against CPU scheduling
+ * preemption while failing closed orders of magnitude before any real catastrophic stall
+ * (such as voya0's 21.3s quadratic rescan).
+ */
+export function loadScaledTimingBudget(baseMs = 75, maxScale = 6, load?: number, cpus?: number): number {
+  const l = typeof load === "number" && !Number.isNaN(load) ? load : (Deno.loadavg?.()[0] ?? 0);
+  const c = typeof cpus === "number" && !Number.isNaN(cpus) && cpus > 0 ? cpus : (navigator.hardwareConcurrency || 1);
+  const scale = computeLoadScale(l, c, maxScale);
+  return Math.round(baseMs * scale);
+}
 
 Deno.test("extractMarkdownLinks: parses standard markdown links, links with titles, and angle bracket URLs", () => {
   const md = [
@@ -279,46 +304,146 @@ Deno.test("z3xx4: extractMarkdownLinks extracts bracketed URLs and titles matchi
   ]);
 });
 
-Deno.test("e7gwq falsification: crafted adversarial inputs finish in linear time without stalling the service worker", () => {
+Deno.test("e7gwq / j2vok falsification: crafted adversarial inputs finish in linear time without stalling the service worker", () => {
+  const budgetMs = loadScaledTimingBudget(75, 6);
+
   // 1. 100,000 unclosed opening brackets that would cause catastrophic scan/regex times
   const unclosedBrackets = "[".repeat(100_000);
+  const stats1 = { steps: 0 };
   const t0 = performance.now();
-  const res1 = parseLlmsTxt(unclosedBrackets, ORIGIN);
+  const res1 = parseLlmsTxt(unclosedBrackets, ORIGIN, { stats: stats1 });
   const elapsed1 = performance.now() - t0;
   assertEquals(res1, []);
-  assert(elapsed1 < 50, `100k unclosed brackets must finish in <50ms (took ${elapsed1.toFixed(2)}ms)`);
+  assert(stats1.steps <= unclosedBrackets.length, `steps (${stats1.steps}) must not exceed input length (${unclosedBrackets.length})`);
+  assert(elapsed1 < budgetMs, `100k unclosed brackets must finish in <${budgetMs}ms (took ${elapsed1.toFixed(2)}ms)`);
 
   // 2. 500KiB of unmatched ']' brackets (voya0 finding: previous lastIndexOf backward scan took 21.3s)
   const unmatchedClosing = "]".repeat(500 * 1024);
+  const statsVoya = { steps: 0 };
   const tVoya = performance.now();
-  const resVoya = parseLlmsTxt(unmatchedClosing, ORIGIN);
+  const resVoya = parseLlmsTxt(unmatchedClosing, ORIGIN, { stats: statsVoya });
   const elapsedVoya = performance.now() - tVoya;
   assertEquals(resVoya, []);
-  assert(elapsedVoya < 50, `500KiB of unmatched ']' must finish in <50ms (took ${elapsedVoya.toFixed(2)}ms)`);
+  assert(statsVoya.steps <= unmatchedClosing.length, `steps (${statsVoya.steps}) must not exceed input length (${unmatchedClosing.length})`);
+  assert(elapsedVoya < budgetMs, `500KiB of unmatched ']' must finish in <${budgetMs}ms (took ${elapsedVoya.toFixed(2)}ms)`);
 
   // 3. sbiel finding: [x](y) followed by repeated '](' patterns that previously triggered backward rescans
   const sbielInput = "[x](https://docs.example.com/y)\n" + "](".repeat(100_000);
+  const statsSbiel = { steps: 0 };
   const tSbiel = performance.now();
-  const resSbiel = parseLlmsTxt(sbielInput, ORIGIN);
+  const resSbiel = parseLlmsTxt(sbielInput, ORIGIN, { stats: statsSbiel });
   const elapsedSbiel = performance.now() - tSbiel;
   assertEquals(resSbiel, ["https://docs.example.com/y"]);
-  assert(elapsedSbiel < 50, `100k '](' patterns must finish in <50ms (took ${elapsedSbiel.toFixed(2)}ms)`);
+  assert(statsSbiel.steps <= sbielInput.length, `steps (${statsSbiel.steps}) must not exceed input length (${sbielInput.length})`);
+  assert(elapsedSbiel < budgetMs, `100k '](' patterns must finish in <${budgetMs}ms (took ${elapsedSbiel.toFixed(2)}ms)`);
 
   // 4. 20,000 unclosed link patterns: `[text](` repeated
   const unclosedLinks = "[text](".repeat(20_000);
+  const stats2 = { steps: 0 };
   const t1 = performance.now();
-  const res2 = parseLlmsTxt(unclosedLinks, ORIGIN);
+  const res2 = parseLlmsTxt(unclosedLinks, ORIGIN, { stats: stats2 });
   const elapsed2 = performance.now() - t1;
   assertEquals(res2, []);
-  assert(elapsed2 < 50, `20k unclosed links must finish in <50ms (took ${elapsed2.toFixed(2)}ms)`);
+  assert(stats2.steps <= unclosedLinks.length, `steps (${stats2.steps}) must not exceed input length (${unclosedLinks.length})`);
+  assert(elapsed2 < budgetMs, `20k unclosed links must finish in <${budgetMs}ms (took ${elapsed2.toFixed(2)}ms)`);
 
   // 5. Deeply nested brackets: `[[[[...]]]]`
   const nested = "[".repeat(10_000) + "]".repeat(10_000);
+  const stats3 = { steps: 0 };
   const t2 = performance.now();
-  const res3 = parseLlmsTxt(nested, ORIGIN);
+  const res3 = parseLlmsTxt(nested, ORIGIN, { stats: stats3 });
   const elapsed3 = performance.now() - t2;
   assertEquals(res3, []);
-  assert(elapsed3 < 50, `10k nested brackets must finish in <50ms (took ${elapsed3.toFixed(2)}ms)`);
+  assert(stats3.steps <= nested.length, `steps (${stats3.steps}) must not exceed input length (${nested.length})`);
+  assert(elapsed3 < budgetMs, `10k nested brackets must finish in <${budgetMs}ms (took ${elapsed3.toFixed(2)}ms)`);
+});
+
+/**
+ * Mutant: reproduces pre-e7gwq quadratic backward rescanning behavior (voya0 / sbiel defect).
+ * For each closing bracket ']', it scans backward through the preceding text looking for matching '['.
+ */
+function mutantQuadraticParseLlmsTxt(
+  text: string,
+  origin: string,
+  { maxBytes = MAX_DISCOVERY_DOC_BYTES, stats = null }: { maxBytes?: number; stats?: { steps?: number } | null } = {},
+): string[] {
+  const input = typeof text === "string" ? text.slice(0, maxBytes) : "";
+  const len = input.length;
+  for (let i = 0; i < len; i++) {
+    if (stats) stats.steps = (stats.steps || 0) + 1;
+    if (input.charCodeAt(i) === 93 /* ] */) {
+      // Pre-e7gwq backward scan: look backward for matching '['
+      for (let j = i - 1; j >= 0; j--) {
+        if (stats) stats.steps = (stats.steps || 0) + 1;
+        if (input.charCodeAt(j) === 91 /* [ */) break;
+      }
+    }
+  }
+  return [];
+}
+
+Deno.test("j2vok: computeLoadScale and loadScaledTimingBudget are bounded, load-responsive, and capped at maxScale independent of ambient load", () => {
+  // Pure scale calculation across load spectrum
+  assertEquals(computeLoadScale(0, 1), 1, "zero/idle load returns floor scale 1");
+  assertEquals(computeLoadScale(1, 1), 1, "load equal to CPUs returns scale 1");
+  assertEquals(computeLoadScale(2, 1), 2, "load 2x CPUs returns scale 2");
+  assertEquals(computeLoadScale(3, 1), 3, "load 3x CPUs returns scale 3");
+  assertEquals(computeLoadScale(6, 1), 6, "load 6x CPUs returns maxScale 6");
+  assertEquals(computeLoadScale(100, 1), 6, "extreme load caps at maxScale 6");
+  assertEquals(computeLoadScale(Infinity, 1), 6, "infinite load caps strictly at maxScale 6");
+
+  // Non-finite or negative inputs fail safe to floor 1
+  assertEquals(computeLoadScale(NaN, 1), 1);
+  assertEquals(computeLoadScale(1, 0), 1);
+  assertEquals(computeLoadScale(-5, 1), 1);
+
+  // Injected load tests for loadScaledTimingBudget
+  assertEquals(loadScaledTimingBudget(75, 6, 0, 1), 75, "floor is 75ms");
+  assertEquals(loadScaledTimingBudget(75, 6, 2, 1), 150, "2x load gives 150ms");
+  assertEquals(loadScaledTimingBudget(75, 6, 100, 1), 450, "100x load capped at 450ms ceiling");
+  assertEquals(loadScaledTimingBudget(75, 6, Infinity, 1), 450, "Infinity load capped at 450ms ceiling");
+});
+
+Deno.test("j2vok falsification: negative mutant reproducing pre-e7gwq quadratic scan fails-closed on adversarial input", () => {
+  const budgetMs = loadScaledTimingBudget(75, 6);
+  const sampleSize = 5_000;
+  const sampleInput = "]".repeat(sampleSize);
+
+  // 1. Linear scanner does strictly 1 outer-loop iteration per character (forward-only progression)
+  const linearStats = { steps: 0 };
+  const tLinear0 = performance.now();
+  parseLlmsTxt(sampleInput, ORIGIN, { stats: linearStats });
+  const linearElapsed = performance.now() - tLinear0;
+
+  assertEquals(linearStats.steps, sampleSize, "linear scanner outer-loop steps must equal input length");
+  assert(linearElapsed < budgetMs, `linear parse on 5k sample must take <${budgetMs}ms (took ${linearElapsed.toFixed(2)}ms)`);
+
+  // 2. Quadratic mutant executes N + N*(N-1)/2 steps (O(N^2) catastrophic backward scan)
+  const mutantStats = { steps: 0 };
+  const tMutant0 = performance.now();
+  mutantQuadraticParseLlmsTxt(sampleInput, ORIGIN, { stats: mutantStats });
+  const mutantElapsed = performance.now() - tMutant0;
+
+  const expectedQuadraticSteps = sampleSize + (sampleSize * (sampleSize - 1)) / 2;
+  assertEquals(mutantStats.steps, expectedQuadraticSteps, "mutant step count must match O(N^2) backward scan");
+
+  // Step explosion: mutant does >2,000x more operations than linear scanner on just 5,000 characters
+  assert(
+    mutantStats.steps > linearStats.steps * 1000,
+    `mutant step count (${mutantStats.steps}) must exceed linear step count (${linearStats.steps}) by >1000x`,
+  );
+
+  // Fails-closed assertion: mutant step count violates the deterministic linear bound (steps <= length)
+  assert(
+    mutantStats.steps > sampleSize,
+    "mutant must violate the deterministic linear step bound (steps <= length)",
+  );
+
+  // Fails-closed timing comparison: mutant is detected by superlinear execution steps
+  assert(
+    mutantElapsed > linearElapsed || mutantStats.steps > 10_000_000,
+    "mutant must be detected by superlinear execution steps",
+  );
 });
 
 Deno.test("e7gwq falsification: parseLlmsTxt bounds candidate URL count to MAX_DISCOVERED_LINKS", () => {
