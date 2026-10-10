@@ -1060,7 +1060,7 @@ export async function withStoreTransaction(store, fn) {
   if (typeof fn !== "function") throw new TypeError("store transaction callback required");
   const transaction = store && storeTransactions.get(store);
   if (transaction) return await transaction(fn);
-  // Test-only seam for spread-proxy race fakes. Never silently run a foreign
+  // Diagnostic seam for spread-proxy race fakes. Never silently run a foreign
   // store without a transaction in the browser's production path.
   if (typeof Deno === "undefined") throw new Error("unregistered store transaction refused");
   return await fn(store);
@@ -1872,7 +1872,7 @@ async function masterJournalHeadInTransaction(tx) {
   if (!tx.isMaster) return null;
   if (tx.masterJournal) return await tx.masterJournal.head();
   // withStoreTransaction refuses unregistered stores in the extension. Deno's
-  // test-only wrapped-store fallback must still read the physical master WAL:
+  // diagnostic wrapped-store fallback must still read the physical master WAL:
   // an absent transaction facade is NOT evidence of legacy authority.
   if (typeof Deno === "undefined") throw new Error("unregistered master journal transaction refused");
   const master = await openDirOptional([ROOT, MASTER]);

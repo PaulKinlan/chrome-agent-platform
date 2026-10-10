@@ -239,7 +239,7 @@ export async function stageMasterJournalRepairIntent(master, {
   }
   // The caller holds the master Web Lock. Re-read the owner's bounded WAL +
   // legacy fingerprints BEFORE creating even the first witness file; a stale
-  // plan is not permission to change authority. This is still test-only and
+  // plan is not permission to change authority. This remains diagnostic scaffolding and
   // does not grant owner approval or quarantine permission.
   const currentEvidence = await fingerprintRequestedMasterJournalRepairLeaves(master, requestedRepairLeaves);
   if (currentEvidence.evidenceSha256 !== expectedEvidenceSha256) {
@@ -445,7 +445,7 @@ async function writeOrReuseCompactionRecord(directory, name, kind, payload, sour
 /** Fold at most 128 replayed frames into a <=500-row checkpoint and a
  * bounded immutable archive segment. The other head slot and its whole chain
  * remain available until a later publication advances it; export includes
- * the union of both slots in the meantime. This is test-only until the WAL
+ * the union of both slots in the meantime. This remains staged until the WAL
  * writer, receipt/CAS and clear paths are wired as one authority. */
 // Internal only: a direct compaction could leave a claim older than the
 // current checkpoint without the frame runner's retirement/preflight hooks.
@@ -533,7 +533,7 @@ async function stageMasterJournalCompaction(master, {
 }
 
 /** Writes a checked immutable operation frame then publishes one alternating
- * checked head slot. Test-only until the master store's *every* mutation and
+ * checked head slot. Staged until the master store's *every* mutation and
  * export path use a single lock + projection. A failed head close is NOT an
  * acknowledgement; recovery fails closed on a corrupt present head. */
 export async function stageMasterJournalFrame(master, operation, {
