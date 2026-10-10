@@ -238,3 +238,32 @@ Deno.test("acp harness selection (legibility): /health endpoint reports default 
     await server.shutdown();
   }
 });
+
+Deno.test("57g6b: prototype-key ?harness= names (constructor/toString/hasOwnProperty) are refused by /health and /acp", async () => {
+  const server = createAcpServer(0, undefined, {}, "", TEST_BRIDGE_TOKEN);
+  const port = (server as any).addr.port;
+  try {
+    for (const protoKey of ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"]) {
+      // 1. /health endpoint: must not report false green (adapterPresent: false, adapter: "(unresolved)")
+      const healthRes = await fetch(`http://127.0.0.1:${port}/health?harness=${encodeURIComponent(protoKey)}`);
+      assertEquals(healthRes.status, 200);
+      const healthJson = await healthRes.json();
+      assertEquals(healthJson.ok, true);
+      assertEquals(healthJson.adapterPresent, false, `adapterPresent must be false for ${protoKey}`);
+      assertEquals(healthJson.adapter, "(unresolved)", `adapter must be (unresolved) for ${protoKey}`);
+      assert(healthJson.error?.includes(`unknown harness "${protoKey}"`), `error must name unknown harness for ${protoKey}`);
+      assertEquals(healthJson.harnessCli, null);
+      assertEquals(healthJson.harnessCliPath, null);
+
+      // 2. /acp endpoint: must reject with HTTP 400 unknown harness instead of bypassing guard
+      const acpRes = await fetch(`http://127.0.0.1:${port}/acp?token=${TEST_BRIDGE_TOKEN}&harness=${encodeURIComponent(protoKey)}`, {
+        headers: { "Authorization": `Bearer ${TEST_BRIDGE_TOKEN}` },
+      });
+      assertEquals(acpRes.status, 400);
+      const acpText = await acpRes.text();
+      assert(acpText.includes(`ACP Bridge: unknown harness "${protoKey}"`), `acp response must refuse ${protoKey}: ${acpText}`);
+    }
+  } finally {
+    await server.shutdown();
+  }
+});

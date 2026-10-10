@@ -257,11 +257,13 @@ export function acpConnectionRefusal(
  * (https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json):
  * package + pinned version, run with `npx -y` so NOTHING has to be installed
  * by hand. `--adapter <path>` still overrides for a local/custom build. */
-export const HARNESS_ADAPTERS: Record<string, { pkg: string; version: string; label: string }> = {
-  "pi": { pkg: "pi-acp", version: "0.0.33", label: "pi" },
-  "claude-code": { pkg: "@agentclientprotocol/claude-agent-acp", version: "0.78.0", label: "Claude Code" },
-  "codex": { pkg: "@agentclientprotocol/codex-acp", version: "1.12.0", label: "Codex" },
-};
+export const HARNESS_ADAPTERS: Record<string, { pkg: string; version: string; label: string }> = Object.freeze(
+  Object.assign(Object.create(null), {
+    "pi": { pkg: "pi-acp", version: "0.0.33", label: "pi" },
+    "claude-code": { pkg: "@agentclientprotocol/claude-agent-acp", version: "0.78.0", label: "Claude Code" },
+    "codex": { pkg: "@agentclientprotocol/codex-acp", version: "1.12.0", label: "Codex" },
+  }),
+);
 
 /** The harness CLI each adapter drives, and the env var each adapter honours
  * for an EXPLICIT CLI path (verified against the pinned adapters, 2026-09-18:
@@ -270,11 +272,13 @@ export const HARNESS_ADAPTERS: Record<string, { pkg: string; version: string; la
  * way to find `pi`; the claude-code/codex adapters BUNDLE a CLI (the Claude
  * Agent SDK's native binary / @openai/codex/bin/codex.js), so for them a PATH
  * miss is not fatal — `bundledFallback` says what runs instead. */
-export const HARNESS_CLI: Record<string, { cli: string; envVar?: string; install: string; bundledFallback?: string }> = {
-  "pi": { cli: "pi", envVar: "PI_ACP_PI_COMMAND", install: "npm install -g @earendil-works/pi-coding-agent" },
-  "claude-code": { cli: "claude", envVar: "CLAUDE_CODE_EXECUTABLE", install: "install the Claude Code CLI and sign in", bundledFallback: "the Claude Agent SDK's bundled native binary" },
-  "codex": { cli: "codex", envVar: "CODEX_PATH", install: "install the Codex CLI and sign in", bundledFallback: "the bundled @openai/codex CLI" },
-};
+export const HARNESS_CLI: Record<string, { cli: string; envVar?: string; install: string; bundledFallback?: string }> = Object.freeze(
+  Object.assign(Object.create(null), {
+    "pi": { cli: "pi", envVar: "PI_ACP_PI_COMMAND", install: "npm install -g @earendil-works/pi-coding-agent" },
+    "claude-code": { cli: "claude", envVar: "CLAUDE_CODE_EXECUTABLE", install: "install the Claude Code CLI and sign in", bundledFallback: "the Claude Agent SDK's bundled native binary" },
+    "codex": { cli: "codex", envVar: "CODEX_PATH", install: "install the Codex CLI and sign in", bundledFallback: "the bundled @openai/codex CLI" },
+  }),
+);
 
 /** Find an executable on a PATH string (no shell, no side effects). Exported so
  * the resolution rule is unit-tested rather than pinned by a substring. */
@@ -290,7 +294,7 @@ export function resolveCliOnPath(cli: string, pathValue = ""): string {
  * bridge's PATH, hand the adapter its ABSOLUTE path (pi-acp honours it), so a
  * harness found here is found even if the adapter's own PATH differs. */
 export function childEnvForHarness(harness: string, pathValue = ""): Record<string, string> {
-  const spec = HARNESS_CLI[harness];
+  const spec = Object.hasOwn(HARNESS_CLI, harness) ? HARNESS_CLI[harness] : undefined;
   if (!spec?.envVar) return {};
   const resolved = resolveCliOnPath(spec.cli, pathValue);
   return resolved ? { [spec.envVar]: resolved } : {};
@@ -303,7 +307,7 @@ export function childEnvForHarness(harness: string, pathValue = ""): Record<stri
  * runs — not a false "will fail" alarm. Empty when the CLI is visible or the
  * harness is unknown. Exported so the rule is unit-tested, not substring-pinned. */
 export function harnessCliWarning(harness: string, pathValue = ""): string[] {
-  const spec = HARNESS_CLI[harness];
+  const spec = Object.hasOwn(HARNESS_CLI, harness) ? HARNESS_CLI[harness] : undefined;
   if (!spec) return [];
   if (resolveCliOnPath(spec.cli, pathValue)) return [];
   if (spec.bundledFallback) {
@@ -347,7 +351,7 @@ export function resolveAdapter(
   opts: { home?: string; exists?: (p: string) => boolean } = {},
 ): { cmd: string; args: string[]; describe: string; adapterName: string | null } {
   if (adapterOverride) return { cmd: "node", args: [adapterOverride], describe: adapterOverride, adapterName: null };
-  const spec = HARNESS_ADAPTERS[harness];
+  const spec = Object.hasOwn(HARNESS_ADAPTERS, harness) ? HARNESS_ADAPTERS[harness] : undefined;
   if (!spec) {
     throw new Error(
       `unknown harness "${harness}" — known harnesses: ${Object.keys(HARNESS_ADAPTERS).join(", ")} ` +
@@ -999,8 +1003,8 @@ export function createAcpServer(
           adapterPresent,
           defaultCwd: defaultCwdValue,
           knownHarnesses: Object.keys(HARNESS_ADAPTERS),
-          harnessCli: HARNESS_CLI[rawProbeHarness]?.cli ?? null,
-          harnessCliPath: HARNESS_CLI[rawProbeHarness] ? (resolveCliOnPath(HARNESS_CLI[rawProbeHarness].cli, Deno.env.get("PATH") ?? "") || null) : null,
+          harnessCli: Object.hasOwn(HARNESS_CLI, rawProbeHarness) ? HARNESS_CLI[rawProbeHarness].cli : null,
+          harnessCliPath: Object.hasOwn(HARNESS_CLI, rawProbeHarness) ? (resolveCliOnPath(HARNESS_CLI[rawProbeHarness].cli, Deno.env.get("PATH") ?? "") || null) : null,
           ...(error ? { error } : {}),
         }),
         { headers: { "Content-Type": "application/json" } },
@@ -1011,7 +1015,7 @@ export function createAcpServer(
     // (e.g. ?harness=claude-code or ?harness=codex). Defaults to the bridge's
     // configured default harness.
     const requestedHarness = url.searchParams.get("harness")?.trim();
-    if (!adapterPathOverride && requestedHarness && !HARNESS_ADAPTERS[requestedHarness]) {
+    if (!adapterPathOverride && requestedHarness && !Object.hasOwn(HARNESS_ADAPTERS, requestedHarness)) {
       const displayBad = sanitizeLogString(requestedHarness);
       return new Response(
         `ACP Bridge: unknown harness "${displayBad}" — known harnesses: ${Object.keys(HARNESS_ADAPTERS).join(", ")}`,
