@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.633] — 2026-10-10
+- Fix NTP boot staging false contention exclusions on parked esbuild daemons and deduplicate zero-tick builder definitions.
+
 ## [0.3.632] — 2026-10-10
 - Contention detection in NTP boot staging now recognizes rustc and cargo builders to avoid false contract breaches under concurrent build load.
 
