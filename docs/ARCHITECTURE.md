@@ -662,7 +662,10 @@ for owner inspection (at most 256 WAL leaves, 8 MiB per file and 16 MiB
 combined by default), but emits NO actionable quarantine candidates.
 `fingerprintMasterJournalRepairEvidence` hashes this bounded manifest plus
 legacy fingerprints and WAL-directory presence, distinguishing absent from
-present-empty; it is an inspection identity, NOT owner approval or a CAS.
+present-empty. The test-only repair-intent issuer requires this exact expected
+fingerprint and rereads under the caller's master lock before creating WAL
+evidence; a changed source refuses without creating the WAL directory. It is
+an inspection identity, NOT owner approval or a product CAS.
 The separate `inspectIntactMasterJournalPrefixesForOwner` can replay each head
 slot independently behind those evidence bounds, including an older intact
 prefix beside a torn latest slot; each checked slot binds the SHA-256 of its

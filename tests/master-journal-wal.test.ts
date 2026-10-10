@@ -99,18 +99,32 @@ async function legacyFixture(faults = {}) {
     readGeneration: async () => generation };
 }
 
+Deno.test("repair intent issuance refuses a changed owner evidence fingerprint before creating WAL", async () => {
+  const { master } = await legacyFixture();
+  const plan = await fingerprintMasterJournalRepairEvidence(master);
+  (await master.getFileHandle("journal.json")).bytes = encoder.encode(JSON.stringify([{ id: "changed" }]));
+  await assertRejects(() => stageMasterJournalRepairIntent(master, {
+    id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", reason: "pre-head-residue",
+    expectedEvidenceSha256: plan.sha256,
+  }), Error, "repair evidence changed");
+  assertEquals(master.children.has("journal-wal"), false,
+    "stale evidence must not even create the WAL authority directory");
+});
+
 Deno.test("durable repair-intent witness refuses missing or unmatched head without legacy fallback", async () => {
   const { master, allocateVersion } = await legacyFixture();
   const wal = await master.getDirectoryHandle("journal-wal", { create: true });
   const witnessId = "11111111-2222-4333-8444-555555555555";
+  const firstEvidence = await fingerprintMasterJournalRepairEvidence(master);
   const staged = await stageMasterJournalRepairIntent(master, {
-    id: witnessId, reason: "pre-head-residue",
+    id: witnessId, reason: "pre-head-residue", expectedEvidenceSha256: firstEvidence.sha256,
   });
   assertEquals(staged.id, witnessId);
   const witness = await wal.getFileHandle("repair-intent-1.json");
   const witnessBytes = witness.bytes.slice();
+  const pendingEvidence = await fingerprintMasterJournalRepairEvidence(master);
   await assertRejects(() => stageMasterJournalRepairIntent(master, {
-    id: witnessId, reason: "pre-head-residue",
+    id: witnessId, reason: "pre-head-residue", expectedEvidenceSha256: pendingEvidence.sha256,
   }), Error, "repair intent");
   assertEquals(witness.bytes, witnessBytes, "an exact retry must not overwrite append-only repair evidence");
   await assertRejects(() => readMasterJournalHead(master), Error, "repair intent");
@@ -236,7 +250,8 @@ Deno.test("a newer immutable repair intent cannot be discharged by an older sign
   const firstId = "11111111-2222-4333-8444-555555555555";
   const nextId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
   const wal = await master.getDirectoryHandle("journal-wal", { create: true });
-  await stageMasterJournalRepairIntent(master, { id: firstId, reason: "pre-head-residue" });
+  await stageMasterJournalRepairIntent(master, { id: firstId, reason: "pre-head-residue",
+    expectedEvidenceSha256: (await fingerprintMasterJournalRepairEvidence(master)).sha256 });
   const firstFile = await wal.getFileHandle("repair-intent-1.json");
   const firstBytes = firstFile.bytes.slice();
   // Simulate only a separately approved, checked head publication in a fake.
@@ -248,13 +263,16 @@ Deno.test("a newer immutable repair intent cannot be discharged by an older sign
     ...head, repairIntentId: firstId, repairIntentSequence: 1,
   }));
   assertEquals((await readMasterJournalHead(master)).repairIntentId, firstId);
-  await stageMasterJournalRepairIntent(master, { id: nextId, reason: "owner-repair" });
+  await stageMasterJournalRepairIntent(master, { id: nextId, reason: "owner-repair",
+    expectedEvidenceSha256: (await fingerprintMasterJournalRepairEvidence(master)).sha256 });
   assertEquals(firstFile.bytes, firstBytes, "old checked witness bytes stay append-only");
   assertEquals(wal.children.has("repair-intent-2.json"), true);
   await assertRejects(() => readMasterJournalHead(master), Error, "newer repair intent pending",
     "the old signed head cannot discharge the newer ID or reactivate legacy");
+  const pendingPlan = await fingerprintMasterJournalRepairEvidence(master);
   await assertRejects(() => stageMasterJournalRepairIntent(master, {
     id: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff", reason: "owner-repair",
+    expectedEvidenceSha256: pendingPlan.sha256,
   }), Error, "newer repair intent pending");
   assertEquals(wal.children.has("repair-intent-3.json"), false,
     "a pending re-repair cannot skip to another witness");
@@ -268,11 +286,13 @@ Deno.test("a newer immutable repair intent cannot be discharged by an older sign
 
 Deno.test("failed repair-intent close leaves non-overwritable fail-closed evidence", async () => {
   const { master, legacy } = await legacyFixture({ close: "repair-intent-1.json" });
-  const input = { id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", reason: "pre-head-residue" };
+  const input = { id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", reason: "pre-head-residue",
+    expectedEvidenceSha256: (await fingerprintMasterJournalRepairEvidence(master)).sha256 };
   await assertRejects(() => stageMasterJournalRepairIntent(master, input), Error, "injected close");
   await assertRejects(() => readMasterJournalHead(master), Error); // never activate stale legacy bytes
   const torn = (await (await master.getDirectoryHandle("journal-wal"))
     .getFileHandle("repair-intent-1.json")).bytes.slice();
+  input.expectedEvidenceSha256 = (await fingerprintMasterJournalRepairEvidence(master)).sha256;
   await assertRejects(() => stageMasterJournalRepairIntent(master, input), Error);
   assertEquals((await (await master.getDirectoryHandle("journal-wal"))
     .getFileHandle("repair-intent-1.json")).bytes, torn, "retry cannot overwrite torn witness bytes");

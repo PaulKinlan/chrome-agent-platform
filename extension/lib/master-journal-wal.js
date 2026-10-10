@@ -1,4 +1,5 @@
 import { capLog } from "./cap-log.js";
+import { fingerprintMasterJournalRepairEvidence } from "./master-journal-owner-inspection.js";
 
 // Master-only journal authority. A legacy journal remains authoritative until
 // the first checked head is published; staged files are never treated as rows.
@@ -198,10 +199,19 @@ export async function readMasterJournalHead(master) {
  * Publishing this immutable checked intent deliberately freezes journal reads
  * until a separately owner-approved head binds its exact identity. A failed
  * close leaves evidence; retry may NOT erase the same immutable name. */
-export async function stageMasterJournalRepairIntent(master, { id, reason } = {}) {
+export async function stageMasterJournalRepairIntent(master, { id, reason, expectedEvidenceSha256 } = {}) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id) ||
-      !["pre-head-residue", "torn-head", "orphan-record", "owner-repair"].includes(reason)) {
-    throw new Error("master journal repair intent requires an exact ID and bounded reason");
+      !["pre-head-residue", "torn-head", "orphan-record", "owner-repair"].includes(reason) ||
+      !/^[0-9a-f]{64}$/.test(expectedEvidenceSha256)) {
+    throw new Error("master journal repair intent requires an exact ID, bounded reason and evidence fingerprint");
+  }
+  // The caller holds the master Web Lock. Re-read the owner's bounded WAL +
+  // legacy fingerprints BEFORE creating even the first witness file; a stale
+  // plan is not permission to change authority. This is still test-only and
+  // does not grant owner approval or quarantine permission.
+  const currentEvidence = await fingerprintMasterJournalRepairEvidence(master);
+  if (currentEvidence.sha256 !== expectedEvidenceSha256) {
+    throw new Error("master journal repair evidence changed before intent issuance");
   }
   const directory = await master.getDirectoryHandle(DIRECTORY, { create: true });
   let sequence = 1;
