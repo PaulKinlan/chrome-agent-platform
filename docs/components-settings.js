@@ -1008,6 +1008,7 @@ export class ModelPicker extends Component {
     }
   }
   _onKey(e) {
+    if (e.isComposing || e.keyCode === 229) return;
     const options = this._visibleOptions ?? [];
     switch (e.key) {
       case "ArrowDown":
