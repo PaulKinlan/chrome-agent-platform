@@ -514,7 +514,9 @@ and each names the executable check that would catch a regression.
   `tests/secret-redaction.test.ts`.
 - **INV-7 — Untrusted content reaches the model only inside a per-assembly random
   boundary, and the model is told that fenced text is data.**
-  `extension/lib/untrusted-fence.js:46-96`; `extension/lib/system-prompts.js:763-773`.
+  `extension/lib/untrusted-fence.js:46-96`; `extension/lib/system-prompts.js:763-773`;
+  `extension/lib/skill-import.js` (imported third-party skill and command bodies are fenced
+  with `wrapUntrustedContent` at import time; finding `tm-unfenced-imported-instructions`).
 - **INV-8 — Destructive actions require an approval bound to the exact action, target and
   payload digest, and expiring.** `extension/lib/owner-approval.js:23`, `:533`, `:634`;
   `extension/lib/browser-tools.js` (`register_user_script`, `update_user_script`,
@@ -599,6 +601,15 @@ decision and, where one exists, the trigger that would reopen it.
     Reopen if the machine is shared or hosts an untrusted local process. This
     is not voicebox `k74h` (a cross-origin web-page threat in another project).
     **Owning register entry: R24, including alternatives and the reopen trigger.**
+11. **Third-party skill instruction injection (t045y / tm-unfenced-imported-instructions).**
+    CLOSED by `extension/lib/skill-import.js` and `extension/skills/skills-panel.js`.
+    Third-party skill bodies (SKILL.md, supporting files) and commands imported from
+    external URLs are piped through `wrapUntrustedContent` at import time and persisted
+    with untrusted-fence metadata (`untrusted: true`, `fenced: true`, `sourceUrl`). When
+    delivered to the model (in system prompt boundary skills or via ACP skill context),
+    the imported content is fenced as untrusted data rather than trusted instructions,
+    preventing prompt injection from elevating to standing instructions. Provenance is
+    surfaced in the skills UI.
 
 ---
 

@@ -58,6 +58,20 @@ function skillCard(r, onUse, onDelete, sendFn = send) {
     : `${r.description ?? ""}${large ? " — the full body and supporting files load on demand via skill_read during a run." : ""}`.trim() || r.id;
   details.append(summary, how, hint);
 
+  if (isImported) {
+    const prov = document.createElement("div");
+    prov.className = "skill-provenance";
+    const parts = [];
+    if (r.sourceUrl) parts.push(`Source: ${r.sourceUrl}`);
+    if (r.importedAt) {
+      const d = new Date(r.importedAt);
+      parts.push(`Imported: ${isNaN(d.getTime()) ? r.importedAt : d.toISOString().slice(0, 10)}`);
+    }
+    parts.push(r.fenced !== false ? "Fenced: untrusted content" : "Fenced: no");
+    prov.textContent = parts.join(" · ");
+    details.append(prov);
+  }
+
   wrap.append(row, details);
   return wrap;
 }
