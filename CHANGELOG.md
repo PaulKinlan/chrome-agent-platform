@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.635] — 2026-10-10
+- Recognise rustc/cargo build contention more reliably during NTP boot staging, including when the CPU map is unavailable (fail closed)
+
 ## [0.3.634] — 2026-10-10
 - Catch hidden slowdowns in site documentation scanning with a stricter linear-time guard.
 
