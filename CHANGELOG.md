@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.654] — 2026-10-10
+- Keep the quiet-window test's documentation of its load-scaled timing bound accurate.
+
 ## [0.3.653] — 2026-10-10
 - Reuse sanctioned load-per-CPU helper for w51r test timeout scaling
 
