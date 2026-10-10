@@ -4,6 +4,7 @@ import { dumpLogBuffer } from "../extension/lib/cap-log.js";
 import { createMasterJournalIssuer } from "../extension/lib/master-journal-issuer.js";
 import {
   fingerprintMasterJournalRepairEvidence,
+  fingerprintRequestedMasterJournalRepairLeaves,
   inspectMasterJournalForOwner,
   snapshotMasterJournalRepairEvidence,
 } from "../extension/lib/master-journal-owner-inspection.js";
@@ -98,6 +99,32 @@ async function legacyFixture(faults = {}) {
   }, readIssuedVersion: async (claim) => issued.get(claimKey(claim)) ?? null,
     readGeneration: async () => generation };
 }
+
+Deno.test("requested quarantine evidence is fingerprinted but cannot authorize moving bytes", async () => {
+  const { master, legacy } = await legacyFixture();
+  const wal = await master.getDirectoryHandle("journal-wal", { create: true });
+  const leaf = "head-a.json";
+  (await wal.getFileHandle(leaf, { create: true })).bytes = encoder.encode("{ torn");
+  const selected = await fingerprintRequestedMasterJournalRepairLeaves(master, [leaf]);
+  assertEquals(selected.actionable, false);
+  assertEquals(selected.candidates, []);
+  assertEquals(selected.requestedRecords.length, 1);
+  assertEquals(selected.requestedRecords[0].name, leaf);
+  assertEquals(selected.requestedRecords[0].bytes, encoder.encode("{ torn").byteLength);
+  assertEquals(/^[0-9a-f]{64}$/.test(selected.requestedRecords[0].sha256), true);
+  await assertRejects(() => fingerprintRequestedMasterJournalRepairLeaves(master, [leaf, leaf]), Error);
+  await assertRejects(() => fingerprintRequestedMasterJournalRepairLeaves(master,
+    ["repair-intent-1.json"]), Error);
+  const staged = await stageMasterJournalRepairIntent(master, {
+    id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", reason: "torn-head",
+    expectedEvidenceSha256: selected.evidenceSha256, requestedRepairLeaves: [leaf],
+  });
+  assertEquals(staged.requestedRepairRecords, selected.requestedRecords,
+    "immutable witness stores exact requested source bytes' fingerprints, not raw bytes");
+  await assertRejects(() => readMasterJournalHead(master), Error);
+  assertEquals(decoder.decode((await wal.getFileHandle(leaf)).bytes), "{ torn");
+  assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy);
+});
 
 Deno.test("repair intent issuance refuses a changed owner evidence fingerprint before creating WAL", async () => {
   const { master } = await legacyFixture();

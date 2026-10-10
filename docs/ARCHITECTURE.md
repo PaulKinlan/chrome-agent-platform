@@ -646,7 +646,10 @@ A re-repair may append a fresh ID only after the previous intent is discharged;
 the newer file blocks the older signed head immediately, and its eventual
 selected head must advance the previous checked epoch's sequence/version.
 Each immutable witness stores the exact pre-issuance bounded evidence SHA-256
-that was rechecked under the master lock; the digest is not owner approval.
+and any explicitly requested WAL leaf names/sizes/digests, rechecked under the
+master lock. `fingerprintRequestedMasterJournalRepairLeaves` only returns
+forensic evidence; it does NOT decide that any leaf can be quarantined or that
+an owner approved moving it.
 Witnesses remain append-only (bounded to 32 per profile). The exact intent
 leaf grammar now participates in backup export/import: both head slots retain
 their own witness-prefix dependencies, a pending newer OR skipped orphan

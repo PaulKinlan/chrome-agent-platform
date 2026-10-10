@@ -1,5 +1,5 @@
 import { capLog } from "./cap-log.js";
-import { fingerprintMasterJournalRepairEvidence } from "./master-journal-owner-inspection.js";
+import { fingerprintRequestedMasterJournalRepairLeaves } from "./master-journal-owner-inspection.js";
 
 // Master-only journal authority. A legacy journal remains authoritative until
 // the first checked head is published; staged files are never treated as rows.
@@ -124,6 +124,12 @@ export async function readMasterJournalHead(master) {
     if (!intent || intent.schemaVersion !== 1 || intent.sequence !== sequence ||
         !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(intent.id) ||
         !/^[0-9a-f]{64}$/.test(intent.evidenceSha256) ||
+        !Array.isArray(intent.requestedRepairRecords) || intent.requestedRepairRecords.length > 32 ||
+        intent.requestedRepairRecords.some((row, index) =>
+          !row || typeof row.name !== "string" || !row.name || row.name.includes("/") ||
+          row.name.startsWith("repair-intent-") || row.name.startsWith("quarantine-") ||
+          !safeInteger(row.bytes) || !/^[0-9a-f]{64}$/.test(row.sha256) ||
+          (index > 0 && intent.requestedRepairRecords[index - 1].name >= row.name)) ||
         !["pre-head-residue", "torn-head", "orphan-record", "owner-repair"].includes(intent.reason) ||
         (sequence > 1 && (!intent.previousHead ||
           !safeInteger(intent.previousHead.epoch, 1) ||
@@ -200,7 +206,9 @@ export async function readMasterJournalHead(master) {
  * Publishing this immutable checked intent deliberately freezes journal reads
  * until a separately owner-approved head binds its exact identity. A failed
  * close leaves evidence; retry may NOT erase the same immutable name. */
-export async function stageMasterJournalRepairIntent(master, { id, reason, expectedEvidenceSha256 } = {}) {
+export async function stageMasterJournalRepairIntent(master, {
+  id, reason, expectedEvidenceSha256, requestedRepairLeaves = [],
+} = {}) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id) ||
       !["pre-head-residue", "torn-head", "orphan-record", "owner-repair"].includes(reason) ||
       !/^[0-9a-f]{64}$/.test(expectedEvidenceSha256)) {
@@ -210,8 +218,8 @@ export async function stageMasterJournalRepairIntent(master, { id, reason, expec
   // legacy fingerprints BEFORE creating even the first witness file; a stale
   // plan is not permission to change authority. This is still test-only and
   // does not grant owner approval or quarantine permission.
-  const currentEvidence = await fingerprintMasterJournalRepairEvidence(master);
-  if (currentEvidence.sha256 !== expectedEvidenceSha256) {
+  const currentEvidence = await fingerprintRequestedMasterJournalRepairLeaves(master, requestedRepairLeaves);
+  if (currentEvidence.evidenceSha256 !== expectedEvidenceSha256) {
     throw new Error("master journal repair evidence changed before intent issuance");
   }
   const directory = await master.getDirectoryHandle(DIRECTORY, { create: true });
@@ -232,6 +240,7 @@ export async function stageMasterJournalRepairIntent(master, { id, reason, expec
   }
   return await writeCheckedRecord(directory, `repair-intent-${sequence}.json`, "repair-intent",
     { schemaVersion: 1, sequence, id, reason, evidenceSha256: expectedEvidenceSha256,
+      requestedRepairRecords: currentEvidence.requestedRecords,
       ...(previousHead ? { previousHead, previousId } : {}) });
 }
 

@@ -87,6 +87,13 @@ export async function snapshotMasterJournalRepairEvidence(master, {
   };
 }
 
+async function hashRepairEvidence(evidence) {
+  const body = JSON.stringify({ schemaVersion: 1, walPresent: evidence.walPresent,
+    records: evidence.records, legacy: evidence.legacy });
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 /** Exact bounded evidence identity for a later explicit owner repair request.
  * This is NOT an approval token, lock, write permit, quarantine candidate or
  * substitute for repeating the snapshot under the master authority lock. */
@@ -95,13 +102,33 @@ export async function fingerprintMasterJournalRepairEvidence(master) {
   if (evidence.state === "inspection_refused") {
     throw new Error(`master journal repair evidence fingerprint refused: ${evidence.refusals[0]}`);
   }
-  const body = JSON.stringify({ schemaVersion: 1, walPresent: evidence.walPresent,
-    records: evidence.records, legacy: evidence.legacy });
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
   return { schemaVersion: 1, walPresent: evidence.walPresent,
-    sha256: [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join(""),
+    sha256: await hashRepairEvidence(evidence),
     recordCount: evidence.records.length, actionable: false,
     authorityOutcomeRequired: evidence.authorityOutcomeRequired, candidates: [] };
+}
+
+/** Owner-requested forensic names, not an authorization to quarantine them.
+ * Only fingerprints already within the bounded snapshot may be reported. A
+ * later publisher must separately prove both-head reachability and approval. */
+export async function fingerprintRequestedMasterJournalRepairLeaves(master, names) {
+  if (!Array.isArray(names) || names.length > 32 ||
+      names.some((name) => typeof name !== "string" || !name || name.length > 128 ||
+        name.includes("/") || name.startsWith("repair-intent-") || name.startsWith("quarantine-")) ||
+      new Set(names).size !== names.length) {
+    throw new Error("master journal requested repair leaves are invalid or repeated");
+  }
+  const evidence = await snapshotMasterJournalRepairEvidence(master);
+  if (evidence.state === "inspection_refused") {
+    throw new Error(`master journal requested repair evidence refused: ${evidence.refusals[0]}`);
+  }
+  const requestedRecords = names.map((name) => {
+    const record = evidence.records.find((row) => row.name === name);
+    if (!record) throw new Error(`master journal requested repair leaf ${name} is missing`);
+    return record;
+  }).sort((a, b) => a.name.localeCompare(b.name));
+  return { schemaVersion: 1, evidenceSha256: await hashRepairEvidence(evidence),
+    actionable: false, authorityOutcomeRequired: true, candidates: [], requestedRecords };
 }
 
 export async function inspectMasterJournalForOwner(master) {

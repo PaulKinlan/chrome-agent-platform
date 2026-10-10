@@ -51,6 +51,7 @@ Deno.test("backup retains and validates a head-bound append-only repair witness"
   const intent = `${PREFIX}repair-intent-1.json`;
   paths.set(intent, ENCODER.encode(await sealMasterJournalRecord("repair-intent", {
     schemaVersion: 1, sequence: 1, id, reason: "owner-repair", evidenceSha256: "a".repeat(64),
+    requestedRepairRecords: [],
   })));
   const original = await unsealMasterJournalRecord(paths.get(`${PREFIX}head-a.json`), "head");
   paths.set(`${PREFIX}head-a.json`, ENCODER.encode(await sealMasterJournalRecord("head", {
@@ -68,7 +69,7 @@ Deno.test("backup retains and validates a head-bound append-only repair witness"
   const nextIntent = `${PREFIX}repair-intent-2.json`;
   paths.set(nextIntent, ENCODER.encode(await sealMasterJournalRecord("repair-intent", {
     schemaVersion: 1, sequence: 2, id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", reason: "owner-repair",
-    evidenceSha256: "b".repeat(64),
+    evidenceSha256: "b".repeat(64), requestedRepairRecords: [],
     previousId: id, previousHead: { epoch: original.epoch, sequence: 0, version: original.version },
   })));
   await assertRejects(() => selectPublishedMasterJournalBackupPaths([...paths.keys()], async (path) => ({
@@ -89,14 +90,14 @@ Deno.test("backup validates an older discharged witness beside a newer checked r
   const first = await unsealMasterJournalRecord(paths.get(`${PREFIX}head-a.json`), "head");
   paths.set(`${PREFIX}repair-intent-1.json`, ENCODER.encode(await sealMasterJournalRecord("repair-intent", {
     schemaVersion: 1, sequence: 1, id: firstId, reason: "pre-head-residue",
-    evidenceSha256: "a".repeat(64),
+    evidenceSha256: "a".repeat(64), requestedRepairRecords: [],
   })));
   paths.set(`${PREFIX}head-a.json`, ENCODER.encode(await sealMasterJournalRecord("head", {
     ...first, repairIntentSequence: 1, repairIntentId: firstId,
   })));
   paths.set(`${PREFIX}repair-intent-2.json`, ENCODER.encode(await sealMasterJournalRecord("repair-intent", {
     schemaVersion: 1, sequence: 2, id: nextId, reason: "owner-repair", previousId: firstId,
-    evidenceSha256: "b".repeat(64),
+    evidenceSha256: "b".repeat(64), requestedRepairRecords: [],
     previousHead: { epoch: first.epoch, sequence: first.sequence, version: first.version },
   })));
   const checkpoint = `checkpoint-${first.epoch}-1.json`;
