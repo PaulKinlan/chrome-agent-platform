@@ -668,8 +668,8 @@ pre-head/torn repair needs, or a checked *current* projection and archive
 chain, without switching authority or editing any record. The separate
 `snapshotMasterJournalRepairEvidence` lists bounded WAL names, sizes and
 SHA-256 digests plus digest-only metadata for legacy journal/archive files
-for owner inspection (at most 256 WAL leaves, 8 MiB per file and 16 MiB
-combined by default), but emits NO actionable quarantine candidates.
+for owner inspection (at most 1024 WAL leaves by default, 8 MiB per file and
+16 MiB combined; an explicit bounded count can raise the leaf cap to 4096), but emits NO actionable quarantine candidates.
 `fingerprintMasterJournalRepairEvidence` hashes this bounded manifest plus
 legacy fingerprints and WAL-directory presence, distinguishing absent from
 present-empty. The test-only repair-intent issuer requires this exact expected

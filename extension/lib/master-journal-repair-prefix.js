@@ -17,7 +17,8 @@ function absent(name) {
 
 /** Caller holds the master Web Lock for a stable evidence snapshot. No bytes,
  * actionable quarantine list or authority selection leave this diagnostic.
- * At most 256 WAL leaves / 16 MiB total are inspected by the evidence gate. */
+ * At most 1024 WAL leaves / 16 MiB total by default; explicit bounded limits
+ * may be tighter or admit up to 4096 leaves. */
 export async function inspectIntactMasterJournalPrefixesForOwner(master) {
   const evidence = await snapshotMasterJournalRepairEvidence(master);
   const base = { actionable: false, authoritySelected: false, candidates: [], heads: [],

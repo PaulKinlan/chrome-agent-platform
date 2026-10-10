@@ -232,6 +232,21 @@ Deno.test("durable repair-intent witness refuses missing or unmatched head witho
     "a checked head cannot discharge a removed witness by omission");
 });
 
+Deno.test("bounded owner evidence inventories 300 small staged frame-shaped leaves", async () => {
+  const { master } = await legacyFixture();
+  const wal = await master.getDirectoryHandle("journal-wal", { create: true });
+  for (let sequence = 1; sequence <= 300; sequence++) {
+    (await wal.getFileHandle(`frame-1-${sequence}.json`, { create: true })).bytes = encoder.encode("x");
+  }
+  const inventory = await snapshotMasterJournalRepairEvidence(master);
+  assertEquals(inventory.state, "requires_explicit_owner_repair");
+  assertEquals(inventory.records.length, 300);
+  assertEquals(inventory.actionable, false);
+  assertEquals(inventory.candidates, []);
+  assertEquals((await snapshotMasterJournalRepairEvidence(master, { maxRecords: 256 })).state,
+    "inspection_refused", "an explicitly tighter owner budget must still refuse");
+});
+
 Deno.test("read-only repair plan fingerprint distinguishes absent WAL, empty WAL and changed legacy bytes", async () => {
   const { master } = await legacyFixture();
   const absent = await fingerprintMasterJournalRepairEvidence(master);
@@ -288,7 +303,7 @@ Deno.test("owner prefix inspection refuses missing checked prefix or oversized e
   assertEquals(damaged.heads.some((entry) => entry.checked), false,
     "no intact prefix exists; legacy must not become a candidate");
   assertEquals(damaged.highestVerifiedHistoricalPrefix, null);
-  for (let i = 0; i < 257; i++) {
+  for (let i = 0; i < 1025; i++) {
     (await wal.getFileHandle(`residue-${i}.json`, { create: true })).bytes = encoder.encode("x");
   }
   const bounded = await inspectIntactMasterJournalPrefixesForOwner(master);

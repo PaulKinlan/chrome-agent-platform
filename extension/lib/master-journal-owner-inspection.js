@@ -11,10 +11,10 @@ import {
 // cap a single explicit owner inspection, not the size of legitimate history.
 // Oversized/unknown records refuse rather than being silently omitted.
 export async function snapshotMasterJournalRepairEvidence(master, {
-  maxRecords = 256, maxRecordBytes = 8 * 1024 * 1024,
+  maxRecords = 1024, maxRecordBytes = 8 * 1024 * 1024,
   maxTotalBytes = 16 * 1024 * 1024,
 } = {}) {
-  if (!Number.isSafeInteger(maxRecords) || maxRecords < 0 || maxRecords > 256 ||
+  if (!Number.isSafeInteger(maxRecords) || maxRecords < 0 || maxRecords > 4096 ||
       !Number.isSafeInteger(maxRecordBytes) || maxRecordBytes < 0 || maxRecordBytes > 32 * 1024 * 1024 ||
       !Number.isSafeInteger(maxTotalBytes) || maxTotalBytes < 0 || maxTotalBytes > 64 * 1024 * 1024) {
     throw new Error("master journal repair evidence limits are invalid");
