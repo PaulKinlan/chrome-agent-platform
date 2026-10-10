@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.644] — 2026-10-10
+- Keep the site documentation scanning self-check accurate as the scanner evolves.
+
 ## [0.3.643] — 2026-10-10
 - Let app readiness polling recover from transient probe timeouts while still failing fast on a real connection loss.
 
