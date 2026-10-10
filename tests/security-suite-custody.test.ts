@@ -65,7 +65,7 @@ type RunResult = {
   state: Array<Record<string, unknown>>;
 };
 
-// The child's 20 s budget counts ITS OWN time. The supervisor's first act is
+// The child's 45 s budget counts ITS OWN time. The supervisor's first act is
 // an exclusive flock on the canonical serialized-Chrome lock; when another lane
 // holds it, the wait used to eat the whole budget and the test reported
 // "supervisor emitted no result marker" for a supervisor that never ran
