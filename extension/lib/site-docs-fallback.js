@@ -75,7 +75,7 @@ export function extractMarkdownLinks(
     stats = null,
   } = {},
 ) {
-  const input = typeof text === "string" ? text.slice(0, maxBytes) : "";
+  const input = typeof text === "string" || text instanceof String ? text.slice(0, maxBytes) : "";
   const urls = [];
   const len = input.length;
   const openStack = [];
@@ -134,7 +134,7 @@ export function parseLlmsTxt(
 }
 
 export function parseSitemapXml(text, origin, { maxBytes = MAX_DISCOVERY_DOC_BYTES, maxLinks = MAX_DISCOVERED_LINKS } = {}) {
-  const input = typeof text === "string" ? text.slice(0, maxBytes) : "";
+  const input = typeof text === "string" || text instanceof String ? text.slice(0, maxBytes) : "";
   const urls = [];
   const re = /<loc>\s*([^<]+?)\s*<\/loc>/gi;
   let m;
