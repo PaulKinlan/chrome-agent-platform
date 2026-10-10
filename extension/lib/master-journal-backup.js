@@ -36,10 +36,14 @@ export async function validateStagedMasterJournalBackup(entries, readFile) {
   if (typeof readFile !== "function") throw new Error("master journal backup requires staged file reads");
   if (!files.has(HEADS[0])) throw new Error("master journal backup has no cutover head");
 
-  const directory = (chosenHead = null) => ({
+  const directory = (chosenHead = null, repairThrough = null) => ({
     async getFileHandle(name) {
       const sourceName = chosenHead && name === HEADS[0] ? chosenHead : name;
       if (chosenHead && name === HEADS[1]) throw absent(name);
+      const repair = /^repair-intent-([1-9]\d*)\.json$/.exec(name);
+      // An older head is verified against only the intents that existed at
+      // its publication; a newer pending/discharged repair cannot rewrite it.
+      if (chosenHead && repair && Number(repair[1]) > repairThrough) throw absent(name);
       const stagedPath = files.get(sourceName);
       if (!stagedPath) throw absent(name);
       return {
@@ -51,10 +55,10 @@ export async function validateStagedMasterJournalBackup(entries, readFile) {
       };
     },
   });
-  const master = (chosenHead = null) => ({
+  const master = (chosenHead = null, repairThrough = null) => ({
     async getDirectoryHandle(name) {
       if (name !== "journal-wal") throw absent(name);
-      return directory(chosenHead);
+      return directory(chosenHead, repairThrough);
     },
   });
 
@@ -71,10 +75,14 @@ export async function validateStagedMasterJournalBackup(entries, readFile) {
       // The combined read already verified the selected generation; replay
       // only a distinct older slot (possibly referencing another checkpoint).
       if (JSON.stringify(head) !== JSON.stringify(selected)) {
-        await readMasterJournalProjection(master(name));
+        await readMasterJournalProjection(master(name, head.repairIntentSequence ?? 0));
       }
-      const chain = await readMasterJournalArchiveChain(master(name), head, { includeRows: false });
+      const chain = await readMasterJournalArchiveChain(master(name, head.repairIntentSequence ?? 0), head,
+        { includeRows: false });
       referenced.add(name);
+      for (let sequence = 1; sequence <= (head.repairIntentSequence ?? 0); sequence++) {
+        referenced.add(`repair-intent-${sequence}.json`);
+      }
       referenced.add(head.checkpoint);
       for (const archive of chain.names) referenced.add(archive);
       for (let sequence = head.checkpointSequence + 1; sequence <= head.sequence; sequence++) {
@@ -144,7 +152,12 @@ export async function selectPublishedMasterJournalBackupPaths(paths, open) {
   }
   const headDirectory = {
     async getFileHandle(name) {
-      const bytes = headBytes.get(name);
+      let bytes = headBytes.get(name);
+      if (!bytes && /^repair-intent-(?:[1-9]\d*)\.json$/.test(name)) {
+        const path = wal.get(name);
+        if (!path) throw absent(name);
+        bytes = await readHeadBytes(open, path, 65536, "repair intent");
+      }
       if (!bytes) throw absent(name);
       return { async getFile() { return { async arrayBuffer() { return bytes.slice().buffer; } }; } };
     },
@@ -169,6 +182,9 @@ export async function selectPublishedMasterJournalBackupPaths(paths, open) {
   for (const [name, bytes] of headBytes) {
     const head = await unsealMasterJournalRecord(bytes, "head");
     published.add(name);
+    for (let sequence = 1; sequence <= (head.repairIntentSequence ?? 0); sequence++) {
+      published.add(`repair-intent-${sequence}.json`);
+    }
     published.add(head.checkpoint);
     const chain = await readMasterJournalArchiveChain(archiveMaster, head, { includeRows: false });
     for (const archive of chain.names) published.add(archive);

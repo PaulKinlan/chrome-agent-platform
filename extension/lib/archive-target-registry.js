@@ -38,6 +38,7 @@ const OPFS_ROOTS = new Map([
 // slots. Exact names alone are not import validation: backup/restore must
 // verify the head, checkpoint, frames and archive as one generation.
 const MASTER_JOURNAL_WAL_RECORD = /^(?:head-[ab]|(?:checkpoint|archive|frame|claim)-([1-9]\d*)-(0|[1-9]\d*))\.json$/u;
+const MASTER_REPAIR_INTENT_LEAF = /^repair-intent-([1-9]\d*)\.json$/u;
 const INTEGRITY_LEAF = /^(?:__gen|__tombs|__epoch)\.json$/u;
 const TOMB_LEAF = /^[^/]+\.tomb$/u;
 const LEGACY_VERSION_LEAF = /^\.[^/]+\.version$/u;
@@ -194,6 +195,9 @@ function classifyMemory(segments) {
       return masterKeyClass(segments[2]);
     }
     if (segments.length === 4 && segments[2] === "journal-wal") {
+      const repair = MASTER_REPAIR_INTENT_LEAF.exec(segments[3]);
+      if (repair) return Number.isSafeInteger(Number(repair[1])) && Number(repair[1]) <= 32
+        ? TERMINAL : "unclassified";
       const match = MASTER_JOURNAL_WAL_RECORD.exec(segments[3]);
       return match && (!match[1] || (Number.isSafeInteger(Number(match[1])) &&
         Number.isSafeInteger(Number(match[2])) &&

@@ -4,7 +4,7 @@ import {
   selectPublishedMasterJournalBackupPaths,
   validateStagedMasterJournalBackup,
 } from "../extension/lib/master-journal-backup.js";
-import { sealMasterJournalRecord } from "../extension/lib/master-journal-wal.js";
+import { sealMasterJournalRecord, unsealMasterJournalRecord } from "../extension/lib/master-journal-wal.js";
 
 const ENCODER = new TextEncoder();
 const PREFIX = "memory/master/journal-wal/";
@@ -43,6 +43,75 @@ async function chainFixture() {
   paths.set("memory/master/journal.json", ENCODER.encode("stale legacy value"));
   return { paths, archives: archives.map((name) => `${PREFIX}${name}`), residue };
 }
+
+Deno.test("backup retains and validates a head-bound append-only repair witness", async () => {
+  const { paths, residue } = await chainFixture();
+  paths.delete(residue);
+  const id = "11111111-2222-4333-8444-555555555555";
+  const intent = `${PREFIX}repair-intent-1.json`;
+  paths.set(intent, ENCODER.encode(await sealMasterJournalRecord("repair-intent", {
+    schemaVersion: 1, sequence: 1, id, reason: "owner-repair",
+  })));
+  const original = await unsealMasterJournalRecord(paths.get(`${PREFIX}head-a.json`), "head");
+  paths.set(`${PREFIX}head-a.json`, ENCODER.encode(await sealMasterJournalRecord("head", {
+    ...original, repairIntentId: id, repairIntentSequence: 1,
+  })));
+  const selected = await selectPublishedMasterJournalBackupPaths([...paths.keys()], async (path) => ({
+    size: paths.get(path).byteLength, stream: new Blob([paths.get(path)]).stream(),
+  }));
+  assertEquals(selected.includes(intent), true, "immutable repair evidence travels with its selected head");
+  assertEquals(selected.includes("memory/master/journal.json"), false);
+  const staged = selected.map((relPath) => ({ relPath, stagedPath: relPath }));
+  assertEquals(await validateStagedMasterJournalBackup(staged, async (path) => paths.get(path)), true);
+  await assertRejects(() => validateStagedMasterJournalBackup(staged.filter((row) => row.relPath !== intent),
+    async (path) => paths.get(path)), Error, "repair witness");
+  const nextIntent = `${PREFIX}repair-intent-2.json`;
+  paths.set(nextIntent, ENCODER.encode(await sealMasterJournalRecord("repair-intent", {
+    schemaVersion: 1, sequence: 2, id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", reason: "owner-repair",
+    previousId: id, previousHead: { epoch: original.epoch, sequence: 0, version: original.version },
+  })));
+  await assertRejects(() => selectPublishedMasterJournalBackupPaths([...paths.keys()], async (path) => ({
+    size: paths.get(path).byteLength, stream: new Blob([paths.get(path)]).stream(),
+  })), Error, "newer repair intent pending");
+});
+
+Deno.test("backup validates an older discharged witness beside a newer checked repair head", async () => {
+  const { paths, residue } = await chainFixture();
+  paths.delete(residue);
+  const firstId = "11111111-2222-4333-8444-555555555555";
+  const nextId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const first = await unsealMasterJournalRecord(paths.get(`${PREFIX}head-a.json`), "head");
+  paths.set(`${PREFIX}repair-intent-1.json`, ENCODER.encode(await sealMasterJournalRecord("repair-intent", {
+    schemaVersion: 1, sequence: 1, id: firstId, reason: "pre-head-residue",
+  })));
+  paths.set(`${PREFIX}head-a.json`, ENCODER.encode(await sealMasterJournalRecord("head", {
+    ...first, repairIntentSequence: 1, repairIntentId: firstId,
+  })));
+  paths.set(`${PREFIX}repair-intent-2.json`, ENCODER.encode(await sealMasterJournalRecord("repair-intent", {
+    schemaVersion: 1, sequence: 2, id: nextId, reason: "owner-repair", previousId: firstId,
+    previousHead: { epoch: first.epoch, sequence: first.sequence, version: first.version },
+  })));
+  const checkpoint = `checkpoint-${first.epoch}-1.json`;
+  paths.set(`${PREFIX}${checkpoint}`, ENCODER.encode(await sealMasterJournalRecord("checkpoint", {
+    epoch: first.epoch, sequence: 1, version: first.version + 1, exists: true, live: [{ id: "repaired" }],
+  })));
+  const lastHash = await hash(JSON.stringify({ epoch: first.epoch, sequence: 1,
+    checkpoint, archive: first.archive, archiveHash: first.archiveHash }));
+  paths.set(`${PREFIX}head-b.json`, ENCODER.encode(await sealMasterJournalRecord("head", {
+    ...first, sequence: 1, version: first.version + 1, checkpointSequence: 1,
+    checkpoint, lastHash, repairIntentSequence: 2, repairIntentId: nextId,
+  })));
+  const selected = await selectPublishedMasterJournalBackupPaths([...paths.keys()], async (path) => ({
+    size: paths.get(path).byteLength, stream: new Blob([paths.get(path)]).stream(),
+  }));
+  for (const leaf of [`checkpoint-${first.epoch}-0.json`, checkpoint,
+    "repair-intent-1.json", "repair-intent-2.json"]) {
+    assertEquals(selected.includes(`${PREFIX}${leaf}`), true);
+  }
+  const staged = selected.map((relPath) => ({ relPath, stagedPath: relPath }));
+  assertEquals(await validateStagedMasterJournalBackup(staged, async (path) => paths.get(path)), true,
+    "older-slot validation must see its own intent prefix, not the newer pending witness");
+});
 
 Deno.test("export refuses pre-head WAL residue instead of selecting legacy journal", async () => {
   const { paths } = await chainFixture();
