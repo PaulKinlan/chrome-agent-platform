@@ -656,7 +656,13 @@ maps the checked requested names/digests to collision-resistant immutable
 quarantine leaf names and a manifest hash; it copies no bytes. A witness with
 ANY requested leaves remains fail-closed even under an exact-ID signed head
 until checked quarantine copies, head binding and backup retention are
-implemented together.
+implemented together. The test/owner-repair-only `stageMasterJournalQuarantineCopy`
+can preserve source-equal raw bytes under deterministic immutable WAL-root names:
+it readback-checks the copy, leaves the source untouched, allows only an exact
+completed retry, and refuses a torn destination without overwriting it. It does
+NOT acquire admission/approval or publish a head; backup export/import still
+refuse quarantine until a checked head binds retention and export privacy policy
+is settled.
 Witnesses remain append-only (bounded to 32 per profile). The exact intent
 leaf grammar now participates in backup export/import: both head slots retain
 their own witness-prefix dependencies, a pending newer OR skipped orphan

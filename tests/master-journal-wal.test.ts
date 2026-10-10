@@ -10,6 +10,7 @@ import {
 } from "../extension/lib/master-journal-owner-inspection.js";
 import { inspectIntactMasterJournalPrefixesForOwner } from "../extension/lib/master-journal-repair-prefix.js";
 import { deriveMasterJournalQuarantineManifest } from "../extension/lib/master-journal-quarantine-manifest.js";
+import { stageMasterJournalQuarantineCopy } from "../extension/lib/master-journal-quarantine-copy.js";
 import {
   selectPublishedMasterJournalBackupPaths,
   validateStagedMasterJournalBackup,
@@ -125,6 +126,59 @@ Deno.test("quarantine retention manifest derives distinct immutable names withou
   await assertRejects(() => deriveMasterJournalQuarantineManifest({ ...intent,
     requestedRepairRecords: [intent.requestedRepairRecords[1], intent.requestedRepairRecords[0]],
   }), Error, "sorted");
+});
+
+Deno.test("test-only quarantine copy retains exact raw bytes and refuses changed source", async () => {
+  const { master, legacy } = await legacyFixture();
+  const wal = await master.getDirectoryHandle("journal-wal", { create: true });
+  const source = "head-a.json";
+  const original = encoder.encode("{ torn secret-shaped evidence");
+  (await wal.getFileHandle(source, { create: true })).bytes = original.slice();
+  const plan = await fingerprintRequestedMasterJournalRepairLeaves(master, [source]);
+  const intent = await stageMasterJournalRepairIntent(master, {
+    id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", reason: "torn-head",
+    expectedEvidenceSha256: plan.evidenceSha256, requestedRepairLeaves: [source],
+  });
+  const expected = await deriveMasterJournalQuarantineManifest(intent);
+  const copied = await stageMasterJournalQuarantineCopy(master,
+    { intentSequence: 1, sourceName: source });
+  assertEquals(copied.quarantineLeaf, expected.entries[0].quarantineLeaf);
+  assertEquals(copied.reused, false);
+  assertEquals((await wal.getFileHandle(copied.quarantineLeaf)).bytes, original);
+  assertEquals((await stageMasterJournalQuarantineCopy(master,
+    { intentSequence: 1, sourceName: source })).reused, true);
+  (await wal.getFileHandle(source)).bytes = encoder.encode("{ changed evidence");
+  await assertRejects(() => stageMasterJournalQuarantineCopy(master,
+    { intentSequence: 1, sourceName: source }), Error, "source changed");
+  assertEquals((await wal.getFileHandle(copied.quarantineLeaf)).bytes, original);
+  await assertRejects(() => readMasterJournalHead(master), Error);
+  assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy);
+});
+
+Deno.test("torn quarantine copy never overwrites source or repairs itself on retry", async () => {
+  const faults = {};
+  const { master, legacy } = await legacyFixture(faults);
+  const wal = await master.getDirectoryHandle("journal-wal", { create: true });
+  const source = "head-a.json";
+  const original = encoder.encode("{ corrupt evidence must survive");
+  (await wal.getFileHandle(source, { create: true })).bytes = original.slice();
+  const plan = await fingerprintRequestedMasterJournalRepairLeaves(master, [source]);
+  const intent = await stageMasterJournalRepairIntent(master, {
+    id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", reason: "torn-head",
+    expectedEvidenceSha256: plan.evidenceSha256, requestedRepairLeaves: [source],
+  });
+  const target = (await deriveMasterJournalQuarantineManifest(intent)).entries[0].quarantineLeaf;
+  faults.close = target;
+  await assertRejects(() => stageMasterJournalQuarantineCopy(master,
+    { intentSequence: 1, sourceName: source }), Error, "injected close");
+  const torn = (await wal.getFileHandle(target)).bytes.slice();
+  faults.close = undefined;
+  await assertRejects(() => stageMasterJournalQuarantineCopy(master,
+    { intentSequence: 1, sourceName: source }), Error, "torn or mismatched");
+  assertEquals((await wal.getFileHandle(target)).bytes, torn);
+  assertEquals((await wal.getFileHandle(source)).bytes, original);
+  assertEquals(decoder.decode((await master.getFileHandle("journal.json")).bytes), legacy);
+  await assertRejects(() => readMasterJournalHead(master), Error);
 });
 
 Deno.test("nonempty repair witness cannot discharge without a checked quarantine retention manifest", async () => {
