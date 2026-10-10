@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.646] — 2026-10-10
+- Sanitize ANSI and C0/C1 control characters in ACP bridge adapter logging
+
 ## [0.3.645] — 2026-10-10
 - Redact adapter error details and sanitise ACP bridge error logging so secrets never reach the log.
 

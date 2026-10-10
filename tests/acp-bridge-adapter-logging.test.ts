@@ -4,7 +4,7 @@
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
-import { createAcpServer } from "../scripts/acp-bridge.ts";
+import { createAcpServer, sanitizeLogString, StderrSanitizer } from "../scripts/acp-bridge.ts";
 import { TEST_BRIDGE_TOKEN } from "./fixtures/acp-bridge-token.ts";
 
 const authedEndpoint = (port: number | string, harness = "codex") =>
@@ -258,6 +258,446 @@ rl.on("line", (line) => {
       !line.includes("\n forged line 2")
     );
     assert(truncatedLogged, `Expected sanitized truncated error message, got: ${JSON.stringify(loggedErrors)}`);
+  } finally {
+    console.error = originalConsoleError;
+    await server.shutdown();
+  }
+});
+
+Deno.test("acp-bridge strips ANSI sequences, OSC commands, and C0 control characters from untrusted error.message", async () => {
+  const dir = durableDir("acp-logging-ansi-canary");
+  const adapterPath = `${dir}/adapter-ansi-canary-mock.mjs`;
+
+  const evilMessage = `Prefix \u001b[31mANSI_COLOR_CANARY\u001b[0m \u001b]0;FORGED_TERMINAL_TITLE\u0007\u001b]52;c;c2VjcmV0\u001b\\ middle\x01\x02\x07\x08\r\n forged line`;
+
+  Deno.writeTextFileSync(
+    adapterPath,
+    `import readline from "node:readline";
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  try {
+    const msg = JSON.parse(line);
+    if (msg.method === "initialize") {
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0",
+        id: msg.id,
+        result: {
+          protocolVersion: 1,
+          agentInfo: { name: "mock-adapter", version: "1.0.0" }
+        }
+      }) + "\\n");
+    } else if (msg.method === "session/new") {
+      process.stderr.write("Stderr canary: " + ${JSON.stringify(evilMessage)} + "\\n");
+      process.stderr.write("ANTHROPIC_API_KEY takes precedence over login: " + ${JSON.stringify(evilMessage)} + "\\n");
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0",
+        id: "\u001b[35mID_CANARY\u001b[0m",
+        error: {
+          code: "\u001b[36mCODE_CANARY\u001b[0m",
+          message: ${JSON.stringify(evilMessage)}
+        }
+      }) + "\\n");
+      setTimeout(() => process.exit(0), 50);
+    }
+  } catch {}
+});
+`,
+  );
+
+  const loggedErrors: string[] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    loggedErrors.push(args.map(String).join(" "));
+    originalConsoleError(...args);
+  };
+
+  const server = createAcpServer(0, adapterPath, {}, undefined, TEST_BRIDGE_TOKEN);
+  const port = (server as any).addr.port;
+
+  try {
+    const ws = new WebSocket(authedEndpoint(port, "codex"));
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => {
+        ws.send(JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: { clientInfo: { name: "test", version: "1" }, protocolVersion: 1 },
+        }));
+      };
+      ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.id === 1) {
+          ws.send(JSON.stringify({
+            jsonrpc: "2.0",
+            id: 2,
+            method: "session/new",
+            params: { cwd: dir, mcpServers: [] },
+          }));
+        } else if (msg.id === 2) {
+          ws.close();
+        }
+      };
+      ws.onclose = () => resolve();
+      ws.onerror = (e) => reject(e);
+    });
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Assert that NO raw ESC bytes (\u001b) or control characters (\x01, \x02, \x07, \x08, etc.) reach the logged output
+    const adapterErrorLine = loggedErrors.find((line) =>
+      line.startsWith('[acp-bridge] adapter error for harness "codex"')
+    );
+    assert(adapterErrorLine, `Expected adapter error log line, got: ${JSON.stringify(loggedErrors)}`);
+
+    const adapterStderrLines = loggedErrors.filter((line) =>
+      line.startsWith("[adapter-stderr]")
+    );
+    assert(adapterStderrLines.length > 0, `Expected adapter stderr log lines, got: ${JSON.stringify(loggedErrors)}`);
+
+    for (const line of [adapterErrorLine, ...adapterStderrLines]) {
+      assert(!line.includes("\u001b"), `Found raw ESC in log line: ${line}`);
+      assert(!line.includes("\x07"), `Found raw BEL in log line: ${line}`);
+      assert(!line.includes("\x01"), `Found raw SOH in log line: ${line}`);
+      assert(!line.includes("\x08"), `Found raw BS in log line: ${line}`);
+      assert(!line.includes("FORGED_TERMINAL_TITLE"), `Found OSC title payload in log line: ${line}`);
+      assert(!line.includes("c2VjcmV0"), `Found OSC 52 clipboard payload in log line: ${line}`);
+      assert(!line.includes("\n"), `Found raw newline in log line: ${line}`);
+      assert(!line.includes("\r"), `Found raw carriage return in log line: ${line}`);
+    }
+
+    // Verify legitimate text remains visible and legible
+    assert(adapterErrorLine.includes("ANSI_COLOR_CANARY"), `Expected sanitized text to retain legible content: ${adapterErrorLine}`);
+    assert(adapterErrorLine.includes("middle forged line"), `Expected space-collapsed text in error: ${adapterErrorLine}`);
+    assert(adapterErrorLine.includes("(id ID_CANARY):"), `Expected sanitized string frame id: ${adapterErrorLine}`);
+    assert(adapterErrorLine.includes("(code CODE_CANARY)"), `Expected sanitized string error code: ${adapterErrorLine}`);
+    assert(adapterStderrLines.some((l) => l.includes("ANSI_COLOR_CANARY")), `Expected stderr to retain legible text`);
+    assert(adapterStderrLines.some((l) => l.includes("forged line")), `Expected stderr to retain legible text`);
+
+    // Verify actionableAuthWarning path was triggered and sanitized
+    const authWarningLine = loggedErrors.find((line) =>
+      line.includes("the harness reported an auth precedence problem:")
+    );
+    assert(authWarningLine, `Expected actionableAuthWarning to be triggered: ${JSON.stringify(loggedErrors)}`);
+    assert(!authWarningLine.includes("\u001b"), `Found raw ESC in auth warning: ${authWarningLine}`);
+    assert(!authWarningLine.includes("\x07"), `Found raw BEL in auth warning: ${authWarningLine}`);
+    assert(!authWarningLine.includes("FORGED_TERMINAL_TITLE"), `Found OSC title in auth warning: ${authWarningLine}`);
+    assert(authWarningLine.includes("ANSI_COLOR_CANARY"), `Expected auth warning to retain legible text: ${authWarningLine}`);
+  } finally {
+    console.error = originalConsoleError;
+    await server.shutdown();
+  }
+});
+
+Deno.test("sanitizeLogString strips ANSI CSI/OSC sequences, collapses C0/C1 control characters, and trims cleanly", () => {
+  // 1. Basic empty / invalid inputs
+  assertEquals(sanitizeLogString(""), "");
+  assertEquals(sanitizeLogString(null as unknown as string), "");
+  assertEquals(sanitizeLogString(undefined as unknown as string), "");
+
+  // 2. ANSI color & cursor CSI sequences
+  assertEquals(
+    sanitizeLogString("\u001b[31;1mRed Bold\u001b[0m normal \u001b[2K\u001b[1;1Hcursor"),
+    "Red Bold normal cursor",
+  );
+
+  // 3. OSC sequences (title, clipboard OSC 52, 7-bit and 8-bit C1)
+  assertEquals(
+    sanitizeLogString("Before \u001b]0;Title\u0007 After"),
+    "Before After",
+  );
+  assertEquals(
+    sanitizeLogString("Before \u001b]52;c;c2VjcmV0\u001b\\ After"),
+    "Before After",
+  );
+  assertEquals(
+    sanitizeLogString("Before \u009d52;c;c2VjcmV0\u009c After"),
+    "Before After",
+  );
+  assertEquals(
+    sanitizeLogString("Before \u009d0;Title\u0007 After"),
+    "Before After",
+  );
+
+  // 4. C0 control characters (BEL, BS, NUL, tabs, CR, LF)
+  assertEquals(
+    sanitizeLogString("Hello\x00\x01\x07\x08World\r\n\tNew   Line"),
+    "Hello World New Line",
+  );
+
+  // 5. C1 control characters and DEL
+  assertEquals(
+    sanitizeLogString("Text\x7fwith\x80\x9fDEL and C1"),
+    "Text with DEL and C1",
+  );
+
+  // 6. Mixed compound attack payload
+  const attackPayload = "\u001b]0;hacked\u0007\u001b[2J\u001b[H\u001b[31mError:\u001b[0m\r\n\x00Forged admin message\u001b]52;c;YmFk\u001b\\";
+  assertEquals(
+    sanitizeLogString(attackPayload),
+    "Error: Forged admin message",
+  );
+
+  // 7. Embedded CSI escape sequences inside OSC payload
+  assertEquals(
+    sanitizeLogString("Prefix \u001b]52;c;FIRST\u001b[31mSECRET\u001b\\ Suffix"),
+    "Prefix Suffix",
+  );
+  assertEquals(
+    sanitizeLogString("Prefix \u001b]52;c;FIRST\u001b[31mSECRET\u0007 Suffix"),
+    "Prefix Suffix",
+  );
+
+  // 8. OSC sequence starting inside an unfinished CSI sequence
+  assertEquals(
+    sanitizeLogString("Prefix \u001b[31\u001b]52;c;SECRET\u0007 Suffix"),
+    "Prefix Suffix",
+  );
+
+  // 9. CSI sequence with private parameter character (e.g., > in DA2 query)
+  assertEquals(
+    sanitizeLogString("Before \u001b[>0c After"),
+    "Before After",
+  );
+});
+
+Deno.test("StderrSanitizer discards split OSC, multi-line OSC, split ST, and C1 sequences while bounding memory", () => {
+  const sanitizer = new StderrSanitizer();
+  const logged: string[] = [];
+  const onLine = (l: string) => logged.push(l);
+
+  // 1. Split OSC across chunk reads
+  sanitizer.processChunk("Prefix \x1b]52;c;", onLine);
+  sanitizer.processChunk("c2VjcmV0\x07 Suffix\n", onLine);
+
+  // 2. Split ST (\x1b and \) across chunk reads with embedded newline inside OSC
+  sanitizer.processChunk("Start \x1b]52;c;LINE1_SECRET\nLINE2_SECRET\x1b", onLine);
+  sanitizer.processChunk("\\ End\n", onLine);
+
+  // 3. C1 8-bit OSC sequence
+  sanitizer.processChunk("C1Start \u009d52;c;C1_SECRET\u009c C1End\n", onLine);
+
+  // 4. CSI color and cursor sequences
+  sanitizer.processChunk("Color \x1b[31;1mRedText\x1b[0m Done\n", onLine);
+
+  // 5. Embedded CSI escape sequences inside OSC payload
+  sanitizer.processChunk("Embedded \x1b]52;c;FIRST\x1b[31mEMBEDDED_SECRET\x1b\\ Suffix\n", onLine);
+
+  // 6. OSC sequence starting inside an unfinished CSI sequence (single and split across chunks)
+  sanitizer.processChunk("Prefix \x1b[31\x1b]52;c;CSI_INTERRUPT_SECRET\x07 Suffix\n", onLine);
+  sanitizer.processChunk("SplitCSI \x1b[31\x1b", onLine);
+  sanitizer.processChunk("]52;c;SPLIT_CSI_SECRET\x07 Done\n", onLine);
+
+  // 7. CSI sequence with private parameter character (e.g. > in DA2)
+  sanitizer.processChunk("Before \x1b[>0c After\n", onLine);
+
+  // 8. Oversized line bounding (> 4096 chars without newline flushes bounded chunk)
+  const hugeChunk = "HugeHeader " + "A".repeat(5000) + "\n";
+  sanitizer.processChunk(hugeChunk, onLine);
+
+  sanitizer.flush(onLine);
+
+  // Assertions:
+  assertEquals(logged[0], "Prefix Suffix");
+  assertEquals(logged[1], "Start End");
+  assertEquals(logged[2], "C1Start C1End");
+  assertEquals(logged[3], "Color RedText Done");
+  assertEquals(logged[4], "Embedded Suffix");
+  assertEquals(logged[5], "Prefix Suffix");
+  assertEquals(logged[6], "SplitCSI Done");
+  assertEquals(logged[7], "Before After");
+
+  // Ensure secrets were never added to lines
+  assert(!logged.some((l) => l.includes("c2VjcmV0")));
+  assert(!logged.some((l) => l.includes("LINE1_SECRET")));
+  assert(!logged.some((l) => l.includes("LINE2_SECRET")));
+  assert(!logged.some((l) => l.includes("C1_SECRET")));
+  assert(!logged.some((l) => l.includes("EMBEDDED_SECRET")));
+  assert(!logged.some((l) => l.includes("CSI_INTERRUPT_SECRET")));
+  assert(!logged.some((l) => l.includes("SPLIT_CSI_SECRET")));
+
+  // Verify huge line was bounded and split into chunks
+  assert(logged.some((l) => l.startsWith("HugeHeader A")));
+});
+
+Deno.test("acp-bridge retains split incomplete OSC and CSI sequences across stderr chunks without leaking payloads", async () => {
+  const dir = durableDir("acp-logging-split-stderr");
+  const adapterPath = `${dir}/adapter-split-stderr-mock.mjs`;
+
+  Deno.writeTextFileSync(
+    adapterPath,
+    `import readline from "node:readline";
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", async (line) => {
+  try {
+    const msg = JSON.parse(line);
+    if (msg.method === "initialize") {
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0",
+        id: msg.id,
+        result: { protocolVersion: 1, agentInfo: { name: "mock-adapter", version: "1.0.0" } }
+      }) + "\\n");
+    } else if (msg.method === "session/new") {
+      // Chunk 1: Incomplete OSC 52 sequence start
+      process.stderr.write("Prefix \u001b]52;c;");
+      await new Promise((r) => setTimeout(r, 60));
+      // Chunk 2: Payload and termination
+      process.stderr.write("c2VjcmV0\u0007 Suffix\\n");
+      await new Promise((r) => setTimeout(r, 60));
+      // Chunk 3: Incomplete CSI sequence start
+      process.stderr.write("Color \u001b[31");
+      await new Promise((r) => setTimeout(r, 60));
+      // Chunk 4: CSI terminator and text
+      process.stderr.write("mRedText\u001b[0m Done\\n");
+      await new Promise((r) => setTimeout(r, 60));
+
+      // Chunk 5: Multi-line OSC sequence spanning a newline and split ST across chunks
+      process.stderr.write("SplitStart \u001b]52;c;LINE1_SECRET\\nLINE2_SECRET\u001b");
+      await new Promise((r) => setTimeout(r, 60));
+
+      // Chunk 6: ST terminator completion and clean text
+      process.stderr.write("\\\\ SplitEnd\\n");
+      await new Promise((r) => setTimeout(r, 60));
+
+      // Chunk 7: 8-bit C1-form OSC payload
+      process.stderr.write("C1Start \u009d52;c;C1_SECRET\u009c C1End\\n");
+      await new Promise((r) => setTimeout(r, 60));
+
+      // Chunk 8: Embedded CSI sequence inside OSC payload
+      process.stderr.write(${JSON.stringify("EmbeddedStart \u001b]52;c;FIRST\u001b[31mEMBEDDED_SECRET\u001b\\ EmbeddedEnd\n")});
+      await new Promise((r) => setTimeout(r, 60));
+
+      // Chunk 9: OSC sequence starting inside an unfinished CSI sequence across chunks
+      process.stderr.write("UnfinishedCSI \u001b[31\u001b");
+      await new Promise((r) => setTimeout(r, 60));
+      process.stderr.write("]52;c;UNFINISHED_CSI_SECRET\u0007 FinishedCSI\\n");
+
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0",
+        id: msg.id,
+        result: { sessionId: "split-test" }
+      }) + "\\n");
+      setTimeout(() => process.exit(0), 50);
+    }
+  } catch {}
+});
+`,
+  );
+
+  const loggedErrors: string[] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    loggedErrors.push(args.map(String).join(" "));
+    originalConsoleError(...args);
+  };
+
+  const server = createAcpServer(0, adapterPath, {}, undefined, TEST_BRIDGE_TOKEN);
+  const port = (server as any).addr.port;
+
+  try {
+    const ws = new WebSocket(authedEndpoint(port, "codex"));
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => {
+        ws.send(JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: { clientInfo: { name: "test", version: "1" }, protocolVersion: 1 },
+        }));
+      };
+      ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.id === 1) {
+          ws.send(JSON.stringify({
+            jsonrpc: "2.0",
+            id: 2,
+            method: "session/new",
+            params: { cwd: dir, mcpServers: [] },
+          }));
+        } else if (msg.id === 2) {
+          ws.close();
+        }
+      };
+      ws.onclose = () => resolve();
+      ws.onerror = (e) => reject(e);
+    });
+
+    await new Promise((r) => setTimeout(r, 300));
+
+    // Verify split OSC payload was completely eliminated across chunk boundaries
+    const leakedOscPayload = loggedErrors.some((l) => l.includes("c2VjcmV0"));
+    assert(!leakedOscPayload, `Split OSC 52 payload leaked to logs: ${JSON.stringify(loggedErrors)}`);
+
+    // Verify no raw ESC or BEL in logs
+    const hasRawEsc = loggedErrors.some((l) => l.includes("\u001b"));
+    assert(!hasRawEsc, `Found raw ESC in logged output: ${JSON.stringify(loggedErrors)}`);
+
+    // Verify multi-line, split ST, and C1 OSC payloads were completely eliminated
+    assert(!loggedErrors.some((l) => l.includes("LINE1_SECRET")), "LINE1_SECRET leaked across newline");
+    assert(!loggedErrors.some((l) => l.includes("LINE2_SECRET")), "LINE2_SECRET leaked across split ST");
+    assert(!loggedErrors.some((l) => l.includes("C1_SECRET")), "C1_SECRET leaked from C1 OSC sequence");
+    assert(!loggedErrors.some((l) => l.includes("EMBEDDED_SECRET")), "EMBEDDED_SECRET leaked from embedded CSI");
+    assert(!loggedErrors.some((l) => l.includes("UNFINISHED_CSI_SECRET")), "UNFINISHED_CSI_SECRET leaked from interrupted CSI");
+
+    const hasSplitClean = loggedErrors.some((l) => l.includes("SplitStart SplitEnd"));
+    assert(hasSplitClean, `Expected "SplitStart SplitEnd" logged, got: ${JSON.stringify(loggedErrors)}`);
+
+    const hasC1Clean = loggedErrors.some((l) => l.includes("C1Start C1End"));
+    assert(hasC1Clean, `Expected "C1Start C1End" logged, got: ${JSON.stringify(loggedErrors)}`);
+
+    const hasEmbeddedClean = loggedErrors.some((l) => l.includes("EmbeddedStart EmbeddedEnd"));
+    assert(hasEmbeddedClean, `Expected "EmbeddedStart EmbeddedEnd" logged, got: ${JSON.stringify(loggedErrors)}`);
+
+    const hasUnfinishedClean = loggedErrors.some((l) => l.includes("UnfinishedCSI FinishedCSI"));
+    assert(hasUnfinishedClean, `Expected "UnfinishedCSI FinishedCSI" logged, got: ${JSON.stringify(loggedErrors)}`);
+  } finally {
+    console.error = originalConsoleError;
+    await server.shutdown();
+  }
+});
+
+Deno.test("acp-bridge captures exit diagnostics even when stderr lacks a trailing newline", async () => {
+  const dir = durableDir("acp-logging-no-newline-exit");
+  const adapterPath = `${dir}/adapter-no-newline-mock.mjs`;
+
+  Deno.writeTextFileSync(
+    adapterPath,
+    `// Immediately write stderr without newline and exit
+process.stderr.write("fatal adapter boot error without newline");
+process.exit(1);
+`,
+  );
+
+  const loggedErrors: string[] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    loggedErrors.push(args.map(String).join(" "));
+  };
+
+  const server = createAcpServer(0, adapterPath, {}, undefined, TEST_BRIDGE_TOKEN);
+  const port = (server as any).addr.port;
+
+  try {
+    let closeReason = "";
+    await new Promise<void>((resolve) => {
+      const ws = new WebSocket(authedEndpoint(port, "codex"));
+      ws.onclose = (ev) => {
+        closeReason = ev.reason;
+        resolve();
+      };
+      ws.onerror = () => resolve();
+    });
+
+    const exitLog = loggedErrors.find((l) => l.includes("adapter for harness \"codex\" exited"));
+    assert(exitLog, `Expected exit log in logged errors, got: ${JSON.stringify(loggedErrors)}`);
+    assert(
+      exitLog.includes("fatal adapter boot error without newline"),
+      `Expected exit log to include un-newlined stderr, got: ${exitLog}`,
+    );
+    assert(
+      closeReason.includes("fatal adapter boot error without newline"),
+      `Expected socket close reason to include un-newlined stderr, got: "${closeReason}"`,
+    );
   } finally {
     console.error = originalConsoleError;
     await server.shutdown();
