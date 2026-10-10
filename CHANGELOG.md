@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.643] — 2026-10-10
+- Document substring and slice coverage in site-docs complexity guard and clean unused capture
+
 ## [0.3.642] — 2026-10-10
 - Harden site-docs fallback complexity guard against backward rescans via substring
 

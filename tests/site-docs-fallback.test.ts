@@ -449,7 +449,8 @@ Deno.test("j2vok falsification: negative mutant reproducing pre-e7gwq quadratic 
 /**
  * Independent complexity guard that instruments String.prototype and string proxy access
  * during execution to measure total character inspections, backward reads, and backward rescan method calls.
- * Covers charCodeAt, charAt, codePointAt, at, lastIndexOf, and bracket indexing input[j] (uil17, otqr7).
+ * Covers charCodeAt, charAt, codePointAt, at, lastIndexOf, bracket indexing input[j],
+ * slice, substring, and substr (uil17, otqr7, 0zj6g).
  * Fails closed without relying on wall-clock timing budgets.
  */
 function measureCharacterInspections<T>(
@@ -482,7 +483,6 @@ function measureCharacterInspections<T>(
   const origLastIndexOf = String.prototype.lastIndexOf;
   const origSubstring = String.prototype.substring;
   const origSubstr = (String.prototype as any).substr;
-  const origSlice = String.prototype.slice;
 
   function createTrackedString(rawStr: string, baseOffset = 0): string {
     const target = new String(rawStr);
