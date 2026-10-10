@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.638] — 2026-10-10
+- Keep scheduled agent tasks from opening a background page unless developer features and a provider are enabled.
+
 ## [0.3.637] — 2026-10-10
 - Reroute scheduled agent alarms through worker execution with decomposed service-worker callbacks.
 
