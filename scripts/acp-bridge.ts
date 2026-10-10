@@ -459,6 +459,11 @@ export class StderrSanitizer {
             this.inOscEsc = true;
             continue;
           }
+          if (char === "\n") {
+            this.droppedLinesCount++;
+            this.hasOscLineContent = false;
+            continue;
+          }
           this.hasOscLineContent = true;
           continue;
         }

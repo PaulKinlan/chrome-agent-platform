@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.658] — 2026-10-10
+- Account for suppressed stderr line when newline directly follows ESC inside unterminated terminal escape
+
 ## [0.3.657] — 2026-10-10
 - Fix transient custody exit 70 flakes under concurrent process churn by recognizing kernel ESRCH as vanished process
 
