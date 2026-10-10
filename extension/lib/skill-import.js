@@ -6,6 +6,21 @@
 // or attach to any agent. Skills are DATA (a prompt + files), never eval'd.
 
 import { checkFetchTarget } from "./fetch-policy.js";
+import {
+  wrapUntrustedContent,
+  tagUntrusted,
+  UNTRUSTED_TOKEN_PLACEHOLDER,
+} from "./untrusted-fence.js";
+
+/** Wrap an imported skill or command body in the untrusted-instruction fence
+ * so remote content cannot silently elevate to trusted standing instructions (INV-5, t045y).
+ * Idempotent: does not double-fence if already fenced. */
+export function fenceSkillBody(text, token = UNTRUSTED_TOKEN_PLACEHOLDER) {
+  const str = String(text ?? "");
+  if (!str.trim()) return str;
+  if (str.startsWith("<<<UNTRUSTED") && str.includes("<<<END")) return str;
+  return wrapUntrustedContent(str, token);
+}
 
 const rateLimitErr = (status, action) =>
   new Error(`GitHub API rate-limited (HTTP ${status}) while ${action}; wait and retry, or use a raw.githubusercontent.com URL`);
@@ -71,9 +86,13 @@ export async function fetchWithSafeRedirects(url, init = {}, fetcher = globalThi
   }
 }
 
-/** Parse minimal YAML frontmatter (name/description/author/version). */
+/** Parse minimal YAML frontmatter (name/description/author/version).
+ * Tolerates untrusted fence wrapper so frontmatter can be extracted even from fenced bodies. */
 export function parseFrontmatter(md) {
-  const text = String(md ?? "");
+  let text = String(md ?? "");
+  if (text.startsWith("<<<UNTRUSTED")) {
+    text = text.replace(/^<<<UNTRUSTED[^\n]*>>>\n?/, "").replace(/\n?<<<END[^\n]*>>>$/, "");
+  }
   const m = text.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/);
   const meta = {};
   if (!m) return { body: text, meta };
@@ -179,12 +198,18 @@ async function fetchDirectSkill(url) {
   const content = await readSkillText(resp);
   const { meta } = parseFrontmatter(content);
   const urlName = targetUrl.split("/").pop().replace(/\.md$/i, "") || "imported-skill";
+  const fenced = fenceSkillBody(content);
   return {
-    files: { "SKILL.md": content },
+    sourceUrl: targetUrl,
+    untrusted: true,
+    fenced: true,
+    files: { "SKILL.md": fenced },
+    rawFiles: { "SKILL.md": content },
     meta: {
       name: meta.name || urlName,
       description: meta.description || `Imported from ${url}`,
       author: meta.author,
+      sourceUrl: targetUrl,
     },
   };
 }
@@ -237,7 +262,8 @@ async function fetchGitHubSkill(url) {
     const fr = await fetchWithSafeRedirects(file.download_url);
     if (!fr.ok) return null;
     const label = `${owner}/${repo} ${file.path ?? file.name}`;
-    return await readSkillText(fr, label);
+    const text = await readSkillText(fr, label);
+    return fenceSkillBody(text);
   };
 
   try {
@@ -316,11 +342,15 @@ async function fetchGitHubSkill(url) {
 
   const { meta } = parseFrontmatter(skillContent);
   return {
+    sourceUrl: url,
+    untrusted: true,
+    fenced: true,
     files,
     meta: {
       name: meta.name || `${owner}/${repo}`,
       description: meta.description || `Skill from ${owner}/${repo}`,
       author: meta.author || owner,
+      sourceUrl: url,
     },
   };
 }
@@ -339,10 +369,14 @@ async function fetchGitHubSkill(url) {
 export async function installImportedSkill(memory, fetched, fileStore = null) {
   const name = fetched.meta?.name || fetched.name || "imported-skill";
   const id = fetched.id || slugifySkillId(name);
-  const files =
+  const rawFiles =
     fetched.files && typeof fetched.files === "object" && !Array.isArray(fetched.files)
       ? fetched.files
       : { "SKILL.md": fetched.files?.["SKILL.md"] ?? "" };
+  const files = {};
+  for (const [key, val] of Object.entries(rawFiles)) {
+    files[key] = fenceSkillBody(val);
+  }
   const promptBytes = new TextEncoder().encode(String(files["SKILL.md"] ?? "")).byteLength;
   const store = fileStore ?? (await import("./skill-files.js"));
   const { fileCount, totalBytes } = await store.writeSkillFiles(id, files);
@@ -352,6 +386,9 @@ export async function installImportedSkill(memory, fetched, fileStore = null) {
     description: fetched.meta?.description || fetched.description || "",
     author: fetched.meta?.author || fetched.author,
     source: "imported",
+    sourceUrl: fetched.sourceUrl || fetched.url || fetched.meta?.sourceUrl || null,
+    untrusted: true,
+    fenced: true,
     mode: "on-demand",
     category: fetched.category || "imported",
     // Metadata only — the body lives in OPFS (small skills read it back via
@@ -400,13 +437,20 @@ export async function removeImportedSkill(memory, id, fileStore = null) {
 export async function loadImportedSkill(memory, row, fileStore = null) {
   if (!row || typeof row !== "object") return row;
   if (Number.isInteger(row.promptBytes)) return row; // fresh / already migrated
-  const body = typeof row.prompt === "string" ? row.prompt : "";
-  const files = row.files && typeof row.files === "object" ? row.files : {};
+  const rawBody = typeof row.prompt === "string" ? row.prompt : "";
+  const body = fenceSkillBody(rawBody);
+  const files = row.files && typeof row.files === "object" ? { ...row.files } : {};
   if (!files["SKILL.md"] && body) files["SKILL.md"] = body;
+  for (const [k, v] of Object.entries(files)) {
+    files[k] = fenceSkillBody(v);
+  }
   const migrated = {
     ...row,
+    untrusted: true,
+    fenced: true,
+    sourceUrl: row.sourceUrl || null,
     prompt: "",
-    promptBytes: new TextEncoder().encode(body).byteLength,
+    promptBytes: new TextEncoder().encode(files["SKILL.md"] ?? body).byteLength,
   };
   delete migrated.files; // index rows are metadata-only (bodies live in OPFS)
   const store = fileStore ?? (await import("./skill-files.js"));
@@ -421,7 +465,7 @@ export async function loadImportedSkill(memory, row, fileStore = null) {
     // body is NOT store-backed: skill_read cannot serve it, so a skill_read
     // marker would be a dead loader — the full inline body composes instead
     // (renderBoundarySkills keys the marker on integer promptBytes only).
-    return { ...row, migrationFailed: true };
+    return { ...row, prompt: body, untrusted: true, fenced: true, migrationFailed: true };
   }
   // Persist the migrated metadata row so future reads skip the migration.
   const list = (await memory.get("importedSkills")) ?? [];
@@ -588,8 +632,11 @@ export async function discoverRepoSkillsAndCommands(url, options = {}) {
         if (!isCmd && meta.author) item.author = meta.author;
         if (isCmd) {
           item.argumentHint = meta.argumentHint ?? meta["argument-hint"] ?? "";
-          item.prompt = body;
+          item.prompt = fenceSkillBody(body);
         }
+        item.sourceUrl = item.downloadUrl;
+        item.untrusted = true;
+        item.fenced = true;
       } catch (e) {
         if (String(e?.message ?? "").includes("rate-limited") || String(e?.message ?? "").includes("budget")) throw e;
       }
@@ -617,14 +664,18 @@ export async function installImportedCommand(memory, cmd) {
   if (!cmd || typeof cmd !== "object") throw new Error("invalid command object");
   const name = cmd.name || cmd.meta?.name || "command";
   const id = cmd.id || slugifySkillId(name);
-  const prompt = typeof cmd.prompt === "string" ? cmd.prompt : (cmd.body || cmd.template || "");
+  const rawPrompt = typeof cmd.prompt === "string" ? cmd.prompt : (cmd.body || cmd.template || "");
+  const prompt = fenceSkillBody(rawPrompt);
   const record = {
     id,
     name,
     description: cmd.description || cmd.meta?.description || "",
     argumentHint: cmd.argumentHint || cmd.meta?.argumentHint || cmd.meta?.["argument-hint"] || "",
     prompt,
+    untrusted: true,
+    fenced: true,
     source: cmd.source || "imported",
+    sourceUrl: cmd.sourceUrl || cmd.url || cmd.meta?.sourceUrl || null,
     plugin: cmd.plugin || null,
     category: cmd.category || "imported",
     path: cmd.path || "",
@@ -677,7 +728,7 @@ export async function installBatchSkillsAndCommands(memory, batch = {}, fileStor
       const noMap = !s.files || Array.isArray(s.files) || typeof s.files !== "object" || !s.files["SKILL.md"];
       if (noMap && s.downloadUrl) {
         const { meta, body } = await fetchBody(s);
-        fetched = { id: s.id, files: { "SKILL.md": body }, meta: { name: s.name || meta.name, description: s.description || meta.description, author: s.author || meta.author } };
+        fetched = { id: s.id, sourceUrl: s.downloadUrl, untrusted: true, fenced: true, files: { "SKILL.md": fenceSkillBody(body) }, meta: { name: s.name || meta.name, description: s.description || meta.description, author: s.author || meta.author, sourceUrl: s.downloadUrl } };
       }
       installedSkills.push(await installImportedSkill(memory, fetched, fileStore));
     } catch (e) {
@@ -690,7 +741,7 @@ export async function installBatchSkillsAndCommands(memory, batch = {}, fileStor
       let cmd = c;
       if (!cmd.prompt && cmd.downloadUrl) {
         const { body, meta } = await fetchBody(c);
-        cmd = { ...cmd, prompt: body, meta: { ...meta, ...cmd.meta } };
+        cmd = { ...cmd, prompt: fenceSkillBody(body), sourceUrl: c.downloadUrl, untrusted: true, fenced: true, meta: { ...meta, ...cmd.meta, sourceUrl: c.downloadUrl } };
       }
       installedCommands.push(await installImportedCommand(memory, cmd));
     } catch (e) {

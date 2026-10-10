@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.624] — 2026-10-10
+- Fence imported third-party skills and commands as untrusted content
+
 ## [0.3.623] — 2026-10-10
 - Enforce shared SSRF and private-address predicate from fetch-policy.js with manual redirect re-validation on skill import URLs, preventing requests to loopback, RFC 1918 private ranges, link-local, and cloud metadata services.
 

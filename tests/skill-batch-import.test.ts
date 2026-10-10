@@ -1,6 +1,7 @@
 // tests/skill-batch-import.test.ts — batch skill and command storage and indexing in OPFS/memory.
 // @ts-nocheck
 import { assertEquals, assertStringIncludes, assert } from "jsr:@std/assert@1";
+import { wrapUntrustedContent } from "../extension/lib/untrusted-fence.js";
 import {
   installImportedCommand,
   removeImportedCommand,
@@ -61,7 +62,9 @@ Deno.test("installImportedCommand persists a command record in memory index", as
   const list = await loadAllImportedCommands(mem);
   assertEquals(list.length, 1);
   assertEquals(list[0].id, "pm-ai-shipping-ship-check");
-  assertEquals(list[0].prompt, "# /ship-check -- Is This Safe to Ship?\nRun shipping sequence on $ARGUMENTS.");
+  assertEquals(list[0].prompt, wrapUntrustedContent("# /ship-check -- Is This Safe to Ship?\nRun shipping sequence on $ARGUMENTS."));
+  assertEquals(list[0].untrusted, true);
+  assertEquals(list[0].fenced, true);
 
   // Idempotent re-save updates existing row
   const updated = await installImportedCommand(mem, {
@@ -153,8 +156,8 @@ Deno.test("installBatchSkillsAndCommands installs multiple skills and commands w
   // Verify OPFS files written for multi-file skill
   const skill1Files = fs._files.get("plugin-skill-1");
   assert(skill1Files);
-  assertEquals(skill1Files["SKILL.md"], "---\nname: skill-1\n---\nBody of skill 1");
-  assertEquals(skill1Files["scripts/helper.py"], "print('hello')");
+  assertEquals(skill1Files["SKILL.md"], wrapUntrustedContent("---\nname: skill-1\n---\nBody of skill 1"));
+  assertEquals(skill1Files["scripts/helper.py"], wrapUntrustedContent("print('hello')"));
 });
 
 Deno.test("installBatchSkillsAndCommands fetches downloadUrl when files/prompt not provided", async () => {

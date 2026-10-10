@@ -164,9 +164,10 @@ Deno.test("skills-in-settings: fetchSkillFromUrl resolves a GitHub directory/blo
     assertEquals(r?.meta?.description, "Teach a topic to the user", `meta.description should be parsed, got ${r?.meta?.description}`);
     // The multi-file walk collects SKILL.md + its siblings under the same parent.
     assert(r?.files?.["SKILL.md"], "SKILL.md must be present in the fetched files");
-    assertEquals(r?.files?.["SKILL.md"], bodies["skills/productivity/teach/SKILL.md"], "SKILL.md body must be the file's content");
-    assertEquals(r?.files?.["assets/prompt.txt"], "teach me about this topic", "a sibling file in a subdirectory must be collected with its relative path");
-    assertEquals(r?.files?.["README.md"], "# Teach skill\n", "a sibling file in the SKILL.md parent directory must be collected");
+    assert(r?.files?.["SKILL.md"].includes(bodies["skills/productivity/teach/SKILL.md"]), "SKILL.md body must contain the file's content");
+    assert(r?.files?.["SKILL.md"].includes("<<<UNTRUSTED run:"), "SKILL.md must be fenced as untrusted data");
+    assert(r?.files?.["assets/prompt.txt"].includes("teach me about this topic"), "a sibling file in a subdirectory must be collected with its relative path");
+    assert(r?.files?.["README.md"].includes("# Teach skill\n"), "a sibling file in the SKILL.md parent directory must be collected");
   } finally {
     globalThis.fetch = priorFetch;
   }

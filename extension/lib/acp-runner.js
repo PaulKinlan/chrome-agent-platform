@@ -8,6 +8,7 @@ import { AcpClient, acpAllowOptionId, acpDenyOptionId } from "./acp-client.js";
 import { AcpNativeTransport, DEFAULT_NATIVE_HOST } from "./acp-native.js";
 import { acpExecutionId } from "./acp-thread-journal.js";
 import { sha256Hex } from "./pure.js";
+import { wrapUntrustedContent } from "./untrusted-fence.js";
 
 
 // ── CAP skill context on the harness turn (chrome-agent-platform-etdn) ──────
@@ -48,7 +49,15 @@ export async function resolveSkillContext(text, { runtimeSend = null } = {}) {
       return rows.find((r) => r.refId === refId || r.id === id) ?? null;
     })
     .filter(Boolean)
-    .map((r) => ({ refId: r.refId ?? r.id, name: r.name ?? r.id, description: r.description ?? "", prompt: r.prompt ?? "" }));
+    .map((r) => ({
+      refId: r.refId ?? r.id,
+      name: r.name ?? r.id,
+      description: r.description ?? "",
+      prompt: r.prompt ?? "",
+      source: r.source ?? "builtin",
+      untrusted: r.untrusted ?? false,
+      fenced: r.fenced ?? false,
+    }));
 }
 
 /** The harness turn payload: the skill context block, then the owner's own
@@ -56,12 +65,19 @@ export async function resolveSkillContext(text, { runtimeSend = null } = {}) {
 export function buildPromptWithSkillContext(task, skills) {
   const list = Array.isArray(skills) ? skills.filter((s) => s && (s.prompt || s.description)) : [];
   if (!list.length) return String(task ?? "");
-  const block = list.map((s) =>
-    `<cap-skill ref="${s.refId}" name="${s.name}">\n` +
-    (s.description ? `<description>${s.description}</description>\n` : "") +
-    `<instructions>\n${s.prompt}\n</instructions>\n` +
-    `</cap-skill>`
-  ).join("\n");
+  const block = list.map((s) => {
+    const isImported = s.source === "imported" || s.untrusted === true || String(s.refId ?? "").startsWith("imported:");
+    const promptText = String(s.prompt ?? "");
+    const safePrompt = isImported && promptText && !promptText.includes("<<<UNTRUSTED")
+      ? wrapUntrustedContent(promptText)
+      : promptText;
+    return (
+      `<cap-skill ref="${s.refId}" name="${s.name}">\n` +
+      (s.description ? `<description>${s.description}</description>\n` : "") +
+      `<instructions>\n${safePrompt}\n</instructions>\n` +
+      `</cap-skill>`
+    );
+  }).join("\n");
   return `<cap-skills>\n${block}\n\n${String(task ?? "")}`;
 }
 
