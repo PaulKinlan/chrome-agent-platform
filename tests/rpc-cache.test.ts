@@ -203,6 +203,66 @@ Deno.test("8xhq7: creating a named agent evicts the same page's pre-create roste
   assertEquals(unrelatedReads, 1, "agent writes must not evict unrelated provider reads");
 });
 
+Deno.test("9q1ik: updating, configuring, or duplicating agents evicts the cached roster before repaint", async () => {
+  const routesToTest = [
+    { route: "named-agent.update", payload: { id: "agent-1", name: "Renamed Agent" }, targetRead: "named-agent.list" },
+    { route: "named-agent.set-tools", payload: { id: "agent-1", tools: [] }, targetRead: "named-agent.list" },
+    { route: "named-agent.set-provider", payload: { id: "agent-1", config: {} }, targetRead: "named-agent.list" },
+    { route: "named-agent.set-mcp-servers", payload: { id: "agent-1", servers: [] }, targetRead: "named-agent.list" },
+    { route: "background-agent.update", payload: { id: "bg-1", name: "Updated Bg" }, targetRead: "background-agent.list" },
+    { route: "background-agent.duplicate", payload: { id: "bg-1" }, targetRead: "background-agent.list" },
+    { route: "background-agent.set", payload: { id: "bg-1", active: true }, targetRead: "background-agent.list" },
+    { route: "agent.update", payload: { origin: "https://example.com", name: "Site Agent" }, targetRead: "agent.directory" },
+  ];
+
+  for (const { route, payload, targetRead } of routesToTest) {
+    clearRpcCache();
+    let readCount = 0;
+    let unrelatedCount = 0;
+    let writeCount = 0;
+
+    const send = async (type: string) => {
+      if (type === targetRead) {
+        readCount++;
+        return { ok: true, version: readCount };
+      }
+      if (type === route) {
+        writeCount++;
+        return { ok: true };
+      }
+      if (type === "provider.status") {
+        unrelatedCount++;
+        return { ok: true, provider: "demo" };
+      }
+      throw new Error(`unexpected RPC: ${type}`);
+    };
+
+    // 1. Initial read caches the target
+    await cachedRpc(targetRead, {}, { send });
+    assertEquals(readCount, 1);
+
+    // 2. Immediate second read hits cache without network call
+    await cachedRpc(targetRead, {}, { send });
+    assertEquals(readCount, 1);
+
+    // 3. Warm unrelated read
+    await cachedRpc("provider.status", {}, { send });
+    assertEquals(unrelatedCount, 1);
+
+    // 4. Send mutating route
+    await cachedRpc(route, payload, { send });
+    assertEquals(writeCount, 1);
+
+    // 5. Subsequent read must be evicted (fresh fetch)
+    await cachedRpc(targetRead, {}, { send });
+    assertEquals(readCount, 2, `write route ${route} must invalidate cached ${targetRead}`);
+
+    // 6. Unrelated read must NOT be evicted
+    await cachedRpc("provider.status", {}, { send });
+    assertEquals(unrelatedCount, 1, `write route ${route} must not over-invalidate provider.status`);
+  }
+});
+
 Deno.test("rpc-cache: broadcast events invalidate corresponding cached routes", async () => {
   clearRpcCache();
   let dirCalls = 0;
