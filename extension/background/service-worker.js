@@ -1629,20 +1629,14 @@ async function dispatchScheduledWorkerTask({ alarm, task, token, fence, agent, f
     return { ok: false, orphaned: true };
   }
 
-  // Preflight check: worker host (offscreen document) must be available.
-  // If unavailable (e.g. headless unit testing without offscreen docs), fall back to SW runTask.
-  const offscreen = await ensureOffscreen();
-  if (!offscreen?.ok) {
-    swLog.warn(`worker offscreen host unavailable for ${alarm.name} (${offscreen?.error}) — falling back to SW runTask`);
-    return null;
-  }
-
-  // P0 / axi8h finding: The worker host currently only implements the keyless demo model
+  // P0 / axi8h / 9j0x2 finding: The worker host currently only implements the keyless demo model
   // (createDemoModel), which is active ONLY when developer features are enabled.
   // When developer features are off (the shipped default), provider 'demo' resolves to
   // createLocalAssistant() in SW runTask. Keyed providers (google, anthropic, openai) also
   // require the SW model proxy (Phase 3).
   // Therefore, fall back to SW runTask unless developer features are ON and provider is 'demo'.
+  // These checks MUST run BEFORE ensureOffscreen() so default profiles and keyed providers
+  // do not spuriously create an offscreen document on scheduled fires (chrome-agent-platform-9j0x2).
   if (!await developerFeaturesOn()) {
     return null;
   }
@@ -1665,6 +1659,14 @@ async function dispatchScheduledWorkerTask({ alarm, task, token, fence, agent, f
   }
   // P2-1: Attachments require multimodal handling in SW runTask; worker does not support them
   if (task.attachments && task.attachments.length > 0) {
+    return null;
+  }
+
+  // Preflight check: worker host (offscreen document) must be available.
+  // If unavailable (e.g. headless unit testing without offscreen docs), fall back to SW runTask.
+  const offscreen = await ensureOffscreen();
+  if (!offscreen?.ok) {
+    swLog.warn(`worker offscreen host unavailable for ${alarm.name} (${offscreen?.error}) — falling back to SW runTask`);
     return null;
   }
 
