@@ -24,7 +24,7 @@ import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath } from "node:path";
-import { BUILD_GATE, READ_ONLY_DIST, SERIAL, partition } from "./test-partition.mjs";
+import { BUILD_GATE, HEAVY_GATE, READ_ONLY_DIST, SERIAL, partition } from "./test-partition.mjs";
 import { announce, runReadOnlyDistBatch, runSerialFiles } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
 import { parallelPlan } from "./lib/parallel-plan.mjs";
@@ -234,6 +234,19 @@ export function enumerateRunnerTests(dir = "tests", names = readdirSync(dir, { r
     .map((f) => `tests/${f}`).sort();
 }
 
+/**
+ * Derives the test execution plan for default `npm test` runs (all tests, no CLI filter).
+ * Deferrals:
+ * - BUILD_GATE files are deferred to `npm run test:build` (h65e).
+ * - HEAVY_GATE files are deferred to `npm run test:heavy` (o29c0).
+ */
+export function defaultTestPlan(all = enumerateRunnerTests()) {
+  const part = partition(all);
+  const serialFiles = [...SERIAL].filter((f) => !BUILD_GATE.has(f));
+  const parallel = part.parallel.filter((f) => !HEAVY_GATE.has(f));
+  return { serialFiles, parallel };
+}
+
 export async function main(args = process.argv.slice(2)) {
   const cliFiles = args.filter((f) => !f.startsWith("-"));
   let all;
@@ -256,9 +269,11 @@ export async function main(args = process.argv.slice(2)) {
     // Option D (chrome-agent-platform-h65e): BUILD_GATE files run in the dedicated
     // npm run test:build gate, so npm test runs only the remaining serial hazard files.
     // Preserve SERIAL declaration order so early fixtures (build-smoke) run before consumers.
-    const part = partition(all);
-    serialFiles = [...SERIAL].filter((f) => !BUILD_GATE.has(f));
-    parallel = part.parallel;
+    // chrome-agent-platform-o29c0: HEAVY_GATE files run in the dedicated npm run test:heavy
+    // tier, so standard npm test skips WASM and heavy binary fixtures to relieve memory and CPU pressure.
+    const plan = defaultTestPlan(all);
+    serialFiles = plan.serialFiles;
+    parallel = plan.parallel;
   }
 
   // chrome-agent-platform-kz27: the parallel phase used to be conditional on the serial phase
@@ -281,11 +296,16 @@ export async function main(args = process.argv.slice(2)) {
   // independent parallel guards; both phases run and the first failure wins.
   const parallelRc = await runParallel(other);
   const rc = serialRc || readOnlyRc || parallelRc;
-  const deferredCount = cliFiles.length === 0 ? all.length - (serialFiles.length + parallel.length) : 0;
+  const buildDeferredCount = cliFiles.length === 0 ? all.filter((f) => BUILD_GATE.has(f)).length : 0;
+  const heavyDeferredCount = cliFiles.length === 0 ? all.filter((f) => HEAVY_GATE.has(f)).length : 0;
+  const deferredParts = [];
+  if (buildDeferredCount) deferredParts.push(`${buildDeferredCount} deferred to npm run test:build`);
+  if (heavyDeferredCount) deferredParts.push(`${heavyDeferredCount} deferred to npm run test:heavy`);
+  const deferredSummary = deferredParts.length ? `, ${deferredParts.join(", ")}` : "";
   console.log(
     `run-tests: ${serialFiles.length + parallel.length} files total, ${plan.skipped} skipped` +
       ` (${serialFiles.length} serial, ${readOnly.length} post-build read-only, ${parallel.length - readOnly.length} other parallel` +
-      `${deferredCount ? `, ${deferredCount} deferred to npm run test:build` : ""}), wall ${((Date.now() - t0) / 1000).toFixed(0)}s`,
+      `${deferredSummary}), wall ${((Date.now() - t0) / 1000).toFixed(0)}s`,
   );
   process.exit(rc);
 }

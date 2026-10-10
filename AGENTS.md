@@ -348,15 +348,18 @@ read in run 2.
      `git diff origin/main` attributes every file another lane landed since you
      branched (measured live: 17 foreign files in the canonical checkout), and
      one of those can force a full suite on a change that never touched it.
-  3. `npm test` — the full unit suite, once, before you push or report done.
-     It is the only way to run the whole suite: a raw `deno test tests/` is
-     refused, and a raw single-file run finds no modules.
+  3. `npm test` — the unit suite, once, before you push or report done.
+     Full coverage across the repo runs across `npm test`, `npm run test:build`, and `npm run test:heavy`:
+     a raw `deno test tests/` is refused, and a raw single-file run finds no modules.
      The suite's serial phase asserts the built tree is current at HEAD, so run
      `npm run build:production` after your LAST commit and before this gate:
      any commit invalidates `extension/dist/dist.complete` (1mz2).
   4. `npm run test:build` — the dedicated heavy build-behaviour gate (Option D,
      chrome-agent-platform-h65e) covering in-place rebuilds, mode alternation,
      and bundled-tool verify/regen. Run during landing.
+  5. `npm run test:heavy` — the dedicated WASM/heavy-fixture tier (Option E,
+     chrome-agent-platform-o29c0) covering Pyodide, image codecs, and heavy WASI runtimes
+     (56.6 MB binaries). Run during landing alongside `test:build`.
   Never weaken or skip a test to make a subset pass; the subset differs from
   the gate only in WHICH files run.
 - **Visual verification.** UI work is verified by driving the real UI in headless

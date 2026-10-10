@@ -45,6 +45,18 @@ Option D (chrome-agent-platform-h65e) partitions heavy in-place build-behaviour 
   - `tests/store-doc-denial.test.ts`: validates store build output and Zod Doc.compile denial (reuses warm build record in ~6s).
   - `tests/package-extension-freshness.test.ts`, `tests/bundle-budget.test.ts`, `tests/diff-core.test.ts`, `tests/wasm-tree-shaking.test.ts`: dist bundle and marker integrity checks.
 
+### 2.1c The Dedicated Heavy Gate (`npm run test:heavy` / `scripts/heavy-gate.ts`)
+chrome-agent-platform-o29c0 partitions WASM and heavy binary fixture tests out of `npm test`'s parallel phase into a dedicated tier:
+- **Command:** `npm run test:heavy` (invokes `scripts/heavy-gate.ts`).
+- **Rationale:** `packages/bundled/evidence/`, `wasm-tools/`, and `docs/admissions/` hold 56.6 MB of binaries (Pyodide, image codecs, SQLite, WASI tools). Loading and instantiating these inside parallel Deno isolates alongside 650+ other test files caused RAM pressure and CPU starvation on multi-tenant fleet runners. Tiering them to `npm run test:heavy` shrinks the default gate while preserving full coverage in `test:all` and dedicated runs.
+- **Enforced Ceiling:** 1200s (20 minutes). Overridable via `CAP_HEAVY_GATE_TIMEOUT_MS`.
+- **Enumerated Coverage (19 test files in `HEAVY_GATE_FILES`):**
+  - Python / Pyodide: `tests/python-runtime.test.ts`, `tests/python-wheel-unpack.test.ts`, `tests/python-storage-guard.test.ts`
+  - Image Codecs / Media: `tests/zxing-admission.test.ts`, `tests/compressops-admission.test.ts`, `tests/imageops-admission.test.ts`, `tests/jxl-admission.test.ts`, `tests/oxipng-admission.test.ts`, `tests/avif-admission.test.ts`
+  - CallExport & WASI: `tests/callexport-admission.test.ts`, `tests/t3-trio-admission.test.ts`, `tests/unix-tools-admission.test.ts`, `tests/wasi-preview1-runtime.test.ts`
+  - Memory-Intensive WASM: `tests/wasm-external-sort.test.ts`, `tests/wasm-host-gate2.test.ts`
+  - Emscripten Evidence & Schema-2 Audits: `tests/emscripten-blake3-admission.test.ts`, `tests/emscripten-numeric-acceptance.test.ts`, `tests/emscripten-module-audit.test.ts`, `tests/emscripten-abi-evidence.test.ts`
+
 ### 2.2 Acceptance and Journey Harnesses (`scripts/`)
 All harnesses under `scripts/` require a real browser:
 - **`scripts/chrome-journeys.ts`**: The 370-check sequential CDP journey suite. Loads the unpacked extension, requires real Chromium or Chrome for Testing, and takes the **exclusive canonical lock**.
