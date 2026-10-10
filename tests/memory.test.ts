@@ -12,6 +12,7 @@ import { withMasterJournalWebLock } from "../extension/lib/master-journal-lock.j
 import { createStagedMasterJournalProductRoutes } from "../extension/lib/master-journal-product-routes.js";
 import { masterMemory, siteMemory, MemoryStoreQuotaError, usageLedgerInspector, saveScreenshot, listScreenshots, journalAppend, journalAppendWithReceipt, journalCompensateExecution, journalAppendOnce, journalCommitCancellation, withStoreTransaction, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds, durableRunMemory, migrateLegacyDurableRunMemory, forgetDurableThread } from "../extension/lib/memory.js";
 import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
+import { createMemoryRoutes } from "../extension/background/routes/memory.js";
 import { createThread, deleteThread } from "../extension/lib/threads.js";
 
 // ---- minimal in-memory OPFS fake ----
@@ -886,6 +887,10 @@ Deno.test("staged master clear preserves WAL authority and generation while prod
     assertEquals((await mem.get("journal-archive"))[0]?.id, "history");
     await assertRejects(() => mem.clear(), Error, "WAL writer is not enabled",
       "a published test head must not silently enable the product clear path");
+    const routed = await createMemoryRoutes()["memory.clear"]({ origin: "master" });
+    assertEquals(routed.ok, false, "generic master clear must remain refused even through the real route");
+    assertEquals(routed.error.includes("WAL writer is not enabled"), true);
+    assertEquals((await mem.get("journal"))[0]?.id, "before");
     generationWriteGate = async () => { throw new Error("injected clear issuance failure"); };
     try {
       await assertRejects(() => withStoreTransaction(mem, async (tx) =>

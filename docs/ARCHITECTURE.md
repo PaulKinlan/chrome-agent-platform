@@ -677,6 +677,10 @@ keys. A product caller census found no legitimate literal `.set("journal")`
 or `.set("journal-archive")` call; trusted append and compensation use
 `setTrusted` and dedicated verbs. This user-visible tightening does not
 implicitly enable the WAL writer or create a generic model WAL replace route.
+Generic `memory.clear({origin:"master"})` likewise REFUSES once a WAL head
+exists; only a future explicit owner/approval-gated reset under restoreLock,
+registry and master-journal fences may clear that authority. Staged
+`tx.masterJournal.clearIfCurrent` is not a product clear route.
 Before a checked head exists, legacy `journal.json` remains authoritative.
 After a checked cutover (including a restored WAL bundle), master journal and
 archive reads, snapshots, versions and key enumeration use its projection;
