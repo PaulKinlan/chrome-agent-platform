@@ -748,6 +748,44 @@ Deno.test("StderrSanitizer defers candidate diagnostic release until unterminati
     assertEquals(s4.droppedLinesCount, 0);
     assertEquals(s4.unterminatedOscSeen, false);
     assertEquals(out, ["hello"]);
+
+    // 8e. Newline directly following ESC inside unterminated OSC: 2 lines suppressed (repro from qo23r)
+    const s5 = new StderrSanitizer();
+    s5.processChunk("\u001b]0;abc\u001b\ndef", () => {});
+    s5.flush(() => {});
+    assertEquals(s5.droppedLinesCount, 2);
+    assertEquals(s5.unterminatedOscSeen, true);
+
+    // 8f. Split chunk between ESC and newline inside unterminated OSC: 2 lines suppressed (qo23r)
+    const s6 = new StderrSanitizer();
+    s6.processChunk("\u001b]0;abc\u001b", () => {});
+    s6.processChunk("\ndef", () => {});
+    s6.flush(() => {});
+    assertEquals(s6.droppedLinesCount, 2);
+    assertEquals(s6.unterminatedOscSeen, true);
+
+    // 8g. Newline directly following ESC without trailing content: 1 line suppressed (qo23r)
+    const s7 = new StderrSanitizer();
+    s7.processChunk("\u001b]0;abc\u001b\n", () => {});
+    s7.flush(() => {});
+    assertEquals(s7.droppedLinesCount, 1);
+    assertEquals(s7.unterminatedOscSeen, true);
+
+    // 8h. Newline directly following ESC with empty preceding line: 2 lines suppressed (qo23r)
+    const s8 = new StderrSanitizer();
+    s8.processChunk("\u001b]\u001b\ndef", () => {});
+    s8.flush(() => {});
+    assertEquals(s8.droppedLinesCount, 2);
+    assertEquals(s8.unterminatedOscSeen, true);
+
+    // 8i. Clean ST / BEL after ESC: normal resume, zero dropped lines, zero payload leaks (qo23r)
+    const s9 = new StderrSanitizer();
+    const out9: string[] = [];
+    s9.processChunk("\u001b]0;abc\u001b\\hello\n", (l) => out9.push(l));
+    s9.flush((l) => out9.push(l));
+    assertEquals(s9.droppedLinesCount, 0);
+    assertEquals(s9.unterminatedOscSeen, false);
+    assertEquals(out9, ["hello"]);
   }
 });
 
