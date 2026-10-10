@@ -591,8 +591,13 @@ non-WAL master keys with fresh tombstones while retaining `journal-wal/` and
 guard publication and live undo as receipt append without inventing an
 execution ID for ordinary rows; exact replay identity is optional and checked
 when supplied. Neither is invoked by a product journal writer while the
-one-authority cutover is incomplete. Sibling WAL verbs and master key mutations
-within one transaction serialize, because
+one-authority cutover is incomplete. A separate test-only
+`createStagedMasterJournalProductRoutes` maps the existing append, receipt,
+replay, compensation and cancellation call signatures onto these transaction
+verbs and requires a checked published head. It does not import into any
+product caller: a head restored from a backup must still NOT turn on partial
+product writes. Site/agent/background journal calls remain legacy. Sibling WAL
+verbs and master key mutations within one transaction serialize, because
 the outer lock excludes other transactions but not concurrent promises in the
 same callback. A guard must not await ANY promise from its transaction, even
 one that was queued earlier, or it can wait on itself. Guards may read KV or

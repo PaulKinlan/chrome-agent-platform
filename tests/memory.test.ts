@@ -9,6 +9,7 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { createMemoryRunLogHandles } from "./fixtures/run-log-wal-memory.js";
 import { stageMasterJournalCutover, stageMasterJournalFrame } from "../extension/lib/master-journal-wal.js";
 import { withMasterJournalWebLock } from "../extension/lib/master-journal-lock.js";
+import { createStagedMasterJournalProductRoutes } from "../extension/lib/master-journal-product-routes.js";
 import { masterMemory, siteMemory, MemoryStoreQuotaError, usageLedgerInspector, saveScreenshot, listScreenshots, journalAppend, journalAppendWithReceipt, journalCompensateExecution, journalAppendOnce, journalCommitCancellation, withStoreTransaction, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds, durableRunMemory, migrateLegacyDurableRunMemory, forgetDurableThread } from "../extension/lib/memory.js";
 import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
 import { createThread, deleteThread } from "../extension/lib/threads.js";
@@ -796,6 +797,54 @@ Deno.test("pre-head cutover residue refuses master readers and writes without le
     }
     assertEquals((await master.getFileHandle("journal.json")).node.content.includes("legacy"), true,
       "the old bytes are preserved for owner repair, not selected as live authority");
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      value: previousNavigator, configurable: true, writable: true,
+    });
+  }
+});
+
+Deno.test("staged product journal verbs map receipts, idempotency, cancellation without enabling production", async () => {
+  const isolated = dirNode();
+  const previousNavigator = globalThis.navigator;
+  Object.defineProperty(globalThis, "navigator", {
+    value: { storage: { async getDirectory() { return new FakeDirHandle(isolated); } } },
+    configurable: true, writable: true,
+  });
+  try {
+    const mem = masterMemory();
+    const routes = createStagedMasterJournalProductRoutes(withStoreTransaction);
+    await mem.setTrusted("journal", [{ type: "history", id: "legacy" }]);
+    await assertRejects(() => routes.append(mem, { type: "note" }), Error, "published head");
+    assertEquals(await mem.get("journal"), [{ type: "history", id: "legacy" }],
+      "a staged route cannot cut over a legacy profile implicitly");
+    const site = siteMemory("https://example.test");
+    await assertRejects(() => routes.append(site, { type: "note" }), Error, "master store");
+    assertEquals((await journalAppend(site, { type: "site-note" })).at(-1).type, "site-note",
+      "site journals remain on the legacy authority");
+    const api = await import("../extension/lib/memory.js");
+    await api.withMasterJournalIssuer(async (master, issuer) => {
+      await stageMasterJournalCutover(master, { journalExists: true,
+        journal: [{ type: "history", id: "legacy" }], archive: [], allocateVersion: issuer.allocateVersion });
+    });
+    const ordinary = await routes.append(mem, { type: "note", message: "whole row" });
+    assertEquals(ordinary.at(-1).executionId, undefined, "ordinary rows do not invent execution IDs");
+    const receipt = await routes.appendWithReceipt(mem, { type: "task", executionId: "staged-quota" });
+    assertEquals(receipt.wal.operationId != null, true);
+    const legacyReceipt = { schemaVersion: 1, key: "journal", executionId: "staged-quota" };
+    await assertRejects(() => routes.compensate(mem, null), Error, "invalid journal compensation receipt");
+    assertEquals((await routes.compensate(mem, legacyReceipt)).reason, "legacy_receipt_after_cutover");
+    assertEquals((await routes.compensate(mem, receipt)).ok, true);
+    assertEquals((await mem.get("journal")).some((r) => r.executionId === "staged-quota"), false);
+    const first = await routes.appendOnce(mem, { type: "result", executionId: "staged-terminal", result: "first" });
+    const head = await withStoreTransaction(mem, async (tx) => tx.masterJournal.head());
+    const duplicate = await routes.appendOnce(mem, { type: "result", executionId: "staged-terminal", result: "second" });
+    assertEquals(duplicate, first);
+    assertEquals(await withStoreTransaction(mem, async (tx) => tx.masterJournal.head()), head,
+      "idempotent replay must not allocate another version");
+    const cancelled = await routes.cancel(mem, { type: "cancelled", executionId: "staged-terminal" });
+    assertEquals(cancelled.filter((r) => r.executionId === "staged-terminal").map((r) => r.type), ["cancelled"]);
+    await assertRejects(() => journalAppend(mem, { type: "still-disabled" }), Error, "WAL writer is not enabled");
   } finally {
     Object.defineProperty(globalThis, "navigator", {
       value: previousNavigator, configurable: true, writable: true,
