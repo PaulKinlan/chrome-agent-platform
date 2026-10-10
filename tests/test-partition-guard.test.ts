@@ -23,6 +23,9 @@ import {
   BUILD_GATE_REASONS,
   classifyHazards,
   EXEMPTIONS,
+  HEAVY_GATE,
+  HEAVY_GATE_FILES,
+  HEAVY_GATE_REASONS,
   isReviewedReadOnlySpawn,
   partition,
   PRODUCTION_BUILD_TIMEOUT_MS,
@@ -888,4 +891,39 @@ Deno.test("h65e: fast smoke assertion remains in SERIAL to catch broken builds i
   assert(SERIAL.has(smoke), `${smoke} must be declared in SERIAL_REASONS`);
   assert(!BUILD_GATE.has(smoke), `${smoke} must stay in npm test, not in BUILD_GATE`);
   assert(Deno.statSync(`${ROOT}${smoke}`).isFile, `${smoke} must exist on disk`);
+});
+
+Deno.test("o29c0: every HEAVY_GATE file is enumerated, has a reason, and exists on disk", () => {
+  assert(HEAVY_GATE_FILES.length >= 19, `HEAVY_GATE_FILES floor tightened: must enumerate at least 19 heavy tests, got ${HEAVY_GATE_FILES.length}`);
+  assertEquals(HEAVY_GATE_FILES.length, 19, "HEAVY_GATE_FILES floor tightened: exactly 19 heavy tests partitioned");
+  const reasons = HEAVY_GATE_REASONS as Record<string, string>;
+  for (const file of HEAVY_GATE_FILES) {
+    assert(typeof reasons[file] === "string" && reasons[file].length > 0, `${file} must have a non-empty reason in HEAVY_GATE_REASONS`);
+    assert(Deno.statSync(`${ROOT}${file}`).isFile, `${file} must exist on disk`);
+  }
+});
+
+Deno.test("o29c0 tyyl0: default npm test partition contains zero HEAVY_GATE files (skip filter is pinned)", async () => {
+  const { defaultTestPlan, enumerateRunnerTests } = await import("../scripts/run-tests.mjs");
+  const all = enumerateRunnerTests();
+  const plan = defaultTestPlan(all);
+  const heavyInDefault = [...plan.serialFiles, ...plan.parallel].filter((f) => HEAVY_GATE.has(f));
+  assertEquals(
+    heavyInDefault,
+    [],
+    `the default npm test partition must contain zero HEAVY_GATE files, but contained: ${heavyInDefault.join(", ")}`,
+  );
+  // Source-level pin: run-tests.mjs must contain the explicit skip filter
+  const runTestsSrc = Deno.readTextFileSync(`${ROOT}scripts/run-tests.mjs`);
+  assert(
+    runTestsSrc.includes("!HEAVY_GATE.has(f)"),
+    "scripts/run-tests.mjs must explicitly filter out HEAVY_GATE files from parallel",
+  );
+});
+
+Deno.test("o29c0: HEAVY_GATE files do not collide with BUILD_GATE or SERIAL", () => {
+  for (const file of HEAVY_GATE_FILES) {
+    assert(!BUILD_GATE.has(file), `${file} in HEAVY_GATE must not be in BUILD_GATE`);
+    assert(!SERIAL.has(file), `${file} in HEAVY_GATE must not be in SERIAL`);
+  }
 });

@@ -133,9 +133,10 @@ npm run test:file -- tests/<relevant>.test.ts
 # 8. Run full two-phase suite gate and dedicated build gate (Option D: chrome-agent-platform-h65e)
 npm test > /tmp/npm-test-<bead>.log 2>&1
 # Verify exit 0, zero failures, record wall time and phase counts
-# Run dedicated heavy build-behaviour gate:
+# Run dedicated heavy build-behaviour and WASM/fixture gates:
 npm run test:build > /tmp/npm-test-build-<bead>.log 2>&1
-# Verify exit 0, zero failures (runs build-bootstrap, build-debug-mode, build-tool-bundling)
+npm run test:heavy > /tmp/npm-test-heavy-<bead>.log 2>&1
+# Verify exit 0, zero failures (runs build-bootstrap, build-debug-mode, build-tool-bundling; heavy WASM tier)
 
 # 9. Push explicit SHA to main
 git push origin <commit-sha>:main
@@ -173,7 +174,7 @@ When work is divided into a base capability branch and one or more dependent fea
    - Does NOT duplicate changelog notes or version bump files.
    - Contains ONLY the delta of the dependent change.
 4. **Independent Numbering**: The dependent branch receives its own sequential version bump and its own distinct changelog bullet upon landing.
-5. **Full Gates on the Stacked Tip**: Run the full two-phase suite (`npm test`) and dedicated build gate (`npm run test:build`) on the final landed tree. Never assume that because the base was green and the dependent was green on its local parent, the union on main is green.
+5. **Full Gates on the Stacked Tip**: Run the full two-phase suite (`npm test`), dedicated build gate (`npm run test:build`), and heavy gate (`npm run test:heavy`) on the final landed tree. Never assume that because the base was green and the dependent was green on its local parent, the union on main is green.
 
 ---
 

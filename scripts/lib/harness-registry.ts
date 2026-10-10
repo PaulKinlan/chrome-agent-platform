@@ -96,6 +96,11 @@ export const HARNESSES: Record<string, HarnessEntry> = {
     npm: "test:build",
     reason: "does NOT take the fleet turn: executes node build.mjs in-place through serial-phase runner with measured bounds (Option D / chrome-agent-platform-h65e)",
   },
+  "heavy-gate.ts": {
+    class: "gate",
+    npm: "test:heavy",
+    reason: "does NOT take the fleet turn: executes WASM and heavy binary fixture tests in a dedicated tier (chrome-agent-platform-o29c0)",
+  },
 
   // ── named (npm script, run on demand) ───────────────────────────────────
   "agent-access-journeys.ts": { class: "named", npm: "test:agent-access", reason: "81/7 at the re-inventory (seven agent-access checks red); 90 s; promote to a gate once green" },

@@ -94,6 +94,35 @@ export const BUILD_GATE_REASONS = {
 export const BUILD_GATE_FILES = Object.freeze(Object.keys(BUILD_GATE_REASONS));
 export const BUILD_GATE = new Set(BUILD_GATE_FILES);
 
+// Heavy WASM and binary fixture tests moved to the dedicated npm run test:heavy tier (chrome-agent-platform-o29c0).
+// packages/bundled/evidence/, wasm-tools/, and docs/admissions/ hold >30MB of binaries (Pyodide, image decoders,
+// SQLite, WASI tools). Loading and instantiating these inside parallel Deno isolates spikes RAM (>3GB) and starves
+// CPUs on loaded fleet machines. Tiering them to npm run test:heavy keeps the default gate fast and focused while
+// preserving full coverage in the dedicated tier and test:all.
+export const HEAVY_GATE_REASONS = {
+  "tests/python-runtime.test.ts": "loads >10MB Pyodide WebAssembly runtime in-process and executes Python code",
+  "tests/python-wheel-unpack.test.ts": "loads Pyodide runtime to test wheel unpacking and offline package execution",
+  "tests/python-storage-guard.test.ts": "loads Pyodide runtime to test ambient storage guards and Python imports",
+  "tests/zxing-admission.test.ts": "loads 2.7MB ZXing WASM and executes real streaming worker image decoding",
+  "tests/compressops-admission.test.ts": "loads 2.8MB CompressOps WASM and executes real streaming worker compression jobs",
+  "tests/imageops-admission.test.ts": "loads 1.5MB ImageOps WASM and executes real streaming worker image operations",
+  "tests/jxl-admission.test.ts": "loads 4.3MB JXL WASM and executes real streaming worker image decoding",
+  "tests/oxipng-admission.test.ts": "loads 652KB OxiPNG WASM and executes real streaming worker PNG optimization",
+  "tests/avif-admission.test.ts": "loads 4.3MB AVIF evidence binaries and executes real job-lane worker",
+  "tests/callexport-admission.test.ts": "loads multiple MBs of call-export WASM evidence binaries (b2, c2, d3)",
+  "tests/t3-trio-admission.test.ts": "loads awk/sed/grep WASM binaries and runs WASI instances",
+  "tests/unix-tools-admission.test.ts": "instantiates WASM binaries and executes WASI tool streaming KAT",
+  "tests/wasi-preview1-runtime.test.ts": "instantiates WASM binaries and executes extensive WASI preview1 runtime test matrix",
+  "tests/wasm-external-sort.test.ts": "runs memory-intensive WASM external merge sort with large allocations",
+  "tests/wasm-host-gate2.test.ts": "compiles and runs multiple WASM binaries through worker lifecycle and abort paths",
+  "tests/emscripten-blake3-admission.test.ts": "loads blake3 wasm evidence and executes adapter KAT vectors",
+  "tests/emscripten-numeric-acceptance.test.ts": "builds acceptance package with numeric WASM evidence and audits graph",
+  "tests/emscripten-module-audit.test.ts": "loads and audits multiple large schema-2 Emscripten WASM binaries",
+  "tests/emscripten-abi-evidence.test.ts": "loads 1.2MB emscripten-abi evidence and executes native profile tests",
+};
+export const HEAVY_GATE_FILES = Object.freeze(Object.keys(HEAVY_GATE_REASONS));
+export const HEAVY_GATE = new Set(HEAVY_GATE_FILES);
+
 /**
  * The bound for ONE child production build, used by the build-heavy serial files instead of a
  * hard-coded 180s/300s (chrome-agent-platform-kj9s). MEASURED on this 2-vCPU box at load ~5, warm
