@@ -381,13 +381,17 @@ export function clipCloseReason(reason: string, limit = 123): string {
 }
 
 /**
- * Streaming sanitizer for untrusted stderr from adapter processes.
- *
- * Implements an explicit state machine that discards ANSI CSI and OSC sequences
- * (including their payloads, even when payloads contain newlines or are split
- * across chunk boundaries or split String Terminators).
- * Line buffering is strictly bounded to 4096 characters per line to prevent
- * unbounded memory accumulation under arbitrary adapter output.
+ * Sanitizes a streaming stderr chunk from an adapter child process.
+ * Strips ANSI CSI sequences, 7-bit/8-bit OSC sequences, and C0/C1 control characters
+ * while bounding buffer size per line to 2000 characters to prevent memory exhaustion
+ * under runaway output.
+ * If an adapter emits an unterminated OSC sequence (i.e. encounters an unescaped newline
+ * or EOF without a BEL or ST terminator), all ambiguous post-OSC text is discarded fail-closed
+ * to prevent leaking untrusted OSC payloads or spoofed diagnostics across ALL OSC classes
+ * (Finding vpo4n).
+ * Dropped lines are counted, and on process exit the bridge reports a generic diagnostic
+ * ("stderr suppressed after unterminated OSC (N lines dropped)") rather than uninformative "no stderr".
+ * Terminated OSC sequences (ending with BEL, ST, or C1 ST) cleanly resume normal stderr parsing.
  */
 export class StderrSanitizer {
   private inOsc = false;
@@ -395,15 +399,24 @@ export class StderrSanitizer {
   private inCsi = false;
   private inEsc = false;
   private lineBuffer = "";
+  public inOscDiscardOnly = false;
+  public unterminatedOscSeen = false;
+  public droppedLinesCount = 0;
+
+  private resetOsc(): void {
+    this.inOsc = false;
+    this.inOscEsc = false;
+    this.inOscDiscardOnly = false;
+  }
 
   public processChunk(chunk: string, onLine: (line: string) => void): void {
     if (typeof chunk !== "string" || !chunk) return;
     for (let i = 0; i < chunk.length; i++) {
       const char = chunk[i];
-      const code = char.charCodeAt(0);
 
       // 8-bit C1 control characters (OSC: \u009d, CSI: \u009b)
       if (char === "\u009d") {
+        this.resetOsc();
         this.inOsc = true;
         this.inOscEsc = false;
         this.inEsc = false;
@@ -422,8 +435,16 @@ export class StderrSanitizer {
         if (this.inOscEsc) {
           this.inOscEsc = false;
           if (char === "\\") {
-            // ST complete (\x1b\\)
-            this.inOsc = false;
+            // ST complete (\x1b\\) - trustworthy end boundary!
+            this.resetOsc();
+            this.droppedLinesCount = 0;
+            continue;
+          }
+          if (char === "]") {
+            // ESC ] interrupts previous OSC with a new 7-bit OSC sequence
+            this.resetOsc();
+            this.inOsc = true;
+            this.inCsi = false;
             continue;
           }
           if (char === "\x1b") {
@@ -433,20 +454,29 @@ export class StderrSanitizer {
           continue;
         }
         if (char === "\x07" || char === "\u009c") {
-          this.inOsc = false;
+          // BEL or C1 ST terminates OSC - trustworthy end boundary!
+          this.resetOsc();
+          this.droppedLinesCount = 0;
           continue;
         }
         if (char === "\x1b") {
           this.inOscEsc = true;
           continue;
         }
-        // Inside OSC, all characters (including newlines and payloads) are discarded
+        if (char === "\n") {
+          // Newline inside OSC: track as potential dropped lines if unterminated
+          this.inOscDiscardOnly = true;
+          this.droppedLinesCount++;
+          continue;
+        }
+        // Inside OSC or in post-unterminated discard mode: discard characters
         continue;
       }
 
       if (this.inEsc) {
         this.inEsc = false;
         if (char === "]") {
+          this.resetOsc();
           this.inOsc = true;
           this.inCsi = false;
           continue;
@@ -461,56 +491,71 @@ export class StderrSanitizer {
           this.inCsi = false;
           continue;
         }
-        continue;
-      }
-
-      if (char === "\x1b") {
-        this.inEsc = true;
-        this.inCsi = false;
+        if (char === "\n") {
+          const clean = this.cleanLine(this.lineBuffer);
+          this.lineBuffer = "";
+          if (clean) onLine(clean);
+          continue;
+        }
         continue;
       }
 
       if (this.inCsi) {
-        // CSI final character is in the range 0x40-0x7E (@-~)
-        if (code >= 0x40 && code <= 0x7e) {
+        if (char === "\x1b") {
+          this.inEsc = true;
+          this.inCsi = false;
+          continue;
+        }
+        if (char >= "@" && char <= "~") {
           this.inCsi = false;
         }
         continue;
       }
 
+      if (char === "\x1b") {
+        this.inEsc = true;
+        continue;
+      }
+
+      if (char === "\r") {
+        continue;
+      }
+
       if (char === "\n") {
-        const clean = this.lineBuffer
-          .replace(/[\x00-\x1f\x7f-\x9f]+/g, " ")
-          .replace(/ {2,}/g, " ")
-          .trim();
+        const clean = this.cleanLine(this.lineBuffer);
         this.lineBuffer = "";
         if (clean) onLine(clean);
         continue;
       }
 
-      if (this.lineBuffer.length < 4096) {
+      const code = char.charCodeAt(0);
+      if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
+        continue;
+      }
+
+      if (this.lineBuffer.length < 2000) {
         this.lineBuffer += char;
-      } else {
-        const clean = this.lineBuffer
-          .replace(/[\x00-\x1f\x7f-\x9f]+/g, " ")
-          .replace(/ {2,}/g, " ")
-          .trim();
-        this.lineBuffer = "";
-        if (clean) onLine(clean);
-        this.lineBuffer = char;
       }
     }
   }
 
+  private cleanLine(raw: string): string {
+    return raw
+      .replace(/[\x00-\x1f\x7f-\x9f]+/g, " ")
+      .replace(/ {2,}/g, " ")
+      .trim();
+  }
+
   public flush(onLine: (line: string) => void): void {
+    if (this.inOsc) {
+      this.unterminatedOscSeen = true;
+    }
     if (this.lineBuffer.trim()) {
-      const clean = this.lineBuffer
-        .replace(/[\x00-\x1f\x7f-\x9f]+/g, " ")
-        .replace(/ {2,}/g, " ")
-        .trim();
+      const clean = this.cleanLine(this.lineBuffer);
       this.lineBuffer = "";
       if (clean) onLine(clean);
     }
+    this.resetOsc();
   }
 }
 
@@ -1060,11 +1105,11 @@ export function createAcpServer(
         writer = proc.stdin.getWriter();
         lastStderr = "";
 
+        const sanitizer = new StderrSanitizer();
         // Relay stderr to console and remember its tail for the exit reason
         const stderrDrained = (async () => {
           const reader = proc.stderr.getReader();
           const decoder = new TextDecoder();
-          const sanitizer = new StderrSanitizer();
           const onLine = (cleanLine: string) => {
             lastStderr = (lastStderr ? `${lastStderr} | ${cleanLine}` : cleanLine).slice(-2000);
             console.error(`[adapter-stderr] ${cleanLine}`);
@@ -1095,7 +1140,12 @@ export function createAcpServer(
           try {
             await Promise.race([stderrDrained, new Promise((r) => setTimeout(r, 200))]);
           } catch { /* ignore drain timeout */ }
-          const detail = lastStderr ? sanitizeLogString(lastStderr) : "no stderr";
+          const exitDetail = sanitizer.droppedLinesCount > 0 || sanitizer.unterminatedOscSeen
+            ? `stderr suppressed after unterminated OSC (${sanitizer.droppedLinesCount} line${sanitizer.droppedLinesCount === 1 ? "" : "s"} dropped)`
+            : "";
+          const detail = lastStderr
+            ? (exitDetail ? `${sanitizeLogString(lastStderr)} | ${exitDetail}` : sanitizeLogString(lastStderr))
+            : (exitDetail || "no stderr");
           console.error(`[acp-bridge] adapter for harness "${displayHarness}" exited (code ${exitStatus.code}, signal ${exitStatus.signal}): ${detail}`);
           if (socket.readyState === WebSocket.OPEN) {
             try { socket.close(1011, clipCloseReason(`adapter for harness "${displayHarness}" exited: ${detail}`)); } catch { /* already closed */ }
