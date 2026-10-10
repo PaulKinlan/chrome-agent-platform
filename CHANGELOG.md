@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.656] — 2026-10-10
+- Report the correct number of discarded stderr lines when an unterminated terminal escape ends at the end of output.
+
 ## [0.3.655] — 2026-10-10
 - Keep the Create-click readiness test tied to the real scaling helper it guards.
 
