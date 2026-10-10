@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.627] — 2026-10-10
+- Bound site documentation discovery parsing to prevent service worker stalls.
+- Harden third-party skill import boundary against forged fences.
+
 ## [0.3.626] — 2026-10-10
 - Upgrade fast-uri dependency to 3.1.8 to patch the host-normalization advisory.
 
