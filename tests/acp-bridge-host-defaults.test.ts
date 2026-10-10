@@ -91,6 +91,15 @@ Deno.test("resolveAdapter: local install > absolute npx > loud refusal", () => {
   try { resolveAdapter("not-a-harness", "", binDir); } catch (e) { unknown = String((e as Error)?.message ?? e); }
   assert(unknown.includes("unknown harness"), unknown);
   for (const known of Object.keys(HARNESS_ADAPTERS)) assert(unknown.includes(known), unknown);
+
+  // Prototype property names are not valid harnesses and fail loudly (chrome-agent-platform-57g6b)
+  for (const protoKey of ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf", "isPrototypeOf"]) {
+    let protoErr = "";
+    try { resolveAdapter(protoKey, "", binDir); } catch (e) { protoErr = String((e as Error)?.message ?? e); }
+    assert(protoErr.includes(`unknown harness "${protoKey}"`), `resolveAdapter("${protoKey}") must throw unknown harness, got: ${protoErr}`);
+    assertEquals(childEnvForHarness(protoKey, binDir), {});
+    assertEquals(harnessCliWarning(protoKey, binDir), []);
+  }
 });
 
 Deno.test("adapter tool-server identity: resolve first, then only the matching initialize reply", () => {
