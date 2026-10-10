@@ -11,6 +11,9 @@
 //    and throws `app never became ready` on timeout.
 // 4. interactWhenReady(): waits for app readiness before executing an interaction.
 
+import { isCdpEvaluateTimeout } from "./quiet-window.ts";
+import { CdpEvaluateLoadTimeoutError, CdpEvaluateIdleTimeoutError } from "./kat-evaluate.ts";
+
 export const APP_READY_ATTR = "data-cap-app-ready";
 export const APP_NEVER_BECAME_READY = "app never became ready";
 
@@ -83,6 +86,21 @@ export interface AppReadinessResult {
 }
 
 /**
+ * Classifies an evaluator rejection as a transport or classified evaluate timeout
+ * that must propagate directly rather than being swallowed into an app-hydration failure (u7p0b).
+ */
+export function isTransportOrEvaluateTimeoutError(e: any): boolean {
+  if (!e) return false;
+  if (e instanceof CdpEvaluateLoadTimeoutError || e?.name === "CdpEvaluateLoadTimeoutError") return true;
+  if (e instanceof CdpEvaluateIdleTimeoutError || e?.name === "CdpEvaluateIdleTimeoutError") return true;
+  const msg = String(e?.message ?? e);
+  if (isCdpEvaluateTimeout(msg)) return true;
+  if (/^cdp timeout: Runtime\.evaluate/i.test(msg)) return true;
+  if (/Target closed|Session (?:closed|with given id not found)|WebSocket (?:closed|is not open)|Connection closed/i.test(msg)) return true;
+  return false;
+}
+
+/**
  * Polls for the named app-ready signal before interaction.
  *
  * Throws an Error starting with `app never became ready` if the page does not
@@ -124,6 +142,9 @@ export async function waitForAppReady(
       }
     } catch (e) {
       clearTimeout(probeTimer);
+      if (isTransportOrEvaluateTimeoutError(e)) {
+        throw e;
+      }
       lastProbe = { error: String(e) };
     }
     await new Promise((r) => setTimeout(r, pollIntervalMs));
