@@ -1,6 +1,6 @@
 // tests/agent-worker-alarm-reroute.test.ts — Phase 4 handleAlarm -> worker reroute
 // @ts-nocheck
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import * as acorn from "npm:acorn";
 import { createAgentWorkerRoutes } from "../extension/background/routes/agent-worker.js";
 import { createRunControl } from "../extension/lib/run-control.js";
@@ -556,31 +556,62 @@ Deno.test("Falsifier w87od: timeout stop-run steer passes mode 'stop-run' (actio
   assertEquals(misroutedRes.mode, "inject", "missing mode falls through to default 'inject'");
 });
 
-Deno.test("Falsifier w87od (fence.abort): production fence in service-worker.js exposes abort(reason) triggering lock.controller", async () => {
+Deno.test("Falsifier w87od / xcjvk (fence.abort): production fence in service-worker.js exposes abort(reason) triggering lock.controller", async () => {
   const swSrc = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   const swAst = acorn.parse(swSrc, { ecmaVersion: "latest", sourceType: "module" });
 
-  let fenceObj = null;
-  walkAst(swAst, (n) => {
-    if (n.type === "VariableDeclarator" && n.id?.name === "fence" && n.init?.type === "ObjectExpression") {
-      fenceObj = n.init;
-    }
-  });
-  assert(fenceObj, "production fence object expression must exist in service-worker.js");
-
-  const abortProp = fenceObj.properties.find((p) => p.key?.name === "abort");
-  assert(abortProp, "fence MUST declare an abort method (w87od)");
-
-  let callsLockController = false;
-  walkAst(abortProp, (n) => {
-    if (n.type === "CallExpression") {
-      const callee = n.callee;
-      if (callee.type === "MemberExpression" && callee.property?.name === "abort") {
-        callsLockController = true;
+  const inspectFenceAbortReceiver = (ast: any): { foundFence: boolean; hasAbort: boolean; callsLockController: boolean } => {
+    let fenceObj: any = null;
+    walkAst(ast, (n) => {
+      if (n.type === "VariableDeclarator" && n.id?.name === "fence" && n.init?.type === "ObjectExpression") {
+        fenceObj = n.init;
       }
-    }
-  });
-  assert(callsLockController, "fence.abort MUST invoke lock.controller.abort (w87od)");
+    });
+    if (!fenceObj) return { foundFence: false, hasAbort: false, callsLockController: false };
+
+    const abortProp = fenceObj.properties.find((p: any) => p.key?.name === "abort");
+    if (!abortProp) return { foundFence: true, hasAbort: false, callsLockController: false };
+
+    let callsLockController = false;
+    walkAst(abortProp, (n) => {
+      if (n.type === "CallExpression") {
+        const callee = n.callee;
+        // Verify receiver is specifically lock.controller (or lock.controller?.abort) (xcjvk)
+        if (
+          callee.type === "MemberExpression" &&
+          callee.property?.name === "abort" &&
+          callee.object?.type === "MemberExpression" &&
+          callee.object.object?.name === "lock" &&
+          callee.object.property?.name === "controller"
+        ) {
+          callsLockController = true;
+        }
+      }
+    });
+    return { foundFence: true, hasAbort: true, callsLockController };
+  };
+
+  const prodResult = inspectFenceAbortReceiver(swAst);
+  assert(prodResult.foundFence, "production fence object expression must exist in service-worker.js");
+  assert(prodResult.hasAbort, "fence MUST declare an abort method (w87od)");
+  assert(prodResult.callsLockController, "fence.abort MUST invoke lock.controller.abort (w87od, xcjvk)");
+
+  // Mutation-sensitivity verification: swapping the receiver off lock.controller MUST fail the assertion (xcjvk)
+  assert(swSrc.includes("lock.controller?.abort"), "production service-worker.js must contain lock.controller?.abort target");
+  const mutatedSwSrc = swSrc.replace("lock.controller?.abort(reason);", "lock.other?.abort(reason);");
+  assert(mutatedSwSrc !== swSrc, "mutation must successfully substitute target receiver");
+  const mutatedAst = acorn.parse(mutatedSwSrc, { ecmaVersion: "latest", sourceType: "module" });
+  const mutantResult = inspectFenceAbortReceiver(mutatedAst);
+  assertEquals(mutantResult.callsLockController, false, "mutated receiver (lock.other) must NOT satisfy callsLockController");
+
+  // Prove assertion fails closed (RED) on mutant:
+  assertThrows(
+    () => {
+      assert(mutantResult.callsLockController, "fence.abort MUST invoke lock.controller.abort (w87od, xcjvk)");
+    },
+    Error,
+    "fence.abort MUST invoke lock.controller.abort (w87od, xcjvk)",
+  );
 });
 
 Deno.test("Falsifier axi8h (model parity): provider 'demo' with developerFeatures OFF yields local-assistant on SW, not demo-local", async () => {
