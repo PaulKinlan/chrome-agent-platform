@@ -118,6 +118,19 @@ function runParallel(files, phase = "parallel phase") {
           readyOk = true;
           startPhaseTimer();
         } else if (Date.now() - t0Ready > PARALLEL_READY_TIMEOUT_MS) {
+          // Re-check marker one last time before declaring timeout to avoid polling race
+          try {
+            if (existsSync(PARALLEL_READY_FILE) && statSync(PARALLEL_READY_FILE).size > 0) {
+              ready = true;
+            }
+          } catch {}
+          if (ready) {
+            clearInterval(readyPoll);
+            readyPoll = null;
+            readyOk = true;
+            startPhaseTimer();
+            return;
+          }
           clearInterval(readyPoll);
           readyPoll = null;
           timedOut = true;
