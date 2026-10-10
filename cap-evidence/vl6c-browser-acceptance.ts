@@ -30,7 +30,7 @@ const EVIDENCE_DIR = durableDir(`cap-vl6c-acceptance-${Date.now()}`);
 await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
 
 console.log(`[acceptance] Starting ACP bridge on port ${PORT} (token required)...`);
-const bridge = createAcpServer(PORT, undefined, {}, "", BRIDGE_TOKEN);
+const bridge = createAcpServer(PORT, undefined, {}, undefined, BRIDGE_TOKEN);
 
 console.log(`[acceptance] Launching headless Chrome with extension at ${EXT}...`);
 const profile = durableDir(`cap-vl6c-profile-${Date.now()}`);
@@ -165,7 +165,7 @@ try {
     })
   `);
 
-  console.log("  Codex list_tabs turn outcome:", listTurnResult?.ok ? "SUCCESS" : "ERROR", listTurnResult?.result?.slice(0, 200));
+  console.log("  Codex list_tabs turn outcome:", listTurnResult?.ok ? "SUCCESS" : "ERROR", listTurnResult?.ok ? listTurnResult?.result?.slice(0, 200) : (listTurnResult?.error || JSON.stringify(listTurnResult)));
   check("Codex agent.run completed successfully", listTurnResult?.ok === true);
   check("Codex identified the real open tab 'Example Domain'", listTurnResult?.result?.includes("Example Domain"));
 
@@ -222,7 +222,7 @@ try {
   // Wait for the Codex turn to settle with the denial
   console.log("  Waiting for Codex turn to settle after denial...");
   const closeTurnResult = await evalInSession(ntpSession, `window.__closeTurnPromise`);
-  console.log("  Codex close_tab turn outcome:", closeTurnResult?.ok ? "SUCCESS" : "RESULT", closeTurnResult?.result?.slice(0, 200));
+  console.log("  Codex close_tab turn outcome:", closeTurnResult?.ok ? "SUCCESS" : "RESULT", closeTurnResult?.ok ? closeTurnResult?.result?.slice(0, 200) : (closeTurnResult?.error || JSON.stringify(closeTurnResult)));
 
   check("Codex received the owner denial", /denied/i.test(closeTurnResult?.result ?? ""));
 
@@ -248,7 +248,7 @@ try {
     })
   `);
 
-  console.log("  Pi turn outcome:", piTurnResult?.ok ? "SUCCESS" : "RESULT", piTurnResult?.result?.slice(0, 200));
+  console.log("  Pi turn outcome:", piTurnResult?.ok ? "SUCCESS" : "RESULT", piTurnResult?.ok ? piTurnResult?.result?.slice(0, 200) : (piTurnResult?.error || JSON.stringify(piTurnResult)));
   check("Pi agent.run completed successfully", piTurnResult?.ok === true);
   check("Pi response contains expected output", /PONG_SUCCESS/i.test(piTurnResult?.result ?? ""));
 
