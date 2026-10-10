@@ -156,13 +156,13 @@ function validateRequest(raw) {
   });
 }
 
-// Fetch + hash-verify one declared asset. The bytes of main-wasm are retained
-// (they travel into the factory, so the verified bytes ARE the executed bytes);
-// glue/adapter are imported by the worker from their packaged URLs afterwards —
-// the immutable installed package inventory is the integrity boundary there
+// Fetch + hash-verify one declared asset. Bytes of main-wasm are retained;
+// glue/adapter are imported by the worker from their packaged URLs afterwards
 // (fetch-then-import is not an atomic boundary in an unpacked tree, by design).
-async function fetchVerifiedAsset(asset) {
-  const response = await fetch(chrome.runtime.getURL(asset.path));
+async function fetchVerifiedAsset(asset, runtime = globalThis.chrome?.runtime) {
+  const getURL = runtime?.getURL ?? globalThis.chrome?.runtime?.getURL;
+  if (!getURL) fail("emscripten_asset_fetch");
+  const response = await fetch(getURL(asset.path));
   if (!response.ok) fail("emscripten_asset_fetch");
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (bytes.byteLength !== asset.size || await sha256HexBytes(bytes) !== asset.sha256) {
@@ -190,23 +190,26 @@ const inFlight = new Set();
 
 export async function executeEmscriptenRunRequest(raw, {
   createWorker = (url) => new Worker(url, { type: "module" }),
+  runtime = globalThis.chrome?.runtime,
 } = {}) {
   const request = validateRequest(raw);
   if (inFlight.has(request.packageId)) fail("emscripten_busy");
   inFlight.add(request.packageId);
   try {
+    const effectiveRuntime = runtime ?? globalThis.chrome?.runtime;
+    if (!effectiveRuntime?.getURL) fail("emscripten_asset_fetch");
     const bytesByRole = new Map();
     for (const asset of request.assets) {
-      bytesByRole.set(asset.role, await fetchVerifiedAsset(asset));
+      bytesByRole.set(asset.role, await fetchVerifiedAsset(asset, effectiveRuntime));
     }
     const wasmBytes = bytesByRole.get("main-wasm");
-    const glueUrl = chrome.runtime.getURL(request.assets.find((a) => a.role === "glue").path);
-    const adapterUrl = chrome.runtime.getURL(request.assets.find((a) => a.role === "adapter").path);
+    const glueUrl = effectiveRuntime.getURL(request.assets.find((a) => a.role === "glue").path);
+    const adapterUrl = effectiveRuntime.getURL(request.assets.find((a) => a.role === "adapter").path);
     const wallMs = request.lifecycle.startupMs + request.lifecycle.callMs + EMSCRIPTEN_DEADLINE_MARGIN_MS;
 
     let worker;
     try {
-      worker = createWorker(chrome.runtime.getURL("lib/emscripten-worker.js"));
+      worker = createWorker(effectiveRuntime.getURL("lib/emscripten-worker.js"));
     } catch (error) {
       throw error;
     }
@@ -298,16 +301,18 @@ function validateWorkerResult(result, request) {
 }
 
 export function registerEmscriptenHost(deps = {}) {
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const runtime = deps?.runtime ?? globalThis.chrome?.runtime;
+  if (!runtime?.onMessage) return;
+  runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type !== EMSCRIPTEN_RUN_TYPE) return undefined;
     // Only the extension service worker may submit a run. Same-extension pages
     // and content scripts share sender.id, so id-only checking is not an
     // authority boundary; document/tab senders are rejected explicitly.
-    if (!isTrustedServiceWorkerSender(sender)) {
+    if (!isTrustedServiceWorkerSender(sender, runtime)) {
       sendResponse({ ok: false, error: "emscripten_run_sender" });
       return false;
     }
-    executeEmscriptenRunRequest(message, deps)
+    executeEmscriptenRunRequest(message, { ...deps, runtime })
       .then((result) => sendResponse(result))
       .catch((error) => sendResponse({
         ok: false,

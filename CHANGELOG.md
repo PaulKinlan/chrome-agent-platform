@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.630] — 2026-10-10
+- Fix uncaught dangling-promise TypeError and stub racing in emscripten host tests.
+
 ## [0.3.629] — 2026-10-10
 - Invalidate cached agent rosters immediately upon agent updates
 

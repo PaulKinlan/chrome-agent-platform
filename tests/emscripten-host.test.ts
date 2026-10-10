@@ -191,20 +191,26 @@ Deno.test("emscripten host: hostile worker results are rejected (wrong session, 
 
 Deno.test("emscripten host: one in-flight job per package — the second refuses honestly", async () => {
   installStubs();
+  let first = null;
   try {
     let firstPosted = null;
+    let onFirstPosted = null;
+    const firstPostedPromise = new Promise((resolve) => { onFirstPosted = resolve; });
     class HangingWorker {
-      postMessage(message) { firstPosted = message; /* never answers */ }
+      postMessage(message) {
+        firstPosted = message;
+        onFirstPosted?.(message);
+        /* never answers */
+      }
       terminate() {}
     }
-    const first = executeEmscriptenRunRequest(await request({
+    first = executeEmscriptenRunRequest(await request({
       lifecycle: { startupMs: 250, callMs: 250 },
     }), { createWorker: () => new HangingWorker() });
-    let waited = 0;
-    while (!firstPosted && waited < 2000) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      waited += 10;
-    }
+    await Promise.race([
+      firstPostedPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("first job post timeout")), 5000)),
+    ]);
     assert(firstPosted, "the first job posted");
     let code = null;
     try { await executeEmscriptenRunRequest(await request()); }
@@ -212,7 +218,12 @@ Deno.test("emscripten host: one in-flight job per package — the second refuses
     assert(code === "emscripten_busy", `concurrent run refused: ${code}`);
     const firstResult = await first; // the deadline (armed before init) settles it
     assert(firstResult.ok === false && firstResult.phase === "timeout", `first run timed out honestly: ${JSON.stringify(firstResult)}`);
-  } finally { restoreStubs(); }
+  } finally {
+    if (first) {
+      try { await first; } catch { /* best effort */ }
+    }
+    restoreStubs();
+  }
 });
 
 Deno.test("emscripten host: only the service worker may submit (tab/document senders rejected)", async () => {
@@ -224,6 +235,7 @@ Deno.test("emscripten host: only the service worker may submit (tab/document sen
       onMessage: { addListener: (fn) => listeners.push(fn) },
     },
   };
+  let runPromise = null;
   try {
     registerEmscriptenHost();
     assert(listeners.length === 1, "exactly one listener");
@@ -241,20 +253,81 @@ Deno.test("emscripten host: only the service worker may submit (tab/document sen
     const wrongUrl = listener(req, { ...swSender, url: "chrome-extension://cap-kat/options/options.html" }, (r) => responses.push(r));
     assert(wrongUrl === false && responses.at(-1)?.error === "emscripten_run_sender", "wrong URL rejected");
     // The real SW sender is accepted and runs async (worker factory injected).
-    let ran = null;
     class InstantWorker {
       postMessage(message) { queueMicrotask(() => this.onmessage({ data: workerResult(message) })); }
       terminate() {}
     }
     registerEmscriptenHost({ createWorker: () => new InstantWorker() });
-    const accepted = listeners[1](req, swSender, (r) => { ran = r; });
+    let runPromiseResolve;
+    runPromise = new Promise((resolve) => { runPromiseResolve = resolve; });
+    const accepted = listeners[1](req, swSender, runPromiseResolve);
     assert(accepted === true, "SW sender accepted (async)");
-    const deadline = Date.now() + 5_000;
-    while (!ran && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    const ran = await Promise.race([
+      runPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("SW run timed out")), 5000)),
+    ]);
     assert(ran?.ok === true && ran?.result === 42.5, `SW-submitted run completed: ${JSON.stringify(ran)}`);
-  } finally { restoreStubs(); }
+  } finally {
+    if (runPromise) {
+      try { await Promise.race([runPromise, new Promise((r) => setTimeout(r, 100))]); } catch { /* best effort */ }
+    }
+    restoreStubs();
+  }
+});
+
+Deno.test("emscripten host: dangling promise / undefined chrome.runtime cannot recur", async () => {
+  // 1. Calling registerEmscriptenHost when globalThis.chrome is undefined fails safe without throwing.
+  restoreStubs();
+  assert(globalThis.chrome === undefined, "chrome is undefined");
+  let registerError = null;
+  try { registerEmscriptenHost(); } catch (err) { registerError = err; }
+  assert(registerError === null, `registerEmscriptenHost with undefined chrome must not throw: ${registerError}`);
+
+  // 2. Calling executeEmscriptenRunRequest when chrome is undefined fails closed honestly (no unhandled TypeError).
+  const req = await request();
+  let runCode = null;
+  try {
+    await executeEmscriptenRunRequest(req);
+  } catch (err) {
+    runCode = err.code ?? err.message;
+  }
+  assert(runCode === "emscripten_asset_fetch", `executeEmscriptenRunRequest without chrome fails closed honestly: ${runCode}`);
+
+  // 3. Sender-guard path fails closed honestly when chrome.runtime is undefined (no unhandled deref).
+  const swSender = { id: "cap-kat", url: "chrome-extension://cap-kat/dist/background/service-worker.js" };
+  const mockListeners = [];
+  registerEmscriptenHost({
+    runtime: {
+      onMessage: { addListener: (fn) => mockListeners.push(fn) },
+    },
+  });
+  assert(mockListeners.length === 1, "listener registered with mock runtime");
+  let senderResponse = null;
+  const accepted = mockListeners[0](req, swSender, (r) => { senderResponse = r; });
+  assert(accepted === false, "untrusted sender rejected synchronously when runtime invalid");
+  assert(senderResponse?.error === "emscripten_run_sender", "sender rejection error code");
+
+  // 4. An in-flight run where chrome stub is wiped mid-fetch (before line 203 getURL) settles cleanly using captured runtime.
+  const fetchMock = syntheticFetch(defaultBytes);
+  installStubs((url) => {
+    // Clear global chrome mid-fetch before line 203 evaluates glueUrl:
+    globalThis.chrome = undefined;
+    return fetchMock(url);
+  });
+  try {
+    let workerUrl = null;
+    class FastWorker {
+      constructor(url) { workerUrl = url; }
+      postMessage(message) { queueMicrotask(() => this.onmessage({ data: workerResult(message) })); }
+      terminate() {}
+    }
+    const result = await executeEmscriptenRunRequest(req, { createWorker: (url) => new FastWorker(url) });
+    assert(result.ok === true && result.phase === "completed" && result.result === 42.5,
+      `in-flight run settles safely even if global chrome wiped mid-fetch: ${JSON.stringify(result)}`);
+    assert(workerUrl.startsWith("chrome-extension://cap-kat/"), "worker url constructed from captured runtime");
+  } finally {
+    restoreStubs();
+  }
 });
 
 Deno.test("emscripten host: source pins — worker path literal, no execution primitives in the host", async () => {
