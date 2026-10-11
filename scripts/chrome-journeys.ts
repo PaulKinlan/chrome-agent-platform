@@ -4843,7 +4843,7 @@ async function main() {
     );
     const keylessBefore = await msgValue({ type: "thread.list" });
     const keylessThreadsBefore = new Set((keylessBefore?.threads ?? []).map((t) => t?.id));
-    await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
+    await cdp.send("Target.activateTarget", { targetId: ntpPage.id });
     await cdp.send("Page.bringToFront", {}, ntpSession);
     await clickSel(cdp, ntpSession, "#home").catch(() => false);
     await sleep(600);

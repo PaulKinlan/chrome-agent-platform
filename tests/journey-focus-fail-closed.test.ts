@@ -9,7 +9,7 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 const journeySource = await Deno.readTextFile(new URL("../scripts/chrome-journeys.ts", import.meta.url));
 
-Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52: scripts/chrome-journeys.ts does not swallow tab activation/focus rejections", () => {
+Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2.1: scripts/chrome-journeys.ts does not swallow tab activation/focus rejections", () => {
   // Line 2272: openCreateDialog pre-Create click
   const openCreateDialogIdx = journeySource.indexOf("const openCreateDialog = async () => {");
   assert(openCreateDialogIdx > 0, "openCreateDialog must be found in scripts/chrome-journeys.ts");
@@ -36,10 +36,18 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52: script
     "testActionLedgerJourney must not swallow Target.activateTarget errors with .catch()",
   );
 
-  // Line 4838: keyless composer pre-input
+  // Line 4846: keyless composer pre-input Target.activateTarget and Page.bringToFront
   const keylessIdx = journeySource.indexOf('const keylessBefore = await msgValue({ type: "thread.list" });');
   assert(keylessIdx > 0, "keyless target activation must be found in scripts/chrome-journeys.ts");
   const keylessBlock = journeySource.slice(keylessIdx, keylessIdx + 400);
+  assert(
+    keylessBlock.includes('await cdp.send("Target.activateTarget", { targetId: ntpPage.id });\n    await cdp.send("Page.bringToFront", {}, ntpSession);'),
+    "keyless pre-input must await Target.activateTarget without .catch() before Page.bringToFront",
+  );
+  assert(
+    !keylessBlock.includes('await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch('),
+    "keyless pre-input must not swallow Target.activateTarget errors with .catch()",
+  );
   assert(
     keylessBlock.includes('await cdp.send("Page.bringToFront", {}, ntpSession);\n    await clickSel('),
     "keyless pre-input must await Page.bringToFront without .catch() before clickSel",
@@ -1903,5 +1911,271 @@ Deno.test("7at52: hub security shield badge observation fails closed on Page.bri
       mutantErr?.message.includes("evalIn failed on dead session"),
       "mutant error is downstream eval failure instead of root-cause focus failure (RED)",
     );
+  }
+});
+
+Deno.test("vs9d2.1: keyless composer pre-input fails closed on Target.activateTarget rejection, preventing Page.bringToFront, clickSel, and typeInto", async () => {
+  // Extract the real Cdp class from scripts/chrome-journeys.ts
+  const cdpStart = journeySource.indexOf("class Cdp {");
+  const cdpEnd = journeySource.indexOf("\n/** Open a tab", cdpStart);
+  assert(cdpStart >= 0 && cdpEnd > cdpStart, "the real Cdp class must be found in scripts/chrome-journeys.ts");
+  const cdpSource = journeySource.slice(cdpStart, cdpEnd).replace("sessionId?", "sessionId");
+
+  let nextTimer = 0;
+  const timers = new Map<number, { callback: () => void; delay: number }>();
+  const RealCdp = new Function("setTimeout", "clearTimeout", `${cdpSource}\nreturn Cdp;`)(
+    (callback: () => void, delay: number) => {
+      timers.set(++nextTimer, { callback, delay });
+      return nextTimer;
+    },
+    (id: number) => timers.delete(id),
+  );
+
+  // Extract keyless pre-input block
+  const anchor = 'const keylessBefore = await msgValue({ type: "thread.list" });';
+  const anchorIdx = journeySource.indexOf(anchor);
+  assert(anchorIdx > 0, "keyless pre-input anchor must be found");
+  const start = journeySource.indexOf('await cdp.send("Target.activateTarget", { targetId: ntpPage.id });', anchorIdx);
+  assert(start > 0, "keyless pre-input start must be found");
+  const end = journeySource.indexOf("const KEYLESS_CARD_SEL = ", start);
+  assert(end > start, "keyless pre-input end must be found");
+  const blockBody = journeySource.slice(start, end).trim();
+
+  // Helper compiler executes the block directly without synthetic try/finally
+  const compileRunner = (body: string) =>
+    new Function(
+      "cdp",
+      "ntpPage",
+      "ntpSession",
+      "clickSel",
+      "sleep",
+      "check",
+      "typeInto",
+      "composerInput",
+      "composerSend",
+      `return (async () => {\n${body}\n})();`,
+    );
+
+  const runner = compileRunner(blockBody);
+
+  // ── Scenario 1: Dead Transport (CLOSED socket + 15s timer rejection) ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 3, // CLOSED
+      send: (frame: string) => frames.push(frame),
+    };
+    const cdp = new RealCdp(ws);
+    ws.onclose();
+    assertEquals(cdp.fatalEvents, ["websocket closed unexpectedly"]);
+
+    let clickCount = 0;
+    let typeCount = 0;
+
+    const runPromise = runner(
+      cdp,
+      { id: "fake-ntp-page" },
+      "fake-ntp-session",
+      async () => { clickCount++; return true; },
+      async () => {},
+      () => {},
+      async () => { typeCount++; return true; },
+      () => "#composer",
+      () => "#send",
+    );
+
+    let runErr: any = null;
+    runPromise.catch((e: any) => { runErr = e; });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    assertEquals(runErr, null, "Must remain pending while awaiting 15s timer");
+    assertEquals(cdp.pending.size, 1, "Cdp.pending must hold Target.activateTarget request");
+    assertEquals(timers.size, 1, "Timer must be active");
+    const [timerId, timerEntry] = [...timers.entries()][0];
+    assertEquals(timerEntry.delay, 15000, "Cdp.send timer must be 15000ms");
+    assertEquals(clickCount, 0, "No clickSel while pending");
+    assertEquals(typeCount, 0, "No typeInto while pending");
+
+    // Fire the 15s timer callback
+    timers.delete(timerId);
+    timerEntry.callback();
+
+    await runPromise.catch(() => {});
+    assert(runErr !== null, "Must reject after timer fires");
+    assert(
+      runErr.message.includes("cdp timeout: Target.activateTarget"),
+      `Unexpected timeout error: ${runErr.message}`,
+    );
+    assertEquals(cdp.pending.size, 0, "Pending entry must be cleaned up on timeout");
+    assertEquals(clickCount, 0, "clickSel must NOT be called on dead transport (0 clicks)");
+    assertEquals(typeCount, 0, "typeInto must NOT be called on dead transport (0 typing)");
+  }
+
+  // ── Scenario 2: Closed Target (-32602 Wire Protocol Error) ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 1, // OPEN
+      send: (frame: string) => {
+        frames.push(frame);
+        const parsed = JSON.parse(frame);
+        if (parsed.method === "Target.activateTarget") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                error: {
+                  code: -32602,
+                  message: "No target with given id found",
+                },
+              }),
+            });
+          });
+        } else if (parsed.method === "Page.bringToFront") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                result: {},
+              }),
+            });
+          });
+        }
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    let clickCount = 0;
+    let typeCount = 0;
+
+    let runErr: any = null;
+    try {
+      await runner(
+        cdp,
+        { id: "closed-ntp-page" },
+        "fake-ntp-session",
+        async () => { clickCount++; return true; },
+        async () => {},
+        () => {},
+        async () => { typeCount++; return true; },
+        () => "#composer",
+        () => "#send",
+      );
+    } catch (e: any) {
+      runErr = e;
+    }
+
+    assert(runErr !== null, "Must reject on closed target");
+    assert(
+      runErr.message.includes("cdp error") && runErr.message.includes("No target with given id found"),
+      `Unexpected closed target error: ${runErr?.message}`,
+    );
+    assertEquals(clickCount, 0, "Zero clicks after Target.activateTarget rejection");
+    assertEquals(typeCount, 0, "Zero typing after Target.activateTarget rejection");
+    // Verify Page.bringToFront was never sent over the wire
+    const btfSent = frames.some((f) => JSON.parse(f).method === "Page.bringToFront");
+    assertEquals(btfSent, false, "Page.bringToFront must not be sent when Target.activateTarget fails");
+  }
+
+  // ── Scenario 3: Positive Valid Activation Path ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 1, // OPEN
+      send: (frame: string) => {
+        frames.push(frame);
+        const parsed = JSON.parse(frame);
+        queueMicrotask(() => {
+          ws.onmessage({
+            data: JSON.stringify({
+              id: parsed.id,
+              result: {},
+            }),
+          });
+        });
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    let clickCount = 0;
+    let typeCount = 0;
+    let typedValue = "";
+
+    await runner(
+      cdp,
+      { id: "valid-ntp-page" },
+      "valid-ntp-session",
+      async () => { clickCount++; return true; },
+      async () => {},
+      () => {},
+      async (_cdp: any, _sess: any, _sel: string, val: string) => {
+        typeCount++;
+        typedValue = val;
+        return true;
+      },
+      () => "#composer",
+      () => "#send",
+    );
+
+    assertEquals(clickCount, 2, "Both #home and #send must be clicked on success");
+    assertEquals(typeCount, 1, "Composer must be typed into on success");
+    assertEquals(typedValue, "group my tabs by topic", "Correct task text typed");
+  }
+
+  // ── Scenario 4: Mutant Check (restoring .catch(() => {}) swallows activation failure and enters Page.bringToFront/clickSel/typeInto) ──
+  {
+    const mutantBody = blockBody.replace(
+      'await cdp.send("Target.activateTarget", { targetId: ntpPage.id });',
+      'await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});',
+    );
+    assert(mutantBody !== blockBody, "mutant must contain .catch()");
+
+    const mutantFrames: string[] = [];
+    const ws: any = {
+      readyState: 1,
+      send: (frame: string) => {
+        mutantFrames.push(frame);
+        const parsed = JSON.parse(frame);
+        if (parsed.method === "Target.activateTarget") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                error: { code: -32602, message: "No target with given id found" },
+              }),
+            });
+          });
+        } else {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({ id: parsed.id, result: {} }),
+            });
+          });
+        }
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    let mutantClickCount = 0;
+    let mutantTypeCount = 0;
+    const mutantRunner = compileRunner(mutantBody);
+
+    await mutantRunner(
+      cdp,
+      { id: "closed-ntp-page" },
+      "fake-ntp-session",
+      async () => { mutantClickCount++; return true; },
+      async () => {},
+      () => {},
+      async () => { mutantTypeCount++; return true; },
+      () => "#composer",
+      () => "#send",
+    );
+
+    const btfSent = mutantFrames.some((f) => JSON.parse(f).method === "Page.bringToFront");
+    assertEquals(btfSent, true, "mutant with .catch() swallows error and sends Page.bringToFront (RED)");
+    assertEquals(mutantClickCount, 2, "mutant with .catch() swallows error and calls clickSel twice (RED)");
+    assertEquals(mutantTypeCount, 1, "mutant with .catch() swallows error and calls typeInto (RED)");
   }
 });
