@@ -9,7 +9,7 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 const journeySource = await Deno.readTextFile(new URL("../scripts/chrome-journeys.ts", import.meta.url));
 
-Deno.test("j1zcb / 0ucue: scripts/chrome-journeys.ts does not swallow Page.bringToFront rejections at :2272, :4838, and :5302", () => {
+Deno.test("j1zcb / 0ucue / u0qo0: scripts/chrome-journeys.ts does not swallow Page.bringToFront rejections at :2272, :4838, :5302, and :9505", () => {
   // Line 2272: openCreateDialog pre-Create click
   const openCreateDialogIdx = journeySource.indexOf("const openCreateDialog = async () => {");
   assert(openCreateDialogIdx > 0, "openCreateDialog must be found in scripts/chrome-journeys.ts");
@@ -47,6 +47,19 @@ Deno.test("j1zcb / 0ucue: scripts/chrome-journeys.ts does not swallow Page.bring
   assert(
     !driveHubTaskBlock.includes('await cdp.send("Page.bringToFront", {}, ntpSession).catch('),
     "driveHubTask must not swallow Page.bringToFront errors with .catch()",
+  );
+
+  // Line 9505: testTaskLifecycle step 1 pre-input
+  const step1Idx = journeySource.indexOf("// ── step 1 ──");
+  assert(step1Idx > 0, "testTaskLifecycle step 1 must be found in scripts/chrome-journeys.ts");
+  const step1Block = journeySource.slice(step1Idx, step1Idx + 400);
+  assert(
+    step1Block.includes('await cdp.send("Page.bringToFront", {}, ntp);\n    await clickSel(cdp, ntp, "#home")'),
+    "testTaskLifecycle step 1 must await Page.bringToFront without .catch() before clickSel",
+  );
+  assert(
+    !step1Block.includes('await cdp.send("Page.bringToFront", {}, ntp).catch('),
+    "testTaskLifecycle step 1 must not swallow Page.bringToFront errors with .catch()",
   );
 });
 
@@ -385,4 +398,110 @@ Deno.test("0ucue: driveHubTask fails closed on Page.bringToFront rejection, prev
   assertEquals(mutantEvalInCalled, true, "mutant with .catch() swallows error and calls evalIn");
   assertEquals(mutantClickSelCalled, true, "mutant with .catch() swallows error and calls clickSel");
   assertEquals(mutantTypeIntoCalled, true, "mutant with .catch() swallows error and calls typeInto");
+});
+
+Deno.test("u0qo0: testTaskLifecycle step 1 fails closed on Page.bringToFront rejection, preventing clickSel and typeInto", async () => {
+  // Extract testTaskLifecycle step 1 pre-input block from scripts/chrome-journeys.ts
+  const start = journeySource.indexOf("// ── step 1 ──");
+  assert(start > 0, "step 1 start must be found");
+  const end = journeySource.indexOf("const STATE = `", start);
+  assert(end > start, "step 1 end must be found");
+  const step1Body = journeySource.slice(start, end).trim();
+
+  let clickSelCount = 0;
+  let typeIntoCalled = false;
+
+  const mockCdp = {
+    send: async (method: string, _params: any) => {
+      if (method === "Page.bringToFront") {
+        throw new Error("Page.bringToFront: Session with given id not found.");
+      }
+      return {};
+    },
+  };
+
+  const runner = new Function(
+    "cdp",
+    "ntpPage",
+    "ntp",
+    "clickSel",
+    "sleep",
+    "typeInto",
+    "composerInput",
+    "composerSend",
+    "DEMO_STEP1",
+    `
+    return (async () => {
+      ${step1Body}
+    })();
+    `,
+  );
+
+  let thrownError: Error | undefined;
+  try {
+    await runner(
+      mockCdp,
+      { id: "test-ntp-page" },
+      "test-ntp-session",
+      async () => { clickSelCount++; return true; },
+      async () => {},
+      async () => { typeIntoCalled = true; return true; },
+      () => "#composer-input-hub",
+      () => "#composer-send-hub",
+      "demo step 1 prompt",
+    );
+  } catch (err: any) {
+    thrownError = err;
+  }
+
+  assert(thrownError !== undefined, "step 1 must throw when Page.bringToFront fails");
+  assert(
+    thrownError.message.includes("Session with given id not found"),
+    `thrown error must preserve root cause: ${thrownError.message}`,
+  );
+  assertEquals(clickSelCount, 0, "clickSel must NOT be called when focus fails (0 calls)");
+  assertEquals(typeIntoCalled, false, "typeInto must NOT be called when focus fails");
+
+  // Mutant check: restoring .catch(() => {}) swallows focus error and invokes downstream clickSel and typeInto
+  const mutantStep1Body = step1Body.replace(
+    'await cdp.send("Page.bringToFront", {}, ntp);',
+    'await cdp.send("Page.bringToFront", {}, ntp).catch(() => {});',
+  );
+  assert(mutantStep1Body.includes(".catch("), "mutant must contain catch()");
+
+  const mutantRunner = new Function(
+    "cdp",
+    "ntpPage",
+    "ntp",
+    "clickSel",
+    "sleep",
+    "typeInto",
+    "composerInput",
+    "composerSend",
+    "DEMO_STEP1",
+    `
+    return (async () => {
+      ${mutantStep1Body}
+    })();
+    `,
+  );
+
+  let mutantClickCount = 0;
+  let mutantTypeCalled = false;
+
+  await mutantRunner(
+    mockCdp,
+    { id: "test-ntp-page" },
+    "test-ntp-session",
+    async () => { mutantClickCount++; return true; },
+    async () => {},
+    async () => { mutantTypeCalled = true; return true; },
+    () => "#composer-input-hub",
+    () => "#composer-send-hub",
+    "demo step 1 prompt",
+  );
+
+  // The mutant survived by swallowing rejection and dispatched both clickSel (#home and #send) and typeInto!
+  assertEquals(mutantClickCount, 2, "mutant with .catch() swallows error and calls clickSel twice (#home and #send)");
+  assertEquals(mutantTypeCalled, true, "mutant with .catch() swallows error and calls typeInto");
 });

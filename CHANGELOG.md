@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.669] — 2026-10-11
+- Fail closed on browser tab focus failures during task lifecycle test automation
+
 ## [0.3.668] — 2026-10-11
 - Clarify skill-import redirect test claims between live Chrome opaqueredirect refusal and inspectable-3xx defense-in-depth
 
