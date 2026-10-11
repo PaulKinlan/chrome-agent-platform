@@ -9,7 +9,7 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 const journeySource = await Deno.readTextFile(new URL("../scripts/chrome-journeys.ts", import.meta.url));
 
-Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2.1: scripts/chrome-journeys.ts does not swallow tab activation/focus rejections", () => {
+Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2.1 / vs9d2.2: scripts/chrome-journeys.ts does not swallow tab activation/focus rejections", () => {
   // Line 2272: openCreateDialog pre-Create click
   const openCreateDialogIdx = journeySource.indexOf("const openCreateDialog = async () => {");
   assert(openCreateDialogIdx > 0, "openCreateDialog must be found in scripts/chrome-journeys.ts");
@@ -57,10 +57,18 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2
     "keyless pre-input must not swallow Page.bringToFront errors with .catch()",
   );
 
-  // Line 5302: driveHubTask pre-input
+  // Line 5310: driveHubTask pre-input Target.activateTarget and Page.bringToFront
   const driveHubTaskIdx = journeySource.indexOf("const driveHubTask = async (text) => {");
   assert(driveHubTaskIdx > 0, "driveHubTask must be found in scripts/chrome-journeys.ts");
   const driveHubTaskBlock = journeySource.slice(driveHubTaskIdx, driveHubTaskIdx + 400);
+  assert(
+    driveHubTaskBlock.includes('await cdp.send("Target.activateTarget", { targetId: ntpPage.id });\n      await cdp.send("Page.bringToFront", {}, ntpSession);'),
+    "driveHubTask must await Target.activateTarget without .catch() before Page.bringToFront",
+  );
+  assert(
+    !driveHubTaskBlock.includes('await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch('),
+    "driveHubTask must not swallow Target.activateTarget errors with .catch()",
+  );
   assert(
     driveHubTaskBlock.includes('await cdp.send("Page.bringToFront", {}, ntpSession);\n      await evalIn('),
     "driveHubTask must await Page.bringToFront without .catch() before evalIn",
@@ -2175,6 +2183,315 @@ Deno.test("vs9d2.1: keyless composer pre-input fails closed on Target.activateTa
 
     const btfSent = mutantFrames.some((f) => JSON.parse(f).method === "Page.bringToFront");
     assertEquals(btfSent, true, "mutant with .catch() swallows error and sends Page.bringToFront (RED)");
+    assertEquals(mutantClickCount, 2, "mutant with .catch() swallows error and calls clickSel twice (RED)");
+    assertEquals(mutantTypeCount, 1, "mutant with .catch() swallows error and calls typeInto (RED)");
+  }
+});
+
+Deno.test("vs9d2.2: driveHubTask fails closed on Target.activateTarget rejection, preventing Page.bringToFront, view-reset evalIn, clickSel, and typeInto", async () => {
+  // Extract the real Cdp class from scripts/chrome-journeys.ts
+  const cdpStart = journeySource.indexOf("class Cdp {");
+  const cdpEnd = journeySource.indexOf("\n/** Open a tab", cdpStart);
+  assert(cdpStart >= 0 && cdpEnd > cdpStart, "the real Cdp class must be found in scripts/chrome-journeys.ts");
+  const cdpSource = journeySource.slice(cdpStart, cdpEnd).replace("sessionId?", "sessionId");
+
+  let nextTimer = 0;
+  const timers = new Map<number, { callback: () => void; delay: number }>();
+  const RealCdp = new Function("setTimeout", "clearTimeout", `${cdpSource}\nreturn Cdp;`)(
+    (callback: () => void, delay: number) => {
+      timers.set(++nextTimer, { callback, delay });
+      return nextTimer;
+    },
+    (id: number) => timers.delete(id),
+  );
+
+  // Extract the real driveHubTask declaration
+  const start = journeySource.indexOf("const driveHubTask = async (text) => {");
+  assert(start > 0, "driveHubTask declaration must be found");
+  const end = journeySource.indexOf("const pollThreadError = async (deadlineMs, done) => {", start);
+  assert(end > start, "driveHubTask declaration end must be found");
+  const driveHubTaskDeclaration = journeySource.slice(start, end).trim();
+
+  // Helper compiler executes the real declaration directly
+  const compileDriveHubTask = (declaration: string) =>
+    new Function(
+      "cdp",
+      "ntpPage",
+      "ntpSession",
+      "evalIn",
+      "sleep",
+      "clickSel",
+      "typeInto",
+      "composerInput",
+      "composerSend",
+      `${declaration};\nreturn driveHubTask;`,
+    );
+
+  // Verify structural caller-level provider cleanup in scripts/chrome-journeys.ts
+  const crumbStart = journeySource.indexOf("const scripted = await startScriptedProvider(");
+  assert(crumbStart > 0, "crumb bakery journey must be found");
+  const crumbEnd = journeySource.indexOf("JOURNEY 3e3", crumbStart);
+  assert(crumbEnd > crumbStart, "crumb bakery journey end must be found");
+  const crumbBlock = journeySource.slice(crumbStart, crumbEnd);
+  assert(
+    crumbBlock.includes('await driveHubTask("build a crumb bakery page");'),
+    "crumb bakery must call driveHubTask",
+  );
+  assert(
+    crumbBlock.includes("await scripted.close();"),
+    "crumb bakery must call scripted.close() in finally",
+  );
+
+  const runawayStart = journeySource.indexOf("const runaway = await startScriptedProvider(");
+  assert(runawayStart > 0, "runaway tool loop journey must be found");
+  const runawayEnd = journeySource.indexOf("JOURNEY 3f", runawayStart);
+  assert(runawayEnd > runawayStart, "runaway tool loop journey end must be found");
+  const runawayBlock = journeySource.slice(runawayStart, runawayEnd);
+  assert(
+    runawayBlock.includes('await driveHubTask("read my probe memory and keep going");'),
+    "runaway journey must call driveHubTask",
+  );
+  assert(
+    runawayBlock.includes("await runaway.close();"),
+    "runaway journey must call runaway.close() in finally",
+  );
+
+  // ── Scenario 1: Dead Transport (CLOSED socket + 15s timer rejection) ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 3, // CLOSED
+      send: (frame: string) => frames.push(frame),
+    };
+    const cdp = new RealCdp(ws);
+    ws.onclose();
+    assertEquals(cdp.fatalEvents, ["websocket closed unexpectedly"]);
+
+    let evalInCount = 0;
+    let clickCount = 0;
+    let typeCount = 0;
+
+    const driveHubTask = compileDriveHubTask(driveHubTaskDeclaration)(
+      cdp,
+      { id: "fake-ntp-page" },
+      "fake-ntp-session",
+      async () => { evalInCount++; return true; },
+      async () => {},
+      async () => { clickCount++; return true; },
+      async () => { typeCount++; return true; },
+      () => "#composer",
+      () => "#send",
+    );
+
+    const runPromise = driveHubTask("test prompt");
+    let runErr: any = null;
+    runPromise.catch((e: any) => { runErr = e; });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    assertEquals(runErr, null, "Must remain pending while awaiting 15s timer");
+    assertEquals(cdp.pending.size, 1, "Cdp.pending must hold Target.activateTarget request");
+    assertEquals(timers.size, 1, "Timer must be active");
+    const [timerId, timerEntry] = [...timers.entries()][0];
+    assertEquals(timerEntry.delay, 15000, "Cdp.send timer must be 15000ms");
+    assertEquals(evalInCount, 0, "No evalIn while pending");
+    assertEquals(clickCount, 0, "No clickSel while pending");
+    assertEquals(typeCount, 0, "No typeInto while pending");
+
+    // Fire the 15s timer callback
+    timers.delete(timerId);
+    timerEntry.callback();
+
+    await runPromise.catch(() => {});
+
+    assert(runErr !== null, "Must reject after timer fires");
+    assert(
+      runErr.message.includes("cdp timeout: Target.activateTarget"),
+      `Unexpected timeout error: ${runErr.message}`,
+    );
+    assertEquals(cdp.pending.size, 0, "Pending entry must be cleaned up on timeout");
+    assertEquals(evalInCount, 0, "evalIn must NOT be called on dead transport (0 evals)");
+    assertEquals(clickCount, 0, "clickSel must NOT be called on dead transport (0 clicks)");
+    assertEquals(typeCount, 0, "typeInto must NOT be called on dead transport (0 typing)");
+  }
+
+  // ── Scenario 2: Closed Target (-32602 Wire Protocol Error) ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 1, // OPEN
+      send: (frame: string) => {
+        frames.push(frame);
+        const parsed = JSON.parse(frame);
+        if (parsed.method === "Target.activateTarget") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                error: {
+                  code: -32602,
+                  message: "No target with given id found",
+                },
+              }),
+            });
+          });
+        } else if (parsed.method === "Page.bringToFront") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                result: {},
+              }),
+            });
+          });
+        }
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    let evalInCount = 0;
+    let clickCount = 0;
+    let typeCount = 0;
+
+    const driveHubTask = compileDriveHubTask(driveHubTaskDeclaration)(
+      cdp,
+      { id: "closed-ntp-page" },
+      "fake-ntp-session",
+      async () => { evalInCount++; return true; },
+      async () => {},
+      async () => { clickCount++; return true; },
+      async () => { typeCount++; return true; },
+      () => "#composer",
+      () => "#send",
+    );
+
+    let runErr: any = null;
+    try {
+      await driveHubTask("test prompt");
+    } catch (e: any) {
+      runErr = e;
+    }
+
+    assert(runErr !== null, "Must reject on closed target");
+    assert(
+      runErr.message.includes("cdp error") && runErr.message.includes("No target with given id found"),
+      `Unexpected closed target error: ${runErr?.message}`,
+    );
+    assertEquals(evalInCount, 0, "Zero evalIn after Target.activateTarget rejection");
+    assertEquals(clickCount, 0, "Zero clicks after Target.activateTarget rejection");
+    assertEquals(typeCount, 0, "Zero typing after Target.activateTarget rejection");
+    const btfSent = frames.some((f) => JSON.parse(f).method === "Page.bringToFront");
+    assertEquals(btfSent, false, "Page.bringToFront must not be sent when Target.activateTarget fails");
+  }
+
+  // ── Scenario 3: Positive Valid Activation Path ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 1, // OPEN
+      send: (frame: string) => {
+        frames.push(frame);
+        const parsed = JSON.parse(frame);
+        queueMicrotask(() => {
+          ws.onmessage({
+            data: JSON.stringify({
+              id: parsed.id,
+              result: {},
+            }),
+          });
+        });
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    let evalInCount = 0;
+    let clickCount = 0;
+    let typeCount = 0;
+    let typedValue = "";
+
+    const driveHubTask = compileDriveHubTask(driveHubTaskDeclaration)(
+      cdp,
+      { id: "valid-ntp-page" },
+      "valid-ntp-session",
+      async (_cdp: any, _sess: any, expr: string) => {
+        evalInCount++;
+        if (expr.includes("composerInput")) return "test prompt";
+        return true;
+      },
+      async () => {},
+      async () => { clickCount++; return true; },
+      async (_cdp: any, _sess: any, _sel: string, val: string) => {
+        typeCount++;
+        typedValue = val;
+        return true;
+      },
+      () => "#composer",
+      () => "#send",
+    );
+
+    await driveHubTask("test prompt");
+
+    assert(evalInCount >= 1, "View reset and composer evaluations must run on success");
+    assertEquals(clickCount, 2, "Both #home and #send must be clicked on success");
+    assertEquals(typeCount, 1, "Composer must be typed into on success");
+    assertEquals(typedValue, "test prompt", "Correct prompt text typed");
+  }
+
+  // ── Scenario 4: Mutant Check (restoring .catch(() => {}) swallows activation failure and enters Page.bringToFront/evalIn/clickSel/typeInto) ──
+  {
+    const mutantDeclaration = driveHubTaskDeclaration.replace(
+      'await cdp.send("Target.activateTarget", { targetId: ntpPage.id });',
+      'await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});',
+    );
+    assert(mutantDeclaration !== driveHubTaskDeclaration, "mutant must contain .catch()");
+
+    const mutantFrames: string[] = [];
+    const ws: any = {
+      readyState: 1,
+      send: (frame: string) => {
+        mutantFrames.push(frame);
+        const parsed = JSON.parse(frame);
+        if (parsed.method === "Target.activateTarget") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                error: { code: -32602, message: "No target with given id found" },
+              }),
+            });
+          });
+        } else {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({ id: parsed.id, result: {} }),
+            });
+          });
+        }
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    let mutantEvalInCount = 0;
+    let mutantClickCount = 0;
+    let mutantTypeCount = 0;
+
+    const mutantDriveHubTask = compileDriveHubTask(mutantDeclaration)(
+      cdp,
+      { id: "closed-ntp-page" },
+      "fake-ntp-session",
+      async () => { mutantEvalInCount++; return true; },
+      async () => {},
+      async () => { mutantClickCount++; return true; },
+      async () => { mutantTypeCount++; return true; },
+      () => "#composer",
+      () => "#send",
+    );
+
+    await mutantDriveHubTask("test prompt");
+
+    const btfSent = mutantFrames.some((f) => JSON.parse(f).method === "Page.bringToFront");
+    assertEquals(btfSent, true, "mutant with .catch() swallows error and sends Page.bringToFront (RED)");
+    assert(mutantEvalInCount >= 1, "mutant with .catch() swallows error and evaluates view reset (RED)");
     assertEquals(mutantClickCount, 2, "mutant with .catch() swallows error and calls clickSel twice (RED)");
     assertEquals(mutantTypeCount, 1, "mutant with .catch() swallows error and calls typeInto (RED)");
   }

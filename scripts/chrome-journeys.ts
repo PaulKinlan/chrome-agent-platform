@@ -5307,7 +5307,7 @@ async function main() {
     const driveHubTask = async (text) => {
       // The NTP is a background tab after the Settings journey; a background
       // target neither paints nor screenshots, so bring it to the front first.
-      await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
+      await cdp.send("Target.activateTarget", { targetId: ntpPage.id });
       await cdp.send("Page.bringToFront", {}, ntpSession);
       await evalIn(cdp, ntpSession, `(() => {
         if (location.hash) location.hash = "";
