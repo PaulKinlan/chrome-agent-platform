@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.674] — 2026-10-11
+- Fail closed on page focus rejection before security shield observation
+
 ## [0.3.673] — 2026-10-11
 - Fail closed on page focus rejection before scripted probe input
 

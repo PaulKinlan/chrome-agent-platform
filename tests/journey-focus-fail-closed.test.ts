@@ -9,7 +9,7 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 const journeySource = await Deno.readTextFile(new URL("../scripts/chrome-journeys.ts", import.meta.url));
 
-Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq: scripts/chrome-journeys.ts does not swallow tab activation/focus rejections", () => {
+Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52: scripts/chrome-journeys.ts does not swallow tab activation/focus rejections", () => {
   // Line 2272: openCreateDialog pre-Create click
   const openCreateDialogIdx = journeySource.indexOf("const openCreateDialog = async () => {");
   assert(openCreateDialogIdx > 0, "openCreateDialog must be found in scripts/chrome-journeys.ts");
@@ -131,6 +131,19 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq: scripts/chrome
   assert(
     !probeBlock.includes("cleanupError"),
     "runScriptedToolProbe must not capture or interpolate cleanupError",
+  );
+
+  // Line 1913: hub security shield badge observation
+  const shieldFocusIdx = journeySource.indexOf("// The shield badge still updates within 1 s of a REAL security event");
+  assert(shieldFocusIdx > 0, "shield badge focus section must be found in scripts/chrome-journeys.ts");
+  const shieldFocusBlock = journeySource.slice(shieldFocusIdx, shieldFocusIdx + 400);
+  assert(
+    shieldFocusBlock.includes('await cdp.send("Page.bringToFront", {}, ntpSession);'),
+    "shield badge focus must await Page.bringToFront without .catch()",
+  );
+  assert(
+    !shieldFocusBlock.includes('await cdp.send("Page.bringToFront", {}, ntpSession).catch('),
+    "shield badge focus must not swallow Page.bringToFront errors with .catch()",
   );
 });
 
@@ -1688,5 +1701,207 @@ Deno.test("fk9pq / mu9oa: activateNtpSession fails closed on Page.bringToFront r
     } finally {
       await testProv.cleanup();
     }
+  }
+});
+
+Deno.test("7at52: hub security shield badge observation fails closed on Page.bringToFront rejection, preventing evalIn, msgValue, and captureShot", async () => {
+  // Extract shield observation block from scripts/chrome-journeys.ts
+  const markerIdx = journeySource.indexOf("// The shield badge still updates within 1 s of a REAL security event");
+  assert(markerIdx > 0, "shield badge marker must be found");
+  const blockStart = journeySource.indexOf('await cdp.send("Page.bringToFront", {}, ntpSession);', markerIdx);
+  assert(blockStart > 0, "shield badge focus block start must be found");
+  const blockEnd = journeySource.indexOf("// Restore the fresh transparency state for the journeys that follow.", blockStart);
+  assert(blockEnd > blockStart, "shield badge focus block end must be found");
+  const blockSource = journeySource.slice(blockStart, blockEnd).trim();
+
+  // Extract the real Cdp class from scripts/chrome-journeys.ts
+  const cdpStart = journeySource.indexOf("class Cdp {");
+  const cdpEnd = journeySource.indexOf("\n/** Open a tab", cdpStart);
+  assert(cdpStart >= 0 && cdpEnd > cdpStart, "the real Cdp class must be found in scripts/chrome-journeys.ts");
+  const cdpSource = journeySource.slice(cdpStart, cdpEnd).replace("sessionId?", "sessionId");
+
+  let nextTimer = 0;
+  const timers = new Map<number, { callback: () => void; delay: number }>();
+  const RealCdp = new Function("setTimeout", "clearTimeout", `${cdpSource}\nreturn Cdp;`)(
+    (callback: () => void, delay: number) => {
+      timers.set(++nextTimer, { callback, delay });
+      return nextTimer;
+    },
+    (id: number) => timers.delete(id),
+  );
+
+  const compileRunner = (body: string) => {
+    return new Function(
+      "cdp",
+      "ntpSession",
+      "sleep",
+      "evalIn",
+      "msgValue",
+      "check",
+      "captureShot",
+      "writeEvidence",
+      `return (async () => {
+        ${body}
+      })();`,
+    );
+  };
+
+  // ── Scenario 1: Closed Session Wire Error (-32001) ──
+  {
+    const ws: any = {
+      readyState: 1, // OPEN
+      send: (frame: string) => {
+        const parsed = JSON.parse(frame);
+        if (parsed.method === "Page.bringToFront") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                error: { code: -32001, message: "Session with given id not found." },
+              }),
+            });
+          });
+        }
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    let evalCalls = 0;
+    let msgCalls = 0;
+    let captureCalls = 0;
+    let sleepCalls = 0;
+    let checkCalls = 0;
+
+    const runner = compileRunner(blockSource);
+    let thrownErr: any = null;
+    try {
+      await runner(
+        cdp,
+        "fake-ntp-session",
+        async () => { sleepCalls++; },
+        async () => { evalCalls++; return 0; },
+        async () => { msgCalls++; return {}; },
+        () => { checkCalls++; },
+        async () => { captureCalls++; return null; },
+        async () => {},
+      );
+    } catch (err: any) {
+      thrownErr = err;
+    }
+
+    assert(thrownErr !== null, "must throw on closed session");
+    assert(
+      thrownErr.message.includes("(-32001): Session with given id not found."),
+      `Must preserve exact CDP protocol error: ${thrownErr.message}`,
+    );
+    assertEquals(evalCalls, 0, "evalIn must NOT be called on focus rejection (0 eval calls)");
+    assertEquals(msgCalls, 0, "msgValue must NOT be called on focus rejection (0 msg calls)");
+    assertEquals(captureCalls, 0, "captureShot must NOT be called on focus rejection (0 capture calls)");
+    assertEquals(sleepCalls, 0, "sleep must NOT be called on focus rejection (0 sleep calls)");
+    assertEquals(checkCalls, 0, "check assertions must NOT run on focus rejection");
+  }
+
+  // ── Scenario 2: Dead Transport (CLOSED socket + 15s timer rejection) ──
+  {
+    const ws: any = {
+      readyState: 3, // CLOSED
+      send: (_frame: string) => {
+        // Page.bringToFront on dead socket: ws.send returns normally, no reply frame, pending timer
+      },
+    };
+    const cdp = new RealCdp(ws);
+    ws.onclose();
+    assertEquals(cdp.fatalEvents, ["websocket closed unexpectedly"]);
+
+    let evalCalls = 0;
+    let msgCalls = 0;
+    let captureCalls = 0;
+
+    const runner = compileRunner(blockSource);
+    const runPromise = runner(
+      cdp,
+      "fake-ntp-session",
+      async () => {},
+      async () => { evalCalls++; return 0; },
+      async () => { msgCalls++; return {}; },
+      () => {},
+      async () => { captureCalls++; return null; },
+      async () => {},
+    );
+
+    let runErr: any = null;
+    runPromise.catch((e: any) => { runErr = e; });
+
+    // Yield macro-task turns to allow runner to reach await Page.bringToFront
+    await new Promise((r) => setTimeout(r, 10));
+
+    assertEquals(runErr, null, "Must remain pending while awaiting 15s timer");
+    assertEquals(cdp.pending.size, 1, "Cdp.pending must hold Page.bringToFront request");
+    assertEquals(timers.size, 1, "Timer must be active");
+    const [timerId, timerEntry] = [...timers.entries()][0];
+    assertEquals(timerEntry.delay, 15000, "Cdp.send timer must be 15000ms");
+    assertEquals(evalCalls, 0, "Zero evalIn while pending");
+    assertEquals(msgCalls, 0, "Zero msgValue while pending");
+    assertEquals(captureCalls, 0, "Zero captureShot while pending");
+
+    // Fire the 15s timer callback
+    timers.delete(timerId);
+    timerEntry.callback();
+
+    await runPromise.catch(() => {});
+    assert(runErr !== null, "Must reject after timer fires");
+    assert(
+      runErr.message.includes("cdp timeout: Page.bringToFront"),
+      `Unexpected timeout error: ${runErr.message}`,
+    );
+    assertEquals(evalCalls, 0, "Zero evalIn on dead transport");
+    assertEquals(msgCalls, 0, "Zero msgValue on dead transport");
+    assertEquals(captureCalls, 0, "Zero captureShot on dead transport");
+  }
+
+  // ── Scenario 3: Mutant Check (restoring .catch(() => {}) swallows focus rejection and enters downstream evalIn) ──
+  {
+    const mutantSource = blockSource.replace(
+      'await cdp.send("Page.bringToFront", {}, ntpSession);',
+      'await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});',
+    );
+    assert(mutantSource !== blockSource, "mutant must contain catch()");
+
+    const mutantCdp: any = {
+      send: async (method: string) => {
+        if (method === "Page.bringToFront") {
+          throw new Error("cdp error 1 (-32001): Session with given id not found.");
+        }
+        return {};
+      },
+    };
+
+    let mutantEvalCalls = 0;
+    const mutantRunner = compileRunner(mutantSource);
+
+    let mutantErr: any = null;
+    try {
+      await mutantRunner(
+        mutantCdp,
+        "fake-ntp-session",
+        async () => {},
+        async () => {
+          mutantEvalCalls++;
+          throw new Error("evalIn failed on dead session");
+        },
+        async () => {},
+        () => {},
+        async () => null,
+        async () => {},
+      );
+    } catch (e: any) {
+      mutantErr = e;
+    }
+
+    assertEquals(mutantEvalCalls, 1, "mutant with .catch() swallows focus error and enters downstream evalIn (RED)");
+    assert(
+      mutantErr?.message.includes("evalIn failed on dead session"),
+      "mutant error is downstream eval failure instead of root-cause focus failure (RED)",
+    );
   }
 });

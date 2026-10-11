@@ -1915,7 +1915,7 @@ async function main() {
     // the page reports a CSP violation through the existing diagnostics.report
     // route (exactly what the hub's own securitypolicyviolation listener
     // sends), and the SW's revision bump pushes the new count to the badge.
-    await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});
+    await cdp.send("Page.bringToFront", {}, ntpSession);
     await sleep(200);
     const shieldCount = () => evalIn(cdp, ntpSession, `Number(document.querySelector('security-shield')?.getAttribute('count') ?? -1)`);
     const shieldCountBefore = await shieldCount();
