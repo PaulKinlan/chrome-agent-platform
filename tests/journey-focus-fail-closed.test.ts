@@ -1941,7 +1941,16 @@ Deno.test("vs9d2.1: keyless composer pre-input fails closed on Target.activateTa
   assert(end > start, "keyless pre-input end must be found");
   const blockBody = journeySource.slice(start, end).trim();
 
-  // Helper compiler
+  // Verify production journey main finally teardown exists
+  const mainFinallyIdx = journeySource.lastIndexOf("} finally {");
+  assert(mainFinallyIdx > 0, "main finally block must exist in scripts/chrome-journeys.ts");
+  const mainFinallyBlock = journeySource.slice(mainFinallyIdx);
+  assert(
+    mainFinallyBlock.includes("teardownJourneyChrome(proc, profile)"),
+    "main finally must tear down Chrome process and profile",
+  );
+
+  // Helper compiler executes the block directly without synthetic try/finally
   const compileRunner = (body: string) =>
     new Function(
       "cdp",
@@ -1953,18 +1962,7 @@ Deno.test("vs9d2.1: keyless composer pre-input fails closed on Target.activateTa
       "typeInto",
       "composerInput",
       "composerSend",
-      "onCleanup",
-      `
-      return (async () => {
-        let cleanupRan = false;
-        try {
-          ${body}
-        } finally {
-          cleanupRan = true;
-          onCleanup(cleanupRan);
-        }
-      })();
-      `,
+      `return (async () => {\n${body}\n})();`,
     );
 
   const runner = compileRunner(blockBody);
@@ -1982,7 +1980,6 @@ Deno.test("vs9d2.1: keyless composer pre-input fails closed on Target.activateTa
 
     let clickCount = 0;
     let typeCount = 0;
-    let cleanupRan = false;
 
     const runPromise = runner(
       cdp,
@@ -1994,7 +1991,6 @@ Deno.test("vs9d2.1: keyless composer pre-input fails closed on Target.activateTa
       async () => { typeCount++; return true; },
       () => "#composer",
       () => "#send",
-      (cleaned: boolean) => { cleanupRan = cleaned; },
     );
 
     let runErr: any = null;
@@ -2023,7 +2019,6 @@ Deno.test("vs9d2.1: keyless composer pre-input fails closed on Target.activateTa
     assertEquals(cdp.pending.size, 0, "Pending entry must be cleaned up on timeout");
     assertEquals(clickCount, 0, "clickSel must NOT be called on dead transport (0 clicks)");
     assertEquals(typeCount, 0, "typeInto must NOT be called on dead transport (0 typing)");
-    assertEquals(cleanupRan, true, "cleanup must run in finally");
   }
 
   // ── Scenario 2: Closed Target (-32602 Wire Protocol Error) ──
@@ -2062,7 +2057,6 @@ Deno.test("vs9d2.1: keyless composer pre-input fails closed on Target.activateTa
 
     let clickCount = 0;
     let typeCount = 0;
-    let cleanupRan = false;
 
     let runErr: any = null;
     try {
@@ -2076,7 +2070,6 @@ Deno.test("vs9d2.1: keyless composer pre-input fails closed on Target.activateTa
         async () => { typeCount++; return true; },
         () => "#composer",
         () => "#send",
-        (cleaned: boolean) => { cleanupRan = cleaned; },
       );
     } catch (e: any) {
       runErr = e;
@@ -2089,7 +2082,6 @@ Deno.test("vs9d2.1: keyless composer pre-input fails closed on Target.activateTa
     );
     assertEquals(clickCount, 0, "Zero clicks after Target.activateTarget rejection");
     assertEquals(typeCount, 0, "Zero typing after Target.activateTarget rejection");
-    assertEquals(cleanupRan, true, "cleanup must run in finally");
     // Verify Page.bringToFront was never sent over the wire
     const btfSent = frames.some((f) => JSON.parse(f).method === "Page.bringToFront");
     assertEquals(btfSent, false, "Page.bringToFront must not be sent when Target.activateTarget fails");
@@ -2118,7 +2110,6 @@ Deno.test("vs9d2.1: keyless composer pre-input fails closed on Target.activateTa
     let clickCount = 0;
     let typeCount = 0;
     let typedValue = "";
-    let cleanupRan = false;
 
     await runner(
       cdp,
@@ -2134,13 +2125,11 @@ Deno.test("vs9d2.1: keyless composer pre-input fails closed on Target.activateTa
       },
       () => "#composer",
       () => "#send",
-      (cleaned: boolean) => { cleanupRan = cleaned; },
     );
 
     assertEquals(clickCount, 2, "Both #home and #send must be clicked on success");
     assertEquals(typeCount, 1, "Composer must be typed into on success");
     assertEquals(typedValue, "group my tabs by topic", "Correct task text typed");
-    assertEquals(cleanupRan, true, "cleanup must run on success");
   }
 
   // ── Scenario 4: Mutant Check (restoring .catch(() => {}) swallows activation failure and enters Page.bringToFront/clickSel/typeInto) ──
@@ -2191,7 +2180,6 @@ Deno.test("vs9d2.1: keyless composer pre-input fails closed on Target.activateTa
       async () => { mutantTypeCount++; return true; },
       () => "#composer",
       () => "#send",
-      () => {},
     );
 
     const btfSent = mutantFrames.some((f) => JSON.parse(f).method === "Page.bringToFront");
