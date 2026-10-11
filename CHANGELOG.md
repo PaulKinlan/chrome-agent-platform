@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.676] — 2026-10-11
+- Fail closed on target activation rejection in driveHubTask before NTP focus and input
+
 ## [0.3.675] — 2026-10-11
 - Fail closed on target activation rejection in keyless check before NTP focus
 
