@@ -9,7 +9,7 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 const journeySource = await Deno.readTextFile(new URL("../scripts/chrome-journeys.ts", import.meta.url));
 
-Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2.1 / vs9d2.2: scripts/chrome-journeys.ts does not swallow tab activation/focus rejections", () => {
+Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2.1 / vs9d2.2 / vs9d2.3: scripts/chrome-journeys.ts does not swallow tab activation/focus rejections", () => {
   // Line 2272: openCreateDialog pre-Create click
   const openCreateDialogIdx = journeySource.indexOf("const openCreateDialog = async () => {");
   assert(openCreateDialogIdx > 0, "openCreateDialog must be found in scripts/chrome-journeys.ts");
@@ -82,6 +82,14 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2
   const step1Idx = journeySource.indexOf("// ── step 1 ──");
   assert(step1Idx > 0, "testTaskLifecycle step 1 must be found in scripts/chrome-journeys.ts");
   const step1Block = journeySource.slice(step1Idx, step1Idx + 400);
+  assert(
+    step1Block.includes('await cdp.send("Target.activateTarget", { targetId: ntpPage.id });\n    await cdp.send("Page.bringToFront", {}, ntp);'),
+    "testTaskLifecycle step 1 must await Target.activateTarget without .catch() before Page.bringToFront",
+  );
+  assert(
+    !step1Block.includes('await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch('),
+    "testTaskLifecycle step 1 must not swallow Target.activateTarget errors with .catch()",
+  );
   assert(
     step1Block.includes('await cdp.send("Page.bringToFront", {}, ntp);\n    await clickSel(cdp, ntp, "#home")'),
     "testTaskLifecycle step 1 must await Page.bringToFront without .catch() before clickSel",
@@ -2467,3 +2475,256 @@ Deno.test("vs9d2.2: driveHubTask fails closed on Target.activateTarget rejection
     assertEquals(mutantTypeCount, 1, "mutant with .catch() swallows error and calls typeInto (RED)");
   }
 });
+
+Deno.test("vs9d2.3: testTaskLifecycle step 1 fails closed on Target.activateTarget rejection, preventing Page.bringToFront and input", async () => {
+  // Extract real Cdp implementation from scripts/chrome-journeys.ts
+  const cdpStart = journeySource.indexOf("class Cdp {");
+  const cdpEnd = journeySource.indexOf("\n/** Open a tab", cdpStart);
+  assert(cdpStart >= 0 && cdpEnd > cdpStart, "the real Cdp class must be found in scripts/chrome-journeys.ts");
+  const cdpSource = journeySource.slice(cdpStart, cdpEnd).replace("sessionId?", "sessionId");
+
+  // Wire mock timers so 15s transport timeout can be triggered deterministically
+  const timers = new Map<number, { callback: () => void; delay: number }>();
+  let nextTimer = 0;
+  const RealCdp = new Function("setTimeout", "clearTimeout", `${cdpSource}\nreturn Cdp;`)(
+    (callback: () => void, delay: number) => {
+      timers.set(++nextTimer, { callback, delay });
+      return nextTimer;
+    },
+    (id: number) => timers.delete(id),
+  );
+
+  // Extract the real step 1 pre-input declaration from demoPathJourney
+  const start = journeySource.indexOf("// ── step 1 ──");
+  assert(start > 0, "step 1 start must be found");
+  const end = journeySource.indexOf("const STATE = `", start);
+  assert(end > start, "step 1 end must be found");
+  const step1Declaration = journeySource.slice(start, end).trim();
+
+  // Helper compiler executes the real declaration directly
+  const compileStep1 = (code: string) =>
+    new Function(
+      "cdp",
+      "ntpPage",
+      "ntp",
+      "clickSel",
+      "sleep",
+      "typeInto",
+      "composerInput",
+      "composerSend",
+      "DEMO_STEP1",
+      `return (async () => {\n${code}\n})();`,
+    );
+
+  // ── Scenario 1: Dead Transport (CLOSED socket + 15s timer rejection) ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 3, // CLOSED
+      send: (frame: string) => frames.push(frame),
+    };
+    const cdp = new RealCdp(ws);
+    ws.onclose();
+    assertEquals(cdp.fatalEvents, ["websocket closed unexpectedly"]);
+
+    let clickCount = 0;
+    let typeCount = 0;
+
+    const runStep1 = compileStep1(step1Declaration)(
+      cdp,
+      { id: "fake-ntp-page" },
+      "fake-ntp-session",
+      async () => { clickCount++; return true; },
+      async () => {},
+      async () => { typeCount++; return true; },
+      () => "#composer",
+      () => "#send",
+      "test demo prompt",
+    );
+
+    // Frame was placed in transport buffer while pending 15s timer
+    assertEquals(frames.length, 1);
+    const sentMsg = JSON.parse(frames[0]);
+    assertEquals(sentMsg.method, "Target.activateTarget");
+    assertEquals(sentMsg.params, { targetId: "fake-ntp-page" });
+
+    // Assert zero downstream calls while waiting
+    assertEquals(clickCount, 0, "clickSel must NOT be called while activation is pending");
+    assertEquals(typeCount, 0, "typeInto must NOT be called while activation is pending");
+
+    // Advance 15s transport timeout
+    const timerEntries = [...timers.entries()];
+    assertEquals(timerEntries.length, 1, "exactly one transport timer must be registered");
+    const [timerId, timer] = timerEntries[0];
+    assertEquals(timer.delay, 15000, "transport timeout must be 15000ms");
+    timers.delete(timerId);
+    timer.callback();
+
+    await assertRejects(
+      () => runStep1,
+      Error,
+      "cdp timeout: Target.activateTarget",
+    );
+
+    // Assert zero downstream calls after dead transport rejection
+    const btfSent = frames.some((f) => JSON.parse(f).method === "Page.bringToFront");
+    assertEquals(btfSent, false, "Page.bringToFront must NOT be sent after activation timeout");
+    assertEquals(clickCount, 0, "clickSel must NOT be called after activation timeout (0 calls)");
+    assertEquals(typeCount, 0, "typeInto must NOT be called after activation timeout (0 calls)");
+  }
+
+  // ── Scenario 2: Closed Target (-32602 wire rejection) ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 1, // OPEN
+      send: (frame: string) => {
+        frames.push(frame);
+        const parsed = JSON.parse(frame);
+        if (parsed.method === "Target.activateTarget") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                error: { code: -32602, message: "No target with given id found" },
+              }),
+            });
+          });
+        }
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    let clickCount = 0;
+    let typeCount = 0;
+
+    const runStep1 = compileStep1(step1Declaration)(
+      cdp,
+      { id: "closed-ntp-page" },
+      "fake-ntp-session",
+      async () => { clickCount++; return true; },
+      async () => {},
+      async () => { typeCount++; return true; },
+      () => "#composer",
+      () => "#send",
+      "test demo prompt",
+    );
+
+    await assertRejects(
+      () => runStep1,
+      Error,
+      "No target with given id found",
+    );
+
+    // Fail closed: zero downstream calls across all methods
+    const btfSent = frames.some((f) => JSON.parse(f).method === "Page.bringToFront");
+    assertEquals(btfSent, false, "Page.bringToFront must NOT be sent after target error");
+    assertEquals(clickCount, 0, "clickSel must NOT be called after target error (0 calls)");
+    assertEquals(typeCount, 0, "typeInto must NOT be called after target error (0 calls)");
+  }
+
+  // ── Scenario 3: Positive Path (pure mocked collaborators) ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 1, // OPEN
+      send: (frame: string) => {
+        frames.push(frame);
+        const parsed = JSON.parse(frame);
+        queueMicrotask(() => {
+          ws.onmessage({
+            data: JSON.stringify({ id: parsed.id, result: {} }),
+          });
+        });
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    let clickCount = 0;
+    let typeCount = 0;
+
+    const runStep1 = compileStep1(step1Declaration)(
+      cdp,
+      { id: "active-ntp-page" },
+      "fake-ntp-session",
+      async () => { clickCount++; return true; },
+      async () => {},
+      async () => { typeCount++; return true; },
+      () => "#composer",
+      () => "#send",
+      "test demo prompt",
+    );
+
+    await runStep1;
+
+    // Both CDP commands sent
+    assertEquals(frames.length, 2);
+    assertEquals(JSON.parse(frames[0]).method, "Target.activateTarget");
+    assertEquals(JSON.parse(frames[1]).method, "Page.bringToFront");
+    // #home click and #send click invoked, prompt typed
+    assertEquals(clickCount, 2, "positive path must click #home and #send");
+    assertEquals(typeCount, 1, "positive path must type prompt into composer");
+  }
+
+  // ── Scenario 4: Swallow Mutant Check (Restoring .catch(() => {})) ──
+  {
+    const mutantDeclaration = step1Declaration.replace(
+      'await cdp.send("Target.activateTarget", { targetId: ntpPage.id });',
+      'await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});',
+    );
+    assert(
+      mutantDeclaration.includes(".catch("),
+      "mutant must contain .catch() restoration",
+    );
+
+    const mutantFrames: string[] = [];
+    const ws: any = {
+      readyState: 1,
+      send: (frame: string) => {
+        mutantFrames.push(frame);
+        const parsed = JSON.parse(frame);
+        if (parsed.method === "Target.activateTarget") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                error: { code: -32602, message: "No target with given id found" },
+              }),
+            });
+          });
+        } else {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({ id: parsed.id, result: {} }),
+            });
+          });
+        }
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    let mutantClickCount = 0;
+    let mutantTypeCount = 0;
+
+    const mutantRunStep1 = compileStep1(mutantDeclaration)(
+      cdp,
+      { id: "closed-ntp-page" },
+      "fake-ntp-session",
+      async () => { mutantClickCount++; return true; },
+      async () => {},
+      async () => { mutantTypeCount++; return true; },
+      () => "#composer",
+      () => "#send",
+      "test demo prompt",
+    );
+
+    await mutantRunStep1;
+
+    // Restoring .catch(() => {}) swallows target rejection and calls first downstream forbidden call: Page.bringToFront
+    const btfSent = mutantFrames.some((f) => JSON.parse(f).method === "Page.bringToFront");
+    assertEquals(btfSent, true, "mutant with .catch() swallows error and sends Page.bringToFront (RED)");
+    assertEquals(mutantClickCount, 2, "mutant with .catch() swallows error and calls clickSel twice (RED)");
+    assertEquals(mutantTypeCount, 1, "mutant with .catch() swallows error and calls typeInto (RED)");
+  }
+});
+

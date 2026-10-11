@@ -9544,7 +9544,7 @@ async function demoPathJourney() {
     await sleep(1200);
 
     // ── step 1 ──
-    await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
+    await cdp.send("Target.activateTarget", { targetId: ntpPage.id });
     await cdp.send("Page.bringToFront", {}, ntp);
     await clickSel(cdp, ntp, "#home").catch(() => false);
     await sleep(500);
