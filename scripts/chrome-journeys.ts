@@ -3570,7 +3570,7 @@ async function main() {
       cdp.pageSessions.add(ledgerOptsSession);
       await sleep(1200);
       await evalIn(cdp, ledgerOptsSession, `chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "openai-compatible", baseURL: ledgerProvider.baseURL, apiKey: SCRIPTED_DUMMY_KEY, model: "scripted" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`);
-      await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
+      await cdp.send("Target.activateTarget", { targetId: ntpPage.id });
       await clickSel(cdp, ntpSession, "#home").catch(() => false);
       await sleep(600);
       // Snapshot BEFORE the click: the terminal wait must bind to THIS run's

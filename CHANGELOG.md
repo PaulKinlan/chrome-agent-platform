@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.671] — 2026-10-11
+- Fail closed on target activation failure in action ledger check test
+
 ## [0.3.670] — 2026-10-11
 - Fail closed on browser tab focus failures during factory reset test automation
 
