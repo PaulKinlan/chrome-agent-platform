@@ -224,9 +224,68 @@ async function fetchText(fetchImpl, url, timeoutMs, origin, maxBytes = null) {
       }
       if (finalOrigin !== origin) return null; // redirected off-origin — refused
     }
-    const text = await res.text();
-    if (typeof text !== "string") return null;
-    return typeof maxBytes === "number" && maxBytes > 0 ? text.slice(0, maxBytes) : text;
+    // Preservation per 9yx7a: When maxBytes is null (general-content path), preserve existing res.text() byte-for-byte
+    if (typeof maxBytes !== "number" || maxBytes <= 0) {
+      const text = await res.text();
+      return typeof text === "string" ? text : null;
+    }
+
+    // Bounded discovery doc path (llms.txt / sitemap.xml / root HTML):
+    // Absent reader fails closed (zero res.text fallback that would buffer unbounded body)
+    if (!res.body || typeof res.body.getReader !== "function") {
+      return null;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let result = "";
+    let totalBytes = 0;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          result += decoder.decode();
+          break;
+        }
+        if (!value || !(value instanceof Uint8Array)) continue;
+
+        const remaining = maxBytes - totalBytes;
+        if (value.byteLength >= remaining) {
+          const slice = value.subarray(0, remaining);
+          result += decoder.decode(slice, { stream: false });
+          totalBytes += remaining;
+
+          // Abort underlying transport BEFORE awaiting cancel, with bound on cancel settlement
+          ctrl.abort();
+          let cancelTimer = null;
+          let cancelOk = false;
+          try {
+            await Promise.race([
+              Promise.resolve(reader.cancel("maxBytes exceeded")).then(() => {
+                cancelOk = true;
+              }),
+              new Promise((_, reject) => {
+                cancelTimer = setTimeout(() => reject(new Error("cancel timed out")), 200);
+              }),
+            ]);
+          } catch {
+            cancelOk = false;
+          } finally {
+            if (cancelTimer != null) clearTimeout(cancelTimer);
+          }
+          if (!cancelOk) return null; // failed to cancel or cancel timed out/rejected -> fail closed
+          break;
+        }
+
+        result += decoder.decode(value, { stream: true });
+        totalBytes += value.byteLength;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    return result;
   } catch {
     return null;
   } finally {

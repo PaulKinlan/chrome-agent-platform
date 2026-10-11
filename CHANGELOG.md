@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.667] — 2026-10-10
+- Limit memory usage when discovering site documentation files
+
 ## [0.3.666] — 2026-10-10
 - Fail closed on browser tab focus failures during hub task automation
 
