@@ -554,7 +554,7 @@ async function activateNtpSession(cdp, session) {
   if (targetId) {
     await cdp?.send?.("Target.activateTarget", { targetId })?.catch?.(() => {});
   }
-  await cdp?.send?.("Page.bringToFront", {}, session)?.catch?.(() => {});
+  await cdp.send("Page.bringToFront", {}, session);
 }
 
 async function runScriptedToolProbe(cdp, ntpSession, optsSession, steps, task, expectRequests, onPause = null) {

@@ -9,7 +9,7 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 const journeySource = await Deno.readTextFile(new URL("../scripts/chrome-journeys.ts", import.meta.url));
 
-Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f: scripts/chrome-journeys.ts does not swallow tab activation/focus rejections", () => {
+Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq: scripts/chrome-journeys.ts does not swallow tab activation/focus rejections", () => {
   // Line 2272: openCreateDialog pre-Create click
   const openCreateDialogIdx = journeySource.indexOf("const openCreateDialog = async () => {");
   assert(openCreateDialogIdx > 0, "openCreateDialog must be found in scripts/chrome-journeys.ts");
@@ -101,6 +101,19 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f: scripts/chrome-journey
   assert(
     !approvalBlock.includes('await cdp.send("Page.bringToFront", {}, optsSession).catch('),
     "captureApprovalEvidence must not swallow Page.bringToFront errors with .catch()",
+  );
+
+  // Line 557: activateNtpSession pre-input focus
+  const activateIdx = journeySource.indexOf("async function activateNtpSession(cdp, session) {");
+  assert(activateIdx > 0, "activateNtpSession must be found in scripts/chrome-journeys.ts");
+  const activateBlock = journeySource.slice(activateIdx, activateIdx + 400);
+  assert(
+    activateBlock.includes('await cdp.send("Page.bringToFront", {}, session);'),
+    "activateNtpSession must await Page.bringToFront without .catch()",
+  );
+  assert(
+    !activateBlock.includes('await cdp.send("Page.bringToFront", {}, session).catch('),
+    "activateNtpSession must not swallow Page.bringToFront errors with .catch()",
   );
 });
 
@@ -1152,4 +1165,274 @@ Deno.test("hpm8f: captureApprovalEvidence fails closed on Page.bringToFront reje
   assertEquals(mutantCaptureCalls, 3, "mutant with .catch() swallows error and calls captureShot 3 times");
   assertEquals(mutantSleepCalls, 3, "mutant with .catch() sleeps 3 times");
   assert(mutantErr?.message.includes("approval evidence capture failed"), "mutant throws evidence capture failed instead of CDP root cause");
+});
+
+Deno.test("fk9pq: activateNtpSession fails closed on Page.bringToFront rejection, preventing clickSel and typeInto", async () => {
+  // Extract activateNtpSession and runScriptedToolProbe pre-input block from scripts/chrome-journeys.ts
+  const helperStart = journeySource.indexOf("async function activateNtpSession(cdp, session) {");
+  assert(helperStart > 0, "activateNtpSession start must be found");
+  const helperEnd = journeySource.indexOf("\nasync function runScriptedToolProbe", helperStart);
+  assert(helperEnd > helperStart, "activateNtpSession end must be found");
+  const helperBody = journeySource.slice(helperStart, helperEnd).trim();
+
+  const probeStart = journeySource.indexOf("await activateNtpSession(cdp, ntpSession);", helperEnd);
+  assert(probeStart > 0, "runScriptedToolProbe activate call must be found");
+  const probeEnd = journeySource.indexOf("while (provider.requests.length < expectRequests", probeStart);
+  assert(probeEnd > probeStart, "runScriptedToolProbe polling loop must be found");
+  const probeBody = journeySource.slice(probeStart, probeEnd).trim();
+
+  // Extract the real Cdp class from scripts/chrome-journeys.ts
+  const cdpStart = journeySource.indexOf("class Cdp {");
+  const cdpEnd = journeySource.indexOf("\n/** Open a tab", cdpStart);
+  assert(cdpStart >= 0 && cdpEnd > cdpStart, "the real Cdp class must be found in scripts/chrome-journeys.ts");
+  const cdpSource = journeySource.slice(cdpStart, cdpEnd).replace("sessionId?", "sessionId");
+
+  let nextTimer = 0;
+  const timers = new Map<number, { callback: () => void; delay: number }>();
+  const RealCdp = new Function("setTimeout", "clearTimeout", `${cdpSource}\nreturn Cdp;`)(
+    (callback: () => void, delay: number) => {
+      timers.set(++nextTimer, { callback, delay });
+      return nextTimer;
+    },
+    (id: number) => timers.delete(id),
+  );
+
+  // ── Scenario 1: Closed Session Wire Error (-32001) ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 1, // OPEN
+      send: (frame: string) => {
+        frames.push(frame);
+        const parsed = JSON.parse(frame);
+        if (parsed.method === "Target.getTargetInfo") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                result: { targetInfo: { targetId: "fake-ntp-target-id" } },
+              }),
+            });
+          });
+        } else if (parsed.method === "Target.activateTarget") {
+          queueMicrotask(() => {
+            ws.onmessage({ data: JSON.stringify({ id: parsed.id, result: {} }) });
+          });
+        } else if (parsed.method === "Page.bringToFront") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                error: { code: -32001, message: "Session with given id not found." },
+              }),
+            });
+          });
+        }
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    let clickSelCount = 0;
+    let typeIntoCount = 0;
+    let pollLoopEntered = false;
+
+    const runner = new Function(
+      "cdp",
+      "ntpSession",
+      "evalIn",
+      "sleep",
+      "clickSel",
+      "typeInto",
+      "composerInput",
+      "composerSend",
+      "task",
+      "onPoll",
+      `
+      ${helperBody}
+      return (async () => {
+        ${probeBody}
+        onPoll();
+      })();
+      `,
+    );
+
+    let thrownError: any = null;
+    try {
+      await runner(
+        cdp,
+        "fake-ntp-session",
+        async () => {},
+        async () => {},
+        async () => { clickSelCount++; return true; },
+        async () => { typeIntoCount++; return true; },
+        () => "#composer [data-composer-input]",
+        () => "#composer [data-composer-send]",
+        "test task",
+        () => { pollLoopEntered = true; },
+      );
+    } catch (err: any) {
+      thrownError = err;
+    }
+
+    assert(thrownError !== null, "activateNtpSession must throw on closed session");
+    assert(
+      thrownError.message.includes("(-32001): Session with given id not found."),
+      `Must preserve exact CDP protocol error: ${thrownError.message}`,
+    );
+    assertEquals(clickSelCount, 0, "clickSel must NOT be called on closed session (0 clicks)");
+    assertEquals(typeIntoCount, 0, "typeInto must NOT be called on closed session (0 typing)");
+    assertEquals(pollLoopEntered, false, "120s polling loop must never be entered on closed session");
+  }
+
+  // ── Scenario 2: Dead Transport (CLOSED socket + 15s timer rejection) ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 3, // CLOSED
+      send: (frame: string) => {
+        frames.push(frame);
+        const parsed = JSON.parse(frame);
+        if (parsed.method === "Target.getTargetInfo") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                result: { targetInfo: { targetId: "fake-ntp-target-id" } },
+              }),
+            });
+          });
+        } else if (parsed.method === "Target.activateTarget") {
+          queueMicrotask(() => {
+            ws.onmessage({ data: JSON.stringify({ id: parsed.id, result: {} }) });
+          });
+        }
+        // Page.bringToFront on dead socket: ws.send returns normally, no reply frame, pending timer
+      },
+    };
+    const cdp = new RealCdp(ws);
+    ws.onclose();
+    assertEquals(cdp.fatalEvents, ["websocket closed unexpectedly"]);
+
+    let clickSelCount = 0;
+    let typeIntoCount = 0;
+    let pollLoopEntered = false;
+
+    const runner = new Function(
+      "cdp",
+      "ntpSession",
+      "evalIn",
+      "sleep",
+      "clickSel",
+      "typeInto",
+      "composerInput",
+      "composerSend",
+      "task",
+      "onPoll",
+      `
+      ${helperBody}
+      return (async () => {
+        ${probeBody}
+        onPoll();
+      })();
+      `,
+    );
+
+    const runPromise = runner(
+      cdp,
+      "fake-ntp-session",
+      async () => {},
+      async () => {},
+      async () => { clickSelCount++; return true; },
+      async () => { typeIntoCount++; return true; },
+      () => "#composer [data-composer-input]",
+      () => "#composer [data-composer-send]",
+      "test task",
+      () => { pollLoopEntered = true; },
+    );
+
+    let runErr: any = null;
+    runPromise.catch((e: any) => { runErr = e; });
+
+    // Yield macro-task turns to allow runner to reach await Page.bringToFront
+    await new Promise((r) => setTimeout(r, 10));
+
+    assertEquals(runErr, null, "Must remain pending while awaiting 15s timer");
+    assertEquals(cdp.pending.size, 1, "Cdp.pending must hold Page.bringToFront request");
+    assertEquals(timers.size, 1, "Timer must be active");
+    const [timerId, timerEntry] = [...timers.entries()][0];
+    assertEquals(timerEntry.delay, 15000, "Cdp.send timer must be 15000ms");
+    assertEquals(clickSelCount, 0, "Zero clickSel while pending");
+    assertEquals(typeIntoCount, 0, "Zero typeInto while pending");
+
+    // Fire the 15s timer callback
+    timers.delete(timerId);
+    timerEntry.callback();
+
+    await runPromise.catch(() => {});
+    assert(runErr !== null, "Must reject after timer fires");
+    assert(
+      runErr.message.includes("cdp timeout: Page.bringToFront"),
+      `Unexpected timeout error: ${runErr.message}`,
+    );
+    assertEquals(clickSelCount, 0, "Zero clickSel on dead transport");
+    assertEquals(typeIntoCount, 0, "Zero typeInto on dead transport");
+    assertEquals(pollLoopEntered, false, "120s polling loop must never be entered on dead transport");
+  }
+
+  // ── Mutant check: restoring .catch(() => {}) swallows rejection and calls clickSel and typeInto ──
+  const mutantHelperBody = helperBody.replace(
+    'await cdp.send("Page.bringToFront", {}, session);',
+    'await cdp.send("Page.bringToFront", {}, session).catch(() => {});',
+  );
+  assert(mutantHelperBody.includes(".catch("), "mutant must contain catch()");
+
+  const mutantRunner = new Function(
+    "cdp",
+    "ntpSession",
+    "evalIn",
+    "sleep",
+    "clickSel",
+    "typeInto",
+    "composerInput",
+    "composerSend",
+    "task",
+    "onPoll",
+    `
+    ${mutantHelperBody}
+    return (async () => {
+      ${probeBody}
+      onPoll();
+    })();
+    `,
+  );
+
+  let mutantClickCount = 0;
+  let mutantTypeCount = 0;
+  let mutantPollEntered = false;
+
+  await mutantRunner(
+    {
+      pageSessions: new Set(),
+      send: async (method: string) => {
+        if (method === "Page.bringToFront") {
+          throw new Error("cdp error 1 (-32001): Session with given id not found.");
+        }
+        return {};
+      },
+    },
+    "fake-ntp-session",
+    async () => "typed",
+    async () => {},
+    async () => { mutantClickCount++; return true; },
+    async () => { mutantTypeCount++; return true; },
+    () => "#composer [data-composer-input]",
+    () => "#composer [data-composer-send]",
+    "test task",
+    () => { mutantPollEntered = true; },
+  );
+
+  // The mutant survived by swallowing rejection and called clickSel twice (#home and composerSend) and typeInto!
+  assertEquals(mutantClickCount, 2, "mutant with .catch() swallows error and calls clickSel twice (#home and send)");
+  assertEquals(mutantTypeCount, 1, "mutant with .catch() swallows error and calls typeInto");
+  assertEquals(mutantPollEntered, true, "mutant with .catch() enters 120s polling loop");
 });
