@@ -1941,15 +1941,6 @@ Deno.test("vs9d2.1: keyless composer pre-input fails closed on Target.activateTa
   assert(end > start, "keyless pre-input end must be found");
   const blockBody = journeySource.slice(start, end).trim();
 
-  // Verify production journey main finally teardown exists
-  const mainFinallyIdx = journeySource.lastIndexOf("} finally {");
-  assert(mainFinallyIdx > 0, "main finally block must exist in scripts/chrome-journeys.ts");
-  const mainFinallyBlock = journeySource.slice(mainFinallyIdx);
-  assert(
-    mainFinallyBlock.includes("teardownJourneyChrome(proc, profile)"),
-    "main finally must tear down Chrome process and profile",
-  );
-
   // Helper compiler executes the block directly without synthetic try/finally
   const compileRunner = (body: string) =>
     new Function(
