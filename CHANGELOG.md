@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.672] — 2026-10-11
+- Fail closed on target activation failure before capturing approval check evidence
+
 ## [0.3.671] — 2026-10-11
 - Fail closed on target activation failure in action ledger check test
 

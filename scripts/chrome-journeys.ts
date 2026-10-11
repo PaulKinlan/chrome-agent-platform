@@ -8112,7 +8112,7 @@ async function main() {
       text: denyPayload,
     };
     const captureApprovalEvidence = async (name) => {
-      await cdp.send("Page.bringToFront", {}, optsSession).catch(() => {});
+      await cdp.send("Page.bringToFront", {}, optsSession);
       let shot = null;
       for (let i = 0; i < 3 && !shot; i++) {
         shot = await captureShot(cdp, optsSession).catch(() => null);

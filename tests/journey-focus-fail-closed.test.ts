@@ -9,7 +9,7 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 const journeySource = await Deno.readTextFile(new URL("../scripts/chrome-journeys.ts", import.meta.url));
 
-Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q: scripts/chrome-journeys.ts does not swallow tab activation/focus rejections", () => {
+Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f: scripts/chrome-journeys.ts does not swallow tab activation/focus rejections", () => {
   // Line 2272: openCreateDialog pre-Create click
   const openCreateDialogIdx = journeySource.indexOf("const openCreateDialog = async () => {");
   assert(openCreateDialogIdx > 0, "openCreateDialog must be found in scripts/chrome-journeys.ts");
@@ -88,6 +88,19 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q: scripts/chrome-journeys.ts doe
   assert(
     !resetBlock.includes('await cdp.send("Page.bringToFront", {}, opts).catch('),
     "testDataManagement factory reset must not swallow Page.bringToFront errors with .catch()",
+  );
+
+  // Line 8115: captureApprovalEvidence pre-screenshot focus
+  const approvalIdx = journeySource.indexOf("const captureApprovalEvidence = async (name) => {");
+  assert(approvalIdx > 0, "captureApprovalEvidence must be found in scripts/chrome-journeys.ts");
+  const approvalBlock = journeySource.slice(approvalIdx, approvalIdx + 300);
+  assert(
+    approvalBlock.includes('await cdp.send("Page.bringToFront", {}, optsSession);\n      let shot = null;'),
+    "captureApprovalEvidence must await Page.bringToFront without .catch() before screenshot retries",
+  );
+  assert(
+    !approvalBlock.includes('await cdp.send("Page.bringToFront", {}, optsSession).catch('),
+    "captureApprovalEvidence must not swallow Page.bringToFront errors with .catch()",
   );
 });
 
@@ -936,4 +949,207 @@ Deno.test("8u6x2 / 5ui2q: testActionLedgerJourney fails closed on Target.activat
   // The mutant survived by swallowing rejection and called clickSel twice (#home and composerSend) and typeInto!
   assertEquals(mutantClickCount, 2, "mutant with .catch() swallows error and calls clickSel twice (#home and composerSend)");
   assertEquals(mutantTypeCount, 1, "mutant with .catch() swallows error and calls typeInto");
+});
+
+Deno.test("hpm8f: captureApprovalEvidence fails closed on Page.bringToFront rejection, preventing captureShot retry loop", async () => {
+  // Extract captureApprovalEvidence helper definition from scripts/chrome-journeys.ts
+  const start = journeySource.indexOf("const captureApprovalEvidence = async (name) => {");
+  assert(start > 0, "captureApprovalEvidence start must be found");
+  const end = journeySource.indexOf("await captureApprovalEvidence(\"approval-deny-pending.png\");", start);
+  assert(end > start, "captureApprovalEvidence end must be found");
+  const fnBody = journeySource.slice(start, end).trim();
+
+  // Extract the real Cdp class from scripts/chrome-journeys.ts
+  const cdpStart = journeySource.indexOf("class Cdp {");
+  const cdpEnd = journeySource.indexOf("\n/** Open a tab", cdpStart);
+  assert(cdpStart >= 0 && cdpEnd > cdpStart, "the real Cdp class must be found in scripts/chrome-journeys.ts");
+  const cdpSource = journeySource.slice(cdpStart, cdpEnd).replace("sessionId?", "sessionId");
+
+  let nextTimer = 0;
+  const timers = new Map<number, { callback: () => void; delay: number }>();
+  const RealCdp = new Function("setTimeout", "clearTimeout", `${cdpSource}\nreturn Cdp;`)(
+    (callback: () => void, delay: number) => {
+      timers.set(++nextTimer, { callback, delay });
+      return nextTimer;
+    },
+    (id: number) => timers.delete(id),
+  );
+
+  // ── Scenario 1: Closed Session Wire Error (-32001) ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 1, // OPEN
+      send: (frame: string) => {
+        frames.push(frame);
+        const parsed = JSON.parse(frame);
+        if (parsed.method === "Page.bringToFront") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                error: { code: -32001, message: "Session with given id not found." },
+              }),
+            });
+          });
+        }
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    let captureShotCalls = 0;
+    let sleepCalls = 0;
+    let writeEvidenceCalls = 0;
+
+    const runner = new Function(
+      "cdp",
+      "optsSession",
+      "captureShot",
+      "sleep",
+      "writeEvidence",
+      `
+      return (async () => {
+        ${fnBody}
+        return await captureApprovalEvidence("test.png");
+      })();
+      `,
+    );
+
+    let thrownError: any = null;
+    try {
+      await runner(
+        cdp,
+        "fake-opts-session",
+        async () => { captureShotCalls++; return new Uint8Array([1, 2, 3]); },
+        async (ms: number) => { sleepCalls++; },
+        async (name: string, shot: any) => { writeEvidenceCalls++; },
+      );
+    } catch (err: any) {
+      thrownError = err;
+    }
+
+    assert(thrownError !== null, "captureApprovalEvidence must throw on closed session");
+    assert(
+      thrownError.message.includes("cdp error 1 (-32001): Session with given id not found."),
+      `Must preserve exact CDP protocol error: ${thrownError.message}`,
+    );
+    assertEquals(captureShotCalls, 0, "Zero captureShot calls must be made on closed session error");
+    assertEquals(sleepCalls, 0, "Zero sleep calls must be made on closed session error");
+    assertEquals(writeEvidenceCalls, 0, "Zero writeEvidence calls must be made on closed session error");
+  }
+
+  // ── Scenario 2: Dead Transport (CLOSED socket + 15s timer rejection) ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 3, // CLOSED
+      send: (frame: string) => frames.push(frame),
+    };
+    const cdp = new RealCdp(ws);
+    ws.onclose();
+    assertEquals(cdp.fatalEvents, ["websocket closed unexpectedly"]);
+
+    let captureShotCalls = 0;
+    let sleepCalls = 0;
+    let writeEvidenceCalls = 0;
+
+    const runner = new Function(
+      "cdp",
+      "optsSession",
+      "captureShot",
+      "sleep",
+      "writeEvidence",
+      `
+      return (async () => {
+        ${fnBody}
+        return await captureApprovalEvidence("test.png");
+      })();
+      `,
+    );
+
+    const runPromise = runner(
+      cdp,
+      "fake-opts-session",
+      async () => { captureShotCalls++; return new Uint8Array([1, 2, 3]); },
+      async () => { sleepCalls++; },
+      async () => { writeEvidenceCalls++; },
+    );
+
+    let runErr: any = null;
+    runPromise.catch((e: any) => { runErr = e; });
+
+    // Yield macro-task turns to allow runner to reach await Page.bringToFront
+    await new Promise((r) => setTimeout(r, 10));
+
+    assertEquals(runErr, null, "Must remain pending while awaiting 15s timer");
+    assertEquals(cdp.pending.size, 1, "Cdp.pending must hold Page.bringToFront request");
+    assertEquals(timers.size, 1, "Timer must be active");
+    const [timerId, timerEntry] = [...timers.entries()][0];
+    assertEquals(timerEntry.delay, 15000, "Cdp.send timer must be 15000ms");
+    assertEquals(captureShotCalls, 0, "Zero captureShot calls while pending");
+
+    // Fire the 15s timer callback
+    timers.delete(timerId);
+    timerEntry.callback();
+
+    await runPromise.catch(() => {});
+    assert(runErr !== null, "Must reject after timer fires");
+    assert(
+      runErr.message.includes("cdp timeout: Page.bringToFront"),
+      `Unexpected timeout error: ${runErr.message}`,
+    );
+    assertEquals(captureShotCalls, 0, "Zero captureShot calls on dead transport");
+    assertEquals(sleepCalls, 0, "Zero sleep calls on dead transport");
+    assertEquals(writeEvidenceCalls, 0, "Zero writeEvidence calls on dead transport");
+  }
+
+  // ── Mutant check: restoring .catch(() => {}) swallows rejection and calls captureShot 3 times ──
+  const mutantFnBody = fnBody.replace(
+    'await cdp.send("Page.bringToFront", {}, optsSession);',
+    'await cdp.send("Page.bringToFront", {}, optsSession).catch(() => {});',
+  );
+  assert(mutantFnBody.includes(".catch("), "mutant must contain catch()");
+
+  const mutantRunner = new Function(
+    "cdp",
+    "optsSession",
+    "captureShot",
+    "sleep",
+    "writeEvidence",
+    `
+    return (async () => {
+      ${mutantFnBody}
+      return await captureApprovalEvidence("test.png");
+    })();
+    `,
+  );
+
+  let mutantCaptureCalls = 0;
+  let mutantSleepCalls = 0;
+
+  let mutantErr: any = null;
+  try {
+    await mutantRunner(
+      {
+        pageSessions: new Set(),
+        send: async () => {
+          throw new Error("cdp error 1 (-32001): Session with given id not found.");
+        },
+      },
+      "fake-opts-session",
+      async () => {
+        mutantCaptureCalls++;
+        return null; // fails so loop retries
+      },
+      async () => { mutantSleepCalls++; },
+      async () => {},
+    );
+  } catch (err: any) {
+    mutantErr = err;
+  }
+
+  // With .catch(() => {}), the rejection is swallowed and captureShot is called 3 times!
+  assertEquals(mutantCaptureCalls, 3, "mutant with .catch() swallows error and calls captureShot 3 times");
+  assertEquals(mutantSleepCalls, 3, "mutant with .catch() sleeps 3 times");
+  assert(mutantErr?.message.includes("approval evidence capture failed"), "mutant throws evidence capture failed instead of CDP root cause");
 });
