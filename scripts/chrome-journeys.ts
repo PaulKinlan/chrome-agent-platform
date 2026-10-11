@@ -9502,7 +9502,7 @@ async function demoPathJourney() {
 
     // ── step 1 ──
     await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
-    await cdp.send("Page.bringToFront", {}, ntp).catch(() => {});
+    await cdp.send("Page.bringToFront", {}, ntp);
     await clickSel(cdp, ntp, "#home").catch(() => false);
     await sleep(500);
     const typed = await typeInto(cdp, ntp, composerInput("hub"), DEMO_STEP1);
