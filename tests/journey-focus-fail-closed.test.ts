@@ -642,7 +642,23 @@ Deno.test("25enf: testDataManagement factory reset fails closed on Page.bringToF
   assertEquals(mutantBoxOfCalled, true, "mutant with .catch() swallows error and calls boxOf to poll dialog");
 });
 
-Deno.test("8u6x2 / 5ui2q: testActionLedgerJourney fails closed on Target.activateTarget rejection with wire-accurate error shapes, preventing clickSel and typeInto", async () => {
+Deno.test("8u6x2 / 5ui2q: testActionLedgerJourney fails closed on Target.activateTarget rejection with wire-accurate Cdp.send mechanics, preventing clickSel and typeInto", async () => {
+  // Extract the real Cdp class from scripts/chrome-journeys.ts
+  const cdpStart = journeySource.indexOf("class Cdp {");
+  const cdpEnd = journeySource.indexOf("\n/** Open a tab", cdpStart);
+  assert(cdpStart >= 0 && cdpEnd > cdpStart, "the real Cdp class must be found in scripts/chrome-journeys.ts");
+  const cdpSource = journeySource.slice(cdpStart, cdpEnd).replace("sessionId?", "sessionId");
+
+  let nextTimer = 0;
+  const timers = new Map<number, { callback: () => void; delay: number }>();
+  const RealCdp = new Function("setTimeout", "clearTimeout", `${cdpSource}\nreturn Cdp;`)(
+    (callback: () => void, delay: number) => {
+      timers.set(++nextTimer, { callback, delay });
+      return nextTimer;
+    },
+    (id: number) => timers.delete(id),
+  );
+
   // Extract testActionLedgerJourney activation and setup block from scripts/chrome-journeys.ts
   const start = journeySource.indexOf("const ledgerOptsPage = await openPage(port, `chrome-extension://${extId}/options/options.html`);");
   assert(start > 0, "testActionLedgerJourney start must be found");
@@ -650,39 +666,23 @@ Deno.test("8u6x2 / 5ui2q: testActionLedgerJourney fails closed on Target.activat
   assert(end > start, "testActionLedgerJourney end must be found");
   const blockBody = journeySource.slice(start, end).trim();
 
-  for (const scenario of [
-    {
-      name: "closed target (-32602 wire shape)",
-      reject: async () => {
-        throw new Error("cdp error 2 (-32602): No target with given id found");
-      },
-      expectedErr: "cdp error 2 (-32602): No target with given id found",
-    },
-    {
-      name: "dead transport (bounded Cdp.send timeout shape)",
-      reject: async () => {
-        // Wire reality: on closed transport, ws.send() returns normally and Cdp.send rejects on timeout
-        await new Promise((r) => setTimeout(r, 10));
-        throw new Error("cdp timeout: Target.activateTarget (requestId=1, targetId=fake-ntp-id)");
-      },
-      expectedErr: "cdp timeout: Target.activateTarget",
-    },
-  ]) {
+  // ── Scenario 1: Dead Transport (CLOSED socket + 15s timer rejection) ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 3, // CLOSED
+      send: (frame: string) => frames.push(frame),
+    };
+    const cdp = new RealCdp(ws);
+    // ws.onclose fires fatalEvents but does NOT settle pending
+    ws.onclose();
+    assertEquals(cdp.fatalEvents, ["websocket closed unexpectedly"]);
+
     let clickSelCount = 0;
     let typeIntoCount = 0;
     let listRunIdsCount = 0;
     let providerClosed = false;
     let providerRestored = false;
-
-    const mockCdp = {
-      pageSessions: new Set(),
-      send: async (method: string, _params: any) => {
-        if (method === "Target.activateTarget") {
-          return await scenario.reject();
-        }
-        return {};
-      },
-    };
 
     const runner = new Function(
       "cdp",
@@ -715,10 +715,124 @@ Deno.test("8u6x2 / 5ui2q: testActionLedgerJourney fails closed on Target.activat
       `,
     );
 
-    let thrownError: Error | undefined;
+    const runPromise = runner(
+      cdp,
+      async () => ({ id: "fake-opts-id" }),
+      9222,
+      "fake-ext-id",
+      async () => "fake-opts-session",
+      async () => {},
+      async () => ({}),
+      { close: async () => { providerClosed = true; } },
+      "fake-key",
+      { id: "fake-ntp-id" },
+      "fake-ntp-session",
+      async () => { clickSelCount++; return true; },
+      async () => { listRunIdsCount++; return []; },
+      () => "#composer [data-composer-input]",
+      async () => { typeIntoCount++; return true; },
+      () => "#composer [data-composer-send]",
+      (restored: boolean) => { providerRestored = restored; },
+    );
+
+    let runErr: any = null;
+    runPromise.catch((e: any) => { runErr = e; });
+
+    // Yield to allow runner to reach await Target.activateTarget
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Assert that while promise is pending in the timer, zero clicks/typing have occurred
+    assertEquals(runErr, null, "Must remain pending while awaiting 15s timer");
+    assertEquals(cdp.pending.size, 1, "Cdp.pending must hold Target.activateTarget request");
+    assertEquals(timers.size, 1, "Timer must be active");
+    const [timerId, timerEntry] = [...timers.entries()][0];
+    assertEquals(timerEntry.delay, 15000, "Cdp.send timer must be 15000ms");
+    assertEquals(clickSelCount, 0, "No clickSel while pending");
+    assertEquals(typeIntoCount, 0, "No typeInto while pending");
+
+    // Fire the 15s timer callback
+    timers.delete(timerId);
+    timerEntry.callback();
+
+    // Now the run promise rejects
+    await runPromise.catch(() => {});
+    assert(runErr !== null, "Must reject after timer fires");
+    assert(
+      runErr.message.includes("cdp timeout: Target.activateTarget (requestId=1, targetId=unavailable, sessionId=unavailable)"),
+      `Unexpected timeout error: ${runErr.message}`,
+    );
+    assertEquals(cdp.pending.size, 0, "Pending entry must be cleaned up on timeout");
+    assertEquals(clickSelCount, 0, "clickSel must NOT be called on dead transport (0 clicks)");
+    assertEquals(typeIntoCount, 0, "typeInto must NOT be called on dead transport (0 typing)");
+    assertEquals(listRunIdsCount, 0, "listRunIds must NOT be called on dead transport");
+    assertEquals(providerClosed, true, "ledgerProvider.close() must execute in finally");
+    assertEquals(providerRestored, true, "provider restore must execute in finally");
+  }
+
+  // ── Scenario 2: Closed Target (-32602 Wire Protocol Error) ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 1, // OPEN
+      send: (frame: string) => {
+        frames.push(frame);
+        const parsed = JSON.parse(frame);
+        if (parsed.method === "Target.activateTarget") {
+          // Send wire protocol error frame
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                error: { code: -32602, message: "No target with given id found" },
+              }),
+            });
+          });
+        }
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    let clickSelCount = 0;
+    let typeIntoCount = 0;
+    let listRunIdsCount = 0;
+    let providerClosed = false;
+    let providerRestored = false;
+
+    const runner = new Function(
+      "cdp",
+      "openPage",
+      "port",
+      "extId",
+      "attachRuntime",
+      "sleep",
+      "evalIn",
+      "ledgerProvider",
+      "SCRIPTED_DUMMY_KEY",
+      "ntpPage",
+      "ntpSession",
+      "clickSel",
+      "listRunIds",
+      "composerInput",
+      "typeInto",
+      "composerSend",
+      "onCleanup",
+      `
+      return (async () => {
+        let ledgerOptsSession = null;
+        try {
+          ${blockBody}
+        } finally {
+          await ledgerProvider.close();
+          onCleanup(Boolean(ledgerOptsSession));
+        }
+      })();
+      `,
+    );
+
+    let runErr: any = null;
     try {
       await runner(
-        mockCdp,
+        cdp,
         async () => ({ id: "fake-opts-id" }),
         9222,
         "fake-ext-id",
@@ -736,20 +850,21 @@ Deno.test("8u6x2 / 5ui2q: testActionLedgerJourney fails closed on Target.activat
         () => "#composer [data-composer-send]",
         (restored: boolean) => { providerRestored = restored; },
       );
-    } catch (err: any) {
-      thrownError = err;
+    } catch (e: any) {
+      runErr = e;
     }
 
-    assert(thrownError !== undefined, `testActionLedgerJourney must throw on ${scenario.name}`);
+    assert(runErr !== null, "Must reject on closed target protocol error");
     assert(
-      thrownError.message.includes(scenario.expectedErr),
-      `thrown error must preserve root cause: ${thrownError.message}`,
+      runErr.message.includes("cdp error 1 (-32602): No target with given id found"),
+      `Unexpected protocol error: ${runErr.message}`,
     );
-    assertEquals(clickSelCount, 0, `clickSel must NOT be called on ${scenario.name} (0 clicks)`);
-    assertEquals(typeIntoCount, 0, `typeInto must NOT be called on ${scenario.name} (0 typing)`);
-    assertEquals(listRunIdsCount, 0, `listRunIds must NOT be called on ${scenario.name}`);
-    assertEquals(providerClosed, true, `ledgerProvider.close() must be executed in finally on ${scenario.name}`);
-    assertEquals(providerRestored, true, `provider restore must be executed in finally on ${scenario.name}`);
+    assertEquals(cdp.pending.size, 0, "Pending entry must be cleaned up on reply");
+    assertEquals(clickSelCount, 0, "clickSel must NOT be called on closed target (0 clicks)");
+    assertEquals(typeIntoCount, 0, "typeInto must NOT be called on closed target (0 typing)");
+    assertEquals(listRunIdsCount, 0, "listRunIds must NOT be called on closed target");
+    assertEquals(providerClosed, true, "ledgerProvider.close() must execute in finally");
+    assertEquals(providerRestored, true, "provider restore must execute in finally");
   }
 
   // Mutant check: restoring .catch(() => {}) swallows Target.activateTarget rejection
