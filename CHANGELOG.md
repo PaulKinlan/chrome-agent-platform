@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.673] — 2026-10-11
+- Fail closed on page focus rejection before scripted probe input
+
 ## [0.3.672] — 2026-10-11
 - Fail closed on target activation failure before capturing approval check evidence
 

@@ -9,7 +9,7 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 const journeySource = await Deno.readTextFile(new URL("../scripts/chrome-journeys.ts", import.meta.url));
 
-Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f: scripts/chrome-journeys.ts does not swallow tab activation/focus rejections", () => {
+Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq: scripts/chrome-journeys.ts does not swallow tab activation/focus rejections", () => {
   // Line 2272: openCreateDialog pre-Create click
   const openCreateDialogIdx = journeySource.indexOf("const openCreateDialog = async () => {");
   assert(openCreateDialogIdx > 0, "openCreateDialog must be found in scripts/chrome-journeys.ts");
@@ -101,6 +101,36 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f: scripts/chrome-journey
   assert(
     !approvalBlock.includes('await cdp.send("Page.bringToFront", {}, optsSession).catch('),
     "captureApprovalEvidence must not swallow Page.bringToFront errors with .catch()",
+  );
+
+  // Line 557: activateNtpSession pre-input focus
+  const activateIdx = journeySource.indexOf("async function activateNtpSession(cdp, session) {");
+  assert(activateIdx > 0, "activateNtpSession must be found in scripts/chrome-journeys.ts");
+  const activateBlock = journeySource.slice(activateIdx, activateIdx + 400);
+  assert(
+    activateBlock.includes('await cdp.send("Page.bringToFront", {}, session);'),
+    "activateNtpSession must await Page.bringToFront without .catch()",
+  );
+  assert(
+    !activateBlock.includes('await cdp.send("Page.bringToFront", {}, session).catch('),
+    "activateNtpSession must not swallow Page.bringToFront errors with .catch()",
+  );
+
+  // mu9oa / j9zyi: runScriptedToolProbe provider cleanup on rejection
+  const probeIdx = journeySource.indexOf("async function runScriptedToolProbe(cdp, ntpSession, optsSession, steps, task, expectRequests, onPause = null) {");
+  assert(probeIdx > 0, "runScriptedToolProbe must be found in scripts/chrome-journeys.ts");
+  const probeBlock = journeySource.slice(probeIdx, probeIdx + 6000);
+  assert(
+    probeBlock.includes("await provider.close();"),
+    "runScriptedToolProbe must await provider.close() on failure",
+  );
+  assert(
+    probeBlock.includes('console.warn("[runScriptedToolProbe] scripted provider cleanup failed");'),
+    "runScriptedToolProbe must emit fixed nonsecret diagnostic warning without interpolating error details",
+  );
+  assert(
+    !probeBlock.includes("cleanupError"),
+    "runScriptedToolProbe must not capture or interpolate cleanupError",
   );
 });
 
@@ -1152,4 +1182,511 @@ Deno.test("hpm8f: captureApprovalEvidence fails closed on Page.bringToFront reje
   assertEquals(mutantCaptureCalls, 3, "mutant with .catch() swallows error and calls captureShot 3 times");
   assertEquals(mutantSleepCalls, 3, "mutant with .catch() sleeps 3 times");
   assert(mutantErr?.message.includes("approval evidence capture failed"), "mutant throws evidence capture failed instead of CDP root cause");
+});
+
+Deno.test("fk9pq / mu9oa: activateNtpSession fails closed on Page.bringToFront rejection, cleans up provider exactly once, and prevents input", async () => {
+  // Extract activateNtpSession and runScriptedToolProbe from scripts/chrome-journeys.ts
+  const helperStart = journeySource.indexOf("async function activateNtpSession(cdp, session) {");
+  assert(helperStart > 0, "activateNtpSession start must be found");
+  const helperEnd = journeySource.indexOf("\nasync function runScriptedToolProbe", helperStart);
+  assert(helperEnd > helperStart, "activateNtpSession end must be found");
+  const helperBody = journeySource.slice(helperStart, helperEnd).trim();
+
+  const probeStart = journeySource.indexOf("async function runScriptedToolProbe(cdp, ntpSession, optsSession, steps, task, expectRequests, onPause = null) {");
+  assert(probeStart > 0, "runScriptedToolProbe start must be found");
+  const probeEnd = journeySource.indexOf("\n/** Capture a PNG screenshot", probeStart);
+  assert(probeEnd > probeStart, "runScriptedToolProbe end must be found");
+  const probeFnSource = journeySource.slice(probeStart, probeEnd).trim();
+
+  // Extract the real Cdp class from scripts/chrome-journeys.ts
+  const cdpStart = journeySource.indexOf("class Cdp {");
+  const cdpEnd = journeySource.indexOf("\n/** Open a tab", cdpStart);
+  assert(cdpStart >= 0 && cdpEnd > cdpStart, "the real Cdp class must be found in scripts/chrome-journeys.ts");
+  const cdpSource = journeySource.slice(cdpStart, cdpEnd).replace("sessionId?", "sessionId");
+
+  let nextTimer = 0;
+  const timers = new Map<number, { callback: () => void; delay: number }>();
+  const RealCdp = new Function("setTimeout", "clearTimeout", `${cdpSource}\nreturn Cdp;`)(
+    (callback: () => void, delay: number) => {
+      timers.set(++nextTimer, { callback, delay });
+      return nextTimer;
+    },
+    (id: number) => timers.delete(id),
+  );
+
+  const createTestProvider = () => {
+    const ac = new AbortController();
+    let isListening = true;
+    let closeCallCount = 0;
+    const server = Deno.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      signal: ac.signal,
+      onListen: () => {},
+    }, () => new Response(JSON.stringify({ ok: true })));
+    const port = (server.addr as Deno.NetAddr).port;
+    const provider = {
+      baseURL: `http://127.0.0.1:${port}/v1`,
+      port,
+      requests: [] as any[],
+      closeCallCount: () => closeCallCount,
+      isListening: () => isListening,
+      close: async () => {
+        closeCallCount++;
+        ac.abort();
+        try { await server.shutdown(); } catch {}
+        isListening = false;
+      },
+    };
+    return {
+      provider,
+      cleanup: async () => {
+        ac.abort();
+        try { await server.shutdown(); } catch {}
+        isListening = false;
+      },
+    };
+  };
+
+  const compileRunner = (probeSource: string) => {
+    return new Function(
+      "startScriptedProvider",
+      "evalIn",
+      "listRunIds",
+      "sleep",
+      "clickSel",
+      "typeInto",
+      "composerInput",
+      "composerSend",
+      "awaitNewRunTerminal",
+      "isCdpEvaluateTimeout",
+      "SCRIPTED_DUMMY_KEY",
+      `
+      ${helperBody}
+      ${probeSource}
+      return runScriptedToolProbe;
+      `,
+    );
+  };
+
+  // ── Scenario 1: Closed Session Wire Error (-32001) ──
+  {
+    const ws: any = {
+      readyState: 1, // OPEN
+      send: (frame: string) => {
+        const parsed = JSON.parse(frame);
+        if (parsed.method === "Target.getTargetInfo") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                result: { targetInfo: { targetId: "fake-ntp-target-id" } },
+              }),
+            });
+          });
+        } else if (parsed.method === "Target.activateTarget") {
+          queueMicrotask(() => {
+            ws.onmessage({ data: JSON.stringify({ id: parsed.id, result: {} }) });
+          });
+        } else if (parsed.method === "Page.bringToFront") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                error: { code: -32001, message: "Session with given id not found." },
+              }),
+            });
+          });
+        }
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    let clickSelCount = 0;
+    let typeIntoCount = 0;
+    const testProv = createTestProvider();
+
+    try {
+      const runnerFactory = compileRunner(probeFnSource);
+      const runner = runnerFactory(
+        async () => testProv.provider,
+        async () => {},
+        async () => new Set(),
+        async () => {},
+        async () => { clickSelCount++; return true; },
+        async () => { typeIntoCount++; return true; },
+        () => "#composer [data-composer-input]",
+        () => "#composer [data-composer-send]",
+        async () => ({ phase: "done" }),
+        () => false,
+        "test-dummy-key",
+      );
+
+      let thrownError: any = null;
+      try {
+        await runner(
+          cdp,
+          "fake-ntp-session",
+          "fake-opts-session",
+          [],
+          "test task",
+          1,
+        );
+      } catch (err: any) {
+        thrownError = err;
+      }
+
+      assert(thrownError !== null, "activateNtpSession must throw on closed session");
+      assert(
+        thrownError.message.includes("(-32001): Session with given id not found."),
+        `Must preserve exact CDP protocol error: ${thrownError.message}`,
+      );
+      assertEquals(testProv.provider.closeCallCount(), 1, "provider.close() must be called exactly once on focus rejection");
+      assertEquals(testProv.provider.isListening(), false, "listener must be stopped on focus rejection");
+      assertEquals(clickSelCount, 0, "clickSel must NOT be called on closed session (0 clicks)");
+      assertEquals(typeIntoCount, 0, "typeInto must NOT be called on closed session (0 typing)");
+
+      // Assert server is down and does not respond
+      const serverDown = await fetch(testProv.provider.baseURL).then(() => false, () => true);
+      assert(serverDown, "server must not accept requests after cleanup");
+    } finally {
+      await testProv.cleanup();
+    }
+  }
+
+  // ── Scenario 2: Synchronous throw and rejection in provider.close() preserve primary CDP error and avoid leaking error payloads ──
+  {
+    const ws: any = {
+      readyState: 1, // OPEN
+      send: (frame: string) => {
+        const parsed = JSON.parse(frame);
+        if (parsed.method === "Target.getTargetInfo") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                result: { targetInfo: { targetId: "fake-ntp-target-id" } },
+              }),
+            });
+          });
+        } else if (parsed.method === "Target.activateTarget") {
+          queueMicrotask(() => {
+            ws.onmessage({ data: JSON.stringify({ id: parsed.id, result: {} }) });
+          });
+        } else if (parsed.method === "Page.bringToFront") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                error: { code: -32001, message: "Session with given id not found." },
+              }),
+            });
+          });
+        }
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    const INERT_SENTINEL = "INERT_SENTINEL_BEARER_NOT_A_REAL_KEY_12345";
+    const warnLogs: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: any[]) => {
+      warnLogs.push(args.map(String).join(" "));
+    };
+
+    try {
+      // 2a. Sync throw in close() with sensitive-looking error payload
+      const syncThrowProvider = {
+        baseURL: "http://127.0.0.1:0/v1",
+        requests: [] as any[],
+        close: () => {
+          throw new Error(`provider close failure: Authorization: Bearer ${INERT_SENTINEL}`);
+        },
+      };
+
+      const runnerFactory = compileRunner(probeFnSource);
+      const runnerSync = runnerFactory(
+        async () => syncThrowProvider,
+        async () => {},
+        async () => new Set(),
+        async () => {},
+        async () => true,
+        async () => true,
+        () => "#composer [data-composer-input]",
+        () => "#composer [data-composer-send]",
+        async () => ({ phase: "done" }),
+        () => false,
+        "test-dummy-key",
+      );
+
+      let syncErr: any = null;
+      try {
+        await runnerSync(cdp, "fake-ntp-session", "fake-opts-session", [], "test task", 1);
+      } catch (e: any) {
+        syncErr = e;
+      }
+      assert(syncErr !== null, "must throw primary error");
+      assert(
+        syncErr.message.includes("(-32001): Session with given id not found."),
+        `Must preserve primary CDP error when provider.close throws synchronously: ${syncErr.message}`,
+      );
+      assert(!syncErr.message.includes(INERT_SENTINEL), "Primary error must not contain cleanup sentinel");
+      assertEquals(
+        warnLogs.includes("[runScriptedToolProbe] scripted provider cleanup failed"),
+        true,
+        "Must emit constant nonsecret cleanup warning",
+      );
+      assert(
+        !warnLogs.some((l) => l.includes(INERT_SENTINEL)),
+        "Warning logs must NOT leak arbitrary error payload or sentinel",
+      );
+
+      // 2b. Async rejection in close() with sensitive-looking error payload
+      const asyncRejectProvider = {
+        baseURL: "http://127.0.0.1:0/v1",
+        requests: [] as any[],
+        close: async () => {
+          throw new Error(`async close rejection: token=${INERT_SENTINEL}`);
+        },
+      };
+
+      const runnerAsync = runnerFactory(
+        async () => asyncRejectProvider,
+        async () => {},
+        async () => new Set(),
+        async () => {},
+        async () => true,
+        async () => true,
+        () => "#composer [data-composer-input]",
+        () => "#composer [data-composer-send]",
+        async () => ({ phase: "done" }),
+        () => false,
+        "test-dummy-key",
+      );
+
+      let asyncErr: any = null;
+      try {
+        await runnerAsync(cdp, "fake-ntp-session", "fake-opts-session", [], "test task", 1);
+      } catch (e: any) {
+        asyncErr = e;
+      }
+      assert(asyncErr !== null, "must throw primary error");
+      assert(
+        asyncErr.message.includes("(-32001): Session with given id not found."),
+        `Must preserve primary CDP error when provider.close rejects: ${asyncErr.message}`,
+      );
+      assert(!asyncErr.message.includes(INERT_SENTINEL), "Primary error must not contain cleanup sentinel");
+      assert(
+        !warnLogs.some((l) => l.includes(INERT_SENTINEL)),
+        "Warning logs must NOT leak arbitrary error payload or sentinel",
+      );
+    } finally {
+      console.warn = origWarn;
+    }
+  }
+
+  // ── Scenario 3: Dead Transport (CLOSED socket + 15s timer rejection) ──
+  {
+    const ws: any = {
+      readyState: 3, // CLOSED
+      send: (frame: string) => {
+        const parsed = JSON.parse(frame);
+        if (parsed.method === "Target.getTargetInfo") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                result: { targetInfo: { targetId: "fake-ntp-target-id" } },
+              }),
+            });
+          });
+        } else if (parsed.method === "Target.activateTarget") {
+          queueMicrotask(() => {
+            ws.onmessage({ data: JSON.stringify({ id: parsed.id, result: {} }) });
+          });
+        }
+        // Page.bringToFront on dead socket: ws.send returns normally, no reply frame, pending timer
+      },
+    };
+    const cdp = new RealCdp(ws);
+    ws.onclose();
+    assertEquals(cdp.fatalEvents, ["websocket closed unexpectedly"]);
+
+    let clickSelCount = 0;
+    let typeIntoCount = 0;
+    const testProv = createTestProvider();
+
+    try {
+      const runnerFactory = compileRunner(probeFnSource);
+      const runner = runnerFactory(
+        async () => testProv.provider,
+        async () => {},
+        async () => new Set(),
+        async () => {},
+        async () => { clickSelCount++; return true; },
+        async () => { typeIntoCount++; return true; },
+        () => "#composer [data-composer-input]",
+        () => "#composer [data-composer-send]",
+        async () => ({ phase: "done" }),
+        () => false,
+        "test-dummy-key",
+      );
+
+      const runPromise = runner(
+        cdp,
+        "fake-ntp-session",
+        "fake-opts-session",
+        [],
+        "test task",
+        1,
+      );
+
+      let runErr: any = null;
+      runPromise.catch((e: any) => { runErr = e; });
+
+      // Yield macro-task turns to allow runner to reach await Page.bringToFront
+      await new Promise((r) => setTimeout(r, 10));
+
+      assertEquals(runErr, null, "Must remain pending while awaiting 15s timer");
+      assertEquals(cdp.pending.size, 1, "Cdp.pending must hold Page.bringToFront request");
+      assertEquals(timers.size, 1, "Timer must be active");
+      const [timerId, timerEntry] = [...timers.entries()][0];
+      assertEquals(timerEntry.delay, 15000, "Cdp.send timer must be 15000ms");
+      assertEquals(testProv.provider.closeCallCount(), 0, "provider must not be closed while pending");
+      assertEquals(clickSelCount, 0, "Zero clickSel while pending");
+      assertEquals(typeIntoCount, 0, "Zero typeInto while pending");
+
+      // Fire the 15s timer callback
+      timers.delete(timerId);
+      timerEntry.callback();
+
+      await runPromise.catch(() => {});
+      assert(runErr !== null, "Must reject after timer fires");
+      assert(
+        runErr.message.includes("cdp timeout: Page.bringToFront"),
+        `Unexpected timeout error: ${runErr.message}`,
+      );
+      assertEquals(testProv.provider.closeCallCount(), 1, "provider.close() must be called after timeout rejection");
+      assertEquals(testProv.provider.isListening(), false, "listener must be stopped after timeout rejection");
+      assertEquals(clickSelCount, 0, "Zero clickSel on dead transport");
+      assertEquals(typeIntoCount, 0, "Zero typeInto on dead transport");
+    } finally {
+      await testProv.cleanup();
+    }
+  }
+
+  // ── Scenario 4: Successful execution transfers ownership, no helper close ──
+  {
+    const testProv = createTestProvider();
+    try {
+      const mockSuccessCdp: any = {
+        send: async () => ({ result: {} }),
+      };
+      const runnerFactory = compileRunner(probeFnSource);
+      const runner = runnerFactory(
+        async () => testProv.provider,
+        async () => {},
+        async () => new Set(),
+        async () => {},
+        async () => true,
+        async () => true,
+        () => "#composer [data-composer-input]",
+        () => "#composer [data-composer-send]",
+        async () => ({ id: "run-1", phase: "done" }),
+        () => false,
+        "test-dummy-key",
+      );
+
+      const res: any = await runner(
+        mockSuccessCdp,
+        "fake-ntp-session",
+        "fake-opts-session",
+        [],
+        "test task",
+        0, // expectRequests 0 -> while loop immediately finishes
+      );
+
+      assertEquals(res.provider, testProv.provider, "transfers ownership of provider to caller");
+      assertEquals(testProv.provider.closeCallCount(), 0, "helper must NOT close provider on successful return");
+
+      // Caller closes provider
+      await res.provider.close();
+      assertEquals(testProv.provider.closeCallCount(), 1, "caller closes provider");
+    } finally {
+      await testProv.cleanup();
+    }
+  }
+
+  // ── Scenario 5: Missing cleanup mutant check (missing provider.close() on failure leaves server listening) ──
+  {
+    const cleanupBlock = `    try {
+      await provider.close();
+    } catch {
+      console.warn("[runScriptedToolProbe] scripted provider cleanup failed");
+    }`;
+    const mutantSource = probeFnSource.replace(cleanupBlock, "");
+    assert(mutantSource !== probeFnSource, "mutant must remove provider cleanup");
+
+    const testProv = createTestProvider();
+    try {
+      const ws: any = {
+        readyState: 1,
+        send: (frame: string) => {
+          const parsed = JSON.parse(frame);
+          if (parsed.method === "Target.getTargetInfo") {
+            queueMicrotask(() => {
+              ws.onmessage({
+                data: JSON.stringify({
+                  id: parsed.id,
+                  result: { targetInfo: { targetId: "fake-ntp-target-id" } },
+                }),
+              });
+            });
+          } else if (parsed.method === "Target.activateTarget") {
+            queueMicrotask(() => {
+              ws.onmessage({ data: JSON.stringify({ id: parsed.id, result: {} }) });
+            });
+          } else if (parsed.method === "Page.bringToFront") {
+            queueMicrotask(() => {
+              ws.onmessage({
+                data: JSON.stringify({
+                  id: parsed.id,
+                  error: { code: -32001, message: "Session with given id not found." },
+                }),
+              });
+            });
+          }
+        },
+      };
+      const cdp = new RealCdp(ws);
+
+      const mutantRunnerFactory = compileRunner(mutantSource);
+      const mutantRunner = mutantRunnerFactory(
+        async () => testProv.provider,
+        async () => {},
+        async () => new Set(),
+        async () => {},
+        async () => true,
+        async () => true,
+        () => "#composer [data-composer-input]",
+        () => "#composer [data-composer-send]",
+        async () => ({ phase: "done" }),
+        () => false,
+        "test-dummy-key",
+      );
+
+      let mutantErr: any = null;
+      try {
+        await mutantRunner(cdp, "fake-ntp-session", "fake-opts-session", [], "test task", 1);
+      } catch (e: any) {
+        mutantErr = e;
+      }
+      assert(mutantErr !== null, "mutant must throw error");
+      // The mutant failed to clean up the provider:
+      assertEquals(testProv.provider.closeCallCount(), 0, "mutant fails to close provider on error (RED)");
+      assertEquals(testProv.provider.isListening(), true, "mutant leaves server listening (RED)");
+    } finally {
+      await testProv.cleanup();
+    }
+  }
 });
