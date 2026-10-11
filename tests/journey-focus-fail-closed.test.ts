@@ -9,7 +9,7 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 const journeySource = await Deno.readTextFile(new URL("../scripts/chrome-journeys.ts", import.meta.url));
 
-Deno.test("j1zcb / 0ucue / u0qo0: scripts/chrome-journeys.ts does not swallow Page.bringToFront rejections at :2272, :4838, :5302, and :9505", () => {
+Deno.test("j1zcb / 0ucue / u0qo0 / 25enf: scripts/chrome-journeys.ts does not swallow Page.bringToFront rejections at :2272, :4838, :5302, :9505, and :9931", () => {
   // Line 2272: openCreateDialog pre-Create click
   const openCreateDialogIdx = journeySource.indexOf("const openCreateDialog = async () => {");
   assert(openCreateDialogIdx > 0, "openCreateDialog must be found in scripts/chrome-journeys.ts");
@@ -60,6 +60,21 @@ Deno.test("j1zcb / 0ucue / u0qo0: scripts/chrome-journeys.ts does not swallow Pa
   assert(
     !step1Block.includes('await cdp.send("Page.bringToFront", {}, ntp).catch('),
     "testTaskLifecycle step 1 must not swallow Page.bringToFront errors with .catch()",
+  );
+
+  // Line 9931: testDataManagement factory reset pre-input
+  const resetAnchor = journeySource.indexOf("// ── the reset: a second Settings document watches the stores ──");
+  assert(resetAnchor > 0, "testDataManagement factory reset must be found in scripts/chrome-journeys.ts");
+  const resetIdx = journeySource.indexOf('await cdp.send("Target.activateTarget", { targetId: optsPage.id })', resetAnchor);
+  assert(resetIdx > 0, "factory reset focus anchor must be found");
+  const resetBlock = journeySource.slice(resetIdx, resetIdx + 300);
+  assert(
+    resetBlock.includes('await cdp.send("Page.bringToFront", {}, opts);\n    await clickSel(cdp, opts, \'a.nav-item[data-section="data"]\')'),
+    "testDataManagement factory reset must await Page.bringToFront without .catch() before Data nav click",
+  );
+  assert(
+    !resetBlock.includes('await cdp.send("Page.bringToFront", {}, opts).catch('),
+    "testDataManagement factory reset must not swallow Page.bringToFront errors with .catch()",
   );
 });
 
@@ -504,4 +519,112 @@ Deno.test("u0qo0: testTaskLifecycle step 1 fails closed on Page.bringToFront rej
   // The mutant survived by swallowing rejection and dispatched both clickSel (#home and #send) and typeInto!
   assertEquals(mutantClickCount, 2, "mutant with .catch() swallows error and calls clickSel twice (#home and #send)");
   assertEquals(mutantTypeCalled, true, "mutant with .catch() swallows error and calls typeInto");
+});
+
+Deno.test("25enf: testDataManagement factory reset fails closed on Page.bringToFront rejection, preventing DOM clickSel and mutation", async () => {
+  // Extract testDataManagement factory reset block from scripts/chrome-journeys.ts
+  const start = journeySource.indexOf("await cdp.send(\"Target.activateTarget\", { targetId: optsPage.id })", journeySource.indexOf("// ── the reset: a second Settings document watches the stores ──"));
+  assert(start > 0, "factory reset focus block start must be found");
+  const end = journeySource.indexOf("report(DIALOG,", start);
+  assert(end > start, "factory reset focus block end must be found");
+  const resetBody = journeySource.slice(start, end).trim();
+
+  let clickSelCount = 0;
+  let boxOfCalled = false;
+  let evalInCalled = false;
+
+  const mockCdp = {
+    send: async (method: string, _params: any) => {
+      if (method === "Page.bringToFront") {
+        throw new Error("Page.bringToFront: Session with given id not found.");
+      }
+      return {};
+    },
+  };
+
+  const runner = new Function(
+    "cdp",
+    "optsPage",
+    "opts",
+    "clickSel",
+    "sleep",
+    "boxOf",
+    "evalIn",
+    "captureShot",
+    "writeEvidence",
+    `
+    return (async () => {
+      ${resetBody}
+    })();
+    `,
+  );
+
+  let thrownError: Error | undefined;
+  try {
+    await runner(
+      mockCdp,
+      { id: "test-opts-page" },
+      "test-opts-session",
+      async () => { clickSelCount++; return true; },
+      async () => {},
+      async () => { boxOfCalled = true; return { x: 10, y: 10 }; },
+      async () => { evalInCalled = true; return "Delete everything permanent"; },
+      async () => null,
+      async () => {},
+    );
+  } catch (err: any) {
+    thrownError = err;
+  }
+
+  assert(thrownError !== undefined, "factory reset sequence must throw when Page.bringToFront fails");
+  assert(
+    thrownError.message.includes("Session with given id not found"),
+    `thrown error must preserve root cause: ${thrownError.message}`,
+  );
+  assertEquals(clickSelCount, 0, "clickSel must NOT be called when focus fails (0 clicks)");
+  assertEquals(boxOfCalled, false, "boxOf must NOT be called when focus fails");
+  assertEquals(evalInCalled, false, "evalIn must NOT be called when focus fails");
+
+  // Mutant check: restoring .catch(() => {}) swallows focus error and invokes clickSel and boxOf
+  const mutantResetBody = resetBody.replace(
+    'await cdp.send("Page.bringToFront", {}, opts);',
+    'await cdp.send("Page.bringToFront", {}, opts).catch(() => {});',
+  );
+  assert(mutantResetBody.includes(".catch("), "mutant must contain catch()");
+
+  const mutantRunner = new Function(
+    "cdp",
+    "optsPage",
+    "opts",
+    "clickSel",
+    "sleep",
+    "boxOf",
+    "evalIn",
+    "captureShot",
+    "writeEvidence",
+    `
+    return (async () => {
+      ${mutantResetBody}
+    })();
+    `,
+  );
+
+  let mutantClickCount = 0;
+  let mutantBoxOfCalled = false;
+
+  await mutantRunner(
+    mockCdp,
+    { id: "test-opts-page" },
+    "test-opts-session",
+    async () => { mutantClickCount++; return true; },
+    async () => {},
+    async () => { mutantBoxOfCalled = true; return { x: 10, y: 10 }; },
+    async () => "Delete everything permanent",
+    async () => null,
+    async () => {},
+  );
+
+  // The mutant survived by swallowing rejection and dispatched clicks to Data nav and Reset button!
+  assertEquals(mutantClickCount, 2, "mutant with .catch() swallows error and calls clickSel twice (Data nav and Reset button)");
+  assertEquals(mutantBoxOfCalled, true, "mutant with .catch() swallows error and calls boxOf to poll dialog");
 });
