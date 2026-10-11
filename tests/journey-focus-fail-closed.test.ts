@@ -116,7 +116,7 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq: scripts/chrome
     "activateNtpSession must not swallow Page.bringToFront errors with .catch()",
   );
 
-  // mu9oa: runScriptedToolProbe provider cleanup on rejection
+  // mu9oa / j9zyi: runScriptedToolProbe provider cleanup on rejection
   const probeIdx = journeySource.indexOf("async function runScriptedToolProbe(cdp, ntpSession, optsSession, steps, task, expectRequests, onPause = null) {");
   assert(probeIdx > 0, "runScriptedToolProbe must be found in scripts/chrome-journeys.ts");
   const probeBlock = journeySource.slice(probeIdx, probeIdx + 6000);
@@ -125,8 +125,12 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq: scripts/chrome
     "runScriptedToolProbe must await provider.close() on failure",
   );
   assert(
-    probeBlock.includes("catch (cleanupError)"),
-    "runScriptedToolProbe must catch provider cleanup errors to preserve primary error attribution",
+    probeBlock.includes('console.warn("[runScriptedToolProbe] scripted provider cleanup failed");'),
+    "runScriptedToolProbe must emit fixed nonsecret diagnostic warning without interpolating error details",
+  );
+  assert(
+    !probeBlock.includes("cleanupError"),
+    "runScriptedToolProbe must not capture or interpolate cleanupError",
   );
 });
 
@@ -1350,7 +1354,7 @@ Deno.test("fk9pq / mu9oa: activateNtpSession fails closed on Page.bringToFront r
     }
   }
 
-  // ── Scenario 2: Synchronous throw and rejection in provider.close() preserve primary CDP error ──
+  // ── Scenario 2: Synchronous throw and rejection in provider.close() preserve primary CDP error and avoid leaking error payloads ──
   {
     const ws: any = {
       readyState: 1, // OPEN
@@ -1383,78 +1387,102 @@ Deno.test("fk9pq / mu9oa: activateNtpSession fails closed on Page.bringToFront r
     };
     const cdp = new RealCdp(ws);
 
-    // 2a. Sync throw in close()
-    const syncThrowProvider = {
-      baseURL: "http://127.0.0.1:0/v1",
-      requests: [] as any[],
-      close: () => {
-        throw new Error("sync provider close failure");
-      },
+    const INERT_SENTINEL = "INERT_SENTINEL_BEARER_NOT_A_REAL_KEY_12345";
+    const warnLogs: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: any[]) => {
+      warnLogs.push(args.map(String).join(" "));
     };
 
-    const runnerFactory = compileRunner(probeFnSource);
-    const runnerSync = runnerFactory(
-      async () => syncThrowProvider,
-      async () => {},
-      async () => new Set(),
-      async () => {},
-      async () => true,
-      async () => true,
-      () => "#composer [data-composer-input]",
-      () => "#composer [data-composer-send]",
-      async () => ({ phase: "done" }),
-      () => false,
-      "test-dummy-key",
-    );
-
-    let syncErr: any = null;
     try {
-      await runnerSync(cdp, "fake-ntp-session", "fake-opts-session", [], "test task", 1);
-    } catch (e: any) {
-      syncErr = e;
+      // 2a. Sync throw in close() with sensitive-looking error payload
+      const syncThrowProvider = {
+        baseURL: "http://127.0.0.1:0/v1",
+        requests: [] as any[],
+        close: () => {
+          throw new Error(`provider close failure: Authorization: Bearer ${INERT_SENTINEL}`);
+        },
+      };
+
+      const runnerFactory = compileRunner(probeFnSource);
+      const runnerSync = runnerFactory(
+        async () => syncThrowProvider,
+        async () => {},
+        async () => new Set(),
+        async () => {},
+        async () => true,
+        async () => true,
+        () => "#composer [data-composer-input]",
+        () => "#composer [data-composer-send]",
+        async () => ({ phase: "done" }),
+        () => false,
+        "test-dummy-key",
+      );
+
+      let syncErr: any = null;
+      try {
+        await runnerSync(cdp, "fake-ntp-session", "fake-opts-session", [], "test task", 1);
+      } catch (e: any) {
+        syncErr = e;
+      }
+      assert(syncErr !== null, "must throw primary error");
+      assert(
+        syncErr.message.includes("(-32001): Session with given id not found."),
+        `Must preserve primary CDP error when provider.close throws synchronously: ${syncErr.message}`,
+      );
+      assert(!syncErr.message.includes(INERT_SENTINEL), "Primary error must not contain cleanup sentinel");
+      assertEquals(
+        warnLogs.includes("[runScriptedToolProbe] scripted provider cleanup failed"),
+        true,
+        "Must emit constant nonsecret cleanup warning",
+      );
+      assert(
+        !warnLogs.some((l) => l.includes(INERT_SENTINEL)),
+        "Warning logs must NOT leak arbitrary error payload or sentinel",
+      );
+
+      // 2b. Async rejection in close() with sensitive-looking error payload
+      const asyncRejectProvider = {
+        baseURL: "http://127.0.0.1:0/v1",
+        requests: [] as any[],
+        close: async () => {
+          throw new Error(`async close rejection: token=${INERT_SENTINEL}`);
+        },
+      };
+
+      const runnerAsync = runnerFactory(
+        async () => asyncRejectProvider,
+        async () => {},
+        async () => new Set(),
+        async () => {},
+        async () => true,
+        async () => true,
+        () => "#composer [data-composer-input]",
+        () => "#composer [data-composer-send]",
+        async () => ({ phase: "done" }),
+        () => false,
+        "test-dummy-key",
+      );
+
+      let asyncErr: any = null;
+      try {
+        await runnerAsync(cdp, "fake-ntp-session", "fake-opts-session", [], "test task", 1);
+      } catch (e: any) {
+        asyncErr = e;
+      }
+      assert(asyncErr !== null, "must throw primary error");
+      assert(
+        asyncErr.message.includes("(-32001): Session with given id not found."),
+        `Must preserve primary CDP error when provider.close rejects: ${asyncErr.message}`,
+      );
+      assert(!asyncErr.message.includes(INERT_SENTINEL), "Primary error must not contain cleanup sentinel");
+      assert(
+        !warnLogs.some((l) => l.includes(INERT_SENTINEL)),
+        "Warning logs must NOT leak arbitrary error payload or sentinel",
+      );
+    } finally {
+      console.warn = origWarn;
     }
-    assert(syncErr !== null, "must throw primary error");
-    assert(
-      syncErr.message.includes("(-32001): Session with given id not found."),
-      `Must preserve primary CDP error when provider.close throws synchronously: ${syncErr.message}`,
-    );
-    assert(!syncErr.message.includes("sync provider close failure"), "Must not replace primary error with cleanup error");
-
-    // 2b. Async rejection in close()
-    const asyncRejectProvider = {
-      baseURL: "http://127.0.0.1:0/v1",
-      requests: [] as any[],
-      close: async () => {
-        throw new Error("async provider close rejection");
-      },
-    };
-
-    const runnerAsync = runnerFactory(
-      async () => asyncRejectProvider,
-      async () => {},
-      async () => new Set(),
-      async () => {},
-      async () => true,
-      async () => true,
-      () => "#composer [data-composer-input]",
-      () => "#composer [data-composer-send]",
-      async () => ({ phase: "done" }),
-      () => false,
-      "test-dummy-key",
-    );
-
-    let asyncErr: any = null;
-    try {
-      await runnerAsync(cdp, "fake-ntp-session", "fake-opts-session", [], "test task", 1);
-    } catch (e: any) {
-      asyncErr = e;
-    }
-    assert(asyncErr !== null, "must throw primary error");
-    assert(
-      asyncErr.message.includes("(-32001): Session with given id not found."),
-      `Must preserve primary CDP error when provider.close rejects: ${asyncErr.message}`,
-    );
-    assert(!asyncErr.message.includes("async provider close rejection"), "Must not replace primary error with cleanup error");
   }
 
   // ── Scenario 3: Dead Transport (CLOSED socket + 15s timer rejection) ──
@@ -1593,8 +1621,8 @@ Deno.test("fk9pq / mu9oa: activateNtpSession fails closed on Page.bringToFront r
   {
     const cleanupBlock = `    try {
       await provider.close();
-    } catch (cleanupError) {
-      console.warn(\`[runScriptedToolProbe] provider close failed: \${String(cleanupError?.message ?? cleanupError)}\`);
+    } catch {
+      console.warn("[runScriptedToolProbe] scripted provider cleanup failed");
     }`;
     const mutantSource = probeFnSource.replace(cleanupBlock, "");
     assert(mutantSource !== probeFnSource, "mutant must remove provider cleanup");

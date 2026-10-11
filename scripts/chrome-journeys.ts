@@ -643,8 +643,8 @@ async function runScriptedToolProbe(cdp, ntpSession, optsSession, steps, task, e
   } catch (err) {
     try {
       await provider.close();
-    } catch (cleanupError) {
-      console.warn(`[runScriptedToolProbe] provider close failed: ${String(cleanupError?.message ?? cleanupError)}`);
+    } catch {
+      console.warn("[runScriptedToolProbe] scripted provider cleanup failed");
     }
     throw err;
   }
