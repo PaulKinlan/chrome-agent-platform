@@ -2237,9 +2237,12 @@ Deno.test("vs9d2.2: driveHubTask fails closed on Target.activateTarget rejection
     crumbBlock.includes('await driveHubTask("build a crumb bakery page");'),
     "crumb bakery must call driveHubTask",
   );
+  const crumbFinallyIdx = crumbBlock.indexOf("} finally {");
+  assert(crumbFinallyIdx > 0, "crumb bakery must contain a finally block");
+  const crumbFinallyBlock = crumbBlock.slice(crumbFinallyIdx);
   assert(
-    crumbBlock.includes("await scripted.close();"),
-    "crumb bakery must call scripted.close() in finally",
+    crumbFinallyBlock.includes("await scripted.close();"),
+    "crumb bakery must call scripted.close() inside finally",
   );
 
   const runawayStart = journeySource.indexOf("const runaway = await startScriptedProvider(");
@@ -2251,9 +2254,12 @@ Deno.test("vs9d2.2: driveHubTask fails closed on Target.activateTarget rejection
     runawayBlock.includes('await driveHubTask("read my probe memory and keep going");'),
     "runaway journey must call driveHubTask",
   );
+  const runawayFinallyIdx = runawayBlock.indexOf("} finally {");
+  assert(runawayFinallyIdx > 0, "runaway journey must contain a finally block");
+  const runawayFinallyBlock = runawayBlock.slice(runawayFinallyIdx);
   assert(
-    runawayBlock.includes("await runaway.close();"),
-    "runaway journey must call runaway.close() in finally",
+    runawayFinallyBlock.includes("await runaway.close();"),
+    "runaway journey must call runaway.close() inside finally",
   );
 
   // ── Scenario 1: Dead Transport (CLOSED socket + 15s timer rejection) ──
