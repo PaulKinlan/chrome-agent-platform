@@ -642,7 +642,7 @@ Deno.test("25enf: testDataManagement factory reset fails closed on Page.bringToF
   assertEquals(mutantBoxOfCalled, true, "mutant with .catch() swallows error and calls boxOf to poll dialog");
 });
 
-Deno.test("5ui2q: testActionLedgerJourney fails closed on Target.activateTarget rejection, preventing clickSel and typeInto while executing local finally cleanup", async () => {
+Deno.test("8u6x2 / 5ui2q: testActionLedgerJourney fails closed on Target.activateTarget rejection with wire-accurate error shapes, preventing clickSel and typeInto", async () => {
   // Extract testActionLedgerJourney activation and setup block from scripts/chrome-journeys.ts
   const start = journeySource.indexOf("const ledgerOptsPage = await openPage(port, `chrome-extension://${extId}/options/options.html`);");
   assert(start > 0, "testActionLedgerJourney start must be found");
@@ -651,8 +651,22 @@ Deno.test("5ui2q: testActionLedgerJourney fails closed on Target.activateTarget 
   const blockBody = journeySource.slice(start, end).trim();
 
   for (const scenario of [
-    { name: "dead target (-32000)", err: new Error("Target.activateTarget: No target with given id found.") },
-    { name: "dead transport", err: new Error("Target.activateTarget: WebSocket connection closed.") },
+    {
+      name: "closed target (-32602 wire shape)",
+      reject: async () => {
+        throw new Error("cdp error 2 (-32602): No target with given id found");
+      },
+      expectedErr: "cdp error 2 (-32602): No target with given id found",
+    },
+    {
+      name: "dead transport (bounded Cdp.send timeout shape)",
+      reject: async () => {
+        // Wire reality: on closed transport, ws.send() returns normally and Cdp.send rejects on timeout
+        await new Promise((r) => setTimeout(r, 10));
+        throw new Error("cdp timeout: Target.activateTarget (requestId=1, targetId=fake-ntp-id)");
+      },
+      expectedErr: "cdp timeout: Target.activateTarget",
+    },
   ]) {
     let clickSelCount = 0;
     let typeIntoCount = 0;
@@ -664,7 +678,7 @@ Deno.test("5ui2q: testActionLedgerJourney fails closed on Target.activateTarget 
       pageSessions: new Set(),
       send: async (method: string, _params: any) => {
         if (method === "Target.activateTarget") {
-          throw scenario.err;
+          return await scenario.reject();
         }
         return {};
       },
@@ -728,7 +742,7 @@ Deno.test("5ui2q: testActionLedgerJourney fails closed on Target.activateTarget 
 
     assert(thrownError !== undefined, `testActionLedgerJourney must throw on ${scenario.name}`);
     assert(
-      thrownError.message.includes(scenario.err.message),
+      thrownError.message.includes(scenario.expectedErr),
       `thrown error must preserve root cause: ${thrownError.message}`,
     );
     assertEquals(clickSelCount, 0, `clickSel must NOT be called on ${scenario.name} (0 clicks)`);
@@ -782,7 +796,7 @@ Deno.test("5ui2q: testActionLedgerJourney fails closed on Target.activateTarget 
       pageSessions: new Set(),
       send: async (method: string) => {
         if (method === "Target.activateTarget") {
-          throw new Error("Target.activateTarget: No target with given id found.");
+          throw new Error("cdp error 2 (-32602): No target with given id found");
         }
         return {};
       },
