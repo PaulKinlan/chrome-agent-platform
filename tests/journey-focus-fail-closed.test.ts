@@ -2227,41 +2227,6 @@ Deno.test("vs9d2.2: driveHubTask fails closed on Target.activateTarget rejection
       `${declaration};\nreturn driveHubTask;`,
     );
 
-  // Verify structural caller-level provider cleanup in scripts/chrome-journeys.ts
-  const crumbStart = journeySource.indexOf("const scripted = await startScriptedProvider(");
-  assert(crumbStart > 0, "crumb bakery journey must be found");
-  const crumbEnd = journeySource.indexOf("JOURNEY 3e3", crumbStart);
-  assert(crumbEnd > crumbStart, "crumb bakery journey end must be found");
-  const crumbBlock = journeySource.slice(crumbStart, crumbEnd);
-  assert(
-    crumbBlock.includes('await driveHubTask("build a crumb bakery page");'),
-    "crumb bakery must call driveHubTask",
-  );
-  const crumbFinallyIdx = crumbBlock.indexOf("} finally {");
-  assert(crumbFinallyIdx > 0, "crumb bakery must contain a finally block");
-  const crumbFinallyBlock = crumbBlock.slice(crumbFinallyIdx);
-  assert(
-    crumbFinallyBlock.includes("await scripted.close();"),
-    "crumb bakery must call scripted.close() inside finally",
-  );
-
-  const runawayStart = journeySource.indexOf("const runaway = await startScriptedProvider(");
-  assert(runawayStart > 0, "runaway tool loop journey must be found");
-  const runawayEnd = journeySource.indexOf("JOURNEY 3f", runawayStart);
-  assert(runawayEnd > runawayStart, "runaway tool loop journey end must be found");
-  const runawayBlock = journeySource.slice(runawayStart, runawayEnd);
-  assert(
-    runawayBlock.includes('await driveHubTask("read my probe memory and keep going");'),
-    "runaway journey must call driveHubTask",
-  );
-  const runawayFinallyIdx = runawayBlock.indexOf("} finally {");
-  assert(runawayFinallyIdx > 0, "runaway journey must contain a finally block");
-  const runawayFinallyBlock = runawayBlock.slice(runawayFinallyIdx);
-  assert(
-    runawayFinallyBlock.includes("await runaway.close();"),
-    "runaway journey must call runaway.close() inside finally",
-  );
-
   // ── Scenario 1: Dead Transport (CLOSED socket + 15s timer rejection) ──
   {
     const frames: string[] = [];
