@@ -559,86 +559,95 @@ async function activateNtpSession(cdp, session) {
 
 async function runScriptedToolProbe(cdp, ntpSession, optsSession, steps, task, expectRequests, onPause = null) {
   const provider = await startScriptedProvider({ steps });
-  await evalIn(cdp, optsSession, `chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "openai-compatible", baseURL: provider.baseURL, apiKey: SCRIPTED_DUMMY_KEY, model: "scripted" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`);
-  const beforeIds = await listRunIds(cdp, optsSession);
-  await activateNtpSession(cdp, ntpSession);
-  await evalIn(cdp, ntpSession, `(() => {
-    if (location.hash) location.hash = "";
-    const v = document.getElementById("view");
-    if (v) v.hidden = true;
-    const vch = document.getElementById("view-client-host");
-    if (vch) vch.hidden = true;
-    const dv = document.getElementById("directory-view");
-    if (dv) dv.hidden = true;
-    const av = document.getElementById("artifacts-view");
-    if (av) av.hidden = true;
-    const tv = document.getElementById("thread-view");
-    if (tv) tv.hidden = true;
-    document.body.classList.remove("view-open", "full-view-open");
-    return true;
-  })()`).catch(() => {});
-  await sleep(300);
-  await clickSel(cdp, ntpSession, "#home").catch(() => false);
-  await sleep(600);
-  await evalIn(cdp, ntpSession, `(() => {
-    const el = document.querySelector('${composerInput("hub")}');
-    el?.focus();
-    return true;
-  })()`).catch(() => {});
-  await typeInto(cdp, ntpSession, composerInput("hub"), task);
-  let inputVal = await evalIn(cdp, ntpSession, `document.querySelector('${composerInput("hub")}')?.value ?? null`);
-  if (!inputVal) {
-    // If char typing missed due to window activation, set value & fire input event
+  try {
+    await evalIn(cdp, optsSession, `chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "openai-compatible", baseURL: provider.baseURL, apiKey: SCRIPTED_DUMMY_KEY, model: "scripted" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`);
+    const beforeIds = await listRunIds(cdp, optsSession);
+    await activateNtpSession(cdp, ntpSession);
     await evalIn(cdp, ntpSession, `(() => {
-      const c = document.getElementById("composer");
-      if (c && typeof c.setText === "function") {
-        c.setText(${JSON.stringify(task)});
-      } else {
-        const inp = document.querySelector('${composerInput("hub")}');
-        if (inp) {
-          inp.value = ${JSON.stringify(task)};
-          inp.dispatchEvent(new Event("input", { bubbles: true }));
-        }
-      }
+      if (location.hash) location.hash = "";
+      const v = document.getElementById("view");
+      if (v) v.hidden = true;
+      const vch = document.getElementById("view-client-host");
+      if (vch) vch.hidden = true;
+      const dv = document.getElementById("directory-view");
+      if (dv) dv.hidden = true;
+      const av = document.getElementById("artifacts-view");
+      if (av) av.hidden = true;
+      const tv = document.getElementById("thread-view");
+      if (tv) tv.hidden = true;
+      document.body.classList.remove("view-open", "full-view-open");
       return true;
-    })()`);
-  }
-  await clickSel(cdp, ntpSession, composerSend("hub"));
-  const t0 = Date.now();
-  while (provider.requests.length < expectRequests && Date.now() - t0 < 120000) {
-    if (onPause) await onPause().catch(() => false);
-    await sleep(250);
-  }
-  // chrome-agent-platform-9t1p: this loop used to exit SILENTLY on timeout and
-  // hand the caller a partial result. The caller's check then failed on a
-  // confusing payload, and the REAL failure — a run that never settled because
-  // the service worker never answered — surfaced one step later as a generic
-  // `cdp timeout: Runtime.evaluate`, which the harness then blamed on the box.
-  // Three outcomes, not two: it happened and passed, it happened and did not
-  // pass, or IT DID NOT HAPPEN. This is the third, and it is named here, at the
-  // point where the expectation was actually broken.
-  if (provider.requests.length < expectRequests) {
-    // Diagnose cheaply. A bounded read answers two different questions: what
-    // phase the run reached, and — if the read itself times out — whether the
-    // service worker is answering AT ALL, which is the known cause and must be
-    // reported as itself rather than as a CDP timeout about something else.
-    let phase;
-    try {
-      const record = await awaitNewRunTerminal(cdp, optsSession, beforeIds, task, 3000);
-      phase = record?.phase ? String(record.phase) : "no durable run record";
-    } catch (e) {
-      const message = String(e?.message ?? e);
-      phase = isCdpEvaluateTimeout(message)
-        ? "UNREADABLE — the service worker did not answer run.list (an unanswered round trip, NOT fleet load)"
-        : `unreadable (${message})`;
+    })()`).catch(() => {});
+    await sleep(300);
+    await clickSel(cdp, ntpSession, "#home").catch(() => false);
+    await sleep(600);
+    await evalIn(cdp, ntpSession, `(() => {
+      const el = document.querySelector('${composerInput("hub")}');
+      el?.focus();
+      return true;
+    })()`).catch(() => {});
+    await typeInto(cdp, ntpSession, composerInput("hub"), task);
+    let inputVal = await evalIn(cdp, ntpSession, `document.querySelector('${composerInput("hub")}')?.value ?? null`);
+    if (!inputVal) {
+      // If char typing missed due to window activation, set value & fire input event
+      await evalIn(cdp, ntpSession, `(() => {
+        const c = document.getElementById("composer");
+        if (c && typeof c.setText === "function") {
+          c.setText(${JSON.stringify(task)});
+        } else {
+          const inp = document.querySelector('${composerInput("hub")}');
+          if (inp) {
+            inp.value = ${JSON.stringify(task)};
+            inp.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+        }
+        return true;
+      })()`);
     }
-    throw new Error(
-      `scripted probe "${task}": the scripted provider received ${provider.requests.length} of ` +
-        `${expectRequests} requests after ${Math.round((Date.now() - t0) / 1000)}s and the run reached phase ${phase}`,
-    );
+    await clickSel(cdp, ntpSession, composerSend("hub"));
+    const t0 = Date.now();
+    while (provider.requests.length < expectRequests && Date.now() - t0 < 120000) {
+      if (onPause) await onPause().catch(() => false);
+      await sleep(250);
+    }
+    // chrome-agent-platform-9t1p: this loop used to exit SILENTLY on timeout and
+    // hand the caller a partial result. The caller's check then failed on a
+    // confusing payload, and the REAL failure — a run that never settled because
+    // the service worker never answered — surfaced one step later as a generic
+    // `cdp timeout: Runtime.evaluate`, which the harness then blamed on the box.
+    // Three outcomes, not two: it happened and passed, it happened and did not
+    // pass, or IT DID NOT HAPPEN. This is the third, and it is named here, at the
+    // point where the expectation was actually broken.
+    if (provider.requests.length < expectRequests) {
+      // Diagnose cheaply. A bounded read answers two different questions: what
+      // phase the run reached, and — if the read itself times out — whether the
+      // service worker is answering AT ALL, which is the known cause and must be
+      // reported as itself rather than as a CDP timeout about something else.
+      let phase;
+      try {
+        const record = await awaitNewRunTerminal(cdp, optsSession, beforeIds, task, 3000);
+        phase = record?.phase ? String(record.phase) : "no durable run record";
+      } catch (e) {
+        const message = String(e?.message ?? e);
+        phase = isCdpEvaluateTimeout(message)
+          ? "UNREADABLE — the service worker did not answer run.list (an unanswered round trip, NOT fleet load)"
+          : `unreadable (${message})`;
+      }
+      throw new Error(
+        `scripted probe "${task}": the scripted provider received ${provider.requests.length} of ` +
+          `${expectRequests} requests after ${Math.round((Date.now() - t0) / 1000)}s and the run reached phase ${phase}`,
+      );
+    }
+    const run = await awaitNewRunTerminal(cdp, optsSession, beforeIds, task);
+    return { provider, run };
+  } catch (err) {
+    try {
+      await provider.close();
+    } catch (cleanupError) {
+      console.warn(`[runScriptedToolProbe] provider close failed: ${String(cleanupError?.message ?? cleanupError)}`);
+    }
+    throw err;
   }
-  const run = await awaitNewRunTerminal(cdp, optsSession, beforeIds, task);
-  return { provider, run };
 }
 
 /** Capture a PNG screenshot of a session (visible evidence for the journeys). */
