@@ -308,7 +308,22 @@ Deno.test("u73qn falsification: discoverRepoSkillsAndCommands refuses marketplac
   assertEquals(privateMarketplaceFetched, false, "Private marketplace download_url must NEVER be fetched");
 });
 
-Deno.test("u73qn: public redirect to another public URL succeeds", async () => {
+// =============================================================================
+// Redirect handling: Simulated Chrome opaqueredirect vs Inspectable-3xx Defense-in-Depth
+//
+// In the shipped Chrome extension runtime, all fetches are issued with redirect: 'manual'
+// (extension/lib/skill-import.js:81). When a redirect occurs, Chromium's network service
+// strips headers and returns type: 'opaqueredirect' (status: 0), where the Location header
+// is uninspectable by extension JavaScript. The tests below model this response contract
+// using a simulated opaqueredirect shape (hand-written mock, not live browser driving),
+// verifying that fetchWithSafeRedirects enforces immediate fail-closed refusal.
+//
+// The manual Location-hop re-validation loop (MAX_REDIRECT_HOPS = 5) in fetchWithSafeRedirects
+// acts as defense-in-depth for runtimes or environments where redirect: 'manual' exposes an
+// inspectable 3xx response with Location headers (e.g. Node/Deno/custom fetchers).
+// =============================================================================
+
+Deno.test("klbus / u73qn (inspectable-3xx non-Chrome defense-in-depth): public redirect to another public URL succeeds when Location is inspectable", async () => {
   const origFetch = globalThis.fetch;
   let finalFetched = false;
 
@@ -338,7 +353,7 @@ Deno.test("u73qn: public redirect to another public URL succeeds", async () => {
     }
   });
 
-Deno.test("u73qn boundary (a): multi-hop chain with a private hop in the middle is refused without fetching it", async () => {
+Deno.test("klbus / u73qn (inspectable-3xx non-Chrome defense-in-depth): boundary (a) multi-hop chain with a private hop in the middle is refused without fetching it", async () => {
   const origFetch = globalThis.fetch;
   let privateHopFetched = false;
   const visitedUrls: string[] = [];
@@ -383,7 +398,7 @@ Deno.test("u73qn boundary (a): multi-hop chain with a private hop in the middle 
   }
 });
 
-Deno.test("u73qn boundary (b): chain longer than MAX_REDIRECT_HOPS (5) is refused fail-closed", async () => {
+Deno.test("klbus / u73qn (inspectable-3xx non-Chrome defense-in-depth): boundary (b) chain longer than MAX_REDIRECT_HOPS (5) is refused fail-closed", async () => {
   const origFetch = globalThis.fetch;
   let hops = 0;
 
@@ -412,7 +427,7 @@ Deno.test("u73qn boundary (b): chain longer than MAX_REDIRECT_HOPS (5) is refuse
   }
 });
 
-Deno.test("u73qn boundary (c): relative Location resolves and is re-checked against checkFetchTarget", async () => {
+Deno.test("klbus / u73qn (inspectable-3xx non-Chrome defense-in-depth): boundary (c) relative Location resolves and is re-checked against checkFetchTarget", async () => {
   const origFetch = globalThis.fetch;
 
   // 1. Safe relative redirect resolves against base URL and succeeds
@@ -518,7 +533,9 @@ Deno.test("u73qn: public URLs pass validation and are not refused by the SSRF ch
   }
 });
 
-Deno.test("u73qn: opaqueredirect response is refused fail-closed without following uninspectable destination", async () => {
+Deno.test("klbus / u73qn (simulated Chrome redirect:manual opaqueredirect shape): opaqueredirect response is refused fail-closed without following uninspectable destination", async () => {
+  // Hand-written mock of the Fetch API redirect: 'manual' response shape (type: 'opaqueredirect', status: 0)
+  // to exercise fetchWithSafeRedirects fail-closed handling without driving a real browser.
   const origFetch = globalThis.fetch;
   globalThis.fetch = async (): Promise<any> => {
     return {
@@ -538,6 +555,47 @@ Deno.test("u73qn: opaqueredirect response is refused fail-closed without followi
       err.message.includes("opaque destination") || err.message.includes("redirected"),
       `Expected opaque redirect refusal, got: ${err.message}`,
     );
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+Deno.test("klbus falsification: simulated Chrome redirect:manual opaqueredirect shape refuses public redirects (opaque 3xx) fail-closed rather than following them", async () => {
+  // Simulates Chrome's redirect: 'manual' response shape where a 301/302 from https://example.com/redirect-me.md
+  // returns type: 'opaqueredirect' (status: 0, empty headers) via hand-written mock.
+  // A test or caller claiming that this redirect shape follows public redirects is falsified:
+  // it MUST throw and refuse fail-closed rather than delivering the redirected skill.
+  const origFetch = globalThis.fetch;
+  let finalCdnFetched = false;
+
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<any> => {
+    const url = typeof input === "string" ? input : (input instanceof URL ? input.href : input.url);
+    if (url === "https://example.com/redirect-me.md") {
+      // Hand-written mock of Chrome's exact Fetch API contract for redirect: 'manual'
+      return {
+        type: "opaqueredirect",
+        status: 0,
+        ok: false,
+        headers: new Headers(),
+      };
+    }
+    if (url.includes("actual-skill.md")) {
+      finalCdnFetched = true;
+      return new Response("---\nname: Safe Redirected Skill\n---\nRedirected Content", { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  };
+
+  try {
+    const err = await assertRejects(
+      () => fetchSkillFromUrl("https://example.com/redirect-me.md"),
+      Error,
+    );
+    assert(
+      err.message.includes("opaque destination") || err.message.includes("redirected"),
+      `Expected opaque redirect refusal under simulated opaqueredirect shape, got: ${err.message}`,
+    );
+    assertEquals(finalCdnFetched, false, "Must NEVER follow uninspectable redirect hop under opaqueredirect shape");
   } finally {
     globalThis.fetch = origFetch;
   }

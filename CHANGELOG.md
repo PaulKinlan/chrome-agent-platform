@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.668] — 2026-10-11
+- Clarify skill-import redirect test claims between live Chrome opaqueredirect refusal and inspectable-3xx defense-in-depth
+
 ## [0.3.667] — 2026-10-10
 - Limit memory usage when discovering site documentation files
 
