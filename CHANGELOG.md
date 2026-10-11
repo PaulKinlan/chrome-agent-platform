@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.670] — 2026-10-11
+- Fail closed on browser tab focus failures during factory reset test automation
+
 ## [0.3.669] — 2026-10-11
 - Fail closed on browser tab focus failures during task lifecycle test automation
 

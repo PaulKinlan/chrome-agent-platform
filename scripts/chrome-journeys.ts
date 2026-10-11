@@ -9928,7 +9928,7 @@ async function factoryResetJourney() {
     const msgWatch = msgOn(watch);
 
     await cdp.send("Target.activateTarget", { targetId: optsPage.id }).catch(() => {});
-    await cdp.send("Page.bringToFront", {}, opts).catch(() => {});
+    await cdp.send("Page.bringToFront", {}, opts);
     await clickSel(cdp, opts, 'a.nav-item[data-section="data"]');
     await sleep(400);
     const clicked = await clickSel(cdp, opts, "#factory-reset-btn");
