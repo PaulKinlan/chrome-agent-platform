@@ -9,7 +9,7 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 const journeySource = await Deno.readTextFile(new URL("../scripts/chrome-journeys.ts", import.meta.url));
 
-Deno.test("j1zcb / 0ucue / u0qo0 / 25enf: scripts/chrome-journeys.ts does not swallow Page.bringToFront rejections at :2272, :4838, :5302, :9505, and :9931", () => {
+Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q: scripts/chrome-journeys.ts does not swallow tab activation/focus rejections", () => {
   // Line 2272: openCreateDialog pre-Create click
   const openCreateDialogIdx = journeySource.indexOf("const openCreateDialog = async () => {");
   assert(openCreateDialogIdx > 0, "openCreateDialog must be found in scripts/chrome-journeys.ts");
@@ -21,6 +21,19 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf: scripts/chrome-journeys.ts does not sw
   assert(
     !openCreateDialogBlock.includes('await cdp.send("Page.bringToFront", {}, ntpSession).catch('),
     "openCreateDialog must not swallow Page.bringToFront errors with .catch()",
+  );
+
+  // Line 3573: testActionLedgerJourney Target.activateTarget pre-input
+  const ledgerIdx = journeySource.indexOf("const ledgerBeforeIds = await listRunIds(cdp, ledgerOptsSession);");
+  assert(ledgerIdx > 0, "testActionLedgerJourney must be found in scripts/chrome-journeys.ts");
+  const ledgerBlock = journeySource.slice(ledgerIdx - 500, ledgerIdx);
+  assert(
+    ledgerBlock.includes('await cdp.send("Target.activateTarget", { targetId: ntpPage.id });\n      await clickSel(cdp, ntpSession, "#home")'),
+    "testActionLedgerJourney must await Target.activateTarget without .catch() before #home click",
+  );
+  assert(
+    !ledgerBlock.includes('await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch('),
+    "testActionLedgerJourney must not swallow Target.activateTarget errors with .catch()",
   );
 
   // Line 4838: keyless composer pre-input
@@ -627,4 +640,171 @@ Deno.test("25enf: testDataManagement factory reset fails closed on Page.bringToF
   // The mutant survived by swallowing rejection and dispatched clicks to Data nav and Reset button!
   assertEquals(mutantClickCount, 2, "mutant with .catch() swallows error and calls clickSel twice (Data nav and Reset button)");
   assertEquals(mutantBoxOfCalled, true, "mutant with .catch() swallows error and calls boxOf to poll dialog");
+});
+
+Deno.test("5ui2q: testActionLedgerJourney fails closed on Target.activateTarget rejection, preventing clickSel and typeInto while executing local finally cleanup", async () => {
+  // Extract testActionLedgerJourney activation and setup block from scripts/chrome-journeys.ts
+  const start = journeySource.indexOf("const ledgerOptsPage = await openPage(port, `chrome-extension://${extId}/options/options.html`);");
+  assert(start > 0, "testActionLedgerJourney start must be found");
+  const end = journeySource.indexOf("const ledgerApprovalStart = Date.now();", start);
+  assert(end > start, "testActionLedgerJourney end must be found");
+  const blockBody = journeySource.slice(start, end).trim();
+
+  for (const scenario of [
+    { name: "dead target (-32000)", err: new Error("Target.activateTarget: No target with given id found.") },
+    { name: "dead transport", err: new Error("Target.activateTarget: WebSocket connection closed.") },
+  ]) {
+    let clickSelCount = 0;
+    let typeIntoCount = 0;
+    let listRunIdsCount = 0;
+    let providerClosed = false;
+    let providerRestored = false;
+
+    const mockCdp = {
+      pageSessions: new Set(),
+      send: async (method: string, _params: any) => {
+        if (method === "Target.activateTarget") {
+          throw scenario.err;
+        }
+        return {};
+      },
+    };
+
+    const runner = new Function(
+      "cdp",
+      "openPage",
+      "port",
+      "extId",
+      "attachRuntime",
+      "sleep",
+      "evalIn",
+      "ledgerProvider",
+      "SCRIPTED_DUMMY_KEY",
+      "ntpPage",
+      "ntpSession",
+      "clickSel",
+      "listRunIds",
+      "composerInput",
+      "typeInto",
+      "composerSend",
+      "onCleanup",
+      `
+      return (async () => {
+        let ledgerOptsSession = null;
+        try {
+          ${blockBody}
+        } finally {
+          await ledgerProvider.close();
+          onCleanup(Boolean(ledgerOptsSession));
+        }
+      })();
+      `,
+    );
+
+    let thrownError: Error | undefined;
+    try {
+      await runner(
+        mockCdp,
+        async () => ({ id: "fake-opts-id" }),
+        9222,
+        "fake-ext-id",
+        async () => "fake-opts-session",
+        async () => {},
+        async () => ({}),
+        { close: async () => { providerClosed = true; } },
+        "fake-key",
+        { id: "fake-ntp-id" },
+        "fake-ntp-session",
+        async () => { clickSelCount++; return true; },
+        async () => { listRunIdsCount++; return []; },
+        () => "#composer [data-composer-input]",
+        async () => { typeIntoCount++; return true; },
+        () => "#composer [data-composer-send]",
+        (restored: boolean) => { providerRestored = restored; },
+      );
+    } catch (err: any) {
+      thrownError = err;
+    }
+
+    assert(thrownError !== undefined, `testActionLedgerJourney must throw on ${scenario.name}`);
+    assert(
+      thrownError.message.includes(scenario.err.message),
+      `thrown error must preserve root cause: ${thrownError.message}`,
+    );
+    assertEquals(clickSelCount, 0, `clickSel must NOT be called on ${scenario.name} (0 clicks)`);
+    assertEquals(typeIntoCount, 0, `typeInto must NOT be called on ${scenario.name} (0 typing)`);
+    assertEquals(listRunIdsCount, 0, `listRunIds must NOT be called on ${scenario.name}`);
+    assertEquals(providerClosed, true, `ledgerProvider.close() must be executed in finally on ${scenario.name}`);
+    assertEquals(providerRestored, true, `provider restore must be executed in finally on ${scenario.name}`);
+  }
+
+  // Mutant check: restoring .catch(() => {}) swallows Target.activateTarget rejection
+  const mutantBlockBody = blockBody.replace(
+    'await cdp.send("Target.activateTarget", { targetId: ntpPage.id });',
+    'await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});',
+  );
+  assert(mutantBlockBody.includes(".catch("), "mutant must contain catch()");
+
+  const mutantRunner = new Function(
+    "cdp",
+    "openPage",
+    "port",
+    "extId",
+    "attachRuntime",
+    "sleep",
+    "evalIn",
+    "ledgerProvider",
+    "SCRIPTED_DUMMY_KEY",
+    "ntpPage",
+    "ntpSession",
+    "clickSel",
+    "listRunIds",
+    "composerInput",
+    "typeInto",
+    "composerSend",
+    `
+    return (async () => {
+      let ledgerOptsSession = null;
+      try {
+        ${mutantBlockBody}
+      } finally {
+        await ledgerProvider.close();
+      }
+    })();
+    `,
+  );
+
+  let mutantClickCount = 0;
+  let mutantTypeCount = 0;
+
+  await mutantRunner(
+    {
+      pageSessions: new Set(),
+      send: async (method: string) => {
+        if (method === "Target.activateTarget") {
+          throw new Error("Target.activateTarget: No target with given id found.");
+        }
+        return {};
+      },
+    },
+    async () => ({ id: "fake-opts-id" }),
+    9222,
+    "fake-ext-id",
+    async () => "fake-opts-session",
+    async () => {},
+    async () => ({}),
+    { close: async () => {} },
+    "fake-key",
+    { id: "fake-ntp-id" },
+    "fake-ntp-session",
+    async () => { mutantClickCount++; return true; },
+    async () => [],
+    () => "#composer [data-composer-input]",
+    async () => { mutantTypeCount++; return true; },
+    () => "#composer [data-composer-send]",
+  );
+
+  // The mutant survived by swallowing rejection and called clickSel twice (#home and composerSend) and typeInto!
+  assertEquals(mutantClickCount, 2, "mutant with .catch() swallows error and calls clickSel twice (#home and composerSend)");
+  assertEquals(mutantTypeCount, 1, "mutant with .catch() swallows error and calls typeInto");
 });
