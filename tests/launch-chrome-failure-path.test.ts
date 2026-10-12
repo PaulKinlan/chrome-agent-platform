@@ -239,7 +239,7 @@ Deno.test(
       fake,
       [
         "#!/bin/bash",
-        `( exec -a "${helperMarker}" sleep 300 ) &`,
+        `/bin/sh -c "sleep 300; : ${helperMarker}" >/dev/null 2>&1 &`,
         `while ! pgrep -f "${helperMarker}" >/dev/null 2>&1; do sleep 0.01; done`,
         "echo 'DevTools listening on ws://127.0.0.1:31337/devtools/browser/abc' >&2",
         "wait",
@@ -273,9 +273,14 @@ Deno.test(
             timeoutMs: 5000,
             processTable: recoverableProcessTable,
             teardown: async (target) => {
-              observedTarget = target;
+              if (!observedTarget) observedTarget = target;
               // Assert the unmarked helper is running before teardown proceeds (handshake)
-              const running = await survivors(helperMarker);
+              const deadline = Date.now() + 5000;
+              let running = await survivors(helperMarker);
+              while (running.length === 0 && Date.now() < deadline) {
+                await new Promise((r) => setTimeout(r, 20));
+                running = await survivors(helperMarker);
+              }
               assert(running.length >= 1, "unmarked helper must be running before teardown begins");
               await teardownChrome(target);
             },
@@ -434,7 +439,7 @@ Deno.test(
       fake,
       [
         "#!/bin/bash",
-        `( exec -a "${helperMarker} $*" sleep 300 ) &`,
+        `/bin/sh -c "sleep 300; : ${helperMarker} $*" >/dev/null 2>&1 &`,
         `while ! pgrep -f "${helperMarker}" >/dev/null 2>&1; do sleep 0.01; done`,
         "sleep 300",
         "",
@@ -460,7 +465,12 @@ Deno.test(
               capturedTarget = target;
               if (teardownAttempts === 1) {
                 // Assert the helper is confirmed live before teardown proceeds (handshake)
-                const running = await survivors(helperMarker);
+                const deadline = Date.now() + 5000;
+                let running = await survivors(helperMarker);
+                while (running.length === 0 && Date.now() < deadline) {
+                  await new Promise((r) => setTimeout(r, 20));
+                  running = await survivors(helperMarker);
+                }
                 assert(running.length >= 1, "profile helper must be running before teardown begins");
               }
               if (target && typeof target === "object" && "processGroup" in target && target.processGroup !== undefined) {

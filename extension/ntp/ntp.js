@@ -5604,9 +5604,12 @@ function initSideDisclosures() {
 
 export const SIDE_COLLAPSED_KEY = "cap:ntp:sidebar-collapsed";
 
+let sideRailNavInitialized = false;
+
 function initSideRailNav() {
   const railNav = document.getElementById("side-rail-nav");
-  if (!railNav) return;
+  if (!railNav || sideRailNavInitialized) return;
+  sideRailNavInitialized = true;
   railNav.addEventListener("click", (e) => {
     const btn = e.target?.closest?.(".rail-sec-btn");
     if (!btn) return;

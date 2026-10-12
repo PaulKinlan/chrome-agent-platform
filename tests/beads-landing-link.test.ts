@@ -175,3 +175,50 @@ Deno.test("beads-landing-link: SOURCE-BOUND — the real history yields the link
   assert(merge?.commits.some((c: { sha: string }) => c.sha.startsWith("71bc5d389")),
     "the pinned real merge must still yield its bead link");
 });
+
+Deno.test("beads-landing-link: trailing punctuation (.,-,)) is stripped and interior dots preserved (chrome-agent-platform-d1kdf)", () => {
+  const refs = extractBeadRefs([
+    "a".repeat(40) + "\x1fsee chrome-agent-platform-t5o2i. and (chrome-agent-platform-parent) with comma chrome-agent-platform-item,\x1fbody ends with chrome-agent-platform-body.",
+    "b".repeat(40) + "\x1fchrome-agent-platform-child.4: hierarchical bead\x1fbody references chrome-agent-platform-other.9.",
+    "c".repeat(40) + "\x1fsee chrome-agent-platform-dash- — dash as punctuation\x1fbody",
+  ].join("\x1e"));
+  const beads = refs.map((r) => r.bead).sort();
+  assertEquals(beads, [
+    "chrome-agent-platform-body",
+    "chrome-agent-platform-child.4",
+    "chrome-agent-platform-dash",
+    "chrome-agent-platform-item",
+    "chrome-agent-platform-other.9",
+    "chrome-agent-platform-parent",
+    "chrome-agent-platform-t5o2i",
+  ]);
+});
+
+Deno.test("beads-landing-link: --comment fails non-zero when bd comment fails (chrome-agent-platform-d1kdf)", () => {
+  const root = scratchRepo();
+  try {
+    const bin = join(root, "fixture-bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, "bd"), `#!/bin/sh
+if [ "$1" = "comment" ]; then
+  if [ "$2" = "chrome-agent-platform-aaaa" ]; then
+    echo "simulated comment failure for $2" >&2
+    exit 1
+  fi
+  echo "commented $2"
+  exit 0
+fi
+exit 2
+`, { mode: 0o755 });
+    const script = Deno.env.get("CAP_BEADS_LINK_TEST_TOOL") ||
+      fileURLToPath(new URL("../scripts/beads-landing-link.mjs", import.meta.url));
+    const result = spawnSync("node", [script, "HEAD", "--comment", "testsha123"], {
+      cwd: root, encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` },
+    });
+    assertEquals(result.status, 1, `expected non-zero exit on bd comment failure, got ${result.status}`);
+    assert(result.stderr.includes("failed to comment"), `expected failure details in stderr, got: ${result.stderr}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

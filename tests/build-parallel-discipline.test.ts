@@ -806,6 +806,22 @@ Deno.test("build discipline C: the version-GC grace comes from resolveGcGraceMs(
   assert(guard, "the grace timer must sit inside an `if` that reads gcGraceMs (0 = no wait)");
 });
 
+Deno.test("build discipline D: deno install self-heal calls are bounded with runBoundedChild (chrome-agent-platform-0iidx)", () => {
+  const { source } = parseModule("build.mjs");
+  assert(
+    !source.includes('execFileSync("deno"'),
+    "build.mjs must not invoke deno install with unbounded execFileSync (use runBoundedChild)",
+  );
+  assert(
+    source.includes('label: "deno install --frozen-lockfile"'),
+    'build.mjs must pass label: "deno install --frozen-lockfile" to runBoundedChild',
+  );
+  assert(
+    source.includes("CAP_DENO_INSTALL_TIMEOUT_MS"),
+    "build.mjs must use boundedChildTimeoutMs with CAP_DENO_INSTALL_TIMEOUT_MS",
+  );
+});
+
 // ---------------------------------------------------------------------------------------------------
 // Self-proof: the rule functions accept a clean fixture and reject each mutant of it. A mutant is a
 // real text edit of the fixture (re-parsed from source), and each one names the category that must

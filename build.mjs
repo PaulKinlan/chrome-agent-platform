@@ -22,7 +22,6 @@ import path, { join, extname } from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { boundedChildTimeoutMs, runBoundedChild } from "./scripts/lib/bounded-child.mjs";
 import { syncGallery } from "./scripts/sync-gallery.mjs";
 import { syncChangelog } from "./scripts/sync-changelog.mjs";
@@ -446,7 +445,13 @@ try {
       // `deno install` re-link the top-level entries.
       try {
         rmSync(denoStoreDir, { recursive: true, force: true });
-        execFileSync("deno", ["install", "--frozen-lockfile"], { cwd: ROOT, stdio: "inherit" });
+        const res = await runBoundedChild("deno", ["install", "--frozen-lockfile"], {
+          cwd: ROOT,
+          stdio: "inherit",
+          label: "deno install --frozen-lockfile",
+          timeoutMs: boundedChildTimeoutMs(process.env, "CAP_DENO_INSTALL_TIMEOUT_MS"),
+        });
+        if (res.status !== 0) throw new Error(`deno install exited with code ${res.status}`);
         denoEntries = readdirSync(denoStoreDir);
       } catch (err) {
         throw new Error(
@@ -455,7 +460,13 @@ try {
       }
     } else if (!hasSdkEntries()) {
       try {
-        execFileSync("deno", ["install", "--frozen-lockfile"], { cwd: ROOT, stdio: "inherit" });
+        const res = await runBoundedChild("deno", ["install", "--frozen-lockfile"], {
+          cwd: ROOT,
+          stdio: "inherit",
+          label: "deno install --frozen-lockfile",
+          timeoutMs: boundedChildTimeoutMs(process.env, "CAP_DENO_INSTALL_TIMEOUT_MS"),
+        });
+        if (res.status !== 0) throw new Error(`deno install exited with code ${res.status}`);
         denoEntries = readdirSync(denoStoreDir);
       } catch (err) {
         throw new Error(

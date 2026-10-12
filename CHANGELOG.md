@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.677] — 2026-10-12
+- Harden emscripten manifest URL validation, pure durable tool result normalization, and NTP side-rail navigation listeners
+
 ## [0.3.676] — 2026-10-11
 - Fail closed on target activation rejection in driveHubTask before NTP focus and input
 

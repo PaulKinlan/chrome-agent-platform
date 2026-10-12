@@ -806,8 +806,10 @@ Deno.test("mujlt runner boundary: abnormal exit before test summary preserves ex
   Deno.writeTextFileSync(
     fixture,
     `import { ENVIRONMENTAL_REFUSAL_MARKER } from "${new URL("../scripts/lib/ntp-boot-attribution.ts", import.meta.url).href}";\n` +
-      `console.error(ENVIRONMENTAL_REFUSAL_MARKER + ' {"reason":"test-refusal"}');\n` +
-      `Deno.kill(Deno.pid, "SIGKILL");\n`,
+      `Deno.test("fixture: abnormal exit after marker", () => {\n` +
+      `  Deno.stderr.writeSync(new TextEncoder().encode(ENVIRONMENTAL_REFUSAL_MARKER + ' {"reason":"test-refusal"}\\n'));\n` +
+      `  Deno.kill(Deno.pid, "SIGKILL");\n` +
+      `});\n`,
   );
 
   try {

@@ -16,7 +16,7 @@ Deno.test("bbz3s: pre-bundle guard covers developer and store targets", async ()
   const builds = source.indexOf("await settleAll([", plugin);
   assert(check > 0 && check < plugin && plugin < builds,
     "the live AJV-to-fast-uri resolution must be checked before bundling in BOTH build targets");
-  assertStringIncludes(source, 'execFileSync("deno", ["install", "--frozen-lockfile"]',
+  assertStringIncludes(source, 'runBoundedChild("deno", ["install", "--frozen-lockfile"]',
     "even an SDK-missing auto-install cannot silently rewrite deno.lock");
 });
 
@@ -133,10 +133,10 @@ Deno.test("c1e3s: build.mjs refuses symlinked node_modules and .deno store BEFOR
   assert(preRepairBlock, "build.mjs must contain pre-repair symlink guard before let denoEntries");
   assertStringIncludes(preRepairBlock[0], 'lstatSync(nmDir).isSymbolicLink()', "pre-repair guard must check nmDir");
   assertStringIncludes(preRepairBlock[0], 'lstatSync(denoStoreDir).isSymbolicLink()', "pre-repair guard must check denoStoreDir");
-  const repairCallIndex = buildScript.indexOf('execFileSync("deno", ["install", "--frozen-lockfile"]');
+  const repairCallIndex = buildScript.indexOf('runBoundedChild("deno", ["install", "--frozen-lockfile"]');
   assert(repairCallIndex > 0, "build.mjs must contain repair call");
   assert(buildScript.indexOf('const nmDir = path.join(ROOT, "node_modules");') < repairCallIndex,
-    "pre-repair symlink check must execute before any repair execFileSync call");
+    "pre-repair symlink check must execute before any repair runBoundedChild call");
 
   // Dynamic execution test: run the pre-repair logic against mock layouts
   const tmp = Deno.makeTempDirSync({ dir: durableDir("bbz3s-live-resolution"), prefix: "build-guard-" });

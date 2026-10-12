@@ -825,11 +825,7 @@ export async function launchChrome(opts: {
     // If not, teardown falls back to leader-plus-profile kill as the accepted fallback.
     let fallbackGroup: number | undefined;
     try {
-      const stat = processGroup(proc.pid, opts.processTable);
-      if (stat?.group === proc.pid && stat.startTicks) {
-        fallbackGroup = proc.pid;
-        recordLeaderStartTicks(proc, stat.startTicks);
-      }
+      fallbackGroup = await isolatedProcessGroup(proc, opts.processTable);
     } catch {
       // Table still unreadable: leader-plus-profile kill is the documented fallback.
     }

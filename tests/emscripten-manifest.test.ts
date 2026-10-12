@@ -1,7 +1,7 @@
 // Shape/identity tests ONLY. Synthetic pins are not an inventory, licensing
 // evidence, a released candidate, or a successful numeric admission fixture.
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
-import { canonicalJson, WasmPackageAuthority } from "../extension/lib/wasm-package-authority.js";
+import { canonicalJson, WasmPackageAuthority, WasmPackageAuthorityError } from "../extension/lib/wasm-package-authority.js";
 // ycez/ltkj.2: the schema-2 surface is REGISTERED by the options-document broker — importing it here
 // is what lets `authority.validateManifest` validate a schema-2 record at all (the authority takes the
 // surface by injection and never imports the decoder itself; see lib/emscripten-admission.js).
@@ -132,4 +132,18 @@ Deno.test("emscripten provenance: comparison scope excludes new adapter, is clos
   assertThrows(() => validateEmscriptenProvenance(canonicalJson(missingOutput), m));
   const wrongSource = sidecar(); wrongSource.sources[0].revision = "historical-build";
   assertThrows(() => validateEmscriptenProvenance(canonicalJson(wrongSource), m));
+});
+
+Deno.test("emscripten provenance: malformed https URL fails with typed provenance_source_invalid without throwing raw TypeError (chrome-agent-platform-9ekup)", () => {
+  const m = fixture();
+  const p = sidecar();
+  p.sources[0].source = "https://[";
+  let err: any;
+  try {
+    validateEmscriptenProvenance(canonicalJson(p), m);
+  } catch (e) {
+    err = e;
+  }
+  assert(err instanceof WasmPackageAuthorityError, `expected WasmPackageAuthorityError, got ${err}`);
+  assertEquals(err.code, "provenance_source_invalid");
 });

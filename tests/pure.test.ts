@@ -20,6 +20,7 @@ import {
   sanitizeToolName,
   schemaToZod,
   SECRET_KEY_RE,
+  normalizeDurableToolResult,
 } from "../extension/lib/pure.js";
 import { journalJson } from "../extension/shared/tool-tree.js";
 
@@ -801,4 +802,34 @@ Deno.test("execute_tool secret redaction transform simulation: broadcast, journa
   const durableLogJson = JSON.stringify(durableLog);
   assert(!durableLogJson.includes(rawKey), "durable run log must NOT contain raw chacha key");
   assert(durableLogJson.includes("[REDACTED]"), "durable run log must contain [REDACTED]");
+});
+
+Deno.test("normalizeDurableToolResult: isolates array conversion failure to that field without dropping the record (chrome-agent-platform-caa3s)", () => {
+  const throwingPerms = Object.assign(["tabs"], {
+    slice() {
+      throw new Error("boom");
+    },
+  });
+  const input = {
+    type: "tool-result",
+    id: "res-1",
+    executionId: "exec-1",
+    callId: "call-1",
+    tool: "my-tool",
+    result: "success-data",
+    permissionRequirement: {
+      reason: "need access",
+      permissions: throwingPerms,
+      grantOrigins: ["https://example.com"],
+      grantGlobal: true,
+    },
+  };
+  const normalized: any = normalizeDurableToolResult(input);
+  assertEquals(normalized.id, "res-1");
+  assertEquals(normalized.callId, "call-1");
+  assertEquals(normalized.result, "success-data");
+  assertEquals(normalized.permissionRequirement?.reason, "need access");
+  assertEquals(normalized.permissionRequirement?.permissions, []);
+  assertEquals(normalized.permissionRequirement?.grantOrigins, ["https://example.com"]);
+  assertEquals(normalized.permissionRequirement?.grantGlobal, true);
 });

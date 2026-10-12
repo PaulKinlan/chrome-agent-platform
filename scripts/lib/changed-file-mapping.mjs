@@ -9,9 +9,10 @@
 //
 // THE TWO CLASSES:
 //
-//   1. UNIMPORTED HARNESSES. scripts/a11y-audit.ts, scripts/sidebar-parity.ts and
-//      scripts/constrained-width-layout.ts are uncovered; scripts/lib/composer-target.ts
-//      and scripts/lib/css-padding.ts are COVERED, because a test imports them.
+//   1. UNIMPORTED HARNESSES. scripts/a11y-audit.ts and scripts/sidebar-parity.ts
+//      are uncovered; scripts/kat-constrained-width-layout.ts (via tests/harness-marks.test.ts),
+//      scripts/lib/composer-target.ts and scripts/lib/css-padding.ts are COVERED,
+//      because a test imports them.
 //      So it is not "any scripts/** change" — it is precisely the files nothing
 //      imports. What covers top-level scripts/*.ts instead is the tree-walking
 //      guards, which enumerate scripts/*.ts at RUNTIME (harnessFiles() does a

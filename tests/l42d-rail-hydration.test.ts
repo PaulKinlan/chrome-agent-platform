@@ -119,6 +119,7 @@ Deno.test("l42d: rail click during held boot read survives stale saved-true repl
   releaseRead({ "hub.sidebarCollapsed": true });
   await restoring;
   await api.writes();
+  assertEquals(railHandlers.length, 1, "rail click handler must be registered exactly once (chrome-agent-platform-fwca1)");
   trace.push(`after reply ${JSON.stringify(api.snapshot())}, durable=${saved.value}`);
   console.log(`L42D_EVENT_TRACE ${JSON.stringify(trace)}`);
   assertEquals(api.snapshot().userToggled, true, "rail click must establish explicit user intent");
@@ -127,4 +128,11 @@ Deno.test("l42d: rail click during held boot read survives stale saved-true repl
   assertEquals(saved.writes, [false], "stale boot reply must not persist the old choice again");
   assertEquals(saved.value, false);
   assertEquals(attributes.get("aria-expanded"), "true");
+
+  media.matches = true;
+  api.applySidebarForWidth();
+  const writesBefore = saved.writes.length;
+  railNav.click();
+  await api.writes();
+  assertEquals(saved.writes.length - writesBefore, 1, "post-hydration rail click must persist via kv.set exactly once (chrome-agent-platform-fwca1)");
 });

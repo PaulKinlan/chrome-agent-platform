@@ -146,7 +146,15 @@ export function validateEmscriptenProvenance(raw, m) {
   if (p.format !== "cap-emscripten-admission-provenance-v1") fail("provenance_format");
   const pin = a => {
     keys(a, "name source revision sha256 size"); text(a.name); text(a.source); text(a.revision); digest(a.sha256); count(a.size); if (!a.size) fail("provenance_incomplete");
-    if (a.source.startsWith("https:")) { const url = new URL(a.source); if (url.protocol !== "https:" || url.username || url.password) fail("provenance_source_invalid"); }
+    if (a.source.startsWith("https:")) {
+      try {
+        const url = new URL(a.source);
+        if (url.protocol !== "https:" || url.username || url.password) fail("provenance_source_invalid");
+      } catch (err) {
+        if (err instanceof WasmPackageAuthorityError) throw err;
+        fail("provenance_source_invalid");
+      }
+    }
     else assertRelativePath(a.source, "provenance.source");
   };
   for (const k of ["toolchain", "sources", "patches"]) { ordered(p[k], a => a.name); p[k].forEach(pin); }

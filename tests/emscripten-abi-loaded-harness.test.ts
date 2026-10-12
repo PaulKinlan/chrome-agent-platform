@@ -808,11 +808,21 @@ Deno.test("w6wo: an UNMARKED path is never removed, and refuses with the actiona
     assertStringIncludes(err.message, probe);
     assertStringIncludes(err.message, "ls -la");
     await Deno.stat(probe); // still there — a refusal must not delete what it refused
+
+    // Remove the (a) probe dir before (b) so (b) directly exercises the dangling symlink path
+    await Deno.remove(probe, { recursive: true });
+
     // (b) a dangling symlink: lstat sees it, and it is not ours either.
-    await Deno.symlink("missing-target", link).catch((e) => { if (!(e instanceof Deno.errors.AlreadyExists)) throw e; });
+    await Deno.symlink("missing-target", probe);
     assertEquals((await probePathVerdict(extension)).kind, "foreign");
+    const errSymlink = await assertRejects(() => clearProbeLeftoverIfProvable(extension), Error);
+    assertStringIncludes(errSymlink.message, "NEVER removed");
+    assertStringIncludes(errSymlink.message, probe);
+    assertStringIncludes(errSymlink.message, "ls -la");
+    assertStringIncludes(errSymlink.message, "symlink -> missing-target");
+    const lst = await Deno.lstat(probe);
+    assert(lst.isSymlink);
   } finally {
     await Deno.remove(probe, { recursive: true }).catch(() => {});
-    await Deno.remove(link).catch(() => {});
   }
 });

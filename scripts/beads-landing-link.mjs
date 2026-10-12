@@ -48,7 +48,9 @@ export function extractBeadRefs(logText, { prefix = DEFAULT_PREFIX } = {}) {
     if (!sha || !subject) continue;
     const seen = new Set();
     for (const match of `${subject}\n${body}`.matchAll(pattern)) {
-      const bead = `${prefix}${match[1].toLowerCase()}`;
+      const rawId = match[1].toLowerCase().replace(/[.-]+$/, "");
+      if (!rawId) continue;
+      const bead = `${prefix}${rawId}`;
       if (seen.has(bead)) continue;
       seen.add(bead);
       refs.push({ bead, sha: sha.trim(), subject: subject.trim() });
@@ -146,6 +148,7 @@ function main(argv) {
   }
 
   if (commentSha) {
+    const failedBeads = [];
     for (const { bead, commits } of links) {
       const lines = [
         `LANDING LINK (chrome-agent-platform-j4t1): referenced by landing ${commentSha} via ${commits.length} commit(s) in ${range}.`,
@@ -154,7 +157,16 @@ function main(argv) {
         "This is a LINK, not a verdict: confirm the behaviour is on main before closing, and say plainly if the landing re-implemented it.",
       ].join("\n");
       const r = bd(cwd, ["comment", bead, lines]);
-      console.log(`  commented ${bead}: ${(r.stdout || r.stderr).trim().split("\n").pop()}`);
+      if (r.status !== 0) {
+        failedBeads.push(bead);
+        console.error(`  failed to comment ${bead} (exit ${r.status}): ${(r.stderr || r.stdout).trim()}`);
+      } else {
+        console.log(`  commented ${bead}: ${(r.stdout || r.stderr).trim().split("\n").pop()}`);
+      }
+    }
+    if (failedBeads.length > 0) {
+      console.error(`beads-landing-link: failed to comment on ${failedBeads.length} bead(s): ${failedBeads.join(", ")}`);
+      process.exit(1);
     }
   }
 }

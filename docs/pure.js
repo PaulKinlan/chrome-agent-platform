@@ -1350,57 +1350,79 @@ export function normalizeDurableToolResult(log) {
       try { prHostOrigins = rawPr.hostOrigins; } catch { prHostOrigins = []; }
       try { prApprovals = rawPr.approvals; } catch { prApprovals = []; }
 
+      let permissions = [];
+      try {
+        if (Array.isArray(prPerms)) {
+          permissions = prPerms.slice(0, 8).map((p) => {
+            try { return boundedAndRedacted(safeString(p, ""), 64); } catch { return "[unserializable]"; }
+          });
+        }
+      } catch {
+        permissions = [];
+      }
+
+      let grantOrigins = [];
+      try {
+        if (Array.isArray(prGrantOrigins)) {
+          grantOrigins = prGrantOrigins.slice(0, 50).map((o) => {
+            try { return boundedAndRedacted(safeString(o, ""), 240); } catch { return "[unserializable]"; }
+          });
+        }
+      } catch {
+        grantOrigins = [];
+      }
+
       const req = {
         reason: boundedAndRedacted(safeString(prReason, ""), 240),
-        permissions: Array.isArray(prPerms)
-          ? prPerms.slice(0, 8).map((p) => {
-              try { return boundedAndRedacted(safeString(p, ""), 64); } catch { return "[unserializable]"; }
-            })
-          : [],
-        grantOrigins: Array.isArray(prGrantOrigins)
-          ? prGrantOrigins.slice(0, 50).map((o) => {
-              try { return boundedAndRedacted(safeString(o, ""), 240); } catch { return "[unserializable]"; }
-            })
-          : [],
+        permissions,
+        grantOrigins,
         grantGlobal: prGrantGlobal === true,
       };
-      if (Array.isArray(prHostOrigins) && prHostOrigins.length) {
-        req.hostOrigins = prHostOrigins.slice(0, 50).map((h) => {
-          try { return boundedAndRedacted(safeString(h, ""), 240); } catch { return "[unserializable]"; }
-        });
+      try {
+        if (Array.isArray(prHostOrigins) && prHostOrigins.length) {
+          req.hostOrigins = prHostOrigins.slice(0, 50).map((h) => {
+            try { return boundedAndRedacted(safeString(h, ""), 240); } catch { return "[unserializable]"; }
+          });
+        }
+      } catch {
+        // Omit hostOrigins on processing failure
       }
-      if (Array.isArray(prApprovals) && prApprovals.length) {
-        req.approvals = prApprovals.slice(0, 10).map((a) => {
-          if (!a || typeof a !== "object" || Array.isArray(a)) return null;
-          let aId, aAct, aTgt, aDetail;
-          try { aId = a.approvalId; } catch { aId = "[unserializable]"; }
-          try { aAct = a.action; } catch { aAct = "[unserializable]"; }
-          try { aTgt = a.targetRef; } catch { aTgt = "[unserializable]"; }
-          try { aDetail = a.detail; } catch { aDetail = null; }
+      try {
+        if (Array.isArray(prApprovals) && prApprovals.length) {
+          req.approvals = prApprovals.slice(0, 10).map((a) => {
+            if (!a || typeof a !== "object" || Array.isArray(a)) return null;
+            let aId, aAct, aTgt, aDetail;
+            try { aId = a.approvalId; } catch { aId = "[unserializable]"; }
+            try { aAct = a.action; } catch { aAct = "[unserializable]"; }
+            try { aTgt = a.targetRef; } catch { aTgt = "[unserializable]"; }
+            try { aDetail = a.detail; } catch { aDetail = null; }
 
-          const app = {
-            approvalId: boundedAndRedacted(safeString(aId, ""), 64),
-            action: boundedAndRedacted(safeString(aAct, ""), 64),
-            targetRef: boundedAndRedacted(safeString(aTgt, ""), 240),
-          };
-          if (aDetail && typeof aDetail === "object" && !Array.isArray(aDetail)) {
-            let dKind, dOrig, dTool, dScope;
-            try { dKind = aDetail.kind; } catch { dKind = "[unserializable]"; }
-            try { dOrig = aDetail.origin; } catch { dOrig = "[unserializable]"; }
-            try { dTool = aDetail.tool; } catch { dTool = "[unserializable]"; }
-            try { dScope = aDetail.scope; } catch { dScope = null; }
-
-            app.detail = {
-              kind: boundedAndRedacted(safeString(dKind, "webmcp-tool"), 32),
-              origin: boundedAndRedacted(safeString(dOrig, ""), 240),
-              tool: boundedAndRedacted(safeString(dTool, ""), 1024),
+            const app = {
+              approvalId: boundedAndRedacted(safeString(aId, ""), 64),
+              action: boundedAndRedacted(safeString(aAct, ""), 64),
+              targetRef: boundedAndRedacted(safeString(aTgt, ""), 240),
             };
-            if (dScope != null) {
-              app.detail.scope = boundedAndRedacted(safeString(dScope, ""), 32);
+            if (aDetail && typeof aDetail === "object" && !Array.isArray(aDetail)) {
+              let dKind, dOrig, dTool, dScope;
+              try { dKind = aDetail.kind; } catch { dKind = "[unserializable]"; }
+              try { dOrig = aDetail.origin; } catch { dOrig = "[unserializable]"; }
+              try { dTool = aDetail.tool; } catch { dTool = "[unserializable]"; }
+              try { dScope = aDetail.scope; } catch { dScope = null; }
+
+              app.detail = {
+                kind: boundedAndRedacted(safeString(dKind, "webmcp-tool"), 32),
+                origin: boundedAndRedacted(safeString(dOrig, ""), 240),
+                tool: boundedAndRedacted(safeString(dTool, ""), 1024),
+              };
+              if (dScope != null) {
+                app.detail.scope = boundedAndRedacted(safeString(dScope, ""), 32);
+              }
             }
-          }
-          return app;
-        }).filter(Boolean);
+            return app;
+          }).filter(Boolean);
+        }
+      } catch {
+        // Omit approvals on processing failure
       }
       out.permissionRequirement = req;
     }

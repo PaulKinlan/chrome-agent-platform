@@ -283,7 +283,7 @@ function tools() {
 // Registry parity: the 8 T12 tools are appended AND the counts are honest.
 // (The 4 chrome.debugger CDP tools were removed 2026-08-27 — see the guard below.)
 // ──────────────────────────────────────────────────────────────────────────
-Deno.test("T12: browserToolset has exactly 138 tools matching BROWSER_TOOL_NAMES (117 + 8 + 6 page actions + 7 file tools)", () => {
+Deno.test("T12: browserToolset has exactly 140 tools matching BROWSER_TOOL_NAMES (117 + 8 + 6 page actions + 7 file tools + capture_page + extract_tables)", () => {
   reset();
   // BROWSER_TOOL_NAMES is the SHIPPED inventory (the developer build); the
   // default build omits the developer-only names

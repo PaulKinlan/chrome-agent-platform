@@ -22,7 +22,8 @@ Deno.test("cap-ai-sdk-dedup layout behaviors", async (t) => {
 import fs from "fs";
 import path from "path";
 import { createRequire } from "module";
-const execFileSync = () => { fs.mkdirSync(denoStoreDir, { recursive: true }); }; // Mock auto-install for tests
+const boundedChildTimeoutMs = () => 1000;
+const runBoundedChild = async () => { fs.mkdirSync(denoStoreDir, { recursive: true }); return { status: 0 }; }; // Mock auto-install for tests
 const { readdirSync, rmSync } = fs;
 function realpathSync(p) { return fs.realpathSync(p); }
 const ROOT = process.cwd();
@@ -265,4 +266,63 @@ console.log("GUARD_PASSED");
     }
   });
 
+  await t.step("hung deno install self-heal is killed by runBoundedChild and names deno install --frozen-lockfile (chrome-agent-platform-0iidx)", async () => {
+    const tmp = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-sdkdedup-hang-" });
+    try {
+      await Deno.writeTextFile(path.join(tmp, "package.json"), `{"name":"test"}`);
+      const nm = path.join(tmp, "node_modules");
+      await mkPkg(nm, "zod");
+      await Deno.mkdir(path.join(nm, "zod", "v4"));
+      await Deno.writeTextFile(path.join(nm, "zod", "v4", "index.js"), "");
+      await mkPkg(nm, "@ai-sdk/anthropic");
+      await mkPkg(nm, "@ai-sdk/provider-utils");
+      await mkPkg(nm, "@modelcontextprotocol/sdk");
+
+      const binDir = path.join(tmp, "bin");
+      await Deno.mkdir(binDir, { recursive: true });
+      const fakeDeno = path.join(binDir, "deno");
+      await Deno.writeTextFile(fakeDeno, "#!/usr/bin/env node\nAtomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);\n");
+      await Deno.chmod(fakeDeno, 0o755);
+
+      const boundedChildUrl = new URL("../scripts/lib/bounded-child.mjs", import.meta.url).href;
+      const hangGuardLogic = `
+import fs from "fs";
+import path from "path";
+import { createRequire } from "module";
+import { runBoundedChild, boundedChildTimeoutMs } from ${JSON.stringify(boundedChildUrl)};
+const { readdirSync, rmSync } = fs;
+function realpathSync(p) { return fs.realpathSync(p); }
+const ROOT = process.cwd();
+const denoStoreDir = path.join(ROOT, "node_modules", ".deno");
+let BUILD_TARGET = "developer";
+${sdkSelectionLogic}
+console.log("GUARD_PASSED");
+`;
+      await Deno.writeTextFile(path.join(tmp, "guard-hang.mjs"), hangGuardLogic);
+
+      const start = Date.now();
+      const cmd = new Deno.Command("node", {
+        args: ["guard-hang.mjs"],
+        cwd: tmp,
+        env: {
+          ...Deno.env.toObject(),
+          PATH: `${binDir}:${Deno.env.get("PATH") ?? ""}`,
+          CAP_DENO_INSTALL_TIMEOUT_MS: "1000",
+        },
+      });
+      const { code, stdout, stderr } = await cmd.output();
+      const elapsed = Date.now() - start;
+      const out = new TextDecoder().decode(stdout);
+      const err = new TextDecoder().decode(stderr);
+
+      assert(code !== 0, "Expected non-zero exit code when deno install hangs\\n" + out + "\\n" + err);
+      assert(elapsed >= 750 && elapsed < 15000, `Expected elapsed time >= 750ms and < 15000ms, got ${elapsed}ms`);
+      assert(err.includes("cap-deno-store-resolve:"), "Expected cap-deno-store-resolve prefix in error\\n" + err);
+      assert(err.includes("deno install --frozen-lockfile HUNG: no exit within 1s"), "Expected hang notice in error\\n" + err);
+    } finally {
+      await Deno.remove(tmp, { recursive: true });
+    }
+  });
+
 });
+

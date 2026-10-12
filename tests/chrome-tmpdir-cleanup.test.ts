@@ -90,7 +90,7 @@ Deno.test("gfxoc: browser startup refusal cleans the newly allocated scratch bef
       console.log(JSON.stringify({ refused, before, after: names() }));
     `;
     const child = await new Deno.Command(Deno.execPath(), {
-      args: ["eval", "-A", "--config", fileURLToPath(new URL("../deno.runner.jsonc", import.meta.url)), program],
+      args: ["eval", "--config", fileURLToPath(new URL("../deno.runner.jsonc", import.meta.url)), program],
       cwd: fileURLToPath(new URL("..", import.meta.url)),
       stdout: "piped", stderr: "piped",
     }).output();

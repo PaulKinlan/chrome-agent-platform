@@ -478,8 +478,9 @@ the literal.
   `settleAll` and is awaited (never `Promise.all` / `race` / `any` / `allSettled`, no
   `globalThis` or `Reflect` indirection), every `package-archive.mjs` function that calls a
   write primitive is held to the same rule, the one `writeBuildOnceRecord` call sits after the
-  last top-level `try` with its exact arguments and nothing fatal after it, and the GC grace
-  goes through `resolveGcGraceMs`. It has a reasoned entry in `scripts/test-partition.mjs`.
+  last top-level `try` with its exact arguments and nothing fatal after it, the GC grace
+  goes through `resolveGcGraceMs`, and every `deno install` self-heal call in `build.mjs` goes
+  through `runBoundedChild` with `CAP_DENO_INSTALL_TIMEOUT_MS` (0iidx). It has a reasoned entry in `scripts/test-partition.mjs`.
   `tests/build-once-record.test.ts` EXECUTES `scripts/lib/build-once-record.mjs` (the only writer
   of `serial-build-once/<key>.json` that `build.mjs` uses; the fixture `tests/fixtures/build-once.mjs`
   is a second writer, so the test ties the two together) against real files and judges it with an oracle

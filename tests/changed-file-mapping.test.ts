@@ -393,3 +393,15 @@ Deno.test("nco2: the mapping is a SUBSET of the full suite, never an invention",
     );
   }
 });
+
+Deno.test("ugvyo: every harness mentioned in changed-file-mapping.mjs header exists on disk", () => {
+  const header = Deno.readTextFileSync(`${ROOT}scripts/lib/changed-file-mapping.mjs`);
+  const matches = [...header.matchAll(/scripts\/[a-z0-9-]+\.ts/g)].map((m) => m[0]);
+  assert(matches.length > 0, "must cite example harnesses");
+  for (const path of matches) {
+    assert(
+      Deno.statSync(`${ROOT}${path}`).isFile,
+      `cited harness ${path} in changed-file-mapping.mjs must exist on disk (chrome-agent-platform-ugvyo)`,
+    );
+  }
+});

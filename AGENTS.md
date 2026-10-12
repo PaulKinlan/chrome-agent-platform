@@ -328,13 +328,14 @@ read in run 2.
      (chrome-agent-platform-nco2), because "no reachable test" read identically
      for three different causes:
      - *unimported `scripts/*.ts` harness* — the import graph cannot reach a
-       harness nothing imports (`scripts/a11y-audit.ts`, `sidebar-parity.ts`,
-       `constrained-width-layout.ts`); what covers it is the tree-walking guards,
-       which enumerate top-level `scripts/*.ts` at RUNTIME and so have no import edge.
-       Those guards are now selected instead of the whole suite. This is not "any
-       `scripts/**` change": `scripts/lib/composer-target.ts` and `css-padding.ts`
-       are COVERED, because a test imports them. A `.mjs` helper or anything in
-       a subdirectory is NOT inspected by those guards, so it fails closed.
+       harness nothing imports (`scripts/a11y-audit.ts`, `sidebar-parity.ts`);
+       what covers it is the tree-walking guards, which enumerate top-level
+       `scripts/*.ts` at RUNTIME and so have no import edge. Those guards are now
+       selected instead of the whole suite. This is not "any `scripts/**` change":
+       `scripts/kat-constrained-width-layout.ts` (via `tests/harness-marks.test.ts`),
+       `scripts/lib/composer-target.ts` and `css-padding.ts` are COVERED, because
+       a test imports them. A `.mjs` helper or anything in a subdirectory is NOT
+       inspected by those guards, so it fails closed.
      - *version-only bookkeeping JSON* — the post-commit hook rewrites
        `package.json`, `package-lock.json` and `extension/manifest.json` on every
        commit, and JSON has no importers. A diff confined to version fields maps

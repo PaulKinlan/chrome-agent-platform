@@ -1159,9 +1159,23 @@ Deno.test("yuu9s: unreadable /proc identity is named unverified, never a vanishe
   );
 });
 
+function findDeadPid(startPid = 99_998): number {
+  let pid = startPid;
+  while (pid > 1000) {
+    try {
+      (globalThis as any).process.kill(pid, 0);
+      pid--;
+    } catch (e: any) {
+      if (e?.code === "ESRCH") return pid;
+      pid--;
+    }
+  }
+  throw new Error("could not find a dead PID");
+}
+
 // wtjz and yuu9s: a dead pid is a named absence; unreadable is NOT dead.
 Deno.test("security-suite custody: verifyLiveProcOwnership names an absent pid rather than leaking raw ENOENT", async () => {
-  const deadPid = 999999999;
+  const deadPid = findDeadPid();
   assertEquals(await verifyLiveProcOwnership(deadPid, "12345", 50), {
     status: "vanished", reason: "pid-vanished-during-ownership-inspection",
   });
@@ -1197,16 +1211,7 @@ const coded = (code: string) => Object.assign(new Error(code), { code });
 
 Deno.test("8ixk / wd6gc: isVanishedProcError accepts ONLY confirmed disappeared /proc entry", () => {
   // Find a verified non-existent PID in the OS process table
-  let deadPid = 999_999;
-  while (deadPid > 1000) {
-    try {
-      (globalThis as any).process.kill(deadPid, 0);
-      deadPid--;
-    } catch (e: any) {
-      if (e?.code === "ESRCH") break;
-      deadPid--;
-    }
-  }
+  const deadPid = findDeadPid();
   const livePid = Deno.pid;
 
   // 1. ENOENT is vanished with or without PID
