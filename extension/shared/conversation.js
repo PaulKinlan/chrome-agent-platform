@@ -1302,7 +1302,14 @@ export function pairToolJournal(entries) {
         const eff = effectiveToolCall(rawTool, rawArgs, result?.result ?? null);
         if (!eff.lazy || eff.args == null) return rawArgs;
         // The unwrapped inner arguments (selectionRef plumbing never shown).
-        try { return typeof eff.args === "string" ? eff.args : safeJsonStringify(eff.args); } catch { return rawArgs; }
+        try {
+          if (typeof eff.args === "string") return eff.args;
+          const hasHtmlBody = typeof eff.args === "object" && !Array.isArray(eff.args) &&
+            (typeof eff.args.html === "string" || (eff.args.type === "html" && typeof eff.args.content === "string"));
+          return hasHtmlBody
+            ? safeJsonStringify(eff.args, { maxBytes: 256 * 1024, maxString: 256 * 1024 })
+            : safeJsonStringify(eff.args);
+        } catch { return rawArgs; }
       })(),
       result: result?.result ?? null,
       // The retained FULL result (redacted, ≤ 64 KiB) the durable row carries

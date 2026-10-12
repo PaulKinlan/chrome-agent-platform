@@ -63,6 +63,12 @@ function relayPreference(data) {
   } catch { /* inner frame not ready */ }
 }
 
+function relayToParent(data) {
+  try {
+    window.parent.postMessage(data, "*");
+  } catch { /* host is being removed */ }
+}
+
 window.addEventListener("message", (event) => {
   const data = event.data;
 
@@ -74,20 +80,46 @@ window.addEventListener("message", (event) => {
       mountPreview({ nonce, html });
       return;
     }
-    if (data?.type === "cap:preference" && validNonce(data.nonce)) {
+    if ((data?.type === "cap:preference" || data?.type === "cap:artifact-action-result") && validNonce(data.nonce)) {
       relayPreference(data);
     }
     return;
   }
 
-  // The generated document may only announce the existing preference nonce.
+  // The generated document may announce readiness or request validated proxy actions.
   // No arbitrary child message or URL is relayed to the privileged parent.
   if (
     active && event.source === active.frame.contentWindow &&
-    data?.type === "cap:preference-ready" && data.nonce === active.nonce
+    data?.nonce === active.nonce
   ) {
-    try {
-      window.parent.postMessage(data, "*");
-    } catch { /* host is being removed */ }
+    if (data?.type === "cap:preference-ready") {
+      relayToParent(data);
+      return;
+    }
+    if (data?.type === "cap:artifact-action") {
+      if (active.html.includes('data-cap-thumb="1"')) return;
+      if (data.userGesture !== true) return;
+      if (typeof data.requestId !== "string" || !data.requestId || data.requestId.length > 64) return;
+      if (data.action === "clipboard-write") {
+        if (typeof data.text !== "string" || data.text.length > 1048576) return;
+        relayToParent(data);
+        return;
+      }
+      if (data.action === "open-external") {
+        if (typeof data.url !== "string") return;
+        const rawUrl = data.url.trim();
+        if (!rawUrl || rawUrl.length > 8192 || /[\u0000-\u001f\u007f]/.test(rawUrl)) return;
+        try {
+          const p = new URL(rawUrl);
+          if (p.protocol !== "https:" && p.protocol !== "http:" && p.protocol !== "mailto:") return;
+          if (p.username || p.password) return;
+          if ((p.protocol === "http:" || p.protocol === "https:") && !p.hostname) return;
+        } catch {
+          return;
+        }
+        relayToParent(data);
+        return;
+      }
+    }
   }
 });

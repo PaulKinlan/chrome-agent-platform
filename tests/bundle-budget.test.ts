@@ -910,7 +910,10 @@ Deno.test("bd06: build.mjs auto-materializes .deno with a frozen lock before res
   // If npm ci/install wiped node_modules/.deno, resolving before deno install
   // would resolve CANON_* to flat node_modules/ instead of node_modules/.deno/,
   // or readdirSync(denoStoreDir) would throw raw ENOENT.
-  const denoInstallCheck = source.indexOf('execFileSync("deno", ["install", "--frozen-lockfile"]');
+  const denoInstallCheck = (() => {
+    const boundedPos = source.indexOf('runBoundedChild("deno", ["install", "--frozen-lockfile"]');
+    return boundedPos !== -1 ? boundedPos : source.indexOf('execFileSync("deno", ["install", "--frozen-lockfile"]');
+  })();
   const requireFromRootPos = source.indexOf('createRequire(path.join(ROOT, "package.json"))');
   const canonAnthropicPos = source.indexOf('CANON_ANTHROPIC = resolveCanonical("@ai-sdk/anthropic"');
   const canonZodDirPos = source.indexOf('CANON_ZOD_DIR = realpathSync(path.join(ROOT, "node_modules", "zod"))');

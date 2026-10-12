@@ -412,12 +412,17 @@ export class ArtifactInspector extends Component {
       this._root.querySelector(".status").textContent = t("components_table_preview_opened");
       return;
     }
-    const frame = createHtmlFrame(this._asset.content ?? "", { title:`Interactive preview of ${this._asset.name ?? "HTML artifact"}` });
-    host.replaceChildren(frame.wrapper);
+    const wrapper = document.createElement("div");
+    wrapper.className = "frame";
+    wrapper.innerHTML = renderHtmlFrame(this._asset.content ?? "");
+    host.replaceChildren(wrapper);
     host.hidden = false;
-    this._frameCleanup = wireHtmlFramePreference(frame.wrapper, { nonce:frame.nonce, ...currentFramePreference() });
-    this._frameDispose = frame.dispose;
-    frame.iframe.focus();
+    const cleanups = [wireHtmlFrameContent(wrapper)];
+    const nonce = wrapper.querySelector(".html-frame")?.dataset?.frameNonce;
+    if (nonce) cleanups.push(wireHtmlFramePreference(wrapper, { nonce, ...currentFramePreference() }));
+    this._frameCleanup = () => { for (const c of cleanups) { try { c(); } catch { /* cleanup is best effort */ } } };
+    const iframe = wrapper.querySelector("iframe");
+    iframe?.focus();
     this._root.querySelector(".status").textContent = t("components_sandbox_preview_opened");
   }
   stopPreview() {

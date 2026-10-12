@@ -708,6 +708,142 @@ Deno.test("components: wireHtmlFrameContent delivers the staged HTML once, then 
   }
 });
 
+Deno.test("components: wireHtmlFrameContent executes writeHostClipboard and openSafeExternalUrl on valid cap:artifact-action", async () => {
+  const mod = await import("../extension/shared/components.js?wire-actions=" + Date.now());
+  const nonce = "action-test-nonce";
+  const tabsOpened = [];
+  const clipboardWritten = [];
+
+  globalThis.chrome = {
+    runtime: { getURL: (p) => `chrome-extension://extid/${p}` },
+    tabs: { create: (opts) => { tabsOpened.push(opts); return { id: 1 }; } },
+  };
+  const origNavDesc = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    value: {
+      clipboard: {
+        writeText: async (text) => {
+          clipboardWritten.push(text);
+          return true;
+        },
+      },
+    },
+    configurable: true,
+    writable: true,
+  });
+
+  const windowListeners = {};
+  const origWindowAdd = globalThis.window?.addEventListener;
+  const origWindowRemove = globalThis.window?.removeEventListener;
+  if (globalThis.window) {
+    globalThis.window.addEventListener = (type, fn) => {
+      (windowListeners[type] = windowListeners[type] || []).push(fn);
+    };
+    globalThis.window.removeEventListener = (type, fn) => {
+      if (windowListeners[type]) {
+        windowListeners[type] = windowListeners[type].filter((f) => f !== fn);
+      }
+    };
+  }
+
+  try {
+    const out = mod.renderHtmlFrame("<p>interactive content</p>", { nonce });
+    const posted = [];
+    const iframe = {
+      contentWindow: { postMessage: (msg) => posted.push(msg) },
+      matches: (s) => s === "iframe",
+      getAttribute: () => null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    const htmlFrame = {
+      tagName: "div",
+      dataset: { frameNonce: nonce },
+      classList: ["html-frame"],
+      matches: (sel) => sel === ".html-frame",
+      querySelector: (sel) => (sel === "iframe" ? iframe : null),
+    };
+
+    const cleanup = mod.wireHtmlFrameContent(htmlFrame, { nonce });
+
+    // 1. Deliver valid clipboard-write action
+    const onAction = windowListeners["message"]?.[0];
+    if (!onAction) throw new Error("message listener was not registered");
+
+    onAction({
+      source: iframe.contentWindow,
+      data: {
+        type: mod.FRAME_ACTION_TYPE,
+        nonce,
+        requestId: "req_clip_1",
+        action: "clipboard-write",
+        text: "hello clipboard",
+        userGesture: true,
+      },
+    });
+
+    // Wait microtask for async clipboard write to settle and reply
+    await new Promise((r) => setTimeout(r, 20));
+    if (!clipboardWritten.includes("hello clipboard")) {
+      throw new Error(`clipboard write was not executed: ${JSON.stringify(clipboardWritten)}`);
+    }
+    const clipResult = posted.find((m) => m.type === mod.FRAME_ACTION_RESULT_TYPE && m.requestId === "req_clip_1");
+    if (!clipResult || clipResult.ok !== true) {
+      throw new Error(`expected successful clipboard action result: ${JSON.stringify(posted)}`);
+    }
+
+    // 2. Deliver valid open-external action
+    onAction({
+      source: iframe.contentWindow,
+      data: {
+        type: mod.FRAME_ACTION_TYPE,
+        nonce,
+        requestId: "req_open_1",
+        action: "open-external",
+        url: "https://x.com/intent/tweet?text=hello",
+        userGesture: true,
+      },
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    if (!tabsOpened.some((t) => t.url === "https://x.com/intent/tweet?text=hello")) {
+      throw new Error(`tabs.create was not called with safe URL: ${JSON.stringify(tabsOpened)}`);
+    }
+    const openResult = posted.find((m) => m.type === mod.FRAME_ACTION_RESULT_TYPE && m.requestId === "req_open_1");
+    if (!openResult || openResult.ok !== true) {
+      throw new Error(`expected successful open-external action result: ${JSON.stringify(posted)}`);
+    }
+
+    // 3. Deliver unsafe URL (blocked)
+    onAction({
+      source: iframe.contentWindow,
+      data: {
+        type: mod.FRAME_ACTION_TYPE,
+        nonce,
+        requestId: "req_bad_url",
+        action: "open-external",
+        url: "javascript:alert(1)",
+        userGesture: true,
+      },
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    const badResult = posted.find((m) => m.type === mod.FRAME_ACTION_RESULT_TYPE && m.requestId === "req_bad_url");
+    if (!badResult || badResult.ok !== false) {
+      throw new Error(`expected unsafe URL to be rejected: ${JSON.stringify(posted)}`);
+    }
+
+    cleanup();
+  } finally {
+    delete globalThis.chrome;
+    if (origNavDesc) Object.defineProperty(globalThis, "navigator", origNavDesc);
+    if (globalThis.window) {
+      globalThis.window.addEventListener = origWindowAdd;
+      globalThis.window.removeEventListener = origWindowRemove;
+    }
+  }
+});
+
 Deno.test("components: the sandbox host files + the manifest sandbox.pages ship together (no 404 preview)", async () => {
   // import.meta.url-RELATIVE paths (portable across worktrees/clones/CI); Deno
   // fs APIs keep the suite free of a @types/node type-check dependency.

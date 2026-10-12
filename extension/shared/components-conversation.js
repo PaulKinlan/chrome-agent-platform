@@ -2673,7 +2673,12 @@ export const TS_GAP_MS = 5 * 60 * 1000;
 /** Preserve prose while carrying structured tool payloads through DOM attributes. */
 export function toolPayloadAttribute(value) {
   if (value == null) return null;
-  return typeof value === "string" ? value : safeJsonStringify(value);
+  if (typeof value === "string") return value;
+  const hasHtmlBody = typeof value === "object" && !Array.isArray(value) &&
+    (typeof value.html === "string" || (value.type === "html" && typeof value.content === "string"));
+  return hasHtmlBody
+    ? safeJsonStringify(value, { maxBytes: 256 * 1024, maxString: 256 * 1024 })
+    : safeJsonStringify(value);
 }
 
 export function formatTsLabel(ts) {

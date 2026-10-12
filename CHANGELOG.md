@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.678] — 2026-10-12
+- Double-iframe HTML artifact embeds now safely proxy user-gesture clipboard writes (navigator.clipboard.writeText and document.execCommand) and external window.open / link navigation through the sandbox host without Permissions Policy violations.
+
 ## [0.3.677] — 2026-10-12
 - Harden emscripten manifest URL validation, pure durable tool result normalization, and NTP side-rail navigation listeners
 

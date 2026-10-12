@@ -171,3 +171,13 @@ Deno.test("MessageBubble component: renders generate_ui tool card as live sandbo
   assert(shadowHtml.includes("<summary>Raw payload</summary>"), "must provide 'Raw payload' disclosure");
   assert(shadowHtml.includes("Sales Dashboard"), "raw payload must include tool arguments");
 });
+
+Deno.test("toolPayloadAttribute preserves full HTML document strings (>400 chars) in generate_ui object args", async () => {
+  const { toolPayloadAttribute } = await import("../extension/shared/components.js");
+  const largeHtml = `<!doctype html><html><body>${"<p>Chrome history item</p>".repeat(30)}<script>function copyDraft(){navigator.clipboard.writeText("ok");}</script></body></html>`;
+  assert(largeHtml.length > 800, "fixture HTML exceeds default 400-char maxString");
+  const serialized = toolPayloadAttribute({ name: "Social Media Drafts", html: largeHtml });
+  const parsed = JSON.parse(serialized);
+  assertEquals(parsed.html, largeHtml, "full HTML document must survive toolPayloadAttribute without 400-char mid-script truncation");
+});
+

@@ -88,6 +88,101 @@ Deno.test("frame-guards: a message with a wrong nonce is ignored (one-way nonce 
   assertEquals(applied.lang, undefined, "wrong nonce must not apply the locale");
 });
 
+Deno.test("frame-guards: bootstrap proxies navigator.clipboard.writeText on user gesture and rejects without gesture", async () => {
+  const body = extractScript("preferenceBootstrapScript", "NONCE_CLIP");
+  const posted = [];
+  const listeners = [];
+  const windowShim = {
+    parent: { postMessage: (msg) => posted.push(msg) },
+    addEventListener: (type, fn) => listeners.push(fn),
+  };
+  const docListeners = {};
+  const documentShim = {
+    documentElement: { setAttribute: () => {} },
+    addEventListener: (type, fn) => { (docListeners[type] = docListeners[type] || []).push(fn); },
+  };
+  const navigatorShim = {};
+  new Function("window", "document", "navigator", body)(windowShim, documentShim, navigatorShim);
+
+  // Without user gesture, clipboard.writeText rejects with NotAllowedError
+  let rejected = false;
+  try {
+    await navigatorShim.clipboard.writeText("draft content");
+  } catch (err) {
+    rejected = true;
+    assert(err instanceof DOMException || String(err).includes("user gesture"), "error must indicate user gesture requirement");
+  }
+  assert(rejected, "writeText must reject without a user gesture");
+  assertEquals(posted.filter((m) => m.type === "cap:artifact-action").length, 0, "no action posted without gesture");
+
+  // Simulate user gesture (e.g. click on document)
+  docListeners["click"]?.forEach((fn) => fn({ isTrusted: true, target: {} }));
+
+  // With user gesture, writeText emits cap:artifact-action
+  const writePromise = navigatorShim.clipboard.writeText("draft content");
+  const actionPosts = posted.filter((m) => m.type === "cap:artifact-action");
+  assertEquals(actionPosts.length, 1, "exactly one action message posted");
+  const action = actionPosts[0];
+  assertEquals(action.action, "clipboard-write");
+  assertEquals(action.text, "draft content");
+  assertEquals(action.nonce, "NONCE_CLIP");
+  assertEquals(action.userGesture, true);
+  assert(action.requestId, "must carry a requestId");
+
+  // Deliver resolution
+  listeners[0]({
+    source: windowShim.parent,
+    data: {
+      type: "cap:artifact-action-result",
+      nonce: "NONCE_CLIP",
+      requestId: action.requestId,
+      ok: true,
+    },
+  });
+  await writePromise; // Should resolve successfully
+});
+
+Deno.test("frame-guards: bootstrap proxies window.open and link clicks on user gesture and blocks invalid schemes", () => {
+  const body = extractScript("preferenceBootstrapScript", "NONCE_OPEN");
+  const posted = [];
+  const listeners = [];
+  const windowShim = {
+    parent: { postMessage: (msg) => posted.push(msg) },
+    addEventListener: (type, fn) => listeners.push(fn),
+  };
+  const docListeners = {};
+  const documentShim = {
+    documentElement: { setAttribute: () => {} },
+    addEventListener: (type, fn) => { (docListeners[type] = docListeners[type] || []).push(fn); },
+  };
+  const navigatorShim = {};
+  new Function("window", "document", "navigator", body)(windowShim, documentShim, navigatorShim);
+
+  // Without gesture, window.open returns null and posts nothing
+  assertEquals(windowShim.open("https://x.com/intent/tweet?text=hello", "_blank"), null);
+  assertEquals(posted.filter((m) => m.type === "cap:artifact-action").length, 0);
+
+  // Simulate user gesture
+  docListeners["click"]?.forEach((fn) => fn({ isTrusted: true, target: {} }));
+
+  // With gesture, valid https: URL returns a window stub and posts open-external
+  const win = windowShim.open("https://x.com/intent/tweet?text=hello", "_blank");
+  assert(win !== null && typeof win === "object", "window.open must return window proxy stub");
+  assertEquals(win.closed, false);
+  const actionPosts = posted.filter((m) => m.type === "cap:artifact-action");
+  assertEquals(actionPosts.length, 1);
+  assertEquals(actionPosts[0].action, "open-external");
+  assertEquals(actionPosts[0].url, "https://x.com/intent/tweet?text=hello");
+  assertEquals(actionPosts[0].nonce, "NONCE_OPEN");
+
+  // Unsafe schemes must return null and not post
+  docListeners["click"]?.forEach((fn) => fn({ isTrusted: true, target: {} }));
+  assertEquals(windowShim.open("javascript:alert(1)"), null);
+  assertEquals(windowShim.open("chrome-extension://someid/options.html"), null);
+  assertEquals(windowShim.open("data:text/html,<h1>bad</h1>"), null);
+  assertEquals(posted.filter((m) => m.type === "cap:artifact-action").length, 1, "no new actions posted for unsafe schemes");
+});
+
 // ────────────────────────────────────────────────────────────────────────────
 // wireHtmlFramePreference delivery ordering (r3 review P1)
 // The genuine-ready handler must DELIVER the preference — done guards

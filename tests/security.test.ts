@@ -208,6 +208,127 @@ Deno.test("security: artifact preview keeps a stable host for every self-navigat
     assertEquals(innerPosts.length, 1, "validated preference is relayed to the current inner frame");
     messageHandler({ source: current.contentWindow, data: { type: "cap:artifact-preview-open", nonce: "forged", html: "<p>forged</p>" } });
     assertEquals(createCount, 2, "an untrusted child cannot replace the host's preview authority");
+
+    // Safe action proxying: valid user-gesture actions are relayed upward
+    messageHandler({
+      source: current.contentWindow,
+      data: {
+        type: "cap:artifact-action",
+        nonce: "next-preview",
+        requestId: "req_open",
+        action: "open-external",
+        url: "https://x.com/intent/tweet?text=hello",
+        userGesture: true,
+      },
+    });
+    assertEquals(parentPosts.length, 2, "open-external action relayed to parent");
+    assertEquals(parentPosts[1].action, "open-external");
+
+    messageHandler({
+      source: current.contentWindow,
+      data: {
+        type: "cap:artifact-action",
+        nonce: "next-preview",
+        requestId: "req_clip",
+        action: "clipboard-write",
+        text: "copied text",
+        userGesture: true,
+      },
+    });
+    assertEquals(parentPosts.length, 3, "clipboard-write action relayed to parent");
+
+    // Parent result is relayed back to child
+    messageHandler({
+      source: parent,
+      data: {
+        type: "cap:artifact-action-result",
+        nonce: "next-preview",
+        requestId: "req_clip",
+        ok: true,
+      },
+    });
+    assertEquals(innerPosts.length, 2, "action result relayed down to inner frame");
+
+    // Unsafe or unactivated actions are dropped (parentPosts count does not change)
+    // 1. Missing userGesture
+    messageHandler({
+      source: current.contentWindow,
+      data: {
+        type: "cap:artifact-action",
+        nonce: "next-preview",
+        requestId: "req_bad1",
+        action: "open-external",
+        url: "https://x.com/safe",
+        userGesture: false,
+      },
+    });
+    assertEquals(parentPosts.length, 3, "unactivated action dropped");
+
+    // 2. Unsafe scheme (javascript:)
+    messageHandler({
+      source: current.contentWindow,
+      data: {
+        type: "cap:artifact-action",
+        nonce: "next-preview",
+        requestId: "req_bad2",
+        action: "open-external",
+        url: "javascript:alert(1)",
+        userGesture: true,
+      },
+    });
+    assertEquals(parentPosts.length, 3, "javascript: URL dropped");
+
+    // 3. Unsafe scheme (chrome-extension:)
+    messageHandler({
+      source: current.contentWindow,
+      data: {
+        type: "cap:artifact-action",
+        nonce: "next-preview",
+        requestId: "req_bad3",
+        action: "open-external",
+        url: "chrome-extension://someid/options.html",
+        userGesture: true,
+      },
+    });
+    assertEquals(parentPosts.length, 3, "chrome-extension: URL dropped");
+
+    // 4. Wrong nonce
+    messageHandler({
+      source: current.contentWindow,
+      data: {
+        type: "cap:artifact-action",
+        nonce: "wrong-nonce",
+        requestId: "req_bad4",
+        action: "open-external",
+        url: "https://x.com/safe",
+        userGesture: true,
+      },
+    });
+    assertEquals(parentPosts.length, 3, "wrong nonce dropped");
+
+    // 5. Thumbnail frame drops all actions
+    messageHandler({
+      source: parent,
+      data: {
+        type: "cap:artifact-preview-open",
+        nonce: "thumb-preview",
+        html: mod.injectFrameGuards("<button>thumb</button>", "thumb-preview", { thumbnail: true }),
+      },
+    });
+    assertEquals(mounted.length, 1);
+    const thumbFrame = mounted[0];
+    messageHandler({
+      source: thumbFrame.contentWindow,
+      data: {
+        type: "cap:artifact-action",
+        nonce: "thumb-preview",
+        requestId: "req_thumb",
+        action: "clipboard-write",
+        text: "test",
+        userGesture: true,
+      },
+    });
+    assertEquals(parentPosts.length, 3, "thumbnail preview drops actions");
   } finally {
     globalThis.window = previousWindow;
     globalThis.document = previousDocument;

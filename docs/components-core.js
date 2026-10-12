@@ -328,7 +328,7 @@ export function navigationGuardScript() {
     "try{window.open=function(){return null;};}catch(e){}",
     "try{if(window.navigation&&window.navigation.addEventListener){window.navigation.addEventListener('navigate',function(e){if(e.cancelable)e.preventDefault();});}}catch(e){}",
     "function block(e){e.preventDefault();e.stopPropagation();}",
-    "document.addEventListener('click',function(e){var t=e.target;var a=t&&t.closest?t.closest('a[href],area[href]'):null;if(a)block(e);},true);",
+    "document.addEventListener('click',function(e){var t=e.target;var a=t&&t.closest?t.closest('a[href],area[href]'):null;if(a)e.preventDefault();},true);",
     "document.addEventListener('submit',block,true);",
     "})();"].join("")}</script>`;
 }
@@ -397,6 +397,101 @@ export function injectCspMeta(html) {
  */
 export const FRAME_PREFERENCE_TYPE = "cap:preference";
 export const FRAME_PREFERENCE_READY = "cap:preference-ready";
+export const FRAME_ACTION_TYPE = "cap:artifact-action";
+export const FRAME_ACTION_RESULT_TYPE = "cap:artifact-action-result";
+export const MAX_FRAME_CLIPBOARD_CHARS = 1024 * 1024;
+export const MAX_FRAME_EXTERNAL_URL_CHARS = 8192;
+
+/**
+ * Validate that a URL is safe to open in a new browser tab/window.
+ * Allows only https:, http:, and mailto: protocols. Rejects embedded credentials,
+ * control characters, oversized URLs, and internal schemes (chrome:, javascript:, data:, etc.).
+ * @param {string} rawUrl
+ * @returns {string|null} Canonical safe URL href or null if invalid/unsafe
+ */
+export function validateSafeExternalUrl(rawUrl) {
+  if (typeof rawUrl !== "string") return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed || trimmed.length > MAX_FRAME_EXTERNAL_URL_CHARS) return null;
+  if (/[\u0000-\u001f\u007f]/.test(trimmed)) return null;
+  let url;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:" && url.protocol !== "mailto:") {
+    return null;
+  }
+  if (url.username || url.password) return null;
+  if (url.protocol === "http:" || url.protocol === "https:") {
+    if (!url.hostname) return null;
+  }
+  return url.href;
+}
+
+/**
+ * Perform a trusted host-level clipboard write.
+ * Attempts navigator.clipboard.writeText first, then falls back to an offscreen textarea.
+ * @param {string} text
+ * @returns {Promise<boolean>}
+ */
+export async function writeHostClipboard(text) {
+  const str = String(text ?? "");
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(str);
+      return true;
+    } catch {
+      // Fall back below if navigator.clipboard was blocked or unavailable
+    }
+  }
+  if (typeof document !== "undefined" && document.createElement && document.body) {
+    try {
+      const prev = document.activeElement;
+      const ta = document.createElement("textarea");
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "-9999px";
+      ta.style.left = "-9999px";
+      ta.style.opacity = "0";
+      ta.value = str;
+      document.body.appendChild(ta);
+      ta.focus?.();
+      ta.select?.();
+      const ok = document.execCommand?.("copy") === true;
+      ta.remove();
+      prev?.focus?.();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Safely open an external URL on behalf of a sandboxed frame.
+ * @param {string} rawUrl
+ * @returns {boolean} True if navigation was dispatched
+ */
+export function openSafeExternalUrl(rawUrl) {
+  const safeUrl = validateSafeExternalUrl(rawUrl);
+  if (!safeUrl) return false;
+  if (typeof chrome !== "undefined" && typeof chrome?.tabs?.create === "function") {
+    try {
+      chrome.tabs.create({ url: safeUrl });
+      return true;
+    } catch { /* chrome.tabs.create failed or was blocked */ }
+  }
+  if (typeof window !== "undefined" && typeof window.open === "function") {
+    try {
+      window.open(safeUrl, "_blank", "noopener,noreferrer");
+      return true;
+    } catch { /* window.open failed or was blocked */ }
+  }
+  return false;
+}
 
 /** A fresh, unguessable one-time token for the frame handshake. */
 export function generateNonce() {
@@ -407,21 +502,35 @@ export function generateNonce() {
 }
 
 /** The bootstrapping script injected into a generated document. It (a) announces
- * readiness to the parent, and (b) applies a parent-validated locale. It
- * re-checks the nonce + the source (parent only) so a sibling frame cannot forge
- * a preference. It has no network access (the CSP) + no parent-DOM access (the
- * sandbox), so it is a confined, one-way receiver.
+ * readiness to the parent, (b) applies a parent-validated locale, and (c) establishes
+ * a safe proxy bridge for user gestures (window.open, clipboard writes, external links).
  */
 export function preferenceBootstrapScript(nonce) {
   const n = JSON.stringify(String(nonce ?? ""));
   return `<script data-cap-bootstrap>${[
     "(function(){var nonce=" + n + ";",
+    "var lastGesture=0,lastOpenTs=0,seq=0,pending={};",
+    "function hasGesture(){try{if(typeof navigator!=='undefined'&&navigator.userActivation&&navigator.userActivation.isActive)return true;}catch(e){}return(Date.now()-lastGesture)<5000;}",
+    "function normUrl(u){try{var s=String(u||'').trim();if(!s||s.length>8192||/[\\u0000-\\u001f\\u007f]/.test(s))return null;var p=new URL(s);if(p.protocol!=='https:'&&p.protocol!=='http:'&&p.protocol!=='mailto:')return null;if(p.username||p.password)return null;if((p.protocol==='http:'||p.protocol==='https:')&&!p.hostname)return null;return p.href;}catch(e){return null;}}",
+    "function sendAction(act,u,t){return new Promise(function(resolve,reject){if(!nonce){reject(new Error('Missing frame nonce'));return;}var id='req_'+(++seq);var timer=setTimeout(function(){delete pending[id];reject(new Error('Action timed out'));},10000);pending[id]={resolve:resolve,reject:reject,timer:timer};try{window.parent.postMessage({type:'cap:artifact-action',nonce:nonce,requestId:id,action:act,url:u||'',text:t||'',userGesture:true},'*');}catch(e){clearTimeout(timer);delete pending[id];reject(e);}});}",
     "function apply(p){if(!p)return;var el=document.documentElement,s=el.style;",
     "if(p.locale){try{el.setAttribute('lang',p.locale);}catch(e){}}",
     "if(p.colorScheme){try{el.setAttribute('data-color-scheme',p.colorScheme);if(s)s.colorScheme=p.colorScheme==='system'||p.colorScheme==='no-preference'?'light dark':p.colorScheme;}catch(e){}}",
     "if(typeof p.reduceMotion==='boolean'){try{el.setAttribute('data-reduce-motion',p.reduceMotion?'reduce':'no-preference');}catch(e){}}}",
     "window.addEventListener('message',function(e){if(e.source!==window.parent)return;",
-    "var d=e.data;if(d&&d.type==='cap:preference'&&d.nonce===nonce)apply(d.preference);});",
+    "var d=e.data;if(d&&d.type==='cap:preference'&&d.nonce===nonce)apply(d.preference);",
+    "if(d&&d.type==='cap:artifact-action-result'&&d.nonce===nonce&&d.requestId&&pending[d.requestId]){var entry=pending[d.requestId];delete pending[d.requestId];clearTimeout(entry.timer);if(d.ok)entry.resolve();else entry.reject(new DOMException(d.error||'Action denied','NotAllowedError'));}",
+    "});",
+    "var clipProxy={writeText:function(text){if(!hasGesture())return Promise.reject(new DOMException('The Clipboard API requires a user gesture.','NotAllowedError'));var s=String(text==null?'':text);if(s.length>1048576)return Promise.reject(new DOMException('Clipboard text exceeds maximum length.','NotAllowedError'));return sendAction('clipboard-write','',s);}};",
+    "try{if(typeof Clipboard!=='undefined'&&Clipboard.prototype){Object.defineProperty(Clipboard.prototype,'writeText',{configurable:true,writable:true,value:clipProxy.writeText});}}catch(e){}",
+    "try{if(typeof Navigator!=='undefined'&&Navigator.prototype){Object.defineProperty(Navigator.prototype,'clipboard',{configurable:true,get:function(){return clipProxy;}});}}catch(e){}",
+    "try{if(typeof navigator!=='undefined'){try{Object.defineProperty(navigator,'clipboard',{configurable:true,get:function(){return clipProxy;}});}catch(e){if(navigator.clipboard)navigator.clipboard.writeText=clipProxy.writeText;}}}catch(e){}",
+    "try{if(typeof document!=='undefined'&&document.execCommand){var origExec=document.execCommand;document.execCommand=function(cmd){if(String(cmd||'').toLowerCase()==='copy'){if(!hasGesture())return false;var sel='';try{var ae=document.activeElement;if(ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA')&&typeof ae.value==='string'){var st=ae.selectionStart,en=ae.selectionEnd;sel=(typeof st==='number'&&typeof en==='number'&&en>st)?ae.value.slice(st,en):ae.value;}else if(window.getSelection){sel=String(window.getSelection()||'');}}catch(e){}sendAction('clipboard-write','',sel).catch(function(){});return true;}try{return origExec.apply(document,arguments);}catch(e){return false;}};}}catch(e){}",
+    "try{window.open=function(url){if(!hasGesture())return null;var safe=normUrl(url);if(!safe)return null;lastOpenTs=Date.now();sendAction('open-external',safe,'').catch(function(){});return{closed:false,focus:function(){},blur:function(){},close:function(){this.closed=true;},postMessage:function(){}}};}catch(e){}",
+    "if(typeof document!=='undefined'&&document.addEventListener){",
+    "['pointerdown','mousedown','mouseup','click','touchend','keydown'].forEach(function(ev){document.addEventListener(ev,function(e){if(!e||e.isTrusted!==false)lastGesture=Date.now();},true);});",
+    "document.addEventListener('click',function(e){var t=e.target;var a=t&&t.closest?t.closest('a[href],area[href]'):null;if(!a)return;e.preventDefault();if(!hasGesture())return;var raw=a.getAttribute?(a.getAttribute('href')||''):(a.href||'');if(raw.charAt(0)==='#'){if(raw.length>1&&document.getElementById){var el=document.getElementById(raw.slice(1));if(el&&el.scrollIntoView)el.scrollIntoView();}return;}if(Date.now()-lastOpenTs<50)return;var safe=normUrl(raw||a.href);if(safe)sendAction('open-external',safe,'').catch(function(){});},false);",
+    "}",
     "try{window.parent.postMessage({type:'cap:preference-ready',nonce:nonce},'*');}catch(e){}",
     "})();"].join("")}</script>`;
 }
@@ -510,6 +619,7 @@ export function wireHtmlFrameContent(container, { nonce } = {}) {
   const guarded = n ? frameContents.get(n) : null;
   if (!iframe || guarded == null) return () => {};
   let open = true;
+  let lastOpenAt = 0;
   const post = () => {
     if (!open) return;
     try { iframe.contentWindow?.postMessage({ type: "cap:artifact-preview-open", nonce: n, html: guarded }, "*"); } catch { /* frame not ready */ }
@@ -517,9 +627,66 @@ export function wireHtmlFrameContent(container, { nonce } = {}) {
   iframe.addEventListener("load", post);
   // The frame may already be loaded (the sandbox host resolves fast) — try once now.
   setTimeout(post, 0);
+
+  const onAction = (e) => {
+    if (!open || e.source !== iframe.contentWindow) return;
+    const d = e.data;
+    if (!d || d.type !== FRAME_ACTION_TYPE || d.nonce !== n) return;
+    const reply = (ok, error) => {
+      try {
+        iframe.contentWindow?.postMessage({
+          type: FRAME_ACTION_RESULT_TYPE,
+          nonce: n,
+          requestId: String(d.requestId ?? ""),
+          ok: ok === true,
+          ...(error ? { error: String(error) } : {})
+        }, "*");
+      } catch { /* frame tearing down or detached */ }
+    };
+
+    if (guarded.includes('data-cap-thumb="1"') || iframe.getAttribute?.("scrolling") === "no") {
+      reply(false, "Actions are disabled in thumbnail previews");
+      return;
+    }
+    if (d.userGesture !== true) {
+      reply(false, "User gesture required");
+      return;
+    }
+    if (d.action === "clipboard-write") {
+      if (typeof d.text !== "string" || d.text.length > MAX_FRAME_CLIPBOARD_CHARS) {
+        reply(false, "Invalid clipboard payload");
+        return;
+      }
+      Promise.resolve(writeHostClipboard(d.text)).then((ok) => reply(ok, ok ? "" : "Clipboard write failed"));
+    } else if (d.action === "open-external") {
+      const now = Date.now();
+      if (now - lastOpenAt < 250) {
+        reply(false, "Rate limited");
+        return;
+      }
+      lastOpenAt = now;
+      const safeUrl = validateSafeExternalUrl(d.url);
+      if (!safeUrl) {
+        reply(false, "Blocked unsafe URL");
+        return;
+      }
+      const ok = openSafeExternalUrl(safeUrl);
+      reply(ok, ok ? "" : "Failed to open external URL");
+    } else {
+      reply(false, "Unsupported artifact action");
+    }
+  };
+
+  if (typeof window !== "undefined" && window.addEventListener) {
+    window.addEventListener("message", onAction);
+  }
+
   return () => {
     open = false;
     iframe.removeEventListener("load", post);
+    if (typeof window !== "undefined" && window.removeEventListener) {
+      window.removeEventListener("message", onAction);
+    }
     frameContents.delete(n);
   };
 }

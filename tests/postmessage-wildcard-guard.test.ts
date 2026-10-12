@@ -352,6 +352,22 @@ export const ALLOWED_WILDCARD_CHANNELS: Array<{
       "A srcdoc frame -> its parent. An srcdoc frame's origin is opaque, so it cannot be named as a target; the nonce is the guard (moved to components-core.js under 9epn.6).",
   },
   {
+    file: "extension/shared/components-core.js",
+    fingerprint:
+      "{type:'cap:artifact-action',nonce:nonce,requestId:id,action:act,url:u||'',text:t||'',userGesture:true}",
+    count: 1,
+    reason:
+      "A sandboxed artifact srcdoc frame -> its sandbox host parent: proxies user-gesture actions (window.open, clipboard write) guarded by nonce, user gesture tracking, and schema validation.",
+  },
+  {
+    file: "extension/shared/components-core.js",
+    fingerprint:
+      '{ type: FRAME_ACTION_RESULT_TYPE, nonce: n, requestId: String(d.requestId ?? ""), ok: ok === true, ...(error ? { error: String(error) } : {}) }',
+    count: 1,
+    reason:
+      "Extension page -> sandboxed preview frame: returns action resolution/denial to the nested frame, guarded by the frame nonce and requestId.",
+  },
+  {
     file: "extension/skills/skills-panel.js",
     fingerprint: '{ type: "use-skill", id: skill.refId ?? skill.id ?? skill.name, ref: token }',
     count: 1,
@@ -375,7 +391,7 @@ export const GUARDED_WILDCARD_CHANNELS_BY_FILE: Record<string, number> = {
   "extension/options/options.js": 1,
   "extension/sandbox/artifact-preview.js": 2,
   "extension/sandbox/script-sandbox.js": 1,
-  "extension/shared/components-core.js": 3,
+  "extension/shared/components-core.js": 5,
   "extension/skills/skills-panel.js": 1,
 };
 
