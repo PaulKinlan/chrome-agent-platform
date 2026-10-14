@@ -58,6 +58,11 @@ import {
   permLeaseRoutes,
   requireSettingsSender,
 } from "./routes/index.js";
+import {
+  SETTINGS_SESSION_ROUTES,
+  createSettingsSessions,
+  validateSettingsSessionMintSender,
+} from "../lib/settings-session.js";
 import { createEnclaveLedger } from "../lib/enclave-ledger.js";
 import { describeError, formatError, errorDetail } from "../lib/error-report.js";
 import { BUDGET_CONTINUE_TASK, boundedIterations, budgetExhaustedTerminal, continuationStopTerminal, isBudgetTerminal, steerStopTerminal } from "../lib/run-budget.js";
@@ -5694,6 +5699,37 @@ chrome.permissions?.onAdded?.addListener((granted) => {
       chrome.tabs.sendMessage(t.id, { type: "webmcp.detect.rearm" }).catch(() => {});
     }
   })().catch(() => {});
+});
+
+// Per-document hub Settings sessions (chrome-agent-platform-8v5l.2 /
+// chrome-agent-platform-l354r). Mirrored to chrome.storage.session so a
+// service-worker restart does not strand a live hub Settings view; revoked on
+// settings.session.close or when the owning tab closes. The static route
+// allowlist SETTINGS_SESSION_ROUTES starts EMPTY — no route is admitted until
+// explicitly approved per panel.
+const SETTINGS_SESSION_STORAGE_KEY = "cap:settingsSessions";
+const settingsSessions = createSettingsSessions({
+  allowedRoutes: SETTINGS_SESSION_ROUTES,
+  store: {
+    async read() {
+      try {
+        const stored = await chrome.storage?.session?.get(SETTINGS_SESSION_STORAGE_KEY);
+        return stored?.[SETTINGS_SESSION_STORAGE_KEY] ?? null;
+      } catch {
+        return null;
+      }
+    },
+    async write(map) {
+      try {
+        await chrome.storage?.session?.set({ [SETTINGS_SESSION_STORAGE_KEY]: map });
+      } catch { /* best-effort persistence — in-memory copy remains authoritative in this worker turn */ }
+    },
+  },
+});
+chrome.tabs?.onRemoved?.addListener((tabId) => {
+  if (Number.isInteger(tabId)) {
+    settingsSessions.close({ tabId }).catch(() => {});
+  }
 });
 
 async function issueBridgeNonce(tabId, documentId) {
@@ -13119,6 +13155,42 @@ const handlers = mergeRouteMaps(
   async "security.clear"() {
     return securityClear();
   },
+  async "settings.session.open"(msg, context) {
+    if (!isOwnerPrincipal(context)) return ERR_OWNER_EXT_REQUIRED;
+    const senderCheck = validateSettingsSessionMintSender(context?.sender, {
+      extensionId: chrome.runtime.id,
+      hubUrl: chrome.runtime.getURL("ntp/ntp.html"),
+      canonicalOrigin,
+    });
+    if (!senderCheck.ok) {
+      securityEvent(
+        "blocked-action",
+        `settings.session.open denied (${senderCheck.reason}): ${senderCheck.error}`,
+      );
+      return {
+        ok: false,
+        error: senderCheck.error,
+        reason: senderCheck.reason,
+      };
+    }
+    return await settingsSessions.open({
+      documentId: senderCheck.documentId,
+      scopes: msg?.scopes,
+      tabId: senderCheck.tabId,
+    });
+  },
+  async "settings.session.close"(_msg, context) {
+    if (!isOwnerPrincipal(context)) return ERR_OWNER_EXT_REQUIRED;
+    const documentId = typeof context?.documentId === "string" ? context.documentId.trim() : "";
+    if (!documentId) {
+      return {
+        ok: false,
+        error: "sender documentId is required",
+        reason: "invalid-document",
+      };
+    }
+    return await settingsSessions.close({ documentId });
+  },
   },
 );
 
@@ -13238,6 +13310,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     principal: "extension",
     documentId: typeof sender?.documentId === "string" ? sender.documentId : "",
     senderUrl: typeof sender?.url === "string" ? sender.url : "",
+    sender,
   };
   const optionsUrl = chrome.runtime.getURL("options/options.html");
   if (isExactOptionsSender(sender, chrome.runtime.id, optionsUrl)) {
@@ -13280,19 +13353,66 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  dispatchRoute(message.type, message, routeContext).then((result) => sendResponse(result)).catch((e) => {
-    // The comprehensive error: unwrap the AI SDK wrapper + say what to do,
-    // instead of the raw "No output generated. Check the stream for errors".
-    const desc = errorDetail(e, { tool: message?.type || "" });
-    sendResponse({
-      ok: false,
-      error: desc.message,
-      errorCategory: desc.category,
-      errorReason: desc.reason,
-      errorAction: desc.action,
-      errorDetail: desc.detail,
+  // Settings-session verification (chrome-agent-platform-8v5l.2): happens BEFORE
+  // dispatchRoute (which strips `__*` body keys). A valid session keeps
+  // `principal: "extension"` and attaches `routeContext.settingsSession`; any
+  // invalid, expired, revoked, wrong-document or wrong-scope token fails CLOSED
+  // (no upgrade, and the token value is never logged or echoed).
+  const hasSettingsSessionToken = Boolean(
+    message &&
+      typeof message === "object" &&
+      Object.prototype.hasOwnProperty.call(message, "__settingsSession"),
+  );
+  const rawSettingsSessionToken = hasSettingsSessionToken
+    ? message.__settingsSession
+    : undefined;
+
+  const resolveContextPromise = hasSettingsSessionToken
+    ? settingsSessions
+        .verify({
+          token: rawSettingsSessionToken,
+          documentId: routeContext.documentId,
+          route: message.type,
+        })
+        .then((verdict) => {
+          if (verdict.ok && routeContext.principal === "extension") {
+            return {
+              ...routeContext,
+              principal: "extension",
+              settingsSession: verdict.session,
+            };
+          }
+          securityEvent(
+            "blocked-action",
+            `settings session verification failed for ${message.type}: ${verdict.reason ?? "invalid"}`,
+          );
+          return routeContext;
+        })
+        .catch(() => {
+          securityEvent(
+            "blocked-action",
+            `settings session verification failed for ${message.type}: unexpected-error`,
+          );
+          return routeContext;
+        })
+    : Promise.resolve(routeContext);
+
+  resolveContextPromise
+    .then((resolvedContext) => dispatchRoute(message.type, message, resolvedContext))
+    .then((result) => sendResponse(result))
+    .catch((e) => {
+      // The comprehensive error: unwrap the AI SDK wrapper + say what to do,
+      // instead of the raw "No output generated. Check the stream for errors".
+      const desc = errorDetail(e, { tool: message?.type || "" });
+      sendResponse({
+        ok: false,
+        error: desc.message,
+        errorCategory: desc.category,
+        errorReason: desc.reason,
+        errorAction: desc.action,
+        errorDetail: desc.detail,
+      });
     });
-  });
   return true; // async response
 });
 

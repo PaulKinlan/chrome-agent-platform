@@ -29,7 +29,7 @@ section 9 and is marked as an open question — it is not asserted as a threat.
 | [`docs/RISK-REGISTER.md`](docs/RISK-REGISTER.md) | the architectural risk register (R1–R21 + the withheld decisions) |
 | [`docs/CONSTITUTION.md`](docs/CONSTITUTION.md) §1 | the security vector list every change is reviewed against |
 | [`docs/INTERNAL-SENDER-CONTRACT-AUDIT.md`](docs/INTERNAL-SENDER-CONTRACT-AUDIT.md) | the sender-classifier adjudication (bead `lw6d`) |
-| [`docs/SW-DISPATCH-AUTHORITY-CENSUS.md`](docs/SW-DISPATCH-AUTHORITY-CENSUS.md) | the 290-route dispatch census and its 37 unclassified mutations |
+| [`docs/SW-DISPATCH-AUTHORITY-CENSUS.md`](docs/SW-DISPATCH-AUTHORITY-CENSUS.md) | the 292-route dispatch census and its 37 unclassified mutations |
 | [`docs/CHROME-TEST-CONTRACT.md`](docs/CHROME-TEST-CONTRACT.md) | which gate runs a real browser, and why a subset gate cannot see a cross-cutting guard |
 | [`docs/STREAMING-CREDENTIAL-FILTER-RESERVED-MEMBERS.md`](docs/STREAMING-CREDENTIAL-FILTER-RESERVED-MEMBERS.md) | the archive credential/`__proto__` filter parity contract |
 | [`docs/PERMISSION-MATRIX.md`](docs/PERMISSION-MATRIX.md) | the permission-state mechanism classes and their headless acceptance |
@@ -45,11 +45,11 @@ http(s) page) and it acts on two different untrusted feeds at once: web page con
 and model output.
 
 Component map, with the file that owns each surface:
-- **Offscreen-inventory evidence pin: `origin/main@28c7189d`.** The dispatch census and `tests/sw-dispatch-authority-census.test.ts` assert 290 registered routes on this branch; that earlier main pin had fewer routes. The offscreen host inventory below is taken from the actual `register*Host()` calls and listeners in `extension/offscreen/offscreen.js`, not inferred from the incomplete onMessage-only census §6.2. Re-read named symbols at a newer tree; line numbers are locators.
+- **Offscreen-inventory evidence pin: `origin/main@28c7189d`.** The dispatch census and `tests/sw-dispatch-authority-census.test.ts` assert 292 registered routes on this branch; that earlier main pin had fewer routes. The offscreen host inventory below is taken from the actual `register*Host()` calls and listeners in `extension/offscreen/offscreen.js`, not inferred from the incomplete onMessage-only census §6.2. Re-read named symbols at a newer tree; line numbers are locators.
 
 | Component | Where | Notes |
 |---|---|---|
-| Service worker (the privileged broker) | `extension/background/service-worker.js#chrome.runtime.onMessage.addListener` | the ONE central dispatcher listener; 290 registered routes |
+| Service worker (the privileged broker) | `extension/background/service-worker.js#chrome.runtime.onMessage.addListener` | the ONE central dispatcher listener; 292 registered routes |
 | Route modules | `extension/background/routes/` | dispatched through `mergeRouteMaps` (census §2) |
 | New-tab hub / Settings / side panel | `extension/ntp/`, `extension/options/`, `extension/sidepanel/` | extension documents; principal `extension` / `owner-options` |
 | Offscreen document | `extension/offscreen/offscreen.js` | single runtime host: 11 `register*Host()` calls (ACP model, agent worker, Python, Wasm stream, call-export, Emscripten, WASI job, table worker, owner-uploaded Wasm, SVG rasterise, on-device text), plus the script-sandbox and clipboard listeners; reclaim can interrupt in-flight work across those lanes (R12) |
@@ -270,7 +270,7 @@ consequences are carried by the matching register entry where one exists.
   non-page-allowed route to page senders (allowlist check at
   `extension/background/service-worker.js#PAGE_ALLOWED_ROUTES.has`),
   so the class is reachable only from extension principals. **Register:** R11.
-- **The executable census pins the current count.** The census §4.9 lists 37 unclassified mutations among 290 registered routes on this branch; consult its route rows for locations rather than interpreting older T4 line locators as current.
+- **The executable census pins the current count.** The census §4.9 lists 37 unclassified mutations among 292 registered routes on this branch; consult its route rows for locations rather than interpreting older T4 line locators as current.
 
 ### T5. Sandbox escape and network egress from the script sandbox
 
@@ -477,6 +477,33 @@ consequences are carried by the matching register entry where one exists.
   every target origin, asserts run ownership, and enforces an owner-visible approval card
   bound to the canonical SHA-256 digest of the complete, untruncated script source (INV-8).
 
+### T20. In-hub Settings session residual risk (honest limit — `chrome-agent-platform-8v5l.2` / `chrome-agent-platform-l354r`)
+
+- **Boundary:** TB2. **Evidence:** `extension/lib/settings-session.js#SETTINGS_SESSION_ROUTES`,
+  `extension/lib/settings-session.js#createSettingsSessions`,
+  `extension/background/routes/auth.js#requireSettingsSession`,
+  `extension/background/routes/auth.js#requireSettingsSurface`,
+  `extension/background/service-worker.js#settings.session.open`,
+  `extension/background/service-worker.js#settings.session.close`.
+- **Honest limit:** the hub document (`ntp/ntp.html`) also renders untrusted content. Any script
+  running inside `ntp/ntp.html` can call `settings.session.open` and then every route the static
+  allowlist `SETTINGS_SESSION_ROUTES` admits. A session therefore **narrows scope and lifetime**
+  (TTL <= 15 minutes, explicit revoke on `settings.session.close` and tab removal, bounded table)
+  and makes admission explicit, revocable, and auditable. It does **not** recreate the
+  browser-enforced boundary that the exact-options (`options/options.html`) iframe gives today.
+  The only unforgeable input is `sender.documentId` (browser-attested). The token is not a secret
+  that defends against script executing inside the hub document, and no doc or comment may claim
+  it is.
+- **Controls:** `SETTINGS_SESSION_ROUTES` starts empty (`Object.freeze({})`), admitting zero
+  routes at Stage 3b (`tests/settings-session.test.ts`, `tests/sw-dispatch-authority-census.test.ts`);
+  `settings.session.open` refuses content scripts, subframes (`frameId !== 0`), non-hub documents,
+  query strings, and missing `documentId`; verification in the central listener keeps
+  `principal: "extension"` and never upgrades to `"owner-options"`, never widens
+  `requireSettingsSender` or `mayResolveApproval`, scrubs `__settingsSession` before handler
+  invocation, and never writes a session token into `securityEvent`, logs, receipts, or error text.
+  Credential routes remain restricted to `owner-options` by default (decision bead
+  `chrome-agent-platform-l354r`, question (a)).
+
 ---
 
 ## 6. Security Invariants for Auditors
@@ -613,6 +640,14 @@ decision and, where one exists, the trigger that would reopen it.
     system prompt) wrap imported skills in an unguessable per-assembly random token (`mintUntrustedToken`),
     telling the model that fenced text is untrusted data. `acp-runner.js` provides an unattached library
     seam for tests and future integrations with optional run-token fencing. Provenance is surfaced in the skills UI.
+12. **In-hub Settings session residual risk (T20 / `chrome-agent-platform-8v5l.2` / `chrome-agent-platform-l354r`).**
+    Because `ntp/ntp.html` also renders untrusted content, any script executing inside the hub top frame
+    can call `settings.session.open` and invoke routes in `SETTINGS_SESSION_ROUTES`. A session narrows
+    scope and lifetime and binds to browser-attested `sender.documentId`, but does not recreate the
+    browser-enforced isolation of the `options/options.html` iframe. `SETTINGS_SESSION_ROUTES` is
+    therefore empty by default (`Object.freeze({})`), credential routes stay on `owner-options`, and
+    every future route addition requires explicit owner approval on `chrome-agent-platform-l354r` plus
+    lockstep census and falsification coverage.
 
 ---
 

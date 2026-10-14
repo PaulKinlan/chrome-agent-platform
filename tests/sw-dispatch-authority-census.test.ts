@@ -4,9 +4,10 @@
 // Invariants guarded:
 //   1. docs/SW-DISPATCH-AUTHORITY-CENSUS.md exists and is cited in AGENTS.md and routes/ROUTE_MAP.md.
 //   2. Every registered route in handlers (via mergeRouteMaps) is extracted from actual AST composition.
-//   3. The census classification is complete, disjoint, and covers 100% of registered routes (290 total).
+//   3. The census classification is complete, disjoint, and covers 100% of registered routes (292 total).
 //      (l0r: recipe.list catalog fork deleted; wfo5: browser.callTool added;
-//       s7wl: the vault/enclave maps the resolver below used to skip, +9.)
+//       s7wl: the vault/enclave maps the resolver below used to skip, +9;
+//       8v5l.2: settings.session.open and settings.session.close added, +2.)
 //   4. Any new route added to mergeRouteMaps without explicit census classification fails RED.
 //   5. Unclassified mutations (e.g. named-agent.set-tools) are pinned to an explicit inventory.
 //   6. The document's §3/§4 categories exactly match the tested classifications (4h47).
@@ -19,6 +20,7 @@ import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import * as acorn from "npm:acorn";
 import { PAGE_ALLOWED_ROUTES } from "../extension/lib/pure.js";
 import { OWNER_DIRECT_ACTIONS, DESTRUCTIVE_ACTIONS } from "../extension/lib/owner-approval.js";
+import { SETTINGS_SESSION_ROUTES } from "../extension/lib/settings-session.js";
 
 import { createActivityRoutes } from "../extension/background/routes/activity.js";
 import { createSchedulerRoutes } from "../extension/background/routes/scheduler.js";
@@ -93,6 +95,9 @@ export const CENSUS_CATEGORIES = {
     // isAllowedCaller() is isOwnerPrincipal(context) or the SW-internal caller flag
     // (routes/enclave-proxy.js:180); pages and model runs are refused.
     "enclave.proxy",
+    // 8v5l.2: hub Settings session lifecycle routes, gated by isOwnerPrincipal(context)
+    // plus exact top-frame hub sender validation on open and sender documentId on close.
+    "settings.session.open", "settings.session.close",
   ]),
   EXECUTION_AND_WORKER_ORCHESTRATION: new Set([
     "agent.run", "named-agent.run", "named-agent.delegate", "agent.delegate",
@@ -427,43 +432,95 @@ Deno.test("census: companion-doc total and route-name falsifications RED by docu
   const arch = await Deno.readTextFile(`${ROOT}docs/ARCHITECTURE.md`);
   const plan = await Deno.readTextFile(`${ROOT}docs/NATIVE-AGENT-POSITION-PLAN.md`);
 
-  assertThrows(() => assertRouteMap(map.replace("**290**", "**289**")), Error, "ROUTE_MAP total");
+  assertThrows(() => assertRouteMap(map.replace("**292**", "**291**")), Error, "ROUTE_MAP total");
   assertThrows(() => assertRouteMap(map.replace("`enclave.proxy`", "`enclave.proxy-renamed`")), Error, "enclave.proxy-renamed");
   assertThrows(() => assertRiskAndThreatPopulation(risks.replace("37 unclassified mutation routes", "31 unclassified mutation routes"), threat), Error, "RISK-REGISTER R11 risk");
   assertThrows(() => assertRiskAndThreatPopulation(risks.replace("`asset.export-to-folder` writes", "`asset.export-to-folder-renamed` writes"), threat), Error, "asset.export-to-folder-renamed");
   assertThrows(() => assertRiskAndThreatPopulation(risks,
-    threat.replace("` assert 290 registered routes", "` assert 289 registered routes")),
+    threat.replace("` assert 292 registered routes", "` assert 291 registered routes")),
     Error, "THREAT_MODEL component-map evidence pin population");
   assertThrows(() => assertRiskAndThreatPopulation(risks,
-    threat.replace("37 unclassified mutations among 290 registered routes", "37 unclassified mutations among 289 registered routes")),
+    threat.replace("37 unclassified mutations among 292 registered routes", "37 unclassified mutations among 291 registered routes")),
     Error, "THREAT_MODEL T4 evidence pin registered count");
 
   // r073 falsification drills:
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch.replace("290-route population", "289-route population"), plan),
+    () => assertArchitectureAndStrategyPopulation(arch.replace("292-route population", "291-route population"), plan),
     Error,
     "ARCHITECTURE.md route count must equal registered population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch.replace("290-route population", "bogus text"), plan),
+    () => assertArchitectureAndStrategyPopulation(arch.replace("292-route population", "bogus text"), plan),
     Error,
     "ARCHITECTURE.md must state the complete route population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("290-route dispatch authority", "289-route dispatch authority")),
+    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("292-route dispatch authority", "291-route dispatch authority")),
     Error,
     "NATIVE-AGENT-POSITION-PLAN.md route count must equal registered population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("290-route dispatch authority", "bogus text")),
+    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("292-route dispatch authority", "bogus text")),
     Error,
     "NATIVE-AGENT-POSITION-PLAN.md must state the dispatch authority route count",
   );
 });
 
-Deno.test("census: all registered routes in handlers are derived via AST and total 290", () => {
+Deno.test("census: all registered routes in handlers are derived via AST and total 292", () => {
   const registered = extractAllRegisteredRoutes();
-  assertEquals(registered.size, 290, `registered routes population must equal 290 (got ${registered.size})`);
+  assertEquals(registered.size, 292, `registered routes population must equal 292 (got ${registered.size})`);
+});
+
+export function assertSettingsSessionRoutesInCensus(
+  sessionRoutes: Record<string, unknown> = SETTINGS_SESSION_ROUTES,
+  categories: Record<string, Set<string>> = CENSUS_CATEGORIES,
+  registered: Set<string> = extractAllRegisteredRoutes(),
+): void {
+  const classified = new Set<string>();
+  for (const set of Object.values(categories)) {
+    for (const r of set) classified.add(r);
+  }
+  for (const [route, scopes] of Object.entries(sessionRoutes ?? {})) {
+    assert(
+      registered.has(route),
+      `SETTINGS_SESSION_ROUTES entry "${route}" is not a registered SW route`,
+    );
+    assert(
+      classified.has(route),
+      `SETTINGS_SESSION_ROUTES entry "${route}" has no census classification in CENSUS_CATEGORIES`,
+    );
+    assert(
+      !categories.PAGE_ALLOWED?.has(route),
+      `SETTINGS_SESSION_ROUTES entry "${route}" must never be in PAGE_ALLOWED`,
+    );
+    assert(
+      !categories.UNCLASSIFIED_MUTATIONS?.has(route),
+      `SETTINGS_SESSION_ROUTES entry "${route}" must be explicitly gated, not in UNCLASSIFIED_MUTATIONS`,
+    );
+    const list = Array.isArray(scopes) ? scopes.filter((s) => typeof s === "string" && s.trim().length > 0) : [];
+    assert(
+      list.length > 0,
+      `SETTINGS_SESSION_ROUTES entry "${route}" must declare at least one non-empty panel scope`,
+    );
+  }
+}
+
+Deno.test("census: SETTINGS_SESSION_ROUTES is empty at Stage 3b and every entry requires a census classification (m9)", () => {
+  assertSettingsSessionRoutesInCensus(SETTINGS_SESSION_ROUTES);
+  assertEquals(
+    Object.keys(SETTINGS_SESSION_ROUTES),
+    [],
+    "SETTINGS_SESSION_ROUTES must start EMPTY at Stage 3b merge (chrome-agent-platform-8v5l.2)",
+  );
+  // Falsification drill (m9): adding a route to SETTINGS_SESSION_ROUTES without a census entry turns RED.
+  assertThrows(
+    () =>
+      assertSettingsSessionRoutesInCensus({
+        "settings.unclassified.mutant.m9": ["providers"],
+      }),
+    Error,
+    "settings.unclassified.mutant.m9",
+  );
 });
 
 function assertCompleteClassification(registered: Set<string>): void {

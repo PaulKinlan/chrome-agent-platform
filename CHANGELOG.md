@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.680] — 2026-10-14
+- Harden Settings session security so embedded Settings views use short-lived, document-bound session tokens.
+
 ## [0.3.679] — 2026-10-14
 - Remove the retired Chrome Prompt API provider option from Settings and automatically switch any saved Prompt API configuration to the local demo model.
 

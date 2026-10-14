@@ -344,6 +344,10 @@ const BASELINE_ROUTES = [
   "page.capture",
   "capture.page",
   "asset.export-to-folder",
+  // Stage 3b (chrome-agent-platform-8v5l.2): document-bound settings-session
+  // lifecycle routes.
+  "settings.session.open",
+  "settings.session.close",
 ];
 
 Deno.test("sw routes: mergeRouteMaps combines maps and detects collisions", () => {

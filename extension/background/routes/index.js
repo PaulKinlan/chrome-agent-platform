@@ -1,6 +1,6 @@
 // extension/background/routes/index.js — route module registry and composition helpers.
 
-export { requireSettingsSender } from "./auth.js";
+export { requireSettingsSender, requireSettingsSession, requireSettingsSurface } from "./auth.js";
 export { kvRoutes } from "./kv.js";
 export { permLeaseRoutes } from "./perm-lease.js";
 export { createProviderRoutes } from "./provider.js";
