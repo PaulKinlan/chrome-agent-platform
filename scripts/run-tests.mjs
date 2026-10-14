@@ -24,10 +24,11 @@ import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath } from "node:path";
-import { BUILD_GATE, HEAVY_GATE, READ_ONLY_DIST, SERIAL, partition } from "./test-partition.mjs";
+import { BUILD_GATE, BUILD_GATE_FILES, HEAVY_GATE, HEAVY_GATE_FILES, READ_ONLY_DIST, SERIAL, partition } from "./test-partition.mjs";
 import { announce, runReadOnlyDistBatch, runSerialFiles } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
 import { parallelPlan } from "./lib/parallel-plan.mjs";
+import { emitGateLedger, parseGateBuild } from "./lib/gate-manifest.mjs";
 
 export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
 const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_MS ?? DEFAULT_PARALLEL_TIMEOUT_MS);
@@ -307,6 +308,34 @@ export async function main(args = process.argv.slice(2)) {
       ` (${serialFiles.length} serial, ${readOnly.length} post-build read-only, ${parallel.length - readOnly.length} other parallel` +
       `${deferredSummary}), wall ${((Date.now() - t0) / 1000).toFixed(0)}s`,
   );
+  // The coverage ledger for the FULL tier (chrome-agent-platform-0eq00). Only the default `npm test`
+  // form is a gate; an explicit-file run (`run-tests.mjs tests/x.test.ts`) is an inner-loop tool and
+  // deliberately emits nothing, so a probe run can never look like a gate record.
+  if (cliFiles.length === 0) {
+    const executedSuites = [...serialFiles, ...plan.files];
+    const skippedFiles = parallel.filter((f) => !plan.files.includes(f));
+    emitGateLedger({
+      manifest: {
+        tier: "full",
+        executed: rc === 0 ? executedSuites.length : 0,
+        executedSuites: rc === 0 ? executedSuites : [],
+        selected: executedSuites,
+        certifiable: rc === 0,
+        build: parseGateBuild(process.env.CAP_GATE_BUILD_JSON),
+        omitted: [
+          ...BUILD_GATE_FILES.map((file) => ({
+            file,
+            reason: "deferred to the dedicated npm run test:build tier of the FULL command",
+          })),
+          ...HEAVY_GATE_FILES.map((file) => ({
+            file,
+            reason: "NOT in the FULL gate command — runs under npm run test:heavy",
+          })),
+          ...skippedFiles.map((file) => ({ file, reason: "skipped in this run: the serial phase failed" })),
+        ],
+      },
+    });
+  }
   process.exit(rc);
 }
 

@@ -174,6 +174,11 @@ export const SELECTOR_INFRASTRUCTURE = Object.freeze([
   "scripts/test-partition.mjs", // decides serial vs parallel for both runners
   "scripts/lib/serial-phase.mjs", // executes the serial phase for both runners
   "scripts/lib/changed-file-mapping.mjs", // this file: the mapping the subset trusts
+  // chrome-agent-platform-0eq00: the gate's build decision and its coverage ledger. Both decide what
+  // a green record MEANS, so a change to either must fail closed to the full suite rather than be
+  // validated by a subset they themselves chose.
+  "scripts/build-if-needed.mjs", // decides whether the FAST gate builds at all
+  "scripts/lib/gate-manifest.mjs", // the coverage ledger every gate record carries
 ]);
 
 export function isSelectorInfrastructure(rel) {

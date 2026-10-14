@@ -2,6 +2,13 @@
 //
 //   node scripts/select-tests.mjs            run the subset: `deno test -A <files>`
 //   node scripts/select-tests.mjs --list     print the selected test files, one per line
+//   node scripts/select-tests.mjs --plan-json   print the decision as JSON on stdout (no tests run):
+//                                                {kind, files, changed, unmappable, mapped, reason}
+//                                                kind:"full" means the subset cannot validate this change
+//   node scripts/select-tests.mjs --build-if-needed   VALIDATE-OR-BUILD the store dist before running
+//                                                (chrome-agent-platform-0eq00): reuse a dist.complete
+//                                                that validates for the exact commit, build otherwise,
+//                                                and refuse to run if no certified dist can be produced
 //   node scripts/select-tests.mjs --core     run the always-on core only (security/vocabulary)
 //   node scripts/select-tests.mjs --always-on   run EXACTLY the always-on set (core + source-inspecting
 //                                                guards) — the set a subset gate cannot be trusted to
@@ -40,6 +47,8 @@ import { tokenizer } from "acorn";
 import { partition } from "./test-partition.mjs";
 import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
 import { isSelectorInfrastructure, mapUncovered, versionOnlyJsonChange } from "./lib/changed-file-mapping.mjs";
+import { emitGateLedger } from "./lib/gate-manifest.mjs";
+import { decideBuild, ensureStoreBuild, findDistConsumers } from "./build-if-needed.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -627,24 +636,143 @@ export async function runPartitioned(files) {
   return rc;
 }
 
-async function runDeno(files) {
+/**
+ * Run one planned subset and write the coverage ledger. Returns the exit code (the caller decides
+ * when to exit, so a `--list`/JSON mode can never run tests by accident).
+ *
+ * The manifest names the suites that EXECUTED, never a claim that they covered anything: the fleet
+ * consumer's own oracle decides which changed files were placed (chrome-agent-platform-0eq00).
+ */
+async function runDeno(files, { build = null } = {}) {
   if (!files.length) {
     console.error("select-tests: no test files selected — nothing to run.");
-    process.exit(1);
+    // A gate that executed nothing must not read as green coverage.
+    emitGateLedger({ unknown: "no test file was selected, so nothing was executed" });
+    return 1;
   }
   console.error(`select-tests: ${files.length} file(s):\n  ${files.map((f) => `  ${f}`).join("\n")}`);
-  process.exit(await runPartitioned(files));
+  const rc = await runPartitioned(files);
+  emitGateLedger({
+    manifest: {
+      tier: "fast",
+      executed: rc === 0 ? files.length : 0,
+      executedSuites: rc === 0 ? files : [],
+      selected: files,
+      certifiable: rc === 0,
+      build,
+    },
+  });
+  return rc;
 }
 
-function runFullSuite() {
+/**
+ * The full-suite tier is emitted by scripts/run-tests.mjs (the one process that knows which files
+ * `npm test` actually ran); the build disposition rides across in CAP_GATE_BUILD_JSON so a
+ * fail-closed FAST run still records why a build was paid for.
+ */
+function runFullSuite({ build = null } = {}) {
   // The full suite is the two-phase runner (npm test), never a bare sweep.
-  const r = spawnSync(process.execPath, [join(ROOT, "scripts/run-tests.mjs")], { stdio: "inherit", cwd: ROOT });
-  process.exit(r.status ?? 1);
+  const env = build ? { ...process.env, CAP_GATE_BUILD_JSON: JSON.stringify(build) } : process.env;
+  const r = spawnSync(process.execPath, [join(ROOT, "scripts/run-tests.mjs")], { stdio: "inherit", cwd: ROOT, env });
+  return r.status ?? 1;
+}
+
+/**
+ * VALIDATE-OR-BUILD (chrome-agent-platform-0eq00). Only `--build-if-needed` reaches this: the plain
+ * `test:changed` loop keeps its documented behaviour (no build) so an inner-loop run can never pay
+ * for one. A build that cannot leave a certified dist is a hard stop, not a green subset.
+ */
+async function prepareBuild(decision, enabled) {
+  if (!enabled) return null;
+  const build = await ensureStoreBuild({ required: decision.required, reason: decision.reason, root: ROOT });
+  console.error(`select-tests: build-if-needed: ${build.disposition} in ${build.secs.toFixed(1)}s — ${build.reason}`);
+  if (build.disposition === "failed") {
+    emitGateLedger({ unknown: `the store build could not produce a certified dist: ${build.reason}` });
+    process.exit(1);
+  }
+  return build;
+}
+
+/**
+ * The selector's decision, pure of printing and of running (chrome-agent-platform-0eq00 plan mode).
+ * `kind: "full"` means the subset cannot validate this change: callers must run the full suite.
+ *
+ * @param {{ base?: string }} [opts]
+ * @returns {{
+ *   kind: "subset" | "full",
+ *   files: string[] | null,
+ *   changed: string[],
+ *   uncovered: string[],
+ *   mapped: Array<{ file: string, mechanism: string, tests: string[] }>,
+ *   unmappable: Array<{ file: string, mechanism: string }>,
+ *   notices: string[],
+ *   failClosedHeader?: string,
+ *   reason: string,
+ * }}
+ */
+export function planSelection({ base = "origin/main" } = {}) {
+  const changed = changedFiles(base);
+  const notices = [];
+  if (!changed.length) notices.push(`select-tests: no files changed vs ${base} — running always-on core.`);
+  const reverse = changed.length ? buildReverseGraph() : null;
+  const uncovered = changed.length ? changedWithoutCoverage(changed, reverse) : [];
+
+  const selfChanged = changed.filter((f) => isSelectorInfrastructure(f));
+  if (selfChanged.length) {
+    const unmappable = selfChanged.map((file) => ({
+      file,
+      mechanism: "the test selector's own machinery — a subset chosen by the thing under test cannot validate it",
+    }));
+    return {
+      kind: "full",
+      files: null,
+      changed,
+      uncovered,
+      mapped: [],
+      unmappable,
+      notices,
+      failClosedHeader: `select-tests: FAIL CLOSED — this change edits the test selector's own machinery, so a subset it chooses cannot validate it:`,
+      reason: "the test selector's own machinery changed",
+    };
+  }
+
+  const baseRef = mergeBaseOf(base);
+  const { mapped, unmappable } = uncovered.length
+    ? mapUncovered(uncovered, (rel) => versionOnlyAgainst(baseRef, rel))
+    : { mapped: [], unmappable: [] };
+
+  if (unmappable.length) {
+    return {
+      kind: "full",
+      files: null,
+      changed,
+      uncovered,
+      mapped,
+      unmappable,
+      notices,
+      reason: "changed file(s) with no reachable test cannot be proved covered by a subset",
+    };
+  }
+  for (const m of mapped) {
+    notices.push(`select-tests: ${m.file} has no importer — ${m.mechanism}; selecting its ${m.tests.length} inspecting guard(s).`);
+  }
+  return {
+    kind: "subset",
+    files: selectTestFiles(changed, reverse, mapped),
+    changed,
+    uncovered,
+    mapped,
+    unmappable: [],
+    notices,
+    reason: "",
+  };
 }
 
 async function main() {
   const args = process.argv.slice(2);
   const list = args.includes("--list");
+  const planJson = args.includes("--plan-json");
+  const buildIfNeeded = args.includes("--build-if-needed");
   const coreOnly = args.includes("--core");
   const alwaysOnOnly = args.includes("--always-on");
   const baseIdx = args.indexOf("--base");
@@ -668,55 +796,73 @@ async function main() {
         `see, never as the whole gate.`,
     );
     if (list) console.log(files.join("\n"));
-    else await runDeno(files);
+    else {
+      emitGateLedger({
+        unknown:
+          "--always-on executes only the always-on guard set: it does not run the changed files' tests " +
+          "and does not run the full suite, so it cannot certify the change",
+      });
+      process.exit(await runDeno(files));
+    }
     return;
   }
   if (coreOnly) {
     const files = CORE.filter((c) => existsSync(join(ROOT, c)));
     if (list) console.log(files.join("\n"));
-    else await runDeno(files);
-    return;
-  }
-  const changed = changedFiles(base);
-  if (!changed.length) console.error(`select-tests: no files changed vs ${base} — running always-on core.`);
-  const reverse = changed.length ? buildReverseGraph() : null;
-  const uncovered = changed.length ? changedWithoutCoverage(changed, reverse) : [];
-
-  const selfChanged = changed.filter((f) => isSelectorInfrastructure(f));
-  if (selfChanged.length) {
-    const unmappable = selfChanged.map((file) => ({
-      file,
-      mechanism: "the test selector's own machinery — a subset chosen by the thing under test cannot validate it",
-    }));
-    const plan = failClosedPlan({
-      list,
-      unmappable,
-      header: `select-tests: FAIL CLOSED — this change edits the test selector's own machinery, so a subset it chooses cannot validate it:`,
-    });
-    console.error(plan.output.join("\n"));
-    if (plan.action === "list") console.log("FULL_SUITE");
-    else runFullSuite();
+    else {
+      emitGateLedger({ unknown: "--core executes only the always-on core: it cannot certify the change" });
+      process.exit(await runDeno(files));
+    }
     return;
   }
 
-  const baseRef = mergeBaseOf(base);
-  const { mapped, unmappable } = uncovered.length
-    ? mapUncovered(uncovered, (rel) => versionOnlyAgainst(baseRef, rel))
-    : { mapped: [], unmappable: [] };
-
-  if (unmappable.length) {
-    const plan = failClosedPlan({ list, unmappable });
-    console.error(plan.output.join("\n"));
-    if (plan.action === "list") console.log("FULL_SUITE");
-    else runFullSuite();
+  const plan = planSelection({ base });
+  if (planJson) {
+    console.log(
+      JSON.stringify({
+        tier: "fast",
+        kind: plan.kind,
+        base,
+        files: plan.files ?? [],
+        changed: plan.changed,
+        unmapped: [],
+        unmappable: plan.unmappable.map((u) => ({ file: u.file, mechanism: u.mechanism })),
+        mapped: plan.mapped.map((m) => ({ file: m.file, tests: m.tests })),
+        reason: plan.reason,
+      }),
+    );
     return;
   }
-  for (const m of mapped) {
-    console.error(`select-tests: ${m.file} has no importer — ${m.mechanism}; selecting its ${m.tests.length} inspecting guard(s).`);
+  for (const notice of plan.notices) console.error(notice);
+
+  if (plan.kind === "full") {
+    // The caller keeps this EXACT shape: tests/changed-file-mapping.test.ts (nco2/R1b) pins that
+    // infrastructure changes route fail-closed through failClosedPlan rather than a bespoke path.
+    const unmappable = plan.unmappable;
+    const closed = failClosedPlan({ list, unmappable, header: plan.failClosedHeader });
+    console.error(closed.output.join("\n"));
+    if (closed.action === "list") {
+      console.log("FULL_SUITE");
+      return;
+    }
+    // Fail-closed runs the full suite, which needs a certified dist for the same reason a subset
+    // does (its serial phase reads the built bundles).
+    const build = await prepareBuild(decideBuild({ kind: "full", changed: plan.changed }), buildIfNeeded);
+    process.exit(runFullSuite({ build }));
   }
-  const files = selectTestFiles(changed, reverse, mapped);
-  if (list) console.log(files.join("\n"));
-  else await runDeno(files);
+
+  if (list) {
+    console.log(plan.files.join("\n"));
+    return;
+  }
+  const decision = decideBuild({
+    kind: "subset",
+    selected: plan.files,
+    changed: plan.changed,
+    distConsumers: findDistConsumers(plan.files),
+  });
+  const build = await prepareBuild(decision, buildIfNeeded);
+  process.exit(await runDeno(plan.files, { build }));
 }
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) main();
