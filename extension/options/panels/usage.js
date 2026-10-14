@@ -11,7 +11,7 @@ import {
   svgShareBars,
   topTools,
 } from "../../lib/usage-viz.js";
-import { escapeHtml } from "../../shared/components-core.js";
+import { escapeHtml } from "../../lib/pure.js";
 import { createPanelContext, bindPanelCtx } from "../panel-context.js";
 
 let currentUsageRange = "7d"; // hoisted above renderUsage — no TDZ on section open

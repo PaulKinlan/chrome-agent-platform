@@ -15,6 +15,12 @@
     body {
       display: flex;
       min-height: 100vh;
+      padding-inline-start: 240px;
+      box-sizing: border-box;
+      transition: padding-inline-start .18s ease;
+    }
+    body:has(> .side.collapsed) {
+      padding-inline-start: 56px;
     }
     /* When an in-context view is open, hide the hub + freeze the page scroll so
        the background cannot scroll behind the overlay (the scrollbar belongs to
@@ -48,9 +54,13 @@
       flex-direction: column;
       padding: 16px 12px;
       gap: 4px;
-      position: sticky;
+      position: fixed;
       inset-block-start: 0;
+      inset-inline-start: 0;
       block-size: 100vh;
+      z-index: 20;
+      backface-visibility: hidden;
+      transform: translateZ(0);
       overflow: clip;
       transition: inline-size .18s ease, flex-basis .18s ease;
     }
@@ -63,6 +73,9 @@
        scrim closes it — zero horizontal overflow in every state. */
     .side-scrim { display: none; }
     @media (max-width: 599.98px) {
+      body {
+        padding-inline-start: 56px;
+      }
       .side.overlay {
         position: fixed;
         inset-block: 0;
@@ -161,7 +174,7 @@
     }
     .side.collapsed .side-toggle svg { transform: rotate(180deg); }
     @media (prefers-reduced-motion: reduce) {
-      .side-toggle, .side-toggle svg, .side, #thread-view.view-overlay, #view.view-overlay { transition: none !important; }
+      body, .side-toggle, .side-toggle svg, .side, #thread-view.view-overlay, #view.view-overlay { transition: none !important; }
     }
     [dir="rtl"] .side-toggle svg { transform: scaleX(-1); }
     [dir="rtl"] .side.collapsed .side-toggle svg { transform: scaleX(-1) rotate(180deg); }
@@ -1829,6 +1842,13 @@
       box-sizing: border-box;
     }
     .settings-view[hidden] { display: none !important; }
+    @media (min-width: 681px) {
+      .view-client-host:has(> #settings-view:not([hidden])) {
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+    }
 
     /* The task thread does NOT cover the sidebar: it fills the area to the
        RIGHT of the task sidebar so the sidebar (and its active-thread state)

@@ -15,6 +15,7 @@ body:not(:has(#settings-view)) {
   max-inline-size: var(--content-max);
   margin-inline: auto;
   padding-inline: var(--content-gutter);
+  padding-inline-start: calc(var(--content-gutter) + 240px);
   box-sizing: border-box;
 }
 .side {
@@ -26,10 +27,15 @@ body:not(:has(#settings-view)) {
   flex-direction: column;
   padding: 16px 12px;
   gap: 4px;
-  /* Stick the nav to the top so it stays visible while the content scrolls. */
-  position: sticky;
+  /* Decouple nav from document scrolling to eliminate scroll vibration. */
+  position: fixed;
+  inset-block-start: 0;
   top: 0;
+  inset-inline-start: calc(max(0px, (100% - var(--content-max)) / 2) + var(--content-gutter));
   height: 100vh;
+  z-index: 10;
+  backface-visibility: hidden;
+  transform: translateZ(0);
   overflow-y: auto;
   box-sizing: border-box;
 }
@@ -193,10 +199,39 @@ nav {
   padding-top: 12px;
 }
 .content {
+  display: block;
   flex: 1 1 auto;
   min-inline-size: 0;
   padding: var(--space-5) var(--space-6);
   max-width: none;
+}
+@media (min-width: 681px) {
+  :scope#settings-view {
+    flex: 1 1 0%;
+    min-block-size: 0;
+    height: 100%;
+    overflow: hidden;
+  }
+  :scope#settings-view .options-shell {
+    flex: 1 1 0%;
+    min-height: 0;
+    height: 100%;
+    padding-inline: var(--content-gutter);
+    overflow: hidden;
+  }
+  :scope#settings-view .side {
+    position: relative;
+    inset: auto;
+    top: auto;
+    height: 100%;
+    flex: 0 0 240px;
+    overflow-y: auto;
+  }
+  :scope#settings-view .content {
+    height: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
 }
 [data-embedded] .side .brand {
   display: none;
@@ -240,7 +275,8 @@ section:not(:first-of-type) {
 section:target,
 section:focus-within,
 section[data-active="true"],
-.panel.active {
+.panel.active,
+.panel.active section {
   content-visibility: visible;
 }
 .panel h2 {
@@ -1481,10 +1517,13 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
 @media (max-width: 680px) {
   .options-shell {
     flex-direction: column;
+    padding-inline: var(--content-gutter);
   }
 
   .side {
     position: static;
+    inset: auto;
+    transform: none;
     width: 100%;
     height: auto;
     max-height: none;
