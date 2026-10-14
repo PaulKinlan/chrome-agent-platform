@@ -315,6 +315,22 @@ Deno.test("abuse gate 8: unsealed or discarded stream promotion is rejected", as
 
   // 2. Discarded stream promotion attempt -> fails closed (stream directory missing)
   const discardedStream = await createWasmStreamOutput({ owner, storage });
+  const dir = await storage.getDirectory();
+  const streams = await dir.getDirectoryHandle("wasm-tool-streams-v1");
+  const streamDir = await streams.getDirectoryHandle(discardedStream.id);
+  const stdoutFile = await streamDir.getFileHandle("stdout.bin");
+  const writer = await stdoutFile.createWritable();
+  await writer.write("Discard candidate payload");
+  await writer.close();
+
+  await sealWasmStreamOutput({
+    ref: discardedStream,
+    owner,
+    bytes: 25,
+    receipt: { exitCode: 0 },
+    storage,
+  });
+
   await discardWasmStream({ ref: discardedStream, owner, storage });
   await assertRejects(
     async () => promoteWasmStreamToArtifact(discardedStream, { owner, storage, force: true }),
