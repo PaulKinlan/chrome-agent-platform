@@ -495,7 +495,7 @@ export function assertExtensionBuilt(extPath: string): void {
   } catch (e) {
     if (e instanceof Deno.errors.NotFound) {
       throw new Error(
-        `launchChrome: the extension at ${extPath} does not exist — extension/dist not built - run npm run build:production`,
+        `launchChrome: the extension at ${extPath} does not exist`,
       );
     }
     throw e;
@@ -541,7 +541,7 @@ export function assertExtensionBuilt(extPath: string): void {
     }
   }
 
-  if (manifestText.includes("dist/") || extPath.replace(/[\/\\]$/, "").endsWith("extension")) {
+  if (manifestText.includes("dist/")) {
     const distPath = join(extPath, "dist");
     try {
       const distStat = Deno.statSync(distPath);
