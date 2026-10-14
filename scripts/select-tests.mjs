@@ -553,6 +553,57 @@ export function changedWithoutCoverage(changed, reverse) {
 export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
 const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_MS ?? DEFAULT_PARALLEL_TIMEOUT_MS);
 
+/**
+ * Every suite the repo's runners can execute — the same walk as scripts/run-tests.mjs's
+ * enumerateRunnerTests (pinned equal in tests/build-if-needed.test.ts so the two cannot drift). The
+ * FAST tier needs the population to disclose what it did NOT run (review P1-A, 2026-10-14).
+ */
+export function allTestFiles() {
+  return readdirSync(join(ROOT, "tests"), { recursive: true })
+    .map((f) => `tests/${f}`)
+    .filter((f) => f.endsWith(".test.ts"))
+    .sort();
+}
+
+// One reason per OMISSION CLASS (review P1-A): an omission with no reason is a silent skip. Kept
+// SHORT on purpose — a subset run omits ~670 suites, so the reason text is repeated ~670 times in the
+// ledger line; the nuance lives in the `unknown:` marker and in the run's own stderr summary.
+export const OMITTED_UNSELECTED_REASON = "unselected: no import path from the changed set";
+export const OMITTED_GUARDS_ONLY_REASON = "not run: --always-on executes only the always-on guards";
+export const OMITTED_CORE_ONLY_REASON = "not run: --core executes only the always-on core";
+
+// A bound on the disclosed inventory: complete by default (the real suite is ~711), with an operator
+// knob (CAP_GATE_LEDGER_MAX_OMITTED) for a log-size tradeoff. It is never a SILENT cap — the total and
+// the dropped count are always reported, and a bound that would erase every named entry is refused.
+export const MAX_OMITTED_ENTRIES = 5000;
+
+/** The disclosure bound; a missing or nonsensical value falls back to complete. 0 is refused. */
+export function omittedLimit(raw = process.env.CAP_GATE_LEDGER_MAX_OMITTED) {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 1) return MAX_OMITTED_ENTRIES;
+  return Math.min(Math.floor(value), MAX_OMITTED_ENTRIES);
+}
+
+/**
+ * The suites a run did NOT execute, each with its reason.
+ * @param {string[]} files the suites this run selected
+ * @param {string} reason why every unselected suite was not selected
+ * @param {number} [limit] disclosure bound (see omittedLimit)
+ * @returns {{ omitted: Array<{ file: string, reason: string }>, omittedTotal: number, omittedTruncated: number }}
+ */
+export function omittedInventory(files, reason, limit = omittedLimit()) {
+  const selected = new Set(files);
+  const all = allTestFiles()
+    .filter((f) => !selected.has(f))
+    .map((f) => ({ file: f, reason }));
+  if (all.length <= limit) return { omitted: all, omittedTotal: all.length, omittedTruncated: 0 };
+  return {
+    omitted: all.slice(0, limit),
+    omittedTotal: all.length,
+    omittedTruncated: all.length - limit,
+  };
+}
+
 function runPhase(files, flags, label, timeoutMs = 300_000) {
   // Deno schedules parallel files independently; print candidate names first
   // so a mid-phase kill retains attribution without falsely naming a culprit.
@@ -643,7 +694,7 @@ export async function runPartitioned(files) {
  * The manifest names the suites that EXECUTED, never a claim that they covered anything: the fleet
  * consumer's own oracle decides which changed files were placed (chrome-agent-platform-0eq00).
  */
-async function runDeno(files, { build = null } = {}) {
+async function runDeno(files, { build = null, omittedReason = null } = {}) {
   if (!files.length) {
     console.error("select-tests: no test files selected — nothing to run.");
     // A gate that executed nothing must not read as green coverage.
@@ -652,6 +703,16 @@ async function runDeno(files, { build = null } = {}) {
   }
   console.error(`select-tests: ${files.length} file(s):\n  ${files.map((f) => `  ${f}`).join("\n")}`);
   const rc = await runPartitioned(files);
+  const inventory = omittedReason
+    ? omittedInventory(files, omittedReason)
+    : { omitted: [], omittedTotal: 0, omittedTruncated: 0 };
+  if (inventory.omittedTotal) {
+    console.error(
+      `select-tests: ledger: ${inventory.omittedTotal} suite(s) NOT run` +
+        `${inventory.omittedTruncated ? ` (${inventory.omitted.length} named, ${inventory.omittedTruncated} dropped from the disclosed list)` : " (all named)"}` +
+        ` — ${omittedReason}`,
+    );
+  }
   emitGateLedger({
     manifest: {
       tier: "fast",
@@ -659,6 +720,9 @@ async function runDeno(files, { build = null } = {}) {
       executedSuites: rc === 0 ? files : [],
       selected: files,
       certifiable: rc === 0,
+      omitted: inventory.omitted,
+      omittedTotal: inventory.omittedTotal,
+      omittedTruncated: inventory.omittedTruncated,
       build,
     },
   });
@@ -764,6 +828,7 @@ export function planSelection({ base = "origin/main" } = {}) {
     mapped,
     unmappable: [],
     notices,
+    omittedReason: OMITTED_UNSELECTED_REASON,
     reason: "",
   };
 }
@@ -802,7 +867,7 @@ async function main() {
           "--always-on executes only the always-on guard set: it does not run the changed files' tests " +
           "and does not run the full suite, so it cannot certify the change",
       });
-      process.exit(await runDeno(files));
+      process.exit(await runDeno(files, { omittedReason: OMITTED_GUARDS_ONLY_REASON }));
     }
     return;
   }
@@ -811,7 +876,7 @@ async function main() {
     if (list) console.log(files.join("\n"));
     else {
       emitGateLedger({ unknown: "--core executes only the always-on core: it cannot certify the change" });
-      process.exit(await runDeno(files));
+      process.exit(await runDeno(files, { omittedReason: OMITTED_CORE_ONLY_REASON }));
     }
     return;
   }
@@ -862,7 +927,7 @@ async function main() {
     distConsumers: findDistConsumers(plan.files),
   });
   const build = await prepareBuild(decision, buildIfNeeded);
-  process.exit(await runDeno(plan.files, { build }));
+  process.exit(await runDeno(plan.files, { build, omittedReason: plan.omittedReason }));
 }
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) main();

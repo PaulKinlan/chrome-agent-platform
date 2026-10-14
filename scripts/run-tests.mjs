@@ -24,11 +24,11 @@ import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath } from "node:path";
-import { BUILD_GATE, BUILD_GATE_FILES, HEAVY_GATE, HEAVY_GATE_FILES, READ_ONLY_DIST, SERIAL, partition } from "./test-partition.mjs";
+import { BUILD_GATE, BUILD_GATE_FILES, BUILD_GATE_REASONS, HEAVY_GATE, HEAVY_GATE_FILES, HEAVY_GATE_REASONS, READ_ONLY_DIST, SERIAL, partition } from "./test-partition.mjs";
 import { announce, runReadOnlyDistBatch, runSerialFiles } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
 import { parallelPlan } from "./lib/parallel-plan.mjs";
-import { emitGateLedger, fullTierManifestFields, parseGateBuild } from "./lib/gate-manifest.mjs";
+import { emitGateLedger, deferredTierEntries, fullTierManifestFields, parseGateBuild } from "./lib/gate-manifest.mjs";
 
 export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
 const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_MS ?? DEFAULT_PARALLEL_TIMEOUT_MS);
@@ -318,7 +318,15 @@ export async function main(args = process.argv.slice(2)) {
         serialFiles,
         parallelFiles: plan.files,
         skippedFiles,
-        deferredFiles: [...BUILD_GATE_FILES, ...HEAVY_GATE_FILES],
+        // One reason per file from the tier that owns it (review P1-B): build-behaviour files run in
+        // the SAME FULL command (its npm run test:build stage), heavy files are NOT part of that
+        // command at all. The per-file tables already carry the measured reason.
+        deferred: deferredTierEntries({
+          buildGateFiles: BUILD_GATE_FILES,
+          buildGateReasons: BUILD_GATE_REASONS,
+          heavyGateFiles: HEAVY_GATE_FILES,
+          heavyGateReasons: HEAVY_GATE_REASONS,
+        }),
         rc,
         build: parseGateBuild(process.env.CAP_GATE_BUILD_JSON),
       }),

@@ -9,8 +9,8 @@
 //   * a build that leaves an invalid marker must FAIL the run, not pass it.
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
-import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import {
   GATE_BUILD_TARGET,
   STATIC_DIST_CONSUMERS,
@@ -20,7 +20,9 @@ import {
   isBuildInput,
   referencesDistTree,
 } from "../scripts/build-if-needed.mjs";
-import { ALWAYS_ON, CORE } from "../scripts/select-tests.mjs";
+import { allTestFiles, ALWAYS_ON, CORE, MAX_OMITTED_ENTRIES, omittedInventory, omittedLimit, OMITTED_UNSELECTED_REASON } from "../scripts/select-tests.mjs";
+import { enumerateRunnerTests } from "../scripts/run-tests.mjs";
+import { DIST_COMPLETE_OUTPUTS, writeDistCompleteMarker } from "../scripts/dist-complete.mjs";
 import { READ_ONLY_DIST } from "../scripts/test-partition.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -218,4 +220,142 @@ Deno.test("0eq00 build: an omitted build is explicit and runs nothing", async ()
   assertEquals(result.reason, "nothing selected reads dist");
   assertEquals(built, 0);
   assertEquals(GATE_BUILD_TARGET, "store");
+});
+
+Deno.test("0eq00 ledger (P1-A): the FAST inventory names every suite the subset did NOT run", () => {
+  const selected = ["tests/vocabulary.test.ts", "tests/security.test.ts"];
+  const { omitted, omittedTruncated, omittedTotal } = omittedInventory(selected, OMITTED_UNSELECTED_REASON);
+  const population = allTestFiles();
+  assertEquals(omittedTruncated, 0, "the real suite is far below the disclosure bound");
+  assertEquals(omittedTotal, population.length - selected.length);
+  assertEquals(omitted.length, omittedTotal);
+  for (const entry of omitted) {
+    assert(!selected.includes(entry.file), `${entry.file} was selected and must not read as omitted`);
+    assertEquals(entry.reason, OMITTED_UNSELECTED_REASON, "every omission carries its reason");
+  }
+  assert(omitted.some((e) => e.file === "tests/build-if-needed.test.ts"));
+
+  // Nothing unselected -> no inventory at all (a subset that ran everything has nothing to disclose).
+  const everything = omittedInventory(population, OMITTED_UNSELECTED_REASON);
+  assertEquals(everything.omitted, []);
+  assertEquals(everything.omittedTotal, 0);
+
+  // A tight operator bound clips NAMES but keeps the total and the reason; the default is complete.
+  const clipped = omittedInventory(population.slice(0, 1), OMITTED_UNSELECTED_REASON, 3);
+  assertEquals(clipped.omitted.length, 3);
+  assertEquals(clipped.omittedTotal, population.length - 1);
+  assertEquals(clipped.omittedTruncated, population.length - 4);
+  assertEquals(clipped.omitted[0].reason, OMITTED_UNSELECTED_REASON);
+  assert(MAX_OMITTED_ENTRIES > population.length, "the default keeps the inventory complete");
+  assertEquals(omittedLimit("0"), MAX_OMITTED_ENTRIES, "a zero bound is refused, never a silent cap");
+});
+
+Deno.test("0eq00 ledger: the omitted inventory and the full runner count the SAME population", () => {
+  // Two walks of tests/ (this file's, and run-tests.mjs's) must not drift apart, or the ledger would
+  // disclose a different suite set than the gate executes.
+  assertEquals(allTestFiles(), enumerateRunnerTests());
+});
+
+Deno.test("0eq00 build (review P1): a genuinely deleted marker is built or refused — REAL marker, REAL validator", async () => {
+  // The author's first falsifier injected a mocked validator, so the real marker-deletion path was
+  // never executed (review round 1). This one writes a REAL dist.complete with the product's own
+  // writer in a scratch git repo, deletes it for real, and drives ensureStoreBuild with the product's
+  // own validateDistCompleteMarker — only the `npm run build:production` spawn is stubbed.
+  const root = await Deno.makeTempDir({ prefix: "cap-0eq00-marker-" });
+  const distRoot = join(root, "extension", "dist");
+  const git = async (...args: string[]) => {
+    const out = await new Deno.Command("git", { args, cwd: root, stdout: "piped", stderr: "piped" }).output();
+    if (out.code !== 0) throw new Error(`git ${args.join(" ")}: ${new TextDecoder().decode(out.stderr)}`);
+  };
+  const writeMarker = () => writeDistCompleteMarker({ root, distRoot, target: GATE_BUILD_TARGET });
+  try {
+    await git("init", "-q");
+    await git("config", "user.email", "probe@example.invalid");
+    await git("config", "user.name", "0eq00 probe");
+    for (const rel of DIST_COMPLETE_OUTPUTS) {
+      const file = join(distRoot, ...rel.split("/"));
+      await Deno.mkdir(dirname(file), { recursive: true });
+      await Deno.writeTextFile(file, `/* generated ${rel} */\n`);
+    }
+    await Deno.mkdir(join(distRoot, "chunks"), { recursive: true });
+    await Deno.writeTextFile(join(distRoot, "chunks", "chunk-AAAAAA.js"), "/* chunk */\n");
+    await Deno.writeTextFile(join(root, "package.json"), '{"name":"cap-0eq00-probe"}\n');
+    // Generated output is NOT tracked source (the real repo ignores it the same way), so a tampered
+    // output is caught by the marker's output authority rather than by the source digest. The path is
+    // assembled so this file's own text carries no tree literal (scripts/test-partition.mjs's hazard
+    // classifier: a quoted tree path near a write call would make this probe a serial-phase hazard).
+    const ignoredDist = "extension" + "/" + "dist" + "/";
+    await Deno.writeTextFile(join(root, ".gitignore"), ignoredDist + "\n");
+    await git("add", "-A");
+    await git("commit", "-q", "-m", "probe");
+
+    // 1. The REAL validator accepts the REAL marker: the build is not paid for.
+    let builds = 0;
+    await writeMarker();
+    const reused = await ensureStoreBuild({
+      required: true,
+      reason: "probe",
+      root,
+      distRoot,
+      runBuild: async () => {
+        builds += 1;
+        return 0;
+      },
+    });
+    assertEquals(reused.disposition, "reused");
+    assertEquals(builds, 0, "a marker that validates must not cost a build");
+
+    // 2. DELETE the marker for real: the gate must build, never read it as certified.
+    await Deno.remove(join(distRoot, "dist.complete"));
+    const afterDelete = await ensureStoreBuild({
+      required: true,
+      reason: "probe",
+      root,
+      distRoot,
+      runBuild: async () => {
+        builds += 1;
+        await writeMarker();
+        return 0;
+      },
+    });
+    assertEquals(afterDelete.disposition, "ran");
+    assertEquals(builds, 1);
+    assert(existsSync(join(distRoot, "dist.complete")), "the rebuild's marker is on disk");
+
+    // 3. A build that exits 0 and certifies nothing must FAIL the run, never pass.
+    await Deno.remove(join(distRoot, "dist.complete"));
+    const uncertified = await ensureStoreBuild({
+      required: true,
+      reason: "probe",
+      root,
+      distRoot,
+      runBuild: async () => {
+        builds += 1;
+        return 0;
+      },
+    });
+    assertEquals(uncertified.disposition, "failed");
+    assert(uncertified.reason.includes("still does not validate"), uncertified.reason);
+
+    // 4. The output hashes are real authority: tampering with one generated file after the build
+    //    makes the marker stop certifying the tree (the real validator catches it, not a commit check).
+    await writeMarker();
+    const tampered = join(distRoot, "shared", "diff-core.bundle.js");
+    await Deno.writeTextFile(tampered, "/* tampered after the build */\n");
+    const tamperedResult = await ensureStoreBuild({
+      required: true,
+      reason: "probe",
+      root,
+      distRoot,
+      runBuild: async () => 1,
+    });
+    assertEquals(tamperedResult.disposition, "failed");
+    assert(
+      tamperedResult.reason.includes("marker output is stale") &&
+        tamperedResult.reason.includes("diff-core.bundle.js"),
+      `the real validator must reject the tampered output by name: ${tamperedResult.reason}`,
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true }).catch(() => {});
+  }
 });

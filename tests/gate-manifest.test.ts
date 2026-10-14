@@ -8,9 +8,12 @@
 // (coord, 2026-10-14: producer-first sequencing).
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import {
+  BUILD_GATE_DEFERRAL_SUFFIX,
   GATE_MANIFEST_PREFIX,
   GATE_UNKNOWN_PREFIX,
   GATE_UNMAPPED_PREFIX,
+  HEAVY_GATE_DEFERRAL_SUFFIX,
+  deferredTierEntries,
   emitGateLedger,
   formatGateManifest,
   formatGateUnmapped,
@@ -19,6 +22,12 @@ import {
   normalizeSuiteList,
   parseGateBuild,
 } from "../scripts/lib/gate-manifest.mjs";
+import {
+  BUILD_GATE_FILES,
+  BUILD_GATE_REASONS,
+  HEAVY_GATE_FILES,
+  HEAVY_GATE_REASONS,
+} from "../scripts/test-partition.mjs";
 
 // The extractor's own recognizer: `re.match(r"^fast-gate:\s*manifest:\s*(\{.*\})$", line)`.
 const EXTRACTOR_MANIFEST_RE = /^fast-gate:\s*manifest:\s*(\{.*\})$/;
@@ -132,7 +141,10 @@ Deno.test("0eq00 ledger: the full tier is computed from what the runner did (and
     serialFiles: ["tests/serial-a.test.ts"],
     parallelFiles: ["tests/p1.test.ts", "tests/p2.test.ts"],
     skippedFiles: [],
-    deferredFiles: ["tests/build-bootstrap.test.ts", "tests/python-runtime.test.ts"],
+    deferred: [
+      { file: "tests/build-bootstrap.test.ts", reason: "runs the generator in-place — also runs in this FULL command's npm run test:build stage" },
+      { file: "tests/python-runtime.test.ts", reason: "loads Pyodide — NOT part of the FULL gate command; runs only under the separate npm run test:heavy tier" },
+    ],
     rc: 0,
     build: { disposition: "ran", reason: "rebuilt", secs: 95 },
   });
@@ -167,6 +179,74 @@ Deno.test("0eq00 ledger: the full tier is computed from what the runner did (and
 
   // An explicit-file run is an inner-loop tool, not a gate: no record is invented.
   assertEquals(fullTierManifestFields({ rc: 0, cliFiles: ["tests/x.test.ts"] }), null);
+});
+
+Deno.test("0eq00 ledger (P1-B): heavy files are NOT described as part of the FULL command", () => {
+  // The FULL gate command is `build:production && npm test && test:build` — it has NO test:heavy stage.
+  // One shared reason for build-gate and heavy files was a false statement about the heavy ones.
+  const entries = deferredTierEntries({
+    buildGateFiles: BUILD_GATE_FILES,
+    buildGateReasons: BUILD_GATE_REASONS,
+    heavyGateFiles: HEAVY_GATE_FILES,
+    heavyGateReasons: HEAVY_GATE_REASONS,
+  });
+  const byFile = new Map(entries.map((e) => [e.file, e.reason]));
+  assertEquals(entries.length, BUILD_GATE_FILES.length + HEAVY_GATE_FILES.length);
+  // The two wordings must stay DISTINCT and each must name its own tier (a shared sentence is the
+  // exact defect the review found; one text cannot be true for both).
+  assert(BUILD_GATE_DEFERRAL_SUFFIX.includes("test:build"), BUILD_GATE_DEFERRAL_SUFFIX);
+  assert(HEAVY_GATE_DEFERRAL_SUFFIX.includes("test:heavy"), HEAVY_GATE_DEFERRAL_SUFFIX);
+  assert(HEAVY_GATE_DEFERRAL_SUFFIX.includes("NOT part of the FULL gate command"), HEAVY_GATE_DEFERRAL_SUFFIX);
+  assert(!HEAVY_GATE_DEFERRAL_SUFFIX.includes("test:build"), "the heavy tier is not the build-behaviour tier");
+  assert(BUILD_GATE_DEFERRAL_SUFFIX !== HEAVY_GATE_DEFERRAL_SUFFIX);
+  for (const file of BUILD_GATE_FILES) {
+    const reason = byFile.get(file);
+    assert(reason.includes(BUILD_GATE_DEFERRAL_SUFFIX), `${file} runs in the FULL command's test:build stage: ${reason}`);
+  }
+  for (const file of HEAVY_GATE_FILES) {
+    const reason = byFile.get(file);
+    assert(reason.includes(HEAVY_GATE_DEFERRAL_SUFFIX), `${file} must not be described as part of the FULL command: ${reason}`);
+    assert(
+      !reason.includes(BUILD_GATE_DEFERRAL_SUFFIX),
+      `${file} must not claim the build-behaviour stage: ${reason}`,
+    );
+  }
+  // Every entry carries a reason, so the manifest guard cannot reject a real FULL record.
+  const full = fullTierManifestFields({ serialFiles: ["tests/a.test.ts"], rc: 0, deferred: entries });
+  assert(parse(formatGateManifest(full)), "the manifest with real deferrals must be valid");
+});
+
+Deno.test("0eq00 ledger (P1-A): an omission with no reason is refused, and truncation is disclosed", () => {
+  // The executed+omitted-with-reasons contract: "omitted, cause unknown" is a silent skip.
+  assertThrows(
+    () => formatGateManifest({ tier: "fast", executed: 1, executedSuites: ["tests/a.test.ts"], omitted: [{ file: "tests/b.test.ts", reason: "  " }] }),
+    Error,
+    "has no reason",
+  );
+  // A bound may clip names but must never erase the disclosure itself.
+  assertThrows(
+    () => formatGateManifest({ tier: "fast", executed: 1, executedSuites: ["tests/a.test.ts"], omittedTotal: 9, omittedTruncated: 9 }),
+    Error,
+    "silent skip",
+  );
+  const clipped = parse(
+    formatGateManifest({
+      tier: "fast",
+      executed: 1,
+      executedSuites: ["tests/a.test.ts"],
+      omitted: [{ file: "tests/b.test.ts", reason: "unselected: no import path from the changed set" }],
+      omittedTotal: 13,
+      omittedTruncated: 12,
+    }),
+  );
+  assertEquals(clipped.omitted, [{ file: "tests/b.test.ts", reason: "unselected: no import path from the changed set" }]);
+  assertEquals(clipped.omitted_total, 13, "the total survives any clipping");
+  assertEquals(clipped.omitted_truncated, 12, "a clipped list must say how many entries it dropped");
+  const complete = parse(
+    formatGateManifest({ tier: "fast", executed: 1, executedSuites: ["tests/a.test.ts"], omitted: [] }),
+  );
+  assertEquals(complete.omitted_truncated, undefined);
+  assertEquals(complete.omitted_total, undefined);
 });
 
 Deno.test("0eq00 ledger: a parent tier's build disposition crosses the process boundary safely", () => {

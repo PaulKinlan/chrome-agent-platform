@@ -32,6 +32,11 @@ export function normalizeSuiteList(files = []) {
  * nothing: `executed > 0` with no `executed_suites` is exactly the `suites:[]` lie the ledger exists
  * to prevent (chrome-agent-platform-0eq00 falsifier).
  *
+ * Omission disclosure (review P1-A, 2026-10-14): every suite a tier did NOT run must appear in
+ * `omitted` WITH a reason. An entry without a reason is refused, because "omitted, cause unknown" is
+ * the silent skip the ledger exists to prevent. `omittedTruncated` exists only as a bound on a
+ * pathological population and always reports how many entries were dropped.
+ *
  * @param {{
  *   tier: "fast" | "full",
  *   executed: number,
@@ -39,6 +44,8 @@ export function normalizeSuiteList(files = []) {
  *   selected?: string[],
  *   certifiable?: boolean,
  *   omitted?: Array<{ file: string, reason: string }>,
+ *   omittedTotal?: number,
+ *   omittedTruncated?: number,
  *   unmapped?: string[],
  *   build?: { disposition: string, reason: string, secs: number, markerCommit?: string | null } | null,
  * }} fields
@@ -51,6 +58,8 @@ export function formatGateManifest({
   selected = [],
   certifiable = true,
   omitted = [],
+  omittedTotal = 0,
+  omittedTruncated = 0,
   unmapped = [],
   build = null,
 } = {}) {
@@ -85,11 +94,29 @@ export function formatGateManifest({
       marker_commit: build.markerCommit ?? null,
     };
   }
-  const omittedList = omitted.filter((o) => o && o.file);
-  if (omittedList.length) {
-    payload.omitted = omittedList
-      .map((o) => ({ file: String(o.file), reason: String(o.reason ?? "") }))
-      .sort((a, b) => a.file.localeCompare(b.file, "en"));
+  const named = omitted
+    .filter((o) => o && o.file)
+    .map((o) => ({ file: String(o.file), reason: String(o.reason ?? "").trim() }))
+    .sort((a, b) => a.file.localeCompare(b.file, "en"));
+  for (const entry of named) {
+    if (!entry.reason) {
+      throw new Error(
+        `gate manifest: omitted suite ${entry.file} has no reason; an undisclosed omission is the ` +
+          `silent skip this ledger exists to prevent`,
+      );
+    }
+  }
+  const total = Math.max(Number(omittedTotal) || 0, named.length + Math.max(0, Number(omittedTruncated) || 0));
+  if (total > 0 && named.length === 0) {
+    // A bound must never be allowed to erase the disclosure itself.
+    throw new Error(
+      `gate manifest: ${total} omitted suite(s) with no named entry and no reason would be a silent skip`,
+    );
+  }
+  if (named.length) payload.omitted = named;
+  if (total > 0) payload.omitted_total = total;
+  if (Number.isInteger(omittedTruncated) && omittedTruncated > 0) {
+    payload.omitted_truncated = omittedTruncated;
   }
   const unmappedList = normalizeSuiteList(unmapped);
   if (unmappedList.length) payload.unmapped = unmappedList;
@@ -119,6 +146,40 @@ export function parseGateBuild(raw) {
 }
 
 /**
+ * How a deferred suite's reason is worded, per tier (review P1-B, 2026-10-14). These are separate on
+ * purpose: a build-behaviour file DOES run in the same
+ * FULL command (its `npm run test:build` stage), while a heavy file is NOT part of the FULL gate
+ * command at all. One shared sentence covering both was a false statement about the heavy files.
+ */
+export const BUILD_GATE_DEFERRAL_SUFFIX =
+  "also runs in this FULL command's npm run test:build stage";
+export const HEAVY_GATE_DEFERRAL_SUFFIX =
+  "NOT part of the FULL gate command; runs only under the separate npm run test:heavy tier";
+
+/**
+ * `[{file, reason}]` for every suite deferred to another tier, built from that tier's own reason table
+ * (scripts/test-partition.mjs) so the ledger never invents a cause.
+ */
+export function deferredTierEntries({
+  buildGateFiles = [],
+  buildGateReasons = {},
+  heavyGateFiles = [],
+  heavyGateReasons = {},
+} = {}) {
+  const entries = [
+    ...buildGateFiles.map((file) => ({
+      file,
+      reason: `${buildGateReasons[file] ?? "deferred to the build-behaviour tier"} — ${BUILD_GATE_DEFERRAL_SUFFIX}`,
+    })),
+    ...heavyGateFiles.map((file) => ({
+      file,
+      reason: `${heavyGateReasons[file] ?? "deferred to the heavy tier"} — ${HEAVY_GATE_DEFERRAL_SUFFIX}`,
+    })),
+  ];
+  return entries.sort((a, b) => a.file.localeCompare(b.file, "en"));
+}
+
+/**
  * The FULL tier's manifest fields, computed from what the runner actually did (chrome-agent-platform-
  * 0eq00). Pure so the arithmetic and the disclosure of DEFERRED files are unit-tested: the full suite
  * is the merger's gate, so an implementer can never exercise this path by running it.
@@ -126,9 +187,15 @@ export function parseGateBuild(raw) {
  * `rc !== 0` reports `executed: 0` with `certifiable: false` rather than naming suites whose result the
  * run cannot certify — the consumer reads `certifiable: false` as PARTIAL coverage, never KNOWN.
  *
+ * `deferred` carries ONE reason per file from the tier that owns it (review P1-B): a build-behaviour
+ * file runs later in the SAME FULL command (`test:build`), while a heavy file is NOT part of that
+ * command at all (`test:heavy` is a separate tier) — one shared wording for both would be a false
+ * statement about the heavy files.
+ *
  * @param {{
  *   serialFiles?: string[], parallelFiles?: string[], skippedFiles?: string[],
- *   deferredFiles?: string[], rc: number, cliFiles?: string[], build?: object | null,
+ *   deferred?: Array<{ file: string, reason: string }>, rc: number, cliFiles?: string[],
+ *   build?: object | null,
  * }} args
  * @returns {object | null} null when this was not the default `npm test` form (no gate record)
  */
@@ -136,13 +203,17 @@ export function fullTierManifestFields({
   serialFiles = [],
   parallelFiles = [],
   skippedFiles = [],
-  deferredFiles = [],
+  deferred = [],
   rc,
   cliFiles = [],
   build = null,
 } = {}) {
   if (cliFiles.length > 0) return null;
   const executedSuites = [...serialFiles, ...parallelFiles];
+  const omitted = [
+    ...deferred.map((entry) => ({ file: entry.file, reason: entry.reason })),
+    ...skippedFiles.map((file) => ({ file, reason: "skipped in this run: the serial phase failed" })),
+  ];
   return {
     tier: "full",
     executed: rc === 0 ? executedSuites.length : 0,
@@ -150,13 +221,8 @@ export function fullTierManifestFields({
     selected: executedSuites,
     certifiable: rc === 0,
     build,
-    omitted: [
-      ...deferredFiles.map((file) => ({
-        file,
-        reason: "deferred to another tier of the FULL command (npm run test:build / npm run test:heavy)",
-      })),
-      ...skippedFiles.map((file) => ({ file, reason: "skipped in this run: the serial phase failed" })),
-    ],
+    omitted,
+    omittedTotal: omitted.length,
   };
 }
 
