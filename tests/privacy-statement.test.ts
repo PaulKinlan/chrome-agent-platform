@@ -111,7 +111,7 @@ Deno.test("sent list: names every outbound provider host, the local-only presets
   for (const h of SKILL_IMPORT_HOSTS) assert(text.includes(h), `sent list names the skill-import host ${h}`);
   const skillImport = await read("extension/lib/skill-import.js");
   for (const h of SKILL_IMPORT_HOSTS) assert(skillImport.includes(`https://${h}/`), `skill-import.js really fetches ${h}`);
-  assert(/on this computer/.test(text), "the local presets (Ollama, LM Studio, Chrome's built-in model) are stated to stay local");
+  assert(/Ollama and LM Studio run on this computer/.test(text) && !/built-in model/i.test(text), "the local presets (Ollama and LM Studio) are stated to stay local without listing Chrome's built-in model");
   assert(/approved/.test(text) && /cookies/.test(text), "the script fetch line states the approval gate and that no cookies are sent");
   assert(statement.sent.some((row) => /no analytics|nothing else leaves/i.test(row.text)), "the statement says nothing else leaves the computer");
 });

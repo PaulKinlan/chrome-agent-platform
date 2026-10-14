@@ -19,9 +19,8 @@ const ntpJs = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.
 
 // ── Part A: Local keyless provider onboarding readiness ───────────────────
 Deno.test("d885.6 Part A: providerReadyForFirstTask allows configured ollama and lm-studio", () => {
-  // Demo and prompt-api are never ready for first task.
+  // Demo is never ready for first task.
   assertEquals(providerReadyForFirstTask({ provider: "demo" }), false);
-  assertEquals(providerReadyForFirstTask({ provider: "prompt-api" }), false);
 
   // Unconfigured ollama / lm-studio is false.
   assertEquals(providerReadyForFirstTask({ provider: "ollama" }), false);

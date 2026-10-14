@@ -60,7 +60,7 @@ Deno.test("rebuild never mutates the agent-do default rows (no aliasing)", () =>
 Deno.test("MANUAL_ROWS survive a refresh when no source lists them", () => {
   const table = rebuildPricingTable({ sourceRows: [], defaultPricing: {}, existing: {} });
   assertEquals(table["claude-opus-5"], { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 });
-  assert(table["gemini-nano"]?.input === 0, "free on-device rows must stay zero-cost");
+  assert(table["demo-local"]?.input === 0, "free demo rows must stay zero-cost");
 });
 
 Deno.test("the rendered module serializes carried cache fields", () => {

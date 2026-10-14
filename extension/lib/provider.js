@@ -6,9 +6,8 @@
 //      Every advertised OpenAI-compatible provider (OpenAI, Anthropic, Gemini,
 //      DeepSeek, Ollama) goes through the SAME compatible adapter with ITS OWN
 //      endpoint — none silently falls back to a different model.
-//   2. Chrome's built-in Prompt API (Gemini nano) — on-device, no key.
-//   3. Demo local model — a deterministic, clearly-labelled fallback so the
-//      agent loop always runs end-to-end with zero configuration.
+//   2. Local assistant / Demo local model — a deterministic, clearly-labelled
+//      fallback so the agent loop always runs end-to-end with zero configuration.
 //
 // There is NO hardcoded provider key and NO fake default — a Chrome extension
 // cannot call a paid provider without the user's key, and this file never ships
@@ -24,15 +23,15 @@ import {
   createAnthropicNativeModel,
   isDefaultAnthropicEndpoint,
 } from "./models/anthropic-native-model.js";
-import {
-  createPromptApiModel,
-  isPromptApiAvailable,
-} from "./models/prompt-api-model.js";
 import { createDemoModel } from "./models/demo-model.js";
 import { createLocalAssistant, LOCAL_ASSISTANT_MODEL_ID } from "./models/local-assistant.js";
 import { defaultModelFor } from "./model-catalog.js";
 import { kvGet, kvSet } from "./kv.js";
 import { DEVELOPER_FEATURES_KEY } from "./pure.js";
+import {
+  isRemovedProviderId,
+  migrateLegacyProviderConfig,
+} from "./provider-visibility.js";
 import {
   DEFAULTS,
   PROVIDER_CHOICES,
@@ -59,16 +58,30 @@ export {
 
 export async function getProviderConfig() {
   const stored = await kvGet("providerConfig");
-  return { ...DEFAULTS, ...(stored.providerConfig ?? {}) };
+  const raw = stored.providerConfig ?? {};
+  const merged = { ...DEFAULTS, ...raw };
+  if (isRemovedProviderId(raw.provider)) {
+    const migrated = migrateLegacyProviderConfig(merged);
+    await kvSet({ providerConfig: migrated });
+    return migrated;
+  }
+  return migrateLegacyProviderConfig(merged);
 }
 
 export async function setProviderConfig(partial) {
   const cur = await getProviderConfig();
-  const next = { ...cur, ...partial };
+  const incomingRemoved = isRemovedProviderId(partial?.provider);
+  const next = incomingRemoved
+    ? migrateLegacyProviderConfig({ ...cur, ...partial })
+    : { ...cur, ...partial };
+  if (!incomingRemoved && partial?.provider && !partial?.migratedFrom) {
+    delete next.migratedFrom;
+    delete next.notice;
+  }
   // A provider SWITCH that omits the base URL must not inherit the previous
   // provider's endpoint (an OpenAI save after a BYO save would otherwise run
   // OpenAI's key against the BYO URL).
-  if (partial?.provider && partial.provider !== cur.provider && partial.baseURL === undefined) {
+  if (partial?.provider && next.provider !== cur.provider && partial.baseURL === undefined) {
     next.baseURL = "";
   }
   // Store the EFFECTIVE base URL: a preset provider saved without one gets the
@@ -86,16 +99,17 @@ export async function setProviderConfig(partial) {
  * { model, modelId, providerName }. */
 
 export async function resolveModelFromConfig(cfg) {
-  const id = cfg.provider;
+  const normalized = migrateLegacyProviderConfig(cfg ?? {});
+  const id = normalized.provider;
 
   if (OPENAI_COMPATIBLE_IDS.has(id)) {
-    const baseURL = effectiveBaseURL(cfg);
-    const apiKey = cfg.apiKey ?? "";
+    const baseURL = effectiveBaseURL(normalized);
+    const apiKey = normalized.apiKey ?? "";
     // An EMPTY model id resolves to the provider's catalogue default (the
     // recommended, verified-callable id) instead of silently running the demo
     // model — providers without a catalogue (BYO endpoint, Ollama, LM Studio)
     // still need an explicit id (CAP-FB-20260830-MODEL-CATALOG-CURRENT-01).
-    const explicitModel = String(cfg.model ?? "").trim();
+    const explicitModel = String(normalized.model ?? "").trim();
     const model = explicitModel || defaultModelFor(id);
     const usingDefaultModel = !explicitModel && Boolean(model);
     const needsKey = PROVIDER_CHOICES.find((p) => p.id === id)?.needsKey ??
@@ -116,7 +130,7 @@ export async function resolveModelFromConfig(cfg) {
     // (same credential + middleware). A CUSTOM base URL is a BYO/proxy
     // endpoint and stays on the compatible adapter — provider server tools
     // then honestly report owner-action-required.
-    if (id === "gemini" && isDefaultGeminiEndpoint(cfg.baseURL)) {
+    if (id === "gemini" && isDefaultGeminiEndpoint(normalized.baseURL)) {
       const canonicalModel = normaliseGeminiNativeModelId(model);
       const m = createGeminiNativeModel({ apiKey, model: canonicalModel });
       return {
@@ -133,7 +147,7 @@ export async function resolveModelFromConfig(cfg) {
     // Messages API (same credential + middleware). A CUSTOM base URL is a
     // BYO/proxy endpoint and stays on the compatible adapter — provider
     // server tools then honestly report owner-action-required.
-    if (id === "anthropic" && isDefaultAnthropicEndpoint(cfg.baseURL)) {
+    if (id === "anthropic" && isDefaultAnthropicEndpoint(normalized.baseURL)) {
       const m = createAnthropicNativeModel({ apiKey, model });
       return {
         model: m,
@@ -147,33 +161,14 @@ export async function resolveModelFromConfig(cfg) {
     return { model: m, modelId: model, providerName: id, providerLane: "openai-compatible", usingDefaultModel };
   }
 
-  if (id === "prompt-api") {
-    if (await isPromptApiAvailable()) {
-      try {
-        const model = createPromptApiModel();
-        return {
-          model,
-          modelId: "gemini-nano",
-          providerName: "chrome-prompt-api",
-        };
-      } catch {
-        // fall through to demo
-      }
-    }
-    return {
-      model: createDemoModel(),
-      modelId: "demo-local",
-      providerName: "demo (prompt api unavailable)",
-    };
-  }
-
   // default: no provider configured. A fresh profile runs the LOCAL ASSISTANT
   // (deterministic tab skills through the real tool protocol — a real first
   // result with no key, CAP-FB-20260830-KEYLESS-FIRST-RESULT-01). The marker
   // demo model — the journey suite's test seam — is reachable ONLY under the
-  // developer flag, so its "[demo model] Task received (N chars)" plumbing
-  // proof can never be the first thing a new user reads.
-  if (await developerFeaturesOn()) {
+  // developer flag (or when migrating a legacy removed provider config to demo),
+  // so its "[demo model] Task received (N chars)" plumbing proof can never be
+  // the first thing a new user reads.
+  if (isRemovedProviderId(cfg?.provider) || isRemovedProviderId(cfg?.migratedFrom) || await developerFeaturesOn()) {
     return {
       model: createDemoModel(),
       modelId: "demo-local",

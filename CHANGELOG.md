@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.679] — 2026-10-14
+- Remove the retired Chrome Prompt API provider option from Settings and automatically switch any saved Prompt API configuration to the local demo model.
+
 ## [0.3.678] — 2026-10-12
 - Double-iframe HTML artifact embeds now safely proxy user-gesture clipboard writes (navigator.clipboard.writeText and document.execCommand) and external window.open / link navigation through the sandbox host without Permissions Policy violations.
 

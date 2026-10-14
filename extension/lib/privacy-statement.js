@@ -104,7 +104,7 @@ export function buildPrivacyStatement({ outboundHosts = [], retentionPolicy = nu
     },
     {
       id: "local-models",
-      description: "Ollama, LM Studio and Chrome's built-in model run on this computer. With one of those chosen, nothing leaves it.",
+      description: "Ollama and LM Studio run on this computer. With one of those chosen, nothing leaves it.",
     },
     {
       id: "model-list",

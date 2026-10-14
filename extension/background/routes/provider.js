@@ -5,7 +5,11 @@ import {
   PROVIDER_CHOICES,
   setProviderConfig,
 } from "../../lib/provider.js";
-import { publicProviderChoices } from "../../lib/provider-visibility.js";
+import {
+  isRemovedProviderId,
+  migrateLegacyProviderConfig,
+  publicProviderChoices,
+} from "../../lib/provider-visibility.js";
 import { keyedProviderConfigured } from "../../lib/first-run-onboarding.js";
 import {
   isLocalProvider,
@@ -122,8 +126,11 @@ export function createProviderRoutes({ invalidateAgent = () => {}, harnessConfig
       // provider), the stored key is preserved INSIDE the SW; an explicit ""
       // from the dedicated clear-key route is the only removal path. The route
       // returns the REDACTED config — the raw key never crosses back out.
-      const cfg = m?.config ?? {};
-      // Local providers (demo / prompt-api) need no model id — never gate them.
+      const rawCfg = m?.config ?? {};
+      const cfg = isRemovedProviderId(rawCfg.provider)
+        ? migrateLegacyProviderConfig(rawCfg)
+        : { ...rawCfg };
+      // Local providers (demo) need no model id — never gate them.
       const isLocal = isLocalProvider(cfg);
       const choice = PROVIDER_CHOICES.find((p) => p.id === cfg.provider) ?? null;
       // An id the product does not know can never resolve a model, a preset

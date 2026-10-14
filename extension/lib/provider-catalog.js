@@ -5,7 +5,7 @@
 // without pulling in the heavy AI SDK model layer (ai, @ai-sdk/*, zod, demo-model).
 
 export const DEFAULTS = {
-  // "demo" | "openai" | "anthropic" | "gemini" | "deepseek" | "ollama" | "prompt-api"
+  // "demo" | "openai" | "openai-compatible" | "anthropic" | "gemini" | "deepseek" | "ollama" | "lm-studio"
   provider: "demo",
   baseURL: "",
   apiKey: "",
@@ -14,7 +14,7 @@ export const DEFAULTS = {
 
 /** Complete runtime/test provider authority. User-facing lists derive a
  * public-only view via provider-visibility.js; do not delete internal choices
- * here or stored Demo/Prompt API selections would stop resolving. */
+ * here or stored Demo selections would stop resolving. */
 export const PROVIDER_CHOICES = [
   { id: "demo", label: "Demo (no key — deterministic local)" },
   {
@@ -73,12 +73,6 @@ export const PROVIDER_CHOICES = [
     needsKey: false,
     baseURL: "http://localhost:1234/v1",
     needsModel: true,
-  },
-  {
-    id: "prompt-api",
-    label: "Chrome Prompt API (Gemini nano, on-device)",
-    needsKey: false,
-    needsModel: false,
   },
 ];
 

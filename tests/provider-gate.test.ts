@@ -21,6 +21,10 @@ import {
   logGateOnce,
   resetGateLog,
 } from "../extension/lib/provider-gate.js";
+import {
+  REMOVED_PROMPT_API_NOTICE,
+  providerSelectionPresentation,
+} from "../extension/lib/provider-visibility.js";
 
 // ---- providerOriginPattern ----
 // ── fresh-module isolation (no production reset hook) ───────────────────────
@@ -86,10 +90,9 @@ Deno.test("a model-missing refusal is NOT a provider error (no retry scheduling)
   assertEquals(r.tripped, false);
 });
 
-// ---- local providers (demo + Prompt API) are never gated ----
-Deno.test("isLocalProvider identifies the demo + Prompt API (no host permission)", () => {
+// ---- local providers (demo) are never gated ----
+Deno.test("isLocalProvider identifies the demo provider (no host permission)", () => {
   assert(isLocalProvider({ provider: "demo", baseURL: "" }));
-  assert(isLocalProvider({ provider: "prompt-api" }));
   assert(!isLocalProvider({ provider: "gemini", baseURL: "https://generativelanguage.googleapis.com/v1beta/openai" }));
   assert(!isLocalProvider({ provider: "openai", baseURL: "https://api.openai.com/v1" }));
   assert(!isLocalProvider({}));
@@ -648,21 +651,35 @@ Deno.test("kv.get (real dispatcher): secret namespaces redacted on read-all AND 
     "provider.models returns the exact public provider list",
   );
   assert(
-    !publicModels?.choices?.some((choice) => choice.id === "demo" || choice.id === "prompt-api"),
+    !publicModels?.choices?.some((choice) => choice.id === "demo"),
     "provider.models leaked an internal provider",
   );
   const demoAfterModels = await dispatch({ type: "provider.get" }, ownerSender);
   assertEquals(demoAfterModels?.provider, "demo", "reading the public list migrated the stored Demo selection");
 
+  // Stored or incoming legacy "prompt-api" config migrates cleanly to "demo"
+  // (model "gemini-nano" -> "demo-local") and surfaces the removal notice.
+  await dispatch({
+    type: "kv.set",
+    values: { providerConfig: { provider: "prompt-api", baseURL: "", apiKey: "", model: "gemini-nano" } },
+  }, ownerSender);
+  const migratedGet = await dispatch({ type: "provider.get" }, ownerSender);
+  assertEquals(migratedGet?.provider, "demo", "stored prompt-api config migrates to demo");
+  assertEquals(migratedGet?.model, "demo-local", "stored gemini-nano model migrates to demo-local");
+  assertEquals(migratedGet?.migratedFrom, "prompt-api", "migrated config records migratedFrom");
+  assertEquals(migratedGet?.notice, REMOVED_PROMPT_API_NOTICE, "migrated config surfaces the removal notice");
+  const migratedPresentation = providerSelectionPresentation(migratedGet, publicModels?.choices ?? []);
+  assertEquals(migratedPresentation.provider, "demo");
+  assertEquals(migratedPresentation.hiddenInternal, true);
+  assertEquals(migratedPresentation.message, REMOVED_PROMPT_API_NOTICE);
+
   const promptSet = await dispatch({ type: "provider.set", config: { provider: "prompt-api", baseURL: "", apiKey: "", model: "gemini-nano" } }, ownerSender);
-  assertEquals(promptSet?.provider, "prompt-api", "Prompt API remains accepted as internal authority");
-  await dispatch({ type: "provider.models" }, ownerSender);
-  const promptAfterModels = await dispatch({ type: "provider.get" }, ownerSender);
-  assertEquals(promptAfterModels?.provider, "prompt-api", "reading the public list migrated the stored Prompt API selection");
+  assertEquals(promptSet?.provider, "demo", "provider.set migrates prompt-api to demo");
+  assertEquals(promptSet?.model, "demo-local", "provider.set migrates gemini-nano to demo-local");
+  assertEquals(promptSet?.notice, REMOVED_PROMPT_API_NOTICE, "provider.set returns the removal notice");
 
   const legacyNamed = {
     demoProbe: { id: "demoProbe", name: "Demo probe", provider: { provider: "demo", baseURL: "", model: "demo-local" } },
-    promptProbe: { id: "promptProbe", name: "Prompt probe", provider: { provider: "prompt-api", baseURL: "", model: "gemini-nano" } },
   };
   await dispatch({ type: "kv.set", values: { "cap:namedAgents": legacyNamed } }, ownerSender);
   const namedBeforeModels = await dispatch({ type: "kv.get", keys: ["cap:namedAgents"] }, ownerSender);

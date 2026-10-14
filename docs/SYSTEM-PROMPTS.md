@@ -189,11 +189,8 @@ for every run type:
   protected layer), so the composition covers exactly the platform text the
   model receives.
 
-The Chrome Prompt API adapter binds at its true final boundary too: each call
-creates a session whose immutable `systemPrompt` is the exact AI-SDK system
-message, while the non-system transcript preserves message roles for both
-`doGenerate` and `doStream`. The demo model's streaming (`doStream`) boundary
-is covered explicitly, not inferred from the non-streaming method.
+The demo model's streaming (`doStream`) boundary is covered explicitly, not
+inferred from the non-streaming method.
 
 `prompt.set` / `prompt.reset` / `prompt.keep` invalidate the cached
 orchestrator so the NEXT run picks up the new composition immediately.
@@ -280,9 +277,7 @@ credential-shape string in a store reaches the prompt only as `[REDACTED]`.
   keep/reset), UTF-8 byte bounds + malformed-Unicode sanitize/reject contracts,
   FIPS/RFC SHA-256/HMAC known-answer vectors, versioned key rotation, and the
   run-bound attestation through the real agent core (streaming demo, hub,
-  delegated site-worker, and scoped/hook shapes). `tests/prompt-api.test.ts`
-  covers exact final-boundary session/transcript binding for generation and
-  streaming.
+  delegated site-worker, and scoped/hook shapes).
 - `scripts/system-prompts-integration.ts` — the real-extension journey: the
   built extension in headless Chrome, driving the Settings → Advanced UI with
   REAL pointer/keyboard input (CDP mouse clicks + trusted text insertion), the

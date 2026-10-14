@@ -1,8 +1,7 @@
 // lib/model-prices.js — bundled model pricing (per 1M tokens, USD).
 //
 // Source: https://www.llm-prices.com/current-v1.json (model id -> {input, output}
-// per-1M-token USD). Plus zero-cost entries for the on-device models
-// (gemini-nano / the Chrome Prompt API).
+// per-1M-token USD). Plus zero-cost entries for the built-in demo provider.
 //
 // Rows may add cacheRead/cacheWrite (per-1M USD) where a published source was
 // verified — additive documentation-in-data; agent-do's cost math reads only
@@ -19,7 +18,6 @@ export const MODEL_PRICING = {
   "amazon-nova-premier": { input: 2.5, output: 12.5 },
   "amazon-nova-pro": { input: 0.8, output: 3.2 },
   "chatgpt-4o-latest": { input: 5, output: 15 },
-  "chrome-prompt-api": { input: 0, output: 0 },
   "claude-3-5-haiku": { input: 0.8, output: 4 },
   "claude-3-5-sonnet": { input: 3, output: 15 },
   "claude-3-haiku": { input: 0.25, output: 1.25 },
@@ -92,8 +90,6 @@ export const MODEL_PRICING = {
   // Provider alias for the current Flash — resolves to gemini-3.8-flash as of
   // 2026-09-02 (Google pricing page); re-verify when the alias rolls forward.
   "gemini-flash-latest": { input: 0.75, output: 3.75, cacheRead: 0.075 },
-  "gemini-nano": { input: 0, output: 0 },
-  "gemini-nano-prompt-api": { input: 0, output: 0 },
   "gemma-4-e4b-it-qat-q4_0": { input: 0, output: 0 },
   "gemma-4-26b-a4b-it-qat-q4_0": { input: 0, output: 0 },
   "gemma2": { input: 0, output: 0 },
@@ -220,7 +216,6 @@ export const MODEL_PRICING = {
   "phi3": { input: 0, output: 0 },
   "pixtral-12b": { input: 0.15, output: 0.15 },
   "pixtral-large-latest": { input: 2, output: 6 },
-  "prompt-api": { input: 0, output: 0 },
   "qwen2.5": { input: 0, output: 0 },
   "qwen3-32b": { input: 0.29, output: 0.59 },
   "qwen3.6-plus": { input: 0.5, output: 3 },
@@ -296,9 +291,9 @@ export function modelsForVendor(vendor) {
     // lane, CAP-FB-20260830-MODEL-CATALOG-CURRENT-01). The rows stay in
     // MODEL_PRICING for pricing old usage.
     .filter((id) => !isPricingTierId(id) && !isRetiredModelId(id))
-    // On-device ids (the Prompt API's gemini-nano family) are NOT cloud models
-    // — they never resolve through the OpenAI-compatible endpoint, so the
-    // pickers must not offer them (the k3 review's catalogue finding).
+    // On-device nano ids are NOT cloud models — they never resolve through the
+    // OpenAI-compatible endpoint, so the pickers must not offer them (the k3
+    // review's catalogue finding).
     .filter((id) => !id.includes("nano") && !id.includes("prompt-api"))
     .filter((id) => !id.includes("image"))
     .sort(sortNewestFirst);

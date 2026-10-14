@@ -1,10 +1,17 @@
 // tests/provider-public-list.test.ts — public provider visibility + migration safety.
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
-import { PROVIDER_CHOICES } from "../extension/lib/provider.js";
+import { PROVIDER_CHOICES, resolveModelFromConfig } from "../extension/lib/provider.js";
+import {
+  normalizeAgentProvider,
+  redactAgentProvider,
+} from "../extension/lib/named-agents.js";
 import {
   INTERNAL_PROVIDER_ACTIVE_MESSAGE,
   INTERNAL_PROVIDER_IDS,
+  REMOVED_PROMPT_API_ID,
+  REMOVED_PROMPT_API_NOTICE,
+  migrateLegacyProviderConfig,
   providerSelectionPresentation,
   publicProviderChoices,
   renderInternalProviderStatus,
@@ -44,7 +51,7 @@ Deno.test("provider public list: filters internal choices without changing runti
 Deno.test("provider options: the settings picker source never offers an internal provider", async () => {
   // Structured extraction, not a substring scan (test-honesty rule 2): slice
   // the PROVIDERS array literal out of options.js and read the ids actually
-  // declared inside it, so a demo/prompt-api card added back into the picker
+  // declared inside it, so a demo card added back into the picker
   // fails this test by construction. The exclusion lives by ABSENCE from this
   // array (Paul 2026-08-17 note in options.js) — this pin is what makes the
   // absence a guarded property instead of an accident.
@@ -95,7 +102,7 @@ for (const provider of INTERNAL_PROVIDER_IDS) {
     const config = Object.freeze({
       provider,
       baseURL: "",
-      model: provider === "prompt-api" ? "gemini-nano" : "",
+      model: "",
     });
     const before = JSON.stringify(config);
     const state = providerSelectionPresentation(
@@ -127,7 +134,7 @@ for (const provider of INTERNAL_PROVIDER_IDS) {
     const override = Object.freeze({
       provider,
       baseURL: "",
-      model: provider === "prompt-api" ? "gemini-nano" : "demo-local",
+      model: "demo-local",
       hasApiKey: false,
     });
     const before = JSON.stringify(override);
@@ -148,6 +155,54 @@ for (const provider of INTERNAL_PROVIDER_IDS) {
     );
   });
 }
+
+Deno.test("provider migration: stored global and per-agent prompt-api configs migrate to demo and surface the notice", async () => {
+  assert(
+    !PROVIDER_CHOICES.some((choice) => choice.id === REMOVED_PROMPT_API_ID),
+    "prompt-api must not remain in PROVIDER_CHOICES",
+  );
+  const legacyGlobal = Object.freeze({
+    provider: REMOVED_PROMPT_API_ID,
+    baseURL: "",
+    model: "gemini-nano",
+  });
+  const migratedGlobal = migrateLegacyProviderConfig(legacyGlobal);
+  assertEquals(migratedGlobal.provider, "demo");
+  assertEquals(migratedGlobal.model, "demo-local");
+  assertEquals(migratedGlobal.migratedFrom, REMOVED_PROMPT_API_ID);
+  assertEquals(migratedGlobal.notice, REMOVED_PROMPT_API_NOTICE);
+
+  const state = providerSelectionPresentation(
+    migratedGlobal,
+    publicProviderChoices(PROVIDER_CHOICES),
+  );
+  assertEquals(state.provider, "demo");
+  assertEquals(state.hiddenInternal, true);
+  assertEquals(state.selectValue, "");
+  assertEquals(state.message, REMOVED_PROMPT_API_NOTICE);
+  const target = { hidden: true, textContent: "stale" };
+  renderInternalProviderStatus(target, state);
+  assertEquals(target, {
+    hidden: false,
+    textContent: REMOVED_PROMPT_API_NOTICE,
+  });
+
+  const normalizedAgent = normalizeAgentProvider(legacyGlobal);
+  assertEquals(normalizedAgent?.provider, "demo");
+  assertEquals(normalizedAgent?.model, "demo-local");
+  assertEquals(normalizedAgent?.migratedFrom, REMOVED_PROMPT_API_ID);
+  assertEquals(normalizedAgent?.notice, REMOVED_PROMPT_API_NOTICE);
+
+  const redactedAgent = redactAgentProvider(legacyGlobal);
+  assertEquals(redactedAgent?.provider, "demo");
+  assertEquals(redactedAgent?.model, "demo-local");
+  assertEquals(redactedAgent?.migratedFrom, REMOVED_PROMPT_API_ID);
+  assertEquals(redactedAgent?.notice, REMOVED_PROMPT_API_NOTICE);
+
+  const resolved = await resolveModelFromConfig(legacyGlobal);
+  assertEquals(resolved.providerName, "demo");
+  assertEquals(resolved.modelId, "demo-local");
+});
 
 Deno.test("provider options: listed providers remain selected and clear the internal-only status", () => {
   const state = providerSelectionPresentation(

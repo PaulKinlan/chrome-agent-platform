@@ -9300,23 +9300,15 @@ const handlers = mergeRouteMaps(
   },
   async "named-agent.refine"({ id, role }) {
     // Improve the agent's role/system prompt (the owner's intent) into a clearer,
-    // more effective instruction, using the Prompt API (on-device, free) when
-    // available, else the configured provider. Never writes — returns the refined
-    // text for the dialog to preview + the owner to accept.
+    // more effective instruction using the configured provider. Never writes —
+    // returns the refined text for the dialog to preview + the owner to accept.
     const raw = String(role ?? "").trim();
     if (!raw) return { ok: false, error: "nothing to refine — describe what the agent does first" };
     let refined = null;
     try {
-      const promptApi = await resolveModelFromConfig({ provider: "prompt-api", baseURL: "", apiKey: "", model: "gemini-nano" });
-      let model;
-      let isDemo = false;
-      if (promptApi?.modelId === "gemini-nano") {
-        model = promptApi.model;
-      } else {
-        const resolved = await getModel();
-        model = resolved.model;
-        isDemo = resolved.modelId === "demo-local";
-      }
+      const resolved = await getModel();
+      const model = resolved.model;
+      const isDemo = resolved.modelId === "demo-local";
       if (!isDemo) {
         const r = await generateText({
           model,

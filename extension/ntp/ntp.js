@@ -5227,7 +5227,6 @@ const PROVIDER_LABELS = {
   "openai-compatible": "OpenAI-compatible",
   ollama: "Ollama",
   "lm-studio": "LM Studio",
-  "prompt-api": "Chrome Prompt API",
   demo: "Demo",
 };
 async function renderProviderStatus() {

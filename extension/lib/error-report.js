@@ -118,7 +118,6 @@ const PROVIDER_LABEL = {
   "openai-compatible": "the provider",
   ollama: "Ollama",
   lmstudio: "LM Studio",
-  "prompt-api": "the Prompt API",
   demo: "the demo provider",
 };
 /** Mask bare credential SHAPES a provider echoes into its error text

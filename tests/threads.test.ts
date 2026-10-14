@@ -137,8 +137,7 @@ Deno.test("historyFromThread maps messages to agent-do turn shape", async () => 
   ]);
 });
 
-Deno.test("generateThreadName falls back to the first line without the Prompt API", async () => {
-  // No LanguageModel / ai in Deno → isPromptApiAvailable() returns false → fallback.
+Deno.test("generateThreadName derives the title from the first line of the prompt", async () => {
   const name = await generateThreadName("Group my tabs by domain\nand colour-code them");
   assertEquals(name, "Group my tabs by domain", "first line is the fallback title");
 });

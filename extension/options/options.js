@@ -150,12 +150,10 @@ async function wireRunRetentionSettings() {
 }
 
 // ── Provider presets (the user picks one; OpenAI-compatible endpoints) ──
-// NOTE: the "demo" + "prompt-api" providers are deliberately NOT in this
-// picker (Paul 2026-08-17). The Chrome Prompt API (Gemini nano) is only for
-// INTERNAL summarization/auto-naming (see lib/threads.js — it calls
-// createPromptApiModel() directly, not the user's selected provider), and the
-// Demo (local) provider is TESTING-only. Both remain resolvable in lib/provider.js
-// for those internal/test paths, but the user picks only a real chat provider.
+// NOTE: the "demo" provider is deliberately NOT in this picker (Paul
+// 2026-08-17): Demo (local) is TESTING-only. It remains resolvable in
+// lib/provider.js for internal/test paths, while the user picks only a real
+// chat provider.
 const PROVIDERS = [
   {
     id: "openai",

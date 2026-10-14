@@ -109,7 +109,7 @@ export function prefilledModelFor(provider, cfg) {
 /** Whether the "Use" button is ENABLED. The four-click flow requires a passing
  * Test for the CURRENT key+model before Use commits — so a fresh card (no test
  * yet) has Use disabled, and editing the key or model resets that. Two exemptions
- * keep the panel usable: a keyless provider (demo / Prompt API / a local server)
+ * keep the panel usable: a keyless provider (demo / a local server)
  * needs no key test, and the CURRENTLY-ACTIVE default is already running, so its
  * "Update" stays available for a small edit. */
 export function useEnabled({ testPassed = false, isActive = false, needsKey = true } = {}) {

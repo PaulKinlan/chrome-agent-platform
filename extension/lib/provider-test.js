@@ -3,7 +3,6 @@
 // A minimal, real round-trip per provider so the user can confirm their key +
 // model id actually work before relying on them:
 //   - demo             → always succeeds (deterministic local model).
-//   - prompt-api       → probes the on-device Chrome Prompt API session.
 //   - openai-compatible→ a tiny `/chat/completions` call to the configured base URL.
 //
 // The function is PURE (no chrome.*, no kv, no DOM) so it is unit-testable;
@@ -11,10 +10,6 @@
 // from an extension page is subject to the provider's CORS policy — a CORS
 // rejection surfaces as a clear network error, never a false success.
 
-import {
-  createPromptApiModel,
-  isPromptApiAvailable,
-} from "./models/prompt-api-model.js";
 import { safeProviderError } from "./pure.js";
 import { isOpenAIEndpoint } from "./models/openai-model.js";
 
@@ -104,39 +99,6 @@ export async function testProvider(p, fields = {}, deps = {}) {
       latencyMs: latency(),
       detail: "Demo (local) — deterministic, no network, always works.",
     };
-  }
-
-  if (p.id === "prompt-api") {
-    if (!(await isPromptApiAvailable())) {
-      return {
-        ok: false,
-        latencyMs: latency(),
-        errorKind: "unavailable",
-        error:
-          "Chrome Prompt API (Gemini nano) is not available — enable it in chrome://flags and download the model.",
-      };
-    }
-    try {
-      const model = createPromptApiModel();
-      const out = await model.doGenerate({
-        prompt: [
-          { role: "user", content: [{ type: "text", text: "Reply with the single word: ok" }] },
-        ],
-      });
-      const text = String(out?.content?.[0]?.text ?? "").trim();
-      return {
-        ok: true,
-        latencyMs: latency(),
-        detail: `Prompt API responded (${text ? JSON.stringify(text.slice(0, 30)) : "no text"}).`,
-      };
-    } catch (e) {
-      return {
-        ok: false,
-        latencyMs: latency(),
-        errorKind: "error",
-        error: String(e?.message ?? e),
-      };
-    }
   }
 
   if (!OPENAI_COMPATIBLE_IDS.has(p.id)) {

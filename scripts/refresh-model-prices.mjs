@@ -27,13 +27,8 @@ import { MODEL_PRICING } from "../extension/lib/model-prices.js";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PRICES_URL = "https://www.llm-prices.com/current-v1.json";
 
-// Zero-cost on-device + demo models (the Chrome Prompt API / gemini-nano and
-// the built-in demo provider).
+// Zero-cost built-in demo models.
 const FREE_MODELS = [
-  "gemini-nano",
-  "gemini-nano-prompt-api",
-  "chrome-prompt-api",
-  "prompt-api",
   "demo",
   "demo-local",
 ];
@@ -88,8 +83,7 @@ export function renderPricingModule(table) {
   L.push("// lib/model-prices.js — bundled model pricing (per 1M tokens, USD).");
   L.push("//");
   L.push("// Source: https://www.llm-prices.com/current-v1.json (model id -> {input, output}");
-  L.push("// per-1M-token USD). Plus zero-cost entries for the on-device models");
-  L.push("// (gemini-nano / the Chrome Prompt API).");
+  L.push("// per-1M-token USD). Plus zero-cost entries for the built-in demo provider.");
   L.push("//");
   L.push("// Rows may add cacheRead/cacheWrite (per-1M USD) where a published source was");
   L.push("// verified — additive documentation-in-data; agent-do's cost math reads only");

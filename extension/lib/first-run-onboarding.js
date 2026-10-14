@@ -4,6 +4,8 @@
 // verified by the owning surface; model/service-worker routes cannot mint owner
 // authority.
 
+import { migrateLegacyProviderConfig } from "./provider-visibility.js";
+
 export const FIRST_RUN_TASK_PROMPT =
   'Create or update a text artifact named "First task" in the master scope with three concise ways I can use this agent hub. Call create_asset with the idempotency key "first-task" so a repeated run updates the same artifact instead of creating a duplicate.';
 
@@ -66,19 +68,19 @@ export async function requestBrowserControlFromOwnerClick({
 }
 
 export function keyedProviderConfigured(config) {
-  const provider = String(config?.provider ?? "");
-  if (
-    !provider || provider === "demo" || provider === "prompt-api" ||
-    provider === "ollama"
-  ) return false;
-  return String(config?.baseURL ?? "").trim().length > 0 &&
-    String(config?.apiKey ?? "").length > 0 &&
-    String(config?.model ?? "").trim().length > 0;
+  const normalized = migrateLegacyProviderConfig(config);
+  const provider = String(normalized?.provider ?? "");
+  if (!provider || provider === "demo" || provider === "ollama") return false;
+  return String(normalized?.baseURL ?? "").trim().length > 0 &&
+    String(normalized?.apiKey ?? "").length > 0 &&
+    String(normalized?.model ?? "").trim().length > 0;
 }
 
 export function providerReadyForFirstTask(config) {
-  const provider = String(config?.selectedProvider ?? config?.provider ?? "");
-  if (!provider || provider === "demo" || provider === "prompt-api") {
+  const rawProvider = String(config?.selectedProvider ?? config?.provider ?? "");
+  const normalized = migrateLegacyProviderConfig({ ...config, provider: rawProvider });
+  const provider = String(normalized?.provider ?? "");
+  if (!provider || provider === "demo") {
     return false;
   }
   if (provider === "ollama" || provider === "lm-studio") {

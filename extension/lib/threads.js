@@ -19,7 +19,6 @@
 
 import { masterMemory, forgetDurableThread } from "./memory.js";
 import { sanitizeAttachments } from "./attachments.js";
-import { isPromptApiAvailable, createPromptApiModel } from "./models/prompt-api-model.js";
 import {
   createWorkingSet,
   addTabToWorkingSet,
@@ -235,33 +234,12 @@ async function writeIndex(index) {
 }
 
 /**
- * Generate a short title for a task. Uses the Chrome Prompt API (Gemini nano)
- * when available; otherwise falls back to the first line of the prompt
+ * Generate a short title for a task from the first line of the prompt
  * (truncated). Never throws — naming is best-effort.
  */
 export async function generateThreadName(task) {
   const text = String(task ?? "").trim();
   if (!text) return "New task";
-  try {
-    if (await isPromptApiAvailable()) {
-      const model = createPromptApiModel();
-      const res = await model.doGenerate({
-        prompt: [{
-          role: "user",
-          content: [{
-            type: "text",
-            text:
-              `Generate a short title for this task (at most 6 words, no quotes, ` +
-              `no trailing punctuation). Return ONLY the title:\n\n${text.slice(0, 500)}`,
-          }],
-        }],
-      });
-      const title = String(res?.content?.[0]?.text ?? "").trim();
-      if (title) {
-        return title;
-      }
-    }
-  } catch { /* fall through to the truncated fallback */ }
   const first = text.split(/\n+/)[0].replace(/^```[a-z0-9]*\s*/i, "").trim();
   const s = first || "New task";
   return s.length > 48 ? s.slice(0, 48) + "…" : s;
@@ -327,7 +305,7 @@ export async function createThread(task, attachments, harnessId = null) {
 }
 
 /** Fire-and-forget: upgrade a thread's name via the model, then update the
- * index. Never throws (best-effort). The Prompt API await runs OUTSIDE the
+ * index. Never throws (best-effort). The naming await runs OUTSIDE the
  * global thread mutex (the wider-goal review's finding: holding the mutex
  * across a model await blocked ALL thread mutations); the lock is taken only
  * for the read-modify-write of the stored name. */

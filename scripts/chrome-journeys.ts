@@ -943,7 +943,7 @@ const EXPECTED = [
   "Settings: Clear key removed only the key (endpoint/model preserved)",
   "Settings: clicked Update via a real click",
   "Settings: Update preserved endpoint/model + empty key",
-  "Settings: demo + prompt-api absent from the provider picker",
+  "Settings: demo absent from the provider picker",
   "Settings: empty model + valid key resolves to the default (provider.status usingDefaultModel:true, modelId gpt-5.6-luna)",
   "Settings: provider restored to demo",
   "Settings: demo still resolvable via the SW (testing only)",
@@ -4467,13 +4467,13 @@ async function main() {
         afterUpdate?.baseURL === "https://custom.invalid/v1" &&
         afterUpdate?.model === "model-one",
     );
-    // The demo + prompt-api providers are no longer in the SETTINGS PICKER
-    // (Paul 2026-08-17: the Prompt API is internal-only; the demo is testing-only),
-    // but they remain resolvable through the service worker for the tests. Verify
-    // BOTH: the picker omits them AND the SW still resolves demo.
+    // The demo provider is no longer in the SETTINGS PICKER (Paul 2026-08-17:
+    // the demo is testing-only), but it remains resolvable through the service
+    // worker for the tests. Verify BOTH: the picker omits it AND the SW still
+    // resolves demo.
     check(
-      "Settings: demo + prompt-api absent from the provider picker",
-      (await evalIn(cdp, optsSession, `document.querySelectorAll('.provider-card[data-provider="demo"], .provider-card[data-provider="prompt-api"]').length`)) === 0,
+      "Settings: demo absent from the provider picker",
+      (await evalIn(cdp, optsSession, `document.querySelectorAll('.provider-card[data-provider="demo"]').length`)) === 0,
     );
     // CAP-FB-20260830-MODEL-CATALOG-CURRENT-01: an EMPTY model with a key no
     // longer runs the demo model — provider.status reports the catalogue

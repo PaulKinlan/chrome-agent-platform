@@ -138,6 +138,7 @@ function withAgentsLock(fn) {
 export { withAgentsLock as withNamedAgentsLock };
 
 import { projectUnifiedAgents, slugifyAgentId } from "./agent-projection.js";
+import { migrateLegacyProviderConfig } from "./provider-visibility.js";
 export { projectUnifiedAgents, slugifyAgentId };
 
 // A per-agent provider override is a COMPLETE provider-specific config
@@ -146,7 +147,7 @@ export { projectUnifiedAgents, slugifyAgentId };
 // review's credential-disclosure finding). The override is null (inherit the
 // global) when absent.
 const PROVIDER_IDS = new Set([
-  "demo", "openai", "openai-compatible", "anthropic", "gemini", "deepseek", "ollama", "prompt-api",
+  "demo", "openai", "openai-compatible", "anthropic", "gemini", "deepseek", "ollama",
 ]);
 
 /** Validate + normalize a per-agent provider override. Returns null when the
@@ -154,13 +155,17 @@ const PROVIDER_IDS = new Set([
 export function normalizeAgentProvider(value) {
   if (value == null) return null;
   if (typeof value !== "object") return null;
-  const provider = String(value.provider ?? "").trim();
+  const migrated = migrateLegacyProviderConfig(value);
+  const provider = String(migrated.provider ?? "").trim();
   if (!provider || !PROVIDER_IDS.has(provider)) return null;
   return {
     provider,
-    baseURL: String(value.baseURL ?? "").slice(0, 512),
-    apiKey: String(value.apiKey ?? "").slice(0, 512),
-    model: String(value.model ?? "").slice(0, 128),
+    baseURL: String(migrated.baseURL ?? "").slice(0, 512),
+    apiKey: String(migrated.apiKey ?? "").slice(0, 512),
+    model: String(migrated.model ?? "").slice(0, 128),
+    ...(migrated.migratedFrom
+      ? { migratedFrom: migrated.migratedFrom, notice: migrated.notice }
+      : {}),
   };
 }
 
@@ -170,14 +175,18 @@ export function normalizeAgentProvider(value) {
  * path. */
 export function redactAgentProvider(provider) {
   if (!provider || typeof provider !== "object") return null;
+  const migrated = migrateLegacyProviderConfig(provider);
   return {
-    provider: provider.provider,
-    baseURL: provider.baseURL ?? "",
-    model: provider.model ?? "",
+    provider: migrated.provider,
+    baseURL: migrated.baseURL ?? "",
+    model: migrated.model ?? "",
     // apiKey deliberately omitted — hasApiKey carries ONLY the presence bit
     // (the UI shows "(kept — blank keeps it)" + the Clear key control without
     // ever seeing the key).
-    hasApiKey: Boolean(provider.apiKey),
+    hasApiKey: Boolean(migrated.apiKey),
+    ...(migrated.migratedFrom
+      ? { migratedFrom: migrated.migratedFrom, notice: migrated.notice }
+      : {}),
   };
 }
 
@@ -241,7 +250,8 @@ export async function getNamedAgent(id) {
 export async function getNamedAgentProvider(id) {
   const map = await agentsMap();
   const slug = slugifyAgentId(id);
-  return map[slug]?.provider ?? null;
+  const raw = map[slug]?.provider ?? null;
+  return raw ? migrateLegacyProviderConfig(raw) : null;
 }
 
 

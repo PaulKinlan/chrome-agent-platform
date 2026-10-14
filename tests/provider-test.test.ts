@@ -1,7 +1,7 @@
 // @ts-nocheck — the probe body is a plain object whose optional OpenAI field is asserted absent/present.
 // Unit tests for the "Test connection" provider probe — the no-network parts:
 // the HTTP-status → error-kind mapping and the config validation. (The real
-// fetch + Prompt API paths need a browser/network, so they're exercised by the
+// fetch paths need a browser/network, so they're exercised by the
 // options page itself + the Chrome journeys.)
 
 import { assertEquals, assert, assertStringIncludes } from "jsr:@std/assert@1";
