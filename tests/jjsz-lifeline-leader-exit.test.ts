@@ -38,6 +38,7 @@ import {
   setsidSpawnSpec,
 } from "../scripts/lib/process-tree.ts";
 import { type LaunchedChrome, launchChrome, teardownChrome } from "../scripts/lib/chrome-launch.ts";
+import { withCleanup } from "../scripts/lib/test-cleanup.js";
 
 const PGREP = "/usr/bin/pgrep";
 const SELF = Deno.pid;
@@ -536,7 +537,7 @@ Deno.test("lifeline: a parent that dies in the middle of a FAILED teardown still
   const child = new Deno.Command(spec.command, { args: spec.args, stdout: "piped", stderr: "piped" }).spawn();
   let group = 0;
   let watcherPid = 0;
-  try {
+  await withCleanup(async () => {
     const reader = child.stdout.getReader();
     const dec = new TextDecoder();
     let seen = "";
@@ -577,29 +578,25 @@ Deno.test("lifeline: a parent that dies in the middle of a FAILED teardown still
       await until(() => liveGroupMembers(group).length === 0, 8000),
       `the watcher must reap the group when the parent dies after a failed teardown; alive: ${liveGroupMembers(group)}`,
     );
-  } finally {
-    if (group > 1) {
-      try { Deno.kill(-group, "SIGKILL"); } catch { /* gone */ }
-    }
-    try { Deno.kill(-child.pid, "SIGKILL"); } catch { /* gone */ }
-    try { child.kill("SIGKILL"); } catch { /* gone */ }
-    await child.status.catch(() => {});
+  }, [
+    () => { if (group > 1) { try { Deno.kill(-group, "SIGKILL"); } catch { /* gone */ } } },
+    () => { try { Deno.kill(-child.pid, "SIGKILL"); } catch { /* gone */ } },
+    () => { try { child.kill("SIGKILL"); } catch { /* gone */ } },
+    () => child.status.catch(() => {}),
     // The watcher's sweep ends with `pkill -9 -f '<profile>( |$)'`, which also matches the argv of the
     // profile-pattern pkill/pgrep that teardownChrome(null, ...) runs next: wait for the watcher to finish
     // so the two never overlap (each would SIGKILL the other: "pkill exited 137").
-    await cleanupSteps([
-      () => {
-        if (watcherPid > 1) {
-          return until(() => {
-            const row = processGroup(watcherPid);
-            return row === null || row.state === "Z";
-          }, 8000);
-        }
-      },
-      () => teardownChrome(null, profile),
-      () => Deno.removeSync(root, { recursive: true }),
-    ]);
-  }
+    async () => {
+      if (watcherPid > 1) {
+        assert(await until(() => {
+          const row = processGroup(watcherPid);
+          return row === null || row.state === "Z";
+        }, 8000), "the watcher exits before profile teardown");
+      }
+    },
+    () => teardownChrome(null, profile),
+    () => Deno.removeSync(root, { recursive: true }),
+  ]);
 });
 
 // ── F1: success path order, and the single guard (fake watcher) ─────────────
@@ -784,7 +781,7 @@ Deno.test("killProcessTree started while the leader-exit sweep is in flight WAIT
   const controlProc = spawnLeader("/bin/sleep", ["300"]);
   const held: { watcher?: HeldWatcher } = {};
   let teardown: Promise<void> | undefined;
-  try {
+  await withCleanup(async () => {
     // CONTROL (anti-vacuity): with NO sweep in flight, the very same teardown kills an identical fresh carrier.
     // How long that takes, on this box at this moment, is what the observation window below is measured against:
     // a "still alive" observation shorter than the time the teardown needs to act proves nothing, because a mutant
@@ -824,14 +821,14 @@ Deno.test("killProcessTree started while the leader-exit sweep is in flight WAIT
     assert(await settlesWithin(teardown, 8000), "the teardown proceeds once the sweep has settled");
     await teardown;
     assertEquals(await exitsWithin(bystander, 8000), true, "and then it runs: the profile carrier is killed");
-  } finally {
-    held.watcher?.end(); // an assertion that failed above must not leave the held sweep (and its bound timer) behind
-    await cleanupSteps([() => teardown]); // never let a teardown rejection replace the assertion that failed
-    await reap(proc);
-    await reap(bystander);
-    await reap(controlProc);
-    await reap(controlCarrier);
-  }
+  }, [
+    () => held.watcher?.end(), // release a held sweep even if the test assertion failed
+    () => teardown,
+    () => reap(proc),
+    () => reap(bystander),
+    () => reap(controlProc),
+    () => reap(controlCarrier),
+  ]);
 });
 
 Deno.test("killProcessTree that THROWS before touching the leader does not strand the leader-exit sweep (jjsz F1b)", async () => {
