@@ -260,18 +260,39 @@ Deno.test("kozg.4: import selected sends ONLY the checked entries", async () => 
   assertEquals(ids.sort(), ["pm-standup-cmd", "pm-triage"]);
 });
 
-// chrome-agent-platform-d885.8 Part C falsification:
+// chrome-agent-platform-d885.8 Part C falsification + tiw25/3io3p adoption:
 // mountSkillsSection handles the use event on imported command rows without throwing
-// ReferenceError: onUse is not defined and uses view.ref.
-Deno.test("d885.8: clicking use on imported command row does not throw ReferenceError and uses view.ref", async () => {
+// ReferenceError: onUse is not defined, fails closed when unadopted, and uses adopted task when adopted.
+Deno.test("d885.8: clicking use on imported command row does not throw ReferenceError and enforces adoption", async () => {
   const ui = makeSection();
-  const sendImpl = async (type: string) => {
+  const { computeCommandContentSha256 } = await import(`${ROOT}extension/shared/composer-commands.js`);
+  const bodyText = "Run custom task for <arg>";
+  const sha = computeCommandContentSha256(bodyText);
+
+  let isAdopted = false;
+  const sendImpl = async (type: string, payload?: any) => {
     if (type === "command.list") {
       return {
         commands: [
-          { id: "my-cmd-id", name: "mycmd", description: "A custom command", argumentHint: "<arg>" },
+          {
+            id: "my-cmd-id",
+            name: "mycmd",
+            description: "A custom command",
+            argumentHint: "<arg>",
+            prompt: bodyText,
+            source: "github:test/custom",
+            contentSha256: sha,
+            adoptedSha256: isAdopted ? sha : null,
+            adoptedSource: isAdopted ? "github:test/custom" : null,
+            adopted: isAdopted,
+            reviewRequired: !isAdopted,
+          },
         ],
       };
+    }
+    if (type === "command.adopt") {
+      isAdopted = true;
+      return { ok: true };
     }
     if (type === "skill.list") return { skills: [], broken: [] };
     return { ok: true };
@@ -280,7 +301,7 @@ Deno.test("d885.8: clicking use on imported command row does not throw Reference
   mountSkillsSection(ui.section as any, { send: sendImpl });
   await new Promise((r) => setTimeout(r, 10));
 
-  const commandRow = (ui.commandsList.children as any[]).flatMap((c: any) => c.children).find((k: any) => k.tag === "capability-row");
+  let commandRow = (ui.commandsList.children as any[]).flatMap((c: any) => c.children).find((k: any) => k.tag === "capability-row");
   assert(commandRow, "imported command row must be rendered");
 
   let postedMessage: any = null;
@@ -292,10 +313,19 @@ Deno.test("d885.8: clicking use on imported command row does not throw Reference
   };
 
   try {
-    // Before fix, this threw "ReferenceError: onUse is not defined"
+    // 1. Unadopted command fails closed on use: no message posted, status reports review required
+    await commandRow.dispatch("use");
+    assertEquals(postedMessage, null, "unadopted command must not post use-skill to parent");
+    assert(ui.status.textContent.includes("Review required"), "must report review required");
+
+    // 2. Adopt the command
+    await sendImpl("command.adopt", { id: "my-cmd-id", source: "github:test/custom", sha256: sha });
+    await ui.section._refreshSkills();
+
+    commandRow = (ui.commandsList.children as any[]).flatMap((c: any) => c.children).find((k: any) => k.tag === "capability-row");
     await commandRow.dispatch("use");
     assertEquals(postedMessage?.type, "use-skill");
-    assertEquals(postedMessage?.ref, "/mycmd <arg>");
+    assertEquals(postedMessage?.ref, bodyText);
   } finally {
     (globalThis as any).window = originalWindow;
   }

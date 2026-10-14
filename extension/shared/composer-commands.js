@@ -148,6 +148,618 @@ const clean = (value, max = 512) => String(value ?? "").slice(0, max);
 const hit = (query, ...values) =>
   !query || values.some((value) => clean(value).toLowerCase().includes(query));
 
+/**
+ * chrome-agent-platform-tiw25 + chrome-agent-platform-3io3p:
+ * Imported commands remain untrusted as stored remote data and become an
+ * owner-authored task instruction ONLY after explicit owner adoption bound to
+ * (command id, provenance source, SHA-256 of canonical unfenced content).
+ * At insertion/send we reject unknown provenance, changed or malformed legacy
+ * fences, missing approval, and stale/mutated bodies; we render the approved
+ * body as readable plaintext task, never a misleading <run-token> placeholder
+ * or a real run token.
+ */
+export const UNTRUSTED_COMMAND_TOKEN_PLACEHOLDER = "<run-token>";
+export const IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS =
+  "Review required before running this imported command.";
+
+const PLACEHOLDER_OPEN = `<<<UNTRUSTED run:${UNTRUSTED_COMMAND_TOKEN_PLACEHOLDER}>>>`;
+const PLACEHOLDER_CLOSE = `<<<END run:${UNTRUSTED_COMMAND_TOKEN_PLACEHOLDER}>>>`;
+
+const SHA256_K = new Uint32Array([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+function rotr32(x, n) {
+  return (x >>> n) | (x << (32 - n));
+}
+
+/** Compute deterministic 64-char lowercase hex SHA-256 of normalized UTF-8 command content. */
+export function computeCommandContentSha256(text) {
+  const normalized = String(text ?? "").replace(/\r\n/g, "\n");
+  const msg = new TextEncoder().encode(normalized);
+  const bitLenHi = Math.floor(msg.length / 0x20000000);
+  const bitLenLo = (msg.length << 3) >>> 0;
+  const padLen = (msg.length + 9 + 63) & ~63;
+  const buf = new Uint8Array(padLen);
+  buf.set(msg);
+  buf[msg.length] = 0x80;
+  const view = new DataView(buf.buffer);
+  view.setUint32(padLen - 8, bitLenHi, false);
+  view.setUint32(padLen - 4, bitLenLo, false);
+
+  let h0 = 0x6a09e667, h1 = 0xbb67ae85, h2 = 0x3c6ef372, h3 = 0xa54ff53a;
+  let h4 = 0x510e527f, h5 = 0x9b05688c, h6 = 0x1f83d9ab, h7 = 0x5be0cd19;
+  const w = new Uint32Array(64);
+
+  for (let offset = 0; offset < padLen; offset += 64) {
+    for (let i = 0; i < 16; i++) {
+      w[i] = view.getUint32(offset + i * 4, false);
+    }
+    for (let i = 16; i < 64; i++) {
+      const s0 = rotr32(w[i - 15], 7) ^ rotr32(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+      const s1 = rotr32(w[i - 2], 17) ^ rotr32(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+    }
+    let a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
+    for (let i = 0; i < 64; i++) {
+      const S1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25);
+      const ch = (e & f) ^ (~e & g);
+      const temp1 = (h + S1 + ch + SHA256_K[i] + w[i]) >>> 0;
+      const S0 = rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const temp2 = (S0 + maj) >>> 0;
+      h = g; g = f; f = e; e = (d + temp1) >>> 0;
+      d = c; c = b; b = a; a = (temp1 + temp2) >>> 0;
+    }
+    h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0; h3 = (h3 + d) >>> 0;
+    h4 = (h4 + e) >>> 0; h5 = (h5 + f) >>> 0; h6 = (h6 + g) >>> 0; h7 = (h7 + h) >>> 0;
+  }
+
+  return [h0, h1, h2, h3, h4, h5, h6, h7]
+    .map((v) => v.toString(16).padStart(8, "0"))
+    .join("");
+}
+
+/** Return true if text carries a raw <run-token> placeholder or untrusted fence delimiter. */
+export function containsUntrustedPlaceholderFence(text) {
+  if (typeof text !== "string" || !text) return false;
+  return (
+    text.includes(UNTRUSTED_COMMAND_TOKEN_PLACEHOLDER) ||
+    text.includes("<<<UNTRUSTED") ||
+    text.includes("<<<END run:")
+  );
+}
+
+function unwrapSingleStringBody(rawText, { requireFence = false } = {}) {
+  if (typeof rawText !== "string") {
+    return { ok: false, reason: "empty_body", error: IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS };
+  }
+  const normalized = rawText.replace(/\r\n/g, "\n");
+  const trimmed = normalized.trim();
+  if (!trimmed) {
+    return { ok: false, reason: "empty_body", error: IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS };
+  }
+  const hasFenceMarkers =
+    trimmed.startsWith("<<<UNTRUSTED") ||
+    trimmed.includes("<<<UNTRUSTED") ||
+    trimmed.includes("<<<END") ||
+    trimmed.includes(UNTRUSTED_COMMAND_TOKEN_PLACEHOLDER);
+
+  if (hasFenceMarkers) {
+    if (
+      !trimmed.startsWith(`${PLACEHOLDER_OPEN}\n`) ||
+      !trimmed.endsWith(`\n${PLACEHOLDER_CLOSE}`)
+    ) {
+      return {
+        ok: false,
+        reason: "malformed_fence",
+        error: "Imported command has a malformed or forged untrusted fence; review required.",
+      };
+    }
+    const firstClose = trimmed.indexOf(PLACEHOLDER_CLOSE);
+    if (firstClose !== trimmed.length - PLACEHOLDER_CLOSE.length) {
+      return {
+        ok: false,
+        reason: "malformed_fence",
+        error: "Imported command fence closes early with trailing text; review required.",
+      };
+    }
+    const inner = trimmed.slice(
+      PLACEHOLDER_OPEN.length + 1,
+      trimmed.length - PLACEHOLDER_CLOSE.length - 1,
+    );
+    if (!inner.trim() || containsUntrustedPlaceholderFence(inner)) {
+      return {
+        ok: false,
+        reason: "malformed_fence",
+        error: "Imported command contains nested or placeholder fence markers; review required.",
+      };
+    }
+    return {
+      ok: true,
+      body: inner,
+      wasFenced: true,
+      sha256: computeCommandContentSha256(inner),
+    };
+  }
+
+  if (requireFence) {
+    return {
+      ok: false,
+      reason: "malformed_fence",
+      error: "Imported command claims fenced:true without a valid untrusted fence; review required.",
+    };
+  }
+
+  return {
+    ok: true,
+    body: normalized,
+    wasFenced: false,
+    sha256: computeCommandContentSha256(normalized),
+  };
+}
+
+/**
+ * Extract the canonical unfenced body and SHA-256 digest from a command or prompt string.
+ * Rejects malformed, nested, forged, or trailing fences fail-closed, and rejects if
+ * multiple body fields on a command object disagree (1-byte mutation detection).
+ */
+export function extractCanonicalCommandBody(commandOrPrompt, options = {}) {
+  if (typeof commandOrPrompt === "string") {
+    return unwrapSingleStringBody(commandOrPrompt, options);
+  }
+  if (!commandOrPrompt || typeof commandOrPrompt !== "object") {
+    return { ok: false, reason: "invalid_command", error: IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS };
+  }
+  const cmdName = String(commandOrPrompt.name ?? commandOrPrompt.id ?? "").trim();
+  const bareSlashName = cmdName ? `/${cmdName}` : "";
+  const candidates = [];
+  const requirePromptFence = Boolean(options.requireFence || (commandOrPrompt.fenced === true && commandOrPrompt.adopted !== true));
+
+  if (typeof commandOrPrompt.prompt === "string" && commandOrPrompt.prompt !== "") {
+    candidates.push({ field: "prompt", value: commandOrPrompt.prompt, requireFence: requirePromptFence });
+  }
+  if (typeof commandOrPrompt.body === "string" && commandOrPrompt.body !== "") {
+    candidates.push({ field: "body", value: commandOrPrompt.body, requireFence: false });
+  }
+  if (typeof commandOrPrompt.rawPrompt === "string" && commandOrPrompt.rawPrompt !== "") {
+    candidates.push({ field: "rawPrompt", value: commandOrPrompt.rawPrompt, requireFence: false });
+  }
+  if (typeof commandOrPrompt.template === "string" && commandOrPrompt.template !== "") {
+    candidates.push({ field: "template", value: commandOrPrompt.template, requireFence: false });
+  }
+  if (typeof commandOrPrompt.approvedPrompt === "string" && commandOrPrompt.approvedPrompt !== "") {
+    candidates.push({ field: "approvedPrompt", value: commandOrPrompt.approvedPrompt, requireFence: false });
+  }
+  if (typeof commandOrPrompt.task === "string" && commandOrPrompt.task !== "") {
+    candidates.push({ field: "task", value: commandOrPrompt.task, requireFence: false });
+  }
+  if (
+    typeof commandOrPrompt.insertText === "string" &&
+    commandOrPrompt.insertText !== "" &&
+    (candidates.length === 0 || (commandOrPrompt.insertText.trim() !== bareSlashName && commandOrPrompt.insertText.trim() !== `/${commandOrPrompt.id}`))
+  ) {
+    candidates.push({ field: "insertText", value: commandOrPrompt.insertText, requireFence: false });
+  }
+
+  if (candidates.length === 0) {
+    return { ok: false, reason: "empty_body", error: IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS };
+  }
+
+  let primary = null;
+  for (const cand of candidates) {
+    const res = unwrapSingleStringBody(cand.value, { requireFence: cand.requireFence });
+    if (!res.ok) return res;
+    if (!primary) {
+      primary = res;
+    } else if (res.sha256 !== primary.sha256 || res.body !== primary.body) {
+      return {
+        ok: false,
+        reason: "digest_mismatch",
+        error: "Imported command body was modified after adoption; review required.",
+      };
+    }
+  }
+  return primary;
+}
+
+/** Return true if a composer command item represents an imported command (rather than built-in /summarise or /translate). */
+export function isImportedCommandItem(item) {
+  if (!item || typeof item !== "object") return false;
+  const id = String(item.id ?? "");
+  if (id === "summarise" || id === "translate" || id === "cmd:command") return false;
+  if (
+    id.startsWith("command:") ||
+    (typeof item.commandId === "string" && item.commandId.length > 0) ||
+    item.ns === "command" ||
+    item.ns === "cmd" ||
+    item.untrusted === true ||
+    item.fenced === true ||
+    item.source === "imported" ||
+    item.category === "imported" ||
+    typeof item.sourceUrl === "string" ||
+    typeof item.contentSha256 === "string" ||
+    typeof item.adoptedSha256 === "string" ||
+    typeof item.reviewRequired === "boolean" ||
+    containsUntrustedPlaceholderFence(item.prompt) ||
+    containsUntrustedPlaceholderFence(item.insertText)
+  ) {
+    return true;
+  }
+  return item.kind === "command";
+}
+
+function normalizeCommandId(commandOrId) {
+  const raw = typeof commandOrId === "string"
+    ? commandOrId
+    : String(commandOrId?.commandId || commandOrId?.id || "");
+  const trimmed = raw.trim();
+  return trimmed.startsWith("command:") ? trimmed.slice("command:".length) : trimmed;
+}
+
+function resolveCommandProvenance(command) {
+  const rawSource = typeof command?.source === "string" ? command.source.trim() : "";
+  const rawSourceUrl = typeof command?.sourceUrl === "string" ? command.sourceUrl.trim() : "";
+  const effectiveSource = rawSource && rawSource !== "imported" ? rawSource : (rawSourceUrl || rawSource);
+  return { rawSource, rawSourceUrl, effectiveSource };
+}
+
+/**
+ * Preview an imported command's exact canonical body, provenance source, and SHA-256 digest
+ * for explicit owner review prior to adoption.
+ */
+export function previewImportedCommand(command) {
+  if (!command || typeof command !== "object") {
+    return { ok: false, reason: "invalid_command", error: IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS };
+  }
+  const cmdId = normalizeCommandId(command);
+  if (!cmdId) {
+    return { ok: false, reason: "missing_id", error: IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS };
+  }
+  const { rawSource, rawSourceUrl, effectiveSource } = resolveCommandProvenance(command);
+  if (!effectiveSource || effectiveSource === "unknown" || rawSource === "unknown") {
+    return {
+      ok: false,
+      reason: "unknown_provenance",
+      error: "Imported command has unknown provenance and cannot be adopted.",
+    };
+  }
+  const extracted = extractCanonicalCommandBody(command);
+  if (!extracted.ok) {
+    return { ok: false, reason: extracted.reason, error: extracted.error };
+  }
+  if (
+    typeof command.contentSha256 === "string" &&
+    command.contentSha256.trim() &&
+    command.contentSha256.trim().toLowerCase() !== extracted.sha256
+  ) {
+    return {
+      ok: false,
+      reason: "digest_mismatch",
+      error: "Imported command content does not match its recorded SHA-256 digest.",
+    };
+  }
+  return {
+    ok: true,
+    id: cmdId,
+    name: String(command.name || cmdId),
+    source: effectiveSource,
+    sourceUrl: rawSourceUrl || null,
+    sha256: extracted.sha256,
+    body: extracted.body,
+  };
+}
+
+/**
+ * Validate and resolve an imported command into its owner-adopted plaintext task instruction.
+ * Fails closed on unknown provenance, malformed/placeholder fences, missing adoption, or
+ * a 1-byte modification (SHA-256 mismatch between live content and owner-adopted digest).
+ */
+export function resolveImportedCommandTask(command, adoptionRecord = undefined) {
+  if (!command || typeof command !== "object") {
+    return {
+      ok: false,
+      reviewRequired: true,
+      reason: "invalid_command",
+      error: IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
+    };
+  }
+  const cmdId = normalizeCommandId(command);
+  if (!cmdId) {
+    return {
+      ok: false,
+      reviewRequired: true,
+      reason: "missing_id",
+      error: IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
+    };
+  }
+  const { rawSource, rawSourceUrl, effectiveSource } = resolveCommandProvenance(command);
+  if (!effectiveSource || effectiveSource === "unknown" || rawSource === "unknown") {
+    return {
+      ok: false,
+      reviewRequired: true,
+      reason: "unknown_provenance",
+      error: "Imported command has unknown provenance; review required.",
+    };
+  }
+  const extracted = extractCanonicalCommandBody(command);
+  if (!extracted.ok) {
+    return {
+      ok: false,
+      reviewRequired: true,
+      reason: extracted.reason,
+      error: extracted.error || IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
+    };
+  }
+  const liveSha256 = extracted.sha256;
+  const canonicalBody = extracted.body;
+
+  if (
+    typeof command.contentSha256 === "string" &&
+    command.contentSha256.trim() &&
+    command.contentSha256.trim().toLowerCase() !== liveSha256
+  ) {
+    return {
+      ok: false,
+      reviewRequired: true,
+      reason: "digest_mismatch",
+      sha256: liveSha256,
+      error: "Imported command content changed since import; review required.",
+    };
+  }
+
+  let adoption = adoptionRecord;
+  if (adoption instanceof Map) {
+    adoption = adoption.get(cmdId) ?? adoption.get(command.id) ?? null;
+  } else if (
+    adoption &&
+    typeof adoption === "object" &&
+    !("sha256" in adoption) &&
+    !("adoptedSha256" in adoption) &&
+    !("id" in adoption) &&
+    !("commandId" in adoption)
+  ) {
+    adoption = adoption[cmdId] ?? adoption[command.id] ?? null;
+  } else if (adoption === undefined) {
+    if (
+      typeof command.adoptedSha256 === "string" &&
+      command.adoptedSha256.trim() &&
+      command.reviewRequired !== true
+    ) {
+      adoption = {
+        id: command.adoptedId ?? cmdId,
+        source: command.adoptedSource ?? effectiveSource,
+        sourceUrl: command.adoptedSourceUrl ?? (rawSourceUrl || null),
+        sha256: command.adoptedSha256,
+        adoptedAt: command.adoptedAt ?? null,
+      };
+    } else {
+      adoption = null;
+    }
+  }
+
+  if (!adoption || typeof adoption !== "object") {
+    return {
+      ok: false,
+      reviewRequired: true,
+      reason: "missing_adoption",
+      sha256: liveSha256,
+      error: IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
+    };
+  }
+
+  const adoptedId = normalizeCommandId(adoption);
+  if (!adoptedId || adoptedId !== cmdId) {
+    return {
+      ok: false,
+      reviewRequired: true,
+      reason: "id_mismatch",
+      sha256: liveSha256,
+      error: "Imported command adoption id does not match command id; review required.",
+    };
+  }
+
+  const adoptedSource = String(adoption.source ?? adoption.adoptedSource ?? "").trim();
+  if (!adoptedSource || adoptedSource === "unknown") {
+    return {
+      ok: false,
+      reviewRequired: true,
+      reason: "unknown_provenance",
+      sha256: liveSha256,
+      error: "Imported command adoption record has unknown provenance; review required.",
+    };
+  }
+
+  const expectedSourceUrl = adoption.sourceUrl ?? command.adoptedSourceUrl ?? null;
+  if (expectedSourceUrl && rawSourceUrl !== expectedSourceUrl) {
+    return {
+      ok: false,
+      reviewRequired: true,
+      reason: "source_mismatch",
+      sha256: liveSha256,
+      error: "Imported command sourceUrl changed after adoption; review required.",
+    };
+  }
+  if (
+    command.adoptedSource &&
+    rawSource &&
+    command.adoptedSource !== rawSource &&
+    command.adoptedSource !== effectiveSource
+  ) {
+    return {
+      ok: false,
+      reviewRequired: true,
+      reason: "source_mismatch",
+      sha256: liveSha256,
+      error: "Imported command source changed after adoption; review required.",
+    };
+  }
+
+  const sourceMatches =
+    adoptedSource === effectiveSource ||
+    (rawSource === "imported" && rawSourceUrl && adoptedSource === rawSource) ||
+    (rawSourceUrl && adoptedSource === rawSourceUrl && rawSource === "imported");
+  if (!sourceMatches) {
+    return {
+      ok: false,
+      reviewRequired: true,
+      reason: "source_mismatch",
+      sha256: liveSha256,
+      error: "Imported command provenance source does not match adoption record; review required.",
+    };
+  }
+
+  const adoptedSha256 = String(adoption.sha256 ?? adoption.adoptedSha256 ?? "").trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(adoptedSha256)) {
+    return {
+      ok: false,
+      reviewRequired: true,
+      reason: "invalid_digest",
+      sha256: liveSha256,
+      error: "Imported command adoption record has an invalid SHA-256 digest; review required.",
+    };
+  }
+  if (adoptedSha256 !== liveSha256) {
+    return {
+      ok: false,
+      reviewRequired: true,
+      reason: "digest_mismatch",
+      sha256: liveSha256,
+      error: "Imported command body does not match the owner-approved SHA-256 digest; review required.",
+    };
+  }
+
+  if (containsUntrustedPlaceholderFence(canonicalBody)) {
+    return {
+      ok: false,
+      reviewRequired: true,
+      reason: "placeholder_fence_rejected",
+      sha256: liveSha256,
+      error: IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
+    };
+  }
+
+  return {
+    ok: true,
+    reviewRequired: false,
+    id: cmdId,
+    source: adoptedSource,
+    sha256: liveSha256,
+    task: canonicalBody,
+    text: canonicalBody,
+  };
+}
+
+function stampAdoptedCommand(command, adoption) {
+  const resolved = resolveImportedCommandTask(
+    { ...command, contentSha256: undefined },
+    adoption,
+  );
+  if (!resolved.ok) return resolved;
+  const now = Number.isFinite(adoption?.adoptedAt) ? adoption.adoptedAt : Date.now();
+  const stamped = {
+    ...command,
+    id: resolved.id,
+    source: command.source || resolved.source,
+    contentSha256: resolved.sha256,
+    adopted: true,
+    reviewRequired: false,
+    adoptedId: resolved.id,
+    adoptedSource: resolved.source,
+    adoptedSourceUrl: command.sourceUrl ?? null,
+    adoptedSha256: resolved.sha256,
+    adoptedAt: now,
+  };
+  return {
+    ...stamped,
+    ok: true,
+    task: resolved.task,
+    text: resolved.task,
+    sha256: resolved.sha256,
+    command: stamped,
+  };
+}
+
+/**
+ * Record explicit owner adoption of an imported command bound to { id, source, sha256 }.
+ * Accepts either a memory store ({ get, set }) or a command object directly.
+ */
+export function adoptImportedCommand(target, adoption) {
+  if (target && typeof target.get === "function" && typeof target.set === "function") {
+    return (async () => {
+      const cmdId = normalizeCommandId(adoption);
+      if (!cmdId) {
+        return { ok: false, reviewRequired: true, reason: "missing_id", error: IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS };
+      }
+      const list = (await target.get("importedCommands")) ?? [];
+      const idx = list.findIndex((c) => normalizeCommandId(c) === cmdId);
+      if (idx < 0) {
+        return { ok: false, reviewRequired: true, reason: "not_found", error: "No imported command with that id." };
+      }
+      const res = stampAdoptedCommand(list[idx], adoption);
+      if (!res.ok) return res;
+      list[idx] = res.command;
+      await target.set("importedCommands", list);
+      return res;
+    })();
+  }
+  return stampAdoptedCommand(target, adoption);
+}
+
+/**
+ * Resolve an NTP starter-chip pick when the chip text starts with `/`.
+ * Fails closed unless the matching imported command has a valid owner adoption record.
+ */
+export function resolveCommandStarterPick(text, commands = []) {
+  const raw = String(text ?? "").trim();
+  if (!raw.startsWith("/")) {
+    return { ok: false, reviewRequired: false, reason: "not_command", error: "" };
+  }
+  const cmdName = raw.slice(1).trim();
+  const list = Array.isArray(commands) ? commands : [];
+  const cmd = list.find((c) => c && (c.name === cmdName || c.id === cmdName));
+  if (!cmd) {
+    return {
+      ok: false,
+      reviewRequired: true,
+      reason: "not_found",
+      error: IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
+    };
+  }
+  return resolveImportedCommandTask(cmd);
+}
+
+/**
+ * Validate a task instruction string (and optional command metadata) at composer send / SW admission.
+ * Rejects any task carrying the public <run-token> placeholder fence or un-adopted command provenance.
+ */
+export function validateTaskInstructionAdmission(task, options = {}) {
+  if (options?.command) {
+    const cmdCheck = resolveImportedCommandTask(options.command, options.adoptionRecord);
+    if (!cmdCheck.ok) return cmdCheck;
+  }
+  if (typeof task === "object" && task !== null && ("prompt" in task || "commandId" in task || "reviewRequired" in task)) {
+    return resolveImportedCommandTask(task, options?.adoptionRecord);
+  }
+  const str = String(task ?? "");
+  if (containsUntrustedPlaceholderFence(str)) {
+    return {
+      ok: false,
+      reviewRequired: true,
+      reason: "placeholder_fence_rejected",
+      error: IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
+    };
+  }
+  return { ok: true, reviewRequired: false, task: str, text: str };
+}
+
 async function hasPermission(chromeApi, permission) {
   try {
     return !!(await chromeApi?.permissions?.contains?.({ permissions: [permission] }));
@@ -228,18 +840,43 @@ export async function loadComposerCommandItems(
         .map((item) => {
           const hint = item.argumentHint ? ` [${item.argumentHint}]` : "";
           const plugin = item.plugin ? ` (${item.plugin})` : "";
-          const description = `${item.description || "Imported command"}${hint}${plugin}`;
-          const insertText = item.prompt ? item.prompt : `/${item.name} `;
+          const baseDescription = `${item.description || "Imported command"}${hint}${plugin}`;
+          const resolved = resolveImportedCommandTask(item);
+          if (!resolved.ok) {
+            return {
+              id: `command:${item.id}`,
+              commandId: item.id,
+              label: `/${item.name}`,
+              description: `${baseDescription} — review required`,
+              kind: "command",
+              argumentHint: item.argumentHint || "",
+              prompt: "",
+              plugin: item.plugin || null,
+              insertText: "",
+              source: item.source || item.sourceUrl || null,
+              contentSha256: resolved.sha256 || item.contentSha256 || null,
+              adoptedSha256: null,
+              reviewRequired: true,
+              disabled: true,
+              status: resolved.error || IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
+              reason: resolved.reason,
+            };
+          }
           return {
             id: `command:${item.id}`,
             commandId: item.id,
             label: `/${item.name}`,
-            description,
+            description: baseDescription,
             kind: "command",
             argumentHint: item.argumentHint || "",
-            prompt: item.prompt || "",
+            prompt: resolved.task,
             plugin: item.plugin || null,
-            insertText,
+            insertText: resolved.task,
+            source: resolved.source,
+            contentSha256: resolved.sha256,
+            adoptedSha256: resolved.sha256,
+            adoptedAt: item.adoptedAt ?? null,
+            reviewRequired: false,
           };
         });
     }
@@ -487,7 +1124,44 @@ export async function resolveComposerCommandSelection(
   { runtimeSend = null, chromeApi = globalThis.chrome } = {},
 ) {
   if (!item) return null;
-  if (item.kind === "command") {
+  if (item.kind === "command" || isImportedCommandItem(item) || containsUntrustedPlaceholderFence(item.insertText || item.prompt || item.task)) {
+    if (isImportedCommandItem(item) || containsUntrustedPlaceholderFence(item.insertText || item.prompt || item.task)) {
+      let check = resolveImportedCommandTask(item);
+      if (check.ok && typeof runtimeSend === "function") {
+        const res = await runtimeSend("command.list").catch(() => null);
+        if (Array.isArray(res?.commands)) {
+          const live = res.commands.find((c) => normalizeCommandId(c) === check.id);
+          if (!live) {
+            check = {
+              ok: false,
+              reviewRequired: true,
+              reason: "not_found",
+              error: IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
+            };
+          } else {
+            check = resolveImportedCommandTask(live, {
+              id: check.id,
+              source: check.source,
+              sha256: check.sha256,
+            });
+          }
+        }
+      }
+      if (!check.ok) {
+        return {
+          text: "",
+          attachment: null,
+          blocked: true,
+          reviewRequired: true,
+          reason: check.reason,
+          notice: check.error || IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
+        };
+      }
+      return {
+        text: check.task,
+        attachment: null,
+      };
+    }
     return {
       text: item.insertText || item.prompt || `/${item.id}`,
       attachment: null,

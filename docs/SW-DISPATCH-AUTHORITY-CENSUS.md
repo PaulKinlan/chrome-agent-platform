@@ -2,13 +2,13 @@
 
 **Status:** Authoritative Census (chrome-agent-platform-ygvt / CAP-FB-20260908-OWNER-DISPATCH-CENSUS-01)  
 **Seams:** `extension/background/service-worker.js`, `extension/background/routes/`, `extension/lib/owner-approval.js`, `extension/lib/pure.js`, `extension/lib/settings-session.js`  
-**Population:** 292 total registered routes, derived from the executable composition (`mergeRouteMaps`) on this branch; `origin/main@f507d58f` was an earlier 288-route snapshot.
+**Population:** 293 total registered routes, derived from the executable composition (`mergeRouteMaps`) on this branch; `origin/main@f507d58f` was an earlier 288-route snapshot.
 
 ---
 
 ## 1. Executive Summary & Purpose
 
-This document provides a total, honest census of all 292 message routes registered in the Chrome Agent Platform Service Worker.
+This document provides a total, honest census of all 293 message routes registered in the Chrome Agent Platform Service Worker.
 
 The population is the key set `mergeRouteMaps` in `service-worker.js` actually returns, evaluated at `origin/main@f507d58f` — not a hand-kept list. That evaluation corrected 276 → 285 (chrome-agent-platform-s7wl): the earlier count silently skipped the three maps `vaultRoutes`, `enclaveProxyRoutes` and `enclaveStatusRoutes` (9 routes, landed 2026-10-03 in `bd17634f`). The 260 this document's sibling threat model quoted and the 276 here were both wrong about the composed population; 285 is what composition produces.
 
@@ -43,7 +43,7 @@ Every message arriving at the Service Worker passes through a layered defense-in
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │ Layer 2: Central Dispatcher (dispatchRoute)                            │
-│ - look up type in handlers map (292 registered routes)                 │
+│ - look up type in handlers map (293 registered routes)                 │
 │ - scrub __* fields and userActivation from message body                │
 │ - inject trusted browser-attested sender (__sender = pageSender)       │
 └───────────────────────────────────┬────────────────────────────────────┘
@@ -76,7 +76,7 @@ Every message arriving at the Service Worker passes through a layered defense-in
 
 ---
 
-## 3. High-Level Population Summary (292 Routes)
+## 3. High-Level Population Summary (293 Routes)
 
 | Category | Count | Permitted Callers | Gating Mechanism |
 |---|---|---|---|
@@ -84,13 +84,13 @@ Every message arriving at the Service Worker passes through a layered defense-in
 | **Settings-Only Direct (`SETTINGS_ONLY_DIRECT`)** | 51 | `owner-options` | `requireSettingsSender` or `wasmStreamOwner` |
 | **Owner-Approval Direct (`OWNER_APPROVAL_DIRECT`)** | 13 | `owner-options`, `extension` | `requireOwnerApproval` + `isOwnerDirectApproval` |
 | **Owner-Approval Required (`OWNER_APPROVAL_REQUIRED`)** | 18 | `model`, `extension` | `requireOwnerApproval` (always prompts or model card) |
-| **Owner Extension-Fenced (`OWNER_EXTENSION_FENCED`)** | 27 | `owner-options`, `extension` | `isOwnerPrincipal(context)` |
+| **Owner Extension-Fenced (`OWNER_EXTENSION_FENCED`)** | 28 | `owner-options`, `extension` | `isOwnerPrincipal(context)` |
 | **Execution & Worker Orchestration** | 23 | `extension`, `model`, worker | `runControl`, `activeExecutions`, worker RPC |
 | **Agent Task Board (`AGENT_BOARD`)** | 13 | `extension`, `model` | Board state machine, role fences |
 | **Storage, KV & Memory Fenced** | 10 | `owner-options`, `extension` | Secret key fences, quiescence tracking, leases |
 | **Unclassified Mutations (Gaps)** | 37 | `extension` (any) | Central page filter only; no route-local gate |
 | **Read-Only / Status / Telemetry** | 93 | `owner-options`, `extension` | Read-only browser-attested status; no site enrollment or tool dispatch |
-| **Total** | **292** | | |
+| **Total** | **293** | | |
 
 ---
 
@@ -220,7 +220,7 @@ Actions that require an explicit owner approval card with a payload digest befor
 
 ---
 
-### 4.5 Owner Extension-Fenced Routes (`OWNER_EXTENSION_FENCED` — 27 routes)
+### 4.5 Owner Extension-Fenced Routes (`OWNER_EXTENSION_FENCED` — 28 routes)
 Fenced with `isOwnerPrincipal(context)` (`"extension"` or `"owner-options"`). Callable by extension surfaces (hub, side panel, options), but rejected for pages.
 
 | Route Name | Owning Module | Description |
@@ -252,6 +252,7 @@ Fenced with `isOwnerPrincipal(context)` (`"extension"` or `"owner-options"`). Ca
 | `enclave.proxy` | `routes/enclave-proxy.js` | One proxied request to an approved service, with vault-injected auth; refused for pages and model runs |
 | `settings.session.open` | `service-worker.js` | Mints a short-lived, document-bound in-hub Settings session; additionally requires exact top-frame hub sender (`ntp/ntp.html`) and intersects requested scopes with `SETTINGS_SESSION_ROUTES` (empty at Stage 3b) |
 | `settings.session.close` | `service-worker.js` | Revokes the caller document's active in-hub Settings session on unmount |
+| `command.adopt` | `service-worker.js` | Adopts imported command after exact SHA-256 and source verification |
 
 ---
 
@@ -402,7 +403,7 @@ These routes perform no state mutations and return status, listings, configurati
 ### 5.4 Route-to-Seam Enforcement (chrome-agent-platform-gn3c)
 `tests/sw-dispatch-authority-census.test.ts` parses the registered handler AST and checks each of the 13 §4.3 direct and 18 §4.4 required routes against its approval call. Extracted scheduler, agent-schedule, and file-grant handlers must retain their injected `requireOwnerApproval`; the script and site-tool helper calls must retain their forwarding seam. Direct actions must remain in `OWNER_DIRECT_ACTIONS` and reach `isOwnerDirectApproval`; required actions must remain approvable in `DESTRUCTIVE_ACTIONS`. AST mutants deleting the `capability.revoke` call, scheduler approval injection, or script helper's forwarding call each fail naming the affected route.
 
-The reviewed action-name exceptions are explicit and still require a real call: `asset.patch` and `asset.append` use the `asset.update` card; `fs-grant.write-file-approved` uses `fs.write`; `browser.destructive-action` accepts only members of `DESTRUCTIVE_BROWSER_ACTIONS`, each of which must be approvable. `named-agent.delete` uses the injected `createNamedAgentDeleteGate` before teardown. This check proves static seam presence and the declared action, not full runtime control-flow dominance or authority coverage for the 37 unclassified §4.9 routes; those gaps remain separately tracked.
+The reviewed action-name exceptions are explicit and still require a real call: `asset.patch` and `asset.append` use the `asset.update` card; `fs-grant.write-file-approved` uses `fs.write`; `browser.destructive-action` accepts only members of `DESTRUCTIVE_BROWSER_ACTIONS`, each of which must be approvable. `named-agent.delete` uses the injected `createNamedAgentDeleteGate` before teardown. This check proves static seam presence and the declared action, not full runtime control-flow dominance or authority coverage for the 38 unclassified §4.9 routes; those gaps remain separately tracked.
 
 ---
 

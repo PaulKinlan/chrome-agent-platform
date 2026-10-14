@@ -78,6 +78,7 @@ export const PANEL_REGISTRY = /* @__PURE__ */ Object.freeze([
       "skill.importBatch",
       "command.list",
       "command.delete",
+      "command.adopt",
     ],
   ),
   def(

@@ -9,6 +9,11 @@
 
 import { send } from "../lib/messages.js";
 import { SKILL_ICON, SKILL_ICON_FALLBACK } from "../shared/skill-icons.js";
+import {
+  resolveImportedCommandTask,
+  previewImportedCommand,
+  IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
+} from "../shared/composer-commands.js";
 
 /** A skill = the shared capability-row (consistent layout) + a collapsed
  * "how it works" details for the documentation. The action is "Use in a task"
@@ -128,7 +133,19 @@ export async function renderSkillList(listEl, { onUse, onDelete, send: sendFn = 
  * When Settings is opened as a bare tab (no hub parent), degrade honestly:
  * copy the /skill:<id> reference and confirm inline — never a silent no-op. */
 export function useSkill(skill, { statusEl, onUse = null } = {}) {
-  const token = skill.ref || `/skill:${skill.refId ?? skill.id ?? skill.name}`;
+  const isCommand = skill?.kind === "command" || Boolean(skill?.isCommand);
+  if (isCommand) {
+    const check = resolveImportedCommandTask(skill);
+    if (!check.ok) {
+      if (statusEl) {
+        statusEl.textContent = check.error || IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS;
+      }
+      return;
+    }
+  }
+  const token = isCommand && skill.task
+    ? skill.task
+    : (skill.ref || `/skill:${skill.refId ?? skill.id ?? skill.name}`);
   if (typeof onUse === "function") {
     const handled = onUse(skill, { statusEl, token });
     if (handled !== false) return;
@@ -371,8 +388,54 @@ export function mountSkillsSection(sectionEl, { send: sendFn = send, onUse = nul
       const hint = document.createElement("span");
       hint.className = "hint";
       hint.textContent = view.ref;
-      how.textContent = view.description || `Imported command ${view.name}.`;
+      how.textContent = view.baseDescription || `Imported command ${view.name}.`;
       details.append(summary, how, hint);
+
+      const preview = previewImportedCommand(cmd);
+      const auditMeta = document.createElement("div");
+      auditMeta.className = "command-audit-meta";
+
+      if (preview.ok) {
+        const metaLine = document.createElement("div");
+        metaLine.className = "command-meta-line";
+        metaLine.textContent = `Source: ${preview.source} · SHA-256: ${preview.sha256.slice(0, 12)}…`;
+        auditMeta.append(metaLine);
+      }
+
+      if (!view.isAdopted) {
+        const reviewReq = document.createElement("div");
+        reviewReq.className = "command-review-notice";
+        reviewReq.textContent = view.status || IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS;
+        auditMeta.append(reviewReq);
+
+        if (preview.ok) {
+          const adoptBtn = document.createElement("button");
+          adoptBtn.type = "button";
+          adoptBtn.className = "btn secondary adopt-command-btn";
+          adoptBtn.textContent = "Review & Adopt";
+          adoptBtn.addEventListener("click", async () => {
+            const adoptRes = await sendFn("command.adopt", {
+              id: preview.id,
+              source: preview.source,
+              sha256: preview.sha256,
+            }).catch((err) => ({ ok: false, error: String(err?.message ?? err) }));
+            if (adoptRes?.ok) {
+              if (status) status.textContent = `Adopted command /${view.name}.`;
+              await renderCommands();
+            } else {
+              if (status) status.textContent = adoptRes?.error || "Failed to adopt command.";
+            }
+          });
+          auditMeta.append(adoptBtn);
+        }
+      } else {
+        const adoptedBadge = document.createElement("div");
+        adoptedBadge.className = "command-adopted-badge";
+        adoptedBadge.textContent = "Owner adopted (exact body verified)";
+        auditMeta.append(adoptedBadge);
+      }
+
+      details.append(auditMeta);
       wrap.append(row, details);
       commandsList.append(wrap);
     }
@@ -497,11 +560,29 @@ export function commandView(cmd) {
   const name = String(cmd?.name ?? cmd?.id ?? "command");
   const hint = String(cmd?.argumentHint ?? "").trim();
   const description = String(cmd?.description ?? "").trim();
+  const resolved = resolveImportedCommandTask(cmd);
+  const isAdopted = resolved.ok && !resolved.reviewRequired;
   return {
     id: String(cmd?.id ?? name),
+    commandId: String(cmd?.id ?? name),
     name,
     hint,
-    description,
+    description: isAdopted ? description : `${description || "imported command"} — review required`,
+    baseDescription: description,
     ref: `/${name}${hint ? " " + hint : ""}`,
+    kind: "command",
+    isCommand: true,
+    isAdopted,
+    reviewRequired: !isAdopted,
+    task: isAdopted ? resolved.task : "",
+    prompt: isAdopted ? resolved.task : "",
+    source: resolved.ok ? resolved.source : (cmd?.source || null),
+    sha256: resolved.ok ? resolved.sha256 : (cmd?.contentSha256 || null),
+    adopted: isAdopted,
+    adoptedSha256: isAdopted ? resolved.sha256 : null,
+    adoptedSource: isAdopted ? resolved.source : null,
+    adoptedAt: cmd?.adoptedAt ?? null,
+    reason: resolved.ok ? null : resolved.reason,
+    status: resolved.ok ? null : (resolved.error || IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS),
   };
 }

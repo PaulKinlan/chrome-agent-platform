@@ -13,8 +13,31 @@ import {
   isWellFormedFence,
   isWellFormedFenceWithToken,
 } from "./untrusted-fence.js";
+import {
+  IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
+  computeCommandContentSha256,
+  containsUntrustedPlaceholderFence,
+  extractCanonicalCommandBody,
+  previewImportedCommand,
+  resolveImportedCommandTask,
+  adoptImportedCommand,
+  resolveCommandStarterPick,
+  validateTaskInstructionAdmission,
+} from "../shared/composer-commands.js";
 
-export { isWellFormedFence, isWellFormedFenceWithToken };
+export {
+  isWellFormedFence,
+  isWellFormedFenceWithToken,
+  IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
+  computeCommandContentSha256,
+  containsUntrustedPlaceholderFence,
+  extractCanonicalCommandBody,
+  previewImportedCommand,
+  resolveImportedCommandTask,
+  adoptImportedCommand,
+  resolveCommandStarterPick,
+  validateTaskInstructionAdmission,
+};
 
 /** Wrap an imported skill or command body in the untrusted-instruction fence
  * so remote content cannot silently elevate to trusted standing instructions (INV-5, t045y).
@@ -681,9 +704,11 @@ export async function installImportedCommand(memory, cmd) {
   const id = cmd.id || slugifySkillId(name);
   const rawPrompt = typeof cmd.prompt === "string" ? cmd.prompt : (cmd.body || cmd.template || "");
   const isAlreadyFenced = Boolean(cmd.fenced);
-  const prompt = isAlreadyFenced && isWellFormedFence(rawPrompt)
+  const extracted = extractCanonicalCommandBody(rawPrompt);
+  const prompt = isAlreadyFenced && isWellFormedFenceWithToken(rawPrompt, UNTRUSTED_TOKEN_PLACEHOLDER) && extracted.ok
     ? rawPrompt
     : fenceSkillBody(rawPrompt, UNTRUSTED_TOKEN_PLACEHOLDER);
+  const contentSha256 = extracted.ok ? extracted.sha256 : computeCommandContentSha256(rawPrompt);
   const record = {
     id,
     name,
@@ -699,6 +724,12 @@ export async function installImportedCommand(memory, cmd) {
     path: cmd.path || "",
     repo: cmd.repo || null,
     importedAt: cmd.importedAt || Date.now(),
+    contentSha256,
+    reviewRequired: true,
+    adopted: false,
+    adoptedSha256: null,
+    adoptedSource: null,
+    adoptedAt: null,
   };
   const list = (await memory.get("importedCommands")) ?? [];
   const idx = list.findIndex((c) => c.id === id);

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.685] — 2026-10-14
+- Imported commands now require your explicit review and adoption before they can be inserted into the composer or run as a task.
+
 ## [0.3.684] — 2026-10-14
 - Skills, Usage, and About now open directly inside the Hub Settings view without creating an extra frame, and the Directory link to Agents settings opens the right section.
 

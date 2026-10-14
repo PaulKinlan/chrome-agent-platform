@@ -51,6 +51,7 @@ import {
   COMMAND_INSERTION_DISCLOSURE,
   loadComposerCommandItems,
   resolveComposerCommandSelection,
+  computeCommandContentSha256,
 } from "../extension/shared/composer-commands.js";
 import { assert, assertEquals, assertMatch } from "jsr:@std/assert@1";
 
@@ -331,6 +332,12 @@ Deno.test("/command and /cmd list imported commands, format descriptions with ar
       argumentHint: "<repo path>",
       prompt: "Review $ARGUMENTS for safety and shipping readiness",
       plugin: "pm-ai-shipping",
+      source: "github:pm/ai-shipping",
+      contentSha256: computeCommandContentSha256("Review $ARGUMENTS for safety and shipping readiness"),
+      adoptedSha256: computeCommandContentSha256("Review $ARGUMENTS for safety and shipping readiness"),
+      adoptedSource: "github:pm/ai-shipping",
+      adopted: true,
+      reviewRequired: false,
     },
     {
       id: "pm-execution-write-prd",
@@ -339,6 +346,12 @@ Deno.test("/command and /cmd list imported commands, format descriptions with ar
       argumentHint: "<feature description>",
       prompt: "Create PRD for $ARGUMENTS",
       plugin: "pm-execution",
+      source: "github:pm/execution",
+      contentSha256: computeCommandContentSha256("Create PRD for $ARGUMENTS"),
+      adoptedSha256: computeCommandContentSha256("Create PRD for $ARGUMENTS"),
+      adoptedSource: "github:pm/execution",
+      adopted: true,
+      reviewRequired: false,
     },
     {
       id: "pm-toolkit-review-resume",
@@ -347,6 +360,12 @@ Deno.test("/command and /cmd list imported commands, format descriptions with ar
       argumentHint: "",
       prompt: "Review this resume against target role",
       plugin: "pm-toolkit",
+      source: "github:pm/toolkit",
+      contentSha256: computeCommandContentSha256("Review this resume against target role"),
+      adoptedSha256: computeCommandContentSha256("Review this resume against target role"),
+      adoptedSource: "github:pm/toolkit",
+      adopted: true,
+      reviewRequired: false,
     },
   ];
   const runtimeSend = async (type: string) => {
@@ -369,6 +388,11 @@ Deno.test("/command and /cmd list imported commands, format descriptions with ar
     prompt: "Review $ARGUMENTS for safety and shipping readiness",
     plugin: "pm-ai-shipping",
     insertText: "Review $ARGUMENTS for safety and shipping readiness",
+    source: "github:pm/ai-shipping",
+    contentSha256: computeCommandContentSha256("Review $ARGUMENTS for safety and shipping readiness"),
+    adoptedSha256: computeCommandContentSha256("Review $ARGUMENTS for safety and shipping readiness"),
+    adoptedAt: null,
+    reviewRequired: false,
   });
 
   const allAlias = await loadComposerCommandItems("cmd", "", { runtimeSend });
@@ -393,20 +417,30 @@ Deno.test("/command and /cmd list imported commands, format descriptions with ar
   const filteredEmpty = await loadComposerCommandItems("command", "nonexistent-query", { runtimeSend });
   assertEquals(filteredEmpty.length, 0);
 
-  // Fallback label when no prompt is given uses /${name} 
-  const noPromptItem = (await loadComposerCommandItems("command", "", {
+  // Unadopted commands are fail-closed: disabled: true, reviewRequired: true, insertText: ""
+  const unadoptedItem = (await loadComposerCommandItems("command", "", {
     runtimeSend: async () => ({ ok: true, commands: [{ id: "c1", name: "ping", description: "ping" }] }),
   }))[0];
-  assertEquals(noPromptItem.insertText, "/ping ");
+  assertEquals(unadoptedItem.disabled, true);
+  assertEquals(unadoptedItem.reviewRequired, true);
+  assertEquals(unadoptedItem.insertText, "");
 });
 
 Deno.test("resolveComposerCommandSelection returns the template prompt text for command kind", async () => {
+  const itemPrompt = "Run template task for $ARGUMENTS";
+  const itemSha = computeCommandContentSha256(itemPrompt);
   const item = {
     id: "command:test-cmd",
     commandId: "test-cmd",
     kind: "command",
-    insertText: "Run template task for $ARGUMENTS",
-    prompt: "Run template task for $ARGUMENTS",
+    source: "github:test/owner",
+    contentSha256: itemSha,
+    adoptedSha256: itemSha,
+    adoptedSource: "github:test/owner",
+    adopted: true,
+    reviewRequired: false,
+    insertText: itemPrompt,
+    prompt: itemPrompt,
   };
   const resolved = await resolveComposerCommandSelection(item);
   assertEquals(resolved, {
@@ -414,13 +448,24 @@ Deno.test("resolveComposerCommandSelection returns the template prompt text for 
     attachment: null,
   });
 
-  // Fallback when neither insertText nor prompt is defined
-  const fallbackItem = { id: "command:fallback-id", kind: "command" };
+  // Fallback when neither insertText nor prompt is defined (non-imported command)
+  const fallbackItem = { id: "fallback-id", kind: "non-imported" };
   const fallbackResolved = await resolveComposerCommandSelection(fallbackItem);
   assertEquals(fallbackResolved, {
-    text: "/command:fallback-id",
+    text: "/fallback-id",
     attachment: null,
   });
+
+  // Unadopted imported command fails closed with empty text and notice
+  const unadoptedItem = {
+    id: "command:unadopted-cmd",
+    kind: "command",
+    prompt: "Sneaky prompt",
+  };
+  const unadoptedResolved = await resolveComposerCommandSelection(unadoptedItem);
+  assertEquals(unadoptedResolved?.blocked, true);
+  assertEquals(unadoptedResolved?.reviewRequired, true);
+  assertEquals(unadoptedResolved?.text, "");
 });
 
 Deno.test("AgentComposer._select correctly handles /command namespace selection and command template insertion", async () => {

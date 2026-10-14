@@ -36,6 +36,10 @@ import {
 import "../shared/components-hub.js";
 import "../shared/components-conversation.js";
 import "../shared/components-artifacts.js";
+import {
+  resolveCommandStarterPick,
+  validateTaskInstructionAdmission,
+} from "../shared/composer-commands.js";
 import { runStagedBoot } from "./ntp-boot-scheduler.js";
 import { formatSidebarAgentRole, sleep, timeAgo } from "../lib/pure.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
@@ -644,15 +648,18 @@ exampleChips?.addEventListener("pick", async (event) => {
   const text = String(event.detail?.text ?? "");
   if (!text) return;
   if (text.startsWith("/")) {
-    const cmdName = text.slice(1).trim();
     try {
       const res = await send("command.list").catch(() => ({}));
-      const cmd = (res?.commands || []).find((c) => c.name === cmdName || c.id === cmdName);
-      if (cmd) {
-        composer.value = cmd.prompt ? cmd.prompt : `/${cmd.name} `;
+      const commands = Array.isArray(res?.commands) ? res.commands : [];
+      const resolved = resolveCommandStarterPick(text, commands);
+      if (resolved.ok && resolved.task) {
+        composer.value = resolved.task;
         composer.focus();
         return;
       }
+      composer.value = "";
+      composer.setStatus?.(resolved.error || "Review required before running this imported command.", false);
+      return;
     } catch { /* best effort */ }
   }
 
@@ -6286,6 +6293,17 @@ window.addEventListener("message", async (e) => {
     // task, not run in isolation).
     if (!isPanelFrameSource(e.source)) return;
     const id = String(d.id ?? "").trim();
+    if (d.kind === "command") {
+      const check = validateTaskInstructionAdmission(d.ref);
+      if (!check.ok) {
+        composer.setStatus?.(check.error || "Review required before running this imported command.", false);
+        return;
+      }
+      goHome({ focusAfter: composer });
+      composer.value = d.ref;
+      composer.focus();
+      return;
+    }
     const token = d.ref ? String(d.ref).trim() : `/skill:${id}`;
     goHome({ focusAfter: composer });
     composer.value = composer.value ? `${composer.value} ${token}` : token;

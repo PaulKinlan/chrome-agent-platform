@@ -64,6 +64,7 @@ const WRITE_INVALIDATIONS = [
   { match: /^(?:asset\.(?:create|delete|update))/, prefixes: ["asset.", "artifacts."] },
   // Only writes: board.messages is a cached READ, not board.message.
   { match: /^board\.(?:post|claim|message|complete|fail)$/, prefixes: ["board."] },
+  { match: /^(?:command\.(?:delete|adopt))/, prefixes: ["command."] },
   { match: /^(?:run\.(?:retry|dismissFailed|dismissedFailed))/, prefixes: ["run."] },
 ];
 

@@ -458,6 +458,9 @@ import {
   installBatchSkillsAndCommands,
   loadAllImportedCommands,
   removeImportedCommand,
+  adoptImportedCommand,
+  validateTaskInstructionAdmission,
+  IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
 } from "../lib/skill-import.js";
 import { readSkillFile, writeSkillFiles, removeSkillFiles } from "../lib/skill-files.js";
 import { attachedSkillRefs, JOURNALED_SKILLS_CAP } from "../lib/skill-promotion.js";
@@ -4230,7 +4233,17 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
   // mutex would DEADLOCK (the parent holds it while awaiting this tool
   // result). Depth (≤2) + descendant (≤4) caps bound the concurrency this
   // opens: at most one top-level run plus its bounded descendant tree.
-  const runBody = async () => {    const taskId = id ?? String(Date.now());
+  const runBody = async () => {
+    const taskAdmission = validateTaskInstructionAdmission(task);
+    if (!taskAdmission.ok) {
+      return {
+        ok: false,
+        error: taskAdmission.error || IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
+        reason: taskAdmission.reason,
+        reviewRequired: true,
+      };
+    }
+    const taskId = id ?? String(Date.now());
     // A BACKGROUND/SCHEDULED agent passes its OWN memory (Paul: all agents get
     // their own OPFS). The journal + the orchestrator's memory tools then write
     // to that agent's own tier, never the master's.
@@ -8608,6 +8621,15 @@ const handlers = mergeRouteMaps(
     }
   },
   async "agent.run"(m, routeContext) {
+    const admission = validateTaskInstructionAdmission(m?.task, { command: m?.command });
+    if (!admission.ok) {
+      return {
+        ok: false,
+        error: admission.error || IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
+        reason: admission.reason,
+        reviewRequired: true,
+      };
+    }
     // Validate the attachment dataURL SHAPE only (dptw: the 8 MiB/16 MiB/8-count
     // caps are gone — the message transport and OPFS quota surface their own
     // honest errors). Malformed dataURLs and declared-type/parsed-MIME
@@ -11716,6 +11738,21 @@ const handlers = mergeRouteMaps(
     const out = await removeImportedCommand(masterMemory(), rid);
     if (out?.ok) broadcastRegistryChanged();
     return out;
+  },
+  async "command.adopt"(m, context) {
+    if (!isOwnerPrincipal(context)) return ERR_OWNER_EXT_REQUIRED;
+    if (context?.sender) {
+      const docId = typeof context?.documentId === "string" ? context.documentId.trim() : "";
+      const url = typeof context?.senderUrl === "string" ? context.senderUrl : (context?.sender?.url ?? "");
+      const isTopExtensionSurface = typeof url === "string" && url.startsWith("chrome-extension://");
+      if (!docId && !isTopExtensionSurface) {
+        return ERR_OWNER_EXT_REQUIRED;
+      }
+    }
+    const mem = masterMemory();
+    const res = await adoptImportedCommand(mem, m);
+    if (res?.ok) broadcastRegistryChanged();
+    return res;
   },
   async "site-skills.set"(m, context) {
     // The owner writes a per-origin site note from the Settings surface ONLY
