@@ -132,7 +132,7 @@ Deno.test("alarm lifecycle: unrelated permission changes are ignored", () => {
 
 Deno.test("alarm lifecycle: alarms stay mandatory — Settings requests optional capabilities and verifies every grant", async () => {
   const optionsSource = await Deno.readTextFile(
-    new URL("../extension/options/options.js", import.meta.url),
+    new URL("../extension/options/panels/permissions.js", import.meta.url),
   );
   const workerSource = await Deno.readTextFile(
     new URL("../extension/background/service-worker.js", import.meta.url),

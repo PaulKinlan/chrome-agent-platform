@@ -217,7 +217,7 @@ Deno.test("agent-deletion UI source contracts: delete buttons and confirmation d
   const ntpJs = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
   const sidepanelHtml = await Deno.readTextFile(new URL("../extension/sidepanel/sidepanel.html", import.meta.url));
   const sidepanelJs = await Deno.readTextFile(new URL("../extension/sidepanel/sidepanel.js", import.meta.url));
-  const optionsJs = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
+  const optionsJs = await Deno.readTextFile(new URL("../extension/options/panels/agents.js", import.meta.url));
 
   // NTP thread view header delete button & confirmation
   assert(ntpHtml.includes('id="delete-agent"'), "NTP must have #delete-agent button");

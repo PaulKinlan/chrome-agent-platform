@@ -112,7 +112,7 @@ Deno.test("first-run composition preserves transaction and provider boundaries",
   const [worker, memory, options, memoryRoutes] = await Promise.all([
     text("../extension/background/service-worker.js"),
     text("../extension/lib/memory.js"),
-    text("../extension/options/options.js"),
+    text("../extension/options/panels/agents.js"),
     // The memory.get/set/list/clear routes (incl. the __tombs reserved-key
     // boundary) live in the extracted module since the teardown r5 review —
     // the boundary is pinned at its real home, not the SW text.

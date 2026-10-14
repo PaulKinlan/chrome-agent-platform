@@ -63,7 +63,7 @@ Deno.test("acp settings: options surface declares endpoint, token, cwd, permissi
 });
 
 Deno.test("acp settings: options.js implements renderAcpSettings with KV read/write/remove bindings", async () => {
-  const code = await Deno.readTextFile(fileURLToPath(new URL("../extension/options/options.js", import.meta.url)));
+  const code = await Deno.readTextFile(fileURLToPath(new URL("../extension/options/panels/agents.js", import.meta.url)));
   assert(code.includes("async function renderAcpSettings()"), "renderAcpSettings function declared");
   assert(code.includes('await storage.get(["acp.endpoint"'), "reads acp keys from storage");
   assert(code.includes('await storage.set({ "acp.cwd":'), "persists acp.cwd");

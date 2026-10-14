@@ -36,7 +36,7 @@ Deno.test("agent schedule markers distinguish on-demand, running, and disabled s
 });
 
 Deno.test("Settings and the hub sidebar both render the schedule marker through the ONE shared humanising helper", async () => {
-  const options = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
+  const options = await Deno.readTextFile(new URL("../extension/options/panels/agents.js", import.meta.url));
   const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
   const agentDisplay = await Deno.readTextFile(new URL("../extension/shared/agent-display.js", import.meta.url));
   // The marker is built in ONE place, and that place humanises via the shared formatter.
@@ -66,7 +66,7 @@ Deno.test("sidebar projection: disabled background agents are excluded, enabled 
 });
 
 Deno.test("every agent display surface uses the active-only projection (Settings, hub panel, hub sidebar, side panel)", async () => {
-  const options = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
+  const options = await Deno.readTextFile(new URL("../extension/options/panels/agents.js", import.meta.url));
   const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
   const sidepanel = await Deno.readTextFile(new URL("../extension/sidepanel/sidepanel.html", import.meta.url));
   assertEquals(options.includes("const existingBackground = background.filter((agent) => agent.enabled === true)"), true);
@@ -89,7 +89,7 @@ Deno.test("Settings projects a same-id named/enabled-background collision as one
   assertEquals(rows[0].namedAgent, named);
   assertEquals(rows[0].backgroundAgent, background);
 
-  const options = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
+  const options = await Deno.readTextFile(new URL("../extension/options/panels/agents.js", import.meta.url));
   assertEquals(options.includes("const unified = projectUnifiedAgents(named, existingBackground)"), true);
   assertEquals(options.includes("backgroundAgentRow(projected.backgroundAgent, row)"), true);
   assertEquals(options.includes("for (const agent of background) list.appendChild(backgroundAgentRow(agent))"), false);

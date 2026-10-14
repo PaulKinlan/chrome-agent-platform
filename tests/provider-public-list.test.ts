@@ -55,7 +55,7 @@ Deno.test("provider options: the settings picker source never offers an internal
   // fails this test by construction. The exclusion lives by ABSENCE from this
   // array (Paul 2026-08-17 note in options.js) — this pin is what makes the
   // absence a guarded property instead of an accident.
-  const js = await Deno.readTextFile("extension/options/options.js");
+  const js = await Deno.readTextFile("extension/options/panels/providers.js");
   const arrayStart = js.indexOf("const PROVIDERS = [");
   assert(arrayStart !== -1, "the settings PROVIDERS array literal is missing");
   const arrayEnd = js.indexOf("\n];", arrayStart);
@@ -218,7 +218,8 @@ Deno.test("provider options: listed providers remain selected and clear the inte
 
 Deno.test("provider options source: global and per-agent settings renderers consume the shared no-migration state", async () => {
   const html = await Deno.readTextFile("extension/options/options.html");
-  const js = await Deno.readTextFile("extension/options/options.js");
+  const providersJs = await Deno.readTextFile("extension/options/panels/providers.js");
+  const agentsJs = await Deno.readTextFile("extension/options/panels/agents.js");
   const css = await Deno.readTextFile("extension/options/options.css");
 
   assert(
@@ -227,13 +228,13 @@ Deno.test("provider options source: global and per-agent settings renderers cons
   );
   assertStringIncludes(html, 'id="provider-selection-status"');
   assertStringIncludes(html, 'role="status"');
-  assertStringIncludes(js, "providerSelectionPresentation(cfg, PROVIDERS)");
-  assertStringIncludes(js, "providerSelectionPresentation(cur, PROVIDERS)");
+  assertStringIncludes(providersJs, "providerSelectionPresentation(cfg, PROVIDERS)");
+  assertStringIncludes(agentsJs, "providerSelectionPresentation(cur, PROVIDERS)");
   assertStringIncludes(
-    js,
+    agentsJs,
     "renderInternalProviderStatus(internalStatus, storedSelection)",
   );
-  assertStringIncludes(js, "hiddenLegacyUnchanged");
-  assertStringIncludes(js, "setAgentProvider.disabled = hiddenLegacyUnchanged");
+  assertStringIncludes(agentsJs, "hiddenLegacyUnchanged");
+  assertStringIncludes(agentsJs, "setAgentProvider.disabled = hiddenLegacyUnchanged");
   assertStringIncludes(css, ".agent-provider-internal-status");
 });

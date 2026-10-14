@@ -1148,6 +1148,9 @@ Deno.test("options.js: wires renderLocalFolders and renders empty state or grant
   const optionsJs = await Deno.readTextFile(
     new URL("../extension/options/options.js", import.meta.url),
   );
+  const localFoldersJs = await Deno.readTextFile(
+    new URL("../extension/options/panels/local-folders.js", import.meta.url),
+  );
 
   assert(
     optionsJs.includes("export async function renderLocalFolders"),
@@ -1162,24 +1165,24 @@ Deno.test("options.js: wires renderLocalFolders and renders empty state or grant
     "options.js must initialize local folders on page boot",
   );
   assert(
-    optionsJs.includes("No local folder or file access has been granted"),
-    "options.js must render truthful empty state when no grants exist",
+    localFoldersJs.includes("No local folder or file access has been granted"),
+    "local-folders panel must render truthful empty state when no grants exist",
   );
   assert(
-    optionsJs.includes('type: "fs-grant.remove"'),
-    "options.js must send fs-grant.remove when revoking",
+    localFoldersJs.includes('type: "fs-grant.remove"'),
+    "local-folders panel must send fs-grant.remove when revoking",
   );
   assert(
-    optionsJs.includes("Re-grant access"),
-    "options.js must render Re-grant access button for prompt grants",
+    localFoldersJs.includes("Re-grant access"),
+    "local-folders panel must render Re-grant access button for prompt grants",
   );
   assert(
-    optionsJs.includes("regrantFsGrantAccess"),
-    "options.js must invoke regrantFsGrantAccess",
+    localFoldersJs.includes("regrantFsGrantAccess"),
+    "local-folders panel must invoke regrantFsGrantAccess",
   );
   assert(
-    optionsJs.includes("mountGrantBrowser"),
-    "options.js must mount the folder-tree browser drawer (lib/folder-browser.js)",
+    localFoldersJs.includes("mountGrantBrowser"),
+    "local-folders panel must mount the folder-tree browser drawer (lib/folder-browser.js)",
   );
   const browserJs = await Deno.readTextFile(
     new URL("../extension/lib/folder-browser.js", import.meta.url),
@@ -1189,9 +1192,9 @@ Deno.test("options.js: wires renderLocalFolders and renders empty state or grant
     "lib/folder-browser.js must render the non-blocking inline file viewer",
   );
   assertEquals(
-    optionsJs.includes("prompt("),
+    localFoldersJs.includes("prompt("),
     false,
-    "options.js must NOT use window.prompt for file viewing (N-2 modernization)",
+    "local-folders panel must NOT use window.prompt for file viewing (N-2 modernization)",
   );
 });
 

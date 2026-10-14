@@ -6,10 +6,10 @@
 // style of tests/settings-strings-audit.test.ts.
 import { assert } from "jsr:@std/assert@1";
 
-const source = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
+const source = await Deno.readTextFile(new URL("../extension/options/panels/permissions.js", import.meta.url));
 
 Deno.test("options.js: never imports the page-realm revokeCapability", () => {
-  const importBlock = source.match(/import\s*\{[^}]*\}\s*from\s*["']\.\.\/lib\/capabilities\.js["']/)?.[0] ?? "";
+  const importBlock = source.match(/import\s*\{[^}]*\}\s*from\s*["']\.\.(?:\/\.\.)?\/lib\/capabilities\.js["']/)?.[0] ?? "";
   assert(importBlock.length > 0, "options.js imports from ../lib/capabilities.js (requestCapability stays in the page)");
   assert(!/\brevokeCapability\b/.test(importBlock), "options.js must not import revokeCapability — Turn off goes through the SW route");
   assert(!/\brevokeCapability\s*\(/.test(source), "options.js must not call revokeCapability() in the page realm");

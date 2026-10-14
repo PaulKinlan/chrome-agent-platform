@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.681] — 2026-10-14
+- Refactor Settings panels into modular, mountable views while keeping all standalone Settings pages identical.
+
 ## [0.3.680] — 2026-10-14
 - Harden Settings session security so embedded Settings views use short-lived, document-bound session tokens.
 

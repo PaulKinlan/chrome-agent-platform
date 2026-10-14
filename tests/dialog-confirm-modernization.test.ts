@@ -287,7 +287,7 @@ Deno.test("deleteAgentDialog produces one body for named agents and one for back
   await tick();
   assertEquals(site.settled(), true, "a genuine click deletes");
   // Every delete-agent call site goes through the helper — no hand-rolled body.
-  for (const file of ["extension/ntp/ntp.js", "extension/options/options.js", "extension/sidepanel/sidepanel.js"]) {
+  for (const file of ["extension/ntp/ntp.js", "extension/options/panels/agents.js", "extension/sidepanel/sidepanel.js"]) {
     const src = await Deno.readTextFile(new URL(`../${file}`, import.meta.url));
     assertStringIncludes(src, "deleteAgentDialog(", `${file} uses the shared delete-agent dialog`);
     for (const stale of ["registry entry", "recurring alarm", "system prompt override", "Are you sure you want to delete ${"]) {

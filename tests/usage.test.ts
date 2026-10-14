@@ -51,7 +51,7 @@ Deno.test("usage panel: the detail-toggle listener is wired EXACTLY once, outsid
   // #usage-detail-toggle click were added inside renderUsage, each render would
   // stack a listener and produce parity-dependent dead/inverted toggles. It must
   // be a single, static, one-time wiring.
-  const src = await Deno.readTextFile("extension/options/options.js");
+  const src = await Deno.readTextFile("extension/options/panels/usage.js");
   const matches = src.match(/#usage-detail-toggle"\)\.addEventListener/g) ?? [];
   assertEquals(matches.length, 1, "usage-detail-toggle must be wired exactly once");
   // The single wiring must be OUTSIDE the renderUsage body (which is polled).

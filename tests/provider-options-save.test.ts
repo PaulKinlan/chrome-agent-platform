@@ -42,7 +42,7 @@ const provider = {
 
 Deno.test("provider save: Options uses the guarded production binding and no page storage mutation", async () => {
   const optionsSource = await Deno.readTextFile(
-    new URL("../extension/options/options.js", import.meta.url),
+    new URL("../extension/options/panels/providers.js", import.meta.url),
   );
   const saveSource = await Deno.readTextFile(
     new URL("../extension/lib/provider-options-save.js", import.meta.url),

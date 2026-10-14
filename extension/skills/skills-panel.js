@@ -127,8 +127,12 @@ export async function renderSkillList(listEl, { onUse, onDelete, send: sendFn = 
  * case) the parent NTP receives the postMessage and pre-fills the composer.
  * When Settings is opened as a bare tab (no hub parent), degrade honestly:
  * copy the /skill:<id> reference and confirm inline — never a silent no-op. */
-export function useSkill(skill, { statusEl } = {}) {
+export function useSkill(skill, { statusEl, onUse = null } = {}) {
   const token = skill.ref || `/skill:${skill.refId ?? skill.id ?? skill.name}`;
+  if (typeof onUse === "function") {
+    const handled = onUse(skill, { statusEl, token });
+    if (handled !== false) return;
+  }
   try {
     if (typeof window !== "undefined" && window.parent && window.parent !== window) {
       // Send the source-qualified refId so the hub pre-fills a collision-proof
@@ -153,8 +157,9 @@ export function useSkill(skill, { statusEl } = {}) {
 
 /** Wire the import form + list inside a container. Idempotent per container:
  * the section re-renders in place (re-imports refresh the list). */
-export function mountSkillsSection(sectionEl, { send: sendFn = send } = {}) {
-  if (!sectionEl || sectionEl.dataset.skillsMounted === "1") return;
+export function mountSkillsSection(sectionEl, { send: sendFn = send, onUse = null } = {}) {
+  if (!sectionEl) return null;
+  if (sectionEl.dataset.skillsMounted === "1") return sectionEl._skillsHandle ?? null;
   sectionEl.dataset.skillsMounted = "1";
   const list = sectionEl.querySelector(".skills-list");
   const status = sectionEl.querySelector(".import-status");
@@ -189,7 +194,7 @@ export function mountSkillsSection(sectionEl, { send: sendFn = send } = {}) {
 
   const refresh = async () => {
     const res = await renderSkillList(list, {
-      onUse: (r) => useSkill(r, { statusEl: status }),
+      onUse: (r) => useSkill(r, { statusEl: status, onUse }),
       onDelete: () => refresh(),
       send: sendFn,
     });
@@ -323,8 +328,10 @@ export function mountSkillsSection(sectionEl, { send: sendFn = send } = {}) {
 
   const importAllBtn = sectionEl.querySelector(".import-all-btn");
   const importSelectedBtn = sectionEl.querySelector(".import-selected-btn");
-  importAllBtn?.addEventListener("click", () => doBatchImport(selectAllEntries(discovery)));
-  importSelectedBtn?.addEventListener("click", () => doBatchImport(collectSelection()));
+  const onImportAll = () => doBatchImport(selectAllEntries(discovery));
+  const onImportSelected = () => doBatchImport(collectSelection());
+  importAllBtn?.addEventListener("click", onImportAll);
+  importSelectedBtn?.addEventListener("click", onImportSelected);
 
   // ── Installed commands (command.list / command.delete) ──────────────────
   const renderCommands = async () => {
@@ -351,7 +358,7 @@ export function mountSkillsSection(sectionEl, { send: sendFn = send } = {}) {
       row.setAttribute("name", view.name);
       row.setAttribute("description", view.description || "imported command");
       row.setAttribute("action", "use-delete");
-      row.addEventListener("use", () => useSkill(view, { statusEl: status }));
+      row.addEventListener("use", () => useSkill(view, { statusEl: status, onUse }));
       row.addEventListener("delete", async () => {
         const res2 = await sendFn("command.delete", { id: view.id }).catch(() => ({ ok: false }));
         if (res2?.ok) await renderCommands();
@@ -371,16 +378,37 @@ export function mountSkillsSection(sectionEl, { send: sendFn = send } = {}) {
     }
   };
 
-  const refreshAll = () => { refresh(); renderCommands(); };
+  const refreshAll = () => Promise.all([refresh(), renderCommands()]);
   sectionEl._refreshSkills = refreshAll;
 
+  let onUrlKeydown = null;
+  if (urlInput && typeof urlInput.addEventListener === "function") {
+    const origAdd = urlInput.addEventListener.bind(urlInput);
+    urlInput.addEventListener = (type, fn, opts) => {
+      if (type === "keydown") onUrlKeydown = fn;
+      return origAdd(type, fn, opts);
+    };
+  }
   urlInput?.addEventListener("keydown", (e) => {
     if (e.isComposing || e.keyCode === 229) return;
     if (e.key === "Enter") doImport();
   });
 
-  refresh();
-  renderCommands();
+  const ready = refreshAll();
+  const unmount = () => {
+    searchInput?.removeEventListener?.("input", updateFilter);
+    importBtn?.removeEventListener?.("click", doImport);
+    discoverBtn?.removeEventListener?.("click", doDiscover);
+    importAllBtn?.removeEventListener?.("click", onImportAll);
+    importSelectedBtn?.removeEventListener?.("click", onImportSelected);
+    urlInput?.removeEventListener?.("keydown", onUrlKeydown);
+    delete sectionEl.dataset.skillsMounted;
+    delete sectionEl._refreshSkills;
+    delete sectionEl._skillsHandle;
+  };
+  const handle = { refresh: refreshAll, unmount, ready };
+  sectionEl._skillsHandle = handle;
+  return handle;
 }
 
 // ── Multi-skill discovery + batch import + installed commands

@@ -150,7 +150,7 @@ Deno.test("tool-library: Settings section + wiring use ONLY the existing shadow 
   assertMatch(section, /id="tool-library-view"/, "the component has its own distinct id (no duplicate-id ambiguity)");
   assertEquals([...html.matchAll(/id="tool-library"/g)].length, 1, "exactly one #tool-library id (the section)");
 
-  const js = await text("../extension/options/options.js");
+  const js = await text("../extension/options/panels/tool-library.js");
   assertMatch(js, /renderToolLibrary/, "the wiring exists");
   assertMatch(js, /"tool-catalog\.shadow"[\s\S]{0,80}action:\s*"summary"/, "the wiring requests ONLY the summary action");
   assertNotMatch(js, /action:\s*"search"|action:\s*"capture"|action:\s*"resolve"/, "no search/capture/resolve in this slice");

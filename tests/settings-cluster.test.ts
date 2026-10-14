@@ -20,7 +20,7 @@ function usageMock() {
 }
 
 Deno.test("PERM-LAYOUT: the gates span no longer carries the `.muted` class (grid-area hint collision)", async () => {
-  const src = await read("extension/options/options.js");
+  const src = await read("extension/options/panels/permissions.js");
   assert(!src.includes('gates.className = "perm-gates muted"'), "the gates must not carry `muted` (which assigns grid-area:hint)");
   // CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01: the Permissions
   // section no longer builds a gates span at all — the sentence is the

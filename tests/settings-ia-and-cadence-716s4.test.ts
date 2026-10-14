@@ -5,6 +5,8 @@ import { formatCadenceMinutes } from "../extension/lib/next-run-label.js";
 const HTML = await Deno.readTextFile(new URL("../extension/options/options.html", import.meta.url));
 const CSS = await Deno.readTextFile(new URL("../extension/options/options.css", import.meta.url));
 const JS = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
+const AGENTS_JS = await Deno.readTextFile(new URL("../extension/options/panels/agents.js", import.meta.url));
+const USAGE_JS = await Deno.readTextFile(new URL("../extension/options/panels/usage.js", import.meta.url));
 const COMPONENTS_JS = await Deno.readTextFile(new URL("../extension/shared/components-settings.js", import.meta.url));
 
 Deno.test("716s.4 cadence formatter: humanises period in minutes to plain English labels", () => {
@@ -51,14 +53,14 @@ Deno.test("716s.4 Settings navigation IA: nav shows 6 group headings and retains
 });
 
 Deno.test("716s.4 Starter templates disclosure: agent and skill templates wrap in collapsed details", () => {
-  // options.js must wrap background agent gallery in starter-templates-disclosure
+  // panels/agents.js must wrap background agent gallery in starter-templates-disclosure
   assert(
-    JS.includes('class="starter-templates-disclosure"') || JS.includes("starter-templates-disclosure"),
-    "options.js must use starter-templates-disclosure",
+    AGENTS_JS.includes('class="starter-templates-disclosure"') || AGENTS_JS.includes("starter-templates-disclosure"),
+    "panels/agents.js must use starter-templates-disclosure",
   );
   assert(
-    JS.includes("Browse starter templates…") || JS.includes("starter-templates-disclosure"),
-    "options.js must provide starter templates disclosure summary",
+    AGENTS_JS.includes("Browse starter templates…") || AGENTS_JS.includes("starter-templates-disclosure"),
+    "panels/agents.js must provide starter templates disclosure summary",
   );
 
   // CSS must style .starter-templates-disclosure
@@ -66,7 +68,7 @@ Deno.test("716s.4 Starter templates disclosure: agent and skill templates wrap i
 });
 
 Deno.test("716s.4 Usage panel: hides estimated cost line when cost is 0", () => {
-  const usageRender = JS.slice(JS.indexOf("async function renderUsage"), JS.indexOf("// ── Charts"));
+  const usageRender = USAGE_JS.slice(USAGE_JS.indexOf("export async function renderUsage"), USAGE_JS.indexOf("// ── Charts"));
   assert(
     usageRender.includes("safe.estimatedCost > 0") || usageRender.includes("estimatedCost > 0"),
     "renderUsage must conditionally include estimated cost only when > 0",

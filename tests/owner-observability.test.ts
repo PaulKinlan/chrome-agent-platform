@@ -5,7 +5,7 @@ const read = (path: string) => Deno.readTextFileSync(new URL(path, import.meta.u
 
 Deno.test("owner observability: Settings owns verbosity and full-local-detail without weakening export redaction", () => {
   const html = read("../extension/options/options.html");
-  const options = read("../extension/options/options.js");
+  const options = read("../extension/options/panels/prompts.js");
   const logger = read("../extension/lib/cap-log.js");
   assertStringIncludes(html, 'id="log-verbosity"');
   assertStringIncludes(html, 'id="log-full-detail"');

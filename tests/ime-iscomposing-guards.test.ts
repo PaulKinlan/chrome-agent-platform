@@ -26,7 +26,7 @@ Deno.test("bmkv9: static check: all 6 audited surfaces carry e.isComposing || e.
     "ntp.js task rename input keydown must guard on e.isComposing || e.keyCode === 229",
   );
 
-  const optionsSrc = await Deno.readTextFile(`${ROOT}extension/options/options.js`);
+  const optionsSrc = await Deno.readTextFile(`${ROOT}extension/options/panels/permissions.js`);
   assert(
     optionsSrc.includes('input?.addEventListener("keydown", (e) => {\n      if (e.isComposing || e.keyCode === 229) return;') ||
     optionsSrc.includes('input?.addEventListener("keydown", (e) => { if (e.isComposing || e.keyCode === 229) return;'),

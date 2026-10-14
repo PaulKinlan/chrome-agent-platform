@@ -228,7 +228,7 @@ Deno.test("r4xk2: pinned selectors adhere to >= 12px font scale floor", () => {
 
   // folder-browser and options JS
   const folderBrowserJs = readFileSync("extension/lib/folder-browser.js", "utf8");
-  const optionsJs = readFileSync("extension/options/options.js", "utf8");
+  const optionsJs = readFileSync("extension/options/panels/local-folders.js", "utf8");
   assert(folderBrowserJs.includes('upBtn.style.fontSize = "var(--text-xs, 12px)";'), "folder-browser upBtn must be >= 12px");
   assert(folderBrowserJs.includes('count.style.fontSize = "var(--text-xs, 12px)";'), "folder-browser count must be >= 12px");
   assert(folderBrowserJs.includes('viewer.style.fontSize = "var(--text-xs, 12px)";'), "folder-browser viewer must be >= 12px");

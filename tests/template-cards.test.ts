@@ -10,7 +10,7 @@ import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS } from "../extension/lib/agent-te
 
 const components = await Deno.readTextFile(new URL("../extension/shared/components-settings.js", import.meta.url));
 const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
-const options = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
+const options = await Deno.readTextFile(new URL("../extension/options/panels/agents.js", import.meta.url));
 const gallery = await Deno.readTextFile(new URL("../docs/components.html", import.meta.url));
 const picker = await Deno.readTextFile(new URL("../extension/lib/agent-template-select.js", import.meta.url));
 

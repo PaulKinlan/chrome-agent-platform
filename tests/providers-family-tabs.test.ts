@@ -83,7 +83,7 @@ Deno.test("structural: options.html hosts a tablist slot and panels root, not th
 });
 
 Deno.test("structural: options.js renders family tabs + tabpanels with ARIA wiring", async () => {
-  const js = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
+  const js = await Deno.readTextFile(new URL("../extension/options/panels/providers.js", import.meta.url));
   assertStringIncludes(js, `"segmented-control"`, "the shared tablist component is used");
   assertStringIncludes(js, `controls-prefix`);
   assertStringIncludes(js, `role", "tabpanel"`);

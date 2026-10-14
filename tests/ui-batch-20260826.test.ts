@@ -46,8 +46,9 @@ Deno.test("Approvals: the orphaned settings section is gone; revoke confirmation
   assertNotMatch(html, /id="approvals"/, "Approvals section removed");
   assertNotMatch(html, /data-section="approvals"/, "Approvals nav removed");
   const js = read("../extension/options/options.js");
+  const permissionsJs = read("../extension/options/panels/permissions.js");
   assertNotMatch(js, /renderApprovals/, "approvals settings-panel wiring removed");
-  assertMatch(js, /runOwnerApprovedMutation/, "revoke confirmation routes through the in-context owner-approved mutation");
+  assertMatch(permissionsJs, /runOwnerApprovedMutation/, "revoke confirmation routes through the in-context owner-approved mutation");
 });
 
 Deno.test("System prompt: search-once-then-execute guidance present and context-bounded", () => {

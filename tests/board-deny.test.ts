@@ -257,7 +257,7 @@ Deno.test("board deny: each route is defined exactly once (no duplicate-key dead
 });
 
 Deno.test("board deny: Settings wiring uses the real named-agent.list route and its {agents} envelope", async () => {
-  const src = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
+  const src = await Deno.readTextFile(new URL("../extension/options/panels/board-permissions.js", import.meta.url));
   const section = src.slice(src.indexOf("renderBoardDenyRules"));
   assert(section.includes('"named-agent.list"'), "the dropdowns use the real route name");
   assert(!section.includes('"named-agents.list"'), "the nonexistent plural route is gone");

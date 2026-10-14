@@ -151,7 +151,7 @@ Deno.test("backup-restore: options.html controls have correct accept attribute a
 });
 
 Deno.test("backup-restore: options.js routes backups through transactional streamRestoreArchive with confirmation", async () => {
-  const code = await Deno.readTextFile("extension/options/options.js");
+  const code = await Deno.readTextFile("extension/options/panels/data.js");
 
   // streamRestoreArchive wiring check
   assert(

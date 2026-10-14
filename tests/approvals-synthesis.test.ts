@@ -19,7 +19,7 @@ Deno.test("approvals synthesis: the settings section + nav + wiring are fully re
 });
 
 Deno.test("approvals synthesis: the Permissions section has no Settings-list detours; Turn off is an in-context owner-approved revoke", () => {
-  const js = read("../extension/options/options.js");
+  const js = read("../extension/options/panels/permissions.js");
   // OPTIONAL + JIT model (owner directive 2026-08-29; superseding the
   // install-granted model this test was written under): capabilities are
   // runtime-revocable again, and the ONLY revoke control is the Turn off button

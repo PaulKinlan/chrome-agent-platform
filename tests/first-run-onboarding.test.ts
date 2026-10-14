@@ -200,7 +200,7 @@ Deno.test("first run: shared setup components use native labelled controls and r
 
 Deno.test("first run: options blocks session-only credentials before provider.set under install-granted storage", async () => {
   const source = await Deno.readTextFile(
-    new URL("../extension/options/options.js", import.meta.url),
+    new URL("../extension/options/panels/providers.js", import.meta.url),
   );
   const binding = source.indexOf("bindProviderSetDefault({");
   const guard = source.indexOf(

@@ -68,7 +68,7 @@ Deno.test("the hub strip reads Ready — OpenAI · gpt-5.6-luna when a keyed pro
 // ── Structural guards on the built panel (retargeted from providers-tabs) ──
 const root = new URL("../extension/options/", import.meta.url);
 const html = await Deno.readTextFile(new URL("options.html", root));
-const js = await Deno.readTextFile(new URL("options.js", root));
+const js = await Deno.readTextFile(new URL("panels/providers.js", root));
 
 // ── the no-internal-API-in-user-copy pin (df8b55ea) ───────────────────────
 // User copy says what the reader gets, never the API the extension calls: the

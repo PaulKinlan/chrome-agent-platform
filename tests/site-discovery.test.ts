@@ -142,7 +142,7 @@ Deno.test("site discovery: permanent manifest host access is honest cleanup succ
 Deno.test("site discovery WIRING (source pins): boot recovery and proactive discovery UI are wired", async () => {
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
-  const options = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
+  const options = await Deno.readTextFile(new URL("../extension/options/panels/agents.js", import.meta.url));
 
   // Invariant 1: SW runs reconcileEnrolledOriginScriptsOnBoot on startup
   assert(

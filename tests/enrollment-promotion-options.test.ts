@@ -1,7 +1,7 @@
 import { assert } from "jsr:@std/assert@1";
 
 Deno.test("D2: Settings surfaces inert pending, retry, abandonment, and cleanup without listing a Site Agent", async () => {
-  const options = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
+  const options = await Deno.readTextFile(new URL("../extension/options/panels/data.js", import.meta.url));
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   const start = options.indexOf('boundedSend("agent.pending-cleanup")');
   const end = options.indexOf("// ── Factory reset / Delete all data", start);

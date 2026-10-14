@@ -3,6 +3,9 @@ import { assert, assertStringIncludes } from "jsr:@std/assert@1";
 const read = (path: string) => Deno.readTextFileSync(new URL(path, import.meta.url));
 const html = read("../extension/options/options.html");
 const options = read("../extension/options/options.js");
+const providers = read("../extension/options/panels/providers.js");
+const permissions = read("../extension/options/panels/permissions.js");
+const hooks = read("../extension/options/panels/hooks.js");
 const components = read("../extension/shared/components.js");
 const onboarding = read("../extension/lib/first-run-onboarding.js");
 const pure = read("../extension/lib/pure.js");
@@ -27,11 +30,11 @@ Deno.test("settings cleanliness: the request-era Verify storage control is remov
 });
 
 Deno.test("settings cleanliness: API-key persistence still fails closed when install storage is missing", () => {
-  assertStringIncludes(options, "function blockSessionOnlyCredentialSave(input)");
-  assertStringIncludes(options, "credentialNeedsDurableStorage({ enteredKey: input?.value ?? \"\", storageGranted })");
-  assertStringIncludes(options, "Storage is missing from this installation. Reload the extension; if it is still missing, reinstall the extension before saving an API key.");
-  const guard = options.indexOf("shouldBlock: () => blockSessionOnlyCredentialSave(credentialInput)");
-  const persist = options.indexOf("requestHostAccess: requestProviderHostAccess", guard);
+  assertStringIncludes(providers, "function blockSessionOnlyCredentialSave(input)");
+  assertStringIncludes(providers, "credentialNeedsDurableStorage({ enteredKey: input?.value ?? \"\", storageGranted })");
+  assertStringIncludes(providers, "Storage is missing from this installation. Reload the extension; if it is still missing, reinstall the extension before saving an API key.");
+  const guard = providers.indexOf("shouldBlock: () => blockSessionOnlyCredentialSave(credentialInput)");
+  const persist = providers.indexOf("requestHostAccess: requestProviderHostAccess", guard);
   assert(guard >= 0 && persist > guard, "the synchronous durability guard stays before provider persistence");
 });
 
@@ -42,26 +45,26 @@ Deno.test("settings cleanliness: real owner controls and install-grant diagnosti
     'id="permission-list"',
     'id="hook-list"',
   ]) assertStringIncludes(html, marker);
-  assertStringIncludes(options, "async function renderPermissions()");
+  assertStringIncludes(permissions, "async function renderPermissions()");
   // OPTIONAL + JIT model: the Permissions section is a live three-state
   // display (granted = the switch / requestable = the ghost Turn on button /
   // platform-unavailable = text) plus the fixed mandatory "Always on" group,
   // every row a shared <capability-row>
   // (CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01).
-  assertStringIncludes(options, 'document.createElement("capability-row")');
-  assertStringIncludes(options, 'row.dataset.state = "granted"');
-  assertStringIncludes(options, 'row.setAttribute("action-state", "on")');
-  assertStringIncludes(options, 'row.dataset.state = "requestable"');
-  assertStringIncludes(options, 'row.setAttribute("action-label", "Turn on")');
-  assertStringIncludes(options, 'row.dataset.state = "unavailable"');
-  assertStringIncludes(options, 'row.setAttribute("action-label", "Not available on this platform")');
-  assertStringIncludes(options, 'row.dataset.state = "required"');
-  assertStringIncludes(options, 'row.setAttribute("action-label", "Always on")');
+  assertStringIncludes(permissions, 'document.createElement("capability-row")');
+  assertStringIncludes(permissions, 'row.dataset.state = "granted"');
+  assertStringIncludes(permissions, 'row.setAttribute("action-state", "on")');
+  assertStringIncludes(permissions, 'row.dataset.state = "requestable"');
+  assertStringIncludes(permissions, 'row.setAttribute("action-label", "Turn on")');
+  assertStringIncludes(permissions, 'row.dataset.state = "unavailable"');
+  assertStringIncludes(permissions, 'row.setAttribute("action-label", "Not available on this platform")');
+  assertStringIncludes(permissions, 'row.dataset.state = "required"');
+  assertStringIncludes(permissions, 'row.setAttribute("action-label", "Always on")');
   // The hand-rolled card row is gone from both sections (the board deny list
   // is the only remaining .perm-row user).
-  const permissionsFn = options.slice(options.indexOf("async function renderPermissions()"), options.indexOf("async function renderHooks()"));
+  const permissionsFn = permissions.slice(permissions.indexOf("async function renderPermissions()"), permissions.indexOf("async function renderHooks()"));
   assert(!permissionsFn.includes('"perm-row"'), "Permissions no longer hand-rolls .perm-row cards");
-  const hooksFn = options.slice(options.indexOf("async function renderHooks()"), options.indexOf("// vocab:advanced:end"));
+  const hooksFn = hooks.slice(hooks.indexOf("async function renderHooks()"), hooks.indexOf("// vocab:advanced:end"));
   assert(!hooksFn.includes('"perm-row"') && !hooksFn.includes("danger"), "Hooks is a table of switches, not danger-button cards");
   assertStringIncludes(hooksFn, 'document.createElement("switch-toggle")');
   assertStringIncludes(html, '<table id="hook-list" class="hooks-table">');

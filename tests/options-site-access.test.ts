@@ -148,9 +148,9 @@ Deno.test("site access: scope copy is true for wildcards without claiming proven
   assertEquals(siteAccessScope("weird"), "this entry");
 });
 
-// ── Wiring pins (exact call expressions — live occurrences in options.js) ──
+// ── Wiring pins (exact call expressions — live occurrences in panels/permissions.js) ──
 
-const options = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
+const options = await Deno.readTextFile(new URL("../extension/options/panels/permissions.js", import.meta.url));
 
 Deno.test("options.js renders the verified site-access group from the real Chrome state", () => {
   // The CALL — deleting the construct deletes this occurrence (import is not a call site).

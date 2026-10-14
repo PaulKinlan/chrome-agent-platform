@@ -257,6 +257,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "screenshot-vision-evidence.ts": { class: "manual", reason: "green at the re-inventory (25 s); the screenshot-to-model evidence run" },
   "sidepanel-companion-journey.ts": { class: "manual", reason: "9/0 at the re-inventory (54 s); the side-panel companion journey standalone" },
   "skills-in-settings-evidence.ts": { class: "manual", reason: "9/0 at the re-inventory (23 s); the skills-in-Settings evidence run" },
+  "settings-panel-parity.ts": { class: "manual", reason: "chrome-agent-platform-8v5l.1 Acceptance 1 parity harness: loads standalone options.html at BASE and HEAD in the same Chrome, mounts all 16 sections, and compares normalized section DOM, ordered SW message types, and live listener/timer counts" },
   "system-prompts-integration.ts": { class: "manual", reason: "3/11 at the re-inventory and then a crash: <system-prompt-editor> never renders on options.html#prompts (Settings drift); kept for bisecting" },
   "unix-tools-streaming-acceptance.ts": { class: "manual", reason: "long-form release evidence: loads the exact extension and drives all nine streamed Unix tools over one 100 MiB owner-bound OPFS fixture, including receipt hashes and reference chaining" },
   "validate-package-load.ts": { class: "manual", reason: "loads the PACKAGED build (scripts/evidence-runner.sh gate 18 after gate 17 packages it)" },

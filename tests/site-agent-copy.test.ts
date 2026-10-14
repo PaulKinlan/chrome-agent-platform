@@ -155,7 +155,7 @@ Deno.test("site-agent copy: unknown states fail safely with actionable public co
 Deno.test("site-agent basic surfaces contain no diagnostic status row or old scan promises", async () => {
   const ntpHtml = await Deno.readTextFile("extension/ntp/ntp.html");
   const ntpJs = await Deno.readTextFile("extension/ntp/ntp.js");
-  const optionsJs = await Deno.readTextFile("extension/options/options.js");
+  const optionsJs = await Deno.readTextFile("extension/options/panels/agents.js");
   const componentsJs = await Deno.readTextFile("extension/shared/components-core.js");
   const sidepanelHtml = await Deno.readTextFile("extension/sidepanel/sidepanel.html");
   const sidepanelJs = await Deno.readTextFile("extension/sidepanel/sidepanel.js");
@@ -181,7 +181,7 @@ Deno.test("site-agent basic surfaces contain no diagnostic status row or old sca
 });
 
 Deno.test("site-agent diagnostics retain bounded technical detail off the basic rows", async () => {
-  const optionsJs = await Deno.readTextFile("extension/options/options.js");
+  const optionsJs = await Deno.readTextFile("extension/options/panels/agents.js");
   assert(optionsJs.includes("Script status (attested):"));
   assert(optionsJs.includes("Injection:"));
   assert(optionsJs.includes("Page report:"));
@@ -298,7 +298,7 @@ Deno.test("side panel companion: live region semantics + the Open/Enter transiti
 });
 
 Deno.test("site-agent copy: the centralized vocabulary is the ACTUAL consumer authority across every visible surface", async () => {
-  const surfaces = ["extension/options/options.html", "extension/options/options.js", "extension/sidepanel/sidepanel.html",
+  const surfaces = ["extension/options/options.html", "extension/options/options.js", "extension/options/panels/agents.js", "extension/sidepanel/sidepanel.html",
     "extension/sidepanel/sidepanel.js",
     "extension/directory/directory.js",
     "extension/ntp/ntp.html", "extension/ntp/ntp.js", "extension/shared/conversation.js",

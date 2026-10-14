@@ -493,7 +493,7 @@ Deno.test("provider-server: source pins — the settings toggle + rate card exis
   assertStringIncludes(html, "server-tools-enabled");
   assertStringIncludes(html, "$14 per 1,000 searches");
   const js = await Deno.readTextFile(
-    new URL("../extension/options/options.js", import.meta.url),
+    new URL("../extension/options/panels/providers.js", import.meta.url),
   );
   assertStringIncludes(js, "cap:providerServerTools");
   assertStringIncludes(js, "key: String(a?.instanceId ?? \"\")");
