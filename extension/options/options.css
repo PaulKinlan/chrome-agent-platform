@@ -1,10 +1,12 @@
 /* Options / settings page — a dedicated configuration pane. */
-body {
+body:not(:has(#settings-view)) {
   margin: 0;
   min-height: 100vh;
   min-inline-size: 0;
   background: var(--bg);
 }
+
+@scope (#settings-view, body:not(:has(#settings-view))) {
 .options-shell {
   display: flex;
   min-height: 100vh;
@@ -2104,5 +2106,6 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   padding: 1px 4px;
   border-radius: 3px;
   background: var(--surface-subtle, rgba(128, 128, 128, 0.1));
+}
 }
 

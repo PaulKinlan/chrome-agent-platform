@@ -7,6 +7,7 @@
     <title>Agent Hub — new tab</title>
     <link rel="icon" href="../icons/icon16.png">
     <link rel="stylesheet" href="../shared/theme.css">
+    <link rel="stylesheet" href="../options/options.css">
     <style>
     /* The hub is a COMMAND CENTER: a thread sidebar (left) + the main area
        (the composer hero + the activity overview). Mirrors the settings
@@ -1818,6 +1819,17 @@
     .artifacts-view .capacity.full .cap-fill { background: #d64545; }
     .artifacts-view .capacity.full { border-color: #d64545; }
 
+    /* Hub-hosted Settings view (Stage 3c chrome-agent-platform-8v5l.3) */
+    .settings-view {
+      display: flex;
+      flex-direction: column;
+      min-block-size: 100%;
+      min-inline-size: 0;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .settings-view[hidden] { display: none !important; }
+
     /* The task thread does NOT cover the sidebar: it fills the area to the
        RIGHT of the task sidebar so the sidebar (and its active-thread state)
        stays visible while inside a task (item 26). The settings/directory/
@@ -2255,6 +2267,7 @@
           </div>
           <div class="foot" id="artifacts-foot"></div>
         </section>
+        <section id="settings-view" class="settings-view" tabindex="-1" aria-labelledby="view-title" hidden></section>
       </div>
       <!-- CAP-FB-20260828-PANEL-DOC-RETENTION-01: panel frames are created
            lazily per panel path by ntp.js (panelFrameFor) — see the pool note. -->

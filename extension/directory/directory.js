@@ -89,7 +89,7 @@ export async function renderDirectoryContent(targetRowsEl, { onNavigateSettings 
       } else if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) {
         chrome.runtime.openOptionsPage();
       } else {
-        location.href = "../options/options.html#section-agents";
+        location.href = "../options/options.html#agents";
       }
     });
     targetRowsEl.append(emptyState);

@@ -49,6 +49,7 @@ export const DIST_COMPLETE_OUTPUTS = Object.freeze([
   "privacy.bundle.js",
   "offscreen.bundle.js",
   "user-wasm-store-client.bundle.js",
+  "settings-view.bundle.js",
 ]);
 export const INDEXED_SOURCE_EXCLUDED_PATHS = Object.freeze(new Set([
   "docs/diff-core.bundle.js",

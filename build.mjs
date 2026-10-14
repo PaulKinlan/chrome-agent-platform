@@ -659,6 +659,7 @@ try {
     const PRIVACY_BUNDLE = path.join(STAGE, "privacy.bundle.js");
     const OFFSCREEN_BUNDLE = path.join(STAGE, "offscreen.bundle.js");
     const USER_WASM_STORE_CLIENT_BUNDLE = path.join(STAGE, "user-wasm-store-client.bundle.js");
+    const SETTINGS_VIEW_BUNDLE = path.join(STAGE, "settings-view.bundle.js");
     const DIFF_CORE = path.join(STAGE, "shared/diff-core.bundle.js");
     const WORKER = path.join(STAGE, "workers/agent-worker.js");
 
@@ -692,6 +693,7 @@ try {
       privacyResult,
       offscreenResult,
       userWasmClientResult,
+      settingsViewResult,
       diffCoreResult,
       workerResult,
     ] = await settleAll([
@@ -720,6 +722,7 @@ try {
       build({ ...shared, entryPoints: [path.join(EXT_DIR, "privacy/privacy.js")], outfile: PRIVACY_BUNDLE, metafile: true }),
       build({ ...shared, entryPoints: [path.join(EXT_DIR, "offscreen/offscreen.js")], outfile: OFFSCREEN_BUNDLE, metafile: true }),
       build({ ...shared, entryPoints: [path.join(EXT_DIR, "lib/user-wasm-store-client.js")], outfile: USER_WASM_STORE_CLIENT_BUNDLE, metafile: true }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/settings-view.js")], outfile: SETTINGS_VIEW_BUNDLE, metafile: true }),
       build({ ...shared, entryPoints: [path.join(EXT_DIR, "shared/diff-core.js")], outfile: DIFF_CORE }),
       build({
         ...shared,
@@ -746,6 +749,7 @@ try {
       { name: "privacy", entry: "privacy/privacy.js", out: "privacy.bundle.js", path: PRIVACY_BUNDLE, result: privacyResult, budget: 65_000 },
       { name: "offscreen", entry: "offscreen/offscreen.js", out: "offscreen.bundle.js", path: OFFSCREEN_BUNDLE, result: offscreenResult, budget: 250_000 },
       { name: "user-wasm-store-client", entry: "lib/user-wasm-store-client.js", out: "user-wasm-store-client.bundle.js", path: USER_WASM_STORE_CLIENT_BUNDLE, result: userWasmClientResult, budget: 10_000 },
+      { name: "settings-view", entry: "options/settings-view.js", out: "settings-view.bundle.js", path: SETTINGS_VIEW_BUNDLE, result: settingsViewResult, budget: 120_000 },
     ];
     const SURFACE_BUNDLE_PATHS = SURFACE_BUNDLES.map((s) => s.path);
     const ALL_BUNDLE_PATHS = [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE, ...SURFACE_BUNDLE_PATHS, ...emittedChunks];
@@ -875,6 +879,7 @@ try {
         "privacy.bundle.js": privacyResult.metafile,
         "offscreen.bundle.js": offscreenResult.metafile,
         "user-wasm-store-client.bundle.js": userWasmClientResult.metafile,
+        "settings-view.bundle.js": settingsViewResult.metafile,
       };
       const swSize = (await stat(SW)).size;
       if (DEBUG_BUILD) {

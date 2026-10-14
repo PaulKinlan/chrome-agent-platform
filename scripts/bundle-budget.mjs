@@ -42,6 +42,7 @@ export const STORE_BUNDLE_BUDGETS = Object.freeze({
   "privacy.bundle.js": 65_000,
   "offscreen.bundle.js": 250_000,
   "user-wasm-store-client.bundle.js": 10_000,
+  "settings-view.bundle.js": 120_000,
 });
 
 /** The bundle outputs the budget report covers (relative to dist/). */

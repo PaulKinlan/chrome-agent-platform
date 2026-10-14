@@ -22,7 +22,7 @@ Deno.test("artifacts client view: ntp.html contains client-side view host and ar
 
 Deno.test("artifacts client view: ntp.js mounts Artifacts natively without iframe", () => {
   const openView = ntpJs.slice(ntpJs.indexOf("function openView("), ntpJs.indexOf("function closeView("));
-  assert(openView.includes("const isClientSide = targetRoute === VIEW_ROUTE.DIRECTORY || targetRoute === VIEW_ROUTE.ARTIFACTS;"),
+  assert(openView.includes("const isClientSide = targetRoute === VIEW_ROUTE.DIRECTORY || targetRoute === VIEW_ROUTE.ARTIFACTS || (targetRoute === VIEW_ROUTE.SETTINGS && isHubOk);"),
     "openView must identify client-side views");
   assert(openView.includes("else if (targetRoute === VIEW_ROUTE.ARTIFACTS) {"),
     "openView must branch for VIEW_ROUTE.ARTIFACTS");
@@ -61,7 +61,7 @@ Deno.test("artifacts client view: URL addressability and deep linking support (C
 
 Deno.test("artifacts client view: hash-restore on reload and traverse-to-unmounted fallthrough (C9)", () => {
   const applyRoute = ntpJs.slice(ntpJs.indexOf("async function applyCurrentHashRoute"), ntpJs.indexOf("// Support browser back/forward navigation"));
-  assert(applyRoute.includes("const isClient = targetRoute === VIEW_ROUTE.DIRECTORY || targetRoute === VIEW_ROUTE.ARTIFACTS;"),
+  assert(applyRoute.includes("const isClient = targetRoute === VIEW_ROUTE.DIRECTORY || targetRoute === VIEW_ROUTE.ARTIFACTS || (targetRoute === VIEW_ROUTE.SETTINGS && isHubOkSettingsPath(parsed.path));"),
     "applyCurrentHashRoute must identify client-side Artifacts route");
   assert(applyRoute.includes("openView(parsed.path, title, null, { pushHistory: false });"),
     "unmounted view traverse/reload must fall through to openView");
@@ -69,7 +69,7 @@ Deno.test("artifacts client view: hash-restore on reload and traverse-to-unmount
 
 Deno.test("artifacts client view: a11y focus movement on mount and restoration on unmount (C10)", () => {
   const openView = ntpJs.slice(ntpJs.indexOf("function openView("), ntpJs.indexOf("function closeView("));
-  assert(openView.includes('focusAfter: activePanelFrame ?? (isClientSide ? (document.getElementById("view-back") ?? (targetRoute === VIEW_ROUTE.DIRECTORY ? directoryViewEl : artifactsViewEl)) : null)'),
+  assert(openView.includes('focusAfter: activePanelFrame ?? (isClientSide ? (document.getElementById("view-back") ?? (targetRoute === VIEW_ROUTE.DIRECTORY ? directoryViewEl : (targetRoute === VIEW_ROUTE.SETTINGS ? settingsViewEl : artifactsViewEl))) : null)'),
     "openView must route focus into client view upon mount");
   const closeView = ntpJs.slice(ntpJs.indexOf("function closeView("), ntpJs.indexOf("// ── Multi-Page App"));
   assert(closeView.includes("viewFocus.close(() => {})"),

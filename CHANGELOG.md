@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.684] — 2026-10-14
+- Skills, Usage, and About now open directly inside the Hub Settings view without creating an extra frame, and the Directory link to Agents settings opens the right section.
+
 ## [0.3.683] — 2026-10-14
 - Added a single permission card for multi-step tab tasks so you can approve tab access once per run.
 

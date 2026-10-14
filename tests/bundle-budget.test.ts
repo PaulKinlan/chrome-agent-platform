@@ -222,6 +222,7 @@ Deno.test("9epn.4 bundle budget: every generated bundle has a ceiling and the ga
       "shared/diff-core.bundle.js",
       "sidepanel.bundle.js",
       "user-wasm-store-client.bundle.js",
+      "settings-view.bundle.js",
       "workers/agent-worker.js",
       // Sorted here rather than by hand: the actual list is sorted, and the two
       // "artifact" names differ only at the 9th character ('.' < 's'), which is
@@ -844,6 +845,7 @@ Deno.test("9epn.5 dynamic evaluator gate covers all surface bundles without dyna
     "privacy.bundle.js",
     "offscreen.bundle.js",
     "user-wasm-store-client.bundle.js",
+    "settings-view.bundle.js",
   ];
 
   for (const b of bundles) {

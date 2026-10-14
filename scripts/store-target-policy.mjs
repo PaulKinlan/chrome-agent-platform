@@ -50,6 +50,7 @@ export const BUNDLE_ARCHIVE_MAP = Object.freeze(new Map([
   ["dist/privacy.bundle.js", "privacy/privacy.js"],
   ["dist/offscreen.bundle.js", "offscreen/offscreen.js"],
   ["dist/user-wasm-store-client.bundle.js", "lib/user-wasm-store-client.js"],
+  ["dist/settings-view.bundle.js", "options/settings-view.js"],
 ]));
 
 export const STORE_BOUNDARY_ALLOWLIST = Object.freeze({

@@ -5720,11 +5720,122 @@ const viewClientHost = document.getElementById("view-client-host");
 const directoryViewEl = document.getElementById("directory-view");
 const directoryRowsEl = document.getElementById("directory-rows");
 const artifactsViewEl = document.getElementById("artifacts-view");
+const settingsViewEl = document.getElementById("settings-view");
 const viewFocus = createViewFocusController();
+
+const HUB_OK_SETTINGS_SECTIONS = new Set(["skills", "usage", "about"]);
+
+function normalizeHubSettingsSection(candidate) {
+  if (typeof candidate !== "string" || !candidate) return null;
+  let clean = candidate.startsWith("#") ? candidate.slice(1).trim() : candidate.trim();
+  if (clean.startsWith("section-")) clean = clean.slice("section-".length);
+  else if (clean.startsWith("section=")) clean = clean.slice("section=".length);
+  if (clean === "background-agents" || clean === "background") return "agents";
+  if (clean === "provider") return "providers";
+  return clean;
+}
+
+function resolveSettingsSectionFromPath(rawPath) {
+  const str = String(rawPath ?? "").trim();
+  if (!str) return "providers";
+  const [beforeHash, rawHash] = str.split("#", 2);
+  const [routeBase, rawQuery] = beforeHash.split("?", 2);
+  if (routeBase === "recipes/index.html") return "skills";
+  let candidate = rawHash ?? "";
+  if (!candidate && rawQuery) {
+    for (const part of rawQuery.split("&")) {
+      if (part.startsWith("section=")) {
+        try {
+          candidate = decodeURIComponent(part.slice("section=".length));
+        } catch {
+          candidate = part.slice("section=".length);
+        }
+        break;
+      }
+    }
+  }
+  return normalizeHubSettingsSection(candidate) ?? "providers";
+}
+
+function isHubOkSettingsPath(rawPath) {
+  const str = String(rawPath ?? "").trim();
+  if (!str) return false;
+  const [beforeHash] = str.split("#", 2);
+  const routeBase = beforeHash.split("?", 2)[0];
+  if (routeBase === "recipes/index.html") return true;
+  if (routeBase !== "options/options.html" && routeBase !== "settings") return false;
+  const sectionId = resolveSettingsSectionFromPath(rawPath);
+  return HUB_OK_SETTINGS_SECTIONS.has(sectionId);
+}
+
+let settingsViewModulePromise = null;
+function loadSettingsViewModule() {
+  if (!settingsViewModulePromise) {
+    const url = typeof chrome !== "undefined" && typeof chrome.runtime?.getURL === "function"
+      ? chrome.runtime.getURL("dist/settings-view.bundle.js")
+      : "../options/settings-view.js";
+    settingsViewModulePromise = import(url);
+  }
+  return settingsViewModulePromise;
+}
+
+let activeSettingsViewTeardown = null;
+let activeSettingsViewSectionId = null;
+
+function teardownHubSettingsView() {
+  if (activeSettingsViewTeardown) {
+    const fn = activeSettingsViewTeardown;
+    activeSettingsViewTeardown = null;
+    try { fn(); } catch { /* best effort */ }
+  }
+  if (settingsViewEl) {
+    settingsViewEl.hidden = true;
+    try { settingsViewEl.replaceChildren(); } catch { /* best effort */ }
+  }
+  activeSettingsViewSectionId = null;
+}
+
+async function renderHubSettingsView(sectionId, { focusHeading = false } = {}) {
+  const mod = await loadSettingsViewModule();
+  activeSettingsViewTeardown = mod.teardownSettingsView;
+  activeSettingsViewSectionId = sectionId;
+  return await mod.renderSettingsView(settingsViewEl, {
+    sectionId,
+    focusHeading,
+    send,
+    storage: (typeof chrome !== "undefined" && chrome.storage?.local) ? chrome.storage.local : null,
+    setTimeout: (...args) => setTimeout(...args),
+    clearTimeout: (...args) => clearTimeout(...args),
+    onNavigateSection: async (nextSec, navOpts = {}) => {
+      const canonical = normalizeHubSettingsSection(nextSec);
+      if (navOpts.exactDocument || !HUB_OK_SETTINGS_SECTIONS.has(canonical)) {
+        openView("options/options.html#" + canonical, "Settings");
+      } else {
+        const nextPath = "settings#" + canonical;
+        const hash = `#view=${encodeURIComponent(nextPath)}`;
+        if (typeof window !== "undefined" && window.history?.replaceState) {
+          navigateNtpRoute(window, hash, { route: "view", path: nextPath, title: "Settings" }, "Settings");
+        }
+        await renderHubSettingsView(canonical, { focusHeading: true });
+      }
+    },
+    onUseSkill: (ref) => {
+      const id = typeof ref === "object" ? String(ref?.id ?? "").trim() : String(ref ?? "").trim();
+      const token = (typeof ref === "object" && ref?.ref) ? String(ref.ref).trim() : `/skill:${id}`;
+      goHome({ focusAfter: composer });
+      if (composer) {
+        composer.value = composer.value ? `${composer.value} ${token}` : token;
+        composer.focus?.();
+      }
+    },
+    onGoHome: () => goHome({ focusAfter: composer }),
+    onClose: () => closeView(),
+  });
+}
 
 function embeddedViewRoute(path) {
   const routePath = String(path ?? "").split(/[?#]/, 1)[0];
-  if (routePath === "options/options.html") return VIEW_ROUTE.SETTINGS;
+  if (routePath === "options/options.html" || routePath === "settings") return VIEW_ROUTE.SETTINGS;
   if (routePath === "directory/directory.html" || routePath === "directory") return VIEW_ROUTE.DIRECTORY;
   if (routePath === "artifacts/index.html" || routePath === "artifacts" || routePath.startsWith("artifacts&")) return VIEW_ROUTE.ARTIFACTS;
   return VIEW_ROUTE.SETTINGS;
@@ -5752,24 +5863,41 @@ function openView(path, title, trigger) {
       path = path.slice(0, qi) + (params.length ? `?${params.join("&")}` : "") + path.slice(end);
     }
   }
-  const [basePath, hash] = String(path ?? "").split("#");
+
+  // Stage 3c / C5 URL contract: resolve Settings view paths and canonical sections.
   const targetRoute = embeddedViewRoute(path);
-  const isClientSide = targetRoute === VIEW_ROUTE.DIRECTORY || targetRoute === VIEW_ROUTE.ARTIFACTS;
+  let isHubOk = false;
+  if (targetRoute === VIEW_ROUTE.SETTINGS) {
+    const sectionId = resolveSettingsSectionFromPath(path);
+    isHubOk = HUB_OK_SETTINGS_SECTIONS.has(sectionId);
+    if (isHubOk) {
+      path = `settings#${sectionId}`;
+      title = "Settings";
+    } else {
+      path = `options/options.html#${sectionId}`;
+    }
+  }
+
+  const [basePath, hash] = String(path ?? "").split("#");
+  const isClientSide = targetRoute === VIEW_ROUTE.DIRECTORY || targetRoute === VIEW_ROUTE.ARTIFACTS || (targetRoute === VIEW_ROUTE.SETTINGS && isHubOk);
   if (targetRoute !== VIEW_ROUTE.ARTIFACTS) teardownArtifactsView();
+  if (targetRoute !== VIEW_ROUTE.SETTINGS || !isHubOk) teardownHubSettingsView();
 
   if (isClientSide) {
     if (viewClientHost) {
       viewClientHost.hidden = false;
       if (targetRoute === VIEW_ROUTE.DIRECTORY) {
         if (artifactsViewEl) artifactsViewEl.hidden = true;
+        if (settingsViewEl) settingsViewEl.hidden = true;
         if (directoryViewEl && directoryRowsEl) {
           directoryViewEl.hidden = false;
           renderDirectoryContent(directoryRowsEl, {
-            onNavigateSettings: () => openView("options/options.html#section-agents", "Settings"),
+            onNavigateSettings: () => openView("options/options.html#agents", "Settings"),
           });
         }
       } else if (targetRoute === VIEW_ROUTE.ARTIFACTS) {
         if (directoryViewEl) directoryViewEl.hidden = true;
+        if (settingsViewEl) settingsViewEl.hidden = true;
         if (artifactsViewEl) {
           artifactsViewEl.hidden = false;
           renderArtifactsView(artifactsViewEl, {
@@ -5777,6 +5905,14 @@ function openView(path, title, trigger) {
             onAttachArtifact: (artifact) => attachArtifactToComposer(artifact, { closeOverlay: true }),
             onGoHome: () => goHome({ focusAfter: composer }),
           });
+        }
+      } else if (targetRoute === VIEW_ROUTE.SETTINGS) {
+        if (directoryViewEl) directoryViewEl.hidden = true;
+        if (artifactsViewEl) artifactsViewEl.hidden = true;
+        if (settingsViewEl) {
+          settingsViewEl.hidden = false;
+          const sectionId = resolveSettingsSectionFromPath(path);
+          renderHubSettingsView(sectionId);
         }
       }
     }
@@ -5786,6 +5922,7 @@ function openView(path, title, trigger) {
     if (viewClientHost) viewClientHost.hidden = true;
     if (directoryViewEl) directoryViewEl.hidden = true;
     if (artifactsViewEl) artifactsViewEl.hidden = true;
+    if (settingsViewEl) settingsViewEl.hidden = true;
     const frame = panelFrameFor(path);
     // Embedded panel documents boot at their exact canonical URL — NO query. The
     // old approach appended ?embedded=1 as an embeddedness marker and then had
@@ -5835,7 +5972,7 @@ function openView(path, title, trigger) {
       activeViewRoute = targetRoute;
       syncViewOpen();
     }, null), {
-    focusAfter: activePanelFrame ?? (isClientSide ? (document.getElementById("view-back") ?? (targetRoute === VIEW_ROUTE.DIRECTORY ? directoryViewEl : artifactsViewEl)) : null),
+    focusAfter: activePanelFrame ?? (isClientSide ? (document.getElementById("view-back") ?? (targetRoute === VIEW_ROUTE.DIRECTORY ? directoryViewEl : (targetRoute === VIEW_ROUTE.SETTINGS ? settingsViewEl : artifactsViewEl))) : null),
   });
 }
 function closeView({ fromNavigation = false } = {}) {
@@ -5847,6 +5984,7 @@ function closeView({ fromNavigation = false } = {}) {
   if (artifactsViewEl) {
     closeArtifactInspector(artifactsViewEl);
   }
+  teardownHubSettingsView();
 
   runRouteUpdate(() => {
     hideViewInner();
@@ -5949,10 +6087,12 @@ async function applyCurrentHashRoute(isTraverse = false) {
       // pooled panel frame is the active one (an unbooted path has no frame
       // yet, so a traverse to a not-yet-opened view falls through to openView).
       const targetRoute = embeddedViewRoute(parsed.path);
-      const isClient = targetRoute === VIEW_ROUTE.DIRECTORY || targetRoute === VIEW_ROUTE.ARTIFACTS;
+      const isClient = targetRoute === VIEW_ROUTE.DIRECTORY || targetRoute === VIEW_ROUTE.ARTIFACTS || (targetRoute === VIEW_ROUTE.SETTINGS && isHubOkSettingsPath(parsed.path));
+      const [parsedBasePath] = String(parsed.path ?? "").split("#");
+      const parsedSection = targetRoute === VIEW_ROUTE.SETTINGS ? resolveSettingsSectionFromPath(parsed.path) : null;
       const isOpen = isClient
-        ? (!viewOverlay?.hidden && activeViewRoute === targetRoute)
-        : (!viewOverlay?.hidden && activePanelFrame === panelFrames.get(parsed.path));
+        ? (!viewOverlay?.hidden && activeViewRoute === targetRoute && (targetRoute !== VIEW_ROUTE.SETTINGS || activeSettingsViewSectionId === parsedSection))
+        : (!viewOverlay?.hidden && activePanelFrame === panelFrames.get(parsedBasePath));
       if (isOpen) {
         if (viewTitle && meta.title && meta.title !== "View") {
           viewTitle.textContent = meta.title;
@@ -5963,6 +6103,8 @@ async function applyCurrentHashRoute(isTraverse = false) {
             onAttachArtifact: (artifact) => attachArtifactToComposer(artifact, { closeOverlay: true }),
             onGoHome: () => goHome({ focusAfter: composer }),
           });
+        } else if (targetRoute === VIEW_ROUTE.SETTINGS && isHubOkSettingsPath(parsed.path)) {
+          renderHubSettingsView(parsedSection, { focusHeading: true });
         }
       } else {
         openView(parsed.path, title, null, { pushHistory: false });
