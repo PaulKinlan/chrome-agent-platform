@@ -3555,7 +3555,9 @@ async function main() {
     // below uses), and the owner's Undo click then genuinely deletes the
     // run-created agent through actions.undo → the production executor.
     // ─────────────────────────────────────────────────────────────
+    console.error(`[ACTIVITY FRONTIER] ${new Date().toISOString()} memory.set begin`);
     await msgValue({ type: "memory.set", origin: "master", key: "cap:action-ledger", value: [] });
+    console.error(`[ACTIVITY FRONTIER] ${new Date().toISOString()} memory.set end; provider.start begin`);
     const ledgerProvider = await startScriptedProvider({
       steps: [
         { tool: "search_tools", args: { query: "create_named_agent", limit: 1 } },
@@ -3563,6 +3565,7 @@ async function main() {
         { text: "Created the Undo Journey Agent." },
       ],
     });
+    console.error(`[ACTIVITY FRONTIER] ${new Date().toISOString()} provider.start end`);
     let createdAgentId = null;
     let ledgerCardSeen = false;
     let ledgerCardTitle = null;
@@ -3574,17 +3577,28 @@ async function main() {
     let ledgerOptsSession = null;
     try {
       // provider.set is restricted to the Settings surface — open one.
+      console.error(`[ACTIVITY FRONTIER] ${new Date().toISOString()} options.open begin`);
       const ledgerOptsPage = await openPage(port, `chrome-extension://${extId}/options/options.html`);
+      // Keep this logger inside the extracted setup block used by the focus test.
+      // Only stage names, timestamps and counts: never provider payloads or tool results.
+      const ledgerTrace = (stage, extra = "") =>
+        console.error(`[ACTIVITY FRONTIER] ${new Date().toISOString()} ${stage}${extra ? ` ${extra}` : ""}`);
+      ledgerTrace("options.open end; options.attach begin");
       ledgerOptsSession = await attachRuntime(cdp, ledgerOptsPage.id);
+      ledgerTrace("options.attach end");
       cdp.pageSessions.add(ledgerOptsSession);
       await sleep(1200);
+      ledgerTrace("provider.set begin");
       await evalIn(cdp, ledgerOptsSession, `chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "openai-compatible", baseURL: ledgerProvider.baseURL, apiKey: SCRIPTED_DUMMY_KEY, model: "scripted" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`);
+      ledgerTrace("provider.set end; ntp.activate begin");
       await cdp.send("Target.activateTarget", { targetId: ntpPage.id });
       await clickSel(cdp, ntpSession, "#home").catch(() => false);
       await sleep(600);
+      ledgerTrace("ntp.activate end; run.list begin");
       // Snapshot BEFORE the click: the terminal wait must bind to THIS run's
       // exact execution (request-count arrival is not settlement).
       const ledgerBeforeIds = await listRunIds(cdp, ledgerOptsSession);
+      ledgerTrace("run.list end; prior-card snapshot begin");
       // A stale card from a prior turn may still LOOK pending after expiry.
       // Snapshot existing DOM nodes so this run can approve only its new card.
       await evalIn(cdp, ntpSession, `(() => {
@@ -3592,8 +3606,11 @@ async function main() {
         globalThis.__jnyLedgerCard = null;
         return true;
       })()`);
+      ledgerTrace("prior-card snapshot end; composer.type begin");
       await typeInto(cdp, ntpSession, composerInput("hub"), "create the Undo Journey Agent");
+      ledgerTrace("composer.type end; composer.send begin");
       await clickSel(cdp, ntpSession, composerSend("hub"));
+      ledgerTrace("composer.send end; approval.poll begin");
       // A model-initiated named-agent.create now pays a real owner card. Do
       // not let an unanswered/expired request look like a completed create:
       // observe the pending card, capture it for owner-visible evidence, then
@@ -3601,7 +3618,9 @@ async function main() {
       // terminal run. A missing card or mismatched title fails the named check.
       const ledgerApprovalStart = Date.now();
       for (let i = 0; i < 120 && ledgerProvider.requests.length < 3; i++) {
+        ledgerTrace("approval.poll iteration begin", `i=${i} requests=${ledgerProvider.requests.length} cardSeen=${ledgerCardSeen}`);
         if (!ledgerCardSeen) {
+          ledgerTrace("approval.card-probe begin", `i=${i}`);
           const pending = await evalIn(cdp, ntpSession, `(() => {
             const cards = [...document.querySelectorAll('#thread-conversation approval-card')]
               .filter((card) => !globalThis.__jnyLedgerPriorApprovalCards.has(card) &&
@@ -3612,17 +3631,26 @@ async function main() {
             globalThis.__jnyLedgerCard = card;
             card.scrollIntoView({ block: 'center', inline: 'center' });
             return { title: card.shadowRoot.querySelector('.title').textContent };
-          })()`).catch(() => null);
+          })()`).catch((error) => {
+            ledgerTrace("approval.card-probe rejected", `i=${i} kind=${String(error?.name ?? "unknown").slice(0, 40)}`);
+            return null;
+          });
+          ledgerTrace("approval.card-probe end", `i=${i} found=${Boolean(pending)}`);
           if (pending) {
             ledgerCardSeen = true;
             ledgerCardTitle = String(pending.title ?? "");
             ledgerCardElapsedMs = Date.now() - ledgerApprovalStart;
+            ledgerTrace("approval.screenshot begin");
             ledgerCardShot = await captureShot(cdp, ntpSession);
+            ledgerTrace("approval.screenshot end", `present=${Boolean(ledgerCardShot)}`);
             if (ledgerCardTitle === "Approve named-agent.create?" && ledgerCardShot?.length > 200) {
+              ledgerTrace("approval.evidence-write begin");
               await writeEvidence("activity-create-approval-pending.png", ledgerCardShot);
+              ledgerTrace("approval.evidence-write end");
               // clickShadow selects the LAST matching host, not the observed
               // one. Recheck the saved node and send real CDP mouse events at
               // THAT button; never approve another run's pending request.
+              ledgerTrace("approval.hit-test begin");
               const point = await evalIn(cdp, ntpSession, `(() => {
                 const card = globalThis.__jnyLedgerCard;
                 if (!card?.isConnected || (card.getAttribute('state') || 'pending') !== 'pending' ||
@@ -3635,17 +3663,23 @@ async function main() {
                 if (r.width <= 0 || r.height <= 0 || card.shadowRoot.elementFromPoint(x, y) !== button) return null;
                 return { x, y };
               })()`).catch(() => null);
+              ledgerTrace("approval.hit-test end", `point=${Boolean(point)}`);
               if (point) {
+                ledgerTrace("approval.click begin");
                 await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 }, ntpSession);
                 await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 }, ntpSession);
                 ledgerCardApproved = true;
+                ledgerTrace("approval.click end");
               }
             }
           }
         }
         if (ledgerProvider.requests.length < 3) await sleep(250);
+        ledgerTrace("approval.poll iteration end", `i=${i} requests=${ledgerProvider.requests.length}`);
       }
+      ledgerTrace("run.terminal-wait begin", `requests=${ledgerProvider.requests.length} approved=${ledgerCardApproved}`);
       const ledgerRun = await awaitNewRunTerminal(cdp, ledgerOptsSession, ledgerBeforeIds, "create the Undo Journey Agent");
+      ledgerTrace("run.terminal-wait end", `phase=${ledgerRun?.phase ?? "none"}`);
       const env = ledgerProvider.requests.length > 0 ? executeEnvelope(ledgerProvider.requests[ledgerProvider.requests.length - 1], "create_named_agent") : null;
       createdAgentId = env?.result?.agent?.id ?? env?.result?.id ?? null;
       check(

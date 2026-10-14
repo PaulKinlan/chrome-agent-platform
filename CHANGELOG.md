@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.686] — 2026-10-14
+- check diagnostics identify where Activity ledger runs stop progressing.
+
 ## [0.3.685] — 2026-10-14
 - Imported commands now require your explicit review and adoption before they can be inserted into the composer or run as a task.
 
