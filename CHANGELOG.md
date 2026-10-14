@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.683] — 2026-10-14
+- Added a single permission card for multi-step tab tasks so you can approve tab access once per run.
+
 ## [0.3.682] — 2026-10-14
 - Updated the Tool library description in Settings to clearly state that the preview runs a bundled tool on your explicit click without installing, granting, updating, or removing tools.
 
