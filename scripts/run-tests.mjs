@@ -28,7 +28,7 @@ import { BUILD_GATE, BUILD_GATE_FILES, HEAVY_GATE, HEAVY_GATE_FILES, READ_ONLY_D
 import { announce, runReadOnlyDistBatch, runSerialFiles } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
 import { parallelPlan } from "./lib/parallel-plan.mjs";
-import { emitGateLedger, parseGateBuild } from "./lib/gate-manifest.mjs";
+import { emitGateLedger, fullTierManifestFields, parseGateBuild } from "./lib/gate-manifest.mjs";
 
 export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
 const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_MS ?? DEFAULT_PARALLEL_TIMEOUT_MS);
@@ -312,28 +312,16 @@ export async function main(args = process.argv.slice(2)) {
   // form is a gate; an explicit-file run (`run-tests.mjs tests/x.test.ts`) is an inner-loop tool and
   // deliberately emits nothing, so a probe run can never look like a gate record.
   if (cliFiles.length === 0) {
-    const executedSuites = [...serialFiles, ...plan.files];
     const skippedFiles = parallel.filter((f) => !plan.files.includes(f));
     emitGateLedger({
-      manifest: {
-        tier: "full",
-        executed: rc === 0 ? executedSuites.length : 0,
-        executedSuites: rc === 0 ? executedSuites : [],
-        selected: executedSuites,
-        certifiable: rc === 0,
+      manifest: fullTierManifestFields({
+        serialFiles,
+        parallelFiles: plan.files,
+        skippedFiles,
+        deferredFiles: [...BUILD_GATE_FILES, ...HEAVY_GATE_FILES],
+        rc,
         build: parseGateBuild(process.env.CAP_GATE_BUILD_JSON),
-        omitted: [
-          ...BUILD_GATE_FILES.map((file) => ({
-            file,
-            reason: "deferred to the dedicated npm run test:build tier of the FULL command",
-          })),
-          ...HEAVY_GATE_FILES.map((file) => ({
-            file,
-            reason: "NOT in the FULL gate command — runs under npm run test:heavy",
-          })),
-          ...skippedFiles.map((file) => ({ file, reason: "skipped in this run: the serial phase failed" })),
-        ],
-      },
+      }),
     });
   }
   process.exit(rc);

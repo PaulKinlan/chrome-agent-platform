@@ -15,6 +15,7 @@ import {
   formatGateManifest,
   formatGateUnmapped,
   formatGateUnknown,
+  fullTierManifestFields,
   normalizeSuiteList,
   parseGateBuild,
 } from "../scripts/lib/gate-manifest.mjs";
@@ -124,6 +125,48 @@ Deno.test("0eq00 ledger: unmapped and unknown markers use the extractor's exact 
   assert(parse(lines[0]));
   assertEquals(lines[1], `${GATE_UNMAPPED_PREFIX}scripts/x.mjs`);
   assertEquals(lines[2], `${GATE_UNKNOWN_PREFIX}no test file was selected`);
+});
+
+Deno.test("0eq00 ledger: the full tier is computed from what the runner did (and discloses deferrals)", () => {
+  const passing = fullTierManifestFields({
+    serialFiles: ["tests/serial-a.test.ts"],
+    parallelFiles: ["tests/p1.test.ts", "tests/p2.test.ts"],
+    skippedFiles: [],
+    deferredFiles: ["tests/build-bootstrap.test.ts", "tests/python-runtime.test.ts"],
+    rc: 0,
+    build: { disposition: "ran", reason: "rebuilt", secs: 95 },
+  });
+  assertEquals(passing.tier, "full");
+  assertEquals(passing.executed, 3);
+  assertEquals(
+    passing.executedSuites,
+    ["tests/serial-a.test.ts", "tests/p1.test.ts", "tests/p2.test.ts"],
+  );
+  assertEquals(passing.certifiable, true);
+  assertEquals(passing.omitted.length, 2, "deferred tiers plus skipped files are disclosed");
+  assertEquals(passing.build.disposition, "ran");
+  assert(parse(formatGateManifest(passing)), "the full fields must format into a valid manifest");
+
+  // A failed full run names NOTHING it cannot certify.
+  const failing = fullTierManifestFields({ serialFiles: ["tests/serial-a.test.ts"], parallelFiles: [], rc: 1 });
+  assertEquals(failing.executed, 0);
+  assertEquals(failing.executedSuites, []);
+  assertEquals(failing.certifiable, false);
+
+  // A serial failure runs the always-on guards only; the rest are named as skipped, not hidden.
+  const degraded = fullTierManifestFields({
+    serialFiles: ["tests/serial-a.test.ts"],
+    parallelFiles: ["tests/guard.test.ts"],
+    skippedFiles: ["tests/other.test.ts"],
+    rc: 0,
+  });
+  assertEquals(degraded.executed, 2);
+  assertEquals(degraded.omitted, [
+    { file: "tests/other.test.ts", reason: "skipped in this run: the serial phase failed" },
+  ]);
+
+  // An explicit-file run is an inner-loop tool, not a gate: no record is invented.
+  assertEquals(fullTierManifestFields({ rc: 0, cliFiles: ["tests/x.test.ts"] }), null);
 });
 
 Deno.test("0eq00 ledger: a parent tier's build disposition crosses the process boundary safely", () => {

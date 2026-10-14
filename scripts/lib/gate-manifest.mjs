@@ -118,6 +118,48 @@ export function parseGateBuild(raw) {
   }
 }
 
+/**
+ * The FULL tier's manifest fields, computed from what the runner actually did (chrome-agent-platform-
+ * 0eq00). Pure so the arithmetic and the disclosure of DEFERRED files are unit-tested: the full suite
+ * is the merger's gate, so an implementer can never exercise this path by running it.
+ *
+ * `rc !== 0` reports `executed: 0` with `certifiable: false` rather than naming suites whose result the
+ * run cannot certify — the consumer reads `certifiable: false` as PARTIAL coverage, never KNOWN.
+ *
+ * @param {{
+ *   serialFiles?: string[], parallelFiles?: string[], skippedFiles?: string[],
+ *   deferredFiles?: string[], rc: number, cliFiles?: string[], build?: object | null,
+ * }} args
+ * @returns {object | null} null when this was not the default `npm test` form (no gate record)
+ */
+export function fullTierManifestFields({
+  serialFiles = [],
+  parallelFiles = [],
+  skippedFiles = [],
+  deferredFiles = [],
+  rc,
+  cliFiles = [],
+  build = null,
+} = {}) {
+  if (cliFiles.length > 0) return null;
+  const executedSuites = [...serialFiles, ...parallelFiles];
+  return {
+    tier: "full",
+    executed: rc === 0 ? executedSuites.length : 0,
+    executedSuites: rc === 0 ? executedSuites : [],
+    selected: executedSuites,
+    certifiable: rc === 0,
+    build,
+    omitted: [
+      ...deferredFiles.map((file) => ({
+        file,
+        reason: "deferred to another tier of the FULL command (npm run test:build / npm run test:heavy)",
+      })),
+      ...skippedFiles.map((file) => ({ file, reason: "skipped in this run: the serial phase failed" })),
+    ],
+  };
+}
+
 /** `fast-gate: unmapped: a b c` — null when there is nothing to report. */
 export function formatGateUnmapped(files = []) {
   const list = normalizeSuiteList(files);
