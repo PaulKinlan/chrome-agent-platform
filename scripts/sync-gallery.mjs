@@ -78,6 +78,16 @@ const FILES = [
   ["extension/shared/thread-projection-authority.js", "docs/thread-projection-authority.js"],
 ];
 
+/**
+ * chrome-agent-platform-bverr: true when the deployed copy already holds exactly these bytes (absent counts
+ * as different). The comparison is the whole rule: an unconditional write moves the tracked file's nsec ctime,
+ * and the fleet's gate witness records nsec ctime rather than content ON PURPOSE (so a mutate-then-revert
+ * cannot hide) - so rewriting identical bytes makes a gate over an unchanged tree read as STALE.
+ */
+export function sameBytes(current, expected) {
+  return current !== null && current.length === expected.length && Buffer.compare(current, expected) === 0;
+}
+
 export async function syncGallery({ check = false } = {}) {
   let drifted = false;
   for (const [src, dst] of FILES) {
@@ -150,8 +160,17 @@ export async function syncGallery({ check = false } = {}) {
         );
       }
     } else {
-      await writeFile(dstUrl, expected);
-      console.log(`synced ${dst} ← ${src}`);
+      // Write ONLY when the bytes differ - the rule scripts/sync-changelog.mjs already follows (it compares
+      // before it writes). build.mjs calls this from `npm run build:production`, which every full gate runs,
+      // so an unconditional write here invalidates the gate's own witness: tracked docs/* moved 23:02:08Z in
+      // the measured 76qp unions with git status CLEAN, because the bytes were identical and only ctime moved.
+      const current = await readFile(dstUrl).catch(() => null);
+      if (sameBytes(current, expected)) {
+        console.log(`in sync ${dst} ← ${src}`);
+      } else {
+        await writeFile(dstUrl, expected);
+        console.log(`synced ${dst} ← ${src}`);
+      }
     }
   }
   return !drifted;
