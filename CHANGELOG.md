@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.687] — 2026-10-14
+- Wire Settings nav labels and icon buttons through i18n catalogue
+
 ## [0.3.686] — 2026-10-14
 - Fix left sidebar and Settings menu scroll vibration on NTP and Settings surfaces
 

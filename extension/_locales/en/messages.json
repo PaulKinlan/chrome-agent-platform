@@ -76,8 +76,17 @@
   "options_add_a_site_agent": {
     "message": "Add a Site Agent"
   },
+  "options_add_file": {
+    "message": "Add file"
+  },
+  "options_add_folder": {
+    "message": "Add folder"
+  },
   "options_add_rule": {
     "message": "Add rule"
+  },
+  "options_add_server": {
+    "message": "Add server"
   },
   "options_add_site_agent": {
     "message": "Add Site Agent"
@@ -447,6 +456,9 @@
   "options_version": {
     "message": "Version $1",
     "description": "$1 is the installed version read from the manifest, e.g. v0.3.560"
+  },
+  "options_webassembly_files": {
+    "message": "WebAssembly files"
   },
   "options_what_s_new": {
     "message": "What's new"

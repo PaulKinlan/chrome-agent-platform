@@ -132,7 +132,7 @@ Deno.test("i18n: every data-i18n leaf in Settings markup resolves to a catalogue
     assertEquals(entry.message, entry.message.trim(), `${key}: no padding whitespace in the catalogue`);
     checked++;
   }
-  assert(checked >= 100, `expected the Settings migration to have wired ~120 leaves, found ${checked}`);
+  assert(checked >= 132, `expected the Settings migration to have wired >= 132 leaves, found ${checked}`);
 });
 
 Deno.test("i18n: hydrating the migrated Settings leaves renders the catalogue value, and mutating the catalogue changes the render (falsification)", async () => {
@@ -155,6 +155,42 @@ Deno.test("i18n: hydrating the migrated Settings leaves renders the catalogue va
   // FALSIFICATION: the catalogue value must be byte-identical to the static
   // markup text — if a migration ever reworded a string, this is the tripwire.
   assertEquals(messages[key].message, staticText, "catalogue value drifted from the original rendered text — migrations must be byte-identical");
+});
+
+// ── Settings nav labels and icon buttons (s06h) ──────────────────────────────
+
+Deno.test("s06h: Settings nav labels and icon buttons resolve through data-i18n catalogue", async () => {
+  const html = new URL("../extension/options/options.html", import.meta.url);
+  const src = await Deno.readTextFile(html);
+
+  // 1. All 16 nav-item links contain a span with data-i18n that resolves
+  const navMatches = [...src.matchAll(/<a\s+href="#([^"]+)"\s+class="nav-item"[^>]*>([\s\S]*?)<\/a>/g)];
+  assertEquals(navMatches.length, 16, "must have 16 nav items");
+  for (const [, section, inner] of navMatches) {
+    const spanMatch = /<span\b[^>]*\bdata-i18n="([^"]+)"[^>]*>([^<>]*)<\/span>/.exec(inner);
+    assert(spanMatch, `nav-item for #${section} must contain a span with data-i18n`);
+    const [, key, text] = spanMatch;
+    assert(messages[key], `catalogue missing key ${key} for nav item #${section}`);
+    assertEquals(messages[key].message, text.trim(), `catalogue message for ${key} must match static text`);
+  }
+
+  // 2. The three icon buttons carry data-i18n that resolves to the button text
+  const iconButtons = [
+    { id: "mcp-add-btn", expectedKey: "options_add_server", expectedText: "Add server" },
+    { id: "fs-add-directory-btn", expectedKey: "options_add_folder", expectedText: "Add folder" },
+    { id: "fs-add-file-btn", expectedKey: "options_add_file", expectedText: "Add file" },
+  ];
+  for (const { id, expectedKey, expectedText } of iconButtons) {
+    const btnRegex = new RegExp(`<button\\b[^>]*id="${id}"[^>]*>([\\s\\S]*?)<\\/button>`);
+    const btnMatch = btnRegex.exec(src);
+    assert(btnMatch, `button #${id} must exist in options.html`);
+    const spanMatch = /<span\b[^>]*\bdata-i18n="([^"]+)"[^>]*>([^<>]*)<\/span>/.exec(btnMatch[1]);
+    assert(spanMatch, `button #${id} must contain a span with data-i18n`);
+    assertEquals(spanMatch[1], expectedKey, `button #${id} must have data-i18n="${expectedKey}"`);
+    assertEquals(spanMatch[2].trim(), expectedText, `button #${id} text must match ${expectedText}`);
+    assert(messages[expectedKey], `catalogue missing key ${expectedKey}`);
+    assertEquals(messages[expectedKey].message, expectedText);
+  }
 });
 
 // ── Mixed content (chrome-agent-platform-716s.2) ─────────────────────────────

@@ -104,23 +104,15 @@ for byte, so nothing in the suite could see it. The contract is now:
 entries that shipped. Run against the pre-fix tree it reported 72 findings
 across 28 keys; the fixed tree reports none.
 
-## Migrated / remaining (updated at stage 5, revised 716s.2)
+## Migrated / remaining (updated at stage 5, revised 716s.2, s06h)
 
-- Migrated: 125 Settings leaves (`options_*`), the artifact-preview component
+- Migrated: 132 Settings leaves (`options_*`, including all 16 nav labels `Providers … About` and the three icon buttons `Add server`, `Add folder`, `Add file` via `<span data-i18n>` leaves — s06h), the artifact-preview component
   strings (`components_*`), and — since 716s.2 — the six mixed-content Settings
   sentences (`options_version`, `options_mcp_lead`,
   `options_site_agents_host_access`, `options_diagnostics_logs_help`,
   `options_skills_lead`, plus the brand text span) through the `$n` slot
   contract above.
 - Remaining in Settings, each with its class:
-  - **Nav labels and icon buttons** (`Providers … About` in the left nav; `Add
-    server`, `Add folder`, `Add file`): a text run beside an inline SVG. The
-    generated `data-i18n` sat on the `</svg>` end tag and never hydrated; those
-    dead attributes and their 17 keys are removed. Wire them either as a mixed
-    message (`"$1 Providers"`, the icon as the slot) or by moving the label
-    into a `<span data-i18n>`; the second is kinder to translators but touches
-    every Settings harness that reads `.nav-item` text — tracked as a
-    follow-up bead.
   - **The Backup & restore export paragraph, the About tagline and the
     developer-features description**: static leaves the first migration did
     not reach; plain `data-i18n` leaves when picked up.
