@@ -1784,8 +1784,10 @@ customElements.define("system-prompt-editor", SystemPromptEditor);
 /* vocab:advanced:end */
 
 /* ──────────────────────────────────────────────────────────────────────────
- * <tool-library> — READ-ONLY owner diagnostics for the tool catalog contract
- * (CAP-FB-20260822-TOOL-LIBRARY-UI-01, panel-1 first slice).
+ * <tool-library> — the owner's tool catalog + explicit Settings preview
+ * (CAP-FB-20260822-TOOL-LIBRARY-UI-01, panel-1 first slice; tool-library
+ * decision A, chrome-agent-platform-vc52 / jt83l: the explicit Preview stays
+ * and the copy says so — the old nothing-runs framing contradicted it).
  *
  * HARD BOUNDARY: the ONLY action surfaces are explicit-owner-click buttons —
  * the Settings preview Run button (emits tool-preview-request; the options
@@ -1793,7 +1795,7 @@ customElements.define("system-prompt-editor", SystemPromptEditor);
  * and the package-validate button (emits tool-package-validate-request for
  * the EXACTLY-ONE listed package only — the ltkj.2 Settings validation
  * surface; validation never enables execution).
- * No install/update/revoke/grant/execute/verify/copy, no catalog/provider
+ * No install/update/revoke/grant/verify/copy, no catalog/provider
  * selection authority.
  * It renders bounded metadata from the Settings-principal tool-catalog.shadow
  * diagnostics route only (summary in production; rows when a future reviewed
@@ -2259,8 +2261,9 @@ export class ToolLibrary extends Component {
       .status-line.error { color:var(--danger, #b3261e); }
       @media (max-width:560px) { .tool-head { grid-template-columns:1fr; } .groups .count { margin-inline-start:0; } }
     `, `
-      <p class="framing">This is a read-only diagnostic view of the tools the platform can see.
-        It cannot run, install, grant, update, or remove anything.</p>
+      <p class="framing">The tools the agent can use, grouped by what they are for. The preview below runs a
+        bundled tool on this device, only on your explicit click — nothing here installs, grants,
+        updates, or removes tools.</p>
       <div class="catalog"></div>
       <div class="packages">
         <h3>Bundled tool packages</h3>
