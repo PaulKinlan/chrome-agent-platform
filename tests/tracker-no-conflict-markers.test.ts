@@ -1,10 +1,10 @@
-// The trackers are merged by many agents a day. A conflict marker that slips
-// through a hand merge is invisible to check-tasks (it only counts fields), and
-// on 2026-08-30 six marker lines sat in the claims table on main for several
-// hours. This fails the unit gate on any marker in the public trackers.
+// Top-level docs are merged by many agents a day. A conflict marker that slips
+// through a hand merge sat in the public record on 2026-08-30 for several
+// hours. This fails the unit gate on any marker in the public docs (TASKS.md,
+// TASKS-DONE.md, and KNOWN-ISSUES.md were deleted under chrome-agent-platform-yz4e).
 import { assertEquals } from "jsr:@std/assert@1";
 
-const FILES = ["TASKS.md", "TASKS-DONE.md", "KNOWN-ISSUES.md", "PLAN.md", "CHANGELOG.md", "README.md", "AGENTS.md"];
+const FILES = ["PLAN.md", "CHANGELOG.md", "README.md", "AGENTS.md"];
 const MARKER = /^(<{7}|={7}|>{7})( |$)/m;
 
 Deno.test("trackers: no git conflict markers survive in the public record", async () => {

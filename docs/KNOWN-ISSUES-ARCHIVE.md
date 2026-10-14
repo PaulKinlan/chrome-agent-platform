@@ -2,7 +2,7 @@
 
 > **This file is history, not a tracker.** It holds 27 rounds of review findings from the
 > intercom review fleet (sol / GLM / DeepSeek), which no longer exists. Every `CAP-FB-*`
-> id mentioned below had an entry in [`TASKS.md`](../TASKS.md) or [`TASKS-DONE.md`](../TASKS-DONE.md) — both retired history since 2026-09-02 —
+> id mentioned below had an entry in `TASKS.md` or `TASKS-DONE.md` — both retired history since 2026-09-02 —
 > and at the time of archiving, 15 of the 18 findings referenced here were already closed.
 >
 > Live findings live in beads: `bd ready` for claimable work, `bd list` for the rest. Do not add to this file.
@@ -113,7 +113,7 @@ Closed by shipped work; kept as one line each so the history stays readable.
 An independent Claude/Opus 5 session with no prior custody reviewed exact
 `origin/main@300bea1` (`0.2.105`) by building it and driving it, not by reading trackers.
 Full rationale, evidence and the ordered work queue are in
-[`REVIEW-2026-08-21.md`](../REVIEW-2026-08-21.md); the tasks were in the retired [`TASKS.md`](../TASKS.md) (history; live work is `bd ready`).
+[`REVIEW-2026-08-21.md`](../REVIEW-2026-08-21.md); the tasks were in the retired `TASKS.md` (history; live work is `bd ready`).
 
 **Baseline confirmed healthy at that commit:** build clean, **633 unit tests pass, 0 fail**
 (green only with `TMPDIR` on durable storage — see the inode finding below),
