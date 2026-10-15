@@ -576,8 +576,11 @@
           <div id="vault-quotas-status" role="status" class="muted" style="margin:4px 0;" hidden></div>
           <div id="vault-quotas" class="vault-ledger"></div>
           <div class="vault-quota-add-row" style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap;">
+            <label class="sr-only" for="vault-quota-add-service">Service id for the quota you are adding</label>
             <input id="vault-quota-add-service" type="text" placeholder="service-id (e.g. custom-api)" style="width:180px;" autocomplete="off" spellcheck="false">
+            <label class="sr-only" for="vault-quota-add-limit">Call limit for the quota you are adding (0 disables the service)</label>
             <input id="vault-quota-add-limit" type="number" min="0" placeholder="Limit (0 = disable)" style="width:140px;">
+            <label class="sr-only" for="vault-quota-add-window">Limit window for the quota you are adding</label>
             <select id="vault-quota-add-window" class="input-select" style="width:110px;">
               <option value="3600000">1 hour</option>
               <option value="86400000" selected>24 hours</option>

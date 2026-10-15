@@ -265,12 +265,19 @@ function vaultCard(item, ctx) {
   return wrap;
 }
 
+// Element helper for the quota table: createElement + className + textContent tripled the source (and the
+// shipped options bundle) for ~35 cells and controls, which is most of the quota UI's byte cost.
+const mk = (tag, cls, text, style) => {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  if (style) Object.assign(node.style, style);
+  return node;
+};
+
 function formatWindowDuration(windowMs) {
   if (!windowMs || typeof windowMs !== "number") return "—";
-  if (windowMs % 86400000 === 0) {
-    const hours = windowMs / 3600000;
-    return `${hours}h (${windowMs.toLocaleString()}ms)`;
-  }
+  // A whole-day window is a whole number of hours, so the %3600000 branch below already covers it.
   if (windowMs % 3600000 === 0) {
     const hours = windowMs / 3600000;
     return `${hours}h (${windowMs.toLocaleString()}ms)`;
@@ -373,16 +380,14 @@ export async function renderVaultQuotas(ctx) {
   const usage = res.usage || {};
   const serviceIds = Object.keys(usage);
   if (serviceIds.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "muted";
+    const empty = mk("div", "muted");
     empty.style.padding = "12px";
     empty.textContent = "No service quotas or telemetry available.";
     host.replaceChildren(empty);
     return;
   }
 
-  const table = document.createElement("table");
-  table.className = "vault-ledger-table vault-quotas-table";
+  const table = mk("table", "vault-ledger-table vault-quotas-table");
 
   const thead = document.createElement("thead");
   const trHead = document.createElement("tr");
@@ -397,8 +402,7 @@ export async function renderVaultQuotas(ctx) {
   const tbody = document.createElement("tbody");
   for (const serviceId of serviceIds) {
     const item = usage[serviceId] || {};
-    const tr = document.createElement("tr");
-    tr.className = "vault-quota-row";
+    const tr = mk("tr", "vault-quota-row");
     tr.dataset.service = serviceId;
     tr.dataset.count = String(item.count ?? 0);
     tr.dataset.limit = String(item.limit ?? "");
@@ -407,14 +411,12 @@ export async function renderVaultQuotas(ctx) {
     tr.dataset.disabled = String(Boolean(item.disabled));
     tr.dataset.unmetered = String(Boolean(item.unmetered));
 
-    const tdService = document.createElement("td");
-    tdService.className = "vault-quota-service";
+    const tdService = mk("td", "vault-quota-service");
     const codeService = document.createElement("code");
     codeService.textContent = serviceId;
     tdService.append(codeService);
 
-    const tdStatus = document.createElement("td");
-    tdStatus.className = "vault-quota-status";
+    const tdStatus = mk("td", "vault-quota-status");
     const statusPill = document.createElement("span");
     if (item.disabled) {
       statusPill.className = "vault-status-pill fail";
@@ -428,12 +430,9 @@ export async function renderVaultQuotas(ctx) {
     }
     tdStatus.append(statusPill);
 
-    const tdCount = document.createElement("td");
-    tdCount.className = "vault-quota-count";
-    tdCount.textContent = String(item.count ?? 0);
+    const tdCount = mk("td", "vault-quota-count", String(item.count ?? 0));
 
-    const tdLimit = document.createElement("td");
-    tdLimit.className = "vault-quota-limit";
+    const tdLimit = mk("td", "vault-quota-limit");
     if (item.disabled) {
       tdLimit.textContent = "0 (disabled)";
     } else if (item.unmetered) {
@@ -442,8 +441,7 @@ export async function renderVaultQuotas(ctx) {
       tdLimit.textContent = String(item.limit);
     }
 
-    const tdRemaining = document.createElement("td");
-    tdRemaining.className = "vault-quota-remaining";
+    const tdRemaining = mk("td", "vault-quota-remaining");
     if (item.disabled) {
       tdRemaining.textContent = "0";
     } else if (item.unmetered) {
@@ -452,46 +450,36 @@ export async function renderVaultQuotas(ctx) {
       tdRemaining.textContent = String(item.remaining);
     }
 
-    const tdWindow = document.createElement("td");
-    tdWindow.className = "vault-quota-window";
+    const tdWindow = mk("td", "vault-quota-window");
     if (item.unmetered) {
       tdWindow.textContent = "—";
     } else {
       tdWindow.textContent = formatWindowDuration(item.windowMs);
     }
 
-    const tdReset = document.createElement("td");
-    tdReset.className = "vault-quota-reset";
+    const tdReset = mk("td", "vault-quota-reset");
     if (item.disabled || item.unmetered || item.resetMs === null || item.resetMs === undefined) {
       tdReset.textContent = "—";
     } else {
       tdReset.textContent = formatRemainingMs(item.resetMs);
     }
 
-    const tdActions = document.createElement("td");
-    tdActions.className = "vault-quota-actions";
+    const tdActions = mk("td", "vault-quota-actions");
     tdActions.style.whiteSpace = "nowrap";
 
     const limitInput = document.createElement("input");
     limitInput.type = "number";
     limitInput.min = "0";
     limitInput.className = "vault-quota-limit-input";
-    limitInput.style.width = "65px";
-    limitInput.style.padding = "2px 4px";
-    limitInput.style.fontSize = "12px";
-    limitInput.style.marginRight = "4px";
+    Object.assign(limitInput.style, {width: "65px", padding: "2px 4px", fontSize: "12px", marginRight: "4px"});
     limitInput.placeholder = "Limit";
     limitInput.setAttribute("aria-label", `Limit for ${serviceId}`);
     if (typeof item.limit === "number") {
       limitInput.value = String(item.limit);
     }
 
-    const windowSelect = document.createElement("select");
-    windowSelect.className = "input-select vault-quota-window-select";
-    windowSelect.style.width = "85px";
-    windowSelect.style.padding = "2px 4px";
-    windowSelect.style.fontSize = "12px";
-    windowSelect.style.marginRight = "4px";
+    const windowSelect = mk("select", "input-select vault-quota-window-select");
+    Object.assign(windowSelect.style, {width: "85px", padding: "2px 4px", fontSize: "12px", marginRight: "4px"});
     windowSelect.setAttribute("aria-label", `Window for ${serviceId}`);
 
     const opt1h = document.createElement("option");
@@ -518,9 +506,7 @@ export async function renderVaultQuotas(ctx) {
     setBtn.type = "button";
     setBtn.className = "btn small vault-quota-set-btn";
     setBtn.textContent = "Set";
-    setBtn.style.padding = "2px 8px";
-    setBtn.style.fontSize = "12px";
-    setBtn.style.marginRight = "4px";
+    Object.assign(setBtn.style, {padding: "2px 8px", fontSize: "12px", marginRight: "4px"});
     setBtn.addEventListener("click", async () => {
       const rawLimit = limitInput.value.trim();
       const numLimit = Number(rawLimit);
@@ -565,8 +551,7 @@ export async function renderVaultQuotas(ctx) {
     clearBtn.type = "button";
     clearBtn.className = "btn small ghost vault-quota-clear-btn";
     clearBtn.textContent = "Clear";
-    clearBtn.style.padding = "2px 8px";
-    clearBtn.style.fontSize = "12px";
+    Object.assign(clearBtn.style, {padding: "2px 8px", fontSize: "12px"});
     clearBtn.addEventListener("click", async () => {
       clearBtn.disabled = true;
       let stored;
@@ -609,16 +594,14 @@ function renderVaultLedger(ledgerEntries, ctx) {
   host.replaceChildren();
 
   if (!Array.isArray(ledgerEntries) || ledgerEntries.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "muted";
+    const empty = mk("div", "muted");
     empty.style.padding = "12px";
     empty.textContent = "No proxied requests recorded yet.";
     host.append(empty);
     return;
   }
 
-  const table = document.createElement("table");
-  table.className = "vault-ledger-table";
+  const table = mk("table", "vault-ledger-table");
 
   const thead = document.createElement("thead");
   const trHead = document.createElement("tr");
@@ -641,23 +624,17 @@ function renderVaultLedger(ledgerEntries, ctx) {
     tdService.textContent = entry.service || entry.keyId || "—";
 
     const tdMethod = document.createElement("td");
-    const methodSpan = document.createElement("span");
-    methodSpan.className = "vault-method-tag";
-    methodSpan.textContent = entry.method || "GET";
+    const methodSpan = mk("span", "vault-method-tag", entry.method || "GET");
     tdMethod.append(methodSpan);
 
     const tdPath = document.createElement("td");
     const codePath = document.createElement("code");
     codePath.textContent = `${entry.origin || ""}${entry.path || "/"}`;
-    codePath.style.whiteSpace = "normal";
-    codePath.style.overflowWrap = "anywhere";
-    codePath.style.wordBreak = "break-all";
+    Object.assign(codePath.style, {whiteSpace: "normal", overflowWrap: "anywhere", wordBreak: "break-all"});
     tdPath.append(codePath);
 
     const tdStatus = document.createElement("td");
-    const statusPill = document.createElement("span");
-    statusPill.className = `vault-status-pill ${entry.ok ? "ok" : "fail"}`;
-    statusPill.textContent = entry.status !== null ? String(entry.status) : (entry.code || (entry.ok ? "OK" : "Refused"));
+    const statusPill = mk("span", `vault-status-pill ${entry.ok ? "ok" : "fail"}`, entry.status !== null ? String(entry.status) : (entry.code || (entry.ok ? "OK" : "Refused")));
     tdStatus.append(statusPill);
 
     const tdMs = document.createElement("td");
