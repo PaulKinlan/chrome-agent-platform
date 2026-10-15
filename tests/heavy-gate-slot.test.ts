@@ -478,6 +478,8 @@ console.log(JSON.stringify({ event: "released" }));
     const { code } = await child.status;
     const elapsed = Date.now() - t0;
     assertEquals(code, 0, "the child exited cleanly");
+    // Loaded-gate calibration (cl00m): sibling test workers delayed a separate child to 2,898 ms.
+    // Ten seconds is >3x that observed stall yet only 1/6 of the 60 s leaked-timer lifetime.
     assert(elapsed < 10_000, `the child exited in ${elapsed} ms despite a 60 s bound — the timer must not outlive the release`);
   } finally {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
@@ -531,8 +533,30 @@ try {
 // Every timer the acquisition creates must be cleared on BOTH success and error (clearTimeout
 // in a finally). A standalone Deno subprocess that acquires and releases must exit naturally
 // and promptly without Deno.exit or an outer kill.
+// Observe the REAL 1,500 ms backstop timer's creation and cancellation inside each
+// child before it prints its verdict. Unlike a parent wall-clock, this cannot turn
+// a scheduler pause into a false leak, or let a leaked timer pass under a wide cap.
+const BACKSTOP_TIMER_PROBE = `
+const nativeSetTimeout = globalThis.setTimeout;
+const nativeClearTimeout = globalThis.clearTimeout;
+const pendingBackstops = new Set();
+let backstopsScheduled = 0;
+globalThis.setTimeout = (fn, ms, ...args) => {
+  const handle = nativeSetTimeout(fn, ms, ...args);
+  // Distinguish the kill backstop from a coincidentally 1,500 ms read budget.
+  if (ms === 1500 && String(fn).includes("SIGKILL")) {
+    backstopsScheduled++;
+    pendingBackstops.add(handle);
+  }
+  return handle;
+};
+globalThis.clearTimeout = (handle) => {
+  pendingBackstops.delete(handle);
+  nativeClearTimeout(handle);
+};
+`;
 
-Deno.test("k9i3 drill: standalone subprocess acquires and releases promptly without Deno.exit or outer kill", async () => {
+Deno.test("k9i3 drill: standalone subprocess acquires and releases before its 10 s bound", async () => {
   // Reproduces the exact probe condition: boundMs=10000 prints RELEASED and exits promptly,
   // never hanging until the bound fires.
   const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-k9i3-acquire-" });
@@ -565,13 +589,15 @@ console.log(JSON.stringify({ event: "RELEASED" }));
     assertEquals(code, 0, "the standalone process exited cleanly");
     const out = new TextDecoder().decode(stdout);
     assert(out.includes('"event":"RELEASED"'), `must output RELEASED, got: ${out}`);
-    assert(elapsed < 1000, `the process exited in ${elapsed} ms (< 1000 ms) despite boundMs=10000`);
+    // cl00m: 2,898 ms under a loaded full gate vs ~40 ms idle. Six seconds is
+    // >2x that measured gate stall, but still below the 10 s leaked read timer.
+    assert(elapsed < 6000, `the process exited in ${elapsed} ms (< 6000 ms) despite boundMs=10000`);
   } finally {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 });
 
-Deno.test("k9i3 drill: a REFUSED acquisition exits promptly, without an outer kill", async () => {
+Deno.test("k9i3 drill: a REFUSED acquisition clears its backstop without an outer kill", async () => {
   const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-k9i3-refused-" });
   const slotPath = `${dir}/gate.lock`;
   const holder = await acquireHeavyGateSlot({
@@ -585,7 +611,7 @@ Deno.test("k9i3 drill: a REFUSED acquisition exits promptly, without an outer ki
   const script = `${dir}/refused.mjs`;
   await Deno.writeTextFile(script, `
 import { acquireHeavyGateSlot } from ${JSON.stringify(`${ROOT}scripts/lib/heavy-gate-slot.ts`)};
-const t0 = Date.now();
+${BACKSTOP_TIMER_PROBE}
 let verdict = "acquired";
 try {
   const lease = await acquireHeavyGateSlot({
@@ -600,10 +626,9 @@ try {
 } catch (e) {
   verdict = e?.name ?? "?";
 }
-console.log(JSON.stringify({ verdict, ms: Date.now() - t0 }));
+console.log(JSON.stringify({ verdict, backstopsScheduled, pendingBackstops: pendingBackstops.size }));
 `);
   try {
-    const t0 = Date.now();
     const child = new Deno.Command(Deno.execPath(), {
       args: ["run", "-A", "--no-check", script, slotPath],
       cwd: ROOT,
@@ -611,11 +636,11 @@ console.log(JSON.stringify({ verdict, ms: Date.now() - t0 }));
       stderr: "piped",
     }).spawn();
     const { code, stdout } = await child.output();
-    const elapsed = Date.now() - t0;
     assertEquals(code, 0, "the refused child exited cleanly");
     const out = JSON.parse(new TextDecoder().decode(stdout).trim().split("\n").pop() ?? "{}");
     assertEquals(out.verdict, "HeavyGateSlotRefusedError", `the child must report refusal, got ${JSON.stringify(out)}`);
-    assert(elapsed < 2000, `the refused child took ${elapsed} ms to exit (< 2000 ms) — leaked timer must not hold it`);
+    assertEquals(out.backstopsScheduled, 1, "the refusal path actually scheduled its 1,500 ms backstop");
+    assertEquals(out.pendingBackstops, 0, "the refusal path cleared the backstop before exit");
   } finally {
     holder.release();
     await Deno.remove(dir, { recursive: true }).catch(() => {});
@@ -657,25 +682,30 @@ console.log(JSON.stringify({ verdict, ms: Date.now() - t0 }));
     assertEquals(code, 0, "the setup-failed child exited cleanly");
     const out = JSON.parse(new TextDecoder().decode(stdout).trim().split("\n").pop() ?? "{}");
     assertEquals(out.verdict, "HeavyGateSlotSetupError", `the child must report a setup fault, got ${JSON.stringify(out)}`);
+    // cl00m: 2,898 ms measured for a different child under the loaded gate.
+    // Ten seconds preserves >3x headroom yet catches a leaked 60 s read timer.
     assert(
-      elapsed < 1000,
-      `the setup-failed child took ${elapsed} ms (< 1000 ms) with a 60 s bound — all timers must be cleared before exit`,
+      elapsed < 10_000,
+      `the setup-failed child took ${elapsed} ms (< 10,000 ms) with a 60 s bound — the read timer must be cleared before exit`,
     );
   } finally {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 });
 
-Deno.test("k9i3 drill: status-rejection in !acquired branch clears backstop watchdog and exits well under 1500ms", async () => {
+Deno.test("k9i3 drill: status-rejection in !acquired branch clears its 1,500 ms backstop", async () => {
   // Directly forces the error path in the `!acquired` branch where `child.status` rejects
   // (e.g. child process already reaped / ECHILD).
   // Pre-fix behavior: `clearTimeout(timer)` after `await child.status` was skipped on rejection,
   // leaving the 1500 ms watchdog timer active on the event loop -> subprocess took ~1560 ms to exit.
-  // Fixed behavior: `finally { clearTimeout(backstop) }` executes regardless -> subprocess exits in < 300 ms.
+  // Fixed behavior: `finally { clearTimeout(backstop) }` executes regardless.
+  // The loaded gate took 1,649 ms without a leak, so elapsed < 1,000 ms was not
+  // a sound distinguisher; measure the backstop handle itself instead.
   const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-k9i3-reap-" });
   const script = `${dir}/reap-drill.mjs`;
   await Deno.writeTextFile(script, `
 import { acquireHeavyGateSlot } from ${JSON.stringify(`${ROOT}scripts/lib/heavy-gate-slot.ts`)};
+${BACKSTOP_TIMER_PROBE}
 
 // Intercept Deno.Command.prototype.spawn so the locking helper exits immediately without
 // emitting CAP_HEAVY_GATE_ACQUIRED, forcing the !acquired branch, and child.status rejects.
@@ -695,7 +725,6 @@ Deno.Command.prototype.spawn = function(...spawnArgs) {
   return child;
 };
 
-const t0 = Date.now();
 let verdict = "acquired";
 try {
   await acquireHeavyGateSlot({
@@ -709,10 +738,9 @@ try {
 } catch (e) {
   verdict = e?.name ?? "?";
 }
-console.log(JSON.stringify({ verdict, elapsedMs: Date.now() - t0 }));
+console.log(JSON.stringify({ verdict, backstopsScheduled, pendingBackstops: pendingBackstops.size }));
 // No Deno.exit() — process must exit naturally through unpinned event loop
 `);
-  const t0 = Date.now();
   try {
     const child = new Deno.Command(Deno.execPath(), {
       args: ["run", "-A", "--no-check", script],
@@ -721,18 +749,17 @@ console.log(JSON.stringify({ verdict, elapsedMs: Date.now() - t0 }));
       stderr: "piped",
     }).spawn();
     const { code, stdout } = await child.output();
-    const elapsed = Date.now() - t0;
     assertEquals(code, 0, "the child exited cleanly despite status rejection");
     const out = JSON.parse(new TextDecoder().decode(stdout).trim().split("\n").pop() ?? "{}");
     assert(
       ["HeavyGateSlotRefusedError", "HeavyGateSlotSetupError"].includes(out.verdict),
       `must throw error on status rejection, got ${JSON.stringify(out)}`,
     );
-    // Pre-fix: took ~1560 ms (RED). Fixed: takes ~75 ms (GREEN).
-    assert(
-      elapsed < 1000,
-      `child exited in ${elapsed} ms — must exit well under the 1500 ms backstop watchdog lifetime (pre-fix leak: ~1560 ms)`,
-    );
+    // The old code leaves the created handle live through this snapshot. Under
+    // load, a good child can exceed the watchdog lifetime too; the handle state
+    // distinguishes those cases without weakening the injected ECHILD verdict.
+    assertEquals(out.backstopsScheduled, 1, "the status-rejection branch actually scheduled its 1,500 ms backstop");
+    assertEquals(out.pendingBackstops, 0, "status rejection cleared the backstop before exit (pre-fix leak: ~1,560 ms)");
   } finally {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
