@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.690] — 2026-10-15
+- Bounded key counting on OPFS memory stores, so the diagnostics route no longer enumerates every key
+- Aborting a run that is not live, or that does not match the active run, is refused honestly instead of silently stopping the wrong one.
+- Restoring a recently closed tab shows a single final reply, with the browser cleanup note preserved.
+
 ## [0.3.689] — 2026-10-15
 - no user-facing change; a host-contention stall can no longer be reported as a product defect.
 
