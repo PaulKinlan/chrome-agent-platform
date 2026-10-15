@@ -17,7 +17,7 @@ Deno.test("heavy-gate static: exports main and filesFor, matching HEAVY_GATE_FIL
   assertEquals(typeof filesFor, "function");
   assertEquals(filesFor([]), [...HEAVY_GATE_FILES]);
   assertEquals(filesFor(["tests/foo.test.ts", "--flag"]), ["tests/foo.test.ts"]);
-  assertEquals(HEAVY_GATE_FILES.length, 19);
+  assertEquals(HEAVY_GATE_FILES.length, 20);
   assertEquals(DEFAULT_HEAVY_GATE_TIMEOUT_MS, 1200_000);
 });
 
