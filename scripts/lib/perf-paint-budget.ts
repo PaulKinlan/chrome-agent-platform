@@ -66,12 +66,12 @@ export function classifyPaintMetrics(
   }
 
   const over: string[] = [];
-  if (fcp > budgets.fcpMs) over.push(`fcp ${fcp}ms > ${budgets.fcpMs}ms`);
-  if (lcp > budgets.lcpMs) over.push(`lcp ${lcp}ms > ${budgets.lcpMs}ms`);
+  if (fcp > budgets.fcpMs) over.push(`fcp ${Number(fcp.toFixed(1))}ms > ${budgets.fcpMs}ms`);
+  if (lcp > budgets.lcpMs) over.push(`lcp ${Number(lcp.toFixed(1))}ms > ${budgets.lcpMs}ms`);
   if (over.length > 0) return { verdict: "FAIL", reasons: [over.join("; ")] };
 
   return {
     verdict: "PASS",
-    reasons: [`fcp ${fcp}ms <= ${budgets.fcpMs}ms and lcp ${lcp}ms <= ${budgets.lcpMs}ms`],
+    reasons: [`fcp ${Number(fcp.toFixed(1))}ms <= ${budgets.fcpMs}ms and lcp ${Number(lcp.toFixed(1))}ms <= ${budgets.lcpMs}ms`],
   };
 }
