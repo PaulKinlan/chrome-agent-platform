@@ -67,6 +67,53 @@ export interface HarnessEntry {
   /** Semver or build string of the verified browser (e.g. "154.0.8037.92"). */
   chromeVersion?: string;
   owner?: string;
+  /** Explicit class of a named owner. "standing" = a permanently open ownership
+   *  role whose failures are continuous, not a task to complete; undefined means
+   *  an ordinary owner that finishes. The guard recognises the class from the
+   *  bead's own label, so the declaration and the tracker must agree. See
+   *  chrome-agent-platform-9tkwq. */
+  ownerClass?: "standing" | "task";
+}
+
+/** The label a standing/component owner carries in the tracker. A standing owner is
+ *  permanently open BY DESIGN, so "the owner bead must not be closed" is the wrong
+ *  predicate for that class: it is recognised explicitly instead of by one bead
+ *  happening never to close (chrome-agent-platform-9tkwq). */
+export const STANDING_OWNER_LABEL = "standing-owner";
+
+export type OwnerClassVerdict = { accept: true } | { accept: false; reason: string };
+
+/** Decide whether a named owner's resolution is acceptable, as a pure function so the
+ *  class matrix is testable without the tracker and the guard keeps ONE mechanism
+ *  (it still calls `bd show` once per owner). Ordinary owners keep the original 35o1
+ *  rule exactly: closed fails. A standing owner fails too if it closes - continuous
+ *  ownership must never be dropped silently - but it says so in the language of the
+ *  class, and the class must be explicit on both sides rather than implied by either. */
+export function classifyOwnerResolution({ declaredClass, status, labels }: {
+  declaredClass?: HarnessEntry["ownerClass"];
+  status: string;
+  labels?: readonly string[];
+}): OwnerClassVerdict {
+  const closed = status.trim().toLowerCase() === "closed";
+  const declaredStanding = declaredClass === "standing";
+  const labelledStanding = (labels ?? []).includes(STANDING_OWNER_LABEL);
+  if (declaredStanding !== labelledStanding) {
+    return {
+      accept: false,
+      reason: declaredStanding
+        ? `the registry declares a standing owner but the bead does not carry the ${STANDING_OWNER_LABEL} label - the class has to be explicit on both sides`
+        : `the bead carries the ${STANDING_OWNER_LABEL} label but the entry does not declare ownerClass: "standing" - declare the class instead of relying on the label alone`,
+    };
+  }
+  if (closed) {
+    return {
+      accept: false,
+      reason: declaredStanding
+        ? `names a STANDING owner that is CLOSED: continuous ownership was dropped rather than completed - re-point HarnessEntry.owner at a live bead, or re-declare the class (chrome-agent-platform-9tkwq)`
+        : `is CLOSED - re-point HarnessEntry.owner at a live bead in the same change (chrome-agent-platform-35o1)`,
+    };
+  }
+  return { accept: true };
 }
 
 /** The owner-of-record bead for the journey gate. Kept beside the entry so the
@@ -74,7 +121,10 @@ export interface HarnessEntry {
 // STANDING owner (coord, 2026-10-15): the 35o1 guard reads this field against the tracker, so any owner that
 // can itself complete re-reds the guard the day it closes - which is exactly what happened when 76qp closed
 // with the eleven-item union and every gate on main began failing at tests/harness-registry.test.ts:172.
-// c6rt4 carries label standing-owner and never closes: journey-triage ownership is continuous, not a task.
+// c6rt4 is permanently open BY DESIGN: journey-triage ownership is continuous, not a task. That class is now
+// declared explicitly (ownerClass: "standing" on the entry) and recognised by the guard from the bead's own
+// standing-owner label, instead of depending on this bead happening never to close (chrome-agent-platform-9tkwq).
+// A closed owner still fails for EVERY class, including this one.
 // See chrome-agent-platform-uxufb.
 export const JOURNEY_GATE_OWNER = "chrome-agent-platform-c6rt4";
 
@@ -90,6 +140,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
     npm: "test:chrome",
     loadSensitive: "eo4d.1: 370 sequential CDP round-trips over minutes; r1 died at 59/370 and r3 at 250/370 on `cdp timeout: Runtime.evaluate` with machine load >7 (other lanes' imageops/esbuild + Rust/Wasm builds); r4 passed 370/370 only in an uninterrupted quiet window",
     owner: JOURNEY_GATE_OWNER,
+    ownerClass: "standing",
   },
   "security-suite.ts": { class: "gate", npm: "test:security", via: "scripts/security-suite-supervisor.sh", reason: "does NOT take the fleet turn: its supervisor (scripts/security-suite-supervisor.sh) already holds the CANONICAL locked section on fd 9 for the whole run, and the fleet-wide order is turn-then-canonical — taking the turn inside would invert it and can deadlock against another gate. launchChrome now REFUSES that combination (chrome-agent-platform-ryrr)" },
   "security-injection.ts": { class: "gate", npm: "test:security:injection", reason: "does NOT take the fleet turn: same custody reasoning as security-suite.ts — it runs inside the supervisor\u0027s canonical section (fd 9), so the turn would invert the order (chrome-agent-platform-ryrr)" },
