@@ -350,7 +350,7 @@ Deno.test({
       await cdp.send("Page.bringToFront", {}, page.sessionId);
       await new Promise((r) => setTimeout(r, 1500));
 
-      // Capture pre-run baseline diagnostics entries
+      // Capture pre-run baseline diagnostics entries and max timestamp
       const baselineEntries = await cdp.eval(
         page.sessionId,
         `new Promise((resolve) => {
@@ -359,6 +359,7 @@ Deno.test({
           });
         })`,
       );
+      const baselineTs = (baselineEntries || []).reduce((max, e) => Math.max(max, e?.ts || 0), 0);
       const baselineCount = baselineEntries?.length || 0;
 
       // Run a keyless prompt
@@ -407,13 +408,16 @@ Deno.test({
             });
           })`,
         );
-        const newEntries = (currentEntries || []).slice(baselineCount);
-        const match = newEntries.find((e) => {
+        // diagnostics.list returns newest first: new entries arrive in the prefix
+        const newCount = Math.max(0, (currentEntries?.length || 0) - baselineCount);
+        const newPrefix = (currentEntries || []).slice(0, newCount);
+        const match = newPrefix.find((e) => {
+          const isNewer = (e?.ts || 0) >= baselineTs;
           const msg = String(e?.message || "").toLowerCase();
           const kind = String(e?.kind || "").toLowerCase();
-          return msg.includes("pricing") || msg.includes("cost tracking") ||
+          return isNewer && (msg.includes("pricing") || msg.includes("cost tracking") ||
             kind.includes("denied") || kind.includes("declined") ||
-            msg.includes("denied") || msg.includes("declined");
+            msg.includes("denied") || msg.includes("declined"));
         });
         if (match) {
           keylessEntryFound = true;
