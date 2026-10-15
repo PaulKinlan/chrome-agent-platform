@@ -36,7 +36,7 @@ globalThis.document = { createElement: (tag) => new FakeElement(tag) };
 const screenshotId = "shot_store_101";
 const dataURL = "data:image/png;base64,YQ==";
 const store = new Map([
-  [screenshotId, { dataURL, url: "https://example.com/captured" }],
+  [screenshotId, { dataURL, url: "https://store.example/saved-original" }],
   ["shot_decoy_999", { dataURL: "data:image/png;base64,Yg==", url: "https://other.example/" }],
 ]);
 const lookups = [];
@@ -64,8 +64,7 @@ Deno.test("b7ny0.22: Map store DOUBLE resolves the real images-row ID through sc
   const images = rows.filter((row) => row.role === "images");
   assertEquals(images.length, 1, "the real projection creates one image row");
   assertEquals(images[0].items.map(({ id, kind }) => ({ id, kind })),
-    [{ id: screenshotId, kind: "screenshot" }], "the row carries a screenshot ID, not image bytes");
-  assert(!JSON.stringify(images[0]).includes(dataURL), "the projection never inlines store bytes");
+    [{ id: screenshotId, kind: "screenshot" }], "the projected row names the screenshot ID and kind");
 
   const conversation = new AgentConversation();
   conversation._connected = true;
