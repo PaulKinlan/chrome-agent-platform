@@ -50,7 +50,8 @@ Deno.test("luq4w: always-on source guards must not silently require a production
   const selected = new Set(ALWAYS_ON);
   const distConsumers = findDistConsumers([...ALWAYS_ON]).filter((file) => selected.has(file));
   assertEquals(distConsumers, [], "a source guard mentioning dist only to skip it must not force every fast gate to build");
-  // This pin runs when selected or in the full suite; --always-on does not include this test file itself.
+  // This pin runs when selected or in the full suite, not in an isolated --always-on run;
+  // tests/build-if-needed.test.ts independently asserts this zero-consumer invariant.
 });
 
 Deno.test("kz27: the split put the browser-free SCAN in the set and left the live race out", () => {
