@@ -566,6 +566,26 @@
           </div>
         </div>
 
+        <div id="vault-quotas-section" class="vault-ledger-section">
+          <div class="vault-ledger-header">
+            <h3>Service call quotas &amp; rate bounds</h3>
+            <button id="vault-quotas-reset" class="btn small ghost" type="button">Reset to defaults</button>
+          </div>
+          <p class="muted">Hourly and daily request quotas enforced at the enclave proxy. Limit of 0 disables the service fail-closed. Overrides persist across browser restarts.</p>
+          <div id="vault-quotas-warning" class="vault-status-pill fail" style="display:none;margin:8px 0;padding:6px 10px;" role="alert">Stored quota configuration failed validation. Using built-in defaults fail-closed.</div>
+          <div id="vault-quotas-status" role="status" class="muted" style="margin:4px 0;" hidden></div>
+          <div id="vault-quotas" class="vault-ledger"></div>
+          <div class="vault-quota-add-row" style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap;">
+            <input id="vault-quota-add-service" type="text" placeholder="service-id (e.g. custom-api)" style="width:180px;" autocomplete="off" spellcheck="false">
+            <input id="vault-quota-add-limit" type="number" min="0" placeholder="Limit (0 = disable)" style="width:140px;">
+            <select id="vault-quota-add-window" class="input-select" style="width:110px;">
+              <option value="3600000">1 hour</option>
+              <option value="86400000" selected>24 hours</option>
+            </select>
+            <button id="vault-quota-add-save" class="btn small" type="button">Set quota</button>
+          </div>
+        </div>
+
         <div id="vault-ledger-section" class="vault-ledger-section">
           <div class="vault-ledger-header">
             <h3>Proxied request log</h3>

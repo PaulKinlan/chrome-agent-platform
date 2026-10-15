@@ -32,7 +32,7 @@ const [ensureCtx, $, $$, byId, send, boundedSend, storage, saveFlash, on, makeUn
 function vaultSend(type, payload = {}, ctx) {
   return send({ type, ...payload }).then(
     (v) => v,
-    (e) => ({ ok: false, error: String(e?.message ?? e) }),
+    (e) => ({ ok: false, error: String(e?.message ?? e), code: e?.code }),
   );
 }
 
@@ -99,6 +99,7 @@ async function renderVaultPanel(ctx) {
     host.append(vaultCard(item));
   }
 
+  await renderVaultQuotas(ctx);
   renderVaultLedger(res?.ledger ?? []);
 }
 
@@ -263,6 +264,298 @@ function vaultCard(item, ctx) {
   return wrap;
 }
 
+function formatWindowDuration(windowMs) {
+  if (!windowMs || typeof windowMs !== "number") return "—";
+  if (windowMs % 86400000 === 0) {
+    const hours = windowMs / 3600000;
+    return `${hours}h (${windowMs.toLocaleString()}ms)`;
+  }
+  if (windowMs % 3600000 === 0) {
+    const hours = windowMs / 3600000;
+    return `${hours}h (${windowMs.toLocaleString()}ms)`;
+  }
+  if (windowMs % 60000 === 0) {
+    const mins = windowMs / 60000;
+    return `${mins}m (${windowMs.toLocaleString()}ms)`;
+  }
+  return `${windowMs.toLocaleString()}ms`;
+}
+
+function formatRemainingMs(resetMs) {
+  if (resetMs === null || resetMs === undefined) return "—";
+  if (resetMs <= 0) return "0s";
+  const seconds = Math.floor(resetMs / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  if (hours > 0) {
+    return `${hours}h ${minutes % 60}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds % 60}s`;
+  }
+  return `${seconds}s`;
+}
+
+export function setQuotaStatus(text, isError, ctx) {
+  const el = byId("vault-quotas-status");
+  if (!el) return;
+  el.hidden = false;
+  el.textContent = text;
+  el.style.color = isError ? "var(--danger,#b3261e)" : "";
+}
+
+let lastConfiguredQuotas = null;
+
+async function getStoredQuotas() {
+  if (lastConfiguredQuotas && typeof lastConfiguredQuotas === "object") {
+    return { ...lastConfiguredQuotas };
+  }
+  try {
+    const got = await globalThis.chrome?.storage?.local?.get?.("cap:enclave:quotas");
+    const raw = got?.["cap:enclave:quotas"];
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      lastConfiguredQuotas = { ...raw };
+      return { ...lastConfiguredQuotas };
+    }
+  } catch {}
+  lastConfiguredQuotas = {};
+  return {};
+}
+
+export async function renderVaultQuotas(ctx) {
+  const host = byId("vault-quotas");
+  if (!host) return;
+
+  const res = await vaultSend("vault.ledger.usage", {});
+  const isInvalid = Boolean(res?.configInvalid);
+  const warningEl = byId("vault-quotas-warning");
+  if (warningEl) {
+    if (isInvalid) {
+      warningEl.style.display = "";
+      warningEl.hidden = false;
+      warningEl.textContent = "Stored quota configuration failed validation. Using built-in defaults fail-closed.";
+    } else {
+      warningEl.style.display = "none";
+      warningEl.hidden = true;
+    }
+  }
+
+  if (!res?.ok) {
+    setQuotaStatus(`Failed to load quotas: ${res?.error || res?.code || "unknown"}`, true);
+    return;
+  }
+
+  const usage = res.usage || {};
+  const serviceIds = Object.keys(usage);
+  if (serviceIds.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "muted";
+    empty.style.padding = "12px";
+    empty.textContent = "No service quotas or telemetry available.";
+    host.replaceChildren(empty);
+    return;
+  }
+
+  const table = document.createElement("table");
+  table.className = "vault-ledger-table vault-quotas-table";
+
+  const thead = document.createElement("thead");
+  const trHead = document.createElement("tr");
+  for (const col of ["Service", "Status", "Calls", "Limit", "Remaining", "Window", "Reset In", "Actions"]) {
+    const th = document.createElement("th");
+    th.textContent = col;
+    trHead.append(th);
+  }
+  thead.append(trHead);
+  table.append(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const serviceId of serviceIds) {
+    const item = usage[serviceId] || {};
+    const tr = document.createElement("tr");
+    tr.className = "vault-quota-row";
+    tr.dataset.service = serviceId;
+    tr.dataset.count = String(item.count ?? 0);
+    tr.dataset.limit = String(item.limit ?? "");
+    tr.dataset.remaining = String(item.remaining ?? "");
+    tr.dataset.windowMs = String(item.windowMs ?? "");
+    tr.dataset.disabled = String(Boolean(item.disabled));
+    tr.dataset.unmetered = String(Boolean(item.unmetered));
+
+    const tdService = document.createElement("td");
+    tdService.className = "vault-quota-service";
+    const codeService = document.createElement("code");
+    codeService.textContent = serviceId;
+    tdService.append(codeService);
+
+    const tdStatus = document.createElement("td");
+    tdStatus.className = "vault-quota-status";
+    const statusPill = document.createElement("span");
+    if (item.disabled) {
+      statusPill.className = "vault-status-pill fail";
+      statusPill.textContent = "Disabled";
+    } else if (item.unmetered) {
+      statusPill.className = "vault-status-pill";
+      statusPill.textContent = "Unmetered";
+    } else {
+      statusPill.className = "vault-status-pill ok";
+      statusPill.textContent = "Active";
+    }
+    tdStatus.append(statusPill);
+
+    const tdCount = document.createElement("td");
+    tdCount.className = "vault-quota-count";
+    tdCount.textContent = String(item.count ?? 0);
+
+    const tdLimit = document.createElement("td");
+    tdLimit.className = "vault-quota-limit";
+    if (item.disabled) {
+      tdLimit.textContent = "0 (disabled)";
+    } else if (item.unmetered) {
+      tdLimit.textContent = "Unmetered";
+    } else {
+      tdLimit.textContent = String(item.limit);
+    }
+
+    const tdRemaining = document.createElement("td");
+    tdRemaining.className = "vault-quota-remaining";
+    if (item.disabled) {
+      tdRemaining.textContent = "0";
+    } else if (item.unmetered) {
+      tdRemaining.textContent = "Unmetered";
+    } else {
+      tdRemaining.textContent = String(item.remaining);
+    }
+
+    const tdWindow = document.createElement("td");
+    tdWindow.className = "vault-quota-window";
+    if (item.unmetered) {
+      tdWindow.textContent = "—";
+    } else {
+      tdWindow.textContent = formatWindowDuration(item.windowMs);
+    }
+
+    const tdReset = document.createElement("td");
+    tdReset.className = "vault-quota-reset";
+    if (item.disabled || item.unmetered || item.resetMs === null || item.resetMs === undefined) {
+      tdReset.textContent = "—";
+    } else {
+      tdReset.textContent = formatRemainingMs(item.resetMs);
+    }
+
+    const tdActions = document.createElement("td");
+    tdActions.className = "vault-quota-actions";
+    tdActions.style.whiteSpace = "nowrap";
+
+    const limitInput = document.createElement("input");
+    limitInput.type = "number";
+    limitInput.min = "0";
+    limitInput.className = "vault-quota-limit-input";
+    limitInput.style.width = "65px";
+    limitInput.style.padding = "2px 4px";
+    limitInput.style.fontSize = "12px";
+    limitInput.style.marginRight = "4px";
+    limitInput.placeholder = "Limit";
+    limitInput.setAttribute("aria-label", `Limit for ${serviceId}`);
+    if (typeof item.limit === "number") {
+      limitInput.value = String(item.limit);
+    }
+
+    const windowSelect = document.createElement("select");
+    windowSelect.className = "input-select vault-quota-window-select";
+    windowSelect.style.width = "85px";
+    windowSelect.style.padding = "2px 4px";
+    windowSelect.style.fontSize = "12px";
+    windowSelect.style.marginRight = "4px";
+    windowSelect.setAttribute("aria-label", `Window for ${serviceId}`);
+
+    const opt1h = document.createElement("option");
+    opt1h.value = "3600000";
+    opt1h.textContent = "1 hour";
+    const opt24h = document.createElement("option");
+    opt24h.value = "86400000";
+    opt24h.textContent = "24 hours";
+    windowSelect.append(opt1h, opt24h);
+
+    if (item.windowMs && item.windowMs !== 3600000 && item.windowMs !== 86400000) {
+      const optCustom = document.createElement("option");
+      optCustom.value = String(item.windowMs);
+      optCustom.textContent = formatWindowDuration(item.windowMs);
+      windowSelect.append(optCustom);
+    }
+    if (item.windowMs) {
+      windowSelect.value = String(item.windowMs);
+    } else {
+      windowSelect.value = "86400000";
+    }
+
+    const setBtn = document.createElement("button");
+    setBtn.type = "button";
+    setBtn.className = "btn small vault-quota-set-btn";
+    setBtn.textContent = "Set";
+    setBtn.style.padding = "2px 8px";
+    setBtn.style.fontSize = "12px";
+    setBtn.style.marginRight = "4px";
+    setBtn.addEventListener("click", async () => {
+      const rawLimit = limitInput.value.trim();
+      const numLimit = Number(rawLimit);
+      if (rawLimit === "" || !Number.isInteger(numLimit) || numLimit < 0) {
+        setQuotaStatus(`Limit for ${serviceId} must be a non-negative integer (0 to disable).`, true);
+        return;
+      }
+      const numWindow = Number(windowSelect.value);
+      if (!Number.isInteger(numWindow) || numWindow <= 0) {
+        setQuotaStatus(`Window for ${serviceId} must be a positive integer.`, true);
+        return;
+      }
+      setBtn.disabled = true;
+      const stored = await getStoredQuotas();
+      const updated = {
+        ...stored,
+        [serviceId]: { limit: numLimit, windowMs: numWindow },
+      };
+      const writeRes = await vaultSend("vault.ledger.setQuotas", { quotas: updated });
+      setBtn.disabled = false;
+      if (!writeRes?.ok) {
+        setQuotaStatus(`Failed to set quota for ${serviceId}: ${writeRes?.error || writeRes?.code || "invalid_quota_config"}`, true);
+        return;
+      }
+      lastConfiguredQuotas = { ...(writeRes.quotas ?? updated) };
+      setQuotaStatus(`Quota updated for ${serviceId}: limit ${numLimit}, window ${formatWindowDuration(numWindow)}.`, false);
+      await renderVaultPanel();
+    });
+
+    const clearBtn = document.createElement("button");
+    clearBtn.type = "button";
+    clearBtn.className = "btn small ghost vault-quota-clear-btn";
+    clearBtn.textContent = "Clear";
+    clearBtn.style.padding = "2px 8px";
+    clearBtn.style.fontSize = "12px";
+    clearBtn.addEventListener("click", async () => {
+      clearBtn.disabled = true;
+      const stored = await getStoredQuotas();
+      const updated = { ...stored };
+      delete updated[serviceId];
+      const writeRes = await vaultSend("vault.ledger.setQuotas", { quotas: updated });
+      clearBtn.disabled = false;
+      if (!writeRes?.ok) {
+        setQuotaStatus(`Failed to clear quota for ${serviceId}: ${writeRes?.error || writeRes?.code || "unknown"}`, true);
+        return;
+      }
+      lastConfiguredQuotas = { ...(writeRes.quotas ?? updated) };
+      setQuotaStatus(`Quota cleared for ${serviceId}. Restored to default.`, false);
+      await renderVaultPanel();
+    });
+
+    tdActions.append(limitInput, windowSelect, setBtn, clearBtn);
+    tr.append(tdService, tdStatus, tdCount, tdLimit, tdRemaining, tdWindow, tdReset, tdActions);
+    tbody.append(tr);
+  }
+
+  table.append(tbody);
+  host.replaceChildren(table);
+}
+
 function renderVaultLedger(ledgerEntries, ctx) {
   const host = byId("vault-ledger");
   if (!host) return;
@@ -402,6 +695,55 @@ export function initVaultStatic(ctx, { runInitialRender = true } = {}) {
 
   byId("vault-ledger-clear")?.addEventListener("click", async () => {
     await vaultSend("vault.ledger.clear", {});
+    await renderVaultPanel();
+  });
+
+  byId("vault-quotas-reset")?.addEventListener("click", async () => {
+    const res = await vaultSend("vault.ledger.setQuotas", { quotas: {} });
+    if (!res?.ok) {
+      setQuotaStatus(`Reset failed: ${res?.error || res?.code || "unknown"}`, true);
+      return;
+    }
+    lastConfiguredQuotas = {};
+    setQuotaStatus("All quotas reset to built-in defaults.", false);
+    await renderVaultPanel();
+  });
+
+  byId("vault-quota-add-save")?.addEventListener("click", async () => {
+    const serviceInput = byId("vault-quota-add-service");
+    const limitInput = byId("vault-quota-add-limit");
+    const windowSelect = byId("vault-quota-add-window");
+    const serviceId = serviceInput?.value?.trim()?.toLowerCase() ?? "";
+    const rawLimit = limitInput?.value?.trim() ?? "";
+    const numLimit = Number(rawLimit);
+    const numWindow = Number(windowSelect?.value ?? "86400000");
+
+    if (!serviceId) {
+      setQuotaStatus("Service ID is required.", true);
+      return;
+    }
+    if (rawLimit === "" || !Number.isInteger(numLimit) || numLimit < 0) {
+      setQuotaStatus(`Limit for ${serviceId} must be a non-negative integer (0 to disable).`, true);
+      return;
+    }
+    if (!Number.isInteger(numWindow) || numWindow <= 0) {
+      setQuotaStatus(`Window for ${serviceId} must be a positive integer.`, true);
+      return;
+    }
+    const stored = await getStoredQuotas();
+    const updated = {
+      ...stored,
+      [serviceId]: { limit: numLimit, windowMs: numWindow },
+    };
+    const writeRes = await vaultSend("vault.ledger.setQuotas", { quotas: updated });
+    if (!writeRes?.ok) {
+      setQuotaStatus(`Failed to set quota for ${serviceId}: ${writeRes?.error || writeRes?.code || "invalid_quota_config"}`, true);
+      return;
+    }
+    if (serviceInput) serviceInput.value = "";
+    if (limitInput) limitInput.value = "";
+    lastConfiguredQuotas = { ...(writeRes.quotas ?? updated) };
+    setQuotaStatus(`Quota set for ${serviceId}: limit ${numLimit}, window ${formatWindowDuration(numWindow)}.`, false);
     await renderVaultPanel();
   });
 

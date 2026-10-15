@@ -266,6 +266,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-recent-activity.ts": { class: "kat", ...RED("crash", "the explorer never mounts on the NTP ({mounted:false}) and the KAT then throws") },
   "kat-scheduled-next-run-widget.ts": { class: "kat" },
   "kat-scheduled-run-output.ts": { class: "kat" },
+  "kat-quota-ui.ts": { class: "kat" },
   "kat-settings-cleanliness.ts": { class: "kat" },
   "kat-python-no-ambient-network.ts": { class: "kat" },
   "kat-python-permissioned-fetch.ts": { class: "kat" },
