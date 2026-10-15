@@ -214,19 +214,19 @@ Deno.test("b7ny0.20: cold durable run-log reload projects the full result into t
     { role: "user", content: "read", ts: 0, executionId }, ...toolRows,
     { role: "assistant", content: "done", ts: 3, executionId },
   ] }).filter((row) => row.role === "tool");
-  assertEquals(projected.detail, full, "the real card receives the COLD retrieved result, not a supplied fixture detail");
   const card = buildToolCardDom({ name: projected.name, status: projected.status,
     result: projected.result, detail: projected.detail, cardExpanded: true, expandedState: new Map() });
   const blocks = findAll(card, (el) => hasClass(el, "tt-block"));
-  assertEquals(blocks.filter((b) => findAll(b, (el) => hasClass(el, "tt-block-label"))[0]?.textContent === "result").length,
-    1, "one result block after reload");
-  const pretty = findAll(card, (el) => hasClass(el, "tt-raw"))[0];
-  assert(pretty, "the cold result is rendered in the pretty JSON view");
+  const resultBlocks = blocks.filter((b) => findAll(b, (el) => hasClass(el, "tt-block-label"))[0]?.textContent === "result");
+  const pretty = findAll(resultBlocks[0], (el) => hasClass(el, "tt-raw"))[0];
   const tokens = findAll(pretty, (el) => /(^|\s)tt-json-/.test(String(el.className ?? "")));
+  const tailInPretty = tokens.map((el) => el.textContent).join("").includes("COLD-TAIL-MARKER-END");
+  assertEquals({ coldDetail: projected.detail === full, tailInPretty }, { coldDetail: true, tailInPretty: true },
+    "the COLD retrieved detail and beyond-300 tail must both reach the same pretty JSON card");
+  assertEquals(resultBlocks.length, 1, "one result block after reload");
+  assert(pretty, "the cold result is rendered in that result block's pretty JSON view");
   const kinds = new Set(tokens.map((el) => String(el.className).match(/tt-json-([a-z]+)/)?.[1]));
   for (const kind of ["key", "string", "number", "boolean", "punct"]) assert(kinds.has(kind), `cold JSON has ${kind} theme tokens`);
-  assert(tokens.map((el) => el.textContent).join("").includes("COLD-TAIL-MARKER-END"),
-    "a leaf beyond byte 300 survives the reload into the same card's syntax-coloured view");
 });
 
 Deno.test("json card: a nested error inside an ok:true envelope renders as the headline in the error colour and flips the status chip to error (never a success-looking card)", () => {
