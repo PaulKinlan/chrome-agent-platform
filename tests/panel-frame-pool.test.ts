@@ -19,10 +19,11 @@ Deno.test("PANEL-POOL: panels use a single exact-document options frame (retired
   assert(!ntpHtml.includes('id="view-frame"'), "the static shared #view-frame must be gone from the markup");
 });
 
-Deno.test("PANEL-POOL: directory, artifacts, and hub-ok Settings panels create zero iframes in the hub DOM", () => {
-  // 1. Static markup verification: zero static iframes in ntp.html, and all client views nested under #view-client-host
-  const staticIframes = (ntpHtml.match(/<iframe/gi) || []).length;
-  assertEquals(staticIframes, 0, "ntp.html markup must have zero static <iframe> elements");
+Deno.test("PANEL-POOL: directory, artifacts, and hub-ok Settings routes create zero panel frames in PANEL_FRAME_CONTAINER", () => {
+  // 1. Static markup verification: zero static panel iframes in #view overlay, and all client views nested under #view-client-host
+  const viewSection = ntpHtml.slice(ntpHtml.indexOf('id="view"'), ntpHtml.indexOf('id="thread-view"'));
+  const staticIframes = (viewSection.match(/<iframe/gi) || []).length;
+  assertEquals(staticIframes, 0, "#view overlay markup must have zero static panel <iframe> elements");
 
   const vchIndex = ntpHtml.indexOf('id="view-client-host"');
   const dirIndex = ntpHtml.indexOf('id="directory-view"');
@@ -33,7 +34,7 @@ Deno.test("PANEL-POOL: directory, artifacts, and hub-ok Settings panels create z
   assert(dirIndex > vchIndex && artIndex > vchIndex && setIndex > vchIndex && setIndex < viewEnd,
     "directory-view, artifacts-view, and settings-view must all mount inside #view-client-host in ntp.html");
 
-  // 2. In ntp.js openView, client-side views mount directly in #view-client-host with zero iframe instantiation
+  // 2. In ntp.js openView, client-side views mount directly in #view-client-host with zero panel frame instantiation
   const openViewBody = ntpJs.slice(ntpJs.indexOf("function openView("), ntpJs.indexOf("function closeView("));
   const startClient = openViewBody.indexOf("if (isClientSide) {");
   assert(startClient >= 0, "openView must contain an explicit isClientSide branch");
@@ -41,7 +42,8 @@ Deno.test("PANEL-POOL: directory, artifacts, and hub-ok Settings panels create z
   assert(elseBranch > startClient, "openView must separate client-side mounting from exact-document frame mounting");
 
   const clientBranch = openViewBody.slice(startClient, elseBranch);
-  assert(!clientBranch.includes("panelFrameFor("), "client-side views must never invoke panelFrameFor or create an iframe");
+  assert(!clientBranch.includes("panelFrameFor("), "client-side views must never invoke panelFrameFor or create a panel frame");
+  assert(!clientBranch.includes('createElement("iframe")'), "client-side views must never create an iframe element");
   assert(clientBranch.includes("activePanelFrame = null;"), "client-side views must clear activePanelFrame");
   assert(clientBranch.includes("if (optionsFrame) optionsFrame.hidden = true;"), "optionsFrame is hidden when client views mount");
 
@@ -62,7 +64,7 @@ Deno.test("PANEL-POOL: directory, artifacts, and hub-ok Settings panels create z
   );
 });
 
-Deno.test("PANEL-POOL: simulated DOM lifecycle verifies zero iframes and per-route mounting under #view-client-host", () => {
+Deno.test("PANEL-POOL: simulated panel frame lifecycle verifies zero panel frames for client views and one retained optionsFrame for exact-document panels", () => {
   // Construct a minimal DOM fixture modeling ntp.html's #view container
   const makeElement = (id: string, tagName = "div") => ({
     id,
@@ -97,7 +99,7 @@ Deno.test("PANEL-POOL: simulated DOM lifecycle verifies zero iframes and per-rou
   container.appendChild(viewClientHost);
 
   let optionsFrame: any = null;
-  function getOrCreateOptionsFrame() {
+  function panelFrameFor() {
     if (!optionsFrame) {
       optionsFrame = makeElement("options-frame", "iframe");
       optionsFrame.dataset.panelPath = "options/options.html";
@@ -128,13 +130,16 @@ Deno.test("PANEL-POOL: simulated DOM lifecycle verifies zero iframes and per-rou
       directoryView.hidden = true;
       artifactsView.hidden = true;
       settingsView.hidden = true;
-      const frame = getOrCreateOptionsFrame();
+      const frame = panelFrameFor();
       frame.hidden = false;
     }
   }
 
-  // 1. Initial state: zero iframes in container
-  assertEquals(container.querySelectorAll("iframe").length, 0, "initial DOM must contain 0 iframes");
+  // Helper to count panel frames specifically within the PANEL_FRAME_CONTAINER (#view)
+  const countPanelFrames = () => container.querySelectorAll("iframe").filter(f => f.dataset.panelPath === "options/options.html").length;
+
+  // 1. Initial state: zero panel frames in PANEL_FRAME_CONTAINER
+  assertEquals(countPanelFrames(), 0, "initial PANEL_FRAME_CONTAINER must contain 0 panel frames");
 
   // 2. Open Directory view
   simulateOpenView("directory/directory.html");
@@ -142,7 +147,7 @@ Deno.test("PANEL-POOL: simulated DOM lifecycle verifies zero iframes and per-rou
   assertEquals(directoryView.hidden, false, "directoryView must be unhidden");
   assertEquals(artifactsView.hidden, true, "artifactsView must remain hidden");
   assertEquals(settingsView.hidden, true, "settingsView must remain hidden");
-  assertEquals(container.querySelectorAll("iframe").length, 0, "directory view must create 0 iframes in hub DOM");
+  assertEquals(countPanelFrames(), 0, "directory view must create 0 panel frames in PANEL_FRAME_CONTAINER");
 
   // 3. Open Artifacts view
   simulateOpenView("artifacts/index.html");
@@ -150,7 +155,7 @@ Deno.test("PANEL-POOL: simulated DOM lifecycle verifies zero iframes and per-rou
   assertEquals(directoryView.hidden, true, "directoryView must remain hidden");
   assertEquals(artifactsView.hidden, false, "artifactsView must be unhidden");
   assertEquals(settingsView.hidden, true, "settingsView must remain hidden");
-  assertEquals(container.querySelectorAll("iframe").length, 0, "artifacts view must create 0 iframes in hub DOM");
+  assertEquals(countPanelFrames(), 0, "artifacts view must create 0 panel frames in PANEL_FRAME_CONTAINER");
 
   // 4. Open Hub-ok Settings views (skills, usage, about)
   for (const section of ["skills", "usage", "about"]) {
@@ -159,25 +164,25 @@ Deno.test("PANEL-POOL: simulated DOM lifecycle verifies zero iframes and per-rou
     assertEquals(directoryView.hidden, true, "directoryView must remain hidden");
     assertEquals(artifactsView.hidden, true, "artifactsView must remain hidden");
     assertEquals(settingsView.hidden, false, `settingsView must be unhidden for settings#${section}`);
-    assertEquals(container.querySelectorAll("iframe").length, 0, `settings#${section} must create 0 iframes in hub DOM`);
+    assertEquals(countPanelFrames(), 0, `settings#${section} must create 0 panel frames in PANEL_FRAME_CONTAINER`);
   }
 
   // 5. Open exact-document panel (e.g. providers)
   simulateOpenView("options/options.html#providers");
   assertEquals(viewClientHost.hidden, true, "viewClientHost must be hidden for exact-document panels");
   assertEquals(optionsFrame?.hidden, false, "optionsFrame must be unhidden for exact-document panels");
-  assertEquals(container.querySelectorAll("iframe").length, 1, "exact-document panel creates exactly 1 optionsFrame");
+  assertEquals(countPanelFrames(), 1, "exact-document panel creates exactly 1 optionsFrame in PANEL_FRAME_CONTAINER");
 
-  // 6. Navigate between exact-document panels (never creates a 2nd iframe)
+  // 6. Navigate between exact-document panels (never creates a 2nd panel frame)
   simulateOpenView("options/options.html#data");
-  assertEquals(container.querySelectorAll("iframe").length, 1, "exact-document panel switch must retain exactly 1 optionsFrame");
+  assertEquals(countPanelFrames(), 1, "exact-document panel switch must retain exactly 1 optionsFrame");
 
   // 7. Navigate back to client view (optionsFrame hidden, viewClientHost unhidden, still 1 retained frame)
   simulateOpenView("directory/directory.html");
   assertEquals(viewClientHost.hidden, false, "viewClientHost unhidden when returning to directory");
   assertEquals(directoryView.hidden, false, "directoryView unhidden");
   assertEquals(optionsFrame.hidden, true, "optionsFrame hidden when returning to directory");
-  assertEquals(container.querySelectorAll("iframe").length, 1, "no new iframes created when switching back to client views");
+  assertEquals(countPanelFrames(), 1, "no new panel frames created when switching back to client views");
 });
 
 Deno.test("PANEL-POOL: a panel document is booted exactly once (no per-open navigation)", () => {
