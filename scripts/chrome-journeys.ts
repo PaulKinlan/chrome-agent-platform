@@ -552,7 +552,7 @@ async function activateNtpSession(cdp, session) {
   const targetInfo = await cdp?.send?.("Target.getTargetInfo", {}, session)?.catch?.(() => null);
   const targetId = targetInfo?.targetInfo?.targetId;
   if (targetId) {
-    await cdp?.send?.("Target.activateTarget", { targetId })?.catch?.(() => {});
+    await cdp?.send?.("Target.activateTarget", { targetId });
   }
   await cdp.send("Page.bringToFront", {}, session);
 }
@@ -9544,7 +9544,7 @@ async function demoPathJourney() {
     await sleep(1200);
 
     // ── step 1 ──
-    await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
+    await cdp.send("Target.activateTarget", { targetId: ntpPage.id });
     await cdp.send("Page.bringToFront", {}, ntp);
     await clickSel(cdp, ntp, "#home").catch(() => false);
     await sleep(500);
@@ -9970,7 +9970,7 @@ async function factoryResetJourney() {
     cdp.pageSessions.add(watch);
     const msgWatch = msgOn(watch);
 
-    await cdp.send("Target.activateTarget", { targetId: optsPage.id }).catch(() => {});
+    await cdp.send("Target.activateTarget", { targetId: optsPage.id });
     await cdp.send("Page.bringToFront", {}, opts);
     await clickSel(cdp, opts, 'a.nav-item[data-section="data"]');
     await sleep(400);
