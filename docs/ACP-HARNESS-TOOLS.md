@@ -110,6 +110,14 @@ no per-server filter — the choice is the whole config or none of it. Other har
 alone: `claude-agent-acp` and `codex-acp` take their servers from ACP, so isolating them would strip servers
 the operator did configure for them; and an unknown harness is not guessed at.
 
+**If a real switch is needed, this is what exists today.** The `pi` CLI on this machine documents three
+levers that could reach the same goal (`pi --help`): `--no-tools`/`-nt` drops the built-in and extension tools
+together, which is all-or-nothing in the wrong direction for a harness that needs its tools; `--exclude-tools`/
+`-xt <names>` drops named tools; and `PI_CODING_AGENT_DIR` pointed at a separate agent directory would avoid the
+operator's MCP configuration altogether, at the cost of also moving `auth.json` and so losing the harness's
+auth. None of the three was demonstrated against an MCP server here, so they are recorded as the documented
+options rather than as a working replacement for the variable above. (chrome-agent-platform mfn9m)
+
 **Honest limit.** The variable name and value are the mode `pi` is expected to use, and they were NOT
 verified against a `pi` build: the pinned adapter `pi-acp@0.0.33` never mentions the variable (isolation is
 its only control because it discards `params.mcpServers`), and the `pi` CLI on this machine exposes no
