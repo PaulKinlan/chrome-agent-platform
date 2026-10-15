@@ -321,7 +321,7 @@ async function getStoredQuotas() {
       lastConfiguredQuotas = { ...raw };
       return { ...raw };
     }
-  } catch {}
+  } catch { /* why-safe: no chrome.storage in this context (unit tests) - fall through to the in-memory fallback below */ }
   if (lastConfiguredQuotas && typeof lastConfiguredQuotas === "object") {
     return { ...lastConfiguredQuotas };
   }
