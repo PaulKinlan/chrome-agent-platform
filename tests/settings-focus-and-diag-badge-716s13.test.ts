@@ -350,6 +350,17 @@ Deno.test({
       await cdp.send("Page.bringToFront", {}, page.sessionId);
       await new Promise((r) => setTimeout(r, 1500));
 
+      // Capture pre-run baseline diagnostics entries
+      const baselineEntries = await cdp.eval(
+        page.sessionId,
+        `new Promise((resolve) => {
+          chrome.runtime.sendMessage({ type: 'diagnostics.list' }, (res) => {
+            resolve(res?.entries || []);
+          });
+        })`,
+      );
+      const baselineCount = baselineEntries?.length || 0;
+
       // Run a keyless prompt
       await cdp.eval(
         page.sessionId,
@@ -386,9 +397,9 @@ Deno.test({
       );
 
       // Wait for keyless diagnostic entry to land in background buffer
-      let keylessEntries = [];
+      let keylessEntryFound = false;
       for (let i = 0; i < 50; i++) {
-        keylessEntries = await cdp.eval(
+        const currentEntries = await cdp.eval(
           page.sessionId,
           `new Promise((resolve) => {
             chrome.runtime.sendMessage({ type: 'diagnostics.list' }, (res) => {
@@ -396,13 +407,24 @@ Deno.test({
             });
           })`,
         );
-        if (keylessEntries && keylessEntries.length > 0) break;
+        const newEntries = (currentEntries || []).slice(baselineCount);
+        const match = newEntries.find((e) => {
+          const msg = String(e?.message || "").toLowerCase();
+          const kind = String(e?.kind || "").toLowerCase();
+          return msg.includes("pricing") || msg.includes("cost tracking") ||
+            kind.includes("denied") || kind.includes("declined") ||
+            msg.includes("denied") || msg.includes("declined");
+        });
+        if (match) {
+          keylessEntryFound = true;
+          break;
+        }
         await new Promise((r) => setTimeout(r, 200));
       }
 
       assert(
-        keylessEntries.length > 0,
-        "keyless run must produce at least one diagnostic entry in the background buffer",
+        keylessEntryFound,
+        "keyless run must produce an expected keyless diagnostic entry (pricing notice or permission decision) in the background buffer",
       );
 
       // Explicitly await badge refresh with the updated entries buffer
