@@ -8,7 +8,6 @@
 import { checkFetchTarget } from "./fetch-policy.js";
 import {
   wrapUntrustedContent,
-  tagUntrusted,
   UNTRUSTED_TOKEN_PLACEHOLDER,
   isWellFormedFence,
   isWellFormedFenceWithToken,
@@ -239,7 +238,6 @@ async function fetchDirectSkill(url) {
     untrusted: true,
     fenced: true,
     files: { "SKILL.md": fenced },
-    rawFiles: { "SKILL.md": content },
     meta: {
       name: meta.name || urlName,
       description: meta.description || `Imported from ${url}`,
