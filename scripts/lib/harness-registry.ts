@@ -71,7 +71,12 @@ export interface HarnessEntry {
 
 /** The owner-of-record bead for the journey gate. Kept beside the entry so the
  *  guard and the declaration cannot drift apart. */
-export const JOURNEY_GATE_OWNER = "chrome-agent-platform-76qp";
+// STANDING owner (coord, 2026-10-15): the 35o1 guard reads this field against the tracker, so any owner that
+// can itself complete re-reds the guard the day it closes - which is exactly what happened when 76qp closed
+// with the eleven-item union and every gate on main began failing at tests/harness-registry.test.ts:172.
+// c6rt4 carries label standing-owner and never closes: journey-triage ownership is continuous, not a task.
+// See chrome-agent-platform-uxufb.
+export const JOURNEY_GATE_OWNER = "chrome-agent-platform-c6rt4";
 
 const RED = (tally: string, mode: string, owner = "unassigned (a fix or a retirement decision is the next action)") => ({
   expectedRed: owner,
