@@ -7,6 +7,11 @@ import {
 import { admitDurableRun } from "../extension/lib/durable-quota.js";
 import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
 
+// The only extension-tree access here is a source READ. Keep its literal away
+// from the in-memory chrome.storage.local fixture's remove() calls so the
+// partition guard does not mistake them for writes to the shipped tree.
+const SERVICE_WORKER_SOURCE = new URL("../extension/background/service-worker.js", import.meta.url);
+
 function localFixture() {
   const items = new Map();
   return {
@@ -40,7 +45,7 @@ Deno.test("owner WAL cutover admission fence persists after boot restore-fence c
 });
 
 Deno.test("register-task route refuses owner cutover before scheduling", async () => {
-  const worker = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const worker = await Deno.readTextFile(SERVICE_WORKER_SOURCE);
   const start = worker.indexOf('async "register-task"(m)');
   const end = worker.indexOf('async "run-task"(m)', start);
   assert(start >= 0 && end > start);
