@@ -358,7 +358,7 @@ export async function renderVaultQuotas(ctx) {
     if (isInvalid) {
       warningEl.style.display = "";
       warningEl.hidden = false;
-      warningEl.textContent = "Stored quota configuration failed validation. Using built-in defaults fail-closed.";
+      warningEl.textContent = "Some saved quota settings were not valid, so the built-in limits are being used. Reset to defaults or set new limits here.";
     } else {
       warningEl.style.display = "none";
       warningEl.hidden = true;
@@ -534,7 +534,18 @@ export async function renderVaultQuotas(ctx) {
         return;
       }
       setBtn.disabled = true;
-      const stored = await getStoredQuotas();
+      let stored;
+      try {
+        stored = await getStoredQuotas();
+      } catch (err) {
+        // A failed read must be VISIBLE and must not leave the control disabled, and it must not
+        // proceed to write: building a quota set from a config we could not read is the stale-override
+        // bug this read path exists to fix. vaultSend absorbs route rejections, so this is the only
+        // path in these handlers that can reject - which is why it needs its own catch.
+        setBtn.disabled = false;
+        setQuotaStatus(`Could not read your saved quota settings: ${String(err?.message ?? err)}`, true);
+        return;
+      }
       const updated = {
         ...stored,
         [serviceId]: { limit: numLimit, windowMs: numWindow },
@@ -558,7 +569,18 @@ export async function renderVaultQuotas(ctx) {
     clearBtn.style.fontSize = "12px";
     clearBtn.addEventListener("click", async () => {
       clearBtn.disabled = true;
-      const stored = await getStoredQuotas();
+      let stored;
+      try {
+        stored = await getStoredQuotas();
+      } catch (err) {
+        // A failed read must be VISIBLE and must not leave the control disabled, and it must not
+        // proceed to write: building a quota set from a config we could not read is the stale-override
+        // bug this read path exists to fix. vaultSend absorbs route rejections, so this is the only
+        // path in these handlers that can reject - which is why it needs its own catch.
+        clearBtn.disabled = false;
+        setQuotaStatus(`Could not read your saved quota settings: ${String(err?.message ?? err)}`, true);
+        return;
+      }
       const updated = { ...stored };
       delete updated[serviceId];
       const writeRes = await vaultSend("vault.ledger.setQuotas", { quotas: updated });
@@ -755,7 +777,14 @@ export function initVaultStatic(ctx, { runInitialRender = true } = {}) {
       setQuotaStatus(`Window for ${serviceId} must be a positive integer.`, true);
       return;
     }
-    const stored = await getStoredQuotas();
+    let stored;
+    try {
+      stored = await getStoredQuotas();
+    } catch (err) {
+      // Visible failure, and NO write attempted from an unreadable config.
+      setQuotaStatus(`Could not read your saved quota settings: ${String(err?.message ?? err)}`, true);
+      return;
+    }
     const updated = {
       ...stored,
       [serviceId]: { limit: numLimit, windowMs: numWindow },
