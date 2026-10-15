@@ -39,6 +39,15 @@ there. The reviewer agents check against it.
 Many agents work on this repo AT THE SAME TIME. That is the expected mode, not
 an exception. These rules make that safe:
 
+**Never run `git stash` in a worktree.** The stash list is shared by the whole
+repository, not isolated per worktree: concurrent lanes can pop each other's
+edits. For a RED/GREEN falsification, first copy your edited regular files to
+unique names under ignored `.cap-scratch/`; write pristine copies with
+`git show origin/main:path/to/file > .cap-scratch/<unique>.base`, copy those
+into place for RED, then restore your edits from the saved copies for GREEN
+(even if the RED run fails). Do not pop or drop another lane's existing stashes.
+The copy procedure is spelled out in `.agents/skills/beads-flow/SKILL.md` §3.
+
 1. **Every agent works in its OWN git worktree on a fresh branch off the
    `origin/main` tip** — `git fetch origin && git worktree add <path> -b <branch> origin/main`,
    then set it up before the first gate: `npm ci` (the npm deps), `deno install` (the deno

@@ -35,6 +35,23 @@ git log origin/<prior-art-branch> --oneline   # if the bead names a branch
   scripts, textContent not innerHTML, components not one-offs).
 - Every fix ships with falsification-gated tests: RED without the change, GREEN
   with it. An assertion never observed failing is not evidence.
+- **Never run `git stash` in a worktree.** Stashes belong to the repository,
+  not the worktree; another lane can pop your edit (or you can pop theirs).
+  For a regular tracked file, use ignored `.cap-scratch/` copies instead:
+  ```sh
+  path=extension/lib/threads.js # replace with the file under test
+  mkdir -p .cap-scratch/red-green
+  scratch=$(mktemp -d .cap-scratch/red-green/XXXXXX)
+  cp -- "$path" "$scratch/edited"
+  git show "origin/main:$path" > "$scratch/base"
+  trap 'cp -- "$scratch/edited" "$path"' EXIT # restore even if RED exits nonzero
+  cp -- "$scratch/base" "$path"
+  # Run the focused test and capture the intended RED.
+  cp -- "$scratch/edited" "$path"
+  trap - EXIT
+  # Re-run the focused test and capture GREEN.
+  ```
+  Save each changed file separately; do not pop/drop old stashes to clean up.
 - Found a NEW bug/blocker along the way? File it NOW, linked to what you were doing:
   ```
   bd -C <repo> create --title "..." --description "observed + repro + acceptance" --priority <n>
@@ -43,6 +60,9 @@ git log origin/<prior-art-branch> --oneline   # if the bead names a branch
   Then get back to your task. Never silently absorb or ignore a discovered defect.
 
 ## 4. Gate — ONE COMMAND AT A TIME, output to a log, read the tail before the next
+For a RED/GREEN gate, use the §3 file-copy procedure and restore edits before
+GREEN. **Never `git stash` to switch versions**: another worktree shares the
+same stash stack, even while its test is running.
 ```
 npm run build  > /tmp/build-<short>.log 2>&1; tail -3 /tmp/build-<short>.log
 deno test --allow-all tests/ > /tmp/test-<short>.log 2>&1; tail -5 /tmp/test-<short>.log
