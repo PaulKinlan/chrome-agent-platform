@@ -364,6 +364,15 @@ Deno.test("r6 P1-2 agent-worker.steer: reports the worker's steered ack, host po
   // (e) stop-run (r7 P1-1): the worker REFUSED the abort (no live run / a
   // different run is live) — the refusal must reach the caller as ok:false,
   // never the fabricated aborted ack the r6 route test handed back.
+  let sentMessage = null;
+  chromeStub = {
+    runtime: {
+      sendMessage: async (m) => {
+        sentMessage = m;
+        return m.type === "agent-worker-host:post" ? hostReply : { ok: true };
+      },
+    },
+  };
   hostReply = { ok: true, posted: true, relayed: { type: "agent-worker:abort-refused", runId: R6_RUN_ID, agentId: "bg:hat", error: "run_not_live" } };
   prev = globalThis.chrome;
   globalThis.chrome = chromeStub;
@@ -372,6 +381,14 @@ Deno.test("r6 P1-2 agent-worker.steer: reports the worker's steered ack, host po
     const refused = await routes["agent-worker.steer"]({ runId: R6_RUN_ID, mode: "stop-run" }, { principal: "extension" });
     assertEquals(refused.ok, false, "a worker abort-refusal must reach the caller as ok:false — never stopped:true");
     assertEquals(refused.code, "run_not_live");
+    // Assert chrome.runtime.sendMessage receives expectReply.types containing agent-worker:abort-refused
+    assertEquals(sentMessage?.type, "agent-worker-host:post");
+    assertEquals(sentMessage?.msg?.type, "agent-worker:abort");
+    assertEquals(
+      sentMessage?.expectReply?.types?.includes("agent-worker:abort-refused"),
+      true,
+      "expectReply must declare agent-worker:abort-refused in its expected reply types",
+    );
   } finally { globalThis.chrome = prev; }
 });
 

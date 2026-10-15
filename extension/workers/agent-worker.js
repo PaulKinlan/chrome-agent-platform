@@ -292,7 +292,7 @@ function handleMessage(port, msg) {
         });
         break;
       }
-      activeRun.controller.abort();
+      activeRun?.controller?.abort();
       port.postMessage({ type: "agent-worker:aborted", runId: String(msg?.runId ?? ""), agentId: AGENT_ID });
       break;
     case "agent-worker:close":
