@@ -31,6 +31,7 @@ import {
   selectTestFiles,
 } from "../scripts/select-tests.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
+import { findDistConsumers } from "../scripts/build-if-needed.mjs";
 import { enumerateRunnerTests } from "../scripts/run-tests.mjs";
 
 /** Test-looking modules are terminal graph nodes, even if the runner never executes them. */
@@ -110,6 +111,12 @@ Deno.test("qcfc: selectTestFiles always selects the full ALWAYS_ON set (core + s
       assert(selected.includes(file), `${file} must be selected by selectTestFiles`);
     }
   }
+});
+
+Deno.test("luq4w: an always-on source guard cannot silently force a store build", () => {
+  const selected = new Set(ALWAYS_ON);
+  const consumers = findDistConsumers([...ALWAYS_ON]).filter((file) => selected.has(file));
+  assertEquals(consumers, [], "always-on members must remain free of built-artifact reads");
 });
 
 Deno.test("qcfc: changing service-worker.js selects sw-dispatch-authority-census and sw-route-modularization", () => {

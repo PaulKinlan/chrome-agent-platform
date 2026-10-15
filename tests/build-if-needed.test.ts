@@ -94,7 +94,7 @@ Deno.test("0eq00 build: every reviewed dist reader is a static consumer (no drif
 
 Deno.test("omsz9 build: the always-on core is dist-free, so a subset gate can omit the store build", () => {
   // chrome-agent-platform-omsz9: tests/owner-approval-security.test.ts moved to the
-  // extension/shared/diff-core.js source seam, and the 14 directory-scanning guards in ALWAYS_ON
+  // extension/shared/diff-core.js source seam, and the 15 directory-scanning guards in ALWAYS_ON
   // are recognized as tree-skipping scanners rather than dist consumers.
   // Therefore, findDistConsumers(ALWAYS_ON) returns zero consumers from the always-on set,
   // making the `build: omitted` branch reachable for test/doc changes with no dist consumers.
@@ -110,7 +110,7 @@ Deno.test("omsz9 build: the always-on core is dist-free, so a subset gate can om
 });
 
 Deno.test("omsz9 build: verified tree-skipping guards in ALWAYS_ON are not false-positive dist consumers", () => {
-  assertEquals(ALWAYS_ON_TREE_SKIPPING_GUARDS.size, 14, "exactly 14 verified tree-skipping guards");
+  assertEquals(ALWAYS_ON_TREE_SKIPPING_GUARDS.size, 15, "exactly 15 verified tree-skipping guards");
   for (const file of ALWAYS_ON_TREE_SKIPPING_GUARDS) {
     assert(ALWAYS_ON.includes(file), `${file} must be an ALWAYS_ON member`);
     const text = readReal(file);

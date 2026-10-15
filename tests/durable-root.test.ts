@@ -308,6 +308,8 @@ const ALLOWED_FILES = new Set([
   "tests/chrome-slot-semaphore-honesty.test.ts",
   "tests/chrome-slot-semaphore.test.ts",
   "tests/emscripten-abi-loaded-harness.test.ts",
+  // luq4w: pure detector fixture spells a tmpfs path literally; it creates no file or retained evidence.
+  "tests/evidence-durable-static.test.ts",
   "tests/evidence-durable.test.ts",
   "tests/kat-bistro-caller.test.ts",
   "tests/kat-finalizer.test.ts",

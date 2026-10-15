@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.698] — 2026-10-15
+- Fast checks flag shipped host paths and uppercase styling before integration.
+
 ## [0.3.697] — 2026-10-15
 - Harden enclave quota recovery, align unmetered window telemetry, and document default reset.
 
