@@ -1,6 +1,7 @@
 // panels/web-services.js — Web services & vault Settings panel module.
 
 import { vaultPanelRows, resolveSaveAction } from "../../lib/secret-vault.js";
+import { ENCLAVE_QUOTAS_STORAGE_KEY } from "../../lib/enclave-ledger.js";
 import { createPanelContext, bindPanelCtx } from "../panel-context.js";
 
 const VAULT_PRESETS = [
@@ -306,18 +307,24 @@ export function setQuotaStatus(text, isError, ctx) {
 
 let lastConfiguredQuotas = null;
 
+// Storage is AUTHORITATIVE and is re-read on every call. The in-memory value is only a
+// fallback for contexts without chrome.storage (unit tests). Caching it as the primary
+// source meant a second options tab - or any out-of-band change - could make a set or a
+// clear re-persist STALE overrides for other services, silently writing a config the user
+// never chose. (fpb0's mirror bug in the same family: a stored value disagreeing with what
+// the user just did.)
 async function getStoredQuotas() {
+  try {
+    const got = await globalThis.chrome?.storage?.local?.get?.(ENCLAVE_QUOTAS_STORAGE_KEY);
+    const raw = got?.[ENCLAVE_QUOTAS_STORAGE_KEY];
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      lastConfiguredQuotas = { ...raw };
+      return { ...raw };
+    }
+  } catch {}
   if (lastConfiguredQuotas && typeof lastConfiguredQuotas === "object") {
     return { ...lastConfiguredQuotas };
   }
-  try {
-    const got = await globalThis.chrome?.storage?.local?.get?.("cap:enclave:quotas");
-    const raw = got?.["cap:enclave:quotas"];
-    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-      lastConfiguredQuotas = { ...raw };
-      return { ...lastConfiguredQuotas };
-    }
-  } catch {}
   lastConfiguredQuotas = {};
   return {};
 }
