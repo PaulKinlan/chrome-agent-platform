@@ -16,7 +16,16 @@
 // fails here; a `gate` that is not actually in `test:all` fails here.
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { HARNESSES, harnessFiles, katFiles, readKatVerdicts, RETIRED_KATS, staleExpectedReds } from "../scripts/lib/harness-registry.ts";
+import {
+  HARNESSES,
+  harnessFiles,
+  katFiles,
+  readKatVerdicts,
+  RETIRED_KATS,
+  staleExpectedReds,
+  classifyOwnerResolution,
+  STANDING_OWNER_LABEL,
+} from "../scripts/lib/harness-registry.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const pkg = JSON.parse(Deno.readTextFileSync(`${ROOT}package.json`));
@@ -183,7 +192,7 @@ Deno.test("35o1: the named owners RESOLVE to beads that are not closed", async (
       `${file}: owner "${owner}" must be a bead id (this repo's or the voicebox DB's)`);
   }
 
-  const probe = async (id: string): Promise<{ ok: boolean; closed: boolean; note: string }> => {
+  const probe = async (id: string): Promise<{ ok: boolean; closed: boolean; note: string; status?: string; labels?: string[] }> => {
     let out = "";
     try {
       const cmd = new Deno.Command("bd", { args: ["show", id, "--json"], cwd: ROOT, stdout: "piped", stderr: "piped" });
@@ -199,7 +208,9 @@ Deno.test("35o1: the named owners RESOLVE to beads that are not closed", async (
     const parsed = (() => { try { const j = JSON.parse(out); return Array.isArray(j) ? j[0] : j; } catch { return null; } })();
     if (!parsed || typeof parsed !== "object") return { ok: false, closed: false, note: `bd show ${id} returned no parseable record` };
     const status = String((parsed as { status?: unknown }).status ?? "").toLowerCase();
-    return { ok: true, closed: status === "closed", note: `status=${status || "unknown"}` };
+    const rawLabels = (parsed as { labels?: unknown }).labels;
+    const labels = Array.isArray(rawLabels) ? rawLabels.map(String) : [];
+    return { ok: true, closed: status === "closed", note: `status=${status || "unknown"}`, status, labels };
   };
 
   const inconclusive: string[] = [];
@@ -209,10 +220,13 @@ Deno.test("35o1: the named owners RESOLVE to beads that are not closed", async (
       inconclusive.push(`${file} → ${owner}: ${r.note}`);
       continue;
     }
+    // The class predicate is pure and unit-pinned below; here it runs against the
+    // real tracker through the ONE probe above, so the guard keeps a single mechanism.
+    const verdict = classifyOwnerResolution({ declaredClass: HARNESSES[file]?.ownerClass, status: r.status ?? "", labels: r.labels });
     assertEquals(
-      r.closed,
-      false,
-      `${file} names owner ${owner}, which is CLOSED — re-point HarnessEntry.owner at a live bead in the same change (chrome-agent-platform-35o1)`,
+      verdict.accept,
+      true,
+      `${file} names owner ${owner}, which ${verdict.accept ? "" : verdict.reason}`,
     );
   }
   if (inconclusive.length) {
@@ -257,4 +271,26 @@ Deno.test("40vf4: webmcp-acceptance.ts harness-registry entry records the tested
     typeof entry.chromeVersion === "string" && entry.chromeVersion.startsWith("154"),
     `webmcp-acceptance.ts must record chromeVersion 154: got ${entry.chromeVersion}`,
   );
+});
+
+Deno.test("9tkwq: the standing/component owner class is explicit on both sides, and closed still fails for every class", () => {
+  // Pure, so the whole matrix is pinned without the tracker: a standing owner is
+  // permanently open BY DESIGN, so it is recognised by an explicit declaration that
+  // the bead's own label agrees with - not by one bead happening never to close.
+  // The ordinary-owner cases are here to hold 35o1 exactly as it was: closed fails.
+  const cases: Array<[string, { declaredClass?: "standing" | "task"; status: string; labels?: string[] }, boolean, string?]> = [
+    ["standing: declared + labelled + open is accepted", { declaredClass: "standing", status: "open", labels: [STANDING_OWNER_LABEL] }, true],
+    ["standing: a CLOSED standing owner still fails, in the language of the class", { declaredClass: "standing", status: "closed", labels: [STANDING_OWNER_LABEL] }, false, "STANDING owner that is CLOSED"],
+    ["standing: declared but the bead does not carry the label fails", { declaredClass: "standing", status: "open", labels: [] }, false, "does not carry the standing-owner label"],
+    ["standing: labelled but the registry does not declare it fails", { declaredClass: "task", status: "open", labels: [STANDING_OWNER_LABEL] }, false, 'ownerClass: "standing"'],
+    ["ordinary: open is accepted exactly as before", { status: "open" }, true],
+    ["ordinary: CLOSED still fails (35o1 unchanged, case-insensitive status)", { status: "CLOSED" }, false, "is CLOSED"],
+  ];
+  for (const [name, input, accept, fragment] of cases) {
+    const verdict = classifyOwnerResolution(input);
+    assertEquals(verdict.accept, accept, name);
+    if (!accept && fragment) {
+      assert(!verdict.accept && verdict.reason.includes(fragment), `${name}: reason should name the class, got: ${!verdict.accept ? verdict.reason : "accepted"}`);
+    }
+  }
 });
