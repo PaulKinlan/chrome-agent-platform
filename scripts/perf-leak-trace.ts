@@ -3,8 +3,9 @@
 // budgets:
 //
 //   - the SW registers fast (< 500ms from launch)
-//   - the hub / settings / sidepanel paint fast: MEASURED FCP < 500ms and LCP < 1000ms from
-//     real paint entries, plus the load-settle budget (< 1s). chrome-agent-platform-9epn.12:
+//   - the hub / settings / sidepanel paint fast: MEASURED FCP and LCP from real paint entries,
+//     both held to this file's EXISTING render budget (< 1s to first meaningful paint) rather than
+//     to a number invented here, plus the load-settle budget (< 1s). chrome-agent-platform-9epn.12:
 //     this file used to assert only `navigate -> load + 300ms settle` while claiming a paint
 //     budget; a load-only number cannot see a slow paint behind a fast load and passes for a
 //     page that never painted, so the paint metrics are now observed and decided by

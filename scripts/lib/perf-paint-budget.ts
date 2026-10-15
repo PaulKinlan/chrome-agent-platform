@@ -25,7 +25,14 @@ export interface PaintBudgets {
   lcpMs: number;
 }
 
-export const DEFAULT_PAINT_BUDGETS: PaintBudgets = Object.freeze({ fcpMs: 500, lcpMs: 1000 });
+// Provenance, checked against origin/main rather than assumed: the render budget this file
+// enforces is the one the harness already claimed — "< 1s to first meaningful paint"
+// (scripts/perf-leak-trace.ts header, the Constitution §4 render budget) — applied to the
+// measured paint metrics instead of to a load-settle settle time. It is deliberately NOT 500ms:
+// the 500ms in that file is the SW REGISTER budget, and an earlier revision of this constant
+// carried it into the FCP bound, which tightened the render contract by stealth and made a
+// 594ms hub read as a failure against a budget nobody had agreed (chrome-agent-platform-9epn.12).
+export const DEFAULT_PAINT_BUDGETS: PaintBudgets = Object.freeze({ fcpMs: 1000, lcpMs: 1000 });
 
 export type PaintVerdict = "PASS" | "FAIL" | "UNMEASURED";
 

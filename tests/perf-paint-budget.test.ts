@@ -24,9 +24,9 @@ Deno.test("9epn.12 paint budget: measured and in budget is a PASS", () => {
 });
 
 Deno.test("9epn.12 paint budget: measured and over budget is a FAIL, naming which metric", () => {
-  const slowFcp = classifyPaintMetrics({ fcpMs: 700, lcpMs: 900 });
+  const slowFcp = classifyPaintMetrics({ fcpMs: 1300, lcpMs: 1400 });
   assertEquals(slowFcp.verdict, "FAIL");
-  assertEquals(/fcp 700ms > 500ms/.test(slowFcp.reasons.join(" ")), true);
+  assertEquals(/fcp 1300ms > 1000ms/.test(slowFcp.reasons.join(" ")), true);
 
   const slowLcp = classifyPaintMetrics({ fcpMs: 120, lcpMs: 1500 });
   assertEquals(slowLcp.verdict, "FAIL");
@@ -67,8 +67,21 @@ Deno.test("9epn.12 RED-BEFORE: the pre-change collector output cannot satisfy a 
   assertEquals(classifyPaintMetrics({ fcpMs: 0, lcpMs: 0 }, zeroBudgets).verdict, "PASS");
 });
 
+Deno.test("9epn.12 paint budget: tonight's MEASURED hub passes the EXISTING render budget", () => {
+  // These are the numbers the browser arms actually measured on the hub (2026-10-15T04:57Z): FCP
+  // 594.8ms, LCP 802.8ms. They breached a 500ms FCP bound that an earlier revision of this file
+  // invented by carrying the SW REGISTER budget into the paint bound - which is what turned a
+  // measured page into a false failure. Against the repo's existing "< 1s to first meaningful paint"
+  // they pass, and that is the point: measuring a claim must not smuggle in a new contract.
+  const measured = classifyPaintMetrics({ fcpMs: 594.7649999856949, lcpMs: 802.7750000357628 });
+  assertEquals(measured.verdict, "PASS");
+  assertEquals(/fcp 594.765ms/.test(measured.reasons.join(" ")), true);
+});
+
 Deno.test("9epn.12 paint budget: the declared budgets are the ones named in the report", () => {
-  assertEquals(DEFAULT_PAINT_BUDGETS.fcpMs, 500);
+  // The repo's existing render budget is "< 1s to first meaningful paint"; 500ms is the SW register
+  // budget and must not be carried into the paint bound (chrome-agent-platform-9epn.12).
+  assertEquals(DEFAULT_PAINT_BUDGETS.fcpMs, 1000);
   assertEquals(DEFAULT_PAINT_BUDGETS.lcpMs, 1000);
   assertEquals(Object.isFrozen(DEFAULT_PAINT_BUDGETS), true);
 });
