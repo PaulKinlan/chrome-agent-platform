@@ -119,6 +119,15 @@ export const HEAVY_GATE_REASONS = {
   "tests/emscripten-numeric-acceptance.test.ts": "builds acceptance package with numeric WASM evidence and audits graph",
   "tests/emscripten-module-audit.test.ts": "loads and audits multiple large schema-2 Emscripten WASM binaries",
   "tests/emscripten-abi-evidence.test.ts": "loads 1.2MB emscripten-abi evidence and executes native profile tests",
+  // chrome-agent-platform-mr1ak: the WALL-CLOCK half of the NTP boot contract. Measured in a real
+  // browser, and on a shared fleet box the load is sibling lanes' test workers (high load/core, zero
+  // compilers), which the contention classification cannot see - so a scheduler stall read as a
+  // product defect and reddened the FULL gate at load/core 0.84 against the repo's own 0.35 bound.
+  // The FULL gate keeps boot coverage without a timing budget (ntp-rpc-census and the other
+  // browser tests load ntp.html and assert outcomes; the structural boot-scheduler assertions stay
+  // in tests/ntp-boot-staging.test.ts).
+  "tests/ntp-boot-staging-timing.test.ts":
+    "wall-clock NTP boot budgets (median long tasks 0, composer-ready < 150ms, thread-hydrated <= 250ms) in a real browser; measured under the heavy slot where the box can be quiet",
 };
 export const HEAVY_GATE_FILES = Object.freeze(Object.keys(HEAVY_GATE_REASONS));
 export const HEAVY_GATE = new Set(HEAVY_GATE_FILES);
