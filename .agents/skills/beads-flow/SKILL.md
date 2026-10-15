@@ -37,20 +37,25 @@ git log origin/<prior-art-branch> --oneline   # if the bead names a branch
   with it. An assertion never observed failing is not evidence.
 - **Never run `git stash` in a worktree.** Stashes belong to the repository,
   not the worktree; another lane can pop your edit (or you can pop theirs).
-  For a regular tracked file, use ignored `.cap-scratch/` copies instead:
+  For a regular source file, use ignored `.cap-scratch/` copies instead:
   ```sh
   path=extension/lib/threads.js # replace with the file under test
   mkdir -p .cap-scratch/red-green
   scratch=$(mktemp -d .cap-scratch/red-green/XXXXXX)
   cp -- "$path" "$scratch/edited"
-  git show "origin/main:$path" > "$scratch/base"
   trap 'cp -- "$scratch/edited" "$path"' EXIT # restore even if RED exits nonzero
-  cp -- "$scratch/base" "$path"
+  if git cat-file -e "origin/main:$path" 2>/dev/null; then
+    git show "origin/main:$path" > "$scratch/base"
+    cp -- "$scratch/base" "$path"
+  else
+    rm -f -- "$path" # a new file must be absent for RED, not empty
+  fi
   # Run the focused test and capture the intended RED.
   cp -- "$scratch/edited" "$path"
   trap - EXIT
   # Re-run the focused test and capture GREEN.
   ```
+  a path that does not exist on origin/main (a file your fix ADDS) has no base to copy - git show fails and the redirect leaves an empty file; for those, RED is rm -f $path and GREEN is cp -- $scratch/edited $path.
   Save each changed file separately; do not pop/drop old stashes to clean up.
 - Found a NEW bug/blocker along the way? File it NOW, linked to what you were doing:
   ```
