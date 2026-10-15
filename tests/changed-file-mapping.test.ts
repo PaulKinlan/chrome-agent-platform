@@ -18,6 +18,7 @@ import {
   BOOKKEEPING_GUARDS,
   classifyUncovered,
   HARNESS_TREE_GUARDS,
+  HTML_EXPORT_ENTRY_GUARDS,
   isGuardEnumeratedScript,
   isScriptsHarness,
   isSelectorInfrastructure,
@@ -252,6 +253,22 @@ Deno.test("nco2: unenumerated scripts under scripts/ fail closed", () => {
   const libHelper = classifyUncovered("scripts/lib/some-helper.ts");
   assertEquals(libHelper.tests, [], "subdirectory helper must fail closed");
   assert(/not enumerated/.test(libHelper.mechanism), libHelper.mechanism);
+});
+
+Deno.test("3p3e.12: ONLY the two shipped Export HTML documents map to the exact DOM-entry guard", () => {
+  const allowed = ["extension/ntp/ntp.html", "extension/artifact/artifact.html"];
+  assertEquals(Object.keys(HTML_EXPORT_ENTRY_GUARDS).sort(), allowed.sort());
+  for (const file of allowed) {
+    const v = classifyUncovered(file);
+    assertEquals(v.tests, ["tests/thread-export-entry-html.test.ts"]);
+    const html = Deno.readTextFileSync(`${ROOT}${file}`);
+    const guard = Deno.readTextFileSync(`${ROOT}tests/thread-export-entry-html.test.ts`);
+    assert(guard.includes(file.slice("extension/".length)), `${file} must be read by the mapped guard`);
+    assert(/<button\b[^>]*\bid="export-(?:thread|html)"/.test(html), `${file} owns a real Export button`);
+  }
+  for (const file of ["extension/ntp/index.html", "extension/artifact/preview.html", "extension/options/options.html", "scripts/lib/changed-file-mapping.mjs"]) {
+    assertEquals(classifyUncovered(file).tests, [], `${file} must still fail closed`);
+  }
 });
 
 Deno.test("nco2: mapUncovered splits mapped from unmappable and carries the reason", () => {

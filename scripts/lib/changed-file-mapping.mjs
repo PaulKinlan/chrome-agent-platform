@@ -34,6 +34,11 @@
 //      stripping the declared version fields — never by grepping for lines
 //      containing "version" (which passes nested dependency bumps).
 //
+//   3. TWO EXPORT ENTRY HTML DOCUMENTS (3p3e.12). These have no import graph
+//      edge, but tests/thread-export-entry-html.test.ts reads their actual
+//      button/label/initial-state and the loaded script's exact route wiring.
+//      Map ONLY those literal paths — all other HTML still fails closed.
+//
 // Everything else stays FAIL CLOSED, and now says which file and which mechanism
 // forced it.
 
@@ -63,6 +68,13 @@ export const BOOKKEEPING_GUARDS = Object.freeze([
   "tests/bundled-tool-packages.test.ts",
   "tests/first-run-onboarding-composition.test.ts",
 ]);
+
+/** Exact documents with an executable static DOM-entry + script-wiring guard.
+ * Never match a directory, wildcard, or sibling HTML page. */
+export const HTML_EXPORT_ENTRY_GUARDS = Object.freeze({
+  "extension/ntp/ntp.html": Object.freeze(["tests/thread-export-entry-html.test.ts"]),
+  "extension/artifact/artifact.html": Object.freeze(["tests/thread-export-entry-html.test.ts"]),
+});
 
 /** The three files the post-commit version hook rewrites. */
 export const BOOKKEEPING_FILES = Object.freeze([
@@ -211,6 +223,12 @@ export function classifyUncovered(rel, { versionOnly = false } = {}) {
         "cannot validate it (measured: a broken readdir in run-tests.mjs kills `npm test` " +
         "instantly while test:changed stayed green over a 21-file subset)",
       tests: [],
+    };
+  }
+  if (Object.hasOwn(HTML_EXPORT_ENTRY_GUARDS, path)) {
+    return {
+      mechanism: "exact HTML Export entry read and wired by the focused DOM-entry contract test",
+      tests: [...HTML_EXPORT_ENTRY_GUARDS[path]],
     };
   }
   if (isBookkeepingFile(path)) {
