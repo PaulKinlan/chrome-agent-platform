@@ -242,10 +242,15 @@ export function createVaultRoutes({
       }
       const res = await testConnection({ service });
       const ok = res?.ok === true;
+      // chrome-agent-platform-fpb0: only codes a producer can actually set belong here.
+      // auth_failed, timeout and secret_unavailable were declared and producible by NO path,
+      // so the panel advertised states that could not occur. tests/fpb0-vault-declared-codes
+      // fails in EITHER direction: a declared code with no producer, or a producible code
+      // that is not declared (how a rebase silently drops a code a newer main added).
       const KNOWN_CODES = new Set([
-        "auth_failed", "connection_failed", "timeout", "redirect_refused",
+        "connection_failed", "redirect_refused",
         "bound_exceeded", "target_refused", "origin_not_approved",
-        "unknown_service", "bad_method", "secret_unavailable",
+        "unknown_service", "bad_method",
         "template_error", "unbounded_response", "not_wired",
         "quota_exceeded", "ledger_unavailable", "clock_skew",
         "quota_config_invalid", "service_disabled", "invalid_quota_config",

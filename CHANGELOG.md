@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.699] — 2026-10-15
+- The Settings "Test connection" panel no longer offers status states that no code path can produce (auth_failed, timeout, secret_unavailable), and a new test now fails if the declared status set and the real producers drift in either direction.
+
+
 ## [0.3.698] — 2026-10-15
 - Fast checks flag shipped host paths and uppercase styling before integration.
 
