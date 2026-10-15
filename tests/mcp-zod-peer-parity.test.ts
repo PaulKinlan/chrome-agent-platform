@@ -257,6 +257,17 @@ Deno.test("mcp-zod-peer-parity: shipped SW converter contribution is exactly 177
   const sdkZodPeer = realpathSync(path.dirname(sdkRequire.resolve("zod/package.json")));
   assertEquals(sdkZodPeer, zodDir, "the root SDK must bind the same zod@3 peer as the production build");
   const sdkPin = "converter-test-sdk-pin";
+  // Mirror build.mjs:359-365: redirect ../dist/shared/diff-core.bundle.js to the
+  // diff-core SOURCE wrapper so the pin builds in a clean worktree without a
+  // pre-existing extension/dist build (chrome-agent-platform-bvj5).
+  const diffCoreFromSource = {
+    name: "cap-diff-core-from-source",
+    setup(b) {
+      b.onResolve({ filter: /dist\/shared\/diff-core\.bundle\.js$/ }, () => ({
+        path: path.join(Deno.cwd(), "extension/shared/diff-core.js"),
+      }));
+    },
+  };
   const pinCanonicalSdk = {
     name: "converter-test-canonical-sdk",
     setup(b) {
@@ -283,7 +294,7 @@ Deno.test("mcp-zod-peer-parity: shipped SW converter contribution is exactly 177
       entryPoints: [path.join(Deno.cwd(), "extension/background/service-worker.js")],
       write: false,
       metafile: true,
-      plugins: [browserDependencies, pinCanonicalSdk],
+      plugins: [browserDependencies, diffCoreFromSource, pinCanonicalSdk],
       nodePaths: [path.dirname(path.dirname(sdkDir))],
       define: {
         ...browserProcessEnvOptions.define,
@@ -317,6 +328,179 @@ Deno.test("mcp-zod-peer-parity: shipped SW converter contribution is exactly 177
       [0, 83, 94],
       "per-file converter contributions (equal-and-opposite edits cannot cancel out)",
     );
+
+    // Verify that the service worker bundle routed diff-core through the source wrapper,
+    // not relying on a pre-built extension/dist bundle.
+    const swInputs = Object.keys(Object.values(res.metafile.outputs)[0].inputs || {});
+    assertEquals(
+      swInputs.some((p) => p.endsWith("extension/shared/diff-core.js")),
+      true,
+      "shipped SW bundle must import extension/shared/diff-core.js source wrapper",
+    );
+    assertEquals(
+      swInputs.some((p) => p.includes("diff-core.bundle.js")),
+      false,
+      "shipped SW bundle must not depend on prebuilt dist/shared/diff-core.bundle.js",
+    );
+  } finally {
+    await stop();
+  }
+});
+
+Deno.test("mcp-zod-peer-parity (bvj5): omitting diff-core source redirect fails resolution when dist is absent", async () => {
+  const { build, stop } = await import("npm:esbuild@0.25.12");
+  const path = await import("node:path");
+  const { browserDependencies, browserProcessEnvOptions } = await import("../scripts/browser-dependencies.mjs");
+
+  const diffCoreFromSource = {
+    name: "cap-diff-core-from-source",
+    setup(b) {
+      b.onResolve({ filter: /dist\/shared\/diff-core\.bundle\.js$/ }, () => ({
+        path: path.join(Deno.cwd(), "extension/shared/diff-core.js"),
+      }));
+    },
+  };
+
+  // Create an unbuilt tree sandbox matching the real extension layout where dist/ is absent.
+  // This exercises the real import '../dist/shared/diff-core.bundle.js' from an extension/lib context.
+  const tempDir = await Deno.makeTempDir({ prefix: "cap-unbuilt-tree-" });
+  const mockLibDir = path.join(tempDir, "extension/lib");
+  await Deno.mkdir(mockLibDir, { recursive: true });
+
+  try {
+    // 1. In an unbuilt tree (no extension/dist), omitting diffCoreFromSource fails resolution
+    let failedWithoutPlugin = false;
+    try {
+      await build({
+        bundle: true,
+        format: "esm",
+        platform: "browser",
+        target: "chrome120",
+        stdin: {
+          contents: `import { lineDiffSummary } from "../dist/shared/diff-core.bundle.js"; console.log(lineDiffSummary);`,
+          resolveDir: mockLibDir,
+          sourcefile: path.join(mockLibDir, "artifacts-probe.js"),
+        },
+        write: false,
+        plugins: [browserDependencies],
+      });
+    } catch (err) {
+      failedWithoutPlugin = String(err).includes('Could not resolve "../dist/shared/diff-core.bundle.js"');
+    }
+    assertEquals(failedWithoutPlugin, true, "omitting diff-core redirect must fail resolution in unbuilt tree");
+
+    // 2. With diffCoreFromSource: resolves cleanly to extension/shared/diff-core.js without requiring built dist
+    const withPlugin = await build({
+      bundle: true,
+      format: "esm",
+      platform: "browser",
+      target: "chrome120",
+      stdin: {
+        contents: `import { lineDiffSummary } from "../dist/shared/diff-core.bundle.js"; console.log(lineDiffSummary);`,
+        resolveDir: mockLibDir,
+        sourcefile: path.join(mockLibDir, "artifacts-probe.js"),
+      },
+      write: false,
+      metafile: true,
+      plugins: [browserDependencies, diffCoreFromSource],
+    });
+    assertEquals(withPlugin.errors.length, 0, "must resolve cleanly via source redirect");
+    const output = Object.values(withPlugin.metafile.outputs)[0];
+    const inputs = Object.keys(output.inputs || {});
+    assertEquals(
+      inputs.some((p) => p.endsWith("extension/shared/diff-core.js")),
+      true,
+      "must redirect resolution to source extension/shared/diff-core.js",
+    );
+    assertEquals(
+      inputs.some((p) => p.includes("diff-core.bundle.js")),
+      false,
+      "must not include any pre-built diff-core bundle in output inputs",
+    );
+
+    // 3. Verify against the real repository entry point extension/lib/artifacts.js
+    const realArtifactsRes = await build({
+      bundle: true,
+      format: "esm",
+      platform: "browser",
+      target: "chrome120",
+      entryPoints: [path.join(Deno.cwd(), "extension/lib/artifacts.js")],
+      write: false,
+      metafile: true,
+      plugins: [browserDependencies, diffCoreFromSource],
+      define: browserProcessEnvOptions.define,
+    });
+    assertEquals(realArtifactsRes.errors.length, 0, "real artifacts entry must build cleanly with redirect");
+    const realInputs = Object.keys(Object.values(realArtifactsRes.metafile.outputs)[0].inputs || {});
+    assertEquals(
+      realInputs.some((p) => p.endsWith("extension/shared/diff-core.js")),
+      true,
+      "real artifacts build must use source wrapper extension/shared/diff-core.js",
+    );
+    assertEquals(
+      realInputs.some((p) => p.includes("diff-core.bundle.js")),
+      false,
+      "real artifacts build must not use prebuilt dist bundle",
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+    await stop();
+  }
+});
+
+Deno.test("mcp-zod-peer-parity (bvj5 falsification): changing plugin set to unpinned SDK moves emitted converter numbers", async () => {
+  // Acceptance (iii): prove that the pin's numbers are sensitive to the plugin configuration.
+  // When pinCanonicalSdk is omitted, the build resolves both peer SDK instances and emits
+  // two copies of the converter (6 files, 354 bytes).
+  const { build, stop } = await import("npm:esbuild@0.25.12");
+  const path = await import("node:path");
+  const { realpathSync } = await import("node:fs");
+  const { browserDependencies, browserProcessEnvOptions } = await import("../scripts/browser-dependencies.mjs");
+  const sdkDir = realpathSync(path.join(Deno.cwd(), "node_modules/@modelcontextprotocol/sdk"));
+
+  const diffCoreFromSource = {
+    name: "cap-diff-core-from-source",
+    setup(b) {
+      b.onResolve({ filter: /dist\/shared\/diff-core\.bundle\.js$/ }, () => ({
+        path: path.join(Deno.cwd(), "extension/shared/diff-core.js"),
+      }));
+    },
+  };
+
+  try {
+    const unpinnedRes = await build({
+      bundle: true,
+      format: "esm",
+      platform: "browser",
+      target: "chrome120",
+      entryPoints: [path.join(Deno.cwd(), "extension/background/service-worker.js")],
+      write: false,
+      metafile: true,
+      plugins: [browserDependencies, diffCoreFromSource],
+      nodePaths: [path.dirname(path.dirname(sdkDir))],
+      define: {
+        ...browserProcessEnvOptions.define,
+        __CAP_BUILD_LOG_DEFAULT__: JSON.stringify("off"),
+      },
+      banner: browserProcessEnvOptions.banner,
+    });
+
+    let unpinnedBytes = 0;
+    let unpinnedFiles = 0;
+    for (const outData of Object.values(unpinnedRes.metafile.outputs)) {
+      if (outData.inputs) {
+        for (const [inPath, inData] of Object.entries(outData.inputs)) {
+          if (inPath.includes("zod-to-json-schema")) {
+            unpinnedBytes += inData.bytesInOutput;
+            unpinnedFiles += 1;
+          }
+        }
+      }
+    }
+
+    // Proves that changing the plugin set causes the measured numbers to move
+    assertEquals(unpinnedFiles, 6, "unpinned build emits two converter copies (6 files)");
+    assertEquals(unpinnedBytes, 354, "unpinned build emits two converter copies (354 bytes)");
   } finally {
     await stop();
   }
