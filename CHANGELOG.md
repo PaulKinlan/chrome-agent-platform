@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.691] — 2026-10-15
+- no user-facing change; the bundled-tool peer-parity probe now runs in an isolated per-test scratch directory, so parallel test runs no longer share scratch state.
+
 ## [0.3.690] — 2026-10-15
 - Bounded key counting on OPFS memory stores, so the diagnostics route no longer enumerates every key
 - Aborting a run that is not live, or that does not match the active run, is refused honestly instead of silently stopping the wrong one.
