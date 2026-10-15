@@ -171,7 +171,19 @@ async function main() {
       ["settings", "options/options.html"],
       ["sidepanel", "sidepanel/sidepanel.html"],
     ] as const) {
-      const { ms, fcpMs, lcpMs, paintEntries } = await pageLoad(cdp, `chrome-extension://${sw.extId}/${path}`);
+      // A surface that cannot be loaded must still APPEAR, as UNMEASURED, and never be dropped from the
+      // report (chrome-agent-platform-9epn.12 review note). A load error is a real failure of the
+      // load-settle check and an unmeasured paint; either way the surface keeps its line in the output.
+      let load: Awaited<ReturnType<typeof pageLoad>> | null = null;
+      try {
+        load = await pageLoad(cdp, `chrome-extension://${sw.extId}/${path}`);
+      } catch (error) {
+        const detail = { surface: name, path, loadError: String(error) };
+        check(`${name} rendered fast (< 1000ms)`, false, detail);
+        checkPaint(name, classifyPaintMetrics({ fcpMs: null, lcpMs: null }, paintBudgets), detail);
+        continue;
+      }
+      const { ms, fcpMs, lcpMs, paintEntries } = load;
       check(`${name} rendered fast (< 1000ms)`, ms < 1000, { ms });
       checkPaint(
         name,
