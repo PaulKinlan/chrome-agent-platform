@@ -314,17 +314,35 @@ let lastConfiguredQuotas = null;
 // never chose. (fpb0's mirror bug in the same family: a stored value disagreeing with what
 // the user just did.)
 async function getStoredQuotas() {
-  try {
-    const got = await globalThis.chrome?.storage?.local?.get?.(ENCLAVE_QUOTAS_STORAGE_KEY);
-    const raw = got?.[ENCLAVE_QUOTAS_STORAGE_KEY];
-    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-      lastConfiguredQuotas = { ...raw };
-      return { ...raw };
+  const read = globalThis.chrome?.storage?.local?.get;
+  if (typeof read !== "function") {
+    // No chrome.storage at all in this context (unit tests). There is nothing to read, so the
+    // in-memory value is the only possible source and this is NOT a failure path.
+    if (lastConfiguredQuotas && typeof lastConfiguredQuotas === "object") {
+      return { ...lastConfiguredQuotas };
     }
-  } catch { /* why-safe: no chrome.storage in this context (unit tests) - fall through to the in-memory fallback below */ }
-  if (lastConfiguredQuotas && typeof lastConfiguredQuotas === "object") {
-    return { ...lastConfiguredQuotas };
+    lastConfiguredQuotas = {};
+    return {};
   }
+  let got;
+  try {
+    got = await read.call(globalThis.chrome.storage.local, ENCLAVE_QUOTAS_STORAGE_KEY);
+  } catch (err) {
+    // SURFACED, deliberately not swallowed and deliberately NOT falling back to the cached
+    // copy: writing a quota set from a value we could not read is how a stale override gets
+    // re-persisted for another service, which is the F1 bug this read path exists to fix. An
+    // observability hole here would sit directly under that fix. The callers catch a throw,
+    // render it as a failure and never claim success.
+    const e = new Error(`quota configuration could not be read: ${String(err?.message ?? err)}`);
+    e.code = "quota_read_failed";
+    throw e;
+  }
+  const raw = got?.[ENCLAVE_QUOTAS_STORAGE_KEY];
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    lastConfiguredQuotas = { ...raw };
+    return { ...raw };
+  }
+  // Storage IS readable and holds nothing, so the empty object is the authoritative answer.
   lastConfiguredQuotas = {};
   return {};
 }
