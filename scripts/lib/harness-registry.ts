@@ -71,7 +71,10 @@ export interface HarnessEntry {
 
 /** The owner-of-record bead for the journey gate. Kept beside the entry so the
  *  guard and the declaration cannot drift apart. */
-export const JOURNEY_GATE_OWNER = "chrome-agent-platform-76qp";
+// dj2yd measurement scaffolding (LOCAL, UNCOMMITTED, not landed): 76qp closed with the union, so the 35o1 guard
+// reds on main until a live owner is named. Coord owns which bead that is; this only lets the activation be
+// measured on a green tree. See chrome-agent-platform-uxufb.
+export const JOURNEY_GATE_OWNER = "chrome-agent-platform-b7ny0";
 
 const RED = (tally: string, mode: string, owner = "unassigned (a fix or a retirement decision is the next action)") => ({
   expectedRed: owner,
