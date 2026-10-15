@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.694] — 2026-10-15
+- Add exact-value credential redaction and static HTML generator for thread exports.
+
 ## [0.3.693] — 2026-10-15
 - Screenshot test failures identify capture errors versus empty responses without misclassifying display state.
 
