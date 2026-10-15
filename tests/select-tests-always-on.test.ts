@@ -15,7 +15,8 @@ import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
-import { alwaysOnGuards, failClosedPlan, SCANNER_EXCLUSIONS, SOURCE_INSPECTING_GUARDS } from "../scripts/select-tests.mjs";
+import { ALWAYS_ON, alwaysOnGuards, failClosedPlan, SCANNER_EXCLUSIONS, SOURCE_INSPECTING_GUARDS } from "../scripts/select-tests.mjs";
+import { findDistConsumers } from "../scripts/build-if-needed.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -43,6 +44,13 @@ Deno.test("kz27: the tree-walking guards are IN the always-on list, and every en
   for (const file of SOURCE_INSPECTING_GUARDS) {
     assert(existsSync(join(ROOT, file)), `always-on guard ${file} must exist on disk`);
   }
+});
+
+Deno.test("luq4w: always-on source guards must not silently require a production build", () => {
+  const selected = new Set(ALWAYS_ON);
+  const distConsumers = findDistConsumers([...ALWAYS_ON]).filter((file) => selected.has(file));
+  assertEquals(distConsumers, [], "a source guard mentioning dist only to skip it must not force every fast gate to build");
+  // This pin runs when selected or in the full suite; --always-on does not include this test file itself.
 });
 
 Deno.test("kz27: the split put the browser-free SCAN in the set and left the live race out", () => {

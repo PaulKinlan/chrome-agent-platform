@@ -1,5 +1,6 @@
-// Static source half of no-uppercase-kickers-716s10. The original file keeps
-// its real-Chrome visual check in the full suite, never in the fast gate.
+// Static text-transform source census from no-uppercase-kickers-716s10.
+// Its skills-panel sentence-case and sidepanel .tasks-h pins, plus its real-Chrome
+// visual check, remain in the original full-suite file; this is not their replacement.
 import { assertEquals } from "jsr:@std/assert@1";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";

@@ -1,6 +1,7 @@
-// Static text-artifact half of evidence-durable: no full-tree materialization,
-// generated-package verification, browser, or Wasm binary hashing in every fast gate.
-// The original tests/evidence-durable.test.ts remains in the full suite.
+// Static text-artifact path check from evidence-durable: no full-tree materialization
+// or generated-package verification in every fast gate. New or unlisted .wasm
+// binaries are NOT inspected here; their hashing and exemptions remain in the
+// original tests/evidence-durable.test.ts in the full suite.
 import { assertEquals } from "jsr:@std/assert@1";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";

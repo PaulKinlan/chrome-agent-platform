@@ -45,6 +45,8 @@ export const ALWAYS_ON_TREE_SKIPPING_GUARDS = Object.freeze(new Set([
   "tests/durable-root.test.ts",
   "tests/enrollment-authority-reader-census.test.ts",
   "tests/kat-service-worker-match.test.ts",
+  // luq4w: skips generated output while walking shipped source; no built-artifact read/import.
+  "tests/no-uppercase-kickers-static.test.ts",
   "tests/postmessage-wildcard-guard.test.ts",
   "tests/settings-strings-audit.test.ts",
   "tests/single-source-helpers.test.ts",
@@ -59,7 +61,7 @@ export const ALWAYS_ON_TREE_SKIPPING_GUARDS = Object.freeze(new Set([
 // against a dist the gate cannot certify, which is the failure this module exists to prevent.
 const DIST_REFERENCE_RE = /\bdist(?:-versions)?\b|\bdist\.complete\b/;
 
-// Tightened check scoped to the 14 verified ALWAYS_ON tree-skipping guards (chrome-agent-platform-omsz9).
+// Tightened check scoped to the 15 verified ALWAYS_ON tree-skipping guards (chrome-agent-platform-omsz9).
 // These guards walk source trees and filter out dist/ or cite dist in comments/AST rules.
 // They are ONLY treated as dist consumers if they actually load or read from the built extension/dist tree.
 const TIGHTENED_DIST_CONSUMER_RE =
@@ -68,7 +70,7 @@ const TIGHTENED_DIST_CONSUMER_RE =
 /**
  * True when a test file's source references the built dist tree.
  * For general files, uses the broad fail-closed DIST_REFERENCE_RE.
- * For the 14 verified ALWAYS_ON tree-skipping guards, strips backtick test fixtures and comments
+ * For the 15 verified ALWAYS_ON tree-skipping guards, strips backtick test fixtures and comments
  * before evaluating with TIGHTENED_DIST_CONSUMER_RE to distinguish tree skipping from real loads.
  * @param {string} text
  * @param {string | null} [rel] repo-relative path of the test file
