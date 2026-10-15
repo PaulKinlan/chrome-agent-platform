@@ -471,18 +471,22 @@ Deno.test("passes immediately after marker", () => {});
 `);
 
   try {
-    // This positive fixture boots another Deno runtime under the 2-vCPU
-    // parallel gate. A flat 5s boot deadline produced a false 124 in the
-    // 051b972d5 gate; it is not the fail-closed missing-marker fixture below.
-    // Give the positive fixture a 15–20s soft ready bound: the 15s floor matches
-    // the delayed-ready fixture above, and serialFileTimeoutMs caps 5s x load
-    // at 20s. xy6n2 may add one measured-load grace after that soft deadline
-    // (up to 60–80s hard), but still refuses an absent marker; its fail-closed
-    // missing-marker fixtures above retain their own short bounds.
+    // This positive fixture boots another Deno runtime in the parallel gate.
+    // A flat 5s boot deadline falsely returned 124 in gate 051b972d5. The
+    // parallel twin (tests/parallel-phase-resilience.test.ts) already pins a
+    // load-scaled 15s floor; use that floor and cap this 5s scaler at 20s.
+    // xy6n2's measured-load grace is already live on main: after this 15–20s
+    // SOFT deadline it can extend to a 60–80s HARD deadline under measured
+    // load, then refuses an absent marker. The missing-marker fixtures above
+    // retain their separate short fail-closed bounds.
     const bootBudgetMs = Math.max(15_000, serialFileTimeoutMs({
       base: 5_000,
       loadPerCpu: currentLoadPerCpu(),
     }));
+    assert(bootBudgetMs >= 15_000 && bootBudgetMs <= 20_000,
+      `positive marker soft boot budget must stay in 15–20s, got ${bootBudgetMs}ms`);
+    assertEquals(serialFileTimeoutMs({ base: 5_000, loadPerCpu: 99 }), 20_000,
+      "the load scaler must cap this positive fixture at 20s even under extreme load");
     const res = runSerialFile(tempTest, {
       timeoutMs: bootBudgetMs,
       readyFile,
