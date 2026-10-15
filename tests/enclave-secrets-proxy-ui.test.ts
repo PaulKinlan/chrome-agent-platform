@@ -868,3 +868,73 @@ Deno.test("jao1.6.1 Part E.8: a REJECTED storage read renders the failure, re-en
     else delete (globalThis as any).chrome;
   }
 });
+
+Deno.test("jao1.6.1 Part E.9: the SAME rejected storage read is handled by Clear and by the add row", async () => {
+  // Part E.8 proves the Set button's failure path. Set is one of THREE controls that read the stored
+  // config before writing, so this drives the other two: a fix applied at one call site while a sibling
+  // still escapes its listener is exactly the shape of the original defect.
+  const { root, elements } = createPanelFixture();
+  const { mount } = await import("../extension/options/panels/web-services.js");
+
+  const hadChrome = "chrome" in globalThis;
+  const prevChrome = (globalThis as any).chrome;
+  (globalThis as any).chrome = {
+    storage: { local: { get: async () => { throw new Error("storage read failed"); } } },
+  };
+
+  const setQuotaCalls: any[] = [];
+  const ctx = createPanelContext({
+    root,
+    send: async (type: string, payload: any = {}) => {
+      if (type === "vault.status") return { ok: true, services: [], proxyRules: [], ledger: [] };
+      if (type === "vault.ledger.usage") {
+        return {
+          ok: true,
+          usage: { "brave-search": { count: 0, disabled: false, limit: 50, remaining: 50, resetMs: 86400000, unmetered: false, windowMs: 86400000 } },
+          configInvalid: false,
+        };
+      }
+      if (type === "vault.ledger.setQuotas") {
+        setQuotaCalls.push({ type, ...payload });
+        return { ok: true, quotas: payload.quotas };
+      }
+      return { ok: true };
+    },
+  });
+
+  try {
+    const handle = await mount(root, ctx);
+    const statusEl = elements["vault-quotas-status"];
+    const rows = elements["vault-quotas"].querySelectorAll(".vault-quota-row");
+    const braveRow = rows.find((r: any) => r.dataset.service === "brave-search");
+    assert(braveRow, "brave-search row must exist");
+
+    // Clear
+    const clearBtn = braveRow.querySelector(".vault-quota-clear-btn");
+    clearBtn.click();
+    await new Promise((r) => setTimeout(r, 30));
+    assertEquals(statusEl.hidden, false, "Clear: a failed read must be visible");
+    assertStringIncludes(statusEl.textContent, "Could not read your saved quota settings", "Clear: the failure must be named");
+    assert(!statusEl.textContent.includes("Quota cleared"), "Clear: must NEVER claim success after a failed read");
+    assertEquals(setQuotaCalls.length, 0, "Clear: no setQuotas write may be sent when the read failed");
+    assertEquals(clearBtn.disabled, false, "Clear: the control must be re-enabled after a failed read");
+
+    // Add row (its handler does not disable the button, so only visibility and the absent write apply)
+    elements["vault-quota-add-service"].value = "custom-api";
+    elements["vault-quota-add-limit"].value = "5";
+    // The window must be a valid positive integer too, or the handler correctly rejects the input and
+    // returns BEFORE the storage read - which would make this half of the test pass for the wrong reason.
+    elements["vault-quota-add-window"].value = "3600000";
+    elements["vault-quota-add-save"].click();
+    await new Promise((r) => setTimeout(r, 30));
+    assertEquals(statusEl.hidden, false, "Add: a failed read must be visible");
+    assertStringIncludes(statusEl.textContent, "Could not read your saved quota settings", "Add: the failure must be named");
+    assert(!statusEl.textContent.includes("Quota set for"), "Add: must NEVER claim success after a failed read");
+    assertEquals(setQuotaCalls.length, 0, "Add: no setQuotas write may be sent when the read failed");
+
+    handle.unmount();
+  } finally {
+    if (hadChrome) (globalThis as any).chrome = prevChrome;
+    else delete (globalThis as any).chrome;
+  }
+});
