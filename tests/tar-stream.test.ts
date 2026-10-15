@@ -4,6 +4,7 @@ import { assert, assertEquals, assertNotEquals, assertRejects, assertThrows } fr
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import {
   createTarHeader,
+  decodeTarStream,
   encodeTarStream,
   formatPaxRecord,
   USTAR_SIZE_LIMIT,
@@ -474,4 +475,338 @@ Deno.test("vv8c M4: a POSIX ustar prefix+name header decodes as the FULL joined 
   });
   assertEquals(seen.length, 1);
   assertEquals(seen[0].name, rel, "the ustar prefix joins the name (was truncated to the bare 100-byte field)");
+});
+
+// ── 11rm.2: streaming TAR decoder (chrome-agent-platform-vv8c) ──────────────
+
+async function collectDecode(source: any, options: any = {}) {
+  // The body must be consumed DURING onEntry — the decoder drains whatever the
+  // consumer leaves unread (the contract the Stage-4 restore driver uses:
+  // stream to staging while inside the callback).
+  const entries: any[] = [];
+  await decodeTarStream(
+    source,
+    (entry: any) => {
+      const chunks2: Uint8Array[] = [];
+      const reader = entry.body.getReader();
+      const drain = (async () => {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks2.push(value);
+        }
+      })();
+      return Promise.resolve(drain).then(() => {
+        const bytes = new Uint8Array(chunks2.reduce((a: number, c: Uint8Array) => a + c.byteLength, 0));
+        let off = 0;
+        for (const c of chunks2) {
+          bytes.set(c, off);
+          off += c.byteLength;
+        }
+        entries.push({ name: entry.name, size: entry.size, typeflag: entry.typeflag, bytes });
+        return true;
+      });
+    },
+    options,
+  );
+  return entries;
+}
+
+function bytesEqual(a: any, b: any) {
+  return a instanceof Uint8Array && b instanceof Uint8Array && a.byteLength === b.byteLength &&
+    a.every((v: number, i: number) => v === b[i]);
+}
+
+Deno.test("11rm.2: round-trip decode is byte-exact across the encoder's entry matrix", async () => {
+
+  const longPath = "deep/nested/path/that/exceeds/the/one/hundred/character/ustar/limit/by/a/large/margin/for/testing/pax/roundtrip.txt";
+  const unicodePath = "documents/unicøde-tëst-🔥/roundtrip.json";
+  const binaryBytes = new Uint8Array([0x00, 0xFF, 0xFE, 0x01, 0x80, 0x7F, 0x55, 0xAA, 0x00, 0x00]);
+  const entries = [
+    { name: "empty.txt", size: 0, body: new Uint8Array(0) },
+    { name: "small.txt", size: 11, body: new TextEncoder().encode("hello world") },
+    { name: "exact-512.bin", size: 512, body: new Uint8Array(512).fill(0xAB) },
+    { name: "odd-513.bin", size: 513, body: new Uint8Array(513).map((_v: number, i: number) => i % 251) },
+    { name: "binary.dat", size: binaryBytes.length, body: binaryBytes },
+    { name: unicodePath, size: 19, body: new TextEncoder().encode('{"unicode": "🔥"}') },
+    { name: longPath, size: 15, body: new TextEncoder().encode("long path data\n") },
+  ];
+
+  const chunks: Uint8Array[] = [];
+  const sink = new WritableStream<Uint8Array>({ write(chunk) { chunks.push(chunk); } });
+  const enc = await encodeTarStream(entries, sink);
+  const archive = new Uint8Array(chunks.reduce((a: number, c: Uint8Array) => a + c.byteLength, 0));
+  let off = 0;
+  for (const c of chunks) { archive.set(c, off); off += c.byteLength; }
+
+  const decoded = await collectDecode(new Blob([archive]).stream());
+  assertEquals(decoded.length, entries.length, "every entry is decoded in order");
+  for (let i = 0; i < entries.length; i++) {
+    assertEquals(decoded[i].name, entries[i].name, `entry ${i} name`);
+    assertEquals(decoded[i].size, BigInt(entries[i].size), `entry ${i} size`);
+    assert(bytesEqual(decoded[i].bytes, entries[i].body), `entry ${i} payload must be byte-exact`);
+  }
+  assertEquals(decoded.reduce((a, e) => a + e.bytes.byteLength, 0), Number(enc.totalBytes));
+});
+
+Deno.test("11rm.2: decodeTarStream reads a REAL GNU-tar-created archive (default format, long-name L entries)", async () => {
+  const tmpDir = durableDir(`tar-decode-gnu-${Date.now()}`);
+  await Deno.mkdir(`${tmpDir}/payload/deep/nested/directory/structure/that/is/deliberately/well/beyond/the/ustar/name/limit/for/gnu/longname`, { recursive: true });
+  await Deno.writeTextFile(`${tmpDir}/payload/top.txt`, "top level\n");
+  await Deno.writeTextFile(`${tmpDir}/payload/deep/nested/directory/structure/that/is/deliberately/well/beyond/the/ustar/name/limit/for/gnu/longname/deep.txt`, "deep gnu longname data\n");
+  const bin = new Uint8Array(700).map((_v: number, i: number) => (i * 7) % 256);
+  await Deno.writeFile(`${tmpDir}/payload/binary700.bin`, bin);
+  const tarFile = `${tmpDir}/gnu.tar`;
+  try {
+    const mk = new Deno.Command("tar", { args: ["-cf", tarFile, "-C", `${tmpDir}/payload`, "."], stdout: "piped", stderr: "piped" }).outputSync();
+    assertEquals(mk.code, 0, `GNU tar -cf failed: ${new TextDecoder().decode(mk.stderr)}`);
+
+    const decoded = await collectDecode(new Blob([await Deno.readFile(tarFile)]).stream());
+    const byName = new Map(decoded.map((e) => [e.name.replace(/^\.\//, ""), e]));
+    assert(byName.has("top.txt"), `top.txt decoded (got: ${decoded.map((e: any) => e.name).join(", ")})`);
+    assert(byName.has("binary700.bin"), "binary file decoded");
+    assert(
+      byName.has("deep/nested/directory/structure/that/is/deliberately/well/beyond/the/ustar/name/limit/for/gnu/longname/deep.txt"),
+      "the >100-char GNU longname path decodes through the L entry",
+    );
+    assertEquals(new TextDecoder().decode(byName.get("top.txt").bytes), "top level\n");
+    assert(bytesEqual(byName.get("binary700.bin").bytes, bin), "GNU-tar'd binary bytes are byte-exact");
+    assertEquals(
+      new TextDecoder().decode(byName.get("deep/nested/directory/structure/that/is/deliberately/well/beyond/the/ustar/name/limit/for/gnu/longname/deep.txt").bytes),
+      "deep gnu longname data\n",
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("11rm.2: decodeTarStream reads a POSIX pax-format GNU tar archive (PAX x-header overlay)", async () => {
+  const tmpDir = durableDir(`tar-decode-pax-${Date.now()}`);
+  await Deno.mkdir(`${tmpDir}/payload`, { recursive: true });
+  const longPath = "pax/deep/nested/path/that/exceeds/the/one/hundred/character/ustar/limit/yes/really/long/pax-file.txt";
+  await Deno.mkdir(`${tmpDir}/payload/${longPath.split("/").slice(0, -1).join("/")}`, { recursive: true });
+  await Deno.writeTextFile(`${tmpDir}/payload/${longPath}`, "pax overlay data\n");
+  const tarFile = `${tmpDir}/pax.tar`;
+  try {
+    const mk = new Deno.Command("tar", { args: ["--format=pax", "-cf", tarFile, "-C", tmpDir, "payload"], stdout: "piped", stderr: "piped" }).outputSync();
+    assertEquals(mk.code, 0, `pax tar -cf failed: ${new TextDecoder().decode(mk.stderr)}`);
+
+    for (const f of [tarFile]) {
+      const decoded = await collectDecode(new Blob([await Deno.readFile(f)]).stream());
+      const longEntry = decoded.find((e: any) => e.name.includes("pax-file.txt"));
+      assert(longEntry, `the long pax path decodes (${decoded.map((e: any) => e.name).join(", ")})`);
+      assertEquals(new TextDecoder().decode(longEntry.bytes), "pax overlay data\n");
+    }
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("11rm.2: PAX size overlay decodes the declared size (ustar field lies by design there)", async () => {
+  // Hand-craft what the encoder emits for a size beyond ustar: a PAX 'x' header
+  // carrying a `size` record, then a regular header whose ustar size field is 0.
+  const pathRecord = formatPaxRecord("path", "big/lies-about-size.bin");
+  const sizeRecord = formatPaxRecord("size", "10");
+  const paxData = new Uint8Array(pathRecord.length + sizeRecord.length);
+  paxData.set(pathRecord, 0);
+  paxData.set(sizeRecord, pathRecord.length);
+
+  // Build the archive by hand: PAX header + data, regular header (size 0) + 10-byte payload, terminator.
+  const enc = new TextEncoder();
+  const parts: Uint8Array[] = [];
+  parts.push(createTarHeader("PaxHeaders.0/big", BigInt(paxData.length), "x", 0));
+  parts.push(paxData);
+  parts.push(new Uint8Array((512 - (paxData.length % 512)) % 512));
+  parts.push(createTarHeader("big/lies-about-size.bin", 0n, "0", 0));
+  const payload = enc.encode("0123456789");
+  parts.push(payload);
+  parts.push(new Uint8Array((512 - (payload.length % 512)) % 512));
+  parts.push(new Uint8Array(1024));
+  const archive = new Uint8Array(parts.reduce((a: number, c: Uint8Array) => a + c.byteLength, 0));
+  let off = 0;
+  for (const c of parts) { archive.set(c, off); off += c.byteLength; }
+
+  const decoded = await collectDecode(new Blob([archive]).stream());
+  assertEquals(decoded.length, 1, "the PAX header is consumed, not delivered");
+  assertEquals(decoded[0].name, "big/lies-about-size.bin");
+  assertEquals(decoded[0].size, 10n, "the PAX size record wins over the ustar field");
+  assertEquals(new TextDecoder().decode(decoded[0].bytes), "0123456789");
+});
+
+Deno.test("11rm.2: fail closed — header checksum corruption is a named error", async () => {
+  const chunks: Uint8Array[] = [];
+  await encodeTarStream([{ name: "victim.txt", size: 3, body: new TextEncoder().encode("abc") }], new WritableStream<Uint8Array>({ write(c) { chunks.push(c); } }));
+  const archive = new Uint8Array(chunks.reduce((a: number, c: Uint8Array) => a + c.byteLength, 0));
+  let off = 0;
+  for (const c of chunks) { archive.set(c, off); off += c.byteLength; }
+  archive[6] ^= 0x01; // inside the ASCII name field, checksum no longer matches
+
+  await assertRejects(
+    () => collectDecode(new Blob([archive]).stream()),
+    Error,
+    "checksum",
+  );
+});
+
+Deno.test("11rm.2: fail closed — truncated payload and missing terminator are named errors", async () => {
+  const chunks: Uint8Array[] = [];
+  await encodeTarStream(
+    [{ name: "a.bin", size: 1000, body: new Uint8Array(1000).fill(1) }, { name: "b.txt", size: 5, body: new TextEncoder().encode("b.txt") }],
+    new WritableStream<Uint8Array>({ write(c) { chunks.push(c); } }),
+  );
+  const archive = new Uint8Array(chunks.reduce((a: number, c: Uint8Array) => a + c.byteLength, 0));
+  let off = 0;
+  for (const c of chunks) { archive.set(c, off); off += c.byteLength; }
+
+  // Cut mid-payload of the first entry.
+  await assertRejects(() => collectDecode(new Blob([archive.slice(0, 512 + 300)]).stream()), Error, "truncat");
+  // Drop the terminator blocks entirely.
+  await assertRejects(() => collectDecode(new Blob([archive.slice(0, archive.byteLength - 512)]).stream()), Error, "terminat");
+});
+
+Deno.test("11rm.2: onEntry false skips an entry — the payload is drained and later entries stay byte-exact", async () => {
+  const big = new Uint8Array(1024 * 1024).map((_v: number, i: number) => i % 253);
+  const entries = [
+    { name: "big skipped.bin", size: big.length, body: big },
+    { name: "kept.txt", size: 4, body: new TextEncoder().encode("kept") },
+  ];
+  const chunks: Uint8Array[] = [];
+  await encodeTarStream(entries, new WritableStream<Uint8Array>({ write(c) { chunks.push(c); } }));
+  const archive = new Uint8Array(chunks.reduce((a: number, c: Uint8Array) => a + c.byteLength, 0));
+  let off = 0;
+  for (const c of chunks) { archive.set(c, off); off += c.byteLength; }
+
+  const seen: any[] = [];
+  await decodeTarStream(
+    new Blob([archive]).stream(),
+    (entry: any) => {
+      seen.push({ name: entry.name, size: entry.size });
+      return entry.name === "kept.txt"; // false = skip; the decoder drains
+    },
+  );
+  assertEquals(seen.map((e: any) => e.name), ["big skipped.bin", "kept.txt"], "skipped entries are announced, not delivered");
+  // `kept.txt` content verified via full read:
+  const kept = await (async () => {
+    const out: any[] = [];
+    await decodeTarStream(new Blob([archive]).stream(), (e: any) => {
+      if (e.name !== "kept.txt") return false;
+      const r = e.body.getReader();
+      return (async () => {
+        const { value } = await r.read();
+        out.push(new TextDecoder().decode(value!));
+        await r.cancel();
+        return true;
+      })();
+    });
+    return out[0];
+  })();
+  assertEquals(kept, "kept");
+});
+
+Deno.test("11rm.2: abort signal stops decoding and cancels the source", async () => {
+  const chunks: Uint8Array[] = [];
+  await encodeTarStream(
+    [{ name: "one.bin", size: 600, body: new Uint8Array(600) }, { name: "two.bin", size: 600, body: new Uint8Array(600) }],
+    new WritableStream<Uint8Array>({ write(c) { chunks.push(c); } }),
+  );
+
+  const controller = new AbortController();
+  let cancelled = false;
+  // A live source: the real archive first, then ENDLESS filler — so the stream
+  // is still open when the abort fires (a source that closed itself cannot be
+  // cancelled; that was a test bug, not a decoder property).
+  const pending: Uint8Array[] = [...chunks];
+  const tracked = new ReadableStream<Uint8Array>({
+    pull(ctrl) {
+      const next = pending.shift();
+      if (next) {
+        ctrl.enqueue(next);
+        return;
+      }
+      if (controller.signal.aborted) {
+        ctrl.close();
+        return;
+      }
+      ctrl.enqueue(new Uint8Array(512).fill(0x41));
+    },
+    cancel() { cancelled = true; },
+  });
+
+  await assertRejects(
+    () =>
+      decodeTarStream(
+        tracked,
+        () => {
+          controller.abort();
+          return true;
+        },
+        { signal: controller.signal },
+      ),
+    Error,
+  );
+  assert(cancelled, "the underlying source must be cancelled on abort");
+});
+
+Deno.test("vv8c H1: a partially consumed body drains only its unread remainder before the next entry", async () => {
+  const first = new Uint8Array(64 * 1024 + 13).map((_v: number, i: number) => i % 251);
+  const second = new TextEncoder().encode("next entry stays aligned");
+  const chunks: Uint8Array[] = [];
+  await encodeTarStream([
+    { name: "first.bin", size: first.byteLength, body: first },
+    { name: "next.txt", size: second.byteLength, body: second },
+  ], new WritableStream<Uint8Array>({ write(chunk) { chunks.push(chunk); } }));
+  const archive = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0));
+  let offset = 0;
+  for (const chunk of chunks) { archive.set(chunk, offset); offset += chunk.byteLength; }
+  const seen: string[] = [];
+  const result = await decodeTarStream(new Blob([archive]).stream(), async (entry) => {
+    seen.push(entry.name);
+    if (entry.name === "first.bin") {
+      const reader = entry.body.getReader();
+      const { done, value } = await reader.read();
+      assertEquals(done, false);
+      assertEquals(value?.byteLength, 64 * 1024, "only the first 64 KiB was consumed");
+      assert(bytesEqual(value, first.subarray(0, 64 * 1024)));
+      reader.releaseLock(); // leave 13 bytes for the decoder's own drain
+      return true;
+    }
+    assertEquals(entry.name, "next.txt");
+    assert(bytesEqual(new Uint8Array(await new Response(entry.body).arrayBuffer()), second));
+    return true;
+  });
+  assertEquals(seen, ["first.bin", "next.txt"]);
+  assertEquals(result.files, 2);
+  assertEquals(result.totalBytes, BigInt(first.byteLength + second.byteLength));
+});
+
+Deno.test("cwuh1: only an exact zero-byte bare ./ DIRECTORY root is skipped", async () => {
+  const archiveWith = (name: string, typeflag = "5", size = 0) => {
+    const bytes = new Uint8Array(512 + 1024);
+    bytes.set(vv8cHeader(name, size, typeflag));
+    return new Blob([bytes]).stream();
+  };
+  let calls = 0;
+  const root = await decodeTarStream(archiveWith("./"), () => { calls++; return true; });
+  assertEquals(calls, 0, "the archive root is not a restore member");
+  assertEquals(root, { files: 0, totalBytes: 0n });
+
+  for (const [name, error] of [
+    ["../escape/", "escapes the archive root"],
+    ["/absolute/", "tar member name is absolute"],
+    ["./", "tar member name is empty"],
+  ]) {
+    await assertRejects(
+      () => decodeTarStream(archiveWith(name, name === "./" ? "0" : "5"), () => { calls++; return true; }),
+      Error,
+      error,
+      `${name} is not the bare directory root`,
+    );
+  }
+  await assertRejects(
+    () => decodeTarStream(archiveWith("./", "5", 1), () => { calls++; return true; }),
+    Error,
+    "tar member name is empty",
+    "a root directory with an unconsumed body must not be silently skipped",
+  );
+  assertEquals(calls, 0, "hostile members never reach the restore callback");
 });
