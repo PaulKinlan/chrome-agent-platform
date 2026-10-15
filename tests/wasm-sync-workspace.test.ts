@@ -31,7 +31,7 @@ const row = (path, bytes) => ({ path, bytes });
 // Identical values either way, so the byte-matrix assertions below cannot tell the two apart.
 const dense = (length, value = 1) => new Array(length).fill(value);
 
-Deno.test("5icgm: dense() byte values agree with an independently encoded workspace write/read", () => {
+Deno.test("5icgm/wtpwp: explicit and default dense() bytes agree with an independently encoded workspace write/read", () => {
   // Do not construct the expected bytes from dense() or hand-copy byte literals:
   // this independent producer writes TextEncoder bytes into the REAL workspace.
   // A dense() value error must disagree with the bytes read back from that write.
@@ -46,6 +46,10 @@ Deno.test("5icgm: dense() byte values agree with an independently encoded worksp
 
   const generated = dense(encoded.byteLength, content.charCodeAt(0));
   assertEquals(generated, expected, "dense() must yield the real writer's bytes, not a repeated literal fixture");
+  // wtpwp was GREEN-FIRST unmutated; a temporary default value=2 mutant made this assertion RED.
+  // The omitted argument has its own producer-derived byte oracle, not a copied array.
+  assertEquals(dense(encoded.byteLength), [...new TextEncoder().encode("\u0001".repeat(encoded.byteLength))],
+    "dense() default byte must match the encoder's repeated U+0001 code point");
   const seeded = createSyncWorkspace({ root: "tool-jobs/dense/seeded/", seed: { files: [row("inputs/probe.bin", generated)] } });
   const handle = seeded.open("inputs/probe.bin", { read: true });
   assertEquals([...handle.read(0, encoded.byteLength)], expected,
