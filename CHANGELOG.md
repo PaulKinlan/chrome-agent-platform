@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.701] — 2026-10-15
+- A CAP-spawned pi session is now pointed at its own MCP configuration instead of the machine's at both places CAP starts one; the wiring is tested, but end-to-end isolation is not yet demonstrated with the pinned tool versions.
+
 ## [0.3.700] — 2026-10-15
 - Restore accepts GNU tar archives created from a directory while continuing to reject unsafe archive paths.
 
