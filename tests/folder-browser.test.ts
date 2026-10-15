@@ -16,6 +16,7 @@ import {
   joinPath,
   parentPath,
   breadcrumbParts,
+  entryLineIcon,
   mountGrantBrowser,
 } from "../extension/lib/folder-browser.js";
 
@@ -69,7 +70,10 @@ function makeEl(tag) {
   return el;
 }
 
-globalThis.document = { createElement: (tag) => makeEl(tag) };
+globalThis.document = {
+  createElement: (tag) => makeEl(tag),
+  createElementNS: (_ns, tag) => makeEl(tag),
+};
 
 // --- test helpers ------------------------------------------------------------
 
@@ -186,7 +190,7 @@ Deno.test("mount lists the grant root with breadcrumb + entries", async () => {
   // A directory row is a real button; the file row is inert (has View).
   const dirBtn = byClass(host, "fs-dir");
   assertEquals(dirBtn.length, 1);
-  assertEquals(dirBtn[0].textContent, "📁 docs");
+  assertEquals(dirBtn[0].textContent, "docs");
   assertEquals(dirBtn[0].type, "button");
 
   const viewBtns = byClass(host, "fs-view");
@@ -217,7 +221,7 @@ Deno.test("clicking a directory row queries the subdirectory path and re-renders
   assert(crumbs[0].attrs["aria-current"] === undefined);
   assert(crumbs[1].attrs["aria-current"] === "page");
   // Nested contents visible.
-  assertEquals(byClass(host, "fs-dir")[0].textContent, "📁 deep");
+  assertEquals(byClass(host, "fs-dir")[0].textContent, "deep");
 });
 
 Deno.test("nested click-through: docs/deep, then breadcrumb back to docs", async () => {
@@ -392,4 +396,53 @@ Deno.test("file View reads through the CURRENT directory path (path-aware)", asy
   assertEquals(viewers.length, 1);
   assert(viewers[0].textContent.includes("guide.md"));
   assert(viewers[0].textContent.includes("hi"));
+});
+
+// --- SVG row icons (e8jj8) ---------------------------------------------------
+
+Deno.test("e8jj8: entryLineIcon renders accessible inline SVG icons without emoji", () => {
+  const dirSvg = entryLineIcon("directory");
+  assertEquals(dirSvg.tag, "svg");
+  assertEquals(dirSvg.attrs["aria-hidden"], "true");
+  assertEquals(dirSvg.attrs["stroke"], "currentColor");
+  assertEquals(dirSvg.attrs["viewBox"], "0 0 24 24");
+  assertEquals(dirSvg.children[0].tag, "path");
+
+  const fileSvg = entryLineIcon("file");
+  assertEquals(fileSvg.tag, "svg");
+  assertEquals(fileSvg.attrs["aria-hidden"], "true");
+  assertEquals(fileSvg.attrs["stroke"], "currentColor");
+  assertEquals(fileSvg.attrs["viewBox"], "0 0 24 24");
+  assertEquals(fileSvg.children.length, 2); // path + fold
+});
+
+Deno.test("e8jj8: folder browser row entries render SVG icons and contain no emoji", async () => {
+  const host = makeEl("div");
+  const { send } = treeSend(TREE);
+  await mount(host, send);
+
+  // Directory row button: icon is aria-hidden SVG, textContent is purely entry name
+  const dirBtn = byClass(host, "fs-dir")[0];
+  assertEquals(dirBtn.textContent, "docs");
+  const dirSvg = dirBtn.children.find((c) => c.tag === "svg");
+  assert(dirSvg, "directory row must contain an inline SVG icon");
+  assertEquals(dirSvg.attrs["aria-hidden"], "true");
+  assertEquals(dirSvg.attrs["stroke"], "currentColor");
+
+  // File row: icon is aria-hidden SVG, textContent is purely file name
+  const fileRow = byClass(host, "fs-file")[0];
+  assertEquals(fileRow.textContent, "notes.txt");
+  const fileSvg = fileRow.children.find((c) => c.tag === "svg");
+  assert(fileSvg, "file row must contain an inline SVG icon");
+  assertEquals(fileSvg.attrs["aria-hidden"], "true");
+  assertEquals(fileSvg.attrs["stroke"], "currentColor");
+
+  // Invariant: no emoji U+1F4C1 (📁) or U+1F4C4 (📄) anywhere in the mounted host tree
+  const allNodes = walk(host);
+  for (const node of allNodes) {
+    assert(!node.textContent.includes("📁"), "no folder emoji allowed");
+    assert(!node.textContent.includes("📄"), "no document emoji allowed");
+    assert(!node.textContent.includes("\u{1F4C1}"), "no U+1F4C1 allowed");
+    assert(!node.textContent.includes("\u{1F4C4}"), "no U+1F4C4 allowed");
+  }
 });
