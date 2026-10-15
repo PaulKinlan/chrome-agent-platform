@@ -19,6 +19,30 @@ Deno.test("PANEL-POOL: panels use a single exact-document options frame (retired
   assert(!ntpHtml.includes('id="view-frame"'), "the static shared #view-frame must be gone from the markup");
 });
 
+Deno.test("PANEL-POOL: directory, artifacts, and hub-ok Settings panels create zero iframes in the hub DOM", () => {
+  // In ntp.js, client-side views mount directly in #view-client-host with zero iframe instantiation
+  const openViewBody = ntpJs.slice(ntpJs.indexOf("function openView("), ntpJs.indexOf("function closeView("));
+  const startClient = openViewBody.indexOf("if (isClientSide) {");
+  assert(startClient >= 0, "openView must contain an explicit isClientSide branch");
+  const elseBranch = openViewBody.indexOf("} else {", startClient);
+  assert(elseBranch > startClient, "openView must separate client-side mounting from exact-document frame mounting");
+
+  const clientBranch = openViewBody.slice(startClient, elseBranch);
+  assert(!clientBranch.includes("panelFrameFor("), "client-side views must never invoke panelFrameFor or create an iframe");
+  assert(clientBranch.includes("activePanelFrame = null;"), "client-side views must clear activePanelFrame");
+  assert(clientBranch.includes("if (optionsFrame) optionsFrame.hidden = true;"), "optionsFrame is hidden when client views mount");
+
+  // Verify route classification includes Directory, Artifacts, and hub-ok Settings sections
+  assert(
+    ntpJs.includes("const isClientSide = targetRoute === VIEW_ROUTE.DIRECTORY || targetRoute === VIEW_ROUTE.ARTIFACTS || (targetRoute === VIEW_ROUTE.SETTINGS && isHubOk);"),
+    "directory, artifacts, and hub-ok settings routes must be classified client-side",
+  );
+  assert(
+    ntpJs.includes('const HUB_OK_SETTINGS_SECTIONS = new Set(["skills", "usage", "about"]);'),
+    "HUB_OK_SETTINGS_SECTIONS must define client-side settings sections",
+  );
+});
+
 Deno.test("PANEL-POOL: a panel document is booted exactly once (no per-open navigation)", () => {
   // The only frame.src assignment in openView is the boot-once branch.
   const openView = ntpJs.slice(ntpJs.indexOf("function openView("), ntpJs.indexOf("function closeView("));
