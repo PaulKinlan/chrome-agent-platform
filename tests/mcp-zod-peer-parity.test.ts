@@ -31,6 +31,8 @@
 // reaches a bundle.
 
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
+import * as path from "node:path";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 import * as z3 from "npm:zod@3.25.76";
 import * as z4 from "npm:zod@4.4.3";
 import { zodToJsonSchema } from "npm:zod-to-json-schema@3.25.2";
@@ -45,6 +47,18 @@ import {
 } from "../node_modules/.deno/@modelcontextprotocol+sdk@1.31.0/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-json-schema-compat.js";
 import { McpServer } from "../node_modules/.deno/@modelcontextprotocol+sdk@1.31.0/node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js";
 import { compileSchemaToZod } from "../extension/lib/pure.js";
+
+// Module-scope definition of cap-diff-core-from-source mirroring build.mjs:359-365
+// Redirects ../dist/shared/diff-core.bundle.js to the diff-core source wrapper so
+// the pin builds in a clean worktree without a pre-existing extension/dist build (bvj5).
+const diffCoreFromSource = {
+  name: "cap-diff-core-from-source",
+  setup(b: any) {
+    b.onResolve({ filter: /dist\/shared\/diff-core\.bundle\.js$/ }, () => ({
+      path: path.join(Deno.cwd(), "extension/shared/diff-core.js"),
+    }));
+  },
+};
 
 Deno.test("mcp-zod-peer-parity: runtime detection correctly identifies Zod 3 vs Zod 4 schemas", () => {
   const z3Schema = z3.string().min(1);
@@ -257,17 +271,12 @@ Deno.test("mcp-zod-peer-parity: shipped SW converter contribution is exactly 177
   const sdkZodPeer = realpathSync(path.dirname(sdkRequire.resolve("zod/package.json")));
   assertEquals(sdkZodPeer, zodDir, "the root SDK must bind the same zod@3 peer as the production build");
   const sdkPin = "converter-test-sdk-pin";
-  // Mirror build.mjs:359-365: redirect ../dist/shared/diff-core.bundle.js to the
-  // diff-core SOURCE wrapper so the pin builds in a clean worktree without a
-  // pre-existing extension/dist build (chrome-agent-platform-bvj5).
-  const diffCoreFromSource = {
-    name: "cap-diff-core-from-source",
-    setup(b) {
-      b.onResolve({ filter: /dist\/shared\/diff-core\.bundle\.js$/ }, () => ({
-        path: path.join(Deno.cwd(), "extension/shared/diff-core.js"),
-      }));
-    },
-  };
+  // Coupling pin: verify build.mjs defines the identical redirect filter
+  const buildMjsSource = await Deno.readTextFile(path.join(Deno.cwd(), "build.mjs"));
+  assert(
+    buildMjsSource.includes("/dist\\/shared\\/diff-core\\.bundle\\.js$/"),
+    "build.mjs must define cap-diff-core-from-source filter /dist\\/shared\\/diff-core\\.bundle\\.js$/",
+  );
   const pinCanonicalSdk = {
     name: "converter-test-canonical-sdk",
     setup(b) {
@@ -330,8 +339,11 @@ Deno.test("mcp-zod-peer-parity: shipped SW converter contribution is exactly 177
     );
 
     // Verify that the service worker bundle routed diff-core through the source wrapper,
-    // not relying on a pre-built extension/dist bundle.
-    const swInputs = Object.keys(Object.values(res.metafile.outputs)[0].inputs || {});
+    // not relying on a pre-built extension/dist bundle. Match by output key.
+    const swOutputEntry = Object.entries(res.metafile.outputs).find(([outPath]) =>
+      outPath.includes("service-worker")
+    ) || Object.entries(res.metafile.outputs)[0];
+    const swInputs = Object.keys(swOutputEntry[1]?.inputs || {});
     assertEquals(
       swInputs.some((p) => p.endsWith("extension/shared/diff-core.js")),
       true,
@@ -349,21 +361,11 @@ Deno.test("mcp-zod-peer-parity: shipped SW converter contribution is exactly 177
 
 Deno.test("mcp-zod-peer-parity (bvj5): omitting diff-core source redirect fails resolution when dist is absent", async () => {
   const { build, stop } = await import("npm:esbuild@0.25.12");
-  const path = await import("node:path");
   const { browserDependencies, browserProcessEnvOptions } = await import("../scripts/browser-dependencies.mjs");
 
-  const diffCoreFromSource = {
-    name: "cap-diff-core-from-source",
-    setup(b) {
-      b.onResolve({ filter: /dist\/shared\/diff-core\.bundle\.js$/ }, () => ({
-        path: path.join(Deno.cwd(), "extension/shared/diff-core.js"),
-      }));
-    },
-  };
-
   // Create an unbuilt tree sandbox matching the real extension layout where dist/ is absent.
-  // This exercises the real import '../dist/shared/diff-core.bundle.js' from an extension/lib context.
-  const tempDir = await Deno.makeTempDir({ prefix: "cap-unbuilt-tree-" });
+  // Routed through durableDir("scratch") per bead chp / durable-root guard convention.
+  const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-unbuilt-tree-" });
   const mockLibDir = path.join(tempDir, "extension/lib");
   await Deno.mkdir(mockLibDir, { recursive: true });
 
@@ -405,8 +407,8 @@ Deno.test("mcp-zod-peer-parity (bvj5): omitting diff-core source redirect fails 
       plugins: [browserDependencies, diffCoreFromSource],
     });
     assertEquals(withPlugin.errors.length, 0, "must resolve cleanly via source redirect");
-    const output = Object.values(withPlugin.metafile.outputs)[0];
-    const inputs = Object.keys(output.inputs || {});
+    const probeOutput = Object.entries(withPlugin.metafile.outputs)[0][1];
+    const inputs = Object.keys(probeOutput?.inputs || {});
     assertEquals(
       inputs.some((p) => p.endsWith("extension/shared/diff-core.js")),
       true,
@@ -429,9 +431,13 @@ Deno.test("mcp-zod-peer-parity (bvj5): omitting diff-core source redirect fails 
       metafile: true,
       plugins: [browserDependencies, diffCoreFromSource],
       define: browserProcessEnvOptions.define,
+      banner: browserProcessEnvOptions.banner,
     });
     assertEquals(realArtifactsRes.errors.length, 0, "real artifacts entry must build cleanly with redirect");
-    const realInputs = Object.keys(Object.values(realArtifactsRes.metafile.outputs)[0].inputs || {});
+    const realOutput = Object.entries(realArtifactsRes.metafile.outputs).find(([outPath]) =>
+      outPath.includes("artifacts")
+    ) || Object.entries(realArtifactsRes.metafile.outputs)[0];
+    const realInputs = Object.keys(realOutput[1]?.inputs || {});
     assertEquals(
       realInputs.some((p) => p.endsWith("extension/shared/diff-core.js")),
       true,
@@ -453,19 +459,9 @@ Deno.test("mcp-zod-peer-parity (bvj5 falsification): changing plugin set to unpi
   // When pinCanonicalSdk is omitted, the build resolves both peer SDK instances and emits
   // two copies of the converter (6 files, 354 bytes).
   const { build, stop } = await import("npm:esbuild@0.25.12");
-  const path = await import("node:path");
   const { realpathSync } = await import("node:fs");
   const { browserDependencies, browserProcessEnvOptions } = await import("../scripts/browser-dependencies.mjs");
   const sdkDir = realpathSync(path.join(Deno.cwd(), "node_modules/@modelcontextprotocol/sdk"));
-
-  const diffCoreFromSource = {
-    name: "cap-diff-core-from-source",
-    setup(b) {
-      b.onResolve({ filter: /dist\/shared\/diff-core\.bundle\.js$/ }, () => ({
-        path: path.join(Deno.cwd(), "extension/shared/diff-core.js"),
-      }));
-    },
-  };
 
   try {
     const unpinnedRes = await build({

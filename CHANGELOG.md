@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.689] — 2026-10-15
+- none: internal test and build-tooling fix
+
 ## [0.3.688] — 2026-10-15
 - Settings, options and side-panel labels are now translated, so the extension follows your browser language.
 - The Settings folder browser shows crisp inline icons, and importing a skill is lighter and faster.
