@@ -24,6 +24,7 @@
     "test:heavy": "deno run -A scripts/heavy-gate.ts",
     "test:changed": "node scripts/select-tests.mjs",
     "test:fast": "node scripts/select-tests.mjs",
+    "gate:fast": "node scripts/select-tests.mjs --build-if-needed",
     "test:file": "CAP_TEST_RUNNER=1 deno test -A --config deno.runner.jsonc",
     "test:chrome": "deno run -A scripts/chrome-journeys.ts",
     "test:agent-access": "deno run -A scripts/agent-access-journeys.ts",

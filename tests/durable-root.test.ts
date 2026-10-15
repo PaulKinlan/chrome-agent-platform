@@ -355,6 +355,12 @@ const ALLOWED_CALLS_ONLY = new Set([
   // jixr: raw process teardown uses a private fixture dir removed in the
   // same test's finally. Permit the temp-dir call, not tmpfs path literals.
   "tests/process-tree-cleanup.test.ts",
+  // chrome-agent-platform-0eq00: the marker-deletion falsifier needs its own scratch git repo (a
+  // REAL dist.complete written by the product's writer and read back by the product's validator), so
+  // the test can never depend on the lane's worktree carrying a built dist. The dir is created under
+  // makeTempDir and removed in the same test's finally — a fixture, never retained evidence, and the
+  // file holds no tmpfs path literal.
+  "tests/build-if-needed.test.ts",
 ]);
 
 function* walk(dir: string): Generator<string> {
