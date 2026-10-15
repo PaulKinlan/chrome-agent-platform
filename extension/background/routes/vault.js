@@ -10,6 +10,7 @@
 // the secret.
 
 import { vaultPanelRows } from "../../lib/secret-vault.js";
+import { validateQuotasConfig } from "../../lib/enclave-ledger.js";
 
 function vaultPanelRowsOf(masked) {
   return vaultPanelRows(masked);
@@ -135,15 +136,14 @@ export function createVaultRoutes({
       const proxyRules = await loadProxyRules();
       const ledgerEntries = typeof ledger?.list === "function" ? ledger.list() : [];
       const usage = typeof ledger?.getUsage === "function" ? await ledger.getUsage() : {};
-      const status = typeof ledger?.getConfigStatus === "function" ? ledger.getConfigStatus() : { configInvalid: false, configError: null };
+      const status = typeof ledger?.getConfigStatus === "function" ? ledger.getConfigStatus() : { configInvalid: false };
       return {
         ok: true,
         services: vaultPanelRowsOf(masked),
         proxyRules,
         ledger: ledgerEntries,
         usage,
-        configInvalid: status.configInvalid,
-        configError: status.configError,
+        configInvalid: Boolean(status.configInvalid),
       };
     },
 
@@ -194,26 +194,37 @@ export function createVaultRoutes({
     async "vault.ledger.usage"(m, context) {
       requireSettingsSender(context);
       const usage = typeof ledger?.getUsage === "function" ? await ledger.getUsage() : {};
-      const status = typeof ledger?.getConfigStatus === "function" ? ledger.getConfigStatus() : { configInvalid: false, configError: null };
+      const status = typeof ledger?.getConfigStatus === "function" ? ledger.getConfigStatus() : { configInvalid: false };
       return {
         ok: true,
         usage,
-        configInvalid: status.configInvalid,
-        configError: status.configError,
+        configInvalid: Boolean(status.configInvalid),
       };
     },
 
+    /**
+     * Sets and persists owner enclave quota overrides.
+     * Passing { quotas: {} } clears all custom overrides back to defaults.
+     */
     async "vault.ledger.setQuotas"({ quotas } = {}, context) {
       requireSettingsSender(context);
       if (typeof ledger?.setQuotas !== "function") {
         return { ok: false, code: "not_wired" };
       }
+      let validated;
       try {
-        const updated = await ledger.setQuotas(quotas);
-        return { ok: true, quotas: updated };
+        validated = validateQuotasConfig(quotas);
       } catch (err) {
         const e = new Error(`enclave quotas: ${String(err?.message ?? err)}`);
         e.code = "invalid_quota_config";
+        throw e;
+      }
+      try {
+        const updated = await ledger.setQuotas(validated);
+        return { ok: true, quotas: updated };
+      } catch (err) {
+        const e = new Error(`enclave quotas storage write failed: ${String(err?.message ?? err)}`);
+        e.code = "ledger_unavailable";
         throw e;
       }
     },

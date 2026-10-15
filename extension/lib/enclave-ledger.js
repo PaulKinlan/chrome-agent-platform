@@ -324,10 +324,15 @@ export function createEnclaveLedger({
       const quota = effectiveQuotas[serviceId] ?? DEFAULT_ENCLAVE_QUOTAS[serviceId];
       if (!quota) {
         let rollup = rollups[serviceId];
+        const defaultWindowMs = 24 * 60 * 60 * 1000;
         if (!rollup) {
           rollup = { windowStartMs: now, count: 0, lastUpdatedMs: now };
           rollups[serviceId] = rollup;
           pruneRollupsIfNeeded();
+        } else if (now - rollup.windowStartMs >= defaultWindowMs) {
+          rollup.windowStartMs = now;
+          rollup.count = 0;
+          rollup.lastUpdatedMs = now;
         }
         rollup.count += 1;
         rollup.lastUpdatedMs = now;
@@ -488,15 +493,16 @@ export function createEnclaveLedger({
 
     /**
      * Explicitly sets and persists owner quota overrides.
+     * Assigns configuredQuotas and clears quotaConfigError only after storage persistence resolves.
      * @param {any} newQuotas
      */
     async setQuotas(newQuotas) {
       const validated = validateQuotasConfig(newQuotas);
-      configuredQuotas = validated;
-      quotaConfigError = null;
       if (storageArea && typeof storageArea.set === "function") {
         await storageArea.set({ [quotasStorageKey]: validated });
       }
+      configuredQuotas = validated;
+      quotaConfigError = null;
       return Object.freeze({ ...configuredQuotas });
     },
 

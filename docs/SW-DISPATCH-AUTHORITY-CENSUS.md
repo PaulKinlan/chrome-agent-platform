@@ -167,7 +167,7 @@ Restricted strictly to the Settings surface (`principal === "owner-options"`). G
 | `vault.ledger.clear` | `routes/vault.js` | Clears the enclave egress ledger | `requireSettingsSender` |
 | `vault.ledger.resetQuotas` | `routes/vault.js` | Resets enclave service quotas | `requireSettingsSender` |
 | `vault.ledger.usage` | `routes/vault.js` | Reads enclave per-service quota usage telemetry | `requireSettingsSender` |
-| `vault.ledger.setQuotas` | `routes/vault.js` | Sets and persists owner enclave quota overrides | `requireSettingsSender` |
+| `vault.ledger.setQuotas` | `routes/vault.js` | Sets and persists owner enclave quota overrides (empty object clears to defaults) | `requireSettingsSender` |
 | `vault.test` | `routes/vault.js` | Runs ONE minimal proxied request; returns `{ ok, status, code }` only | `requireSettingsSender` |
 | `enclave.status` | `service-worker.js` | Reports enclave enablement + configured services for Settings | `principal === "owner-options"` |
 
