@@ -669,9 +669,15 @@ export async function decodeTarStream(source, onEntry, options = {}) {
         continue;
       }
       if (header.typeflag === "5") {
-        // Directory entry (a real `tar -cf` of a tree contains them): announced
-        // with an empty body so a restore driver can create the directory;
-        // there is no payload to drain.
+        // GNU `tar -cf archive.tar .` starts with a zero-byte "./" directory
+        // describing the archive root, not a member for a restore driver.
+        // Skip only that bare header: overlays and nonempty directory bodies
+        // still take the fail-closed name path below.
+        if (header.name === "./" && header.size === 0n && overlayName === null && overlaySize === null) {
+          continue;
+        }
+        // Other directory entries are announced with an empty body so a
+        // restore driver can create them; there is no payload to drain.
         const dirName = safeEntryName(overlayName ?? header.name);
         overlayName = null;
         overlaySize = null;
