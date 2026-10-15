@@ -6,8 +6,8 @@ function fileNode(content) { return { kind: "file", content }; }
 class FakeWritable { constructor(n) { this.node = n; this.parts = []; } async write(s) { this.parts.push(typeof s === "string" ? s : new TextDecoder().decode(s)); } async close() { this.node.content = this.parts.join(""); } }
 class FakeFileHandle { constructor(n) { this.node = n; } get kind() { return "file"; } async getFile() { const n = this.node; return { size: (n.content ?? "").length, async text() { return n.content ?? ""; } }; } async createWritable() { return new FakeWritable(this.node); } }
 class FakeDirHandle { constructor(n) { this.node = n; } get kind() { return "directory"; }
-  async getDirectoryHandle(name, opts = {}) { if (!this.node.children.has(name)) { if (opts?.create !== true) throw new Error(`no dir ${name}`); this.node.children.set(name, dirNode()); } return new FakeDirHandle(this.node.children.get(name)); }
-  async getFileHandle(name, opts = {}) { if (!this.node.children.has(name)) { if (opts?.create !== true) throw new Error(`no file ${name}`); this.node.children.set(name, fileNode("")); } return new FakeFileHandle(this.node.children.get(name)); }
+  async getDirectoryHandle(name, opts = {}) { if (!this.node.children.has(name)) { if (opts?.create !== true) throw new DOMException(`no dir ${name}`, "NotFoundError"); this.node.children.set(name, dirNode()); } return new FakeDirHandle(this.node.children.get(name)); }
+  async getFileHandle(name, opts = {}) { if (!this.node.children.has(name)) { if (opts?.create !== true) throw new DOMException(`no file ${name}`, "NotFoundError"); this.node.children.set(name, fileNode("")); } return new FakeFileHandle(this.node.children.get(name)); }
   async removeEntry(name) { this.node.children.delete(name); }
   async *entries() { for (const [name, node] of this.node.children) yield [name, node.kind === "file" ? new FakeFileHandle(node) : new FakeDirHandle(node)]; } }
 const root = dirNode();

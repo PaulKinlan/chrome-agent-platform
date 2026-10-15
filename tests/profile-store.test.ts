@@ -78,7 +78,7 @@ function dirHandle(node, name) {
     getDirectoryHandle: async (seg, { create } = {}) => {
       const key = "d:" + seg;
       if (!node.has(key)) {
-        if (!create) throw new Error("missing " + seg);
+        if (!create) throw new DOMException("missing " + seg, "NotFoundError");
         node.set(key, new Map());
       }
       return dirHandle(node.get(key), seg);
@@ -86,7 +86,7 @@ function dirHandle(node, name) {
     getFileHandle: async (seg, { create } = {}) => {
       const key = "f:" + seg;
       if (!node.has(key)) {
-        if (!create) throw new Error("missing " + seg);
+        if (!create) throw new DOMException("missing " + seg, "NotFoundError");
         node.set(key, { text: "" });
       }
       const rec = node.get(key);

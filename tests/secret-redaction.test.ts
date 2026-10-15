@@ -188,7 +188,7 @@ Deno.test("threads: recordThreadError PERSISTS redacted text (the real storage c
   class DirShim {
     constructor() { this.kids = new Map(); }
     async getDirectoryHandle(name, { create } = {}) {
-      if (!this.kids.has(name)) { if (!create) throw new Error("nf"); this.kids.set(name, new DirShim()); }
+      if (!this.kids.has(name)) { if (!create) throw new DOMException("nf", "NotFoundError"); this.kids.set(name, new DirShim()); }
       return this.kids.get(name);
     }
     async getFileHandle(name, { create } = {}) {
@@ -200,9 +200,7 @@ Deno.test("threads: recordThreadError PERSISTS redacted text (the real storage c
         // with "the durable generation authority is corrupt" — a HARNESS
         // defect, not a product bug.
         if (!create) {
-          const missing = new Error("not found: " + name);
-          missing.name = "NotFoundError";
-          throw missing;
+          throw new DOMException("not found: " + name, "NotFoundError");
         }
         this.kids.set(name, new FileShim(""));
       }

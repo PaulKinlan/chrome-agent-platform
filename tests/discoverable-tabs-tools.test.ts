@@ -50,7 +50,7 @@ class FakeDirHandle {
   }
   async removeEntry(name) { this.node.children.delete(name); }
 }
-const notFound = (name) => Object.assign(new Error(`not found: ${name}`), { name: "NotFoundError" });
+const notFound = (name) => new DOMException(`not found: ${name}`, "NotFoundError");
 const root = dirNode();
 Object.defineProperty(globalThis.navigator, "storage", {
   value: { async getDirectory() { return new FakeDirHandle(root); } },

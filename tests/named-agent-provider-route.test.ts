@@ -56,7 +56,7 @@ class FakeDirHandle {
     }
   }
 }
-const notFound = (name) => Object.assign(new Error(`not found: ${name}`), { name: "NotFoundError" });
+const notFound = (name) => new DOMException(`not found: ${name}`, "NotFoundError");
 const root = dirNode();
 Object.defineProperty(globalThis, "navigator", {
   value: { storage: { async getDirectory() { return new FakeDirHandle(root); } } },

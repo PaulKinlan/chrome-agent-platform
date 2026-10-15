@@ -719,9 +719,7 @@ Deno.test("resume race: the snapshot phase PASSES for A, the row is swapped mid-
 function dirNode() { return { kind: "directory", children: new Map() }; }
 function fileNode(content) { return { kind: "file", content }; }
 function namedNotFound(message: string) {
-  const e = new Error(message);
-  (e as { name: string }).name = "NotFoundError";
-  return e;
+  return new DOMException(message, "NotFoundError");
 }
 class FakeWritable {
   constructor(node) { this.node = node; this.parts = []; }

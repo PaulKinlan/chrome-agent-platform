@@ -9,8 +9,8 @@ class FakeFileHandle { constructor(node) { this.node = node; } get kind() { retu
 class FakeDirHandle {
   constructor(node) { this.node = node; }
   get kind() { return "directory"; }
-  async getDirectoryHandle(name, options = {}) { if (!this.node.children.has(name)) { if (options.create !== true) throw new Error("missing"); this.node.children.set(name, dirNode()); } return new FakeDirHandle(this.node.children.get(name)); }
-  async getFileHandle(name, options = {}) { if (!this.node.children.has(name)) { if (options.create !== true) throw new Error("missing"); this.node.children.set(name, fileNode("")); } return new FakeFileHandle(this.node.children.get(name)); }
+  async getDirectoryHandle(name, options = {}) { if (!this.node.children.has(name)) { if (options.create !== true) throw new DOMException("missing", "NotFoundError"); this.node.children.set(name, dirNode()); } return new FakeDirHandle(this.node.children.get(name)); }
+  async getFileHandle(name, options = {}) { if (!this.node.children.has(name)) { if (options.create !== true) throw new DOMException("missing", "NotFoundError"); this.node.children.set(name, fileNode("")); } return new FakeFileHandle(this.node.children.get(name)); }
   async removeEntry(name) { this.node.children.delete(name); }
   async *entries() { for (const [name, node] of this.node.children) yield [name, node.kind === "file" ? new FakeFileHandle(node) : new FakeDirHandle(node)]; }
 }

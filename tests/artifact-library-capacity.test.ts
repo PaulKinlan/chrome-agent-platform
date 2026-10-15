@@ -43,14 +43,14 @@ class FakeDirHandle {
   get kind() { return "directory"; }
   async getDirectoryHandle(name, opts = {}) {
     if (!this.node.children.has(name)) {
-      if (!opts.create) throw new Error(`not found: ${name}`);
+      if (!opts.create) throw new DOMException(`not found: ${name}`, "NotFoundError");
       this.node.children.set(name, dirNode());
     }
     return new FakeDirHandle(this.node.children.get(name));
   }
   async getFileHandle(name, opts = {}) {
     if (!this.node.children.has(name)) {
-      if (!opts.create) throw new Error(`not found: ${name}`);
+      if (!opts.create) throw new DOMException(`not found: ${name}`, "NotFoundError");
       this.node.children.set(name, fileNode(""));
     }
     return new FakeFileHandle(this.node.children.get(name));

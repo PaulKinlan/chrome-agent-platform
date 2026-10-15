@@ -90,7 +90,7 @@ function rootHandle() {
   return {
     name: "/",
     getDirectoryHandle: async (seg, { create } = {}) => {
-      if (!create && !fs.has("d:" + seg)) throw Object.assign(new Error("missing"), { name: "NotFoundError" });
+      if (!create && !fs.has("d:" + seg)) throw new DOMException("missing", "NotFoundError");
       return dirHandle(getDir([seg]), seg);
     },
     removeEntry: async (seg) => {
@@ -110,7 +110,7 @@ function dirHandle(node, name) {
     getDirectoryHandle: async (seg, { create } = {}) => {
       const key = "d:" + seg;
       if (!node.has(key)) {
-        if (!create) throw Object.assign(new Error("missing " + seg), { name: "NotFoundError" });
+        if (!create) throw new DOMException("missing " + seg, "NotFoundError");
         node.set(key, new Map());
       }
       return dirHandle(node.get(key), seg);
@@ -118,7 +118,7 @@ function dirHandle(node, name) {
     getFileHandle: async (seg, { create } = {}) => {
       const key = "f:" + seg;
       if (!node.has(key)) {
-        if (!create) throw Object.assign(new Error("missing " + seg), { name: "NotFoundError" });
+        if (!create) throw new DOMException("missing " + seg, "NotFoundError");
         node.set(key, { text: "" });
       }
       const rec = node.get(key);
