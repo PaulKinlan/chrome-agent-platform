@@ -477,14 +477,23 @@ export async function syncAboutPage({ root = REPO, check = false } = {}) {
   const { metadata, entries } = await extractAboutData({ root });
   const htmlContent = renderAboutHtml({ metadata, entries, root });
   const htmlPath = join(root, "extension/about/about.html");
+  const existingHtml = await readFile(htmlPath, "utf8").catch(() => null);
 
   if (check) {
-    const existingHtml = await readFile(htmlPath, "utf8").catch(() => null);
     if (existingHtml !== htmlContent) {
       console.error("DRIFT: extension/about/about.html differs from generated output — run `npm run sync:about`");
       return false;
     }
     console.log("About page in sync");
+    return true;
+  }
+
+  // chrome-agent-platform-bverr: write only when the bytes differ. build.mjs calls this from
+  // `npm run build:production`, which every full gate runs, and rewriting identical bytes moves the tracked
+  // file's nsec ctime for no reason - which the fleet's gate witness (nsec ctime, deliberately, so a
+  // mutate-then-revert cannot hide) reads as a mid-run tree change and invalidates the gate as STALE.
+  if (existingHtml === htmlContent) {
+    console.log(`extension/about/about.html already in sync (${entries.length} tools)`);
     return true;
   }
 
