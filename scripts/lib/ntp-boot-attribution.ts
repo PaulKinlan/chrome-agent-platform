@@ -744,6 +744,34 @@ export function evaluateBootStagingPolicy(
     const taskRuns = validRuns.filter((r) => r.longTasks.length > 0);
     const quietTaskRuns = taskRuns.filter((r) => !r.hostAboveQuietBound);
     if (taskRuns.length > 0 && quietTaskRuns.length === 0) {
+    // Review of the mr1ak packet (P1): a refusal must NEVER supersede a red. Runs that carry no long
+    // task are not evidence for this branch, so a QUIET run with a latency breach would otherwise have
+    // been hidden behind the refusal below. Mirror Check 4's exact bounds and message shape here.
+    for (const r of validRuns) {
+      if (r.hostAboveQuietBound) continue;
+      if (r.composerReadyMs != null && r.composerReadyMs >= 150) {
+        return {
+          ok: false,
+          environmentalRefusal: false,
+          error: `Run ${r.run}: composer-ready took ${r.composerReadyMs}ms on uncontended host (must be < 150ms) [${r.hostEnvironment}]`,
+          warnings,
+          validRuns,
+          contendedRuns,
+          medianTaskCount,
+        };
+      }
+      if (r.threadListHydratedMs != null && r.threadListHydratedMs > 250) {
+        return {
+          ok: false,
+          environmentalRefusal: false,
+          error: `Run ${r.run}: thread-list-hydrated took ${r.threadListHydratedMs}ms on uncontended host (must be <= 250ms) [${r.hostEnvironment}]`,
+          warnings,
+          validRuns,
+          contendedRuns,
+          medianTaskCount,
+        };
+      }
+    }
       const detail = `median long tasks > 50ms is ${medianTaskCount} across ${validRuns.length} valid ` +
         `run(s), but every run carrying a task was measured above the repo's own quiet bound ` +
         `(CAP_QUIET_MAX_LOAD_PER_CORE=${taskRuns[0].hostQuietBound}): ` +

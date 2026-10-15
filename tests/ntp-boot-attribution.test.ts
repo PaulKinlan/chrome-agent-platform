@@ -2300,3 +2300,22 @@ Deno.test("mr1ak: a latency breach on a loaded box refuses instead of claiming a
   assertEquals(quiet.environmentalRefusal, false);
   assertStringIncludes(quiet.error!, "on uncontended host");
 });
+
+Deno.test("mr1ak review: a QUIET run's latency breach is NOT hidden behind a loaded-run marginal refusal", () => {
+  // Runs 1-3 are loaded and carry a marginal long task; runs 4-5 are quiet, carry no long task, and
+  // breach composer-ready. The marginal breaches are host contention, but the quiet-run latency
+  // breach is a product defect: a refusal must never supersede a red.
+  const loadedMarginal = (n: number) => marginalTaskRun(n, LOADED_NO_BUILDERS, 70);
+  const quietLatencyBreach = (n: number) =>
+    attributeBootRun(n, { composerReadyDurationMs: 320, threadListHydratedDurationMs: 90, longTasks: [] }, QUIET_BOX_SAMPLE);
+  const runs = [loadedMarginal(1), loadedMarginal(2), loadedMarginal(3), quietLatencyBreach(4), quietLatencyBreach(5)];
+  assertEquals(runs[0].hostAboveQuietBound, true);
+  assertEquals(runs[3].hostAboveQuietBound, false, "runs 4-5 must be quiet for this to be the masking case");
+  assertEquals(runs[3].composerReadyMs, 320);
+
+  const policy = evaluateBootStagingPolicy(runs);
+  assertEquals(policy.ok, false);
+  assertEquals(policy.environmentalRefusal, false, "a quiet run's real latency breach must stay a product red");
+  assertStringIncludes(policy.error!, "on uncontended host");
+  assertStringIncludes(policy.error!, "composer-ready took 320ms");
+});
