@@ -12,6 +12,9 @@
 // Falsification (recorded in TASKS.md): revert the error-headline rule in
 // buildToolCardDom → "a nested error renders as the headline" is RED.
 import { assert, assertEquals } from "jsr:@std/assert";
+import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
+import { toolRowsFromRunLog, projectThreadMessages } from "../extension/shared/conversation.js";
+import { createMemoryRunLogHandles } from "./fixtures/run-log-wal-memory.js";
 
 class ElementStub {
   constructor(tag) {
@@ -145,6 +148,85 @@ Deno.test("json card: the tree is built ONCE from the full retained result — a
   assert(joined.includes("\n  "), "the JSON is pretty-printed (indented), not a single line");
   assert(!/selectedTool|schemaSummary|selectionRef/.test(joined), "the lazy envelope is stripped from the pretty view");
   assertEquals(findAll(card, (e) => hasClass(e, "tool-status"))[0]?.textContent, "done");
+});
+
+Deno.test("b7ny0.20: cold durable run-log reload projects the full result into the same pretty JSON card", async () => {
+  // Each instance owns its entire store/log fixture; no other test's state or
+  // another lane's files are read. Restart means a NEW registry over that store.
+  class Store {
+    values = new Map();
+    versions = new Map();
+    async get(key) { return structuredClone(this.values.get(key) ?? null); }
+    async has(key) { return this.values.has(key); }
+    async getVersion(key) { return this.versions.get(key) ?? 0; }
+    async snapshot(key) { return { exists: this.values.has(key), value: await this.get(key), version: await this.getVersion(key) }; }
+    async setTrusted(key, value) {
+      const version = (await this.getVersion(key)) + 1;
+      this.values.set(key, structuredClone(value));
+      this.versions.set(key, version);
+      return version;
+    }
+    async keys() { return [...this.values.keys()].sort(); }
+    async compareAndRestore(key, expected, value) {
+      if (await this.getVersion(key) !== expected) return false;
+      await this.setTrusted(key, value);
+      return true;
+    }
+    async compareAndDelete(key, expected) {
+      if (await this.getVersion(key) !== expected) return false;
+      this.values.delete(key);
+      this.versions.set(key, expected + 1);
+      return true;
+    }
+    async delete(key) { this.values.delete(key); this.versions.set(key, (await this.getVersion(key)) + 1); }
+  }
+  const store = new Store();
+  const logHandleFor = createMemoryRunLogHandles();
+  const registry = (bootId) => createDurableRunRegistry({
+    store, logHandleFor, bootId, now: (() => { let n = 1_000; return () => ++n; })(),
+    resolveJournalStore: async () => ({ journal: [] }),
+    appendJournal: async () => {}, replaceCancellationJournal: async () => {},
+    commitThread: async () => {}, replaceCancellationThread: async () => {},
+    injectFailure: async () => {},
+  });
+  const executionId = "exec_b7ny020_cold_001";
+  const first = registry("boot-before");
+  await first.start({
+    executionId, clientCorrelationId: "page-b7ny020", threadId: "thread-b7ny020",
+    kind: "task", taskPreview: "read the whole page", journalTarget: "master",
+    resumeRequest: { id: "task-b7ny020", task: "read the whole page", memoryOrigin: "master",
+      providerBinding: { schemaVersion: 1, provider: "demo", model: "demo", requestedScope: null, local: true },
+      idempotencyKey: executionId },
+  });
+  const full = JSON.stringify({ ok: true, selectedTool: "read_page", result: {
+    text: "z".repeat(2000), wordCount: 4321, complete: true, tail: "COLD-TAIL-MARKER-END",
+  } });
+  await first.appendLog(executionId, { type: "tool-call", callId: "c1", run: "r1", tool: "execute_tool", at: 1 }, "tool-call:c1");
+  await first.appendLog(executionId, { type: "tool-result", callId: "c1", run: "r1", tool: "execute_tool",
+    selectedTool: "read_page", result: full.slice(0, 300) + "…", resultFull: full,
+    resultFullTruncated: false, ok: true, at: 2 }, "tool-result:c1");
+  const reopened = registry("boot-after");
+  await reopened.recover();
+  const coldLog = await reopened.listLogs(executionId);
+  const toolRows = toolRowsFromRunLog(executionId, coldLog).filter((row) => row.role === "tool");
+  assertEquals(toolRows.length, 1, "the cold log replays one tool result");
+  const [projected] = projectThreadMessages({ messages: [
+    { role: "user", content: "read", ts: 0, executionId }, ...toolRows,
+    { role: "assistant", content: "done", ts: 3, executionId },
+  ] }).filter((row) => row.role === "tool");
+  assertEquals(projected.detail, full, "the real card receives the COLD retrieved result, not a supplied fixture detail");
+  const card = buildToolCardDom({ name: projected.name, status: projected.status,
+    result: projected.result, detail: projected.detail, cardExpanded: true, expandedState: new Map() });
+  const blocks = findAll(card, (el) => hasClass(el, "tt-block"));
+  assertEquals(blocks.filter((b) => findAll(b, (el) => hasClass(el, "tt-block-label"))[0]?.textContent === "result").length,
+    1, "one result block after reload");
+  const pretty = findAll(card, (el) => hasClass(el, "tt-raw"))[0];
+  assert(pretty, "the cold result is rendered in the pretty JSON view");
+  const tokens = findAll(pretty, (el) => /(^|\s)tt-json-/.test(String(el.className ?? "")));
+  const kinds = new Set(tokens.map((el) => String(el.className).match(/tt-json-([a-z]+)/)?.[1]));
+  for (const kind of ["key", "string", "number", "boolean", "punct"]) assert(kinds.has(kind), `cold JSON has ${kind} theme tokens`);
+  assert(tokens.map((el) => el.textContent).join("").includes("COLD-TAIL-MARKER-END"),
+    "a leaf beyond byte 300 survives the reload into the same card's syntax-coloured view");
 });
 
 Deno.test("json card: a nested error inside an ok:true envelope renders as the headline in the error colour and flips the status chip to error (never a success-looking card)", () => {
