@@ -350,7 +350,7 @@ Deno.test({
       await cdp.send("Page.bringToFront", {}, page.sessionId);
       await new Promise((r) => setTimeout(r, 1500));
 
-      // Capture pre-run baseline diagnostics entries and max timestamp
+      // Capture pre-run baseline diagnostics entries
       const baselineEntries = await cdp.eval(
         page.sessionId,
         `new Promise((resolve) => {
@@ -359,8 +359,9 @@ Deno.test({
           });
         })`,
       );
-      const baselineTs = (baselineEntries || []).reduce((max, e) => Math.max(max, e?.ts || 0), 0);
-      const baselineCount = baselineEntries?.length || 0;
+      const baselineFingerprints = new Set(
+        (baselineEntries || []).map((e) => `${e?.ts}:${e?.source}:${e?.kind}:${e?.message}`),
+      );
 
       // Run a keyless prompt
       await cdp.eval(
@@ -408,16 +409,16 @@ Deno.test({
             });
           })`,
         );
-        // diagnostics.list returns newest first: new entries arrive in the prefix
-        const newCount = Math.max(0, (currentEntries?.length || 0) - baselineCount);
-        const newPrefix = (currentEntries || []).slice(0, newCount);
-        const match = newPrefix.find((e) => {
-          const isNewer = (e?.ts || 0) >= baselineTs;
+        // Find newly arrived entries not present in the baseline snapshot.
+        // Snapshot set difference remains robust even when the buffer is capped at 200.
+        const match = (currentEntries || []).find((e) => {
+          const key = `${e?.ts}:${e?.source}:${e?.kind}:${e?.message}`;
+          if (baselineFingerprints.has(key)) return false;
           const msg = String(e?.message || "").toLowerCase();
           const kind = String(e?.kind || "").toLowerCase();
-          return isNewer && (msg.includes("pricing") || msg.includes("cost tracking") ||
+          return msg.includes("pricing") || msg.includes("cost tracking") ||
             kind.includes("denied") || kind.includes("declined") ||
-            msg.includes("denied") || msg.includes("declined"));
+            msg.includes("denied") || msg.includes("declined");
         });
         if (match) {
           keylessEntryFound = true;
