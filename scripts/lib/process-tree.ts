@@ -90,6 +90,8 @@ export interface ProcessTableDeps {
   hasProc?: boolean;
   /** Run `/bin/ps` with `args`. May throw (spawn failure). Default: bounded, `clearEnv` run. */
   ps?: (args: string[]) => PsOutput;
+  /** Read `/proc/${pid}/stat`. Default: Deno.readTextFileSync(`/proc/${pid}/stat`). Injected for Linux proc-reading tests. */
+  readProcStat?: (pid: number) => string;
 }
 
 export interface ProcessGroupInfo {
@@ -190,11 +192,18 @@ export function processGroup(pid: number, deps: ProcessTableDeps = {}): ProcessG
     };
   }
   try {
-    const stat = Deno.readTextFileSync(`/proc/${pid}/stat`);
+    const stat = deps.readProcStat ? deps.readProcStat(pid) : Deno.readTextFileSync(`/proc/${pid}/stat`);
     const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
     return { state: fields[0], group: Number(fields[2]), startTicks: fields[19] };
   } catch (e) {
-    if (e instanceof Deno.errors.NotFound) return null;
+    if (
+      e instanceof Deno.errors.NotFound ||
+      (e as any)?.code === "ESRCH" ||
+      (e as any)?.osError === 3 ||
+      String((e as any)?.message).includes("No such process")
+    ) {
+      return null;
+    }
     throw e;
   }
 }

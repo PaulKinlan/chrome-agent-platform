@@ -928,7 +928,13 @@ async function main() {
     // Fail-closed runs the full suite, which needs a certified dist for the same reason a subset
     // does (its serial phase reads the built bundles).
     const build = await prepareBuild(decideBuild({ kind: "full", changed: plan.changed }), buildIfNeeded);
-    process.exit(runFullSuite({ build }));
+    const rc = runFullSuite({ build });
+    if (rc === 0) {
+      console.error("select-tests: parallel phase GREEN (full suite fail-closed)");
+    } else if (rc === 75) {
+      console.error("select-tests: parallel phase REFUSED (environmental verdict, exit 75)");
+    }
+    process.exit(rc);
   }
 
   if (list) {

@@ -50,10 +50,24 @@ export function areAllFailuresEnvironmental(cleanOutput) {
   if (errorBlocks.length === 0) return false;
 
   for (const block of errorBlocks) {
+    // Separate test heading (<test_name> => <path>) from the actual error body
+    // so a test with QuietWindowRefusedError in its name does not falsely classify product errors.
+    const arrowIdx = block.indexOf("=>");
+    const errorBody = arrowIdx !== -1 ? block.slice(block.indexOf("\n", arrowIdx)) : block;
+
+    // Finding 2y5h7: An AssertionError in the error body (e.g. from assertRejects) is a
+    // test failure, never an uncaught environmental refusal.
+    if (errorBody.includes("AssertionError:")) {
+      return false;
+    }
+
     const isRefusal =
-      block.includes("CAP_ENVIRONMENTAL_REFUSAL") ||
-      block.includes("BootStagingEnvironmentalRefusalError") ||
-      block.includes("ENVIRONMENT: ntp-boot-staging refusal");
+      errorBody.includes("CAP_ENVIRONMENTAL_REFUSAL") ||
+      errorBody.includes("ENVIRONMENT: machine is not quiet enough for this gate") ||
+      errorBody.includes("ENVIRONMENT: ntp-boot-staging refusal") ||
+      errorBody.includes("ENVIRONMENT: the fleet-wide heavy-gate slot is busy") ||
+      errorBody.includes("QuietWindowRefusedError: ENVIRONMENT:") ||
+      errorBody.includes("BootStagingEnvironmentalRefusalError: ENVIRONMENT:");
     if (!isRefusal) {
       return false;
     }
@@ -199,7 +213,12 @@ function runParallel(files, phase = "parallel phase") {
         return;
       }
       let effectiveCode = code ?? (signal ? 128 + 15 : 1);
-      if (effectiveCode !== 0 && capturedOutput.includes("CAP_ENVIRONMENTAL_REFUSAL")) {
+      const hasEnvironmentalMarker =
+        capturedOutput.includes("CAP_ENVIRONMENTAL_REFUSAL") ||
+        capturedOutput.includes("QuietWindowRefusedError") ||
+        capturedOutput.includes("ENVIRONMENT: machine is not quiet enough for this gate") ||
+        capturedOutput.includes("ENVIRONMENT: ntp-boot-staging refusal");
+      if (effectiveCode !== 0 && hasEnvironmentalMarker) {
         // Finding P1 (Round 4 review): A passing test emitting a marker must NOT allow a
         // failing product test to exit 75. Every failed test under ERRORS must carry
         // verified environmental refusal evidence.
