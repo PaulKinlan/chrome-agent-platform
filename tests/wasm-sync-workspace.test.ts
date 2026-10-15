@@ -26,7 +26,10 @@ function valid(rows) {
 }
 
 const row = (path, bytes) => ({ path, bytes });
-const dense = (length, value = 1) => Array.from({ length }, () => value);
+// chrome-agent-platform-iwu1z: new Array(n).fill(v) allocates and fills in one operation, where the mapper form
+// of Array.from called back into JS once per element - measured 884 ms vs 199 ms for this file's 9 MiB seed.
+// Identical values either way, so the byte-matrix assertions below cannot tell the two apart.
+const dense = (length, value = 1) => new Array(length).fill(value);
 
 Deno.test("S1 seed: inputs predecessor matrix is byte-identical to the 13936ec validator output", () => {
   // The tree/stat/du-style seeds: order, exact paths, exact bytes preserved.
