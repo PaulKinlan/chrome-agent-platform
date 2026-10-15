@@ -87,7 +87,7 @@ try {
   );
   const countFor = async () => {
     const text = String(await explorerText() ?? "");
-    const m = text.match(/clear-fixture\.example \((\d+)\)/);
+    const m = text.match(/clear-fixture\.example \((\d+)\+?\)/);
     return m ? Number(m[1]) : -1;
   };
 

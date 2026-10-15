@@ -10,8 +10,17 @@ import {
   backgroundAgentMemory,
   namedAgentMemory,
   siteMemory,
+  listNamedAgentIds,
+  listBackgroundAgentIds,
+  listOrigins,
+  countStoreKeys,
 } from "../../lib/memory.js";
-import { readOnlyAgentMemorySelector } from "../../lib/named-agents.js";
+import {
+  readOnlyAgentMemorySelector,
+  classifyAgentMemoryDirs,
+  slugifyAgentId,
+  listNamedAgents,
+} from "../../lib/named-agents.js";
 import { sleep } from "../../lib/pure.js";
 
 /** Resolve an `origin` label (the memory route's selector) to its OPFS store.
@@ -141,4 +150,65 @@ export function createMemoryRoutes() {
       }
     },
   });
+}
+
+/**
+ * Enumerate every memory store with bounded key counts (chrome-agent-platform-9epn.11).
+ * Injected deps allow unit tests to verify zero keys() calls with counting proxies.
+ */
+export async function enumerateMemoryStores(deps = {}) {
+  const _listNamedAgentIds = deps.listNamedAgentIds ?? listNamedAgentIds;
+  const _listBackgroundAgentIds = deps.listBackgroundAgentIds ?? listBackgroundAgentIds;
+  const _listOrigins = deps.listOrigins ?? listOrigins;
+  const _listNamedAgents = deps.listNamedAgents ?? listNamedAgents;
+  const _classifyAgentMemoryDirs = deps.classifyAgentMemoryDirs ?? classifyAgentMemoryDirs;
+  const _namedAgentMemory = deps.namedAgentMemory ?? namedAgentMemory;
+  const _backgroundAgentMemory = deps.backgroundAgentMemory ?? backgroundAgentMemory;
+  const _siteMemory = deps.siteMemory ?? siteMemory;
+  const _masterMemory = deps.masterMemory ?? masterMemory;
+  const _countStoreKeys = deps.countStoreKeys ?? countStoreKeys;
+
+  const [namedIds, bgIds, origins] = await Promise.all([
+    _listNamedAgentIds(),
+    _listBackgroundAgentIds(),
+    _listOrigins(),
+  ]);
+  const named = await _listNamedAgents();
+  const nameById = new Map(named.map((a) => [slugifyAgentId(a.id), a.name || a.id]));
+  const nameByInstance = new Map(named.map((a) => [String(a.instanceId ?? ""), a.name || a.id]));
+
+  const classified = _classifyAgentMemoryDirs({ dirs: namedIds, agents: named });
+  const stores = [{ key: "master", label: "The hub", kind: "master" }];
+  for (const c of classified) {
+    const label = nameByInstance.get(c.dir) ?? nameById.get(slugifyAgentId(c.dir)) ?? c.dir;
+    const store = _namedAgentMemory(c.dir);
+    stores.push({
+      key: c.selector,
+      label: c.state === "legacy" ? `${label} (legacy — read-only)` : c.state === "orphan" ? `${c.dir} (orphan)` : label,
+      kind: "named",
+      state: c.state,
+      readOnly: c.readOnly,
+      keyCount: await _countStoreKeys(store, 500),
+    });
+  }
+  for (const id of bgIds) {
+    const store = _backgroundAgentMemory(id);
+    stores.push({
+      key: `background:${id}`,
+      label: id,
+      kind: "background",
+      keyCount: await _countStoreKeys(store, 500),
+    });
+  }
+  for (const origin of origins) {
+    const store = _siteMemory(origin);
+    stores.push({
+      key: origin,
+      label: origin,
+      kind: "site",
+      keyCount: await _countStoreKeys(store, 500),
+    });
+  }
+  stores[0].keyCount = await _countStoreKeys(_masterMemory(), 500);
+  return { ok: true, stores };
 }
