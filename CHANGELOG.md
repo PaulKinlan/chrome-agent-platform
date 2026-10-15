@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.688] — 2026-10-15
+- Settings, options and side-panel labels are now translated, so the extension follows your browser language.
+- The Settings folder browser shows crisp inline icons, and importing a skill is lighter and faster.
+- The extension-build check no longer trips on flat directory names, and master-journal write-ahead-log groundwork is staged behind the scenes.
+
 ## [0.3.687] — 2026-10-14
 - Clean up unused imports and dead fields in skill import module
 - Allow flat third-party extension directories ending in extension to be launched
