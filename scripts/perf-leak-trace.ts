@@ -3,7 +3,13 @@
 // budgets:
 //
 //   - the SW registers fast (< 500ms from launch)
-//   - the hub / chat / settings render fast (< 1s to first meaningful paint)
+//   - the hub / settings / sidepanel paint fast: MEASURED FCP and LCP from real paint entries,
+//     both held to this file's EXISTING render budget (< 1s to first meaningful paint) rather than
+//     to a number invented here, plus the load-settle budget (< 1s). chrome-agent-platform-9epn.12:
+//     this file used to assert only `navigate -> load + 300ms settle` while claiming a paint
+//     budget; a load-only number cannot see a slow paint behind a fast load and passes for a
+//     page that never painted, so the paint metrics are now observed and decided by
+//     scripts/lib/perf-paint-budget.ts (UNMEASURED is a distinct, non-pass outcome).
 //   - the SW heap does not leak across a loop of memory writes
 //   - OPFS usage stays bounded across that loop (the journal / stores are capped)
 //   - the hub's DOM node count does not grow unboundedly across a render loop
@@ -13,6 +19,11 @@
 import { methodValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+import {
+  classifyPaintMetrics,
+  DEFAULT_PAINT_BUDGETS,
+  type PaintDecision,
+} from "./lib/perf-paint-budget.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
@@ -20,9 +31,18 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let pass = 0;
 let fail = 0;
+// A paint budget that could not be measured is NOT a pass and is counted separately, so a bare
+// "RESULT: n passed" can never hide an unmeasured surface (chrome-agent-platform-9epn.12).
+let unmeasured = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
   if (cond) { pass++; console.log(`PASS: ${name}`); }
   else { fail++; console.log(`FAIL: ${name} — ${JSON.stringify(detail)}`); }
+}
+function checkPaint(surface: string, decision: PaintDecision, detail?: unknown) {
+  if (decision.verdict === "PASS") { pass++; console.log(`PASS: ${surface} paint budget — ${decision.reasons.join("; ")}`); return; }
+  if (decision.verdict === "FAIL") { fail++; console.log(`FAIL: ${surface} paint budget — ${decision.reasons.join("; ")} ${JSON.stringify(detail ?? {})}`); return; }
+  unmeasured++;
+  console.log(`UNMEASURED: ${surface} paint budget — ${decision.reasons.join("; ")} ${JSON.stringify(detail ?? {})}`);
 }
 
 type Cdp = {
@@ -69,7 +89,10 @@ async function findSw(cdp: Cdp): Promise<{ id: string; extId: string }> {
   throw new Error("extension did not load");
 }
 
-async function pageLoad(cdp: Cdp, url: string): Promise<{ ms: number; sessionId: string }> {
+async function pageLoad(
+  cdp: Cdp,
+  url: string,
+): Promise<{ ms: number; sessionId: string; fcpMs: number | null; lcpMs: number | null; paintEntries: number }> {
   const t = await cdp.send("Target.createTarget", { url: "about:blank" });
   const s = await cdp.send("Target.attachToTarget", { targetId: t.targetId, flatten: true });
   const sessionId = s.result?.sessionId ?? s.sessionId;
@@ -85,6 +108,24 @@ async function pageLoad(cdp: Cdp, url: string): Promise<{ ms: number; sessionId:
           }
         }).observe({ entryTypes: ['longtask'] });
       } catch {}
+      // 9epn.12: real paint entries, registered before any document script runs. The buffered:
+      // true option is what makes them survive being observed from this injection point.
+      window.__capPaint = { fcp: null, lcp: null, entries: 0 };
+      try {
+        new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            window.__capPaint.entries++;
+            if (entry.name === 'first-contentful-paint') window.__capPaint.fcp = entry.startTime;
+            if (entry.name === 'first-paint' && window.__capPaint.fcp == null) window.__capPaint.fcp = entry.startTime;
+          }
+        }).observe({ type: 'paint', buffered: true });
+        new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            window.__capPaint.entries++;
+            window.__capPaint.lcp = entry.startTime;
+          }
+        }).observe({ type: 'largest-contentful-paint', buffered: true });
+      } catch {}
     `,
   }, sessionId);
   const t0 = Date.now();
@@ -93,11 +134,29 @@ async function pageLoad(cdp: Cdp, url: string): Promise<{ ms: number; sessionId:
   await cdp.evl(sessionId, `new Promise(r => { if (document.readyState === 'complete') r(); else addEventListener('load', r, { once: true }); })`);
   await sleep(300);
   const ms = Date.now() - t0;
-  return { ms, sessionId };
+  let paint: { fcp?: number | null; lcp?: number | null; entries?: number } = {};
+  try {
+    paint = JSON.parse(await cdp.evl(sessionId, "JSON.stringify(window.__capPaint ?? {})")) ?? {};
+  } catch { /* unmeasured: the decider refuses to call this a pass */ }
+  return {
+    ms,
+    sessionId,
+    fcpMs: typeof paint.fcp === "number" ? paint.fcp : null,
+    lcpMs: typeof paint.lcp === "number" ? paint.lcp : null,
+    paintEntries: typeof paint.entries === "number" ? paint.entries : 0,
+  };
 }
 
 async function main() {
   const { proc, cdp, close, tmp } = await launch();
+  // The paint budgets honour the harness's existing rejection hook, so a falsifier run can prove
+  // these checks red (chrome-agent-platform-9epn.12).
+  const testBudgetRejection = Deno.args.includes("--test-budget-rejection") ||
+    Deno.env.get("CAP_TEST_BUDGET_REJECTION") === "1";
+  const paintBudgets = {
+    fcpMs: testBudgetRejection ? 0 : DEFAULT_PAINT_BUDGETS.fcpMs,
+    lcpMs: testBudgetRejection ? 0 : DEFAULT_PAINT_BUDGETS.lcpMs,
+  };
   try {
     // ── 1. SW register time (< 500ms budget) ──
     const t0 = Date.now();
@@ -105,10 +164,33 @@ async function main() {
     const swMs = Date.now() - t0;
     check("SW registered fast (< 500ms)", swMs < 500, { ms: swMs });
 
-    // ── 2. render budgets (< 1s each) ──
-    for (const [name, path] of [["hub", "ntp/ntp.html"], ["settings", "options/options.html"]] as const) {
-      const { ms } = await pageLoad(cdp, `chrome-extension://${sw.extId}/${path}`);
+    // ── 2. render budgets: the load-settle budget AND measured paint metrics ──
+    // 9epn.12 moved the paint budgets to a measured decider; the load-settle check is unchanged
+    // (it is a real, separate budget) and the surfaces now include the sidepanel.
+    for (const [name, path] of [
+      ["hub", "ntp/ntp.html"],
+      ["settings", "options/options.html"],
+      ["sidepanel", "sidepanel/sidepanel.html"],
+    ] as const) {
+      // A surface that cannot be loaded must still APPEAR, as UNMEASURED, and never be dropped from the
+      // report (chrome-agent-platform-9epn.12 review note). A load error is a real failure of the
+      // load-settle check and an unmeasured paint; either way the surface keeps its line in the output.
+      let load: Awaited<ReturnType<typeof pageLoad>> | null = null;
+      try {
+        load = await pageLoad(cdp, `chrome-extension://${sw.extId}/${path}`);
+      } catch (error) {
+        const detail = { surface: name, path, loadError: String(error) };
+        check(`${name} rendered fast (< 1000ms)`, false, detail);
+        checkPaint(name, classifyPaintMetrics({ fcpMs: null, lcpMs: null }, paintBudgets), detail);
+        continue;
+      }
+      const { ms, fcpMs, lcpMs, paintEntries } = load;
       check(`${name} rendered fast (< 1000ms)`, ms < 1000, { ms });
+      checkPaint(
+        name,
+        classifyPaintMetrics({ fcpMs, lcpMs }, paintBudgets),
+        { fcpMs, lcpMs, paintEntries, budget: paintBudgets },
+      );
     }
 
     // ── 3. SW heap + OPFS bounded across a memory-write loop ──
@@ -266,7 +348,6 @@ async function main() {
       "hub CPU non-idle": `${cpuMs} ms`,
     });
 
-    const testBudgetRejection = Deno.args.includes("--test-budget-rejection") || Deno.env.get("CAP_TEST_BUDGET_REJECTION") === "1";
     const budget = {
       runP50: testBudgetRejection ? 0 : 400,
       threadGet: testBudgetRejection ? 0 : 40,
@@ -291,8 +372,11 @@ async function main() {
     await Deno.remove(tmp, { recursive: true }).catch(() => {});
   }
 
-  console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
-  Deno.exit(fail === 0 ? 0 : 1);
+  console.log(`\nRESULT: ${pass} passed, ${fail} failed, ${unmeasured} unmeasured`);
+  if (unmeasured > 0) {
+    console.log("UNMEASURED is not a pass: a paint budget was claimed and not measured (chrome-agent-platform-9epn.12).");
+  }
+  Deno.exit(fail === 0 && unmeasured === 0 ? 0 : 1);
 }
 
 await main();
