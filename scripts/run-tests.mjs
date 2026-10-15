@@ -28,6 +28,7 @@ import { BUILD_GATE, BUILD_GATE_FILES, BUILD_GATE_REASONS, HEAVY_GATE, HEAVY_GAT
 import { announce, runReadOnlyDistBatch, runSerialFiles } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
 import { parallelPlan } from "./lib/parallel-plan.mjs";
+import { loadWeights, scheduleOrder } from "./lib/parallel-schedule.mjs";
 import { emitGateLedger, deferredTierEntries, fullTierManifestFields, parseGateBuild } from "./lib/gate-manifest.mjs";
 
 export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
@@ -66,10 +67,15 @@ function runParallel(files, phase = "parallel phase") {
   // Concurrent scheduling cannot identify the stalled file. Announce every
   // candidate BEFORE spawn so even a mid-phase kill leaves names on both streams.
   announce(`run-tests: ${phase} candidates (${files.length} file(s)):\n${files.map((file) => `  - ${file}`).join("\n")}`);
+  // Scheduling changes only order, never worker count or selected files. The off switch
+  // preserves the pre-slice invocation for an A/B on the exact same committed tree.
+  const scheduled = phase === "parallel phase" && process.env.CAP_PARALLEL_SCHEDULE !== "0";
+  const ordered = scheduled ? scheduleOrder(files, loadWeights()) : files;
+  if (scheduled) announce(`run-tests: parallel scheduler longest-first (${ordered.length} selected file(s)); Deno default workers`);
   const t0 = Date.now();
   return new Promise((resolve) => {
     let capturedOutput = "";
-    const child = spawn("deno", ["test", "-A", "--config", "deno.runner.jsonc", "--parallel", ...files], {
+    const child = spawn("deno", ["test", "-A", "--config", "deno.runner.jsonc", "--parallel", ...ordered], {
       stdio: ["inherit", "pipe", "pipe"],
       env: { ...process.env, CAP_TEST_RUNNER: "1" },
       detached: true,
