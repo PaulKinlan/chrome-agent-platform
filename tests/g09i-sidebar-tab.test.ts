@@ -50,7 +50,9 @@ Deno.test({
           navVisible:getComputedStyle(document.getElementById('side-rail-nav')).display!=='none'};
       })()`);
       assertEquals(before, { collapsed: true, focused: "side-toggle", navVisible: true });
-      const initial = await cdp.screenshot(sid, { fromSurface: false, timeoutMs: 6000 });
+      const initial = await cdp.screenshot(sid, { fromSurface: false, timeoutMs: 6000,
+        onFailure: (failures) => console.error(`g09i collapsed rail: DOM state asserted; screenshot capture failed: ${JSON.stringify(failures)}`),
+      });
       assert(initial, "capture the collapsed rail before keyboard navigation");
       await Deno.writeFile(`${evidence}/before.png`, initial);
       const focus: any[] = [];
@@ -90,7 +92,9 @@ Deno.test({
       })()`);
       assertEquals(expanded.collapsed, false, "sidebar must be expanded after toggle click");
       assertEquals(expanded.summaryTabindex, null, "expanding sidebar must restore natural tabindex on summary (no tabindex attribute)");
-      const after = await cdp.screenshot(sid, { fromSurface: false, timeoutMs: 6000 });
+      const after = await cdp.screenshot(sid, { fromSurface: false, timeoutMs: 6000,
+        onFailure: (failures) => console.error(`g09i expanded rail: DOM state asserted; screenshot capture failed: ${JSON.stringify(failures)}`),
+      });
       assert(after, "capture the keyboard-focused rail");
       await Deno.writeFile(`${evidence}/after.png`, after);
       await Deno.writeTextFile(`${evidence}/focus.json`, JSON.stringify({ before, focus }, null, 2));

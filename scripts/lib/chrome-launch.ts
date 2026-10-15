@@ -1517,6 +1517,12 @@ export async function waitForServiceWorker(
   return null;
 }
 
+export interface ScreenshotFailure {
+  stage: "initial" | "wake" | "fallback";
+  outcome: "error" | "empty";
+  error?: string;
+}
+
 export interface ScreenshotOptions {
   format?: "png" | "jpeg" | "webp";
   quality?: number;
@@ -1524,6 +1530,8 @@ export interface ScreenshotOptions {
   fromSurface?: boolean;
   captureBeyondViewport?: boolean;
   timeoutMs?: number;
+  /** Diagnostic only: terminal capture failure still returns null. Never classifies host state. */
+  onFailure?: (failures: ScreenshotFailure[]) => void;
 }
 
 /**
@@ -1547,6 +1555,15 @@ export async function safeCaptureScreenshot(
   opts: ScreenshotOptions = {},
 ): Promise<Uint8Array | null> {
   const timeoutMs = opts.timeoutMs ?? 8000;
+  const failures: ScreenshotFailure[] = [];
+  const recordError = (stage: ScreenshotFailure["stage"], error: unknown) => {
+    failures.push({ stage, outcome: "error", error: String(error instanceof Error ? error.message : error).replace(/[\r\n]/g, " ").slice(0, 240) });
+  };
+  const terminalFailure = (): null => {
+    // A diagnostic callback cannot turn a failed screenshot into an unrelated test error.
+    try { opts.onFailure?.(failures); } catch { /* preserve the null contract */ }
+    return null;
+  };
   const captureCall = (fromSurface?: boolean) => {
     const params: Record<string, unknown> = {
       format: opts.format ?? "png",
@@ -1565,8 +1582,9 @@ export async function safeCaptureScreenshot(
     if (b64 && typeof b64 === "string") {
       return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
     }
-  } catch (_err) {
-    // If fromSurface was true (or defaulted), the frame scheduler may be quiesced.
+    failures.push({ stage: "initial", outcome: "empty" });
+  } catch (error) {
+    recordError("initial", error);
     // Fall through to wake the compositor and retry with fromSurface: false.
   }
 
@@ -1578,17 +1596,22 @@ export async function safeCaptureScreenshot(
         awaitPromise: true,
       }, sessionId),
       1500,
-    ).catch(() => {});
+    );
+  } catch (error) {
+    recordError("wake", error);
+  }
+  try {
     const fallback = await withTimeout(captureCall(false), Math.min(timeoutMs, 4000));
     const b64 = fallback?.result?.data ?? fallback?.data;
     if (b64 && typeof b64 === "string") {
       return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
     }
-  } catch {
-    return null;
+    failures.push({ stage: "fallback", outcome: "empty" });
+  } catch (error) {
+    recordError("fallback", error);
   }
 
-  return null;
+  return terminalFailure();
 }
 
 export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {

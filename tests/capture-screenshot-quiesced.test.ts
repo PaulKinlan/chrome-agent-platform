@@ -86,3 +86,48 @@ Deno.test("safeCaptureScreenshot: returns null safely when both attempts fail or
   });
   assertEquals(bytes, null, "terminal failure must return null without throwing");
 });
+
+Deno.test("safeCaptureScreenshot: terminal diagnostics distinguish rejected, empty, and successful captures without changing null", async () => {
+  const png = { result: { data: SAMPLE_PNG_B64 } };
+  const seen: unknown[] = [];
+  const onFailure = (failures: unknown) => seen.push(failures);
+
+  const rejected = await safeCaptureScreenshot(async (method) => {
+    if (method === "Page.captureScreenshot") throw new Error("Protocol error: Target closed");
+    return { result: { value: true } };
+  }, "session-rejected", { timeoutMs: 100, onFailure });
+  assertEquals(rejected, null);
+  assertEquals(seen.pop(), [
+    { stage: "initial", outcome: "error", error: "Protocol error: Target closed" },
+    { stage: "fallback", outcome: "error", error: "Protocol error: Target closed" },
+  ], "a rejected CDP capture is not an empty CDP response");
+
+  const empty = await safeCaptureScreenshot(async (method) => {
+    if (method === "Page.captureScreenshot") return { result: {} };
+    return { result: { value: true } };
+  }, "session-empty", { timeoutMs: 100, onFailure });
+  assertEquals(empty, null);
+  assertEquals(seen.pop(), [
+    { stage: "initial", outcome: "empty" },
+    { stage: "fallback", outcome: "empty" },
+  ], "a response without PNG data must not claim a protocol error or a sleeping display");
+
+  let captureCalls = 0;
+  const timedOut = await safeCaptureScreenshot(async (method) => {
+    if (method === "Page.captureScreenshot" && ++captureCalls === 1) return await new Promise(() => {});
+    if (method === "Page.captureScreenshot") return { result: {} };
+    return { result: { value: true } };
+  }, "session-timeout", { timeoutMs: 10, onFailure });
+  assertEquals(timedOut, null);
+  assertEquals(seen.pop(), [
+    { stage: "initial", outcome: "error", error: "deadline" },
+    { stage: "fallback", outcome: "empty" },
+  ], "a timed-out CDP request keeps its deadline cause rather than becoming an empty response");
+
+  const successful = await safeCaptureScreenshot(async (method) => {
+    if (method === "Page.captureScreenshot") return png;
+    throw new Error("a successful first capture must not wake the compositor");
+  }, "session-success", { timeoutMs: 100, onFailure });
+  assert(successful instanceof Uint8Array);
+  assertEquals(seen.length, 0, "a successful capture must not emit a failure diagnostic");
+});
