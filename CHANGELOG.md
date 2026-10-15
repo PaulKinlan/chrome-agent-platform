@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.697] — 2026-10-15
+- Harden enclave quota recovery, align unmetered window telemetry, and document default reset.
+
 ## [0.3.696] — 2026-10-15
 - Add configurable per-service enclave quotas, fail-closed validation, and settings usage telemetry route.
 
