@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.687] — 2026-10-15
+- Bounded key counting on OPFS memory stores eliminating keys() enumerations on memory.stores
+
 ## [0.3.686] — 2026-10-14
 - Fix left sidebar and Settings menu scroll vibration on NTP and Settings surfaces
 

@@ -161,6 +161,7 @@ import {
   backgroundAgentMemory,
   namedAgentMemory,
   siteMemory,
+  countStoreKeys,
 } from "../lib/memory.js";
 import {
   createBuiltinBackgroundSet,
@@ -11311,7 +11312,7 @@ const handlers = mergeRouteMaps(
         kind: "named",
         state: c.state,
         readOnly: c.readOnly,
-        keyCount: (await store.keys()).length,
+        keyCount: await countStoreKeys(store, 500),
       });
     }
     for (const id of bgIds) {
@@ -11320,7 +11321,7 @@ const handlers = mergeRouteMaps(
         key: `background:${id}`,
         label: id,
         kind: "background",
-        keyCount: (await store.keys()).length,
+        keyCount: await countStoreKeys(store, 500),
       });
     }
     for (const origin of origins) {
@@ -11329,10 +11330,10 @@ const handlers = mergeRouteMaps(
         key: origin,
         label: origin,
         kind: "site",
-        keyCount: (await store.keys()).length,
+        keyCount: await countStoreKeys(store, 500),
       });
     }
-    stores[0].keyCount = (await masterMemory().keys()).length;
+    stores[0].keyCount = await countStoreKeys(masterMemory(), 500);
     return { ok: true, stores };
   },
 
