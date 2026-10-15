@@ -2,14 +2,16 @@
 // compaction records are written. The caller holds the master Web Lock for the
 // entire transaction. Product WAL writes remain OFF until all routes are wired.
 import { capLog } from "./cap-log.js";
+import { isMissingMasterJournalHandle } from "./master-journal-opfs-errors.js";
 import { readMasterJournalHead, sealMasterJournalRecord, unsealMasterJournalRecord } from "./master-journal-wal.js";
 
 const DECODER = new TextDecoder("utf-8", { fatal: true });
 const ENCODER = new TextEncoder();
 const LOG = capLog("master-journal-wal");
+
 const CLAIM_DIRECTORY = "journal-wal";
 
-function isMissing(error) { return error?.name === "NotFoundError"; }
+function isMissing(error) { return isMissingMasterJournalHandle(error); }
 
 async function optionalFile(directory, name) {
   try { return await directory.getFileHandle(name); }

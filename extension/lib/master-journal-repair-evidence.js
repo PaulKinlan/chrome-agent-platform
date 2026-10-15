@@ -1,6 +1,7 @@
 // Bounded, read-only repair evidence inventory. This low-level module must NOT
 // import the WAL reader: the WAL issuer rechecks these bytes under its caller's
 // master Web Lock, while owner-inspection adds a separate strict authority view.
+import { isMissingMasterJournalHandle } from "./master-journal-opfs-errors.js";
 export async function collectMasterJournalRepairEvidenceInventory(master, {
   maxRecords = 1024, maxRecordBytes = 8 * 1024 * 1024,
   maxTotalBytes = 16 * 1024 * 1024,
@@ -15,7 +16,7 @@ export async function collectMasterJournalRepairEvidenceInventory(master, {
   let directory;
   try { directory = await master.getDirectoryHandle("journal-wal"); }
   catch (error) {
-    if (error?.name !== "NotFoundError") return refuse(`master journal repair evidence unreadable: ${error?.message ?? error}`);
+    if (!isMissingMasterJournalHandle(error)) return refuse(`master journal repair evidence unreadable: ${error?.message ?? error}`);
     directory = null;
   }
   const records = [];
@@ -47,7 +48,7 @@ export async function collectMasterJournalRepairEvidenceInventory(master, {
       let handle;
       try { handle = await master.getFileHandle(filename); }
       catch (error) {
-        if (error?.name !== "NotFoundError") throw error;
+        if (!isMissingMasterJournalHandle(error)) throw error;
         legacy[key] = { present: false };
         continue;
       }

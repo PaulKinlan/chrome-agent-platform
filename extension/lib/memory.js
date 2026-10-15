@@ -215,17 +215,32 @@ async function readTombs(dir) {
   return { map, floor };
 }
 
-/** Persist the bounded tombstone authority (map + floor), folding the oldest
- * entries into the floor when over the bound (a folded key NEVER returns to
- * version 0 — its absence resolves through the per-key DERIVED version). */
+/** Persist the bounded tombstone authority (map + floor). A tombstone may
+ * fold into the floor only after its value file is physically absent: a
+ * failed unlink leaves a live envelope that MUST remain hidden by its exact
+ * tombstone. When too many orphans remain, refuse rather than lose authority. */
 async function writeTombs(dir, tombs) {
   let entries = [...tombs.map.entries()];
   let floor = tombs.floor;
   if (entries.length > MAX_TOMBSTONES) {
     entries.sort((a, b) => a[1] - b[1]);
-    const folded = entries.slice(0, entries.length - MAX_TOMBSTONES);
-    for (const [, v] of folded) if (v > floor) floor = v;
-    entries = entries.slice(entries.length - MAX_TOMBSTONES);
+    let excess = entries.length - MAX_TOMBSTONES;
+    const retained = [];
+    for (const [key, version] of entries) {
+      if (excess > 0) {
+        try {
+          await dir.getFileHandle(`${key}.json`);
+        } catch (error) {
+          if (!isMissingMasterJournalHandle(error)) throw error;
+          if (version > floor) floor = version;
+          excess--;
+          continue;
+        }
+      }
+      retained.push([key, version]);
+    }
+    if (excess > 0) throw new Error("tombstone capacity requires repair of retained value orphans");
+    entries = retained;
   }
   const obj = {};
   for (const [k, v] of entries) obj[k] = v;
@@ -239,29 +254,32 @@ async function writeTombs(dir, tombs) {
 }
 
 /** The current durable version of a key:
- *  1. the LIVE value envelope's version (a live key always reports its write
- *     token — the reviewer's floor-shadows-live finding),
- *  2. else the per-key tombstone generation (a deleted key),
- *  3. else a DERIVED per-key NEGATIVE absence version (never-created / folded) —
- *     per-key distinct (no cross-key token reuse) + never 0 (no expected-0 ABA). */
+ *  1. a newer per-key tombstone wins over an orphaned live envelope,
+ *  2. otherwise the LIVE value envelope's token wins over the global floor,
+ *  3. otherwise the tombstone or DERIVED per-key NEGATIVE absence version.
+ * A recreated live key clears its own tombstone; the unrelated folded floor
+ * must never shadow that valid live write. */
 async function currentVersion(dir, key) {
-  // Read the tombstone authority FIRST so a corrupt `__tombs.json` fails closed
-  // on EVERY read (never a silent reset), then let the LIVE envelope WIN over
-  // any tombstone/floor (the reviewer's floor-shadows-live finding).
   const tombs = await readTombs(dir);
   const entry = await readEntry(dir, `${key}.json`, true);
+  const deletedVersion = tombs.map.get(key);
   if (entry) {
     if (!Number.isSafeInteger(entry.v) || entry.v < 0) {
       throw new Error("a value envelope authority is corrupt");
     }
+    if (deletedVersion !== undefined) {
+      if (entry.v === deletedVersion) throw new Error("a value envelope conflicts with its tombstone");
+      if (entry.v < deletedVersion) return deletedVersion;
+    }
     return entry.v;
   }
-  if (tombs.map.has(key)) return tombs.map.get(key);
+  if (deletedVersion !== undefined) return deletedVersion;
   return absentVersion(key, tombs.floor);
 }
 
 import { kvGet } from "./kv.js";
 import { withMasterJournalWebLock } from "./master-journal-lock.js";
+import { isMissingMasterJournalHandle } from "./master-journal-opfs-errors.js";
 import { createMasterJournalIssuer } from "./master-journal-issuer.js";
 import {
   appendMasterJournalRow,

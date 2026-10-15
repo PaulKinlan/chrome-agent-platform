@@ -2,6 +2,7 @@
 // isolation without becoming authority. Product readers MUST still use the
 // strict combined-head projection; this module offers no repair publisher.
 import { snapshotMasterJournalRepairEvidence } from "./master-journal-owner-inspection.js";
+import { isMissingMasterJournalHandle } from "./master-journal-opfs-errors.js";
 import {
   readMasterJournalArchiveChain,
   readMasterJournalProjection,
@@ -29,7 +30,7 @@ export async function inspectIntactMasterJournalPrefixesForOwner(master, evidenc
   let directory;
   try { directory = await master.getDirectoryHandle("journal-wal"); }
   catch (error) {
-    if (error?.name === "NotFoundError") return { ...base, state: "wal_absent" };
+    if (isMissingMasterJournalHandle(error)) return { ...base, state: "wal_absent" };
     return { ...base, state: "inspection_refused", reason: String(error?.message ?? error) };
   }
   const heads = [];
@@ -37,7 +38,7 @@ export async function inspectIntactMasterJournalPrefixesForOwner(master, evidenc
     let handle;
     try { handle = await directory.getFileHandle(slot); }
     catch (error) {
-      heads.push({ slot, checked: false, reason: error?.name === "NotFoundError" ? "absent" : "unreadable" });
+      heads.push({ slot, checked: false, reason: isMissingMasterJournalHandle(error) ? "absent" : "unreadable" });
       continue;
     }
     try {

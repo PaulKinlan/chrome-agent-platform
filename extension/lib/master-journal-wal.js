@@ -1,4 +1,5 @@
 import { capLog } from "./cap-log.js";
+import { isMissingMasterJournalHandle } from "./master-journal-opfs-errors.js";
 import { fingerprintRequestedMasterJournalRepairLeaves } from "./master-journal-repair-evidence.js";
 
 // Master-only journal authority. A legacy journal remains authoritative until
@@ -50,7 +51,7 @@ export async function unsealMasterJournalRecord(serialized, kind) {
 async function optionalDirectory(master) {
   try { return await master.getDirectoryHandle(DIRECTORY); }
   catch (error) {
-    if (error?.name === "NotFoundError") return null;
+    if (isMissingMasterJournalHandle(error)) return null;
     throw error;
   }
 }
@@ -58,7 +59,7 @@ async function optionalDirectory(master) {
 async function optionalFile(directory, name) {
   try { return await directory.getFileHandle(name); }
   catch (error) {
-    if (error?.name === "NotFoundError") return null;
+    if (isMissingMasterJournalHandle(error)) return null;
     throw error;
   }
 }

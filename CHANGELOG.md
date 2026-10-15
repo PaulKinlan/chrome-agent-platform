@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.687] — 2026-10-15
+- Prevent deleted memory entries from reappearing after a storage removal failure.
+
 ### Unreleased design note — master journal WAL (writer disabled)
 - The planned WAL retains the master-journal archive as an append-only history log, not a set of current rows. Undoing a guarded append removes its forbidden row from the live journal but retains its earlier eviction as historical residue, including after compaction. This is intentional, tested, and not a shipped writer change; no archive retraction is promised.
 
