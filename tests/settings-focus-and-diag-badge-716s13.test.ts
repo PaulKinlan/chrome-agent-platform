@@ -386,35 +386,41 @@ Deno.test({
       );
 
       // Wait for keyless diagnostic entry to land in background buffer
-      for (let i = 0; i < 40; i++) {
-        const entriesCount = await cdp.eval(
+      let keylessEntries = [];
+      for (let i = 0; i < 50; i++) {
+        keylessEntries = await cdp.eval(
           page.sessionId,
           `new Promise((resolve) => {
             chrome.runtime.sendMessage({ type: 'diagnostics.list' }, (res) => {
-              resolve(res?.entries?.length || 0);
+              resolve(res?.entries || []);
             });
           })`,
         );
-        if (entriesCount > 0) break;
+        if (keylessEntries && keylessEntries.length > 0) break;
         await new Promise((r) => setTimeout(r, 200));
       }
 
-      // Wait for badge count to settle to '0'
-      let diagAfterKeyless;
-      for (let i = 0; i < 40; i++) {
-        diagAfterKeyless = await cdp.eval(
-          page.sessionId,
-          `(() => {
-            const d = document.getElementById('diagnostics-panel');
-            return {
-              badgeCount: d?.getAttribute('count'),
-              hasAttention: d?.hasAttribute('attention')
-            };
-          })()`,
-        );
-        if (diagAfterKeyless?.badgeCount === "0") break;
-        await new Promise((r) => setTimeout(r, 150));
-      }
+      assert(
+        keylessEntries.length > 0,
+        "keyless run must produce at least one diagnostic entry in the background buffer",
+      );
+
+      // Explicitly await badge refresh with the updated entries buffer
+      await cdp.eval(
+        page.sessionId,
+        `import('/shared/diagnostics-client.js').then((m) => m.refreshDiagnostics())`,
+      );
+
+      const diagAfterKeyless = await cdp.eval(
+        page.sessionId,
+        `(() => {
+          const d = document.getElementById('diagnostics-panel');
+          return {
+            badgeCount: d?.getAttribute('count'),
+            hasAttention: d?.hasAttribute('attention')
+          };
+        })()`,
+      );
 
       assertEquals(
         diagAfterKeyless.badgeCount,
