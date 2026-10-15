@@ -33,10 +33,9 @@ import {
   mayResolveApproval,
   stageApprovalDetail,
 } from "../extension/lib/owner-approval.js";
-// The BUILT diff bundle (jsdiff): the consumers never resolve the bare "diff"
-// specifier from source, so the test computes the reference counts through the
-// same build the extension ships (run `npm run build` first).
-import { structuredPatch } from "../extension/dist/shared/diff-core.bundle.js";
+// The diff-core SOURCE seam (jsdiff wrapper): importing from source rather than
+// the built bundle keeps the security suite bundle-free for FAST gate omission (chrome-agent-platform-omsz9).
+import { structuredPatch } from "../extension/shared/diff-core.js";
 import { isExactOptionsSender, SETTINGS_SECTIONS } from "../extension/lib/pure.js";
 import { scrubEventDetail } from "../extension/lib/diagnostics.js";
 import {

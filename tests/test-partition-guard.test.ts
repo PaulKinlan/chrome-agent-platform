@@ -176,13 +176,13 @@ Deno.test("partition guard: SERIAL membership is pinned with reasons and exists 
 
 // Pinned literal list of reviewed READ_ONLY_DIST files (P1a: 323kf).
 // Prevents silent removal of readers from the post-build batch.
+// Note: tests/owner-approval-security.test.ts moved to diff-core SOURCE seam (chrome-agent-platform-omsz9).
 const EXPECTED_READ_ONLY_DIST = [
   "tests/diff-core.test.ts",
   "tests/wasm-tree-shaking.test.ts",
   "tests/bundle-budget.test.ts",
   "tests/bundled-tool-packages.test.ts",
   "tests/tool-exec-preview.test.ts",
-  "tests/owner-approval-security.test.ts",
 ];
 
 Deno.test("partition guard: READ_ONLY_DIST membership is pinned with reasons, exists on disk, and is disjoint from SERIAL", async () => {
@@ -192,7 +192,7 @@ Deno.test("partition guard: READ_ONLY_DIST membership is pinned with reasons, ex
     "READ_ONLY_DIST must match the reviewed pinned list of read-only dist consumers",
   );
   assertEquals(new Set(Object.keys(READ_ONLY_DIST_REASONS)), READ_ONLY_DIST, "READ_ONLY_DIST is exactly the reasoned set");
-  assert(READ_ONLY_DIST.size === 6, "READ_ONLY_DIST must contain exactly 6 reviewed files");
+  assert(READ_ONLY_DIST.size === 5, "READ_ONLY_DIST must contain exactly 5 reviewed files");
   for (const [rel, reason] of Object.entries(READ_ONLY_DIST_REASONS)) {
     assert(reason.trim().length > 0, `${rel}: every read-only dist entry states why it runs in the post-build batch`);
     const st = await Deno.stat(`${ROOT}${rel}`).catch(() => null);
