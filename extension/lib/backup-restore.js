@@ -7,6 +7,8 @@
 
 import { decodeTarStream } from "./tar-stream.js";
 import { newId, sleep } from "./pure.js";
+import { validateStagedMasterJournalBackup } from "./master-journal-backup.js";
+import { withMasterJournalWebLock } from "./master-journal-lock.js";
 import {
   createOpfsAdapter,
   createChromeAlarmsAdapter,
@@ -28,6 +30,7 @@ const RESTORE_RECOVERY_ALARM = "cap-restore-recovery-alarm";
 const INTERNAL_RESTORE_KEYS = new Set([
   IMPORT_SIDECAR_KEY,
   RESTORE_FENCE_KEY,
+  "cap:masterJournalCutoverFence", // owner-local coordination, never imported from a backup
   RESTORE_HEARTBEAT_KEY,
   RESTORE_CLAIM_KEY,
   RESTORE_INVALIDATION_KEY,
@@ -247,7 +250,7 @@ export async function streamRestoreArchive({
 
     // 2. Self-heal first: recover any truly abandoned crashed import BEFORE acquiring new claim
     try {
-      await recoverPendingImport(backends);
+      await withMasterJournalWebLock(() => recoverPendingImport(backends));
     } catch (healErr) {
       throw new Error(`Self-heal rollback failed: ${healErr?.message || healErr}`);
     }
@@ -401,6 +404,10 @@ export async function streamRestoreArchive({
     if (typeof counts.opfsFiles === "number" && counts.opfsFiles !== stagedEntries.length) {
       throw new Error(`Invalid backup archive: manifest opfsFiles mismatch (${counts.opfsFiles} vs ${stagedEntries.length})`);
     }
+    // A raw WAL archive is a unit: reject torn heads, absent dependencies and
+    // unpublished frames BEFORE owner confirmation or any live-file mutation.
+    // Legacy profiles (no WAL records) retain their existing import path.
+    await validateStagedMasterJournalBackup(stagedEntries, opfs?.readFile?.bind(opfs));
   } catch (err) {
     if (typeof opfs?.removeDirectory === "function") {
       await opfs.removeDirectory(stagingDir, { recursive: true }).catch(() => {});
@@ -518,7 +525,22 @@ export async function streamRestoreArchive({
         await chrome.runtime.sendMessage({ type: "restore.quiesce" }).catch(() => {});
       } catch { /* best-effort quiesce message */ }
     }
+  } catch (earlyErr) {
+    if (typeof onRollback === "function") {
+      try { await onRollback(); } catch { /* best-effort invalidation */ }
+    }
+    await cleanupOnBackupFailure();
+    if (typeof opfs?.removeFile === "function") {
+      for (const entry of stagedEntries) await opfs.removeFile(entry.stagedPath).catch(() => {});
+    }
+    throw earlyErr;
+  }
 
+  // Confirmation and quiescence may await the owner/worker; acquiring the
+  // master lock before them risks deadlock. Snapshot, live swap, rollback and
+  // invalidation execute under one lock after those waits finish.
+  return await withMasterJournalWebLock(async () => {
+  try {
     existingAlarms = (alarms && typeof alarms.getAll === "function")
       ? (await alarms.getAll()).filter((a) => a && a.name !== RESTORE_RECOVERY_ALARM)
       : [];
@@ -905,6 +927,7 @@ export async function streamRestoreArchive({
     report: { restored: summary },
     restored: summary,
   };
+  });
 } finally {
   if (restoreHeartbeatTimer) clearInterval(restoreHeartbeatTimer);
   if (!committed && typeof kvGet === "function" && typeof kvRemove === "function") {

@@ -1,0 +1,94 @@
+// Read-only, bounded owner diagnostic. A historical head can be checked in
+// isolation without becoming authority. Product readers MUST still use the
+// strict combined-head projection; this module offers no repair publisher.
+import { snapshotMasterJournalRepairEvidence } from "./master-journal-owner-inspection.js";
+import {
+  readMasterJournalArchiveChain,
+  readMasterJournalProjection,
+  unsealMasterJournalRecord,
+} from "./master-journal-wal.js";
+
+const HEADS = ["head-a.json", "head-b.json"];
+const INTENT = /^repair-intent-([1-9]\d*)\.json$/;
+
+function absent(name) {
+  return new DOMException(`master journal diagnostic ${name} is absent`, "NotFoundError");
+}
+
+/** Caller holds the master Web Lock for a stable evidence snapshot. No bytes,
+ * actionable quarantine list or authority selection leave this diagnostic.
+ * At most 1024 WAL leaves / 16 MiB total by default; explicit bounded limits
+ * may be tighter or admit up to 4096 leaves. */
+export async function inspectIntactMasterJournalPrefixesForOwner(master, evidenceLimits = {}) {
+  const evidence = await snapshotMasterJournalRepairEvidence(master, evidenceLimits);
+  const base = { actionable: false, authoritySelected: false, candidates: [], heads: [],
+    highestVerifiedHistoricalPrefix: null };
+  if (evidence.state === "inspection_refused") {
+    return { ...base, state: "inspection_refused", reason: evidence.refusals[0] };
+  }
+  let directory;
+  try { directory = await master.getDirectoryHandle("journal-wal"); }
+  catch (error) {
+    if (error?.name === "NotFoundError") return { ...base, state: "wal_absent" };
+    return { ...base, state: "inspection_refused", reason: String(error?.message ?? error) };
+  }
+  const heads = [];
+  for (const slot of HEADS) {
+    let handle;
+    try { handle = await directory.getFileHandle(slot); }
+    catch (error) {
+      heads.push({ slot, checked: false, reason: error?.name === "NotFoundError" ? "absent" : "unreadable" });
+      continue;
+    }
+    try {
+      const file = await handle.getFile();
+      if (file.size > 65536) throw new Error("head exceeds owner diagnostic byte bound");
+      const bytes = await file.arrayBuffer();
+      const sha256 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+        .map((value) => value.toString(16).padStart(2, "0")).join("");
+      if (sha256 !== evidence.records.find((record) => record.name === slot)?.sha256) {
+        throw new Error("head changed after bounded owner evidence snapshot");
+      }
+      const selected = await unsealMasterJournalRecord(bytes, "head");
+      const repairThrough = selected.repairIntentSequence ?? 0;
+      const historicalDirectory = {
+        async getFileHandle(name) {
+          if (name === HEADS[0]) return handle;
+          if (name === HEADS[1]) throw absent(name);
+          const intent = INTENT.exec(name);
+          if (intent && Number(intent[1]) > repairThrough) throw absent(name);
+          return directory.getFileHandle(name);
+        },
+      };
+      const historicalMaster = {
+        async getDirectoryHandle(name) {
+          if (name !== "journal-wal") throw absent(name);
+          return historicalDirectory;
+        },
+      };
+      const projection = await readMasterJournalProjection(historicalMaster);
+      if (!projection) throw new Error("diagnostic head is absent");
+      const archive = await readMasterJournalArchiveChain(historicalMaster, projection.head,
+        { includeRows: false });
+      heads.push({ slot, checked: true, sha256, epoch: projection.head.epoch,
+        sequence: projection.head.sequence, version: projection.head.version,
+        checkpointSequence: projection.head.checkpointSequence,
+        archiveSegments: archive.names.length });
+    } catch (error) {
+      heads.push({ slot, checked: false, reason: String(error?.message ?? error) });
+    }
+  }
+  const checked = heads.filter((entry) => entry.checked);
+  let highestVerifiedHistoricalPrefix = null;
+  if (checked.length === 1) {
+    highestVerifiedHistoricalPrefix = checked[0];
+  } else if (checked.length === 2) {
+    const [older, newer] = checked.sort((a, b) => a.sequence - b.sequence);
+    // Never manufacture an ordering between a fork/equal slots. An intact
+    // historical prefix is NOT an acknowledgement or repair authorization.
+    if (older.epoch === newer.epoch && newer.sequence === older.sequence + 1 &&
+        newer.version > older.version) highestVerifiedHistoricalPrefix = newer;
+  }
+  return { ...base, state: "historical_prefix_diagnostic", heads,
+    highestVerifiedHistoricalPrefix };
+}

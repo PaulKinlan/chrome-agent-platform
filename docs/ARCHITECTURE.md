@@ -511,6 +511,241 @@ stricter marker-before-removal GC in `opfs-tool-workspace.js` is the
 unwired successor — §1.5.) Run-log compaction runs from terminal commits,
 never timers (docs/DURABLE-RUN-ARCHITECTURE.md §"OPFS records").
 
+**Journal-scoped export consistency (jw7wf workstream):** Master-store writes
+share the cross-context `cap:master-journal` Web Lock with the owner Options
+streaming export (held from raw file inventory through the final TAR byte) and
+the legacy service-worker buffered export. The legacy append, receipt
+compensation and cancellation paths now hold ONE master lock across their
+compound snapshot/archive/live commit/guard/CAS operations. Clean guard
+failures CAS-compensate archived overflow using its exact version; re-enrollment
+deletes rather than restoring old archive secrets. This still is NOT a unified
+WAL transaction: a failed/ambiguous legacy journal-file close lacks a reliable
+write receipt, and a power loss between the two legacy files is not atomic. The journal's checkpoint, head,
+frames and archive must travel as one coherent generation once its WAL writer
+is enabled. The target registry now recognizes exact master-only WAL record
+names. Restore now validates both checked heads and their referenced records
+as one archive-staged generation before owner confirmation, refusing torn or
+unpublished WAL leaves; legacy backups with no WAL remain accepted. Streaming
+and buffered exports now select only files referenced by checked head slots,
+excluding unpublished WAL residue and stale legacy journal values while the
+master Web Lock is held. Both buffered and streamed import paths now reject
+incomplete WAL generations; the legacy buffered service-worker import takes
+`cap:restoreLock` then the master Web Lock around recovery, swap and rollback.
+Options streaming restore now takes `cap:restoreLock` first, validates the
+staged generation, waits for owner confirmation and run quiescence WITHOUT the
+master lock, then holds that lock across the existing-file snapshot, live-file
+replacement, rollback and cache invalidation. A prior abandoned-import
+self-heal separately holds the master lock under `cap:restoreLock`. These lock
+fakes are not yet real-Chrome cross-context proof; neither import prevalidation
+nor filtered export alone is a complete backup/restore safety proof. Future WAL
+compaction must retain every dependency referenced by EITHER head slot until
+both slots have published and readback-verified the new checkpoint; then it
+may retire the superseded frames. Export selects both chains, and restore
+refuses a missing dependency in either, so early frame deletion is a hard red.
+The disabled-writer cutover codec now splits a legacy unbounded archive into
+immutable checked segments of at most 500 whole rows. A constant-size head
+binds the exact checkpoint and terminal segment bytes; each segment hashes its
+predecessor. Both raw backup selectors walk all reachable segments, rejecting
+missing or changed interiors and excluding unpublished residue. The disabled-
+writer codec now folds at most 128 immutable frames into a checked <=500-row
+checkpoint plus one bounded archive segment, then publishes the new head last.
+The other head's dependencies stay reachable for export until that slot also
+advances. Clear resets the chain at the next unused segment index with an
+explicit reset marker; contiguous predecessors cannot silently skip archived
+rows. A complete orphaned compaction segment/checkpoint may be reused only
+when its checked canonical bytes equal a freshly derived payload from the
+validated current head's checkpoint, frame range and archive chain, and the
+caller supplies an exact checkpoint+source-specific durable issuance witness
+for its generation (a global issued-version floor is insufficient); reuse is
+logged. The staged issuer writes a checked `claim-<epoch>-<sequence>.json`
+record after durable version issuance and BEFORE derived compaction records.
+A complete matching claim can be adopted across a restart; torn, changed or
+unwitnessed claims refuse. Claims are retry evidence, not journal authority:
+raw export excludes them after head publication, and an imported published
+checkpoint needs no old claim. The staged issuer retires a claim only after
+both checked head slots advance past its checkpoint. Retirement failure after
+head publication cannot turn an acknowledged append into an apparent failure;
+the next append retries retirement before mutation and refuses if it fails.
+The claim self-asserts its issued version and checks it against the durable
+global generation floor. This detects accidental corruption, not an OPFS
+writer that re-seals a modified claim: without a staged checkpoint, that floor
+cannot independently bind a token to a request. No cryptographic attestation
+against a malicious local OPFS writer is claimed. Product wiring of this
+issuer remains disabled. A staged `withMasterJournalIssuer()` callback now
+binds the real on-disk master `__gen.json` issuer and its uncached witness
+under the existing master Web Lock. Issuance always rereads `__gen.json` under
+that lock: a SW or Options writer cannot overwrite another realm's token with
+a stale JS cache. A generation observation outside the master Web Lock is
+not a CAS precondition. Non-master stores do not acquire this cross-context
+lock; uncached reads alone cannot serialize their concurrent issuers. A
+missing generation file after cutover refuses instead of bootstrapping from
+stale legacy rows; a generation behind the checked WAL head or a torn file
+also refuses. This callback
+is not a product write route and does not enable cutover. Master store
+transactions also expose staged receipt/compensation/cancellation WAL verbs
+using the lock they already hold; they never nest a second Web Lock. Staged
+`frameIfCurrent` prepares exact-epoch/version-checked replace/delete/clear
+frames for future direct store routes. The separate staged `clearIfCurrent`
+checks the same head tokens, publishes a clear-reset frame first, then removes
+non-WAL master keys with fresh tombstones while retaining `journal-wal/` and
+`__gen.json`; each successful strict-path key unlink receives its own
+persisted generation tombstone before the next removal, so a later removal
+failure cannot make earlier versions revert to derived negative absence.
+Failure issuing that tombstone after an unlink still requires explicit owner
+repair; interruption is not a whole-profile atomic clear. Product
+`masterMemory().clear()` still refuses on a WAL head. Staged `append` shares the same pre/post-
+guard publication and live undo as receipt append without inventing an
+execution ID for ordinary rows; exact replay identity is optional and checked
+when supplied. Neither is invoked by a product journal writer while the
+one-authority cutover is incomplete. A separate test-only
+`createStagedMasterJournalProductRoutes` maps the existing append, receipt,
+replay, compensation and cancellation call signatures onto these transaction
+verbs and requires a checked published head. It does not import into any
+product caller: a head restored from a backup must still NOT turn on partial
+product writes. Site/agent/background journal calls remain legacy. Sibling WAL
+verbs and master key mutations within one transaction serialize, because
+the outer lock excludes other transactions but not concurrent promises in the
+same callback. A guard must not await ANY promise from its transaction, even
+one that was queued earlier, or it can wait on itself. Guards may read KV or
+storage, but must not request a master write or journal read. Because the
+browser cannot identify an async guard caller, the adapter refuses every
+transaction operation invoked WHILE a guard is in flight, including an
+unrelated sibling; callers should await guarded writes before issuing the
+next transaction operation. Raw `masterMemory()` writes in a guard still
+re-enter the non-reentrant lock and are forbidden. No product journal verb
+calls the adapter yet: master append and cancellation refuse immediately when
+a checked head exists; a legacy-shape compensation receipt returns an explicit
+`legacy_receipt_after_cutover` preservation refusal rather than appearing to
+undo a row on the wrong authority. A WAL-shaped receipt likewise returns
+`master_wal_writer_disabled` until every product route is migrated. A staged
+`durableRuns.withMasterJournalCutoverFence` holds the registry write chain
+through a future publication callback and refuses active writers, pending
+master outboxes, unreadable registry entries and master cancel-requested
+records. Its callback has no product caller. The lock-free writer count alone
+is insufficient: quota rollback retires its writer before compensating a
+legacy receipt but holds the registry write chain throughout. Any future
+owner cutover additionally requires quiescence before the master Web Lock
+and every product writer route enabled atomically with publication. A
+separate `cap:masterJournalCutoverFence` key is now checked at run admission,
+scheduled-task admission, and `register-task`; a present but malformed key
+refuses too. Unlike `cap:restoreFence`, boot recovery does not auto-clear it,
+and backups exclude it. No product code arms/disarms this owner fence yet.
+Factory reset now holds `cap:restoreLock`, the SW enrollment/audit/consent
+barriers, and then `cap:master-journal` around its wipe; a future SW cutover
+must take those locks in compatible order. No cutover is published by these
+staged gates. Even the Deno-only unregistered-store test seam reads the physical head when a
+wrapped master store has no transaction facade. Torn, non-equal or source-mismatched
+immutable records, damaged head slots, and pre-head cutover residue (a
+nonempty WAL directory with no published head) remain fail-closed until
+explicit owner repair; none selects the stale legacy journal automatically.
+A staged checked `repair-intent-<sequence>.json` witness makes head absence or an
+unmatched/torn head refuse even when legacy bytes exist. Logical discharge
+requires a sealed selected head binding its exact intent ID; the witness
+bytes remain append-only, and frame rotation/compaction retain that binding.
+The staged lock-scoped `stageMasterJournalRepairIntent` seals each immutable
+`repair-intent-<sequence>.json` witness and refuses a torn/pending exact retry.
+A re-repair may append a fresh ID only after the previous intent is discharged;
+the newer file blocks the older signed head immediately, and its eventual
+selected head must advance the previous checked epoch's sequence/version.
+Both present head slots are checked against their own historical exact witness
+IDs; a forged older slot cannot hide behind a valid newer slot.
+Each immutable witness stores the exact pre-issuance bounded evidence SHA-256
+and any explicitly requested WAL leaf names/sizes/digests, rechecked under the
+master lock. Bounded byte collection and requested-leaf hashing live in
+`master-journal-repair-evidence.js`, which imports no WAL reader: WAL issuance
+imports only this collector while owner inspection layers strict projection
+checks on top, avoiding a WAL↔owner-inspection ESM cycle. The re-read prevents
+cooperating master-lock writers from changing evidence between owner observation
+and intent issuance; it is not a power-loss guarantee, a lock of unrelated
+profile storage, or a defense against code that bypasses the master lock.
+`fingerprintRequestedMasterJournalRepairLeaves` only returns forensic evidence; it does NOT decide that any leaf can be quarantined or that
+an owner approved moving it. `deriveMasterJournalQuarantineManifest` only
+maps the checked requested names/digests to collision-resistant immutable
+quarantine leaf names and a manifest hash; it copies no bytes. A witness with
+ANY requested leaves remains fail-closed even under an exact-ID signed head
+until checked quarantine copies, head binding and backup retention are
+implemented together. The **test fixture** in
+`tests/fixtures/master-journal-quarantine-copy.js` models an append-only
+source-equal raw copy and a bounded read-only retention inspection, including
+torn-copy retry refusal and unbound-leaf detection. This fixture is deliberately
+outside the extension: it cannot be imported by a product route without a
+visible new product change. No real owner publisher or product byte-copy/export
+exists. Backup export/import still refuse quarantine; Paul's arbitrary-secrets
+export policy must be ruled before any production quarantine byte-copy path.
+Witnesses remain append-only (bounded to 32 per profile). The exact intent
+leaf grammar now participates in backup export/import: both head slots retain
+their own witness-prefix dependencies, a pending newer OR skipped orphan
+intent refuses export rather than disappearing, and an import missing an older
+signed witness refuses. No product route
+approves a repair head. The reserved flat `quarantine-<intent-sequence>-<sha256>.json`
+WAL-root grammar is recognized but export AND restore deliberately refuse any
+such file until an owner-approved head binds its exact retention manifest;
+there is no quarantine writer, and no owner repair is enabled. Production WAL writes are still OFF. The read-only `inspectMasterJournalForOwner` helper classifies empty/absent WAL,
+pre-head/torn repair needs, or a checked *current* projection and archive
+chain, without switching authority or editing any record. The separate
+`snapshotMasterJournalRepairEvidence` lists bounded WAL names, sizes and
+SHA-256 digests plus digest-only metadata for legacy journal/archive files
+for owner inspection (at most 1024 WAL leaves by default, 8 MiB per file and
+16 MiB combined; an explicit bounded count can raise the leaf cap to 4096), but emits NO actionable quarantine candidates.
+`fingerprintMasterJournalRepairEvidence` hashes this bounded manifest plus
+legacy fingerprints and WAL-directory presence, distinguishing absent from
+present-empty. The test-only repair-intent issuer requires this exact expected
+fingerprint and rereads under the caller's master lock before creating WAL
+evidence; a changed source refuses without creating the WAL directory. It is
+an inspection identity, NOT owner approval or a product CAS.
+The separate `inspectIntactMasterJournalPrefixesForOwner` can replay each head
+slot independently behind those evidence bounds (an explicit owner call may
+raise the leaf count within the hard cap), including an older intact prefix
+beside a torn latest slot; each checked slot binds the SHA-256 of its
+snapshot bytes. It may identify the highest verified *historical* prefix
+only when ordering is unambiguous; equal/forked slots produce no tip. It
+never selects authority or a republish candidate. No intact slot means no
+prefix to publish.
+Oversized or
+unclassified leaves refuse the manifest; its unlocked hashes are not a
+durable removal CAS. Neither helper replays an older head slot, performs
+full backup validation, quarantine, or repair; those remain owner-gated work. Archive rows are an append-only HISTORY LOG,
+not a set of currently evicted rows: a compensated
+row may legitimately exist in both live and archive. Readers must not infer
+live state from archive history. On a post-commit guard failure, a replace or
+delete frame removes the forbidden appended row from live, but its already
+recorded eviction remains in pending overflow or the sealed archive as
+historical residue; no tombstone or retract operation exists in this bead.
+A cancellation's bounded replace frame can carry at most one checked oldest
+live-row eviction, atomically updating live and pending archive history with
+one head publication; unrelated replace/delete frames do not retract history.
+The staged receipt records an `epoch:sequence` operation coordinate and
+validates that coordinate's shape before compensation. It is descriptive,
+not a cryptographic frame proof: exact epoch/version CAS plus the checked
+projection and live-ring suffix lineage are the actual compensation authority.
+The frame grammar still needs exact receipt, CAS and cancellation evidence
+before enabling mutation; physical power-loss
+recovery, real Chrome cross-context proof and safe on-disk retirement also
+remain outstanding.
+Generic model-facing `memory.set` can no longer replace master `journal` or
+`journal-archive`, including on legacy profiles: both are reserved authority
+keys. The `journal-wal` stem and `journal-wal/quarantine/` namespace are also
+reserved from generic master memory writes before any quarantine publisher is
+implemented. A product caller census found no legitimate literal `.set("journal")`
+or `.set("journal-archive")` call; trusted append and compensation use
+`setTrusted` and dedicated verbs. This user-visible tightening does not
+implicitly enable the WAL writer or create a generic model WAL replace route.
+Generic `memory.clear({origin:"master"})` likewise REFUSES once a WAL head
+exists; only a future explicit owner/approval-gated reset under restoreLock,
+registry and master-journal fences may clear that authority. Staged
+`tx.masterJournal.clearIfCurrent` is not a product clear route.
+Before a checked head exists, legacy `journal.json` remains authoritative.
+After a checked cutover (including a restored WAL bundle), master journal and
+archive reads, snapshots, versions and key enumeration use its projection;
+legacy writes/CAS/delete/master-clear REFUSE rather than shadowing that head.
+The production WAL mutation path is still DISABLED, so this is a deliberately
+non-shippable intermediate state. This lock does **not** make the entire
+profile a point-in-time snapshot: other store writers retain their existing semantics. The broader
+whole-profile consistency requirement is a separate follow-up, not a claim of
+this journal workstream. Within an actual extension context, a missing Web
+Locks API refuses unprotected master writes/exports; Deno storage fakes are
+the only fallback.
+
 **Backup & restore (implemented vs designed):**
 - **Shipped implementation** (`extension/lib/data-archive.js:104-105`): uses a
   monolithic in-memory JSON/Base64 archive bounded by legacy caps

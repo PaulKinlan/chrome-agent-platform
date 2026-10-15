@@ -50,6 +50,10 @@
 // possibly stale extras — loss-free, cleaned by the next import.
 
 import { isManagedRedactedTarget, sanitizeRedactedTargetText } from "./logical-site-agent-config.js";
+import {
+  selectPublishedMasterJournalBackupPaths,
+  validateStagedMasterJournalBackup,
+} from "./master-journal-backup.js";
 
 const ENCODER = new TextEncoder();
 const FATAL_DECODER = new TextDecoder("utf-8", { fatal: true });
@@ -147,6 +151,7 @@ const EPHEMERAL_KV_KEYS = new Set([
   "cap:webmcpSnapshotGate",
   "cap:importBackup",
   "cap:restoreFence",
+  "cap:masterJournalCutoverFence",
   "cap:restoreHeartbeat",
   "cap:restoreClaim",
   "cap:invalidationPending",
@@ -363,7 +368,11 @@ export async function collectExportData({ kvGet, opfs, alarms, maxOpfsFiles = MA
 
   const files = [];
   let totalBytes = 0;
-  for (const path of await opfs.listFiles()) {
+  const paths = await selectPublishedMasterJournalBackupPaths(await opfs.listFiles(), async (path) => {
+    const bytes = await opfs.readFile(path);
+    return { size: bytes.byteLength, stream: new Blob([bytes]).stream() };
+  });
+  for (const path of paths) {
     if (isExcludedOpfsPath(path)) continue;
     let bytes = await opfs.readFile(path);
     if (isManagedRedactedTarget(path)) {
@@ -749,6 +758,15 @@ export async function importArchive(bundleText, { kvGet, kvSet, kvRemove, opfs, 
   // journal — restore the original profile before anything else reads it.
   const backends = { kvGet, kvSet, kvRemove, opfs, alarms };
   await recoverPendingImport(backends);
+
+  // Legacy buffered imports and streaming imports share the WAL generation
+  // validator. After any pending self-heal, refuse a torn or incomplete WAL
+  // bundle before touching the live profile for THIS import.
+  const byPath = new Map(parsed.opfs.map((entry) => [entry.path, entry._bytes]));
+  await validateStagedMasterJournalBackup(
+    parsed.opfs.map((entry) => ({ relPath: entry.path, stagedPath: entry.path })),
+    async (path) => byPath.get(path),
+  );
 
   // Phase 1 — target state check BEFORE any mutation.
   const existingKv = (await kvGet(null)) || {};

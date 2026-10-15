@@ -2,14 +2,43 @@
 // (CAP-FB-20260823-FACTORY-RESET-01).
 // @ts-nocheck
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import {
   executeFactoryReset,
   enumerateStorageTargets,
   FACTORY_RESET_STORAGE_CLASSES,
+  withFactoryResetIsolation,
 } from "../extension/lib/factory-reset.js";
 import { kvGet, kvSet } from "../extension/lib/kv.js";
 import { loadFirstRunGuideState } from "../extension/lib/first-run-onboarding.js";
+
+Deno.test("owner factory reset drains audit and consent before the master lock around the wipe", async () => {
+  const held = [];
+  const entered = [];
+  const wrap = (name) => async (fn) => {
+    entered.push(name);
+    held.push(name);
+    try { return await fn(); } finally { held.pop(); }
+  };
+  const locks = { request: async (name, options, fn) => {
+    assertEquals(name, "cap:restoreLock");
+    assertEquals(options.mode, "exclusive");
+    return await wrap("restore")(() => fn({ name }));
+  } };
+  const result = await withFactoryResetIsolation(async () => {
+    assertEquals(held, ["restore", "enrollment", "audit", "consent", "master"]);
+    return "wiped";
+  }, { locks,
+    withEnrollmentLock: (fn) => wrap("enrollment")(() => wrap("audit")(() => wrap("consent")(fn))),
+    withMasterJournalWebLock: wrap("master"),
+  });
+  assertEquals(result, "wiped");
+  assertEquals(entered, ["restore", "enrollment", "audit", "consent", "master"]);
+  assertEquals(held, []);
+  await assertRejects(() => withFactoryResetIsolation(async () => "unsafe", {
+    locks: null, withEnrollmentLock: wrap("enrollment"), withMasterJournalWebLock: wrap("master"),
+  }), Error, "restore Web Lock is unavailable");
+});
 
 // In-memory mock storage environments
 class MockDirectoryHandle {

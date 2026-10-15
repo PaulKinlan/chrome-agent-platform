@@ -7,8 +7,12 @@
 
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { createMemoryRunLogHandles } from "./fixtures/run-log-wal-memory.js";
-import { masterMemory, siteMemory, MemoryStoreQuotaError, usageLedgerInspector, saveScreenshot, listScreenshots, journalAppend, journalAppendWithReceipt, journalCompensateExecution, journalAppendOnce, journalCommitCancellation, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds, durableRunMemory, migrateLegacyDurableRunMemory, forgetDurableThread } from "../extension/lib/memory.js";
+import { stageMasterJournalCutover, stageMasterJournalFrame } from "../extension/lib/master-journal-wal.js";
+import { withMasterJournalWebLock } from "../extension/lib/master-journal-lock.js";
+import { createStagedMasterJournalProductRoutes } from "../extension/lib/master-journal-product-routes.js";
+import { masterMemory, siteMemory, MemoryStoreQuotaError, usageLedgerInspector, saveScreenshot, listScreenshots, journalAppend, journalAppendWithReceipt, journalCompensateExecution, journalAppendOnce, journalCommitCancellation, withStoreTransaction, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds, durableRunMemory, migrateLegacyDurableRunMemory, forgetDurableThread } from "../extension/lib/memory.js";
 import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
+import { createMemoryRoutes } from "../extension/background/routes/memory.js";
 import { createThread, deleteThread } from "../extension/lib/threads.js";
 
 // ---- minimal in-memory OPFS fake ----
@@ -24,6 +28,7 @@ function fileNode(content) {
 // setTrusted or the final file size. A 300-row whole-value rewrite is quadratic
 // even though journal.json ends at only ~300 rows; the WAL must remove this cost.
 let journalValueBytesWritten = 0;
+let generationWriteGate = null;
 class FakeWritable {
   constructor(node, name = "") {
     this.node = node;
@@ -31,6 +36,7 @@ class FakeWritable {
     this.parts = [];
   }
   async write(s) {
+    if (this.name === "__gen.json" && generationWriteGate) await generationWriteGate();
     const text = typeof s === "string" ? s : new TextDecoder().decode(s);
     this.parts.push(text);
     if (this.name === "journal.json") journalValueBytesWritten += new TextEncoder().encode(text).byteLength;
@@ -56,6 +62,9 @@ class FakeFileHandle {
       async text() {
         return node.content ?? "";
       },
+      async arrayBuffer() {
+        return new TextEncoder().encode(node.content ?? "").buffer;
+      },
     };
   }
   async createWritable() {
@@ -71,14 +80,14 @@ class FakeDirHandle {
   }
   async getDirectoryHandle(name, opts = {}) {
     if (!this.node.children.has(name)) {
-      if (!opts.create) throw new Error(`not found: ${name}`);
+      if (!opts.create) throw new DOMException(`not found: ${name}`, "NotFoundError");
       this.node.children.set(name, dirNode());
     }
     return new FakeDirHandle(this.node.children.get(name));
   }
   async getFileHandle(name, opts = {}) {
     if (!this.node.children.has(name)) {
-      if (!opts.create) throw new Error(`not found: ${name}`);
+      if (!opts.create) throw new DOMException(`not found: ${name}`, "NotFoundError");
       this.node.children.set(name, fileNode(""));
     }
     return new FakeFileHandle(this.node.children.get(name), name);
@@ -149,6 +158,206 @@ Deno.test("memory.has distinguishes a stored null from an absent key (round-22 n
   assertEquals(await mem.has(key), false, "deleted key must report has=false");
 });
 
+Deno.test("generic master memory cannot forge journal or archive while trusted append remains available", async () => {
+  const mem = masterMemory();
+  for (const key of ["journal", "journal-archive", "journal-wal", "journal-wal/quarantine/repair-attempt"]) {
+    await assertRejects(() => mem.set(key, [{ type: "forged" }]), Error, "reserved");
+  }
+  const site = siteMemory("https://journal-reservation.example");
+  await assertRejects(() => site.set("journal", [{ type: "forged" }]), Error, "reserved");
+  const legacy = await journalAppend(mem, { type: "note", message: "trusted route" });
+  assertEquals(legacy.at(-1).message, "trusted route",
+    "the generic master restriction must not disable the trusted legacy append before cutover");
+});
+
+Deno.test("master writes share the journal Web Lock; site stores keep their own lock", async () => {
+  const previous = navigator.locks;
+  const names = [];
+  navigator.locks = {
+    request: async (name, options, fn) => {
+      names.push({ name, mode: options.mode });
+      return await fn();
+    },
+  };
+  try {
+    await masterMemory().setTrusted("journal", []);
+    await siteMemory("https://journal-lock.example").set("site-key", "site-value");
+    assertEquals(names, [{ name: "cap:master-journal", mode: "exclusive" }]);
+  } finally {
+    if (previous === undefined) delete navigator.locks;
+    else navigator.locks = previous;
+  }
+});
+
+Deno.test("master journal append holds one non-reentrant cross-context lock across its transaction", async () => {
+  const mem = masterMemory();
+  await mem.setTrusted("journal", []);
+  const previous = navigator.locks;
+  const names = [];
+  let held = false;
+  navigator.locks = {
+    request: async (name, options, fn) => {
+      if (held) throw new Error("nested master journal Web Lock acquisition");
+      names.push({ name, mode: options.mode });
+      held = true;
+      try { return await fn(); } finally { held = false; }
+    },
+  };
+  try {
+    await journalAppend(mem, { type: "result", executionId: "exec-single-lock" });
+    assertEquals(names, [{ name: "cap:master-journal", mode: "exclusive" }]);
+    assertEquals((await mem.get("journal")).at(-1).executionId, "exec-single-lock");
+  } finally {
+    if (previous === undefined) delete navigator.locks;
+    else navigator.locks = previous;
+  }
+});
+
+Deno.test("owner export cannot interleave a master append between its snapshot and commit", async () => {
+  const mem = masterMemory();
+  await mem.setTrusted("journal", []);
+  const previous = navigator.locks;
+  let last = Promise.resolve();
+  navigator.locks = {
+    request: (_name, _options, fn) => {
+      const run = last.then(fn);
+      last = run.then(() => {}, () => {});
+      return run;
+    },
+  };
+  let enterGuard;
+  let releaseGuard;
+  const inGuard = new Promise((resolve) => { enterGuard = resolve; });
+  const proceed = new Promise((resolve) => { releaseGuard = resolve; });
+  try {
+    let calls = 0;
+    const append = journalAppend(mem, { executionId: "exec-export-no-interleave" }, async () => {
+      if (++calls === 1) { enterGuard(); await proceed; }
+    });
+    await inGuard;
+    let exportEntered = false;
+    const exportRead = withMasterJournalWebLock(async () => {
+      exportEntered = true;
+      return await mem.get("journal");
+    });
+    // Advance the promise queue without timing assumptions: an unrelated
+    // microtask cannot make a queued Web Lock enter until append releases it.
+    await Promise.resolve();
+    await Promise.resolve();
+    assertEquals(exportEntered, false);
+    releaseGuard();
+    await append;
+    const exported = await exportRead;
+    assertEquals(exported.at(-1).executionId, "exec-export-no-interleave");
+  } finally {
+    releaseGuard();
+    if (previous === undefined) delete navigator.locks;
+    else navigator.locks = previous;
+  }
+});
+
+Deno.test("master 500-row append plus failed guard compensates inside one non-reentrant lock", async () => {
+  const mem = masterMemory();
+  const seed = Array.from({ length: 500 }, (_, i) => ({ id: `single-lock-old-${i}` }));
+  await mem.setTrusted("journal", seed);
+  const previous = navigator.locks;
+  const names = [];
+  let held = false;
+  navigator.locks = {
+    request: async (name, options, fn) => {
+      if (held) throw new Error("nested master journal Web Lock acquisition");
+      names.push({ name, mode: options.mode });
+      held = true;
+      try { return await fn(); } finally { held = false; }
+    },
+  };
+  try {
+    let calls = 0;
+    await assertRejects(() => journalAppend(mem, { executionId: "exec-single-lock-compensation" }, async () => {
+      if (++calls > 1) throw new Error("ownership lost after commit");
+    }), Error, "ownership lost after commit");
+    assertEquals(names, [{ name: "cap:master-journal", mode: "exclusive" }]);
+    assertEquals(await mem.get("journal"), seed, "the ring eviction must be compensated exactly");
+  } finally {
+    if (previous === undefined) delete navigator.locks;
+    else navigator.locks = previous;
+  }
+});
+
+Deno.test("failed pre-commit append does not retain an absent archive overflow", async () => {
+  const mem = masterMemory();
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await mem.setTrusted("journal", seed);
+  await mem.delete("journal-archive");
+  await assertRejects(() => journalAppend(mem, { executionId: "exec-failed-precommit" }, async () => {
+    throw new Error("owner fence lost before commit");
+  }), Error, "owner fence lost before commit");
+  assertEquals(await mem.get("journal"), seed);
+  assertEquals(await mem.has("journal-archive"), false);
+});
+
+Deno.test("failed post-commit append restores a present-empty archive as well as the live ring", async () => {
+  const mem = masterMemory();
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await mem.setTrusted("journal", seed);
+  await mem.setTrusted("journal-archive", []);
+  let calls = 0;
+  await assertRejects(() => journalAppend(mem, { executionId: "exec-failed-postcommit" }, async () => {
+    if (++calls === 2) throw new Error("owner fence lost after commit");
+  }), Error, "owner fence lost after commit");
+  assertEquals(await mem.get("journal"), seed);
+  assertEquals(await mem.has("journal-archive"), true);
+  assertEquals(await mem.get("journal-archive"), []);
+});
+
+Deno.test("re-enrollment compensation deletes only its archived write, never restores old archive secrets", async () => {
+  const mem = masterMemory();
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await mem.setTrusted("journal", seed);
+  await mem.setTrusted("journal-archive", [{ text: "prior-enrollment-private" }]);
+  let calls = 0;
+  await assertRejects(() => journalAppend(mem, { executionId: "exec-reenrolled-overflow" }, async () => {
+    if (++calls === 2) throw Object.assign(new Error("re-enrolled"), { genMismatch: true });
+  }), Error, "re-enrolled");
+  assertEquals(await mem.has("journal"), false);
+  assertEquals(await mem.has("journal-archive"), false);
+});
+
+Deno.test("an escaped transaction facade cannot write after its master lock is released", async () => {
+  const mem = masterMemory();
+  let escaped;
+  await withStoreTransaction(mem, async (tx) => { escaped = tx; });
+  await assertRejects(async () => await escaped.setTrusted("journal", [{ id: "unlocked-write" }]), Error, "expired");
+  assertEquals(((await mem.get("journal")) ?? []).some((row) => row.id === "unlocked-write"), false);
+});
+
+Deno.test("master cancellation with archived overflow holds one cross-context lock", async () => {
+  const mem = masterMemory();
+  const seed = Array.from({ length: 500 }, (_, id) => ({ id }));
+  await mem.setTrusted("journal", seed);
+  const previous = navigator.locks;
+  const names = [];
+  let held = false;
+  navigator.locks = {
+    request: async (name, options, fn) => {
+      if (held) throw new Error("nested master journal Web Lock acquisition");
+      names.push({ name, mode: options.mode });
+      held = true;
+      try { return await fn(); } finally { held = false; }
+    },
+  };
+  try {
+    const rows = await journalCommitCancellation(mem, { result: "stopped" }, "exec-single-lock-cancel");
+    assertEquals(names, [{ name: "cap:master-journal", mode: "exclusive" }]);
+    assertEquals(rows.length, 500);
+    assertEquals(rows.at(-1).type, "cancelled");
+    assertEquals((await mem.get("journal-archive")).at(-1).id, 0);
+  } finally {
+    if (previous === undefined) delete navigator.locks;
+    else navigator.locks = previous;
+  }
+});
+
 Deno.test("journalAppendOnce commits exactly one terminal row per immutable executionId", async () => {
   const mem = masterMemory();
   await mem.delete("journal");
@@ -214,6 +423,128 @@ Deno.test("journalCommitCancellation replaces a partial result with one cancella
   assertEquals(rows.filter((row) => row.executionId === "exec-cancel-001").length, 1);
   assertEquals(rows[0].type, "cancelled");
   assertEquals(rows[0].cancelled, true);
+});
+
+Deno.test("master journal readers use a checked cutover rather than stale legacy values", async () => {
+  const mem = masterMemory();
+  const legacyVersion = await mem.setTrusted("journal", [{ id: "stale-legacy" }]);
+  const storage = new FakeDirHandle(root);
+  const memory = await storage.getDirectoryHandle("memory", { create: true });
+  const master = await memory.getDirectoryHandle("master", { create: true });
+  try {
+    await stageMasterJournalCutover(master, {
+      journalExists: true, journal: [{ id: "checked-wal" }], archive: [{ id: "archived" }],
+      allocateVersion: async () => legacyVersion + 1,
+    });
+    assertEquals(await mem.get("journal"), [{ id: "checked-wal" }]);
+    assertEquals(await mem.getStrict("journal"), [{ id: "checked-wal" }]);
+    assertEquals(await mem.has("journal"), true);
+    assertEquals(await mem.getVersion("journal"), legacyVersion + 1);
+    assertEquals(await mem.snapshot("journal"), {
+      exists: true, value: [{ id: "checked-wal" }], version: legacyVersion + 1,
+    });
+    assertEquals(await mem.getStrict("journal-archive"), [{ id: "archived" }]);
+    assertEquals((await mem.keys()).includes("journal"), true);
+    const oldReceipt = { schemaVersion: 1, key: "journal", executionId: "legacy-receipt",
+      preState: { exists: false, value: null, version: 0 },
+      postState: [{ id: "checked-wal" }], writeVersion: legacyVersion + 1, appended: true };
+    assertEquals((await journalCompensateExecution(mem, oldReceipt)).reason,
+      "legacy_receipt_after_cutover", "a legacy receipt must explicitly refuse on checked WAL authority");
+    // Deno's registered-transaction fallback accepts wrapped test stores.
+    // They must still inspect the physical master WAL, not treat the absent
+    // tx.masterJournal facade as evidence that legacy is authoritative.
+    const wrappedMaster = new Proxy(mem, { get(target, key) {
+      const value = target[key];
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+    assertEquals((await journalCompensateExecution(wrappedMaster, oldReceipt)).reason,
+      "legacy_receipt_after_cutover", "wrapped Deno stores cannot bypass checked WAL refusal");
+    await assertRejects(() => journalAppendWithReceipt(mem,
+      { type: "task", executionId: "wal-off" }), Error, "append refused");
+    await assertRejects(() => journalCommitCancellation(mem,
+      { type: "cancelled", executionId: "wal-off" }, "wal-off"), Error, "cancellation refused");
+    await assertRejects(() => mem.setTrusted("journal", [{ id: "must-not-shadow-wal" }]), Error, "WAL");
+    await assertRejects(() => mem.set("journal", [{ id: "untrusted-shadow" }]), Error, "reserved");
+    await assertRejects(() => mem.set("journal-archive", []), Error, "reserved");
+    await assertRejects(() => mem.setTrusted("journal-archive", []), Error, "WAL");
+    await assertRejects(() => mem.compareAndRestore("journal", legacyVersion + 1, []), Error, "WAL");
+    await assertRejects(() => mem.compareAndDelete("journal", legacyVersion + 1), Error, "WAL");
+    await assertRejects(() => mem.delete("journal"), Error, "WAL");
+    await assertRejects(() => mem.clear(), Error, "WAL");
+    const head = await (await master.getDirectoryHandle("journal-wal")).getFileHandle("head-a.json");
+    const published = head.node.content;
+    head.node.content = "{\"torn\":";
+    try {
+      for (const readOrMutation of [() => mem.get("journal"), () => mem.getStrict("journal"),
+        () => mem.has("journal"), () => mem.snapshot("journal"),
+        () => mem.getVersion("journal"), () => mem.keys(),
+        () => journalAppendWithReceipt(mem, { type: "task", executionId: "torn-writer" }),
+        () => journalCommitCancellation(mem, { type: "cancelled" }, "torn-writer"),
+        () => journalCompensateExecution(mem, oldReceipt)]) {
+        await assertRejects(readOrMutation, Error, "corrupt");
+      }
+    } finally {
+      head.node.content = published;
+    }
+    await master.removeEntry("journal-wal", { recursive: true });
+    await stageMasterJournalCutover(master, {
+      journalExists: false, journal: [], archiveExists: true, archive: [],
+      allocateVersion: async () => legacyVersion + 2,
+    });
+    assertEquals(await mem.get("journal"), null, "a stale legacy row cannot resurrect an absent WAL key");
+    assertEquals(await mem.getStrict("journal"), null);
+    assertEquals(await mem.has("journal"), false);
+    assertEquals(await mem.snapshot("journal"), { exists: false, value: null, version: legacyVersion + 2 });
+    assertEquals((await mem.keys()).includes("journal"), false);
+    assertEquals(await mem.has("journal-archive"), true, "present-empty archive stays distinct from absence");
+    assertEquals(await mem.getStrict("journal-archive"), []);
+    assertEquals((await mem.keys()).includes("journal-archive"), true);
+    await assertRejects(() => mem.delete("journal-archive"), Error, "WAL");
+  } finally {
+    await master.removeEntry("journal-wal", { recursive: true });
+  }
+  assertEquals(await mem.get("journal"), [{ id: "stale-legacy" }], "test fixture removal restores the old authority");
+});
+
+Deno.test("journal cancellation archives overflow and keeps the live 500-row boundary", async () => {
+  const mem = masterMemory();
+  const seed = Array.from({ length: 500 }, (_, i) => ({ ts: i, type: "history", id: `cancel-old-${i}` }));
+  await mem.setTrusted("journal", seed);
+  const rows = await journalCommitCancellation(mem, { result: "cancelled" }, "exec-cancel-overflow");
+  assertEquals(rows.length, 500);
+  assertEquals(rows[0].id, "cancel-old-1");
+  assertEquals(rows.at(-1).executionId, "exec-cancel-overflow");
+  const archive = await mem.get("journal-archive");
+  assertEquals(archive.at(-1).id, "cancel-old-0", "the evicted whole row must remain in the archive");
+});
+
+Deno.test("journal cancellation refuses a stale snapshot without erasing a foreign append", async () => {
+  const mem = masterMemory();
+  await mem.setTrusted("journal", [{ type: "history", id: "original" }]);
+  let injected = false;
+  const inject = async (value) => {
+    if (!injected) {
+      injected = true;
+      await mem.setTrusted("journal", [...value, { type: "foreign", id: "later" }]);
+    }
+  };
+  const racing = {
+    ...mem,
+    async snapshot(key) {
+      const state = await mem.snapshot(key);
+      if (key === "journal") await inject(state.value);
+      return state;
+    },
+    async get(key) {
+      const value = await mem.get(key);
+      if (key === "journal") await inject(value ?? []);
+      return value;
+    },
+  };
+  await assertRejects(() => journalCommitCancellation(racing, { result: "cancelled" }, "exec-cancel-race"), Error, "concurrent");
+  const rows = await mem.get("journal");
+  assertEquals(rows.map((row) => row.id), ["original", "later"]);
+  assertEquals(rows.some((row) => row.executionId === "exec-cancel-race"), false);
 });
 
 Deno.test("journalAppend compensation restores the EXACT pre-append state at the 500-entry cap (round-23)", async () => {
@@ -405,6 +736,7 @@ Deno.test("journal quota receipt restores absent vs empty and is idempotent", as
 Deno.test("journal quota compensation removes task/prompt rows and preserves foreign append + ring eviction", async () => {
   const mem = masterMemory();
   const seed = Array.from({ length: 500 }, (_, i) => ({ ts: i, type: "history", id: `old-${i}` }));
+  await mem.setTrusted("journal-archive", []);
   await mem.setTrusted("journal", seed);
   const receipt = await journalAppendWithReceipt(mem, { type: "task", executionId: "exec_receipt_rows", task: "x" });
   await journalAppend(mem, { type: "prompt-attestation", executionId: "exec_receipt_rows", receipt: "opaque" });
@@ -417,6 +749,8 @@ Deno.test("journal quota compensation removes task/prompt rows and preserves for
   assertEquals(rows.at(-1).executionId, "exec_foreign_later");
   assertEquals(rows.length, 500);
   assertEquals(rows[0].id, "old-1", "target eviction is restored; only the foreign append evicts old-0");
+  assertEquals((await mem.get("journal-archive")).map((row) => row.id), ["old-0", "old-1", "old-2", "old-3"],
+    "legacy archive is an append-only HISTORY LOG: compensation restores live rows without retracting prior evictions");
 });
 
 Deno.test("journal quota compensation fails closed on ABA and generation mismatch", async () => {
@@ -434,6 +768,431 @@ Deno.test("journal quota compensation fails closed on ABA and generation mismatc
   });
   assertEquals(generation.reason, "generation_mismatch");
   assertEquals((await mem.get("journal")).some((row) => row.executionId === fenced.executionId), true);
+});
+
+Deno.test("post-compensation fence undo CAS uses its actual issued token, not journal version plus one", async () => {
+  const mem = masterMemory();
+  await mem.setTrusted("journal", [{ id: "before" }]);
+  const receipt = await journalAppendWithReceipt(mem, { type: "task", executionId: "exec-undo-actual-token" });
+  await mem.setTrusted("other-key-before-compensation", { changed: true });
+  let calls = 0;
+  const result = await journalCompensateExecution(mem, receipt, async () => {
+    if (++calls === 3) throw new Error("ownership lost after compensation");
+  });
+  assertEquals(result.reason, "journal_fence_failed");
+  assertEquals(await mem.get("journal"), receipt.postState, "failed compensation must undo itself");
+});
+
+Deno.test("pre-head cutover residue refuses master readers and writes without legacy fallback", async () => {
+  const isolated = dirNode();
+  const previousNavigator = globalThis.navigator;
+  Object.defineProperty(globalThis, "navigator", {
+    value: { storage: { async getDirectory() { return new FakeDirHandle(isolated); } } },
+    configurable: true, writable: true,
+  });
+  try {
+    const mem = masterMemory();
+    await mem.setTrusted("journal", [{ id: "legacy" }]);
+    const master = await (await new FakeDirHandle(isolated).getDirectoryHandle("memory", { create: true }))
+      .getDirectoryHandle("master", { create: true });
+    const wal = await master.getDirectoryHandle("journal-wal", { create: true });
+    assertEquals(await mem.get("journal"), [{ id: "legacy" }],
+      "an empty WAL directory alone is not cutover evidence");
+    const checkpoint = await wal.getFileHandle("checkpoint-2-0.json", { create: true });
+    const writable = await checkpoint.createWritable();
+    await writable.write("{\"torn\":");
+    await writable.close();
+    for (const operation of [
+      () => mem.get("journal"), () => mem.getStrict("journal"), () => mem.keys(),
+      () => mem.setTrusted("journal", [{ id: "shadow" }]),
+      () => journalAppendWithReceipt(mem, { type: "task", executionId: "pre-head" }),
+    ]) {
+      await assertRejects(operation, Error, "pre-head residue");
+    }
+    assertEquals((await master.getFileHandle("journal.json")).node.content.includes("legacy"), true,
+      "the old bytes are preserved for owner repair, not selected as live authority");
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      value: previousNavigator, configurable: true, writable: true,
+    });
+  }
+});
+
+Deno.test("staged product journal verbs map receipts, idempotency, cancellation without enabling production", async () => {
+  const isolated = dirNode();
+  const previousNavigator = globalThis.navigator;
+  Object.defineProperty(globalThis, "navigator", {
+    value: { storage: { async getDirectory() { return new FakeDirHandle(isolated); } } },
+    configurable: true, writable: true,
+  });
+  try {
+    const mem = masterMemory();
+    const routes = createStagedMasterJournalProductRoutes(withStoreTransaction);
+    await mem.setTrusted("journal", [{ type: "history", id: "legacy" }]);
+    await assertRejects(() => routes.append(mem, { type: "note" }), Error, "published head");
+    assertEquals(await mem.get("journal"), [{ type: "history", id: "legacy" }],
+      "a staged route cannot cut over a legacy profile implicitly");
+    const site = siteMemory("https://example.test");
+    await assertRejects(() => routes.append(site, { type: "note" }), Error, "master store");
+    assertEquals((await journalAppend(site, { type: "site-note" })).at(-1).type, "site-note",
+      "site journals remain on the legacy authority");
+    const api = await import("../extension/lib/memory.js");
+    await api.withMasterJournalIssuer(async (master, issuer) => {
+      await stageMasterJournalCutover(master, { journalExists: true,
+        journal: [{ type: "history", id: "legacy" }], archive: [], allocateVersion: issuer.allocateVersion });
+    });
+    const ordinary = await routes.append(mem, { type: "note", message: "whole row" });
+    assertEquals(ordinary.at(-1).executionId, undefined, "ordinary rows do not invent execution IDs");
+    const receipt = await routes.appendWithReceipt(mem, { type: "task", executionId: "staged-quota" });
+    assertEquals(receipt.wal.operationId != null, true);
+    const legacyReceipt = { schemaVersion: 1, key: "journal", executionId: "staged-quota" };
+    await assertRejects(() => routes.compensate(mem, null), Error, "invalid journal compensation receipt");
+    assertEquals((await routes.compensate(mem, legacyReceipt)).reason, "legacy_receipt_after_cutover");
+    assertEquals((await routes.compensate(mem, receipt)).ok, true);
+    assertEquals((await mem.get("journal")).some((r) => r.executionId === "staged-quota"), false);
+    const first = await routes.appendOnce(mem, { type: "result", executionId: "staged-terminal", result: "first" });
+    const head = await withStoreTransaction(mem, async (tx) => tx.masterJournal.head());
+    const duplicate = await routes.appendOnce(mem, { type: "result", executionId: "staged-terminal", result: "second" });
+    assertEquals(duplicate, first);
+    assertEquals(await withStoreTransaction(mem, async (tx) => tx.masterJournal.head()), head,
+      "idempotent replay must not allocate another version");
+    const cancelled = await routes.cancel(mem, { type: "cancelled", executionId: "staged-terminal" });
+    assertEquals(cancelled.filter((r) => r.executionId === "staged-terminal").map((r) => r.type), ["cancelled"]);
+    await assertRejects(() => journalAppend(mem, { type: "still-disabled" }), Error, "WAL writer is not enabled");
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      value: previousNavigator, configurable: true, writable: true,
+    });
+  }
+});
+
+Deno.test("staged master clear preserves WAL authority and generation while product clear stays OFF", async () => {
+  const isolated = dirNode();
+  const previousNavigator = globalThis.navigator;
+  Object.defineProperty(globalThis, "navigator", {
+    value: { storage: { async getDirectory() { return new FakeDirHandle(isolated); } } },
+    configurable: true, writable: true,
+  });
+  try {
+    const api = await import("../extension/lib/memory.js");
+    const mem = api.masterMemory();
+    await mem.setTrusted("owner-key", { untouched: false });
+    await mem.setTrusted("journal", [{ type: "task", id: "before" }]);
+    await api.withMasterJournalIssuer(async (master, issuer) => {
+      await stageMasterJournalCutover(master, { journalExists: true,
+        journal: [{ type: "task", id: "before" }], archive: [{ type: "evicted", id: "history" }],
+        allocateVersion: issuer.allocateVersion });
+    });
+    const before = await withStoreTransaction(mem, async (tx) => await tx.masterJournal.head());
+    assertEquals((await mem.get("journal-archive"))[0]?.id, "history");
+    await assertRejects(() => mem.clear(), Error, "WAL writer is not enabled",
+      "a published test head must not silently enable the product clear path");
+    const routed = await createMemoryRoutes()["memory.clear"]({ origin: "master" });
+    assertEquals(routed.ok, false, "generic master clear must remain refused even through the real route");
+    assertEquals(routed.error.includes("WAL writer is not enabled"), true);
+    assertEquals((await mem.get("journal"))[0]?.id, "before");
+    generationWriteGate = async () => { throw new Error("injected clear issuance failure"); };
+    try {
+      await assertRejects(() => withStoreTransaction(mem, async (tx) =>
+        tx.masterJournal.clearIfCurrent({ expectedEpoch: before.epoch, expectedVersion: before.version })),
+      Error, "injected clear issuance failure");
+    } finally { generationWriteGate = null; }
+    assertEquals(await mem.get("owner-key"), { untouched: false },
+      "failed frame publication cannot remove unrelated master keys");
+    assertEquals(await withStoreTransaction(mem, async (tx) => tx.masterJournal.head()), before);
+    const cleared = await withStoreTransaction(mem, async (tx) => await tx.masterJournal.clearIfCurrent({
+      expectedEpoch: before.epoch, expectedVersion: before.version,
+    }));
+    assertEquals(cleared.ok, true);
+    assertEquals(cleared.head.sequence, before.sequence + 1);
+    assertEquals(await mem.has("journal"), false);
+    assertEquals(await mem.has("journal-archive"), false);
+    assertEquals(await mem.get("owner-key"), null);
+    assert((await mem.getVersion("owner-key")) > cleared.head.version,
+      "owner key gets a fresh tombstone after WAL clear, not a reused generation");
+    const after = await withStoreTransaction(mem, async (tx) => await tx.masterJournal.head());
+    assertEquals(after, cleared.head, "the checked WAL authority remains published");
+    const stale = await withStoreTransaction(mem, async (tx) => await tx.masterJournal.clearIfCurrent({
+      expectedEpoch: before.epoch, expectedVersion: before.version,
+    }));
+    assertEquals(stale.ok, false, "an old head cannot clear a newer generation");
+    assertEquals(await withStoreTransaction(mem, async (tx) => await tx.masterJournal.head()), after);
+    await mem.setTrusted("before-failure", { mustBeTombstoned: true });
+    await mem.setTrusted("owner-after", { keepUntilConfirmed: true });
+    const masterNode = isolated.children.get("memory").children.get("master");
+    const originalRemove = FakeDirHandle.prototype.removeEntry;
+    FakeDirHandle.prototype.removeEntry = async function (name, opts) {
+      if (this.node === masterNode && name === "owner-after.json") {
+        throw new Error("injected owner-key delete failure");
+      }
+      return await originalRemove.call(this, name, opts);
+    };
+    try {
+      await assertRejects(() => withStoreTransaction(mem, async (tx) =>
+        tx.masterJournal.clearIfCurrent({ expectedEpoch: after.epoch, expectedVersion: after.version })),
+      Error, "injected owner-key delete failure");
+    } finally { FakeDirHandle.prototype.removeEntry = originalRemove; }
+    const partial = await withStoreTransaction(mem, async (tx) => tx.masterJournal.head());
+    assertEquals(partial.sequence, after.sequence + 1,
+      "a published clear frame is not rolled back when a later key removal fails");
+    assertEquals(masterNode.children.has("owner-after.json"), true,
+      "the failed physical removal is reported, not mislabelled as an acknowledged clear");
+    assertEquals(await mem.has("before-failure"), false);
+    assert((await mem.getVersion("before-failure")) > partial.version,
+      "a deletion preceding the failure must retain a positive issued tombstone");
+    assertEquals(await mem.compareAndRestore("before-failure", 0, { stale: true }), false,
+      "negative absence already rejects stale expected-zero CAS; preserve that protection");
+    assertEquals(await mem.get("owner-after"), { keepUntilConfirmed: true },
+      "the failed physical removal must not expose a tombstoned live envelope");
+    const repaired = await withStoreTransaction(mem, async (tx) => tx.masterJournal.clearIfCurrent({
+      expectedEpoch: partial.epoch, expectedVersion: partial.version,
+    }));
+    assertEquals(repaired.ok, true, "an explicit retry at the new head can finish the partial clear");
+    assertEquals(await mem.get("owner-after"), null);
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      value: previousNavigator, configurable: true, writable: true,
+    });
+  }
+});
+
+Deno.test("staged master transaction exposes WAL verbs without re-entering the master lock", async () => {
+  const isolated = dirNode();
+  const previousNavigator = globalThis.navigator;
+  Object.defineProperty(globalThis, "navigator", {
+    value: { storage: { async getDirectory() { return new FakeDirHandle(isolated); } } },
+    configurable: true, writable: true,
+  });
+  try {
+    const api = await import("../extension/lib/memory.js");
+    await api.withMasterJournalIssuer(async (master, issuer) => {
+      await stageMasterJournalCutover(master, { journalExists: false,
+        journal: [], archive: [], allocateVersion: issuer.allocateVersion });
+    });
+    let expired;
+    const receipt = await withStoreTransaction(api.masterMemory(), async (tx) => {
+      assertEquals(typeof tx.masterJournal?.appendWithReceipt, "function");
+      assertEquals(typeof tx.masterJournal?.compensate, "function");
+      assertEquals(typeof tx.masterJournal?.cancel, "function");
+      expired = tx.masterJournal;
+      return await tx.masterJournal.appendWithReceipt({ type: "task", executionId: "tx-authority" });
+    });
+    assertEquals(receipt.wal.operationId, "1:1");
+    assertEquals((await api.masterMemory().get("journal"))[0].executionId, "tx-authority");
+    const concurrent = await withStoreTransaction(api.masterMemory(), async (tx) =>
+      Promise.all([
+        tx.masterJournal.appendWithReceipt({ type: "task", executionId: "tx-concurrent-a" }),
+        tx.masterJournal.appendWithReceipt({ type: "task", executionId: "tx-concurrent-b" }),
+      ]));
+    assertEquals(new Set(concurrent.map((r) => r.writeVersion)).size, 2,
+      "two concurrent operations inside one transaction still issue distinct versions");
+    assertEquals((await api.masterMemory().get("journal")).map((r) => r.executionId),
+      ["tx-authority", "tx-concurrent-a", "tx-concurrent-b"]);
+    const withGenerationBarrier = async (fn) => {
+      let releaseGenerationWrites;
+      const generationBarrier = new Promise((resolve) => { releaseGenerationWrites = resolve; });
+      let waitingGenerationWrites = 0;
+      generationWriteGate = async () => {
+        if (++waitingGenerationWrites === 2) releaseGenerationWrites();
+        await generationBarrier;
+      };
+      // Old parallel issuers both read before either write closes. On the fixed
+      // queue, the first issuer advances after this bounded one-writer release.
+      const gateTimer = setTimeout(releaseGenerationWrites, 80);
+      try { return await fn(); }
+      finally { generationWriteGate = null; clearTimeout(gateTimer); }
+    };
+    const [keyVersion, mixedReceipt] = await withGenerationBarrier(() =>
+      withStoreTransaction(api.masterMemory(), async (tx) => Promise.all([
+        tx.setTrusted("mixed-master-key", "value"),
+        tx.masterJournal.appendWithReceipt({ type: "task", executionId: "tx-mixed-version" }),
+      ])));
+    assertEquals(keyVersion !== mixedReceipt.writeVersion, true,
+      "a key write and WAL frame inside one transaction cannot issue the same version");
+    const expectedKeyVersion = await api.masterMemory().getVersion("mixed-master-key");
+    const [restoredVersion, restoredReceipt] = await withGenerationBarrier(() =>
+      withStoreTransaction(api.masterMemory(), async (tx) => Promise.all([
+        tx.compareAndRestore("mixed-master-key", expectedKeyVersion, "restored"),
+        tx.masterJournal.appendWithReceipt({ type: "task", executionId: "tx-mixed-cas" }),
+      ])));
+    assertEquals(restoredVersion !== false && restoredVersion !== restoredReceipt.writeVersion, true,
+      "a matching CAS restore and WAL frame cannot issue the same version");
+    const beforeGuard = (await api.masterMemory().get("journal")).length;
+    await withStoreTransaction(api.masterMemory(), async (tx) => {
+      const prior = await tx.masterJournal.head();
+      const guardedReceipt = await tx.masterJournal.appendWithReceipt(
+        { type: "task", executionId: "guard-boundary" }, { guard: async () => {
+          await assertRejects(() => tx.masterJournal.head(), Error, "guard is in flight");
+          await assertRejects(() => tx.setTrusted("guard-unexpected", true), Error, "guard is in flight");
+        } });
+      assertEquals(guardedReceipt.wal.sequence, prior.sequence + 1);
+    });
+    assertEquals((await api.masterMemory().get("journal")).length, beforeGuard + 1);
+    assertEquals(isolated.children.get("memory").children.get("master").children.has("guard-unexpected.json"), false);
+    let guardEntered;
+    let releaseGuard;
+    const entered = new Promise((resolve) => { guardEntered = resolve; });
+    const holdGuard = new Promise((resolve) => { releaseGuard = resolve; });
+    const sibling = await withStoreTransaction(api.masterMemory(), async (tx) => {
+      const pending = tx.masterJournal.appendWithReceipt(
+        { type: "task", executionId: "guard-held-sibling" }, { guard: async () => {
+          guardEntered();
+          await holdGuard;
+        } });
+      await entered;
+      try {
+        await assertRejects(() => tx.setTrusted("sibling-during-guard", true), Error,
+          "guard is in flight");
+      } finally { releaseGuard(); }
+      return await pending;
+    });
+    assertEquals(sibling.appended, true,
+      "the refused sibling cannot make an already pending append look uncommitted");
+    assertEquals(isolated.children.get("memory").children.get("master").children.has("sibling-during-guard.json"), false);
+    const recoveredTail = await withStoreTransaction(api.masterMemory(), async (tx) => {
+      await assertRejects(() => tx.masterJournal.appendWithReceipt(
+        { type: "task", executionId: "guard-denied" }, { guard: async () => { throw new Error("deny guard"); } }),
+      Error, "deny guard");
+      return await tx.masterJournal.appendWithReceipt(
+        { type: "task", executionId: "after-denied-guard" });
+    });
+    assertEquals(recoveredTail.appended, true, "a failed queued operation cannot poison the transaction tail");
+    const routed = await withStoreTransaction(api.masterMemory(), async (tx) => {
+      const before = await tx.masterJournal.head();
+      const receipt = await tx.masterJournal.appendWithReceipt(
+        { type: "task", executionId: "compensated-tx" });
+      const compensation = await tx.masterJournal.compensate(receipt);
+      const cancelled = await tx.masterJournal.cancel(
+        { executionId: "cancelled-tx", type: "cancelled" }, "cancelled-tx");
+      return { before, compensation, cancelled, after: await tx.masterJournal.head() };
+    });
+    assertEquals(routed.compensation.ok, true);
+    assertEquals(routed.cancelled.at(-1).executionId, "cancelled-tx");
+    assertEquals(routed.after.sequence, routed.before.sequence + 3);
+    const framed = await withStoreTransaction(api.masterMemory(), async (tx) => {
+      const prior = await tx.masterJournal.head();
+      await assertRejects(() => tx.masterJournal.frameIfCurrent({ operation: "delete" }),
+        Error, "requires exact epoch and version");
+      const replaced = await tx.masterJournal.frameIfCurrent({ operation: "replace", rows: [{ id: "framed" }] },
+        { expectedEpoch: prior.epoch, expectedVersion: prior.version });
+      await assertRejects(() => tx.masterJournal.frameIfCurrent({ operation: "delete" },
+        { expectedEpoch: prior.epoch, expectedVersion: prior.version }), Error, "CAS version mismatch");
+      const deleted = await tx.masterJournal.frameIfCurrent({ operation: "delete" },
+        { expectedEpoch: replaced.epoch, expectedVersion: replaced.version });
+      const cleared = await tx.masterJournal.frameIfCurrent({ operation: "clear" },
+        { expectedEpoch: deleted.epoch, expectedVersion: deleted.version });
+      return { prior, replaced, deleted, cleared };
+    });
+    assertEquals(framed.replaced.sequence, framed.prior.sequence + 1);
+    assertEquals(framed.deleted.sequence, framed.replaced.sequence + 1);
+    assertEquals(framed.cleared.sequence, framed.deleted.sequence + 1);
+    assertEquals(await api.masterMemory().has("journal"), false);
+    assertEquals(await api.masterMemory().has("journal-archive"), false,
+      "clear is an epoch-local WAL reset, not a stale legacy file write");
+    const noReceipt = await withStoreTransaction(api.masterMemory(), async (tx) =>
+      tx.masterJournal.append({ type: "prompt-attestation", note: "no execution id" }));
+    assertEquals(noReceipt.at(-1).note, "no execution id");
+    assertEquals(noReceipt.at(-1).executionId, undefined,
+      "fire-and-forget rows must not gain invented execution identity");
+    assertEquals(isolated.children.get("memory").children.get("master").children.has("journal.json"), false);
+    await assertRejects(async () => expired.appendWithReceipt(
+      { type: "task", executionId: "after-scope" }), Error, "expired");
+    await withStoreTransaction(api.siteMemory("https://site.test"), async (tx) => {
+      assertEquals(tx.masterJournal, undefined, "site stores have no master authority");
+    });
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      value: previousNavigator, configurable: true, writable: true,
+    });
+  }
+});
+
+Deno.test("master clear epoch reads the durable generation after a foreign realm writes", async () => {
+  const isolated = dirNode();
+  const previousNavigator = globalThis.navigator;
+  Object.defineProperty(globalThis, "navigator", {
+    value: { storage: { async getDirectory() { return new FakeDirHandle(isolated); } } },
+    configurable: true, writable: true,
+  });
+  try {
+    const realmA = await import("../extension/lib/memory.js?wal-clear-realm-a");
+    const realmB = await import("../extension/lib/memory.js?wal-clear-realm-b");
+    const a = realmA.masterMemory();
+    const first = await a.setTrusted("first", true);
+    const second = await realmB.masterMemory().setTrusted("second", true);
+    assert(second > first);
+    await a.clear();
+    const master = isolated.children.get("memory").children.get("master");
+    const epoch = JSON.parse(master.children.get("__epoch.json").content).gen;
+    assert(epoch >= second, "clear must not publish a stale epoch after another realm advanced __gen");
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      value: previousNavigator, configurable: true, writable: true,
+    });
+  }
+});
+
+Deno.test("staged master issuer uses the real durable generation under one lock", async () => {
+  const isolated = dirNode();
+  const previousNavigator = globalThis.navigator;
+  Object.defineProperty(globalThis, "navigator", {
+    value: { storage: { async getDirectory() { return new FakeDirHandle(isolated); } } },
+    configurable: true, writable: true,
+  });
+  try {
+    const memoryApi = await import("../extension/lib/memory.js");
+    assertEquals(typeof memoryApi.masterJournalReadGeneration, "function");
+    assertEquals(typeof memoryApi.withMasterJournalIssuer, "function");
+    assertEquals(await memoryApi.masterJournalReadGeneration(), 0);
+    assertEquals(isolated.children.has("memory"), false, "a read must not create a master store");
+    const published = await memoryApi.withMasterJournalIssuer(async (master, issuer) => {
+      await stageMasterJournalCutover(master, {
+        journalExists: true, journal: [{ id: "seed" }], archive: [],
+        allocateVersion: issuer.allocateVersion,
+      });
+      for (let id = 0; id < 129; id++) await stageMasterJournalFrame(master,
+        { operation: "append", row: { id } }, issuer);
+      return (await memoryApi.masterJournalReadGeneration());
+    });
+    assert(published > 129);
+    assertEquals(await memoryApi.masterJournalReadGeneration(), published);
+    const master = isolated.children.get("memory").children.get("master");
+    assertEquals(master.children.has("journal.json"), false, "the staged issuer never mirrors legacy journal.json");
+    assertEquals(master.children.get("journal-wal").children.has("claim-1-129.json"), false,
+      "real generation compaction claim retires after both checked heads advance");
+    let escapedIssuer;
+    await memoryApi.withMasterJournalIssuer(async (_master, issuer) => {
+      escapedIssuer = issuer;
+      void issuer.allocateVersion(); // the lock must outlive this unawaited issuance
+    });
+    assertEquals(await memoryApi.masterJournalReadGeneration(), published + 1);
+    await assertRejects(async () => escapedIssuer.allocateVersion(), Error, "expired");
+    master.children.get("__gen.json").content = JSON.stringify({ gen: published - 1 });
+    await assertRejects(() => memoryApi.masterJournalReadGeneration(), Error,
+      "behind checked master journal head");
+    master.children.get("__gen.json").content = JSON.stringify({ gen: published + 1 });
+    master.children.delete("__gen.json");
+    await assertRejects(() => memoryApi.masterJournalReadGeneration(), Error,
+      "missing after cutover");
+    await assertRejects(() => memoryApi.withMasterJournalIssuer(async (_master, issuer) =>
+      issuer.allocateVersion()), Error, "missing after cutover");
+    master.children.set("__gen.json", fileNode("{torn:"));
+    await assertRejects(() => memoryApi.masterJournalReadGeneration(), Error, "corrupt");
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {
+      value: previousNavigator, configurable: true, writable: true,
+    });
+  }
+});
+
+Deno.test("master generation remains monotonic across independent extension realms", async () => {
+  const firstRealm = masterMemory();
+  const first = await firstRealm.setTrusted("wal-realm-token-first", "first");
+  const secondModule = await import("../extension/lib/memory.js?wal-independent-realm");
+  const second = await secondModule.masterMemory().setTrusted("wal-realm-token-second", "second");
+  const third = await firstRealm.setTrusted("wal-realm-token-third", "third");
+  assert(second > first, "another realm must read the previously issued durable token");
+  assert(third > second, "a cached local token must not overwrite another realm's issued version");
 });
 
 Deno.test("global generation bootstraps above legacy envelope and sidecar tokens", async () => {
@@ -541,6 +1300,20 @@ Deno.test("durable authority migrates out of master store without eviction and n
   const terminal = await registry.settle(freshId, { ok: true, result: "done", logicalId: "recipe:dedupe-tabs" });
   assertEquals(terminal.phase, "terminal", "new scheduled execution reaches terminal authority");
   assertEquals((await master.keys()).some((key) => key.startsWith("run:")), false, "new runs consume zero master keys");
+});
+
+Deno.test("durable-run routed strict reads expose run and outbox bytes for a cutover fence", async () => {
+  root.children.clear();
+  const durable = durableRunMemory();
+  const id = "exec:22222222-2222-4222-8222-222222222222";
+  const record = { executionId: id, journalTarget: "master", phase: "cancel-requested" };
+  const outbox = { executionId: id, journalTarget: "master", kind: "cancellation" };
+  await durable.setTrusted(`run:${id}`, record);
+  await durable.setTrusted(`run-outbox:${id}`, outbox);
+  assertEquals(await durable.getStrict(`run:${id}`), record);
+  assertEquals(await durable.getStrict(`run-outbox:${id}`), outbox);
+  assertEquals(await durable.getStrict("run-outbox:exec:33333333-3333-4333-8333-333333333333"), null);
+  assert((await durable.keys()).includes(`run-outbox:${id}`));
 });
 
 Deno.test("stores allow >500 tiny keys per execution with NO key count or byte limits (dptw)", async () => {

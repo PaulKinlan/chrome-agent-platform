@@ -5,6 +5,7 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { streamExportArchive } from "../extension/lib/backup-export.js";
 import { streamRestoreArchive, createOptionsQuiesce } from "../extension/lib/backup-restore.js";
+import { sealMasterJournalRecord } from "../extension/lib/master-journal-wal.js";
 import { buildArchive, collectExportData, importArchive, recoverPendingImport } from "../extension/lib/data-archive.js";
 import { admitDurableRun } from "../extension/lib/durable-quota.js";
 import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
@@ -132,6 +133,78 @@ Deno.test("backup-restore: streamExportArchive -> streamRestoreArchive round-tri
   assertEquals(restoredAlarms[0].when, 1700000000000);
   assertEquals(restoredAlarms[0].periodInMinutes, 30);
   assert(progressReports.length >= 2, "progress reports recorded for each file");
+});
+
+Deno.test("streamed restore holds the master journal lock only after quiescence through live swap", async () => {
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  let restoreHeld = false;
+  let masterHeld = false;
+  let quiesced = false;
+  let liveWrites = 0;
+  const names = [];
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: {
+    locks: { request: async (name, options, fn) => {
+      names.push(name);
+      assertEquals(name, "cap:master-journal");
+      assertEquals(restoreHeld, true, "master lock follows restoreLock");
+      assertEquals(options.mode, "exclusive");
+      assertEquals(masterHeld, false, "nested master lock would deadlock in Chrome");
+      masterHeld = true;
+      try { return await fn(); } finally { masterHeld = false; }
+    } },
+  } });
+  try {
+    const livePath = "memory/master/journal.json";
+    const oldPath = "memory/master/old.json";
+    const files = new Map([[livePath, ENCODER.encode("old")], [oldPath, ENCODER.encode("retired")]]);
+    const kv = {};
+    const next = ENCODER.encode("new");
+    const bundle = buildArchive({
+      kv: {}, files: [{ path: livePath, bytes: next }], totalBytes: next.byteLength,
+      alarms: [], configuredProviders: [], mcpServers: [],
+    });
+    const result = await streamRestoreArchive({
+      stream: bundle, overwrite: true,
+      lockAcquirer: async (name, fn) => {
+        assertEquals(name, "cap:restoreLock");
+        restoreHeld = true;
+        try { return await fn(); } finally { restoreHeld = false; }
+      },
+      confirm: async () => { assertEquals(masterHeld, false); return true; },
+      quiesce: async () => { assertEquals(masterHeld, false); quiesced = true; },
+      opfs: {
+        listFiles: async () => [...files.keys()],
+        readFile: async (path) => files.get(path),
+        writeFile: async (path, bytes) => {
+          if (path === livePath) {
+            assertEquals(quiesced, true);
+            assertEquals(masterHeld, true);
+            liveWrites++;
+          }
+          files.set(path, bytes);
+        },
+        removeFile: async (path) => {
+          if (path === oldPath) assertEquals(masterHeld, true, "prune must stay inside the master lock");
+          files.delete(path);
+        },
+      },
+      kvGet: async (keys) => keys === null ? kv : Array.isArray(keys)
+        ? Object.fromEntries(keys.filter((key) => Object.hasOwn(kv, key)).map((key) => [key, kv[key]]))
+        : Object.hasOwn(kv, keys) ? { [keys]: kv[keys] } : {},
+      kvSet: async (items) => { Object.assign(kv, items); },
+      kvRemove: async (keys) => { for (const key of (Array.isArray(keys) ? keys : [keys])) delete kv[key]; },
+      alarms: { getAll: async () => [], create: async () => {}, clear: async () => {} },
+    });
+    assertEquals(result.ok, true);
+    assertEquals(liveWrites, 1);
+    assertEquals(DECODER.decode(files.get(livePath)), "new");
+    assertEquals(files.has(oldPath), false);
+    assertEquals(masterHeld, false);
+    assert(names.length >= 2, "pending recovery and live swap both require the master lock");
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
+    else delete globalThis.navigator;
+  }
 });
 
 Deno.test("backup-restore: options.html controls have correct accept attribute and classes", async () => {
@@ -320,6 +393,133 @@ Deno.test("backup-restore: legacy JSON backup auto-detection, fallback routing a
   assertEquals(res.ok, true, "legacy JSON restore must succeed");
   assertEquals(DECODER.decode(liveFiles.get("legacy/note.txt")!), "legacy content via json");
   assertEquals(liveKv["legacy:pref"], "restored-val");
+});
+
+Deno.test("backup-restore refuses a torn master WAL head before owner confirmation or live mutation", async () => {
+  const walPath = "memory/master/journal-wal/head-a.json";
+  const livePath = "memory/master/journal.json";
+  const torn = "{\"torn\":";
+  const bundle = JSON.stringify({
+    magic: "cap-export", formatVersion: 1, exportedAt: 1750000000000,
+    extensionVersion: "0.3.0", policy: { excluded: [] }, configuredProviders: [],
+    mcpServers: [], kv: {}, alarms: [],
+    opfs: [{ path: walPath, encoding: "utf8", data: torn }],
+    manifest: { kvKeys: 0, opfsFiles: 1, alarms: 0, totalBytes: ENCODER.encode(torn).length + 2 },
+  });
+  const files = new Map([[livePath, ENCODER.encode("owner existing journal")]]);
+  let confirmationCalls = 0;
+  await assertRejects(() => streamRestoreArchive({
+    stream: bundle,
+    opfs: {
+      listFiles: async () => [...files.keys()],
+      readFile: async (p) => files.get(p),
+      writeFile: async (p, bytes) => { files.set(p, bytes); },
+      removeFile: async (p) => { files.delete(p); },
+    },
+    confirm: async () => { confirmationCalls++; return true; },
+    overwrite: true,
+  }), Error, "master journal");
+  assertEquals(confirmationCalls, 0);
+  assertEquals(DECODER.decode(files.get(livePath)), "owner existing journal");
+  assertEquals(files.has(walPath), false);
+});
+
+Deno.test("backup-restore accepts a fully checked master WAL generation and rejects an unpublished frame", async () => {
+  const epoch = 18;
+  const checkpoint = `checkpoint-${epoch}-0.json`;
+  const archive = `archive-${epoch}-0.json`;
+  const walPrefix = "memory/master/journal-wal/";
+  const checkpointBody = await sealMasterJournalRecord("checkpoint", { epoch, sequence: 0, exists: true, live: [{ id: "new" }] });
+  const archiveBody = await sealMasterJournalRecord("archive", { epoch, rows: [{ id: "archived" }] });
+  const headBinding = JSON.stringify({ epoch, sequence: 0, checkpoint, archive });
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", ENCODER.encode(headBinding)));
+  const lastHash = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const headBody = await sealMasterJournalRecord("head", {
+    epoch, sequence: 0, checkpointSequence: 0, checkpoint, archive, lastHash, version: epoch,
+  });
+  const records = [
+    { path: `${walPrefix}${checkpoint}`, encoding: "utf8", data: checkpointBody },
+    { path: `${walPrefix}${archive}`, encoding: "utf8", data: archiveBody },
+    { path: `${walPrefix}head-a.json`, encoding: "utf8", data: headBody },
+  ];
+  const bundle = (opfs) => JSON.stringify({
+    magic: "cap-export", formatVersion: 1, exportedAt: 1750000000000,
+    extensionVersion: "0.3.0", policy: { excluded: [] }, configuredProviders: [],
+    mcpServers: [], kv: {}, alarms: [], opfs,
+    manifest: { kvKeys: 0, opfsFiles: opfs.length, alarms: 0,
+      totalBytes: opfs.reduce((n, entry) => n + ENCODER.encode(entry.data).length, 2) },
+  });
+  const restored = new Map();
+  const opfs = {
+    listFiles: async () => [...restored.keys()],
+    readFile: async (path) => restored.get(path),
+    writeFile: async (path, bytes) => { restored.set(path, bytes); },
+    removeFile: async (path) => { restored.delete(path); },
+  };
+  const success = await streamRestoreArchive({ stream: bundle(records), opfs, overwrite: true });
+  assertEquals(success.ok, true);
+  for (const record of records) assertEquals(DECODER.decode(restored.get(record.path)), record.data);
+
+  // The owner-facing export is streamed TAR, not the legacy JSON fixture.
+  const source = new Map(records.map((record) => [record.path, ENCODER.encode(record.data)]));
+  const chunks = [];
+  await streamExportArchive({
+    writable: new WritableStream({ write: (chunk) => { chunks.push(chunk); } }),
+    listFiles: async () => [...source.keys()],
+    open: async (path) => ({ size: source.get(path).length, stream: new Blob([source.get(path)]).stream() }),
+    kvGet: async () => ({}), alarms: { getAll: async () => [] }, extensionVersion: "0.3.0",
+  });
+  const tar = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0));
+  let at = 0;
+  for (const chunk of chunks) { tar.set(chunk, at); at += chunk.length; }
+  const tarFiles = new Map();
+  const tarRestore = await streamRestoreArchive({
+    stream: new Blob([tar]).stream(),
+    opfs: {
+      listFiles: async () => [...tarFiles.keys()],
+      readFile: async (path) => tarFiles.get(path),
+      writeFile: async (path, bytes) => { tarFiles.set(path, bytes); },
+      removeFile: async (path) => { tarFiles.delete(path); },
+    }, overwrite: true,
+  });
+  assertEquals(tarRestore.ok, true);
+  for (const record of records) assertEquals(DECODER.decode(tarFiles.get(record.path)), record.data);
+
+  const unpublishedFrame = await sealMasterJournalRecord("frame", {
+    epoch, sequence: 1, previousHash: lastHash, version: epoch + 1,
+    operation: "append", row: { id: "unpublished" },
+  });
+  let confirmations = 0;
+  await assertRejects(() => streamRestoreArchive({
+    stream: bundle([...records, {
+      path: `${walPrefix}frame-${epoch}-1.json`, encoding: "utf8", data: unpublishedFrame,
+    }]), opfs,
+    confirm: async () => { confirmations++; return true; }, overwrite: true,
+  }), Error, "unpublished");
+  await assertRejects(() => streamRestoreArchive({
+    stream: bundle(records.filter((record) => record.path !== `${walPrefix}${checkpoint}`)), opfs,
+    confirm: async () => { confirmations++; return true; }, overwrite: true,
+  }), Error, "missing");
+  assertEquals(confirmations, 0);
+  assertEquals(DECODER.decode(restored.get(`${walPrefix}head-a.json`)), headBody,
+    "a rejected archive must not alter the live published head");
+
+  // An owner-directed overwrite with a legacy-only bundle must remove EVERY
+  // published WAL record. This is a restore, not an automatic torn-head
+  // fallback: legacy data is authority only after the checked swap commits.
+  const legacyJournal = JSON.stringify([{ id: "restored-legacy" }]);
+  const legacyGen = JSON.stringify({ gen: 42 });
+  const legacy = await streamRestoreArchive({
+    stream: bundle([
+      { path: "memory/master/journal.json", encoding: "utf8", data: legacyJournal },
+      { path: "memory/master/__gen.json", encoding: "utf8", data: legacyGen },
+    ]), opfs, overwrite: true,
+  });
+  assertEquals(legacy.ok, true);
+  assertEquals(DECODER.decode(restored.get("memory/master/journal.json")), legacyJournal);
+  assertEquals(DECODER.decode(restored.get("memory/master/__gen.json")), legacyGen);
+  assertEquals([...restored.keys()].some((path) => path.startsWith(walPrefix)), false,
+    "legacy-only owner restore cannot retain a stale WAL head or frame as a second authority");
 });
 
 Deno.test("backup-restore: rejection of invalid archives (missing manifest, reserved keys, unsafe paths)", async () => {

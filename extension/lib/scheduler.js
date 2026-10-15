@@ -7,6 +7,7 @@ import { newId } from "./pure.js";
 import { kvGet, kvSet } from "./kv.js";
 import { assertRunAlive, assertRunOwned } from "./run-fence.js";
 import { migrateSkillIdentities } from "./skill-identity-migration.js";
+import { readJournalAdmissionFence } from "./master-journal-cutover-admission.js";
 
 const TASK_KEY = "cap:scheduledTasks";
 const INFLIGHT_KEY = "cap:scheduledInflight";
@@ -153,13 +154,16 @@ function validLock(v) {
 let mutex = Promise.resolve();
 async function checkRestoreFence() {
   if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-    let fenceCheck;
+    let fence;
     try {
-      fenceCheck = await chrome.storage.local.get("cap:restoreFence");
+      fence = await readJournalAdmissionFence(chrome.storage.local);
     } catch (err) {
       throw new Error(`Failed to verify restore admission fence: ${err?.message || err}`);
     }
-    if (fenceCheck?.["cap:restoreFence"]) {
+    if (fence === "master_journal_cutover") {
+      throw new Error("Cannot mutate scheduled task: master journal cutover requires owner repair");
+    }
+    if (fence === "restore") {
       throw new Error("Cannot mutate scheduled task: profile restore is in progress");
     }
   }

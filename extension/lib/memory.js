@@ -91,49 +91,99 @@ function getDirKey(dirOrPath) {
   return null;
 }
 
-let genCache = new Map();
 let tombsCache = new Map();
 
 function invalidateDirCache(pathOrKey) {
   const key = typeof pathOrKey === "string" ? pathOrKey : getDirKey(pathOrKey);
   if (!key) return;
-  for (const k of genCache.keys()) {
-    if (k === key || k.startsWith(`${key}/`)) genCache.delete(k);
-  }
   for (const k of tombsCache.keys()) {
     if (k === key || k.startsWith(`${key}/`)) tombsCache.delete(k);
   }
 }
 
+/** No realm-local generation cache can witness a cross-context Web Lock.
+ * Read the on-disk token even after this realm previously issued a version. */
+async function readDurableGeneration(dir) {
+  let raw;
+  try { raw = await readJsonStrict(dir, GEN_FILE, { allowAbsent: true }); }
+  catch { throw new Error("the durable generation authority is corrupt"); }
+  const head = getDirKey(dir) === `${ROOT}/${MASTER}` ? await readMasterJournalHead(dir) : null;
+  if (raw == null && head) {
+    throw new Error("the master journal generation authority is missing after cutover");
+  }
+  const gen = raw == null ? await legacyGenerationFloor(dir) : raw.gen;
+  if (!Number.isSafeInteger(gen) || gen < 0) {
+    throw new Error("the durable generation authority is corrupt");
+  }
+  if (head && gen < head.version) {
+    throw new Error("the durable generation authority is behind checked master journal head");
+  }
+  return gen;
+}
+
 /** Issue the next durable generation for a store directory. The caller holds
  * the write mutex (atomic). Returns the generation. */
 async function issueVersion(dir) {
-  const dirKey = getDirKey(dir);
-  let prev;
-  if (dirKey && genCache.has(dirKey)) {
-    prev = genCache.get(dirKey);
-  } else {
-    let genRaw;
-    try {
-      genRaw = await readJsonStrict(dir, GEN_FILE, { allowAbsent: true });
-    } catch {
-      // The authority file is corrupt — fail closed, never reset the sequence.
-      throw new Error("the durable generation authority is corrupt");
-    }
-    prev = genRaw == null ? await legacyGenerationFloor(dir) : genRaw.gen;
-    if (!Number.isSafeInteger(prev) || prev < 0) {
-      throw new Error("the durable generation authority is corrupt");
-    }
-  }
+  // Only the MASTER has a cross-context Web Lock; no realm-local cache can
+  // witness it. Re-read on every issuance, including non-master stores, to
+  // avoid a stale token (this alone does not serialize non-master realms).
+  const prev = await readDurableGeneration(dir);
   if (prev >= Number.MAX_SAFE_INTEGER) {
     throw new Error("the durable generation authority is exhausted");
   }
   const gen = prev + 1;
   await writeJson(dir, GEN_FILE, { gen });
-  if (dirKey) {
-    genCache.set(dirKey, gen);
-  }
   return gen;
+}
+
+/** Non-creating, uncached OBSERVATION of the real master generation. It is
+ * not a CAS precondition outside the master Web Lock: another realm may issue
+ * a token immediately after this read. */
+export async function masterJournalReadGeneration() {
+  let dir = await rootDir();
+  for (const segment of [ROOT, MASTER]) {
+    try { dir = await dir.getDirectoryHandle(segment); }
+    catch (error) {
+      if (error?.name === "NotFoundError") return 0;
+      throw error;
+    }
+  }
+  return await readDurableGeneration(tagDir(dir, [ROOT, MASTER]));
+}
+
+/** Staged lock-scoped WAL issuer. No product call site or writer cutover is
+ * enabled. Await every frame before leaving. Never await a masterMemory()
+ * write/clear inside this callback: the master mutex/Web Lock is non-reentrant. */
+export async function withMasterJournalIssuer(fn) {
+  if (typeof fn !== "function") throw new Error("master journal issuer requires a callback");
+  return await withWriteLock([ROOT, MASTER], async () => {
+    const master = await openDir([ROOT, MASTER]);
+    const issuer = createMasterJournalIssuer(master, {
+      issueVersion: () => issueVersion(master),
+      readGeneration: () => readDurableGeneration(master),
+    });
+    let active = true;
+    const pending = new Set();
+    const scoped = Object.fromEntries(Object.entries(issuer).map(([name, op]) =>
+      [name, (...args) => {
+        if (!active) throw new Error("master journal issuer has expired");
+        const run = Promise.resolve().then(() => op(...args));
+        pending.add(run);
+        run.then(() => pending.delete(run), () => pending.delete(run));
+        run.catch(() => {}); // caller still receives the same rejection
+        return run;
+      }]));
+    let result;
+    let callbackError;
+    try { result = await fn(master, Object.freeze(scoped)); }
+    catch (error) { callbackError = error; }
+    active = false;
+    const unsettled = await Promise.allSettled([...pending]);
+    if (callbackError) throw callbackError;
+    const failed = unsettled.find((entry) => entry.status === "rejected");
+    if (failed) throw new Error(`unawaited master journal issuance failed: ${failed.reason?.message ?? failed.reason}`);
+    return result;
+  });
 }
 
 /** Read the bounded tombstone authority: { map: {key→gen}, floor } or null. */
@@ -211,6 +261,15 @@ async function currentVersion(dir, key) {
 }
 
 import { kvGet } from "./kv.js";
+import { withMasterJournalWebLock } from "./master-journal-lock.js";
+import { createMasterJournalIssuer } from "./master-journal-issuer.js";
+import {
+  appendMasterJournalRow,
+  appendMasterJournalWithReceipt,
+  compensateMasterJournalReceipt,
+  cancelMasterJournalExecution,
+} from "./master-journal-transaction.js";
+import { readMasterJournalHead, readMasterJournalProjection, stageMasterJournalFrame } from "./master-journal-wal.js";
 import { fnv1a, newId } from "./pure.js";
 
 const ENROLL_KEY = "cap:enrollment";
@@ -225,6 +284,14 @@ const ENROLL_KEY = "cap:enrollment";
 // forged `threads` index could be written through `masterMemory().set` and
 // `listThreads()` returned it. Internal thread code uses `setTrusted`.
 const MASTER_RESERVED_KEYS = new Set([
+  // A generic model-facing memory.set must not replace WAL or legacy master
+  // history. Trusted append/receipt/cancellation routes own these keys.
+  "journal",
+  "journal-archive",
+  // WAL repair/quarantine is a nested authority namespace, never a generic
+  // model key (even if a flat key with this stem would otherwise be legal).
+  "journal-wal",
+  "journal-wal/quarantine",
   "origins",
   "enrolled",
   "assets",
@@ -751,7 +818,6 @@ async function assertQuota(storeDir, grow, storeBoundBytes = null) {
 export const usageLedgerInspector = {
   reset: () => {
     ledgerInvalidate();
-    genCache.clear();
     tombsCache.clear();
   },
   seed: ledgerSeed,
@@ -785,7 +851,17 @@ function withWriteLock(pathOrFn, maybeFn) {
   const path = typeof pathOrFn === "function" ? "global" : pathOrFn;
   const key = dirMutexKey(path);
   const prev = writeMutexes.get(key) || Promise.resolve();
-  const run = prev.then(fn, fn);
+  // The legacy mutex is confined to one JS realm. Master generations and the
+  // journal's future checkpoint/head are shared with the owner Options page:
+  // serialize ALL master writes (including unrelated __gen issuers) against
+  // raw journal export across contexts. Non-master stores are unaffected.
+  // Compound journal guards run INSIDE this non-reentrant lock: they may read
+  // chrome.storage/KV, but must NOT await a master-store write/snapshot or
+  // acquire an enrollment/storage mutex whose owner awaits master writes.
+  // A realm-global "already held" flag would wrongly reject legitimate
+  // concurrent writers, so it is not a safe reentrancy detector.
+  const execute = key === `${ROOT}/${MASTER}` ? () => withMasterJournalWebLock(fn) : fn;
+  const run = prev.then(execute, execute);
   const next = run.then(() => {}, () => {});
   writeMutexes.set(key, next);
   next.finally(() => {
@@ -802,7 +878,6 @@ export async function resetAllStores() {
     await Promise.allSettled(active);
   }
   writeMutexes.clear();
-  genCache.clear();
   tombsCache.clear();
   ledgerInvalidate();
 }
@@ -811,6 +886,29 @@ export async function resetAllStores() {
  * code-unit `.length`, which under-counts non-ASCII data — the round-16 finding). */
 function utf8Bytes(str) {
   return new TextEncoder().encode(str).byteLength;
+}
+
+function isMasterJournalKey(isMaster, key) {
+  return isMaster && (key === "journal" || key === "journal-archive");
+}
+
+async function checkedMasterJournalValue(path, isMaster, key) {
+  if (!isMasterJournalKey(isMaster, key)) return null;
+  const dir = await openDirOptional(path);
+  if (!dir) return null;
+  const projection = await readMasterJournalProjection(dir, { includeArchive: key === "journal-archive" });
+  if (!projection) return null; // no cutover: preserve the legacy store
+  return key === "journal"
+    ? { exists: projection.exists, value: projection.live, version: projection.version }
+    : { exists: projection.archiveExists, value: projection.archive, version: projection.version };
+}
+
+async function assertLegacyMasterJournalWriteAllowed(dir, isMaster, key) {
+  if (isMasterJournalKey(isMaster, key) && await readMasterJournalHead(dir)) {
+    // Production WAL writes remain DISABLED. A restored cut-over profile is
+    // readable but must never silently create a conflicting journal.json.
+    throw new Error("master journal WAL writer is not enabled; legacy write refused");
+  }
 }
 
 /** The LOCKED body of setValue (no lock acquisition). Exported so callers that
@@ -825,6 +923,7 @@ async function setValueInner(path, key, value, { isMaster, trusted = false, stor
   // forged `thread:t_...` body must be as unreachable as a forged `threads`
   // index (the wider-goal review's thread-authority finding).
   const trustedPrefix = isMaster && (
+    k.startsWith("journal-wal/") ||
     k.startsWith("thread:") || k.startsWith("run:") ||
     k.startsWith("run-outbox:") || k.startsWith("run-log:") ||
     k.startsWith("run-resume:") || k.startsWith("run-payload:")
@@ -844,6 +943,7 @@ async function setValueInner(path, key, value, { isMaster, trusted = false, stor
   }
   const newBytes = utf8Bytes(serialized);
   const dir = await openDir(path);
+  await assertLegacyMasterJournalWriteAllowed(dir, isMaster, key);
   await ledgerEnsure();
   // The OLD value's file bytes come from the ledger (the same unit — UTF-8
   // file bytes — the walk measured in) so the delta needs no extra handle I/O.
@@ -890,9 +990,9 @@ async function setValue(path, key, value, { isMaster, trusted = false, storeBoun
  * never recreates a directory that cleanup just removed (the round-27 cleanup-
  * recreation blocker). A write that DOES land creates the directory only for the
  * actual mutation. */
-async function compareAndSet(path, key, expectedVersion, nextValue, { isMaster }) {
-  return withWriteLock(path, async () => {
+async function compareAndSetInner(path, key, expectedVersion, nextValue, { isMaster }) {
     const dir = await openDirOptional(path);
+    if (dir) await assertLegacyMasterJournalWriteAllowed(dir, isMaster, key);
     const cur = dir ? await currentVersion(dir, key) : 0;
     if (cur !== expectedVersion) {
       // Idempotent delete: retrying an already-tombstoned delete returns the
@@ -933,16 +1033,91 @@ async function compareAndSet(path, key, expectedVersion, nextValue, { isMaster }
       await writeTombs(targetDir, tombs);
     }
     return version; // exact token of this write
-  });
 }
 
-/** A single origin-scoped store. `origin` is a canonical origin string or "master". */
-/** The shared store body: a path + a label, with the origin/master reserved-key
- * semantics. `memoryStore` (master + site origins) and `namedAgentMemory`
- * (named agents) both build their store through here so every store gets the
- * same bounds, version tokens, and CAS semantics. */
+async function compareAndSet(path, key, expectedVersion, nextValue, options) {
+  return withWriteLock(path, () => compareAndSetInner(path, key, expectedVersion, nextValue, options));
+}
+
+async function snapshotInner(path, isMaster, key) {
+  const wal = await checkedMasterJournalValue(path, isMaster, key);
+  if (wal) return { exists: wal.exists, value: wal.exists ? structuredClone(wal.value) : null, version: wal.version };
+  const dir = await openDirOptional(path);
+  if (!dir) return { exists: false, value: null, version: 0 };
+  const tombs = await readTombs(dir);
+  const entry = tombs.map.has(key) ? null : await readEntry(dir, `${key}.json`, true);
+  const version = await currentVersion(dir, key);
+  return entry
+    ? { exists: true, value: structuredClone(entry.value), version }
+    : { exists: false, value: null, version };
+}
+
+// Own-store identity is not copied by object spread (unlike an enumerable
+// Symbol), so test proxies that override get/snapshot keep their injection
+// seams instead of accidentally inheriting the real store's transaction.
+const storeTransactions = new WeakMap();
+export async function withStoreTransaction(store, fn) {
+  if (typeof fn !== "function") throw new TypeError("store transaction callback required");
+  const transaction = store && storeTransactions.get(store);
+  if (transaction) return await transaction(fn);
+  // Diagnostic seam for spread-proxy race fakes. Never silently run a foreign
+  // store without a transaction in the browser's production path.
+  if (typeof Deno === "undefined") throw new Error("unregistered store transaction refused");
+  return await fn(store);
+}
+
+// Caller already holds this store's write mutex. The ordinary master clear
+// still REFUSES on a WAL head; only the staged tx verb can call this with
+// preserveWal after publishing a checked clear-reset frame.
+async function clearStoreDirectory(dir, { preserveWal = false, strictRemovals = false } = {}) {
+  const genRaw = await readJsonStrict(dir, GEN_FILE, { allowAbsent: true });
+  if (genRaw !== null && (!Number.isSafeInteger(genRaw.gen) || genRaw.gen < 0)) {
+    throw new Error("the durable generation authority is corrupt");
+  }
+  const removedKeys = [];
+  let tombs = strictRemovals ? await readTombs(dir) : null;
+  for await (const [name] of dir.entries()) {
+    if (name === GEN_FILE || name === TOMBS_FILE || name === "__epoch.json" ||
+        (preserveWal && name === "journal-wal")) continue;
+    const key = name.endsWith(".json") ? name.slice(0, -5) : null;
+    const logicalKey = key !== null && !INTERNAL_KEY_RE.test(key) ? key : null;
+    // Keep the legacy clear's existing best-effort tombstoning even when a
+    // physical removal fails. The staged strict path never acknowledges one.
+    if (!strictRemovals && logicalKey !== null) removedKeys.push(logicalKey);
+    try { await removeTracked(dir, name, { recursive: true }); }
+    catch (error) {
+      // Legacy clear preserves its historical best-effort cleanup. A staged
+      // WAL clear must never ACK a partial profile deletion as successful.
+      if (strictRemovals) throw error;
+      continue;
+    }
+    if (!strictRemovals || logicalKey === null) continue;
+    // A later removal may fail. Persist this successful deletion's version
+    // before advancing, or a retry cannot discover its absent key. Do NOT
+    // tombstone before unlink: currentVersion prefers a live envelope while
+    // get/has prefer a tombstone, so a failed unlink would split authority.
+    const deletedGen = await issueVersion(dir);
+    tombs.map.set(logicalKey, deletedGen);
+    tombs = await writeTombs(dir, tombs);
+  }
+  if (!strictRemovals) {
+    tombs = await readTombs(dir);
+    for (const key of removedKeys) {
+      const deletedGen = await issueVersion(dir);
+      tombs.map.set(key, deletedGen);
+    }
+    await writeTombs(dir, tombs);
+  }
+  if (genRaw && typeof genRaw.gen === "number") {
+    await writeJson(dir, "__epoch.json", { gen: genRaw.gen });
+  }
+}
+
+/** A single origin-scoped store. `origin` is a canonical origin string or "master".
+ * `memoryStore` (master + site origins) and `namedAgentMemory` both build the
+ * same path-scoped body so they share bounds, version tokens and CAS semantics. */
 function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
-  return {
+  const store = {
     isMaster,
     origin,
     async get(key) {
@@ -954,6 +1129,8 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
       if (/^(?:__gen|__tx|__wal|__epoch|__tombs|profile:|profile$|cap:board-)/.test(String(key))) {
         throw new Error(`key "${key}" is reserved on this store`);
       }
+      const wal = await checkedMasterJournalValue(path, isMaster, key);
+      if (wal) return wal.exists ? wal.value : null;
       const dir = await openDirOptional(path);
       if (!dir) return null;
       // The TOMBSTONE authority is honored: a deleted key reads as absent even
@@ -967,6 +1144,8 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
      * tombstone exists), but THROWS on a real read/corruption failure (never
      * silently treats an unreadable store as empty). */
     async getStrict(key) {
+      const wal = await checkedMasterJournalValue(path, isMaster, key);
+      if (wal) return wal.exists ? wal.value : null;
       const dir = await openDirOptional(path);
       if (!dir) return null;
       const tombs = await readTombs(dir);
@@ -979,6 +1158,8 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
      * must not conflate them). Honors the tombstone authority (a tombstoned key
      * with a live orphan file is ABSENT). */
     async has(key) {
+      const wal = await checkedMasterJournalValue(path, isMaster, key);
+      if (wal) return wal.exists;
       const dir = await openDirOptional(path);
       if (!dir) return false;
       const tombs = await readTombs(dir);
@@ -993,21 +1174,12 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
     /** Atomic value/existence/version receipt under the same write mutex used by
      * all trusted writes and CAS compensation. */
     async snapshot(key) {
-      return await withWriteLock(path, async () => {
-        const dir = await openDirOptional(path);
-        if (!dir) return { exists: false, value: null, version: 0 };
-        const tombs = await readTombs(dir);
-        const entry = tombs.map.has(key)
-          ? null
-          : await readEntry(dir, `${key}.json`, true);
-        const version = await currentVersion(dir, key);
-        return entry
-          ? { exists: true, value: structuredClone(entry.value), version }
-          : { exists: false, value: null, version };
-      });
+      return await withWriteLock(path, () => snapshotInner(path, isMaster, key));
     },
     /** The key's current durable token; deleted keys retain a tombstone token. */
     async getVersion(key) {
+      const wal = await checkedMasterJournalValue(path, isMaster, key);
+      if (wal) return wal.version;
       const dir = await openDirOptional(path);
       if (!dir) return 0;
       return await currentVersion(dir, key);
@@ -1050,13 +1222,27 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
       // The FULL internal namespace is hidden from logical enumeration (the
       // reviewer's finding: __tx/assetRepair/assets/asset:/__epoch were
       // listed).
-      return out.filter((k) => !INTERNAL_KEY_RE.test(k)).sort();
+      const visible = out.filter((k) => !INTERNAL_KEY_RE.test(k));
+      if (isMaster) {
+        const journal = await checkedMasterJournalValue(path, true, "journal");
+        if (journal) {
+          const archive = await checkedMasterJournalValue(path, true, "journal-archive");
+          for (const key of ["journal", "journal-archive"]) {
+            const index = visible.indexOf(key);
+            if (index >= 0) visible.splice(index, 1);
+          }
+          if (journal.exists) visible.push("journal");
+          if (archive?.exists) visible.push("journal-archive");
+        }
+      }
+      return visible.sort();
     },
     async delete(key) {
       // Plain delete is serialized and publishes the durable tombstone before
       // removing the value. A tombstone failure therefore leaves the live value.
       await withWriteLock(path, async () => {
         const dir = await openDir(path);
+        await assertLegacyMasterJournalWriteAllowed(dir, isMaster, key);
         const deletedGen = await issueVersion(dir);
         const tombs = await readTombs(dir);
         tombs.map.set(key, deletedGen);
@@ -1073,39 +1259,155 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
       // finding: clear reopened expected-0).
       await withWriteLock(path, async () => {
         const dir = await openDir(path);
-        let genRaw = null;
-        const dirKey = getDirKey(dir);
-        if (dirKey && genCache.has(dirKey)) {
-          genRaw = { gen: genCache.get(dirKey) };
-        } else {
-          try { genRaw = await readJsonStrict(dir, GEN_FILE, { allowAbsent: true }); } catch { genRaw = null; }
+        if (isMaster && await readMasterJournalHead(dir)) {
+          throw new Error("master journal WAL writer is not enabled; master clear refused");
         }
-        const removedKeys = [];
-        for await (const [name] of dir.entries()) {
-          if (name === GEN_FILE || name === TOMBS_FILE || name === "__epoch.json") continue;
-          if (name.endsWith(".json")) {
-            const key = name.slice(0, -5);
-            if (!INTERNAL_KEY_RE.test(key)) removedKeys.push(key);
-          }
-          try {
-            await removeTracked(dir, name, { recursive: true });
-          } catch { /* absent */ }
-        }
-        // Every removed logical value gets a tombstone. Legacy `.version`
-        // sidecars and internal transaction files are removed but never exposed
-        // as user keys in the new authority.
-        const tombs = await readTombs(dir);
-        for (const key of removedKeys) {
-          const deletedGen = await issueVersion(dir);
-          tombs.map.set(key, deletedGen);
-        }
-        await writeTombs(dir, tombs);
-        if (genRaw && typeof genRaw.gen === "number") {
-          await writeJson(dir, "__epoch.json", { gen: genRaw.gen });
-        }
+        // The generation authority and per-key tombstones survive. The
+        // product path still refuses on a WAL head; no writer is enabled here.
+        await clearStoreDirectory(dir);
       });
     },
   };
+  storeTransactions.set(store, (fn) => withWriteLock(path, async () => {
+    let active = true;
+    const pending = new Set();
+    const scoped = (op) => (...args) => {
+      if (!active) throw new Error("store transaction has expired");
+      const run = Promise.resolve().then(() => op(...args));
+      pending.add(run);
+      run.then(() => pending.delete(run), () => pending.delete(run));
+      run.catch(() => {}); // the caller still receives the rejection
+      return run;
+    };
+    // These verbs use the ALREADY-HELD master write/Web Lock. Calling
+    // withMasterJournalIssuer() from here would re-enter both locks and hang.
+    // Keep the directory + issuer private and scoped to this transaction;
+    // there is still NO product call site or enabled WAL write route.
+    let journalAuthority = null;
+    const authority = () => {
+      if (!isMaster) throw new Error("master journal authority requires master store");
+      return journalAuthority ??= (async () => {
+        const master = await openDir(path);
+        return { master, issuer: createMasterJournalIssuer(master, {
+          issueVersion: () => issueVersion(master),
+          readGeneration: () => readDurableGeneration(master),
+        }) };
+      })();
+    };
+    // The outer lock excludes OTHER transactions, not sibling promises in the
+    // same callback. Serialise WAL verbs here or two concurrent appends could
+    // derive the same next sequence and race the same immutable frame name.
+    let journalTail = Promise.resolve();
+    let guardActive = false;
+    const ordered = (op) => {
+      const tracked = scoped((...args) => {
+        const run = journalTail.then(() => op(...args));
+        journalTail = run.then(() => {}, () => {});
+        return run;
+      });
+      return (...args) => {
+        // A guard awaiting another queued operation would wait on itself.
+        // We cannot identify the async caller in a browser, so conservatively
+        // reject ALL transaction operations invoked while a guard is in flight
+        // (including unrelated siblings). Callers must await guarded writes.
+        if (guardActive) {
+          return Promise.reject(new Error("master journal transaction call refused while guard is in flight"));
+        }
+        return tracked(...args);
+      };
+    };
+    const guarded = (guard) => {
+      if (guard == null) return null;
+      if (typeof guard !== "function") throw new Error("master journal guard must be a function");
+      return async () => {
+        if (guardActive) throw new Error("nested master journal guard refused");
+        guardActive = true;
+        try { return await guard(); }
+        finally { guardActive = false; }
+      };
+    };
+    const mutationScoped = isMaster ? ordered : scoped;
+    const masterJournal = isMaster ? Object.freeze({
+
+      head: ordered(async () => readMasterJournalHead((await authority()).master)),
+      // For future direct store replace/delete/clear routing only. A caller
+      // MUST capture the published epoch+version before requesting this frame;
+      // omitting either token cannot turn a stale mutation into a blind write.
+      // No product call site enables this staged writer yet.
+      frameIfCurrent: ordered(async (operation, { expectedEpoch, expectedVersion } = {}) => {
+        if (!Number.isSafeInteger(expectedEpoch) || expectedEpoch < 1 ||
+            !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+          throw new Error("master journal frame requires exact epoch and version");
+        }
+        const { master, issuer } = await authority();
+        return await stageMasterJournalFrame(master, operation,
+          { ...issuer, expectedEpoch, expectedVersion });
+      }),
+      // Staged only. A clear-reset frame publishes first so a failed frame
+      // cannot delete unrelated master keys. The WAL directory and __gen must
+      // survive later key tombstoning. This is journal authority consistency,
+      // NOT a whole-profile point-in-time atomic clear on interruption.
+      clearIfCurrent: ordered(async ({ expectedEpoch, expectedVersion } = {}) => {
+        if (!Number.isSafeInteger(expectedEpoch) || expectedEpoch < 1 ||
+            !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+          throw new Error("master journal clear requires exact epoch and version");
+        }
+        const { master, issuer } = await authority();
+        const before = await readMasterJournalHead(master);
+        if (!before) throw new Error("master journal clear requires a published head");
+        if (before.epoch !== expectedEpoch || before.version !== expectedVersion) {
+          return { ok: false, reason: "stale_master_journal_head" };
+        }
+        const head = await stageMasterJournalFrame(master, { operation: "clear" },
+          { ...issuer, expectedEpoch, expectedVersion });
+        await clearStoreDirectory(master, { preserveWal: true, strictRemovals: true });
+        return { ok: true, head };
+      }),
+      append: ordered(async (entry, { guard = null, idempotencyExecutionId = null } = {}) => {
+        const { master, issuer } = await authority();
+        return await appendMasterJournalRow(master, entry,
+          { ...issuer, guard: guarded(guard), idempotencyExecutionId });
+      }),
+      appendWithReceipt: ordered(async (entry, { guard = null, idempotencyExecutionId = null } = {}) => {
+        const { master, issuer } = await authority();
+        return await appendMasterJournalWithReceipt(master, entry,
+          { ...issuer, guard: guarded(guard), idempotencyExecutionId });
+      }),
+      compensate: ordered(async (receipt, { guard = null } = {}) => {
+        const { master, issuer } = await authority();
+        return await compensateMasterJournalReceipt(master, receipt,
+          { ...issuer, guard: guarded(guard) });
+      }),
+      cancel: ordered(async (entry, executionId = entry?.executionId) => {
+        const { master, issuer } = await authority();
+        return await cancelMasterJournalExecution(master, entry, executionId, issuer);
+      }),
+    }) : null;
+    const tx = Object.freeze({
+      isMaster,
+      ...(isMaster ? { masterJournal } : {}),
+      get: scoped((key) => store.get(key)),
+      getStrict: scoped((key) => store.getStrict(key)),
+      has: scoped((key) => store.has(key)),
+      getVersion: scoped((key) => store.getVersion(key)),
+      snapshot: scoped((key) => snapshotInner(path, isMaster, key)),
+      setTrusted: mutationScoped((key, value) => setValueInner(path, key, value, { isMaster, trusted: true, storeBoundBytes })),
+      compareAndDelete: mutationScoped((key, version) => compareAndSetInner(path, key, version, undefined, { isMaster })),
+      compareAndRestore: mutationScoped((key, version, value) => compareAndSetInner(path, key, version, value, { isMaster })),
+    });
+    let result;
+    let callbackError;
+    try { result = await fn(tx); } catch (error) { callbackError = error; }
+    active = false;
+    // An accidentally unawaited operation must finish while this lock is
+    // still held; it cannot leak an unlocked write after callback return.
+    const unsettled = await Promise.allSettled([...pending]);
+    if (callbackError) throw callbackError;
+    const failed = unsettled.find((entry) => entry.status === "rejected");
+    if (failed) throw new Error(`unawaited store transaction operation failed: ${failed.reason?.message ?? failed.reason}`);
+    return result;
+  }));
+  return store;
 }
 
 export function memoryStore(origin) {
@@ -1409,6 +1711,9 @@ export function durableRunMemory() {
     isMaster: false,
     origin: "durable-runs",
     async get(key) { return await (await readStore(key)).get(key); },
+    // A cutover fence must not interpret a damaged run or outbox file as an
+    // absent key. Route the strict read to the same owning store as get().
+    async getStrict(key) { return await (await readStore(key)).getStrict(key); },
     async has(key) { return await (await readStore(key)).has(key); },
     async snapshot(key) { return await (await readStore(key)).snapshot(key); },
     async getVersion(key) { return await (await readStore(key)).getVersion(key); },
@@ -1563,6 +1868,17 @@ function withJournalLock(fn) {
   return run;
 }
 
+async function masterJournalHeadInTransaction(tx) {
+  if (!tx.isMaster) return null;
+  if (tx.masterJournal) return await tx.masterJournal.head();
+  // withStoreTransaction refuses unregistered stores in the extension. Deno's
+  // diagnostic wrapped-store fallback must still read the physical master WAL:
+  // an absent transaction facade is NOT evidence of legacy authority.
+  if (typeof Deno === "undefined") throw new Error("unregistered master journal transaction refused");
+  const master = await openDirOptional([ROOT, MASTER]);
+  return master ? await readMasterJournalHead(master) : null;
+}
+
 // The live journal ring keeps the latest 500 entries; everything older is
 // archived (dptw owner-steer: archive-to-file, never evict).
 const JOURNAL_LIVE_ENTRIES = 500;
@@ -1595,7 +1911,10 @@ async function exactStoreSnapshot(store, key) {
 }
 
 async function journalAppendInternal(store, entry, guard, idempotencyExecutionId, receiptCapable) {
-  return withJournalLock(async () => {
+  return withJournalLock(() => withStoreTransaction(store, async (store) => {
+  if (await masterJournalHeadInTransaction(store)) {
+    throw new Error("master journal WAL writer is not enabled; append refused");
+  }
   // Capture the exact value, existence and version as one stable receipt.
   const pre = await exactStoreSnapshot(store, "journal");
   const original = pre.exists ? pre.value : [];
@@ -1615,19 +1934,37 @@ async function journalAppendInternal(store, entry, guard, idempotencyExecutionId
   // dptw: the entry is stored WHOLE — no result/task text clipping.
   journal.push({ ts: Date.now(), ...entry });
   const entries = boundJournal(journal);
-  // Archive BEFORE the live commit: a failed archive aborts the append with
-  // the live journal untouched (nothing lost); a failed commit after a
-  // successful archive leaves an archive duplicate — harmless, archive rows
-  // are immutable records readers dedupe by executionId/ts.
+  // Archive BEFORE the live commit: a failed archive aborts without evicting
+  // any row. The same transaction lock covers both values and the guard/CAS
+  // compensation, including the absent-vs-present-empty archive receipt.
+  // A failed journal write with no issued version remains an ambiguous legacy
+  // OPFS close boundary; only a unified WAL frame can remove that last gap.
   const overflow = journalOverflow(journal);
+  let archiveReceipt = null;
   if (overflow.length > 0) {
-    const archive = (await store.get(JOURNAL_ARCHIVE_KEY)) ?? [];
+    const preArchive = await exactStoreSnapshot(store, JOURNAL_ARCHIVE_KEY);
+    const archive = preArchive.exists ? preArchive.value : [];
     if (!Array.isArray(archive)) throw new Error("journal archive is not an array");
-    await store.setTrusted(JOURNAL_ARCHIVE_KEY, archive.concat(overflow));
+    const writeVersion = await store.setTrusted(JOURNAL_ARCHIVE_KEY, archive.concat(overflow));
+    archiveReceipt = { preArchive, writeVersion };
   }
-  // Re-check the caller's fence IMMEDIATELY before the commit (no other await
-  // between this check and setTrusted).
-  if (guard) await guard();
+  const undoArchive = async (discardOldEnrollment = false) => {
+    if (!archiveReceipt) return;
+    const { preArchive, writeVersion } = archiveReceipt;
+    const undone = discardOldEnrollment || !preArchive.exists
+      ? await store.compareAndDelete(JOURNAL_ARCHIVE_KEY, writeVersion)
+      : await store.compareAndRestore(JOURNAL_ARCHIVE_KEY, writeVersion, preArchive.value);
+    if (!undone) throw new Error("journal archive compensation CAS refused");
+  };
+  // Re-check the caller's fence IMMEDIATELY before the commit. If it fails,
+  // remove only our archive write with its exact issued generation.
+  if (guard) {
+    try { await guard(); } catch (error) {
+      try { await undoArchive(error?.genMismatch === true); }
+      catch (undoError) { throw new AggregateError([error, undoError], "journal pre-commit fence failed; archive compensation unverified"); }
+      throw error;
+    }
+  }
   // `setTrusted` returns the durable VERSION TOKEN for THIS write (the round-27
   // value-CAS ABA blocker). Capture it so compensation below targets this exact
   // write, never a same-value write made under a different enrollment.
@@ -1656,12 +1993,17 @@ async function journalAppendInternal(store, entry, guard, idempotencyExecutionId
       //   2. abort/ownership loss (same enrollment): restore the EXACT pre-append
       //      state, CAS-scoped (only if the version is still `wroteVersion`).
       try {
-        if (e?.genMismatch === true) {
-          await store.compareAndDelete("journal", wroteVersion);
-        } else {
-          await store.compareAndRestore("journal", wroteVersion, original);
-        }
-      } catch { /* best-effort compensation */ }
+        const journalUndone = e?.genMismatch === true
+          ? await store.compareAndDelete("journal", wroteVersion)
+          : await store.compareAndRestore("journal", wroteVersion, original);
+        // Never remove overflow while the live append could still be present.
+        // On re-enrollment, delete our archive write but do not restore old
+        // enrollment content into the newly reused master directory.
+        if (!journalUndone) throw new Error("journal compensation CAS refused");
+        await undoArchive(e?.genMismatch === true);
+      } catch (undoError) {
+        throw new AggregateError([e, undoError], "journal post-commit fence failed; compensation unverified");
+      }
       throw e;
     }
   }
@@ -1679,7 +2021,7 @@ async function journalAppendInternal(store, entry, guard, idempotencyExecutionId
     writeVersion: wroteVersion,
     appended: true,
   };
-  });
+  }));
 }
 
 export async function journalAppend(store, entry, guard = null, idempotencyExecutionId = null) {
@@ -1698,9 +2040,16 @@ function sameJson(a, b) {
 
 /** Version/fence-scoped removal of one execution's journal rows. */
 export async function journalCompensateExecution(store, receipt, guard = null) {
-  return withJournalLock(async () => {
+  return withJournalLock(() => withStoreTransaction(store, async (store) => {
     if (!receipt || receipt.schemaVersion !== 1 || receipt.key !== "journal" || !receipt.executionId) {
       throw new Error("invalid journal compensation receipt");
+    }
+    // No partial authority switch: an in-flight legacy receipt is NOT a WAL
+    // receipt and must never report a successful compensation after cutover.
+    // The staged WAL transaction verbs are not product-routed yet.
+    if (await masterJournalHeadInTransaction(store)) {
+      return { ok: false, compensated: false, preserved: true,
+        reason: receipt.wal ? "master_wal_writer_disabled" : "legacy_receipt_after_cutover" };
     }
     const fence = async () => {
       if (!guard) return null;
@@ -1763,14 +2112,16 @@ export async function journalCompensateExecution(store, receipt, guard = null) {
 
     const postCommitRefusal = await fence();
     if (postCommitRefusal) {
-      // Undo only this compensation; a concurrent append makes the CAS refuse.
-      await store.compareAndRestore("journal", current.version + 1, current.value).catch(() => false);
+      // Undo only this compensation using its ACTUAL issued generation. Other
+      // master keys may have advanced __gen since current.version, so +1 is
+      // not the write's receipt even while the journal transaction is locked.
+      await store.compareAndRestore("journal", swapped, current.value).catch(() => false);
       return postCommitRefusal;
     }
     const after = await exactStoreSnapshot(store, "journal");
     receipt.compensatedState = structuredClone(after);
     return { ok: true, compensated: true, idempotent: false, concurrentRowsPreserved: current.version !== receipt.writeVersion };
-  });
+  }));
 }
 
 /** Append one journal row for an immutable execution, or return the existing
@@ -1786,15 +2137,30 @@ export async function journalAppendOnce(store, entry, guard = null, executionId 
  * make the durable tombstone win without producing two terminal outcomes. */
 export async function journalCommitCancellation(store, entry, executionId = entry?.executionId) {
   if (!executionId) throw new Error("journalCommitCancellation requires executionId");
-  return withJournalLock(async () => {
-    const original = (await store.get("journal")) ?? [];
+  return withJournalLock(() => withStoreTransaction(store, async (store) => {
+    if (await masterJournalHeadInTransaction(store)) {
+      throw new Error("master journal WAL writer is not enabled; cancellation refused");
+    }
+    const pre = await exactStoreSnapshot(store, "journal");
+    const original = pre.exists ? pre.value : [];
+    if (!Array.isArray(original)) throw new Error("journal is not an array");
     const kept = original.filter((row) => !(
       row?.executionId === executionId && ["result", "cancelled"].includes(row?.type)
     ));
     kept.push({ ts: Date.now(), ...entry, type: "cancelled", executionId, cancelled: true });
-    await store.setTrusted("journal", kept);
-    return kept;
-  });
+    const overflow = journalOverflow(kept);
+    if (overflow.length > 0) {
+      const archive = (await store.get(JOURNAL_ARCHIVE_KEY)) ?? [];
+      if (!Array.isArray(archive)) throw new Error("journal archive is not an array");
+      await store.setTrusted(JOURNAL_ARCHIVE_KEY, archive.concat(overflow));
+    }
+    const bounded = boundJournal(kept);
+    // A different realm can append after our snapshot: refuse instead of
+    // blindly replacing its row with a stale cancellation projection.
+    const swapped = await store.compareAndRestore("journal", pre.version, bounded);
+    if (!swapped) throw new Error("journal cancellation lost a concurrent write");
+    return bounded;
+  }));
 }
 
 // Screenshots are LARGE media stored as SEPARATE OPFS files under

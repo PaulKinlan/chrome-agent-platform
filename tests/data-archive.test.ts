@@ -28,6 +28,7 @@ import {
   isExcludedOpfsPath,
   ArchiveFormatError,
 } from "../extension/lib/data-archive.js";
+import { sealMasterJournalRecord } from "../extension/lib/master-journal-wal.js";
 
 // ── mock backends (pure DI — no chrome.*, no OPFS, no window) ──────────────
 
@@ -190,7 +191,10 @@ Deno.test("archive bytes never contain credential material; the bundle records W
 
 Deno.test("sanitizeKvForExport strips ephemeral keys and never leaks providerConfig", () => {
   const { kv } = fixtureBackends();
+  kv.store.set("cap:masterJournalCutoverFence", { schemaVersion: 1, phase: "armed" });
   const out = sanitizeKvForExport(Object.fromEntries(kv.store));
+  assertEquals(out["cap:masterJournalCutoverFence"], undefined,
+    "a local owner cutover fence must never travel in an export");
   assertEquals(out.providerConfig, undefined);
   assertEquals(out["cap:webmcpBridgeNonces"], undefined);
   assertEquals(out["cap:namedAgents"].length, 2);
@@ -291,6 +295,46 @@ Deno.test("archive bounds are named and enforced (file count and total bytes)", 
 });
 
 // ── 6. export is idempotent and never emits a partial archive ─────────────
+
+Deno.test("buffered backup excludes stale legacy and unpublished master WAL residue", async () => {
+  const prefix = "memory/master/journal-wal/";
+  const epoch = 18;
+  const checkpoint = `checkpoint-${epoch}-0.json`;
+  const archive = `archive-${epoch}-0.json`;
+  const binding = JSON.stringify({ epoch, sequence: 0, checkpoint, archive });
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(binding)));
+  const lastHash = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const head = await sealMasterJournalRecord("head", {
+    epoch, sequence: 0, checkpointSequence: 0, checkpoint, archive, lastHash, version: epoch,
+  });
+  const opfs = mockOpfs({
+    [`${prefix}head-a.json`]: head,
+    [`${prefix}${checkpoint}`]: await sealMasterJournalRecord("checkpoint", { epoch, sequence: 0, exists: true, live: [{ id: 1 }] }),
+    [`${prefix}${archive}`]: await sealMasterJournalRecord("archive", { epoch, rows: [] }),
+    [`${prefix}frame-${epoch}-1.json`]: "unpublished",
+    "memory/master/journal.json": "stale legacy value",
+  });
+  const snapshot = await collectExportData({ kvGet: mockKv().kvGet, opfs, alarms: mockAlarms() });
+  assertEquals(snapshot.files.map(({ path }) => path).sort(), [
+    `${prefix}head-a.json`, `${prefix}${checkpoint}`, `${prefix}${archive}`,
+  ].sort());
+});
+
+Deno.test("buffered import refuses a torn master WAL archive before live mutation", async () => {
+  const bundle = buildArchive({
+    kv: {}, files: [{ path: "memory/master/journal-wal/head-a.json", bytes: new TextEncoder().encode("{\"torn\":") }],
+    totalBytes: 8, alarms: [], configuredProviders: [], mcpServers: [],
+  });
+  const kv = mockKv();
+  const opfs = mockOpfs({ "memory/master/journal.json": "owner old journal" });
+  await assertRejects(() => importArchive(bundle, {
+    kvGet: kv.kvGet, kvSet: kv.kvSet, kvRemove: kv.kvRemove,
+    opfs, alarms: mockAlarms(), overwrite: true,
+  }), Error, "master journal");
+  assertEquals(new TextDecoder().decode(opfs.map.get("memory/master/journal.json")), "owner old journal");
+  assertEquals(opfs.map.has("memory/master/journal-wal/head-a.json"), false);
+  assertEquals(kv.store.has("cap:importBackup"), false);
+});
 
 Deno.test("export is re-runnable (SW-restart safe) and a failing backend emits NOTHING", async () => {
   const b = fixtureBackends();
