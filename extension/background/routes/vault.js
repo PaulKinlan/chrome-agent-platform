@@ -180,6 +180,12 @@ export function createVaultRoutes({
       return { ok: true };
     },
 
+    async "vault.ledger.resetQuotas"({ serviceId } = {}, context) {
+      requireSettingsSender(context);
+      await ledger?.resetQuotas?.(serviceId);
+      return { ok: true };
+    },
+
     /** One minimal authenticated request through the enclave proxy: proves the
      * stored token is accepted WITHOUT logging or returning it.
      * SECURITY (voicebox-dsflash1's review): the proxy's error TEXT is never
@@ -198,6 +204,7 @@ export function createVaultRoutes({
         "bound_exceeded", "target_refused", "origin_not_approved",
         "unknown_service", "bad_method", "secret_unavailable",
         "template_error", "unbounded_response", "not_wired",
+        "quota_exceeded", "ledger_unavailable", "clock_skew",
       ]);
       const code = ok ? null : (typeof res?.code === "string" && KNOWN_CODES.has(res.code) ? res.code : "connection_failed");
       return { ok, status: typeof res?.status === "number" ? res.status : null, code };

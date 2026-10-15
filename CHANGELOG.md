@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.695] — 2026-10-15
+- Add persistent request audit logging, rate limiting, and quota enforcement to secure enclave proxy.
+
 ## [0.3.694] — 2026-10-15
 - Add exact-value credential redaction and static HTML generator for thread exports.
 

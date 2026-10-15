@@ -133,6 +133,8 @@ function extractVaultKeys(value, set = new Set()) {
  *   getDynamicServices?: null | (() => Promise<Record<string, any>> | Record<string, any>),
  *   onRecord?: null | ((entry: any) => void),
  *   isAllowedCaller?: (context: any) => boolean,
+ *   ledger?: any,
+ *   customQuotas?: Record<string, { limit: number, windowMs: number }>,
  * }} [opts]
  */
 export function createEnclaveProxyRoutes({
@@ -142,6 +144,8 @@ export function createEnclaveProxyRoutes({
   getDynamicServices = null,
   onRecord = null,
   isAllowedCaller = () => false,
+  ledger = null,
+  customQuotas = null,
 } = {}) {
   if (!vault || typeof vault.getSecretRaw !== "function") {
     throw new TypeError("enclave proxy routes require the Stage-1 secret vault");
@@ -197,6 +201,7 @@ export function createEnclaveProxyRoutes({
         s.keyId?.toLowerCase() === lower
       );
     }
+    const canonicalServiceId = service?.id || serviceId;
 
     const origins = service?.origins || (service?.origin ? [service.origin] : null);
     if (!service || !Array.isArray(origins) || origins.length === 0) {
@@ -204,7 +209,7 @@ export function createEnclaveProxyRoutes({
       e.code = "unknown_service";
       try {
         onRecord?.({
-          service: serviceId,
+          service: canonicalServiceId,
           keyId: serviceId,
           method: String(message?.method ?? "GET").toUpperCase(),
           origin: "",
@@ -214,6 +219,7 @@ export function createEnclaveProxyRoutes({
           code: e.code,
           ms: Date.now() - startMs,
           timestamp: startMs,
+          countUsage: false,
         });
       } catch { /* ignore */ }
       throw e;
@@ -225,7 +231,7 @@ export function createEnclaveProxyRoutes({
       e.code = "bad_method";
       try {
         onRecord?.({
-          service: serviceId,
+          service: canonicalServiceId,
           keyId: service.secretKey || service.keyId || serviceId,
           method,
           origin: origins[0] || "",
@@ -235,9 +241,36 @@ export function createEnclaveProxyRoutes({
           code: e.code,
           ms: Date.now() - startMs,
           timestamp: startMs,
+          countUsage: false,
         });
       } catch { /* ignore */ }
       throw e;
+    }
+
+    // Rate limiting & quota enforcement (chrome-agent-platform-jao1.6):
+    // Refuse calls with quota_exceeded BEFORE resolving templates or making network I/O.
+    if (ledger && typeof ledger.checkQuota === "function") {
+      const quotaCheck = await ledger.checkQuota(canonicalServiceId, { customQuotas });
+      if (!quotaCheck.ok) {
+        const e = new Error(`enclave proxy: ${quotaCheck.error || "quota exceeded"}`);
+        e.code = quotaCheck.code || "quota_exceeded";
+        try {
+          onRecord?.({
+            service: canonicalServiceId,
+            keyId: service.secretKey || service.keyId || serviceId,
+            method,
+            origin: origins[0] || "",
+            path: String(message?.path ?? message?.url ?? ""),
+            status: null,
+            ok: false,
+            code: e.code,
+            ms: Date.now() - startMs,
+            timestamp: startMs,
+            countUsage: false,
+          });
+        } catch { /* ignore */ }
+        throw e;
+      }
     }
 
     // Default service auth injection on enclave.proxy:
@@ -288,7 +321,7 @@ export function createEnclaveProxyRoutes({
           e.code = "origin_not_approved";
           try {
             onRecord?.({
-              service: serviceId,
+              service: canonicalServiceId,
               keyId: refKey,
               method,
               origin: origins[0] || "",
@@ -298,6 +331,7 @@ export function createEnclaveProxyRoutes({
               code: e.code,
               ms: Date.now() - startMs,
               timestamp: startMs,
+              countUsage: false,
             });
           } catch { /* ignore */ }
           throw e;
@@ -351,7 +385,7 @@ export function createEnclaveProxyRoutes({
       e.code = "target_refused";
       try {
         onRecord?.({
-          service: serviceId,
+          service: canonicalServiceId,
           keyId: secretKey || serviceId,
           method,
           origin: origins[0] || "",
@@ -361,6 +395,7 @@ export function createEnclaveProxyRoutes({
           code: e.code,
           ms: Date.now() - startMs,
           timestamp: startMs,
+          countUsage: false,
         });
       } catch { /* ignore */ }
       throw e;
@@ -373,7 +408,7 @@ export function createEnclaveProxyRoutes({
       e.code = "origin_not_approved";
       try {
         onRecord?.({
-          service: serviceId,
+          service: canonicalServiceId,
           keyId: secretKey || serviceId,
           method,
           origin,
@@ -383,6 +418,7 @@ export function createEnclaveProxyRoutes({
           code: e.code,
           ms: Date.now() - startMs,
           timestamp: startMs,
+          countUsage: false,
         });
       } catch { /* ignore */ }
       throw e;
@@ -423,7 +459,7 @@ export function createEnclaveProxyRoutes({
       capLog("enclave-proxy").warn(`enclave proxy: ${serviceId} request failed: ${detail}`);
       try {
         onRecord?.({
-          service: serviceId,
+          service: canonicalServiceId,
           keyId: secretKey || serviceId,
           method,
           origin,
@@ -433,6 +469,7 @@ export function createEnclaveProxyRoutes({
           code: "connection_failed",
           ms: Date.now() - startMs,
           timestamp: startMs,
+          countUsage: false,
         });
       } catch { /* ignore */ }
       return { ok: false, code: "connection_failed", error: "connection_failed" };
@@ -441,7 +478,7 @@ export function createEnclaveProxyRoutes({
     if (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400)) {
       try {
         onRecord?.({
-          service: serviceId,
+          service: canonicalServiceId,
           keyId: secretKey || serviceId,
           method,
           origin,
@@ -451,6 +488,7 @@ export function createEnclaveProxyRoutes({
           code: "redirect_refused",
           ms: Date.now() - startMs,
           timestamp: startMs,
+          countUsage: false,
         });
       } catch { /* ignore */ }
       return { ok: false, code: "redirect_refused", error: "redirect_refused" };
@@ -464,7 +502,7 @@ export function createEnclaveProxyRoutes({
     if (!Number.isNaN(declared) && declared > MAX_BODY_BYTES) {
       try {
         onRecord?.({
-          service: serviceId,
+          service: canonicalServiceId,
           keyId: secretKey || serviceId,
           method,
           origin,
@@ -474,6 +512,7 @@ export function createEnclaveProxyRoutes({
           code: "bound_exceeded",
           ms: Date.now() - startMs,
           timestamp: startMs,
+          countUsage: false,
         });
       } catch { /* ignore */ }
       return { ok: false, error: `enclave proxy: the response from ${serviceId} declared ${declared} bytes, over the 1 MiB enclave bound` };
@@ -491,7 +530,7 @@ export function createEnclaveProxyRoutes({
           try { await reader.cancel(); } catch { /* gone */ }
           try {
             onRecord?.({
-              service: serviceId,
+              service: canonicalServiceId,
               keyId: secretKey || serviceId,
               method,
               origin,
@@ -501,6 +540,7 @@ export function createEnclaveProxyRoutes({
               code: "bound_exceeded",
               ms: Date.now() - startMs,
               timestamp: startMs,
+              countUsage: false,
             });
           } catch { /* ignore */ }
           return { ok: false, code: "bound_exceeded", error: "bound_exceeded" };
@@ -512,7 +552,7 @@ export function createEnclaveProxyRoutes({
       // it is refused — the enclave never accepts an unbounded body.
       try {
         onRecord?.({
-          service: serviceId,
+          service: canonicalServiceId,
           keyId: secretKey || serviceId,
           method,
           origin,
@@ -522,6 +562,7 @@ export function createEnclaveProxyRoutes({
           code: "unbounded_response",
           ms: Date.now() - startMs,
           timestamp: startMs,
+          countUsage: false,
         });
       } catch { /* ignore */ }
       return { ok: false, code: "unbounded_response", error: "unbounded_response" };
@@ -535,7 +576,7 @@ export function createEnclaveProxyRoutes({
 
     try {
       onRecord?.({
-        service: serviceId,
+        service: canonicalServiceId,
         keyId: secretKey || serviceId,
         method,
         origin,
@@ -545,6 +586,7 @@ export function createEnclaveProxyRoutes({
         code: (res.ok ?? true) ? null : String(res.status),
         ms: Date.now() - startMs,
         timestamp: startMs,
+        countUsage: false,
       });
     } catch { /* ignore */ }
 

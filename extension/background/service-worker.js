@@ -7291,7 +7291,10 @@ let enclaveVaultPromise = null;
 // this module instance will ever mint.
 const enclaveSwAccess = createServiceWorkerAccess();
 const ENCLAVE_SW_CALLER = Symbol("cap.enclave.sw-caller");
-const enclaveLedger = createEnclaveLedger({ maxEntries: 100 });
+const enclaveLedger = createEnclaveLedger({
+  maxEntries: 100,
+  storageArea: chrome.storage.local,
+});
 
 async function getDynamicProxyRulesMap() {
   try {
@@ -7331,6 +7334,7 @@ const enclaveProxyRoutes = createEnclaveProxyRoutes({
       enclaveVault().then((v) => v.getSecretRaw(keyId, { ...opts, access: enclaveSwAccess })),
   },
   getDynamicServices: getDynamicProxyRulesMap,
+  ledger: enclaveLedger,
   onRecord: (entry) => enclaveLedger.record(entry),
   isAllowedCaller: (context) => Boolean(context?.[ENCLAVE_SW_CALLER] === true || isOwnerPrincipal(context)),
 });
