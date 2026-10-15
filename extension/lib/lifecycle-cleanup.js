@@ -419,6 +419,10 @@ export async function liveLifecycleSnapshot(snapshot, tabProbe, windowProbe) {
   return { ...s, openedTabs, openedWindows, restoredTabIds, restoredWindowIds };
 }
 
+// Shared with the thread terminal dedupe: only the runtime's exact appended
+// note may replace a matching interim final, never a merely similar answer.
+export const RUN_END_CLEANUP_NOTE_LABEL = "— Browser-tidy (runtime note) — ";
+
 /**
  * Append the run-end cleanup note to a run's final result text (the thread's
  * terminal row). Bounded: the note itself is short and the result is bounded
@@ -429,5 +433,5 @@ export function appendRunEndCleanupNote(result, snapshot, autoClosedTabIds = [])
   if (!note) return result;
   const base = String(result ?? "").trimEnd();
   const sep = base ? "\n\n" : "";
-  return `${base}${sep}— Browser-tidy (runtime note) — ${note}`;
+  return `${base}${sep}${RUN_END_CLEANUP_NOTE_LABEL}${note}`;
 }

@@ -19,6 +19,7 @@
 
 import { masterMemory, forgetDurableThread } from "./memory.js";
 import { sanitizeAttachments } from "./attachments.js";
+import { RUN_END_CLEANUP_NOTE_LABEL } from "./lifecycle-cleanup.js";
 import {
   createWorkingSet,
   addTabToWorkingSet,
@@ -531,9 +532,19 @@ export async function commitThreadTerminal(id, executionId, terminal) {
       const interimCandidate = thread.messages.find((m) =>
         m?.executionId === executionId && Number.isInteger(m?.step) && m.role === "assistant" && m.content !== content);
       const interimTextForDedupe = interimCandidate ? boundText(rawContent) : content;
+      // The runtime may append its Browser-tidy note AFTER agent-do emitted
+      // and persisted the final text. That changes the terminal bytes without
+      // making the plain final a second substantive answer. Match only the
+      // exact runtime marker and exact redacted base, never a loose prefix.
+      const noteMarker = `\n\n${RUN_END_CLEANUP_NOTE_LABEL}`;
+      const noteAt = role === "assistant" ? rawContent.lastIndexOf(noteMarker) : -1;
+      const finalBeforeNote = noteAt > 0 && noteAt + noteMarker.length < rawContent.length
+        ? boundText(rawContent.slice(0, noteAt))
+        : null;
       thread.messages = thread.messages.filter((message) =>
         !(message?.executionId === executionId && Number.isInteger(message?.step) && message.role === "assistant" &&
-          (message.content === content || message.content === interimTextForDedupe)));
+          (message.content === content || message.content === interimTextForDedupe ||
+            (finalBeforeNote !== null && message.content === finalBeforeNote))));
       const envelope = boundTerminalEnvelope(terminal, role);
       thread.messages.push({
         role,
