@@ -399,18 +399,22 @@ Deno.test({
         await new Promise((r) => setTimeout(r, 200));
       }
 
-      await new Promise((r) => setTimeout(r, 1000));
-
-      const diagAfterKeyless = await cdp.eval(
-        page.sessionId,
-        `(() => {
-          const d = document.getElementById('diagnostics-panel');
-          return {
-            badgeCount: d?.getAttribute('count'),
-            hasAttention: d?.hasAttribute('attention')
-          };
-        })()`,
-      );
+      // Wait for badge count to settle to '0'
+      let diagAfterKeyless;
+      for (let i = 0; i < 40; i++) {
+        diagAfterKeyless = await cdp.eval(
+          page.sessionId,
+          `(() => {
+            const d = document.getElementById('diagnostics-panel');
+            return {
+              badgeCount: d?.getAttribute('count'),
+              hasAttention: d?.hasAttribute('attention')
+            };
+          })()`,
+        );
+        if (diagAfterKeyless?.badgeCount === "0") break;
+        await new Promise((r) => setTimeout(r, 150));
+      }
 
       assertEquals(
         diagAfterKeyless.badgeCount,
@@ -434,18 +438,22 @@ Deno.test({
         })`,
       );
 
-      await new Promise((r) => setTimeout(r, 1500));
-
-      const diagAfterRealError = await cdp.eval(
-        page.sessionId,
-        `(() => {
-          const d = document.getElementById('diagnostics-panel');
-          return {
-            badgeCount: d?.getAttribute('count'),
-            hasAttention: d?.hasAttribute('attention')
-          };
-        })()`,
-      );
+      // Poll for badge count to update to '1' after real error (causal polling replacing fixed sleep)
+      let diagAfterRealError;
+      for (let i = 0; i < 60; i++) {
+        diagAfterRealError = await cdp.eval(
+          page.sessionId,
+          `(() => {
+            const d = document.getElementById('diagnostics-panel');
+            return {
+              badgeCount: d?.getAttribute('count'),
+              hasAttention: d?.hasAttribute('attention')
+            };
+          })()`,
+        );
+        if (diagAfterRealError?.badgeCount === "1") break;
+        await new Promise((r) => setTimeout(r, 200));
+      }
 
       assertEquals(
         diagAfterRealError.badgeCount,
