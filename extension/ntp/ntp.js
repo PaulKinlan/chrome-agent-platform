@@ -8,6 +8,7 @@
 import { send } from "../lib/messages.js";
 import { handleBroadcastEvent, invalidateRpcCache } from "../shared/rpc-cache.js";
 import { saveArtifactToDisk } from "../lib/artifact-export.js";
+import { openThreadExportPreview } from "../shared/thread-export-preview.js";
 import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, skillAsTemplate, templatePrefill } from "../lib/agent-templates.js";
 import { buildAgentSkillRows } from "../lib/agent-skill-rows.js";
 import { projectUnifiedAgents, slugifyAgentId } from "../lib/agent-projection.js";
@@ -2683,6 +2684,19 @@ if (threadConversation) {
 }
 const editAgentBtn = document.getElementById("edit-agent");
 const shareAgentBtn = document.getElementById("share-agent");
+const exportThreadBtn = document.getElementById("export-thread");
+exportThreadBtn?.addEventListener("click", async () => {
+  const id = currentThreadId;
+  if (!id || currentAgentId) return;
+  try {
+    await openThreadExportPreview({
+      kind: "thread", id, opener: exportThreadBtn,
+      stillCurrent: () => currentThreadId === id && !threadView.hidden,
+    });
+  } catch {
+    setStatus("Could not prepare the redacted HTML export. Try again.", false);
+  }
+});
 const deleteAgentBtn = document.getElementById("delete-agent");
 const threadWorkingSetActions = document.getElementById("thread-working-set-actions");
 const threadGroupTabsBtn = document.getElementById("thread-group-tabs");
@@ -3091,6 +3105,7 @@ async function openThread(id) {
     return;
   }
   const thread = res.ok ? res.thread : null;
+  if (exportThreadBtn) exportThreadBtn.hidden = !thread;
   renderThreadProjection(thread, owner);
   if (thread?.workingSet) {
     let ws = createWorkingSet(thread.workingSet);
@@ -3225,6 +3240,7 @@ async function openBackgroundAgentChat(id, name) {
   // named-agent.update), so hide the Edit button rather than show a dead one.
   editAgentBtn.hidden = true;
   if (shareAgentBtn) shareAgentBtn.hidden = true;
+  if (exportThreadBtn) exportThreadBtn.hidden = true;
   if (deleteAgentBtn) {
     deleteAgentBtn.hidden = false;
     deleteAgentBtn.setAttribute("aria-label", "Delete background agent");
@@ -3387,6 +3403,7 @@ async function openAgentSurface({ kind, id, name }) {
   editAgentBtn.hidden = kind !== "named";
   if (kind === "named") editAgentBtn.setAttribute("aria-label", "Edit agent");
   if (shareAgentBtn) shareAgentBtn.hidden = kind !== "named";
+  if (exportThreadBtn) exportThreadBtn.hidden = true;
   if (deleteAgentBtn) {
     // ACP harness agents have no delete route (nothing to delete: the harness
     // lives on the host) — the control must not be offered for them.

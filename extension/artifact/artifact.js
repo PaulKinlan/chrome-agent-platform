@@ -12,6 +12,7 @@
 
 import { send } from "../lib/messages.js";
 import { saveArtifactToDisk } from "../lib/artifact-export.js";
+import { openThreadExportPreview } from "../shared/thread-export-preview.js";
 import {
   renderHtmlFrame,
   wireHtmlFrameContent,
@@ -31,7 +32,21 @@ const metaEl = document.getElementById("meta");
 const out = document.getElementById("out");
 const copyBtn = document.getElementById("copy-content");
 const saveBtn = document.getElementById("save-disk");
+const exportBtn = document.getElementById("export-html");
+const exportError = document.getElementById("export-html-error");
 const modes = document.getElementById("modes");
+exportBtn?.addEventListener("click", async () => {
+  if (!currentAsset) return;
+  if (exportError) { exportError.hidden = true; exportError.textContent = ""; }
+  try {
+    await openThreadExportPreview({ kind: "artifact", id, origin, opener: exportBtn });
+  } catch {
+    if (exportError) {
+      exportError.textContent = "Could not prepare the redacted HTML export. Try again.";
+      exportError.hidden = false;
+    }
+  }
+});
 
 document.getElementById("back").addEventListener("click", () => {
   if (history.length > 1) history.back();
@@ -307,6 +322,7 @@ async function reload({ keepMode } = {}) {
   currentAssetContent = asset.content ?? "";
   if (copyBtn) copyBtn.disabled = !currentAssetContent;
   if (saveBtn) saveBtn.disabled = !currentAsset;
+  if (exportBtn) exportBtn.disabled = !currentAsset;
 
   panels = buildPanels();
   renderPreview(panels.preview, asset);

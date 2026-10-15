@@ -4,7 +4,7 @@
 // Invariants guarded:
 //   1. docs/SW-DISPATCH-AUTHORITY-CENSUS.md exists and is cited in AGENTS.md and routes/ROUTE_MAP.md.
 //   2. Every registered route in handlers (via mergeRouteMaps) is extracted from actual AST composition.
-//   3. The census classification is complete, disjoint, and covers 100% of registered routes (296 total).
+//   3. The census classification is complete, disjoint, and covers 100% of registered routes (297 total).
 //      (l0r: recipe.list catalog fork deleted; wfo5: browser.callTool added;
 //       s7wl: the vault/enclave maps the resolver below used to skip, +9;
 //       8v5l.2: settings.session.open and settings.session.close added, +2.)
@@ -92,6 +92,9 @@ export const CENSUS_CATEGORIES = {
     "run.control.queue.enqueue", "run.control.queue.remove", "run.control.queue.move",
     "run.retry", "run.logs", "site-skills.set", "agent-workspace.clear",
     "browser.callTool",
+    // 3p3e.12: exact Chrome-attested sender.id AND NTP/artifact-viewer page path,
+    // narrower than the ordinary owner-extension principal fence.
+    "thread-export.html",
     // isAllowedCaller() is isOwnerPrincipal(context) or the SW-internal caller flag
     // (routes/enclave-proxy.js:180); pages and model runs are refused.
     "enclave.proxy",
@@ -433,43 +436,43 @@ Deno.test("census: companion-doc total and route-name falsifications RED by docu
   const arch = await Deno.readTextFile(`${ROOT}docs/ARCHITECTURE.md`);
   const plan = await Deno.readTextFile(`${ROOT}docs/NATIVE-AGENT-POSITION-PLAN.md`);
 
-  assertThrows(() => assertRouteMap(map.replace("**296**", "**295**")), Error, "ROUTE_MAP total");
+  assertThrows(() => assertRouteMap(map.replace("**297**", "**296**")), Error, "ROUTE_MAP total");
   assertThrows(() => assertRouteMap(map.replace("`enclave.proxy`", "`enclave.proxy-renamed`")), Error, "enclave.proxy-renamed");
   assertThrows(() => assertRiskAndThreatPopulation(risks.replace("37 unclassified mutation routes", "31 unclassified mutation routes"), threat), Error, "RISK-REGISTER R11 risk");
   assertThrows(() => assertRiskAndThreatPopulation(risks.replace("`asset.export-to-folder` writes", "`asset.export-to-folder-renamed` writes"), threat), Error, "asset.export-to-folder-renamed");
   assertThrows(() => assertRiskAndThreatPopulation(risks,
-    threat.replace("` assert 296 registered routes", "` assert 295 registered routes")),
+    threat.replace("` assert 297 registered routes", "` assert 296 registered routes")),
     Error, "THREAT_MODEL component-map evidence pin population");
   assertThrows(() => assertRiskAndThreatPopulation(risks,
-    threat.replace("37 unclassified mutations among 296 registered routes", "37 unclassified mutations among 295 registered routes")),
+    threat.replace("37 unclassified mutations among 297 registered routes", "37 unclassified mutations among 296 registered routes")),
     Error, "THREAT_MODEL T4 evidence pin registered count");
 
   // r073 falsification drills:
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch.replace("296-route population", "295-route population"), plan),
+    () => assertArchitectureAndStrategyPopulation(arch.replace("297-route population", "296-route population"), plan),
     Error,
     "ARCHITECTURE.md route count must equal registered population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch.replace("296-route population", "bogus text"), plan),
+    () => assertArchitectureAndStrategyPopulation(arch.replace("297-route population", "bogus text"), plan),
     Error,
     "ARCHITECTURE.md must state the complete route population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("296-route dispatch authority", "295-route dispatch authority")),
+    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("297-route dispatch authority", "296-route dispatch authority")),
     Error,
     "NATIVE-AGENT-POSITION-PLAN.md route count must equal registered population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("296-route dispatch authority", "bogus text")),
+    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("297-route dispatch authority", "bogus text")),
     Error,
     "NATIVE-AGENT-POSITION-PLAN.md must state the dispatch authority route count",
   );
 });
 
-Deno.test("census: all registered routes in handlers are derived via AST and total 296", () => {
+Deno.test("census: all registered routes in handlers are derived via AST and total 297", () => {
   const registered = extractAllRegisteredRoutes();
-  assertEquals(registered.size, 296, `registered routes population must equal 296 (got ${registered.size})`);
+  assertEquals(registered.size, 297, `registered routes population must equal 297 (got ${registered.size})`);
 });
 
 export function assertSettingsSessionRoutesInCensus(
