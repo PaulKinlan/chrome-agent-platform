@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.696] — 2026-10-15
+- Add configurable per-service enclave quotas, fail-closed validation, and settings usage telemetry route.
+
 ## [0.3.695] — 2026-10-15
 - Add persistent request audit logging, rate limiting, and quota enforcement to secure enclave proxy.
 

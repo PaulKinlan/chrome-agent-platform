@@ -10,6 +10,9 @@
 // - atomic reservation at grant time: increments counter inside checkQuota before returning grant
 // - clock skew protection: backwards clock jumps cannot clear or extend quota (fail-closed)
 // - fail-closed on storage read/write errors without permanently wedging the system
+// - configurable per-service limits with strict shape validation; fails closed on malformed config
+// - limit of zero explicitly disables service fail-closed
+// - telemetry usage surface (getUsage): privacy-safe count, remaining, window timing per service
 // - windowing semantics: fixed tumbling window (windowStartMs + windowMs)
 // - bounded service rollups (max 50 services tracked)
 // - newest-first list() projection
@@ -36,13 +39,47 @@ export const DEFAULT_ENCLAVE_QUOTAS = Object.freeze({
 });
 
 export const ENCLAVE_LEDGER_STORAGE_KEY = "cap:enclave:ledger";
+export const ENCLAVE_QUOTAS_STORAGE_KEY = "cap:enclave:quotas";
 export const MAX_TRACKED_SERVICES = 50;
+
+/**
+ * Strictly validates the shape of custom per-service quota overrides.
+ * Throws TypeError if the structure, service ID, limits, or windows are malformed.
+ * @param {any} raw
+ * @returns {Record<string, Readonly<{ limit: number, windowMs: number }>>}
+ */
+export function validateQuotasConfig(raw) {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new TypeError("enclave quotas configuration must be a non-null object");
+  }
+  const validated = {};
+  for (const [serviceId, cfg] of Object.entries(raw)) {
+    if (!serviceId || typeof serviceId !== "string") {
+      throw new TypeError("enclave quota service ID must be a non-empty string");
+    }
+    if (cfg === null || typeof cfg !== "object" || Array.isArray(cfg)) {
+      throw new TypeError(`enclave quota for "${serviceId}" must be an object`);
+    }
+    if (!Number.isInteger(cfg.limit) || cfg.limit < 0) {
+      throw new TypeError(`enclave quota limit for "${serviceId}" must be a non-negative integer (got ${cfg.limit})`);
+    }
+    if (!Number.isInteger(cfg.windowMs) || cfg.windowMs <= 0) {
+      throw new TypeError(`enclave quota windowMs for "${serviceId}" must be a positive integer (got ${cfg.windowMs})`);
+    }
+    validated[serviceId] = Object.freeze({
+      limit: cfg.limit,
+      windowMs: cfg.windowMs,
+    });
+  }
+  return Object.freeze(validated);
+}
 
 /**
  * @param {{
  *   maxEntries?: number,
  *   storageArea?: any,
  *   storageKey?: string,
+ *   quotasStorageKey?: string,
  *   quotas?: Record<string, { limit: number, windowMs: number }>,
  * }} [opts]
  */
@@ -50,6 +87,7 @@ export function createEnclaveLedger({
   maxEntries = 100,
   storageArea = null,
   storageKey = ENCLAVE_LEDGER_STORAGE_KEY,
+  quotasStorageKey = ENCLAVE_QUOTAS_STORAGE_KEY,
   quotas = DEFAULT_ENCLAVE_QUOTAS,
 } = {}) {
   /** @type {Array<Readonly<{ service: string, keyId: string, method: string, origin: string, path: string, status: number|null, ok: boolean, code: string|null, ms: number, timestamp: number }>>} */
@@ -58,6 +96,8 @@ export function createEnclaveLedger({
   /** @type {Record<string, { windowStartMs: number, count: number, lastUpdatedMs: number }>} */
   const rollups = {};
 
+  let configuredQuotas = null;
+  let quotaConfigError = null;
   let storageLoaded = false;
   let lastWriteError = null;
 
@@ -74,7 +114,7 @@ export function createEnclaveLedger({
   async function loadFromStorage() {
     if (!storageArea || typeof storageArea.get !== "function") return;
     try {
-      const data = await storageArea.get(storageKey);
+      const data = await storageArea.get([storageKey, quotasStorageKey]);
       const saved = data?.[storageKey];
       if (saved && typeof saved === "object") {
         if (Array.isArray(saved.entries)) {
@@ -101,6 +141,18 @@ export function createEnclaveLedger({
           }
         }
       }
+
+      // Load & validate persisted owner quota overrides
+      if (data?.[quotasStorageKey] !== undefined) {
+        try {
+          configuredQuotas = validateQuotasConfig(data[quotasStorageKey]);
+          quotaConfigError = null;
+        } catch (err) {
+          configuredQuotas = null;
+          quotaConfigError = new Error(`invalid enclave quota configuration: ${err?.message ?? err}`);
+        }
+      }
+
       storageLoaded = true;
     } catch (err) {
       storageLoaded = false;
@@ -210,7 +262,8 @@ export function createEnclaveLedger({
 
       // 2. Optional standalone counter increment (default false)
       if (serviceId && countUsage === true) {
-        const quota = quotas[serviceId] ?? DEFAULT_ENCLAVE_QUOTAS[serviceId];
+        const effectiveQuotas = configuredQuotas || quotas || DEFAULT_ENCLAVE_QUOTAS;
+        const quota = effectiveQuotas[serviceId] ?? DEFAULT_ENCLAVE_QUOTAS[serviceId];
         const windowMs = quota?.windowMs ?? 24 * 60 * 60 * 1000;
 
         if (!rollups[serviceId] || ts - rollups[serviceId].windowStartMs >= windowMs) {
@@ -258,15 +311,44 @@ export function createEnclaveLedger({
         }
       }
 
-      const effectiveQuotas = customQuotas || quotas || DEFAULT_ENCLAVE_QUOTAS;
+      // Fail-closed on malformed persisted quota configuration
+      if (quotaConfigError) {
+        return Object.freeze({
+          ok: false,
+          code: "quota_config_invalid",
+          error: `secure enclave quota configuration is invalid (${String(quotaConfigError?.message ?? quotaConfigError)})`,
+        });
+      }
+
+      const effectiveQuotas = customQuotas || configuredQuotas || quotas || DEFAULT_ENCLAVE_QUOTAS;
       const quota = effectiveQuotas[serviceId] ?? DEFAULT_ENCLAVE_QUOTAS[serviceId];
-      if (!quota || !Number.isFinite(quota.limit) || quota.limit <= 0) {
+      if (!quota) {
+        let rollup = rollups[serviceId];
+        if (!rollup) {
+          rollup = { windowStartMs: now, count: 0, lastUpdatedMs: now };
+          rollups[serviceId] = rollup;
+          pruneRollupsIfNeeded();
+        }
+        rollup.count += 1;
+        rollup.lastUpdatedMs = now;
         return Object.freeze({ ok: true });
       }
 
       const windowMs = Number(quota.windowMs) || 24 * 60 * 60 * 1000;
-      let rollup = rollups[serviceId];
+      const limit = Number(quota.limit);
 
+      // Limit 0: service is explicitly disabled by owner policy
+      if (limit === 0) {
+        return Object.freeze({
+          ok: false,
+          code: "service_disabled",
+          error: `service "${serviceId}" is disabled by owner quota policy (limit: 0)`,
+          remaining: 0,
+          resetMs: null,
+        });
+      }
+
+      let rollup = rollups[serviceId];
       if (!rollup) {
         rollup = { windowStartMs: now, count: 0, lastUpdatedMs: now };
         rollups[serviceId] = rollup;
@@ -290,12 +372,12 @@ export function createEnclaveLedger({
       }
 
       // Quota limit enforcement
-      if (rollup.count >= quota.limit) {
+      if (rollup.count >= limit) {
         const resetMs = Math.max(0, (rollup.windowStartMs + windowMs) - now);
         return Object.freeze({
           ok: false,
           code: "quota_exceeded",
-          error: `quota exceeded for service "${serviceId}" (${rollup.count}/${quota.limit} calls in window)`,
+          error: `quota exceeded for service "${serviceId}" (${rollup.count}/${limit} calls in window)`,
           remaining: 0,
           resetMs,
         });
@@ -324,9 +406,98 @@ export function createEnclaveLedger({
       const resetMs = Math.max(0, (rollup.windowStartMs + windowMs) - now);
       return Object.freeze({
         ok: true,
-        remaining: Math.max(0, quota.limit - rollup.count),
+        remaining: Math.max(0, limit - rollup.count),
         resetMs,
       });
+    },
+
+    /**
+     * Returns per-service usage telemetry: count, disabled, limit, remaining, resetMs, unmetered, windowMs, windowStartMs.
+     * Guaranteed to never include query strings, headers, bodies, or secret keys.
+     * @param {{ now?: number }} [opts]
+     */
+    async getUsage({ now = Date.now() } = {}) {
+      if (storageArea && !storageLoaded) {
+        try {
+          await loadFromStorage();
+        } catch { /* best effort */ }
+      }
+      const effectiveQuotas = configuredQuotas || quotas || DEFAULT_ENCLAVE_QUOTAS;
+      const allServices = new Set([
+        ...Object.keys(DEFAULT_ENCLAVE_QUOTAS),
+        ...Object.keys(effectiveQuotas),
+        ...Object.keys(rollups),
+      ]);
+      const usage = {};
+      for (const serviceId of allServices) {
+        const quota = effectiveQuotas[serviceId] ?? DEFAULT_ENCLAVE_QUOTAS[serviceId];
+        const rollup = rollups[serviceId];
+        let count = 0;
+        let windowStartMs = now;
+        if (rollup) {
+          const wMs = Number(quota?.windowMs) || 86400000;
+          if (now - rollup.windowStartMs < wMs) {
+            count = rollup.count;
+            windowStartMs = rollup.windowStartMs;
+          } else {
+            count = 0;
+            windowStartMs = now;
+          }
+        }
+
+        if (!quota) {
+          usage[serviceId] = Object.freeze({
+            count,
+            disabled: false,
+            limit: null,
+            remaining: null,
+            resetMs: null,
+            unmetered: true,
+            windowMs: null,
+            windowStartMs,
+          });
+          continue;
+        }
+
+        const windowMs = Number(quota.windowMs) || 86400000;
+        const limit = Number(quota.limit);
+        const disabled = limit === 0;
+        const remaining = disabled ? 0 : Math.max(0, limit - count);
+        const resetMs = disabled ? null : Math.max(0, (windowStartMs + windowMs) - now);
+
+        usage[serviceId] = Object.freeze({
+          count,
+          disabled,
+          limit,
+          remaining,
+          resetMs,
+          unmetered: false,
+          windowMs,
+          windowStartMs,
+        });
+      }
+      return Object.freeze(usage);
+    },
+
+    getConfigStatus() {
+      return Object.freeze({
+        configInvalid: Boolean(quotaConfigError),
+        configError: quotaConfigError ? String(quotaConfigError.message) : null,
+      });
+    },
+
+    /**
+     * Explicitly sets and persists owner quota overrides.
+     * @param {any} newQuotas
+     */
+    async setQuotas(newQuotas) {
+      const validated = validateQuotasConfig(newQuotas);
+      configuredQuotas = validated;
+      quotaConfigError = null;
+      if (storageArea && typeof storageArea.set === "function") {
+        await storageArea.set({ [quotasStorageKey]: validated });
+      }
+      return Object.freeze({ ...configuredQuotas });
     },
 
     list() {
