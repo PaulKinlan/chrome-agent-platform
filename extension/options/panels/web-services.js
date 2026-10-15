@@ -32,7 +32,7 @@ const [ensureCtx, $, $$, byId, send, boundedSend, storage, saveFlash, on, makeUn
 function vaultSend(type, payload = {}, ctx) {
   return send({ type, ...payload }).then(
     (v) => v,
-    (e) => ({ ok: false, error: String(e?.message ?? e) }),
+    (e) => ({ ok: false, error: String(e?.message ?? e), code: e?.code }),
   );
 }
 
@@ -99,6 +99,7 @@ async function renderVaultPanel(ctx) {
     host.append(vaultCard(item));
   }
 
+  await renderVaultQuotas(ctx);
   renderVaultLedger(res?.ledger ?? []);
 }
 
@@ -263,22 +264,43 @@ function vaultCard(item, ctx) {
   return wrap;
 }
 
+// Element helper for the quota table: createElement + className + textContent tripled the source (and the
+// shipped options bundle) for ~35 cells and controls, which is most of the quota UI's byte cost.
+const mk = (tag, cls, text, style) => {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  if (style) Object.assign(node.style, style);
+  return node;
+};
+
+// The quota UI is its own chunk (panels/vault-quotas.js): it was the largest optional block in this panel,
+// and options.bundle.js has a hard 450 KB budget. The promise is memoised so every entry point shares one
+// fetch, and renderVaultQuotas is awaited during the initial render, so the chunk is loaded before any
+// control it owns can be clicked.
+let quotaUiPromise;
+const loadQuotaUi = () => (quotaUiPromise ??= import("./vault-quotas.js"));
+const quotaDeps = () => ({ byId, mk, send: vaultSend, rerender: renderVaultPanel });
+
+export async function renderVaultQuotas(ctx) {
+  const mod = await loadQuotaUi();
+  return mod.renderVaultQuotas(ctx, quotaDeps());
+}
+
 function renderVaultLedger(ledgerEntries, ctx) {
   const host = byId("vault-ledger");
   if (!host) return;
   host.replaceChildren();
 
   if (!Array.isArray(ledgerEntries) || ledgerEntries.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "muted";
+    const empty = mk("div", "muted");
     empty.style.padding = "12px";
     empty.textContent = "No proxied requests recorded yet.";
     host.append(empty);
     return;
   }
 
-  const table = document.createElement("table");
-  table.className = "vault-ledger-table";
+  const table = mk("table", "vault-ledger-table");
 
   const thead = document.createElement("thead");
   const trHead = document.createElement("tr");
@@ -301,23 +323,17 @@ function renderVaultLedger(ledgerEntries, ctx) {
     tdService.textContent = entry.service || entry.keyId || "—";
 
     const tdMethod = document.createElement("td");
-    const methodSpan = document.createElement("span");
-    methodSpan.className = "vault-method-tag";
-    methodSpan.textContent = entry.method || "GET";
+    const methodSpan = mk("span", "vault-method-tag", entry.method || "GET");
     tdMethod.append(methodSpan);
 
     const tdPath = document.createElement("td");
     const codePath = document.createElement("code");
     codePath.textContent = `${entry.origin || ""}${entry.path || "/"}`;
-    codePath.style.whiteSpace = "normal";
-    codePath.style.overflowWrap = "anywhere";
-    codePath.style.wordBreak = "break-all";
+    Object.assign(codePath.style, {whiteSpace: "normal", overflowWrap: "anywhere", wordBreak: "break-all"});
     tdPath.append(codePath);
 
     const tdStatus = document.createElement("td");
-    const statusPill = document.createElement("span");
-    statusPill.className = `vault-status-pill ${entry.ok ? "ok" : "fail"}`;
-    statusPill.textContent = entry.status !== null ? String(entry.status) : (entry.code || (entry.ok ? "OK" : "Refused"));
+    const statusPill = mk("span", `vault-status-pill ${entry.ok ? "ok" : "fail"}`, entry.status !== null ? String(entry.status) : (entry.code || (entry.ok ? "OK" : "Refused")));
     tdStatus.append(statusPill);
 
     const tdMs = document.createElement("td");
@@ -403,6 +419,16 @@ export function initVaultStatic(ctx, { runInitialRender = true } = {}) {
   byId("vault-ledger-clear")?.addEventListener("click", async () => {
     await vaultSend("vault.ledger.clear", {});
     await renderVaultPanel();
+  });
+
+  byId("vault-quotas-reset")?.addEventListener("click", async () => {
+    const mod = await loadQuotaUi();
+    await mod.resetQuotas(ctx, quotaDeps());
+  });
+
+  byId("vault-quota-add-save")?.addEventListener("click", async () => {
+    const mod = await loadQuotaUi();
+    await mod.addQuotaFromRow(ctx, quotaDeps());
   });
 
   const enclaveToggle = byId("enclave-enabled-toggle");

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.702] — 2026-10-15
+- Settings now shows per-service enclave call quotas with used, limit, remaining and window, and lets you set, reset or clear a service's limit (0 disables the service).
+
 ## [0.3.701] — 2026-10-15
 - A CAP-spawned pi session is now pointed at its own MCP configuration instead of the machine's at both places CAP starts one; the wiring is tested, but end-to-end isolation is not yet demonstrated with the pinned tool versions.
 

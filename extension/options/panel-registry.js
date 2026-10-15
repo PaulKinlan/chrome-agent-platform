@@ -159,6 +159,8 @@ export const PANEL_REGISTRY = /* @__PURE__ */ Object.freeze([
       "vault.test",
       "vault.delete",
       "vault.ledger.clear",
+      "vault.ledger.usage",
+      "vault.ledger.setQuotas",
     ],
   ),
   def(

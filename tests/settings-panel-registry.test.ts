@@ -169,6 +169,11 @@ Deno.test("8v5l.1 Acceptance 4(i): every literal SW message type a panel module 
       combinedSource += "\n" + (await readRepoText("extension/lib/provider-options-save.js"));
     } else if (entry.id === "agents" || entry.id === "permissions") {
       combinedSource += "\n" + (await readRepoText("extension/lib/owner-approved-mutation.js"));
+    } else if (entry.id === "web-services") {
+      // The quota UI is this panel's own chunk module (it is dynamically imported so the options bundle stays
+      // inside its 450 KB budget), and its two SW routes are sent from there - so the panel's send sites span
+      // both files, exactly as the skills/providers/agents cases above do.
+      combinedSource += "\n" + (await readRepoText("extension/options/panels/vault-quotas.js"));
     }
 
     const { allRoutes, rawRoutes } = extractPanelRoutesFromSource(combinedSource);
@@ -241,9 +246,18 @@ Deno.test("8v5l.1 Acceptance 4(ii): hub-ok panels match l354r decision and never
 });
 
 Deno.test("8v5l.1 Acceptance 5 (static boundary): no panel module reads window.top, window.parent, location, or calls chrome.runtime.sendMessage directly", async () => {
+  // A panel can delegate to its own module(s) - web-services loads its quota UI as a separate chunk - and a
+  // prohibited direct browser API must be caught there too, not only in the file named after the panel.
+  const DELEGATED_PANEL_MODULES: Record<string, string[]> = {
+    "web-services": ["extension/options/panels/vault-quotas.js"],
+  };
   for (const entry of PANEL_REGISTRY) {
-    const relPath = `extension/options/panels/${entry.id}.js`;
-    const clean = stripJsComments(await readRepoText(relPath));
+    const relPaths = [
+      `extension/options/panels/${entry.id}.js`,
+      ...(DELEGATED_PANEL_MODULES[entry.id] ?? []),
+    ];
+    for (const relPath of relPaths) {
+      const clean = stripJsComments(await readRepoText(relPath));
 
     assert(
       !/\bwindow\.(?:top|parent)\b/.test(clean),
@@ -264,7 +278,8 @@ Deno.test("8v5l.1 Acceptance 5 (static boundary): no panel module reads window.t
     assert(
       !/\bdocument\.body\b/.test(clean),
       `${relPath} must not touch document.body outside root (append modals/nodes to ctx.root and remove on unmount)`,
-    );
+      );
+    }
   }
 });
 
