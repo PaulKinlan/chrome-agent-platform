@@ -1052,6 +1052,26 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
       // listed).
       return out.filter((k) => !INTERNAL_KEY_RE.test(k)).sort();
     },
+    /** Bounded count of logical keys in this store (chrome-agent-platform-9epn.11).
+     * Stops scanning as soon as `cap` non-tombstoned, non-internal keys are found,
+     * avoiding full array allocation, sorting, and unbounded OPFS iteration.
+     * Returns { count: number, capped: boolean }. */
+    async count({ cap = 500 } = {}) {
+      const dir = await openDirOptional(path);
+      if (!dir) return { count: 0, capped: false };
+      const tombs = await readTombs(dir);
+      let count = 0;
+      for await (const [name] of dir.entries()) {
+        if (name.endsWith(".json") && !INTERNAL_FILE_RE.test(name)) {
+          const key = name.slice(0, -5);
+          if (!tombs.map.has(key) && !INTERNAL_KEY_RE.test(key)) {
+            count++;
+            if (cap != null && count >= cap) return { count, capped: true };
+          }
+        }
+      }
+      return { count, capped: false };
+    },
     async delete(key) {
       // Plain delete is serialized and publishes the durable tombstone before
       // removing the value. A tombstone failure therefore leaves the live value.
@@ -1446,6 +1466,44 @@ export function durableRunMemory() {
       }
       for (const key of await legacy.keys()) if (isLegacyDurableKey(key)) keys.add(key);
       return [...keys].sort();
+    },
+    async count({ cap = 500 } = {}) {
+      let count = 0;
+      const registry = durableStoreForKey(DURABLE_INDEX_KEY);
+      const reg = typeof registry.count === "function"
+        ? await registry.count({ cap })
+        : { count: (await registry.keys()).length, capped: false };
+      count += reg.count;
+      if (cap != null && count >= cap) return { count: cap, capped: true };
+
+      for (const store of await durableExecutionStores()) {
+        const remaining = cap != null ? cap - count : undefined;
+        const res = typeof store.count === "function"
+          ? await store.count({ cap: remaining })
+          : { count: (await store.keys()).length, capped: false };
+        count += res.count;
+        if (cap != null && count >= cap) return { count: cap, capped: true };
+      }
+      for (const store of await durablePayloadStores()) {
+        const remaining = cap != null ? cap - count : undefined;
+        const res = typeof store.count === "function"
+          ? await store.count({ cap: remaining })
+          : { count: (await store.keys()).length, capped: false };
+        count += res.count;
+        if (cap != null && count >= cap) return { count: cap, capped: true };
+      }
+      for (const store of await durableThreadStores()) {
+        const remaining = cap != null ? cap - count : undefined;
+        const res = typeof store.count === "function"
+          ? await store.count({ cap: remaining })
+          : { count: (await store.keys()).length, capped: false };
+        count += res.count;
+        if (cap != null && count >= cap) return { count: cap, capped: true };
+      }
+      const legacyKeys = (await legacy.keys()).filter(isLegacyDurableKey);
+      count += legacyKeys.length;
+      if (cap != null && count >= cap) return { count: cap, capped: true };
+      return { count, capped: false };
     },
     async clear() {
       const parent = await openDir([ROOT]);
@@ -1856,3 +1914,20 @@ export async function loadScreenshot(id) {
 export async function listScreenshots() {
   return (await masterMemory().get("screenshots")) ?? [];
 }
+
+/**
+ * Return a human/UI-ready key count for a memory store without performing an
+ * unbounded keys() scan or allocating/sorting arrays (chrome-agent-platform-9epn.11).
+ * If the store implements count(), it uses the bounded count with early exit.
+ * If count reaches cap, returns `${cap}+` (e.g. "500+"), otherwise the numeric count.
+ */
+export async function countStoreKeys(store, cap = 500) {
+  if (!store) return 0;
+  if (typeof store.count === "function") {
+    const res = await store.count({ cap });
+    return res?.capped ? `${cap}+` : (res?.count ?? 0);
+  }
+  const keys = await store.keys();
+  return cap != null && keys.length >= cap ? `${cap}+` : keys.length;
+}
+

@@ -19,6 +19,7 @@ export {
   trackMemoryWrite,
   awaitMemoryQuiescence,
   normalizeMemoryKey,
+  enumerateMemoryStores,
 } from "./memory.js";
 
 /**

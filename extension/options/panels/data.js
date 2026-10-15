@@ -132,7 +132,10 @@ export async function renderMemoryExplorer(ctx) {
     caret.setAttribute("aria-hidden", "true");
     const name = document.createElement("span");
     name.className = "mem-dir-name";
-    name.textContent = `${store.label} (${store.keyCount ?? 0})`;
+    const countText = typeof store.keyCount === "number" && store.keyCount >= 500
+      ? "500+"
+      : (store.keyCount ?? 0);
+    name.textContent = `${store.label} (${countText})`;
     head.append(caret, name);
     const body = document.createElement("div");
     body.className = "mem-dir-body" + " hidden";

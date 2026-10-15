@@ -50,6 +50,7 @@ import {
   createMemoryRoutes,
   resolveMemory,
   awaitMemoryQuiescence,
+  enumerateMemoryStores,
   createAgentScheduleRoutes,
   createNamedAgentDeleteGate,
   createApplyAgentSchedule,
@@ -11283,57 +11284,7 @@ const handlers = mergeRouteMaps(
   // Data & memory explorer can browse each agent's OWN OPFS sandbox. The
   // selector is what memory.get/list/clear accept (resolveMemory).
   async "memory.stores"() {
-    const [namedIds, bgIds, origins] = await Promise.all([
-      listNamedAgentIds(),
-      listBackgroundAgentIds(),
-      listOrigins(),
-    ]);
-    const named = await listNamedAgents();
-    const nameById = new Map(named.map((a) => [slugifyAgentId(a.id), a.name || a.id]));
-    const nameByInstance = new Map(named.map((a) => [String(a.instanceId ?? ""), a.name || a.id]));
-    // review r3 P1-3: store selectors must RESOLVE TRUTHLY. The old listing
-    // exposed a live agent's legacy slug dir under `agent:<slug>` while
-    // get/list/clear canonicalized that selector to the instanceId dir — so
-    // the explorer's "Clear (legacy)" cleared the agent's LIVE memory and
-    // left the displayed legacy dir untouched. classifyAgentMemoryDirs pins
-    // each dir to its true selector: canonical instanceId (read-write),
-    // legacy slug of a live agent (READ-ONLY — it is teardown that removes
-    // it), or orphan (read-write; a real dead dir).
-    const { classifyAgentMemoryDirs } = await import("../lib/named-agents.js");
-    const classified = classifyAgentMemoryDirs({ dirs: namedIds, agents: named });
-    const stores = [{ key: "master", label: "The hub", kind: "master" }];
-    for (const c of classified) {
-      const label = nameByInstance.get(c.dir) ?? nameById.get(slugifyAgentId(c.dir)) ?? c.dir;
-      const store = namedAgentMemory(c.dir);
-      stores.push({
-        key: c.selector,
-        label: c.state === "legacy" ? `${label} (legacy — read-only)` : c.state === "orphan" ? `${c.dir} (orphan)` : label,
-        kind: "named",
-        state: c.state,
-        readOnly: c.readOnly,
-        keyCount: (await store.keys()).length,
-      });
-    }
-    for (const id of bgIds) {
-      const store = backgroundAgentMemory(id);
-      stores.push({
-        key: `background:${id}`,
-        label: id,
-        kind: "background",
-        keyCount: (await store.keys()).length,
-      });
-    }
-    for (const origin of origins) {
-      const store = siteMemory(origin);
-      stores.push({
-        key: origin,
-        label: origin,
-        kind: "site",
-        keyCount: (await store.keys()).length,
-      });
-    }
-    stores[0].keyCount = (await masterMemory().keys()).length;
-    return { ok: true, stores };
+    return await enumerateMemoryStores();
   },
 
   async "register-task"(m) {
