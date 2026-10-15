@@ -2193,3 +2193,110 @@ Deno.test("nffa7 end-to-end: readLoadSample with 10 distinct actively compiling 
   assertEquals(run.validMeasurement, false, "measurement must be invalidated by actively compiling builders");
   assertEquals(run.hostLoaded, true);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// chrome-agent-platform-mr1ak: a wall-clock breach is evidence about the PAGE only when the box was
+// inside the repo's own quiet bound (CAP_QUIET_MAX_LOAD_PER_CORE, default 0.35 load1/core) while it
+// was measured. The fleet's own contention is SIBLING LANES' Deno/Chrome test workers: high
+// load/core, ZERO compilers, so the contention classification never fires and a 52-109ms scheduler
+// stall was reported as a product defect, reddening the FULL gate and suppressing 658 files.
+// These are the falsifiers: the SAME marginal breach refuses on a loaded box and stays a product red
+// on a quiet one; severe stalls stay reds on any host; and a clean run is still a pass.
+// Load figures are extreme (2.5 vs 0.01) so the assertions do not depend on the default bound.
+const LOADED_NO_BUILDERS: any = {
+  measurable: true,
+  load1: 20,
+  load5: 18,
+  cores: 8,
+  loadPerCore: 2.5,
+  compilers: 0,
+  compilerNames: [],
+  activeCompilers: 0,
+  activeCompilerNames: [],
+};
+const QUIET_BOX_SAMPLE: any = {
+  measurable: true,
+  load1: 0.08,
+  load5: 0.09,
+  cores: 8,
+  loadPerCore: 0.01,
+  compilers: 0,
+  compilerNames: [],
+  activeCompilers: 0,
+  activeCompilerNames: [],
+};
+const marginalTaskRun = (n: number, sample: any, durationMs = 62) =>
+  attributeBootRun(n, {
+    composerReadyEndMs: 40,
+    threadListHydratedEndMs: 80,
+    longTasks: [{ name: "self", duration: durationMs, startTime: 30 }],
+  }, sample);
+
+Deno.test("mr1ak: the same marginal breach REFUSES environmentally on a loaded box (never a product red)", () => {
+  const runs = [1, 2, 3].map((n) => marginalTaskRun(n, LOADED_NO_BUILDERS));
+  // PREMISE FIRST: the box really was above the repo's own bound and the breach really is marginal.
+  assertEquals(runs[0].hostAboveQuietBound, true, "a load/core of 2.5 must read as above the quiet bound");
+  assertEquals(runs[0].hostWorstLoadPerCore, 2.5);
+  assert(runs[0].hostWorstLoadPerCore! > runs[0].hostQuietBound, "the recorded worst load must exceed the bound used");
+  assertEquals(runs[0].severeBreaches.length, 0, "62ms is marginal, not severe");
+  assertEquals(runs[0].validMeasurement, true, "no compiler evidence: the run is not excluded as contended");
+
+  const policy = evaluateBootStagingPolicy(runs);
+  assertEquals(policy.ok, false);
+  assertEquals(policy.environmentalRefusal, true, "host contention must not be reported as a page verdict");
+  assertStringIncludes(policy.error!, "ENVIRONMENT: ntp-boot-staging refusal");
+  assertStringIncludes(policy.error!, "load/core");
+});
+
+Deno.test("mr1ak: the same marginal breach on a QUIET box stays a PRODUCT RED (not a blanket excuse)", () => {
+  const runs = [1, 2, 3].map((n) => marginalTaskRun(n, QUIET_BOX_SAMPLE));
+  assertEquals(runs[0].hostAboveQuietBound, false);
+  const policy = evaluateBootStagingPolicy(runs);
+  assertEquals(policy.ok, false);
+  assertEquals(policy.environmentalRefusal, false, "a quiet-box breach is the page's");
+  assertStringIncludes(policy.error!, "contract breach");
+  assertEquals(policy.medianTaskCount, 1);
+});
+
+Deno.test("mr1ak: a SEVERE stall on a loaded box is still a product red (catastrophic stalls ignore host load)", () => {
+  const runs = [
+    marginalTaskRun(1, LOADED_NO_BUILDERS, 620),
+    marginalTaskRun(2, LOADED_NO_BUILDERS, 640),
+    marginalTaskRun(3, LOADED_NO_BUILDERS),
+  ];
+  assertEquals(runs[0].hostAboveQuietBound, true);
+  assertEquals(runs[0].severeBreaches.length, 1, "620ms is a severe breach");
+  const policy = evaluateBootStagingPolicy(runs);
+  assertEquals(policy.ok, false);
+  assertEquals(policy.environmentalRefusal, false, "severe stalls are a product red on any host");
+  assertStringIncludes(policy.error!, "severe long task breach");
+});
+
+Deno.test("mr1ak: a clean run on a loaded box still PASSES (a refusal never replaces a pass)", () => {
+  const cleanRun = (n: number) =>
+    attributeBootRun(n, { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [] }, LOADED_NO_BUILDERS);
+  const runs = [cleanRun(1), cleanRun(2), cleanRun(3)];
+  assertEquals(runs[0].hostAboveQuietBound, true, "the box was loaded...");
+  const policy = evaluateBootStagingPolicy(runs);
+  assertEquals(policy.ok, true, "...but the page was clean, so this is a pass");
+  assertEquals(policy.environmentalRefusal, false);
+});
+
+Deno.test("mr1ak: a latency breach on a loaded box refuses instead of claiming an uncontended host", () => {
+  const slowRun = (n: number, sample: any) =>
+    attributeBootRun(n, {
+      composerReadyDurationMs: 300,
+      threadListHydratedDurationMs: 80,
+      longTasks: [],
+    }, sample);
+
+  const loaded = evaluateBootStagingPolicy([slowRun(1, LOADED_NO_BUILDERS)]);
+  assertEquals(loaded.ok, false);
+  assertEquals(loaded.environmentalRefusal, true);
+  assertStringIncludes(loaded.error!, "composer-ready took 300ms with load/core");
+
+  // The pre-existing quiet-box path is unchanged, wording included.
+  const quiet = evaluateBootStagingPolicy([slowRun(1, QUIET_BOX_SAMPLE)]);
+  assertEquals(quiet.environmentalRefusal, false);
+  assertStringIncludes(quiet.error!, "on uncontended host");
+});

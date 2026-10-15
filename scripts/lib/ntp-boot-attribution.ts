@@ -4,6 +4,7 @@
 import {
   environmentLine,
   readLoadSample,
+  resolveSpec,
   type LoadSample,
   ENVIRONMENTAL_REFUSAL_EXIT,
   ENVIRONMENTAL_REFUSAL_MARKER,
@@ -121,6 +122,12 @@ export interface BootStagingRunResult {
   severeBreaches: AttributedLongTask[];
   hostEnvironment: string;
   hostLoaded: boolean;
+  /** Was any load sample in this run's interval above the repo's own quiet bound? (mr1ak) */
+  hostAboveQuietBound: boolean;
+  /** The worst (highest) load/core observed during the run, or null when unmeasurable. (mr1ak) */
+  hostWorstLoadPerCore: number | null;
+  /** The bound that decision used, so a reader can see what "loaded" meant. (mr1ak) */
+  hostQuietBound: number;
   validMeasurement: boolean;
   invalidReason?: string;
 }
@@ -574,6 +581,19 @@ export function attributeBootRun(
 
   const hostLoaded = !validMeasurement;
 
+  // chrome-agent-platform-mr1ak: whether the BOX was within the repo's own quiet bound while this
+  // run was measured. `hostLoaded` above means "this run was excluded as contended" (compiler
+  // evidence); this is the measurement-ENVIRONMENT fact the wall-clock budgets need, and it is
+  // deliberately separate so the existing contention semantics keep their pinned meaning. The
+  // bound is the repo's own (CAP_QUIET_MAX_LOAD_PER_CORE, default 0.35 load1/core) rather than a
+  // number invented here.
+  const quietBound = resolveSpec().maxLoadPerCore;
+  const measuredSamples = samples.filter((s): s is LoadSample => !!s && s.measurable);
+  const worstLoadPerCore = measuredSamples.length > 0
+    ? Math.max(...measuredSamples.map((s) => s.loadPerCore))
+    : null;
+  const hostAboveQuietBound = worstLoadPerCore != null && worstLoadPerCore > quietBound;
+
   const loafEntries = rawMetrics.loafEntries || [];
   // Unrounded 50.0 ms threshold — no weak rounding bypass
   const severeTasks = (rawMetrics.longTasks || []).filter((t) => t.duration > 50.0);
@@ -609,6 +629,9 @@ export function attributeBootRun(
     severeBreaches,
     hostEnvironment,
     hostLoaded,
+    hostAboveQuietBound,
+    hostWorstLoadPerCore: worstLoadPerCore,
+    hostQuietBound: quietBound,
     validMeasurement,
     invalidReason,
   };
@@ -713,6 +736,31 @@ export function evaluateBootStagingPolicy(
     : taskCounts[mid];
 
   if (medianTaskCount > 0) {
+    // chrome-agent-platform-mr1ak: a wall-clock breach is evidence about the PAGE only when the box
+    // was inside the repo's own quiet bound while it was measured. Severe stalls already red above,
+    // on any host; here the breach is marginal (<= 500ms), so if EVERY run carrying a task was
+    // measured on a loaded box the honest verdict is a refusal — not a product red (a false defect
+    // claim, which is what reds our FULL gate today) and never a pass.
+    const taskRuns = validRuns.filter((r) => r.longTasks.length > 0);
+    const quietTaskRuns = taskRuns.filter((r) => !r.hostAboveQuietBound);
+    if (taskRuns.length > 0 && quietTaskRuns.length === 0) {
+      const detail = `median long tasks > 50ms is ${medianTaskCount} across ${validRuns.length} valid ` +
+        `run(s), but every run carrying a task was measured above the repo's own quiet bound ` +
+        `(CAP_QUIET_MAX_LOAD_PER_CORE=${taskRuns[0].hostQuietBound}): ` +
+        taskRuns.map((r) => `Run ${r.run} load/core ${r.hostWorstLoadPerCore ?? "unknown"}`).join(", ") +
+        ` — host contention, not a page verdict`;
+      const refusal = new BootStagingEnvironmentalRefusalError(runs, detail);
+      return {
+        ok: false,
+        environmentalRefusal: true,
+        refusalError: refusal,
+        error: `ENVIRONMENT: ntp-boot-staging refusal — ${detail}`,
+        warnings,
+        validRuns,
+        contendedRuns,
+        medianTaskCount,
+      };
+    }
     const summary = validRuns
       .filter((r) => r.longTasks.length > 0)
       .map((r) => `Run ${r.run}: ${r.longTasks.map(formatTaskAttribution).join(", ")}`)
@@ -738,8 +786,18 @@ export function evaluateBootStagingPolicy(
   }
 
   // 5. Check 4: On valid (uncontended) runs, strictly enforce composerReady < 150ms and threadListHydrated <= 250ms
+  // Latency breaches measured while the box was ABOVE the repo's quiet bound are collected here and
+  // refused after the loop (mr1ak): they cannot be attributed to the page. A breach on a quiet box
+  // returns the product red below, exactly as before.
+  const loadedLatencyBreaches: string[] = [];
   for (const r of validRuns) {
     if (r.composerReadyMs != null && r.composerReadyMs >= 150) {
+      if (r.hostAboveQuietBound) {
+        loadedLatencyBreaches.push(
+          `Run ${r.run}: composer-ready took ${r.composerReadyMs}ms with load/core ${r.hostWorstLoadPerCore ?? "unknown"} > ${r.hostQuietBound}`,
+        );
+        continue;
+      }
       return {
         ok: false,
         environmentalRefusal: false,
@@ -751,6 +809,12 @@ export function evaluateBootStagingPolicy(
       };
     }
     if (r.threadListHydratedMs != null && r.threadListHydratedMs > 250) {
+      if (r.hostAboveQuietBound) {
+        loadedLatencyBreaches.push(
+          `Run ${r.run}: thread-list-hydrated took ${r.threadListHydratedMs}ms with load/core ${r.hostWorstLoadPerCore ?? "unknown"} > ${r.hostQuietBound}`,
+        );
+        continue;
+      }
       return {
         ok: false,
         environmentalRefusal: false,
@@ -761,6 +825,22 @@ export function evaluateBootStagingPolicy(
         medianTaskCount,
       };
     }
+  }
+
+  if (loadedLatencyBreaches.length > 0) {
+    const detail = `${loadedLatencyBreaches.join("; ")} — measured above the repo's own quiet bound ` +
+      `(CAP_QUIET_MAX_LOAD_PER_CORE), so this is host contention, not a page verdict`;
+    const refusal = new BootStagingEnvironmentalRefusalError(runs, detail);
+    return {
+      ok: false,
+      environmentalRefusal: true,
+      refusalError: refusal,
+      error: `ENVIRONMENT: ntp-boot-staging refusal — ${detail}`,
+      warnings,
+      validRuns,
+      contendedRuns,
+      medianTaskCount,
+    };
   }
 
   return {
