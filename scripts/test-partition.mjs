@@ -72,14 +72,13 @@ export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
 
 // Reviewed read-only consumers run after all serial rebuilds. Keep these in
 // partition(...).parallel as well: select-tests.mjs consumes only serial/parallel
-// and MUST NOT silently drop the six when it runs a changed-file subset.
+// and MUST NOT silently drop the five when it runs a changed-file subset.
 export const READ_ONLY_DIST_REASONS = Object.freeze({
   "tests/diff-core.test.ts": "imports the built diff-core bundle without writing it",
   "tests/wasm-tree-shaking.test.ts": "reads three built page bundles without writing them",
   "tests/bundle-budget.test.ts": "reads the built budget/metafile/marker and build.mjs SOURCE without running a build",
   "tests/bundled-tool-packages.test.ts": "reads shipped inventory/CAS and generator SOURCE; its only child command is git provenance",
   "tests/tool-exec-preview.test.ts": "revalidates shipped CAS and manifests without writing them",
-  "tests/owner-approval-security.test.ts": "imports the built diff-core bundle without writing it",
 });
 export const READ_ONLY_DIST = new Set(Object.keys(READ_ONLY_DIST_REASONS));
 
@@ -189,7 +188,6 @@ export const EXEMPTIONS = {
   "tests/wasm-tree-shaking.test.ts": "reads only built page bundles; post-build read-only batch follows serial rebuilds",
   "tests/bundle-budget.test.ts": "reads built bundles and build.mjs text; does not execute its source-string execFileSync snippet; post-build batch follows serial rebuilds",
   "tests/bundled-tool-packages.test.ts": "reads shipped CAS and generator text; Deno.Command runs git only; post-build batch follows serial rebuilds",
-  "tests/owner-approval-security.test.ts": "imports only built diff-core; post-build read-only batch follows serial rebuilds",
   // chrome-agent-platform-fixn: the drift guard plants mutated about.html / inventory fixtures
   // inside makeTempDir scratch trees to verify drift detection and fail-closed attribution;
   // the real repo tree is read, never written.

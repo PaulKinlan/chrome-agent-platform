@@ -14,6 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import {
   GATE_BUILD_TARGET,
   STATIC_DIST_CONSUMERS,
+  ALWAYS_ON_TREE_SKIPPING_GUARDS,
   decideBuild,
   ensureStoreBuild,
   findDistConsumers,
@@ -91,21 +92,54 @@ Deno.test("0eq00 build: every reviewed dist reader is a static consumer (no drif
   assert(STATIC_DIST_CONSUMERS.length >= READ_ONLY_DIST.size + 1);
 });
 
-Deno.test("0eq00 build: the always-on core contains a dist reader, so a subset gate is never build-free", () => {
-  // THE MEASURED FACT the architect design did not account for: tests/owner-approval-security.test.ts
-  // is always-on AND statically imports extension/dist/shared/diff-core.bundle.js. Therefore the
-  // `build: omitted` branch is currently unreachable for any selection — pin it here so nobody
-  // "discovers" the omission as a saving without removing this reader from the always-on set (or
-  // giving the gate a dist-free core).
-  assert(CORE.includes("tests/owner-approval-security.test.ts"), "the reader is in the always-on core");
+Deno.test("omsz9 build: the always-on core is dist-free, so a subset gate can omit the store build", () => {
+  // chrome-agent-platform-omsz9: tests/owner-approval-security.test.ts moved to the
+  // extension/shared/diff-core.js source seam, and the 14 directory-scanning guards in ALWAYS_ON
+  // are recognized as tree-skipping scanners rather than dist consumers.
+  // Therefore, findDistConsumers(ALWAYS_ON) returns zero consumers from the always-on set,
+  // making the `build: omitted` branch reachable for test/doc changes with no dist consumers.
+  assert(CORE.includes("tests/owner-approval-security.test.ts"), "the suite remains in the always-on core");
   const consumers = findDistConsumers(ALWAYS_ON, readReal);
-  assert(
-    consumers.includes("tests/owner-approval-security.test.ts"),
-    "the always-on set must be recognised as dist-consuming",
-  );
+  const alwaysOnConsumers = consumers.filter((f) => ALWAYS_ON.includes(f));
+  assertEquals(alwaysOnConsumers, [], "the always-on set must contain zero dist consumers");
+
   const decision = decideBuild({ kind: "subset", selected: ALWAYS_ON, changed: [], distConsumers: consumers });
-  assertEquals(decision.required, true);
-  assert(decision.reason.includes(`${DIST_ROOT} tree`), decision.reason);
+  assertEquals(decision.required, false);
+  assert(decision.reason.includes(`no selected test reads ${DIST_ROOT}`), decision.reason);
+  assert(decision.reason.includes("no build input changed"), decision.reason);
+});
+
+Deno.test("omsz9 build: verified tree-skipping guards in ALWAYS_ON are not false-positive dist consumers", () => {
+  assertEquals(ALWAYS_ON_TREE_SKIPPING_GUARDS.size, 14, "exactly 14 verified tree-skipping guards");
+  for (const file of ALWAYS_ON_TREE_SKIPPING_GUARDS) {
+    assert(ALWAYS_ON.includes(file), `${file} must be an ALWAYS_ON member`);
+    const text = readReal(file);
+    assert(!referencesDistTree(text, file), `${file} must not be flagged as a dist consumer`);
+  }
+});
+
+Deno.test("omsz9 build falsification: actual dist imports or reads in tree-skipping guards force the build", () => {
+  const file = "tests/durable-root.test.ts";
+  assert(ALWAYS_ON_TREE_SKIPPING_GUARDS.has(file));
+
+  // Mutant 1: static import of built bundle
+  const mutantImport = `import { patch } from "../${DIST_BUNDLE}";\n` + readReal(file);
+  assert(referencesDistTree(mutantImport, file), "static import of dist bundle must force build");
+  const consumers1 = findDistConsumers([file], () => mutantImport);
+  assert(consumers1.includes(file));
+
+  // Mutant 2: dynamic import of built bundle
+  const mutantDynamic = `const mod = await import("../${DIST_BUNDLE}");\n` + readReal(file);
+  assert(referencesDistTree(mutantDynamic, file), "dynamic import of dist bundle must force build");
+
+  // Mutant 3: runtime readFile of dist tree
+  const mutantRead = `const data = await Deno.readTextFile("${DIST_ROOT}/options.bundle.js");\n` + readReal(file);
+  assert(referencesDistTree(mutantRead, file), "readTextFile of dist bundle must force build");
+
+  // Mutant 4: unverified test file with tree-skip syntax is still fail-closed
+  const unverified = "tests/unverified-new-guard.test.ts";
+  const unverifiedText = `const SKIP_DIRS = ["dist"];`;
+  assert(referencesDistTree(unverifiedText, unverified), "unverified files fail closed on any dist reference");
 });
 
 Deno.test("0eq00 build: the decision skips a build only when nothing needs one (and says why)", () => {

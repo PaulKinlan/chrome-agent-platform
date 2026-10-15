@@ -31,13 +31,55 @@ export const STATIC_DIST_CONSUMERS = Object.freeze([
   "tests/build-smoke.test.ts",
 ]);
 
-// Deliberately broad: `dist`, `dist-versions`, `dist.complete`, `extension/dist/...`. A false
-// positive costs one build (the status quo); a false negative would run a dist-reading test against
-// a dist the gate cannot certify, which is the failure this module exists to prevent.
+/**
+ * Static tree-walking and census guards in ALWAYS_ON that mention "dist" only to skip it
+ * during directory enumeration, in comments, or in AST/partition rule declarations
+ * (chrome-agent-platform-omsz9). They do NOT load or read built artifacts.
+ * Scoped explicitly by name to preserve fail-closed behaviour for any unverified file.
+ */
+export const ALWAYS_ON_TREE_SKIPPING_GUARDS = Object.freeze(new Set([
+  "tests/chrome-tools-t12-static.test.ts",
+  "tests/code-health.test.ts",
+  "tests/composer-selector-migration.test.ts",
+  "tests/dialog-confirm-modernization.test.ts",
+  "tests/durable-root.test.ts",
+  "tests/enrollment-authority-reader-census.test.ts",
+  "tests/kat-service-worker-match.test.ts",
+  "tests/postmessage-wildcard-guard.test.ts",
+  "tests/settings-strings-audit.test.ts",
+  "tests/single-source-helpers.test.ts",
+  "tests/source-inspecting-tests-guard.test.ts",
+  "tests/substring-pin-honesty.test.ts",
+  "tests/test-partition-guard.test.ts",
+  "tests/unbundled-page-census.test.ts",
+]));
+
+// Deliberately broad for unknown test files: `dist`, `dist-versions`, `dist.complete`, `extension/dist/...`.
+// A false positive costs one build (the status quo); a false negative would run a dist-reading test
+// against a dist the gate cannot certify, which is the failure this module exists to prevent.
 const DIST_REFERENCE_RE = /\bdist(?:-versions)?\b|\bdist\.complete\b/;
 
-/** True when a test file's source references the built dist tree (over-approximating on purpose). */
-export function referencesDistTree(text) {
+// Tightened check scoped to the 14 verified ALWAYS_ON tree-skipping guards (chrome-agent-platform-omsz9).
+// These guards walk source trees and filter out dist/ or cite dist in comments/AST rules.
+// They are ONLY treated as dist consumers if they actually load or read from the built extension/dist tree.
+const TIGHTENED_DIST_CONSUMER_RE =
+  /\bimport\s+(?:type\s+)?(?:[\w*\s{},]*from\s+)?["'][^"']*?\b(?:extension\/)?dist\/|\bimport\s*\(\s*["'][^"']*?\b(?:extension\/)?dist\/|\b(?:readTextFile|readFile|readFileSync|readTextFileSync)\s*(?:Sync)?\s*\(\s*(?:ROOT\s*\+\s*)?["'][^"']*?\bextension\/dist\/|\bdist\.complete\b/;
+
+/**
+ * True when a test file's source references the built dist tree.
+ * For general files, uses the broad fail-closed DIST_REFERENCE_RE.
+ * For the 14 verified ALWAYS_ON tree-skipping guards, strips backtick test fixtures and comments
+ * before evaluating with TIGHTENED_DIST_CONSUMER_RE to distinguish tree skipping from real loads.
+ * @param {string} text
+ * @param {string | null} [rel] repo-relative path of the test file
+ */
+export function referencesDistTree(text, rel = null) {
+  if (rel && ALWAYS_ON_TREE_SKIPPING_GUARDS.has(rel)) {
+    const stripped = String(text ?? "")
+      .replace(/`[\s\S]*?`/g, "\"\"")
+      .replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
+    return TIGHTENED_DIST_CONSUMER_RE.test(stripped);
+  }
   return DIST_REFERENCE_RE.test(String(text ?? ""));
 }
 
@@ -62,7 +104,7 @@ export function findDistConsumers(files = [], readText = null) {
     if (!String(rel).startsWith("tests/")) continue;
     if (consumers.has(rel)) continue;
     const text = read(rel);
-    if (text === null || referencesDistTree(text)) consumers.add(rel);
+    if (text === null || referencesDistTree(text, rel)) consumers.add(rel);
   }
   return [...consumers].sort();
 }
