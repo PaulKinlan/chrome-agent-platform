@@ -71,6 +71,8 @@ export const SOURCE_INSPECTING_GUARDS = [
   "tests/enrollment-authority-reader-census.test.ts",
   "tests/sw-dispatch-authority-census.test.ts",
   "tests/sw-route-modularization.test.ts",
+  // luq4w: one text-only test reads the census and launcher source; no browser launch.
+  "tests/census-resolution-wiring.test.ts",
   // o75bp: source/document security anchors have no static import edge from the SW;
   // a SW-only edit must still run their symbol-existence guard in test:changed.
   "tests/security-doc-drift.test.ts",
@@ -87,6 +89,10 @@ export const SOURCE_INSPECTING_GUARDS = [
   "tests/manifest-permissions.test.ts",
   "tests/harness-registry.test.ts",
   "tests/source-materialization.test.ts",
+  // luq4w: static halves of mixed full-suite guards. Never promote their full files:
+  // evidence-durable materializes/verifies a tree twice; no-uppercase launches Chrome.
+  "tests/evidence-durable-static.test.ts",
+  "tests/no-uppercase-kickers-static.test.ts",
   "tests/source-inspecting-tests-guard.test.ts",
   "tests/postmessage-wildcard-guard.test.ts",
   // chrome-agent-platform-kz27 — tree-walking guards that were MISSING from this list, which is the
@@ -204,6 +210,15 @@ export const SOURCE_INSPECTING_GUARDS = [
  * audit FAIL CLOSED, which is the detector working as intended.
  */
 export const SCANNER_EXCLUSIONS = Object.freeze({
+  // chrome-agent-platform-luq4w: the original file also materializes the entire source tree
+  // and runs generated-package verification twice. Its text-path check is always-on in
+  // evidence-durable-static; its binary/verification coverage stays in the full suite.
+  "tests/evidence-durable.test.ts":
+    "chrome-agent-platform-luq4w: materializes a whole checkout and invokes build-bundled-tool-packages.mjs --verify twice; the fast, browser-free text-artifact path check lives in tests/evidence-durable-static.test.ts. Keep the heavyweight binary and fresh-checkout verification in the full suite.",
+  // chrome-agent-platform-luq4w: this mixed file launches real Chrome when available.
+  // Its text-transform source census is always-on in no-uppercase-kickers-static.
+  "tests/no-uppercase-kickers-716s10.test.ts":
+    "chrome-agent-platform-luq4w: contains a real Chrome journey (conditionally ignored only on hosts without Chrome). Including the whole file would break the no-browser fast-gate contract. tests/no-uppercase-kickers-static.test.ts covers its source-level uppercase text-transform rule; the visual journey stays in the full suite.",
   // chrome-agent-platform-p1lp: a genuine repo-walker (`const TESTS = `${ROOT}tests/``, then a walk of
   // every test file to catch vacuous .includes() pins) — and NOT promoted while it is RED. It fails
   // "the attributed population and its documented exclusions" on current main, adjudicated by running it

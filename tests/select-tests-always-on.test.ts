@@ -26,6 +26,9 @@ Deno.test("kz27: the tree-walking guards are IN the always-on list, and every en
       "tests/dialog-confirm-modernization.test.ts",
       "tests/single-source-helpers.test.ts",
       "tests/security-doc-drift.test.ts", // o75bp: SW-only changes must recheck cited symbols
+      "tests/census-resolution-wiring.test.ts", // luq4w: cheap text-only cross-file wiring pin
+      "tests/evidence-durable-static.test.ts", // luq4w: path literals, without tree materialization
+      "tests/no-uppercase-kickers-static.test.ts", // luq4w: source census, without Chrome
     ]
   ) {
     assert(
@@ -33,6 +36,8 @@ Deno.test("kz27: the tree-walking guards are IN the always-on list, and every en
       `${guard} reads the repo tree as data and must be always-on (kz27)`,
     );
   }
+  assertEquals(SOURCE_INSPECTING_GUARDS.length, 39,
+    "reviewed static guards must not disappear silently; update this count when deliberately changing the list");
   // A list is only a list if its members are real: an entry naming a file that does not exist would
   // "cover" nothing while looking reassuring.
   for (const file of SOURCE_INSPECTING_GUARDS) {
@@ -124,6 +129,18 @@ Deno.test("kz27: the browser-dependent scanner is held out BY DECLARATION, with 
   );
 });
 
+Deno.test("luq4w: mixed full-suite guards are excluded, and their cheap static halves remain always-on", () => {
+  for (const [mixed, staticHalf] of [
+    ["tests/evidence-durable.test.ts", "tests/evidence-durable-static.test.ts"],
+    ["tests/no-uppercase-kickers-716s10.test.ts", "tests/no-uppercase-kickers-static.test.ts"],
+  ] as const) {
+    assert(!SOURCE_INSPECTING_GUARDS.includes(mixed), `${mixed} must not bring a build or browser into every fast gate`);
+    assert(SOURCE_INSPECTING_GUARDS.includes(staticHalf), `${staticHalf} must cover the source class`);
+    assert(SCANNER_EXCLUSIONS[mixed]?.includes("chrome-agent-platform-luq4w"),
+      `${mixed} must have an explicit, owned exclusion reason`);
+  }
+});
+
 Deno.test("kz27: a FAIL-CLOSED selection NAMES the always-on guard set it could not cover", () => {
   const plan = failClosedPlan({ uncovered: ["scripts/merge-closing-block.sh"], list: true });
   assertEquals(plan.action, "list", "with --list the caller prints FULL_SUITE and runs nothing");
@@ -173,4 +190,7 @@ Deno.test("kz27: the always-on set is runnable by name (--always-on) without the
     listed.includes("tests/durable-root.test.ts"),
     "durable-root must be in the set, so a lane can run it explicitly (kz27)",
   );
+  for (const guard of ["tests/evidence-durable-static.test.ts", "tests/no-uppercase-kickers-static.test.ts"]) {
+    assert(listed.includes(guard), `--always-on must select the static equivalent ${guard}`);
+  }
 });
