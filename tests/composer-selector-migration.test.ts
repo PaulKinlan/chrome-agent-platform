@@ -47,6 +47,9 @@ const EXEMPT = new Set([
   "scripts/lib/composer-target.ts",
   "tests/agent-composer-unique-ids.test.ts",
   "tests/composer-selector-migration.test.ts",
+  // The cutover guard quotes the SW message route `run-task` while asserting
+  // that owner fencing precedes scheduling; it never selects a composer node.
+  "tests/master-journal-cutover-admission.test.ts",
 ]);
 
 // MEASURED, not remembered:

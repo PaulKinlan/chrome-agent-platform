@@ -59,7 +59,7 @@ class ShimDir {
     const k = String(n);
     const kid = this.kids.get(k);
     if (kid) return kid;
-    if (!create) throw Object.assign(new Error("nf"), { name: "NotFoundError" });
+    if (!create) throw new DOMException("nf", "NotFoundError");
     const d = new ShimDir(k);
     this.kids.set(k, d);
     return d;
@@ -68,7 +68,7 @@ class ShimDir {
     const k = String(n);
     const kid = this.kids.get(k);
     if (kid) return kid;
-    if (!create) throw Object.assign(new Error("nf"), { name: "NotFoundError" });
+    if (!create) throw new DOMException("nf", "NotFoundError");
     const f = new ShimFile(k);
     this.kids.set(k, f);
     return f;

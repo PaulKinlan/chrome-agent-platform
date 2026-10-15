@@ -28,7 +28,10 @@ globalThis.chrome = {
   },
   storage: {
     local: {
-      get: async (k) => (k === null || k === undefined ? Object.fromEntries(store) : { [k]: store.get(k) }),
+      // Chrome omits absent keys; returning { [k]: undefined } fabricates a
+      // present-but-malformed cutover fence and makes scheduler refuse repair.
+      get: async (k) => (k === null || k === undefined ? Object.fromEntries(store) :
+        store.has(k) ? { [k]: store.get(k) } : {}),
       set: async (obj) => { for (const [k, v] of Object.entries(obj)) store.set(k, v); },
       remove: async (keys) => { for (const k of Array.isArray(keys) ? keys : [keys]) store.delete(k); },
     },
