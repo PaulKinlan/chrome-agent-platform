@@ -66,7 +66,7 @@ export const SERIAL_REASONS = {
   // 32-worker parallel phase causes CPU starvation during boot, failing full gates with
   // median long tasks 1 vs 0 and composer latency up to 383ms, while passing 4/0 in isolation.
   // Running serially before the parallel phase removes the concurrent load.
-  "tests/ntp-boot-staging.test.ts": "median-long-task (0) and stage1-composer (<150ms) boot assertions race the parallel phase under concurrent load (failed union-gate full runs; passes 4/0 in isolation)",
+  "tests/ntp-boot-staging.test.ts": "staged-boot unit mechanics (runStagedBoot ordering, fault isolation, deferred custom elements); kept serial for schedule stability after its wall-clock assertions moved to tests/ntp-boot-staging-timing.test.ts (chrome-agent-platform-mr1ak)",
 };
 export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
 
@@ -119,6 +119,21 @@ export const HEAVY_GATE_REASONS = {
   "tests/emscripten-numeric-acceptance.test.ts": "builds acceptance package with numeric WASM evidence and audits graph",
   "tests/emscripten-module-audit.test.ts": "loads and audits multiple large schema-2 Emscripten WASM binaries",
   "tests/emscripten-abi-evidence.test.ts": "loads 1.2MB emscripten-abi evidence and executes native profile tests",
+  // chrome-agent-platform-mr1ak: the WALL-CLOCK half of the NTP boot contract. Measured in a real
+  // browser, and on a shared fleet box the load is sibling lanes' test workers (high load/core, zero
+  // compilers), which the contention classification cannot see - so a scheduler stall read as a
+  // product defect and reddened the FULL gate at load/core 0.84 against the repo's own 0.35 bound.
+  // The FULL gate keeps boot coverage without a timing budget (ntp-rpc-census and the other
+  // browser tests load ntp.html and assert outcomes; the structural boot-scheduler assertions stay
+  // in tests/ntp-boot-staging.test.ts).
+  // WARNING, measured during review: this tier is NOT a quiet box. scripts/heavy-gate.ts runs
+  // `deno test --parallel` over these 20 files, 19 of which are RAM/CPU-saturating WASM and Pyodide
+  // stress suites, and it neither acquires the fleet slot nor promotes an environmental refusal.
+  // What this entry buys is that a landing no longer takes a load-dependent verdict; a wall-clock
+  // budget still needs the box quiet, and the repo's only mechanism for that is a test acquiring it
+  // itself via scripts/lib/quiet-window.ts (awaitQuietWindow) - the follow-up the hub must decide.
+  "tests/ntp-boot-staging-timing.test.ts":
+    "wall-clock NTP boot budgets (median long tasks 0, composer-ready < 150ms, thread-hydrated <= 250ms) in a real browser; kept out of the FULL gate so a landing does not take a load-dependent verdict, but note this tier runs in parallel with WASM stress suites and is not itself quiet",
 };
 export const HEAVY_GATE_FILES = Object.freeze(Object.keys(HEAVY_GATE_REASONS));
 export const HEAVY_GATE = new Set(HEAVY_GATE_FILES);

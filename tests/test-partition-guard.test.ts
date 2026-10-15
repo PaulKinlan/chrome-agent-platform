@@ -454,7 +454,7 @@ Deno.test("partition guard: isReviewedReadOnlySpawn requires anchored executable
 const WALL_CLOCK_FLAKE_SERIAL = [
   "tests/serial-phase-timeout.test.ts", // 3vi7 + cihz: declared 5000 ms work vs 4000 ms flat / 12000 ms scaled bounds
   "tests/chrome-slot-semaphore-honesty.test.ts", // mee3: 1.5 s skip bound vs 2 s marker window
-  "tests/ntp-boot-staging.test.ts", // jdgjy: median-long-task(0)/stage1-composer(<150ms) boot assertions race the parallel phase
+  "tests/ntp-boot-staging.test.ts", // jdgjy wall-clock half moved to tests/ntp-boot-staging-timing.test.ts (mr1ak review); still serial for schedule stability
 ];
 
 Deno.test("partition guard: reviewed wall-clock flake declarations are pinned by name", () => {
@@ -894,8 +894,12 @@ Deno.test("h65e: fast smoke assertion remains in SERIAL to catch broken builds i
 });
 
 Deno.test("o29c0: every HEAVY_GATE file is enumerated, has a reason, and exists on disk", () => {
-  assert(HEAVY_GATE_FILES.length >= 19, `HEAVY_GATE_FILES floor tightened: must enumerate at least 19 heavy tests, got ${HEAVY_GATE_FILES.length}`);
-  assertEquals(HEAVY_GATE_FILES.length, 19, "HEAVY_GATE_FILES floor tightened: exactly 19 heavy tests partitioned");
+  // chrome-agent-platform-mr1ak: the WALL-CLOCK NTP boot contract moved to the heavy tier, so this
+  // deliberate floor moves 19 -> 20. Named here because the move is a gate-contract change: the
+  // FULL gate keeps certifying that the hub boots (browser tests that load ntp.html and assert
+  // outcomes) without a wall-clock budget that a loaded box cannot honour.
+  assert(HEAVY_GATE_FILES.length >= 20, `HEAVY_GATE_FILES floor tightened: must enumerate at least 20 heavy tests, got ${HEAVY_GATE_FILES.length}`);
+  assertEquals(HEAVY_GATE_FILES.length, 20, "HEAVY_GATE_FILES floor tightened: exactly 20 heavy tests partitioned");
   const reasons = HEAVY_GATE_REASONS as Record<string, string>;
   for (const file of HEAVY_GATE_FILES) {
     assert(typeof reasons[file] === "string" && reasons[file].length > 0, `${file} must have a non-empty reason in HEAVY_GATE_REASONS`);
