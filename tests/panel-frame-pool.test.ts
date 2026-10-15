@@ -10,9 +10,12 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 const ntpJs = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
 const ntpHtml = await Deno.readTextFile(new URL("../extension/ntp/ntp.html", import.meta.url));
 
-Deno.test("PANEL-POOL: panels use a per-path persistent frame pool (no shared #view-frame)", () => {
-  assert(ntpJs.includes("const panelFrames = new Map()"), "ntp.js must declare the per-path panel frame pool");
-  assert(ntpJs.includes("function panelFrameFor(path)"), "ntp.js must create panel frames lazily per path");
+Deno.test("PANEL-POOL: panels use a single exact-document options frame (retired multi-view Map pool)", () => {
+  assert(ntpJs.includes("let optionsFrame = null;"), "ntp.js must declare the single exact-document options frame");
+  assert(!ntpJs.includes("const panelFrames = new Map()"), "ntp.js must retire the open-ended multi-path panelFrames Map pool");
+  assert(ntpJs.includes("function panelFrameFor(path)"), "ntp.js must resolve the exact-document frame via panelFrameFor");
+  assert(ntpJs.includes('optionsFrame.dataset.panelPath = "options/options.html";'), "optionsFrame must set data-panel-path for journey automation");
+  assert(ntpJs.includes("PANEL_FRAME_CONTAINER.appendChild(optionsFrame);"), "optionsFrame must be appended to the panel frame container");
   assert(!ntpHtml.includes('id="view-frame"'), "the static shared #view-frame must be gone from the markup");
 });
 

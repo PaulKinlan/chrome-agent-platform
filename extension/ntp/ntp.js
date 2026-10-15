@@ -5687,40 +5687,37 @@ const viewOverlay = document.getElementById("view");
 // renderer retains each destroyed document until a MAJOR GC — measured 12
 // open/close cycles across settings/directory/assets growing Documents 4→39,
 // Frames 3→20, listeners 113→776 and JS heap 1.8→8.4MB before any GC
-// (scripts/panel-leak-probe.ts). With a per-panel pool the document count is
-// bounded by the panel count, nothing is destroyed on close, and re-opening a
-// panel is instant (no reload). Freshness semantics are unchanged: a panel
-// document already booted once per hub session for same-panel reopens; this
-// makes panel switches behave the same way.
-const panelFrames = new Map();
+// Stage 4a (chrome-agent-platform-p9it.1): The open-ended multi-path iframe
+// pool (panelFrames = new Map()) is retired. Client-side views (Directory,
+// Artifacts, hub-ok Settings) mount directly in #view-client-host with zero
+// iframes. For the 13 exact-document Settings panels (providers, credentials,
+// wasm, approvals), exactly ONE bounded optionsFrame is created lazily and
+// retained, preserving the exact document URL (no query string) and
+// data-panel-path="options/options.html" for journey automation.
+let optionsFrame = null;
 let activePanelFrame = null;
 const PANEL_FRAME_CONTAINER = document.getElementById("view");
 function panelFrameFor(path) {
   const [basePath, hash] = String(path ?? "").split("#");
-  let frame = panelFrames.get(basePath);
-  if (!frame) {
-    frame = document.createElement("iframe");
-    frame.dataset.panelPath = basePath;
-    frame.title = "view";
-    frame.hidden = true;
-    PANEL_FRAME_CONTAINER.appendChild(frame);
-    panelFrames.set(basePath, frame);
+  if (!optionsFrame) {
+    optionsFrame = document.createElement("iframe");
+    optionsFrame.dataset.panelPath = "options/options.html";
+    optionsFrame.title = "view";
+    optionsFrame.hidden = true;
+    PANEL_FRAME_CONTAINER.appendChild(optionsFrame);
   }
-  if (hash !== undefined && frame.contentWindow) {
+  if (hash !== undefined && optionsFrame.contentWindow) {
     try {
-      if (frame.contentWindow.location) {
-        frame.contentWindow.location.hash = `#${hash}`;
+      if (optionsFrame.contentWindow.location) {
+        optionsFrame.contentWindow.location.hash = `#${hash}`;
       }
     } catch { /* cross-frame or unready */ }
   }
-  return frame;
+  return optionsFrame;
 }
 function isPanelFrameSource(win) {
-  if (!win) return false;
-  for (const frame of panelFrames.values()) {
-    if (frame.contentWindow === win) return true;
-  }
-  return false;
+  if (!win || !optionsFrame) return false;
+  return optionsFrame.contentWindow === win;
 }
 const viewTitle = document.getElementById("view-title");
 const viewClientHost = document.getElementById("view-client-host");
@@ -5923,7 +5920,7 @@ function openView(path, title, trigger) {
         }
       }
     }
-    for (const other of panelFrames.values()) other.hidden = true;
+    if (optionsFrame) optionsFrame.hidden = true;
     activePanelFrame = null;
   } else {
     if (viewClientHost) viewClientHost.hidden = true;
@@ -5952,7 +5949,7 @@ function openView(path, title, trigger) {
         }
       } catch { /* best effort */ }
     }
-    for (const other of panelFrames.values()) other.hidden = other !== frame;
+    if (optionsFrame) optionsFrame.hidden = false;
     activePanelFrame = frame;
     frame.title = title;
   }
@@ -6099,7 +6096,7 @@ async function applyCurrentHashRoute(isTraverse = false) {
       const parsedSection = targetRoute === VIEW_ROUTE.SETTINGS ? resolveSettingsSectionFromPath(parsed.path) : null;
       const isOpen = isClient
         ? (!viewOverlay?.hidden && activeViewRoute === targetRoute && (targetRoute !== VIEW_ROUTE.SETTINGS || activeSettingsViewSectionId === parsedSection))
-        : (!viewOverlay?.hidden && activePanelFrame === panelFrames.get(parsedBasePath));
+        : (!viewOverlay?.hidden && activePanelFrame === optionsFrame && parsedBasePath === "options/options.html");
       if (isOpen) {
         if (viewTitle && meta.title && meta.title !== "View") {
           viewTitle.textContent = meta.title;
