@@ -5,9 +5,9 @@
 // tests spawn real child processes that hold the real flock — a single-process
 // test of a lock proves nothing about the exclusion it exists to provide.
 //
-// Every fixture takes a PRIVATE slot path under a temp dir, never the fleet's
-// own: a test must not be able to block a real gate, and the fleet slot is not
-// somewhere to experiment.
+// Contention fixtures take PRIVATE slots under temp dirs: they must not block
+// a real gate. The sole default-slot exception is n772's <=300 ms reader probe;
+// it reports INCONCLUSIVE if another lane holds the fleet slot.
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import {
@@ -760,6 +760,290 @@ console.log(JSON.stringify({ verdict, backstopsScheduled, pendingBackstops: pend
     // distinguishes those cases without weakening the injected ECHILD verdict.
     assertEquals(out.backstopsScheduled, 1, "the status-rejection branch actually scheduled its 1,500 ms backstop");
     assertEquals(out.pendingBackstops, 0, "status rejection cleared the backstop before exit (pre-fix leak: ~1,560 ms)");
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+// ── n772: the announcement's PATH and HONESTY ───────────────────────────────
+// The bead (chrome-agent-platform-n772) reported that the writer derived
+// `${slotPath}.holder.json` while the exported reader default was a different
+// literal, so an operational reader saw no announcement. On this tree the path
+// derivation already special-cases the default slot (the 0lj3 revision), and the
+// tests below are the two the bead asked for that were missing: an EXECUTING check
+// of the announced sidecar (not a constant comparison), and an isolation check for
+// private slots. A third check covers a defect measured while verifying this one:
+// a FREE slot announced "waiting ... held by an unnamed holder", i.e. a holder that
+// did not exist.
+
+Deno.test("n772 drill: the default slot's announcement is where the DEFAULT reader looks", async () => {
+  // (a) EXECUTING, on a private slot: the writer's derivation and the reader agree
+  // in practice, on a lock that cannot block a real gate (this file's own rule).
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-n772-" });
+  const slotPath = `${dir}/gate.lock`;
+  try {
+    const lease = await acquireHeavyGateSlot({
+      gate: "n772-private-roundtrip", kind: "gate", boundMs: 2000,
+      slot: { slotPath }, onAcquired: () => {}, onWait: () => {},
+    });
+    const derived = heavyGateHolderPathFor(slotPath);
+    assert(derived.endsWith(".holder.json"), `a private announcement lives beside its slot; got ${derived}`);
+    assertEquals(readHeavyGateHolder(derived).holder?.gate, "n772-private-roundtrip");
+    lease.release();
+    assertEquals(readHeavyGateHolder(derived).holder, null, "the release clears the private announcement");
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+  // (b) EXECUTING, on the REAL default slot: acquire it only if it is free, with a
+  // bound so short it cannot hold a real gate up, and then read through the DEFAULT
+  // reader (no argument). Under the reported drift this is exactly what fails: the
+  // announcement would land at `${HEAVY_GATE_SLOT_PATH}.holder.json` and the
+  // default reader would see nothing. When another lane holds the slot the check is
+  // INCONCLUSIVE by construction — this test never waits for the fleet slot, and it
+  // says so rather than passing quietly.
+  try {
+    const lease = await acquireHeavyGateSlot({
+      gate: "n772-default-reader", kind: "gate", boundMs: 300,
+      slot: { slotPath: HEAVY_GATE_SLOT_PATH },
+      onAcquired: () => {}, onWait: () => {},
+    });
+    try {
+      const viaDefaultReader = readHeavyGateHolder();
+      assertEquals(
+        viaDefaultReader.holder?.gate, "n772-default-reader",
+        "the announcement for the default slot must be visible to the default reader (no path argument)",
+      );
+      assert(viaDefaultReader.alive === true, "our own live process must read as alive");
+    } finally {
+      lease.release();
+    }
+    assertEquals(readHeavyGateHolder().holder, null, "the release removes the announcement at the default path");
+  } catch (e) {
+    if ((e as Error).name === "HeavyGateSlotRefusedError") {
+      console.log("  INCONCLUSIVE (default-path half): the fleet slot is held by another lane right now — the default reader's path was not exercised on this run (the private half above already ran). Re-run when the slot is free; this is not a pass and not a failure.");
+    } else throw e;
+  }
+  // The pure derivation still pins the contract when a real holder makes the
+  // executing half INCONCLUSIVE; put it AFTER the executing check so a free
+  // default slot falsifies path drift by actual readback, not a constant alone.
+  assertEquals(
+    heavyGateHolderPathFor(HEAVY_GATE_SLOT_PATH),
+    HEAVY_GATE_HOLDER_PATH,
+    "the default slot's announcement path must be the path the default reader reads",
+  );
+});
+
+Deno.test("n772 drill: a private slot's announcement stays beside it and never at the default path", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-n772-iso-" });
+  const slotPath = `${dir}/private.lock`;
+  const defaultBefore = (() => { try { return Deno.readTextFileSync(HEAVY_GATE_HOLDER_PATH); } catch { return null; } })();
+  try {
+    const lease = await acquireHeavyGateSlot({
+      gate: "n772-isolated-holder", kind: "gate", boundMs: 2000,
+      slot: { slotPath }, onAcquired: () => {}, onWait: () => {},
+    });
+    try {
+      // The private announcement exists at its own derived path...
+      assertEquals(readHeavyGateHolder(`${slotPath}.holder.json`).holder?.gate, "n772-isolated-holder");
+      // ...and the DEFAULT reader must never see our private holder. The
+      // default sidecar belongs to other live lanes; they may change its bytes
+      // while this private fixture runs, so a before/after mismatch alone is
+      // INCONCLUSIVE, not a red attributed to this acquisition.
+      const defaultNow = (() => { try { return Deno.readTextFileSync(HEAVY_GATE_HOLDER_PATH); } catch { return null; } })();
+      assert(
+        readHeavyGateHolder().holder?.gate !== "n772-isolated-holder",
+        "the default reader must not report a private slot's holder",
+      );
+      if (defaultNow !== defaultBefore) {
+        console.log("  INCONCLUSIVE (default sidecar bytes): another gate changed the shared default announcement during this private-slot check");
+      } else {
+        assertEquals(defaultNow, defaultBefore, "the private slot left the default sidecar bytes identical");
+      }
+    } finally {
+      lease.release();
+    }
+    assertEquals(readHeavyGateHolder(`${slotPath}.holder.json`).holder, null, "the private announcement is cleared on release");
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("n772 drill: a FREE slot announces no wait; a held slot names its holder", async () => {
+  // MEASURED BEFORE THE FIX: acquiring a FREE slot fired onWait once with
+  // "waiting for the fleet-wide gate slot [...] — held by an unnamed holder (no
+  // announcement sidecar)" while the acquisition completed in ~8 ms: a holder claim
+  // where there was no holder, and enough to make real contention indistinguishable
+  // from an uncontended acquisition in every gate's log. The line now prints only
+  // once the acquisition has actually failed to complete a read, naming the holder
+  // read AT THAT MOMENT.
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-n772-wait-" });
+  const slotPath = `${dir}/wait.lock`;
+  const holderOpts = { kind: "gate" as const, slot: { slotPath } };
+  try {
+    const freeWaits: string[] = [];
+    const freeAcquired: string[] = [];
+    const free = await acquireHeavyGateSlot({
+      gate: "n772-free", boundMs: 2000, ...holderOpts,
+      onWait: (l) => freeWaits.push(l), onAcquired: (l) => freeAcquired.push(l),
+    });
+    free.release();
+    assertEquals(freeWaits, [], "a free slot must announce no wait — there is nothing to wait for and no holder to name");
+    assert(freeAcquired.length > 0, "the acquisition itself is still announced");
+
+    const holder = await acquireHeavyGateSlot({ gate: "n772-holder", boundMs: 3000, ...holderOpts, onWait: () => {}, onAcquired: () => {} });
+    try {
+      const waits: string[] = [];
+      const refused = await acquireHeavyGateSlot({
+        gate: "n772-waiter", boundMs: 1200, ...holderOpts,
+        onWait: (l) => waits.push(l), onAcquired: () => {},
+      }).then((lease) => { lease.release(); return null; }, (e) => e as Error);
+      assert(refused, "the second acquisition must be refused while the first holds the slot");
+      assertEquals(waits.length, 1, "a contested acquisition announces the wait exactly once");
+      assert(
+        waits[0].includes("n772-holder") && /\bpid \d+\b/.test(waits[0]),
+        `the wait must name the real holder and its pid; got: ${waits[0]}`,
+      );
+    } finally {
+      holder.release();
+    }
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+// ── o3rx: SETUP vs CONTENTION is decided by the STATUS PAIR, not by scanning the message ──
+// The 0lj3 drill above covers the lock-file case (exit 66, 'cannot open lock file'). These
+// drills include shapes a message scan gets wrong, measured on Linux 2026-09-24:
+//   * failure to execute the command   -> exit 69 + "failed to execute sh: No such file or directory"
+//   * access failure on the lock's dir -> exit 66 + "Permission denied"
+// and the discriminator that makes them distinguishable from contention at all: genuine
+// contention is exit 1 with EMPTY stderr (flock's own -w elapsed), which is why the rule is
+// "a quiet exit 1, or a helper our backstop killed while it was still waiting" — everything else
+// names a real cause. Before this, exit 69 was classified as contention: a peer was blamed for a
+// missing `sh`.
+
+Deno.test("o3rx drill: a helper that cannot execute its command is a SETUP fault, not a busy peer", async () => {
+  // A PATH that contains flock and nothing else: flock runs, then cannot find `sh`.
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-o3rx-exec-" });
+  const binDir = `${dir}/bin`;
+  await Deno.mkdir(binDir, { recursive: true });
+  const flockPath = (await new Deno.Command("sh", { args: ["-c", "command -v flock"] }).output()).stdout;
+  const flock = new TextDecoder().decode(flockPath).trim();
+  assert(flock.length > 0, "this drill needs flock on PATH to stage an exec failure after it");
+  await Deno.symlink(flock, `${binDir}/flock`);
+  const script = `${dir}/probe.mjs`;
+  await Deno.writeTextFile(script, `
+import { acquireHeavyGateSlot } from ${JSON.stringify(`${ROOT}scripts/lib/heavy-gate-slot.ts`)};
+try {
+  const lease = await acquireHeavyGateSlot({ gate: "o3rx-exec", kind: "gate", boundMs: 1500, slot: { slotPath: Deno.args[0] }, onWait: () => {}, onAcquired: () => {} });
+  lease.release();
+  console.log(JSON.stringify({ name: "none" }));
+} catch (e) {
+  console.log(JSON.stringify({ name: e?.name ?? "?", message: String(e?.message ?? e).slice(0, 300) }));
+}
+`);
+  try {
+    const child = new Deno.Command(Deno.execPath(), {
+      args: ["run", "-A", "--no-check", script, `${dir}/gate.lock`],
+      cwd: ROOT,
+      // flock is reachable; `sh` deliberately is not.
+      env: { ...Deno.env.toObject(), PATH: binDir },
+      stdout: "piped", stderr: "piped",
+    }).spawn();
+    const { code, stdout } = await child.output();
+    assertEquals(code, 0, "the probe itself must run to completion");
+    const out = JSON.parse(new TextDecoder().decode(stdout).trim().split("\n").pop() ?? "{}");
+    assertEquals(out.name, "HeavyGateSlotSetupError", `an exec failure must be SETUP, not contention; got ${JSON.stringify(out)}`);
+    assert(
+      String(out.message).includes("failed to execute") || String(out.message).includes("No such file or directory"),
+      `the real cause must be named (flock's own words); got: ${out.message}`,
+    );
+    assert(!String(out.message).includes("held by"), "an exec failure must never blame a peer");
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("o3rx drill: an UNWRITABLE lock directory is a SETUP fault naming the access failure", async () => {
+  if (typeof Deno.uid === "function" && Deno.uid() === 0) {
+    console.log("  INCONCLUSIVE: root can bypass chmod 0500; this drill needs an unprivileged Linux user");
+    return;
+  }
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-o3rx-perm-" });
+  const readOnly = `${dir}/ro`;
+  await Deno.mkdir(readOnly, { recursive: true });
+  await Deno.chmod(readOnly, 0o500);
+  try {
+    const err = await assertRejects(
+      () => acquireHeavyGateSlot({
+        gate: "o3rx-perm", kind: "gate", boundMs: 1500,
+        slot: { slotPath: `${readOnly}/fresh.lock` },
+        onWait: () => {},
+      }),
+      Error,
+    );
+    assertEquals(err.name, "HeavyGateSlotSetupError", "an access failure must be SETUP, not contention");
+    assert(
+      err.message.includes("Permission denied") || err.message.includes("cannot open lock file"),
+      `the access failure must be named; got: ${err.message}`,
+    );
+    assert(!err.message.includes("busy"), `an access failure must not read as busy: ${err.message}`);
+  } finally {
+    await Deno.chmod(readOnly, 0o700).catch(() => {});
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("o3rx drill: a helper that never performs the handshake is a SETUP fault, not a busy peer", async () => {
+  // The sharpest case, and the one a message scan cannot decide: a `flock` that runs and exits
+  // WITHOUT printing the acquisition marker. `flock` is resolved from PATH, so this is not
+  // hypothetical — a wrapper script, a busybox build, or a different tool with that name all land
+  // here, and so does a helper killed before it could write. Nothing was contended, nothing was
+  // timed out, and there is no peer to blame: the previous rule classified a silent exit 0 (and
+  // any exit code it did not recognise) as "the slot is busy", which sends a lane to wait for a
+  // holder that does not exist.
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-o3rx-stub-" });
+  const binDir = `${dir}/bin`;
+  await Deno.mkdir(binDir, { recursive: true });
+  await Deno.writeTextFile(`${binDir}/flock`, `#!/bin/sh\nif [ "\${STUB_EXIT:-0}" = sigterm ]; then kill -TERM $$; fi\nif [ "\${STUB_EXIT:-0}" = sigkill ]; then kill -KILL $$; fi\nexit \${STUB_EXIT:-0}\n`);
+  await Deno.chmod(`${binDir}/flock`, 0o755);
+  const script = `${dir}/probe.mjs`;
+  await Deno.writeTextFile(script, `
+import { acquireHeavyGateSlot } from ${JSON.stringify(`${ROOT}scripts/lib/heavy-gate-slot.ts`)};
+const out = [];
+for (const label of ["silent-exit-0", "silent-exit-70", "silent-sigterm", "silent-sigkill"]) {
+  Deno.env.set("STUB_EXIT", label === "silent-exit-0" ? "0" : label === "silent-exit-70" ? "70" : label === "silent-sigterm" ? "sigterm" : "sigkill");
+  try {
+    const lease = await acquireHeavyGateSlot({ gate: "o3rx-stub", kind: "gate", boundMs: 1200, slot: { slotPath: Deno.args[0] }, onWait: () => {}, onAcquired: () => {} });
+    lease.release();
+    out.push({ label, name: "none" });
+  } catch (e) {
+    out.push({ label, name: e?.name ?? "?", message: String(e?.message ?? e).slice(0, 200) });
+  }
+}
+console.log(JSON.stringify(out));
+`);
+  try {
+    const child = new Deno.Command(Deno.execPath(), {
+      args: ["run", "-A", "--no-check", script, `${dir}/gate.lock`],
+      cwd: ROOT,
+      env: { ...Deno.env.toObject(), PATH: binDir },
+      stdout: "piped", stderr: "piped",
+    }).spawn();
+    const { code, stdout, stderr } = await child.output();
+    assertEquals(code, 0, `the probe must run to completion; stderr: ${new TextDecoder().decode(stderr).slice(0, 300)}`);
+    const rows = JSON.parse(new TextDecoder().decode(stdout).trim().split("\n").pop() ?? "[]");
+    for (const row of rows) {
+      assertEquals(
+        row.name, "HeavyGateSlotSetupError",
+        `${row.label}: no handshake happened, so nothing was contended — this must be SETUP, never busy; got ${JSON.stringify(row)}`,
+      );
+      assert(!String(row.message).includes("held by"), `${row.label} must not blame a peer`);
+      if (row.label === "silent-sigterm" || row.label === "silent-sigkill") {
+        const expected = row.label === "silent-sigkill" ? "SIGKILL" : "SIGTERM";
+        assert(String(row.message).includes(`signal ${expected}`), `the signal must be named: ${row.message}`);
+      }
+    }
   } finally {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
