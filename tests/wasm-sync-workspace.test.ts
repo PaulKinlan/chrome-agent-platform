@@ -31,6 +31,28 @@ const row = (path, bytes) => ({ path, bytes });
 // Identical values either way, so the byte-matrix assertions below cannot tell the two apart.
 const dense = (length, value = 1) => new Array(length).fill(value);
 
+Deno.test("5icgm: dense() byte values agree with an independently encoded workspace write/read", () => {
+  // Do not construct the expected bytes from dense() or hand-copy byte literals:
+  // this independent producer writes TextEncoder bytes into the REAL workspace.
+  // A dense() value error must disagree with the bytes read back from that write.
+  const content = "h".repeat(17);
+  const encoded = new TextEncoder().encode(content);
+  const producer = createSyncWorkspace({ root: "tool-jobs/dense/producer/" });
+  const tx = producer.createScratchFile("scratch/reference.bin");
+  tx.commit(); // provisional handles reject read/write until this commit
+  assertEquals(tx.handle.write(0, encoded), encoded.byteLength);
+  const expected = [...tx.handle.read(0, encoded.byteLength)];
+  tx.handle.close();
+
+  const generated = dense(encoded.byteLength, content.charCodeAt(0));
+  assertEquals(generated, expected, "dense() must yield the real writer's bytes, not a repeated literal fixture");
+  const seeded = createSyncWorkspace({ root: "tool-jobs/dense/seeded/", seed: { files: [row("inputs/probe.bin", generated)] } });
+  const handle = seeded.open("inputs/probe.bin", { read: true });
+  assertEquals([...handle.read(0, encoded.byteLength)], expected,
+    "the dense-produced seed must read back byte-identical to the independently written file");
+  handle.close();
+});
+
 Deno.test("S1 seed: inputs predecessor matrix is byte-identical to the 13936ec validator output", () => {
   // The tree/stat/du-style seeds: order, exact paths, exact bytes preserved.
   const seeded = valid([
