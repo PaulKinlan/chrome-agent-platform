@@ -11,11 +11,13 @@
 // 7. Atomic quota reservation (P1-1): concurrent calls via Promise.all cannot bypass quota limit.
 // 8. Canonical service ID accounting (P2-1): aliases (e.g. BRAVE_SEARCH_API_KEY) record under canonical ID.
 
-import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
 
 import {
   createEnclaveLedger,
   DEFAULT_ENCLAVE_QUOTAS,
+  ENCLAVE_QUOTAS_STORAGE_KEY,
+  validateQuotasConfig,
 } from "../extension/lib/enclave-ledger.js";
 
 import { createEnclaveProxyRoutes } from "../extension/background/routes/enclave-proxy.js";
@@ -461,4 +463,238 @@ Deno.test("vault routes: vault.ledger.resetQuotas resets service quota (P2-3)", 
   // Reset quotas via vault route
   await routes["vault.ledger.resetQuotas"]({ serviceId: "brave-search" }, { principal: "owner-options" });
   assertEquals(ledger.getRollups()["brave-search"], undefined);
+});
+
+// ── Part 8: Slice 2 Configurable Quotas & Usage Surface ─────────────────────
+
+Deno.test("slice 2: validateQuotasConfig strictly enforces valid quota shapes", () => {
+  // Valid
+  const valid = validateQuotasConfig({
+    "brave-search": { limit: 25, windowMs: 86400000 },
+    "github": { limit: 0, windowMs: 3600000 },
+  });
+  assertEquals(valid["brave-search"].limit, 25);
+  assertEquals(valid["github"].limit, 0);
+
+  // Invalid: not an object, negative limit, non-integer, non-positive window
+  assertThrows(() => validateQuotasConfig(null as any));
+  assertThrows(() => validateQuotasConfig([] as any));
+  assertThrows(() => validateQuotasConfig({ "test": { limit: -1, windowMs: 1000 } }));
+  assertThrows(() => validateQuotasConfig({ "test": { limit: 1.5, windowMs: 1000 } }));
+  assertThrows(() => validateQuotasConfig({ "test": { limit: 10, windowMs: 0 } }));
+  assertThrows(() => validateQuotasConfig({ "test": { limit: 10, windowMs: -500 } }));
+  assertThrows(() => validateQuotasConfig({ "": { limit: 10, windowMs: 1000 } }));
+});
+
+Deno.test("slice 2: malformed persisted quota config fails closed without fallback", async () => {
+  const storage = fakeStorage({
+    [ENCLAVE_QUOTAS_STORAGE_KEY]: {
+      "brave-search": { limit: "corrupted_non_number", windowMs: 86400000 },
+    },
+  });
+
+  const ledger = createEnclaveLedger({ storageArea: storage });
+
+  // Fails closed with quota_config_invalid; does NOT silently fall back to default limit of 50
+  const check = await ledger.checkQuota("brave-search");
+  assertEquals(check.ok, false);
+  assertEquals(check.code, "quota_config_invalid");
+  assertStringIncludes(check.error ?? "", "invalid");
+});
+
+Deno.test("slice 2: valid persisted quota override takes precedence over defaults", async () => {
+  const storage = fakeStorage({
+    [ENCLAVE_QUOTAS_STORAGE_KEY]: {
+      "brave-search": { limit: 2, windowMs: 86400000 }, // Override default 50 to 2
+    },
+  });
+
+  const ledger = createEnclaveLedger({ storageArea: storage });
+
+  // 1st call: OK (1 remaining)
+  const c1 = await ledger.checkQuota("brave-search");
+  assertEquals(c1.ok, true);
+  assertEquals(c1.remaining, 1);
+
+  // 2nd call: OK (0 remaining)
+  const c2 = await ledger.checkQuota("brave-search");
+  assertEquals(c2.ok, true);
+  assertEquals(c2.remaining, 0);
+
+  // 3rd call: Quota exceeded
+  const c3 = await ledger.checkQuota("brave-search");
+  assertEquals(c3.ok, false);
+  assertEquals(c3.code, "quota_exceeded");
+});
+
+Deno.test("slice 2: limit of zero disables service fail-closed", async () => {
+  const storage = fakeStorage({
+    [ENCLAVE_QUOTAS_STORAGE_KEY]: {
+      "brave-search": { limit: 0, windowMs: 86400000 },
+    },
+  });
+
+  const ledger = createEnclaveLedger({ storageArea: storage });
+
+  const check = await ledger.checkQuota("brave-search");
+  assertEquals(check.ok, false);
+  assertEquals(check.code, "service_disabled");
+  assertStringIncludes(check.error ?? "", "disabled");
+});
+
+Deno.test("slice 2: getUsage and vault.ledger.usage route report accurate telemetry with privacy", async () => {
+  const storage = fakeStorage({
+    [ENCLAVE_QUOTAS_STORAGE_KEY]: {
+      "brave-search": { limit: 5, windowMs: 3600000 },
+      "disabled-service": { limit: 0, windowMs: 3600000 },
+    },
+  });
+
+  const ledger = createEnclaveLedger({ storageArea: storage });
+  const baseTime = Date.now() - 5000;
+
+  // Make 2 calls to brave-search, 1 to an unmetered service
+  await ledger.checkQuota("brave-search", { now: baseTime });
+  await ledger.checkQuota("brave-search", { now: baseTime + 1000 });
+  await ledger.checkQuota("unmetered-test-service", { now: baseTime });
+
+  // 1. Direct ledger.getUsage()
+  const usage: any = await ledger.getUsage({ now: baseTime + 2000 });
+  const braveUsage = usage["brave-search"];
+  assertEquals(braveUsage.limit, 5);
+  assertEquals(braveUsage.count, 2);
+  assertEquals(braveUsage.remaining, 3);
+  assertEquals(braveUsage.disabled, false);
+  assertEquals(braveUsage.unmetered, false);
+  assertEquals(braveUsage.windowStartMs, baseTime);
+
+  // Exact key set assertion (Note 4): strict contract, zero surprise fields
+  const expectedKeys = ["count", "disabled", "limit", "remaining", "resetMs", "unmetered", "windowMs", "windowStartMs"].sort();
+  assertEquals(Object.keys(braveUsage).sort(), expectedKeys);
+
+  // Unmetered service assertion (Note 2)
+  const unmeteredUsage = usage["unmetered-test-service"];
+  assertEquals(unmeteredUsage.unmetered, true);
+  assertEquals(unmeteredUsage.disabled, false);
+  assertEquals(unmeteredUsage.limit, null);
+  assertEquals(unmeteredUsage.remaining, null);
+  assertEquals(unmeteredUsage.resetMs, null);
+  assertEquals(Object.keys(unmeteredUsage).sort(), expectedKeys);
+
+  // Explicitly disabled service (Note 2)
+  const disabledUsage = usage["disabled-service"];
+  assertEquals(disabledUsage.disabled, true);
+  assertEquals(disabledUsage.unmetered, false);
+  assertEquals(disabledUsage.limit, 0);
+  assertEquals(disabledUsage.remaining, 0);
+  assertEquals(disabledUsage.resetMs, null); // Disabled does not count down to false rollover
+  assertEquals(Object.keys(disabledUsage).sort(), expectedKeys);
+
+  // 2. Vault route vault.ledger.usage
+  const fakeVault = { listMasked: async () => ({}) };
+  const routes = createVaultRoutes({
+    vault: fakeVault as any,
+    requireSettingsSender: () => true,
+    ledger,
+  });
+
+  const res = await routes["vault.ledger.usage"]({}, { principal: "owner-options" });
+  assertEquals(res.ok, true);
+  assertEquals(res.configInvalid, false);
+  assertEquals(res.usage["brave-search"].count, 2);
+
+  // 3. Privacy contract check: ensure serialized usage leaks no private tokens or queries
+  const serialized = JSON.stringify(res.usage);
+  assert(!serialized.includes("token"), "usage must not contain token");
+  assert(!serialized.includes("path"), "usage must not contain path");
+  assert(!serialized.includes("key"), "usage must not contain secret keys");
+});
+
+Deno.test("slice 2: vault.ledger routes enforce real settings sender gate (Note 4)", async () => {
+  const ledger = createEnclaveLedger();
+  const routes = createVaultRoutes({
+    vault: { listMasked: async () => ({}) } as any,
+    requireSettingsSender: (context: any) => {
+      if (context?.principal !== "owner-options") {
+        throw new Error("caller must be Settings surface (owner-options)");
+      }
+    },
+    ledger,
+  });
+
+  // Non-settings principal must throw
+  await assertRejects(
+    () => routes["vault.ledger.usage"]({}, { principal: "model" }),
+    Error,
+    "caller must be Settings surface",
+  );
+  await assertRejects(
+    () => routes["vault.ledger.setQuotas"]({ quotas: {} }, { principal: "extension" }),
+    Error,
+    "caller must be Settings surface",
+  );
+
+  // owner-options succeeds
+  const usageRes = await routes["vault.ledger.usage"]({}, { principal: "owner-options" });
+  assertEquals(usageRes.ok, true);
+});
+
+Deno.test("slice 2: vault.ledger.setQuotas validates, persists, reports configInvalid, and unblocks corrupted ledger (Notes 1, 3, 4)", async () => {
+  // Start with corrupted config in storage
+  const storage = fakeStorage({
+    [ENCLAVE_QUOTAS_STORAGE_KEY]: { "brave-search": "corrupted-entry" },
+  });
+
+  const ledger = createEnclaveLedger({ storageArea: storage });
+  const routes = createVaultRoutes({
+    vault: { listMasked: async () => ({}) } as any,
+    requireSettingsSender: () => true,
+    ledger,
+  });
+
+  // 1. Initial checkQuota fails-closed due to corrupted storage
+  const initialCheck = await ledger.checkQuota("brave-search");
+  assertEquals(initialCheck.ok, false);
+  assertEquals(initialCheck.code, "quota_config_invalid");
+
+  // 2. vault.ledger.usage reports configInvalid: true transparently to UI (Note 3)
+  const invalidStatus = await routes["vault.ledger.usage"]({}, { principal: "owner-options" });
+  assertEquals(invalidStatus.ok, true);
+  assertEquals(invalidStatus.configInvalid, true);
+  assertStringIncludes(invalidStatus.configError ?? "", "invalid");
+
+  // 3. Malformed write attempt is refused without mutating storage (Note 1 & 4)
+  await assertRejects(
+    () => routes["vault.ledger.setQuotas"]({
+      quotas: { "brave-search": { limit: -5, windowMs: 1000 } },
+    }, { principal: "owner-options" }),
+    Error,
+    "non-negative integer",
+  );
+
+  // Storage remains unchanged
+  const storedAfterFailedWrite = await storage.get(ENCLAVE_QUOTAS_STORAGE_KEY);
+  assertEquals(storedAfterFailedWrite[ENCLAVE_QUOTAS_STORAGE_KEY]["brave-search"], "corrupted-entry");
+
+  // 4. Valid setQuotas write succeeds, persists, clears error, and unblocks checkQuota (Note 1)
+  const setRes: any = await routes["vault.ledger.setQuotas"]({
+    quotas: { "brave-search": { limit: 10, windowMs: 3600000 } },
+  }, { principal: "owner-options" });
+  assertEquals(setRes.ok, true);
+  assertEquals(setRes.quotas["brave-search"].limit, 10);
+
+  // Storage now contains valid config
+  const storedAfterValid = await storage.get(ENCLAVE_QUOTAS_STORAGE_KEY);
+  assertEquals(storedAfterValid[ENCLAVE_QUOTAS_STORAGE_KEY]["brave-search"].limit, 10);
+
+  // vault.ledger.usage now reports configInvalid: false
+  const recoveredStatus = await routes["vault.ledger.usage"]({}, { principal: "owner-options" });
+  assertEquals(recoveredStatus.configInvalid, false);
+  assertEquals(recoveredStatus.configError, null);
+  assertEquals(recoveredStatus.usage["brave-search"].limit, 10);
+
+  // checkQuota is unblocked and succeeds!
+  const recoveredCheck = await ledger.checkQuota("brave-search");
+  assertEquals(recoveredCheck.ok, true);
+  assertEquals(recoveredCheck.remaining, 9);
 });

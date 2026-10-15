@@ -134,11 +134,16 @@ export function createVaultRoutes({
       const masked = await vault.listMasked({ caller: "ui" });
       const proxyRules = await loadProxyRules();
       const ledgerEntries = typeof ledger?.list === "function" ? ledger.list() : [];
+      const usage = typeof ledger?.getUsage === "function" ? await ledger.getUsage() : {};
+      const status = typeof ledger?.getConfigStatus === "function" ? ledger.getConfigStatus() : { configInvalid: false, configError: null };
       return {
         ok: true,
         services: vaultPanelRowsOf(masked),
         proxyRules,
         ledger: ledgerEntries,
+        usage,
+        configInvalid: status.configInvalid,
+        configError: status.configError,
       };
     },
 
@@ -186,6 +191,33 @@ export function createVaultRoutes({
       return { ok: true };
     },
 
+    async "vault.ledger.usage"(m, context) {
+      requireSettingsSender(context);
+      const usage = typeof ledger?.getUsage === "function" ? await ledger.getUsage() : {};
+      const status = typeof ledger?.getConfigStatus === "function" ? ledger.getConfigStatus() : { configInvalid: false, configError: null };
+      return {
+        ok: true,
+        usage,
+        configInvalid: status.configInvalid,
+        configError: status.configError,
+      };
+    },
+
+    async "vault.ledger.setQuotas"({ quotas } = {}, context) {
+      requireSettingsSender(context);
+      if (typeof ledger?.setQuotas !== "function") {
+        return { ok: false, code: "not_wired" };
+      }
+      try {
+        const updated = await ledger.setQuotas(quotas);
+        return { ok: true, quotas: updated };
+      } catch (err) {
+        const e = new Error(`enclave quotas: ${String(err?.message ?? err)}`);
+        e.code = "invalid_quota_config";
+        throw e;
+      }
+    },
+
     /** One minimal authenticated request through the enclave proxy: proves the
      * stored token is accepted WITHOUT logging or returning it.
      * SECURITY (voicebox-dsflash1's review): the proxy's error TEXT is never
@@ -205,6 +237,7 @@ export function createVaultRoutes({
         "unknown_service", "bad_method", "secret_unavailable",
         "template_error", "unbounded_response", "not_wired",
         "quota_exceeded", "ledger_unavailable", "clock_skew",
+        "quota_config_invalid", "service_disabled", "invalid_quota_config",
       ]);
       const code = ok ? null : (typeof res?.code === "string" && KNOWN_CODES.has(res.code) ? res.code : "connection_failed");
       return { ok, status: typeof res?.status === "number" ? res.status : null, code };
