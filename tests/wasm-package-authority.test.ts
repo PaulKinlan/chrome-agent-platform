@@ -39,12 +39,21 @@ const expectCode = async (fn, code) => {
 };
 
 class FakeStore {
-  constructor() {
-    this.rows = new Map();
-    this.version = 0;
+  constructor(sharedRows = null, versionRef = null) {
+    this.rows = sharedRows ?? new Map();
+    this.versionRef = versionRef ?? { v: 0 };
     this.fault = null;
+    this.hook = null;
   }
+  get version() { return this.versionRef.v; }
+  set version(v) { this.versionRef.v = v; }
   arm({ method, key = null, state = null, when = "before" }) { this.fault = { method, key, state, when }; }
+  intercept(method, fn) { this.hook = { method, fn }; }
+  async _runHook(method, key, value) {
+    if (this.hook && this.hook.method === method) {
+      await this.hook.fn(key, value);
+    }
+  }
   _match(method, key, value, when) {
     const fault = this.fault;
     if (!fault || fault.method !== method || fault.when !== when || (fault.key != null && fault.key !== key) || (fault.state != null && fault.state !== value?.state)) return false;
@@ -52,9 +61,16 @@ class FakeStore {
     return true;
   }
   _throw() { throw new Error("injected crash"); }
-  async getStrict(key) { return this.rows.has(key) ? structuredClone(this.rows.get(key).value) : null; }
-  async getVersion(key) { return this.rows.get(key)?.version ?? 0; }
+  async getStrict(key) {
+    await this._runHook("getStrict", key);
+    return this.rows.has(key) ? structuredClone(this.rows.get(key).value) : null;
+  }
+  async getVersion(key) {
+    await this._runHook("getVersion", key);
+    return this.rows.get(key)?.version ?? 0;
+  }
   async setTrusted(key, value) {
+    await this._runHook("setTrusted", key, value);
     if (this._match("setTrusted", key, value, "before")) this._throw();
     const token = ++this.version;
     this.rows.set(key, { value: structuredClone(value), version: token });
@@ -62,6 +78,7 @@ class FakeStore {
     return token;
   }
   async compareAndRestore(key, expectedVersion, value) {
+    await this._runHook("compareAndRestore", key, value);
     if (this._match("compareAndRestore", key, value, "before")) this._throw();
     if ((this.rows.get(key)?.version ?? 0) !== expectedVersion) return false;
     const token = ++this.version;
@@ -546,6 +563,100 @@ Deno.test("wasm authority corruption fails closed and never becomes an empty reg
   await aba.store.setTrusted("wasmPkg", { schemaVersion: 1, packages: {} });
   const abaRestart = new WasmPackageAuthority({ getStore: () => aba.store, inventory: aba.inventory });
   await expectCode(() => abaRestart.recoverTx(), "wasm_wal_recovery_conflict");
+});
+
+Deno.test("wasm WAL: racing bundled admissions against shared persistence reject CAS conflict with concurrent_package_write", async () => {
+  // Scope caveat (chrome-agent-platform-tzc / chrome-agent-platform-nra31):
+  // This test pins the BUNDLED tool-package path where withStoreLock,
+  // compareAndRestore, and WAL guarantee atomic admission. It does NOT imply the
+  // owner-selected Wasm path shares this guarantee; the owner path lacks package-level
+  // CAS, WAL, and registry keys (tracked in P2 finding chrome-agent-platform-nra31).
+
+  // In-repo tiny fixture: cap.bundled.sha256sum (approx 1.8 KB manifest)
+  const manifestRel = "extension/wasm/manifests/cap.bundled.sha256sum-1.0.0.manifest.json";
+  const raw = await Deno.readTextFile(manifestRel);
+  const parsed = JSON.parse(raw);
+  const probe = new WasmPackageAuthority();
+  const manifestDigest = probe.manifestDigest(parsed);
+
+  const wasmRel = `extension/wasm/cas/${parsed.executables[0].sha256}.wasm`;
+  const wasm = await Deno.readFile(wasmRel);
+  const sbom = await Deno.readFile(parsed.sbom.ref);
+  const license = await Deno.readFile(parsed.license.file);
+
+  const files = new Map([
+    [manifestRel, enc.encode(raw)],
+    [wasmRel, wasm],
+    [parsed.sbom.ref, sbom],
+    [parsed.license.file, license],
+  ]);
+
+  const inventoryFiles = [
+    { rel: manifestRel, sha256: await digest(files.get(manifestRel)), size: files.get(manifestRel).byteLength },
+    { rel: wasmRel, sha256: parsed.executables[0].sha256, size: wasm.byteLength },
+    { rel: parsed.sbom.ref, sha256: parsed.sbom.sha256, size: sbom.byteLength },
+    { rel: parsed.license.file, sha256: await digest(license), size: license.byteLength },
+  ];
+
+  const inventory = {
+    release: "0.2.151",
+    files: inventoryFiles,
+    manifests: [{ pkg: parsed.package.id, version: parsed.package.version, digest: manifestDigest }],
+    signer: { lane: "bundled", keyId: parsed.signer.keyId },
+    evidence: [],
+    revocations: [],
+    transitions: [],
+    async readFile(rel) { return files.get(rel); },
+    async listFiles() { return [...files.keys()]; },
+  };
+
+  const sharedRows = new Map();
+  const versionRef = { v: 0 };
+  const storeA = new FakeStore(sharedRows, versionRef);
+  const storeB = new FakeStore(sharedRows, versionRef);
+
+  let bHasReadGen;
+  const bGenPromise = new Promise((resolve) => { bHasReadGen = resolve; });
+
+  // Store A prepares its WAL and pauses until Store B reads registryGen (0)
+  storeA.intercept("setTrusted", async (_key, value) => {
+    if (value?.state === "prepared") {
+      await bGenPromise;
+    }
+  });
+
+  // Store B signals once it reads registryGen
+  storeB.intercept("getVersion", async (key) => {
+    if (key === "wasmPkg") {
+      bHasReadGen();
+    }
+  });
+
+  const authA = new WasmPackageAuthority({ getStore: () => storeA, inventory, now: () => 1000 });
+  const authB = new WasmPackageAuthority({ getStore: () => storeB, inventory, now: () => 1000 });
+
+  const admissionFiles = new Map([[parsed.executables[0].sha256, wasm]]);
+
+  const outcomes = await Promise.allSettled([
+    authA.admitBundled({ manifest: raw, files: admissionFiles }),
+    authB.admitBundled({ manifest: raw, files: admissionFiles }),
+  ]);
+
+  assertEquals(outcomes.filter((o) => o.status === "fulfilled").length, 1, "exactly one install must commit");
+  const rejected = outcomes.filter((o) => o.status === "rejected");
+  assertEquals(rejected.length, 1, "the loser must reject");
+  assert(rejected[0].reason instanceof WasmPackageAuthorityError, "loser must reject with WasmPackageAuthorityError");
+  assertEquals(rejected[0].reason.code, "concurrent_package_write", "loser must fail with concurrent_package_write");
+
+  // Registry must contain exactly the committed package
+  const reg = await authA.query({ packageId: parsed.package.id });
+  assert(reg.ok, "committed package must be present in registry");
+  assertEquals(reg.record.packageId, parsed.package.id);
+  assertEquals(reg.record.current.version, parsed.package.version);
+
+  // WAL must be consistent and cleared to 'none'
+  const wal = await storeA.getStrict("__wasmTx");
+  assertEquals(wal.state, "none", "WAL must be clean and consistent");
 });
 
 Deno.test("wasm static/RHC boundary: no route, execution, owner, OPFS, network or permission surface", async () => {
