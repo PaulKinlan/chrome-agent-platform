@@ -19,6 +19,8 @@ import {
   recordThreadError,
   setThreadStatus,
 } from "../extension/lib/threads.js";
+import { appendRunEndCleanupNote } from "../extension/lib/lifecycle-cleanup.js";
+import { projectThreadMessages } from "../extension/shared/conversation.js";
 
 // ---- minimal in-memory OPFS fake ----
 function dirNode() {
@@ -287,6 +289,44 @@ Deno.test("a terminal equal to the last interim text replaces that interim row (
   assertEquals(thread.messages.map((m) => m.content), ["list my open tabs", "Here are your open tabs: A, B, C"]);
   assertEquals(thread.messages[1].executionId, exec);
   assertEquals(thread.messages[1].step, undefined, "the surviving row is the terminal");
+});
+
+Deno.test("gg1o: one scripted final after restore_closed with a runtime note renders one assistant bubble", async () => {
+  const t = await createThread("restore my recently closed tab");
+  const executionId = "exec-gg1o-restore-1";
+  const text = "Restored the tab you closed.";
+  // A scripted provider emits ONE visible final text after its tool step.
+  // The SW persists that text as an interim row before attaching its runtime
+  // cleanup note to the durable terminal response.
+  const scriptedFinal = async (emit) => {
+    await emit({ type: "text", persist: true, step: 1, text });
+    return text;
+  };
+  const result = await scriptedFinal(async (event) => {
+    await appendThreadMessage(t.id, { role: "assistant", content: event.text, executionId, step: event.step });
+  });
+  const terminalText = appendRunEndCleanupNote(result, { restoredTabIds: [301] });
+  assert(terminalText.includes("Browser-tidy (runtime note)"));
+  await commitThreadTerminal(t.id, executionId, { role: "assistant", content: terminalText });
+  const saved = await getThread(t.id);
+  const bubbles = projectThreadMessages(saved).filter((message) => message.role === "assistant");
+  assertEquals(bubbles.length, 1, "a single final response must not appear once plain and once with the appended runtime note");
+  assertEquals(bubbles[0].content, terminalText, "the surviving bubble retains the full runtime note");
+  assertEquals(saved.messages.filter((m) => m.role === "assistant").length, 1,
+    "the duplicate is removed from durable thread history, not only hidden in the UI");
+});
+
+Deno.test("gg1o: a distinct earlier answer remains when the final gains a runtime note", async () => {
+  const t = await createThread("restore then explain");
+  const executionId = "exec-gg1o-restore-2";
+  await appendThreadMessage(t.id, { role: "assistant", content: "I found your closed tab.", executionId, step: 0 });
+  await appendThreadMessage(t.id, { role: "assistant", content: "Restored the tab you closed.", executionId, step: 1 });
+  const final = appendRunEndCleanupNote("Restored the tab you closed, and it is ready to use.", { restoredTabIds: [302] });
+  await commitThreadTerminal(t.id, executionId, { role: "assistant", content: final });
+  const contents = projectThreadMessages(await getThread(t.id))
+    .filter((message) => message.role === "assistant").map((message) => message.content);
+  assertEquals(contents, ["I found your closed tab.", "Restored the tab you closed.", final],
+    "distinct intermediate answers stay visible; matching only a prefix is not enough to remove one");
 });
 
 Deno.test("the index preview never carries a bracketed model tag (USER-VOICE-COPY-01)", async () => {
