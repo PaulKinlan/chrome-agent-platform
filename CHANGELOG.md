@@ -2,6 +2,7 @@
 
 ## [0.3.687] — 2026-10-14
 - Clean up unused imports and dead fields in skill import module
+- Allow flat third-party extension directories ending in extension to be launched
 
 ## [0.3.686] — 2026-10-14
 - Fix left sidebar and Settings menu scroll vibration on NTP and Settings surfaces

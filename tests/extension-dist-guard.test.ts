@@ -136,3 +136,27 @@ Deno.test("zqgn3: assertExtensionBuilt succeeds when declared artifacts are pres
   }
 });
 
+Deno.test("97urm: third-party flat extension ending in 'extension' without dist succeeds", () => {
+  const scratch = makeScratchDir("flat-wrap");
+  const dir = join(scratch, "third-party-extension");
+  Deno.mkdirSync(dir, { recursive: true });
+  try {
+    const manifest = {
+      manifest_version: 3,
+      name: "third-party-extension",
+      version: "1.0",
+      background: {
+        service_worker: "background.js",
+      },
+    };
+    Deno.writeTextFileSync(join(dir, "manifest.json"), JSON.stringify(manifest));
+    Deno.writeTextFileSync(join(dir, "background.js"), "// direct worker");
+
+    // Must not throw when third-party flat extension has no dist/ directory
+    assertExtensionBuilt(dir);
+  } finally {
+    Deno.removeSync(scratch, { recursive: true });
+  }
+});
+
+
