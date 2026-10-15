@@ -12,6 +12,8 @@
 
 import { parseArgs } from "jsr:@std/cli@1/parse-args";
 import { acpChildEnvFor, acpChildEnvNote, acpChildSpawnOptions, actionableAuthWarning, sanitizeLogString } from "./lib/acp-child-env.ts";
+// Re-exported so a harness-isolation test can import the rule from the bridge, where the wiring lives.
+export { harnessMcpIsolationEnv, PI_MCP_EXCLUSIVE_ENV } from "./lib/acp-child-env.ts";
 export { sanitizeLogString } from "./lib/acp-child-env.ts";
 import { existsSync } from "node:fs";
 // jsjy review F2: crypto.subtle.timingSafeEqual does NOT exist in this Deno
@@ -1101,7 +1103,7 @@ export function createAcpServer(
         // The scoped child environment, computed once per connection so the host-side note is emitted
         // even when the adapter dies later (5f5u). The HOST layer is scoped first and the caller's
         // explicit childEnv is merged on top, so an explicitly pinned key is never deleted.
-        const acpChildEnvResult = acpChildEnvFor(childEnv);
+        const acpChildEnvResult = acpChildEnvFor(childEnv, { harness: connectionHarness });
         const acpChildEnvNoteText = acpChildEnvNote(acpChildEnvResult, displayHarness);
         if (acpChildEnvNoteText) console.error(acpChildEnvNoteText);
         const cmd = new Deno.Command(resolved.cmd, acpChildSpawnOptions({

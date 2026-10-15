@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.700] — 2026-10-15
+- a CAP-spawned pi session now uses only its own MCP configuration and no longer picks up the MCP servers configured on the machine.
+
 ## [0.3.699] — 2026-10-15
 - The Settings "Test connection" panel no longer offers status states that no code path can produce (auth_failed, timeout, secret_unavailable), and a new test now fails if the declared status set and the real producers drift in either direction.
 

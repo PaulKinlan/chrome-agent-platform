@@ -25,6 +25,12 @@ if (LOG) {
       type: "fixture-env",
       pid: process.pid,
       anthropicApiKey: process.env.ANTHROPIC_API_KEY ? "PRESENT" : "ABSENT",
+      // nqe6j: MCP isolation, reported as a DERIVED BOOLEAN rather than the raw value, so this stays
+      // presence-only like the line above while still pinning the exact semantics a CAP-spawned pi needs.
+      mcpExclusive: process.env.PI_MCP_CONFIG_MODE === "exclusive",
+      // The bridge spawns a FRESH adapter per connection into one log, so the row needs a label to
+      // be attributable; PI_ACP_HARNESS is the label the bridge itself sets.
+      harness: process.env.PI_ACP_HARNESS ?? null,
     }) + "\n");
   } catch { /* logging is best-effort */ }
 }

@@ -33,6 +33,20 @@ const NATIVE_HOST = `${ROOT}scripts/acp-native-host.sh`;
 const FAKE_KEY = "sk-ant-not-a-real-key-5f5u-wiring";
 // Every other fixture knob pinned off so ambient process state cannot
 // contaminate this run (chrome-agent-platform-tqfg).
+async function fixtureMcpReport(logPath: string, harness?: string, timeoutMs = 20_000): Promise<boolean | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const rows = Deno.readTextFileSync(logPath).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      const report = rows.find((row) => row?.type === "fixture-env");
+      const row = harness === undefined ? report : rows.find((r) => r?.harness === harness);
+      if (row) return row.mcpExclusive === true;
+    } catch { /* not written yet */ }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return null;
+}
+
 const CLEAN_FIXTURE_KNOBS = {
   CAP_ACP_FIXTURE_AGENT_NAME: "",
   CAP_ACP_FIXTURE_DIE_ON_SPAWN: "0",
@@ -232,4 +246,71 @@ Deno.test("5f5u wiring: the NATIVE HOST passes the key through when CAP_ACP_KEEP
     proc.kill("SIGKILL");
     await proc.status.catch(() => {});
   }
+});
+
+
+
+// nqe6j: MCP isolation must reach the adapter through BOTH spawn sites. Each assertion reads the ENV THE
+// CHILD ACTUALLY SAW (reported by the fixture), not the rule function, because a rule that is never applied
+// is the defect this bead exists to fix - and the parked branch wired only the bridge.
+Deno.test("nqe6j: the BRIDGE spawns a pi adapter with MCP discovery off, and leaves other harnesses alone", async () => {
+  const logPath = freshLog("mcp-bridge");
+  // In-process so the childEnv travels as the CALLER's explicit map, as the existing bridge test does.
+  const server = createAcpServer(0, FAKE_ADAPTER, {
+    ...CLEAN_FIXTURE_KNOBS,
+    CAP_ACP_FIXTURE_LOG: logPath,
+  }, "", TEST_BRIDGE_TOKEN);
+  const port = (server as any).addr.port;
+  try {
+    for (const harness of ["pi", "claude-code"]) {
+      const ws = await connect(`${authedEndpoint(port)}&harness=${harness}`);
+      // The bridge closes the connection when the adapter exits; closing our side too keeps it prompt.
+      await new Promise((r) => setTimeout(r, 500));
+      ws.close();
+    }
+    assertEquals(
+      await fixtureMcpReport(logPath, "pi"),
+      true,
+      "a CAP-spawned pi must be told to use only its own MCP config, or the operator's chrome-devtools-mcp launches a second browser",
+    );
+    assertEquals(
+      await fixtureMcpReport(logPath, "claude-code"),
+      false,
+      "claude-code takes its servers from ACP, so isolating it would strip the operator's own servers for no reason",
+    );
+  } finally {
+    await server.shutdown();
+  }
+});
+
+Deno.test("nqe6j: the NATIVE HOST spawns a pi adapter with MCP discovery off (the parked branch never wired this site)", async () => {
+  const piLog = freshLog("mcp-native-pi");
+  const otherLog = freshLog("mcp-native-other");
+  const run = async (harness: string, logPath: string) => {
+    const proc = new Deno.Command(NATIVE_HOST, {
+      env: {
+        ...Deno.env.toObject(),
+        ...CLEAN_FIXTURE_KNOBS,
+        CAP_ACP_ADAPTER: FAKE_ADAPTER,
+        CAP_ACP_HARNESS: harness,
+        CAP_ACP_CWD: durableDir("acp-fixture"),
+        CAP_ACP_FIXTURE_LOG: logPath,
+      },
+      stdin: "piped",
+      stdout: "piped",
+      stderr: "null",
+    }).spawn();
+    try {
+      return await fixtureMcpReport(logPath);
+    } finally {
+      proc.kill("SIGKILL");
+      await proc.status.catch(() => {});
+    }
+  };
+  assertEquals(
+    await run("pi", piLog),
+    true,
+    "the native host is a real spawn site: with CAP_ACP_HARNESS=pi its adapter child must get the isolation too",
+  );
+  assertEquals(await run("not-a-harness", otherLog), false, "and an unknown harness must not be isolated by guess");
 });

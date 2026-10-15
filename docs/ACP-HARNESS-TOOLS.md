@@ -90,3 +90,30 @@ All bundle budgets pass without relaxing ceilings.
 2. In-flight tool calls run through the standard approval gates: gated tools (`close_tab`, `wipe_browsing_data`, `write_file`) raise the in-conversation live approval/diff card before executing.
 3. If an owner denies a requested tool mutation, the denial error is returned verbatim to the harness so it can plan its next step.
 4. Legacy `browser/call_tool` is refused with `-32601` when `toolHandler` is active, ensuring all tool calls route through the authenticated run-bound executor.
+
+## MCP isolation for a CAP-spawned `pi`
+
+A CAP-harness session must not inherit the operator's own MCP configuration. On a developer machine that
+configuration can hand the session a browser-automation server which launches its own headless Chrome, and
+that is the opposite of this project's architecture: the extension runs the browser, and the harness is
+meant to ask it for tools.
+
+So when CAP spawns a `pi` adapter it also sets `PI_MCP_CONFIG_MODE=exclusive` in that child's environment,
+from **both** spawn sites — the bridge (`scripts/acp-bridge.ts`) and the native messaging host
+(`scripts/acp-native-host.ts`). Both go through one composer in `scripts/lib/acp-child-env.ts`, so a third
+spawn site cannot forget it, and `tests/acp-child-env-wiring.test.ts` spawns a fixture adapter through each
+site and asserts the environment the child actually saw.
+
+**This is all-or-nothing, and that is the intended cost.** For `pi`, the session sees only its own MCP
+configuration: the operator's machine-level servers are not available inside a CAP session at all. There is
+no per-server filter — the choice is the whole config or none of it. Other harnesses are deliberately left
+alone: `claude-agent-acp` and `codex-acp` take their servers from ACP, so isolating them would strip servers
+the operator did configure for them; and an unknown harness is not guessed at.
+
+**Honest limit.** The variable name and value are the mode `pi` is expected to use, and they were NOT
+verified against a `pi` build: the pinned adapter `pi-acp@0.0.33` never mentions the variable (isolation is
+its only control because it discards `params.mcpServers`), and the `pi` CLI on this machine exposes no
+`PI_MCP_*` variable at all. What IS verified is that the variable reaches the harness — the adapter spawns
+the CLI with the inherited environment — and that both CAP spawn sites set it, which the wiring test fails
+on if either one stops. If the real switch turns out to differ, `harnessMcpIsolationEnv` in
+`scripts/lib/acp-child-env.ts` is the single place to change.

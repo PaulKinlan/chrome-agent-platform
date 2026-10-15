@@ -62,7 +62,12 @@ if (import.meta.main) {
   // 5f5u: the native host spawned with NO env, so the adapter inherited the host environment whole —
   // including an ANTHROPIC_API_KEY that takes precedence over a claude.ai login. Scope it out for the
   // child (host untouched; CAP_ACP_KEEP_API_KEY=1 passes it through) and say so host-side.
-  const childEnvResult = acpChildEnv();
+  // The harness identity is what selects MCP isolation, and this host already knows it (CAP_ACP_HARNESS).
+  // Wiring it here closes the gap the parked branch left: the native host spawned with no isolation at all.
+  // acpChildEnv's FIRST parameter is the base environment: passing the options object positionally there
+  // replaces the child env wholesale (it becomes {harness: ...}) and the adapter cannot start at all -
+  // caught by tests/acp-child-env-wiring.test.ts, which is exactly why the wiring is asserted per site.
+  const childEnvResult = acpChildEnv(Deno.env.toObject(), { harness: HARNESS });
   const childEnvNote = acpChildEnvNote(childEnvResult, "native host");
   if (childEnvNote) console.error(childEnvNote);
   const child = new Deno.Command(resolved.cmd, acpChildSpawnOptions({

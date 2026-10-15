@@ -35,6 +35,8 @@ export const OVERRIDING_AUTH_VARS: readonly string[] = ["ANTHROPIC_API_KEY"];
 export interface AcpChildEnvOptions {
   /** Keep the overriding auth source in the child env (CAP_ACP_KEEP_API_KEY=1). */
   keepApiKey?: boolean;
+  /** The harness this child will run, when the caller knows it (used for MCP isolation). */
+  harness?: string;
 }
 
 export interface AcpChildEnvResult {
@@ -43,8 +45,33 @@ export interface AcpChildEnvResult {
   bridgedAuthVars: string[];
 }
 
+
+/** The variable pi reads to pick how it sources MCP servers. */
+export const PI_MCP_EXCLUSIVE_ENV = "PI_MCP_CONFIG_MODE";
+
 /**
- * The environment for an ACP adapter child: the host environment with the OVERRIDING auth sources
+ * The MCP-isolation environment for a harness session, or `{}` for harnesses that need none.
+ *
+ * A CAP-spawned `pi` must not inherit the operator's own MCP config: on this machine that config hands the
+ * harness a browser-automation server that launches its own headless Chrome, which is the opposite of the
+ * owner's architecture ("a local process asking to run Google Chrome" is the rejected behaviour,
+ * owner-reported 2026-09-22). `pi` is the only harness isolated here, deliberately: pi-acp 0.0.33 stores
+ * `params.mcpServers` and never reads them, so isolation is the only control that reaches it, while
+ * claude-agent-acp and codex-acp thread `mcpServers` through and are controlled by injection - isolating
+ * them would strip servers the operator configured for no reason. An unknown harness is not guessed at.
+ *
+ * HONEST CAVEAT, so nobody reads this as a measurement that was never taken: the NAME and VALUE below are
+ * the mode pi is expected to use, but this could NOT be verified against the pinned adapter or the installed
+ * pi CLI (pi-acp 0.0.33's published source contains no reference to the variable, and the installed pi 0.87.1
+ * exposes no PI_MCP_* variable at all). What IS verified is that the variable reaches pi when it is set on the
+ * adapter's environment: the pinned adapter spawns the CLI with `env: process.env`. If the real switch turns
+ * out to be different, this is the one place to change it. (chrome-agent-platform nqe6j)
+ */
+export function harnessMcpIsolationEnv(harness: string): Record<string, string> {
+  return harness === "pi" ? { [PI_MCP_EXCLUSIVE_ENV]: "exclusive" } : {};
+}
+
+/** The environment for an ACP adapter child: the host environment with the OVERRIDING auth sources
  * removed unless they were explicitly kept.
  *
  * `base` is never mutated — this returns a copy — because the caller's environment (and the rest of
@@ -53,7 +80,7 @@ export interface AcpChildEnvResult {
  */
 export function acpChildEnv(
   base: Record<string, string> = Deno.env.toObject(),
-  { keepApiKey = Deno.env.get("CAP_ACP_KEEP_API_KEY") === "1" }: AcpChildEnvOptions = {},
+  { keepApiKey = Deno.env.get("CAP_ACP_KEEP_API_KEY") === "1", harness }: AcpChildEnvOptions = {},
 ): AcpChildEnvResult {
   const env = { ...base };
   const bridgedAuthVars: string[] = [];
@@ -65,6 +92,10 @@ export function acpChildEnv(
       }
     }
   }
+  // Applied AFTER the scoping loop so an inherited value cannot defeat the isolation for a harness that
+  // needs it. An explicit `childEnv` passed to acpChildEnvFor still wins, which is that function's
+  // documented contract (jp78) - the isolation is the default, not a cage around a deliberate override.
+  if (harness !== undefined) Object.assign(env, harnessMcpIsolationEnv(harness));
   return { env, bridgedAuthVars };
 }
 
