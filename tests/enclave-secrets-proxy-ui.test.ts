@@ -592,7 +592,7 @@ Deno.test("jao1.6.1 Part E.3: Quotas UI renders configInvalid honestly in fail-c
 
   // Warning banner MUST be displayed when configInvalid is true
   assertEquals(elements["vault-quotas-warning"].hidden, false, "Warning banner must be visible on configInvalid");
-  assertStringIncludes(elements["vault-quotas-warning"].textContent, "validation", "Must explain config validation failure honestly");
+  assertStringIncludes(elements["vault-quotas-warning"].textContent, "not valid", "Must explain config validation failure honestly");
 
   handle.unmount();
 });
