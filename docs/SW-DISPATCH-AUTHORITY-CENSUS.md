@@ -76,7 +76,7 @@ Every message arriving at the Service Worker passes through a layered defense-in
 
 ---
 
-## 3. High-Level Population Summary (296 Routes)
+## 3. High-Level Population Summary (298 Routes)
 
 | Category | Count | Permitted Callers | Gating Mechanism |
 |---|---|---|---|
@@ -88,16 +88,16 @@ Every message arriving at the Service Worker passes through a layered defense-in
 | **Execution & Worker Orchestration** | 23 | `extension`, `model`, worker | `runControl`, `activeExecutions`, worker RPC |
 | **Agent Task Board (`AGENT_BOARD`)** | 13 | `extension`, `model` | Board state machine, role fences |
 | **Storage, KV & Memory Fenced** | 10 | `owner-options`, `extension` | Secret key fences, quiescence tracking, leases |
-| **Unclassified Mutations (Gaps)** | 37 | `extension` (any) | Central page filter only; no route-local gate |
-| **Read-Only / Status / Telemetry** | 93 | `owner-options`, `extension` | Read-only browser-attested status; no site enrollment or tool dispatch |
-| **Total** | **296** | | |
+| **Unclassified Mutations (Gaps)** | 38 | `extension` (any) | Central page filter only; no route-local gate |
+| **Read-Only / Status / Telemetry** | 94 | `owner-options`, `extension` | Read-only browser-attested status; no site enrollment or tool dispatch |
+| **Total** | **298** | | |
 
 ---
 
 ## 4. Total Route Inventory & Classification
 
 ### 4.1 Page-Allowed Routes (`PAGE_ALLOWED_ROUTES` — 7 routes)
-These are the ONLY routes accessible to content scripts. All other 289 routes reject content-script callers with `"not authorized from a page"`.
+These are the ONLY routes accessible to content scripts. All other 291 routes reject content-script callers with `"not authorized from a page"`.
 
 | Route Name | Owning Module | Description | Authority Gate |
 |---|---|---|---|
@@ -328,7 +328,7 @@ Mounted from `extension/lib/agent-board.js` at `boardRoutes.routes`. Implements 
 
 ---
 
-### 4.9 Unclassified Mutations (Gaps Inventory — 37 routes)
+### 4.9 Unclassified Mutations (Gaps Inventory — 38 routes)
 These routes perform state mutations (modifying storage, memory, agents, threads, or settings) but **lack an explicit policy gate** (`requireOwnerApproval`, `requireSettingsSender`, or `isOwnerPrincipal`). They rely solely on Layer 1 rejecting content scripts.
 
 | Route Name | Owning Module | What It Mutates | Current Authority Checked | Gap / Risk | Proposed Remediation |
@@ -370,13 +370,14 @@ These routes perform state mutations (modifying storage, memory, agents, threads
 | `page.capture` | `service-worker.js` (~9513) | Captures a tab to an artifact | Valid `tabId` | Writes an artifact (and can attach a screenshot) with no policy decision | Require `isOwnerPrincipal(context)` |
 | `capture.page` | `service-worker.js` (~9517) | Alias of `page.capture` | Valid `tabId` | Same as `page.capture`; the sibling spelling is a second entry point | Require `isOwnerPrincipal(context)` |
 | `asset.export-to-folder` | `service-worker.js` (~9759) | Writes an artifact's bytes into an owner-granted local folder | Valid id + a granted folder | **Discrepancy:** its capability row (`export_asset_to_folder`) is labelled `destructive` (`DESTRUCTIVE_POLICY_TOOLS` in `lib/chrome-tool-capabilities.js`), but the route itself calls no owner-approval seam — a declared destructive class with no route-local gate | Wire `requireOwnerApproval(context, "asset.export-to-folder")` for the model path, or reclassify the row |
+| `document.read_spreadsheet` | `service-worker.js` (~11226) | Extracts spreadsheet sheets and creates a canonical tabular artifact in assets | Valid attachment / base64 payload | Creates an asset artifact with no approval gate | Require `isOwnerPrincipal(context)` or rely on central page filter |
 
 ---
 
-### 4.10 Read-Only / Status / Telemetry Routes (93 routes)
+### 4.10 Read-Only / Status / Telemetry Routes (94 routes)
 These routes perform no state mutations and return status, listings, configuration summaries, or diagnostics. `webmcp.diagnostics.get` is owner-extension-fenced; its global toggle is never returned to a page sender or passed into the page's MAIN-world bootstrap.
 
-`actions.list`, `activity.list`, `agent-workspace.usage`, `agent.directory`, `agent.attached-webmcp-document`, `agent.discoverable-tabs`, `agent.get`, `agent.history-view`, `agent.list`, `agent.listAll`, `agent.orchestrator`, `agent.registry`, `agent.tool-offers`, `alarms.permission-granted`, `asset.capacity`, `asset.get`, `asset.list`, `asset.version-get`, `asset.versions`, `background-agent.history`, `background-agent.list`, `browser-control.get`, `cap:fetch`, `capabilities.status`, `capability.request`, `capture.tab`, `command.list`, `diagnostics.list`, `diagnostics.report`, `fs-grant.get`, `fs-grant.grep`, `fs-grant.list`, `fs-grant.list-entries`, `fs-grant.read-file`, `fs-grant.scan`, `fs-grant.search`, `hooks.status`, `invalidate-agent`, `mcp.servers.get`, `mcp.servers.global-redacted`, `memory.origins`, `memory.overview`, `memory.stores`, `named-agent.get`, `named-agent.grep`, `named-agent.history`, `named-agent.list`, `named-agent.delegations`, `observability.clearTrace`, `observability.dumpTrace`, `observability.page-measures`, `observability.setVerbosity`, `onDeviceText.summarize`, `onDeviceText.detectLanguage`, `onDeviceText.translate`, `onDeviceText.availability`, `prompt.attest`, `prompt.attestRun`, `prompt.describe`, `provider.models`, `provider.permission-summary`, `provider.status`, `provider.summary`, `background-agent.custom-list`, `run-log.list`, `run.dismissedFailed`, `run.list`, `schedules.list`, `screenshots.get`, `screenshots.list`, `script.get`, `script.list`, `security.state`, `sidepanel.getTarget`, `sidepanel.getTools`, `sidepanel.openPage`, `site-skills.get`, `skill.discover`, `skill.list`, `skills.all`, `skills.get`, `task.list`, `task.nextRun`, `thread.get`, `thread.list`, `tools.allOrigins`, `tools.consent.states`, `tools.policies`, `usage.get`, `webmcp.diagnostics.get`, `webmcp.status`, `python.network.grants`, `wheel.list`.
+`actions.list`, `activity.list`, `agent-workspace.usage`, `agent.directory`, `agent.attached-webmcp-document`, `agent.discoverable-tabs`, `agent.get`, `agent.history-view`, `agent.list`, `agent.listAll`, `agent.orchestrator`, `agent.registry`, `agent.tool-offers`, `alarms.permission-granted`, `asset.capacity`, `asset.get`, `asset.list`, `asset.version-get`, `asset.versions`, `background-agent.history`, `background-agent.list`, `browser-control.get`, `cap:fetch`, `capabilities.status`, `capability.request`, `capture.tab`, `command.list`, `diagnostics.list`, `diagnostics.report`, `document.read_document`, `fs-grant.get`, `fs-grant.grep`, `fs-grant.list`, `fs-grant.list-entries`, `fs-grant.read-file`, `fs-grant.scan`, `fs-grant.search`, `hooks.status`, `invalidate-agent`, `mcp.servers.get`, `mcp.servers.global-redacted`, `memory.origins`, `memory.overview`, `memory.stores`, `named-agent.get`, `named-agent.grep`, `named-agent.history`, `named-agent.list`, `named-agent.delegations`, `observability.clearTrace`, `observability.dumpTrace`, `observability.page-measures`, `observability.setVerbosity`, `onDeviceText.summarize`, `onDeviceText.detectLanguage`, `onDeviceText.translate`, `onDeviceText.availability`, `prompt.attest`, `prompt.attestRun`, `prompt.describe`, `provider.models`, `provider.permission-summary`, `provider.status`, `provider.summary`, `background-agent.custom-list`, `run-log.list`, `run.dismissedFailed`, `run.list`, `schedules.list`, `screenshots.get`, `screenshots.list`, `script.get`, `script.list`, `security.state`, `sidepanel.getTarget`, `sidepanel.getTools`, `sidepanel.openPage`, `site-skills.get`, `skill.discover`, `skill.list`, `skills.all`, `skills.get`, `task.list`, `task.nextRun`, `thread.get`, `thread.list`, `tools.allOrigins`, `tools.consent.states`, `tools.policies`, `usage.get`, `webmcp.diagnostics.get`, `webmcp.status`, `python.network.grants`, `wheel.list`.
 
 ---
 

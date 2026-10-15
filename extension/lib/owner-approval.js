@@ -505,12 +505,16 @@ export function bindModelApprovalDispatcher(executionId, dispatch, onApprovalEve
   const resolverDocumentId = typeof runEnvelope?.resolverDocumentId === "string" && runEnvelope.resolverDocumentId.length <= 200
     ? runEnvelope.resolverDocumentId
     : "";
+  const attachments = Array.isArray(runEnvelope?.attachments)
+    ? runEnvelope.attachments
+    : [];
   const context = Object.freeze({
     principal: "model",
     executionId: captured,
     runId: captured,
     agentId,
     resolverDocumentId,
+    attachments,
     onApprovalEvent: typeof onApprovalEvent === "function" ? onApprovalEvent : null,
   });
   return (type, args) => dispatch(type, args, context);

@@ -128,6 +128,7 @@ export const CENSUS_CATEGORIES = {
     "task.cancel", "task.cancelBackground", "schedule.cancelOrphans", "diagnostics.clear",
     "security.clear", "usage.clear", "webmcp.diagnostics.set", "skills.set",
     "clipboard.write", "write_clipboard", "page.capture", "capture.page", "asset.export-to-folder",
+    "document.read_spreadsheet",
   ]),
   READ_ONLY_STATUS_TELEMETRY: new Set([
     "actions.list", "activity.list", "agent-workspace.usage", "agent.directory",
@@ -153,7 +154,7 @@ export const CENSUS_CATEGORIES = {
     "tools.policies", "usage.get", "webmcp.diagnostics.get", "webmcp.status",
     "python.network.grants",
     "onDeviceText.summarize", "onDeviceText.detectLanguage", "onDeviceText.translate", "onDeviceText.availability",
-    "wheel.list",
+    "wheel.list", "document.read_document",
   ]),
 };
 
@@ -433,43 +434,43 @@ Deno.test("census: companion-doc total and route-name falsifications RED by docu
   const arch = await Deno.readTextFile(`${ROOT}docs/ARCHITECTURE.md`);
   const plan = await Deno.readTextFile(`${ROOT}docs/NATIVE-AGENT-POSITION-PLAN.md`);
 
-  assertThrows(() => assertRouteMap(map.replace("**296**", "**295**")), Error, "ROUTE_MAP total");
+  assertThrows(() => assertRouteMap(map.replace("**298**", "**297**")), Error, "ROUTE_MAP total");
   assertThrows(() => assertRouteMap(map.replace("`enclave.proxy`", "`enclave.proxy-renamed`")), Error, "enclave.proxy-renamed");
-  assertThrows(() => assertRiskAndThreatPopulation(risks.replace("37 unclassified mutation routes", "31 unclassified mutation routes"), threat), Error, "RISK-REGISTER R11 risk");
+  assertThrows(() => assertRiskAndThreatPopulation(risks.replace("38 unclassified mutation routes", "31 unclassified mutation routes"), threat), Error, "RISK-REGISTER R11 risk");
   assertThrows(() => assertRiskAndThreatPopulation(risks.replace("`asset.export-to-folder` writes", "`asset.export-to-folder-renamed` writes"), threat), Error, "asset.export-to-folder-renamed");
   assertThrows(() => assertRiskAndThreatPopulation(risks,
-    threat.replace("` assert 296 registered routes", "` assert 295 registered routes")),
+    threat.replace("` assert 298 registered routes", "` assert 297 registered routes")),
     Error, "THREAT_MODEL component-map evidence pin population");
   assertThrows(() => assertRiskAndThreatPopulation(risks,
-    threat.replace("37 unclassified mutations among 296 registered routes", "37 unclassified mutations among 295 registered routes")),
+    threat.replace("38 unclassified mutations among 298 registered routes", "38 unclassified mutations among 297 registered routes")),
     Error, "THREAT_MODEL T4 evidence pin registered count");
 
   // r073 falsification drills:
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch.replace("296-route population", "295-route population"), plan),
+    () => assertArchitectureAndStrategyPopulation(arch.replace("298-route population", "297-route population"), plan),
     Error,
     "ARCHITECTURE.md route count must equal registered population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch.replace("296-route population", "bogus text"), plan),
+    () => assertArchitectureAndStrategyPopulation(arch.replace("298-route population", "bogus text"), plan),
     Error,
     "ARCHITECTURE.md must state the complete route population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("296-route dispatch authority", "295-route dispatch authority")),
+    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("298-route dispatch authority", "297-route dispatch authority")),
     Error,
     "NATIVE-AGENT-POSITION-PLAN.md route count must equal registered population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("296-route dispatch authority", "bogus text")),
+    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("298-route dispatch authority", "bogus text")),
     Error,
     "NATIVE-AGENT-POSITION-PLAN.md must state the dispatch authority route count",
   );
 });
 
-Deno.test("census: all registered routes in handlers are derived via AST and total 296", () => {
+Deno.test("census: all registered routes in handlers are derived via AST and total 298", () => {
   const registered = extractAllRegisteredRoutes();
-  assertEquals(registered.size, 296, `registered routes population must equal 296 (got ${registered.size})`);
+  assertEquals(registered.size, 298, `registered routes population must equal 298 (got ${registered.size})`);
 });
 
 export function assertSettingsSessionRoutesInCensus(

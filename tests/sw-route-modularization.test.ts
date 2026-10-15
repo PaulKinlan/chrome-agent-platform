@@ -144,6 +144,8 @@ const BASELINE_ROUTES = [
   // provider hosts the code really resolves + the run-log policy in force.
   "privacy.statement",
   "python.execute",
+  "document.read_spreadsheet",
+  "document.read_document",
   "python.fetch",
   "python.network.grants",
   "python.network.grant",

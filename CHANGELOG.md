@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.703] — 2026-10-15
+- Read DOCX/XLSX/PPTX attachments via curated pure-Python documents bundle
+
 ## [0.3.702] — 2026-10-15
 - Settings now shows per-service enclave call quotas with used, limit, remaining and window, and lets you set, reset or clear a service's limit (0 disables the service).
 
