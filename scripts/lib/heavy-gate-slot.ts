@@ -256,10 +256,9 @@ export async function acquireHeavyGateSlot(opts: AcquireHeavyGateOptions): Promi
       ],
       stdin: "piped",
       stdout: "piped",
-      // stderr is CAPTURED, not discarded: it is how a setup failure (exit 66,
-      // 'cannot open lock file') is told apart from contention (exit 1, silent,
-      // after the whole bound). Reporting both as 'busy' sends a lane to wait for
-      // a holder that does not exist.
+      // stderr is CAPTURED, not discarded: the (code, signal) status pair
+      // classifies contention; stderr supplies bounded setup diagnostics such
+      // as exit 66 'cannot open lock file'. An unread pipe is drained below.
       stderr: "piped",
     }).spawn();
   } catch (e) {
@@ -276,37 +275,50 @@ export async function acquireHeavyGateSlot(opts: AcquireHeavyGateOptions): Promi
   const decoder = new TextDecoder();
   let seen = "";
   let announcedWait = false;
+  const ANNOUNCE_WAIT_AFTER_MS = 200;
+  const POLL_MS = 250;
   const deadline = t0 + waitMs + 2000;
+  // Reuse ONE outstanding read across polls. Starting a new read every 250 ms
+  // would queue thousands of reads during the 20-minute default bound.
+  type Poll = { kind: "chunk"; chunk: ReadableStreamReadResult<Uint8Array> } | { kind: "error" } | { kind: "timeout" };
+  const nextRead = (): Promise<Poll> => reader.read().then(
+    (chunk) => ({ kind: "chunk", chunk }),
+    () => ({ kind: "error" }),
+  );
+  let pendingRead = nextRead();
   let acquired = false;
   try {
     while (!seen.includes("CAP_HEAVY_GATE_ACQUIRED") && Date.now() < deadline) {
-      if (!announcedWait) {
-        announcedWait = true;
-        say(
-          `heavy-gate: ${opts.gate} waiting for the fleet-wide gate slot [${slotPath}] (bound ${waitMs} ms) — held by ` +
-            `${describeHolder(holderAtStart.holder, holderAtStart.alive)}`,
-        );
-      }
-      // ONE timer per read, CLEARED in the same breath. The first version left a
-      // `setTimeout` of up to the whole bound pending on every iteration, so a
-      // process that acquired and released promptly still could not exit until the
-      // timer fired (review 2026-09-23: 'the acquisition timer survives release').
+      // k9i3: clear EACH short poll timer even when the read wins. The deadline
+      // is enforced by the loop, not by an uncleared timer after release.
       let timer: ReturnType<typeof setTimeout> | undefined;
-      let chunk: ReadableStreamReadResult<Uint8Array>;
+      let polled: Poll;
       try {
-        chunk = await Promise.race([
-          reader.read(),
-          new Promise<{ done: true; value: undefined }>((r) => {
-            timer = setTimeout(() => r({ done: true, value: undefined }), Math.max(1, deadline - Date.now()));
+        polled = await Promise.race([
+          pendingRead,
+          new Promise<Poll>((resolve) => {
+            timer = setTimeout(() => resolve({ kind: "timeout" }), Math.max(1, Math.min(POLL_MS, deadline - Date.now())));
           }),
         ]);
-      } catch {
-        break;
       } finally {
         if (timer !== undefined) clearTimeout(timer);
       }
-      if (chunk.value) seen += decoder.decode(chunk.value, { stream: true });
-      if (chunk.done) break;
+      if (polled.kind === "error") break;
+      if (polled.kind === "chunk") {
+        if (polled.chunk.value) seen += decoder.decode(polled.chunk.value, { stream: true });
+        if (polled.chunk.done) break;
+        pendingRead = nextRead();
+      }
+      // A FREE slot completes the handshake before this grace; a real waiter
+      // names the holder read NOW rather than the possibly stale start snapshot.
+      if (!announcedWait && Date.now() - t0 >= ANNOUNCE_WAIT_AFTER_MS && !seen.includes("CAP_HEAVY_GATE_ACQUIRED")) {
+        announcedWait = true;
+        const announced = readHeavyGateHolder(holderPath);
+        say(
+          `heavy-gate: ${opts.gate} waiting for the fleet-wide gate slot [${slotPath}] (bound ${waitMs} ms) — held by ` +
+            `${describeHolder(announced.holder, announced.alive)}`,
+        );
+      }
     }
     acquired = seen.includes("CAP_HEAVY_GATE_ACQUIRED");
   } finally {
@@ -318,15 +330,21 @@ export async function acquireHeavyGateSlot(opts: AcquireHeavyGateOptions): Promi
 
   if (!acquired) {
     const waitedMs = Date.now() - t0;
-    // Why did we not get it? Wait for the helper's own verdict and read what it
-    // said: 66 + 'cannot open lock file' is a SETUP fault; 1 (or still running
-    // when our backstop deadline passed) is genuine contention.
+    // util-linux flock: quiet exit 1 means its own -w wait expired. Deno on
+    // this VM reports our backstop SIGKILL as (137, SIGKILL), not (null, SIGKILL).
+    // Any other non-handshake exit is SETUP, never evidence of a busy peer.
     let exitCode: number | null = null;
+    let exitSignal: string | null = null;
+    let backstopKilled = false;
     let backstop: ReturnType<typeof setTimeout> | undefined;
     try {
-      backstop = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* gone */ } }, 1500);
+      backstop = setTimeout(() => {
+        backstopKilled = true;
+        try { child.kill("SIGKILL"); } catch { /* gone */ }
+      }, 1500);
       const status = await child.status;
       exitCode = status.code;
+      exitSignal = status.signal;
     } catch { /* reaped */ } finally {
       if (backstop !== undefined) clearTimeout(backstop);
     }
@@ -334,9 +352,12 @@ export async function acquireHeavyGateSlot(opts: AcquireHeavyGateOptions): Promi
     try {
       errText = (await new Response(child.stderr).text()).trim();
     } catch { /* no stderr to read */ }
-    const setupFailure = /cannot open lock file|Permission denied|No such file or directory/iu.test(errText) || exitCode === 66;
-    if (setupFailure) {
-      throw new HeavyGateSlotSetupError(opts.gate, slotPath, errText || `the locking helper exited ${exitCode}`);
+    const quietTimeout = exitCode === 1 && exitSignal === null && errText === "";
+    const killedWhileWaiting = backstopKilled && exitSignal === "SIGKILL" && (exitCode === 137 || exitCode === null);
+    if (!quietTimeout && !killedWhileWaiting) {
+      const statusDetail = `status ${exitCode ?? "null"}, signal ${exitSignal ?? "none"}`;
+      const detail = errText ? `${statusDetail}: ${errText}` : `the locking helper exited with ${statusDetail}`;
+      throw new HeavyGateSlotSetupError(opts.gate, slotPath, detail.slice(0, 300));
     }
     const now = readHeavyGateHolder(holderPath);
     throw new HeavyGateSlotRefusedError(opts.gate, now.holder ?? holderAtStart.holder, now.alive, waitedMs, slotPath);
