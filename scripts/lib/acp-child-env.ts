@@ -46,7 +46,9 @@ export interface AcpChildEnvResult {
 }
 
 
-/** The variable pi reads to pick how it sources MCP servers. */
+/** The variable CAP sets to ask pi to source its MCP servers exclusively. The NAME is unverified against
+ * the pinned adapter - see the caveat on harnessMcpIsolationEnv below, which is the authority - so read this
+ * as the value we set and forward, not as a switch pi is known to read. (chrome-agent-platform mfn9m) */
 export const PI_MCP_EXCLUSIVE_ENV = "PI_MCP_CONFIG_MODE";
 
 /**
