@@ -878,8 +878,13 @@ Deno.test("jao1.6.1 Part E.9: the SAME rejected storage read is handled by Clear
 
   const hadChrome = "chrome" in globalThis;
   const prevChrome = (globalThis as any).chrome;
+  // Count the reads as well as failing them. Clear runs first and leaves its error on screen, so an Add half
+  // that only asserted "a message is visible and nothing was written" also passes with a missing or no-op Add
+  // listener - measured, not assumed: with this test before the counter, deleting the Add listener still gave
+  // 13/0. Requiring the read count to increase is what makes each half exercise its own path.
+  let storageReads = 0;
   (globalThis as any).chrome = {
-    storage: { local: { get: async () => { throw new Error("storage read failed"); } } },
+    storage: { local: { get: async () => { storageReads += 1; throw new Error("storage read failed"); } } },
   };
 
   const setQuotaCalls: any[] = [];
@@ -911,8 +916,10 @@ Deno.test("jao1.6.1 Part E.9: the SAME rejected storage read is handled by Clear
 
     // Clear
     const clearBtn = braveRow.querySelector(".vault-quota-clear-btn");
+    const readsBeforeClear = storageReads;
     clearBtn.click();
     await new Promise((r) => setTimeout(r, 30));
+    assert(storageReads > readsBeforeClear, "Clear: the handler must actually attempt the storage read");
     assertEquals(statusEl.hidden, false, "Clear: a failed read must be visible");
     assertStringIncludes(statusEl.textContent, "Could not read your saved quota settings", "Clear: the failure must be named");
     assert(!statusEl.textContent.includes("Quota cleared"), "Clear: must NEVER claim success after a failed read");
@@ -925,8 +932,16 @@ Deno.test("jao1.6.1 Part E.9: the SAME rejected storage read is handled by Clear
     // The window must be a valid positive integer too, or the handler correctly rejects the input and
     // returns BEFORE the storage read - which would make this half of the test pass for the wrong reason.
     elements["vault-quota-add-window"].value = "3600000";
+    // Hide Clear's message first, so the assertions below cannot be satisfied by it, and count the reads.
+    statusEl.hidden = true;
+    statusEl.textContent = "";
+    const readsBeforeAdd = storageReads;
     elements["vault-quota-add-save"].click();
     await new Promise((r) => setTimeout(r, 30));
+    assert(
+      storageReads > readsBeforeAdd,
+      "Add: the handler must actually attempt the storage read (a stale message from Clear must not satisfy this)",
+    );
     assertEquals(statusEl.hidden, false, "Add: a failed read must be visible");
     assertStringIncludes(statusEl.textContent, "Could not read your saved quota settings", "Add: the failure must be named");
     assert(!statusEl.textContent.includes("Quota set for"), "Add: must NEVER claim success after a failed read");
