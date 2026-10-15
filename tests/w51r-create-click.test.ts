@@ -3,7 +3,7 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
 import { clickVisibleCreateAgent, createAgentClickTarget } from "../scripts/lib/create-agent-click.ts";
-import { launchChrome, openCdp, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
+import { launchChrome, openCdp, resolveChromiumBinaryReport, teardownChrome, type ScreenshotFailure } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
 import { isUsableBinary } from "../scripts/lib/browser-refusal.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
@@ -166,7 +166,9 @@ export async function runW51rCreateClickJourney(options: {
     const opened = await waitFor(wide.sessionId, (s) => s.open, openTimeoutMs);
     assertEquals(opened.nativeOpen, true, "the actual shadow-root dialog must be open");
     assertEquals(opened.clicks, 1, "the real mouse event must reach #new-agent once");
-    const image = await cdp.screenshot(wide.sessionId, { fromSurface: false, timeoutMs: 6000 });
+    const image = await cdp.screenshot(wide.sessionId, { fromSurface: false, timeoutMs: 6000,
+      onFailure: (failures: ScreenshotFailure[]) => console.error(`w51r open dialog: DOM state asserted; screenshot capture failed: ${JSON.stringify(failures)}`),
+    });
     assert(image, "the open dialog needs screenshot evidence");
     await Deno.writeFile(`${evidence}/wide-open.png`, image);
 
@@ -183,7 +185,9 @@ export async function runW51rCreateClickJourney(options: {
     const after = await read(narrow.sessionId);
     assertEquals(after.clicks, 0, "no hidden-element mouse click must be dispatched");
     assertEquals(after.open, false, "a refusal cannot have opened a Create dialog");
-    const narrowImage = await cdp.screenshot(narrow.sessionId, { fromSurface: false, timeoutMs: 6000 });
+    const narrowImage = await cdp.screenshot(narrow.sessionId, { fromSurface: false, timeoutMs: 6000,
+      onFailure: (failures: ScreenshotFailure[]) => console.error(`w51r narrow rail: DOM state asserted; screenshot capture failed: ${JSON.stringify(failures)}`),
+    });
     assert(narrowImage, "collapsed rail needs screenshot evidence");
     await Deno.writeFile(`${evidence}/narrow-refused.png`, narrowImage);
     console.log(`w51r browser evidence: ${evidence}`);

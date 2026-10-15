@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.693] — 2026-10-15
+- Screenshot test failures identify capture errors versus empty responses without misclassifying display state.
+
 ## [0.3.692] — 2026-10-15
 - Retire the multi-view iframe pool in favor of a single exact-document settings frame.
 
