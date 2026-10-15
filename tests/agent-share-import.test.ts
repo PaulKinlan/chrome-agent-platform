@@ -150,13 +150,21 @@ Deno.test({
       await send("Page.navigate", { url: `chrome-extension://${extId}/ntp/ntp.html` }, sessionId);
       await new Promise((r) => setTimeout(r, 1500));
       await clickShareAgentRowWhenReady(ev);
-      await new Promise((r) => setTimeout(r, 1200));
-      assertEquals(await ev(`document.getElementById("share-agent")?.hidden`), false, "the Share button is offered on a named agent's view header");
+      let shareButtonUnhidden = false;
+      for (let t = 0; t < 50 && !shareButtonUnhidden; t++) {
+        const hidden = await ev(`document.getElementById("share-agent")?.hidden`);
+        if (hidden === false) {
+          shareButtonUnhidden = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      assertEquals(shareButtonUnhidden, true, "the Share button is offered on a named agent's view header");
 
       // 3. Share via a real click; the card downloads to the temp dir.
       await ev(`document.getElementById("share-agent").click()`);
       let cardFile = null;
-      for (let t = 0; t < 40 && !cardFile; t++) {
+      for (let t = 0; t < 50 && !cardFile; t++) {
         await new Promise((r) => setTimeout(r, 250));
         for await (const ent of Deno.readDir(downloads)) {
           if (ent.name.endsWith(".agent.json")) cardFile = `${downloads}/${ent.name}`;
@@ -180,46 +188,59 @@ Deno.test({
       // 4. Import: open the create dialog via the real rail button and inject
       // the SAME downloaded card through the real file input.
       await ev(`document.getElementById("new-agent").click()`);
-      await new Promise((r) => setTimeout(r, 800));
-      const injected = await ev(`(() => {
-        const dialog = document.querySelector("body > agent-dialog:last-of-type");
-        if (!dialog) return "no dialog";
-        const input = [...dialog.querySelectorAll(".agent-config-footer input[type=file]")]
-          .find((i) => (i.getAttribute("accept") || "").includes("agent.json") || (i.getAttribute("accept") || "").includes("json"));
-        if (!input) return "no import input";
-        const dt = new DataTransfer();
-        dt.items.add(new File([${JSON.stringify(cardText)}], ${JSON.stringify(cardFile.split("/").pop())}, { type: "application/json" }));
-        input.files = dt.files;
-        input.dispatchEvent(new Event("change", { bubbles: true }));
-        return "injected";
-      })()`);
+      let injected = null;
+      for (let t = 0; t < 60 && injected !== "injected"; t++) {
+        injected = await ev(`(() => {
+          const dialog = document.querySelector("body > agent-dialog:last-of-type");
+          if (!dialog) return "no dialog";
+          const input = [...dialog.querySelectorAll(".agent-config-footer input[type=file]")]
+            .find((i) => (i.getAttribute("accept") || "").includes("agent.json") || (i.getAttribute("accept") || "").includes("json"));
+          if (!input) return "no import input";
+          const dt = new DataTransfer();
+          dt.items.add(new File([${JSON.stringify(cardText)}], ${JSON.stringify(cardFile.split("/").pop())}, { type: "application/json" }));
+          input.files = dt.files;
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+          return "injected";
+        })()`);
+        if (injected !== "injected") await new Promise((r) => setTimeout(r, 200));
+      }
       assertEquals(injected, "injected", "the create dialog must offer an import file input");
-      await new Promise((r) => setTimeout(r, 800));
 
       // 5. The dialog shows the validated fields for confirmation BEFORE create.
-      const prefill = await ev(`(() => {
-        const dialog = document.querySelector("body > agent-dialog:last-of-type");
-        const note = dialog?.querySelector(".agent-config-import-note");
-        const name = [...dialog.querySelectorAll("input")].find((i) => i.value === "Share Pilot");
-        return { note: note?.textContent ?? null, noteShown: note?.style?.display !== "none", nameFilled: !!name };
-      })()`);
-      assertEquals(prefill.nameFilled, true, "the name field is prefilled from the card");
-      assertEquals(prefill.noteShown, true, "the import confirmation is shown");
-      assert(String(prefill.note).includes("Share Pilot"), "the confirmation names the imported agent");
+      let prefill = null;
+      for (let t = 0; t < 50 && (!prefill?.nameFilled || !prefill?.noteShown); t++) {
+        prefill = await ev(`(() => {
+          const dialog = document.querySelector("body > agent-dialog:last-of-type");
+          const note = dialog?.querySelector(".agent-config-import-note");
+          const name = [...dialog?.querySelectorAll("input") ?? []].find((i) => i.value === "Share Pilot");
+          return { note: note?.textContent ?? null, noteShown: note?.style?.display !== "none", nameFilled: !!name };
+        })()`);
+        if (!prefill?.nameFilled || !prefill?.noteShown) await new Promise((r) => setTimeout(r, 200));
+      }
+      assertEquals(prefill?.nameFilled, true, "the name field is prefilled from the card");
+      assertEquals(prefill?.noteShown, true, "the import confirmation is shown");
+      assert(String(prefill?.note).includes("Share Pilot"), "the confirmation names the imported agent");
 
       // 6. Create commits; the new record's card fields equal the exported card's.
-      const clicked = await ev(`(() => {
-        const dialog = document.querySelector("body > agent-dialog:last-of-type");
-        const btn = [...dialog.querySelectorAll(".agent-config-footer button")].find((b) => b.textContent?.trim() === "Create agent");
-        if (!btn) return false;
-        btn.click();
-        return true;
-      })()`);
+      let clicked = false;
+      for (let t = 0; t < 40 && !clicked; t++) {
+        clicked = await ev(`(() => {
+          const dialog = document.querySelector("body > agent-dialog:last-of-type");
+          const btn = [...dialog?.querySelectorAll(".agent-config-footer button") ?? []].find((b) => b.textContent?.trim() === "Create agent");
+          if (!btn) return false;
+          btn.click();
+          return true;
+        })()`);
+        if (!clicked) await new Promise((r) => setTimeout(r, 200));
+      }
       assertEquals(clicked, true, "the create button must be present");
-      await new Promise((r) => setTimeout(r, 1500));
 
-      const list = await ev(`new Promise((resolve) => chrome.runtime.sendMessage({ type: "named-agent.list" }, (res) => resolve(res?.agents ?? [])))`);
-      const shares = (list ?? []).filter((a) => a.name === "Share Pilot");
+      let shares = [];
+      for (let t = 0; t < 60 && shares.length === 0; t++) {
+        const list = await ev(`new Promise((resolve) => chrome.runtime.sendMessage({ type: "named-agent.list" }, (res) => resolve(res?.agents ?? [])))`);
+        shares = (list ?? []).filter((a) => a.name === "Share Pilot");
+        if (shares.length === 0) await new Promise((r) => setTimeout(r, 200));
+      }
       // The store held ZERO before Create (the source was deleted after export);
       // a slug id may be reused by the fresh record, so the record identity is
       // "exactly one Share Pilot that did not exist before", not an id diff.

@@ -350,6 +350,19 @@ Deno.test({
       await cdp.send("Page.bringToFront", {}, page.sessionId);
       await new Promise((r) => setTimeout(r, 1500));
 
+      // Capture pre-run baseline diagnostics entries
+      const baselineEntries = await cdp.eval(
+        page.sessionId,
+        `new Promise((resolve) => {
+          chrome.runtime.sendMessage({ type: 'diagnostics.list' }, (res) => {
+            resolve(res?.entries || []);
+          });
+        })`,
+      );
+      const baselineFingerprints = new Set(
+        (baselineEntries || []).map((e) => `${e?.ts}:${e?.source}:${e?.kind}:${e?.message}`),
+      );
+
       // Run a keyless prompt
       await cdp.eval(
         page.sessionId,
@@ -386,31 +399,57 @@ Deno.test({
       );
 
       // Wait for keyless diagnostic entry to land in background buffer
-      for (let i = 0; i < 40; i++) {
-        const entriesCount = await cdp.eval(
+      let keylessEntryFound = false;
+      for (let i = 0; i < 50; i++) {
+        const currentEntries = await cdp.eval(
           page.sessionId,
           `new Promise((resolve) => {
             chrome.runtime.sendMessage({ type: 'diagnostics.list' }, (res) => {
-              resolve(res?.entries?.length || 0);
+              resolve(res?.entries || []);
             });
           })`,
         );
-        if (entriesCount > 0) break;
+        // Find newly arrived entries not present in the baseline snapshot.
+        // Snapshot set difference remains robust even when the buffer is capped at 200.
+        const match = (currentEntries || []).find((e) => {
+          const key = `${e?.ts}:${e?.source}:${e?.kind}:${e?.message}`;
+          if (baselineFingerprints.has(key)) return false;
+          const msg = String(e?.message || "").toLowerCase();
+          const kind = String(e?.kind || "").toLowerCase();
+          return msg.includes("pricing") || msg.includes("cost tracking") ||
+            kind.includes("denied") || kind.includes("declined") ||
+            msg.includes("denied") || msg.includes("declined");
+        });
+        if (match) {
+          keylessEntryFound = true;
+          break;
+        }
         await new Promise((r) => setTimeout(r, 200));
       }
 
-      await new Promise((r) => setTimeout(r, 1000));
-
-      const diagAfterKeyless = await cdp.eval(
-        page.sessionId,
-        `(() => {
-          const d = document.getElementById('diagnostics-panel');
-          return {
-            badgeCount: d?.getAttribute('count'),
-            hasAttention: d?.hasAttribute('attention')
-          };
-        })()`,
+      assert(
+        keylessEntryFound,
+        "keyless run must produce an expected keyless diagnostic entry (pricing notice or permission decision) in the background buffer",
       );
+
+      // Poll for badge count and attention to settle via the live subscription
+      let diagAfterKeyless;
+      for (let i = 0; i < 50; i++) {
+        diagAfterKeyless = await cdp.eval(
+          page.sessionId,
+          `(() => {
+            const d = document.getElementById('diagnostics-panel');
+            return {
+              badgeCount: d?.getAttribute('count'),
+              hasAttention: d?.hasAttribute('attention')
+            };
+          })()`,
+        );
+        if (diagAfterKeyless?.badgeCount === "0" && !diagAfterKeyless?.hasAttention) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 200));
+      }
 
       assertEquals(
         diagAfterKeyless.badgeCount,
@@ -434,18 +473,22 @@ Deno.test({
         })`,
       );
 
-      await new Promise((r) => setTimeout(r, 1500));
-
-      const diagAfterRealError = await cdp.eval(
-        page.sessionId,
-        `(() => {
-          const d = document.getElementById('diagnostics-panel');
-          return {
-            badgeCount: d?.getAttribute('count'),
-            hasAttention: d?.hasAttribute('attention')
-          };
-        })()`,
-      );
+      // Poll for badge count to update to '1' after real error (causal polling replacing fixed sleep)
+      let diagAfterRealError;
+      for (let i = 0; i < 60; i++) {
+        diagAfterRealError = await cdp.eval(
+          page.sessionId,
+          `(() => {
+            const d = document.getElementById('diagnostics-panel');
+            return {
+              badgeCount: d?.getAttribute('count'),
+              hasAttention: d?.hasAttribute('attention')
+            };
+          })()`,
+        );
+        if (diagAfterRealError?.badgeCount === "1") break;
+        await new Promise((r) => setTimeout(r, 200));
+      }
 
       assertEquals(
         diagAfterRealError.badgeCount,
