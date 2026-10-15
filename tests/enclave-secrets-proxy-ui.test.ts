@@ -801,3 +801,70 @@ Deno.test("jao1.6.1 Part E.7: Fail-closed path: invalid_quota_config renders fai
   handle.unmount();
 });
 
+
+Deno.test("jao1.6.1 Part E.8: a REJECTED storage read renders the failure, re-enables the control, and writes NOTHING", async () => {
+  const { root, elements } = createPanelFixture();
+  const { mount } = await import("../extension/options/panels/web-services.js");
+
+  // Make the authoritative storage read itself reject - the path F1 introduced. Before this test
+  // nothing proved the failure was REACHABLE: the throw escaped the click listener after the button
+  // was disabled, so the control stayed greyed, no status was ever rendered, and the safe outcome
+  // (no write) was accidental rather than asserted.
+  const hadChrome = "chrome" in globalThis;
+  const prevChrome = (globalThis as any).chrome;
+  (globalThis as any).chrome = {
+    storage: { local: { get: async () => { throw new Error("storage read failed"); } } },
+  };
+
+  const setQuotaCalls: any[] = [];
+  const ctx = createPanelContext({
+    root,
+    send: async (type: string, payload: any = {}) => {
+      if (type === "vault.status") return { ok: true, services: [], proxyRules: [], ledger: [] };
+      if (type === "vault.ledger.usage") {
+        return {
+          ok: true,
+          usage: { "brave-search": { count: 0, disabled: false, limit: 50, remaining: 50, resetMs: 86400000, unmetered: false, windowMs: 86400000 } },
+          configInvalid: false,
+        };
+      }
+      if (type === "vault.ledger.setQuotas") {
+        setQuotaCalls.push({ type, ...payload });
+        return { ok: true, quotas: payload.quotas };
+      }
+      return { ok: true };
+    },
+  });
+
+  try {
+    const handle = await mount(root, ctx);
+    const rows = elements["vault-quotas"].querySelectorAll(".vault-quota-row");
+    const braveRow = rows.find((r: any) => r.dataset.service === "brave-search");
+    assert(braveRow, "brave-search row must exist");
+    const limitInput = braveRow.querySelector(".vault-quota-limit-input");
+    const setBtn = braveRow.querySelector(".vault-quota-set-btn");
+
+    limitInput.value = "20";
+    setBtn.click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    const statusEl = elements["vault-quotas-status"];
+    assertEquals(statusEl.hidden, false, "a failed read must be visible, not silent");
+    assertStringIncludes(statusEl.textContent, "Could not read your saved quota settings", "the failure must be named");
+    assertEquals(statusEl.style.color, "var(--danger,#b3261e)", "the failure must be styled as an error");
+    assert(!statusEl.textContent.includes("Quota updated"), "must NEVER claim success after a failed read");
+
+    // SAFETY, the behaviour that matters: a read we could not perform must not become a write.
+    // Writing here would persist a quota set built from a config we could not read - the exact
+    // stale-override bug F1 exists to prevent.
+    assertEquals(setQuotaCalls.length, 0, "no setQuotas write may be sent when the read failed");
+
+    // The control must not be left disabled by an error path - the pre-fix defect.
+    assertEquals(setBtn.disabled, false, "the control must be re-enabled after a failed read");
+
+    handle.unmount();
+  } finally {
+    if (hadChrome) (globalThis as any).chrome = prevChrome;
+    else delete (globalThis as any).chrome;
+  }
+});
