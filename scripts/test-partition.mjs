@@ -180,6 +180,16 @@ export const SERIAL_FILE_TIMEOUTS = Object.freeze({
 // does not apply; the guard test pins the reason. Keep this list tiny —
 // membership is a review-time decision, never a default.
 export const EXEMPTIONS = {
+  // bvj5: flagged twice by the conservative detectors; both hits checked in the file
+  // rather than assumed. (1) "names build.mjs" is a READ - the only reference is
+  // Deno.readTextFile(build.mjs) as static input, with no Deno.Command, no spawn and
+  // no import of it anywhere in the file. The detector says itself that reading is
+  // not loading and that EXEMPTIONS exists for exactly this case. (2) "writes under
+  // extension/ or packages/" is a path STRING in a private sandbox: every write goes
+  // into a per-test Deno.makeTempDir under durableDir("scratch") that mirrors the real
+  // extension layout so the unbuilt-tree case can be asserted, and it is removed in a
+  // finally. Nothing shared is read or written, so concurrent execution is harmless.
+  "tests/mcp-zod-peer-parity.test.ts": "reads build.mjs as TEXT as static input (never spawned, never imported); every write is confined to a per-test makeTempDir sandbox under durableDir(scratch) removed in a finally - no shared artifact is touched, so parallel execution is harmless",
   // o49qg: these five classify as artifact hazards, but are audited read-only.
   // The sixth (tool-exec-preview) has no classifier hit and must NOT be given a
   // dead exemption. Both runners finish SERIAL first; the full runner also
