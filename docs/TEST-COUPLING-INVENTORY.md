@@ -531,6 +531,32 @@ the literal.
   caller). The injection script was the fourth known way to get that wrong, and it was found by a
   reader, not a gate.
 
+## 23. tests/parallel-schedule.test.ts — weighted-file and tier watcher (chrome-agent-platform-hj6du)
+
+- **Watches:** every key in `scripts/lib/test-weights.json` against the current full
+  parallel phase: `defaultTestPlan(enumerateRunnerTests()).parallel` minus
+  `READ_ONLY_DIST`. A key for a renamed, removed, serial, build-deferred,
+  heavy-deferred or read-only-dist test is stale. The same test asserts that
+  `scheduleOrder` returns exactly the selected file multiset, without omissions
+  or duplicates; scheduling changes order only, not Deno's worker count.
+- **Owed by a re-anchor:** before renaming or moving a weighted test between
+  tiers, check its table entry and update or remove that weight in the same
+  change; run `npm run test:file -- tests/parallel-schedule.test.ts`. The
+  parallel subset and the 54 weights must not be mistaken for a list of tests
+  to execute: the runner selects files before it schedules them.
+- **Subject moves:** LOUD, verified — temporarily restoring the now-heavy
+  `tests/python-runtime.test.ts` weight made this test fail 0/1 naming the
+  stale file; restoring the table returned it to 4/0 (3/0 on the order-only
+  tip after removal of the worker-count test).
+- **Derivation and limit:** the 54 surviving durations are historical isolated
+  file timings measured on a **2-vCPU** VM at `1f79854` on 2026-10-08, not
+  remeasured durations on the current tree. The 2026-10-15 refresh checked
+  tier membership and removed **only five** newly heavy-deferred names; it
+  did not recalibrate the surviving 54 weights. The table affects ordering
+  only and cannot drop a test. Performance still needs a same-tree A/B, not
+  an inference from these numbers; an unweighted new parallel test remains
+  selected and keeps its place after the weighted files.
+
 ---
 
 ## The four book rules
