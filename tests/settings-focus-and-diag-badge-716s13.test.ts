@@ -432,22 +432,24 @@ Deno.test({
         "keyless run must produce an expected keyless diagnostic entry (pricing notice or permission decision) in the background buffer",
       );
 
-      // Explicitly await badge refresh with the updated entries buffer
-      await cdp.eval(
-        page.sessionId,
-        `import('/shared/diagnostics-client.js').then((m) => m.refreshDiagnostics())`,
-      );
-
-      const diagAfterKeyless = await cdp.eval(
-        page.sessionId,
-        `(() => {
-          const d = document.getElementById('diagnostics-panel');
-          return {
-            badgeCount: d?.getAttribute('count'),
-            hasAttention: d?.hasAttribute('attention')
-          };
-        })()`,
-      );
+      // Poll for badge count and attention to settle via the live subscription
+      let diagAfterKeyless;
+      for (let i = 0; i < 50; i++) {
+        diagAfterKeyless = await cdp.eval(
+          page.sessionId,
+          `(() => {
+            const d = document.getElementById('diagnostics-panel');
+            return {
+              badgeCount: d?.getAttribute('count'),
+              hasAttention: d?.hasAttribute('attention')
+            };
+          })()`,
+        );
+        if (diagAfterKeyless?.badgeCount === "0" && !diagAfterKeyless?.hasAttention) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 200));
+      }
 
       assertEquals(
         diagAfterKeyless.badgeCount,
