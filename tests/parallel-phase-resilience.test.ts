@@ -14,7 +14,7 @@
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
-import { DEFAULT_PARALLEL_TIMEOUT_MS as RUN_PARALLEL_TIMEOUT_MS } from "../scripts/run-tests.mjs";
+import { DEFAULT_PARALLEL_TIMEOUT_MS as RUN_PARALLEL_TIMEOUT_MS, areAllFailuresEnvironmental } from "../scripts/run-tests.mjs";
 import { DEFAULT_PARALLEL_TIMEOUT_MS as SELECT_PARALLEL_TIMEOUT_MS } from "../scripts/select-tests.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/u, "");
@@ -418,4 +418,89 @@ Deno.test("passes leaving an orphan", () => {
     }
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
+});
+
+Deno.test("ic1pa: areAllFailuresEnvironmental classifies QuietWindowRefusedError and machine quietness errors as environmental", () => {
+  const quietRefusalOutput = `
+ ERRORS 
+
+mkax: quiet-window gate refused under heavy build load => ./tests/quiet-window.test.ts:500:6
+error: QuietWindowRefusedError: ENVIRONMENT: machine is not quiet enough for this gate (waited 600000 ms, still load/core 0.94 > 0.35, 9 active heavy-builders). Not started — this is an environmental refusal (exit 75), not a failure of the tree.
+  throw new QuietWindowRefusedError(verdict);
+        ^
+
+ FAILURES 
+`;
+
+  assertEquals(areAllFailuresEnvironmental(quietRefusalOutput), true);
+
+  const markerRefusalOutput = `
+ ERRORS 
+
+test with refusal marker => ./tests/some.test.ts:10:6
+error: Error: CAP_ENVIRONMENTAL_REFUSAL {"reason":"host-loaded"}
+  throw new Error("CAP_ENVIRONMENTAL_REFUSAL");
+        ^
+
+ FAILURES 
+`;
+  assertEquals(areAllFailuresEnvironmental(markerRefusalOutput), true);
+
+  const productFailureOutput = `
+ ERRORS 
+
+genuine product bug => ./tests/real.test.ts:20:6
+error: AssertionError: Values are not equal. Expected 5, got 51.
+  throw new AssertionError(message);
+        ^
+
+ FAILURES 
+`;
+  assertEquals(areAllFailuresEnvironmental(productFailureOutput), false);
+
+  // Finding P1: Test name containing refusal marker/class must NOT convert an assertion failure to environmental
+  const testNamedRefusalFailingAssertion = `
+ ERRORS 
+
+ic1pa: areAllFailuresEnvironmental classifies QuietWindowRefusedError and machine quietness errors as environmental => ./tests/parallel-phase-resilience.test.ts:423:6
+error: AssertionError: Values are not equal.
+  throw new AssertionError(message);
+        ^
+
+ FAILURES 
+`;
+  assertEquals(areAllFailuresEnvironmental(testNamedRefusalFailingAssertion), false, "test name with QuietWindowRefusedError must not mask AssertionError");
+
+  // Finding 2y5h7 (Round 2 review): Assertion body naming QuietWindowRefusedError must NOT convert an assertion failure to environmental
+  const assertRejectsForgedBody = `
+ ERRORS 
+
+genuine product regression => ./tests/quiet-window.test.ts:445:6
+error: AssertionError: Expected error to be instance of "QuietWindowRefusedError", but was "Error".
+  throw new AssertionError(message);
+        ^
+
+ FAILURES 
+`;
+  assertEquals(areAllFailuresEnvironmental(assertRejectsForgedBody), false, "assertRejects errorBody naming QuietWindowRefusedError must not mask AssertionError");
+});
+
+Deno.test("ic1pa: processGroup returns null on ESRCH / vanished process", async () => {
+  const { processGroup } = await import("../scripts/lib/process-tree.ts");
+  // 1. Natural ENOENT check
+  const nonExistentPid = 2_147_483_000;
+  const result = processGroup(nonExistentPid);
+  assertEquals(result, null, "processGroup must return null without throwing on non-existent process");
+
+  // 2. Finding P2: Injected ESRCH / osError 3 check (distinct from Deno.errors.NotFound)
+  const esrchError = new Error("No such process: readfile /proc/12345/stat");
+  (esrchError as any).osError = 3;
+  (esrchError as any).code = "ESRCH";
+
+  const esrchResult = processGroup(12345, {
+    readProcStat: () => {
+      throw esrchError;
+    },
+  });
+  assertEquals(esrchResult, null, "processGroup must return null when reading stat throws ESRCH");
 });
