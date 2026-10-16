@@ -404,17 +404,21 @@ async function attempt(fn: () => unknown): Promise<void> {
  * process with the leader's pid exists with a DIFFERENT start time (a leader that
  * is simply absent still means "the old group, or nothing").
  *
- * KNOWN RESIDUAL RISK (found while making the crash tests deterministic; documented,
- * not implemented). The watcher is isolated by its own perl wrapper (`setsid()`), which
- * runs a few milliseconds AFTER the spawn returns. Until then it still shares THIS
- * process's group, so a SIGKILL of that whole GROUP inside the window kills the watcher
- * together with its parent and nothing reaps the browser (a probe that killed the
- * parent's group immediately after attaching orphaned the target in 7 of 20 runs; once
- * the watcher's own group was visible, 20 of 20 were reaped). A kill of the parent
- * ALONE, or of its group after the window, is covered. `launchChrome` keeps running for
- * at least the browser's start-up after attaching, so real exposure is tiny. What would
- * remove it: wait for `processGroup(watcher.pid).group === watcher.pid` before returning
- * (that makes the attach asynchronous, which every caller would have to accommodate).
+ * The watcher's isolation is CONFIRMED before a launch reports a protected browser (bead
+ * chrome-agent-platform-6tau8). `lifelineState(proc).ready` resolves TRUE once the watcher
+ * leads its own group, and FALSE only for a RUNNING watcher whose isolation could not be
+ * confirmed within its bound (the watcher says so once, by name); `launchChrome` REFUSES on
+ * FALSE inside its existing try, so the abort path tears the browser down and rethrows rather
+ * than reporting a launch whose crash watchdog a SIGKILL of this process's process GROUP
+ * could take with it. The remaining window is the one inside this function: the watcher is
+ * isolated by the `setsid` in its own wrapper, which runs a few milliseconds AFTER
+ * `Deno.Command.spawn()` returns, so a group kill inside that window still takes the watcher
+ * with its parent. `ready` is what closes that window for a caller that awaits it, and it is
+ * the strongest form available here because Deno exposes no spawn-time `setsid`; the
+ * alternative - making this function asynchronous - would change the synchronous-arming
+ * contract every caller relies on. The `unprotected` path (no watcher could be started at
+ * all) still resolves TRUE on purpose: the lifeline has already reported it once, and the
+ * caller's policy decision about running unprotected is deliberately unchanged.
  */
 export function attachProcessLifeline(
   proc: Deno.ChildProcess,
