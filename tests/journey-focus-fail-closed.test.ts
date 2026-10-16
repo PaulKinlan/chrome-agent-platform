@@ -1287,7 +1287,9 @@ Deno.test("fk9pq / mu9oa / vs9d2: activateNtpSession fails closed on Target.acti
       close: async () => {
         closeCallCount++;
         ac.abort();
-        try { await server.shutdown(); } catch {}
+        try { await boundedTeardown("provider server.shutdown()", server.shutdown()); } catch (e) {
+          if (String((e as Error)?.message ?? e).includes("harness teardown stalled")) throw e;
+        }
         isListening = false;
       },
     };
@@ -1295,10 +1297,33 @@ Deno.test("fk9pq / mu9oa / vs9d2: activateNtpSession fails closed on Target.acti
       provider,
       cleanup: async () => {
         ac.abort();
-        try { await server.shutdown(); } catch {}
+        try { await boundedTeardown("provider server.shutdown()", server.shutdown()); } catch (e) {
+          if (String((e as Error)?.message ?? e).includes("harness teardown stalled")) throw e;
+        }
         isListening = false;
       },
     };
+  };
+
+  // A bounded, explicit teardown. Every await in this harness must be able to FAIL LOUDLY rather than
+  // never settle: the file runs inside lane fast gates and the merger's union gate, and a never-settling
+  // await there costs a whole heavy slot (measured: a 600s gate killed with no verdict). This does not
+  // soften the assertion - a stall is a named error and therefore a red test, never a pass.
+  const boundedTeardown = async (label: string, work: Promise<unknown>, ms = 4000) => {
+    let timer: any;
+    try {
+      await Promise.race([
+        work,
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`harness teardown stalled: ${label} did not settle within ${ms}ms`)),
+            ms,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   };
 
   const compileRunner = (probeSource: string, customHelperBody: string = helperBody) => {
@@ -1328,6 +1353,16 @@ Deno.test("fk9pq / mu9oa / vs9d2: activateNtpSession fails closed on Target.acti
       readyState: 1, // OPEN
       send: (frame: string) => {
         const parsed = JSON.parse(frame);
+        if (!["Target.getTargetInfo", "Target.activateTarget", "Page.bringToFront"].includes(parsed.method)) {
+          // Explicit, method-named failure for anything this socket does not model. The harness builds the
+          // REAL Cdp class with stubbed timers, so an unmodelled method would otherwise await a stub 15s
+          // timer that nothing fires - a never-settling await that hangs the whole file (and the union
+          // gate). Failing loudly here is what makes the hang impossible; a silent default would instead
+          // re-create the false-green this exact scenario exists to catch.
+          const unmodelled = { id: parsed.id, error: { code: -32601, message: `harness does not model ${parsed.method}` } };
+          queueMicrotask(() => { ws.onmessage({ data: JSON.stringify(unmodelled) }); });
+          return;
+        }
         if (parsed.method === "Target.getTargetInfo") {
           queueMicrotask(() => {
             ws.onmessage({
@@ -1413,6 +1448,16 @@ Deno.test("fk9pq / mu9oa / vs9d2: activateNtpSession fails closed on Target.acti
       readyState: 1, // OPEN
       send: (frame: string) => {
         const parsed = JSON.parse(frame);
+        if (!["Target.getTargetInfo", "Target.activateTarget", "Page.bringToFront"].includes(parsed.method)) {
+          // Explicit, method-named failure for anything this socket does not model. The harness builds the
+          // REAL Cdp class with stubbed timers, so an unmodelled method would otherwise await a stub 15s
+          // timer that nothing fires - a never-settling await that hangs the whole file (and the union
+          // gate). Failing loudly here is what makes the hang impossible; a silent default would instead
+          // re-create the false-green this exact scenario exists to catch.
+          const unmodelled = { id: parsed.id, error: { code: -32601, message: `harness does not model ${parsed.method}` } };
+          queueMicrotask(() => { ws.onmessage({ data: JSON.stringify(unmodelled) }); });
+          return;
+        }
         if (parsed.method === "Target.getTargetInfo") {
           queueMicrotask(() => {
             ws.onmessage({
@@ -1544,6 +1589,16 @@ Deno.test("fk9pq / mu9oa / vs9d2: activateNtpSession fails closed on Target.acti
       readyState: 3, // CLOSED
       send: (frame: string) => {
         const parsed = JSON.parse(frame);
+        if (!["Target.getTargetInfo", "Target.activateTarget", "Page.bringToFront"].includes(parsed.method)) {
+          // Explicit, method-named failure for anything this socket does not model. The harness builds the
+          // REAL Cdp class with stubbed timers, so an unmodelled method would otherwise await a stub 15s
+          // timer that nothing fires - a never-settling await that hangs the whole file (and the union
+          // gate). Failing loudly here is what makes the hang impossible; a silent default would instead
+          // re-create the false-green this exact scenario exists to catch.
+          const unmodelled = { id: parsed.id, error: { code: -32601, message: `harness does not model ${parsed.method}` } };
+          queueMicrotask(() => { ws.onmessage({ data: JSON.stringify(unmodelled) }); });
+          return;
+        }
         if (parsed.method === "Target.getTargetInfo") {
           queueMicrotask(() => {
             ws.onmessage({
@@ -1686,6 +1741,16 @@ Deno.test("fk9pq / mu9oa / vs9d2: activateNtpSession fails closed on Target.acti
         readyState: 1,
         send: (frame: string) => {
           const parsed = JSON.parse(frame);
+        if (!["Target.getTargetInfo", "Target.activateTarget", "Page.bringToFront"].includes(parsed.method)) {
+          // Explicit, method-named failure for anything this socket does not model. The harness builds the
+          // REAL Cdp class with stubbed timers, so an unmodelled method would otherwise await a stub 15s
+          // timer that nothing fires - a never-settling await that hangs the whole file (and the union
+          // gate). Failing loudly here is what makes the hang impossible; a silent default would instead
+          // re-create the false-green this exact scenario exists to catch.
+          const unmodelled = { id: parsed.id, error: { code: -32601, message: `harness does not model ${parsed.method}` } };
+          queueMicrotask(() => { ws.onmessage({ data: JSON.stringify(unmodelled) }); });
+          return;
+        }
           if (parsed.method === "Target.getTargetInfo") {
             queueMicrotask(() => {
               ws.onmessage({
@@ -1751,6 +1816,16 @@ Deno.test("fk9pq / mu9oa / vs9d2: activateNtpSession fails closed on Target.acti
       send: (frame: string) => {
         frames.push(frame);
         const parsed = JSON.parse(frame);
+        if (!["Target.getTargetInfo", "Target.activateTarget", "Page.bringToFront"].includes(parsed.method)) {
+          // Explicit, method-named failure for anything this socket does not model. The harness builds the
+          // REAL Cdp class with stubbed timers, so an unmodelled method would otherwise await a stub 15s
+          // timer that nothing fires - a never-settling await that hangs the whole file (and the union
+          // gate). Failing loudly here is what makes the hang impossible; a silent default would instead
+          // re-create the false-green this exact scenario exists to catch.
+          const unmodelled = { id: parsed.id, error: { code: -32601, message: `harness does not model ${parsed.method}` } };
+          queueMicrotask(() => { ws.onmessage({ data: JSON.stringify(unmodelled) }); });
+          return;
+        }
         if (parsed.method === "Target.getTargetInfo") {
           queueMicrotask(() => {
             ws.onmessage({
@@ -1832,6 +1907,16 @@ Deno.test("fk9pq / mu9oa / vs9d2: activateNtpSession fails closed on Target.acti
       send: (frame: string) => {
         frames.push(frame);
         const parsed = JSON.parse(frame);
+        if (!["Target.getTargetInfo", "Target.activateTarget", "Page.bringToFront"].includes(parsed.method)) {
+          // Explicit, method-named failure for anything this socket does not model. The harness builds the
+          // REAL Cdp class with stubbed timers, so an unmodelled method would otherwise await a stub 15s
+          // timer that nothing fires - a never-settling await that hangs the whole file (and the union
+          // gate). Failing loudly here is what makes the hang impossible; a silent default would instead
+          // re-create the false-green this exact scenario exists to catch.
+          const unmodelled = { id: parsed.id, error: { code: -32601, message: `harness does not model ${parsed.method}` } };
+          queueMicrotask(() => { ws.onmessage({ data: JSON.stringify(unmodelled) }); });
+          return;
+        }
         if (parsed.method === "Target.getTargetInfo") {
           queueMicrotask(() => {
             ws.onmessage({
@@ -1928,6 +2013,16 @@ Deno.test("fk9pq / mu9oa / vs9d2: activateNtpSession fails closed on Target.acti
       send: (frame: string) => {
         mutantFrames.push(frame);
         const parsed = JSON.parse(frame);
+        if (!["Target.getTargetInfo", "Target.activateTarget", "Page.bringToFront"].includes(parsed.method)) {
+          // Explicit, method-named failure for anything this socket does not model. The harness builds the
+          // REAL Cdp class with stubbed timers, so an unmodelled method would otherwise await a stub 15s
+          // timer that nothing fires - a never-settling await that hangs the whole file (and the union
+          // gate). Failing loudly here is what makes the hang impossible; a silent default would instead
+          // re-create the false-green this exact scenario exists to catch.
+          const unmodelled = { id: parsed.id, error: { code: -32601, message: `harness does not model ${parsed.method}` } };
+          queueMicrotask(() => { ws.onmessage({ data: JSON.stringify(unmodelled) }); });
+          return;
+        }
         if (parsed.method === "Target.getTargetInfo") {
           queueMicrotask(() => {
             ws.onmessage({
