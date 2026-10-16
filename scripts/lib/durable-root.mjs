@@ -56,6 +56,8 @@ export function durableRoot() {
   return root;
 }
 
+export const DEFAULT_DURABLE_DIR_MAX_ENTRIES = 1000;
+
 /** A mkdir -p'd named dir under the durable root. Throws if RAM-backed. */
 export function durableDir(...parts) {
   const dir = join(durableRoot(), ...parts);
@@ -64,21 +66,28 @@ export function durableDir(...parts) {
   }
   if (!existsSync(dir)) {
     const rawCap = process.env.CAP_DURABLE_DIR_MAX_ENTRIES;
-    const cap = rawCap !== undefined && rawCap.trim() !== "" ? Number(rawCap) : 5000;
-    if (cap > 0) {
-      const parent = parts.length > 1 ? join(durableRoot(), ...parts.slice(0, -1)) : durableRoot();
-      try {
-        if (existsSync(parent)) {
-          const count = readdirSync(parent).length;
-          if (count >= cap) {
-            throw new Error(
-              `CAP_DURABLE_DIR_MAX_ENTRIES exceeded: ${parent} has ${count} entries (limit ${cap}, requested ${dir})`,
-            );
-          }
-        }
-      } catch (err) {
-        if (err.message && err.message.includes("CAP_DURABLE_DIR_MAX_ENTRIES exceeded")) throw err;
+    let cap = DEFAULT_DURABLE_DIR_MAX_ENTRIES;
+    if (rawCap !== undefined && rawCap.trim() !== "") {
+      const parsed = Number(rawCap);
+      if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error(
+          `CAP_DURABLE_DIR_MAX_ENTRIES invalid: expected positive integer, got ${JSON.stringify(rawCap)}`,
+        );
       }
+      cap = parsed;
+    }
+    const parent = parts.length > 1 ? join(durableRoot(), ...parts.slice(0, -1)) : durableRoot();
+    try {
+      if (existsSync(parent)) {
+        const count = readdirSync(parent).length;
+        if (count >= cap) {
+          throw new Error(
+            `CAP_DURABLE_DIR_MAX_ENTRIES exceeded: ${parent} has ${count} entries (limit ${cap}, requested ${dir})`,
+          );
+        }
+      }
+    } catch (err) {
+      if (err.message && err.message.includes("CAP_DURABLE_DIR_MAX_ENTRIES exceeded")) throw err;
     }
   }
   mkdirSync(dir, { recursive: true });

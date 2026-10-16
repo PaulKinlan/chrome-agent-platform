@@ -59,6 +59,12 @@ function probeEnvCases(): Promise<Record<string, Probe>> {
         mod.durableDir("sub1");
         mod.durableDir("sub2");
         out.capExceeded = probe(() => mod.durableDir("sub3"));
+        Deno.env.set("CAP_DURABLE_DIR_MAX_ENTRIES", "abc");
+        out.capInvalidNonNumeric = probe(() => mod.durableDir("subInvalid1"));
+        Deno.env.set("CAP_DURABLE_DIR_MAX_ENTRIES", "0");
+        out.capInvalidZero = probe(() => mod.durableDir("subInvalid2"));
+        Deno.env.set("CAP_DURABLE_DIR_MAX_ENTRIES", "-1");
+        out.capInvalidNegative = probe(() => mod.durableDir("subInvalid3"));
       } finally {
         Deno.env.delete("CAP_DURABLE_DIR_MAX_ENTRIES");
         try { Deno.removeSync(capRoot, { recursive: true }); } catch {}
@@ -135,6 +141,21 @@ Deno.test("durableDir: throws named error when CAP_DURABLE_DIR_MAX_ENTRIES is ex
   assertStringIncludes(probed.capExceeded?.threw ?? "", "CAP_DURABLE_DIR_MAX_ENTRIES exceeded");
   assertStringIncludes(probed.capExceeded?.threw ?? "", "limit 2");
   assertStringIncludes(probed.capExceeded?.threw ?? "", "sub3");
+});
+
+Deno.test("durableDir: throws named error when CAP_DURABLE_DIR_MAX_ENTRIES is invalid/non-positive (p5wzd)", async () => {
+  const probed = await probeEnvCases();
+  assert(probed.capInvalidNonNumeric?.threw !== undefined, "non-numeric cap must throw");
+  assertStringIncludes(probed.capInvalidNonNumeric?.threw ?? "", "CAP_DURABLE_DIR_MAX_ENTRIES invalid: expected positive integer");
+  assertStringIncludes(probed.capInvalidNonNumeric?.threw ?? "", "\"abc\"");
+
+  assert(probed.capInvalidZero?.threw !== undefined, "zero cap must throw");
+  assertStringIncludes(probed.capInvalidZero?.threw ?? "", "CAP_DURABLE_DIR_MAX_ENTRIES invalid: expected positive integer");
+  assertStringIncludes(probed.capInvalidZero?.threw ?? "", "\"0\"");
+
+  assert(probed.capInvalidNegative?.threw !== undefined, "negative cap must throw");
+  assertStringIncludes(probed.capInvalidNegative?.threw ?? "", "CAP_DURABLE_DIR_MAX_ENTRIES invalid: expected positive integer");
+  assertStringIncludes(probed.capInvalidNegative?.threw ?? "", "\"-1\"");
 });
 
 /** Statically detect any parent-process CAP_DURABLE_ROOT mutation (set, delete, assignment). */
