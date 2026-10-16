@@ -1,8 +1,6 @@
 /* docs/showcase.css — the component gallery layout (specimens + composed demo).
    The components themselves style via their shadow roots + the theme vars. */
 
-:root { --chrome-accent: #0969da; }
-html[data-theme="sunlit"] { background: #ffffff; color: #1f2328; }
 body {
   margin: 0;
   font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
