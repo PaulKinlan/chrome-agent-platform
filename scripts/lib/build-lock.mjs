@@ -238,9 +238,24 @@ export async function holderIsDead(holder, deps = {}) {
     : procStatFields(holder.pid);
   const resolved = probe instanceof Promise ? await probe : probe;
   if (!resolved?.ok) {
-    // kill() said alive but the /proc entry is gone: the process died in between (or was reaped).
-    // An UNREADABLE entry is different and stays alive — refusing to steal is the safe direction.
-    return resolved?.reason === "gone";
+    // kill() said alive but the probe read nothing. An UNREADABLE (or unparseable) entry is not
+    // evidence of death and stays alive — refusing to steal is the safe direction.
+    if (resolved?.reason !== "gone") return false;
+    // chrome-agent-platform-0ym29: a single "gone" probe is not proof of death. `ps -p <pid>`
+    // reports gone for an absent pid, but a `ps` that exits 1 with EMPTY stdout AND stderr for any
+    // OTHER reason is indistinguishable from that, and reading it as death lets one build be stolen
+    // from a LIVE holder — two concurrent publishes against one dist. So re-run kill(pid, 0): ESRCH
+    // now means the process really did die/rereap in between (steal), while answering again — or
+    // EPERM, which is existence we merely may not signal — is a persisting contradiction and MUST be
+    // treated as ALIVE. Dist/`ps` behaviour on Linux is otherwise unchanged.
+    let recheckError = null;
+    try {
+      kill(holder.pid, 0);
+    } catch (e) {
+      recheckError = e;
+    }
+    if (!recheckError) return false; // it still answers: the "gone" probe is contradicted
+    return recheckError.code === "ESRCH";
   }
 
   // THE r0v8 FIX: a zombie is a corpse. It answers kill(pid, 0) and keeps its starttime, so every
