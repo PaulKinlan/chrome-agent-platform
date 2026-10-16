@@ -73,8 +73,12 @@ Deno.test("unbuilt-tree-components: 2y7qe recurrence guard passes with docs bund
       `2y7qe recurrence guard must pass in unbuilt tree without docs/diff-core.bundle.js.\nstdout:\n${stdout}\nstderr:\n${stderr}`,
     );
     assert(
-      stdout.includes("ok"),
-      `Expected test output to contain 'ok', got:\n${stdout}`,
+      stdout.includes("2y7qe recurrence guard: every cross-module call to components-core is imported and exported"),
+      `Expected test output to contain guard execution name, got:\n${stdout}`,
+    );
+    assert(
+      stdout.includes("1 passed") && !stdout.includes("0 passed"),
+      `Expected test output to confirm 1 passed (not 0 passed / filter miss), got:\n${stdout}`,
     );
   } finally {
     if (stashedContent !== null) {
