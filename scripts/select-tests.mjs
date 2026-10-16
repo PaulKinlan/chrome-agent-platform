@@ -46,7 +46,7 @@ import { fileURLToPath } from "node:url";
 import { tokenizer } from "acorn";
 import { partition } from "./test-partition.mjs";
 import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
-import { isSelectorInfrastructure, mapUncovered, versionOnlyJsonChange } from "./lib/changed-file-mapping.mjs";
+import { HTML_EXPORT_ENTRY_GUARDS, isSelectorInfrastructure, mapUncovered, versionOnlyJsonChange } from "./lib/changed-file-mapping.mjs";
 import { emitGateLedger, explainChangedFileMapping } from "./lib/gate-manifest.mjs";
 import { decideBuild, ensureStoreBuild, findDistConsumers } from "./build-if-needed.mjs";
 import { checkBrowserPrerequisite } from "./lib/browser-prerequisite.mjs";
@@ -557,10 +557,10 @@ export function selectTestFiles(changed, reverse, mapped = []) {
 // Changed code/config files with NO reachable test. A subset cannot prove
 // coverage of these (nothing imports them), so callers must FAIL CLOSED to the
 // full suite rather than run a silent core-only green. Files absent from the
-// current tree (deleted/renamed) are NOT fail-closed candidates: retention in
-// selectTestFiles selects their remaining importers, whose imports now fail
-// loudly — the honest red. Pure content/docs can break nothing through the
-// import graph and stay core-only.
+// current tree (deleted/renamed) normally rely on importer retention: their
+// remaining importers fail loudly. Exact declared HTML entries have no such
+// importer edge, so a missing one must reach the mapping's fail-closed check.
+// Pure content/docs stay core-only.
 export function changedWithoutCoverage(changed, reverse) {
   const uncovered = [];
   const reverseMap = reverse ?? new Map();
@@ -568,7 +568,10 @@ export function changedWithoutCoverage(changed, reverse) {
     if (isChangedTest(c)) continue; // runs itself (or was deleted = nothing to do)
     if (CONTENT_EXT_RE.test(c)) continue; // docs/assets: no executable effect
     const abs = resolve(ROOT, c);
-    if (!existsSync(abs)) continue; // deleted/renamed: retention selects importers, if any
+    if (!existsSync(abs)) {
+      if (Object.hasOwn(HTML_EXPORT_ENTRY_GUARDS, c)) uncovered.push(c);
+      continue; // other deleted/renamed files retain importer coverage
+    }
     if (reachableTestFrom(abs, reverseMap, (p) => isTestRel(relative(ROOT, p)))) continue;
     uncovered.push(c);
   }
@@ -842,6 +845,8 @@ export function planSelection({ base = "origin/main" } = {}) {
   const { mapped, unmappable } = uncovered.length
     ? mapUncovered(uncovered, (rel) => versionOnlyAgainst(baseRef, rel), (test) => {
       try { return statSync(join(ROOT, test)).isFile(); } catch { return false; }
+    }, (source) => {
+      try { return statSync(join(ROOT, source)).isFile(); } catch { return false; }
     })
     : { mapped: [], unmappable: [] };
 

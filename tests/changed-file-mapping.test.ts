@@ -309,6 +309,7 @@ Deno.test("nco2: mapUncovered splits mapped from unmappable and carries the reas
     ["package.json", "extension/manifest.json", "scripts/a11y-audit.ts", "some/unknown-thing.json"],
     (f) => f === "package.json",
     declaredGuardExists,
+    () => true,
   );
   assertEquals(mapped.map((m) => m.file).sort(), ["package.json", "scripts/a11y-audit.ts"]);
   assertEquals(unmappable.map((u) => u.file).sort(), ["extension/manifest.json", "some/unknown-thing.json"]);
@@ -321,15 +322,34 @@ Deno.test("nco2: mapUncovered splits mapped from unmappable and carries the reas
 Deno.test("cqsim: absent declared guard refuses subset and names both source and missing test", () => {
   const source = "extension/ntp/ntp.html";
   const guard = "tests/thread-export-entry-html.test.ts";
-  const missing = mapUncovered([source], () => false, () => false);
+  const missing = mapUncovered([source], () => false, () => false, () => true);
   assertEquals(missing.mapped, []);
   assertEquals(missing.unmappable.map((entry: any) => entry.file), [source]);
   assert(missing.unmappable[0].mechanism.includes(source));
   assert(missing.unmappable[0].mechanism.includes(guard));
   assertThrows(() => mapUncovered([source], () => false), Error, "declared guard existence predicates are required");
-  const present = mapUncovered([source], () => false, declaredGuardExists);
+  const present = mapUncovered([source], () => false, declaredGuardExists, () => true);
   assertEquals(present.unmappable, []);
   assertEquals(present.mapped[0].tests, [guard]);
+});
+
+Deno.test("9l5z4: deleted exact HTML entries fail closed with source and declared guard named", () => {
+  const guard = "tests/thread-export-entry-html.test.ts";
+  for (const source of Object.keys(HTML_EXPORT_ENTRY_GUARDS)) {
+    const missing = mapUncovered([source], () => false, declaredGuardExists, () => false);
+    assertEquals(missing.mapped, [], source);
+    assertEquals(missing.unmappable.map((entry: any) => entry.file), [source]);
+    assert(missing.unmappable[0].mechanism.includes(source));
+    assert(missing.unmappable[0].mechanism.includes(guard));
+    const present = mapUncovered([source], () => false, declaredGuardExists, () => true);
+    assertEquals(present.unmappable, []);
+    assertEquals(present.mapped[0].tests, [guard]);
+  }
+  assertThrows(
+    () => mapUncovered(["extension/ntp/ntp.html"], () => false, declaredGuardExists),
+    Error,
+    "source-existence predicate is required",
+  );
 });
 
 Deno.test("nco2: every declared guard EXISTS and actually reads the tree it guards", () => {
