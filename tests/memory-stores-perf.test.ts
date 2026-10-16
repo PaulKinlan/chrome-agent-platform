@@ -181,6 +181,9 @@ import { countStoreKeysWithLoadRetry } from "../scripts/lib/load-retry.ts";
 import { parseMemoryClearLabelCount } from "../scripts/lib/data-memory-clear-parser.ts";
 
 Deno.test("9epn.11: bounded count benchmarks < 5 ms even with high key volumes", async () => {
+  // Caveat: masterMemory() in this unit test is backed by the file-local in-memory
+  // FakeDirHandle/FakeFileHandle OPFS mock, so elapsed time benchmarks the JS loop
+  // and zero keys() allocation overhead in memory (< 5ms), not physical OPFS disk I/O.
   const store = masterMemory();
   for (let i = 0; i < 550; i++) {
     await store.set(`scale_key_${i}`, i);
@@ -193,7 +196,7 @@ Deno.test("9epn.11: bounded count benchmarks < 5 ms even with high key volumes",
   );
 
   assertEquals(keyCount, "500+");
-  assert(elapsed < 5, `countStoreKeys must finish in < 5ms on 500+ keys (took ${elapsed.toFixed(2)}ms)`);
+  assert(elapsed < 5, `countStoreKeys must finish in < 5ms on 500+ keys in unit mock (took ${elapsed.toFixed(2)}ms)`);
 });
 
 Deno.test("ri0x8: countStoreKeysWithLoadRetry fires retry on injected contention and refuses on quiet/unmeasurable", async () => {
