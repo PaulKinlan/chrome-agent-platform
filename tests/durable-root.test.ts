@@ -51,6 +51,18 @@ function probeEnvCases(): Promise<Record<string, Probe>> {
       out.shm = probe(() => mod.durableRoot());
       set("/proc/cap-chp-impossible");
       out.impossible = probe(() => mod.durableDir("probe"));
+      const capRoot = (Deno.env.get("HOME") || "/home/paulkinlan") + "/cap-cap-test-dir-" + Date.now();
+      Deno.mkdirSync(capRoot, { recursive: true });
+      try {
+        set(capRoot);
+        Deno.env.set("CAP_DURABLE_DIR_MAX_ENTRIES", "2");
+        mod.durableDir("sub1");
+        mod.durableDir("sub2");
+        out.capExceeded = probe(() => mod.durableDir("sub3"));
+      } finally {
+        Deno.env.delete("CAP_DURABLE_DIR_MAX_ENTRIES");
+        try { Deno.removeSync(capRoot, { recursive: true }); } catch {}
+      }
       console.log("PROBE " + JSON.stringify(out));
     })()`;
     const { stdout, stderr, success } = await new Deno.Command(Deno.execPath(), {
@@ -115,6 +127,14 @@ Deno.test("durableDir fails loudly when the durable location is unavailable", as
   const probed = await probeEnvCases();
   assert(probed.impossible.threw !== undefined, "an unavailable durable root must throw");
   assertStringIncludes(probed.impossible.threw ?? "", "/proc/cap-chp-impossible");
+});
+
+Deno.test("durableDir: throws named error when CAP_DURABLE_DIR_MAX_ENTRIES is exceeded (yc91a)", async () => {
+  const probed = await probeEnvCases();
+  assert(probed.capExceeded?.threw !== undefined, "exceeding the entry cap must throw");
+  assertStringIncludes(probed.capExceeded?.threw ?? "", "CAP_DURABLE_DIR_MAX_ENTRIES exceeded");
+  assertStringIncludes(probed.capExceeded?.threw ?? "", "limit 2");
+  assertStringIncludes(probed.capExceeded?.threw ?? "", "sub3");
 });
 
 /** Statically detect any parent-process CAP_DURABLE_ROOT mutation (set, delete, assignment). */

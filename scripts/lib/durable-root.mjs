@@ -8,7 +8,7 @@
 // lock, slot poison) stay on tmpfs — a reboot auto-clears stale locks, which
 // is a feature. Plain ESM with node: imports so BOTH runtimes (deno test/journey
 // scripts and node build scripts) share this one rule.
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -61,6 +61,25 @@ export function durableDir(...parts) {
   const dir = join(durableRoot(), ...parts);
   if (isRamBacked(dir)) {
     throw new Error(`refusing RAM-backed evidence dir ${dir} (bead chp)`);
+  }
+  if (!existsSync(dir)) {
+    const rawCap = process.env.CAP_DURABLE_DIR_MAX_ENTRIES;
+    const cap = rawCap !== undefined && rawCap.trim() !== "" ? Number(rawCap) : 5000;
+    if (cap > 0) {
+      const parent = parts.length > 1 ? join(durableRoot(), ...parts.slice(0, -1)) : durableRoot();
+      try {
+        if (existsSync(parent)) {
+          const count = readdirSync(parent).length;
+          if (count >= cap) {
+            throw new Error(
+              `CAP_DURABLE_DIR_MAX_ENTRIES exceeded: ${parent} has ${count} entries (limit ${cap}, requested ${dir})`,
+            );
+          }
+        }
+      } catch (err) {
+        if (err.message && err.message.includes("CAP_DURABLE_DIR_MAX_ENTRIES exceeded")) throw err;
+      }
+    }
   }
   mkdirSync(dir, { recursive: true });
   return dir;

@@ -24,29 +24,33 @@ const NODE_BIN = new TextDecoder().decode(
 /** A scratch home, a bin dir with exactly `bins`, and the dry-run plan. */
 async function plan({ bins, harness }: { bins: string[]; harness?: string }) {
   const scratch = await durableDir(`acp-harness-default-${Date.now()}`);
-  const bin = join(scratch, "bin");
-  const home = join(scratch, "home");
-  await Deno.mkdir(bin, { recursive: true });
-  await Deno.mkdir(home, { recursive: true });
-  for (const name of bins) {
-    await Deno.writeTextFile(join(bin, name), "#!/bin/sh\necho 1.0.0\n");
-    await Deno.chmod(join(bin, name), 0o755);
+  try {
+    const bin = join(scratch, "bin");
+    const home = join(scratch, "home");
+    await Deno.mkdir(bin, { recursive: true });
+    await Deno.mkdir(home, { recursive: true });
+    for (const name of bins) {
+      await Deno.writeTextFile(join(bin, name), "#!/bin/sh\necho 1.0.0\n");
+      await Deno.chmod(join(bin, name), 0o755);
+    }
+    const args = [SCRIPT, "install", "--dry-run"];
+    if (harness) args.push("--harness", harness);
+    const res = new Deno.Command(NODE_BIN, {
+      args,
+      cwd: ROOT,
+      stdout: "piped",
+      stderr: "piped",
+      env: { ...Deno.env.toObject(), HOME: home, PATH: `${bin}:/usr/bin:/bin` },
+    }).outputSync();
+    return {
+      code: res.code,
+      out: new TextDecoder().decode(res.stdout),
+      err: new TextDecoder().decode(res.stderr),
+      plannedHarness: /harness:\s*(\S+)/.exec(new TextDecoder().decode(res.stdout))?.[1] ?? null,
+    };
+  } finally {
+    await Deno.remove(scratch, { recursive: true }).catch(() => {});
   }
-  const args = [SCRIPT, "install", "--dry-run"];
-  if (harness) args.push("--harness", harness);
-  const res = new Deno.Command(NODE_BIN, {
-    args,
-    cwd: ROOT,
-    stdout: "piped",
-    stderr: "piped",
-    env: { ...Deno.env.toObject(), HOME: home, PATH: `${bin}:/usr/bin:/bin` },
-  }).outputSync();
-  return {
-    code: res.code,
-    out: new TextDecoder().decode(res.stdout),
-    err: new TextDecoder().decode(res.stderr),
-    plannedHarness: /harness:\s*(\S+)/.exec(new TextDecoder().decode(res.stdout))?.[1] ?? null,
-  };
 }
 
 Deno.test("acp:install: with no --harness, the harness is the one the machine HAS (claude-only machine)", async () => {
@@ -120,8 +124,12 @@ async function hostDefaultsFor(home: string, makeJournal: boolean, frame: object
 
 Deno.test("acp-bridge: a session with no cwd gets NOTHING invented when $HOME/journal does not exist", async () => {
   const scratch = await durableDir(`acp-cwd-${Date.now()}`);
-  const got = await hostDefaultsFor(join(scratch, "no-journal"), false, { method: "session/new", params: {} });
-  assertEquals(got.params?.cwd, undefined, `nothing may be invented: ${JSON.stringify(got)}`);
+  try {
+    const got = await hostDefaultsFor(join(scratch, "no-journal"), false, { method: "session/new", params: {} });
+    assertEquals(got.params?.cwd, undefined, `nothing may be invented: ${JSON.stringify(got)}`);
+  } finally {
+    await Deno.remove(scratch, { recursive: true }).catch(() => {});
+  }
 });
 
 Deno.test("acp-bridge: a machine that HAS $HOME/journal still does not have it invented", async () => {
@@ -130,22 +138,30 @@ Deno.test("acp-bridge: a machine that HAS $HOME/journal still does not have it i
   // ~/journal it would have been silently adopted as the working directory. A
   // tool must not carry somebody's directory convention, so the default is "".
   const scratch = await durableDir(`acp-cwd-with-${Date.now()}`);
-  const home = join(scratch, "with-journal");
-  const got = await hostDefaultsFor(home, true, { method: "session/new", params: {} });
-  assertEquals(got.params?.cwd, undefined, `nothing may be invented, even here: ${JSON.stringify(got)}`);
-  // and with an explicit host default it IS used (the declared path, not a guess)
-  const explicit = await hostDefaultsFor(home, true, null, join(home, "journal"));
-  assertEquals(explicit.params?.cwd, join(home, "journal"), JSON.stringify(explicit));
+  try {
+    const home = join(scratch, "with-journal");
+    const got = await hostDefaultsFor(home, true, { method: "session/new", params: {} });
+    assertEquals(got.params?.cwd, undefined, `nothing may be invented, even here: ${JSON.stringify(got)}`);
+    // and with an explicit host default it IS used (the declared path, not a guess)
+    const explicit = await hostDefaultsFor(home, true, null, join(home, "journal"));
+    assertEquals(explicit.params?.cwd, join(home, "journal"), JSON.stringify(explicit));
+  } finally {
+    await Deno.remove(scratch, { recursive: true }).catch(() => {});
+  }
 });
 
 Deno.test("acp-bridge: an explicit cwd in the frame, or the documented empty host default, is never overridden", async () => {
   const scratch = await durableDir(`acp-cwd-explicit-${Date.now()}`);
-  const home = join(scratch, "home");
-  const explicit = await hostDefaultsFor(home, false, { method: "session/new", params: { cwd: "/somewhere/told" } });
-  assertEquals(explicit.params?.cwd, "/somewhere/told", JSON.stringify(explicit));
-  // "" is the contract's "no host default configured" — nothing invented.
-  const emptyHostDefault = await hostDefaultsFor(home, false, null, "");
-  assertEquals(emptyHostDefault.params?.cwd, undefined, JSON.stringify(emptyHostDefault));
+  try {
+    const home = join(scratch, "home");
+    const explicit = await hostDefaultsFor(home, false, { method: "session/new", params: { cwd: "/somewhere/told" } });
+    assertEquals(explicit.params?.cwd, "/somewhere/told", JSON.stringify(explicit));
+    // "" is the contract's "no host default configured" — nothing invented.
+    const emptyHostDefault = await hostDefaultsFor(home, false, null, "");
+    assertEquals(emptyHostDefault.params?.cwd, undefined, JSON.stringify(emptyHostDefault));
+  } finally {
+    await Deno.remove(scratch, { recursive: true }).catch(() => {});
+  }
 });
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -238,5 +254,6 @@ Deno.test("acp-bridge drive: the client's missing cwd is warned about once and r
     try { bridge.kill("SIGKILL"); } catch { /* already gone */ }
     await bridge.status.catch(() => {});
     await collector;
+    await Deno.remove(scratch, { recursive: true }).catch(() => {});
   }
 });

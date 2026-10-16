@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.707] — 2026-10-16
+- Clean up ACP test scratch directories on teardown and enforce durable-root entry cap to prevent disk starvation.
+
 ## [0.3.706] — 2026-10-16
 - Read DOCX, XLSX, and PPTX with bounded built-in readers; keep spreadsheet cells and rich text complete and refuse over-expanded or unsupported documents without a partial artifact.
 
