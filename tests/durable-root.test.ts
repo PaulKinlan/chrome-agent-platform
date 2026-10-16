@@ -65,8 +65,16 @@ function probeEnvCases(): Promise<Record<string, Probe>> {
         out.capInvalidZero = probe(() => mod.durableDir("subInvalid2"));
         Deno.env.set("CAP_DURABLE_DIR_MAX_ENTRIES", "-1");
         out.capInvalidNegative = probe(() => mod.durableDir("subInvalid3"));
+        Deno.env.set("CAP_DURABLE_DIR_MAX_ENTRIES", "100");
+        Deno.env.set("CAP_DURABLE_DIR_MIN_FREE_BYTES", "999999999999999");
+        out.minFreeExceeded = probe(() => mod.durableDir("subMinFree"));
+        Deno.env.set("CAP_DURABLE_DIR_MIN_FREE_BYTES", "lots");
+        out.minFreeInvalid = probe(() => mod.durableDir("subMinFreeInvalid"));
+        Deno.env.set("CAP_DURABLE_DIR_MIN_FREE_BYTES", "0");
+        out.minFreeZeroOk = probe(() => mod.durableDir("subMinFreeZero"));
       } finally {
         Deno.env.delete("CAP_DURABLE_DIR_MAX_ENTRIES");
+        Deno.env.delete("CAP_DURABLE_DIR_MIN_FREE_BYTES");
         try { Deno.removeSync(capRoot, { recursive: true }); } catch {}
       }
       console.log("PROBE " + JSON.stringify(out));
@@ -156,6 +164,19 @@ Deno.test("durableDir: throws named error when CAP_DURABLE_DIR_MAX_ENTRIES is in
   assert(probed.capInvalidNegative?.threw !== undefined, "negative cap must throw");
   assertStringIncludes(probed.capInvalidNegative?.threw ?? "", "CAP_DURABLE_DIR_MAX_ENTRIES invalid: expected positive integer");
   assertStringIncludes(probed.capInvalidNegative?.threw ?? "", "\"-1\"");
+});
+
+Deno.test("durableDir: free-disk reserve is the byte bound, not the entry count (iqt8f)", async () => {
+  const probed = await probeEnvCases();
+  assert(probed.minFreeExceeded?.threw !== undefined, "free space below the reserve must throw");
+  assertStringIncludes(probed.minFreeExceeded?.threw ?? "", "CAP_DURABLE_DIR_MIN_FREE_BYTES exceeded");
+  assertStringIncludes(probed.minFreeExceeded?.threw ?? "", "reserve 999999999999999");
+  assertStringIncludes(probed.minFreeExceeded?.threw ?? "", "subMinFree");
+
+  assert(probed.minFreeInvalid?.threw !== undefined, "non-numeric reserve must throw, not silently disable");
+  assertStringIncludes(probed.minFreeInvalid?.threw ?? "", "CAP_DURABLE_DIR_MIN_FREE_BYTES invalid: expected non-negative integer");
+
+  assertEquals(probed.minFreeZeroOk?.threw, undefined, "an explicit 0 reserve is an operator choice and permits creation");
 });
 
 /** Statically detect any parent-process CAP_DURABLE_ROOT mutation (set, delete, assignment). */
