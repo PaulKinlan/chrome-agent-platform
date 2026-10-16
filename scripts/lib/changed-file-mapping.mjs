@@ -273,16 +273,17 @@ export function classifyUncovered(rel, { versionOnly = false } = {}) {
 
 /**
  * Map a whole uncovered list. The caller supplies git access and the CURRENT
- * worktree's declared-test existence check. Both are required: assuming that a
- * declared guard exists lets a missing test silently turn coverage into core-only.
+ * worktree's declared-test and mapped-source existence checks. All are required:
+ * assuming a guard or an exact mapped HTML entry exists can silently bless core-only coverage.
  *
  * `mapped` is `[{ file, mechanism, tests }]`; `unmappable` is the same shape
  * with no tests, and its presence means the caller must run the full suite and
  * print every entry — a full-suite run that says why it ran.
  */
-export function mapUncovered(uncovered, versionOnlyFor, declaredTestExists) {
-  if (typeof versionOnlyFor !== "function" || typeof declaredTestExists !== "function") {
-    throw new Error("mapUncovered: version-only and declared guard existence predicates are required");
+export function mapUncovered(uncovered, versionOnlyFor, declaredTestExists, declaredSourceExists) {
+  if (typeof versionOnlyFor !== "function" || typeof declaredTestExists !== "function" ||
+      typeof declaredSourceExists !== "function") {
+    throw new Error("mapUncovered: version-only and declared guard existence predicates are required; source-existence predicate is required");
   }
   const mapped = [];
   const unmappable = [];
@@ -293,6 +294,14 @@ export function mapUncovered(uncovered, versionOnlyFor, declaredTestExists) {
       unmappable.push({
         file,
         mechanism: `${verdict.mechanism}; ${file} declared guard missing or not a file: ${missing.join(", ")}`,
+        tests: [],
+      });
+      continue;
+    }
+    if (Object.hasOwn(HTML_EXPORT_ENTRY_GUARDS, file) && !declaredSourceExists(file)) {
+      unmappable.push({
+        file,
+        mechanism: `${verdict.mechanism}; deleted declared HTML entry ${file} is missing or not a file; ${verdict.tests.join(", ")} cannot certify its absence`,
         tests: [],
       });
       continue;
