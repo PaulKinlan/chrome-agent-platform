@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.718] — 2026-10-16
+- the licence disclosure on the About page now credits the actual author of the bundled BLAKE3 module (hash-wasm, Copyright (c) 2020 Dani Biro) instead of the generic CAP tools text.
+
 ## [0.3.717] — 2026-10-16
 - none: internal test stub construction and ETXTBSY race elimination
 

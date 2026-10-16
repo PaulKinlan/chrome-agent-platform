@@ -380,7 +380,7 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   assert(threw === "preview_authority", "extra authority key fails closed");
 });
 
-Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 38 allowlisted tools", async () => {
+Deno.test(`preview: immutable revalidation passes on the REAL shipped bytes for ALL ${PREVIEW_TOOL_IDS.length} allowlisted tools`, async () => {
   for (const toolId of PREVIEW_TOOL_IDS) {
     const spec = previewSpecFor(toolId);
     const row = BUNDLED_TOOL_PACKAGE_ROWS.find((candidate) => candidate.toolId === toolId);
