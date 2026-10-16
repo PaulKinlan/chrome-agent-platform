@@ -113,7 +113,7 @@ Instead of having the Service Worker assemble an archive and transmit it over IP
 ### 3.2 Advantages of Options-Driven Streaming
 1. **Zero Impact on Service Worker Bundle**: All streaming TAR logic, file tree walking, and stream pumping reside in the Options bundle, which has no 3 MB limit.
 2. **Zero IPC Payload Bottleneck**: Bytes flow directly from OPFS handles to the native disk stream via the browser kernel. Zero bytes are passed through `chrome.runtime.sendMessage`.
-3. **True Constant-Memory Streaming ($O(1)$ RAM)**: Memory consumption is bounded by the chunk buffer size (64 KiB), whether exporting 5 MB or 50 GB.
+3. **True Constant-Memory Streaming ($O(1)$ RAM)**: Payload bytes are pulled one body at a time in chunks (64 KiB), whether exporting 5 MB or 50 GB. The exporter overlaps up to four independent OPFS metadata opens while streaming the current body; only lazy stream handles are prefetched, never file payloads or redacted-target contents. An aborted export cancels unread prefetched streams.
 4. **Immunity to MV3 Worker Termination**: The transfer runs in the open Options tab; it cannot be killed by the 30-second background worker idle timer.
 5. **Live, Non-Blocking Progress**: The Options document directly tracks byte counts and file names, updating the UI smoothly without IPC chatter.
 

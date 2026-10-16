@@ -25,6 +25,9 @@ import { isManagedRedactedTarget, sanitizeRedactedTargetText } from "./logical-s
 import { encodeTarStream } from "./tar-stream.js";
 
 const ENCODER = new TextEncoder();
+// Opening an OPFS File only obtains its metadata and lazy stream. Keep a small
+// number of those independent opens in flight; archive bodies remain serial.
+const OPEN_WINDOW = 4;
 
 /** Re-chunk a byte stream into at-most `chunkSize` pieces (last one short).
  * Backpressured: chunks are pulled only as the encoder writes them. */
@@ -201,26 +204,56 @@ export async function streamExportArchive({
       body: countedPass(alarmsBytes, "alarms.json", onProgress, counter),
     };
 
-    for (const path of paths) {
-      const handle = await open(path);
-      if (isManagedRedactedTarget(path)) {
-        // Bounded by design: redacted targets are small config JSON documents.
-        // The registered sanitizer runs HERE, before any byte can enter the
-        // archive (the 8fuc property, inherited from collectExportData).
-        const raw = new Uint8Array(await new Response(handle.stream).arrayBuffer());
-        const sanitized = sanitizeRedactedTargetText(path, new TextDecoder("utf-8", { fatal: true }).decode(raw));
-        const sanitizedBytes = ENCODER.encode(JSON.stringify(sanitized));
-        yield {
-          name: `opfs/${path}`,
-          size: sanitizedBytes.length,
-          body: countedPass(sanitizedBytes, `opfs/${path}`, onProgress, counter),
-        };
-      } else {
-        yield {
-          name: `opfs/${path}`,
-          size: handle.size,
-          body: countedBody(rechunk(handle.stream, chunkSize), `opfs/${path}`, onProgress, counter),
-        };
+    // The window overlaps independent OPFS metadata opens with the current
+    // TAR body, but yields in listFiles order. Only handles are prefetched:
+    // never read a body or sanitize a redacted target before its turn.
+    const pending = new Map();
+    const startOpen = (i) => {
+      if (i >= paths.length) return;
+      // Normalize rejections immediately: a later slot may fail before the
+      // encoder reaches it, and must not become an unhandled rejection.
+      pending.set(i, Promise.resolve().then(() => open(paths[i])).then(
+        (handle) => ({ handle }), (error) => ({ error }),
+      ));
+    };
+    for (let i = 0; i < Math.min(OPEN_WINDOW, paths.length); i++) startOpen(i);
+    try {
+      for (let i = 0; i < paths.length; i++) {
+        const path = paths[i];
+        const outcome = await pending.get(i);
+        pending.delete(i);
+        if ("error" in outcome) throw outcome.error;
+        const { handle } = outcome;
+        startOpen(i + OPEN_WINDOW);
+        if (isManagedRedactedTarget(path)) {
+          // Bounded by design: redacted targets are small config JSON documents.
+          // The registered sanitizer runs HERE, before any byte can enter the
+          // archive (the 8fuc property, inherited from collectExportData).
+          const raw = new Uint8Array(await new Response(handle.stream).arrayBuffer());
+          const sanitized = sanitizeRedactedTargetText(path, new TextDecoder("utf-8", { fatal: true }).decode(raw));
+          const sanitizedBytes = ENCODER.encode(JSON.stringify(sanitized));
+          yield {
+            name: `opfs/${path}`,
+            size: sanitizedBytes.length,
+            body: countedPass(sanitizedBytes, `opfs/${path}`, onProgress, counter),
+          };
+        } else {
+          yield {
+            name: `opfs/${path}`,
+            size: handle.size,
+            body: countedBody(rechunk(handle.stream, chunkSize), `opfs/${path}`, onProgress, counter),
+          };
+        }
+      }
+    } finally {
+      // An earlier open or the sink may fail. Cancel streams obtained for
+      // later entries rather than retaining unread handles after the abort.
+      for (const future of pending.values()) {
+        void future.then(({ handle }) => {
+          if (handle?.stream && !handle.stream.locked) {
+            return handle.stream.cancel().catch(() => {});
+          }
+        }).catch(() => {});
       }
     }
   }
