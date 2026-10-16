@@ -5,6 +5,7 @@
 // defaults retained evidence or big scratch to /tmp (allowlist: tiny
 // cross-process coordination files and test fixtures).
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { assert, assertEquals, assertThrows, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   DEFAULT_DURABLE_DIR_FLOOR_BYTES,
@@ -503,8 +504,11 @@ Deno.test("guard: tmpdir/tmpfs usage is durable-routed or deliberately allowed",
 // verdict below keeps both halves falsifiable without touching this host's disk.
 
 Deno.test("nudb2: the free-space verdict separates shared-volume pressure (warn) from evidence fullness (fatal)", () => {
-  const anchor = "/home/x/cap-evidence";
-  const dir = "/home/x/cap-evidence/run-1";
+  // Derived from the repo root, not a machine literal: these two strings are only echoed and compared by the
+  // pure verdict (nothing touches the disk), and an absolute machine literal would rightly trip
+  // tests/machine-path-honesty.test.ts.
+  const anchor = join(ROOT, "cap-evidence");
+  const dir = join(anchor, "run-1");
   // Plenty: silent.
   assertEquals(freeSpaceVerdict({ free: 5_000_000_000, minFree: DEFAULT_DURABLE_DIR_MIN_FREE_BYTES, floor: DEFAULT_DURABLE_DIR_FLOOR_BYTES, anchor, dir }), {});
   // The incident: 481 MB free on the shared volume, far above any evidence need. NAMED, created anyway.
