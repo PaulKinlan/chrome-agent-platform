@@ -687,6 +687,28 @@ Deno.test("88lzq: real temporary-directory calls survive string and template sca
   assertEquals(findDurableViolations('dir=`mktemp -d cap-x`', "scripts/sample.sh").length, 1);
 });
 
+Deno.test("jpwvv: comment markers inside quotes never hide a real call or invent one", () => {
+  assertEquals(findDurableViolations("const n = 1;// we avoid mkdtemp here", "scripts/sample.ts"), []);
+  const shell = findDurableViolations('x="a #"; mktemp -d cap-x', "scripts/sample.sh");
+  assertEquals(shell.length, 1, "the # in a shell string must not erase executable code");
+  assert(shell[0].includes("scripts/sample.sh:1:"));
+
+  // Real-tree witness: probeSource contains a template interpolation whose
+  // quoted branch starts with whitespace + '// returns immediately'. A regex
+  // comment pass applied before quote recognition truncates that actual line,
+  // mis-pairs the template and can invent a violation later in THIS file.
+  const path = new URL("./serial-phase-resilience.test.ts", import.meta.url);
+  const source = Deno.readTextFileSync(path);
+  const actualBranch = '"  // returns immediately"';
+  assertStringIncludes(source, actualBranch);
+  const scanned = scanGuardSource(source, false);
+  assertStringIncludes(scanned.literals, actualBranch,
+    "the real quoted branch survives comment scanning; an early // regex truncates it");
+  assertEquals(scanned.calls.length, source.length, "scanner offsets stay aligned with the real fixture");
+  assertEquals(findDurableViolations(source, "tests/serial-phase-resilience.test.ts"), [],
+    "the actual serial-phase fixture must not acquire a false violation");
+});
+
 // ── chrome-agent-platform-nudb2: scoped reserve + bounded, age-gated trim ──────────────────────
 // The reserve measures the volume that holds the durable root, which on this fleet is the ROOT
 // filesystem (repos, worktrees, node_modules, rustc/deno builds). It therefore cannot tell evidence
