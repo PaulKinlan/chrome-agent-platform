@@ -34,6 +34,19 @@ import {
 } from "../scripts/lib/build-lock.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
+/** chrome-agent-platform-0ym29: a `kill(pid, 0)` seam answering one recorded outcome per call
+ *  (`null` = alive, an `Error` = thrown); calls past the script repeat its last entry. Stealing on a
+ *  "gone" probe now requires the RE-CHECK to agree (ESRCH), so a gone fixture must be paired with
+ *  [alive, ESRCH] — a lone probe verdict is no longer proof of death. */
+const killSeam = (outcomes: Array<Error | null>) => {
+  let i = 0;
+  return () => {
+    const outcome = outcomes[Math.min(i++, outcomes.length - 1)] ?? null;
+    if (outcome) throw outcome;
+  };
+};
+const ESRCH = Object.assign(new Error("no such process"), { code: "ESRCH" });
+
 type SpawnLike = {
   status?: number | null;
   signal?: string | null;
@@ -459,7 +472,7 @@ Deno.test("jjsz F1(b): ONLY exit-1 + empty stdout + empty stderr is gone; every 
       assertEquals(fields.code, row.code, `diagnostic code: ${JSON.stringify(fields)}`);
       const dead = await holderIsDead(
         { pid: PID, start: "Wed Oct 7 12:26:48 2026", boot: BOOT },
-        { bootId: BOOT, kill: () => {}, procStat: probeVia(row.exec) },
+        { bootId: BOOT, kill: killSeam([null, ESRCH]), procStat: probeVia(row.exec) },
       );
       assertEquals(
         dead,
@@ -494,20 +507,29 @@ Deno.test("jjsz F1(b): a well-formed row parses to {state, start} and a Z row is
 
 Deno.test("jjsz F1(b): acquireBuildLock steals from a GONE owner and refuses an UNREADABLE one", async () => {
   const owned = { pid: PID, start: "Wed Oct 7 12:26:48 2026", boot: BOOT };
-  const run = (root: string, exec: Exec, owner: object = contenderIdentity()) =>
+  // The kill seam is per-case: a gone fixture is [alive, ESRCH] (the re-check must agree before the
+  // steal), while an UNREADABLE probe is only ever polled against a live process, so its seam keeps
+  // answering alive — a seam that ran on to ESRCH would make the second poll of an unreadable holder
+  // look like a real death and steal a lock this test exists to protect (chrome-agent-platform-0ym29).
+  const run = (root: string, exec: Exec, owner: object = contenderIdentity(), kill: () => void = () => {}) =>
     acquireBuildLock({
       root,
       owner,
       attempts: 2,
       intervalMs: 5,
-      livenessDeps: { kill: () => {}, bootId: BOOT, procStat: probeVia(exec) },
+      livenessDeps: { kill, bootId: BOOT, procStat: probeVia(exec) },
     });
 
   const goneRoot = tmpRoot("gone");
   try {
     writeLock(goneRoot, { ...owned, token: "dead-owner-token" });
     const ours = contenderIdentity();
-    await run(goneRoot, returning({ status: 1, signal: null, stdout: "", stderr: "" }), ours);
+    await run(
+      goneRoot,
+      returning({ status: 1, signal: null, stdout: "", stderr: "" }),
+      ours,
+      killSeam([null, ESRCH]),
+    );
     assertEquals(lockToken(goneRoot), ours.token, "a gone owner's lock must become ours");
   } finally {
     await removeRoot(goneRoot);

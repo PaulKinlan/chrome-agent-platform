@@ -29,6 +29,16 @@ import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const decoder = new TextDecoder();
 
+/** A kill(pid, 0) seam answering one recorded outcome per call: `null` = alive, an Error = thrown.
+ *  Calls beyond the script repeat its last entry. */
+function killSeam(outcomes: Array<Error | null>) {
+  let i = 0;
+  return () => {
+    const outcome = outcomes[Math.min(i++, outcomes.length - 1)] ?? null;
+    if (outcome) throw outcome;
+  };
+}
+
 let tmpSeq = 0;
 async function tmpRoot(prefix: string): Promise<string> {
   // Durable, like every other scratch dir in this repo: tests/durable-root.test.ts polices a bare
@@ -228,9 +238,13 @@ Deno.test("r0v8: a gone pid and a different boot are both stealable", async () =
 
 Deno.test("r0v8: a vanished /proc entry is dead, an unreadable one stays alive", async () => {
   // The race the defect description names: kill() reports alive, but /proc says the pid is gone.
+  // The re-check must AGREE (ESRCH) before the lock is stolen — one "gone" probe is not proof.
   const vanished = await holderIsDead(
     { pid: process.pid, start: "1", boot: machineBootId() },
-    { kill: () => {}, procStat: () => ({ ok: false, reason: "gone" }) },
+    {
+      kill: killSeam([null, Object.assign(new Error("no such process"), { code: "ESRCH" })]),
+      procStat: () => ({ ok: false, reason: "gone" }),
+    },
   );
   assertEquals(vanished, true, "a missing /proc/<pid>/stat must mean stealable");
 
@@ -239,6 +253,27 @@ Deno.test("r0v8: a vanished /proc entry is dead, an unreadable one stays alive",
     { kill: () => {}, procStat: () => ({ ok: false, reason: "unreadable" }) },
   );
   assertEquals(unreadable, false, "unreadable is not proof of death — refuse, do not steal");
+});
+
+Deno.test("0ym29: a 'gone' probe contradicted by a second live kill(0) refuses to steal", async () => {
+  // A `ps` that exits 1 with EMPTY stdout/stderr for any reason other than an absent pid reads as
+  // "gone". If kill(pid, 0) answers AGAIN, death is not proven: stealing here would run two builds
+  // against one dist. The persisting contradiction must be treated as ALIVE.
+  const aliveTwice = await holderIsDead(
+    { pid: process.pid, start: "1", boot: machineBootId() },
+    { kill: killSeam([null, null]), procStat: () => ({ ok: false, reason: "gone" }) },
+  );
+  assertEquals(aliveTwice, false, "kill(0) answering twice contradicts 'gone' — refuse, do not steal");
+
+  // EPERM on the re-check also proves the process exists (we merely may not signal it).
+  const epermOnRecheck = await holderIsDead(
+    { pid: process.pid, start: "1", boot: machineBootId() },
+    {
+      kill: killSeam([null, Object.assign(new Error("not permitted"), { code: "EPERM" })]),
+      procStat: () => ({ ok: false, reason: "gone" }),
+    },
+  );
+  assertEquals(epermOnRecheck, false, "EPERM on the re-check is existence, not death");
 });
 
 Deno.test("r0v8: an ownerless lock is stealable only once observably old", async () => {
