@@ -9,7 +9,7 @@
 // serial failure still runs the always-on subset, and the run says how much it skipped — because a
 // gate that cannot tell you what it ran is the other half of this bead's family.
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { guardSubset, parallelPlan } from "../scripts/lib/parallel-plan.mjs";
+import { guardSubset, parallelPlan, computeParallelPhaseTimeout, DEFAULT_PARALLEL_TIMEOUT_MS } from "../scripts/lib/parallel-plan.mjs";
 
 const PARALLEL = ["tests/a.test.ts", "tests/b.test.ts", "tests/durable-root.test.ts", "tests/c.test.ts"];
 const ALWAYS_ON = ["tests/durable-root.test.ts", "tests/core.test.ts"];
@@ -48,4 +48,24 @@ Deno.test("kz27: the plan is not a blanket 'run everything' — the failure stat
   // An always-on file that is not in this run's parallel set is simply not run here (it belongs to
   // another phase) — the subset is an intersection, not an assumption.
   assertEquals(guardSubset(PARALLEL, ["tests/not-in-this-run.test.ts"]), []);
+});
+
+Deno.test("877x1: computeParallelPhaseTimeout adapts dynamically to CPU concurrency and file count", () => {
+  // On a 2-vCPU machine with 800 files, timeout scales beyond the 1800s floor
+  const scaled2Cpu = computeParallelPhaseTimeout(800, { cpus: 2, minMs: 0 });
+  // 120s + (800 * 5s) / 2 = 120s + 2000s = 2120s = 2,120,000 ms
+  assertEquals(scaled2Cpu, 2_120_000);
+
+  // On an 8-vCPU machine with 800 files, timeout scales down proportionally
+  const scaled8Cpu = computeParallelPhaseTimeout(800, { cpus: 8, minMs: 0 });
+  // 120s + (800 * 5s) / 8 = 120s + 500s = 620s = 620,000 ms
+  assertEquals(scaled8Cpu, 620_000);
+
+  // Standard minMs floor preserves DEFAULT_PARALLEL_TIMEOUT_MS (1800s) for smaller counts
+  const smallSuite = computeParallelPhaseTimeout(10, { cpus: 2 });
+  assertEquals(smallSuite, DEFAULT_PARALLEL_TIMEOUT_MS);
+
+  // Explicit envTimeout override is honored
+  const overridden = computeParallelPhaseTimeout(800, { envTimeout: "999000", cpus: 2 });
+  assertEquals(overridden, 999_000);
 });

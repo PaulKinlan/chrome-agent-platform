@@ -27,14 +27,13 @@ import { resolve as resolvePath } from "node:path";
 import { BUILD_GATE, BUILD_GATE_FILES, BUILD_GATE_REASONS, HEAVY_GATE, HEAVY_GATE_FILES, HEAVY_GATE_REASONS, READ_ONLY_DIST, SERIAL, partition } from "./test-partition.mjs";
 import { announce, runReadOnlyDistBatch, runSerialFiles } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
-import { parallelPlan } from "./lib/parallel-plan.mjs";
+import { parallelPlan, computeParallelPhaseTimeout, DEFAULT_PARALLEL_TIMEOUT_MS } from "./lib/parallel-plan.mjs";
 import { loadWeights, scheduleOrder } from "./lib/parallel-schedule.mjs";
 import { emitGateLedger, deferredTierEntries, fullTierManifestFields, parseGateBuild } from "./lib/gate-manifest.mjs";
 import { checkBrowserPrerequisite } from "./lib/browser-prerequisite.mjs";
 import { ENVIRONMENTAL_REFUSAL_EXIT } from "./lib/environmental-verdict.mjs";
 
-export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
-const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_MS ?? DEFAULT_PARALLEL_TIMEOUT_MS);
+export { DEFAULT_PARALLEL_TIMEOUT_MS, computeParallelPhaseTimeout };
 const PARALLEL_READY_FILE = process.env.CAP_PARALLEL_READY_FILE;
 const PARALLEL_READY_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_READY_TIMEOUT_MS ?? 60_000);
 
@@ -89,6 +88,7 @@ function runParallel(files, phase = "parallel phase") {
   const ordered = scheduled ? scheduleOrder(files, loadWeights()) : files;
   if (scheduled) announce(`run-tests: parallel scheduler longest-first (${ordered.length} selected file(s)); Deno default workers`);
   const t0 = Date.now();
+  const phaseTimeoutMs = computeParallelPhaseTimeout(files.length);
   return new Promise((resolve) => {
     let capturedOutput = "";
     const child = spawn("deno", ["test", "-A", "--config", "deno.runner.jsonc", "--parallel", ...ordered], {
@@ -115,13 +115,13 @@ function runParallel(files, phase = "parallel phase") {
     let readyOk = !PARALLEL_READY_FILE;
 
     const startPhaseTimer = () => {
-      if (PARALLEL_PHASE_TIMEOUT_MS > 0 && Number.isFinite(PARALLEL_PHASE_TIMEOUT_MS)) {
+      if (phaseTimeoutMs > 0 && Number.isFinite(phaseTimeoutMs)) {
         timer = setTimeout(() => {
           timedOut = true;
           if (child.pid) {
             try { process.kill(-child.pid, "SIGKILL"); } catch { /* gone */ }
           }
-        }, PARALLEL_PHASE_TIMEOUT_MS);
+        }, phaseTimeoutMs);
       }
     };
 
@@ -208,7 +208,7 @@ function runParallel(files, phase = "parallel phase") {
         return;
       }
       if (timedOut) {
-        announce(`\nrun-tests: ${phase} TIMED OUT after ${PARALLEL_PHASE_TIMEOUT_MS / 1000}s`);
+        announce(`\nrun-tests: ${phase} TIMED OUT after ${phaseTimeoutMs / 1000}s`);
         announce(`run-tests: TIMED-OUT ${phase.toUpperCase()} CANDIDATE FILE(S) (culprit unconfirmed):`);
         for (const file of files) announce(`  - ${file} (${phase} timed out; individual culprit unknown)`);
         resolve(124);

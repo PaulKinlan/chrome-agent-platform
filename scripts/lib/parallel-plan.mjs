@@ -13,6 +13,43 @@
 // Pure on purpose: the acceptance is about which files run in which state, so it is unit-tested
 // rather than inferred from the shape of a print statement in a script.
 
+import os from "node:os";
+
+export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
+
+/**
+ * Computes a concurrency- and file-count-adaptive parallel phase timeout
+ * (chrome-agent-platform-877x1).
+ *
+ * Sizing adapts to available parallelism:
+ * On 2-vCPU machines (nproc=2), Deno default concurrency is 2 workers;
+ * running ~550+ files requires >1000 CPU-seconds (>600s wall time). A flat bound
+ * risks timing out by construction under lower core counts or growing suites.
+ *
+ * @param {number} filesCount - Number of test files to execute in parallel
+ * @param {object} [options]
+ * @param {number} [options.cpus] - Available concurrency (defaults to os.availableParallelism or cpus.length)
+ * @param {string|number} [options.envTimeout] - Explicit timeout override from env
+ * @param {number} [options.msPerFile] - Estimated CPU budget per file (default 5000ms: ~2.5s work + 2x margin)
+ * @param {number} [options.baselineMs] - Baseline floor for isolate spin-up and long test tail (default 120,000ms)
+ * @param {number} [options.minMs] - Minimum timeout floor (default DEFAULT_PARALLEL_TIMEOUT_MS = 1,800,000ms)
+ * @returns {number} Timeout in milliseconds
+ */
+export function computeParallelPhaseTimeout(filesCount, options = {}) {
+  const envVal = options.envTimeout ?? process.env.CAP_PARALLEL_TEST_TIMEOUT_MS;
+  if (envVal !== undefined && envVal !== "") {
+    const parsed = Number(envVal);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  const cpus = options.cpus ?? (typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length) ?? 1;
+  const count = typeof filesCount === "number" && Number.isFinite(filesCount) && filesCount > 0 ? filesCount : 0;
+  const msPerFile = options.msPerFile ?? 5_000;
+  const baselineMs = options.baselineMs ?? 120_000;
+  const scaledMs = Math.ceil(baselineMs + (count * msPerFile) / Math.max(1, cpus));
+  const minMs = options.minMs ?? DEFAULT_PARALLEL_TIMEOUT_MS;
+  return Math.max(minMs, scaledMs);
+}
+
 /** The always-on files that are also in this run's parallel set. */
 export function guardSubset(parallel, alwaysOn) {
   const on = new Set(alwaysOn);
