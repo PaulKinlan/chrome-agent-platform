@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.720] — 2026-10-16
+- a Chrome launch is no longer reported as protected before its crash watchdog is in its own session, so a test runner that kills the whole process group can no longer orphan a browser.
+
 ## [0.3.719] — 2026-10-16
 - unauth callers can no longer read host paths from the ACP /health endpoint, and a page teardown no longer kills a Chrome whose profile path merely prefixes another's
 

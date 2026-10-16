@@ -5,7 +5,9 @@
 // argv carries a unique marker, exactly like `--user-data-dir=<profile>`.
 import { assert, assertEquals, assertRejects, assertStrictEquals } from "jsr:@std/assert@1";
 import {
+  attachProcessLifeline,
   isolatedProcessGroup,
+  lifelineState,
   killProcessTree,
   liveGroupMembers,
   processGroup,
@@ -216,16 +218,15 @@ Deno.test("launchChrome lifeline: SIGKILLing the parent test process reaps the i
       await new Promise((r) => setTimeout(r, 25));
     }
     assert(liveGroupMembers(browserGroup).length >= 2, "browser + unmarked helper are alive in isolated group");
-    // The watcher's perl wrapper runs setsid a few ms after it is spawned; until then it still shares
-    // the parent's process group and the group kill below would take it along (measured: 7 of 20
-    // immediate kills orphaned the browser). The crash guarantee is defined from that point on.
-    for (let i = 0; i < 200 && processGroup(watcherPid)?.group !== watcherPid; i++) {
-      await new Promise((r) => setTimeout(r, 25));
-    }
+    // 6tau8: this used to SPIN here until the watcher entered its own session, because the watcher's
+    // perl wrapper runs setsid a few ms after spawn and a group kill inside that window takes it along
+    // (measured: 7 of 20 immediate kills orphaned the browser). The wait is no longer the test's job:
+    // launchChrome does not report a launched browser until the watcher leads its own group, so by
+    // READY the guarantee is already true - which is what this asserts, with no spin.
     assertEquals(
       processGroup(watcherPid)?.group,
       watcherPid,
-      "the lifeline watcher is in its own session before its parent's process group is killed",
+      "the watcher must lead its own group BEFORE launchChrome returns (the crash guarantee holds from that point, 6tau8)",
     );
 
     // Simulate a timed-out test runner killing only the parent deno process group (-parentProc.pid).
@@ -478,5 +479,82 @@ Deno.test("cfc9c: reapCrashpadHandler refuses malformed, empty, or root paths an
       await p.status;
     } catch { /* clean */ }
     try { Deno.removeSync(baseDir, { recursive: true }); } catch { /* ignore */ }
+  }
+});
+
+// 6tau8 — the WIRING pin. The `launchChrome` await on `ready` is timing-only in a healthy launch (the
+// browser's banner takes longer than the watcher's setsid), so no behavioural case can see it: with the
+// await deleted the crash test above still passes. It is pinned in source instead, exactly because it
+// is the difference between "the guarantee is true when the launch returns" and "usually true":
+Deno.test("6tau8: launchChrome awaits the lifeline's isolation confirmation before returning", async () => {
+  const launcher = await Deno.readTextFile(new URL("../scripts/lib/chrome-launch.ts", import.meta.url));
+  const attach = launcher.indexOf("attachProcessLifeline(proc, {");
+  assert(attach > 0, "launchChrome still attaches a lifeline");
+  const awaits = launcher.indexOf("await lifelineState(proc)?.ready", attach);
+  assert(
+    awaits > attach,
+    "launchChrome must await lifelineState(proc).ready right after attaching: the watcher leads its own " +
+      "group only a few ms after spawn, and a group kill inside that window orphans the browser (6tau8)",
+  );
+  assert(
+    awaits - attach < 1200,
+    `the await belongs to this attach (found ${awaits - attach} chars later - is it attached elsewhere?)`,
+  );
+});
+
+// 6tau8 — the window itself, deterministically. The end-to-end crash test above passes even when the
+// window is open (it only shows up in ~7 of 20 immediate group kills), so the guarantee needs a case
+// that reads it directly: once `ready` resolves, the watcher LEADS its own group. Without the
+// confirmation in attachProcessLifeline, `ready` resolves immediately after spawn - microseconds
+// after the wrapper is born, before its perl setsid - and this reds.
+Deno.test("6tau8: attachProcessLifeline hands back a watcher already confirmed to lead its own group", async () => {
+  const spec = setsidSpawnSpec("/bin/sleep", ["300"]);
+  const proc = new Deno.Command(spec.command, { args: spec.args, stdout: "null", stderr: "null" }).spawn();
+  const warnLines: string[] = [];
+  try {
+    const group = await isolatedProcessGroup(proc);
+    assert(group !== undefined, "the stand-in must lead its own group before attaching");
+    attachProcessLifeline(proc, { group }, { warn: (line) => warnLines.push(line) });
+    const state = lifelineState(proc);
+    assert(state !== undefined, "the lifeline must be registered");
+    assertEquals(state!.state, "armed", "it is armed synchronously (callers rely on that)");
+    await state!.ready;
+    const watcherPid = state!.watcherPid!;
+    assert(watcherPid > 1, "a watcher pid is recorded");
+    assertEquals(
+      processGroup(watcherPid)?.group,
+      watcherPid,
+      "once `ready` resolves the watcher leads its own group - so a parent-GROUP kill can no longer take it",
+    );
+    assertEquals(warnLines, [], "a watcher that isolates promptly is not warned about");
+  } finally {
+    try { Deno.kill(-proc.pid, "SIGKILL"); } catch { /* gone */ }
+    try { proc.kill("SIGKILL"); } catch { /* gone */ }
+    await proc.status;
+  }
+});
+
+Deno.test("6tau8: a watcher that never leads its own group is warned about ONCE, by name", async () => {
+  const spec = setsidSpawnSpec("/bin/sleep", ["300"]);
+  const proc = new Deno.Command(spec.command, { args: spec.args, stdout: "null", stderr: "null" }).spawn();
+  const warnLines: string[] = [];
+  try {
+    const group = await isolatedProcessGroup(proc);
+    attachProcessLifeline(proc, { group }, { warn: (line) => warnLines.push(line), confirmIsolation: async () => false });
+    const state = lifelineState(proc);
+    await state!.ready;
+    assertEquals(warnLines.length, 1, `exactly one diagnostic, by name: ${JSON.stringify(warnLines)}`);
+    assert(
+      warnLines[0].includes("does not lead its own process group"),
+      `the diagnostic must name what is missing: ${warnLines[0]}`,
+    );
+    assert(
+      warnLines[0].includes("a kill of this process alone is still covered"),
+      `and state the residual precisely: ${warnLines[0]}`,
+    );
+  } finally {
+    try { Deno.kill(-proc.pid, "SIGKILL"); } catch { /* gone */ }
+    try { proc.kill("SIGKILL"); } catch { /* gone */ }
+    await proc.status;
   }
 });

@@ -45,6 +45,7 @@ import {
   attachProcessLifeline,
   isolatedProcessGroup,
   killProcessTree,
+  lifelineState,
   processGroup,
   recordLeaderStartTicks,
   type ProcessTableDeps,
@@ -822,6 +823,11 @@ export async function launchChrome(opts: {
       group,
       treeMatch: resolvedProfile ? `user-data-dir=${resolvedProfile}` : undefined,
     });
+    // 6tau8: do not report a protected browser before its lifeline watcher leads its own process
+    // group - the crash guarantee would otherwise be a few milliseconds away from true, and a test
+    // runner that kills this process's GROUP is exactly the crash it covers. Bounded inside
+    // attachProcessLifeline (40 x 25 ms); a watcher that never isolates is warned about there.
+    await lifelineState(proc)?.ready;
   } catch (e) {
     // chrome-agent-platform-5fh6a: when isolatedProcessGroup throws (e.g. unreadable table),
     // check if the table has become readable and confirms setsid's group (proc.pid).

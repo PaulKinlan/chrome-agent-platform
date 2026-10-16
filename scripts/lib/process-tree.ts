@@ -237,6 +237,10 @@ export type LifelineStateName = "armed" | "fired" | "disarmed" | "unprotected";
 interface Lifeline {
   state: LifelineStateName;
   watcherPid: number | null;
+  /** Resolves once the watcher's OWN process group has been confirmed (or could not be, which warns
+   *  once). See `attachProcessLifeline` for why the guarantee is a promise and not a fact at spawn
+   *  time (bead chrome-agent-platform-6tau8). */
+  ready: Promise<void>;
   /** The in-flight (or finished) transition out of `armed`; null while armed / unprotected. */
   settled: Promise<void> | null;
   /** `killProcessTree` calls running for this proc: they own the cleanup AND its verdict. */
@@ -303,6 +307,13 @@ export interface LifelineDeps {
   sweepTimeoutMs?: number;
   /** Build the pkill pattern (default `lifelineMatchPattern`). */
   matchPattern?: (treeMatch: string | undefined) => string;
+  /**
+   * Confirm the watcher leads its own process group (bead chrome-agent-platform-6tau8). Defaults to a
+   * bounded `processGroup` poll when this module spawned the watcher, and to "confirmed" when `spawn`
+   * is injected - a test that fabricates the watcher owns the process it fabricated (its pid need not
+   * exist), so the default would only burn the bound and warn about a process the test invented.
+   */
+  confirmIsolation?: (watcherPid: number) => Promise<boolean>;
 }
 
 function spawnLifelineWatcher(spec: LifelineSpawnSpec): LifelineWatcher {
@@ -323,7 +334,18 @@ async function attempt(fn: () => unknown): Promise<void> {
 /**
  * Attach a crash-safe lifeline watchdog to `proc`. The watchdog runs in its own
  * session and reads a pipe whose write end is held exclusively by this parent
- * process. If this process dies for ANY reason (including `SIGKILL` or a test
+ * process.
+ *
+ * WHEN THE GUARANTEE IS TRUE (bead chrome-agent-platform-6tau8). The lifeline is
+ * `armed` synchronously, but "the watcher survives a `SIGKILL` of this process's
+ * whole process GROUP" only becomes true once the watcher leads its OWN group,
+ * which the `setsid` inside its wrapper achieves a few milliseconds after spawn.
+ * `lifelineState(proc).ready` is that confirmation (bounded, and it warns once if
+ * the watcher never isolates); `launchChrome` awaits it before reporting a
+ * protected browser, so anything that kills the group after a launch returns is
+ * covered. A caller that attaches directly must await `ready` before claiming the
+ * guarantee: it is not a fact at return time, and it cannot be made one, because
+ * Deno exposes no spawn-time `setsid`. If this process dies for ANY reason (including `SIGKILL` or a test
  * runner killing the parent's process group), the kernel closes the pipe and the
  * watchdog immediately terminates `proc`, its isolated process group, and any
  * helper matching `treeMatch`. `killProcessTree` disarms the watchdog only AFTER
@@ -417,6 +439,7 @@ export function attachProcessLifeline(
   const lifeline: Lifeline = {
     state: "unprotected",
     watcherPid: null,
+    ready: Promise.resolve(),
     settled: null,
     teardowns: 0,
     disarm: async () => {},
@@ -439,6 +462,28 @@ export function attachProcessLifeline(
   }
   lifeline.state = "armed";
   lifeline.watcherPid = watcher.pid;
+
+  // 6tau8: the guarantee must not be a claim we cannot keep yet. The watcher is put into its own
+  // session by `setsid`, which runs INSIDE its wrapper a few milliseconds after `spawn()` returns; a
+  // SIGKILL of the parent's whole process GROUP inside that window takes the watcher down with the
+  // parent and nothing reaps the browser (measured: 7 of 20 immediate group kills orphaned the
+  // target; 20 of 20 once the watcher's own group was visible). So the watcher's group is CONFIRMED
+  // here, bounded, and the confirmation is exposed as `lifelineState(proc).ready` - `launchChrome`
+  // awaits it before it reports a launched, protected browser, and a caller that attaches directly
+  // must await it before claiming the guarantee. It cannot be a synchronous fact: Deno exposes no
+  // spawn-time setsid, so the isolation can only be observed, never asserted at spawn (the residual
+  // window is inside this function until `ready` resolves).
+  const confirm = deps.confirmIsolation ?? (deps.spawn ? async () => true : (pid: number) => leadsOwnGroup(pid));
+  lifeline.ready = confirm(watcher.pid)
+    .catch(() => false)
+    .then((isolated) => {
+      if (isolated) return;
+      warn(
+        `process-tree: lifeline watcher ${watcher.pid} for pid ${proc.pid} does not lead its own process group ` +
+          `after ${WATCHER_ISOLATION_ATTEMPTS * 25} ms; a SIGKILL of this process's process GROUP can take the ` +
+          `watcher with it and orphan the browser (a kill of this process alone is still covered)`,
+      );
+    });
 
   // The single guard: every transition out of `armed` goes through here, and the
   // state flips synchronously, so a second trigger always sees it already spent.
@@ -504,9 +549,16 @@ export function attachProcessLifeline(
  */
 export function lifelineState(
   proc: Deno.ChildProcess,
-): { state: LifelineStateName; watcherPid: number | null; settled: Promise<void> | null } | undefined {
+): {
+  state: LifelineStateName;
+  watcherPid: number | null;
+  settled: Promise<void> | null;
+  /** Resolves when the watcher has been confirmed to lead its own process group (6tau8). */
+  ready: Promise<void>;
+} | undefined {
   const lifeline = lifelines.get(proc);
-  return lifeline && { state: lifeline.state, watcherPid: lifeline.watcherPid, settled: lifeline.settled };
+  return lifeline &&
+    { state: lifeline.state, watcherPid: lifeline.watcherPid, settled: lifeline.settled, ready: lifeline.ready };
 }
 
 /** The launcher waits for setsid to exec before recording the isolated group.
@@ -516,15 +568,44 @@ export async function isolatedProcessGroup(
   deps: ProcessTableDeps = {},
 ): Promise<number | undefined> {
   for (let i = 0; i < 20; i++) {
-    const stat = processGroup(proc.pid, deps);
-    if (stat?.group === proc.pid) {
-      leaderStartTicks.set(proc, stat.startTicks);
+    const seen = groupObservation(proc.pid, deps);
+    if (seen === "isolated") {
+      leaderStartTicks.set(proc, processGroup(proc.pid, deps)!.startTicks);
       return proc.pid;
     }
-    if (!stat || stat.state === "Z") return undefined; // exited before observation
+    if (seen === "gone") return undefined; // exited before observation
     await sleep(25);
   }
   throw new Error(`Chrome pid ${proc.pid} did not enter its own process group; refusing group kill`);
+}
+
+/** Whether `pid` leads its own process group yet, is gone, or is still in its spawner's group. */
+function groupObservation(pid: number, deps: ProcessTableDeps = {}): "isolated" | "gone" | "not-yet" {
+  const stat = processGroup(pid, deps);
+  if (stat?.group === pid) return "isolated";
+  if (!stat || stat.state === "Z") return "gone";
+  return "not-yet";
+}
+
+/** How long `attachProcessLifeline` waits for its watcher to lead its own group: 40 x 25 ms. */
+const WATCHER_ISOLATION_ATTEMPTS = 40;
+
+/**
+ * Wait, bounded, for `pid` to LEAD its own process group - i.e. for the `setsid` inside the watcher's
+ * wrapper to have run. Returns false when the process is gone or still shares our group at the bound.
+ */
+async function leadsOwnGroup(
+  pid: number,
+  deps: ProcessTableDeps = {},
+  attempts = WATCHER_ISOLATION_ATTEMPTS,
+): Promise<boolean> {
+  for (let i = 0; i < attempts; i++) {
+    const seen = groupObservation(pid, deps);
+    if (seen === "isolated") return true;
+    if (seen === "gone") return false; // gone before it could be observed isolated
+    await sleep(25);
+  }
+  return false;
 }
 
 /**
