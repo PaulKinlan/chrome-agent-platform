@@ -110,7 +110,7 @@ Deno.test("omsz9 build: the always-on core is dist-free, so a subset gate can om
 });
 
 Deno.test("omsz9 build: verified tree-skipping guards in ALWAYS_ON are not false-positive dist consumers", () => {
-  assertEquals(ALWAYS_ON_TREE_SKIPPING_GUARDS.size, 15, "exactly 15 verified tree-skipping guards");
+  assertEquals(ALWAYS_ON_TREE_SKIPPING_GUARDS.size, 16, "exactly 16 verified tree-skipping guards (uvo3 added the wasm-package-authority static split)");
   for (const file of ALWAYS_ON_TREE_SKIPPING_GUARDS) {
     assert(ALWAYS_ON.includes(file), `${file} must be an ALWAYS_ON member`);
     const text = readReal(file);

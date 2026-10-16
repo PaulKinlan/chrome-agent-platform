@@ -492,9 +492,14 @@ Deno.test("2irv: REAL-TREE falsification exposes unguarded repo walks in root an
   const withoutHarnessConsumers = new Set(original);
   withoutHarnessConsumers.delete("tests/harness-registry.test.ts");
   withoutHarnessConsumers.delete("tests/quiet-window-static.test.ts");
+  // chrome-agent-platform-uvo3: the harness-registry read has a THIRD always-on consumer now — the
+  // registry <-> fleetSlot census split out of tests/heavy-gate-slot.test.ts — so the walk is still
+  // covered with only two removed, which is the mechanism working. The falsification needs all of them
+  // gone, and the assertion below stays exact rather than being loosened.
+  withoutHarnessConsumers.delete("tests/heavy-gate-slot-static.test.ts");
   assert(
     uncoveredExternalRepoWalks(reverse, withoutHarnessConsumers).includes("scripts/lib/harness-registry.ts"),
-    "a shared-helper repo walk must RED when its two executing tests are no longer always-on",
+    "a shared-helper repo walk must RED when every always-on test that executes it is no longer always-on",
   );
 });
 

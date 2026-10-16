@@ -54,6 +54,10 @@ export const ALWAYS_ON_TREE_SKIPPING_GUARDS = Object.freeze(new Set([
   "tests/substring-pin-honesty.test.ts",
   "tests/test-partition-guard.test.ts",
   "tests/unbundled-page-census.test.ts",
+  // chrome-agent-platform-uvo3: walks extension/ collecting the shipped .wasm set and skips the
+  // generated dirs by name while doing it; it neither imports nor reads extension/dist, so the
+  // tightened check below is the right classification for it.
+  "tests/wasm-package-authority-static.test.ts",
 ]));
 
 // Deliberately broad for unknown test files: `dist`, `dist-versions`, `dist.complete`, `extension/dist/...`.
@@ -61,7 +65,8 @@ export const ALWAYS_ON_TREE_SKIPPING_GUARDS = Object.freeze(new Set([
 // against a dist the gate cannot certify, which is the failure this module exists to prevent.
 const DIST_REFERENCE_RE = /\bdist(?:-versions)?\b|\bdist\.complete\b/;
 
-// Tightened check scoped to the 15 verified ALWAYS_ON tree-skipping guards (chrome-agent-platform-omsz9).
+// Tightened check scoped to the 16 verified ALWAYS_ON tree-skipping guards (chrome-agent-platform-omsz9,
+// extended by chrome-agent-platform-uvo3).
 // These guards walk source trees and filter out dist/ or cite dist in comments/AST rules.
 // They are ONLY treated as dist consumers if they actually load or read from the built extension/dist tree.
 const TIGHTENED_DIST_CONSUMER_RE =
@@ -80,7 +85,7 @@ const MODULE_DIST_IMPORT_RE =
 /**
  * True when a test file's source references the built dist tree.
  * For general files, uses the broad fail-closed DIST_REFERENCE_RE.
- * For the 15 verified ALWAYS_ON tree-skipping guards, strips backtick test fixtures and comments
+ * For the 16 verified ALWAYS_ON tree-skipping guards, strips backtick test fixtures and comments
  * before evaluating with TIGHTENED_DIST_CONSUMER_RE to distinguish tree skipping from real loads.
  * @param {string} text
  * @param {string | null} [rel] repo-relative path of the test file
