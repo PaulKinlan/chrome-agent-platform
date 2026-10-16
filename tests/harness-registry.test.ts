@@ -52,6 +52,19 @@ Deno.test("gate and named harnesses are real npm scripts pointing at their file"
   assertEquals(bad, [], `registry npm scripts that do not run their file:\n${bad.join("\n")}`);
 });
 
+Deno.test("tvfsx: injection's registry custody claim matches its direct npm route", () => {
+  const entry = HARNESSES["security-injection.ts"];
+  const command = scripts[entry.npm ?? ""] ?? "";
+  const supervisor = Deno.readTextFileSync(`${ROOT}scripts/security-suite-supervisor.sh`);
+  // Pin the independently observable route, not just the registry's own prose.
+  assertEquals(command, "deno run -A scripts/security-injection.ts");
+  assert(!supervisor.includes("scripts/security-injection.ts"), "custody wrapper must not already run injection");
+  assert(/runs directly.*without canonical fd 9 custody/i.test(entry.reason ?? ""),
+    `the registry must state that the directly invoked harness lacks custody: ${entry.reason}`);
+  assert(!/runs inside the supervisor/i.test(entry.reason ?? ""),
+    "a direct npm route cannot claim the supervisor's canonical section");
+});
+
 Deno.test("every gate is part of test:all, and test:all runs nothing unregistered", () => {
   const all = scripts["test:all"] ?? "";
   const steps = all.split("&&").map((s) => s.trim()).filter(Boolean);

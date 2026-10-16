@@ -143,7 +143,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
     ownerClass: "standing",
   },
   "security-suite.ts": { class: "gate", npm: "test:security", via: "scripts/security-suite-supervisor.sh", reason: "does NOT take the fleet turn: its supervisor (scripts/security-suite-supervisor.sh) already holds the CANONICAL locked section on fd 9 for the whole run, and the fleet-wide order is turn-then-canonical — taking the turn inside would invert it and can deadlock against another gate. launchChrome now REFUSES that combination (chrome-agent-platform-ryrr)" },
-  "security-injection.ts": { class: "gate", npm: "test:security:injection", reason: "does NOT take the fleet turn: same custody reasoning as security-suite.ts — it runs inside the supervisor\u0027s canonical section (fd 9), so the turn would invert the order (chrome-agent-platform-ryrr)" },
+  "security-injection.ts": { class: "gate", npm: "test:security:injection", reason: "runs directly from its npm script, without canonical fd 9 custody or a declared load-sensitive fleet turn; unlike security-suite.ts, this harness is not supervised (chrome-agent-platform-tvfsx)" },
   "component-gallery-smoke.ts": { class: "gate", npm: "test:components", reason: "does NOT take the fleet turn yet: same as a11y-audit — the components gate is not declared load-sensitive, and the turn is paired with that declaration on purpose (chrome-agent-platform-ryrr)" },
   "a11y-audit.ts": { class: "gate", npm: "test:a11y", reason: "does NOT take the fleet turn yet: a measurable, geometry-and-contrast gate whose load-sensitivity has no recorded run history, so making it wait for a quiet box would be a declaration without evidence (chrome-agent-platform-ryrr)" },
   "kat-runner.ts": { class: "gate", npm: "test:kat" },
