@@ -359,24 +359,29 @@ export async function main(args = process.argv.slice(2)) {
   // deliberately emits nothing, so a probe run can never look like a gate record.
   if (cliFiles.length === 0) {
     const skippedFiles = parallel.filter((f) => !plan.files.includes(f));
-    emitGateLedger({
-      manifest: fullTierManifestFields({
-        serialFiles,
-        parallelFiles: plan.files,
-        skippedFiles,
-        // One reason per file from the tier that owns it (review P1-B): build-behaviour files run in
-        // the SAME FULL command (its npm run test:build stage), heavy files are NOT part of that
-        // command at all. The per-file tables already carry the measured reason.
-        deferred: deferredTierEntries({
-          buildGateFiles: BUILD_GATE_FILES,
-          buildGateReasons: BUILD_GATE_REASONS,
-          heavyGateFiles: HEAVY_GATE_FILES,
-          heavyGateReasons: HEAVY_GATE_REASONS,
-        }),
-        rc,
-        build: parseGateBuild(process.env.CAP_GATE_BUILD_JSON),
+    // A FAST selector that failed closed passes its changed-file candidates to
+    // this FULL runner. Report placement from suites that actually executed,
+    // including a named reason when a heavy/build-tier suite was deferred.
+    const fileMappingContext = process.env.CAP_GATE_FILE_MAPPING_JSON
+      ? JSON.parse(process.env.CAP_GATE_FILE_MAPPING_JSON) : null;
+    const manifest = fullTierManifestFields({
+      serialFiles,
+      parallelFiles: plan.files,
+      skippedFiles,
+      // One reason per file from the tier that owns it (review P1-B): build-behaviour files run in
+      // the SAME FULL command (its npm run test:build stage), heavy files are NOT part of that
+      // command at all. The per-file tables already carry the measured reason.
+      deferred: deferredTierEntries({
+        buildGateFiles: BUILD_GATE_FILES,
+        buildGateReasons: BUILD_GATE_REASONS,
+        heavyGateFiles: HEAVY_GATE_FILES,
+        heavyGateReasons: HEAVY_GATE_REASONS,
       }),
+      rc,
+      build: parseGateBuild(process.env.CAP_GATE_BUILD_JSON),
+      fileMappingContext,
     });
+    emitGateLedger({ manifest, fileMapping: manifest?.fileMapping ?? [] });
   }
   process.exit(rc);
 }

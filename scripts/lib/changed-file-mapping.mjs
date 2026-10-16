@@ -206,7 +206,9 @@ export const SELECTOR_INFRASTRUCTURE = Object.freeze([
   // a green record MEANS, so a change to either must fail closed to the full suite rather than be
   // validated by a subset they themselves chose.
   "scripts/build-if-needed.mjs", // decides whether the FAST gate builds at all
+  "scripts/gate-full.mjs", // verifies the exact-tip build before both FULL gate tiers
   "scripts/lib/gate-manifest.mjs", // the coverage ledger every gate record carries
+  "tests/coverage-contract.json", // fleet's independent placement policy cannot subset-certify itself
 ]);
 
 export function isSelectorInfrastructure(rel) {

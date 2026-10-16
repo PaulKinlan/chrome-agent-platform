@@ -371,6 +371,8 @@ Deno.test("nco2/R1b: the selector's OWN machinery can never be subset-mapped", (
   }
   assert(SELECTOR_INFRASTRUCTURE.includes("scripts/run-tests.mjs"));
   assert(SELECTOR_INFRASTRUCTURE.includes("scripts/select-tests.mjs"));
+  assert(SELECTOR_INFRASTRUCTURE.includes("scripts/gate-full.mjs"));
+  assert(SELECTOR_INFRASTRUCTURE.includes("tests/coverage-contract.json"));
 
   const src = Deno.readTextFileSync(`${ROOT}scripts/select-tests.mjs`);
   assert(

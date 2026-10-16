@@ -47,7 +47,7 @@ import { tokenizer } from "acorn";
 import { partition } from "./test-partition.mjs";
 import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
 import { isSelectorInfrastructure, mapUncovered, versionOnlyJsonChange } from "./lib/changed-file-mapping.mjs";
-import { emitGateLedger } from "./lib/gate-manifest.mjs";
+import { emitGateLedger, explainChangedFileMapping } from "./lib/gate-manifest.mjs";
 import { decideBuild, ensureStoreBuild, findDistConsumers } from "./build-if-needed.mjs";
 import { checkBrowserPrerequisite } from "./lib/browser-prerequisite.mjs";
 
@@ -509,8 +509,10 @@ function reachableTestFrom(startAbs, reverse, isTest) {
   return false;
 }
 
-export function selectTestFiles(changed, reverse, mapped = []) {
-  const selected = new Set(ALWAYS_ON.filter((c) => existsSync(join(ROOT, c))));
+// Only tests justified by this changed set — never count unrelated ALWAYS_ON
+// suites as evidence that a particular file was exercised.
+export function testCandidatesForChanged(changed, reverse, mapped = []) {
+  const selected = new Set();
   for (const m of mapped) {
     for (const t of m.tests) if (existsSync(join(ROOT, t))) selected.add(t);
   }
@@ -543,6 +545,13 @@ export function selectTestFiles(changed, reverse, mapped = []) {
     }
   }
   return [...selected].sort();
+}
+
+export function selectTestFiles(changed, reverse, mapped = []) {
+  return [...new Set([
+    ...ALWAYS_ON.filter((c) => existsSync(join(ROOT, c))),
+    ...testCandidatesForChanged(changed, reverse, mapped),
+  ])].sort();
 }
 
 // Changed code/config files with NO reachable test. A subset cannot prove
@@ -710,7 +719,7 @@ export async function runPartitioned(files) {
  * The manifest names the suites that EXECUTED, never a claim that they covered anything: the fleet
  * consumer's own oracle decides which changed files were placed (chrome-agent-platform-0eq00).
  */
-async function runDeno(files, { build = null, omittedReason = null } = {}) {
+async function runDeno(files, { build = null, omittedReason = null, fileMappingContext = null } = {}) {
   if (!files.length) {
     console.error("select-tests: no test files selected — nothing to run.");
     // A gate that executed nothing must not read as green coverage.
@@ -729,6 +738,9 @@ async function runDeno(files, { build = null, omittedReason = null } = {}) {
         ` — ${omittedReason}`,
     );
   }
+  const fileMapping = fileMappingContext ? explainChangedFileMapping({
+    ...fileMappingContext, executedSuites: rc === 0 ? files : [], omitted: inventory.omitted,
+  }) : [];
   emitGateLedger({
     manifest: {
       tier: "fast",
@@ -739,8 +751,10 @@ async function runDeno(files, { build = null, omittedReason = null } = {}) {
       omitted: inventory.omitted,
       omittedTotal: inventory.omittedTotal,
       omittedTruncated: inventory.omittedTruncated,
+      fileMapping,
       build,
     },
+    fileMapping,
   });
   return rc;
 }
@@ -750,9 +764,13 @@ async function runDeno(files, { build = null, omittedReason = null } = {}) {
  * `npm test` actually ran); the build disposition rides across in CAP_GATE_BUILD_JSON so a
  * fail-closed FAST run still records why a build was paid for.
  */
-function runFullSuite({ build = null } = {}) {
+function runFullSuite({ build = null, fileMappingContext = null } = {}) {
   // The full suite is the two-phase runner (npm test), never a bare sweep.
-  const env = build ? { ...process.env, CAP_GATE_BUILD_JSON: JSON.stringify(build) } : process.env;
+  const env = {
+    ...process.env,
+    ...(build ? { CAP_GATE_BUILD_JSON: JSON.stringify(build) } : {}),
+    ...(fileMappingContext ? { CAP_GATE_FILE_MAPPING_JSON: JSON.stringify(fileMappingContext) } : {}),
+  };
   const r = spawnSync(process.execPath, [join(ROOT, "scripts/run-tests.mjs")], { stdio: "inherit", cwd: ROOT, env });
   return r.status ?? 1;
 }
@@ -807,6 +825,7 @@ export function planSelection({ base = "origin/main" } = {}) {
       kind: "full",
       files: null,
       changed,
+      reverse,
       uncovered,
       mapped: [],
       unmappable,
@@ -826,6 +845,7 @@ export function planSelection({ base = "origin/main" } = {}) {
       kind: "full",
       files: null,
       changed,
+      reverse,
       uncovered,
       mapped,
       unmappable,
@@ -840,6 +860,7 @@ export function planSelection({ base = "origin/main" } = {}) {
     kind: "subset",
     files: selectTestFiles(changed, reverse, mapped),
     changed,
+    reverse,
     uncovered,
     mapped,
     unmappable: [],
@@ -847,6 +868,14 @@ export function planSelection({ base = "origin/main" } = {}) {
     omittedReason: OMITTED_UNSELECTED_REASON,
     reason: "",
   };
+}
+
+function fileMappingContextForPlan(plan) {
+  const candidates = Object.fromEntries(plan.changed.map((file) => [
+    file,
+    testCandidatesForChanged([file], plan.reverse, plan.mapped.filter((entry) => entry.file === file)),
+  ]));
+  return { changed: plan.changed, candidates, unmappable: plan.unmappable };
 }
 
 async function main() {
@@ -929,7 +958,7 @@ async function main() {
     // Fail-closed runs the full suite, which needs a certified dist for the same reason a subset
     // does (its serial phase reads the built bundles).
     const build = await prepareBuild(decideBuild({ kind: "full", changed: plan.changed }), buildIfNeeded);
-    const rc = runFullSuite({ build });
+    const rc = runFullSuite({ build, fileMappingContext: fileMappingContextForPlan(plan) });
     if (rc === 0) {
       console.error("select-tests: parallel phase GREEN (full suite fail-closed)");
     } else if (rc === 75) {
@@ -963,7 +992,9 @@ async function main() {
     distConsumers: findDistConsumers(plan.files),
   });
   const build = await prepareBuild(decision, buildIfNeeded);
-  process.exit(await runDeno(plan.files, { build, omittedReason: plan.omittedReason }));
+  process.exit(await runDeno(plan.files, {
+    build, omittedReason: plan.omittedReason, fileMappingContext: fileMappingContextForPlan(plan),
+  }));
 }
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) main();
