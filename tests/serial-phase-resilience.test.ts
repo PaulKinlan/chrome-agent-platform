@@ -209,44 +209,22 @@ Deno.test("hangs indefinitely", async () => {
 
 // ── yepno: contention-proofness, and a failure that names its own cause ──────
 //
-// Another CAP lane holding the canonical serialized-Chrome lock is the NORMAL state of this fleet,
-// so this case runs the child WHILE a foreign holder owns that exact path: the child isolates itself
-// on its own per-run `CAP_CHROME_LOCK_PATH` (set before chrome-launch is imported), so a foreign
-// holder must not be able to red it. That is the property, tested at no extra child-run cost.
+// NO HOLD OF A REAL LOCK HAPPENS HERE, deliberately: tests/chrome-lock-fixture-scope.test.ts (bead
+// 1qr3) forbids a unit test from holding, spawning flock on, or pointing CAP_CHROME_LOCK_PATH at the
+// machine's real Chrome coordination files, because that gate belongs to real browsers. An earlier
+// version of this change held the real canonical path to prove the child immune to a foreign holder;
+// the guard fired and it was RIGHT, so the hold is gone rather than the rule bent. The foreign-holder
+// property lives in the CHILD, on the shape the guard prescribes - a Deno.makeTempFile path with
+// CAP_CHROME_LOCK_PATH pointed at it: tests/chrome-launch-lock.test.ts already holds its own temp lock
+// and pins both the queue and the NAMED refusal ("could not take the serialized-Chrome lock"). The
+// child also chooses its lock path before chrome-launch is imported, which is why the parent cannot
+// substitute one for it.
 //
 // The second, independent defect this fixes is ATTRIBUTION. The merger's 0.3.716 union red here as
 // `values are not equal: chrome-launch-lock must pass cleanly` / `1 !== 0` with the child's output
 // discarded - not one line of it reached the gate log, so nobody could say WHY it exited 1 and the
 // /tmp mtime of a foreign lock was read as the cause. A non-zero exit now carries the child's own
 // output, and lock contention is NAMED rather than left to look like a delta's fault.
-const CANONICAL_LOCK = "/tmp/cap-serialized-chrome-acceptance.lock";
-
-/** Hold `path` exclusively from OUTSIDE this process and CONFIRM the hold before returning:
- *  a bare sleep-based race is load-dependent, and `flock -n` failing is an observed fact. */
-/** The hold must OUTLIVE the child run by a wide margin or the property quietly stops being tested:
- *  measured, a 30 s hold expired mid-run under load (child wall 32 s) and the case still passed, so
- *  the holder is released explicitly in the caller's `finally` instead of on a timer. */
-async function holdConfirmed(path: string, seconds = 300): Promise<Deno.ChildProcess> {
-  const holder = new Deno.Command("flock", {
-    args: ["-o", "-w", "20", path, "sleep", String(seconds)],
-    stdout: "null",
-    stderr: "null",
-  }).spawn();
-  const deadline = Date.now() + 20000;
-  for (;;) {
-    const probe = new Deno.Command("flock", { args: ["-n", path, "true"], stdout: "null", stderr: "null" }).spawn();
-    if ((await probe.status).code === 1) return holder;
-    if (Date.now() > deadline) break;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  await releaseHolder(holder);
-  throw new Error(`could not confirm an exclusive hold on ${path}`);
-}
-
-async function releaseHolder(holder: Deno.ChildProcess): Promise<void> {
-  try { holder.kill("SIGKILL"); } catch { /* already gone */ }
-  try { await holder.status; } catch { /* reaped */ }
-}
 
 /** Why the child exited the way it did, from the child's own output. */
 const LOCK_CONTENTION_RE = /could not take the serialized-Chrome lock|is held by another lane's browser/;
@@ -264,7 +242,7 @@ function childDiagnosis(res: { code: number; timedOut?: boolean; stdout?: Uint8A
   return `exit ${res.code}${res.timedOut ? " (timedOut)" : ""}` +
     (contended
       ? ` — NAMED CONTENTION on the serialized-Chrome lock. Quoted from the child: ${contended}. ` +
-        `A foreign holder of ${CANONICAL_LOCK} is normal fleet state, so classify this rather than blaming the delta`
+        "A foreign holder of that lock path is normal fleet state, so classify this rather than blaming the delta"
       : "") +
     ` — child output: ${excerpt || "<the child produced no output at all>"}`;
 }
@@ -277,24 +255,11 @@ Deno.test("6yrq: lock tests clean up temporary lock files and leave /tmp clean",
   // path(s) as CAP_LOCK_FIXTURE:<path> lines; we assert exactly those are gone.
   // A killed child still attributes correctly: the marker is printed at start,
   // and the residue is then genuinely ours.
-  const existedBefore = await Deno.lstat(CANONICAL_LOCK).then(() => true, () => false);
-  const holder = await holdConfirmed(CANONICAL_LOCK);
-  let res;
-  try {
-    res = runSerialFile("tests/chrome-launch-lock.test.ts", {
-      stdio: "pipe",
-      cwd: ROOT,
-    });
-  } finally {
-    await releaseHolder(holder);
-    // Only a file THIS case created may be removed: another lane's lock file is not ours to delete.
-    if (!existedBefore) await Deno.remove(CANONICAL_LOCK).catch(() => {});
-  }
-  assertEquals(
-    res.code,
-    0,
-    `chrome-launch-lock must pass cleanly while a foreign canonical-lock holder exists: ${childDiagnosis(res)}`,
-  );
+  const res = runSerialFile("tests/chrome-launch-lock.test.ts", {
+    stdio: "pipe",
+    cwd: ROOT,
+  });
+  assertEquals(res.code, 0, `chrome-launch-lock must pass cleanly: ${childDiagnosis(res)}`);
 
   const out = new TextDecoder().decode(res.stdout ?? new Uint8Array());
   const fixtures = [...out.matchAll(/^CAP_LOCK_FIXTURE:(\S+)$/gm)].map((m) => m[1]);
