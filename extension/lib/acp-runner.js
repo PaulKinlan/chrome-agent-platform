@@ -388,7 +388,14 @@ export function acpHealthUrl(endpoint) {
 export async function probeAcpBridgeHealth(endpoint = DEFAULT_ACP_ENDPOINT, harnessId = "") {
   const base = acpHealthUrl(endpoint);
   if (!base) return null;
-  const url = harnessId ? `${base}?harness=${encodeURIComponent(harnessId)}` : base;
+  const token = (() => {
+    try { return new URL(String(endpoint ?? "")).searchParams.get("token"); } catch { return ""; }
+  })();
+  const params = new URLSearchParams();
+  if (token) params.set("token", token);
+  if (harnessId) params.set("harness", harnessId);
+  const qs = params.toString();
+  const url = qs ? `${base}?${qs}` : base;
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
     if (res.ok) return await res.json();

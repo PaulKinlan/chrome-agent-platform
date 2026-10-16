@@ -243,12 +243,13 @@ export function acpConnectionRefusal(
   // tokenless LOCAL access on purpose.
   if (allowAnonymousLoopback) return null;
   const encoder = new TextEncoder();
-  const presentedParam = url.searchParams.get("token");
+  const bearerToken = req.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  const presentedParam = url.searchParams.get("token") || bearerToken;
   const presented = encoder.encode(presentedParam ?? "");
   const expected = encoder.encode(tokenOverride);
   const accepted = presented.byteLength === expected.byteLength && timingSafeEqual(presented, expected);
   if (!accepted) {
-    return (presentedParam === null || presentedParam === "")
+    return (presentedParam === null || presentedParam === "" || presentedParam === undefined)
       ? { reason: "token-missing", detail: "authentication required: the bridge needs its shared token (paste it into the acp.token setting)" }
       : { reason: "token-invalid", detail: "authentication failed: the token does not match the bridge's shared token" };
   }
@@ -989,13 +990,29 @@ export function createAcpServer(
     }
 
     if (url.pathname === "/health") {
+      const clientOrigin = req.headers.get("origin");
+      if (!originAllowed(clientOrigin)) {
+        return new Response("ACP Bridge: web origins are not allowed to access health endpoint", {
+          status: 403,
+          headers: { "Content-Type": "text/plain" },
+        });
+      }
+
+      // c76l7: check authentication to avoid leaking process details (cwd, cli paths) pre-auth
+      const refusal = acpConnectionRefusal(req, url, tokenOverride, allowAnonymousLoopback);
+      const authenticated = refusal === null;
+
       const rawProbeHarness = url.searchParams.get("harness")?.trim() || HARNESS;
       const probeHarness = sanitizeLogString(rawProbeHarness).slice(0, 128) || HARNESS;
       let defaultCwdValue = hostCwdDefault;
       let adapterDescribe = "";
       let adapterPresent: boolean | null = false;
       let error = "";
-      try { defaultCwdValue = defaultCwd(); } catch { defaultCwdValue = ""; }
+      if (authenticated) {
+        try { defaultCwdValue = hostCwdDefault || defaultCwd(); } catch { defaultCwdValue = hostCwdDefault || ""; }
+      } else {
+        defaultCwdValue = "";
+      }
       try {
         const resolved = resolveAdapter(rawProbeHarness, adapterPathOverride);
         adapterDescribe = resolved.describe;
@@ -1007,22 +1024,35 @@ export function createAcpServer(
       } catch (e) {
         error = sanitizeLogString(String((e as Error)?.message ?? e));
       }
+      let safeError = "";
+      if (error) {
+        if (authenticated) {
+          safeError = error;
+        } else if (error.includes("unknown harness")) {
+          safeError = error;
+        } else {
+          safeError = "adapter resolution failed";
+        }
+      }
       // `ok` is the BRIDGE being up. A readiness probe would need a turn, so
       // this endpoint never pretends to know more than it does.
       return new Response(
         JSON.stringify({
           ok: true,
+          authenticated,
           harness: HARNESS,
           probeHarness,
           supportsHarnessSelection: !adapterPathOverride,
           pinnedAdapter: Boolean(adapterPathOverride),
-          adapter: adapterDescribe || "(unresolved)",
-          adapterPresent,
-          defaultCwd: defaultCwdValue,
+          adapter: authenticated ? (adapterDescribe || "(unresolved)") : "(unauthenticated)",
+          adapterPresent: authenticated ? adapterPresent : null,
+          defaultCwd: authenticated ? defaultCwdValue : null,
           knownHarnesses: Object.keys(HARNESS_ADAPTERS),
           harnessCli: Object.hasOwn(HARNESS_CLI, rawProbeHarness) ? HARNESS_CLI[rawProbeHarness].cli : null,
-          harnessCliPath: Object.hasOwn(HARNESS_CLI, rawProbeHarness) ? (resolveCliOnPath(HARNESS_CLI[rawProbeHarness].cli, Deno.env.get("PATH") ?? "") || null) : null,
-          ...(error ? { error } : {}),
+          harnessCliPath: authenticated && Object.hasOwn(HARNESS_CLI, rawProbeHarness)
+            ? (resolveCliOnPath(HARNESS_CLI[rawProbeHarness].cli, Deno.env.get("PATH") ?? "") || null)
+            : null,
+          ...(safeError ? { error: safeError } : {}),
         }),
         { headers: { "Content-Type": "application/json" } },
       );

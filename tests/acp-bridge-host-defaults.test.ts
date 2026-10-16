@@ -199,8 +199,8 @@ Deno.test("createAcpServer: /health supports ?harness= query and returns support
     assertEquals(jsonDefault.supportsHarnessSelection, true);
     assertEquals(jsonDefault.knownHarnesses, ["pi", "claude-code", "codex"]);
 
-    // Explicit claude-code probe
-    const resClaude = await fetch(`http://127.0.0.1:${port}/health?harness=claude-code`);
+    // Explicit claude-code probe (authenticated to view adapter describe)
+    const resClaude = await fetch(`http://127.0.0.1:${port}/health?token=${TEST_BRIDGE_TOKEN}&harness=claude-code`);
     assertEquals(resClaude.ok, true);
     const jsonClaude = await resClaude.json();
     assertEquals(jsonClaude.harness, "pi", "default server harness remains pi");
@@ -266,6 +266,137 @@ process.exit(0);
     assertEquals(loggedEnv.PI_ACP_HARNESS, "claude-code");
   } finally {
     await server.shutdown();
+  }
+});
+
+Deno.test("c76l7: /health rejects untrusted web origins with HTTP 403 and allows extension origins", async () => {
+  const server = createAcpServer(0, undefined, {}, undefined, TEST_BRIDGE_TOKEN);
+  const port = (server as any).addr.port;
+  try {
+    // 1. Untrusted web origins must be rejected
+    const badOrigins = [
+      "http://evil.com",
+      "https://attacker.example.org",
+      "http://localhost:8080",
+    ];
+    for (const origin of badOrigins) {
+      const res = await fetch(`http://127.0.0.1:${port}/health`, {
+        headers: { "Origin": origin },
+      });
+      assertEquals(res.status, 403, `web origin ${origin} must be refused with 403`);
+      const body = await res.text();
+      assert(body.includes("web origins are not allowed"), `response body must state origin refusal for ${origin}`);
+    }
+
+    // 2. Allowed extension origins must succeed
+    const extOrigins = [
+      "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+      "moz-extension://12345678-1234-1234-1234-1234567890ab",
+    ];
+    for (const origin of extOrigins) {
+      const res = await fetch(`http://127.0.0.1:${port}/health`, {
+        headers: { "Origin": origin },
+      });
+      assertEquals(res.status, 200, `extension origin ${origin} must be allowed`);
+      const json = await res.json();
+      assertEquals(json.ok, true);
+    }
+  } finally {
+    await server.shutdown();
+  }
+});
+
+Deno.test("c76l7 / 7uwob: /health strips adapter, defaultCwd, and harnessCliPath when unauthenticated and discloses only when authenticated", async () => {
+  const testCwd = "/custom/declared/cwd";
+  const server = createAcpServer(0, undefined, {}, testCwd, TEST_BRIDGE_TOKEN);
+  const port = (server as any).addr.port;
+  try {
+    // 1. Unauthenticated request (no token): defaultCwd, harnessCliPath, adapter, adapterPresent stripped/protected
+    const unauthRes = await fetch(`http://127.0.0.1:${port}/health?harness=pi`);
+    assertEquals(unauthRes.status, 200);
+    const unauthText = await unauthRes.text();
+    const unauthJson = JSON.parse(unauthText);
+    assertEquals(unauthJson.ok, true);
+    assertEquals(unauthJson.authenticated, false);
+    assertEquals(unauthJson.defaultCwd, null, "unauthenticated /health must not disclose defaultCwd");
+    assertEquals(unauthJson.harnessCliPath, null, "unauthenticated /health must not disclose harnessCliPath");
+    assertEquals(unauthJson.adapter, "(unauthenticated)", "unauthenticated /health must not disclose adapter path or details");
+    assertEquals(unauthJson.adapterPresent, null);
+    // Ensure no filesystem paths appear in unauthenticated response body
+    assert(!unauthText.includes("/home/"), `unauth response must not contain /home/ paths: ${unauthText}`);
+    assert(!unauthText.includes("/Users/"), `unauth response must not contain /Users/ paths: ${unauthText}`);
+    assert(!unauthText.includes("/bin/"), `unauth response must not contain /bin/ paths: ${unauthText}`);
+    assert(!unauthText.includes(testCwd), `unauth response must not contain declared cwd: ${unauthText}`);
+
+    // 2. Wrong token: still treated as unauthenticated
+    const badTokenRes = await fetch(`http://127.0.0.1:${port}/health?harness=pi&token=wrong-token`);
+    assertEquals(badTokenRes.status, 200);
+    const badTokenJson = await badTokenRes.json();
+    assertEquals(badTokenJson.ok, true);
+    assertEquals(badTokenJson.authenticated, false);
+    assertEquals(badTokenJson.defaultCwd, null);
+    assertEquals(badTokenJson.harnessCliPath, null);
+    assertEquals(badTokenJson.adapter, "(unauthenticated)");
+    assertEquals(badTokenJson.adapterPresent, null);
+
+    // 3. Authenticated request via query param: reveals adapter, defaultCwd, and harnessCliPath
+    const authQueryRes = await fetch(`http://127.0.0.1:${port}/health?harness=pi&token=${TEST_BRIDGE_TOKEN}`);
+    assertEquals(authQueryRes.status, 200);
+    const authQueryJson = await authQueryRes.json();
+    assertEquals(authQueryJson.ok, true);
+    assertEquals(authQueryJson.authenticated, true);
+    assertEquals(authQueryJson.defaultCwd, testCwd, "authenticated /health reveals defaultCwd");
+    assert(authQueryJson.adapter.includes("pi-acp"), "authenticated /health reveals adapter descriptor");
+
+    // 4. Authenticated request via Authorization header: reveals adapter, defaultCwd, and harnessCliPath
+    const authHeaderRes = await fetch(`http://127.0.0.1:${port}/health?harness=pi`, {
+      headers: { "Authorization": `Bearer ${TEST_BRIDGE_TOKEN}` },
+    });
+    assertEquals(authHeaderRes.status, 200);
+    const authHeaderJson = await authHeaderRes.json();
+    assertEquals(authHeaderJson.ok, true);
+    assertEquals(authHeaderJson.authenticated, true);
+    assertEquals(authHeaderJson.defaultCwd, testCwd, "authenticated /health with Bearer token reveals defaultCwd");
+    assert(authHeaderJson.adapter.includes("pi-acp"));
+  } finally {
+    await server.shutdown();
+  }
+
+  // 5. Pinned --adapter override: unauthenticated fetch does not disclose host path
+  const pinnedPath = "/Users/paulkinlan/private/custom-acp/index.js";
+  const pinnedServer = createAcpServer(0, pinnedPath, {}, testCwd, TEST_BRIDGE_TOKEN);
+  const pinnedPort = (pinnedServer as any).addr.port;
+  try {
+    const unauthPinnedRes = await fetch(`http://127.0.0.1:${pinnedPort}/health`);
+    assertEquals(unauthPinnedRes.status, 200);
+    const unauthPinnedText = await unauthPinnedRes.text();
+    const unauthPinnedJson = JSON.parse(unauthPinnedText);
+    assertEquals(unauthPinnedJson.authenticated, false);
+    assertEquals(unauthPinnedJson.adapter, "(unauthenticated)");
+    assert(!unauthPinnedText.includes(pinnedPath), "unauthenticated /health must not leak pinned adapter path");
+
+    const authPinnedRes = await fetch(`http://127.0.0.1:${pinnedPort}/health?token=${TEST_BRIDGE_TOKEN}`);
+    assertEquals(authPinnedRes.status, 200);
+    const authPinnedJson = await authPinnedRes.json();
+    assertEquals(authPinnedJson.authenticated, true);
+    assertEquals(authPinnedJson.adapter, pinnedPath, "authenticated /health reveals pinned adapter path");
+  } finally {
+    await pinnedServer.shutdown();
+  }
+
+  // 6. Anonymous loopback mode: all requests are authenticated by design
+  const anonServer = createAcpServer(0, undefined, {}, testCwd, "", true);
+  const anonPort = (anonServer as any).addr.port;
+  try {
+    const anonRes = await fetch(`http://127.0.0.1:${anonPort}/health?harness=pi`);
+    assertEquals(anonRes.status, 200);
+    const anonJson = await anonRes.json();
+    assertEquals(anonJson.ok, true);
+    assertEquals(anonJson.authenticated, true);
+    assertEquals(anonJson.defaultCwd, testCwd);
+    assert(anonJson.adapter.includes("pi-acp"));
+  } finally {
+    await anonServer.shutdown();
   }
 });
 
