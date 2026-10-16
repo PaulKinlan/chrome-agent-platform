@@ -14,6 +14,9 @@ export const BUILD_INFRA_PATTERNS = Object.freeze([
   /^build\.mjs$/,
   /^scripts\/build-.*\.mjs$/,
   /^scripts\/lib\/.*build.*\.mjs$/,
+  /^scripts\/lib\/wasm-.*\.mjs$/,
+  /^scripts\/gate-full\.mjs$/,
+  /^scripts\/select-tests\.mjs$/,
   /^packages\/bundled\//,
   /^deno\.runner\.jsonc$/,
   /^package\.json$/,
@@ -21,18 +24,61 @@ export const BUILD_INFRA_PATTERNS = Object.freeze([
 ]);
 
 export function hasBuildInfraChanges(changedFiles) {
-  if (!Array.isArray(changedFiles)) return true;
+  if (!Array.isArray(changedFiles) || changedFiles.length === 0) {
+    // If null/undefined/non-array, or if changedFiles is empty (e.g. unknown delta / single commit / git failure),
+    // fail closed: trigger test:build.
+    return true;
+  }
   return changedFiles.some((file) => BUILD_INFRA_PATTERNS.some((pat) => pat.test(file)));
 }
 
-function defaultGetChangedFiles(root) {
+export function defaultGetChangedFiles(root = ROOT, options = {}) {
   try {
-    const res = spawnSync("git", ["diff", "--name-only", "HEAD~1..HEAD"], {
-      cwd: root,
-      encoding: "utf8",
-    });
-    if (res.status === 0 && res.stdout) {
-      return res.stdout.trim().split("\n").filter(Boolean);
+    let base = options?.baseRef;
+    if (!base) {
+      const explicitBaseIdx = process.argv.indexOf("--base");
+      if (explicitBaseIdx !== -1 && process.argv[explicitBaseIdx + 1]) {
+        base = process.argv[explicitBaseIdx + 1];
+      }
+    }
+    if (!base) {
+      // Try merge-base of origin/main and HEAD
+      const mb = spawnSync("git", ["merge-base", "origin/main", "HEAD"], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      if (mb.status === 0 && mb.stdout?.trim()) {
+        base = mb.stdout.trim();
+      }
+    }
+    if (!base) {
+      // Fallback: check if HEAD~1 exists
+      const rev = spawnSync("git", ["rev-parse", "--verify", "HEAD~1"], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      if (rev.status === 0) {
+        base = "HEAD~1";
+      }
+    }
+
+    if (base) {
+      const diff = spawnSync("git", ["diff", "--name-only", `${base}..HEAD`], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      if (diff.status === 0 && diff.stdout !== undefined) {
+        return diff.stdout.trim().split("\n").filter(Boolean);
+      }
+    } else {
+      // Root commit with no base: inspect commit tree
+      const show = spawnSync("git", ["show", "--name-only", "--format=", "HEAD"], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      if (show.status === 0 && show.stdout !== undefined) {
+        return show.stdout.trim().split("\n").filter(Boolean);
+      }
     }
   } catch {}
   return [];

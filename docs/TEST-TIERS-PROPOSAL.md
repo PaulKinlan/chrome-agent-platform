@@ -94,7 +94,7 @@ To satisfy Fleet Speed Rules R1 (Full Gate ≤ 300s) and R2 (Fast Gate ≤ 60s),
   - Standard `npm test` ALREADY contains `tests/build-smoke.test.ts`, which runs on every single landing.
   - `tests/build-smoke.test.ts` executes a certified store build of the exact tree object and validates `dist.complete` byte authority, AST exported functions, reachability, and bundle budgets.
   - The three tests in `test:build` exercise build *meta-mechanics* (e.g. verifying that toggling debug mode twice leaves clean artifacts, or verifying that symlink boots do not re-bootstrap). They do not test runtime extension logic.
-  - **Selective Execution:** When a PR or merge touches `build.mjs`, `scripts/build-*.mjs`, `scripts/lib/wasm-*.mjs`, or `packages/bundled/**`, `scripts/select-tests.mjs` and `scripts/gate-full.mjs` automatically trigger `test:build`. For the 95% of landings that touch extension logic, NTP UI, or tests, running 3 redundant in-place rebuilds is pure overhead.
+  - **Selective Execution:** When a PR or merge touches `build.mjs`, `scripts/build-*.mjs`, `scripts/lib/.*build.*\.mjs`, `scripts/lib/wasm-*.mjs`, `scripts/gate-full.mjs`, `scripts/select-tests.mjs`, `packages/bundled/**`, `deno.runner.jsonc`, or `package*.json`, `scripts/select-tests.mjs` and `scripts/gate-full.mjs` automatically trigger `test:build`. For the 95% of landings that touch extension logic, NTP UI, or tests, running 3 redundant in-place rebuilds is pure overhead.
 
 ### Lever 2: Exact-Tip Build Reuse (`scripts/gate-full.mjs`)
 - **What moves:** Redundant `npm run build:production` calls when the merger's union tip has already been built and certified.
@@ -127,7 +127,7 @@ CHECK_FAST_CMD="npm run gate:fast"
 
 # Bound ceilings:
 CHECK_TIMEOUT=1800      # 30m bound (plenty for 240s run)
-CHECK_FAST_TIMEOUT=300  # 5m bound (plenty for 60s run)
+CHECK_FAST_TIMEOUT=600  # 10m bound (matches live conf and accommodates measured 150-520s runs)
 
 # Fast gate verification contract:
 CHECK_FAST_PASS_RE='^select-tests: parallel phase GREEN'
@@ -146,6 +146,9 @@ const BUILD_INFRA_PATTERNS = [
   /^build\.mjs$/,
   /^scripts\/build-.*\.mjs$/,
   /^scripts\/lib\/.*build.*\.mjs$/,
+  /^scripts\/lib\/wasm-.*\.mjs$/,
+  /^scripts\/gate-full\.mjs$/,
+  /^scripts\/select-tests\.mjs$/,
   /^packages\/bundled\//,
   /^deno\.runner\.jsonc$/,
   /^package\.json$/,
