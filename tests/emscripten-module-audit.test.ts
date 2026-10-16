@@ -160,6 +160,81 @@ Deno.test("emscripten graph audit: missing dependency, wrong type and untrusted 
   await assertRejects(() => auditEmscriptenGraph(missingExport, files), Error, "provider_export_missing");
 });
 
+Deno.test("emscripten graph audit: dependency-edge prefix-id ordering agrees with tuple order (0mld / gnw2e)", async () => {
+  const { auditEmscriptenGraph } = await import("../extension/lib/emscripten-module-audit.js");
+  const { assertRejects } = await import("jsr:@std/assert@1");
+
+  const dylinkName = [8, ...new TextEncoder().encode("dylink.0")];
+  const sub1 = [1, ...u32(4), 0, 0, 0, 0];
+  const encodeStr = (s: string) => [...u32(s.length), ...new TextEncoder().encode(s)];
+  const makeDylinkWasm = (needed: string[]) => {
+    if (!needed.length) return wasm();
+    const neededBytes = [needed.length, ...needed.flatMap(encodeStr)];
+    const sub2 = [2, ...u32(neededBytes.length), ...neededBytes];
+    return wasm(section(0, [...dylinkName, ...sub1, ...sub2]));
+  };
+
+  const wasmMain = makeDylinkWasm(["z.wasm"]);
+  const wasmMainSide = makeDylinkWasm(["a.wasm"]);
+  const wasmSide = makeDylinkWasm([]);
+  const glueBytes = new Uint8Array([1, 2, 3]);
+
+  const files = new Map<string, Uint8Array>();
+  const shaMain = await sha256HexBytes(wasmMain);
+  const shaMainSide = await sha256HexBytes(wasmMainSide);
+  const shaSide = await sha256HexBytes(wasmSide);
+  const shaGlue = await sha256HexBytes(glueBytes);
+
+  const pathMain = `extension/wasm/cas/${shaMain}.wasm`;
+  const pathMainSide = `extension/wasm/cas/${shaMainSide}.wasm`;
+  const pathSide = `extension/wasm/cas/${shaSide}.wasm`;
+  const pathGlue = `extension/wasm/runtime/a0/1.0.0/glue.mjs`;
+
+  files.set(pathMain, wasmMain);
+  files.set(pathMainSide, wasmMainSide);
+  files.set(pathSide, wasmSide);
+  files.set(pathGlue, glueBytes);
+
+  const assets = [
+    { id: "glue", role: "glue", path: pathGlue, sha256: shaGlue, size: glueBytes.length },
+    { id: "main", role: "main-wasm", path: pathMain, sha256: shaMain, size: wasmMain.length },
+    { id: "main-side", role: "side-wasm", path: pathMainSide, sha256: shaMainSide, size: wasmMainSide.length },
+    { id: "side", role: "side-wasm", path: pathSide, sha256: shaSide, size: wasmSide.length },
+  ];
+
+  const modules = [
+    { asset: "main", ...auditEmscriptenModule(wasmMain) },
+    { asset: "main-side", ...auditEmscriptenModule(wasmMainSide) },
+    { asset: "side", ...auditEmscriptenModule(wasmSide) },
+  ].map(({ features: _features, ...rest }) => rest);
+
+  const edges = [
+    { from: "main", name: "z.wasm", to: "main-side" },
+    { from: "main-side", name: "a.wasm", to: "side" },
+  ];
+
+  const graph = {
+    assets,
+    modules,
+    linkGraph: { policy: "eager", main: "main", dependencies: edges },
+  };
+
+  // 1. Canonical order (main before main-side) accepted
+  const result = await auditEmscriptenGraph(graph, files);
+  assertEquals(result.modules.length, 3);
+
+  // 2. Reversed order rejected with dependency_invalid
+  const reversed = structuredClone(graph);
+  reversed.linkGraph.dependencies = [...edges].reverse();
+  await assertRejects(() => auditEmscriptenGraph(reversed, files), Error, "dependency_invalid");
+
+  // 3. Duplicate edge rejected with dependency_invalid
+  const duplicate = structuredClone(graph);
+  duplicate.linkGraph.dependencies = [edges[0], edges[0]];
+  await assertRejects(() => auditEmscriptenGraph(duplicate, files), Error, "dependency_invalid");
+});
+
+
 Deno.test("emscripten graph audit: glue tamper and repinned unreviewed glue fail different gates", async () => {
   const { auditEmscriptenGraph } = await import("../extension/lib/emscripten-module-audit.js");
   const { assertRejects } = await import("jsr:@std/assert@1");
