@@ -58,20 +58,13 @@ export function defaultGetChangedFiles(root = ROOT, options = {}) {
       }
     }
     if (!base) {
-      // Fallback: check if local main exists (e.g. repo without origin/main remote ref)
-      const mbLocal = spawnSync("git", ["merge-base", "main", "HEAD"], {
-        cwd: root,
-        encoding: "utf8",
-      });
-      if (mbLocal.status === 0 && mbLocal.stdout?.trim() && mbLocal.stdout.trim() !== headSha) {
-        base = mbLocal.stdout.trim();
-      }
-    }
-    if (!base) {
       // Fallback: check if HEAD is a merge commit (multiple parents).
       // On a merge commit, HEAD~1 inspects only the first parent and ignores
       // other branches in a batched union, recreating the partial delta bug (chrome-agent-platform-6c97h).
       // If HEAD is not a merge commit, HEAD~1 safely inspects the single commit.
+      // If HEAD is a merge commit without origin/main or explicit base, we do NOT
+      // guess local main (which may be ahead or contain part of the batch — 8z367);
+      // we leave base undefined so defaultGetChangedFiles returns [] and fails closed.
       const isMerge = spawnSync("git", ["rev-parse", "--verify", "HEAD^2"], {
         cwd: root,
         encoding: "utf8",

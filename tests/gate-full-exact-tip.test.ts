@@ -161,19 +161,29 @@ Deno.test("28qd4: defaultGetChangedFiles handles real git union delta, root comm
     assertEquals(unionFiles.includes("extension/ntp/ntp.js"), true, "union delta must include extension/ntp/ntp.js from branch B");
     assertEquals(hasBuildInfraChanges(unionFiles), true);
 
-    // Default call without options should resolve merge-base with local main (chrome-agent-platform-6c97h)
+    // Batched union without origin/main or explicit base: must NOT guess local main
+    // (which could already contain part of the batch - 8z367), but return [] so hasBuildInfraChanges fails closed.
     const defaultUnionFiles = defaultGetChangedFiles(tempDir);
-    assertEquals(defaultUnionFiles.includes("build.mjs"), true, "default delta must include build.mjs from branch A");
-    assertEquals(defaultUnionFiles.includes("extension/ntp/ntp.js"), true, "default delta must include extension/ntp/ntp.js from branch B");
-    assertEquals(hasBuildInfraChanges(defaultUnionFiles), true);
+    assertEquals(defaultUnionFiles, [], "unresolvable merge commit without origin/main must return []");
+    assertEquals(hasBuildInfraChanges(defaultUnionFiles), true, "unresolvable merge commit must fail closed");
+
+    // 8z367 adversarial test: local main already contains branch-a (so merge-base(main, HEAD) is branch-a)
+    // and origin/main is not yet present. It must NOT return only branch-b and skip test:build!
+    new Deno.Command("git", { args: ["checkout", "main"], cwd: tempDir }).outputSync();
+    new Deno.Command("git", { args: ["merge", "--no-ff", "branch-a", "-m", "merge branch a into main"], cwd: tempDir }).outputSync();
+    new Deno.Command("git", { args: ["checkout", "union"], cwd: tempDir }).outputSync();
+    const adversarialFilesWithoutOrigin = defaultGetChangedFiles(tempDir);
+    assertEquals(adversarialFilesWithoutOrigin, [], "adversarial union without origin/main must return [] and not guess local main");
+    assertEquals(hasBuildInfraChanges(adversarialFilesWithoutOrigin), true, "adversarial union must fail closed and run test:build");
 
     // Simulate remote origin/main presence (merger environment):
-    // delete local main branch, set up remote origin with main, and test default path
+    // set up remote origin with main pointing to the initial base commit (before branch-a), and test default path
     const originDir = Deno.makeTempDirSync({ dir: durableDir("scratch"), prefix: "gate-full-origin-" });
     try {
       new Deno.Command("git", { args: ["init", "--bare"], cwd: originDir }).outputSync();
       new Deno.Command("git", { args: ["remote", "add", "origin", originDir], cwd: tempDir }).outputSync();
-      new Deno.Command("git", { args: ["push", "origin", "main:refs/heads/main"], cwd: tempDir }).outputSync();
+      // Push the initial base commit as origin/main
+      new Deno.Command("git", { args: ["push", "origin", "HEAD~2:refs/heads/main"], cwd: tempDir }).outputSync();
       new Deno.Command("git", { args: ["branch", "-D", "main"], cwd: tempDir }).outputSync();
       new Deno.Command("git", { args: ["fetch", "origin"], cwd: tempDir }).outputSync();
 
@@ -182,7 +192,7 @@ Deno.test("28qd4: defaultGetChangedFiles handles real git union delta, root comm
       assertEquals(originDefaultFiles.includes("extension/ntp/ntp.js"), true, "origin/main delta must include extension/ntp/ntp.js");
       assertEquals(hasBuildInfraChanges(originDefaultFiles), true);
 
-      // Now test orphan merge commit without any main/origin-main base:
+      // Now test orphan merge commit without any origin/main base:
       // must NOT fall back to HEAD~1, must return [] so hasBuildInfraChanges fails closed
       new Deno.Command("git", { args: ["remote", "remove", "origin"], cwd: tempDir }).outputSync();
       // Delete origin tracking branch
