@@ -30,6 +30,7 @@ import { ALWAYS_ON } from "./select-tests.mjs";
 import { parallelPlan, computeParallelPhaseTimeout, DEFAULT_PARALLEL_TIMEOUT_MS } from "./lib/parallel-plan.mjs";
 import { loadWeights, scheduleOrder } from "./lib/parallel-schedule.mjs";
 import { emitGateLedger, deferredTierEntries, fullTierManifestFields, parseGateBuild } from "./lib/gate-manifest.mjs";
+import { parseSuiteDurations, slowestSuites } from "./lib/parallel-durations.mjs";
 import { checkBrowserPrerequisite } from "./lib/browser-prerequisite.mjs";
 import {
   ENVIRONMENTAL_REFUSAL_EXIT,
@@ -43,7 +44,7 @@ const PARALLEL_READY_FILE = process.env.CAP_PARALLEL_READY_FILE;
 const PARALLEL_READY_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_READY_TIMEOUT_MS ?? 60_000);
 
 
-function runParallel(files, phase = "parallel phase") {
+function runParallel(files, phase = "parallel phase", durationsOut = null) {
   if (!files || files.length === 0) return Promise.resolve(0);
   // Concurrent scheduling cannot identify the stalled file. Announce every
   // candidate BEFORE spawn so even a mid-phase kill leaves names on both streams.
@@ -206,6 +207,19 @@ function runParallel(files, phase = "parallel phase") {
           announce(`\nrun-tests: ${phase} exited non-zero with refusal marker but missing test summary — preserving exit ${effectiveCode}`);
         }
       }
+      // Publish per-file test-seconds measured from this phase's own reporter
+      // lines (chrome-agent-platform-6gk81): the manifest carries the full
+      // map, this log line names the tail a human should re-tier or split.
+      if (durationsOut) {
+        const measured = parseSuiteDurations(capturedOutput);
+        for (const [file, secs] of measured) {
+          durationsOut.set(file, (durationsOut.get(file) ?? 0) + secs);
+        }
+        const slowest = slowestSuites(measured, 10);
+        if (slowest.length) {
+          announce(`run-tests: ${phase} slowest suites (test-seconds): ${slowest.map((s) => `${s.file} ${s.secs}s`).join(", ")}`);
+        }
+      }
       const secs = ((Date.now() - t0) / 1000).toFixed(0);
       const isRefusal = effectiveCode === ENVIRONMENTAL_REFUSAL_EXIT;
       const statusText = effectiveCode === 0 ? "GREEN" : isRefusal ? `REFUSED (environmental verdict, exit ${ENVIRONMENTAL_REFUSAL_EXIT})` : "FAILED";
@@ -306,11 +320,12 @@ export async function main(args = process.argv.slice(2)) {
   // parallel process AFTER serial (partition(...).parallel is intentionally total).
   const readOnly = plan.files.filter((file) => READ_ONLY_DIST.has(file));
   const other = plan.files.filter((file) => !READ_ONLY_DIST.has(file));
+  const suiteDurations = new Map();
   const readOnlyRc = await runReadOnlyDistBatch(readOnly,
-    (files) => runParallel(files, "post-build read-only phase"));
+    (files) => runParallel(files, "post-build read-only phase", suiteDurations));
   // Preserve kz27: a failed builder OR read-only guard must not hide the
   // independent parallel guards; both phases run and the first failure wins.
-  const parallelRc = await runParallel(other);
+  const parallelRc = await runParallel(other, "parallel phase", suiteDurations);
   const rc = combinePhaseExitCodes(serialRc, readOnlyRc, parallelRc);
   const buildDeferredCount = cliFiles.length === 0 ? all.filter((f) => BUILD_GATE.has(f)).length : 0;
   const heavyDeferredCount = cliFiles.length === 0 ? all.filter((f) => HEAVY_GATE.has(f)).length : 0;
@@ -351,6 +366,7 @@ export async function main(args = process.argv.slice(2)) {
       rc,
       build: parseGateBuild(process.env.CAP_GATE_BUILD_JSON),
       fileMappingContext,
+      suiteDurations,
     });
     emitGateLedger({ manifest, fileMapping: manifest?.fileMapping ?? [] });
   }

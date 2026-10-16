@@ -18,6 +18,7 @@
 // This module is pure and shares only the selector's pure content policy, so both tier emitters
 // (scripts/select-tests.mjs and scripts/run-tests.mjs) use one formatter without a dependency cycle.
 import { isPassiveContentFile } from "./content-exemptions.mjs";
+import { suiteDurationsObject } from "./parallel-durations.mjs";
 
 export const GATE_MANIFEST_PREFIX = "fast-gate: manifest: ";
 export const GATE_UNMAPPED_PREFIX = "fast-gate: unmapped: ";
@@ -83,6 +84,7 @@ export function explainChangedFileMapping({ changed = [], candidates = {}, execu
  *   unmapped?: string[],
  *   fileMapping?: Array<{ file: string, status: string, executed_suites: string[], reason: string }>,
  *   build?: { disposition: string, reason: string, secs: number, markerCommit?: string | null } | null,
+ *   suiteDurations?: Map<string, number> | Record<string, number>,
  * }} fields
  * @returns {string}
  */
@@ -98,6 +100,7 @@ export function formatGateManifest({
   unmapped = [],
   fileMapping = [],
   build = null,
+  suiteDurations = null,
 } = {}) {
   if (tier !== "fast" && tier !== "full") {
     throw new Error(`gate manifest: tier must be "fast" or "full", got ${JSON.stringify(tier)}`);
@@ -165,6 +168,15 @@ export function formatGateManifest({
       }
     }
     payload.file_mapping = fileMapping;
+  }
+  // Per-file test-seconds measured from the parallel reporter's own lines
+  // (chrome-agent-platform-6gk81): the input longest-first scheduling orders
+  // by, published so the tail is named in every gate record instead of
+  // re-derived by hand. Sanitized (bad entries dropped), never validated by
+  // throwing — this formatter runs after the suite has finished.
+  if (suiteDurations) {
+    const durations = suiteDurationsObject(suiteDurations);
+    if (Object.keys(durations).length) payload.suite_durations = durations;
   }
   return GATE_MANIFEST_PREFIX + JSON.stringify(payload);
 }
@@ -242,6 +254,7 @@ export function deferredTierEntries({
  *   serialFiles?: string[], parallelFiles?: string[], skippedFiles?: string[], failingFiles?: string[],
  *   deferred?: Array<{ file: string, reason: string }>, rc: number, cliFiles?: string[],
  *   build?: object | null, fileMappingContext?: object | null,
+ *   suiteDurations?: Map<string, number> | Record<string, number> | null,
  * }} args
  * @returns {object | null} null when this was not the default `npm test` form (no gate record)
  */
@@ -255,6 +268,7 @@ export function fullTierManifestFields({
   cliFiles = [],
   build = null,
   fileMappingContext = null,
+  suiteDurations = null,
 } = {}) {
   if (cliFiles.length > 0) return null;
   const executedSuites = [...serialFiles, ...parallelFiles];
@@ -273,6 +287,10 @@ export function fullTierManifestFields({
     selected: executedSuites,
     certifiable: rc === 0,
     build,
+    // Durations are measurements, not coverage claims: a red run's timings
+    // are still the honest input for re-weighting, so they ride along
+    // regardless of rc (unlike executed_suites, which rc gates).
+    suiteDurations,
     omitted,
     omittedTotal: omitted.length,
     ...(fileMappingContext ? { fileMapping: explainChangedFileMapping({
