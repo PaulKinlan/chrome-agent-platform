@@ -2292,6 +2292,17 @@ async function auditModuleAst(options: AuditOptions): Promise<string[]> {
         } else if (await fileExists(resolvedPath)) {
           const mod = await getModuleExports(resolvedPath, acorn, path, moduleExportsCache);
           targetExports = mod.exports;
+        } else if (baseDir === "docs" && specifier === "./diff-core.bundle.js") {
+          // In an unbuilt tree, docs/diff-core.bundle.js is not yet generated from
+          // extension/shared/diff-core.js. Resolve from the source module so static
+          // cross-module recurrence guards pass in fresh unbuilt clones (chrome-agent-platform-6h71c).
+          const fallbackSourcePath = path.resolve("extension/shared/diff-core.js");
+          if (await fileExists(fallbackSourcePath)) {
+            const mod = await getModuleExports(fallbackSourcePath, acorn, path, moduleExportsCache);
+            targetExports = mod.exports;
+          } else {
+            violations.push(`${baseDir}/${f}: imports from '${specifier}', but module file cannot be resolved at ${relTarget}`);
+          }
         } else {
           violations.push(`${baseDir}/${f}: imports from '${specifier}', but module file cannot be resolved at ${relTarget}`);
         }
@@ -2345,6 +2356,14 @@ async function auditModuleAst(options: AuditOptions): Promise<string[]> {
         } else if (await fileExists(resolvedPath)) {
           const mod = await getModuleExports(resolvedPath, acorn, path, moduleExportsCache);
           targetExports = mod.exports;
+        } else if (baseDir === "docs" && specifier === "./diff-core.bundle.js") {
+          const fallbackSourcePath = path.resolve("extension/shared/diff-core.js");
+          if (await fileExists(fallbackSourcePath)) {
+            const mod = await getModuleExports(fallbackSourcePath, acorn, path, moduleExportsCache);
+            targetExports = mod.exports;
+          } else {
+            violations.push(`${baseDir}/${f}: re-exports from '${specifier}', but module file cannot be resolved at ${relTarget}`);
+          }
         } else {
           violations.push(`${baseDir}/${f}: re-exports from '${specifier}', but module file cannot be resolved at ${relTarget}`);
         }
