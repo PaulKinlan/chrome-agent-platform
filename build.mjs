@@ -154,20 +154,23 @@ const shippedJsAll = await walkJs("extension");
 // than a hardcoded hash. Exemption is content-addressed: a file is exempt ONLY
 // while its bytes hash-match its inventory row, so a drifted or undeclared
 // file stays inside the AST scan and fails closed.
-const packageStoreExempt = new Set();
 // walkJs returns RELATIVE paths ("extension/wasm/..."), so the exemption set
 // keys on the same rel form — join(ROOT, …) is only used to READ the bytes.
-for (const row of BUNDLED_INVENTORY_EARLY.files) {
-  if (!/^extension\/wasm\/.+\.m?js$/.test(row.rel)) continue;
-  let bytes;
-  try {
-    bytes = await readFile(join(ROOT, row.rel));
-  } catch {
-    continue; // absent file is not this scan's problem (walkJs only saw present files)
-  }
-  const digest = createHash("sha256").update(bytes).digest("hex");
-  if (row.sha256 === digest) packageStoreExempt.add(row.rel);
-}
+const earlyExempt = await settleAll(
+  BUNDLED_INVENTORY_EARLY.files
+    .filter((row) => /^extension\/wasm\/.+\.m?js$/.test(row.rel))
+    .map(async (row) => {
+      let bytes;
+      try {
+        bytes = await readFile(join(ROOT, row.rel));
+      } catch {
+        return null; // absent file is not this scan's problem (walkJs only saw present files)
+      }
+      const digest = createHash("sha256").update(bytes).digest("hex");
+      return row.sha256 === digest ? row.rel : null;
+    }),
+);
+const packageStoreExempt = new Set(earlyExempt.filter(Boolean));
 // Schema-2 runtime data assets (roles adapter/glue/pthread-bootstrap/data)
 // are MANIFEST members, not inventory file rows: their pin is the asset
 // sha256 inside a manifest whose own digest is tied to the inventory row

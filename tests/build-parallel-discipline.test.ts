@@ -739,6 +739,15 @@ Deno.test("build discipline A: build.mjs has none of the cheap evasions (Array.f
   assertEquals(report["A.evasions"], [], "a rule that Promise.all cannot be written must not be satisfiable by writing it another way");
 });
 
+Deno.test("build discipline e149t: build.mjs package-store exemption walk uses settleAll over BUNDLED_INVENTORY_EARLY", () => {
+  const { program } = realBuild();
+  const calls = settleAllCalls(program);
+  const inventoryFanOut = calls.find((c: Node) => {
+    return JSON.stringify(c).includes("BUNDLED_INVENTORY_EARLY");
+  });
+  assert(inventoryFanOut, "build.mjs must fan out the package-store exemption walk through settleAll");
+});
+
 Deno.test("build discipline A: package-archive.mjs's stage writer (copyInventoryToStage) settles too", () => {
   const { program } = parseModule("scripts/package-archive.mjs");
   const report = packageArchiveReport(program);
