@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.715] — 2026-10-16
+- none: internal full-gate changed file detection and build tier trigger accuracy
+
 ## [0.3.714] — 2026-10-16
 - load-sensitive gates are no longer held closed by the compiler children of a single heavy build.
 
