@@ -88,24 +88,56 @@ if (landingMode && hookMode) {
   process.exit(1);
 }
 const notes = [];
+const candidates = [];
+const internalRefs = [];
+function commitSha(value, flag) {
+  if (!landingMode || !value || !/^[a-f0-9]{7,64}$/i.test(value)) {
+    console.error(`[bump-version] ERROR: ${flag} requires --landing and a commit SHA`);
+    process.exit(1);
+  }
+  try {
+    return execFileSync("git", ["rev-parse", "--verify", `${value}^{commit}`], {
+      cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    console.error(`[bump-version] ERROR: cannot resolve ${flag} commit ${value}`);
+    process.exit(1);
+  }
+}
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === "--user-note" || argv[i] === "--note") notes.push(argv[++i]);
+  if (argv[i] === "--internal") internalRefs.push(commitSha(argv[++i], "--internal"));
   if (argv[i] === "--from") {
-    const sha = argv[++i];
-    if (!landingMode || !sha || !/^[a-f0-9]{7,64}$/i.test(sha)) {
-      console.error("[bump-version] ERROR: --from requires --landing and a commit SHA");
+    const sha = commitSha(argv[++i], "--from");
+    const body = execFileSync("git", ["show", "-s", "--format=%B", sha], { cwd: ROOT, encoding: "utf8" });
+    const trailers = [...body.matchAll(/^Release-note:\s*(.*)$/gim)].map((match) => match[1]);
+    candidates.push({ sha, trailers });
+    notes.push(...trailers);
+  }
+}
+if (landingMode) {
+  const internal = new Set(internalRefs);
+  const seen = new Set();
+  for (const { sha, trailers } of candidates) {
+    if (seen.has(sha)) {
+      console.error(`[bump-version] ERROR: duplicate landing candidate ${sha}`);
       process.exit(1);
     }
-    let body;
-    try {
-      body = execFileSync("git", ["show", "-s", "--format=%B", sha], { cwd: ROOT, encoding: "utf8" });
-    } catch {
-      console.error(`[bump-version] ERROR: cannot read landing commit ${sha}`);
+    seen.add(sha);
+    if (!trailers.length && !internal.has(sha)) {
+      console.error(`[bump-version] ERROR: candidate ${sha} has no Release-note trailer; pass --internal ${sha} explicitly if it is internal-only`);
       process.exit(1);
     }
-    for (const line of body.split(/\r?\n/)) {
-      const match = /^Release-note:\s*(.*)$/i.exec(line);
-      if (match) notes.push(match[1]);
+    if (trailers.length && internal.has(sha)) {
+      console.error(`[bump-version] ERROR: candidate ${sha} has a Release-note trailer and cannot be declared --internal`);
+      process.exit(1);
+    }
+    console.error(`[bump-version] landing candidate ${sha}: ${trailers.length ? `${trailers.length} note(s)` : "explicitly internal (no release note)"}`);
+  }
+  for (const sha of internal) {
+    if (!seen.has(sha)) {
+      console.error(`[bump-version] ERROR: --internal ${sha} is not a --from candidate`);
+      process.exit(1);
     }
   }
 }

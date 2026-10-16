@@ -113,9 +113,14 @@ node scripts/check-beads-export-divergence.mjs
 # version/changelog/About/inventory stamp on the union. Do not pass merge commits
 # or arbitrary ancestors: name only the candidate commits landing in this batch.
 node scripts/bump-version.mjs patch --landing --from <candidate-sha> [--from <next-candidate-sha> ...]
-# If the union has a synthesized user-facing effect not in a trailer, pass
-# --user-note "<what the user gets>" explicitly. A union with no notes mints
-# nothing; 'Release-note: none: internal' is an ERROR, not a release. For a
+# EVERY --from candidate must supply a Release-note trailer, or be named as
+# --internal <same-candidate-sha> explicitly if it is internal-only. A mixed
+# batch with an unnamed trailer-less candidate FAILS rather than silently
+# losing a user-facing change under another candidate's release heading.
+# If the union has an additional synthesized user-facing effect, pass
+# --user-note "<what the user gets>" explicitly. A union with only explicit
+# internal candidates mints nothing; 'Release-note: none: internal' is an
+# ERROR, not a release. For a
 # legacy union with surfaces ONE patch ahead of the latest CHANGELOG entry,
 # add --reconcile-merge to this command rather than hand-resetting six files.
 # The shared .git/hooks/post-commit dispatcher runs the tracked hook from the
@@ -128,7 +133,9 @@ npm run check:changelog
 npm run check:changelog-order
 npm run check:vocabulary
 # The ledger reads committed HEAD, so run it AFTER step 5 as well; step 4
-# alone cannot certify the new release stamp.
+# alone cannot certify the new release stamp. The full landing gate enforces
+# the committed union ledger; lane tests defer owed entries by git ancestry,
+# never by a worktree's branch name.
 
 # 5. Commit the union stamp with an appropriate subject (no hook bump)
 git add CHANGELOG.md extension/CHANGELOG.md package.json package-lock.json extension/manifest.json extension/lib/bundled-inventory-data.js extension/about/about.html ...

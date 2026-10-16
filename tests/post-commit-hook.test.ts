@@ -97,6 +97,37 @@ Deno.test("uikt5: two trailed branch commits become ONE landing release with bot
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+Deno.test("3er9j: mixed union refuses a trailer-less candidate unless named internal", async () => {
+  const dir = await mirror();
+  try {
+    const first = commit(dir, "visible branch", "you can share conversations");
+    const second = commit(dir, "download button for artifacts");
+    const refused = stamp(dir, "--from", first, "--from", second);
+    assert(refused.status !== 0, "missing trailer in mixed batch must block landing");
+    assert(refused.stderr.includes(second), `must name the missing candidate: ${refused.stderr}`);
+    assert(refused.stderr.includes("--internal"), refused.stderr);
+    await assertUnstamped(dir);
+    const allowed = stamp(dir, "--from", first, "--from", second, "--internal", second);
+    assertEquals(allowed.status, 0, allowed.stderr);
+    assertEquals(await version(dir), "1.2.4");
+    const log = await readFile(path.join(dir, "CHANGELOG.md"), "utf8");
+    assert(log.includes("- you can share conversations"));
+    assert(!log.includes("download button for artifacts"), "explicitly internal candidate adds no invented bullet");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+Deno.test("3er9j: unmatched or trailed --internal candidate fails without stamping", async () => {
+  const dir = await mirror();
+  try {
+    const trailed = commit(dir, "visible", "you can share conversations");
+    const missing = stamp(dir, "--from", trailed, "--internal", trailed);
+    assert(missing.status !== 0 && missing.stderr.includes(trailed), missing.stderr);
+    const stray = stamp(dir, "--from", trailed, "--internal", git(dir, "rev-parse", "HEAD~1"));
+    assert(stray.status !== 0 && stray.stderr.includes("not a --from candidate"), stray.stderr);
+    await assertUnstamped(dir);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 Deno.test("uikt5: legacy one-patch surface skew reconciles during landing without a hand reset", async () => {
   const dir = await mirror();
   try {

@@ -310,14 +310,41 @@ Deno.test("ledger: a version heading inside a fenced code block does not satisfy
   await cleanupFixtures();
 });
 
+function isLandedHead(repo: string) {
+  const main = spawnSync("git", ["rev-parse", "--verify", "origin/main"], { cwd: repo, encoding: "utf8" });
+  assertEquals(main.status, 0, main.stderr);
+  const ancestry = spawnSync("git", ["merge-base", "--is-ancestor", "HEAD", "origin/main"], {
+    cwd: repo, encoding: "utf8",
+  });
+  assert([0, 1].includes(ancestry.status ?? -1), `cannot determine whether HEAD is landed: ${ancestry.stderr}`);
+  return ancestry.status === 0;
+}
+
+Deno.test("ledger: landing guard follows ancestry for renamed and detached worktrees", async () => {
+  const repo = await mkLedgerRepo("branch-independent");
+  repo.git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
+  assert(isLandedHead(repo.dir), "release baseline is landed");
+  Deno.writeTextFileSync(`${repo.dir}/extension/new-feature.js`, "export const visible = true;\n");
+  repo.commit("feature without release entry");
+  const tip = repo.git(["rev-parse", "HEAD"]).trim();
+  repo.git(["branch", "-m", "fleet/imp-branch"]);
+  assertEquals(isLandedHead(repo.dir), false, "unlanded commit on implementer branch");
+  repo.git(["branch", "-m", "fleet/arch-branch"]);
+  assertEquals(isLandedHead(repo.dir), false, "same tree under architect branch");
+  repo.git(["checkout", "--detach", "-q", tip]);
+  assertEquals(isLandedHead(repo.dir), false, "same tree when detached");
+  repo.git(["checkout", "-q", "--detach", "origin/main"]);
+  assert(isLandedHead(repo.dir), "landed baseline when detached");
+  await cleanupFixtures();
+});
+
 Deno.test("ledger: the landed tree covers every product commit; lane releases are deferred", async () => {
-  // The merger stamps once on its landing union. A fleet implementer branch
-  // intentionally carries product commits with no release entry; only the
-  // merger/main tree must be fully paid up. Keep all surface checks on lanes.
+  // The merger stamps once on its landing union. A tree with unlanded commits
+  // may legitimately owe a release; judge by ancestry, never worktree branch
+  // name (the same tree must give the same result even when detached). The
+  // merger's explicit check:changelog-ledger remains strict after its commit.
   const ledger = deriveLedger({ repo: repoRoot });
-  const branch = spawnSync("git", ["branch", "--show-current"], { cwd: repoRoot, encoding: "utf8" });
-  assertEquals(branch.status, 0, branch.stderr);
-  if (!/^fleet\/imp-[a-z0-9-]+$/.test(branch.stdout.trim())) {
+  if (isLandedHead(repoRoot)) {
     assertEquals(ledger.owed, [], `landed product commits owed entries: ${JSON.stringify(ledger.owed, null, 2)}`);
   }
   assertEquals(ledger.surfaces.length, 6, `every surface is enumerated: ${JSON.stringify(ledger.surfaces)}`);
