@@ -1,6 +1,6 @@
 // The FAST ledger must distinguish graph-reachable suites that ran from
 // changed files with no executed inspecting suite, and give the latter a reason.
-import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
 import { buildReverseGraph, testCandidatesForChanged } from "../scripts/select-tests.mjs";
 import { explainChangedFileMapping, formatGateManifest, emitGateLedger, fullTierManifestFields } from "../scripts/lib/gate-manifest.mjs";
 
@@ -22,6 +22,15 @@ Deno.test("sgzyg: independent fleet contract names only guards selected for thei
 function guardExists(file: string) {
   try { return Deno.statSync(new URL(`../${file}`, import.meta.url)).isFile; } catch { return false; }
 }
+
+Deno.test("sgzyg: manifest refuses a coverage claim without its executable suite or omission reason", () => {
+  for (const row of [
+    { file: "extension/lib/no-guard.js", status: "unmapped", executed_suites: [], reason: "" },
+    { file: "extension/background/service-worker.js", status: "mapped", executed_suites: [], reason: "guard ran" },
+  ]) {
+    assertThrows(() => formatGateManifest({ tier: "fast", executed: 0, fileMapping: [row] }), Error, "invalid reasoned changed-file placement");
+  }
+});
 
 Deno.test("sgzyg: candidate attribution excludes unrelated always-on suites", () => {
   const graph = buildReverseGraph();
