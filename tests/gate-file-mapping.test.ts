@@ -1,8 +1,9 @@
 // The FAST ledger must distinguish graph-reachable suites that ran from
 // changed files with no executed inspecting suite, and give the latter a reason.
 import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
-import { buildReverseGraph, testCandidatesForChanged } from "../scripts/select-tests.mjs";
+import { buildReverseGraph, changedWithoutCoverage, testCandidatesForChanged } from "../scripts/select-tests.mjs";
 import { explainChangedFileMapping, formatGateManifest, emitGateLedger, fullTierManifestFields } from "../scripts/lib/gate-manifest.mjs";
+import { isSelectorInfrastructure } from "../scripts/lib/changed-file-mapping.mjs";
 
 Deno.test("sgzyg: independent fleet contract names only guards selected for their actual changed source", () => {
   const contract = JSON.parse(Deno.readTextFileSync(new URL("./coverage-contract.json", import.meta.url)));
@@ -76,6 +77,27 @@ Deno.test("sgzyg: file ledger names every path, executed guard, and reason for m
   }, fileMapping: rows, log: (line: string) => lines.push(line) });
   assert(lines.some((line) => line === "fast-gate: unmapped: extension/no-guard.js tests/python-runtime.test.ts"));
   assert(lines.some((line) => line.startsWith("fast-gate: unmapped-reason: ") && line.includes("Pyodide tier only")));
+});
+
+Deno.test("z06au: gif/pdf content is not falsely marked unmapped by the ledger", () => {
+  assertEquals(isSelectorInfrastructure("scripts/lib/content-exemptions.mjs"), true, "the selector must not subset-certify edits to its own content policy");
+  const passive = ["extension/icons/a.gif", "docs/reference.pdf", "extension/icons/b.png"];
+  assertEquals(changedWithoutCoverage(passive, new Map()), []);
+  const rows = explainChangedFileMapping({ changed: passive, executedSuites: [] });
+  assertEquals(rows.map((row: {status: string}) => row.status), passive.map(() => "not-applicable"));
+  const lines: string[] = [];
+  emitGateLedger({ fileMapping: rows, log: (line: string) => lines.push(line) });
+  assertEquals(lines.some((line) => line.startsWith("fast-gate: unmapped:")), false);
+});
+
+Deno.test("z06au: direct docs HTML classification stays executable for selector and ledger", () => {
+  const executable = "docs/index.html";
+  assertEquals(changedWithoutCoverage([executable], new Map()), [executable]);
+  const rows = explainChangedFileMapping({ changed: [executable], executedSuites: [] });
+  assertEquals(rows[0].status, "unmapped");
+  const lines: string[] = [];
+  emitGateLedger({ fileMapping: rows, log: (line: string) => lines.push(line) });
+  assertEquals(lines.filter((line) => line.startsWith("fast-gate: unmapped:")), ["fast-gate: unmapped: docs/index.html"]);
 });
 
 Deno.test("sgzyg: executing a selector import does not make its self-chosen subset authoritative", () => {

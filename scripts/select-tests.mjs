@@ -47,6 +47,7 @@ import { tokenizer } from "acorn";
 import { partition } from "./test-partition.mjs";
 import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
 import { isSelectorInfrastructure, mapUncovered, versionOnlyJsonChange } from "./lib/changed-file-mapping.mjs";
+import { isPassiveContentFile } from "./lib/content-exemptions.mjs";
 import { emitGateLedger, explainChangedFileMapping } from "./lib/gate-manifest.mjs";
 import { decideBuild, ensureStoreBuild, findDistConsumers } from "./build-if-needed.mjs";
 import { checkBrowserPrerequisite } from "./lib/browser-prerequisite.mjs";
@@ -486,11 +487,6 @@ export function buildReverseGraph(onLexerFailure) {
 const isTestRel = (rel) => /^tests[\\/][^\\/]+\.test\.(ts|js)$/.test(rel);
 const isChangedTest = (c) => /\.test\.(ts|js)$/.test(c);
 
-// Pure content/docs that no test executes; their edits cannot break the suite
-// through the import graph and are not fail-closed targets (the full suite's
-// doc-scanning tests, if any, stay the merge gate).
-const CONTENT_EXT_RE = /\.(md|markdown|txt|png|jpe?g|gif|svg|webp|ico|woff2?|pdf)$/i;
-
 // Walk the reverse graph from one abs path; true when a test file is reachable.
 function reachableTestFrom(startAbs, reverse, isTest) {
   const seen = new Set([startAbs]);
@@ -566,7 +562,7 @@ export function changedWithoutCoverage(changed, reverse) {
   const reverseMap = reverse ?? new Map();
   for (const c of changed) {
     if (isChangedTest(c)) continue; // runs itself (or was deleted = nothing to do)
-    if (CONTENT_EXT_RE.test(c)) continue; // docs/assets: no executable effect
+    if (isPassiveContentFile(c)) continue; // docs/assets: no executable effect
     const abs = resolve(ROOT, c);
     if (!existsSync(abs)) continue; // deleted/renamed: retention selects importers, if any
     if (reachableTestFrom(abs, reverseMap, (p) => isTestRel(relative(ROOT, p)))) continue;
