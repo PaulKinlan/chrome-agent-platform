@@ -19,5 +19,15 @@ Deno.test("fnwt: documented Impeccable fallback launches and loads the project c
   const context = new TextDecoder().decode(stdout);
   assertStringIncludes(context, "# PRODUCT.md");
   assertStringIncludes(context, "Chrome Agent Platform");
-  assert(context.includes("DESIGN.md"), "the launcher must load design context, not just exist");
+  // chrome-agent-platform-pfyiy: the launcher's ABSENCE notice also contains the
+  // bare string "DESIGN.md" ("PRODUCT.md exists but no DESIGN.md or incumbent
+  // visual implementation was found"), so a substring check was satisfied while
+  // no design context had loaded - it could not tell "loaded" from "missing".
+  // Pin the section heading the launcher emits only when it really loads the
+  // document, and fail on the absence notice.
+  assertStringIncludes(context, "\n# DESIGN.md\n", "the launcher must load design context, not just exist");
+  assert(
+    !context.includes("WORLD_DISCOVERY_REQUIRED"),
+    "a missing-design notice must fail this assertion, not satisfy it",
+  );
 });
