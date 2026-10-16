@@ -207,6 +207,68 @@ Deno.test("hangs indefinitely", async () => {
   }
 });
 
+// ── yepno: contention-proofness, and a failure that names its own cause ──────
+//
+// Another CAP lane holding the canonical serialized-Chrome lock is the NORMAL state of this fleet,
+// so this case runs the child WHILE a foreign holder owns that exact path: the child isolates itself
+// on its own per-run `CAP_CHROME_LOCK_PATH` (set before chrome-launch is imported), so a foreign
+// holder must not be able to red it. That is the property, tested at no extra child-run cost.
+//
+// The second, independent defect this fixes is ATTRIBUTION. The merger's 0.3.716 union red here as
+// `values are not equal: chrome-launch-lock must pass cleanly` / `1 !== 0` with the child's output
+// discarded - not one line of it reached the gate log, so nobody could say WHY it exited 1 and the
+// /tmp mtime of a foreign lock was read as the cause. A non-zero exit now carries the child's own
+// output, and lock contention is NAMED rather than left to look like a delta's fault.
+const CANONICAL_LOCK = "/tmp/cap-serialized-chrome-acceptance.lock";
+
+/** Hold `path` exclusively from OUTSIDE this process and CONFIRM the hold before returning:
+ *  a bare sleep-based race is load-dependent, and `flock -n` failing is an observed fact. */
+/** The hold must OUTLIVE the child run by a wide margin or the property quietly stops being tested:
+ *  measured, a 30 s hold expired mid-run under load (child wall 32 s) and the case still passed, so
+ *  the holder is released explicitly in the caller's `finally` instead of on a timer. */
+async function holdConfirmed(path: string, seconds = 300): Promise<Deno.ChildProcess> {
+  const holder = new Deno.Command("flock", {
+    args: ["-o", "-w", "20", path, "sleep", String(seconds)],
+    stdout: "null",
+    stderr: "null",
+  }).spawn();
+  const deadline = Date.now() + 20000;
+  for (;;) {
+    const probe = new Deno.Command("flock", { args: ["-n", path, "true"], stdout: "null", stderr: "null" }).spawn();
+    if ((await probe.status).code === 1) return holder;
+    if (Date.now() > deadline) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  await releaseHolder(holder);
+  throw new Error(`could not confirm an exclusive hold on ${path}`);
+}
+
+async function releaseHolder(holder: Deno.ChildProcess): Promise<void> {
+  try { holder.kill("SIGKILL"); } catch { /* already gone */ }
+  try { await holder.status; } catch { /* reaped */ }
+}
+
+/** Why the child exited the way it did, from the child's own output. */
+const LOCK_CONTENTION_RE = /could not take the serialized-Chrome lock|is held by another lane's browser/;
+
+/** Why the child exited the way it did, from the child's own output. */
+function childDiagnosis(res: { code: number; timedOut?: boolean; stdout?: Uint8Array | null; stderr?: Uint8Array | null }): string {
+  const text = `${res.stdout ? new TextDecoder().decode(res.stdout) : ""}${res.stderr ? new TextDecoder().decode(res.stderr) : ""}`;
+  const lines = text.trim().split("\n").filter((l) => l.trim());
+  // Bounded, but the line the message is ABOUT is quoted verbatim rather than hoped into a window:
+  // a tail-only excerpt drops a cause stated near the start, and a head-only one drops the summary.
+  const excerpt = lines.length <= 12
+    ? lines.join(" | ")
+    : `${lines.slice(0, 4).join(" | ")} … ${lines.slice(-8).join(" | ")}`;
+  const contended = lines.filter((l) => LOCK_CONTENTION_RE.test(l)).slice(0, 2).map((l) => l.trim()).join(" | ");
+  return `exit ${res.code}${res.timedOut ? " (timedOut)" : ""}` +
+    (contended
+      ? ` — NAMED CONTENTION on the serialized-Chrome lock. Quoted from the child: ${contended}. ` +
+        `A foreign holder of ${CANONICAL_LOCK} is normal fleet state, so classify this rather than blaming the delta`
+      : "") +
+    ` — child output: ${excerpt || "<the child produced no output at all>"}`;
+}
+
 Deno.test("6yrq: lock tests clean up temporary lock files and leave /tmp clean", async () => {
   // Attribution, not a shared-prefix scan (chrome-agent-platform-p15i): with
   // ~8 lanes sharing /tmp, a scan for `cap-chrome-lock-test-*` also matches a
@@ -215,11 +277,24 @@ Deno.test("6yrq: lock tests clean up temporary lock files and leave /tmp clean",
   // path(s) as CAP_LOCK_FIXTURE:<path> lines; we assert exactly those are gone.
   // A killed child still attributes correctly: the marker is printed at start,
   // and the residue is then genuinely ours.
-  const res = runSerialFile("tests/chrome-launch-lock.test.ts", {
-    stdio: "pipe",
-    cwd: ROOT,
-  });
-  assertEquals(res.code, 0, "chrome-launch-lock must pass cleanly");
+  const existedBefore = await Deno.lstat(CANONICAL_LOCK).then(() => true, () => false);
+  const holder = await holdConfirmed(CANONICAL_LOCK);
+  let res;
+  try {
+    res = runSerialFile("tests/chrome-launch-lock.test.ts", {
+      stdio: "pipe",
+      cwd: ROOT,
+    });
+  } finally {
+    await releaseHolder(holder);
+    // Only a file THIS case created may be removed: another lane's lock file is not ours to delete.
+    if (!existedBefore) await Deno.remove(CANONICAL_LOCK).catch(() => {});
+  }
+  assertEquals(
+    res.code,
+    0,
+    `chrome-launch-lock must pass cleanly while a foreign canonical-lock holder exists: ${childDiagnosis(res)}`,
+  );
 
   const out = new TextDecoder().decode(res.stdout ?? new Uint8Array());
   const fixtures = [...out.matchAll(/^CAP_LOCK_FIXTURE:(\S+)$/gm)].map((m) => m[1]);
@@ -556,4 +631,55 @@ Deno.test("source pin: chrome-launch cancels stderr reader on proc exit", async 
     src.includes("reader.cancel()"),
     "scripts/lib/chrome-launch.ts must cancel the stderr reader when proc exits",
   );
+});
+
+// yepno, condition (2): two lanes gating at once is the fleet's normal state, so the child is run
+// TWICE CONCURRENTLY here and both runs must be green - which holds by construction only because the
+// child takes its own per-run `cap-chrome-lock-test-*` fixture (this asserts both runs report a
+// DIFFERENT fixture path, which is what makes them independent rather than racing on one lock).
+Deno.test("yepno: two concurrent lock-child runs are independent, each on its own fixture path", async () => {
+  const spawnChild = () =>
+    new Deno.Command("npm", {
+      args: ["run", "test:file", "--", "tests/chrome-launch-lock.test.ts"],
+      cwd: ROOT,
+      stdout: "piped",
+      stderr: "piped",
+    }).spawn();
+  const [a, b] = [spawnChild(), spawnChild()];
+  const [ra, rb] = await Promise.all([a.output(), b.output()]);
+  const textOf = (r: Deno.CommandOutput) => `${new TextDecoder().decode(r.stdout)}${new TextDecoder().decode(r.stderr)}`;
+  const fixturesOf = (text: string) => [...text.matchAll(/^CAP_LOCK_FIXTURE:(\S+)$/gm)].map((m) => m[1]);
+  const [fa, fb] = [fixturesOf(textOf(ra)), fixturesOf(textOf(rb))];
+  assertEquals(ra.code, 0, `concurrent run A must pass: exit ${ra.code} — ${childDiagnosis({ code: ra.code, stdout: ra.stdout, stderr: ra.stderr })}`);
+  assertEquals(rb.code, 0, `concurrent run B must pass: exit ${rb.code} — ${childDiagnosis({ code: rb.code, stdout: rb.stdout, stderr: rb.stderr })}`);
+  assert(fa.length > 0 && fb.length > 0, "both runs must report their fixture paths");
+  assert(fa[0] !== fb[0], `the two runs must not share a lock fixture (${fa[0]} vs ${fb[0]})`);
+});
+
+// The attribution fix needs its own falsifier: a child that exits non-zero must be reported with ITS
+// OWN output, and lock contention must be NAMED. The fixture is a throwaway serial file whose failure
+// is exactly the product's contention sentence, so this asserts the diagnosis rather than the outcome
+// of a real lane's browser.
+Deno.test("yepno: a non-zero child exit is reported with the child's output, and lock contention is NAMED", async () => {
+  const dir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-yepno-diagnosis-" });
+  const failing = `${dir}/failing.test.ts`;
+  const contentionLine = "launchChrome: could not take the serialized-Chrome lock within 800 ms (/tmp/cap-serialized-chrome-acceptance.lock is held by another lane's browser).";
+  await Deno.writeTextFile(
+    failing,
+    `import { assertEquals } from "jsr:@std/assert@1";
+Deno.test("a child that cannot take the lock", () => {
+  console.log(${JSON.stringify(contentionLine)});
+  assertEquals(1, 0, "stand-in for the lock refusal");
+});
+`,
+  );
+  try {
+    const res = runSerialFile(failing, { stdio: "pipe", cwd: ROOT });
+    assert(res.code !== 0, "the fixture child must fail");
+    const message = childDiagnosis(res);
+    assert(message.includes("could not take the serialized-Chrome lock"), `the child's own line must survive into the message: ${message}`);
+    assert(message.includes("NAMED CONTENTION"), `lock contention must be named, not left to look like a delta: ${message}`);
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
 });
