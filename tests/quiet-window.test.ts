@@ -20,6 +20,9 @@ import {
   awaitQuietWindow,
   classifyActiveBuilders,
   classifyEvaluateTimeout,
+  hasNamedHeavyJob,
+  classifyCdpTimeout,
+  measureCdpTimeout,
   ENVIRONMENTAL_REFUSAL_EXIT,
   ENVIRONMENTAL_REFUSAL_MARKER,
   builderJobRoot,
@@ -658,6 +661,76 @@ Deno.test("9t1p: an IDLE box is NOT fleet load — it is a product red that says
   assert(/never settled/.test(v.reason), v.reason);
   assert(/NOT fleet load/.test(v.reason), `it must say what it is not: ${v.reason}`);
   assert(!/WAS loaded/.test(v.reason));
+});
+
+Deno.test("56hfm / lckla: classifyCdpTimeout requires contemporaneous named heavy-builder job for environmental refusal", () => {
+  // 1. Suite's own parallel-phase load (load/core 0.89) with ZERO named heavy-builder jobs
+  // MUST strictly remain PRODUCT RED (cause: "idle-never-settled", environmental: false).
+  const suiteParallelLoadOnly = sample({
+    load1: 12.5,
+    load5: 8.2,
+    load15: 6.0,
+    cores: 14,
+    loadPerCore: 0.89,
+    compilers: 0,
+    compilerNames: [],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    activeBuilderJobs: 0,
+  });
+  assertEquals(hasNamedHeavyJob(suiteParallelLoadOnly), false);
+  const v1 = classifyCdpTimeout(suiteParallelLoadOnly, resolveSpec(SPEC));
+  assertEquals(v1.cause, "idle-never-settled");
+  assertEquals(v1.environmental, false, "parallel phase load alone must NEVER be classified as environmental refusal");
+  assert(v1.reason.includes("zero concurrent named heavy-builder jobs"), v1.reason);
+  assert(v1.reason.includes("preserving PRODUCT RED per MERGER-PLAYBOOK m9g43"), v1.reason);
+
+  // 2. High load WITH named heavy-builder job(s) (e.g. rustc / cargo from concurrent build)
+  // correctly takes the environmental refusal verdict (exit 75).
+  const loadWithRustBuild = sample({
+    load1: 12.5,
+    load5: 8.2,
+    load15: 6.0,
+    cores: 14,
+    loadPerCore: 0.89,
+    compilers: 1,
+    compilerNames: ["cargo"],
+    activeCompilers: 1,
+    activeCompilerNames: ["rustc"],
+    activeBuilderJobs: 1,
+  });
+  assertEquals(hasNamedHeavyJob(loadWithRustBuild), true);
+  const v2 = classifyCdpTimeout(loadWithRustBuild, resolveSpec(SPEC));
+  assertEquals(v2.cause, "loaded");
+  assertEquals(v2.environmental, true, "load with named heavy-builder jobs qualifies as environmental refusal");
+  assert(v2.reason.includes("under named heavy builder load"), v2.reason);
+
+  // 3. Idle box with zero compilers stays product red.
+  const idle = sample({
+    load1: 0.20,
+    load5: 0.15,
+    cores: 14,
+    loadPerCore: 0.01,
+    compilers: 0,
+    compilerNames: [],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    activeBuilderJobs: 0,
+  });
+  assertEquals(hasNamedHeavyJob(idle), false);
+  const v3 = classifyCdpTimeout(idle, resolveSpec(SPEC));
+  assertEquals(v3.cause, "idle-never-settled");
+  assertEquals(v3.environmental, false);
+
+  // 4. Unmeasurable box fails closed to environmental refusal.
+  const unmeasurable = sample({
+    measurable: false,
+    error: "proc scan failed: EACCES",
+    loadPerCore: Infinity,
+  });
+  const v4 = classifyCdpTimeout(unmeasurable, resolveSpec(SPEC));
+  assertEquals(v4.cause, "unmeasurable");
+  assertEquals(v4.environmental, true);
 });
 
 Deno.test("9t1p: an UNMEASURABLE box fails CLOSED to environmental, but never claims load", () => {

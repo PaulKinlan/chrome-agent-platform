@@ -33,6 +33,8 @@ import {
   readLoadSample,
   classifyEvaluateTimeout,
   measureEvaluateTimeout,
+  classifyCdpTimeout,
+  measureCdpTimeout,
   type EvaluateTimeoutVerdict,
   ENVIRONMENTAL_REFUSAL_MARKER,
 } from "./quiet-window.ts";
@@ -1311,9 +1313,9 @@ export async function openCdp(wsUrl: string, opts: OpenCdpOpts = {}): Promise<Cd
         const timeoutBudget = opts.timeoutMs ?? 30000;
         const verdict = opts.measureVerdict
           ? await opts.measureVerdict()
-          : await measureEvaluateTimeout().catch(async () => {
+          : await measureCdpTimeout().catch(async () => {
               const sample = await readLoadSample().catch(() => null);
-              return classifyEvaluateTimeout(sample);
+              return classifyCdpTimeout(sample);
             });
         const liveChrome = opts.countLiveChrome
           ? opts.countLiveChrome()
@@ -1583,9 +1585,9 @@ export async function waitForServiceWorker(
   if (timedOutCalls > 0 || lastError !== null) {
     const verdict = opts.measureVerdict
       ? await opts.measureVerdict()
-      : await measureEvaluateTimeout().catch(async () => {
+      : await measureCdpTimeout().catch(async () => {
           const sample = await readLoadSample().catch(() => null);
-          return classifyEvaluateTimeout(sample);
+          return classifyCdpTimeout(sample);
         });
     const liveChrome = opts.countLiveChrome
       ? opts.countLiveChrome()

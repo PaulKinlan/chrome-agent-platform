@@ -142,6 +142,24 @@ error: AssertionError: must have polled responsive Chrome multiple times under l
  FAILURES 
 `;
   assertEquals(areAllFailuresEnvironmental(assertionFailureWithLoadQuote), false, "AssertionError must never be converted to environmental");
+
+  // 5. Finding lckla: Parallel phase load alone (e.g. load/core 0.89) with ZERO named heavy-builder jobs
+  // MUST strictly remain PRODUCT RED (exit 1) per MERGER-PLAYBOOK m9g43.
+  const swParallelPhaseOnlyLoadOutput = `
+ ERRORS 
+
+waitForServiceWorker timeout under suite's own parallel load => ./tests/sample-browser.test.ts:15:6
+error: ServiceWorkerTargetTimeoutError: PRODUCT RED (not environmental): waitForServiceWorker: Target.getTargets: deadline exceeded (120ms total budget, 30ms per-call budget, 3 attempts) [idle-never-settled] live-chrome=7 load1=12.50 load5=8.20 cores=14 load/core=0.89 heavy-builders=0 active=0 jobs=0 — cdp operation exceeded the budget with zero concurrent named heavy-builder jobs (unnamed parallel-phase load: load1=12.50 load5=8.20 cores=14 load/core=0.89 heavy-builders=0 active=0 jobs=0) — preserving PRODUCT RED per MERGER-PLAYBOOK m9g43
+    throw new ServiceWorkerTargetTimeoutError(msg, details);
+          ^
+
+ FAILURES 
+`;
+  assertEquals(
+    areAllFailuresEnvironmental(swParallelPhaseOnlyLoadOutput),
+    false,
+    "suite parallel-phase load alone with zero named builders must strictly remain product red",
+  );
 });
 
 Deno.test("xj6sb: combinePhaseExitCodes combines exit codes correctly and prioritizes product failures over refusals", () => {

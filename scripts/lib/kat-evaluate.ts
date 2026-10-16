@@ -4,6 +4,8 @@
 import {
   classifyEvaluateTimeout,
   measureEvaluateTimeout,
+  classifyCdpTimeout,
+  measureCdpTimeout,
   evaluateTimeoutReport,
   ENVIRONMENTAL_REFUSAL_EXIT,
   ENVIRONMENTAL_REFUSAL_MARKER,
@@ -86,9 +88,9 @@ export function createClassifiedCdpClient(
   const clearTimer = opts.clearTimeoutFn ?? ((id) => clearTimeout(id));
 
   const measure = opts.measureVerdict ?? (async () => {
-    return await measureEvaluateTimeout().catch(async () => {
+    return await measureCdpTimeout().catch(async () => {
       const sample = await readLoadSample().catch(() => null);
-      return classifyEvaluateTimeout(sample);
+      return classifyCdpTimeout(sample);
     });
   });
 
@@ -147,7 +149,7 @@ export function createClassifiedCdpClient(
         // Finding P1: Recalculate elapsed AFTER measurement completes
         const elapsedAfterMeasure = now() - req.startedAt;
 
-        if (verdict.cause === "loaded" || verdict.environmental) {
+        if (verdict.environmental && (verdict.cause === "loaded" || verdict.cause === "unmeasurable")) {
           if (!req.extended && starvationTimeoutMs > elapsedAfterMeasure) {
             req.extended = true;
             const remainingMs = Math.max(1, starvationTimeoutMs - elapsedAfterMeasure);
