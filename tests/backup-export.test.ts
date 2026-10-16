@@ -194,6 +194,62 @@ Deno.test("0ymn: streaming export preserves the content contract over a fake OPF
   assertEquals(byName.has(`opfs/${EXCLUDED_PATH}`), false, "the excluded private path is never archived");
 });
 
+Deno.test("hnilk: opens overlap in a four-handle window while TAR bodies keep list order", async () => {
+  const paths = Array.from({ length: 11 }, (_, i) => `entry-${i}.txt`);
+  let active = 0;
+  let peak = 0;
+  const chunks: Uint8Array[] = [];
+  await streamExportArchive({
+    writable: new WritableStream<Uint8Array>({ write(chunk) { chunks.push(chunk); } }),
+    listFiles: async () => paths,
+    open: async (path) => {
+      active++;
+      peak = Math.max(peak, active);
+      // All opens in a window start before any one settles. On the old serial
+      // loop the first open settles before a second one can be issued.
+      await Promise.resolve();
+      await Promise.resolve();
+      active--;
+      const bytes = ENCODER.encode(path);
+      return { size: bytes.length, stream: new Blob([bytes]).stream() };
+    },
+    kvGet: async () => ({}),
+    alarms: { getAll: async () => [] },
+  });
+  assert(peak >= 2, `independent OPFS opens must overlap, observed ${peak}`);
+  assert(peak <= 4, `at most four metadata opens may run together, observed ${peak}`);
+  const entries = await walkTar(collectArchiveBytes(chunks));
+  assertEquals(entries.map((entry) => entry.name), [
+    "manifest.json", "kv.json", "alarms.json", ...paths.map((path) => `opfs/${path}`),
+  ]);
+  for (const entry of entries.slice(3)) {
+    assertEquals(DECODER.decode(entry.data), entry.name.slice("opfs/".length));
+  }
+});
+
+Deno.test("hnilk: a prefetched open failure aborts export and cancels unread streams", async () => {
+  let cancelled = 0;
+  let aborted = false;
+  const bytes = ENCODER.encode("a");
+  await assertRejects(() => streamExportArchive({
+    writable: new WritableStream<Uint8Array>({ abort() { aborted = true; } }),
+    listFiles: async () => ["a", "b", "c"],
+    open: async (path) => {
+      if (path === "b") throw new Error("open failed");
+      return {
+        size: bytes.length,
+        stream: path === "c" ? new ReadableStream({ cancel() { cancelled++; } }) : new Blob([bytes]).stream(),
+      };
+    },
+    kvGet: async () => ({}),
+    alarms: { getAll: async () => [] },
+  }), Error, "open failed");
+  assert(aborted, "no complete archive may be published after a failed open");
+  // Cleanup is scheduled for any future open that has not yet settled.
+  await Promise.resolve();
+  assertEquals(cancelled, 1, "the prefetched later stream is not retained");
+});
+
 Deno.test("0ymn: the archive extracts with SYSTEM tar and matches the fake OPFS byte-for-byte", async () => {
   const profile = fakeProfile();
   const storage = fakeStorage(profile, KV, ALARMS);
