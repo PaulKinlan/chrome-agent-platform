@@ -139,12 +139,23 @@ export class ProcessUnreadableError extends Error {
   }
 }
 
+/** The environment every `ps` in this file runs under (chrome-agent-platform-d9fyo).
+ *
+ *  A bounded `ps` was not enough: the child still inherited the caller's environment, and `ps` prints
+ *  `lstart` in the CALLER's locale and zone. The row parser below reads ONE fixed shape, so the same
+ *  live process renders differently (or not at all) under a non-C locale or another TZ - a start time
+ *  RECORDED under one launch environment and RE-READ under another then mismatches and reads as pid
+ *  reuse, i.e. as a different process. This is the same pin, for the same reason, as
+ *  scripts/lib/build-lock.mjs. `/bin/ps` is an ABSOLUTE path, so no PATH is needed in the child. */
+export const PS_ENV = Object.freeze({ LC_ALL: "C", TZ: "UTC" });
+
 /** A wedged `ps` must not hang custody: it is bounded and then killed (SIGKILL, since a wedged ps may
  *  ignore SIGTERM). The whole-table read is larger than a single-pid read, hence the buffer.
  *  `makePsRun(timeoutMs)` builds the runner so a test can shorten the bound and prove it. */
 export const PS_TIMEOUT_MS = 5_000;
 export const makePsRun = (timeoutMs = PS_TIMEOUT_MS) => (file, args) =>
   execFileAsync(file, args, {
+    env: PS_ENV,
     timeout: timeoutMs,
     killSignal: "SIGKILL",
     maxBuffer: 8 * 1024 * 1024,
@@ -299,6 +310,21 @@ export async function sha256File(file) {
  *  number. */
 export const FLOCK_HELD_EXIT = 97;
 
+/** A wedged `flock` must not hang custody either (chrome-agent-platform-d9fyo): the probe had NO bound,
+ *  so a `flock` that blocks forever held the whole custody chain open instead of failing closed. */
+export const FLOCK_PROBE_TIMEOUT_MS = 5_000;
+/** `flock` is resolved through PATH (below), so unlike `/bin/ps` this child KEEPS the inherited
+ *  environment - only LC_ALL/TZ are pinned, for the same reason as PS_ENV: a translated or differently
+ *  zoned diagnostic must not decide a verdict. `makeFlockRun(timeoutMs)` exists so a test can shorten the
+ *  bound and prove it, exactly as `makePsRun` does for `ps`. */
+export const makeFlockRun = (timeoutMs = FLOCK_PROBE_TIMEOUT_MS) => (file, args) =>
+  execFileAsync(file, args, {
+    env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+    maxBuffer: 1024 * 1024,
+  });
+
 /**
  * No-/proc platforms (macOS) have no `fdinfo` `lock:` line, so liveness of the canonical
  * lock is proven by FAILING to take it ourselves. Only the distinctive "held" status proves
@@ -325,13 +351,18 @@ export const FLOCK_HELD_EXIT = 97;
  */
 export async function probeCanonicalLockHeld(
   lockPath = CANONICAL_LOCK,
-  run = (file, args) => execFileAsync(file, args),
+  run = makeFlockRun(),
 ) {
   try {
     await run("flock", ["-n", "-E", String(FLOCK_HELD_EXIT), lockPath, "true"]);
     return "canonical inherited lock has no live exclusive flock";
   } catch (e) {
-    if (e?.code === FLOCK_HELD_EXIT && e.stderr === "") return null;
+    // ONLY the exact held exit with empty stderr proves the lock is held. A bound expiring is a kill
+    // (signal/killed set) and is therefore explicitly NOT that proof: a timeout is unverifiable, never
+    // "the lock is not held".
+    if (e?.code === FLOCK_HELD_EXIT && e.stderr === "" && !e?.signal && e?.killed !== true) {
+      return null;
+    }
     return "canonical inherited lock could not be verified (flock unavailable or failed)";
   }
 }

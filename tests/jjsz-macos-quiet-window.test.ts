@@ -13,13 +13,15 @@
 // after ps returns; truncation keeps precedence so the bounded retry still applies; ps failures stay
 // unmeasurable. Every macOS-branch verdict is driven through the `hasProc` / `runPs` / `loadavg` / `budget`
 // seams, so it runs on EVERY platform. The last test drives the REAL ps under a hostile locale.
-import { assert, assertEquals, assertMatch, assertNotEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertMatch, assertNotEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 import { spawnSync } from "node:child_process";
 import { statSync } from "node:fs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import {
+  defaultRunPs,
   environmentLine,
   isQuiet,
+  PS_PROBE_TIMEOUT_MS,
   type LoadSampleDeps,
   type PsInvocation,
   type PsResult,
@@ -477,4 +479,37 @@ Deno.test({
       await Deno.remove(dir, { recursive: true }).catch(() => {});
     }
   },
+});
+
+// ---------------------------------------------------------------------------------------------
+// chrome-agent-platform-d9fyo: the ps probe is BOUNDED
+// ---------------------------------------------------------------------------------------------
+// The environment was pinned (above) but nothing bounded the CHILD: a wedged `ps` held the quiet-window
+// verdict open, with the per-file window in scripts/test-partition.mjs as the only backstop. The bound is
+// a timeout into a SIGKILL, and its rejection is what readLoadSampleOnce's catch turns into
+// `measurable:false`, which fails CLOSED (an unmeasurable box is never assumed quiet).
+
+Deno.test("d9fyo: a wedged ps rejects inside the bound instead of holding the window open", async () => {
+  assert(
+    Number.isFinite(PS_PROBE_TIMEOUT_MS) && PS_PROBE_TIMEOUT_MS > 0,
+    "the default bound must be a finite positive number of milliseconds",
+  );
+  const started = Date.now();
+  const err = await assertRejects(
+    () => defaultRunPs({ args: ["5"], env: {}, clearEnv: true }, { bin: "/bin/sleep", timeoutMs: 200 }),
+    Error,
+  );
+  const elapsed = Date.now() - started;
+  assertStringIncludes(err.message, "ps probe exceeded 200ms");
+  assert(elapsed < 2_000, `the bound must fire at ~200ms, took ${elapsed}ms (remove the bound and this hangs)`);
+});
+
+Deno.test("d9fyo: a timed-out probe is an UNMEASURABLE sample and a refusal, never a quiet verdict", async () => {
+  const sample = await readLoadSample(
+    null,
+    depsOf({ runPs: () => Promise.reject(new Error(`ps probe exceeded ${PS_PROBE_TIMEOUT_MS}ms`)) }),
+  );
+  assertEquals(sample.measurable, false, "a probe that could not answer is not a measurement");
+  assertStringIncludes(String(sample.error), "ps probe exceeded");
+  assertEquals(isQuiet(sample, SPEC), false, "an unmeasurable box must never read as quiet");
 });
