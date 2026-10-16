@@ -452,8 +452,12 @@ Deno.test("killProcessTree whose pkill is rejected (exit 2) leaves the lifeline 
   try {
     const calls: string[] = [];
     attachProcessLifeline(proc, { group: proc.pid }, { spawn: () => fakeWatcher(calls) });
+    // The rejection is INJECTED rather than provoked by an unbalanced pattern: since
+    // chrome-agent-platform-i6lgk the teardown escapes and anchors the pattern, so a profile
+    // path can no longer make pkill exit 2 - but a real rejection must still fail closed, so
+    // the seam keeps this rule pinned. The pattern here is a real, harmless one.
     await assertRejects(
-      () => killProcessTree(proc, `jjsz-f1-(unbalanced-${crypto.randomUUID()}`),
+      () => killProcessTree(proc, `jjsz-f1-rejected-${crypto.randomUUID()}`, { signal: async () => ({ code: 2 }) }),
       Error,
       "pkill exited",
     );

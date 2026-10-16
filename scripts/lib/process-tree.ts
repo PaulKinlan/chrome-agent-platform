@@ -565,6 +565,9 @@ export function liveGroupMembers(group: number, deps: ProcessTableDeps = {}): nu
   return members;
 }
 
+/** What the teardown needs from a pkill/pgrep run: how it ended. */
+export type SignalRun = (bin: string, args: string[]) => Promise<{ code: number }>;
+
 async function runOut(bin: string, args: string[]) {
   // Absolute path + a cleared environment: no PATH/LD_* tricks in a cleanup path.
   return await new Deno.Command(bin, { args, stdout: "piped", stderr: "piped", clearEnv: true }).output();
@@ -574,7 +577,10 @@ async function runOut(bin: string, args: string[]) {
  * Kill `proc`, its isolated group when provided, and processes whose argv
  * contains `treeMatch`, then verify both group and profile have no live
  * members. `treeMatch` must NOT start with "-": pkill/pgrep would parse a
- * leading "--user-data-dir=…" as an option and exit 2. Throws when survivors
+ * leading "--user-data-dir=…" as an option and exit 2. The pattern actually
+ * used for pkill/pgrep is `lifelineMatchPattern(treeMatch)` - escaped and
+ * end-anchored - so a teardown for `<profile>/p1` cannot signal
+ * `<profile>/p10` (chrome-agent-platform-i6lgk). Throws when survivors
  * or a pgrep failure make cleanup unconfirmable — never silently fails open.
  *
  * The crash-safe lifeline (`attachProcessLifeline`) is disarmed only once the
@@ -586,12 +592,21 @@ async function runOut(bin: string, args: string[]) {
 export async function killProcessTree(
   proc: Deno.ChildProcess | null,
   treeMatch: string,
-  { attempts = 20, intervalMs = 250, group, deps }: {
+  { attempts = 20, intervalMs = 250, group, deps, signal }: {
     attempts?: number;
     intervalMs?: number;
     group?: number;
     /** Process-table seam (default: this host's /proc or /bin/ps). */
     deps?: ProcessTableDeps;
+    /**
+     * Seam for the teardown's own pkill/pgrep (default: the bounded, `clearEnv` runner).
+     * It exists so the fail-closed rule - a REJECTED pkill leaves the lifeline ARMED - stays
+     * testable now that the pattern is always escaped and anchored: escaping removed the
+     * pattern-injection route (`unbalanced (` ) that used to force exit 2, but a real rejection
+     * (a missing pkill, a libc that refuses the ERE, a host fault) must still fail closed
+     * (chrome-agent-platform-i6lgk, jjsz F1a).
+     */
+    signal?: SignalRun;
   } = {},
 ): Promise<void> {
   if (treeMatch.startsWith("-")) {
@@ -602,7 +617,7 @@ export async function killProcessTree(
   try {
     // `settled` is non-null from the moment a sweep (or disarm) began; it never rejects.
     if (lifeline?.settled) await lifeline.settled;
-    await killTreeAndVerify(proc, treeMatch, { attempts, intervalMs, group }, deps ?? {});
+    await killTreeAndVerify(proc, treeMatch, { attempts, intervalMs, group }, deps ?? {}, signal);
   } finally {
     if (lifeline) lifeline.teardowns--;
   }
@@ -616,7 +631,22 @@ async function killTreeAndVerify(
   treeMatch: string,
   { attempts, intervalMs, group }: { attempts: number; intervalMs: number; group?: number },
   deps: ProcessTableDeps,
+  signal?: SignalRun,
 ): Promise<void> {
+  const run = signal ?? runOut;
+  // The pattern the lifeline sweep uses, for the same reason and with the same refusal
+  // (chrome-agent-platform-i6lgk): a RAW match over-matches by prefix, so tearing down
+  // `<profile>/p1` also signalled `<profile>/p10`, and an unescaped one lets a profile path
+  // containing an ERE metacharacter match something else entirely. The refusal is kept in ONE
+  // place - an empty or NUL-bearing pattern must never reach pkill, which would match every
+  // process on the host.
+  const match = lifelineMatchPattern(treeMatch);
+  if (match === "") {
+    throw new Error(
+      `process-tree: teardown cannot use treeMatch ${JSON.stringify(clip(treeMatch, 80))} as a pkill/pgrep pattern ` +
+        "(empty, leading '-', or NUL-bearing) - refusing to signal anything",
+    );
+  }
   if (group !== undefined) {
     if (!proc || unsafeGroupReason(proc, group) !== null || processGroup(Deno.pid, deps)?.group === group) {
       throw new Error(`refusing unsafe process group ${group}`);
@@ -632,12 +662,12 @@ async function killTreeAndVerify(
   }
   try { proc?.kill("SIGKILL"); } catch { /* already gone */ }
   try { await proc?.status; } catch { /* reaped */ }
-  const killed = await runOut(PKILL, ["-9", "-f", treeMatch]);
+  const killed = await run(PKILL, ["-9", "-f", match]);
   if (killed.code !== 0 && killed.code !== 1) throw new Error(`pkill exited ${killed.code} — cannot confirm cleanup`);
   for (let i = 0; i < attempts; i++) {
     let out;
     try {
-      out = await runOut(PGREP, ["-f", treeMatch]);
+      out = await run(PGREP, ["-f", match]);
     } catch (e) {
       throw new Error(`pgrep failed (${(e as Error)?.message ?? e}) — cannot confirm cleanup`);
     }
