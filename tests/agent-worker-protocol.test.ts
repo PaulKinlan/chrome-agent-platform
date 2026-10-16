@@ -321,3 +321,34 @@ Deno.test("r7 P1-1: an abort naming the ACTIVE run is still ACKED (the refusal g
   const done = await until(() => find(port.sent, "agent-worker:run-done"));
   assert(done, "the run must still settle — the abort path must never orphan it");
 });
+
+Deno.test("ffa7l: an abort naming a run that already COMPLETED is REFUSED (activeRun cleared on terminal settle)", async () => {
+  const { connect } = await loadWorker();
+  const port = fakePort();
+  connect({ ports: [port] });
+
+  // Kick a run and wait for it to complete normally.
+  port.emit({ type: "agent-worker:run", runId: RUN_ID, task: "say hello", modelKind: "demo", maxIterations: 1 });
+  const done = await until(() => find(port.sent, "agent-worker:run-done"));
+  assert(done, "the initial run must complete");
+  assertEquals(done.ok, true);
+
+  // Now emit an abort naming the COMPLETED run: activeRun was cleared in
+  // handleRun's finally block (extension/workers/agent-worker.js:211), so the
+  // worker must refuse honestly with agent-worker:abort-refused and error 'run_not_live'.
+  port.emit({ type: "agent-worker:abort", runId: RUN_ID });
+  const refused = await until(() =>
+    [...port.sent].reverse().find((m) => m?.type === "agent-worker:abort-refused" && m?.runId === RUN_ID)
+  );
+  assert(refused, "an abort naming an already-completed run must be refused");
+  assertEquals(refused.runId, RUN_ID);
+  assertEquals(refused.error, "run_not_live");
+
+  // Verify no agent-worker:aborted message was emitted for the completed run
+  const messagesAfterDone = port.sent.slice(port.sent.indexOf(done) + 1);
+  assert(
+    !find(messagesAfterDone, "agent-worker:aborted"),
+    "a completed run must never be acknowledged as aborted",
+  );
+});
+
