@@ -271,6 +271,12 @@ export const EXEMPTIONS = {
   // Deno.readTextFileSync per source file; it imports neither script (importing build.mjs RUNS a build),
   // spawns nothing and writes nothing, so it cannot race a rebuild of extension/dist.
   "tests/build-parallel-discipline.test.ts": "reads build.mjs and scripts/package-archive.mjs as TEXT (one readTextFileSync each) and parses them with acorn; never imported, spawned or run, and performs no writes at all",
+  // chrome-agent-platform-l3dc2: the capture-site pin reads build.mjs as TEXT and parses it with
+  // acorn to check the two captured fields; build.mjs is never imported (importing it RUNS a build),
+  // never spawned, and the generator is untouched. The only writes are one durableDir("scratch") record
+  // tree created and removed inside the same test, so no shared artifact is read or written and
+  // concurrent execution cannot race a rebuild of extension/dist.
+  "tests/build-once-capture.test.ts": "reads build.mjs as TEXT and parses it with acorn to pin the captured record fields (never imported, spawned or run); the only writes are a durableDir(scratch) record tree removed in the same test's finally",
 };
 
 // A test that SPAWNS or IMPORTS one of these local drivers inherits the
