@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.704] — 2026-10-16
+- checks now genuinely stop when a tab cannot be activated. The activation call was being skipped entirely because the target id was read from the wrong level of the reply, so a dead tab could still be typed into; that is fixed and covered.
+
 ## [0.3.703] — 2026-10-15
 - Preview, save, or share one redacted self-contained task or artifact HTML file.
 
