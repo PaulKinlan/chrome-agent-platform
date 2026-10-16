@@ -1,4 +1,4 @@
-// jhfji: the exact runtime SW entry has no static-import edge from a test.
+// jhfji: the literal new URL below gives the runtime SW an instrumented selector edge.
 // Parse the shipped module to pin the REAL route initializer, its authoritative
 // dependencies, and the handler map registration; text in comments cannot pass.
 // @ts-nocheck — acorn nodes are plain JS across the Deno/npm boundary.
