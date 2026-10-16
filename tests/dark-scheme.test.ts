@@ -117,3 +117,24 @@ Deno.test("dark-scheme: no hardcoded ink/canvas left on dynamic surfaces", () =>
   // The default-google-blue fallback violated the design identity (no default blue).
   assert(!components.includes("0b57d0"), "no default-blue fallbacks in components");
 });
+
+Deno.test("fte5y: docs surfaces resolve light-dark() and contain no stale mock/theme rules", () => {
+  // 1. docs/index.html declares color-scheme: light dark and light-dark() values
+  const indexHtml = read("docs/index.html");
+  assert(indexHtml.includes("color-scheme: light dark"), "docs/index.html must declare color-scheme: light dark");
+  assert(indexHtml.includes("light-dark("), "docs/index.html must use light-dark() for adaptable colors");
+
+  // 2. docs/showcase.css has no hardcoded html[data-theme='sunlit'] or dead --chrome-accent
+  const showcaseCss = read("docs/showcase.css");
+  assert(!showcaseCss.includes("html[data-theme="), "docs/showcase.css must not contain hardcoded theme-switcher rules");
+  assert(!showcaseCss.includes("--chrome-accent:"), "docs/showcase.css must not define dead --chrome-accent token");
+
+  // 3. docs/mock.css is removed (withdrawn mock stylesheet)
+  try {
+    Deno.statSync(join(ROOT, "docs/mock.css"));
+    assert(false, "docs/mock.css must be removed");
+  } catch (e) {
+    assert(e instanceof Deno.errors.NotFound, "docs/mock.css must not exist");
+  }
+});
+

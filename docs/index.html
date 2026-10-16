@@ -7,10 +7,24 @@
   <!-- CSP-safe, no-script redirect (the WCAG H76 pattern): a static meta
        refresh to the component gallery with a visible fallback link. -->
   <meta http-equiv="refresh" content="0; url=components.html">
+  <link rel="stylesheet" href="theme.css">
   <style>
-    body { font: 16px/1.6 system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; background: #f7f6f3; color: #1d1b18; }
-    a { color: #0e6e63; }
-    .withdrawn { border: 1px solid #ddd8d2; border-radius: 12px; padding: 1rem 1.25rem; background: #fff; }
+    :root { color-scheme: light dark; }
+    body {
+      font: 16px/1.6 system-ui, sans-serif;
+      max-width: 720px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      background: light-dark(#f7f6f3, #1a1815);
+      color: light-dark(#1d1b18, #eae6de);
+    }
+    a { color: light-dark(#0e6e63, #4ecdc4); }
+    .withdrawn {
+      border: 1px solid light-dark(#ddd8d2, #6b6355);
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      background: light-dark(#fff, #23211d);
+    }
   </style>
 </head>
 <body>
