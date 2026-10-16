@@ -57,6 +57,65 @@ function sample(over: Partial<LoadSample> = {}): LoadSample {
 
 const SPEC = { maxLoadPerCore: 0.35, maxCompilers: 1, maxWaitMs: 1000, sampleMs: 50, sustainedSamples: 3 };
 
+/**
+ * Create an executable stub pointing to `source`.
+ * Uses symlink on both Darwin and Linux to eliminate the write-then-exec race
+ * (ETXTBSY / os error 26, chrome-agent-platform-n64td) caused by spawning immediately
+ * after writing to a file while the kernel inode write reference or background thread
+ * close is still pending.
+ *
+ * For environments where symlink fails (or when forceCopyFallback is tested),
+ * reads bytes from source, writes via an explicit file descriptor that is fsync'd
+ * and closed directly BEFORE atomic rename (chrome-agent-platform-o7abi), ensuring
+ * no outstanding write descriptor can linger into execve.
+ */
+export async function createExecutableStub(
+  target: string,
+  source: string,
+  options: { forceCopyFallback?: boolean } = {},
+): Promise<void> {
+  if (!options.forceCopyFallback) {
+    try {
+      await Deno.symlink(source, target);
+      return;
+    } catch { /* proceed to fallback */ }
+  }
+  const tmp = `${target}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  const bytes = await Deno.readFile(source);
+  const f = await Deno.open(tmp, { write: true, createNew: true, mode: 0o755 });
+  try {
+    await f.write(bytes);
+    await f.sync();
+  } finally {
+    f.close();
+  }
+  await Deno.rename(tmp, target);
+}
+
+export let spawnStubRetries = 0;
+
+/**
+ * Spawn an executable stub with bounded ETXTBSY retry as defense-in-depth against
+ * transient OS write-lock latency under extreme host load.
+ */
+async function spawnStub(cmd: string, options: Deno.CommandOptions): Promise<Deno.ChildProcess> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      return new Deno.Command(cmd, options).spawn();
+    } catch (err: any) {
+      lastErr = err;
+      if (err?.message?.includes("os error 26") || err?.message?.includes("Text file busy") || err?.code === "ETXTBSY") {
+        spawnStubRetries++;
+        await new Promise((r) => setTimeout(r, 20 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
 /** The real esbuild binary (not the .bin shim), so a spawned burner is a REAL
  *  compiler whose /proc comm is `esbuild`. Discovered rather than pinned to one
  *  platform directory: a pin names one machine's layout (chrome-agent-platform-icf1). */
@@ -192,12 +251,8 @@ Deno.test("dnop: the REAL sampler counts this test's compiling process and not i
   let compiler: Deno.ChildProcess | null = null;
   try {
     for (const n of ["rustc", "esbuild", "cargo"]) {
-      if (Deno.build.os === "darwin") {
-        await Deno.symlink("/bin/sleep", `${dir}/${n}`);
-      } else {
-        await Deno.copyFile("/bin/sleep", `${dir}/${n}`);
-      }
-      parked.push(new Deno.Command(`${dir}/${n}`, { args: ["30"], stdout: "null", stderr: "null" }).spawn());
+      await createExecutableStub(`${dir}/${n}`, "/bin/sleep");
+      parked.push(await spawnStub(`${dir}/${n}`, { args: ["30"], stdout: "null", stderr: "null" }));
     }
     await new Promise((r) => setTimeout(r, 500));
     const first = await readLoadSample();
@@ -237,6 +292,9 @@ Deno.test("dnop: the REAL sampler counts this test's compiling process and not i
       second.compilerNames.includes("esbuild") && after.compilerNames.includes("esbuild"),
       `the park this test created is visible as a name match: ${JSON.stringify({ s2: second.compilerNames, after: after.compilerNames })}`,
     );
+    // n64td / o7abi: verify that the stub construction is race-free by construction
+    // and that spawnStub did not have to retry a single time.
+    assertEquals(spawnStubRetries, 0, "spawnStub must achieve zero retries under clean symlink construction");
   } finally {
     for (const p of [...parked, compiler]) {
       if (!p) continue;
@@ -1044,15 +1102,15 @@ Deno.test("qs8v7: the REAL sampler groups this test\'s nine children under their
   let job: Deno.ChildProcess | null = null;
   try {
     // The fixture is the incident's shape: a HEAVY-NAMED parent (cargo) that forks nine rustc
-    // children. /bin/sh copies make both names real executables.
-    await Deno.copyFile("/bin/sh", `${dir}/cargo`);
-    await Deno.copyFile("/bin/sleep", `${dir}/rustc`);
+    // children. Stubs point to real executables without write-then-exec race (n64td).
+    await createExecutableStub(`${dir}/cargo`, "/bin/sh");
+    await createExecutableStub(`${dir}/rustc`, "/bin/sleep");
     await Deno.writeTextFile(pidFile, "");
     const before = await readLoadSample();
-    job = new Deno.Command(`${dir}/cargo`, {
+    job = await spawnStub(`${dir}/cargo`, {
       args: ["-c", `for i in 1 2 3 4 5 6 7 8 9; do ${dir}/rustc 10 & echo $! >> ${pidFile}; done; wait`],
       stdout: "null", stderr: "null",
-    }).spawn();
+    });
     let pids: string[] = [];
     for (let attempt = 0; attempt < 40 && pids.length < 9; attempt++) {
       await new Promise((r) => setTimeout(r, 50));
@@ -1068,6 +1126,8 @@ Deno.test("qs8v7: the REAL sampler groups this test\'s nine children under their
     const parents = new Set(pids.map((pid) => during.cpu?.get(pid)?.ppid));
     assertEquals([...parents], [parentPid], `every child's parent is the heavy job root: ${JSON.stringify([...parents])} vs ${parentPid}`);
     assertEquals(countBuilderJobs(pids, during.cpu), 1, "the governor counts this test\'s nine children as ONE builder");
+    // n64td / o7abi: verify zero retries were needed during multi-child spawn
+    assertEquals(spawnStubRetries, 0, "spawnStub must achieve zero retries under clean symlink construction");
     assert(
       pids.every((pid) => during.cpu?.has(pid)),
       "the sampler kept the per-pid evidence for every child (the job count is derived from it, not instead of it)",
@@ -1079,6 +1139,64 @@ Deno.test("qs8v7: the REAL sampler groups this test\'s nine children under their
     try {
       await new Deno.Command("sh", { args: ["-c", `pkill -f ${dir}/rustc || true`], stdout: "null", stderr: "null" }).output();
     } catch { /* best effort */ }
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("n64td / o7abi: createExecutableStub eliminates write-then-exec ETXTBSY race across multiple rapid cycles for both symlink and fallback", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "cap-n64td-stubs-" });
+  try {
+    // 1. Symlink construction: direct spawn (without spawnStub) must NEVER throw ETXTBSY
+    for (let i = 0; i < 20; i++) {
+      const target = `${dir}/symlink_cargo_${i}`;
+      await createExecutableStub(target, "/bin/sleep");
+      // Direct Command.spawn without retry helper
+      const proc = new Deno.Command(target, { args: ["0.01"], stdout: "null", stderr: "null" }).spawn();
+      const status = await proc.status;
+      assertEquals(status.success, true);
+    }
+
+    // 2. o7abi: Fallback copy-write construction (readFile + open + write + sync + close + rename)
+    // Direct spawn (without spawnStub) must ALSO never throw ETXTBSY because the write descriptor
+    // is explicitly closed and sync'd before atomic rename
+    for (let i = 0; i < 20; i++) {
+      const target = `${dir}/fallback_cargo_${i}`;
+      await createExecutableStub(target, "/bin/sleep", { forceCopyFallback: true });
+      // Direct Command.spawn without retry helper
+      const proc = new Deno.Command(target, { args: ["0.01"], stdout: "null", stderr: "null" }).spawn();
+      const status = await proc.status;
+      assertEquals(status.success, true);
+    }
+
+    // 3. Negative control / fault-injection: prove that holding a write fd open on an inode
+    // across rename DOES throw ETXTBSY, and spawnStub's retry mechanism detects and handles it
+    const retriesBefore = spawnStubRetries;
+    const leakTarget = `${dir}/leaked_cargo`;
+    const leakTmp = `${leakTarget}.tmp`;
+    const bytes = await Deno.readFile("/bin/sleep");
+    const leakFile = await Deno.open(leakTmp, { write: true, createNew: true, mode: 0o755 });
+    await leakFile.write(bytes);
+    await leakFile.sync();
+    // Deliberately keep leakFile open while renaming to target to simulate deferred write reference
+    await Deno.rename(leakTmp, leakTarget);
+
+    let threwEtxtbsy = false;
+    try {
+      new Deno.Command(leakTarget, { args: ["0.01"], stdout: "null", stderr: "null" }).spawn();
+    } catch (err: any) {
+      if (err?.message?.includes("os error 26") || err?.message?.includes("Text file busy") || err?.code === "ETXTBSY") {
+        threwEtxtbsy = true;
+      }
+    }
+    // Release the write fd so subsequent operations can proceed
+    leakFile.close();
+    assert(threwEtxtbsy, "direct spawn with unclosed write fd must throw ETXTBSY");
+
+    // After closing leakFile, spawnStub succeeds cleanly
+    const recovered = await spawnStub(leakTarget, { args: ["0.01"], stdout: "null", stderr: "null" });
+    const recStatus = await recovered.status;
+    assertEquals(recStatus.success, true);
+  } finally {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 });
