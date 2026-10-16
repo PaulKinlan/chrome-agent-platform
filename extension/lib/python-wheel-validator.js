@@ -10,11 +10,121 @@
 // 4. Metadata presence: must contain *.dist-info/WHEEL.
 // 5. Zero path traversal: no absolute paths or '..' directory traversal segments.
 // 6. Zero binary extensions: must not contain compiled native code (.so, .pyd, .dylib, .dll, .exe).
+// 7. Bounded archive: declared uncompressed bytes, expansion ratio and entry count are all ceilinged,
+//    because the SAME bytes are handed to pyodide.unpackArchive inside the sandbox, which extracts
+//    every entry into MEMFS with no limits of its own (chrome-agent-platform-gdrfu).
 
 const PURE_WHEEL_SUFFIX_RE = /-(?:py2\.py3|py[23])-none-any\.whl$/i;
 const BINARY_EXT_RE = /\.(so|pyd|dylib|dll|exe)(?:\.[0-9]+)*$/i;
 const DIST_INFO_WHEEL_RE = /^[A-Za-z0-9_.-]+\.dist-info\/WHEEL$/;
 const TRAVERSAL_RE = /(?:^|\/|\\)\.\.(?:\/|\\|$)/;
+
+/**
+ * Archive-bomb bounds for a wheel that will be unpacked inside the Pyodide sandbox
+ * (chrome-agent-platform-gdrfu).
+ *
+ * The numbers are ceilings on what an UNTRUSTED archive may DECLARE, not on what is measured after
+ * extraction - extraction is the thing being protected. A pure-Python wheel is source plus metadata:
+ * the largest wheels on PyPI are a few MiB, so 64 MiB of declared output is far above anything real
+ * and far below an OOM. The ratio catches the cheap bomb (a few hundred declared bytes per archive
+ * byte), the total catches the patient one, and the entry count catches the inode/heap flood.
+ */
+export const WHEEL_ARCHIVE_BOUNDS = Object.freeze({
+  maxEntries: 2048,
+  maxTotalUncompressedBytes: 64 * 1024 * 1024,
+  maxExpansionRatio: 100,
+});
+
+/**
+ * Normalize the wheel-byte shapes that reach the extension from the blob store (Uint8Array,
+ * ArrayBuffer, a plain byte array, or a view over one).
+ *
+ * @param {unknown} bytes
+ * @returns {Uint8Array | null}
+ */
+export function toWheelBytes(bytes) {
+  if (bytes instanceof Uint8Array) return bytes;
+  if (bytes instanceof ArrayBuffer) return new Uint8Array(bytes);
+  if (Array.isArray(bytes)) {
+    try {
+      return new Uint8Array(bytes);
+    } catch {
+      return null;
+    }
+  }
+  if (bytes && typeof bytes === "object" && bytes.buffer instanceof ArrayBuffer) {
+    return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  }
+  return null;
+}
+
+/**
+ * Inspect an archive's DECLARED shape against {@link WHEEL_ARCHIVE_BOUNDS}.
+ *
+ * Fail closed: an archive this parser cannot fully read (malformed, truncated, or using zip64
+ * sentinel sizes it cannot resolve) is refused as unprovable rather than handed to the unpacker.
+ *
+ * @param {Uint8Array} bytes
+ * @returns {{ ok: true, entries: number, totalUncompressedBytes: number, expansionRatio: number }
+ *   | { ok: false, refused: string, error: string }}
+ */
+export function inspectWheelArchiveBounds(bytes) {
+  const parsed = parseZipArchive(bytes);
+  if (!parsed) {
+    return {
+      ok: false,
+      refused: "archive-bounds-unprovable",
+      error: "Archive bounds cannot be proven (malformed, truncated, or zip64 sizes this parser does not resolve); refusing rather than unpacking it unbounded",
+    };
+  }
+  const { cdNames, totalUncompressedBytes } = parsed;
+  if (cdNames.length > WHEEL_ARCHIVE_BOUNDS.maxEntries) {
+    return {
+      ok: false,
+      refused: "archive-entry-count",
+      error: `Archive declares ${cdNames.length} entries, over the ${WHEEL_ARCHIVE_BOUNDS.maxEntries}-entry ceiling`,
+    };
+  }
+  if (totalUncompressedBytes > WHEEL_ARCHIVE_BOUNDS.maxTotalUncompressedBytes) {
+    return {
+      ok: false,
+      refused: "archive-uncompressed-size",
+      error: `Archive declares ${totalUncompressedBytes} uncompressed bytes, over the ${WHEEL_ARCHIVE_BOUNDS.maxTotalUncompressedBytes}-byte ceiling`,
+    };
+  }
+  // Each entry's declared size is 32-bit, so this sum stays far inside Number's exact range; the
+  // denominator floored at 1 only avoids a divide-by-zero on a zero-length buffer (already refused
+  // as invalid above), it never manufactures a ratio that lets a bomb through.
+  const expansionRatio = totalUncompressedBytes / Math.max(1, bytes.byteLength);
+  if (expansionRatio > WHEEL_ARCHIVE_BOUNDS.maxExpansionRatio) {
+    return {
+      ok: false,
+      refused: "archive-expansion-ratio",
+      error: `Archive expands ${expansionRatio.toFixed(1)}:1, over the ${WHEEL_ARCHIVE_BOUNDS.maxExpansionRatio}:1 ceiling`,
+    };
+  }
+  return { ok: true, entries: cdNames.length, totalUncompressedBytes, expansionRatio };
+}
+
+/**
+ * The bounds gate for one wheel of the shape the blob store and the run transport use
+ * (`{ name, bytes }`). Shares {@link inspectWheelArchiveBounds} with the upload validator so both
+ * gates enforce one definition.
+ *
+ * @param {{ name?: unknown, bytes?: unknown }} wheel
+ * @returns {{ ok: true, entries: number, totalUncompressedBytes: number, expansionRatio: number }
+ *   | { ok: false, refused: string, error: string }}
+ */
+export function validateWheelArchiveBounds({ name, bytes } = {}) {
+  const label = typeof name === "string" && name.trim() ? name.trim() : "unnamed.whl";
+  const raw = toWheelBytes(bytes);
+  if (!raw || raw.byteLength === 0) {
+    return { ok: false, refused: "archive-bounds-unprovable", error: `Wheel '${label}' has no readable bytes to bound` };
+  }
+  const bounds = inspectWheelArchiveBounds(raw);
+  if (!bounds.ok) return { ...bounds, error: `Wheel '${label}': ${bounds.error}` };
+  return bounds;
+}
 
 /**
  * Check whether a path contains path traversal ('..') or is absolute.
@@ -33,12 +143,11 @@ export function isPathTraversalOrAbsolute(path) {
  * Returns null if the zip is malformed, truncated, or if Central Directory and Local Headers desync.
  *
  * @param {Uint8Array} bytes
- * @returns {{ cdNames: string[], localNames: string[] } | null}
+ * @returns {{ cdNames: string[], localNames: string[], totalUncompressedBytes: number, totalCompressedBytes: number } | null}
  */
 export function parseZipArchive(bytes) {
   if (!(bytes instanceof Uint8Array) || bytes.byteLength < 22) return null;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-
   // Check initial local header magic PK\x03\x04
   if (view.getUint32(0, true) !== 0x04034b50) return null;
 
@@ -60,6 +169,8 @@ export function parseZipArchive(bytes) {
   const cdNames = [];
   const cdOffsets = new Set();
   let off = cdOffset;
+  let totalUncompressedBytes = 0;
+  let totalCompressedBytes = 0;
   const decoder = new TextDecoder();
 
   // 1. Walk Central Directory entries
@@ -69,6 +180,15 @@ export function parseZipArchive(bytes) {
     const extraLen = view.getUint16(off + 30, true);
     const commentLen = view.getUint16(off + 32, true);
     const localHeaderOffset = view.getUint32(off + 42, true);
+    // Declared sizes live at CD+20 (compressed) and CD+24 (uncompressed). A 0xFFFFFFFF sentinel
+    // means the real value is in a zip64 extra field this parser does not read, so neither the
+    // size ceiling nor the expansion ratio below could be proven for this archive: fail closed
+    // here rather than admit an archive whose declared shape is unknown.
+    const entryCompressed = view.getUint32(off + 20, true);
+    const entryUncompressed = view.getUint32(off + 24, true);
+    if (entryCompressed === 0xffffffff || entryUncompressed === 0xffffffff) return null;
+    totalCompressedBytes += entryCompressed;
+    totalUncompressedBytes += entryUncompressed;
 
     if (off + 46 + nameLen > bytes.byteLength) return null;
     const name = decoder.decode(bytes.subarray(off + 46, off + 46 + nameLen));
@@ -110,7 +230,7 @@ export function parseZipArchive(bytes) {
     localOff += 30 + nameLen + extraLen + compressedSize;
   }
 
-  return { cdNames, localNames };
+  return { cdNames, localNames, totalUncompressedBytes, totalCompressedBytes };
 }
 
 /**
@@ -128,7 +248,7 @@ export function extractZipFilenames(bytes) {
  * Validates a Python wheel by content and filename according to PEP 427 purelib rules.
  *
  * @param {{ name: string, bytes: Uint8Array }} param0
- * @returns {{ ok: true, name: string, distInfo: string, files: string[] } | { ok: false, refused: string, error: string }}
+ * @returns {{ ok: true, name: string, distInfo: string, files: string[], archive: { entries: number, totalUncompressedBytes: number, expansionRatio: number } } | { ok: false, refused: string, error: string }}
  */
 export function validatePurePythonWheel({ name, bytes }) {
   if (typeof name !== "string" || !name.trim()) {
@@ -207,5 +327,13 @@ export function validatePurePythonWheel({ name, bytes }) {
     };
   }
 
-  return { ok: true, name: cleanName, distInfo, files: cdNames };
+  // Bounded archive (chrome-agent-platform-gdrfu): the same bytes are later handed to
+  // pyodide.unpackArchive inside the sandbox, which extracts every entry into MEMFS with no limits
+  // of its own, so the declared shape is bounded HERE as well as at the run-time hop.
+  const bounds = validateWheelArchiveBounds({ name: cleanName, bytes });
+  if (!bounds.ok) {
+    return { ok: false, refused: bounds.refused, error: bounds.error };
+  }
+
+  return { ok: true, name: cleanName, distInfo, files: cdNames, archive: bounds };
 }
