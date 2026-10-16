@@ -40,10 +40,11 @@ async function computeExpectedChunkGraph(bundlePath: string): Promise<Set<string
 }
 
 Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all dynamic chunks resolve with 0 404s and 0 CSP errors", async () => {
-  assert(
-    RESOLVED_BIN !== null,
-    `20e2u browser verification requires a resolved Chrome binary (tried: ${TRIED_BINS.join("; ")})`,
-  );
+  if (RESOLVED_BIN === null) {
+    const { refuseWithoutBrowser } = await import("../scripts/lib/browser-refusal.ts");
+    refuseWithoutBrowser({ binary: null, tried: TRIED_BINS }, ["20e2u condition (e)"]);
+    return;
+  }
   const CHROME_BIN = RESOLVED_BIN;
   const tmp = durableDir(`cap-chunk-browser-${Date.now()}`);
 
