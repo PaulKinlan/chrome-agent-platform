@@ -203,6 +203,8 @@ export const EXEMPTIONS = {
   // the real repo tree is read, never written.
   "tests/about-page-drift-guard.test.ts": "writes mutated about.html fixtures only inside makeTempDir scratch trees to prove drift detection; the repo tree is read, never written",
   "tests/evidence-durable.test.ts": "spawns the bundled-tool generator ONLY inside a pristine makeTempDir checkout materialization; every write goes to the temp dir, never to repo extension/ or packages/",
+  // yvvvd: gate-full-exact-tip unit tests test runFullGate selective build-tier logic with in-memory mocks
+  "tests/gate-full-exact-tip.test.ts": "mentions build.mjs as a mock changed-file path in pure unit tests of runFullGate (in-memory mocks for ensure and run, no build spawned or executed)",
   // xe11: the owed-changelog ledger test builds throwaway git FIXTURE repos in a
   // makeTempDir and writes `extension/lib/tool.js` INSIDE them (the product-path
   // that makes a fixture commit owed). The extension/ and extension/dist literals
