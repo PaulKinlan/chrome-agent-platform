@@ -12,6 +12,7 @@
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
+import { parseMemoryClearLabelCount } from "./lib/data-memory-clear-parser.ts";
 const EXT = fileURLToPath(new URL("../extension", import.meta.url));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0;
@@ -87,8 +88,7 @@ try {
   );
   const countFor = async () => {
     const text = String(await explorerText() ?? "");
-    const m = text.match(/clear-fixture\.example \((\d+)\+?\)/);
-    return m ? Number(m[1]) : -1;
+    return parseMemoryClearLabelCount(text, "clear-fixture.example");
   };
 
   let before = -1;

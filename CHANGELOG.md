@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.715] — 2026-10-16
+- none: internal memory store test coverage, count semantics docs, and shared label parser
+
 ## [0.3.714] — 2026-10-16
 - load-sensitive gates are no longer held closed by the compiler children of a single heavy build.
 

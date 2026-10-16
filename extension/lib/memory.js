@@ -1467,6 +1467,18 @@ export function durableRunMemory() {
       for (const key of await legacy.keys()) if (isLegacyDurableKey(key)) keys.add(key);
       return [...keys].sort();
     },
+    /**
+     * Bounded count of logical keys across durable run stores (chrome-agent-platform-9epn.11).
+     *
+     * Semantics:
+     * - Returns `{ count: number, capped: boolean }`.
+     * - Early exit: terminates scanning across child stores as soon as `cap` is met.
+     * - Set-union divergence note: while keys() performs a Set union to de-duplicate any
+     *   legacy duplicate keys during migration, count() accumulates counts across distinct
+     *   partitioned store families (registry, executions, payloads, threads, legacy) to
+     *   avoid full key collection and Set allocation. If legacy migration duplicates exist,
+     *   count() represents an upper bound until migration settles.
+     */
     async count({ cap = 500 } = {}) {
       let count = 0;
       const registry = durableStoreForKey(DURABLE_INDEX_KEY);

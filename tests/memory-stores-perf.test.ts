@@ -117,11 +117,26 @@ Deno.test("9epn.11: store.count({ cap }) stops early and reports capped state", 
   assertEquals(await countStoreKeys(store, 50), 9);
 });
 
-Deno.test("9epn.11: durableRunMemory implements bounded count()", async () => {
+Deno.test("9epn.11: durableRunMemory implements bounded count() with early-exit capping", async () => {
   const durable = durableRunMemory();
-  const res = await durable.count({ cap: 500 });
-  assert(typeof res.count === "number");
-  assert(typeof res.capped === "boolean");
+  const resEmpty = await durable.count({ cap: 500 });
+  assert(typeof resEmpty.count === "number");
+  assert(typeof resEmpty.capped === "boolean");
+
+  // Seed actual durable keys across families to exercise the cap branch
+  await durable.set("thread-runs:ffa7l-t1", { runs: [] });
+  await durable.set("thread-runs:ffa7l-t2", { runs: [] });
+  await durable.set("thread-runs:ffa7l-t3", { runs: [] });
+
+  // Cap at 2: count >= cap triggers early exit and capped: true
+  const resCapped = await durable.count({ cap: 2 });
+  assertEquals(resCapped, { count: 2, capped: true });
+  assertEquals(await countStoreKeys(durable, 2), "2+");
+
+  // Cap at 10: uncapped returns full count
+  const resUncapped = await durable.count({ cap: 10 });
+  assertEquals(resUncapped, { count: 3, capped: false });
+  assertEquals(await countStoreKeys(durable, 10), 3);
 });
 
 Deno.test("9epn.11: countStoreKeys makes ZERO store.keys() calls", async () => {
@@ -163,6 +178,7 @@ Deno.test("9epn.11: countStoreKeys makes ZERO store.keys() calls", async () => {
 });
 
 import { countStoreKeysWithLoadRetry } from "../scripts/lib/load-retry.ts";
+import { parseMemoryClearLabelCount } from "../scripts/lib/data-memory-clear-parser.ts";
 
 Deno.test("9epn.11: bounded count benchmarks < 5 ms even with high key volumes", async () => {
   const store = masterMemory();
@@ -342,7 +358,8 @@ Deno.test("9epn.11 P2: enumerateMemoryStores makes ZERO keys() calls across all 
   const fakeBg = instrumentStore(backgroundAgentMemory("bg-1"), "background");
   const fakeSite = instrumentStore(siteMemory("https://example.org"), "site");
 
-  // Seed keys in each store
+  // Clear any leftover keys in master and seed keys in each store
+  await fakeMaster.clear();
   await fakeMaster.set("master_k1", "v");
   await fakeNamed.set("named_k1", "v");
   await fakeBg.set("bg_k1", "v");
@@ -375,6 +392,12 @@ Deno.test("9epn.11 P2: enumerateMemoryStores makes ZERO keys() calls across all 
   assertEquals(countCalls.background, 1, "backgroundAgentMemory must receive 1 count() call");
   assertEquals(countCalls.site, 1, "siteMemory must receive 1 count() call");
 
+  // Value flow-through: keyCount must match the actual store counts
+  assertEquals(res.stores.find((s) => s.kind === "master")?.keyCount, 1);
+  assertEquals(res.stores.find((s) => s.kind === "named")?.keyCount, 1);
+  assertEquals(res.stores.find((s) => s.kind === "background")?.keyCount, 1);
+  assertEquals(res.stores.find((s) => s.kind === "site")?.keyCount, 1);
+
   // Falsification drill: if an unpinned route implementation uses (await store.keys()).length,
   // keysCalls MUST be non-zero
   const legacyRevertRun = async (store) => (await store.keys()).length;
@@ -388,13 +411,17 @@ Deno.test("9epn.11 P2: enumerateMemoryStores makes ZERO keys() calls across all 
   assertEquals(keysCalls.site, 1, "legacy revert increments site keysCalls");
 });
 
-Deno.test("9epn.11: data-memory-clear regex matches both numeric and capped 500+ label formats", () => {
-  const parseCount = (text) => {
-    const m = text.match(/clear-fixture\.example \((\d+)\+?\)/);
-    return m ? Number(m[1]) : -1;
-  };
+Deno.test("9epn.11: memory.stores handler delegates directly to enumerateMemoryStores()", () => {
+  const swCode = Deno.readTextFileSync(new URL("../extension/background/service-worker.js", import.meta.url));
+  const handlerMatch = swCode.match(/async\s+["']memory\.stores["']\s*\(\)\s*\{([^}]+)\}/);
+  assert(handlerMatch, "memory.stores handler must be declared in service-worker.js");
+  const body = handlerMatch[1].trim();
+  assertEquals(body, "return await enumerateMemoryStores();", "memory.stores handler must directly delegate to enumerateMemoryStores()");
+});
 
-  assertEquals(parseCount("clear-fixture.example (5)"), 5);
-  assertEquals(parseCount("clear-fixture.example (500+)"), 500);
-  assertEquals(parseCount("clear-fixture.example (unknown)"), -1);
+Deno.test("9epn.11: data-memory-clear parser matches both numeric and capped 500+ label formats", () => {
+  assertEquals(parseMemoryClearLabelCount("clear-fixture.example (5)"), 5);
+  assertEquals(parseMemoryClearLabelCount("clear-fixture.example (500+)"), 500);
+  assertEquals(parseMemoryClearLabelCount("clear-fixture.example (unknown)"), -1);
+  assertEquals(parseMemoryClearLabelCount(""), -1);
 });
