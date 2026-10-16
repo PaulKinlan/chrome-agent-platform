@@ -19,6 +19,7 @@ import {
   classifyUncovered,
   HARNESS_TREE_GUARDS,
   HTML_EXPORT_ENTRY_GUARDS,
+  EXPORT_JS_ENTRY_GUARDS,
   isGuardEnumeratedScript,
   isScriptsHarness,
   isSelectorInfrastructure,
@@ -269,6 +270,36 @@ Deno.test("3p3e.12: ONLY the two shipped Export HTML documents map to the exact 
   for (const file of ["extension/ntp/index.html", "extension/artifact/preview.html", "extension/options/options.html", "scripts/lib/changed-file-mapping.mjs"]) {
     assertEquals(classifyUncovered(file).tests, [], `${file} must still fail closed`);
   }
+});
+
+Deno.test("jhfji: only the four literal Export-path JS files map to executable inspecting guards", () => {
+  const exact = [
+    "extension/artifact/artifact.js",
+    "extension/background/service-worker.js",
+    "extension/ntp/ntp.js",
+    "scripts/check-reachability.mjs",
+  ];
+  assertEquals(Object.keys(EXPORT_JS_ENTRY_GUARDS).sort(), [...exact].sort());
+  for (const file of exact) {
+    const verdict = classifyUncovered(file);
+    assertEquals(verdict.tests, [...EXPORT_JS_ENTRY_GUARDS[file]]);
+    assert(verdict.tests.length > 0);
+    const expectedSource = file.startsWith("extension/") ? file.slice("extension/".length) : file;
+    assert(Deno.statSync(`${ROOT}${file}`).isFile, `${file} exists in the shipped tree`);
+    assert(
+      verdict.tests.some((test: string) => Deno.readTextFileSync(`${ROOT}${test}`).includes(expectedSource)),
+      `${file} must be read or imported by a declared guard, not mapped to an unrelated test`,
+    );
+  }
+  for (const file of [
+    "extension/ntp/other.js", "extension/artifact/other.js", "extension/background/other.js",
+    "scripts/other.mjs", "scripts/lib/other-helper.mjs", "scripts/lib/changed-file-mapping.mjs",
+  ]) {
+    assertEquals(classifyUncovered(file).tests, [], `${file} must remain full-gate unmappable`);
+  }
+  const grouped = mapUncovered([...exact, "extension/ntp/other.js"]);
+  assertEquals(grouped.mapped.map((m: any) => m.file).sort(), [...exact].sort());
+  assertEquals(grouped.unmappable.map((m: any) => m.file), ["extension/ntp/other.js"]);
 });
 
 Deno.test("nco2: mapUncovered splits mapped from unmappable and carries the reason", () => {
