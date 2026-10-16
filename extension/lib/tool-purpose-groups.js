@@ -207,10 +207,13 @@ const ROUTE_FAMILY_GROUP = Object.freeze({
   "management.usage": "memory-usage",
   "management.table": "tables-queries",
   "management.clipboard": "text-documents",
+  "management.documents": "text-documents",
 });
 
 // Per-tool overrides where the route family mixes purposes. Keyed by toolId.
 const TOOL_GROUP_OVERRIDES = Object.freeze({
+  "read_spreadsheet": "tables-queries",
+  "read_document": "text-documents",
   // browser.page splits into reading vs. driving.
   "read_page": "reading-capture",
   "capture_page": "reading-capture",

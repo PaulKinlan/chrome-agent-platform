@@ -14,6 +14,20 @@ export function isTextLikeAttachment({ name = "", type = "" } = {}) {
     /\.(?:c|cc|cpp|css|csv|go|h|hpp|html?|ini|java|js|json|jsx|log|md|mjs|py|rs|sh|toml|ts|tsx|txt|xml|ya?ml|wat)$/.test(filename);
 }
 
+export function isOfficeDocumentAttachment({ name = "", type = "" } = {}) {
+  const mime = String(type ?? "").toLowerCase().split(";", 1)[0].trim();
+  const filename = String(name ?? "").toLowerCase();
+  return (
+    mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    mime === "application/vnd.openxmlformats-officedocument.presentationml.presentation" ||
+    mime === "application/vnd.ms-excel" ||
+    mime === "application/msword" ||
+    mime === "application/vnd.ms-powerpoint" ||
+    /\.(xlsx|docx|pptx)$/i.test(filename)
+  );
+}
+
 export function textToDataUrl(text, type = "text/plain") {
   const bytes = new TextEncoder().encode(String(text ?? ""));
   let binary = "";
@@ -79,6 +93,22 @@ export function attachmentContext(attachments, { untrustedToken = null } = {}) {
     }
     if (a.kind === "tab" || a.url) {
       parts.push(guard(a, `[tab: ${a.name ?? "tab"} — ${a.url ?? "(no url)"}]`));
+      continue;
+    }
+    if (isOfficeDocumentAttachment(a)) {
+      const isXlsx = /\.(xlsx|xls)$/i.test(String(a.name ?? "")) || String(a.type ?? "").includes("spreadsheet");
+      const toolHint = isXlsx
+        ? `use read_spreadsheet with attachmentName: "${a.name}" to extract its sheets into a tabular artifact`
+        : `use read_document with attachmentName: "${a.name}" to extract its content as Markdown`;
+      parts.push(
+        guard(
+          a,
+          `[attachment: ${a.name ?? "unnamed"} (${a.kind ?? "file"}, ${
+            a.type ?? "office document"
+          }, ${a.size ?? "?"} bytes)]\n` +
+          `  (office document attached — ${toolHint})`,
+        ),
+      );
       continue;
     }
     parts.push(

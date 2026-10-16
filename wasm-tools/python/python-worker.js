@@ -556,14 +556,16 @@ self.onmessage = async (event) => {
     }
     const stdout = [];
     pyodide.setStdout({ batched: (chunk) => stdout.push(String(chunk ?? "")) });
-    // One-shot stdin: the whole input arrives once, then EOF — a program that
-    // reads to EOF terminates instead of re-reading the same bytes forever.
-    let stdinGiven = false;
+    // The host provides one bounded message; Pyodide's stdin callback cannot
+    // consume a long string atomically. Feed it finite chunks, then EOF.
+    const stdinFrame = String(message.stdin ?? "");
+    let stdinOffset = 0;
     pyodide.setStdin({
       stdin: () => {
-        if (stdinGiven) return undefined;
-        stdinGiven = true;
-        return String(message.stdin ?? "");
+        if (stdinOffset >= stdinFrame.length) return undefined;
+        const chunk = stdinFrame.slice(stdinOffset, stdinOffset + 4096);
+        stdinOffset += chunk.length;
+        return chunk;
       },
     });
     await pyodide.runPythonAsync(String(message.code ?? ""));

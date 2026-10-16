@@ -42,6 +42,7 @@ const WORST_ORDER = [REPLAY_UNKNOWN, REPLAY_MUTATING, REPLAY_IDEMPOTENT, REPLAY_
 // Browser reads (the browserToolset readOnly set): observe only.
 const BROWSER_READ_TOOLS = new Set([
   "read_page",
+  "read_document",
   "capture_page",
   "extract_tables",
   "capture_screenshot",
@@ -149,6 +150,7 @@ const IDEMPOTENT_TOOLS = new Set([
   "table_group_aggregate",
   "table_pivot",
   "table_formula",
+  "read_spreadsheet",
 ]);
 
 export const READ_ONLY_TOOLS = new Set([
@@ -270,7 +272,7 @@ const BUILT_IN_TOOLS = new Set([
   "unsubscribe_hook", "generate_ui", "create_script", "update_script",
   "delete_script", "list_scripts", "get_script", "run_script", "python_execute",
   "table_filter", "table_select", "table_join", "table_group_aggregate", "table_pivot", "table_formula",
-  "write_clipboard",
+  "write_clipboard", "read_spreadsheet", "read_document",
   // Per-agent schedule controls: mutating built-ins (route-gated by owner
   // approval; a replay re-runs the gated route, so the gate re-arms).
   "schedules_pause", "schedules_resume", "schedules_update",
