@@ -31,7 +31,7 @@ import { parallelPlan } from "./lib/parallel-plan.mjs";
 import { loadWeights, scheduleOrder } from "./lib/parallel-schedule.mjs";
 import { emitGateLedger, deferredTierEntries, fullTierManifestFields, parseGateBuild } from "./lib/gate-manifest.mjs";
 import { checkBrowserPrerequisite } from "./lib/browser-prerequisite.mjs";
-import { ENVIRONMENTAL_REFUSAL_EXIT } from "./lib/environmental-verdict.mjs";
+import { ENVIRONMENTAL_REFUSAL_EXIT, ENVIRONMENTAL_REFUSAL_MARKER } from "./lib/environmental-verdict.mjs";
 
 export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
 const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_MS ?? DEFAULT_PARALLEL_TIMEOUT_MS);
@@ -64,7 +64,7 @@ export function areAllFailuresEnvironmental(cleanOutput) {
     }
 
     const isRefusal =
-      errorBody.includes("CAP_ENVIRONMENTAL_REFUSAL") ||
+      errorBody.includes(ENVIRONMENTAL_REFUSAL_MARKER) ||
       errorBody.includes("ENVIRONMENT: machine is not quiet enough for this gate") ||
       errorBody.includes("ENVIRONMENT: ntp-boot-staging refusal") ||
       errorBody.includes("ENVIRONMENT: the fleet-wide heavy-gate slot is busy") ||
@@ -216,7 +216,7 @@ function runParallel(files, phase = "parallel phase") {
       }
       let effectiveCode = code ?? (signal ? 128 + 15 : 1);
       const hasEnvironmentalMarker =
-        capturedOutput.includes("CAP_ENVIRONMENTAL_REFUSAL") ||
+        capturedOutput.includes(ENVIRONMENTAL_REFUSAL_MARKER) ||
         capturedOutput.includes("QuietWindowRefusedError") ||
         capturedOutput.includes("ENVIRONMENT: machine is not quiet enough for this gate") ||
         capturedOutput.includes("ENVIRONMENT: ntp-boot-staging refusal");
