@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.718] — 2026-10-16
+- hardened the Python wheel admission path against archive bombs and patched proxy-addr, ip-address, hono and undici
+
 ## [0.3.717] — 2026-10-16
 - none: internal test stub construction and ETXTBSY race elimination
 
