@@ -90,7 +90,7 @@ Deno.test("jy7aj / aa4zf: isBrowserDependentTest distinguishes browser launchers
     );
   }
 
-  // All 44 ALWAYS_ON guards must never be flagged as browser-dependent
+  // All ALWAYS_ON guards must never be flagged as browser-dependent
   for (const file of ALWAYS_ON) {
     assertEquals(
       isBrowserDependentTest(file),
@@ -108,9 +108,14 @@ Deno.test("jy7aj / aa4zf: isBrowserDependentTest distinguishes browser launchers
   assertEquals(isBrowserDependentTest("tests/vocabulary.test.ts"), false);
 });
 
-Deno.test("aa4zf: empty-change gate plan (44 ALWAYS_ON guards) does not refuse on a host without Chrome", () => {
+Deno.test("aa4zf: empty-change gate plan (the whole ALWAYS_ON guard set) does not refuse on a host without Chrome", () => {
   const plan = selectTestFiles([], null);
-  assertEquals(plan.length, 44, "empty-change plan must select the 44 always-on guards");
+  // Pinned to the LIVE list, not a literal: an empty change must select EVERY always-on guard, and
+  // the count belongs to SOURCE_INSPECTING_GUARDS/CORE. tests/select-tests-always-on.test.ts already
+  // owns the "the list must not change silently" pin, so a second copy of the number only goes stale
+  // (chrome-agent-platform-uvo3 added two entries and the literal 44 here was the only thing in the
+  // full suite that noticed).
+  assertEquals(plan.length, ALWAYS_ON.length, `empty-change plan must select every always-on guard (${ALWAYS_ON.length})`);
 
   const check = checkBrowserPrerequisite(plan, {
     isFullSuite: false,
