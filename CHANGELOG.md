@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.720] — 2026-10-16
+- the licence disclosure on the About page now credits the actual author of the bundled BLAKE3 module (hash-wasm, Copyright (c) 2020 Dani Biro) instead of the generic CAP tools text
+
 ## [0.3.719] — 2026-10-16
 - unauth callers can no longer read host paths from the ACP /health endpoint, and a page teardown no longer kills a Chrome whose profile path merely prefixes another's
 
