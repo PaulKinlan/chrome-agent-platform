@@ -739,6 +739,28 @@ Deno.test("build discipline A: build.mjs has none of the cheap evasions (Array.f
   assertEquals(report["A.evasions"], [], "a rule that Promise.all cannot be written must not be satisfiable by writing it another way");
 });
 
+Deno.test("build discipline e149t: build.mjs package-store exemption walk uses settleAll over BUNDLED_INVENTORY_EARLY", () => {
+  const { program } = realBuild();
+  const calls = settleAllCalls(program);
+  const inventoryFanOut = calls.find((c: Node) => {
+    return JSON.stringify(c).includes("BUNDLED_INVENTORY_EARLY");
+  });
+  assert(inventoryFanOut, "build.mjs must fan out the package-store exemption walk through settleAll");
+});
+
+Deno.test("build discipline z3983: pyodide-staging.mjs verifies all admitted files before copying", () => {
+  const { program, source } = parseModule("scripts/lib/pyodide-staging.mjs");
+  const calls = settleAllCalls(program);
+  assertEquals(calls.length, 2, "pyodide-staging.mjs must contain exactly two settleAll phases");
+  // verify call occurs before copy call
+  assert(calls[0].start < calls[1].start, "Phase 1 verify settleAll must precede Phase 2 copy settleAll");
+  // check Phase 1 throws mismatch and Phase 2 calls copyFile
+  const phase1Source = source.slice(calls[0].start, calls[0].end);
+  const phase2Source = source.slice(calls[1].start, calls[1].end);
+  assert(phase1Source.includes("pyodide runtime admission mismatch"), "Phase 1 must verify sha256 digests");
+  assert(phase2Source.includes("cf(") || phase2Source.includes("copyFile("), "Phase 2 must copy admitted files");
+});
+
 Deno.test("build discipline A: package-archive.mjs's stage writer (copyInventoryToStage) settles too", () => {
   const { program } = parseModule("scripts/package-archive.mjs");
   const report = packageArchiveReport(program);

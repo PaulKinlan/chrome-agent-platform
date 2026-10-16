@@ -43,6 +43,7 @@ import {
 } from "./scripts/changelog-delta.mjs";
 import { resolveGcGraceMs, settleAll } from "./scripts/lib/build-concurrency.mjs";
 import { writeBuildOnceRecord } from "./scripts/lib/build-once-record.mjs";
+import { stagePyodideRuntime } from "./scripts/lib/pyodide-staging.mjs";
 
 function parseBuildTarget(args) {
   if (!Array.isArray(args) || args.length > 1) {
@@ -154,20 +155,23 @@ const shippedJsAll = await walkJs("extension");
 // than a hardcoded hash. Exemption is content-addressed: a file is exempt ONLY
 // while its bytes hash-match its inventory row, so a drifted or undeclared
 // file stays inside the AST scan and fails closed.
-const packageStoreExempt = new Set();
 // walkJs returns RELATIVE paths ("extension/wasm/..."), so the exemption set
 // keys on the same rel form — join(ROOT, …) is only used to READ the bytes.
-for (const row of BUNDLED_INVENTORY_EARLY.files) {
-  if (!/^extension\/wasm\/.+\.m?js$/.test(row.rel)) continue;
-  let bytes;
-  try {
-    bytes = await readFile(join(ROOT, row.rel));
-  } catch {
-    continue; // absent file is not this scan's problem (walkJs only saw present files)
-  }
-  const digest = createHash("sha256").update(bytes).digest("hex");
-  if (row.sha256 === digest) packageStoreExempt.add(row.rel);
-}
+const earlyExempt = await settleAll(
+  BUNDLED_INVENTORY_EARLY.files
+    .filter((row) => /^extension\/wasm\/.+\.m?js$/.test(row.rel))
+    .map(async (row) => {
+      let bytes;
+      try {
+        bytes = await readFile(join(ROOT, row.rel));
+      } catch {
+        return null; // absent file is not this scan's problem (walkJs only saw present files)
+      }
+      const digest = createHash("sha256").update(bytes).digest("hex");
+      return row.sha256 === digest ? row.rel : null;
+    }),
+);
+const packageStoreExempt = new Set(earlyExempt.filter(Boolean));
 // Schema-2 runtime data assets (roles adapter/glue/pthread-bootstrap/data)
 // are MANIFEST members, not inventory file rows: their pin is the asset
 // sha256 inside a manifest whose own digest is tied to the inventory row
@@ -921,24 +925,9 @@ try {
     // packaged extension at dist/wasm-tools/python/ (the generated-artifact
     // tree — the raw third-party glue is never shipped as scanned source).
     {
-      const RUNTIME_SRC = path.join(ROOT, "wasm-tools/python");
-      const manifest = JSON.parse(await readFile(path.join(RUNTIME_SRC, "MANIFEST.json"), "utf8"));
-      const runtimeFiles = Object.keys(manifest.files); // 7 pinned files incl. python-worker.js
-      const PY = path.join(STAGE, "wasm-tools/python");
-      await mkdir(PY, { recursive: true });
-      // Phase 1 — verify EVERY admitted file before any is staged: a drifted byte fails the build
-      // closed with nothing copied, rather than leaving its already-verified siblings in STAGE.
-      await settleAll(runtimeFiles.map(async (file) => {
-        const expected = manifest.files[file]?.sha256;
-        if (!expected) throw new Error(`pyodide runtime ${file} has no admission hash in wasm-tools/python/MANIFEST.json`);
-        const digest = createHash("sha256").update(await readFile(path.join(RUNTIME_SRC, file))).digest("hex");
-        if (digest !== expected) {
-          throw new Error(`pyodide runtime admission mismatch: ${file} sha256 ${digest} != manifest ${expected}`);
-        }
-      }));
-      // Phase 2 — stage them.
-      await settleAll(runtimeFiles.map((file) => copyFile(path.join(RUNTIME_SRC, file), path.join(PY, file))));
-      console.log(`build: admitted Pyodide runtime staged (${runtimeFiles.length} files, sha256-verified against MANIFEST.json)`);
+      const RUNTIME_SRC = process.env.CAP_PYODIDE_RUNTIME_SRC || path.join(ROOT, "wasm-tools/python");
+      const count = await stagePyodideRuntime(RUNTIME_SRC, STAGE);
+      console.log(`build: admitted Pyodide runtime staged (${count} files, sha256-verified against MANIFEST.json)`);
     }
 
     await settleAll(["background/service-worker.js", "options.bundle.js", "ntp.bundle.js", "sidepanel.bundle.js", "shared/diff-core.bundle.js", ...SURFACE_BUNDLES.map((s) => s.out)].map(async (rel) => {
