@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.718] — 2026-10-16
+- none: internal quiet-window ETXTBSY retry test exercise
+
 ## [0.3.717] — 2026-10-16
 - none: internal test stub construction and ETXTBSY race elimination
 
