@@ -8,7 +8,7 @@
 // lock, slot poison) stay on tmpfs — a reboot auto-clears stale locks, which
 // is a feature. Plain ESM with node: imports so BOTH runtimes (deno test/journey
 // scripts and node build scripts) share this one rule.
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statfsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -56,11 +56,73 @@ export function durableRoot() {
   return root;
 }
 
+export const DEFAULT_DURABLE_DIR_MAX_ENTRIES = 1000;
+// The entry cap alone is not a disk bound (iqt8f: 5000 entries x the measured
+// ~5.7 MB/scratch dir exceeds this host's disk). The real bound is free space:
+// refuse to create a NEW durable dir once available disk drops below this
+// reserve, whatever size each entry turns out to be.
+export const DEFAULT_DURABLE_DIR_MIN_FREE_BYTES = 512 * 1024 * 1024;
+
+function parseCapEnv(name, fallback, { allowZero = false } = {}) {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const parsed = Number(raw);
+  const valid = Number.isFinite(parsed) && Number.isInteger(parsed) &&
+    (allowZero ? parsed >= 0 : parsed > 0);
+  if (!valid) {
+    throw new Error(
+      `${name} invalid: expected ${allowZero ? "non-negative" : "positive"} integer, got ${JSON.stringify(raw)}`,
+    );
+  }
+  return parsed;
+}
+
+function freeBytesAt(path) {
+  try {
+    const st = statfsSync(path);
+    const avail = Number(st.bavail) * Number(st.bsize);
+    return Number.isFinite(avail) ? avail : null;
+  } catch {
+    return null; // statfs unavailable: the entry cap still applies.
+  }
+}
+
 /** A mkdir -p'd named dir under the durable root. Throws if RAM-backed. */
 export function durableDir(...parts) {
   const dir = join(durableRoot(), ...parts);
   if (isRamBacked(dir)) {
     throw new Error(`refusing RAM-backed evidence dir ${dir} (bead chp)`);
+  }
+  if (!existsSync(dir)) {
+    const cap = parseCapEnv("CAP_DURABLE_DIR_MAX_ENTRIES", DEFAULT_DURABLE_DIR_MAX_ENTRIES);
+    const minFree = parseCapEnv(
+      "CAP_DURABLE_DIR_MIN_FREE_BYTES",
+      DEFAULT_DURABLE_DIR_MIN_FREE_BYTES,
+      { allowZero: true },
+    );
+    const parent = parts.length > 1 ? join(durableRoot(), ...parts.slice(0, -1)) : durableRoot();
+    try {
+      if (existsSync(parent)) {
+        const count = readdirSync(parent).length;
+        if (count >= cap) {
+          throw new Error(
+            `CAP_DURABLE_DIR_MAX_ENTRIES exceeded: ${parent} has ${count} entries (limit ${cap}, requested ${dir})`,
+          );
+        }
+      }
+      if (minFree > 0) {
+        const anchor = existsSync(parent) ? parent : homedir();
+        const free = freeBytesAt(anchor);
+        if (free !== null && free < minFree) {
+          throw new Error(
+            `CAP_DURABLE_DIR_MIN_FREE_BYTES exceeded: ${anchor} has ${free} bytes free ` +
+              `(reserve ${minFree}, requested ${dir})`,
+          );
+        }
+      }
+    } catch (err) {
+      if (err.message && err.message.startsWith("CAP_DURABLE_DIR_")) throw err;
+    }
   }
   mkdirSync(dir, { recursive: true });
   return dir;

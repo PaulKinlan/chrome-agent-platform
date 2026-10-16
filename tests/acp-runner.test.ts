@@ -222,6 +222,7 @@ async function continuityAttempt(
     return { ok: false, verdict: resumeFailureVerdict(await fixtureFrames(logPath), detail), detail };
   } finally {
     await bridge.shutdown();
+    await Deno.remove(hostCwd, { recursive: true }).catch(() => {});
   }
 }
 
