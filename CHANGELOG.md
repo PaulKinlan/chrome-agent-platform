@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.714] — 2026-10-16
+- load-sensitive gates are no longer held closed by the compiler children of a single heavy build.
+
 ## [0.3.713] — 2026-10-16
 - the ACP docs bundle table now reflects a real production build, with headroom per bundle and the source of truth named.
 
