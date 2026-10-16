@@ -884,6 +884,43 @@ export function planSelection({ base = "origin/main" } = {}) {
   };
 }
 
+/**
+ * Forward module closure (importer -> imported) for the reverse graph buildReverseGraph produced, so a
+ * SELECTED test's import graph can be checked for a dist consumer (chrome-agent-platform-1l1ph).
+ * Memoised: the closures of the selected tests overlap heavily, so each repo module is expanded once.
+ * @param {Map<string, Set<string>>} reverse abs imported -> Set(abs importers)
+ * @returns {(rel: string) => string[]} repo-relative modules reachable from that test
+ */
+export function reachableModulesFrom(reverse) {
+  const forward = new Map(); // abs importer -> Set(abs imported)
+  for (const [imported, importers] of reverse) {
+    for (const importer of importers) {
+      let set = forward.get(importer);
+      if (!set) forward.set(importer, set = new Set());
+      set.add(imported);
+    }
+  }
+  const cache = new Map();
+  return (rel) => {
+    const hit = cache.get(rel);
+    if (hit) return hit;
+    const start = resolve(ROOT, rel);
+    const seen = new Set([start]);
+    const stack = [start];
+    const out = [];
+    while (stack.length) {
+      for (const next of forward.get(stack.pop()) ?? []) {
+        if (seen.has(next)) continue;
+        seen.add(next);
+        out.push(relative(ROOT, next).replace(/\\/g, "/"));
+        stack.push(next);
+      }
+    }
+    cache.set(rel, out);
+    return out;
+  };
+}
+
 function fileMappingContextForPlan(plan) {
   const candidates = Object.fromEntries(plan.changed.map((file) => [
     file,
@@ -999,11 +1036,15 @@ async function main() {
     process.exit(prereq.refusal.exit);
   }
 
+  const reachableModules = plan.reverse ? reachableModulesFrom(plan.reverse) : null;
   const decision = decideBuild({
     kind: "subset",
     selected: plan.files,
     changed: plan.changed,
-    distConsumers: findDistConsumers(plan.files),
+    distConsumers: findDistConsumers(plan.files, null, reachableModules),
+    // chrome-agent-platform-1l1ph: with no import graph and a non-empty selection the consumer
+    // analysis is incomplete, and an incomplete analysis must not omit the build.
+    consumptionProof: reachableModules || plan.files.length === 0 ? "proven" : "no import graph for this selection",
   });
   const build = await prepareBuild(decision, buildIfNeeded);
   process.exit(await runDeno(plan.files, {

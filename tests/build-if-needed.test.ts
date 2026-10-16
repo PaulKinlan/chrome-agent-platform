@@ -21,7 +21,7 @@ import {
   isBuildInput,
   referencesDistTree,
 } from "../scripts/build-if-needed.mjs";
-import { allTestFiles, ALWAYS_ON, CORE, MAX_OMITTED_ENTRIES, omittedInventory, omittedLimit, OMITTED_UNSELECTED_REASON } from "../scripts/select-tests.mjs";
+import { allTestFiles, ALWAYS_ON, CORE, buildReverseGraph, MAX_OMITTED_ENTRIES, omittedInventory, omittedLimit, OMITTED_UNSELECTED_REASON, reachableModulesFrom } from "../scripts/select-tests.mjs";
 import { enumerateRunnerTests } from "../scripts/run-tests.mjs";
 import { DIST_COMPLETE_OUTPUTS, writeDistCompleteMarker } from "../scripts/dist-complete.mjs";
 import { READ_ONLY_DIST } from "../scripts/test-partition.mjs";
@@ -392,4 +392,127 @@ Deno.test("0eq00 build (review P1): a genuinely deleted marker is built or refus
   } finally {
     await Deno.remove(root, { recursive: true }).catch(() => {});
   }
+});
+
+// ── chrome-agent-platform-1l1ph: the consumer analysis must follow the IMPORT GRAPH ──────────
+// The 2026-10-16 defect: the decision read "no selected test reads extension/dist (45 selected)" and
+// omitted the build, while a selected test's import graph reached extension/shared/components-artifacts.js,
+// which imports the built bundle. On a FRESH worktree (no extension/dist) the tier then died type-checking
+// the missing bundle, and warm worktrees hid it. These tests pin BOTH directions: a transitive consumer
+// forces the build, and a genuinely dist-free selection still omits it.
+
+Deno.test("1l1ph build: a real test whose import closure gains a dist import is a consumer (the shape that trips this again)", () => {
+  const reachable = reachableModulesFrom(buildReverseGraph());
+  const test = "tests/durable-root.test.ts"; // a real test that never names the built tree itself
+  const module = reachable(test)[0]; // a real module the test really imports
+  assert(module, "fixture: this test must have a real import closure");
+  // Deliberately NOT pinned to any one source file's current imports: chrome-agent-platform-phif1 moved the
+  // accidental `../dist/…bundle.js` imports in extension/shared and extension/lib back to source, and the
+  // next file that reaches the tree transitively must still be seen. Substituting a dist import into a REAL
+  // module of a REAL closure tests the walk itself, not today's repository contents.
+  const distImporting = `import { lineDiffSummary } from "../${"dist"}/shared/diff-core.bundle.js";\n`;
+  const readWithDist = (rel: string) => (rel === module ? distImporting : readReal(rel));
+  assertEquals(
+    findDistConsumers([test], readWithDist).includes(test),
+    false,
+    "the direct-only scan cannot see an import edge, which is the whole defect",
+  );
+  assertEquals(
+    findDistConsumers([test], readWithDist, reachable).includes(test),
+    true,
+    "a test whose import closure reads the built tree IS a dist consumer",
+  );
+  const decision = decideBuild({
+    kind: "subset",
+    selected: [test],
+    changed: [test],
+    distConsumers: findDistConsumers([test], readWithDist, reachable),
+  });
+  assertEquals(decision.required, true, "the transitive consumer must force the build");
+});
+
+Deno.test("1l1ph build: walking the graph only ever ADDS consumers — a direct one can never be dropped", () => {
+  const reachable = reachableModulesFrom(buildReverseGraph());
+  const direct = findDistConsumers(ALWAYS_ON, readReal);
+  const transitive = findDistConsumers(ALWAYS_ON, readReal, reachable);
+  for (const file of direct) {
+    assert(transitive.includes(file), `${file} was a direct dist consumer and must stay one`);
+  }
+});
+
+Deno.test("1l1ph build: a selection with no dist consumer anywhere in its graph still OMITS the build", () => {
+  const reachable = reachableModulesFrom(buildReverseGraph());
+  const clean = ["tests/durable-root.test.ts"];
+  const consumers = findDistConsumers(clean, readReal, reachable);
+  assertEquals(
+    consumers.filter((f) => clean.includes(f)),
+    [],
+    "no consumer may be invented for a dist-free selection (or the omission becomes decorative)",
+  );
+  const decision = decideBuild({ kind: "subset", selected: clean, changed: clean, distConsumers: consumers });
+  assertEquals(decision.required, false, "a proven dist-free selection must not pay for a build");
+  assert(decision.reason.includes("no selected test reads"), decision.reason);
+});
+
+Deno.test("1l1ph build: an INCOMPLETE consumer analysis fails safe and builds", () => {
+  // With no import graph the caller cannot prove the negative, so the absence of a named consumer is
+  // not evidence (chrome-agent-platform-1l1ph).
+  const decision = decideBuild({
+    kind: "subset",
+    selected: ["tests/probe.test.ts"],
+    changed: [],
+    distConsumers: [],
+    consumptionProof: "no import graph for this selection",
+  });
+  assertEquals(decision.required, true, "an unproven analysis must build");
+  assert(
+    decision.reason.includes("could not be completed") && decision.reason.includes("required"),
+    `the reason must name the incomplete analysis: ${decision.reason}`,
+  );
+});
+
+Deno.test("1l1ph build: transitive detection follows real imports — a comment mention or a phantom module is not a consumer", () => {
+  const test = "tests/probe.test.ts";
+  const readTest = 'import { x } from "./y.ts";\n';
+  const readByPath = (rel: string) => (rel === test ? readTest : "// the dist tree is generated by the build\nconst x = 1;\n");
+  assertEquals(
+    findDistConsumers([test], readByPath, () => ["extension/shared/comments-only.js"]).includes(test),
+    false,
+    "prose about the dist tree must not force a build (or every comment costs 20s)",
+  );
+  // An import edge the graph names but whose file no longer exists cannot read anything: treating it as
+  // a consumer would force a build on every gate forever (the closure of a real test reaches tests/x.mjs).
+  const readTestOnly = (rel: string) => (rel === test ? readTest : null);
+  assertEquals(
+    findDistConsumers([test], readTestOnly, () => ["extension/shared/phantom-that-does-not-exist.js"]).includes(test),
+    false,
+    "a phantom module must not force a build",
+  );
+  // The graph also emits specifiers that resolved to the repo root ("") or to a directory. Neither is a
+  // module that can import the tree, and both would otherwise fail closed forever.
+  assertEquals(
+    findDistConsumers([test], readTestOnly, () => [""]).includes(test),
+    false,
+    "an empty specifier must not force a build",
+  );
+  assertEquals(
+    findDistConsumers([test], readTestOnly, () => ["extension/shared"]).includes(test),
+    false,
+    "a directory must not force a build",
+  );
+  // But a module that IS there and cannot be read stays fail-closed.
+  assertEquals(
+    findDistConsumers([test], readTestOnly, () => ["extension/shared/components-artifacts.js"]).includes(test),
+    true,
+    "an unreadable-but-present module is not proof of innocence",
+  );
+  // A module that only READS the tree is deliberately NOT a consumer: the gate's own dist.complete marker
+  // readers are in the closure of the always-on core, and flagging them would make the omission unable to
+  // ever fire (a permanent build for a decision that is then decorative).
+  const markerReader = 'const text = readFileSync(join(DIST_DIR, "dist.complete"), "utf8");\n';
+  assertEquals(
+    findDistConsumers([test], (rel) => (rel === test ? readTest : markerReader), () => ["extension/shared/marker-reader.js"]).includes(test),
+    false,
+    "a module that only reads the built tree must not force every gate to build",
+  );
 });
