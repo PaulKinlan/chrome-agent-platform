@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.716] — 2026-10-16
+- none: internal agent-worker protocol test pinning for completed runs, memory store count-semantics docs, and check diagnostics
+
 ## [0.3.715] — 2026-10-16
 - none: internal gate tooling: test verdict classification and gate attribution, full-gate changed-file detection and build-tier trigger, and environment-pinned probes
 
