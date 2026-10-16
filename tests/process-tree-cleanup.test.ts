@@ -488,7 +488,9 @@ Deno.test("cfc9c: reapCrashpadHandler refuses malformed, empty, or root paths an
 // is the difference between "the guarantee is true when the launch returns" and "usually true":
 Deno.test("6tau8: launchChrome awaits the lifeline's isolation confirmation before returning", async () => {
   const launcher = await Deno.readTextFile(new URL("../scripts/lib/chrome-launch.ts", import.meta.url));
-  const attach = launcher.indexOf("attachProcessLifeline(proc, {");
+  // Pin the WIRING (the await follows the attach), not the call's formatting: a reformat must not be
+  // able to red a pin about ordering, and a reformat is exactly what moving this call to three lines did.
+  const attach = launcher.indexOf("attachProcessLifeline(");
   assert(attach > 0, "launchChrome still attaches a lifeline");
   const awaits = launcher.indexOf("await lifelineState(proc)?.ready", attach);
   assert(
@@ -518,7 +520,7 @@ Deno.test("6tau8: attachProcessLifeline hands back a watcher already confirmed t
     const state = lifelineState(proc);
     assert(state !== undefined, "the lifeline must be registered");
     assertEquals(state!.state, "armed", "it is armed synchronously (callers rely on that)");
-    await state!.ready;
+    assertEquals(await state!.ready, true, "confirmed isolation reports true");
     const watcherPid = state!.watcherPid!;
     assert(watcherPid > 1, "a watcher pid is recorded");
     assertEquals(
@@ -542,7 +544,11 @@ Deno.test("6tau8: a watcher that never leads its own group is warned about ONCE,
     const group = await isolatedProcessGroup(proc);
     attachProcessLifeline(proc, { group }, { warn: (line) => warnLines.push(line), confirmIsolation: async () => false });
     const state = lifelineState(proc);
-    await state!.ready;
+    assertEquals(
+      await state!.ready,
+      false,
+      "UNCONFIRMED isolation must report false: an unconfirmed state that defaults to 'fine' is the lie this contract exists to prevent",
+    );
     assertEquals(warnLines.length, 1, `exactly one diagnostic, by name: ${JSON.stringify(warnLines)}`);
     assert(
       warnLines[0].includes("does not lead its own process group"),
@@ -556,5 +562,52 @@ Deno.test("6tau8: a watcher that never leads its own group is warned about ONCE,
     try { Deno.kill(-proc.pid, "SIGKILL"); } catch { /* gone */ }
     try { proc.kill("SIGKILL"); } catch { /* gone */ }
     await proc.status;
+  }
+});
+
+// 6tau8 condition (3): FAIL-SAFE ON UNCONFIRMED. A running watcher whose isolation cannot be confirmed
+// means the crash guarantee is not in place, so the LAUNCH refuses (and the existing abort path tears
+// the browser down) instead of handing back a "launched" browser whose watchdog would die with this
+// process group. Without the refusal, `ready: false` would be reported as a launch - the same class of
+// lie as a gate red that cannot name its cause.
+Deno.test("6tau8: launchChrome REFUSES an unconfirmed lifeline isolation and leaves no browser behind", async () => {
+  const root = Deno.makeTempDirSync({ prefix: "6tau8-refuse-" });
+  const fake = `${root}/fake-browser`;
+  Deno.writeTextFileSync(
+    fake,
+    "#!/bin/sh\necho 'DevTools listening on ws://127.0.0.1:31337/devtools/browser/abc' >&2\nsleep 300\n",
+  );
+  Deno.chmodSync(fake, 0o755);
+  const warnings: string[] = [];
+  try {
+    await assertRejects(
+      () =>
+        launchChrome({
+          binary: fake,
+          args: [],
+          profile: `${root}/profile`,
+          lockPath: `${root}/lock`,
+          timeoutMs: 5000,
+          lifeline: { confirmIsolation: async () => false, warn: (line) => warnings.push(line) },
+        }),
+      Error,
+      "refusing to report a launched browser",
+    );
+    assert(
+      warnings.some((line) => line.includes("does not lead its own process group")),
+      `the lifeline must say why, by name: ${JSON.stringify(warnings)}`,
+    );
+    // Fail-safe means no orphan: the refusal must go through the launch's abort path, which tears down.
+    let left: string[] = [];
+    for (let i = 0; i < 80; i++) {
+      left = await survivors(root);
+      if (left.length === 0) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    assertEquals(left, [], "the refused launch must not leave its browser running");
+  } finally {
+    await cleanupSteps([
+      () => Deno.removeSync(root, { recursive: true }),
+    ]);
   }
 });

@@ -45,7 +45,9 @@ import {
   attachProcessLifeline,
   isolatedProcessGroup,
   killProcessTree,
+  LIFELINE_ISOLATION_WAIT_MS,
   lifelineState,
+  type LifelineDeps,
   processGroup,
   recordLeaderStartTicks,
   type ProcessTableDeps,
@@ -627,6 +629,9 @@ export async function launchChrome(opts: {
    *  probe. Production never sets it; tests inject a failing `ps` to prove an unreadable table
    *  FAILS THE LAUNCH CLOSED (teardown + rethrow) rather than running an unprotected browser. */
   processTable?: ProcessTableDeps;
+  /** Test seam (chrome-agent-platform-6tau8): the lifeline's own deps, so a launch can be driven with
+   *  an isolation confirmation that never succeeds. Production never sets it. */
+  lifeline?: LifelineDeps;
   /** Test seam (chrome-agent-platform-5fh6a): override teardownChrome to simulate teardown
    *  failures during launch abort. Production never sets it. */
   teardown?: (
@@ -819,15 +824,28 @@ export async function launchChrome(opts: {
   try {
     group = await isolatedProcessGroup(proc, opts.processTable);
     if (group !== undefined) procGroups.set(proc, group);
-    attachProcessLifeline(proc, {
-      group,
-      treeMatch: resolvedProfile ? `user-data-dir=${resolvedProfile}` : undefined,
-    });
+    attachProcessLifeline(
+      proc,
+      { group, treeMatch: resolvedProfile ? `user-data-dir=${resolvedProfile}` : undefined },
+      opts.lifeline,
+    );
     // 6tau8: do not report a protected browser before its lifeline watcher leads its own process
     // group - the crash guarantee would otherwise be a few milliseconds away from true, and a test
     // runner that kills this process's GROUP is exactly the crash it covers. Bounded inside
-    // attachProcessLifeline (40 x 25 ms); a watcher that never isolates is warned about there.
-    await lifelineState(proc)?.ready;
+    // attachProcessLifeline. UNCONFIRMED is FAIL-SAFE: `false` means a running watcher did not lead
+    // its own group within its bound, so this refuses the launch (the catch below tears the browser
+    // down and rethrows) instead of handing back a "launched" browser whose watchdog would die with
+    // this process group. That mirrors isolatedProcessGroup, which already refuses when the
+    // BROWSER's own isolation cannot be shown. `true` also covers the F5 path where no watcher could
+    // be started at all: that is reported once by the lifeline itself, not re-decided here.
+    const lifelineIsolated = await lifelineState(proc)?.ready;
+    if (lifelineIsolated === false) {
+      throw new Error(
+        `launchChrome: the lifeline watcher for pid ${proc.pid} did not lead its own process group within ` +
+          `${LIFELINE_ISOLATION_WAIT_MS} ms; refusing to report a launched browser whose crash watchdog a ` +
+          `SIGKILL of this process's process GROUP could take with it`,
+      );
+    }
   } catch (e) {
     // chrome-agent-platform-5fh6a: when isolatedProcessGroup throws (e.g. unreadable table),
     // check if the table has become readable and confirms setsid's group (proc.pid).

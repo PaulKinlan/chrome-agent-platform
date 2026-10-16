@@ -237,10 +237,12 @@ export type LifelineStateName = "armed" | "fired" | "disarmed" | "unprotected";
 interface Lifeline {
   state: LifelineStateName;
   watcherPid: number | null;
-  /** Resolves once the watcher's OWN process group has been confirmed (or could not be, which warns
-   *  once). See `attachProcessLifeline` for why the guarantee is a promise and not a fact at spawn
-   *  time (bead chrome-agent-platform-6tau8). */
-  ready: Promise<void>;
+  /** TRUE once the watcher's OWN process group has been confirmed; FALSE only when a RUNNING watcher
+   *  could not be confirmed within the bound (which also warns once). It is `true` for an
+   *  `unprotected` lifeline - no watcher was started at all, which the F5 warning already reports.
+   *  See `attachProcessLifeline` for why this is a promise and not a fact at spawn time
+   *  (bead chrome-agent-platform-6tau8). */
+  ready: Promise<boolean>;
   /** The in-flight (or finished) transition out of `armed`; null while armed / unprotected. */
   settled: Promise<void> | null;
   /** `killProcessTree` calls running for this proc: they own the cleanup AND its verdict. */
@@ -439,7 +441,9 @@ export function attachProcessLifeline(
   const lifeline: Lifeline = {
     state: "unprotected",
     watcherPid: null,
-    ready: Promise.resolve(),
+    // Nothing to confirm: no watcher exists, and the F5 warning above already says this browser is
+    // NOT protected. `false` is reserved for a RUNNING watcher whose isolation could not be confirmed.
+    ready: Promise.resolve(true),
     settled: null,
     teardowns: 0,
     disarm: async () => {},
@@ -477,12 +481,14 @@ export function attachProcessLifeline(
   lifeline.ready = confirm(watcher.pid)
     .catch(() => false)
     .then((isolated) => {
-      if (isolated) return;
-      warn(
-        `process-tree: lifeline watcher ${watcher.pid} for pid ${proc.pid} does not lead its own process group ` +
-          `after ${WATCHER_ISOLATION_ATTEMPTS * 25} ms; a SIGKILL of this process's process GROUP can take the ` +
-          `watcher with it and orphan the browser (a kill of this process alone is still covered)`,
-      );
+      if (!isolated) {
+        warn(
+          `process-tree: lifeline watcher ${watcher.pid} for pid ${proc.pid} does not lead its own process group ` +
+            `within ${LIFELINE_ISOLATION_WAIT_MS} ms; a SIGKILL of this process's process GROUP can take the ` +
+            `watcher with it and orphan the browser (a kill of this process alone is still covered)`,
+        );
+      }
+      return isolated;
     });
 
   // The single guard: every transition out of `armed` goes through here, and the
@@ -553,8 +559,9 @@ export function lifelineState(
   state: LifelineStateName;
   watcherPid: number | null;
   settled: Promise<void> | null;
-  /** Resolves when the watcher has been confirmed to lead its own process group (6tau8). */
-  ready: Promise<void>;
+  /** TRUE when the watcher was confirmed to lead its own process group; FALSE only for a running
+   *  watcher that could not be confirmed. Callers must treat FALSE as isolation UNCONFIRMED. */
+  ready: Promise<boolean>;
 } | undefined {
   const lifeline = lifelines.get(proc);
   return lifeline &&
@@ -589,6 +596,8 @@ function groupObservation(pid: number, deps: ProcessTableDeps = {}): "isolated" 
 
 /** How long `attachProcessLifeline` waits for its watcher to lead its own group: 40 x 25 ms. */
 const WATCHER_ISOLATION_ATTEMPTS = 40;
+/** The bound in milliseconds, exported so a caller can name it in a refusal (chrome-agent-platform-6tau8). */
+export const LIFELINE_ISOLATION_WAIT_MS = WATCHER_ISOLATION_ATTEMPTS * 25;
 
 /**
  * Wait, bounded, for `pid` to LEAD its own process group - i.e. for the `setsid` inside the watcher's
