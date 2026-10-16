@@ -25,15 +25,17 @@ Deno.test("9dvae: environmental-verdict constants are single-sourced and match q
   assertEquals(BROWSER_PREREQ_MARKER, ENVIRONMENTAL_REFUSAL_MARKER, "browser-prerequisite marker must equal environmental-verdict");
 });
 
-Deno.test("k3a4c: scripts/run-tests.mjs imports ENVIRONMENTAL_REFUSAL_MARKER and uses no bare literals", () => {
+Deno.test("k3a4c / ufpn2: scripts/run-tests.mjs imports ENVIRONMENTAL_REFUSAL_MARKER and uses no bare literals", () => {
   const runTestsContent = Deno.readTextFileSync(new URL("../scripts/run-tests.mjs", import.meta.url));
   assert(
-    runTestsContent.includes("import { ENVIRONMENTAL_REFUSAL_EXIT, ENVIRONMENTAL_REFUSAL_MARKER } from \"./lib/environmental-verdict.mjs\""),
-    "run-tests.mjs must import ENVIRONMENTAL_REFUSAL_MARKER from environmental-verdict.mjs",
+    /import\s*\{[^}]*\bENVIRONMENTAL_REFUSAL_MARKER\b[^}]*\}\s*from\s*["']\.\/lib\/environmental-verdict\.mjs["']/.test(
+      runTestsContent,
+    ),
+    "run-tests.mjs must import ENVIRONMENTAL_REFUSAL_MARKER from ./lib/environmental-verdict.mjs",
   );
   assert(
-    !runTestsContent.includes("\"CAP_ENVIRONMENTAL_REFUSAL\""),
-    "run-tests.mjs must not contain bare literal \"CAP_ENVIRONMENTAL_REFUSAL\"",
+    !/CAP_ENVIRONMENTAL_REFUSAL/.test(runTestsContent),
+    "run-tests.mjs must not contain bare literal or token CAP_ENVIRONMENTAL_REFUSAL",
   );
 
   const testOutput = `
