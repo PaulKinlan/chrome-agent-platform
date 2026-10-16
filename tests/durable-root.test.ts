@@ -577,3 +577,96 @@ function existsSyncGuard(path: string): boolean {
     return false;
   }
 }
+
+// ── reviewer findings on the trim (chrome-agent-platform-zcg7p, -kkczc) ─────────────────────────
+// Both were reproduced by rev-nudb2 against 60884e03 and both are pinned here as falsifiers: the trim
+// must never remove live output, and the allowlist must not be a way to reach another lane's evidence.
+
+Deno.test("zcg7p: an entry whose SUBTREE was written recently is live output, even with an old directory mtime", async () => {
+  const root = await Deno.makeTempDir({ prefix: "cap-trim-live-probe-" });
+  const now = Date.now();
+  const hour = 60 * 60 * 1000;
+  const old = (now - 2 * hour) / 1000;
+  try {
+    const parent = `${root}/scratch`;
+    const live = `${parent}/active-run`;
+    Deno.mkdirSync(live, { recursive: true });
+    Deno.writeTextFileSync(`${live}/live`, "initial");
+    // The reviewer's exact shape: the DIRECTORY mtime is two hours old (writing into an existing file
+    // does not touch it) while the file inside was just written by the still-running lane.
+    Deno.utimeSync(live, old, old);
+    Deno.writeTextFileSync(`${live}/live`, "new live data");
+    assertEquals(
+      trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 10 }).removed,
+      0,
+      "a directory holding recently written output must not be trimmed",
+    );
+    assertEquals(existsSyncGuard(`${live}/live`), true, "the live output survives");
+    // Control: the same shape with nothing written afterwards IS stale and is trimmed.
+    const dead = `${parent}/dead-run`;
+    Deno.mkdirSync(dead, { recursive: true });
+    Deno.writeTextFileSync(`${dead}/out`, "old");
+    Deno.utimeSync(dead, old, old);
+    Deno.utimeSync(`${dead}/out`, old, old);
+    assertEquals(trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 10 }).removed, 1, "a genuinely stale entry is still trimmed");
+    assertEquals(existsSyncGuard(dead), false, "the stale entry is gone");
+  } finally {
+    await Deno.remove(root, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("kkczc: an allowlisted parent that is a SYMLINK is never followed, and symlinked entries are never removed", async () => {
+  const root = await Deno.makeTempDir({ prefix: "cap-trim-link-probe-" });
+  const now = Date.now();
+  const old = (now - 2 * 60 * 60 * 1000) / 1000;
+  const hour = 60 * 60 * 1000;
+  try {
+    // Another lane's evidence, outside every allowlisted name.
+    const other = `${root}/other-lane`;
+    Deno.mkdirSync(other, { recursive: true });
+    Deno.writeTextFileSync(`${other}/evidence`, "owned by another lane");
+    Deno.utimeSync(`${other}/evidence`, old, old);
+    // The reviewer's exact shape: `scratch` itself is a symlink to it.
+    Deno.symlinkSync(other, `${root}/scratch`);
+    assertEquals(trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 10 }).removed, 0, "a symlinked allowlisted parent must not be followed");
+    assertEquals(existsSyncGuard(`${other}/evidence`), true, "the other lane's evidence survives");
+
+    // A real allowlisted parent containing a symlink entry: the link is skipped, its target survives.
+    Deno.removeSync(`${root}/scratch`);
+    Deno.mkdirSync(`${root}/scratch`, { recursive: true });
+    Deno.symlinkSync(other, `${root}/scratch/linked`);
+    assertEquals(trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 10 }).removed, 0, "a symlinked entry is not removable scratch");
+    assertEquals(existsSyncGuard(`${other}/evidence`), true, "the link target survives");
+
+    // And a genuine stale directory in that same parent still goes: the guard does not disable the trim.
+    Deno.mkdirSync(`${root}/scratch/stale`, { recursive: true });
+    Deno.writeTextFileSync(`${root}/scratch/stale/f`, "old");
+    Deno.utimeSync(`${root}/scratch/stale`, old, old);
+    Deno.utimeSync(`${root}/scratch/stale/f`, old, old);
+    assertEquals(trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 10 }).removed, 1, "stale scratch in a real parent is still trimmed");
+  } finally {
+    await Deno.remove(root, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("zcg7p/kkczc: when staleness cannot be PROVEN the entry is kept (bounded walk fails closed)", async () => {
+  const root = await Deno.makeTempDir({ prefix: "cap-trim-budget-probe-" });
+  const now = Date.now();
+  const old = (now - 2 * 60 * 60 * 1000) / 1000;
+  const hour = 60 * 60 * 1000;
+  try {
+    const dir = `${root}/serial-phase-logs/unknown-age`;
+    Deno.mkdirSync(dir, { recursive: true });
+    Deno.writeTextFileSync(`${dir}/a`, "old");
+    Deno.writeTextFileSync(`${dir}/b`, "old");
+    Deno.utimeSync(dir, old, old);
+    Deno.utimeSync(`${dir}/a`, old, old);
+    Deno.utimeSync(`${dir}/b`, old, old);
+    // A budget too small to walk the subtree means "unknown", and unknown is never deleted.
+    assertEquals(trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 10, maxStats: 1 }).removed, 0, "an unproven entry must be kept");
+    assertEquals(existsSyncGuard(`${dir}/a`), true, "unproven scratch survives");
+    assertEquals(trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 10, maxStats: 100 }).removed, 1, "with a real budget the same entry is provably stale and goes");
+  } finally {
+    await Deno.remove(root, { recursive: true }).catch(() => {});
+  }
+});

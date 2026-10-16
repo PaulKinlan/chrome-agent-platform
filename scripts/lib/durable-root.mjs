@@ -8,7 +8,7 @@
 // lock, slot poison) stay on tmpfs — a reboot auto-clears stale locks, which
 // is a feature. Plain ESM with node: imports so BOTH runtimes (deno test/journey
 // scripts and node build scripts) share this one rule.
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statfsSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statfsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -88,6 +88,10 @@ export const DEFAULT_DURABLE_DIR_FLOOR_BYTES = 32 * 1024 * 1024;
 export const DEFAULT_DURABLE_DIR_TRIM_NAMES = ["serial-phase-logs", "acp-fixture-logs", "scratch", "tmp"];
 export const DEFAULT_DURABLE_DIR_TRIM_MIN_AGE_MS = 60 * 60 * 1000;
 export const DEFAULT_DURABLE_DIR_TRIM_MAX_ENTRIES = 200;
+// The stat budget for the staleness walk (kkczc/zcg7p): proving an entry stale means looking at its
+// whole subtree, so the walk is bounded and an unfinished walk means "unknown", which keeps the
+// entry. 20k stats is a fraction of a second and this path only runs when free space is low.
+export const DEFAULT_DURABLE_DIR_TRIM_MAX_STATS = 20000;
 
 function parseCapEnv(name, fallback, { allowZero = false } = {}) {
   const raw = process.env[name];
@@ -131,39 +135,98 @@ export function freeSpaceVerdict({ free, minFree, floor, anchor, dir }) {
 }
 
 /**
+ * The NEWEST mtime in an entry's subtree, or null when it could not be established (chrome-agent-
+ * platform-zcg7p).
+ *
+ * The entry's own mtime is not its age: writing into an existing file leaves the parent directory's
+ * mtime untouched, and the reviewer's repro showed a live >1h run being deleted that way. A run that
+ * is still working has a recently written file, so the maximum over the subtree is the honest "last
+ * touched" signal. Symlinks are never followed (chrome-agent-platform-kkczc) and the walk is bounded:
+ * exhausting the budget, an unreadable directory, or a vanished path returns null, which the caller
+ * treats as NOT stale and therefore keeps.
+ */
+function newestMtimeMs(path, budget) {
+  let newest = null;
+  const stack = [path];
+  while (stack.length) {
+    if (budget.left <= 0) return null;
+    budget.left--;
+    const current = stack.pop();
+    let st;
+    try {
+      st = lstatSync(current); // lstat: a symlink is itself, never its target
+    } catch {
+      return null; // vanished under us: unprovable, so keep
+    }
+    if (newest === null || st.mtimeMs > newest) newest = st.mtimeMs;
+    if (st.isSymbolicLink()) continue;
+    if (st.isDirectory()) {
+      let names;
+      try {
+        names = readdirSync(current);
+      } catch {
+        return null; // unreadable subtree: unprovable, so keep
+      }
+      for (const name of names) stack.push(join(current, name));
+    }
+  }
+  return newest;
+}
+
+/**
  * Bounded self-cleaning trim of stale scratch under the durable root (nudb2).
  * Allowlisted directories only, age-gated oldest-first, entry-bounded, and every
  * failure ignored: the trim is relief, never a new way for a gate to fail.
+ *
+ * Two reviewer findings are pinned here (chrome-agent-platform-zcg7p, -kkczc): an
+ * entry is stale only when the NEWEST mtime anywhere in its subtree is older than
+ * the bound, and an allowlisted parent must be a REAL directory - a symlink is not
+ * followed, and symlinked entries are never removed - so the allowlist cannot be
+ * used to reach another lane's evidence.
  * @returns {{removed: number, before: number|null, after: number|null}}
  */
 export function trimStaleScratch(root, {
   names = DEFAULT_DURABLE_DIR_TRIM_NAMES,
   minAgeMs = DEFAULT_DURABLE_DIR_TRIM_MIN_AGE_MS,
   maxEntries = DEFAULT_DURABLE_DIR_TRIM_MAX_ENTRIES,
+  maxStats = DEFAULT_DURABLE_DIR_TRIM_MAX_STATS,
   now = Date.now(),
 } = {}) {
   const before = freeBytesAt(root);
+  const budget = { left: maxStats };
   let removed = 0;
   for (const name of names) {
-    if (removed >= maxEntries) break;
+    if (removed >= maxEntries || budget.left <= 0) break;
     const parent = join(root, name);
+    let parentStat;
+    try {
+      parentStat = lstatSync(parent);
+    } catch {
+      continue; // not present or unreadable: nothing to trim
+    }
+    if (!parentStat.isDirectory()) continue; // a symlinked or non-directory allowlisted name is not ours
     let entries;
     try {
       entries = readdirSync(parent, { withFileTypes: true });
     } catch {
-      continue; // not present, unreadable, or not a directory: nothing to trim
+      continue; // unreadable directory: nothing to trim
     }
     const candidates = [];
     for (const entry of entries) {
       const path = join(parent, entry.name);
+      if (entry.isSymbolicLink()) continue; // never remove through a link
+      let st;
       try {
-        const mtime = statSync(path).mtimeMs;
-        if (now - mtime >= minAgeMs) candidates.push({ path, mtime });
+        st = lstatSync(path);
       } catch {
-        // raced away by its owner: it is already gone
+        continue; // raced away by its owner: it is already gone
       }
+      if (st.isSymbolicLink()) continue;
+      const newest = newestMtimeMs(path, budget);
+      if (newest === null) continue; // could not prove it stale: keep it
+      if (now - newest >= minAgeMs) candidates.push({ path, newest });
     }
-    candidates.sort((a, b) => a.mtime - b.mtime); // oldest first: the newest scratch survives
+    candidates.sort((a, b) => a.newest - b.newest); // oldest first: the newest scratch survives
     for (const candidate of candidates) {
       if (removed >= maxEntries) break;
       try {
