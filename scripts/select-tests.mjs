@@ -203,6 +203,16 @@ export const SOURCE_INSPECTING_GUARDS = [
   // reap their full process tree carrying a profile, not a bare proc.kill().
   // It reads tests/ and scripts/ as data, so it is registered in ALWAYS_ON.
   "tests/real-browser-teardown.test.ts",
+  // chrome-agent-platform-uvo3: p1lp's two OWED splits from the widened detector, completed here.
+  // Both are the STATIC half of a mixed file whose whole-file promotion was refused, i.e. the remedy
+  // this list already documents (quiet-window-static, chrome-profile-static, chrome-tools-t12-static).
+  // tests/wasm-package-authority-static.test.ts walks extension/ for the shipped .wasm set and binds
+  // it to the inventory's declared CAS set with a SHA-256 per file: static reads only, no spawn, no
+  // browser, 97ms measured. tests/heavy-gate-slot-static.test.ts is the registry <-> `fleetSlot` census
+  // over scripts/*.ts: 65ms measured, spawns nothing. The spawning harnesses stay in the full suite and
+  // are still in SCANNER_EXCLUSIONS with their reasons.
+  "tests/wasm-package-authority-static.test.ts",
+  "tests/heavy-gate-slot-static.test.ts",
 ];
 
 /**
@@ -228,21 +238,25 @@ export const SCANNER_EXCLUSIONS = Object.freeze({
   // with main's versions of this bead's files swapped in, so the failure is not caused here. An
   // always-on guard that is red on main makes EVERY subset gate red, which is worse than the gap it
   // closes; promotion is owed the moment that red is fixed, and the red itself needs its own bead.
-  // chrome-agent-platform-p1lp: caught by the widened detector, and DELIBERATELY not always-on for the
-  // reason the architecture demands — this file is 16 tests of manifest/schema/import policy over
-  // fixtures, and only ONE of them walks the extension tree. Promoting it would run fifteen unit tests
-  // in every subset gate to cover one static invariant, which is the mixed-file mistake the split
-  // pattern exists to avoid. The invariant is real and should be split into its own -static file the way
-  // tests/chrome-tools-t12 was here; until that happens this entry is the written-down decision rather
-  // than a silent hole. Follow-up owed by chrome-agent-platform-p1lp.
+  // chrome-agent-platform-uvo3: p1lp's owed split, DONE. The walker is gone from this file — the
+  // static/RHC boundary test (the extension/ walk plus the shipped-CAS == declared-inventory binding)
+  // now lives in tests/wasm-package-authority-static.test.ts, which is in SOURCE_INSPECTING_GUARDS
+  // above. Measured at the split with `npm run test:file -- <file>`: 19 tests before, 18 after, so
+  // exactly the one walker moved and nothing else changed. What remains is manifest, schema and
+  // revocation policy plus the CAS race tests over fixtures — no walk of tracked source — so if the
+  // detector still matches this file from a relative-URL read of extension/, this entry is retained as
+  // the written-down decision rather than a silent hole. Do not promote this file whole.
   "tests/wasm-package-authority.test.ts":
-    "one of its 16 tests walks extension/ (walk(fileURLToPath(new URL('../extension', import.meta.url)))) while the other fifteen are manifest/schema policy unit tests over fixtures, so promoting the file would run fifteen unit tests in every subset gate for one static invariant. The established remedy is the split (tests/quiet-window-static.test.ts, tests/chrome-profile-static.test.ts, and tests/chrome-tools-t12-static.test.ts from this same bead). Follow-up owed by chrome-agent-platform-p1lp.",
-  // chrome-agent-platform-p1lp: it walks `${ROOT}scripts` to find load-sensitive harnesses, so it IS a
-  // repo-walker — but the file is a 15-test harness for the heavy-gate slot that SPAWNS processes to
-  // take and hold the slot, so it fails the host-independent and cost-budgeted criteria an always-on
-  // entry must meet. Its static half belongs in its own file, as above.
+    "chrome-agent-platform-uvo3: its one repo-walking test (the extension/ walk plus the shipped-CAS == declared-inventory binding) was SPLIT into tests/wasm-package-authority-static.test.ts, which is always-on; 19 tests ran before the split and 18 after. What remains is manifest/schema/revocation policy and the CAS-race tests over fixtures with no walk of tracked source, so promoting the whole file would still run eighteen fixture tests in every subset gate for nothing.",
+  // chrome-agent-platform-uvo3: p1lp's owed split, DONE. The census (the registry's loadSensitive set
+  // == the sources that take the fleet-wide slot, plus the kat-runner wiring) now lives in
+  // tests/heavy-gate-slot-static.test.ts, which is in SOURCE_INSPECTING_GUARDS above. Measured at the
+  // split: 25 tests before, 24 after, with the SAME single pre-existing environmental failure on both
+  // sides (the HELD-slot journey test refuses environmentally on a worktree with no built dist), which
+  // is how the split is shown to change nothing but the one moved test. What remains is the spawning
+  // harness for the heavy-gate slot itself, which must stay out of the always-on set.
   "tests/heavy-gate-slot.test.ts":
-    "it walks ${ROOT}scripts to find load-sensitive harnesses, but the file is a 15-test harness for the heavy-gate slot itself and spawns processes to take and hold that slot, so it fails the host-independent and cost-budgeted criteria for an always-on entry (the qepn/3bv7/j3o1 lesson). Its static census belongs in its own -static file; that split is owed by chrome-agent-platform-p1lp.",
+    "chrome-agent-platform-uvo3: its one tracked-source census (${ROOT}scripts load-sensitive harnesses vs the registry's loadSensitive set, plus the kat-runner slot wiring) was SPLIT into tests/heavy-gate-slot-static.test.ts, which is always-on and spawns nothing; 25 tests ran before the split and 24 after. What remains is the harness that spawns real holders to take and HOLD the heavy-gate slot, so it is neither host-independent nor cheap and must not be promoted whole (the qepn/3bv7/j3o1 lesson).",
   "tests/quiet-window.test.ts":
     "its BURNER helper locates the real esbuild binary by reading a ROOT-rooted node_modules path, which the widened detector matches because the pattern accepts any ROOT-rooted read. That read is a fixture lookup, not a scan of tracked source, and it is NOT the reason this file is interesting: its tracked-source assertions (registry <-> source consistency, the no-interference pin, the journey harness's exit wiring) were SPLIT into tests/quiet-window-static.test.ts, which is always-on and spawns nothing. The file itself must stay out of the set because it spawns real esbuild --minify burners and costs 23s, tripling every subset gate and injecting compiler load during other lanes' gates — see chrome-agent-platform-fgik. p1lp RESULT: the exclusion is STILL NECESSARY, and that is a residual detection limit rather than an oversight. Narrowing the walk pattern moved the match to the ROOT-rooted read instead: `Deno.readDir(`${ROOT}node_modules/@esbuild`)` matches /Deno\.readDir\(\s*`\$\{ROOT\}/, so the detector still sees a ROOT-rooted directory read. Distinguishing 'reads node_modules' from 'walks tracked source' needs the TARGET PATH, not the root, and no pattern-based detector here has that — so the decision stays written down in this list, where a reader can find it.",
   "tests/chrome-profile-location.test.ts":

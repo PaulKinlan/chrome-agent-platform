@@ -37,7 +37,7 @@ Deno.test("kz27: the tree-walking guards are IN the always-on list, and every en
       `${guard} reads the repo tree as data and must be always-on (kz27)`,
     );
   }
-  assertEquals(SOURCE_INSPECTING_GUARDS.length, 39,
+  assertEquals(SOURCE_INSPECTING_GUARDS.length, 41,
     "reviewed static guards must not disappear silently; update this count when deliberately changing the list");
   // A list is only a list if its members are real: an entry naming a file that does not exist would
   // "cover" nothing while looking reassuring.

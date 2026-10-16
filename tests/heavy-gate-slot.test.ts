@@ -236,35 +236,10 @@ Deno.test("0lj3: the fleet slot and its sidecar are the documented tmpfs paths",
   assertEquals(HEAVY_GATE_HOLDER_PATH, "/tmp/cap-heavy-gate.holder.json");
 });
 
-Deno.test("0lj3: the fleet slot is PAIRED with the load-sensitive declaration, both directions", async () => {
-  // A declaration nobody honours is worse than none: the harness that says "my
-  // reds are environmental" (registry `loadSensitive`) is exactly the one that
-  // must take turns, and a harness that did not declare itself must NOT hold the
-  // fleet-wide slot. Same shape as the mkax guard for requireQuiet.
-  const { HARNESSES } = await import("../scripts/lib/harness-registry.ts");
-  const declared = Object.entries(HARNESSES)
-    .filter(([, entry]) => entry.loadSensitive !== undefined)
-    .map(([file]) => file)
-    .sort();
-  assert(declared.length >= 1, "at least one harness declares itself load-sensitive");
+// The static census invariant was SPLIT into tests/heavy-gate-slot-static.test.ts
+// (chrome-agent-platform-uvo3): this file spawns processes to hold the heavy-gate slot, so it is
+// not host-independent and must not be promoted whole. See SOURCE_INSPECTING_GUARDS.
 
-  const taking = (await Promise.all(
-    [...Deno.readDirSync(`${ROOT}scripts`)]
-      .filter((e) => e.isFile && e.name.endsWith(".ts"))
-      .map(async (e) => ({ name: e.name, src: await Deno.readTextFile(`${ROOT}scripts/${e.name}`) })),
-  )).filter((f) => /fleetSlot:\s*(true|\{)/u.test(f.src)).map((f) => f.name).sort();
-
-  assertEquals(
-    taking,
-    declared,
-    "the registry's loadSensitive set and the sources that take the fleet-wide slot must be the SAME set",
-  );
-  // The batch runner takes one turn for many browsers, so it is named here even
-  // though it is not a `loadSensitive` harness itself (it launches no browser of
-  // its own — its KATs do).
-  const katRunner = await Deno.readTextFile(`${ROOT}scripts/kat-runner.ts`);
-  assert(/acquireHeavyGateSlot\(\{\s*gate:\s*"kat-runner"/u.test(katRunner), "the KAT batch takes the fleet-wide turn for the whole run");
-});
 
 Deno.test("0lj3: fleetSlot without requireQuiet is a caller bug, refused at the launcher", async () => {
   const err = await assertRejects(
