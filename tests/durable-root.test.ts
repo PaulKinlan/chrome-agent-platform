@@ -470,20 +470,125 @@ function* walk(dir: string): Generator<string> {
   }
 }
 
-/** Strip comments without changing line numbers, so diagnostics name the original line. */
-export function stripComments(source: string, isShell: boolean): string {
-  if (isShell) return source.replace(/(^|\s)#.*$/gm, "$1");
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/(^|\s)\/\/.*$/gm, "$1");
+// A single quote-aware pass produces aligned views: `calls` excludes comments
+// and literal text but retains executable ${...} expressions; `literals`
+// excludes comments but keeps path strings. Never remove a newline: the line
+// of a violation must match the file even across continued quoted strings.
+function scanGuardSource(source: string, isShell: boolean) {
+  // Index by UTF-16 code unit, like String.slice/RegExp, not Unicode codepoint.
+  const calls = source.split("");
+  const literals = source.split("");
+  const strings: { kind: string; text: string; start: number; line: number }[] = [];
+  type State = { kind: string; parent?: State; depth?: number; start?: number; line?: number; inClass?: boolean };
+  let state: State = { kind: "code" };
+  let line = 1;
+  const blank = (at: number, comments = false) => {
+    if (source[at] === "\n") return;
+    calls[at] = " ";
+    if (comments) literals[at] = " ";
+  };
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "\n") line++;
+    if (state.kind === "line-comment") {
+      if (ch === "\n") state = state.parent!;
+      else blank(i, true);
+      continue;
+    }
+    if (state.kind === "block-comment") {
+      blank(i, true);
+      if (ch === "*" && source[i + 1] === "/") {
+        blank(++i, true);
+        state = state.parent!;
+      }
+      continue;
+    }
+    if (state.kind === "regex") {
+      blank(i);
+      if (ch === "\\" && i + 1 < source.length) {
+        blank(++i);
+        if (source[i] === "\n") line++;
+      } else if (ch === "[") state.inClass = true;
+      else if (ch === "]") state.inClass = false;
+      else if (ch === "/" && !state.inClass) state = state.parent!;
+      else if (ch === "\n") state = state.parent!; // malformed regex: fail closed on later code
+      continue;
+    }
+    if (state.kind === "single" || state.kind === "double" || state.kind === "template") {
+      const quote = state.kind === "single" ? "'" : state.kind === "double" ? '"' : "`";
+      if (ch === "\\" && i + 1 < source.length) {
+        blank(i);
+        blank(++i);
+        if (source[i] === "\n") line++;
+        continue;
+      }
+      if (ch === quote) {
+        blank(i);
+        strings.push({ kind: state.kind, text: source.slice(state.start! + 1, i), start: state.start!, line: state.line! });
+        state = state.parent!;
+        continue;
+      }
+      if (state.kind === "template" && ch === "$" && source[i + 1] === "{") {
+        state = { kind: "interpolation", depth: 1, parent: state };
+        i++;
+        continue;
+      }
+      blank(i);
+      continue;
+    }
+    if (state.kind === "interpolation") {
+      if (ch === "{") state.depth!++;
+      if (ch === "}" && --state.depth! === 0) {
+        state = state.parent!;
+        continue;
+      }
+    }
+    // Comments and quotes are recognized in both ordinary code and template
+    // interpolations. A '#' inside a shell quote is NOT a comment.
+    if (!isShell && ch === "/" && (source[i + 1] === "/" || source[i + 1] === "*")) {
+      const block = source[i + 1] === "*";
+      state = { kind: block ? "block-comment" : "line-comment", parent: state };
+      blank(i, true);
+      blank(++i, true);
+      continue;
+    }
+    if (!isShell && ch === "/" && source[i + 1] !== "/" && source[i + 1] !== "*") {
+      const prefix = source.slice(source.lastIndexOf("\n", i - 1) + 1, i).trimEnd();
+      if (/[=([{,:!?|&]$/.test(prefix) || /\b(?:return|throw|case|yield)$/.test(prefix)) {
+        state = { kind: "regex", parent: state, inClass: false };
+        blank(i);
+        continue;
+      }
+    }
+    if (isShell && ch === "#" && (i === 0 || /[\s;]/.test(source[i - 1]))) {
+      state = { kind: "line-comment", parent: state };
+      blank(i, true);
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      state = { kind: ch === "'" ? "single" : ch === '"' ? "double" : "template", parent: state, start: i, line };
+      blank(i);
+    }
+  }
+  // An unterminated quote is not evidence that later code is safe: leave its
+  // text visible to the call detector rather than silently suppressing it.
+  while (state.parent) {
+    if (state.start !== undefined) {
+      for (let i = state.start; i < source.length; i++) calls[i] = source[i];
+    }
+    state = state.parent;
+  }
+  return { calls: calls.join(""), literals: literals.join(""), strings };
 }
 
-/** Keep string contents from looking like executable temporary-directory calls. */
+/** Strip comments without changing offsets or line numbers. */
+export function stripComments(source: string, isShell: boolean): string {
+  return scanGuardSource(source, isShell).literals;
+}
+
+/** Keep executable interpolation expressions while blanking quoted rationale. */
 export function stripStrings(source: string): string {
-  return source
-    .replace(/`(?:\\[\s\S]|[^\\`])*`/g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/'(?:\\[\s\S]|[^\\'\n])*'/g, "''")
-    .replace(/"(?:\\[\s\S]|[^\\"\n])*"/g, '""');
+  return scanGuardSource(source, false).calls;
 }
 
 /** Apply the existing allowlists and detectors to source at their proper scope. */
@@ -495,14 +600,29 @@ export function findDurableViolations(
 ): string[] {
   const violations: string[] = [];
   const rawLines = content.split("\n");
-  const codeLines = stripComments(content, isShell).split("\n");
-  const callLines = stripStrings(codeLines.join("\n")).split("\n");
-  for (let i = 0; i < codeLines.length; i++) {
+  const scanned = scanGuardSource(content, isShell);
+  const callLines = scanned.calls.split("\n");
+  const literalLines = scanned.literals.split("\n");
+  const executedStrings = new Set<number>();
+  for (const string of scanned.strings) {
+    if (!CALL_DETECTORS.some((re) => re.test(string.text))) continue;
+    const before = content.slice(content.lastIndexOf("\n", string.start - 1) + 1, string.start);
+    const assignment = /\b(?:const|let|var)\s+([\w$]+)\s*=\s*$/.exec(before);
+    const name = assignment?.[1];
+    const assignedSink = name && new RegExp(`\\b(?:exec|execSync|execFile\\w*|spawn|spawnSync|Deno\\.Command)\\s*\\(\\s*${name.replace(/\$/g, "\\$")}\\b`).test(scanned.calls);
+    const directSink = /\b(?:exec|execSync|execFile\w*|spawn|spawnSync|Deno\.Command)\s*\(\s*$/.test(before);
+    // Rationale strings are inert; a literal passed to a process sink or
+    // shell command substitution is executable, even without a -d flag.
+    if (directSink || assignedSink || (isShell && string.kind === "template")) {
+      executedStrings.add(string.line);
+    }
+  }
+  for (let i = 0; i < rawLines.length; i++) {
     const rawLine = rawLines[i];
     if (DURABLE_ROUTED.test(rawLine)) continue;
     if (ALLOWED_LITERALS.some((l) => rawLine.includes(l))) continue;
-    const call = CALL_DETECTORS.some((re) => re.test(callLines[i]));
-    const literal = LITERAL_DETECTORS.some((re) => re.test(codeLines[i]));
+    const call = CALL_DETECTORS.some((re) => re.test(callLines[i])) || executedStrings.has(i + 1);
+    const literal = LITERAL_DETECTORS.some((re) => re.test(literalLines[i]));
     if ((!call && !literal) || (allowedCallsOnly && call && !literal)) continue;
     violations.push(`${relPath}:${i + 1}: ${rawLine.trim()}`);
   }
@@ -543,6 +663,28 @@ Deno.test("pru35/rxhq2: comment and rationale mentions pass; real calls and path
   assertEquals(findDurableViolations(
     'const dir = await mkdtemp(path.join(durableDir("scratch"), "cap-x-"));', "scripts/test-fixture.ts",
   ), []);
+});
+
+Deno.test("88lzq: real temporary-directory calls survive string and template scanning", () => {
+  const samples = [
+    ['const p = `${await mkdtemp("cap-x-")}`;', 1],
+    ['const cmd = `mktemp -d cap-${id}`; await exec(cmd);', 1],
+    ['await exec(`mktemp -d cap-x`);', 1],
+    ['const cmd = `mktemp -d cap-x`;\nawait exec(cmd);', 1],
+    ['const a = "a ` tick";\nconst dir = await mkdtemp("cap-x-");\nconst b = "b ` tick";', 2],
+    ['const a = "a \\\nb";\ndurableDir("x");\nconst dir = await mkdtemp("cap-x-");', 4],
+    ['const p = `before ${`inner ${mkdtemp("cap-x-")}`} after`;', 1],
+    ["const re = /['\"`]/;\nconst dir = await mkdtemp('cap-x-');", 2],
+    ['const emoji = "🧭";\nconst dir = await mkdtemp("cap-x-");', 2],
+  ] as const;
+  for (const [source, line] of samples) {
+    const failures = findDurableViolations(source, "scripts/sample.ts");
+    assertEquals(failures.length, 1, source);
+    assert(failures[0].includes(`scripts/sample.ts:${line}:`), source);
+  }
+  assertEquals(findDurableViolations('const rationale = `avoid mkdtemp ${why}`;', "scripts/sample.ts"), []);
+  assertEquals(findDurableViolations('const draft = `mktemp -d cap-${id}`;', "scripts/sample.ts"), []);
+  assertEquals(findDurableViolations('dir=`mktemp -d cap-x`', "scripts/sample.sh").length, 1);
 });
 
 // ── chrome-agent-platform-nudb2: scoped reserve + bounded, age-gated trim ──────────────────────
