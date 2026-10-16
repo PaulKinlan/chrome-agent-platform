@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.706] — 2026-10-16
+- Read DOCX, XLSX, and PPTX with bounded built-in readers; keep spreadsheet cells and rich text complete and refuse over-expanded or unsupported documents without a partial artifact.
+
 ## [0.3.705] — 2026-10-16
 - The offscreen document and the script sandbox now declare their page language, so assistive technology can identify the default English language of those internal pages instead of having to guess it.
 

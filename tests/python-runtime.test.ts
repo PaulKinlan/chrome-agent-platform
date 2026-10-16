@@ -213,6 +213,26 @@ Deno.test("pyodide provider: python_execute transports code+stdin to the host an
   assert(typeof sent[0].runId === "string");
 });
 
+Deno.test("pyodide provider: document-sized stdin chunks reach the offscreen host as one complete frame", async () => {
+  let frame = null;
+  const provider = createPythonRuntimeProvider({
+    ensureHost: async () => ({ ok: true }),
+    sendMessage: async (message) => { frame = message; return { ok: true, stdout: "" }; },
+  });
+  const runtime = await provider.provider();
+  const payload = "A".repeat(24 * 1024);
+  let offset = 0;
+  runtime.setStdin({ stdin: () => {
+    if (offset >= payload.length) return undefined;
+    const chunk = payload.slice(offset, offset + 4096);
+    offset += chunk.length;
+    return chunk;
+  } });
+  await runtime.runPythonAsync("print('transport')");
+  assertEquals(frame.stdin.length, payload.length, "the facade must not serialize only the first 4096-byte chunk");
+  assertEquals(frame.stdin, payload);
+});
+
 Deno.test("pyodide provider: a host that cannot open degrades to unavailable, then retries", async () => {
   let fails = true;
   const tool = await providerBacked({

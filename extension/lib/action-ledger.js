@@ -138,6 +138,22 @@ const INVERSE_BUILDERS = Object.freeze({
       inverse: null,
     };
   },
+  read_spreadsheet(args, result) {
+    const name = args?.attachmentName || "spreadsheet";
+    const count = result?.totalSheets ?? (Array.isArray(result?.sheets) ? result.sheets.length : 1);
+    return {
+      sentence: `Read spreadsheet attachment ${name} (${count} ${count === 1 ? "sheet" : "sheets"})`,
+      inverse: null,
+    };
+  },
+  read_document(args, result) {
+    const name = args?.attachmentName || "document";
+    const chars = result?.characterCount ?? (typeof result?.content === "string" ? result.content.length : 0);
+    return {
+      sentence: `Read document attachment ${name} (${chars} ${chars === 1 ? "character" : "characters"})`,
+      inverse: null,
+    };
+  },
   export_asset_to_folder(args, result) {
     const name = result?.name || args?.name || result?.filename || "artifact";
     const path = result?.path || args?.path || "folder";

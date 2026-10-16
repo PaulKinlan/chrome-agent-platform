@@ -135,7 +135,8 @@ import { createSecretVault, createServiceWorkerAccess } from "../lib/secret-vaul
 import { createThreadExportRoute } from "../lib/thread-export-route.js";
 import { synthesizeServiceTools, SERVICE_DESCRIPTORS, enclaveToolsForRun } from "../lib/service-tools.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
-import { attachmentContext, buildMultimodalTask, sanitizeAttachments, validateRunAttachments } from "../lib/attachments.js";
+import { attachmentContext, buildMultimodalTask, sanitizeAttachments, validateRunAttachments, isOfficeDocumentAttachment } from "../lib/attachments.js";
+import { executeReadSpreadsheet, executeReadDocument } from "../lib/python-documents-bundle.js";
 import {
   ASK_AGENT_COMMAND,
   askAgentHubUrl,
@@ -2266,9 +2267,11 @@ const latestExecutionByTask = new Map(); // logical taskId → execId (latest)
 const activeExecutions = new Set(); // execIds currently allowed to record
 const MAX_RUN_ATTESTATIONS = 100;
 const harnessRunDocuments = new Map(); // executionId -> documentId
+const executionAttachments = new Map(); // executionId -> Array<attachment>
 const endedExecutions = new Set();
 function markExecutionEnded(executionId) {
   if (!executionId) return;
+  executionAttachments.delete(executionId);
   endedExecutions.add(executionId);
   while (endedExecutions.size > 500) {
     endedExecutions.delete(endedExecutions.keys().next().value);
@@ -2526,6 +2529,7 @@ function finalizeExecution(execId) {
   // Table workers are exact-run children. Ending any foreground/delegated
   // execution terminates only workers carrying this immutable execution id.
   cancelTableExecution(execId);
+  executionAttachments.delete(execId);
   // The attempt is over: its slot is sealed (a late/duplicate emission is
   // dropped, never appended into a REUSED slot) and the callback is unbound
   // by the caller's finally. The recorded events stay readable.
@@ -3336,6 +3340,9 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         entry.add(normalized);
       },
     };
+    const runAttachments = approvalExecutionId
+      ? (executionAttachments.get(approvalExecutionId) ?? [])
+      : [];
     const modelManagementDispatch = bindModelApprovalDispatcher(
       approvalExecutionId,
       dispatchRoute,
@@ -3345,6 +3352,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       {
         agentId: providerServerAgentId || "hub",
         resolverDocumentId: approvalResolverDocumentId,
+        attachments: runAttachments,
       },
     );
     // Bind the workers' site-tool ask gate to THIS run's dispatcher (see the
@@ -4664,6 +4672,9 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
     // finally, and its slot is FINALIZED so a late emission can never leak
     // into a later run's records.
     beginExecution(executionId, taskId);
+    if (Array.isArray(attachments) && attachments.length > 0) {
+      executionAttachments.set(executionId, attachments);
+    }
     // chrome-agent-platform-afiu: this run is now steerable/queuable — the
     // composer's run.control.* routes resolve against THIS live record.
     runControl.register({
@@ -11242,6 +11253,68 @@ const handlers = mergeRouteMaps(
     return await runPython(runtime, { code: String(code ?? ""), stdin: String(stdin ?? ""), wheels });
   },
 
+  async "document.read_spreadsheet"({ attachmentName, maxRows, data, origin = "master" }, context) {
+    const atts = Array.isArray(context?.attachments) && context.attachments.length > 0
+      ? context.attachments
+      : (context?.executionId ? (executionAttachments.get(context.executionId) ?? []) : []);
+    let targetAttachment = null;
+    if (attachmentName) {
+      targetAttachment = atts.find((a) => a?.name === attachmentName || a?.name?.toLowerCase() === String(attachmentName).toLowerCase());
+    }
+    if (!targetAttachment && atts.length === 1 && isOfficeDocumentAttachment(atts[0])) {
+      targetAttachment = atts[0];
+    }
+    let b64Data = null;
+    if (typeof data === "string" && data.length > 0) {
+      b64Data = data;
+    } else if (targetAttachment?.dataURL) {
+      b64Data = targetAttachment.dataURL;
+    }
+    if (!b64Data) {
+      return { ok: false, error: `attachment_not_found: could not find spreadsheet attachment '${attachmentName ?? ""}'` };
+    }
+    return await executeReadSpreadsheet({
+      base64Data: b64Data,
+      maxRows,
+      runtimeProvider: getPythonRuntimeProvider(),
+      createAssetFn: createAsset,
+      attachmentName: targetAttachment?.name || attachmentName || "spreadsheet.xlsx",
+      origin: origin ?? "master",
+    });
+  },
+
+  async "document.read_document"({ attachmentName, maxCharacters, data, docType, origin = "master" }, context) {
+    const atts = Array.isArray(context?.attachments) && context.attachments.length > 0
+      ? context.attachments
+      : (context?.executionId ? (executionAttachments.get(context.executionId) ?? []) : []);
+    let targetAttachment = null;
+    if (attachmentName) {
+      targetAttachment = atts.find((a) => a?.name === attachmentName || a?.name?.toLowerCase() === String(attachmentName).toLowerCase());
+    }
+    if (!targetAttachment && atts.length === 1 && isOfficeDocumentAttachment(atts[0])) {
+      targetAttachment = atts[0];
+    }
+    let b64Data = null;
+    if (typeof data === "string" && data.length > 0) {
+      b64Data = data;
+    } else if (targetAttachment?.dataURL) {
+      b64Data = targetAttachment.dataURL;
+    }
+    if (!b64Data) {
+      return { ok: false, error: `attachment_not_found: could not find document attachment '${attachmentName ?? ""}'` };
+    }
+    const resolvedDocType = docType || (targetAttachment?.name?.toLowerCase().endsWith(".pptx") ? "pptx" : "docx");
+    return await executeReadDocument({
+      base64Data: b64Data,
+      docType: resolvedDocType,
+      maxCharacters,
+      runtimeProvider: getPythonRuntimeProvider(),
+      attachmentName: targetAttachment?.name || attachmentName || "document",
+      untrusted: targetAttachment?.untrusted === true,
+      untrustedToken: context?.untrustedToken ?? null,
+    });
+  },
+
   // ---- saved workflows (workflows-to-memory) ----
   // Run a saved workflow's script-js body. The agent's workflow_run tool reads
   // the record from ITS OWN origin-keyed memory and dispatches {name, kind,
@@ -12817,6 +12890,9 @@ const handlers = mergeRouteMaps(
       // and progress stream inside the lock. No callback from this attempt may
       // survive into a later cached-worker run.
       beginExecution(execId, logicalId);
+      if (Array.isArray(validAttachments) && validAttachments.length > 0) {
+        executionAttachments.set(execId, validAttachments);
+      }
       durableRunAborters.set(execId, () => {
         try { a.abort?.(); } catch { /* already stopped */ }
       });

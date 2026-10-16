@@ -29,7 +29,7 @@ section 9 and is marked as an open question — it is not asserted as a threat.
 | [`docs/RISK-REGISTER.md`](docs/RISK-REGISTER.md) | the architectural risk register (R1–R21 + the withheld decisions) |
 | [`docs/CONSTITUTION.md`](docs/CONSTITUTION.md) §1 | the security vector list every change is reviewed against |
 | [`docs/INTERNAL-SENDER-CONTRACT-AUDIT.md`](docs/INTERNAL-SENDER-CONTRACT-AUDIT.md) | the sender-classifier adjudication (bead `lw6d`) |
-| [`docs/SW-DISPATCH-AUTHORITY-CENSUS.md`](docs/SW-DISPATCH-AUTHORITY-CENSUS.md) | the 297-route dispatch census and its 37 unclassified mutations |
+| [`docs/SW-DISPATCH-AUTHORITY-CENSUS.md`](docs/SW-DISPATCH-AUTHORITY-CENSUS.md) | the 299-route dispatch census and its 38 unclassified mutations |
 | [`docs/CHROME-TEST-CONTRACT.md`](docs/CHROME-TEST-CONTRACT.md) | which gate runs a real browser, and why a subset gate cannot see a cross-cutting guard |
 | [`docs/STREAMING-CREDENTIAL-FILTER-RESERVED-MEMBERS.md`](docs/STREAMING-CREDENTIAL-FILTER-RESERVED-MEMBERS.md) | the archive credential/`__proto__` filter parity contract |
 | [`docs/PERMISSION-MATRIX.md`](docs/PERMISSION-MATRIX.md) | the permission-state mechanism classes and their headless acceptance |
@@ -45,11 +45,11 @@ http(s) page) and it acts on two different untrusted feeds at once: web page con
 and model output.
 
 Component map, with the file that owns each surface:
-- **Offscreen-inventory evidence pin: `origin/main@28c7189d`.** The dispatch census and `tests/sw-dispatch-authority-census.test.ts` assert 297 registered routes on this branch; that earlier main pin had fewer routes. The offscreen host inventory below is taken from the actual `register*Host()` calls and listeners in `extension/offscreen/offscreen.js`, not inferred from the incomplete onMessage-only census §6.2. Re-read named symbols at a newer tree; line numbers are locators.
+- **Offscreen-inventory evidence pin: `origin/main@28c7189d`.** The dispatch census and `tests/sw-dispatch-authority-census.test.ts` assert 299 registered routes on this branch; that earlier main pin had fewer routes. The offscreen host inventory below is taken from the actual `register*Host()` calls and listeners in `extension/offscreen/offscreen.js`, not inferred from the incomplete onMessage-only census §6.2. Re-read named symbols at a newer tree; line numbers are locators.
 
 | Component | Where | Notes |
 |---|---|---|
-| Service worker (the privileged broker) | `extension/background/service-worker.js#chrome.runtime.onMessage.addListener` | the ONE central dispatcher listener; 297 registered routes |
+| Service worker (the privileged broker) | `extension/background/service-worker.js#chrome.runtime.onMessage.addListener` | the ONE central dispatcher listener; 299 registered routes |
 | Route modules | `extension/background/routes/` | dispatched through `mergeRouteMaps` (census §2) |
 | New-tab hub / Settings / side panel | `extension/ntp/`, `extension/options/`, `extension/sidepanel/` | extension documents; principal `extension` / `owner-options` |
 | Offscreen document | `extension/offscreen/offscreen.js` | single runtime host: 11 `register*Host()` calls (ACP model, agent worker, Python, Wasm stream, call-export, Emscripten, WASI job, table worker, owner-uploaded Wasm, SVG rasterise, on-device text), plus the script-sandbox and clipboard listeners; reclaim can interrupt in-flight work across those lanes (R12) |
@@ -262,15 +262,15 @@ consequences are carried by the matching register entry where one exists.
 
 ### T4. Unclassified service-worker mutations
 
-- **Boundary:** TB2. **Evidence:** `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` §4.9 — 37
+- **Boundary:** TB2. **Evidence:** `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` §4.9 — 38
   routes mutate persistent state with no route-local principal check and no approval
   gate (for example `named-agent.set-tools` at `extension/background/service-worker.js#named-agent.set-tools`
   and `asset.export-to-folder` at `extension/background/service-worker.js#asset.export-to-folder`; `background-agent.delete` is owner-direct,
-  not in this 37). **Answer:** the central listener refuses every
+  not in this 38). **Answer:** the central listener refuses every
   non-page-allowed route to page senders (allowlist check at
   `extension/background/service-worker.js#PAGE_ALLOWED_ROUTES.has`),
   so the class is reachable only from extension principals. **Register:** R11.
-- **The executable census pins the current count.** The census §4.9 lists 37 unclassified mutations among 297 registered routes on this branch; consult its route rows for locations rather than interpreting older T4 line locators as current.
+- **The executable census pins the current count.** The census §4.9 lists 38 unclassified mutations among 299 registered routes on this branch; consult its route rows for locations rather than interpreting older T4 line locators as current.
 
 ### T5. Sandbox escape and network egress from the script sandbox
 
@@ -608,7 +608,7 @@ decision and, where one exists, the trigger that would reopen it.
 6. **The 60-second approval TTL (T17).** Accepted; the correct behaviour is an honest
    expiration failure rather than an approval that outlives the moment it was requested.
    Register R7.
-7. **The 37 unclassified mutation routes (T4).** Inventory accepted; only extension
+7. **The 38 unclassified mutation routes (T4).** Inventory accepted; only extension
    principals can reach them. Register R11.
 8. **The `debugger` permission is absent.** Not an accepted risk so much as a standing
    prohibition: `tests/chrome-tools-t12.test.ts` holds the removal guard and the journey
