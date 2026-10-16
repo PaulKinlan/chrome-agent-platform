@@ -160,7 +160,42 @@ Deno.test("28qd4: defaultGetChangedFiles handles real git union delta, root comm
     assertEquals(unionFiles.includes("build.mjs"), true, "union delta must include build.mjs from branch A");
     assertEquals(unionFiles.includes("extension/ntp/ntp.js"), true, "union delta must include extension/ntp/ntp.js from branch B");
     assertEquals(hasBuildInfraChanges(unionFiles), true);
+
+    // Default call without options should resolve merge-base with local main (chrome-agent-platform-6c97h)
+    const defaultUnionFiles = defaultGetChangedFiles(tempDir);
+    assertEquals(defaultUnionFiles.includes("build.mjs"), true, "default delta must include build.mjs from branch A");
+    assertEquals(defaultUnionFiles.includes("extension/ntp/ntp.js"), true, "default delta must include extension/ntp/ntp.js from branch B");
+    assertEquals(hasBuildInfraChanges(defaultUnionFiles), true);
+
+    // Simulate remote origin/main presence (merger environment):
+    // delete local main branch, set up remote origin with main, and test default path
+    const originDir = Deno.makeTempDirSync({ dir: durableDir("scratch"), prefix: "gate-full-origin-" });
+    try {
+      new Deno.Command("git", { args: ["init", "--bare"], cwd: originDir }).outputSync();
+      new Deno.Command("git", { args: ["remote", "add", "origin", originDir], cwd: tempDir }).outputSync();
+      new Deno.Command("git", { args: ["push", "origin", "main:refs/heads/main"], cwd: tempDir }).outputSync();
+      new Deno.Command("git", { args: ["branch", "-D", "main"], cwd: tempDir }).outputSync();
+      new Deno.Command("git", { args: ["fetch", "origin"], cwd: tempDir }).outputSync();
+
+      const originDefaultFiles = defaultGetChangedFiles(tempDir);
+      assertEquals(originDefaultFiles.includes("build.mjs"), true, "origin/main delta must include build.mjs");
+      assertEquals(originDefaultFiles.includes("extension/ntp/ntp.js"), true, "origin/main delta must include extension/ntp/ntp.js");
+      assertEquals(hasBuildInfraChanges(originDefaultFiles), true);
+
+      // Now test orphan merge commit without any main/origin-main base:
+      // must NOT fall back to HEAD~1, must return [] so hasBuildInfraChanges fails closed
+      new Deno.Command("git", { args: ["remote", "remove", "origin"], cwd: tempDir }).outputSync();
+      // Delete origin tracking branch
+      new Deno.Command("git", { args: ["branch", "-D", "-r", "origin/main"], cwd: tempDir }).outputSync();
+
+      const orphanMergeFiles = defaultGetChangedFiles(tempDir);
+      assertEquals(orphanMergeFiles, [], "unresolvable merge commit must return [] and not fall back to HEAD~1");
+      assertEquals(hasBuildInfraChanges(orphanMergeFiles), true, "unresolvable merge commit must fail closed");
+    } finally {
+      Deno.removeSync(originDir, { recursive: true });
+    }
   } finally {
     Deno.removeSync(tempDir, { recursive: true });
   }
 });
+
