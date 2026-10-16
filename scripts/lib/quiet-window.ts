@@ -16,7 +16,8 @@
 //
 // Contract:
 //   - MEASURE: 1-minute loadavg per core, plus a count of heavy compiler/build
-//     processes. Both from /proc, no dependencies.
+//     processes (the NAME MATCH, evidence) and of heavy builder JOBS (what the
+//     threshold counts — see the qs8v7 note below). Both from /proc, no dependencies.
 //
 //     chrome-agent-platform-dnop: the compiler count is a count of COMPILING
 //     processes, not of process names. A name-only match counted the long-lived
@@ -35,6 +36,24 @@
 //     when the gate starts must still block it). `compilers`/`compilerNames`
 //     stay as the name-match evidence, so a refusal line still names what is on
 //     the box.
+//
+//     chrome-agent-platform-qs8v7: the threshold counts heavy builder JOBS, not
+//     compiler processes. A cargo/rust build is ONE job that spawns one rustc child
+//     per codegen unit — measured on this host as 9 rustc children sharing a single
+//     parent chain under cargo — and a pid count read that one
+//     legitimate, correctly serialised job as "active heavy-builders 9 > 1", holding
+//     every load-sensitive gate for the whole build. FLEET_HEAVY_SLOTS=1 already
+//     promises at most one heavy job, so the count that matters is jobs: a job is a
+//     builder plus the heavy-named parents above it (from /proc/<pid>/stat), a process
+//     whose parentage cannot be read counts as its own job (fail closed), and a sample
+//     carrying no job information
+//     (hand-built, or the macOS `ps` path, which does not report pgrp) is compared on
+//     its process count exactly as before. NOTE what this does NOT weaken: the LOAD
+//     test is the measured signal for "the box is busy" and is unchanged, and two or
+//     more jobs still refuse BY NAME — what is gone is only a single job's children
+//     being misread as competing builders. The PRESENCE question is deliberately
+//     unchanged: `hasDiscreteBuilder` and ntp-boot-attribution's `hasActiveBuilder`
+//     still answer "is a builder on this box at all", which one job already answers.
 //     Honest limit, stated: a build that is I/O-blocked for a whole sample
 //     shows no CPU in that sample and would not count as active for it — but
 //     the quiet still has to SUSTAIN across consecutive samples, so a run can
@@ -55,7 +74,7 @@
 // Tunables (all env-overridable, all read per call so a runner can change them
 // without a module-reload order trap):
 //   CAP_QUIET_MAX_LOAD_PER_CORE  default 0.35  (load1 / cores)
-//   CAP_QUIET_MAX_COMPILERS      default 1     (heavy build processes)
+//   CAP_QUIET_MAX_COMPILERS      default 1     (heavy builder JOBS, not processes — qs8v7)
 //   CAP_QUIET_WAIT_MS            default 600000
 //   CAP_QUIET_SAMPLE_MS          default 2000
 //   CAP_QUIET_SUSTAINED          default 3
@@ -147,6 +166,13 @@ export interface LoadSample {
   activeCompilers?: number;
   /** Names of the active builders (bounded, de-duplicated). */
   activeCompilerNames?: string[];
+  /** How many heavy builder JOBS the active builders represent (chrome-agent-platform-qs8v7):
+   *  distinct process groups, so ONE build's N compiler children count as one builder. A pid
+   *  whose job identity is unknown counts as its own job. THIS is what the threshold counts when
+   *  it is defined. `undefined` means the sample carries no job information at all (hand-built,
+   *  or the macOS ps path) and the caller falls back to the process count: fail closed, never
+   *  quieter. */
+  activeBuilderJobs?: number;
   /** True when at least one discrete builder (rustc, cargo, rust-lld) was seen,
    *  unbounded by the 8-entry compilerNames diagnostic cap. */
   hasDiscreteBuilder?: boolean;
@@ -168,13 +194,18 @@ export interface ProcCpu {
   name: string;
   startTicks: string;
   cpuTicks: number;
+  /** Parent pid (field 4 of /proc/<pid>/stat): how the builder-job grouping walks UP to
+   *  the job's root (chrome-agent-platform-qs8v7). `null`/absent means the parent could
+   *  not be read — the process is then its own job, which is the fail-closed direction.
+   *  The macOS `ps` path does not report it, which is why it is optional. */
+  ppid?: string | null;
 }
 
-/** utime+stime and starttime from /proc/<pid>/stat (fields 14, 15 and 22).
- *  The comm is bracketed and may itself contain spaces and parentheses, so the
- *  parse starts after the LAST ')': field 3 is then index 0, making utime 11,
- *  stime 12 and starttime 19. Exported for the unit tests — a misparse here
- *  would silently classify every build as idle, which is the dnop bug again
+/** utime+stime, starttime (fields 14, 15 and 22) and the parent (field 4) from
+ *  /proc/<pid>/stat. The comm is bracketed and may itself contain spaces and
+ *  parentheses, so the parse starts after the LAST ')': field 3 is then index 0, making
+ *  ppid 1, utime 11, stime 12 and starttime 19. Exported for the unit tests — a
+ *  misparse here would silently classify every build as idle, which is the dnop bug again
  *  with the arithmetic instead of the name. */
 export function parseProcStatCpu(stat: string, name = ""): ProcCpu | null {
   const close = stat.lastIndexOf(")");
@@ -183,7 +214,8 @@ export function parseProcStatCpu(stat: string, name = ""): ProcCpu | null {
   const utime = Number(rest[11]);
   const stime = Number(rest[12]);
   if (!Number.isFinite(utime) || !Number.isFinite(stime)) return null;
-  return { name, startTicks: String(rest[19] ?? ""), cpuTicks: utime + stime };
+  const ppid = /^\d+$/u.test(rest[1] ?? "") ? rest[1] : null;
+  return { name, startTicks: String(rest[19] ?? ""), cpuTicks: utime + stime, ppid };
 }
 
 export type ProcCpuMap = Map<string, ProcCpu>;
@@ -208,6 +240,36 @@ export function classifyActiveBuilders(prev: ProcCpuMap | null | undefined, curr
     }
   }
   return active;
+}
+
+/** The heavy JOB ROOT of a builder: walk UP the parent chain while the parent is itself a
+ *  heavy-named process we can see (chrome-agent-platform-qs8v7).
+ *
+ *  This is the distinction the incident needed. A cargo/rust build is ONE job — cargo forks one
+ *  rustc per codegen unit — so the nine rustc children must collapse into the cargo root. Forty
+ *  compilers started INDEPENDENTLY (by a test, a shell, or a CI step) have no heavy parent, so each
+ *  stays its own job and still counts, which is what the existing real-journey refusal test pins.
+ *  Bounded, and fail-closed in the unreadable direction: a pid whose parent is unknown or is not a
+ *  heavy builder is its own root, so an unknown can only make the box look BUSIER, never quieter. */
+export function builderJobRoot(pid: string, cpu: ProcCpuMap | null | undefined): string {
+  let current = pid;
+  const seen = new Set<string>([pid]);
+  for (let hop = 0; hop < 32; hop++) {
+    const parent = cpu?.get(current)?.ppid;
+    if (!parent || seen.has(parent)) break;
+    if (!cpu?.has(parent)) break; // the parent is not a heavy builder: current is the job root
+    seen.add(parent);
+    current = parent;
+  }
+  return current;
+}
+
+/** How many heavy builder JOBS the active builders represent (chrome-agent-platform-qs8v7).
+ *  Pure: one job per distinct heavy job root. */
+export function countBuilderJobs(activePids: string[], cpu: ProcCpuMap | null | undefined): number {
+  const roots = new Set<string>();
+  for (const pid of activePids) roots.add(builderJobRoot(pid, cpu));
+  return roots.size;
 }
 
 export interface QuietSpec {
@@ -309,6 +371,7 @@ export function environmentLine(sample: LoadSample | null, spec?: ResolvedSpec):
     `cores=${sample.cores} load/core=${sample.loadPerCore.toFixed(2)} ` +
     `heavy-builders=${sample.compilers}` +
     (sample.activeCompilers !== undefined ? ` active=${sample.activeCompilers}` : "") +
+    (sample.activeBuilderJobs !== undefined ? ` jobs=${sample.activeBuilderJobs}` : "") +
     (sample.compilerNames.length ? `[${sample.compilerNames.join(",")}]` : "");
   return spec ? `${base} (threshold ${formatSpec(spec)})` : base;
 }
@@ -590,6 +653,8 @@ async function readLoadSampleOnce(
     compilers, compilerNames: [...names], measurable: true,
     activeCompilers: activePids.length,
     activeCompilerNames: activeNames.slice(0, 8),
+    // qs8v7: the threshold counts JOBS. Nine rustc children of one cargo build are one builder.
+    activeBuilderJobs: countBuilderJobs(activePids, cpu),
     hasDiscreteBuilder,
     cpu,
     unbaselined,
@@ -609,13 +674,23 @@ export function quietReasons(sample: LoadSample, spec: ResolvedSpec): string[] {
   // against its name match — an unknown must never be treated as quiet.
   const active = sample.activeCompilers ?? sample.compilers;
   const activityKnown = sample.activeCompilers !== undefined;
-  if (active > spec.maxCompilers) {
-    reasons.push(`active heavy-builders ${active} > ${spec.maxCompilers}` +
+  // qs8v7: and it counts builder JOBS, not compiler processes. One build spawns one
+  // rustc per codegen unit, so a pid count read a single legitimate job as nine
+  // competing builders and held every load-sensitive gate for the build's duration.
+  // A job is a builder and the heavy parents above it; unknown parentage stays fail-closed
+  // (the process counts as its own job), and a sample with no job information at all keeps
+  // the process count it has always used.
+  const jobs = sample.activeBuilderJobs;
+  const jobsKnown = typeof jobs === "number";
+  const compared = jobsKnown ? (jobs as number) : active;
+  if (compared > spec.maxCompilers) {
+    reasons.push(`active heavy-builders ${compared} > ${spec.maxCompilers}` +
       (sample.compilerNames.length
         ? ` (named: ${sample.compilerNames.join(",")}` +
           (activityKnown
             ? (sample.activeCompilerNames?.length ? `; compiling: ${sample.activeCompilerNames.join(",")}` : "; none compiling")
-            : "; activity unknown — counted fail-closed") + ")"
+            : "; activity unknown — counted fail-closed") +
+          (jobsKnown ? `; ${active} process(es) in ${jobs} job(s)` : "") + ")"
         : ""));
   }
   return reasons;

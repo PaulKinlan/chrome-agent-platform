@@ -22,6 +22,8 @@ import {
   classifyEvaluateTimeout,
   ENVIRONMENTAL_REFUSAL_EXIT,
   ENVIRONMENTAL_REFUSAL_MARKER,
+  builderJobRoot,
+  countBuilderJobs,
   environmentLine,
   evaluateTimeoutReport,
   HEAVY_PROCESS_NAMES,
@@ -34,6 +36,7 @@ import {
   readLoadSample,
   resolveSpec,
   type LoadSample,
+  type ProcCpu,
 } from "../scripts/lib/quiet-window.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -871,5 +874,138 @@ Deno.test("r2ai: a box that CANNOT be sampled at either budget still refuses, an
   } finally {
     if (before[0] === undefined) Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN"); else Deno.env.set("CAP_QUIET_MAX_PROC_SCAN", before[0]);
     if (before[1] === undefined) Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN_MS"); else Deno.env.set("CAP_QUIET_MAX_PROC_SCAN_MS", before[1]);
+  }
+});
+
+// ── qs8v7: the threshold counts heavy builder JOBS, not compiler processes ────────────────────────
+// The incident: a union gate read "active heavy-builders 9 > 1 (named: rustc ...)" while ONE Rust
+// build was running. A cargo/rust build forks one rustc per codegen unit, so a pid count turned a
+// single legitimate, correctly serialised job into nine competing builders and held every
+// load-sensitive gate for the build's duration. These tests pin the unit (jobs), keep the refusal by
+// name for genuinely competing builders AND for compilers started independently, and keep the
+// unreadable case fail-closed.
+
+Deno.test("qs8v7: one heavy JOB with nine compiler children is ONE builder, not nine", () => {
+  const job = (pid: string, ppid: string): [string, ProcCpu] => [pid, { name: "rustc", startTicks: "500", cpuTicks: 900, ppid }];
+  const cpu: Map<string, ProcCpu> = new Map([
+    ["900", { name: "cargo", startTicks: "400", cpuTicks: 500, ppid: null }],
+    ...["101", "102", "103", "104", "105", "106", "107", "108", "109"].map((pid) => job(pid, "900")),
+  ]);
+  const children = ["101", "102", "103", "104", "105", "106", "107", "108", "109"];
+  const active = classifyActiveBuilders(null, cpu);
+  assertEquals(children.every((pid) => active.includes(pid)), true, "all nine children are active processes");
+  assertEquals(builderJobRoot("105", cpu), "900", "a rustc child resolves to its cargo root");
+  assertEquals(countBuilderJobs(active, cpu), 1, "…so the job count is ONE: the heavy-job root is the unit");
+
+  const oneJob = sample({ compilers: 9, compilerNames: ["rustc"], activeCompilers: 9, activeCompilerNames: ["rustc"], activeBuilderJobs: 1 });
+  const reasons = quietReasons(oneJob, resolveSpec(SPEC));
+  assertEquals(reasons.filter((r) => r.includes("heavy-builders")), [], "one job must not hold the gate on the builder count");
+
+  // Two jobs is a real condition and still refuses, naming what is on the box.
+  const twoJobs = sample({ compilers: 18, compilerNames: ["rustc"], activeCompilers: 18, activeCompilerNames: ["rustc"], activeBuilderJobs: 2 });
+  const refused = quietReasons(twoJobs, resolveSpec(SPEC)).filter((r) => r.includes("heavy-builders"));
+  assertEquals(refused.length, 1);
+  assert(refused[0].includes("active heavy-builders 2 > 1"), refused[0]);
+  assert(refused[0].includes("named: rustc"), refused[0]);
+  assert(refused[0].includes("18 process(es) in 2 job(s)"), refused[0]);
+});
+
+Deno.test("qs8v7: compilers started INDEPENDENTLY are separate jobs and still refuse (the mkax contract)", () => {
+  // The existing contract this must not break: the real-journey test spawns 40 burners itself and
+  // requires the gate to refuse. Their parent is the test process, which is not a heavy builder, so
+  // they have no shared root — each is its own job, exactly as before.
+  const burners = Array.from({ length: 40 }, (_, i) => String(2000 + i));
+  // The sampler's map holds HEAVY names only, so the parent (here 1500, the test process) is
+  // deliberately absent: that is exactly what makes each burner its own root.
+  const cpu: Map<string, ProcCpu> = new Map(
+    burners.map((pid) => [pid, { name: "rustc", startTicks: "1", cpuTicks: 40, ppid: "1500" }] as [string, ProcCpu]),
+  );
+  assertEquals(countBuilderJobs(burners, cpu), 40, "forty independently started compilers are forty builders");
+  const s = sample({ compilers: 40, compilerNames: ["rustc"], activeCompilers: 40, activeCompilerNames: ["rustc"], activeBuilderJobs: countBuilderJobs(burners, cpu) });
+  assert(
+    quietReasons(s, resolveSpec(SPEC)).some((r) => r.includes("active heavy-builders 40 > 1")),
+    "an independently started compiler still holds the gate, by name",
+  );
+});
+
+Deno.test("qs8v7: unknown parentage fails CLOSED — a builder whose parent cannot be read is its own job", () => {
+  const cpu: Map<string, ProcCpu> = new Map([
+    ["201", { name: "rustc", startTicks: "1", cpuTicks: 10, ppid: "700" }],
+    ["202", { name: "rustc", startTicks: "1", cpuTicks: 10 }],
+    ["203", { name: "cargo", startTicks: "1", cpuTicks: 10, ppid: null }],
+  ]);
+  assertEquals(countBuilderJobs(["201", "202", "203"], cpu), 3, "unreadable parentage is never merged into someone else's job");
+  assertEquals(countBuilderJobs([], cpu), 0);
+  // A cycle in the parent chain (impossible from /proc, but a hand-built map can hold one) terminates.
+  const cyclic: Map<string, ProcCpu> = new Map([
+    ["1", { name: "rustc", startTicks: "1", cpuTicks: 1, ppid: "2" }],
+    ["2", { name: "cargo", startTicks: "1", cpuTicks: 1, ppid: "1" }],
+  ]);
+  // A cycle cannot come from /proc, but it must TERMINATE, and each member still counts as its own
+  // builder rather than being merged into a group whose root cannot be established.
+  assertEquals(countBuilderJobs(["1", "2"], cyclic), 2);
+  // A sample from a caller that carries no job information at all keeps the process-count
+  // reading it has always had: an unknown must never be treated as quieter than a known.
+  const legacy = sample({ compilers: 9, compilerNames: ["rustc"], activeCompilers: 9, activeCompilerNames: ["rustc"] });
+  assert(
+    quietReasons(legacy, resolveSpec(SPEC)).some((r) => r.includes("active heavy-builders 9 > 1")),
+    "no job information means the old fail-closed process count",
+  );
+});
+
+Deno.test("qs8v7: parseProcStatCpu reads field 4 (ppid) and refuses a non-numeric one", () => {
+  const stat = "4242 (rustc) R 1 4242 4242 0 -1 4194304 0 0 0 0 120 40 0 0 20 0 1 0 98765 0 0";
+  const parsed = parseProcStatCpu(stat, "rustc");
+  assertEquals(parsed?.ppid, "1");
+  assertEquals(parsed?.cpuTicks, 160);
+  const odd = parseProcStatCpu("4242 (rustc) R notanumber 4242 4242 0 -1 4194304 0 0 0 0 120 40 0 0 20 0 1 0 98765 0 0", "rustc");
+  assertEquals(odd?.ppid, null, "a parent this parser cannot read is null, never a merge");
+});
+
+Deno.test("qs8v7: the REAL sampler groups this test\'s nine children under their heavy parent job", async () => {
+  // Linux only: the parent chain comes from /proc/<pid>/stat, and the macOS ps path does not report
+  // it — there the documented fallback keeps the process count (fail closed).
+  if (Deno.build.os !== "linux") return;
+  const dir = await Deno.makeTempDir({ prefix: "cap-qs8v7-jobs-" });
+  const pidFile = `${dir}/pids`;
+  let job: Deno.ChildProcess | null = null;
+  try {
+    // The fixture is the incident's shape: a HEAVY-NAMED parent (cargo) that forks nine rustc
+    // children. /bin/sh copies make both names real executables.
+    await Deno.copyFile("/bin/sh", `${dir}/cargo`);
+    await Deno.copyFile("/bin/sleep", `${dir}/rustc`);
+    await Deno.writeTextFile(pidFile, "");
+    const before = await readLoadSample();
+    job = new Deno.Command(`${dir}/cargo`, {
+      args: ["-c", `for i in 1 2 3 4 5 6 7 8 9; do ${dir}/rustc 10 & echo $! >> ${pidFile}; done; wait`],
+      stdout: "null", stderr: "null",
+    }).spawn();
+    let pids: string[] = [];
+    for (let attempt = 0; attempt < 40 && pids.length < 9; attempt++) {
+      await new Promise((r) => setTimeout(r, 50));
+      pids = [...new Set((await Deno.readTextFile(pidFile)).split("\n").map((l) => l.trim()).filter(Boolean))];
+    }
+    assertEquals(pids.length, 9, "the fixture must have started nine children");
+    const during = await readLoadSample(before.cpu ?? null);
+    const active = classifyActiveBuilders(before.cpu, during.cpu);
+    for (const pid of pids) {
+      assert(active.includes(pid), `pid ${pid} of this test\'s job is active (that is what made the old count nine)`);
+    }
+    const parentPid = String(job.pid);
+    const parents = new Set(pids.map((pid) => during.cpu?.get(pid)?.ppid));
+    assertEquals([...parents], [parentPid], `every child's parent is the heavy job root: ${JSON.stringify([...parents])} vs ${parentPid}`);
+    assertEquals(countBuilderJobs(pids, during.cpu), 1, "the governor counts this test\'s nine children as ONE builder");
+    assert(
+      pids.every((pid) => during.cpu?.has(pid)),
+      "the sampler kept the per-pid evidence for every child (the job count is derived from it, not instead of it)",
+    );
+  } finally {
+    if (job) {
+      try { job.kill("SIGKILL"); } catch { /* already gone */ }
+    }
+    try {
+      await new Deno.Command("sh", { args: ["-c", `pkill -f ${dir}/rustc || true`], stdout: "null", stderr: "null" }).output();
+    } catch { /* best effort */ }
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 });
