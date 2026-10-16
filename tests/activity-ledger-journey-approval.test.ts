@@ -63,3 +63,42 @@ Deno.test("activity ledger: wrong-card, missing click or card assertion is RED",
   assert(noCardAssertion !== leg, "mutant must replace the live card assertion");
   assertThrows(() => assertCardDrivenApproval(noCardAssertion), Error, "missing card or owner click");
 });
+
+// ---------------------------------------------------------------------------------------------
+// chrome-agent-platform-jm54c + chrome-agent-platform-0g5ql: the two Activity-frontier reds that
+// could not name their own cause. The poll's wall-clock bound is what separates "the run did not
+// settle" from "the poll exhausted its budget", and keeping the provider.set result is what
+// separates a rejected provider.set from a composer that never dispatched. Both are asserted from
+// the SAME sliced leg the rest of this file uses, so the wiring cannot rot into dead code.
+function assertCauseIsNamed(body: string) {
+  assert(body.includes("APPROVAL_POLL_BUDGET_MS"),
+    "the approval poll must be bounded by wall clock, not only by 120 iterations");
+  assert(body.includes("Date.now() < ledgerApprovalDeadline"),
+    "the wall-clock bound must be the loop's own condition");
+  assert(body.includes("approvalPollCause({"),
+    "the poll's outcome must be classified into a name (budget vs card-never-appeared)");
+  assert(body.includes("pollCause: ledgerPollCause"),
+    "the named poll cause must reach the terminal check's evidence, or a failure still cannot be read");
+  assert(/const ledgerProviderSet = await evalIn\(/.test(body),
+    "the provider.set result must be KEPT - discarding it is the 0g5ql defect");
+  assert(body.includes("providerSetCause(ledgerProviderSet)"),
+    "the kept provider.set result must be named in the trace and the evidence");
+}
+
+Deno.test("jm54c+0g5ql: the frontier names why the ledger leg failed", () => {
+  assertCauseIsNamed(leg);
+});
+
+Deno.test("jm54c+0g5ql: removing either name is RED", () => {
+  const noBudget = leg.replace("Date.now() < ledgerApprovalDeadline", "true");
+  assert(noBudget !== leg, "mutant must remove the wall-clock bound");
+  assertThrows(() => assertCauseIsNamed(noBudget), Error, "the loop's own condition");
+
+  const noCause = leg.replace("pollCause: ledgerPollCause,", "");
+  assert(noCause !== leg, "mutant must drop the named cause from the evidence");
+  assertThrows(() => assertCauseIsNamed(noCause), Error, "must reach the terminal check's evidence");
+
+  const noProviderSet = leg.replace("const ledgerProviderSet = await evalIn(", "await evalIn(");
+  assert(noProviderSet !== leg, "mutant must discard the provider.set result again");
+  assertThrows(() => assertCauseIsNamed(noProviderSet), Error, "must be KEPT");
+});

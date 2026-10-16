@@ -44,6 +44,7 @@ import { isCdpEvaluateTimeout } from "./lib/quiet-window.ts";
 import { wireValue } from "./lib/cdp-eval.ts";
 import { computeUnpackedExtensionId, launchChrome as spawnChrome, SW_MATCH, teardownChrome } from "./lib/chrome-launch.ts";
 import { assertJourneyNtpPrincipal } from "./lib/journey-ntp-principal.ts";
+import { approvalPollCause, APPROVAL_POLL_BUDGET_MS, providerSetCause } from "./lib/journey-failure-cause.mjs";
 import {
   ENVIRONMENTAL_REFUSAL_EXIT,
   ENVIRONMENTAL_REFUSAL_MARKER,
@@ -3592,7 +3593,14 @@ async function main() {
       cdp.pageSessions.add(ledgerOptsSession);
       await sleep(1200);
       ledgerTrace("provider.set begin");
-      await evalIn(cdp, ledgerOptsSession, `chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "openai-compatible", baseURL: ledgerProvider.baseURL, apiKey: SCRIPTED_DUMMY_KEY, model: "scripted" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`);
+      // Keep the RESULT: provider.set resolves to the redacted config on success and to `{err}` on
+      // rejection, and discarding it is what made a rejection indistinguishable from a composer
+      // that never dispatched (chrome-agent-platform-0g5ql). Reduced to a name, never logged.
+      const ledgerProviderSet = await evalIn(cdp, ledgerOptsSession, `chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "openai-compatible", baseURL: ledgerProvider.baseURL, apiKey: SCRIPTED_DUMMY_KEY, model: "scripted" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`);
+      // The line above is anchored VERBATIM by tests/journey-focus-fail-closed.test.ts, which also
+      // extracts this setup block and runs it under stubs - so the captured value is NAMED later,
+      // outside that fence, instead of calling a helper the sandbox does not provide
+      // (chrome-agent-platform-0g5ql needs the RESULT kept, not a new call inside the block).
       ledgerTrace("provider.set end; ntp.activate begin");
       await cdp.send("Target.activateTarget", { targetId: ntpPage.id });
       await clickSel(cdp, ntpSession, "#home").catch(() => false);
@@ -3620,7 +3628,11 @@ async function main() {
       // issue ONE genuine Allow click for that exact action before reading the
       // terminal run. A missing card or mismatched title fails the named check.
       const ledgerApprovalStart = Date.now();
-      for (let i = 0; i < 120 && ledgerProvider.requests.length < 3; i++) {
+      // Bound the poll by WALL CLOCK as well as iteration count: 120 x 250ms is up to 30s of polling
+      // inside the 90s no-assertion watchdog, which is why an exhausted budget and a run that never
+      // settled used to be the same red (chrome-agent-platform-jm54c).
+      const ledgerApprovalDeadline = ledgerApprovalStart + APPROVAL_POLL_BUDGET_MS;
+      for (let i = 0; i < 120 && ledgerProvider.requests.length < 3 && Date.now() < ledgerApprovalDeadline; i++) {
         ledgerTrace("approval.poll iteration begin", `i=${i} requests=${ledgerProvider.requests.length} cardSeen=${ledgerCardSeen}`);
         if (!ledgerCardSeen) {
           ledgerTrace("approval.card-probe begin", `i=${i}`);
@@ -3680,7 +3692,17 @@ async function main() {
         if (ledgerProvider.requests.length < 3) await sleep(250);
         ledgerTrace("approval.poll iteration end", `i=${i} requests=${ledgerProvider.requests.length}`);
       }
-      ledgerTrace("run.terminal-wait begin", `requests=${ledgerProvider.requests.length} approved=${ledgerCardApproved}`);
+      const ledgerPollCause = approvalPollCause({
+        requests: ledgerProvider.requests.length,
+        // Boolean(), not a `=== true` comparison: an existing falsifier in
+        // tests/activity-ledger-journey-approval.test.ts replaces the FIRST occurrence of that literal
+        // to knock out the terminal check's own assertion, and a second copy here would silently
+        // retarget that mutation at this call instead of at the thing it means to break.
+        cardSeen: Boolean(ledgerCardSeen),
+        cardApproved: Boolean(ledgerCardApproved),
+        elapsedMs: Date.now() - ledgerApprovalStart,
+      });
+      ledgerTrace("run.terminal-wait begin", `requests=${ledgerProvider.requests.length} approved=${ledgerCardApproved} cause=${ledgerPollCause}`);
       const ledgerRun = await awaitNewRunTerminal(cdp, ledgerOptsSession, ledgerBeforeIds, "create the Undo Journey Agent");
       ledgerTrace("run.terminal-wait end", `phase=${ledgerRun?.phase ?? "none"}`);
       const env = ledgerProvider.requests.length > 0 ? executeEnvelope(ledgerProvider.requests[ledgerProvider.requests.length - 1], "create_named_agent") : null;
@@ -3695,6 +3717,7 @@ async function main() {
         { cardSeen: ledgerCardSeen, cardTitle: ledgerCardTitle, cardApproved: ledgerCardApproved,
           cardShotBytes: ledgerCardShot?.length ?? 0, cardElapsedMs: ledgerCardElapsedMs,
           requests: ledgerProvider.requests.length, overflow: ledgerProvider.overflow, env,
+          pollCause: ledgerPollCause, providerSet: providerSetCause(ledgerProviderSet),
           runPhase: ledgerRun?.phase ?? null, terminalOk: ledgerRun?.terminal?.ok ?? null },
       );
       // The run's durable thread is the owner-visible record of the run's
