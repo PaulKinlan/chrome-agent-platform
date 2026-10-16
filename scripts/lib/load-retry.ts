@@ -76,7 +76,7 @@ export async function countStoreKeysWithLoadRetry(
   const warn = deps.warn ?? ((msg: string) => console.warn(msg));
 
   const t0 = now();
-  const keyCount = await countFn();
+  let keyCount = await countFn();
   let elapsed = now() - t0;
   let retried = false;
 
@@ -100,6 +100,7 @@ export async function countStoreKeysWithLoadRetry(
         const retryElapsed = now() - retryT0;
         if (retryElapsed < budgetMs) {
           elapsed = retryElapsed;
+          keyCount = retryCount;
           break;
         }
         await sleep(20);
