@@ -46,10 +46,14 @@ Deno.test("kz27: the tree-walking guards are IN the always-on list, and every en
   }
 });
 
-Deno.test("luq4w: always-on source guards must not silently require a production build", () => {
+Deno.test("luq4w / vyjc0: always-on source guards must not silently require a production build", () => {
   const selected = new Set(ALWAYS_ON);
-  const distConsumers = findDistConsumers([...ALWAYS_ON]).filter((file) => selected.has(file));
-  assertEquals(distConsumers, [], "a source guard mentioning dist only to skip it must not force every fast gate to build");
+  const buildConsumers = findDistConsumers([...ALWAYS_ON]).filter((file) => selected.has(file));
+  assertEquals(buildConsumers, [], "a source guard mentioning the generated output only to skip it must not force every fast gate to build");
+
+  // vyjc0: tests/select-tests-always-on.test.ts itself must not be classified as a build consumer
+  const selfConsumers = findDistConsumers(["tests/select-tests-always-on.test.ts"]).filter((f) => f === "tests/select-tests-always-on.test.ts");
+  assertEquals(selfConsumers, [], "select-tests-always-on.test.ts must not contain bare tokens that classify it as a build consumer");
   // This pin runs when selected or in the full suite, not in an isolated --always-on run;
   // tests/build-if-needed.test.ts independently asserts this zero-consumer invariant.
 });
