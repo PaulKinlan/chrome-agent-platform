@@ -73,7 +73,9 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2
   // Line 2272: openCreateDialog pre-Create click
   const openCreateDialogIdx = journeySource.indexOf("const openCreateDialog = async () => {");
   assert(openCreateDialogIdx > 0, "openCreateDialog must be found in scripts/chrome-journeys.ts");
-  const openCreateDialogBlock = journeySource.slice(openCreateDialogIdx, openCreateDialogIdx + 500);
+  const openCreateDialogEnd = journeySource.indexOf("\n    };\n    await openCreateDialog();", openCreateDialogIdx);
+  assert(openCreateDialogEnd > openCreateDialogIdx, "openCreateDialog end must be found");
+  const openCreateDialogBlock = journeySource.slice(openCreateDialogIdx, openCreateDialogEnd);
   assert(
     openCreateDialogBlock.includes('await cdp.send("Page.bringToFront", {}, ntpSession);'),
     "openCreateDialog must await Page.bringToFront without .catch()",
@@ -86,7 +88,9 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2
   // Line 3573: testActionLedgerJourney Target.activateTarget pre-input
   const ledgerIdx = journeySource.indexOf("const ledgerBeforeIds = await listRunIds(cdp, ledgerOptsSession);");
   assert(ledgerIdx > 0, "testActionLedgerJourney must be found in scripts/chrome-journeys.ts");
-  const ledgerBlock = journeySource.slice(ledgerIdx - 500, ledgerIdx);
+  const ledgerStart = journeySource.lastIndexOf('ledgerTrace("provider.set end; ntp.activate begin");', ledgerIdx);
+  assert(ledgerStart > 0, "testActionLedgerJourney activation anchor must be found");
+  const ledgerBlock = journeySource.slice(ledgerStart, ledgerIdx);
   assert(
     ledgerBlock.includes('await cdp.send("Target.activateTarget", { targetId: ntpPage.id });\n      await clickSel(cdp, ntpSession, "#home")'),
     "testActionLedgerJourney must await Target.activateTarget without .catch() before #home click",
@@ -99,7 +103,9 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2
   // Line 4846: keyless composer pre-input Target.activateTarget and Page.bringToFront
   const keylessIdx = journeySource.indexOf('const keylessBefore = await msgValue({ type: "thread.list" });');
   assert(keylessIdx > 0, "keyless target activation must be found in scripts/chrome-journeys.ts");
-  const keylessBlock = journeySource.slice(keylessIdx, keylessIdx + 400);
+  const keylessEnd = journeySource.indexOf('check("keyless: clicked Run task"', keylessIdx);
+  assert(keylessEnd > keylessIdx, "keyless step end must be found");
+  const keylessBlock = journeySource.slice(keylessIdx, keylessEnd);
   assert(
     keylessBlock.includes('await cdp.send("Target.activateTarget", { targetId: ntpPage.id });\n    await cdp.send("Page.bringToFront", {}, ntpSession);'),
     "keyless pre-input must await Target.activateTarget without .catch() before Page.bringToFront",
@@ -120,7 +126,9 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2
   // Line 5310: driveHubTask pre-input Target.activateTarget and Page.bringToFront
   const driveHubTaskIdx = journeySource.indexOf("const driveHubTask = async (text) => {");
   assert(driveHubTaskIdx > 0, "driveHubTask must be found in scripts/chrome-journeys.ts");
-  const driveHubTaskBlock = journeySource.slice(driveHubTaskIdx, driveHubTaskIdx + 400);
+  const driveHubTaskEnd = journeySource.indexOf("const pollThreadError = async (deadlineMs, done) => {", driveHubTaskIdx);
+  assert(driveHubTaskEnd > driveHubTaskIdx, "driveHubTask end must be found");
+  const driveHubTaskBlock = journeySource.slice(driveHubTaskIdx, driveHubTaskEnd);
   assert(
     driveHubTaskBlock.includes('await cdp.send("Target.activateTarget", { targetId: ntpPage.id });\n      await cdp.send("Page.bringToFront", {}, ntpSession);'),
     "driveHubTask must await Target.activateTarget without .catch() before Page.bringToFront",
@@ -141,7 +149,9 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2
   // Line 9505: testTaskLifecycle step 1 pre-input
   const step1Idx = journeySource.indexOf("// ── step 1 ──");
   assert(step1Idx > 0, "demoPathJourney step 1 must be found in scripts/chrome-journeys.ts");
-  const step1Block = journeySource.slice(step1Idx, step1Idx + 400);
+  const step1End = journeySource.indexOf("const STATE = `", step1Idx);
+  assert(step1End > step1Idx, "demoPathJourney step 1 end must be found");
+  const step1Block = journeySource.slice(step1Idx, step1End);
   assert(
     step1Block.includes('await cdp.send("Target.activateTarget", { targetId: ntpPage.id });\n    await cdp.send("Page.bringToFront", {}, ntp);'),
     "demoPathJourney step 1 must await Target.activateTarget without .catch() before Page.bringToFront",
@@ -162,9 +172,9 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2
   // Line 9931: testDataManagement factory reset pre-input
   const resetAnchor = journeySource.indexOf("// ── the reset: a second Settings document watches the stores ──");
   assert(resetAnchor > 0, "testDataManagement factory reset must be found in scripts/chrome-journeys.ts");
-  const resetIdx = journeySource.indexOf('await cdp.send("Target.activateTarget", { targetId: optsPage.id })', resetAnchor);
-  assert(resetIdx > 0, "factory reset focus anchor must be found");
-  const resetBlock = journeySource.slice(resetIdx, resetIdx + 300);
+  const resetEnd = journeySource.indexOf("report(DIALOG,", resetAnchor);
+  assert(resetEnd > resetAnchor, "testDataManagement factory reset end must be found");
+  const resetBlock = journeySource.slice(resetAnchor, resetEnd);
   assert(
     resetBlock.includes('await cdp.send("Target.activateTarget", { targetId: optsPage.id });\n    await cdp.send("Page.bringToFront", {}, opts);'),
     "testDataManagement factory reset must await Target.activateTarget without .catch() before Page.bringToFront",
@@ -185,7 +195,9 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2
   // Line 8115: captureApprovalEvidence pre-screenshot focus
   const approvalIdx = journeySource.indexOf("const captureApprovalEvidence = async (name) => {");
   assert(approvalIdx > 0, "captureApprovalEvidence must be found in scripts/chrome-journeys.ts");
-  const approvalBlock = journeySource.slice(approvalIdx, approvalIdx + 300);
+  const approvalEnd = journeySource.indexOf("\n    };", approvalIdx);
+  assert(approvalEnd > approvalIdx, "captureApprovalEvidence end must be found");
+  const approvalBlock = journeySource.slice(approvalIdx, approvalEnd);
   assert(
     approvalBlock.includes('await cdp.send("Page.bringToFront", {}, optsSession);\n      let shot = null;'),
     "captureApprovalEvidence must await Page.bringToFront without .catch() before screenshot retries",
@@ -198,7 +210,9 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2
   // Line 557: activateNtpSession pre-input focus
   const activateIdx = journeySource.indexOf("async function activateNtpSession(cdp, session) {");
   assert(activateIdx > 0, "activateNtpSession must be found in scripts/chrome-journeys.ts");
-  const activateBlock = journeySource.slice(activateIdx, activateIdx + 400);
+  const activateEnd = journeySource.indexOf("\nasync function runScriptedToolProbe", activateIdx);
+  assert(activateEnd > activateIdx, "activateNtpSession end must be found");
+  const activateBlock = journeySource.slice(activateIdx, activateEnd);
   assert(
     activateBlock.includes('await cdp?.send?.("Target.activateTarget", { targetId });'),
     "activateNtpSession must await Target.activateTarget without .catch()",
@@ -219,7 +233,9 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2
   // mu9oa / j9zyi: runScriptedToolProbe provider cleanup on rejection
   const probeIdx = journeySource.indexOf("async function runScriptedToolProbe(cdp, ntpSession, optsSession, steps, task, expectRequests, onPause = null) {");
   assert(probeIdx > 0, "runScriptedToolProbe must be found in scripts/chrome-journeys.ts");
-  const probeBlock = journeySource.slice(probeIdx, probeIdx + 6000);
+  const probeEnd = journeySource.indexOf("\n/** Capture a PNG screenshot", probeIdx);
+  assert(probeEnd > probeIdx, "runScriptedToolProbe end must be found");
+  const probeBlock = journeySource.slice(probeIdx, probeEnd);
   assert(
     probeBlock.includes("await provider.close();"),
     "runScriptedToolProbe must await provider.close() on failure",
@@ -236,7 +252,9 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2
   // Line 1913: hub security shield badge observation
   const shieldFocusIdx = journeySource.indexOf("// The shield badge still updates within 1 s of a REAL security event");
   assert(shieldFocusIdx > 0, "shield badge focus section must be found in scripts/chrome-journeys.ts");
-  const shieldFocusBlock = journeySource.slice(shieldFocusIdx, shieldFocusIdx + 400);
+  const shieldFocusEnd = journeySource.indexOf("const shieldAttention = await evalIn", shieldFocusIdx);
+  assert(shieldFocusEnd > shieldFocusIdx, "shield badge focus section end must be found");
+  const shieldFocusBlock = journeySource.slice(shieldFocusIdx, shieldFocusEnd);
   assert(
     shieldFocusBlock.includes('await cdp.send("Page.bringToFront", {}, ntpSession);'),
     "shield badge focus must await Page.bringToFront without .catch()",
@@ -2301,7 +2319,7 @@ Deno.test("vs9d2.1: keyless composer pre-input fails closed on Target.activateTa
   const anchor = 'const keylessBefore = await msgValue({ type: "thread.list" });';
   const anchorIdx = journeySource.indexOf(anchor);
   assert(anchorIdx > 0, "keyless pre-input anchor must be found");
-  const start = journeySource.indexOf('await cdp.send("Target.activateTarget", { targetId: ntpPage.id });', anchorIdx);
+  const start = journeySource.indexOf('await cdp.send("Target.activateTarget", { targetId: ntpPage.id })', anchorIdx);
   assert(start > 0, "keyless pre-input start must be found");
   const end = journeySource.indexOf("const KEYLESS_CARD_SEL = ", start);
   assert(end > start, "keyless pre-input end must be found");
@@ -2492,10 +2510,10 @@ Deno.test("vs9d2.1: keyless composer pre-input fails closed on Target.activateTa
   // ── Scenario 4: Mutant Check (restoring .catch(() => {}) swallows activation failure and enters Page.bringToFront/clickSel/typeInto) ──
   {
     const mutantBody = blockBody.replace(
-      'await cdp.send("Target.activateTarget", { targetId: ntpPage.id });',
+      /await cdp\.send\("Target\.activateTarget", \{ targetId: ntpPage\.id \}\)(?:\.catch\([^)]*\))?;?/,
       'await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});',
     );
-    assert(mutantBody !== blockBody, "mutant must contain .catch()");
+    assert(mutantBody.includes('Target.activateTarget", { targetId: ntpPage.id }).catch('), "mutant must contain .catch()");
 
     const mutantFrames: string[] = [];
     const ws: any = {
@@ -3099,7 +3117,7 @@ Deno.test("vs9d2: testDataManagement factory reset fails closed on Target.activa
   // Extract the real factory reset pre-input declaration from testDataManagement
   const resetAnchor = journeySource.indexOf("// ── the reset: a second Settings document watches the stores ──");
   assert(resetAnchor > 0, "factory reset anchor must be found");
-  const start = journeySource.indexOf('await cdp.send("Target.activateTarget", { targetId: optsPage.id });', resetAnchor);
+  const start = journeySource.indexOf('await cdp.send("Target.activateTarget", { targetId: optsPage.id })', resetAnchor);
   assert(start > 0, "factory reset start must be found");
   const end = journeySource.indexOf("report(DIALOG,", start);
   assert(end > start, "factory reset end must be found");
@@ -3309,11 +3327,11 @@ Deno.test("vs9d2: testDataManagement factory reset fails closed on Target.activa
   // ── Scenario 4: Swallow Mutant Check (Restoring .catch(() => {})) ──
   {
     const mutantDeclaration = resetDeclaration.replace(
-      'await cdp.send("Target.activateTarget", { targetId: optsPage.id });',
+      /await cdp\.send\("Target\.activateTarget", \{ targetId: optsPage\.id \}\)(?:\.catch\([^)]*\))?;?/,
       'await cdp.send("Target.activateTarget", { targetId: optsPage.id }).catch(() => {});',
     );
     assert(
-      mutantDeclaration.includes(".catch("),
+      mutantDeclaration.includes('Target.activateTarget", { targetId: optsPage.id }).catch('),
       "mutant must contain .catch() restoration",
     );
 
