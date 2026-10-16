@@ -470,6 +470,45 @@ function* walk(dir: string): Generator<string> {
   }
 }
 
+/** Strip comments without changing line numbers, so diagnostics name the original line. */
+export function stripComments(source: string, isShell: boolean): string {
+  if (isShell) return source.replace(/(^|\s)#.*$/gm, "$1");
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/(^|\s)\/\/.*$/gm, "$1");
+}
+
+/** Keep string contents from looking like executable temporary-directory calls. */
+export function stripStrings(source: string): string {
+  return source
+    .replace(/`(?:\\[\s\S]|[^\\`])*`/g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/'(?:\\[\s\S]|[^\\'\n])*'/g, "''")
+    .replace(/"(?:\\[\s\S]|[^\\"\n])*"/g, '""');
+}
+
+/** Apply the existing allowlists and detectors to source at their proper scope. */
+export function findDurableViolations(
+  content: string,
+  relPath: string,
+  { isShell = relPath.endsWith(".sh"), allowedCallsOnly = false }:
+    { isShell?: boolean; allowedCallsOnly?: boolean } = {},
+): string[] {
+  const violations: string[] = [];
+  const rawLines = content.split("\n");
+  const codeLines = stripComments(content, isShell).split("\n");
+  const callLines = stripStrings(codeLines.join("\n")).split("\n");
+  for (let i = 0; i < codeLines.length; i++) {
+    const rawLine = rawLines[i];
+    if (DURABLE_ROUTED.test(rawLine)) continue;
+    if (ALLOWED_LITERALS.some((l) => rawLine.includes(l))) continue;
+    const call = CALL_DETECTORS.some((re) => re.test(callLines[i]));
+    const literal = LITERAL_DETECTORS.some((re) => re.test(codeLines[i]));
+    if ((!call && !literal) || (allowedCallsOnly && call && !literal)) continue;
+    violations.push(`${relPath}:${i + 1}: ${rawLine.trim()}`);
+  }
+  return violations;
+}
+
 Deno.test("guard: tmpdir/tmpfs usage is durable-routed or deliberately allowed", () => {
   const offenders: string[] = [];
   for (const root of GUARD_ROOTS) {
@@ -477,25 +516,33 @@ Deno.test("guard: tmpdir/tmpfs usage is durable-routed or deliberately allowed",
       const rel = file.slice(ROOT.length);
       if (rel === "tests/durable-root.test.ts") continue; // the guard names the patterns itself
       if (ALLOWED_FILES.has(rel)) continue;
-      const lines = Deno.readTextFileSync(file).split("\n");
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (DURABLE_ROUTED.test(line)) continue;
-        if (ALLOWED_LITERALS.some((l) => line.includes(l))) continue;
-        const call = CALL_DETECTORS.some((re) => re.test(line));
-        const literal = LITERAL_DETECTORS.some((re) => re.test(line));
-        if (!call && !literal) continue;
-        if (ALLOWED_FILES.has(rel)) continue;
-        if (ALLOWED_CALLS_ONLY.has(rel) && call && !literal) continue;
-        offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
-      }
+      offenders.push(...findDurableViolations(Deno.readTextFileSync(file), rel, {
+        allowedCallsOnly: ALLOWED_CALLS_ONLY.has(rel),
+      }));
     }
   }
-  assertEquals(
-    offenders,
-    [],
-    "tmpdir/tmpfs usage outside the durable convention and the allowance list",
-  );
+  assertEquals(offenders, [], "tmpdir/tmpfs usage outside the durable convention and the allowance list");
+});
+
+Deno.test("pru35/rxhq2: comment and rationale mentions pass; real calls and path literals fail", () => {
+  const text = [
+    "// We avoid mkdtemp and /tmp/ allocations here.",
+    "/* A multi-line comment mentions mktemp and /dev/shm/ scratch. */",
+    'const rationale = "reads source as static input; avoids mkdtemp and makeTempDir outside durableDir";',
+    'const desc = `avoiding mktemp in shell scripts`;',
+  ].join("\n");
+  assertEquals(findDurableViolations(text, "scripts/test-fixture.ts"), []);
+  assertEquals(findDurableViolations("# mktemp is avoided here\n# /tmp/ is not used", "scripts/test-fixture.sh"), []);
+
+  const call = findDurableViolations('const dir = await mkdtemp("scratch-");', "scripts/test-fixture.ts");
+  assertEquals(call.length, 1);
+  assert(call[0].includes("scripts/test-fixture.ts:1"));
+  const literal = findDurableViolations('const socket = "/tmp/chrome.sock";', "scripts/test-fixture.ts");
+  assertEquals(literal.length, 1);
+  assert(literal[0].includes("scripts/test-fixture.ts:1"));
+  assertEquals(findDurableViolations(
+    'const dir = await mkdtemp(path.join(durableDir("scratch"), "cap-x-"));', "scripts/test-fixture.ts",
+  ), []);
 });
 
 // ── chrome-agent-platform-nudb2: scoped reserve + bounded, age-gated trim ──────────────────────
