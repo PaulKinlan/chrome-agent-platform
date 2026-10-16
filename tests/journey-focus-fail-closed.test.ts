@@ -69,7 +69,7 @@ const boundRunnerFactory = (factory: any) => (...factoryArgs: any[]) =>
 
 
 
-Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2.1 / vs9d2.2 / vs9d2 / vs9d2.3: scripts/chrome-journeys.ts does not swallow tab activation/focus rejections", () => {
+Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2.1 / vs9d2.2 / vs9d2 / vs9d2.3 / f0cmo: scripts/chrome-journeys.ts does not swallow tab activation/focus rejections", () => {
   // Line 2272: openCreateDialog pre-Create click
   const openCreateDialogIdx = journeySource.indexOf("const openCreateDialog = async () => {");
   assert(openCreateDialogIdx > 0, "openCreateDialog must be found in scripts/chrome-journeys.ts");
@@ -98,6 +98,25 @@ Deno.test("j1zcb / 0ucue / u0qo0 / 25enf / 5ui2q / hpm8f / fk9pq / 7at52 / vs9d2
   assert(
     !ledgerBlock.includes('await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch('),
     "testActionLedgerJourney must not swallow Target.activateTarget errors with .catch()",
+  );
+
+  // Line 4101: JIT permission journey pre-input Target.activateTarget and Page.bringToFront (f0cmo)
+  const jitAnchor = journeySource.indexOf("// ── JIT grant/deny/retry/revoke journey ──");
+  assert(jitAnchor > 0, "JIT grant/deny/retry/revoke journey anchor must be found in scripts/chrome-journeys.ts");
+  const jitEnd = journeySource.indexOf("const capabilityButtonSelector = ", jitAnchor);
+  assert(jitEnd > jitAnchor, "JIT grant/deny/retry/revoke journey end must be found");
+  const jitBlock = journeySource.slice(jitAnchor, jitEnd);
+  assert(
+    jitBlock.includes('await cdp.send("Target.activateTarget", { targetId: optsPage.id });\n    await cdp.send("Page.bringToFront", {}, optsSession);'),
+    "JIT permission journey must await Target.activateTarget without .catch() before Page.bringToFront",
+  );
+  assert(
+    !jitBlock.includes('await cdp.send("Target.activateTarget", { targetId: optsPage.id }).catch('),
+    "JIT permission journey must not swallow Target.activateTarget errors with .catch()",
+  );
+  assert(
+    !jitBlock.includes('await cdp.send("Page.bringToFront", {}, optsSession).catch('),
+    "JIT permission journey must not swallow Page.bringToFront errors with .catch()",
   );
 
   // Line 4846: keyless composer pre-input Target.activateTarget and Page.bringToFront
@@ -3386,6 +3405,215 @@ Deno.test("vs9d2: testDataManagement factory reset fails closed on Target.activa
     assertEquals(btfSent, true, "mutant with .catch() swallows error and sends Page.bringToFront (RED)");
     assertEquals(mutantClickCount, 2, "mutant with .catch() swallows error and calls clickSel twice (RED)");
     assertEquals(mutantWriteEvidenceCount, 1, "mutant with .catch() swallows error and calls writeEvidence (RED)");
+  }
+});
+
+Deno.test("f0cmo: JIT permission journey fails closed on Target.activateTarget rejection, preventing Page.bringToFront and capability interactions", async () => {
+  // Extract real Cdp implementation from scripts/chrome-journeys.ts
+  const cdpStart = journeySource.indexOf("class Cdp {");
+  const cdpEnd = journeySource.indexOf("\n/** Open a tab", cdpStart);
+  assert(cdpStart >= 0 && cdpEnd > cdpStart, "the real Cdp class must be found in scripts/chrome-journeys.ts");
+  const cdpSource = journeySource.slice(cdpStart, cdpEnd).replace("sessionId?", "sessionId");
+
+  // Wire mock timers so 15s transport timeout can be triggered deterministically
+  const timers = new Map<number, { callback: () => void; delay: number }>();
+  let nextTimer = 0;
+  const RealCdp = new Function("setTimeout", "clearTimeout", `${cdpSource}\nreturn Cdp;`)(
+    (callback: () => void, delay: number) => {
+      timers.set(++nextTimer, { callback, delay });
+      return nextTimer;
+    },
+    (id: number) => timers.delete(id),
+  );
+
+  // Extract the real JIT pre-input activation declaration
+  const jitAnchor = journeySource.indexOf("// ── JIT grant/deny/retry/revoke journey ──");
+  assert(jitAnchor > 0, "JIT journey anchor must be found");
+  const start = journeySource.indexOf('await cdp.send("Target.activateTarget", { targetId: optsPage.id }', jitAnchor);
+  assert(start > 0, "JIT activation start must be found");
+  const end = journeySource.indexOf("const capabilityButtonSelector = ", start);
+  assert(end > start, "JIT activation end must be found");
+  const jitDeclaration = journeySource.slice(start, end).trim();
+
+  const compileJit = (code: string) =>
+    new Function(
+      "cdp",
+      "optsPage",
+      "optsSession",
+      `return (async () => {\n${code}\n})();`,
+    );
+
+  // ── Scenario 1: Dead Transport (CLOSED socket + 15s timer rejection) ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 3, // CLOSED
+      send: (frame: string) => frames.push(frame),
+    };
+    const cdp = new RealCdp(ws);
+    ws.onclose();
+    assertEquals(cdp.fatalEvents, ["websocket closed unexpectedly"]);
+
+    const runPromise = compileJit(jitDeclaration)(
+      cdp,
+      { id: "fake-opts-page" },
+      "fake-opts-session",
+    );
+    let runErr: any = null;
+    runPromise.catch((e: any) => { runErr = e; });
+
+    assertEquals(frames.length, 1);
+    const sentMsg = JSON.parse(frames[0]);
+    assertEquals(sentMsg.method, "Target.activateTarget");
+    assertEquals(sentMsg.params, { targetId: "fake-opts-page" });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Advance 15s transport timeout
+    const timerEntries = [...timers.entries()];
+    assertEquals(timerEntries.length, 1, "exactly one transport timer must be registered");
+    const [timerId, timer] = timerEntries[0];
+    assertEquals(timer.delay, 15000, "transport timeout must be 15000ms");
+    timers.delete(timerId);
+    timer.callback();
+
+    // Give microtasks a turn to run/settle
+    await new Promise((r) => setTimeout(r, 10));
+
+    // If a mutant swallowed the error and queued a second call, fire its timer too so no promise dangles
+    if (timers.size > 0) {
+      for (const [id, t] of [...timers.entries()]) {
+        timers.delete(id);
+        t.callback();
+      }
+    }
+
+    await runPromise.catch(() => {});
+    assert(runErr !== null, "Must reject after timer fires");
+    assert(
+      runErr.message.includes("cdp timeout: Target.activateTarget"),
+      `Unexpected timeout error: ${runErr.message}`,
+    );
+
+    const btfSent = frames.some((f) => JSON.parse(f).method === "Page.bringToFront");
+    assertEquals(btfSent, false, "Page.bringToFront must NOT be sent after activation timeout");
+  }
+
+  // ── Scenario 2: Closed Target (-32602 wire rejection) ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 1, // OPEN
+      send: (frame: string) => {
+        frames.push(frame);
+        const parsed = JSON.parse(frame);
+        if (parsed.method === "Target.activateTarget") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                error: { code: -32602, message: "No target with given id found" },
+              }),
+            });
+          });
+        }
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    const runJit = compileJit(jitDeclaration)(
+      cdp,
+      { id: "closed-opts-page" },
+      "fake-opts-session",
+    );
+
+    await assertRejects(
+      () => runJit,
+      Error,
+      "No target with given id found",
+    );
+
+    const btfSent = frames.some((f) => JSON.parse(f).method === "Page.bringToFront");
+    assertEquals(btfSent, false, "Page.bringToFront must NOT be sent after target error");
+  }
+
+  // ── Scenario 3: Positive Path ──
+  {
+    const frames: string[] = [];
+    const ws: any = {
+      readyState: 1, // OPEN
+      send: (frame: string) => {
+        frames.push(frame);
+        const parsed = JSON.parse(frame);
+        queueMicrotask(() => {
+          ws.onmessage({
+            data: JSON.stringify({ id: parsed.id, result: {} }),
+          });
+        });
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    const runJit = compileJit(jitDeclaration)(
+      cdp,
+      { id: "active-opts-page" },
+      "fake-opts-session",
+    );
+
+    await runJit;
+
+    assertEquals(frames.length, 2);
+    assertEquals(JSON.parse(frames[0]).method, "Target.activateTarget");
+    assertEquals(JSON.parse(frames[1]).method, "Page.bringToFront");
+  }
+
+  // ── Scenario 4: Swallow Mutant Check (Restoring .catch(() => {})) ──
+  {
+    const mutantDeclaration = jitDeclaration.replace(
+      /await cdp\.send\("Target\.activateTarget", \{ targetId: optsPage\.id \}\);?/,
+      'await cdp.send("Target.activateTarget", { targetId: optsPage.id }).catch(() => {});',
+    );
+    assert(
+      mutantDeclaration.includes('Target.activateTarget", { targetId: optsPage.id }).catch('),
+      "mutant must contain .catch() restoration",
+    );
+
+    const mutantFrames: string[] = [];
+    const ws: any = {
+      readyState: 1,
+      send: (frame: string) => {
+        mutantFrames.push(frame);
+        const parsed = JSON.parse(frame);
+        if (parsed.method === "Target.activateTarget") {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({
+                id: parsed.id,
+                error: { code: -32602, message: "No target with given id found" },
+              }),
+            });
+          });
+        } else {
+          queueMicrotask(() => {
+            ws.onmessage({
+              data: JSON.stringify({ id: parsed.id, result: {} }),
+            });
+          });
+        }
+      },
+    };
+    const cdp = new RealCdp(ws);
+
+    const mutantRunJit = compileJit(mutantDeclaration)(
+      cdp,
+      { id: "closed-opts-page" },
+      "fake-opts-session",
+    );
+
+    await mutantRunJit;
+
+    const btfSent = mutantFrames.some((f) => JSON.parse(f).method === "Page.bringToFront");
+    assertEquals(btfSent, true, "mutant with .catch() swallows error and sends Page.bringToFront (RED)");
   }
 });
 
