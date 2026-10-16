@@ -2,7 +2,7 @@
 // Real browser verification of site-agent delegation with attachments & live progress.
 // CAP-FB-20260825-DELEGATE-ATTACHMENTS-PROGRESS-01.
 
-import { wireValue } from "./lib/cdp-eval.ts";
+import { wireValue, withTransientContextRetry } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import {
   launchChrome,
@@ -94,11 +94,17 @@ try {
   await send("Runtime.enable", {}, s);
   await send("Page.enable", {}, s);
 
-  const evalIn = async (expr: string) => {
-    const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, s);
-    if (r?.result?.exceptionDetails) return { __error: r.result.exceptionDetails.exception?.description ?? "threw" };
-    return wireValue<any>(r, "k.site-delegation-attachments");
-  };
+  // A Runtime.evaluate issued before the frame's default execution context exists dies with a
+  // transient TRANSPORT error ("CDP error N: Cannot find default execution context") about 2 s into
+  // launch. This KAT had NO retry for it, which is how a launch race red the union gate and cost a
+  // whole re-run (chrome-agent-platform-zq76k). The shared retry absorbs only that transport error;
+  // a page throw and every other failure still surface unchanged.
+  const evalIn = async (expr: string) =>
+    await withTransientContextRetry(async () => {
+      const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, s);
+      if (r?.result?.exceptionDetails) return { __error: r.result.exceptionDetails.exception?.description ?? "threw" };
+      return wireValue<any>(r, "k.site-delegation-attachments");
+    });
 
   const results: string[] = [];
   const check = (name: string, ok: boolean, detail = "") =>

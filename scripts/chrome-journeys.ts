@@ -41,7 +41,7 @@ import { fileURLToPath } from "node:url";
 import { DEMO_STREAM_ANSWER } from "../extension/lib/models/demo-model.js";
 import { durableDir } from "./lib/durable-root.mjs";
 import { isCdpEvaluateTimeout } from "./lib/quiet-window.ts";
-import { wireValue } from "./lib/cdp-eval.ts";
+import { wireValue, withTransientContextRetry } from "./lib/cdp-eval.ts";
 import { computeUnpackedExtensionId, launchChrome as spawnChrome, SW_MATCH, teardownChrome } from "./lib/chrome-launch.ts";
 import { assertJourneyNtpPrincipal } from "./lib/journey-ntp-principal.ts";
 import { approvalPollCause, APPROVAL_POLL_BUDGET_MS, providerSetCause } from "./lib/journey-failure-cause.mjs";
@@ -365,10 +365,13 @@ async function attachRuntime(cdp, targetId) {
  * naming this site — never a bare undefined a check can read as a product
  * answer (kwrx / 0aeh). */
 async function evalIn(cdp, session, expression) {
-  let lastErr = null;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      const r = await withTimeout(
+  // The transient execution-context retry is SHARED now (scripts/lib/cdp-eval.ts): this file and
+  // click-target each carried a copy, while the KAT scripts beside them had none
+  // (chrome-agent-platform-zq76k). Behaviour is unchanged: 5 attempts, 250 ms apart, decided on the
+  // error KIND first, and the last error is rethrown when the attempts run out.
+  return await withTransientContextRetry(async () =>
+    wireValue<any>(
+      await withTimeout(
         cdp.send(
           "Runtime.evaluate",
           { expression, returnByValue: true, awaitPromise: true },
@@ -376,18 +379,10 @@ async function evalIn(cdp, session, expression) {
         ),
         15000,
         "evalIn",
-      );
-      return wireValue<any>(r, "jny.evalIn");
-    } catch (e) {
-      lastErr = e;
-      if (String(e?.message ?? e).includes("Cannot find default execution context") && attempt < 4) {
-        await sleep(250);
-        continue;
-      }
-      throw e;
-    }
-  }
-  throw lastErr;
+      ),
+      "jny.evalIn",
+    )
+  );
 }
 
 /** EVERY piece of text the thread can show the owner — light DOM AND every
