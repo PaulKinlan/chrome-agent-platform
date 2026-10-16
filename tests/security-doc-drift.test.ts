@@ -96,8 +96,13 @@ function section(text: string, start: string, end: string): string {
 
 // Resolve source AST nodes, not text occurrences: a comment or a second copy
 // must not satisfy a missing security check (o75bp; 5x4iw's line pins drifted).
-function sourceAnchorLines(ast: unknown, symbol: string): number[] {
-  const lines: number[] = [];
+interface AnchorNodeMatch {
+  line: number;
+  node: { start: number; end: number; loc: { start: { line: number } }; arguments?: any[] };
+}
+
+function sourceAnchorNodes(ast: unknown, symbol: string): AnchorNodeMatch[] {
+  const matches: AnchorNodeMatch[] = [];
   const memberPath = (node: unknown): string | null => {
     if (node?.type === "Identifier") return node.name;
     if (node?.type !== "MemberExpression" || node.computed || node.property?.type !== "Identifier") return null;
@@ -107,12 +112,12 @@ function sourceAnchorLines(ast: unknown, symbol: string): number[] {
   const visit = (node: unknown) => {
     if (!node || typeof node !== "object") return;
     if ((node.type === "VariableDeclarator" || node.type === "FunctionDeclaration" || node.type === "ClassDeclaration") &&
-        node.id?.type === "Identifier" && node.id.name === symbol) lines.push(node.id.loc.start.line);
+        node.id?.type === "Identifier" && node.id.name === symbol) matches.push({ line: node.id.loc.start.line, node: node as any });
     if (node.type === "CallExpression" && symbol.includes(".") && memberPath(node.callee) === symbol) {
-      lines.push(node.loc.start.line); // bare names must resolve to declarations, not callers
+      matches.push({ line: node.loc.start.line, node: node as any }); // bare names must resolve to declarations, not callers
     }
     if (node.type === "Property" && node.method && node.key?.type === "Literal" && node.key.value === symbol) {
-      lines.push(node.key.loc.start.line); // quoted SW route method, not a comment/string use
+      matches.push({ line: node.key.loc.start.line, node: node as any }); // quoted SW route method, not a comment/string use
     }
     for (const [key, value] of Object.entries(node)) {
       if (key === "start" || key === "end" || key === "loc") continue;
@@ -121,7 +126,11 @@ function sourceAnchorLines(ast: unknown, symbol: string): number[] {
     }
   };
   visit(ast);
-  return lines.sort((a, b) => a - b);
+  return matches.sort((a, b) => a.line - b.line);
+}
+
+function sourceAnchorLines(ast: unknown, symbol: string): number[] {
+  return sourceAnchorNodes(ast, symbol).map((m) => m.line);
 }
 
 function assertLiveRouteCitations(model: string, pure: string, worker: string, register = read("docs/RISK-REGISTER.md")): void {
@@ -176,6 +185,28 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string, r
     [section(register, "### R22", "### R23"), [pureRoute, listener, allowlist, classifier]],
   ];
   for (const [piece, anchors] of sections) for (const [path, symbol] of anchors) check(piece, path, symbol);
+
+  // Assert containment (hf1u0): PAGE_ALLOWED_ROUTES.has must lie within the chrome.runtime.onMessage.addListener callback
+  const swAst = parsed.get("extension/background/service-worker.js");
+  if (swAst) {
+    const listenerMatches = sourceAnchorNodes(swAst, "chrome.runtime.onMessage.addListener");
+    const allowlistMatches = sourceAnchorNodes(swAst, "PAGE_ALLOWED_ROUTES.has");
+    if (listenerMatches.length === 1 && allowlistMatches.length === 1) {
+      const listenerCall = listenerMatches[0].node;
+      const callback = listenerCall.arguments?.[0];
+      const allowlistCall = allowlistMatches[0].node;
+      assert(
+        callback &&
+          typeof callback.start === "number" &&
+          typeof callback.end === "number" &&
+          allowlistCall.start >= callback.start &&
+          allowlistCall.end <= callback.end,
+        "extension/background/service-worker.js#PAGE_ALLOWED_ROUTES.has must be contained within " +
+          "the extension/background/service-worker.js#chrome.runtime.onMessage.addListener callback",
+      );
+    }
+  }
+
   assert(!/extension\/background\/service-worker\.js:\d+/.test(model),
     "THREAT_MODEL must cite service-worker symbols, not drift-prone source lines");
   assert(!/extension\/background\/service-worker\.js:\d+/.test(section(register, "### R22", "### R23")),
@@ -272,6 +303,10 @@ Deno.test("5x4iw: page route and dispatcher citations resolve at current source 
     Error, "missing security anchor extension/lib/pure.js#PAGE_ALLOWED_ROUTES", "removing a cited declaration must fail");
   assertThrows(() => assertLiveRouteCitations(model, pure, worker.replace("!PAGE_ALLOWED_ROUTES.has(message.type)", "true")),
     Error, "missing security anchor extension/background/service-worker.js#PAGE_ALLOWED_ROUTES.has", "removing the live allowlist check must fail");
+  assertThrows(() => assertLiveRouteCitations(model, pure,
+    worker.replace("!PAGE_ALLOWED_ROUTES.has(message.type)", "true") +
+      "\nvoid PAGE_ALLOWED_ROUTES.has('dead-code');\n"),
+    Error, "must be contained within", "moving the allowlist check outside the listener callback must fail");
   assertThrows(() => assertLiveRouteCitations(model, pure, worker.replace('async "cap:fetch"(', 'async "retired:fetch"(')),
     Error, "missing security anchor extension/background/service-worker.js#cap:fetch", "removing a cited SW route must fail");
   assertThrows(() => assertLiveRouteCitations(model, pure,
