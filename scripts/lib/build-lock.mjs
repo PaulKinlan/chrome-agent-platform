@@ -37,11 +37,23 @@ export const DEFAULT_INTERVAL_MS = 500;
 export const OWNERLESS_STALE_MS = 60_000;
 export const QUARANTINE_PREFIX = ".lock-quarantine-";
 
+/** The sentinel `machineBootId()` returns when its platform read FAILS. It is deliberately not a
+ *  boot id: it proves nothing about either side of a comparison, so it can never establish "a
+ *  different boot" (chrome-agent-platform-k4kve). */
+export const UNKNOWN_BOOT = "unknown-boot";
+
+/** True only for a boot value that can carry a comparison: a non-empty string that is not the
+ *  sentinel. Both sides must pass this before the boot fence may fire. */
+export function isKnownBoot(value) {
+  return typeof value === "string" && value.length > 0 && value !== UNKNOWN_BOOT;
+}
+
 export function machineBootId(read = defaultProcRead) {
   try {
-    return String(read("/proc/sys/kernel/random/boot_id")).trim();
+    const id = String(read("/proc/sys/kernel/random/boot_id")).trim();
+    return id.length > 0 ? id : UNKNOWN_BOOT;
   } catch {
-    return "unknown-boot";
+    return UNKNOWN_BOOT;
   }
 }
 
@@ -195,11 +207,11 @@ export function buildOwnerIdentity(pid = process.pid, boot = machineBootId(), de
 /**
  * Decide whether the lock's recorded holder is dead, i.e. whether the lock is stealable.
  *
- * Dead when: no owner at all and the lock is observably old; a different boot; kill(pid, 0) reports
- * ESRCH; /proc/<pid>/stat has vanished; the state is `Z` (zombie) or `X` (dead); or the starttime
- * changed (pid reuse).
- * Alive when: kill reports EPERM; /proc/<pid>/stat is unreadable rather than missing; or the owner
- * matches in every respect.
+ * Dead when: no owner at all and the lock is observably old; a PROVABLY different boot (both ids
+ * known — see UNKNOWN_BOOT); kill(pid, 0) reports ESRCH; /proc/<pid>/stat has vanished; the state is
+ * `Z` (zombie) or `X` (dead); or the starttime changed (pid reuse).
+ * Alive when: kill reports EPERM; /proc/<pid>/stat is unreadable rather than missing; the boot
+ * compare cannot prove anything because a side is unknown; or the owner matches in every respect.
  *
  * `deps` exists so the decision is testable without contriving a real process in each state:
  *   bootId, now, kill, procStat(pid) -> {ok, state, start, reason}, lockDirBirthtimeMs() -> number.
@@ -221,8 +233,15 @@ export async function holderIsDead(holder, deps = {}) {
     return now() - born > OWNERLESS_STALE_MS;
   }
 
-  // A different boot means the recorded pid+starttime cannot be this machine's live process.
-  if (holder.boot && holder.boot !== bootId) return true;
+  // A PROVABLY different boot means the recorded pid+starttime cannot be this machine's live
+  // process. BOTH sides must be known: machineBootId() returns the "unknown-boot" sentinel when its
+  // read fails, and a lock written before that read existed holds the sentinel literally, so an
+  // unverifiable side proves nothing. Comparing a known holder against an unknown contender (or the
+  // reverse) STOLE a live build lock — two concurrent publishes into dist, then the build GC removing
+  // the sibling's fresh version, the exact damage this file's header documents
+  // (chrome-agent-platform-k4kve). This is the same shape as the start compare below, which also
+  // requires both sides.
+  if (isKnownBoot(holder.boot) && isKnownBoot(bootId) && holder.boot !== bootId) return true;
 
   let killError = null;
   try {

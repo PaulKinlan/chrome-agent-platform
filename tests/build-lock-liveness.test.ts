@@ -19,11 +19,13 @@ import {
   DEFAULT_ATTEMPTS,
   DEFAULT_INTERVAL_MS,
   holderIsDead,
+  isKnownBoot,
   LOCK_DIRNAME,
   machineBootId,
   OWNERLESS_STALE_MS,
   parseProcStat,
   procStatFields,
+  UNKNOWN_BOOT,
 } from "../scripts/lib/build-lock.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
@@ -274,6 +276,52 @@ Deno.test("0ym29: a 'gone' probe contradicted by a second live kill(0) refuses t
     },
   );
   assertEquals(epermOnRecheck, false, "EPERM on the re-check is existence, not death");
+});
+
+// chrome-agent-platform-k4kve: the boot fence may compare only when BOTH sides are known.
+// machineBootId() answers the sentinel "unknown-boot" when its read fails (macOS has no
+// /proc/sys/kernel/random/boot_id), and a lock written before the fence read existed holds that
+// sentinel literally. The old compare (`holder.boot !== bootId`) read EITHER case as "a different
+// boot" and STOLE a live holder — two concurrent publishes into dist, then the build GC removing the
+// sibling's fresh version. The published repro (fix owner's evidence, node v24.21.0) was
+// `sysctl OK -> false | sysctl TIMEOUT -> true (WRONG) | pre-fix lock -> true (WRONG)`.
+Deno.test("k4kve: an unknown boot on either side never fences, a known different boot always does", async () => {
+  const HOLDER_START = "Wed Oct  7 12:10:01 2026";
+  const realBoot = "1759800000";
+  const live = { kill: () => {}, procStat: () => ({ ok: true, state: "S", start: HOLDER_START }) };
+
+  // The sysctl TIMEOUT row: the holder is unambiguously LIVE on the same boot, and only the
+  // CONTENDER's read failed.
+  const contenderReadFailed = await holderIsDead(
+    { pid: 4242, token: "t1", at: 1, boot: realBoot, start: HOLDER_START },
+    { bootId: UNKNOWN_BOOT, ...live },
+  );
+  assertEquals(contenderReadFailed, false, "a failed local read cannot prove a different boot — do not steal");
+
+  // The pre-fix-lock row: a lock written before the boot read existed holds the sentinel literally.
+  const sentinelHolder = await holderIsDead(
+    { pid: 4242, token: "t1", at: 1, boot: UNKNOWN_BOOT, start: HOLDER_START },
+    { bootId: realBoot, ...live },
+  );
+  assertEquals(sentinelHolder, false, "an unknown holder boot proves nothing either — do not steal");
+
+  const bothUnknown = await holderIsDead(
+    { pid: 4242, token: "t1", at: 1, boot: UNKNOWN_BOOT, start: HOLDER_START },
+    { bootId: UNKNOWN_BOOT, ...live },
+  );
+  assertEquals(bothUnknown, false, "neither side can fence the other");
+
+  // Over-fixing is the OTHER defect (chrome-agent-platform-8qkmg: a boot fence that never fires), so a
+  // genuinely different boot with an otherwise-live holder must still be stealable.
+  const differentBoot = await holderIsDead(
+    { pid: 4242, token: "t1", at: 1, boot: realBoot, start: HOLDER_START },
+    { bootId: "1759809999", ...live },
+  );
+  assertEquals(differentBoot, true, "a provably different boot must still fence");
+
+  assertEquals(isKnownBoot(UNKNOWN_BOOT), false, "the sentinel is not a boot id");
+  assertEquals(isKnownBoot(""), false, "an empty read is not a boot id");
+  assertEquals(isKnownBoot(realBoot), true);
 });
 
 Deno.test("r0v8: an ownerless lock is stealable only once observably old", async () => {
