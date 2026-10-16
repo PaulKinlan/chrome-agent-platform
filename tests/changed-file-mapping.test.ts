@@ -11,7 +11,7 @@
 // therefore a real edit shape, not a synthetic one.
 // @ts-nocheck
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
 import {
   BOOKKEEPING_FILES,
@@ -36,6 +36,9 @@ import {
 } from "../scripts/select-tests.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
+const declaredGuardExists = (rel: string) => {
+  try { return Deno.statSync(`${ROOT}${rel}`).isFile; } catch { return false; }
+};
 const BASE = JSON.stringify({
   name: "chrome-agent-platform",
   version: "0.3.474",
@@ -305,6 +308,7 @@ Deno.test("nco2: mapUncovered splits mapped from unmappable and carries the reas
   const { mapped, unmappable } = mapUncovered(
     ["package.json", "extension/manifest.json", "scripts/a11y-audit.ts", "some/unknown-thing.json"],
     (f) => f === "package.json",
+    declaredGuardExists,
   );
   assertEquals(mapped.map((m) => m.file).sort(), ["package.json", "scripts/a11y-audit.ts"]);
   assertEquals(unmappable.map((u) => u.file).sort(), ["extension/manifest.json", "some/unknown-thing.json"]);
@@ -312,6 +316,20 @@ Deno.test("nco2: mapUncovered splits mapped from unmappable and carries the reas
     assert(entry.mechanism && entry.mechanism.length > 10, `every entry names its mechanism: ${entry.file}`);
   }
   assert(unmappable.length > 0);
+});
+
+Deno.test("cqsim: absent declared guard refuses subset and names both source and missing test", () => {
+  const source = "extension/ntp/ntp.html";
+  const guard = "tests/thread-export-entry-html.test.ts";
+  const missing = mapUncovered([source], () => false, () => false);
+  assertEquals(missing.mapped, []);
+  assertEquals(missing.unmappable.map((entry: any) => entry.file), [source]);
+  assert(missing.unmappable[0].mechanism.includes(source));
+  assert(missing.unmappable[0].mechanism.includes(guard));
+  assertThrows(() => mapUncovered([source], () => false), Error, "declared guard existence predicates are required");
+  const present = mapUncovered([source], () => false, declaredGuardExists);
+  assertEquals(present.unmappable, []);
+  assertEquals(present.mapped[0].tests, [guard]);
 });
 
 Deno.test("nco2: every declared guard EXISTS and actually reads the tree it guards", () => {
