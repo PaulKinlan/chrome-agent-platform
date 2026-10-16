@@ -486,5 +486,72 @@ Deno.test("owner-blobs: corrupted bytes on disk fail closed on pre-instantiate r
   assert(caughtError.message.includes("blob_digest_mismatch"));
 });
 
+Deno.test("owner-blobs: hard crash leaving orphan .bin without metadata fails closed and prunes on recovery (x7n6o)", async () => {
+  const f = fixture();
+  const rawBytes = new Uint8Array([1, 2, 3, 4]);
+  const fakeDigest = "a".repeat(64);
+  const root = await (await f.options.storage.getDirectory()).getDirectoryHandle(OWNER_BLOBS_ROOT, { create: true });
+  const writer = await (await root.getFileHandle(`${fakeDigest}.bin`, { create: true })).createWritable();
+  await writer.write(rawBytes);
+  await writer.close();
+
+  // getFile must fail closed with NotFoundError (never surfaces unmanifested orphan bytes)
+  await assertRejects(() => f.store.getFile(fakeDigest), DOMException);
+
+  // list() must recover by pruning the orphan .bin file from disk
+  const list = await f.store.list();
+  assertEquals(list, []);
+  assertEquals([...f.files.keys()], []);
+});
+
+Deno.test("owner-blobs: metadata without bytes fails closed during recovery (x7n6o)", async () => {
+  const f = fixture();
+  const fakeDigest = "b".repeat(64);
+  const root = await (await f.options.storage.getDirectory()).getDirectoryHandle(OWNER_BLOBS_ROOT, { create: true });
+  const writer = await (await root.getFileHandle(`${fakeDigest}.json`, { create: true })).createWritable();
+  await writer.write(JSON.stringify({
+    version: 2,
+    digest: fakeDigest,
+    kind: "wasm",
+    name: "Missing bytes",
+    description: "test",
+    size: 100,
+    addedAt: 123456,
+  }));
+  await writer.close();
+
+  // list() must fail closed — missing bytes for a committed record throws
+  await assertRejects(() => f.store.list(), Error, `Stored blob bytes are missing: ${fakeDigest}`);
+});
+
+Deno.test("owner-blobs: staging upload prune respects grace window for concurrent uploads (h2ge)", async () => {
+  const f = fixture();
+  const root = await (await f.options.storage.getDirectory()).getDirectoryHandle(OWNER_BLOBS_ROOT, { create: true });
+  const now = 100_000;
+  f.options.now = () => now;
+
+  // 1. Live temporary created 10s ago (within 60s grace)
+  const liveTemp = `upload-${now - 10_000}-${crypto.randomUUID()}.bin`;
+  const w1 = await (await root.getFileHandle(liveTemp, { create: true })).createWritable();
+  await w1.write(new Uint8Array([1, 2]));
+  await w1.close();
+
+  // 2. Stale crashed temporary created 70s ago (exceeds 60s grace)
+  const staleTemp = `upload-${now - 70_000}-${crypto.randomUUID()}.bin`;
+  const w2 = await (await root.getFileHandle(staleTemp, { create: true })).createWritable();
+  await w2.write(new Uint8Array([3, 4]));
+  await w2.close();
+
+  // list() runs recoveryPass
+  const entries = await f.store.list();
+  assertEquals(entries, []);
+
+  // Stale temp must be reaped; live temp must be preserved
+  const surviving = [...f.files.keys()].map((k) => k.replace(`${OWNER_BLOBS_ROOT}/`, ""));
+  assertEquals(surviving.includes(liveTemp), true, "live staging file within grace must not be pruned");
+  assertEquals(surviving.includes(staleTemp), false, "stale staging file exceeding grace must be pruned");
+});
+
+
 
 
