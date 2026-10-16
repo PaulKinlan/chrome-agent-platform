@@ -1,5 +1,16 @@
 {
- "_about": "Historical isolated-file wall seconds measured at 1f79854 on a 2-vCPU VM (2026-10-08); ordering estimates, NOT timings for the current tree. Refreshed against the current full parallel tier on 2026-10-15: removed five now-heavy-deferred entries. Used ONLY to order selected files; never decides which files run. Unweighted files preserve their selection order after the weighted files. tests/parallel-schedule.test.ts rejects non-parallel, deferred, missing, or read-only-dist names.",
+ "_about": "Historical isolated-file wall seconds measured at 1f79854 on a 2-vCPU VM (2026-10-08); ordering estimates, NOT timings for the current tree. The 2026-10-15 change REMOVED five now-heavy-deferred names and RE-MEASURED NOTHING, so every surviving number below is still a 2026-10-08 measurement. Used ONLY to order selected files; never decides which files run (see _provenance, and docs/TEST-COUPLING-INVENTORY.md entry 23). tests/parallel-schedule.test.ts rejects non-parallel, deferred, missing, or read-only-dist names.",
+ "_provenance": {
+  "measured_at": "2026-10-08",
+  "measured_tree": "1f79854",
+  "measured_host": "2-vCPU VM (not this fleet's host class, and not a current-tree measurement)",
+  "measured_method": "each file run ALONE through the repo's per-file runner (`npm run test:file -- tests/<x>.test.ts`), recording wall seconds; one file at a time so a file's own tail does not overlap the next",
+  "rederivation": "NONE COMMITTED: no script or knob re-measures this table, which is why the numbers above are stale-but-ordered rather than current. Whoever refreshes weights must MEASURE on the tree in question, then update the numbers, measured_at/measured_tree, and say so here.",
+  "refreshed_on": "2026-10-15",
+  "refreshed_scope": "names only - five entries that had become heavy-deferred were removed; no duration was recalibrated",
+  "guarantee": "ordering only: the table may reorder the parallel set but can never add, drop or deselect a file (tests/parallel-schedule.test.ts pins the permutation against the live selection)",
+  "off_switch": "CAP_PARALLEL_SCHEDULE=0 disables this ordering entirely (scripts/run-tests.mjs); documented in docs/CHROME-TEST-CONTRACT.md"
+ },
  "weights": {
   "tests/wasm-sync-workspace.test.ts": 50.9,
   "tests/serial-phase-resilience.test.ts": 31.9,
