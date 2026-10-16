@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.709] — 2026-10-16
+- Clean up ACP test scratch directories on teardown and enforce durable-root entry cap to prevent disk starvation.
+
 ## [0.3.708] — 2026-10-16
 - Single-source environmental refusal marker in test runner
 
