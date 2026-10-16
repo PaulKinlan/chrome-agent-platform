@@ -41,3 +41,46 @@ Deno.test("unbuilt-tree-components: docs/components-artifacts.js references diff
     "docs/components-artifacts.js imports from ./diff-core.bundle.js",
   );
 });
+
+Deno.test("unbuilt-tree-components: 2y7qe recurrence guard passes with docs bundle absent (x3rx7)", async () => {
+  const bundlePath = path.join(DOCS_DIR, "diff-core.bundle.js");
+  let stashedContent: string | null = null;
+  if (fs.existsSync(bundlePath)) {
+    stashedContent = fs.readFileSync(bundlePath, "utf8");
+    fs.unlinkSync(bundlePath);
+  }
+
+  try {
+    const cmd = new Deno.Command("deno", {
+      args: [
+        "test",
+        "-A",
+        "--config",
+        "deno.runner.jsonc",
+        "--filter",
+        "2y7qe recurrence guard: every cross-module call to components-core is imported and exported",
+        "tests/components.test.ts",
+      ],
+      cwd: ROOT,
+      env: { ...Deno.env.toObject(), CAP_TEST_RUNNER: "1" },
+    });
+    const output = await cmd.output();
+    const stdout = new TextDecoder().decode(output.stdout);
+    const stderr = new TextDecoder().decode(output.stderr);
+    assertEquals(
+      output.code,
+      0,
+      `2y7qe recurrence guard must pass in unbuilt tree without docs/diff-core.bundle.js.\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+    );
+    assert(
+      stdout.includes("ok"),
+      `Expected test output to contain 'ok', got:\n${stdout}`,
+    );
+  } finally {
+    if (stashedContent !== null) {
+      fs.writeFileSync(bundlePath, stashedContent, "utf8");
+    }
+  }
+});
+
+
