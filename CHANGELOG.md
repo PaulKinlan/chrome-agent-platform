@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.708] — 2026-10-16
+- Single-source environmental refusal marker in test runner
+
 ## [0.3.707] — 2026-10-16
 - Dynamically scaled parallel test phase timeout with CPU concurrency and suite size
 
