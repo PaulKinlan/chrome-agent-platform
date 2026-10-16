@@ -28,6 +28,7 @@
 
 import { EXECUTOR_BOUNDS } from "./wasm-executor-bounds.js";
 import { newId } from "./pure.js";
+import { validateWheelArchiveBounds } from "./python-wheel-validator.js";
 
 export const PYTHON_EXEC_TIMEOUT_MS = EXECUTOR_BOUNDS.maxCallMs; // 30s: a hung interpreter must die
 export const PYTHON_RUNTIME_VERSION = "0.26.4";
@@ -204,6 +205,21 @@ export function createPythonRuntimeProvider({
             wheelsToSend = [];
           }
         }
+        // The LAST extension-side hop before the sandbox (chrome-agent-platform-gdrfu): these exact
+        // bytes are what the Pyodide worker unpacks into MEMFS with no limits of its own, so each
+        // wheel's DECLARED shape is bounded here, after every writer to the store (upload route,
+        // share import, or the run's own wheel list) has had its say. Fail closed: a wheel whose
+        // bounds cannot be proven refuses the RUN rather than being silently dropped, because a
+        // silent drop would run user code against a site-packages the caller did not ask for.
+        const runWheels = [];
+        for (const wheel of Array.isArray(wheelsToSend) ? wheelsToSend : []) {
+          const bounds = validateWheelArchiveBounds({ name: wheel?.name, bytes: wheel?.bytes });
+          if (!bounds.ok) {
+            takeRecords();
+            throw new Error(`python_wheel_refused: ${bounds.error}`);
+          }
+          runWheels.push(wheel);
+        }
         let response;
         try {
           response = await withTimeout(
@@ -212,7 +228,7 @@ export function createPythonRuntimeProvider({
               runId,
               code: sanitizeInput(code),
               stdin: sanitizeInput(oneShotStdin()),
-              wheels: Array.isArray(wheelsToSend) ? wheelsToSend : [],
+              wheels: runWheels,
             }),
             timeoutMs,
           );

@@ -6,7 +6,8 @@
 // admitted-runtime pins, the runtime-provider transport, and — the
 // falsification — REAL Pyodide execution of python_execute code.
 import { fileURLToPath } from "node:url";
-import { assertEquals, assert, assertStringIncludes } from "jsr:@std/assert@1";
+import { assertEquals, assert, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
+import { buildStoredZip, legitWheelBytes, legitWheelEntries } from "./fixtures/wheel-archive-fixtures.ts";
 import { runPython, PYTHON_EXEC_BOUNDS } from "../extension/lib/python-execution.js";
 import {
   createPythonRuntimeProvider,
@@ -327,4 +328,49 @@ Deno.test("pyodide host: empty code is refused before any worker spawns", async 
   const host = registerPythonHost({ getURL: (rel) => `ext://${rel}`, fetchImpl: diskFetch(), WorkerCtor: class { postMessage() {} terminate() {} } });
   const result = await host.executeRun({ code: "" });
   assertEquals(result.error, "python_empty_code");
+});
+
+// ── the run-time archive-bomb gate (chrome-agent-platform-gdrfu) ────────────────────────────────
+// The sandbox's own unpacker (pyodide.unpackArchive) extracts every entry into MEMFS with no
+// byte/ratio/count limits, and the worker's bytes come from THIS hop - so the guard is asserted
+// here, at the last extension-side code before the run message, not only in the pure validator.
+Deno.test("pyodide provider: a declared archive bomb never reaches the sandbox host", async () => {
+  const sent: any[] = [];
+  const bomb = buildStoredZip(legitWheelEntries([
+    { name: "pkg/payload.py", data: new Uint8Array(0), declaredUncompressed: 40 * 1024 * 1024 },
+  ]));
+  const provider = createPythonRuntimeProvider({
+    ensureHost: async () => ({ ok: true }),
+    sendMessage: async (message: any) => { sent.push(message); return { ok: true, stdout: "" }; },
+    loadWheels: async () => [{ name: "pkg-1.0.0-py3-none-any.whl", bytes: Array.from(bomb) }],
+  });
+  const runtime = await provider.provider();
+  await assertRejects(() => runtime.runPythonAsync("print(1)"), Error, "python_wheel_refused");
+  assertEquals(sent.length, 0, "a refused wheel must not produce a run frame for the host");
+});
+
+Deno.test("pyodide provider: an unprovable archive is refused, and a real wheel still passes through byte-identical", async () => {
+  const refusals: any[] = [];
+  const unprovable = createPythonRuntimeProvider({
+    ensureHost: async () => ({ ok: true }),
+    sendMessage: async (message: any) => { refusals.push(message); return { ok: true, stdout: "" }; },
+    loadWheels: async () => [{ name: "pkg-1.0.0-py3-none-any.whl", bytes: [80, 75, 3, 4] }],
+  });
+  const refused = await unprovable.provider();
+  await assertRejects(() => refused.runPythonAsync("print(1)"), Error, "python_wheel_refused");
+  assertEquals(refusals.length, 0, "an archive whose bounds cannot be proven must not be unpacked");
+
+  const legit = legitWheelBytes();
+  let frame: any = null;
+  const provider = createPythonRuntimeProvider({
+    ensureHost: async () => ({ ok: true }),
+    sendMessage: async (message: any) => { frame = message; return { ok: true, stdout: "ok" }; },
+    // The production loader hands the store's bytes over as a plain number array
+    // (extension/background/service-worker.js loadWheels), so the gate must normalize that shape.
+    loadWheels: async () => [{ name: "pkg-1.0.0-py3-none-any.whl", bytes: Array.from(legit) }],
+  });
+  const runtime = await provider.provider();
+  await runtime.runPythonAsync("print('wheels')"); // throws if the gate refused a real wheel
+  assertEquals(frame.wheels.length, 1, "an admitted wheel is transported, not dropped");
+  assertEquals(Array.from(frame.wheels[0].bytes), Array.from(legit), "wheels reach the host byte-identical");
 });
