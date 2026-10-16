@@ -5,6 +5,7 @@ import { assertEquals, assert } from "jsr:@std/assert@1";
 import {
   ENVIRONMENTAL_REFUSAL_EXIT,
   ENVIRONMENTAL_REFUSAL_MARKER,
+  combinePhaseExitCodes,
 } from "../scripts/lib/environmental-verdict.mjs";
 import {
   ENVIRONMENTAL_REFUSAL_EXIT as QUIET_WINDOW_EXIT,
@@ -50,3 +51,22 @@ error: Error: ${ENVIRONMENTAL_REFUSAL_MARKER} {"reason":"prereq-failed"}
 `;
   assertEquals(areAllFailuresEnvironmental(testOutput), true);
 });
+
+Deno.test("xj6sb: combinePhaseExitCodes combines exit codes correctly and prioritizes product failures over refusals", () => {
+  // All green
+  assertEquals(combinePhaseExitCodes(0, 0, 0), 0);
+  assertEquals(combinePhaseExitCodes(), 0);
+
+  // Pure environmental refusal
+  assertEquals(combinePhaseExitCodes(ENVIRONMENTAL_REFUSAL_EXIT, 0, 0), ENVIRONMENTAL_REFUSAL_EXIT);
+  assertEquals(combinePhaseExitCodes(0, ENVIRONMENTAL_REFUSAL_EXIT), ENVIRONMENTAL_REFUSAL_EXIT);
+  assertEquals(combinePhaseExitCodes(ENVIRONMENTAL_REFUSAL_EXIT, ENVIRONMENTAL_REFUSAL_EXIT), ENVIRONMENTAL_REFUSAL_EXIT);
+
+  // Product failures strictly outrank environmental refusal
+  assertEquals(combinePhaseExitCodes(ENVIRONMENTAL_REFUSAL_EXIT, 0, 1), 1, "product failure exit 1 must outrank refusal");
+  assertEquals(combinePhaseExitCodes(1, ENVIRONMENTAL_REFUSAL_EXIT, 0), 1, "product failure exit 1 must outrank refusal");
+  assertEquals(combinePhaseExitCodes(ENVIRONMENTAL_REFUSAL_EXIT, 124, 0), 124, "timeout exit 124 must outrank refusal");
+  assertEquals(combinePhaseExitCodes(124, ENVIRONMENTAL_REFUSAL_EXIT), 124);
+  assertEquals(combinePhaseExitCodes(1, 0, 0), 1);
+});
+

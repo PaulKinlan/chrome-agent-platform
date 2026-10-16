@@ -177,7 +177,30 @@ Deno.test("0eq00 ledger: the full tier is computed from what the runner did (and
     { file: "tests/other.test.ts", reason: "skipped in this run: the serial phase failed" },
   ]);
 
+  // xj6sb: when failing serial files are known, the omission reason names them by name
+  const degradedNamed = fullTierManifestFields({
+    serialFiles: ["tests/serial-a.test.ts"],
+    parallelFiles: ["tests/guard.test.ts"],
+    skippedFiles: ["tests/other.test.ts"],
+    failingFiles: ["tests/serial-a.test.ts"],
+    rc: 1,
+  });
+  assertEquals(degradedNamed.omitted, [
+    { file: "tests/other.test.ts", reason: "skipped in this run: serial file(s) failed [tests/serial-a.test.ts]" },
+  ]);
+
+  // xj6sb: an environmental refusal in serial phase runs the full parallel suite without skipped files
+  const refused = fullTierManifestFields({
+    serialFiles: ["tests/serial-refusal.test.ts"],
+    parallelFiles: ["tests/p1.test.ts", "tests/p2.test.ts"],
+    skippedFiles: [],
+    rc: 75,
+  });
+  assertEquals(refused.omitted, []);
+  assertEquals(refused.selected, ["tests/serial-refusal.test.ts", "tests/p1.test.ts", "tests/p2.test.ts"]);
+
   // An explicit-file run is an inner-loop tool, not a gate: no record is invented.
+
   assertEquals(fullTierManifestFields({ rc: 0, cliFiles: ["tests/x.test.ts"] }), null);
 });
 

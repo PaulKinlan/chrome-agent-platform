@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.711] — 2026-10-16
+- Fix parallel test phase suppression on serial environmental refusal and attribute failing serial files by name
+
 ## [0.3.710] — 2026-10-16
 - Deliver test tier proposal and selective build-tier execution in full gate
 

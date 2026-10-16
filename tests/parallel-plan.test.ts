@@ -10,6 +10,7 @@
 // gate that cannot tell you what it ran is the other half of this bead's family.
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { guardSubset, parallelPlan, computeParallelPhaseTimeout, DEFAULT_PARALLEL_TIMEOUT_MS } from "../scripts/lib/parallel-plan.mjs";
+import { ENVIRONMENTAL_REFUSAL_EXIT } from "../scripts/lib/environmental-verdict.mjs";
 
 const PARALLEL = ["tests/a.test.ts", "tests/b.test.ts", "tests/durable-root.test.ts", "tests/c.test.ts"];
 const ALWAYS_ON = ["tests/durable-root.test.ts", "tests/core.test.ts"];
@@ -49,6 +50,32 @@ Deno.test("kz27: the plan is not a blanket 'run everything' — the failure stat
   // another phase) — the subset is an intersection, not an assumption.
   assertEquals(guardSubset(PARALLEL, ["tests/not-in-this-run.test.ts"]), []);
 });
+
+Deno.test("xj6sb: an ENVIRONMENTAL REFUSAL (exit 75) in serial phase runs the full parallel phase (0 skipped) with refusal stated", () => {
+  const plan = parallelPlan({ serialRc: ENVIRONMENTAL_REFUSAL_EXIT, parallel: PARALLEL, alwaysOn: ALWAYS_ON });
+  assertEquals(plan.files, PARALLEL, "environmental refusal must run the entire parallel suite to verify the tree");
+  assertEquals(plan.skipped, 0, "environmental refusal must not skip any parallel file");
+  assert(plan.announce !== null, "refusal announcement must be stated");
+  assert(plan.announce.includes("REFUSED"), plan.announce);
+  assert(plan.announce.includes("exit 75"), plan.announce);
+  assert(plan.announce.includes("running the full parallel phase"), plan.announce);
+  assert(plan.announce.includes("never quietly skipping files"), plan.announce);
+});
+
+Deno.test("xj6sb: a FAILED serial phase names failing files in announcement", () => {
+  const plan = parallelPlan({
+    serialRc: 1,
+    parallel: PARALLEL,
+    alwaysOn: ALWAYS_ON,
+    failingFiles: ["tests/ntp-boot-staging.test.ts"],
+  });
+  assertEquals(plan.files, ["tests/durable-root.test.ts"]);
+  assertEquals(plan.skipped, 3);
+  assert(plan.announce !== null);
+  assert(plan.announce.includes("serial file(s) failed [tests/ntp-boot-staging.test.ts]"), plan.announce);
+  assert(plan.announce.includes("3 of 4"), plan.announce);
+});
+
 
 Deno.test("877x1: computeParallelPhaseTimeout adapts dynamically to CPU concurrency and file count", () => {
   // On a 2-vCPU machine with 800 files, timeout scales beyond the 1800s floor (neutralize fleet full-gate env pin)

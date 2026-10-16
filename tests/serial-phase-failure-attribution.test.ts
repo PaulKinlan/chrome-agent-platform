@@ -403,3 +403,103 @@ Deno.test("t0vh: concurrent sibling test logs in shared logDir do not corrupt fa
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+Deno.test("xj6sb: an environmental refusal in serial phase is classified as REFUSED (exit 75)", async () => {
+  const dir = durableDir(`xj6sb-refusal-${Deno.pid}`);
+  const passFile = join(dir, "zz-pass.test.ts");
+  const refusalFile = join(dir, "zz-refusal.test.ts");
+  const driver = join(dir, "zz-driver.mjs");
+
+  await Deno.writeTextFile(
+    passFile,
+    `Deno.test("fixture: passes", () => {});\n`,
+  );
+  await Deno.writeTextFile(
+    refusalFile,
+    `Deno.test("fixture: environmental refusal", () => {\n` +
+      `  throw new Error("CAP_ENVIRONMENTAL_REFUSAL {\\"reason\\":\\"host-loaded\\"}");\n` +
+      `});\n`,
+  );
+  await Deno.writeTextFile(
+    driver,
+    `import { runSerialFiles } from ${JSON.stringify(join(ROOT, "scripts/lib/serial-phase.mjs"))};\n` +
+      `const failuresOut = [];\n` +
+      `const rc = runSerialFiles([process.argv[2], process.argv[3]], {\n` +
+      `  stdio: "pipe",\n  cwd: ${JSON.stringify(ROOT)},\n  timeoutMs: 120000,\n  failuresOut,\n` +
+      `});\n` +
+      `console.log("XJ6SB_DRIVER_RC=" + rc);\n` +
+      `console.log("XJ6SB_FAILURES=" + JSON.stringify(failuresOut));\n`,
+  );
+
+  const { code, stdout, stderr } = await new Deno.Command("node", {
+    args: [driver, passFile, refusalFile],
+    cwd: ROOT,
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  const out = decoder.decode(stdout) + decoder.decode(stderr);
+
+  try {
+    assert(out.includes("zz-refusal.test.ts REFUSED (exit 75)"), `refused file must be named with REFUSED (exit 75):\n${out}`);
+    assert(out.includes("serial phase (2 build/artifact files) REFUSED (1/2 refused)"), `phase summary must state REFUSED (1/2 refused):\n${out}`);
+    assert(out.includes("run-tests: REFUSED SERIAL FILE(S):"), `phase must print REFUSED SERIAL FILE(S) header:\n${out}`);
+    assert(out.includes("XJ6SB_DRIVER_RC=75"), `driver rc must be 75:\n${out}`);
+    const failuresLine = out.split("\n").find((l) => l.startsWith("XJ6SB_FAILURES="));
+    assert(failuresLine, `failures line must exist:\n${out}`);
+    const failures = JSON.parse(failuresLine.slice("XJ6SB_FAILURES=".length));
+    assertEquals(failures.length, 1);
+    assertEquals(failures[0].code, 75);
+    assertEquals(failures[0].isRefusal, true);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("xj6sb: mixed product failure and environmental refusal returns product failure code (exit 1)", async () => {
+  const dir = durableDir(`xj6sb-mixed-${Deno.pid}`);
+  const failFile = join(dir, "zz-fail.test.ts");
+  const refusalFile = join(dir, "zz-refusal.test.ts");
+  const driver = join(dir, "zz-driver.mjs");
+
+  await Deno.writeTextFile(
+    failFile,
+    `Deno.test("fixture: product bug", () => {\n` +
+      `  throw new Error("REAL_PRODUCT_BUG");\n` +
+      `});\n`,
+  );
+  await Deno.writeTextFile(
+    refusalFile,
+    `Deno.test("fixture: environmental refusal", () => {\n` +
+      `  throw new Error("CAP_ENVIRONMENTAL_REFUSAL {\\"reason\\":\\"host-loaded\\"}");\n` +
+      `});\n`,
+  );
+  await Deno.writeTextFile(
+    driver,
+    `import { runSerialFiles } from ${JSON.stringify(join(ROOT, "scripts/lib/serial-phase.mjs"))};\n` +
+      `const failuresOut = [];\n` +
+      `const rc = runSerialFiles([process.argv[2], process.argv[3]], {\n` +
+      `  stdio: "pipe",\n  cwd: ${JSON.stringify(ROOT)},\n  timeoutMs: 120000,\n  failuresOut,\n` +
+      `});\n` +
+      `console.log("XJ6SB_MIXED_RC=" + rc);\n` +
+      `console.log("XJ6SB_MIXED_FAILURES=" + JSON.stringify(failuresOut));\n`,
+  );
+
+  const { code, stdout, stderr } = await new Deno.Command("node", {
+    args: [driver, failFile, refusalFile],
+    cwd: ROOT,
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  const out = decoder.decode(stdout) + decoder.decode(stderr);
+
+  try {
+    assert(out.includes("zz-fail.test.ts FAILED (exit 1)"), `failing file must be named FAILED:\n${out}`);
+    assert(out.includes("zz-refusal.test.ts REFUSED (exit 75)"), `refusal file must be named REFUSED:\n${out}`);
+    assert(out.includes("serial phase (2 build/artifact files) FAILED (2/2 failed)"), `phase summary must state FAILED (2/2 failed):\n${out}`);
+    assert(out.includes("run-tests: FAILING SERIAL FILE(S):"), `phase must print FAILING SERIAL FILE(S) header:\n${out}`);
+    assert(out.includes("XJ6SB_MIXED_RC=1"), `driver rc must be 1 (product failure outranks refusal):\n${out}`);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
