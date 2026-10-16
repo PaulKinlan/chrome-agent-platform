@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.724] — 2026-10-16
+- Backups of many small files spend less time waiting for OPFS opens; archive content and chunked memory behavior remain unchanged.
+
 ## [0.3.723] — 2026-10-16
 - Sandboxed scripts now use the brokered background connection on registered runs, preventing unbrokered direct fetches.
 
