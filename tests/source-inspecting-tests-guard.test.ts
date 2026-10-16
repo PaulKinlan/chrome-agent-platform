@@ -654,6 +654,14 @@ Deno.test("qcfc: every declared exclusion is JUSTIFIED (a reason and a bead, nev
   }
 });
 
+Deno.test("yooji: unbuilt-tree-components is declared in SCANNER_EXCLUSIONS with reason citing full gate coverage", () => {
+  const rel = "tests/unbuilt-tree-components.test.ts";
+  assert(Object.hasOwn(SCANNER_EXCLUSIONS, rel), `${rel} must be declared in SCANNER_EXCLUSIONS`);
+  const reason = SCANNER_EXCLUSIONS[rel as keyof typeof SCANNER_EXCLUSIONS];
+  assert(reason.includes("chrome-agent-platform-yooji"), "must cite bead chrome-agent-platform-yooji");
+  assert(reason.includes("npm test"), "must cite npm test coverage");
+});
+
 Deno.test("qcfc: REAL-TREE falsification — an actual repo-walking guard is flagged when unlisted", () => {
   // F3: the synthetic fixtures prove the PARSER; a real file proves the DETECTOR against the tree we
   // actually ship. If the patterns stop catching real repo-walking code, this fails on main rather than
