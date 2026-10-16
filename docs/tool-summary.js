@@ -359,6 +359,14 @@ export function describeToolCall(name, args) {
       return u ? `Reading the page (${u})` : "Reading the page";
     }
     case "capture_page": return "Saving page as readable note";
+    case "read_spreadsheet": {
+      const nm = pickArg(args, ["attachmentName", "name"]);
+      return nm ? `Reading spreadsheet “${nm}”` : "Reading spreadsheet";
+    }
+    case "read_document": {
+      const nm = pickArg(args, ["attachmentName", "name"]);
+      return nm ? `Reading document “${nm}”` : "Reading document";
+    }
     case "extract_tables": return "Extracting tables from page";
     case "find_elements": return "Finding elements on the page";
     case "click": case "click_element": {

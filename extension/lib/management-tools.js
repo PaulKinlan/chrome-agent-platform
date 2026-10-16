@@ -67,6 +67,8 @@ export const MANAGEMENT_TOOL_NAMES = [
   "board_read_messages",
   ...TABLE_TOOL_NAMES,
   "write_clipboard",
+  "read_spreadsheet",
+  "read_document",
 ];
 
 const TableArtifactIdSchema = z.string().min(1).max(200);
@@ -687,6 +689,24 @@ export function managementToolset({ callRoute }) {
       execute: async ({ text }) => {
         return await call("clipboard.write", { text });
       },
+    }),
+    read_spreadsheet: tool({
+      description:
+        "Read a spreadsheet (.xlsx) attachment into a canonical tabular artifact with all sheets preserved. Returns { ok: true, artifactId, artifact, sheets: [{ name, headers, rows, totalRows, truncated }] }.",
+      inputSchema: z.object({
+        attachmentName: z.string().describe("the filename of the attached .xlsx file to inspect"),
+        maxRows: z.number().int().positive().optional().describe("maximum rows to read per sheet (bounded by system limits)"),
+      }),
+      execute: ({ attachmentName, maxRows }) => call("document.read_spreadsheet", { attachmentName, maxRows }),
+    }),
+    read_document: tool({
+      description:
+        "Read a word document (.docx) or presentation (.pptx) attachment into Markdown with headings and structure preserved. Returns { ok: true, content, characterCount, format: 'markdown' }.",
+      inputSchema: z.object({
+        attachmentName: z.string().describe("the filename of the attached .docx or .pptx file to inspect"),
+        maxCharacters: z.number().int().positive().optional().describe("maximum characters to extract (bounded by system limits)"),
+      }),
+      execute: ({ attachmentName, maxCharacters }) => call("document.read_document", { attachmentName, maxCharacters }),
     }),
   };
 }

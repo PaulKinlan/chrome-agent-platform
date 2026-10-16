@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.704] — 2026-10-16
+- Read DOCX, XLSX, and PPTX attachments with bounded built-in readers that report incomplete or unsupported content instead of silently omitting it.
+
 ## [0.3.703] — 2026-10-15
 - Preview, save, or share one redacted self-contained task or artifact HTML file.
 
