@@ -10,6 +10,34 @@ import { ensureStoreBuild } from "./build-if-needed.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
+export const BUILD_INFRA_PATTERNS = Object.freeze([
+  /^build\.mjs$/,
+  /^scripts\/build-.*\.mjs$/,
+  /^scripts\/lib\/.*build.*\.mjs$/,
+  /^packages\/bundled\//,
+  /^deno\.runner\.jsonc$/,
+  /^package\.json$/,
+  /^package-lock\.json$/,
+]);
+
+export function hasBuildInfraChanges(changedFiles) {
+  if (!Array.isArray(changedFiles)) return true;
+  return changedFiles.some((file) => BUILD_INFRA_PATTERNS.some((pat) => pat.test(file)));
+}
+
+function defaultGetChangedFiles(root) {
+  try {
+    const res = spawnSync("git", ["diff", "--name-only", "HEAD~1..HEAD"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    if (res.status === 0 && res.stdout) {
+      return res.stdout.trim().split("\n").filter(Boolean);
+    }
+  } catch {}
+  return [];
+}
+
 function runCommand(command, args, env, root) {
   const result = spawnSync(command, args, { cwd: root, env, stdio: "inherit" });
   if (result.error) console.error(`gate-full: ${args.join(" ")} could not start: ${result.error.message}`);
@@ -21,6 +49,8 @@ export async function runFullGate({
   ensure = ensureStoreBuild,
   run = runCommand,
   log = console.error,
+  selectiveBuildTier = process.argv.includes("--selective-build-tier"),
+  getChanged = defaultGetChangedFiles,
 } = {}) {
   let build;
   try {
@@ -39,8 +69,23 @@ export async function runFullGate({
   const env = { ...process.env, CAP_GATE_BUILD_JSON: JSON.stringify(build) };
   const tested = await run("npm", ["test"], env, root);
   if (tested !== 0) return tested || 1;
-  const buildTier = await run("npm", ["run", "test:build"], env, root);
-  return buildTier || 0;
+
+  let shouldRunBuildTier = true;
+  if (selectiveBuildTier) {
+    const changed = typeof getChanged === "function" ? getChanged(root) : defaultGetChangedFiles(root);
+    shouldRunBuildTier = hasBuildInfraChanges(changed);
+    if (!shouldRunBuildTier) {
+      log(
+        "gate-full: selective build tier: skipping test:build (no build infrastructure changed in this delta; build-smoke verified in npm test)",
+      );
+    }
+  }
+
+  if (shouldRunBuildTier) {
+    const buildTier = await run("npm", ["run", "test:build"], env, root);
+    return buildTier || 0;
+  }
+  return 0;
 }
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {

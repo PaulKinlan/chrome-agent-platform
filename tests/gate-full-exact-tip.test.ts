@@ -55,3 +55,38 @@ Deno.test("sgzyg: failed npm test stops before build-behaviour tier; failed buil
     assertEquals(seen, [...calls]);
   }
 });
+
+Deno.test("yvvvd: selective build tier runs test:build when build infra changes, skips when only UI/extension code changes", async () => {
+  // Case A: Build infra changed (e.g. build.mjs) -> runs test:build
+  const callsWithBuildChange: string[] = [];
+  const resultBuildChange = await runFullGate({
+    root: "/isolated-test-root",
+    selectiveBuildTier: true,
+    getChanged: () => ["build.mjs", "extension/ntp/ntp.js"],
+    ensure: async () => ({ disposition: "reused", reason: "certified", secs: 0.5, markerCommit: "abc" }),
+    run: (_command: string, args: string[]) => {
+      callsWithBuildChange.push(args.join(" "));
+      return 0;
+    },
+  });
+  assertEquals(resultBuildChange, 0);
+  assertEquals(callsWithBuildChange, ["test", "run test:build"]);
+
+  // Case B: No build infra changed (e.g. only UI/extension files) -> skips test:build safely
+  const callsWithoutBuildChange: string[] = [];
+  const logsWithoutBuildChange: string[] = [];
+  const resultNoBuildChange = await runFullGate({
+    root: "/isolated-test-root",
+    selectiveBuildTier: true,
+    getChanged: () => ["extension/ntp/ntp.js", "tests/ntp.test.ts"],
+    ensure: async () => ({ disposition: "reused", reason: "certified", secs: 0.5, markerCommit: "abc" }),
+    run: (_command: string, args: string[]) => {
+      callsWithoutBuildChange.push(args.join(" "));
+      return 0;
+    },
+    log: (msg: string) => logsWithoutBuildChange.push(msg),
+  });
+  assertEquals(resultNoBuildChange, 0);
+  assertEquals(callsWithoutBuildChange, ["test"]);
+  assertStringIncludes(logsWithoutBuildChange.join("\n"), "skipping test:build");
+});
