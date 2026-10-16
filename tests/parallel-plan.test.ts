@@ -65,7 +65,25 @@ Deno.test("877x1: computeParallelPhaseTimeout adapts dynamically to CPU concurre
   const smallSuite = computeParallelPhaseTimeout(10, { cpus: 2 });
   assertEquals(smallSuite, DEFAULT_PARALLEL_TIMEOUT_MS);
 
-  // Explicit envTimeout override is honored
+  // Production option-less call: for current suite size (~687 files), respects DEFAULT_PARALLEL_TIMEOUT_MS floor (882rr)
+  const optionless = computeParallelPhaseTimeout(687);
+  assert(optionless >= DEFAULT_PARALLEL_TIMEOUT_MS, "option-less call must respect at least the default floor");
+
+  // On 2 CPUs with real suite size (687 files), scales above the 1800s floor (882rr)
+  const scaledRealSuite2Cpu = computeParallelPhaseTimeout(687, { cpus: 2 });
+  assertEquals(scaledRealSuite2Cpu, 1_837_500);
+
+  // Massive suite scales option-less above 1800s floor even on multi-core host
+  const massiveSuite = computeParallelPhaseTimeout(5000, { cpus: 8 });
+  assertEquals(massiveSuite, 3_245_000);
+
+  // Explicit positive envTimeout override is honored
   const overridden = computeParallelPhaseTimeout(800, { envTimeout: "999000", cpus: 2 });
   assertEquals(overridden, 999_000);
+
+  // bzk6g: Explicit 0 or negative envTimeout disables the timeout (returns 0)
+  const disabledZero = computeParallelPhaseTimeout(800, { envTimeout: "0", cpus: 2 });
+  assertEquals(disabledZero, 0, "envTimeout 0 must return 0 to disable kill timer");
+  const disabledNegative = computeParallelPhaseTimeout(800, { envTimeout: "-1", cpus: 2 });
+  assertEquals(disabledNegative, 0, "negative envTimeout must return 0 to disable kill timer");
 });

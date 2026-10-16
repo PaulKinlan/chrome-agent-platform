@@ -39,7 +39,10 @@ export function computeParallelPhaseTimeout(filesCount, options = {}) {
   const envVal = options.envTimeout ?? process.env.CAP_PARALLEL_TEST_TIMEOUT_MS;
   if (envVal !== undefined && envVal !== "") {
     const parsed = Number(envVal);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    if (Number.isFinite(parsed)) {
+      if (parsed <= 0) return 0; // Explicit 0/negative disables the timeout (pre-delta escape hatch; bzk6g)
+      return parsed;
+    }
   }
   const cpus = options.cpus ?? (typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length) ?? 1;
   const count = typeof filesCount === "number" && Number.isFinite(filesCount) && filesCount > 0 ? filesCount : 0;
