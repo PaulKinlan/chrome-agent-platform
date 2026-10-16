@@ -280,6 +280,17 @@ Deno.test("census: docs/SW-DISPATCH-AUTHORITY-CENSUS.md exists and is cited", as
 
   const agents = await Deno.readTextFile(`${ROOT}AGENTS.md`);
   assert(agents.includes("docs/SW-DISPATCH-AUTHORITY-CENSUS.md"), "AGENTS.md must cite census");
+
+  // 78d3i: narrative route counts in §1 must match the registered population and have no stale counts
+  const total = extractAllRegisteredRoutes().size;
+  assert(
+    census.includes(total + " is what composition produces"),
+    `census §1 must state '${total} is what composition produces'`,
+  );
+  assert(
+    !census.includes("285 is what composition produces"),
+    "census §1 must not claim '285 is what composition produces'",
+  );
 });
 
 // zb58: the route-map inventory was still at 258 after the executable census

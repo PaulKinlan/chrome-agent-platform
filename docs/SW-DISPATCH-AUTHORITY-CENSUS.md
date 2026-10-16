@@ -10,7 +10,7 @@
 
 This document provides a total, honest census of all 299 message routes registered in the Chrome Agent Platform Service Worker.
 
-The population is the key set `mergeRouteMaps` in `service-worker.js` actually returns, evaluated at `origin/main@f507d58f` — not a hand-kept list. That evaluation corrected 276 → 285 (chrome-agent-platform-s7wl): the earlier count silently skipped the three maps `vaultRoutes`, `enclaveProxyRoutes` and `enclaveStatusRoutes` (9 routes, landed 2026-10-03 in `bd17634f`). The 260 this document's sibling threat model quoted and the 276 here were both wrong about the composed population; 285 is what composition produces.
+The population is the key set `mergeRouteMaps` in `service-worker.js` actually returns — not a hand-kept list. An earlier evaluation corrected 276 → 285 (chrome-agent-platform-s7wl) when the earlier count silently skipped the three maps `vaultRoutes`, `enclaveProxyRoutes` and `enclaveStatusRoutes` (9 routes, landed 2026-10-03 in `bd17634f`), which then grew through the 288-route snapshot at `f507d58f` to the current 299 registered routes. 299 is what composition produces.
 
 Prior audits (such as 18ug) focused narrowly on call sites of `requireOwnerApproval`, identifying 31 approval sites. However, `requireOwnerApproval` is only one of multiple gating layers in the extension. A route that does not call `requireOwnerApproval` is not necessarily insecure, but a mutation that reaches state modification without an explicit policy decision represents an unclassified authority boundary.
 
