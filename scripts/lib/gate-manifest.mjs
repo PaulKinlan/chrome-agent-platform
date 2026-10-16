@@ -15,8 +15,9 @@
 // `executed` must be a COUNT of suites that positively ran: absent or <= 0 places nothing, and
 // `certifiable: false` forces coverage PARTIAL (never KNOWN) at the consumer.
 //
-// This module is pure and dependency-free so both tier emitters (scripts/select-tests.mjs for the
-// changed-file tier, scripts/run-tests.mjs for the full-suite tier) share one formatter.
+// This module is pure and shares only the selector's pure content policy, so both tier emitters
+// (scripts/select-tests.mjs and scripts/run-tests.mjs) use one formatter without a dependency cycle.
+import { isPassiveContentFile } from "./content-exemptions.mjs";
 
 export const GATE_MANIFEST_PREFIX = "fast-gate: manifest: ";
 export const GATE_UNMAPPED_PREFIX = "fast-gate: unmapped: ";
@@ -38,7 +39,7 @@ export function explainChangedFileMapping({ changed = [], candidates = {}, execu
   const omittedByFile = new Map(omitted.map(({ file, reason }) => [file, reason]));
   const unmappableByFile = new Map(unmappable.map(({ file, mechanism }) => [file, mechanism]));
   return normalizeSuiteList(changed).map((file) => {
-    if (file.startsWith(".beads/") || /^(?:docs\/.*|.*)\.(?:md|markdown|png|jpe?g|svg|webp|ico|woff2?|txt)$/i.test(file)) {
+    if (file.startsWith(".beads/") || isPassiveContentFile(file)) {
       return { file, status: "not-applicable", executed_suites: [], reason: "content or Beads metadata; no executable suite required" };
     }
     // An explicitly fail-closed path cannot certify its own subset, even if a

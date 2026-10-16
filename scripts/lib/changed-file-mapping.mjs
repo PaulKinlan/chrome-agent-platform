@@ -193,6 +193,7 @@ export const SELECTOR_INFRASTRUCTURE = Object.freeze([
   "scripts/build-if-needed.mjs", // decides whether the FAST gate builds at all
   "scripts/gate-full.mjs", // verifies the exact-tip build before both FULL gate tiers
   "scripts/lib/gate-manifest.mjs", // the coverage ledger every gate record carries
+  "scripts/lib/content-exemptions.mjs", // shared policy for which changed files the selector/ledger skip
   "tests/coverage-contract.json", // fleet's independent placement policy cannot subset-certify itself
 ]);
 
