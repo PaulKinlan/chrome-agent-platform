@@ -27,9 +27,9 @@ BODY="$(git log -1 --format=%B)"
 NOTE="$(printf '%s\n' "$BODY" | sed -n 's/^[Rr]elease-note:[[:space:]]*//p' | head -n 1)"
 if [ -z "$NOTE" ]; then NOTE="${CAP_USER_NOTE:-}"; fi
 if [ -n "$NOTE" ]; then
-  node scripts/bump-version.mjs patch --hook --message "$MSG" --user-note "$NOTE"
+  node scripts/bump-version.mjs patch --hook --message "$MSG" --user-note "$NOTE" || exit 1
 else
-  node scripts/bump-version.mjs patch --hook --message "$MSG"
+  node scripts/bump-version.mjs patch --hook --message "$MSG" || exit 1
 fi
 # keep the bundled gallery/changelog in lockstep with the just-bumped tree
 node scripts/sync-gallery.mjs >/dev/null 2>&1

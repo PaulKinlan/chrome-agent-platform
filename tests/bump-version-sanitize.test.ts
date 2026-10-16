@@ -30,6 +30,8 @@ const REPO_SCRIPTS = path.join(REPO_ROOT, "scripts");
 // (null when nothing was written).
 async function bump(message: string, ...flags: string[]) {
   const dir = await mkdtemp(path.join(tmpdir(), "cap-y6z6-"));
+  const mergedDrift = flags.includes("--fixture-merge-drift");
+  flags = flags.filter((flag) => flag !== "--fixture-merge-drift");
   try {
     await mkdir(path.join(dir, "scripts"), { recursive: true });
     for (const f of ["bump-version.mjs", "sync-changelog.mjs"]) {
@@ -47,6 +49,16 @@ async function bump(message: string, ...flags: string[]) {
     await writeFile(path.join(dir, "package.json"), JSON.stringify({ name: "t", version: "1.2.3" }, null, 2));
     await writeFile(path.join(dir, "package-lock.json"), JSON.stringify({ name: "t", version: "1.2.3", packages: { "": { name: "t", version: "1.2.3" } } }, null, 2));
     await writeFile(path.join(dir, "extension", "manifest.json"), JSON.stringify({ manifest_version: 3, version: "1.2.3", version_name: "1.2.3" }, null, 2));
+    if (mergedDrift) {
+      for (const rel of ["package.json", "package-lock.json", "extension/manifest.json"]) {
+        const file = path.join(dir, rel);
+        const json = JSON.parse(await readFile(file, "utf8"));
+        json.version = "1.2.4";
+        if (json.version_name) json.version_name = "1.2.4";
+        if (json.packages?.[""]) json.packages[""].version = "1.2.4";
+        await writeFile(file, JSON.stringify(json));
+      }
+    }
     const changelog = "# Changelog\n\n## [1.2.3] — 2026-01-01\n- init\n";
     await writeFile(path.join(dir, "CHANGELOG.md"), changelog);
     await writeFile(path.join(dir, "extension", "CHANGELOG.md"), changelog);
@@ -126,6 +138,29 @@ Deno.test("bump-version: an internal: note bails in hook mode — no version con
   assertEquals(r.version, "1.2.3", "a marked-internal note must not consume a version");
   assertEquals(r.bullet, null, "a marked-internal note must not be published as a release entry");
   assert(/NOT bumping/.test(r.stderr), `loud notice, the same path bookkeeping takes: ${r.stderr}`);
+});
+
+Deno.test("uvtk4: none: internal notes cannot consume a version through the hook or explicit bump", async () => {
+  for (const flags of [["--hook", "--user-note", "none: internal gate tooling"], ["--user-note", "None: internal test verdict classification"]]) {
+    const r = await bump("not a release", ...flags);
+    assertEquals(r.version, "1.2.3", `no version consumed: ${flags}`);
+    assertEquals(r.bullet, null, `no release published: ${flags}`);
+    assert(/user-facing|internal/i.test(r.stderr), `named rejection: ${r.stderr}`);
+    assertEquals(r.status, 1, `an explicit invalid release request must fail: ${r.stderr}`);
+  }
+});
+
+Deno.test("uvtk4: a merged one-patch surface collision cannot silently skip the changelog number", async () => {
+  const note = "you can export all your memory to a file";
+  const refused = await bump(note, "--fixture-merge-drift", "--user-note", note);
+  assertEquals(refused.status, 1, refused.stderr);
+  assertEquals(refused.version, "1.2.4", "refusal leaves the tree untouched");
+  assertEquals(refused.bullet, null);
+  assert(/changelog=1\.2\.3/.test(refused.stderr), refused.stderr);
+  const union = await bump(note, "--fixture-merge-drift", "--reconcile-merge", "--user-note", note);
+  assertEquals(union.status, 0, union.stderr);
+  assertEquals(union.version, "1.2.4", "union reuses the one patch version, not 1.2.5");
+  assertEquals(union.bullet, note, "the changelog and surfaces advance together");
 });
 
 Deno.test("bump-version: a user-facing note still bumps in hook mode, so syncing the filter did not just disable the hook", async () => {

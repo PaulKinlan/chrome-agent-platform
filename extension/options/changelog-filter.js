@@ -42,7 +42,9 @@ const ENGINEERING_PREFIX_RE = /^(merge|chore|fix|test|ci|docs)(\([^)]*\))?:/i;
 //      the point of the marker is that nobody has to justify it.
 // Both are the accepted cost of not inferring intent. If either starts biting, the
 // fix is a review convention or a second signal, not a guess at the writer's meaning.
-const INTERNAL_MARKER_RE = /^internal:/i;
+// Both spellings explicitly say there is no user-visible release. The latter was
+// minted as 0.3.715 by three concurrent internal-only branches (uvtk4).
+const INTERNAL_MARKER_RE = /^(?:internal:|none:\s*internal\b)/i;
 const SHA_RE = /\b[0-9a-f]{7,40}\b/i;
 // chrome-agent-platform-4zp3: the words that ACTUALLY leaked into a shipped
 // entry ("correct my own capability claim — NO pinned adapter implements
@@ -68,7 +70,7 @@ export function isInternalEntry(text) {
 // The rejection rules in EXACTLY the order isUserFacingEntry has always
 // applied them — the explain view must never disagree with the boolean.
 const REJECTION_RULES = [
-  { name: "INTERNAL_MARKER_RE", why: "declared internal (leading 'internal:')", re: INTERNAL_MARKER_RE },
+  { name: "INTERNAL_MARKER_RE", why: "declared internal (leading 'internal:' or 'none: internal')", re: INTERNAL_MARKER_RE },
   { name: "LEAKED_JOINER_RE", why: "a leading joiner-punctuation leak", re: LEAKED_JOINER_RE },
   { name: "ENGINEERING_PREFIX_RE", why: "a conventional commit prefix", re: ENGINEERING_PREFIX_RE },
   { name: "SHA_RE", why: "a bare git SHA", re: SHA_RE },
