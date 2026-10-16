@@ -180,6 +180,10 @@ export const SERIAL_FILE_TIMEOUTS = Object.freeze({
 // does not apply; the guard test pins the reason. Keep this list tiny —
 // membership is a review-time decision, never a default.
 export const EXEMPTIONS = {
+  // uikt5: every git commit and release-stamp write occurs in a unique mkdtemp
+  // scratch repository, deleted in finally. The checkout is only read for
+  // source copies; no production or shared build artifact is mutated.
+  "tests/post-commit-hook.test.ts": "writes extension/manifest.json and version surfaces only inside a unique mkdtemp scratch git repository removed in finally; reads tracked hook/stamper sources without touching the shared checkout",
   // uvtk4: the fixture first creates a unique temporary-directory root, and
   // all writes to extension/ and version files use paths joined under it. The
   // checkout is only read for source copies; no shared build artifact changes.
