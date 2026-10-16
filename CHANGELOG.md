@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.723] — 2026-10-16
+- Sandboxed scripts now use the brokered background connection on registered runs, preventing unbrokered direct fetches.
+
 ## [0.3.722] — 2026-10-16
 - internal-only release notes no longer consume a version, and About hides historical internal bullets
 
