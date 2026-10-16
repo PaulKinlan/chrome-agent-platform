@@ -5,8 +5,15 @@
 // defaults retained evidence or big scratch to /tmp (allowlist: tiny
 // cross-process coordination files and test fixtures).
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { assert, assertEquals, assertThrows, assertStringIncludes } from "jsr:@std/assert@1";
-import { isRamBacked } from "../scripts/lib/durable-root.mjs";
+import {
+  DEFAULT_DURABLE_DIR_FLOOR_BYTES,
+  DEFAULT_DURABLE_DIR_MIN_FREE_BYTES,
+  freeSpaceVerdict,
+  isRamBacked,
+  trimStaleScratch,
+} from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -23,7 +30,7 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 // EMPTY one) had the same exposure with a quieter failure mode: a concurrent
 // reader would silently resolve the wrong root instead of throwing.
 // The parent only ASSERTS on what the child reports, so the outcomes stay here.
-type Probe = { value?: unknown; threw?: string };
+type Probe = { value?: unknown; threw?: string; warn?: string };
 let probeRun: Promise<Record<string, Probe>> | null = null;
 
 /** Resolve every env-dependent durable-root case in one throwaway child. */
@@ -53,6 +60,7 @@ function probeEnvCases(): Promise<Record<string, Probe>> {
       out.impossible = probe(() => mod.durableDir("probe"));
       const capRoot = (Deno.env.get("HOME") || "/home/paulkinlan") + "/cap-cap-test-dir-" + Date.now();
       Deno.mkdirSync(capRoot, { recursive: true });
+      out.capRoot = { value: capRoot };
       try {
         set(capRoot);
         Deno.env.set("CAP_DURABLE_DIR_MAX_ENTRIES", "2");
@@ -66,8 +74,20 @@ function probeEnvCases(): Promise<Record<string, Probe>> {
         Deno.env.set("CAP_DURABLE_DIR_MAX_ENTRIES", "-1");
         out.capInvalidNegative = probe(() => mod.durableDir("subInvalid3"));
         Deno.env.set("CAP_DURABLE_DIR_MAX_ENTRIES", "100");
+        // nudb2: the shared-volume reserve is ADVISORY — it names the condition and creates anyway.
+        const realError = console.error;
+        let warned = "";
+        console.error = (...args) => { warned = args.join(" "); };
         Deno.env.set("CAP_DURABLE_DIR_MIN_FREE_BYTES", "999999999999999");
-        out.minFreeExceeded = probe(() => mod.durableDir("subMinFree"));
+        out.minFreeAdvisory = probe(() => mod.durableDir("subMinFree"));
+        out.minFreeWarning = { warn: warned };
+        // ...and the evidence-viability floor is the half that still fails closed.
+        Deno.env.set("CAP_DURABLE_DIR_FLOOR_BYTES", "999999999999999");
+        out.floorExceeded = probe(() => mod.durableDir("subFloor"));
+        Deno.env.set("CAP_DURABLE_DIR_FLOOR_BYTES", "abc");
+        out.floorInvalid = probe(() => mod.durableDir("subFloorInvalid"));
+        console.error = realError;
+        Deno.env.delete("CAP_DURABLE_DIR_FLOOR_BYTES");
         Deno.env.set("CAP_DURABLE_DIR_MIN_FREE_BYTES", "lots");
         out.minFreeInvalid = probe(() => mod.durableDir("subMinFreeInvalid"));
         Deno.env.set("CAP_DURABLE_DIR_MIN_FREE_BYTES", "0");
@@ -166,12 +186,23 @@ Deno.test("durableDir: throws named error when CAP_DURABLE_DIR_MAX_ENTRIES is in
   assertStringIncludes(probed.capInvalidNegative?.threw ?? "", "\"-1\"");
 });
 
-Deno.test("durableDir: free-disk reserve is the byte bound, not the entry count (iqt8f)", async () => {
+Deno.test("nudb2: a low shared volume NAMES the condition and creates the dir instead of throwing", async () => {
+  // The regression this bead fixes: the reserve measures the ROOT filesystem (repos, worktrees, builds),
+  // so a low-free condition there - nine rustc builders, not evidence growth - threw on EVERY create and
+  // redded 13/13 of a merger's union gate. Advisory + named, with the viability floor as the integrity half.
   const probed = await probeEnvCases();
-  assert(probed.minFreeExceeded?.threw !== undefined, "free space below the reserve must throw");
-  assertStringIncludes(probed.minFreeExceeded?.threw ?? "", "CAP_DURABLE_DIR_MIN_FREE_BYTES exceeded");
-  assertStringIncludes(probed.minFreeExceeded?.threw ?? "", "reserve 999999999999999");
-  assertStringIncludes(probed.minFreeExceeded?.threw ?? "", "subMinFree");
+  assert(probed.minFreeAdvisory?.threw === undefined, "a low shared volume must not throw");
+  assertEquals(probed.minFreeAdvisory?.value, `${probed.capRoot?.value}/subMinFree`,
+    "the dir is created despite the advisory reserve being far above free space");
+  assertStringIncludes(probed.minFreeWarning?.warn ?? "", "CAP_DURABLE_DIR_LOW_FREE_WARNING");
+  assertStringIncludes(probed.minFreeWarning?.warn ?? "", "subMinFree");
+  assertStringIncludes(probed.minFreeWarning?.warn ?? "", "advisory reserve 999999999999999");
+
+  assert(probed.floorExceeded?.threw !== undefined, "free space below the viability floor must still fail closed");
+  assertStringIncludes(probed.floorExceeded?.threw ?? "", "CAP_DURABLE_DIR_FLOOR exceeded");
+  assertStringIncludes(probed.floorExceeded?.threw ?? "", "subFloor");
+  assert(probed.floorInvalid?.threw !== undefined, "a non-numeric floor must throw, not silently disable");
+  assertStringIncludes(probed.floorInvalid?.threw ?? "", "CAP_DURABLE_DIR_FLOOR_BYTES invalid: expected non-negative integer");
 
   assert(probed.minFreeInvalid?.threw !== undefined, "non-numeric reserve must throw, not silently disable");
   assertStringIncludes(probed.minFreeInvalid?.threw ?? "", "CAP_DURABLE_DIR_MIN_FREE_BYTES invalid: expected non-negative integer");
@@ -464,4 +495,178 @@ Deno.test("guard: tmpdir/tmpfs usage is durable-routed or deliberately allowed",
     [],
     "tmpdir/tmpfs usage outside the durable convention and the allowance list",
   );
+});
+
+// ── chrome-agent-platform-nudb2: scoped reserve + bounded, age-gated trim ──────────────────────
+// The reserve measures the volume that holds the durable root, which on this fleet is the ROOT
+// filesystem (repos, worktrees, node_modules, rustc/deno builds). It therefore cannot tell evidence
+// growth from nine heavy builders, and throwing on it took every lane's gate down with it. The pure
+// verdict below keeps both halves falsifiable without touching this host's disk.
+
+Deno.test("nudb2: the free-space verdict separates shared-volume pressure (warn) from evidence fullness (fatal)", () => {
+  // Derived from the repo root, not a machine literal: these two strings are only echoed and compared by the
+  // pure verdict (nothing touches the disk), and an absolute machine literal would rightly trip
+  // tests/machine-path-honesty.test.ts.
+  const anchor = join(ROOT, "cap-evidence");
+  const dir = join(anchor, "run-1");
+  // Plenty: silent.
+  assertEquals(freeSpaceVerdict({ free: 5_000_000_000, minFree: DEFAULT_DURABLE_DIR_MIN_FREE_BYTES, floor: DEFAULT_DURABLE_DIR_FLOOR_BYTES, anchor, dir }), {});
+  // The incident: 481 MB free on the shared volume, far above any evidence need. NAMED, created anyway.
+  const advisory = freeSpaceVerdict({ free: 481 * 1024 * 1024, minFree: DEFAULT_DURABLE_DIR_MIN_FREE_BYTES, floor: DEFAULT_DURABLE_DIR_FLOOR_BYTES, anchor, dir });
+  assertEquals(advisory.fatal, undefined, "a shared-volume reserve must never fail the create");
+  assertStringIncludes(advisory.warning ?? "", "CAP_DURABLE_DIR_LOW_FREE_WARNING");
+  assertStringIncludes(advisory.warning ?? "", String(481 * 1024 * 1024));
+  assertStringIncludes(advisory.warning ?? "", dir);
+  // Genuinely full evidence volume: below the viability floor, so integrity still fails closed.
+  const fatal = freeSpaceVerdict({ free: 4 * 1024 * 1024, minFree: DEFAULT_DURABLE_DIR_MIN_FREE_BYTES, floor: DEFAULT_DURABLE_DIR_FLOOR_BYTES, anchor, dir });
+  assertStringIncludes(fatal.fatal ?? "", "CAP_DURABLE_DIR_FLOOR exceeded");
+  assertStringIncludes(fatal.fatal ?? "", dir);
+  // statfs unavailable (null/undefined free) stays silent: the entry cap is still the byte bound's backstop.
+  assertEquals(freeSpaceVerdict({ free: null, minFree: DEFAULT_DURABLE_DIR_MIN_FREE_BYTES, floor: DEFAULT_DURABLE_DIR_FLOOR_BYTES, anchor, dir }), {});
+  // An operator who disables both knobs gets no verdict at all.
+  assertEquals(freeSpaceVerdict({ free: 1, minFree: 0, floor: 0, anchor, dir }), {});
+});
+
+Deno.test("nudb2: the trim is bounded, age-gated, allowlisted and never fatal", async () => {
+  const root = await Deno.makeTempDir({ prefix: "cap-trim-probe-" });
+  const now = Date.now();
+  const hour = 60 * 60 * 1000;
+  try {
+    const logs = `${root}/serial-phase-logs`;
+    const scratch = `${root}/scratch`;
+    const other = `${root}/lead-evidence-dir`;
+    for (const dir of [logs, scratch, other]) Deno.mkdirSync(dir, { recursive: true });
+    // stale (older than the age bound) in two allowlisted parents, plus a LIVE (fresh) sibling
+    Deno.writeTextFileSync(`${logs}/old-1.log`, "x");
+    Deno.writeTextFileSync(`${logs}/old-2.log`, "x");
+    Deno.writeTextFileSync(`${scratch}/old-3.log`, "x");
+    Deno.writeTextFileSync(`${scratch}/live.log`, "x");
+    Deno.utimeSync(`${logs}/old-1.log`, (now - 2 * hour) / 1000, (now - 2 * hour) / 1000);
+    Deno.utimeSync(`${logs}/old-2.log`, (now - 2 * hour) / 1000, (now - 2 * hour) / 1000);
+    Deno.utimeSync(`${scratch}/old-3.log`, (now - 2 * hour) / 1000, (now - 2 * hour) / 1000);
+    // a stale dir OUTSIDE the allowlist: another lane's evidence must never be trimmed
+    Deno.writeTextFileSync(`${other}/deliverable.txt`, "x");
+    Deno.utimeSync(`${other}/deliverable.txt`, (now - 2 * hour) / 1000, (now - 2 * hour) / 1000);
+
+    const trimmed = trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 2 });
+    assertEquals(trimmed.removed, 2, "the entry bound caps the trim even when more entries are stale");
+    assertEquals(existsSyncGuard(`${logs}/live.log`), false, "a live entry in the same parent must survive the trim");
+    assertEquals(existsSyncGuard(`${scratch}/live.log`), true, "a live entry must survive the trim");
+    assertEquals(existsSyncGuard(`${scratch}/old-3.log`), true, "the bound stops the trim mid-way");
+    assertEquals(existsSyncGuard(`${other}/deliverable.txt`), true, "an allowlist miss is never trimmed");
+
+    // A second pass with a larger bound takes the remaining stale entry.
+    const second = trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 50 });
+    assertEquals(second.removed, 1, "the remaining stale allowlisted entry is trimmed");
+    assertEquals(existsSyncGuard(`${scratch}/old-3.log`), false, "the stale scrub is gone");
+    // Nothing stale left: a further pass is a no-op, and never throws.
+    assertEquals(trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 50 }).removed, 0);
+    // A missing/absent durable root is not an error either.
+    assertEquals(trimStaleScratch(`${root}/does-not-exist`, { now, minAgeMs: hour }).removed, 0);
+  } finally {
+    await Deno.remove(root, { recursive: true }).catch(() => {});
+  }
+});
+
+/** existsSync without importing it at module scope (test-local readability). */
+function existsSyncGuard(path: string): boolean {
+  try {
+    Deno.statSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ── reviewer findings on the trim (chrome-agent-platform-zcg7p, -kkczc) ─────────────────────────
+// Both were reproduced by rev-nudb2 against 60884e03 and both are pinned here as falsifiers: the trim
+// must never remove live output, and the allowlist must not be a way to reach another lane's evidence.
+
+Deno.test("zcg7p: an entry whose SUBTREE was written recently is live output, even with an old directory mtime", async () => {
+  const root = await Deno.makeTempDir({ prefix: "cap-trim-live-probe-" });
+  const now = Date.now();
+  const hour = 60 * 60 * 1000;
+  const old = (now - 2 * hour) / 1000;
+  try {
+    const parent = `${root}/scratch`;
+    const live = `${parent}/active-run`;
+    Deno.mkdirSync(live, { recursive: true });
+    Deno.writeTextFileSync(`${live}/live`, "initial");
+    // The reviewer's exact shape: the DIRECTORY mtime is two hours old (writing into an existing file
+    // does not touch it) while the file inside was just written by the still-running lane.
+    Deno.utimeSync(live, old, old);
+    Deno.writeTextFileSync(`${live}/live`, "new live data");
+    assertEquals(
+      trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 10 }).removed,
+      0,
+      "a directory holding recently written output must not be trimmed",
+    );
+    assertEquals(existsSyncGuard(`${live}/live`), true, "the live output survives");
+    // Control: the same shape with nothing written afterwards IS stale and is trimmed.
+    const dead = `${parent}/dead-run`;
+    Deno.mkdirSync(dead, { recursive: true });
+    Deno.writeTextFileSync(`${dead}/out`, "old");
+    Deno.utimeSync(dead, old, old);
+    Deno.utimeSync(`${dead}/out`, old, old);
+    assertEquals(trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 10 }).removed, 1, "a genuinely stale entry is still trimmed");
+    assertEquals(existsSyncGuard(dead), false, "the stale entry is gone");
+  } finally {
+    await Deno.remove(root, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("kkczc: an allowlisted parent that is a SYMLINK is never followed, and symlinked entries are never removed", async () => {
+  const root = await Deno.makeTempDir({ prefix: "cap-trim-link-probe-" });
+  const now = Date.now();
+  const old = (now - 2 * 60 * 60 * 1000) / 1000;
+  const hour = 60 * 60 * 1000;
+  try {
+    // Another lane's evidence, outside every allowlisted name.
+    const other = `${root}/other-lane`;
+    Deno.mkdirSync(other, { recursive: true });
+    Deno.writeTextFileSync(`${other}/evidence`, "owned by another lane");
+    Deno.utimeSync(`${other}/evidence`, old, old);
+    // The reviewer's exact shape: `scratch` itself is a symlink to it.
+    Deno.symlinkSync(other, `${root}/scratch`);
+    assertEquals(trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 10 }).removed, 0, "a symlinked allowlisted parent must not be followed");
+    assertEquals(existsSyncGuard(`${other}/evidence`), true, "the other lane's evidence survives");
+
+    // A real allowlisted parent containing a symlink entry: the link is skipped, its target survives.
+    Deno.removeSync(`${root}/scratch`);
+    Deno.mkdirSync(`${root}/scratch`, { recursive: true });
+    Deno.symlinkSync(other, `${root}/scratch/linked`);
+    assertEquals(trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 10 }).removed, 0, "a symlinked entry is not removable scratch");
+    assertEquals(existsSyncGuard(`${other}/evidence`), true, "the link target survives");
+
+    // And a genuine stale directory in that same parent still goes: the guard does not disable the trim.
+    Deno.mkdirSync(`${root}/scratch/stale`, { recursive: true });
+    Deno.writeTextFileSync(`${root}/scratch/stale/f`, "old");
+    Deno.utimeSync(`${root}/scratch/stale`, old, old);
+    Deno.utimeSync(`${root}/scratch/stale/f`, old, old);
+    assertEquals(trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 10 }).removed, 1, "stale scratch in a real parent is still trimmed");
+  } finally {
+    await Deno.remove(root, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("zcg7p/kkczc: when staleness cannot be PROVEN the entry is kept (bounded walk fails closed)", async () => {
+  const root = await Deno.makeTempDir({ prefix: "cap-trim-budget-probe-" });
+  const now = Date.now();
+  const old = (now - 2 * 60 * 60 * 1000) / 1000;
+  const hour = 60 * 60 * 1000;
+  try {
+    const dir = `${root}/serial-phase-logs/unknown-age`;
+    Deno.mkdirSync(dir, { recursive: true });
+    Deno.writeTextFileSync(`${dir}/a`, "old");
+    Deno.writeTextFileSync(`${dir}/b`, "old");
+    Deno.utimeSync(dir, old, old);
+    Deno.utimeSync(`${dir}/a`, old, old);
+    Deno.utimeSync(`${dir}/b`, old, old);
+    // A budget too small to walk the subtree means "unknown", and unknown is never deleted.
+    assertEquals(trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 10, maxStats: 1 }).removed, 0, "an unproven entry must be kept");
+    assertEquals(existsSyncGuard(`${dir}/a`), true, "unproven scratch survives");
+    assertEquals(trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 10, maxStats: 100 }).removed, 1, "with a real budget the same entry is provably stale and goes");
+  } finally {
+    await Deno.remove(root, { recursive: true }).catch(() => {});
+  }
 });
