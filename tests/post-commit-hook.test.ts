@@ -148,6 +148,21 @@ Deno.test("8nec A: a jargon subject with a Release-note trailer bumps with the t
   }
 });
 
+Deno.test("uvtk4: an explicit none: internal trailer cannot mint a release via the reference hook", async () => {
+  const scratch = await new Scratch().setup();
+  try {
+    const r = commit(scratch.dir, "test: internal gate tooling", "Release-note: none: internal gate tooling");
+    assertEquals(await workingVersion(scratch.dir), INITIAL);
+    assertEquals(await commitVersion(scratch.dir), INITIAL);
+    assert(!(await scratch.changelog()).includes("[1.2.4]"));
+    assert(/ERROR:.*none: internal/.test(String(r.stderr)), `named rejection: ${r.stderr}`);
+    // Git does not roll back a commit when post-commit exits nonzero; the
+    // promise here is that it cannot mint a release, not that git aborts.
+  } finally {
+    await scratch.cleanup();
+  }
+});
+
 Deno.test("8nec A: CAP_USER_NOTE bumps without a trailer", async () => {
   const scratch = await new Scratch().setup();
   try {

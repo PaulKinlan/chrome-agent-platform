@@ -70,6 +70,8 @@ Deno.test("changelog filter: isUserFacingEntry rejects engineering and workflow 
   const reject = [
     "merge: WebMCP acceptance green lane (0c9783c8)",
     "chore(tasks): record bundled-inventory drift fix",
+    "none: internal gate tooling",
+    "None: internal test verdict classification",
     "fix(build): version bumps now keep inventory in lockstep",
     "test: widen recent-section assertions",
     "ci: run the gate",
@@ -122,6 +124,7 @@ Deno.test("changelog filter: isUserFacingEntry accepts plain user copy", () => {
     "\"Show all\" lists every earlier change once.",
     "(Beta) The composer remembers your last provider.",
     "Click the green button to proceed with the run.",
+    "You can clear one conversation without clearing the rest.",
     "A red highlight indicates removed text in the diff view.",
     "...and the composer remembers your last provider.",
   ];

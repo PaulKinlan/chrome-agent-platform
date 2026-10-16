@@ -40,7 +40,7 @@ import { execSync } from "child_process";
 // `internal:` notes as release entries and burned a version on one of them. The
 // mirrors now copy the module too, so the standalone rationale no longer applies —
 // a second copy of a rule is how two gates drift apart.
-import { isUserFacingEntry } from "../extension/options/changelog-filter.js";
+import { isInternalEntry, isUserFacingEntry, parseChangelog } from "../extension/options/changelog-filter.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -85,6 +85,10 @@ const uni = argv.findIndex((a) => a === "--user-note" || a === "--note");
 const userNote = uni >= 0 ? argv[uni + 1] : null;
 const skipIfNoNote = argv.includes("--skip-if-no-note") || argv.includes("--hook");
 const hookMode = argv.includes("--hook");
+// Explicit merger-only repair: after a union leaves the surfaces one patch ahead
+// of CHANGELOG, use the changelog as the release anchor instead of resetting
+// six files by hand. Never infer this mode during a normal author/hook bump.
+const reconcileMerge = argv.includes("--reconcile-merge");
 // 8nec: in hook mode the subject is NOT a note source, not even a fallback. The author
 // states the user-facing copy with --user-note (the hook extracts it from a Release-note:
 // trailer or CAP_USER_NOTE); without it, nothing is bumped.
@@ -120,6 +124,10 @@ const sanitizeEntry = (note) => String(note)
 const cleanNote = finalNote ? sanitizeEntry(finalNote) : null;
 
 if (cleanNote && !isUserFacingEntry(cleanNote)) {
+  if (isInternalEntry(cleanNote) && /^none:\s*internal\b/i.test(cleanNote)) {
+    console.error(`[bump-version] ERROR: note "${cleanNote}" declares no user-facing change (none: internal); omit the Release-note trailer for internal work.`);
+    process.exit(1);
+  }
   if (skipIfNoNote) {
     console.error(
       `[bump-version] commit note "${cleanNote.slice(0, 72)}" does not pass user-facing filter — ` +
@@ -166,6 +174,30 @@ const pkg = readJson(pkgPath);
 const lock = existsSync(lockPath) ? readJson(lockPath) : null;
 const manifest = readJson(manifestPath);
 const current = manifest.version || pkg.version;
+const changelogPath = join(ROOT, "CHANGELOG.md");
+const changelogVersion = existsSync(changelogPath)
+  ? parseChangelog(readFileSync(changelogPath, "utf-8"))[0]?.version : null;
+const inventoryPath = join(ROOT, "extension", "lib", "bundled-inventory-data.js");
+const inventoryRelease = existsSync(inventoryPath)
+  ? readFileSync(inventoryPath, "utf-8").match(/^\s*"release": "([^"]*)",/m)?.[1] : null;
+const surfaces = [
+  ["bundled-inventory-data.js release", inventoryRelease],
+  ["package.json", pkg.version],
+  ["package-lock.json", lock?.version],
+  ["package-lock.json packages root", lock?.packages?.[""]?.version],
+  ["extension/manifest.json", manifest.version],
+  ["extension/manifest.json version_name", manifest.version_name],
+].filter(([, version]) => version != null);
+const expected = reconcileMerge && changelogVersion ? bumpSemver(changelogVersion, "patch") : changelogVersion;
+if ((reconcileMerge && (!changelogVersion || hookMode || type !== "patch" || !surfaces.some(([, version]) => version === expected))) ||
+    (changelogVersion && surfaces.some(([, version]) => version !== changelogVersion && (!reconcileMerge || version !== expected)))) {
+  console.error(`[bump-version] ERROR: version surfaces and latest CHANGELOG disagree (` +
+    `changelog=${changelogVersion ?? "missing"}; ${surfaces.map(([name, version]) => `${name}=${version}`).join(", ")}). ` +
+    (reconcileMerge ? `Only a one-patch merge collision can be reconciled.` :
+      `Resolve the merge or run patch --reconcile-merge --user-note "<what the user gets>" for a one-patch union.`));
+  process.exit(1);
+}
+const releaseBase = reconcileMerge ? changelogVersion : current;
 
 // 8nec (B): one bump per branch, not one per commit. If this branch's version no longer
 // matches origin/main's, the branch either already carries the bump (its changelog entry
@@ -182,7 +214,7 @@ if (hookMode) {
   }
 }
 
-const next = bumpSemver(current, type);
+const next = bumpSemver(releaseBase, type);
 
 pkg.version = next;
 if (lock) {
@@ -207,7 +239,6 @@ if (lock) {
 
 // Prepend a CHANGELOG entry ONLY when we have a user-language note that
 // survived sanitizing (xk2u: never invent placeholder text).
-const changelogPath = join(ROOT, "CHANGELOG.md");
 if (existsSync(changelogPath) && cleanNote) {
   const date = new Date().toISOString().slice(0, 10);
   const existing = readFileSync(changelogPath, "utf-8");
@@ -224,7 +255,6 @@ if (existsSync(changelogPath) && cleanNote) {
 // `npm run build` fails closed on the bundled-tool verify gate. The top-level
 // `"release"` key is unique (per-package manifests use "version", SBOM refs use "rel"),
 // so a targeted patch is byte-equivalent to a full regeneration for a version-only bump.
-const inventoryPath = join(ROOT, "extension", "lib", "bundled-inventory-data.js");
 if (existsSync(inventoryPath)) {
   const inv = readFileSync(inventoryPath, "utf-8");
   const updatedInv = inv.replace(/^(\s*)"release": "[^"]*",/m, `$1"release": "${next}",`);

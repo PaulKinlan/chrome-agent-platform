@@ -110,6 +110,13 @@ node scripts/check-beads-export-divergence.mjs
 #    - CHANGELOG.md: union-merge bodies, place new version at top, preserve all prior bullets
 #    - Version files: update package.json, package-lock.json, extension/manifest.json,
 #      and extension/lib/bundled-inventory-data.js to the next sequential version
+# uvtk4: for a union whose version surfaces are already one patch ahead of the
+# latest CHANGELOG heading (competing branches each bumped), leave that prior
+# heading as the anchor and run ONE explicit reconciliation instead of resetting
+# six files by hand. This adds the one union release entry and reuses its number:
+# node scripts/bump-version.mjs patch --reconcile-merge --user-note "<what the user gets>"
+# Normal bumps refuse drift; reconciliation refuses non-patch or wider drift.
+# Internal-only unions have NO release note or version bump.
 
 # 4. Sync changelog and verify order/vocabulary
 npm run sync:changelog
