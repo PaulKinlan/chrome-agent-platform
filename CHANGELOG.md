@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.713] — 2026-10-16
+- the ACP docs bundle table now reflects a real production build, with headroom per bundle and the source of truth named.
+
 ## [0.3.712] — 2026-10-16
 - internal test and source import hygiene fix
 

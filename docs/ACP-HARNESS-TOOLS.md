@@ -71,18 +71,34 @@ still depends on that run's permissions, origin and policy.
 
 ## Measured gates and limits
 
-Production build measurements on `origin/main` baseline with landed bundle budgets:
+Store-target bundle sizes from a fresh `npm run build:production` (measured 2026-10-16 on
+`origin/main` b6389708, v0.3.712). The ceilings are the ones the build itself reports and asserts
+against — `STORE_SW_BUDGET_BYTES` and `STORE_BUNDLE_BUDGETS` in `scripts/bundle-budget.mjs`, which is
+the source of truth; the table is a dated snapshot, so re-measure rather than trusting it:
 
-| Surface | Size | Ceiling | Status |
-| --- | ---: | ---: | --- |
-| Store background/service-worker.js | 2,540,055 B | 3,000,000 B | PASS |
-| Workers/agent-worker.js | 846,602 B | 2,000,000 B | PASS |
-| options.bundle.js | 889,522 B | 900,000 B | PASS |
-| ntp.bundle.js | 903,528 B | 920,000 B | PASS |
-| sidepanel.bundle.js | 687,602 B | 700,000 B | PASS |
-| shared/diff-core.bundle.js | 16,611 B | 17,000 B | PASS |
+| Surface | Size | Ceiling | Headroom |
+| --- | ---: | ---: | ---: |
+| Store background/service-worker.js | 2,809,119 B | 3,000,000 B | 190,881 B |
+| Workers/agent-worker.js | 853,051 B | 2,000,000 B | 1,146,949 B |
+| options.bundle.js | 444,527 B | 450,000 B | 5,473 B |
+| ntp.bundle.js | 350,389 B | 500,000 B | 149,611 B |
+| sidepanel.bundle.js | 19,832 B | 250,000 B | 230,168 B |
+| shared/diff-core.bundle.js | 16,623 B | 17,000 B | 377 B |
+| artifacts.bundle.js | 151,058 B | 200,000 B | 48,942 B |
+| artifact.bundle.js | 138,122 B | 200,000 B | 61,878 B |
+| directory.bundle.js | 61,788 B | 65,000 B | 3,212 B |
+| privacy.bundle.js | 63,912 B | 65,000 B | 1,088 B |
+| offscreen.bundle.js | 245,796 B | 250,000 B | 4,204 B |
+| settings-view.bundle.js | 85,847 B | 120,000 B | 34,153 B |
+| chunks aggregate (7 chunks) | 556,793 B | 750,000 B | 193,207 B |
 
-All bundle budgets pass without relaxing ceilings.
+Every store budget passes and none was relaxed. Five bundles sit under 5% headroom (diff-core
+377 B, privacy 1,088 B, options 5,473 B, offscreen 4,204 B, directory 3,212 B): that thin margin is
+the pattern chrome-agent-platform-3rryv tracks, not a single over-budget bundle. The per-bundle
+ceilings quoted here earlier in this file (options 900,000, ntp 920,000, sidepanel 700,000, with
+matching sizes) predated the 20e2u code-splitting ratchet-down and were wrong on both sides of the
+comparison; since Paul's 2026-10-05 decision a size overrun is measured and reported rather than
+failing the build, and a lane still must not retune a ceiling.
 
 ## Operational boundaries
 
