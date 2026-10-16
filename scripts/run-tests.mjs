@@ -31,51 +31,17 @@ import { parallelPlan, computeParallelPhaseTimeout, DEFAULT_PARALLEL_TIMEOUT_MS 
 import { loadWeights, scheduleOrder } from "./lib/parallel-schedule.mjs";
 import { emitGateLedger, deferredTierEntries, fullTierManifestFields, parseGateBuild } from "./lib/gate-manifest.mjs";
 import { checkBrowserPrerequisite } from "./lib/browser-prerequisite.mjs";
-import { ENVIRONMENTAL_REFUSAL_EXIT, ENVIRONMENTAL_REFUSAL_MARKER } from "./lib/environmental-verdict.mjs";
+import {
+  ENVIRONMENTAL_REFUSAL_EXIT,
+  ENVIRONMENTAL_REFUSAL_MARKER,
+  areAllFailuresEnvironmental,
+  combinePhaseExitCodes,
+} from "./lib/environmental-verdict.mjs";
 
-export { DEFAULT_PARALLEL_TIMEOUT_MS, computeParallelPhaseTimeout };
+export { DEFAULT_PARALLEL_TIMEOUT_MS, computeParallelPhaseTimeout, areAllFailuresEnvironmental, combinePhaseExitCodes };
 const PARALLEL_READY_FILE = process.env.CAP_PARALLEL_READY_FILE;
 const PARALLEL_READY_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_READY_TIMEOUT_MS ?? 60_000);
 
-export function areAllFailuresEnvironmental(cleanOutput) {
-  const errorsIndex = cleanOutput.indexOf(" ERRORS ");
-  if (errorsIndex === -1) return false;
-
-  const failuresIndex = cleanOutput.indexOf(" FAILURES ", errorsIndex);
-  const errorsText = failuresIndex !== -1
-    ? cleanOutput.slice(errorsIndex, failuresIndex)
-    : cleanOutput.slice(errorsIndex);
-
-  // Each failure in Deno test error output starts with "\n\n<test_name> =>" or "\n<test_name> =>"
-  const errorBlocks = errorsText.split(/\n+(?=[^\s\n].*?=>\s*)/).slice(1);
-  if (errorBlocks.length === 0) return false;
-
-  for (const block of errorBlocks) {
-    // Separate test heading (<test_name> => <path>) from the actual error body
-    // so a test with QuietWindowRefusedError in its name does not falsely classify product errors.
-    const arrowIdx = block.indexOf("=>");
-    const errorBody = arrowIdx !== -1 ? block.slice(block.indexOf("\n", arrowIdx)) : block;
-
-    // Finding 2y5h7: An AssertionError in the error body (e.g. from assertRejects) is a
-    // test failure, never an uncaught environmental refusal.
-    if (errorBody.includes("AssertionError:")) {
-      return false;
-    }
-
-    const isRefusal =
-      errorBody.includes(ENVIRONMENTAL_REFUSAL_MARKER) ||
-      errorBody.includes("ENVIRONMENT: machine is not quiet enough for this gate") ||
-      errorBody.includes("ENVIRONMENT: ntp-boot-staging refusal") ||
-      errorBody.includes("ENVIRONMENT: the fleet-wide heavy-gate slot is busy") ||
-      errorBody.includes("QuietWindowRefusedError: ENVIRONMENT:") ||
-      errorBody.includes("BootStagingEnvironmentalRefusalError: ENVIRONMENT:");
-    if (!isRefusal) {
-      return false;
-    }
-  }
-
-  return true;
-}
 
 function runParallel(files, phase = "parallel phase") {
   if (!files || files.length === 0) return Promise.resolve(0);
@@ -329,8 +295,10 @@ export async function main(args = process.argv.slice(2)) {
   // guards green, because they never ran. The plan is pure and lives in scripts/lib/parallel-plan.mjs;
   // here we only print what it decides and let the serial failure still decide the exit code.
   const t0 = Date.now();
-  const serialRc = serialFiles.length ? runSerialFiles(serialFiles) : 0;
-  const plan = parallelPlan({ serialRc, parallel, alwaysOn: ALWAYS_ON });
+  const serialFailures = [];
+  const serialRc = serialFiles.length ? runSerialFiles(serialFiles, { failuresOut: serialFailures }) : 0;
+  const failingFiles = serialFailures.filter((f) => f.code !== 0 && !f.isRefusal).map((f) => f.file);
+  const plan = parallelPlan({ serialRc, parallel, alwaysOn: ALWAYS_ON, failingFiles });
   if (plan.announce) console.error(`\n${plan.announce}`);
   // Extract reviewed readers from the parallel plan; SERIAL has fully ended.
   // In the unchanged per-change runner both subsets still share its one
@@ -342,7 +310,7 @@ export async function main(args = process.argv.slice(2)) {
   // Preserve kz27: a failed builder OR read-only guard must not hide the
   // independent parallel guards; both phases run and the first failure wins.
   const parallelRc = await runParallel(other);
-  const rc = serialRc || readOnlyRc || parallelRc;
+  const rc = combinePhaseExitCodes(serialRc, readOnlyRc, parallelRc);
   const buildDeferredCount = cliFiles.length === 0 ? all.filter((f) => BUILD_GATE.has(f)).length : 0;
   const heavyDeferredCount = cliFiles.length === 0 ? all.filter((f) => HEAVY_GATE.has(f)).length : 0;
   const deferredParts = [];
@@ -368,6 +336,8 @@ export async function main(args = process.argv.slice(2)) {
       serialFiles,
       parallelFiles: plan.files,
       skippedFiles,
+      failingFiles,
+
       // One reason per file from the tier that owns it (review P1-B): build-behaviour files run in
       // the SAME FULL command (its npm run test:build stage), heavy files are NOT part of that
       // command at all. The per-file tables already carry the measured reason.

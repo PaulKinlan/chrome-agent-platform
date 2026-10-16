@@ -14,6 +14,7 @@
 // rather than inferred from the shape of a print statement in a script.
 
 import os from "node:os";
+import { ENVIRONMENTAL_REFUSAL_EXIT } from "./environmental-verdict.mjs";
 
 export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
 
@@ -66,21 +67,35 @@ export function guardSubset(parallel, alwaysOn) {
 }
 
 /**
- * @param {{ serialRc: number, parallel: string[], alwaysOn: string[] }} args
+ * @param {{ serialRc: number, parallel: string[], alwaysOn: string[], failingFiles?: string[] }} args
  * @returns {{ files: string[], skipped: number, announce: string|null }}
  *   files    — the parallel files to run
  *   skipped  — how many parallel files this run does NOT execute
- *   announce — a line to print when files were skipped, else null
+ *   announce — a line to print when files were skipped or refusal occurred, else null
  */
-export function parallelPlan({ serialRc, parallel, alwaysOn }) {
+export function parallelPlan({ serialRc, parallel, alwaysOn, failingFiles = [] }) {
   if (serialRc === 0) return { files: parallel, skipped: 0, announce: null };
+  if (serialRc === ENVIRONMENTAL_REFUSAL_EXIT) {
+    return {
+      files: parallel,
+      skipped: 0,
+      announce:
+        `run-tests: the serial phase was REFUSED (environmental verdict, exit ${ENVIRONMENTAL_REFUSAL_EXIT}) — ` +
+        `running the full parallel phase (${parallel.length} file(s)) with the refusal stated; never quietly skipping files on environmental contention.`,
+    };
+  }
   const files = guardSubset(parallel, alwaysOn);
+  const skipped = parallel.length - files.length;
+  const names = Array.isArray(failingFiles) && failingFiles.length > 0
+    ? ` [${failingFiles.join(", ")}]`
+    : "";
   return {
     files,
-    skipped: parallel.length - files.length,
+    skipped,
     announce:
-      `run-tests: the serial phase failed, so ${parallel.length - files.length} of ${parallel.length} ` +
+      `run-tests: serial file(s) failed${names}, so ${skipped} of ${parallel.length} ` +
       `parallel file(s) are SKIPPED — except the ALWAYS-ON GUARD SET (${files.length} file(s)), which ` +
       `runs regardless, because a guard result must never be conditional on an unrelated phase passing.`,
   };
 }
+

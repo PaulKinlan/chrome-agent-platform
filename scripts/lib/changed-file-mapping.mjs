@@ -186,6 +186,8 @@ export const SELECTOR_INFRASTRUCTURE = Object.freeze([
   "scripts/select-tests.mjs", // the subset picker itself
   "scripts/test-partition.mjs", // decides serial vs parallel for both runners
   "scripts/lib/serial-phase.mjs", // executes the serial phase for both runners
+  "scripts/lib/parallel-plan.mjs", // plans parallel execution and failure/refusal handling
+  "scripts/lib/environmental-verdict.mjs", // canonical environmental refusal definitions and exit code combination
   "scripts/lib/changed-file-mapping.mjs", // this file: the mapping the subset trusts
   // chrome-agent-platform-0eq00: the gate's build decision and its coverage ledger. Both decide what
   // a green record MEANS, so a change to either must fail closed to the full suite rather than be

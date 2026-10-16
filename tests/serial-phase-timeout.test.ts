@@ -76,18 +76,19 @@ Deno.test("86gg: the bound still BOUNDS — a hung file is killed (exit 124)", a
   // completes, so the runner reports success). Only a repeating timer INSIDE a
   // never-resolving async test holds the runner open — which is what the bound
   // must kill.
-  await Deno.writeTextFile(
-    hung,
-    'Deno.test("hangs forever", async () => { setInterval(() => {}, 1000); await new Promise(() => {}); });\n',
-  );
-  const r = runSerialFile(hung, { timeoutMs: 2_000, stdio: ["ignore", "ignore", "ignore"], cwd: ROOT });
   try {
+    await Deno.writeTextFile(
+      hung,
+      'Deno.test("hangs forever", async () => { setInterval(() => {}, 1000); await new Promise(() => {}); });\n',
+    );
+    const r = runSerialFile(hung, { timeoutMs: 2_000, stdio: ["ignore", "ignore", "ignore"], cwd: ROOT });
     assertEquals(r.timedOut, true, "a file that never finishes must be killed");
     assertEquals(r.code, 124);
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    try { await Deno.remove(dir, { recursive: true }); } catch { /* ignore */ }
   }
 });
+
 
 Deno.test("cihz/86gg: the scaled bound is STRICTLY above the flat bound, and a kill happens only below the fixture's DECLARED work", async () => {
   // WHY THIS REPLACED THE OLD FORM (chrome-agent-platform-cihz): it used a 3.5s fixture, a 2s flat bound and a
@@ -133,9 +134,10 @@ Deno.test("cihz/86gg: the scaled bound is STRICTLY above the flat bound, and a k
     );
     assertEquals(survived.code, 0, "the surviving file must exit cleanly");
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    try { await Deno.remove(dir, { recursive: true }); } catch { /* ignore */ }
   }
 });
+
 
 // ── chrome-agent-platform-kj9s: per-file windows ──────────────────────────────
 // A per-file bound exists for files whose cost is set by BUILD COUNT (build-bootstrap: 3 production
@@ -147,35 +149,36 @@ Deno.test("kj9s: a per-file bound overrides the base window for the files that n
   const dir = await fixtureDir("kj9s-per-file-bounds");
   const hung = `${dir}/zz-hung-perfile-${Date.now()}.test.ts`;
   const fine = `${dir}/zz-fine-perfile-${Date.now()}.test.ts`;
-  await Deno.writeTextFile(
-    hung,
-    'Deno.test("hangs forever", async () => { setInterval(() => {}, 1000); await new Promise(() => {}); });\n',
-  );
-  await Deno.writeTextFile(
-    fine,
-    'Deno.test("finishes fast", () => { if (1 !== 1) throw new Error("unreachable"); });\n',
-  );
-  const started = Date.now();
   try {
-  const rc = runSerialFiles([hung, fine], {
-    timeoutMs: 60_000, // a base window so generous that only the override can explain a fast kill
-    perFileTimeoutMs: { [hung]: 2_000 },
-    stdio: ["ignore", "ignore", "ignore"],
-    cwd: ROOT,
-  });
-  const elapsed = Date.now() - started;
-  assertEquals(rc, 124, "the hung file must be killed and its exit reported");
-  assert(
-    elapsed < 20_000,
-    `the per-file override (2s) must govern the listed file, not the 60s base — took ${elapsed}ms`,
-  );
-  // The unlisted file keeps the base window and passes (no override invented for it).
-  assertEquals(
-    runSerialFiles([fine], { timeoutMs: 60_000, perFileTimeoutMs: { [hung]: 2_000 }, stdio: ["ignore", "ignore", "ignore"], cwd: ROOT }),
-    0,
-    "an unlisted file runs under the base window and passes",
-  );
+    await Deno.writeTextFile(
+      hung,
+      'Deno.test("hangs forever", async () => { setInterval(() => {}, 1000); await new Promise(() => {}); });\n',
+    );
+    await Deno.writeTextFile(
+      fine,
+      'Deno.test("finishes fast", () => { if (1 !== 1) throw new Error("unreachable"); });\n',
+    );
+    const started = Date.now();
+    const rc = runSerialFiles([hung, fine], {
+      timeoutMs: 60_000, // a base window so generous that only the override can explain a fast kill
+      perFileTimeoutMs: { [hung]: 2_000 },
+      stdio: ["ignore", "ignore", "ignore"],
+      cwd: ROOT,
+    });
+    const elapsed = Date.now() - started;
+    assertEquals(rc, 124, "the hung file must be killed and its exit reported");
+    assert(
+      elapsed < 20_000,
+      `the per-file override (2s) must govern the listed file, not the 60s base — took ${elapsed}ms`,
+    );
+    // The unlisted file keeps the base window and passes (no override invented for it).
+    assertEquals(
+      runSerialFiles([fine], { timeoutMs: 60_000, perFileTimeoutMs: { [hung]: 2_000 }, stdio: ["ignore", "ignore", "ignore"], cwd: ROOT }),
+      0,
+      "an unlisted file runs under the base window and passes",
+    );
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    try { await Deno.remove(dir, { recursive: true }); } catch { /* ignore */ }
   }
 });
+

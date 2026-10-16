@@ -239,7 +239,7 @@ export function deferredTierEntries({
  * statement about the heavy files.
  *
  * @param {{
- *   serialFiles?: string[], parallelFiles?: string[], skippedFiles?: string[],
+ *   serialFiles?: string[], parallelFiles?: string[], skippedFiles?: string[], failingFiles?: string[],
  *   deferred?: Array<{ file: string, reason: string }>, rc: number, cliFiles?: string[],
  *   build?: object | null, fileMappingContext?: object | null,
  * }} args
@@ -249,6 +249,7 @@ export function fullTierManifestFields({
   serialFiles = [],
   parallelFiles = [],
   skippedFiles = [],
+  failingFiles = [],
   deferred = [],
   rc,
   cliFiles = [],
@@ -257,10 +258,14 @@ export function fullTierManifestFields({
 } = {}) {
   if (cliFiles.length > 0) return null;
   const executedSuites = [...serialFiles, ...parallelFiles];
+  const skippedReason = Array.isArray(failingFiles) && failingFiles.length > 0
+    ? `skipped in this run: serial file(s) failed [${failingFiles.join(", ")}]`
+    : "skipped in this run: the serial phase failed";
   const omitted = [
     ...deferred.map((entry) => ({ file: entry.file, reason: entry.reason })),
-    ...skippedFiles.map((file) => ({ file, reason: "skipped in this run: the serial phase failed" })),
+    ...skippedFiles.map((file) => ({ file, reason: skippedReason })),
   ];
+
   return {
     tier: "full",
     executed: rc === 0 ? executedSuites.length : 0,

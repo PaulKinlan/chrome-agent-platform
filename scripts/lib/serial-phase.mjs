@@ -31,6 +31,11 @@ import { durableRoot } from "./durable-root.mjs";
 // `perFileTimeoutMs: null` explicitly.
 import { SERIAL_FILE_TIMEOUTS } from "../test-partition.mjs";
 import { LOCK_DIRNAME } from "./build-lock.mjs";
+import {
+  ENVIRONMENTAL_REFUSAL_EXIT,
+  ENVIRONMENTAL_REFUSAL_MARKER,
+  areAllFailuresEnvironmental,
+} from "./environmental-verdict.mjs";
 
 // o49qg: the serial builder is the only permitted writer before this batch.
 // Build.mjs acquires LOCK_DIRNAME before staging and atomically switches the
@@ -331,9 +336,10 @@ export function runSerialFiles(files, {
   stdio = "pipe",
   cwd = undefined,
   env = process.env,
+  failuresOut = undefined,
 } = {}) {
   const t0 = Date.now();
-  /** @type {{ file: string, code: number, timedOut: boolean, secs: string, log: string|null }[]} */
+  /** @type {{ file: string, code: number, timedOut: boolean, isRefusal?: boolean, secs: string, log: string|null }[]} */
   const failures = [];
   const logDir = serialLogDir();
   // (2) chrome-agent-platform-grj9: the durable per-file log directory is SHARED across worktrees
@@ -373,11 +379,33 @@ export function runSerialFiles(files, {
           log = null;
         }
       }
-      failures.push({ file, code: result.code, timedOut: Boolean(result.timedOut), secs, log });
+
+      let effectiveCode = result.code;
+      const clean = text.replace(/\x1b\[[0-9;]*[mGKH]/gu, "");
+      const hasEnvironmentalMarker =
+        clean.includes(ENVIRONMENTAL_REFUSAL_MARKER) ||
+        clean.includes("QuietWindowRefusedError") ||
+        clean.includes("ENVIRONMENT: machine is not quiet enough for this gate") ||
+        clean.includes("ENVIRONMENT: ntp-boot-staging refusal") ||
+        clean.includes("ENVIRONMENT: the fleet-wide heavy-gate slot is busy");
+      if (effectiveCode !== 0 && hasEnvironmentalMarker) {
+        const summaryMatch = /FAILED\b[\s\S]*?\|\s*(\d+)\s*failed/i.exec(clean);
+        if (summaryMatch) {
+          const failCount = Number(summaryMatch[1]);
+          const allEnvironmental = areAllFailuresEnvironmental(clean);
+          if (failCount > 0 && allEnvironmental) {
+            effectiveCode = ENVIRONMENTAL_REFUSAL_EXIT;
+          }
+        }
+      }
+
+      const isRefusal = effectiveCode === ENVIRONMENTAL_REFUSAL_EXIT;
+      failures.push({ file, code: effectiveCode, timedOut: Boolean(result.timedOut), isRefusal, secs, log });
+      const verdictWord = isRefusal ? "REFUSED" : "FAILED";
       // Named HERE as well as in the summary: the reader watching the log sees which file broke the
       // moment it breaks, instead of scrolling back to guess from a missing banner.
       announce(
-        `\nrun-tests: serial file ${file} FAILED (exit ${result.code}${result.timedOut ? ", TIMED OUT" : ""}) in ${secs}s` +
+        `\nrun-tests: serial file ${file} ${verdictWord} (exit ${effectiveCode}${result.timedOut ? ", TIMED OUT" : ""}) in ${secs}s` +
           `${log ? ` — captured output: ${log}` : ""}`,
       );
       // The captured output stays on stderr: it is unbounded, and BOTH streams above name the
@@ -387,7 +415,13 @@ export function runSerialFiles(files, {
   }
 
   const secs = ((Date.now() - t0) / 1000).toFixed(0);
-  const statusStr = failures.length === 0 ? "GREEN" : `FAILED (${failures.length}/${files.length} failed)`;
+  const anyProductFailure = failures.some((f) => f.code !== ENVIRONMENTAL_REFUSAL_EXIT);
+  const allRefusals = failures.length > 0 && !anyProductFailure;
+  const statusStr = failures.length === 0
+    ? "GREEN"
+    : allRefusals
+    ? `REFUSED (${failures.length}/${files.length} refused)`
+    : `FAILED (${failures.length}/${files.length} failed)`;
   // ulcw: the run id is printed WITH the count, so a reader can match this summary to exactly the
   // durable logs whose names carry the same id — the count and its evidence share one value.
   console.log(`\nrun-tests: serial phase (${files.length} build/artifact files) ${statusStr} in ${secs}s [run ${stamp}]`);
@@ -395,14 +429,22 @@ export function runSerialFiles(files, {
   if (failures.length > 0) {
     // THE WHOLE POINT (dsoq): a COUNT without a NAME cannot be acted on. This block is what a
     // landing gate must print, and tests/serial-phase-failure-attribution.test.ts fails if it stops.
-    announce("run-tests: FAILING SERIAL FILE(S):");
+    const heading = allRefusals ? "run-tests: REFUSED SERIAL FILE(S):" : "run-tests: FAILING SERIAL FILE(S):";
+    announce(heading);
     for (const f of failures) {
       announce(
-        `  - ${f.file} (exit ${f.code}${f.timedOut ? ", TIMED OUT" : ""}) in ${f.secs}s` +
+        `  - ${f.file} (exit ${f.code}${f.timedOut ? ", TIMED OUT" : ""}${f.isRefusal ? ", REFUSED" : ""}) in ${f.secs}s` +
           `${f.log ? ` — log: ${f.log}` : ""}`,
       );
     }
   }
 
-  return failures.length > 0 ? failures[0].code : 0;
+  if (Array.isArray(failuresOut)) {
+    failuresOut.push(...failures);
+  }
+
+  const returnCode = anyProductFailure
+    ? (failures.find((f) => f.code !== ENVIRONMENTAL_REFUSAL_EXIT)?.code ?? 1)
+    : (failures[0]?.code ?? 0);
+  return returnCode;
 }

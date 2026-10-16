@@ -51,6 +51,7 @@ import { isPassiveContentFile } from "./lib/content-exemptions.mjs";
 import { emitGateLedger, explainChangedFileMapping } from "./lib/gate-manifest.mjs";
 import { decideBuild, ensureStoreBuild, findDistConsumers } from "./build-if-needed.mjs";
 import { checkBrowserPrerequisite } from "./lib/browser-prerequisite.mjs";
+import { ENVIRONMENTAL_REFUSAL_EXIT, combinePhaseExitCodes } from "./lib/environmental-verdict.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -707,12 +708,19 @@ export async function runPartitioned(files) {
   console.error(
     `select-tests: ${files.length} file(s) — partition: ${serial.length} serial hazard(s)${serial.length ? ` [${serial.join(", ")}]` : ""}, ${parallel.length} parallel`,
   );
-  let rc = 0;
-  if (serial.length) rc = runSerialFiles(serial, { cwd: ROOT });
+  let serialRc = 0;
+  if (serial.length) serialRc = runSerialFiles(serial, { cwd: ROOT });
+  let parallelRc = 0;
   const parallelTimeoutMs = computeParallelPhaseTimeout(parallel.length);
-  if (rc === 0 && parallel.length) rc = await runPhase(parallel, ["--parallel"], "parallel phase", parallelTimeoutMs);
-  return rc;
+  if ((serialRc === 0 || serialRc === ENVIRONMENTAL_REFUSAL_EXIT) && parallel.length) {
+    if (serialRc === ENVIRONMENTAL_REFUSAL_EXIT) {
+      announce(`\nselect-tests: serial phase REFUSED (exit ${ENVIRONMENTAL_REFUSAL_EXIT}) — running parallel phase with refusal stated`);
+    }
+    parallelRc = await runPhase(parallel, ["--parallel"], "parallel phase", parallelTimeoutMs);
+  }
+  return combinePhaseExitCodes(serialRc, parallelRc);
 }
+
 
 /**
  * Run one planned subset and write the coverage ledger. Returns the exit code (the caller decides
