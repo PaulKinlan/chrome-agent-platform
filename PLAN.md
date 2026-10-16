@@ -313,7 +313,7 @@ Also P0: `CAP-FB-20260827-MAIN-GATES-RED-02` (fixed and shipped; author review w
 
 ### Performance program (2026-10-01 audit)
 - **`chrome-agent-platform-9epn.2`** — NTP boot long task elimination: orders boot renders, yields between stages, defers non-hub element definitions, achieving 0 long tasks > 50ms on new tab load.
-- **`chrome-agent-platform-9epn.11`** — Bounded OPFS key counting: replaced full keys() enumerations in the memory.stores diagnostics route with countStoreKeys({ cap: 500 }), ensuring Settings → Data displays in < 5ms with zero keys() allocations.
+- **`chrome-agent-platform-9epn.11`** — Bounded OPFS key counting: replaced full keys() enumerations in the memory.stores diagnostics route with countStoreKeys({ cap: 500 }), ensuring Settings → Data displays with zero keys() allocations (< 5ms unit-benchmark budget measured on in-memory mock OPFS store; caveat: real-browser OPFS filesystem timing is unpinned pending seeded-profile browser measurement).
 
 **P1.** On-device text tools via Chrome built-in Summarizer / LanguageDetector / Translator (`chrome-agent-platform-3p3e.5`, offscreen execution, keyless/offline private summarization/detection/translation, `/summarise` & `/translate` composer commands); Template picker visual cards (`CAP-FB-20260829-TEMPLATE-CARDS-01`, candidate in
 review); dialog consolidation (five implementations, three hand-rolled outside the component

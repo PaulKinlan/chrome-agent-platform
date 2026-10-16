@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.717] — 2026-10-16
+- none: internal test and documentation honesty caveat for OPFS mock benchmark
+
 ## [0.3.716] — 2026-10-16
 - none: internal agent-worker protocol test pinning for completed runs, memory store count-semantics docs, and check diagnostics
 
