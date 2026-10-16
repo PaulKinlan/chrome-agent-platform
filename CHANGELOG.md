@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.703] — 2026-10-16
+- checks now genuinely stop when a tab cannot be activated. The activation call was being skipped entirely because the target id was read from the wrong level of the reply, so a dead tab could still be typed into; that is fixed and covered.
+
 ## [0.3.702] — 2026-10-15
 - Settings now shows per-service enclave call quotas with used, limit, remaining and window, and lets you set, reset or clear a service's limit (0 disables the service).
 
