@@ -180,10 +180,10 @@ export const SERIAL_FILE_TIMEOUTS = Object.freeze({
 // does not apply; the guard test pins the reason. Keep this list tiny —
 // membership is a review-time decision, never a default.
 export const EXEMPTIONS = {
-  // uvtk4: the fixture first creates a unique mkdtemp root, and all writes to
-  // extension/ and version files use paths joined under that root. The real
+  // uvtk4: the fixture first creates a unique temporary-directory root, and
+  // all writes to extension/ and version files use paths joined under it. The
   // checkout is only read for source copies; no shared build artifact changes.
-  "tests/bump-version-sanitize.test.ts": "writes extension/manifest.json and other version surfaces only inside each mkdtemp scratch mirror, removed in finally; the checkout is read-only and parallel execution is safe",
+  "tests/bump-version-sanitize.test.ts": "writes extension/manifest.json and other version surfaces only inside each unique temporary-directory fixture, removed in finally; the checkout is read-only and parallel execution is safe",
   // bvj5: flagged twice by the conservative detectors; both hits checked in the file
   // rather than assumed. (1) "names build.mjs" is a READ - the only reference is
   // Deno.readTextFile(build.mjs) as static input, with no Deno.Command, no spawn and
