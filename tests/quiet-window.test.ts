@@ -1170,32 +1170,42 @@ Deno.test("n64td / o7abi: createExecutableStub eliminates write-then-exec ETXTBS
 
     // 3. Negative control / fault-injection: prove that holding a write fd open on an inode
     // across rename DOES throw ETXTBSY, and spawnStub's retry mechanism detects and handles it
-    const retriesBefore = spawnStubRetries;
-    const leakTarget = `${dir}/leaked_cargo`;
-    const leakTmp = `${leakTarget}.tmp`;
-    const bytes = await Deno.readFile("/bin/sleep");
-    const leakFile = await Deno.open(leakTmp, { write: true, createNew: true, mode: 0o755 });
-    await leakFile.write(bytes);
-    await leakFile.sync();
-    // Deliberately keep leakFile open while renaming to target to simulate deferred write reference
-    await Deno.rename(leakTmp, leakTarget);
+    if (Deno.build.os === "linux") {
+      const retriesBefore = spawnStubRetries;
+      const leakTarget = `${dir}/leaked_cargo`;
+      const leakTmp = `${leakTarget}.tmp`;
+      const bytes = await Deno.readFile("/bin/sleep");
+      const leakFile = await Deno.open(leakTmp, { write: true, createNew: true, mode: 0o755 });
+      await leakFile.write(bytes);
+      await leakFile.sync();
+      // Deliberately keep leakFile open while renaming to target to simulate deferred write reference
+      await Deno.rename(leakTmp, leakTarget);
 
-    let threwEtxtbsy = false;
-    try {
-      new Deno.Command(leakTarget, { args: ["0.01"], stdout: "null", stderr: "null" }).spawn();
-    } catch (err: any) {
-      if (err?.message?.includes("os error 26") || err?.message?.includes("Text file busy") || err?.code === "ETXTBSY") {
-        threwEtxtbsy = true;
+      let threwEtxtbsy = false;
+      try {
+        new Deno.Command(leakTarget, { args: ["0.01"], stdout: "null", stderr: "null" }).spawn();
+      } catch (err: any) {
+        if (err?.message?.includes("os error 26") || err?.message?.includes("Text file busy") || err?.code === "ETXTBSY") {
+          threwEtxtbsy = true;
+        }
+      }
+      assert(threwEtxtbsy, "direct spawn with unclosed write fd must throw ETXTBSY");
+
+      // Verify spawnStub catches ETXTBSY and succeeds once the write fd is closed during backoff (xtji1)
+      const timer = setTimeout(() => {
+        try { leakFile.close(); } catch { /* ignore */ }
+      }, 25);
+      let recovered: Deno.ChildProcess | null = null;
+      try {
+        recovered = await spawnStub(leakTarget, { args: ["0.01"], stdout: "null", stderr: "null" });
+        const recStatus = await recovered.status;
+        assertEquals(recStatus.success, true);
+        assert(spawnStubRetries > retriesBefore, `spawnStub must advance retry count on ETXTBSY (before: ${retriesBefore}, after: ${spawnStubRetries})`);
+      } finally {
+        clearTimeout(timer);
+        try { leakFile.close(); } catch { /* already closed */ }
       }
     }
-    // Release the write fd so subsequent operations can proceed
-    leakFile.close();
-    assert(threwEtxtbsy, "direct spawn with unclosed write fd must throw ETXTBSY");
-
-    // After closing leakFile, spawnStub succeeds cleanly
-    const recovered = await spawnStub(leakTarget, { args: ["0.01"], stdout: "null", stderr: "null" });
-    const recStatus = await recovered.status;
-    assertEquals(recStatus.success, true);
   } finally {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
