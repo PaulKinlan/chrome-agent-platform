@@ -42,12 +42,8 @@
 
 import { masterMemory, siteMemory, canonicalOrigin } from "./memory.js";
 import { newId, sha256Hex } from "./pure.js";
-// The ONE diff core (jsdiff via ./shared/diff-core.js → dist bundle). The build
-// rewrites this dist import to the source wrapper for every bundle (build.mjs
-// `cap-diff-core-from-source`), so no second diff implementation ships and the
-// line delta a `patch_asset` reports is the SAME core the viewer/thread render
-// (CAP-FB-20260830-PATCH-ASSET-TOOL-01, DIFF-LIBRARY-01).
-import { lineDiffSummary } from "../dist/shared/diff-core.bundle.js";
+// The ONE diff core (jsdiff via ./shared/diff-core.js).
+import { lineDiffSummary } from "../shared/diff-core.js";
 
 const INDEX_KEY = "assets"; // reserved authority key (see memory.js)
 const REPAIR_KEY = "assetRepair"; // durable pending-deletion/restore state (reserved)

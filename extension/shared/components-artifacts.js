@@ -2,7 +2,7 @@
 
 import { t } from "./i18n.js";
 import { cachedRpc } from "./rpc-cache.js";
-import { lineDiffSummary } from "../dist/shared/diff-core.bundle.js";
+import { lineDiffSummary } from "./diff-core.js";
 
 import {
   Component,

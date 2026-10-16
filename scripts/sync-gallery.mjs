@@ -124,7 +124,7 @@ export async function syncGallery({ check = false } = {}) {
       expected = Buffer.from(expected.toString("utf8").replace("../lib/hub-timeline.js", "./hub-timeline.js"));
       expected = Buffer.from(expected.toString("utf8").replace("../lib/diagnostics-badge.js", "./diagnostics-badge.js"));
       expected = Buffer.from(expected.toString("utf8").replace("../lib/clipboard-tools.js", "./clipboard-tools.js"));
-      expected = Buffer.from(expected.toString("utf8").replace("../dist/shared/diff-core.bundle.js", "./diff-core.bundle.js"));
+      expected = Buffer.from(expected.toString("utf8").replace("./diff-core.js", "./diff-core.bundle.js"));
     }
     if (dst === "docs/diff-core.bundle.js") {
       // Developer builds append a sourceMappingURL; the gallery copy carries no
