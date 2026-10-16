@@ -7,7 +7,7 @@
 // previous message said only "no reachable test", which read identically for
 // three different causes.
 //
-// THE TWO CLASSES:
+// THE THREE CLASSES:
 //
 //   1. UNIMPORTED HARNESSES. scripts/a11y-audit.ts and scripts/sidebar-parity.ts
 //      are uncovered; scripts/kat-constrained-width-layout.ts (via tests/harness-marks.test.ts),
@@ -37,10 +37,8 @@
 //   3. TWO EXPORT ENTRY HTML DOCUMENTS (3p3e.12). These have no import graph
 //      edge, but tests/thread-export-entry-html.test.ts reads their actual
 //      button/label/initial-state and the loaded script's exact route wiring.
-//   4. FOUR UNIMPORTED EXPORT ENTRY SCRIPTS (jhfji). They are reached at
-//      runtime, but the selector cannot infer that from static imports. Each
-//      LITERAL path maps to an executable UI / SW / reachability contract.
-//      Map ONLY those literal paths — siblings still fail closed.
+//      The Export JS entry scripts DO have import/URL edges; selector-level
+//      tests pin their real guard selection instead of declaring dead mappings.
 //
 // Everything else stays FAIL CLOSED, and now says which file and which mechanism
 // forced it.
@@ -77,19 +75,6 @@ export const BOOKKEEPING_GUARDS = Object.freeze([
 export const HTML_EXPORT_ENTRY_GUARDS = Object.freeze({
   "extension/ntp/ntp.html": Object.freeze(["tests/thread-export-entry-html.test.ts"]),
   "extension/artifact/artifact.html": Object.freeze(["tests/thread-export-entry-html.test.ts"]),
-});
-
-/** Exact runtime entry paths with executable export wiring/authority guards.
- * No wildcard, directory, or adjacent JS file belongs to this map. */
-export const EXPORT_JS_ENTRY_GUARDS = Object.freeze({
-  "extension/artifact/artifact.js": Object.freeze(["tests/thread-export-entry-html.test.ts"]),
-  "extension/ntp/ntp.js": Object.freeze(["tests/thread-export-entry-html.test.ts"]),
-  "extension/background/service-worker.js": Object.freeze([
-    "tests/thread-export-sw-entry.test.ts",
-    "tests/sw-dispatch-authority-census.test.ts",
-    "tests/thread-export-route.test.ts",
-  ]),
-  "scripts/check-reachability.mjs": Object.freeze(["tests/reachability.test.ts"]),
 });
 
 /** The three files the post-commit version hook rewrites. */
@@ -247,12 +232,6 @@ export function classifyUncovered(rel, { versionOnly = false } = {}) {
     return {
       mechanism: "exact HTML Export entry read and wired by the focused DOM-entry contract test",
       tests: [...HTML_EXPORT_ENTRY_GUARDS[path]],
-    };
-  }
-  if (Object.hasOwn(EXPORT_JS_ENTRY_GUARDS, path)) {
-    return {
-      mechanism: "exact runtime Export JS entry inspected by executable DOM/dispatch/reachability contract guards",
-      tests: [...EXPORT_JS_ENTRY_GUARDS[path]],
     };
   }
   if (isBookkeepingFile(path)) {

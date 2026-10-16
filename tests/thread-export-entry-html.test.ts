@@ -4,6 +4,10 @@
 import { assert, assertEquals, assertMatch, assertStringIncludes } from "jsr:@std/assert@1";
 const root = new URL("../extension/", import.meta.url);
 const source = (path: string) => Deno.readTextFileSync(new URL(path, root));
+// Literal URLs create selector edges from each JS entry to this executable
+// Export guard. Dynamic source(path) reads alone do not give it those edges.
+const ntpScript = new URL("../extension/ntp/ntp.js", import.meta.url);
+const artifactScript = new URL("../extension/artifact/artifact.js", import.meta.url);
 
 function entryButton(html: string, id: string, label: string, initialState: "hidden" | "disabled") {
   const tags = [...html.matchAll(/<button\b[^>]*>[^<]*<\/button>/g)].map((m) => m[0]);
@@ -23,7 +27,7 @@ Deno.test("thread HTML: labelled, initially hidden Export action is in the loade
   const threadHeader = html.match(/<div id="thread-view"[^>]*>[\s\S]*?<div class="view-head">([\s\S]*?)<div class="thread-body">/)?.[1];
   assert(threadHeader, "the task-thread header exists in the shipped document");
   assertStringIncludes(entryButton(threadHeader, "export-thread", "Export thread as HTML", "hidden"), "Export thread…");
-  const js = source("ntp/ntp.js");
+  const js = Deno.readTextFileSync(ntpScript);
   assertStringIncludes(js, 'document.getElementById("export-thread")');
   assertStringIncludes(js, 'exportThreadBtn?.addEventListener("click"');
   assertMatch(js, /openThreadExportPreview\(\{\s*kind:\s*"thread",\s*id/);
@@ -36,7 +40,7 @@ Deno.test("artifact HTML: labelled, disabled-until-loaded Export action is in th
   const toolbar = html.match(/<div\s+class="head-right">[\s\S]*?<\/div>/)?.[0];
   assert(toolbar, "the standalone artifact viewer toolbar exists");
   assertStringIncludes(entryButton(toolbar, "export-html", "Export artifact as HTML", "disabled"), "Export HTML…");
-  const js = source("artifact/artifact.js");
+  const js = Deno.readTextFileSync(artifactScript);
   assertStringIncludes(js, 'document.getElementById("export-html")');
   assertStringIncludes(js, 'exportBtn?.addEventListener("click"');
   assertMatch(js, /openThreadExportPreview\(\{\s*kind:\s*"artifact",\s*id,\s*origin/);

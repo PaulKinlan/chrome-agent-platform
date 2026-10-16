@@ -19,7 +19,6 @@ import {
   classifyUncovered,
   HARNESS_TREE_GUARDS,
   HTML_EXPORT_ENTRY_GUARDS,
-  EXPORT_JS_ENTRY_GUARDS,
   isGuardEnumeratedScript,
   isScriptsHarness,
   isSelectorInfrastructure,
@@ -28,7 +27,13 @@ import {
   VERSION_FIELDS_BY_FILE,
   versionOnlyJsonChange,
 } from "../scripts/lib/changed-file-mapping.mjs";
-import { mergeBaseOf, versionOnlyAgainst } from "../scripts/select-tests.mjs";
+import {
+  buildReverseGraph,
+  changedWithoutCoverage,
+  mergeBaseOf,
+  selectTestFiles,
+  versionOnlyAgainst,
+} from "../scripts/select-tests.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const BASE = JSON.stringify({
@@ -272,23 +277,20 @@ Deno.test("3p3e.12: ONLY the two shipped Export HTML documents map to the exact 
   }
 });
 
-Deno.test("jhfji: only the four literal Export-path JS files map to executable inspecting guards", () => {
-  const exact = [
-    "extension/artifact/artifact.js",
-    "extension/background/service-worker.js",
-    "extension/ntp/ntp.js",
-    "scripts/check-reachability.mjs",
-  ];
-  assertEquals(Object.keys(EXPORT_JS_ENTRY_GUARDS).sort(), [...exact].sort());
-  for (const file of exact) {
-    const verdict = classifyUncovered(file);
-    assertEquals(verdict.tests, [...EXPORT_JS_ENTRY_GUARDS[file]]);
-    assert(verdict.tests.length > 0);
-    const expectedSource = file.startsWith("extension/") ? file.slice("extension/".length) : file;
-    assert(Deno.statSync(`${ROOT}${file}`).isFile, `${file} exists in the shipped tree`);
+Deno.test("y546u: Export JS guards are reached through real selector edges, not dead uncovered-file mappings", () => {
+  const reverse = buildReverseGraph();
+  const exact = new Map([
+    ["extension/artifact/artifact.js", "tests/thread-export-entry-html.test.ts"],
+    ["extension/background/service-worker.js", "tests/thread-export-sw-entry.test.ts"],
+    ["extension/ntp/ntp.js", "tests/thread-export-entry-html.test.ts"],
+    ["scripts/check-reachability.mjs", "tests/reachability.test.ts"],
+  ]);
+  for (const [file, guard] of exact) {
+    assertEquals(changedWithoutCoverage([file], reverse), [], `${file} already has a real reverse-import edge`);
+    assertEquals(classifyUncovered(file).tests, [], `${file} must not claim an unreachable-file mapping`);
     assert(
-      verdict.tests.some((test: string) => Deno.readTextFileSync(`${ROOT}${test}`).includes(expectedSource)),
-      `${file} must be read or imported by a declared guard, not mapped to an unrelated test`,
+      selectTestFiles([file], reverse).includes(guard),
+      `${file} must select its executable Export guard via the actual selector, not only classifyUncovered()`,
     );
   }
   for (const file of [
@@ -297,9 +299,6 @@ Deno.test("jhfji: only the four literal Export-path JS files map to executable i
   ]) {
     assertEquals(classifyUncovered(file).tests, [], `${file} must remain full-gate unmappable`);
   }
-  const grouped = mapUncovered([...exact, "extension/ntp/other.js"]);
-  assertEquals(grouped.mapped.map((m: any) => m.file).sort(), [...exact].sort());
-  assertEquals(grouped.unmappable.map((m: any) => m.file), ["extension/ntp/other.js"]);
 });
 
 Deno.test("nco2: mapUncovered splits mapped from unmappable and carries the reason", () => {
