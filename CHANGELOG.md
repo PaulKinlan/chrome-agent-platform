@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.716] — 2026-10-16
+- none: internal test stub construction and ETXTBSY race elimination
+
 ## [0.3.715] — 2026-10-16
 - none: internal test stub construction and ETXTBSY race elimination
 
