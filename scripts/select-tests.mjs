@@ -575,8 +575,9 @@ export function changedWithoutCoverage(changed, reverse) {
   return uncovered;
 }
 
-export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
-const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_MS ?? DEFAULT_PARALLEL_TIMEOUT_MS);
+import { computeParallelPhaseTimeout, DEFAULT_PARALLEL_TIMEOUT_MS } from "./lib/parallel-plan.mjs";
+
+export { DEFAULT_PARALLEL_TIMEOUT_MS, computeParallelPhaseTimeout };
 
 /**
  * Every suite the repo's runners can execute — the same walk as scripts/run-tests.mjs's
@@ -629,7 +630,8 @@ export function omittedInventory(files, reason, limit = omittedLimit()) {
   };
 }
 
-function runPhase(files, flags, label, timeoutMs = 300_000) {
+function runPhase(files, flags, label, timeoutMs = null) {
+  const effectiveTimeoutMs = timeoutMs ?? computeParallelPhaseTimeout(files.length);
   // Deno schedules parallel files independently; print candidate names first
   // so a mid-phase kill retains attribution without falsely naming a culprit.
   announce(`select-tests: ${label} candidates (${files.length} file(s)):\n${files.map((file) => `  - ${file}`).join("\n")}`);
@@ -645,13 +647,13 @@ function runPhase(files, flags, label, timeoutMs = 300_000) {
 
     let timedOut = false;
     let timer = null;
-    if (timeoutMs > 0 && Number.isFinite(timeoutMs)) {
+    if (effectiveTimeoutMs > 0 && Number.isFinite(effectiveTimeoutMs)) {
       timer = setTimeout(() => {
         timedOut = true;
         if (child.pid) {
           try { process.kill(-child.pid, "SIGKILL"); } catch { /* gone */ }
         }
-      }, timeoutMs);
+      }, effectiveTimeoutMs);
     }
 
     const onSig = (sig) => {
@@ -679,7 +681,7 @@ function runPhase(files, flags, label, timeoutMs = 300_000) {
     child.on("close", (code, signal) => {
       cleanup();
       if (timedOut) {
-        announce(`select-tests: ${label} TIMED OUT after ${timeoutMs / 1000}s`);
+        announce(`select-tests: ${label} TIMED OUT after ${effectiveTimeoutMs / 1000}s`);
         announce(`select-tests: TIMED-OUT ${label.toUpperCase()} CANDIDATE FILE(S) (culprit unconfirmed):`);
         for (const file of files) announce(`  - ${file} (${label} timed out; individual culprit unknown)`);
         resolve(124);
@@ -708,7 +710,8 @@ export async function runPartitioned(files) {
   );
   let rc = 0;
   if (serial.length) rc = runSerialFiles(serial, { cwd: ROOT });
-  if (rc === 0 && parallel.length) rc = await runPhase(parallel, ["--parallel"], "parallel phase", PARALLEL_PHASE_TIMEOUT_MS);
+  const parallelTimeoutMs = computeParallelPhaseTimeout(parallel.length);
+  if (rc === 0 && parallel.length) rc = await runPhase(parallel, ["--parallel"], "parallel phase", parallelTimeoutMs);
   return rc;
 }
 

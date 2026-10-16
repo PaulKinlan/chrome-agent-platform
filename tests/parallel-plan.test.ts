@@ -9,7 +9,7 @@
 // serial failure still runs the always-on subset, and the run says how much it skipped — because a
 // gate that cannot tell you what it ran is the other half of this bead's family.
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { guardSubset, parallelPlan } from "../scripts/lib/parallel-plan.mjs";
+import { guardSubset, parallelPlan, computeParallelPhaseTimeout, DEFAULT_PARALLEL_TIMEOUT_MS } from "../scripts/lib/parallel-plan.mjs";
 
 const PARALLEL = ["tests/a.test.ts", "tests/b.test.ts", "tests/durable-root.test.ts", "tests/c.test.ts"];
 const ALWAYS_ON = ["tests/durable-root.test.ts", "tests/core.test.ts"];
@@ -48,4 +48,42 @@ Deno.test("kz27: the plan is not a blanket 'run everything' — the failure stat
   // An always-on file that is not in this run's parallel set is simply not run here (it belongs to
   // another phase) — the subset is an intersection, not an assumption.
   assertEquals(guardSubset(PARALLEL, ["tests/not-in-this-run.test.ts"]), []);
+});
+
+Deno.test("877x1: computeParallelPhaseTimeout adapts dynamically to CPU concurrency and file count", () => {
+  // On a 2-vCPU machine with 800 files, timeout scales beyond the 1800s floor (neutralize fleet full-gate env pin)
+  const scaled2Cpu = computeParallelPhaseTimeout(800, { cpus: 2, minMs: 0, ignoreEnv: true });
+  // 120s + (800 * 5s) / 2 = 120s + 2000s = 2120s = 2,120,000 ms
+  assertEquals(scaled2Cpu, 2_120_000);
+
+  // On an 8-vCPU machine with 800 files, timeout scales down proportionally
+  const scaled8Cpu = computeParallelPhaseTimeout(800, { cpus: 8, minMs: 0, ignoreEnv: true });
+  // 120s + (800 * 5s) / 8 = 120s + 500s = 620s = 620,000 ms
+  assertEquals(scaled8Cpu, 620_000);
+
+  // Standard minMs floor preserves DEFAULT_PARALLEL_TIMEOUT_MS (1800s) for smaller counts
+  const smallSuite = computeParallelPhaseTimeout(10, { cpus: 2, ignoreEnv: true });
+  assertEquals(smallSuite, DEFAULT_PARALLEL_TIMEOUT_MS);
+
+  // Production option-less call: for current suite size (~687 files), respects DEFAULT_PARALLEL_TIMEOUT_MS floor (882rr)
+  const optionless = computeParallelPhaseTimeout(687);
+  assert(optionless >= DEFAULT_PARALLEL_TIMEOUT_MS, "option-less call must respect at least the default floor");
+
+  // On 2 CPUs with real suite size (687 files), scales above the 1800s floor (882rr)
+  const scaledRealSuite2Cpu = computeParallelPhaseTimeout(687, { cpus: 2, ignoreEnv: true });
+  assertEquals(scaledRealSuite2Cpu, 1_837_500);
+
+  // Massive suite scales option-less above 1800s floor even on multi-core host
+  const massiveSuite = computeParallelPhaseTimeout(5000, { cpus: 8, ignoreEnv: true });
+  assertEquals(massiveSuite, 3_245_000);
+
+  // Explicit positive envTimeout override is honored
+  const overridden = computeParallelPhaseTimeout(800, { envTimeout: "999000", cpus: 2 });
+  assertEquals(overridden, 999_000);
+
+  // bzk6g: Explicit 0 or negative envTimeout disables the timeout (returns 0)
+  const disabledZero = computeParallelPhaseTimeout(800, { envTimeout: "0", cpus: 2 });
+  assertEquals(disabledZero, 0, "envTimeout 0 must return 0 to disable kill timer");
+  const disabledNegative = computeParallelPhaseTimeout(800, { envTimeout: "-1", cpus: 2 });
+  assertEquals(disabledNegative, 0, "negative envTimeout must return 0 to disable kill timer");
 });
