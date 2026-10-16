@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.722] — 2026-10-16
+- Sandboxed scripts now use the brokered background connection on registered runs, preventing unbrokered direct fetches.
+
 ## [0.3.721] — 2026-10-16
 - a Chrome launch is no longer reported as protected before its crash watchdog is in its own session, so a test runner that kills the whole process group can no longer orphan a browser
 

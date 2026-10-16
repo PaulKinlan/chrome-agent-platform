@@ -39,7 +39,7 @@ function validateUrl(url) {
  * SERVICE WORKER (chrome.runtime `cap:fetch`) so the cross-origin fetch carries
  * the extension's host permission — a DIRECT fetch from the NTP/offscreen page
  * is CORS-blocked for a cross-origin page with no Access-Control-Allow-Origin. */
-export async function runFetch(payload, runId = null) {
+export async function runFetch(payload, runId = null, { allowDirect = false } = {}) {
   const v = validateUrl(payload?.url);
   if (!v.ok) return { ok: false, error: v.error };
   const method = payload?.opts?.method ? String(payload.opts.method).toUpperCase() : "GET";
@@ -60,6 +60,12 @@ export async function runFetch(payload, runId = null) {
     } catch (e) {
       return { ok: false, error: `fetch failed: ${e?.message ?? e}` };
     }
+  }
+  // Confine direct-fetch fallback (te1pu): a registered run must never bypass the
+  // brokered route. Direct fetch is allowed only when explicitly permitted or in
+  // un-scoped unit test contexts without a runId.
+  if (runId != null && !allowDirect) {
+    return { ok: false, error: "fetch failed: brokered service worker route unavailable for run" };
   }
   let res;
   try {

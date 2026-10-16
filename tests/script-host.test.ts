@@ -93,3 +93,38 @@ Deno.test("script host: handleScriptRunMessage fails closed on invalid module na
   assertEquals(response?.error?.includes("Invalid module name"), true);
 });
 
+Deno.test("script host te1pu: runFetch refuses direct fetch fallback on registered run when chrome.runtime is absent", async () => {
+  const { runFetch } = await import("../extension/lib/script-host.js");
+  const origChrome = globalThis.chrome;
+  const origFetch = globalThis.fetch;
+  let fetchCalled = false;
+  try {
+    delete globalThis.chrome;
+    globalThis.fetch = async () => {
+      fetchCalled = true;
+      return new Response("ok", { status: 200 });
+    };
+
+    // 1. With runId and chrome absent: fails closed, never calls direct fetch
+    const runRes = await runFetch({ url: "https://example.com/api" }, "registered-run-123");
+    assertEquals(runRes.ok, false);
+    assertEquals(runRes.error, "fetch failed: brokered service worker route unavailable for run");
+    assertEquals(fetchCalled, false, "direct fetch must NOT be invoked on a run-scoped path");
+
+    // 2. Unscoped call (runId == null) preserves the test fallback
+    const unscopedRes = await runFetch({ url: "https://example.com/api" }, null);
+    assertEquals(unscopedRes.ok, true);
+    assertEquals(fetchCalled, true, "direct fetch allowed in unscoped test context");
+
+    // 3. Explicit allowDirect override allows direct fetch even with runId
+    fetchCalled = false;
+    const explicitRes = await runFetch({ url: "https://example.com/api" }, "registered-run-123", { allowDirect: true });
+    assertEquals(explicitRes.ok, true);
+    assertEquals(fetchCalled, true);
+  } finally {
+    globalThis.chrome = origChrome;
+    globalThis.fetch = origFetch;
+  }
+});
+
+
