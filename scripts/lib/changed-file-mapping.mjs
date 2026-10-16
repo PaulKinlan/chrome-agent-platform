@@ -292,18 +292,31 @@ export function classifyUncovered(rel, { versionOnly = false } = {}) {
 }
 
 /**
- * Map a whole uncovered list. `versionOnlyFor(rel)` is injected so the caller
- * owns git access.
+ * Map a whole uncovered list. The caller supplies git access and the CURRENT
+ * worktree's declared-test existence check. Both are required: assuming that a
+ * declared guard exists lets a missing test silently turn coverage into core-only.
  *
  * `mapped` is `[{ file, mechanism, tests }]`; `unmappable` is the same shape
  * with no tests, and its presence means the caller must run the full suite and
  * print every entry — a full-suite run that says why it ran.
  */
-export function mapUncovered(uncovered, versionOnlyFor = () => false) {
+export function mapUncovered(uncovered, versionOnlyFor, declaredTestExists) {
+  if (typeof versionOnlyFor !== "function" || typeof declaredTestExists !== "function") {
+    throw new Error("mapUncovered: version-only and declared guard existence predicates are required");
+  }
   const mapped = [];
   const unmappable = [];
   for (const file of uncovered) {
     const verdict = classifyUncovered(file, { versionOnly: versionOnlyFor(file) });
+    const missing = verdict.tests.filter((test) => !declaredTestExists(test));
+    if (missing.length) {
+      unmappable.push({
+        file,
+        mechanism: `${verdict.mechanism}; ${file} declared guard missing or not a file: ${missing.join(", ")}`,
+        tests: [],
+      });
+      continue;
+    }
     (verdict.tests.length ? mapped : unmappable).push({ file, ...verdict });
   }
   return { mapped, unmappable };

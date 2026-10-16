@@ -837,7 +837,9 @@ export function planSelection({ base = "origin/main" } = {}) {
 
   const baseRef = mergeBaseOf(base);
   const { mapped, unmappable } = uncovered.length
-    ? mapUncovered(uncovered, (rel) => versionOnlyAgainst(baseRef, rel))
+    ? mapUncovered(uncovered, (rel) => versionOnlyAgainst(baseRef, rel), (test) => {
+      try { return statSync(join(ROOT, test)).isFile(); } catch { return false; }
+    })
     : { mapped: [], unmappable: [] };
 
   if (unmappable.length) {
