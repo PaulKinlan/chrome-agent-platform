@@ -991,7 +991,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "caveats": V1,
   "capabilities": C1,
   "replayClass": S[2],
-  "licence": L0,
+  "licence": L2,
   "binary": {
    "sha256": "984b12e3b76a670fe58f43aa965658cdfefe0867f88c4935a292f68bdf3c55e1",
    "bytes": 11891,

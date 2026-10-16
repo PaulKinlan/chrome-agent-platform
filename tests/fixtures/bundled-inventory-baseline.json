@@ -1,11 +1,11 @@
 {
   "_comment": [
-    "Baseline for tests/bundled-tool-packages.test.ts — the predecessor inventory that",
+    "Baseline for tests/bundled-tool-packages.test.ts \u2014 the predecessor inventory that",
     "regeneration must not silently change. Taken from git history at the commit named",
     "in takenAt (the test verifies that commit exists, so a hand-edited provenance fails).",
     "",
     "WHEN TO RE-TAKE: only when a digest change is REVIEWED as intentional. Adding a",
-    "package does NOT require re-taking this file — additions are asserted elsewhere and",
+    "package does NOT require re-taking this file \u2014 additions are asserted elsewhere and",
     "do not change an existing digest. A digest change must either be declared in",
     "intentionalReadmissions with a reason, or this baseline must be re-taken, which is a",
     "visible diff in review. That is the point: chrome-agent-platform-ne8u replaced a",
@@ -229,7 +229,7 @@
     },
     {
       "pkg": "cap.bundled.hash.blake3",
-      "reason": "chrome-agent-platform-7rok: build.rebuildRef now names the real reproduction script, so this manifest digest moves by design"
+      "reason": "chrome-agent-platform-7rok: build.rebuildRef now names the real reproduction script, so this manifest digest moves by design; chrome-agent-platform-10z9: license.file now names hash-wasm-MIT.txt (hash-wasm 4.12.0's blake3, Copyright (c) 2020 Dani Biro) instead of the a2 lane's MIT.txt - the attribution this tool actually ships - so the digest moves a second time by design"
     },
     {
       "pkg": "cap.bundled.imageops",
