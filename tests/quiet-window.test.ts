@@ -54,6 +54,48 @@ function sample(over: Partial<LoadSample> = {}): LoadSample {
 
 const SPEC = { maxLoadPerCore: 0.35, maxCompilers: 1, maxWaitMs: 1000, sampleMs: 50, sustainedSamples: 3 };
 
+/**
+ * Create an executable stub pointing to `source`.
+ * Uses symlink on both Darwin and Linux to eliminate the write-then-exec race
+ * (ETXTBSY / os error 26, chrome-agent-platform-n64td) caused by spawning immediately
+ * after writing to a file while the kernel inode write reference or background thread
+ * close is still pending. Falls back to fsync'd copy+rename if symlinking fails.
+ */
+async function createExecutableStub(target: string, source: string): Promise<void> {
+  try {
+    await Deno.symlink(source, target);
+  } catch {
+    const tmp = `${target}.tmp.${Date.now()}`;
+    await Deno.copyFile(source, tmp);
+    const f = await Deno.open(tmp, { read: true, write: true });
+    await f.sync();
+    f.close();
+    await Deno.chmod(tmp, 0o755);
+    await Deno.rename(tmp, target);
+  }
+}
+
+/**
+ * Spawn an executable stub with bounded ETXTBSY retry as defense-in-depth against
+ * transient OS write-lock latency under extreme host load.
+ */
+async function spawnStub(cmd: string, options: Deno.CommandOptions): Promise<Deno.ChildProcess> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      return new Deno.Command(cmd, options).spawn();
+    } catch (err: any) {
+      lastErr = err;
+      if (err?.message?.includes("os error 26") || err?.message?.includes("Text file busy") || err?.code === "ETXTBSY") {
+        await new Promise((r) => setTimeout(r, 20 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
 /** The real esbuild binary (not the .bin shim), so a spawned burner is a REAL
  *  compiler whose /proc comm is `esbuild`. Discovered rather than pinned to one
  *  platform directory: a pin names one machine's layout (chrome-agent-platform-icf1). */
@@ -189,12 +231,8 @@ Deno.test("dnop: the REAL sampler counts this test's compiling process and not i
   let compiler: Deno.ChildProcess | null = null;
   try {
     for (const n of ["rustc", "esbuild", "cargo"]) {
-      if (Deno.build.os === "darwin") {
-        await Deno.symlink("/bin/sleep", `${dir}/${n}`);
-      } else {
-        await Deno.copyFile("/bin/sleep", `${dir}/${n}`);
-      }
-      parked.push(new Deno.Command(`${dir}/${n}`, { args: ["30"], stdout: "null", stderr: "null" }).spawn());
+      await createExecutableStub(`${dir}/${n}`, "/bin/sleep");
+      parked.push(await spawnStub(`${dir}/${n}`, { args: ["30"], stdout: "null", stderr: "null" }));
     }
     await new Promise((r) => setTimeout(r, 500));
     const first = await readLoadSample();
@@ -971,15 +1009,15 @@ Deno.test("qs8v7: the REAL sampler groups this test\'s nine children under their
   let job: Deno.ChildProcess | null = null;
   try {
     // The fixture is the incident's shape: a HEAVY-NAMED parent (cargo) that forks nine rustc
-    // children. /bin/sh copies make both names real executables.
-    await Deno.copyFile("/bin/sh", `${dir}/cargo`);
-    await Deno.copyFile("/bin/sleep", `${dir}/rustc`);
+    // children. Stubs point to real executables without write-then-exec race (n64td).
+    await createExecutableStub(`${dir}/cargo`, "/bin/sh");
+    await createExecutableStub(`${dir}/rustc`, "/bin/sleep");
     await Deno.writeTextFile(pidFile, "");
     const before = await readLoadSample();
-    job = new Deno.Command(`${dir}/cargo`, {
+    job = await spawnStub(`${dir}/cargo`, {
       args: ["-c", `for i in 1 2 3 4 5 6 7 8 9; do ${dir}/rustc 10 & echo $! >> ${pidFile}; done; wait`],
       stdout: "null", stderr: "null",
-    }).spawn();
+    });
     let pids: string[] = [];
     for (let attempt = 0; attempt < 40 && pids.length < 9; attempt++) {
       await new Promise((r) => setTimeout(r, 50));
@@ -1006,6 +1044,21 @@ Deno.test("qs8v7: the REAL sampler groups this test\'s nine children under their
     try {
       await new Deno.Command("sh", { args: ["-c", `pkill -f ${dir}/rustc || true`], stdout: "null", stderr: "null" }).output();
     } catch { /* best effort */ }
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("n64td: createExecutableStub eliminates write-then-exec ETXTBSY race across multiple rapid cycles", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "cap-n64td-stubs-" });
+  try {
+    for (let i = 0; i < 20; i++) {
+      const target = `${dir}/cargo_${i}`;
+      await createExecutableStub(target, "/bin/sleep");
+      const proc = await spawnStub(target, { args: ["0.01"], stdout: "null", stderr: "null" });
+      const status = await proc.status;
+      assertEquals(status.success, true);
+    }
+  } finally {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 });
