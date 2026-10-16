@@ -1024,6 +1024,16 @@ export function createAcpServer(
       } catch (e) {
         error = sanitizeLogString(String((e as Error)?.message ?? e));
       }
+      let safeError = "";
+      if (error) {
+        if (authenticated) {
+          safeError = error;
+        } else if (error.includes("unknown harness")) {
+          safeError = error;
+        } else {
+          safeError = "adapter resolution failed";
+        }
+      }
       // `ok` is the BRIDGE being up. A readiness probe would need a turn, so
       // this endpoint never pretends to know more than it does.
       return new Response(
@@ -1034,15 +1044,15 @@ export function createAcpServer(
           probeHarness,
           supportsHarnessSelection: !adapterPathOverride,
           pinnedAdapter: Boolean(adapterPathOverride),
-          adapter: adapterDescribe || "(unresolved)",
-          adapterPresent,
+          adapter: authenticated ? (adapterDescribe || "(unresolved)") : "(unauthenticated)",
+          adapterPresent: authenticated ? adapterPresent : null,
           defaultCwd: authenticated ? defaultCwdValue : null,
           knownHarnesses: Object.keys(HARNESS_ADAPTERS),
           harnessCli: Object.hasOwn(HARNESS_CLI, rawProbeHarness) ? HARNESS_CLI[rawProbeHarness].cli : null,
           harnessCliPath: authenticated && Object.hasOwn(HARNESS_CLI, rawProbeHarness)
             ? (resolveCliOnPath(HARNESS_CLI[rawProbeHarness].cli, Deno.env.get("PATH") ?? "") || null)
             : null,
-          ...(error ? { error } : {}),
+          ...(safeError ? { error: safeError } : {}),
         }),
         { headers: { "Content-Type": "application/json" } },
       );
