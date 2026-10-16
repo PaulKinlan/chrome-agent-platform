@@ -34,6 +34,12 @@ export function hasBuildInfraChanges(changedFiles) {
 
 export function defaultGetChangedFiles(root = ROOT, options = {}) {
   try {
+    const headRev = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    const headSha = headRev.status === 0 ? headRev.stdout?.trim() : null;
+
     let base = options?.baseRef;
     if (!base) {
       const explicitBaseIdx = process.argv.indexOf("--base");
@@ -47,18 +53,38 @@ export function defaultGetChangedFiles(root = ROOT, options = {}) {
         cwd: root,
         encoding: "utf8",
       });
-      if (mb.status === 0 && mb.stdout?.trim()) {
+      if (mb.status === 0 && mb.stdout?.trim() && mb.stdout.trim() !== headSha) {
         base = mb.stdout.trim();
       }
     }
     if (!base) {
-      // Fallback: check if HEAD~1 exists
-      const rev = spawnSync("git", ["rev-parse", "--verify", "HEAD~1"], {
+      // Fallback: check if local main exists (e.g. repo without origin/main remote ref)
+      const mbLocal = spawnSync("git", ["merge-base", "main", "HEAD"], {
         cwd: root,
         encoding: "utf8",
       });
-      if (rev.status === 0) {
-        base = "HEAD~1";
+      if (mbLocal.status === 0 && mbLocal.stdout?.trim() && mbLocal.stdout.trim() !== headSha) {
+        base = mbLocal.stdout.trim();
+      }
+    }
+    if (!base) {
+      // Fallback: check if HEAD is a merge commit (multiple parents).
+      // On a merge commit, HEAD~1 inspects only the first parent and ignores
+      // other branches in a batched union, recreating the partial delta bug (chrome-agent-platform-6c97h).
+      // If HEAD is not a merge commit, HEAD~1 safely inspects the single commit.
+      const isMerge = spawnSync("git", ["rev-parse", "--verify", "HEAD^2"], {
+        cwd: root,
+        encoding: "utf8",
+      }).status === 0;
+
+      if (!isMerge) {
+        const rev = spawnSync("git", ["rev-parse", "--verify", "HEAD~1"], {
+          cwd: root,
+          encoding: "utf8",
+        });
+        if (rev.status === 0) {
+          base = "HEAD~1";
+        }
       }
     }
 
@@ -71,7 +97,15 @@ export function defaultGetChangedFiles(root = ROOT, options = {}) {
         return diff.stdout.trim().split("\n").filter(Boolean);
       }
     } else {
-      // Root commit with no base: inspect commit tree
+      // Root commit or unresolvable merge with no base: inspect commit tree or fail closed
+      const isMerge = spawnSync("git", ["rev-parse", "--verify", "HEAD^2"], {
+        cwd: root,
+        encoding: "utf8",
+      }).status === 0;
+      if (isMerge) {
+        // Unresolvable merge with no base: return empty array so hasBuildInfraChanges fails closed
+        return [];
+      }
       const show = spawnSync("git", ["show", "--name-only", "--format=", "HEAD"], {
         cwd: root,
         encoding: "utf8",
