@@ -30,7 +30,7 @@
 import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
-import { execSync } from "child_process";
+import { execSync, execFileSync } from "child_process";
 // ONE source of truth for what counts as a user-facing bullet. This file used to
 // carry its own copy of the six filter regexes plus isUserFacingEntry, justified
 // as "so the standalone script functions in scratch temporary test mirrors". The
@@ -81,11 +81,37 @@ const argv = process.argv.slice(2);
 const type = argv.find((a) => !a.startsWith("-")) || "patch";
 const mi = argv.findIndex((a) => a === "--message" || a === "-m");
 const message = mi >= 0 ? argv[mi + 1] : null;
-const uni = argv.findIndex((a) => a === "--user-note" || a === "--note");
-const userNote = uni >= 0 ? argv[uni + 1] : null;
-const skipIfNoNote = argv.includes("--skip-if-no-note") || argv.includes("--hook");
+const landingMode = argv.includes("--landing");
 const hookMode = argv.includes("--hook");
-// Explicit merger-only repair: after a union leaves the surfaces one patch ahead
+if (landingMode && hookMode) {
+  console.error("[bump-version] ERROR: --landing cannot be combined with --hook");
+  process.exit(1);
+}
+const notes = [];
+for (let i = 0; i < argv.length; i++) {
+  if (argv[i] === "--user-note" || argv[i] === "--note") notes.push(argv[++i]);
+  if (argv[i] === "--from") {
+    const sha = argv[++i];
+    if (!landingMode || !sha || !/^[a-f0-9]{7,64}$/i.test(sha)) {
+      console.error("[bump-version] ERROR: --from requires --landing and a commit SHA");
+      process.exit(1);
+    }
+    let body;
+    try {
+      body = execFileSync("git", ["show", "-s", "--format=%B", sha], { cwd: ROOT, encoding: "utf8" });
+    } catch {
+      console.error(`[bump-version] ERROR: cannot read landing commit ${sha}`);
+      process.exit(1);
+    }
+    for (const line of body.split(/\r?\n/)) {
+      const match = /^Release-note:\s*(.*)$/i.exec(line);
+      if (match) notes.push(match[1]);
+    }
+  }
+}
+const userNote = notes[0] ?? null;
+const skipIfNoNote = argv.includes("--skip-if-no-note") || hookMode || landingMode;
+// Explicit merger-only repair (also available with --landing): after a union leaves the surfaces one patch ahead
 // of CHANGELOG, use the changelog as the release anchor instead of resetting
 // six files by hand. Never infer this mode during a normal author/hook bump.
 const reconcileMerge = argv.includes("--reconcile-merge");
@@ -122,6 +148,17 @@ const sanitizeEntry = (note) => String(note)
   .replace(/^(?:[+&:;,./|—–-]+(?:\s+|$))+/, "")
   .trim();
 const cleanNote = finalNote ? sanitizeEntry(finalNote) : null;
+const landingNotes = landingMode ? notes.map((note) => sanitizeEntry(note ?? "")) : [];
+// Reject the whole union before writing any surface; a self-declared internal
+// note cannot be hidden behind another branch's legitimate release note.
+if (landingMode && landingNotes.some((note) => /^none:\s*internal\b/i.test(note))) {
+  console.error("[bump-version] ERROR: none: internal cannot mint a release; omit that trailer");
+  process.exit(1);
+}
+if (landingMode && landingNotes.some((note) => !note || !isUserFacingEntry(note))) {
+  console.error("[bump-version] ERROR: landing note is empty or not user-facing");
+  process.exit(1);
+}
 
 if (cleanNote && !isUserFacingEntry(cleanNote)) {
   if (isInternalEntry(cleanNote) && /^none:\s*internal\b/i.test(cleanNote)) {
@@ -242,7 +279,8 @@ if (lock) {
 if (existsSync(changelogPath) && cleanNote) {
   const date = new Date().toISOString().slice(0, 10);
   const existing = readFileSync(changelogPath, "utf-8");
-  const entry = `\n## [${next}] — ${date}\n- ${cleanNote}\n`;
+  const bullets = landingMode ? [...new Set(landingNotes)] : [cleanNote];
+  const entry = `\n## [${next}] — ${date}\n${bullets.map((note) => `- ${note}\n`).join("")}`;
   const updated = existing.replace(/(#[^\n]*\n)/, `$1${entry}`);
   writeFileSync(changelogPath, updated);
 }
@@ -262,9 +300,11 @@ if (existsSync(inventoryPath)) {
     writeFileSync(inventoryPath, updatedInv);
     // Stage it so the post-commit hook's `git commit --amend` bundles the resynced
     // inventory (the hook's explicit `git add` list does not include it). Best-effort.
-    try {
-      execSync("git add extension/lib/bundled-inventory-data.js", { cwd: ROOT, stdio: "ignore" });
-    } catch { /* not a git repo / git unavailable — the file is still written */ }
+    if (hookMode) {
+      try {
+        execSync("git add extension/lib/bundled-inventory-data.js", { cwd: ROOT, stdio: "ignore" });
+      } catch { /* not a git repo / git unavailable — the file is still written */ }
+    }
   }
 }
 
@@ -281,9 +321,11 @@ if (existsSync(aboutGenPath)) {
   try {
     const { syncAboutPage } = await import("./generate-about-page.mjs");
     await syncAboutPage({ check: false });
-    try {
-      execSync("git add extension/about/about.html", { cwd: ROOT, stdio: "ignore" });
-    } catch { /* best-effort staging */ }
+    if (hookMode) {
+      try {
+        execSync("git add extension/about/about.html", { cwd: ROOT, stdio: "ignore" });
+      } catch { /* best-effort staging */ }
+    }
   } catch (err) {
     console.warn(`[bump-version] Warning: failed to sync about page: ${err?.message || err}`);
   }

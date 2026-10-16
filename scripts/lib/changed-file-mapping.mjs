@@ -23,18 +23,7 @@
 //      A .mjs helper or anything in a subdirectory (scripts/lib/...) is NOT
 //      inspected by those guards, so it fails closed to the full suite.
 //
-//   2. VERSION-ONLY BOOKKEEPING JSON. The post-commit hook bumps package.json,
-//      package-lock.json and extension/manifest.json on every commit. JSON is
-//      not imported, so all three are uncovered at every commit.
-//
-//      Mapping here is narrower on purpose: ONLY a diff confined to version
-//      fields is mapped. A package.json that gains a dependency or a script is a
-//      real change and keeps failing closed. `versionOnlyJsonChange` decides
-//      that by PARSING BOTH SIDES and structurally comparing both sides after
-//      stripping the declared version fields — never by grepping for lines
-//      containing "version" (which passes nested dependency bumps).
-//
-//   3. TWO EXPORT ENTRY HTML DOCUMENTS (3p3e.12). These have no import graph
+//   2. TWO EXPORT ENTRY HTML DOCUMENTS (3p3e.12). These have no import graph
 //      edge, but tests/thread-export-entry-html.test.ts reads their actual
 //      button/label/initial-state and the loaded script's exact route wiring.
 //      The Export JS entry scripts DO have import/URL edges; selector-level
@@ -238,17 +227,10 @@ export function classifyUncovered(rel, { versionOnly = false } = {}) {
     };
   }
   if (isBookkeepingFile(path)) {
-    return versionOnly
-      ? {
-        mechanism: "version-only bookkeeping JSON (the post-commit hook's bump)",
-        tests: [...BOOKKEEPING_GUARDS],
-      }
-      : {
-        mechanism:
-          "bookkeeping JSON with a NON-version change — a dependency, script or " +
-          "permission edit cannot be proved by a subset",
-        tests: [],
-      };
+    return {
+      mechanism: "release/version JSON belongs to the merger; a lane change here cannot be subset-certified",
+      tests: [],
+    };
   }
   if (isScriptsHarness(path)) {
     if (isGuardEnumeratedScript(path)) {
