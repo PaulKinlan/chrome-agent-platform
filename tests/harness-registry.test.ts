@@ -55,14 +55,20 @@ Deno.test("gate and named harnesses are real npm scripts pointing at their file"
 Deno.test("tvfsx: injection's registry custody claim matches its direct npm route", () => {
   const entry = HARNESSES["security-injection.ts"];
   const command = scripts[entry.npm ?? ""] ?? "";
-  const supervisor = Deno.readTextFileSync(`${ROOT}scripts/security-suite-supervisor.sh`);
-  // Pin the independently observable route, not just the registry's own prose.
-  assertEquals(command, "deno run -A scripts/security-injection.ts");
-  assert(!supervisor.includes("scripts/security-injection.ts"), "custody wrapper must not already run injection");
+  const custodySource = Deno.readTextFileSync(`${ROOT}scripts/security-suite-custody.mjs`);
+  // The production config chooses the actual runner; the shell wrapper never
+  // names it. Fail loudly if that config is refactored rather than trusting a
+  // vacuous search of the wrapper's text.
+  const production = custodySource.match(/const productionRunner = path\.join\(repoRoot, "scripts", "([^"]+)"\)/);
+  assertEquals(production?.[1], "security-suite.ts", "verify the supervisor's actual production runner");
+  assert(!command.includes("supervisor") && command.includes("scripts/security-injection.ts"),
+    `injection is directly launched, not routed through custody: ${command}`);
+  assert(!entry.via, "injection has no wrapper route");
+  assert(production?.[1] !== "security-injection.ts", "injection is not the custody runner");
   assert(/runs directly.*without canonical fd 9 custody/i.test(entry.reason ?? ""),
     `the registry must state that the directly invoked harness lacks custody: ${entry.reason}`);
-  assert(!/runs inside the supervisor/i.test(entry.reason ?? ""),
-    "a direct npm route cannot claim the supervisor's canonical section");
+  assert(!/(?:runs inside|under|by|same)\s+(?:the\s+)?(?:supervisor|custody)/i.test(entry.reason ?? ""),
+    `the registry must not contradict the direct route with a custody claim: ${entry.reason}`);
 });
 
 Deno.test("every gate is part of test:all, and test:all runs nothing unregistered", () => {
