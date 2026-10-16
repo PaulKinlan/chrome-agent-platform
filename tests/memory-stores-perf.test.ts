@@ -274,6 +274,39 @@ Deno.test("ri0x8: countStoreKeysWithLoadRetry fires retry on injected contention
   assertEquals(resultUnmeasurable.elapsed, 10);
 });
 
+Deno.test("7fbta: countStoreKeysWithLoadRetry pairs the passing retry's keyCount with retry elapsed", async () => {
+  let callCount = 0;
+  let simulatedTime = 0;
+  const result = await countStoreKeysWithLoadRetry(
+    async () => {
+      callCount++;
+      return callCount === 1 ? "attempt-1-slow-count" : "attempt-2-passing-count";
+    },
+    500,
+    5,
+    {
+      readLoadSample: async () => ({
+        measurable: true,
+        loadPerCore: 3.0,
+        activeCompilers: 8,
+      }),
+      isQuiet: () => false,
+      resolveSpec: () => ({} as any),
+      now: () => {
+        if (callCount === 1) simulatedTime += 10;
+        else simulatedTime += 1;
+        return simulatedTime;
+      },
+      sleep: async () => {},
+      warn: () => {},
+    },
+  );
+
+  assertEquals(result.retried, true);
+  assertEquals(result.elapsed, 1);
+  assertEquals(result.keyCount, "attempt-2-passing-count", "keyCount must be updated to the passing retry attempt's count");
+});
+
 Deno.test("9epn.11 P2: enumerateMemoryStores makes ZERO keys() calls across all four store types", async () => {
   // Pin all 4 store factories driven by the memory.stores route:
   // 1. masterMemory
