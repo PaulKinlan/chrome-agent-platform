@@ -21,8 +21,15 @@ import { durableDir } from "../scripts/lib/durable-root.mjs";
 const ROOT = join(dirname(fromFileUrl(import.meta.url)), "..");
 const SCRIPT = join(ROOT, "scripts", "acp-service.mjs");
 
+// chrome-agent-platform-zlq53: every fixture below used a fixed SHARED durable directory name
+// and removed it recursively, so two lanes running this suite at the same time deleted each
+// other's fixture files mid-run (interference bug nyi3q). A per-run subdirectory makes the
+// fixture owned by the run that created it.
+let fixtureRunSeq = 0;
+const fixtureDir = (name: string) => durableDir(name, `${process.pid}-${Date.now()}-${fixtureRunSeq++}`);
+
 Deno.test("acp:service doctor (falsification 1): broken shebang fails execution with ENOENT and names missing interpreter", () => {
-  const scratch = durableDir("cap-doctor-shebang");
+  const scratch = fixtureDir("cap-doctor-shebang");
   Deno.mkdirSync(scratch, { recursive: true });
   try {
     const binDir = join(scratch, "bin");
@@ -80,7 +87,7 @@ Deno.test("acp:service doctor (falsification 1): broken shebang fails execution 
 });
 
 Deno.test("acp:service doctor (falsification 2): dangling symlink fails execution with ENOENT and names nonexistent target", () => {
-  const scratch = durableDir("cap-doctor-symlink");
+  const scratch = fixtureDir("cap-doctor-symlink");
   Deno.mkdirSync(scratch, { recursive: true });
   try {
     const binDir = join(scratch, "bin");
@@ -136,7 +143,7 @@ Deno.test("acp:service doctor (falsification 2): dangling symlink fails executio
 });
 
 Deno.test("acp:service doctor: missing binary from captured PATH reports NOT FOUND in captured PATH", () => {
-  const scratch = durableDir("cap-doctor-missing");
+  const scratch = fixtureDir("cap-doctor-missing");
   Deno.mkdirSync(scratch, { recursive: true });
   try {
     const emptyBin = join(scratch, "empty-bin");
@@ -174,7 +181,7 @@ Deno.test("acp:service doctor: missing binary from captured PATH reports NOT FOU
 });
 
 Deno.test("acp:service doctor: healthy captured PATH executes binaries and prints version", () => {
-  const scratch = durableDir("cap-doctor-healthy");
+  const scratch = fixtureDir("cap-doctor-healthy");
   Deno.mkdirSync(scratch, { recursive: true });
   try {
     const binDir = join(scratch, "bin");
@@ -223,7 +230,7 @@ Environment="PATH=${binDir}:/usr/bin:/bin"
 });
 
 Deno.test("acp:service doctor: tails log and identifies last fatal error line", () => {
-  const scratch = durableDir("cap-doctor-log");
+  const scratch = fixtureDir("cap-doctor-log");
   Deno.mkdirSync(scratch, { recursive: true });
   try {
     const logFile = join(scratch, "bridge.log");
@@ -269,7 +276,7 @@ Deno.test("acp:service doctor: tails log and identifies last fatal error line", 
 });
 
 Deno.test("acp:service doctor: prints repository commit, version, and worktree cleanliness", () => {
-  const scratch = durableDir("cap-doctor-git");
+  const scratch = fixtureDir("cap-doctor-git");
   Deno.mkdirSync(scratch, { recursive: true });
   try {
     const plist = join(scratch, "mock.plist");
