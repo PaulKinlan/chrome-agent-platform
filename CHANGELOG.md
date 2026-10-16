@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.712] — 2026-10-16
+- internal test and source import hygiene fix
+
 ## [0.3.711] — 2026-10-16
 - Fix parallel test phase suppression on serial environmental refusal and attribute failing serial files by name
 
