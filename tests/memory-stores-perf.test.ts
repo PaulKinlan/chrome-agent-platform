@@ -162,38 +162,116 @@ Deno.test("9epn.11: countStoreKeys makes ZERO store.keys() calls", async () => {
   assertEquals(keysCalls, 1, "legacy (await store.keys()).length triggers keysCalls");
 });
 
+import { countStoreKeysWithLoadRetry } from "../scripts/lib/load-retry.ts";
+
 Deno.test("9epn.11: bounded count benchmarks < 5 ms even with high key volumes", async () => {
   const store = masterMemory();
   for (let i = 0; i < 550; i++) {
     await store.set(`scale_key_${i}`, i);
   }
 
-  const t0 = performance.now();
-  const keyCount = await countStoreKeys(store, 500);
-  let elapsed = performance.now() - t0;
+  const { keyCount, elapsed } = await countStoreKeysWithLoadRetry(
+    () => countStoreKeys(store, 500),
+    500,
+    5,
+  );
 
   assertEquals(keyCount, "500+");
-
-  if (elapsed >= 5) {
-    const { readLoadSample, isQuiet, environmentLine, resolveSpec } = await import("../scripts/lib/quiet-window.ts");
-    const sample = await readLoadSample().catch(() => null);
-    if (sample && sample.measurable && !isQuiet(sample, resolveSpec())) {
-      console.warn(`[LOAD-RETRY] countStoreKeys took ${elapsed.toFixed(2)}ms under host contention (${environmentLine(sample)}), retrying on warm cycle...`);
-      for (let retry = 0; retry < 5; retry++) {
-        const retryT0 = performance.now();
-        const retryCount = await countStoreKeys(store, 500);
-        const retryElapsed = performance.now() - retryT0;
-        assertEquals(retryCount, "500+");
-        if (retryElapsed < 5) {
-          elapsed = retryElapsed;
-          break;
-        }
-        await new Promise((r) => setTimeout(r, 20));
-      }
-    }
-  }
-
   assert(elapsed < 5, `countStoreKeys must finish in < 5ms on 500+ keys (took ${elapsed.toFixed(2)}ms)`);
+});
+
+Deno.test("ri0x8: countStoreKeysWithLoadRetry fires retry on injected contention and refuses on quiet/unmeasurable", async () => {
+  const store = masterMemory();
+  await store.set("k1", "v1");
+
+  // 1. Contended host: initial run mocked slow (10ms >= 5ms), warm retry achieves 1ms (< 5ms)
+  let calls = 0;
+  let simulatedTime = 0;
+  const resultContended = await countStoreKeysWithLoadRetry(
+    () => countStoreKeys(store, 1),
+    1,
+    5,
+    {
+      readLoadSample: async () => ({
+        measurable: true,
+        loadPerCore: 3.0,
+        activeCompilers: 8,
+      }),
+      isQuiet: () => false,
+      resolveSpec: () => ({} as any),
+      now: () => {
+        calls++;
+        if (calls === 1) simulatedTime = 0;
+        else if (calls === 2) simulatedTime = 10;
+        else if (calls === 3) simulatedTime = 10;
+        else if (calls === 4) simulatedTime = 11;
+        return simulatedTime;
+      },
+      sleep: async () => {},
+      warn: () => {},
+    },
+  );
+
+  assertEquals(resultContended.retried, true, "must retry under simulated contention");
+  assertEquals(resultContended.elapsed, 1, "elapsed must update to retry duration");
+
+  // 2. Quiet host: initial run mocked slow -> MUST NOT retry, fails closed
+  calls = 0;
+  simulatedTime = 0;
+  const resultQuiet = await countStoreKeysWithLoadRetry(
+    () => countStoreKeys(store, 1),
+    1,
+    5,
+    {
+      readLoadSample: async () => ({
+        measurable: true,
+        loadPerCore: 0.1,
+        activeCompilers: 0,
+      }),
+      isQuiet: () => true,
+      resolveSpec: () => ({} as any),
+      now: () => {
+        calls++;
+        if (calls === 1) simulatedTime = 0;
+        else if (calls === 2) simulatedTime = 10;
+        return simulatedTime;
+      },
+      sleep: async () => {},
+      warn: () => {},
+    },
+  );
+
+  assertEquals(resultQuiet.retried, false, "must NOT retry on quiet box");
+  assertEquals(resultQuiet.elapsed, 10, "elapsed remains initial slow time");
+
+  // 3. Unmeasurable host: measurable = false -> MUST NOT retry, fails closed
+  calls = 0;
+  simulatedTime = 0;
+  const resultUnmeasurable = await countStoreKeysWithLoadRetry(
+    () => countStoreKeys(store, 1),
+    1,
+    5,
+    {
+      readLoadSample: async () => ({
+        measurable: false,
+        loadPerCore: 0,
+        activeCompilers: 0,
+      }),
+      isQuiet: () => false,
+      resolveSpec: () => ({} as any),
+      now: () => {
+        calls++;
+        if (calls === 1) simulatedTime = 0;
+        else if (calls === 2) simulatedTime = 10;
+        return simulatedTime;
+      },
+      sleep: async () => {},
+      warn: () => {},
+    },
+  );
+
+  assertEquals(resultUnmeasurable.retried, false, "must NOT retry on unmeasurable box");
+  assertEquals(resultUnmeasurable.elapsed, 10);
 });
 
 Deno.test("9epn.11 P2: enumerateMemoryStores makes ZERO keys() calls across all four store types", async () => {
