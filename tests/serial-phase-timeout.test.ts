@@ -22,6 +22,14 @@ import {
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
+// chrome-agent-platform-nyi3q: every fixture below used a SHARED durable directory name and removed it
+// recursively, so two lanes running this suite at the same time deleted each other's fixture files
+// mid-spawn. Measured on 2026-10-16: the same two cases failed on two different trees in the same
+// minutes with `deno` exiting 1 in 0.0s and `spawnSync deno ETIMEDOUT`, and passed whenever the suite ran
+// alone. A per-run subdirectory makes the fixture owned by the run that created it.
+let fixtureRunSeq = 0;
+const fixtureDir = (name: string) => durableDir(name, `${process.pid}-${Date.now()}-${fixtureRunSeq++}`);
+
 Deno.test("86gg: an idle box gets exactly the base timeout", () => {
   assertEquals(serialFileTimeoutMs({ loadPerCpu: 1 }), DEFAULT_SERIAL_FILE_TIMEOUT_MS);
   assertEquals(serialFileTimeoutMs({ loadPerCpu: 0 }), DEFAULT_SERIAL_FILE_TIMEOUT_MS);
@@ -59,7 +67,7 @@ Deno.test("86gg: more load never means less time (monotone)", () => {
 Deno.test("86gg: the bound still BOUNDS — a hung file is killed (exit 124)", async () => {
   // Durable-routed per the repo's durable-root guard (tmpdir usage is only allowed
   // through this helper) — the same guard this suite is about, catching my scratch.
-  const dir = await durableDir("86gg-serial-timeout");
+  const dir = await fixtureDir("86gg-serial-timeout");
   const hung = `${dir}/zz-hung-${Date.now()}.test.ts`;
   // The fixture must keep the event loop ALIVE *and* never finish. Two shapes
   // that are NOT hangs, measured while writing this test: a bare
@@ -73,9 +81,12 @@ Deno.test("86gg: the bound still BOUNDS — a hung file is killed (exit 124)", a
     'Deno.test("hangs forever", async () => { setInterval(() => {}, 1000); await new Promise(() => {}); });\n',
   );
   const r = runSerialFile(hung, { timeoutMs: 2_000, stdio: ["ignore", "ignore", "ignore"], cwd: ROOT });
-  assertEquals(r.timedOut, true, "a file that never finishes must be killed");
-  assertEquals(r.code, 124);
-  await Deno.remove(dir, { recursive: true });
+  try {
+    assertEquals(r.timedOut, true, "a file that never finishes must be killed");
+    assertEquals(r.code, 124);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
 });
 
 Deno.test("cihz/86gg: the scaled bound is STRICTLY above the flat bound, and a kill happens only below the fixture's DECLARED work", async () => {
@@ -86,7 +97,7 @@ Deno.test("cihz/86gg: the scaled bound is STRICTLY above the flat bound, and a k
   // The fix is to stop letting the clock decide: the fixture DECLARES its work, the flat bound sits BELOW that
   // declared work (so a kill is structural — the file cannot exit before its own timer), and the scaled bound
   // sits far enough ABOVE it that deno startup cannot consume the difference.
-  const dir = await durableDir("cihz-scaled-bound");
+  const dir = await fixtureDir("cihz-scaled-bound");
   const SLOW_MS = 5_000; // the fixture's DECLARED work, asserted directly rather than inferred from elapsed time
   const FLAT_MS = 4_000; // strictly below SLOW_MS -> the kill cannot be a race with the box's load
   const slow = `${dir}/zz-cihz-slow-${Date.now()}.test.ts`;
@@ -133,7 +144,7 @@ Deno.test("cihz/86gg: the scaled bound is STRICTLY above the flat bound, and a k
 // base window still governs an unlisted one — the failure mode this must not have is "the override
 // silently does nothing and the file is still killed by the base".
 Deno.test("kj9s: a per-file bound overrides the base window for the files that need it, and only those", async () => {
-  const dir = await durableDir("kj9s-per-file-bounds");
+  const dir = await fixtureDir("kj9s-per-file-bounds");
   const hung = `${dir}/zz-hung-perfile-${Date.now()}.test.ts`;
   const fine = `${dir}/zz-fine-perfile-${Date.now()}.test.ts`;
   await Deno.writeTextFile(
@@ -145,6 +156,7 @@ Deno.test("kj9s: a per-file bound overrides the base window for the files that n
     'Deno.test("finishes fast", () => { if (1 !== 1) throw new Error("unreachable"); });\n',
   );
   const started = Date.now();
+  try {
   const rc = runSerialFiles([hung, fine], {
     timeoutMs: 60_000, // a base window so generous that only the override can explain a fast kill
     perFileTimeoutMs: { [hung]: 2_000 },
@@ -163,5 +175,7 @@ Deno.test("kj9s: a per-file bound overrides the base window for the files that n
     0,
     "an unlisted file runs under the base window and passes",
   );
-  await Deno.remove(dir, { recursive: true });
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
 });
