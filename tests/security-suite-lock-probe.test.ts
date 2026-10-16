@@ -8,7 +8,7 @@
 
 import { assert, assertEquals, assertRejects, assertStrictEquals } from "jsr:@std/assert@1";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
-import { FLOCK_HELD_EXIT, probeCanonicalLockHeld } from "../scripts/security-suite-custody.mjs";
+import { FLOCK_HELD_EXIT, FLOCK_PROBE_TIMEOUT_MS, makeFlockRun, probeCanonicalLockHeld } from "../scripts/security-suite-custody.mjs";
 
 const NOT_HELD = "canonical inherited lock has no live exclusive flock";
 const UNVERIFIED = "canonical inherited lock could not be verified (flock unavailable or failed)";
@@ -312,4 +312,39 @@ Deno.test("jjsz N8: the cleanup helper never throws, runs every later step after
     }
   });
   assertStrictEquals(surfaced, own, "a failing cleanup must not replace the error that was already propagating");
+});
+
+// ---------------------------------------------------------------------------------------------
+// chrome-agent-platform-d9fyo: the flock probe is BOUNDED and its environment is pinned
+// ---------------------------------------------------------------------------------------------
+
+Deno.test("d9fyo: the default flock runner is BOUNDED (a wedged flock must not hold custody open)", async () => {
+  assert(
+    Number.isFinite(FLOCK_PROBE_TIMEOUT_MS) && FLOCK_PROBE_TIMEOUT_MS > 0,
+    "the default bound must be a finite positive number of milliseconds",
+  );
+  const started = Date.now();
+  const err = await assertRejects(() => makeFlockRun(200)("/bin/sleep", ["5"]), Error) as Error & { killed?: boolean };
+  const elapsed = Date.now() - started;
+  assert(elapsed < 2_000, `the bound must fire at ~200ms, took ${elapsed}ms (remove the bound and this hangs)`);
+  assertStrictEquals(err.killed, true, "a bound expiring is a KILL, and the classification below depends on it");
+});
+
+Deno.test("d9fyo: a killed or timed-out probe is UNVERIFIED - it can never read as 'held'", async () => {
+  const lock = "/nonexistent/d9fyo-probe.lock";
+  // The held exit code with an empty stderr is the ONLY proof. A bound expiring produces exactly that
+  // shape on some platforms (the kill and the status travel together), so the kill is excluded explicitly.
+  assertStrictEquals(await probeCanonicalLockHeld(lock, rejectWith({ code: FLOCK_HELD_EXIT, stderr: "", killed: true, signal: "SIGKILL" })), UNVERIFIED);
+  assertStrictEquals(await probeCanonicalLockHeld(lock, rejectWith({ code: FLOCK_HELD_EXIT, stderr: "", signal: "SIGKILL" })), UNVERIFIED);
+  assertStrictEquals(await probeCanonicalLockHeld(lock, rejectWith({ code: "ETIMEDOUT", stderr: "", killed: true })), UNVERIFIED);
+  // …and the shape it must still accept, with nothing killed, is unchanged.
+  assertStrictEquals(await probeCanonicalLockHeld(lock, rejectWith({ code: FLOCK_HELD_EXIT, stderr: "" })), null);
+});
+
+Deno.test("d9fyo: the flock runner pins LC_ALL/TZ and KEEPS PATH (flock is resolved through it)", async () => {
+  const out = await makeFlockRun(5_000)("/usr/bin/env", []);
+  const lines = String(out.stdout).split("\n");
+  assert(lines.includes("LC_ALL=C"), `expected LC_ALL=C, got: ${String(out.stdout).slice(0, 200)}`);
+  assert(lines.includes("TZ=UTC"), `expected TZ=UTC, got: ${String(out.stdout).slice(0, 200)}`);
+  assert(lines.some((l) => l.startsWith("PATH=")), "PATH must survive: flock is PATH-resolved");
 });

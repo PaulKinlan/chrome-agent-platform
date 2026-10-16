@@ -33,6 +33,7 @@ import {
   groupAlive,
   liveObservedResidue,
   makePsRun,
+  PS_ENV,
   observeDescendants,
   parseProcStat,
   procIdentities,
@@ -802,4 +803,18 @@ Deno.test({
     const out = await makePsRun()("/bin/sh", ["-c", "head -c 2000000 /dev/zero | tr '\\0' a"]);
     assertEquals(out.stdout.length, 2_000_000);
   },
+});
+
+// ---------------------------------------------------------------------------------------------
+// chrome-agent-platform-d9fyo: custody's ps runner carries the PINNED environment
+// ---------------------------------------------------------------------------------------------
+
+Deno.test("d9fyo: custody's ps runner runs under PS_ENV alone (nothing of the caller's environment)", async () => {
+  // A bounded ps was not enough: `lstart` is printed in the caller's locale and zone while the row parser
+  // reads ONE fixed shape, so an inherited environment can make the same live process render differently -
+  // or not at all - between the sample that recorded it and the sample that re-reads it. `/usr/bin/env`
+  // prints exactly what the child was given, so this fails if the pin is removed or narrowed.
+  const out = await makePsRun(5_000)("/usr/bin/env", []);
+  assertEquals(String(out.stdout).trim().split("\n").sort(), ["LC_ALL=C", "TZ=UTC"]);
+  assertEquals(PS_ENV, { LC_ALL: "C", TZ: "UTC" });
 });

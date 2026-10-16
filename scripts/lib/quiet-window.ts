@@ -458,11 +458,40 @@ export interface LoadSampleDeps {
  *  hole. `TZ=UTC` has no such twin: without it ps falls back to the machine's zone. */
 const PS_ENV: Readonly<Record<string, string>> = Object.freeze({ LC_ALL: "C", TZ: "UTC" });
 
-async function defaultRunPs({ args, env, clearEnv }: PsInvocation): Promise<PsResult> {
-  const out = await new Deno.Command("/bin/ps", { args, env, clearEnv, stdout: "piped", stderr: "null" }).output();
-  return { code: out.code, stdout: new TextDecoder().decode(out.stdout) };
-}
+/** A wedged `ps` must not hold the quiet-window verdict open (chrome-agent-platform-d9fyo): the probe
+ *  was environment-pinned but UNBOUNDED, so a `ps` that blocks turned the gate into a hang, with the
+ *  per-file window in scripts/test-partition.mjs as the only backstop. The bound is the platform's own
+ *  cancellation - an AbortSignal - and not a hand-rolled signal to the child, because this module is
+ *  under the mkax policy that the quiet-window governor never manipulates a process to manufacture a
+ *  quiet window (tests/quiet-window-static.test.ts). When the signal expires Deno terminates the `ps`
+ *  IT spawned and `output()` resolves with the signal's status; that status is not a measurement, so it
+ *  is detected via `aborted` and thrown, which readLoadSampleOnce's catch turns into `measurable: false`
+ *  - and this module fails CLOSED on that (an unmeasurable machine is never assumed quiet). */
+export const PS_PROBE_TIMEOUT_MS = 5_000;
 
+/** Exported with an injectable `bin`/`timeoutMs` so the BOUND itself is testable: pointed at a command
+ *  that never exits it must fail inside the bound (and go RED, by hanging, if the bound is removed). */
+export async function defaultRunPs(
+  { args, env, clearEnv }: PsInvocation,
+  { bin = "/bin/ps", timeoutMs = PS_PROBE_TIMEOUT_MS }: { bin?: string; timeoutMs?: number } = {},
+): Promise<PsResult> {
+  const bounded = new AbortController();
+  const timer = setTimeout(() => bounded.abort(), timeoutMs);
+  try {
+    const out = await new Deno.Command(bin, {
+      args,
+      env,
+      clearEnv,
+      stdout: "piped",
+      stderr: "null",
+      signal: bounded.signal,
+    }).output();
+    if (bounded.signal.aborted) throw new Error(`ps probe exceeded ${timeoutMs}ms`);
+    return { code: out.code, stdout: new TextDecoder().decode(out.stdout) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
 function parsePsCpuTicks(timeStr: string): number {
   const parts = timeStr.split(":");
   let seconds = 0;
