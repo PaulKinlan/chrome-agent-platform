@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.710] — 2026-10-16
+- Deliver test tier proposal and selective build-tier execution in full gate
+
 ## [0.3.709] — 2026-10-16
 - Clean up ACP test scratch directories on teardown and enforce durable-root entry cap to prevent disk starvation.
 
