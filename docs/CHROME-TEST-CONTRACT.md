@@ -33,6 +33,26 @@ The full gate runs in two sequential phases:
     - If no executable browser resolves, the browser-dependent tests decline; after the remaining static tests, the last test calls `refuseWithoutBrowser(...)` (near line 492), prints the named/count diagnostics, and exits **75** via `scripts/lib/browser-refusal.ts`. Exit 75 is neither a pass (0) nor a product red (1). If a browser resolves but its actual launch fails for another reason, diagnose that failure rather than calling it this missing-browser refusal.
     - Other parallel test files in `tests/` are in-memory unit tests, mock Web/DOM tests, or static source scanners that require no browser.
 
+### 2.1d The parallel-phase file order and its off switch (`CAP_PARALLEL_SCHEDULE`)
+The parallel phase's WORKER COUNT is Deno's default, but its FILE ORDER is the repo's own:
+`scripts/lib/parallel-schedule.mjs` sorts the selected files longest-first, using the weights in
+`scripts/lib/test-weights.json`, so the heaviest files start first and their tails overlap the light
+ones instead of the whole phase finishing on the last heavy file. This does not change WHICH files
+run: the runner selects files first (`scripts/select-tests.mjs`, `defaultTestPlan`) and the schedule
+is a permutation of that selection, pinned by `tests/parallel-schedule.test.ts`, which also rejects a
+weight naming a file that is no longer in the parallel tier (renamed, removed, serial, build-deferred,
+heavy-deferred or read-only-dist).
+- **Off switch:** `CAP_PARALLEL_SCHEDULE=0` (`scripts/run-tests.mjs`) turns the ordering off and runs
+the selected files in their selection order. It exists for diagnosis - a same-tree A/B of a
+scheduling complaint - never as a fix for a red test; an unordered phase runs the same file multiset.
+- **Where the numbers come from, and their limit:** the 54 weights are historical isolated-file wall
+seconds measured on a **2-vCPU** VM at tree `1f79854` on **2026-10-08**, not timings for the current
+tree. The 2026-10-15 refresh checked tier membership and removed five newly heavy-deferred names; it
+recalibrated nothing. NO committed command re-measures the table, so a performance claim needs a
+same-tree A/B rather than an inference from these numbers. The full derivation, the method, and what
+a re-anchor owes (`npm run test:file -- tests/parallel-schedule.test.ts`) are in
+`docs/TEST-COUPLING-INVENTORY.md` entry 23 and in the table's own `_provenance` block.
+
 ### 2.1b The Dedicated Build Gate (`npm run test:build` / `scripts/build-gate.ts`)
 Option D (chrome-agent-platform-h65e) partitions heavy in-place build-behaviour tests out of `npm test` into a dedicated explicitly-budgeted gate:
 - **Command:** `npm run test:build` (invokes `scripts/build-gate.ts`, enforced ceiling: 2120s; measured 31-36 s on an Apple-silicon workstation after jjsz, 2026-10-07 — a single-host figure, not a bound: a loaded or 2-vCPU Linux host takes longer, up to the ceiling; explicit `CAP_SERIAL_TEST_TIMEOUT_MS` overrides without scaling).
