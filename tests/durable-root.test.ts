@@ -470,6 +470,183 @@ function* walk(dir: string): Generator<string> {
   }
 }
 
+// A single quote-aware pass produces aligned views: `calls` excludes comments
+// and literal text but retains executable ${...} expressions; `literals`
+// excludes comments but keeps path strings. Never remove a newline: the line
+// of a violation must match the file even across continued quoted strings.
+function scanGuardSource(source: string, isShell: boolean) {
+  // Index by UTF-16 code unit, like String.slice/RegExp, not Unicode codepoint.
+  const calls = source.split("");
+  const literals = source.split("");
+  const strings: { kind: string; text: string; start: number; line: number }[] = [];
+  type State = { kind: string; parent?: State; depth?: number; start?: number; line?: number; inClass?: boolean };
+  let state: State = { kind: "code" };
+  let line = 1;
+  const blank = (at: number, comments = false) => {
+    if (source[at] === "\n") return;
+    calls[at] = " ";
+    if (comments) literals[at] = " ";
+  };
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "\n") line++;
+    if (state.kind === "line-comment") {
+      if (ch === "\n") state = state.parent!;
+      else blank(i, true);
+      continue;
+    }
+    if (state.kind === "block-comment") {
+      blank(i, true);
+      if (ch === "*" && source[i + 1] === "/") {
+        blank(++i, true);
+        state = state.parent!;
+      }
+      continue;
+    }
+    if (state.kind === "regex") {
+      blank(i);
+      if (ch === "\\" && i + 1 < source.length) {
+        blank(++i);
+        if (source[i] === "\n") line++;
+      } else if (ch === "[") state.inClass = true;
+      else if (ch === "]") state.inClass = false;
+      else if (ch === "/" && !state.inClass) state = state.parent!;
+      else if (ch === "\n") state = state.parent!; // malformed regex: fail closed on later code
+      continue;
+    }
+    if (state.kind === "single" || state.kind === "double" || state.kind === "template") {
+      const quote = state.kind === "single" ? "'" : state.kind === "double" ? '"' : "`";
+      if (ch === "\\" && i + 1 < source.length) {
+        blank(i);
+        blank(++i);
+        if (source[i] === "\n") line++;
+        continue;
+      }
+      if (ch === "\n" && state.kind !== "template") {
+        // JS single/double strings cannot cross an unescaped line break. If
+        // a regex was misclassified as a quote, do not hide later code.
+        for (let j = state.start!; j < i; j++) calls[j] = source[j];
+        state = state.parent!;
+        continue;
+      }
+      if (ch === quote) {
+        blank(i);
+        strings.push({ kind: state.kind, text: source.slice(state.start! + 1, i), start: state.start!, line: state.line! });
+        state = state.parent!;
+        continue;
+      }
+      if (state.kind === "template" && ch === "$" && source[i + 1] === "{") {
+        state = { kind: "interpolation", depth: 1, parent: state };
+        i++;
+        continue;
+      }
+      blank(i);
+      continue;
+    }
+    if (state.kind === "interpolation") {
+      if (ch === "{") state.depth!++;
+      if (ch === "}" && --state.depth! === 0) {
+        state = state.parent!;
+        continue;
+      }
+    }
+    // Comments and quotes are recognized in both ordinary code and template
+    // interpolations. A '#' inside a shell quote is NOT a comment.
+    if (!isShell && ch === "/" && (source[i + 1] === "/" || source[i + 1] === "*")) {
+      const block = source[i + 1] === "*";
+      state = { kind: block ? "block-comment" : "line-comment", parent: state };
+      blank(i, true);
+      blank(++i, true);
+      continue;
+    }
+    if (!isShell && ch === "/" && source[i + 1] !== "/" && source[i + 1] !== "*") {
+      const prefix = source.slice(source.lastIndexOf("\n", i - 1) + 1, i).trimEnd();
+      // Arrow bodies (`x => /'/.test(x)`) are regex positions too. Mis-pairing
+      // a quote inside that regex can otherwise mask a real call below it.
+      if (/[=([{,:!?|&>]$/.test(prefix) || /\b(?:return|throw|case|yield)$/.test(prefix)) {
+        state = { kind: "regex", parent: state, inClass: false };
+        blank(i);
+        continue;
+      }
+    }
+    if (isShell && ch === "#" && (i === 0 || /[\s;]/.test(source[i - 1]))) {
+      state = { kind: "line-comment", parent: state };
+      blank(i, true);
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      state = { kind: ch === "'" ? "single" : ch === '"' ? "double" : "template", parent: state, start: i, line };
+      blank(i);
+    }
+  }
+  // An unterminated quote is not evidence that later code is safe: leave its
+  // text visible to the call detector rather than silently suppressing it.
+  while (state.parent) {
+    if (state.start !== undefined) {
+      for (let i = state.start; i < source.length; i++) calls[i] = source[i];
+    }
+    state = state.parent;
+  }
+  return { calls: calls.join(""), literals: literals.join(""), strings };
+}
+
+/** Strip comments without changing offsets or line numbers. */
+export function stripComments(source: string, isShell: boolean): string {
+  return scanGuardSource(source, isShell).literals;
+}
+
+/** Keep executable interpolation expressions while blanking quoted rationale. */
+export function stripStrings(source: string): string {
+  return scanGuardSource(source, false).calls;
+}
+
+/** Apply the existing allowlists and detectors to source at their proper scope. */
+export function findDurableViolations(
+  content: string,
+  relPath: string,
+  { isShell = relPath.endsWith(".sh"), allowedCallsOnly = false }:
+    { isShell?: boolean; allowedCallsOnly?: boolean } = {},
+): string[] {
+  const violations: string[] = [];
+  const rawLines = content.split("\n");
+  const scanned = scanGuardSource(content, isShell);
+  const callLines = scanned.calls.split("\n");
+  const literalLines = scanned.literals.split("\n");
+  const executedStrings = new Set<number>();
+  const sink = "(?:exec|execSync|execFile\\w*|spawn|spawnSync|Deno\\.Command|sh|bash)";
+  const executableCalls = new RegExp(CALL_DETECTORS.map((re) => `(?:${re.source})`).join("|"), "g");
+  for (const string of scanned.strings) {
+    const matches = [...string.text.matchAll(executableCalls)];
+    if (matches.length === 0) continue;
+    const before = content.slice(content.lastIndexOf("\n", string.start - 1) + 1, string.start);
+    const assignment = /\b(?:const|let|var)\s+([\w$]+)\s*=\s*$/.exec(before);
+    const name = assignment?.[1];
+    // The named command may be argv[2], not argv[0]: the house style is
+    // Deno.Command("bash", { args: ["-c", cmd] }), and spawn is similar.
+    const assignedSink = name && new RegExp(`\\b${sink}\\s*\\([^;]*\\b${name.replace(/\$/g, "\\$")}\\b`).test(scanned.calls);
+    const directSink = new RegExp(`\\b${sink}\\s*\\([^;]*$`).test(scanned.calls.slice(0, string.start));
+    // Rationale strings are inert; only strings actually passed to a process
+    // sink (or shell command substitution) are executable.
+    if (!(directSink || assignedSink || (isShell && string.kind === "template"))) continue;
+    for (const match of matches) {
+      // A multi-line template's opening line might contain durableDir() and
+      // be exempt; attribute the violation to the token's actual line.
+      const offset = string.text.slice(0, match.index).split("\n").length - 1;
+      executedStrings.add(string.line + offset);
+    }
+  }
+  for (let i = 0; i < rawLines.length; i++) {
+    const rawLine = rawLines[i];
+    if (DURABLE_ROUTED.test(rawLine)) continue;
+    if (ALLOWED_LITERALS.some((l) => rawLine.includes(l))) continue;
+    const call = CALL_DETECTORS.some((re) => re.test(callLines[i])) || executedStrings.has(i + 1);
+    const literal = LITERAL_DETECTORS.some((re) => re.test(literalLines[i]));
+    if ((!call && !literal) || (allowedCallsOnly && call && !literal)) continue;
+    violations.push(`${relPath}:${i + 1}: ${rawLine.trim()}`);
+  }
+  return violations;
+}
+
 Deno.test("guard: tmpdir/tmpfs usage is durable-routed or deliberately allowed", () => {
   const offenders: string[] = [];
   for (const root of GUARD_ROOTS) {
@@ -477,25 +654,120 @@ Deno.test("guard: tmpdir/tmpfs usage is durable-routed or deliberately allowed",
       const rel = file.slice(ROOT.length);
       if (rel === "tests/durable-root.test.ts") continue; // the guard names the patterns itself
       if (ALLOWED_FILES.has(rel)) continue;
-      const lines = Deno.readTextFileSync(file).split("\n");
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (DURABLE_ROUTED.test(line)) continue;
-        if (ALLOWED_LITERALS.some((l) => line.includes(l))) continue;
-        const call = CALL_DETECTORS.some((re) => re.test(line));
-        const literal = LITERAL_DETECTORS.some((re) => re.test(line));
-        if (!call && !literal) continue;
-        if (ALLOWED_FILES.has(rel)) continue;
-        if (ALLOWED_CALLS_ONLY.has(rel) && call && !literal) continue;
-        offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
-      }
+      offenders.push(...findDurableViolations(Deno.readTextFileSync(file), rel, {
+        allowedCallsOnly: ALLOWED_CALLS_ONLY.has(rel),
+      }));
     }
   }
-  assertEquals(
-    offenders,
-    [],
-    "tmpdir/tmpfs usage outside the durable convention and the allowance list",
-  );
+  assertEquals(offenders, [], "tmpdir/tmpfs usage outside the durable convention and the allowance list");
+});
+
+Deno.test("pru35/rxhq2: comment and rationale mentions pass; real calls and path literals fail", () => {
+  const text = [
+    "// We avoid mkdtemp and /tmp/ allocations here.",
+    "/* A multi-line comment mentions mktemp and /dev/shm/ scratch. */",
+    'const rationale = "reads source as static input; avoids mkdtemp and makeTempDir outside durableDir";',
+    'const desc = `avoiding mktemp in shell scripts`;',
+  ].join("\n");
+  assertEquals(findDurableViolations(text, "scripts/test-fixture.ts"), []);
+  assertEquals(findDurableViolations("# mktemp is avoided here\n# /tmp/ is not used", "scripts/test-fixture.sh"), []);
+
+  const call = findDurableViolations('const dir = await mkdtemp("scratch-");', "scripts/test-fixture.ts");
+  assertEquals(call.length, 1);
+  assert(call[0].includes("scripts/test-fixture.ts:1"));
+  const literal = findDurableViolations('const socket = "/tmp/chrome.sock";', "scripts/test-fixture.ts");
+  assertEquals(literal.length, 1);
+  assert(literal[0].includes("scripts/test-fixture.ts:1"));
+  assertEquals(findDurableViolations(
+    'const dir = await mkdtemp(path.join(durableDir("scratch"), "cap-x-"));', "scripts/test-fixture.ts",
+  ), []);
+});
+
+Deno.test("88lzq: real temporary-directory calls survive string and template scanning", () => {
+  const samples = [
+    ['const p = `${await mkdtemp("cap-x-")}`;', 1],
+    ['const cmd = `mktemp -d cap-${id}`; await exec(cmd);', 1],
+    ['await exec(`mktemp -d cap-x`);', 1],
+    ['const cmd = `mktemp -d cap-x`;\nawait exec(cmd);', 1],
+    ['const a = "a ` tick";\nconst dir = await mkdtemp("cap-x-");\nconst b = "b ` tick";', 2],
+    ['const a = "a \\\nb";\ndurableDir("x");\nconst dir = await mkdtemp("cap-x-");', 4],
+    ['const p = `before ${`inner ${mkdtemp("cap-x-")}`} after`;', 1],
+    ["const re = /['\"`]/;\nconst dir = await mkdtemp('cap-x-');", 2],
+    ['const emoji = "🧭";\nconst dir = await mkdtemp("cap-x-");', 2],
+  ] as const;
+  for (const [source, line] of samples) {
+    const failures = findDurableViolations(source, "scripts/sample.ts");
+    assertEquals(failures.length, 1, source);
+    assert(failures[0].includes(`scripts/sample.ts:${line}:`), source);
+  }
+  assertEquals(findDurableViolations('const rationale = `avoid mkdtemp ${why}`;', "scripts/sample.ts"), []);
+  assertEquals(findDurableViolations('const draft = `mktemp -d cap-${id}`;', "scripts/sample.ts"), []);
+  assertEquals(findDurableViolations('dir=`mktemp -d cap-x`', "scripts/sample.sh").length, 1);
+});
+
+Deno.test("jpwvv: comment markers inside quotes never hide a real call or invent one", () => {
+  assertEquals(findDurableViolations("const n = 1;// we avoid mkdtemp here", "scripts/sample.ts"), []);
+  const shell = findDurableViolations('x="a #"; mktemp -d cap-x', "scripts/sample.sh");
+  assertEquals(shell.length, 1, "the # in a shell string must not erase executable code");
+  assert(shell[0].includes("scripts/sample.sh:1:"));
+
+  // Real-tree witness: probeSource contains a template interpolation whose
+  // quoted branch starts with whitespace + '// returns immediately'. A regex
+  // comment pass applied before quote recognition truncates that actual line,
+  // mis-pairs the template and can invent a violation later in THIS file.
+  const path = new URL("./serial-phase-resilience.test.ts", import.meta.url);
+  const source = Deno.readTextFileSync(path);
+  const actualBranch = '"  // returns immediately"';
+  assertStringIncludes(source, actualBranch);
+  const scanned = scanGuardSource(source, false);
+  assertStringIncludes(scanned.literals, actualBranch,
+    "the real quoted branch survives comment scanning; an early // regex truncates it");
+  assertEquals(scanned.calls.length, source.length, "scanner offsets stay aligned with the real fixture");
+  assertEquals(findDurableViolations(source, "tests/serial-phase-resilience.test.ts"), [],
+    "the actual serial-phase fixture must not acquire a false violation");
+});
+
+Deno.test("bp2qx: arrow-adjacent regex with quotes cannot hide later temp calls", () => {
+  // Read the real source line so this fixture follows the in-repo idiom,
+  // rather than proving only a hand-typed arrow/regex approximation.
+  const source = Deno.readTextFileSync(new URL("../scripts/live-every-tab.ts", import.meta.url));
+  const liveLine = source.split("\n").find((line) => line.includes("const listTabsOk = plain.filter"));
+  assert(liveLine?.includes('=> /"type":"tool-result"/'), "live-every-tab must still carry the arrow-regex shape");
+  const liveFixture = `${liveLine}\nconst dir = await mkdtemp("cap-x-");`;
+  assertEquals(findDurableViolations(liveFixture, "scripts/live-every-tab.ts").length, 1);
+  for (const quote of ["'", '"']) {
+    const regex = `const hit = arr.filter((n) => /cap${quote}/.test(n));`;
+    const fixture = `${regex}\nconst dir = await mkdtemp("cap-x-");\nconst other = ${quote}fine${quote};`;
+    const failures = findDurableViolations(fixture, "scripts/sample.ts");
+    assertEquals(failures.length, 1, `a quote inside an arrow regex must not hide code: ${regex}`);
+    assert(failures[0].includes("scripts/sample.ts:2:"));
+    assertEquals(scanGuardSource(fixture, false).calls.split("\n")[0].includes("cap"), false,
+      "the arrow regex must be lexed as a literal, not code");
+  }
+});
+
+Deno.test("6rvgs: argv and shell wrappers execute command strings, not rationale text", () => {
+  const commands = [
+    'const cmd = "mktemp -d cap-x";\nawait new Deno.Command("bash", { args: ["-c", cmd] }).output();',
+    'const cmd = "mktemp -d cap-x";\nspawn("bash", ["-c", cmd]);',
+    'const cmd = "mktemp -d cap-x";\nawait sh(cmd);',
+    'await new Deno.Command("bash", { args: ["-c", "mktemp -d cap-x"] }).output();',
+  ];
+  for (const command of commands) {
+    const failures = findDurableViolations(command, "scripts/sample.ts");
+    assertEquals(failures.length, 1, `the executed command must be rejected: ${command}`);
+    assert(failures[0].includes("scripts/sample.ts:1:") || failures[0].includes("scripts/sample.ts:2:"));
+  }
+  assertEquals(findDurableViolations('const rationale = "avoid mktemp in a shell";', "scripts/sample.ts"), []);
+});
+
+Deno.test("xn482: executed multiline templates name the hazardous line despite opening-line allowance", () => {
+  for (const opening of ['const base = 1; await exec(`echo hi', 'const base = durableDir("x"); await exec(`echo hi']) {
+    const fixture = `${opening}\nmktemp -d cap-x` + '`);';
+    const failures = findDurableViolations(fixture, "scripts/sample.ts");
+    assertEquals(failures.length, 1, `the later command must be reported even when the opener is allowed: ${fixture}`);
+    assert(failures[0].includes("scripts/sample.ts:2: mktemp -d cap-x"));
+  }
 });
 
 // ── chrome-agent-platform-nudb2: scoped reserve + bounded, age-gated trim ──────────────────────
