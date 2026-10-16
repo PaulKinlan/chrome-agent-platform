@@ -1,0 +1,4 @@
+{
+  "extension/background/service-worker.js": ["tests/thread-export-sw-entry.test.ts"],
+  "extension/lib/python-documents-bundle.js": ["tests/python-documents-bundle-3p3e11.test.ts"]
+}

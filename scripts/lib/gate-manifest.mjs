@@ -27,6 +27,39 @@ export function normalizeSuiteList(files = []) {
   return [...new Set(files.map((f) => String(f).trim()).filter(Boolean))].sort();
 }
 
+/** Explain actual suite placement without counting unrelated always-on tests as coverage.
+ * Candidates come from the selector's reverse graph / exact mappings; executed_suites
+ * comes only from the runner. The fleet's independent extractor may find additional
+ * gaps, but this ledger never claims a selected or omitted suite actually ran.
+ * @param {{changed?: string[], candidates?: Record<string, string[]>, executedSuites?: string[], omitted?: Array<{file: string, reason: string}>, unmappable?: Array<{file: string, mechanism: string}>}} args
+ */
+export function explainChangedFileMapping({ changed = [], candidates = {}, executedSuites = [], omitted = [], unmappable = [] } = {}) {
+  const ran = new Set(executedSuites);
+  const omittedByFile = new Map(omitted.map(({ file, reason }) => [file, reason]));
+  const unmappableByFile = new Map(unmappable.map(({ file, mechanism }) => [file, mechanism]));
+  return normalizeSuiteList(changed).map((file) => {
+    if (file.startsWith(".beads/") || /^(?:docs\/.*|.*)\.(?:md|markdown|png|jpe?g|svg|webp|ico|woff2?|txt)$/i.test(file)) {
+      return { file, status: "not-applicable", executed_suites: [], reason: "content or Beads metadata; no executable suite required" };
+    }
+    // An explicitly fail-closed path cannot certify its own subset, even if a
+    // suite happens to import it. Full execution is not selector authority.
+    const failClosedReason = unmappableByFile.get(file);
+    if (failClosedReason) {
+      return { file, status: "unmapped", executed_suites: [], reason: failClosedReason };
+    }
+    const reachable = normalizeSuiteList(candidates[file] ?? []);
+    const executed = reachable.filter((suite) => ran.has(suite));
+    if (executed.length) {
+      return { file, status: "mapped", executed_suites: executed, reason: "reachable inspecting suite executed" };
+    }
+    const omittedReason = reachable.map((suite) => omittedByFile.get(suite)).filter(Boolean);
+    const reason = omittedReason.length ? `reachable suite not run: ${omittedReason.join("; ")}`
+      : reachable.length ? `reachable suite(s) not executed: ${reachable.join(", ")}`
+      : "no executable inspecting suite is reachable from this changed path";
+    return { file, status: "unmapped", executed_suites: [], reason };
+  });
+}
+
 /**
  * One manifest line. Throws rather than emitting a record that would read as a green run naming
  * nothing: `executed > 0` with no `executed_suites` is exactly the `suites:[]` lie the ledger exists
@@ -47,6 +80,7 @@ export function normalizeSuiteList(files = []) {
  *   omittedTotal?: number,
  *   omittedTruncated?: number,
  *   unmapped?: string[],
+ *   fileMapping?: Array<{ file: string, status: string, executed_suites: string[], reason: string }>,
  *   build?: { disposition: string, reason: string, secs: number, markerCommit?: string | null } | null,
  * }} fields
  * @returns {string}
@@ -61,6 +95,7 @@ export function formatGateManifest({
   omittedTotal = 0,
   omittedTruncated = 0,
   unmapped = [],
+  fileMapping = [],
   build = null,
 } = {}) {
   if (tier !== "fast" && tier !== "full") {
@@ -120,6 +155,16 @@ export function formatGateManifest({
   }
   const unmappedList = normalizeSuiteList(unmapped);
   if (unmappedList.length) payload.unmapped = unmappedList;
+  if (fileMapping.length) {
+    for (const row of fileMapping) {
+      if (!row.file || !["mapped", "unmapped", "not-applicable"].includes(row.status) || !row.reason?.trim() ||
+          (row.status === "mapped" && !row.executed_suites?.length) ||
+          (row.status !== "mapped" && row.executed_suites?.length)) {
+        throw new Error(`gate manifest: invalid reasoned changed-file placement: ${JSON.stringify(row)}`);
+      }
+    }
+    payload.file_mapping = fileMapping;
+  }
   return GATE_MANIFEST_PREFIX + JSON.stringify(payload);
 }
 
@@ -195,7 +240,7 @@ export function deferredTierEntries({
  * @param {{
  *   serialFiles?: string[], parallelFiles?: string[], skippedFiles?: string[],
  *   deferred?: Array<{ file: string, reason: string }>, rc: number, cliFiles?: string[],
- *   build?: object | null,
+ *   build?: object | null, fileMappingContext?: object | null,
  * }} args
  * @returns {object | null} null when this was not the default `npm test` form (no gate record)
  */
@@ -207,6 +252,7 @@ export function fullTierManifestFields({
   rc,
   cliFiles = [],
   build = null,
+  fileMappingContext = null,
 } = {}) {
   if (cliFiles.length > 0) return null;
   const executedSuites = [...serialFiles, ...parallelFiles];
@@ -223,6 +269,9 @@ export function fullTierManifestFields({
     build,
     omitted,
     omittedTotal: omitted.length,
+    ...(fileMappingContext ? { fileMapping: explainChangedFileMapping({
+      ...fileMappingContext, executedSuites: rc === 0 ? executedSuites : [], omitted,
+    }) } : {}),
   };
 }
 
@@ -242,13 +291,15 @@ export function formatGateUnknown(reason) {
 /**
  * Write the ledger to a log. Everything goes to stderr so `--list` stdout stays a parseable file
  * list. Returns the lines written (for tests).
- * @param {{ manifest?: object | null, unmapped?: string[], unknown?: string | null, log?: (...a: any[]) => void }} args
+ * @param {{ manifest?: object | null, unmapped?: string[], fileMapping?: Array<{file: string, status: string, reason: string}>, unknown?: string | null, log?: (...a: any[]) => void }} args
  */
-export function emitGateLedger({ manifest = null, unmapped = [], unknown = null, log = console.error } = {}) {
+export function emitGateLedger({ manifest = null, unmapped = [], fileMapping = [], unknown = null, log = console.error } = {}) {
   const lines = [];
   if (manifest) lines.push(formatGateManifest(manifest));
-  const unmappedLine = formatGateUnmapped(unmapped);
+  const missing = fileMapping.filter((row) => row.status === "unmapped");
+  const unmappedLine = formatGateUnmapped([...unmapped, ...missing.map((row) => row.file)]);
   if (unmappedLine) lines.push(unmappedLine);
+  for (const row of missing) lines.push(`fast-gate: unmapped-reason: ${JSON.stringify({ file: row.file, reason: row.reason })}`);
   if (unknown) lines.push(formatGateUnknown(unknown));
   for (const line of lines) log(line);
   return lines;
