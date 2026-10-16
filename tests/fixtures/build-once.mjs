@@ -4,11 +4,12 @@
 // stdout and artifact, WITHOUT each of them paying for another build.
 //
 // WHY A REUSED STDOUT IS NOT A REUSED VERDICT: a record is keyed by the built tree's OWN source
-// authority — the dist.complete marker's commit plus its sha256 over EVERY indexed source file
-// (2183 files, which includes scripts/build.mjs and the scrub/denial logic, since the authority is
-// a full Git-index inventory). A record is trusted only when (a) the live dist.complete validates
-// against the current tree (the same 2-4 s check `npm run note:dist` performs) and (b) its key
-// equals that live marker's key. So any change the repo's OWN staleness contract would catch — a new
+// authority — the dist.complete marker's commit, its sha256 over EVERY indexed source file,
+// and sha256 of the marker's own bytes (including generated output hashes). A record is trusted
+// only when (a) the live dist.complete validates against the current tree (the same 2-4 s check
+// `npm run note:dist` performs) and (b) its key equals that live marker's key. So a new build of
+// the same indexed source but with different generated bundles also gets a different record.
+// Any change the repo's OWN staleness contract would catch — a new
 // commit, or any edit to an INDEXED source including the build and the scrub logic — produces a
 // different key, and a record can never stand in for a tree it did not build. SCOPE OF THE CLAIM,
 // stated rather than implied: this is exactly the authority dist.complete defines and no more. That
@@ -25,19 +26,18 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { validateDistCompleteMarker } from "../../scripts/dist-complete.mjs";
+import { buildOnceKeyFromMarkerText } from "../../scripts/lib/build-once-key.mjs";
 import { durableRoot } from "../../scripts/lib/durable-root.mjs";
 import { PRODUCTION_BUILD_TIMEOUT_MS } from "../../scripts/test-partition.mjs";
 
 const RECORD_DIR_NAME = "serial-build-once";
 
-function readMarker(root) {
+export function readMarker(root) {
   try {
     const raw = readFileSync(join(root, "extension", "dist", "dist.complete"), "utf8");
-    const marker = JSON.parse(raw);
-    const commit = typeof marker?.commit === "string" ? marker.commit : "";
-    const digest = typeof marker?.source?.digest === "string" ? marker.source.digest : "";
-    if (!commit || !digest) return null;
-    return { commit, digest, target: marker.target };
+    const key = buildOnceKeyFromMarkerText(raw);
+    if (!key) return null;
+    return { key };
   } catch {
     return null;
   }
@@ -58,7 +58,7 @@ function recordDir() {
  */
 export async function storeBuildOnce({ root, timeoutMs = PRODUCTION_BUILD_TIMEOUT_MS } = {}) {
   const marker = readMarker(root);
-  const key = marker ? `${marker.commit}-${marker.digest}` : null;
+  const key = marker?.key ?? null;
   const recordPath = key ? join(recordDir(), `${key}.json`) : null;
 
   if (recordPath && existsSync(recordPath)) {
@@ -70,7 +70,7 @@ export async function storeBuildOnce({ root, timeoutMs = PRODUCTION_BUILD_TIMEOU
         expectedTarget: "store",
       });
       const live = readMarker(root);
-      if (live && `${live.commit}-${live.digest}` === key) {
+      if (live?.key === key) {
         const record = JSON.parse(readFileSync(recordPath, "utf8"));
         if (record?.code === 0 && typeof record?.stdout === "string") {
           return { code: 0, stdout: record.stdout, source: "record", key };
@@ -103,7 +103,7 @@ export async function storeBuildOnce({ root, timeoutMs = PRODUCTION_BUILD_TIMEOU
   // build JUST wrote, not by the one it replaced.
   if (code === 0) {
     const built = readMarker(root);
-    const builtKey = built ? `${built.commit}-${built.digest}` : null;
+    const builtKey = built?.key ?? null;
     if (builtKey) {
       try {
         writeFileSync(join(recordDir(), `${builtKey}.json`), JSON.stringify({ code, stdout, at: new Date().toISOString() }));

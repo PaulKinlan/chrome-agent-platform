@@ -43,6 +43,7 @@ import {
 } from "./scripts/changelog-delta.mjs";
 import { resolveGcGraceMs, settleAll } from "./scripts/lib/build-concurrency.mjs";
 import { writeBuildOnceRecord } from "./scripts/lib/build-once-record.mjs";
+import { buildOnceKeyFromMarkerText } from "./scripts/lib/build-once-key.mjs";
 import { stagePyodideRuntime } from "./scripts/lib/pyodide-staging.mjs";
 
 function parseBuildTarget(args) {
@@ -1094,8 +1095,11 @@ try {
     if (isStoreBuild) {
       // Captured here (the marker and summary are known now) but WRITTEN only after the last fatal
       // finalizer below the outer `finally`, by writeBuildOnceRecord (which applies shouldRecordBuild).
+      // Hash the exact marker bytes just published, not only the indexed
+      // source: two builds of one commit may produce different bundles.
+      const markerText = await readFile(COMPLETE_MARKER, "utf8");
       storeBuildRecord = {
-        key: `${writtenMarker.commit}-${writtenMarker.source.digest}`,
+        key: buildOnceKeyFromMarkerText(markerText),
         stdout: `${publishSummary}\n`,
       };
     }
