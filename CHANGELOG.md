@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.718] — 2026-10-16
+- a page teardown no longer signals a Chrome profile whose path merely starts with another profile's path (a `<profile>/p1` cleanup could kill `<profile>/p10`).
+
 ## [0.3.717] — 2026-10-16
 - none: internal test stub construction and ETXTBSY race elimination
 

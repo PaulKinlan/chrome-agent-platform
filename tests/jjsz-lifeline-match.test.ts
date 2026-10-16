@@ -23,6 +23,7 @@ import { assert, assertEquals, assertRejects, assertStrictEquals } from "jsr:@st
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import {
   attachProcessLifeline,
+  killProcessTree,
   isolatedProcessGroup,
   lifelineMatchPattern,
   type LifelineSpawnSpec,
@@ -62,6 +63,16 @@ async function untilCarriers(pattern: string, n: number, ms = 8000): Promise<boo
     await new Promise((r) => setTimeout(r, 25));
   }
   return (await pgrepPids(pattern)).length >= n;
+}
+
+/** Poll until `pattern` (a pgrep -f expression) matches nothing. */
+async function untilGone(pattern: string, ms = 8000): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if ((await pgrepPids(pattern)).length === 0) return true;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return (await pgrepPids(pattern)).length === 0;
 }
 
 async function exitsWithin(proc: Deno.ChildProcess, ms: number): Promise<boolean> {
@@ -450,4 +461,62 @@ Deno.test("jjsz N8: the cleanup helper never throws, runs every later step after
     }
   });
   assertStrictEquals(surfaced, own, "a failing cleanup must not replace the error that was already propagating");
+});
+
+// ── the teardown path uses the SAME escaped, end-anchored pattern (chrome-agent-platform-i6lgk) ──
+// killProcessTree's pkill/pgrep used the caller's treeMatch RAW while the lifeline sweep escaped and
+// anchored it, so a teardown for `<profile>/p1` also signalled `<profile>/p10`. These cases run REAL
+// processes and a REAL pkill, and every pattern is prefixed by a unique scratch directory, so even
+// with the fix reverted nothing but this file's own throwaway carriers can match (the file's rule).
+
+Deno.test("i6lgk: a teardown for <profile>/p1 does not signal the PREFIX-related <profile>/p10", async () => {
+  const root = scratch("teardown");
+  const wanted = `${root}/p1`;
+  const prefixSibling = `${root}/p10`;
+  const first = carrier(wanted);
+  const second = carrier(prefixSibling);
+  try {
+    assert(await untilCarriers(wanted, 1), "the /p1 carrier is running");
+    assert(await untilCarriers(lifelineMatchPattern(prefixSibling), 1), "the /p10 carrier is running");
+    assertEquals(
+      (await pgrepPids(wanted)).length,
+      2,
+      "the RAW prefix matches both carriers - this over-match is the defect under test",
+    );
+
+    await killProcessTree(null, wanted);
+
+    assert(await untilGone(lifelineMatchPattern(wanted)), "the requested profile is gone");
+    assertEquals(
+      await pgrepPids(lifelineMatchPattern(prefixSibling)),
+      [String(second.pid)],
+      "the end anchor keeps a prefix-related profile alive: /p10 must not be signalled for /p1",
+    );
+  } finally {
+    await reap(first);
+    await reap(second);
+  }
+});
+
+Deno.test("i6lgk: an unusable pattern is refused BEFORE any signal, and a live carrier is untouched", async () => {
+  const marker = `${scratch("refuse")}/p1`;
+  const live = carrier(marker);
+  try {
+    assert(await untilCarriers(lifelineMatchPattern(marker), 1), "the carrier is running");
+    // NUL-bearing rather than EMPTY, deliberately: if this refusal were ever removed, an empty
+    // pattern would make `pkill -9 -f ''` match every process on the host, so the empty case is
+    // asserted only through the pure builder above. A NUL cannot reach pkill intact.
+    await assertRejects(
+      () => killProcessTree(null, `${marker}\u0000x`),
+      Error,
+      "cannot use treeMatch",
+    );
+    assertEquals(
+      await pgrepPids(lifelineMatchPattern(marker)),
+      [String(live.pid)],
+      "the refused teardown signalled nothing",
+    );
+  } finally {
+    await reap(live);
+  }
 });
