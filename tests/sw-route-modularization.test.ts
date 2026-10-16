@@ -335,6 +335,8 @@ const BASELINE_ROUTES = [
   "diagnostics.report",
   "security.state",
   "security.clear",
+  // 3p3e.12: exact owner-page HTML export, also inventoried by the authority census.
+  "thread-export.html",
   "browser.callTool",
   "onDeviceText.summarize",
   "onDeviceText.detectLanguage",

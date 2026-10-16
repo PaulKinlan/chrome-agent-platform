@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.703] — 2026-10-15
+- Preview, save, or share one redacted self-contained task or artifact HTML file.
+
 ## [0.3.702] — 2026-10-15
 - Settings now shows per-service enclave call quotas with used, limit, remaining and window, and lets you set, reset or clear a service's limit (0 disables the service).
 

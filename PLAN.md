@@ -385,6 +385,9 @@ extracts clean structured Markdown with YAML frontmatter from tabs and persists 
 Artifacts store with `asArtifact: true`. Composer `+` attach menu provides "Capture this page",
 and `/capture` provides slash-command execution.
 
+## Feature: One-file redacted HTML export (3p3e.12) — Slice 2 candidate
+Slice 1's pure redactor and script-free HTML renderer landed at `f2adf4ab`; it had no UI entry point. Slice 2 adds a task-header Export action and an artifact-viewer Export action. A SW-only, exact-sender-attested read route resolves the authoritative thread and referenced artifact bodies, collects current configured credentials without returning raw vault values, redacts data before rendering, and refuses incomplete exports. The owner previews the exact script-disabled HTML file in a native modal before Save (picker with download fallback) or supported file Share. This candidate still requires focused gates, real-browser evidence, independent review, and the merger's full union gate before landing.
+
 ## Feature: View-Frame Collapse (chrome-agent-platform-lmq) — Staged
 - Stage 1: Client-side view host + Directory view (`chrome-agent-platform-9xj8`) — implemented. Directory renders as a client-side view in the Hub DOM (#view-client-host / #directory-view) without an iframe; single-history-entry preserved by construction; iframe pool retained for Settings/Artifacts.
 - Stage 2: Artifacts explorer client-side view & side inspector (`chrome-agent-platform-5r5s`) — implemented. Artifacts renders natively within Hub DOM (#view-client-host / #artifacts-view); cards grid, kind pill filter, search, capacity meter, and responsive split inspector integrated directly; cross-document postMessage eliminated for Reuse; deep link hash routes (#view=artifacts) supported.

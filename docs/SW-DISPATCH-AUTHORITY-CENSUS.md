@@ -2,13 +2,13 @@
 
 **Status:** Authoritative Census (chrome-agent-platform-ygvt / CAP-FB-20260908-OWNER-DISPATCH-CENSUS-01)  
 **Seams:** `extension/background/service-worker.js`, `extension/background/routes/`, `extension/lib/owner-approval.js`, `extension/lib/pure.js`, `extension/lib/settings-session.js`  
-**Population:** 296 total registered routes, derived from the executable composition (`mergeRouteMaps`) on this branch; `origin/main@f507d58f` was an earlier 288-route snapshot.
+**Population:** 297 total registered routes, derived from the executable composition (`mergeRouteMaps`) on this branch; `origin/main@f507d58f` was an earlier 288-route snapshot.
 
 ---
 
 ## 1. Executive Summary & Purpose
 
-This document provides a total, honest census of all 296 message routes registered in the Chrome Agent Platform Service Worker.
+This document provides a total, honest census of all 297 message routes registered in the Chrome Agent Platform Service Worker.
 
 The population is the key set `mergeRouteMaps` in `service-worker.js` actually returns, evaluated at `origin/main@f507d58f` — not a hand-kept list. That evaluation corrected 276 → 285 (chrome-agent-platform-s7wl): the earlier count silently skipped the three maps `vaultRoutes`, `enclaveProxyRoutes` and `enclaveStatusRoutes` (9 routes, landed 2026-10-03 in `bd17634f`). The 260 this document's sibling threat model quoted and the 276 here were both wrong about the composed population; 285 is what composition produces.
 
@@ -43,7 +43,7 @@ Every message arriving at the Service Worker passes through a layered defense-in
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │ Layer 2: Central Dispatcher (dispatchRoute)                            │
-│ - look up type in handlers map (296 registered routes)                 │
+│ - look up type in handlers map (297 registered routes)                 │
 │ - scrub __* fields and userActivation from message body                │
 │ - inject trusted browser-attested sender (__sender = pageSender)       │
 └───────────────────────────────────┬────────────────────────────────────┘
@@ -76,7 +76,7 @@ Every message arriving at the Service Worker passes through a layered defense-in
 
 ---
 
-## 3. High-Level Population Summary (296 Routes)
+## 3. High-Level Population Summary (297 Routes)
 
 | Category | Count | Permitted Callers | Gating Mechanism |
 |---|---|---|---|
@@ -84,20 +84,20 @@ Every message arriving at the Service Worker passes through a layered defense-in
 | **Settings-Only Direct (`SETTINGS_ONLY_DIRECT`)** | 54 | `owner-options` | `requireSettingsSender` or `wasmStreamOwner` |
 | **Owner-Approval Direct (`OWNER_APPROVAL_DIRECT`)** | 13 | `owner-options`, `extension` | `requireOwnerApproval` + `isOwnerDirectApproval` |
 | **Owner-Approval Required (`OWNER_APPROVAL_REQUIRED`)** | 18 | `model`, `extension` | `requireOwnerApproval` (always prompts or model card) |
-| **Owner Extension-Fenced (`OWNER_EXTENSION_FENCED`)** | 28 | `owner-options`, `extension` | `isOwnerPrincipal(context)` |
+| **Owner Extension-Fenced (`OWNER_EXTENSION_FENCED`)** | 29 | `owner-options`, `extension` | `isOwnerPrincipal(context)` or stricter exact owner-page sender ID/path (`thread-export.html`) |
 | **Execution & Worker Orchestration** | 23 | `extension`, `model`, worker | `runControl`, `activeExecutions`, worker RPC |
 | **Agent Task Board (`AGENT_BOARD`)** | 13 | `extension`, `model` | Board state machine, role fences |
 | **Storage, KV & Memory Fenced** | 10 | `owner-options`, `extension` | Secret key fences, quiescence tracking, leases |
 | **Unclassified Mutations (Gaps)** | 37 | `extension` (any) | Central page filter only; no route-local gate |
 | **Read-Only / Status / Telemetry** | 93 | `owner-options`, `extension` | Read-only browser-attested status; no site enrollment or tool dispatch |
-| **Total** | **296** | | |
+| **Total** | **297** | | |
 
 ---
 
 ## 4. Total Route Inventory & Classification
 
 ### 4.1 Page-Allowed Routes (`PAGE_ALLOWED_ROUTES` — 7 routes)
-These are the ONLY routes accessible to content scripts. All other 289 routes reject content-script callers with `"not authorized from a page"`.
+These are the ONLY routes accessible to content scripts. All other 290 routes reject content-script callers with `"not authorized from a page"`.
 
 | Route Name | Owning Module | Description | Authority Gate |
 |---|---|---|---|
@@ -223,12 +223,13 @@ Actions that require an explicit owner approval card with a payload digest befor
 
 ---
 
-### 4.5 Owner Extension-Fenced Routes (`OWNER_EXTENSION_FENCED` — 28 routes)
-Fenced with `isOwnerPrincipal(context)` (`"extension"` or `"owner-options"`). Callable by extension surfaces (hub, side panel, options), but rejected for pages.
+### 4.5 Owner Extension-Fenced Routes (`OWNER_EXTENSION_FENCED` — 29 routes)
+Fenced at least as strictly as `isOwnerPrincipal(context)` (`"extension"` or `"owner-options"`); the HTML-export route additionally requires the Chrome-attested exact extension ID and a listed page path (NTP for threads; artifact viewer for artifacts). Callable only by its permitted extension surface, never by a content script or model run.
 
 | Route Name | Owning Module | Description |
 |---|---|---|
 | `acp.commands` | `service-worker.js` | Extension-only, temporary no-prompt/no-tool discovery session; always closes; no command dispatch |
+| `thread-export.html` | `service-worker.js` via `lib/thread-export-route.js` | Exact Chrome-attested extension ID + permitted page path; NTP-only for threads. Reads an authoritative thread or artifact, redacts known credentials inside the SW, returns only bounded static HTML and a safe filename; no vault token/raw value leaves the SW and no new permission is requested |
 | `browser.callTool` | `service-worker.js` | Invokes a browser tool (ACP in-app protocol) |
 | `actions.undo` | `service-worker.js` | Undoes a user action recorded in ledger |
 | `notifications.list` | `service-worker.js` | Lists pending extension notifications |

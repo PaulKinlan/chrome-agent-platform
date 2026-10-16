@@ -66,10 +66,12 @@
           <segmented-control id="modes" items="Preview,Source,Diff" value="Preview" label="Artifact view" hidden></segmented-control>
         </div>
         <div class="head-right">
+          <button class="btn" id="export-html" type="button" aria-label="Export artifact as HTML" disabled>Export HTML…</button>
           <button class="btn" id="save-disk" type="button" disabled>Save to disk</button>
           <button class="btn" id="copy-content" type="button" disabled>Copy content</button>
         </div>
       </div>
+      <p class="error" id="export-html-error" role="status" aria-live="polite" hidden></p>
       <div id="out"></div>
     </main>
     <script type="module" src="../dist/artifact.bundle.js"></script>

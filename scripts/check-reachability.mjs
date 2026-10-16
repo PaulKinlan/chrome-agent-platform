@@ -52,11 +52,8 @@ export const SKIPPED_DIRS = new Set(["dist", "dist-versions", "dist-archives", "
 //     tests so the follow-up is a mechanical delete.
 export const RETAINED = {
 
-  "lib/thread-export-html.js":
-    "Standalone static HTML generator for thread exports (chrome-agent-platform-3p3e.12, Slice 1): UI export/save wiring is the NEXT slice; tests/thread-export-html.test.ts pins the generator contract meanwhile.",
-
-  "lib/thread-export-redact.js":
-    "Pure exact-value secret redactor and collector for thread exports (chrome-agent-platform-3p3e.12, Slice 1): UI export/save wiring is the NEXT slice; tests/thread-export-html.test.ts pins the redaction contract meanwhile.",
+  // Slice 2 of 3p3e.12 reaches both export modules via the SW-only
+  // thread-export route. Their interim Slice-1 RETAINED exceptions are gone.
 
   "lib/acp-port.js":
     "Streaming MessageChannel transport for the in-browser sandboxed ACP harness (qnd4, cap-k3 design): the options.js wiring + sandbox harness page are the NEXT slice on the branch; tests/acp-port.test.ts pins the handshake/framing contract meanwhile.",

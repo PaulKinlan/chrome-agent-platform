@@ -132,6 +132,7 @@ import {
   createChromeAlarmsAdapter,
 } from "../lib/data-archive.js";
 import { createSecretVault, createServiceWorkerAccess } from "../lib/secret-vault.js";
+import { createThreadExportRoute } from "../lib/thread-export-route.js";
 import { synthesizeServiceTools, SERVICE_DESCRIPTORS, enclaveToolsForRun } from "../lib/service-tools.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { attachmentContext, buildMultimodalTask, sanitizeAttachments, validateRunAttachments } from "../lib/attachments.js";
@@ -7440,13 +7441,30 @@ const enclaveStatusRoutes = {
     return await enclaveStatusForSettings();
   },
 };
+// Export is a read-only owner-page route. The SW alone holds the vault access
+// token; no caller-provided body, token, or raw credential ever crosses back.
+const threadExportRoute = createThreadExportRoute({
+  extensionId: chrome.runtime.id,
+  getThreadView: (id) => handlers["thread.get"]({ id, all: true }),
+  getArtifact: (origin, id) => getAsset(origin, id),
+  getProviderConfig: async () => (await kvGet("providerConfig")).providerConfig ?? {},
+  getCredentialStores: async () => {
+    const stored = await kvGet(["cap:mcpServers", "cap:namedAgents"]);
+    return { globalMcpServers: stored["cap:mcpServers"] ?? [], namedAgents: stored["cap:namedAgents"] ?? [] };
+  },
+  listVaultKeys: async () => (await enclaveVault().then((vault) => vault.listMasked({ caller: "sw" }))).map(({ keyId }) => keyId),
+  readVaultSecret: async (keyId) => (await enclaveVault().then((vault) =>
+    vault.getSecretRaw(keyId, { caller: "sw", access: enclaveSwAccess }))).value,
+});
 const handlers = mergeRouteMaps(
   vaultRoutes,
   enclaveProxyRoutes,
   enclaveStatusRoutes,
-  // THE ACP HARNESS'S BROWSER-TOOL CALLS (chrome-agent-platform-2amt). Fenced with isOwnerPrincipal
-  // (OWNER_EXTENSION_FENCED): callable by extension surfaces (hub, sidepanel), but rejected for pages.
   {
+    // 3p3e.12: the stricter exact ID + page-path fence lives in thread-export-route.js.
+    "thread-export.html": threadExportRoute,
+    // THE ACP HARNESS'S BROWSER-TOOL CALLS (chrome-agent-platform-2amt). Fenced with isOwnerPrincipal
+    // (OWNER_EXTENSION_FENCED): callable by extension surfaces (hub, sidepanel), but rejected for pages.
     "browser.callTool": async (message, context) => {
       if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
       const executionId = typeof message?.executionId === "string" ? message.executionId : "";

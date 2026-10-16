@@ -447,6 +447,9 @@ see images" were measured coming back from one.
   note and a `truncated` event. The diff itself comes from the bundled diff
   core (jsdiff); the element only renders it.
 
+## Portable HTML export boundary (3p3e.12, Slice 2)
+The task header and standalone artifact viewer offer a keyboard-reachable Export action. Only the exact Chrome-attested extension sender ID **and** permitted page path may call `thread-export.html`; the route accepts an authoritative thread ID or artifact origin+ID, never caller-provided HTML or a vault token. The SW resolves stored thread/run-log projection and referenced artifact bodies, reads configured provider/MCP values and the vault with its existing SW-held access token, redacts the **data** before templating and refuses a file if known literals remain. It returns only a bounded, fixed-`text/html` static document and a sanitized `.html` filename. The renderer's existing printed privacy caveat is honest about unknown user-prose secrets. A native modal shows the exact same File bytes in a sandboxed script-disabled frame before the user can Save or Share; the picker opens directly on the Save gesture, falling back to a download only when unavailable, and Share is offered only when `navigator.canShare({ files })` supports this File. No new extension permissions are requested.
+
 ## Generated artifact boundary
 Interactive HTML previews use three distinct layers: the privileged extension
 surface, a stable manifest-declared opaque sandbox host, and one disposable
