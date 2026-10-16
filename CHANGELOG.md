@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.705] — 2026-10-16
+- The offscreen document and the script sandbox now declare their page language, so assistive technology can identify the default English language of those internal pages instead of having to guess it.
+
 ## [0.3.704] — 2026-10-16
 - checks now genuinely stop when a tab cannot be activated. The activation call was being skipped entirely because the target id was read from the wrong level of the reply, so a dead tab could still be typed into; that is fixed and covered.
 
