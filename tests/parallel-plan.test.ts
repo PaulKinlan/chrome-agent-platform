@@ -51,18 +51,18 @@ Deno.test("kz27: the plan is not a blanket 'run everything' — the failure stat
 });
 
 Deno.test("877x1: computeParallelPhaseTimeout adapts dynamically to CPU concurrency and file count", () => {
-  // On a 2-vCPU machine with 800 files, timeout scales beyond the 1800s floor
-  const scaled2Cpu = computeParallelPhaseTimeout(800, { cpus: 2, minMs: 0 });
+  // On a 2-vCPU machine with 800 files, timeout scales beyond the 1800s floor (neutralize fleet full-gate env pin)
+  const scaled2Cpu = computeParallelPhaseTimeout(800, { cpus: 2, minMs: 0, ignoreEnv: true });
   // 120s + (800 * 5s) / 2 = 120s + 2000s = 2120s = 2,120,000 ms
   assertEquals(scaled2Cpu, 2_120_000);
 
   // On an 8-vCPU machine with 800 files, timeout scales down proportionally
-  const scaled8Cpu = computeParallelPhaseTimeout(800, { cpus: 8, minMs: 0 });
+  const scaled8Cpu = computeParallelPhaseTimeout(800, { cpus: 8, minMs: 0, ignoreEnv: true });
   // 120s + (800 * 5s) / 8 = 120s + 500s = 620s = 620,000 ms
   assertEquals(scaled8Cpu, 620_000);
 
   // Standard minMs floor preserves DEFAULT_PARALLEL_TIMEOUT_MS (1800s) for smaller counts
-  const smallSuite = computeParallelPhaseTimeout(10, { cpus: 2 });
+  const smallSuite = computeParallelPhaseTimeout(10, { cpus: 2, ignoreEnv: true });
   assertEquals(smallSuite, DEFAULT_PARALLEL_TIMEOUT_MS);
 
   // Production option-less call: for current suite size (~687 files), respects DEFAULT_PARALLEL_TIMEOUT_MS floor (882rr)
@@ -70,11 +70,11 @@ Deno.test("877x1: computeParallelPhaseTimeout adapts dynamically to CPU concurre
   assert(optionless >= DEFAULT_PARALLEL_TIMEOUT_MS, "option-less call must respect at least the default floor");
 
   // On 2 CPUs with real suite size (687 files), scales above the 1800s floor (882rr)
-  const scaledRealSuite2Cpu = computeParallelPhaseTimeout(687, { cpus: 2 });
+  const scaledRealSuite2Cpu = computeParallelPhaseTimeout(687, { cpus: 2, ignoreEnv: true });
   assertEquals(scaledRealSuite2Cpu, 1_837_500);
 
   // Massive suite scales option-less above 1800s floor even on multi-core host
-  const massiveSuite = computeParallelPhaseTimeout(5000, { cpus: 8 });
+  const massiveSuite = computeParallelPhaseTimeout(5000, { cpus: 8, ignoreEnv: true });
   assertEquals(massiveSuite, 3_245_000);
 
   // Explicit positive envTimeout override is honored

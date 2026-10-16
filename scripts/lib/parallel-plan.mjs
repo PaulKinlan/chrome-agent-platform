@@ -30,14 +30,20 @@ export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
  * @param {object} [options]
  * @param {number} [options.cpus] - Available concurrency (defaults to os.availableParallelism or cpus.length)
  * @param {string|number} [options.envTimeout] - Explicit timeout override from env
+ * @param {boolean} [options.ignoreEnv] - Whether to ignore process.env overrides
  * @param {number} [options.msPerFile] - Estimated CPU budget per file (default 5000ms: ~2.5s work + 2x margin)
  * @param {number} [options.baselineMs] - Baseline floor for isolate spin-up and long test tail (default 120,000ms)
  * @param {number} [options.minMs] - Minimum timeout floor (default DEFAULT_PARALLEL_TIMEOUT_MS = 1,800,000ms)
  * @returns {number} Timeout in milliseconds
  */
 export function computeParallelPhaseTimeout(filesCount, options = {}) {
-  const envVal = options.envTimeout ?? process.env.CAP_PARALLEL_TEST_TIMEOUT_MS;
-  if (envVal !== undefined && envVal !== "") {
+  let envVal;
+  if ("envTimeout" in options) {
+    envVal = options.envTimeout;
+  } else if (!options.ignoreEnv) {
+    envVal = process.env.CAP_PARALLEL_TEST_TIMEOUT_MS;
+  }
+  if (envVal !== undefined && envVal !== null && envVal !== "") {
     const parsed = Number(envVal);
     if (Number.isFinite(parsed)) {
       if (parsed <= 0) return 0; // Explicit 0/negative disables the timeout (pre-delta escape hatch; bzk6g)
