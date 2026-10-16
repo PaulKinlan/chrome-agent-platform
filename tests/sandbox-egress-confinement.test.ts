@@ -15,6 +15,7 @@
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
+import { captureSnapshotWithRetry } from "../scripts/lib/load-retry.ts";
 import { launchChrome, openCdp, computeUnpackedExtensionId, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
 import { STORE_SANDBOX_CSP } from "../scripts/store-target-policy.mjs";
@@ -268,23 +269,7 @@ Deno.test({
         conv.appendArtifact({ artifact: { ...asset, origin: asset.origin ?? "master", id } });
       })()`);
 
-      let imageStatus = null;
-      for (let attempt = 0; attempt < 24; attempt++) {
-        try {
-          const snapshot = await cdp.send("Page.captureSnapshot", { format: "mhtml" }, page.sessionId);
-          const mhtml = String(snapshot.result?.data ?? "").replace(/=\r?\n/g, "");
-          if (mhtml.includes("image-loaded:20")) { imageStatus = "loaded:20"; break; }
-          if (mhtml.includes("image-blocked:0")) { imageStatus = "blocked:0"; break; }
-        } catch (e) {
-          // Under host CPU contention Page.captureSnapshot can transiently fail to generate MHTML
-          if (attempt === 23) {
-            const { readLoadSample, environmentLine } = await import("../scripts/lib/quiet-window.ts");
-            const sample = await readLoadSample().catch(() => null);
-            throw new Error(`Page.captureSnapshot failed after 24 attempts [${environmentLine(sample)}]: ${e?.message ?? e}`);
-          }
-        }
-        await new Promise((r) => setTimeout(r, 250));
-      }
+      const { status: imageStatus } = await captureSnapshotWithRetry(cdp, page.sessionId, 24);
       assertEquals(imageStatus, "loaded:20", "Artifact preview must render local data: images without CSP blockage");
     } finally {
       cdp?.close();

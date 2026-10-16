@@ -504,3 +504,57 @@ Deno.test("ic1pa: processGroup returns null on ESRCH / vanished process", async 
   });
   assertEquals(esrchResult, null, "processGroup must return null when reading stat throws ESRCH");
 });
+
+Deno.test("ri0x8: captureSnapshotWithRetry survives transient MHTML generation failure and fails closed on exhausted attempts", async () => {
+  const { captureSnapshotWithRetry } = await import("../scripts/lib/load-retry.ts");
+
+  // 1. Transient failure on attempts 1-2, success on attempt 3
+  let callCount = 0;
+  const mockCdp = {
+    send: async (method: string) => {
+      callCount++;
+      if (method === "Page.captureSnapshot") {
+        if (callCount < 3) {
+          throw new Error("Page.captureSnapshot: Failed to generate MHTML");
+        }
+        return { result: { data: "Content-Type: multipart/related\nimage-loaded:20\n" } };
+      }
+      return {};
+    },
+  };
+
+  const result = await captureSnapshotWithRetry(mockCdp as any, "session-1", 5, {
+    sleep: async () => {},
+  });
+
+  assertEquals(result.attempts, 3, "must retry through transient MHTML failure");
+  assertEquals(result.status, "loaded:20", "must return success status when attempt succeeds");
+
+  // 2. Exhausted failures: rethrows error carrying environmentLine
+  const failingCdp = {
+    send: async () => {
+      throw new Error("Page.captureSnapshot: Failed to generate MHTML");
+    },
+  };
+
+  let caughtError: Error | null = null;
+  try {
+    await captureSnapshotWithRetry(failingCdp as any, "session-2", 3, {
+      readLoadSample: async () => ({
+        measurable: true,
+        loadPerCore: 4.0,
+        activeCompilers: 9,
+      }),
+      environmentLine: () => "live-chrome=7 load1=12.50 heavy-builders=2[esbuild,cargo]",
+      sleep: async () => {},
+    });
+  } catch (e: any) {
+    caughtError = e;
+  }
+
+  assert(caughtError !== null, "must throw when all attempts exhaust");
+  assert(
+    caughtError!.message.includes("Page.captureSnapshot failed after 3 attempts [live-chrome=7 load1=12.50 heavy-builders=2[esbuild,cargo]]"),
+    `error message must include attempt count and environmentLine: ${caughtError!.message}`,
+  );
+});

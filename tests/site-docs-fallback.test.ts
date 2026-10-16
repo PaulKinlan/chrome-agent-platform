@@ -304,38 +304,16 @@ Deno.test("z3xx4: extractMarkdownLinks extracts bracketed URLs and titles matchi
   ]);
 });
 
+import { measureWithLoadRetry } from "../scripts/lib/load-retry.ts";
+
 Deno.test("e7gwq / j2vok falsification: crafted adversarial inputs finish in linear time without stalling the service worker", async () => {
   const budgetMs = loadScaledTimingBudget(75, 6);
-
-  const measureWithLoadRetry = async (run: (stats: { steps: number }) => void) => {
-    let stats = { steps: 0 };
-    const t0 = performance.now();
-    run(stats);
-    let elapsed = performance.now() - t0;
-    if (elapsed >= budgetMs) {
-      const { readLoadSample, isQuiet, resolveSpec } = await import("../scripts/lib/quiet-window.ts");
-      const sample = await readLoadSample().catch(() => null);
-      if (sample && sample.measurable && !isQuiet(sample, resolveSpec())) {
-        for (let retry = 0; retry < 3; retry++) {
-          const freshStats = { steps: 0 };
-          const tRetry = performance.now();
-          run(freshStats);
-          const retryElapsed = performance.now() - tRetry;
-          if (retryElapsed < budgetMs) {
-            elapsed = retryElapsed;
-            stats = freshStats;
-            break;
-          }
-        }
-      }
-    }
-    return { elapsed, stats };
-  };
+  const measure = (run: (stats: { steps: number }) => void) => measureWithLoadRetry(run, budgetMs);
 
   // 1. 100,000 unclosed opening brackets that would cause catastrophic scan/regex times
   const unclosedBrackets = "[".repeat(100_000);
   let res1: string[] = [];
-  const { elapsed: elapsed1, stats: stats1 } = await measureWithLoadRetry((stats) => {
+  const { elapsed: elapsed1, stats: stats1 } = await measure((stats) => {
     res1 = parseLlmsTxt(unclosedBrackets, ORIGIN, { stats });
   });
   assertEquals(res1, []);
@@ -345,7 +323,7 @@ Deno.test("e7gwq / j2vok falsification: crafted adversarial inputs finish in lin
   // 2. 500KiB of unmatched ']' brackets (voya0 finding: previous lastIndexOf backward scan took 21.3s)
   const unmatchedClosing = "]".repeat(500 * 1024);
   let resVoya: string[] = [];
-  const { elapsed: elapsedVoya, stats: statsVoya } = await measureWithLoadRetry((stats) => {
+  const { elapsed: elapsedVoya, stats: statsVoya } = await measure((stats) => {
     resVoya = parseLlmsTxt(unmatchedClosing, ORIGIN, { stats });
   });
   assertEquals(resVoya, []);
@@ -355,7 +333,7 @@ Deno.test("e7gwq / j2vok falsification: crafted adversarial inputs finish in lin
   // 3. sbiel finding: [x](y) followed by repeated '](' patterns that previously triggered backward rescans
   const sbielInput = "[x](https://docs.example.com/y)\n" + "](".repeat(100_000);
   let resSbiel: string[] = [];
-  const { elapsed: elapsedSbiel, stats: statsSbiel } = await measureWithLoadRetry((stats) => {
+  const { elapsed: elapsedSbiel, stats: statsSbiel } = await measure((stats) => {
     resSbiel = parseLlmsTxt(sbielInput, ORIGIN, { stats });
   });
   assertEquals(resSbiel, ["https://docs.example.com/y"]);
@@ -365,7 +343,7 @@ Deno.test("e7gwq / j2vok falsification: crafted adversarial inputs finish in lin
   // 4. 20,000 unclosed link patterns: `[text](` repeated
   const unclosedLinks = "[text](".repeat(20_000);
   let res2: string[] = [];
-  const { elapsed: elapsed2, stats: stats2 } = await measureWithLoadRetry((stats) => {
+  const { elapsed: elapsed2, stats: stats2 } = await measure((stats) => {
     res2 = parseLlmsTxt(unclosedLinks, ORIGIN, { stats });
   });
   assertEquals(res2, []);
@@ -375,12 +353,103 @@ Deno.test("e7gwq / j2vok falsification: crafted adversarial inputs finish in lin
   // 5. Deeply nested brackets: `[[[[...]]]]`
   const nested = "[".repeat(10_000) + "]".repeat(10_000);
   let res3: string[] = [];
-  const { elapsed: elapsed3, stats: stats3 } = await measureWithLoadRetry((stats) => {
+  const { elapsed: elapsed3, stats: stats3 } = await measure((stats) => {
     res3 = parseLlmsTxt(nested, ORIGIN, { stats });
   });
   assertEquals(res3, []);
   assert(stats3.steps <= nested.length, `steps (${stats3.steps}) must not exceed input length (${nested.length})`);
   assert(elapsed3 < budgetMs, `10k nested brackets must finish in <${budgetMs}ms (took ${elapsed3.toFixed(2)}ms)`);
+});
+
+Deno.test("ri0x8: measureWithLoadRetry executes warm retry on injected non-quiet contention and uses fresh stats per attempt", async () => {
+  // 1. Contended host: initial run exceeds budget (100ms >= 50ms), simulated retry finishes in 10ms (< 50ms)
+  let attemptCount = 0;
+  let simulatedTime = 0;
+  const mockNow = () => simulatedTime;
+
+  const resultContended = await measureWithLoadRetry(
+    (stats) => {
+      attemptCount++;
+      stats.steps += 100_000;
+      if (attemptCount === 1) {
+        simulatedTime += 100; // First attempt slow (scheduler preemption)
+      } else {
+        simulatedTime += 10;  // Second attempt fast (warm cache, no swap)
+      }
+    },
+    50, // budgetMs
+    {
+      readLoadSample: async () => ({
+        measurable: true,
+        loadPerCore: 2.5,
+        activeCompilers: 9,
+      }),
+      isQuiet: () => false, // Non-quiet
+      resolveSpec: () => ({} as any),
+      now: mockNow,
+    },
+  );
+
+  assertEquals(attemptCount, 2, "must retry when initial run exceeds budget on contended host");
+  assertEquals(resultContended.retried, true, "retried flag must be true");
+  assertEquals(resultContended.elapsed, 10, "elapsed must reflect passing retry elapsed time");
+  assertEquals(resultContended.stats.steps, 100_000, "stats.steps must NOT accumulate across attempts (yggmv pin: exactly 100,000, not 200,000)");
+
+  // 2. Quiet host: initial run exceeds budget -> MUST NOT retry, fails closed
+  let quietAttempts = 0;
+  let quietTime = 0;
+  const quietNow = () => quietTime;
+
+  const resultQuiet = await measureWithLoadRetry(
+    (stats) => {
+      quietAttempts++;
+      stats.steps += 100_000;
+      quietTime += 100;
+    },
+    50,
+    {
+      readLoadSample: async () => ({
+        measurable: true,
+        loadPerCore: 0.1,
+        activeCompilers: 0,
+      }),
+      isQuiet: () => true, // Quiet box
+      resolveSpec: () => ({} as any),
+      now: quietNow,
+    },
+  );
+
+  assertEquals(quietAttempts, 1, "must NOT retry on quiet box");
+  assertEquals(resultQuiet.retried, false, "retried flag must be false");
+  assertEquals(resultQuiet.elapsed, 100, "elapsed must reflect initial failure");
+  assertEquals(resultQuiet.stats.steps, 100_000);
+
+  // 3. Unmeasurable host: measurable = false -> MUST NOT retry, fails closed
+  let unmeasurableAttempts = 0;
+  let unmeasurableTime = 0;
+  const unmeasurableNow = () => unmeasurableTime;
+
+  const resultUnmeasurable = await measureWithLoadRetry(
+    (stats) => {
+      unmeasurableAttempts++;
+      stats.steps += 100_000;
+      unmeasurableTime += 100;
+    },
+    50,
+    {
+      readLoadSample: async () => ({
+        measurable: false,
+        loadPerCore: 0,
+        activeCompilers: 0,
+      }),
+      isQuiet: () => false,
+      resolveSpec: () => ({} as any),
+      now: unmeasurableNow,
+    },
+  );
+
+  assertEquals(unmeasurableAttempts, 1, "must NOT retry on unmeasurable box");
+  assertEquals(resultUnmeasurable.retried, false, "retried flag must be false");
 });
 
 /**
