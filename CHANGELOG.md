@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.719] — 2026-10-16
+- unauth callers can no longer read host paths from the ACP /health endpoint, and a page teardown no longer kills a Chrome whose profile path merely prefixes another's
+
 ## [0.3.718] — 2026-10-16
 - hardened the Python wheel admission path against archive bombs and patched proxy-addr, ip-address, hono and undici
 
