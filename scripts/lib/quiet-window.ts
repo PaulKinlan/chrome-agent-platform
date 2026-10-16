@@ -910,6 +910,83 @@ export function classifyEvaluateTimeout(
 }
 
 /**
+ * Returns true if the sample carries contemporaneous evidence of a named heavy
+ * builder or compiler job that is not the test runner itself.
+ */
+export function hasNamedHeavyJob(sample: LoadSample | null): boolean {
+  if (!sample || !sample.measurable) return false;
+  if (Array.isArray(sample.compilerNames) && sample.compilerNames.length > 0) return true;
+  if (Array.isArray(sample.activeCompilerNames) && sample.activeCompilerNames.length > 0) return true;
+  if (typeof sample.activeBuilderJobs === "number" && sample.activeBuilderJobs > 0) return true;
+  if (typeof sample.compilers === "number" && sample.compilers > 0) return true;
+  if (typeof sample.activeCompilers === "number" && sample.activeCompilers > 0) return true;
+  return false;
+}
+
+/**
+ * Classify a real-browser CDP timeout (e.g. Target.getTargets, openCdp send,
+ * or in-page evaluate in browser test journeys).
+ *
+ * Per MERGER-PLAYBOOK m9g43 and CHROME-TEST-CONTRACT:220, ambient load / load average
+ * alone from the test suite's own parallel phase is NOT an environmental signature.
+ * A CDP timeout under load is classified as an environmental refusal ONLY when the
+ * sample carries contemporaneous evidence of a NAMED heavy builder job
+ * (activeBuilderJobs > 0 or non-empty compilerNames).
+ * On an idle box, or under parallel test runner load with zero named builder jobs,
+ * it is classified as a PRODUCT RED (environmental: false).
+ */
+export function classifyCdpTimeout(
+  sample: LoadSample | null,
+  spec: ResolvedSpec = resolveSpec(),
+): EvaluateTimeoutVerdict {
+  const environment = environmentLine(sample, spec);
+  if (!sample || !sample.measurable) {
+    return {
+      cause: "unmeasurable",
+      environmental: true,
+      reason: `cdp operation exceeded the budget; the box could not be measured (${
+        sample?.error ?? "no sample"
+      }) — failing closed to environmental, NOT a load claim`,
+      environment,
+      sample: sample ?? null,
+    };
+  }
+
+  const namedJob = hasNamedHeavyJob(sample);
+  const reasons = quietReasons(sample, spec);
+
+  if (namedJob && reasons.length > 0) {
+    return {
+      cause: "loaded",
+      environmental: true,
+      reason: `cdp operation exceeded the budget under named heavy builder load (${reasons.join("; ")})`,
+      environment,
+      sample,
+    };
+  }
+
+  return {
+    cause: "idle-never-settled",
+    environmental: false,
+    reason: namedJob
+      ? "cdp operation exceeded the budget while the box was measurably IDLE"
+      : `cdp operation exceeded the budget with zero concurrent named heavy-builder jobs (unnamed parallel-phase load: ${environment}) — preserving PRODUCT RED per MERGER-PLAYBOOK m9g43`,
+    environment,
+    sample,
+  };
+}
+
+/**
+ * Convenience wrapper: read a load sample and classify a real-browser CDP timeout.
+ */
+export async function measureCdpTimeout(
+  spec: ResolvedSpec = resolveSpec(),
+): Promise<EvaluateTimeoutVerdict> {
+  const sample = await readLoadSample().catch(() => null);
+  return classifyCdpTimeout(sample, spec);
+}
+
+/**
  * The harness's decision, as data: which exit code an evaluate timeout takes
  * and what it prints. Separated from `chrome-journeys.ts` so it can be executed
  * in a unit test — the misattribution this bead fixes lived at the exit site,

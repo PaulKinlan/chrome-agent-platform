@@ -239,7 +239,11 @@ whole-suite mutant run); **inspection** means read from the source, not executed
   Anything that moves the journeys' abort path owes `git grep -n "measureEvaluateTimeout\\|evaluateTimeoutReport\\|environmentalAbort"`: an evaluate timeout is classified by
   MEASUREMENT (`loaded` / `idle-never-settled` / `unmeasurable`), and only the first and
   last are environmental — an idle box that never settled is a product red and its line
-  must not carry `CAP_ENVIRONMENTAL_REFUSAL`.
+  must not carry `CAP_ENVIRONMENTAL_REFUSAL`. Real-browser CDP operations (`waitForServiceWorker`,
+  `openCdp` send, `kat-evaluate`) use `classifyCdpTimeout` (`chrome-agent-platform-56hfm`),
+  requiring contemporaneous evidence of a named heavy builder job (`activeBuilderJobs > 0`
+  or non-empty `compilerNames`) before granting `loaded` / `environmental: true`; unnamed parallel-phase
+  load alone strictly remains `PRODUCT RED`.
 - **Subject moves:** LOUD naming the harness.
 
 ## 10b. tests/journey-scripted-probe.test.ts + `runScriptedToolProbe` in scripts/chrome-journeys.ts

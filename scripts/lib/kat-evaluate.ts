@@ -4,6 +4,8 @@
 import {
   classifyEvaluateTimeout,
   measureEvaluateTimeout,
+  classifyCdpTimeout,
+  measureCdpTimeout,
   evaluateTimeoutReport,
   ENVIRONMENTAL_REFUSAL_EXIT,
   ENVIRONMENTAL_REFUSAL_MARKER,
@@ -31,7 +33,7 @@ export class CdpEvaluateLoadTimeoutError extends Error {
     totalTimeoutMs: number,
   ) {
     super(
-      `CDP ${method} exceeded total budget (${totalTimeoutMs}ms, base ${baseTimeoutMs}ms) under host load [${verdict.cause}]: ${verdict.environment} (${verdict.reason})`,
+      `${ENVIRONMENTAL_REFUSAL_MARKER}: ENVIRONMENT: CDP ${method} exceeded total budget (${totalTimeoutMs}ms, base ${baseTimeoutMs}ms) under host load [${verdict.cause}]: ${verdict.environment} (${verdict.reason})`,
     );
     this.name = "CdpEvaluateLoadTimeoutError";
     this.method = method;
@@ -86,9 +88,9 @@ export function createClassifiedCdpClient(
   const clearTimer = opts.clearTimeoutFn ?? ((id) => clearTimeout(id));
 
   const measure = opts.measureVerdict ?? (async () => {
-    return await measureEvaluateTimeout().catch(async () => {
+    return await measureCdpTimeout().catch(async () => {
       const sample = await readLoadSample().catch(() => null);
-      return classifyEvaluateTimeout(sample);
+      return classifyCdpTimeout(sample);
     });
   });
 
@@ -147,7 +149,7 @@ export function createClassifiedCdpClient(
         // Finding P1: Recalculate elapsed AFTER measurement completes
         const elapsedAfterMeasure = now() - req.startedAt;
 
-        if (verdict.cause === "loaded" || verdict.environmental) {
+        if (verdict.environmental && (verdict.cause === "loaded" || verdict.cause === "unmeasurable")) {
           if (!req.extended && starvationTimeoutMs > elapsedAfterMeasure) {
             req.extended = true;
             const remainingMs = Math.max(1, starvationTimeoutMs - elapsedAfterMeasure);
@@ -160,6 +162,16 @@ export function createClassifiedCdpClient(
           }
 
           pending.delete(id);
+          log(
+            `${ENVIRONMENTAL_REFUSAL_MARKER} ${
+              JSON.stringify({
+                method: req.method,
+                reason: verdict.reason,
+                cause: verdict.cause,
+                environment: verdict.environment,
+              })
+            }`,
+          );
           req.reject(
             new CdpEvaluateLoadTimeoutError(
               req.method,

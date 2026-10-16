@@ -185,7 +185,8 @@ function runParallel(files, phase = "parallel phase") {
         capturedOutput.includes(ENVIRONMENTAL_REFUSAL_MARKER) ||
         capturedOutput.includes("QuietWindowRefusedError") ||
         capturedOutput.includes("ENVIRONMENT: machine is not quiet enough for this gate") ||
-        capturedOutput.includes("ENVIRONMENT: ntp-boot-staging refusal");
+        capturedOutput.includes("ENVIRONMENT: ntp-boot-staging refusal") ||
+        capturedOutput.includes("ENVIRONMENT: the fleet-wide heavy-gate slot is busy");
       if (effectiveCode !== 0 && hasEnvironmentalMarker) {
         // Finding P1 (Round 4 review): A passing test emitting a marker must NOT allow a
         // failing product test to exit 75. Every failed test under ERRORS must carry

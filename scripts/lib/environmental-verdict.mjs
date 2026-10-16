@@ -39,13 +39,32 @@ export function areAllFailuresEnvironmental(cleanOutput) {
       return false;
     }
 
+    // Finding lckla / 56hfm: A failure designated as PRODUCT RED or idle/unnamed load
+    // is strictly a product stop, never an environmental refusal.
+    if (
+      errorBody.includes("PRODUCT RED (not environmental):") ||
+      errorBody.includes("[idle-never-settled]") ||
+      errorBody.includes("zero concurrent named heavy-builder jobs")
+    ) {
+      return false;
+    }
+
     const isRefusal =
-      errorBody.includes(ENVIRONMENTAL_REFUSAL_MARKER) ||
       errorBody.includes("ENVIRONMENT: machine is not quiet enough for this gate") ||
       errorBody.includes("ENVIRONMENT: ntp-boot-staging refusal") ||
       errorBody.includes("ENVIRONMENT: the fleet-wide heavy-gate slot is busy") ||
       errorBody.includes("QuietWindowRefusedError: ENVIRONMENT:") ||
-      errorBody.includes("BootStagingEnvironmentalRefusalError: ENVIRONMENT:");
+      errorBody.includes("BootStagingEnvironmentalRefusalError: ENVIRONMENT:") ||
+      (errorBody.includes(ENVIRONMENTAL_REFUSAL_MARKER) &&
+        errorBody.includes("ENVIRONMENT:") &&
+        (errorBody.includes("ServiceWorkerTargetTimeoutError:") ||
+          errorBody.includes("CdpEvaluateLoadTimeoutError:") ||
+          errorBody.includes("CdpLoadTimeoutError:")) &&
+        (errorBody.includes("[loaded]") || errorBody.includes("[unmeasurable]"))) ||
+      (errorBody.includes(ENVIRONMENTAL_REFUSAL_MARKER) &&
+        !errorBody.includes("ServiceWorkerTargetTimeoutError:") &&
+        !errorBody.includes("CdpEvaluateLoadTimeoutError:") &&
+        !errorBody.includes("CdpLoadTimeoutError:"));
     if (!isRefusal) {
       return false;
     }

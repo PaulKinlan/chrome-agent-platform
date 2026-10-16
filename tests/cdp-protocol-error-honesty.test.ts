@@ -33,7 +33,12 @@
 // The third test is the CONTROL. Without it these two could pass by making the
 // client reject everything; it proves a well-behaved peer still resolves honestly.
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { openCdp } from "../scripts/lib/chrome-launch.ts";
+import {
+  openCdp,
+  CdpLoadTimeoutError,
+  CdpIdleTimeoutError,
+} from "../scripts/lib/chrome-launch.ts";
+import { ENVIRONMENTAL_REFUSAL_MARKER } from "../scripts/lib/environmental-verdict.mjs";
 
 type Inbound = { id?: number; method?: string; params?: unknown; sessionId?: string };
 /** Returns the CDP reply body; the server adds the matching `id`. */
@@ -144,6 +149,81 @@ Deno.test("mee3: control — a well-behaved CDP peer still resolves honestly (th
     assertEquals(targets.result.targetInfos[0].targetId, "TARGET-1");
     assertEquals(await cdp.attach("TARGET-1"), "SESSION-HONEST");
     assertEquals(await cdp.eval("SESSION-HONEST", "1+1"), "HONEST-EVAL-VALUE");
+  } finally {
+    cdp.close();
+    await srv.close();
+  }
+});
+
+Deno.test("56hfm: openCdp deadline timeout under host load throws CdpLoadTimeoutError naming load environment and marker", async () => {
+  // Silent server that never answers
+  const srv = await serveFakeCdp(() => null);
+  const mockLoadedVerdict: any = {
+    cause: "loaded",
+    environmental: true,
+    reason: "cdp evaluate exceeded the budget and the box WAS loaded (load1/core > 0.8)",
+    environment: "load1=12.50 load5=8.20 cores=14 load/core=0.89 heavy-builders=2[esbuild,cargo]",
+    sample: null,
+  };
+
+  const cdp = await openCdp(srv.url, {
+    timeoutMs: 40,
+    measureVerdict: async () => mockLoadedVerdict,
+    countLiveChrome: () => 7,
+  });
+
+  try {
+    const err: any = await assertRejects(
+      () => cdp.send("Target.getTargets"),
+      CdpLoadTimeoutError,
+    );
+
+    assert(err instanceof CdpLoadTimeoutError, "must throw CdpLoadTimeoutError");
+    assertEquals(err.verdict.cause, "loaded");
+    assertEquals(err.verdict.environmental, true);
+    assertEquals(err.timeoutMs, 40);
+    assertEquals(err.liveChrome, 7);
+    assert(err.message.includes(ENVIRONMENTAL_REFUSAL_MARKER), "must carry refusal marker");
+    assert(err.message.includes("ENVIRONMENT:"), "must carry ENVIRONMENT prefix");
+    assert(err.message.includes("[loaded]"), "must name load cause");
+    assert(err.message.includes("live-chrome=7"), "must name live chrome count");
+    assert(err.message.includes("load/core=0.89"), "must include host load");
+  } finally {
+    cdp.close();
+    await srv.close();
+  }
+});
+
+Deno.test("56hfm: FALSIFICATION (two-sided) — openCdp deadline timeout on idle box throws CdpIdleTimeoutError (PRODUCT RED)", async () => {
+  // Silent server that never answers
+  const srv = await serveFakeCdp(() => null);
+  const mockIdleVerdict: any = {
+    cause: "idle-never-settled",
+    environmental: false,
+    reason: "cdp evaluate exceeded the budget while the box was measurably IDLE",
+    environment: "load1=0.10 load5=0.08 cores=14 load/core=0.01 heavy-builders=0",
+    sample: null,
+  };
+
+  const cdp = await openCdp(srv.url, {
+    timeoutMs: 40,
+    measureVerdict: async () => mockIdleVerdict,
+    countLiveChrome: () => 1,
+  });
+
+  try {
+    const err: any = await assertRejects(
+      () => cdp.send("Target.getTargets"),
+      CdpIdleTimeoutError,
+    );
+
+    assert(err instanceof CdpIdleTimeoutError, "must throw CdpIdleTimeoutError");
+    assertEquals(err.verdict.cause, "idle-never-settled");
+    assertEquals(err.verdict.environmental, false);
+    assertEquals(err.timeoutMs, 40);
+    assertEquals(err.liveChrome, 1);
+    assert(err.message.includes("PRODUCT RED (not environmental)"), "must carry product red marker");
+    assert(!err.message.includes(ENVIRONMENTAL_REFUSAL_MARKER), "must NOT carry environmental refusal marker");
   } finally {
     cdp.close();
     await srv.close();
