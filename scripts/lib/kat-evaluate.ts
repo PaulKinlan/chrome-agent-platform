@@ -31,7 +31,7 @@ export class CdpEvaluateLoadTimeoutError extends Error {
     totalTimeoutMs: number,
   ) {
     super(
-      `CDP ${method} exceeded total budget (${totalTimeoutMs}ms, base ${baseTimeoutMs}ms) under host load [${verdict.cause}]: ${verdict.environment} (${verdict.reason})`,
+      `${ENVIRONMENTAL_REFUSAL_MARKER}: ENVIRONMENT: CDP ${method} exceeded total budget (${totalTimeoutMs}ms, base ${baseTimeoutMs}ms) under host load [${verdict.cause}]: ${verdict.environment} (${verdict.reason})`,
     );
     this.name = "CdpEvaluateLoadTimeoutError";
     this.method = method;
@@ -160,6 +160,16 @@ export function createClassifiedCdpClient(
           }
 
           pending.delete(id);
+          log(
+            `${ENVIRONMENTAL_REFUSAL_MARKER} ${
+              JSON.stringify({
+                method: req.method,
+                reason: verdict.reason,
+                cause: verdict.cause,
+                environment: verdict.environment,
+              })
+            }`,
+          );
           req.reject(
             new CdpEvaluateLoadTimeoutError(
               req.method,

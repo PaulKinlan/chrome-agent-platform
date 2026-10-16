@@ -156,6 +156,8 @@ Deno.test("tf48c: exhausted starvation deadline under host load throws CdpEvalua
   assertEquals(err.verdict.cause, "loaded");
   assert(err.message.includes("[loaded]"));
   assert(err.message.includes("load1=28.00"));
+  assert(err.message.includes(ENVIRONMENTAL_REFUSAL_MARKER), "message must carry refusal marker under load");
+  assert(err.message.includes("ENVIRONMENT:"), "message must carry ENVIRONMENT prefix under load");
 
   // Check report format matches environmental refusal protocol
   const report = evaluateTimeoutReport(err.verdict);
@@ -198,6 +200,8 @@ Deno.test("tf48c: idle box timeout throws CdpEvaluateIdleTimeoutError (exit 1, P
   assert(err instanceof CdpEvaluateIdleTimeoutError);
   assertEquals(err.verdict.cause, "idle-never-settled");
   assertEquals(err.verdict.environmental, false);
+  assert(!err.message.includes(ENVIRONMENTAL_REFUSAL_MARKER), "idle message must NOT carry refusal marker");
+  assert(err.message.includes("PRODUCT RED (not environmental)"), "idle message must carry product red prefix");
 
   // Check report format matches product red protocol
   const report = evaluateTimeoutReport(err.verdict);

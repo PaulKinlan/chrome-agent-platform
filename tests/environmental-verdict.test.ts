@@ -52,6 +52,98 @@ error: Error: ${ENVIRONMENTAL_REFUSAL_MARKER} {"reason":"prereq-failed"}
   assertEquals(areAllFailuresEnvironmental(testOutput), true);
 });
 
+Deno.test("56hfm: areAllFailuresEnvironmental recognizes real-browser timeout errors under host load as environmental", () => {
+  const swLoadOutput = `
+ ERRORS 
+
+waitForServiceWorker stall under host load => ./tests/sample-browser.test.ts:15:6
+error: ServiceWorkerTargetTimeoutError: ${ENVIRONMENTAL_REFUSAL_MARKER}: ENVIRONMENT: waitForServiceWorker: Target.getTargets: deadline exceeded (120ms total budget, 30ms per-call budget, 3 attempts) [loaded] live-chrome=7 load1=12.50 load5=8.20 cores=14 load/core=0.89 heavy-builders=2[esbuild,cargo]
+    throw new ServiceWorkerTargetTimeoutError(msg, details);
+          ^
+
+ FAILURES 
+`;
+  assertEquals(areAllFailuresEnvironmental(swLoadOutput), true);
+
+  const cdpLoadOutput = `
+ ERRORS 
+
+cdp eval stall under host load => ./tests/sample-browser.test.ts:35:6
+error: CdpLoadTimeoutError: ${ENVIRONMENTAL_REFUSAL_MARKER}: ENVIRONMENT: CDP Runtime.evaluate deadline exceeded (30000ms budget) under host load [loaded]: live-chrome=7 load1=12.50 load/core=0.89
+    throw new CdpLoadTimeoutError(msg, verdict, budget, liveChrome);
+          ^
+
+ FAILURES 
+`;
+  assertEquals(areAllFailuresEnvironmental(cdpLoadOutput), true);
+
+  const katEvalLoadOutput = `
+ ERRORS 
+
+kat evaluate stall under host load => ./tests/kat-evaluate-sample.test.ts:40:6
+error: CdpEvaluateLoadTimeoutError: ${ENVIRONMENTAL_REFUSAL_MARKER}: ENVIRONMENT: CDP Runtime.evaluate exceeded total budget (25000ms, base 10000ms) under host load [loaded]: load1=12.50 load5=8.20 cores=14 load/core=0.89 (cdp evaluate exceeded the budget and the box WAS loaded)
+    throw new CdpEvaluateLoadTimeoutError(method, verdict, baseTimeoutMs, starvationTimeoutMs);
+          ^
+
+ FAILURES 
+`;
+  assertEquals(areAllFailuresEnvironmental(katEvalLoadOutput), true);
+});
+
+Deno.test("56hfm: FALSIFICATION (two-sided) — idle timeouts and genuine product failures stay PRODUCT RED", () => {
+  // 1. ServiceWorkerTargetTimeoutError while idle MUST be product red (environmental: false)
+  const swIdleOutput = `
+ ERRORS 
+
+waitForServiceWorker timeout on idle box => ./tests/sample-browser.test.ts:15:6
+error: ServiceWorkerTargetTimeoutError: PRODUCT RED (not environmental): waitForServiceWorker: Target.getTargets: deadline exceeded (80ms total budget, 25ms per-call budget, 2 attempts) [idle-never-settled] live-chrome=1 load1=0.20 load5=0.15 cores=14 load/core=0.01 heavy-builders=0
+    throw new ServiceWorkerTargetTimeoutError(msg, details);
+          ^
+
+ FAILURES 
+`;
+  assertEquals(areAllFailuresEnvironmental(swIdleOutput), false, "idle service worker timeout must stay product red");
+
+  // 2. CdpIdleTimeoutError while idle MUST be product red
+  const cdpIdleOutput = `
+ ERRORS 
+
+cdp eval stall on idle box => ./tests/sample-browser.test.ts:35:6
+error: CdpIdleTimeoutError: PRODUCT RED (not environmental): CDP Runtime.evaluate deadline exceeded (30000ms budget) while the box was measurably IDLE [load1=0.20 load5=0.15 cores=14 load/core=0.01 heavy-builders=0] — cdp evaluate exceeded the budget while the box was measurably IDLE
+    throw new CdpIdleTimeoutError(msg, verdict, budget, liveChrome);
+          ^
+
+ FAILURES 
+`;
+  assertEquals(areAllFailuresEnvironmental(cdpIdleOutput), false, "idle cdp timeout must stay product red");
+
+  // 3. CdpEvaluateIdleTimeoutError while idle MUST be product red
+  const katIdleOutput = `
+ ERRORS 
+
+kat evaluate stall on idle box => ./tests/kat-evaluate-sample.test.ts:40:6
+error: CdpEvaluateIdleTimeoutError: PRODUCT RED (not environmental): CDP Runtime.evaluate exceeded budget (10000ms) while the box was measurably IDLE [load1=0.20 load5=0.15 cores=14 load/core=0.01 heavy-builders=0] — cdp evaluate exceeded the budget while the box was measurably IDLE
+    throw new CdpEvaluateIdleTimeoutError(method, verdict, timeoutMs);
+          ^
+
+ FAILURES 
+`;
+  assertEquals(areAllFailuresEnvironmental(katIdleOutput), false, "idle kat timeout must stay product red");
+
+  // 4. An AssertionError that quotes load evidence or refusal markers MUST still be product red
+  const assertionFailureWithLoadQuote = `
+ ERRORS 
+
+test failure with load quote => ./tests/wait-for-service-worker-resilience.test.ts:215:6
+error: AssertionError: must have polled responsive Chrome multiple times under loaded: live-chrome=7 load1=12.50
+    throw new AssertionError(msg);
+          ^
+
+ FAILURES 
+`;
+  assertEquals(areAllFailuresEnvironmental(assertionFailureWithLoadQuote), false, "AssertionError must never be converted to environmental");
+});
+
 Deno.test("xj6sb: combinePhaseExitCodes combines exit codes correctly and prioritizes product failures over refusals", () => {
   // All green
   assertEquals(combinePhaseExitCodes(0, 0, 0), 0);

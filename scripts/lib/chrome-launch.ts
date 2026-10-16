@@ -34,6 +34,7 @@ import {
   classifyEvaluateTimeout,
   measureEvaluateTimeout,
   type EvaluateTimeoutVerdict,
+  ENVIRONMENTAL_REFUSAL_MARKER,
 } from "./quiet-window.ts";
 import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, type HeavyGateLease } from "./heavy-gate-slot.ts";
 import { resolveChromeForTesting } from "./chrome-for-testing.ts";
@@ -1206,12 +1207,64 @@ export interface CdpClient {
   close(): void;
 }
 
+export interface OpenCdpOpts {
+  timeoutMs?: number;
+  measureVerdict?: () => Promise<EvaluateTimeoutVerdict>;
+  countLiveChrome?: () => number;
+}
+
+/**
+ * Thrown by CDP client operations when a CDP method call exceeds its deadline under host load.
+ * Carries the host load verdict, timeout budget, and live Chrome process count.
+ */
+export class CdpLoadTimeoutError extends Error {
+  readonly verdict: EvaluateTimeoutVerdict;
+  readonly timeoutMs: number;
+  readonly liveChrome: number;
+
+  constructor(
+    message: string,
+    verdict: EvaluateTimeoutVerdict,
+    timeoutMs: number,
+    liveChrome: number,
+  ) {
+    super(message);
+    this.name = "CdpLoadTimeoutError";
+    this.verdict = verdict;
+    this.timeoutMs = timeoutMs;
+    this.liveChrome = liveChrome;
+  }
+}
+
+/**
+ * Thrown by CDP client operations when a CDP method call exceeds its deadline while the machine was measurably idle.
+ * This represents a product failure (something never settled, e.g. unhandled promise, hung service worker).
+ */
+export class CdpIdleTimeoutError extends Error {
+  readonly verdict: EvaluateTimeoutVerdict;
+  readonly timeoutMs: number;
+  readonly liveChrome: number;
+
+  constructor(
+    message: string,
+    verdict: EvaluateTimeoutVerdict,
+    timeoutMs: number,
+    liveChrome: number,
+  ) {
+    super(message);
+    this.name = "CdpIdleTimeoutError";
+    this.verdict = verdict;
+    this.timeoutMs = timeoutMs;
+    this.liveChrome = liveChrome;
+  }
+}
+
 /**
  * The minimal CDP client the harnesses used to each carry a private copy of.
  * One WebSocket over the browser endpoint `launchChrome()` returned; every
  * method is bounded and a protocol error REJECTS (never resolves as success).
  */
-export async function openCdp(wsUrl: string, opts: { timeoutMs?: number } = {}): Promise<CdpClient> {
+export async function openCdp(wsUrl: string, opts: OpenCdpOpts = {}): Promise<CdpClient> {
   const ws = new WebSocket(wsUrl);
   await withTimeout(
     new Promise<void>((res, rej) => {
@@ -1251,8 +1304,49 @@ export async function openCdp(wsUrl: string, opts: { timeoutMs?: number } = {}):
         ws.send(JSON.stringify({ id: mid, method, params, sessionId }));
       }),
       opts.timeoutMs ?? 30000,
-    ).catch((e) => {
+    ).catch(async (e) => {
       pending.delete(mid);
+      const isDeadline = e?.message === "deadline" || e?.message?.includes("deadline");
+      if (isDeadline) {
+        const timeoutBudget = opts.timeoutMs ?? 30000;
+        const verdict = opts.measureVerdict
+          ? await opts.measureVerdict()
+          : await measureEvaluateTimeout().catch(async () => {
+              const sample = await readLoadSample().catch(() => null);
+              return classifyEvaluateTimeout(sample);
+            });
+        const liveChrome = opts.countLiveChrome
+          ? opts.countLiveChrome()
+          : countLiveChromeProcesses();
+        const evidence = `[cdp:${method}] deadline exceeded (${timeoutBudget}ms budget) under ${verdict.cause}: live-chrome=${liveChrome} ${verdict.environment} (${verdict.reason})`;
+        console.error(evidence);
+        if (verdict.environmental) {
+          console.error(
+            `${ENVIRONMENTAL_REFUSAL_MARKER} ${
+              JSON.stringify({
+                method,
+                reason: verdict.reason,
+                cause: verdict.cause,
+                environment: verdict.environment,
+                liveChrome,
+              })
+            }`,
+          );
+          throw new CdpLoadTimeoutError(
+            `${ENVIRONMENTAL_REFUSAL_MARKER}: ENVIRONMENT: CDP ${method} deadline exceeded (${timeoutBudget}ms budget) under host load [${verdict.cause}]: live-chrome=${liveChrome} ${verdict.environment} (${verdict.reason})`,
+            verdict,
+            timeoutBudget,
+            liveChrome,
+          );
+        } else {
+          throw new CdpIdleTimeoutError(
+            `PRODUCT RED (not environmental): CDP ${method} deadline exceeded (${timeoutBudget}ms budget) while the box was measurably IDLE [${verdict.environment}] — ${verdict.reason}`,
+            verdict,
+            timeoutBudget,
+            liveChrome,
+          );
+        }
+      }
       throw new Error(`${method}: ${e?.message ?? e}`);
     });
   };
@@ -1500,8 +1594,26 @@ export async function waitForServiceWorker(
     const evidence = `[waitForServiceWorker] Target.getTargets: deadline exceeded (${totalTimeoutMs}ms total budget, ${callTimeoutMs}ms per-call budget, ${attempts} attempts, ${timedOutCalls} timed out) under ${verdict.cause}: live-chrome=${liveChrome} ${verdict.environment} (${verdict.reason})`;
     console.error(evidence);
 
+    if (verdict.environmental) {
+      console.error(
+        `${ENVIRONMENTAL_REFUSAL_MARKER} ${
+          JSON.stringify({
+            target: "waitForServiceWorker",
+            reason: verdict.reason,
+            cause: verdict.cause,
+            environment: verdict.environment,
+            liveChrome,
+          })
+        }`,
+      );
+    }
+
+    const prefix = verdict.environmental
+      ? `${ENVIRONMENTAL_REFUSAL_MARKER}: ENVIRONMENT: `
+      : "PRODUCT RED (not environmental): ";
+
     throw new ServiceWorkerTargetTimeoutError(
-      `waitForServiceWorker: Target.getTargets: deadline exceeded (${totalTimeoutMs}ms total budget, ${callTimeoutMs}ms per-call budget, ${attempts} attempts) [${verdict.cause}] live-chrome=${liveChrome} ${verdict.environment}`,
+      `${prefix}waitForServiceWorker: Target.getTargets: deadline exceeded (${totalTimeoutMs}ms total budget, ${callTimeoutMs}ms per-call budget, ${attempts} attempts) [${verdict.cause}] live-chrome=${liveChrome} ${verdict.environment}`,
       {
         totalTimeoutMs,
         callTimeoutMs,

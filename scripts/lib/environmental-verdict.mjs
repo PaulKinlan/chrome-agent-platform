@@ -45,7 +45,13 @@ export function areAllFailuresEnvironmental(cleanOutput) {
       errorBody.includes("ENVIRONMENT: ntp-boot-staging refusal") ||
       errorBody.includes("ENVIRONMENT: the fleet-wide heavy-gate slot is busy") ||
       errorBody.includes("QuietWindowRefusedError: ENVIRONMENT:") ||
-      errorBody.includes("BootStagingEnvironmentalRefusalError: ENVIRONMENT:");
+      errorBody.includes("BootStagingEnvironmentalRefusalError: ENVIRONMENT:") ||
+      (errorBody.includes("ServiceWorkerTargetTimeoutError:") &&
+        (errorBody.includes("[loaded]") || errorBody.includes("[unmeasurable]"))) ||
+      (errorBody.includes("CdpEvaluateLoadTimeoutError:") &&
+        (errorBody.includes("[loaded]") || errorBody.includes("[unmeasurable]"))) ||
+      (errorBody.includes("CdpLoadTimeoutError:") &&
+        (errorBody.includes("[loaded]") || errorBody.includes("[unmeasurable]")));
     if (!isRefusal) {
       return false;
     }

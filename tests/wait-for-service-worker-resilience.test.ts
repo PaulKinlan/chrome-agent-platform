@@ -15,6 +15,7 @@
 // 8. countLiveChromeProcesses executes safely without throwing.
 
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
+import { ENVIRONMENTAL_REFUSAL_MARKER } from "../scripts/lib/environmental-verdict.mjs";
 import {
   waitForServiceWorker,
   SW_MATCH,
@@ -179,6 +180,8 @@ Deno.test("3nurz: waitForServiceWorker throws ServiceWorkerTargetTimeoutError na
   assert(err.message.includes("[loaded]"), "message must name load classification");
   assert(err.message.includes("live-chrome=7"), "message must include live Chrome process count");
   assert(err.message.includes("load/core=0.89"), "message must include host load info");
+  assert(err.message.includes(ENVIRONMENTAL_REFUSAL_MARKER), "message must carry refusal marker under load");
+  assert(err.message.includes("ENVIRONMENT:"), "message must carry ENVIRONMENT prefix under load");
 });
 
 Deno.test("3nurz: waitForServiceWorker classifies timeout under idle conditions as idle-never-settled", async () => {
@@ -210,6 +213,8 @@ Deno.test("3nurz: waitForServiceWorker classifies timeout under idle conditions 
   assertEquals(err.verdict.cause, "idle-never-settled");
   assertEquals(err.verdict.environmental, false);
   assert(err.message.includes("[idle-never-settled]"));
+  assert(!err.message.includes(ENVIRONMENTAL_REFUSAL_MARKER), "idle message must NOT carry refusal marker");
+  assert(err.message.includes("PRODUCT RED (not environmental):"), "idle message must carry product red prefix");
 });
 
 Deno.test("3nurz: waitForServiceWorker returns null when Chrome is responsive but worker never registers", async () => {
