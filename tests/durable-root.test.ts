@@ -64,6 +64,7 @@ function probeEnvCases(): Promise<Record<string, Probe>> {
       try {
         set(capRoot);
         Deno.env.set("CAP_DURABLE_DIR_MAX_ENTRIES", "2");
+        Deno.env.set("CAP_DURABLE_DIR_MIN_FREE_BYTES", "0");
         mod.durableDir("sub1");
         mod.durableDir("sub2");
         out.capExceeded = probe(() => mod.durableDir("sub3"));
