@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.718] — 2026-10-16
+- none: internal ACP bridge /health origin guard and pre-auth info disclosure remediation
+
 ## [0.3.717] — 2026-10-16
 - none: internal test stub construction and ETXTBSY race elimination
 
