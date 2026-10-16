@@ -735,9 +735,15 @@ export async function requireQuietWindow(
   throw new QuietWindowRefusedError(verdict);
 }
 
-/** The exit code a harness uses for an environmental refusal. Distinct from 0
- *  (green) and 1 (a product red) so no aggregator can confuse them. */
-export const ENVIRONMENTAL_REFUSAL_EXIT = 75;
+import {
+  ENVIRONMENTAL_REFUSAL_EXIT,
+  ENVIRONMENTAL_REFUSAL_MARKER,
+} from "./environmental-verdict.mjs";
+
+export {
+  ENVIRONMENTAL_REFUSAL_EXIT,
+  ENVIRONMENTAL_REFUSAL_MARKER,
+};
 
 /**
  * chrome-agent-platform-qk7p: a journeys `Runtime.evaluate` that exceeds the
@@ -752,9 +758,6 @@ export const ENVIRONMENTAL_REFUSAL_EXIT = 75;
 export function isCdpEvaluateTimeout(message: string): boolean {
   return /cdp timeout: Runtime\.evaluate/.test(String(message ?? ""));
 }
-
-/** The marker line an aggregator can grep to classify a refusal. */
-export const ENVIRONMENTAL_REFUSAL_MARKER = "CAP_ENVIRONMENTAL_REFUSAL";
 
 /**
  * chrome-agent-platform-9t1p: `isCdpEvaluateTimeout` says an evaluate blew its

@@ -30,6 +30,8 @@ import { ALWAYS_ON } from "./select-tests.mjs";
 import { parallelPlan } from "./lib/parallel-plan.mjs";
 import { loadWeights, scheduleOrder } from "./lib/parallel-schedule.mjs";
 import { emitGateLedger, deferredTierEntries, fullTierManifestFields, parseGateBuild } from "./lib/gate-manifest.mjs";
+import { checkBrowserPrerequisite } from "./lib/browser-prerequisite.mjs";
+import { ENVIRONMENTAL_REFUSAL_EXIT } from "./lib/environmental-verdict.mjs";
 
 export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
 const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_MS ?? DEFAULT_PARALLEL_TIMEOUT_MS);
@@ -229,7 +231,7 @@ function runParallel(files, phase = "parallel phase") {
           const failCount = Number(summaryMatch[1]);
           const allEnvironmental = areAllFailuresEnvironmental(clean);
           if (failCount > 0 && allEnvironmental) {
-            effectiveCode = 75;
+            effectiveCode = ENVIRONMENTAL_REFUSAL_EXIT;
           } else {
             announce(`\nrun-tests: ${phase} contains non-environmental failure(s) — preserving PRODUCT RED (exit 1)`);
           }
@@ -238,8 +240,8 @@ function runParallel(files, phase = "parallel phase") {
         }
       }
       const secs = ((Date.now() - t0) / 1000).toFixed(0);
-      const isRefusal = effectiveCode === 75;
-      const statusText = effectiveCode === 0 ? "GREEN" : isRefusal ? "REFUSED (environmental verdict, exit 75)" : "FAILED";
+      const isRefusal = effectiveCode === ENVIRONMENTAL_REFUSAL_EXIT;
+      const statusText = effectiveCode === 0 ? "GREEN" : isRefusal ? `REFUSED (environmental verdict, exit ${ENVIRONMENTAL_REFUSAL_EXIT})` : "FAILED";
       console.log(`\nrun-tests: ${phase} (${files.length} files) ${statusText} in ${secs}s`);
       resolve(effectiveCode);
     });
@@ -300,6 +302,25 @@ export async function main(args = process.argv.slice(2)) {
     const plan = defaultTestPlan(all);
     serialFiles = plan.serialFiles;
     parallel = plan.parallel;
+  }
+
+  // Pre-flight prerequisite check (chrome-agent-platform-jy7aj):
+  // When browser-dependent tests (or the full gate suite) are to run, verify that a usable
+  // browser resolves BEFORE executing any tests. If missing, REFUSE loudly with a named
+  // prerequisite fault instead of letting a serial failure skip 645 files and mask the run as '1 failed'.
+  const prereq = checkBrowserPrerequisite(cliFiles.length === 0 ? all : cliFiles, {
+    isFullSuite: cliFiles.length === 0,
+    totalFiles: serialFiles.length + parallel.length,
+  });
+  if (prereq.refused) {
+    console.error(`\n${prereq.refusal.line}\n`);
+    console.log(prereq.refusal.marker, JSON.stringify(prereq.refusal.payload));
+    if (cliFiles.length === 0) {
+      emitGateLedger({
+        unknown: `PREREQUISITE MISSING: chrome - ${prereq.refusal.payload.filesNotRun} files not run (${prereq.report.tried.join("; ")})`,
+      });
+    }
+    process.exit(prereq.refusal.exit);
   }
 
   // chrome-agent-platform-kz27: the parallel phase used to be conditional on the serial phase

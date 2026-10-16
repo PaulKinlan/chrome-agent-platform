@@ -49,6 +49,7 @@ import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
 import { isSelectorInfrastructure, mapUncovered, versionOnlyJsonChange } from "./lib/changed-file-mapping.mjs";
 import { emitGateLedger } from "./lib/gate-manifest.mjs";
 import { decideBuild, ensureStoreBuild, findDistConsumers } from "./build-if-needed.mjs";
+import { checkBrowserPrerequisite } from "./lib/browser-prerequisite.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -941,6 +942,20 @@ async function main() {
     console.log(plan.files.join("\n"));
     return;
   }
+
+  // Pre-flight prerequisite check (chrome-agent-platform-jy7aj):
+  // If the selected subset includes browser-dependent tests, refuse early with a named
+  // prerequisite fault rather than executing failing tests.
+  const prereq = checkBrowserPrerequisite(plan.files);
+  if (prereq.refused) {
+    console.error(`\n${prereq.refusal.line}\n`);
+    console.log(prereq.refusal.marker, JSON.stringify(prereq.refusal.payload));
+    emitGateLedger({
+      unknown: `PREREQUISITE MISSING: chrome - ${prereq.refusal.payload.filesNotRun} files not run (${prereq.report.tried.join("; ")})`,
+    });
+    process.exit(prereq.refusal.exit);
+  }
+
   const decision = decideBuild({
     kind: "subset",
     selected: plan.files,
