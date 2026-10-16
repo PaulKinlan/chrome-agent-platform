@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.721] — 2026-10-16
+- a Chrome launch is no longer reported as protected before its crash watchdog is in its own session, so a test runner that kills the whole process group can no longer orphan a browser
+
 ## [0.3.720] — 2026-10-16
 - the licence disclosure on the About page now credits the actual author of the bundled BLAKE3 module (hash-wasm, Copyright (c) 2020 Dani Biro) instead of the generic CAP tools text
 
