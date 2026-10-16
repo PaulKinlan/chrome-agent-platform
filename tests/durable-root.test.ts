@@ -470,6 +470,70 @@ function* walk(dir: string): Generator<string> {
   }
 }
 
+/**
+ * Strips comments from source code while preserving exact line count and line indices.
+ */
+export function stripComments(source: string, isShell: boolean): string {
+  if (isShell) {
+    return source.replace(/(^|\s)#.*$/gm, "$1");
+  }
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/(^|\s)\/\/.*$/gm, "$1");
+}
+
+/**
+ * Strips string literals from source code while preserving exact line count and line indices.
+ */
+export function stripStrings(source: string): string {
+  return source
+    .replace(/`(?:\\[\s\S]|[^\\`])*`/g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/'(?:\\[\s\S]|[^\\'\n])*'/g, "''")
+    .replace(/"(?:\\[\s\S]|[^\\"\n])*"/g, '""');
+}
+
+/**
+ * Scan file content for unallowed tempdir calls or tmpfs literals.
+ * Scope-aware (pru35): comments and string literals are not treated as CALL sites,
+ * and comments are not treated as path literals.
+ */
+export function findDurableViolations(
+  content: string,
+  relPath: string,
+  {
+    isShell = relPath.endsWith(".sh"),
+    allowedCallsOnly = false,
+  }: { isShell?: boolean; allowedCallsOnly?: boolean } = {},
+): string[] {
+  const violations: string[] = [];
+  const noCommentsText = stripComments(content, isShell);
+  const noStringsText = stripStrings(noCommentsText);
+
+  const rawLines = content.split("\n");
+  const codeLines = noCommentsText.split("\n");
+  const codeWithoutStringsLines = noStringsText.split("\n");
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const rawLine = rawLines[i];
+    const codeLine = codeLines[i];
+    const codeWithoutStrings = codeWithoutStringsLines[i];
+
+    if (DURABLE_ROUTED.test(rawLine)) continue;
+    if (ALLOWED_LITERALS.some((l) => rawLine.includes(l))) continue;
+
+    // CALL detectors match only in executable code outside comments and string literals
+    const call = CALL_DETECTORS.some((re) => re.test(codeWithoutStrings));
+    // LITERAL detectors match path literals in code outside comments
+    const literal = LITERAL_DETECTORS.some((re) => re.test(codeLine));
+
+    if (!call && !literal) continue;
+    if (allowedCallsOnly && call && !literal) continue;
+
+    violations.push(`${relPath}:${i + 1}: ${rawLine.trim()}`);
+  }
+  return violations;
+}
+
 Deno.test("guard: tmpdir/tmpfs usage is durable-routed or deliberately allowed", () => {
   const offenders: string[] = [];
   for (const root of GUARD_ROOTS) {
@@ -477,25 +541,66 @@ Deno.test("guard: tmpdir/tmpfs usage is durable-routed or deliberately allowed",
       const rel = file.slice(ROOT.length);
       if (rel === "tests/durable-root.test.ts") continue; // the guard names the patterns itself
       if (ALLOWED_FILES.has(rel)) continue;
-      const lines = Deno.readTextFileSync(file).split("\n");
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (DURABLE_ROUTED.test(line)) continue;
-        if (ALLOWED_LITERALS.some((l) => line.includes(l))) continue;
-        const call = CALL_DETECTORS.some((re) => re.test(line));
-        const literal = LITERAL_DETECTORS.some((re) => re.test(line));
-        if (!call && !literal) continue;
-        if (ALLOWED_FILES.has(rel)) continue;
-        if (ALLOWED_CALLS_ONLY.has(rel) && call && !literal) continue;
-        offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
-      }
+      const content = Deno.readTextFileSync(file);
+      const violations = findDurableViolations(content, rel, {
+        allowedCallsOnly: ALLOWED_CALLS_ONLY.has(rel),
+      });
+      offenders.push(...violations);
     }
   }
   assertEquals(
     offenders,
     [],
-    "tmpdir/tmpfs usage outside the durable convention and the allowance list",
+    "tmpdir/tmpfs usage outside the durable convention and the allowance list (use durableDir('scratch') or ALLOWED_LITERALS)",
   );
+});
+
+Deno.test("pru35: durable-root scanner is scope-aware (comments and rationale strings do not trip CALL or LITERAL detectors)", () => {
+  // 1. Comment mentioning mkdtemp or /tmp/path: PASS
+  const commentFixture = [
+    "// We deliberately avoid mkdtemp and /tmp/ allocations here.",
+    "/* Multiline comment mentioning mktemp and /dev/shm/ scratch */",
+    "const active = 1;",
+  ].join("\n");
+  assertEquals(findDurableViolations(commentFixture, "scripts/test-fixture.ts"), []);
+
+  // 2. Rationale / explanation string containing mkdtemp or makeTempDir: PASS
+  const stringFixture = [
+    'const rationale = "reads build.mjs as static input; avoids mkdtemp and makeTempDir outside durableDir";',
+    'const desc = `avoiding mktemp in shell scripts`;',
+  ].join("\n");
+  assertEquals(findDurableViolations(stringFixture, "scripts/test-fixture.ts"), []);
+
+  // 3. Shell script comment mentioning mktemp or /tmp/: PASS
+  const shellCommentFixture = [
+    "#!/bin/bash",
+    "# mktemp is avoided here in favor of durableRoot",
+    "# /tmp/ is not used",
+    "echo ok",
+  ].join("\n");
+  assertEquals(findDurableViolations(shellCommentFixture, "scripts/test-fixture.sh"), []);
+
+  // 4. Real call to mkdtemp without durableDir: FLAGGED
+  const callFixture = [
+    'const dir = await mkdtemp("scratch-");',
+  ].join("\n");
+  const callViolations = findDurableViolations(callFixture, "scripts/test-fixture.ts");
+  assertEquals(callViolations.length, 1);
+  assert(callViolations[0].includes("scripts/test-fixture.ts:1"));
+
+  // 5. Real path literal in code: FLAGGED
+  const literalFixture = [
+    'const socket = "/tmp/chrome.sock";',
+  ].join("\n");
+  const literalViolations = findDurableViolations(literalFixture, "scripts/test-fixture.ts");
+  assertEquals(literalViolations.length, 1);
+  assert(literalViolations[0].includes("scripts/test-fixture.ts:1"));
+
+  // 6. Real call with durableDir: PASS
+  const durableFixture = [
+    'const dir = await mkdtemp(path.join(durableDir("scratch"), "cap-x-"));',
+  ].join("\n");
+  assertEquals(findDurableViolations(durableFixture, "scripts/test-fixture.ts"), []);
 });
 
 // ── chrome-agent-platform-nudb2: scoped reserve + bounded, age-gated trim ──────────────────────
