@@ -258,8 +258,26 @@ const LIFELINE_PKILL_REJECTED = 3;
 // The watcher: block on the pipe (`cat` returns only on EOF), then kill the group and
 // the profile's stragglers. `$?` right after pkill is pkill's own status: 1 = nothing
 // matched (fine), >= 2 = the pattern was rejected (reported, never swallowed).
-const LIFELINE_SCRIPT = 'cat >/dev/null 2>&1; ' +
-  'if [ -n "$CAP_LIFELINE_TARGET" ]; then ' +
+export const LIFELINE_SCRIPT = 'cat >/dev/null 2>&1; ' +
+  // lsk1p: the group is signalled by NUMBER, so re-check that the pid still leads the
+  // group this lifeline was attached to before signalling it. `$CAP_LIFELINE_START` is the
+  // leader's start time recorded at attach; the VALUE SHAPE picks the same derivation the
+  // host used (all digits = Linux /proc starttime, anything else = ps lstart), so the two
+  // sides always compare like with like. `same_leader` returns FALSE only when a process
+  // with the leader's pid exists with a DIFFERENT start - a pid that is simply absent, an
+  // unreadable /proc entry, or no recorded start at all still means "the old group, or
+  // nothing", and the signal must go out (never orphan a browser to avoid a rare mis-signal).
+  'same_leader() { ' +
+  '[ -z "$CAP_LIFELINE_START" ] && return 0; ' +
+  'case "$CAP_LIFELINE_START" in ' +
+  '*[!0-9]*) cur=$(LC_ALL=C TZ=UTC /bin/ps -o lstart= -p "$CAP_LIFELINE_TARGET" 2>/dev/null | tr -s " " | sed "s/^ //; s/ $//");; ' +
+  '*) cur=""; '
+  + 'if [ -r "/proc/$CAP_LIFELINE_TARGET/stat" ]; then cur=$(sed "s/^[^)]*) //" "/proc/$CAP_LIFELINE_TARGET/stat" 2>/dev/null | awk "{print \\$20}"); fi;; ' +
+  'esac; ' +
+  '[ -n "$cur" ] || return 0; ' +
+  '[ "$cur" = "$CAP_LIFELINE_START" ]; ' +
+  '}; ' +
+  'if [ -n "$CAP_LIFELINE_TARGET" ] && same_leader; then ' +
   'kill -TERM -"$CAP_LIFELINE_TARGET" "$CAP_LIFELINE_TARGET" 2>/dev/null || true; ' +
   'sleep 0.1; ' +
   'kill -KILL -"$CAP_LIFELINE_TARGET" "$CAP_LIFELINE_TARGET" 2>/dev/null || true; ' +
@@ -453,7 +471,13 @@ export function attachProcessLifeline(
     watcher = (deps.spawn ?? spawnLifelineWatcher)({
       command: spec.command,
       args: spec.args,
-      env: { CAP_LIFELINE_TARGET: String(target), CAP_LIFELINE_MATCH: match },
+      env: {
+        CAP_LIFELINE_TARGET: String(target),
+        CAP_LIFELINE_MATCH: match,
+        // lsk1p: the leader's identity, so the watcher can refuse to signal a group whose
+        // pid has been reused. Absent when the group was never observed ("" = no re-check).
+        CAP_LIFELINE_START: leaderStartTicks.get(proc) ?? "",
+      },
     });
   } catch (e) {
     warn(

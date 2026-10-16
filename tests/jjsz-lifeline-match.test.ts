@@ -26,6 +26,7 @@ import {
   killProcessTree,
   isolatedProcessGroup,
   lifelineMatchPattern,
+  LIFELINE_SCRIPT,
   type LifelineSpawnSpec,
   lifelineState,
   type LifelineWatcher,
@@ -250,6 +251,9 @@ Deno.test("attachProcessLifeline hands the watcher the BUILT pattern, never the 
     assertEquals(specs[0].env, {
       CAP_LIFELINE_TARGET: String(proc.pid),
       CAP_LIFELINE_MATCH: String.raw`user-data-dir=/x/a\.b\+c( |$)`,
+      // lsk1p: no start time was recorded for this group (isolatedProcessGroup never ran), so
+      // the watcher is told "" and keeps its old "signal the old group, or nothing" behaviour.
+      CAP_LIFELINE_START: "",
     });
     assertEquals(lines, [], "a usable match is not reported");
 
@@ -518,5 +522,105 @@ Deno.test("i6lgk: an unusable pattern is refused BEFORE any signal, and a live c
     );
   } finally {
     await reap(live);
+  }
+});
+
+// ── lsk1p: the watcher re-checks the LEADER'S IDENTITY before signalling the group ─────
+//
+// THE DEFECT. The watcher signals the group by NUMBER: `kill -TERM -"$T" "$T"`. If the
+// leader is reaped, its pid group is empty and the pid can be handed to an unrelated
+// process group (another lane's setsid child) in the window before the sweep: the watcher
+// would then signal that lane's tree. The pid's start time is the kernel's identity for it,
+// so the watcher now compares the recorded start against the live one and skips the group
+// signal only when a process with that pid EXISTS WITH A DIFFERENT START. A pid that is
+// simply absent, an unreadable /proc entry, or no record at all still means "the old group,
+// or nothing" - the signal must go out, because skipping it would orphan a real browser.
+
+/** Run the REAL watcher script (not a fake) with `start` as the recorded leader identity,
+ *  close its stdin, and return its exit code: exactly what the kernel does to it when the
+ *  parent dies. */
+async function fireWatcher(target: number, start: string): Promise<number> {
+  const spec = setsidSpawnSpec("/bin/sh", ["-c", LIFELINE_SCRIPT]);
+  const watcher = new Deno.Command(spec.command, {
+    args: spec.args,
+    stdin: "piped",
+    stdout: "null",
+    stderr: "null",
+    clearEnv: true,
+    env: { CAP_LIFELINE_TARGET: String(target), CAP_LIFELINE_MATCH: "", CAP_LIFELINE_START: start },
+  }).spawn();
+  await watcher.stdin.close();
+  const status = await watcher.status;
+  return status.code;
+}
+
+/** A single process that leads its OWN group and carries `marker` as argv[0] - so the group
+ *  signal `-<pid>` has exactly one visible victim and its death is the observable. */
+function leaderWithMarker(marker: string): Deno.ChildProcess {
+  return spawnLeader("/bin/bash", ["-c", 'exec -a "$1" sleep 300', "_", marker]);
+}
+
+Deno.test("lsk1p: the watcher does NOT signal a group whose pid has been reused (different start)", async () => {
+  const leader = leaderWithMarker("lsk1p-reused-leader");
+  try {
+    const start = processGroup(leader.pid)?.startTicks;
+    assert(start !== undefined && start !== "", "the leader's identity is readable before the watcher fires");
+    const bogus = start === "0" ? "1" : "0";
+    const code = await fireWatcher(leader.pid, bogus);
+    assertEquals(code, 0, "a skipped group signal is a normal exit, not a failure");
+    assert(!(await exitsWithin(leader, 250)), "the leader must be ALIVE: its pid now names someone else's group");
+  } finally {
+    await reap(leader);
+  }
+});
+
+Deno.test("lsk1p: the same watcher DOES signal the group when the recorded start matches", async () => {
+  const leader = leaderWithMarker("lsk1p-same-leader");
+  try {
+    const start = processGroup(leader.pid)?.startTicks;
+    assert(start !== undefined && start !== "", "the leader's identity is readable before the watcher fires");
+    const code = await fireWatcher(leader.pid, start);
+    assertEquals(code, 0, "a fired group signal is a normal exit");
+    assert(await exitsWithin(leader, 4000), "the identity check must not disable the group signal");
+  } finally {
+    await reap(leader);
+  }
+});
+
+Deno.test("lsk1p: no recorded start (legacy) still signals the group, and an absent leader exits cleanly", async () => {
+  const leader = leaderWithMarker("lsk1p-no-record");
+  try {
+    assertEquals(await fireWatcher(leader.pid, ""), 0, "no record = the old behaviour, a normal exit");
+    assert(await exitsWithin(leader, 4000), 'an empty CAP_LIFELINE_START must not silently disable the group kill');
+  } finally {
+    await reap(leader);
+  }
+
+  const gone = leaderWithMarker("lsk1p-absent");
+  const gonePid = gone.pid;
+  await reap(gone);
+  assertEquals(await fireWatcher(gonePid, "123456"), 0, "an absent leader is a clean exit, never a crash");
+});
+
+Deno.test("lsk1p: attachProcessLifeline hands the watcher the leader's recorded start time", async () => {
+  const proc = spawnLeader("/bin/sleep", ["300"]);
+  try {
+    const group = await isolatedProcessGroup(proc);
+    assertEquals(group, proc.pid, "the stand-in leads its own group");
+    const specs: LifelineSpawnSpec[] = [];
+    attachProcessLifeline(proc, { group, treeMatch: undefined }, {
+      spawn: (spec) => {
+        specs.push(spec);
+        return fakeWatcher();
+      },
+    });
+    assertEquals(
+      specs[0].env.CAP_LIFELINE_START,
+      processGroup(proc.pid)?.startTicks,
+      "the watcher is given the identity it must re-check before signalling by number",
+    );
+    await lifelineState(proc)?.settled;
+  } finally {
+    await reap(proc);
   }
 });
