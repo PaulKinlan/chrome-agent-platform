@@ -37,12 +37,38 @@ export const DEFAULT_INTERVAL_MS = 500;
 export const OWNERLESS_STALE_MS = 60_000;
 export const QUARANTINE_PREFIX = ".lock-quarantine-";
 
-export function machineBootId(read = defaultProcRead) {
-  try {
-    return String(read("/proc/sys/kernel/random/boot_id")).trim();
-  } catch {
-    return "unknown-boot";
+export function machineBootId(read = defaultProcRead, deps = {}) {
+  const effectiveRead = read ?? defaultProcRead;
+  const { hasProc = HAS_PROC, exec = spawnSync, timeoutMs = PS_TIMEOUT_MS } = deps;
+  if (hasProc || effectiveRead !== defaultProcRead) {
+    try {
+      return String(effectiveRead("/proc/sys/kernel/random/boot_id")).trim();
+    } catch {
+      return "unknown-boot";
+    }
   }
+
+  // macOS / no-/proc platform: read boot time via sysctl -n kern.boottime (chrome-agent-platform-8qkmg)
+  // sysctl -n kern.boottime prints: { sec = 1759800000, usec = 0 } Tue Oct  7 12:10:01 2026
+  // Taking the sec field gives a locale-independent, monotonic identity per boot.
+  for (const bin of ["/usr/sbin/sysctl", "/sbin/sysctl"]) {
+    try {
+      const r = exec(bin, ["-n", "kern.boottime"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: PS_ENV,
+        timeout: timeoutMs,
+        killSignal: "SIGKILL",
+      });
+      if (!r?.error && r?.status === 0 && typeof r?.stdout === "string") {
+        const m = r.stdout.match(/sec\s*=\s*(\d+)/);
+        if (m) return m[1];
+      }
+    } catch {
+      // try next candidate binary
+    }
+  }
+  return "unknown-boot";
 }
 
 /**
@@ -180,15 +206,16 @@ export function procStatFields(pid, read = defaultProcRead, deps = {}) {
  *  @param {number} [pid]
  *  @param {string} [boot]
  *  @param {{procStat?: (pid: number) => {ok: boolean, start?: string}}} [deps] */
-export function buildOwnerIdentity(pid = process.pid, boot = machineBootId(), deps = {}) {
+export function buildOwnerIdentity(pid = process.pid, boot = undefined, deps = {}) {
   const { procStat = procStatFields } = deps;
   const self = procStat(pid);
+  const effectiveBoot = boot !== undefined ? boot : machineBootId(deps.read, deps);
   return {
     pid,
     token: randomUUID(),
     at: Date.now(),
     start: self?.ok && self.start ? self.start : null,
-    boot,
+    boot: effectiveBoot,
   };
 }
 
@@ -206,7 +233,7 @@ export function buildOwnerIdentity(pid = process.pid, boot = machineBootId(), de
  */
 export async function holderIsDead(holder, deps = {}) {
   const {
-    bootId = machineBootId(),
+    bootId = machineBootId(deps.read, deps),
     now = Date.now,
     kill = process.kill,
     procStat = null,

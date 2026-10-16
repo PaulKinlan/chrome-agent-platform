@@ -28,6 +28,7 @@ import {
   buildOwnerIdentity,
   holderIsDead,
   LOCK_DIRNAME,
+  machineBootId,
   procStatFields,
   PS_ENV,
   PS_TIMEOUT_MS,
@@ -909,4 +910,139 @@ Deno.test("jjsz N8: the cleanup helper never throws, runs every later step after
     }
   });
   assertStrictEquals(surfaced, own, "a failing cleanup must not replace the error that was already propagating");
+});
+
+// ---------------------------------------------------------------------------------------------
+// chrome-agent-platform-8qkmg: macOS boot fence via sysctl -n kern.boottime.
+//
+// machineBootId() used to return the constant "unknown-boot" on macOS because /proc is absent.
+// The boot fence therefore never fired on macOS. sysctl -n kern.boottime provides a real boot
+// identity (the sec field) so a reboot stales stale build locks.
+// ---------------------------------------------------------------------------------------------
+
+Deno.test("8qkmg: machineBootId reads kern.boottime sec on macOS and falls back cleanly on error", () => {
+  // Canned successful sysctl execution
+  const cannedBootSec = "1759800000";
+  const fakeExec: Exec = (file, args, options) => {
+    assertEquals(file, "/usr/sbin/sysctl");
+    assertEquals(args, ["-n", "kern.boottime"]);
+    assertEquals(options.env, PS_ENV);
+    assertEquals(options.timeout, PS_TIMEOUT_MS);
+    assertEquals(options.killSignal, "SIGKILL");
+    return {
+      status: 0,
+      stdout: `{ sec = ${cannedBootSec}, usec = 0 } Tue Oct  7 12:10:01 2026\n`,
+      stderr: "",
+    };
+  };
+
+  const id = machineBootId(undefined, { hasProc: false, exec: fakeExec });
+  assertEquals(id, cannedBootSec);
+
+  // Variant formatting with different whitespace / values
+  const fakeExec2: Exec = () => ({
+    status: 0,
+    stdout: "{sec=1759812345, usec=42}\n",
+    stderr: "",
+  });
+  assertEquals(machineBootId(undefined, { hasProc: false, exec: fakeExec2 }), "1759812345");
+
+  // Non-zero exit status degrades to "unknown-boot" without throwing
+  const failStatusExec: Exec = () => ({
+    status: 1,
+    stdout: "",
+    stderr: "sysctl: unknown oid 'kern.boottime'\n",
+  });
+  assertEquals(machineBootId(undefined, { hasProc: false, exec: failStatusExec }), "unknown-boot");
+
+  // Missing sec in output degrades to "unknown-boot"
+  const corruptOutputExec: Exec = () => ({
+    status: 0,
+    stdout: "unexpected output format\n",
+    stderr: "",
+  });
+  assertEquals(machineBootId(undefined, { hasProc: false, exec: corruptOutputExec }), "unknown-boot");
+
+  // Thrown error (e.g. spawn failure) degrades to "unknown-boot" without throwing
+  const throwingExec: Exec = () => {
+    throw new Error("spawnSync ENOENT");
+  };
+  assertEquals(machineBootId(undefined, { hasProc: false, exec: throwingExec }), "unknown-boot");
+
+  // /sbin/sysctl fallback when /usr/sbin/sysctl returns ENOENT error
+  const fallbackExec: Exec = (file) => {
+    if (file === "/usr/sbin/sysctl") {
+      return { status: null, error: { code: "ENOENT" } };
+    }
+    return {
+      status: 0,
+      stdout: "{ sec = 1759899999, usec = 0 } Tue Oct  7 12:10:01 2026\n",
+      stderr: "",
+    };
+  };
+  assertEquals(machineBootId(undefined, { hasProc: false, exec: fallbackExec }), "1759899999");
+});
+
+Deno.test("8qkmg: macOS boot fence: different boot sec makes an otherwise-identical lock stale; identical keeps it live", async () => {
+  const bootA = "1759800000";
+  const bootB = "1759899999";
+
+  // Recorded lock holder from bootA
+  const holder = {
+    pid: PID,
+    token: "token-1",
+    at: Date.now(),
+    boot: bootA,
+    start: "Wed Oct 7 12:10:01 2026",
+  };
+
+  const sameBootExec: Exec = () => ({
+    status: 0,
+    stdout: `{ sec = ${bootA}, usec = 0 } Tue Oct  7 12:10:01 2026\n`,
+    stderr: "",
+  });
+
+  const nextBootExec: Exec = () => ({
+    status: 0,
+    stdout: `{ sec = ${bootB}, usec = 0 } Tue Oct  7 12:10:01 2026\n`,
+    stderr: "",
+  });
+
+  const liveProcStat = () => ({ ok: true, state: "S", start: "Wed Oct 7 12:10:01 2026" });
+
+  // When boot matches, holder is NOT dead (live lock)
+  const deadSameBoot = await holderIsDead(holder, {
+    hasProc: false,
+    exec: sameBootExec,
+    kill: () => {}, // kill(0) succeeds
+    procStat: liveProcStat,
+  });
+  assertEquals(deadSameBoot, false, "same boot identity keeps live lock alive");
+
+  // When boot differs (machine rebooted), holder IS dead (stale lock from previous boot)
+  const deadNextBoot = await holderIsDead(holder, {
+    hasProc: false,
+    exec: nextBootExec,
+    kill: () => {}, // even if PID was reused and kill(0) succeeds!
+    procStat: liveProcStat,
+  });
+  assertEquals(deadNextBoot, true, "different boot identity marks lock dead (stale after reboot)");
+});
+
+Deno.test("8qkmg: Linux branch unchanged: reads /proc/sys/kernel/random/boot_id without invoking sysctl", () => {
+  let execCalled = false;
+  const unusedExec: Exec = () => {
+    execCalled = true;
+    return { status: 0, stdout: "{ sec = 1759800000, usec = 0 }\n", stderr: "" };
+  };
+
+  const linuxBootId = "c8f9b9f7-66a7-4ea9-b223-388f8d67a142";
+  const mockRead = (path: string) => {
+    assertEquals(path, "/proc/sys/kernel/random/boot_id");
+    return `${linuxBootId}\n`;
+  };
+
+  const id = machineBootId(mockRead, { hasProc: true, exec: unusedExec });
+  assertEquals(id, linuxBootId);
+  assertEquals(execCalled, false, "sysctl must not be invoked on Linux");
 });
