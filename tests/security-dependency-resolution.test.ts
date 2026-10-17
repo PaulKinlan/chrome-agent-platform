@@ -2,22 +2,175 @@
 // bbz3s: check the package AJV REALLY resolves before either build target bundles it.
 // Fixture stores are isolated under durable scratch; NEVER mutate shared node_modules.
 import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
+import { parse } from "npm:acorn";
 import { join } from "node:path";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { assertLiveFastUriResolution } from "../scripts/bundle-budget.mjs";
 
-Deno.test("bbz3s: pre-bundle guard covers developer and store targets", async () => {
-  const source = await Deno.readTextFile(new URL("../build.mjs", import.meta.url));
-  const check = source.indexOf("assertLiveFastUriResolution({");
-  const plugin = source.indexOf("const capAiSdkDedup =");
-  // jjsz: build.mjs fans out through settleAll, never Promise.all (a rejected sibling must not keep
-  // writing into STAGE after the rollback removes it; tests/build-parallel-discipline.test.ts pins
-  // that rule). This anchor is the FIRST such fan-out after the plugin definition, as it always was.
-  const builds = source.indexOf("await settleAll([", plugin);
-  assert(check > 0 && check < plugin && plugin < builds,
-    "the live AJV-to-fast-uri resolution must be checked before bundling in BOTH build targets");
-  assertStringIncludes(source, 'runBoundedChild("deno", ["install", "--frozen-lockfile"]',
-    "even an SDK-missing auto-install cannot silently rewrite deno.lock");
+// Keep the pin independent of build execution: importing build.mjs starts a real build.
+// Parse its original source (not esbuild output, whose offsets refer to transformed code).
+const BUILD_SOURCE = new URL("../build.mjs", import.meta.url);
+const GUARD = "assertLiveFastUriResolution";
+const isName = (node, name) => node?.type === "Identifier" && node.name === name;
+const isCall = (node, name) => node?.type === "CallExpression" && isName(node.callee, name);
+
+function astNodes(program) {
+  const nodes = [];
+  const parents = new Map();
+  function walk(node, parent = null) {
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child, parent);
+      return;
+    }
+    if (!node || typeof node !== "object" || typeof node.type !== "string") return;
+    nodes.push(node);
+    parents.set(node, parent);
+    for (const [key, value] of Object.entries(node)) {
+      if (["start", "end", "type", "loc"].includes(key)) continue;
+      walk(value, node);
+    }
+  }
+  walk(program);
+  return { nodes, parents };
+}
+
+function bindingNames(pattern) {
+  if (!pattern) return [];
+  if (pattern.type === "Identifier") return [pattern.name];
+  if (pattern.type === "ArrayPattern") return pattern.elements.flatMap(bindingNames);
+  if (pattern.type === "ObjectPattern") return pattern.properties.flatMap((prop) => bindingNames(prop.value ?? prop.argument));
+  if (pattern.type === "RestElement") return bindingNames(pattern.argument);
+  if (pattern.type === "AssignmentPattern") return bindingNames(pattern.left);
+  return [];
+}
+
+function shadowsName(node, name) {
+  if (node.type === "VariableDeclarator" || node.type === "CatchClause") {
+    return bindingNames(node.id ?? node.param).includes(name);
+  }
+  if (["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"].includes(node.type)) {
+    return isName(node.id, name) || node.params.some((param) => bindingNames(param).includes(name));
+  }
+  return node.type === "ClassDeclaration" && isName(node.id, name);
+}
+
+/** Require one live, unconditional import-bound check ahead of the ACTUAL esbuild fan-out. */
+function preBundleGuardProblems(source) {
+  const program = parse(source, { ecmaVersion: "latest", sourceType: "module" });
+  const { nodes, parents } = astNodes(program);
+  const problems = [];
+  const guardImports = program.body.flatMap((node) => node.type === "ImportDeclaration" &&
+      node.source.value === "./scripts/bundle-budget.mjs"
+    ? node.specifiers.filter((spec) => spec.imported?.name === GUARD && spec.local?.name === GUARD)
+    : []);
+  if (guardImports.length !== 1) problems.push("the guard must be imported once, unaliased, from bundle-budget.mjs");
+  if (nodes.some((node) => shadowsName(node, GUARD))) problems.push("the imported guard name is shadowed");
+  const esbuildImports = program.body.flatMap((node) => node.type === "ImportDeclaration" && node.source.value === "esbuild"
+    ? node.specifiers.filter((spec) => spec.imported?.name === "build" && spec.local?.name === "build") : []);
+  if (esbuildImports.length !== 1 || nodes.some((node) => shadowsName(node, "build"))) {
+    problems.push("build() must name the unshadowed esbuild import");
+  }
+
+  const calls = nodes.filter((node) => isCall(node, GUARD));
+  if (calls.length !== 1) problems.push(`expected exactly one live guard call, found ${calls.length}`);
+  const bundles = nodes.filter((node) => isCall(node, "build"));
+  if (!bundles.length) problems.push("no esbuild build() calls: the bundle scan is vacuous");
+  const fanouts = nodes.filter((node) => {
+    if (node.type !== "VariableDeclarator" || node.id.type !== "ArrayPattern") return false;
+    if (!bindingNames(node.id).includes("swResult") || !bindingNames(node.id).includes("workerResult")) return false;
+    const settle = node.init?.type === "AwaitExpression" ? node.init.argument : null;
+    return isCall(settle, "settleAll") && settle.arguments[0]?.type === "ArrayExpression" &&
+      settle.arguments[0].elements.length > 0 && settle.arguments[0].elements.every((element) => isCall(element, "build"));
+  });
+  if (fanouts.length !== 1) problems.push(`expected one real bundled-results settleAll fan-out, found ${fanouts.length}`);
+  // Preserve the old --frozen-lockfile pin, but on an executable call rather
+  // than text that a comment or a misleading label could satisfy.
+  const frozenInstalls = nodes.filter((node) => isCall(node, "runBoundedChild") &&
+    node.arguments[0]?.value === "deno" && node.arguments[1]?.type === "ArrayExpression" &&
+    node.arguments[1].elements.length === 2 && node.arguments[1].elements[0]?.value === "install" &&
+    node.arguments[1].elements[1]?.value === "--frozen-lockfile");
+  if (frozenInstalls.length !== 2) problems.push("both deno install repairs must invoke runBoundedChild with --frozen-lockfile");
+
+  if (calls.length === 1) {
+    const call = calls[0];
+    const statement = parents.get(call);
+    const block = parents.get(statement);
+    if (statement?.type !== "ExpressionStatement" || statement.expression !== call || block?.type !== "BlockStatement") {
+      problems.push("the guard must be its own direct statement");
+    }
+    const props = call.arguments[0]?.type === "ObjectExpression" ? call.arguments[0].properties : [];
+    if (call.arguments.length !== 1 || props.length !== 2 ||
+      !props.some((p) => !p.computed && isName(p.key, "root") && isName(p.value, "ROOT")) ||
+      !props.some((p) => !p.computed && isName(p.key, "sdkDir") && isName(p.value, "CANON_MCP_SDK_DIR"))) {
+      problems.push("the guard must resolve the live root and canonical SDK instance");
+    }
+    // A check inside a branch, function, catch, or a swallowing try/catch can
+    // leave the other build target unguarded even when its text comes first.
+    for (let child = statement; child; child = parents.get(child)) {
+      if (["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression", "IfStatement", "SwitchCase",
+        "ForStatement", "ForInStatement", "ForOfStatement", "WhileStatement", "DoWhileStatement", "CatchClause",
+        "ConditionalExpression"].includes(child.type)) {
+        problems.push(`the guard is conditional or deferred under ${child.type}`);
+      }
+      if (child.type === "TryStatement" && (child.handler || child.block !== parents.get(statement) &&
+        !isAncestor(child.block, statement, parents))) {
+        problems.push("the guard can be caught or bypassed by a try clause");
+      }
+    }
+    if (fanouts.length === 1) {
+      const fanoutStatement = parents.get(fanouts[0]);
+      if (block !== parents.get(fanoutStatement) || statement.start >= fanoutStatement.start) {
+        problems.push("the guard must precede the real bundle fan-out in the same straight-line block");
+      }
+    }
+    if (bundles.some((bundle) => bundle.start < statement.end)) {
+      problems.push("an esbuild build() starts before the guard");
+    }
+  }
+  return problems;
+}
+
+function isAncestor(ancestor, child, parents) {
+  for (let node = child; node; node = parents.get(node)) if (node === ancestor) return true;
+  return false;
+}
+
+const replaceOnce = (source, needle, replacement) => {
+  assertEquals(source.split(needle).length, 2, `the real build must contain one ${needle.slice(0, 70)}`);
+  return source.replace(needle, replacement);
+};
+
+Deno.test("bbz3s: an unconditional live AJV check precedes the real developer/store bundle fan-out", () => {
+  const source = Deno.readTextFileSync(BUILD_SOURCE);
+  assertEquals(preBundleGuardProblems(source), [], "both targets must verify AJV before calling esbuild");
+});
+
+Deno.test("bbz3s: comment, conditional, late and swallowed-check mutants cannot satisfy the pre-bundle pin", () => {
+  const source = Deno.readTextFileSync(BUILD_SOURCE);
+  const line = "    assertLiveFastUriResolution({ root: ROOT, sdkDir: CANON_MCP_SDK_DIR });";
+  const late = replaceOnce(replaceOnce(source, line, ""), "    const chunksDir =", `${line}\n    const chunksDir =`);
+  const mutants = [
+    ["removed guard, comment decoy", replaceOnce(source, line, `    // ${line.trim()} await settleAll([; const capAiSdkDedup =`), "exactly one live guard call"],
+    ["guarded only in store builds", replaceOnce(source, line, `    if (BUILD_TARGET === "store") ${line.trim()}`), "conditional or deferred"],
+    ["guard moved after actual esbuild fan-out", late, "esbuild build() starts before the guard"],
+    ["guard exception swallowed", replaceOnce(source, line, `    try { ${line.trim()} } catch {}`), "caught or bypassed"],
+    ["guard call only in void expression", replaceOnce(source, line, `    void ${line.trim()}`), "own direct statement"],
+    ["one install missing frozen lockfile", replaceOnce(source,
+      'rmSync(denoStoreDir, { recursive: true, force: true });\n        const res = await runBoundedChild("deno", ["install", "--frozen-lockfile"]',
+      'rmSync(denoStoreDir, { recursive: true, force: true });\n        const res = await runBoundedChild("deno", ["install"]'), "both deno install repairs"],
+    ["esbuild import replaced by local fake", replaceOnce(source,
+      'import { build, transform } from "esbuild";',
+      'import { transform } from "esbuild"; const build = () => ({})'), "unshadowed esbuild import"],
+  ];
+  for (const [name, mutant, expected] of mutants) {
+    assert(mutant !== source, `${name} must change the real source`);
+    assert(preBundleGuardProblems(mutant).some((s) => s.includes(expected)), `${name} must RED on ${expected}`);
+  }
+  // Unlike the old capAiSdkDedup string anchor, moving the check past the
+  // plugin but still before the real bundle fan-out remains a valid order.
+  const reordered = replaceOnce(replaceOnce(source, line, ""), "    const shared = {", `${line}\n    const shared = {`);
+  assertEquals(preBundleGuardProblems(reordered), [], "an unconditional check need not precede plugin definition");
+  assertEquals(Deno.readTextFileSync(BUILD_SOURCE), source, "mutations stay in memory: build.mjs is byte-identical");
 });
 
 Deno.test("bbz3s: stale, mixed, flat and dangling AJV links fail closed against BOTH locks", () => {
