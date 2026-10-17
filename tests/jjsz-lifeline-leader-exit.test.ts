@@ -359,12 +359,13 @@ Deno.test("lifeline: launchChrome hands the sweep the PROFILE marker — a helpe
 });
 
 Deno.test("80yqb: bare leader kill then same-profile launch waits for the old sweep, preserving the second browser and reaping detached helpers", async () => {
-  const { root, fake, profile, lockPath } = fixture("80yqb-relaunch", DETACHED_HELPER_BROWSER);
+  const script = DETACHED_HELPER_BROWSER.replace(
+    "#!/bin/bash",
+    '#!/bin/bash\nif [ -n "$CAP_80YQB_STARTED" ]; then echo started > "$CAP_80YQB_STARTED"; fi',
+  );
+  const { root, fake, profile, lockPath } = fixture("80yqb-relaunch", script);
   const release = `${root}/release-sweep`;
   const marker = `${root}/second-started`;
-  const secondFake = `${root}/second-browser`;
-  Deno.writeTextFileSync(secondFake, FAKE_BROWSER.replace("#!/bin/bash", `#!/bin/bash\necho started > "${marker}"`));
-  Deno.chmodSync(secondFake, 0o755);
   let first: LaunchedChrome | undefined;
   let second: LaunchedChrome | undefined;
   let secondLaunch: Promise<LaunchedChrome> | undefined;
@@ -389,7 +390,10 @@ Deno.test("80yqb: bare leader kill then same-profile launch waits for the old sw
       "the old profile sweep is held and registered as in flight");
     assert(await settlesWithin(awaitFiredLifelineSweep(`user-data-dir=${root}/other-profile`), 150),
       "an unrelated profile cannot be blocked by this sweep");
-    secondLaunch = launchChrome({ binary: secondFake, profile, lockPath: `${root}/second-scope`, timeoutMs: 8000 });
+    secondLaunch = launchChrome({
+      binary: fake, profile, lockPath: `${root}/second-scope`, timeoutMs: 8000,
+      env: { CAP_80YQB_STARTED: marker },
+    });
     await new Promise((resolve) => setTimeout(resolve, 350));
     assertEquals(await Deno.stat(marker).then(() => true, () => false), false,
       "the second Chrome must not spawn until the old profile pkill has completed");
