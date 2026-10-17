@@ -31,6 +31,7 @@ import {
 import {
   buildReverseGraph,
   changedWithoutCoverage,
+  clearReferrersCache,
   mergeBaseOf,
   referrersFor,
   selectTestFiles,
@@ -525,6 +526,14 @@ Deno.test("oeqvx: classifyUncovered maps fixtures and text-read scripts when ref
   assert(scriptWithRefs.tests.includes("tests/journey-focus-fail-closed.test.ts"));
   assert(scriptWithRefs.tests.includes("tests/harness-registry.test.ts"));
   assert(scriptWithRefs.mechanism.includes("scripts/ file named by tests"), scriptWithRefs.mechanism);
+  assert(scriptWithRefs.mechanism.includes("subprocess/join reference"), scriptWithRefs.mechanism);
+
+  // Subprocess-invoked script (check-changelog.mjs): mapped to referrers
+  const changelogWithRefs = classifyUncovered("scripts/check-changelog.mjs", {
+    referrers: ["tests/changelog.test.ts"],
+  });
+  assertEquals(changelogWithRefs.tests, ["tests/changelog.test.ts"]);
+  assert(changelogWithRefs.mechanism.includes("subprocess/join reference"), changelogWithRefs.mechanism);
 
   // Unenumerated script with referrers: mapped to referrers
   const subHelperWithRefs = classifyUncovered("scripts/lib/some-helper.mjs", {
@@ -576,6 +585,24 @@ Deno.test("oeqvx: referrersFor finds suites that mention fixtures or text-read s
   const orphan = "tests/fixtures/" + orphanBase;
   const orphanRefs = referrersFor(orphan);
   assertEquals(orphanRefs, [], "non-existent or unmentioned fixture has zero referrers");
+
+  // Subprocess-invoked script with join(ROOT, ...) or spawn in tests
+  const chkRefs = referrersFor("scripts/check-changelog.mjs");
+  assert(
+    chkRefs.includes("tests/changelog.test.ts"),
+    "changelog.test.ts references scripts/check-changelog.mjs",
+  );
+});
+
+Deno.test("gjdn1: clearReferrersCache clears cached content so subsequent call repopulates", () => {
+  // Prime cache
+  const first = referrersFor("tests/fixtures/security-suite-fake-runner.mjs");
+  assert(first.length > 0);
+
+  // Clear cache and verify function executes without error and subsequent call succeeds
+  clearReferrersCache();
+  const second = referrersFor("tests/fixtures/security-suite-fake-runner.mjs");
+  assertEquals(second, first);
 });
 
 Deno.test("oeqvx: mapUncovered maps fixture when referrersFor is supplied and fails closed when empty (mutant)", () => {

@@ -7,7 +7,7 @@
 // previous message said only "no reachable test", which read identically for
 // three different causes.
 //
-// THE THREE CLASSES:
+// THE FOUR CLASSES:
 //
 //   1. UNIMPORTED HARNESSES. scripts/a11y-audit.ts and scripts/sidebar-parity.ts
 //      are uncovered; scripts/kat-constrained-width-layout.ts (via tests/harness-marks.test.ts),
@@ -20,14 +20,26 @@
 //
 //      Why mapping these is not a weakening: NO unit test executes them. The full
 //      suite adds nothing for this class over the tree-walking guards.
-//      A .mjs helper or anything in a subdirectory (scripts/lib/...) is NOT
-//      inspected by those guards, so it fails closed to the full suite.
 //
 //   2. TWO EXPORT ENTRY HTML DOCUMENTS (3p3e.12). These have no import graph
 //      edge, but tests/thread-export-entry-html.test.ts reads their actual
 //      button/label/initial-state and the loaded script's exact route wiring.
 //      The Export JS entry scripts DO have import/URL edges; selector-level
 //      tests pin their real guard selection instead of declaring dead mappings.
+//
+//   3. UNIMPORTED FIXTURES (tests/fixtures/**, chrome-agent-platform-oeqvx).
+//      These files have no static import edge. When test files mention their path
+//      (or specific basename), referrersFor() resolves them to their referring
+//      test suites. Limitation: matching uses literal path/substring or specific
+//      basename (>=10 chars), so globbing consumers or helper-mediated dynamic
+//      paths are not selected (unreferenced fixtures fail closed).
+//
+//   4. TEXT-READ OR SUBPROCESS SCRIPTS (scripts/**, chrome-agent-platform-oeqvx).
+//      Scripts invoked via subprocess/spawn or joined via join(ROOT, ...) rather
+//      than static or URL-instrumented imports (e.g. scripts/check-changelog.mjs
+//      invoked by tests/changelog.test.ts). When test files reference them,
+//      referrersFor() maps them to referring tests (and tree-walking guards for
+//      enumerated harnesses). Unreferenced scripts without tree guards fail closed.
 //
 // Everything else stays FAIL CLOSED, and now says which file and which mechanism
 // forced it.
@@ -260,7 +272,7 @@ export function classifyUncovered(rel, { versionOnly = false, referrers = [] } =
         : [...referrers];
       return {
         mechanism:
-          "scripts/ file named by tests (text reference with no static import edge; " +
+          "scripts/ file named by tests (subprocess/join reference with no static import edge; " +
           "selects tests that mention the path; globbing consumers not selected)",
         tests,
       };
