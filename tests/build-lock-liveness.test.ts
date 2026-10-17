@@ -324,6 +324,35 @@ Deno.test("k4kve: an unknown boot on either side never fences, a known different
   assertEquals(isKnownBoot(realBoot), true);
 });
 
+// chrome-agent-platform-xgcek (the k4kve closure attack): whitespace and padding are NOT identities.
+// isKnownBoot originally accepted any non-empty string that was not the sentinel, so a holder boot of
+// " " counted as a KNOWN boot id and the fence compared it - a live lock stolen on a machine whose
+// local boot identity read failed, which is the exact damage k4kve closed. The raw compare also read a
+// PADDED recording of the same boot (" 1759800000 ") as a different boot. Both sides now go through
+// comparableBoot(), and a value that trims to nothing is unknown.
+Deno.test("xgcek: whitespace and padding are not boot identities, a real difference still is", async () => {
+  const HOLDER_START = "Wed Oct  7 12:10:01 2026";
+  const realBoot = "1759800000";
+  const live = { kill: () => {}, procStat: () => ({ ok: true, state: "S", start: HOLDER_START }) };
+  const decision = async (boot: string, bootId: string) =>
+    await holderIsDead({ pid: 4242, token: "t1", at: 1, boot, start: HOLDER_START }, { bootId, ...live });
+
+  const blanks = [" ", "\t", "  ", "\n", " \t "];
+  for (const blank of blanks) {
+    assertEquals(await decision(blank, realBoot), false, `a holder boot of ${JSON.stringify(blank)} proves nothing - do not steal`);
+    assertEquals(await decision(realBoot, blank), false, `a contender boot of ${JSON.stringify(blank)} proves nothing either`);
+    assertEquals(isKnownBoot(blank), false, `${JSON.stringify(blank)} is not a boot id`);
+  }
+
+  assertEquals(await decision(`  ${realBoot} `, realBoot), false, "a padded recording of the SAME boot is the same boot");
+  assertEquals(await decision(realBoot, `\t${realBoot}`), false, "padding on the contender side is not a different boot");
+  assertEquals(isKnownBoot(`  ${realBoot} `), true, "a padded real id is still a known boot id");
+
+  assertEquals(await decision("1759809999", realBoot), true, "a genuinely different boot must still fence");
+
+  assertEquals(await decision("  unknown-boot ", realBoot), false, "a padded SENTINEL is still the sentinel");
+});
+
 Deno.test("r0v8: an ownerless lock is stealable only once observably old", async () => {
   const root = await tmpRoot("ownerless");
   try {
