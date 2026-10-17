@@ -48,16 +48,29 @@ function browserKillShape(source: string): Shape {
   }
   const { code } = transformSync(source, { loader: "ts", format: "esm", target: "esnext" });
   const program = acorn.parse(code, { ecmaVersion: "latest", sourceType: "module" }) as unknown as Ast;
+  const launchNames = new Set(["launchChrome"]);
+  visit(program, (node) => {
+    if (node.type === "ImportSpecifier" && node.imported?.name === "launchChrome" && node.local?.name) {
+      launchNames.add(node.local.name);
+    }
+  });
+  const isLaunchCall = (node: Ast): boolean =>
+    node.type === "CallExpression" && launchNames.has(dotted(node.callee) ?? "");
   const launchers = new Set<string>();
   let launches = 0;
   visit(program, (node) => {
-    if (node.type === "CallExpression" && dotted(node.callee) === "launchChrome") launches++;
-    if (node.type === "FunctionDeclaration" && node.id?.name) {
+    if (isLaunchCall(node)) launches++;
+    const functionName = node.type === "FunctionDeclaration" ? node.id?.name :
+      node.type === "VariableDeclarator" && node.id?.type === "Identifier" &&
+          ["ArrowFunctionExpression", "FunctionExpression"].includes(node.init?.type)
+        ? node.id.name : null;
+    const functionBody = node.type === "FunctionDeclaration" ? node.body : node.init?.body;
+    if (functionName && functionBody) {
       let containsLaunch = false;
-      visit(node.body, (inner) => {
-        if (inner.type === "CallExpression" && dotted(inner.callee) === "launchChrome") containsLaunch = true;
+      visit(functionBody, (inner) => {
+        if (isLaunchCall(inner)) containsLaunch = true;
       });
-      if (containsLaunch) launchers.add(node.id.name);
+      if (containsLaunch) launchers.add(functionName);
     }
   });
   if (!launches) return { launches: 0, bareKills: 0 };
@@ -67,7 +80,7 @@ function browserKillShape(source: string): Shape {
   const launchish = (node: Ast | null | undefined) => {
     const call = unawait(node);
     return call?.type === "CallExpression" &&
-      (dotted(call.callee) === "launchChrome" || launchers.has(dotted(call.callee) ?? ""));
+      (launchNames.has(dotted(call.callee) ?? "") || launchers.has(dotted(call.callee) ?? ""));
   };
   // One direct handle assignment and one .proc alias hop. Extra alias depth is
   // unproven; a member-chain .proc.kill fallback below classifies rather than
@@ -211,11 +224,25 @@ Deno.test("6efbv: fresh script and changed allowlisted shape mutants turn the ru
   const optional = `const chrome = await launchChrome({profile: "P"}); chrome.proc?.kill?.("SIGKILL");`;
   assert(audit({ "scripts/new-optional.ts": optional }, {}).some((s) => s.includes("unlisted launchChrome bare kill")),
     "optional-call spelling must not bypass the census prefilter");
+  const arrow = `const boot = (profile) => launchChrome({profile}); const chrome = await boot("P");
+    chrome.proc.kill("SIGKILL"); await boot("P");`;
+  assert(audit({ "scripts/new-arrow.ts": arrow }, {}).some((s) => s.includes("unlisted launchChrome bare kill")),
+    "a fresh script using an arrow-function launcher must not escape the census");
+  const aliased = `import {launchChrome as startBrowser} from "./lib/chrome-launch.ts";
+    const chrome = await startBrowser({profile: "P"}); chrome.proc.kill("SIGKILL");`;
+  assert(audit({ "scripts/new-aliased.ts": aliased }, {}).some((s) => s.includes("unlisted launchChrome bare kill")),
+    "an aliased launchChrome import must not escape the census");
   const safe = `const chrome = await launchChrome({profile: "P"}); await reapLeaderAndSettle(chrome.proc);
     const next = await launchChrome({profile: "P"}); await teardownChrome(next);`;
   assertEquals(audit({ "scripts/new-safe.ts": safe }, {}), [], "reap/teardown calls are not bare kills");
-  const nonBrowser = `const child = new Deno.Command("/bin/true").spawn(); child.kill("SIGKILL");`;
-  assertEquals(audit({ "scripts/new-child.ts": nonBrowser }, {}), [], "a child outside launchChrome is not a browser-handle kill");
+  const nonBrowser = `const chrome = await launchChrome({profile: "P"});
+    const child = new Deno.Command("/bin/true").spawn(); child.kill("SIGKILL"); Deno.kill(child.pid, "SIGKILL");
+    await teardownChrome(chrome);`;
+  assertEquals(audit({ "scripts/new-child.ts": nonBrowser }, {}), [],
+    "an unrelated child's kill is not a browser-handle kill even in a launchChrome script");
+  const pidKill = `const chrome = await launchChrome({profile: "P"}); Deno.kill(chrome.proc.pid, "SIGKILL");`;
+  assert(audit({ "scripts/new-pid-kill.ts": pidKill }, {}).some((s) => s.includes("unlisted launchChrome bare kill")),
+    "killing the browser by pid instead of through its handle is still bare");
 
   const original = Deno.readTextFileSync(`${ROOT}${CUSTODY_RUNNER}`);
   const needle = "    await reapLeaderAndSettle(chrome.proc);";
@@ -231,5 +258,10 @@ Deno.test("6efbv: fresh script and changed allowlisted shape mutants turn the ru
   assert(baseline, `${existing} must be among the reviewed bare-kill exceptions`);
   assert(audit({ [existing]: `${source}\nvoid launchChrome({profile: "P"});\n` }, { [existing]: baseline })
     .some((s) => s.includes("exception shape changed")),
-  "adding a new launch site to an existing exception must force a lifecycle re-review");
+    "adding a new launch site to an existing exception must force a lifecycle re-review");
+  assert(audit({ [existing]: `${source}\nchrome.proc.kill("SIGKILL");\n` }, { [existing]: baseline })
+    .some((s) => s.includes("exception shape changed")),
+    "adding a new bare kill to an existing exception must force a lifecycle re-review");
+  assert(audit({ [existing]: safe }, { [existing]: baseline }).some((s) => s.includes("stale bare-kill exception")),
+    "an exception must not linger after its bare kill has been removed");
 });
