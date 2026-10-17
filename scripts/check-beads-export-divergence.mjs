@@ -5,7 +5,11 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
 function command(name, args) {
-  const result = spawnSync(name, args, { encoding: "utf8", timeout: 30_000, maxBuffer: 16 * 1024 * 1024 });
+  // `.beads/issues.jsonl` is now larger than 16 MiB (16,834,259 bytes at chrome-agent-platform-t5o2i.2), and
+  // `git show HEAD:` of it exceeded this buffer -> ENOBUFS, which the caller reports as a divergence-check
+  // failure and the pre-commit hook turns into a REFUSED COMMIT for every lane inheriting that parent.
+  // 64 MiB matches scripts/beads-landing-link.mjs; it is a ceiling, not an allocation.
+  const result = spawnSync(name, args, { encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 });
   if (result.error || result.status !== 0) {
     throw new Error(`${name} ${args.join(" ")} failed: ${result.error?.message ?? result.stderr?.trim() ?? `exit ${result.status}`}`);
   }

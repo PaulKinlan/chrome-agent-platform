@@ -998,9 +998,37 @@ Deno.test("lifeline: a watcher that never exits after the SIGKILL is bounded and
     );
     assertEquals(calls, ["stdin.close", "kill:SIGKILL"], "the bounded second wait added no kill of its own");
     assertEquals(lifelineState(proc)?.cleanupConfirmed, false, "the sweep ended without proof the watcher is gone");
-    assertEqualLines(lines, ["did not finish", "UNCONFIRMED"]);
+    // Three honest lines: the overrun, the UNCONFIRMED verdict, and the close that never returned - which
+    // is reported but is NOT the verdict (the watcher's exit is).
+    assertEqualLines(lines, ["did not finish", "UNCONFIRMED", "stdin close did not settle"]);
     // And the truth is not a warning only: a same-profile launch is REFUSED while that is unconfirmed.
     await assertRejects(() => awaitFiredLifelineSweep(marker), Error, "did not exit within their bound");
+  } finally {
+    await reap(proc);
+  }
+});
+
+Deno.test("lifeline: an unsettled stdin close alone does NOT refuse the profile — the watcher's exit is what decides cleanup (t5o2i.2)", async () => {
+  const proc = spawnLeader("/bin/sleep", ["300"]);
+  const marker = `user-data-dir=jjsz-t5o2i-closeonly-${crypto.randomUUID()}`;
+  const calls: string[] = [];
+  const lines: string[] = [];
+  try {
+    attachProcessLifeline(proc, { group: proc.pid, treeMatch: marker }, {
+      // The close call never returns, but the watcher DOES die on the SIGKILL: only the close is unproven.
+      spawn: () => fakeWatcher(calls, { hangs: true, onClose: () => new Promise<void>(() => {}) }),
+      warn: (line) => lines.push(line),
+      sweepTimeoutMs: 40,
+      settleTimeoutMs: 60,
+    });
+    proc.kill("SIGKILL");
+    await proc.status;
+    assert(await until(() => lifelineState(proc)?.state === "fired", 5000), "the exit fired the sweep");
+    assert(await settlesWithin(lifelineState(proc)?.settled, 5000), "the sweep settles inside its bounds");
+    assertEquals(lifelineState(proc)?.cleanupConfirmed, true, "a watcher that exited is a CONFIRMED cleanup, whatever the close did");
+    assertEqualLines(lines, ["did not finish", "stdin close did not settle"]);
+    // CONTROL for the refusal above: this profile is still usable, so the guard did not become "always refuse".
+    await awaitFiredLifelineSweep(marker);
   } finally {
     await reap(proc);
   }
@@ -1022,8 +1050,8 @@ Deno.test("lifeline: a DISARM whose watcher never exits is bounded, reported, an
     assertEquals(calls, ["kill:SIGKILL", "stdin.close"], "the disarm still kills first and closes the trigger");
     assertEquals(lifelineState(proc)?.state, "disarmed");
     assertEquals(lifelineState(proc)?.cleanupConfirmed, false, "the disarm ended without proof the watcher is gone");
-    assertEquals(lines.length, 1, `each overrun is reported once: ${lines.join(" | ")}`);
-    assertEqualLines(lines, ["UNCONFIRMED"]);
+    assertEquals(lines.length, 2, `the two overruns are each reported once: ${lines.join(" | ")}`);
+    assertEqualLines(lines, ["stdin close did not settle", "UNCONFIRMED"]);
     // A disarmed-but-unconfirmed watcher can also still run its pkill, so the profile is refused too.
     await assertRejects(() => awaitFiredLifelineSweep(marker), Error, "UNCONFIRMED");
   } finally {

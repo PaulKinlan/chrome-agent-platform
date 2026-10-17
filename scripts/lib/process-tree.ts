@@ -245,10 +245,11 @@ interface Lifeline {
   ready: Promise<boolean>;
   /** The in-flight (or finished) transition out of `armed`; null while armed / unprotected. */
   settled: Promise<void> | null;
-  /** FALSE once a wait on the watcher's OWN exit (or on its stdin close) timed out. The transition
-   *  still SETTLES - that is the point of the second bound - but it settles without proof that the
-   *  watcher, and any `pkill` it had already forked, is gone. TRUE means every wait the lifeline made
-   *  on its watcher finished inside its bound (t5o2i.2). */
+  /** FALSE once the wait on the watcher's OWN exit timed out. The transition still SETTLES - that is
+   *  the point of the second bound - but it settles without proof that the watcher, and any `pkill` it
+   *  had already forked, is gone. TRUE means the watcher's exit was observed inside its bound; an
+   *  unsettled stdin close is reported separately and does NOT clear this (it is not a death signal)
+   *  (t5o2i.2). */
   cleanupConfirmed: boolean;
   /** `killProcessTree` calls running for this proc: they own the cleanup AND its verdict. */
   teardowns: number;
@@ -265,8 +266,8 @@ const lifelines = new WeakMap<Deno.ChildProcess, Lifeline>();
 interface ProfileSweep {
   fired: boolean;
   settled: Promise<void> | null;
-  /** FALSE once this lifeline's watcher exit (or stdin close) went UNCONFIRMED; the entry is then kept
-   *  in the registry for the rest of the process and a same-profile launch is refused (t5o2i.2). */
+  /** FALSE once this lifeline's watcher EXIT went UNCONFIRMED; the entry is then kept in the registry
+   *  for the rest of the process and a same-profile launch is refused (t5o2i.2). */
   confirmed: boolean;
 }
 const profileSweeps = new Map<string, Set<ProfileSweep>>();
@@ -380,8 +381,8 @@ export interface LifelineDeps {
   /** How long a leader-exit sweep may take before the watcher is SIGKILLed (default 5000). */
   sweepTimeoutMs?: number;
   /** The SHORT second bound on the waits that follow (the SIGKILLed watcher's exit, and the stdin
-   *  close): default `LIFELINE_SETTLE_WAIT_MS` (1000). A wait that overruns does not fail the sweep -
-   *  it ends it UNCONFIRMED, which is reported (t5o2i.2). */
+   *  close): default `LIFELINE_SETTLE_WAIT_MS` (1000). Neither overrun fails the sweep - an unsettled
+   *  exit ends it UNCONFIRMED and an unsettled close is reported without that verdict (t5o2i.2). */
   settleTimeoutMs?: number;
   /** Build the pkill pattern (default `lifelineMatchPattern`). */
   matchPattern?: (treeMatch: string | undefined) => string;
@@ -542,6 +543,7 @@ export function attachProcessLifeline(
   const sweepTimeoutMs = deps.sweepTimeoutMs ?? 5000;
   const settleTimeoutMs = deps.settleTimeoutMs ?? LIFELINE_SETTLE_WAIT_MS;
   let unconfirmedReported = false;
+  let closeReported = false;
   const match = (deps.matchPattern ?? lifelineMatchPattern)(treeMatch);
   // umuyk: this object has to exist BEFORE the coverage checks, because the no-group/no-pattern case
   // below reports it as `unprotected` and returns it. Nothing else in this function depends on the
@@ -669,8 +671,12 @@ export function attachProcessLifeline(
   };
   // t5o2i.2: the watcher can be in uninterruptible I/O, where a pending SIGKILL is not delivered until
   // the operation finishes - so "we asked it to die" is not "it is gone". Every post-timeout wait is
-  // bounded, and an overrun ends the transition UNCONFIRMED with a line that says exactly that instead
-  // of letting `settled` imply a clean sweep.
+  // bounded, and an overrun is REPORTED rather than left to imply that `settled` means a clean sweep.
+  //
+  // The deciding signal is the watcher's own EXIT (its `status`): a watcher proven gone cannot run the
+  // pkill it has not reached yet. An unsettled `stdin.close` is a weaker fact - it says the close call
+  // did not return, not that anything is still alive - so it is reported and judged separately, and it
+  // must not quarantine a profile (a spurious refusal would be its own false verdict).
   const unconfirmed = (wait: string): void => {
     lifeline.cleanupConfirmed = false;
     if (sweepEntry) sweepEntry.confirmed = false;
@@ -685,9 +691,18 @@ export function attachProcessLifeline(
         `; use a fresh profile`,
     );
   };
+  const closeUnsettled = (): void => {
+    if (closeReported) return;
+    closeReported = true;
+    warn(
+      `process-tree: lifeline ${lifeline.state} for pid ${proc.pid}: its stdin close did not settle within ` +
+        `${settleTimeoutMs} ms, so whether the sweep trigger reached the watcher is unknown; the watcher's ` +
+        `own exit, which is what decides cleanup, is judged separately`,
+    );
+  };
   const disarmBody = async (): Promise<void> => {
     await attempt(() => watcher.kill("SIGKILL"));
-    if (!(await settlesWithin(attempt(() => watcher.stdin.close()), settleTimeoutMs))) unconfirmed("stdin close");
+    if (!(await settlesWithin(attempt(() => watcher.stdin.close()), settleTimeoutMs))) closeUnsettled();
     if (!(await settlesWithin(attempt(() => watcher.status), settleTimeoutMs))) unconfirmed("exit after SIGKILL");
   };
   const sweepBody = async (): Promise<void> => {
@@ -718,7 +733,7 @@ export function attachProcessLifeline(
     } finally {
       clearTimeout(timer);
     }
-    if (!(await settlesWithin(closing, settleTimeoutMs))) unconfirmed("stdin close");
+    if (!(await settlesWithin(closing, settleTimeoutMs))) closeUnsettled();
   };
   lifeline.disarm = () => {
     if (lifeline.state === "armed") return leave("disarmed", disarmBody);
@@ -749,8 +764,8 @@ export function lifelineState(
   /** TRUE when the watcher was confirmed to lead its own process group; FALSE only for a running
    *  watcher that could not be confirmed. Callers must treat FALSE as isolation UNCONFIRMED. */
   ready: Promise<boolean>;
-  /** FALSE when a wait on the watcher's exit (or stdin close) overran its second bound: the transition
-   *  settled, but without proof that the watcher is gone (t5o2i.2). */
+  /** FALSE when the wait on the watcher's EXIT overran its second bound: the transition settled, but
+   *  without proof that the watcher is gone (t5o2i.2). An unsettled stdin close does not clear it. */
   cleanupConfirmed: boolean;
 } | undefined {
   const lifeline = lifelines.get(proc);
