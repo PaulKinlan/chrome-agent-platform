@@ -6,17 +6,89 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp, waitForServiceWorker, teardownChrome, resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
+import { ENVIRONMENTAL_REFUSAL_MARKER } from "../scripts/lib/environmental-verdict.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT_DIR = `${ROOT}/extension`;
+const DIST = `${EXT_DIR}/dist`;
 const { binary: RESOLVED_BIN, tried: TRIED_BINS } = resolveChromiumBinaryReport();
 
-async function computeExpectedChunkGraph(bundlePath: string): Promise<Set<string>> {
-  const chunksDir = `${ROOT}/extension/dist/chunks`;
+const SURFACES = [
+  { path: "ntp/ntp.html", bundle: "ntp.bundle.js", minChunks: 4 },
+  { path: "sidepanel/sidepanel.html", bundle: "sidepanel.bundle.js", minChunks: 3 },
+  { path: "options/options.html", bundle: "options.bundle.js", minChunks: 4 },
+];
+
+type MarkerIndex = {
+  /** A fingerprint of the build that wrote dist: commit + every indexed output byte. */
+  fingerprint: string;
+  /** dist-relative path -> the sha256 and size dist.complete records for it. */
+  outputs: Map<string, { sha256: string; size: number }>;
+};
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes as unknown as BufferSource);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** dist.complete is the build's own record of the byte it wrote for every output. */
+async function readMarkerIndex(): Promise<MarkerIndex> {
+  let marker: { commit?: string; outputs?: Array<{ path: string; sha256: string; size: number }> };
+  try {
+    marker = JSON.parse(await Deno.readTextFile(`${DIST}/dist.complete`));
+  } catch (e) {
+    throw new Error(
+      `extension/dist/dist.complete is not a readable built marker (${String((e as Error)?.message ?? e)}). ` +
+        `This test derives its expected chunk graph from the build's own record, so the extension must be built: npm run build:production`,
+    );
+  }
+  const outputs = new Map((marker.outputs ?? []).map((o) => [o.path, { sha256: o.sha256, size: o.size }]));
+  if (outputs.size === 0) throw new Error("extension/dist/dist.complete indexes no outputs: npm run build:production");
+  return {
+    fingerprint: `${marker.commit ?? "unknown"}:${await sha256Hex(new TextEncoder().encode(JSON.stringify([...outputs])))}`,
+    outputs,
+  };
+}
+
+/** Read one built file AS THE BYTE dist.complete records for it, waiting briefly for a rebuild in flight.
+ *
+ *  chrome-agent-platform-kxzib: this test derives its expectation from dist, and a build that was writing
+ *  dist concurrently was read as a TRUNCATED bundle - undefined content is a shorter string, not an error.
+ *  options.bundle.js references vault-quotas-GKSROYHG.js at 78% of its bytes (the other four chunk
+ *  references sit in the first 0.3%), so a short read dropped exactly that chunk from the "expected"
+ *  graph while the browser had loaded it, reding the whole serial phase on a tree nothing was wrong
+ *  with. Reading the byte the marker records makes the expectation a function of ONE build, and a tree
+ *  that never settles is an explicit refusal naming the file - never a silently smaller graph.
+ */
+async function readMarkerVerifiedFile(index: MarkerIndex, relPath: string): Promise<string> {
+  const expected = index.outputs.get(relPath);
+  if (!expected) {
+    throw new Error(
+      `dist.complete does not index ${relPath}, so the expected import graph could not be attributed to a build output`,
+    );
+  }
+  let observed = "not read";
+  for (let attempt = 1; attempt <= 40; attempt++) {
+    const bytes = await Deno.readFile(`${DIST}/${relPath}`).catch(() => null);
+    if (bytes) {
+      const actual = await sha256Hex(bytes);
+      if (bytes.byteLength === expected.size && actual === expected.sha256) {
+        return new TextDecoder().decode(bytes);
+      }
+      observed = `${bytes.byteLength} bytes (sha256 ${actual.slice(0, 12)})`;
+    }
+    if (attempt < 40) await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(
+    `${ENVIRONMENTAL_REFUSAL_MARKER} {"method":"readMarkerVerifiedFile","reason":"dist is not the build dist.complete records - a rebuild is rewriting it while this expectation is derived","file":"${relPath}","read":"${observed}","markerRecords":"${expected.size} bytes (sha256 ${expected.sha256.slice(0, 12)})","attempts":40}`,
+  );
+}
+
+async function computeExpectedChunkGraph(index: MarkerIndex, bundleRelPath: string): Promise<Set<string>> {
   const visited = new Set<string>();
   const queue: string[] = [];
 
-  const bundleCode = await Deno.readTextFile(bundlePath);
+  const bundleCode = await readMarkerVerifiedFile(index, bundleRelPath);
   for (const m of bundleCode.matchAll(/\.\/chunks\/([a-zA-Z0-9._-]+\.js)/g)) {
     if (!visited.has(m[1])) {
       visited.add(m[1]);
@@ -26,8 +98,9 @@ async function computeExpectedChunkGraph(bundlePath: string): Promise<Set<string
 
   while (queue.length > 0) {
     const chunkName = queue.shift()!;
-    const chunkFile = `${chunksDir}/${chunkName}`;
-    const chunkCode = await Deno.readTextFile(chunkFile).catch(() => "");
+    // A referenced chunk that the marker does not index, or whose bytes are not the recorded ones, is a
+    // hard stop: the old `.catch(() => "")` here could silently shorten the graph instead.
+    const chunkCode = await readMarkerVerifiedFile(index, `chunks/${chunkName}`);
     for (const m of chunkCode.matchAll(/\.\/([a-zA-Z0-9._-]+\.js)/g)) {
       if (!visited.has(m[1])) {
         visited.add(m[1]);
@@ -48,6 +121,14 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
   const CHROME_BIN = RESOLVED_BIN;
   const tmp = durableDir(`cap-chunk-browser-${Date.now()}`);
 
+  // The expectation is derived from the build's own record BEFORE the browser loads it, once per
+  // surface: one settled build, one graph - and the same bytes the browser is about to load (kxzib).
+  const markerIndex = await readMarkerIndex();
+  const expectedGraphs = new Map<string, Set<string>>();
+  for (const surface of SURFACES) {
+    expectedGraphs.set(surface.path, await computeExpectedChunkGraph(markerIndex, surface.bundle));
+  }
+
   let chrome = null;
   let client = null;
   try {
@@ -66,11 +147,7 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
     assert(sw, "Service worker must start");
     const extId = sw.url.split("/")[2];
 
-    const surfaces = [
-      { path: "ntp/ntp.html", bundle: "ntp.bundle.js", minChunks: 4 },
-      { path: "sidepanel/sidepanel.html", bundle: "sidepanel.bundle.js", minChunks: 3 },
-      { path: "options/options.html", bundle: "options.bundle.js", minChunks: 4 },
-    ];
+    const surfaces = SURFACES;
     for (const surface of surfaces) {
       const openTarget = await client.open("about:blank");
       const { targetId, sessionId } = openTarget;
@@ -188,8 +265,10 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
         `Page URL must match expected target for ${surface.path}`,
       );
 
-      // 2. Compute the exact static chunk import graph for this surface bundle
-      const expectedGraph = await computeExpectedChunkGraph(`${ROOT}/extension/dist/${surface.bundle}`);
+      // 2. The expected static chunk import graph for this surface bundle, derived from the build's
+      //    own record before the browser was launched (see expectedGraphs above).
+      const expectedGraph = expectedGraphs.get(surface.path)!;
+      assert(expectedGraph.size > 0, `${surface.path} expected graph must not be empty`);
 
       // 3. Assert zero network failures, zero CSP violations, and zero runtime exceptions
       assertEquals(networkFailed, [], `No network failures loading ${surface.path}`);
@@ -228,6 +307,16 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
       assertEquals(lazyChunkResult, true, `Lazy dynamic import of dist/chunks/${sampleChunk} must resolve cleanly via chrome.runtime.getURL`);
 
       await client.send("Target.closeTarget", { targetId });
+    }
+
+    // The comparison above is only meaningful against the build the browser loaded. If another process
+    // rebuilt dist while this run was in flight, say so as an environmental refusal naming the build,
+    // rather than reporting the delta for a tree that changed under it.
+    const after = await readMarkerIndex();
+    if (after.fingerprint !== markerIndex.fingerprint) {
+      throw new Error(
+        `${ENVIRONMENTAL_REFUSAL_MARKER} {"method":"readMarkerIndex","reason":"dist was rebuilt while this run loaded it, so the loaded chunks and the expected graph describe different builds","before":"${markerIndex.fingerprint.slice(0, 24)}","after":"${after.fingerprint.slice(0, 24)}"}`,
+      );
     }
   } finally {
     if (client) {
