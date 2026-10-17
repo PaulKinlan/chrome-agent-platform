@@ -24,20 +24,18 @@
 //     page-side description. Instrument death is never folded into the
 //     refusal, so a caller can tell "not there yet" from "the harness broke".
 //
-// The ONE retry carried over from the helper this replaces is a TRANSPORT
-// execution-context failure: the same "Cannot find default execution context"
-// message chrome-journeys' evalIn retries, which names a session whose frame
-// has not come up rather than a page answer. It is bounded, and it is decided
-// on the ERROR KIND first — a page throw is tagged `PageThrowError` at the
-// source (openCdp.eval) and is never retried, because a page expression can
-// literally throw that phrase and the retry would swallow it (0lb4 P1).
+// The ONE retry this file carries is a TRANSPORT execution-context failure: the
+// same "Cannot find default execution context" message chrome-journeys' evalIn
+// retries, which names a session whose frame has not come up rather than a page
+// answer. It is SHARED now rather than hand-rolled here
+// (chrome-agent-platform-zq76k), and the shared helper decides on the ERROR KIND
+// first — a page throw is tagged `PageThrowError` at the source (openCdp.eval)
+// and is never retried, because a page expression can literally throw that
+// phrase and the retry would swallow it (0lb4 P1).
 import type { CdpClient } from "./chrome-launch.ts";
-import { EvalSurfaceError, PageThrowError } from "./cdp-eval.ts";
+import { EvalSurfaceError, withTransientContextRetry } from "./cdp-eval.ts";
 
 const SITE = "click-target";
-const TRANSIENT_CONTEXT = "Cannot find default execution context";
-const CONTEXT_ATTEMPTS = 5;
-const CONTEXT_RETRY_MS = 250;
 
 export type ClickOutcome =
   | { clicked: true; x: number; y: number }
@@ -60,23 +58,14 @@ export async function clickAt(cdp: CdpClient, session: string, expr: string): Pr
 }
 
 async function probePoint(cdp: CdpClient, session: string, expr: string): Promise<{ x: number; y: number } | null> {
-  let lastErr: unknown = null;
-  for (let attempt = 0; attempt < CONTEXT_ATTEMPTS; attempt++) {
-    try {
-      const value = await cdp.eval(session, expr);
-      return isPoint(value) ? value : null;
-    } catch (e) {
-      lastErr = e;
-      // A PAGE throw is not a transport failure, whatever its text says: an
-      // expression that itself throws "Cannot find default execution context"
-      // must SURFACE, not be retried into an absence answer (0lb4 P1).
-      if (e instanceof PageThrowError) break;
-      const message = String((e as Error)?.message ?? e);
-      if (!message.includes(TRANSIENT_CONTEXT) || attempt === CONTEXT_ATTEMPTS - 1) break;
-      await new Promise((resolve) => setTimeout(resolve, CONTEXT_RETRY_MS));
-    }
+  try {
+    // The shared retry absorbs only the transient execution-context TRANSPORT error; a page throw
+    // (PageThrowError) and any other transport failure come straight back here to be surfaced.
+    const value = await withTransientContextRetry(() => cdp.eval(session, expr));
+    return isPoint(value) ? value : null;
+  } catch (e) {
+    throw new EvalSurfaceError(SITE, `${String((e as Error)?.message ?? e)} — expr: ${snip(expr)}`);
   }
-  throw new EvalSurfaceError(SITE, `${String((lastErr as Error)?.message ?? lastErr)} — expr: ${snip(expr)}`);
 }
 
 function isPoint(value: unknown): value is { x: number; y: number } {

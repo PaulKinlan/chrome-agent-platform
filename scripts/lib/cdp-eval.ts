@@ -64,6 +64,65 @@ export class PageThrowError extends Error {
   }
 }
 
+/** The TRANSPORT failure every harness in this repo retries by hand: an
+ * execution context that has not come up yet. Chrome reports it as a protocol
+ * error on the Runtime.evaluate CALL, before any page code runs. */
+export const TRANSIENT_CONTEXT_MESSAGE = "Cannot find default execution context";
+/** Bounded: 5 attempts total, 250 ms apart (the numbers both hand-rolled copies
+ * used, kept so this is a refactor and not a behaviour change). */
+export const TRANSIENT_CONTEXT_ATTEMPTS = 5;
+export const TRANSIENT_CONTEXT_RETRY_MS = 250;
+
+export interface TransientContextRetryOptions {
+  attempts?: number;
+  delayMs?: number;
+  /** Injected so a test can assert the retry schedule without waiting for it. */
+  sleep?: (ms: number) => Promise<void>;
+  onRetry?: (attempt: number, message: string) => void;
+}
+
+/** Retry a Runtime.evaluate that died with the transient execution-context
+ * TRANSPORT error, and ONLY that one.
+ *
+ * This is the single source for a retry that chrome-journeys' evalIn and
+ * click-target's probePoint each carried a copy of, and that the journey/KAT
+ * scripts beside them did NOT have at all (chrome-agent-platform-zq76k: a ~2 s
+ * launch race in kat-site-delegation-attachments red a union gate and cost a
+ * whole re-run because its local evalIn had no retry). One copy, one decision.
+ *
+ * DECIDED ON THE ERROR KIND FIRST: a `PageThrowError` is never retried, whatever
+ * its text says — a page expression can literally throw "Cannot find default
+ * execution context", and retrying it would swallow a real page failure into an
+ * absent value (0lb4 P1). A transport failure that is NOT this phrase is not
+ * retried either: it does not mean a frame is coming up.
+ *
+ * Exhausting `attempts` rethrows the LAST error unchanged, so each caller keeps
+ * its own error contract (click-target wraps it in an EvalSurfaceError naming
+ * its site; chrome-journeys rethrows it).
+ */
+export async function withTransientContextRetry<T>(
+  evaluate: () => Promise<T>,
+  opts: TransientContextRetryOptions = {},
+): Promise<T> {
+  const attempts = opts.attempts ?? TRANSIENT_CONTEXT_ATTEMPTS;
+  const delayMs = opts.delayMs ?? TRANSIENT_CONTEXT_RETRY_MS;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await evaluate();
+    } catch (e) {
+      lastErr = e;
+      if (e instanceof PageThrowError) break;
+      const message = String((e as Error)?.message ?? e);
+      if (!message.includes(TRANSIENT_CONTEXT_MESSAGE) || attempt === attempts - 1) break;
+      opts.onRetry?.(attempt + 1, message);
+      await sleep(delayMs);
+    }
+  }
+  throw lastErr;
+}
+
 /** Wire envelope: what a `resolve(d)` CDP wrapper hands back. */
 export interface WireEvaluateMessage {
   id?: number;
