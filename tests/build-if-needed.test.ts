@@ -221,6 +221,17 @@ Deno.test("0eq00 build: a build that does not certify the dist FAILS the run (ne
     },
   });
   assertEquals(failedBuild.disposition, "failed");
+  // im9q8: a failed build must not be blamed on the stale marker that merely CAUSED the retry. The
+  // old shape, "store build exited 2 (marker is missing)", reads as if the marker caused the
+  // failure; the real cause is the build's own, named in its output. Keep the retry cause, fix the
+  // attribution.
+  assert(failedBuild.reason.includes("store build exited 2"), failedBuild.reason);
+  assert(failedBuild.reason.includes("build's own"), failedBuild.reason);
+  assert(failedBuild.reason.includes("marker is missing"), failedBuild.reason);
+  assert(
+    !/exited \d+ \(/.test(failedBuild.reason),
+    `the failure reason must not present the pre-existing marker error as the cause of the failure: ${failedBuild.reason}`,
+  );
   assertEquals(built, 1, "a failing build is not retried inside the decision");
 
   const stillInvalid = await ensureStoreBuild({
