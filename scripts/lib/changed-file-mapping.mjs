@@ -156,6 +156,11 @@ export function isScriptsHarness(rel) {
   return /^scripts[\\/].+\.(ts|mjs|js)$/.test(rel.replace(/\\/g, "/"));
 }
 
+/** A fixture under tests/fixtures/ that no test imports statically. */
+export function isTestsFixture(rel) {
+  return /^tests[\\/]fixtures[\\/].+/.test(rel.replace(/\\/g, "/"));
+}
+
 /**
  * Is this script ENUMERATED by the tree-walking guards?
  * `harnessFiles()` in scripts/lib/harness-registry.ts enumerates
@@ -206,7 +211,7 @@ export function isBookkeepingFile(rel) {
  * Returns `{ mechanism, tests }`; `tests` empty means FAIL CLOSED and the
  * mechanism is the reason to print.
  */
-export function classifyUncovered(rel, { versionOnly = false } = {}) {
+export function classifyUncovered(rel, { versionOnly = false, referrers = [] } = {}) {
   const path = rel.replace(/\\/g, "/");
   // The selector's own machinery is never subset-mappable. Checked FIRST so
   // no later branch can bless it, and duplicated at the caller because an
@@ -232,7 +237,34 @@ export function classifyUncovered(rel, { versionOnly = false } = {}) {
       tests: [],
     };
   }
+  if (isTestsFixture(path)) {
+    if (referrers.length) {
+      return {
+        mechanism:
+          "tests/fixtures/ file named by tests (no static import edge; " +
+          "selects tests that mention the path; globbing consumers not selected)",
+        tests: [...referrers],
+      };
+    }
+    return {
+      mechanism:
+        "tests/fixtures/ file with no static import edge and no referencing test — " +
+        "genuinely unmappable statically",
+      tests: [],
+    };
+  }
   if (isScriptsHarness(path)) {
+    if (referrers.length) {
+      const tests = isGuardEnumeratedScript(path)
+        ? [...new Set([...referrers, ...HARNESS_TREE_GUARDS])]
+        : [...referrers];
+      return {
+        mechanism:
+          "scripts/ file named by tests (text reference with no static import edge; " +
+          "selects tests that mention the path; globbing consumers not selected)",
+        tests,
+      };
+    }
     if (isGuardEnumeratedScript(path)) {
       return {
         mechanism: "top-level scripts/*.ts enumerated by the tree-walking guards (harnessFiles scans scripts/*.ts)",
@@ -264,7 +296,13 @@ export function classifyUncovered(rel, { versionOnly = false } = {}) {
  * with no tests, and its presence means the caller must run the full suite and
  * print every entry — a full-suite run that says why it ran.
  */
-export function mapUncovered(uncovered, versionOnlyFor, declaredTestExists, declaredSourceExists) {
+export function mapUncovered(
+  uncovered,
+  versionOnlyFor,
+  declaredTestExists,
+  declaredSourceExists,
+  referrersFor = () => [],
+) {
   if (typeof versionOnlyFor !== "function" || typeof declaredTestExists !== "function" ||
       typeof declaredSourceExists !== "function") {
     throw new Error("mapUncovered: version-only and declared guard existence predicates are required; source-existence predicate is required");
@@ -272,7 +310,8 @@ export function mapUncovered(uncovered, versionOnlyFor, declaredTestExists, decl
   const mapped = [];
   const unmappable = [];
   for (const file of uncovered) {
-    const verdict = classifyUncovered(file, { versionOnly: versionOnlyFor(file) });
+    const referrers = typeof referrersFor === "function" ? referrersFor(file) : [];
+    const verdict = classifyUncovered(file, { versionOnly: versionOnlyFor(file), referrers });
     const missing = verdict.tests.filter((test) => !declaredTestExists(test));
     if (missing.length) {
       unmappable.push({

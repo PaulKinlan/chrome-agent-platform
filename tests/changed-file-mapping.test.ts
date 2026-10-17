@@ -22,6 +22,7 @@ import {
   isGuardEnumeratedScript,
   isScriptsHarness,
   isSelectorInfrastructure,
+  isTestsFixture,
   mapUncovered,
   SELECTOR_INFRASTRUCTURE,
   VERSION_FIELDS_BY_FILE,
@@ -31,6 +32,7 @@ import {
   buildReverseGraph,
   changedWithoutCoverage,
   mergeBaseOf,
+  referrersFor,
   selectTestFiles,
   versionOnlyAgainst,
 } from "../scripts/select-tests.mjs";
@@ -488,3 +490,125 @@ Deno.test("ugvyo: every harness mentioned in changed-file-mapping.mjs header exi
     );
   }
 });
+
+Deno.test("oeqvx: isTestsFixture identifies fixtures under tests/fixtures/", () => {
+  assertEquals(isTestsFixture("tests/fixtures/security-suite-fake-runner.mjs"), true);
+  assertEquals(isTestsFixture("tests/fixtures/acp-fake-adapter.mjs"), true);
+  assertEquals(isTestsFixture("tests/fixtures/crumb-v1.html"), true);
+  assertEquals(isTestsFixture("tests/fixtures/artifact-tx-4eaf0d34/memory.js"), true);
+  assertEquals(isTestsFixture("scripts/chrome-journeys.ts"), false);
+  assertEquals(isTestsFixture("tests/changed-file-mapping.test.ts"), false);
+  assertEquals(isTestsFixture("extension/background/service-worker.js"), false);
+});
+
+Deno.test("oeqvx: classifyUncovered maps fixtures and text-read scripts when referrers exist, and fails closed when absent", () => {
+  // Fixture with referrers: mapped
+  const fixtureWithRefs = classifyUncovered("tests/fixtures/security-suite-fake-runner.mjs", {
+    referrers: ["tests/security-suite-custody.test.ts", "tests/file-url-root-guard.test.ts"],
+  });
+  assertEquals(fixtureWithRefs.tests, [
+    "tests/security-suite-custody.test.ts",
+    "tests/file-url-root-guard.test.ts",
+  ]);
+  assert(fixtureWithRefs.mechanism.includes("tests/fixtures/ file named by tests"), fixtureWithRefs.mechanism);
+  assert(fixtureWithRefs.mechanism.includes("globbing consumers not selected"), fixtureWithRefs.mechanism);
+
+  // Fixture without referrers: fails closed
+  const fixtureNoRefs = classifyUncovered("tests/fixtures/security-suite-fake-runner.mjs", { referrers: [] });
+  assertEquals(fixtureNoRefs.tests, []);
+  assert(fixtureNoRefs.mechanism.includes("no static import edge and no referencing test"), fixtureNoRefs.mechanism);
+
+  // Text-referenced script with referrers: mapped (and includes HARNESS_TREE_GUARDS for top-level enumerated scripts)
+  const scriptWithRefs = classifyUncovered("scripts/chrome-journeys.ts", {
+    referrers: ["tests/journey-focus-fail-closed.test.ts"],
+  });
+  assert(scriptWithRefs.tests.includes("tests/journey-focus-fail-closed.test.ts"));
+  assert(scriptWithRefs.tests.includes("tests/harness-registry.test.ts"));
+  assert(scriptWithRefs.mechanism.includes("scripts/ file named by tests"), scriptWithRefs.mechanism);
+
+  // Unenumerated script with referrers: mapped to referrers
+  const subHelperWithRefs = classifyUncovered("scripts/lib/some-helper.mjs", {
+    referrers: ["tests/some-test.test.ts"],
+  });
+  assertEquals(subHelperWithRefs.tests, ["tests/some-test.test.ts"]);
+  assert(subHelperWithRefs.mechanism.includes("scripts/ file named by tests"), subHelperWithRefs.mechanism);
+
+  // Unenumerated script without referrers: fails closed
+  const subHelperNoRefs = classifyUncovered("scripts/lib/some-helper.mjs", { referrers: [] });
+  assertEquals(subHelperNoRefs.tests, []);
+  assert(subHelperNoRefs.mechanism.includes("not enumerated by the tree-walking guards"), subHelperNoRefs.mechanism);
+});
+
+Deno.test("oeqvx: referrersFor finds suites that mention fixtures or text-read scripts", () => {
+  const fakeRunnerRefs = referrersFor("tests/fixtures/security-suite-fake-runner.mjs");
+  assert(
+    fakeRunnerRefs.includes("tests/security-suite-custody.test.ts"),
+    "security-suite-custody.test.ts references security-suite-fake-runner.mjs",
+  );
+  assert(
+    fakeRunnerRefs.includes("tests/file-url-root-guard.test.ts"),
+    "file-url-root-guard.test.ts references security-suite-fake-runner.mjs",
+  );
+
+  const acpAdapterRefs = referrersFor("tests/fixtures/acp-fake-adapter.mjs");
+  assert(
+    acpAdapterRefs.includes("tests/acp-child-env-wiring.test.ts"),
+    "acp-child-env-wiring.test.ts references acp-fake-adapter.mjs",
+  );
+  assert(
+    acpAdapterRefs.includes("tests/acp-bridge-security.test.ts"),
+    "acp-bridge-security.test.ts references acp-fake-adapter.mjs",
+  );
+
+  const journeyRefs = referrersFor("scripts/chrome-journeys.ts");
+  assert(
+    journeyRefs.includes("tests/journey-focus-fail-closed.test.ts"),
+    "journey-focus-fail-closed.test.ts references chrome-journeys.ts",
+  );
+
+  const crumbRefs = referrersFor("tests/fixtures/crumb-v1.html");
+  assert(
+    crumbRefs.includes("tests/components.test.ts"),
+    "components.test.ts references crumb-v1.html",
+  );
+
+  const orphanBase = "non_existent_orphan_" + "xyz_unreferenced_probe.mjs";
+  const orphan = "tests/fixtures/" + orphanBase;
+  const orphanRefs = referrersFor(orphan);
+  assertEquals(orphanRefs, [], "non-existent or unmentioned fixture has zero referrers");
+});
+
+Deno.test("oeqvx: mapUncovered maps fixture when referrersFor is supplied and fails closed when empty (mutant)", () => {
+  const fixture = "tests/fixtures/security-suite-fake-runner.mjs";
+  const mappedResult = mapUncovered(
+    [fixture],
+    () => false,
+    declaredGuardExists,
+    () => true,
+    referrersFor,
+  );
+  assertEquals(mappedResult.unmappable, [], "fixture with referrers must not be unmappable");
+  assertEquals(mappedResult.mapped.length, 1);
+  assertEquals(mappedResult.mapped[0].file, fixture);
+  assert(
+    mappedResult.mapped[0].tests.includes("tests/security-suite-custody.test.ts"),
+    "must include security-suite-custody.test.ts",
+  );
+
+  // Non-equivalent mutant: when referrersFor returns [] (or mapping removed), fixture fails closed
+  const mutantResult = mapUncovered(
+    [fixture],
+    () => false,
+    declaredGuardExists,
+    () => true,
+    () => [],
+  );
+  assertEquals(mutantResult.mapped, [], "fixture without referrers must not be mapped");
+  assertEquals(mutantResult.unmappable.length, 1);
+  assertEquals(mutantResult.unmappable[0].file, fixture);
+  assert(
+    mutantResult.unmappable[0].mechanism.includes("no static import edge and no referencing test"),
+    mutantResult.unmappable[0].mechanism,
+  );
+});
+
