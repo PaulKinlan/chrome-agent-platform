@@ -22,7 +22,7 @@
 
 //
 // SELECTIVE (chrome-agent-platform-6gk81): the default (no explicit files) form decides from a
-// CONTENT key over this tier's own inputs whether the three tests can tell this tree apart from a
+// CONTENT key over this tier's own inputs (its transitive static IMPORT CLOSURE plus the data trees) whether the three tests can tell this tree apart from a
 // tree that already passed them (scripts/lib/build-tier-inputs.mjs carries the rule, the safety
 // argument for what is out of the key, and the fail-closed direction). A matching recorded PASS
 // skips the 92s; any byte of build machinery, any of the tier's own tests, and every failure mode
@@ -76,6 +76,15 @@ export async function main(args = Deno.args): Promise<number> {
   }
   if (decision) {
     console.log(`build-gate: SELECTIVE — ${decision.reason} (${decision.inputs} input file(s), key ${String(decision.key).slice(0, 12)})`);
+    const unresolved: string[] = (decision as { closure?: { unresolved?: string[] } }).closure?.unresolved ?? [];
+    if (unresolved.length > 0) {
+      // Residue, disclosed rather than hidden: a relative import the static scan cannot resolve is
+      // NOT silently treated as "no dependency". It cannot be keyed, so it is named here.
+      console.log(
+        `build-gate: note: ${unresolved.length} relative specifier(s) in the closure did not resolve to a repo file and are not keyed ` +
+          `(specifier-shaped text in code or comments, or a path this static scan cannot follow): ${unresolved.slice(0, 5).join("; ")}${unresolved.length > 5 ? " …" : ""}`,
+      );
+    }
   }
 
   console.log(`build-gate: running ${files.length} build-behaviour test(s) serially:`);

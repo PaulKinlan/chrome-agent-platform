@@ -3,60 +3,85 @@
 //
 // WHY THIS EXISTS. The FULL (union landing) gate is `build:production && npm test && test:build`.
 // Measured on tree e7674fca (2026-10-17T06:39Z, PASS, 341s): build 18s + serial 74s + post-build
-// read-only 18s + parallel 139s (704 files, 824.8 suite-seconds) + test:build 92s. So `test:build`
-// is 27% of every landing for three files that assert build MECHANICS. docs/TEST-TIERS-PROPOSAL.md
-// (yvvvd) already defines that as Tier 3, "Selective & Nightly ... Trigger: Runs when build.mjs,
-// packages/bundled, or generators change", and the bead that owns this measurement (6gk81) names
-// tree-copy concurrency only as the fallback if the cheaper cut is insufficient.
+// read-only 18s + parallel 139s (704 files, 824.8 suite-seconds) + test:build 92s — so `test:build`
+// was 27% of every landing for three files that assert build MECHANICS. On a loaded VM the same tier
+// measured 146.6s. docs/TEST-TIERS-PROPOSAL.md (yvvvd) already defines that tier as Tier 3,
+// "Selective & Nightly ... Trigger: Runs when build.mjs, packages/bundled, or generators change",
+// and the bead that owns this measurement (6gk81) names tree-copy concurrency only as the fallback.
 //
 // WHY A CONTENT KEY AND NOT A GIT DELTA. scripts/gate-full.mjs implements the same Tier-3 rule from
 // `git merge-base origin/main HEAD..HEAD`, and three of its review findings are all the same class
 // of bug: a base that is guessed wrongly (or a git failure) reports "no build-infra change" and
 // silently skips the tier (chrome-agent-platform-28qd4, -8z367, -6c97h). A content key cannot have
 // that bug: it is computed from the bytes of the files the verdict depends on, in the tree being
-// gated, with no reference to any ref, remote or merge base. A tree whose build machinery is
-// byte-identical to a tree that already passed this tier has the same build machinery; a tree with
-// one changed byte in it runs the tier.
+// gated, with no reference to any ref, remote or merge base.
 //
-// WHAT IS IN THE KEY. Everything the three build-behaviour tests' assertions depend on: the build
-// entry point (build.mjs), the build/package/dist/wasm machinery it drives, the tier's own tests and
-// fixtures, the inputs the generator tiers read (packages/bundled/**, wasm-tools/**), the extension
-// manifest and the dependency/runner pinning. Editing any of these runs the tier — including editing
-// a build test, which is the point: a tier cannot certify the tests that define it.
+// WHAT IS IN THE KEY — the IMPORT CLOSURE, not a hand-written pattern list. The first version of
+// this module keyed a list of path patterns, and review (rev-6gk81, 2026-10-17, finding on
+// chrome-agent-platform-1yzg2) showed exactly why a list is the wrong shape: `build.mjs` imports
+// scripts/browser-dependencies.mjs, scripts/lib/{bounded-child,pyodide-staging}.mjs,
+// scripts/{sync-gallery,sync-changelog,generate-about-page}.mjs and the tier's tests import
+// scripts/lib/process-tree.ts and scripts/dist-complete.mjs — none of which the list matched, so
+// editing any of them left the key unchanged. A list also cannot tell you when it has drifted.
+//
+// The key is therefore the TRANSITIVE STATIC IMPORT CLOSURE of the tier's roots:
+//   * build.mjs
+//   * scripts/build-gate.ts (the runner itself)
+//   * every file in BUILD_GATE_FILES (tests/build-bootstrap.test.ts, -debug-mode, -tool-bundling)
+// resolving relative specifiers (`./x`, `../x`, with the `.mjs`/`.ts`/`.js`/`.json` and `/index.*`
+// fallbacks this repo uses) to repo files, recursively. Bare specifiers (`node:`, `npm:`, `jsr:`,
+// `jsr:@std/...`) are not repo files and are covered by the lockfiles in the data set below. That
+// makes the key track what the tests actually execute: a helper imported by the build, or by a test,
+// is an input automatically, and nobody has to remember to add it.
+// Plus the DATA inputs the closure cannot see:
+//   * packages/bundled/** and wasm-tools/** — the generator/Wasmer trees the build reads by path
+//   * extension/manifest*.json, package.json, package-lock.json, deno.lock, deno.runner.jsonc
+//
+// RESIDUE, stated so it is not implied away: a specifier assembled at runtime (`"./lib/" + name`, a
+// substituting template) is invisible to static import scanning, exactly as it is to every text
+// detector in this repo (scripts/test-partition.mjs documents the same residue for its own hazard
+// rules). The mitigation is not silence: if the closure exceeds MAX_CLOSURE_FILES the walk reports
+// `truncated` and the tier RUNS (fail closed) rather than keying a partial set.
 //
 // WHAT IS DELIBERATELY OUT OF THE KEY, and what covers it instead (so the skip is not a coverage
 // hole — this paragraph is the whole safety argument and a review should hold it to account):
 //   * The version counter (package.json / package-lock.json / extension/manifest.json / the bundled
 //     inventory `.release`). The landing bump (scripts/bump-version.mjs) rewrites it on EVERY
 //     landing, so a key that included it could never match. It is a stamp, not an input: any
-//     occurrence of the tree's current version is replaced with VERSION_PLACEHOLDER before hashing.
+//     occurrence of the tree's current version is replaced with VERSION_PLACEHOLDER before hashing,
+//     and a test fails if the version appears in an input the bump does not rewrite.
 //     Materialisation of that stamp is asserted on every gate by `build:production` itself
 //     ("changelog in sync", "About page in sync", "docs/... in sync", "VERIFY OK: ... generated
 //     files byte-identical to the committed tree").
 //   * CHANGELOG.md, for the same reason (the landing prepends an entry), and because
 //     `build:production` asserts the materialised changelog on every gate.
-//   * Product sources (extension/**, docs/**): the tier's assertions are about HOW the build works,
-//     not about what it contains. The product-content dimensions are already asserted on EVERY gate:
-//     build:production's generated-file sync, oracle scan, reachability and 52-binary manifest; plus
-//     tests/build-smoke.test.ts (serial), tests/dist-complete-source-authority.test.ts and
-//     tests/bundled-tool-packages.test.ts (post-build read-only) inside `npm test`.
-//
-// THE EVERYTHING-GATE STILL RUNS IT. `npm run test:all` invokes the tier as
-// `CAP_BUILD_TIER=force npm run test:build`, so the aggregate/nightly line — the "Nightly" half of the
-// proposal's "Selective & Nightly" — never inherits the skip. tests/build-tier-inputs.test.ts pins that.
+//   * Product sources (extension/**, docs/**), when the build machinery does not import them: the
+//     tier's assertions are about HOW the build works, not about what it contains. The product
+//     dimensions are asserted on EVERY gate by build:production's generated-file sync, oracle scan,
+//     reachability and 52-binary Wasm manifest, plus npm test's build-smoke,
+//     dist-complete-source-authority and bundled-tool-packages. (A product file that IS imported by
+//     the machinery — e.g. extension/shared/components-core.js through a sync script — is in the
+//     closure and therefore in the key.)
 //
 // FAIL-CLOSED DIRECTION. Every unknown returns "run": no digests, no durable root, no record, a
-// record for a different key, an unreadable record, or an explicit request (`npm run test:build
-// tests/x.test.ts`, `CAP_BUILD_TIER=force`) => the tier runs. There is NO environment variable that
-// skips the tier; the selector's only off-switch is "run the tests". The worst a broken key can do
-// is make the tier run every time (the pre-6gk81 behaviour, 92s), never the reverse.
+// record for a different key, an unreadable record, a truncated closure, or an explicit request
+// (`npm run test:build tests/x.test.ts`, `CAP_BUILD_TIER=force`) => the tier runs. There is NO
+// environment variable that skips it; the selector's only off-switch is "run the tests". The worst a
+// broken key can do is make the tier run every time (the pre-6gk81 behaviour, 92-146s), never the
+// reverse.
+//
+// THE EVERYTHING-GATE STILL RUNS IT. `npm run test:all` invokes the tier as
+// `CAP_BUILD_TIER=force npm run test:build`, so the aggregate/nightly line — the "Nightly" half of
+// the proposal's "Selective & Nightly" — never inherits the skip. tests/build-tier-inputs.test.ts
+// pins that.
 //
 // Plain ESM with node: imports so both runtimes (deno: scripts/build-gate.ts and the tests) share it.
 
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, readFile, stat, mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { durableRoot } from "./durable-root.mjs";
+import { BUILD_GATE_FILES } from "../test-partition.mjs";
 
 /** The recorded-PASS directory under the durable root; one `<key>.json` per passing input key. */
 export const BUILD_TIER_RECORD_DIR_NAME = "build-tier-pass";
@@ -65,22 +90,20 @@ export const BUILD_TIER_RECORD_DIR_NAME = "build-tier-pass";
 export const VERSION_PLACEHOLDER = "<VERSION>";
 
 /**
- * Repo-relative POSIX paths whose BYTES the build tier's verdict depends on. Membership is a claim
- * about the tier, so it is pinned by tests/build-tier-inputs.test.ts: a path that changes what a
- * build-behaviour assertion can see belongs here, and a product path does not.
+ * The roots whose transitive static imports define the key. The tier's own tests come from
+ * BUILD_GATE_FILES so adding a build test cannot leave it out of its own key.
  */
-export const BUILD_TIER_INPUT_PATTERNS = Object.freeze([
-  /^build\.mjs$/,
-  /^scripts\/build-[^/]+\.(?:mjs|ts|js)$/, // build-gate.ts, build-if-needed.mjs, build-bundled-tool-packages.mjs, ...
-  /^scripts\/package-[^/]+\.mjs$/, // package-archive.mjs, package-extension.mjs
-  /^scripts\/bump-version\.mjs$/, // the landing stamp's writer (its surfaces are keyed version-neutrally)
-  /^scripts\/changelog-delta\.mjs$/, // gates the build-once record the serial build tests read
-  /^scripts\/test-partition\.mjs$/, // BUILD_GATE_CHILD_BUILDS / the tier's per-file windows
-  /^scripts\/lib\/(?:build|dist|copy-built-tree|wasm|emscripten)[^/]*\.(?:mjs|ts)$/,
-  /^tests\/build-[^/]+\.test\.ts$/, // the tier's own tests, including build-smoke
-  /^tests\/fixtures\/build-once\.mjs$/,
-  /^packages\/bundled\//, // bundled-tool generator inputs (incl. the inventory the release stamp lives in)
-  /^wasm-tools\//, // the Wasm binaries the build bundles and the archive hashes
+export const BUILD_TIER_ROOTS = Object.freeze([
+  "build.mjs",
+  "scripts/build-gate.ts",
+  ...BUILD_GATE_FILES,
+]);
+
+/** The closure is bounded: beyond this the walk reports `truncated` and the tier runs (fail closed). */
+export const MAX_CLOSURE_FILES = 500;
+
+/** Data inputs the closure cannot see (read by path, not imported). */
+export const BUILD_TIER_DATA_PATTERNS = Object.freeze([
   /^extension\/manifest[^/]*\.json$/,
   /^package\.json$/,
   /^package-lock\.json$/,
@@ -88,25 +111,13 @@ export const BUILD_TIER_INPUT_PATTERNS = Object.freeze([
   /^deno\.runner\.jsonc$/,
 ]);
 
-/** Repo-root files considered directly (all filtered through BUILD_TIER_INPUT_PATTERNS). */
-const ROOT_FILES = Object.freeze([
-  "build.mjs",
-  "package.json",
-  "package-lock.json",
-  "deno.lock",
-  "deno.runner.jsonc",
-]);
-
-/** Directories walked one level deep (the pattern list decides what survives). */
-const FLAT_DIRS = Object.freeze(["scripts", "scripts/lib", "tests", "tests/fixtures", "extension"]);
-
-/** Directories walked recursively: whole input trees, not source files. */
+/** Whole trees the build reads by path. */
 const TREE_DIRS = Object.freeze(["packages/bundled", "wasm-tools"]);
 
-/** True when a repo-relative POSIX path is a build-tier input. */
-export function isBuildTierInput(repoPath) {
+/** True when a repo-relative POSIX path is a build-tier DATA input (closure membership is separate). */
+export function isBuildTierDataInput(repoPath) {
   if (typeof repoPath !== "string" || repoPath === "") return false;
-  return BUILD_TIER_INPUT_PATTERNS.some((pattern) => pattern.test(repoPath));
+  return BUILD_TIER_DATA_PATTERNS.some((pattern) => pattern.test(repoPath));
 }
 
 /**
@@ -119,6 +130,155 @@ export function isBuildTierInput(repoPath) {
 export function buildTierMode(env = {}) {
   const raw = String(env.CAP_BUILD_TIER ?? "").trim().toLowerCase();
   return raw === "force" || raw === "1" || raw === "true" || raw === "always" ? "force" : "selective";
+}
+
+const SPECIFIER_RES = [
+  /\bfrom\s*["']([^"']+)["']/g, // import … from "x" / export … from "x"
+  /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g, // dynamic import with a literal specifier
+  /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g, // CJS
+  /\bimport\s+["']([^"']+)["']/g, // side-effect import
+];
+
+/**
+ * Every literal module specifier in a source text. This is a text scan, not a parser: it also matches
+ * specifier-shaped text inside a string (a generator emitting source) or a comment. Two consequences,
+ * both harmless: an unresolved entry is REPORTED rather than silently dropped, and placeholders that
+ * cannot be module specifiers (`"..."`, a glob, anything with whitespace) are filtered out so the
+ * report only names paths the scan genuinely could not follow.
+ */
+export function moduleSpecifiers(text) {
+  const out = new Set();
+  for (const re of SPECIFIER_RES) for (const m of String(text).matchAll(re)) out.add(m[1]);
+  return [...out].filter((specifier) => specifier !== "" && !specifier.includes("...") && !specifier.includes("*") && !/\s/.test(specifier));
+}
+
+/** Normalise a repo-relative POSIX path, resolving `.` and `..` segments. */
+export function normalizeRepoPath(path) {
+  const parts = [];
+  for (const segment of String(path).split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") parts.pop();
+    else parts.push(segment);
+  }
+  return parts.join("/");
+}
+
+/**
+ * The repo file a relative specifier points at, or null. Tries the literal path, then the extension
+ * swaps this repo uses (tests import `../scripts/x.mjs` for TypeScript sources elsewhere, so both
+ * directions are needed), then an `/index.*` file. Bare specifiers (`node:`, `npm:`, `jsr:`) are not
+ * repo files — the lockfiles in the data set cover them.
+ */
+export async function resolveSpecifier(fromRel, specifier, exists = fileExists) {
+  if (typeof specifier !== "string" || !specifier.startsWith(".")) return null;
+  const base = normalizeRepoPath(join(dirname(fromRel), specifier));
+  if (base === "" || base.startsWith("..")) return null; // escapes the repo
+  const swap = base.match(/^(.*)\.(mjs|ts|js|json|cjs)$/);
+  const candidates = [base];
+  if (swap) {
+    const stem = swap[1];
+    for (const ext of ["mjs", "ts", "js", "json", "cjs"]) if (`${stem}.${ext}` !== base) candidates.push(`${stem}.${ext}`);
+  } else {
+    for (const ext of ["mjs", "ts", "js", "json"]) candidates.push(`${base}.${ext}`);
+  }
+  for (const ext of ["mjs", "ts", "js"]) candidates.push(`${base}/index.${ext}`);
+  for (const candidate of candidates) {
+    if (await exists(candidate)) return candidate;
+  }
+  return null;
+}
+
+async function fileExists(relPath) {
+  try {
+    return (await stat(relPath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The transitive static import closure of BUILD_TIER_ROOTS, as sorted repo-relative paths.
+ * `truncated` is true when the walk hit MAX_CLOSURE_FILES — the caller must then RUN the tier.
+ * @param {{ root: string, maxFiles?: number, exists?: (rel: string) => Promise<boolean>, read?: (abs: string) => Promise<Uint8Array> }} args
+ * @returns {Promise<{ paths: string[], truncated: boolean, unresolved: string[] }>}
+ */
+export async function collectBuildTierClosure({
+  root,
+  maxFiles = MAX_CLOSURE_FILES,
+  exists = (rel) => fileExists(join(root, rel)),
+  read = (abs) => readFile(abs),
+} = {}) {
+  if (!root) throw new Error("collectBuildTierClosure: root is required");
+  const seen = new Set();
+  const unresolved = new Set();
+  const queue = [...BUILD_TIER_ROOTS];
+  let truncated = false;
+  while (queue.length > 0) {
+    const rel = queue.shift();
+    if (seen.has(rel)) continue;
+    if (seen.size >= maxFiles) {
+      truncated = true;
+      break;
+    }
+    seen.add(rel);
+    let text;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(await read(join(root, rel)));
+    } catch {
+      continue; // binary (a .wasm import target) or unreadable: nothing to scan, the file is still in the key
+    }
+    for (const specifier of moduleSpecifiers(text)) {
+      const resolved = await resolveSpecifier(rel, specifier, exists);
+      if (resolved) {
+        if (!seen.has(resolved)) queue.push(resolved);
+      } else if (specifier.startsWith(".")) {
+        unresolved.add(`${rel} -> ${specifier}`); // a RELATIVE import that does not resolve: residue, reported
+      }
+    }
+  }
+  return { paths: [...seen].sort(), truncated, unresolved: [...unresolved].sort() };
+}
+
+/** List files under `<root>/<relDir>` as repo-relative POSIX paths (missing directory => nothing). */
+async function listDirAt(root, relDir, recursive) {
+  let entries;
+  try {
+    entries = await readdir(join(root, relDir), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const entry of entries) {
+    const rel = `${relDir}/${entry.name}`;
+    if (entry.isDirectory()) {
+      if (recursive) out.push(...(await listDirAt(root, rel, true)));
+      continue;
+    }
+    out.push(rel); // regular file or symlink: its CONTENT is the input
+  }
+  return out;
+}
+
+/**
+ * Every build-tier input path in the tree: the import closure, the data inputs, and the path-read
+ * trees. Sorted and de-duplicated, so two identical trees always produce the same list.
+ * @param {{ root: string, listDir?: Function, closure?: Function }} [args]
+ * @returns {Promise<{ paths: string[], truncated: boolean, unresolved: string[] }>}
+ */
+export async function collectBuildTierInputPaths({ root, listDir = listDirAt, closure = collectBuildTierClosure } = {}) {
+  if (!root) throw new Error("collectBuildTierInputPaths: root is required");
+  const walked = await closure({ root });
+  const found = new Set(walked.paths);
+  for (const rel of ["package.json", "package-lock.json", "deno.lock", "deno.runner.jsonc"]) {
+    if (isBuildTierDataInput(rel)) found.add(rel);
+  }
+  for (const rel of await listDir(root, "extension", false)) {
+    if (isBuildTierDataInput(rel)) found.add(rel);
+  }
+  for (const dir of TREE_DIRS) {
+    for (const rel of await listDir(root, dir, true)) found.add(rel);
+  }
+  return { paths: [...found].sort(), truncated: walked.truncated, unresolved: walked.unresolved };
 }
 
 /**
@@ -142,54 +302,13 @@ export function versionNeutralBytes(bytes, version) {
 }
 
 /**
- * List files under `<root>/<relDir>` as repo-relative POSIX paths. A missing/unreadable directory
- * contributes nothing (a tree that lacks one of these trees simply has fewer inputs).
- */
-async function listDirAt(root, relDir, recursive) {
-  let entries;
-  try {
-    entries = await readdir(join(root, relDir), { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const out = [];
-  for (const entry of entries) {
-    const rel = `${relDir}/${entry.name}`;
-    if (entry.isDirectory()) {
-      if (recursive) out.push(...(await listDirAt(root, rel, true)));
-      continue;
-    }
-    out.push(rel); // regular file or symlink: its CONTENT is the input
-  }
-  return out;
-}
-
-/** Every candidate build-tier input path in the tree, sorted (deterministic, no duplicates). */
-/**
- * @param {{ root: string, listDir?: (root: string, relDir: string, recursive: boolean) => Promise<string[]> }} args
- * @returns {Promise<string[]>}
- */
-export async function collectBuildTierInputPaths({ root, listDir = listDirAt }) {
-  if (!root) throw new Error("collectBuildTierInputPaths: root is required");
-  const found = new Set();
-  for (const file of ROOT_FILES) if (isBuildTierInput(file)) found.add(file);
-  for (const dir of FLAT_DIRS) {
-    for (const rel of await listDir(root, dir, false)) if (isBuildTierInput(rel)) found.add(rel);
-  }
-  for (const dir of TREE_DIRS) {
-    for (const rel of await listDir(root, dir, true)) if (isBuildTierInput(rel)) found.add(rel);
-  }
-  return [...found].sort();
-}
-
-/**
  * Digest every build-tier input. `read` is injectable so the decision can be exercised without a
  * checkout; a path that cannot be read is skipped, which changes the key (the tier then runs).
  * @param {{ root?: string, version?: string | null, read?: (absPath: string) => Promise<Uint8Array>, paths?: string[] | null }} [args]
  * @returns {Promise<Array<{path: string, sha256: string, bytes: number}>>}
  */
 export async function collectBuildTierInputs({ root, version, read = readFile, paths = null } = {}) {
-  const files = paths ?? (await collectBuildTierInputPaths({ root }));
+  const files = paths ?? (await collectBuildTierInputPaths({ root })).paths;
   const entries = [];
   for (const rel of files) {
     let bytes;
@@ -207,7 +326,6 @@ export async function collectBuildTierInputs({ root, version, read = readFile, p
   return entries;
 }
 
-/** The key for a set of digests: order-independent, and null when nothing could be digested. */
 /**
  * @param {Array<{path: string, sha256: string}>} [entries]
  * @returns {string | null}
@@ -222,15 +340,18 @@ export function buildTierKey(entries = []) {
 
 /**
  * The decision itself, pure. `record` is a previously recorded PASS for `record.key`; only an exact
- * key match may skip, and only in selective mode.
- * @param {{ entries?: Array<{path: string, sha256: string}>, record?: {key?: string, at?: string} | null, mode?: string }} [args]
+ * key match may skip, only in selective mode, and never when the closure was truncated.
+ * @param {{ entries?: Array<{path: string, sha256: string}>, record?: {key?: string, at?: string} | null, mode?: string, truncated?: boolean }} [args]
  * @returns {{ run: boolean, key: string|null, inputs: number, reason: string }}
  */
-export function buildTierDecision({ entries = [], record = null, mode = "selective" } = {}) {
+export function buildTierDecision({ entries = [], record = null, mode = "selective", truncated = false } = {}) {
   const key = buildTierKey(entries);
   const inputs = Array.isArray(entries) ? entries.length : 0;
   if (mode === "force") {
     return { run: true, key, inputs, reason: "CAP_BUILD_TIER=force (a forced run, not a selection)" };
+  }
+  if (truncated) {
+    return { run: true, key, inputs, reason: `import closure exceeded ${MAX_CLOSURE_FILES} files (fail closed: a partial key must not certify)` };
   }
   if (!key) {
     return { run: true, key: null, inputs, reason: "no build-tier input could be digested (fail closed)" };
@@ -254,11 +375,7 @@ export function buildTierDecision({ entries = [], record = null, mode = "selecti
   };
 }
 
-/**
- * The recorded-PASS directory, or null when the durable root is unavailable (=> fail closed).
- * @param {Record<string, string | undefined>} [env]
- * @returns {string | null}
- */
+/** The recorded-PASS directory, or null when the durable root is unavailable (=> fail closed). */
 export function buildTierRecordDir(env = process.env) {
   try {
     const explicit = env.CAP_BUILD_TIER_RECORD_DIR;
@@ -318,8 +435,8 @@ export async function recordBuildTierPass({
 }
 
 /**
- * Resolve the tier's run/skip decision for a tree: collect the digests, read the record for that
- * key, and decide. The only entry point scripts/build-gate.ts uses.
+ * Resolve the tier's run/skip decision for a tree: collect the inputs, read the record for that key,
+ * and decide. The only entry point scripts/build-gate.ts uses.
  * @param {{
  *   root?: string,
  *   version?: string | null,
@@ -338,8 +455,10 @@ export async function resolveBuildTier({
   collect = collectBuildTierInputs,
   readRecord = readBuildTierRecord,
 }) {
-  const entries = await collect({ root, version });
+  const collectPaths = collectBuildTierInputPaths;
+  const walked = await collectPaths({ root });
+  const entries = await collect({ root, version, paths: walked.paths });
   const key = buildTierKey(entries);
   const record = key ? await readRecord({ key, dir: recordDir }) : null;
-  return { ...buildTierDecision({ entries, record, mode }), record };
+  return { ...buildTierDecision({ entries, record, mode, truncated: walked.truncated }), record, closure: walked };
 }
