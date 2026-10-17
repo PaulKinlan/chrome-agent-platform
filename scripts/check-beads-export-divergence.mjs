@@ -4,8 +4,12 @@
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
+// toyoj: a real export crossed 16 MiB and made every pre-commit fail ENOBUFS.
+// Leave a bounded, fail-closed ceiling with headroom for ledger growth.
+const MAX_EXPORT_BYTES = 128 * 1024 * 1024;
+
 function command(name, args) {
-  const result = spawnSync(name, args, { encoding: "utf8", timeout: 30_000, maxBuffer: 16 * 1024 * 1024 });
+  const result = spawnSync(name, args, { encoding: "utf8", timeout: 30_000, maxBuffer: MAX_EXPORT_BYTES });
   if (result.error || result.status !== 0) {
     throw new Error(`${name} ${args.join(" ")} failed: ${result.error?.message ?? result.stderr?.trim() ?? `exit ${result.status}`}`);
   }
