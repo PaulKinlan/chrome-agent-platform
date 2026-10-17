@@ -178,6 +178,31 @@ Deno.test("kz27: a FAIL-CLOSED selection NAMES the always-on guard set it could 
   );
 });
 
+Deno.test("3qrsr: a FAIL-CLOSED refusal reads as a coverage policy, never as a failed test", () => {
+  // The record a reviewer reads is all they get: a dependency-resolution change (or any unmapped
+  // file) leaves exit 1, which every reader has learned to mean "a test failed". The interim shape
+  // keeps that state and fixes only the words, so each of the three facts must be present.
+  const plan = failClosedPlan({
+    unmappable: [{ file: "package-lock.json", mechanism: "a dependency resolution change" }],
+    list: true,
+  });
+  const text = plan.output.join("\n");
+  assertStringIncludes(text, "package-lock.json");
+  assertStringIncludes(text, "NOT A TEST FAILURE");
+  assertStringIncludes(text, "FULL suite (npm test)");
+  // The state itself is deliberately unchanged (coord ruling: message-only, no NEEDS-FULL state).
+  assertStringIncludes(text, "FAIL CLOSED");
+  assert(plan.action === "list", "the refusal still refuses: --list prints FULL_SUITE and runs nothing");
+});
+
+Deno.test("3qrsr: the uncovered-file form of the refusal names its files too", () => {
+  const plan = failClosedPlan({ uncovered: ["package-lock.json"], list: true });
+  const text = plan.output.join("\n");
+  assertStringIncludes(text, "package-lock.json");
+  assertStringIncludes(text, "NOT A TEST FAILURE");
+  assertStringIncludes(text, "FULL suite (npm test)");
+});
+
 Deno.test("kz27: the always-on set is runnable by name (--always-on) without the selector choosing it", async () => {
   // node, not process.execPath: under deno that is the DENO binary, which then refuses the script's
   // env access (measured: NotCapable on CAP_PARALLEL_TEST_TIMEOUT_MS). This mirrors production, where

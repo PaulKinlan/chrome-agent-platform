@@ -294,7 +294,12 @@ export function failClosedPlan({ uncovered = [], list = false, unmappable = [], 
     output: [
       headerLine,
       ...fileLines,
-      `Running the FULL suite (npm test) instead.`,
+      // 3qrsr: this refusal is a COVERAGE POLICY, not a test failure, and the report is the only thing
+      // a reviewer reads off the record. It must name the changed file(s), name the gate that IS
+      // required, and say that nothing failed - a bare "FAIL CLOSED" next to an unrelated "1 failed"
+      // elsewhere in the same log is indistinguishable from a red test caused by the change.
+      `select-tests: NOT A TEST FAILURE — no test has run and none has failed. This refusal is a coverage policy: a subset cannot prove the file(s) above are covered, so the fast tier withholds a verdict instead of guessing at one.`,
+      `select-tests: REQUIRED GATE — the FULL suite (npm test). A --fast lane cannot certify this change; the merger runs FULL on the landing union. Running the FULL suite (npm test) instead.`,
       `select-tests: THE ALWAYS-ON GUARD SET (${guards.length} files) IS NOT COVERED BY A SUBSET GATE — run these explicitly if you cannot run the full suite:`,
       ...guards.map((f) => `  ${f}`),
       // F2 (delta review, c1a77598): the fail-closed report must say the same thing `--always-on`
