@@ -497,6 +497,9 @@ Deno.test("2irv: REAL-TREE falsification exposes unguarded repo walks in root an
   // covered with only two removed, which is the mechanism working. The falsification needs all of them
   // gone, and the assertion below stays exact rather than being loosened.
   withoutHarnessConsumers.delete("tests/heavy-gate-slot-static.test.ts");
+  // 6efbv's new always-on kill census imports the same harnessFiles() walker.
+  // Remove it too: this mutant must withdraw EVERY real consumer, not just the old three.
+  withoutHarnessConsumers.delete("tests/lifeline-reap-rule.test.ts");
   assert(
     uncoveredExternalRepoWalks(reverse, withoutHarnessConsumers).includes("scripts/lib/harness-registry.ts"),
     "a shared-helper repo walk must RED when every always-on test that executes it is no longer always-on",

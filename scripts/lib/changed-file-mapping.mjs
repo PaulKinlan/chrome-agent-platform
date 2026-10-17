@@ -36,6 +36,7 @@
  *  cover a top-level harness nobody imports, and they have no import edge to it. */
 export const HARNESS_TREE_GUARDS = Object.freeze([
   "tests/harness-registry.test.ts",
+  "tests/lifeline-reap-rule.test.ts",
   "tests/scripts-exit-codes.test.ts",
   "tests/substring-pin-honesty.test.ts",
   "tests/durable-root.test.ts",
