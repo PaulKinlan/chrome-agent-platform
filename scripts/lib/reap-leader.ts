@@ -24,9 +24,11 @@
 //      that browser starts ends with `pkill -9 -f 'user-data-dir=<profile>( |$)'`, which matches the
 //      second browser's command line and kills it.
 //
-// THE RULE: a runner that kills its leader and then relaunches on the same profile, or exits under a
-// supervisor that samples its descendants (case 1 above), MUST go through this function, or through
-// `teardownChrome` in scripts/lib/chrome-launch.ts, which owns the cleanup AND the profile. Do not use
+// THE RULE: a runner that exits under a supervisor that samples its descendants (case 1 above)
+// MUST go through this function, or through `teardownChrome` in scripts/lib/chrome-launch.ts.
+// Since 80yqb, a same-process relaunch through `launchChrome` waits for a FIRED profile sweep
+// before spawning (case 2), but a cross-process relaunch cannot see that registry (6n41t).
+// Keeping this helper also keeps the runner's own residue verdict honest. Do not use
 // `teardownChrome` where the profile belongs to someone else:
 // scripts/security-suite.ts runs on a profile the supervisor issued, and `teardownChrome` deletes it
 // before the supervisor's `cleanupExactProfile` has inspected it. "Relaunches" means a second
@@ -38,8 +40,8 @@
 // finally (`launched.proc.kill("SIGTERM"); await launched.proc.status`), is bare on purpose: nothing
 // opens a browser after it and no supervisor samples their descendants (both are `manual` harnesses
 // in scripts/lib/harness-registry.ts), so a watcher that outlives the script by ~110 ms is harmless
-// there. A fifth runner would not be caught by anything until bead chrome-agent-platform-80yqb makes
-// `launchChrome` wait for an in-flight sweep.
+// there. A fifth runner that relaunches via `launchChrome` now gets the 80yqb in-process
+// sweep wait; a fifth runner that exits under the security supervisor still needs this helper.
 //
 // The wait is bounded. The sweep gives up on its own watcher after `sweepTimeoutMs` (5 s by
 // default), SIGKILLs it and settles; `settled` never rejects.

@@ -252,6 +252,27 @@ interface Lifeline {
 
 const lifelines = new WeakMap<Deno.ChildProcess, Lifeline>();
 
+// 80yqb: a second launch in THIS process must not start while the first
+// generation's profile sweep can still pkill its command line. Armed lifelines
+// do not block launches; only an already-fired sweep does. The shell watcher
+// still owns cleanup if this process dies, so cross-process/parent-death
+// relaunches remain a separate problem (chrome-agent-platform-6n41t).
+interface ProfileSweep {
+  fired: boolean;
+  settled: Promise<void> | null;
+}
+const profileSweeps = new Map<string, Set<ProfileSweep>>();
+
+export async function awaitFiredLifelineSweep(treeMatch: string): Promise<void> {
+  // Give an already-resolved leader.status reaction a checkpoint to mark its
+  // sweep before the new launch checks the registry. Never await a live leader.
+  await Promise.resolve();
+  const pending = [...(profileSweeps.get(treeMatch) ?? [])]
+    .filter((entry) => entry.fired && entry.settled !== null)
+    .map((entry) => entry.settled!);
+  await Promise.all(pending);
+}
+
 /** The watcher's exit status when pkill rejected the pattern (exit >= 2); the group kill already ran. */
 const LIFELINE_PKILL_REJECTED = 3;
 
@@ -540,6 +561,12 @@ export function attachProcessLifeline(
   }
   lifeline.state = "armed";
   lifeline.watcherPid = watcher.pid;
+  const sweepEntry: ProfileSweep | null = treeMatch && match !== "" ? { fired: false, settled: null } : null;
+  if (sweepEntry) {
+    const siblings = profileSweeps.get(treeMatch!) ?? new Set<ProfileSweep>();
+    siblings.add(sweepEntry);
+    profileSweeps.set(treeMatch!, siblings);
+  }
 
   // 6tau8: the guarantee must not be a claim we cannot keep yet. The watcher is put into its own
   // session by `setsid`, which runs INSIDE its wrapper a few milliseconds after `spawn()` returns; a
@@ -569,7 +596,15 @@ export function attachProcessLifeline(
   // state flips synchronously, so a second trigger always sees it already spent.
   const leave = (next: "fired" | "disarmed", body: () => Promise<void>): Promise<void> => {
     lifeline.state = next;
-    lifeline.settled = body().catch(() => {});
+    if (sweepEntry) sweepEntry.fired = next === "fired";
+    lifeline.settled = body().catch(() => {}).finally(() => {
+      if (sweepEntry) {
+        const siblings = profileSweeps.get(treeMatch!);
+        siblings?.delete(sweepEntry);
+        if (siblings?.size === 0) profileSweeps.delete(treeMatch!);
+      }
+    });
+    if (sweepEntry) sweepEntry.settled = lifeline.settled;
     return lifeline.settled;
   };
   const disarmBody = async (): Promise<void> => {

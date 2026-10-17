@@ -43,6 +43,7 @@ import { resolveChromeForTesting } from "./chrome-for-testing.ts";
 import { isUsableBinary } from "./browser-refusal.ts";
 import {
   attachProcessLifeline,
+  awaitFiredLifelineSweep,
   isolatedProcessGroup,
   killProcessTree,
   LIFELINE_ISOLATION_WAIT_MS,
@@ -774,6 +775,10 @@ export async function launchChrome(opts: {
       throw e;
     }
   }
+  // Use the exact same identity for pre-spawn sweep waiting and the watcher.
+  // This protects in-process relaunches on a profile, not another process that
+  // starts Chrome while our shell watcher is sweeping (80yqb/6n41t).
+  const treeMatch = resolvedProfile ? `user-data-dir=${resolvedProfile}` : undefined;
   const args = (opts.extension || opts.profile)
     ? [
       ...chromeBaseArgs({ profile: resolvedProfile, extension: opts.extension, windowSize: opts.windowSize }),
@@ -792,6 +797,9 @@ export async function launchChrome(opts: {
   let proc: Deno.ChildProcess;
   let scratchDir: string | undefined;
   try {
+    // The old leader's fired lifeline may still be inside its profile pkill.
+    // Await it before this launch exists; never wait for a merely armed leader.
+    if (treeMatch) await awaitFiredLifelineSweep(treeMatch);
     // setsid execs the browser in a new process group (without -f, the spawned
     // child is not a group leader). This makes descendants identifiable even
     // when Chromium rewrites their command line or a wrapper replaces the binary.
@@ -826,7 +834,7 @@ export async function launchChrome(opts: {
     if (group !== undefined) procGroups.set(proc, group);
     attachProcessLifeline(
       proc,
-      { group, treeMatch: resolvedProfile ? `user-data-dir=${resolvedProfile}` : undefined },
+      { group, treeMatch },
       opts.lifeline,
     );
     // 6tau8: do not report a protected browser before its lifeline watcher leads its own process
