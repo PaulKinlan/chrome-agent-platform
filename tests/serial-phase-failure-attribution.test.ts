@@ -80,10 +80,39 @@ Deno.test("dsoq: a failing serial file is NAMED, with its captured output, and p
       `the count line must still be printed:\n${out}`,
     );
     // (5) attribution, not a blanket list: the passing file must not be named as failing.
-    const failingBlock = out.slice(out.indexOf("FAILING SERIAL FILE(S)"));
+    //
+    // tn7wh: this used to slice from the FIRST "FAILING SERIAL FILE(S)" marker to the END of the output
+    // and reject the passing file's name anywhere in that tail. That rule only held while a PASSING
+    // serial file printed NOTHING once it finished, which is precisely the gap tn7wh closed by
+    // publishing every file's duration on the success path: the passing file's name now appears
+    // (correctly) on its own "GREEN in Xs" line, which lands after the inner run's marker, so the tail
+    // is no longer a failure block at all. The check is narrowed to what it means - the passing file
+    // must not be an ENTRY of a failure block, and must carry no blame signature anywhere in the
+    // output. That is STRICTER than the slice it replaces, which only ever looked AFTER the first
+    // marker and so could not have seen a passing file blamed earlier in the log.
+    const blockAt = out.indexOf("FAILING SERIAL FILE(S)");
+    assert(blockAt >= 0, `the phase must print a named failing-file block:\n${out}`);
+    const blockLines = out.slice(blockAt).split("\n");
+    const blockEntries: string[] = [];
+    for (let i = 1; i < blockLines.length; i++) {
+      // The block IS its contiguous entry list: everything after the marker up to the first line that
+      // is not an entry (the driver's own marker, the next phase line, ...).
+      if (!blockLines[i].trim().startsWith("- ")) break;
+      blockEntries.push(blockLines[i]);
+    }
     assert(
-      !failingBlock.includes("zz-dsoq-passing.test.ts"),
-      `the passing file must not be blamed:\n${failingBlock}`,
+      blockEntries.length > 0,
+      `the failure block must actually LIST its entry, not only a header:\n${out.slice(blockAt)}`,
+    );
+    assert(
+      !blockEntries.join("\n").includes("zz-dsoq-passing.test.ts"),
+      `the passing file must not be an entry of the failure block:\n${blockEntries.join("\n")}`,
+    );
+    // The whole output is checked for a blame signature, not just the tail: naming a passing file
+    // alongside "FAILED" or an exit code is the misattribution this test exists to prevent.
+    assert(
+      !out.includes("zz-dsoq-passing.test.ts FAILED") && !out.includes("zz-dsoq-passing.test.ts (exit"),
+      `the passing file must carry no blame signature anywhere in the output:\n${out}`,
     );
     // (3) a durable per-file log is named and really exists.
     const logPath = out.match(/(\/\S*serial-phase-logs\/\S+\.log)/)?.[1];

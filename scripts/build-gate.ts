@@ -4,14 +4,21 @@
 // run during landing or on-demand.
 //
 // Enumerated coverage:
-//   • tests/build-bootstrap.test.ts (per-file bound: 850s) — steady-state symlink bootstrap, GC of dangling v-boot
+//   • tests/build-bootstrap.test.ts (per-file bound: 650s) — steady-state symlink bootstrap, GC of dangling v-boot
 //     symlinks under dist-versions, live version counts, and archive packaging idempotence.
-//   • tests/build-debug-mode.test.ts (per-file bound: 550s) — developer vs store target marker validation, sourcemap
+//   • tests/build-debug-mode.test.ts (per-file bound: 950s) — developer vs store target marker validation, sourcemap
 //     inclusion/exclusion, and mode alternation integrity.
 //   • tests/build-tool-bundling.test.ts (base serial window, measured ~10s; ceiling 720s under 4x load) — bundled-tool
 //     generator verify-mode drift check, --regen-tools idempotence, and provenance validation.
 //
-// Total enforced ceiling: 2120s (~35 min under max load scale; measured 31-36 s on an Apple-silicon workstation after jjsz).
+// Total enforced ceiling: 2320s (~39 min under max load scale; measured 31-36 s on an Apple-silicon workstation after jjsz).
+// Re-derived 2026-10-17 (chrome-agent-platform-tn7wh). A first pass set both windows from the MEASURED work (83.8s/57.4s
+// on a loaded 8-core box) x3 = 350s each; that was WRONG and review finding chrome-agent-platform-rppwx caught it. These
+// files run SEQUENTIAL real builds under their own bounds, and a later child cannot be NAMED until the earlier ones have
+// finished, so the window must cover the whole declared child count (2 and 3) x PRODUCTION_BUILD_TIMEOUT_MS, not one
+// child bound. The windows are therefore derived in scripts/test-partition.mjs and the invariant is asserted by
+// tests/test-partition-guard.test.ts. Note build-debug-mode RISES 550s -> 950s: the old 550s was already below
+// 3 x 300s and so never guaranteed child attribution. The ceiling rises with it; it is a bound, not a runtime cost.
 
 import { fileURLToPath } from "node:url";
 import { runSerialFiles } from "./lib/serial-phase.mjs";

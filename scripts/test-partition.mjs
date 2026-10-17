@@ -155,9 +155,9 @@ export const PRODUCTION_BUILD_TIMEOUT_MS = 300_000;
  * Per-file serial windows (chrome-agent-platform-kj9s). ONE global window for every serial file was
  * the mismatch that made a handful of build-heavy files look like a capacity problem: those files run
  * several REAL production builds, so their cost is a property of build COUNT, not of tree health.
- * Every value here is MEASURED WORK x ~3 — headroom for a loaded box that does not turn a hung file
- * into a 15-minute wait — and ONLY files that genuinely need it are listed; every other serial file
- * keeps the base window, so a hang there is still caught fast.
+ * Every value here is DERIVED from the child bound and that file's build count — see THE ONE RULE
+ * below; it is never a multiple of measured work — and ONLY files that genuinely need it are listed;
+ * every other serial file keeps the base window, so a hang there is still caught fast.
  *
  * MEASURED 2026-10-06 by gate kj9s-measure AFTER the 7->3 / 6->3 regroup (the box was deliberately
  * loaded: a merger gate was running concurrently, so these are pessimistic):
@@ -168,11 +168,120 @@ export const PRODUCTION_BUILD_TIMEOUT_MS = 300_000;
  *                               file's only build.mjs calls are fail-fast (bogus flag, disabled
  *                               target, drifted verify). It keeps the base window.
  *   store-doc-denial       6s  via the memoized record (97s when it really builds) -> base window.
- * A bound is MEASURED WORK x ~3, which is what the two entries below are.
+ * Per-file serial windows (chrome-agent-platform-kj9s). ONE global window for every serial file was
+ * the mismatch that made a handful of build-heavy files look like a capacity problem: those files run
+ * several REAL production builds, so their cost is a property of build COUNT, not of tree health.
+ * ONLY files that genuinely need it are listed; every other serial file keeps the base window, so a
+ * hang there is still caught fast. A per-file entry REPLACES the load-scaled base window rather than
+ * scaling with it (serial-phase.mjs picks `perFileTimeoutMs?.[file] ?? timeoutMs`), so the entry is an
+ * ABSOLUTE number and nothing else scales it.
+ *
+ * THE ONE RULE (review finding chrome-agent-platform-zv3kh replaced the stale measured-x3 wording that
+ * used to live here, and chrome-agent-platform-rppwx is what that wording cost us): a window is DERIVED
+ * from the child bound and the builds the file can run, never from a multiple of measured work.
+ *
+ *     window = BUILD_GATE_CHILD_BUILDS[file] x PRODUCTION_BUILD_TIMEOUT_MS + FILE_WINDOW_SLACK_MS
+ *
+ * The reason is attribution, not headroom. These files run SEQUENTIAL real builds, each under its own
+ * child bound, and a LATER child cannot be NAMED until the EARLIER ones have finished, so the window
+ * must exceed (the builds before the hung one, each worth up to its own bound) + one child bound. A
+ * window sized as measured-work x k silently violates that: at 350s, a 100s first build plus a hung
+ * second needed 400s to be named and this window SIGKILLed the group 50s first, leaving only "the file
+ * timed out". tests/test-partition-guard.test.ts ASSERTS the derived invariant, so the table cannot be
+ * hand-edited back below it.
+ *
+ * DO NOT size an entry from a measurement. Measurement's role here is EVIDENCE ONLY: it shows the
+ * measured work is 5-7x below the floor (so no plausible load reaches it), and it caught that the old
+ * 550_000 for build-debug-mode was already below 3 x the child bound. If a remeasurement ever suggests
+ * a number smaller than the derived floor, the measurement is not the thing to change - see
+ * chrome-agent-platform-fa2h1, where the child bound itself is the lever.
+ *
+ * MEASURED 2026-10-06 by gate kj9s-measure AFTER the 7->3 / 6->3 regroup (the box was deliberately
+ * loaded: a merger gate was running concurrently, so these are pessimistic):
+ *   build-bootstrap      278s  (3 production builds + 2 ZIP packagings; ~216s quiet at ~72s/build)
+ *   build-debug-mode     173s  (developer + store + steady-state store)
+ *   build-tool-bundling   10s  -> NEEDS NO BOUND. This corrects an UNMEASURED earlier estimate of
+ *                               ~510s: the two generator "regenerations" are sub-second, and the
+ *                               file's only build.mjs calls are fail-fast (bogus flag, disabled
+ *                               target, drifted verify). It keeps the base window.
+ *   store-doc-denial       6s  via the memoized record (97s when it really builds) -> base window.
+ *
+ * RE-MEASURED 2026-10-17 by gate testbuild-tn7wh (exit 0, 148s wall), because the 2026-10-06 numbers
+ * had stopped describing the work: chrome-agent-platform-6gk81 then cut build-bootstrap 3->2 and
+ * build-debug-mode 3->2 real builds (test:build 140.8s -> 103.3s), and the old 850s/550s had been
+ * carried over unexamined. The box was loaded: 8 cores (nproc), load ~11, so about 1.4 per CPU —
+ * ABOVE idle and below the base window's MAX_LOAD_SCALE of 4. (An earlier revision of this comment
+ * claimed "2 vCPU = 5.5 per CPU, ABOVE MAX_LOAD_SCALE of 4". That was WRONG: the 2-vCPU figure is a
+ * stale note in build.mjs from an older VM size, and I repeated it without checking. Corrected by
+ * nproc/node os.cpus(). It is a loaded-box measurement, not a saturated-box one, and it is Linux-only
+ * — the Mac and concurrency conditions the bead's acceptance names are an OPEN GAP, recorded on the
+ * bead, not something this block may imply it covered.)
+ *   build-bootstrap   83.8s  (2 production builds + 2 ZIP packagings)
+ *   build-debug-mode  57.4s  (developer + store; steady-state restoral is validate-or-build)
+ *   build-tool-bundling 6.3s -> still needs no bound, and its 2026-10-06 note stands.
+ * A second loaded run (gate testbuild-tn7wh-verify, exit 0) is the reason the numbers below are cited
+ * as a RANGE, not a point: bootstrap 84.4s (stable), tool-bundling 5.9s (stable), but debug-mode
+ * 86.8s — 1.5x its first run — so a single measurement of that file is not a safe basis for a bound.
+ *
+ * THE FLOOR IS THE CHILD BOUNDS, NOT THE MEASUREMENT (review finding chrome-agent-platform-rppwx).
+ * The windows were briefly set to x3 of the measured work (350s each). That was WRONG, and the
+ * arithmetic is why: each of these files runs SEVERAL sequential real builds, and each build carries
+ * its own PRODUCTION_BUILD_TIMEOUT_MS bound. The child bound kills and NAMES a hung build at (its own
+ * start + that bound). A LATER child cannot be named before the EARLIER ones have finished, so for the
+ * child bound to fire before this file window, the window must exceed
+ *
+ *     (the builds before the hung one, each worth up to its own bound) + one child bound
+ *
+ * i.e. at least N x PRODUCTION_BUILD_TIMEOUT_MS for a file that can run N builds. At 350s a first
+ * build of 100s plus a hung second build needed 400s to be named, and the 350s file window SIGKILLed
+ * the group 50s earlier, leaving only "the file timed out" — the exact attribution this table exists
+ * to preserve. So each window is DERIVED from BUILD_GATE_CHILD_BUILDS and the child bound below,
+ * never from a multiple of measured work, and tests/test-partition-guard.test.ts now ASSERTS that
+ * invariant so it cannot drift again.
+ *
+ * What the measurement is therefore worth, stated plainly: it shows the measured work is 5-7x BELOW
+ * the floor (so the floor is child-bound-driven and no reasonable load will reach it), and it shows
+ * the OLD values were unsound TOO — 550_000 for build-debug-mode was already below 3 x 300_000, so it
+ * never guaranteed child attribution either. It does NOT justify a smaller window, and this change is
+ * not the speed win the bead hoped for: the real lever for catching a hang sooner is
+ * PRODUCTION_BUILD_TIMEOUT_MS itself (300s, roughly 7x the ~42s measured build), whose reduction
+ * carries a documented lock-leak risk and so needs its own measurement and review.
  */
+
+/**
+ * How many REAL production builds each build-behaviour file can run. This is what its window is
+ * floored by (chrome-agent-platform-rppwx): a file's window must outlast every build BEFORE the hung
+ * one plus one child bound, or the file window kills the hang before the child bound can name it.
+ *   build-bootstrap   2 (two production builds, plus two ZIP packagings inside the same window)
+ *   build-debug-mode  3 (a developer build, a store build, and the fail-closed steady-state restoral:
+ *                        validate-or-build, so it builds only when the marker does NOT validate. It is
+ *                        counted because a window must cover the worst case the file can REACH, not
+ *                        the common case it usually takes.)
+ * A file with no entry here keeps one child bound of headroom — enough for the base window, which no
+ * entry may replace without this arithmetic.
+ */
+export const BUILD_GATE_CHILD_BUILDS = Object.freeze(
+  /** @type {Record<string, number>} */ ({
+    "tests/build-bootstrap.test.ts": 2,
+    "tests/build-debug-mode.test.ts": 3,
+  }),
+);
+
+/** Slack added to a derived window: the phase's own bookkeeping, and the ZIP packagings riding inside
+ *  build-bootstrap's window, none of which has a child bound of its own to be named by. */
+export const FILE_WINDOW_SLACK_MS = 50_000;
+
+/** Derive a file window from the child bound and the builds that file can run (rppwx). */
+function fileWindowMs(file) {
+  return (BUILD_GATE_CHILD_BUILDS[file] ?? 1) * PRODUCTION_BUILD_TIMEOUT_MS + FILE_WINDOW_SLACK_MS;
+}
+
 export const SERIAL_FILE_TIMEOUTS = Object.freeze({
-  "tests/build-bootstrap.test.ts": 850_000, // 278s measured (contended) x 3.1
-  "tests/build-debug-mode.test.ts": 550_000, // 173s measured (contended) x 3.2
+  // 2 builds x 300s + 50s = 650s, against 83.8-84.4s measured work.
+  "tests/build-bootstrap.test.ts": fileWindowMs("tests/build-bootstrap.test.ts"),
+  // 3 builds x 300s + 50s = 950s, against 57.4-86.8s measured work. RAISED from 550_000, which was
+  // already below 3 x 300_000 and so never guaranteed child attribution (rppwx).
+  "tests/build-debug-mode.test.ts": fileWindowMs("tests/build-debug-mode.test.ts"),
 });
 
 // Files a content scan classifies as hazards but that are provably

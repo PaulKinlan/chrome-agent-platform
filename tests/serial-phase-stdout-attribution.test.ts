@@ -12,7 +12,7 @@
 //
 // The fixtures live in the durable evidence root, never in tests/: a deliberately
 // failing file inside tests/ would be collected by the suite it is meant to test.
-import { assert, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -128,6 +128,79 @@ Deno.test("ia4z: a per-file TIMEOUT is NAMED in a STDOUT-ONLY capture too", asyn
       `a stdout-only capture must also carry the exit code for the timeout kill:\n${out}`,
     );
     assertStringIncludes(err, "zz-ia4z-hung.test.ts", `stderr must still name the timed-out file:\n${err}`);
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+// chrome-agent-platform-tn7wh: the serial phase must publish what each file COST, on the passing path
+// too. Before this, runSerialFiles computed the per-file elapsed time and printed it only when a file
+// failed, so a green gate log said "the phase took 103s" and nothing about the three files inside it.
+// The two windows in SERIAL_FILE_TIMEOUTS are DERIVED from the child bound and each file's build count
+// in test-partition.mjs, with the invariant asserted by test-partition-guard (chrome-agent-platform-rppwx);
+// measurement is evidence for that rule, not its input (chrome-agent-platform-fa2h1 moves the child bound
+// itself). With no per-file number on success there was nothing to check them against — which is how they
+// earlier came to be sized against builds the files no longer run. This asserts the emission contract
+// that makes the next re-measurement mechanical: one grep over any gate log.
+Deno.test("tn7wh: every serial file reports its own duration on the PASSING path too", async () => {
+  const dir = durableDir(`tn7wh-durations-${Deno.pid}`);
+  const passFile = join(dir, "zz-tn7wh-passing.test.ts");
+  const failFile = join(dir, "zz-tn7wh-failing.test.ts");
+  const driver = join(dir, "zz-tn7wh-driver.mjs");
+  await Deno.writeTextFile(
+    passFile,
+    `Deno.test("fixture: passes", () => {\n  if (1 !== 1) throw new Error("unreachable");\n});\n`,
+  );
+  // The failing fixture is present ON PURPOSE: it is what puts the named FAILING SERIAL FILE(S) block
+  // in the output, so the test can prove the passing file's duration line is not inside it. A report
+  // that named the passing file in the failure block would be the misattribution this suite exists
+  // to prevent.
+  await Deno.writeTextFile(
+    failFile,
+    `Deno.test("fixture: deliberately fails", () => {\n  throw new Error("TN7WH_DELIBERATE_FAILURE");\n});\n`,
+  );
+  await Deno.writeTextFile(
+    driver,
+    `import { runSerialFiles } from ${JSON.stringify(join(ROOT, "scripts/lib/serial-phase.mjs"))};\n` +
+      `const rc = runSerialFiles([process.argv[2], process.argv[3]], {\n` +
+      `  stdio: "pipe",\n  cwd: ${JSON.stringify(ROOT)},\n  timeoutMs: 120000,\n});\n` +
+      `console.log("TN7WH_DRIVER_RC=" + rc);\n`,
+  );
+
+  const { out } = await runDriver(driver, [passFile, failFile]);
+  try {
+    // The passing file's own cost is printed, named, and numeric. `\S+` because a serial file is
+    // named by path; the duration is to ONE decimal, the same resolution the failure line uses, so a
+    // re-measurement does not have to round before comparing.
+    const durations = [...out.matchAll(/run-tests: serial file (\S+) (GREEN|FAILED|REFUSED)[^\n]*? in ([\d.]+)s/g)];
+    const passLine = durations.find((m) => m[1] === passFile);
+    assert(
+      passLine,
+      `the passing serial file must report its own duration on success (tn7wh); got: ${JSON.stringify(durations.map((m) => m[0]))}`,
+    );
+    assertEquals(passLine[2], "GREEN", `the passing file's line must not be a failure verdict: ${passLine[0]}`);
+    assert(
+      Number(passLine[3]) > 0 && Number.isFinite(Number(passLine[3])),
+      `the reported duration must be a real measurement, got ${passLine[3]}`,
+    );
+    // grep-ability is the contract: one line per file, in the shape the window table cites.
+    assert(
+      /^run-tests: serial file /m.test(passLine[0]),
+      `the duration must be its own greppable line, got ${JSON.stringify(passLine[0])}`,
+    );
+    // A duration is not a verdict: the word FAILED next to a PASSING file is what the attribution
+    // tests treat as blame, so the success line must never carry it.
+    assert(
+      !passLine[0].includes("FAILED"),
+      `the passing file's duration line must not read as blame: ${passLine[0]}`,
+    );
+    const blockAt = out.indexOf("FAILING SERIAL FILE(S)");
+    if (blockAt >= 0) {
+      assert(
+        !out.slice(blockAt).includes(passFile),
+        `the passing file's duration must not be listed in the failure block:\n${out.slice(blockAt)}`,
+      );
+    }
   } finally {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }

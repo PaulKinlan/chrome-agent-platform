@@ -369,6 +369,18 @@ export function runSerialFiles(files, {
     const spawnError = result.error ? `${result.error.stack ?? String(result.error)}\n` : "";
     const text = `${spawnError}${result.stdout?.toString?.() ?? ""}${result.stderr?.toString?.() ?? ""}`;
 
+    // chrome-agent-platform-tn7wh: the per-file elapsed time was computed on BOTH paths but only
+    // PRINTED on failure, so the serial windows could not be re-derived from a passing gate — which is
+    // how the two entries in SERIAL_FILE_TIMEOUTS came to be sized against work the files no longer do.
+    // The success line is symmetric with the failure line below (same shape, same stream, same
+    // resolution) so one grep over any gate log re-derives every window. It deliberately does NOT
+    // contain the word FAILED: the attribution tests assert a PASSING file is never blamed, and a
+    // bare duration is the whole point (there is no verdict to add here — a non-zero exit took the
+    // failure branch below).
+    if (result.code === 0) {
+      announce(`run-tests: serial file ${file} GREEN in ${secs}s`);
+    }
+
     if (result.code !== 0) {
       let log = null;
       if (logDir) {
