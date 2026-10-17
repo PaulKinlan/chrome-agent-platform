@@ -10,7 +10,7 @@
 // every test green, and tests/build-smoke.test.ts asserts only exit 0 on the
 // reused record.
 //
-// Two halves, one file, both mutation-checked:
+// Three halves, one file, all mutation-checked:
 //
 //  1. BEHAVIOURAL (injected, no build): a schema-valid published marker plus the
 //     build's own publish summary, captured exactly as the capture expression
@@ -18,16 +18,25 @@
 //     score reader. The on-disk file NAME must equal the key computed
 //     independently here (= the name the reader will compute for that marker),
 //     and the recorded stdout must be the publish summary, non-empty.
-//     SCOPE: this proves the capture shape pipes end to end. It does NOT prove
-//     that a REAL build's stdout is what lands in publishSummary - that tie is
-//     the structural half's job, and the real build itself is exercised by the
-//     serial tier (build-smoke / store-doc-denial).
+//     SCOPE: this proves the capture shape pipes end to end. The tie to the real
+//     build (that the text recorded is what the build itself would emit) is
+//     section 3's job, and a real build is exercised by the serial tier
+//     (build-smoke / store-doc-denial).
 //  2. STRUCTURAL: build.mjs's capture must compute the key through
 //     buildOnceKeyFromMarkerText(<the published marker text>) and must build its
 //     stdout from the publish summary. Pinned on the AST, with a mutant drill
 //     per field (wrong field, wrong source, old two-field key, constant stdout,
 //     blank stdout, dropped newline) that must all be flagged, so the pin cannot
 //     pass vacuously.
+//  3. THE SUMMARY ITSELF (chrome-agent-platform-b7hti, from the first review of
+//     this file): sections 1 and 2 both took the summary TEXT on trust - a build
+//     whose `publishSummary` initializer was emptied (or hardcoded) still
+//     recorded a bare newline and left every assertion green. So the summary
+//     expression is EVALUATED here from build.mjs's own source with fixture
+//     counts, and the capture template is evaluated with that value: the text
+//     written through the real writer is then the build's own two expressions,
+//     and it must be non-empty, name what was published, and carry the
+//     INTERPOLATED counts (so a constant cannot pose as the summary).
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { fromFileUrl, join } from "jsr:@std/path@1";
 import { parse } from "npm:acorn";
@@ -52,9 +61,9 @@ const markerText = `${JSON.stringify({
   source: { digest: SOURCE_DIGEST, files: 1 },
   target: "store",
 })}\n`;
-// The real publish summary's shape (build.mjs prints it before capturing it):
-// one line, no trailing newline; the capture adds the newline.
-const publishSummary = `built ${join("extension", "dist", "background", "service-worker.js")} + dist/options.bundle.js ATOMICALLY (serialized owner-token lock; one dist dir; seam scan clean; dist.complete marker; rollback-fatal)`;
+// The real publish summary's shape is build.mjs's OWN expression (section 3
+// evaluates it); this fixture is only the substring set section 1 asserts on.
+const summaryMustMention = ["built ", "ATOMICALLY", "dist.complete marker", "rollback-fatal"];
 
 // ── 1. behavioural: the captured record's NAME and STDOUT, through the real writer ──
 
@@ -63,12 +72,15 @@ Deno.test("l3dc2: the captured record's file name and stdout survive the real wr
   const recordDir = join(root, "records");
   const distDir = join(root, "extension", "dist");
   try {
-    // The capture, exactly as build.mjs's capture expression prescribes.
+    // The capture, exactly as build.mjs's capture expression prescribes: the key from the
+    // published marker text, the stdout from the BUILD's own summary expression (section 3),
+    // plus the newline the capture adds.
+    const buildSource = await Deno.readTextFile(BUILD_MJS);
     const key = buildOnceKeyFromMarkerText(markerText);
     assert(key, "a schema-valid marker must yield a key");
     const record = {
       key,
-      stdout: `${publishSummary}\n`,
+      stdout: evaluateCaptureStdout(buildSource, evaluateSummary(buildSource)),
     };
 
     // The name computed INDEPENDENTLY of build.mjs and of the key helper: the
@@ -86,7 +98,7 @@ Deno.test("l3dc2: the captured record's file name and stdout survive the real wr
     //     newline the capture adds, and it says what was published
     assertEquals(body.stdout, record.stdout);
     assertEquals(body.stdout.length > 0, true, "a blank stdout silently weakens every consumer of the record");
-    assertStringIncludes(body.stdout, "ATOMICALLY");
+    for (const marker of summaryMustMention) assertStringIncludes(body.stdout, marker);
     assertEquals(body.stdout.endsWith("\n"), true);
     assertEquals(body.stdout.trimEnd().split("\n").length, 1, "the real capture records the publish summary as one line");
 
@@ -195,4 +207,109 @@ Deno.test("l3dc2: build.mjs's capture fields are pinned, and each field mutation
     flagged.set(name, problems);
   }
   assertEquals(flagged.size, mutants.length);
+});
+
+// ── 3. the summary the capture records is build.mjs's OWN expression (b7hti) ──
+
+/** The source text of build.mjs's `const publishSummary = <expr>` initializer. */
+function summaryInitializerSource(source: string): string {
+  let init: Node | undefined;
+  walk(parse(source, { ecmaVersion: "latest", sourceType: "module" }), (n) => {
+    if (n.type === "VariableDeclarator" && isIdent(n.id as Node, "publishSummary")) init = n.init as Node;
+  });
+  assert(init, "build.mjs must still declare publishSummary — the text its capture records");
+  const node = init as Node;
+  return source.slice(node.start as number, node.end as number);
+}
+
+/** The build's own numbers, as fixtures: a real build's counts differ, and the point here is
+ *  that the TEXT comes from build.mjs's expression, not from these values. */
+const SUMMARY_COUNTS: Record<string, number> = { occurrences: 7, zodProbes: 3, zodDocCompiles: 2 };
+/** build.mjs reaches `path.join` through the `path` binding it imports. */
+const SUMMARY_PATH = { join: (...parts: string[]) => parts.join("/") };
+
+/** Evaluate build.mjs's OWN summary expression with those fixtures: exactly the text a build
+ *  prints and captures for those counts. An emptied or hardcoded initializer therefore yields
+ *  empty or count-free text here, which is what makes the pins below non-vacuous. */
+function evaluateSummary(source: string): string {
+  const names = Object.keys(SUMMARY_COUNTS);
+  const fn = new Function("path", ...names, `return (${summaryInitializerSource(source)});`) as (...a: unknown[]) => unknown;
+  return String(fn(SUMMARY_PATH, ...names.map((n) => SUMMARY_COUNTS[n])));
+}
+
+/** Evaluate build.mjs's OWN capture template (the stdout field) with the summary bound to it:
+ *  the exact bytes the capture records. */
+function evaluateCaptureStdout(source: string, summary: string): string {
+  const node = captureProperties(source).get("stdout");
+  assert(node, "build.mjs's capture must still set a stdout field");
+  const text = source.slice(node.start as number, node.end as number);
+  const fn = new Function("publishSummary", `return (${text});`) as (s: string) => unknown;
+  return String(fn(summary));
+}
+
+/** Reasons build.mjs's summary expression cannot be what the capture records. Empty = pinned. */
+function summaryProblems(source: string): string[] {
+  let emitted: string;
+  try {
+    emitted = evaluateSummary(source);
+  } catch (e) {
+    return [`the summary expression did not evaluate with the known fixtures (${String((e as Error)?.message ?? e)})`];
+  }
+  if (typeof emitted !== "string" || emitted.trim().length === 0) {
+    return ["the summary expression must produce text: an emptied initializer records a bare newline"];
+  }
+  const problems: string[] = [];
+  for (const marker of summaryMustMention) {
+    if (!emitted.includes(marker)) problems.push(`the summary must name what was published: missing ${JSON.stringify(marker)}`);
+  }
+  for (const [name, value] of Object.entries(SUMMARY_COUNTS)) {
+    if (!emitted.includes(String(value))) {
+      problems.push(`the summary must interpolate the build's own ${name}, not a hardcoded constant`);
+    }
+  }
+  return problems;
+}
+
+Deno.test("b7hti: the recorded stdout is build.mjs's own summary expression, with its interpolated counts", async () => {
+  const source = await Deno.readTextFile(BUILD_MJS);
+  assertEquals(summaryProblems(source), [], "the real summary expression must satisfy every pin");
+
+  const emitted = evaluateSummary(source);
+  const captured = evaluateCaptureStdout(source, emitted);
+  assertEquals(captured, `${emitted}\n`, "the capture must record the summary plus the newline it adds");
+  assertEquals(captured.trimEnd().split("\n").length, 1, "the recorded summary is one line");
+
+  // Through the REAL writer, onto disk: a consumer reads back that text — not a manufactured
+  // sample, and never the bare newline an emptied summary would produce.
+  const root = durableDir("scratch", `b7hti-summary-${crypto.randomUUID()}`);
+  const recordDir = join(root, "records");
+  try {
+    const key = buildOnceKeyFromMarkerText(markerText);
+    assert(key, "a schema-valid marker must yield a key");
+    await writeBuildOnceRecord({ record: { key, stdout: captured }, buildSucceeded: true, exitCode: 0, recordDir });
+    const body = JSON.parse(await Deno.readTextFile(join(recordDir, `${key}.json`)));
+    assertEquals(body.stdout, captured);
+    assert(body.stdout.trim().length > 0, "the recorded stdout must not be only the newline an emptied summary yields");
+    for (const marker of summaryMustMention) assertStringIncludes(body.stdout, marker);
+    for (const value of Object.values(SUMMARY_COUNTS)) assertStringIncludes(body.stdout, String(value));
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("b7hti: an emptied or hardcoded summary initializer is flagged, not silently captured", async () => {
+  const clean = await Deno.readTextFile(BUILD_MJS);
+  const initializer = summaryInitializerSource(clean);
+  const mutants: Array<[string, string]> = [
+    ["the summary initializer is emptied", clean.replace(initializer, '""')],
+    [
+      "the summary is a hardcoded constant with no interpolation",
+      clean.replace(initializer, '"built dist ATOMICALLY (seam scan clean; dist.complete marker; rollback-fatal)"'),
+    ],
+  ];
+  for (const [name, mutated] of mutants) {
+    assert(mutated !== clean, `mutant "${name}" must actually change build.mjs (the pin is vacuous otherwise)`);
+    const problems = summaryProblems(mutated);
+    assert(problems.length > 0, `mutant "${name}" must be flagged by summaryProblems(), but nothing was reported`);
+  }
 });
