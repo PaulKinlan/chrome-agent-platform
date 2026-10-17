@@ -727,9 +727,11 @@ export function attachProcessLifeline(
         `own exit, which is what decides cleanup, is judged separately`,
     );
   };
-  // The watcher's status, read once and never swallowed: a throw or rejection here means the exit could not be
-  // OBSERVED, which is not the same as an exit (qh5lp).
-  const watcherStatus = (): Promise<unknown> | null => {
+  // THE ONE WAY to read the watcher's status (qh5lp, zt6zw). The getter itself can THROW, and reading it directly
+  // inside a body meant one throw escaped into `leave()`'s catch, which reported a settled transition with nothing
+  // unconfirmed - a confirmed cleanup nobody had observed. Every path reads it through here: a throw or a rejected
+  // promise both mean "the exit could not be OBSERVED", which is not the same as an exit.
+  const watcherStatus = (): Promise<{ code: number; signal: string | null }> | null => {
     try {
       return watcher.status;
     } catch {
@@ -748,10 +750,18 @@ export function attachProcessLifeline(
     const timedOut = Symbol("lifeline sweep timed out");
     let timer: ReturnType<typeof setTimeout> | undefined;
     let statusFailed = false;
+    const status = watcherStatus();
+    if (status === null) {
+      // The getter threw: there is no exit to observe at all. Kill the watcher anyway and end UNCONFIRMED.
+      await attempt(() => watcher.kill("SIGKILL"));
+      unconfirmed("exit status could not be read (the watcher's status getter threw)");
+      if (!(await settlesWithin(closing, settleTimeoutMs))) closeUnsettled();
+      return;
+    }
     try {
       const outcome = await Promise.race([
         // A REJECTION is not an exit: it is an exit we could not read, which stays UNCONFIRMED (qh5lp).
-        watcher.status.then((status) => status, () => {
+        status.then((value) => value, () => {
           statusFailed = true;
           return null;
         }),
@@ -765,7 +775,9 @@ export function attachProcessLifeline(
             `killing its watcher (the group may not have been fully signalled)`,
         );
         await attempt(() => watcher.kill("SIGKILL"));
-        if (!(await diedWithin(watcher.status, settleTimeoutMs))) unconfirmed("exit after SIGKILL");
+        // Read it AGAIN through the accessor: a getter that starts throwing must not be a confirmed exit either.
+        const afterKill = watcherStatus();
+        if (afterKill === null || !(await diedWithin(afterKill, settleTimeoutMs))) unconfirmed("exit after SIGKILL");
       } else if (statusFailed) {
         unconfirmed("exit status could not be read (the watcher's status promise rejected)");
       } else if (outcome !== null && outcome.code === LIFELINE_PKILL_REJECTED) {

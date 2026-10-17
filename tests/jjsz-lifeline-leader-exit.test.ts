@@ -160,6 +160,8 @@ function fakeWatcher(
     /** t5o2i.2 qh5lp: the watcher's status promise REJECTS instead of resolving - an exit that could not be
      *  read. Rejection happens at the point the lifeline triggers it, so no promise is left unhandled. */
     rejectStatus?: boolean;
+    /** t5o2i.2 zt6zw: the `status` GETTER itself throws, so there is no promise to await at all. */
+    throwStatusGetter?: boolean;
     onKill?: () => void;
     onClose?: () => Promise<void>;
   } = {},
@@ -175,7 +177,7 @@ function fakeWatcher(
     if (opts.rejectStatus) fail(new Error("watcher status unavailable"));
     else settle(value);
   };
-  return {
+  const watcher = {
     pid: 424_242,
     status,
     stdin: {
@@ -198,6 +200,13 @@ function fakeWatcher(
       settle({ code: opts.exitCode ?? 0, signal: null });
     },
   };
+  if (!opts.throwStatusGetter) return watcher;
+  // A getter that THROWS on every read (zt6zw): reading it is not an exit, it is an exit we cannot even ask about.
+  return Object.defineProperty(watcher, "status", {
+    get() {
+      throw new Error("watcher status unavailable (getter threw)");
+    },
+  }) as typeof watcher;
 }
 
 type HeldWatcher = ReturnType<typeof fakeWatcher>;
@@ -1047,6 +1056,41 @@ Deno.test("lifeline: an unsettled stdin close alone does NOT refuse the profile 
     await awaitFiredLifelineSweep(marker);
   } finally {
     await reap(proc);
+  }
+});
+
+Deno.test("lifeline: a watcher whose status GETTER THROWS is UNCONFIRMED and refuses the profile - in the sweep AND the disarm (t5o2i.2 zt6zw)", async () => {
+  // The reviewer's repro: the sweep read `watcher.status` directly, so a throwing getter escaped into leave()'s
+  // catch and the transition settled with cleanupConfirmed TRUE and the profile reusable.
+  for (const shape of ["sweep", "disarm"] as const) {
+    const proc = spawnLeader("/bin/sleep", ["300"]);
+    const marker = `user-data-dir=jjsz-t5o2i-getter-${shape}-${crypto.randomUUID()}`;
+    const lines: string[] = [];
+    try {
+      const disarm = attachProcessLifeline(proc, { group: proc.pid, treeMatch: marker }, {
+        spawn: () => fakeWatcher([], { throwStatusGetter: true }),
+        warn: (line) => lines.push(line),
+        sweepTimeoutMs: 40,
+        settleTimeoutMs: 60,
+      });
+      if (shape === "disarm") {
+        assert(await settlesWithin(disarm(), 5000), "the disarm settles inside its bound even when the getter throws");
+      } else {
+        proc.kill("SIGKILL");
+        await proc.status;
+        assert(await until(() => lifelineState(proc)?.state === "fired", 5000), "the exit fired the sweep");
+        assert(await settlesWithin(lifelineState(proc)?.settled, 5000), "the sweep settles inside its bound");
+      }
+      assertEquals(
+        lifelineState(proc)?.cleanupConfirmed,
+        false,
+        `${shape}: a status that cannot even be read is NOT an observed exit, so cleanup cannot be confirmed`,
+      );
+      assert(lines.some((line) => line.includes("UNCONFIRMED")), `${shape}: the unconfirmed verdict is reported: ${lines.join(" | ")}`);
+      await assertRejects(() => awaitFiredLifelineSweep(marker), Error, "did not exit within their bound", `${shape}: the profile is refused`);
+    } finally {
+      await reap(proc);
+    }
   }
 });
 
