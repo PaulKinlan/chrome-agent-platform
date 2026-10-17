@@ -222,19 +222,28 @@ function summaryInitializerSource(source: string): string {
   return source.slice(node.start as number, node.end as number);
 }
 
-/** The build's own numbers, as fixtures: a real build's counts differ, and the point here is
- *  that the TEXT comes from build.mjs's expression, not from these values. */
-const SUMMARY_COUNTS: Record<string, number> = { occurrences: 7, zodProbes: 3, zodDocCompiles: 2 };
+/** The build's own numbers, as fixtures: a real build's counts differ, and the point here is that the
+ *  TEXT comes from build.mjs's expression, not from these values.
+ *
+ *  lf5vu: TWO sets, each carrying distinct multi-digit values, because ONE set cannot tell
+ *  interpolation from a constant - "7" is a substring of "17", so a pasted log line with stale counts
+ *  passed the old `includes` check. Two disjoint sets also let the pins require that swapping the
+ *  counts CHANGES the emitted text, which no constant can do. */
+const SUMMARY_COUNT_SETS: Array<Record<string, number>> = [
+  { occurrences: 101, zodProbes: 202, zodDocCompiles: 303 },
+  { occurrences: 404, zodProbes: 505, zodDocCompiles: 606 },
+];
+const SUMMARY_COUNTS = SUMMARY_COUNT_SETS[0];
 /** build.mjs reaches `path.join` through the `path` binding it imports. */
 const SUMMARY_PATH = { join: (...parts: string[]) => parts.join("/") };
 
 /** Evaluate build.mjs's OWN summary expression with those fixtures: exactly the text a build
  *  prints and captures for those counts. An emptied or hardcoded initializer therefore yields
  *  empty or count-free text here, which is what makes the pins below non-vacuous. */
-function evaluateSummary(source: string): string {
-  const names = Object.keys(SUMMARY_COUNTS);
+function evaluateSummary(source: string, counts: Record<string, number> = SUMMARY_COUNTS): string {
+  const names = Object.keys(counts);
   const fn = new Function("path", ...names, `return (${summaryInitializerSource(source)});`) as (...a: unknown[]) => unknown;
-  return String(fn(SUMMARY_PATH, ...names.map((n) => SUMMARY_COUNTS[n])));
+  return String(fn(SUMMARY_PATH, ...names.map((n) => counts[n])));
 }
 
 /** Evaluate build.mjs's OWN capture template (the stdout field) with the summary bound to it:
@@ -247,25 +256,36 @@ function evaluateCaptureStdout(source: string, summary: string): string {
   return String(fn(summary));
 }
 
-/** Reasons build.mjs's summary expression cannot be what the capture records. Empty = pinned. */
+/** Reasons build.mjs's summary expression cannot be what the capture records. Empty = pinned.
+ *
+ *  lf5vu: every count set is evaluated, and the texts are required to DIFFER - a constant cannot
+ *  answer two different count sets with two different summaries, and each set's own values must
+ *  appear, so stale digits in a pasted line are no longer enough to pass. */
 function summaryProblems(source: string): string[] {
-  let emitted: string;
-  try {
-    emitted = evaluateSummary(source);
-  } catch (e) {
-    return [`the summary expression did not evaluate with the known fixtures (${String((e as Error)?.message ?? e)})`];
-  }
-  if (typeof emitted !== "string" || emitted.trim().length === 0) {
-    return ["the summary expression must produce text: an emptied initializer records a bare newline"];
-  }
   const problems: string[] = [];
-  for (const marker of summaryMustMention) {
-    if (!emitted.includes(marker)) problems.push(`the summary must name what was published: missing ${JSON.stringify(marker)}`);
-  }
-  for (const [name, value] of Object.entries(SUMMARY_COUNTS)) {
-    if (!emitted.includes(String(value))) {
-      problems.push(`the summary must interpolate the build's own ${name}, not a hardcoded constant`);
+  const emittedBySet: string[] = [];
+  for (const counts of SUMMARY_COUNT_SETS) {
+    let emitted: string;
+    try {
+      emitted = evaluateSummary(source, counts);
+    } catch (e) {
+      return [`the summary expression did not evaluate with the known fixtures (${String((e as Error)?.message ?? e)})`];
     }
+    if (typeof emitted !== "string" || emitted.trim().length === 0) {
+      return ["the summary expression must produce text: an emptied initializer records a bare newline"];
+    }
+    emittedBySet.push(emitted);
+    for (const marker of summaryMustMention) {
+      if (!emitted.includes(marker)) problems.push(`the summary must name what was published: missing ${JSON.stringify(marker)}`);
+    }
+    for (const [name, value] of Object.entries(counts)) {
+      if (!emitted.includes(String(value))) {
+        problems.push(`the summary must interpolate the build's own ${name} (${value}), not a hardcoded constant`);
+      }
+    }
+  }
+  if (new Set(emittedBySet).size !== emittedBySet.length) {
+    problems.push("the summary must be built from its counts: two different count sets produced the same text");
   }
   return problems;
 }
@@ -305,6 +325,15 @@ Deno.test("b7hti: an emptied or hardcoded summary initializer is flagged, not si
     [
       "the summary is a hardcoded constant with no interpolation",
       clean.replace(initializer, '"built dist ATOMICALLY (seam scan clean; dist.complete marker; rollback-fatal)"'),
+    ],
+    [
+      // lf5vu: the reviewer's exact probe - a PASTED log line carrying stale counts. It passed the
+      // old single-set `includes` check because 7/3/2 are substrings of 17/13/12.
+      "the summary is a pasted log line with stale counts (lf5vu)",
+      clean.replace(
+        initializer,
+        '"built extension/dist/background/service-worker.js + dist/options.bundle.js ATOMICALLY (serialized owner-token lock; one dist dir; removed 17 new-Function + 13 probes + 12 pinned Doc.compile methods; seam scan clean; dist.complete marker; rollback-fatal)"',
+      ),
     ],
   ];
   for (const [name, mutated] of mutants) {
