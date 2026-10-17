@@ -2,32 +2,52 @@
 // covers it anyway. chrome-agent-platform-nco2.
 //
 // THE PROBLEM: scripts/select-tests.mjs proves subset coverage through the
-// STATIC IMPORT GRAPH. Two file classes have no import edges at all, so the
-// picker cannot prove coverage and falls back to the whole suite. Worse, the
-// previous message said only "no reachable test", which read identically for
-// three different causes.
+// STATIC IMPORT GRAPH. Certain file classes have no static import edges, so the
+// picker cannot prove coverage through imports alone and would otherwise fall
+// back to the whole suite. This module classifies those classes and maps them
+// to the guards that actually cover them.
 //
-// THE THREE CLASSES:
+// THE CLASSES:
 //
 //   1. UNIMPORTED HARNESSES. scripts/a11y-audit.ts and scripts/sidebar-parity.ts
 //      are uncovered; scripts/kat-constrained-width-layout.ts (via tests/harness-marks.test.ts),
 //      scripts/lib/composer-target.ts and scripts/lib/css-padding.ts are COVERED,
 //      because a test imports them.
-//      So it is not "any scripts/** change" — it is precisely the files nothing
-//      imports. What covers top-level scripts/*.ts instead is the tree-walking
+//      What covers top-level scripts/*.ts instead is the tree-walking
 //      guards, which enumerate scripts/*.ts at RUNTIME (harnessFiles() does a
 //      readdirSync for scripts/*.ts) and so never appear as static import edges.
-//
 //      Why mapping these is not a weakening: NO unit test executes them. The full
 //      suite adds nothing for this class over the tree-walking guards.
-//      A .mjs helper or anything in a subdirectory (scripts/lib/...) is NOT
-//      inspected by those guards, so it fails closed to the full suite.
 //
 //   2. TWO EXPORT ENTRY HTML DOCUMENTS (3p3e.12). These have no import graph
 //      edge, but tests/thread-export-entry-html.test.ts reads their actual
 //      button/label/initial-state and the loaded script's exact route wiring.
 //      The Export JS entry scripts DO have import/URL edges; selector-level
 //      tests pin their real guard selection instead of declaring dead mappings.
+//
+//   3. UNIMPORTED FIXTURES (tests/fixtures/**, chrome-agent-platform-oeqvx).
+//      These files have no static import edge. When test files mention their path
+//      (or specific basename), referrersFor() resolves them to their referring
+//      test suites. Limitation: matching uses literal path/substring or specific
+//      basename (>=10 chars), so globbing consumers or helper-mediated dynamic
+//      paths are not selected (unreferenced fixtures fail closed).
+//
+//   4. TEXT-REFERENCED SCRIPTS (scripts/**, chrome-agent-platform-oeqvx).
+//      Scripts referenced by tests via text/content mentions (common causes:
+//      subprocess invocation, join(ROOT, ...), or raw file reads) rather than
+//      static or URL-instrumented imports (e.g. scripts/check-changelog.mjs
+//      referenced by tests/changelog.test.ts). When test files reference them,
+//      referrersFor() maps them to referring tests (and tree-walking guards for
+//      enumerated harnesses). Unreferenced scripts without tree guards fail closed.
+//
+//   5. BUNDLED WASM MANIFESTS, SBOMS, AND LICENSES (extension/wasm/{manifests,sbom,licenses}/**,
+//      chrome-agent-platform-3aq3v).
+//      These files have no static JS import edge. They are inspected at runtime by
+//      Wasm tree-walking guards (tests/bundled-tool-packages.test.ts,
+//      tests/wasm-manifest-assets.test.ts, tests/wasm-package-authority-static.test.ts,
+//      tests/wasm-catalogue-status-truth.test.ts) which validate all manifests,
+//      SBOM identities, checksums, and license notices, plus any specific test
+//      referencing the path via referrersFor().
 //
 // Everything else stays FAIL CLOSED, and now says which file and which mechanism
 // forced it.
@@ -58,6 +78,25 @@ export const BOOKKEEPING_GUARDS = Object.freeze([
   "tests/bump-version-sanitize.test.ts",
   "tests/bundled-tool-packages.test.ts",
   "tests/first-run-onboarding-composition.test.ts",
+]);
+
+/** Tests that inspect and validate the extension/wasm/manifests/ directory. */
+export const WASM_MANIFEST_GUARDS = Object.freeze([
+  "tests/bundled-tool-packages.test.ts",
+  "tests/wasm-manifest-assets.test.ts",
+  "tests/wasm-package-authority-static.test.ts",
+  "tests/wasm-catalogue-status-truth.test.ts",
+]);
+
+/** Tests that inspect and validate the extension/wasm/sbom/ directory. */
+export const WASM_SBOM_GUARDS = Object.freeze([
+  "tests/wasm-package-authority-static.test.ts",
+  "tests/bundled-tool-packages.test.ts",
+]);
+
+/** Tests that inspect and validate the extension/wasm/licenses/ directory. */
+export const WASM_LICENSE_GUARDS = Object.freeze([
+  "tests/bundled-tool-packages.test.ts",
 ]);
 
 /** Exact documents with an executable static DOM-entry + script-wiring guard.
@@ -162,6 +201,21 @@ export function isTestsFixture(rel) {
   return /^tests[\\/]fixtures[\\/].+/.test(rel.replace(/\\/g, "/"));
 }
 
+/** A bundled Wasm package manifest under extension/wasm/manifests/. */
+export function isWasmManifest(rel) {
+  return /^extension[\\/]wasm[\\/]manifests[\\/].+\.manifest\.json$/.test(rel.replace(/\\/g, "/"));
+}
+
+/** An SBOM document under extension/wasm/sbom/. */
+export function isWasmSbom(rel) {
+  return /^extension[\\/]wasm[\\/]sbom[\\/].+\.(cdx|spdx)\.json$/.test(rel.replace(/\\/g, "/"));
+}
+
+/** A license notice text file under extension/wasm/licenses/. */
+export function isWasmLicense(rel) {
+  return /^extension[\\/]wasm[\\/]licenses[\\/].+\.txt$/.test(rel.replace(/\\/g, "/"));
+}
+
 /**
  * Is this script ENUMERATED by the tree-walking guards?
  * `harnessFiles()` in scripts/lib/harness-registry.ts enumerates
@@ -254,6 +308,33 @@ export function classifyUncovered(rel, { versionOnly = false, referrers = [] } =
       tests: [],
     };
   }
+  if (isWasmManifest(path)) {
+    const tests = [...new Set([...referrers, ...WASM_MANIFEST_GUARDS])];
+    return {
+      mechanism:
+        "extension/wasm/manifests/ manifest validated by bundled-tool-packages, " +
+        "wasm-manifest-assets, and authority static guards (plus referring tests)",
+      tests,
+    };
+  }
+  if (isWasmSbom(path)) {
+    const tests = [...new Set([...referrers, ...WASM_SBOM_GUARDS])];
+    return {
+      mechanism:
+        "extension/wasm/sbom/ CycloneDX/SPDX SBOM validated by authority static " +
+        "and bundled-tool-packages guards (plus referring tests)",
+      tests,
+    };
+  }
+  if (isWasmLicense(path)) {
+    const tests = [...new Set([...referrers, ...WASM_LICENSE_GUARDS])];
+    return {
+      mechanism:
+        "extension/wasm/licenses/ license notice validated by bundled-tool-packages " +
+        "guard (plus referring tests)",
+      tests,
+    };
+  }
   if (isScriptsHarness(path)) {
     if (referrers.length) {
       const tests = isGuardEnumeratedScript(path)
@@ -261,7 +342,7 @@ export function classifyUncovered(rel, { versionOnly = false, referrers = [] } =
         : [...referrers];
       return {
         mechanism:
-          "scripts/ file named by tests (text reference with no static import edge; " +
+          "scripts/ file named by tests (content reference with no static import edge; " +
           "selects tests that mention the path; globbing consumers not selected)",
         tests,
       };

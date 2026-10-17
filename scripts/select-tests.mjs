@@ -631,7 +631,13 @@ export function testFilesWithContent({ reload = false } = {}) {
 
 /**
  * Tests that refer to this path by literal path or basename (when specific).
- * Used to map fixtures and text-read scripts that have no static import edge.
+ * Used to map fixtures and subprocess/join-referenced scripts that have no static import edge.
+ *
+ * Basename matching basis:
+ * - A filename <10 chars is too generic to serve as evidence of consumption.
+ * - The tests/fixtures/artifact-tx-4eaf0d34/ snapshot carries generic module names
+ *   ('README.md', 'memory.js', 'artifacts.js', 'kv.js') that would match completely
+ *   unrelated tests if matched by basename. Those fixtures map by literal path only.
  */
 export function referrersFor(rel, { reload = false } = {}) {
   const normalized = rel.replace(/\\/g, "/");

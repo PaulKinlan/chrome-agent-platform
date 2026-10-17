@@ -23,17 +23,25 @@ import {
   isScriptsHarness,
   isSelectorInfrastructure,
   isTestsFixture,
+  isWasmLicense,
+  isWasmManifest,
+  isWasmSbom,
   mapUncovered,
   SELECTOR_INFRASTRUCTURE,
   VERSION_FIELDS_BY_FILE,
   versionOnlyJsonChange,
+  WASM_LICENSE_GUARDS,
+  WASM_MANIFEST_GUARDS,
+  WASM_SBOM_GUARDS,
 } from "../scripts/lib/changed-file-mapping.mjs";
 import {
   buildReverseGraph,
   changedWithoutCoverage,
+  clearReferrersCache,
   mergeBaseOf,
   referrersFor,
   selectTestFiles,
+  testFilesWithContent,
   versionOnlyAgainst,
 } from "../scripts/select-tests.mjs";
 
@@ -379,6 +387,18 @@ Deno.test("nco2: every declared guard EXISTS and actually reads the tree it guar
       `${rel} must contain the literal path of a bookkeeping file it is claimed to cover`,
     );
   }
+  for (const rel of WASM_MANIFEST_GUARDS) {
+    const src = Deno.readTextFileSync(`${ROOT}${rel}`);
+    assert(/manifests|manifest/i.test(src), `${rel} must reference Wasm manifests`);
+  }
+  for (const rel of WASM_SBOM_GUARDS) {
+    const src = Deno.readTextFileSync(`${ROOT}${rel}`);
+    assert(/sbom|cdx|spdx/i.test(src), `${rel} must reference Wasm SBOMs`);
+  }
+  for (const rel of WASM_LICENSE_GUARDS) {
+    const src = Deno.readTextFileSync(`${ROOT}${rel}`);
+    assert(/license/i.test(src), `${rel} must reference licenses`);
+  }
 });
 
 Deno.test("nco2: the changed set is scoped to the MERGE-BASE, never the moving tip", () => {
@@ -525,6 +545,14 @@ Deno.test("oeqvx: classifyUncovered maps fixtures and text-read scripts when ref
   assert(scriptWithRefs.tests.includes("tests/journey-focus-fail-closed.test.ts"));
   assert(scriptWithRefs.tests.includes("tests/harness-registry.test.ts"));
   assert(scriptWithRefs.mechanism.includes("scripts/ file named by tests"), scriptWithRefs.mechanism);
+  assert(scriptWithRefs.mechanism.includes("content reference"), scriptWithRefs.mechanism);
+
+  // Subprocess-invoked script (check-changelog.mjs): mapped to referrers
+  const changelogWithRefs = classifyUncovered("scripts/check-changelog.mjs", {
+    referrers: ["tests/changelog.test.ts"],
+  });
+  assertEquals(changelogWithRefs.tests, ["tests/changelog.test.ts"]);
+  assert(changelogWithRefs.mechanism.includes("content reference"), changelogWithRefs.mechanism);
 
   // Unenumerated script with referrers: mapped to referrers
   const subHelperWithRefs = classifyUncovered("scripts/lib/some-helper.mjs", {
@@ -576,6 +604,92 @@ Deno.test("oeqvx: referrersFor finds suites that mention fixtures or text-read s
   const orphan = "tests/fixtures/" + orphanBase;
   const orphanRefs = referrersFor(orphan);
   assertEquals(orphanRefs, [], "non-existent or unmentioned fixture has zero referrers");
+
+  // Subprocess-invoked script with join(ROOT, ...) or spawn in tests
+  const chkRefs = referrersFor("scripts/check-changelog.mjs");
+  assert(
+    chkRefs.includes("tests/changelog.test.ts"),
+    "changelog.test.ts references scripts/check-changelog.mjs",
+  );
+});
+
+Deno.test("2yc3j: clearReferrersCache clears cached content so subsequent call repopulates", () => {
+  // Prime cache
+  const cached = testFilesWithContent();
+  const sentinel = { file: "tests/__sentinel_fake_test__.test.ts", content: "sentinel_marker_content" };
+  cached.push(sentinel);
+  assert(testFilesWithContent().some((entry) => entry.file === sentinel.file));
+
+  // clearReferrersCache must discard the cached array reference
+  clearReferrersCache();
+  const repopulated = testFilesWithContent();
+  assert(
+    !repopulated.some((entry) => entry.file === sentinel.file),
+    "cleared cache must repopulate fresh without the injected sentinel",
+  );
+});
+
+Deno.test("3aq3v: Wasm manifest, SBOM, and license predicates and mapping", () => {
+  assertEquals(isWasmManifest("extension/wasm/manifests/cap.bundled.hash.keccak.256-1.0.0.manifest.json"), true);
+  assertEquals(isWasmManifest("extension/wasm/manifests/cap.bundled.avif-1.0.0.manifest.json"), true);
+  assertEquals(isWasmManifest("extension/manifest.json"), false);
+
+  assertEquals(isWasmSbom("extension/wasm/sbom/hash_keccak_256.cdx.json"), true);
+  assertEquals(isWasmSbom("extension/wasm/sbom/c2.spdx.json"), true);
+  assertEquals(isWasmSbom("package.json"), false);
+
+  assertEquals(isWasmLicense("extension/wasm/licenses/hash-wasm-MIT.txt"), true);
+  assertEquals(isWasmLicense("extension/wasm/licenses/0BSD.txt"), true);
+  assertEquals(isWasmLicense("extension/wasm/cas/1234.wasm"), false);
+
+  // Manifest mapping without explicit referrers
+  const manifestVerdict = classifyUncovered(
+    "extension/wasm/manifests/cap.bundled.hash.keccak.256-1.0.0.manifest.json",
+    { referrers: [] },
+  );
+  assert(manifestVerdict.tests.includes("tests/bundled-tool-packages.test.ts"));
+  assert(manifestVerdict.tests.includes("tests/wasm-manifest-assets.test.ts"));
+  assert(manifestVerdict.mechanism.includes("extension/wasm/manifests/ manifest validated"), manifestVerdict.mechanism);
+
+  // Manifest mapping with explicit referrers (e.g. tests/wasm-shared-cas-claims.test.ts)
+  const manifestWithRefs = classifyUncovered(
+    "extension/wasm/manifests/cap.bundled.hash.sha3.256-1.0.0.manifest.json",
+    { referrers: ["tests/wasm-shared-cas-claims.test.ts"] },
+  );
+  assert(manifestWithRefs.tests.includes("tests/wasm-shared-cas-claims.test.ts"));
+  assert(manifestWithRefs.tests.includes("tests/bundled-tool-packages.test.ts"));
+
+  // SBOM mapping
+  const sbomVerdict = classifyUncovered(
+    "extension/wasm/sbom/hash_keccak_256.cdx.json",
+    { referrers: [] },
+  );
+  assert(sbomVerdict.tests.includes("tests/wasm-package-authority-static.test.ts"));
+  assert(sbomVerdict.tests.includes("tests/bundled-tool-packages.test.ts"));
+  assert(sbomVerdict.mechanism.includes("extension/wasm/sbom/"), sbomVerdict.mechanism);
+
+  // License mapping
+  const licenseVerdict = classifyUncovered(
+    "extension/wasm/licenses/hash-wasm-MIT.txt",
+    { referrers: [] },
+  );
+  assert(licenseVerdict.tests.includes("tests/bundled-tool-packages.test.ts"));
+  assert(licenseVerdict.mechanism.includes("extension/wasm/licenses/"), licenseVerdict.mechanism);
+
+  // mapUncovered integration
+  const mapped = mapUncovered(
+    [
+      "extension/wasm/manifests/cap.bundled.hash.keccak.256-1.0.0.manifest.json",
+      "extension/wasm/sbom/hash_keccak_256.cdx.json",
+      "extension/wasm/licenses/hash-wasm-MIT.txt",
+    ],
+    () => false,
+    declaredGuardExists,
+    () => true,
+    referrersFor,
+  );
+  assertEquals(mapped.unmappable, [], "Wasm manifests, SBOMs, and licenses must be mapped, not unmappable");
+  assertEquals(mapped.mapped.length, 3);
 });
 
 Deno.test("oeqvx: mapUncovered maps fixture when referrersFor is supplied and fails closed when empty (mutant)", () => {
