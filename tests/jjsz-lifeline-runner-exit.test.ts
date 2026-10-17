@@ -946,6 +946,9 @@ function injectionViolations(program: Ast): Violations {
   //     report everything(), so it cannot smuggle the real sequence past - but that is the pin refusing to read a file
   //     it does not recognise, not a rule that understands two tries).
   //   * `await kill()` where `kill` is a getter or a member that changes between reads.
+  //   * REACHABILITY of the removal: every `Deno.remove` in the finally must take `profile` (f6p3l), but a single
+  //     dead `Deno.remove(profile)` under an always-false guard satisfies that and removes nothing. Deciding it needs
+  //     data-flow, not a position rule.
   // A shadow of `proc` (a parameter or a local in kill()) has no rule of its own: the TypeScript transform renames a
   // nested declaration that collides with the module-level one (`proc` becomes `proc2`), so the reap statement no
   // longer names `proc` and the count above rejects it as a missing reap. That is measured, not assumed: a drill that
@@ -1027,10 +1030,21 @@ function injectionViolations(program: Ast): Violations {
   }
   // t5o2i.1 survivor (g): the ordering above compares POSITIONS, so a removal of any other path satisfies it. The
   // removal the pin counts must be of the launch profile.
-  const removal = removeAt < 0 ? null : removeCall(finalizer[removeAt]);
-  if (removal && dotted(removal.arguments[0]) !== "profile") {
+  //
+  // f6p3l (reviewer finding on the first version of this clause): checking only the FIRST lexical `Deno.remove` was
+  // not enough - `if (false) await Deno.remove(profile); await Deno.remove("other")` satisfied it while the profile was
+  // never removed. So EVERY removal in the finally must take `profile`. What is still unread, and stated rather than
+  // implied: reachability. A single dead `Deno.remove(profile)` under an always-false guard satisfies this clause and
+  // removes nothing; deciding that needs data-flow, not a position rule (listed in the pin comment).
+  const removals: Ast[] = [];
+  descend({ type: "BlockStatement", body: finalizer } as Ast, (node) => {
+    if (node.type === "CallExpression" && dotted(node.callee) === "Deno.remove") removals.push(node);
+  });
+  const wrongRemovals = removals.filter((call: Ast) => dotted(call.arguments[0]) !== "profile");
+  if (wrongRemovals.length > 0) {
     violations.order.push(
-      `the finally's removal must be \`Deno.remove(profile, ...)\`; it removes ${JSON.stringify(dotted(removal.arguments[0]))}, ` +
+      `every \`Deno.remove\` in the finally must remove the launch profile; ${wrongRemovals.length} of ${removals.length} ` +
+        `remove(s) something else (the first is ${JSON.stringify(dotted(wrongRemovals[0].arguments[0]))}), ` +
         "so the ordering is satisfied without the profile being removed",
     );
   }
@@ -1175,6 +1189,7 @@ const INJECTION_LAUNCH_ONLY = "  const l = await launchChrome({ binary: CHROMIUM
 const INJECTION_LAUNCH_AND_STORE = INJECTION_LAUNCH_ONLY + INJECTION_BOOT_STORE;
 const INJECTION_BOOT_THROW = '  if (!sw) throw new Error("no service worker");\n';
 const INJECTION_ATTACH_HEAD = "async function attach(url: string, waitMs = 1500) {\n";
+const INJECTION_PROFILE_REMOVAL = "try { await Deno.remove(profile, { recursive: true }); removed = true; } catch { await sleep(300); }";
 const INJECTION_KILL_HEAD = "async function kill() {\n";
 const INJECTION_REMOVAL_REPORT = "  if (!removed) { console.error(`profile not removed: ${profile}`); exitCode = 1; }\n";
 
@@ -1288,6 +1303,17 @@ function injectionMutants(source: string): Array<[string, string, Array<keyof Vi
     [
       "the finally calls Deno.exit() before its `await kill()`",
       mutate(source, INJECTION_LAST_KILL, "  if (exitCode === 0) Deno.exit(2);\n" + INJECTION_LAST_KILL),
+      ["order"],
+    ],
+    // (g) f6p3l: a DEAD profile removal followed by the real one, which removes another path - the reviewer's
+    // exact repro. Checking only the first lexical Deno.remove accepted it; every removal must take `profile`.
+    [
+      "the finally hides a dead profile removal behind the real removal of another path",
+      mutate(
+        source,
+        INJECTION_PROFILE_REMOVAL,
+        'try { if (false) await Deno.remove(profile, { recursive: true }); await Deno.remove("not-the-profile", { recursive: true }); removed = true; } catch { await sleep(300); }',
+      ),
       ["order"],
     ],
     // (g) a removal that satisfies the ORDER without removing the profile.
