@@ -4,9 +4,10 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
-const CHECKER = new URL("../scripts/check-beads-export-divergence.mjs", import.meta.url).pathname;
+const CHECKER = fileURLToPath(new URL("../scripts/check-beads-export-divergence.mjs", import.meta.url));
 
 Deno.test("toyoj: >16 MiB committed and canonical exports remain checked for missing IDs", () => {
   const root = mkdtempSync(join(durableDir("beads-export-size"), "export-"));
