@@ -43,8 +43,28 @@ function defaultReportSecondary(reason, index) {
   console.error(`build: parallel task #${index} also failed — ${detail}`);
 }
 
-/** The version-GC grace used when CAP_BUILD_GC_GRACE_MS is unset or unusable. */
-export const DEFAULT_GC_GRACE_MS = 50;
+/**
+ * The version-GC grace used when `CAP_BUILD_GC_GRACE_MS` is unset or unusable.
+ *
+ * MEASURED, not guessed (chrome-agent-platform-b0ld8, 2026-10-17). The grace exists so a process
+ * that resolved the OLD `dist` just before the swap can finish reading. The slowest such reader in
+ * this repo hashes every file of the built tree (resolveDist / collectPackageInventory): 28 files,
+ * 19.6 MB, 130-300 ms on an 8-core Linux box. A paced-reader sweep over a real mirrored tree
+ * (cap-evidence/b0ld8-gc-grace-harness.mjs, results recorded on the bead) measured two conditions:
+ *   unloaded: the full-tree hash lost the tree 6/6 times at 50 ms AND at 100 ms, never at 200 ms;
+ *             copy-tree (cp -rL) survived at 100 ms; single-file at 0 ms.
+ *   loaded (6 busy children on 8 cores): still 6/6 at 100 ms, 2/6 at 200 ms, and clear only at
+ *             500 ms - so load roughly doubles what the grace must cover.
+ * 1000 ms is therefore 2x the smallest grace that survived a LOADED measurement, and half the old
+ * fixed 2000 ms. The 50 ms it replaces was an unmeasured guess that the measurement shows was unsafe
+ * at either condition.
+ *
+ * Cost, stated plainly: this is paid once per publish that has a prior version to collect, so it is
+ * ~1 s of a ~5 s warm build. That is the price of not tearing a reader mid-hash; a build-time budget
+ * that cannot afford it should lower it explicitly with CAP_BUILD_GC_GRACE_MS rather than have the
+ * default be a number nobody measured.
+ */
+export const DEFAULT_GC_GRACE_MS = 1_000;
 /** An explicit grace is capped here: a typo must never stall every build for minutes. */
 export const MAX_GC_GRACE_MS = 60_000;
 
@@ -52,23 +72,24 @@ export const MAX_GC_GRACE_MS = 60_000;
  * The delay (ms) between publishing the new version and garbage-collecting the old ones, from
  * `CAP_BUILD_GC_GRACE_MS`. The grace lets a reader that resolved the PREVIOUS `dist` link
  * mid-open finish (the pointer swap itself is atomic); it used to be a fixed 2000 ms on every
- * build, about half of a warm `build:production`. The default is now 50 ms.
+ * build, about half of a warm `build:production`. The default is now 1000 ms, set from measurement
+ * (see DEFAULT_GC_GRACE_MS and chrome-agent-platform-b0ld8).
  *
  * Only a plain run of decimal digits (after trimming surrounding whitespace) is a number. Every
  * other spelling that `Number()` would have accepted is a bad value, not a clever one: `-0` read
  * as NO grace although this table promises a bad value never is, and `0x10` / `0b101` / `1e3` /
  * `12.5` silently meant 16 / 5 / 1000 / 12.5.
  *
- *   unset / empty / whitespace                      -> 50    (default)
- *   anything but plain decimal digits               -> 50    (a bad value is never read as "no grace"):
+ *   unset / empty / whitespace                      -> 1000  (default)
+ *   anything but plain decimal digits               -> 1000  (a bad value is never read as "no grace"):
  *       negative or signed (-1, -0, +5), fractional (12.5, .5), exponent (1e3),
  *       hex / octal / binary (0x10, 0o7, 0b101), words (abc, NaN, Infinity),
  *       units or separators (12px, 1,5, 1_000), non-ASCII digits
  *   0 (any number of zeros)                         -> 0     (explicit: no grace at all)
- *   2000                                            -> 2000  (the previous behaviour)
+ *   2000                                            -> 2000  (the previous default)
  *   7, 007, 010                                     -> 7, 7, 10 (leading zeros are decimal, never octal)
  *   anything above 60000                            -> 60000
- *   a value too large for a double (Number(raw) is Infinity, from about 1.8e308) -> 50    (unusable, not a clamp)
+ *   a value too large for a double (Number(raw) is Infinity, from about 1.8e308) -> 1000  (unusable, not a clamp)
  *
  * @param {Record<string, string | undefined> | undefined} env
  * @returns {number}
