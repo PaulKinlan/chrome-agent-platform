@@ -730,21 +730,20 @@ Deno.test("ymnpg: the sweep signals the GROUP only - a non-leader holding the ta
 // `setsid` may FORK: when it does, `proc.pid` is a wrapper that exits immediately and the REAL
 // session leader is a child with a DIFFERENT pid. Any group-signal assertion that trusts `proc.pid`
 // can therefore pass because the wrapper exited on its own (measured 2026-10-17 on this VM: 5 of 6
-// spawns landed in the parent's group, i.e. under a wrapper pid, and it is why the assertions below
-// discover the leader by its unique argv marker instead of assuming the pid they were handed).
+// spawns were observed in the parent's group at the FIRST probe (possibly still before setsid ran).
+// A forced-fork fixture below proves the distinct wrapper case deterministically; either way,
+// discover the live leader by a unique argv marker instead of assuming the pid handed back.
 async function discoveredLeader(marker: string, ms = 4000): Promise<number | null> {
   const deadline = Date.now() + ms;
-  let wrapper: number | null = null;
   while (Date.now() < deadline) {
     for (const raw of await pgrepPids(marker)) {
       const pid = Number(raw);
       const info = processGroup(pid);
       if (info && info.group === pid && info.state !== "Z" && info.state !== "X") return pid;
-      if (info) wrapper = pid; // diagnostic only: never accept a wrapper as a group-signal target
     }
     await new Promise((r) => setTimeout(r, 25));
   }
-  return wrapper;
+  return null; // never return a wrapper as a candidate for a group-signal assertion
 }
 
 const liveProcess = (pid: number): boolean => {
