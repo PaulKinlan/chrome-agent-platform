@@ -154,6 +154,9 @@ function fakeWatcher(
      *  and never exits, so BOTH post-timeout waits overrun. `end()` still finishes it, so a failing test
      *  leaves no pending promise behind. */
     uninterruptible?: boolean;
+    /** t5o2i.2 v8zbu: the close returns but the watcher's EXIT is held until the test calls `end()` - the
+     *  deterministic way to have a transition genuinely in flight with only its death unproven. */
+    holdStatus?: boolean;
     onKill?: () => void;
     onClose?: () => Promise<void>;
   } = {},
@@ -168,7 +171,7 @@ function fakeWatcher(
     stdin: {
       close() {
         calls.push("stdin.close");
-        if (!opts.hangs && !opts.uninterruptible) settle({ code: opts.exitCode ?? 0, signal: null });
+        if (!opts.hangs && !opts.uninterruptible && !opts.holdStatus) settle({ code: opts.exitCode ?? 0, signal: null });
         if (opts.uninterruptible) return new Promise<void>(() => {});
         return opts.onClose?.() ?? Promise.resolve();
       },
@@ -176,7 +179,7 @@ function fakeWatcher(
     kill(signo = "SIGTERM") {
       calls.push(`kill:${signo}`);
       opts.onKill?.();
-      if (!opts.uninterruptible) settle({ code: 137, signal: signo });
+      if (!opts.uninterruptible && !opts.holdStatus) settle({ code: 137, signal: signo });
     },
     end() {
       settle({ code: opts.exitCode ?? 0, signal: null });
@@ -1030,6 +1033,69 @@ Deno.test("lifeline: an unsettled stdin close alone does NOT refuse the profile 
     // CONTROL for the refusal above: this profile is still usable, so the guard did not become "always refuse".
     await awaitFiredLifelineSweep(marker);
   } finally {
+    await reap(proc);
+  }
+});
+
+Deno.test("lifeline: a same-profile launch WAITS for an in-flight DISARM and then refuses when its watcher's exit stays unproven (t5o2i.2 v8zbu/rm08r)", async () => {
+  // The reviewer's window: a disarm leaves `fired` false, so a guard keyed on `fired` skipped it entirely and let
+  // the launch run while the watcher's exit was still unproven - the 80yqb race, in the disarm window.
+  const proc = spawnLeader("/bin/sleep", ["300"]);
+  const marker = `user-data-dir=jjsz-t5o2i-disarm-race-${crypto.randomUUID()}`;
+  const calls: string[] = [];
+  try {
+    const held: { watcher?: HeldWatcher } = {};
+    const disarm = attachProcessLifeline(proc, { group: proc.pid, treeMatch: marker }, {
+      // The close returns, the watcher's EXIT is held: the transition is genuinely in flight, not merely armed.
+      spawn: () => (held.watcher = fakeWatcher(calls, { holdStatus: true })),
+      warn: () => {},
+      settleTimeoutMs: 250,
+    });
+    const inFlight = disarm();
+    assert(await until(() => calls.length >= 2, 5000), "the disarm reached its close and has not settled");
+    let verdict: "pending" | "resolved" | "rejected" = "pending";
+    // The guard must not decide while the disarm is in flight: a handful of microtasks is deterministic here (the
+    // disarm cannot settle without its timer, so there is no wall-clock race in this assertion).
+    const guard = awaitFiredLifelineSweep(marker).then(() => { verdict = "resolved"; }, () => { verdict = "rejected"; });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    assertEquals(verdict, "pending", "the guard must WAIT for the in-flight disarm, not resolve on it");
+    assert(await settlesWithin(inFlight, 8000), "the disarm settles inside its bound");
+    await guard;
+    assertEquals(verdict, "rejected", "the in-flight disarm's exit stayed unproven, so the launch is refused");
+    assertEquals(lifelineState(proc)?.cleanupConfirmed, false);
+  } finally {
+    await reap(proc);
+  }
+});
+
+Deno.test("lifeline: a same-profile launch WAITS for an in-flight DISARM whose watcher then exits, and is ALLOWED (t5o2i.2 v8zbu control)", async () => {
+  const proc = spawnLeader("/bin/sleep", ["300"]);
+  const marker = `user-data-dir=jjsz-t5o2i-disarm-control-${crypto.randomUUID()}`;
+  const calls: string[] = [];
+  const held: { watcher?: HeldWatcher } = {};
+  try {
+    const disarm = attachProcessLifeline(proc, { group: proc.pid, treeMatch: marker }, {
+      spawn: () => (held.watcher = fakeWatcher(calls, { holdStatus: true })),
+      warn: () => {},
+      settleTimeoutMs: 5000, // generous: the test ends the watcher, not the bound
+    });
+    const inFlight = disarm();
+    assert(await until(() => calls.length >= 2, 5000), "the disarm reached its close and has not settled");
+    let verdict: "pending" | "resolved" | "rejected" = "pending";
+    const guard = awaitFiredLifelineSweep(marker).then(() => { verdict = "resolved"; }, () => { verdict = "rejected"; });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    assertEquals(verdict, "pending", "the guard waits for the disarm rather than deciding on a live transition");
+    held.watcher!.end(); // the watcher exits: its death is proven, so the cleanup is CONFIRMED
+    assert(await settlesWithin(inFlight, 8000), "the disarm settles once its watcher exits");
+    await guard;
+    assertEquals(verdict, "resolved", "a confirmed disarm lets the same-profile launch proceed");
+    assertEquals(lifelineState(proc)?.cleanupConfirmed, true);
+  } finally {
+    held.watcher?.end();
     await reap(proc);
   }
 });

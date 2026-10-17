@@ -281,13 +281,21 @@ const profileSweeps = new Map<string, Set<ProfileSweep>>();
  * SIGKILL), the sweep is honestly UNCONFIRMED rather than a clean settle: it may still signal the
  * profile when it is finally scheduled, so a browser launched here could be killed by it. That is the
  * one case that refuses, and the error names the profile and the one next action.
+ *
+ * It waits for ANY transition out of `armed` - a fired sweep AND a disarm in flight (v8zbu/rm08r). The
+ * filter keys on `settled`, not on `fired`: a disarm leaves `fired` false, and while it is in flight its
+ * watcher's exit is unproven, so skipping it let a same-profile launch run straight past the very
+ * quarantine this guard exists for. A merely ARMED lifeline has `settled === null` and is still never
+ * awaited (the leader is alive; there is nothing to wait for).
  */
 export async function awaitFiredLifelineSweep(treeMatch: string): Promise<void> {
   // Give an already-resolved leader.status reaction a checkpoint to mark its
   // sweep before the new launch checks the registry. Never await a live leader.
   await Promise.resolve();
   const pending = [...(profileSweeps.get(treeMatch) ?? [])]
-    .filter((entry) => entry.fired && entry.settled !== null)
+    // `settled !== null` means that lifeline has LEFT `armed` (fired, or disarming) - awaiting a disarm is
+    // the point: it may end UNCONFIRMED, which the re-read below turns into a refusal.
+    .filter((entry) => entry.settled !== null)
     .map((entry) => entry.settled!);
   await Promise.all(pending);
   // Re-read AFTER the wait: a sweep that was in flight above can be the one that turns unconfirmed.
