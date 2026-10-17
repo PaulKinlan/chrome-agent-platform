@@ -42,10 +42,19 @@ export const QUARANTINE_PREFIX = ".lock-quarantine-";
  *  different boot" (chrome-agent-platform-k4kve). */
 export const UNKNOWN_BOOT = "unknown-boot";
 
+/** A boot value in its COMPARABLE form: surrounding whitespace is not identity, and a value that is
+ *  only whitespace says nothing at all. Both the classification and the fence compare use this, so a
+ *  padded recording of the same boot can never be read as a different one (chrome-agent-platform-
+ *  xgcek: the raw compare stole a live lock for a holder boot of " 1759800000 "). */
+export function comparableBoot(value) {
+  return typeof value === "string" ? value.trim() : value;
+}
+
 /** True only for a boot value that can carry a comparison: a non-empty string that is not the
  *  sentinel. Both sides must pass this before the boot fence may fire. */
 export function isKnownBoot(value) {
-  return typeof value === "string" && value.length > 0 && value !== UNKNOWN_BOOT;
+  const boot = comparableBoot(value);
+  return typeof boot === "string" && boot.length > 0 && boot !== UNKNOWN_BOOT;
 }
 
 export function machineBootId(read = defaultProcRead) {
@@ -241,7 +250,12 @@ export async function holderIsDead(holder, deps = {}) {
   // the sibling's fresh version, the exact damage this file's header documents
   // (chrome-agent-platform-k4kve). This is the same shape as the start compare below, which also
   // requires both sides.
-  if (isKnownBoot(holder.boot) && isKnownBoot(bootId) && holder.boot !== bootId) return true;
+  // xgcek: compared in comparableBoot form on BOTH sides, so a padded recording of the same boot is
+  // not read as a different one (the raw compare stole a live lock for a holder boot of " 1759800000 ").
+  if (
+    isKnownBoot(holder.boot) && isKnownBoot(bootId) &&
+    comparableBoot(holder.boot) !== comparableBoot(bootId)
+  ) return true;
 
   let killError = null;
   try {
