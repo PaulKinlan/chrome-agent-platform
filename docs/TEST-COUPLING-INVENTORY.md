@@ -530,10 +530,11 @@ the literal.
   outside the 19 names the discipline test lists; an imported helper that fans out with
   `Promise.all` internally; a fatal raised from an exit handler after the record call; and a
   new script that bare-kills a launched leader and then exits or relaunches: the reap pins are
-  per-site, not a rule (`chrome-agent-platform-6efbv`; the structural fix is `80yqb`: make
-  `launchChrome` wait for an in-flight sweep on its own profile, which removes the class for every
-  caller). The injection script was the fourth known way to get that wrong, and it was found by a
-  reader, not a gate.
+  per-site for supervisor residue (`chrome-agent-platform-6efbv`). `80yqb` makes
+  `launchChrome` wait for a fired in-process sweep on its own profile, preventing same-process
+  relaunch kills; cross-process/parent-death relaunch is still exposed (`chrome-agent-platform-6n41t`).
+  The injection script was the fourth known way to get that wrong, and it was found by a reader,
+  not a gate.
 
 ## 23. tests/parallel-schedule.test.ts — weighted-file and tier watcher (chrome-agent-platform-hj6du)
 

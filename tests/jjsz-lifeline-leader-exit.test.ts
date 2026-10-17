@@ -27,10 +27,12 @@ import { assert, assertEquals, assertRejects, assertStrictEquals, assertThrows }
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import {
   attachProcessLifeline,
+  awaitFiredLifelineSweep,
   isolatedProcessGroup,
   killProcessTree,
   lifelineState,
   type LifelineWatcher,
+  type LifelineSpawnSpec,
   liveGroupMembers,
   type ProcessTableDeps,
   processGroup,
@@ -241,6 +243,19 @@ const DETACHED_HELPER_BROWSER = [
   "",
 ].join("\n");
 
+function heldProfileWatcher(release: string) {
+  return (spec: LifelineSpawnSpec): LifelineWatcher => {
+    const script = spec.args.at(-1)!;
+    const needle = "sleep 0.1; ";
+    assertEquals(script.split(needle).length, 2, "the held sweep replaces the REAL group-kill pause exactly once");
+    const held = script.replace(needle, 'while [ ! -f "$CAP_80YQB_RELEASE" ]; do sleep 0.02; done; ');
+    return new Deno.Command(spec.command, {
+      args: [...spec.args.slice(0, -1), held], stdin: "piped", stdout: "null", stderr: "null",
+      clearEnv: true, env: { ...spec.env, CAP_80YQB_RELEASE: release },
+    }).spawn();
+  };
+}
+
 function fixture(topic: string, script: string = FAKE_BROWSER) {
   const root = Deno.makeTempDirSync({ dir: durableDir("scratch"), prefix: `jjsz-${topic}-` });
   const fake = `${root}/fake-browser`;
@@ -338,6 +353,68 @@ Deno.test("lifeline: launchChrome hands the sweep the PROFILE marker — a helpe
     }
     await cleanupSteps([
       () => teardownChrome(null, profile),
+      () => Deno.removeSync(root, { recursive: true }),
+    ]);
+  }
+});
+
+Deno.test("80yqb: bare leader kill then same-profile launch waits for the old sweep, preserving the second browser and reaping detached helpers", async () => {
+  const script = DETACHED_HELPER_BROWSER.replace(
+    "#!/bin/bash",
+    '#!/bin/bash\nif [ -n "$CAP_80YQB_STARTED" ]; then echo started > "$CAP_80YQB_STARTED"; fi',
+  );
+  const { root, fake, profile, lockPath } = fixture("80yqb-relaunch", script);
+  const release = `${root}/release-sweep`;
+  const marker = `${root}/second-started`;
+  let first: LaunchedChrome | undefined;
+  let second: LaunchedChrome | undefined;
+  let secondLaunch: Promise<LaunchedChrome> | undefined;
+  try {
+    first = await launchChrome({
+      binary: fake, profile, lockPath, timeoutMs: 8000,
+      lifeline: { spawn: heldProfileWatcher(release), sweepTimeoutMs: 10_000 },
+    });
+    const firstGroup = first.processGroup;
+    assert(firstGroup !== undefined, "the first browser leads a verified isolated group");
+    const detached = `^detached .*user-data-dir=${profile}`;
+    assert(await untilCarriers(detached, 1), "the first browser's detached, profile-carrying helper exists");
+    const oldHelper = Number((await survivors(detached))[0]);
+    assert(!liveGroupMembers(firstGroup).includes(oldHelper), "only the profile sweep can reap this helper");
+    assert(await settlesWithin(awaitFiredLifelineSweep(`user-data-dir=${profile}`), 200),
+      "an ARMED lifeline cannot delay a new launch for its entire lifetime");
+
+    first.proc.kill("SIGKILL");
+    await first.proc.status; // no reapLeaderAndSettle: this is the unpinned caller shape
+    assertEquals(lifelineState(first.proc)?.state, "fired");
+    assert(!(await settlesWithin(awaitFiredLifelineSweep(`user-data-dir=${profile}`), 150)),
+      "the old profile sweep is held and registered as in flight");
+    assert(await settlesWithin(awaitFiredLifelineSweep(`user-data-dir=${root}/other-profile`), 150),
+      "an unrelated profile cannot be blocked by this sweep");
+    secondLaunch = launchChrome({
+      binary: fake, profile, lockPath: `${root}/second-scope`, timeoutMs: 8000,
+      env: { CAP_80YQB_STARTED: marker },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    assertEquals(await Deno.stat(marker).then(() => true, () => false), false,
+      "the second Chrome must not spawn until the old profile pkill has completed");
+
+    Deno.writeTextFileSync(release, "go");
+    await transitionSettled(first.proc);
+    second = await secondLaunch;
+    assertEquals(await Deno.readTextFile(marker), "started\n", "the new browser starts after the sweep");
+    assert(await until(() => liveGroupMembers(firstGroup).length === 0), "the first browser's group is reaped");
+    assert(await until(() => {
+      const entry = processGroup(oldHelper);
+      return entry === null || entry.state === "Z";
+    }), "the old detached helper is reaped by the unchanged profile sweep");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert(processGroup(second.proc.pid)?.state !== "Z", "the second browser survives the old sweep");
+  } finally {
+    Deno.writeTextFileSync(release, "go");
+    if (secondLaunch && !second) second = await secondLaunch.catch(() => undefined);
+    await cleanupSteps([
+      () => second ? teardownChrome(second) : undefined,
+      () => first ? teardownChrome(first) : undefined,
       () => Deno.removeSync(root, { recursive: true }),
     ]);
   }
