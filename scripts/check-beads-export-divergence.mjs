@@ -5,7 +5,10 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
 function command(name, args) {
-  const result = spawnSync(name, args, { encoding: "utf8", timeout: 30_000, maxBuffer: 16 * 1024 * 1024 });
+  // .beads/issues.jsonl outgrew 16 MiB on origin/main (16,826,463 bytes at 4ffb6d48), so `git show HEAD:` of
+  // it hit ENOBUFS and the pre-commit hook refused EVERY commit from that base, on every lane. 64 MiB is the
+  // ceiling scripts/beads-landing-link.mjs already uses (chrome-agent-platform-7unpg tracks the real fix).
+  const result = spawnSync(name, args, { encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 });
   if (result.error || result.status !== 0) {
     throw new Error(`${name} ${args.join(" ")} failed: ${result.error?.message ?? result.stderr?.trim() ?? `exit ${result.status}`}`);
   }
