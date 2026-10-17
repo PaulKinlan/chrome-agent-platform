@@ -724,6 +724,18 @@ export async function observeDescendants(rootPid, observed = new Map(), deps = {
   return observed;
 }
 
+/** Chrome-agent-platform-qo3u8 (a): how many times the FINAL residue identity read is attempted
+ *  before an unreadable observation is declared unverified, and the pause between attempts.
+ *
+ *  DECISION (owner: this bead, 2026-10-17): retry, and keep the fail-closed verdict. A transient `ps`
+ *  failure — spawn EAGAIN, a momentarily unreadable table — is not evidence that a descendant is still
+ *  alive, so paying ~200 ms to ask again is strictly more informative than failing a security-suite run
+ *  on one hiccup. It does not weaken the fail-closed direction: if every attempt is unreadable the run
+ *  still exits 70 with the same named `observation-unverified` reason, and a `gone` VERDICT is never
+ *  retried (it is an answer, not a failure). */
+export const RESIDUE_READ_ATTEMPTS = 3;
+export const RESIDUE_READ_RETRY_MS = 100;
+
 /**
  * The observed descendants that are still live: same pid, starttime and uid, and not a zombie.
  *
@@ -731,32 +743,57 @@ export async function observeDescendants(rootPid, observed = new Map(), deps = {
  * and raw ENOENT from a vanished /proc entry are clean; EMFILE/EACCES or an unreadable `ps` are
  * unverified residue, with a bounded reason. A failed observation never proves the pid exited.
  *
+ * An UNREADABLE read is retried a bounded number of times first (chrome-agent-platform-qo3u8 (a), see
+ * RESIDUE_READ_ATTEMPTS): the first read used to decide the verdict on its own, so one transient `ps`
+ * failure failed the whole run. `sleep`, `attempts` and `retryMs` are seams for the test.
+ *
  * `readIdentity(pid)` is a test seam; legacy `hasProc` callers remain accepted but
  * the gone/unreadable rule no longer varies by platform.
  *
  * @param {Map<number, any>} observed
- * @param {{readIdentity?: (pid: number) => Promise<any>, hasProc?: boolean}} [deps]
+ * @param {{readIdentity?: (pid: number) => Promise<any>, hasProc?: boolean, sleep?: (ms: number) => Promise<void>, attempts?: number, retryMs?: number}} [deps]
  */
 export async function liveObservedResidue(observed, deps = {}) {
-  const { readIdentity = readProcIdentity } = deps;
+  const {
+    readIdentity = readProcIdentity,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    attempts = RESIDUE_READ_ATTEMPTS,
+    retryMs = RESIDUE_READ_RETRY_MS,
+  } = deps;
   const residue = [];
   for (const expected of observed.values()) {
-    try {
-      const current = await readIdentity(expected.pid);
-      if (
-        current.starttime === expected.starttime &&
-        current.uid === expected.uid &&
-        current.state !== "Z"
-      ) residue.push(current);
-    } catch (error) {
-      // Gone is clean.
-      if (error instanceof ProcessGoneError || isVanishedProcError(error, expected.pid)) continue;
+    let current = null;
+    let unreadable = null;
+    for (let attempt = 1; attempt <= Math.max(1, attempts); attempt++) {
+      try {
+        current = await readIdentity(expected.pid);
+        unreadable = null;
+        break;
+      } catch (error) {
+        // Gone is clean, and it is a VERDICT: re-asking a proven absence would only repeat it.
+        if (error instanceof ProcessGoneError || isVanishedProcError(error, expected.pid)) {
+          current = null;
+          unreadable = null;
+          break;
+        }
+        unreadable = error;
+        if (attempt < attempts) await sleep(retryMs);
+      }
+    }
+    if (unreadable) {
       residue.push({
         ...expected,
         unverified: true,
-        unverifiedReason: String(error?.message ?? error).slice(0, 200),
+        unverifiedReason: String(unreadable?.message ?? unreadable).slice(0, 200),
       });
+      continue;
     }
+    if (
+      current &&
+      current.starttime === expected.starttime &&
+      current.uid === expected.uid &&
+      current.state !== "Z"
+    ) residue.push(current);
   }
   return residue;
 }

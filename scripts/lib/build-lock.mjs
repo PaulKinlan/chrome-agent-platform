@@ -213,6 +213,29 @@ export function buildOwnerIdentity(pid = process.pid, boot = machineBootId(), de
   };
 }
 
+/** Start values that can be COMPARED at all (chrome-agent-platform-qo3u8 (b)).
+ *
+ *  Two writers exist and both are canonical: Linux records `/proc/<pid>/stat` field 22 (all digits),
+ *  and the macOS branch records `ps -o lstart=` under PS_ENV, which is `Www Mmm d hh:mm:ss yyyy`.
+ *  A build-lock owner recorded by a build that PREDATES that pinned environment holds the inherited
+ *  locale's text instead — measured shapes include `Wed  7 Oct 12:10:01 2026` (en_GB) and
+ *  `Mer  7 oct 12:10:01 2026` (fr_FR) — and the canonical reader cannot compare it to anything.
+ *
+ *  DECISION (owner: chrome-agent-platform-qo3u8, 2026-10-17): such a value is UNKNOWN, not DIFFERENT,
+ *  so the holder stays alive and the lock is not stolen. Reading it as "a different process" let the
+ *  first contender after an upgrade steal a LIVE build's lock exactly once — the damage this file's
+ *  header documents — and "cannot prove reuse" is already the rule applied to `start: null`.
+ *
+ *  @returns {string|null} the value when it is comparable, else null.
+ */
+export function comparableStart(start) {
+  const value = start === undefined || start === null ? "" : String(start).trim();
+  if (!value) return null;
+  if (/^\d+$/u.test(value)) return value; // Linux tick counter
+  if (/^[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/u.test(value)) return value; // PS_ENV lstart
+  return null;
+}
+
 /**
  * Decide whether the lock's recorded holder is dead, i.e. whether the lock is stealable.
  *
@@ -302,7 +325,13 @@ export async function holderIsDead(holder, deps = {}) {
   // treated as "cannot prove reuse" and the holder stays alive: the first draft recorded the truthy string
   // "0" on a failed read, which mismatched every later read and made a LIVE build's lock stealable
   // (chrome-agent-platform-jjsz).
-  if (holder.start && resolved.start && String(resolved.start) !== String(holder.start)) return true;
+  // qo3u8 (b): compare ONLY values that are in a canonical, comparable form. A recorded start from
+  // before the PS_ENV pin (or any other text we cannot place) is UNKNOWN, so it cannot prove reuse and
+  // the holder stays ALIVE — the one-time steal at an upgrade is removed. The Linux (`/proc` ticks) and
+  // canonical `ps` forms still compare exactly as before.
+  const recordedStart = comparableStart(holder.start);
+  const observedStart = comparableStart(resolved.start);
+  if (recordedStart && observedStart && recordedStart !== observedStart) return true;
 
   return false;
 }
