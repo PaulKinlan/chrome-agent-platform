@@ -30,7 +30,7 @@
 import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
-import { execSync } from "child_process";
+import { execSync, execFileSync } from "child_process";
 // ONE source of truth for what counts as a user-facing bullet. This file used to
 // carry its own copy of the six filter regexes plus isUserFacingEntry, justified
 // as "so the standalone script functions in scratch temporary test mirrors". The
@@ -81,11 +81,69 @@ const argv = process.argv.slice(2);
 const type = argv.find((a) => !a.startsWith("-")) || "patch";
 const mi = argv.findIndex((a) => a === "--message" || a === "-m");
 const message = mi >= 0 ? argv[mi + 1] : null;
-const uni = argv.findIndex((a) => a === "--user-note" || a === "--note");
-const userNote = uni >= 0 ? argv[uni + 1] : null;
-const skipIfNoNote = argv.includes("--skip-if-no-note") || argv.includes("--hook");
+const landingMode = argv.includes("--landing");
 const hookMode = argv.includes("--hook");
-// Explicit merger-only repair: after a union leaves the surfaces one patch ahead
+if (landingMode && hookMode) {
+  console.error("[bump-version] ERROR: --landing cannot be combined with --hook");
+  process.exit(1);
+}
+const notes = [];
+const candidates = [];
+const internalRefs = [];
+function commitSha(value, flag) {
+  if (!landingMode || !value || !/^[a-f0-9]{7,64}$/i.test(value)) {
+    console.error(`[bump-version] ERROR: ${flag} requires --landing and a commit SHA`);
+    process.exit(1);
+  }
+  try {
+    return execFileSync("git", ["rev-parse", "--verify", `${value}^{commit}`], {
+      cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    console.error(`[bump-version] ERROR: cannot resolve ${flag} commit ${value}`);
+    process.exit(1);
+  }
+}
+for (let i = 0; i < argv.length; i++) {
+  if (argv[i] === "--user-note" || argv[i] === "--note") notes.push(argv[++i]);
+  if (argv[i] === "--internal") internalRefs.push(commitSha(argv[++i], "--internal"));
+  if (argv[i] === "--from") {
+    const sha = commitSha(argv[++i], "--from");
+    const body = execFileSync("git", ["show", "-s", "--format=%B", sha], { cwd: ROOT, encoding: "utf8" });
+    const trailers = [...body.matchAll(/^Release-note:\s*(.*)$/gim)].map((match) => match[1]);
+    candidates.push({ sha, trailers });
+    notes.push(...trailers);
+  }
+}
+if (landingMode) {
+  const internal = new Set(internalRefs);
+  const seen = new Set();
+  for (const { sha, trailers } of candidates) {
+    if (seen.has(sha)) {
+      console.error(`[bump-version] ERROR: duplicate landing candidate ${sha}`);
+      process.exit(1);
+    }
+    seen.add(sha);
+    if (!trailers.length && !internal.has(sha)) {
+      console.error(`[bump-version] ERROR: candidate ${sha} has no Release-note trailer; pass --internal ${sha} explicitly if it is internal-only`);
+      process.exit(1);
+    }
+    if (trailers.length && internal.has(sha)) {
+      console.error(`[bump-version] ERROR: candidate ${sha} has a Release-note trailer and cannot be declared --internal`);
+      process.exit(1);
+    }
+    console.error(`[bump-version] landing candidate ${sha}: ${trailers.length ? `${trailers.length} note(s)` : "explicitly internal (no release note)"}`);
+  }
+  for (const sha of internal) {
+    if (!seen.has(sha)) {
+      console.error(`[bump-version] ERROR: --internal ${sha} is not a --from candidate`);
+      process.exit(1);
+    }
+  }
+}
+const userNote = notes[0] ?? null;
+const skipIfNoNote = argv.includes("--skip-if-no-note") || hookMode || landingMode;
+// Explicit merger-only repair (also available with --landing): after a union leaves the surfaces one patch ahead
 // of CHANGELOG, use the changelog as the release anchor instead of resetting
 // six files by hand. Never infer this mode during a normal author/hook bump.
 const reconcileMerge = argv.includes("--reconcile-merge");
@@ -122,6 +180,17 @@ const sanitizeEntry = (note) => String(note)
   .replace(/^(?:[+&:;,./|—–-]+(?:\s+|$))+/, "")
   .trim();
 const cleanNote = finalNote ? sanitizeEntry(finalNote) : null;
+const landingNotes = landingMode ? notes.map((note) => sanitizeEntry(note ?? "")) : [];
+// Reject the whole union before writing any surface; a self-declared internal
+// note cannot be hidden behind another branch's legitimate release note.
+if (landingMode && landingNotes.some((note) => /^none:\s*internal\b/i.test(note))) {
+  console.error("[bump-version] ERROR: none: internal cannot mint a release; omit that trailer");
+  process.exit(1);
+}
+if (landingMode && landingNotes.some((note) => !note || !isUserFacingEntry(note))) {
+  console.error("[bump-version] ERROR: landing note is empty or not user-facing");
+  process.exit(1);
+}
 
 if (cleanNote && !isUserFacingEntry(cleanNote)) {
   if (isInternalEntry(cleanNote) && /^none:\s*internal\b/i.test(cleanNote)) {
@@ -242,7 +311,8 @@ if (lock) {
 if (existsSync(changelogPath) && cleanNote) {
   const date = new Date().toISOString().slice(0, 10);
   const existing = readFileSync(changelogPath, "utf-8");
-  const entry = `\n## [${next}] — ${date}\n- ${cleanNote}\n`;
+  const bullets = landingMode ? [...new Set(landingNotes)] : [cleanNote];
+  const entry = `\n## [${next}] — ${date}\n${bullets.map((note) => `- ${note}\n`).join("")}`;
   const updated = existing.replace(/(#[^\n]*\n)/, `$1${entry}`);
   writeFileSync(changelogPath, updated);
 }
@@ -262,9 +332,11 @@ if (existsSync(inventoryPath)) {
     writeFileSync(inventoryPath, updatedInv);
     // Stage it so the post-commit hook's `git commit --amend` bundles the resynced
     // inventory (the hook's explicit `git add` list does not include it). Best-effort.
-    try {
-      execSync("git add extension/lib/bundled-inventory-data.js", { cwd: ROOT, stdio: "ignore" });
-    } catch { /* not a git repo / git unavailable — the file is still written */ }
+    if (hookMode) {
+      try {
+        execSync("git add extension/lib/bundled-inventory-data.js", { cwd: ROOT, stdio: "ignore" });
+      } catch { /* not a git repo / git unavailable — the file is still written */ }
+    }
   }
 }
 
@@ -281,9 +353,11 @@ if (existsSync(aboutGenPath)) {
   try {
     const { syncAboutPage } = await import("./generate-about-page.mjs");
     await syncAboutPage({ check: false });
-    try {
-      execSync("git add extension/about/about.html", { cwd: ROOT, stdio: "ignore" });
-    } catch { /* best-effort staging */ }
+    if (hookMode) {
+      try {
+        execSync("git add extension/about/about.html", { cwd: ROOT, stdio: "ignore" });
+      } catch { /* best-effort staging */ }
+    }
   } catch (err) {
     console.warn(`[bump-version] Warning: failed to sync about page: ${err?.message || err}`);
   }

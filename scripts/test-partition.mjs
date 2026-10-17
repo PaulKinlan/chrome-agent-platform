@@ -180,6 +180,10 @@ export const SERIAL_FILE_TIMEOUTS = Object.freeze({
 // does not apply; the guard test pins the reason. Keep this list tiny —
 // membership is a review-time decision, never a default.
 export const EXEMPTIONS = {
+  // uikt5: every git commit and release-stamp write occurs in a unique mkdtemp
+  // scratch repository, deleted in finally. The checkout is only read for
+  // source copies; no production or shared build artifact is mutated.
+  "tests/post-commit-hook.test.ts": "writes extension/manifest.json and version surfaces only inside a unique mkdtemp scratch git repository removed in finally; reads tracked hook/stamper sources without touching the shared checkout",
   // uvtk4: the fixture first creates a unique temporary-directory root, and
   // all writes to extension/ and version files use paths joined under it. The
   // checkout is only read for source copies; no shared build artifact changes.
@@ -664,6 +668,28 @@ export function classifyHazards(text) {
  * `entries` are [repoRelativePath, content] pairs; the result is the hazard files that would run in
  * the PARALLEL phase, so an empty result is the safe answer.
  */
+// uikt5: this exemption is for ONE isolated scratch-git fixture, not every
+// writer that happens to live in this test file. Assert the scratch root and
+// cleanup at their actual sites, then inspect every write/copy call destination.
+// A future write to the real checkout must revoke the exemption automatically.
+function isolatedLandingFixture(text) {
+  const code = stripComments(text);
+  if (!/const dir = await mkdtemp\(path\.join\(tmpdir\(\), "cap-landing-stamp-"\)\)/.test(code) ||
+      !/const hook = path\.join\(dir, "\.git\/hooks\/post-commit"\)/.test(code) ||
+      !/finally\s*\{\s*await rm\(dir, \{ recursive: true, force: true \}\)/.test(code)) return false;
+  for (const match of code.matchAll(WRITE_CALL_RE)) {
+    const name = match[0].slice(0, -1).trim();
+    const args = getCallArgs(code, match.index + match[0].length).trim();
+    if (name === "copyFile") {
+      if (!/^path\.join\(ROOT, rel\), path\.join\(dir, rel\)$/.test(args) &&
+          !/^path\.join\(ROOT, "scripts\/git-hooks\/post-commit"\), hook$/.test(args)) return false;
+    } else if (!/^(?:path\.join\(dir,\s*[^)]*\)|dir|hook)\s*(?:,|$)/.test(args)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function unserialisedHazards(entries) {
   const violations = [];
   for (const [rel, text] of entries) {
@@ -709,7 +735,8 @@ export function unserialisedHazards(entries) {
     if (!classes.length) continue; // safe → defaults to the parallel phase
     if (SERIAL.has(rel)) continue;
     const reason = EXEMPTIONS[rel];
-    if (typeof reason === "string" && reason.trim().length > 0) continue;
+    if (typeof reason === "string" && reason.trim().length > 0 &&
+        (rel !== "tests/post-commit-hook.test.ts" || isolatedLandingFixture(text))) continue;
     violations.push(`${rel} — ${classes.join("; ")}`);
   }
   return violations;

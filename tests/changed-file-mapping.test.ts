@@ -235,13 +235,9 @@ Deno.test("nco2: classification names the mechanism, and only maps what it can j
   assert(/enumerated by the tree-walking guards/.test(harness.mechanism), harness.mechanism);
 
   const bump = classifyUncovered("package.json", { versionOnly: true });
-  assertEquals(bump.tests, [...BOOKKEEPING_GUARDS]);
-  assert(/version-only/.test(bump.mechanism), bump.mechanism);
-
-  // The SAME file with a real change is deliberately unmappable.
-  const realChange = classifyUncovered("package.json", { versionOnly: false });
-  assertEquals(realChange.tests, [], "a non-version package.json change must fail closed");
-  assert(/NON-version/.test(realChange.mechanism), realChange.mechanism);
+  assertEquals(bump.tests, [], "even version-only JSON must fail closed on a lane");
+  assert(/belongs to the merger/.test(bump.mechanism), bump.mechanism);
+  assertEquals(classifyUncovered("package.json", { versionOnly: false }).tests, []);
 
   const unknown = classifyUncovered("some/unknown-thing.json");
   assertEquals(unknown.tests, [], "an unrecognised file still fails closed");
@@ -311,8 +307,8 @@ Deno.test("nco2: mapUncovered splits mapped from unmappable and carries the reas
     declaredGuardExists,
     () => true,
   );
-  assertEquals(mapped.map((m) => m.file).sort(), ["package.json", "scripts/a11y-audit.ts"]);
-  assertEquals(unmappable.map((u) => u.file).sort(), ["extension/manifest.json", "some/unknown-thing.json"]);
+  assertEquals(mapped.map((m) => m.file), ["scripts/a11y-audit.ts"]);
+  assertEquals(unmappable.map((u) => u.file).sort(), ["extension/manifest.json", "package.json", "some/unknown-thing.json"]);
   for (const entry of [...mapped, ...unmappable]) {
     assert(entry.mechanism && entry.mechanism.length > 10, `every entry names its mechanism: ${entry.file}`);
   }

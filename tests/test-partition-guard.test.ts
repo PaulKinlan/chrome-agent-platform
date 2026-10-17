@@ -89,6 +89,35 @@ Deno.test("partition guard: every build-artifact hazard test is serial (or revie
   );
 });
 
+Deno.test("uikt5: scratch-fixture exemption rejects a real shared writer and a moved root, not prose", async () => {
+  const rel = "tests/post-commit-hook.test.ts";
+  const source = await Deno.readTextFile(`${ROOT}${rel}`);
+  assertEquals(unserialisedHazards([[rel, source]]), [], "the actual fixture is isolated");
+  const shared = ["extension", "dist", "unsafe.js"].join("/");
+  const writer = `await writeFile(path.join(ROOT, ${JSON.stringify(shared)}), "bad");`;
+  const prose = `${source}\n// ${writer}\n`;
+  assertEquals(unserialisedHazards([[rel, prose]]), [], "a comment is not an executable write");
+  const injected = source.replace(
+    'await writeFile(path.join(dir, "extension/CHANGELOG.md"), changelog);',
+    `await writeFile(path.join(dir, "extension/CHANGELOG.md"), changelog);\n  ${writer}`,
+  );
+  assert(injected !== source, "mutation inserted at the real fixture write site");
+  assertStringIncludes(unserialisedHazards([[rel, injected]]).join("; "), rel,
+    "a real checkout writer must revoke this file-specific exemption");
+  const moved = source.replace(
+    'const dir = await mkdtemp(path.join(tmpdir(), "cap-landing-stamp-"));',
+    `const dir = path.join(ROOT, ${JSON.stringify(["extension", "dist", "shared"].join("/"))});`,
+  );
+  assert(moved !== source, "mutation moved the real scratch root");
+  assertStringIncludes(unserialisedHazards([[rel, moved]]).join("; "), rel,
+    "an unsafe root must revoke the exemption even if call sites look unchanged");
+  assertStringIncludes(
+    unserialisedHazards([["tests/new-shared-writer.test.ts", writer]]).join("; "),
+    "tests/new-shared-writer.test.ts",
+    "a newly added shared writer must still fail the partition guard",
+  );
+});
+
 Deno.test("partition guard: a driver reference is a LOAD or a SPAWN, never a mention (8b8w/f94p)", async () => {
   // Probe strings are ASSEMBLED at runtime so this file's own text never
   // carries a literal tests/* reference for its own inheritance scan.

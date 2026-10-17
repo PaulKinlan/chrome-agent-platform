@@ -71,15 +71,15 @@ const MAX_MARKER_BYTES = 4_096;
 
 /** chrome-agent-platform-1mz2: the marker binds HEAD, every indexed source byte
  * and the generated outputs, so ANY commit invalidates a built tree — including
- * the post-commit hook's own version bump and `git commit --amend`. A lane then
+ * `git commit --amend` or the merger's landing stamp commit. A lane then
  * meets the staleness as red serial-phase tests, and a verdict that names only
  * the marker costs a re-diagnosis every time. Both staleness verdicts carry the
  * cause and the exact fix; the pinned substrings stay at the front so every
  * existing tamper assertion still reads the same verdict. */
 const STALE_REBUILD_GUIDANCE =
   " — dist.complete binds the exact commit, every indexed source byte and the generated " +
-  "bundles, so any commit invalidates it (the post-commit hook also bumps the version and " +
-  "amends HEAD); rebuild before the gate: npm run build:production";
+  "bundles, so any commit invalidates it (including the merger's release stamp); " +
+  "rebuild before the gate: npm run build:production";
 
 function markerError(message) {
   return new Error(`dist.complete validation failed: ${message}`);

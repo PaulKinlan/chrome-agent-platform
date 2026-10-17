@@ -69,8 +69,7 @@ The copy procedure is spelled out in `.agents/skills/beads-flow/SKILL.md` §3.
    `deno install` when it detects the flat-zod/stale-store mix, but the explicit order is
    the dependable fix.
    **`extension/dist/dist.complete` binds HEAD, every indexed source byte and the generated
-   bundles: ANY commit invalidates the build — including the post-commit hook's own version
-   bump and `git commit --amend`.** Rebuild after your LAST commit, before `npm test`
+   bundles: ANY commit invalidates the build — including `git commit --amend`.** Rebuild after your LAST commit, before `npm test`
    (`npm run note:dist` says whether the build is current in ~0.2 s); otherwise the serial
    phase reds on `dist.complete` markers that are unrelated to your change (1mz2).
    Never implement directly in the primary checkout (`~/chrome-agent-platform`)
@@ -115,16 +114,18 @@ automatically; run it manually after beads-only changes).
 
 The reference hooks are tracked in `scripts/git-hooks/`: `pre-commit`
 refreshes `.beads/issues.jsonl` into the checkout being committed;
-`post-commit` bumps the version and pushes the Dolt data. Install both once,
+`post-commit` pushes the Dolt data but NEVER stamps lane commits. The merger
+runs `node scripts/bump-version.mjs patch --landing --from <candidate-sha>`
+for each user-facing candidate on the union before committing it. Install both once,
 from the primary checkout — hooks live in the common `.git/hooks`, so one
 install serves every linked worktree:
 `cp scripts/git-hooks/pre-commit scripts/git-hooks/post-commit .git/hooks/ && chmod +x .git/hooks/pre-commit .git/hooks/post-commit`.
-**The post-commit version bump is explicit and once per branch (chrome-agent-platform-8nec):**
-the commit subject is never a release note. To consume a version, put
-`Release-note: <what the user gets, in plain language>` in the commit body (or set
-`CAP_USER_NOTE` before `git commit`); without one the hook bumps nothing and writes no
-entry. A second commit on the same branch does not bump again — the branch keeps its one
-bump until it lands, and a branch behind `origin/main` waits for a rebase.
+**Release notes are explicit; stamps belong to the merger (chrome-agent-platform-uikt5):**
+the commit subject is never a release note. Put
+`Release-note: <what the user gets, in plain language>` in the commit body
+for user-facing work. No lane commit changes the version, CHANGELOG, inventory or
+About page, even with a trailer; the merger stamps once for the union. An
+internal-only commit has no trailer (never `Release-note: none: internal`).
 A hook never locates the repo via `$0` — from every worktree that is the
 primary's hook file, and the old `cd "$(dirname "$0")/../.."` wrote the export
 into the shared checkout and staged the primary's file into the worktree's
@@ -347,13 +348,10 @@ read in run 2.
        `scripts/lib/composer-target.ts` and `css-padding.ts` are COVERED, because
        a test imports them. A `.mjs` helper or anything in a subdirectory is NOT
        inspected by those guards, so it fails closed.
-     - *version-only bookkeeping JSON* — the post-commit hook rewrites
-       `package.json`, `package-lock.json` and `extension/manifest.json` on every
-       commit, and JSON has no importers. A diff confined to version fields maps
-       to the tests that read those files as data. **Only a version-only diff.**
-       A new dependency, a new script, an added permission or a weakened CSP
-       still fails closed — decided by PARSING BOTH SIDES and comparing key
-       paths, never by grepping for lines containing `"version"`.
+     - *release/version JSON* — lane commits no longer stamp `package.json`,
+       `package-lock.json` or `extension/manifest.json`. Any lane change to these
+       files (including version-only edits) fails closed to the full suite;
+       the merger owns version stamping and the full landing gate.
      - *anything else* — genuinely unmappable, still the full suite, now with the
        file named.
      The changed set is scoped to the **merge-base**, not the tip: a direct

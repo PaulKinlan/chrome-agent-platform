@@ -4,8 +4,8 @@
 //
 // `extension/dist/dist.complete` binds the exact Git commit, every indexed
 // source byte and the generated bundle bytes, so ANY commit invalidates a built
-// tree — including the post-commit hook's own version bump and
-// `git commit --amend`. Lanes met that as three red serial-phase tests whose
+// tree — including `git commit --amend` or the merger's release stamp.
+// Lanes met that as three red serial-phase tests whose
 // message named a marker rather than the cause, paying a re-diagnosis each
 // time. The post-commit hook runs this so the cause and the fix are printed
 // before the next gate run.

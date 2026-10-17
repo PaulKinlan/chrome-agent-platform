@@ -21,10 +21,10 @@ Every landing on `origin/main` must follow this procedure. A merger lane does no
      A single headline count (e.g. "4404 passed") obscures whether the serial phase ran at all and masks phase-specific environmental failures. Every landing report must state: `19 serial files + N parallel files = Total files, X passed, Y failed, Z ignored, wall time Ts`.
 
 4. **Union Changelog Reconciliation & Monotonic Numbering**
-   - *Why*: Every candidate branch generates a version bump from its commit message. Rebase collisions in `CHANGELOG.md` frequently lead careless mergers to overwrite another lane's release notes. Mergers must union-resolve changelog bodies: preserve all prior version sections, preserve all user-facing bullets, and place the new release block on top. Patch numbers in the `0.3.x` series must be strictly contiguous (no gaps, no duplicates); missing numbers fail `scripts/check-changelog.mjs`.
+   - *Why*: Candidate branches carry release notes only in commit trailers. The merger stamps one release on the union; preserve all user-facing bullets and prior changelog sections. Patch numbers in the `0.3.x` series must remain contiguous (no gaps, no duplicates); missing numbers fail `scripts/check-changelog.mjs`.
 
 5. **Renumber at Landing, Never Pre-emptively**
-   - *Why*: Lanes cannot know which branch will clear review first. Pre-emptive rebumping creates secondary collisions across in-flight lanes. Authoring lanes keep their draft version; the merger lane assigns the definitive version number at the moment of landing.
+   - *Why*: Lanes cannot know which branch will clear review first. Authoring lanes keep the last landed version, with no draft stamp; the merger assigns one definitive version on the union.
 
 6. **Real-Browser Verification ("It Serves" is not "It Works")**
    - *Why*: Passing unit tests or HTTP 200 responses do not prove UI works. A test harness can report `18/2 passed` while having crashed on line 1 without executing a single check. Where a branch touches user-visible UI, component behavior, or harness drivers, the merger must drive the actual behavior in a real browser (CDP / headless Chrome) and assert on measured geometry and state.
@@ -107,28 +107,40 @@ git checkout HEAD -- .beads/issues.jsonl
 # IDs + snapshot ref on a decision bead and use the one-commit exact-ID override
 # documented in docs/BEADS-EXPORT-DIVERGENCE.md; do not bypass all hooks.
 node scripts/check-beads-export-divergence.mjs
-#    - CHANGELOG.md: union-merge bodies, place new version at top, preserve all prior bullets
-#    - Version files: update package.json, package-lock.json, extension/manifest.json,
-#      and extension/lib/bundled-inventory-data.js to the next sequential version
-# uvtk4: for a union whose version surfaces are already one patch ahead of the
-# latest CHANGELOG heading (competing branches each bumped), leave that prior
-# heading as the anchor and run ONE explicit reconciliation instead of resetting
-# six files by hand. This adds the one union release entry and reuses its number:
-# node scripts/bump-version.mjs patch --reconcile-merge --user-note "<what the user gets>"
-# Normal bumps refuse drift; reconciliation refuses non-patch or wider drift.
-# Internal-only unions have NO release note or version bump.
+# 3a. STAMP ONCE after applying all candidates, before the landing commit.
+# Pass each candidate SHA with a Release-note trailer; the command reads trailers
+# from those commits, deduplicates their user-facing bullets and writes ONE new
+# version/changelog/About/inventory stamp on the union. Do not pass merge commits
+# or arbitrary ancestors: name only the candidate commits landing in this batch.
+node scripts/bump-version.mjs patch --landing --from <candidate-sha> [--from <next-candidate-sha> ...]
+# EVERY --from candidate must supply a Release-note trailer, or be named as
+# --internal <same-candidate-sha> explicitly if it is internal-only. A mixed
+# batch with an unnamed trailer-less candidate FAILS rather than silently
+# losing a user-facing change under another candidate's release heading.
+# If the union has an additional synthesized user-facing effect, pass
+# --user-note "<what the user gets>" explicitly. A union with only explicit
+# internal candidates mints nothing; 'Release-note: none: internal' is an
+# ERROR, not a release. For a
+# legacy union with surfaces ONE patch ahead of the latest CHANGELOG entry,
+# add --reconcile-merge to this command rather than hand-resetting six files.
+# The shared .git/hooks/post-commit dispatcher runs the tracked hook from the
+# committing worktree. Confirm the union contains the new hook before the
+# landing commit; an older worktree can still amend/stamp commits.
 
 # 4. Sync changelog and verify order/vocabulary
 npm run sync:changelog
 npm run check:changelog
 npm run check:changelog-order
 npm run check:vocabulary
-npm run check:changelog-ledger   # owed-changelog ledger (xe11): product commits since
-                              # the newest entry with no release entry FAIL here
+# The ledger reads committed HEAD, so run it AFTER step 5 as well; step 4
+# alone cannot certify the new release stamp. The full landing gate enforces
+# the committed union ledger; lane tests defer owed entries by git ancestry,
+# never by a worktree's branch name.
 
-# 5. Commit with appropriate subject (avoiding post-commit double-bump)
-git add CHANGELOG.md package.json package-lock.json extension/manifest.json extension/lib/bundled-inventory-data.js ...
+# 5. Commit the union stamp with an appropriate subject (no hook bump)
+git add CHANGELOG.md extension/CHANGELOG.md package.json package-lock.json extension/manifest.json extension/lib/bundled-inventory-data.js extension/about/about.html ...
 git commit -m "chrome-agent-platform-<bead>: <summary of user-visible change>"
+npm run check:changelog-ledger   # checks the committed release against product commits
 
 # 6. Rebuild production store bundle (mandatory after commit)
 npm run build:production
