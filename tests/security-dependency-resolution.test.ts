@@ -70,6 +70,28 @@ function preBundleGuardProblems(source) {
   if (esbuildImports.length !== 1 || nodes.some((node) => shadowsName(node, "build"))) {
     problems.push("build() must name the unshadowed esbuild import");
   }
+  // The bundle scan below recognizes direct build() calls only. Keep the
+  // esbuild binding surface closed, so buildSync/context/namespace imports or
+  // a future bundling API cannot start work before the live guard unseen.
+  const esbuildDeclarations = program.body.filter((node) =>
+    node.type === "ImportDeclaration" && node.source.value === "esbuild");
+  const esbuildSpecifiers = esbuildDeclarations.length === 1 ? esbuildDeclarations[0].specifiers : [];
+  const esbuildNames = esbuildSpecifiers.map((spec) => spec.type === "ImportSpecifier"
+    ? `${spec.imported.name}:${spec.local.name}` : "<default-or-namespace>").sort();
+  if (esbuildDeclarations.length !== 1 || esbuildNames.join(",") !== "build:build,transform:transform") {
+    problems.push("the esbuild import surface must be exactly { build, transform }");
+  }
+  // createRequire is used for unrelated dependency checks in this file; only
+  // esbuild's specifier outside its one static import is prohibited.
+  if (nodes.some((node) => node.type === "Literal" && node.value === "esbuild" &&
+    !esbuildDeclarations.some((declaration) => declaration.source === node))) {
+    problems.push("esbuild cannot be loaded outside its static import");
+  }
+  if (nodes.some((node) => isName(node, "build") &&
+    !esbuildSpecifiers.some((spec) => spec.imported === node || spec.local === node) &&
+    !(parents.get(node)?.type === "CallExpression" && parents.get(node).callee === node))) {
+    problems.push("build must be called directly, never aliased or passed elsewhere");
+  }
 
   const calls = nodes.filter((node) => isCall(node, GUARD));
   if (calls.length !== 1) problems.push(`expected exactly one live guard call, found ${calls.length}`);
@@ -161,6 +183,23 @@ Deno.test("bbz3s: comment, conditional, late and swallowed-check mutants cannot 
     ["esbuild import replaced by local fake", replaceOnce(source,
       'import { build, transform } from "esbuild";',
       'import { transform } from "esbuild"; const build = () => ({})'), "unshadowed esbuild import"],
+    ["buildSync imported and called before guard", replaceOnce(replaceOnce(source,
+      'import { build, transform } from "esbuild";',
+      'import { build, buildSync, transform } from "esbuild";'), line,
+      `    buildSync({ entryPoints: ["decoy.js"], outfile: "decoy.js" });\n${line}`), "esbuild import surface"],
+    ["context imported and called before guard", replaceOnce(replaceOnce(source,
+      'import { build, transform } from "esbuild";',
+      'import { build, context, transform } from "esbuild";'), line,
+      `    await context({ entryPoints: ["decoy.js"], outfile: "decoy.js" });\n${line}`), "esbuild import surface"],
+    ["namespace import hides a bundle call", replaceOnce(source,
+      'import { build, transform } from "esbuild";',
+      'import { build, transform } from "esbuild"; import * as esbuild from "esbuild";'), "esbuild import surface"],
+    ["require reaches another esbuild binding", replaceOnce(source, line,
+      `    const decoy = createRequire(import.meta.url)("esbuild");\n${line}`), "esbuild cannot be loaded outside"],
+    ["dynamic import reaches another esbuild binding", replaceOnce(source, line,
+      `    const decoy = await import("esbuild");\n${line}`), "esbuild cannot be loaded outside"],
+    ["build alias evades the bundle scan", replaceOnce(source, line,
+      `    const bundledEarly = build; bundledEarly({ entryPoints: ["decoy.js"] });\n${line}`), "build must be called directly"],
   ];
   for (const [name, mutant, expected] of mutants) {
     assert(mutant !== source, `${name} must change the real source`);
@@ -170,6 +209,8 @@ Deno.test("bbz3s: comment, conditional, late and swallowed-check mutants cannot 
   // plugin but still before the real bundle fan-out remains a valid order.
   const reordered = replaceOnce(replaceOnce(source, line, ""), "    const shared = {", `${line}\n    const shared = {`);
   assertEquals(preBundleGuardProblems(reordered), [], "an unconditional check need not precede plugin definition");
+  const nonBundling = replaceOnce(source, line, `    await transform("1", { loader: "js" });\n${line}`);
+  assertEquals(preBundleGuardProblems(nonBundling), [], "a non-bundling transform before the guard is allowed");
   assertEquals(Deno.readTextFileSync(BUILD_SOURCE), source, "mutations stay in memory: build.mjs is byte-identical");
 });
 
