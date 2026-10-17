@@ -41,6 +41,10 @@
 //     tests/build-smoke.test.ts (serial), tests/dist-complete-source-authority.test.ts and
 //     tests/bundled-tool-packages.test.ts (post-build read-only) inside `npm test`.
 //
+// THE EVERYTHING-GATE STILL RUNS IT. `npm run test:all` invokes the tier as
+// `CAP_BUILD_TIER=force npm run test:build`, so the aggregate/nightly line — the "Nightly" half of the
+// proposal's "Selective & Nightly" — never inherits the skip. tests/build-tier-inputs.test.ts pins that.
+//
 // FAIL-CLOSED DIRECTION. Every unknown returns "run": no digests, no durable root, no record, a
 // record for a different key, an unreadable record, or an explicit request (`npm run test:build
 // tests/x.test.ts`, `CAP_BUILD_TIER=force`) => the tier runs. There is NO environment variable that

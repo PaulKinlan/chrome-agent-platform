@@ -328,6 +328,13 @@ export const EXEMPTIONS = {
   // are fixture strings in temp dirs, never repo paths — and the ledger's CLI runs
   // with --repo pointing at the fixture, never at the checkout.
   "tests/owed-changelog-ledger.test.ts": "writes extension/* paths only inside its own makeTempDir git fixtures (with --repo pinned to the fixture); the repo tree is read, never written",
+  // 6gk81: the build-tier selector's tests replay a landing version bump over "package.json",
+  // "extension/manifest.json" and "package-lock.json" — but every one of those writes goes into a
+  // mkdtemp scratch tree under durableDir("scratch") (removed in a finally), so the classifier's
+  // "writes under extension/" hit is a fixture path, not a repo path. The real checkout is read
+  // only (build inputs are read for their digests; no build, spawn or generator is executed), so
+  // concurrent execution is harmless and this file belongs in the parallel phase.
+  "tests/build-tier-inputs.test.ts": "writes package.json / extension/manifest.json / package-lock.json only inside a mkdtemp scratch tree under durableDir(scratch) removed in finally; the checkout is read for digests only and no build is spawned or imported",
   // 4lc0 re-review: the fresh-instance gate plants `tests/*.test.ts` files in a makeTempDir scratch tree
   // and walks it. The write-hazard heuristic sees a write call near an `extension/` literal (the SAFE
   // fixture string it plants) and correctly flags the text — but every write goes to the scratch tree,
