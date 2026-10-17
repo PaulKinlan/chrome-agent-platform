@@ -44,8 +44,10 @@ import {
   collectBuildTierClosure,
   collectBuildTierInputPaths,
   collectBuildTierInputs,
+  inClosureScope,
   isBuildTierDataInput,
   moduleSpecifiers,
+  pathReferences,
   normalizeRepoPath,
   readBuildTierRecord,
   recordBuildTierPass,
@@ -104,6 +106,31 @@ Deno.test("closure: every literal module-specifier shape is found, and non-speci
   assertEquals(moduleSpecifiers("const x = 1; // no imports here").length, 0);
 });
 
+Deno.test("closure: files the build EXECUTES BY PATH are found too, not just imports (the 21iey finding)", () => {
+  // build.mjs spawns a generator, points esbuild at stub modules and injects a probe script; the tier's
+  // own test invokes the generator through a template literal. None of these is an import.
+  const text = [
+    'const GENERATOR = path.join(ROOT, "scripts/build-bundled-tool-packages.mjs");',
+    'const GATEWAY_STUB = path.join(ROOT, "scripts/stubs/gateway-stub.mjs");',
+    "const OIDC_STUB = path.join(ROOT, 'scripts/stubs/vercel-oidc-stub.mjs');",
+    'const GENERATOR2 = `${ROOT}scripts/build-bundled-tool-packages.mjs`;',
+    'if (DEBUG_BUILD) swInject.push(path.join(ROOT, "scripts/mcp-probe-entry.js"));',
+    'const notAPath = "./scripts/../extension/lib/kv.js";',
+    'const docs = "docs/components-core.js";',
+  ].join("\n");
+  const tokens = pathReferences(text);
+  for (const expected of [
+    "scripts/build-bundled-tool-packages.mjs",
+    "scripts/stubs/gateway-stub.mjs",
+    "scripts/stubs/vercel-oidc-stub.mjs",
+    "scripts/mcp-probe-entry.js",
+  ]) {
+    assert(tokens.includes(expected), `expected ${expected} in ${JSON.stringify(tokens)}`);
+  }
+  assert(!tokens.some((token) => token.includes("/../")), `a ..-escaping token must not be taken as a path: ${JSON.stringify(tokens)}`);
+  assert(!tokens.some((token) => token.startsWith("docs/")), "docs/** is a build WRITE target, not a token-scanned input tree");
+});
+
 Deno.test("closure: relative specifiers resolve with this repo's extension and index conventions", async () => {
   const files = new Set(["tests/build-x.test.ts", "scripts/lib/helper.ts", "scripts/lib/dual.mjs", "scripts/lib/pkg/index.ts", "build.mjs"]);
   const exists = async (rel: string) => files.has(normalizeRepoPath(rel));
@@ -119,6 +146,34 @@ Deno.test("closure: relative specifiers resolve with this repo's extension and i
 // ---------------------------------------------------------------------------------------------------
 // The closure walk, on an injected graph (no checkout needed).
 // ---------------------------------------------------------------------------------------------------
+
+Deno.test("closure: a generator SPAWNED by path is in the closure, and changing its bytes changes the key", async () => {
+  // The reviewer's repro (chrome-agent-platform-21iey): a scratch tree whose build.mjs runs a generator
+  // by constructed path. Before the fix, replacing the generator with `throw new Error()` left the key
+  // identical and a matching record skipped the tier.
+  const dir = scratchDir();
+  try {
+    await mkdir(join(dir, "scripts", "stubs"), { recursive: true });
+    await mkdir(join(dir, "tests"), { recursive: true });
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "cap", type: "module", version: V1 }));
+    await writeFile(join(dir, "build.mjs"), 'const g = path.join(ROOT, "scripts/build-bundled-tool-packages.mjs");\nconst s = path.join(ROOT, "scripts/stubs/gateway-stub.mjs");\n');
+    await writeFile(join(dir, "scripts", "build-gate.ts"), "");
+    for (const test of BUILD_GATE_FILES) await writeFile(join(dir, test), "");
+    await writeFile(join(dir, "scripts", "build-bundled-tool-packages.mjs"), "export const ok = 1;\n");
+    await writeFile(join(dir, "scripts", "stubs", "gateway-stub.mjs"), "export const stub = 1;\n");
+
+    const before = await collectBuildTierInputPaths({ root: dir });
+    assert(before.paths.includes("scripts/build-bundled-tool-packages.mjs"), `spawned generator must be keyed (${before.paths.join(", ")})`);
+    assert(before.paths.includes("scripts/stubs/gateway-stub.mjs"), "esbuild plugin entry must be keyed");
+    const beforeKey = buildTierKey(await collectBuildTierInputs({ root: dir, version: V1, paths: before.paths }));
+
+    await writeFile(join(dir, "scripts", "build-bundled-tool-packages.mjs"), 'throw new Error("broken generator");\n');
+    const afterKey = buildTierKey(await collectBuildTierInputs({ root: dir, version: V1, paths: before.paths }));
+    assertNotEquals(afterKey, beforeKey, "a changed generator must invalidate the recorded PASS");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 Deno.test("closure: a helper imported by the build OR by a tier test is an input, transitively", async () => {
   const graph: Record<string, string> = {
@@ -187,6 +242,11 @@ Deno.test("closure: the real tier's own dependencies are inputs (the 1yzg2 revie
     // imported by the tier's TESTS
     "scripts/lib/process-tree.ts",
     "scripts/dist-complete.mjs",
+    // EXECUTED BY PATH by build.mjs / the tier's test (chrome-agent-platform-21iey)
+    "scripts/build-bundled-tool-packages.mjs",
+    "scripts/stubs/gateway-stub.mjs",
+    "scripts/stubs/vercel-oidc-stub.mjs",
+    "scripts/mcp-probe-entry.js",
     // imported by build.mjs
     "scripts/browser-dependencies.mjs",
     "scripts/lib/bounded-child.mjs",
@@ -220,6 +280,22 @@ Deno.test("closure: product sources, the changelog and unrelated tests are NOT i
   }
 });
 
+Deno.test("closure: machinery that imports a PRODUCT file does not drag the product tree into the key", async () => {
+  // extension/**, docs/** are product/output surfaces: build:production asserts their generated state on
+  // every gate, and keying them would re-run this tier on nearly every product landing. The scope rule
+  // stops the walk; this pins it against a real file the machinery imports today.
+  assert(inClosureScope("scripts/lib/build-lock.mjs"));
+  assert(inClosureScope("tests/build-smoke.test.ts"));
+  assert(!inClosureScope("extension/lib/kv.js"));
+  assert(!inClosureScope("docs/components-core.js"));
+  const { paths } = await collectBuildTierClosure({ root: ROOT });
+  const product = paths.filter((rel) => !inClosureScope(rel) && rel !== "build.mjs");
+  assertEquals(product, [], `the closure must stay inside the machinery trees: ${product.join(", ")}`);
+  for (const rel of ["extension/lib/kv.js", "extension/shared/components-core.js", "docs/components-core.js"]) {
+    assert(!paths.includes(rel), `${rel} is product content and must not be keyed`);
+  }
+});
+
 Deno.test("closure: the real roots are the tier's tests, the runner and the build entry point", () => {
   assertEquals([...BUILD_TIER_ROOTS], ["build.mjs", "scripts/build-gate.ts", ...BUILD_GATE_FILES]);
   for (const rel of ["build.mjs", "scripts/build-gate.ts", ...BUILD_GATE_FILES]) assert(BUILD_TIER_ROOTS.includes(rel), rel);
@@ -227,7 +303,7 @@ Deno.test("closure: the real roots are the tier's tests, the runner and the buil
 });
 
 Deno.test("data inputs: the manifest and the dependency pinning are inputs; product files are not", () => {
-  for (const rel of ["package.json", "package-lock.json", "deno.lock", "deno.runner.jsonc", "extension/manifest.json"]) {
+  for (const rel of ["package.json", "package-lock.json", "deno.lock", "deno.runner.jsonc", "extension/manifest.json", "extension/lib/bundled-inventory-data.js"]) {
     assert(isBuildTierDataInput(rel), `${rel} pins the build and must be an input`);
   }
   for (const rel of ["CHANGELOG.md", "extension/background/service-worker.js", "README.md", ""]) {

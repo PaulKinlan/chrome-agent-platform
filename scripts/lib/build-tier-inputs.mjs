@@ -24,15 +24,27 @@
 // scripts/lib/process-tree.ts and scripts/dist-complete.mjs — none of which the list matched, so
 // editing any of them left the key unchanged. A list also cannot tell you when it has drifted.
 //
-// The key is therefore the TRANSITIVE STATIC IMPORT CLOSURE of the tier's roots:
+// The key is therefore the TRANSITIVE CLOSURE of the tier's roots — files it IMPORTS and files it
+// NAMES BY PATH (a helper invoked as a child process, an esbuild plugin entry, an injected script are
+// not imports, and review finding chrome-agent-platform-21iey proved that gap the same way):
 //   * build.mjs
 //   * scripts/build-gate.ts (the runner itself)
 //   * every file in BUILD_GATE_FILES (tests/build-bootstrap.test.ts, -debug-mode, -tool-bundling)
 // resolving relative specifiers (`./x`, `../x`, with the `.mjs`/`.ts`/`.js`/`.json` and `/index.*`
-// fallbacks this repo uses) to repo files, recursively. Bare specifiers (`node:`, `npm:`, `jsr:`,
-// `jsr:@std/...`) are not repo files and are covered by the lockfiles in the data set below. That
-// makes the key track what the tests actually execute: a helper imported by the build, or by a test,
-// is an input automatically, and nobody has to remember to add it.
+// fallbacks this repo uses) to repo files, recursively; and scanning each visited file's text for
+// REPO PATH TOKENS (`scripts/build-bundled-tool-packages.mjs`, `scripts/stubs/gateway-stub.mjs`,
+// `scripts/mcp-probe-entry.js`, `${ROOT}scripts/...`) that name an existing file, which is how the
+// build reaches child processes and bundler entry points. Bare specifiers (`node:`, `npm:`, `jsr:`,
+// `jsr:@std/...`) are not repo files and are covered by the lockfiles in the data set below.
+//
+// PATH TOKENS ARE RESTRICTED TO THE MACHINERY TREES (`scripts/`, `tests/`, `packages/`,
+// `wasm-tools/`). `docs/**` and `extension/**` are deliberately NOT token-scanned: in the build they
+// are overwhelmingly WRITE targets (`in sync docs/components-core.js`), so keying every such
+// reference would make the tier re-run on nearly every product change and the skip would never fire.
+// The parts of `extension/**` the machinery actually IMPORTS still enter through the import closure
+// (extension/lib/{cap-log,kv,memory,emscripten-module-audit,bundled-inventory-data}.js do today).
+// That makes the key track what the tests actually execute: a helper imported or spawned by the
+// build, or by a test, is an input automatically, and nobody has to remember to add it.
 // Plus the DATA inputs the closure cannot see:
 //   * packages/bundled/** and wasm-tools/** — the generator/Wasmer trees the build reads by path
 //   * extension/manifest*.json, package.json, package-lock.json, deno.lock, deno.runner.jsonc
@@ -81,7 +93,7 @@ import { createHash } from "node:crypto";
 import { readdir, readFile, stat, mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { durableRoot } from "./durable-root.mjs";
-import { BUILD_GATE_FILES } from "../test-partition.mjs";
+import { BUILD_GATE_FILES, stripComments } from "../test-partition.mjs";
 
 /** The recorded-PASS directory under the durable root; one `<key>.json` per passing input key. */
 export const BUILD_TIER_RECORD_DIR_NAME = "build-tier-pass";
@@ -105,6 +117,7 @@ export const MAX_CLOSURE_FILES = 500;
 /** Data inputs the closure cannot see (read by path, not imported). */
 export const BUILD_TIER_DATA_PATTERNS = Object.freeze([
   /^extension\/manifest[^/]*\.json$/,
+  /^extension\/lib\/bundled-inventory-data\.js$/, // the generator's `release` surface (a landing stamp)
   /^package\.json$/,
   /^package-lock\.json$/,
   /^deno\.lock$/,
@@ -150,6 +163,51 @@ export function moduleSpecifiers(text) {
   const out = new Set();
   for (const re of SPECIFIER_RES) for (const m of String(text).matchAll(re)) out.add(m[1]);
   return [...out].filter((specifier) => specifier !== "" && !specifier.includes("...") && !specifier.includes("*") && !/\s/.test(specifier));
+}
+
+/**
+ * Repo path tokens in a source text: an existing-file reference under one of the MACHINERY trees,
+ * matched anywhere a quoted or template literal (or a bare token) names it. Comments and prose match
+ * too, which is harmless — a candidate only enters the key if the file exists, and a wider key is the
+ * safe direction (it re-runs the tier, it never skips one).
+ */
+export const PATH_TOKEN_RE = /(?:^|[^\w.\/-])((?:scripts|tests|packages|wasm-tools)\/[A-Za-z0-9._\/-]+\.(?:mjs|ts|js|cjs|mts|cts))/g;
+const NOT_A_PATH_TOKEN = /(?:^|\/)\.\.(?:\/|$)/;
+
+/**
+ * What the closure may CONTAIN: the machinery and the tests. A resolved import or path token outside
+ * these prefixes is product content (`extension/**`, `docs/**`, a root config) and is NOT added — the
+ * existing policy, made mechanical so a helper that imports a product file cannot drag ~100 product
+ * sources into the key and re-run the tier on every product landing. `extension/manifest*.json` and
+ * the bundled inventory's release surface are keyed explicitly as DATA inputs instead.
+ */
+const CLOSURE_PREFIXES = ["scripts/", "tests/"];
+
+/**
+ * Tokens that are added to the key but NOT walked, and prefix checks for the reason:
+ *   * `packages/bundled/` and `wasm-tools/` are already keyed WHOLESALE as data trees (every file),
+ *     so walking them again only costs time and can only re-discover the same bytes.
+ *   * a path token into `tests/` is a fixture reference, not something the build executes; the tests
+ *     the tier runs are its ROOTS, and `tests/fixtures/**` arrives through the import closure.
+ * Dropping these is what keeps the closure ~50 files instead of tripping MAX_CLOSURE_FILES.
+ */
+const LEAF_TREES = ["packages/bundled/", "wasm-tools/"];
+const NOT_WALKED_TOKENS = ["tests/"];
+
+/** Every repo path token in a text, de-duplicated and filtered to things that can be a path. */
+export function pathReferences(text) {
+  const out = new Set();
+  for (const match of String(text).matchAll(PATH_TOKEN_RE)) {
+    const token = match[1];
+    if (NOT_A_PATH_TOKEN.test(token)) continue;
+    out.add(token);
+  }
+  return [...out];
+}
+
+/** True when a resolved path may be part of the closure (machinery or tests). */
+export function inClosureScope(repoPath) {
+  return CLOSURE_PREFIXES.some((prefix) => String(repoPath).startsWith(prefix));
 }
 
 /** Normalise a repo-relative POSIX path, resolving `.` and `..` segments. */
@@ -227,13 +285,25 @@ export async function collectBuildTierClosure({
     } catch {
       continue; // binary (a .wasm import target) or unreadable: nothing to scan, the file is still in the key
     }
-    for (const specifier of moduleSpecifiers(text)) {
+    // Scan CODE, not prose (the o4m2 lesson the partition guard already learned): a comment that
+    // mentions scripts/run-tests.mjs or a fixture path is not a read or an execution, and following it
+    // would widen the key with files the tier never touches.
+    const code = stripComments(text);
+    for (const specifier of moduleSpecifiers(code)) {
       const resolved = await resolveSpecifier(rel, specifier, exists);
       if (resolved) {
-        if (!seen.has(resolved)) queue.push(resolved);
+        if (inClosureScope(resolved) && !seen.has(resolved)) queue.push(resolved);
       } else if (specifier.startsWith(".")) {
         unresolved.add(`${rel} -> ${specifier}`); // a RELATIVE import that does not resolve: residue, reported
       }
+    }
+    // Executed-by-path entry points (chrome-agent-platform-21iey): the build spawns a generator, points
+    // esbuild at stub modules and injects a probe script — none of which is an import.
+    for (const token of pathReferences(code)) {
+      if (seen.has(token) || LEAF_TREES.some((prefix) => token.startsWith(prefix))) continue;
+      if (NOT_WALKED_TOKENS.some((prefix) => token.startsWith(prefix))) continue;
+      if (!inClosureScope(token)) continue;
+      if (await exists(token)) queue.push(token);
     }
   }
   return { paths: [...seen].sort(), truncated, unresolved: [...unresolved].sort() };
