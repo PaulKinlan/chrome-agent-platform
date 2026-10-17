@@ -86,7 +86,7 @@ export const READ_ONLY_DIST = new Set(Object.keys(READ_ONLY_DIST_REASONS));
 // These files run multiple in-place builds and are partitioned out of standard npm test to eliminate
 // load variance and save ~8 minutes on every lane's gate.
 export const BUILD_GATE_REASONS = {
-  "tests/build-bootstrap.test.ts": "runs node build.mjs in-place (dist/dist-versions rewrite; 3 production builds)",
+  "tests/build-bootstrap.test.ts": "runs node build.mjs in-place (dist/dist-versions rewrite; 2 production builds)",
   "tests/build-debug-mode.test.ts": "runs node build.mjs in-place (debug+store bundles; mode alternation)",
   "tests/build-tool-bundling.test.ts": "runs build.mjs / the bundled-tool generator in-place (verify-mode drift check and regen)",
 };

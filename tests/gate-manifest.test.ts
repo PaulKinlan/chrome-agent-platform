@@ -116,6 +116,25 @@ Deno.test("0eq00 ledger: the full tier names what the command does NOT run", () 
   assertEquals(payload.omitted[0].reason, "build-behaviour");
 });
 
+Deno.test("6gk81 ledger: measured suite durations ride in the manifest, sanitized", () => {
+  const payload = parse(
+    formatGateManifest({
+      tier: "full",
+      executed: 1,
+      executedSuites: ["tests/a.test.ts"],
+      suiteDurations: new Map([
+        ["tests/z.test.ts", 1.26],
+        ["tests/a.test.ts", 95],
+        ["tests/nan.test.ts", Number.NaN],
+      ]),
+    }),
+  );
+  assertEquals(payload.suite_durations, { "tests/a.test.ts": 95, "tests/z.test.ts": 1.3 });
+  // No measurements, no field: an empty map invents nothing.
+  const none = parse(formatGateManifest({ tier: "full", executed: 0, suiteDurations: new Map() }));
+  assertEquals(none.suite_durations, undefined);
+});
+
 Deno.test("0eq00 ledger: unmapped and unknown markers use the extractor's exact prefixes", () => {
   assertEquals(formatGateUnmapped([]), null, "an empty unmapped list emits no line");
   assertEquals(formatGateUnmapped(["b.ts", "a.ts"]), `${GATE_UNMAPPED_PREFIX}a.ts b.ts`);
