@@ -23,10 +23,10 @@
 // machine state outside that directory, or on a real build.
 import { assert, assertEquals, assertNotEquals } from "jsr:@std/assert@1";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 import {
   BUILD_TIER_RECORD_DIR_NAME,
   VERSION_PLACEHOLDER,
@@ -48,6 +48,14 @@ const KEY_A = "a".repeat(64);
 const KEY_B = "b".repeat(64);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+
+/**
+ * A private scratch root under the durable root (never /tmp: tmpfs is RAM-backed and the fleet bans
+ * it — tests/durable-root.test.ts enforces the convention). Unique per call, removed in a finally.
+ */
+function scratchDir(): string {
+  return durableDir("scratch", `cap-build-tier-${crypto.randomUUID()}`);
+}
 
 function digest(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -185,7 +193,7 @@ Deno.test("build-tier mode: CAP_BUILD_TIER can force a run and cannot switch the
 // ---------------------------------------------------------------------------------------------------
 
 Deno.test("build-tier record: only an exit-0 run of a named tier is recorded and read back", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "cap-build-tier-"));
+  const dir = scratchDir();
   try {
     const refused: Array<[{ key: string, suites: string[], exitCode: number, dir: string | null }, { written: boolean, reason: string }]> = [
       [{ key: KEY_A, suites: ["tests/build-smoke.test.ts"], exitCode: 1, dir }, { written: false, reason: "tier-did-not-exit-0" }],
@@ -210,7 +218,7 @@ Deno.test("build-tier record: only an exit-0 run of a named tier is recorded and
 });
 
 Deno.test("build-tier record: a malformed or key-mismatched file is refused, never trusted", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "cap-build-tier-bad-"));
+  const dir = scratchDir();
   try {
     await mkdir(dir, { recursive: true });
     const file = join(dir, `${KEY_A}.json`);
@@ -242,7 +250,7 @@ Deno.test("resolveBuildTier: unchanged inputs skip, one changed chunk runs, the 
       return { path, sha256: digest(versionNeutralBytes(bytes, version)), bytes: bytes.length };
     });
   };
-  const dir = await mkdtemp(join(tmpdir(), "cap-build-tier-resolve-"));
+  const dir = scratchDir();
   try {
     // The PASS is recorded on the first version; the next landing bumps it with the same machinery.
     const first = await resolveBuildTier({ root: ROOT, version: V1, recordDir: dir, collect: collectFor(trees.first) });
@@ -302,7 +310,7 @@ Deno.test("build-tier inputs: a simulated landing bump over the real stamp surfa
   // rewrite over a real directory (so the real walk and the real file reads are exercised) and requires
   // the key to be unchanged: otherwise the tier would re-run on every landing and the skip would never
   // fire — the failure mode that is silent, because everything still passes.
-  const dir = await mkdtemp(join(tmpdir(), "cap-build-tier-bump-"));
+  const dir = scratchDir();
   const stamp = (version: string) => ({
     "package.json": JSON.stringify({ name: "cap", version, scripts: { test: "node x" } }, null, 2) + "\n",
     "package-lock.json": JSON.stringify({ name: "cap", version, lockfileVersion: 3, packages: { "": { name: "cap", version } } }, null, 2) + "\n",
@@ -357,6 +365,18 @@ Deno.test("build-tier inputs: the tree's version stamp appears ONLY in the files
     `version ${version} appears in build-tier inputs that scripts/bump-version.mjs does not rewrite. ` +
       "Either stop keying those files (see the header of scripts/lib/build-tier-inputs.mjs) or teach the bump to stamp them.",
   );
+});
+
+Deno.test("build-gate call site: the everything-gate (test:all) FORCES the tier, so the nightly cannot inherit the skip", async () => {
+  // Selection answers "can these three tests tell this tree apart from one that passed them?".
+  // `npm run test:all` is the everything-gate: it must run them regardless, or the nightly — the tier
+  // the TEST-TIERS-PROPOSAL calls "Selective & Nightly" — silently stops executing build behaviour.
+  const scripts = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8")).scripts;
+  const all: string = scripts["test:all"];
+  assert(typeof all === "string", "test:all must exist");
+  assert(/CAP_BUILD_TIER=force\s+npm run test:build/.test(all), "test:all must force the build tier (CAP_BUILD_TIER=force npm run test:build)");
+  // …and the plain step, so a reader of `npm run test:build` still finds the tier in the aggregate.
+  assert(all.includes("npm run test:build"), "the tier must still be named in test:all");
 });
 
 Deno.test("build-tier record dir: an unresolvable record dir makes the tier run, never skip", () => {
