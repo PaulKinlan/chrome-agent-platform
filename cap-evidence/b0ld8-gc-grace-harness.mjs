@@ -254,8 +254,11 @@ async function main() {
     sweeps: {},
   };
   for (const kind of Object.keys(KINDS)) out.sweeps[kind] = await sweep(box, kind, graces);
+  // A kind that is already safe at grace 0 (the single-file reader: it wins the race outright) must
+  // report 0, not the next grace in the table. The earlier `&& r.graceMs > 0` excluded that row, so
+  // the summary printed 10 ms for a reader its own rows show never failing - chrome-agent-platform-m7tfe.
   out.smallestSafeGraceMs = Object.fromEntries(
-    Object.entries(out.sweeps).map(([k, rows]) => [k, rows.find((r) => r.failed === 0 && r.graceMs > 0)?.graceMs ?? null]),
+    Object.entries(out.sweeps).map(([k, rows]) => [k, rows.find((r) => r.failed === 0)?.graceMs ?? null]),
   );
   if (stopLoad) stopLoad();
   await rm(box.root, { recursive: true, force: true });

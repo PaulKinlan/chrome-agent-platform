@@ -1041,10 +1041,13 @@ try {
     // the PREVIOUS link mid-open complete (the pointer swap is atomic; this
     // covers the open-then-read window on the old target). It was a fixed 2 s on
     // every build — about half of a warm `build:production` (chrome-agent-platform-
-    // jjsz). The default is now 50 ms; CAP_BUILD_GC_GRACE_MS=<ms> restores any
-    // window (2000 = the previous behaviour, 0 = none). A missing, empty, negative or
-    // non-numeric value falls back to the default, never to "no grace" — the policy
-    // lives in scripts/lib/build-concurrency.mjs (resolveGcGraceMs) so it is tested.
+    // jjsz). The default is now the MEASURED 1000 ms (chrome-agent-platform-b0ld8: a reader hashing
+    // the whole 28-file / 19.6 MB tree needs 130-300 ms, and 50 ms - and 100 ms, and under load even
+    // 200 ms - lost the tree mid-read). CAP_BUILD_GC_GRACE_MS=<ms> restores any
+    // window (2000 = the previous behaviour, 0 = none), and the value itself lives in
+    // scripts/lib/build-concurrency.mjs (DEFAULT_GC_GRACE_MS, parsed by resolveGcGraceMs) so it is
+    // set and tested in ONE place. A missing, empty, negative or
+    // non-numeric value falls back to the default, never to "no grace".
     // The grace is paid only when a PRIOR version is being collected: when
     // dist-versions holds only the live pointer (or residue that is not a version
     // target — dangling symlinks, .DS_Store/._ metadata), there is no old target a
