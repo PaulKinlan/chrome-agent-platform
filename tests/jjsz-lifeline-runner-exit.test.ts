@@ -51,16 +51,15 @@
 //     only use a shadow covers, and renames a shadow when the import stays used; both happen to be caught by
 //     other pins, but they are properties of the transform, so the declaration count is its own rule).
 //
-// THE PINS ARE PER-SITE, NOT A RULE. They prove these four scripts go through the helper. The rule ("a runner
-// that kills its leader and then relaunches on the same profile, or exits under a supervisor that samples its
-// descendants, goes through `reapLeaderAndSettle` or `teardownChrome`") is stated in scripts/lib/reap-leader.ts;
-// proving a RULE needs a fresh-instance mutant (a new runner with the
-// old shape that the test then has to catch), and this file does not catch one. That is not hypothetical:
-// scripts/security-injection.ts was a fresh instance that every earlier pin missed, and it was found by a
-// reviewer reading the code, not by a gate (bead 80yqb keeps the structural fix open: make `launchChrome`
-// wait for an in-flight sweep on its own profile, which removes the class for every caller). The acceptance
-// scripts that still end with a bare `proc.kill(...); await proc.status` and then exit are outside it on
-// purpose: no supervisor judges them and nothing relaunches on their profile, so their watcher finishes alone.
+// THESE FOUR PINS ARE PER-SITE. They prove these scripts still call the helper at their reviewed boundaries.
+// A separate rule-level census (tests/lifeline-reap-rule.test.ts, 6efbv) forces review of any NEW script
+// bare-killing a launchChrome handle, and forbids that shape in the security custody runner. Its fresh-script
+// and removed-reap mutants prove that discovery rule, not the timing or profile identity of every caller.
+// This distinction matters: scripts/security-injection.ts was a fresh instance missed by the earlier pins
+// and found by a reviewer reading the code. The 80yqb launchChrome pre-spawn sweep wait is the structural
+// in-process relaunch fix; the helper here remains necessary for supervisor-residue custody and profile flush.
+// The acceptance scripts that still end with a bare `proc.kill(...); await proc.status` and then exit have
+// reviewed census exceptions: no supervisor judges them, so their watcher finishes alone.
 // The end-of-script `finally` of the two journeys is the same shape and is left alone for the same reason;
 // only the phase-1 to phase-2 boundary, which has a relaunch, is pinned.
 import { assert, assertEquals, assertNotEquals } from "jsr:@std/assert@1";
