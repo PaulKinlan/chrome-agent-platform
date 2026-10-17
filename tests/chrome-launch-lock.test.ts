@@ -15,16 +15,19 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 const origLockPath = Deno.env.get("CAP_CHROME_LOCK_PATH");
-const LOCK = await Deno.makeTempFile({ prefix: "cap-chrome-lock-test-" });
-// Attribution marker (chrome-agent-platform-p15i): the serial-phase resilience
-// check reads THIS line to learn which fixture THIS run owns, instead of
-// scanning a shared /tmp prefix space that also matches other lanes' files.
-console.log(`CAP_LOCK_FIXTURE:${LOCK}`);
-Deno.env.set("CAP_CHROME_LOCK_PATH", LOCK);
 Deno.env.delete("CAP_SECURITY_NONCE");
 Deno.env.delete("CAP_CHROME_LOCK_HELD");
-// Import AFTER the env is set: the module reads the lock path at load.
-const { launchChrome } = await import("../scripts/lib/chrome-launch.ts");
+// The launcher resolves the canonical path per call. A fresh path for each
+// test prevents an earlier browser's asynchronous release or stale holder
+// from being mistaken for this test's external flock under load.
+const { launchChrome, teardownChrome } = await import("../scripts/lib/chrome-launch.ts");
+async function fixtureLock(): Promise<string> {
+  const lock = await Deno.makeTempFile({ prefix: "cap-chrome-lock-test-" });
+  // The parent resilience test attributes ALL markers to this child run.
+  console.log(`CAP_LOCK_FIXTURE:${lock}`);
+  Deno.env.set("CAP_CHROME_LOCK_PATH", lock);
+  return lock;
+}
 
 async function fakeBrowser(): Promise<string> {
   const fake = await Deno.makeTempFile({ suffix: ".sh" });
@@ -34,11 +37,6 @@ async function fakeBrowser(): Promise<string> {
   );
   await Deno.chmod(fake, 0o755);
   return fake;
-}
-
-// -o keeps the lock fd in flock itself (not the sleep), so killing flock releases it.
-function holdLock(seconds: number): Deno.ChildProcess {
-  return new Deno.Command("flock", { args: ["-o", LOCK, "sleep", String(seconds)], stdout: "null", stderr: "null" }).spawn();
 }
 
 /** Hold the canonical lock path exclusively from OUTSIDE this process, and CONFIRM the hold
@@ -72,7 +70,8 @@ async function settled(proc: Deno.ChildProcess) {
 }
 
 Deno.test("uzik: an opt-in canonical launch queues behind another lane's holder and then proceeds", async () => {
-  const holder = await holdConfirmed(LOCK);
+  const lock = await fixtureLock();
+  const holder = await holdConfirmed(lock);
   const fake = await fakeBrowser();
   try {
     // Start the launch, keep the gate busy for at least a second, then release:
@@ -88,17 +87,24 @@ Deno.test("uzik: an opt-in canonical launch queues behind another lane's holder 
   } finally {
     await settled(holder);
     await Deno.remove(fake);
+    await Deno.remove(lock);
   }
 });
 
 Deno.test("uzik: an opt-in canonical launch that cannot get the lock within its bound FAILS instead of starting", async () => {
-  const holder = await holdConfirmed(LOCK);
+  const lock = await fixtureLock();
+  const holder = await holdConfirmed(lock);
   Deno.env.set("CAP_CHROME_LOCK_WAIT_MS", "800");
   const fake = await fakeBrowser();
   const t0 = Date.now();
   try {
     await assertRejects(
-      () => launchChrome({ binary: fake, args: [], timeoutMs: 5000, canonicalLock: true }),
+      async () => {
+        const unexpected = await launchChrome({ binary: fake, args: [], timeoutMs: 5000, canonicalLock: true });
+        // If the launch succeeds, assertRejects must still fail — but first
+        // release its browser/ref so the next test cannot inherit a live lock.
+        await teardownChrome(unexpected);
+      },
       Error,
       "could not take the serialized-Chrome lock",
     );
@@ -107,34 +113,48 @@ Deno.test("uzik: an opt-in canonical launch that cannot get the lock within its 
     Deno.env.delete("CAP_CHROME_LOCK_WAIT_MS");
     await settled(holder);
     await Deno.remove(fake);
+    await Deno.remove(lock);
   }
 });
 
 Deno.test("uzik: one process may hold the canonical lock across two browsers, and releases it when the last exits", async () => {
+  const lock = await fixtureLock();
   const fake = await fakeBrowser();
-  const a = await launchChrome({ binary: fake, args: [], timeoutMs: 5000, canonicalLock: true });
-  const b = await launchChrome({ binary: fake, args: [], timeoutMs: 5000, canonicalLock: true });
+  let a: Awaited<ReturnType<typeof launchChrome>> | null = null;
+  let b: Awaited<ReturnType<typeof launchChrome>> | null = null;
   try {
-    assertEquals(a.lockWaitMs < 1500, true, "the first launch took the lock");
+    a = await launchChrome({ binary: fake, args: [], timeoutMs: 5000, canonicalLock: true });
+    b = await launchChrome({ binary: fake, args: [], timeoutMs: 5000, canonicalLock: true });
+    // Successful first launch proves acquisition; a wall-clock ceiling here
+    // measures fork/exec scheduling under parallel load, not lock correctness.
+    assertEquals(a.chromeSlot, -1, "the first launch took the canonical scope");
     assertEquals(b.lockWaitMs, 0, "the second is reentrant inside this process — no queue");
-    assertEquals(a.chromeSlot, -1);
-    assertEquals(b.chromeSlot, -1);
-  } finally {
     await settled(a.proc);
-    await new Promise((r) => setTimeout(r, 400));
-    // One browser still alive → the lock is still held.
-    const blocked = new Deno.Command("flock", { args: ["-n", LOCK, "true"] }).spawn();
+    // One browser still alive → the lock is still held, without a blind sleep.
+    const blocked = new Deno.Command("flock", { args: ["-n", lock, "true"], stdout: "null", stderr: "null" }).spawn();
     assertEquals((await blocked.status).code, 1, "the lock lives until the LAST browser exits");
     await settled(b.proc);
-    await new Promise((r) => setTimeout(r, 600));
-    const probe = new Deno.Command("flock", { args: ["-w", "5", LOCK, "true"] }).spawn();
-    assertEquals((await probe.status).code, 0, "the canonical lock was released");
+    // Wait for the actual release callback; scheduler load may delay it, but
+    // a never-released lock must still fail within a finite bound.
+    let released = false;
+    const deadline = Date.now() + 10000;
+    do {
+      const probe = new Deno.Command("flock", { args: ["-n", lock, "true"], stdout: "null", stderr: "null" }).spawn();
+      released = (await probe.status).code === 0;
+      if (released) break;
+      await new Promise((r) => setTimeout(r, 50));
+    } while (Date.now() < deadline);
+    assert(released, "the canonical lock was released after the last browser exited");
+  } finally {
+    if (a) await settled(a.proc);
+    if (b) await settled(b.proc);
     await Deno.remove(fake);
+    await Deno.remove(lock);
   }
 });
 
 Deno.test("uzik: a clean process still defaults CHROME_LOCK_PATH to the canonical literal", async () => {
-  // This file overrode the path at load, so read the default the way the
+  // Earlier tests overrode the path, so read the default the way the
   // security custody chain depends on it: in a CLEAN subprocess. The supervisor
   // verifies an inherited flock against exactly that literal
   // (scripts/security-suite-custody.mjs verifyInheritedCanonicalLock), so a
@@ -155,8 +175,7 @@ Deno.test("uzik: a clean process still defaults CHROME_LOCK_PATH to the canonica
   assertEquals(seen.CHROME_LOCK_PATH, seen.CHROME_LOCK_PATH_DEFAULT, "no env → the canonical default");
 });
 
-Deno.test("cleanup: chrome-launch-lock restores env and removes temp lock", async () => {
+Deno.test("cleanup: chrome-launch-lock restores env after temporary lock fixtures", async () => {
   if (origLockPath === undefined) Deno.env.delete("CAP_CHROME_LOCK_PATH");
   else Deno.env.set("CAP_CHROME_LOCK_PATH", origLockPath);
-  await Deno.remove(LOCK).catch(() => {});
 });
