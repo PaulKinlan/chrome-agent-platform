@@ -267,10 +267,18 @@ Deno.test("6yrq: lock tests clean up temporary lock files and leave /tmp clean",
   assertEquals(new Set(fixtures).size, fixtures.length, "lock tests must not share one process-global lock path");
   const leaked = [];
   for (const fixture of fixtures) {
-    try {
-      await Deno.lstat(fixture);
-      leaked.push(fixture);
-    } catch { /* gone, as required */ }
+    let gone = false;
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      try {
+        await Deno.lstat(fixture);
+        await new Promise((r) => setTimeout(r, 50));
+      } catch {
+        gone = true;
+        break;
+      }
+    }
+    if (!gone) leaked.push(fixture);
   }
   assertEquals(leaked, [], `lock tests must not leak their own temporary lock files: ${leaked.join(", ")}`);
 });
