@@ -229,6 +229,7 @@ export const STATIC_BROWSER_EXCLUSIONS = new Set([
   "tests/jjsz-lifeline-process-table.test.ts",
   "tests/jjsz-lifeline-match.test.ts",
   "tests/jjsz-lifeline-runner-exit.test.ts",
+  "tests/lifeline-reap-rule.test.ts", // 6efbv: AST census only; never spawns Chrome
 ]);
 
 /**

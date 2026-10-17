@@ -91,6 +91,8 @@ export const SOURCE_INSPECTING_GUARDS = [
   "tests/acp-fixture-env-guard.test.ts",
   "tests/manifest-permissions.test.ts",
   "tests/harness-registry.test.ts",
+  // 6efbv: scans every top-level scripts/*.ts for newly unreviewed bare browser kills (~0.9s isolated).
+  "tests/lifeline-reap-rule.test.ts",
   "tests/source-materialization.test.ts",
   // luq4w: static halves of mixed full-suite guards. Never promote their full files:
   // evidence-durable materializes/verifies a tree twice; no-uppercase launches Chrome.
