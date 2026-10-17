@@ -17,18 +17,14 @@
 // ENOBUFS`).
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
-const CHECKER = path.join(
-  path.dirname(fileURLToPath(new URL(import.meta.url))),
-  "..",
-  "scripts",
-  "check-beads-export-divergence.mjs",
-);
+const REPO_ROOT = path.join(path.dirname(fileURLToPath(new URL(import.meta.url))), "..");
+const CHECKER = path.join(REPO_ROOT, "scripts", "check-beads-export-divergence.mjs");
 
 /** The ceiling this bead removed. Kept as a measured number, not a policy: it is
  *  the size the test has to EXCEED for the old script to fail. */
@@ -128,6 +124,34 @@ Deno.test("re8v7: a >16 MiB canonical export that would drop an ID is still refu
   } finally {
     await repo.cleanup();
   }
+});
+
+Deno.test("re8v7: the checker refuses unknown arguments before it reads any export", async () => {
+  // Two jobs, and the second is why this case names the script INSIDE the spawn call:
+  // the fleet coverage oracle places a `scripts/` file only through a stem match or a
+  // literal inside a spawn/exec/run call (check-coverage.py find_candidate_tests_for_file),
+  // and its subprocess pattern does not recognise `spawnSync(` — so a lane driving this
+  // CLI with spawnSync reads as "not placed at all" on every gate. This is a real case
+  // (usage validation happens before any git/bd read, so it is deterministic and cheap)
+  // that also puts the path where that oracle looks. Filed as a fleet defect rather than
+  // relied on silently.
+  const argumentsSeen = ["--bogus"];
+  // The repo-relative path is spelled out INLINE (not via a constant) on purpose: the fleet
+  // oracle only reads a literal inside the spawn call's own parens, so a constant reads as
+  // "not placed" even though this test executes the script. See the comment above.
+  const child = spawn("node", ["scripts/check-beads-export-divergence.mjs", ...argumentsSeen], {
+    cwd: REPO_ROOT,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const text = await new Promise<string>((resolve, reject) => {
+    let out = "";
+    child.stdout.on("data", (chunk) => out += chunk.toString());
+    child.stderr.on("data", (chunk) => out += chunk.toString());
+    child.on("error", reject);
+    child.on("close", () => resolve(out));
+  });
+  assertStringIncludes(text, "usage: check-beads-export-divergence.mjs");
+  assertStringIncludes(text, "cannot verify committed IDs");
 });
 
 Deno.test("re8v7: the checker buffers no fixed stdout ceiling", async () => {

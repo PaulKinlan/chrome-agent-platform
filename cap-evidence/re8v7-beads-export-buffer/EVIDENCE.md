@@ -5,7 +5,7 @@
   `maxBuffer: 16 * 1024 * 1024` (`git show HEAD:.beads/issues.jsonl` and
   `bd export --all`) now collect stdout from a streamed child and are bounded by wall
   clock (30 s), not by a byte constant.
-- Tests: `tests/beads-export-divergence.test.ts` (3) — a committed *and* canonical
+- Tests: `tests/beads-export-divergence.test.ts` (4) — a committed *and* canonical
   export past the old ceiling is read in full; a >16 MiB canonical export that would
   drop an ID is still refused and names the ID; no executable `maxBuffer` may return.
 - Deliberately NOT changed: whether lane commits keep refreshing the 16.8 MB passive
@@ -35,6 +35,11 @@ pre-commit hook refused commits across the fleet; the workaround in use was
 - The refusal case is the anti-overfit half: at the same >16 MiB size, dropping
   `cap-drop-me` from the canonical export still exits 1 and names it, so "stream and
   stop checking" cannot pass.
+- A fourth case pins usage validation before any read, and spells the repo-relative
+  script path inline so a coverage oracle can place this file: fleet's
+  `check-coverage.py` subprocess pattern does not recognise `spawnSync(`, so the
+  first version of this file was reported "unmapped" while the repo's own manifest
+  in the SAME log said `status=mapped`. Filed as fleet defect `fleet-8ymew`.
 
 ## Scratch placement
 The fixture's two 16.9 MB exports are `durableDir("re8v7-beads-export")`-routed and
