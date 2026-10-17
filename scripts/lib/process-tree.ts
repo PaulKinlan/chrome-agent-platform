@@ -467,11 +467,47 @@ export function attachProcessLifeline(
   const warn = deps.warn ?? ((line: string) => console.error(line));
   const sweepTimeoutMs = deps.sweepTimeoutMs ?? 5000;
   const match = (deps.matchPattern ?? lifelineMatchPattern)(treeMatch);
-  if (!groupArmed) {
+  // umuyk: this object has to exist BEFORE the coverage checks, because the no-group/no-pattern case
+  // below reports it as `unprotected` and returns it. Nothing else in this function depends on the
+  // declaration order.
+  const lifeline: Lifeline = {
+    state: "unprotected",
+    watcherPid: null,
+    // Nothing to confirm: no watcher exists (either it could not be started, or umuyk's no-group/
+    // no-pattern case below), and the warning already says this browser is NOT protected. `false` is
+    // reserved for a RUNNING watcher whose isolation could not be confirmed.
+    ready: Promise.resolve(true),
+    settled: null,
+    teardowns: 0,
+    disarm: async () => {},
+  };
+  if (!groupArmed && match !== "") {
     warn(
       `process-tree: lifeline for pid ${proc.pid} has no verified process group; the sweep arms the ` +
         `profile pattern only, so the leader's tree is covered by that pattern rather than by a group signal`,
     );
+  }
+  // umuyk (round-2 review of ymnpg): a lifeline with NEITHER a verified group NOR a usable pattern
+  // cannot reap anything. Arming a watcher here would spawn a process whose real script skips both
+  // signal paths (target "" and match "") while the warnings claimed the profile pattern covered the
+  // tree - a coverage claim the module cannot keep. Reported as the UNPROTECTED case instead, the same
+  // way a watcher that could not be started is reported (F5): no watcher, state "unprotected", one
+  // warning that names the consequence. `launchChrome` reaches this path when no profile was resolved
+  // (treeMatch undefined) and `isolatedProcessGroup` returned nothing, and any rejected treeMatch
+  // reaches it too. Coverage is never invented - only narrowed and named.
+  if (!groupArmed && match === "") {
+    // Built as its own string so the narrowing of `treeMatch` does not have to survive a nested
+    // template expression (the type checker refuses to narrow it inside the interpolation).
+    const detail = treeMatch
+      ? ` (treeMatch ${JSON.stringify(clip(treeMatch, 80))} was rejected)`
+      : " (no profile was resolved)";
+    warn(
+      `process-tree: lifeline for pid ${proc.pid} has neither a verified process group nor a usable ` +
+        `profile pattern${detail}; ` +
+        `this browser is NOT protected against a killed parent and may be orphaned`,
+    );
+    lifelines.set(proc, lifeline);
+    return lifeline.disarm;
   }
   if (treeMatch && match === "") {
     warn(
@@ -480,16 +516,6 @@ export function attachProcessLifeline(
     );
   }
   const spec = setsidSpawnSpec("/bin/sh", ["-c", LIFELINE_SCRIPT]);
-  const lifeline: Lifeline = {
-    state: "unprotected",
-    watcherPid: null,
-    // Nothing to confirm: no watcher exists, and the F5 warning above already says this browser is
-    // NOT protected. `false` is reserved for a RUNNING watcher whose isolation could not be confirmed.
-    ready: Promise.resolve(true),
-    settled: null,
-    teardowns: 0,
-    disarm: async () => {},
-  };
   let watcher: LifelineWatcher;
   try {
     watcher = (deps.spawn ?? spawnLifelineWatcher)({

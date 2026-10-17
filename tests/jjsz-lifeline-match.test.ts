@@ -755,3 +755,49 @@ Deno.test("ymnpg: an empty target skips the group path, while an armed verified 
     await reap(verified);
   }
 });
+
+// ── umuyk (round-2 review of ymnpg): a lifeline with NOTHING to sweep must say so ───────────
+//
+// Arming a watcher with no verified group AND no usable pattern gives it target="" and match="", so the
+// real LIFELINE_SCRIPT skips BOTH signal paths - while the arming warnings claimed the profile pattern
+// covered the tree. That is a coverage claim the module cannot keep, so this case is reported the same
+// way a watcher that could not be started is: no watcher, state "unprotected", one warning naming the
+// consequence. `launchChrome` reaches it when no profile was resolved (treeMatch undefined) and
+// `isolatedProcessGroup` returned nothing; any rejected treeMatch reaches it too.
+
+Deno.test("umuyk: no verified group AND no usable pattern reports UNPROTECTED, never an inert watcher", async () => {
+  // The module signals a group only when the CALLER verified one (ymnpg/N3): a leader that happens to
+  // lead its own group is still not signalled if the caller passed nothing, so these fixtures are the
+  // shapes `launchChrome` uses when `isolatedProcessGroup` confirmed nothing - `{}` (which is also
+  // what a caller with no profile treeMatch passes) and a rejected treeMatch.
+  const noProfile = spawnLeader("/bin/sleep", ["300"]);
+  const badMatch = spawnLeader("/bin/sleep", ["300"]);
+  try {
+    const lines: string[] = [];
+    const specs: LifelineSpawnSpec[] = [];
+    const spawn = (spec: LifelineSpawnSpec) => {
+      specs.push(spec);
+      return fakeWatcher();
+    };
+
+    const disarmA = attachProcessLifeline(noProfile, {}, { spawn, warn: (line) => lines.push(line) });
+    assertEquals(specs.length, 0, "neither a group nor a pattern: a watcher could not reap anything, so none is started");
+    assertEquals(lifelineState(noProfile)?.state, "unprotected", "the lifeline must report the case it cannot cover");
+    assertEquals(lifelineState(noProfile)?.settled, null, "nothing was armed, so there is nothing to settle");
+    assertEquals(lines.length, 1, "exactly one warning, and it must name the real consequence");
+    assert(lines[0].includes("NOT protected"), lines[0]);
+    assert(!lines[0].includes("arms the profile pattern only"), "it must not claim pattern coverage it does not have");
+    await disarmA();
+
+    const disarmB = attachProcessLifeline(badMatch, { treeMatch: "--user-data-dir=/x" }, { spawn, warn: (line) => lines.push(line) });
+    assertEquals(specs.length, 0, "a rejected pattern plus no verified group is the same unprotected case");
+    assertEquals(lifelineState(badMatch)?.state, "unprotected");
+    assertEquals(lines.length, 2);
+    assert(lines[1].includes("was rejected"), lines[1]);
+    assert(lines[1].includes("NOT protected"), lines[1]);
+    await disarmB();
+  } finally {
+    await reap(noProfile);
+    await reap(badMatch);
+  }
+});
