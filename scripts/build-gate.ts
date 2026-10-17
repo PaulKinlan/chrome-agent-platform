@@ -20,15 +20,64 @@
 // tests/test-partition-guard.test.ts. Note build-debug-mode RISES 550s -> 950s: the old 550s was already below
 // 3 x 300s and so never guaranteed child attribution. The ceiling rises with it; it is a bound, not a runtime cost.
 
+//
+// SELECTIVE (chrome-agent-platform-6gk81): the default (no explicit files) form decides from a
+// CONTENT key over this tier's own inputs whether the three tests can tell this tree apart from a
+// tree that already passed them (scripts/lib/build-tier-inputs.mjs carries the rule, the safety
+// argument for what is out of the key, and the fail-closed direction). A matching recorded PASS
+// skips the 92s; any byte of build machinery, any of the tier's own tests, and every failure mode
+// (no record, unreadable durable root, a record for another key, CAP_BUILD_TIER=force) RUNS it.
+// There is no env var that skips the tier: a build gate's own tier must not be switchable off.
+//
+// Why this is not a coverage hole: the tier asserts build MECHANICS (symlink boot, GC of v-boot and
+// metadata residue, one live version, two-build determinism, dev/store mode alternation, generator
+// idempotence+provenance). Its product-content dimensions are already asserted on EVERY gate by
+// build:production (generated-file sync, docs/about/changelog sync, oracle scan, reachability, the
+// 52-binary Wasm manifest) plus npm test's build-smoke, dist-complete-source-authority and
+// bundled-tool-packages. Measured before this change: test:build 92s of a 341s union gate.
+
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runSerialFiles } from "./lib/serial-phase.mjs";
 import { BUILD_GATE_FILES } from "./test-partition.mjs";
+import { buildTierMode, recordBuildTierPass, resolveBuildTier } from "./lib/build-tier-inputs.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
-export function main(args = Deno.args): number {
+/** The tree's own version, or null when package.json is unreadable (then the key is version-blind). */
+async function treeVersion(): Promise<string | null> {
+  try {
+    const pkg = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
+    return typeof pkg?.version === "string" && pkg.version !== "" ? pkg.version : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function main(args = Deno.args): Promise<number> {
   const cliFiles = args.filter((a) => !a.startsWith("-"));
-  const files = cliFiles.length > 0 ? cliFiles : [...BUILD_GATE_FILES];
+  const explicit = cliFiles.length > 0;
+  const files = explicit ? cliFiles : [...BUILD_GATE_FILES];
+
+  // An explicit request names its own files, so it always runs; only the default form is selected.
+  const decision = explicit
+    ? null
+    : await resolveBuildTier({ root: ROOT, version: await treeVersion(), mode: buildTierMode(Deno.env.toObject()) });
+
+  if (decision && !decision.run) {
+    console.log(`build-gate: SKIP ${files.length} build-behaviour test(s) — ${decision.reason}`);
+    console.log(
+      "build-gate: what still verified this tree in this gate: build:production (generated-file sync, docs/about/changelog, " +
+        "oracle scan, reachability, Wasm manifest) and npm test (build-smoke, dist-complete-source-authority, bundled-tool-packages)",
+    );
+    console.log(`build-gate: tier: ${JSON.stringify({ ran: false, key: decision.key, inputs: decision.inputs, reason: decision.reason })}`);
+    return 0;
+  }
+  if (decision) {
+    console.log(`build-gate: SELECTIVE — ${decision.reason} (${decision.inputs} input file(s), key ${String(decision.key).slice(0, 12)})`);
+  }
+
   console.log(`build-gate: running ${files.length} build-behaviour test(s) serially:`);
   for (const f of files) {
     console.log(`  - ${f}`);
@@ -36,6 +85,11 @@ export function main(args = Deno.args): number {
   const rc = runSerialFiles(files, { cwd: ROOT });
   if (rc === 0) {
     console.log(`\nbuild-gate: ALL ${files.length} BUILD-BEHAVIOUR TESTS GREEN`);
+    if (decision?.key) {
+      // Only a PASS may record, so a failing tier can never license a later skip.
+      const recorded = await recordBuildTierPass({ key: decision.key, suites: files, exitCode: rc });
+      console.log(`build-gate: PASS record ${recorded.written ? "written" : `not written (${recorded.reason})`} for input key ${decision.key.slice(0, 12)}`);
+    }
   } else {
     console.error(`\nbuild-gate: FAILED with exit code ${rc}`);
   }
@@ -43,6 +97,6 @@ export function main(args = Deno.args): number {
 }
 
 if (import.meta.main) {
-  const code = main();
+  const code = await main();
   Deno.exit(code);
 }
