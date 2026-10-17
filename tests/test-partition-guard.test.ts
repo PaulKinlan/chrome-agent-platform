@@ -28,6 +28,7 @@ import {
   HEAVY_GATE_REASONS,
   isReviewedReadOnlySpawn,
   partition,
+  BUILD_GATE_CHILD_BUILDS,
   PRODUCTION_BUILD_TIMEOUT_MS,
   READ_ONLY_DIST,
   READ_ONLY_DIST_REASONS,
@@ -896,6 +897,19 @@ Deno.test("kj9s: every per-file serial bound names a SERIAL file, and no entry s
     assert(
       PRODUCTION_BUILD_TIMEOUT_MS < ms,
       `${file}'s window (${ms}ms) must outlast one child build (${PRODUCTION_BUILD_TIMEOUT_MS}ms)`,
+    );
+    // chrome-agent-platform-rppwx: ONE child bound is not enough. These files run SEQUENTIAL child
+    // builds, and a later child cannot be named until the earlier ones have finished, so the window
+    // must outlast every build BEFORE the hung one plus the hung child's own bound — i.e. the whole
+    // declared child count. The windows are derived from exactly this, so a hand-written number that
+    // silently dropped below it would be caught here rather than by a misattributed hang months later.
+    // (The 350s revision of this table failed this assertion for both files: a 100s first build plus a
+    // hung second needed 400s to be named, and the file window SIGKILLed the group 50s first.)
+    const childBuilds = BUILD_GATE_CHILD_BUILDS[file] ?? 1;
+    assert(
+      ms >= childBuilds * PRODUCTION_BUILD_TIMEOUT_MS,
+      `${file}'s window (${ms}ms) must cover its ${childBuilds} sequential child build bound(s) ` +
+        `(${childBuilds * PRODUCTION_BUILD_TIMEOUT_MS}ms) so a hung LATER child is still NAMED by its own bound`,
     );
   }
   // The child bound is MEASURED (~72s store build) x ~4, so it must never fall back to a token value.

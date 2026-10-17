@@ -55,10 +55,10 @@ a re-anchor owes (`npm run test:file -- tests/parallel-schedule.test.ts`) are in
 
 ### 2.1b The Dedicated Build Gate (`npm run test:build` / `scripts/build-gate.ts`)
 Option D (chrome-agent-platform-h65e) partitions heavy in-place build-behaviour tests out of `npm test` into a dedicated explicitly-budgeted gate:
-- **Command:** `npm run test:build` (invokes `scripts/build-gate.ts`, enforced ceiling: 1420s; measured 31-36 s on an Apple-silicon workstation after jjsz, 2026-10-07 — a single-host figure, not a bound: a loaded or 2-vCPU Linux host takes longer, up to the ceiling; explicit `CAP_SERIAL_TEST_TIMEOUT_MS` overrides without scaling).
+- **Command:** `npm run test:build` (invokes `scripts/build-gate.ts`, enforced ceiling: 2320s; measured 31-36 s on an Apple-silicon workstation after jjsz, 2026-10-07 — a single-host figure, not a bound: a loaded or 2-vCPU Linux host takes longer, up to the ceiling; explicit `CAP_SERIAL_TEST_TIMEOUT_MS` overrides without scaling).
 - **Enumerated Coverage:**
-  - `tests/build-bootstrap.test.ts` (per-file bound: 350s): steady-state symlink bootstrap, GC of dangling v-boot symlinks under dist-versions, live version counts, archive packaging idempotence.
-  - `tests/build-debug-mode.test.ts` (per-file bound: 350s): developer vs store target marker validation, sourcemap inclusion/exclusion, and mode alternation integrity.
+  - `tests/build-bootstrap.test.ts` (per-file bound: 650s = 2 sequential child builds x the 300s child bound + 50s slack): steady-state symlink bootstrap, GC of dangling v-boot symlinks under dist-versions, live version counts, archive packaging idempotence.
+  - `tests/build-debug-mode.test.ts` (per-file bound: 950s = 3 sequential child builds x the 300s child bound + 50s slack): developer vs store target marker validation, sourcemap inclusion/exclusion, and mode alternation integrity. The third child is the fail-closed steady-state restoral, which builds only when the marker does not validate; it is counted because a window must cover the worst case the file can reach. This bound ROSE from 550s, which was already below 3 x 300s and so never guaranteed that a hung later child would be named by its own bound (`chrome-agent-platform-rppwx`).
   - `tests/build-tool-bundling.test.ts` (base serial window, measured ~10s; ceiling 720s under 4x load): bundled-tool generator verify-mode drift check, `--regen-tools` idempotence, and provenance validation.
 - **Coverage Remaining in `npm test`:**
   - `tests/build-smoke.test.ts`: a store build of THIS tree exited 0 and the live `dist.complete` marker validates. It either runs `node build.mjs --target=store` now or reuses the record `build.mjs` writes after its last fatal step (§6.2); it does not always execute the build itself.

@@ -198,8 +198,13 @@ export const PRODUCTION_BUILD_TIMEOUT_MS = 300_000;
  * RE-MEASURED 2026-10-17 by gate testbuild-tn7wh (exit 0, 148s wall), because the 2026-10-06 numbers
  * had stopped describing the work: chrome-agent-platform-6gk81 then cut build-bootstrap 3->2 and
  * build-debug-mode 3->2 real builds (test:build 140.8s -> 103.3s), and the old 850s/550s had been
- * carried over unexamined. The box was loaded (load ~11 on 2 vCPU = 5.5 per CPU, ABOVE the base
- * window's MAX_LOAD_SCALE of 4), so these are pessimistic in the same sense as the row above:
+ * carried over unexamined. The box was loaded: 8 cores (nproc), load ~11, so about 1.4 per CPU —
+ * ABOVE idle and below the base window's MAX_LOAD_SCALE of 4. (An earlier revision of this comment
+ * claimed "2 vCPU = 5.5 per CPU, ABOVE MAX_LOAD_SCALE of 4". That was WRONG: the 2-vCPU figure is a
+ * stale note in build.mjs from an older VM size, and I repeated it without checking. Corrected by
+ * nproc/node os.cpus(). It is a loaded-box measurement, not a saturated-box one, and it is Linux-only
+ * — the Mac and concurrency conditions the bead's acceptance names are an OPEN GAP, recorded on the
+ * bead, not something this block may imply it covered.)
  *   build-bootstrap   83.8s  (2 production builds + 2 ZIP packagings)
  *   build-debug-mode  57.4s  (developer + store; steady-state restoral is validate-or-build)
  *   build-tool-bundling 6.3s -> still needs no bound, and its 2026-10-06 note stands.
@@ -207,18 +212,65 @@ export const PRODUCTION_BUILD_TIMEOUT_MS = 300_000;
  * as a RANGE, not a point: bootstrap 84.4s (stable), tool-bundling 5.9s (stable), but debug-mode
  * 86.8s — 1.5x its first run — so a single measurement of that file is not a safe basis for a bound.
  *
- * Both entries are therefore FLOOR-BOUND, and 350_000 is also >= 3x the WORST observation of either
- * file (84.4s and 86.8s -> 253s and 260s), so it keeps the documented x3 headroom against the slowest
- * run rather than only the median. x3 of the FASTEST observations (251s and 172s) is under the
- * child-build floor, so 350_000 (= the 300s child bound + 50s of phase slack) governs both; tightening
- * past it would break the invariant that a hung child is killed and NAMED before the file window
- * expires. That still cuts 850_000 by 500s (a hang is caught after ~5.8 min, not ~14.2 min) and
- * 550_000 by 200s (~9.2 min -> ~5.8 min), and both files were confirmed GREEN well inside the new
- * bound on the verify run (84.4s / 86.8s), so tightening did not turn healthy work red.
+ * THE FLOOR IS THE CHILD BOUNDS, NOT THE MEASUREMENT (review finding chrome-agent-platform-rppwx).
+ * The windows were briefly set to x3 of the measured work (350s each). That was WRONG, and the
+ * arithmetic is why: each of these files runs SEVERAL sequential real builds, and each build carries
+ * its own PRODUCTION_BUILD_TIMEOUT_MS bound. The child bound kills and NAMES a hung build at (its own
+ * start + that bound). A LATER child cannot be named before the EARLIER ones have finished, so for the
+ * child bound to fire before this file window, the window must exceed
+ *
+ *     (the builds before the hung one, each worth up to its own bound) + one child bound
+ *
+ * i.e. at least N x PRODUCTION_BUILD_TIMEOUT_MS for a file that can run N builds. At 350s a first
+ * build of 100s plus a hung second build needed 400s to be named, and the 350s file window SIGKILLed
+ * the group 50s earlier, leaving only "the file timed out" — the exact attribution this table exists
+ * to preserve. So each window is DERIVED from BUILD_GATE_CHILD_BUILDS and the child bound below,
+ * never from a multiple of measured work, and tests/test-partition-guard.test.ts now ASSERTS that
+ * invariant so it cannot drift again.
+ *
+ * What the measurement is therefore worth, stated plainly: it shows the measured work is 5-7x BELOW
+ * the floor (so the floor is child-bound-driven and no reasonable load will reach it), and it shows
+ * the OLD values were unsound TOO — 550_000 for build-debug-mode was already below 3 x 300_000, so it
+ * never guaranteed child attribution either. It does NOT justify a smaller window, and this change is
+ * not the speed win the bead hoped for: the real lever for catching a hang sooner is
+ * PRODUCTION_BUILD_TIMEOUT_MS itself (300s, roughly 7x the ~42s measured build), whose reduction
+ * carries a documented lock-leak risk and so needs its own measurement and review.
  */
+
+/**
+ * How many REAL production builds each build-behaviour file can run. This is what its window is
+ * floored by (chrome-agent-platform-rppwx): a file's window must outlast every build BEFORE the hung
+ * one plus one child bound, or the file window kills the hang before the child bound can name it.
+ *   build-bootstrap   2 (two production builds, plus two ZIP packagings inside the same window)
+ *   build-debug-mode  3 (a developer build, a store build, and the fail-closed steady-state restoral:
+ *                        validate-or-build, so it builds only when the marker does NOT validate. It is
+ *                        counted because a window must cover the worst case the file can REACH, not
+ *                        the common case it usually takes.)
+ * A file with no entry here keeps one child bound of headroom — enough for the base window, which no
+ * entry may replace without this arithmetic.
+ */
+export const BUILD_GATE_CHILD_BUILDS = Object.freeze(
+  /** @type {Record<string, number>} */ ({
+    "tests/build-bootstrap.test.ts": 2,
+    "tests/build-debug-mode.test.ts": 3,
+  }),
+);
+
+/** Slack added to a derived window: the phase's own bookkeeping, and the ZIP packagings riding inside
+ *  build-bootstrap's window, none of which has a child bound of its own to be named by. */
+export const FILE_WINDOW_SLACK_MS = 50_000;
+
+/** Derive a file window from the child bound and the builds that file can run (rppwx). */
+function fileWindowMs(file) {
+  return (BUILD_GATE_CHILD_BUILDS[file] ?? 1) * PRODUCTION_BUILD_TIMEOUT_MS + FILE_WINDOW_SLACK_MS;
+}
+
 export const SERIAL_FILE_TIMEOUTS = Object.freeze({
-  "tests/build-bootstrap.test.ts": 350_000, // floor-bound: 83.8s measured 2026-10-17 (loaded; range 83.8-84.4) x3 = 251s < 300s child bound
-  "tests/build-debug-mode.test.ts": 350_000, // floor-bound: 57.4s measured 2026-10-17 (loaded; range 57.4-86.8) x3 = 172-260s < 300s child bound
+  // 2 builds x 300s + 50s = 650s, against 83.8-84.4s measured work.
+  "tests/build-bootstrap.test.ts": fileWindowMs("tests/build-bootstrap.test.ts"),
+  // 3 builds x 300s + 50s = 950s, against 57.4-86.8s measured work. RAISED from 550_000, which was
+  // already below 3 x 300_000 and so never guaranteed child attribution (rppwx).
+  "tests/build-debug-mode.test.ts": fileWindowMs("tests/build-debug-mode.test.ts"),
 });
 
 // Files a content scan classifies as hazards but that are provably
