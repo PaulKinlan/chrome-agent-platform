@@ -544,8 +544,10 @@ export async function buildBundledWasmManifestMap(root, { inventory = null } = {
   if (!data || !Array.isArray(data.files) || !Array.isArray(data.manifests)) {
     throw packageError("bundled inventory authority is malformed");
   }
-  const { manifestCasMappings, assertManifestRowDigest } = await import("./lib/wasm-manifest-assets.mjs");
+  const { manifestCasMappings, assertManifestRowDigest, registerBundledManifestIdentity, recordBundledWasmClaim } = await import("./lib/wasm-manifest-assets.mjs");
   const declared = new Set(data.files.map((row) => row?.rel));
+  const manifestIdentities = new Set();
+  const casClaims = new Map();
   const CAS_RE = /^extension\/wasm\/cas\/[0-9a-f]{64}\.wasm$/u;
   const map = new Map();
   for (const identity of data.manifests) {
@@ -573,19 +575,24 @@ export async function buildBundledWasmManifestMap(root, { inventory = null } = {
     }
     let mappings;
     try {
+      registerBundledManifestIdentity(manifestIdentities, identity, manifest);
       mappings = manifestCasMappings(manifest);
     } catch (error) {
       throw packageError(error?.message ?? `bundled manifest mapping invalid: ${manifestRel}`);
     }
-    for (const { casRel, schemaVersion, executable, asset } of mappings) {
+    for (const mapping of mappings) {
+      const { casRel, schemaVersion, executable, asset } = mapping;
       if (!CAS_RE.test(casRel) || !declared.has(casRel)) {
         throw packageError(`bundled Wasm executable outside the declared CAS inventory: ${casRel}`);
       }
-      const archivePath = casRel.slice("extension/".length);
-      if (map.has(archivePath)) {
-        throw packageError(`duplicate bundled Wasm manifest mapping: ${archivePath}`);
+      try {
+        if (recordBundledWasmClaim(casClaims, mapping, manifest)) {
+          const archivePath = casRel.slice("extension/".length);
+          map.set(archivePath, schemaVersion === 2 ? { schemaVersion: 2, id: asset.id, sha256: asset.sha256, size: asset.size } : executable);
+        }
+      } catch (error) {
+        throw packageError(error?.message ?? `bundled manifest mapping invalid: ${manifestRel}`);
       }
-      map.set(archivePath, schemaVersion === 2 ? { schemaVersion: 2, id: asset.id, sha256: asset.sha256, size: asset.size } : executable);
     }
   }
   return map;

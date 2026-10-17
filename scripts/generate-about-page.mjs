@@ -90,6 +90,10 @@ export const UPSTREAM_MAP = Object.freeze({
     upstreamName: "hash-wasm (Daninet/hash-wasm)",
     upstreamUrl: "https://github.com/Daninet/hash-wasm",
   },
+  "cap.bundled.hash.keccak.256": {
+    upstreamName: "hash-wasm (Daninet/hash-wasm)",
+    upstreamUrl: "https://github.com/Daninet/hash-wasm",
+  },
   "cap.bundled.hash.md4": {
     upstreamName: "hash-wasm (Daninet/hash-wasm)",
     upstreamUrl: "https://github.com/Daninet/hash-wasm",
@@ -107,6 +111,14 @@ export const UPSTREAM_MAP = Object.freeze({
     upstreamUrl: "https://github.com/Daninet/hash-wasm",
   },
   "cap.bundled.hash.sha3.256": {
+    upstreamName: "hash-wasm (Daninet/hash-wasm)",
+    upstreamUrl: "https://github.com/Daninet/hash-wasm",
+  },
+  "cap.bundled.hash.sha3.384": {
+    upstreamName: "hash-wasm (Daninet/hash-wasm)",
+    upstreamUrl: "https://github.com/Daninet/hash-wasm",
+  },
+  "cap.bundled.hash.sha3.512": {
     upstreamName: "hash-wasm (Daninet/hash-wasm)",
     upstreamUrl: "https://github.com/Daninet/hash-wasm",
   },

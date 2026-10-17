@@ -232,6 +232,21 @@ try {
         selectionRef: refFor(req, "hash_sha3_256"),
         arguments: { data: btoa("hello") },
       }) },
+      { tool: "search_tools", args: { query: "hash sha3 384", limit: 5 } },
+      { tool: "execute_tool", args: (req: any) => ({
+        selectionRef: refFor(req, "hash_sha3_384"),
+        arguments: { data: btoa("hello") },
+      }) },
+      { tool: "search_tools", args: { query: "hash sha3 512", limit: 5 } },
+      { tool: "execute_tool", args: (req: any) => ({
+        selectionRef: refFor(req, "hash_sha3_512"),
+        arguments: { data: btoa("hello") },
+      }) },
+      { tool: "search_tools", args: { query: "hash keccak 256", limit: 5 } },
+      { tool: "execute_tool", args: (req: any) => ({
+        selectionRef: refFor(req, "hash_keccak_256"),
+        arguments: { data: btoa("hello") },
+      }) },
       { tool: "search_tools", args: { query: "gzip compress", limit: 5 } },
       { tool: "execute_tool", args: (req: any) => ({
         selectionRef: refFor(req, "gzip"),
@@ -316,9 +331,9 @@ try {
   assert(typed === true, "composer input not found");
   await cdp.eval(ntp.sessionId, `document.querySelector('${composerSend("hub")}')?.click()`);
 
-  // 14 searches + 14 executes + the final text = 29 model calls; the 29th
-  // carries the last execute's result. Wait well past that.
-  const EXPECTED_CALLS = 29;
+  // 17 searches + 17 executes + the final text = 35 model calls; the 35th
+  // carries the last execute's result. Never snapshot mid-run.
+  const EXPECTED_CALLS = 35;
   let calls = 0;
   for (let i = 0; i < 240; i++) {
     calls = provider.requests.length;
@@ -384,6 +399,15 @@ try {
       const out = JSON.stringify(env?.result ?? "");
       assert(out.includes("3338be694f50c5f338814986cdf0686453a888b84f424d792af4b9202398f392"), `hash_sha3_256 vector wrong: ${out.slice(0, 200)}`);
     }],
+    ...([
+      ["hash_sha3_384", "720aea11019ef06440fbf05d87aa24680a2153df3907b23631e7177ce620fa1330ff07c0fddee54699a4c3ee0ee9d887"],
+      ["hash_sha3_512", "75d527c368f2efe848ecf6b073a36767800805e9eef2b1857d5f984f036eb6df891d75f72d9b154518c1cd58835286d1da9a38deba3de98b5a53e5ed78a84976"],
+      ["hash_keccak_256", "1c8aff950685c2ed4bc3174f3472287b56d9517b9c948127319a09a7a36deac8"],
+    ] as const).map(([toolId, expected]): [string, string, (env: any) => void] => [toolId, "execute_tool", (env) => {
+      assert(env?.ok === true, `${toolId} envelope not ok: ${JSON.stringify(env)?.slice(0, 300)}`);
+      const out = JSON.stringify(env?.result ?? "");
+      assert(out.includes(expected), `${toolId} vector wrong: ${out.slice(0, 200)}`);
+    }]),
     ["gzip", "execute_tool", (env) => {
       // ten9 (no tool may be preview-gated): gzip now EXECUTES in-run through
       // the offscreen WASI host — output must be real gzip bytes (magic 1f8b),

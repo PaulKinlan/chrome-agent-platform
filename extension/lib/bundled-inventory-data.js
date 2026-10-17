@@ -99,6 +99,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "digest": "46ca602b097d817c917e3025ed79e1e8fbc256b76e9e591e105c3b03b2a8d65e"
   },
   {
+   "pkg": "cap.bundled.hash.keccak.256",
+   "version": "1.0.0",
+   "digest": "9f0f24e9d947a393af228f09f35590844409159111ea39fd63187fb6ab1d46e1"
+  },
+  {
    "pkg": "cap.bundled.hash.md4",
    "version": "1.0.0",
    "digest": "8f80818720934e42af112f18a21338fcdf5b6a754999e46bdf211363b4628450"
@@ -121,7 +126,17 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.hash.sha3.256",
    "version": "1.0.0",
-   "digest": "a3e37bf6ff91166247dcd636583dae3bf9309ed46baab3dd649963013c64b454"
+   "digest": "5e860622c9ec7940ba883abf457bd854f9aee4b22767eb7cb87e7c1f848ae926"
+  },
+  {
+   "pkg": "cap.bundled.hash.sha3.384",
+   "version": "1.0.0",
+   "digest": "159f8244cbf62d2a0a65461250ac96242bfb45250cd6ac5bc27bab6c8080aff5"
+  },
+  {
+   "pkg": "cap.bundled.hash.sha3.512",
+   "version": "1.0.0",
+   "digest": "8497d71425f2c44541968bc17fff6177b859dcd43ce1dafa6eb61c7940bc2805"
   },
   {
    "pkg": "cap.bundled.hash.sha384",
@@ -706,6 +721,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 1965
   },
   {
+   "rel": "extension/wasm/manifests/cap.bundled.hash.keccak.256-1.0.0.manifest.json",
+   "sha256": "9f0f24e9d947a393af228f09f35590844409159111ea39fd63187fb6ab1d46e1",
+   "size": 2046
+  },
+  {
    "rel": "extension/wasm/manifests/cap.bundled.hash.md4-1.0.0.manifest.json",
    "sha256": "8f80818720934e42af112f18a21338fcdf5b6a754999e46bdf211363b4628450",
    "size": 1914
@@ -727,8 +747,18 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.hash.sha3.256-1.0.0.manifest.json",
-   "sha256": "a3e37bf6ff91166247dcd636583dae3bf9309ed46baab3dd649963013c64b454",
+   "sha256": "5e860622c9ec7940ba883abf457bd854f9aee4b22767eb7cb87e7c1f848ae926",
    "size": 2001
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.hash.sha3.384-1.0.0.manifest.json",
+   "sha256": "159f8244cbf62d2a0a65461250ac96242bfb45250cd6ac5bc27bab6c8080aff5",
+   "size": 1981
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.hash.sha3.512-1.0.0.manifest.json",
+   "sha256": "8497d71425f2c44541968bc17fff6177b859dcd43ce1dafa6eb61c7940bc2805",
+   "size": 1982
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.hash.sha384-1.0.0.manifest.json",
@@ -956,6 +986,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 1393
   },
   {
+   "rel": "extension/wasm/sbom/hash_keccak_256.cdx.json",
+   "sha256": "603dff86047a3569e62881795f02730f7e35f4a0195cec49297e8ff5c70fe7d5",
+   "size": 1403
+  },
+  {
    "rel": "extension/wasm/sbom/hash_md4.cdx.json",
    "sha256": "b4ebd5fa684ea19ea1292f513e07248d91ed2772a21b1013493c91f477aef2be",
    "size": 1389
@@ -977,7 +1012,17 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/sbom/hash_sha3_256.cdx.json",
-   "sha256": "082dcdef0d842d221eded26676a971cb7c384bfff82d2bbb652d0b6340a9d9e3",
+   "sha256": "503eb933c0681223d2c588ed12ecfa3486a227ed172c43bd1be806b58ea5ae6a",
+   "size": 1399
+  },
+  {
+   "rel": "extension/wasm/sbom/hash_sha3_384.cdx.json",
+   "sha256": "e772a8738429f27a70feb2d372d9beb7e234a48f59e6b1d523c0349956495414",
+   "size": 1399
+  },
+  {
+   "rel": "extension/wasm/sbom/hash_sha3_512.cdx.json",
+   "sha256": "1ef85e762aaa298030821d04d93458760b22c307cb2f6e6b67b1035cb546081a",
    "size": 1399
   },
   {

@@ -239,16 +239,21 @@ const { BUNDLED_INVENTORY } = await import("./extension/lib/bundled-inventory-da
 // Single schema-aware manifest→CAS mapping (ltkj.2): the same helper serves the
 // generator, this scan and the Store archive map — one rule, not three parsers.
 // Inventory-row digest drift fails closed before any mapping is trusted.
-const { manifestCasMappings, assertManifestRowDigest } = await import("./scripts/lib/wasm-manifest-assets.mjs");
+const { manifestCasMappings, assertManifestRowDigest, registerBundledManifestIdentity, recordBundledWasmClaim } = await import("./scripts/lib/wasm-manifest-assets.mjs");
 const manifestByFile = new Map();
+const manifestIdentities = new Set();
+const casClaims = new Map();
 for (const identity of BUNDLED_INVENTORY.manifests) {
   const manifestRel = `extension/wasm/manifests/${identity.pkg}-${identity.version}.manifest.json`;
   const manifestText = await readFile(join(ROOT, manifestRel), "utf8");
   assertManifestRowDigest(manifestText, identity);
   const manifest = JSON.parse(manifestText);
-  for (const { casRel, schemaVersion, executable, asset } of manifestCasMappings(manifest)) {
-    if (manifestByFile.has(casRel)) throw new Error(`bundled-Wasm manifest collision: ${casRel}`);
-    manifestByFile.set(casRel, schemaVersion === 2 ? { schemaVersion: 2, asset } : executable);
+  registerBundledManifestIdentity(manifestIdentities, identity, manifest);
+  for (const mapping of manifestCasMappings(manifest)) {
+    const { casRel, schemaVersion, executable, asset } = mapping;
+    if (recordBundledWasmClaim(casClaims, mapping, manifest)) {
+      manifestByFile.set(casRel, schemaVersion === 2 ? { schemaVersion: 2, asset } : executable);
+    }
   }
 }
 const wasmViolations = await scanBundledWasmFiles(shippedWasm, {
