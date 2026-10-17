@@ -11,9 +11,9 @@
 // construction, while a bare Promise.all surfaces the rejection in a microtask, long before a 25 ms
 // timer can fire — so the mutant is RED every time, and the correct code is green every time.
 import { assert, assertEquals, assertStrictEquals } from "jsr:@std/assert@1";
-import { mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 import {
   DEFAULT_GC_GRACE_MS,
   MAX_GC_GRACE_MS,
@@ -136,7 +136,9 @@ Deno.test("settleAll: a falsy rejection reason (undefined, 0, empty string) stil
 // actually waits `gcGraceMs` before its rm is pinned separately by build-parallel-discipline.test.ts:804;
 // together they cover the product path without adding a third 40s production build to the build tier.
 Deno.test("b0ld8: a reader that pinned the OLD version dir survives a publish+GC when the grace outlasts it, and is torn down with no grace", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "b0ld8-grace-"));
+  // durableDir, not os.tmpdir(): /tmp on the build host is RAM-backed and tests/durable-root.test.ts
+  // fails closed on real tmpdir usage (this test was caught by that guard on its first gate run).
+  const root = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "b0ld8-grace-" });
   const versions = path.join(root, "dist-versions");
   const dist = path.join(root, "dist");
   const oldDir = path.join(versions, "v-old-1-1");

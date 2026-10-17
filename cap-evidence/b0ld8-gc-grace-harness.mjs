@@ -33,8 +33,8 @@
 import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { createReadStream } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -85,7 +85,7 @@ async function walk(dir, root = dir) {
 }
 
 async function makeSandbox() {
-  const root = await mkdtemp(path.join(tmpdir(), "b0ld8-gc-"));
+  const root = await mkdtemp(path.join(durableDir("scratch"), "b0ld8-gc-"));
   const versions = path.join(root, "dist-versions");
   await mkdir(versions, { recursive: true });
   const oldDir = path.join(versions, "v-old-1-1000");
