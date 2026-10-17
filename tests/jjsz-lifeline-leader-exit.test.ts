@@ -157,21 +157,34 @@ function fakeWatcher(
     /** t5o2i.2 v8zbu: the close returns but the watcher's EXIT is held until the test calls `end()` - the
      *  deterministic way to have a transition genuinely in flight with only its death unproven. */
     holdStatus?: boolean;
+    /** t5o2i.2 qh5lp: the watcher's status promise REJECTS instead of resolving - an exit that could not be
+     *  read. Rejection happens at the point the lifeline triggers it, so no promise is left unhandled. */
+    rejectStatus?: boolean;
     onKill?: () => void;
     onClose?: () => Promise<void>;
   } = {},
 ): LifelineWatcher & { end(): void } {
   let settle!: (status: { code: number; signal: string | null }) => void;
-  const status = new Promise<{ code: number; signal: string | null }>((resolve) => {
+  let fail!: (error: Error) => void;
+  const status = new Promise<{ code: number; signal: string | null }>((resolve, reject) => {
     settle = resolve;
+    fail = reject;
   });
+  /** The exit is reported: a rejection when this watcher's status cannot be read (qh5lp), else the status. */
+  const reportExit = (value: { code: number; signal: string | null }): void => {
+    if (opts.rejectStatus) fail(new Error("watcher status unavailable"));
+    else settle(value);
+  };
   return {
     pid: 424_242,
     status,
     stdin: {
       close() {
         calls.push("stdin.close");
-        if (!opts.hangs && !opts.uninterruptible && !opts.holdStatus) settle({ code: opts.exitCode ?? 0, signal: null });
+        if (!opts.hangs && !opts.uninterruptible && !opts.holdStatus) reportExit({ code: opts.exitCode ?? 0, signal: null });
+        // qh5lp: a watcher whose status cannot be read reports that at the first exit signal - the sweep's trigger -
+        // so the sweep's own rejection branch is exercised, not just the post-SIGKILL wait.
+        if (opts.rejectStatus) fail(new Error("watcher status unavailable"));
         if (opts.uninterruptible) return new Promise<void>(() => {});
         return opts.onClose?.() ?? Promise.resolve();
       },
@@ -179,7 +192,7 @@ function fakeWatcher(
     kill(signo = "SIGTERM") {
       calls.push(`kill:${signo}`);
       opts.onKill?.();
-      if (!opts.uninterruptible && !opts.holdStatus) settle({ code: 137, signal: signo });
+      if (!opts.uninterruptible && !opts.holdStatus) reportExit({ code: 137, signal: signo });
     },
     end() {
       settle({ code: opts.exitCode ?? 0, signal: null });
@@ -1034,6 +1047,46 @@ Deno.test("lifeline: an unsettled stdin close alone does NOT refuse the profile 
     await awaitFiredLifelineSweep(marker);
   } finally {
     await reap(proc);
+  }
+});
+
+Deno.test("lifeline: a watcher whose EXIT STATUS REJECTS is UNCONFIRMED and refuses the profile - a rejection is not an exit (t5o2i.2 qh5lp)", async () => {
+  // The reviewer's repro: `attempt(() => watcher.status)` swallowed the rejection, so a cleanup nobody had proved
+  // was reported as confirmed and the same profile could be reused while the watcher might still sweep.
+  for (const shape of ["disarm", "sweep"] as const) {
+    const proc = spawnLeader("/bin/sleep", ["300"]);
+    const marker = `user-data-dir=jjsz-t5o2i-reject-${shape}-${crypto.randomUUID()}`;
+    const lines: string[] = [];
+    try {
+      const disarm = attachProcessLifeline(proc, { group: proc.pid, treeMatch: marker }, {
+        spawn: () => fakeWatcher([], { hangs: true, rejectStatus: true }),
+        warn: (line) => lines.push(line),
+        sweepTimeoutMs: 40,
+        settleTimeoutMs: 60,
+      });
+      if (shape === "disarm") {
+        assert(await settlesWithin(disarm(), 5000), "the disarm settles inside its bound");
+      } else {
+        proc.kill("SIGKILL");
+        await proc.status;
+        assert(await until(() => lifelineState(proc)?.state === "fired", 5000), "the exit fired the sweep");
+        assert(await settlesWithin(lifelineState(proc)?.settled, 5000), "the sweep settles inside its bound");
+      }
+      assertEquals(
+        lifelineState(proc)?.cleanupConfirmed,
+        false,
+        `${shape}: a status that rejected is an exit we did NOT observe, so cleanup cannot be confirmed`,
+      );
+      assert(lines.some((line) => line.includes("UNCONFIRMED")), `${shape}: the unconfirmed verdict is reported: ${lines.join(" | ")}`);
+      await assertRejects(
+        () => awaitFiredLifelineSweep(marker),
+        Error,
+        "did not exit within their bound",
+        `${shape}: the profile must be refused, not reused`,
+      );
+    } finally {
+      await reap(proc);
+    }
   }
 });
 

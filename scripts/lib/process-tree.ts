@@ -423,9 +423,28 @@ async function attempt(fn: () => unknown): Promise<void> {
  *  watcher has stopped, which a SIGKILL usually gives in milliseconds. */
 export const LIFELINE_SETTLE_WAIT_MS = 1000;
 
+/** TRUE only when the watcher's EXIT was OBSERVED: its `status` promise RESOLVED within `ms`. A REJECTION is
+ *  not an exit - it means the exit could not be read - so it counts as FALSE, fail closed (qh5lp). Swallowing
+ *  that rejection (the old `attempt(() => watcher.status)`) reported a cleanup nobody had proved and let the
+ *  profile be reused while a watcher that may still sweep was alive. */
+async function diedWithin(p: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p.then(() => true, () => false),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** TRUE when `p` settled within `ms`, FALSE when the bound expired first. Never rejects (a rejection
- *  means the wait is over, which is what is being measured). The loser is NOT cancelled: a
- *  `watcher.status` cannot be, and the caller reports the timeout instead of pretending it ended. */
+ *  means the wait is over, which is what is being measured). Used only for waits whose SUBJECT is the call
+ *  completing (the stdin close), never for the watcher's death - see `diedWithin` for that. The loser is not
+ *  cancelled: a `watcher.status` cannot be, and the caller reports the timeout instead of pretending it ended. */
 async function settlesWithin(p: Promise<unknown>, ms: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -708,19 +727,34 @@ export function attachProcessLifeline(
         `own exit, which is what decides cleanup, is judged separately`,
     );
   };
+  // The watcher's status, read once and never swallowed: a throw or rejection here means the exit could not be
+  // OBSERVED, which is not the same as an exit (qh5lp).
+  const watcherStatus = (): Promise<unknown> | null => {
+    try {
+      return watcher.status;
+    } catch {
+      return null;
+    }
+  };
   const disarmBody = async (): Promise<void> => {
     await attempt(() => watcher.kill("SIGKILL"));
     if (!(await settlesWithin(attempt(() => watcher.stdin.close()), settleTimeoutMs))) closeUnsettled();
-    if (!(await settlesWithin(attempt(() => watcher.status), settleTimeoutMs))) unconfirmed("exit after SIGKILL");
+    const status = watcherStatus();
+    if (status === null || !(await diedWithin(status, settleTimeoutMs))) unconfirmed("exit after SIGKILL");
   };
   const sweepBody = async (): Promise<void> => {
     // The watcher's own trigger is EOF on its stdin: close it and do NOT kill the shell.
     const closing = attempt(() => watcher.stdin.close());
     const timedOut = Symbol("lifeline sweep timed out");
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let statusFailed = false;
     try {
       const outcome = await Promise.race([
-        watcher.status.then((status) => status, () => null),
+        // A REJECTION is not an exit: it is an exit we could not read, which stays UNCONFIRMED (qh5lp).
+        watcher.status.then((status) => status, () => {
+          statusFailed = true;
+          return null;
+        }),
         new Promise<typeof timedOut>((resolve) => {
           timer = setTimeout(() => resolve(timedOut), sweepTimeoutMs);
         }),
@@ -731,7 +765,9 @@ export function attachProcessLifeline(
             `killing its watcher (the group may not have been fully signalled)`,
         );
         await attempt(() => watcher.kill("SIGKILL"));
-        if (!(await settlesWithin(watcher.status, settleTimeoutMs))) unconfirmed("exit after SIGKILL");
+        if (!(await diedWithin(watcher.status, settleTimeoutMs))) unconfirmed("exit after SIGKILL");
+      } else if (statusFailed) {
+        unconfirmed("exit status could not be read (the watcher's status promise rejected)");
       } else if (outcome !== null && outcome.code === LIFELINE_PKILL_REJECTED) {
         warn(
           `process-tree: lifeline sweep for pid ${proc.pid}: pkill rejected the profile pattern; ` +
