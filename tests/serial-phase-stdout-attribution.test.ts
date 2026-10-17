@@ -136,9 +136,11 @@ Deno.test("ia4z: a per-file TIMEOUT is NAMED in a STDOUT-ONLY capture too", asyn
 // chrome-agent-platform-tn7wh: the serial phase must publish what each file COST, on the passing path
 // too. Before this, runSerialFiles computed the per-file elapsed time and printed it only when a file
 // failed, so a green gate log said "the phase took 103s" and nothing about the three files inside it.
-// The two windows in SERIAL_FILE_TIMEOUTS are supposed to be MEASURED WORK x ~3 (test-partition.mjs),
-// and with no per-file number on success there was nothing to re-measure them against — which is how
-// they came to be sized against builds the files no longer run. This asserts the emission contract
+// The two windows in SERIAL_FILE_TIMEOUTS are DERIVED from the child bound and each file's build count
+// in test-partition.mjs, with the invariant asserted by test-partition-guard (chrome-agent-platform-rppwx);
+// measurement is evidence for that rule, not its input (chrome-agent-platform-fa2h1 moves the child bound
+// itself). With no per-file number on success there was nothing to check them against — which is how they
+// earlier came to be sized against builds the files no longer run. This asserts the emission contract
 // that makes the next re-measurement mechanical: one grep over any gate log.
 Deno.test("tn7wh: every serial file reports its own duration on the PASSING path too", async () => {
   const dir = durableDir(`tn7wh-durations-${Deno.pid}`);

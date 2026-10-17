@@ -155,9 +155,9 @@ export const PRODUCTION_BUILD_TIMEOUT_MS = 300_000;
  * Per-file serial windows (chrome-agent-platform-kj9s). ONE global window for every serial file was
  * the mismatch that made a handful of build-heavy files look like a capacity problem: those files run
  * several REAL production builds, so their cost is a property of build COUNT, not of tree health.
- * Every value here is MEASURED WORK x ~3 — headroom for a loaded box that does not turn a hung file
- * into a 15-minute wait — and ONLY files that genuinely need it are listed; every other serial file
- * keeps the base window, so a hang there is still caught fast.
+ * Every value here is DERIVED from the child bound and that file's build count — see THE ONE RULE
+ * below; it is never a multiple of measured work — and ONLY files that genuinely need it are listed;
+ * every other serial file keeps the base window, so a hang there is still caught fast.
  *
  * MEASURED 2026-10-06 by gate kj9s-measure AFTER the 7->3 / 6->3 regroup (the box was deliberately
  * loaded: a merger gate was running concurrently, so these are pessimistic):
@@ -171,19 +171,30 @@ export const PRODUCTION_BUILD_TIMEOUT_MS = 300_000;
  * Per-file serial windows (chrome-agent-platform-kj9s). ONE global window for every serial file was
  * the mismatch that made a handful of build-heavy files look like a capacity problem: those files run
  * several REAL production builds, so their cost is a property of build COUNT, not of tree health.
- * Every value here is MEASURED WORK x ~3 — headroom for a loaded box that does not turn a hung file
- * into a 15-minute wait — and ONLY files that genuinely need it are listed; every other serial file
- * keeps the base window, so a hang there is still caught fast.
+ * ONLY files that genuinely need it are listed; every other serial file keeps the base window, so a
+ * hang there is still caught fast. A per-file entry REPLACES the load-scaled base window rather than
+ * scaling with it (serial-phase.mjs picks `perFileTimeoutMs?.[file] ?? timeoutMs`), so the entry is an
+ * ABSOLUTE number and nothing else scales it.
  *
- * A per-file entry REPLACES the load-scaled base window rather than scaling with it (serial-phase.mjs
- * picks `perFileTimeoutMs?.[file] ?? timeoutMs`), so the x3 is what absorbs load here — the entry below
- * is an absolute number and must be sized from a LOADED measurement, never from a quiet one.
+ * THE ONE RULE (review finding chrome-agent-platform-zv3kh replaced the stale measured-x3 wording that
+ * used to live here, and chrome-agent-platform-rppwx is what that wording cost us): a window is DERIVED
+ * from the child bound and the builds the file can run, never from a multiple of measured work.
  *
- * The value is max(measured x ~3, PRODUCTION_BUILD_TIMEOUT_MS + slack): tests/test-partition-guard.test.ts
- * pins the lower half of that (the window must outlast ONE child build, so a hung child is killed and
- * NAMED by its own bound before this window expires and the only thing a reader learns is "the file
- * timed out"). When the x3 of a now-faster file lands UNDER that floor, the floor is what governs, and
- * the entry is floored deliberately rather than tightened past the invariant.
+ *     window = BUILD_GATE_CHILD_BUILDS[file] x PRODUCTION_BUILD_TIMEOUT_MS + FILE_WINDOW_SLACK_MS
+ *
+ * The reason is attribution, not headroom. These files run SEQUENTIAL real builds, each under its own
+ * child bound, and a LATER child cannot be NAMED until the EARLIER ones have finished, so the window
+ * must exceed (the builds before the hung one, each worth up to its own bound) + one child bound. A
+ * window sized as measured-work x k silently violates that: at 350s, a 100s first build plus a hung
+ * second needed 400s to be named and this window SIGKILLed the group 50s first, leaving only "the file
+ * timed out". tests/test-partition-guard.test.ts ASSERTS the derived invariant, so the table cannot be
+ * hand-edited back below it.
+ *
+ * DO NOT size an entry from a measurement. Measurement's role here is EVIDENCE ONLY: it shows the
+ * measured work is 5-7x below the floor (so no plausible load reaches it), and it caught that the old
+ * 550_000 for build-debug-mode was already below 3 x the child bound. If a remeasurement ever suggests
+ * a number smaller than the derived floor, the measurement is not the thing to change - see
+ * chrome-agent-platform-fa2h1, where the child bound itself is the lever.
  *
  * MEASURED 2026-10-06 by gate kj9s-measure AFTER the 7->3 / 6->3 regroup (the box was deliberately
  * loaded: a merger gate was running concurrently, so these are pessimistic):

@@ -892,11 +892,13 @@ Deno.test("kj9s: every per-file serial bound names a SERIAL file, and no entry s
     assert(SERIAL.has(file), `${file} has a per-file bound but is not in the SERIAL phase`);
     assert(Number.isSafeInteger(ms) && ms > 0, `${file} must carry a positive integer bound, got ${ms}`);
     assert(ms <= 1_200_000, `${file}'s bound (${ms}ms) must stay a bound, not an essay-writing window`);
-    // A single child build must be killed and NAMED by the child bound before the file window it
-    // runs under expires — otherwise the only thing a reader learns is "the file timed out".
+    // The BASE check: a single child build must be killed and NAMED by the child bound before the file
+    // window it runs under expires — otherwise the only thing a reader learns is "the file timed out".
+    // This is necessary but NOT sufficient; the N-child check immediately below is the real rule
+    // (chrome-agent-platform-rppwx), since a later child cannot be named until earlier ones finish.
     assert(
       PRODUCTION_BUILD_TIMEOUT_MS < ms,
-      `${file}'s window (${ms}ms) must outlast one child build (${PRODUCTION_BUILD_TIMEOUT_MS}ms)`,
+      `${file}'s window (${ms}ms) must outlast at least one child build (${PRODUCTION_BUILD_TIMEOUT_MS}ms)`,
     );
     // chrome-agent-platform-rppwx: ONE child bound is not enough. These files run SEQUENTIAL child
     // builds, and a later child cannot be named until the earlier ones have finished, so the window
