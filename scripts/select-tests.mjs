@@ -612,6 +612,55 @@ export function allTestFiles() {
     .sort();
 }
 
+let cachedTestFilesWithContent = null;
+
+export function clearReferrersCache() {
+  cachedTestFilesWithContent = null;
+}
+
+export function testFilesWithContent({ reload = false } = {}) {
+  if (cachedTestFilesWithContent && !reload) return cachedTestFilesWithContent;
+  cachedTestFilesWithContent = allTestFiles().map((file) => ({
+    file,
+    content: readFileSync(join(ROOT, file), "utf8"),
+  }));
+  return cachedTestFilesWithContent;
+}
+
+/**
+ * Tests that refer to this path by literal path or basename (when specific).
+ * Used to map fixtures and text-read scripts that have no static import edge.
+ */
+export function referrersFor(rel, { reload = false } = {}) {
+  const normalized = rel.replace(/\\/g, "/");
+  const candidates = [normalized];
+  if (normalized.startsWith("tests/")) {
+    candidates.push(normalized.slice("tests/".length));
+  }
+  const base = normalized.split("/").pop();
+  if (normalized.startsWith("scripts/") && base && base.length >= 10) {
+    candidates.push(base);
+  }
+  if (
+    normalized.startsWith("tests/fixtures/") &&
+    base &&
+    base.length >= 10 &&
+    !["README.md", "memory.js", "artifacts.js", "kv.js"].includes(base)
+  ) {
+    candidates.push(base);
+  }
+
+  const tests = testFilesWithContent({ reload });
+  const matched = [];
+  for (const { file, content } of tests) {
+    if (file === normalized) continue;
+    if (candidates.some((pattern) => content.includes(pattern))) {
+      matched.push(file);
+    }
+  }
+  return matched.sort();
+}
+
 // One reason per OMISSION CLASS (review P1-A): an omission with no reason is a silent skip. Kept
 // SHORT on purpose — a subset run omits ~670 suites, so the reason text is repeated ~670 times in the
 // ledger line; the nuance lives in the `unknown:` marker and in the run's own stderr summary.
@@ -872,7 +921,7 @@ export function planSelection({ base = "origin/main" } = {}) {
       try { return statSync(join(ROOT, test)).isFile(); } catch { return false; }
     }, (source) => {
       try { return statSync(join(ROOT, source)).isFile(); } catch { return false; }
-    })
+    }, referrersFor)
     : { mapped: [], unmappable: [] };
 
   if (unmappable.length) {
