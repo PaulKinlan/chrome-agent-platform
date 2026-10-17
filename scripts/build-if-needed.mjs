@@ -317,7 +317,14 @@ export async function ensureStoreBuild({
   if (rc !== 0) {
     return {
       disposition: "failed",
-      reason: `store build exited ${rc} (${existing.error ?? "no valid dist.complete"})`,
+      // The RETRY cause and the FAILURE cause are different things, and this record is the one a
+      // reviewer or a hub reads. Quoting the pre-existing marker error as the parenthetical here
+      // reads as if the stale marker caused the failure: im9q8 measured exactly that — a store build
+      // blocked by cap-security-dependency-resolve was reported as "build target mismatch: expected
+      // store, got developer", and the real cause was then diagnosed as a second, independent
+      // target defect. Name the build's failure first; keep the marker error only as why it ran.
+      reason: `store build exited ${rc}; the failure is the build's own and is named in its output above. ` +
+        `The build ran because no valid dist.complete was reused for this commit (${existing.error ?? "no valid dist.complete"}).`,
       secs,
       markerCommit: null,
     };
