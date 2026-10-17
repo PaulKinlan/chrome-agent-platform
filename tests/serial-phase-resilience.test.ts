@@ -263,7 +263,8 @@ Deno.test("6yrq: lock tests clean up temporary lock files and leave /tmp clean",
 
   const out = new TextDecoder().decode(res.stdout ?? new Uint8Array());
   const fixtures = [...out.matchAll(/^CAP_LOCK_FIXTURE:(\S+)$/gm)].map((m) => m[1]);
-  assert(fixtures.length > 0, "the child must report its fixture paths (marker protocol broken — never pass vacuously)");
+  assertEquals(fixtures.length, 3, "each of the three lock tests must report its own fixture path");
+  assertEquals(new Set(fixtures).size, fixtures.length, "lock tests must not share one process-global lock path");
   const leaked = [];
   for (const fixture of fixtures) {
     try {
