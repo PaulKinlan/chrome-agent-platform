@@ -11,6 +11,9 @@
 // construction, while a bare Promise.all surfaces the rejection in a microtask, long before a 25 ms
 // timer can fire — so the mutant is RED every time, and the correct code is green every time.
 import { assert, assertEquals, assertStrictEquals } from "jsr:@std/assert@1";
+import { mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 import {
   DEFAULT_GC_GRACE_MS,
   MAX_GC_GRACE_MS,
@@ -117,11 +120,103 @@ Deno.test("settleAll: a falsy rejection reason (undefined, 0, empty string) stil
   }
 });
 
-Deno.test("resolveGcGraceMs: the default is 50 ms (the old fixed 2000 ms was half of a warm build)", () => {
-  assertEquals(DEFAULT_GC_GRACE_MS, 50);
-  assertEquals(resolveGcGraceMs({}), 50);
-  assertEquals(resolveGcGraceMs(undefined), 50);
-  assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: undefined }), 50);
+// ---------------------------------------------------------------- the version-GC grace (b0ld8)
+//
+// The grace exists so a process that resolved the PREVIOUS dist just before a rebuild published the
+// new one can finish reading before the old version directory is removed. This asserts the PROPERTY,
+// in BOTH directions so it cannot pass vacuously:
+//   positive: a grace that outlasts the reader keeps the old tree readable across the swap;
+//   negative: with NO grace the same reader loses the tree mid-read (if it did not, the positive half
+//             would be asserting nothing).
+// Deterministic by CONSTRUCTION, not by a timer winning a race: the reader is paced, so it always has
+// unread files left when the swap lands, and the positive case's grace is many times the reader's
+// remaining work, so load can slow the reader without changing either outcome.
+//
+// Scope, stated honestly: this pins the CONTRACT (a grace must outlive a reader). That build.mjs
+// actually waits `gcGraceMs` before its rm is pinned separately by build-parallel-discipline.test.ts:804;
+// together they cover the product path without adding a third 40s production build to the build tier.
+Deno.test("b0ld8: a reader that pinned the OLD version dir survives a publish+GC when the grace outlasts it, and is torn down with no grace", async () => {
+  // durableDir, not os.tmpdir(): /tmp on the build host is RAM-backed and tests/durable-root.test.ts
+  // fails closed on real tmpdir usage (this test was caught by that guard on its first gate run).
+  const root = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "b0ld8-grace-" });
+  const versions = path.join(root, "dist-versions");
+  const dist = path.join(root, "dist");
+  const oldDir = path.join(versions, "v-old-1-1");
+  const newDir = path.join(versions, "v-new-2-2");
+  const NAMES = Array.from({ length: 8 }, (_, i) => `f${i}.js`);
+  const seed = async () => {
+    await mkdir(oldDir, { recursive: true });
+    for (const n of NAMES) await writeFile(path.join(oldDir, n), `old-${n}`);
+    await rm(dist, { force: true });
+    await symlink(path.relative(root, oldDir), dist); // build.mjs's shape: a RELATIVE link
+  };
+  // build.mjs's publish order: symlink a next link, atomically rename it over dist, wait the grace
+  // only when a prior version exists, then GC every other version directory.
+  const publishAndGc = async (graceMs: number) => {
+    const next = `${dist}.next`;
+    await rm(next, { force: true }).catch(() => {});
+    await symlink(path.relative(root, newDir), next);
+    await rename(next, dist);
+    if (graceMs > 0) await sleep(graceMs);
+    for (const e of await readdir(versions, { withFileTypes: true })) {
+      const full = path.join(versions, e.name);
+      if (full !== newDir) await rm(full, { recursive: true, force: true });
+    }
+  };
+  // A reader resolves the tree ONCE (as resolveDist / copy-built-tree do), then reads it slowly.
+  const readPinned = async (dir: string) => {
+    const lost: string[] = [];
+    for (const n of NAMES) {
+      try {
+        await readFile(path.join(dir, n));
+      } catch {
+        lost.push(n);
+      }
+      await sleep(15); // paced: 8 files = 120ms, so ~100ms of work remains when the swap lands
+    }
+    return lost;
+  };
+
+  try {
+    await mkdir(newDir, { recursive: true });
+    await writeFile(path.join(newDir, "f0.js"), "new");
+
+    // POSITIVE: grace (600ms) is many times the reader's remaining work (~100ms).
+    await seed();
+    const pin1 = await realpath(dist);
+    assertEquals(pin1, oldDir, "the reader must pin the OLD version directory");
+    const positive = readPinned(pin1);
+    await sleep(20);
+    await publishAndGc(600);
+    assertEquals(
+      await positive,
+      [],
+      "a grace that outlasts the reader must keep the old tree readable across the swap",
+    );
+
+    // NEGATIVE CONTROL: same reader, no grace. The tree is removed mid-read, so the files it had
+    // not reached are gone. This is what makes the positive half non-vacuous.
+    await seed();
+    const pin2 = await realpath(dist);
+    assertEquals(pin2, oldDir);
+    const negative = readPinned(pin2);
+    await sleep(20);
+    await publishAndGc(0);
+    const lost = await negative;
+    assert(
+      lost.length >= NAMES.length - 2,
+      `with no grace the reader MUST lose the unread files, else the positive half proves nothing (lost ${lost.length}/${NAMES.length})`,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+Deno.test("resolveGcGraceMs: the default is the MEASURED 1000 ms (b0ld8; the old 50 ms was an unmeasured guess)", () => {
+  assertEquals(DEFAULT_GC_GRACE_MS, 1_000);
+  assertEquals(resolveGcGraceMs({}), 1_000);
+  assertEquals(resolveGcGraceMs(undefined), 1_000);
+  assertEquals(resolveGcGraceMs({ CAP_BUILD_GC_GRACE_MS: undefined }), 1_000);
 });
 
 Deno.test("resolveGcGraceMs: an unusable value falls back to the default and is never read as 'no grace'", () => {
