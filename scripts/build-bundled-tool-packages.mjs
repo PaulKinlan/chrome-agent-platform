@@ -152,6 +152,9 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
   hash_sha224: "hash_sha224 - hash data with SHA-224. Use for cryptographic checksums and integrity. In/out: base64-encoded bytes as 'data' to a 56-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha224'.",
   hash_sha384: "hash_sha384 - hash data with SHA-384. Use for high-security cryptographic hashing. In/out: base64-encoded bytes as 'data' to a 96-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha384'.",
   hash_sha3_256: "hash_sha3_256 - hash data with SHA3-256. Use for modern Keccak/SHA-3 cryptographic hashing. In/out: base64-encoded bytes as 'data' to a 64-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha3_256'.",
+  hash_sha3_384: "hash_sha3_384 - hash data with SHA3-384. Use for cryptographic hashing. In/out: base64-encoded bytes as 'data' to a 96-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha3_384'.",
+  hash_sha3_512: "hash_sha3_512 - hash data with SHA3-512. Use for cryptographic hashing. In/out: base64-encoded bytes as 'data' to a 128-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha3_512'.",
+  hash_keccak_256: "hash_keccak_256 - hash data with Keccak-256 (not SHA3-256; different padding). Use for Ethereum-compatible Keccak digests. In/out: base64-encoded bytes as 'data' to a 64-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'keccak_256'.",
   hash_blake2b: "hash_blake2b - hash data with BLAKE2b (512-bit). Use for fast secure hashing and fingerprinting. In/out: base64-encoded bytes as 'data' to a 128-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'blake2b'.",
   hash_blake2s: "hash_blake2s - hash data with BLAKE2s (256-bit). Use for fast 32-bit architecture secure hashing. In/out: base64-encoded bytes as 'data' to a 64-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'blake2s'.",
   hash_ripemd160: "hash_ripemd160 - hash data with RIPEMD-160. Use for cryptographic address and checksum derivation. In/out: base64-encoded bytes as 'data' to a 40-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'ripemd160'.",
@@ -371,6 +374,9 @@ for (const toolId of LANES.c2.tools) {
     { toolId: "hash_sha224", binaryName: "sha256", sha256: "c44604aaa9d054401459b0d07f3d6deeb440fa7afdcb0cfd900ef2596d55ce55", bytes: 9689, digestBytes: 28, initParam: 224, capabilities: ["compute", "crypto"] },
     { toolId: "hash_sha384", binaryName: "sha512", sha256: "60afdfbea19ee8ad976da15ef9f557778e1c5de6ee54407e04269da72f5727e5", bytes: 13522, digestBytes: 48, initParam: 384, capabilities: ["compute", "crypto"] },
     { toolId: "hash_sha3_256", binaryName: "sha3", sha256: "4b3e3ab7973037bfdf21c776085c617dd15d8faad72c073f2eb4ca022a233f8b", bytes: 4018, digestBytes: 32, initParam: 256, finalParam: 0x06, capabilities: ["compute", "crypto"] },
+    { toolId: "hash_sha3_384", binaryName: "sha3", sha256: "4b3e3ab7973037bfdf21c776085c617dd15d8faad72c073f2eb4ca022a233f8b", bytes: 4018, digestBytes: 48, initParam: 384, finalParam: 0x06, capabilities: ["compute", "crypto"] },
+    { toolId: "hash_sha3_512", binaryName: "sha3", sha256: "4b3e3ab7973037bfdf21c776085c617dd15d8faad72c073f2eb4ca022a233f8b", bytes: 4018, digestBytes: 64, initParam: 512, finalParam: 0x06, capabilities: ["compute", "crypto"] },
+    { toolId: "hash_keccak_256", binaryName: "sha3", sha256: "4b3e3ab7973037bfdf21c776085c617dd15d8faad72c073f2eb4ca022a233f8b", bytes: 4018, digestBytes: 32, initParam: 256, finalParam: 0x01, capabilities: ["compute", "crypto"] },
     { toolId: "hash_blake2b", binaryName: "blake2b", sha256: "b478c0d889d97d7a8db4d10501457ad78dd406d02dcb4c892c0d844805ef05bb", bytes: 7442, digestBytes: 64, initParam: 512, capabilities: ["compute", "crypto"] },
     { toolId: "hash_blake2s", binaryName: "blake2s", sha256: "89704350070c32c1ea055c06cada4d1b29d2a66e94f49efa9ca1eaab4ef7fe9b", bytes: 6652, digestBytes: 32, initParam: 256, capabilities: ["compute", "crypto"] },
     { toolId: "hash_ripemd160", binaryName: "ripemd160", sha256: "ce819c4a2404b47180d9eee9fb1ea0bf4ace1bc5a1e54c71cb6a1af4ac4e731e", bytes: 6765, digestBytes: 20, capabilities: ["compute", "crypto"] },
@@ -394,7 +400,10 @@ for (const toolId of LANES.c2.tools) {
     };
     const algo = item.toolId.replace(/^hash_/, "");
     const compName = `hashwasm-${algo}`;
-    const uuid = `urn:uuid:${item.sha256.slice(0, 8)}-${item.sha256.slice(8, 12)}-4${item.sha256.slice(13, 16)}-8${item.sha256.slice(17, 20)}-${item.sha256.slice(20, 32)}`;
+    // A CycloneDX serial identifies a package SBOM, not only the shared bytes.
+    // Restrict the migration to the SHA-3 family: other existing SBOM identities stay stable.
+    const serialSeed = item.binaryName === "sha3" ? sha256(`${item.toolId}@${item.sha256}`) : item.sha256;
+    const uuid = `urn:uuid:${serialSeed.slice(0, 8)}-${serialSeed.slice(8, 12)}-4${serialSeed.slice(13, 16)}-8${serialSeed.slice(17, 20)}-${serialSeed.slice(20, 32)}`;
     const sbomData = {
       bomFormat: "CycloneDX",
       specVersion: "1.5",

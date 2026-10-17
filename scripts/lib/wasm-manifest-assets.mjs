@@ -100,11 +100,12 @@ export function recordBundledWasmClaim(claims, mapping, manifest) {
   const { casRel, schemaVersion, executable } = mapping;
   const prior = claims.get(casRel);
   if (!prior) {
-    claims.set(casRel, { mapping, manifest });
+    claims.set(casRel, [{ mapping, manifest }]);
     return true;
   }
-  const old = prior.mapping.executable;
-  if (schemaVersion !== 1 || prior.mapping.schemaVersion !== 1 ||
+  const representative = prior[0];
+  const old = representative.mapping.executable;
+  if (schemaVersion !== 1 || representative.mapping.schemaVersion !== 1 ||
       !executable?.callExport || !old?.callExport) {
     throw wasmManifestMappingError(`duplicate bundled Wasm manifest mapping: ${casRel}`);
   }
@@ -115,9 +116,10 @@ export function recordBundledWasmClaim(claims, mapping, manifest) {
   const common = (m) => ({ build: m.build, license: m.license, source: m.source,
     signer: m.signer, packageType: m.package?.type, packageVersion: m.package?.version });
   if (!isDeepStrictEqual(physical, oldPhysical) || !isDeepStrictEqual(abi, oldAbi) ||
-      !isDeepStrictEqual(common(manifest), common(prior.manifest))) {
+      !isDeepStrictEqual(common(manifest), common(representative.manifest))) {
     throw wasmManifestMappingError(`bundled Wasm variant divergence: ${casRel}`);
   }
+  prior.push({ mapping, manifest });
   return false;
 }
 

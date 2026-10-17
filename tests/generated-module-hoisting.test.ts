@@ -77,7 +77,7 @@ Deno.test("the generated descriptor module keeps every value AND pays for the re
   }
 
   // The file-size guard: original 50,000 ceiling was calibrated for 38 tools
-  // (~1,316 B/tool). With 52 tools admitted (13 hash-wasm + chacha20_poly1305),
+  // (~1,316 B/tool). With 55 tools admitted (16 hash-wasm wave-1 + blake3 + chacha20_poly1305),
   // full hoisting (shared S table, capability arrays C*, licences L*, caveats V*)
   // emits 56,866 bytes (3ugl hoisting + the 2uhx chacha admission). The ceiling is
   // 57,600 bytes (hoisted + ~1.3% headroom). Each new tool admission ratchets this

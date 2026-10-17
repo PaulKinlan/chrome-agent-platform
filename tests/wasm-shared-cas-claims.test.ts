@@ -39,6 +39,8 @@ Deno.test("9iyc: four SHA-3/Keccak manifest identities share one scanned CAS mem
   }
   assertEquals(seen.size, 4, "four independently bound manifest identities");
   assertEquals(claims.size, 1, "one physical binary is scanned once");
+  assertEquals((claims.values().next().value as unknown[])?.length, 4,
+    "every independently validated claimant stays visible, not overwritten");
 });
 
 Deno.test("9iyc: duplicate identity and divergent physical or ABI authority cannot hide behind a shared CAS", () => {
@@ -59,6 +61,8 @@ Deno.test("9iyc: duplicate identity and divergent physical or ABI authority cann
     assertThrows(() => register(other, claims, m), Error);
   }
   assertEquals(claims.size, 1, "a hostile variant never replaces the scanned representative");
+  assertEquals((claims.values().next().value as unknown[])?.length, 1,
+    "a hostile variant cannot enter the validated claim set");
 });
 
 Deno.test("9iyc: schema-2 and non-call-export schema-1 claims cannot reuse a CAS member", () => {

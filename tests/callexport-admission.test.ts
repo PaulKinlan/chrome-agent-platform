@@ -248,13 +248,16 @@ Deno.test("callexport: manifest validation rejects out-of-range initParam and fi
   assertEquals(res4.error, "callexport_finalparam_invalid");
 });
 
-Deno.test("callexport: all 14 admitted hash tools run through the harness and match KAT vectors", async () => {
+Deno.test("callexport: all 17 admitted hash tools run through the harness and match KAT vectors", async () => {
   const EXPECTED_HELLO_VECTORS = {
     hash_md4: "866437cb7a794bce2b727acc0362ee27",
     hash_sha1: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d",
     hash_sha224: "ea09ae9cc6768c50fcee903ed054556e5bfc8347907f12598aa24193",
     hash_sha384: "59e1748777448c69de6b800d7a33bbfb9ff1b463e44354c3553bcdb9c666fa90125a3c79f90397bdf5f6a13de828684f",
     hash_sha3_256: "3338be694f50c5f338814986cdf0686453a888b84f424d792af4b9202398f392",
+    hash_sha3_384: "720aea11019ef06440fbf05d87aa24680a2153df3907b23631e7177ce620fa1330ff07c0fddee54699a4c3ee0ee9d887",
+    hash_sha3_512: "75d527c368f2efe848ecf6b073a36767800805e9eef2b1857d5f984f036eb6df891d75f72d9b154518c1cd58835286d1da9a38deba3de98b5a53e5ed78a84976",
+    hash_keccak_256: "1c8aff950685c2ed4bc3174f3472287b56d9517b9c948127319a09a7a36deac8",
     hash_blake2b: "e4cfa39a3d37be31c59609e807970799caa68a19bfaa15135f165085e01d41a65ba1e1b146aeb6bd0092b49eac214c103ccfa3a365954bbbe52f74a2b3620c94",
     hash_blake2s: "19213bacc58dee6dbde3ceb9a47cbb330b3d86f8cca8997eb00be456f140ca25",
     hash_ripemd160: "108f07b8382412612c048d07d13f814118445acd",
