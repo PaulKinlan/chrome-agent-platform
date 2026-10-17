@@ -21,7 +21,13 @@ import {
   RESIDUE_READ_RETRY_MS,
   liveObservedResidue,
 } from "../scripts/security-suite-custody.mjs";
-import { comparableStart, holderIsDead, machineBootId } from "../scripts/lib/build-lock.mjs";
+import {
+  PS_START_BASIS,
+  buildOwnerIdentity,
+  comparableStart,
+  holderIsDead,
+  machineBootId,
+} from "../scripts/lib/build-lock.mjs";
 
 const OBSERVED = new Map([[4321, { pid: 4321, starttime: "900", uid: 501, pgid: 4321, sid: 4321 }]]);
 const CURRENT = { pid: 4321, starttime: "900", uid: 501, state: "S", pgid: 4321, sid: 4321 };
@@ -106,7 +112,21 @@ Deno.test("qo3u8(b): a pre-upgrade locale start is UNKNOWN, so a live holder is 
   }
 });
 
-Deno.test("qo3u8(b): comparable starts still prove pid reuse — Linux ticks and canonical ps text", async () => {
+Deno.test("qo3u8(b)/khkqz: a C-locale LOCAL-ZONE pre-pin start is not stealable, however canonical it looks", async () => {
+  // The reviewer's repro (chrome-agent-platform-khkqz): the pre-upgrade writer did not pin the time
+  // zone, so the SAME live macOS pid recorded `Wed Oct 7 13:10:01 2026` under a C locale in
+  // Europe/London and reads now as `Wed Oct 7 12:10:01 2026` under PS_ENV (TZ=UTC). Both strings have
+  // the canonical shape, so SHAPE was never evidence: the PRE-UPGRADE lock carries no basis marker,
+  // which is what makes it UNKNOWN. A shape-only rule fails this case, which is why it is here.
+  const stolen = await holderIsDead(
+    { pid: 4321, start: "Wed Oct 7 13:10:01 2026", boot: machineBootId() },
+    { kill: () => {}, procStat: () => ({ ok: true, state: "S", start: "Wed Oct 7 12:10:01 2026" }) },
+  );
+  assertEquals(stolen, false, "a pre-pin start has no provenance marker — UNKNOWN, not pid reuse");
+});
+
+Deno.test("qo3u8(b)/khkqz: LOCKS WRITTEN BY THIS WRITER still prove pid reuse", async () => {
+  // Marked, i.e. written after the provenance field exists — the comparison resumes.
   const ticksReused = await holderIsDead(
     { pid: 4321, start: "900", boot: machineBootId() },
     { kill: () => {}, procStat: () => ({ ok: true, state: "S", start: "901" }) },
@@ -114,24 +134,40 @@ Deno.test("qo3u8(b): comparable starts still prove pid reuse — Linux ticks and
   assertEquals(ticksReused, true, "a changed /proc starttime is pid reuse — stealing is correct");
 
   const psReused = await holderIsDead(
-    { pid: 4321, start: "Wed Oct 7 12:10:01 2026", boot: machineBootId() },
+    { pid: 4321, start: "Wed Oct 7 12:10:01 2026", startBasis: PS_START_BASIS, boot: machineBootId() },
     { kill: () => {}, procStat: () => ({ ok: true, state: "S", start: "Wed Oct 7 12:10:02 2026" }) },
   );
-  assertEquals(psReused, true, "a changed canonical ps start is pid reuse — stealing is correct");
+  assertEquals(psReused, true, "a changed ps start on a marked lock is pid reuse");
 
   const sameProcess = await holderIsDead(
-    { pid: 4321, start: "Wed Oct 7 12:10:01 2026", boot: machineBootId() },
+    { pid: 4321, start: "Wed Oct 7 12:10:01 2026", startBasis: PS_START_BASIS, boot: machineBootId() },
     { kill: () => {}, procStat: () => ({ ok: true, state: "S", start: "Wed Oct 7 12:10:01 2026" }) },
   );
-  assertEquals(sameProcess, false, "the same canonical start is the same process — not stealable");
+  assertEquals(sameProcess, false, "the same start is the same process — not stealable");
 });
 
-Deno.test("qo3u8(b): comparableStart admits exactly the two canonical writers", () => {
-  assertEquals(comparableStart("1759800000"), "1759800000"); // Linux /proc field 22
-  assertEquals(comparableStart("Wed Oct 7 12:10:01 2026"), "Wed Oct 7 12:10:01 2026"); // PS_ENV lstart
+Deno.test("qo3u8(b)/khkqz: this writer RECORDS the provenance its start came from", () => {
+  // Without this, every lock this writer creates would be UNKNOWN to the next reader and a genuinely
+  // dead holder would never be reclaimed. On Linux the /proc branch is the one that runs.
+  const identity = buildOwnerIdentity();
+  assertEquals(identity.startBasis, "proc-stat-22");
+  assertEquals(typeof identity.start, "string");
+});
+
+Deno.test("qo3u8(b)/khkqz: comparableStart requires a REPRODUCIBLE basis, not just the right shape", () => {
+  assertEquals(comparableStart("1759800000"), "1759800000"); // kernel ticks: environment-free
+  assertEquals(comparableStart("1759800000", "proc-stat-22"), "1759800000");
+  assertEquals(
+    comparableStart("Wed Oct 7 12:10:01 2026", PS_START_BASIS),
+    "Wed Oct 7 12:10:01 2026",
+    "a marked ps start is comparable",
+  );
+  // THE khkqz CASE: canonical SHAPE with no marker is NOT comparable — a pre-pin C-locale local-zone
+  // string looks exactly like this.
+  assertEquals(comparableStart("Wed Oct 7 12:10:01 2026"), null);
   assertEquals(comparableStart("Wed  7 Oct 12:10:01 2026"), null); // en_GB pre-pin
   assertEquals(comparableStart("Mer  7 oct 12:10:01 2026"), null); // fr_FR pre-pin
-  assertEquals(comparableStart(""), null);
+  assertEquals(comparableStart("", PS_START_BASIS), null);
   assertEquals(comparableStart(null), null);
   assertEquals(comparableStart(undefined), null);
 });
