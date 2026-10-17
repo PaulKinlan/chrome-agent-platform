@@ -2,9 +2,9 @@
 // actionable marker verdicts (chrome-agent-platform-1mz2).
 //
 // `extension/…/dist.complete` binds HEAD + every indexed source byte + the
-// generated bundles, so ANY commit invalidates a built tree (the post-commit
-// hook also bumps the version and amends). Lanes met that as three red serial
-// tests naming a marker, not the cause. The pin:
+// generated bundles, so ANY commit invalidates a built tree — including `git
+// commit --amend` or the merger's release stamp. Lanes met that as three red
+// serial tests naming a marker, not the cause. The pin:
 //   1. no built marker        -> silent (exit 0) — nothing to say, nothing to fail;
 //   2. a current build        -> silent, so the note is not just always-on;
 //   3. HEAD moved by a commit -> the note names the staleness AND the fix;
