@@ -560,46 +560,90 @@ function leaderWithMarker(marker: string): Deno.ChildProcess {
   return spawnLeader("/bin/bash", ["-c", 'exec -a "$1" sleep 300', "_", marker]);
 }
 
-Deno.test("lsk1p: the watcher does NOT signal a group whose pid has been reused (different start)", async () => {
-  const leader = leaderWithMarker("lsk1p-reused-leader");
+// Deterministic version of the wrapper that /usr/bin/setsid sometimes creates:
+// the Deno child exits while its fork becomes the session leader. This runs on
+// Linux and macOS (both have /usr/bin/perl with POSIX), without relying on the
+// host's incidental decision about whether setsid needs to fork.
+function forcedForkedLeader(marker: string): Deno.ChildProcess {
+  return new Deno.Command("/usr/bin/perl", {
+    args: ["-MPOSIX", "-e",
+      'my $child = fork(); defined($child) or die $!; if ($child) { POSIX::_exit(0) }; POSIX::setsid() >= 0 or die $!; exec { "/bin/bash" } "/bin/bash", "-c", \'exec -a "$1" sleep 300\', "_", $ARGV[0]; die $!',
+      "--", marker],
+    stdout: "null", stderr: "null", clearEnv: true,
+  }).spawn();
+}
+
+Deno.test("6pao0: a forked setsid wrapper is NOT evidence that its session leader was signalled", async () => {
+  const marker = `6pao0-fork-${crypto.randomUUID()}`;
+  const wrapper = forcedForkedLeader(marker);
   try {
-    const start = processGroup(leader.pid)?.startTicks;
-    assert(start !== undefined && start !== "", "the leader's identity is readable before the watcher fires");
-    const bogus = start === "0" ? "1" : "0";
-    const code = await fireWatcher(leader.pid, bogus);
-    assertEquals(code, 0, "a skipped group signal is a normal exit, not a failure");
-    assert(!(await exitsWithin(leader, 250)), "the leader must be ALIVE: its pid now names someone else's group");
+    assert(await untilCarriers(marker, 1), "the detached leader carries the unique marker");
+    const pid = await requireGroupLeader(marker);
+    assert(pid !== wrapper.pid, "the fixture MUST expose a forked wrapper, not accidentally test an in-place setsid");
+    assert(await stillAlive(pid, 100), "the actual session leader is alive before its group is signalled");
+    const start = processGroup(pid)?.startTicks;
+    assert(start, "a verified group leader must have a readable identity");
+    assertEquals(await fireWatcher(pid, start), 0);
+    assert(await until(() => !liveProcess(pid)), "the actual leader, not the wrapper, must be reaped");
   } finally {
-    await reap(leader);
+    await reapMarkerLeader(marker, wrapper);
+  }
+});
+
+Deno.test("lsk1p: the watcher does NOT signal a group whose pid has been reused (different start)", async () => {
+  const marker = `lsk1p-reused-leader-${crypto.randomUUID()}`;
+  const wrapper = leaderWithMarker(marker);
+  try {
+    const pid = await requireGroupLeader(marker);
+    const start = processGroup(pid)?.startTicks;
+    assert(start, "the real group leader's identity is readable before the watcher fires");
+    const bogus = start === "0" ? "1" : "0";
+    const code = await fireWatcher(pid, bogus);
+    assertEquals(code, 0, "a skipped group signal is a normal exit, not a failure");
+    assert(await stillAlive(pid, 250), "the REAL session leader must survive a different recorded identity");
+  } finally {
+    await reapMarkerLeader(marker, wrapper);
   }
 });
 
 Deno.test("lsk1p: the same watcher DOES signal the group when the recorded start matches", async () => {
-  const leader = leaderWithMarker("lsk1p-same-leader");
+  const marker = `lsk1p-same-leader-${crypto.randomUUID()}`;
+  const wrapper = leaderWithMarker(marker);
   try {
-    const start = processGroup(leader.pid)?.startTicks;
-    assert(start !== undefined && start !== "", "the leader's identity is readable before the watcher fires");
-    const code = await fireWatcher(leader.pid, start);
+    const pid = await requireGroupLeader(marker);
+    assert(await stillAlive(pid, 100), "the real session leader was alive before the watcher fired");
+    const start = processGroup(pid)?.startTicks;
+    assert(start, "the real group leader's identity is readable before the watcher fires");
+    const code = await fireWatcher(pid, start);
     assertEquals(code, 0, "a fired group signal is a normal exit");
-    assert(await exitsWithin(leader, 4000), "the identity check must not disable the group signal");
+    assert(await until(() => !liveProcess(pid), 4000), "the matching identity must signal the REAL session leader");
   } finally {
-    await reap(leader);
+    await reapMarkerLeader(marker, wrapper);
   }
 });
 
 Deno.test("lsk1p: no recorded start (legacy) still signals the group, and an absent leader exits cleanly", async () => {
-  const leader = leaderWithMarker("lsk1p-no-record");
+  const marker = `lsk1p-no-record-${crypto.randomUUID()}`;
+  const wrapper = leaderWithMarker(marker);
   try {
-    assertEquals(await fireWatcher(leader.pid, ""), 0, "no record = the old behaviour, a normal exit");
-    assert(await exitsWithin(leader, 4000), 'an empty CAP_LIFELINE_START must not silently disable the group kill');
+    const pid = await requireGroupLeader(marker);
+    assert(await stillAlive(pid, 100), "the real session leader was alive before the watcher fired");
+    assertEquals(await fireWatcher(pid, ""), 0, "no record = the old behaviour, a normal exit");
+    assert(await until(() => !liveProcess(pid), 4000), "an empty CAP_LIFELINE_START must signal the REAL group");
   } finally {
-    await reap(leader);
+    await reapMarkerLeader(marker, wrapper);
   }
 
-  const gone = leaderWithMarker("lsk1p-absent");
-  const gonePid = gone.pid;
-  await reap(gone);
-  assertEquals(await fireWatcher(gonePid, "123456"), 0, "an absent leader is a clean exit, never a crash");
+  const goneMarker = `lsk1p-absent-${crypto.randomUUID()}`;
+  const gone = leaderWithMarker(goneMarker);
+  try {
+    const gonePid = await requireGroupLeader(goneMarker);
+    await reapMarkerLeader(goneMarker, gone);
+    assert(await until(() => !liveProcess(gonePid)), "the absent fixture leader must really be gone");
+    assertEquals(await fireWatcher(gonePid, "123456"), 0, "an absent leader is a clean exit, never a crash");
+  } finally {
+    await reapMarkerLeader(goneMarker, gone);
+  }
 });
 
 Deno.test("lsk1p: attachProcessLifeline hands the watcher the leader's recorded start time", async () => {
@@ -686,21 +730,51 @@ Deno.test("ymnpg: the sweep signals the GROUP only - a non-leader holding the ta
 // `setsid` may FORK: when it does, `proc.pid` is a wrapper that exits immediately and the REAL
 // session leader is a child with a DIFFERENT pid. Any group-signal assertion that trusts `proc.pid`
 // can therefore pass because the wrapper exited on its own (measured 2026-10-17 on this VM: 5 of 6
-// spawns landed in the parent's group, i.e. under a wrapper pid, and it is why the assertions below
-// discover the leader by its unique argv marker instead of assuming the pid they were handed).
+// spawns were observed in the parent's group at the FIRST probe (possibly still before setsid ran).
+// A forced-fork fixture below proves the distinct wrapper case deterministically; either way,
+// discover the live leader by a unique argv marker instead of assuming the pid handed back.
 async function discoveredLeader(marker: string, ms = 4000): Promise<number | null> {
   const deadline = Date.now() + ms;
-  let wrapper: number | null = null;
   while (Date.now() < deadline) {
     for (const raw of await pgrepPids(marker)) {
       const pid = Number(raw);
       const info = processGroup(pid);
-      if (info && info.group === pid) return pid; // the real session leader
-      if (info) wrapper = pid; // a wrapper, if no leader ever appears
+      if (info && info.group === pid && info.state !== "Z" && info.state !== "X") return pid;
     }
     await new Promise((r) => setTimeout(r, 25));
   }
-  return wrapper;
+  return null; // never return a wrapper as a candidate for a group-signal assertion
+}
+
+const liveProcess = (pid: number): boolean => {
+  const info = processGroup(pid);
+  return info !== null && info.state !== "Z" && info.state !== "X";
+};
+
+/** A group-signal assertion must name an actual, LIVE session leader, never the setsid wrapper. */
+async function requireGroupLeader(marker: string): Promise<number> {
+  const pid = await discoveredLeader(marker);
+  const info = pid === null ? null : processGroup(pid);
+  assert(
+    pid !== null && info?.group === pid && liveProcess(pid),
+    `fixture ${marker}: expected a live session leader with pid === pgid, got pid ${pid}, pgid ${info?.group}, state ${info?.state}`,
+  );
+  return pid;
+}
+
+/** Clean up the discovered group even when the Deno child was only a short-lived setsid wrapper. */
+async function reapMarkerLeader(marker: string, wrapper: Deno.ChildProcess): Promise<void> {
+  try {
+    for (const raw of await pgrepPids(marker)) {
+      const pid = Number(raw);
+      const info = processGroup(pid);
+      if (info?.group === pid && info.state !== "Z" && info.state !== "X") {
+        try { Deno.kill(-pid, "SIGKILL"); } catch { /* exited */ }
+      }
+    }
+  } finally {
+    await reap(wrapper);
+  }
 }
 
 /** True while `pid` is a live, non-zombie process at the END of `ms`. */
@@ -721,26 +795,25 @@ Deno.test("ymnpg: an empty target skips the group path, while an armed verified 
   const verified = leaderWithMarker("ymnpg-verified-leader");
   const discovered: number[] = [];
   try {
-    const noGroupPid = await discoveredLeader("ymnpg-nogroup-leader");
-    const verifiedPid = await discoveredLeader("ymnpg-verified-leader");
-    assert(noGroupPid !== null && verifiedPid !== null, "each fixture must have a live process carrying its marker");
-    discovered.push(noGroupPid!, verifiedPid!);
-    assertEquals(processGroup(verifiedPid!)?.group, verifiedPid, "the discovered leader must really lead its own group");
+    const noGroupPid = await requireGroupLeader("ymnpg-nogroup-leader");
+    const verifiedPid = await requireGroupLeader("ymnpg-verified-leader");
+    discovered.push(noGroupPid, verifiedPid);
+    assertEquals(processGroup(verifiedPid)?.group, verifiedPid, "the discovered leader must really lead its own group");
 
-    const noGroupStart = processGroup(noGroupPid!)?.startTicks;
-    const verifiedStart = processGroup(verifiedPid!)?.startTicks;
+    const noGroupStart = processGroup(noGroupPid)?.startTicks;
+    const verifiedStart = processGroup(verifiedPid)?.startTicks;
     assert(noGroupStart, "the unarmed leader's identity is readable");
     assert(verifiedStart, "the armed leader's identity is readable");
 
     assertEquals(await fireWatcher("", noGroupStart!), 0, "an empty target is not a failure: there is simply no group to signal");
     assert(
-      await stillAlive(noGroupPid!, 600),
+      await stillAlive(noGroupPid, 600),
       "an unverified group must not reach the signal path, even against a real group leader",
     );
 
-    assertEquals(await fireWatcher(verifiedPid!, verifiedStart!), 0);
+    assertEquals(await fireWatcher(verifiedPid, verifiedStart!), 0);
     assert(
-      await until(() => processGroup(verifiedPid!) === null, 4000),
+      await until(() => !liveProcess(verifiedPid), 4000),
       "a verified group with a matching start is still signalled and reaped",
     );
   } finally {
