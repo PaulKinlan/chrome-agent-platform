@@ -982,9 +982,12 @@ Deno.test("attachProcessLifeline: refuses an unsafe group — fail closed, nothi
     assertEquals(spawned, 0, "no watcher is ever started for an unsafe group");
     assertEquals(lifelineState(proc), undefined, "and nothing is registered for the proc");
 
-    // The legitimate shapes are still accepted: the leader's own pid, and the default.
+    // The legitimate shapes are still accepted: the leader's own pid (a caller-verified group), and a
+    // default that still has a usable pattern. A default with NEITHER a group nor a pattern is
+    // chrome-agent-platform-umuyk's case - reported as unprotected, never armed into an inert watcher
+    // (pinned by the umuyk test in tests/jjsz-lifeline-match.test.ts).
     attachProcessLifeline(proc, { group: proc.pid }, deps);
-    attachProcessLifeline(other, {}, deps);
+    attachProcessLifeline(other, { treeMatch: "user-data-dir=/x/f3-default" }, deps);
     assertEquals(spawned, 2);
     assertEquals(lifelineState(proc)?.state, "armed");
     assertEquals(lifelineState(other)?.state, "armed");

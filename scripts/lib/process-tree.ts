@@ -277,10 +277,16 @@ export const LIFELINE_SCRIPT = 'cat >/dev/null 2>&1; ' +
   '[ -n "$cur" ] || return 0; ' +
   '[ "$cur" = "$CAP_LIFELINE_START" ]; ' +
   '}; ' +
+  // ymnpg (jjsz N3): the group is signalled AS A GROUP, never as a bare pid. `CAP_LIFELINE_TARGET`
+  // is set only for a group the launcher VERIFIED with setsid (see the arming rule in
+  // `attachProcessLifeline`), and that group always contains the leader, so the second operand added
+  // nothing - while in the ~100 ms between the TERM and the KILL, and once the group's leader is gone,
+  // it could signal whatever process had been handed that pid. Every member of the verified group is
+  // still covered by `-<group>`; a leader that never led one is covered by the profile pkill below.
   'if [ -n "$CAP_LIFELINE_TARGET" ] && same_leader; then ' +
-  'kill -TERM -"$CAP_LIFELINE_TARGET" "$CAP_LIFELINE_TARGET" 2>/dev/null || true; ' +
+  'kill -TERM -"$CAP_LIFELINE_TARGET" 2>/dev/null || true; ' +
   'sleep 0.1; ' +
-  'kill -KILL -"$CAP_LIFELINE_TARGET" "$CAP_LIFELINE_TARGET" 2>/dev/null || true; ' +
+  'kill -KILL -"$CAP_LIFELINE_TARGET" 2>/dev/null || true; ' +
   'fi; ' +
   'if [ -n "$CAP_LIFELINE_MATCH" ]; then ' +
   '/usr/bin/pkill -9 -f "$CAP_LIFELINE_MATCH" 2>/dev/null; ' +
@@ -448,11 +454,61 @@ export function attachProcessLifeline(
   if (unsafe !== null) {
     throw new Error(`attachProcessLifeline: refusing unsafe process group ${target}: ${unsafe}`);
   }
+  // ymnpg (jjsz N3): the group-signal path is armed ONLY for a group the CALLER verified - the same
+  // `group` that `isolatedProcessGroup` recorded. `target = group ?? proc.pid` invented a group out of
+  // the leader's own pid and signalled `-<pid>` with no evidence that pid led any group at all, which
+  // is the pid-reuse class this module has been closing (lsk1p); it also made the bare-pid operand
+  // look load-bearing, and that operand is gone from LIFELINE_SCRIPT. With no verified group the sweep
+  // arms the profile pattern alone and says so below (never silently uncovered, and never a group
+  // signal aimed at a pid nobody verified).
+  const groupArmed = group !== undefined;
   const existing = lifelines.get(proc);
   if (existing) return existing.disarm;
   const warn = deps.warn ?? ((line: string) => console.error(line));
   const sweepTimeoutMs = deps.sweepTimeoutMs ?? 5000;
   const match = (deps.matchPattern ?? lifelineMatchPattern)(treeMatch);
+  // umuyk: this object has to exist BEFORE the coverage checks, because the no-group/no-pattern case
+  // below reports it as `unprotected` and returns it. Nothing else in this function depends on the
+  // declaration order.
+  const lifeline: Lifeline = {
+    state: "unprotected",
+    watcherPid: null,
+    // Nothing to confirm: no watcher exists (either it could not be started, or umuyk's no-group/
+    // no-pattern case below), and the warning already says this browser is NOT protected. `false` is
+    // reserved for a RUNNING watcher whose isolation could not be confirmed.
+    ready: Promise.resolve(true),
+    settled: null,
+    teardowns: 0,
+    disarm: async () => {},
+  };
+  if (!groupArmed && match !== "") {
+    warn(
+      `process-tree: lifeline for pid ${proc.pid} has no verified process group; the sweep arms the ` +
+        `profile pattern only, so the leader's tree is covered by that pattern rather than by a group signal`,
+    );
+  }
+  // umuyk (round-2 review of ymnpg): a lifeline with NEITHER a verified group NOR a usable pattern
+  // cannot reap anything. Arming a watcher here would spawn a process whose real script skips both
+  // signal paths (target "" and match "") while the warnings claimed the profile pattern covered the
+  // tree - a coverage claim the module cannot keep. Reported as the UNPROTECTED case instead, the same
+  // way a watcher that could not be started is reported (F5): no watcher, state "unprotected", one
+  // warning that names the consequence. `launchChrome` reaches this path when no profile was resolved
+  // (treeMatch undefined) and `isolatedProcessGroup` returned nothing, and any rejected treeMatch
+  // reaches it too. Coverage is never invented - only narrowed and named.
+  if (!groupArmed && match === "") {
+    // Built as its own string so the narrowing of `treeMatch` does not have to survive a nested
+    // template expression (the type checker refuses to narrow it inside the interpolation).
+    const detail = treeMatch
+      ? ` (treeMatch ${JSON.stringify(clip(treeMatch, 80))} was rejected)`
+      : " (no profile was resolved)";
+    warn(
+      `process-tree: lifeline for pid ${proc.pid} has neither a verified process group nor a usable ` +
+        `profile pattern${detail}; ` +
+        `this browser is NOT protected against a killed parent and may be orphaned`,
+    );
+    lifelines.set(proc, lifeline);
+    return lifeline.disarm;
+  }
   if (treeMatch && match === "") {
     warn(
       `process-tree: lifeline for pid ${proc.pid} cannot use treeMatch ${JSON.stringify(clip(treeMatch, 80))} ` +
@@ -460,23 +516,13 @@ export function attachProcessLifeline(
     );
   }
   const spec = setsidSpawnSpec("/bin/sh", ["-c", LIFELINE_SCRIPT]);
-  const lifeline: Lifeline = {
-    state: "unprotected",
-    watcherPid: null,
-    // Nothing to confirm: no watcher exists, and the F5 warning above already says this browser is
-    // NOT protected. `false` is reserved for a RUNNING watcher whose isolation could not be confirmed.
-    ready: Promise.resolve(true),
-    settled: null,
-    teardowns: 0,
-    disarm: async () => {},
-  };
   let watcher: LifelineWatcher;
   try {
     watcher = (deps.spawn ?? spawnLifelineWatcher)({
       command: spec.command,
       args: spec.args,
       env: {
-        CAP_LIFELINE_TARGET: String(target),
+        CAP_LIFELINE_TARGET: groupArmed ? String(target) : "",
         CAP_LIFELINE_MATCH: match,
         // lsk1p: the leader's identity, so the watcher can refuse to signal a group whose
         // pid has been reused. Absent when the group was never observed ("" = no re-check).

@@ -539,7 +539,7 @@ Deno.test("i6lgk: an unusable pattern is refused BEFORE any signal, and a live c
 /** Run the REAL watcher script (not a fake) with `start` as the recorded leader identity,
  *  close its stdin, and return its exit code: exactly what the kernel does to it when the
  *  parent dies. */
-async function fireWatcher(target: number, start: string): Promise<number> {
+async function fireWatcher(target: number | string, start: string): Promise<number> {
   const spec = setsidSpawnSpec("/bin/sh", ["-c", LIFELINE_SCRIPT]);
   const watcher = new Deno.Command(spec.command, {
     args: spec.args,
@@ -622,5 +622,182 @@ Deno.test("lsk1p: attachProcessLifeline hands the watcher the leader's recorded 
     await lifelineState(proc)?.settled;
   } finally {
     await reap(proc);
+  }
+});
+
+// ── ymnpg (jjsz N3): the group signal is GROUP-ONLY, and only ever for a VERIFIED group ─────
+//
+// THE DEFECT (two halves, one mechanism). (1) The watcher signalled `-T T`: the second operand is the
+// BARE leader pid, which is in `-T`'s group already whenever T is a verified setsid group, so it added
+// nothing - except a way to signal whatever process had been handed that pid, notably in the ~100 ms
+// between the TERM and the KILL once the group's leader was gone. (2) The arming rule invented a group
+// from the leader's pid (`target = group ?? proc.pid`) when the launcher had confirmed NOTHING, so the
+// signal path could run for a pid nobody had verified led a group. The group signal is now the group
+// alone, and it is armed only when the caller passes the group `isolatedProcessGroup` recorded; with no
+// verified group the sweep arms the profile pattern and WARNS, exactly as it does for an unusable
+// treeMatch - the tree is never silently uncovered.
+
+Deno.test("ymnpg: no verified group means the group-signal path is NOT armed, and it says so", async () => {
+  const proc = spawnLeader("/bin/sleep", ["300"]);
+  try {
+    const specs: LifelineSpawnSpec[] = [];
+    const lines: string[] = [];
+    const spawn = (spec: LifelineSpawnSpec) => {
+      specs.push(spec);
+      return fakeWatcher();
+    };
+    attachProcessLifeline(proc, { treeMatch: "user-data-dir=/x/ymnpg" }, { spawn, warn: (line) => lines.push(line) });
+    assertEquals(
+      specs[0].env.CAP_LIFELINE_TARGET,
+      "",
+      "without a verified group the watcher must not be handed a group to signal",
+    );
+    assertEquals(specs[0].env.CAP_LIFELINE_MATCH, "user-data-dir=/x/ymnpg( |$)", "the profile pattern still covers the tree");
+    assertEquals(lines.length, 1, "the unarmed group path is reported, once");
+    assert(lines[0].includes("no verified process group"), lines[0]);
+    await lifelineState(proc)?.settled;
+  } finally {
+    await reap(proc);
+  }
+});
+
+Deno.test("ymnpg: the sweep signals the GROUP only - a non-leader holding the target pid survives", async () => {
+  // The bare operand's whole effect: a stand-in that carries the target pid but leads NO group. Its
+  // start matches the recorded one, so same_leader passes and the old script reached it with the bare
+  // operand while `-<pid>` matched no group at all.
+  const victim = carrier("ymnpg-non-leader-victim");
+  try {
+    const start = processGroup(victim.pid)?.startTicks;
+    assert(start !== undefined && start !== "", "the stand-in's identity is readable");
+    assert(
+      processGroup(victim.pid)?.group !== victim.pid,
+      "the stand-in must NOT lead its own group - that is the case the bare operand reached",
+    );
+    assertEquals(await fireWatcher(victim.pid, start), 0, "a group signal that matches no group is not an error");
+    assert(
+      !(await exitsWithin(victim, 400)),
+      "a non-leader holding the target pid must SURVIVE the sweep: the bare-pid operand is gone",
+    );
+  } finally {
+    await reap(victim);
+  }
+});
+
+// `setsid` may FORK: when it does, `proc.pid` is a wrapper that exits immediately and the REAL
+// session leader is a child with a DIFFERENT pid. Any group-signal assertion that trusts `proc.pid`
+// can therefore pass because the wrapper exited on its own (measured 2026-10-17 on this VM: 5 of 6
+// spawns landed in the parent's group, i.e. under a wrapper pid, and it is why the assertions below
+// discover the leader by its unique argv marker instead of assuming the pid they were handed).
+async function discoveredLeader(marker: string, ms = 4000): Promise<number | null> {
+  const deadline = Date.now() + ms;
+  let wrapper: number | null = null;
+  while (Date.now() < deadline) {
+    for (const raw of await pgrepPids(marker)) {
+      const pid = Number(raw);
+      const info = processGroup(pid);
+      if (info && info.group === pid) return pid; // the real session leader
+      if (info) wrapper = pid; // a wrapper, if no leader ever appears
+    }
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return wrapper;
+}
+
+/** True while `pid` is a live, non-zombie process at the END of `ms`. */
+async function stillAlive(pid: number, ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  let sawAlive = false;
+  while (Date.now() < deadline) {
+    const info = processGroup(pid);
+    if (!info || info.state === "Z" || info.state === "X") return false;
+    sawAlive = true;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return sawAlive;
+}
+
+Deno.test("ymnpg: an empty target skips the group path, while an armed verified group still reaps", async () => {
+  const noGroup = leaderWithMarker("ymnpg-nogroup-leader");
+  const verified = leaderWithMarker("ymnpg-verified-leader");
+  const discovered: number[] = [];
+  try {
+    const noGroupPid = await discoveredLeader("ymnpg-nogroup-leader");
+    const verifiedPid = await discoveredLeader("ymnpg-verified-leader");
+    assert(noGroupPid !== null && verifiedPid !== null, "each fixture must have a live process carrying its marker");
+    discovered.push(noGroupPid!, verifiedPid!);
+    assertEquals(processGroup(verifiedPid!)?.group, verifiedPid, "the discovered leader must really lead its own group");
+
+    const noGroupStart = processGroup(noGroupPid!)?.startTicks;
+    const verifiedStart = processGroup(verifiedPid!)?.startTicks;
+    assert(noGroupStart, "the unarmed leader's identity is readable");
+    assert(verifiedStart, "the armed leader's identity is readable");
+
+    assertEquals(await fireWatcher("", noGroupStart!), 0, "an empty target is not a failure: there is simply no group to signal");
+    assert(
+      await stillAlive(noGroupPid!, 600),
+      "an unverified group must not reach the signal path, even against a real group leader",
+    );
+
+    assertEquals(await fireWatcher(verifiedPid!, verifiedStart!), 0);
+    assert(
+      await until(() => processGroup(verifiedPid!) === null, 4000),
+      "a verified group with a matching start is still signalled and reaped",
+    );
+  } finally {
+    for (const pid of discovered) {
+      try {
+        Deno.kill(pid, "SIGKILL");
+      } catch {
+        /* gone */
+      }
+    }
+    await reap(noGroup);
+    await reap(verified);
+  }
+});
+
+// ── umuyk (round-2 review of ymnpg): a lifeline with NOTHING to sweep must say so ───────────
+//
+// Arming a watcher with no verified group AND no usable pattern gives it target="" and match="", so the
+// real LIFELINE_SCRIPT skips BOTH signal paths - while the arming warnings claimed the profile pattern
+// covered the tree. That is a coverage claim the module cannot keep, so this case is reported the same
+// way a watcher that could not be started is: no watcher, state "unprotected", one warning naming the
+// consequence. `launchChrome` reaches it when no profile was resolved (treeMatch undefined) and
+// `isolatedProcessGroup` returned nothing; any rejected treeMatch reaches it too.
+
+Deno.test("umuyk: no verified group AND no usable pattern reports UNPROTECTED, never an inert watcher", async () => {
+  // The module signals a group only when the CALLER verified one (ymnpg/N3): a leader that happens to
+  // lead its own group is still not signalled if the caller passed nothing, so these fixtures are the
+  // shapes `launchChrome` uses when `isolatedProcessGroup` confirmed nothing - `{}` (which is also
+  // what a caller with no profile treeMatch passes) and a rejected treeMatch.
+  const noProfile = spawnLeader("/bin/sleep", ["300"]);
+  const badMatch = spawnLeader("/bin/sleep", ["300"]);
+  try {
+    const lines: string[] = [];
+    const specs: LifelineSpawnSpec[] = [];
+    const spawn = (spec: LifelineSpawnSpec) => {
+      specs.push(spec);
+      return fakeWatcher();
+    };
+
+    const disarmA = attachProcessLifeline(noProfile, {}, { spawn, warn: (line) => lines.push(line) });
+    assertEquals(specs.length, 0, "neither a group nor a pattern: a watcher could not reap anything, so none is started");
+    assertEquals(lifelineState(noProfile)?.state, "unprotected", "the lifeline must report the case it cannot cover");
+    assertEquals(lifelineState(noProfile)?.settled, null, "nothing was armed, so there is nothing to settle");
+    assertEquals(lines.length, 1, "exactly one warning, and it must name the real consequence");
+    assert(lines[0].includes("NOT protected"), lines[0]);
+    assert(!lines[0].includes("arms the profile pattern only"), "it must not claim pattern coverage it does not have");
+    await disarmA();
+
+    const disarmB = attachProcessLifeline(badMatch, { treeMatch: "--user-data-dir=/x" }, { spawn, warn: (line) => lines.push(line) });
+    assertEquals(specs.length, 0, "a rejected pattern plus no verified group is the same unprotected case");
+    assertEquals(lifelineState(badMatch)?.state, "unprotected");
+    assertEquals(lines.length, 2);
+    assert(lines[1].includes("was rejected"), lines[1]);
+    assert(lines[1].includes("NOT protected"), lines[1]);
+    await disarmB();
+  } finally {
+    await reap(noProfile);
+    await reap(badMatch);
   }
 });
