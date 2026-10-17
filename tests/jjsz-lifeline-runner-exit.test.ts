@@ -927,13 +927,25 @@ function injectionViolations(program: Ast): Violations {
   // (`proc = null` ahead of the reap with an alias taken first, or right after boot() stores the handle) or a missing one
   // leaves the reap reading something that is not the browser. The write forms read are the ones `nameWrites` finds:
   // plain, compound and destructuring assignment, `++` / `--`, and a for-in / for-of head that assigns the name. Not
-  // read, and listed in chrome-agent-platform-t5o2i: a write through a member of the launch result (`l.proc = null`), a
-  // write that never runs or that is not a direct statement of boot(), and a rebinding of `kill` itself. The structural
-  // fix is chrome-agent-platform-80yqb (launchChrome waits for an in-flight sweep).
+  // read: a write through a member of the launch result (`l.proc = null`), and a write that is not a direct statement of
+  // boot() - the LATE-STORE clause below covers the second as far as it can (the store must follow the launch), but a
+  // store inside a nested block of boot() is read by neither. The structural fix is chrome-agent-platform-80yqb
+  // (launchChrome waits for an in-flight sweep).
   //
   // Each clause of the check below has a mutant in the table that only that clause rejects: the count alone does not see
   // one write of the wrong value (`proc = null`) or of the wrong kind (`proc ??= l.proc`).
   //
+  // chrome-agent-platform-t5o2i.1 - SURVIVORS STILL NOT READ (stated, not claimed closed). Static name matching cannot
+  // decide these, and each would need a data-flow rule rather than a position rule:
+  //   * a bare kill through another spelling: a computed member (`proc["kill"](...)`), `process.kill(proc.pid)`, a
+  //     local alias of the helper (`const kill2 = proc.kill`), or a `Deno.Command(["kill", ...])` call. The `bare`
+  //     property reads dotted identifier chains only. The 6efbv census (landed) judges the process table afterwards and
+  //     is an ADDITIONAL rule, not proof about every alias or position.
+  //   * a kill that is not a call at all (a signal sent through a helper the script imports).
+  //   * a second top-level try whose FIRST sibling is a decoy: measured in the table below (the decoy makes the pin
+  //     report everything(), so it cannot smuggle the real sequence past - but that is the pin refusing to read a file
+  //     it does not recognise, not a rule that understands two tries).
+  //   * `await kill()` where `kill` is a getter or a member that changes between reads.
   // A shadow of `proc` (a parameter or a local in kill()) has no rule of its own: the TypeScript transform renames a
   // nested declaration that collides with the module-level one (`proc` becomes `proc2`), so the reap statement no
   // longer names `proc` and the count above rejects it as a missing reap. That is measured, not assumed: a drill that
@@ -943,6 +955,33 @@ function injectionViolations(program: Ast): Violations {
   if (writes.length !== 1 || writes[0].operator !== "=" || dotted(writes[0].right) !== "l.proc") {
     violations.call.push(`\`proc\` must be written exactly once, by boot() storing the launch handle (\`proc = l.proc\`); it is written ${writes.length} time(s)`);
   }
+  // t5o2i.1 survivor (a), the LATE STORE: the count above accepts one write of `l.proc` ANYWHERE, so a store moved
+  // below a throw point in boot() satisfies it while leaving kill() reaping nothing when that throw fires (the real
+  // boot() throws `no service worker`). The store must be the statement immediately after the launch it stores.
+  const bootFunction = program.body.find((s: Ast) => s.type === "FunctionDeclaration" && s.id?.name === "boot");
+  if (!bootFunction) return everything("no `function boot` in scripts/security-injection.ts: update this pin");
+  const bootBody: Ast[] = bootFunction.body.body;
+  const launchAt = bootBody.findIndex((s: Ast) =>
+    s.type === "VariableDeclaration" &&
+    s.declarations.some((d: Ast) => d.init?.type === "AwaitExpression" && dotted(d.init.argument?.callee) === "launchChrome")
+  );
+  const storeAt = bootBody.findIndex((s: Ast) =>
+    s.type === "ExpressionStatement" && s.expression.type === "AssignmentExpression" && s.expression.operator === "=" &&
+    dotted(s.expression.left) === "proc" && dotted(s.expression.right) === "l.proc"
+  );
+  if (launchAt < 0) {
+    violations.call.push("boot() must launch with `const l = await launchChrome(...)` and store `l.proc`: update this pin");
+  } else if (storeAt !== launchAt + 1) {
+    violations.call.push(
+      "boot() must store the handle on the statement IMMEDIATELY after the launch (`proc = l.proc`); a store further down is one an earlier throw can skip, " +
+        `and kill() would then reap nothing (launch at statement ${launchAt}, store at ${storeAt})`,
+    );
+  }
+  // t5o2i.1 survivor (e): a reassigned `kill` makes the finally's `await kill()` a no-op that satisfies every pin.
+  const killWrites = nameWrites(program, "kill");
+  if (killWrites.length !== 0) {
+    violations.call.push(`\`kill\` must not be reassigned: a write can replace the reap with a no-op that the finally still awaits (${killWrites.length} write(s))`);
+  }
   // order: an awaited kill() sits between the two boots, and the finally awaits kill() BEFORE it removes the profile
   // (an `await kill()` anywhere in the finally would also be satisfied by one below the removal loop).
   if (!sequence.slice(boots[0] + 1, boots[1]).some((s) => awaitedCall(s, "kill") !== null)) {
@@ -950,19 +989,50 @@ function injectionViolations(program: Ast): Violations {
   }
   const finalizer: Ast[] = tryStatement.finalizer.body;
   const killAt = finalizer.findIndex((s) => awaitedCall(s, "kill") !== null);
-  const removeAt = finalizer.findIndex((s) => {
-    let removes = false;
-    descend(s, (node) => {
-      if (node.type === "CallExpression" && dotted(node.callee) === "Deno.remove") removes = true;
+  const removeCall = (statement: Ast): Ast | null => {
+    let found: Ast | null = null;
+    descend(statement, (node) => {
+      if (!found && node.type === "CallExpression" && dotted(node.callee) === "Deno.remove") found = node;
     });
-    return removes;
-  });
+    return found;
+  };
+  const removeAt = finalizer.findIndex((s) => removeCall(s) !== null);
+  // t5o2i.1 survivor (f): an early `throw`, `return` or `Deno.exit()` ahead of the reap leaves the indices intact and
+  // the reap unrun. Conservative on purpose: EVERY such node before the reap is refused, including one inside an inner
+  // try of the finalizer - this cleanup shape has none, and adding one should be a deliberate pin update.
+  const earlyLeave = (): string | null => {
+    let found: string | null = null;
+    for (const statement of killAt < 0 ? [] : finalizer.slice(0, killAt)) {
+      descend(statement, (node) => {
+        if (found) return;
+        if (node.type === "ThrowStatement") found = "throw";
+        else if (node.type === "ReturnStatement") found = "return";
+        else if (node.type === "CallExpression" && dotted(node.callee) === "Deno.exit") found = "Deno.exit";
+      });
+    }
+    return found;
+  };
   if (killAt < 0) {
     violations.order.push("the finally must `await kill()`: the profile is removed after the browser and its sweep are gone");
   } else if (removeAt < 0) {
     violations.order.push("the finally must remove the profile with `Deno.remove(...)` after its `await kill()`, and no such statement is there: update this pin");
   } else if (killAt > removeAt) {
     violations.order.push(`the finally's \`await kill()\` (statement ${killAt}) must come before the profile removal (statement ${removeAt}): the profile is removed after the browser and its sweep are gone`);
+  }
+  const leaving = earlyLeave();
+  if (leaving !== null) {
+    violations.order.push(
+      `nothing before the finally's \`await kill()\` may leave the block early (found ${leaving}): the reap below it would never run`,
+    );
+  }
+  // t5o2i.1 survivor (g): the ordering above compares POSITIONS, so a removal of any other path satisfies it. The
+  // removal the pin counts must be of the launch profile.
+  const removal = removeAt < 0 ? null : removeCall(finalizer[removeAt]);
+  if (removal && dotted(removal.arguments[0]) !== "profile") {
+    violations.order.push(
+      `the finally's removal must be \`Deno.remove(profile, ...)\`; it removes ${JSON.stringify(dotted(removal.arguments[0]))}, ` +
+        "so the ordering is satisfied without the profile being removed",
+    );
   }
   // bare: nothing in the script kills or waits for the browser by hand (the optional chains are read through).
   descend(program, (node) => {
@@ -1099,6 +1169,12 @@ const INJECTION_OLD_SHAPE = '  try { proc?.kill("SIGKILL"); } catch { /* gone */
 const INJECTION_FIRST_KILL = "  await kill();\n  const prefPath";
 const INJECTION_LAST_KILL = "  await kill();\n  // Chrome's helpers release";
 const INJECTION_BOOT_STORE = "  proc = l.proc;\n";
+// t5o2i.1 anchors: the launch statement the store must follow, boot()'s own throw point, and the declaration
+// after `kill()` where a reassignment of the helper can be planted.
+const INJECTION_LAUNCH_ONLY = "  const l = await launchChrome({ binary: CHROMIUM, args: CHROME_ARGS });\n";
+const INJECTION_LAUNCH_AND_STORE = INJECTION_LAUNCH_ONLY + INJECTION_BOOT_STORE;
+const INJECTION_BOOT_THROW = '  if (!sw) throw new Error("no service worker");\n';
+const INJECTION_ATTACH_HEAD = "async function attach(url: string, waitMs = 1500) {\n";
 const INJECTION_KILL_HEAD = "async function kill() {\n";
 const INJECTION_REMOVAL_REPORT = "  if (!removed) { console.error(`profile not removed: ${profile}`); exitCode = 1; }\n";
 
@@ -1185,6 +1261,50 @@ function injectionMutants(source: string): Array<[string, string, Array<keyof Vi
       "the finally awaits kill() only after it has removed the profile",
       mutate(mutate(source, INJECTION_LAST_KILL, "  // Chrome's helpers release"), INJECTION_REMOVAL_REPORT, INJECTION_REMOVAL_REPORT + "  await kill();\n"),
       ["order"],
+    ],
+    // ---- t5o2i.1: the named survivors of the umbrella review, one row each ----
+    // (a) the late store: one write of `l.proc`, below boot()'s own throw point, so kill() can reap nothing.
+    [
+      "boot() stores the handle LATE, below its `no service worker` throw",
+      mutate(
+        mutate(source, INJECTION_LAUNCH_AND_STORE, INJECTION_LAUNCH_ONLY),
+        INJECTION_BOOT_THROW,
+        INJECTION_BOOT_THROW + INJECTION_BOOT_STORE,
+      ),
+      ["call"],
+    ],
+    // (e) a reassigned kill(): the finally still awaits `kill()`, and that call is a no-op.
+    [
+      "kill is reassigned after its declaration (the finally awaits a no-op)",
+      mutate(source, INJECTION_ATTACH_HEAD, INJECTION_ATTACH_HEAD + "kill = async () => {};\n"),
+      ["call"],
+    ],
+    // (f) the finalizer leaves early, ahead of the reap: indices unchanged, reap never runs.
+    [
+      "the finally throws before its `await kill()`",
+      mutate(source, INJECTION_LAST_KILL, "  if (exitCode === 0) throw new Error(\"finalizer left early\");\n" + INJECTION_LAST_KILL),
+      ["order"],
+    ],
+    [
+      "the finally calls Deno.exit() before its `await kill()`",
+      mutate(source, INJECTION_LAST_KILL, "  if (exitCode === 0) Deno.exit(2);\n" + INJECTION_LAST_KILL),
+      ["order"],
+    ],
+    // (g) a removal that satisfies the ORDER without removing the profile.
+    [
+      "the finally removes another path instead of the profile",
+      // A RELATIVE literal on purpose: an absolute /tmp path here would be flagged by the durable-root guard
+      // (tests/durable-root.test.ts), which scans this file like any other. The pin only needs an argument that is
+      // not `profile`.
+      mutate(source, "Deno.remove(profile, { recursive: true })", 'Deno.remove("not-the-profile", { recursive: true })'),
+      ["order"],
+    ],
+    // (c) an earlier decoy try/finally: the pin takes the first try that HAS a finalizer, so the decoy must not be
+    // usable to smuggle the real sequence past it. Measured, not assumed: everything() is the honest expectation.
+    [
+      "a decoy try/finally is placed before the real one",
+      mutate(source, "let exitCode = 1;\ntry {\n", "let exitCode = 1;\ntry { void 0; } finally { void 0; }\ntry {\n"),
+      ["call", "order", "bare"],
     ],
   ];
 }
