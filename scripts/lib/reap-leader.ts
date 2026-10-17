@@ -44,7 +44,11 @@
 // sweep wait; a fifth runner that exits under the security supervisor still needs this helper.
 //
 // The wait is bounded. The sweep gives up on its own watcher after `sweepTimeoutMs` (5 s by
-// default), SIGKILLs it and settles; `settled` never rejects.
+// default), SIGKILLs it, and then waits at most `LIFELINE_SETTLE_WAIT_MS` (1 s) more for that
+// watcher to actually exit (t5o2i.2: a watcher in uninterruptible I/O can outlive its SIGKILL), so
+// `settled` resolves within those two bounds and never rejects. When the second bound expires too,
+// the transition still settles but `lifelineState(proc).cleanupConfirmed` is FALSE: the runner's
+// residue verdict is unaffected, while a same-profile launch through `launchChrome` is refused.
 //
 // `lifelineState(proc).settled` is the promise of the transition out of `armed` (a sweep, or a
 // disarm that finished earlier and is already resolved). It is null when none began: a

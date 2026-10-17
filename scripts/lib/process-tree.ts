@@ -245,6 +245,11 @@ interface Lifeline {
   ready: Promise<boolean>;
   /** The in-flight (or finished) transition out of `armed`; null while armed / unprotected. */
   settled: Promise<void> | null;
+  /** FALSE once a wait on the watcher's OWN exit (or on its stdin close) timed out. The transition
+   *  still SETTLES - that is the point of the second bound - but it settles without proof that the
+   *  watcher, and any `pkill` it had already forked, is gone. TRUE means every wait the lifeline made
+   *  on its watcher finished inside its bound (t5o2i.2). */
+  cleanupConfirmed: boolean;
   /** `killProcessTree` calls running for this proc: they own the cleanup AND its verdict. */
   teardowns: number;
   disarm: () => Promise<void>;
@@ -260,9 +265,22 @@ const lifelines = new WeakMap<Deno.ChildProcess, Lifeline>();
 interface ProfileSweep {
   fired: boolean;
   settled: Promise<void> | null;
+  /** FALSE once this lifeline's watcher exit (or stdin close) went UNCONFIRMED; the entry is then kept
+   *  in the registry for the rest of the process and a same-profile launch is refused (t5o2i.2). */
+  confirmed: boolean;
 }
 const profileSweeps = new Map<string, Set<ProfileSweep>>();
 
+/**
+ * Wait for a FIRED sweep on `treeMatch` before a same-profile launch, and REFUSE the launch while any
+ * lifeline for that profile ended its window without proof that its watcher is gone (t5o2i.2).
+ *
+ * The wait is bounded now: a sweep cannot run past `sweepTimeoutMs` plus its second bound, so this
+ * cannot hang a launch. When a watcher outlived BOTH bounds (uninterruptible I/O keeps a pending
+ * SIGKILL), the sweep is honestly UNCONFIRMED rather than a clean settle: it may still signal the
+ * profile when it is finally scheduled, so a browser launched here could be killed by it. That is the
+ * one case that refuses, and the error names the profile and the one next action.
+ */
 export async function awaitFiredLifelineSweep(treeMatch: string): Promise<void> {
   // Give an already-resolved leader.status reaction a checkpoint to mark its
   // sweep before the new launch checks the registry. Never await a live leader.
@@ -271,6 +289,15 @@ export async function awaitFiredLifelineSweep(treeMatch: string): Promise<void> 
     .filter((entry) => entry.fired && entry.settled !== null)
     .map((entry) => entry.settled!);
   await Promise.all(pending);
+  // Re-read AFTER the wait: a sweep that was in flight above can be the one that turns unconfirmed.
+  const unconfirmed = [...(profileSweeps.get(treeMatch) ?? [])].filter((entry) => !entry.confirmed).length;
+  if (unconfirmed > 0) {
+    throw new Error(
+      `refusing to launch on profile ${JSON.stringify(clip(treeMatch, 80))}: ${unconfirmed} previous lifeline ` +
+        `watcher(s) for it did not exit within their bound even after SIGKILL, so descendant cleanup is ` +
+        `UNCONFIRMED and a sweep may still signal this profile; use a fresh profile for this launch`,
+    );
+  }
 }
 
 /** The watcher's exit status when pkill rejected the pattern (exit >= 2); the group kill already ran. */
@@ -352,6 +379,10 @@ export interface LifelineDeps {
   warn?: (line: string) => void;
   /** How long a leader-exit sweep may take before the watcher is SIGKILLed (default 5000). */
   sweepTimeoutMs?: number;
+  /** The SHORT second bound on the waits that follow (the SIGKILLed watcher's exit, and the stdin
+   *  close): default `LIFELINE_SETTLE_WAIT_MS` (1000). A wait that overruns does not fail the sweep -
+   *  it ends it UNCONFIRMED, which is reported (t5o2i.2). */
+  settleTimeoutMs?: number;
   /** Build the pkill pattern (default `lifelineMatchPattern`). */
   matchPattern?: (treeMatch: string | undefined) => string;
   /**
@@ -376,6 +407,28 @@ function spawnLifelineWatcher(spec: LifelineSpawnSpec): LifelineWatcher {
 
 async function attempt(fn: () => unknown): Promise<void> {
   try { await fn(); } catch { /* best effort: the process may already be gone */ }
+}
+
+/** The short SECOND bound on a post-timeout wait on the watcher itself (t5o2i.2). The 5 s sweep
+ *  bound bounds how long the watcher may take to do its job; this bounds the wait for PROOF that the
+ *  watcher has stopped, which a SIGKILL usually gives in milliseconds. */
+export const LIFELINE_SETTLE_WAIT_MS = 1000;
+
+/** TRUE when `p` settled within `ms`, FALSE when the bound expired first. Never rejects (a rejection
+ *  means the wait is over, which is what is being measured). The loser is NOT cancelled: a
+ *  `watcher.status` cannot be, and the caller reports the timeout instead of pretending it ended. */
+async function settlesWithin(p: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p.then(() => true, () => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -487,6 +540,8 @@ export function attachProcessLifeline(
   if (existing) return existing.disarm;
   const warn = deps.warn ?? ((line: string) => console.error(line));
   const sweepTimeoutMs = deps.sweepTimeoutMs ?? 5000;
+  const settleTimeoutMs = deps.settleTimeoutMs ?? LIFELINE_SETTLE_WAIT_MS;
+  let unconfirmedReported = false;
   const match = (deps.matchPattern ?? lifelineMatchPattern)(treeMatch);
   // umuyk: this object has to exist BEFORE the coverage checks, because the no-group/no-pattern case
   // below reports it as `unprotected` and returns it. Nothing else in this function depends on the
@@ -499,6 +554,8 @@ export function attachProcessLifeline(
     // reserved for a RUNNING watcher whose isolation could not be confirmed.
     ready: Promise.resolve(true),
     settled: null,
+    // TRUE: there is no watcher to wait on, so nothing about its exit can be unconfirmed (t5o2i.2).
+    cleanupConfirmed: true,
     teardowns: 0,
     disarm: async () => {},
   };
@@ -561,7 +618,7 @@ export function attachProcessLifeline(
   }
   lifeline.state = "armed";
   lifeline.watcherPid = watcher.pid;
-  const sweepEntry: ProfileSweep | null = treeMatch && match !== "" ? { fired: false, settled: null } : null;
+  const sweepEntry: ProfileSweep | null = treeMatch && match !== "" ? { fired: false, settled: null, confirmed: true } : null;
   if (sweepEntry) {
     const siblings = profileSweeps.get(treeMatch!) ?? new Set<ProfileSweep>();
     siblings.add(sweepEntry);
@@ -598,7 +655,10 @@ export function attachProcessLifeline(
     lifeline.state = next;
     if (sweepEntry) sweepEntry.fired = next === "fired";
     lifeline.settled = body().catch(() => {}).finally(() => {
-      if (sweepEntry) {
+      // An UNCONFIRMED lifeline stays in the registry: it is the marker that refuses a same-profile
+      // launch (`awaitFiredLifelineSweep`), so dropping it would be the false clean t5o2i.2 forbids.
+      // One entry per unconfirmable watcher, so this does not grow with ordinary sweeps.
+      if (sweepEntry && sweepEntry.confirmed) {
         const siblings = profileSweeps.get(treeMatch!);
         siblings?.delete(sweepEntry);
         if (siblings?.size === 0) profileSweeps.delete(treeMatch!);
@@ -607,10 +667,28 @@ export function attachProcessLifeline(
     if (sweepEntry) sweepEntry.settled = lifeline.settled;
     return lifeline.settled;
   };
+  // t5o2i.2: the watcher can be in uninterruptible I/O, where a pending SIGKILL is not delivered until
+  // the operation finishes - so "we asked it to die" is not "it is gone". Every post-timeout wait is
+  // bounded, and an overrun ends the transition UNCONFIRMED with a line that says exactly that instead
+  // of letting `settled` imply a clean sweep.
+  const unconfirmed = (wait: string): void => {
+    lifeline.cleanupConfirmed = false;
+    if (sweepEntry) sweepEntry.confirmed = false;
+    // Reported ONCE per lifeline: a second overrun in the same transition adds nothing an operator can act on.
+    if (unconfirmedReported) return;
+    unconfirmedReported = true;
+    warn(
+      `process-tree: lifeline ${lifeline.state} for pid ${proc.pid}: its ${wait} did not settle within ` +
+        `${settleTimeoutMs} ms; descendant cleanup is UNCONFIRMED - the watcher (and any pkill it already ` +
+        `forked) may still signal this profile` +
+        (lifeline.state === "fired" ? ", so a same-profile launch is refused" : "") +
+        `; use a fresh profile`,
+    );
+  };
   const disarmBody = async (): Promise<void> => {
     await attempt(() => watcher.kill("SIGKILL"));
-    await attempt(() => watcher.stdin.close());
-    await attempt(() => watcher.status);
+    if (!(await settlesWithin(attempt(() => watcher.stdin.close()), settleTimeoutMs))) unconfirmed("stdin close");
+    if (!(await settlesWithin(attempt(() => watcher.status), settleTimeoutMs))) unconfirmed("exit after SIGKILL");
   };
   const sweepBody = async (): Promise<void> => {
     // The watcher's own trigger is EOF on its stdin: close it and do NOT kill the shell.
@@ -630,7 +708,7 @@ export function attachProcessLifeline(
             `killing its watcher (the group may not have been fully signalled)`,
         );
         await attempt(() => watcher.kill("SIGKILL"));
-        await attempt(() => watcher.status);
+        if (!(await settlesWithin(watcher.status, settleTimeoutMs))) unconfirmed("exit after SIGKILL");
       } else if (outcome !== null && outcome.code === LIFELINE_PKILL_REJECTED) {
         warn(
           `process-tree: lifeline sweep for pid ${proc.pid}: pkill rejected the profile pattern; ` +
@@ -640,7 +718,7 @@ export function attachProcessLifeline(
     } finally {
       clearTimeout(timer);
     }
-    await closing;
+    if (!(await settlesWithin(closing, settleTimeoutMs))) unconfirmed("stdin close");
   };
   lifeline.disarm = () => {
     if (lifeline.state === "armed") return leave("disarmed", disarmBody);
@@ -671,10 +749,19 @@ export function lifelineState(
   /** TRUE when the watcher was confirmed to lead its own process group; FALSE only for a running
    *  watcher that could not be confirmed. Callers must treat FALSE as isolation UNCONFIRMED. */
   ready: Promise<boolean>;
+  /** FALSE when a wait on the watcher's exit (or stdin close) overran its second bound: the transition
+   *  settled, but without proof that the watcher is gone (t5o2i.2). */
+  cleanupConfirmed: boolean;
 } | undefined {
   const lifeline = lifelines.get(proc);
   return lifeline &&
-    { state: lifeline.state, watcherPid: lifeline.watcherPid, settled: lifeline.settled, ready: lifeline.ready };
+    {
+      state: lifeline.state,
+      watcherPid: lifeline.watcherPid,
+      settled: lifeline.settled,
+      ready: lifeline.ready,
+      cleanupConfirmed: lifeline.cleanupConfirmed,
+    };
 }
 
 /** The launcher waits for setsid to exec before recording the isolated group.

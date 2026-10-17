@@ -147,7 +147,16 @@ async function afterLeaderExit(proc: Deno.ChildProcess, ms = 8000): Promise<void
  *  it settles `status` and records no kill, so `calls` stays a record of what the lifeline did. */
 function fakeWatcher(
   calls: string[],
-  opts: { exitCode?: number; hangs?: boolean; onKill?: () => void; onClose?: () => Promise<void> } = {},
+  opts: {
+    exitCode?: number;
+    hangs?: boolean;
+    /** t5o2i.2: the watcher is stuck in uninterruptible I/O - it accepts the SIGKILL and the stdin close
+     *  and never exits, so BOTH post-timeout waits overrun. `end()` still finishes it, so a failing test
+     *  leaves no pending promise behind. */
+    uninterruptible?: boolean;
+    onKill?: () => void;
+    onClose?: () => Promise<void>;
+  } = {},
 ): LifelineWatcher & { end(): void } {
   let settle!: (status: { code: number; signal: string | null }) => void;
   const status = new Promise<{ code: number; signal: string | null }>((resolve) => {
@@ -159,14 +168,15 @@ function fakeWatcher(
     stdin: {
       close() {
         calls.push("stdin.close");
-        if (!opts.hangs) settle({ code: opts.exitCode ?? 0, signal: null });
+        if (!opts.hangs && !opts.uninterruptible) settle({ code: opts.exitCode ?? 0, signal: null });
+        if (opts.uninterruptible) return new Promise<void>(() => {});
         return opts.onClose?.() ?? Promise.resolve();
       },
     },
     kill(signo = "SIGTERM") {
       calls.push(`kill:${signo}`);
       opts.onKill?.();
-      settle({ code: 137, signal: signo });
+      if (!opts.uninterruptible) settle({ code: 137, signal: signo });
     },
     end() {
       settle({ code: opts.exitCode ?? 0, signal: null });
@@ -175,6 +185,12 @@ function fakeWatcher(
 }
 
 type HeldWatcher = ReturnType<typeof fakeWatcher>;
+
+/** Each recorded diagnostic line contains its pattern, in order, and there are no others. */
+function assertEqualLines(lines: string[], patterns: string[]): void {
+  assertEquals(lines.length, patterns.length, `expected ${patterns.length} diagnostic line(s), got: ${lines.join(" | ")}`);
+  patterns.forEach((pattern, i) => assert(lines[i].includes(pattern), `line ${i} must mention ${JSON.stringify(pattern)}: ${lines[i]}`));
+}
 
 /**
  * Run each cleanup step in its OWN try/catch and never throw (jjsz N8). Cleanup in a `finally` must never
@@ -950,6 +966,66 @@ Deno.test("lifeline: a sweep that overruns is bounded — the watcher is SIGKILL
     assertEquals(calls, ["stdin.close", "kill:SIGKILL"], "stdin first (the trigger), the kill only on overrun");
     assertEquals(lines.length, 1);
     assert(lines[0].includes("did not finish"), lines[0]);
+    // t5o2i.2 anti-vacuity: this watcher DID exit on the SIGKILL, so the sweep is confirmed. A flag that
+    // could not tell the two cases apart would make the UNCONFIRMED test below prove nothing.
+    assertEquals(lifelineState(proc)?.cleanupConfirmed, true, "a watcher that exited on the SIGKILL is a CONFIRMED sweep");
+  } finally {
+    await reap(proc);
+  }
+});
+
+Deno.test("lifeline: a watcher that never exits after the SIGKILL is bounded and the sweep ends UNCONFIRMED (t5o2i.2)", async () => {
+  const proc = spawnLeader("/bin/sleep", ["300"]);
+  const marker = `user-data-dir=jjsz-t5o2i-unconfirmed-${crypto.randomUUID()}`;
+  const calls: string[] = [];
+  const lines: string[] = [];
+  try {
+    attachProcessLifeline(proc, { group: proc.pid, treeMatch: marker }, {
+      // Both post-timeout waits (the watcher's exit and its stdin close) never finish: the shape of a
+      // watcher stuck in uninterruptible I/O, where a pending SIGKILL is not delivered.
+      spawn: () => fakeWatcher(calls, { uninterruptible: true }),
+      warn: (line) => lines.push(line),
+      sweepTimeoutMs: 40,
+      settleTimeoutMs: 60,
+    });
+    proc.kill("SIGKILL");
+    await proc.status;
+    assert(await until(() => lifelineState(proc)?.state === "fired", 5000), "the exit fired the sweep");
+    // THE CONTRACT: the transition still SETTLES, inside its bounds, instead of hanging the runner.
+    assert(
+      await settlesWithin(lifelineState(proc)?.settled, 5000),
+      "a sweep whose watcher never exits must still settle within sweepTimeoutMs + settleTimeoutMs",
+    );
+    assertEquals(calls, ["stdin.close", "kill:SIGKILL"], "the bounded second wait added no kill of its own");
+    assertEquals(lifelineState(proc)?.cleanupConfirmed, false, "the sweep ended without proof the watcher is gone");
+    assertEqualLines(lines, ["did not finish", "UNCONFIRMED"]);
+    // And the truth is not a warning only: a same-profile launch is REFUSED while that is unconfirmed.
+    await assertRejects(() => awaitFiredLifelineSweep(marker), Error, "did not exit within their bound");
+  } finally {
+    await reap(proc);
+  }
+});
+
+Deno.test("lifeline: a DISARM whose watcher never exits is bounded, reported, and quarantines the profile (t5o2i.2)", async () => {
+  const proc = spawnLeader("/bin/sleep", ["300"]);
+  const marker = `user-data-dir=jjsz-t5o2i-disarm-${crypto.randomUUID()}`;
+  const calls: string[] = [];
+  const lines: string[] = [];
+  try {
+    const disarm = attachProcessLifeline(proc, { group: proc.pid, treeMatch: marker }, {
+      spawn: () => fakeWatcher(calls, { uninterruptible: true }),
+      warn: (line) => lines.push(line),
+      sweepTimeoutMs: 40,
+      settleTimeoutMs: 60,
+    });
+    assert(await settlesWithin(disarm(), 5000), "the disarm settles inside its bound even when its watcher never exits");
+    assertEquals(calls, ["kill:SIGKILL", "stdin.close"], "the disarm still kills first and closes the trigger");
+    assertEquals(lifelineState(proc)?.state, "disarmed");
+    assertEquals(lifelineState(proc)?.cleanupConfirmed, false, "the disarm ended without proof the watcher is gone");
+    assertEquals(lines.length, 1, `each overrun is reported once: ${lines.join(" | ")}`);
+    assertEqualLines(lines, ["UNCONFIRMED"]);
+    // A disarmed-but-unconfirmed watcher can also still run its pkill, so the profile is refused too.
+    await assertRejects(() => awaitFiredLifelineSweep(marker), Error, "UNCONFIRMED");
   } finally {
     await reap(proc);
   }
