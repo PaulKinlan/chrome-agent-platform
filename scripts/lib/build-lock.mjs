@@ -147,7 +147,7 @@ function psStateAndStart(pid, exec, timeoutMs = PS_TIMEOUT_MS) {
   const row = stdout.trim();
   const m = PS_STATE_LSTART.exec(row);
   if (!m) return { ok: false, reason: row === "" ? "unreadable" : "unparseable" };
-  return { ok: true, state: m[1][0] ?? "?", start: m[2].replace(/\s+/gu, " ") };
+  return { ok: true, state: m[1][0] ?? "?", start: m[2].replace(/\s+/gu, " "), basis: PS_START_BASIS };
 }
 
 /**
@@ -177,7 +177,7 @@ export function procStatFields(pid, read = defaultProcRead, deps = {}) {
   try {
     const parsed = parseProcStat(read(`/proc/${pid}/stat`));
     if (!parsed) return { ok: false, reason: "unparseable" };
-    return { ok: true, state: parsed.state, start: parsed.start };
+    return { ok: true, state: parsed.state, start: parsed.start, basis: PROC_START_BASIS };
   } catch (e) {
     return {
       ok: false,
@@ -209,8 +209,46 @@ export function buildOwnerIdentity(pid = process.pid, boot = machineBootId(), de
     token: randomUUID(),
     at: Date.now(),
     start: self?.ok && self.start ? self.start : null,
+    // Provenance for `start` (khkqz): without it a pre-pin start cannot be told from a current one.
+    ...(self?.ok && self.start && self.basis ? { startBasis: self.basis } : {}),
     boot,
   };
+}
+
+/** HOW a `start` value was recorded — the provenance the pid-reuse compare needs
+ *  (chrome-agent-platform-qo3u8 (b), corrected after review finding chrome-agent-platform-khkqz).
+ *
+ *  SHAPE ALONE CANNOT IDENTIFY THE RECORDING ENVIRONMENT, and the reviewer's repro is why: the
+ *  pre-upgrade writer did NOT pin the time zone, so the SAME live macOS process recorded as
+ *  `Wed Oct 7 13:10:01 2026` under a C locale in Europe/London and reads now as
+ *  `Wed Oct 7 12:10:01 2026` under PS_ENV (TZ=UTC). Both strings have the canonical shape, so a
+ *  shape rule compares them and reads pid REUSE — the one-time steal comes straight back. Non-C
+ *  locale text (`Wed  7 Oct 12:10:01 2026`, `Mer  7 oct ...`) was only the easy half.
+ *
+ *  So each owner file now records the basis its `start` came from, and the compare requires the
+ *  recorded basis to be the CURRENT one. A lock written before this field existed carries no basis
+ *  and is therefore UNKNOWN — alive, not stealable — which is exactly the transition policy the bead
+ *  asked for. After one upgrade every new lock carries the marker and comparisons resume. */
+export const PROC_START_BASIS = "proc-stat-22"; // /proc/<pid>/stat field 22: kernel ticks, environment-free
+export const PS_START_BASIS = "ps-lstart-utc-v1"; // ps -o lstart= under PS_ENV (LC_ALL=C, TZ=UTC)
+
+/** Is this recorded start comparable with a start we read NOW? Only when it came from a writer whose
+ *  environment we can still reproduce: kernel ticks always, `ps` text only under the current marker.
+ *
+ *  @param {unknown} start the value recorded in the owner file (or read from the probe)
+ *  @param {unknown} basis the basis recorded WITH it (undefined for pre-marker owner files)
+ *  @returns {string|null} the value when comparable, else null ("cannot prove reuse").
+ */
+export function comparableStart(start, basis = null) {
+  const value = start === undefined || start === null ? "" : String(start).trim();
+  if (!value) return null;
+  if (/^\d+$/u.test(value)) return basis === null || basis === PROC_START_BASIS ? value : null;
+  if (/^[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/u.test(value)) {
+    // A `ps` start is only comparable when it was recorded under the pinned environment this reader
+    // uses. Shape is NOT evidence of that (khkqz): a C-locale local-zone string is shape-identical.
+    return basis === PS_START_BASIS ? value : null;
+  }
+  return null;
 }
 
 /**
@@ -302,7 +340,19 @@ export async function holderIsDead(holder, deps = {}) {
   // treated as "cannot prove reuse" and the holder stays alive: the first draft recorded the truthy string
   // "0" on a failed read, which mismatched every later read and made a LIVE build's lock stealable
   // (chrome-agent-platform-jjsz).
-  if (holder.start && resolved.start && String(resolved.start) !== String(holder.start)) return true;
+  // qo3u8 (b), corrected by review finding khkqz: compare ONLY values whose RECORDING BASIS we can
+  // reproduce. A start recorded before the PS_ENV pin carries no basis marker and is UNKNOWN, so it
+  // cannot prove reuse and the holder stays ALIVE — that is what removes the one-time steal, including
+  // the C-locale/local-zone shape that no string comparison can distinguish (both sides look canonical
+  // and differ by a time-zone offset). Kernel ticks (Linux) are environment-free and keep comparing;
+  // `ps` text compares only under PS_START_BASIS, which every lock written after this field exists has.
+  const recordedStart = comparableStart(holder.start, holder.startBasis ?? null);
+  // The probe reports its own basis (procStatFields does). Seams that predate the field pass only a
+  // value, so infer it from the shape: digits cannot be a `ps` start, and `ps` text cannot be ticks.
+  const observedBasis = resolved.basis
+    ?? (/^\d+$/u.test(String(resolved.start ?? "").trim()) ? PROC_START_BASIS : PS_START_BASIS);
+  const observedStart = comparableStart(resolved.start, observedBasis);
+  if (recordedStart && observedStart && recordedStart !== observedStart) return true;
 
   return false;
 }

@@ -30,6 +30,7 @@ import {
   LOCK_DIRNAME,
   procStatFields,
   PS_ENV,
+  PS_START_BASIS,
   PS_TIMEOUT_MS,
 } from "../scripts/lib/build-lock.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
@@ -62,7 +63,7 @@ type PsOptions = {
   stdio?: string[];
 };
 type Exec = (file: string, args: string[], options: PsOptions) => SpawnLike;
-type Fields = { ok: boolean; state?: string; start?: string; reason?: string; code?: unknown };
+type Fields = { ok: boolean; state?: string; start?: string; basis?: string; reason?: string; code?: unknown };
 type Ambient = { LC_ALL?: string; LC_TIME?: string; LANG?: string; TZ?: string };
 
 const PID = 1234;
@@ -495,7 +496,8 @@ Deno.test("jjsz F1(b): a well-formed row parses to {state, start} and a Z row is
   for (const row of rows) {
     await t.step(JSON.stringify(row.stdout), async () => {
       const exec = returning({ status: 0, signal: null, stdout: row.stdout, stderr: "" });
-      assertEquals(fieldsVia(exec), { ok: true, state: row.state, start: row.start });
+      // khkqz: the probe reports WHICH basis the start came from; the ps branch is the pinned one.
+      assertEquals(fieldsVia(exec), { ok: true, state: row.state, start: row.start, basis: PS_START_BASIS });
       const dead = await holderIsDead(
         { pid: PID, start: row.start, boot: BOOT },
         { bootId: BOOT, kill: () => {}, procStat: probeVia(exec) },
@@ -640,7 +642,9 @@ Deno.test("jjsz F1(c): acquireBuildLock refuses a live owner whose identity read
   const reuseRoot = tmpRoot("reuse");
   try {
     const recorded = buildOwnerIdentity(PID, BOOT, {
-      procStat: () => ({ ok: true, state: "S", start: "Tue Oct 6 01:02:03 2026" }),
+      // `basis` is what makes this a CURRENT-format lock (khkqz): without it the recorded start is
+      // UNKNOWN and the holder is not stealable, which is the transition policy, not reuse detection.
+      procStat: () => ({ ok: true, state: "S", start: "Tue Oct 6 01:02:03 2026", basis: PS_START_BASIS }),
     });
     assertEquals(recorded.start, "Tue Oct 6 01:02:03 2026", "a successful read records the start");
     writeLock(reuseRoot, { ...recorded, token: "reused-pid-token" });
@@ -682,13 +686,13 @@ Deno.test("jjsz F1: the /proc branch never spawns ps and keeps its ENOENT=gone /
     },
     { hasProc: true, exec: neverSpawn },
   ) as Fields;
-  assertEquals(ok, { ok: true, state: "S", start: "987654" });
+  assertEquals(ok, { ok: true, state: "S", start: "987654", basis: "proc-stat-22" });
   assertEquals(seen, ["/proc/4242/stat"]);
 
   // A caller-supplied reader ALWAYS selects the /proc branch, even where hasProc is false.
   assertEquals(
     procStatFields(4242, () => line, { hasProc: false, exec: neverSpawn }) as Fields,
-    { ok: true, state: "S", start: "987654" },
+    { ok: true, state: "S", start: "987654", basis: "proc-stat-22" },
   );
 
   const gone = procStatFields(4242, () => {
