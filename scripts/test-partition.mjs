@@ -168,11 +168,57 @@ export const PRODUCTION_BUILD_TIMEOUT_MS = 300_000;
  *                               file's only build.mjs calls are fail-fast (bogus flag, disabled
  *                               target, drifted verify). It keeps the base window.
  *   store-doc-denial       6s  via the memoized record (97s when it really builds) -> base window.
- * A bound is MEASURED WORK x ~3, which is what the two entries below are.
+ * Per-file serial windows (chrome-agent-platform-kj9s). ONE global window for every serial file was
+ * the mismatch that made a handful of build-heavy files look like a capacity problem: those files run
+ * several REAL production builds, so their cost is a property of build COUNT, not of tree health.
+ * Every value here is MEASURED WORK x ~3 — headroom for a loaded box that does not turn a hung file
+ * into a 15-minute wait — and ONLY files that genuinely need it are listed; every other serial file
+ * keeps the base window, so a hang there is still caught fast.
+ *
+ * A per-file entry REPLACES the load-scaled base window rather than scaling with it (serial-phase.mjs
+ * picks `perFileTimeoutMs?.[file] ?? timeoutMs`), so the x3 is what absorbs load here — the entry below
+ * is an absolute number and must be sized from a LOADED measurement, never from a quiet one.
+ *
+ * The value is max(measured x ~3, PRODUCTION_BUILD_TIMEOUT_MS + slack): tests/test-partition-guard.test.ts
+ * pins the lower half of that (the window must outlast ONE child build, so a hung child is killed and
+ * NAMED by its own bound before this window expires and the only thing a reader learns is "the file
+ * timed out"). When the x3 of a now-faster file lands UNDER that floor, the floor is what governs, and
+ * the entry is floored deliberately rather than tightened past the invariant.
+ *
+ * MEASURED 2026-10-06 by gate kj9s-measure AFTER the 7->3 / 6->3 regroup (the box was deliberately
+ * loaded: a merger gate was running concurrently, so these are pessimistic):
+ *   build-bootstrap      278s  (3 production builds + 2 ZIP packagings; ~216s quiet at ~72s/build)
+ *   build-debug-mode     173s  (developer + store + steady-state store)
+ *   build-tool-bundling   10s  -> NEEDS NO BOUND. This corrects an UNMEASURED earlier estimate of
+ *                               ~510s: the two generator "regenerations" are sub-second, and the
+ *                               file's only build.mjs calls are fail-fast (bogus flag, disabled
+ *                               target, drifted verify). It keeps the base window.
+ *   store-doc-denial       6s  via the memoized record (97s when it really builds) -> base window.
+ *
+ * RE-MEASURED 2026-10-17 by gate testbuild-tn7wh (exit 0, 148s wall), because the 2026-10-06 numbers
+ * had stopped describing the work: chrome-agent-platform-6gk81 then cut build-bootstrap 3->2 and
+ * build-debug-mode 3->2 real builds (test:build 140.8s -> 103.3s), and the old 850s/550s had been
+ * carried over unexamined. The box was loaded (load ~11 on 2 vCPU = 5.5 per CPU, ABOVE the base
+ * window's MAX_LOAD_SCALE of 4), so these are pessimistic in the same sense as the row above:
+ *   build-bootstrap   83.8s  (2 production builds + 2 ZIP packagings)
+ *   build-debug-mode  57.4s  (developer + store; steady-state restoral is validate-or-build)
+ *   build-tool-bundling 6.3s -> still needs no bound, and its 2026-10-06 note stands.
+ * A second loaded run (gate testbuild-tn7wh-verify, exit 0) is the reason the numbers below are cited
+ * as a RANGE, not a point: bootstrap 84.4s (stable), tool-bundling 5.9s (stable), but debug-mode
+ * 86.8s — 1.5x its first run — so a single measurement of that file is not a safe basis for a bound.
+ *
+ * Both entries are therefore FLOOR-BOUND, and 350_000 is also >= 3x the WORST observation of either
+ * file (84.4s and 86.8s -> 253s and 260s), so it keeps the documented x3 headroom against the slowest
+ * run rather than only the median. x3 of the FASTEST observations (251s and 172s) is under the
+ * child-build floor, so 350_000 (= the 300s child bound + 50s of phase slack) governs both; tightening
+ * past it would break the invariant that a hung child is killed and NAMED before the file window
+ * expires. That still cuts 850_000 by 500s (a hang is caught after ~5.8 min, not ~14.2 min) and
+ * 550_000 by 200s (~9.2 min -> ~5.8 min), and both files were confirmed GREEN well inside the new
+ * bound on the verify run (84.4s / 86.8s), so tightening did not turn healthy work red.
  */
 export const SERIAL_FILE_TIMEOUTS = Object.freeze({
-  "tests/build-bootstrap.test.ts": 850_000, // 278s measured (contended) x 3.1
-  "tests/build-debug-mode.test.ts": 550_000, // 173s measured (contended) x 3.2
+  "tests/build-bootstrap.test.ts": 350_000, // floor-bound: 83.8s measured 2026-10-17 (loaded; range 83.8-84.4) x3 = 251s < 300s child bound
+  "tests/build-debug-mode.test.ts": 350_000, // floor-bound: 57.4s measured 2026-10-17 (loaded; range 57.4-86.8) x3 = 172-260s < 300s child bound
 });
 
 // Files a content scan classifies as hazards but that are provably

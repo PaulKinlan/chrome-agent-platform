@@ -4,14 +4,17 @@
 // run during landing or on-demand.
 //
 // Enumerated coverage:
-//   • tests/build-bootstrap.test.ts (per-file bound: 850s) — steady-state symlink bootstrap, GC of dangling v-boot
+//   • tests/build-bootstrap.test.ts (per-file bound: 350s) — steady-state symlink bootstrap, GC of dangling v-boot
 //     symlinks under dist-versions, live version counts, and archive packaging idempotence.
-//   • tests/build-debug-mode.test.ts (per-file bound: 550s) — developer vs store target marker validation, sourcemap
+//   • tests/build-debug-mode.test.ts (per-file bound: 350s) — developer vs store target marker validation, sourcemap
 //     inclusion/exclusion, and mode alternation integrity.
 //   • tests/build-tool-bundling.test.ts (base serial window, measured ~10s; ceiling 720s under 4x load) — bundled-tool
 //     generator verify-mode drift check, --regen-tools idempotence, and provenance validation.
 //
-// Total enforced ceiling: 2120s (~35 min under max load scale; measured 31-36 s on an Apple-silicon workstation after jjsz).
+// Total enforced ceiling: 1420s (~24 min under max load scale; measured 31-36 s on an Apple-silicon workstation after jjsz).
+// Re-measured 2026-10-17 (chrome-agent-platform-tn7wh): the two per-file bounds above were 850s/550s, sized on the
+// 2026-10-06 build counts before 6gk81 cut them to 2 real builds each; the measured work is now 83.8s and 57.4s on a
+// loaded box, so both entries are floored at the child-build bound + slack. See scripts/test-partition.mjs.
 
 import { fileURLToPath } from "node:url";
 import { runSerialFiles } from "./lib/serial-phase.mjs";
