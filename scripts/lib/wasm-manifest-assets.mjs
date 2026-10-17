@@ -14,7 +14,8 @@
 // not its exact CAS path, a non-wasm asset squatting a CAS path, duplicate
 // mappings within one manifest, and inventory-row manifest digest drift.
 
-import { WasmPackageAuthority } from "../../extension/lib/wasm-package-authority.js";
+import { isDeepStrictEqual } from "node:util";
+import { WasmPackageAuthority, canonicalJson } from "../../extension/lib/wasm-package-authority.js";
 
 const CAS_RE = /^extension\/wasm\/cas\/[0-9a-f]{64}\.wasm$/u;
 const HEX64_RE = /^[0-9a-f]{64}$/u;
@@ -75,6 +76,49 @@ export function manifestCasMappings(manifest) {
     return assertUnique(out);
   }
   throw wasmManifestMappingError(`unsupported manifest schemaVersion: ${manifest?.schemaVersion}`);
+}
+
+// Inventory identity is independent of CAS identity: two packages may share
+// identical bytes, but the same package@version must never be listed twice.
+export function registerBundledManifestIdentity(seen, identity, manifest) {
+  const key = `${identity?.pkg ?? ""}\0${identity?.version ?? ""}`;
+  if (!identity?.pkg || !identity?.version || seen.has(key) ||
+      manifest?.package?.id !== identity.pkg || manifest?.package?.version !== identity.version) {
+    throw wasmManifestMappingError(`duplicate bundled Wasm manifest mapping or identity mismatch: ${key}`);
+  }
+  const validated = probe.validateManifest(canonicalJson(manifest));
+  if (!validated.ok) {
+    throw wasmManifestMappingError(`bundled Wasm manifest invalid for ${key}: ${validated.error}`);
+  }
+  seen.add(key);
+}
+
+/** One physical CAS member may have multiple independently digest-bound schema-1
+ * call-export claimants. No other duplicate is permitted. Return true for the
+ * first claim so consumers retain exactly one physical scan/map entry. */
+export function recordBundledWasmClaim(claims, mapping, manifest) {
+  const { casRel, schemaVersion, executable } = mapping;
+  const prior = claims.get(casRel);
+  if (!prior) {
+    claims.set(casRel, { mapping, manifest });
+    return true;
+  }
+  const old = prior.mapping.executable;
+  if (schemaVersion !== 1 || prior.mapping.schemaVersion !== 1 ||
+      !executable?.callExport || !old?.callExport) {
+    throw wasmManifestMappingError(`duplicate bundled Wasm manifest mapping: ${casRel}`);
+  }
+  const { id: _id, callExport: call, ...physical } = executable;
+  const { id: _oldId, callExport: oldCall, ...oldPhysical } = old;
+  const { digestBytes: _digest, initParam: _init, finalParam: _final, ...abi } = call;
+  const { digestBytes: _oldDigest, initParam: _oldInit, finalParam: _oldFinal, ...oldAbi } = oldCall;
+  const common = (m) => ({ build: m.build, license: m.license, source: m.source,
+    signer: m.signer, packageType: m.package?.type, packageVersion: m.package?.version });
+  if (!isDeepStrictEqual(physical, oldPhysical) || !isDeepStrictEqual(abi, oldAbi) ||
+      !isDeepStrictEqual(common(manifest), common(prior.manifest))) {
+    throw wasmManifestMappingError(`bundled Wasm variant divergence: ${casRel}`);
+  }
+  return false;
 }
 
 function assertUnique(out) {
