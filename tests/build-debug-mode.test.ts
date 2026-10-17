@@ -25,6 +25,7 @@ import {
   validateDistCompleteMarker,
   INDEXED_SOURCE_EXCLUDED_PATHS,
 } from "../scripts/dist-complete.mjs";
+import { ensureStoreBuild } from "../scripts/build-if-needed.mjs";
 // chrome-agent-platform-kj9s: one MEASURED child bound shared by the build-heavy serial files,
 // instead of a per-file hard-coded number (see PRODUCTION_BUILD_TIMEOUT_MS). The file's window
 // (SERIAL_FILE_TIMEOUTS) still governs the whole file.
@@ -56,7 +57,8 @@ async function marker() {
   return JSON.parse(await readFile(path.join(DIST, "dist.complete"), "utf8"));
 }
 
-// ── chrome-agent-platform-kj9s: the mode assertions are regrouped onto TWO builds + one steady-state build ──
+// ── chrome-agent-platform-kj9s: the mode assertions are regrouped onto TWO builds + one steady-state restoral ──
+// (6gk81: the restoral is validate-or-build via ensureStoreBuild, not an unconditional third build.)
 // Each build below is a REAL build and every assertion keeps its own discriminating power: the
 // developer build's sourcemaps/define/marker are read from THAT build, the store build's absence of
 // sourcemaps and its marker from THIS one, and the dev-vs-store source-authority equality compares
@@ -125,9 +127,22 @@ Deno.test("build mode: developer bundle emits sourcemaps; store bundle does not 
 
 Deno.test("build mode: --target=store leaves the STORE dist as the steady state the following serial files read", async () => {
   // The serial phase's later files (packaging, bundle-budget, tool-exec-preview) read a store dist;
-  // this test owns leaving the tree in that state, instead of relying on an earlier test's build.
-  const store = build(["--target=store"]);
-  assertEquals(store.code, 0, store.stderr.slice(0, 2000));
+  // this test owns leaving the tree in that state. chrome-agent-platform-6gk81: it now does so via
+  // the validate-or-build seam (ensureStoreBuild) instead of an unconditional third build — reuse
+  // happens ONLY when dist.complete validates for this exact commit and these source bytes (the
+  // marker's own binding, not a shortcut), and any other state pays the real store build and
+  // fails closed if the result still does not validate. The assertions below are unchanged: the
+  // dist this test leaves behind is a store dist that validates at its own target. The mode
+  // assertions above still run on their own two REAL builds; only this steady-state restoral
+  // stopped paying for a build whose output it never inspected beyond the marker.
+  const ensured = await ensureStoreBuild({
+    required: true,
+    reason: "steady-state restoral: later serial files read a store dist",
+    root: ROOT,
+    distRoot: DIST,
+    runBuild: () => build(["--target=store"]).code,
+  });
+  assert(ensured.disposition === "reused" || ensured.disposition === "ran", `steady-state store dist not ensured: ${ensured.disposition} (${ensured.reason})`);
   assertEquals((await marker()).target, "store");
   const validated = await validateDistCompleteMarker({ root: ROOT, distRoot: DIST, expectedTarget: "store" });
   assertEquals(validated.target, "store", "the steady-state store dist validates at its own target");
