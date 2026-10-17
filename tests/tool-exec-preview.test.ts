@@ -504,7 +504,7 @@ Deno.test("preview: the EXACT 55-tool static allowlist admits every shipped pack
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
   // uslb: call-export tools admit WITHOUT a settings preview (call-export host).
   assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(
-    ["avif", "awk", "awk_filter_bounded", "base64", "chacha20_poly1305", "compressops", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "hash_adler32", "hash_blake2b", "hash_blake2s", "hash_blake3", "hash_crc32", "hash_md4", "hash_ripemd160", "hash_sha1", "hash_sha224", "hash_sha384", "hash_sha3_256", "hash_sha3_384", "hash_sha3_512", "hash_keccak_256", "hash_sm3", "hash_whirlpool", "hash_xxhash32", "head", "imageops", "jq", "jxl", "markdown", "md5sum", "oxipng", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd", "zxing"],
+    ["avif", "awk", "awk_filter_bounded", "base64", "chacha20_poly1305", "compressops", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "hash_adler32", "hash_blake2b", "hash_blake2s", "hash_blake3", "hash_crc32", "hash_keccak_256", "hash_md4", "hash_ripemd160", "hash_sha1", "hash_sha224", "hash_sha384", "hash_sha3_256", "hash_sha3_384", "hash_sha3_512", "hash_sm3", "hash_whirlpool", "hash_xxhash32", "head", "imageops", "jq", "jxl", "markdown", "md5sum", "oxipng", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd", "zxing"],
   ));
   for (const row of admitted) {
     if (row.callexport === true) {
