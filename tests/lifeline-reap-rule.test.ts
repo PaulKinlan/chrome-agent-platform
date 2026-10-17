@@ -214,30 +214,40 @@ Deno.test("6efbv: every bare launchChrome leader kill has a reviewed exception; 
 });
 
 Deno.test("6efbv: fresh script and changed allowlisted shape mutants turn the rule RED", () => {
-  const fresh = `async function probe() {
-    const chrome = await launchChrome({profile: "P"});
-    chrome.proc.kill("SIGKILL"); await chrome.proc.status;
-    await launchChrome({profile: "P"});
-  }`;
+  const fresh = [
+    "async function probe() {",
+    '  const chrome = await launchChrome({profile: "P"});',
+    '  chrome.proc.kill("SIGKILL"); await chrome.proc.status;',
+    '  await launchChrome({profile: "P"});',
+    "}",
+  ].join("\n");
   assert(audit({ "scripts/new-relauncher.ts": fresh }, {}).some((s) => s.includes("unlisted launchChrome bare kill")),
     "a NEW script with a bare kill before a same-profile relaunch must be refused");
   const optional = `const chrome = await launchChrome({profile: "P"}); chrome.proc?.kill?.("SIGKILL");`;
   assert(audit({ "scripts/new-optional.ts": optional }, {}).some((s) => s.includes("unlisted launchChrome bare kill")),
     "optional-call spelling must not bypass the census prefilter");
-  const arrow = `const boot = (profile) => launchChrome({profile}); const chrome = await boot("P");
-    chrome.proc.kill("SIGKILL"); await boot("P");`;
+  const arrow = [
+    'const boot = (profile) => launchChrome({profile}); const chrome = await boot("P");',
+    'chrome.proc.kill("SIGKILL"); await boot("P");',
+  ].join("\n");
   assert(audit({ "scripts/new-arrow.ts": arrow }, {}).some((s) => s.includes("unlisted launchChrome bare kill")),
     "a fresh script using an arrow-function launcher must not escape the census");
-  const aliased = `import {launchChrome as startBrowser} from "./lib/chrome-launch.ts";
-    const chrome = await startBrowser({profile: "P"}); chrome.proc.kill("SIGKILL");`;
+  const aliased = [
+    'import {launchChrome as startBrowser} from "./lib/chrome-launch.ts";',
+    'const chrome = await startBrowser({profile: "P"}); chrome.proc.kill("SIGKILL");',
+  ].join("\n");
   assert(audit({ "scripts/new-aliased.ts": aliased }, {}).some((s) => s.includes("unlisted launchChrome bare kill")),
     "an aliased launchChrome import must not escape the census");
-  const safe = `const chrome = await launchChrome({profile: "P"}); await reapLeaderAndSettle(chrome.proc);
-    const next = await launchChrome({profile: "P"}); await teardownChrome(next);`;
+  const safe = [
+    'const chrome = await launchChrome({profile: "P"}); await reapLeaderAndSettle(chrome.proc);',
+    'const next = await launchChrome({profile: "P"}); await teardownChrome(next);',
+  ].join("\n");
   assertEquals(audit({ "scripts/new-safe.ts": safe }, {}), [], "reap/teardown calls are not bare kills");
-  const nonBrowser = `const chrome = await launchChrome({profile: "P"});
-    const child = new Deno.Command("/bin/true").spawn(); child.kill("SIGKILL"); Deno.kill(child.pid, "SIGKILL");
-    await teardownChrome(chrome);`;
+  const nonBrowser = [
+    'const chrome = await launchChrome({profile: "P"});',
+    'const child = new Deno.Command("/bin/true").spawn(); child.kill("SIGKILL"); Deno.kill(child.pid, "SIGKILL");',
+    'await teardownChrome(chrome);',
+  ].join("\n");
   assertEquals(audit({ "scripts/new-child.ts": nonBrowser }, {}), [],
     "an unrelated child's kill is not a browser-handle kill even in a launchChrome script");
   const pidKill = `const chrome = await launchChrome({profile: "P"}); Deno.kill(chrome.proc.pid, "SIGKILL");`;
