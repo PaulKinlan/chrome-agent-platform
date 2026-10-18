@@ -28,7 +28,8 @@ export function emscriptenJobOwner({ runId, agentId } = {}) {
   if (!validExecutionId(runId) || typeof agentId !== "string" || !AGENT_RE.test(agentId)) {
     fail("emscripten_custody_invalid_identity");
   }
-  return `agent:${runId}:${agentId}`;
+  // Neither validated identity admits '|': :| is an unambiguous tuple boundary.
+  return `agent:${runId}:|${agentId}`;
 }
 
 function receiptFor({ runId, agentId, bytes, sha256, provenance }) {
