@@ -272,7 +272,7 @@ Deno.test("4o93n (d): a HANDLE-LESS teardown queues behind an in-flight sweep fo
   const leader = spawnLeader("/bin/sleep", ["300"]);
   const events: string[] = [];
   const { watcher, end } = heldFakeWatcher(events);
-  const profile = `user-data-dir=${Deno.makeTempDirSync({ prefix: "cap-4o93n-d-" })}`;
+  const profile = `user-data-dir=${Deno.makeTempDirSync({ dir: durableDir("scratch"), prefix: "4o93n-d-" })}`;
   const teardownSignals: string[] = [];
   try {
     attachProcessLifeline(leader, { group: leader.pid, treeMatch: profile }, { spawn: () => watcher, sweepTimeoutMs: 60_000 });
