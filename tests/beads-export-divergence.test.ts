@@ -252,8 +252,16 @@ Deno.test("nabuw / o3i89: buffer overflow triggers reachable capacity errors wit
     await Deno.remove(scratch, { recursive: true }).catch(() => {});
   }
 
-  // 7. package-archive source code does not use maxBuffer: Infinity (05x0v)
+  // 7. package-archive source code does not use unbounded maxBuffer (05x0v, o3vrq).
+  // Comments are allowed to name the options; executable code is not.
   const packageArchiveSrc = await Deno.readTextFile(new URL("../scripts/package-archive.mjs", import.meta.url));
-  assert(!/maxBuffer:\s*Infinity/.test(packageArchiveSrc), "scripts/package-archive.mjs must not contain maxBuffer: Infinity");
+  const packageArchiveCode = packageArchiveSrc
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("//"))
+    .join("\n");
+  assert(
+    !/maxBuffer:\s*(\+?Infinity|\d{9,}|2\s*\*\*\s*\d+)/.test(packageArchiveCode),
+    "scripts/package-archive.mjs must not contain unbounded maxBuffer",
+  );
 });
 
