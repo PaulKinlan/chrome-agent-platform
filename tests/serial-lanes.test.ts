@@ -202,6 +202,46 @@ Deno.test("lanes: a GLOBAL child that cannot START fails closed to sequential in
     `the summary must not claim a concurrency that never happened, saw: ${joined}`);
 });
 
+Deno.test("lanes: a child that DOES start still reports GREEN with its duration (oqko2)", async () => {
+  // oqko2: the summary built its line as `prefix + cond ? a : b`, so `+` (higher precedence) made the whole
+  // concatenation the CONDITION — always truthy — and every run reported the fallback wording, losing
+  // GREEN/REFUSED/FAILED and the duration. The fallback test above could not catch it (it EXPECTED the
+  // fallback wording); this one pins the ordinary path, which is the one every gate actually takes.
+  const files = ["tests/build-smoke.test.ts", "tests/chrome-launch-lock.test.ts"];
+  const announced: string[] = [];
+  const realLog = console.log;
+  const realError = console.error;
+  const capture = (...args: any[]) => { announced.push(args.map(String).join(" ")); };
+  console.log = capture;
+  console.error = capture;
+  let resolveChild = () => {};
+  const childDone = new Promise<void>((resolve) => { resolveChild = () => resolve(); });
+  let rc = -1;
+  try {
+    rc = await runSerialLanes(files, {
+      runLaneFiles: (laneFiles: string[], opts: any) => {
+        for (const file of laneFiles) {
+          opts.failuresOut.push({ file, code: 0, timedOut: false, isRefusal: false, secs: "0", log: null });
+        }
+        if (laneFiles.includes("tests/build-smoke.test.ts")) setTimeout(() => resolveChild(), 0);
+        return 0;
+      },
+      spawnLaneChild: (lane: any) => {
+        writeFileSync(lane.resultPath, JSON.stringify({ rc: 0, failures: [] }));
+        return { pid: 0, kill: () => {}, exited: childDone.then(() => ({ code: 0, signal: null })) };
+      },
+    });
+  } finally {
+    console.log = realLog;
+    console.error = realError;
+  }
+  assertEquals(rc, 0);
+  const summary = announced.filter((line) => line.includes("serial lanes")).at(-1) ?? "";
+  assert(/serial lanes GREEN in \d+s/.test(summary), `the summary must keep its verdict and duration, got: ${summary}`);
+  assert(!/could not start/.test(summary), `a child that started must not be reported as failed to start: ${summary}`);
+  assert(/concurrent/.test(summary), `the summary must still say the lanes ran concurrently: ${summary}`);
+});
+
 Deno.test("lanes: a failing file in the child lane is named and fails the phase", async () => {
   const dir = scratch("fail");
   try {

@@ -658,12 +658,15 @@ export async function runSerialLanes(files, {
   }
   const secs = ((Date.now() - t0) / 1000).toFixed(0);
   const rc = combineLaneExitCodes([codes.strict ?? 0, codes.build ?? 0, codes.global ?? 0]);
-  announce(
-    `run-tests: serial lanes ${rc === 0 ? "GREEN" : rc === ENVIRONMENTAL_REFUSAL_EXIT ? "REFUSED" : "FAILED"} in ${secs}s ` +
-      fellBackToSequential
-        ? `(strict ${lanes.strict.length} alone, build ${lanes.build.length} + global ${lanes.global.length} — GLOBAL child could not start, ran sequentially)`
-        : `(strict ${lanes.strict.length} alone, build ${lanes.build.length} + global ${lanes.global.length} concurrent)`,
-  );
+  // The verdict prefix and the lane detail are SEPARATE strings on purpose (xaj7c follow-up oqko2): with
+  // `prefix + cond ? a : b`, `+` binds tighter than `?:`, so the concatenation becomes the CONDITION — always
+  // truthy — and the summary lost its GREEN/REFUSED/FAILED verdict and its duration on every run. Named
+  // parts make the precedence visible instead of relying on the reader to spot it.
+  const verdict = rc === 0 ? "GREEN" : rc === ENVIRONMENTAL_REFUSAL_EXIT ? "REFUSED" : "FAILED";
+  const laneDetail = fellBackToSequential
+    ? `(strict ${lanes.strict.length} alone, build ${lanes.build.length} + global ${lanes.global.length} — GLOBAL child could not start, ran sequentially)`
+    : `(strict ${lanes.strict.length} alone, build ${lanes.build.length} + global ${lanes.global.length} concurrent)`;
+  announce(`run-tests: serial lanes ${verdict} in ${secs}s ${laneDetail}`);
   if (Array.isArray(failuresOut)) failuresOut.push(...merged);
   return rc;
 }
