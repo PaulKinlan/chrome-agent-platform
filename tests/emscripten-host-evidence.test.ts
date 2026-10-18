@@ -57,10 +57,12 @@ Deno.test("xoeaa: pending and UNKNOWN survive offscreen restart; never claim wor
   assertEquals(unknown.state, "unknown");
   assertEquals((await host.read(identity)).reason, "worker_termination_unproved");
   assertEquals(await host.recordUnknown(identity, "worker_termination_unproved"), unknown);
+  await code(() => host.begin(identity), "emscripten_host_evidence_unknown");
   const restarted = createEmscriptenHostEvidence({ storage });
   assertEquals(await restarted.read(identity), unknown, "separate offscreen incarnation reads durable evidence");
-  await code(() => restarted.begin(identity), "emscripten_host_evidence_collision");
+  await code(() => restarted.begin(identity), "emscripten_host_evidence_unknown");
   await code(() => restarted.recordUnknown(identity, "deadline"), "emscripten_host_evidence_collision");
+  await code(() => restarted.recordUnknown(identity, "offscreen_restart"), "emscripten_host_evidence_reason");
   assertEquals(root.nodes.has(EMSCRIPTEN_HOST_EVIDENCE_ROOT), true);
 });
 

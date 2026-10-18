@@ -7,7 +7,12 @@ Unlike service-worker run-log rows, these records are not compacted by run
 retention. The identity binds execution ID, agent ID, injective stream owner,
 exact stdout ref, SW-issued generation, package, graph digest and operation.
 The host creates its own incarnation ID. Restarted hosts may read evidence but
-cannot claim or overwrite a prior incarnation's pending record. Invalid,
+cannot claim or overwrite a prior incarnation's pending record. Once UNKNOWN
+is recorded, `begin` refuses the same ref/generation even for the original host:
+UNKNOWN can never authorize native replay. An offscreen restart without a known
+terminal event remains the typed implicit `writer_fence_unavailable`; a restarted
+incarnation cannot annotate a prior host's pending record with a fabricated
+`offscreen_restart` reason. Invalid,
 corrupt, unreadable and foreign records fail closed. The original sealed input
 and shared stream/artifact directories are never removed by this module.
 

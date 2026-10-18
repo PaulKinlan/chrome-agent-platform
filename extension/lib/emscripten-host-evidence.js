@@ -10,7 +10,7 @@ export const EMSCRIPTEN_HOST_EVIDENCE_ROOT = "emscripten-host-evidence-v1";
 const HEX32 = /^[0-9a-f]{32}$/u;
 const HEX64 = /^[0-9a-f]{64}$/u;
 const NAME = /^[A-Za-z0-9_.-]{1,128}$/u;
-const REASONS = new Set(["worker_termination_unproved", "worker_error", "deadline", "offscreen_restart", "writer_fence_unavailable"]);
+const REASONS = new Set(["worker_termination_unproved", "worker_error", "deadline", "writer_fence_unavailable"]);
 
 function fail(code, cause) {
   const error = new Error(code, cause ? { cause } : undefined);
@@ -93,6 +93,9 @@ export function createEmscriptenHostEvidence({ storage = globalThis.navigator?.s
     incarnation,
     async begin(raw) {
       const { identity, directory } = await entry(raw, true);
+      // An UNKNOWN is terminal for this exact ref/generation. A duplicate
+      // begin must never re-open native construction after an unproved stop.
+      if (await load(directory, "unknown.json") !== null) fail("emscripten_host_evidence_unknown");
       const present = await load(directory, "pending.json");
       if (present !== null) {
         if (!exact(present, ["version", "state", "identity", "hostIncarnation"]) ||
