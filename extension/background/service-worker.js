@@ -52,6 +52,7 @@ import {
   createHooksRoutes,
   createToolStreamRoutes,
   createSkillRoutes,
+  createObservabilityRoutes,
   resolveMemory,
   awaitMemoryQuiescence,
   enumerateMemoryStores,
@@ -1344,8 +1345,9 @@ import { lineDiffSummary } from "../shared/diff-core.js";
 import { bridgeAndAuditApprovalBindings } from "../lib/approval-bridge-audit.js";
 import { journalJson } from "../shared/tool-tree.js";
 import { createAgentBoardRoutes, BOARD_HUB_ID, posterThreadResolver, boardHeartbeatPlan } from "../lib/agent-board.js";
-import { capLog, dumpLogBuffer, clearLogBuffer, getLogVerbosity, setLogVerbosity, observeToolCall } from "../lib/cap-log.js";
-import { perfSpan, perfSummary, perfClear, mergePerfMeasures } from "../lib/cap-perf.js";
+import { capLog, getLogVerbosity, observeToolCall } from "../lib/cap-log.js";
+// perfSummary/perfClear/mergePerfMeasures moved with the observability routes (atxc6 slice 5).
+import { perfSpan } from "../lib/cap-perf.js";
 import { createRunGenCellBook } from "../lib/run-gen-cells.js";
 
 // Suppress the AI SDK's own warning/retry console spam. The extension surfaces
@@ -1430,7 +1432,6 @@ const delegationRegistry = createDelegationRegistry();
 // alive while a page is listening, and the events are fire-and-forget (a
 // closed port never throws into the run).
 const progressPorts = new Set();
-const pageMeasuresBuffer = [];
 // Startup truth is established before a new run is accepted: recover complete
 // terminal outboxes first, then honestly orphan pre-boot executions. Recovery
 // failure blocks durable starts/routes rather than pretending state is current.
@@ -7468,6 +7469,10 @@ const memoryAdminRoutes = createMemoryAdminRoutes({ memoryOverview });
 // catalog call sites share one definition.
 const skillRoutes = createSkillRoutes({ masterMemory, invalidateAgent, broadcastRegistryChanged });
 
+// chrome-agent-platform-atxc6 slice 5: the observability surface. Zero injections — the trace ring moved into
+// the module with its routes, and everything else it reads is a library import.
+const observabilityRoutes = createObservabilityRoutes();
+
 const toolStreamRoutes = createToolStreamRoutes({ wasmStreamOwner, runWasmStreamTool });
 
 const enclaveStatusRoutes = {
@@ -12958,54 +12963,6 @@ const handlers = mergeRouteMaps(
     return diagnosticClear();
   },
 
-  // ---- observability trace dump (CAP-FB-20260826-OBSERVABILITY-01) ----
-  // The owner's "what is it doing" surface: recent log lines (ring buffer,
-  // redacted at write time) + the performance breakdown (cap:* measures).
-  // From any extension page console:
-  //   chrome.runtime.sendMessage({type:"observability.dumpTrace"}, console.log)
-  async "observability.page-measures"({ measures, page = "page" }, routeContext) {
-    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
-      return { ok: false, error: "extension-only route" };
-    }
-    if (Array.isArray(measures)) {
-      for (const m of measures.slice(0, 100)) {
-        if (m && typeof m.name === "string") {
-          pageMeasuresBuffer.push(m);
-        }
-      }
-      while (pageMeasuresBuffer.length > 500) pageMeasuresBuffer.shift();
-    }
-    return { ok: true, accepted: Array.isArray(measures) ? measures.length : 0 };
-  },
-  async "observability.dumpTrace"() {
-    const logs = dumpLogBuffer();
-    const perf = mergePerfMeasures(perfSummary(), pageMeasuresBuffer);
-    swLog.info("trace dump", { logEntries: logs.entries.length, dropped: logs.dropped, stages: perf.measures.length });
-    return {
-      ok: true,
-      generatedAt: new Date().toISOString(),
-      verbosity: getLogVerbosity(),
-      logs,
-      perf,
-    };
-  },
-  async "observability.clearTrace"() {
-    clearLogBuffer();
-    perfClear();
-    pageMeasuresBuffer.length = 0;
-    swLog.info("trace cleared");
-    return { ok: true };
-  },
-
-  async "observability.setVerbosity"({ level } = {}) {
-    try {
-      await setLogVerbosity(level);
-      swLog.info("verbosity set", { level: getLogVerbosity() });
-      return { ok: true, level: getLogVerbosity() };
-    } catch (e) {
-      return { ok: false, error: e?.message ?? String(e) };
-    }
-  },
   // A page forwards its OWN realm's CSP violations + uncaught errors here (the
   // extension pages listen for `securitypolicyviolation` / `error` and report
   // them so the ONE console shows the whole extension, not just the SW).
@@ -13079,6 +13036,7 @@ const handlers = mergeRouteMaps(
   toolStreamRoutes,
   memoryAdminRoutes,
   skillRoutes,
+  observabilityRoutes,
 );
 
 async function resumeInterruptedRuns() {
