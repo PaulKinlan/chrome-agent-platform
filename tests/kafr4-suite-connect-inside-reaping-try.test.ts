@@ -111,9 +111,17 @@ function tryBlocks(rawSource: string): Block[] {
   return blocks;
 }
 
-/** Index of the first real (non-comment) `openCdp(` CALL in the source, or -1. */
-function cdpCallIndex(source: string): number {
+/**
+ * EVERY real (non-comment) `openCdp(` CALL in the source, in order (d36q4).
+ *
+ * The first version returned only the first call, and the reviewer showed what that misses: a suite with
+ * two launches where the SECOND connect sits outside its reaping try was admitted, because the guard had
+ * stopped looking after the first one. A guard that judges one call site per file is a guard for suites
+ * that happen to have one; the rule is per CONNECT, so every connect is judged.
+ */
+function cdpCallIndices(source: string): number[] {
   const re = new RegExp(`\\b${CONNECT}\\s*\\(`, "g");
+  const found: number[] = [];
   let match: RegExpExecArray | null;
   while ((match = re.exec(source)) !== null) {
     const lineStart = source.lastIndexOf("\n", match.index) + 1;
@@ -121,9 +129,9 @@ function cdpCallIndex(source: string): number {
     const inLineComment = prefix.includes("//");
     const before = source.slice(Math.max(0, match.index - 2), match.index);
     if (inLineComment || before === "//") continue;
-    return match.index;
+    found.push(match.index);
   }
-  return -1;
+  return found;
 }
 
 /** True when `cdpCall` sits inside a try whose `finally` reaps the browser. */
@@ -180,19 +188,22 @@ Deno.test("kafr4: every suite that reaps a launched browser connects CDP INSIDE 
     }
     if (!new RegExp(`${LAUNCH}\\s*\\(`).test(source) || !/reapLeaderAndSettle\s*\(/.test(source)) continue;
     population++;
-    const cdpCall = cdpCallIndex(source);
+    const cdpCalls = cdpCallIndices(source);
     // WHAT THIS RULE DOES NOT COVER, said out loud (o6sqn): a connect made through a local helper
     // (`const { cdp } = await connect(url)` / `new Cdp(ws)` in the journey scripts) is not an
     // `openCdp(...)` CALL, so it is not judged here - those files' reap order is pinned by
     // tests/jjsz-lifeline-runner-exit.test.ts. This guard is about the call shape kafr4 broke, and it
     // walks the tree so a NEW file with that shape is caught instead of having to be listed.
-    if (cdpCall === -1) continue;
+    if (cdpCalls.length === 0) continue;
     judged++;
-    assert(
-      connectInsideReapingTry(source, cdpCall),
-      `${relative}: ${CONNECT}() must be called inside the try whose finally reaps the browser ` +
-        `(kafr4) - a connect that throws outside it skips the reap and leaves a real Chrome to the lifeline`,
-    );
+    for (const cdpCall of cdpCalls) {
+      const line = source.slice(0, cdpCall).split("\n").length;
+      assert(
+        connectInsideReapingTry(source, cdpCall),
+        `${relative}:${line}: ${CONNECT}() must be called inside the try whose finally reaps the browser ` +
+          `(kafr4) - a connect that throws outside it skips the reap and leaves a real Chrome to the lifeline`,
+      );
+    }
   }
   // Two floors, answering two questions. `population` is the walk's reach over files that launch AND reap
   // (six today); if it collapses, discovery broke. `judged` is the files whose connect this rule can SEE
@@ -204,8 +215,9 @@ Deno.test("kafr4: every suite that reaps a launched browser connects CDP INSIDE 
 
 Deno.test("kafr4: security-suite.ts specifically reaps on a connect failure (the case that was broken)", async () => {
   const source = await Deno.readTextFile(`${ROOT}scripts/security-suite.ts`);
-  const cdpCall = cdpCallIndex(source);
-  assert(cdpCall !== -1, "security-suite.ts opens a CDP connection");
+  const cdpCalls = cdpCallIndices(source);
+  assert(cdpCalls.length > 0, "security-suite.ts opens a CDP connection");
+  const cdpCall = cdpCalls[0];
   const reaping = tryBlocks(source).filter((b) => b.hasFinally && /reapLeaderAndSettle\s*\(/.test(b.finallyBody));
   assertEquals(reaping.length, 1, "exactly one try/finally reaps the suite's browser");
   assert(cdpCall > reaping[0].start && cdpCall < reaping[0].end,
@@ -224,7 +236,7 @@ Deno.test("kafr4 falsification: the PRE-FIX shape (connect before the try) reds 
       await reapLeaderAndSettle(chrome.proc);
     }
   `;
-  const cdpCall = cdpCallIndex(broken);
+  const cdpCall = cdpCallIndices(broken)[0] ?? -1;
   assert(cdpCall !== -1, "the falsifier has a call to find");
   assertEquals(connectInsideReapingTry(broken, cdpCall), false,
     "the pre-fix shape must be refused: this is the defect the guard exists for");
@@ -241,8 +253,36 @@ Deno.test("kafr4 falsification: the PRE-FIX shape (connect before the try) reds 
       await reapLeaderAndSettle(chrome.proc);
     }
   `;
-  assertEquals(connectInsideReapingTry(fixed, cdpCallIndex(fixed)), true,
+  assertEquals(connectInsideReapingTry(fixed, cdpCallIndices(fixed)[0] ?? -1), true,
     "and the fixed shape is admitted, so the guard is not simply refusing everything");
+});
+
+Deno.test("d36q4 falsification: a SECOND connect outside its reaping try is not hidden by a good first one", () => {
+  // The reviewer's shape (d36q4): phase 1 connects inside its reaping try, phase 2 launches again and
+  // connects before ITS try. Judging only the first call site admitted this, which is why the census now
+  // walks every connect.
+  const twoPhase = `
+    const first = await ${LAUNCH}({});
+    try {
+      const cdp = await ${CONNECT}(first.wsUrl);
+      await cdp.eval("a");
+    } finally {
+      await reapLeaderAndSettle(first.proc);
+    }
+    const second = await ${LAUNCH}({});
+    const cdp2 = await ${CONNECT}(second.wsUrl);
+    try {
+      await cdp2.eval("b");
+    } finally {
+      await reapLeaderAndSettle(second.proc);
+    }
+  `;
+  const calls = cdpCallIndices(twoPhase);
+  assertEquals(calls.length, 2, "the falsifier has two connects to judge");
+  assertEquals(connectInsideReapingTry(twoPhase, calls[0]), true,
+    "the first connect is inside its reaping try, so it must be admitted");
+  assertEquals(connectInsideReapingTry(twoPhase, calls[1]), false,
+    "and the second is NOT, which the one-call-per-file census could not see");
 });
 
 Deno.test("kafr4 falsification: a try without the reap in its finally does not license the connect", () => {
@@ -257,6 +297,6 @@ Deno.test("kafr4 falsification: a try without the reap in its finally does not l
       cdp.close();
     }
   `;
-  assertEquals(connectInsideReapingTry(shape, cdpCallIndex(shape)), false,
+  assertEquals(connectInsideReapingTry(shape, cdpCallIndices(shape)[0] ?? -1), false,
     "the reap is what makes the finally sufficient, not the presence of any finally");
 });
