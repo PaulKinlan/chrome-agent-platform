@@ -8,6 +8,7 @@ import * as acorn from "npm:acorn";
 import {
   createActivityRoutes,
   createAgentWorkspaceRoutes,
+  createMemoryAdminRoutes,
   createMemoryRoutes,
   createAgentScheduleRoutes,
   createProviderRoutes,
@@ -551,6 +552,10 @@ Deno.test("sw routes: AST verification of route registration across service-work
         // write path, extracted to routes/fs-grants.js
         // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
         registeredRouteKeys.push(...Object.keys(createFsGrantRoutes(FS_GRANT_STUB_DEPS)));
+      } else if (arg.name === "memoryAdminRoutes") {
+        // chrome-agent-platform-atxc6 slice 3: the memory admin routes (purge/sweep/origins/overview/stores)
+        // joined routes/memory.js. The injected summariser cannot change route names.
+        registeredRouteKeys.push(...Object.keys(createMemoryAdminRoutes({ memoryOverview: async () => ({}) })));
       } else if (arg.name === "toolStreamRoutes") {
         // chrome-agent-platform-atxc6 slice 2: the file-backed bundled-tool transport (12 routes) moved to
         // routes/tool-stream.js. The injected owner derivation and engine cannot change route names.

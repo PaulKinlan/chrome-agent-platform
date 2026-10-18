@@ -29,6 +29,7 @@ import { createAgentWorkspaceRoutes } from "../extension/background/routes/agent
 import { createAgentBoardRoutes } from "../extension/lib/agent-board.js";
 import { createHooksRoutes } from "../extension/background/routes/hooks.js";
 import { createToolStreamRoutes } from "../extension/background/routes/tool-stream.js";
+import { createMemoryAdminRoutes } from "../extension/background/routes/memory.js";
 import { createMemoryRoutes } from "../extension/background/routes/memory.js";
 import { createAgentScheduleRoutes } from "../extension/background/routes/agent-schedule.js";
 import { createAgentWorkerRoutes } from "../extension/background/routes/agent-worker.js";
@@ -206,6 +207,8 @@ function extractAllRegisteredRoutes(
     // chrome-agent-platform-atxc6 slice 2: the bundled-tool transport routes. The injected owner
     // derivation and streaming engine cannot change the set of route NAMES, so stubs are honest here.
     createToolStreamRoutes: () => createToolStreamRoutes({ wasmStreamOwner: () => "owner", runWasmStreamTool: async () => ({}) }),
+    // chrome-agent-platform-atxc6 slice 3: the memory admin routes.
+    createMemoryAdminRoutes: () => createMemoryAdminRoutes({ memoryOverview: async () => ({}) }),
     createVaultRoutes: () => createVaultRoutes({ vault: { listMasked: () => [] }, requireSettingsSender: () => {} }),
     createEnclaveProxyRoutes: () => createEnclaveProxyRoutes({ vault: { getSecretRaw: () => null } }),
   };
@@ -352,7 +355,7 @@ function assertRouteMap(routeMap: string): void {
     ["routes/provider.js", Object.keys(createProviderRoutes({}))],
     ["routes/mcp.js", Object.keys(createMcpRoutes({}))],
     ["routes/activity.js", Object.keys(createActivityRoutes({}))],
-    ["routes/memory.js", Object.keys(createMemoryRoutes({}))],
+    ["routes/memory.js", [...Object.keys(createMemoryRoutes({})), ...Object.keys(createMemoryAdminRoutes({ memoryOverview: async () => ({}) }))]],
     ["routes/fs-grants.js", Object.keys(createFsGrantRoutes({}))],
     ["routes/agent-workspace.js", Object.keys(createAgentWorkspaceRoutes())],
     ["routes/agent-schedule.js", Object.keys(createAgentScheduleRoutes({}))],
