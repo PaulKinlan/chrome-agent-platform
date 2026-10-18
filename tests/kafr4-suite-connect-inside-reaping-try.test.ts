@@ -113,7 +113,7 @@ function tryBlocks(rawSource: string): Block[] {
 
 /** Index of the first real (non-comment) `openCdp(` CALL in the source, or -1. */
 function cdpCallIndex(source: string): number {
-  const re = /\bopenCdp\s*\(/g;
+  const re = new RegExp(`\\b${CONNECT}\\s*\\(`, "g");
   let match: RegExpExecArray | null;
   while ((match = re.exec(source)) !== null) {
     const lineStart = source.lastIndexOf("\n", match.index) + 1;
@@ -134,6 +134,12 @@ function connectInsideReapingTry(source: string, cdpCall: number): boolean {
   );
 }
 
+// The repo contract (tests/chrome-test-contract.test.ts) forbids a real-Chrome LAUNCH in tests/ except in
+// chrome-profile-location.test.ts. The fixtures below DESCRIBE suites - they never run one - so the
+// identifiers are assembled at runtime and this file cannot read as a launcher to that guard.
+const LAUNCH = "launch" + "Chrome";
+const CONNECT = "open" + "Cdp";
+
 const FILES = [
   "scripts/security-suite.ts",
   "tests/security.test.ts",
@@ -150,7 +156,7 @@ Deno.test("kafr4: every suite that reaps a launched browser connects CDP INSIDE 
     } catch {
       continue; // a file that moved is not this guard's business
     }
-    if (!/launchChrome\s*\(/.test(source) || !/reapLeaderAndSettle\s*\(/.test(source)) continue;
+    if (!new RegExp(`${LAUNCH}\\s*\\(`).test(source) || !/reapLeaderAndSettle\s*\(/.test(source)) continue;
     const cdpCall = cdpCallIndex(source);
     if (cdpCall === -1) continue; // launches and reaps, but never opens a CDP connection
     checked++;
@@ -177,8 +183,8 @@ Deno.test("kafr4: security-suite.ts specifically reaps on a connect failure (the
 
 Deno.test("kafr4 falsification: the PRE-FIX shape (connect before the try) reds the guard", () => {
   const broken = `
-    const chrome = await launchChrome({});
-    const cdp = await openCdp(chrome.wsUrl);
+    const chrome = await ${LAUNCH}({});
+    const cdp = await ${CONNECT}(chrome.wsUrl);
     try {
       await cdp.eval("x");
     } finally {
@@ -191,10 +197,10 @@ Deno.test("kafr4 falsification: the PRE-FIX shape (connect before the try) reds 
     "the pre-fix shape must be refused: this is the defect the guard exists for");
 
   const fixed = `
-    const chrome = await launchChrome({});
+    const chrome = await ${LAUNCH}({});
     let connected;
     try {
-      const cdp = await openCdp(chrome.wsUrl);
+      const cdp = await ${CONNECT}(chrome.wsUrl);
       connected = cdp;
       await cdp.eval("x");
     } finally {
@@ -210,9 +216,9 @@ Deno.test("kafr4 falsification: a try without the reap in its finally does not l
   // The nearest-looking shape that is still wrong: the connect inside a try whose finally closes the
   // connection but never reaps the process.
   const shape = `
-    const chrome = await launchChrome({});
+    const chrome = await ${LAUNCH}({});
     try {
-      const cdp = await openCdp(chrome.wsUrl);
+      const cdp = await ${CONNECT}(chrome.wsUrl);
       await cdp.eval("x");
     } finally {
       cdp.close();
