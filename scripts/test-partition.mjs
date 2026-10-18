@@ -361,6 +361,11 @@ export const EXEMPTIONS = {
   "tests/wasm-tree-shaking.test.ts": "reads only built page bundles; post-build read-only batch follows serial rebuilds",
   "tests/bundle-budget.test.ts": "reads built bundles and build.mjs text; does not execute its source-string execFileSync snippet; post-build batch follows serial rebuilds",
   "tests/bundled-tool-packages.test.ts": "reads shipped CAS and generator text; Deno.Command runs git only; post-build batch follows serial rebuilds",
+  // fdjme: imports package-archive for its read-only manifest mapper, NOT the
+  // archive/build CLI. The Node fixture generator writes only beneath this
+  // test's unique durable scratch root, removed in finally; no shared dist or
+  // package tree is written and the authority probe runs in the test process.
+  "tests/schema2-archive-admission.test.ts": "calls only package-archive's read-only schema-2 mapper over a uniquely created durableDir(scratch) fixture; its Node generator writes that private fixture and exits, never touching shared build artifacts; removed in finally",
   // chrome-agent-platform-fixn: the drift guard plants mutated about.html / inventory fixtures
   // inside makeTempDir scratch trees to verify drift detection and fail-closed attribution;
   // the real repo tree is read, never written.
