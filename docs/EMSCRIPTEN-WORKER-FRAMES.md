@@ -21,5 +21,7 @@ OPFS no-writers fence.
 
 Focused tests in `tests/emscripten-worker-frames.test.ts` pin one in-flight
 frame, identity/extra-key rejection, delayed ACK until actual host push, failure
-ACK and empty output. Real-Chrome OPFS lock behaviour belongs to n87j0 and
+ACK and empty output. A real module Worker test runs a synthetic adapter result
+through the Worker entry, confirms two transferred frames and a null terminal
+result; it does not claim a loaded-Chrome or OPFS integration check. Real-Chrome OPFS lock behaviour belongs to n87j0 and
 same-origin Worker admission restrictions to 197jd.

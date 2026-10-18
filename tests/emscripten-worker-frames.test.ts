@@ -108,6 +108,43 @@ Deno.test("3mcu1: malformed, foreign or oversized frame aborts host writer witho
   }
 });
 
+Deno.test("3mcu1: actual module Worker transfers frames and returns no binary result", async () => {
+  const worker = new Worker(new URL("../extension/lib/emscripten-worker.js", import.meta.url).href, { type: "module" });
+  const glueUrl = "data:text/javascript," + encodeURIComponent(
+    "export default async () => ({ hash: () => 0 })");
+  const adapterUrl = "data:text/javascript," + encodeURIComponent(
+    "export function createBlake3Adapter() { return { hash: () => new Uint8Array(65539).fill(23) }; }");
+  const frames = [];
+  let timer;
+  try {
+    const terminal = await Promise.race([
+      new Promise((resolve, reject) => {
+        worker.onerror = (event) => reject(new Error(String(event.message)));
+        worker.onmessage = ({ data }) => {
+          if (data.type === EMSCRIPTEN_OUTPUT_FRAME_TYPE) {
+            frames.push(data);
+            worker.postMessage({ type: EMSCRIPTEN_OUTPUT_ACK_TYPE,
+              sessionId: data.sessionId, packageId: data.packageId, operationId: data.operationId,
+              workerInstanceId: data.workerInstanceId, seq: data.seq, ok: true });
+          } else resolve(data);
+        };
+        worker.postMessage({
+          type: "cap:emscripten-worker-job", sessionId: "session", packageId: "pkg",
+          version: "1.0.0", graphDigest: "a".repeat(64), operationId: "hash",
+          operation: { adapterId: "cap-blake3-wasm-v1", exportName: "hash", result: "buffer" },
+          args: [], glueUrl, adapterUrl, wasmBytes: new Uint8Array([1]),
+        });
+      }),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("worker frame deadline")), 5000); }),
+    ]);
+    assertEquals(terminal.ok, true);
+    assertEquals(terminal.result, null, "terminal must not clone binary data");
+    assertEquals(frames.map((frame) => frame.chunk.byteLength), [65536, 3]);
+    assertEquals(frames.map((frame) => frame.seq), [0, 1]);
+    assert(frames.every((frame) => frame.chunk.every((byte) => byte === 23)));
+  } finally { clearTimeout(timer); worker.terminate(); }
+});
+
 Deno.test("3mcu1: empty binary output sends no frames or payload", async () => {
   const result = await postEmscriptenOutputFrames(new Uint8Array(), ID, {
     expectAck: () => assert(false), postFrame: () => assert(false),
