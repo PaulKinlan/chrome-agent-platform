@@ -116,11 +116,12 @@ Deno.test("script host te1pu: runFetch refuses direct fetch fallback on register
     assertEquals(unscopedRes.ok, true);
     assertEquals(fetchCalled, true, "direct fetch allowed in unscoped test context");
 
-    // 3. Explicit allowDirect override allows direct fetch even with runId
+    // 3. Passing extra arguments or allowDirect must not bypass the runId guard (oe4nz)
     fetchCalled = false;
-    const explicitRes = await runFetch({ url: "https://example.com/api" }, "registered-run-123", { allowDirect: true });
-    assertEquals(explicitRes.ok, true);
-    assertEquals(fetchCalled, true);
+    const bypassAttempt = await runFetch({ url: "https://example.com/api" }, "registered-run-123", { allowDirect: true });
+    assertEquals(bypassAttempt.ok, false);
+    assertEquals(bypassAttempt.error, "fetch failed: brokered service worker route unavailable for run");
+    assertEquals(fetchCalled, false, "run-scoped call must never direct-fetch even if allowDirect was passed");
   } finally {
     globalThis.chrome = origChrome;
     globalThis.fetch = origFetch;
