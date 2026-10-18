@@ -278,7 +278,7 @@ const STREAM_WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
 // lib/emscripten-worker.js, behind the same dependency-injected factory shape
 // as the stream host; the worker is terminated on every settlement path.
 const EMSCRIPTEN_WORKER_HOST_CANONICAL_PATH = "extension/lib/emscripten-host.js";
-const EMSCRIPTEN_WORKER_HOST_CANONICAL_LOCATION = { line: 192, column: 26 };
+const EMSCRIPTEN_WORKER_HOST_CANONICAL_LOCATION = { line: 198, column: 26 };
 const EMSCRIPTEN_WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
 // The table host likewise creates exactly one fresh module Worker from the
 // extension-root URL. Its dependency-injected WorkerCtor is pinned to this

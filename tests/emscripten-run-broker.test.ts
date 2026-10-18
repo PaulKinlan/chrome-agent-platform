@@ -61,6 +61,34 @@ Deno.test("broker: catalog rows come from committed schema-2 records only", () =
   assertEquals(rows[0].adapterId, "cap-a0-numeric-v1");
 });
 
+Deno.test("broker: byte-bearing operations stay unavailable until sealed custody exists", () => {
+  for (const operation of [
+    { kind: "native-buffer-v1", result: "buffer", params: [] },
+    { kind: "native-scalar-v1", result: "buffer", params: [] },
+    { kind: "native-scalar-v1", result: "i32", params: [{ name: "data", type: "buffer", minimum: 0, maximum: 1024 }] },
+  ]) {
+    const unsafe = { ...MANIFEST, entry: { ...MANIFEST.entry, operations: [{
+      ...MANIFEST.entry.operations[0], ...operation,
+    }] } };
+    const packageRow = { ...ROW_PACKAGE, manifest: unsafe };
+    assertEquals(emscriptenCatalogRows([packageRow]), [], "no model-visible byte-bearing tool");
+    assertEquals(validateEmscriptenOperationArgs({ ...operation, toolId: "cap_acceptance_weighted_sum" }, {}),
+      { ok: false, error: "emscripten_output_custody_unavailable" }, "direct validation also refuses bytes");
+    assertEquals(buildEmscriptenRunEnvelope({
+      record: packageRow,
+      operationId: "weighted_sum",
+      args: operation.params.length ? [new Uint8Array([1])] : [],
+      authority: { sessionId: "s" },
+    }), null, "no direct envelope can bypass output custody");
+  }
+  assertEquals(emscriptenCatalogRows([ROW_PACKAGE]).length, 1, "scalar operation remains available");
+  const stringDigest = { ...MANIFEST, entry: { ...MANIFEST.entry, operations: [{
+    ...MANIFEST.entry.operations[0], kind: "native-buffer-v1", result: "string", params: [],
+  }] } };
+  assertEquals(emscriptenCatalogRows([{ ...ROW_PACKAGE, manifest: stringDigest }]).length, 1,
+    "native-buffer implementation with string-only wire remains available (Blake3)");
+});
+
 Deno.test("broker: arg validation enforces exact keys, types and admitted bounds", () => {
   const row = emscriptenCatalogRows([ROW_PACKAGE])[0];
   const good = validateEmscriptenOperationArgs(row, { value: 6, weight: 7, bias: 0.5 });

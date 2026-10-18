@@ -160,6 +160,25 @@ Deno.test("emscripten host: scalar args are validated against the broker-derived
   } finally { restoreStubs(); }
 });
 
+Deno.test("emscripten host: byte-bearing envelope cannot invoke native work before sealed custody", async () => {
+  installStubs();
+  try {
+    const base = await request();
+    for (const operation of [
+      { ...base.operation, result: "buffer" },
+      { ...base.operation, params: [{ name: "data", type: "buffer", minimum: 0, maximum: 1024 }] },
+    ]) {
+      let code = null;
+      try {
+        await executeEmscriptenRunRequest({ ...base, operation, args: operation.params.length === 1 ? [new Uint8Array([1])] : base.args }, {
+          createWorker: () => { throw new Error("native work must not start"); },
+        });
+      } catch (error) { code = error.code ?? error.message; }
+      assert(code === "emscripten_output_custody_unavailable", `byte-bearing run refused before spawn: ${code}`);
+    }
+  } finally { restoreStubs(); }
+});
+
 Deno.test("emscripten host: asset byte/hash drift fails closed before any worker exists", async () => {
   installStubs(syntheticFetch({
     ...defaultBytes,

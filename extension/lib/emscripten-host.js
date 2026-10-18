@@ -125,6 +125,12 @@ function validateRequest(raw) {
     fail("emscripten_run_operation");
   }
   for (const param of operation.params) validateParam(param);
+  // The host independently refuses binary data before fetching assets or
+  // starting native constructors. Raw buffers on this wire bypass sealed
+  // stream ownership, audit, byte verification and publication fencing.
+  if (operation.result === "buffer" || operation.params.some((param) => param.type === "buffer")) {
+    fail("emscripten_output_custody_unavailable");
+  }
   if (raw.args.length !== operation.params.length) fail("emscripten_run_args");
   operation.params.forEach((param, index) => validateArg(param, raw.args[index]));
   if (!Array.isArray(raw.assets) || raw.assets.length !== 3) fail("emscripten_run_assets");

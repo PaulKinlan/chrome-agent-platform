@@ -15,6 +15,13 @@
 
 import { EMSCRIPTEN_RUN_TYPE } from "./emscripten-host.js";
 
+// A buffer cannot be carried on the model/extension message wire: it needs a
+// run-owned sealed stream and independent byte verification before publication.
+// Keep every byte-bearing operation unavailable until that custody path lands.
+function requiresSealedCustody(op) {
+  return op.result === "buffer" || op.params?.some((param) => param.type === "buffer");
+}
+
 export function isSchema2Admitted(pkg) {
   return Boolean(pkg && pkg.schema2 === true && pkg.manifest && pkg.graphDigest);
 }
@@ -27,12 +34,13 @@ export function emscriptenCatalogRows(packages) {
     const operations = pkg.manifest?.entry?.operations;
     if (!Array.isArray(operations)) continue;
     for (const op of operations) {
-      if ((op?.kind !== "native-scalar-v1" && op?.kind !== "native-buffer-v1") || typeof op?.toolId !== "string" || !op.toolId) continue;
+      if ((op?.kind !== "native-scalar-v1" && op?.kind !== "native-buffer-v1") || requiresSealedCustody(op) || typeof op?.toolId !== "string" || !op.toolId) continue;
       rows.push(Object.freeze({
         packageId: pkg.packageId,
         version: pkg.version,
         graphDigest: pkg.graphDigest,
         operationId: op.id,
+        kind: op.kind,
         toolId: op.toolId,
         adapterId: pkg.manifest.entry.adapterId,
         exportName: op.exportName,
@@ -81,6 +89,7 @@ function inputSchemaFor(op) {
 // Validate raw model args against the admitted parameter bounds. Returns the
 // ORDERED scalar array (manifest params order) the envelope carries.
 export function validateEmscriptenOperationArgs(row, rawArgs) {
+  if (requiresSealedCustody(row)) return { ok: false, error: "emscripten_output_custody_unavailable" };
   if (!rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs)) {
     return { ok: false, error: "invalid_arguments: shape" };
   }
@@ -135,7 +144,7 @@ export function buildEmscriptenRunEnvelope({ record, operationId, args, authorit
   if (!manifest || typeof operationId !== "string") return null;
   const operations = manifest?.entry?.operations;
   const op = Array.isArray(operations) ? operations.find((candidate) => candidate?.id === operationId) : null;
-  if (!op || (op.kind !== "native-scalar-v1" && op.kind !== "native-buffer-v1")) return null;
+  if (!op || (op.kind !== "native-scalar-v1" && op.kind !== "native-buffer-v1") || requiresSealedCustody(op)) return null;
   const assets = (manifest.assets ?? [])
     .filter((asset) => asset && (asset.role === "adapter" || asset.role === "glue" || asset.role === "main-wasm"))
     .map((asset) => ({
