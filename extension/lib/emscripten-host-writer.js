@@ -2,7 +2,7 @@
 // job Worker: it receives bytes over postMessage, NOT an OPFS handle or ref.
 // Binary execution remains refused until SW/host audit and publication land.
 import { emscriptenJobOwner } from "./emscripten-custody.js";
-import { createEmscriptenHostEvidence } from "./emscripten-host-evidence.js";
+import { createEmscriptenHostEvidence, EMSCRIPTEN_HOST_EVIDENCE_ROOT } from "./emscripten-host-evidence.js";
 import { createIncrementalSha256 } from "./incremental-sha256.js";
 import { openWasmStreamHandles, validateWasmStreamRef, WASM_STREAM_FILE_NAMES } from "./wasm-stream-files.js";
 
@@ -155,10 +155,14 @@ export async function openHostOwnedEmscriptenWriter({ runId, agentId, outputRef,
  * independent re-read. A failed append never returns a successful receipt. */
 export async function openAuditedHostOwnedEmscriptenWriter({ identity, storage, evidence = createEmscriptenHostEvidence({ storage }) } = {}) {
   if (!identity || typeof identity !== "object" || typeof evidence?.begin !== "function" ||
-      typeof evidence?.recordUnknown !== "function" || typeof evidence?.recordClosed !== "function") {
+      typeof evidence?.recordUnknown !== "function" || typeof evidence?.recordClosed !== "function" ||
+      typeof evidence?.recordProtocolViolation !== "function") {
     fail("emscripten_writer_evidence_unavailable");
   }
-  await evidence.begin(identity);
+  const pendingEvidence = await evidence.begin(identity);
+  const ledgerRef = Object.freeze({ version: 1, root: EMSCRIPTEN_HOST_EVIDENCE_ROOT,
+    id: `${pendingEvidence.identity.outputRef.id}-${pendingEvidence.identity.generation}`,
+    hostIncarnation: pendingEvidence.hostIncarnation });
   let channel;
   try {
     channel = await openHostOwnedEmscriptenWriter({
@@ -176,7 +180,7 @@ export async function openAuditedHostOwnedEmscriptenWriter({ identity, storage, 
     async close() {
       const proof = await channel.close();
       await evidence.recordClosed(identity, proof);
-      return Object.freeze({ ...proof, evidenceState: "closed" });
+      return Object.freeze({ ...proof, evidenceState: "closed", ledgerRef });
     },
   });
 }

@@ -13,9 +13,14 @@ identity, awaits the host-owned `push()` before ACK, and aborts on mismatch.
 This is a protocol preparation, not a live feature. The host and SW still
 refuse byte-bearing requests **before native construction**; the host does not
 yet call the frame receiver, and this path cannot produce or publish an artifact.
-The next host integration must own the writer and durable evidence; its deadline
-must remain armed before Worker startup and terminate any unacknowledged Worker.
-UNKNOWN is mandatory on deadline, failed write, malformed frame or failed close.
+The separate direct-module host-only runner (3mcu1) owns the writer and durable
+evidence; its deadline remains armed before job posting and ends an unacknowledged
+Worker in UNKNOWN. The legacy `emscripten-host.js` validator still requires a
+`Uint8Array` buffer result **and** refuses buffer requests up front. x9r8k must
+route an authorized binary request through the host-only runner's null terminal
+plus writer `{frames,bytes,sha256}` proof, rather than merely importing the
+receiver into that legacy path or relaxing its refusal. UNKNOWN is mandatory on
+deadline, failed write, malformed frame or failed close.
 Do not interpret a Worker terminal message or successful `postMessage` as an
 OPFS no-writers fence.
 
