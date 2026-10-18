@@ -72,7 +72,21 @@ export function groupByBead(refs) {
 }
 
 function git(cwd, args) {
-  const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  let r;
+  try {
+    r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", maxBuffer: Infinity });
+  } catch (error) {
+    if (error.code === "ENOBUFS" || error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+      throw new Error(`git ${args.join(" ")} exceeded buffer capacity: ${error.message}`);
+    }
+    throw error;
+  }
+  if (r.error) {
+    if (r.error.code === "ENOBUFS" || r.error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+      throw new Error(`git ${args.join(" ")} exceeded buffer capacity: ${r.error.message}`);
+    }
+    throw r.error;
+  }
   if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr || r.stdout}`);
   return r.stdout;
 }

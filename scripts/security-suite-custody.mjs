@@ -158,7 +158,7 @@ export const makePsRun = (timeoutMs = PS_TIMEOUT_MS) => (file, args) =>
     env: PS_ENV,
     timeout: timeoutMs,
     killSignal: "SIGKILL",
-    maxBuffer: 8 * 1024 * 1024,
+    maxBuffer: Infinity,
   });
 const defaultPsRun = makePsRun();
 
@@ -322,7 +322,7 @@ export const makeFlockRun = (timeoutMs = FLOCK_PROBE_TIMEOUT_MS) => (file, args)
     env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
     timeout: timeoutMs,
     killSignal: "SIGKILL",
-    maxBuffer: 1024 * 1024,
+    maxBuffer: Infinity,
   });
 
 /**

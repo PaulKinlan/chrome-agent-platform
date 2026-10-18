@@ -101,11 +101,18 @@ export function commitOwesProductChange({ files }) {
 // --- git plumbing (HEAD-only reads; never mutates) ---
 
 function git(repo, args) {
-  return execFileSync("git", ["-C", repo, ...args], {
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  try {
+    return execFileSync("git", ["-C", repo, ...args], {
+      encoding: "utf8",
+      maxBuffer: Infinity,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    if (error.code === "ENOBUFS" || error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+      throw new Error(`git ${args.join(" ")} exceeded buffer capacity: ${error.message}`);
+    }
+    throw error;
+  }
 }
 
 /** The commit that introduced the newest changelog heading: the most recent commit

@@ -67,11 +67,19 @@ async function sha256File(file) {
 }
 
 function trackedExtensionIndex(root) {
-  const raw = execFileSync(
-    "git",
-    ["ls-files", "--stage", "-z", "--", "extension"],
-    { cwd: root, encoding: "buffer", maxBuffer: 16 * 1024 * 1024 },
-  );
+  let raw;
+  try {
+    raw = execFileSync(
+      "git",
+      ["ls-files", "--stage", "-z", "--", "extension"],
+      { cwd: root, encoding: "buffer", maxBuffer: Infinity },
+    );
+  } catch (error) {
+    if (error.code === "ENOBUFS" || error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+      throw packageError(`git ls-files exceeded buffer capacity: ${error.message}`);
+    }
+    throw error;
+  }
   const rows = raw.toString("utf8").split("\0").filter(Boolean);
   return rows.map((row) => {
     const match = row.match(/^(\d{6}) ([0-9a-f]{40,64}) (\d)\t(.+)$/u);
@@ -418,7 +426,7 @@ export async function verifyPackageArchive(
   }
   const { stdout } = await execFileAsync("unzip", ["-Z1", archive], {
     encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
+    maxBuffer: Infinity,
   });
   const names = stdout.split(/\r?\n/u).filter(Boolean);
   if (new Set(names).size !== names.length) {
@@ -437,7 +445,7 @@ export async function verifyPackageArchive(
   );
   try {
     await execFileAsync("unzip", ["-q", archive, "-d", extract], {
-      maxBuffer: 16 * 1024 * 1024,
+      maxBuffer: Infinity,
     });
     compareInventory(
       await inventoryDirectory(extract),

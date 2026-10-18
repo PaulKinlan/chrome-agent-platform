@@ -164,3 +164,18 @@ Deno.test("re8v7: the checker buffers no fixed stdout ceiling", async () => {
   assert(!/maxBuffer/.test(code), "no spawn option may cap stdout at a fixed size");
   assert(/spawn\(/.test(code), "the checker must collect stdout from a streamed child");
 });
+
+Deno.test("550tr: scripts that buffer git/tool outputs do not impose a fixed numeric maxBuffer ceiling", async () => {
+  const scripts = [
+    "scripts/beads-landing-link.mjs",
+    "scripts/check-owed-changelog.mjs",
+    "scripts/package-archive.mjs",
+    "scripts/security-suite-custody.mjs",
+  ];
+  for (const rel of scripts) {
+    const src = await readFile(new URL(`../${rel}`, import.meta.url), "utf8");
+    const code = src.split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
+    assert(!/maxBuffer:\s*\d+\s*\*\s*1024/.test(code), `${rel} must not impose a fixed numeric maxBuffer`);
+  }
+});
+
