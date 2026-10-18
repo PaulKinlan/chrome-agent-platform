@@ -16,6 +16,7 @@ export { closeAgentWorkerFor, createAgentWorkerRoutes, reconcileAgentWorkers } f
 export { createHooksRoutes } from "./hooks.js";
 export { createToolStreamRoutes } from "./tool-stream.js";
 export { createSkillRoutes } from "./skills.js";
+export { createObservabilityRoutes } from "./observability.js";
 export {
   createMemoryAdminRoutes,
   createMemoryRoutes,

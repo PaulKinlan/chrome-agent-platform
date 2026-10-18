@@ -31,6 +31,7 @@ import { createHooksRoutes } from "../extension/background/routes/hooks.js";
 import { createToolStreamRoutes } from "../extension/background/routes/tool-stream.js";
 import { createMemoryAdminRoutes } from "../extension/background/routes/memory.js";
 import { createSkillRoutes } from "../extension/background/routes/skills.js";
+import { createObservabilityRoutes } from "../extension/background/routes/observability.js";
 import { createMemoryRoutes } from "../extension/background/routes/memory.js";
 import { createAgentScheduleRoutes } from "../extension/background/routes/agent-schedule.js";
 import { createAgentWorkerRoutes } from "../extension/background/routes/agent-worker.js";
@@ -212,6 +213,8 @@ function extractAllRegisteredRoutes(
     createMemoryAdminRoutes: () => createMemoryAdminRoutes({ memoryOverview: async () => ({}) }),
     // chrome-agent-platform-atxc6 slice 4 (zln9d): the skill family.
     createSkillRoutes: () => createSkillRoutes({ masterMemory: () => ({}), invalidateAgent: () => {}, broadcastRegistryChanged: () => {} }),
+    // chrome-agent-platform-atxc6 slice 5: the observability routes (zero injected deps).
+    createObservabilityRoutes: () => createObservabilityRoutes(),
     createVaultRoutes: () => createVaultRoutes({ vault: { listMasked: () => [] }, requireSettingsSender: () => {} }),
     createEnclaveProxyRoutes: () => createEnclaveProxyRoutes({ vault: { getSecretRaw: () => null } }),
   };
@@ -360,6 +363,7 @@ function assertRouteMap(routeMap: string): void {
     ["routes/activity.js", Object.keys(createActivityRoutes({}))],
     ["routes/memory.js", [...Object.keys(createMemoryRoutes({})), ...Object.keys(createMemoryAdminRoutes({ memoryOverview: async () => ({}) }))]],
     ["routes/skills.js", Object.keys(createSkillRoutes({ masterMemory: () => ({}), invalidateAgent: () => {}, broadcastRegistryChanged: () => {} }))],
+    ["routes/observability.js", Object.keys(createObservabilityRoutes())],
     ["routes/fs-grants.js", Object.keys(createFsGrantRoutes({}))],
     ["routes/agent-workspace.js", Object.keys(createAgentWorkspaceRoutes())],
     ["routes/agent-schedule.js", Object.keys(createAgentScheduleRoutes({}))],

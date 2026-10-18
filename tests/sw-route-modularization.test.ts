@@ -19,6 +19,7 @@ import {
   createHooksRoutes,
   createToolStreamRoutes,
   createSkillRoutes,
+  createObservabilityRoutes,
   kvRoutes,
   mergeRouteMaps,
   permLeaseRoutes,
@@ -553,6 +554,10 @@ Deno.test("sw routes: AST verification of route registration across service-work
         // write path, extracted to routes/fs-grants.js
         // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
         registeredRouteKeys.push(...Object.keys(createFsGrantRoutes(FS_GRANT_STUB_DEPS)));
+      } else if (arg.name === "observabilityRoutes") {
+        // chrome-agent-platform-atxc6 slice 5: the observability trace surface — four routes, ZERO injections
+        // (the page-measure ring moved into the module with them).
+        registeredRouteKeys.push(...Object.keys(createObservabilityRoutes()));
       } else if (arg.name === "skillRoutes") {
         // chrome-agent-platform-atxc6 slice 4 (zln9d): the skill family — skills.set/get/all,
         // skill.list/import/delete/discover/importBatch, site-skills.set/get. `skill.run` stays in the worker
