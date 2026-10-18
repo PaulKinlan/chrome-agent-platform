@@ -4,8 +4,7 @@
 import { EMSCRIPTEN_HOST_STAGE_TYPE } from "./emscripten-stage-protocol.js";
 import { isTrustedServiceWorkerSender } from "./pure.js";
 
-export function registerEmscriptenBinaryStagingHost(deps = {}) {
-  const runtime = deps.runtime ?? globalThis.chrome?.runtime;
+export function registerEmscriptenBinaryStagingHost(runtime = globalThis.chrome?.runtime, load) {
   if (!runtime?.onMessage) return;
   runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type !== EMSCRIPTEN_HOST_STAGE_TYPE) return;
@@ -19,7 +18,7 @@ export function registerEmscriptenBinaryStagingHost(deps = {}) {
     // Resolve a fixed extension URL at runtime: the Store bundle does not
     // support code splitting and otherwise eagerly inlines the entire native
     // runner into offscreen.bundle.js (343 KB > its 250 KB budget).
-    Promise.resolve().then(deps.load ?? (() => import(runtime.getURL("lib/emscripten-host-stage.js"))))
+    Promise.resolve().then(load ?? (() => import(runtime.getURL("lib/emscripten-host-stage.js"))))
       .then(({ executeStagedEmscriptenBinaryRequest }) => executeStagedEmscriptenBinaryRequest(message))
       .then(sendResponse, () => refuse("emscripten_stage_host_unavailable"));
     return true;

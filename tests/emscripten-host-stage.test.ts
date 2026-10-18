@@ -56,12 +56,12 @@ Deno.test("x9r8k.2: only SW sender may reach staging host executor", async () =>
   const { runtime, listeners } = runtimeFixture();
   let calls = 0;
   let loads = 0;
-  registerEmscriptenBinaryStagingHost({ runtime, load: async () => {
+  registerEmscriptenBinaryStagingHost(runtime, async () => {
     loads++;
     return { executeStagedEmscriptenBinaryRequest: async () => {
       calls++; return { ok: false, phase: "unknown", error: "emscripten_worker_termination_unproved", hostProof: PROOF };
     } };
-  } });
+  });
   assertEquals(listeners.length, 1);
   for (const sender of [
     { id: runtime.id, url: "chrome-extension://extension-id/options.html", documentId: "tab" },
