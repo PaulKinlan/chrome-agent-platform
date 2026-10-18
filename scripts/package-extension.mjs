@@ -17,6 +17,7 @@ import { readFile } from "node:fs/promises";
 import {
   collectPackageInventory,
   buildBundledWasmManifestMap,
+  buildBundledRuntimeJsMap,
   packageExtensionArchive,
   verifyPackageArchive,
 } from "./package-archive.mjs";
@@ -59,7 +60,8 @@ async function inventoryForTarget() {
     // (both go through inventoryForTarget); the postcheck re-verifies the
     // archive against this same boundary-checked inventory.
     const bundledWasmManifestByArchivePath = await buildBundledWasmManifestMap(ROOT);
-    await assertStoreTargetBoundary({ target, inventory, bundledWasmManifestByArchivePath });
+    const bundledRuntimeJsByArchivePath = await buildBundledRuntimeJsMap(ROOT);
+    await assertStoreTargetBoundary({ target, inventory, bundledWasmManifestByArchivePath, bundledRuntimeJsByArchivePath });
   }
   return inventory;
 }

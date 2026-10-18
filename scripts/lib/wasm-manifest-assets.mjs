@@ -15,6 +15,7 @@
 // mappings within one manifest, and inventory-row manifest digest drift.
 
 import { isDeepStrictEqual } from "node:util";
+import { createHash } from "node:crypto";
 import { WasmPackageAuthority, canonicalJson } from "../../extension/lib/wasm-package-authority.js";
 
 const CAS_RE = /^extension\/wasm\/cas\/[0-9a-f]{64}\.wasm$/u;
@@ -121,6 +122,75 @@ export function recordBundledWasmClaim(claims, mapping, manifest) {
   }
   prior.push({ mapping, manifest });
   return false;
+}
+
+// The SAME byte-exact JS authority is consumed by the Store build's shipped-
+// code scan and by the ZIP policy. Keys are archive paths (no "extension/"
+// prefix); values include only the manifest-reviewed role, size and digest.
+// Neither a repinned manifest alone nor an inventory row alone may waive an
+// AST scan. The injected reader is scoped to the consumer's immutable tree.
+export async function buildSchema2RuntimeJsMap(inventory, { readBytes } = {}) {
+  if (!Array.isArray(inventory?.files) || !Array.isArray(inventory?.manifests) ||
+      typeof readBytes !== "function") {
+    throw wasmManifestMappingError("schema-2 JS map requires inventory and a byte reader");
+  }
+  const runtimeJs = /^extension\/wasm\/.+\.(?:m?js)$/u;
+  const reviewedJs = /^extension\/wasm\/runtime\/.+\.(?:m?js)$/u;
+  const fileRows = new Map();
+  for (const row of inventory.files) {
+    if (!runtimeJs.test(row?.rel ?? "")) continue;
+    if (fileRows.has(row.rel)) throw wasmManifestMappingError(`duplicate runtime JS inventory row: ${row.rel}`);
+    fileRows.set(row.rel, row);
+  }
+  const seenIdentities = new Set();
+  const mapped = new Map();
+  let schema2AdmissionReady = false;
+  for (const identity of inventory.manifests) {
+    const manifestRel = `extension/wasm/manifests/${identity?.pkg}-${identity?.version}.manifest.json`;
+    if (!inventory.files.some((row) => row?.rel === manifestRel)) {
+      throw wasmManifestMappingError(`schema-2 JS map missing declared manifest: ${manifestRel}`);
+    }
+    let manifestText;
+    try { manifestText = new TextDecoder("utf-8", { fatal: true }).decode(await readBytes(manifestRel)); }
+    catch { throw wasmManifestMappingError(`schema-2 JS map cannot read manifest: ${manifestRel}`); }
+    assertManifestRowDigest(manifestText, identity);
+    const manifest = JSON.parse(manifestText);
+    if (manifest?.schemaVersion !== 2) continue;
+    if (!schema2AdmissionReady) {
+      // Node-only build/package helper. The SW never imports this broker.
+      await import("../../extension/lib/wasm-package-admission.js");
+      schema2AdmissionReady = true;
+    }
+    registerBundledManifestIdentity(seenIdentities, identity, manifest);
+    manifestCasMappings(manifest); // enforce shared role/CAS mapping even for JS-only claims
+    for (const asset of manifest.assets) {
+      if (!/\.(?:m?js)$/u.test(asset.path ?? "")) continue;
+      const rel = asset.path;
+      if (!reviewedJs.test(rel) || WASM_ROLES.has(asset.role) || !SCHEMA2_ROLES.has(asset.role)) {
+        throw wasmManifestMappingError(`schema-2 JS asset is not a runtime data role: ${rel}`);
+      }
+      const archivePath = rel.slice("extension/".length);
+      const row = fileRows.get(rel);
+      if (mapped.has(archivePath)) throw wasmManifestMappingError(`duplicate runtime JS asset mapping: ${archivePath}`);
+      if (!row || row.sha256 !== asset.sha256 || row.size !== asset.size) {
+        throw wasmManifestMappingError(`runtime JS inventory pin drift: ${archivePath}`);
+      }
+      let bytes;
+      try { bytes = await readBytes(rel); }
+      catch { throw wasmManifestMappingError(`runtime JS unreadable: ${archivePath}`); }
+      if (!(bytes instanceof Uint8Array) || bytes.byteLength !== asset.size ||
+          createHash("sha256").update(bytes).digest("hex") !== asset.sha256) {
+        throw wasmManifestMappingError(`runtime JS byte drift: ${archivePath}`);
+      }
+      mapped.set(archivePath, Object.freeze({ role: asset.role, size: asset.size, sha256: asset.sha256 }));
+    }
+  }
+  for (const rel of fileRows.keys()) {
+    if (!mapped.has(rel.slice("extension/".length))) {
+      throw wasmManifestMappingError(`unlisted runtime JS inventory row: ${rel}`);
+    }
+  }
+  return mapped;
 }
 
 function assertUnique(out) {

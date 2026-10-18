@@ -539,6 +539,14 @@ export async function packageExtensionArchive(
 // the declared inventory or unreadable, inventory-row manifest digest drift, an
 // asset whose content address is not a declared extension/wasm/cas/<64-hex>.wasm
 // member, or a duplicate archivePath mapping.
+// The build and archive use the same schema-2 JS byte authority; this wrapper
+// injects the package tree reader without creating a second exemption policy.
+export async function buildBundledRuntimeJsMap(root, { inventory = null } = {}) {
+  const data = inventory ?? (await import("../extension/lib/bundled-inventory-data.js")).BUNDLED_INVENTORY;
+  const { buildSchema2RuntimeJsMap } = await import("./lib/wasm-manifest-assets.mjs");
+  return buildSchema2RuntimeJsMap(data, { readBytes: (rel) => readFile(path.join(root, rel)) });
+}
+
 export async function buildBundledWasmManifestMap(root, { inventory = null } = {}) {
   const data = inventory ?? (await import("../extension/lib/bundled-inventory-data.js")).BUNDLED_INVENTORY;
   if (!data || !Array.isArray(data.files) || !Array.isArray(data.manifests)) {

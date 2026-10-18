@@ -176,6 +176,7 @@ export async function assertStoreTargetBoundary({
   target,
   inventory,
   bundledWasmManifestByArchivePath = new Map(),
+  bundledRuntimeJsByArchivePath = new Map(),
 }) {
   if (target !== STORE_TARGET) {
     throw policyError("explicit --target=store required");
@@ -188,6 +189,9 @@ export async function assertStoreTargetBoundary({
   }
   if (!(bundledWasmManifestByArchivePath instanceof Map)) {
     throw policyError("bundled Wasm manifest authority must be a Map");
+  }
+  if (!(bundledRuntimeJsByArchivePath instanceof Map)) {
+    throw policyError("bundled runtime JS authority must be a Map");
   }
   const byPath = new Map();
   for (const entry of inventory) {
@@ -243,27 +247,58 @@ export async function assertStoreTargetBoundary({
   const jsEntries = nonRuntimeEntries.filter((entry) =>
     /\.(?:m?js)$/iu.test(entry.archivePath)
   );
+  // These exact bytes have already been bound to a digest-pinned schema-2
+  // manifest AND the generated inventory by buildSchema2RuntimeJsMap. Because
+  // exclusion skips ALL AST rules (not merely dynamic WebAssembly), enforce
+  // path, role, size and SHA again against the package's own source bytes.
+  const pinnedRuntimeJs = new Set();
+  for (const [archivePath, pin] of bundledRuntimeJsByArchivePath) {
+    if (!/^wasm\/runtime\/.+\.(?:m?js)$/u.test(archivePath) ||
+        !["adapter", "glue", "pthread-bootstrap", "data"].includes(pin?.role) ||
+        !Number.isSafeInteger(pin?.size) || pin.size <= 0 || pin.size > MAX_TEXT_FILE_BYTES ||
+        !/^[0-9a-f]{64}$/u.test(pin?.sha256 ?? "")) {
+      throw policyError(`invalid schema-2 runtime JS pin: ${archivePath}`);
+    }
+    const entry = byPath.get(archivePath);
+    if (!entry || !jsEntries.includes(entry)) {
+      throw policyError(`bundled runtime JS asset has no package byte: ${archivePath}`);
+    }
+    const bytes = await readFile(entry.sourcePath);
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (bytes.byteLength !== pin.size || digest !== pin.sha256 ||
+        (typeof entry.sha256 === "string" && entry.sha256 !== pin.sha256)) {
+      throw policyError(`bundled runtime JS byte drift: ${archivePath}`);
+    }
+    pinnedRuntimeJs.add(archivePath);
+  }
+  for (const entry of jsEntries) {
+    if (/^wasm\/runtime\/.+\.(?:m?js)$/u.test(entry.archivePath) &&
+        !pinnedRuntimeJs.has(entry.archivePath)) {
+      throw policyError(`unlisted runtime JS in package: ${entry.archivePath}`);
+    }
+  }
+  const scannedJsEntries = jsEntries.filter((entry) => !pinnedRuntimeJs.has(entry.archivePath));
   const generatedBundles = new Set(
-    jsEntries.filter((entry) => entry.archivePath.startsWith("dist/"))
+    scannedJsEntries.filter((entry) => entry.archivePath.startsWith("dist/"))
       .map((entry) => entry.sourcePath),
   );
   const allowedDynamicEvaluatorFiles = new Set(
-    jsEntries.filter((entry) =>
+    scannedJsEntries.filter((entry) =>
       entry.archivePath === "sandbox/script-sandbox.js"
     ).map((entry) => entry.sourcePath),
   );
   const allowedWorkerFiles = new Set(
-    jsEntries.filter((entry) =>
+    scannedJsEntries.filter((entry) =>
       STORE_BOUNDARY_ALLOWLIST.allowedWorkerBundles.includes(entry.archivePath)
     ).map((entry) => entry.sourcePath),
   );
   const allowedWasmFiles = new Set(
-    jsEntries.filter((entry) =>
+    scannedJsEntries.filter((entry) =>
       STORE_BOUNDARY_ALLOWLIST.allowedWasmBundles.includes(entry.archivePath)
     ).map((entry) => entry.sourcePath),
   );
   const archiveMap = new Map(
-    jsEntries.map((entry) => [entry.sourcePath, entry.archivePath]),
+    scannedJsEntries.map((entry) => [entry.sourcePath, entry.archivePath]),
   );
 
   // ── Store map + audit-marker boundary (chrome-agent-platform-sapd) ────────
@@ -320,7 +355,7 @@ export async function assertStoreTargetBoundary({
     }
   }
   const jsViolations = await scanShippedJs(
-    jsEntries.map((entry) => entry.sourcePath),
+    scannedJsEntries.map((entry) => entry.sourcePath),
     {
       generatedBundles,
       allowedWorkerLiterals: new Set(STORE_ALLOWED_WORKER_LITERALS),
@@ -329,7 +364,7 @@ export async function assertStoreTargetBoundary({
       allowedWasmFiles,
       archiveMap,
       readText: async (file) => {
-        const entry = jsEntries.find((candidate) =>
+        const entry = scannedJsEntries.find((candidate) =>
           candidate.sourcePath === file
         );
         if (!entry) throw policyError("scanner requested an unknown JS input");
@@ -401,7 +436,8 @@ export async function assertStoreTargetBoundary({
     bundleArchiveMap: BUNDLE_ARCHIVE_MAP,
     boundaryAllowlist: STORE_BOUNDARY_ALLOWLIST,
     filesScanned: inventory.length,
-    jsScanned: jsEntries.length,
+    jsScanned: scannedJsEntries.length,
+    jsRuntimePinned: pinnedRuntimeJs.size,
     htmlScanned: htmlEntries.length,
     wasmScanned: wasmEntries.length,
   });
