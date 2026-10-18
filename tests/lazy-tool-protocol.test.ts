@@ -134,6 +134,23 @@ Deno.test("lazy protocol: search is non-authorizing and execute delegates throug
   assertEquals(protocol.diagnostics().grantsCreated, 0);
 });
 
+Deno.test("7vp0a: dispatch projects SW-issued run surface without replacing model agentId", async () => {
+  const [base] = builtinRecords(() => ({ ok: true }));
+  let observed;
+  const record = { ...base, dispatch: async (_args: unknown, context: Record<string, unknown>) => {
+    observed = { agentId: context.agentId, runSurfaceRef: context.runSurfaceRef };
+    return { ok: true };
+  } };
+  const protocol = new LazyToolProtocol({
+    readSources: () => [record],
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const context = runContext({ runSurfaceRef: "named:alice" });
+  const ref = await searchedRef(protocol, context);
+  assertEquals((await protocol.execute({ selectionRef: ref, arguments: { value: "x" } }, context)).ok, true);
+  assertEquals(observed, { agentId: "hub", runSurfaceRef: "named:alice" });
+});
+
 Deno.test("lazy protocol: Zod validation cache cannot rotate catalog/package identity", async () => {
   const records = builtinRecords(() => ({ ok: true }));
   const before = new LazyToolProtocol({

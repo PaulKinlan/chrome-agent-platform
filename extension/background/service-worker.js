@@ -904,12 +904,16 @@ async function dispatchEmscriptenRun({ packageId, version, graphDigest, operatio
   const dispatch = (isLive) => runAdmittedEmscripten({
     packageId, version, graphDigest, operationId, args, authority, isLive,
   });
+  // The model's agentId is createAgent's static "hub" even inside a named
+  // run. Only this SW-issued surface, projected through the immutable run
+  // identity, can be compared with runControl's SW-owned surface.
+  const fencedContext = { runId, agentId: context?.runSurfaceRef };
   const isLive = () => isEmscriptenModelRunLive({
-    runId, agentId: context?.agentId, signal: context?.signal,
+    runId, agentId: fencedContext.agentId, signal: context?.signal,
     active: activeExecutions, cancelled: cancellingApprovalExecutions,
     ended: endedExecutions, workerRun: runControl.get(runId),
   });
-  return await dispatchEmscriptenForRun({ preview, context, isLive, dispatch });
+  return await dispatchEmscriptenForRun({ preview, context: fencedContext, isLive, dispatch });
 }
 
 async function loadAdmittedEmscriptenPackages() {
@@ -5081,6 +5085,7 @@ async function runTask({ id, task, harnessId = null, scheduled = false, attachme
             runId: executionId,
             taskId,
             runGeneration: String(executionId),
+            runSurfaceRef: agentSurfaceRef ?? null,
             origin: "",
             documentId: "",
           }),

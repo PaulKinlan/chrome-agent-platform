@@ -93,8 +93,11 @@ Deno.test("Emscripten run fence: actual SW runControl records bind hub/named ide
   const cancelled = new Set();
   runControl.register({ executionId: RUN, surface: "named:alice", kind: "agent" });
   const dispatch = async (isLive) => ({ ok: isLive(), result: "scalar" });
-  const call = (agentId) => {
-    const context = { runId: RUN, agentId };
+  const call = (runSurfaceRef) => {
+    // createAgent's id is ALWAYS "hub" even for named/background runs. The
+    // immutable SW run identity supplies a distinct surface to the broker.
+    const toolContext = { runId: RUN, agentId: "hub", runSurfaceRef };
+    const context = { runId: toolContext.runId, agentId: toolContext.runSurfaceRef };
     const isLive = () => isEmscriptenModelRunLive({
       ...context, active, cancelled, ended: new Set(), workerRun: runControl.get(RUN),
     });
@@ -111,7 +114,13 @@ Deno.test("Emscripten run fence: actual SW runControl records bind hub/named ide
 
 Deno.test("Emscripten run fence: service worker uses a model fence and an explicit Settings preview", async () => {
   const source = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
-  assert(source.includes("dispatchEmscriptenForRun({ preview, context, isLive, dispatch })"), "model and Settings branches must share the tested dispatch seam");
+  assert(source.includes("dispatchEmscriptenForRun({ preview, context: fencedContext, isLive, dispatch })"),
+    "model and Settings branches must share the tested dispatch seam");
+  assert(source.includes("agentId: context?.runSurfaceRef"), "model fence must use the SW-issued surface, not createAgent's static hub id");
+  assert(source.includes("runSurfaceRef: agentSurfaceRef ?? null"), "the SW must place the exact registered surface into the immutable run identity");
+  const agent = await Deno.readTextFile(new URL("../extension/lib/agent.js", import.meta.url));
+  assert(agent.includes('runSurfaceRef: ownData(identityInput, "runSurfaceRef")'), "agent run identity must retain the SW surface");
+  assert(agent.includes('runSurfaceRef: ownData(activeRun.identity, "runSurfaceRef")'), "agent lazy context must project the immutable surface");
   assertEquals(source.match(/preview: true/g)?.length, 3,
     "two Settings broker branches and the direct Settings call each require an explicit preview flag");
   assert(source.includes("if (!isLive()) return { ok: false, phase: \"failed\", error: \"emscripten_run_not_live\" };"),

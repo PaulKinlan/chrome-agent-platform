@@ -1090,6 +1090,9 @@ export class LazyToolProtocol {
             runId: ownData(context, "runId"),
             taskId: ownData(context, "taskId"),
             agentId: ownData(context, "agentId"),
+            // SW-run surface identity is distinct from createAgent's static
+            // "hub" id; Emscripten uses it against the live runControl record.
+            runSurfaceRef: ownData(context, "runSurfaceRef"),
             origin: ownData(context, "origin"),
             documentId: ownData(context, "documentId"),
             runGeneration: ownData(context, "runGeneration"),
