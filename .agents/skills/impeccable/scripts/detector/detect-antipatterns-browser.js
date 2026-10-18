@@ -7793,8 +7793,8 @@ if (IS_BROWSER) {
     const ratios = [];
     const methods = new Set();
     const unresolved = [];
-    for (const point of points) {
-      const sample = await sampleVisualBackgroundAtPoint(el, point, textColor);
+    const samples = await Promise.all(points.map(point => sampleVisualBackgroundAtPoint(el, point, textColor)));
+    for (const sample of samples) {
       if (sample.status !== 'sampled' || !sample.color) {
         unresolved.push(sample.reason);
         continue;
