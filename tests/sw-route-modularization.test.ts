@@ -15,6 +15,7 @@ import {
   createSchedulerRoutes,
   createFsGrantRoutes,
   createAgentWorkerRoutes,
+  createHooksRoutes,
   kvRoutes,
   mergeRouteMaps,
   permLeaseRoutes,
@@ -521,6 +522,10 @@ Deno.test("sw routes: AST verification of route registration across service-work
         // write path, extracted to routes/fs-grants.js
         // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
         registeredRouteKeys.push(...Object.keys(createFsGrantRoutes(FS_GRANT_STUB_DEPS)));
+      } else if (arg.name === "hooksRoutes") {
+        // chrome-agent-platform-atxc6: the system-hooks domain (status/deny/subscribe/unsubscribe),
+        // moved to routes/hooks.js. The injected helpers only gate dispatch, never route names.
+        registeredRouteKeys.push(...Object.keys(createHooksRoutes({ requireOwnerApproval: async () => ({ ok: true }), payloadFields: () => {} })));
       } else if (arg.name === "agentScheduleRoutes") {
         // The named-agent schedule route (named-agent.set-schedule), extracted
         // for principal-synthetic testing (REVISE-2).

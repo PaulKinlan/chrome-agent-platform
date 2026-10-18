@@ -13,6 +13,7 @@ export { createAgentWorkspaceRoutes } from "./agent-workspace.js";
 export { createAgentScheduleRoutes, createApplyAgentSchedule, createNamedAgentDeleteGate, normalizeScheduleTask } from "./agent-schedule.js";
 export { createActivityRoutes, filterActivityEntries, ACTIVITY_STORE_CAPS } from "./activity.js";
 export { closeAgentWorkerFor, createAgentWorkerRoutes, reconcileAgentWorkers } from "./agent-worker.js";
+export { createHooksRoutes } from "./hooks.js";
 export {
   createMemoryRoutes,
   resolveMemory,
