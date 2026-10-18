@@ -173,7 +173,7 @@ function redactedPreview(value) {
   return redactSecretText(String(value ?? ""));
 }
 
-function validExecutionId(value) {
+export function validExecutionId(value) {
   if (typeof value !== "string" || value.length > 200) return false;
   const lower = value.toLowerCase();
   if (["__proto__", "prototype", "constructor"].includes(lower)) return false;

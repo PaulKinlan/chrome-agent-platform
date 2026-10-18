@@ -110,7 +110,7 @@ import {
 import { WASM_STREAM_RUN_TYPE, WASM_STREAM_WALL_MS } from "../lib/wasm-stream-host.js";
 import { CALLEXPORT_RUN_TYPE } from "../lib/wasm-callexport-host.js";
 import { EMSCRIPTEN_RUN_TYPE } from "../lib/emscripten-host.js";
-import { isEmscriptenModelRunLive, runFencedEmscripten } from "../lib/emscripten-run-fence.js";
+import { isEmscriptenModelRunLive, dispatchEmscriptenForRun } from "../lib/emscripten-run-fence.js";
 // The dispatch broker reads the registry through the small read-only core —
 // the write/validation authority module stays out of this bundle (the
 // standing static/RHC boundary pin).
@@ -904,13 +904,12 @@ async function dispatchEmscriptenRun({ packageId, version, graphDigest, operatio
   const dispatch = (isLive) => runAdmittedEmscripten({
     packageId, version, graphDigest, operationId, args, authority, isLive,
   });
-  if (preview) return await dispatch(() => true); // SW-only Settings route, never a model identity
   const isLive = () => isEmscriptenModelRunLive({
     runId, agentId: context?.agentId, signal: context?.signal,
     active: activeExecutions, cancelled: cancellingApprovalExecutions,
     ended: endedExecutions, workerRun: runControl.get(runId),
   });
-  return await runFencedEmscripten({ context, isLive, dispatch: () => dispatch(isLive) });
+  return await dispatchEmscriptenForRun({ preview, context, isLive, dispatch });
 }
 
 async function loadAdmittedEmscriptenPackages() {
