@@ -24,7 +24,10 @@
 //
 // SINGLE WRITER. `createWritable` does not lock the file. The durable-run
 // registry's write lock currently makes the service worker the only writer, and
-// that must stay true. The owner's observation (2026-08-28) is the durable fix:
+// that must stay true. Measured on the shipped Chrome 154.0.8037.92
+// (tests/opfs-platform-facts.test.ts, bead n87j0): a default writable is siloed
+// and does NOT exclude another writable — two are accepted at once and the last
+// close wins — while it DOES refuse a `createSyncAccessHandle`. The owner's observation (2026-08-28) is the durable fix:
 // with the per-agent actor/worker model, an agent's writes can be serialised
 // through its own single worker instance, making single-writer structural
 // rather than conventional — and shared workers also have
