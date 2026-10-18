@@ -10,14 +10,12 @@ import {
 
 // Writes are invisible until close. Faults can happen at write, close, move,
 // or remove; re-opening the store must never publish incomplete uploads.
-function fixture(initialNowOrOptions = 123456) {
+function fixture(initialNow = 123456) {
   const files = new Map();
   const directories = new Map();
   const calls = [];
   let fault = null;
-  let currentNow = typeof initialNowOrOptions === "object" && initialNowOrOptions !== null
-    ? (initialNowOrOptions.now ?? 123456)
-    : initialNowOrOptions;
+  let currentNow = initialNow;
   const clock = () => (typeof currentNow === "function" ? currentNow() : currentNow);
   function check(op, path) {
     calls.push([op, path]);
@@ -582,10 +580,15 @@ Deno.test("owner-blobs: fixture clock injection reaches the store during recover
   assertEquals(await f.store.list(), []);
   assertEquals([...f.files.keys()].some((k) => k.endsWith(temp)), true, "staging file at age 50s must survive");
 
-  // Advance clock to t = 170_000 (age 70s, exceeds 60s grace). File must be pruned.
-  f.setNow(170_000);
+  // Advance clock to t = 159_999 (age 59.999s, strictly < 60s grace). File must survive (wsuxr).
+  f.setNow(159_999);
   assertEquals(await f.store.list(), []);
-  assertEquals([...f.files.keys()].some((k) => k.endsWith(temp)), false, "staging file at age 70s must be pruned");
+  assertEquals([...f.files.keys()].some((k) => k.endsWith(temp)), true, "staging file at age 59.999s must survive");
+
+  // Advance clock to t = 160_000 (age 60s, boundary condition not strictly < 60s). File must be pruned (wsuxr).
+  f.setNow(160_000);
+  assertEquals(await f.store.list(), []);
+  assertEquals([...f.files.keys()].some((k) => k.endsWith(temp)), false, "staging file at age 60s boundary must be pruned");
 });
 
 
