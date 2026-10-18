@@ -25,7 +25,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath } from "node:path";
 import { BUILD_GATE, BUILD_GATE_FILES, BUILD_GATE_REASONS, HEAVY_GATE, HEAVY_GATE_FILES, HEAVY_GATE_REASONS, READ_ONLY_DIST, SERIAL, partition } from "./test-partition.mjs";
-import { announce, runReadOnlyDistBatch, runSerialFiles } from "./lib/serial-phase.mjs";
+import { announce, runReadOnlyDistBatch, runSerialFiles, runSerialLanes } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
 import { parallelPlan, computeParallelPhaseTimeout, DEFAULT_PARALLEL_TIMEOUT_MS } from "./lib/parallel-plan.mjs";
 import { loadWeights, scheduleOrder } from "./lib/parallel-schedule.mjs";
@@ -311,7 +311,10 @@ export async function main(args = process.argv.slice(2)) {
   // here we only print what it decides and let the serial failure still decide the exit code.
   const t0 = Date.now();
   const serialFailures = [];
-  const serialRc = serialFiles.length ? runSerialFiles(serialFiles, { failuresOut: serialFailures }) : 0;
+  // chrome-agent-platform-1oouo: SERIAL runs as lanes when two of its three hazard classes are
+  // independent (build writers vs the process-global Chrome lock/slot cluster); the load- and
+  // clock-sensitive files still run ALONE, first. scripts/test-partition.mjs SERIAL_LANES pins the split.
+  const serialRc = serialFiles.length ? await runSerialLanes(serialFiles, { failuresOut: serialFailures }) : 0;
   const failingFiles = serialFailures.filter((f) => f.code !== 0 && !f.isRefusal).map((f) => f.file);
   const plan = parallelPlan({ serialRc, parallel, alwaysOn: ALWAYS_ON, failingFiles });
   if (plan.announce) console.error(`\n${plan.announce}`);
