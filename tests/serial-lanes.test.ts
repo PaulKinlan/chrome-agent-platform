@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync } from "node:fs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
+import { spawn as realSpawn } from "node:child_process";
 import { runSerialLanes, serialLaneCommand } from "../scripts/lib/serial-phase.mjs";
 import {
   SERIAL,
@@ -152,6 +153,53 @@ Deno.test("lanes: the child is spawned BEFORE the build lane runs, both are awai
   );
   assertEquals(events.indexOf("spawn-child") < events.indexOf("build-start"), true, "spawn must precede the build lane");
   assertEquals(events.includes("build-end"), true, "the build lane must run to completion while the child lives");
+});
+
+Deno.test("lanes: a GLOBAL child that cannot START fails closed to sequential instead of killing the gate (xaj7c)", async () => {
+  // xaj7c: the child lane subscribed only to `exit`. A child that never starts emits `error` and NEVER
+  // `exit`, so Node treated it as an unhandled 'error' event and took the whole gate down — no lane named,
+  // no file named, no cause. The repro was `cwd: /nonexistent` ⇒ ENOENT.
+  const files = [
+    "tests/build-smoke.test.ts", // build
+    "tests/chrome-launch-lock.test.ts", // global
+  ];
+  const ran: string[][] = [];
+  const announced: string[] = [];
+  const realLog = console.log;
+  const realError = console.error;
+  const capture = (...args: any[]) => { announced.push(args.map(String).join(" ")); };
+  console.log = capture;
+  console.error = capture;
+  let rc = -1;
+  try {
+    rc = await runSerialLanes(files, {
+      // A REAL spawn of a binary that does not exist: ENOENT comes from the OS, not from a stub.
+      spawnChild: ((_command: string, _args: string[], options: any) => realSpawn("cap-lane-binary-that-does-not-exist-xyz", [], options)) as any,
+      runLaneFiles: (laneFiles: string[], opts: any) => {
+        ran.push([...laneFiles]);
+        for (const file of laneFiles) {
+          opts.failuresOut.push({ file, code: 0, timedOut: false, isRefusal: false, secs: "0", log: null });
+        }
+        return 0;
+      },
+    });
+  } finally {
+    console.log = realLog;
+    console.error = realError;
+  }
+  // The phase must RESOLVE — a spawn failure is a step failure, not a process kill.
+  assertEquals(rc, 0, "a child that cannot start must not fail the phase when its files still run");
+  assertEquals(
+    ran.map((lane) => lane[0]),
+    ["tests/build-smoke.test.ts", "tests/chrome-launch-lock.test.ts"],
+    "the build lane runs here and the GLOBAL files fall back to running here too",
+  );
+  const joined = announced.join("\n");
+  assert(/GLOBAL child never started/.test(joined), `the cause must be announced, saw: ${joined}`);
+  assert(/ENOENT/.test(joined), `the announcement must carry the OS cause, saw: ${joined}`);
+  assert(/FALL BACK TO SEQUENTIAL/.test(joined), `the fallback must be named, saw: ${joined}`);
+  assert(/GLOBAL child could not start, ran sequentially/.test(joined),
+    `the summary must not claim a concurrency that never happened, saw: ${joined}`);
 });
 
 Deno.test("lanes: a failing file in the child lane is named and fails the phase", async () => {

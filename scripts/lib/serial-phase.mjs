@@ -515,7 +515,7 @@ export function serialLaneCommand({ resultPath, files, cwd = undefined, env = pr
  * `failuresOut` in SERIAL declaration order so the summary reads the same.
  *
  * @param {string[]} files
- * @param {{ timeoutMs?: number, perFileTimeoutMs?: Record<string, number> | null, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv, failuresOut?: any[], childBoundMs?: number, runLaneFiles?: (files: string[], options: any) => number, spawnLaneChild?: ((lane: any) => { pid: number, kill: () => void, exited: Promise<{ code: number | null, signal: string | null }> }) | null }} [options]
+ * @param {{ timeoutMs?: number, perFileTimeoutMs?: Record<string, number> | null, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv, failuresOut?: any[], childBoundMs?: number, runLaneFiles?: (files: string[], options: any) => number, spawnLaneChild?: ((lane: any) => { pid: number, kill: () => void, exited: Promise<{ code: number | null, signal: string | null }> }) | null, spawnChild?: typeof spawn }} [options]
  * @returns {Promise<number>}
  */
 export async function runSerialLanes(files, {
@@ -531,12 +531,18 @@ export async function runSerialLanes(files, {
   // on a loaded box, which would make the assertion about the gate cost more than the gate saves).
   runLaneFiles = runSerialFiles,
   spawnLaneChild = null,
+  // The real spawn is injectable ONLY so a test can make it fail for real (ENOENT/EAGAIN) and assert the
+  // gate survives it. Everything else about the child path is unchanged.
+  spawnChild = spawn,
 } = {}) {
   const lanes = serialLanes(files);
   const runOpts = { ...(timeoutMs === undefined ? {} : { timeoutMs }), perFileTimeoutMs, stdio, cwd, env };
   const t0 = Date.now();
   const laneFailures = { strict: [], build: [], global: [] };
   const codes = {};
+  // xaj7c: when the concurrent GLOBAL child cannot START, its files still run (here) — but the summary
+  // must not claim a concurrency that never happened.
+  let fellBackToSequential = false;
 
   if (lanes.strict.length) {
     announce(
@@ -569,30 +575,52 @@ export async function runSerialLanes(files, {
       const lane = serialLaneCommand({ resultPath, files: lanes.global, cwd, env });
       const child = spawnLaneChild
         ? spawnLaneChild({ ...lane, resultPath, files: lanes.global })
-        : spawn(lane.command, lane.args, lane.options);
+        : spawnChild(lane.command, lane.args, lane.options);
       let killed = false;
       const killer = spawnLaneChild ? null : setTimeout(() => {
         killed = true;
         try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch { /* gone */ } }
       }, bound);
+      // A child that never STARTED emits `error` and never `exit` (xaj7c). Without this listener Node
+      // treats it as an unhandled 'error' event and the whole gate dies — no lane named, no file named,
+      // no actionable cause. The listener turns it into a RESULT the lane logic can act on.
       const childExited = spawnLaneChild
         ? child.exited
-        : new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
+        : new Promise((resolve) => {
+            child.on("exit", (code, signal) => resolve({ code, signal, error: null }));
+            child.on("error", (error) => resolve({ code: null, signal: null, error }));
+          });
       // SPAWNED ABOVE, RUN BELOW: the child is already working when the build lane starts — that ordering
       // is the whole point of the lane split, and it is what the unit test pins.
       codes.build = runLaneFiles(lanes.build, { ...runOpts, failuresOut: laneFailures.build });
-      const { code, signal } = await childExited;
+      const { code, signal, error: spawnFailure } = await childExited;
       if (killer) clearTimeout(killer);
+      if (spawnFailure) {
+        fellBackToSequential = true;
+        // The GLOBAL lane never started (ENOENT for the runtime or cwd, EAGAIN under load, EACCES). The
+        // files are NOT uncertifiable by nature — the mechanism just could not start a process — so fail
+        // closed to the sequential path and RUN THEM HERE rather than reporting a green lane nobody ran
+        // (or dying with an unhandled error event, which is what xaj7c found).
+        announce(
+          `run-tests: serial lanes FALL BACK TO SEQUENTIAL — the GLOBAL child never started ` +
+            `(${spawnFailure.code ?? spawnFailure.message ?? spawnFailure}); running its ${lanes.global.length} file(s) here`,
+        );
+        codes.global = runLaneFiles(lanes.global, { ...runOpts, failuresOut: laneFailures.global });
+      }
       let reported = null;
-      try {
-        reported = JSON.parse(readFileSync(resultPath, "utf8"));
-      } catch {
-        reported = null;
+      if (!spawnFailure) {
+        try {
+          reported = JSON.parse(readFileSync(resultPath, "utf8"));
+        } catch {
+          reported = null;
+        }
       }
       if (reported && Array.isArray(reported.failures)) laneFailures.global = reported.failures;
-      codes.global = reported ? Number(reported.rc) : (code ?? 1);
-      if (killed && codes.global === 0) codes.global = 124;
-      if (!reported) {
+      if (!spawnFailure) {
+        codes.global = reported ? Number(reported.rc) : (code ?? 1);
+        if (killed && codes.global === 0) codes.global = 124;
+      }
+      if (!spawnFailure && !reported) {
         // No result file: the lane never reported, so it cannot be certified. Name it, do not guess.
         announce(
           `run-tests: serial lane GLOBAL did not report a result (exit ${code ?? "?"}${signal ? `, signal ${signal}` : ""}` +
@@ -632,7 +660,9 @@ export async function runSerialLanes(files, {
   const rc = combineLaneExitCodes([codes.strict ?? 0, codes.build ?? 0, codes.global ?? 0]);
   announce(
     `run-tests: serial lanes ${rc === 0 ? "GREEN" : rc === ENVIRONMENTAL_REFUSAL_EXIT ? "REFUSED" : "FAILED"} in ${secs}s ` +
-      `(strict ${lanes.strict.length} alone, build ${lanes.build.length} + global ${lanes.global.length} concurrent)`,
+      fellBackToSequential
+        ? `(strict ${lanes.strict.length} alone, build ${lanes.build.length} + global ${lanes.global.length} — GLOBAL child could not start, ran sequentially)`
+        : `(strict ${lanes.strict.length} alone, build ${lanes.build.length} + global ${lanes.global.length} concurrent)`,
   );
   if (Array.isArray(failuresOut)) failuresOut.push(...merged);
   return rc;
