@@ -288,6 +288,33 @@ const profileSweeps = new Map<string, Set<ProfileSweep>>();
  * quarantine this guard exists for. A merely ARMED lifeline has `settled === null` and is still never
  * awaited (the leader is alive; there is nothing to wait for).
  */
+/**
+ * How many sweeps on `treeMatch` ended WITHOUT proof that their watcher is gone (t5o2i.2, read by 4o93n (d)).
+ *
+ * An UNCONFIRMED sweep may still signal the profile when it is finally scheduled, so anything that reports
+ * this profile as clean has to consult this number first.
+ */
+function unconfirmedSweeps(treeMatch: string): number {
+  return [...(profileSweeps.get(treeMatch) ?? [])].filter((entry) => !entry.confirmed).length;
+}
+
+/**
+ * Wait for every sweep on `treeMatch` that has LEFT `armed` to settle (4o93n (d)).
+ *
+ * This is the teardown's version of the launch guard: it makes a handle-less teardown queue behind a sweep
+ * that is already running for the same profile, so the sweep's `pkill -9 -f` cannot kill the teardown's own
+ * pkill/pgrep. It only WAITS - `settled` never rejects by design - and the caller decides what an unconfirmed
+ * sweep means for its own claim. For a teardown the answer is "run the reap anyway, then refuse to call it
+ * proven", which is why this helper does not throw.
+ */
+async function awaitProfileSweepSettled(treeMatch: string): Promise<void> {
+  await Promise.resolve();
+  const pending = [...(profileSweeps.get(treeMatch) ?? [])]
+    .filter((entry) => entry.settled !== null)
+    .map((entry) => entry.settled!);
+  await Promise.all(pending);
+}
+
 export async function awaitFiredLifelineSweep(treeMatch: string): Promise<void> {
   // Give an already-resolved leader.status reaction a checkpoint to mark its
   // sweep before the new launch checks the registry. Never await a live leader.
@@ -974,13 +1001,36 @@ export async function killProcessTree(
   try {
     // `settled` is non-null from the moment a sweep (or disarm) began; it never rejects.
     if (lifeline?.settled) await lifeline.settled;
+    // 4o93n (d): a HANDLE-LESS teardown has no ChildProcess, so the per-handle serialisation above has no
+    // key and it used to run straight into an in-flight sweep for the same profile - whose `pkill -9 -f`
+    // can match this teardown's own pkill/pgrep command lines and SIGKILL them (observed as exit 137),
+    // failing the teardown. The registry is keyed by the PROFILE, so the profile is all that is needed:
+    // wait for any sweep on this profile to settle first, exactly as a same-profile launch does.
+    if (!lifeline) await awaitProfileSweepSettled(treeMatch);
     await killTreeAndVerify(proc, treeMatch, { attempts, intervalMs, group }, deps ?? {}, signal);
   } finally {
     if (lifeline) lifeline.teardowns--;
   }
   // Verified: the group is empty and nothing matches the profile. Only now is the
   // watchdog redundant (a throw above leaves it armed on purpose).
-  if (lifeline) await lifeline.disarm();
+  if (lifeline) {
+    await lifeline.disarm();
+    return;
+  }
+  // A handle-less teardown cannot DISARM anything, and the sweep it queued behind may have ended UNCONFIRMED:
+  // its watcher never exited even after SIGKILL, so the sweep may still signal this profile when it is
+  // finally scheduled. The reap above has already run - doing it is still the best effort - so what is
+  // refused here is the CLAIM. A caller that gets a resolution is entitled to read it as "the profile is
+  // clear", and that would be a false clean (chrome-agent-platform-vy15c). The refusal names the profile and
+  // the one next action, exactly like its launch twin.
+  const unconfirmed = unconfirmedSweeps(treeMatch);
+  if (unconfirmed > 0) {
+    throw new Error(
+      `teardown of profile ${JSON.stringify(clip(treeMatch, 80))} ran, but descendant cleanup is ` +
+        `UNCONFIRMED: ${unconfirmed} lifeline watcher(s) for it did not exit within their bound even after ` +
+        `SIGKILL, so a sweep may still signal this profile; verify no browser remains before reusing it`,
+    );
+  }
 }
 
 async function killTreeAndVerify(

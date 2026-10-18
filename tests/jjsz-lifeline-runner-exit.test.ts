@@ -68,7 +68,7 @@ import * as acorn from "npm:acorn";
 import { stop, transform } from "npm:esbuild@0.25.12";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { liveObservedResidue, observeDescendants, readProcIdentity } from "../scripts/security-suite-custody.mjs";
-import { attachProcessLifeline, lifelineState, processGroup, setsidSpawnSpec } from "../scripts/lib/process-tree.ts";
+import { attachProcessLifeline, killProcessTree, lifelineState, processGroup, setsidSpawnSpec } from "../scripts/lib/process-tree.ts";
 import { reapLeaderAndSettle } from "../scripts/lib/reap-leader.ts";
 
 const FIXTURE = fileURLToPath(new URL("./fixtures/jjsz-lifeline-runner.ts", import.meta.url));
@@ -261,6 +261,50 @@ Deno.test("jjsz helper: waits for the lifeline's leader-exit sweep (a held watch
     end();
     await lifelineState(leader)?.settled;
     await reapQuietly(leader);
+  }
+});
+
+Deno.test("4o93n (d): a HANDLE-LESS teardown queues behind an in-flight sweep for the same profile", async () => {
+  // The finding: `killProcessTree(null, profile)` has no Deno.ChildProcess, so the per-handle serialisation
+  // had no key and the teardown ran straight into a sweep for the same profile - whose `pkill -9 -f` matches
+  // the teardown's OWN pkill/pgrep command lines and SIGKILLs them (observed as exit 137), failing the
+  // teardown. The registry is keyed by the PROFILE, so the profile is all the teardown needs to queue.
+  const leader = spawnLeader("/bin/sleep", ["300"]);
+  const events: string[] = [];
+  const { watcher, end } = heldFakeWatcher(events);
+  const profile = `user-data-dir=${Deno.makeTempDirSync({ dir: durableDir("scratch"), prefix: "4o93n-d-" })}`;
+  const teardownSignals: string[] = [];
+  try {
+    attachProcessLifeline(leader, { group: leader.pid, treeMatch: profile }, { spawn: () => watcher, sweepTimeoutMs: 60_000 });
+    leader.kill("SIGKILL");
+    await leader.status;
+    await waitFor(() => events.includes("stdin.close"), 10_000, "the leader's exit to start the sweep");
+    assertEquals(lifelineState(leader)?.state, "fired", "the sweep is in flight and its watcher is still running");
+
+    let teardownDone = false;
+    const teardown = killProcessTree(null, profile, {
+      attempts: 1,
+      intervalMs: 1,
+      // Seam for the teardown's own pkill: recording it is how this test sees WHEN the teardown started.
+      signal: (bin, args) => {
+        teardownSignals.push([bin, ...args].join(" "));
+        return Promise.resolve({ code: 1 });
+      },
+    }).then(() => { teardownDone = true; });
+
+    await sleep(300);
+    assertEquals(teardownSignals, [], "a handle-less teardown must NOT signal while a sweep for its profile is in flight");
+    assertEquals(teardownDone, false, "and it must not report itself done either");
+
+    end(); // the sweep's watcher exits: the profile is no longer being swept
+    await within(teardown, 10_000, "the teardown to proceed once the sweep settled");
+    assertEquals(teardownDone, true, "the teardown completes after the sweep");
+    assert(teardownSignals.length > 0, "and it does run its own pkill once the sweep is out of the way");
+  } finally {
+    end();
+    await lifelineState(leader)?.settled;
+    await reapQuietly(leader);
+    try { await Deno.remove(profile.slice("user-data-dir=".length), { recursive: true }); } catch { /* gone */ }
   }
 });
 

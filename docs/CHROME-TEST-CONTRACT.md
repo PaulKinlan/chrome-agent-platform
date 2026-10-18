@@ -286,6 +286,35 @@ This is what the jjsz landing does **not** establish. None of it is a known fail
 - The inherited canonical-lock proof is "the file behind fd 9 has the lock file's device and inode, **and** `flock -n` cannot take the lock". That proves someone holds the lock, not that fd 9 itself does (macOS has no `/proc/self/fdinfo`). `flock` is resolved through `PATH`, as `scripts/security-suite-supervisor.sh` resolves the `flock` that takes the lock in the first place.
 - **That macOS branch is reached only through seam tests today.** `npm run test:security` cannot start on macOS, on `main` or on this branch: the Deno runner's `node:fs` `fstatSync(9)` on an inherited descriptor throws `EBADF` (Deno's descriptor namespace is not the OS table; Node reads the same descriptor fine), so the runner refuses with "canonical inherited lock fd is missing" before the macOS proof can run. `main`'s `/proc`-only check refuses identically. The real supervisor flow was therefore never measured on macOS, and no Linux host was available either (`chrome-agent-platform-mwj7v`). `chrome-agent-platform-8bp69` records the measured fix direction: open `/dev/fd/9` write-only and `fstat` the handle (`stat("/dev/fd/N")` is not equivalent).
 
+**Lifeline edge cases, decided (`chrome-agent-platform-4o93n`).** Three cases were found and deliberately left
+alone during jjsz. Each now has a decision rather than an open question:
+
+- **(c) A `pkill` pattern rejection is unreportable once the parent is dead.** Accepted, no change. The pattern
+  is built by `lifelineMatchPattern`, which escapes every ERE metacharacter and anchors the end, so a rejection
+  cannot come from a caller-supplied profile any more — it would need a mangled pattern between construction and
+  execution, or a `pkill`/libc that refuses the ERE. The group kill has already run by then, and the only thing
+  lost is ATTRIBUTION: the watcher exits 3 into a pipe nobody is reading. A durable receipt written from that
+  dying shell would be a new failure mode in the teardown path to report a case the escaping already prevents,
+  so the trade is recorded here instead. The positive half is pinned: a rejection that IS observed keeps the
+  lifeline ARMED rather than disarming (`tests/jjsz-lifeline-leader-exit.test.ts`, seam `signal`).
+- **(d) A handle-less teardown could not serialise with a sweep for its profile — FIXED.** The serialising state
+  hung off the `Deno.ChildProcess`, and `teardownChrome(null, profile)` has no handle, so it ran straight into an
+  in-flight sweep for the same profile; the sweep's `pkill -9 -f` matches the teardown's own `pkill`/`pgrep`
+  command lines and SIGKILLs them (exit 137), failing the teardown. `killProcessTree` now waits for every sweep
+  on that PROFILE that has left `armed` to settle before it signals anything, which is the same key the sweep
+  registry already uses. Pinned by `tests/jjsz-lifeline-runner-exit.test.ts` "4o93n (d)": with the wait removed,
+  the teardown's `pkill` fires while the sweep's watcher is still running (red), and with it the teardown starts
+  only after the sweep settles. A wait alone was not enough (review finding `vy15c`): a sweep that ends
+  **UNCONFIRMED** still let the teardown resolve, and a resolved teardown reads as "the profile is clear". The
+  reap now runs anyway - best effort is the point of a teardown - and then the call THROWS naming the profile
+  and the UNCONFIRMED verdict, so the caller never receives a clean it cannot prove. Pinned by
+  `tests/jjsz-lifeline-leader-exit.test.ts` "vy15c".
+- **(e) Another PROCESS's `pkill`/`pgrep` on the same profile can be SIGKILLed by the sweep.** Accepted, no
+  change: it fails closed (the teardown throws, the supervisor sidecar names the residue). Serialising across
+  processes needs an OS-level lock held for the sweep window and taken by every cleanup path, including the
+  third-party ones this repo does not own — a heavier mechanism than the P4 risk justifies, and one that would
+  put a lock acquisition in the path whose job is to run when a process is already dying.
+
 **Unreadable custody observations fail closed** (`chrome-agent-platform-yuu9s`): the supervisor keeps sampling after a process-table failure, but an unverified final sample (or an earlier failure while its observed set was empty) exits 70 with a named receipt reason rather than reporting a clean run. Verified residue rows keep their existing receipt shape; unverified rows carry `unverified` and `unverifiedReason`. Linux `/proc` listing and per-pid non-ENOENT read failures now reject as unreadable; only an ENOENT for a vanished process is clean. Strict per-pid checks can refuse a security run on a host whose `/proc` hides unrelated processes (`hidepid`); that is an explicit fail-closed cost, not evidence that residue is absent. Abrupt supervisor death before receipt writing remains outside this custody guarantee.
 
 **Probes that are not fully bounded** (`chrome-agent-platform-d9fyo`): custody's `ps` has a 5 s timeout but runs under the inherited environment; the `flock` probe has no timeout; the quiet-window sampler's `ps` has its environment pinned but no timeout.
