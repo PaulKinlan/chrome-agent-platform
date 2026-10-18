@@ -4,7 +4,7 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import {
   acceptEmscriptenOutputFrame, createEmscriptenFrameAcks, EMSCRIPTEN_OUTPUT_ACK_TYPE,
-  EMSCRIPTEN_OUTPUT_FRAME_TYPE, postEmscriptenOutputFrames,
+  EMSCRIPTEN_OUTPUT_FRAME_TYPE, EMSCRIPTEN_OUTPUT_END_TYPE, postEmscriptenOutputFrames,
 } from "../extension/lib/emscripten-worker-frames.js";
 
 const ID = { sessionId: "s1", packageId: "p1", operationId: "o1", workerInstanceId: "w1" };
@@ -115,6 +115,7 @@ Deno.test("3mcu1: actual module Worker transfers frames and returns no binary re
   const adapterUrl = "data:text/javascript," + encodeURIComponent(
     "export function createBlake3Adapter() { return { hash: () => new Uint8Array(65539).fill(23) }; }");
   const frames = [];
+  let producerEnd = null;
   const hostIdentity = { sessionId: "session", packageId: "pkg", operationId: "hash", workerInstanceId: null };
   let pushedBytes = 0;
   const hostChannel = { push: async ({ chunk }) => { pushedBytes += chunk.byteLength; },
@@ -129,6 +130,8 @@ Deno.test("3mcu1: actual module Worker transfers frames and returns no binary re
             frames.push(data);
             acceptEmscriptenOutputFrame(data, hostIdentity, hostChannel,
               (ack) => worker.postMessage(ack)).catch(reject);
+          } else if (data.type === EMSCRIPTEN_OUTPUT_END_TYPE) {
+            producerEnd = data;
           } else resolve(data);
         };
         worker.postMessage({
@@ -145,6 +148,10 @@ Deno.test("3mcu1: actual module Worker transfers frames and returns no binary re
     assertEquals(frames.map((frame) => frame.chunk.byteLength), [65536, 3]);
     assertEquals(frames.map((frame) => frame.seq), [0, 1]);
     assertEquals(pushedBytes, 65539, "terminal follows all acknowledged host writes");
+    assertEquals(producerEnd?.frames, 2);
+    assertEquals(producerEnd?.bytes, 65539);
+    assertEquals(producerEnd?.workerInstanceId, terminal.workerInstanceId);
+    assertEquals(producerEnd?.sha256?.length, 64);
     assertEquals(hostIdentity.workerInstanceId, terminal.workerInstanceId);
     assert(frames.every((frame) => frame.chunk.every((byte) => byte === 23)));
   } finally { clearTimeout(timer); worker.terminate(); }

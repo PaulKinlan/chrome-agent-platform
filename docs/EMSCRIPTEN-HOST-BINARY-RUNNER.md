@@ -7,7 +7,12 @@ reject byte-bearing native requests before constructor/native execution. This
 prepares the lifecycle path for x9r8k; it is not a release gate or bypass.
 
 The future trusted caller must supply a SW-issued exact ref/generation identity,
-hash-verified asset job and bounded lifecycle. The runner accepts only a scalar
+hash-verified asset job and bounded lifecycle. After every ACKed frame, the
+CAP-authored Worker posts one exact producer-end declaration with frame count,
+byte count and SHA-256 before its scalar terminal result. The host compares it
+against accepted frames and independently re-read committed bytes; a missing,
+duplicate, out-of-order or mismatched declaration yields UNKNOWN, not CLOSED.
+Producer-end is a stream assertion, **not** literal Worker termination. The runner accepts only a scalar
 SemVer version and exact scalar args/operation; a verified wasm subarray is
 copied to an exact-length transfer buffer so unverified sibling bytes never
 cross to the Worker. Before Worker construction, the
