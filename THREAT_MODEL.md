@@ -300,7 +300,17 @@ consequences are carried by the matching register entry where one exists.
   SSRF into private or metadata addresses. Direct GitHub raw links (`github.com/<owner>/<repo>/raw/...`) are
   pre-normalized to `raw.githubusercontent.com` to prevent browser redirect failures. Discovery paths validate
   repository trees, marketplace files (`.claude-plugin/marketplace.json`), and command/skill download URLs
-  through the same predicate. **Tests:** `tests/cap-fetch-deny.test.ts`, `tests/skill-import-ssrf.test.ts`; live SSRF
+  through the same predicate. The site-docs fallback's own fetch
+  (`extension/lib/site-docs-fallback.js#fetchText`) is pinned to the ENROLLED origin instead of the
+  private-host predicate, and holds the same redirect rule (15zzc): `redirect: "manual"`, an
+  `opaqueredirect` refused fail-closed, and every inspectable `Location` hop origin-checked BEFORE its
+  request with the same bounded hop count (`MAX_REDIRECT_HOPS = 5`) — a hostile enrolled origin cannot 302
+  the extension at loopback/metadata hosts, and the request to such a target is never issued. Because a
+  browser service worker cannot read `Location` on a manual redirect, no redirect at all is followed
+  inside the extension: the affected page is skipped and the honest "N of M pages" window reports it.
+  **Tests:** `tests/cap-fetch-deny.test.ts`, `tests/skill-import-ssrf.test.ts`, and the real-loopback-server
+  proof in `tests/site-docs-fallback.test.ts` ("15zzc: an enrolled origin whose docs 302 to another host never
+  causes a request to that host"); live SSRF
   probe at `scripts/security-suite.ts:389`. **Residual, stated in the source:** DNS-to-private/rebinding of a public hostname
   remains out of scope without a resolving DNS-pinning proxy (`extension/lib/fetch-policy.js:21`); unlike sandboxed script
   runs (`checkFetchPolicy`), skill-import fetches do not enforce an approved-host allowlist because the owner directly supplies

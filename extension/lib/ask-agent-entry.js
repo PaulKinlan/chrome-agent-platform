@@ -23,6 +23,7 @@
 // takes the API object as an argument so a fake chrome can drive it in tests.
 
 import { textToDataUrl } from "./attachments.js";
+import { checkFetchTarget } from "./fetch-policy.js";
 
 export const ASK_AGENT_MENU_PARENT_ID = "cap-ask-agent";
 export const ASK_AGENT_MENU_PARENT_TITLE = "Agent";
@@ -293,6 +294,57 @@ export function askAgentPrefillFromClick(info, tab, { now = Date.now() } = {}) {
 
 // ── image bytes (bounded) ──────────────────────────────────────────────────
 
+/** Bounded hop count for the image fetch's own redirect resolution. Same value
+ * as lib/skill-import.js#MAX_REDIRECT_HOPS so the two external-URL paths agree. */
+export const ASK_AGENT_IMAGE_MAX_REDIRECT_HOPS = 5;
+
+/** Fetch a page-chosen image URL while refusing anything the page should not be
+ * able to reach: each hop is checked with `checkFetchTarget` (a private or
+ * loopback target is refused BEFORE its request) and the platform is asked not
+ * to follow redirects at all (`redirect: "manual"`), so a 302 cannot smuggle
+ * the extension into a private host. Mirrors lib/skill-import.js
+ * #fetchWithSafeRedirects: an uninspectable `opaqueredirect` (a browser service
+ * worker exposes no Location) is refused rather than guessed at.
+ * A `data:` URL never leaves the browser, so it is fetched as-is (no egress).
+ * Returns { ok:true, res } or { ok:false, reason }. */
+async function fetchPageChosenImage(fetchImpl, srcUrl, init) {
+  const raw = String(srcUrl ?? "");
+  if (/^data:/i.test(raw)) {
+    try {
+      return { ok: true, res: await fetchImpl(raw, init) };
+    } catch (e) {
+      return { ok: false, reason: String(e?.message ?? e) };
+    }
+  }
+  let current = raw;
+  for (let hop = 0; hop <= ASK_AGENT_IMAGE_MAX_REDIRECT_HOPS; hop++) {
+    const target = checkFetchTarget(current);
+    if (!target.ok) return { ok: false, reason: `image URL refused: ${target.error}` };
+    const res = await fetchImpl(target.url.href, { ...init, redirect: "manual" });
+    if (res?.type === "opaqueredirect") {
+      return { ok: false, reason: `image URL refused: ${current} redirected to an uninspectable destination` };
+    }
+    const status = Number(res?.status ?? 0);
+    if (status >= 300 && status < 400) {
+      const location = res.headers?.get?.("location") ?? res.headers?.get?.("Location");
+      if (!location) return { ok: false, reason: `image URL refused: ${status} redirect without an inspectable Location` };
+      if (hop === ASK_AGENT_IMAGE_MAX_REDIRECT_HOPS) {
+        return { ok: false, reason: `image URL refused: more than ${ASK_AGENT_IMAGE_MAX_REDIRECT_HOPS} redirects` };
+      }
+      let next;
+      try {
+        next = new URL(String(location), target.url.href);
+      } catch {
+        return { ok: false, reason: "image URL refused: invalid redirect target" };
+      }
+      current = next.href;
+      continue;
+    }
+    return { ok: true, res };
+  }
+  return { ok: false, reason: `image URL refused: more than ${ASK_AGENT_IMAGE_MAX_REDIRECT_HOPS} redirects` };
+}
+
 function bytesToBase64(bytes) {
   let binary = "";
   for (let i = 0; i < bytes.length; i += 0x8000) {
@@ -304,12 +356,21 @@ function bytesToBase64(bytes) {
 /** Fill `attachment.dataURL` from `srcUrl` so the image reaches the model as a
  * vision part (lib/attachments.js buildMultimodalTask). Bounded by content
  * type and size; any failure leaves the attachment as a URL reference and
- * returns the reason — the click still lands, just without pixels. */
+ * returns the reason — the click still lands, just without pixels.
+ *
+ * `srcUrl` is PAGE-CHOSEN (a right-clicked <img src>) and the fetch runs with
+ * the extension's authority, so it is treated as untrusted input
+ * (chrome-agent-platform-o4e3w): no private/loopback/metadata host — the same
+ * predicate every host-bridged fetch shares — and no redirect the platform
+ * takes on our behalf. A page can no longer point the extension at a private
+ * host, directly or through a 302. */
 export async function hydrateAskAgentImage(attachment, { fetchImpl = globalThis.fetch, maxBytes = ASK_AGENT_IMAGE_MAX_BYTES } = {}) {
   if (!attachment || attachment.kind !== "image" || !attachment.srcUrl) return { ok: false, reason: "not an image attachment" };
   if (typeof fetchImpl !== "function") return { ok: false, reason: "fetch unavailable" };
   try {
-    const res = await fetchImpl(attachment.srcUrl, { credentials: "omit", redirect: "follow" });
+    const fetched = await fetchPageChosenImage(fetchImpl, attachment.srcUrl, { credentials: "omit" });
+    if (!fetched.ok) return { ok: false, reason: fetched.reason };
+    const res = fetched.res;
     if (!res?.ok) return { ok: false, reason: `image fetch failed (${res?.status ?? "no response"})` };
     const type = String(res.headers?.get?.("content-type") ?? "").split(";", 1)[0].trim().toLowerCase();
     if (!type.startsWith("image/")) return { ok: false, reason: `not an image (${type || "unknown type"})` };

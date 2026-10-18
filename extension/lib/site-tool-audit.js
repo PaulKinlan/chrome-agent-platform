@@ -156,6 +156,22 @@ function hashCanonicalArguments(root) {
   return hash.hex();
 }
 
+/** The terminal audit row's outcome+reason for one site-tool INVOCATION
+ * (chrome-agent-platform-0jniu).
+ *
+ * `outcome` states what the PAGE's tool did — not what the agent ended up
+ * answering from. A tool that threw and was rescued by the site-docs fallback is
+ * a FAILED invocation (reason "docs-fallback"): the owner reading the audit must
+ * be able to tell "the page's tool worked" from "the page's tool failed and the
+ * answer came out of the site's docs". The recovered answer still reaches the
+ * model; only the audit's verdict stays honest. */
+export function siteToolInvocationAuditOutcome(finalRes) {
+  if (finalRes?.authorityRevoked === true) return { outcome: "revoked", reason: "authority-changed" };
+  if (finalRes?.docsFallback) return { outcome: "failed", reason: "docs-fallback" };
+  if (finalRes?.error || finalRes?.ok === false) return { outcome: "failed", reason: "page-error" };
+  return { outcome: "succeeded", reason: "page-result" };
+}
+
 /** Stable incremental SHA-256 only; raw argument values never enter the audit row. */
 export function digestSiteToolArguments(args) {
   try {
