@@ -225,3 +225,34 @@ Deno.test("run_script and create_script are model-callable again and declare the
   await toolset.run_script.execute({ id: "s_1", origin: "master" });
   assertEquals(calls[1].type, "script.run");
 });
+
+// CAP-FB-20260823-PYODIDE-PYTHON-01: python_execute was wired into the
+// management toolset and then LOST in a multi-lane merge (bead 9h4u), so it is
+// pinned by name, schema and route here. Salvaged from cap-beads-brv and
+// cap-beads-9h4u, whose tests never landed with the wiring.
+Deno.test("python_execute is in the toolset, validates {code, stdin?}, and routes python.execute", async () => {
+  assert(MANAGEMENT_TOOL_NAMES.includes("python_execute"), "python_execute is in MANAGEMENT_TOOL_NAMES");
+  const { toolset, calls } = makeTools();
+  assert("python_execute" in toolset, "python_execute is callable");
+  assert(/Pyodide/.test(String(toolset.python_execute.description)), "the description names the Pyodide runtime");
+
+  const valid = toolset.python_execute.inputSchema.parse({ code: "print('hello')" });
+  assertEquals(valid.code, "print('hello')");
+  assertEquals(valid.stdin, undefined, "stdin is optional");
+  const withStdin = toolset.python_execute.inputSchema.parse({ code: "import sys; print(sys.stdin.read())", stdin: "input-data" });
+  assertEquals(withStdin.stdin, "input-data");
+  // min(1): an empty program is not a run.
+  let emptyRejected = false;
+  try {
+    toolset.python_execute.inputSchema.parse({ code: "" });
+  } catch {
+    emptyRejected = true;
+  }
+  assert(emptyRejected, "empty code is rejected by the schema");
+
+  await toolset.python_execute.execute({ code: "print('test')", stdin: "input" });
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].type, "python.execute");
+  assertEquals(calls[0].args.code, "print('test')");
+  assertEquals(calls[0].args.stdin, "input");
+});
