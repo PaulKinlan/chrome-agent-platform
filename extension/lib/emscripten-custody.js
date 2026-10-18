@@ -49,14 +49,14 @@ export async function allocateEmscriptenJobStreams(options = {}) {
   if (!options || typeof options !== "object" || Object.hasOwn(options, "owner")) {
     fail("emscripten_custody_invalid_identity");
   }
-  const { runId, agentId, inputRef, storage } = options;
+  const { runId, agentId, inputRef, storage, beforeCreate } = options;
   const owner = emscriptenJobOwner({ runId, agentId });
   const input = validateWasmStreamRef(inputRef, { kinds: ["input"] });
   const openedInput = await openWasmStreamHandles({ ref: input, owner, storage });
   const inputFile = await openedInput.inputFile.getFile();
   let outputRef;
   try {
-    outputRef = await createWasmStreamOutput({ owner, storage });
+    outputRef = await createWasmStreamOutput({ owner, storage, beforeCreate });
     const { stdoutFile, stderrFile } = await openWasmStreamHandles({
       ref: outputRef, owner, allowUnsealedOutput: true, storage,
     });

@@ -149,6 +149,28 @@ the browser's native OPFS quota is the sole ceiling. Per-execution isolation pre
 retained authority for unrelated runs from crowding owner memory
 (`extension/lib/durable-runs.js`; `extension/lib/memory.js`).
 
+### Emscripten custody audit preparation (ltkj.4.4)
+
+`extension/lib/emscripten-custody-audit.js` is a **retained, unwired** contract, not
+an enabled binary tool. Its SW-only adapter uses `durableRuns.appendLog` (awaited
+until its WAL row is on disk) and `listLogs` to require an exact idempotency-keyed
+`emscripten-custody-intent` row. The stream creator's `beforeCreate` hook receives
+the random output ref before it opens the shared OPFS stream root. Failed append,
+replayed identity mismatch, or liveness loss refuses directory creation; input
+remains sealed and unchanged. A separate `emscripten-custody-terminal` row is
+written only after a trusted callback confirms termination and handle closure,
+an independent bounded-window output rehash succeeds, and the run is still live.
+The callback must derive these facts from service-worker authority, never worker
+self-report. An absent/compacted intent is a refusal, **not** cleanup permission.
+
+These run-log rows can be compacted under the retention policy above, so they
+are **not** a permanent deletion ledger or negative publication proof. No
+Emscripten output can be published through this module. The binary broker guard
+and offscreen host refusal remain enabled. A separate nonpromotable staging root,
+independent durable creation/terminal proof, post-termination seal recheck and
+serialized artifact copy are still required before ltkj.4 or 9a1wj can claim
+publication, corrupt-metadata cleanup, or loaded-browser acceptance.
+
 The registry caches every record it reads or writes for the worker's lifetime:
 it is the single writer of `run:` keys, every mutation through its store drops
 the cached entry, and a service-worker restart starts cold. That is what made

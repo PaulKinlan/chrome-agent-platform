@@ -78,7 +78,9 @@ export const RETAINED = {
   // (lib/bundled-inventory.js was RETAINED here; ltkj.2 reachable now via lib/wasm-package-admission.js)
   // ── surfaces or modules another OPEN entry owns ──
   "lib/emscripten-custody.js":
-    "ltkj.4.3 is an isolated, tested sealed-stream primitive; ltkj.4 must wire durable intent, binary worker transport, independently checked publication and restart cleanup before this module becomes reachable from a product entry.",
+    "ltkj.4.3 is isolated stream custody with ltkj.4.4's pre-create hook; binary transport, independently checked publication and restart cleanup remain unwired until ltkj.4 acceptance.",
+  "lib/emscripten-custody-audit.js":
+    "ltkj.4.4 prepares an SW-supplied append/fence contract before stream creation and after worker termination; it is not wired to the model/offscreen path or permitted to publish artifacts.",
   "lib/archive-target-registry.js":
     "CAP-FB-20260905-UNBOUNDED-DATA-ARCHIVE-01 (11rm / qcuf): classification authority for durable targets. Its sanitizer family stayed tests-only; 8wbb shipped the agentConfig authority separately (lib/logical-site-agent-config.js) — this module ships when the 11rm streaming converter lands.",
   "lib/tabular-diff-artifacts.js":

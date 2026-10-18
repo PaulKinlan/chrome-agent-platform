@@ -2,6 +2,7 @@
 // @ts-nocheck
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import * as custody from "../extension/lib/emscripten-custody.js";
+import * as audited from "../extension/lib/emscripten-custody-audit.js";
 import {
   listWasmStreamEntries,
   stageWasmStreamInputChunks,
@@ -207,6 +208,97 @@ Deno.test("ltkj.4.3: foreign or unsealed output cannot be verified or discarded 
   await expectCode(custody.verifyEmscriptenOutputSeal({ runId: OTHER_RUN, agentId: "named:alice", outputRef: alice.outputRef, storage }), "wasm_stream_authority");
   await expectCode(custody.discardEmscriptenJobOutput({ runId: RUN, agentId: "named:bob", outputRef: alice.outputRef, storage }), "wasm_stream_authority");
   assertEquals((await listWasmStreamEntries({ storage })).length, 2, "failed foreign calls leave original input and output intact");
+});
+
+Deno.test("ltkj.4.4: durable intent precedes output-directory creation and append refusal preserves input", async () => {
+  const { storage, root } = memoryStorage();
+  const inputRef = await stageWasmStreamInputChunks({ owner: owner(), chunks: [new TextEncoder().encode("original")], storage });
+  const events = [];
+  const auditedStorage = { async getDirectory() {
+    events.push("directory-open");
+    return root;
+  } };
+  await expectCode(audited.allocateAuditedEmscriptenJobStreams({
+    runId: RUN, agentId: "hub", inputRef, storage: auditedStorage,
+    isLive: () => true,
+    append: () => { events.push("intent-append-failed"); throw new Error("disk full"); },
+  }), "emscripten_custody_audit_unavailable");
+  assertEquals(events.slice(-1), ["intent-append-failed"], "no directory open after rejected intent");
+  assertEquals((await listWasmStreamEntries({ storage })).map((entry) => entry.id), [inputRef.id]);
+  const rows = new Map();
+  const job = await audited.allocateAuditedEmscriptenJobStreams({
+    runId: RUN, agentId: "hub", inputRef, storage, isLive: () => true,
+    append: async (_run, row, key) => { rows.set(key, row); return row; },
+  });
+  const intent = rows.get(`emscripten-intent:${RUN}:${job.outputRef.id}`);
+  assertEquals(intent.outputRef, job.outputRef);
+  assertEquals(intent.owner, owner());
+  assertEquals(intent.nonpromotable, true);
+  assertEquals(Object.keys(job.handles).sort(), ["inputFile", "stderrFile", "stdoutFile"]);
+});
+
+Deno.test("ltkj.4.4: terminal audit requires matching durable intent, stopped worker and live SW run", async () => {
+  const { storage } = memoryStorage();
+  const inputRef = await stageWasmStreamInputChunks({ owner: owner(), chunks: [new TextEncoder().encode("original")], storage });
+  const rows = new Map();
+  const append = async (_run, row, key) => { rows.set(key, row); return row; };
+  const job = await audited.allocateAuditedEmscriptenJobStreams({
+    runId: RUN, agentId: "hub", inputRef, storage, isLive: () => true, append,
+  });
+  const bytes = new TextEncoder().encode("output");
+  const writer = await job.handles.stdoutFile.createWritable();
+  await writer.write(bytes); await writer.close();
+  await custody.sealEmscriptenOutput({ runId: RUN, agentId: "hub", outputRef: job.outputRef,
+    bytes: bytes.length, sha256: await digest(bytes), provenance, storage });
+  const args = { runId: RUN, agentId: "hub", inputRef, outputRef: job.outputRef, storage, append,
+    readIntent: async (_run, key) => rows.get(key), isLive: () => true, isTerminated: () => true };
+  await expectCode(audited.recordEmscriptenTerminalAudit({ ...args, isTerminated: () => false }), "emscripten_worker_not_fenced");
+  await expectCode(audited.recordEmscriptenTerminalAudit({ ...args, isLive: () => false }), "emscripten_run_not_live");
+  await expectCode(audited.recordEmscriptenTerminalAudit({ ...args, readIntent: async () => null }), "emscripten_custody_audit_mismatch");
+  await expectCode(audited.recordEmscriptenTerminalAudit({ ...args, readIntent: async () => ({ ...rows.values().next().value, agentId: "foreign" }) }), "emscripten_custody_audit_mismatch");
+  assertEquals([...rows.keys()].filter((key) => key.includes("terminal")).length, 0);
+  const terminal = await audited.recordEmscriptenTerminalAudit(args);
+  assertEquals(terminal, { ok: true, audited: true, bytes: bytes.length, sha256: await digest(bytes) });
+  assertEquals(rows.get(`emscripten-terminal:${RUN}:${job.outputRef.id}`).workerTerminated, true);
+  await expectCode(audited.discardFencedEmscriptenOutput({ ...args, isTerminated: () => false }), "emscripten_worker_not_fenced");
+  assertEquals((await listWasmStreamEntries({ storage })).length, 2);
+});
+
+Deno.test("ltkj.4.4: SW registry adapter refuses absent/compacted intent and checks persisted replay", async () => {
+  const rows = [];
+  const registry = {
+    async appendLog(runId, row, idempotencyKey) {
+      const existing = rows.find((item) => item.idempotencyKey === idempotencyKey);
+      if (existing) return existing;
+      const saved = { ...row, executionId: runId, idempotencyKey };
+      rows.push(saved); return saved;
+    },
+    async listLogs() { return rows.slice(); },
+  };
+  const authority = audited.emscriptenRunAuditAuthority({ registry, isLive: () => true, isTerminated: () => true });
+  const row = { type: "emscripten-custody-intent", runId: RUN, agentId: "hub" };
+  const key = `emscripten-intent:${RUN}:abcd`;
+  await authority.append(RUN, row, key);
+  assertEquals((await authority.readIntent(RUN, key)).agentId, "hub");
+  const replay = await authority.append(RUN, { ...row, agentId: "foreign" }, key);
+  assertEquals(replay.agentId, "hub", "caller must reject a mismatched persisted replay");
+  rows.length = 0;
+  assertEquals(await authority.readIntent(RUN, key), null, "a compacted intent cannot be inferred");
+  await expectCode(Promise.resolve().then(() => audited.emscriptenRunAuditAuthority({ registry: null, isLive: () => true, isTerminated: () => true })),
+    "emscripten_custody_audit_unavailable");
+});
+
+Deno.test("ltkj.4.4: intent replay mismatch and post-append cancellation never create output", async () => {
+  const { storage } = memoryStorage();
+  const inputRef = await stageWasmStreamInputChunks({ owner: owner(), chunks: [new TextEncoder().encode("original")], storage });
+  await expectCode(audited.allocateAuditedEmscriptenJobStreams({ runId: RUN, agentId: "hub", inputRef, storage,
+    isLive: () => true, append: (_run, row) => ({ ...row, agentId: "other" }),
+  }), "emscripten_custody_audit_mismatch");
+  let checks = 0;
+  await expectCode(audited.allocateAuditedEmscriptenJobStreams({ runId: RUN, agentId: "hub", inputRef, storage,
+    isLive: () => ++checks < 3, append: (_run, row) => row,
+  }), "emscripten_run_not_live");
+  assertEquals((await listWasmStreamEntries({ storage })).map((entry) => entry.id), [inputRef.id]);
 });
 
 Deno.test("ltkj.4.3: custody has no publication path and cannot bypass binary refusal", async () => {

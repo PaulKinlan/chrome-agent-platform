@@ -235,8 +235,15 @@ export async function openWasmStreamHandles({ ref, owner, allowUnsealedOutput = 
   });
 }
 
-export async function createWasmStreamOutput({ owner, storage } = {}) {
+export async function createWasmStreamOutput({ owner, storage, beforeCreate } = {}) {
   const id = newWasmStreamId();
+  const validatedOwner = validateOwner(owner);
+  // A trusted caller may durably bind this exact random id before ANY directory
+  // creation. Refusal leaves no output bytes behind; no retry uses the same id.
+  if (beforeCreate !== undefined) {
+    if (typeof beforeCreate !== "function") fail("wasm_stream_before_create");
+    await beforeCreate(Object.freeze({ version: 1, id, kind: "stdout" }));
+  }
   try {
     const directory = await streamDirectory(id, { create: true, storage });
     await directory.getFileHandle(FILES.stdout, { create: true });
@@ -246,7 +253,7 @@ export async function createWasmStreamOutput({ owner, storage } = {}) {
       version: 1,
       id,
       type: "output",
-      owner: validateOwner(owner),
+      owner: validatedOwner,
       sealed: false,
       bytes: 0,
       createdAt: Date.now(),
