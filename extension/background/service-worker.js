@@ -2335,7 +2335,9 @@ Object.defineProperty(globalThis, Symbol.for("cap.emscripten.stage-only"), {
       workerRun: runControl.get(runId),
     }),
   }),
-  writable: false, enumerable: false, configurable: false,
+  // Repeated trusted imports in one realm must rebind their fresh run-control;
+  // extension pages cannot access this SW-global property.
+  writable: false, enumerable: false, configurable: true,
 });
 const executionApprovals = createExecutionApprovalStore(64);
 let siteToolProfileEpoch = 0;

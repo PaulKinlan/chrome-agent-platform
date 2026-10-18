@@ -2,8 +2,8 @@
 // @ts-nocheck
 import { assertEquals } from "jsr:@std/assert@1";
 import { EMSCRIPTEN_HOST_STAGE_TYPE } from "../extension/lib/emscripten-stage-protocol.js";
-import { executeStagedEmscriptenBinaryRequest,
-  registerEmscriptenBinaryStagingHost } from "../extension/lib/emscripten-host-stage.js";
+import { executeStagedEmscriptenBinaryRequest } from "../extension/lib/emscripten-host-stage.js";
+import { registerEmscriptenBinaryStagingHost } from "../extension/lib/emscripten-host-stage-route.js";
 import { SERVICE_WORKER_BUNDLE_PATH } from "../extension/lib/pure.js";
 import { emscriptenJobOwner } from "../extension/lib/emscripten-custody.js";
 
@@ -55,7 +55,13 @@ function runtimeFixture() {
 Deno.test("x9r8k.2: only SW sender may reach staging host executor", async () => {
   const { runtime, listeners } = runtimeFixture();
   let calls = 0;
-  registerEmscriptenBinaryStagingHost({ runtime, execute: async () => { calls++; return { ok: false, phase: "unknown", error: "emscripten_worker_termination_unproved", hostProof: PROOF }; } });
+  let loads = 0;
+  registerEmscriptenBinaryStagingHost({ runtime, load: async () => {
+    loads++;
+    return { executeStagedEmscriptenBinaryRequest: async () => {
+      calls++; return { ok: false, phase: "unknown", error: "emscripten_worker_termination_unproved", hostProof: PROOF };
+    } };
+  } });
   assertEquals(listeners.length, 1);
   for (const sender of [
     { id: runtime.id, url: "chrome-extension://extension-id/options.html", documentId: "tab" },
@@ -67,11 +73,13 @@ Deno.test("x9r8k.2: only SW sender may reach staging host executor", async () =>
     assertEquals(result, { ok: false, phase: "unknown", error: "emscripten_stage_sender" });
   }
   assertEquals(calls, 0);
+  assertEquals(loads, 0, "foreign message must not even load executable staging code");
   let response;
   assertEquals(listeners[0](request(), { id: runtime.id, url: runtime.getURL(SERVICE_WORKER_BUNDLE_PATH) },
     (value) => { response = value; }), true);
   await new Promise((resolve) => setTimeout(resolve, 0));
   assertEquals(calls, 1);
+  assertEquals(loads, 1);
   assertEquals(response.hostProof, PROOF);
 });
 

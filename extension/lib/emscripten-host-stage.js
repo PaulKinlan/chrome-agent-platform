@@ -3,7 +3,7 @@ import { emscriptenJobOwner } from "./emscripten-custody.js";
 
 import { runAuditedHostBinaryJob } from "./emscripten-host-binary-runner.js";
 import { EMSCRIPTEN_HOST_STAGE_TYPE } from "./emscripten-stage-protocol.js";
-import { isTrustedServiceWorkerSender, sha256HexBytes } from "./pure.js";
+import { sha256HexBytes } from "./pure.js";
 import { validateSealedWasmStream, validateWasmStreamRef } from "./wasm-stream-files.js";
 
 const REQUEST_KEYS = ["type", "identity", "inputRef", "packageId", "version", "graphDigest",
@@ -121,20 +121,4 @@ export async function executeStagedEmscriptenBinaryRequest(raw, {
   } finally {
     if (claimed) activePackages.delete(raw.packageId);
   }
-}
-
-export function registerEmscriptenBinaryStagingHost(deps = {}) {
-  const runtime = deps.runtime ?? globalThis.chrome?.runtime;
-  if (!runtime?.onMessage) return;
-  runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type !== EMSCRIPTEN_HOST_STAGE_TYPE) return undefined;
-    if (!isTrustedServiceWorkerSender(sender, runtime)) {
-      sendResponse(unknown("emscripten_stage_sender"));
-      return false;
-    }
-    const execute = deps.execute ?? executeStagedEmscriptenBinaryRequest;
-    execute(message, { ...deps, runtime })
-      .then(sendResponse).catch(() => sendResponse(unknown("emscripten_stage_host_unavailable")));
-    return true;
-  });
 }

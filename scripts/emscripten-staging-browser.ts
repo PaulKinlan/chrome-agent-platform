@@ -5,10 +5,12 @@
 // The product staging function, host/Worker protocol and OPFS run unchanged.
 import { cp, readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
-const source = new URL("../extension/", import.meta.url).pathname;
-const scratch = await Deno.makeTempDir({ prefix: "cap-stage-browser-" });
+const source = fileURLToPath(new URL("../extension/", import.meta.url));
+const scratch = durableDir("emscripten-staging-browser", crypto.randomUUID());
 const ext = join(scratch, "extension");
 const profile = join(scratch, "profile");
 let browser: Awaited<ReturnType<typeof launchChrome>> | undefined;
@@ -68,9 +70,9 @@ try {
   text = text.slice(0, readStart) +
     'readPackages:async()=>globalThis[Symbol.for("cap.emscripten.fixture-packages")]()' +
     text.slice(readEnd);
-  const end = text.indexOf("configurable:!1});", at);
-  assert(end > at && end - at < 800, "fixture may only follow the private staging capability");
-  const insertion = end + "configurable:!1});".length;
+  const closing = text.slice(at, at + 800).match(/configurable:![01]\}\);/u);
+  assert(closing?.index !== undefined, "fixture may only follow the private staging capability");
+  const insertion = at + closing.index + closing[0].length;
   const register = `globalThis[Symbol.for("cap.emscripten.fixture-run")]=(id)=>{${match[1]}.add(id);return ${match[2]}.register({executionId:id,threadId:null,surface:null,kind:"task"})};`;
   text = text.slice(0, insertion) + register + text.slice(insertion);
   await writeFile(bundle, text);

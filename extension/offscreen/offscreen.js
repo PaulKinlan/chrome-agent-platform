@@ -12,7 +12,7 @@ import { WasmExecutor } from "../lib/wasm-executor.js";
 import { registerWasmStreamHost } from "../lib/wasm-stream-host.js";
 import { registerCallexportHost } from "../lib/wasm-callexport-host.js";
 import { registerEmscriptenHost } from "../lib/emscripten-host.js";
-import { registerEmscriptenBinaryStagingHost } from "../lib/emscripten-host-stage.js";
+import { registerEmscriptenBinaryStagingHost } from "../lib/emscripten-host-stage-route.js";
 import { registerWasmJobHost } from "../lib/wasm-job-host.js";
 import { registerAgentWorkerHost } from "../lib/agent-worker-host.js";
 import { registerPythonHost } from "../lib/python-host.js";

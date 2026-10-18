@@ -52,7 +52,7 @@ Component map, with the file that owns each surface:
 | Service worker (the privileged broker) | `extension/background/service-worker.js#chrome.runtime.onMessage.addListener` | the ONE central dispatcher listener; 299 registered routes |
 | Route modules | `extension/background/routes/` | dispatched through `mergeRouteMaps` (census §2) |
 | New-tab hub / Settings / side panel | `extension/ntp/`, `extension/options/`, `extension/sidepanel/` | extension documents; principal `extension` / `owner-options` |
-| Offscreen document | `extension/offscreen/offscreen.js` | single runtime host: 11 `register*Host()` calls (ACP model, agent worker, Python, Wasm stream, call-export, Emscripten, WASI job, table worker, owner-uploaded Wasm, SVG rasterise, on-device text), plus the script-sandbox and clipboard listeners; reclaim can interrupt in-flight work across those lanes (R12) |
+| Offscreen document | `extension/offscreen/offscreen.js` | single runtime host: 12 `register*Host()` calls (ACP model, agent worker, Python, Wasm stream, call-export, Emscripten scalar, Emscripten staging, WASI job, table worker, owner-uploaded Wasm, SVG rasterise, on-device text), plus the script-sandbox and clipboard listeners; reclaim can interrupt in-flight work across those lanes (R12) |
 | Sandboxed pages (opaque origin) | `extension/manifest.json:108-113` | `sandbox/script-sandbox.html`, `sandbox/artifact-preview.html` |
 | Content scripts | `extension/manifest.json:127-152` | MAIN-world detector + ISOLATED-world relay |
 | OPFS memory | `extension/lib/memory.js` | ONE OPFS root, origin-keyed by path (`canonicalOrigin` at `extension/lib/memory.js:308`) |
@@ -62,7 +62,7 @@ Component map, with the file that owns each surface:
 | ACP bridge (host-side) | `scripts/acp-bridge.ts:52`, `:785` | loopback WebSocket in front of a shell-capable harness |
 
 **Offscreen host inventory (authority for register R12; `origin/main@28c7189d`).**
-The single `extension/offscreen/offscreen.js` document registers these **11**
+The single `extension/offscreen/offscreen.js` document registers these **12**
 `register*Host()` calls, plus two listeners. “SW-only” means the receiver
 checks a browser-attested service-worker sender, not just the extension ID;
 this does **not** make tool inputs, package bytes, SVG or model output trusted.
@@ -77,6 +77,7 @@ The ACP host uses `onConnect` and its own sender predicate; other listeners use
 | `registerWasmStreamHost` | Bundled Wasm stream jobs with OPFS stdin/stdout | SW-only sender (`extension/lib/wasm-stream-host.js:225-232`); packaged asset/authority checks |
 | `registerCallexportHost` | Zero-import Wasm call-export compute jobs | SW-only sender (`extension/lib/wasm-callexport-host.js:253-259`); package authority |
 | `registerEmscriptenHost` | Admitted schema-2 Emscripten glue and Wasm in a fresh worker | SW-only sender (`extension/lib/emscripten-host.js:293-300`); exact job keys and asset hashes |
+| `registerEmscriptenBinaryStagingHost` | Nonpublishing native-buffer staging in a fresh Worker, host-owned framed writer and retained OPFS evidence | SW-only sender gate BEFORE lazy import (`extension/lib/emscripten-host-stage-route.js:9-22`); sealed run-owned input, exact operation/asset hashes, no seal/publish/delete, termination UNKNOWN |
 | `registerWasmJobHost` | Non-stream bundled WASI tool jobs in a worker | SW-only sender (`extension/lib/wasm-job-host.js:17-26`); manifest/CAS re-validation |
 | `registerTableWorkerHost` | Bounded table operations in a fresh module worker | SW-only sender (`extension/lib/table-worker-host.js:141-158`); SW retains run custody |
 | `registerUserWasmHost` | Owner-uploaded, per-agent-allowlisted Wasm digest in a fresh worker | SW-only sender (`extension/lib/user-wasm-host.js:43-59`); verify stored bytes by digest |
@@ -457,7 +458,7 @@ consequences are carried by the matching register entry where one exists.
 ### T18. Forged offscreen execution messages or confused job envelopes
 
 - **Boundary:** TB2 → S6–S6f. **Evidence:** `extension/offscreen/offscreen.js`
-  registers 11 hosts alongside script/clipboard listeners; those runtime listeners
+  registers 12 hosts alongside script/clipboard listeners; those runtime listeners
   share the extension message bus. A same-extension document or content script
   must not submit `cap:user-wasm-run`, `cap:emscripten-run`, `cap:wasm-wasi-job-run`
   or the other host job types as though it were the privileged broker.
