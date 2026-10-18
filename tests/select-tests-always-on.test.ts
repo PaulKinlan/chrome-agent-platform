@@ -32,14 +32,15 @@ Deno.test("kz27: the tree-walking guards are IN the always-on list, and every en
       "tests/no-uppercase-kickers-static.test.ts", // luq4w: source census, without Chrome
       "tests/kafr4-suite-connect-inside-reaping-try.test.ts", // kafr4: connect/reap ORDER census over every suite
       "tests/build-parallel-discipline.test.ts", // ps2x8: build.mjs / package-archive AST discipline rules
+      "tests/build-once-capture.test.ts", // zw8f0: build.mjs AST build-once capture site pin
     ]
   ) {
     assert(
       SOURCE_INSPECTING_GUARDS.includes(guard),
-      `${guard} reads the repo tree as data and must be always-on (kz27/ps2x8)`,
+      `${guard} reads the repo tree as data and must be always-on (kz27/ps2x8/zw8f0)`,
     );
   }
-  assertEquals(SOURCE_INSPECTING_GUARDS.length, 44,
+  assertEquals(SOURCE_INSPECTING_GUARDS.length, 45,
     "reviewed static guards must not disappear silently; update this count when deliberately changing the list");
   // A list is only a list if its members are real: an entry naming a file that does not exist would
   // "cover" nothing while looking reassuring.

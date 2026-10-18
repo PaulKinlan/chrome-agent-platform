@@ -223,6 +223,9 @@ export const SOURCE_INSPECTING_GUARDS = [
   // parallel build discipline (settleAll fan-out, writeBuildOnceRecord call site, version-GC grace,
   // bounded child execution). Has no static import edge to build.mjs, so it belongs in ALWAYS_ON.
   "tests/build-parallel-discipline.test.ts",
+  // chrome-agent-platform-zw8f0: parses build.mjs as AST text to enforce the build-once record capture site.
+  // Has no static import edge to build.mjs, so it belongs in ALWAYS_ON.
+  "tests/build-once-capture.test.ts",
 ];
 
 /**

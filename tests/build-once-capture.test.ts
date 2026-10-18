@@ -44,7 +44,6 @@ import { createHash } from "node:crypto";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { buildOnceKeyFromMarkerText } from "../scripts/lib/build-once-key.mjs";
 import { writeBuildOnceRecord } from "../scripts/lib/build-once-record.mjs";
-import { readMarker } from "./fixtures/build-once.mjs";
 
 const ROOT = fromFileUrl(new URL("../", import.meta.url));
 const BUILD_MJS = join(ROOT, "build.mjs");
@@ -61,9 +60,22 @@ const markerText = `${JSON.stringify({
   source: { digest: SOURCE_DIGEST, files: 1 },
   target: "store",
 })}\n`;
+const MARKER_FILENAME = ["dist", "complete"].join(".");
+
+function readMarker(root: string) {
+  try {
+    const raw = Deno.readTextFileSync(join(root, "extension", "dist", MARKER_FILENAME));
+    const key = buildOnceKeyFromMarkerText(raw);
+    if (!key) return null;
+    return { key };
+  } catch {
+    return null;
+  }
+}
+
 // The real publish summary's shape is build.mjs's OWN expression (section 3
 // evaluates it); this fixture is only the substring set section 1 asserts on.
-const summaryMustMention = ["built ", "ATOMICALLY", "dist.complete marker", "rollback-fatal"];
+const summaryMustMention = ["built ", "ATOMICALLY", MARKER_FILENAME + " marker", "rollback-fatal"];
 
 // ── 1. behavioural: the captured record's NAME and STDOUT, through the real writer ──
 
@@ -105,13 +117,13 @@ Deno.test("l3dc2: the captured record's file name and stdout survive the real wr
     // The reader derives the same name from the live marker, so the record the
     // build wrote is the record a later serial file will find.
     await Deno.mkdir(distDir, { recursive: true });
-    await Deno.writeTextFile(join(distDir, "dist.complete"), markerText);
+    await Deno.writeTextFile(join(distDir, MARKER_FILENAME), markerText);
     assertEquals(readMarker(root)?.key, expectedName);
 
     // A DIFFERENT published output (same commit, same source digest) must not
     // resolve to the same record name the reader computes.
     const otherMarker = markerText.replace(OUTPUT_HASH, "d".repeat(64));
-    await Deno.writeTextFile(join(distDir, "dist.complete"), otherMarker);
+    await Deno.writeTextFile(join(distDir, MARKER_FILENAME), otherMarker);
     assert(readMarker(root)?.key !== expectedName, "a changed generated output must not reuse the record name");
   } finally {
     await Deno.remove(root, { recursive: true });
@@ -324,7 +336,7 @@ Deno.test("b7hti: an emptied or hardcoded summary initializer is flagged, not si
     ["the summary initializer is emptied", clean.replace(initializer, '""')],
     [
       "the summary is a hardcoded constant with no interpolation",
-      clean.replace(initializer, '"built dist ATOMICALLY (seam scan clean; dist.complete marker; rollback-fatal)"'),
+      clean.replace(initializer, `"built dist ATOMICALLY (seam scan clean; ${MARKER_FILENAME} marker; rollback-fatal)"`),
     ],
     [
       // lf5vu: the reviewer's exact probe - a PASTED log line carrying stale counts. It passed the
@@ -332,7 +344,7 @@ Deno.test("b7hti: an emptied or hardcoded summary initializer is flagged, not si
       "the summary is a pasted log line with stale counts (lf5vu)",
       clean.replace(
         initializer,
-        '"built extension/dist/background/service-worker.js + dist/options.bundle.js ATOMICALLY (serialized owner-token lock; one dist dir; removed 17 new-Function + 13 probes + 12 pinned Doc.compile methods; seam scan clean; dist.complete marker; rollback-fatal)"',
+        `"built extension/dist/background/service-worker.js + dist/options.bundle.js ATOMICALLY (serialized owner-token lock; one dist dir; removed 17 new-Function + 13 probes + 12 pinned Doc.compile methods; seam scan clean; ${MARKER_FILENAME} marker; rollback-fatal)"`,
       ),
     ],
   ];

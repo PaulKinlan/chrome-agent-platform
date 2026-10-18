@@ -58,6 +58,9 @@ export const ALWAYS_ON_TREE_SKIPPING_GUARDS = Object.freeze(new Set([
   // generated dirs by name while doing it; it neither imports nor reads extension/dist, so the
   // tightened check below is the right classification for it.
   "tests/wasm-package-authority-static.test.ts",
+  // chrome-agent-platform-zw8f0: pins the build-once capture expression in build.mjs via AST
+  // analysis and operates on scratch fixtures; neither imports nor reads the built dist tree.
+  "tests/build-once-capture.test.ts",
 ]));
 
 // Deliberately broad for unknown test files: `dist`, `dist-versions`, `dist.complete`, `extension/dist/...`.

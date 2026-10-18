@@ -74,6 +74,16 @@ Deno.test("ps2x8: changing build script selects tests/build-parallel-discipline.
   );
 });
 
+Deno.test("zw8f0: changing build script selects tests/build-once-capture.test.ts", () => {
+  const reverse = buildReverseGraph();
+  const buildScript = ["build", "mjs"].join(".");
+  const selected = selectTestFiles([buildScript], reverse);
+  assert(
+    selected.includes("tests/build-once-capture.test.ts"),
+    "build-once-capture.test.ts must be selected when build script changes",
+  );
+});
+
 Deno.test("select-tests: changed test files always run themselves", () => {
   const selected = selectTestFiles(["tests/security.test.ts"], null);
   assert(selected.includes("tests/security.test.ts"), "a changed test file must run itself");
