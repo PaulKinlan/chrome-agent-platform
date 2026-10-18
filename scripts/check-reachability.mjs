@@ -87,6 +87,8 @@ export const RETAINED = {
     "3mcu1 prepares an offscreen-host-only exclusive writer with bounded frame backpressure, drain/close and independent byte rehash. Native binary transport remains refused until SW and host evidence are wired.",
   "lib/emscripten-host-binary-runner.js":
     "3mcu1 prepares a direct trusted-module binary runner with host-owned writer and durable close evidence; no runtime/SW message route imports it and both binary request guards remain on until x9r8k authority wiring.",
+  "lib/emscripten-sw-intent.js":
+    "x9r8k stages a SW-issued per-ref intent in its own OPFS root outside compactable run logs; authority wiring is still pending, and this record never permits sealing or publication.",
   "lib/archive-target-registry.js":
     "CAP-FB-20260905-UNBOUNDED-DATA-ARCHIVE-01 (11rm / qcuf): classification authority for durable targets. Its sanitizer family stayed tests-only; 8wbb shipped the agentConfig authority separately (lib/logical-site-agent-config.js) — this module ships when the 11rm streaming converter lands.",
   "lib/tabular-diff-artifacts.js":
