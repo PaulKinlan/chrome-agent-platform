@@ -251,6 +251,45 @@ export function comparableStart(start, basis = null) {
   return null;
 }
 
+/** WHY the lock decision reached its answer (chrome-agent-platform-khkqz).
+ *
+ *  The decision already refused to steal on an unprovable start basis, but it SAID nothing about it:
+ *  acquireBuildLock threw "another LIVE build ... is not dead" for a holder it had not proved live.
+ *  When the recorded start carries no provenance marker and the pid has since been reused by an
+ *  unrelated process — the ordinary stale-lock case — that message names a pid that is not the holder
+ *  and hides the only fact that matters: the lock predates the marker, so its liveness is UNKNOWN and
+ *  the ONE-TIME remedy is a deliberate removal. Each branch now reports its reason, and the refusal
+ *  carries it. */
+export const LOCK_VERDICT = Object.freeze({
+  NO_OWNER_YOUNG: "no-owner-young",
+  NO_OWNER_STALE: "no-owner-stale",
+  DIFFERENT_BOOT: "different-boot",
+  PID_GONE: "pid-gone",
+  HOLDER_UNREACHABLE: "holder-unreachable",
+  PROBE_UNREADABLE: "probe-unreadable",
+  PROBE_CONTRADICTED: "probe-contradicted",
+  ZOMBIE: "zombie",
+  PID_REUSED: "pid-reused",
+  START_BASIS_UNKNOWN: "start-basis-unknown",
+  START_MISSING: "start-missing",
+  PROBE_START_UNCOMPARABLE: "probe-start-uncomparable",
+  HOLDER_LIVE: "holder-live",
+});
+
+/** Reasons that mean "we could not decide, so we refused" rather than "the holder is alive". */
+export const UNPROVABLE_VERDICTS = Object.freeze(new Set([
+  // A recorded start we cannot place: the PRE-PIN case, whose pid may since have been reused.
+  LOCK_VERDICT.START_BASIS_UNKNOWN,
+  // A recorded start we could place but a live probe we could not.
+  LOCK_VERDICT.PROBE_START_UNCOMPARABLE,
+]));
+
+/** The typed code an exhausted acquire throws for each kind of refusal. */
+export const LOCK_REFUSAL_CODES = Object.freeze({
+  UNPROVABLE: "LOCK_OWNER_PROVENANCE_UNKNOWN",
+  ALIVE: "LOCK_HOLDER_ALIVE",
+});
+
 /**
  * Decide whether the lock's recorded holder is dead, i.e. whether the lock is stealable.
  *
@@ -263,7 +302,7 @@ export function comparableStart(start, basis = null) {
  * `deps` exists so the decision is testable without contriving a real process in each state:
  *   bootId, now, kill, procStat(pid) -> {ok, state, start, reason}, lockDirBirthtimeMs() -> number.
  */
-export async function holderIsDead(holder, deps = {}) {
+export async function lockOwnerVerdict(holder, deps = {}) {
   const {
     bootId = machineBootId(),
     now = Date.now,
@@ -274,10 +313,12 @@ export async function holderIsDead(holder, deps = {}) {
 
   if (!holder?.pid) {
     // Ownerless: only stealable when observably old (see OWNERLESS_STALE_MS).
-    if (typeof lockDirBirthtimeMs !== "function") return false;
+    if (typeof lockDirBirthtimeMs !== "function") return { dead: false, reason: LOCK_VERDICT.NO_OWNER_YOUNG };
     const born = await lockDirBirthtimeMs();
-    if (typeof born !== "number" || !Number.isFinite(born)) return false;
-    return now() - born > OWNERLESS_STALE_MS;
+    if (typeof born !== "number" || !Number.isFinite(born)) return { dead: false, reason: LOCK_VERDICT.NO_OWNER_YOUNG };
+    return now() - born > OWNERLESS_STALE_MS
+      ? { dead: true, reason: LOCK_VERDICT.NO_OWNER_STALE }
+      : { dead: false, reason: LOCK_VERDICT.NO_OWNER_YOUNG };
   }
 
   // A PROVABLY different boot means the recorded pid+starttime cannot be this machine's live
@@ -293,7 +334,7 @@ export async function holderIsDead(holder, deps = {}) {
   if (
     isKnownBoot(holder.boot) && isKnownBoot(bootId) &&
     comparableBoot(holder.boot) !== comparableBoot(bootId)
-  ) return true;
+  ) return { dead: true, reason: LOCK_VERDICT.DIFFERENT_BOOT };
 
   let killError = null;
   try {
@@ -302,7 +343,11 @@ export async function holderIsDead(holder, deps = {}) {
     killError = e;
   }
   // ESRCH = no such process. Anything else (EPERM) = it exists and we simply may not signal it.
-  if (killError) return killError.code === "ESRCH";
+  if (killError) {
+    return killError.code === "ESRCH"
+      ? { dead: true, reason: LOCK_VERDICT.PID_GONE }
+      : { dead: false, reason: LOCK_VERDICT.HOLDER_UNREACHABLE };
+  }
 
   const probe = typeof procStat === "function"
     ? procStat(holder.pid)
@@ -311,7 +356,7 @@ export async function holderIsDead(holder, deps = {}) {
   if (!resolved?.ok) {
     // kill() said alive but the probe read nothing. An UNREADABLE (or unparseable) entry is not
     // evidence of death and stays alive — refusing to steal is the safe direction.
-    if (resolved?.reason !== "gone") return false;
+    if (resolved?.reason !== "gone") return { dead: false, reason: LOCK_VERDICT.PROBE_UNREADABLE };
     // chrome-agent-platform-0ym29: a single "gone" probe is not proof of death. `ps -p <pid>`
     // reports gone for an absent pid, but a `ps` that exits 1 with EMPTY stdout AND stderr for any
     // OTHER reason is indistinguishable from that, and reading it as death lets one build be stolen
@@ -325,13 +370,15 @@ export async function holderIsDead(holder, deps = {}) {
     } catch (e) {
       recheckError = e;
     }
-    if (!recheckError) return false; // it still answers: the "gone" probe is contradicted
-    return recheckError.code === "ESRCH";
+    if (!recheckError) return { dead: false, reason: LOCK_VERDICT.PROBE_CONTRADICTED }; // the "gone" probe is contradicted
+    return recheckError.code === "ESRCH"
+      ? { dead: true, reason: LOCK_VERDICT.PID_GONE }
+      : { dead: false, reason: LOCK_VERDICT.HOLDER_UNREACHABLE };
   }
 
   // THE r0v8 FIX: a zombie is a corpse. It answers kill(pid, 0) and keeps its starttime, so every
   // other test here calls it alive; it can never run another build. `X` is the transient dead state.
-  if (resolved.state === "Z" || resolved.state === "X") return true;
+  if (resolved.state === "Z" || resolved.state === "X") return { dead: true, reason: LOCK_VERDICT.ZOMBIE };
 
   // pid reuse: same pid, different process (starttime is per-process, not per-pid).
   //
@@ -352,9 +399,32 @@ export async function holderIsDead(holder, deps = {}) {
   const observedBasis = resolved.basis
     ?? (/^\d+$/u.test(String(resolved.start ?? "").trim()) ? PROC_START_BASIS : PS_START_BASIS);
   const observedStart = comparableStart(resolved.start, observedBasis);
-  if (recordedStart && observedStart && recordedStart !== observedStart) return true;
+  if (recordedStart && observedStart && recordedStart !== observedStart) {
+    return { dead: true, reason: LOCK_VERDICT.PID_REUSED };
+  }
 
-  return false;
+  // Nothing above could prove anything. Name WHY, because the difference matters to whoever reads the
+  // refusal: an unplaceable recorded start (a PRE-PIN lock, whose pid may since have been reused by an
+  // unrelated process) is not the same fact as "the holder is alive", and only the first is fixed by
+  // removing the lock deliberately (chrome-agent-platform-khkqz).
+  const recordedRaw = holder.start === undefined || holder.start === null ? "" : String(holder.start).trim();
+  if (!recordedRaw) return { dead: false, reason: LOCK_VERDICT.START_MISSING };
+  if (!recordedStart) return { dead: false, reason: LOCK_VERDICT.START_BASIS_UNKNOWN };
+  if (!observedStart) return { dead: false, reason: LOCK_VERDICT.PROBE_START_UNCOMPARABLE };
+  return { dead: false, reason: LOCK_VERDICT.HOLDER_LIVE };
+}
+
+/**
+ * Is the lock's recorded holder dead, i.e. is the lock stealable? The YES/NO form of
+ * lockOwnerVerdict() — same decision, same branch order, no reason. Callers that must explain a
+ * refusal use lockOwnerVerdict() instead.
+ *
+ * @param {object|null} holder the parsed owner file (null when there is none)
+ * @param {object} [deps] see lockOwnerVerdict
+ * @returns {Promise<boolean>}
+ */
+export async function holderIsDead(holder, deps = {}) {
+  return (await lockOwnerVerdict(holder, deps)).dead;
 }
 
 /**
@@ -411,7 +481,8 @@ export async function acquireBuildLock({
       holder = null;
     }
 
-    if (await holderIsDead(holder, deps)) {
+    const verdict = await lockOwnerVerdict(holder, deps);
+    if (verdict.dead) {
       const quarantine = join(
         root,
         `${QUARANTINE_PREFIX}${holder?.token ?? "orphan"}-${process.pid}-${Date.now()}`,
@@ -426,9 +497,27 @@ export async function acquireBuildLock({
     }
 
     if (attempt >= attempts) {
-      throw new Error(
-        `another LIVE build (pid ${holder?.pid}) holds the build lock and is not dead — refusing to steal; if truly stuck, kill pid ${holder?.pid} or remove ${lockDir} manually`,
-      );
+      // TWO REFUSALS, TOLD APART (chrome-agent-platform-khkqz). A holder we could not DECIDE about —
+      // typically a lock written before the start-provenance marker, whose pid may since have been
+      // reused by an unrelated process — must not be reported as a live build: that sends the operator
+      // to inspect a pid that is not the holder, and hides that the only remedy is a deliberate removal.
+      const unprovable = UNPROVABLE_VERDICTS.has(verdict.reason);
+      const why = verdict.reason === LOCK_VERDICT.START_BASIS_UNKNOWN
+        ? "its recorded start carries no provenance marker (the owner file predates the marker), so the pid may since have " +
+          "been reused and whether that process is still alive cannot be decided from it"
+        : "the live probe returned a start this reader cannot place, so pid reuse cannot be decided";
+      const message = unprovable
+        ? `the build lock's recorded owner (pid ${holder?.pid}) cannot be proven dead (${verdict.reason}): ${why} — refusing ` +
+          `to steal [${LOCK_REFUSAL_CODES.UNPROVABLE}]. Confirm pid ${holder?.pid} yourself, then remove ${lockDir} deliberately ` +
+          `if it is gone.`
+        : `another LIVE build (pid ${holder?.pid}) holds the build lock and is not dead (${verdict.reason}) — refusing to steal; ` +
+          `if truly stuck, kill pid ${holder?.pid} or remove ${lockDir} manually`;
+      throw Object.assign(new Error(message), {
+        code: unprovable ? LOCK_REFUSAL_CODES.UNPROVABLE : LOCK_REFUSAL_CODES.ALIVE,
+        reason: verdict.reason,
+        lockDir,
+        holderPid: holder?.pid ?? null,
+      });
     }
     await sleep();
   }
