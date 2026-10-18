@@ -15,8 +15,10 @@ The host rejects further frames at close, drains its queue, awaits writer close,
 then independently re-reads the resulting file in 64 KiB windows and hashes
 all bytes. A write, close, lock or re-read failure yields UNKNOWN, never a
 positive result. Abort does not seal, publish, delete staging or replay native
-work. The host evidence ledger (`xoeaa`) is not yet wired into this module;
-`recordUnknown` must be supplied by its eventual trusted offscreen caller.
+work. `openAuditedHostOwnedEmscriptenWriter` composes the separate host evidence
+ledger: pending is persisted before the writer opens, UNKNOWN is recorded on
+failure, and CLOSED only after the drain/close/re-read proof. This composition
+remains unwired to the offscreen entry, so it does not start native work.
 
 Current host and worker exact-key envelopes carry no output ref or OPFS handle;
 `tests/emscripten-host.test.ts` exercises the actual posted envelope and

@@ -1,12 +1,17 @@
 // 3mcu1: host-owned output writer; no binary operation is exposed to the model.
 // @ts-nocheck
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { openHostOwnedEmscriptenWriter } from "../extension/lib/emscripten-host-writer.js";
+import { openAuditedHostOwnedEmscriptenWriter, openHostOwnedEmscriptenWriter } from "../extension/lib/emscripten-host-writer.js";
+import { createEmscriptenHostEvidence } from "../extension/lib/emscripten-host-evidence.js";
 import { createWasmStreamOutput, listWasmStreamEntries, WASM_STREAM_ROOT_NAME } from "../extension/lib/wasm-stream-files.js";
 import { emscriptenJobOwner } from "../extension/lib/emscripten-custody.js";
 
 const RUN = "exec_host_writer_123456";
 const AGENT = "named:alice";
+const identityFor = (outputRef) => ({
+  runId: RUN, agentId: AGENT, outputRef, generation: "b".repeat(32),
+  packageId: "image.tool", graphDigest: "c".repeat(64), operationId: "resize",
+});
 function missing() { return new DOMException("not found", "NotFoundError"); }
 function memoryStorage({ exclusive = true, closeFails = false, writeFails = false, beforeStdoutWrite } = {}) {
   const dir = () => {
@@ -148,6 +153,51 @@ Deno.test("3mcu1: forced abort and invalid/gapped frames never seal or delete ou
   await code(() => active.close(), "emscripten_writer_not_open");
   assertEquals(another.reasons, ["deadline"]);
   assertEquals((await listWasmStreamEntries({ storage: another.storage })).length, 1);
+});
+
+Deno.test("3mcu1: host-owned close proof persists across offscreen restart; no artifact is sealed", async () => {
+  const { storage, outputRef } = await setup();
+  const identity = identityFor(outputRef);
+  const host = createEmscriptenHostEvidence({ storage });
+  const channel = await openAuditedHostOwnedEmscriptenWriter({ identity, storage, evidence: host });
+  assertEquals((await host.read(identity)).state, "unknown", "pending is never positive evidence");
+  await channel.push({ seq: 0, chunk: new Uint8Array([3, 4, 5]) });
+  const result = await channel.close();
+  assertEquals(result.evidenceState, "closed");
+  const restarted = createEmscriptenHostEvidence({ storage });
+  const saved = await restarted.read(identity);
+  assertEquals(saved.state, "closed");
+  assertEquals(saved.proof.bytes, 3);
+  assertEquals(saved.proof.sha256, result.sha256);
+  await code(() => restarted.begin(identity), "emscripten_host_evidence_closed");
+  await code(() => host.recordUnknown(identity, "deadline"), "emscripten_host_evidence_collision");
+  assertEquals((await listWasmStreamEntries({ storage })).length, 1);
+});
+
+Deno.test("3mcu1: failed host-owned close leaves only durable UNKNOWN, never closed", async () => {
+  const { storage, outputRef } = await setup({ closeFails: true });
+  const identity = identityFor(outputRef);
+  const host = createEmscriptenHostEvidence({ storage });
+  const channel = await openAuditedHostOwnedEmscriptenWriter({ identity, storage, evidence: host });
+  await channel.push({ seq: 0, chunk: new Uint8Array([1]) });
+  await code(() => channel.close(), "emscripten_writer_close_failed");
+  assertEquals((await createEmscriptenHostEvidence({ storage }).read(identity)).state, "unknown");
+  assertEquals((await host.read(identity)).reason, "writer_fence_unavailable");
+});
+
+Deno.test("3mcu1: final audit append failure never returns a CLOSED receipt", async () => {
+  const { storage, outputRef } = await setup();
+  const identity = identityFor(outputRef);
+  const host = createEmscriptenHostEvidence({ storage });
+  const evidence = {
+    begin: (raw) => host.begin(raw),
+    recordUnknown: (raw, reason) => host.recordUnknown(raw, reason),
+    recordClosed: async () => { throw new Error("injected audit failure"); },
+  };
+  const channel = await openAuditedHostOwnedEmscriptenWriter({ identity, storage, evidence });
+  await channel.push({ seq: 0, chunk: new Uint8Array([1]) });
+  await assertRejects(() => channel.close(), Error, "injected audit failure");
+  assertEquals((await host.read(identity)).state, "unknown", "pending remains nonpublishable");
 });
 
 Deno.test("3mcu1: existing native worker envelope has exact keys and no OPFS capability", async () => {

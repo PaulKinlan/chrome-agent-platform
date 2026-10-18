@@ -2,6 +2,7 @@
 // job Worker: it receives bytes over postMessage, NOT an OPFS handle or ref.
 // Binary execution remains refused until SW/host audit and publication land.
 import { emscriptenJobOwner } from "./emscripten-custody.js";
+import { createEmscriptenHostEvidence } from "./emscripten-host-evidence.js";
 import { createIncrementalSha256 } from "./incremental-sha256.js";
 import { openWasmStreamHandles, validateWasmStreamRef } from "./wasm-stream-files.js";
 
@@ -94,6 +95,7 @@ export async function openHostOwnedEmscriptenWriter({ runId, agentId, outputRef,
       if (state !== "open") fail("emscripten_writer_not_open");
       state = "draining"; // terminal channel fence: reject all later push calls.
       await pending;
+      if (state !== "draining") fail("emscripten_writer_not_open");
       if (firstFailure) {
         await unknown("writer_fence_unavailable");
         fail("emscripten_writer_write_failed", firstFailure);
@@ -103,6 +105,7 @@ export async function openHostOwnedEmscriptenWriter({ runId, agentId, outputRef,
         await unknown("writer_fence_unavailable");
         fail("emscripten_writer_close_failed", cause);
       }
+      if (state !== "draining") fail("emscripten_writer_not_open");
       // The file is visible only AFTER the writable's close has returned.
       // A second independent File snapshot/re-read verifies every committed byte.
       try {
@@ -115,6 +118,7 @@ export async function openHostOwnedEmscriptenWriter({ runId, agentId, outputRef,
           if (chunk.byteLength !== end - offset) fail("emscripten_writer_verification_failed");
           hash.update(chunk);
         }
+        if (state !== "draining") fail("emscripten_writer_not_open");
         state = "closed";
         return Object.freeze({ ok: true, state, writerFence: "exclusive", frames: sequence, bytes, sha256: hash.hex() });
       } catch (cause) {
@@ -125,6 +129,37 @@ export async function openHostOwnedEmscriptenWriter({ runId, agentId, outputRef,
     async abort(reason = "worker_termination_unproved") {
       if (state === "closed") fail("emscripten_writer_already_closed");
       return await unknown(reason);
+    },
+  });
+}
+
+/** Trusted offscreen composition: durably begin before opening the writer and
+ * persist the positive close receipt only after the host's own drain, close and
+ * independent re-read. A failed append never returns a successful receipt. */
+export async function openAuditedHostOwnedEmscriptenWriter({ identity, storage, evidence = createEmscriptenHostEvidence({ storage }) } = {}) {
+  if (!identity || typeof identity !== "object" || typeof evidence?.begin !== "function" ||
+      typeof evidence?.recordUnknown !== "function" || typeof evidence?.recordClosed !== "function") {
+    fail("emscripten_writer_evidence_unavailable");
+  }
+  await evidence.begin(identity);
+  let channel;
+  try {
+    channel = await openHostOwnedEmscriptenWriter({
+      runId: identity.runId, agentId: identity.agentId, outputRef: identity.outputRef, storage,
+      recordUnknown: (reason) => evidence.recordUnknown(identity, reason),
+    });
+  } catch (cause) {
+    await evidence.recordUnknown(identity, "writer_fence_unavailable");
+    throw cause;
+  }
+  return Object.freeze({
+    get state() { return channel.state; },
+    push: (frame) => channel.push(frame),
+    abort: (reason) => channel.abort(reason),
+    async close() {
+      const proof = await channel.close();
+      await evidence.recordClosed(identity, proof);
+      return Object.freeze({ ...proof, evidenceState: "closed" });
     },
   });
 }
