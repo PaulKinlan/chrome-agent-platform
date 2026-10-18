@@ -288,6 +288,22 @@ const profileSweeps = new Map<string, Set<ProfileSweep>>();
  * quarantine this guard exists for. A merely ARMED lifeline has `settled === null` and is still never
  * awaited (the leader is alive; there is nothing to wait for).
  */
+/**
+ * Wait for every sweep on `treeMatch` that has LEFT `armed` to settle (4o93n (d)).
+ *
+ * This is the teardown's version of the launch guard: it does NOT decide whether a launch may proceed (that
+ * is `awaitFiredLifelineSweep`, with its UNCONFIRMED refusal); it only makes a handle-less teardown queue
+ * behind a sweep that is already running for the same profile, so the sweep's `pkill -9 -f` cannot kill the
+ * teardown's own pkill/pgrep. `settled` never rejects by design, so nothing here can throw on a reap path.
+ */
+async function awaitProfileSweepSettled(treeMatch: string): Promise<void> {
+  await Promise.resolve();
+  const pending = [...(profileSweeps.get(treeMatch) ?? [])]
+    .filter((entry) => entry.settled !== null)
+    .map((entry) => entry.settled!);
+  await Promise.all(pending);
+}
+
 export async function awaitFiredLifelineSweep(treeMatch: string): Promise<void> {
   // Give an already-resolved leader.status reaction a checkpoint to mark its
   // sweep before the new launch checks the registry. Never await a live leader.
@@ -974,6 +990,14 @@ export async function killProcessTree(
   try {
     // `settled` is non-null from the moment a sweep (or disarm) began; it never rejects.
     if (lifeline?.settled) await lifeline.settled;
+    // 4o93n (d): a HANDLE-LESS teardown has no ChildProcess, so the per-handle serialisation above has no
+    // key and it used to run straight into an in-flight sweep for the same profile - whose `pkill -9 -f`
+    // can match this teardown's own pkill/pgrep command lines and SIGKILL them (observed as exit 137),
+    // failing the teardown. The registry is keyed by the PROFILE, so the profile is all that is needed:
+    // wait for any sweep on this profile to settle first, exactly as a same-profile launch does. A sweep
+    // that ended UNCONFIRMED makes this throw with the reason, which is the honest outcome - the profile
+    // may still be signalled, so "torn down" would be a claim this code cannot make.
+    if (!lifeline) await awaitProfileSweepSettled(treeMatch);
     await killTreeAndVerify(proc, treeMatch, { attempts, intervalMs, group }, deps ?? {}, signal);
   } finally {
     if (lifeline) lifeline.teardowns--;
