@@ -337,115 +337,370 @@ Deno.test("bmkv9: falsification: skills-panel .import-url ignores Enter when isC
 
 // ── 5. Behavioral Falsification: NTP Task Rename Input ──────────────────────
 
-Deno.test("bmkv9: falsification: NTP task-rename input ignores Enter when isComposing or keyCode 229", () => {
-  // Simulate the exact handler from extension/ntp/ntp.js:
-  // input.addEventListener("keydown", (e) => {
-  //   if (e.isComposing || e.keyCode === 229) return;
-  //   if (e.key === "Enter") { e.preventDefault(); input.blur(); }
-  //   if (e.key === "Escape") { restore(original); }
-  // });
-  let blurred = false;
-  let prevented = false;
-  const fakeInput = {
-    blur: () => { blurred = true; },
-  };
+Deno.test("bmkv9: real module: NTP task-rename input ignores Enter when isComposing or keyCode 229", async () => {
+  const prevCustomElements = (globalThis as any).customElements;
+  const prevHTMLElement = (globalThis as any).HTMLElement;
+  const prevDocument = (globalThis as any).document;
+  const prevWindow = (globalThis as any).window;
+  const prevChrome = (globalThis as any).chrome;
+  const prevLocation = (globalThis as any).location;
+  const prevHistory = (globalThis as any).history;
 
-  const handler = (e: any) => {
-    if (e.isComposing || e.keyCode === 229) return;
-    if (e.key === "Enter") { e.preventDefault(); fakeInput.blur(); }
-  };
+  try {
+    class MockEl {
+      id = "";
+      tagName = "";
+      listeners = new Map<string, any[]>();
+      value = "";
+      children: any[] = [];
+      dataset: Record<string, any> = {};
+      style: Record<string, any> = {};
+      textContent = "";
+      hidden = false;
+      constructor(id = "", tag = "div") {
+        this.id = id;
+        this.tagName = tag.toUpperCase();
+      }
+      addEventListener(type: string, fn: any) {
+        if (!this.listeners.has(type)) this.listeners.set(type, []);
+        this.listeners.get(type)!.push(fn);
+      }
+      querySelector(sel: string) {
+        for (const c of this.children) {
+          if (c.tagName?.toLowerCase() === sel || (c.id && `#${c.id}` === sel) || (c.className && sel === `.${c.className}`)) return c;
+          const found = c.querySelector?.(sel);
+          if (found) return found;
+        }
+        return null;
+      }
+      querySelectorAll() { return []; }
+      replaceChildren(...kids: any[]) { this.children = kids; }
+      appendChild(c: any) { this.children.push(c); return c; }
+      append(...c: any[]) { this.children.push(...c); }
+      setAttribute() {}
+      removeAttribute() {}
+      focus() {}
+      select() {}
+      blur() {
+        const blurFns = this.listeners.get("blur") ?? [];
+        for (const fn of blurFns) fn();
+      }
+      classList = { toggle() {}, add() {}, remove() {}, contains() { return false; } };
+    }
 
-  // 1. Enter while isComposing -> NO blur, NO preventDefault
-  blurred = false;
-  prevented = false;
-  handler({ key: "Enter", isComposing: true, keyCode: 13, preventDefault: () => { prevented = true; } });
-  assertEquals(blurred, false, "NTP task rename must not blur during isComposing");
-  assertEquals(prevented, false, "NTP task rename must not preventDefault during isComposing");
+    const elements = new Map<string, MockEl>();
+    function getEl(id: string) {
+      if (!elements.has(id)) elements.set(id, new MockEl(id));
+      return elements.get(id)!;
+    }
 
-  // 2. Enter while keyCode === 229 -> NO blur, NO preventDefault
-  blurred = false;
-  prevented = false;
-  handler({ key: "Enter", isComposing: false, keyCode: 229, preventDefault: () => { prevented = true; } });
-  assertEquals(blurred, false, "NTP task rename must not blur during keyCode 229");
-  assertEquals(prevented, false, "NTP task rename must not preventDefault during keyCode 229");
+    (globalThis as any).HTMLElement = class {};
+    (globalThis as any).customElements = { define() {}, get() {} };
+    (globalThis as any).document = {
+      getElementById(id: string) { return getEl(id); },
+      querySelector(sel: string) { return getEl(sel.replace(/^[#.]/, "")); },
+      querySelectorAll() { return []; },
+      createElement(tag: string) { return new MockEl("", tag); },
+      createTextNode(text: string) { return { textContent: text }; },
+      addEventListener() {},
+    };
+    (globalThis as any).window = {
+      addEventListener() {},
+      location: { search: "", hash: "#omnibox=thread:test-task", pathname: "" },
+      history: { replaceState() {} },
+    };
+    (globalThis as any).location = (globalThis as any).window.location;
+    (globalThis as any).history = (globalThis as any).window.history;
 
-  // 3. Enter when not composing -> blurs and prevents default
-  blurred = false;
-  prevented = false;
-  handler({ key: "Enter", isComposing: false, keyCode: 13, preventDefault: () => { prevented = true; } });
-  assertEquals(blurred, true, "NTP task rename must blur on plain Enter");
-  assertEquals(prevented, true, "NTP task rename must preventDefault on plain Enter");
+    (globalThis as any).chrome = {
+      runtime: {
+        sendMessage(_msg: any, cb: any) { if (cb) cb({ ok: true }); return Promise.resolve({ ok: true }); },
+        onMessage: { addListener() {} },
+        connect() { return { onMessage: { addListener() {} }, onDisconnect: { addListener() {} } }; },
+        getManifest() { return {}; },
+        getURL(p: string) { return p; },
+      },
+      tabs: {
+        query(_q: any, cb: any) { if (cb) cb([]); return Promise.resolve([]); },
+        onActivated: { addListener() {} },
+        onUpdated: { addListener() {} },
+      },
+      windows: {
+        onFocusChanged: { addListener() {} },
+      },
+      storage: {
+        local: { get(_k: any, cb: any) { if (cb) cb({}); return Promise.resolve({}); }, set(_v: any, cb: any) { if (cb) cb(); return Promise.resolve(); } },
+      },
+    };
+
+    const ntp = await import(`${ROOT}extension/ntp/ntp.js?cacheBust=${Date.now()}`);
+    await ntp.bootPipelinePromise?.catch(() => {});
+    await new Promise((r) => setTimeout(r, 50));
+
+    const threadTitle = getEl("thread-title");
+    const clickHandler = threadTitle.listeners.get("click")?.[0];
+    assert(clickHandler, "threadTitle must have a click listener to start title edit");
+    clickHandler();
+
+    const input = threadTitle.children.find((c: any) => c.tagName === "INPUT");
+    assert(input, "startTitleEdit must replace threadTitle with an input element");
+    const handler = input.listeners.get("keydown")?.[0];
+    assert(handler, "task rename input must have a keydown listener");
+
+    let blurred = false;
+    let prevented = false;
+    input.blur = () => { blurred = true; };
+
+    // 1. Enter while isComposing -> NO blur, NO preventDefault
+    blurred = false;
+    prevented = false;
+    handler({ key: "Enter", isComposing: true, keyCode: 13, preventDefault: () => { prevented = true; } });
+    assertEquals(blurred, false, "NTP task rename must not blur during isComposing");
+    assertEquals(prevented, false, "NTP task rename must not preventDefault during isComposing");
+
+    // 2. Enter while keyCode === 229 -> NO blur, NO preventDefault
+    blurred = false;
+    prevented = false;
+    handler({ key: "Enter", isComposing: false, keyCode: 229, preventDefault: () => { prevented = true; } });
+    assertEquals(blurred, false, "NTP task rename must not blur during keyCode 229");
+    assertEquals(prevented, false, "NTP task rename must not preventDefault during keyCode 229");
+
+    // 3. Enter when not composing -> blurs and prevents default
+    blurred = false;
+    prevented = false;
+    handler({ key: "Enter", isComposing: false, keyCode: 13, preventDefault: () => { prevented = true; } });
+    assertEquals(blurred, true, "NTP task rename must blur on plain Enter");
+    assertEquals(prevented, true, "NTP task rename must preventDefault on plain Enter");
+  } finally {
+    (globalThis as any).customElements = prevCustomElements;
+    (globalThis as any).HTMLElement = prevHTMLElement;
+    (globalThis as any).document = prevDocument;
+    (globalThis as any).window = prevWindow;
+    (globalThis as any).chrome = prevChrome;
+    (globalThis as any).location = prevLocation;
+    (globalThis as any).history = prevHistory;
+  }
 });
 
 // ── 6. Behavioral Falsification: Options Python Net Origin Input ─────────────
 
-Deno.test("bmkv9: falsification: Options #python-net-origin input ignores Enter when isComposing or keyCode 229", () => {
-  // Simulate the exact handler from extension/options/options.js:
-  // input?.addEventListener("keydown", (e) => {
-  //   if (e.isComposing || e.keyCode === 229) return;
-  //   if (e.key === "Enter") { e.preventDefault(); add(); }
-  // });
-  let added = false;
-  let prevented = false;
-  const add = () => { added = true; };
+Deno.test("bmkv9: real module: Options #python-net-origin input ignores Enter when isComposing or keyCode 229", async () => {
+  const prevCustomElements = (globalThis as any).customElements;
+  const prevHTMLElement = (globalThis as any).HTMLElement;
+  const prevDocument = (globalThis as any).document;
 
-  const handler = (e: any) => {
-    if (e.isComposing || e.keyCode === 229) return;
-    if (e.key === "Enter") { e.preventDefault(); add(); }
-  };
+  try {
+    class MockEl {
+      id = "";
+      tagName = "";
+      listeners = new Map<string, any[]>();
+      value = "";
+      children: any[] = [];
+      textContent = "";
+      constructor(id = "", tag = "div") {
+        this.id = id;
+        this.tagName = tag.toUpperCase();
+      }
+      addEventListener(type: string, fn: any) {
+        if (!this.listeners.has(type)) this.listeners.set(type, []);
+        this.listeners.get(type)!.push(fn);
+      }
+      querySelector(sel: string) {
+        if (this.id && sel === `#${this.id}`) return this;
+        for (const c of this.children) {
+          const found = c.querySelector?.(sel);
+          if (found) return found;
+        }
+        return null;
+      }
+      querySelectorAll() { return []; }
+      replaceChildren(...kids: any[]) { this.children = kids; }
+      appendChild(c: any) { this.children.push(c); return c; }
+      setAttribute() {}
+      classList = { toggle() {} };
+    }
 
-  // 1. Enter while isComposing -> NO add, NO preventDefault
-  added = false;
-  prevented = false;
-  handler({ key: "Enter", isComposing: true, keyCode: 13, preventDefault: () => { prevented = true; } });
-  assertEquals(added, false, "options python-net add must not fire during isComposing");
-  assertEquals(prevented, false, "options python-net must not preventDefault during isComposing");
+    (globalThis as any).HTMLElement = class {};
+    (globalThis as any).customElements = { define() {}, get() {} };
+    (globalThis as any).document = {
+      createElement(tag: string) { return new MockEl("", tag); },
+    };
 
-  // 2. Enter while keyCode === 229 -> NO add, NO preventDefault
-  added = false;
-  prevented = false;
-  handler({ key: "Enter", isComposing: false, keyCode: 229, preventDefault: () => { prevented = true; } });
-  assertEquals(added, false, "options python-net add must not fire during keyCode 229");
-  assertEquals(prevented, false, "options python-net must not preventDefault during keyCode 229");
+    const { createPanelContext } = await import(`${ROOT}extension/options/panel-context.js`);
+    const { mount } = await import(`${ROOT}extension/options/panels/permissions.js`);
 
-  // 3. Enter when not composing -> fires add() and prevents default
-  added = false;
-  prevented = false;
-  handler({ key: "Enter", isComposing: false, keyCode: 13, preventDefault: () => { prevented = true; } });
-  assertEquals(added, true, "options python-net add must fire on plain Enter");
-  assertEquals(prevented, true, "options python-net must preventDefault on plain Enter");
+    const root = new MockEl("permissions-panel", "div");
+    const mk = (id: string, tag = "div") => {
+      const el = new MockEl(id, tag);
+      return el;
+    };
+    const list = mk("python-net-list");
+    const input = mk("python-net-origin", "input");
+    const addBtn = mk("python-net-add", "button");
+    const status = mk("python-net-status", "div");
+    root.children.push(list, input, addBtn, status);
+
+    let sent: any[] = [];
+    const mockSend = async (typeOrMsg: any, payload?: any) => {
+      const msg = typeof typeOrMsg === "object" ? typeOrMsg : { type: typeOrMsg, ...payload };
+      sent.push(msg);
+      if (msg.type === "python.network.grants") return { ok: true, grants: [] };
+      if (msg.type === "python.network.grant") return { ok: true, origin: msg.origin, added: true };
+      return { ok: true };
+    };
+
+    const ctx = createPanelContext({ root, send: mockSend });
+    const handle = await mount(root, ctx);
+
+    const keydownListeners = input.listeners.get("keydown") ?? [];
+    assert(keydownListeners.length > 0, "options python-net-origin input must have keydown listener attached");
+    const handler = keydownListeners[0];
+
+    input.value = "https://api.example.com";
+
+    // 1. Enter while isComposing -> NO add, NO preventDefault
+    sent = [];
+    let prevented = false;
+    handler({ key: "Enter", isComposing: true, keyCode: 13, preventDefault: () => { prevented = true; } });
+    await new Promise((r) => setTimeout(r, 20));
+    assertEquals(sent.filter((s) => s.type === "python.network.grant").length, 0, "options python-net add must not fire during isComposing");
+    assertEquals(prevented, false, "options python-net must not preventDefault during isComposing");
+
+    // 2. Enter while keyCode === 229 -> NO add, NO preventDefault
+    sent = [];
+    prevented = false;
+    handler({ key: "Enter", isComposing: false, keyCode: 229, preventDefault: () => { prevented = true; } });
+    await new Promise((r) => setTimeout(r, 20));
+    assertEquals(sent.filter((s) => s.type === "python.network.grant").length, 0, "options python-net add must not fire during keyCode 229");
+    assertEquals(prevented, false, "options python-net must not preventDefault during keyCode 229");
+
+    // 3. Enter when not composing -> fires add() and prevents default
+    sent = [];
+    prevented = false;
+    handler({ key: "Enter", isComposing: false, keyCode: 13, preventDefault: () => { prevented = true; } });
+    await new Promise((r) => setTimeout(r, 20));
+    assertEquals(sent.filter((s) => s.type === "python.network.grant").length, 1, "options python-net add must fire on plain Enter");
+    assertEquals(prevented, true, "options python-net must preventDefault on plain Enter");
+
+    handle?.unmount?.();
+    await new Promise((r) => setTimeout(r, 50));
+  } finally {
+    (globalThis as any).customElements = prevCustomElements;
+    (globalThis as any).HTMLElement = prevHTMLElement;
+    (globalThis as any).document = prevDocument;
+  }
 });
 
 // ── 7. Behavioral Falsification: Sidepanel URL Input ─────────────────────────
 
-Deno.test("bmkv9: falsification: Sidepanel #url input ignores Enter when isComposing or keyCode 229", () => {
-  // Simulate the exact handler from extension/sidepanel/sidepanel.js:
-  // urlInput.addEventListener("keydown", (e) => {
-  //   if (e.isComposing || e.keyCode === 229) return;
-  //   if (e.key === "Enter") go();
-  // });
-  let went = false;
-  const go = () => { went = true; };
+Deno.test("bmkv9: real module: Sidepanel #url input ignores Enter when isComposing or keyCode 229", async () => {
+  const prevCustomElements = (globalThis as any).customElements;
+  const prevHTMLElement = (globalThis as any).HTMLElement;
+  const prevDocument = (globalThis as any).document;
+  const prevWindow = (globalThis as any).window;
+  const prevChrome = (globalThis as any).chrome;
 
-  const handler = (e: any) => {
-    if (e.isComposing || e.keyCode === 229) return;
-    if (e.key === "Enter") go();
-  };
+  try {
+    class MockEl {
+      id = "";
+      tagName = "";
+      listeners = new Map<string, any[]>();
+      value = "";
+      children: any[] = [];
+      textContent = "";
+      constructor(id = "", tag = "div") {
+        this.id = id;
+        this.tagName = tag.toUpperCase();
+      }
+      addEventListener(type: string, fn: any) {
+        if (!this.listeners.has(type)) this.listeners.set(type, []);
+        this.listeners.get(type)!.push(fn);
+      }
+      querySelector() { return null; }
+      querySelectorAll() { return []; }
+      replaceChildren() {}
+      appendChild(c: any) { return c; }
+      append(...c: any[]) { this.children.push(...c); }
+      setAttribute() {}
+      removeAttribute() {}
+      classList = { toggle() {}, add() {}, remove() {}, contains() { return false; } };
+    }
 
-  // 1. Enter while isComposing -> NO go
-  went = false;
-  handler({ key: "Enter", isComposing: true, keyCode: 13 });
-  assertEquals(went, false, "sidepanel go must not fire during isComposing");
+    const elements = new Map<string, MockEl>();
+    function getEl(id: string) {
+      if (id === "agents-tasks") return null;
+      if (!elements.has(id)) elements.set(id, new MockEl(id));
+      return elements.get(id)!;
+    }
 
-  // 2. Enter while keyCode === 229 -> NO go
-  went = false;
-  handler({ key: "Enter", isComposing: false, keyCode: 229 });
-  assertEquals(went, false, "sidepanel go must not fire during keyCode 229");
+    (globalThis as any).HTMLElement = class {};
+    (globalThis as any).customElements = { define() {}, get() {} };
+    (globalThis as any).document = {
+      getElementById(id: string) { return getEl(id); },
+      createElement(tag: string) { return new MockEl("", tag); },
+      addEventListener() {},
+    };
+    (globalThis as any).window = {
+      addEventListener() {},
+    };
 
-  // 3. Enter when not composing -> fires go()
-  went = false;
-  handler({ key: "Enter", isComposing: false, keyCode: 13 });
-  assertEquals(went, true, "sidepanel go must fire on plain Enter");
+    let sent: any[] = [];
+    (globalThis as any).chrome = {
+      runtime: {
+        sendMessage(msg: any, cb: any) {
+          sent.push(msg);
+          if (cb) cb({ ok: true });
+          return Promise.resolve({ ok: true });
+        },
+        connect() { return { onMessage: { addListener() {} }, onDisconnect: { addListener() {} } }; },
+        getManifest() { return {}; },
+        getURL(p: string) { return p; },
+      },
+      tabs: {
+        query(_q: any, cb: any) { if (cb) cb([]); return Promise.resolve([]); },
+        onActivated: { addListener() {} },
+        onUpdated: { addListener() {} },
+      },
+      windows: {
+        onFocusChanged: { addListener() {} },
+      },
+      storage: {
+        local: { get(_k: any, cb: any) { if (cb) cb({}); return Promise.resolve({}); }, set(_v: any, cb: any) { if (cb) cb(); return Promise.resolve(); } },
+      },
+    };
+
+    await import(`${ROOT}extension/sidepanel/sidepanel.js?cacheBust=${Date.now()}`);
+
+    const urlInput = getEl("url");
+    const keydownListeners = urlInput.listeners.get("keydown") ?? [];
+    assert(keydownListeners.length > 0, "sidepanel #url input must have keydown listener attached");
+    const handler = keydownListeners[0];
+
+    urlInput.value = "https://example.com";
+
+    // 1. Enter while isComposing -> NO go
+    sent = [];
+    handler({ key: "Enter", isComposing: true, keyCode: 13 });
+    assertEquals(sent.filter((s) => s.type === "sidepanel.openPage").length, 0, "sidepanel go must not fire during isComposing");
+
+    // 2. Enter while keyCode === 229 -> NO go
+    sent = [];
+    handler({ key: "Enter", isComposing: false, keyCode: 229 });
+    assertEquals(sent.filter((s) => s.type === "sidepanel.openPage").length, 0, "sidepanel go must not fire during keyCode 229");
+
+    // 3. Enter when not composing -> fires go()
+    sent = [];
+    handler({ key: "Enter", isComposing: false, keyCode: 13 });
+    assertEquals(sent.filter((s) => s.type === "sidepanel.openPage").length, 1, "sidepanel go must fire on plain Enter");
+
+    await new Promise((r) => setTimeout(r, 50));
+  } finally {
+    (globalThis as any).customElements = prevCustomElements;
+    (globalThis as any).HTMLElement = prevHTMLElement;
+    (globalThis as any).document = prevDocument;
+    (globalThis as any).window = prevWindow;
+    (globalThis as any).chrome = prevChrome;
+  }
 });
 
 // ── 8. Behavioral Falsification: ModelPicker Combobox (kital) ────────────────
