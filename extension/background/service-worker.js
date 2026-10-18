@@ -247,7 +247,9 @@ import {
   prepareEnrollmentPromotion,
   completeEnrollmentPromotion,
   listPendingEnrollmentPromotions,
+  listEnrollmentSweepTargets,
   abandonEnrollmentPromotion,
+  abandonEnrollmentPromotionLocked,
   retryAbandonedEnrollmentCleanup,
   listAbandonedEnrollmentCleanups,
   getCurrentSiteIdentity,
@@ -8234,7 +8236,13 @@ const handlers = mergeRouteMaps(
       // disenrollOriginLocked (no re-acquisition) is used because we already hold
       // the global lock.
       return await withEnrollmentLock(async () => {
-        const origins = await listOrigins(); // read under the global enrollment lock
+        // chrome-agent-platform-do09a: the sweep must cover pending promotions as
+        // well as enrolled origins. A pending row is inert, so listOrigins() hides
+        // it — and the sweep used to walk listOrigins() alone, which left the row
+        // durable so a LATER boot's reconcileEnrollmentPromotionsOnBoot could finish
+        // the promotion with no owner gesture in that session. One snapshot, read
+        // under the lock the sweep already holds.
+        const { origins, pending: pendingPromotions } = await listEnrollmentSweepTargets();
         // Audit every exact authority loss before the first tombstone. This is
         // an all-or-nothing preflight: an unavailable audit leaves scripting,
         // enrollment and every bridge unchanged rather than partly disabling
@@ -8277,6 +8285,27 @@ const handlers = mergeRouteMaps(
           } catch (e) {
             await markCleanupPending(o);
             results.push({ origin: o, error: String(e?.message ?? e) });
+          }
+        }
+        // do09a: the pending rows listOrigins() hid. Abandoned with the SAME
+        // tombstone, so the owner's Disable is complete and the abandoned row keeps
+        // a retryable cleanup marker instead of a path back to completion.
+        for (const pending of pendingPromotions) {
+          try {
+            abortWorker(pending.origin);
+            await abandonEnrollmentPromotionLocked(pending.origin, pending.gen);
+            const tombGen = await enrollmentGeneration(pending.origin);
+            await notifyOriginBridge(pending.origin, { type: "disenrollment", gen: tombGen });
+            const swept = await unregisterOriginScripts(pending.origin);
+            if (!swept.ok) {
+              await markCleanupPending(pending.origin);
+              results.push({ origin: pending.origin, error: swept.error ?? pending.origin });
+            } else {
+              results.push({ origin: pending.origin, ok: true });
+            }
+          } catch (e) {
+            await markCleanupPending(pending.origin);
+            results.push({ origin: pending.origin, error: String(e?.message ?? e) });
           }
         }
         invalidateAgent();

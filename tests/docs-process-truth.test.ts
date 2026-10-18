@@ -27,7 +27,11 @@ const RETIRED_TRACKERS = ["TASKS.md", "TASKS-DONE.md", "KNOWN-ISSUES.md", "docs/
 // AGENTS.md joined the list under chrome-agent-platform-w56b: the constitution
 // declared the beads-only rule and then pointed readers at the retired files in
 // six places below it.
-const POINTER_DOCS = ["README.md", "PLAN.md", "AGENTS.md", "docs/KNOWN-ISSUES-ARCHIVE.md", "docs/AGENT-MODEL.md"]; // docs/KNOWN-ISSUES.md and docs/UI-FIXES-TRACKER.md were DELETED from the working tree (chrome-agent-platform-yz4e); git history keeps them
+// chrome-agent-platform-8ho9b: the dated review documents joined the list. They
+// are KEPT as history, but their "how to use this document" banner still told a
+// reader to take work from TASKS.md / check KNOWN-ISSUES.md, as LIVE links to
+// files that no longer exist. History stays; the live pointer does not.
+const POINTER_DOCS = ["README.md", "PLAN.md", "AGENTS.md", "docs/KNOWN-ISSUES-ARCHIVE.md", "docs/AGENT-MODEL.md", "REVIEW-2026-08-21.md", "REVIEW-2026-08-30.md"]; // docs/KNOWN-ISSUES.md and docs/UI-FIXES-TRACKER.md were DELETED from the working tree (chrome-agent-platform-yz4e); git history keeps them // docs/KNOWN-ISSUES.md and docs/UI-FIXES-TRACKER.md were DELETED from the working tree (chrome-agent-platform-yz4e); git history keeps them
 const TRACKER_NAME_RE = /\b(TASKS\.md|TASKS-DONE\.md|KNOWN-ISSUES\.md|KNOWN-ISSUES\b(?!-ARCHIVE)|UI-FIXES-TRACKER)/;
 const RETIREMENT_MARKER_RE = /\b(retired|history|legacy)\b/i;
 

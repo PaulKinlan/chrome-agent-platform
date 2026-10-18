@@ -805,6 +805,72 @@ function plainCall(statement: Ast, callee: string): boolean {
  * mutant that swaps it with the reap still reds `order`. What is NOT admitted: closing a different
  * object, or no close at all.
  */
+/**
+ * The property name of a member expression, dotted OR computed (`proc.kill`, `proc["kill"]`), or null.
+ * chrome-agent-platform-t5o2i residue (b): the older `bare` rule read dotted identifier chains only, so
+ * the same hazard respelled - `proc["kill"](...)`, `process.kill(proc.pid)`, `x?.proc.kill(...)` - passed
+ * the pin untouched. The rule below matches by PROPERTY NAME, so a spelling change is not a way past it.
+ */
+function memberName(node: Ast | null | undefined): string | null {
+  if (!node) return null;
+  if (node.type === "ChainExpression") return memberName(node.expression);
+  if (node.type !== "MemberExpression") return null;
+  const property = node.property;
+  if (!node.computed && property?.type === "Identifier") return property.name;
+  if (node.computed && property?.type === "Literal" && typeof property.value === "string") return property.value;
+  return null;
+}
+
+/** The command literal of a `new Deno.Command(<cmd>, ...)`: a string, or the first element of an array. */
+function commandWord(node: Ast): string | null {
+  const first = node.arguments?.[0];
+  const value = first?.type === "Literal" ? first.value : first?.type === "ArrayExpression" ? first.elements?.[0]?.value : undefined;
+  return typeof value === "string" ? value : null;
+}
+
+/**
+ * Every way these scripts could still kill the browser BY HAND (chrome-agent-platform-t5o2i.1 residue
+ * (b)), found by property name rather than by the whole dotted path:
+ *   * a call through a member named `kill` - `proc.kill(...)`, `proc["kill"](...)`, `x?.proc.kill(...)`,
+ *     `process.kill(pid, ...)`, `Deno.kill(...)`;
+ *   * a kill shelled out - `new Deno.Command("kill", ...)`;
+ *   * a kill BORROWED for later (`const k = proc.kill`, `const k = Deno.kill`) - a member reference that is
+ *     not itself a callee.
+ * NOT read, and stated rather than implied: a signal delivered through a helper the script imports (no
+ * `kill` member appears at all), and a `kill` read through a getter that changes between reads. Both need
+ * data-flow, not a name rule; the 6efbv census judges the process table afterwards and is an additional
+ * rule, not proof about every alias.
+ */
+function killByHandSpellings(roots: Ast[]): string[] {
+  const callees = new Set<Ast>();
+  const members: Ast[] = [];
+  const commands: Ast[] = [];
+  for (const root of roots) {
+    descend(root, (node) => {
+      if (node.type === "CallExpression" || node.type === "OptionalCallExpression") {
+        const callee = node.callee;
+        if (callee) callees.add(callee.type === "ChainExpression" ? callee.expression : callee);
+        return;
+      }
+      if (node.type === "NewExpression" && dotted(node.callee) === "Deno.Command") {
+        commands.push(node);
+        return;
+      }
+      if (memberName(node) === "kill") members.push(node);
+    });
+  }
+  const found: string[] = [];
+  for (const node of members) {
+    if (callees.has(node)) found.push("a bare kill through a `kill` member (a call whose property is named kill)");
+    else found.push("a kill borrowed for later (`const k = <obj>.kill`) instead of the helper");
+  }
+  for (const node of commands) {
+    const word = commandWord(node);
+    if (word !== null && /kill$/i.test(word)) found.push(`a kill shelled out with \`new Deno.Command(${JSON.stringify(word)}, ...)\``);
+  }
+  return found;
+}
+
 function closesCdp(statement: Ast): boolean {
   if (statement.type !== "ExpressionStatement") return false;
   let expression = statement.expression;
@@ -887,11 +953,9 @@ function securitySuiteViolations(program: Ast): Violations {
       if (at < reaps[0]) violations.order.push(`\`await ${server}()\` must come after the reap (found at ${at}, reap at ${reaps[0]})`);
     }
   }
+  for (const message of killByHandSpellings(finalizer)) violations.bare.push(`${message}, in the finally`);
   for (const statement of finalizer) {
     descend(statement, (node) => {
-      if (node.type === "CallExpression" && dotted(node.callee) === "chrome.proc.kill") {
-        violations.bare.push("a bare `chrome.proc.kill(...)` is in the finally");
-      }
       if (node.type === "AwaitExpression" && dotted(node.argument) === "chrome.proc.status") {
         violations.bare.push("a bare `await chrome.proc.status` is in the finally");
       }
@@ -930,11 +994,9 @@ function journeyViolations(program: Ast): Violations {
     );
     if (reset < reaps[0]) violations.order.push("`launched = null` must come after the reap (the reap needs the handle), before the second launch");
   }
+  for (const message of killByHandSpellings(between)) violations.bare.push(`${message}, between the two launches`);
   for (const statement of between) {
     descend(statement, (node) => {
-      if (node.type === "CallExpression" && dotted(node.callee) === "launched.proc.kill") {
-        violations.bare.push("a bare `launched.proc.kill(...)` is between the two launches");
-      }
       if (node.type === "AwaitExpression" && dotted(node.argument) === "launched.proc.status") {
         violations.bare.push("a bare `await launched.proc.status` is between the two launches");
       }
@@ -1002,11 +1064,11 @@ function injectionViolations(program: Ast): Violations {
   //
   // chrome-agent-platform-t5o2i.1 - SURVIVORS STILL NOT READ (stated, not claimed closed). Static name matching cannot
   // decide these, and each would need a data-flow rule rather than a position rule:
-  //   * a bare kill through another spelling: a computed member (`proc["kill"](...)`), `process.kill(proc.pid)`, a
-  //     local alias of the helper (`const kill2 = proc.kill`), or a `Deno.Command(["kill", ...])` call. The `bare`
-  //     property reads dotted identifier chains only. The 6efbv census (landed) judges the process table afterwards and
-  //     is an ADDITIONAL rule, not proof about every alias or position.
-  //   * a kill that is not a call at all (a signal sent through a helper the script imports).
+  //   * CLOSED by t5o2i.1 residue (b), do not re-file: a bare kill through another spelling. `bare` used to read
+  //     dotted identifier chains only, so a computed member (`proc["kill"](...)`), `process.kill(proc.pid)`, a borrowed
+  //     `const kill2 = proc.kill`, or a `new Deno.Command("kill", ...)` passed it. killByHandSpellings() now matches by
+  //     PROPERTY NAME and covers all four, each with a mutant in the table below.
+  //   * a kill that is not a call at all (a signal sent through a helper the script imports; no `kill` member appears).
   //   * a second top-level try whose FIRST sibling is a decoy: measured in the table below (the decoy makes the pin
   //     report everything(), so it cannot smuggle the real sequence past - but that is the pin refusing to read a file
   //     it does not recognise, not a rule that understands two tries).
@@ -1045,6 +1107,16 @@ function injectionViolations(program: Ast): Violations {
         `and kill() would then reap nothing (launch at statement ${launchAt}, store at ${storeAt})`,
     );
   }
+  // t5o2i.1 survivor (c), RESHAPING THE LAUNCH RESULT - MEASURED CLOSED, not by a rule of its own. Lifeline
+  // state is a WeakMap keyed by the ChildProcess (scripts/lib/process-tree.ts, lifelineState), so a wrapper or a
+  // COPY of the launch result is killed but its settled is never found and the helper never waits for the sweep.
+  // The forms are `l.proc = null`, `Object.assign(l, {proc: null})`, `l.proc = wrap(l.proc)`, and
+  // `const l = {...(await launchChrome(...)), proc: null}`. Each needs a statement BETWEEN the launch and the
+  // store (or replaces the launch statement), and the two clauses above already refuse both: the store must be
+  // the statement IMMEDIATELY after the launch, and the launch statement's own init must be `await launchChrome`.
+  // This was measured rather than assumed - a member-write rule written for these forms was unreachable (the
+  // mutant table stayed green with it disabled), so it was removed and the forms are pinned by the existing
+  // clauses instead (the dedicated test below asserts WHICH clause: the store-adjacency message).
   // t5o2i.1 survivor (e): a reassigned `kill` makes the finally's `await kill()` a no-op that satisfies every pin.
   const killWrites = nameWrites(program, "kill");
   if (killWrites.length !== 0) {
@@ -1114,9 +1186,8 @@ function injectionViolations(program: Ast): Violations {
     );
   }
   // bare: nothing in the script kills or waits for the browser by hand (the optional chains are read through).
+  for (const message of killByHandSpellings([program])) violations.bare.push(`${message}, in the script`);
   descend(program, (node) => {
-    if (node.type === "CallExpression" && dotted(node.callee) === "proc.kill") violations.bare.push("a bare `proc.kill(...)` is in the script");
-    if (node.type === "CallExpression" && dotted(node.callee) === "Deno.kill") violations.bare.push("a bare `Deno.kill(...)` is in the script");
     if (node.type === "AwaitExpression" && dotted(node.argument) === "proc.status") violations.bare.push("a bare `await proc.status` is in the script");
   });
   return violations;
@@ -1218,6 +1289,8 @@ function journeyMutants(source: string): Array<[string, string, Array<keyof Viol
     ["reap with the default SIGKILL", mutate(source, JOURNEY_REAP, "  await reapLeaderAndSettle(launched.proc);\n"), ["call"]],
     ["replace the call with the old two-line shape", mutate(source, JOURNEY_REAP, JOURNEY_OLD_SHAPE), ["call", "order", "bare"]],
     ["add the old two-line shape back next to the helper", mutate(source, JOURNEY_REAP, JOURNEY_REAP + JOURNEY_OLD_SHAPE), ["bare"]],
+    // t5o2i.1 residue (b), journey half: the same kill respelled between the two launches.
+    ["bare kill through a computed member", mutate(source, JOURNEY_REAP, JOURNEY_REAP + '  launched.proc["kill"]("SIGKILL");\n'), ["bare"]],
     [
       "reset launched before the reap",
       mutate(source, `${JOURNEY_REAP}  launched = null;\n`, `  launched = null;\n${JOURNEY_REAP}`),
@@ -1243,6 +1316,30 @@ for (const journey of JOURNEYS) {
   });
 }
 
+// t5o2i.1 (c): WHICH clause rejects a reshaped launch result. The mutant table asserts properties, not reasons, so
+// without this the reshaping rows could be rejected by any clause at all (and a dead member-write rule would look
+// alive). Each form must be refused by the store-adjacency clause or the launch clause, and by nothing else.
+Deno.test("jjsz pin: a reshaped launch result is refused by the store-adjacency or launch clause, and no other (t5o2i.1 (c))", async () => {
+  const source = sourceOf(SECURITY_INJECTION);
+  const rows: Array<[string, string, RegExp]> = [
+    ["l.proc = null before the store", INJECTION_LAUNCH_ONLY + "  l.proc = null;\n" + INJECTION_BOOT_STORE, /IMMEDIATELY after the launch/],
+    ["Object.assign(l, { proc: null }) before the store", INJECTION_LAUNCH_ONLY + "  Object.assign(l, { proc: null });\n" + INJECTION_BOOT_STORE, /IMMEDIATELY after the launch/],
+    ["l.proc = wrap(l.proc) before the store", INJECTION_LAUNCH_ONLY + "  l.proc = wrap(l.proc);\n" + INJECTION_BOOT_STORE, /IMMEDIATELY after the launch/],
+    [
+      "a spread copy of the launch result instead of the launch",
+      "  const l = {...(await launchChrome({ binary: CHROMIUM, args: CHROME_ARGS })), proc: null};\n" + INJECTION_BOOT_STORE,
+      /must launch with `const l = await launchChrome/,
+    ],
+  ];
+  for (const [name, replacement, reason] of rows) {
+    const found = injectionViolations(await parseTs(mutate(source, INJECTION_LAUNCH_AND_STORE, replacement)));
+    assertEquals(found.call.length, 1, `"${name}" must break exactly one call clause; got ${JSON.stringify(found.call)}`);
+    assert(reason.test(found.call[0]), `"${name}" must be refused by the clause it names (${reason}), not by ${JSON.stringify(found.call[0])}`);
+    assertEquals(found.order, [], `"${name}" must not disturb the ordering clauses`);
+    assertEquals(found.bare, [], `"${name}" must not be read as a bare kill`);
+  }
+});
+
 const INJECTION_REAP = "  if (proc) await reapLeaderAndSettle(proc);\n";
 const INJECTION_OLD_SHAPE = '  try { proc?.kill("SIGKILL"); } catch { /* gone */ }\n  try { await proc?.status; } catch { /* reaped */ }\n';
 const INJECTION_FIRST_KILL = "  await kill();\n  const prefPath";
@@ -1265,6 +1362,13 @@ function injectionMutants(source: string): Array<[string, string, Array<keyof Vi
     ["reap with another signal", mutate(source, "reapLeaderAndSettle(proc)", 'reapLeaderAndSettle(proc, "SIGTERM")'), ["call"]],
     ["replace the call with the old two-line shape", mutate(source, INJECTION_REAP, INJECTION_OLD_SHAPE), ["call", "bare"]],
     ["add the old two-line shape back next to the helper", mutate(source, INJECTION_REAP, INJECTION_REAP + INJECTION_OLD_SHAPE), ["bare"]],
+    // t5o2i.1 residue (b): the SAME hazard respelled. The dotted-path rule these pins used to use read
+    // `dotted(callee) === "proc.kill"`, so every row below was previously a survivor (the pin stayed green
+    // while the script killed the browser by hand). Each is now caught by property name.
+    ["bare kill through a computed member", mutate(source, INJECTION_REAP, INJECTION_REAP + '  proc["kill"]("SIGKILL");\n'), ["bare"]],
+    ["bare kill by pid through process.kill", mutate(source, INJECTION_REAP, INJECTION_REAP + '  process.kill(proc.pid, "SIGKILL");\n'), ["bare"]],
+    ["kill borrowed from the handle and called later", mutate(source, INJECTION_REAP, INJECTION_REAP + "  const kill2 = proc.kill;\n  try { kill2(\"SIGKILL\"); } catch { /* gone */ }\n"), ["bare"]],
+    ["kill shelled out with new Deno.Command", mutate(source, INJECTION_REAP, INJECTION_REAP + '  new Deno.Command("kill", { args: [String(proc.pid)] }).spawn();\n'), ["bare"]],
     ["relaunch without awaiting the kill", mutate(source, INJECTION_FIRST_KILL, "  kill();\n  const prefPath"), ["order"]],
     ["delete the kill between the two boots", mutate(source, INJECTION_FIRST_KILL, "  const prefPath"), ["order"]],
     ["the finally stops awaiting kill()", mutate(source, INJECTION_LAST_KILL, "  kill();\n  // Chrome's helpers release"), ["order"]],
@@ -1351,6 +1455,29 @@ function injectionMutants(source: string): Array<[string, string, Array<keyof Vi
         INJECTION_BOOT_THROW,
         INJECTION_BOOT_THROW + INJECTION_BOOT_STORE,
       ),
+      ["call"],
+    ],
+    // (c) the launch result reshaped before the store: the WeakMap key is lost. Measured CLOSED by the
+    // store-adjacency and launch clauses (see the dedicated t5o2i.1 (c) test for which one fires, and the
+    // comment on injectionViolations for why no member-write rule of its own is needed).
+    [
+      "boot() nulls a member of the launch result before storing the handle",
+      mutate(source, INJECTION_LAUNCH_AND_STORE, INJECTION_LAUNCH_ONLY + "  l.proc = null;\n" + INJECTION_BOOT_STORE),
+      ["call"],
+    ],
+    [
+      "boot() reshapes the launch result with Object.assign before storing the handle",
+      mutate(source, INJECTION_LAUNCH_AND_STORE, INJECTION_LAUNCH_ONLY + "  Object.assign(l, { proc: null });\n" + INJECTION_BOOT_STORE),
+      ["call"],
+    ],
+    [
+      "boot() wraps the handle it stores (the toothless `l.proc = wrap(l.proc)`)",
+      mutate(source, INJECTION_LAUNCH_AND_STORE, INJECTION_LAUNCH_ONLY + "  l.proc = wrap(l.proc);\n" + INJECTION_BOOT_STORE),
+      ["call"],
+    ],
+    [
+      "boot() copies the launch result instead of storing it (`{...launch, proc: null}`)",
+      mutate(source, INJECTION_LAUNCH_AND_STORE, "  const l = {...(await launchChrome({ binary: CHROMIUM, args: CHROME_ARGS })), proc: null};\n" + INJECTION_BOOT_STORE),
       ["call"],
     ],
     // (e) a reassigned kill(): the finally still awaits `kill()`, and that call is a no-op.

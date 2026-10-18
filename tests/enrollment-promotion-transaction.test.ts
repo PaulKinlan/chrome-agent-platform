@@ -1,12 +1,14 @@
 // @ts-nocheck — Chrome/OPFS fault fakes intentionally implement a narrow surface.
-import { assertEquals, assertNotEquals, assertRejects } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertNotEquals, assertRejects } from "jsr:@std/assert@1";
 import { kvGet } from "../extension/lib/kv.js";
 import { createEphemeralSiteToolConsentStore } from "../extension/lib/ephemeral-site-tool-consent.js";
+import { markCleanupPending } from "../extension/lib/enrollment.js";
 import { listOrigins, siteMemory } from "../extension/lib/memory.js";
 import {
-  abandonEnrollmentPromotion, completeEnrollmentPromotion, disenrollOrigin, enrollOrigin,
-  enrollmentGeneration, enrollmentSnapshot, isEnrolled, listPendingEnrollmentPromotions,
-  prepareEnrollmentPromotion, replaceTools, setEnrollmentPolicy, setToolConsentDecision,
+  abandonEnrollmentPromotion, abandonEnrollmentPromotionLocked, completeEnrollmentPromotion, disenrollOrigin,
+  enrollOrigin, enrollmentGeneration, enrollmentSnapshot, isEnrolled, listEnrollmentSweepTargets,
+  listPendingEnrollmentPromotions, prepareEnrollmentPromotion, replaceTools, setEnrollmentPolicy,
+  setToolConsentDecision,
 } from "../extension/lib/tools.js";
 import { SITE_TOOL_CONSENT_KEY, siteToolConsentSnapshot, siteToolIdentity } from "../extension/lib/site-tool-consent.js";
 import { evaluateWebmcpAuthority, siteToolConsentPermissionDigest } from "../extension/lib/webmcp-authority.js";
@@ -349,4 +351,92 @@ Deno.test("2tttw: an abandoned policy-pending row cannot reauthorize on a later 
   await assertRejects(() => completeEnrollmentPromotion(origin, row.gen), Error);
   assertEquals(await isEnrolled(origin), false);
   assertEquals((await listPendingEnrollmentPromotions()).some((entry) => entry.origin === origin), false);
+});
+
+// chrome-agent-platform-do09a. The scripting-Disable transition tombstones every origin from
+// listOrigins(), and listOrigins() hides a pending promotion (`pending` is inert by design), so the
+// owner's Disable left the pending row durable: a LATER boot's reconcileEnrollmentPromotionsOnBoot
+// completed the promotion with no owner gesture in that session. No authority exists while pending and
+// completion needs scripting re-enabled, so this was hygiene rather than a bypass - but Disable was not
+// total. The sweep now reads one snapshot of both populations (listEnrollmentSweepTargets) and abandons
+// the pending rows with the SAME tombstone; the last test pins that wiring in the transition itself.
+Deno.test("do09a: the Disable sweep's target list covers the pending promotion that listOrigins() hides", async () => {
+  const origin = "https://disable-sweep-pending.example";
+  const { gen } = await prepareEnrollmentPromotion(origin, decisions(origin));
+  // The hole, restated as an assertion: the enrolled-origin list on its own does not cover this row.
+  assertEquals((await listOrigins()).includes(origin), false);
+  const targets = await listEnrollmentSweepTargets();
+  assertEquals(targets.origins.includes(origin), false);
+  assertEquals(targets.pending.filter((row) => row.origin === origin).map((row) => [row.gen, row.phase]), [[gen, "promotion-pending"]]);
+  // No row may be counted twice, and no enrolled origin may be swept as a pending promotion.
+  assertEquals(targets.pending.every((row) => !targets.origins.includes(row.origin)), true);
+});
+
+Deno.test("do09a: a pending promotion the sweep abandons cannot be completed by a later boot", async () => {
+  const origin = "https://disable-sweep-abandon.example";
+  const { gen } = await prepareEnrollmentPromotion(origin, decisions(origin));
+  const target = (await listEnrollmentSweepTargets()).pending.find((row) => row.origin === origin);
+  assertEquals(target?.gen, gen);
+  // Exactly what the sweep does: the LOCKED abandon, because the sweep already holds the enrollment lock.
+  assertEquals((await abandonEnrollmentPromotionLocked(origin, target!.gen)).abandoned, true);
+  // A later boot's reconcile finds nothing to complete...
+  assertEquals((await listPendingEnrollmentPromotions()).some((row) => row.origin === origin), false);
+  // ...the durable copy is a tombstone at a NEW generation, so replaying the decision cannot resurrect it...
+  const row = await pending(origin);
+  assertEquals(row.enrolled, false);
+  assertEquals(row.phase, undefined);
+  assertNotEquals(row.gen, gen);
+  await assertRejects(() => complete(origin, gen), Error, "site_enrollment_promotion_stale");
+  assertEquals(await isEnrolled(origin), false);
+  // ...and the same-generation consent envelope is gone, so no site copy outlives the tombstone.
+  assertEquals(await siteMemory(origin).getStrict(SITE_TOOL_CONSENT_KEY).catch(() => null), null);
+});
+
+Deno.test("do09a: policy-pending Disable survives boot reconciliation without re-enrollment", async () => {
+  const origin = "https://policy-pending-disable-restart.example";
+  const first = await prepareEnrollmentPromotion(origin, decisions(origin));
+  await complete(origin, first.gen);
+  failConsentWrite = true;
+  try { await assertRejects(() => setEnrollmentPolicy(origin, "deny"), Error, "simulated consent write failure"); }
+  finally { failConsentWrite = false; }
+  const staged = await pending(origin);
+  assertEquals(staged.phase, "policy-pending");
+  assertEquals(await isEnrolled(origin), false);
+
+  // Model the production Disable sweep's pending-row path. Its catch writes only
+  // cleanupPending; that flag alone must not leave a replayable policy decision.
+  const targets = await listEnrollmentSweepTargets();
+  const failures = [];
+  for (const row of targets.pending.filter((entry) => entry.origin === origin)) {
+    try { await abandonEnrollmentPromotionLocked(row.origin, row.gen); }
+    catch (error) { await markCleanupPending(row.origin); failures.push(error); }
+  }
+  // A worker restart reads the durable pending population anew. The real boot
+  // reconciler calls completeEnrollmentPromotion for each policy-pending row.
+  for (const row of await listPendingEnrollmentPromotions()) {
+    if (row.origin === origin && row.phase === "policy-pending") await complete(row.origin, row.gen);
+  }
+  assertEquals(await isEnrolled(origin), false, "boot must not restore enrollment after Disable");
+  assertEquals(failures.length, 0, "Disable must tombstone, not leave a retry-only cleanup marker");
+  assertEquals((await listPendingEnrollmentPromotions()).some((row) => row.origin === origin), false);
+  const tombstone = await pending(origin);
+  assertEquals(tombstone.phase, undefined);
+  assertNotEquals(tombstone.gen, staged.gen);
+});
+
+Deno.test("do09a: the scripting-Disable transition sweeps the pending promotions, not just listOrigins()", async () => {
+  const source = Deno.readTextFileSync(new URL("../extension/background/service-worker.js", import.meta.url));
+  const disableAt = source.indexOf('id === "scripting"');
+  const snapshotAt = source.indexOf("await listEnrollmentSweepTargets()");
+  const loopAt = source.indexOf("for (const pending of pendingPromotions)");
+  assert(disableAt > 0, "the scripting branch of the permission transition must exist");
+  assert(snapshotAt > disableAt, "the sweep must take its snapshot from listEnrollmentSweepTargets() INSIDE the scripting branch");
+  assert(loopAt > snapshotAt, "the sweep must then walk the pending promotions it snapshot");
+  const body = source.slice(loopAt, loopAt + 1200);
+  assert(body.includes("abandonEnrollmentPromotionLocked(pending.origin, pending.gen)"),
+    "each pending promotion must be abandoned with the same tombstone the owner gesture uses");
+  assert(body.includes("unregisterOriginScripts(pending.origin)"),
+    "a pending promotion can already have its scripts registered, so Disable must unregister them");
+  assert(source.slice(disableAt, snapshotAt).indexOf("const origins = await listOrigins()") < 0,
+    "the snapshot must not revert to listOrigins() alone: that is the population that hid the pending rows");
 });
