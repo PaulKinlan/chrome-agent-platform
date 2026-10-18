@@ -17,6 +17,14 @@
 // exactly like any tool RESULT the page returns — it is carried whole (the
 // dptw directive: no size caps), and the fetch window is honestly reported
 // ("N of M pages") rather than silently truncating.
+//
+// Redirects are part of that pin, and they are the sharp edge (15zzc): a
+// platform fetch that follows a redirect has ALREADY issued the request to the
+// redirect target by the time any response URL can be inspected, so a hostile
+// enrolled origin could steer the extension at loopback/metadata hosts. This
+// module therefore never lets the platform follow a redirect (redirect:
+// "manual"): each hop is resolved here, checked against the enrolled origin
+// BEFORE its request is issued, and bounded (MAX_REDIRECT_HOPS).
 
 // The fetch-count window per fallback: a TIME/REQUEST budget (each page is a
 // network round-trip inside a tool call the owner is waiting on), not a size
@@ -203,89 +211,152 @@ export function htmlToText(html) {
   return s.replace(/\s+/g, " ").trim();
 }
 
-// fetchText verifies the FINAL response URL: fetch follows redirects, and a
-// same-origin docs URL that 302s cross-origin must never feed third-party
-// content into the docs answer (922q review P2 — sameOriginOnly filters the
-// discovered URL strings, not where they land). res.url is the post-redirect
-// URL; when the platform doesn't report it (empty string) there is nothing
-// to verify and the enrolled-origin request stands on its own.
+// A redirect is never followed by the platform on our behalf (15zzc). Bounded
+// hop budget for the hops we resolve ourselves.
+export const MAX_REDIRECT_HOPS = 5;
+
+function originOfUrl(value) {
+  try {
+    const u = new URL(String(value));
+    if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+    return u.origin;
+  } catch {
+    return null;
+  }
+}
+
+function isRedirectResponse(res) {
+  if (!res) return false;
+  if (res.type === "opaqueredirect") return true;
+  if (res.redirected === true) return true;
+  return typeof res.status === "number" && res.status >= 300 && res.status < 400;
+}
+
+// Where a manual redirect points, or null when that cannot be known.
+// A browser service worker answers redirect: "manual" with an opaque-redirect
+// response (type "opaqueredirect", status 0, headers emptied), so inside the
+// extension NO hop is taken at all: that page is skipped rather than
+// speculatively re-requested. Server-side fetch implementations do expose
+// Location, and there a hop is taken only when it stays on the enrolled origin.
+function redirectTargetOf(res, currentUrl) {
+  if (!res || res.type === "opaqueredirect") return null;
+  const headers = res.headers;
+  const location = headers && typeof headers.get === "function" ? headers.get("location") : null;
+  if (!location) return null;
+  try {
+    const next = new URL(String(location), currentUrl);
+    if (next.protocol !== "https:" && next.protocol !== "http:") return null;
+    next.hash = "";
+    return next.toString();
+  } catch {
+    return null;
+  }
+}
+
+// readResponseBody: unbounded text, or the bounded streaming read used for
+// discovery documents. Absent reader fails closed (no res.text fallback that
+// would buffer an unbounded body).
+async function readResponseBody(res, ctrl, maxBytes) {
+  // Preservation per 9yx7a: When maxBytes is null (general-content path), preserve existing res.text() byte-for-byte
+  if (typeof maxBytes !== "number" || maxBytes <= 0) {
+    const text = await res.text();
+    return typeof text === "string" ? text : null;
+  }
+
+  if (!res.body || typeof res.body.getReader !== "function") {
+    return null;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let result = "";
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        result += decoder.decode();
+        break;
+      }
+      if (!value || !(value instanceof Uint8Array)) continue;
+
+      const remaining = maxBytes - totalBytes;
+      if (value.byteLength >= remaining) {
+        const slice = value.subarray(0, remaining);
+        result += decoder.decode(slice, { stream: false });
+        totalBytes += remaining;
+
+        // Abort underlying transport BEFORE awaiting cancel, with bound on cancel settlement
+        ctrl.abort();
+        let cancelTimer = null;
+        let cancelOk = false;
+        try {
+          await Promise.race([
+            Promise.resolve(reader.cancel("maxBytes exceeded")).then(() => {
+              cancelOk = true;
+            }),
+            new Promise((_, reject) => {
+              cancelTimer = setTimeout(() => reject(new Error("cancel timed out")), 200);
+            }),
+          ]);
+        } catch {
+          cancelOk = false;
+        } finally {
+          if (cancelTimer != null) clearTimeout(cancelTimer);
+        }
+        if (!cancelOk) return null; // failed to cancel or cancel timed out/rejected -> fail closed
+        break;
+      }
+
+      result += decoder.decode(value, { stream: true });
+      totalBytes += value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return result;
+}
+
+// fetchText fetches exactly the URLs it is given. The platform is told
+// redirect: "manual" so it never issues a request the caller has not
+// origin-checked; hops are resolved here, checked BEFORE their request, and
+// bounded. The final response URL is verified too, as a backstop against a
+// platform that reports somewhere else (922q review P2 — sameOriginOnly
+// filters the discovered URL strings, not where they land; 15zzc — the check
+// must not be the only defence, because by then the request has been issued).
 async function fetchText(fetchImpl, url, timeoutMs, origin, maxBytes = null) {
+  const enrolledOrigin = origin ? originOfUrl(origin) : null;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetchImpl(url, { signal: ctrl.signal, credentials: "omit" });
-    if (!res || !res.ok) return null;
-    if (origin && typeof res.url === "string" && res.url) {
-      let finalOrigin = null;
-      try {
-        finalOrigin = new URL(res.url).origin;
-      } catch {
-        finalOrigin = null;
-      }
-      if (finalOrigin !== origin) return null; // redirected off-origin — refused
-    }
-    // Preservation per 9yx7a: When maxBytes is null (general-content path), preserve existing res.text() byte-for-byte
-    if (typeof maxBytes !== "number" || maxBytes <= 0) {
-      const text = await res.text();
-      return typeof text === "string" ? text : null;
-    }
-
-    // Bounded discovery doc path (llms.txt / sitemap.xml / root HTML):
-    // Absent reader fails closed (zero res.text fallback that would buffer unbounded body)
-    if (!res.body || typeof res.body.getReader !== "function") {
-      return null;
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder("utf-8");
-    let result = "";
-    let totalBytes = 0;
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          result += decoder.decode();
-          break;
+    let current = String(url);
+    for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
+      // Pre-request origin gate: nothing off-origin is ever requested, so a
+      // hostile origin cannot use a 302 to reach a private host.
+      if (enrolledOrigin && originOfUrl(current) !== enrolledOrigin) return null;
+      const res = await fetchImpl(current, { signal: ctrl.signal, credentials: "omit", redirect: "manual" });
+      if (!res) return null;
+      if (isRedirectResponse(res)) {
+        try {
+          await res.body?.cancel?.();
+        } catch {
+          // a body we cannot drain must not change the verdict
         }
-        if (!value || !(value instanceof Uint8Array)) continue;
-
-        const remaining = maxBytes - totalBytes;
-        if (value.byteLength >= remaining) {
-          const slice = value.subarray(0, remaining);
-          result += decoder.decode(slice, { stream: false });
-          totalBytes += remaining;
-
-          // Abort underlying transport BEFORE awaiting cancel, with bound on cancel settlement
-          ctrl.abort();
-          let cancelTimer = null;
-          let cancelOk = false;
-          try {
-            await Promise.race([
-              Promise.resolve(reader.cancel("maxBytes exceeded")).then(() => {
-                cancelOk = true;
-              }),
-              new Promise((_, reject) => {
-                cancelTimer = setTimeout(() => reject(new Error("cancel timed out")), 200);
-              }),
-            ]);
-          } catch {
-            cancelOk = false;
-          } finally {
-            if (cancelTimer != null) clearTimeout(cancelTimer);
-          }
-          if (!cancelOk) return null; // failed to cancel or cancel timed out/rejected -> fail closed
-          break;
-        }
-
-        result += decoder.decode(value, { stream: true });
-        totalBytes += value.byteLength;
+        const next = redirectTargetOf(res, current);
+        if (!next) return null; // unreadable/absent Location — refuse, do not guess
+        if (enrolledOrigin && originOfUrl(next) !== enrolledOrigin) return null; // off-origin hop refused before any request
+        current = next;
+        continue;
       }
-    } finally {
-      reader.releaseLock();
+      if (!res.ok) return null;
+      if (enrolledOrigin && typeof res.url === "string" && res.url) {
+        if (originOfUrl(res.url) !== enrolledOrigin) return null; // landed off-origin — refused
+      }
+      return await readResponseBody(res, ctrl, maxBytes);
     }
-
-    return result;
+    return null; // redirect budget exhausted
   } catch {
     return null;
   } finally {

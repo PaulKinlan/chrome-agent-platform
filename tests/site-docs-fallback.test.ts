@@ -22,6 +22,7 @@ import {
   withSiteDocsFallback,
   MAX_DISCOVERY_DOC_BYTES,
   MAX_DISCOVERED_LINKS,
+  MAX_REDIRECT_HOPS,
 } from "../extension/lib/site-docs-fallback.js";
 
 const ORIGIN = "https://docs.example.com";
@@ -218,6 +219,128 @@ Deno.test("fetchSiteDocs: a docs URL that redirects SAME-ORIGIN still works", as
   assert(docs);
   assertEquals(docs.pagesUsed, 2);
   assertStringIncludes(docs.content, "INSTALL-MARKER-922q");
+});
+
+// ── 15zzc: redirects are resolved HERE, never by the platform ────────────────
+// A platform fetch that follows a redirect has ALREADY issued the request to
+// the redirect target by the time any response URL can be inspected. So the
+// module must (a) pass redirect: "manual" and (b) origin-check every hop
+// BEFORE its request. These tests drive real loopback servers: an "enrolled"
+// origin whose /llms.txt 302s to a DISTINCT port must never see a single
+// request land there.
+
+Deno.test("15zzc: an enrolled origin whose docs 302 to another host never causes a request to that host (real servers)", async () => {
+  let targetRequests = 0;
+  let sourceRequests = 0;
+  const target = Deno.serve({ port: 0, hostname: "127.0.0.1", onListen() {} }, () => {
+    targetRequests++;
+    return new Response(PAGE("TARGET-MARKER-15zzc"), { headers: { "content-type": "text/html" } });
+  });
+  const targetOrigin = `http://127.0.0.1:${target.addr.port}`;
+  const source = Deno.serve({ port: 0, hostname: "127.0.0.1", onListen() {} }, () => {
+    sourceRequests++;
+    return new Response(null, { status: 302, headers: { location: `${targetOrigin}/internal` } });
+  });
+  const sourceOrigin = `http://127.0.0.1:${source.addr.port}`;
+  try {
+    const docs = await fetchSiteDocs({ origin: sourceOrigin, queryTerms: ["install"], fetchImpl: fetch });
+    assert(sourceRequests > 0, "the enrolled origin was consulted");
+    assertEquals(targetRequests, 0, "the redirect target must never receive a request (RED before 15zzc it received one per discovery URL)");
+    assertEquals(docs, null, "nothing off-origin can be composed into an answer");
+  } finally {
+    await source.shutdown();
+    await target.shutdown();
+  }
+});
+
+Deno.test('15zzc: every docs request is issued with redirect: "manual" so the platform never follows on our behalf', async () => {
+  const seen = [];
+  const fetchImpl = async (url, opts) => {
+    seen.push({ url: String(url), redirect: opts?.redirect });
+    const u = String(url);
+    if (u === `${ORIGIN}/llms.txt`) return new Response(LLMS, { status: 200 });
+    if (u === `${ORIGIN}/docs/install`) return new Response(PAGE("INSTALL-MARKER-922q"), { status: 200 });
+    if (u === `${ORIGIN}/cli-reference`) return new Response(PAGE("CLI-MARKER-922q"), { status: 200 });
+    return new Response("nope", { status: 404 });
+  };
+  const docs = await fetchSiteDocs({ origin: ORIGIN, queryTerms: [], fetchImpl });
+  assert(docs);
+  assert(seen.length > 0, "requests were made");
+  for (const s of seen) {
+    assertEquals(s.redirect, "manual", `request to ${s.url} must not let the platform follow redirects`);
+  }
+});
+
+Deno.test("15zzc: an opaque manual redirect (browser service worker: no readable Location) fails closed and requests nothing else", async () => {
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    // Chrome answers redirect:"manual" with an opaque-redirect response: status
+    // 0, type "opaqueredirect", headers emptied. Where it pointed is unknowable,
+    // so no hop may be taken — and no second request guessed.
+    return {
+      type: "opaqueredirect",
+      status: 0,
+      ok: false,
+      url: "",
+      headers: new Headers(),
+      body: null,
+      text: async () => "",
+    };
+  };
+  const docs = await fetchSiteDocs({ origin: ORIGIN, queryTerms: [], fetchImpl });
+  assertEquals(docs, null, "nothing ingestible: no redirect is followed blindly");
+  assertEquals(
+    calls,
+    [`${ORIGIN}/llms.txt`, `${ORIGIN}/sitemap.xml`, `${ORIGIN}/`],
+    "only the three discovery URLs are asked for, once each: a redirect target is never requested",
+  );
+});
+
+Deno.test("15zzc: same-origin redirects are followed here (bounded), and a same-origin redirect loop terminates instead of hanging", async () => {
+  const hopCalls = [];
+  const hopFetch = async (url) => {
+    hopCalls.push(String(url));
+    const u = String(url);
+    if (u === `${ORIGIN}/llms.txt`) return new Response(LLMS, { status: 200 });
+    if (u === `${ORIGIN}/docs/install`) return new Response(null, { status: 302, headers: { location: `${ORIGIN}/docs/install/` } });
+    if (u === `${ORIGIN}/docs/install/`) return new Response(PAGE("INSTALL-MARKER-922q"), { status: 200 });
+    if (u === `${ORIGIN}/cli-reference`) return new Response(PAGE("CLI-MARKER-922q"), { status: 200 });
+    return new Response("nope", { status: 404 });
+  };
+  const docs = await fetchSiteDocs({ origin: ORIGIN, queryTerms: ["install"], fetchImpl: hopFetch });
+  assert(docs, "a same-origin hop still resolves (trailing-slash canonicalization keeps working where Location is readable)");
+  assertEquals(docs.pagesUsed, 2);
+  assertStringIncludes(docs.content, "INSTALL-MARKER-922q");
+  assert(hopCalls.includes(`${ORIGIN}/docs/install/`), "the same-origin hop was requested by us, not by the platform");
+
+  let loopCalls = 0;
+  const loopFetch = async () => {
+    loopCalls++;
+    return new Response(null, { status: 302, headers: { location: `${ORIGIN}/loop` } });
+  };
+  const started = performance.now();
+  const looped = await fetchSiteDocs({ origin: ORIGIN, queryTerms: [], fetchImpl: loopFetch });
+  assertEquals(looped, null);
+  assert(loopCalls <= (MAX_REDIRECT_HOPS + 1) * 3, `redirect hops are bounded, got ${loopCalls} requests`);
+  assert(loopCalls > 0, "the loop was actually exercised");
+  assert(performance.now() - started < 5_000, "a redirect loop must not stall the service worker");
+});
+
+Deno.test("15zzc: an off-origin hop is refused BEFORE its request, even after a legitimate same-origin hop", async () => {
+  const calls = [];
+  const offOrigin = "http://127.0.0.1:9/steal";
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    const u = String(url);
+    if (u === `${ORIGIN}/llms.txt`) return new Response(null, { status: 301, headers: { location: `${ORIGIN}/llms-v2.txt` } });
+    if (u === `${ORIGIN}/llms-v2.txt`) return new Response(null, { status: 302, headers: { location: offOrigin } });
+    return new Response("nope", { status: 404 });
+  };
+  const docs = await fetchSiteDocs({ origin: ORIGIN, queryTerms: [], fetchImpl });
+  assertEquals(docs, null);
+  assert(calls.includes(`${ORIGIN}/llms-v2.txt`), "the same-origin hop itself is legitimate and was taken");
+  assert(!calls.includes(offOrigin), "the off-origin hop target is never requested");
 });
 
 // ── e7gwq / j2vok: bounded linear discovery parsing ──────────────────────────
