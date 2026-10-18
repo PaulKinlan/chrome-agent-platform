@@ -282,6 +282,12 @@ const STREAM_WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
 const EMSCRIPTEN_WORKER_HOST_CANONICAL_PATH = "extension/lib/emscripten-host.js";
 const EMSCRIPTEN_WORKER_HOST_CANONICAL_LOCATION = { line: 198, column: 26 };
 const EMSCRIPTEN_WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
+// x9r8k.2's separate, SW-sender-gated STAGING host may create one fresh
+// module Worker, but only from the exact packaged Emscripten Worker URL.
+// This narrow pin does not relax the scalar host's binary request guard.
+const EMSCRIPTEN_STAGE_HOST_CANONICAL_PATH = "extension/lib/emscripten-host-stage.js";
+const EMSCRIPTEN_STAGE_HOST_CANONICAL_LOCATION = { line: 115, column: 26 };
+const EMSCRIPTEN_STAGE_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
 // The table host likewise creates exactly one fresh module Worker from the
 // extension-root URL. Its dependency-injected WorkerCtor is pinned to this
 // one file, one node, and one constructor occurrence.
@@ -548,6 +554,18 @@ export async function scanShippedJs(files, {
             node.loc?.start?.column === EMSCRIPTEN_WORKER_HOST_CANONICAL_LOCATION.column &&
             value === null &&
             (text.match(EMSCRIPTEN_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
+          ) || (
+            isCanonicalScannedPath(file, EMSCRIPTEN_STAGE_HOST_CANONICAL_PATH) &&
+            workerSink === "Worker" &&
+            node.loc?.start?.line === EMSCRIPTEN_STAGE_HOST_CANONICAL_LOCATION.line &&
+            node.loc?.start?.column === EMSCRIPTEN_STAGE_HOST_CANONICAL_LOCATION.column &&
+            value === null &&
+            (text.match(EMSCRIPTEN_STAGE_HOST_ALLOWED_RE) ?? []).length === 1 &&
+            urlCall?.type === "CallExpression" &&
+            memberPropertyName(urlCall.callee) === "getURL" &&
+            urlCall.callee?.object?.name === "runtime" &&
+            urlCall.arguments?.length === 1 &&
+            foldString(urlCall.arguments[0]) === "lib/emscripten-worker.js"
           ) || (
             isCanonicalScannedPath(file, TABLE_WORKER_HOST_CANONICAL_PATH) &&
             workerSink === "WorkerCtor" &&

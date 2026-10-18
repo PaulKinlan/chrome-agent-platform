@@ -77,20 +77,13 @@ export const RETAINED = {
     "Owner directive 2026-08-30: the WASI bundled-package inventory API must not change; tests/bundled-tool-packages.test.ts pins it (the service worker reads the generated *.data.js modules directly).",
   // (lib/bundled-inventory.js was RETAINED here; ltkj.2 reachable now via lib/wasm-package-admission.js)
   // ── surfaces or modules another OPEN entry owns ──
-  "lib/emscripten-custody.js":
-    "ltkj.4.3 is isolated stream custody with ltkj.4.4's pre-create hook; binary transport, independently checked publication and restart cleanup remain unwired until ltkj.4 acceptance.",
+  // x9r8k.2's trusted SW staging route imports emscripten-custody.js for
+  // run-owned input authority only; no allocator/seal/discard is reachable.
   "lib/emscripten-custody-audit.js":
     "ltkj.4.4 prepares an SW-supplied append/fence contract before stream creation and after worker termination; it is not wired to the model/offscreen path or permitted to publish artifacts.",
-  "lib/emscripten-host-evidence.js":
-    "xoeaa retains independently stored pending/UNKNOWN host lifecycle evidence across restarts; binary publication remains refused until the 3mcu1 host-owned writer/close fence can prove a positive no-writers boundary.",
-  "lib/emscripten-host-writer.js":
-    "3mcu1 prepares an offscreen-host-only exclusive writer with bounded frame backpressure, drain/close and independent byte rehash. Native binary transport remains refused until SW and host evidence are wired.",
-  "lib/emscripten-host-binary-runner.js":
-    "3mcu1 prepares a direct trusted-module binary runner with host-owned writer and durable close evidence; no runtime/SW message route imports it and both binary request guards remain on until x9r8k authority wiring.",
-  "lib/emscripten-sw-intent.js":
-    "x9r8k stages a SW-issued per-ref intent in its own OPFS root outside compactable run logs; authority wiring is still pending, and this record never permits sealing or publication.",
-  "lib/emscripten-staging-authority.js":
-    "x9r8k prepares independent SW re-reads of the intent, host ledger and unsealed file; even full agreement returns termination UNKNOWN and no seal, artifact or deletion. Route wiring is pending.",
+  // x9r8k.2: SW-only staging now reaches host evidence/writer/runner and the
+  // independent SW intent/verification modules. No seal, publish or delete
+  // path is reachable, and both original binary publication guards remain.
   "lib/archive-target-registry.js":
     "CAP-FB-20260905-UNBOUNDED-DATA-ARCHIVE-01 (11rm / qcuf): classification authority for durable targets. Its sanitizer family stayed tests-only; 8wbb shipped the agentConfig authority separately (lib/logical-site-agent-config.js) — this module ships when the 11rm streaming converter lands.",
   "lib/tabular-diff-artifacts.js":

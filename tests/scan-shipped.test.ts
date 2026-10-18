@@ -318,6 +318,22 @@ Deno.test("scan: Emscripten host keeps its sole worker constructor exact-path an
   }
 });
 
+Deno.test("scan: Emscripten staging host permits only its pinned packaged Worker URL", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/emscripten-host-stage.js", import.meta.url));
+  const file = "extension/lib/emscripten-host-stage.js";
+  assertEquals(await scanShippedJs([file], { readText: async () => source }), []);
+  for (const lookalike of [`/repo/${file}.evil`, `/repo/xx${file}`]) {
+    const v = await scanShippedJs([lookalike], { readText: async () => source });
+    assert(v.some((row) => row.includes("Worker URL is not a literal")));
+  }
+  const mutated = source.replace('runtime.getURL("lib/emscripten-worker.js")',
+    'runtime.getURL(raw.identity.runId)');
+  assert(mutated !== source);
+  const rejected = await scanShippedJs([file], { readText: async () => mutated });
+  assert(rejected.some((row) => row.includes("Worker URL is not a literal")),
+    "the staging host cannot select native code from a request");
+});
+
 const TABLE_WORKER_CANONICAL_REL = "extension/lib/table-worker-host.js";
 
 Deno.test("scan: the table operation worker carries no dynamic code-loading sink", async () => {

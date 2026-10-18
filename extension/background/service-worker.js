@@ -111,6 +111,7 @@ import { WASM_STREAM_RUN_TYPE, WASM_STREAM_WALL_MS } from "../lib/wasm-stream-ho
 import { CALLEXPORT_RUN_TYPE } from "../lib/wasm-callexport-host.js";
 import { EMSCRIPTEN_RUN_TYPE } from "../lib/emscripten-host.js";
 import { isEmscriptenModelRunLive, dispatchEmscriptenForRun } from "../lib/emscripten-run-fence.js";
+import { bindTrustedSwStaging } from "../lib/emscripten-sw-stage.js";
 // The dispatch broker reads the registry through the small read-only core —
 // the write/validation authority module stays out of this bundle (the
 // standing static/RHC boundary pin).
@@ -2317,6 +2318,27 @@ const ephemeralSiteToolConsentStore = createEphemeralSiteToolConsentStore();
 // Every lookup also rechecks the run's captured reset epoch and abort signal.
 const activeAttachedWebmcpRuns = new Map();
 const cancellingApprovalExecutions = new Set();
+// x9r8k.2: a SW-realm-only staging capability for trusted SW callers and
+// diagnostic CDP verification. Chrome does NOT deliver SW self-messages back
+// to its own onMessage listener; an extension-page message could not be a
+// trusted SW caller. This non-enumerable SW-global function has no message
+// route, model tool, Settings preview or artifact/publish/delete capability.
+Object.defineProperty(globalThis, Symbol.for("cap.emscripten.stage-only"), {
+  value: bindTrustedSwStaging({
+    runtime: chrome.runtime,
+    storage: globalThis.navigator?.storage,
+    readPackages: async () => readCommittedPackages(await masterMemory()),
+    ensureHost: ensureOffscreen,
+    isLive: (runId, agentId) => isEmscriptenModelRunLive({
+      runId, agentId, active: activeExecutions,
+      cancelled: cancellingApprovalExecutions, ended: endedExecutions,
+      workerRun: runControl.get(runId),
+    }),
+  }),
+  // Repeated trusted imports in one realm must rebind their fresh run-control;
+  // extension pages cannot access this SW-global property.
+  writable: false, enumerable: false, configurable: true,
+});
 const executionApprovals = createExecutionApprovalStore(64);
 let siteToolProfileEpoch = 0;
 let siteToolResetting = 0;

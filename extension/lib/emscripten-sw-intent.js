@@ -11,6 +11,8 @@ const NAME = /^[A-Za-z0-9_.-]{1,128}$/u;
 const IDENTITY_KEYS = ["runId", "agentId", "outputRef", "generation", "packageId", "graphDigest", "operationId"];
 const RECORD_KEYS = ["version", "state", "identity", "inputRef", "stagingOnly", "nonpromotable", "issuedAt", "reconcileBy"];
 const RETAINED_KEYS = ["version", "type", "state", "identity", "inputRef", "reason", "retainedAt", "reconcileBy"];
+const RETENTION_REASONS = ["output_create_failed", "run_not_live", "host_unavailable",
+  "evidence_mismatch", "evidence_unavailable", "termination_unproved"];
 export const EMSCRIPTEN_SW_RECONCILE_MS = 24 * 60 * 60 * 1000;
 const activeByStorage = new WeakMap();
 
@@ -82,7 +84,7 @@ function checked(actual, expected) {
 function checkedRetained(actual, intent) {
   if (!exact(actual, RETAINED_KEYS) || actual.version !== 1 ||
       actual.type !== "emscripten-staging-retained" || actual.state !== "retained-not-deleted" ||
-      actual.reason !== "output_create_failed" || !same(actual.identity, intent.identity) ||
+      !RETENTION_REASONS.includes(actual.reason) || !same(actual.identity, intent.identity) ||
       !same(actual.inputRef, intent.inputRef) ||
       !Number.isSafeInteger(actual.retainedAt) || actual.retainedAt < intent.issuedAt ||
       actual.reconcileBy !== intent.reconcileBy) fail("emscripten_sw_intent_collision");
@@ -131,7 +133,7 @@ export function createEmscriptenSwIntent({ storage = globalThis.navigator?.stora
       } finally { active.delete(refId); }
     },
     async recordRetained(raw, reason) {
-      if (reason !== "output_create_failed") fail("emscripten_sw_intent_reason");
+      if (!RETENTION_REASONS.includes(reason)) fail("emscripten_sw_intent_reason");
       const expected = recordFor(raw);
       const { directory } = await directoryFor(storage, expected.identity.outputRef.id, false);
       const intent = checked(await load(directory), expected);
