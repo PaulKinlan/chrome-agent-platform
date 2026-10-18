@@ -14,15 +14,21 @@
 // It is deliberately a RULE over every suite in scripts/ and tests/, not a snapshot of one file, so the
 // same defect added to a new suite is caught by existing machinery instead of by the next review.
 //
-// WHAT THIS GUARD PROVES (apb9i, option A - the claim is bounded on purpose):
-//   REACH  every `openCdp(...)` call in the tree is inside the try BLOCK of a try whose finally reaps;
-//   ORDER  that reap is a DIRECT statement of the finally, with no function/arrow/class between it and the
-//          finalizer body, so it actually runs when the finally runs.
-// WHAT IT DOES NOT PROVE: browser IDENTITY. A finally that reaps a different platform object than the one
-// this suite launched still reads as guarded, because proving otherwise is dataflow, not a shape check. The
-// limitation is asserted as a known limitation below rather than left for a reader to discover, and option B
-// (dataflow) is deferred until a suite here launches twice. A guard that quietly claims more than it can
-// check is how the four lexical rounds happened in the first place.
+// WHAT THIS GUARD PROVES, precisely (apb9i option A, then option C after the fifth review round):
+//   REACH              every `openCdp(...)` call in the tree is written inside the try BLOCK of a try whose
+//                      finally contains a reap call;
+//   STRUCTURAL ORDER   that reap is written as a DIRECT statement of the finally - no function, arrow or
+//                      class between the call and the finalizer body - so it is not deferred into a helper
+//                      the finally never calls.
+// WHAT IT DOES NOT PROVE, and says so in docs/CHROME-TEST-CONTRACT.md 4.1 as well as here:
+//   EXECUTION          a reap inside a branch that never runs (`if (false) await reap(...)`) still reads as
+//                      guarded. Proving a branch runs is not a shape property, and a shape check that
+//                      pretended otherwise would be the same mistake as the four lexical rounds;
+//   IDENTITY           a finally that reaps a DIFFERENT platform object than the suite launched still reads
+//                      as guarded: that is dataflow.
+// Both are asserted BELOW as known limitations rather than left for a reader to discover. Option B (dataflow)
+// is deferred until a suite in this repo launches twice; the point of this pin is the ORDER invariant that
+// actually broke - a connect before the try, where the finally never runs at all.
 //
 // WHY THIS IS PARSED AND NOT SCANNED (d36q4, 7g1fp, 3ce48, ke0n9, and coord's ruling):
 // the first version of this guard blanked comments and strings with a hand-written scanner and looked for
@@ -106,15 +112,12 @@ const DEFERRING = new Set([
 ]);
 
 /**
- * TRUE when this try's `finally` reaps the browser with a DIRECT statement (apb9i, option A).
+ * TRUE when this try's `finally` CONTAINS a reap call written as a direct statement (apb9i, option A).
  *
- * Sufficiency has to be about what RUNS. A reap spelled inside a function that the finally never calls is
- * not a reap, and the reviewer showed exactly that reading as guarded - a green verdict for a suite whose
- * browser leaks. So the reap call must sit in the finalizer's own body with no deferring construct
- * (function, arrow, class) between it and that body.
- *
- * This still does not prove the reap is of the SAME browser the suite launched: that is dataflow, and it is
- * deliberately NOT claimed here (see the header). What is claimed - reach and order - is now true.
+ * "Direct" is about syntax, not control flow: the bare `await reap(...)` statement is the shape every real
+ * suite uses, and a reap deferred into a helper the finally never calls is not a reap. But a reap inside a
+ * branch that never evaluates also counts, and this function does not claim otherwise - see the KNOWN
+ * LIMITATION test and docs/CHROME-TEST-CONTRACT.md 4.1.
  */
 function reapsInFinally(tryNode: Node): boolean {
   if (!isNode(tryNode.finalizer)) return false;
@@ -228,7 +231,7 @@ Deno.test("kafr4 (REACH): every connect in every suite is inside the try whose f
   assert(judged >= 1, `the rule judged no file at all: it has stopped applying to the call shape it guards`);
 });
 
-Deno.test("kafr4 (ORDER): security-suite.ts closes an optional handle first, then reaps, directly in the finally", async () => {
+Deno.test("kafr4 (STRUCTURAL ORDER): security-suite.ts closes an optional handle first, then reaps, directly in the finally", async () => {
   const source = await Deno.readTextFile(`${ROOT}scripts/security-suite.ts`);
   const program = await parseTs(source);
   const sites = walk(program).filter(({ node }) => node.type === "CallExpression" && dotted(node.callee) === CONNECT);
@@ -324,11 +327,25 @@ Deno.test("apb9i (ORDER): a reap DEFERRED into a function the finally never call
   assertEquals(await connectVerdicts(direct), [true], "and the direct statement is what makes it guarded");
 });
 
-Deno.test("apb9i KNOWN LIMITATION: identity is NOT claimed, and that is written down here", async () => {
-  // The reviewer's second false green. This suite reaps a DIFFERENT platform object than the one it
-  // launched, so its own browser still leaks - and this guard reads it as guarded, because identity is
-  // dataflow. The test asserts the CURRENT behaviour so the limitation cannot be mistaken for coverage, and
-  // names the decision: option B (dataflow) is deferred until a suite in this repo launches twice.
+Deno.test("apb9i KNOWN LIMITATIONS: execution and identity are NOT claimed, and that is written down here", async () => {
+  // Both shapes a reviewer found, asserted so the boundary cannot be mistaken for coverage.
+  //
+  // (1) EXECUTION: the reap is written but its branch never runs. This is the shape that made option C the
+  // fallback: no shape check can prove a branch runs, and pretending otherwise is how the lexical rounds went.
+  const deadBranch = `
+    const chrome = await ${LAUNCH}({});
+    try {
+      const cdp = await ${CONNECT}(chrome.wsUrl);
+      await cdp.eval("x");
+    } finally {
+      if (false) await ${REAP}(chrome.proc);
+    }
+  `;
+  assertEquals(await connectVerdicts(deadBranch), [true],
+    "KNOWN LIMITATION: the reap is a direct statement of the finally, so ORDER holds STRUCTURALLY - it is " +
+      "not proven to run, and this guard does not claim it");
+
+  // (2) IDENTITY: a DIFFERENT platform object is reaped, so this suite's browser still leaks.
   const wrongBrowser = `
     const chrome = await ${LAUNCH}({});
     try {

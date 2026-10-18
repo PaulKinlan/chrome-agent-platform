@@ -153,6 +153,32 @@ To prevent confusion when reading test files, here is how fake-runner probes dif
 | `tests/chrome-lock-fixture-scope.test.ts` | Static source AST scan | **NO** | None |
 | `tests/machine-path-honesty.test.ts` | Static source scanner | **NO** | None |
 
+### 4.1 What the connect/reap-order pin checks, and what it does not
+
+`tests/kafr4-suite-connect-inside-reaping-try.test.ts` is the structural pin behind kafr4 (a suite that
+connects CDP *before* the `try` whose `finally` reaps the browser it launched never reaps it, and a hung
+suite then holds a real Chrome for as long as it hangs). It is a parsed check — esbuild strips the types,
+acorn parses what is left — so it is not fooled by anything spelled inside a comment, a string, a template
+or a regex. It proves two things and only two:
+
+- **REACH** — every `openCdp(...)` call under `scripts/` and `tests/` is written inside the try **block** of
+  a try whose `finally` contains a reap call;
+- **STRUCTURAL ORDER** — that reap is written as a direct statement of the `finally`, with no function,
+  arrow or class between the call and the finalizer body, so it cannot be deferred into a helper the
+  `finally` never calls.
+
+It does **not** prove **execution** (a reap inside a branch that never runs still reads as guarded) and does
+not prove **identity** (a `finally` that reaps a different platform object than the suite launched still
+reads as guarded). Both are asserted in the test file as KNOWN LIMITATIONS rather than left to be discovered.
+Proving execution is not a shape property; proving identity is dataflow. Dataflow is deferred until a suite
+in this repo launches twice (chrome-agent-platform-d36q4 owns that decision and records the five review
+rounds that got here).
+
+The reason the boundary is written down rather than engineered away: the first four rounds of this pin each
+fixed one lexical corner (block comments, template interpolations, regex literals) and each fix invited the
+next, because the class was "a hand-written JavaScript lexer in a test". A pin that claims more than it
+checks is worse than a pin that states its reach, because "checked" is what a reader takes away.
+
 ---
 
 ## 5. The Motivating Lesson: Subset Gates vs Cross-Cutting Guards
