@@ -173,22 +173,23 @@ Deno.test("re8v7: the checker buffers no fixed stdout ceiling", async () => {
   assert(/spawn\(/.test(code), "the checker must collect stdout from a streamed child");
 });
 
-Deno.test("o3i89 / nabuw: buffer capacity constants are bounded finite numbers >= 1MiB and !== Infinity", async () => {
+Deno.test("o3i89 / nabuw / moomc: buffer capacity constants are bounded finite numbers >= 1MiB and within design ceilings", async () => {
   const { MAX_GIT_BUFFER_BYTES: gitLandingCap } = await import("../scripts/beads-landing-link.mjs");
   const { MAX_GIT_BUFFER_BYTES: gitOwedCap } = await import("../scripts/check-owed-changelog.mjs");
   const { MAX_ARCHIVE_BUFFER_BYTES: archiveCap } = await import("../scripts/package-archive.mjs");
   const { PS_MAX_BUFFER_BYTES: psCap, FLOCK_MAX_BUFFER_BYTES: flockCap } = await import("../scripts/security-suite-custody.mjs");
 
-  for (const [name, cap] of [
-    ["beads-landing-link MAX_GIT_BUFFER_BYTES", gitLandingCap],
-    ["check-owed-changelog MAX_GIT_BUFFER_BYTES", gitOwedCap],
-    ["package-archive MAX_ARCHIVE_BUFFER_BYTES", archiveCap],
-    ["security-suite-custody PS_MAX_BUFFER_BYTES", psCap],
-    ["security-suite-custody FLOCK_MAX_BUFFER_BYTES", flockCap],
+  for (const [name, cap, maxExpected] of [
+    ["beads-landing-link MAX_GIT_BUFFER_BYTES", gitLandingCap, 256 * 1024 * 1024],
+    ["check-owed-changelog MAX_GIT_BUFFER_BYTES", gitOwedCap, 256 * 1024 * 1024],
+    ["package-archive MAX_ARCHIVE_BUFFER_BYTES", archiveCap, 128 * 1024 * 1024],
+    ["security-suite-custody PS_MAX_BUFFER_BYTES", psCap, 32 * 1024 * 1024],
+    ["security-suite-custody FLOCK_MAX_BUFFER_BYTES", flockCap, 1024 * 1024],
   ] as const) {
     assert(typeof cap === "number", `${name} must be a number`);
     assert(Number.isFinite(cap), `${name} must be finite (not Infinity)`);
     assert(cap >= 1024 * 1024, `${name} must be at least 1MiB`);
+    assert(cap <= maxExpected, `${name} (${cap}) must not exceed design ceiling of ${maxExpected} bytes`);
   }
 });
 
@@ -260,12 +261,45 @@ Deno.test("nabuw / o3i89: buffer overflow triggers reachable capacity errors wit
     await Deno.remove(scratch, { recursive: true }).catch(() => {});
   }
 
-  // 7. package-archive source code does not use unbounded maxBuffer (05x0v, o3vrq, wh98h, stvca, 8gnu0).
-  // Uses AST parsing so comments, string literals, quoted keys, and default parameters are strictly evaluated.
+  // 7. package-archive source code does not use unbounded maxBuffer (05x0v, o3vrq, wh98h, stvca, 8gnu0, moomc).
+  // Uses AST parsing so comments, string literals, quoted keys, default parameters, and constant bounds are strictly evaluated.
   const packageArchiveSrc = await Deno.readTextFile(new URL("../scripts/package-archive.mjs", import.meta.url));
   const ast = parseJs(packageArchiveSrc, { ecmaVersion: "latest", sourceType: "module" });
+  function evalStaticNumeric(node: any): number {
+    if (!node) return NaN;
+    if (node.type === "Literal" && typeof node.value === "number") return node.value;
+    if (node.type === "UnaryExpression" && node.operator === "-" && node.argument) {
+      return -evalStaticNumeric(node.argument);
+    }
+    if (node.type === "BinaryExpression") {
+      const left = evalStaticNumeric(node.left);
+      const right = evalStaticNumeric(node.right);
+      if (node.operator === "*") return left * right;
+      if (node.operator === "+") return left + right;
+      if (node.operator === "-") return left - right;
+      if (node.operator === "/") return left / right;
+      if (node.operator === "**") return left ** right;
+    }
+    return NaN;
+  }
+  let foundArchiveBufferConstant = false;
   function walk(node: any) {
     if (!node || typeof node !== "object") return;
+    if (node.type === "VariableDeclarator" && node.id?.name === "MAX_ARCHIVE_BUFFER_BYTES") {
+      foundArchiveBufferConstant = true;
+      const declaredBytes = evalStaticNumeric(node.init);
+      assert(
+        Number.isFinite(declaredBytes) && declaredBytes >= 1024 * 1024 && declaredBytes <= 128 * 1024 * 1024,
+        `scripts/package-archive.mjs MAX_ARCHIVE_BUFFER_BYTES declaration must be statically bounded between 1MiB and 128MiB, got ${declaredBytes}`,
+      );
+    }
+    if (node.type === "AssignmentExpression") {
+      const targetName = node.left.type === "Identifier" ? node.left.name : null;
+      assert(
+        targetName !== "maxBuffer" && targetName !== "MAX_ARCHIVE_BUFFER_BYTES",
+        `scripts/package-archive.mjs must not reassign ${targetName} via AssignmentExpression`,
+      );
+    }
     if (node.type === "Property") {
       const keyName = node.key.type === "Identifier" ? node.key.name : node.key.value;
       if (keyName === "maxBuffer") {
@@ -296,5 +330,6 @@ Deno.test("nabuw / o3i89: buffer overflow triggers reachable capacity errors wit
     }
   }
   walk(ast);
+  assert(foundArchiveBufferConstant, "scripts/package-archive.mjs must declare MAX_ARCHIVE_BUFFER_BYTES");
 });
 
