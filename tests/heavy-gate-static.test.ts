@@ -1,7 +1,7 @@
 // tests/heavy-gate-static.test.ts — static structural tests for scripts/heavy-gate.ts (chrome-agent-platform-o29c0).
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_HEAVY_GATE_TIMEOUT_MS, filesFor, main, partitionByPhase } from "../scripts/heavy-gate.ts";
+import { classifyPhaseExit, DEFAULT_HEAVY_GATE_TIMEOUT_MS, filesFor, main, partitionByPhase } from "../scripts/heavy-gate.ts";
 import {
   BUILD_GATE,
   HEAVY_GATE,
@@ -20,6 +20,24 @@ Deno.test("heavy-gate static: exports main and filesFor, matching HEAVY_GATE_FIL
   assertEquals(filesFor(["tests/foo.test.ts", "--flag"]), ["tests/foo.test.ts"]);
   assertEquals(HEAVY_GATE_FILES.length, 20);
   assertEquals(DEFAULT_HEAVY_GATE_TIMEOUT_MS, 1200_000);
+});
+
+Deno.test("rvht7: a wall-clock phase that refused environmentally becomes exit 75, not 1", () => {
+  // `deno test` reports the refusal as an ordinary failing test (exit 1). The tier runs these files in its own
+  // child, so it must translate the marker itself — otherwise a box problem reaches the operator as a tree
+  // failure at the last step, which is the exact outcome this bead exists to prevent.
+  const refusal = `\n ERRORS \n\nntp-boot-staging: boots ntp.html => ./tests/ntp-boot-staging-timing.test.ts:41:6\n` +
+    `error: QuietWindowRefusedError: ENVIRONMENT: machine is not quiet enough for this gate (waited 181351 ms)\n` +
+    `  throw new QuietWindowRefusedError(verdict);\n\n FAILURES \n`;
+  assertEquals(classifyPhaseExit(1, refusal), 75);
+  // A product assertion still wins: it must never be laundered into an environmental refusal.
+  const product = `\n ERRORS \n\nntp-boot-staging: boots ntp.html => ./tests/ntp-boot-staging-timing.test.ts:41:6\n` +
+    `error: AssertionError: Expected 0 long tasks, got 3\n\n FAILURES \n`;
+  assertEquals(classifyPhaseExit(1, product), 1);
+  // A quiet phase, an already-translated phase, and an unrelated non-zero code pass through untouched.
+  assertEquals(classifyPhaseExit(0, ""), 0);
+  assertEquals(classifyPhaseExit(75, ""), 75);
+  assertEquals(classifyPhaseExit(1, ""), 1);
 });
 
 Deno.test("rvht7: wall-clock suites are split OUT of the parallel batch and keep their order", () => {

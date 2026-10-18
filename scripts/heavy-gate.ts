@@ -19,7 +19,7 @@
 
 import { fileURLToPath } from "node:url";
 import { HEAVY_GATE_FILES, WALL_CLOCK_HEAVY_FILES } from "./test-partition.mjs";
-import { combinePhaseExitCodes } from "./lib/environmental-verdict.mjs";
+import { areAllFailuresEnvironmental, combinePhaseExitCodes, ENVIRONMENTAL_REFUSAL_EXIT } from "./lib/environmental-verdict.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 export const DEFAULT_HEAVY_GATE_TIMEOUT_MS = 1200_000;
@@ -40,11 +40,30 @@ export function partitionByPhase(files: string[]): { parallel: string[]; wallClo
   };
 }
 
+const ANSI_RE = /\x1b\[[0-9;]*[mGKH]/gu;
+
+/**
+ * Translate a finished wall-clock phase into the tier's verdict (chrome-agent-platform-rvht7).
+ *
+ * `deno test` reports a suite that refused environmentally as an ordinary test FAILURE (exit 1), because the
+ * test threw. Across the batch that is exactly what the serial/parallel runners translate via the marker, but
+ * the heavy tier runs these files in its own child processes — so the tier must translate too, or the whole
+ * point of the refusal (a box problem must never read as a tree problem) is lost at the last step.
+ *
+ * Returns 75 when the phase's own output says every failure was environmental; otherwise the code unchanged.
+ */
+export function classifyPhaseExit(code: number, capturedOutput = ""): number {
+  if (code === 0 || code === ENVIRONMENTAL_REFUSAL_EXIT) return code;
+  const clean = capturedOutput.replace(ANSI_RE, "");
+  if (areAllFailuresEnvironmental(clean)) return ENVIRONMENTAL_REFUSAL_EXIT;
+  return code;
+}
+
 /** One `deno test` child with the tier's shared ceiling. Returns the child's exit code (124 on the bound). */
 async function runPhase(
   label: string,
   files: string[],
-  { parallel, timeoutMs }: { parallel: boolean; timeoutMs: number },
+  { parallel, timeoutMs, capture }: { parallel: boolean; timeoutMs: number; capture: boolean },
 ): Promise<number> {
   console.log(`\nheavy-gate: ${label} — ${files.length} file(s)${parallel ? " (--parallel)" : " (SERIAL, quiet-window acquirer)"}`);
   for (const f of files) console.log(`  - ${f}`);
@@ -55,10 +74,27 @@ async function runPhase(
     args,
     cwd: ROOT,
     env: { ...Deno.env.toObject(), CAP_TEST_RUNNER: "1" },
-    stdout: "inherit",
-    stderr: "inherit",
+    // The wall-clock phase is CAPTURED (then echoed) so its refusal marker can be classified without losing
+    // the operator's view; the batch keeps inheriting stdio because it is large and never refused.
+    stdout: capture ? "piped" : "inherit",
+    stderr: capture ? "piped" : "inherit",
   });
   const child = cmd.spawn();
+  let captured = "";
+  const pump = async (stream: ReadableStream<Uint8Array> | null, sink: (chunk: string) => void) => {
+    if (!stream) return;
+    for await (const chunk of stream) {
+      const text = new TextDecoder().decode(chunk);
+      captured += text;
+      sink(text);
+    }
+  };
+  const pumps = capture
+    ? Promise.all([
+      pump(child.stdout, (text) => Deno.stdout.writeSync(new TextEncoder().encode(text))),
+      pump(child.stderr, (text) => Deno.stderr.writeSync(new TextEncoder().encode(text))),
+    ])
+    : Promise.resolve();
   let timer: ReturnType<typeof setTimeout> | null = null;
   let timedOut = false;
   if (timeoutMs > 0 && Number.isFinite(timeoutMs)) {
@@ -68,14 +104,17 @@ async function runPhase(
     }, timeoutMs);
   }
   const status = await child.status;
+  await pumps;
   if (timer) clearTimeout(timer);
   if (timedOut) {
     console.error(`\nheavy-gate: TIMED OUT after ${timeoutMs / 1000}s (${label})`);
     return 124;
   }
-  if (status.code === 0) console.log(`heavy-gate: ${label} GREEN`);
-  else console.error(`heavy-gate: ${label} exited ${status.code}`);
-  return status.code;
+  const verdict = capture ? classifyPhaseExit(status.code, captured) : status.code;
+  if (verdict === 0) console.log(`heavy-gate: ${label} GREEN`);
+  else if (verdict === ENVIRONMENTAL_REFUSAL_EXIT) console.error(`heavy-gate: ${label} REFUSED environmentally (exit 75)`);
+  else console.error(`heavy-gate: ${label} exited ${verdict}`);
+  return verdict;
 }
 
 export async function runHeavyGate(args = Deno.args): Promise<number> {
@@ -85,10 +124,12 @@ export async function runHeavyGate(args = Deno.args): Promise<number> {
   const timeoutMs = Number(Deno.env.get("CAP_HEAVY_GATE_TIMEOUT_MS") ?? DEFAULT_HEAVY_GATE_TIMEOUT_MS);
 
   const codes: number[] = [];
-  if (parallel.length) codes.push(await runPhase("PARALLEL batch", parallel, { parallel: true, timeoutMs }));
+  if (parallel.length) {
+    codes.push(await runPhase("PARALLEL batch", parallel, { parallel: true, timeoutMs, capture: false }));
+  }
   // Wall-clock suites run one at a time, never beside the batch: their assertion is about the box.
   for (const file of wallClock) {
-    codes.push(await runPhase(`WALL-CLOCK ${file}`, [file], { parallel: false, timeoutMs }));
+    codes.push(await runPhase(`WALL-CLOCK ${file}`, [file], { parallel: false, timeoutMs, capture: true }));
   }
 
   const rc = codes.length ? combinePhaseExitCodes(...codes) : 0;
