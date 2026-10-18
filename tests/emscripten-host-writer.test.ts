@@ -13,7 +13,7 @@ const identityFor = (outputRef) => ({
   packageId: "image.tool", graphDigest: "c".repeat(64), operationId: "resize",
 });
 function missing() { return new DOMException("not found", "NotFoundError"); }
-function memoryStorage({ exclusive = true, closeFails = false, writeFails = false, beforeStdoutWrite } = {}) {
+function memoryStorage({ exclusive = true, exclusivePerHandle = false, terminalExclusiveFails = false, closeFails = false, writeFails = false, beforeStdoutWrite } = {}) {
   const dir = () => {
     const children = new Map();
     return {
@@ -25,20 +25,26 @@ function memoryStorage({ exclusive = true, closeFails = false, writeFails = fals
         return node;
       },
       async getFileHandle(name, { create = false } = {}) {
-        if (!children.has(name) && create) children.set(name, { bytes: new Uint8Array(), open: 0 });
+        if (!children.has(name) && create) children.set(name, { bytes: new Uint8Array(), open: 0, exclusiveOpens: 0 });
         const node = children.get(name);
         if (!node || node.getDirectoryHandle) throw missing();
+        let handleOpen = 0;
         return {
           getFile: async () => new Blob([node.bytes]),
           createWritable: async (options = {}) => {
-            if (exclusive && options.mode === "exclusive" && node.open) {
+            if (terminalExclusiveFails && name === "stdout.bin" && options.mode === "exclusive" && node.exclusiveOpens > 0 && node.open === 0) {
+              throw new DOMException("terminal lock unavailable", "NoModificationAllowedError");
+            }
+            if (exclusive && options.mode === "exclusive" &&
+                (exclusivePerHandle ? handleOpen : node.open)) {
               throw new DOMException("exclusive", "NoModificationAllowedError");
             }
-            node.open++;
+            node.open++; handleOpen++;
+            if (options.mode === "exclusive") node.exclusiveOpens++;
             let next = new Uint8Array();
             let position = 0;
             let ended = false;
-            const release = () => { if (!ended) { ended = true; node.open--; } };
+            const release = () => { if (!ended) { ended = true; node.open--; handleOpen--; } };
             return {
               async write(value) {
                 if (name === "stdout.bin") await beforeStdoutWrite?.();
@@ -97,6 +103,21 @@ Deno.test("3mcu1: host drains ordered frames, closes exclusive writer and indepe
   assertEquals((await listWasmStreamEntries({ storage })).length, 1, "no seal, publish or delete");
 });
 
+Deno.test("3mcu1: a frame arriving after drain begins poisons positive proof", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const { storage, outputRef, open } = await setup({ beforeStdoutWrite: () => gate });
+  const channel = await open();
+  const first = channel.push({ seq: 0, chunk: new Uint8Array([1, 2, 3]) });
+  const closing = channel.close();
+  await code(() => channel.push({ seq: 1, chunk: new Uint8Array([4, 5]) }), "emscripten_writer_not_open");
+  release();
+  await first.catch(() => {});
+  await code(() => closing, "emscripten_writer_not_open");
+  assertEquals(channel.state, "unknown");
+  assertEquals((await listWasmStreamEntries({ storage })).map(({ id }) => id), [outputRef.id]);
+});
+
 Deno.test("3mcu1: close cannot advertise bytes while a host write is still pending", async () => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
@@ -108,12 +129,16 @@ Deno.test("3mcu1: close cannot advertise bytes while a host write is still pendi
   closing.then(() => { settled = true; }, () => { settled = true; });
   await Promise.resolve();
   assertEquals(settled, false, "pending write fences close");
-  await code(() => channel.push({ seq: 1, chunk: new Uint8Array([7]) }), "emscripten_writer_not_open");
   release();
   await frame;
   const proof = await closing;
   assertEquals(proof.bytes, 3);
   assertEquals(proof.frames, 1);
+});
+
+Deno.test("3mcu1: a lock scoped only to one FileSystemFileHandle fails closed", async () => {
+  const { open } = await setup({ exclusivePerHandle: true });
+  await code(open, "emscripten_writer_exclusivity_unavailable");
 });
 
 Deno.test("3mcu1: silently ignored exclusive mode refuses instead of using siloed writer", async () => {
@@ -122,6 +147,15 @@ Deno.test("3mcu1: silently ignored exclusive mode refuses instead of using siloe
   const dir = await (await root.getDirectoryHandle(WASM_STREAM_ROOT_NAME)).getDirectoryHandle(outputRef.id);
   assertEquals(dir.children.get("stdout.bin").open, 0, "both probe handles aborted");
   assertEquals((await listWasmStreamEntries({ storage })).length, 1);
+});
+
+Deno.test("3mcu1: terminal lock re-acquisition failure yields UNKNOWN after close", async () => {
+  const { storage, outputRef, open } = await setup({ terminalExclusiveFails: true });
+  const channel = await open();
+  await channel.push({ seq: 0, chunk: new Uint8Array([1]) });
+  await code(() => channel.close(), "emscripten_writer_exclusivity_unavailable");
+  assertEquals(channel.state, "unknown");
+  assertEquals((await listWasmStreamEntries({ storage })).map(({ id }) => id), [outputRef.id]);
 });
 
 Deno.test("3mcu1: close and write failures become UNKNOWN; no seal/artifact/cleanup", async () => {

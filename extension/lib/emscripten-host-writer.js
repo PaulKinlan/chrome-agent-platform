@@ -4,7 +4,7 @@
 import { emscriptenJobOwner } from "./emscripten-custody.js";
 import { createEmscriptenHostEvidence } from "./emscripten-host-evidence.js";
 import { createIncrementalSha256 } from "./incremental-sha256.js";
-import { openWasmStreamHandles, validateWasmStreamRef } from "./wasm-stream-files.js";
+import { openWasmStreamHandles, validateWasmStreamRef, WASM_STREAM_FILE_NAMES } from "./wasm-stream-files.js";
 
 const FRAME_BYTES = 64 * 1024;
 const READ_BYTES = 64 * 1024;
@@ -19,20 +19,23 @@ function fail(code, cause) {
 /** Keep the exclusive writer open while probing a second open. An unknown
  * WebIDL dictionary member can be silently ignored, so an ordinary successful
  * first open is NOT evidence of exclusivity. No fallback to siloed mode. */
-async function exclusiveWriter(handle) {
+async function exclusiveWriter(handle, directory) {
   let primary;
   try {
     primary = await handle.createWritable({ mode: "exclusive" });
     let secondary;
-    try { secondary = await handle.createWritable({ mode: "exclusive" }); }
+    try {
+      const independentHandle = await directory.getFileHandle(WASM_STREAM_FILE_NAMES.stdout);
+      secondary = await independentHandle.createWritable({ mode: "exclusive" });
+    }
     catch (error) {
       if (error?.name === "NoModificationAllowedError") return primary;
       throw error;
     }
-    await secondary.abort?.().catch(() => {});
+    if (secondary?.abort) await secondary.abort().catch(() => {});
     fail("emscripten_writer_exclusivity_unavailable");
   } catch (error) {
-    await primary?.abort?.().catch(() => {});
+    if (primary?.abort) await primary.abort().catch(() => {});
     if (error?.code === "emscripten_writer_exclusivity_unavailable") throw error;
     fail("emscripten_writer_exclusivity_unavailable", error);
   }
@@ -45,8 +48,8 @@ async function exclusiveWriter(handle) {
 export async function openHostOwnedEmscriptenWriter({ runId, agentId, outputRef, storage, recordUnknown } = {}) {
   const owner = emscriptenJobOwner({ runId, agentId });
   const ref = validateWasmStreamRef(outputRef, { kinds: ["stdout"] });
-  const { stdoutFile } = await openWasmStreamHandles({ ref, owner, allowUnsealedOutput: true, storage });
-  const writer = await exclusiveWriter(stdoutFile);
+  const { stdoutFile, directory } = await openWasmStreamHandles({ ref, owner, allowUnsealedOutput: true, storage });
+  const writer = await exclusiveWriter(stdoutFile, directory);
   let state = "open";
   let pending = Promise.resolve();
   let queued = 0;
@@ -69,6 +72,10 @@ export async function openHostOwnedEmscriptenWriter({ runId, agentId, outputRef,
   return Object.freeze({
     get state() { return state; },
     async push({ seq, chunk } = {}) {
+      if (state === "draining") {
+        await unknown("writer_fence_unavailable");
+        fail("emscripten_writer_not_open");
+      }
       if (state !== "open" || firstFailure) fail("emscripten_writer_not_open");
       if (!Number.isSafeInteger(seq) || seq !== sequence || !(chunk instanceof Uint8Array) ||
           chunk.byteLength > FRAME_BYTES || queued >= MAX_PENDING_FRAMES) {
@@ -104,6 +111,16 @@ export async function openHostOwnedEmscriptenWriter({ runId, agentId, outputRef,
       catch (cause) {
         await unknown("writer_fence_unavailable");
         fail("emscripten_writer_close_failed", cause);
+      }
+      if (state !== "draining") fail("emscripten_writer_not_open");
+      // Probe again AFTER close: a different file holder would deny this open.
+      // Failure is UNKNOWN. Never infer a fence from terminate() or a message.
+      try {
+        const probe = await exclusiveWriter(stdoutFile, directory);
+        await probe.abort();
+      } catch (cause) {
+        await unknown("writer_fence_unavailable");
+        fail("emscripten_writer_exclusivity_unavailable", cause);
       }
       if (state !== "draining") fail("emscripten_writer_not_open");
       // The file is visible only AFTER the writable's close has returned.
