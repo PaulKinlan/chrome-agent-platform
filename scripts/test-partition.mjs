@@ -125,15 +125,25 @@ export const HEAVY_GATE_REASONS = {
   // The FULL gate keeps boot coverage without a timing budget (ntp-rpc-census and the other
   // browser tests load ntp.html and assert outcomes; the structural boot-scheduler assertions stay
   // in tests/ntp-boot-staging.test.ts).
-  // WARNING, measured during review: this tier is NOT a quiet box. scripts/heavy-gate.ts runs
-  // `deno test --parallel` over these 20 files, 19 of which are RAM/CPU-saturating WASM and Pyodide
-  // stress suites, and it neither acquires the fleet slot nor promotes an environmental refusal.
-  // What this entry buys is that a landing no longer takes a load-dependent verdict; a wall-clock
-  // budget still needs the box quiet, and the repo's only mechanism for that is a test acquiring it
-  // itself via scripts/lib/quiet-window.ts (awaitQuietWindow) - the follow-up the hub must decide.
+  // rvht7: this file is in WALL_CLOCK_HEAVY_FILES, so heavy-gate runs it AFTER the parallel batch, alone,
+  // and it acquires a quiet window itself (lib/heavy-quiet-acquire.ts) before measuring. The wait is bounded
+  // and ends in an environmental refusal (exit 75 + CAP_ENVIRONMENTAL_REFUSAL) rather than a FAIL: the tier's
+  // other 19 suites saturate the box by design, so a wall-clock verdict taken beside them measured the box,
+  // not the tree.
   "tests/ntp-boot-staging-timing.test.ts":
     "wall-clock NTP boot budgets (median long tasks 0, composer-ready < 150ms, thread-hydrated <= 250ms) in a real browser; kept out of the FULL gate so a landing does not take a load-dependent verdict, but note this tier runs in parallel with WASM stress suites and is not itself quiet",
 };
+/**
+ * The heavy-tier suites that measure WALL-CLOCK budgets rather than just load the box
+ * (chrome-agent-platform-rvht7). They cannot share a `deno test --parallel` batch with the RAM/CPU-saturating
+ * WASM and Pyodide suites: the assertion they make is "the box is quiet", and inside that batch it is not.
+ * scripts/heavy-gate.ts therefore runs these AFTER the parallel batch, one at a time, and each acquires its
+ * own quiet window first (lib/heavy-quiet-acquire.ts, bounded, refusing environmentally rather than failing).
+ *
+ * They stay in HEAVY_GATE_FILES: the tier still owns them, and `filesFor()` still returns the whole set.
+ */
+export const WALL_CLOCK_HEAVY_FILES = Object.freeze(["tests/ntp-boot-staging-timing.test.ts"]);
+
 export const HEAVY_GATE_FILES = Object.freeze(Object.keys(HEAVY_GATE_REASONS));
 export const HEAVY_GATE = new Set(HEAVY_GATE_FILES);
 

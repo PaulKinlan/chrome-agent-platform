@@ -83,6 +83,7 @@ chrome-agent-platform-o29c0 partitions WASM and heavy binary fixture tests out o
   - CallExport & WASI: `tests/callexport-admission.test.ts`, `tests/t3-trio-admission.test.ts`, `tests/unix-tools-admission.test.ts`, `tests/wasi-preview1-runtime.test.ts`
   - Memory-Intensive WASM: `tests/wasm-external-sort.test.ts`, `tests/wasm-host-gate2.test.ts`
   - Emscripten Evidence & Schema-2 Audits: `tests/emscripten-blake3-admission.test.ts`, `tests/emscripten-numeric-acceptance.test.ts`, `tests/emscripten-module-audit.test.ts`, `tests/emscripten-abi-evidence.test.ts`
+- **Two phases (chrome-agent-platform-rvht7):** the 19 WASM/Pyodide suites run as one `deno test --parallel` batch; `WALL_CLOCK_HEAVY_FILES` (`tests/ntp-boot-staging-timing.test.ts`) runs AFTER that batch, one file at a time, because its assertion is "the box was quiet" and the batch is by design the least quiet thing on the machine. That suite acquires a quiet window itself (`lib/heavy-quiet-acquire.ts`) before the first budget is read: the wait is bounded by `CAP_QUIET_ACQUIRE_MS` (default 180s, never unbounded — a nonsense value falls back to the default rather than hanging), the wait duration is printed when it is non-zero, and a window that never arrives ends in an **environmental refusal** (`CAP_ENVIRONMENTAL_REFUSAL` marker + `QuietWindowRefusedError` ⇒ exit 75), never a product FAIL. Measured on this host: acquired after 4.1s at load5 4.51, load/core 0.15.
 
 ### 2.2 Acceptance and Journey Harnesses (`scripts/`)
 All harnesses under `scripts/` require a real browser:
