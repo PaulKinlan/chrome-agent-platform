@@ -81,7 +81,13 @@ export async function acceptEmscriptenOutputFrame(frame, identity, channel, repl
     await channel?.abort?.("writer_fence_unavailable");
     fail("emscripten_frame_invalid");
   }
-  if (identity.workerInstanceId === null) identity.workerInstanceId = frame.workerInstanceId;
+  if (identity.workerInstanceId === null) {
+    try { identity.workerInstanceId = frame.workerInstanceId; }
+    catch {
+      await channel.abort("writer_fence_unavailable");
+      fail("emscripten_frame_invalid");
+    }
+  }
   try {
     await channel.push({ seq: frame.seq, chunk: frame.chunk });
     reply({ type: EMSCRIPTEN_OUTPUT_ACK_TYPE, sessionId: frame.sessionId,

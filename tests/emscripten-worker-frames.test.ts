@@ -150,6 +150,17 @@ Deno.test("3mcu1: actual module Worker transfers frames and returns no binary re
   } finally { clearTimeout(timer); worker.terminate(); }
 });
 
+Deno.test("3mcu1: frozen host identity cannot turn a frame into an untyped omission", async () => {
+  const reasons = []; const replies = [];
+  const frozen = Object.freeze({ sessionId: "s1", packageId: "p1", operationId: "o1", workerInstanceId: null });
+  const channel = { push: () => assert(false), abort: (reason) => reasons.push(reason) };
+  await code(() => acceptEmscriptenOutputFrame({ type: EMSCRIPTEN_OUTPUT_FRAME_TYPE,
+    ...ID, seq: 0, chunk: new Uint8Array([1]) }, frozen, channel,
+  (ack) => replies.push(ack)), "emscripten_frame_invalid");
+  assertEquals(reasons, ["writer_fence_unavailable"]);
+  assertEquals(replies, []);
+});
+
 Deno.test("3mcu1: empty binary output sends no frames or payload", async () => {
   const result = await postEmscriptenOutputFrames(new Uint8Array(), ID, {
     expectAck: () => assert(false), postFrame: () => assert(false),
