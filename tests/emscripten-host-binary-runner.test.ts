@@ -68,7 +68,8 @@ async function context() {
   return { storage, identity, evidence, job };
 }
 function fakeWorker({ malformed = false, timeout = false, lateFrame = false,
-  sendEnd = true, wrongDigest = false, frameAfterEnd = false } = {}) {
+  sendEnd = true, wrongDigest = false, frameAfterEnd = false,
+  emptyOutput = false, duplicateEnd = false, wrongEndIdentity = false } = {}) {
   const frames = [];
   let stopped = 0;
   const instance = "11111111-1111-4111-8111-111111111111";
@@ -91,6 +92,18 @@ function fakeWorker({ malformed = false, timeout = false, lateFrame = false,
         job = message;
         transfer = transferList;
         if (timeout) return;
+        if (emptyOutput) {
+          queueMicrotask(() => {
+            const identity = { sessionId: job.sessionId, packageId: job.packageId,
+              operationId: job.operationId, workerInstanceId: instance };
+            if (sendEnd) worker.onmessage({ data: createEmscriptenOutputEnd(new Uint8Array(),
+              identity, { frames: 0, bytes: 0 }) });
+            worker.onmessage({ data: { type: "cap:emscripten-run-result",
+              sessionId: job.sessionId, packageId: job.packageId, operationId: job.operationId,
+              workerInstanceId: instance, ok: true, phase: "completed", result: null, error: null } });
+          });
+          return;
+        }
         queueMicrotask(() => worker.onmessage({ data: {
           type: EMSCRIPTEN_OUTPUT_FRAME_TYPE, sessionId: job.sessionId,
           packageId: job.packageId, operationId: job.operationId,
@@ -105,7 +118,9 @@ function fakeWorker({ malformed = false, timeout = false, lateFrame = false,
               sessionId: job.sessionId, packageId: job.packageId,
               operationId: job.operationId, workerInstanceId: instance,
             }, { frames: 1, bytes: 2 });
-            worker.onmessage({ data: wrongDigest ? { ...end, sha256: "0".repeat(64) } : end });
+            worker.onmessage({ data: wrongDigest ? { ...end, sha256: "0".repeat(64) } :
+              wrongEndIdentity ? { ...end, workerInstanceId: "foreign" } : end });
+            if (duplicateEnd) worker.onmessage({ data: end });
           }
           if (frameAfterEnd) worker.emitLateFrame();
           worker.onmessage({ data: {
@@ -133,12 +148,23 @@ Deno.test("x9r8k: scalar terminal without a producer-end declaration stays UNKNO
 });
 
 Deno.test("x9r8k: mismatched producer end or frame after end never yields CLOSED", async () => {
-  for (const options of [{ wrongDigest: true }, { frameAfterEnd: true }]) {
+  for (const options of [{ wrongDigest: true }, { frameAfterEnd: true },
+    { duplicateEnd: true }, { wrongEndIdentity: true }]) {
     const { storage, identity, evidence, job } = await context();
     await assertRejects(() => runAuditedHostBinaryJob({ identity, job, storage, evidence,
       createWorker: () => fakeWorker(options), wallMs: 1000 }));
     assertEquals((await evidence.read(identity)).state, "unknown");
   }
+});
+
+Deno.test("x9r8k: empty output binds Worker instance at producer-end and closes zero bytes", async () => {
+  const { storage, identity, evidence, job } = await context();
+  const proof = await runAuditedHostBinaryJob({ identity, job, storage, evidence,
+    createWorker: () => fakeWorker({ emptyOutput: true }), wallMs: 1000 });
+  assertEquals(proof.frames, 0);
+  assertEquals(proof.bytes, 0);
+  assertEquals(proof.sha256, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  assertEquals((await evidence.read(identity)).state, "closed");
 });
 
 Deno.test("3mcu1: host-only runner writes through host channel, closes and persists exact proof", async () => {

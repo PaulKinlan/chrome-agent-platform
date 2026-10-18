@@ -2,10 +2,10 @@
 // @ts-nocheck
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { createWasmStreamOutput, WASM_STREAM_ROOT_NAME } from "../extension/lib/wasm-stream-files.js";
-import { createEmscriptenSwIntent } from "../extension/lib/emscripten-sw-intent.js";
+import { createEmscriptenSwIntent, EMSCRIPTEN_SW_INTENT_ROOT } from "../extension/lib/emscripten-sw-intent.js";
 
 function missing() { return new DOMException("missing", "NotFoundError"); }
-function storageFixture() {
+function storageFixture({ failRetainedWrite = false } = {}) {
   const deletions = [];
   function dir() {
     const nodes = new Map();
@@ -19,6 +19,7 @@ function storageFixture() {
       },
       async getFileHandle(name, { create = false } = {}) {
         if (name === "stderr.bin") throw new Error("injected stderr create failure");
+        if (name === "retained.json" && failRetainedWrite) throw new Error("injected ledger failure");
         if (!nodes.has(name) && create) nodes.set(name, { bytes: "" });
         const node = nodes.get(name);
         if (!node || node.getDirectoryHandle) throw missing();
@@ -52,6 +53,36 @@ Deno.test("x9r8k: retention mode refuses absent lifecycle writer before any outp
   assertEquals(intentStarted, false);
   assertEquals(deletions, []);
   assertEquals(root.nodes.size, 0);
+});
+
+Deno.test("x9r8k: failed retained-marker append stays typed and never erases the intent or dir", async () => {
+  const { storage, root, deletions } = storageFixture({ failRetainedWrite: true });
+  const intent = createEmscriptenSwIntent({ storage, now: () => 1_800_000_000_000 });
+  const inputRef = { version: 1, id: "d".repeat(32), kind: "input" };
+  let identity;
+  const error = await assertRejects(() => createWasmStreamOutput({
+    owner: "agent:exec_staging_123456:|hub", storage,
+    beforeCreate: async (ref) => {
+      identity = { runId: "exec_staging_123456", agentId: "hub", outputRef: ref,
+        generation: "f".repeat(32), packageId: "image.tool",
+        graphDigest: "a".repeat(64), operationId: "resize" };
+      await intent.begin({ identity, inputRef });
+    },
+    preserveOnFailure: true,
+    onRetainedFailure: () => intent.recordRetained({ identity, inputRef }, "output_create_failed"),
+  }));
+  assertEquals(error.code, "wasm_stream_retention_unavailable");
+  assertEquals(deletions, []);
+  const streams = await root.getDirectoryHandle(WASM_STREAM_ROOT_NAME);
+  await streams.getDirectoryHandle(identity.outputRef.id);
+  const intents = await root.getDirectoryHandle(EMSCRIPTEN_SW_INTENT_ROOT);
+  const entry = await intents.getDirectoryHandle(identity.outputRef.id);
+  const reservation = JSON.parse(await (await (await entry.getFileHandle("intent.json")).getFile()).text());
+  assertEquals(reservation.reconcileBy - reservation.issuedAt, 86_400_000,
+    "pre-create reservation still makes a torn append visible for reconciliation");
+  const unreadable = await assertRejects(() => intent.read({ identity, inputRef }));
+  assertEquals(unreadable.code, "emscripten_sw_intent_unavailable",
+    "a failed marker read cannot authorize staging as pending");
 });
 
 Deno.test("x9r8k: post-intent failure retains output and writes bounded retained-not-deleted lifecycle", async () => {

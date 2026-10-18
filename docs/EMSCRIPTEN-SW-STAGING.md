@@ -1,0 +1,36 @@
+# Emscripten staging authority (x9r8k preparation)
+
+**Not a live binary route.** The model broker and scalar offscreen host still
+refuse binary execution; these retained helpers do not seal, publish or delete
+output. The SW-only staging route is a separate, reviewed integration step.
+
+`emscripten-sw-intent.js` reserves one output ref for one SW-issued run, custody
+agent, sealed input ref, generation, package and operation in its own OPFS root
+(`emscripten-sw-intent-v1`), outside compactable run logs. A verified intent
+must be written before `createWasmStreamOutput` opens the output directory.
+Reservations never reopen on replay, even with a new generation for the same
+output ref. Every reservation carries an issued timestamp and a **24-hour
+reconciliation deadline**; expiry refuses staging. This deadline is a review
+trigger, **not permission for automatic deletion**.
+
+Staging output creation must pass `preserveOnFailure: true` and a trusted
+`onRetainedFailure` callback bound to `intent.recordRetained`. A post-intent
+creation failure retains any partial directory and writes a typed
+`retained-not-deleted` marker with that bounded reconciliation deadline.
+A missing marker writer refuses before output creation. If the marker append
+itself fails, creation returns `wasm_stream_retention_unavailable`, leaves the
+partial directory and the pre-existing bounded reservation intact, and no
+reader may treat an unreadable marker as ordinary pending authority. The
+future trusted reconciler must inspect the exact retained record; neither
+this preparation nor `verifyEmscriptenOutputSeal` is a safe cleanup probe.
+
+`emscripten-staging-authority.js` independently re-reads that intent, exact
+host `ledgerRef`, and unsealed stdout bytes in bounded chunks. Even when the
+host's CLOSED proof and the SW's rehash agree, it returns typed
+`emscripten_worker_termination_unproved`: a writer fence and the worker's
+producer-end declaration do **not** attest literal Worker termination.
+The existing `recordEmscriptenTerminalAudit` requires literal termination and
+sealed output; it must not be called with a CLOSED alias or a fabricated
+`isTerminated` callback. The binary guards stay on until separate review of
+the trusted SW route, restricted same-origin Worker admission (197jd), and
+the independent termination witness (uz7e3).
