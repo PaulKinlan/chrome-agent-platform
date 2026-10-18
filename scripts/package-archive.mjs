@@ -548,6 +548,7 @@ export async function buildBundledWasmManifestMap(root, { inventory = null } = {
   const declared = new Set(data.files.map((row) => row?.rel));
   const manifestIdentities = new Set();
   const casClaims = new Map();
+  let schema2AdmissionReady = false;
   const CAS_RE = /^extension\/wasm\/cas\/[0-9a-f]{64}\.wasm$/u;
   const map = new Map();
   for (const identity of data.manifests) {
@@ -575,6 +576,13 @@ export async function buildBundledWasmManifestMap(root, { inventory = null } = {
     }
     let mappings;
     try {
+      if (manifest.schemaVersion === 2 && !schema2AdmissionReady) {
+        // Node-only packaging: use the same complete options admission
+        // surface as the Store build before its schema-2 authority probe.
+        // Schema-1 inventories do not load this module or pay its cost.
+        await import("../extension/lib/wasm-package-admission.js");
+        schema2AdmissionReady = true;
+      }
       registerBundledManifestIdentity(manifestIdentities, identity, manifest);
       mappings = manifestCasMappings(manifest);
     } catch (error) {
