@@ -111,6 +111,7 @@ import { WASM_STREAM_RUN_TYPE, WASM_STREAM_WALL_MS } from "../lib/wasm-stream-ho
 import { CALLEXPORT_RUN_TYPE } from "../lib/wasm-callexport-host.js";
 import { EMSCRIPTEN_RUN_TYPE } from "../lib/emscripten-host.js";
 import { isEmscriptenModelRunLive, dispatchEmscriptenForRun } from "../lib/emscripten-run-fence.js";
+import { registerEmscriptenSwStagingRoute } from "../lib/emscripten-sw-stage.js";
 // The dispatch broker reads the registry through the small read-only core —
 // the write/validation authority module stays out of this bundle (the
 // standing static/RHC boundary pin).
@@ -2317,6 +2318,20 @@ const ephemeralSiteToolConsentStore = createEphemeralSiteToolConsentStore();
 // Every lookup also rechecks the run's captured reset epoch and abort signal.
 const activeAttachedWebmcpRuns = new Map();
 const cancellingApprovalExecutions = new Set();
+// x9r8k.2: a distinct SW-SELF-only staging message, not a model tool or
+// Settings preview. Both existing binary guards stay on. No seal/publish/delete
+// path is reachable; even a matching host ledger returns termination UNKNOWN.
+registerEmscriptenSwStagingRoute({
+  runtime: chrome.runtime,
+  storage: globalThis.navigator?.storage,
+  readPackages: async () => readCommittedPackages(await masterMemory()),
+  ensureHost: ensureOffscreen,
+  isLive: (runId, agentId) => isEmscriptenModelRunLive({
+    runId, agentId, active: activeExecutions,
+    cancelled: cancellingApprovalExecutions, ended: endedExecutions,
+    workerRun: runControl.get(runId),
+  }),
+});
 const executionApprovals = createExecutionApprovalStore(64);
 let siteToolProfileEpoch = 0;
 let siteToolResetting = 0;

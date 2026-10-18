@@ -138,6 +138,58 @@ Deno.test("x9r8k: independent SW verifier refuses sealed or nonzero-byte staging
   assertEquals(fixture.deletions, 0);
 });
 
+Deno.test("x9r8k.2: verifier checks deadline even if the injected SW reader lies", async () => {
+  const fixture = await setup();
+  const intent = { read: async (arg) => {
+    const real = await fixture.intent.read(arg);
+    return { ...real, reconcileBy: real.reconcileBy + 1 };
+  } };
+  await code(() => verify(fixture, { intent }), "emscripten_staging_intent_unavailable");
+});
+
+Deno.test("x9r8k.2: verifier checks owner even when both independent readers and metadata lie", async () => {
+  const fixture = await setup();
+  const forged = { ...(await fixture.intent.read({ identity: fixture.identity, inputRef: fixture.inputRef })).identity,
+    owner: "agent:foreign_run_123456:|hub" };
+  const intent = { read: async (arg) => ({ ...await fixture.intent.read(arg), identity: forged }) };
+  const evidence = { read: async (arg) => ({ ...await fixture.evidence.read(arg), identity: forged }) };
+  const streams = await fixture.root.getDirectoryHandle("wasm-tool-streams-v1");
+  const output = await streams.getDirectoryHandle(fixture.outputRef.id);
+  const authority = output.nodes.get("authority.json");
+  authority.bytes = new TextEncoder().encode(JSON.stringify({
+    ...JSON.parse(new TextDecoder().decode(authority.bytes)), owner: forged.owner,
+  }));
+  await code(() => verify(fixture, { intent, evidence }), "emscripten_staging_intent_unavailable");
+  assertEquals(fixture.deletions, 0);
+});
+
+Deno.test("x9r8k.2: verifier pins unsealed authority id and owner, not just file hash", async () => {
+  const fixture = await setup();
+  const streams = await fixture.root.getDirectoryHandle("wasm-tool-streams-v1");
+  const output = await streams.getDirectoryHandle(fixture.outputRef.id);
+  const file = output.nodes.get("authority.json");
+  const original = file.bytes;
+  const meta = JSON.parse(new TextDecoder().decode(original));
+  for (const patch of [{ id: "e".repeat(32) }, { owner: "agent:foreign_run_123456:|hub" }]) {
+    file.bytes = new TextEncoder().encode(JSON.stringify({ ...meta, ...patch }));
+    await code(() => verify(fixture), "emscripten_staging_bytes_unavailable");
+    file.bytes = original;
+  }
+  assertEquals(fixture.deletions, 0);
+});
+
+Deno.test("x9r8k.2: SW rejects forged host receipt and record facts despite CLOSED bytes", async () => {
+  const fixture = await setup();
+  for (const hostProof of [
+    { ...fixture.proof, evidenceState: "unknown" },
+    { ...fixture.proof, writerFence: "shared" },
+  ]) await code(() => verify(fixture, { hostProof }), "emscripten_staging_evidence_mismatch");
+  const evidence = { read: async (arg) => ({ ...await fixture.evidence.read(arg),
+    identity: { ...(await fixture.evidence.read(arg)).identity, operationId: "foreign" } }) };
+  await code(() => verify(fixture, { evidence }), "emscripten_staging_evidence_mismatch");
+  assertEquals(fixture.deletions, 0);
+});
+
 Deno.test("x9r8k: missing intent, SW restart or cancellation refuse without publication", async () => {
   const fixture = await setup();
   const missingIntent = { read: async () => { throw new Error("compacted"); } };

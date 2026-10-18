@@ -12,6 +12,7 @@ import { WasmExecutor } from "../lib/wasm-executor.js";
 import { registerWasmStreamHost } from "../lib/wasm-stream-host.js";
 import { registerCallexportHost } from "../lib/wasm-callexport-host.js";
 import { registerEmscriptenHost } from "../lib/emscripten-host.js";
+import { registerEmscriptenBinaryStagingHost } from "../lib/emscripten-host-stage.js";
 import { registerWasmJobHost } from "../lib/wasm-job-host.js";
 import { registerAgentWorkerHost } from "../lib/agent-worker-host.js";
 import { registerPythonHost } from "../lib/python-host.js";
@@ -51,6 +52,9 @@ registerCallexportHost();
 // Settings validation execute here in a fresh module worker per job, behind
 // the exact cap:emscripten-run envelope and the SW-only sender gate.
 registerEmscriptenHost();
+// Separate SW-only staging route. The original scalar host still rejects
+// binary requests; this returns only host evidence for an UNKNOWN outcome.
+registerEmscriptenBinaryStagingHost();
 
 // The WASI-job lane (ten9): every non-stream bundled tool executes here — the
 // former in-SW preview-only refusal is gone; this host runs the shared

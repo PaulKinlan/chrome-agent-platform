@@ -13,6 +13,13 @@ output ref. Every reservation carries an issued timestamp and a **24-hour
 reconciliation deadline**; expiry refuses staging. This deadline is a review
 trigger, **not permission for automatic deletion**.
 
+The SW-only route must call `createWasmStreamOutput` directly with
+`preserveOnFailure: true`. It must **never** call
+`allocateEmscriptenJobStreams` or `allocateAuditedEmscriptenJobStreams`:
+those legacy helpers omit preservation and can discard a partial output after
+intent has been written. It must not call `verifyEmscriptenOutputSeal` as a
+staging probe either; that helper can delete a failed output.
+
 Staging output creation must pass `preserveOnFailure: true` and an **adapter**
 callback: `onRetainedFailure(ref, reason)` receives the frozen stdout ref and
 reason, while `intent.recordRetained({ identity, inputRef }, reason)` requires

@@ -165,7 +165,10 @@ function validateRequest(raw) {
 // Fetch + hash-verify one declared asset. Bytes of main-wasm are retained;
 // glue/adapter are imported by the worker from their packaged URLs afterwards
 // (fetch-then-import is not an atomic boundary in an unpacked tree, by design).
-async function fetchVerifiedAsset(asset, runtime = globalThis.chrome?.runtime) {
+// Shared by the scalar host and the separately guarded binary staging host.
+// The latter must verify every packaged asset anew before constructing a Worker.
+export async function fetchVerifiedEmscriptenAsset(asset, runtime = globalThis.chrome?.runtime) {
+  validateAsset(asset);
   const getURL = runtime?.getURL ?? globalThis.chrome?.runtime?.getURL;
   if (!getURL) fail("emscripten_asset_fetch");
   const response = await fetch(getURL(asset.path));
@@ -206,7 +209,7 @@ export async function executeEmscriptenRunRequest(raw, {
     if (!effectiveRuntime?.getURL) fail("emscripten_asset_fetch");
     const bytesByRole = new Map();
     for (const asset of request.assets) {
-      bytesByRole.set(asset.role, await fetchVerifiedAsset(asset, effectiveRuntime));
+      bytesByRole.set(asset.role, await fetchVerifiedEmscriptenAsset(asset, effectiveRuntime));
     }
     const wasmBytes = bytesByRole.get("main-wasm");
     const glueUrl = effectiveRuntime.getURL(request.assets.find((a) => a.role === "glue").path);
