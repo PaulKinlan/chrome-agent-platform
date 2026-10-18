@@ -249,9 +249,13 @@ async function main() {
   // security gate may take).
   const chrome = await launchChrome({ extension: EXT, profile: providedProfile, windowSize: "1440,900", timeoutMs: 20000, grantPermissions: ["cookies"] });
   console.log(`security-suite: launched ${chrome.wsUrl.replace(/\/devtools\/browser\/.*/, "/devtools/browser/…")} with --load-extension=${EXT}`);
-  const cdp = await openCdp(chrome.wsUrl);
-
+  // kafr4: the connect lives INSIDE the try that reaps. openCdp throwing (the DevTools WebSocket never
+  // connecting) used to skip the finally entirely, so the browser we had just launched was left to the
+  // lifeline - which only fires when the RUNNER process exits, so a hung suite kept a real Chrome alive.
+  let connected: Awaited<ReturnType<typeof openCdp>> | undefined;
   try {
+    const cdp = await openCdp(chrome.wsUrl);
+    connected = cdp;
     // ── 1-3: the renderHtmlFrame boundaries on the fixture page ──────────
     const fx = await cdp.open(`${docs.url}/security-fixture`);
     await sleep(3500);
@@ -599,7 +603,8 @@ async function main() {
   } catch (e) {
     check("suite: ran to completion", false, String((e as Error)?.message ?? e));
   } finally {
-    cdp.close();
+    // Nothing to close when the CONNECT itself failed - that is exactly the case this finally now covers.
+    connected?.close();
     await reapLeaderAndSettle(chrome.proc);
     await provider.close();
     await attacker.close();
