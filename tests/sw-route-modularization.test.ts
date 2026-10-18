@@ -8,6 +8,7 @@ import * as acorn from "npm:acorn";
 import {
   createActivityRoutes,
   createAgentWorkspaceRoutes,
+  createMemoryAdminRoutes,
   createMemoryRoutes,
   createAgentScheduleRoutes,
   createProviderRoutes,
@@ -16,6 +17,7 @@ import {
   createFsGrantRoutes,
   createAgentWorkerRoutes,
   createHooksRoutes,
+  createToolStreamRoutes,
   kvRoutes,
   mergeRouteMaps,
   permLeaseRoutes,
@@ -486,6 +488,34 @@ Deno.test("sw routes: AST verification of route registration across service-work
   assert(mergeCall, "handlers must be initialized via mergeRouteMaps");
   assertEquals(mergeCall.callee.name, "mergeRouteMaps");
 
+  // chrome-agent-platform-atxc6: a route map composed by CALLING a factory must have that factory
+  // IMPORTED. Missing the import is invisible to every static gate (the map name is declared, and
+  // `node --check` only parses), and it throws `ReferenceError` the moment the worker module is
+  // evaluated — which only tests that import service-worker.js can see. This is the exact defect
+  // 5c592a9c shipped for one gate cycle, so the class gets a static pin.
+  const declared = new Set();
+  for (const node of ast.body) {
+    if (node.type === "VariableDeclaration") for (const d of node.declarations) if (d.id?.name) declared.add(d.id.name);
+    if (node.type === "FunctionDeclaration" && node.id?.name) declared.add(node.id.name);
+    if (node.type === "ClassDeclaration" && node.id?.name) declared.add(node.id.name);
+    if (node.type === "ImportDeclaration") {
+      for (const spec of node.specifiers) if (spec.local?.name) declared.add(spec.local.name);
+    }
+  }
+  const topLevelInit = new Map();
+  for (const node of ast.body) {
+    if (node.type !== "VariableDeclaration") continue;
+    for (const d of node.declarations) if (d.id?.name && d.init) topLevelInit.set(d.id.name, d.init);
+  }
+  for (const arg of mergeCall.arguments) {
+    // Only `const x = factory(...)` shapes matter: an inline object literal is checked by the caller
+    // count below, and a plain `Object.keys(m)`/member read has no factory to resolve.
+    if (arg.type !== "Identifier") continue;
+    const init = topLevelInit.get(arg.name);
+    if (init?.type !== "CallExpression" || init.callee.type !== "Identifier") continue;
+    assert(declared.has(init.callee.name),
+      `route map \`${arg.name}\` is built by \`${init.callee.name}(...)\`, which the worker never declares or imports: evaluating the route map throws ReferenceError`);
+  }
   // Extract inline routes from ObjectExpressions in the mergeRouteMaps arguments
   const registeredRouteKeys = [];
   const providerRoutes = createProviderRoutes();
@@ -522,6 +552,14 @@ Deno.test("sw routes: AST verification of route registration across service-work
         // write path, extracted to routes/fs-grants.js
         // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
         registeredRouteKeys.push(...Object.keys(createFsGrantRoutes(FS_GRANT_STUB_DEPS)));
+      } else if (arg.name === "memoryAdminRoutes") {
+        // chrome-agent-platform-atxc6 slice 3: the memory admin routes (purge/sweep/origins/overview/stores)
+        // joined routes/memory.js. The injected summariser cannot change route names.
+        registeredRouteKeys.push(...Object.keys(createMemoryAdminRoutes({ memoryOverview: async () => ({}) })));
+      } else if (arg.name === "toolStreamRoutes") {
+        // chrome-agent-platform-atxc6 slice 2: the file-backed bundled-tool transport (12 routes) moved to
+        // routes/tool-stream.js. The injected owner derivation and engine cannot change route names.
+        registeredRouteKeys.push(...Object.keys(createToolStreamRoutes({ wasmStreamOwner: () => "owner", runWasmStreamTool: async () => ({}) })));
       } else if (arg.name === "hooksRoutes") {
         // chrome-agent-platform-atxc6: the system-hooks domain (status/deny/subscribe/unsubscribe),
         // moved to routes/hooks.js. The injected helpers only gate dispatch, never route names.

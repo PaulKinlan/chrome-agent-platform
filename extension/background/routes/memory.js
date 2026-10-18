@@ -22,6 +22,13 @@ import {
   listNamedAgents,
 } from "../../lib/named-agents.js";
 import { sleep } from "../../lib/pure.js";
+// chrome-agent-platform-atxc6 slice 3: the memory ADMIN routes
+// (purgeJournals/sweepOrphans/origins/overview/stores) were the other half of this domain, left inline in
+// three different maps in the worker. They belong beside memory.get/set/list/clear — same stores, same
+// vocabulary, and a reader looking for "what can touch memory" should not have to grep 14k lines.
+import { purgeJournals } from "../../lib/memory.js";
+import { sweepOrphanAgentData } from "../../lib/durable-runs.js";
+import { listScheduledTasks } from "../../lib/scheduler.js";
 
 /** Resolve an `origin` label (the memory route's selector) to its OPFS store.
  * `master` → the hub's store; `background:<slug>` → a background/scheduled
@@ -148,6 +155,76 @@ export function createMemoryRoutes() {
       } catch (e) {
         return { ok: false, error: `could not clear memory: ${e?.message ?? e}` };
       }
+    },
+  });
+}
+
+/**
+ * The memory ADMIN routes, extracted from the worker (chrome-agent-platform-atxc6).
+ *
+ * These are not reads: `purgeJournals` and `sweepOrphans` DESTROY state, so both keep their inline
+ * `principal === "owner-options"` guard verbatim — the Settings surface is the only caller that may reach
+ * them, and the guard lives with the handler rather than in the worker's dispatch so an extraction can
+ * never quietly widen who can call it. `overview`/`stores` are the explorer's read side.
+ *
+ * @param {{ memoryOverview: (store: any) => Promise<any> }} deps
+ *   memoryOverview is the only worker-scope reference in this cluster; everything else is a library import.
+ * @returns {Readonly<Record<string, Function>>} frozen route map
+ */
+export function createMemoryAdminRoutes({ memoryOverview }) {
+  return Object.freeze({
+    /** Owner-reported leftover fix: purge agent journals (per-agent or global)
+     * WITHOUT touching memory content, run history, or assets. */
+    async "memory.purgeJournals"({ target = null } = {}, context) {
+      if (context?.principal !== "owner-options") {
+        return { ok: false, error: "journal purge is restricted to the Settings surface" };
+      }
+      try {
+        const r = await purgeJournals(target);
+        return r?.ok === false ? r : { ok: true, ...r };
+      } catch (err) {
+        return { ok: false, error: `purge_journals_failed: ${err?.message || err}` };
+      }
+    },
+
+    /** Orphan sweep: remove OPFS state whose owning agent no longer exists
+     * (pre-fix deletion leftovers). Never touches assets or live agents. */
+    async "memory.sweepOrphans"(_m, context) {
+      if (context?.principal !== "owner-options") {
+        return { ok: false, error: "orphan sweep is restricted to the Settings surface" };
+      }
+      try {
+        const [agentRows, taskRows] = await Promise.all([listNamedAgents(), listScheduledTasks()]);
+        return await sweepOrphanAgentData({
+          listAgents: async () => agentRows,
+          listTasks: async () => taskRows,
+        });
+      } catch (err) {
+        return { ok: false, error: `orphan_sweep_failed: ${err?.message || err}` };
+      }
+    },
+
+    async "memory.origins"() {
+      return await listOrigins();
+    },
+
+    // ---- per-origin memory overview (the hub's get_memory_overview) ----
+    async "memory.overview"() {
+      const origins = await listOrigins();
+      const overview = { master: await memoryOverview(masterMemory()), origins: {} };
+      for (const o of origins) {
+        overview.origins[o] = await memoryOverview(siteMemory(o));
+      }
+      return { ok: true, overview };
+    },
+
+    // ---- the per-agent memory stores (item 58) ----
+    // Enumerate EVERY memory store (the master + each named agent + each
+    // background agent + each enrolled site origin) with its key count, so the
+    // Data & memory explorer can browse each agent's OWN OPFS sandbox. The
+    // selector is what memory.get/list/clear accept (resolveMemory).
+    async "memory.stores"() {
+      return await enumerateMemoryStores();
     },
   });
 }

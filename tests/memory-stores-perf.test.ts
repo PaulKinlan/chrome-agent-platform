@@ -415,9 +415,14 @@ Deno.test("9epn.11 P2: enumerateMemoryStores makes ZERO keys() calls across all 
 });
 
 Deno.test("9epn.11: memory.stores handler delegates directly to enumerateMemoryStores()", () => {
+  // chrome-agent-platform-atxc6 slice 3: the memory admin routes (including memory.stores) moved to
+  // routes/memory.js. The pin follows the handler to its new home AND checks the worker still composes that
+  // map, so the assertion cannot be satisfied by an orphaned module.
   const swCode = Deno.readTextFileSync(new URL("../extension/background/service-worker.js", import.meta.url));
-  const handlerMatch = swCode.match(/async\s+["']memory\.stores["']\s*\(\)\s*\{([^}]+)\}/);
-  assert(handlerMatch, "memory.stores handler must be declared in service-worker.js");
+  assert(swCode.includes("memoryAdminRoutes"), "the worker must compose the extracted memory admin routes");
+  const moduleCode = Deno.readTextFileSync(new URL("../extension/background/routes/memory.js", import.meta.url));
+  const handlerMatch = moduleCode.match(/async\s+["']memory\.stores["']\s*\(\)\s*\{([^}]+)\}/);
+  assert(handlerMatch, "memory.stores handler must be declared in routes/memory.js");
   const body = handlerMatch[1].trim();
   assertEquals(body, "return await enumerateMemoryStores();", "memory.stores handler must directly delegate to enumerateMemoryStores()");
 });

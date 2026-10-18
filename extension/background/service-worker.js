@@ -48,7 +48,9 @@ import {
   createVaultRoutes,
   createAgentWorkspaceRoutes,
   createMemoryRoutes,
+  createMemoryAdminRoutes,
   createHooksRoutes,
+  createToolStreamRoutes,
   resolveMemory,
   awaitMemoryQuiescence,
   enumerateMemoryStores,
@@ -7453,6 +7455,16 @@ async function enclaveStatusForSettings() {
 // digest payload), not because the handlers need anything else from the worker.
 const hooksRoutes = createHooksRoutes({ requireOwnerApproval, payloadFields });
 
+// chrome-agent-platform-atxc6: the bundled-tool transport routes now live in their own module. The two
+// injected helpers are the worker's owner derivation and the streaming engine it also serves the preview
+// from (they stay in the worker on purpose).
+// chrome-agent-platform-atxc6 slice 3: the memory ADMIN routes (purge/sweep/explorer reads) join
+// memory.get/set/list/clear in routes/memory.js. memoryOverview stays here — it is the worker's own
+// summariser — and arrives as the single injected dependency.
+const memoryAdminRoutes = createMemoryAdminRoutes({ memoryOverview });
+
+const toolStreamRoutes = createToolStreamRoutes({ wasmStreamOwner, runWasmStreamTool });
+
 const enclaveStatusRoutes = {
   "enclave.status": async (m, context) => {
     if (context?.principal !== "owner-options") {
@@ -7648,44 +7660,6 @@ const handlers = mergeRouteMaps(
     return await runTableArtifactTool(toolId, args, context, { isRunLive, runJob: runOffscreenTableJob });
   },
 
-  // File-backed bundled-tool transport. Every public route is restricted to
-  // the exact Settings document by wasmStreamOwner(); content moves in caller-
-  // chosen chunks, while execution and results use opaque OPFS references.
-  async "tool-stream.input.create"(_message, context) {
-    const owner = wasmStreamOwner(context);
-    const ref = await createWasmStreamInput({ owner });
-    return { ok: true, ref };
-  },
-  async "tool-stream.input.append"({ ref, base64 } = {}, context) {
-    const owner = wasmStreamOwner(context);
-    return await appendWasmStreamInputBase64({ ref, owner, base64 });
-  },
-  async "tool-stream.input.seal"({ ref } = {}, context) {
-    const owner = wasmStreamOwner(context);
-    return await sealWasmStreamInput({ ref, owner });
-  },
-  async "tool-stream.run"({ toolId, args = [], inputRef } = {}, context) {
-    const owner = wasmStreamOwner(context);
-    return await runWasmStreamTool({
-      toolId,
-      args,
-      inputRef,
-      owner,
-      documentId: context.documentId,
-    });
-  },
-  async "tool-stream.output.read"({ ref, offset = 0, length = 65536 } = {}, context) {
-    const owner = wasmStreamOwner(context);
-    return await readWasmStreamWindow({ ref, owner, offset, length });
-  },
-  async "tool-stream.output.receipt"({ ref } = {}, context) {
-    const owner = wasmStreamOwner(context);
-    return await readWasmStreamReceipt({ ref, owner });
-  },
-  async "tool-stream.remove"({ ref } = {}, context) {
-    const owner = wasmStreamOwner(context);
-    return await removeWasmStream({ ref, owner });
-  },
 
   // ── The "what I did" action ledger (CAP-FB-20260830-ACTIVITY-LEDGER-UNDO-01) ──
   // actions.list returns the most-recent reversible-first ledger rows the hub +
@@ -9967,37 +9941,6 @@ const handlers = mergeRouteMaps(
     return { ok: true, outboundHosts: OUTBOUND_HOSTS, retentionPolicy };
   },
 
-  /** Owner-reported leftover fix: purge agent journals (per-agent or global)
-   * WITHOUT touching memory content, run history, or assets. */
-  async "memory.purgeJournals"({ target = null } = {}, context) {
-    if (context?.principal !== "owner-options") {
-      return { ok: false, error: "journal purge is restricted to the Settings surface" };
-    }
-    try {
-      const r = await purgeJournals(target);
-      return r?.ok === false ? r : { ok: true, ...r };
-    } catch (err) {
-      return { ok: false, error: `purge_journals_failed: ${err?.message || err}` };
-    }
-  },
-
-  /** Orphan sweep: remove OPFS state whose owning agent no longer exists
-   * (pre-fix deletion leftovers). Never touches assets or live agents. */
-  async "memory.sweepOrphans"(_m, context) {
-    if (context?.principal !== "owner-options") {
-      return { ok: false, error: "orphan sweep is restricted to the Settings surface" };
-    }
-    try {
-      const [agentRows, taskRows] = await Promise.all([listNamedAgents(), listScheduledTasks()]);
-      return await sweepOrphanAgentData({
-        listAgents: async () => agentRows,
-        listTasks: async () => taskRows,
-      });
-    } catch (err) {
-      return { ok: false, error: `orphan_sweep_failed: ${err?.message || err}` };
-    }
-  },
-
   // `agent.registry` — the ONE redacted, grouped, live agent registry the shared
   // <agent-picker> consumes (CAP-FB-20260818-AGENT-ACCESS-01). It is the single
   // source for the side panel's Agents view, every composer's + menu "Choose
@@ -10710,9 +10653,6 @@ const handlers = mergeRouteMaps(
   // review r5 P1-b: the dispatcher must be importable so tests exercise the
   // real route, and the writer-tracking state is shared with the teardown
   // fence through that module seam).
-  async "memory.origins"() {
-    return await listOrigins();
-  },
 
   // Screenshot READER (round-18 blocker 6): the stored screenshot blobs were
   // previously only writable via saveScreenshot with no application route to
@@ -11402,24 +11342,7 @@ const handlers = mergeRouteMaps(
     };
   },
 
-  // ---- per-origin memory overview (the hub's get_memory_overview) ----
-  async "memory.overview"() {
-    const origins = await listOrigins();
-    const overview = { master: await memoryOverview(masterMemory()), origins: {} };
-    for (const o of origins) {
-      overview.origins[o] = await memoryOverview(siteMemory(o));
-    }
-    return { ok: true, overview };
-  },
 
-  // ---- the per-agent memory stores (item 58) ----
-  // Enumerate EVERY memory store (the master + each named agent + each
-  // background agent + each enrolled site origin) with its key count, so the
-  // Data & memory explorer can browse each agent's OWN OPFS sandbox. The
-  // selector is what memory.get/list/clear accept (resolveMemory).
-  async "memory.stores"() {
-    return await enumerateMemoryStores();
-  },
 
   async "register-task"(m) {
     if (typeof chrome !== "undefined" && chrome?.storage?.local) {
@@ -13181,35 +13104,6 @@ const handlers = mergeRouteMaps(
     return { ok: true };
   },
 
-  // ---- tool streaming platform (CAP-FB-20260822-WASM-TOOL-PLATFORM-01) ----
-  // Input create/append/seal, execution, reads, receipts, and removal use the
-  // single owner-derived lifecycle routes above. These platform-only bridges
-  // must not shadow that authority with caller-supplied owner strings.
-  async "tool-stream.stage-attachment"({ attachment } = {}, routeContext) {
-    const owner = wasmStreamOwner(routeContext);
-    const res = await stageAttachmentAsWasmStream(attachment, { owner });
-    return { ok: true, inputRef: res.inputRef, bytes: res.bytes, name: res.name };
-  },
-  async "tool-stream.stage-asset"({ assetId, origin = "master" } = {}, routeContext) {
-    const owner = wasmStreamOwner(routeContext);
-    const assetRes = await getAsset(origin, assetId);
-    if (!assetRes?.ok || !assetRes.asset) return { ok: false, error: "asset not found" };
-    const res = await stageAssetAsWasmStream(assetRes.asset, { owner });
-    return { ok: true, inputRef: res.inputRef, bytes: res.bytes, name: res.name };
-  },
-  async "tool-stream.promote-output"({ outputRef, name, assetType = "text", origin = "master", force = false } = {}, routeContext) {
-    const owner = wasmStreamOwner(routeContext);
-    return await promoteWasmStreamToArtifact(outputRef, { origin, name, type: assetType, owner, force });
-  },
-  async "tool-stream.discard"({ ref } = {}, routeContext) {
-    const owner = wasmStreamOwner(routeContext);
-    await discardWasmStream({ ref, owner });
-    return { ok: true };
-  },
-  async "tool-stream.tabular-transform"({ inputRef, operations, outputFormat, delimiter } = {}, routeContext) {
-    const owner = wasmStreamOwner(routeContext);
-    return await streamTabularTransform(inputRef, { operations, outputFormat, delimiter, owner });
-  },
   async "observability.setVerbosity"({ level } = {}) {
     try {
       await setLogVerbosity(level);
@@ -13289,6 +13183,8 @@ const handlers = mergeRouteMaps(
   },
   },
   hooksRoutes,
+  toolStreamRoutes,
+  memoryAdminRoutes,
 );
 
 async function resumeInterruptedRuns() {

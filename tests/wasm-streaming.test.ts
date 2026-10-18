@@ -301,10 +301,18 @@ Deno.test("WASI stdio adapters stream complete input/output without runtime accu
   equal(runtime.snapshot().counters.stdinBytesRead, source.byteLength);
 });
 
-Deno.test("service worker exposes one owner-derived stream lifecycle instead of shadowing routes", async () => {
+Deno.test("the bundled-tool transport exposes one owner-derived stream lifecycle instead of shadowing routes", async () => {
+  // chrome-agent-platform-atxc6 slice 2: the tool-stream routes moved verbatim into
+  // extension/background/routes/tool-stream.js. The property this test protects is unchanged — exactly ONE
+  // definition of each lifecycle route, and every owner derived from the sender context — so it now asserts
+  // it across BOTH files instead of assuming the monolith is where the code lives.
   const source = await Deno.readTextFile("extension/background/service-worker.js");
+  const module = await Deno.readTextFile("extension/background/routes/tool-stream.js");
+  const routesSource = `${source}\n${module}`;
   equal(source.split('from "../lib/wasm-stream-files.js";').length - 1, 1,
     "the service worker imports the stream lifecycle authority exactly once");
+  equal(module.split('from "../../lib/wasm-stream-files.js";').length - 1, 1,
+    "the extracted transport module imports the stream lifecycle authority exactly once");
   for (const route of [
     "tool-stream.input.create",
     "tool-stream.input.append",
@@ -314,19 +322,18 @@ Deno.test("service worker exposes one owner-derived stream lifecycle instead of 
     "tool-stream.output.receipt",
     "tool-stream.remove",
   ]) {
-    equal(source.split(`async \"${route}\"`).length - 1, 1, `${route} must have exactly one route definition`);
+    equal(routesSource.split(`async \"${route}\"`).length - 1, 1, `${route} must have exactly one route definition`);
   }
-  const lifecycle = source.slice(
-    source.indexOf('async "tool-stream.input.create"'),
-    source.indexOf('// ── The "what I did" action ledger'),
+  const lifecycle = module.slice(
+    module.indexOf('async "tool-stream.input.create"'),
+    module.indexOf("// ---- tool streaming platform") + 1 || module.length,
   );
   assert(lifecycle.includes("wasmStreamOwner(context)"), "lifecycle routes must derive owner authority from the sender context");
   assert(lifecycle.includes("appendWasmStreamInputBase64"), "Chrome transport must use canonical base64 bytes");
   assert(!lifecycle.includes('owner = "hub"'), "lifecycle authority must not be caller-selected");
 
-  const platformRoutes = source.slice(
-    source.indexOf("// ---- tool streaming platform"),
-    source.indexOf('async "observability.setVerbosity"'),
+  const platformRoutes = module.slice(
+    module.indexOf("// ---- tool streaming platform") > 0 ? module.indexOf("// ---- tool streaming platform") : 0,
   );
   equal(platformRoutes.split("wasmStreamOwner(routeContext)").length - 1, 5,
     "every attachment, artifact, promotion, discard, and tabular bridge derives the owner from its sender");
