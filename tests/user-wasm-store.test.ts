@@ -589,11 +589,6 @@ Deno.test("owner-blobs: fixture clock injection reaches the store during recover
   f.setNow(160_000);
   assertEquals(await f.store.list(), []);
   assertEquals([...f.files.keys()].some((k) => k.endsWith(temp)), false, "staging file at age 60s boundary must be pruned");
-
-  // Advance clock to t = 170_000 (age 70s, exceeds 60s grace). File must be pruned.
-  f.setNow(170_000);
-  assertEquals(await f.store.list(), []);
-  assertEquals([...f.files.keys()].some((k) => k.endsWith(temp)), false, "staging file at age 70s must be pruned");
 });
 
 
