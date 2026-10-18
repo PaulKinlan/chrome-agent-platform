@@ -8,7 +8,7 @@ import { emscriptenJobOwner } from "../extension/lib/emscripten-custody.js";
 const RUN = "exec_host_writer_123456";
 const AGENT = "named:alice";
 function missing() { return new DOMException("not found", "NotFoundError"); }
-function memoryStorage({ exclusive = true, closeFails = false, writeFails = false } = {}) {
+function memoryStorage({ exclusive = true, closeFails = false, writeFails = false, beforeStdoutWrite } = {}) {
   const dir = () => {
     const children = new Map();
     return {
@@ -36,6 +36,8 @@ function memoryStorage({ exclusive = true, closeFails = false, writeFails = fals
             const release = () => { if (!ended) { ended = true; node.open--; } };
             return {
               async write(value) {
+                if (name === "stdout.bin") await beforeStdoutWrite?.();
+                if (ended) throw new Error("write after close");
                 if (writeFails && name === "stdout.bin") throw new Error("injected write failure");
                 const bytes = typeof value === "string" ? new TextEncoder().encode(value) : new Uint8Array(value);
                 const merged = new Uint8Array(Math.max(next.length, position + bytes.length));
@@ -88,6 +90,25 @@ Deno.test("3mcu1: host drains ordered frames, closes exclusive writer and indepe
     .map((byte) => byte.toString(16).padStart(2, "0")).join(""));
   await code(() => channel.push({ seq: 2, chunk: a }), "emscripten_writer_not_open");
   assertEquals((await listWasmStreamEntries({ storage })).length, 1, "no seal, publish or delete");
+});
+
+Deno.test("3mcu1: close cannot advertise bytes while a host write is still pending", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const { open } = await setup({ beforeStdoutWrite: () => gate });
+  const channel = await open();
+  const frame = channel.push({ seq: 0, chunk: new Uint8Array([4, 5, 6]) });
+  const closing = channel.close();
+  let settled = false;
+  closing.then(() => { settled = true; }, () => { settled = true; });
+  await Promise.resolve();
+  assertEquals(settled, false, "pending write fences close");
+  await code(() => channel.push({ seq: 1, chunk: new Uint8Array([7]) }), "emscripten_writer_not_open");
+  release();
+  await frame;
+  const proof = await closing;
+  assertEquals(proof.bytes, 3);
+  assertEquals(proof.frames, 1);
 });
 
 Deno.test("3mcu1: silently ignored exclusive mode refuses instead of using siloed writer", async () => {
