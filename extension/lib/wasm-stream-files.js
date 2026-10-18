@@ -235,7 +235,10 @@ export async function openWasmStreamHandles({ ref, owner, allowUnsealedOutput = 
   });
 }
 
-export async function createWasmStreamOutput({ owner, storage, beforeCreate } = {}) {
+export async function createWasmStreamOutput({ owner, storage, beforeCreate, preserveOnFailure = false } = {}) {
+  if (typeof preserveOnFailure !== "boolean" || (preserveOnFailure && typeof beforeCreate !== "function")) {
+    fail("wasm_stream_before_create");
+  }
   const id = newWasmStreamId();
   const validatedOwner = validateOwner(owner);
   // A trusted caller may durably bind this exact random id before ANY directory
@@ -260,7 +263,9 @@ export async function createWasmStreamOutput({ owner, storage, beforeCreate } = 
     });
     return Object.freeze({ version: 1, id, kind: "stdout" });
   } catch (error) {
-    await removeStreamDirectory(id, storage);
+    // After a staging-only SW intent was persisted, an ambiguous partial
+    // output is quarantined; the SW cannot use cleanup to erase that evidence.
+    if (!preserveOnFailure) await removeStreamDirectory(id, storage);
     throw error;
   }
 }
