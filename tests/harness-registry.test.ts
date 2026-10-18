@@ -74,7 +74,14 @@ Deno.test("tvfsx: injection's registry custody claim matches its direct npm rout
 Deno.test("every gate is part of test:all, and test:all runs nothing unregistered", () => {
   const all = scripts["test:all"] ?? "";
   const steps = all.split("&&").map((s) => s.trim()).filter(Boolean);
-  const runs = steps.filter((s) => s.startsWith("npm run ")).map((s) => s.slice("npm run ".length).trim());
+  // The SCRIPT a step runs, not the rest of its command line. A step may carry an environment
+  // assignment or a pass-through argument and still be that script — `CAP_BUILD_TIER=force npm run
+  // test:build` (6gk81: the everything-gate must FORCE the build tier, or the nightly inherits the
+  // landing gate's selective skip) and `npm run test:build -- --force` both invoke test:build. The
+  // old `startsWith("npm run ")` + slice read the whole tail as the script name, so an env prefix
+  // looked like test:build was MISSING from test:all; this regex keeps the SAME invariants (every
+  // gate appears, nothing unregistered runs) while reading the name the shell would execute.
+  const runs = steps.map((s) => s.match(/(?:^|\s)npm run ([^\s]+)/)?.[1]).filter((n): n is string => Boolean(n));
   const gates = Object.entries(HARNESSES).filter(([, e]) => e.class === "gate").map(([, e]) => e.npm!);
   const notInAll = gates.filter((n) => !runs.includes(n));
   assertEquals(notInAll, [], `registry gates missing from test:all: ${notInAll.join(", ")}`);
