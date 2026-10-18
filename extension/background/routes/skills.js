@@ -60,7 +60,7 @@ async "skill.list"() {
   // picker read this SAME route, so no surface can drift. `broken` carries
   // the skills that failed to load so Settings can surface them honestly
   // (never silently offered, never silently hidden).
-  const { skillCatalog } = await import("../lib/skill-catalog.js");
+  const { skillCatalog } = await import("../../lib/skill-catalog.js");
   const { skills, broken } = await skillCatalog({ memory: masterMemory(), fileStore: skillFileStore });
   return { skills, broken };
 },
