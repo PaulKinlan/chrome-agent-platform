@@ -10,11 +10,15 @@ import {
 
 // Writes are invisible until close. Faults can happen at write, close, move,
 // or remove; re-opening the store must never publish incomplete uploads.
-function fixture() {
+function fixture(initialNowOrOptions = 123456) {
   const files = new Map();
   const directories = new Map();
   const calls = [];
   let fault = null;
+  let currentNow = typeof initialNowOrOptions === "object" && initialNowOrOptions !== null
+    ? (initialNowOrOptions.now ?? 123456)
+    : initialNowOrOptions;
+  const clock = () => (typeof currentNow === "function" ? currentNow() : currentNow);
   function check(op, path) {
     calls.push([op, path]);
     if (fault?.op === op && path.endsWith(fault.suffix)) {
@@ -96,10 +100,16 @@ function fixture() {
   }
   const storage = { getDirectory: async () => directory() };
   // Real Web Locks coordinate independent store instances in Deno and Chrome.
-  const options = { storage, locks: navigator.locks, now: () => 123456 };
+  const options = {
+    storage,
+    locks: navigator.locks,
+    get now() { return clock; },
+    set now(v) { currentNow = v; },
+  };
   return {
     files, calls, options,
     store: createOwnerBlobStore(options),
+    setNow(t) { currentNow = t; },
     fail(op, suffix) { fault = { op, suffix }; },
   };
 }
@@ -551,6 +561,33 @@ Deno.test("owner-blobs: staging upload prune respects grace window for concurren
   assertEquals(surviving.includes(liveTemp), true, "live staging file within grace must not be pruned");
   assertEquals(surviving.includes(staleTemp), false, "stale staging file exceeding grace must be pruned");
 });
+
+Deno.test("owner-blobs: fixture clock injection reaches the store during recovery and operations (j7l6l)", async () => {
+  const f = fixture();
+  const root = await (await f.options.storage.getDirectory()).getDirectoryHandle(OWNER_BLOBS_ROOT, { create: true });
+
+  // Create staging upload file timestamped at 100_000
+  const temp = `upload-100000-${crypto.randomUUID()}.bin`;
+  const w = await (await root.getFileHandle(temp, { create: true })).createWritable();
+  await w.write(new Uint8Array([1, 2]));
+  await w.close();
+
+  // At t = 100_000, age is 0s (within 60s grace). Staging file must survive.
+  f.setNow(100_000);
+  assertEquals(await f.store.list(), []);
+  assertEquals([...f.files.keys()].some((k) => k.endsWith(temp)), true, "staging file at t=0 must survive");
+
+  // Advance clock to t = 150_000 (age 50s, still within 60s grace). File must survive.
+  f.setNow(150_000);
+  assertEquals(await f.store.list(), []);
+  assertEquals([...f.files.keys()].some((k) => k.endsWith(temp)), true, "staging file at age 50s must survive");
+
+  // Advance clock to t = 170_000 (age 70s, exceeds 60s grace). File must be pruned.
+  f.setNow(170_000);
+  assertEquals(await f.store.list(), []);
+  assertEquals([...f.files.keys()].some((k) => k.endsWith(temp)), false, "staging file at age 70s must be pruned");
+});
+
 
 
 
