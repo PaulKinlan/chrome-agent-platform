@@ -560,6 +560,22 @@ export async function listPendingEnrollmentPromotions() {
     .map(([origin, row]) => Object.freeze({ origin, gen: row.gen, phase: row.phase }));
 }
 
+/** The registry rows the scripting-Disable sweep must cover, read as ONE snapshot:
+ * the enrolled origins (listOrigins) plus every pending promotion that is NOT one
+ * of them (listPendingEnrollmentPromotions drops nothing for an enrolled row, and
+ * listOrigins hides rows carrying `phase`/`promotionPending`).
+ *
+ * chrome-agent-platform-do09a: the sweep walked listOrigins() alone, so a pending
+ * promotion — which is inert, and therefore not an enrolled origin — survived the
+ * owner's Disable and a later boot's reconcileEnrollmentPromotionsOnBoot completed
+ * it with no owner gesture in that session. Disable now abandons these too.
+ */
+export async function listEnrollmentSweepTargets() {
+  const origins = await listOrigins();
+  const pending = (await listPendingEnrollmentPromotions()).filter((row) => !origins.includes(row.origin));
+  return Object.freeze({ origins, pending: Object.freeze(pending) });
+}
+
 /** Owner abandonment tombstones the pending authority FIRST. A failed OPFS
  * cleanup cannot resurrect it; the durable tombstone carries a retry marker.
  *
@@ -576,31 +592,45 @@ export async function listPendingEnrollmentPromotions() {
  * at a NEW generation, so a replay of the staged decision is stale, not authority.
  */
 export async function abandonEnrollmentPromotion(origin, gen) {
-  const canonical = canonicalOrigin(origin);
-  if (!canonical || !Number.isSafeInteger(gen) || gen < 1) throw new Error("site_enrollment_promotion_invalid");
-  return withEnrollmentLock(async () => {
-    const map = await enrolledMap();
-    const row = map[canonical];
-    const promotionStaged = (row?.phase === "promotion-pending" || row?.phase === "promotion-retry") &&
-      row.enrolled === true && Array.isArray(row.promotionPending);
-    const policyStaged = row?.phase === "policy-pending" && row.enrolled === false;
-    if ((!promotionStaged && !policyStaged) || row.gen !== gen) {
-      throw new Error("site_enrollment_promotion_stale");
-    }
-    map[canonical] = { enrolled: false, at: Date.now(), gen: await nextGeneration({ requireDurable: true }),
-      cleanupPending: true };
-    await kvSetDurable({ [ENROLL_KEY]: map });
-    try {
-      await siteMemory(canonical).delete(SITE_TOOL_CONSENT_KEY);
-      delete map[canonical].cleanupPending;
-      await kvSetDurable({ [ENROLL_KEY]: map });
-      return Object.freeze({ abandoned: true, cleanupPending: false });
-    } catch {
-      return Object.freeze({ abandoned: true, cleanupPending: true });
-    }
-  });
+  return withEnrollmentLock(() => abandonEnrollmentPromotionLocked(origin, gen));
 }
 
+/** The LOCKED body of abandonEnrollmentPromotion (no re-acquisition), for the
+ * scripting-Disable sweep, which already holds the global enrollment lock.
+ *
+ * chrome-agent-platform-do09a: pending promotions are excluded from
+ * listOrigins() (they are inert, so they are not "enrolled origins"), and the
+ * sweep only walked listOrigins() — so the owner's Disable left a pending row
+ * durable and a later boot's reconcile completed the promotion with no owner
+ * gesture in that session. No authority exists while a row is pending and
+ * completion needs scripting re-enabled, so that was hygiene rather than a
+ * bypass; the same tombstone abandonEnrollmentPromotion writes makes Disable
+ * total. The tombstone lands BEFORE the OPFS cleanup, and a failed cleanup
+ * leaves the retryable marker rather than a resurrection path.
+ */
+export async function abandonEnrollmentPromotionLocked(origin, gen) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical || !Number.isSafeInteger(gen) || gen < 1) throw new Error("site_enrollment_promotion_invalid");
+  const map = await enrolledMap();
+  const row = map[canonical];
+  const promotionStaged = (row?.phase === "promotion-pending" || row?.phase === "promotion-retry") &&
+    row.enrolled === true && Array.isArray(row.promotionPending);
+  const policyStaged = row?.phase === "policy-pending" && row.enrolled === false;
+  if ((!promotionStaged && !policyStaged) || row.gen !== gen) {
+    throw new Error("site_enrollment_promotion_stale");
+  }
+  map[canonical] = { enrolled: false, at: Date.now(), gen: await nextGeneration({ requireDurable: true }),
+    cleanupPending: true };
+  await kvSetDurable({ [ENROLL_KEY]: map });
+  try {
+    await siteMemory(canonical).delete(SITE_TOOL_CONSENT_KEY);
+    delete map[canonical].cleanupPending;
+    await kvSetDurable({ [ENROLL_KEY]: map });
+    return Object.freeze({ abandoned: true, cleanupPending: false });
+  } catch {
+    return Object.freeze({ abandoned: true, cleanupPending: true });
+  }
+}
 export async function listAbandonedEnrollmentCleanups() {
   const map = await enrolledMap();
   return Object.entries(map)
