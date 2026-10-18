@@ -2,6 +2,7 @@
 // The SW broker and offscreen request validator continue to reject binary runs.
 // x9r8k must supply a verified, SW-issued job and live authority separately.
 import { openAuditedHostOwnedEmscriptenWriter } from "./emscripten-host-writer.js";
+import { createEmscriptenHostEvidence } from "./emscripten-host-evidence.js";
 import { acceptEmscriptenOutputFrame, EMSCRIPTEN_OUTPUT_FRAME_TYPE } from "./emscripten-worker-frames.js";
 
 const JOB_KEYS = ["adapterUrl", "args", "glueUrl", "graphDigest", "operation", "operationId",
@@ -10,6 +11,7 @@ const RESULT_KEYS = ["error", "ok", "operationId", "packageId", "phase", "result
   "sessionId", "type", "workerInstanceId"];
 const OPERATION_KEYS = ["adapterId", "exportName", "id", "params", "result"];
 const PARAM_KEYS = ["maximum", "minimum", "name", "type"];
+const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 
 function fail(code, cause) {
   const error = new Error(code, cause ? { cause } : undefined);
@@ -27,6 +29,7 @@ function exact(value, keys) {
  * listener, no publish/seal/delete path and no binary-guard bypass. */
 export async function runAuditedHostBinaryJob({ identity, job, storage, evidence, createWorker, wallMs } = {}) {
   if (!exact(job, JOB_KEYS) || job.type !== "cap:emscripten-worker-job" ||
+      typeof job.version !== "string" || !SEMVER_RE.test(job.version) ||
       !exact(job.operation, OPERATION_KEYS) || job.operation.result !== "buffer" ||
       job.operation.id !== job.operationId || typeof job.operation.adapterId !== "string" ||
       typeof job.operation.exportName !== "string" || !Array.isArray(job.operation.params) ||
@@ -44,7 +47,8 @@ export async function runAuditedHostBinaryJob({ identity, job, storage, evidence
       typeof createWorker !== "function" || !Number.isSafeInteger(wallMs) || wallMs <= 0 || wallMs > 245_000) {
     fail("emscripten_host_binary_job");
   }
-  const channel = await openAuditedHostOwnedEmscriptenWriter({ identity, storage, evidence });
+  const hostEvidence = evidence ?? createEmscriptenHostEvidence({ storage });
+  const channel = await openAuditedHostOwnedEmscriptenWriter({ identity, storage, evidence: hostEvidence });
   let worker;
   try { worker = createWorker(); }
   catch (cause) {
@@ -53,6 +57,8 @@ export async function runAuditedHostBinaryJob({ identity, job, storage, evidence
   }
   let timer;
   let done = false;
+  let returnedClosed = false;
+  let terminalReceived = false;
   let events = Promise.resolve();
   const hostIdentity = { sessionId: job.sessionId, packageId: job.packageId,
     operationId: job.operationId, workerInstanceId: null };
@@ -77,6 +83,19 @@ export async function runAuditedHostBinaryJob({ identity, job, storage, evidence
         void rejectUnknown("worker_error", new Error(String(event?.message ?? "worker error")));
       };
       worker.onmessage = ({ data }) => {
+        // Observe arrival, not just processing order: a frame queued after a
+        // terminal message must poison evidence even while close() is pending.
+        if (data?.type === EMSCRIPTEN_OUTPUT_FRAME_TYPE && terminalReceived) {
+          if (!done) {
+            void rejectUnknown("writer_fence_unavailable", new Error("emscripten_frame_after_terminal"));
+          } else if (returnedClosed) {
+            // A message already queued after terminal may arrive after close.
+            // Revoke the durable CLOSED witness; never silently drop it.
+            void hostEvidence.recordProtocolViolation(identity, "writer_fence_unavailable");
+          }
+          return;
+        }
+        if (data?.type === "cap:emscripten-run-result") terminalReceived = true;
         events = events.then(async () => {
           if (done) return;
           if (data?.type === EMSCRIPTEN_OUTPUT_FRAME_TYPE) {
@@ -96,6 +115,7 @@ export async function runAuditedHostBinaryJob({ identity, job, storage, evidence
           // The worker cannot open or hold this file. Only the host-owned
           // channel closes and records evidence after all ACKed writes.
           const closed = await channel.close();
+          returnedClosed = true;
           done = true;
           stop();
           resolve(closed);
@@ -103,8 +123,14 @@ export async function runAuditedHostBinaryJob({ identity, job, storage, evidence
           void rejectUnknown("writer_fence_unavailable", cause);
         });
       };
-      try { worker.postMessage(job, [job.wasmBytes.buffer]); }
-      catch (cause) { void rejectUnknown("worker_error", cause); }
+      try {
+        // A verified view may share a larger backing buffer containing bytes
+        // the asset verifier never saw. Transfer only that view's exact bytes.
+        const bytes = job.wasmBytes.byteOffset === 0 &&
+            job.wasmBytes.byteLength === job.wasmBytes.buffer.byteLength
+          ? job.wasmBytes : job.wasmBytes.slice();
+        worker.postMessage({ ...job, wasmBytes: bytes }, [bytes.buffer]);
+      } catch (cause) { void rejectUnknown("worker_error", cause); }
     });
     return proof;
   } finally { stop(); }

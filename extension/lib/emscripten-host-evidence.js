@@ -97,7 +97,8 @@ export function createEmscriptenHostEvidence({ storage = globalThis.navigator?.s
       const { identity, directory } = await entry(raw, true);
       // An UNKNOWN is terminal for this exact ref/generation. A duplicate
       // begin must never re-open native construction after an unproved stop.
-      if (await load(directory, "unknown.json") !== null) fail("emscripten_host_evidence_unknown");
+      if (await load(directory, "unknown.json") !== null ||
+          await load(directory, "invalidated.json") !== null) fail("emscripten_host_evidence_unknown");
       if (await load(directory, "closed.json") !== null) fail("emscripten_host_evidence_closed");
       const present = await load(directory, "pending.json");
       if (present !== null) {
@@ -121,7 +122,8 @@ export function createEmscriptenHostEvidence({ storage = globalThis.navigator?.s
           !same(pending.identity, identity) || pending.hostIncarnation !== incarnation) {
         fail("emscripten_host_evidence_collision");
       }
-      if (await load(directory, "closed.json") !== null) fail("emscripten_host_evidence_collision");
+      if (await load(directory, "closed.json") !== null ||
+          await load(directory, "invalidated.json") !== null) fail("emscripten_host_evidence_collision");
       const record = { version: 1, state: "unknown", identity, hostIncarnation: incarnation, reason };
       const present = await load(directory, "unknown.json");
       if (present !== null) {
@@ -142,7 +144,8 @@ export function createEmscriptenHostEvidence({ storage = globalThis.navigator?.s
       if (!exact(pending, ["version", "state", "identity", "hostIncarnation"]) ||
           pending.version !== 1 || pending.state !== "pending" ||
           !same(pending.identity, identity) || pending.hostIncarnation !== incarnation ||
-          await load(directory, "unknown.json") !== null) fail("emscripten_host_evidence_collision");
+          await load(directory, "unknown.json") !== null ||
+          await load(directory, "invalidated.json") !== null) fail("emscripten_host_evidence_collision");
       const record = { version: 1, state: "closed", identity, hostIncarnation: incarnation,
         proof: { ...proof } };
       const present = await load(directory, "closed.json");
@@ -151,6 +154,28 @@ export function createEmscriptenHostEvidence({ storage = globalThis.navigator?.s
         return Object.freeze(present);
       }
       await writeVerified(directory, "closed.json", record);
+      return Object.freeze(record);
+    },
+    async recordProtocolViolation(raw, reason) {
+      if (reason !== "writer_fence_unavailable") fail("emscripten_host_evidence_reason");
+      const { identity, directory } = await entry(raw);
+      const pending = await load(directory, "pending.json");
+      const closed = await load(directory, "closed.json");
+      if (!exact(pending, ["version", "state", "identity", "hostIncarnation"]) ||
+          pending.version !== 1 || pending.state !== "pending" ||
+          !same(pending.identity, identity) || pending.hostIncarnation !== incarnation ||
+          !exact(closed, ["version", "state", "identity", "hostIncarnation", "proof"]) ||
+          closed.version !== 1 || closed.state !== "closed" ||
+          !same(closed.identity, identity) || closed.hostIncarnation !== incarnation ||
+          await load(directory, "unknown.json") !== null) fail("emscripten_host_evidence_collision");
+      const record = { version: 1, state: "unknown", identity, hostIncarnation: incarnation,
+        reason, invalidatedClosed: true };
+      const present = await load(directory, "invalidated.json");
+      if (present !== null) {
+        if (!same(present, record)) fail("emscripten_host_evidence_collision");
+        return Object.freeze(present);
+      }
+      await writeVerified(directory, "invalidated.json", record);
       return Object.freeze(record);
     },
     async read(raw) {
@@ -176,8 +201,16 @@ export function createEmscriptenHostEvidence({ storage = globalThis.navigator?.s
           !Number.isSafeInteger(closed.proof.bytes) || closed.proof.bytes < 0 || !HEX64.test(closed.proof.sha256))) {
         fail("emscripten_host_evidence_unavailable");
       }
-      if (unknown !== null && closed !== null) fail("emscripten_host_evidence_unavailable");
-      return Object.freeze(closed ?? unknown ?? { version: 1, state: "unknown", identity,
+      const invalidated = await load(directory, "invalidated.json");
+      if (invalidated !== null && (!exact(invalidated, ["version", "state", "identity", "hostIncarnation", "reason", "invalidatedClosed"]) ||
+          invalidated.version !== 1 || invalidated.state !== "unknown" ||
+          !same(invalidated.identity, identity) || invalidated.hostIncarnation !== pending.hostIncarnation ||
+          invalidated.reason !== "writer_fence_unavailable" || invalidated.invalidatedClosed !== true)) {
+        fail("emscripten_host_evidence_unavailable");
+      }
+      if ((unknown !== null && closed !== null) ||
+          (invalidated !== null && (closed === null || unknown !== null))) fail("emscripten_host_evidence_unavailable");
+      return Object.freeze(invalidated ?? closed ?? unknown ?? { version: 1, state: "unknown", identity,
         hostIncarnation: pending.hostIncarnation, reason: "writer_fence_unavailable" });
     },
   });

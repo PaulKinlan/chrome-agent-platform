@@ -12,14 +12,20 @@ and generation. Missing, corrupt, unreadable and foreign records fail closed.
 No original input, stream or artifact directory is removed by this ledger.
 
 A pending record reads as UNKNOWN. `recordUnknown` persists typed timeout or
-unproved termination. The 3mcu1 host-owned writer can persist a narrow positive
+unproved termination. If a frame is observed after a CLOSED receipt, the same
+host incarnation writes `invalidated.json`: future reads return UNKNOWN and no
+later `begin` or `recordClosed` may supersede that revocation. The 3mcu1 host-owned writer can persist a narrow positive
 CLOSED receipt only after it observes its own exclusive-lock probe, drained
 queue, writer `close()` and independently re-read byte count and SHA-256. An
 UNKNOWN and a CLOSED record for the same identity conflict and read as
 unavailable. Restart may read CLOSED but cannot add it for a prior incarnation.
 A `Worker.terminate()` call or successful worker message alone is not proof of
-close. A crash before a terminal write leaves pending UNKNOWN; an incomplete or
-corrupt terminal write is unavailable, never success.
+close or of producer completeness. The positive caller proof includes a ledger
+reference for independent fresh reads. A crash before a terminal write leaves
+pending UNKNOWN; an incomplete or corrupt terminal write is unavailable, never
+success. A failed late-frame invalidation cannot prove producer quiescence,
+which is why x9r8k also needs a separate stable producer-end declaration before
+publication.
 
 These modules remain **unwired** to the offscreen entry. The binary broker/host
 refusal remains on. A host receipt is not SW live-run authority, a publication
