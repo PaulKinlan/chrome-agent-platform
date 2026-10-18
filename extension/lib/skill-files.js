@@ -122,3 +122,14 @@ export async function removeSkillFiles(id, { getDirectory = null } = {}) {
     /* absent skill dir is a no-op */
   }
 }
+
+/**
+ * The skill file STORE — the two operations `lib/skill-import.js` and the catalog take as `fileStore`.
+ *
+ * Single-sourced here (chrome-agent-platform-zln9d) because it had drifted into a one-line constant inside
+ * the service worker: `{ writeSkillFiles, removeSkillFiles }`, built from the very imports this module owns.
+ * Routes that move out of the worker (routes/skills.js) must see the SAME store object the worker's own
+ * catalog call sites use, so the definition lives beside the functions rather than in whichever file happens
+ * to call them first.
+ */
+export const skillFileStore = Object.freeze({ writeSkillFiles, removeSkillFiles });

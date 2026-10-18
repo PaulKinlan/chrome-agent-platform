@@ -51,6 +51,7 @@ import {
   createMemoryAdminRoutes,
   createHooksRoutes,
   createToolStreamRoutes,
+  createSkillRoutes,
   resolveMemory,
   awaitMemoryQuiescence,
   enumerateMemoryStores,
@@ -468,7 +469,7 @@ import {
   validateTaskInstructionAdmission,
   IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
 } from "../lib/skill-import.js";
-import { readSkillFile, writeSkillFiles, removeSkillFiles } from "../lib/skill-files.js";
+import { readSkillFile, skillFileStore, writeSkillFiles, removeSkillFiles } from "../lib/skill-files.js";
 import { attachedSkillRefs, JOURNALED_SKILLS_CAP } from "../lib/skill-promotion.js";
 import { durableRuns, sweepOrphanAgentData } from "../lib/durable-runs.js";
 import { replaySafetyForTool } from "../lib/tool-replay-safety.js";
@@ -1074,7 +1075,8 @@ async function getCustomSkills() {
 // fresh rows carry `promptBytes`, so a re-read skips the write. If OPFS is
 // unavailable the legacy row is returned untouched (its inline body still
 // composes) — the migration is never destructive.
-const skillFileStore = { writeSkillFiles, removeSkillFiles };
+// skillFileStore now lives in lib/skill-files.js (zln9d): one definition, imported here and by
+// routes/skills.js, so a moved route cannot see a different store object than the worker does.
 // Warn ONCE per failing id (the migration failure is a real surfaced signal,
 // not a silent degradation — the composed inline body keeps the skill usable,
 // but skill_read cannot serve it until storage recovers).
@@ -7460,6 +7462,12 @@ const hooksRoutes = createHooksRoutes({ requireOwnerApproval, payloadFields });
 // summariser — and arrives as the single injected dependency.
 const memoryAdminRoutes = createMemoryAdminRoutes({ memoryOverview });
 
+// chrome-agent-platform-atxc6 slice 4 (zln9d): the skill family. Three injections: the memory resolver and
+// the two worker-local notifications (a skills change must rebuild the orchestrator's prompt and refresh the
+// registry). The file STORE is not injected — it lives in lib/skill-files.js so this map and the worker's own
+// catalog call sites share one definition.
+const skillRoutes = createSkillRoutes({ masterMemory, invalidateAgent, broadcastRegistryChanged });
+
 const toolStreamRoutes = createToolStreamRoutes({ wasmStreamOwner, runWasmStreamTool });
 
 const enclaveStatusRoutes = {
@@ -10602,19 +10610,6 @@ const handlers = mergeRouteMaps(
     return { ok: true, tabId: tab?.id ?? null, url: parsed.href, origin: parsed.origin };
   },
 
-  async "skills.set"({ origin, skills }) {
-    const result = await setSkills(origin, skills);
-    // Skills feed the orchestrator's system prompt at build time — a skills change
-    // must rebuild the running orchestrator, not leave a stale cached prompt.
-    invalidateAgent();
-    return result;
-  },
-  async "skills.get"({ origin }) {
-    return await getSkills(origin);
-  },
-  async "skills.all"() {
-    return await allSkills();
-  },
 
   // memory.get/set/list/clear live in background/routes/memory.js (teardown
   // review r5 P1-b: the dispatcher must be importable so tests exercise the
@@ -11646,64 +11641,9 @@ const handlers = mergeRouteMaps(
     return { ok: true, name, stopping: handle.stopping === true };
   },
 
-  async "skill.list"() {
-    // THE single catalog (CAP-FB-20260831-SKILL-LIST-SYNC-01; l0r retired the
-    // duplicate recipe.list route): built-in on-demand skills + healthy
-    // imported skills. Background skills are scheduled agents
-    // (background-agent.list), never on-demand skills — Settings and every
-    // picker read this SAME route, so no surface can drift. `broken` carries
-    // the skills that failed to load so Settings can surface them honestly
-    // (never silently offered, never silently hidden).
-    const { skillCatalog } = await import("../lib/skill-catalog.js");
-    const { skills, broken } = await skillCatalog({ memory: masterMemory(), fileStore: skillFileStore });
-    return { skills, broken };
-  },
-  async "skill.import"(m) {
-    const url = String(m?.url ?? "").trim();
-    if (!url) return { ok: false, error: "no skill URL provided" };
-    try {
-      const fetched = await fetchSkillFromUrl(url);
-      const skill = await installImportedSkill(masterMemory(), fetched, {
-        writeSkillFiles,
-        removeSkillFiles,
-      });
-      broadcastRegistryChanged();
-      return { ok: true, skill };
-    } catch (e) {
-      return { ok: false, error: e?.message ?? String(e) };
-    }
-  },
-  async "skill.delete"({ id }) {
-    const rid = String(id ?? "").trim();
-    if (!rid) return { ok: false, error: "no skill id provided" };
-    const out = await removeImportedSkill(masterMemory(), rid, {
-      writeSkillFiles,
-      removeSkillFiles,
-    });
-    if (out?.ok) broadcastRegistryChanged();
-    return out;
-  },
-  async "skill.discover"(m) {
-    const url = String(m?.url ?? "").trim();
-    if (!url) return { ok: false, error: "no skill URL provided" };
-    try {
-      return await discoverRepoSkillsAndCommands(url, m?.options);
-    } catch (e) {
-      return { ok: false, error: e?.message ?? String(e) };
-    }
-  },
-  async "skill.importBatch"(m) {
-    try {
-      const res = await installBatchSkillsAndCommands(masterMemory(), m, {
-        writeSkillFiles,
-        removeSkillFiles,
-      });
-      broadcastRegistryChanged();
-      return res;
-    } catch (e) {
-      return { ok: false, error: e?.message ?? String(e) };
-    }
-  },
+  // Imported COMMANDS stay in the worker (chrome-agent-platform-zln9d): adopting one is an
+  // owner-principal decision (isOwnerPrincipal + ERR_OWNER_EXT_REQUIRED), not skill storage, so it keeps its
+  // authority path here while the skill catalog moved to routes/skills.js.
   async "command.list"() {
     return { commands: await loadAllImportedCommands(masterMemory()) };
   },
@@ -11729,21 +11669,7 @@ const handlers = mergeRouteMaps(
     if (res?.ok) broadcastRegistryChanged();
     return res;
   },
-  async "site-skills.set"(m, context) {
-    // The owner writes a per-origin site note from the Settings surface ONLY
-    // (CAP-FB-20260830-SITE-PLAYBOOKS-01). Bounded by setSiteNote itself.
-    requireSettingsSender(context);
-    const origin = String(m?.origin ?? "").trim();
-    if (!origin) return { ok: false, error: "no origin provided" };
-    try { new URL(origin); } catch { return { ok: false, error: "origin must be a URL origin" }; }
-    const note = await setSiteNote(origin, m?.notes);
-    return { ok: true, notes: note };
-  },
-  async "site-skills.get"(m) {
-    const origin = String(m?.origin ?? "").trim();
-    if (!origin) return { ok: false, error: "no origin provided" };
-    return { ok: true, notes: await getSiteNote(origin) };
-  },
+
   async "skill.run"(m) {
     const skill = getSkill(m.id);
     if (!skill) return { ok: false, error: `no skill ${m.id}` };
@@ -13152,6 +13078,7 @@ const handlers = mergeRouteMaps(
   hooksRoutes,
   toolStreamRoutes,
   memoryAdminRoutes,
+  skillRoutes,
 );
 
 async function resumeInterruptedRuns() {

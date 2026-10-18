@@ -18,6 +18,7 @@ import {
   createAgentWorkerRoutes,
   createHooksRoutes,
   createToolStreamRoutes,
+  createSkillRoutes,
   kvRoutes,
   mergeRouteMaps,
   permLeaseRoutes,
@@ -552,6 +553,12 @@ Deno.test("sw routes: AST verification of route registration across service-work
         // write path, extracted to routes/fs-grants.js
         // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
         registeredRouteKeys.push(...Object.keys(createFsGrantRoutes(FS_GRANT_STUB_DEPS)));
+      } else if (arg.name === "skillRoutes") {
+        // chrome-agent-platform-atxc6 slice 4 (zln9d): the skill family — skills.set/get/all,
+        // skill.list/import/delete/discover/importBatch, site-skills.set/get. `skill.run` stays in the worker
+        // because it resolves a skill and calls runTask (the run core, not skill storage), and the imported
+        // COMMAND routes stay too because adopting one is an owner-principal decision.
+        registeredRouteKeys.push(...Object.keys(createSkillRoutes({ masterMemory: () => ({}), invalidateAgent: () => {}, broadcastRegistryChanged: () => {} })));
       } else if (arg.name === "memoryAdminRoutes") {
         // chrome-agent-platform-atxc6 slice 3: the memory admin routes (purge/sweep/origins/overview/stores)
         // joined routes/memory.js. The injected summariser cannot change route names.

@@ -15,6 +15,7 @@ export { createActivityRoutes, filterActivityEntries, ACTIVITY_STORE_CAPS } from
 export { closeAgentWorkerFor, createAgentWorkerRoutes, reconcileAgentWorkers } from "./agent-worker.js";
 export { createHooksRoutes } from "./hooks.js";
 export { createToolStreamRoutes } from "./tool-stream.js";
+export { createSkillRoutes } from "./skills.js";
 export {
   createMemoryAdminRoutes,
   createMemoryRoutes,
