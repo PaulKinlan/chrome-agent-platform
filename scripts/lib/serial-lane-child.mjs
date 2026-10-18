@@ -6,13 +6,16 @@
 // it runs one lane here, in a child, and reads the lane's failure records back from a JSON file
 // (stdout stays the lane's own live output, so the gate log reads exactly as before).
 //
-// Usage: deno run -A --config deno.runner.jsonc scripts/lib/serial-lane-child.mjs <result.json> <file...>
+// Usage: <runtime> scripts/lib/serial-lane-child.mjs <result.json> <file...>
+// The runtime is whatever runs the parent (NODE for `npm test`, deno for the inner loop), so this file
+// uses node:fs and process.exit only — Deno.* here made the lane spawn throw under node.
+import { writeFileSync } from "node:fs";
 import { runSerialFiles } from "./serial-phase.mjs";
 
 const [resultPath, ...files] = process.argv.slice(2);
 if (!resultPath || files.length === 0) {
   console.error("serial-lane-child: usage: <result.json> <file...>");
-  Deno.exit(2);
+  process.exit(2);
 }
 
 const failures = [];
@@ -36,9 +39,9 @@ try {
 }
 
 try {
-  await Deno.writeTextFile(resultPath, JSON.stringify({ rc, failures }));
+  writeFileSync(resultPath, JSON.stringify({ rc, failures }));
 } catch (error) {
   console.error(`serial-lane-child: could not write ${resultPath}: ${error?.message ?? error}`);
-  Deno.exit(rc === 0 ? 1 : rc);
+  process.exit(rc === 0 ? 1 : rc);
 }
-Deno.exit(rc);
+process.exit(rc);

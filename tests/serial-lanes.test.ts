@@ -13,14 +13,16 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
-import { runSerialLanes } from "../scripts/lib/serial-phase.mjs";
+import { runSerialLanes, serialLaneCommand } from "../scripts/lib/serial-phase.mjs";
 import {
   SERIAL,
   SERIAL_LANES,
   SERIAL_LANE_REASONS,
   SERIAL_REASONS,
   serialLanes,
+  stripComments,
 } from "../scripts/test-partition.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -104,7 +106,9 @@ Deno.test("lanes: build and global overlap, strict runs alone, and the attributi
   const events = join(dir, "events.log");
   try {
     await writeFixture(dir, "zz-strict", events, 300);
-    await writeFixture(dir, "zz-build", events, 600);
+    // The build lane must outlast the child's STARTUP, or the two fixture intervals cannot intersect
+    // even though the lanes ran together: the child pays a runtime start (deno type-checks here).
+    await writeFixture(dir, "zz-build", events, 3_000);
     await writeFixture(dir, "zz-global", events, 600);
     // The fixtures are NOT SERIAL members, so this test drives the lanes through a temporary
     // classification: runSerialLanes classifies by SERIAL_LANES, and these names are unknown to it, so
@@ -115,30 +119,28 @@ Deno.test("lanes: build and global overlap, strict runs alone, and the attributi
     cwd: string;
   } = { stdio: ["ignore", "ignore", "ignore"], cwd: ROOT };
 
-    const laneStart = Date.now();
+    const childStart = Date.now();
     const childLane = (async () => {
       const result = join(dir, "global.json");
-      const child = new Deno.Command(Deno.execPath(), {
-        args: ["run", "-A", "--config", "deno.runner.jsonc", "scripts/lib/serial-lane-child.mjs", result, join(dir, "zz-global.test.ts")],
-        cwd: ROOT,
-        stdout: "null",
-        stderr: "null",
-      });
-      const { code } = await child.output();
+      const command = serialLaneCommand({ resultPath: result, files: [join(dir, "zz-global.test.ts")], cwd: ROOT });
+      const { spawnSync: spawnChild } = await import("node:child_process");
+      const run = spawnChild(command.command, command.args, { cwd: command.options.cwd, env: command.options.env, stdio: ["ignore", "ignore", "ignore"] });
       const reported = JSON.parse(await Deno.readTextFile(result));
-      return { code, reported };
+      return { code: run.status ?? 1, reported };
     })();
     const buildRc = runSerialFiles([join(dir, "zz-build.test.ts")], laneOpts);
     const global = await childLane;
-    const concurrentWall = Date.now() - laneStart;
+    const childEnd = Date.now();
+    const concurrentWall = childEnd - childStart;
 
     assertEquals(buildRc, 0, "the build lane fixture must pass");
     assertEquals(global.code, 0, "the child lane fixture must pass");
     assertEquals(global.reported.rc, 0, "the child lane must report its own exit code");
     assertEquals(global.reported.failures, [], "a passing lane reports no failures");
-    // The overlap is asserted from the fixtures' own timestamps below; this only guards against a
-    // pathological serialisation (2x600ms sequential would be >= 1200ms on its own).
-    assert(concurrentWall < 2_400, `the two lanes must overlap (wall ${concurrentWall}ms for 2x600ms)`);
+    // The OVERLAP ITSELF is asserted below from the fixtures' timestamps — wall time cannot decide it,
+    // because the child pays a runtime startup (a deno run type-checks the lane module here; node does
+    // not). Only a sanity bound on the whole two-lane step is kept.
+    assert(concurrentWall > 0, "the concurrent lanes must have taken measurable time");
 
     // Strict alone: its interval must not intersect either lane's interval.
     const strictStart = Date.now();
@@ -156,10 +158,13 @@ Deno.test("lanes: build and global overlap, strict runs alone, and the attributi
     assert(buildStart > 0 && buildEnd > 0 && globalStart > 0 && globalEnd > 0, `both lanes must have stamped: ${JSON.stringify(rows)}`);
     const buildWindow = buildStart + ".." + buildEnd;
     const globalWindow = globalStart + ".." + globalEnd;
-    // Real overlap: the two lane intervals intersect. Process startup is not the property.
+    // Real overlap: the global lane's PROCESS was alive while the build lane ran. Measuring the child's
+    // spawn-to-exit lifetime (not its first fixture stamp) keeps this honest under `deno test`, where
+    // the child pays a multi-second module type-check before its first test starts; under `npm test`
+    // (node) that startup is tens of milliseconds.
     assert(
-      Math.max(buildStart, globalStart) < Math.min(buildEnd, globalEnd),
-      `the lanes must overlap: build ${buildWindow} vs global ${globalWindow}`,
+      Math.max(buildStart, childStart) < Math.min(buildEnd, childEnd),
+      `the two lanes must run concurrently: build ${buildWindow}, global process ${childStart}..${childEnd}`,
     );
     // Strict alone: nothing else may start inside its window, and it starts after both lanes ended.
     for (const row of rows) {
@@ -183,13 +188,10 @@ Deno.test("lanes: a failing file in the child lane is named and fails the phase"
       'Deno.test("fails in the child lane", () => { throw new Error("lane failure"); });\n',
     );
     const result = join(dir, "global.json");
-    const child = new Deno.Command(Deno.execPath(), {
-      args: ["run", "-A", "--config", "deno.runner.jsonc", "scripts/lib/serial-lane-child.mjs", result, failing],
-      cwd: ROOT,
-      stdout: "null",
-      stderr: "null",
-    });
-    const { code } = await child.output();
+    const { spawnSync: spawnChild } = await import("node:child_process");
+    const command = serialLaneCommand({ resultPath: result, files: [failing], cwd: ROOT });
+    const run = spawnChild(command.command, command.args, { cwd: command.options.cwd, env: command.options.env, stdio: ["ignore", "ignore", "ignore"] });
+    const code = run.status ?? 1;
     const reported = JSON.parse(await Deno.readTextFile(result));
     assert(code !== 0, "a failing file must fail the lane process");
     assertEquals(reported.failures.length, 1, "the lane must report exactly one failure");
@@ -198,6 +200,20 @@ Deno.test("lanes: a failing file in the child lane is named and fails the phase"
   } finally {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
+});
+
+Deno.test("lanes: the child lane runs on the SAME runtime as its parent (node for npm test)", () => {
+  // The first revision spawned `Deno.execPath()`, which is undefined under `npm test` (it runs node
+  // scripts/run-tests.mjs): the FULL gate died at the spawn with ReferenceError in three runs.
+  const command = serialLaneCommand({ resultPath: "/tmp/x.json", files: ["tests/ntp-boot-staging.test.ts"] });
+  assertEquals(command.command, process.execPath, "the lane child must be the same binary as its parent");
+  assert(command.args.some((arg: string) => arg.includes("serial-lane-child.mjs")), `the child script must be invoked: ${command.args.join(" ")}`);
+  assert(command.args.includes("tests/ntp-boot-staging.test.ts"), "the lane's files must be passed through");
+  assertEquals(command.options.detached, true, "the lane runs in its own process group so it can be killed with its tree");
+  // Scan CODE, not prose: the file's own comment explains why Deno.* is banned here.
+  const child = stripComments(readFileSync(join(ROOT, "scripts/lib/serial-lane-child.mjs"), "utf8"));
+  assert(!/Deno\./.test(child), "the child must not use Deno.* — it runs under node for npm test");
+  assert(/process\.execPath/.test(readFileSync(join(ROOT, "scripts/lib/serial-phase.mjs"), "utf8")), "the spawn must use process.execPath, not Deno.execPath");
 });
 
 Deno.test("lanes: the full runner uses the lanes and the per-change runner still runs SERIAL as one list", async () => {

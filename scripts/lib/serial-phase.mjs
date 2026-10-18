@@ -470,6 +470,35 @@ function combineLaneExitCodes(codes) {
 }
 
 /**
+ * The command that runs ONE serial lane in its own process.
+ *
+ * Runtime-agnostic on purpose: `npm test` executes scripts/run-tests.mjs under NODE, while the inner
+ * loop and several tests run the same module under DENO. `Deno.execPath()` is undefined under node, so
+ * the first revision of the lane spawn threw `ReferenceError: Deno is not defined` and took the whole
+ * gate down at the spawn site (measured: three FULL runs, exit 1, 27s each). process.execPath is the
+ * running binary in both runtimes; only Deno needs the run/-A/--config words, because a child inherits
+ * no permissions.
+ */
+export function serialLaneCommand({ resultPath, files, cwd = undefined, env = process.env } = /** @type {{ resultPath: string, files: string[], cwd?: string, env?: NodeJS.ProcessEnv }} */ ({})) {
+  const childScript = fileURLToPath(new URL("./serial-lane-child.mjs", import.meta.url));
+  const isDeno = typeof globalThis.Deno !== "undefined" && typeof globalThis.Deno?.execPath === "string";
+  const args = isDeno
+    ? ["run", "-A", "--config", "deno.runner.jsonc", childScript, resultPath, ...files]
+    : [childScript, resultPath, ...files];
+  return {
+    command: process.execPath,
+    args,
+    options: {
+      cwd: cwd ?? process.cwd(),
+      env,
+      // Own process group, so a lane that overruns its bound can be killed with its whole tree.
+      detached: true,
+      stdio: ["ignore", "inherit", "inherit"],
+    },
+  };
+}
+
+/**
  * chrome-agent-platform-1oouo: run SERIAL as LANES instead of one file at a time.
  *
  * The 75s serial phase was one-file-at-a-time by construction, but only ONE of its three hazard classes
@@ -532,11 +561,8 @@ export async function runSerialLanes(files, {
     if (resultPath) {
       const bound = childBoundMs ??
         lanes.global.reduce((total, file) => total + (perFileTimeoutMs?.[file] ?? defaultSerialTimeoutMs(env)), 0) + 60_000;
-      const child = spawn(
-        Deno.execPath(),
-        ["run", "-A", "--config", "deno.runner.jsonc", "scripts/lib/serial-lane-child.mjs", resultPath, ...lanes.global],
-        { cwd: cwd ?? process.cwd(), env, stdio: ["ignore", "inherit", "inherit"] },
-      );
+      const lane = serialLaneCommand({ resultPath, files: lanes.global, cwd, env });
+      const child = spawn(lane.command, lane.args, lane.options);
       let killed = false;
       const killer = setTimeout(() => {
         killed = true;
