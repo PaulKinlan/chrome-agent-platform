@@ -778,10 +778,23 @@ function normalizeWorkspacePattern(pattern) {
     .replace(/\/+$/, '');
 }
 
+// Wildcard workspace segments (`packages/ui-*`) repeat across every candidate
+// directory and every resolution call, so compile each pattern once instead of
+// once per segment comparison (chrome-agent-platform-c1ug5). The compiled
+// pattern has no flags, so a shared instance stays stateless; the cache is
+// bounded so a pathological pattern set cannot grow it unbounded.
+const segmentPatternCache = new Map();
+const SEGMENT_PATTERN_CACHE_LIMIT = 512;
+
 function segmentMatches(patternSegment, relSegment) {
   if (patternSegment === '*') return true;
   if (!patternSegment.includes('*')) return patternSegment === relSegment;
-  const re = new RegExp(`^${escapeRegExp(patternSegment).replace(/\\\*/g, '[^/]*')}$`);
+  let re = segmentPatternCache.get(patternSegment);
+  if (!re) {
+    if (segmentPatternCache.size >= SEGMENT_PATTERN_CACHE_LIMIT) segmentPatternCache.clear();
+    re = new RegExp(`^${escapeRegExp(patternSegment).replace(/\\\*/g, '[^/]*')}$`);
+    segmentPatternCache.set(patternSegment, re);
+  }
   return re.test(relSegment);
 }
 

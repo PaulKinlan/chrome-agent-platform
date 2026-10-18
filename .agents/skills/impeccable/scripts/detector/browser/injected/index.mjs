@@ -134,13 +134,20 @@ if (IS_BROWSER) {
     return r.top >= 0 && r.left >= 0 && r.bottom <= window.innerHeight && r.right <= window.innerWidth;
   }
 
-  // Reposition spotlight on scroll/resize
-  window.addEventListener('scroll', () => {
-    if (spotlightTarget) updateSpotlightClipPath();
-  }, { passive: true });
-  window.addEventListener('resize', () => {
-    if (spotlightTarget) updateSpotlightClipPath();
-  });
+  // Reposition spotlight on scroll/resize. Coalesced to one pass per animation
+  // frame: a scroll burst fires dozens of events between paints and each event
+  // read the target's getBoundingClientRect. The frame runs after the last
+  // event of the burst, so the rect it reads is already final.
+  let spotlightFrame = 0;
+  const scheduleSpotlightUpdate = () => {
+    if (spotlightFrame) return;
+    spotlightFrame = requestAnimationFrame(() => {
+      spotlightFrame = 0;
+      if (spotlightTarget) updateSpotlightClipPath();
+    });
+  };
+  window.addEventListener('scroll', scheduleSpotlightUpdate, { passive: true });
+  window.addEventListener('resize', scheduleSpotlightUpdate);
 
   const overlays = [];
   const TYPE_LABELS = {};
@@ -1131,8 +1138,8 @@ if (IS_BROWSER) {
     const ratios = [];
     const methods = new Set();
     const unresolved = [];
-    for (const point of points) {
-      const sample = await sampleVisualBackgroundAtPoint(el, point, textColor);
+    const samples = await Promise.all(points.map(point => sampleVisualBackgroundAtPoint(el, point, textColor)));
+    for (const sample of samples) {
       if (sample.status !== 'sampled' || !sample.color) {
         unresolved.push(sample.reason);
         continue;

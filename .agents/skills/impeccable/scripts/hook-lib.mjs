@@ -730,7 +730,24 @@ export function suppressionNotice(filePath) {
 }
 
 // Glob → RegExp. Supports `**`, `*`, `?`, and `{a,b}` alternation.
+// Compiled patterns are cached by glob string: matchesAnyGlob rebuilds one per
+// glob for every file, so a fixed ignore list used to be recompiled once per
+// file per glob (chrome-agent-platform-c1ug5). The compiled result carries no
+// flags, so sharing an instance cannot leak `lastIndex` state between calls; the
+// cache is bounded so a caller feeding generated globs cannot grow it unbounded.
+const GLOB_REGEX_CACHE = new Map();
+const GLOB_REGEX_CACHE_LIMIT = 512;
+
 function globToRegex(glob) {
+  const cached = GLOB_REGEX_CACHE.get(glob);
+  if (cached) return cached;
+  if (GLOB_REGEX_CACHE.size >= GLOB_REGEX_CACHE_LIMIT) GLOB_REGEX_CACHE.clear();
+  const compiled = compileGlobToRegex(glob);
+  GLOB_REGEX_CACHE.set(glob, compiled);
+  return compiled;
+}
+
+function compileGlobToRegex(glob) {
   let re = '^';
   let i = 0;
   while (i < glob.length) {
