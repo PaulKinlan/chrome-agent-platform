@@ -94,7 +94,16 @@ Deno.test("lanes: the child is spawned BEFORE the build lane runs, both are awai
   let resolveChild = () => {};
   const childDone = new Promise<void>((resolve) => { resolveChild = () => resolve(); });
   const failuresOut: any[] = [];
-  const rc = await runSerialLanes(files, {
+  // Silenced: runSerialLanes announces its lane summary, and a seam test that deliberately reports a
+  // failing child would otherwise print a fake "run-tests: serial lanes FAILED in 0s" INTO a real gate
+  // log (it did — twice per gate — where a reader or a grep takes it for the phase verdict).
+  const realLog = console.log;
+  const realError = console.error;
+  console.log = () => {};
+  console.error = () => {};
+  let rc = -1;
+  try {
+    rc = await runSerialLanes(files, {
     runLaneFiles: (laneFiles: string[], opts: any) => {
       for (const file of laneFiles) events.push(`run:${file}`);
       if (laneFiles.includes("tests/build-smoke.test.ts")) {
@@ -129,8 +138,12 @@ Deno.test("lanes: the child is spawned BEFORE the build lane runs, both are awai
         exited: childDone.then(() => ({ code: 1, signal: null })),
       };
     },
-    failuresOut,
-  });
+      failuresOut,
+    });
+  } finally {
+    console.log = realLog;
+    console.error = realError;
+  }
   assertEquals(rc, 1, "a failing child lane must fail the phase with its own code");
   assertEquals(
     failuresOut.map((failure) => failure.file),
