@@ -205,7 +205,12 @@ Deno.test("lanes: a failing file in the child lane is named and fails the phase"
 Deno.test("lanes: the child lane runs on the SAME runtime as its parent (node for npm test)", () => {
   // The first revision spawned `Deno.execPath()`, which is undefined under `npm test` (it runs node
   // scripts/run-tests.mjs): the FULL gate died at the spawn with ReferenceError in three runs.
-  const command = serialLaneCommand({ resultPath: "/tmp/x.json", files: ["tests/ntp-boot-staging.test.ts"] });
+  // The result path goes through the durable route like every other scratch path (a literal /tmp path
+  // is what tests/durable-root.test.ts exists to catch — it caught mine).
+  const command = serialLaneCommand({
+    resultPath: join(durableDir("scratch", `serial-lane-cmd-${process.pid}-${Date.now()}`), "result.json"),
+    files: ["tests/ntp-boot-staging.test.ts"],
+  });
   assertEquals(command.command, process.execPath, "the lane child must be the same binary as its parent");
   assert(command.args.some((arg: string) => arg.includes("serial-lane-child.mjs")), `the child script must be invoked: ${command.args.join(" ")}`);
   assert(command.args.includes("tests/ntp-boot-staging.test.ts"), "the lane's files must be passed through");
