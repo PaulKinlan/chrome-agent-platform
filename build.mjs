@@ -243,11 +243,20 @@ const { manifestCasMappings, assertManifestRowDigest, registerBundledManifestIde
 const manifestByFile = new Map();
 const manifestIdentities = new Set();
 const casClaims = new Map();
+let schema2AdmissionReady = false;
 for (const identity of BUNDLED_INVENTORY.manifests) {
   const manifestRel = `extension/wasm/manifests/${identity.pkg}-${identity.version}.manifest.json`;
   const manifestText = await readFile(join(ROOT, manifestRel), "utf8");
   assertManifestRowDigest(manifestText, identity);
   const manifest = JSON.parse(manifestText);
+  if (manifest.schemaVersion === 2 && !schema2AdmissionReady) {
+    // This is the Node-only build path, never a service-worker import. The
+    // options admission broker registers the full schema-2 validator/auditor
+    // on WasmPackageAuthority; without it the probe must fail closed. Keep
+    // default schema-1 builds free of the admission module and its cost.
+    await import("./extension/lib/wasm-package-admission.js");
+    schema2AdmissionReady = true;
+  }
   registerBundledManifestIdentity(manifestIdentities, identity, manifest);
   for (const mapping of manifestCasMappings(manifest)) {
     const { casRel, schemaVersion, executable, asset } = mapping;
