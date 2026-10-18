@@ -170,6 +170,11 @@ export async function handleToolPackageValidate(message, context, {
       epoch: record.epoch,
       status: "validated-not-enabled",
       signatureVerified: false,
+      // 197jd: the JS capability admission verdict over the glue+adapter byte
+      // set (deny-list scan), so the Settings receipt shows the property that
+      // was actually checked — or that it is absent on records admitted
+      // before the invariant existed.
+      jsCapabilityAudit: record.current.jsCapabilityAudit ?? null,
       // ltkj.3: the bounded admitted operation descriptors (ids + scalar param
       // bounds) so the Settings surface can render the run panel. Broker-side
       // dispatch re-derives everything from the admitted manifest; these are
@@ -189,6 +194,7 @@ export async function handleToolPackageValidate(message, context, {
         ok: false,
         error: err.code,
         path: err.path ?? null,
+        detail: err.detail ?? null,
       };
     }
     return {

@@ -712,6 +712,7 @@ export class WasmPackageAuthority {
     if (this._inventory.signer?.lane !== "bundled" || this._inventory.signer?.keyId !== manifest.signer.keyId) fail("key_not_active");
     if (!(this._inventory.manifests ?? []).some((row) => row?.pkg === manifest.package.id && row?.version === manifest.package.version && row?.digest === manifestDigest)) fail("inventory_mismatch", "manifest");
     let graph = null;
+    let jsAudit = null;
     const measured = [];
     if (manifest.schemaVersion === 2) {
       const files = new Map();
@@ -725,6 +726,7 @@ export class WasmPackageAuthority {
       if (!provenanceBytes || provenanceBytes.length !== pin.size || await sha256HexBytes(provenanceBytes) !== pin.sha256) fail("provenance_mismatch");
       schema2OrFail().validateProvenance(decoder.decode(provenanceBytes), manifest);
       graph = await schema2OrFail().auditGraph({ assets: manifest.assets, modules: manifest.modules, linkGraph: manifest.linkGraph }, files);
+      jsAudit = graph.jsAudit;
       if (manifest.entry.adapterId === "cap-a0-numeric-v1") {
         schema2OrFail().assertNumericEligibility(manifest, graph);
       } else if (manifest.entry.adapterId === "cap-blake3-wasm-v1") {
@@ -752,10 +754,10 @@ export class WasmPackageAuthority {
     const sbom = this._inventoryFiles.get(manifest.sbom.ref);
     if (!sbom || await sha256HexBytes(sbom) !== manifest.sbom.sha256) fail("sbom_mismatch");
     if (!this._inventoryFiles.has(manifest.license.file) || (manifest.license.notices && !this._inventoryFiles.has(manifest.license.notices))) fail("provenance_incomplete");
-    return measured;
+    return { measured, jsAudit };
   }
 
-  _record(validated, measured, previous = null) {
+  _record(validated, measured, previous = null, jsAudit = null) {
     const { manifest, manifestDigest, signatureScope } = validated;
     const schema2 = manifest.schemaVersion === 2;
     const graphIdentity = schema2 ? schema2OrFail().identity(manifest) : null;
@@ -767,7 +769,7 @@ export class WasmPackageAuthority {
       version: manifest.package.version,
       manifestDigest,
       capabilityDigest: identityDigest,
-      ...(schema2 ? { runtime: structuredClone(manifest.runtime), graphDigest: graphIdentity.graphDigest, operationDigests: graphIdentity.operationDigests, manifest: structuredClone(manifest) } : {}),
+      ...(schema2 ? { runtime: structuredClone(manifest.runtime), graphDigest: graphIdentity.graphDigest, operationDigests: graphIdentity.operationDigests, manifest: structuredClone(manifest), jsCapabilityAudit: structuredClone(jsAudit) } : {}),
       executables: schema2 ? structuredClone(measured) : manifest.executables.map((executable) => {
         const scan = measured.find((row) => row.id === executable.id);
         return { id: executable.id, sha256: executable.sha256, size: executable.size, declared: structuredClone(executable.memory), measured: structuredClone(scan.measured), imports: structuredClone(scan.imports), skippedSections: structuredClone(scan.skippedSections) };
@@ -882,7 +884,7 @@ export class WasmPackageAuthority {
         if (semverCompare(validated.manifest.package.version, previous.current.version) <= 0) fail("version_not_newer", previous.packageId);
       } else if (expectedVersion != null) fail("stale_version", validated.manifest.package.id);
 
-      const next = this._record(validated, measured, previous);
+      const next = this._record(validated, measured.measured, previous, measured.jsAudit);
       const record = await this._commit(store, { op, packageId: next.packageId, prevRecord: previous, nextRecord: next, registry, registryGen });
       return { ok: true, record };
     });

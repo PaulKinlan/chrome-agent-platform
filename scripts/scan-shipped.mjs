@@ -227,8 +227,10 @@ const CALLEXPORT_HOST_MODULE_RE = /new\s+WebAssembly\.Module\(/g;
 const CALLEXPORT_HOST_INSTANCE_RE = /new\s+WebAssembly\.Instance\(/g;
 // The inert structural auditor validates bytes, never instantiates a module.
 // This exact validate-only site is not an execution-host exemption.
+// (Line re-anchored by chrome-agent-platform-197jd: the capability scan hook
+// above auditEmscriptenGraph shifted the file by nine lines.)
 const EMSCRIPTEN_AUDIT_PATH = "extension/lib/emscripten-module-audit.js";
-const EMSCRIPTEN_VALIDATE_LOCATION = { line: 274, column: 7 };
+const EMSCRIPTEN_VALIDATE_LOCATION = { line: 275, column: 7 };
 
 // THE WORKER-HOST exemption — a second FIXED canonical constant owned by the
 // scanner (NOT caller-supplied): the exact source-only, unreachable executor
