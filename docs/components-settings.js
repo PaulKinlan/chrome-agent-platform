@@ -3,7 +3,7 @@
 import { t } from "./i18n.js";
 import { cachedRpc } from "./rpc-cache.js";
 import { canonicalRef, findAgentByRef } from "./agent-registry.js";
-import { permissionUserLanguage, siteLabel } from "../lib/permission-language.js";
+import { permissionUserLanguage, siteLabel } from "./permission-language.js";
 
 import {
   Component,
