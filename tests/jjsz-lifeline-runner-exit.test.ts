@@ -1107,6 +1107,16 @@ function injectionViolations(program: Ast): Violations {
         `and kill() would then reap nothing (launch at statement ${launchAt}, store at ${storeAt})`,
     );
   }
+  // t5o2i.1 survivor (c), RESHAPING THE LAUNCH RESULT - MEASURED CLOSED, not by a rule of its own. Lifeline
+  // state is a WeakMap keyed by the ChildProcess (scripts/lib/process-tree.ts, lifelineState), so a wrapper or a
+  // COPY of the launch result is killed but its settled is never found and the helper never waits for the sweep.
+  // The forms are `l.proc = null`, `Object.assign(l, {proc: null})`, `l.proc = wrap(l.proc)`, and
+  // `const l = {...(await launchChrome(...)), proc: null}`. Each needs a statement BETWEEN the launch and the
+  // store (or replaces the launch statement), and the two clauses above already refuse both: the store must be
+  // the statement IMMEDIATELY after the launch, and the launch statement's own init must be `await launchChrome`.
+  // This was measured rather than assumed - a member-write rule written for these forms was unreachable (the
+  // mutant table stayed green with it disabled), so it was removed and the forms are pinned by the existing
+  // clauses instead (the dedicated test below asserts WHICH clause: the store-adjacency message).
   // t5o2i.1 survivor (e): a reassigned `kill` makes the finally's `await kill()` a no-op that satisfies every pin.
   const killWrites = nameWrites(program, "kill");
   if (killWrites.length !== 0) {
@@ -1306,6 +1316,30 @@ for (const journey of JOURNEYS) {
   });
 }
 
+// t5o2i.1 (c): WHICH clause rejects a reshaped launch result. The mutant table asserts properties, not reasons, so
+// without this the reshaping rows could be rejected by any clause at all (and a dead member-write rule would look
+// alive). Each form must be refused by the store-adjacency clause or the launch clause, and by nothing else.
+Deno.test("jjsz pin: a reshaped launch result is refused by the store-adjacency or launch clause, and no other (t5o2i.1 (c))", async () => {
+  const source = sourceOf(SECURITY_INJECTION);
+  const rows: Array<[string, string, RegExp]> = [
+    ["l.proc = null before the store", INJECTION_LAUNCH_ONLY + "  l.proc = null;\n" + INJECTION_BOOT_STORE, /IMMEDIATELY after the launch/],
+    ["Object.assign(l, { proc: null }) before the store", INJECTION_LAUNCH_ONLY + "  Object.assign(l, { proc: null });\n" + INJECTION_BOOT_STORE, /IMMEDIATELY after the launch/],
+    ["l.proc = wrap(l.proc) before the store", INJECTION_LAUNCH_ONLY + "  l.proc = wrap(l.proc);\n" + INJECTION_BOOT_STORE, /IMMEDIATELY after the launch/],
+    [
+      "a spread copy of the launch result instead of the launch",
+      "  const l = {...(await launchChrome({ binary: CHROMIUM, args: CHROME_ARGS })), proc: null};\n" + INJECTION_BOOT_STORE,
+      /must launch with `const l = await launchChrome/,
+    ],
+  ];
+  for (const [name, replacement, reason] of rows) {
+    const found = injectionViolations(await parseTs(mutate(source, INJECTION_LAUNCH_AND_STORE, replacement)));
+    assertEquals(found.call.length, 1, `"${name}" must break exactly one call clause; got ${JSON.stringify(found.call)}`);
+    assert(reason.test(found.call[0]), `"${name}" must be refused by the clause it names (${reason}), not by ${JSON.stringify(found.call[0])}`);
+    assertEquals(found.order, [], `"${name}" must not disturb the ordering clauses`);
+    assertEquals(found.bare, [], `"${name}" must not be read as a bare kill`);
+  }
+});
+
 const INJECTION_REAP = "  if (proc) await reapLeaderAndSettle(proc);\n";
 const INJECTION_OLD_SHAPE = '  try { proc?.kill("SIGKILL"); } catch { /* gone */ }\n  try { await proc?.status; } catch { /* reaped */ }\n';
 const INJECTION_FIRST_KILL = "  await kill();\n  const prefPath";
@@ -1421,6 +1455,29 @@ function injectionMutants(source: string): Array<[string, string, Array<keyof Vi
         INJECTION_BOOT_THROW,
         INJECTION_BOOT_THROW + INJECTION_BOOT_STORE,
       ),
+      ["call"],
+    ],
+    // (c) the launch result reshaped before the store: the WeakMap key is lost. Measured CLOSED by the
+    // store-adjacency and launch clauses (see the dedicated t5o2i.1 (c) test for which one fires, and the
+    // comment on injectionViolations for why no member-write rule of its own is needed).
+    [
+      "boot() nulls a member of the launch result before storing the handle",
+      mutate(source, INJECTION_LAUNCH_AND_STORE, INJECTION_LAUNCH_ONLY + "  l.proc = null;\n" + INJECTION_BOOT_STORE),
+      ["call"],
+    ],
+    [
+      "boot() reshapes the launch result with Object.assign before storing the handle",
+      mutate(source, INJECTION_LAUNCH_AND_STORE, INJECTION_LAUNCH_ONLY + "  Object.assign(l, { proc: null });\n" + INJECTION_BOOT_STORE),
+      ["call"],
+    ],
+    [
+      "boot() wraps the handle it stores (the toothless `l.proc = wrap(l.proc)`)",
+      mutate(source, INJECTION_LAUNCH_AND_STORE, INJECTION_LAUNCH_ONLY + "  l.proc = wrap(l.proc);\n" + INJECTION_BOOT_STORE),
+      ["call"],
+    ],
+    [
+      "boot() copies the launch result instead of storing it (`{...launch, proc: null}`)",
+      mutate(source, INJECTION_LAUNCH_AND_STORE, "  const l = {...(await launchChrome({ binary: CHROMIUM, args: CHROME_ARGS })), proc: null};\n" + INJECTION_BOOT_STORE),
       ["call"],
     ],
     // (e) a reassigned kill(): the finally still awaits `kill()`, and that call is a no-op.
