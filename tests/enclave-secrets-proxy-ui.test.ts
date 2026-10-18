@@ -311,7 +311,11 @@ Deno.test("vyhl Part D: options.html contains all required Web services architec
   assertStringIncludes(html, 'id="vault-quotas-status"', "#vault-quotas-status message element must exist");
   assertMatch(html, /<input[^>]*id="vault-quota-add-service"[^>]*aria-label="Service identifier"/, "#vault-quota-add-service must have aria-label");
   assertMatch(html, /<input[^>]*id="vault-quota-add-limit"[^>]*aria-label="Quota limit"[^>]*aria-describedby="vault-quota-add-limit-desc"/, "#vault-quota-add-limit must have aria-label and aria-describedby");
-  assertMatch(html, /<label[^>]*for="vault-quota-add-limit"[^>]*id="vault-quota-add-limit-desc"/, "#vault-quota-add-limit description label must exist");
+  assertMatch(
+    html,
+    /<label[^>]*id="vault-quota-add-limit-desc"[^>]*>Call limit for the quota you are adding \(0 disables the service\)<\/label>/,
+    "#vault-quota-add-limit description label must contain decision-relevant hint",
+  );
   assertMatch(html, /<select[^>]*id="vault-quota-add-window"[^>]*aria-label="Quota window"/, "#vault-quota-add-window must have aria-label");
   assertStringIncludes(html, 'id="vault-quota-add-save"', "#vault-quota-add-save button must exist");
 });
