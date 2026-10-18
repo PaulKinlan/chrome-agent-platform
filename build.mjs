@@ -155,8 +155,15 @@ const shippedJsAll = await walkJs("extension");
 // data JS may skip the authored JS AST scan; the skip applies to ALL scanner
 // rules for those exact bytes, so undeclared or drifted bytes MUST refuse.
 const { buildSchema2RuntimeJsMap } = await import("./scripts/lib/wasm-manifest-assets.mjs");
+// Fetch every inventoried manifest before validating the shared map. settleAll
+// lets all reads finish on failure, and the same bytes flow into the manifest
+// digest/identity checks below (not an independent or weaker JS exemption).
+const earlyManifestBytes = new Map(await settleAll(BUNDLED_INVENTORY_EARLY.manifests.map(async ({ pkg, version }) => {
+  const rel = `extension/wasm/manifests/${pkg}-${version}.manifest.json`;
+  return [rel, await readFile(join(ROOT, rel))];
+})));
 const reviewedJs = await buildSchema2RuntimeJsMap(BUNDLED_INVENTORY_EARLY, {
-  readBytes: (rel) => readFile(join(ROOT, rel)),
+  readBytes: (rel) => earlyManifestBytes.get(rel) ?? readFile(join(ROOT, rel)),
 });
 // walkJs produces extension/-prefixed paths; the map keys archive paths.
 const packageStoreExempt = new Set([...reviewedJs.keys()].map((rel) => `extension/${rel}`));
