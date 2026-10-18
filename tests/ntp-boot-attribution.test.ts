@@ -822,10 +822,36 @@ Deno.test("mujlt runner boundary: abnormal exit before test summary preserves ex
     const { code, stdout, stderr } = await cmd.output();
     const out = new TextDecoder().decode(stdout) + new TextDecoder().decode(stderr);
     assert(code !== 75, `runner must NOT relabel abrupt termination as 75, got ${code}:\n${out}`);
-    assertEquals(code, 143, `runner must preserve abrupt termination signal exit code (143), got ${code}:\n${out}`);
+    assertEquals(code, 143, `runner must preserve abrupt termination signal exit code (143 for SIGTERM), got ${code}:\n${out}`);
     assertStringIncludes(out, "fixture: abnormal exit after marker");
     assertStringIncludes(out, ENVIRONMENTAL_REFUSAL_MARKER);
     assertStringIncludes(out, "missing test summary — preserving exit 143");
+  } finally {
+    try { Deno.removeSync(scratch, { recursive: true }); } catch {}
+  }
+});
+
+Deno.test("mujlt runner boundary: child killed by SIGKILL preserves exact signal exit code 137", async () => {
+  const scratch = Deno.makeTempDirSync({ dir: durableDir("scratch"), prefix: "mujlt-runner-kill-" });
+  const fixture = `${scratch}/sigkill-exit.test.ts`;
+  Deno.writeTextFileSync(
+    fixture,
+    `Deno.test("fixture: die by sigkill", () => {\n` +
+      `  Deno.kill(Deno.pid, "SIGKILL");\n` +
+      `});\n`,
+  );
+
+  try {
+    const cmd = new Deno.Command("node", {
+      args: ["scripts/run-tests.mjs", fixture],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stdout, stderr } = await cmd.output();
+    const out = new TextDecoder().decode(stdout) + new TextDecoder().decode(stderr);
+    assert(code !== 75, `runner must NOT relabel abrupt termination as 75, got ${code}:\n${out}`);
+    assertEquals(code, 137, `runner must preserve exact SIGKILL exit code (137 = 128 + 9), got ${code}:\n${out}`);
+    assertStringIncludes(out, "FAILED");
   } finally {
     try { Deno.removeSync(scratch, { recursive: true }); } catch {}
   }
