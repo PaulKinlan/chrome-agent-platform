@@ -1,14 +1,13 @@
 // x9r8k.2: SW-only staging. No model-facing binary, seal, publish or delete path.
 // @ts-nocheck
-import { assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { stageTrustedEmscriptenBinary, registerEmscriptenSwStagingRoute,
+import { assert, assertEquals } from "jsr:@std/assert@1";
+import { stageTrustedEmscriptenBinary, bindTrustedSwStaging,
   EMSCRIPTEN_SW_STAGE_TYPE } from "../extension/lib/emscripten-sw-stage.js";
 import { emscriptenJobOwner } from "../extension/lib/emscripten-custody.js";
 import { createWasmStreamInput, sealWasmStreamInput } from "../extension/lib/wasm-stream-files.js";
 import { createEmscriptenSwIntent } from "../extension/lib/emscripten-sw-intent.js";
 import { createEmscriptenHostEvidence } from "../extension/lib/emscripten-host-evidence.js";
 import { openAuditedHostOwnedEmscriptenWriter } from "../extension/lib/emscripten-host-writer.js";
-import { SERVICE_WORKER_BUNDLE_PATH } from "../extension/lib/pure.js";
 
 function missing() { return new DOMException("missing", "NotFoundError"); }
 function storageFixture() {
@@ -132,24 +131,40 @@ Deno.test("x9r8k.2: cancellation, stale registry, foreign or unsealed input cann
   }
 });
 
-Deno.test("x9r8k.2: foreign extension page sender cannot invoke staging", async () => {
+Deno.test("x9r8k.2: cancellation after output creation retains the ref and refuses host work", async () => {
   const f = await setup();
-  const listeners = [];
-  const runtime = { id: "extension-id", getURL: (path) => `chrome-extension://extension-id/${path}`,
-    getManifest: () => ({ background: { service_worker: SERVICE_WORKER_BUNDLE_PATH } }),
-    onMessage: { addListener: (fn) => listeners.push(fn) } };
-  registerEmscriptenSwStagingRoute({ runtime, ...f.deps });
-  assertEquals(listeners.length, 1);
-  for (const sender of [
-    { id: runtime.id, url: runtime.getURL("options.html"), documentId: "doc" },
-    { id: runtime.id, url: runtime.getURL(SERVICE_WORKER_BUNDLE_PATH), tab: { id: 3 } },
-    { id: "foreign-id", url: runtime.getURL(SERVICE_WORKER_BUNDLE_PATH) },
-  ]) {
-    let response;
-    const sync = listeners[0](request(f.inputRef), sender, (v) => { response = v; });
-    assertEquals(sync, false);
-    assertEquals(response, { ok: false, phase: "unknown", error: "emscripten_stage_sender" });
-  }
+  f.deps.ensureHost = async () => { f.cancel(); return { ok: true }; };
+  const result = await stageTrustedEmscriptenBinary(request(f.inputRef), f.deps);
+  assertEquals(result, { ok: false, phase: "unknown", error: "emscripten_run_not_live" });
   assertEquals(f.calls, 0);
+  assertEquals(f.deletions, []);
+  const intents = await f.root.getDirectoryHandle("emscripten-sw-intent-v1");
+  const dirs = [...intents.nodes.values()];
+  assertEquals(dirs.length, 1);
+  const marker = JSON.parse(await (await (await dirs[0].getFileHandle("retained.json")).getFile()).text());
+  assertEquals(marker.reason, "run_not_live");
+});
+
+Deno.test("x9r8k.2: even a forged positive host result with CLOSED proof is refused", async () => {
+  const f = await setup();
+  const send = f.deps.sendHost;
+  f.deps.sendHost = async (message) => ({ ...await send(message), ok: true, phase: "completed" });
+  const result = await stageTrustedEmscriptenBinary(request(f.inputRef), f.deps);
+  assertEquals(result, { ok: false, phase: "unknown", error: "emscripten_stage_host_unavailable" });
+  assertEquals(f.calls, 1);
+  assertEquals(f.deletions, []);
+});
+
+Deno.test("x9r8k.2: SW-owned capability has no extension-page message ingress", async () => {
+  const f = await setup();
+  const invoke = bindTrustedSwStaging(f.deps);
+  const refused = await invoke({ ...request(f.inputRef), sender: "extension-page" });
+  assertEquals(refused, { ok: false, phase: "unknown", error: "emscripten_stage_request" });
+  assertEquals(f.calls, 0);
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  assert(sw.includes('Object.defineProperty(globalThis, Symbol.for("cap.emscripten.stage-only")'));
+  assert(!sw.includes("registerEmscriptenSwStagingRoute"));
+  const route = await Deno.readTextFile(new URL("../extension/lib/emscripten-sw-stage.js", import.meta.url));
+  assert(!route.includes("runtime.onMessage.addListener("));
   assertEquals(f.deletions, []);
 });

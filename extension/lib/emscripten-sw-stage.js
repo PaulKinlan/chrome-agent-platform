@@ -5,7 +5,6 @@ import { createEmscriptenHostEvidence } from "./emscripten-host-evidence.js";
 import { verifyStagedEmscriptenRun } from "./emscripten-staging-authority.js";
 import { createEmscriptenSwIntent } from "./emscripten-sw-intent.js";
 import { EMSCRIPTEN_HOST_STAGE_TYPE, EMSCRIPTEN_SW_STAGE_TYPE } from "./emscripten-stage-protocol.js";
-import { isTrustedServiceWorkerSender } from "./pure.js";
 import { createWasmStreamOutput, validateSealedWasmStream } from "./wasm-stream-files.js";
 
 export { EMSCRIPTEN_SW_STAGE_TYPE };
@@ -176,17 +175,12 @@ export async function stageTrustedEmscriptenBinary(raw, {
   return result;
 }
 
-export function registerEmscriptenSwStagingRoute(deps = {}) {
-  const runtime = deps.runtime ?? globalThis.chrome?.runtime;
-  if (!runtime?.onMessage) return;
-  runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type !== EMSCRIPTEN_SW_STAGE_TYPE) return undefined;
-    if (!isTrustedServiceWorkerSender(sender, runtime)) {
-      sendResponse(unknown("emscripten_stage_sender"));
-      return false;
-    }
-    stageTrustedEmscriptenBinary(message, { ...deps, runtime })
-      .then(sendResponse).catch(() => sendResponse(unknown("emscripten_stage_unavailable")));
-    return true;
-  });
+// Bind an immutable SW-local authority closure. There is intentionally NO
+// runtime.onMessage listener for the SW stage type: Chromium does not deliver
+// a service worker's sendMessage back to that worker (real browser falsifier),
+// while allowing extension pages to call this function would break SW-only
+// custody. The offscreen host alone receives a runtime message, from the SW.
+export function bindTrustedSwStaging(deps) {
+  const bound = Object.freeze({ ...deps });
+  return Object.freeze((raw) => stageTrustedEmscriptenBinary(raw, bound));
 }
