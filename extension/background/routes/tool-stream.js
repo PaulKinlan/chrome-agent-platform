@@ -22,10 +22,13 @@ import {
   stageAttachmentAsWasmStream,
 } from "../../lib/tool-stream-platform.js";
 import {
+  appendWasmStreamInputBase64,
+  createWasmStreamInput,
   discardWasmStream,
   readWasmStreamReceipt,
   readWasmStreamWindow,
   removeWasmStream,
+  sealWasmStreamInput,
 } from "../../lib/wasm-stream-files.js";
 
 /**
