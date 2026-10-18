@@ -233,7 +233,7 @@ Deno.test("nabuw / o3i89: buffer overflow triggers reachable capacity errors wit
   }
 
   // 6. package-archive verifyPackageArchive (unzip -Z1 capacity guard)
-  const scratch = await Deno.makeTempDir();
+  const scratch = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-beads-divergence-" });
   const tmpZip = `${scratch}/test.zip`;
   try {
     const zipCmd = new Deno.Command("zip", { args: ["-q", tmpZip, "package.json"] });
