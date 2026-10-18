@@ -83,6 +83,8 @@ export const RETAINED = {
     "ltkj.4.4 prepares an SW-supplied append/fence contract before stream creation and after worker termination; it is not wired to the model/offscreen path or permitted to publish artifacts.",
   "lib/emscripten-host-evidence.js":
     "xoeaa retains independently stored pending/UNKNOWN host lifecycle evidence across restarts; binary publication remains refused until the 3mcu1 host-owned writer/close fence can prove a positive no-writers boundary.",
+  "lib/emscripten-host-writer.js":
+    "3mcu1 prepares an offscreen-host-only exclusive writer with bounded frame backpressure, drain/close and independent byte rehash. Native binary transport remains refused until SW and host evidence are wired.",
   "lib/archive-target-registry.js":
     "CAP-FB-20260905-UNBOUNDED-DATA-ARCHIVE-01 (11rm / qcuf): classification authority for durable targets. Its sanitizer family stayed tests-only; 8wbb shipped the agentConfig authority separately (lib/logical-site-agent-config.js) — this module ships when the 11rm streaming converter lands.",
   "lib/tabular-diff-artifacts.js":
