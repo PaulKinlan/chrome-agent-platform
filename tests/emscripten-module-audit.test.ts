@@ -243,7 +243,12 @@ Deno.test("emscripten graph audit: glue tamper and repinned unreviewed glue fail
   changed[changed.length - 1] ^= 1; files.set(glue.path, changed);
   await assertRejects(() => auditEmscriptenGraph(graph, files), Error, "asset_digest_mismatch");
   glue.sha256 = await sha256HexBytes(changed);
-  await assertRejects(() => auditEmscriptenGraph(graph, files), Error, "provider_untrusted");
+  // chrome-agent-platform-197jd: the capability scan runs FIRST over the
+  // verified bytes, so a repinned unreviewed glue — this fixture carries the
+  // emscripten fetch/XHR preamble idiom but not a reviewed digest — is
+  // refused by the capability gate, not the provider gate. The property
+  // under test is unchanged: the two hostilities fail DIFFERENT gates.
+  await assertRejects(() => auditEmscriptenGraph(graph, files), Error, "js_capability_denied");
 });
 
 Deno.test("emscripten module audit: scanner allows only the one validate-only site", async () => {

@@ -2,6 +2,7 @@
 // No instance, import implementation, constructor or package JavaScript is run.
 import { WasmPackageAuthorityError, canonicalJson, exactKeys, assertRelativePath } from "./wasm-package-authority.js";
 import { sha256HexBytes } from "./pure.js";
+import { auditEmscriptenJsCapabilities, isJsCapabilityAssetRole } from "./emscripten-js-capability-audit.js";
 
 const fail = (code, detail = null) => { throw new WasmPackageAuthorityError(code, "wasm", detail); };
 const TYPES = new Map([[0x7f, "i32"], [0x7e, "i64"], [0x7d, "f32"], [0x7c, "f64"], [0x7b, "v128"], [0x70, "funcref"]]);
@@ -338,6 +339,14 @@ export async function auditEmscriptenGraph(graph, files) {
     assets.set(asset.id, asset);
   }
   if (files.size !== paths.size || [...files.keys()].some(path => !paths.has(path))) fail("asset_files_mismatch");
+  // Capability scan FIRST (chrome-agent-platform-197jd): the worker imports
+  // glue+adapter JS by URL, so their text is scanned for denied capabilities
+  // before any binary parsing or provider resolution. Receipt verdict rides
+  // out on the graph result; a hit refuses admission with a typed code.
+  const jsAudit = auditEmscriptenJsCapabilities(
+    [...assets.values()].filter(a => isJsCapabilityAssetRole(a.role)),
+    files,
+  );
   const wasmAssets = [...assets.values()].filter(a => a.role === "main-wasm" || a.role === "side-wasm");
   if (wasmAssets.filter(a => a.role === "main-wasm").length !== 1 || [...assets.values()].filter(a => a.role === "glue").length !== 1) fail("graph_root_invalid");
   // All asset bytes are checked before any binary parsing.
@@ -419,5 +428,5 @@ export async function auditEmscriptenGraph(graph, files) {
     memoryBytes = align(memoryBytes, info.memoryAlignment, info.memorySize);
     tableElements = align(tableElements, info.tableAlignment, info.tableSize);
   }
-  return { modules: [...scans].map(([asset, scan]) => ({ asset, ...scan })), features: [...new Set([...scans.values()].flatMap(s => s.features))].sort(), allocation: { memoryBytes: Number(memoryBytes), tableElements: Number(tableElements) } };
+  return { modules: [...scans].map(([asset, scan]) => ({ asset, ...scan })), features: [...new Set([...scans.values()].flatMap(s => s.features))].sort(), allocation: { memoryBytes: Number(memoryBytes), tableElements: Number(tableElements) }, jsAudit };
 }
