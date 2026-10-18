@@ -70,6 +70,70 @@ export const SERIAL_REASONS = {
 };
 export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
 
+// SERIAL LANES (chrome-agent-platform-1oouo): the serial phase was 75s of one-file-at-a-time work on
+// every FULL gate. Two of its three hazard classes are independent of each other — exclusive
+// build/artifact writers, and the process-global Chrome lock/slot cluster (which mutates
+// CAP_CHROME_LOCK_PATH / CAP_CHROME_SLOT_DIR and races only ITS OWN siblings) — so they run as two
+// lanes: the build lane in the runner process, the global lane in a child, concurrently.
+//
+// The third class stays STRICTLY serial, alone, before either lane: three reasons say in their own
+// words that CONCURRENT LOAD is what breaks them (ntp-boot-staging measures long tasks and composer
+// latency, chrome-slot-semaphore-honesty asserts a 1500 ms skip against a 2000 ms window, and
+// serial-phase-timeout exists to prove a slow file survives its bound — all three were flaky under the
+// 32-worker parallel phase, and a regression here reds every lane's gate).
+//
+// A file may only enter a concurrent lane if its SERIAL_REASONS entry names a hazard that is INTERNAL
+// to that lane's own files. Anything that says "races serial builds", "concurrent load", "under load",
+// or wall-clock timing stays strict. The guard test asserts the partition is exhaustive and disjoint,
+// and tests/serial-lanes.test.ts asserts strict really does run alone.
+export const SERIAL_LANE_REASONS = Object.freeze({
+  build: "exclusive writers/readers of dist and the repo tree: they must not overlap EACH OTHER, but nothing here measures wall-clock time or a process-global Chrome handle, so the global lane can run beside them",
+  global: "mutate process-global Chrome lock/slot state (CAP_CHROME_LOCK_PATH, CAP_CHROME_SLOT_DIR) and race only their own siblings: sequential inside the lane, concurrent with the build lane",
+  strict: "a reason above says CONCURRENT LOAD or wall-clock timing is what breaks it: runs alone, before either lane",
+});
+
+export const SERIAL_LANES = Object.freeze({
+  // STRICT: load- or clock-sensitive by their own reasons.
+  "tests/ntp-boot-staging.test.ts": "strict",
+  "tests/chrome-slot-semaphore-honesty.test.ts": "strict",
+  "tests/serial-phase-timeout.test.ts": "strict",
+  // GLOBAL: the Chrome lock/slot cluster.
+  "tests/chrome-launch-lock.test.ts": "global",
+  "tests/chrome-launch-lock-scope.test.ts": "global",
+  "tests/chrome-slot-semaphore.test.ts": "global",
+  // BUILD: dist/repo-tree writers and the readers that must follow them. The first three are BUILD_GATE
+  // files, deferred out of `npm test` into `npm run test:build`; they are listed so this partition stays
+  // TOTAL over SERIAL, and they would take the build lane if a config ever ran them inline.
+  "tests/build-bootstrap.test.ts": "build",
+  "tests/build-debug-mode.test.ts": "build",
+  "tests/build-tool-bundling.test.ts": "build",
+  "tests/build-sdk-dedup.test.ts": "build",
+  "tests/build-smoke.test.ts": "build",
+  "tests/store-doc-denial.test.ts": "build",
+  "tests/reachability.test.ts": "build",
+  "tests/package-extension-freshness.test.ts": "build",
+  "tests/select-tests-residue.test.ts": "build",
+  "tests/real-browser-teardown.test.ts": "build",
+  "tests/requires-owner-gesture-column-allowlist.test.ts": "build",
+  "tests/emscripten-abi-loaded-harness.test.ts": "build",
+  "tests/chunk-resolution-browser.test.ts": "build",
+});
+
+/**
+ * Split a SERIAL file list into its lanes, preserving the caller's (declaration) order inside each lane
+ * — build-smoke must still precede the consumers that read its record. A SERIAL file with no lane is a
+ * programming error, not a silent fallback to strict: it would hide the decision from this file.
+ */
+export function serialLanes(files) {
+  const lanes = { strict: [], build: [], global: [] };
+  for (const file of files) {
+    const lane = SERIAL_LANES[file];
+    if (!lane) throw new Error(`serialLanes: ${file} is SERIAL but has no SERIAL_LANES entry (add one with its reason)`);
+    lanes[lane].push(file);
+  }
+  return lanes;
+}
+
 // Reviewed read-only consumers run after all serial rebuilds. Keep these in
 // partition(...).parallel as well: select-tests.mjs consumes only serial/parallel
 // and MUST NOT silently drop the five when it runs a changed-file subset.

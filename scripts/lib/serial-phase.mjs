@@ -17,19 +17,19 @@
 //
 // To preserve diagnostic visibility, the runner does NOT fail-fast: it runs
 // every file in the list and reports all failures.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, watch, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
-import { durableRoot } from "./durable-root.mjs";
+import { durableDir, durableRoot } from "./durable-root.mjs";
 // The per-file serial windows live in ONE table (chrome-agent-platform-kj9s). They are the DEFAULT
 // here, not an opt-in argument, so every caller gets them — including scripts/select-tests.mjs,
 // which runs a subset of the same serial files under `npm run test:changed` and would otherwise
 // hand a build-heavy file the base window and kill it. A caller that wants the old behaviour passes
 // `perFileTimeoutMs: null` explicitly.
-import { SERIAL_FILE_TIMEOUTS } from "../test-partition.mjs";
+import { SERIAL_FILE_TIMEOUTS, serialLanes } from "../test-partition.mjs";
 import { LOCK_DIRNAME } from "./build-lock.mjs";
 import {
   ENVIRONMENTAL_REFUSAL_EXIT,
@@ -459,4 +459,214 @@ export function runSerialFiles(files, {
     ? (failures.find((f) => f.code !== ENVIRONMENTAL_REFUSAL_EXIT)?.code ?? 1)
     : (failures[0]?.code ?? 0);
   return returnCode;
+}
+
+/** Combine lane exit codes the same way the phase combiner does: a product failure wins, a refusal only stands if it is all there is. */
+function combineLaneExitCodes(codes) {
+  const nonZero = codes.filter((code) => code !== 0);
+  if (nonZero.length === 0) return 0;
+  const product = nonZero.find((code) => code !== ENVIRONMENTAL_REFUSAL_EXIT);
+  return product ?? ENVIRONMENTAL_REFUSAL_EXIT;
+}
+
+/**
+ * The command that runs ONE serial lane in its own process.
+ *
+ * Runtime-agnostic on purpose: `npm test` executes scripts/run-tests.mjs under NODE, while the inner
+ * loop and several tests run the same module under DENO. `Deno.execPath()` is undefined under node, so
+ * the first revision of the lane spawn threw `ReferenceError: Deno is not defined` and took the whole
+ * gate down at the spawn site (measured: three FULL runs, exit 1, 27s each). process.execPath is the
+ * running binary in both runtimes; only Deno needs the run/-A/--config words, because a child inherits
+ * no permissions.
+ */
+export function serialLaneCommand({ resultPath, files, cwd = undefined, env = process.env } = /** @type {{ resultPath: string, files: string[], cwd?: string, env?: NodeJS.ProcessEnv }} */ ({})) {
+  const childScript = fileURLToPath(new URL("./serial-lane-child.mjs", import.meta.url));
+  const isDeno = typeof globalThis.Deno !== "undefined" && typeof globalThis.Deno?.execPath === "string";
+  const args = isDeno
+    ? ["run", "-A", "--config", "deno.runner.jsonc", childScript, resultPath, ...files]
+    : [childScript, resultPath, ...files];
+  return {
+    command: process.execPath,
+    args,
+    options: {
+      cwd: cwd ?? process.cwd(),
+      env,
+      // Own process group, so a lane that overruns its bound can be killed with its whole tree.
+      detached: true,
+      stdio: ["ignore", "inherit", "inherit"],
+    },
+  };
+}
+
+/**
+ * chrome-agent-platform-1oouo: run SERIAL as LANES instead of one file at a time.
+ *
+ * The 75s serial phase was one-file-at-a-time by construction, but only ONE of its three hazard classes
+ * actually needs the box to itself. scripts/test-partition.mjs SERIAL_LANES pins the split and each
+ * lane's reason:
+ *   * STRICT runs ALONE, first: its reasons say concurrent load or wall-clock timing is what breaks it.
+ *   * BUILD (dist/repo-tree writers and their readers, in declaration order) runs in THIS process, so
+ *     its per-file attribution and captured output are byte-identical to before.
+ *   * GLOBAL (the process-global Chrome lock/slot cluster, which races only its own siblings) runs in a
+ *     CHILD process at the same time, because a lane cannot overlap itself with a blocking loop.
+ *
+ * Failure attribution is unchanged: every file is still named with its exit code and log by
+ * runSerialFiles, in whichever process it ran, and the lane's records are merged back into
+ * `failuresOut` in SERIAL declaration order so the summary reads the same.
+ *
+ * @param {string[]} files
+ * @param {{ timeoutMs?: number, perFileTimeoutMs?: Record<string, number> | null, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv, failuresOut?: any[], childBoundMs?: number, runLaneFiles?: (files: string[], options: any) => number, spawnLaneChild?: ((lane: any) => { pid: number, kill: () => void, exited: Promise<{ code: number | null, signal: string | null }> }) | null, spawnChild?: typeof spawn }} [options]
+ * @returns {Promise<number>}
+ */
+export async function runSerialLanes(files, {
+  timeoutMs = undefined,
+  perFileTimeoutMs = SERIAL_FILE_TIMEOUTS,
+  stdio = "pipe",
+  cwd = undefined,
+  env = process.env,
+  failuresOut = undefined,
+  childBoundMs = undefined,
+  // Test seams. `runLaneFiles` and `spawnLaneChild` exist so a unit test can assert the LANE ORDERING
+  // and the merge without paying a real deno startup per fixture (a real `deno test` child costs seconds
+  // on a loaded box, which would make the assertion about the gate cost more than the gate saves).
+  runLaneFiles = runSerialFiles,
+  spawnLaneChild = null,
+  // The real spawn is injectable ONLY so a test can make it fail for real (ENOENT/EAGAIN) and assert the
+  // gate survives it. Everything else about the child path is unchanged.
+  spawnChild = spawn,
+} = {}) {
+  const lanes = serialLanes(files);
+  const runOpts = { ...(timeoutMs === undefined ? {} : { timeoutMs }), perFileTimeoutMs, stdio, cwd, env };
+  const t0 = Date.now();
+  const laneFailures = { strict: [], build: [], global: [] };
+  const codes = {};
+  // xaj7c: when the concurrent GLOBAL child cannot START, its files still run (here) — but the summary
+  // must not claim a concurrency that never happened.
+  let fellBackToSequential = false;
+
+  if (lanes.strict.length) {
+    announce(
+      `run-tests: serial lane STRICT (${lanes.strict.length} file(s), run ALONE — their reasons say concurrent load or wall-clock timing breaks them): ` +
+        lanes.strict.join(", "),
+    );
+    codes.strict = runLaneFiles(lanes.strict, { ...runOpts, failuresOut: laneFailures.strict });
+  }
+
+  if (lanes.build.length && lanes.global.length) {
+    announce(
+      `run-tests: serial lanes CONCURRENT — BUILD (${lanes.build.length}) here, GLOBAL (${lanes.global.length}) in a child: ` +
+        `build=${lanes.build.join(", ")} | global=${lanes.global.join(", ")}`,
+    );
+    let resultPath = null;
+    try {
+      resultPath = join(durableDir("serial-lane-results"), `${Date.now()}-${process.pid}-${++SERIAL_RUN_SEQ}.json`);
+    } catch (error) {
+      // Fail closed to the sequential path: a lane mechanism that cannot report its result must not run.
+      announce(
+        `run-tests: serial lanes FALL BACK TO SEQUENTIAL — no durable result path for the global lane (${error?.message ?? error})`,
+      );
+      codes.build = runLaneFiles(lanes.build, { ...runOpts, failuresOut: laneFailures.build });
+      codes.global = runLaneFiles(lanes.global, { ...runOpts, failuresOut: laneFailures.global });
+      resultPath = null;
+    }
+    if (resultPath) {
+      const bound = childBoundMs ??
+        lanes.global.reduce((total, file) => total + (perFileTimeoutMs?.[file] ?? defaultSerialTimeoutMs(env)), 0) + 60_000;
+      const lane = serialLaneCommand({ resultPath, files: lanes.global, cwd, env });
+      const child = spawnLaneChild
+        ? spawnLaneChild({ ...lane, resultPath, files: lanes.global })
+        : spawnChild(lane.command, lane.args, lane.options);
+      let killed = false;
+      const killer = spawnLaneChild ? null : setTimeout(() => {
+        killed = true;
+        try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch { /* gone */ } }
+      }, bound);
+      // A child that never STARTED emits `error` and never `exit` (xaj7c). Without this listener Node
+      // treats it as an unhandled 'error' event and the whole gate dies — no lane named, no file named,
+      // no actionable cause. The listener turns it into a RESULT the lane logic can act on.
+      const childExited = spawnLaneChild
+        ? child.exited
+        : new Promise((resolve) => {
+            child.on("exit", (code, signal) => resolve({ code, signal, error: null }));
+            child.on("error", (error) => resolve({ code: null, signal: null, error }));
+          });
+      // SPAWNED ABOVE, RUN BELOW: the child is already working when the build lane starts — that ordering
+      // is the whole point of the lane split, and it is what the unit test pins.
+      codes.build = runLaneFiles(lanes.build, { ...runOpts, failuresOut: laneFailures.build });
+      const { code, signal, error: spawnFailure } = await childExited;
+      if (killer) clearTimeout(killer);
+      if (spawnFailure) {
+        fellBackToSequential = true;
+        // The GLOBAL lane never started (ENOENT for the runtime or cwd, EAGAIN under load, EACCES). The
+        // files are NOT uncertifiable by nature — the mechanism just could not start a process — so fail
+        // closed to the sequential path and RUN THEM HERE rather than reporting a green lane nobody ran
+        // (or dying with an unhandled error event, which is what xaj7c found).
+        announce(
+          `run-tests: serial lanes FALL BACK TO SEQUENTIAL — the GLOBAL child never started ` +
+            `(${spawnFailure.code ?? spawnFailure.message ?? spawnFailure}); running its ${lanes.global.length} file(s) here`,
+        );
+        codes.global = runLaneFiles(lanes.global, { ...runOpts, failuresOut: laneFailures.global });
+      }
+      let reported = null;
+      if (!spawnFailure) {
+        try {
+          reported = JSON.parse(readFileSync(resultPath, "utf8"));
+        } catch {
+          reported = null;
+        }
+      }
+      if (reported && Array.isArray(reported.failures)) laneFailures.global = reported.failures;
+      if (!spawnFailure) {
+        codes.global = reported ? Number(reported.rc) : (code ?? 1);
+        if (killed && codes.global === 0) codes.global = 124;
+      }
+      if (!spawnFailure && !reported) {
+        // No result file: the lane never reported, so it cannot be certified. Name it, do not guess.
+        announce(
+          `run-tests: serial lane GLOBAL did not report a result (exit ${code ?? "?"}${signal ? `, signal ${signal}` : ""}` +
+            `${killed ? ", killed at its bound" : ""}) — its files are NOT certified`,
+        );
+        codes.global = codes.global === 0 ? 1 : codes.global;
+      }
+    }
+  } else if (lanes.build.length || lanes.global.length) {
+    const lane = lanes.build.length ? "build" : "global";
+    // Only one lane has members: nothing to overlap, so keep the plain sequential path.
+    codes[lane] = runLaneFiles(lanes[lane], { ...runOpts, failuresOut: laneFailures[lane] });
+  }
+
+  // Merge in SERIAL declaration order so the named-failure summary reads exactly as before.
+  const merged = [];
+  for (const file of files) {
+    for (const lane of ["strict", "build", "global"]) {
+      const found = laneFailures[lane].find((failure) => failure.file === file);
+      if (found && !merged.includes(found)) merged.push(found);
+    }
+  }
+  for (const lane of ["strict", "build", "global"]) {
+    for (const failure of laneFailures[lane]) if (!merged.includes(failure)) merged.push(failure);
+  }
+  if (merged.length) {
+    const allRefusals = merged.every((failure) => failure.code === ENVIRONMENTAL_REFUSAL_EXIT);
+    announce(allRefusals ? "run-tests: REFUSED SERIAL FILE(S):" : "run-tests: FAILING SERIAL FILE(S):");
+    for (const failure of merged) {
+      announce(
+        `  - ${failure.file} (exit ${failure.code}${failure.timedOut ? ", TIMED OUT" : ""}${failure.isRefusal ? ", REFUSED" : ""}) in ${failure.secs}s` +
+          `${failure.log ? ` — log: ${failure.log}` : ""}`,
+      );
+    }
+  }
+  const secs = ((Date.now() - t0) / 1000).toFixed(0);
+  const rc = combineLaneExitCodes([codes.strict ?? 0, codes.build ?? 0, codes.global ?? 0]);
+  // The verdict prefix and the lane detail are SEPARATE strings on purpose (xaj7c follow-up oqko2): with
+  // `prefix + cond ? a : b`, `+` binds tighter than `?:`, so the concatenation becomes the CONDITION — always
+  // truthy — and the summary lost its GREEN/REFUSED/FAILED verdict and its duration on every run. Named
+  // parts make the precedence visible instead of relying on the reader to spot it.
+  const verdict = rc === 0 ? "GREEN" : rc === ENVIRONMENTAL_REFUSAL_EXIT ? "REFUSED" : "FAILED";
+  const laneDetail = fellBackToSequential
+    ? `(strict ${lanes.strict.length} alone, build ${lanes.build.length} + global ${lanes.global.length} — GLOBAL child could not start, ran sequentially)`
+    : `(strict ${lanes.strict.length} alone, build ${lanes.build.length} + global ${lanes.global.length} concurrent)`;
+  announce(`run-tests: serial lanes ${verdict} in ${secs}s ${laneDetail}`);
+  if (Array.isArray(failuresOut)) failuresOut.push(...merged);
+  return rc;
 }
