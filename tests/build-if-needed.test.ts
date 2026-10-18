@@ -21,7 +21,7 @@ import {
   isBuildInput,
   referencesDistTree,
 } from "../scripts/build-if-needed.mjs";
-import { allTestFiles, ALWAYS_ON, CORE, buildReverseGraph, MAX_OMITTED_ENTRIES, omittedInventory, omittedLimit, OMITTED_UNSELECTED_REASON, reachableModulesFrom } from "../scripts/select-tests.mjs";
+import { allTestFiles, ALWAYS_ON, CORE, FAST_SUBSET_EXCLUDED, buildReverseGraph, MAX_OMITTED_ENTRIES, omittedInventory, omittedLimit, OMITTED_QUIET_BOX_REASON, OMITTED_UNSELECTED_REASON, reachableModulesFrom } from "../scripts/select-tests.mjs";
 import { enumerateRunnerTests } from "../scripts/run-tests.mjs";
 import { DIST_COMPLETE_OUTPUTS, writeDistCompleteMarker } from "../scripts/dist-complete.mjs";
 import { READ_ONLY_DIST } from "../scripts/test-partition.mjs";
@@ -276,7 +276,14 @@ Deno.test("0eq00 ledger (P1-A): the FAST inventory names every suite the subset 
   assertEquals(omitted.length, omittedTotal);
   for (const entry of omitted) {
     assert(!selected.includes(entry.file), `${entry.file} was selected and must not read as omitted`);
-    assertEquals(entry.reason, OMITTED_UNSELECTED_REASON, "every omission carries its reason");
+    // Two reason CLASSES since zwpp9: the generic "no import path" and the quiet-box exclusion, which
+    // must be told apart (a quiet-box suite is omitted because a loaded host cannot judge it, not
+    // because nothing imports it). Every entry still carries a reason.
+    assertEquals(
+      entry.reason,
+      FAST_SUBSET_EXCLUDED.has(entry.file) ? OMITTED_QUIET_BOX_REASON : OMITTED_UNSELECTED_REASON,
+      "every omission carries its own reason",
+    );
   }
   assert(omitted.some((e) => e.file === "tests/build-if-needed.test.ts"));
 
