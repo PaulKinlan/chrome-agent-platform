@@ -157,7 +157,11 @@ until its WAL row is on disk) and `listLogs` to require an exact idempotency-key
 `emscripten-custody-intent` row. The stream creator's `beforeCreate` hook receives
 the random output ref before it opens the shared OPFS stream root. Failed append,
 replayed identity mismatch, or liveness loss refuses directory creation; input
-remains sealed and unchanged. A separate `emscripten-custody-terminal` row is
+remains sealed and unchanged. Exact-row checks tolerate only the registry's
+`schemaVersion`, `retentionPolicyVersion`, `executionId`, `at` and `idempotencyKey`
+bookkeeping fields; an extra custody field (including `promotable`) refuses.
+Spilled rows without inline custody fields are not accepted as an append proof.
+A separate `emscripten-custody-terminal` row is
 written only after a trusted callback confirms termination and handle closure,
 an independent bounded-window output rehash succeeds, and the run is still live.
 The callback must derive these facts from service-worker authority, never worker
