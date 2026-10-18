@@ -752,6 +752,23 @@ function plainCall(statement: Ast, callee: string): boolean {
     dotted(statement.expression.callee) === callee;
 }
 
+/**
+ * The CDP close as an ExpressionStatement, reading THROUGH an optional chain (kafr4).
+ *
+ * kafr4 moved the connect inside the try that reaps, so the finally can run with no connection to
+ * close and the close is now `connected?.close()`. The invariant this pin exists for is the ORDER -
+ * the close first, then the reap - and that is unchanged: an optional close is still a close, and the
+ * mutant that swaps it with the reap still reds `order`. What is NOT admitted: closing a different
+ * object, or no close at all.
+ */
+function closesCdp(statement: Ast): boolean {
+  if (statement.type !== "ExpressionStatement") return false;
+  let expression = statement.expression;
+  if (expression.type === "ChainExpression") expression = expression.expression;
+  if (expression.type !== "CallExpression") return false;
+  return ["cdp.close", "connected.close"].includes(String(dotted(expression.callee)));
+}
+
 const parsed = new Map<string, Ast>();
 
 /** The program of a TypeScript source: esbuild strips the types, acorn parses what is left. */
@@ -789,7 +806,9 @@ interface Violations {
 const everything = (message: string): Violations => ({ call: [message], order: [message], bare: [message] });
 
 // scripts/security-suite.ts: `main()` launches Chrome, then runs a try/catch/finally whose finally is
-// `cdp.close(); <reap>; await provider.close(); await attacker.close(); await docs.close();`.
+// `<cdp close>; <reap>; await provider.close(); await attacker.close(); await docs.close();`.
+// kafr4: the connect happens INSIDE that try, so the close is `connected?.close()` - optional, because
+// the connect-failed path is exactly the path with nothing to close. The ORDER invariant is intact.
 function securitySuiteViolations(program: Ast): Violations {
   const main = program.body.find((s: Ast) => s.type === "FunctionDeclaration" && s.id?.name === "main");
   if (!main) return everything("no `function main` in scripts/security-suite.ts: update this pin");
@@ -815,8 +834,10 @@ function securitySuiteViolations(program: Ast): Violations {
     if (call.arguments.length !== 1 || dotted(call.arguments[0]) !== "chrome.proc") {
       violations.call.push("it must reap the launch handle with the default signal: `reapLeaderAndSettle(chrome.proc)`");
     }
-    const cdpClose = finalizer.findIndex((s) => plainCall(s, "cdp.close"));
-    if (cdpClose < 0 || cdpClose > reaps[0]) violations.order.push("`cdp.close()` must come first, before the reap");
+    const cdpClose = finalizer.findIndex(closesCdp);
+    if (cdpClose < 0 || cdpClose > reaps[0]) {
+      violations.order.push("the CDP close (`cdp.close()` / `connected?.close()`) must come first, before the reap");
+    }
     for (const server of ["provider.close", "attacker.close", "docs.close"]) {
       const at = finalizer.findIndex((s) => awaitedCall(s, server) !== null);
       if (at < reaps[0]) violations.order.push(`\`await ${server}()\` must come after the reap (found at ${at}, reap at ${reaps[0]})`);
@@ -1065,7 +1086,7 @@ Deno.test("jjsz pin: scripts/security-suite.ts finally awaits reapLeaderAndSettl
   assertEquals(securitySuiteViolations(await parseTs(sourceOf(SECURITY_SUITE))).call, []);
 });
 
-Deno.test("jjsz pin: scripts/security-suite.ts finally runs cdp.close() first and the reap before the three server closes (kills: move the call before cdp.close(), into the try body)", async () => {
+Deno.test("jjsz pin: scripts/security-suite.ts finally closes CDP first and reaps before the three server closes (kills: move the call before the close, into the try body)", async () => {
   assertEquals(securitySuiteViolations(await parseTs(sourceOf(SECURITY_SUITE))).order, []);
 });
 
@@ -1101,7 +1122,7 @@ Deno.test("jjsz pin: scripts/security-injection.ts holds no bare proc.kill / Den
 // ── the pins are themselves checked against mutants of the real sources ─────
 
 const REAP_LINE = "    await reapLeaderAndSettle(chrome.proc);\n";
-const CDP_LINE = "    cdp.close();\n";
+const CDP_LINE = "    connected?.close();\n";
 const OLD_SHAPE = '    try { chrome.proc.kill("SIGKILL"); } catch { /* already dead */ }\n' +
   "    try { await chrome.proc.status; } catch { /* reaped */ }\n";
 const CATCH_HEAD = '  } catch (e) {\n    check("suite: ran to completion"';
@@ -1111,7 +1132,7 @@ function securitySuiteMutants(source: string): Array<[string, string, Array<keyo
   return [
     ["delete the call (the import stays)", mutate(source, REAP_LINE, ""), ["call", "order"]],
     ["drop the await", mutate(source, REAP_LINE, "    reapLeaderAndSettle(chrome.proc);\n"), ["call", "order"]],
-    ["move the call before cdp.close()", mutate(source, CDP_LINE + REAP_LINE, REAP_LINE + CDP_LINE), ["order"]],
+    ["move the call before the cdp close", mutate(source, CDP_LINE + REAP_LINE, REAP_LINE + CDP_LINE), ["order"]],
     [
       "move the call into the try body",
       mutate(mutate(source, REAP_LINE, ""), CATCH_HEAD, `    await reapLeaderAndSettle(chrome.proc);\n${CATCH_HEAD}`),
