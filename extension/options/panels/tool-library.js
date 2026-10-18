@@ -57,6 +57,7 @@ export async function renderToolLibrary() {
             ok: false,
             error: String(response?.error ?? "validation declined"),
             path: response?.path ?? null,
+            detail: response?.detail ?? null,
           };
         } else {
           library.validationResult = response;

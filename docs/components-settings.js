@@ -3,7 +3,7 @@
 import { t } from "./i18n.js";
 import { cachedRpc } from "./rpc-cache.js";
 import { canonicalRef, findAgentByRef } from "./agent-registry.js";
-import { permissionUserLanguage, siteLabel } from "./permission-language.js";
+import { permissionUserLanguage, siteLabel } from "../lib/permission-language.js";
 
 import {
   Component,
@@ -1887,18 +1887,44 @@ export class ToolLibrary extends Component {
     this._validationResult = value && typeof value === "object" ? value : null;
     const statusEl = this._root.querySelector(".validation-status");
     if (!statusEl) return;
+    const auditEl = this._root.querySelector(".validation-js-audit");
     if (value && typeof value === "object") {
       if (value.ok === true) {
         statusEl.classList.remove("error");
         statusEl.textContent = "Package validated. Execution is not enabled.";
+        if (auditEl) {
+          auditEl.classList.remove("refused");
+          const audit = value.jsCapabilityAudit ?? null;
+          if (audit && audit.verdict === "pass" && Array.isArray(audit.scanned)) {
+            const exemptCount = audit.scanned.reduce((n, row) => n + (Array.isArray(row?.exemptions) ? row.exemptions.length : 0), 0);
+            auditEl.textContent = `JS capability audit: pass — ${audit.scanned.length} package JS file(s) parsed and deny-list scanned` +
+              (exemptCount ? ` (${exemptCount} reviewed-glue preamble exemption(s), digest-bound)` : "") +
+              ". This scan CANNOT prove C2 / no-writers: computed, aliased or global capability acquisition remains unproven.";
+          } else {
+            auditEl.textContent = "JS capability audit: not recorded on this receipt (admitted before the invariant).";
+          }
+        }
       } else {
         statusEl.classList.add("error");
         const where = value.path ? ` (at ${value.path})` : "";
         statusEl.textContent = `Validation failed: ${value.error ?? "unknown refusal"}${where}.`;
+        if (auditEl) {
+          if (value.error === "js_capability_denied") {
+            auditEl.classList.add("refused");
+            auditEl.textContent = `JS capability audit: refused — ${value.detail ?? "denied capability in package JS"}.`;
+          } else {
+            auditEl.classList.remove("refused");
+            auditEl.textContent = "";
+          }
+        }
       }
     } else {
       statusEl.classList.remove("error");
       statusEl.textContent = "";
+      if (auditEl) {
+        auditEl.classList.remove("refused");
+        auditEl.textContent = "";
+      }
     }
   }
   get validationBusy() {
@@ -1914,6 +1940,11 @@ export class ToolLibrary extends Component {
     const statusEl = this._root.querySelector(".validation-status");
     if (statusEl && value === true) {
       statusEl.textContent = "Validating package…";
+    }
+    const auditEl = this._root.querySelector(".validation-js-audit");
+    if (auditEl && value === true) {
+      auditEl.classList.remove("refused");
+      auditEl.textContent = "JS capability audit: scanning…";
     }
   }
   _renderValidationPackages() {
@@ -2210,6 +2241,8 @@ export class ToolLibrary extends Component {
       .packages .package-validate-btn[disabled] { opacity:.55; cursor:default; }
       .packages .validation-status { min-block-size:1.25rem; margin:10px 0 0; font-size:13px; color:var(--muted, #625d57); }
       .packages .validation-status.error { color:var(--danger, #b3261e); }
+      .packages .validation-js-audit { min-block-size:1rem; margin:4px 0 0; font-size:12px; color:var(--muted, #625d57); }
+      .packages .validation-js-audit.refused { color:var(--danger, #b3261e); }
       .packages .validation-pkg-info { font-size:13px; font-weight:600; }
       .preview { margin-top:20px; border-block-start:1px solid var(--border, #ddd8d2); padding-block-start:16px; }
       .preview h3 { margin:0 0 4px; font-size:15px; }
@@ -2273,6 +2306,7 @@ export class ToolLibrary extends Component {
         </div>
         <button class="package-validate-btn" type="button" hidden>Validate package</button>
         <p class="validation-status" role="status" aria-live="polite" aria-atomic="true"></p>
+        <p class="validation-js-audit" role="status" aria-live="polite" aria-atomic="true"></p>
       </div>
       <div class="preview" hidden>
         <h3>Bundled tool previews</h3>

@@ -564,7 +564,7 @@ Deno.test("bundle budget: the service-worker bundle carries no Emscripten decode
   }
   const inputs = Object.keys(metafile.inputs ?? {});
   assert(inputs.length > 10, `the metafile must describe the real SW bundle (got ${inputs.length} inputs)`);
-  for (const forbidden of ["emscripten-manifest.js", "emscripten-module-audit.js", "emscripten-admission.js"]) {
+  for (const forbidden of ["emscripten-manifest.js", "emscripten-module-audit.js", "emscripten-admission.js", "emscripten-js-capability-audit.js"]) {
     assertEquals(
       inputs.some((input) => input.endsWith(forbidden)),
       false,
