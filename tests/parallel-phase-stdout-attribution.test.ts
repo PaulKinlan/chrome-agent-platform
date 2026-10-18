@@ -80,3 +80,32 @@ for (const site of ["run-tests", "select-tests"] as const) {
       `the other site's notice must not satisfy this pin:\n${out}`);
   });
 }
+
+Deno.test("w9kty: select-tests runPartitioned maps child SIGKILL to 137 and SIGTERM to 143", async () => {
+  const dir = durableDir(`w9kty-sig-${Deno.pid}`);
+  const killFile = join(dir, "zz-w9kty-kill.test.ts");
+  const termFile = join(dir, "zz-w9kty-term.test.ts");
+  const driver = join(dir, "zz-w9kty-driver.mjs");
+  await Deno.writeTextFile(killFile, `Deno.test("k", () => { Deno.kill(Deno.pid, "SIGKILL"); });\n`);
+  await Deno.writeTextFile(termFile, `Deno.test("t", () => { Deno.kill(Deno.pid, "SIGTERM"); });\n`);
+  await Deno.writeTextFile(driver,
+    `const { runPartitioned } = await import(${JSON.stringify(join(ROOT, "scripts/select-tests.mjs"))});\n` +
+    `const target = process.argv[2];\n` +
+    `const rc = await runPartitioned([target]);\n` +
+    `console.log("W9KTY_RC=" + rc);\n`);
+  try {
+    const { code: codeKill, stdout: outKill } = await new Deno.Command("node", {
+      args: [driver, killFile], cwd: ROOT, stdout: "piped", stderr: "null",
+    }).output();
+    assertEquals(codeKill, 0, "driver must exit cleanly");
+    assertStringIncludes(decoder.decode(outKill), "W9KTY_RC=137", "select-tests must map SIGKILL to 137");
+
+    const { code: codeTerm, stdout: outTerm } = await new Deno.Command("node", {
+      args: [driver, termFile], cwd: ROOT, stdout: "piped", stderr: "null",
+    }).output();
+    assertEquals(codeTerm, 0, "driver must exit cleanly");
+    assertStringIncludes(decoder.decode(outTerm), "W9KTY_RC=143", "select-tests must map SIGTERM to 143");
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});

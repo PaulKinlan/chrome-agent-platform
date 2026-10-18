@@ -6,6 +6,7 @@
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { chmod, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
+import { constants as osConstants } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -32,17 +33,13 @@ import {
 } from "./security-suite-custody.mjs";
 
 const EXPECTED_FIXTURE_HASH =
-  "1ebd6acd66e83d986c4893a31d433a9a18261cabfec6eceb85facca88013b679";
+  "cc853c577d181d7e629d35bd9ffde51e34dd9dbebdf1e7a87d8f84290c1fb759";
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.dirname(SCRIPT_DIR);
 const SUPERVISOR_SIGNALS = new Map([
   ["SIGHUP", 1],
   ["SIGINT", 2],
   ["SIGTERM", 15],
-]);
-const RUNNER_SIGNAL_NUMBERS = new Map([
-  ...SUPERVISOR_SIGNALS,
-  ["SIGKILL", 9],
 ]);
 
 function fail(message, code = 2) {
@@ -496,7 +493,8 @@ if (interruptedSignal) {
   exitCode = 124;
 } else if (outcome.kind === "exit" && outcome.signal) {
   runnerSignal = outcome.signal;
-  exitCode = 128 + (RUNNER_SIGNAL_NUMBERS.get(outcome.signal) ?? 0);
+  const signalNumber = osConstants.signals[outcome.signal] ?? 15;
+  exitCode = 128 + signalNumber;
 } else if (outcome.kind === "exit") {
   exitCode = outcome.code ?? 1;
 } else if (outcome.kind === "spawn-error") {

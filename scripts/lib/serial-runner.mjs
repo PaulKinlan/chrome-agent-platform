@@ -2,6 +2,7 @@
 // for serial phase test fixtures (chrome-agent-platform-5nhz).
 import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
+import { constants as osConstants } from "node:os";
 import { classifyReadyMarkerTimeout, measuredReadyLoadPerCpu } from "./serial-phase.mjs";
 
 const [file, readyFile, timeoutMsStr, readyTimeoutMsStr, injectedReadyLoadStr] = process.argv.slice(2);
@@ -94,5 +95,6 @@ child.on("close", (code, signal) => {
     process.stderr.write(`\nrunSerialFile: child exited before creating ready marker ${readyFile}\n`);
     process.exit(124);
   }
-  process.exit(code ?? (signal ? 128 + 15 : 1));
+  const signalNumber = signal ? (osConstants.signals[signal] ?? 15) : 0;
+  process.exit(code ?? (signal ? 128 + signalNumber : 1));
 });

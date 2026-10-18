@@ -23,6 +23,7 @@
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { constants as osConstants } from "node:os";
 import { resolve as resolvePath } from "node:path";
 import { BUILD_GATE, BUILD_GATE_FILES, BUILD_GATE_REASONS, HEAVY_GATE, HEAVY_GATE_FILES, HEAVY_GATE_REASONS, READ_ONLY_DIST, SERIAL, partition } from "./test-partition.mjs";
 import { announce, runReadOnlyDistBatch, runSerialFiles, runSerialLanes } from "./lib/serial-phase.mjs";
@@ -181,7 +182,8 @@ function runParallel(files, phase = "parallel phase", durationsOut = null) {
         resolve(124);
         return;
       }
-      let effectiveCode = code ?? (signal ? 128 + 15 : 1);
+      const signalNumber = signal ? (osConstants.signals[signal] ?? 15) : 0;
+      let effectiveCode = code ?? (signal ? 128 + signalNumber : 1);
       const hasEnvironmentalMarker =
         capturedOutput.includes(ENVIRONMENTAL_REFUSAL_MARKER) ||
         capturedOutput.includes("QuietWindowRefusedError") ||

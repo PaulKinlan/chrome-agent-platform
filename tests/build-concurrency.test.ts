@@ -11,6 +11,7 @@
 // construction, while a bare Promise.all surfaces the rejection in a microtask, long before a 25 ms
 // timer can fire — so the mutant is RED every time, and the correct code is green every time.
 import { assert, assertEquals, assertStrictEquals } from "jsr:@std/assert@1";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
@@ -128,9 +129,9 @@ Deno.test("settleAll: a falsy rejection reason (undefined, 0, empty string) stil
 //   positive: a grace that outlasts the reader keeps the old tree readable across the swap;
 //   negative: with NO grace the same reader loses the tree mid-read (if it did not, the positive half
 //             would be asserting nothing).
-// Deterministic by CONSTRUCTION, not by a timer winning a race: the reader is paced, so it always has
-// unread files left when the swap lands, and the positive case's grace is many times the reader's
-// remaining work, so load can slow the reader without changing either outcome.
+// Deterministic by CONSTRUCTION, not by a timer winning a race: explicit Promise barriers hold
+// the reader across the atomic swap and gate GC cleanup, guaranteeing unread files remain when
+// the swap lands and eliminating wall-clock sleep races.
 //
 // Scope, stated honestly: this pins the CONTRACT (a grace must outlive a reader). That build.mjs
 // actually waits `gcGraceMs` before its rm is pinned separately by build-parallel-discipline.test.ts:804;
@@ -152,27 +153,36 @@ Deno.test("b0ld8: a reader that pinned the OLD version dir survives a publish+GC
   };
   // build.mjs's publish order: symlink a next link, atomically rename it over dist, wait the grace
   // only when a prior version exists, then GC every other version directory.
-  const publishAndGc = async (graceMs: number) => {
+  const publishAndGc = async (
+    grace: number | Promise<void>,
+    onSwapped?: () => void,
+  ) => {
     const next = `${dist}.next`;
     await rm(next, { force: true }).catch(() => {});
     await symlink(path.relative(root, newDir), next);
     await rename(next, dist);
-    if (graceMs > 0) await sleep(graceMs);
+    if (onSwapped) onSwapped();
+    if (typeof grace === "number") {
+      if (grace > 0) await sleep(grace);
+    } else if (grace) {
+      await grace;
+    }
     for (const e of await readdir(versions, { withFileTypes: true })) {
       const full = path.join(versions, e.name);
       if (full !== newDir) await rm(full, { recursive: true, force: true });
     }
   };
   // A reader resolves the tree ONCE (as resolveDist / copy-built-tree do), then reads it slowly.
-  const readPinned = async (dir: string) => {
+  const readPinned = async (dir: string, onFileRead?: (index: number) => Promise<void> | void) => {
     const lost: string[] = [];
-    for (const n of NAMES) {
+    for (let i = 0; i < NAMES.length; i++) {
+      const n = NAMES[i];
       try {
         await readFile(path.join(dir, n));
       } catch {
         lost.push(n);
       }
-      await sleep(15); // paced: 8 files = 120ms, so ~100ms of work remains when the swap lands
+      if (onFileRead) await onFileRead(i);
     }
     return lost;
   };
@@ -181,32 +191,55 @@ Deno.test("b0ld8: a reader that pinned the OLD version dir survives a publish+GC
     await mkdir(newDir, { recursive: true });
     await writeFile(path.join(newDir, "f0.js"), "new");
 
-    // POSITIVE: grace (600ms) is many times the reader's remaining work (~100ms).
+    // POSITIVE: grace outlasts the reader's remaining work. Deterministic Promise barriers
+    // hold reader at file 0 until the swap completes, ensuring unread files (1..7) remain
+    // when the swap lands, and that reader finishes before GC runs, without wall-clock races.
     await seed();
     const pin1 = await realpath(dist);
     assertEquals(pin1, oldDir, "the reader must pin the OLD version directory");
-    const positive = readPinned(pin1);
-    await sleep(20);
-    await publishAndGc(600);
+    const firstRead1 = Promise.withResolvers<void>();
+    const swapped = Promise.withResolvers<void>();
+    const positive = readPinned(pin1, async (idx) => {
+      if (idx === 0) {
+        firstRead1.resolve();
+        await swapped.promise;
+      }
+    });
+    await firstRead1.promise;
+    const allowGc = Promise.withResolvers<void>();
+    const publishing = publishAndGc(allowGc.promise, () => swapped.resolve());
     assertEquals(
       await positive,
       [],
       "a grace that outlasts the reader must keep the old tree readable across the swap",
     );
+    allowGc.resolve();
+    await publishing;
+    assertEquals(existsSync(oldDir), false, "GC removes old version after grace expires");
 
     // NEGATIVE CONTROL: same reader, no grace. The tree is removed mid-read, so the files it had
     // not reached are gone. This is what makes the positive half non-vacuous.
     await seed();
     const pin2 = await realpath(dist);
     assertEquals(pin2, oldDir);
-    const negative = readPinned(pin2);
-    await sleep(20);
+    const firstRead2 = Promise.withResolvers<void>();
+    const gcDone = Promise.withResolvers<void>();
+    const negative = readPinned(pin2, async (idx) => {
+      if (idx === 0) {
+        firstRead2.resolve();
+        await gcDone.promise;
+      }
+    });
+    await firstRead2.promise;
     await publishAndGc(0);
+    gcDone.resolve();
     const lost = await negative;
-    assert(
-      lost.length >= NAMES.length - 2,
+    assertEquals(
+      lost.length,
+      NAMES.length - 1,
       `with no grace the reader MUST lose the unread files, else the positive half proves nothing (lost ${lost.length}/${NAMES.length})`,
     );
+    assertEquals(existsSync(oldDir), false, "GC with no grace removes the old version immediately");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

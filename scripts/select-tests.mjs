@@ -43,6 +43,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { constants as osConstants } from "node:os";
 import { tokenizer } from "acorn";
 import { partition } from "./test-partition.mjs";
 import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
@@ -804,7 +805,8 @@ function runPhase(files, flags, label, timeoutMs = null) {
       }
       const secs = ((Date.now() - t0) / 1000).toFixed(0);
       console.error(`select-tests: ${label} ${code === 0 ? "GREEN" : "FAILED"} in ${secs}s`);
-      resolve(code ?? (signal ? 128 + 15 : 1));
+      const signalNumber = signal ? (osConstants.signals[signal] ?? 15) : 0;
+      resolve(code ?? (signal ? 128 + signalNumber : 1));
     });
 
     child.on("error", (err) => {

@@ -17,6 +17,7 @@ import { assert, assertEquals, assertStrictEquals, assertStringIncludes } from "
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { classifyActiveBuilders, isHeavyProcessName, type ProcCpuMap } from "../scripts/lib/quiet-window.ts";
 import {
+  ENVIRONMENTAL_REFUSAL_MARKER,
   correlateLongTask,
   attributeBootRun,
   evaluateBootStagingPolicy,
@@ -802,12 +803,40 @@ Deno.test("mujlt runner boundary: mixed failure (refusal + product red) preserve
 Deno.test("mujlt runner boundary: abnormal exit before test summary preserves exit code", async () => {
   const scratch = Deno.makeTempDirSync({ dir: durableDir("scratch"), prefix: "mujlt-runner-abnormal-" });
   const fixture = `${scratch}/abnormal-exit.test.ts`;
-  // Script emits refusal marker but terminates abruptly before Deno test summary can be printed
+  // Script emits refusal marker, then terminates abruptly via SIGTERM before Deno test summary can be printed
   Deno.writeTextFileSync(
     fixture,
     `import { ENVIRONMENTAL_REFUSAL_MARKER } from "${new URL("../scripts/lib/ntp-boot-attribution.ts", import.meta.url).href}";\n` +
       `Deno.test("fixture: abnormal exit after marker", () => {\n` +
-      `  Deno.stderr.writeSync(new TextEncoder().encode(ENVIRONMENTAL_REFUSAL_MARKER + ' {"reason":"test-refusal"}\\n'));\n` +
+      `  console.error("fixture: abnormal exit after marker\\n" + ENVIRONMENTAL_REFUSAL_MARKER + ' {"reason":"test-refusal"}');\n` +
+      `  Deno.kill(Deno.pid, "SIGTERM");\n` +
+      `});\n`,
+  );
+
+  try {
+    const cmd = new Deno.Command("node", {
+      args: ["scripts/run-tests.mjs", fixture],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stdout, stderr } = await cmd.output();
+    const out = new TextDecoder().decode(stdout) + new TextDecoder().decode(stderr);
+    assert(code !== 75, `runner must NOT relabel abrupt termination as 75, got ${code}:\n${out}`);
+    assertEquals(code, 143, `runner must preserve abrupt termination signal exit code (143 for SIGTERM), got ${code}:\n${out}`);
+    assertStringIncludes(out, "fixture: abnormal exit after marker");
+    assertStringIncludes(out, ENVIRONMENTAL_REFUSAL_MARKER);
+    assertStringIncludes(out, "missing test summary — preserving exit 143");
+  } finally {
+    try { Deno.removeSync(scratch, { recursive: true }); } catch {}
+  }
+});
+
+Deno.test("mujlt runner boundary: child killed by SIGKILL preserves exact signal exit code 137", async () => {
+  const scratch = Deno.makeTempDirSync({ dir: durableDir("scratch"), prefix: "mujlt-runner-kill-" });
+  const fixture = `${scratch}/sigkill-exit.test.ts`;
+  Deno.writeTextFileSync(
+    fixture,
+    `Deno.test("fixture: die by sigkill", () => {\n` +
       `  Deno.kill(Deno.pid, "SIGKILL");\n` +
       `});\n`,
   );
@@ -821,7 +850,8 @@ Deno.test("mujlt runner boundary: abnormal exit before test summary preserves ex
     const { code, stdout, stderr } = await cmd.output();
     const out = new TextDecoder().decode(stdout) + new TextDecoder().decode(stderr);
     assert(code !== 75, `runner must NOT relabel abrupt termination as 75, got ${code}:\n${out}`);
-    assertStringIncludes(out, "missing test summary — preserving exit");
+    assertEquals(code, 137, `runner must preserve exact SIGKILL exit code (137 = 128 + 9), got ${code}:\n${out}`);
+    assertStringIncludes(out, "FAILED");
   } finally {
     try { Deno.removeSync(scratch, { recursive: true }); } catch {}
   }

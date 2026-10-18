@@ -305,6 +305,16 @@ Deno.test("security-suite custody: production mode is immutable and fake runners
     "self-test-only override refused in production mode",
   );
 
+  await assertRejects(
+    () => resolveSupervisorConfig({
+      env: { HOME: Deno.env.get("HOME") ?? "", CAP_SECURITY_TEST_SIGNAL: "SIGKILL" },
+      repoRoot: ROOT,
+      expectedFixtureHash: "unused-in-production",
+    }),
+    Error,
+    "self-test-only override refused in production mode",
+  );
+
   for (const name of ["CAP_SECURITY_TEST_FORCE_OBSERVATION_UNREADABLE", "CAP_SECURITY_TEST_FORCE_RESIDUE_UNREADABLE"]) {
     await assertRejects(() => resolveSupervisorConfig({
       env: { HOME: Deno.env.get("HOME") ?? "", [name]: "1" },
@@ -680,6 +690,28 @@ Deno.test("security-suite custody: exit 37 and runner signal propagate exactly",
     assertEquals(signaled.receipt?.runnerSignal, "SIGTERM");
   } finally {
     await removeEvidence(signaled);
+  }
+
+  const signaledKill = await runSupervisor("signal", 2_000, {
+    CAP_SECURITY_TEST_SIGNAL: "SIGKILL",
+  });
+  try {
+    assertEquals(signaledKill.code, 137);
+    assertEquals(signaledKill.receipt?.exit, 137);
+    assertEquals(signaledKill.receipt?.runnerSignal, "SIGKILL");
+  } finally {
+    await removeEvidence(signaledKill);
+  }
+
+  const signaledAbrt = await runSupervisor("signal", 2_000, {
+    CAP_SECURITY_TEST_SIGNAL: "SIGABRT",
+  });
+  try {
+    assertEquals(signaledAbrt.code, 134);
+    assertEquals(signaledAbrt.receipt?.exit, 134);
+    assertEquals(signaledAbrt.receipt?.runnerSignal, "SIGABRT");
+  } finally {
+    await removeEvidence(signaledAbrt);
   }
 });
 
