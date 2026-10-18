@@ -103,3 +103,11 @@ Deno.test("9t1p: the REAL harness routes its evaluate-timeout exit through the m
   assertEquals(/environmentalAbort/.test(harness), false,
     "the boolean that could not tell load from a hang is gone");
 });
+
+Deno.test("kemd3: quiet-window test fixture must not print alarming un-mocked rustc notices", async () => {
+  const src = await Deno.readTextFile(`${ROOT}tests/quiet-window.test.ts`);
+  const match = /mkax: the quiet must be SUSTAINED[\s\S]+?compilerNames:\s*\["([^"]+)"\]/m.exec(src);
+  assert(match !== null, "sustained test must declare its compiler names in fixture");
+  assertEquals(match[1], "fixture:mock-compiler", "compilerNames in sustained fixture must be explicitly mock-prefixed");
+});
+

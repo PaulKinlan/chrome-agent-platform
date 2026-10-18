@@ -318,6 +318,7 @@ Deno.test("mkax: a quiet box starts the gate immediately", async () => {
 });
 
 Deno.test("mkax: the quiet must be SUSTAINED, not a one-sample dip", async () => {
+  const notices: string[] = [];
   // noisy, noisy, quiet, quiet, quiet → starts on the third consecutive quiet.
   const script = [
     sample({ load1: 30, loadPerCore: 30 / 32 }),
@@ -327,24 +328,34 @@ Deno.test("mkax: the quiet must be SUSTAINED, not a one-sample dip", async () =>
   let i = 0;
   const v = await awaitQuietWindow(SPEC, {
     sample: async () => script[Math.min(i++, script.length - 1)],
+    notice: (l) => notices.push(l),
     sleep: async () => {},
   });
   assertEquals(v.ok, true);
   assertEquals(i, 5, "it sampled until the streak was complete");
   // A dip in the middle resets the streak: quiet, quiet, NOISY, quiet, quiet,
   // quiet → six samples, not four.
+  // kemd3: use a mock compiler name and suppress notice so alarming un-mocked
+  // "active heavy-builders 9 > 1 (named: rustc; activity unknown - counted fail-closed)"
+  // lines do not land in gate logs and mislead mergers into suspecting real rustc contention.
   const script2 = [
     sample(), sample(),
-    sample({ compilers: 9, compilerNames: ["rustc"] }),
+    sample({ compilers: 9, compilerNames: ["fixture:mock-compiler"] }),
     sample(), sample(), sample(),
   ];
   let j = 0;
   const v2 = await awaitQuietWindow(SPEC, {
     sample: async () => script2[Math.min(j++, script2.length - 1)],
+    notice: (l) => notices.push(l),
     sleep: async () => {},
   });
   assertEquals(v2.ok, true);
   assertEquals(j, 6, "a mid-window spike restarts the streak");
+
+  // kemd3: verify the fixture never emits alarming real-compiler warning lines into gate logs
+  for (const line of notices) {
+    assertEquals(line.includes("named: rustc; activity unknown"), false, "fixture notices must not mimic real rustc load");
+  }
 });
 
 Deno.test("mkax: a box that never quiets down REFUSES inside its bound", async () => {
@@ -372,6 +383,7 @@ Deno.test("mkax: an unmeasurable box fails CLOSED (never assumed quiet)", async 
   const broken = sample({ measurable: false, error: "read /proc/loadavg: EPERM", loadPerCore: Infinity });
   const v = await awaitQuietWindow({ ...SPEC, sustainedSamples: 3 }, {
     sample: async () => broken,
+    notice: () => {},
     sleep: async () => {},
   });
   assertEquals(v.ok, false);
@@ -379,6 +391,7 @@ Deno.test("mkax: an unmeasurable box fails CLOSED (never assumed quiet)", async 
   // And a sampler that THROWS is the same verdict, not an uncaught crash.
   const v2 = await awaitQuietWindow({ ...SPEC, sustainedSamples: 1 }, {
     sample: async () => { throw new Error("/proc went away"); },
+    notice: () => {},
     sleep: async () => {},
   });
   assertEquals(v2.ok, false);
@@ -388,6 +401,7 @@ Deno.test("mkax: an unmeasurable box fails CLOSED (never assumed quiet)", async 
   let i = 0;
   const v3 = await awaitQuietWindow(SPEC, {
     sample: async () => script[Math.min(i++, script.length - 1)],
+    notice: () => {},
     sleep: async () => {},
   });
   assertEquals(v3.ok, true, "one unreadable sample is a blip, three in a row is an environment");
@@ -398,6 +412,7 @@ Deno.test("mkax: the refusal error is an ENVIRONMENT verdict, and its exit code 
     try {
       const v = await awaitQuietWindow({ ...SPEC, maxWaitMs: 200, sampleMs: 50, sustainedSamples: 2 }, {
         sample: async () => sample({ load1: 20, loadPerCore: 20 / 32 }),
+        notice: () => {},
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
       });
       if (!v.ok) throw new QuietWindowRefusedError(v);
