@@ -562,6 +562,18 @@ export async function listPendingEnrollmentPromotions() {
 
 /** Owner abandonment tombstones the pending authority FIRST. A failed OPFS
  * cleanup cannot resurrect it; the durable tombstone carries a retry marker.
+ *
+ * Two pending shapes are abandoned, by the same tombstone:
+ *   * `promotion-pending` / `promotion-retry` - enrolled:true, the decision copy
+ *     still staged, no authority until the envelope verifies.
+ *   * `policy-pending` - enrolled:false, a policy envelope whose consent write
+ *     failed, so the row holds a decision with no authority yet.
+ * chrome-agent-platform-2tttw (reviewer finding on do09a f5b01d63): the second
+ * shape was refused as stale, so the scripting-Disable sweep could not tombstone
+ * it - the row survived the Disable and the next boot replayed its decision
+ * through completeEnrollmentPromotion, turning isEnrolled true with no scripting
+ * or host precondition satisfied in that session. Both shapes are now tombstoned
+ * at a NEW generation, so a replay of the staged decision is stale, not authority.
  */
 export async function abandonEnrollmentPromotion(origin, gen) {
   const canonical = canonicalOrigin(origin);
@@ -569,8 +581,10 @@ export async function abandonEnrollmentPromotion(origin, gen) {
   return withEnrollmentLock(async () => {
     const map = await enrolledMap();
     const row = map[canonical];
-    if ((row?.phase !== "promotion-pending" && row?.phase !== "promotion-retry") ||
-      row.enrolled !== true || !Array.isArray(row.promotionPending) || row.gen !== gen) {
+    const promotionStaged = (row?.phase === "promotion-pending" || row?.phase === "promotion-retry") &&
+      row.enrolled === true && Array.isArray(row.promotionPending);
+    const policyStaged = row?.phase === "policy-pending" && row.enrolled === false;
+    if ((!promotionStaged && !policyStaged) || row.gen !== gen) {
       throw new Error("site_enrollment_promotion_stale");
     }
     map[canonical] = { enrolled: false, at: Date.now(), gen: await nextGeneration({ requireDurable: true }),

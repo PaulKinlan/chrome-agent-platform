@@ -1,12 +1,12 @@
 // @ts-nocheck — Chrome/OPFS fault fakes intentionally implement a narrow surface.
-import { assertEquals, assertRejects } from "jsr:@std/assert@1";
+import { assertEquals, assertNotEquals, assertRejects } from "jsr:@std/assert@1";
 import { kvGet } from "../extension/lib/kv.js";
 import { createEphemeralSiteToolConsentStore } from "../extension/lib/ephemeral-site-tool-consent.js";
 import { listOrigins, siteMemory } from "../extension/lib/memory.js";
 import {
   abandonEnrollmentPromotion, completeEnrollmentPromotion, disenrollOrigin, enrollOrigin,
-  enrollmentGeneration, enrollmentSnapshot, isEnrolled, prepareEnrollmentPromotion, replaceTools,
-  setEnrollmentPolicy, setToolConsentDecision,
+  enrollmentGeneration, enrollmentSnapshot, isEnrolled, listPendingEnrollmentPromotions,
+  prepareEnrollmentPromotion, replaceTools, setEnrollmentPolicy, setToolConsentDecision,
 } from "../extension/lib/tools.js";
 import { SITE_TOOL_CONSENT_KEY, siteToolConsentSnapshot, siteToolIdentity } from "../extension/lib/site-tool-consent.js";
 import { evaluateWebmcpAuthority, siteToolConsentPermissionDigest } from "../extension/lib/webmcp-authority.js";
@@ -311,4 +311,42 @@ Deno.test("D2 n6c31: an old-generation Deny cannot be bypassed by promoting a di
   await complete(origin, newer.gen);
   assertEquals((await siteToolConsentSnapshot(origin, { name: "booktable", source: "declared" }, newer.gen)).state, "denied");
   assertEquals((await siteToolConsentSnapshot(origin, { name: "BookTable", source: "declared" }, newer.gen)).state, "denied");
+});
+
+// chrome-agent-platform-2tttw (P1, reviewer finding on do09a f5b01d63). A policy-pending row is
+// enrolled:false|phase:"policy-pending": a decision envelope whose consent write failed, staged with no
+// authority. listPendingEnrollmentPromotions() includes it, so the scripting-Disable sweep snapshots it - but
+// abandonEnrollmentPromotion refused it as `stale` (it only accepted the enrolled:true promotion shapes). The
+// sweep therefore marked cleanupPending and left the row; the next boot replayed the staged decision through
+// completeEnrollmentPromotion and isEnrolled flipped to TRUE with no scripting or host precondition satisfied
+// in that session. Disable must tombstone this shape too, at a NEW generation, so the replay is stale.
+Deno.test("2tttw: an abandoned policy-pending row cannot reauthorize on a later boot", async () => {
+  const origin = "https://policy-pending-abandon.example";
+  const first = await prepareEnrollmentPromotion(origin, decisions(origin));
+  await complete(origin, first.gen);
+  failConsentWrite = true;
+  try { await assertRejects(() => setEnrollmentPolicy(origin, "deny"), Error, "simulated consent write failure"); }
+  finally { failConsentWrite = false; }
+  const staged = await pending(origin);
+  assertEquals(staged.phase, "policy-pending");
+  assertEquals(staged.enrolled, false);
+  assertEquals(await isEnrolled(origin), false);
+  // The sweep's population DOES contain this row, so the abandon it performs must tombstone it.
+  const target = (await listPendingEnrollmentPromotions()).find((row) => row.origin === origin);
+  assertEquals(target?.phase, "policy-pending");
+  assertEquals(target?.gen, staged.gen);
+  assertEquals((await abandonEnrollmentPromotion(origin, staged.gen)).abandoned, true);
+  // The durable copy is now a tombstone at a NEW generation - no phase, still not enrolled.
+  const row = await pending(origin);
+  assertEquals(row.enrolled, false);
+  assertEquals(row.phase, undefined);
+  assertNotEquals(row.gen, staged.gen);
+  assertEquals(await isEnrolled(origin), false);
+  // A later boot's reconcile replays the staged decision (old generation): stale, never authority.
+  await assertRejects(() => completeEnrollmentPromotion(origin, staged.gen), Error, "site_enrollment_promotion_stale");
+  assertEquals(await isEnrolled(origin), false);
+  // Even a replay that guessed the new generation finds no pending row to complete.
+  await assertRejects(() => completeEnrollmentPromotion(origin, row.gen), Error);
+  assertEquals(await isEnrolled(origin), false);
+  assertEquals((await listPendingEnrollmentPromotions()).some((entry) => entry.origin === origin), false);
 });
