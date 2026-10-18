@@ -114,6 +114,30 @@ Deno.test("x9r8k: revoked ledger and mismatched staging bytes refuse, never clea
   assertEquals(fresh.deletions, 0);
 });
 
+Deno.test("x9r8k: independent SW verifier refuses forged non-staging intent even if its reader lies", async () => {
+  const fixture = await setup();
+  for (const badField of ["stagingOnly", "nonpromotable"]) {
+    const intent = { read: async (arg) => ({ ...await fixture.intent.read(arg), [badField]: false }) };
+    await code(() => verify(fixture, { intent }), "emscripten_staging_intent_unavailable");
+  }
+  assertEquals(fixture.deletions, 0);
+});
+
+Deno.test("x9r8k: independent SW verifier refuses sealed or nonzero-byte staging authority", async () => {
+  const fixture = await setup();
+  const streamRoot = await fixture.root.getDirectoryHandle("wasm-tool-streams-v1");
+  const output = await streamRoot.getDirectoryHandle(fixture.outputRef.id);
+  const authorityFile = output.nodes.get("authority.json");
+  const original = authorityFile.bytes;
+  const metadata = JSON.parse(new TextDecoder().decode(original));
+  for (const patch of [{ sealed: true }, { bytes: 2 }]) {
+    authorityFile.bytes = new TextEncoder().encode(JSON.stringify({ ...metadata, ...patch }));
+    await code(() => verify(fixture), "emscripten_staging_bytes_unavailable");
+    authorityFile.bytes = original;
+  }
+  assertEquals(fixture.deletions, 0);
+});
+
 Deno.test("x9r8k: missing intent, SW restart or cancellation refuse without publication", async () => {
   const fixture = await setup();
   const missingIntent = { read: async () => { throw new Error("compacted"); } };

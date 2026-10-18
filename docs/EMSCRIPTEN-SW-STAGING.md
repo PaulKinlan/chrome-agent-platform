@@ -13,9 +13,14 @@ output ref. Every reservation carries an issued timestamp and a **24-hour
 reconciliation deadline**; expiry refuses staging. This deadline is a review
 trigger, **not permission for automatic deletion**.
 
-Staging output creation must pass `preserveOnFailure: true` and a trusted
-`onRetainedFailure` callback bound to `intent.recordRetained`. A post-intent
-creation failure retains any partial directory and writes a typed
+Staging output creation must pass `preserveOnFailure: true` and an **adapter**
+callback: `onRetainedFailure(ref, reason)` receives the frozen stdout ref and
+reason, while `intent.recordRetained({ identity, inputRef }, reason)` requires
+SW-issued identity and the pre-sealed run-owned input ref. The callback must
+first check `ref.id === identity.outputRef.id` and `ref.kind === "stdout"`; a
+literal `onRetainedFailure: intent.recordRetained` is incorrect and fails to
+write a marker. A post-intent creation failure retains any partial directory
+and writes a typed
 `retained-not-deleted` marker with that bounded reconciliation deadline.
 A missing marker writer refuses before output creation. If the marker append
 itself fails, creation returns `wasm_stream_retention_unavailable`, leaves the
