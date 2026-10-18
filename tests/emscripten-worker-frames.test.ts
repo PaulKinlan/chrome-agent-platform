@@ -115,6 +115,10 @@ Deno.test("3mcu1: actual module Worker transfers frames and returns no binary re
   const adapterUrl = "data:text/javascript," + encodeURIComponent(
     "export function createBlake3Adapter() { return { hash: () => new Uint8Array(65539).fill(23) }; }");
   const frames = [];
+  const hostIdentity = { sessionId: "session", packageId: "pkg", operationId: "hash", workerInstanceId: null };
+  let pushedBytes = 0;
+  const hostChannel = { push: async ({ chunk }) => { pushedBytes += chunk.byteLength; },
+    abort: () => assert(false, "real Worker never poisons the host writer") };
   let timer;
   try {
     const terminal = await Promise.race([
@@ -123,9 +127,8 @@ Deno.test("3mcu1: actual module Worker transfers frames and returns no binary re
         worker.onmessage = ({ data }) => {
           if (data.type === EMSCRIPTEN_OUTPUT_FRAME_TYPE) {
             frames.push(data);
-            worker.postMessage({ type: EMSCRIPTEN_OUTPUT_ACK_TYPE,
-              sessionId: data.sessionId, packageId: data.packageId, operationId: data.operationId,
-              workerInstanceId: data.workerInstanceId, seq: data.seq, ok: true });
+            acceptEmscriptenOutputFrame(data, hostIdentity, hostChannel,
+              (ack) => worker.postMessage(ack)).catch(reject);
           } else resolve(data);
         };
         worker.postMessage({
@@ -141,6 +144,8 @@ Deno.test("3mcu1: actual module Worker transfers frames and returns no binary re
     assertEquals(terminal.result, null, "terminal must not clone binary data");
     assertEquals(frames.map((frame) => frame.chunk.byteLength), [65536, 3]);
     assertEquals(frames.map((frame) => frame.seq), [0, 1]);
+    assertEquals(pushedBytes, 65539, "terminal follows all acknowledged host writes");
+    assertEquals(hostIdentity.workerInstanceId, terminal.workerInstanceId);
     assert(frames.every((frame) => frame.chunk.every((byte) => byte === 23)));
   } finally { clearTimeout(timer); worker.terminate(); }
 });
