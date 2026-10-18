@@ -147,34 +147,75 @@ async function afterLeaderExit(proc: Deno.ChildProcess, ms = 8000): Promise<void
  *  it settles `status` and records no kill, so `calls` stays a record of what the lifeline did. */
 function fakeWatcher(
   calls: string[],
-  opts: { exitCode?: number; hangs?: boolean; onKill?: () => void; onClose?: () => Promise<void> } = {},
+  opts: {
+    exitCode?: number;
+    hangs?: boolean;
+    /** t5o2i.2: the watcher is stuck in uninterruptible I/O - it accepts the SIGKILL and the stdin close
+     *  and never exits, so BOTH post-timeout waits overrun. `end()` still finishes it, so a failing test
+     *  leaves no pending promise behind. */
+    uninterruptible?: boolean;
+    /** t5o2i.2 v8zbu: the close returns but the watcher's EXIT is held until the test calls `end()` - the
+     *  deterministic way to have a transition genuinely in flight with only its death unproven. */
+    holdStatus?: boolean;
+    /** t5o2i.2 qh5lp: the watcher's status promise REJECTS instead of resolving - an exit that could not be
+     *  read. Rejection happens at the point the lifeline triggers it, so no promise is left unhandled. */
+    rejectStatus?: boolean;
+    /** t5o2i.2 zt6zw: the `status` GETTER itself throws, so there is no promise to await at all. */
+    throwStatusGetter?: boolean;
+    onKill?: () => void;
+    onClose?: () => Promise<void>;
+  } = {},
 ): LifelineWatcher & { end(): void } {
   let settle!: (status: { code: number; signal: string | null }) => void;
-  const status = new Promise<{ code: number; signal: string | null }>((resolve) => {
+  let fail!: (error: Error) => void;
+  const status = new Promise<{ code: number; signal: string | null }>((resolve, reject) => {
     settle = resolve;
+    fail = reject;
   });
-  return {
+  /** The exit is reported: a rejection when this watcher's status cannot be read (qh5lp), else the status. */
+  const reportExit = (value: { code: number; signal: string | null }): void => {
+    if (opts.rejectStatus) fail(new Error("watcher status unavailable"));
+    else settle(value);
+  };
+  const watcher = {
     pid: 424_242,
     status,
     stdin: {
       close() {
         calls.push("stdin.close");
-        if (!opts.hangs) settle({ code: opts.exitCode ?? 0, signal: null });
+        if (!opts.hangs && !opts.uninterruptible && !opts.holdStatus) reportExit({ code: opts.exitCode ?? 0, signal: null });
+        // qh5lp: a watcher whose status cannot be read reports that at the first exit signal - the sweep's trigger -
+        // so the sweep's own rejection branch is exercised, not just the post-SIGKILL wait.
+        if (opts.rejectStatus) fail(new Error("watcher status unavailable"));
+        if (opts.uninterruptible) return new Promise<void>(() => {});
         return opts.onClose?.() ?? Promise.resolve();
       },
     },
     kill(signo = "SIGTERM") {
       calls.push(`kill:${signo}`);
       opts.onKill?.();
-      settle({ code: 137, signal: signo });
+      if (!opts.uninterruptible && !opts.holdStatus) reportExit({ code: 137, signal: signo });
     },
     end() {
       settle({ code: opts.exitCode ?? 0, signal: null });
     },
   };
+  if (!opts.throwStatusGetter) return watcher;
+  // A getter that THROWS on every read (zt6zw): reading it is not an exit, it is an exit we cannot even ask about.
+  return Object.defineProperty(watcher, "status", {
+    get() {
+      throw new Error("watcher status unavailable (getter threw)");
+    },
+  }) as typeof watcher;
 }
 
 type HeldWatcher = ReturnType<typeof fakeWatcher>;
+
+/** Each recorded diagnostic line contains its pattern, in order, and there are no others. */
+function assertEqualLines(lines: string[], patterns: string[]): void {
+  assertEquals(lines.length, patterns.length, `expected ${patterns.length} diagnostic line(s), got: ${lines.join(" | ")}`);
+  patterns.forEach((pattern, i) => assert(lines[i].includes(pattern), `line ${i} must mention ${JSON.stringify(pattern)}: ${lines[i]}`));
+}
 
 /**
  * Run each cleanup step in its OWN try/catch and never throw (jjsz N8). Cleanup in a `finally` must never
@@ -950,6 +991,232 @@ Deno.test("lifeline: a sweep that overruns is bounded — the watcher is SIGKILL
     assertEquals(calls, ["stdin.close", "kill:SIGKILL"], "stdin first (the trigger), the kill only on overrun");
     assertEquals(lines.length, 1);
     assert(lines[0].includes("did not finish"), lines[0]);
+    // t5o2i.2 anti-vacuity: this watcher DID exit on the SIGKILL, so the sweep is confirmed. A flag that
+    // could not tell the two cases apart would make the UNCONFIRMED test below prove nothing.
+    assertEquals(lifelineState(proc)?.cleanupConfirmed, true, "a watcher that exited on the SIGKILL is a CONFIRMED sweep");
+  } finally {
+    await reap(proc);
+  }
+});
+
+Deno.test("lifeline: a watcher that never exits after the SIGKILL is bounded and the sweep ends UNCONFIRMED (t5o2i.2)", async () => {
+  const proc = spawnLeader("/bin/sleep", ["300"]);
+  const marker = `user-data-dir=jjsz-t5o2i-unconfirmed-${crypto.randomUUID()}`;
+  const calls: string[] = [];
+  const lines: string[] = [];
+  try {
+    attachProcessLifeline(proc, { group: proc.pid, treeMatch: marker }, {
+      // Both post-timeout waits (the watcher's exit and its stdin close) never finish: the shape of a
+      // watcher stuck in uninterruptible I/O, where a pending SIGKILL is not delivered.
+      spawn: () => fakeWatcher(calls, { uninterruptible: true }),
+      warn: (line) => lines.push(line),
+      sweepTimeoutMs: 40,
+      settleTimeoutMs: 60,
+    });
+    proc.kill("SIGKILL");
+    await proc.status;
+    assert(await until(() => lifelineState(proc)?.state === "fired", 5000), "the exit fired the sweep");
+    // THE CONTRACT: the transition still SETTLES, inside its bounds, instead of hanging the runner.
+    assert(
+      await settlesWithin(lifelineState(proc)?.settled, 5000),
+      "a sweep whose watcher never exits must still settle within sweepTimeoutMs + settleTimeoutMs",
+    );
+    assertEquals(calls, ["stdin.close", "kill:SIGKILL"], "the bounded second wait added no kill of its own");
+    assertEquals(lifelineState(proc)?.cleanupConfirmed, false, "the sweep ended without proof the watcher is gone");
+    // Three honest lines: the overrun, the UNCONFIRMED verdict, and the close that never returned - which
+    // is reported but is NOT the verdict (the watcher's exit is).
+    assertEqualLines(lines, ["did not finish", "UNCONFIRMED", "stdin close did not settle"]);
+    // And the truth is not a warning only: a same-profile launch is REFUSED while that is unconfirmed.
+    await assertRejects(() => awaitFiredLifelineSweep(marker), Error, "did not exit within their bound");
+  } finally {
+    await reap(proc);
+  }
+});
+
+Deno.test("lifeline: an unsettled stdin close alone does NOT refuse the profile — the watcher's exit is what decides cleanup (t5o2i.2)", async () => {
+  const proc = spawnLeader("/bin/sleep", ["300"]);
+  const marker = `user-data-dir=jjsz-t5o2i-closeonly-${crypto.randomUUID()}`;
+  const calls: string[] = [];
+  const lines: string[] = [];
+  try {
+    attachProcessLifeline(proc, { group: proc.pid, treeMatch: marker }, {
+      // The close call never returns, but the watcher DOES die on the SIGKILL: only the close is unproven.
+      spawn: () => fakeWatcher(calls, { hangs: true, onClose: () => new Promise<void>(() => {}) }),
+      warn: (line) => lines.push(line),
+      sweepTimeoutMs: 40,
+      settleTimeoutMs: 60,
+    });
+    proc.kill("SIGKILL");
+    await proc.status;
+    assert(await until(() => lifelineState(proc)?.state === "fired", 5000), "the exit fired the sweep");
+    assert(await settlesWithin(lifelineState(proc)?.settled, 5000), "the sweep settles inside its bounds");
+    assertEquals(lifelineState(proc)?.cleanupConfirmed, true, "a watcher that exited is a CONFIRMED cleanup, whatever the close did");
+    assertEqualLines(lines, ["did not finish", "stdin close did not settle"]);
+    // CONTROL for the refusal above: this profile is still usable, so the guard did not become "always refuse".
+    await awaitFiredLifelineSweep(marker);
+  } finally {
+    await reap(proc);
+  }
+});
+
+Deno.test("lifeline: a watcher whose status GETTER THROWS is UNCONFIRMED and refuses the profile - in the sweep AND the disarm (t5o2i.2 zt6zw)", async () => {
+  // The reviewer's repro: the sweep read `watcher.status` directly, so a throwing getter escaped into leave()'s
+  // catch and the transition settled with cleanupConfirmed TRUE and the profile reusable.
+  for (const shape of ["sweep", "disarm"] as const) {
+    const proc = spawnLeader("/bin/sleep", ["300"]);
+    const marker = `user-data-dir=jjsz-t5o2i-getter-${shape}-${crypto.randomUUID()}`;
+    const lines: string[] = [];
+    try {
+      const disarm = attachProcessLifeline(proc, { group: proc.pid, treeMatch: marker }, {
+        spawn: () => fakeWatcher([], { throwStatusGetter: true }),
+        warn: (line) => lines.push(line),
+        sweepTimeoutMs: 40,
+        settleTimeoutMs: 60,
+      });
+      if (shape === "disarm") {
+        assert(await settlesWithin(disarm(), 5000), "the disarm settles inside its bound even when the getter throws");
+      } else {
+        proc.kill("SIGKILL");
+        await proc.status;
+        assert(await until(() => lifelineState(proc)?.state === "fired", 5000), "the exit fired the sweep");
+        assert(await settlesWithin(lifelineState(proc)?.settled, 5000), "the sweep settles inside its bound");
+      }
+      assertEquals(
+        lifelineState(proc)?.cleanupConfirmed,
+        false,
+        `${shape}: a status that cannot even be read is NOT an observed exit, so cleanup cannot be confirmed`,
+      );
+      assert(lines.some((line) => line.includes("UNCONFIRMED")), `${shape}: the unconfirmed verdict is reported: ${lines.join(" | ")}`);
+      await assertRejects(() => awaitFiredLifelineSweep(marker), Error, "did not exit within their bound", `${shape}: the profile is refused`);
+    } finally {
+      await reap(proc);
+    }
+  }
+});
+
+Deno.test("lifeline: a watcher whose EXIT STATUS REJECTS is UNCONFIRMED and refuses the profile - a rejection is not an exit (t5o2i.2 qh5lp)", async () => {
+  // The reviewer's repro: `attempt(() => watcher.status)` swallowed the rejection, so a cleanup nobody had proved
+  // was reported as confirmed and the same profile could be reused while the watcher might still sweep.
+  for (const shape of ["disarm", "sweep"] as const) {
+    const proc = spawnLeader("/bin/sleep", ["300"]);
+    const marker = `user-data-dir=jjsz-t5o2i-reject-${shape}-${crypto.randomUUID()}`;
+    const lines: string[] = [];
+    try {
+      const disarm = attachProcessLifeline(proc, { group: proc.pid, treeMatch: marker }, {
+        spawn: () => fakeWatcher([], { hangs: true, rejectStatus: true }),
+        warn: (line) => lines.push(line),
+        sweepTimeoutMs: 40,
+        settleTimeoutMs: 60,
+      });
+      if (shape === "disarm") {
+        assert(await settlesWithin(disarm(), 5000), "the disarm settles inside its bound");
+      } else {
+        proc.kill("SIGKILL");
+        await proc.status;
+        assert(await until(() => lifelineState(proc)?.state === "fired", 5000), "the exit fired the sweep");
+        assert(await settlesWithin(lifelineState(proc)?.settled, 5000), "the sweep settles inside its bound");
+      }
+      assertEquals(
+        lifelineState(proc)?.cleanupConfirmed,
+        false,
+        `${shape}: a status that rejected is an exit we did NOT observe, so cleanup cannot be confirmed`,
+      );
+      assert(lines.some((line) => line.includes("UNCONFIRMED")), `${shape}: the unconfirmed verdict is reported: ${lines.join(" | ")}`);
+      await assertRejects(
+        () => awaitFiredLifelineSweep(marker),
+        Error,
+        "did not exit within their bound",
+        `${shape}: the profile must be refused, not reused`,
+      );
+    } finally {
+      await reap(proc);
+    }
+  }
+});
+
+Deno.test("lifeline: a same-profile launch WAITS for an in-flight DISARM and then refuses when its watcher's exit stays unproven (t5o2i.2 v8zbu/rm08r)", async () => {
+  // The reviewer's window: a disarm leaves `fired` false, so a guard keyed on `fired` skipped it entirely and let
+  // the launch run while the watcher's exit was still unproven - the 80yqb race, in the disarm window.
+  const proc = spawnLeader("/bin/sleep", ["300"]);
+  const marker = `user-data-dir=jjsz-t5o2i-disarm-race-${crypto.randomUUID()}`;
+  const calls: string[] = [];
+  try {
+    const held: { watcher?: HeldWatcher } = {};
+    const disarm = attachProcessLifeline(proc, { group: proc.pid, treeMatch: marker }, {
+      // The close returns, the watcher's EXIT is held: the transition is genuinely in flight, not merely armed.
+      spawn: () => (held.watcher = fakeWatcher(calls, { holdStatus: true })),
+      warn: () => {},
+      settleTimeoutMs: 250,
+    });
+    const inFlight = disarm();
+    assert(await until(() => calls.length >= 2, 5000), "the disarm reached its close and has not settled");
+    let verdict: "pending" | "resolved" | "rejected" = "pending";
+    // The guard must not decide while the disarm is in flight: a handful of microtasks is deterministic here (the
+    // disarm cannot settle without its timer, so there is no wall-clock race in this assertion).
+    const guard = awaitFiredLifelineSweep(marker).then(() => { verdict = "resolved"; }, () => { verdict = "rejected"; });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    assertEquals(verdict, "pending", "the guard must WAIT for the in-flight disarm, not resolve on it");
+    assert(await settlesWithin(inFlight, 8000), "the disarm settles inside its bound");
+    await guard;
+    assertEquals(verdict, "rejected", "the in-flight disarm's exit stayed unproven, so the launch is refused");
+    assertEquals(lifelineState(proc)?.cleanupConfirmed, false);
+  } finally {
+    await reap(proc);
+  }
+});
+
+Deno.test("lifeline: a same-profile launch WAITS for an in-flight DISARM whose watcher then exits, and is ALLOWED (t5o2i.2 v8zbu control)", async () => {
+  const proc = spawnLeader("/bin/sleep", ["300"]);
+  const marker = `user-data-dir=jjsz-t5o2i-disarm-control-${crypto.randomUUID()}`;
+  const calls: string[] = [];
+  const held: { watcher?: HeldWatcher } = {};
+  try {
+    const disarm = attachProcessLifeline(proc, { group: proc.pid, treeMatch: marker }, {
+      spawn: () => (held.watcher = fakeWatcher(calls, { holdStatus: true })),
+      warn: () => {},
+      settleTimeoutMs: 5000, // generous: the test ends the watcher, not the bound
+    });
+    const inFlight = disarm();
+    assert(await until(() => calls.length >= 2, 5000), "the disarm reached its close and has not settled");
+    let verdict: "pending" | "resolved" | "rejected" = "pending";
+    const guard = awaitFiredLifelineSweep(marker).then(() => { verdict = "resolved"; }, () => { verdict = "rejected"; });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    assertEquals(verdict, "pending", "the guard waits for the disarm rather than deciding on a live transition");
+    held.watcher!.end(); // the watcher exits: its death is proven, so the cleanup is CONFIRMED
+    assert(await settlesWithin(inFlight, 8000), "the disarm settles once its watcher exits");
+    await guard;
+    assertEquals(verdict, "resolved", "a confirmed disarm lets the same-profile launch proceed");
+    assertEquals(lifelineState(proc)?.cleanupConfirmed, true);
+  } finally {
+    held.watcher?.end();
+    await reap(proc);
+  }
+});
+
+Deno.test("lifeline: a DISARM whose watcher never exits is bounded, reported, and quarantines the profile (t5o2i.2)", async () => {
+  const proc = spawnLeader("/bin/sleep", ["300"]);
+  const marker = `user-data-dir=jjsz-t5o2i-disarm-${crypto.randomUUID()}`;
+  const calls: string[] = [];
+  const lines: string[] = [];
+  try {
+    const disarm = attachProcessLifeline(proc, { group: proc.pid, treeMatch: marker }, {
+      spawn: () => fakeWatcher(calls, { uninterruptible: true }),
+      warn: (line) => lines.push(line),
+      sweepTimeoutMs: 40,
+      settleTimeoutMs: 60,
+    });
+    assert(await settlesWithin(disarm(), 5000), "the disarm settles inside its bound even when its watcher never exits");
+    assertEquals(calls, ["kill:SIGKILL", "stdin.close"], "the disarm still kills first and closes the trigger");
+    assertEquals(lifelineState(proc)?.state, "disarmed");
+    assertEquals(lifelineState(proc)?.cleanupConfirmed, false, "the disarm ended without proof the watcher is gone");
+    assertEquals(lines.length, 2, `the two overruns are each reported once: ${lines.join(" | ")}`);
+    assertEqualLines(lines, ["stdin close did not settle", "UNCONFIRMED"]);
+    // A disarmed-but-unconfirmed watcher can also still run its pkill, so the profile is refused too.
+    await assertRejects(() => awaitFiredLifelineSweep(marker), Error, "UNCONFIRMED");
   } finally {
     await reap(proc);
   }
