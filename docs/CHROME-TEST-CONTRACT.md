@@ -267,7 +267,11 @@ alone during jjsz. Each now has a decision rather than an open question:
   on that PROFILE that has left `armed` to settle before it signals anything, which is the same key the sweep
   registry already uses. Pinned by `tests/jjsz-lifeline-runner-exit.test.ts` "4o93n (d)": with the wait removed,
   the teardown's `pkill` fires while the sweep's watcher is still running (red), and with it the teardown starts
-  only after the sweep settles.
+  only after the sweep settles. A wait alone was not enough (review finding `vy15c`): a sweep that ends
+  **UNCONFIRMED** still let the teardown resolve, and a resolved teardown reads as "the profile is clear". The
+  reap now runs anyway - best effort is the point of a teardown - and then the call THROWS naming the profile
+  and the UNCONFIRMED verdict, so the caller never receives a clean it cannot prove. Pinned by
+  `tests/jjsz-lifeline-leader-exit.test.ts` "vy15c".
 - **(e) Another PROCESS's `pkill`/`pgrep` on the same profile can be SIGKILLed by the sweep.** Accepted, no
   change: it fails closed (the teardown throws, the supervisor sidecar names the residue). Serialising across
   processes needs an OS-level lock held for the sweep window and taken by every cleanup path, including the

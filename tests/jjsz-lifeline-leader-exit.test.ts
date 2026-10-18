@@ -999,6 +999,49 @@ Deno.test("lifeline: a sweep that overruns is bounded — the watcher is SIGKILL
   }
 });
 
+Deno.test("vy15c: a handle-less teardown RUNS its reap but refuses to claim UNCONFIRMED cleanup", async () => {
+  // The reviewer's case: my first version only WAITED for the sweep, so an UNCONFIRMED sweep still let the
+  // teardown resolve - and a resolved teardown reads as "the profile is clear", which the sweep cannot
+  // promise. The reap still runs (best effort); what it will not do is claim a clean it cannot prove.
+  const proc = spawnLeader("/bin/sleep", ["300"]);
+  const marker = `user-data-dir=jjsz-vy15c-${crypto.randomUUID()}`;
+  const calls: string[] = [];
+  const teardownSignals: string[] = [];
+  try {
+    attachProcessLifeline(proc, { group: proc.pid, treeMatch: marker }, {
+      spawn: () => fakeWatcher(calls, { uninterruptible: true }),
+      warn: () => {},
+      sweepTimeoutMs: 40,
+      settleTimeoutMs: 60,
+    });
+    proc.kill("SIGKILL");
+    await proc.status;
+    assert(await until(() => lifelineState(proc)?.state === "fired", 5000), "the exit fired the sweep");
+    assert(
+      await settlesWithin(lifelineState(proc)?.settled, 5000),
+      "the sweep settles rather than hanging its teardown",
+    );
+    assertEquals(lifelineState(proc)?.cleanupConfirmed, false, "this watcher never exits: UNCONFIRMED");
+
+    const error = await assertRejects(
+      () => killProcessTree(null, marker, {
+        attempts: 1,
+        intervalMs: 1,
+        signal: (bin, args) => {
+          teardownSignals.push([bin, ...args].join(" "));
+          return Promise.resolve({ code: 1 });
+        },
+      }),
+      Error,
+    );
+    assert(error.message.includes("UNCONFIRMED"), `the refusal names the verdict: ${error.message}`);
+    assert(error.message.includes(marker.slice(0, 20)), `and the profile: ${error.message}`);
+    assert(teardownSignals.length > 0, "the reap itself still ran - the refusal is about the CLAIM, not the work");
+  } finally {
+    await reap(proc);
+  }
+});
+
 Deno.test("lifeline: a watcher that never exits after the SIGKILL is bounded and the sweep ends UNCONFIRMED (t5o2i.2)", async () => {
   const proc = spawnLeader("/bin/sleep", ["300"]);
   const marker = `user-data-dir=jjsz-t5o2i-unconfirmed-${crypto.randomUUID()}`;
