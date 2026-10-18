@@ -239,6 +239,42 @@ On a successful **store** build, `build.mjs` writes `<durable root>/serial-build
 | a UTF-8 locale | `tests/tar-stream.test.ts` lists a Unicode-named archive with the system `tar` | inherited unchanged | `en_US.UTF-8` (ships with macOS; the test sets it for that `tar` call only, because bsdtar escapes Unicode names without one) |
 | a browser | `tests/chrome-profile-location.test.ts`, the journeys and KATs | `/usr/bin/chromium`, or `CAP_CHROMIUM` | `CAP_CHROMIUM`, or a Chrome for Testing build in the puppeteer cache (`scripts/lib/chrome-for-testing.ts` resolves `chrome-mac-arm64` and `chrome-mac-x64`) |
 
+### 6.3a The journey watchdog covers two phases and now says which (qifg4)
+
+The harness arms one 90 s watchdog at `main()` entry, so a run that has not completed an assertion within 90 s
+exits 124 with a frontier named. That budget covers two different phases, and they must not be confused:
+
+- **pre-connect** - profile/evidence setup, the browser launch, the DevTools endpoint fetch and the CDP websocket
+  open. The launch (including the serialized-Chrome queue, whose own wait is `CAP_CHROME_LOCK_WAIT_MS`, 20 min
+  default) is deliberately **excluded** from this budget: `beginLaunchAdmission()` suspends the watchdog and
+  `endLaunchAdmission()` restarts it once the browser is live, because admission has its own bounded verdict
+  (exit 75 + the load numbers) and legitimately outlasts 90 s. That bracket is pinned by `cec16` in
+  `tests/journey-abnormal-exit-frontier.test.ts`.
+- **assertion** - every check after the connect, named by the frontier.
+
+What the budget still covers pre-connect was measured rather than assumed: on this box, the real harness with
+`CAP_JOURNEY_STOP_AFTER` at "extension loaded" reaches a passing first check **6.0 s** after process start, about
+7% of the budget, and the browser's own endpoint wait is hard-bounded at 20 s by the launcher.
+
+The defect qifg4 names is therefore **not** the bound - it is the message. Before the first check nothing has
+COMPLETED, and the timeout attributed the hang to a check: `frontier check: "<the next expected check>"`, i.e. it
+named work that had not started as the thing that hung. `startupPhase` now records which pre-connect step owns the
+armed watchdog - setup, then the DevTools endpoint wait, then the websocket open - and while it is set the message
+says `Hang detected during STARTUP phase "..." - no check had started yet (next expected: ..., last completed:
+...)`. It is cleared when the connect completes and whenever a check takes the frontier.
+
+**The first attempt at this was dead code, and the real run found it** (worth recording because the unit pin did
+not): the branch was guarded by `lastStartedCheck === null`, but the module seeds `lastStartedCheck` with
+`EXPECTED[0]` at load time, so it is never null in the real script - the phase branch could only be reached from a
+fake harness. `CAP_JOURNEY_WATCHDOG_MS=1 deno run -A scripts/chrome-journeys.ts` printed the OLD message and proved
+it. The phase now takes precedence on its own, and the unit harness seeds the frontier exactly as production does,
+so the same mistake cannot pass again.
+
+Bounds are unchanged on purpose: a separate startup bound would duplicate the launcher's endpoint wait and the
+admission's exit-75 verdict, and would false-trip a legitimate serialized-lock queue. Pinned by the `qifg4` tests,
+and demonstrable for real with `CAP_JOURNEY_WATCHDOG_MS=1 deno run -A scripts/chrome-journeys.ts` (exits 124 with
+the STARTUP message above).
+
 ### 6.4 What is not proven, and the residual risks (each is a bead)
 
 This is what the jjsz landing does **not** establish. None of it is a known failing gate; each item is a place where a gate could be weaker than it reads, or where a deliberate trade was made.

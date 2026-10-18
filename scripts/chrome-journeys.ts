@@ -709,6 +709,11 @@ let lastStartedCheck = null;
 
 let watchdogTimer = null;
 let launchAdmissionPending = false;
+// qifg4: which NON-CHECK phase owns the armed watchdog, if any. Before the first assertion runs there is no
+// frontier to name, and the message used to print `frontier check: "null"` - a diagnosis gap, not a bound
+// problem. Naming the phase is the cheap honest fix: the SAME 90 s budget stays in force, it just says what it
+// was waiting for. Set by the pre-connect steps, cleared as soon as a check takes over the frontier.
+let startupPhase = null;
 const WATCHDOG_MS = typeof Deno !== "undefined" && Deno.env
   ? Number(Deno.env.get("CAP_JOURNEY_WATCHDOG_MS") || "90000")
   : 90000;
@@ -718,8 +723,19 @@ function resetWatchdog() {
   if (watchdogTimer) clearTimeout(watchdogTimer);
   if (launchAdmissionPending || WATCHDOG_MS <= 0) return;
   watchdogTimer = setTimeout(() => {
-    const reason = `watchdog timeout: no assertion completed for ${WATCHDOG_MS}ms`;
-    console.error(`\n[JOURNEY WATCHDOG TIMEOUT] Hang detected at frontier check: "${lastStartedCheck}" (last completed: "${lastCompletedCheck}") after ${WATCHDOG_MS}ms`);
+    // The startup phase wins whenever it is set. It cannot be inferred from `lastStartedCheck === null`:
+    // the module seeds that frontier with EXPECTED[0] at load time, so it is NEVER null in the real script - an
+    // inference would have left this branch dead code that only a fake harness could reach (both the unit pin
+    // and the first real run with a 1ms budget proved it: the message named the first check instead).
+    const phase = startupPhase;
+    const reason = phase
+      ? `watchdog timeout: no assertion completed for ${WATCHDOG_MS}ms (during ${phase})`
+      : `watchdog timeout: no assertion completed for ${WATCHDOG_MS}ms`;
+    console.error(
+      phase
+        ? `\n[JOURNEY WATCHDOG TIMEOUT] Hang detected during STARTUP phase "${phase}" - no check had started yet (next expected: "${lastStartedCheck}", last completed: "${lastCompletedCheck}") after ${WATCHDOG_MS}ms`
+        : `\n[JOURNEY WATCHDOG TIMEOUT] Hang detected at frontier check: "${lastStartedCheck}" (last completed: "${lastCompletedCheck}") after ${WATCHDOG_MS}ms`,
+    );
     printAbnormalExitSummary({
       reason,
       lastStartedCheck,
@@ -796,6 +812,7 @@ function check(name, cond, detail) {
   if (typeof resetWatchdog === "function") resetWatchdog();
   if (ran.has(name)) throw new Error(`duplicate assertion: ${name}`);
   lastStartedCheck = name;
+  startupPhase = null;
   ran.add(name);
   const owner = EXPECTED_RED.get(name);
   if (owner && !cond) {
@@ -1431,6 +1448,9 @@ async function writeEvidence(name, bytes) {
 async function main() {
   // Bound pre-launch setup too; beginLaunchAdmission cancels this timer only
   // when the separately bounded fleet-slot/quiet admission actually starts.
+  // qifg4: name the setup phase too. The budget is armed here, so ANY pre-connect hang must name a step - the
+  // profile/evidence dirs and the fixture server included, not just the endpoint wait and the websocket.
+  startupPhase = "preparing the profile, evidence dir and fixture server";
   if (typeof resetWatchdog === "function") resetWatchdog();
   if (typeof EXPECTED !== "undefined" && EXPECTED[0]) {
     console.log(`RUN: ${EXPECTED[0]}`);
@@ -1529,10 +1549,14 @@ async function main() {
     port = launched.port;
     if (launched.lockWaitMs > 0) console.log(`chrome journeys: queued ${launched.lockWaitMs} ms for the serialized-Chrome lock`);
 
+    startupPhase = `waiting for the DevTools endpoint on port ${port}`;
     const version = await fetchJson(`http://127.0.0.1:${port}/json/version`);
+    startupPhase = `opening the CDP websocket to port ${port}`;
     ws = new WebSocket(version.webSocketDebuggerUrl);
     await withTimeout(new Promise((r) => ws.onopen = r), 5000, "ws open");
     cdp = new Cdp(ws);
+    // The connect is done; from here the frontier names the work (qifg4).
+    startupPhase = null;
 
     // Auto-attach to NEW service-worker targets BEFORE they execute (pre-boot
     // audit). waitForDebuggerOnStart pauses a new worker until we enable Runtime

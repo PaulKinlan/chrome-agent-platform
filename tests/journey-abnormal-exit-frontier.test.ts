@@ -367,6 +367,60 @@ Deno.test("9ud9e: resetWatchdog arms timer and clearWatchdog cancels it cleanly"
   assertEquals(exitCalls, 0, "must not have exited");
 });
 
+Deno.test("qifg4: a pre-connect hang NAMES the startup phase instead of frontier \"null\"", async () => {
+  // The diagnosis gap this fixes is narrow and real: with the watchdog armed at main() entry, a hang before the
+  // first assertion printed `frontier check: "null"`, which names nothing. The budget is unchanged on purpose -
+  // a separate startup bound would either duplicate the launcher's own 20 s endpoint wait and the admission's
+  // exit-75 verdict, or false-trip a legitimate serialized-lock queue (CAP_CHROME_LOCK_WAIT_MS is 20 min).
+  const watchdogMatch = source.match(/let watchdogTimer = null;[\s\S]*?function clearWatchdog\(\) \{[\s\S]*?\n\}/);
+  assert(watchdogMatch, "watchdog functions must be found");
+  const exits: number[] = [];
+  const logs: string[] = [];
+  const fakeDeno = {
+    env: { get: (k: string) => k === "CAP_JOURNEY_WATCHDOG_MS" ? "30" : undefined },
+    exit: (code: number) => exits.push(code),
+  };
+  const fakeConsole = {
+    log: (...args: any[]) => logs.push(args.join(" ")),
+    error: (...args: any[]) => logs.push(args.join(" ")),
+  };
+  // The extracted source declares `startupPhase` itself; seed it through the returned setter.
+  const harness = new Function(
+    "Deno", "console", "EXPECTED",
+    `let abnormalReported = false;
+     let lastCompletedCheck = null;
+     // Mirror production exactly: the module seeds this with EXPECTED[0] at load time, so it is never null
+     // pre-connect. An '=== null' guard would therefore be dead code in the real script (qifg4 first attempt).
+     let lastStartedCheck = EXPECTED[0] ?? null;
+     let ran = new Set();
+     ${printMatch[0]}
+     ${watchdogMatch[0]}
+     return { resetWatchdog, setPhase: (p) => { startupPhase = p; }, phase: () => startupPhase };`,
+  )(fakeDeno, fakeConsole, EXPECTED);
+  harness.setPhase("opening the CDP websocket to port 9222");
+  harness.resetWatchdog();
+  await new Promise((r) => setTimeout(r, 120));
+  const text = logs.join("\n");
+  assert(text.includes("STARTUP phase"), `the timeout must name the startup phase: ${text}`);
+  assert(text.includes("opening the CDP websocket"), `and the specific step: ${text}`);
+  assert(!text.includes('frontier check: "null"'), "and must never print a null frontier");
+  assertEquals(exits, [124], "the exit code stays the watchdog's own");
+});
+
+Deno.test("qifg4: main() names each pre-connect step and clears the phase once connected", () => {
+  const main = source.match(/async function main\(\) \{[\s\S]*?startupPhase = null;\n/);
+  assert(main, "main must name the endpoint wait and the ws open, then clear the phase after the connect");
+  const setup = main[0].indexOf("startupPhase = \"preparing the profile, evidence dir and fixture server\"");
+  assert(setup > 0 && main[0].indexOf('if (typeof resetWatchdog === "function") resetWatchdog();') > setup,
+    "the setup phase must be named BEFORE the budget is armed, so no pre-connect hang can print a null frontier");
+  const endpoint = main[0].indexOf("startupPhase = `waiting for the DevTools endpoint");
+  const wsOpen = main[0].indexOf("startupPhase = `opening the CDP websocket");
+  const connect = main[0].indexOf("cdp = new Cdp(ws);");
+  const clear = main[0].indexOf("startupPhase = null;");
+  assert(endpoint > 0 && wsOpen > endpoint && connect > wsOpen && clear > connect,
+    "phases must be named in order and cleared only after the connect");
+});
+
 Deno.test("cec16: pre-launch setup stays watchdog-bounded until launch admission actually begins", () => {
   const main = source.match(/async function main\(\) \{[\s\S]*?const launched = await launchJourneyChrome\(profile\);/);
   assert(main, "main setup and first Chrome launch must be present");
