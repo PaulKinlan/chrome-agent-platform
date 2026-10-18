@@ -238,6 +238,30 @@ On a successful **store** build, `build.mjs` writes `<durable root>/serial-build
 | a UTF-8 locale | `tests/tar-stream.test.ts` lists a Unicode-named archive with the system `tar` | inherited unchanged | `en_US.UTF-8` (ships with macOS; the test sets it for that `tar` call only, because bsdtar escapes Unicode names without one) |
 | a browser | `tests/chrome-profile-location.test.ts`, the journeys and KATs | `/usr/bin/chromium`, or `CAP_CHROMIUM` | `CAP_CHROMIUM`, or a Chrome for Testing build in the puppeteer cache (`scripts/lib/chrome-for-testing.ts` resolves `chrome-mac-arm64` and `chrome-mac-x64`) |
 
+### 6.3a The journey watchdog covers two phases and now says which (qifg4)
+
+The harness arms one 90 s watchdog at `main()` entry, so a run that has not completed an assertion within 90 s
+exits 124 with a frontier named. That budget covers two different phases, and they must not be confused:
+
+- **pre-connect** - profile/evidence setup, the browser launch, the DevTools endpoint fetch and the CDP websocket
+  open. The launch (including the serialized-Chrome queue, whose own wait is `CAP_CHROME_LOCK_WAIT_MS`, 20 min
+  default) is deliberately **excluded** from this budget: `beginLaunchAdmission()` suspends the watchdog and
+  `endLaunchAdmission()` restarts it once the browser is live, because admission has its own bounded verdict
+  (exit 75 + the load numbers) and legitimately outlasts 90 s. That bracket is pinned by `cec16` in
+  `tests/journey-abnormal-exit-frontier.test.ts`.
+- **assertion** - every check after the connect, named by the frontier.
+
+What the budget still covers pre-connect was measured rather than assumed: on this box, the real harness with
+`CAP_JOURNEY_STOP_AFTER` at "extension loaded" reaches a passing first check **6.0 s** after process start, about
+7% of the budget, and the browser's own endpoint wait is hard-bounded at 20 s by the launcher.
+
+The defect qifg4 names is therefore **not** the bound - it is the message. Before the first check there is no
+frontier, and the timeout printed `frontier check: "null"`, which names nothing. `startupPhase` now records which
+pre-connect step owns the armed watchdog (endpoint wait, then websocket open) and the message says
+`Hang detected during STARTUP phase "..." - no check had started yet`. Bounds are unchanged on purpose: a separate
+startup bound would duplicate the launcher's endpoint wait and the admission's exit-75 verdict, and would
+false-trip a legitimate serialized-lock queue. Pinned by the two `qifg4` tests.
+
 ### 6.4 What is not proven, and the residual risks (each is a bead)
 
 This is what the jjsz landing does **not** establish. None of it is a known failing gate; each item is a place where a gate could be weaker than it reads, or where a deliberate trade was made.
