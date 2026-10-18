@@ -10,7 +10,7 @@ import {
 
 const RUN = "exec_ems_custody_run_123456";
 const OTHER_RUN = "exec_ems_custody_run_654321";
-const owner = (runId = RUN, agentId = "hub") => `agent:${runId}:${agentId}`;
+const owner = (runId = RUN, agentId = "hub") => custody.emscriptenJobOwner({ runId, agentId });
 const fileNode = () => ({ kind: "file", bytes: new Uint8Array() });
 const dirNode = () => ({ kind: "directory", children: new Map() });
 
@@ -108,6 +108,31 @@ Deno.test("ltkj.4.3: a foreign sealed input never creates an output or changes o
   await expectCode(custody.allocateEmscriptenJobStreams({ runId: OTHER_RUN, agentId: "named:alice", inputRef, storage }),
     "wasm_stream_authority");
   assertEquals((await listWasmStreamEntries({ storage })).map(({ id }) => id), [inputRef.id]);
+});
+
+Deno.test("7wywc: colon-bearing run/agent tuples have distinct, reversible stream owners", () => {
+  const first = { runId: "acp:aaaaaaaa", agentId: "b:c" };
+  const second = { runId: "acp:aaaaaaaa:b", agentId: "c" };
+  const firstOwner = custody.emscriptenJobOwner(first);
+  const secondOwner = custody.emscriptenJobOwner(second);
+  assert(firstOwner !== secondOwner, "different run/agent tuples must never share a stream owner");
+  for (const { runId, agentId } of [first, second, { runId: RUN, agentId: "named:alice" }]) {
+    const encoded = custody.emscriptenJobOwner({ runId, agentId });
+    assertEquals(encoded.startsWith(`agent:${runId}:|`), true);
+    assertEquals(encoded.slice(`agent:${runId}:|`.length), agentId);
+  }
+});
+
+Deno.test("7wywc: a colliding tuple cannot open or discard another job's streams", async () => {
+  const { storage } = memoryStorage();
+  const first = { runId: "acp:aaaaaaaa", agentId: "b:c" };
+  const second = { runId: "acp:aaaaaaaa:b", agentId: "c" };
+  const job = await setup({ ...first, storage });
+  await expectCode(custody.allocateEmscriptenJobStreams({ ...second, inputRef: job.inputRef, storage }), "wasm_stream_authority");
+  await expectCode(custody.discardEmscriptenJobOutput({ ...second, outputRef: job.outputRef, storage }), "wasm_stream_authority");
+  assertEquals((await listWasmStreamEntries({ storage })).map(({ id }) => id).sort(),
+    [job.inputRef.id, job.outputRef.id].sort(), "foreign owner cannot delete the other job's input or output");
+  await custody.discardEmscriptenJobOutput({ ...first, outputRef: job.outputRef, storage });
 });
 
 Deno.test("ltkj.4.3: seal independently hashes bounded chunks and binds exact run provenance", async () => {
