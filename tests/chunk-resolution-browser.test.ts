@@ -14,9 +14,9 @@ const DIST = `${EXT_DIR}/dist`;
 const { binary: RESOLVED_BIN, tried: TRIED_BINS } = resolveChromiumBinaryReport();
 
 const SURFACES = [
-  { path: "ntp/ntp.html", bundle: "ntp.bundle.js", minChunks: 4 },
-  { path: "sidepanel/sidepanel.html", bundle: "sidepanel.bundle.js", minChunks: 3 },
-  { path: "options/options.html", bundle: "options.bundle.js", minChunks: 4 },
+  { path: "ntp/ntp.html", bundle: "ntp.bundle.js" },
+  { path: "sidepanel/sidepanel.html", bundle: "sidepanel.bundle.js" },
+  { path: "options/options.html", bundle: "options.bundle.js" },
 ];
 
 type MarkerIndex = {
@@ -237,13 +237,23 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
         `${surface.path} document.readyState failed to reach 'complete' within 8s`,
       );
 
-      // 2. Wait until all expected dynamic chunks resolve, in-flight requests drain, and 300ms quiet window elapses
+      // 2. The expected static chunk import graph for this surface bundle, derived from the build's
+      //    own record before the browser was launched (see expectedGraphs above).
+      const expectedGraph = expectedGraphs.get(surface.path)!;
+      assert(expectedGraph.size > 0, `${surface.path} expected graph must not be empty`);
+
+      // 3. Wait until all expected dynamic chunks resolve, in-flight requests drain, and 300ms quiet window elapses.
+      // Under gate load (chrome-agent-platform-30yox), main-thread contention can postpone dynamic-import
+      // dispatch of chunks (like vault-quotas in options); do not prematurely settle while expected chunks remain.
       let settled = false;
-      const settleDeadline = Date.now() + 8000;
+      const settleDeadline = Date.now() + 10000;
       while (Date.now() < settleDeadline) {
         const quietMs = Date.now() - lastActivityTime;
+        const allExpectedLoaded = [...expectedGraph].every((c) =>
+          [...distinctChunkUrls].some((u) => u.includes(c))
+        );
         if (
-          distinctChunkUrls.size >= surface.minChunks &&
+          allExpectedLoaded &&
           inFlightRequests.size === 0 &&
           quietMs >= 300
         ) {
@@ -252,12 +262,15 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
         }
         await new Promise((r) => setTimeout(r, 50));
       }
+      const missingExpected = [...expectedGraph].filter(
+        (c) => ![...distinctChunkUrls].some((u) => u.includes(c)),
+      );
       assert(
         settled,
-        `${surface.path} failed to settle within 8s: distinctChunks=${distinctChunkUrls.size}/${surface.minChunks}, inFlight=[${[...inFlightRequests.values()].join(", ")}], quietMs=${Date.now() - lastActivityTime} (need >=300ms)`,
+        `${surface.path} failed to settle expected chunks within 10s: distinctChunks=${distinctChunkUrls.size}/${expectedGraph.size}, missing=[${missingExpected.join(", ")}], inFlight=[${[...inFlightRequests.values()].join(", ")}], quietMs=${Date.now() - lastActivityTime} (need >=300ms)`,
       );
 
-      // 1. Assert the page URL reached the expected extension target
+      // 4. Assert the page URL reached the expected extension target
       const pageUrl = await client.eval(sessionId, "window.location.href");
       assertEquals(
         pageUrl,
@@ -265,17 +278,12 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
         `Page URL must match expected target for ${surface.path}`,
       );
 
-      // 2. The expected static chunk import graph for this surface bundle, derived from the build's
-      //    own record before the browser was launched (see expectedGraphs above).
-      const expectedGraph = expectedGraphs.get(surface.path)!;
-      assert(expectedGraph.size > 0, `${surface.path} expected graph must not be empty`);
-
-      // 3. Assert zero network failures, zero CSP violations, and zero runtime exceptions
+      // 5. Assert zero network failures, zero CSP violations, and zero runtime exceptions
       assertEquals(networkFailed, [], `No network failures loading ${surface.path}`);
       assertEquals(cspViolations, [], `No CSP violations loading ${surface.path}`);
       assertEquals(runtimeErrors, [], `No runtime exceptions loading ${surface.path}`);
 
-      // 4. Compare loaded dynamic chunk URLs against the expected per-surface import graph
+      // 6. Compare loaded dynamic chunk URLs against the expected per-surface import graph
       const loadedChunkNames = new Set(
         [...distinctChunkUrls].map((u) => {
           const m = u.match(/\/dist\/chunks\/([a-zA-Z0-9._-]+\.js)/);
@@ -285,7 +293,7 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
       assertEquals(
         [...loadedChunkNames].sort(),
         [...expectedGraph].sort(),
-        `Loaded chunks for ${surface.path} must match the expected per-surface import graph exactly`,
+        `Loaded chunks for ${surface.path} must match the expected per-surface import graph exactly. Missing: ${missingExpected.join(", ")}`,
       );
 
       console.log(`Loaded ${surface.path} successfully. Chunks verified against import graph: ${[...loadedChunkNames].join(", ")}`);

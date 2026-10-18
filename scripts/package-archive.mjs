@@ -66,12 +66,22 @@ async function sha256File(file) {
   return createHash("sha256").update(await readFile(file)).digest("hex");
 }
 
-function trackedExtensionIndex(root) {
-  const raw = execFileSync(
-    "git",
-    ["ls-files", "--stage", "-z", "--", "extension"],
-    { cwd: root, encoding: "buffer", maxBuffer: 16 * 1024 * 1024 },
-  );
+export const MAX_ARCHIVE_BUFFER_BYTES = 128 * 1024 * 1024;
+
+export function trackedExtensionIndex(root, { maxBuffer = MAX_ARCHIVE_BUFFER_BYTES } = {}) {
+  let raw;
+  try {
+    raw = execFileSync(
+      "git",
+      ["ls-files", "--stage", "-z", "--", "extension"],
+      { cwd: root, encoding: "buffer", maxBuffer },
+    );
+  } catch (error) {
+    if (error.code === "ENOBUFS" || error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+      throw packageError(`git ls-files exceeded buffer capacity (${maxBuffer} bytes): ${error.message}`);
+    }
+    throw error;
+  }
   const rows = raw.toString("utf8").split("\0").filter(Boolean);
   return rows.map((row) => {
     const match = row.match(/^(\d{6}) ([0-9a-f]{40,64}) (\d)\t(.+)$/u);
@@ -411,15 +421,25 @@ async function runZipToFile(
 
 export async function verifyPackageArchive(
   { archive, expected, scratchParent },
+  { maxBuffer = MAX_ARCHIVE_BUFFER_BYTES } = {},
 ) {
   const archiveInfo = await lstat(archive).catch(() => null);
   if (!archiveInfo?.isFile() || archiveInfo.isSymbolicLink()) {
     throw packageError("ZIP is missing, special, or a symlink");
   }
-  const { stdout } = await execFileAsync("unzip", ["-Z1", archive], {
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-  });
+  let stdout;
+  try {
+    const res = await execFileAsync("unzip", ["-Z1", archive], {
+      encoding: "utf8",
+      maxBuffer,
+    });
+    stdout = res.stdout;
+  } catch (error) {
+    if (error.code === "ENOBUFS" || error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+      throw packageError(`unzip -Z1 exceeded buffer capacity (${maxBuffer} bytes): ${error.message}`);
+    }
+    throw error;
+  }
   const names = stdout.split(/\r?\n/u).filter(Boolean);
   if (new Set(names).size !== names.length) {
     throw packageError("ZIP contains duplicate entries");
@@ -436,9 +456,16 @@ export async function verifyPackageArchive(
     path.join(scratchParent, ".cap-package-verify-"),
   );
   try {
-    await execFileAsync("unzip", ["-q", archive, "-d", extract], {
-      maxBuffer: 16 * 1024 * 1024,
-    });
+    try {
+      await execFileAsync("unzip", ["-q", archive, "-d", extract], {
+        maxBuffer,
+      });
+    } catch (error) {
+      if (error.code === "ENOBUFS" || error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+        throw packageError(`unzip -q exceeded buffer capacity (${maxBuffer} bytes): ${error.message}`);
+      }
+      throw error;
+    }
     compareInventory(
       await inventoryDirectory(extract),
       expected,

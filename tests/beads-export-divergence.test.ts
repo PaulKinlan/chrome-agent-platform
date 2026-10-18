@@ -17,6 +17,7 @@
 // ENOBUFS`).
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { parse as parseJs } from "npm:acorn";
 import { spawn, spawnSync } from "node:child_process";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -154,13 +155,181 @@ Deno.test("re8v7: the checker refuses unknown arguments before it reads any expo
   assertStringIncludes(text, "cannot verify committed IDs");
 });
 
+function stripComments(source: string): string {
+  // Strip block comments /* ... */
+  const withoutBlock = source.replace(/\/\*[\s\S]*?\*\//g, "");
+  // Strip line comments // to end of line
+  return withoutBlock.replace(/\/\/.*$/gm, "");
+}
+
 Deno.test("re8v7: the checker buffers no fixed stdout ceiling", async () => {
   // The functional cases above prove the current read works at 16 MiB+; this pin
   // is what stops the cheap "raise the constant" repair from re-introducing a
   // date-shaped bound (7unpg tracks the ratchet itself, not this read).
   const source = await readFile(CHECKER, "utf8");
-  // Comments are allowed to NAME the removed option; executable code is not.
-  const code = source.split("\n").filter((line) => !line.trimStart().startsWith("//")).join("\n");
+  // Comments (line, block, trailing) are allowed to NAME the removed option; executable code is not.
+  const code = stripComments(source);
   assert(!/maxBuffer/.test(code), "no spawn option may cap stdout at a fixed size");
   assert(/spawn\(/.test(code), "the checker must collect stdout from a streamed child");
 });
+
+Deno.test("o3i89 / nabuw / moomc: buffer capacity constants are bounded finite numbers >= 1MiB and within design ceilings", async () => {
+  const { MAX_GIT_BUFFER_BYTES: gitLandingCap } = await import("../scripts/beads-landing-link.mjs");
+  const { MAX_GIT_BUFFER_BYTES: gitOwedCap } = await import("../scripts/check-owed-changelog.mjs");
+  const { MAX_ARCHIVE_BUFFER_BYTES: archiveCap } = await import("../scripts/package-archive.mjs");
+  const { PS_MAX_BUFFER_BYTES: psCap, FLOCK_MAX_BUFFER_BYTES: flockCap } = await import("../scripts/security-suite-custody.mjs");
+
+  for (const [name, cap, maxExpected] of [
+    ["beads-landing-link MAX_GIT_BUFFER_BYTES", gitLandingCap, 256 * 1024 * 1024],
+    ["check-owed-changelog MAX_GIT_BUFFER_BYTES", gitOwedCap, 256 * 1024 * 1024],
+    ["package-archive MAX_ARCHIVE_BUFFER_BYTES", archiveCap, 128 * 1024 * 1024],
+    ["security-suite-custody PS_MAX_BUFFER_BYTES", psCap, 32 * 1024 * 1024],
+    ["security-suite-custody FLOCK_MAX_BUFFER_BYTES", flockCap, 1024 * 1024],
+  ] as const) {
+    assert(typeof cap === "number", `${name} must be a number`);
+    assert(Number.isFinite(cap), `${name} must be finite (not Infinity)`);
+    assert(cap >= 1024 * 1024, `${name} must be at least 1MiB`);
+    assert(cap <= maxExpected, `${name} (${cap}) must not exceed design ceiling of ${maxExpected} bytes`);
+  }
+});
+
+Deno.test("nabuw / o3i89: buffer overflow triggers reachable capacity errors with clear diagnostics", async () => {
+  const { execGit: execGitLanding } = await import("../scripts/beads-landing-link.mjs");
+  const { execGit: execGitOwed } = await import("../scripts/check-owed-changelog.mjs");
+  const { makePsRun, readProcIdentity, probeCanonicalLockHeld } = await import("../scripts/security-suite-custody.mjs");
+
+  // 1. beads-landing-link execGit
+  try {
+    execGitLanding(process.cwd(), ["status"], { maxBuffer: 1 });
+    assert(false, "execGitLanding should have thrown on buffer overflow");
+  } catch (err: any) {
+    assert(err.message.includes("exceeded buffer capacity"), `Expected capacity error, got: ${err.message}`);
+  }
+
+  // 2. check-owed-changelog execGit
+  try {
+    execGitOwed(process.cwd(), ["status"], { maxBuffer: 1 });
+    assert(false, "execGitOwed should have thrown on buffer overflow");
+  } catch (err: any) {
+    assert(err.message.includes("exceeded buffer capacity"), `Expected capacity error, got: ${err.message}`);
+  }
+
+  // 3. security-suite-custody makePsRun / readProcIdentity
+  const tinyPsRun = makePsRun(5000, 1);
+  try {
+    await readProcIdentity(process.pid, { hasProc: false, run: tinyPsRun });
+    assert(false, "readProcIdentity should have thrown ProcessUnreadableError on buffer overflow");
+  } catch (err: any) {
+    assert(err.message.includes("exceeded buffer capacity"), `Expected capacity error, got: ${err.message}`);
+  }
+
+  // 4. security-suite-custody probeCanonicalLockHeld
+  const enobufsFlock = async () => {
+    const error = new Error("buffer overflow") as any;
+    error.code = "ENOBUFS";
+    throw error;
+  };
+  const lockVerdict = await probeCanonicalLockHeld("/dev/null", enobufsFlock);
+  assert(lockVerdict?.includes("exceeded buffer capacity"), `Expected capacity error verdict, got: ${lockVerdict}`);
+
+  // 5. package-archive trackedExtensionIndex
+  const { trackedExtensionIndex, verifyPackageArchive } = await import("../scripts/package-archive.mjs");
+  try {
+    trackedExtensionIndex(process.cwd(), { maxBuffer: 1 });
+    assert(false, "trackedExtensionIndex should have thrown on buffer overflow");
+  } catch (err: any) {
+    assert(err.message.includes("exceeded buffer capacity"), `Expected capacity error, got: ${err.message}`);
+  }
+
+  // 6. package-archive verifyPackageArchive (unzip -Z1 capacity guard)
+  const scratch = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-beads-divergence-" });
+  const tmpZip = `${scratch}/test.zip`;
+  try {
+    const zipCmd = new Deno.Command("zip", { args: ["-q", tmpZip, "package.json"] });
+    const { code } = await zipCmd.output();
+    assert(code === 0, "zip creation failed");
+    try {
+      await verifyPackageArchive(
+        { archive: tmpZip, expected: [], scratchParent: scratch },
+        { maxBuffer: 1 },
+      );
+      assert(false, "verifyPackageArchive should have thrown on buffer overflow");
+    } catch (err: any) {
+      assert(err.message.includes("exceeded buffer capacity"), `Expected capacity error, got: ${err.message}`);
+    }
+  } finally {
+    await Deno.remove(scratch, { recursive: true }).catch(() => {});
+  }
+
+  // 7. package-archive source code does not use unbounded maxBuffer (05x0v, o3vrq, wh98h, stvca, 8gnu0, moomc).
+  // Uses AST parsing so comments, string literals, quoted keys, default parameters, and constant bounds are strictly evaluated.
+  const packageArchiveSrc = await Deno.readTextFile(new URL("../scripts/package-archive.mjs", import.meta.url));
+  const ast = parseJs(packageArchiveSrc, { ecmaVersion: "latest", sourceType: "module" });
+  function evalStaticNumeric(node: any): number {
+    if (!node) return NaN;
+    if (node.type === "Literal" && typeof node.value === "number") return node.value;
+    if (node.type === "UnaryExpression" && node.operator === "-" && node.argument) {
+      return -evalStaticNumeric(node.argument);
+    }
+    if (node.type === "BinaryExpression") {
+      const left = evalStaticNumeric(node.left);
+      const right = evalStaticNumeric(node.right);
+      if (node.operator === "*") return left * right;
+      if (node.operator === "+") return left + right;
+      if (node.operator === "-") return left - right;
+      if (node.operator === "/") return left / right;
+      if (node.operator === "**") return left ** right;
+    }
+    return NaN;
+  }
+  let foundArchiveBufferConstant = false;
+  function walk(node: any) {
+    if (!node || typeof node !== "object") return;
+    if (node.type === "VariableDeclarator" && node.id?.name === "MAX_ARCHIVE_BUFFER_BYTES") {
+      foundArchiveBufferConstant = true;
+      const declaredBytes = evalStaticNumeric(node.init);
+      assert(
+        Number.isFinite(declaredBytes) && declaredBytes >= 1024 * 1024 && declaredBytes <= 128 * 1024 * 1024,
+        `scripts/package-archive.mjs MAX_ARCHIVE_BUFFER_BYTES declaration must be statically bounded between 1MiB and 128MiB, got ${declaredBytes}`,
+      );
+    }
+    if (node.type === "AssignmentExpression") {
+      const targetName = node.left.type === "Identifier" ? node.left.name : null;
+      assert(
+        targetName !== "maxBuffer" && targetName !== "MAX_ARCHIVE_BUFFER_BYTES",
+        `scripts/package-archive.mjs must not reassign ${targetName} via AssignmentExpression`,
+      );
+    }
+    if (node.type === "Property") {
+      const keyName = node.key.type === "Identifier" ? node.key.name : node.key.value;
+      if (keyName === "maxBuffer") {
+        if (node.value.type === "Identifier") {
+          assert(
+            ["maxBuffer", "MAX_ARCHIVE_BUFFER_BYTES"].includes(node.value.name),
+            `scripts/package-archive.mjs Property maxBuffer must bind to maxBuffer or MAX_ARCHIVE_BUFFER_BYTES, got identifier ${node.value.name}`,
+          );
+        } else if (node.value.type === "AssignmentPattern") {
+          assert(
+            node.value.right.type === "Identifier" && node.value.right.name === "MAX_ARCHIVE_BUFFER_BYTES",
+            "scripts/package-archive.mjs Property maxBuffer default must bind to MAX_ARCHIVE_BUFFER_BYTES",
+          );
+        } else {
+          assert(
+            false,
+            `scripts/package-archive.mjs Property maxBuffer must bind to maxBuffer or MAX_ARCHIVE_BUFFER_BYTES, got ${node.value.type}`,
+          );
+        }
+      }
+    }
+    for (const key of Object.keys(node)) {
+      if (Array.isArray(node[key])) {
+        for (const child of node[key]) walk(child);
+      } else if (node[key] && typeof node[key] === "object") {
+        walk(node[key]);
+      }
+    }
+  }
+  walk(ast);
+  assert(foundArchiveBufferConstant, "scripts/package-archive.mjs must declare MAX_ARCHIVE_BUFFER_BYTES");
+});
+
