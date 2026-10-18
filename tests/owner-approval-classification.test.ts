@@ -49,6 +49,9 @@ const APPROVAL_FACTORIES = new Map([
   ["createFsGrantRoutes", ["routes/fs-grants.js", "fsGrantRoutes", 0]],
   ["createAgentScheduleRoutes", ["routes/agent-schedule.js", "agentScheduleRoutes", 0]],
   ["createNamedAgentDeleteGate", ["routes/agent-schedule.js", null, 1]],
+  // chrome-agent-platform-atxc6: the system-hooks domain moved out of the monolith. Its factory takes the
+  // approval seam as its FIRST deps property and is composed into `hooksRoutes`.
+  ["createHooksRoutes", ["routes/hooks.js", "hooksRoutes", 0]],
 ]);
 
 function isApprovedInjection(node, ancestors, file) {

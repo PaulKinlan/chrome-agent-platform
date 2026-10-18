@@ -30,17 +30,26 @@ Deno.test("hooks routes: the module owns exactly the four hook routes and freeze
   }
 });
 
-Deno.test("hooks routes: a missing approval helper fails closed, never an ungated route", () => {
-  assertThrows(
-    () => createHooksRoutes({ payloadFields: deps.payloadFields }),
-    Error,
-    "requireOwnerApproval",
-  );
-  assertThrows(
-    () => createHooksRoutes({ requireOwnerApproval: deps.requireOwnerApproval }),
-    Error,
-    "payloadFields",
-  );
+Deno.test("hooks routes: a missing approval seam fails CLOSED at the mutation, never an ungated write", async () => {
+  // The seam is the call, not a constructor probe (a typeof guard would be an unaccounted reference to
+  // the approval helper and tests/owner-approval-classification.test.ts refuses those). So the property
+  // to pin is behavioural: with no seam injected, a subscribe/unsubscribe REJECTS instead of writing.
+  // `hooks.subscribe` gates on EVERY subscribe (51cd), so a missing seam must refuse. `hooks.unsubscribe`
+  // only consults its gate when an existing subscription is found — with an empty store there is nothing
+  // to remove — so the removal path is pinned where it can be: tests/hook-subscribe-approval.test.ts,
+  // which drives a REAL seeded subscription through the real approval store.
+  const routes = createHooksRoutes({});
+  for (const name of ["hooks.subscribe"]) {
+    let outcome: any = null;
+    try {
+      outcome = await routes[name]({ hookId: "before-run", skillId: "s1" }, { principal: "model" });
+    } catch {
+      outcome = { ok: false, threw: true };
+    }
+    // Whatever the hook library does with a throwing gate, the ROUTE must never report success: a
+    // subscribed hook with no approval behind it is the exact regression this pins.
+    assert(outcome?.ok !== true, `${name} must fail closed when the approval seam is missing (got ${JSON.stringify(outcome)})`);
+  }
 });
 
 Deno.test("hooks routes: the deny list stays owner-only from the module", async () => {

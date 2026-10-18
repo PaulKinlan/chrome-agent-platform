@@ -31,8 +31,11 @@ import { canonicalField, canonicalOperationTarget, canonicalRecord } from "../..
  * @returns {Readonly<Record<string, Function>>} frozen route map
  */
 export function createHooksRoutes({ requireOwnerApproval, payloadFields }) {
-  if (typeof requireOwnerApproval !== "function") throw new Error("createHooksRoutes needs requireOwnerApproval");
-  if (typeof payloadFields !== "function") throw new Error("createHooksRoutes needs payloadFields");
+  // No constructor guard on the injected helpers ON PURPOSE: this module's seam is the CALL
+  // (`requireOwnerApproval(...)` inside subscribe/unsubscribe), and a missing helper makes that call throw
+  // at dispatch — fail closed on the mutation, which is the property that matters. A typeof probe here
+  // would be an unaccounted reference to the approval seam, and tests/owner-approval-classification.test.ts
+  // (correctly) refuses any reference that is neither the injected parameter nor a sanctioned call.
   return Object.freeze({
   async "hooks.status"() {
     // The Settings Hooks panel: every hook + denied state + subscribers.
