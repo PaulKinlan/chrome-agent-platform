@@ -12,7 +12,7 @@
 // with the zombie check removed entirely — proving nothing. Two assertions guard that: kill(pid, 0)
 // must succeed against the fixture (the trap the old code fell into) and the recorded start must
 // equal the zombie's current start (so reuse cannot be the reason it is dead).
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   acquireBuildLock,
   buildOwnerIdentity,
@@ -21,10 +21,13 @@ import {
   holderIsDead,
   isKnownBoot,
   LOCK_DIRNAME,
+  lockOwnerVerdict,
+  LOCK_VERDICT,
   machineBootId,
   OWNERLESS_STALE_MS,
   parseProcStat,
   procStatFields,
+  PS_START_BASIS,
   UNKNOWN_BOOT,
 } from "../scripts/lib/build-lock.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
@@ -403,4 +406,115 @@ Deno.test("the refusal is bounded: the default budget is the documented 48 x 500
   assertEquals(DEFAULT_ATTEMPTS, 48);
   assertEquals(DEFAULT_INTERVAL_MS, 500);
   assertEquals(DEFAULT_ATTEMPTS * DEFAULT_INTERVAL_MS, 24_000, "24s bounded refusal");
+});
+
+// chrome-agent-platform-khkqz (the residual after qo3u8 (b)): a pre-upgrade lock is not STEALABLE any
+// more — the reviewer's C-locale local-zone repro is pinned in tests/qo3u8-fail-closed-tradeoffs.test.ts —
+// but the refusal was SILENT about why. acquireBuildLock threw "another LIVE build (pid N) ... is not
+// dead" for a holder it never proved live: the recorded start has no provenance marker, so the pid-reuse
+// compare is skipped and the holder is merely UNKNOWN. On a pid that has since been reused by an
+// unrelated process (the ordinary stale-lock case) that message sends the operator to inspect a pid that
+// is not the holder, and the lock waits out the whole bounded refusal saying nothing useful.
+//
+// So the decision now reports WHAT it decided and the refusal carries a typed code. This test is the
+// falsifier for that: it asserts the verdict and the code, which is exactly what the old code did not
+// have.
+Deno.test("khkqz: a pre-pin owner is UNKNOWN, and the refusal says so with a TYPED reason", async () => {
+  const root = await tmpRoot("prepin");
+  try {
+    // The owner file a PRE-UPGRADE writer leaves: canonical C-locale text, NO startBasis marker. The
+    // same live pid now reads ten minutes earlier under PS_ENV (TZ=UTC), so a shape comparison reads
+    // pid reuse — the steal this provenance rule removes.
+    const prePin = {
+      pid: 4321,
+      token: "pre-pin-token",
+      at: Date.now(),
+      start: "Wed Oct 7 13:10:01 2026",
+      boot: machineBootId(),
+    };
+    await writeLock(root, prePin);
+    const livenessDeps = {
+      kill: () => {},
+      procStat: () => ({ ok: true, state: "S", start: "Wed Oct 7 12:10:01 2026" }),
+    };
+
+    const verdict = await lockOwnerVerdict(prePin, livenessDeps);
+    assertEquals(verdict.dead, false, "a start we cannot place is not evidence of death");
+    assertEquals(
+      verdict.reason,
+      LOCK_VERDICT.START_BASIS_UNKNOWN,
+      "the verdict must name the unverifiable provenance, not report a generic live holder",
+    );
+
+    const ours = buildOwnerIdentity();
+    const err = (await assertRejects(
+      () => acquireBuildLock({ root, owner: ours, attempts: 1, intervalMs: 1, livenessDeps }),
+    )) as Error & { code?: string; reason?: string };
+    assertEquals(
+      err.code,
+      "LOCK_OWNER_PROVENANCE_UNKNOWN",
+      "the refusal must be TYPED: a pre-pin lock is not a proven live build",
+    );
+    assertEquals(
+      err.reason,
+      LOCK_VERDICT.START_BASIS_UNKNOWN,
+      "the typed refusal must carry the reason the decision reached",
+    );
+    assertStringIncludes(String(err.message), "provenance");
+    assert(
+      !/another LIVE build/.test(String(err.message)),
+      "the message must not claim a LIVE build it never proved",
+    );
+    assertEquals(await lockToken(root), "pre-pin-token", "and the pre-pin lock must be untouched");
+  } finally {
+    await Deno.remove(root, { recursive: true }).catch(() => {});
+  }
+});
+
+// The fail-closed rule above must not be blanket: a lock written by THIS writer carries the marker, so
+// a changed start is still provable pid reuse and the lock must still be reclaimable — otherwise every
+// stale MACOS-style lock would need a human, and the transition would never end.
+Deno.test("khkqz control: a MARKED lock with a changed start is still reclaimable, and a live one is refused with its own code", async () => {
+  const root = await tmpRoot("marked");
+  try {
+    const reused = {
+      pid: 4322,
+      token: "marked-stale",
+      at: Date.now(),
+      start: "Wed Oct 7 12:10:01 2026",
+      startBasis: PS_START_BASIS,
+      boot: machineBootId(),
+    };
+    await writeLock(root, reused);
+    const livenessDeps = {
+      kill: () => {},
+      procStat: () => ({ ok: true, state: "S", start: "Wed Oct 7 13:10:01 2026" }),
+    };
+    const verdict = await lockOwnerVerdict(reused, livenessDeps);
+    assertEquals(verdict.dead, true, "a marked lock with a different start IS pid reuse");
+    assertEquals(verdict.reason, LOCK_VERDICT.PID_REUSED);
+
+    const ours = buildOwnerIdentity();
+    await acquireBuildLock({ root, owner: ours, attempts: 1, intervalMs: 1, livenessDeps });
+    assertEquals(await lockToken(root), ours.token, "the marked stale lock must be reclaimed");
+
+    // And the live case keeps BOTH its wording and its own typed code.
+    const liveRoot = await tmpRoot("marked-live");
+    try {
+      const live = { ...buildOwnerIdentity(), token: "marked-live-token" };
+      await writeLock(liveRoot, live);
+      const liveErr = (await assertRejects(
+        () => acquireBuildLock({ root: liveRoot, owner: buildOwnerIdentity(), attempts: 1, intervalMs: 1 }),
+        Error,
+        "another LIVE build",
+      )) as Error & { code?: string; reason?: string };
+      assertEquals(liveErr.code, "LOCK_HOLDER_ALIVE");
+      assertEquals(liveErr.reason, LOCK_VERDICT.HOLDER_LIVE);
+      assertEquals(await lockToken(liveRoot), "marked-live-token", "a live lock is never touched");
+    } finally {
+      await Deno.remove(liveRoot, { recursive: true }).catch(() => {});
+    }
+  } finally {
+    await Deno.remove(root, { recursive: true }).catch(() => {});
+  }
 });
