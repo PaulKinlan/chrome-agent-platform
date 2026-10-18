@@ -64,6 +64,16 @@ Deno.test("select-tests: a changed source file selects its direct importer test"
   );
 });
 
+Deno.test("ps2x8: changing build script selects tests/build-parallel-discipline.test.ts", () => {
+  const reverse = buildReverseGraph();
+  const buildScript = ["build", "mjs"].join(".");
+  const selected = selectTestFiles([buildScript], reverse);
+  assert(
+    selected.includes("tests/build-parallel-discipline.test.ts"),
+    "build-parallel-discipline.test.ts must be selected when build script changes",
+  );
+});
+
 Deno.test("select-tests: changed test files always run themselves", () => {
   const selected = selectTestFiles(["tests/security.test.ts"], null);
   assert(selected.includes("tests/security.test.ts"), "a changed test file must run itself");

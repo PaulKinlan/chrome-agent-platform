@@ -219,6 +219,10 @@ export const SOURCE_INSPECTING_GUARDS = [
   // are still in SCANNER_EXCLUSIONS with their reasons.
   "tests/wasm-package-authority-static.test.ts",
   "tests/heavy-gate-slot-static.test.ts",
+  // chrome-agent-platform-ps2x8: parses build.mjs and package-archive.mjs as AST data to enforce
+  // parallel build discipline (settleAll fan-out, writeBuildOnceRecord call site, version-GC grace,
+  // bounded child execution). Has no static import edge to build.mjs, so it belongs in ALWAYS_ON.
+  "tests/build-parallel-discipline.test.ts",
 ];
 
 /**
