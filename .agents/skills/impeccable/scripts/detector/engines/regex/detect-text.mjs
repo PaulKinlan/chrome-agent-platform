@@ -12,6 +12,19 @@ import { profileFindings, profileStep } from '../../profile/profiler.mjs';
 // Regex fallback (non-HTML files: CSS, JSX, TSX, etc.)
 // ---------------------------------------------------------------------------
 
+// Tailwind's text-* scale is a fixed vocabulary and the analyzer below runs once
+// per file, so each class matcher is compiled once per process instead of once
+// per class per file (13 compiles x every scanned file; chrome-agent-platform-c1ug5).
+// No flags, so `.test` on a shared instance stays stateless.
+const TW_TEXT_SCALE = { 'text-xs': 12, 'text-sm': 14, 'text-base': 16, 'text-lg': 18, 'text-xl': 20, 'text-2xl': 24, 'text-3xl': 30, 'text-4xl': 36, 'text-5xl': 48, 'text-6xl': 60, 'text-7xl': 72, 'text-8xl': 96, 'text-9xl': 128 };
+let twTextMatchers = null;
+function twTextMatchersList() {
+  if (!twTextMatchers) {
+    twTextMatchers = Object.entries(TW_TEXT_SCALE).map(([cls, px]) => [new RegExp(`\\b${cls}\\b`), px]);
+  }
+  return twTextMatchers;
+}
+
 const hasRounded = (line) =>
   /\brounded(?:-\w+)?\b/.test(line.replace(/\brounded-none\b/g, ''));
 const hasBorderRadius = (line) => /border-radius/i.test(line);
@@ -474,8 +487,7 @@ const REGEX_ANALYZERS = [
       sizes.add(Math.round((m[2] === 'px' ? +m[1] : +m[1] * REM) * 10) / 10);
       sizes.add(Math.round((m[4] === 'px' ? +m[3] : +m[3] * REM) * 10) / 10);
     }
-    const TW = { 'text-xs': 12, 'text-sm': 14, 'text-base': 16, 'text-lg': 18, 'text-xl': 20, 'text-2xl': 24, 'text-3xl': 30, 'text-4xl': 36, 'text-5xl': 48, 'text-6xl': 60, 'text-7xl': 72, 'text-8xl': 96, 'text-9xl': 128 };
-    for (const [cls, px] of Object.entries(TW)) { if (new RegExp(`\\b${cls}\\b`).test(content)) sizes.add(px); }
+    for (const [matcher, px] of twTextMatchersList()) { if (matcher.test(content)) sizes.add(px); }
     if (sizes.size < 3) return [];
     const sorted = [...sizes].sort((a, b) => a - b);
     const ratio = sorted[sorted.length - 1] / sorted[0];
