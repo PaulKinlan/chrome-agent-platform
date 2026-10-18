@@ -723,13 +723,17 @@ function resetWatchdog() {
   if (watchdogTimer) clearTimeout(watchdogTimer);
   if (launchAdmissionPending || WATCHDOG_MS <= 0) return;
   watchdogTimer = setTimeout(() => {
-    const phase = lastStartedCheck === null ? startupPhase : null;
+    // The startup phase wins whenever it is set. It cannot be inferred from `lastStartedCheck === null`:
+    // the module seeds that frontier with EXPECTED[0] at load time, so it is NEVER null in the real script - an
+    // inference would have left this branch dead code that only a fake harness could reach (both the unit pin
+    // and the first real run with a 1ms budget proved it: the message named the first check instead).
+    const phase = startupPhase;
     const reason = phase
       ? `watchdog timeout: no assertion completed for ${WATCHDOG_MS}ms (during ${phase})`
       : `watchdog timeout: no assertion completed for ${WATCHDOG_MS}ms`;
     console.error(
       phase
-        ? `\n[JOURNEY WATCHDOG TIMEOUT] Hang detected during STARTUP phase "${phase}" - no check had started yet (last completed: "${lastCompletedCheck}") after ${WATCHDOG_MS}ms`
+        ? `\n[JOURNEY WATCHDOG TIMEOUT] Hang detected during STARTUP phase "${phase}" - no check had started yet (next expected: "${lastStartedCheck}", last completed: "${lastCompletedCheck}") after ${WATCHDOG_MS}ms`
         : `\n[JOURNEY WATCHDOG TIMEOUT] Hang detected at frontier check: "${lastStartedCheck}" (last completed: "${lastCompletedCheck}") after ${WATCHDOG_MS}ms`,
     );
     printAbnormalExitSummary({
@@ -1444,6 +1448,9 @@ async function writeEvidence(name, bytes) {
 async function main() {
   // Bound pre-launch setup too; beginLaunchAdmission cancels this timer only
   // when the separately bounded fleet-slot/quiet admission actually starts.
+  // qifg4: name the setup phase too. The budget is armed here, so ANY pre-connect hang must name a step - the
+  // profile/evidence dirs and the fixture server included, not just the endpoint wait and the websocket.
+  startupPhase = "preparing the profile, evidence dir and fixture server";
   if (typeof resetWatchdog === "function") resetWatchdog();
   if (typeof EXPECTED !== "undefined" && EXPECTED[0]) {
     console.log(`RUN: ${EXPECTED[0]}`);

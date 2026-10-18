@@ -389,7 +389,9 @@ Deno.test("qifg4: a pre-connect hang NAMES the startup phase instead of frontier
     "Deno", "console", "EXPECTED",
     `let abnormalReported = false;
      let lastCompletedCheck = null;
-     let lastStartedCheck = null;
+     // Mirror production exactly: the module seeds this with EXPECTED[0] at load time, so it is never null
+     // pre-connect. An '=== null' guard would therefore be dead code in the real script (qifg4 first attempt).
+     let lastStartedCheck = EXPECTED[0] ?? null;
      let ran = new Set();
      ${printMatch[0]}
      ${watchdogMatch[0]}
@@ -408,6 +410,9 @@ Deno.test("qifg4: a pre-connect hang NAMES the startup phase instead of frontier
 Deno.test("qifg4: main() names each pre-connect step and clears the phase once connected", () => {
   const main = source.match(/async function main\(\) \{[\s\S]*?startupPhase = null;\n/);
   assert(main, "main must name the endpoint wait and the ws open, then clear the phase after the connect");
+  const setup = main[0].indexOf("startupPhase = \"preparing the profile, evidence dir and fixture server\"");
+  assert(setup > 0 && main[0].indexOf('if (typeof resetWatchdog === "function") resetWatchdog();') > setup,
+    "the setup phase must be named BEFORE the budget is armed, so no pre-connect hang can print a null frontier");
   const endpoint = main[0].indexOf("startupPhase = `waiting for the DevTools endpoint");
   const wsOpen = main[0].indexOf("startupPhase = `opening the CDP websocket");
   const connect = main[0].indexOf("cdp = new Cdp(ws);");
