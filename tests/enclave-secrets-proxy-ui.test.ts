@@ -310,8 +310,11 @@ Deno.test("vyhl Part D: options.html contains all required Web services architec
   assertStringIncludes(html, 'id="vault-quotas-warning"', "#vault-quotas-warning alert element must exist");
   assertStringIncludes(html, 'id="vault-quotas-status"', "#vault-quotas-status message element must exist");
   assertStringIncludes(html, 'id="vault-quota-add-service"', "#vault-quota-add-service input must exist");
+  assertStringIncludes(html, 'aria-label="Service identifier"', "#vault-quota-add-service must have aria-label");
   assertStringIncludes(html, 'id="vault-quota-add-limit"', "#vault-quota-add-limit input must exist");
+  assertStringIncludes(html, 'aria-label="Quota limit"', "#vault-quota-add-limit must have aria-label");
   assertStringIncludes(html, 'id="vault-quota-add-window"', "#vault-quota-add-window select must exist");
+  assertStringIncludes(html, 'aria-label="Quota window"', "#vault-quota-add-window must have aria-label");
   assertStringIncludes(html, 'id="vault-quota-add-save"', "#vault-quota-add-save button must exist");
 });
 
