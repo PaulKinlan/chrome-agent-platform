@@ -243,6 +243,15 @@ Deno.test("bundled wasm filtering: respects agent tools allowlist", () => {
     closureGeneration: "task-execution-core",
   });
   assertEquals(allRecords.length, BUNDLED_TOOL_PACKAGE_ROWS.length, "unfiltered produces every shipped bundled tool row");
+  // Completeness contract (chrome-agent-platform-1frz): admitted tool ids are
+  // EXACTLY the shipped inventory's, sorted. A count alone cannot catch a
+  // package that is silently swapped for another one, which is the failure
+  // mode that let a lost tool stand in for a shipped one.
+  assertEquals(
+    allRecords.map((r) => r.descriptorInput.toolId).sort(),
+    BUNDLED_TOOL_PACKAGE_ROWS.map((row) => row.toolId).sort(),
+    "admitted tool ids are exactly the shipped inventory's",
+  );
 
   // 2. Filtered allowlist by toolId — through the PRODUCTION filter (the same
   // function the service worker's run builder uses), not a local copy.
