@@ -66,3 +66,63 @@ Deno.test("im9q8: MCP SDK resolution matches the npm runtime lock in every Deno 
     .map((name) => name.slice("@modelcontextprotocol/sdk@".length).split("_")[0]))];
   assertEquals(versions, [npm.version], "both zod-peer SDK instances must resolve the npm-locked version");
 });
+
+/** TRUE when `version` is at or above `floor` on the same major line (the advisory ranges are per-major). */
+function atLeast(version: string, floor: string): boolean {
+  const a = version.split(".").map(Number);
+  const b = floor.split(".").map(Number);
+  if (a.length < 3 || b.length < 3 || a.some(Number.isNaN) || b.some(Number.isNaN)) return false;
+  if (a[0] !== b[0]) return a[0] > b[0];
+  if (a[1] !== b[1]) return a[1] > b[1];
+  return a[2] >= b[2];
+}
+
+Deno.test("behrd: every advisory-patched dependency is patched in BOTH lockfiles", () => {
+  // Four findings from the 2026-10-18 nightly (chrome-agent-platform-behrd), each bumped rather than waved
+  // through, and each pinned here so a later lockfile regeneration cannot quietly walk back under the fix.
+  //
+  // Reachability, recorded rather than assumed (all four are transitive and NONE of the advisory paths is on
+  // our executed path today - that is why this is P3 and why the fix is still worth taking):
+  //   hono        GHSA-hxh3-vqpv-xpqv  hono/jsx SSR string escaping (XSS). We import server.js and
+  //                                    webStandardStreamableHttp.js only, never the jsx renderer.
+  //   ip-address  GHSA-j6r3-76f7-8jcv  isInSubnet/isHostInSubnet family confusion. Reached only through
+  //                                    express-rate-limit, which the MCP express subpath pulls in; our
+  //                                    transport is the Web Standard one.
+  //   proxy-addr  GHSA-jqcg-44mw-7w3h  X-Forwarded-For spoofing via IPv4-mapped IPv6 trust subnets. Needs a
+  //                                    configured `trust proxy`; we configure none.
+  //   undici      GHSA-3wwx-pv8p-q78v  WebSocket permessage-deflate zlib DoS. Reached through the AI SDK's
+  //                                    provider-utils, whose requests are plain fetch; no WebSocket path.
+  const patched: Array<{ name: string; floor: string; advisory: string; denoName?: string }> = [
+    { name: "hono", floor: "4.13.7", advisory: "GHSA-hxh3-vqpv-xpqv", denoName: "hono" },
+    { name: "ip-address", floor: "10.7.1", advisory: "GHSA-j6r3-76f7-8jcv", denoName: "ip-address" },
+    { name: "proxy-addr", floor: "2.0.8", advisory: "GHSA-jqcg-44mw-7w3h", denoName: "proxy-addr" },
+    { name: "undici", floor: "7.29.1", advisory: "GHSA-3wwx-pv8p-q78v", denoName: "undici" },
+  ];
+  for (const { name, floor, advisory, denoName } of patched) {
+    const npm = npmLock.packages[`node_modules/${name}`];
+    assert(npm?.version && npm?.integrity, `npm must lock ${name} with an integrity hash`);
+    assert(atLeast(npm.version, floor),
+      `npm locks ${name} ${npm.version}, which is under the ${advisory} fix (need >= ${floor}) - ` +
+        `bump it deliberately rather than accepting the advisory`);
+
+    const denoVersions = [...new Set(Object.keys(denoLock.npm)
+      .filter((entry) => entry.startsWith(`${denoName}@`))
+      .map((entry) => entry.slice(denoName!.length + 1).split("_")[0]))];
+    assert(denoVersions.length > 0, `deno.lock must pin ${denoName} - a missing entry means the Deno graph lost it`);
+    for (const version of denoVersions) {
+      assert(atLeast(version, floor),
+        `deno.lock pins ${denoName} ${version}, under the ${advisory} fix (need >= ${floor}); the Deno store is ` +
+          `what the bundled extension ships, so this is not a dev-only file`);
+    }
+  }
+});
+
+Deno.test("behrd falsification: atLeast refuses the versions this bead bumped AWAY from", () => {
+  assertEquals(atLeast("4.13.5", "4.13.7"), false, "hono 4.13.5 is the version that was vulnerable");
+  assertEquals(atLeast("10.7.0", "10.7.1"), false, "ip-address 10.7.0 is the version that was vulnerable");
+  assertEquals(atLeast("2.0.7", "2.0.8"), false, "proxy-addr 2.0.7 is the version that was vulnerable");
+  assertEquals(atLeast("7.29.0", "7.29.1"), false, "undici 7.29.0 is the version that was vulnerable");
+  assertEquals(atLeast("not-a-version", "1.0.0"), false, "fail closed on nonsense");
+  assertEquals(atLeast("4.13.7", "4.13.7"), true, "the fix itself satisfies the floor");
+  assertEquals(atLeast("5.0.0", "4.13.7"), true, "and a later major does too");
+});
