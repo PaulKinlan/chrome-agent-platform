@@ -578,8 +578,8 @@
           <div class="vault-quota-add-row" style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap;">
             <label class="sr-only" for="vault-quota-add-service">Service id for the quota you are adding</label>
             <input id="vault-quota-add-service" type="text" aria-label="Service identifier" placeholder="service-id (e.g. custom-api)" style="width:180px;" autocomplete="off" spellcheck="false">
-            <label class="sr-only" for="vault-quota-add-limit">Call limit for the quota you are adding (0 disables the service)</label>
-            <input id="vault-quota-add-limit" type="number" min="0" aria-label="Quota limit" placeholder="Limit (0 = disable)" style="width:140px;">
+            <label class="sr-only" for="vault-quota-add-limit" id="vault-quota-add-limit-desc">Call limit for the quota you are adding (0 disables the service)</label>
+            <input id="vault-quota-add-limit" type="number" min="0" aria-label="Quota limit" aria-describedby="vault-quota-add-limit-desc" placeholder="Limit (0 = disable)" style="width:140px;">
             <label class="sr-only" for="vault-quota-add-window">Limit window for the quota you are adding</label>
             <select id="vault-quota-add-window" class="input-select" aria-label="Quota window" style="width:110px;">
               <option value="3600000">1 hour</option>
