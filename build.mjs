@@ -150,58 +150,31 @@ async function walkWasm(dir, out = []) {
 const { scanShippedJs, scanBundledWasmFiles } = await import("./scripts/scan-shipped.mjs");
 const { BUNDLED_INVENTORY: BUNDLED_INVENTORY_EARLY } = await import("./extension/lib/bundled-inventory-data.js");
 const shippedJsAll = await walkJs("extension");
-// ltkj.2: JS members of the package store (extension/wasm/runtime/**) are
-// generated data, not authored shipped code — the same contract as the
-// vendored pyodide lane, except the pin is the BUNDLED_INVENTORY digest rather
-// than a hardcoded hash. Exemption is content-addressed: a file is exempt ONLY
-// while its bytes hash-match its inventory row, so a drifted or undeclared
-// file stays inside the AST scan and fails closed.
-// walkJs returns RELATIVE paths ("extension/wasm/..."), so the exemption set
-// keys on the same rel form — join(ROOT, …) is only used to READ the bytes.
-const earlyExempt = await settleAll(
-  BUNDLED_INVENTORY_EARLY.files
-    .filter((row) => /^extension\/wasm\/.+\.m?js$/.test(row.rel))
-    .map(async (row) => {
-      let bytes;
-      try {
-        bytes = await readFile(join(ROOT, row.rel));
-      } catch {
-        return null; // absent file is not this scan's problem (walkJs only saw present files)
-      }
-      const digest = createHash("sha256").update(bytes).digest("hex");
-      return row.sha256 === digest ? row.rel : null;
-    }),
-);
-const packageStoreExempt = new Set(earlyExempt.filter(Boolean));
-// Schema-2 runtime data assets (roles adapter/glue/pthread-bootstrap/data)
-// are MANIFEST members, not inventory file rows: their pin is the asset
-// sha256 inside a manifest whose own digest is tied to the inventory row
-// (assertManifestRowDigest). Same contract — exemption only on exact byte
-// match; drifted/undeclared files stay inside the AST scan and fail closed.
-const { manifestCasMappings: mapSchemas, assertManifestRowDigest: tieRow } =
-  await import("./scripts/lib/wasm-manifest-assets.mjs");
-for (const identity of BUNDLED_INVENTORY_EARLY.manifests) {
-  const manifestRel = `extension/wasm/manifests/${identity.pkg}-${identity.version}.manifest.json`;
-  const manifestText = await readFile(join(ROOT, manifestRel), "utf8");
-  tieRow(manifestText, identity);
-  const manifest = JSON.parse(manifestText);
-  if (manifest?.schemaVersion !== 2) continue;
-  mapSchemas(manifest); // validation side effect: roles/paths/CAS invariants
-  for (const asset of manifest.assets ?? []) {
-    if (!/^extension\/wasm\/.+\.m?js$/.test(asset?.path ?? "")) continue;
-    let bytes;
-    try {
-      bytes = await readFile(join(ROOT, asset.path));
-    } catch {
-      continue;
-    }
-    const digest = createHash("sha256").update(bytes).digest("hex");
-    if (asset.sha256 === digest) packageStoreExempt.add(asset.path);
+// A SINGLE schema-2 content-addressed map governs both the build scan and
+// Store ZIP policy. Only inventory + manifest + measured-byte-equal runtime
+// data JS may skip the authored JS AST scan; the skip applies to ALL scanner
+// rules for those exact bytes, so undeclared or drifted bytes MUST refuse.
+const { buildSchema2RuntimeJsMap } = await import("./scripts/lib/wasm-manifest-assets.mjs");
+// Fetch every inventoried manifest before validating the shared map. settleAll
+// lets all reads finish on failure, and the same bytes flow into the manifest
+// digest/identity checks below (not an independent or weaker JS exemption).
+const earlyManifestBytes = new Map(await settleAll(BUNDLED_INVENTORY_EARLY.manifests.map(async ({ pkg, version }) => {
+  const rel = `extension/wasm/manifests/${pkg}-${version}.manifest.json`;
+  return [rel, await readFile(join(ROOT, rel))];
+})));
+const reviewedJs = await buildSchema2RuntimeJsMap(BUNDLED_INVENTORY_EARLY, {
+  readBytes: (rel) => earlyManifestBytes.get(rel) ?? readFile(join(ROOT, rel)),
+});
+// walkJs produces extension/-prefixed paths; the map keys archive paths.
+const packageStoreExempt = new Set([...reviewedJs.keys()].map((rel) => `extension/${rel}`));
+for (const rel of shippedJsAll) {
+  if (/^extension\/wasm\/runtime\/.+\.(?:m?js)$/u.test(rel) && !packageStoreExempt.has(rel)) {
+    throw new Error(`unlisted runtime JS shipped by Store build: ${rel}`);
   }
 }
 const shippedJs = shippedJsAll.filter((file) => !packageStoreExempt.has(file));
 if (packageStoreExempt.size > 0) {
-  console.log(`shipped-code scan: ${packageStoreExempt.size} package-store JS asset(s) verified by inventory digest pin (not AST-scanned)`);
+  console.log(`shipped-code scan: ${packageStoreExempt.size} package-store JS asset(s) verified by inventory + manifest + byte pins (not AST-scanned)`);
 }
 // The __zod_*/__vite_* oracle exemption applies ONLY inside the generated
 // dependency bundles (esbuild inlines the zod/vite source there) — never in

@@ -1,5 +1,6 @@
 // @ts-nocheck: temporary package inventories intentionally model hostile files.
 import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
+import { createHash } from "node:crypto";
 import {
   assertStoreTargetBoundary,
   parsePackageArguments,
@@ -64,6 +65,35 @@ Deno.test("store target: exact CSP and bundled-only zero-binary lane pass withou
     assertEquals(result.canLoadNetworkPackages, false);
     assertEquals(result.allowedWorkerLiterals, []);
     assertEquals(result.wasmScanned, 0);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("tiwpa: only byte-pinned schema-2 runtime JS skips the Store AST scan", async () => {
+  const { root, inventory } = await fixture();
+  const rel = "wasm/runtime/reviewed/1.0.0/glue.mjs";
+  const glue = "export const instantiate = WebAssembly.instantiate;\n";
+  const pin = { role: "glue", size: new TextEncoder().encode(glue).byteLength,
+    sha256: createHash("sha256").update(glue).digest("hex") };
+  const entry = await write(root, rel, glue);
+  inventory.push(entry);
+  const check = (map) => assertStoreTargetBoundary({ target: STORE_TARGET, inventory, bundledRuntimeJsByArchivePath: map });
+  try {
+    const map = new Map([[rel, pin]]);
+    const ok = await check(map);
+    assertEquals(ok.jsRuntimePinned, 1);
+    assertEquals(ok.jsScanned, 1, "the ordinary background.js is still scanned");
+    await assertRejects(() => check(new Map()), Error, "unlisted runtime JS in package");
+    await Deno.writeTextFile(entry.sourcePath, `${glue}// changed`);
+    await assertRejects(() => check(map), Error, "bundled runtime JS byte drift");
+    await Deno.writeTextFile(entry.sourcePath, glue);
+    await assertRejects(() => check(new Map([["wasm/runtime/missing/1.0.0/other.mjs", pin]])), Error,
+      "bundled runtime JS asset has no package byte");
+    const unrelated = await write(root, "unrelated.js", "WebAssembly.instantiate(new Uint8Array());\n");
+    inventory.push(unrelated);
+    await assertRejects(() => check(map), Error, "calls dynamic WebAssembly API",
+      "the pin does not grant unrelated callers an execution-host bypass");
   } finally {
     await Deno.remove(root, { recursive: true });
   }
