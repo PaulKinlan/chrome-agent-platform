@@ -335,10 +335,6 @@ export const SERIAL_FILE_TIMEOUTS = Object.freeze({
 // does not apply; the guard test pins the reason. Keep this list tiny —
 // membership is a review-time decision, never a default.
 export const EXEMPTIONS = {
-  // tv7bz: a source-only assertion; it never spawns/imports the build or reads
-  // generated dist. The conservative name detector cannot distinguish this
-  // Deno.readTextFile from a real build hazard, so retain parallel scheduling.
-  "tests/emscripten-build-surface.test.ts": "reads build.mjs as static text only; no build spawn, import, generated artifact read or checkout write, so parallel execution is independent",
   // uikt5: every git commit and release-stamp write occurs in a unique mkdtemp
   // scratch repository, deleted in finally. The checkout is only read for
   // source copies; no production or shared build artifact is mutated.
