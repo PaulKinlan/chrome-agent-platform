@@ -39,7 +39,7 @@ function validateUrl(url) {
  * SERVICE WORKER (chrome.runtime `cap:fetch`) so the cross-origin fetch carries
  * the extension's host permission — a DIRECT fetch from the NTP/offscreen page
  * is CORS-blocked for a cross-origin page with no Access-Control-Allow-Origin. */
-export async function runFetch(payload, runId = null, { allowDirect = false } = {}) {
+export async function runFetch(payload, runId = null) {
   const v = validateUrl(payload?.url);
   if (!v.ok) return { ok: false, error: v.error };
   const method = payload?.opts?.method ? String(payload.opts.method).toUpperCase() : "GET";
@@ -47,8 +47,9 @@ export async function runFetch(payload, runId = null, { allowDirect = false } = 
     return { ok: false, error: `method ${method} is not allowed (GET/HEAD only)` };
   }
   // Prefer the SW route (host permission → no CORS wall). Fall back to a direct
-  // fetch only when chrome.runtime is absent (a unit test / non-extension host),
-  // where the caller's context is trusted.
+  // fetch only for unscoped calls (runId == null, e.g. a unit test / non-extension host),
+  // where the caller's context is trusted. A registered run must never bypass the
+  // brokered route and fails closed when chrome.runtime is absent.
   if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
     try {
       // The run id lets the SW apply THIS run's approved host allow-list
@@ -61,10 +62,9 @@ export async function runFetch(payload, runId = null, { allowDirect = false } = 
       return { ok: false, error: `fetch failed: ${e?.message ?? e}` };
     }
   }
-  // Confine direct-fetch fallback (te1pu): a registered run must never bypass the
-  // brokered route. Direct fetch is allowed only when explicitly permitted or in
-  // un-scoped unit test contexts without a runId.
-  if (runId != null && !allowDirect) {
+  // Confine direct-fetch fallback (te1pu/oe4nz): a registered run must never bypass
+  // the brokered route. Direct fetch is allowed strictly in unscoped contexts (runId == null).
+  if (runId != null) {
     return { ok: false, error: "fetch failed: brokered service worker route unavailable for run" };
   }
   let res;
