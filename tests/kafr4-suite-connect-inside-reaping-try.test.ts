@@ -140,16 +140,38 @@ function connectInsideReapingTry(source: string, cdpCall: number): boolean {
 const LAUNCH = "launch" + "Chrome";
 const CONNECT = "open" + "Cdp";
 
-const FILES = [
-  "scripts/security-suite.ts",
-  "tests/security.test.ts",
-  "tests/jjsz-lifeline-leader-exit.test.ts",
-  "tests/chrome-launch-lock.test.ts",
-];
+/**
+ * Every suite in the repo, found by walking the directories (o6sqn).
+ *
+ * A hard-coded list made this guard's own comment a lie: it claimed to cover scripts/ and tests/ while
+ * checking four names, so the next suite written with the pre-fix shape would have been missed by the
+ * very machinery that exists to catch it. Walking the directories means coverage is a property of the
+ * tree, not of a list somebody has to remember to extend.
+ */
+async function suiteFiles(): Promise<string[]> {
+  const found: string[] = [];
+  for (const root of ["scripts", "tests"]) {
+    let entries: AsyncIterable<Deno.DirEntry>;
+    try {
+      entries = Deno.readDir(`${ROOT}${root}`);
+    } catch {
+      continue;
+    }
+    for await (const entry of entries) {
+      if (!entry.isFile) continue;
+      if (!entry.name.endsWith(".ts")) continue;
+      found.push(`${root}/${entry.name}`);
+    }
+  }
+  return found.sort();
+}
 
 Deno.test("kafr4: every suite that reaps a launched browser connects CDP INSIDE the try that reaps", async () => {
-  let checked = 0;
-  for (const relative of FILES) {
+  let judged = 0;
+  let population = 0;
+  const files = await suiteFiles();
+  assert(files.length > 10, `the walk found only ${files.length} TypeScript files: it has stopped guarding`);
+  for (const relative of files) {
     let source: string;
     try {
       source = await Deno.readTextFile(`${ROOT}${relative}`);
@@ -157,16 +179,27 @@ Deno.test("kafr4: every suite that reaps a launched browser connects CDP INSIDE 
       continue; // a file that moved is not this guard's business
     }
     if (!new RegExp(`${LAUNCH}\\s*\\(`).test(source) || !/reapLeaderAndSettle\s*\(/.test(source)) continue;
+    population++;
     const cdpCall = cdpCallIndex(source);
-    if (cdpCall === -1) continue; // launches and reaps, but never opens a CDP connection
-    checked++;
+    // WHAT THIS RULE DOES NOT COVER, said out loud (o6sqn): a connect made through a local helper
+    // (`const { cdp } = await connect(url)` / `new Cdp(ws)` in the journey scripts) is not an
+    // `openCdp(...)` CALL, so it is not judged here - those files' reap order is pinned by
+    // tests/jjsz-lifeline-runner-exit.test.ts. This guard is about the call shape kafr4 broke, and it
+    // walks the tree so a NEW file with that shape is caught instead of having to be listed.
+    if (cdpCall === -1) continue;
+    judged++;
     assert(
       connectInsideReapingTry(source, cdpCall),
-      `${relative}: openCdp() must be called inside the try whose finally reaps the browser ` +
+      `${relative}: ${CONNECT}() must be called inside the try whose finally reaps the browser ` +
         `(kafr4) - a connect that throws outside it skips the reap and leaves a real Chrome to the lifeline`,
     );
   }
-  assert(checked > 0, "the guard found no suite to check: it has stopped guarding anything");
+  // Two floors, answering two questions. `population` is the walk's reach over files that launch AND reap
+  // (six today); if it collapses, discovery broke. `judged` is the files whose connect this rule can SEE
+  // (one today, scripts/security-suite.ts); if it hits zero the rule applies to nothing and this test
+  // would otherwise pass vacuously.
+  assert(population >= 4, `the walk found only ${population} launch+reap file(s): discovery has drifted`);
+  assert(judged >= 1, `the rule judged no file at all: it has stopped applying to the call shape it guards`);
 });
 
 Deno.test("kafr4: security-suite.ts specifically reaps on a connect failure (the case that was broken)", async () => {
