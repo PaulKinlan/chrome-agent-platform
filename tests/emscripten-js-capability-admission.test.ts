@@ -276,6 +276,81 @@ Deno.test("js-capability admission: an import escaping the admitted set is refus
   assertEquals(bare.error.detail, "glue:external-thing");
 });
 
+Deno.test("js-capability admission: receiver-qualified capability spellings are refused (e840g)", () => {
+  // The reviewer's exact repro list: the idiomatic worker spellings must be
+  // refused like the bare forms — the (?<![\w$]) anchor is an ANTI-SUBSTRING
+  // guard, never a receiver guard.
+  for (const src of [
+    `self.caches.open("x")`,
+    `globalThis.caches.open("x")`,
+    `window.caches.open("x")`,
+    `self.fetch("/x")`,
+    `window.fetch("/x")`,
+    `new self.Worker("w")`,
+    `new self.SharedWorker("w")`,
+    `new globalThis.Worker("w")`,
+  ]) {
+    const { ok, error } = scanSource(src);
+    assertEquals(ok, false, `must refuse: ${src}`);
+    assertEquals(error.code, "js_capability_denied");
+  }
+  // The anchor still does its ONE job: a longer identifier swallows the match
+  // (no substring false hit), and the bare forms still refuse.
+  for (const clean of [
+    `const spawnWorker = (w) => w; spawnWorker("w");`,
+    `const myFetch = (u) => u; myFetch("/x");`,
+    `const refetchCount = 2;`,
+  ]) {
+    const { ok } = scanSource(clean);
+    assertEquals(ok, true, `identifier-suffix must not match: ${clean}`);
+  }
+  // A capability name as a PROPERTY of any receiver is refused (fail-closed):
+  // textual analysis cannot prove an unknown receiver is not the global.
+  const prop = scanSource(`polyfill.fetch("/x");`);
+  assertEquals(prop.ok, false);
+  assertEquals(prop.error.detail, "glue:fetch_call");
+});
+
+Deno.test("js-capability admission: import edges are read structurally, not by regex (u3vfd/3awbd class fix)", () => {
+  const enc2 = (s) => s;
+  // Live edges, every shape (no keyword-to-string gap limit — a 30-symbol
+  // named-import list is ordinary code, not a boundary case).
+  const longImport = `import { ${Array.from({ length: 30 }, (_, i) => `polly${i}`).join(", ")} } from "./payload.mjs";\nexport const q = 1;\n`;
+  const live = scanGraph(
+    [{ id: "glue", role: "glue", source: longImport }],
+    [{ id: "payload", role: "data", source: FIXTURES.get("navigator.storage") }],
+  );
+  assertEquals(live.ok, false, "u3vfd: a >200-char import clause must still reach its target");
+  assertEquals(live.error.detail, "payload:navigator_storage");
+
+  // Non-edges: comments, strings, template raw text and regex literals are
+  // never read for import edges (3awbd: no false refusals of clean packages).
+  for (const clean of [
+    `// import { a } from "./old.mjs";\nexport const x = 1;\n`,
+    `/* import { a } from "./old.mjs"; */\nexport const x = 1;\n`,
+    `export const doc = "import { a } from \\"./old.mjs\\";";\n`,
+    "export const doc = `import { a } from \"./old.mjs\";`;\n",
+    `const re = /import { a } from ".\\/old.mjs";/;\nexport const x = 1;\n`,
+    `const u = import.meta.url;\n`,
+  ]) {
+    const { ok, error } = scanSource(clean);
+    assertEquals(ok, true, `clean source must admit: ${JSON.stringify(clean)} -> ${error?.code} ${error?.detail}`);
+  }
+
+  // ...but template ${...} IS live code: its edges resolve and scan.
+  const liveTemplate = scanGraph(
+    [{ id: "glue", role: "glue", source: "export const doc = `${ import(\"./payload.mjs\") }`;\n" }],
+    [{ id: "payload", role: "data", source: FIXTURES.get("caches") }],
+  );
+  assertEquals(liveTemplate.ok, false);
+  assertEquals(liveTemplate.error.detail, "payload:cache_storage");
+  const unresolvedTemplate = scanGraph([{ id: "glue", role: "glue", source: "export const doc = `${ import(\"./absent.mjs\") }`;\n" }]);
+  assertEquals(unresolvedTemplate.ok, false);
+  assertEquals(unresolvedTemplate.error.code, "js_capability_import_unresolved");
+  assertEquals(unresolvedTemplate.error.detail, "glue:./absent.mjs");
+  void enc2;
+});
+
 function fileMapFor(out) {
   return new Map(
     out.files
@@ -448,9 +523,12 @@ Deno.test("js-capability admission: hostile data-role import is refused END-TO-E
   const manifest = structuredClone(out.manifest);
 
   // The hostile shape: a CLEAN glue that relative-imports a data-role module
-  // carrying the capability. Old behaviour admitted this package with
-  // verdict=pass because only glue/adapter bytes were scanned.
-  const glueBytes = enc.encode(`import { p } from "./payload.mjs";\nexport const q = p;\n`);
+  // carrying the capability — with a >200-char named-import clause (u3vfd's
+  // exact shape, ordinary code a regex extractor skipped). Old behaviour
+  // admitted this package with verdict=pass because only glue/adapter bytes
+  // were scanned.
+  const glueSource = `import { ${Array.from({ length: 30 }, (_, i) => `polly${i}`).join(", ")} } from "./payload.mjs";\nexport const q = 1;\n`;
+  const glueBytes = enc.encode(glueSource);
   const payloadBytes = enc.encode(FIXTURES.get("caches"));
   const glueAsset = manifest.assets.find((a) => a.role === "glue");
   const payloadRel = glueAsset.path.replace(/glue\.mjs$/u, "payload.mjs");

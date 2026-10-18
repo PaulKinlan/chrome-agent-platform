@@ -21,16 +21,28 @@
 // the verified asset byte set, and runs on bytes already digest-checked by
 // the graph audit.
 //
-// Import-graph closure (review finding 1o3uv on chrome-agent-platform-197jd):
-// capabilities do not care about manifest roles. A glue module may relative-
-// import another package asset — a data-role .mjs — and that module executes
-// in the same worker with the same reachability. The scan therefore starts
-// from the declared JS roles (glue/adapter/pthread-bootstrap) and TRANSITIVELY
-// scans every asset they import, whatever role the manifest gave it. Every
-// import specifier must resolve to admitted package bytes: relative paths
-// resolve inside the verified set or the package is refused
-// (js_capability_import_unresolved); bare and URL specifiers cannot resolve
-// in an MV3 worker and are refused the same way.
+// Import-graph closure (review finding 1o3uv): capabilities do not care about
+// manifest roles. A glue module may relative-import another package asset — a
+// data-role .mjs — and that module executes in the same worker with the same
+// reachability. The scan therefore starts from the declared JS roles
+// (glue/adapter/pthread-bootstrap) and TRANSITIVELY scans every asset they
+// import, whatever role the manifest gave it. Every import specifier must
+// resolve to admitted package bytes: relative paths resolve inside the
+// verified set or the package is refused (js_capability_import_unresolved);
+// bare and URL specifiers cannot resolve in an MV3 worker and are refused the
+// same way.
+//
+// Import edges are found by a structural mini-tokenizer (review findings
+// e840g/u3vfd/3awbd: a regex extractor had a length gap that skipped long
+// import lists, read commented-out imports inside comments and template raw
+// text, and the deny-list lookbehind rejected receiver-qualified spellings).
+// The tokenizer skips comments, string literals, template raw text and regex
+// literals, treats template ${...} as live code, and reads import/export-from
+// edges structurally (no keyword-to-string gap limit). Capability names in
+// the deny-list match as identifier OR property (self./window./globalThis.
+// forms are the idiomatic worker spellings and are refused like the bare
+// forms); only a LONGER IDENTIFIER swallows the match (spawnWorker does not
+// match Worker), which is the anti-substring guard, never a receiver guard.
 
 import { WasmPackageAuthorityError } from "./wasm-package-authority.js";
 
@@ -65,6 +77,11 @@ const entry = (id, code, pattern, { exemptGlue = null } = {}) => Object.freeze({
  * tests/emscripten-js-capability-admission.test.ts — a test fails when an
  * entry has no fixture. `code` is the typed refusal suffix carried in the
  * admission error detail (`<assetId>:<code>`) and on the receipt.
+ *
+ * The (?<![\w$]) anchor is an ANTI-SUBSTRING guard (a longer identifier like
+ * spawnWorker must not match Worker), never a receiver guard: the idiomatic
+ * receiver-qualified worker spellings (self.caches.open, window.fetch,
+ * new self.Worker) are matched and refused like the bare forms (e840g).
  */
 export const EMSCRIPTEN_JS_CAPABILITY_DENY_LIST = Object.freeze([
   // OPFS / storage capability acquisition (C2 surface).
@@ -73,16 +90,16 @@ export const EMSCRIPTEN_JS_CAPABILITY_DENY_LIST = Object.freeze([
   entry("getFileHandle", "file_handle", /\bgetFileHandle\b/),
   entry("createSyncAccessHandle", "sync_access_handle", /\bcreateSyncAccessHandle\b/),
   entry("createWritable", "writable_stream", /\bcreateWritable\b/),
-  entry("caches", "cache_storage", /(?<![\w.$])caches\s*\.\s*(?:open|match|has|delete|keys)\b/),
+  entry("caches", "cache_storage", /(?<![\w$])caches\s*\.\s*(?:open|match|has|delete|keys)\b/),
   entry("indexedDB", "indexed_db", /\bindexedDB\b/),
   // Worker spawning from package JS.
-  entry("worker-construction", "worker_construction", /(?<![\w.$])(?:new\s+)?(?:Shared)?Worker\s*\(/),
+  entry("worker-construction", "worker_construction", /(?<![\w$])(?:new\s+)?(?:Shared)?Worker\s*\(/),
   // Network egress: dynamic import of network URLs.
   entry("network-dynamic-import", "network_dynamic_import", /\bimport\s*\(\s*(?:["'`](?:\s*(?:https?:|\/\/|data:|blob:))|new\s+URL\b)/),
   // Network egress: fetch/XHR. The two entries below carry the ONLY
   // exemptions in the list: the reviewed Emscripten runtime preamble digests
   // above (dead URL-loading paths under the direct-binary worker profile).
-  entry("fetch", "fetch_call", /(?<![\w.$])fetch\s*\(/, { exemptGlue: REVIEWED_EMSCRIPTEN_GLUE_PREAMBLE }),
+  entry("fetch", "fetch_call", /(?<![\w$])fetch\s*\(/, { exemptGlue: REVIEWED_EMSCRIPTEN_GLUE_PREAMBLE }),
   entry("xhr", "xhr", /\bXMLHttpRequest\b/, { exemptGlue: REVIEWED_EMSCRIPTEN_GLUE_PREAMBLE }),
 ]);
 
@@ -95,20 +112,212 @@ export function isJsCapabilityAssetRole(role) {
   return role === "glue" || role === "adapter" || role === "pthread-bootstrap";
 }
 
-// Import specifiers this scan resolves: static import/export-from and dynamic
-// import() with a literal specifier. Computed specifiers are invisible here —
-// recorded residual (R25); network-URL-shaped dynamic imports are already
-// denied by the network-dynamic-import list entry at the importing asset.
-const IMPORT_SPECIFIER_RE = /\b(?:import\s*\(\s*|import\s+(?:[\s\S]{0,200}?\bfrom\s+)?|export\s+[\s\S]{0,200}?\bfrom\s+)(["'])([^"'\n\r]+)\1/g;
+// ── Structural import-edge extraction ────────────────────────────────────────
+// A single-pass tokenizer over module text. It is LEXICAL, not a parser: it
+// exists to (a) never read an import edge inside a comment, string literal,
+// template raw text or regex literal, and (b) never miss a live edge because
+// of its shape. Computed specifiers (import(variable)) are not literal text
+// and stay on the documented residual (R25).
 
-export function extractImportSpecifiers(text) {
-  const specifiers = [];
-  IMPORT_SPECIFIER_RE.lastIndex = 0;
-  let match;
-  while ((match = IMPORT_SPECIFIER_RE.exec(text)) !== null) {
-    specifiers.push(match[2]);
-    if (specifiers.length > 64) fail("js_capability_scan_invalid", "import_specifier_bound");
+const IDENT_START = /[\w$]/u;
+const identPart = (c) => IDENT_START.test(c);
+// After these the following `/` starts a regex literal; after an identifier,
+// number, string, `)`, `]`, `}` or same-class punctuation it is division.
+const REGEX_ALLOWED_AFTER = new Set(["", "(", "[", "{", ",", ";", "=", ":", "!", "&", "|", "?", "+", "-", "*", "%", "^", "~", "<", ">", "=>", "&&", "||", "??", "return", "typeof", "case", "in", "of", "instanceof", "new", "delete", "void", "do", "else", "yield", "await", "throw"]);
+const regexAllowedAfter = (prev) => REGEX_ALLOWED_AFTER.has(prev);
+
+function skipWs(text, i) {
+  while (i < text.length && /\s/u.test(text[i])) i++;
+  return i;
+}
+
+function skipStringLiteral(text, i) {
+  const quote = text[i];
+  let j = i + 1;
+  while (j < text.length) {
+    const c = text[j];
+    if (c === "\\") { j += 2; continue; }
+    if (c === quote) return j + 1;
+    if (c === "\n") return j; // unterminated — let code mode resume; never loops
+    j++;
   }
+  return j;
+}
+
+function readStringRaw(text, i) {
+  const quote = text[i];
+  let j = i + 1;
+  let value = "";
+  while (j < text.length) {
+    const c = text[j];
+    if (c === "\\") {
+      // Only pass-through escapes matter for path text; keep the raw char.
+      const next = text[j + 1];
+      if (next !== undefined) value += next === "\n" ? "" : next;
+      j += 2;
+      continue;
+    }
+    if (c === quote) return { value, end: j + 1 };
+    if (c === "\n") return { value, end: j };
+    value += c;
+    j++;
+  }
+  return { value, end: j };
+}
+
+function skipRegexLiteral(text, i) {
+  let j = i + 1;
+  let inClass = false;
+  while (j < text.length) {
+    const c = text[j];
+    if (c === "\\") { j += 2; continue; }
+    if (c === "[") inClass = true;
+    else if (c === "]") inClass = false;
+    else if (c === "/" && !inClass) return j + 1;
+    else if (c === "\n") return j; // not a regex after all; resume code
+    j++;
+  }
+  return j;
+}
+
+function skipTemplateLiteral(text, i, edges) {
+  // text[i] === "`". Raw text is skipped; ${ ... } is LIVE code and is
+  // scanned for edges recursively.
+  let j = i + 1;
+  while (j < text.length) {
+    const c = text[j];
+    if (c === "\\") { j += 2; continue; }
+    if (c === "`") return j + 1;
+    if (c === "$" && text[j + 1] === "{") {
+      j = scanCode(text, j + 2, edges, "}");
+      if (text[j] === "}") j++;
+      continue;
+    }
+    j++;
+  }
+  return j;
+}
+
+// Reads one depth-0 `from "specifier"` clause body. Returns the index to
+// resume scanning from; pushes the edge when a literal specifier is found.
+function readFromClause(text, j, edges) {
+  const start = j;
+  let depth = 0;
+  let sawBinding = false;
+  while (j < text.length && j - start < 65536) {
+    const c = text[j];
+    if (c === "`") { j = skipTemplateLiteral(text, j, edges); continue; }
+    if (c === "/" && text[j + 1] === "/") { const e = text.indexOf("\n", j); j = e < 0 ? text.length : e + 1; continue; }
+    if (c === "/" && text[j + 1] === "*") { const e = text.indexOf("*/", j + 2); j = e < 0 ? text.length : e + 2; continue; }
+    if (c === "\"" || c === "'") {
+      if (depth === 0 && !sawBinding) {
+        const spec = readStringRaw(text, j);
+        edges.push({ specifier: spec.value });
+        return spec.end;
+      }
+      j = skipStringLiteral(text, j);
+      continue;
+    }
+    if (c === "{" || c === "[" || c === "(") { depth++; j++; continue; }
+    if (c === "}" || c === "]" || c === ")") { depth--; j++; continue; }
+    if (c === ";") return j;
+    if (IDENT_START.test(c)) {
+      let e = j + 1;
+      while (e < text.length && identPart(text[e])) e++;
+      const word = text.slice(j, e);
+      if (depth === 0 && word === "from") {
+        const m = skipWs(text, e);
+        if (text[m] === "\"" || text[m] === "'") {
+          const spec = readStringRaw(text, m);
+          edges.push({ specifier: spec.value });
+          return spec.end;
+        }
+        if (m < text.length && IDENT_START.test(text[m])) {
+          // `from` was a binding name (import from from "x"); keep looking.
+          sawBinding = true;
+          j = e;
+          continue;
+        }
+        return m;
+      }
+      if (depth === 0) sawBinding = true;
+      j = e;
+      continue;
+    }
+    j++;
+  }
+  return j;
+}
+
+function scanCode(text, i, edges, stopAt) {
+  let prev = "";
+  while (i < text.length) {
+    const c = text[i];
+    if (stopAt !== undefined && c === stopAt) return i;
+    if (/\s/u.test(c)) { i++; continue; } // whitespace never becomes the significant token
+    if (c === "/" && text[i + 1] === "/") {
+      const e = text.indexOf("\n", i);
+      i = e < 0 ? text.length : e + 1;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      const e = text.indexOf("*/", i + 2);
+      i = e < 0 ? text.length : e + 2;
+      continue;
+    }
+    if (c === "\"" || c === "'") { i = skipStringLiteral(text, i); prev = "string"; continue; }
+    if (c === "`") { i = skipTemplateLiteral(text, i, edges); prev = "template"; continue; }
+    if (c === "/" && regexAllowedAfter(prev)) { i = skipRegexLiteral(text, i); prev = "regex"; continue; }
+    if (IDENT_START.test(c)) {
+      let e = i + 1;
+      while (e < text.length && identPart(text[e])) e++;
+      const word = text.slice(i, e);
+      if (word === "import") {
+        let k = skipWs(text, e);
+        if (text[k] === ".") { i = k + 1; prev = word; continue; } // import.meta
+        if (text[k] === "(") {
+          const m = skipWs(text, k + 1);
+          if (text[m] === "\"" || text[m] === "'") {
+            const spec = readStringRaw(text, m);
+            edges.push({ specifier: spec.value });
+            i = spec.end;
+          } else {
+            i = m; // computed specifier — documented residual (R25)
+          }
+          prev = word;
+          continue;
+        }
+        i = readFromClause(text, k, edges);
+        prev = word;
+        continue;
+      }
+      if (word === "export") {
+        i = readFromClause(text, skipWs(text, e), edges);
+        prev = word;
+        continue;
+      }
+      i = e;
+      prev = word;
+      continue;
+    }
+    prev = c;
+    i++;
+  }
+  return i;
+}
+
+/**
+ * Literal import specifiers of live import edges, in source order:
+ * static `import ... from "x"` / side-effect `import "x"` /
+ * `export ... from "x"` / dynamic `import("x")`. Comments, string literals,
+ * template raw text and regex literals are never read for edges; template
+ * ${...} expressions are live code and are scanned.
+ */
+export function extractImportSpecifiers(text) {
+  const edges = [];
+  scanCode(text, 0, edges, undefined);
+  const specifiers = edges.map((edge) => edge.specifier);
+  if (specifiers.length > 256) fail("js_capability_scan_invalid", "import_specifier_bound");
   return specifiers;
 }
 
