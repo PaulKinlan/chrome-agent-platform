@@ -8,6 +8,7 @@
 // caller-influenced Module fields, hooks, locateFile or memory settings.
 
 import { adapterContractFor } from "./emscripten-adapter-registry.js";
+import { createEmscriptenFrameAcks, postEmscriptenOutputFrames } from "./emscripten-worker-frames.js";
 
 const JOB_TYPE = "cap:emscripten-worker-job";
 const RESULT_TYPE = "cap:emscripten-run-result";
@@ -28,6 +29,7 @@ const JOB_KEYS = Object.freeze([
 const workerInstanceId = crypto.randomUUID();
 let jobAccepted = false;
 let active = false;
+let frameAcks = null;
 
 function exactKeys(value, keys) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value)) &&
@@ -109,6 +111,7 @@ addEventListener("unhandledrejection", (event) => {
 
 addEventListener("message", async (event) => {
   const job = event.data;
+  if (frameAcks?.receive(job)) return;
   if (jobAccepted) return; // exactly ONE job per worker, ever — permanent guard
   if (!exactKeys(job, JOB_KEYS) || job.type !== JOB_TYPE) return;
   jobAccepted = true;
@@ -118,12 +121,23 @@ addEventListener("message", async (event) => {
     packageId: job.packageId,
     operationId: job.operationId,
   };
+  const acks = createEmscriptenFrameAcks({ ...identity, workerInstanceId });
+  frameAcks = acks;
   try {
     const result = await run(job);
+    if (job.operation.result === "buffer") {
+      await postEmscriptenOutputFrames(result, { ...identity, workerInstanceId }, {
+        expectAck: (seq) => acks.expect(seq),
+        postFrame: (frame, transfer) => postMessage(frame, transfer),
+      });
+    }
     active = false;
-    post({ ...identity, ok: true, phase: "completed", result });
+    frameAcks = null;
+    post({ ...identity, ok: true, phase: "completed",
+      result: job.operation.result === "buffer" ? null : result });
   } catch (error) {
     active = false;
+    frameAcks = null;
     post({
       ...identity, ok: false, phase: "failed",
       error: String(error?.stack ?? error).slice(0, 1024),
