@@ -297,10 +297,16 @@ Deno.test("installBatchSkillsAndCommands fetches body for discovered skill with 
   assertEquals(opfsMap["0"], undefined, "OPFS files must not treat array indices as file names");
 });
 
-Deno.test("service-worker source declares skill.discover, skill.importBatch, command.list, command.delete", async () => {
+Deno.test("the skill verbs are registered, wherever they live; the command verbs stay in the worker", async () => {
+  // chrome-agent-platform-atxc6 slice 4 (zln9d): the skill family moved to routes/skills.js and the worker
+  // composes it, so the pin follows the routes — and checks the composition, so a module nothing imports
+  // cannot satisfy it. Imported COMMANDS deliberately stayed in the worker (adopting one is an owner-principal
+  // decision), which is why they are still pinned there.
   const sw = await Deno.readTextFile("extension/background/service-worker.js");
-  assert(sw.includes('async "skill.discover"('), "sw declares skill.discover");
-  assert(sw.includes('async "skill.importBatch"('), "sw declares skill.importBatch");
+  const skills = await Deno.readTextFile("extension/background/routes/skills.js");
+  assert(sw.includes("skillRoutes,"), "the worker must compose the extracted skill routes");
+  assert(skills.includes('async "skill.discover"('), "routes/skills.js declares skill.discover");
+  assert(skills.includes('async "skill.importBatch"('), "routes/skills.js declares skill.importBatch");
   assert(sw.includes('async "command.list"('), "sw declares command.list");
   assert(sw.includes('async "command.delete"('), "sw declares command.delete");
 });
