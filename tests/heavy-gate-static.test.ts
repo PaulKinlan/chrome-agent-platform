@@ -1,13 +1,14 @@
 // tests/heavy-gate-static.test.ts — static structural tests for scripts/heavy-gate.ts (chrome-agent-platform-o29c0).
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_HEAVY_GATE_TIMEOUT_MS, filesFor, main } from "../scripts/heavy-gate.ts";
+import { classifyPhaseExit, DEFAULT_HEAVY_GATE_TIMEOUT_MS, filesFor, main, partitionByPhase } from "../scripts/heavy-gate.ts";
 import {
   BUILD_GATE,
   HEAVY_GATE,
   HEAVY_GATE_FILES,
   HEAVY_GATE_REASONS,
   SERIAL,
+  WALL_CLOCK_HEAVY_FILES,
 } from "../scripts/test-partition.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -19,6 +20,50 @@ Deno.test("heavy-gate static: exports main and filesFor, matching HEAVY_GATE_FIL
   assertEquals(filesFor(["tests/foo.test.ts", "--flag"]), ["tests/foo.test.ts"]);
   assertEquals(HEAVY_GATE_FILES.length, 20);
   assertEquals(DEFAULT_HEAVY_GATE_TIMEOUT_MS, 1200_000);
+});
+
+Deno.test("rvht7: a wall-clock phase that refused environmentally becomes exit 75, not 1", () => {
+  // `deno test` reports the refusal as an ordinary failing test (exit 1). The tier runs these files in its own
+  // child, so it must translate the marker itself — otherwise a box problem reaches the operator as a tree
+  // failure at the last step, which is the exact outcome this bead exists to prevent.
+  const refusal = `\n ERRORS \n\nntp-boot-staging: boots ntp.html => ./tests/ntp-boot-staging-timing.test.ts:41:6\n` +
+    `error: QuietWindowRefusedError: ENVIRONMENT: machine is not quiet enough for this gate (waited 181351 ms)\n` +
+    `  throw new QuietWindowRefusedError(verdict);\n\n FAILURES \n`;
+  assertEquals(classifyPhaseExit(1, refusal), 75);
+  // A product assertion still wins: it must never be laundered into an environmental refusal.
+  const product = `\n ERRORS \n\nntp-boot-staging: boots ntp.html => ./tests/ntp-boot-staging-timing.test.ts:41:6\n` +
+    `error: AssertionError: Expected 0 long tasks, got 3\n\n FAILURES \n`;
+  assertEquals(classifyPhaseExit(1, product), 1);
+  // A quiet phase, an already-translated phase, and an unrelated non-zero code pass through untouched.
+  assertEquals(classifyPhaseExit(0, ""), 0);
+  assertEquals(classifyPhaseExit(75, ""), 75);
+  assertEquals(classifyPhaseExit(1, ""), 1);
+});
+
+Deno.test("rvht7: wall-clock suites are split OUT of the parallel batch and keep their order", () => {
+  const { parallel, wallClock } = partitionByPhase([...HEAVY_GATE_FILES]);
+  // The whole point: a wall-clock budget must never share a batch with the RAM/CPU-saturating suites.
+  assertEquals(wallClock, [...WALL_CLOCK_HEAVY_FILES]);
+  for (const file of WALL_CLOCK_HEAVY_FILES) {
+    assert(!parallel.includes(file), `${file} must not run in the parallel batch`);
+    assert(HEAVY_GATE.has(file), `${file} must still belong to the heavy tier, so npm test never picks it up`);
+  }
+  // The rest of the tier is untouched, in declaration order.
+  assertEquals(parallel, [...HEAVY_GATE_FILES].filter((f) => !WALL_CLOCK_HEAVY_FILES.includes(f)));
+  // A CLI subset that names only wall-clock files yields an empty parallel phase rather than a stray batch.
+  assertEquals(partitionByPhase([WALL_CLOCK_HEAVY_FILES[0]]), { parallel: [], wallClock: [WALL_CLOCK_HEAVY_FILES[0]] });
+});
+
+Deno.test("rvht7: the wall-clock suite ACQUIRES a quiet window before it measures anything", async () => {
+  // A source pin, and deliberately so: the acquisition has to happen before Chrome launches and before the
+  // first sample, and the ordering is the contract. Behaviour is covered by tests/heavy-quiet-acquire.test.ts
+  // (refusal path, bounded wait, marker) — what cannot be driven here is a real 5-run browser measurement.
+  const src = await Deno.readTextFile(new URL("../tests/ntp-boot-staging-timing.test.ts", import.meta.url));
+  const acquire = src.indexOf("acquireQuietWindowForHeavyRun(");
+  const launch = src.indexOf("launchChrome(");
+  assert(acquire > 0, "the suite must call the quiet-window acquire helper");
+  assert(launch > 0, "the suite must still launch Chrome");
+  assert(acquire < launch, "the quiet window must be acquired BEFORE Chrome launches and timing starts");
 });
 
 Deno.test("heavy-gate: tyyl0 skip filter pin ensures default npm test partition contains zero HEAVY_GATE files", async () => {

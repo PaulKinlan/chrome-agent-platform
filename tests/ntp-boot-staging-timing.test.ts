@@ -30,6 +30,9 @@ import {
   ENVIRONMENTAL_REFUSAL_EXIT,
 } from "../scripts/lib/ntp-boot-attribution.ts";
 import { readLoadSample, type LoadSample } from "../scripts/lib/quiet-window.ts";
+// rvht7: acquire a quiet window BEFORE measuring, instead of asserting one from inside the least quiet job on
+// the box. Bounded wait; a window that never arrives is an environmental refusal (exit 75), never a product red.
+import { acquireQuietWindowForHeavyRun } from "../scripts/lib/heavy-quiet-acquire.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT_DIR = `${ROOT}/extension`;
@@ -41,6 +44,14 @@ Deno.test("ntp-boot-staging: headless Chrome for Testing boots ntp.html with 0 l
     return;
   }
   const CHROME_BIN = RESOLVED_BIN;
+
+  // rvht7 — the measurement this file makes is "the box was quiet", so the box must BE quiet before the first
+  // budget is read. scripts/heavy-gate.ts runs this file alone and after its parallel batch; this call is the
+  // part that makes that promise true even when someone runs the file directly. The wait is bounded
+  // (CAP_QUIET_ACQUIRE_MS, default 180s) and a refusal is environmental: the marker is printed by the helper and
+  // the thrown QuietWindowRefusedError is classified as exit 75 by the runners, so this can never read as a
+  // failure of the tree.
+  await acquireQuietWindowForHeavyRun({ label: "ntp-boot-staging-timing" });
 
   const tmp = durableDir(`cap-ntp-boot-${Date.now()}`);
   const lockPath = `${tmp}/chrome.lock`;
