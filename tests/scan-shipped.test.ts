@@ -307,6 +307,17 @@ Deno.test("scan: lookalike python-host paths NEVER inherit the canonical exempti
   }
 });
 
+Deno.test("scan: Emscripten host keeps its sole worker constructor exact-path and exact-location pinned", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/emscripten-host.js", import.meta.url));
+  const file = "extension/lib/emscripten-host.js";
+  assertEquals(await scanShippedJs([file], { readText: async () => source }), []);
+  for (const lookalike of [`/repo/${file}.evil`, `/repo/xx${file}`]) {
+    const violations = await scanShippedJs([lookalike], { readText: async () => source });
+    assert(violations.some((row) => row.includes("Worker URL is not a literal")),
+      `Emscripten lookalike ${lookalike} must not inherit its exemption`);
+  }
+});
+
 const TABLE_WORKER_CANONICAL_REL = "extension/lib/table-worker-host.js";
 
 Deno.test("scan: the table operation worker carries no dynamic code-loading sink", async () => {
