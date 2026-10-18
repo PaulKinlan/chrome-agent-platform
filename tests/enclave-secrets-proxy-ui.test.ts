@@ -2,7 +2,7 @@
 // Enclave environment secret storage, origin-pinned proxy rules, live service-tool caller gate,
 // audit ledger, and Options UI integration.
 
-import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertMatch, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   createSecretVault,
   createServiceWorkerAccess,
@@ -303,15 +303,20 @@ Deno.test("vyhl Part D: options.html contains all required Web services architec
   assertStringIncludes(html, 'id="vault-add-save"');
   assertStringIncludes(html, 'id="vault-status"');
 
-  // jao1.6.1: Quota section elements
+  // jao1.6.1 / ywhg5 / bs39o: Quota section elements and scoped accessibility attributes
   assertStringIncludes(html, 'id="vault-quotas-section"', "#vault-quotas-section container must exist");
   assertStringIncludes(html, 'id="vault-quotas"', "#vault-quotas table container must exist");
   assertStringIncludes(html, 'id="vault-quotas-reset"', "#vault-quotas-reset button must exist");
   assertStringIncludes(html, 'id="vault-quotas-warning"', "#vault-quotas-warning alert element must exist");
   assertStringIncludes(html, 'id="vault-quotas-status"', "#vault-quotas-status message element must exist");
-  assertStringIncludes(html, 'id="vault-quota-add-service"', "#vault-quota-add-service input must exist");
-  assertStringIncludes(html, 'id="vault-quota-add-limit"', "#vault-quota-add-limit input must exist");
-  assertStringIncludes(html, 'id="vault-quota-add-window"', "#vault-quota-add-window select must exist");
+  assertMatch(html, /<input[^>]*id="vault-quota-add-service"[^>]*aria-label="Service identifier"/, "#vault-quota-add-service must have aria-label");
+  assertMatch(html, /<input[^>]*id="vault-quota-add-limit"[^>]*aria-label="Quota limit"[^>]*aria-describedby="vault-quota-add-limit-desc"/, "#vault-quota-add-limit must have aria-label and aria-describedby");
+  assertMatch(
+    html,
+    /<label[^>]*id="vault-quota-add-limit-desc"[^>]*>Call limit for the quota you are adding \(0 disables the service\)<\/label>/,
+    "#vault-quota-add-limit description label must contain decision-relevant hint",
+  );
+  assertMatch(html, /<select[^>]*id="vault-quota-add-window"[^>]*aria-label="Quota window"/, "#vault-quota-add-window must have aria-label");
   assertStringIncludes(html, 'id="vault-quota-add-save"', "#vault-quota-add-save button must exist");
 });
 

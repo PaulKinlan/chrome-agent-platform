@@ -15,7 +15,6 @@ import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}/extension`;
 const OUT = Deno.args[1] ?? `${ROOT}/.cache/kat-quota-ui`;
-const CHROMIUM = "/usr/bin/chromium";
 await Deno.mkdir(OUT, { recursive: true });
 
 let pass = 0, fail = 0;
@@ -26,12 +25,8 @@ function check(name: string, condition: boolean, detail?: unknown) {
 
 const profile = chromeProfileDir("kat-quota-ui");
 const { proc, wsUrl } = await launchChrome({
-  binary: CHROMIUM,
-  args: [
-    "--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
-    `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    "--remote-allow-origins=*", `--user-data-dir=${profile}`, "about:blank",
-  ],
+  extension: EXT,
+  profile,
 });
 const ws = new WebSocket(wsUrl);
 try {
