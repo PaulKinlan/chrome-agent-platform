@@ -8,220 +8,124 @@
 // process exits, so a hung suite holds a real Chrome (and its profile) alive for as long as it hangs.
 //
 // This is a structural pin because the alternative is a live Chrome that must fail to connect: the
-// falsifier below plants the pre-fix shape in a synthetic source and shows the guard reds on it, so the
+// falsifiers below plant the pre-fix shape in synthetic sources and show the guard reds on them, so the
 // check is not "the file happens to contain the right words today".
 //
 // It is deliberately a RULE over every suite in scripts/ and tests/, not a snapshot of one file, so the
 // same defect added to a new suite is caught by existing machinery instead of by the next review.
+//
+// WHY THIS IS PARSED AND NOT SCANNED (d36q4, 7g1fp, 3ce48, ke0n9, and coord's ruling):
+// the first version of this guard blanked comments and strings with a hand-written scanner and looked for
+// `openCdp(` in what was left. Three review rounds each found another corner of JavaScript that the
+// scanner got wrong, in both directions - a connect mentioned in a `/* */` block counted as real; a real
+// connect inside a `${...}` interpolation was invisible; a `}` inside a regex literal ended the
+// interpolation early and blanked the live code after it. Each fix was correct and each fix invited the
+// next corner, because the class is "write a JavaScript lexer in a test". So it stops: esbuild strips the
+// types, acorn parses what is left (exactly what tests/jjsz-lifeline-runner-exit.test.ts already does),
+// and the question "is this a call, and what contains it" is answered from the syntax tree. There is
+// nothing left to tokenise, so there is no fourth corner to find.
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
+import * as acorn from "npm:acorn";
+import { stop, transform } from "npm:esbuild@0.25.12";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-
-/**
- * Blank out comments and string CONTENTS so brace matching counts code, not prose or JSON (7g1fp, 3ce48).
- *
- * A template literal is NOT blanked wholesale. `${ ... }` is executable code - the reviewer's case was a
- * real second `openCdp(...)` spelled inside an interpolation, which the first version of this helper hid,
- * so a connect that could throw and skip its reap was invisible to the census. Interpolations are scanned
- * as code (recursively, so nested templates work), and only the literal text around them is blanked.
- *
- * Output keeps the input length exactly, so every index into it addresses the raw source and the
- * file:line in a failure message points at the line a human must read.
- */
-function codeOnly(source: string): string {
-  type Mode = { kind: "code"; braceDepth: number } | { kind: "template" };
-  const modes: Mode[] = [{ kind: "code", braceDepth: 0 }];
-  let out = "";
-  let i = 0;
-  const template = () => modes[modes.length - 1].kind === "template";
-  // Regex-literal disambiguation (ke0n9): `/` starts a REGEX where an expression cannot end, and a regex
-  // body may contain `}` and `/` that are not code. Without this, `/${}/.test("}")` inside an
-  // interpolation closed the interpolation early and blanked the live code after it.
-  let lastSignificant = "";
-  const regexFollows = () => lastSignificant === "" || "([{,;:=!&|?+-*%<>~^".includes(lastSignificant);
-  while (i < source.length) {
-    const ch = source[i];
-    const next = source[i + 1];
-    if (!template() && ch === "/" && next === "/") {
-      while (i < source.length && source[i] !== "\n") { out += " "; i++; }
-      continue;
-    }
-    if (!template() && ch === "/" && next === "*") {
-      out += "  ";
-      i += 2;
-      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) { out += " "; i++; }
-      if (i < source.length) { out += "  "; i += 2; }
-      continue;
-    }
-    if (!template() && ch === "/" && regexFollows()) {
-      // Blank the regex BODY (it is a pattern, not code) but keep the delimiters, so a `}` or a nested
-      // `/` inside a character class cannot end an interpolation or start a comment.
-      out += "/";
-      i++;
-      let inClass = false;
-      while (i < source.length) {
-        const c = source[i];
-        if (c === "\\") { out += "  "; i += 2; continue; }
-        if (c === "[") { inClass = true; out += "["; i++; continue; }
-        if (c === "]") { inClass = false; out += "]"; i++; continue; }
-        if (c === "/" && !inClass) { out += "/"; i++; break; }
-        if (c === "\n") { out += "\n"; i++; break; }
-        out += " ";
-        i++;
-      }
-      while (i < source.length && /[a-z]/i.test(source[i])) { out += source[i]; i++; }
-      lastSignificant = "/";
-      continue;
-    }
-    if (template()) {
-      if (ch === "\\") { out += source.slice(i, i + 2); i += 2; continue; }
-      if (ch === "$" && next === "{") {
-        // Real code starts here: opened for the tokeniser, not blanked.
-        modes.push({ kind: "code", braceDepth: 0 });
-        out += "${";
-        i += 2;
-        continue;
-      }
-      if (ch === "`") { modes.pop(); out += "`"; i++; continue; }
-      out += ch === "\n" ? "\n" : " ";
-      i++;
-      continue;
-    }
-    const top = modes[modes.length - 1] as { kind: "code"; braceDepth: number };
-    if (ch === "`") { modes.push({ kind: "template" }); out += "`"; i++; continue; }
-    if ((ch === '"' || ch === "'") ) {
-      const quote = ch;
-      out += quote;
-      i++;
-      while (i < source.length) {
-        if (source[i] === "\\") { out += "  "; i += 2; continue; }
-        if (source[i] === quote) { out += quote; i++; break; }
-        out += source[i] === "\n" ? "\n" : " ";
-        i++;
-      }
-      continue;
-    }
-    if (ch === "{") {
-      top.braceDepth++;
-      out += ch;
-      lastSignificant = ch;
-      i++;
-      continue;
-    }
-    if (ch === "}") {
-      top.braceDepth--;
-      lastSignificant = ch;
-      if (modes.length > 1 && top.braceDepth < 0) {
-        modes.pop();
-        out += "}";
-        i++;
-        continue;
-      }
-      out += ch;
-      i++;
-      continue;
-    }
-    if (ch === "`") { lastSignificant = "`"; }
-    if (!/\s/.test(ch)) lastSignificant = ch;
-    out += ch;
-    i++;
-  }
-  return out;
-}
-
-type Block = { start: number; end: number; hasFinally: boolean; finallyBody: string };
-
-/** The index of the `}` that closes the block opened at `open`, on the comment/string-blanked source. */
-function matchBrace(code: string, open: number): number {
-  let depth = 0;
-  for (let i = open; i < code.length; i++) {
-    if (code[i] === "{") depth++;
-    else if (code[i] === "}") {
-      depth--;
-      if (depth === 0) return i;
-    }
-  }
-  return -1;
-}
-
-/**
- * Every `try` block with its full extent: the try body PLUS its catch clauses and its finally.
- *
- * The suite's shape is `try { ... } catch (e) { ... } finally { reap }`, so looking for `} finally`
- * immediately after the try body finds nothing - the catch sits in between. That miss would have made
- * this guard silently pass over the very shape it was written for, which is why the falsifier below
- * pins both the pre-fix shape AND a try whose finally does not reap.
- */
-function tryBlocks(rawSource: string): Block[] {
-  // Same length as the original, so every index below still points at the real file.
-  const code = codeOnly(rawSource);
-  const blocks: Block[] = [];
-  const re = /(^|[^\w.$])try\s*\{/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(code)) !== null) {
-    const open = code.indexOf("{", match.index + match[0].length - 1);
-    const close = matchBrace(code, open);
-    if (close === -1) continue;
-    let cursor = close + 1;
-    let end = close;
-    let hasFinally = false;
-    let finallyBody = "";
-    for (;;) {
-      const rest = code.slice(cursor);
-      const clause = /^\s*(catch\s*(?:\([^)]*\))?\s*\{|finally\s*\{)/.exec(rest);
-      if (!clause) break;
-      const clauseOpen = code.indexOf("{", cursor + clause[0].length - 1);
-      const clauseClose = matchBrace(code, clauseOpen);
-      if (clauseClose === -1) break;
-      if (clause[1].startsWith("finally")) {
-        hasFinally = true;
-        finallyBody = code.slice(clauseOpen, clauseClose + 1);
-      }
-      end = clauseClose;
-      cursor = clauseClose + 1;
-    }
-    blocks.push({ start: open, end, hasFinally, finallyBody });
-  }
-  return blocks;
-}
-
-/**
- * EVERY real (non-comment, non-string) `openCdp(` CALL in the source, in order (d36q4, 7g1fp).
- *
- * The first version returned only the first call, so a suite with two launches where the SECOND connect
- * sat outside its reaping try was admitted. Walking every call site fixed that and introduced the mirror
- * error the reviewer then found: detection skipped `//` lines but not `/* ... *​/` blocks, so a connect
- * MENTIONED in a doc comment was judged as a real one and a valid suite was falsely refused.
- *
- * So the scan runs over `codeOnly`, which blanks comments AND string bodies in place (same length), and
- * the indices it returns still address the raw source. A call spelled inside a string or a comment is not
- * a call; the one shape this cannot see is a call inside a template interpolation, which no suite in this
- * repo uses and which would have to be spelled `\`${${CONNECT}(x)}\``.
- */
-function cdpCallIndices(source: string): number[] {
-  const code = codeOnly(source);
-  const re = new RegExp(`\\b${CONNECT}\\s*\\(`, "g");
-  const found: number[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(code)) !== null) found.push(match.index);
-  return found;
-}
-
-/** True when `cdpCall` sits inside a try whose `finally` reaps the browser. */
-function connectInsideReapingTry(source: string, cdpCall: number): boolean {
-  return tryBlocks(source).some((block) =>
-    cdpCall > block.start && cdpCall < block.end && block.hasFinally &&
-    /reapLeaderAndSettle\s*\(/.test(block.finallyBody)
-  );
-}
 
 // The repo contract (tests/chrome-test-contract.test.ts) forbids a real-Chrome LAUNCH in tests/ except in
 // chrome-profile-location.test.ts. The fixtures below DESCRIBE suites - they never run one - so the
 // identifiers are assembled at runtime and this file cannot read as a launcher to that guard.
 const LAUNCH = "launch" + "Chrome";
 const CONNECT = "open" + "Cdp";
+const REAP = "reapLeaderAndSettle";
+
+type Node = { type: string; start: number; end: number; [key: string]: any };
+const isNode = (value: unknown): value is Node =>
+  typeof value === "object" && value !== null && typeof (value as Node).type === "string";
+
+/** `a.b.c` for a non-computed member chain rooted at an identifier; optional chains included. */
+function dotted(node: Node | null | undefined): string | null {
+  if (!node) return null;
+  if (node.type === "ChainExpression") return dotted(node.expression);
+  if (node.type === "Identifier") return node.name;
+  if (node.type === "MemberExpression" && !node.computed && node.property?.type === "Identifier") {
+    const base = dotted(node.object);
+    return base === null ? null : `${base}.${node.property.name}`;
+  }
+  return null;
+}
+
+const parsed = new Map<string, Node>();
+
+/** The program of a TypeScript source: esbuild strips the types, acorn parses what is left. */
+async function parseTs(source: string): Promise<Node> {
+  const known = parsed.get(source);
+  if (known) return known;
+  try {
+    const { code } = await transform(source, { loader: "ts", format: "esm", target: "esnext" });
+    const program = acorn.parse(code, { ecmaVersion: "latest", sourceType: "module" }) as unknown as Node;
+    parsed.set(source, program);
+    return program;
+  } finally {
+    await stop();
+  }
+}
+
+/** Every node with the chain of its ancestors, outermost first. */
+function walk(program: Node): Array<{ node: Node; ancestors: Node[] }> {
+  const found: Array<{ node: Node; ancestors: Node[] }> = [];
+  const visit = (node: Node, ancestors: Node[]): void => {
+    found.push({ node, ancestors });
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "type" || key === "start" || key === "end") continue;
+      for (const child of Array.isArray(value) ? value : [value]) {
+        if (isNode(child)) visit(child, [...ancestors, node]);
+      }
+    }
+  };
+  visit(program, []);
+  return found;
+}
+
+/** TRUE when this try's `finally` reaps the browser (the reap is what makes the finally sufficient). */
+function reapsInFinally(tryNode: Node): boolean {
+  if (!isNode(tryNode.finalizer)) return false;
+  return walk(tryNode.finalizer).some(({ node }) =>
+    node.type === "CallExpression" && dotted(node.callee) === REAP
+  );
+}
+
+/** The `finally` body statements of a try that reaps, or null. */
+function reapingFinalizer(tryNode: Node): Node | null {
+  return isNode(tryNode.finalizer) && reapsInFinally(tryNode) ? tryNode.finalizer : null;
+}
+
+/**
+ * The verdict for EVERY connect in a source, in source order: true when the call sits inside the `try`
+ * BLOCK of a try whose `finally` reaps.
+ *
+ * Only the try block counts. A connect in the `catch` or in the `finally` is upstream of nothing: the
+ * reap already ran, or is running, and a throw there skips no cleanup but also guards no browser launch.
+ */
+async function connectVerdicts(source: string): Promise<boolean[]> {
+  const program = await parseTs(source);
+  const verdicts: boolean[] = [];
+  for (const { node, ancestors } of walk(program)) {
+    if (node.type !== "CallExpression" || dotted(node.callee) !== CONNECT) continue;
+    const guarded = ancestors.some((ancestor) =>
+      ancestor.type === "TryStatement" &&
+      reapingFinalizer(ancestor) !== null &&
+      node.start >= ancestor.block.start && node.end <= ancestor.block.end
+    );
+    verdicts.push(guarded);
+  }
+  return verdicts;
+}
+
+/** The line a node starts on, for a message a human has to act on. */
+function lineOf(source: string, offset: number): number {
+  return source.slice(0, offset).split("\n").length;
+}
 
 /**
  * Every suite in the repo, found by walking the directories (o6sqn).
@@ -261,59 +165,76 @@ Deno.test("kafr4: every suite that reaps a launched browser connects CDP INSIDE 
     } catch {
       continue; // a file that moved is not this guard's business
     }
-    if (!new RegExp(`${LAUNCH}\\s*\\(`).test(source) || !/reapLeaderAndSettle\s*\(/.test(source)) continue;
+    // Cheap pre-filter over raw text, and it is allowed to be wrong in the SAFE direction: a file that
+    // mentions these names anywhere is parsed, so a mention can only cost a parse, never a missed connect.
+    if (!new RegExp(`${LAUNCH}\\s*\\(`).test(source) || !new RegExp(`${REAP}\\s*\\(`).test(source)) continue;
     population++;
-    const cdpCalls = cdpCallIndices(source);
     // WHAT THIS RULE DOES NOT COVER, said out loud (o6sqn): a connect made through a local helper
     // (`const { cdp } = await connect(url)` / `new Cdp(ws)` in the journey scripts) is not an
     // `openCdp(...)` CALL, so it is not judged here - those files' reap order is pinned by
-    // tests/jjsz-lifeline-runner-exit.test.ts. This guard is about the call shape kafr4 broke, and it
-    // walks the tree so a NEW file with that shape is caught instead of having to be listed.
-    if (cdpCalls.length === 0) continue;
+    // tests/jjsz-lifeline-runner-exit.test.ts instead.
+    const program = await parseTs(source);
+    const sites = walk(program).filter(({ node }) => node.type === "CallExpression" && dotted(node.callee) === CONNECT);
+    if (sites.length === 0) continue;
     judged++;
-    for (const cdpCall of cdpCalls) {
-      const line = source.slice(0, cdpCall).split("\n").length;
+    for (const { node, ancestors } of sites) {
+      const guarded = ancestors.some((ancestor) =>
+        ancestor.type === "TryStatement" &&
+        reapingFinalizer(ancestor) !== null &&
+        node.start >= ancestor.block.start && node.end <= ancestor.block.end
+      );
       assert(
-        connectInsideReapingTry(source, cdpCall),
-        `${relative}:${line}: ${CONNECT}() must be called inside the try whose finally reaps the browser ` +
-          `(kafr4) - a connect that throws outside it skips the reap and leaves a real Chrome to the lifeline`,
+        guarded,
+        `${relative}:${lineOf(source, node.start)}: ${CONNECT}() must be called inside the try whose finally ` +
+          `reaps the browser (kafr4) - a connect that throws outside it skips the reap and leaves a real ` +
+          `Chrome to the lifeline`,
       );
     }
   }
   // Two floors, answering two questions. `population` is the walk's reach over files that launch AND reap
-  // (six today); if it collapses, discovery broke. `judged` is the files whose connect this rule can SEE
-  // (one today, scripts/security-suite.ts); if it hits zero the rule applies to nothing and this test
-  // would otherwise pass vacuously.
+  // (six today); if it collapses, discovery broke. `judged` is the files that actually CALL the connect
+  // (one today, scripts/security-suite.ts); if it hits zero the rule applies to nothing and this test would
+  // otherwise pass vacuously.
   assert(population >= 4, `the walk found only ${population} launch+reap file(s): discovery has drifted`);
   assert(judged >= 1, `the rule judged no file at all: it has stopped applying to the call shape it guards`);
 });
 
-Deno.test("kafr4: security-suite.ts specifically reaps on a connect failure (the case that was broken)", async () => {
+Deno.test("kafr4: security-suite.ts reaps on a connect failure, and its finally tolerates having no connection", async () => {
   const source = await Deno.readTextFile(`${ROOT}scripts/security-suite.ts`);
-  const cdpCalls = cdpCallIndices(source);
-  assert(cdpCalls.length > 0, "security-suite.ts opens a CDP connection");
-  const cdpCall = cdpCalls[0];
-  const reaping = tryBlocks(source).filter((b) => b.hasFinally && /reapLeaderAndSettle\s*\(/.test(b.finallyBody));
+  const program = await parseTs(source);
+  const sites = walk(program).filter(({ node }) => node.type === "CallExpression" && dotted(node.callee) === CONNECT);
+  assert(sites.length > 0, "security-suite.ts opens a CDP connection");
+  assertEquals(await connectVerdicts(source), sites.map(() => true),
+    "every connect in security-suite.ts is inside the reaping try, not before it");
+
+  const reaping = walk(program).filter(({ node }) => node.type === "TryStatement" && reapsInFinally(node));
   assertEquals(reaping.length, 1, "exactly one try/finally reaps the suite's browser");
-  assert(cdpCall > reaping[0].start && cdpCall < reaping[0].end,
-    "the connect is inside the reaping try, not before it");
-  assert(/connected\?\.close\(\)/.test(reaping[0].finallyBody),
-    "the finally tolerates having no connection to close, which is the connect-failed path");
+  const finalizer = reapingFinalizer(reaping[0].node);
+  assert(finalizer, "that try has a finally");
+  const first = finalizer.body[0];
+  const closes = first?.type === "ExpressionStatement" ? first.expression : null;
+  const inner = closes?.type === "ChainExpression" ? closes.expression : closes;
+  // acorn records the optional-ness on the MemberExpression (`connected?.close`), not on the call.
+  const optionalMember = inner?.type === "CallExpression" && inner.callee?.type === "MemberExpression" &&
+    inner.callee.optional === true;
+  assert(
+    inner?.type === "CallExpression" && dotted(inner.callee) === "connected.close" && optionalMember,
+    "the finally's first statement closes through an OPTIONAL handle: the connect-failed path has nothing " +
+      "to close, and that is the path kafr4 is about",
+  );
 });
 
-Deno.test("kafr4 falsification: the PRE-FIX shape (connect before the try) reds the guard", () => {
+Deno.test("kafr4 falsification: the PRE-FIX shape (connect before the try) reds the guard", async () => {
   const broken = `
     const chrome = await ${LAUNCH}({});
     const cdp = await ${CONNECT}(chrome.wsUrl);
     try {
       await cdp.eval("x");
     } finally {
-      await reapLeaderAndSettle(chrome.proc);
+      await ${REAP}(chrome.proc);
     }
   `;
-  const cdpCall = cdpCallIndices(broken)[0] ?? -1;
-  assert(cdpCall !== -1, "the falsifier has a call to find");
-  assertEquals(connectInsideReapingTry(broken, cdpCall), false,
+  assertEquals(await connectVerdicts(broken), [false],
     "the pre-fix shape must be refused: this is the defect the guard exists for");
 
   const fixed = `
@@ -325,127 +246,14 @@ Deno.test("kafr4 falsification: the PRE-FIX shape (connect before the try) reds 
       await cdp.eval("x");
     } finally {
       connected?.close();
-      await reapLeaderAndSettle(chrome.proc);
+      await ${REAP}(chrome.proc);
     }
   `;
-  assertEquals(connectInsideReapingTry(fixed, cdpCallIndices(fixed)[0] ?? -1), true,
+  assertEquals(await connectVerdicts(fixed), [true],
     "and the fixed shape is admitted, so the guard is not simply refusing everything");
 });
 
-Deno.test("ke0n9: a regex literal's } and / do not end the interpolation or start a comment", () => {
-  // The reviewer's shape: a valid TypeScript template whose interpolation tests `/[}]/` (or `/${}/`) before
-  // a real connect. Read as plain text, the `}` inside the pattern closed the interpolation early and every
-  // live call after it was blanked - the census stayed green while a connect sat outside a reaping try.
-  const withRegex = `
-    const first = await ${LAUNCH}({});
-    const guard = \`validate: \${/[}]/.test("}") && await ${CONNECT}(second.wsUrl)} done\`;
-    try {
-      await cdp.eval(guard);
-    } finally {
-      await reapLeaderAndSettle(first.proc);
-    }
-  `;
-  const calls = cdpCallIndices(withRegex);
-  assertEquals(calls.length, 1, "the connect after the regex literal is still LIVE code and is a call site");
-  assertEquals(connectInsideReapingTry(withRegex, calls[0]), false,
-    "and it sits before the try whose finally reaps, which is the leak the regex blind spot hid");
-  // Division must not be mistaken for a regex: `a / b` leaves the following code intact.
-  const division = `const half = total / count;\nconst cdp = await ${CONNECT}(url);\n`;
-  assertEquals(cdpCallIndices(division).length, 1,
-    "a division sign does not start a regex, so the connect after it is still seen");
-});
-
-Deno.test("3ce48: a real connect inside a template interpolation IS a call site", () => {
-  // The reviewer's case: `${...}` is executable, so a second connect spelled there can throw and skip its
-  // reap. The helper must see it, report it, and the census must refuse the file.
-  const interpolated = `
-    const first = await ${LAUNCH}({});
-    try {
-      const cdp = await ${CONNECT}(first.wsUrl);
-      const label = \`phase two: \${await ${CONNECT}(second.wsUrl)} connected\`;
-      await cdp.eval(label);
-    } finally {
-      await reapLeaderAndSettle(first.proc);
-    }
-  `;
-  const calls = cdpCallIndices(interpolated);
-  assertEquals(calls.length, 2, "the interpolation is code: both connects are call sites");
-  assertEquals(connectInsideReapingTry(interpolated, calls[0]), true);
-  assertEquals(connectInsideReapingTry(interpolated, calls[1]), true,
-    "spelled inside the try body it IS guarded, so it is admitted - the finding was that it was invisible");
-
-  // The leaked-browser shape: the same interpolation BEFORE the try, where a rejection skips the reap.
-  const beforeTheTry = `
-    const first = await ${LAUNCH}({});
-    const label = \`phase two: \${await ${CONNECT}(second.wsUrl)} connected\`;
-    try {
-      await cdp.eval(label);
-    } finally {
-      await reapLeaderAndSettle(first.proc);
-    }
-  `;
-  const before = cdpCallIndices(beforeTheTry);
-  assertEquals(before.length, 1, "the pre-try interpolation is a call site");
-  assertEquals(connectInsideReapingTry(beforeTheTry, before[0]), false,
-    "and a connect spelled there skips the reap, which is the leak the helper used to hide");
-  // A template with no interpolation is still just text: it must not create phantom call sites.
-  const prose = "const note = \`call ${CONNECT}(fake.wsUrl) by hand\`;";
-  assertEquals(cdpCallIndices(prose).length, 0, "template TEXT is not code");
-});
-
-Deno.test("7g1fp: a connect MENTIONED in a block comment or a string is not a connect", () => {
-  const safe = `
-    const first = await ${LAUNCH}({});
-    try {
-      const cdp = await ${CONNECT}(first.wsUrl);
-      /**
-       * Historical shape, do not use: this used to be
-       *   const cdp2 = await ${CONNECT}(second.wsUrl);
-       * before the reaping try.
-       */
-      const note = "call ${CONNECT}(fake.wsUrl) only inside the try";
-      await cdp.eval(note);
-    } finally {
-      await reapLeaderAndSettle(first.proc);
-    }
-  `;
-  const calls = cdpCallIndices(safe);
-  assertEquals(calls.length, 1, "only the real call is a call site - not the block comment and not the string");
-  assertEquals(connectInsideReapingTry(safe, calls[0]), true,
-    "and the file is admitted, which the //-only filter got wrong in the reviewer's reproduction");
-});
-
-Deno.test("d36q4 falsification: a SECOND connect outside its reaping try is not hidden by a good first one", () => {
-  // The reviewer's shape (d36q4): phase 1 connects inside its reaping try, phase 2 launches again and
-  // connects before ITS try. Judging only the first call site admitted this, which is why the census now
-  // walks every connect.
-  const twoPhase = `
-    const first = await ${LAUNCH}({});
-    try {
-      const cdp = await ${CONNECT}(first.wsUrl);
-      await cdp.eval("a");
-    } finally {
-      await reapLeaderAndSettle(first.proc);
-    }
-    const second = await ${LAUNCH}({});
-    const cdp2 = await ${CONNECT}(second.wsUrl);
-    try {
-      await cdp2.eval("b");
-    } finally {
-      await reapLeaderAndSettle(second.proc);
-    }
-  `;
-  const calls = cdpCallIndices(twoPhase);
-  assertEquals(calls.length, 2, "the falsifier has two connects to judge");
-  assertEquals(connectInsideReapingTry(twoPhase, calls[0]), true,
-    "the first connect is inside its reaping try, so it must be admitted");
-  assertEquals(connectInsideReapingTry(twoPhase, calls[1]), false,
-    "and the second is NOT, which the one-call-per-file census could not see");
-});
-
-Deno.test("kafr4 falsification: a try without the reap in its finally does not license the connect", () => {
-  // The nearest-looking shape that is still wrong: the connect inside a try whose finally closes the
-  // connection but never reaps the process.
+Deno.test("kafr4 falsification: a try without the reap in its finally does not license the connect", async () => {
   const shape = `
     const chrome = await ${LAUNCH}({});
     try {
@@ -455,6 +263,90 @@ Deno.test("kafr4 falsification: a try without the reap in its finally does not l
       cdp.close();
     }
   `;
-  assertEquals(connectInsideReapingTry(shape, cdpCallIndices(shape)[0] ?? -1), false,
+  assertEquals(await connectVerdicts(shape), [false],
     "the reap is what makes the finally sufficient, not the presence of any finally");
+});
+
+Deno.test("kafr4 falsification: a connect in the CATCH or FINALLY of a reaping try is not guarded", async () => {
+  const inCatch = `
+    const chrome = await ${LAUNCH}({});
+    try {
+      await something();
+    } catch (e) {
+      const cdp = await ${CONNECT}(chrome.wsUrl);
+    } finally {
+      await ${REAP}(chrome.proc);
+    }
+  `;
+  assertEquals(await connectVerdicts(inCatch), [false],
+    "a connect in the catch runs AFTER the try already failed: it is not inside the try block");
+});
+
+Deno.test("d36q4: a SECOND connect outside its reaping try is not hidden by a good first one", async () => {
+  const twoPhase = `
+    const first = await ${LAUNCH}({});
+    try {
+      const cdp = await ${CONNECT}(first.wsUrl);
+      await cdp.eval("a");
+    } finally {
+      await ${REAP}(first.proc);
+    }
+    const second = await ${LAUNCH}({});
+    const cdp2 = await ${CONNECT}(second.wsUrl);
+    try {
+      await cdp2.eval("b");
+    } finally {
+      await ${REAP}(second.proc);
+    }
+  `;
+  assertEquals(await connectVerdicts(twoPhase), [true, false],
+    "the first connect is guarded and the second is not - a per-file 'the first one looked fine' census " +
+      "would have admitted this suite");
+});
+
+Deno.test("7g1fp / ke0n9 / 3ce48: comments, strings, templates and regexes are syntax, not call sites", async () => {
+  // Every lexical corner the three review rounds found, in one source. The parser answers all of them
+  // the same way, because none of these is a call: only the real connect is a call site.
+  const source = `
+    const first = await ${LAUNCH}({});
+    /**
+     * Historical shape, do not use:
+     *   const cdp = await ${CONNECT}(second.wsUrl);
+     */
+    const prose = "call ${CONNECT}(fake.wsUrl) only inside the try";
+    const literal = \`call ${CONNECT}(fake2.wsUrl) by hand\`;
+    const pattern = /[}]${CONNECT}\\(/;
+    try {
+      const cdp = await ${CONNECT}(first.wsUrl);
+      const label = \`phase: \${await ${CONNECT}(first.wsUrl)} ok / \${/[}]/.test("}")}\`;
+      await cdp.eval(prose + literal + String(pattern) + label);
+    } finally {
+      await ${REAP}(first.proc);
+    }
+  `;
+  // Two real calls, and only two: the awaited one in the try and the one inside the interpolation (which IS
+  // code and also sits in the try). The block comment, the string, the template text and the regex all
+  // spell `openCdp(` and none of them is a call.
+  assertEquals(await connectVerdicts(source), [true, true],
+    "a comment, a string, template text and a regex create no call sites, and the interpolated connect is real");
+
+  const leak = `
+    const first = await ${LAUNCH}({});
+    const label = \`phase: \${await ${CONNECT}(second.wsUrl)} / \${/[}]/.test("}")}\`;
+    try {
+      await cdp.eval(label);
+    } finally {
+      await ${REAP}(first.proc);
+    }
+  `;
+  assertEquals(await connectVerdicts(leak), [false],
+    "the same interpolation BEFORE the try is a real connect outside the reap, which is the leak");
+});
+
+Deno.test("kafr4: the guard reads its own fixtures as fixtures", async () => {
+  // This file mentions the launch, the connect and the reap dozens of times, inside template literals. If
+  // the guard counted text, it would report itself; the parser is what makes that impossible.
+  const self = await Deno.readTextFile(fileURLToPath(import.meta.url));
+  assertEquals(await connectVerdicts(self), [],
+    "this test file contains no real connect call, so the guard must find none in it");
 });
