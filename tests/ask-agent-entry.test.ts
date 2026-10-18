@@ -334,6 +334,100 @@ Deno.test("hydrateAskAgentImage: fills a typed dataURL within the bound; refuses
   assertStringIncludes(threw.reason!, "offline");
 });
 
+// ── o4e3w: the image URL is page-chosen, so it is untrusted input ──────────
+// A right-clicked <img src> lets the PAGE choose a URL that the extension then
+// fetches with its own authority. Pre-fix, the fetch was `redirect: "follow"`
+// and unvalidated: an image URL could 302 the extension at a metadata/loopback
+// host, or simply BE one. These tests drive the real hydration path.
+
+Deno.test("o4e3w: a page-chosen image URL that 302s to a metadata host is refused, and the metadata host is never requested", async () => {
+  const calls: { url: string; redirect?: string }[] = [];
+  const METADATA = "http://169.254.169.254/latest/meta-data/";
+  // Emulates the platform: it follows a redirect only when the caller asks it to.
+  const platformishFetch = async (url: unknown, opts?: { redirect?: string }) => {
+    const u = String(url);
+    calls.push({ url: u, redirect: opts?.redirect });
+    if (u === "https://cdn.example.org/p.png") {
+      if (opts?.redirect === "manual") {
+        return {
+          ok: false,
+          status: 302,
+          type: "basic",
+          headers: { get: (k: string) => (k.toLowerCase() === "location" ? METADATA : null) },
+          arrayBuffer: async () => new ArrayBuffer(0),
+        } as never;
+      }
+      // redirect:"follow" — the platform takes the hop for us, request and all.
+      return platformishFetch(METADATA, opts);
+    }
+    return fakeResponse();
+  };
+  const att = askAgentPrefillFromClick({ menuItemId: "cap-ask-agent-image", srcUrl: "https://cdn.example.org/p.png", pageUrl: TAB.url }, TAB)!.attachments[0];
+  const out = await hydrateAskAgentImage(att, { fetchImpl: platformishFetch as never });
+  assertEquals(out.ok, false);
+  assertEquals(calls.length, 1, `only the image URL itself may be requested, got ${JSON.stringify(calls)}`);
+  assert(!calls.some((c) => c.url.includes("169.254.169.254")), "the metadata host must never be requested");
+  assertEquals(calls[0].redirect, "manual", "the platform must never follow the redirect on our behalf");
+  assertStringIncludes(out.reason!, "refused");
+  assertEquals(att.dataURL, undefined, "no bytes, so the attachment stays a URL reference");
+});
+
+Deno.test("o4e3w: a private or loopback image URL is refused before any request (real server)", async () => {
+  let hits = 0;
+  const server = Deno.serve({ port: 0, hostname: "127.0.0.1", onListen() {} }, () => {
+    hits++;
+    return new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "content-type": "image/png" } });
+  });
+  try {
+    const att = askAgentPrefillFromClick(
+      { menuItemId: "cap-ask-agent-image", srcUrl: `http://127.0.0.1:${server.addr.port}/photo.png`, pageUrl: TAB.url },
+      TAB,
+    )!.attachments[0];
+    const out = await hydrateAskAgentImage(att, { fetchImpl: fetch });
+    assertEquals(out.ok, false);
+    assertEquals(hits, 0, "a page-chosen loopback image must never be fetched with extension authority");
+    assertStringIncludes(out.reason!, "private or loopback");
+  } finally {
+    await server.shutdown();
+  }
+});
+
+Deno.test("o4e3w: an inspectable same-host image redirect still resolves, an uninspectable one is refused, data: URLs still hydrate", async () => {
+  // A CDN hop that stays on a public host: followed here, by us, once.
+  const hopCalls: string[] = [];
+  const hopFetch = async (url: unknown, opts?: { redirect?: string }) => {
+    const u = String(url);
+    hopCalls.push(u);
+    if (u === "https://cdn.example.org/p.png" && opts?.redirect === "manual") {
+      return { ok: false, status: 301, type: "basic", headers: { get: (k: string) => (k.toLowerCase() === "location" ? "/v2/p.png" : null) } } as never;
+    }
+    if (u === "https://cdn.example.org/v2/p.png") return fakeResponse() as never;
+    throw new Error(`unexpected fetch ${u}`);
+  };
+  const hopAtt = askAgentPrefillFromClick({ menuItemId: "cap-ask-agent-image", srcUrl: "https://cdn.example.org/p.png", pageUrl: TAB.url }, TAB)!.attachments[0];
+  const hopOut = await hydrateAskAgentImage(hopAtt, { fetchImpl: hopFetch as never });
+  assertEquals(hopOut.ok, true, "a same-host hop keeps working");
+  assertEquals(hopCalls, ["https://cdn.example.org/p.png", "https://cdn.example.org/v2/p.png"]);
+
+  // In the extension's service worker a manual redirect is opaque: refused.
+  const opaqueAtt = askAgentPrefillFromClick({ menuItemId: "cap-ask-agent-image", srcUrl: "https://cdn.example.org/p.png", pageUrl: TAB.url }, TAB)!.attachments[0];
+  const opaqueOut = await hydrateAskAgentImage(opaqueAtt, {
+    fetchImpl: (async () => ({ ok: false, status: 0, type: "opaqueredirect", headers: { get: () => null } })) as never,
+  });
+  assertEquals(opaqueOut.ok, false);
+  assertStringIncludes(opaqueOut.reason!, "uninspectable");
+  assertEquals(opaqueAtt.dataURL, undefined);
+
+  // A data: image never leaves the browser: no policy refusal.
+  const dataAtt = askAgentPrefillFromClick(
+    { menuItemId: "cap-ask-agent-image", srcUrl: "data:image/png;base64,iVBORw0KGgo=", pageUrl: TAB.url },
+    TAB,
+  )!.attachments[0];
+  const dataOut = await hydrateAskAgentImage(dataAtt, { fetchImpl: (async () => fakeResponse()) as never });
+  assertEquals(dataOut.ok, true);
+  assertEquals(dataAtt.type, "image/png");
+});
+
 // ── the hand-off: storage.session keyed by tab, consumed once, expiring ────
 Deno.test("prefill hand-off: stored under the tab's key, taken exactly once, expired after the TTL", async () => {
   const { chrome, state } = fakeChrome();
