@@ -14,6 +14,16 @@
 // It is deliberately a RULE over every suite in scripts/ and tests/, not a snapshot of one file, so the
 // same defect added to a new suite is caught by existing machinery instead of by the next review.
 //
+// WHAT THIS GUARD PROVES (apb9i, option A - the claim is bounded on purpose):
+//   REACH  every `openCdp(...)` call in the tree is inside the try BLOCK of a try whose finally reaps;
+//   ORDER  that reap is a DIRECT statement of the finally, with no function/arrow/class between it and the
+//          finalizer body, so it actually runs when the finally runs.
+// WHAT IT DOES NOT PROVE: browser IDENTITY. A finally that reaps a different platform object than the one
+// this suite launched still reads as guarded, because proving otherwise is dataflow, not a shape check. The
+// limitation is asserted as a known limitation below rather than left for a reader to discover, and option B
+// (dataflow) is deferred until a suite here launches twice. A guard that quietly claims more than it can
+// check is how the four lexical rounds happened in the first place.
+//
 // WHY THIS IS PARSED AND NOT SCANNED (d36q4, 7g1fp, 3ce48, ke0n9, and coord's ruling):
 // the first version of this guard blanked comments and strings with a hand-written scanner and looked for
 // `openCdp(` in what was left. Three review rounds each found another corner of JavaScript that the
@@ -87,12 +97,31 @@ function walk(program: Node): Array<{ node: Node; ancestors: Node[] }> {
   return found;
 }
 
-/** TRUE when this try's `finally` reaps the browser (the reap is what makes the finally sufficient). */
+const DEFERRING = new Set([
+  "FunctionExpression",
+  "ArrowFunctionExpression",
+  "FunctionDeclaration",
+  "ClassExpression",
+  "ClassDeclaration",
+]);
+
+/**
+ * TRUE when this try's `finally` reaps the browser with a DIRECT statement (apb9i, option A).
+ *
+ * Sufficiency has to be about what RUNS. A reap spelled inside a function that the finally never calls is
+ * not a reap, and the reviewer showed exactly that reading as guarded - a green verdict for a suite whose
+ * browser leaks. So the reap call must sit in the finalizer's own body with no deferring construct
+ * (function, arrow, class) between it and that body.
+ *
+ * This still does not prove the reap is of the SAME browser the suite launched: that is dataflow, and it is
+ * deliberately NOT claimed here (see the header). What is claimed - reach and order - is now true.
+ */
 function reapsInFinally(tryNode: Node): boolean {
   if (!isNode(tryNode.finalizer)) return false;
-  return walk(tryNode.finalizer).some(({ node }) =>
-    node.type === "CallExpression" && dotted(node.callee) === REAP
-  );
+  return walk(tryNode.finalizer).some(({ node, ancestors }) => {
+    if (node.type !== "CallExpression" || dotted(node.callee) !== REAP) return false;
+    return !ancestors.some((ancestor) => DEFERRING.has(ancestor.type));
+  });
 }
 
 /** The `finally` body statements of a try that reaps, or null. */
@@ -153,7 +182,7 @@ async function suiteFiles(): Promise<string[]> {
   return found.sort();
 }
 
-Deno.test("kafr4: every suite that reaps a launched browser connects CDP INSIDE the try that reaps", async () => {
+Deno.test("kafr4 (REACH): every connect in every suite is inside the try whose finally reaps", async () => {
   let judged = 0;
   let population = 0;
   const files = await suiteFiles();
@@ -199,7 +228,7 @@ Deno.test("kafr4: every suite that reaps a launched browser connects CDP INSIDE 
   assert(judged >= 1, `the rule judged no file at all: it has stopped applying to the call shape it guards`);
 });
 
-Deno.test("kafr4: security-suite.ts reaps on a connect failure, and its finally tolerates having no connection", async () => {
+Deno.test("kafr4 (ORDER): security-suite.ts closes an optional handle first, then reaps, directly in the finally", async () => {
   const source = await Deno.readTextFile(`${ROOT}scripts/security-suite.ts`);
   const program = await parseTs(source);
   const sites = walk(program).filter(({ node }) => node.type === "CallExpression" && dotted(node.callee) === CONNECT);
@@ -265,6 +294,52 @@ Deno.test("kafr4 falsification: a try without the reap in its finally does not l
   `;
   assertEquals(await connectVerdicts(shape), [false],
     "the reap is what makes the finally sufficient, not the presence of any finally");
+});
+
+Deno.test("apb9i (ORDER): a reap DEFERRED into a function the finally never calls is not a reap", async () => {
+  // The reviewer's first false green: the finally defines a helper that reaps and never calls it. Nothing
+  // reaps, so the connect is not guarded - and the guard must say so.
+  const deferred = `
+    const chrome = await ${LAUNCH}({});
+    try {
+      const cdp = await ${CONNECT}(chrome.wsUrl);
+      await cdp.eval("x");
+    } finally {
+      const later = async () => await ${REAP}(chrome.proc);
+      void later;
+    }
+  `;
+  assertEquals(await connectVerdicts(deferred), [false],
+    "a reap that the finally never runs is not a reap: reach and order both fail for this suite");
+
+  const direct = `
+    const chrome = await ${LAUNCH}({});
+    try {
+      const cdp = await ${CONNECT}(chrome.wsUrl);
+      await cdp.eval("x");
+    } finally {
+      await ${REAP}(chrome.proc);
+    }
+  `;
+  assertEquals(await connectVerdicts(direct), [true], "and the direct statement is what makes it guarded");
+});
+
+Deno.test("apb9i KNOWN LIMITATION: identity is NOT claimed, and that is written down here", async () => {
+  // The reviewer's second false green. This suite reaps a DIFFERENT platform object than the one it
+  // launched, so its own browser still leaks - and this guard reads it as guarded, because identity is
+  // dataflow. The test asserts the CURRENT behaviour so the limitation cannot be mistaken for coverage, and
+  // names the decision: option B (dataflow) is deferred until a suite in this repo launches twice.
+  const wrongBrowser = `
+    const chrome = await ${LAUNCH}({});
+    try {
+      const cdp = await ${CONNECT}(chrome.wsUrl);
+      await cdp.eval("x");
+    } finally {
+      await ${REAP}(someOtherPlatform.proc);
+    }
+  `;
+  assertEquals(await connectVerdicts(wrongBrowser), [true],
+    "KNOWN LIMITATION, not a pass: reach and order hold, identity does not, and this guard does not claim it");
 });
 
 Deno.test("kafr4 falsification: a connect in the CATCH or FINALLY of a reaping try is not guarded", async () => {
