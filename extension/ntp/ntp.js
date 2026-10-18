@@ -2856,6 +2856,7 @@ function hideThreadViewInner() {
   currentThreadId = null;
   currentAgentId = null;
   currentAgentKind = null;
+  highlightTaskSidebarRow(null);
   // Back to the hub: the next task's assistant turns are the hub's own agent.
   threadConversation?.setIdentity?.({ name: "Assistant", avatar: initialAvatar("Assistant") });
   hideAgentSchedules();

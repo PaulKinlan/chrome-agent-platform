@@ -384,3 +384,17 @@ Deno.test("ntp wiring: openThread answers the click before the thread.get read",
     "a loading state is set BEFORE the asynchronous read");
   assertStringIncludes(body, 'threadConversation?.setLiveStatus?.({ state: "running", activity: "Loading task…" });');
 });
+
+Deno.test("ntp wiring: hideThreadViewInner clears the sidebar aria-current highlight (ome8i)", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
+  const start = source.indexOf("function hideThreadViewInner()");
+  assert(start >= 0, "hideThreadViewInner exists");
+  const end = source.indexOf("function hideViewInner()", start);
+  const body = source.slice(start, end);
+
+  assertStringIncludes(
+    body,
+    "highlightTaskSidebarRow(null);",
+    "hideThreadViewInner must clear the active sidebar row's aria-current",
+  );
+});
