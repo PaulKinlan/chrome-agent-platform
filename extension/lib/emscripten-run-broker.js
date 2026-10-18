@@ -19,8 +19,7 @@ import { EMSCRIPTEN_RUN_TYPE } from "./emscripten-host.js";
 // run-owned sealed stream and independent byte verification before publication.
 // Keep every byte-bearing operation unavailable until that custody path lands.
 function requiresSealedCustody(op) {
-  return op.kind === "native-buffer-v1" || op.result === "buffer" ||
-    op.params?.some((param) => param.type === "buffer");
+  return op.result === "buffer" || op.params?.some((param) => param.type === "buffer");
 }
 
 export function isSchema2Admitted(pkg) {

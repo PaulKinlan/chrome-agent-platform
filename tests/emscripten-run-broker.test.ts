@@ -82,6 +82,11 @@ Deno.test("broker: byte-bearing operations stay unavailable until sealed custody
     }), null, "no direct envelope can bypass output custody");
   }
   assertEquals(emscriptenCatalogRows([ROW_PACKAGE]).length, 1, "scalar operation remains available");
+  const stringDigest = { ...MANIFEST, entry: { ...MANIFEST.entry, operations: [{
+    ...MANIFEST.entry.operations[0], kind: "native-buffer-v1", result: "string", params: [],
+  }] } };
+  assertEquals(emscriptenCatalogRows([{ ...ROW_PACKAGE, manifest: stringDigest }]).length, 1,
+    "native-buffer implementation with string-only wire remains available (Blake3)");
 });
 
 Deno.test("broker: arg validation enforces exact keys, types and admitted bounds", () => {
