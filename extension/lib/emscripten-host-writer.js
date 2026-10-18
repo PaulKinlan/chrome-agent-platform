@@ -155,7 +155,8 @@ export async function openHostOwnedEmscriptenWriter({ runId, agentId, outputRef,
  * independent re-read. A failed append never returns a successful receipt. */
 export async function openAuditedHostOwnedEmscriptenWriter({ identity, storage, evidence = createEmscriptenHostEvidence({ storage }) } = {}) {
   if (!identity || typeof identity !== "object" || typeof evidence?.begin !== "function" ||
-      typeof evidence?.recordUnknown !== "function" || typeof evidence?.recordClosed !== "function") {
+      typeof evidence?.recordUnknown !== "function" || typeof evidence?.recordClosed !== "function" ||
+      typeof evidence?.recordProtocolViolation !== "function") {
     fail("emscripten_writer_evidence_unavailable");
   }
   const pendingEvidence = await evidence.begin(identity);

@@ -195,6 +195,50 @@ Deno.test("3mcu1: frame observed after returned CLOSED revokes durable evidence"
   await assertRejects(() => restarted.begin(identity), Error, "emscripten_host_evidence_unknown");
 });
 
+Deno.test("3mcu1: a late frame during terminal evidence append cannot leave CLOSED", async () => {
+  const { storage, identity, evidence, job } = await context();
+  const worker = fakeWorker();
+  let entered;
+  const recordEntered = new Promise((resolve) => { entered = resolve; });
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let appendFinished;
+  const appendSettled = new Promise((resolve) => { appendFinished = resolve; });
+  const slowEvidence = {
+    begin: (raw) => evidence.begin(raw),
+    recordUnknown: (raw, reason) => evidence.recordUnknown(raw, reason),
+    recordClosed: async (raw, proof) => {
+      entered(); await gate;
+      try { return await evidence.recordClosed(raw, proof); }
+      finally { appendFinished(); }
+    },
+    recordProtocolViolation: (raw, reason) => evidence.recordProtocolViolation(raw, reason),
+  };
+  const running = runAuditedHostBinaryJob({ identity, job, storage, evidence: slowEvidence,
+    createWorker: () => worker, wallMs: 1000 });
+  const rejected = assertRejects(() => running);
+  await recordEntered; // writer already closed; durable CLOSED append is still pending.
+  worker.emitLateFrame();
+  release();
+  await rejected;
+  await appendSettled; // distinguish pending's implicit UNKNOWN from a later CLOSED append.
+  assertEquals((await evidence.read(identity)).state, "unknown");
+});
+
+Deno.test("3mcu1: evidence override without late-frame revocation refuses before Worker spawn", async () => {
+  const { storage, identity, evidence, job } = await context();
+  let spawned = false;
+  const incomplete = {
+    begin: (raw) => evidence.begin(raw),
+    recordUnknown: (raw, reason) => evidence.recordUnknown(raw, reason),
+    recordClosed: (raw, proof) => evidence.recordClosed(raw, proof),
+  };
+  await assertRejects(() => runAuditedHostBinaryJob({ identity, job, storage, evidence: incomplete,
+    createWorker: () => { spawned = true; return fakeWorker(); }, wallMs: 1000 }), Error,
+  "emscripten_writer_evidence_unavailable");
+  assertEquals(spawned, false);
+});
+
 Deno.test("3mcu1: malformed frame and silent job both end UNKNOWN, never CLOSED", async () => {
   for (const options of [{ malformed: true }, { timeout: true }]) {
     const { storage, identity, evidence, job } = await context();

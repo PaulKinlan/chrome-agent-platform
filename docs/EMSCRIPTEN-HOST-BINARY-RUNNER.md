@@ -19,9 +19,13 @@ null terminal result with matching Worker incarnation followed by channel drain,
 close, terminal lock probe, independent byte re-read/hash and verified CLOSED
 record. A returned CLOSED proof carries `ledgerRef` (root, exact ref/generation
 key and host incarnation), which the future SW caller must re-read before any
-irreversible publication. A frame arriving after terminal while close is pending
-poisons the attempt immediately; an observed frame after CLOSED durably writes
-`invalidated.json`, making later reads UNKNOWN even across restart. Invalidation
+irreversible publication. A frame arriving after terminal while the writer is
+still draining poisons the attempt immediately. If the writer is already closed
+but `closed.json` append is pending, the runner records that arrival synchronously,
+waits for append and then durably invalidates the receipt **before** returning.
+An observed frame after a returned CLOSED likewise writes `invalidated.json`,
+making later reads UNKNOWN even across restart. Custom evidence providers must
+implement the revocation operation or the runner refuses before Worker startup. Invalidation
 is monotonic and a prior CLOSED proof must never bypass the fresh ledger read.
 Malformed frame, worker error and deadline abort to durable UNKNOWN; none seal,
 publish or delete original input/output staging. **CLOSED proves only the host

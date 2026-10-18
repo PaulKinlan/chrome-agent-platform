@@ -227,6 +227,7 @@ Deno.test("3mcu1: final audit append failure never returns a CLOSED receipt", as
     begin: (raw) => host.begin(raw),
     recordUnknown: (raw, reason) => host.recordUnknown(raw, reason),
     recordClosed: async () => { throw new Error("injected audit failure"); },
+    recordProtocolViolation: (raw, reason) => host.recordProtocolViolation(raw, reason),
   };
   const channel = await openAuditedHostOwnedEmscriptenWriter({ identity, storage, evidence });
   await channel.push({ seq: 0, chunk: new Uint8Array([1]) });

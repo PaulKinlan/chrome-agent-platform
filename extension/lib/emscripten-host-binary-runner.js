@@ -59,6 +59,7 @@ export async function runAuditedHostBinaryJob({ identity, job, storage, evidence
   let done = false;
   let returnedClosed = false;
   let terminalReceived = false;
+  let lateFrameObserved = false;
   let events = Promise.resolve();
   const hostIdentity = { sessionId: job.sessionId, packageId: job.packageId,
     operationId: job.operationId, workerInstanceId: null };
@@ -86,11 +87,12 @@ export async function runAuditedHostBinaryJob({ identity, job, storage, evidence
         // Observe arrival, not just processing order: a frame queued after a
         // terminal message must poison evidence even while close() is pending.
         if (data?.type === EMSCRIPTEN_OUTPUT_FRAME_TYPE && terminalReceived) {
-          if (!done) {
+          lateFrameObserved = true; // synchronously visible to the pending close continuation
+          if (!done && channel.state !== "closed") {
             void rejectUnknown("writer_fence_unavailable", new Error("emscripten_frame_after_terminal"));
           } else if (returnedClosed) {
-            // A message already queued after terminal may arrive after close.
-            // Revoke the durable CLOSED witness; never silently drop it.
+            // A queued message can arrive after the result was returned. Revoke
+            // the durable witness; a future caller must freshly read ledgerRef.
             void hostEvidence.recordProtocolViolation(identity, "writer_fence_unavailable");
           }
           return;
@@ -115,6 +117,15 @@ export async function runAuditedHostBinaryJob({ identity, job, storage, evidence
           // The worker cannot open or hold this file. Only the host-owned
           // channel closes and records evidence after all ACKed writes.
           const closed = await channel.close();
+          if (lateFrameObserved) {
+            // The inner writer may have closed while recordClosed was still
+            // appending. Abort cannot undo it; invalidate AFTER that append.
+            await hostEvidence.recordProtocolViolation(identity, "writer_fence_unavailable");
+            done = true;
+            stop();
+            reject(new Error("emscripten_frame_after_terminal"));
+            return;
+          }
           returnedClosed = true;
           done = true;
           stop();
