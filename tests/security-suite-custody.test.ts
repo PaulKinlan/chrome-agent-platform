@@ -681,6 +681,28 @@ Deno.test("security-suite custody: exit 37 and runner signal propagate exactly",
   } finally {
     await removeEvidence(signaled);
   }
+
+  const signaledKill = await runSupervisor("signal", 2_000, {
+    CAP_SECURITY_TEST_SIGNAL: "SIGKILL",
+  });
+  try {
+    assertEquals(signaledKill.code, 137);
+    assertEquals(signaledKill.receipt?.exit, 137);
+    assertEquals(signaledKill.receipt?.runnerSignal, "SIGKILL");
+  } finally {
+    await removeEvidence(signaledKill);
+  }
+
+  const signaledAbrt = await runSupervisor("signal", 2_000, {
+    CAP_SECURITY_TEST_SIGNAL: "SIGABRT",
+  });
+  try {
+    assertEquals(signaledAbrt.code, 134);
+    assertEquals(signaledAbrt.receipt?.exit, 134);
+    assertEquals(signaledAbrt.receipt?.runnerSignal, "SIGABRT");
+  } finally {
+    await removeEvidence(signaledAbrt);
+  }
 });
 
 Deno.test("yuu9s: persistently unreadable process table exits 70 with an empty observed set and a named receipt", async () => {

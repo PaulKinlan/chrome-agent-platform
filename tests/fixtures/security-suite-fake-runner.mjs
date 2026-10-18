@@ -53,7 +53,8 @@ if (process.argv[2] === "--stubborn-child") {
   } else if (scenario === "exit37") {
     setTimeout(() => process.exit(37), 100);
   } else if (scenario === "signal") {
-    setTimeout(() => process.kill(process.pid, "SIGTERM"), 100);
+    const signal = process.env.CAP_SECURITY_TEST_SIGNAL || "SIGTERM";
+    setTimeout(() => process.kill(process.pid, signal), 100);
   } else if (scenario === "timeout") {
     process.on("SIGTERM", () => {
       record("runner-term");

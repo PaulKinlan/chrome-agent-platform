@@ -967,6 +967,7 @@ export async function resolveSupervisorConfig({
       env.CAP_SECURITY_TEST_SIMULATE_VANISHED_LEADER !== undefined ||
       env.CAP_SECURITY_TEST_FORCE_OBSERVATION_UNREADABLE !== undefined ||
       env.CAP_SECURITY_TEST_FORCE_RESIDUE_UNREADABLE !== undefined ||
+      env.CAP_SECURITY_TEST_SIGNAL !== undefined ||
       env.CAP_SECURITY_TEST_SCENARIO
     ) throw new Error("self-test-only override refused in production mode");
     if (!env.HOME || !path.isAbsolute(env.HOME)) {
