@@ -48,29 +48,44 @@ export async function wireRunRetentionSettings(ctx) {
   }
 }
 
+// ONE TREE, LAST RENDER WINS (chrome-agent-platform-qq6or).
+//
+// The tree used to be built like this: replaceChildren() -> await the memory.stores reply -> append the
+// new root. Both callers of this render (the Data section's own render and hydrateBelowFoldHeavyLists'
+// idle hydration) run without a shared queue, so two renders can interleave exactly in that await:
+// both clear, then both append, and #memory-explorer ends up with TWO identical .mem-tree subtrees —
+// the duplicate "The hub (1)" rows seen in a fresh profile.
+//
+// So a render now takes a token, and only the newest one may write: a stale reply returns without
+// touching the DOM, and the winner REPLACES the container instead of appending into it, which makes
+// "exactly one tree" true by construction rather than by timing.
+let memoryExplorerRenderToken = 0;
+
 export async function renderMemoryExplorer(ctx) {
   if (ctx) ensureCtx(null, ctx);
   const el = $("#memory-explorer");
   if (!el) return;
+  const token = ++memoryExplorerRenderToken;
   const wasExpanded = new Set(
     [...el.querySelectorAll('[data-mem-id][aria-expanded="true"]')]
       .map((n) => n.getAttribute("data-mem-id")),
   );
-  el.replaceChildren();
   const res = await send({ type: "memory.stores" })
     .catch(() => ({ stores: [] }));
+  // A newer render started while this reply was in flight: it owns the container, this one is stale.
+  if (token !== memoryExplorerRenderToken) return;
   const stores = Array.isArray(res?.stores) ? res.stores : [];
   if (!stores.length) {
     const p = document.createElement("p");
     p.className = "muted";
     p.textContent = "No memory stores yet.";
-    el.append(p);
+    el.replaceChildren(p);
     return;
   }
 
   const root = document.createElement("div");
   root.className = "mem-tree";
-  el.append(root);
+  el.replaceChildren(root);
 
   const master = stores.find((s) => s.kind === "master");
   const named = stores.filter((s) => s.kind === "named");
