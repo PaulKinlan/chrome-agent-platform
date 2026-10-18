@@ -2,6 +2,7 @@
 // A matching host CLOSED proves writer bytes, not literal Worker termination.
 import { emscriptenJobOwner } from "./emscripten-custody.js";
 import { EMSCRIPTEN_HOST_EVIDENCE_ROOT } from "./emscripten-host-evidence.js";
+import { EMSCRIPTEN_SW_RECONCILE_MS } from "./emscripten-sw-intent.js";
 import { createIncrementalSha256 } from "./incremental-sha256.js";
 
 const STREAM_ROOT = "wasm-tool-streams-v1";
@@ -67,9 +68,12 @@ export async function verifyStagedEmscriptenRun({ identity, inputRef, hostProof,
   try { swRecord = await intent.read({ identity, inputRef }); }
   catch (cause) { fail("emscripten_staging_intent_unavailable", cause); }
   const expectedOwner = emscriptenJobOwner({ runId: identity?.runId, agentId: identity?.agentId });
-  if (!exact(swRecord, ["version", "state", "identity", "inputRef", "stagingOnly", "nonpromotable"]) ||
+  if (!exact(swRecord, ["version", "state", "identity", "inputRef", "stagingOnly", "nonpromotable",
+    "issuedAt", "reconcileBy"]) ||
       swRecord.version !== 1 || swRecord.state !== "pending" ||
       swRecord.stagingOnly !== true || swRecord.nonpromotable !== true ||
+      !Number.isSafeInteger(swRecord.issuedAt) || !Number.isSafeInteger(swRecord.reconcileBy) ||
+      swRecord.reconcileBy - swRecord.issuedAt !== EMSCRIPTEN_SW_RECONCILE_MS ||
       !exact(swRecord.identity, IDENTITY_KEYS) || swRecord.identity.owner !== expectedOwner ||
       !same(swRecord.identity?.outputRef, identity?.outputRef) ||
       !["runId", "agentId", "generation", "packageId", "graphDigest", "operationId"].every(

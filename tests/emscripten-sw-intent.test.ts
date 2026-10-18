@@ -53,6 +53,9 @@ Deno.test("x9r8k: independent SW intent persists before any output creation and 
   assertEquals(record.state, "pending");
   assertEquals(record.stagingOnly, true);
   assertEquals(record.nonpromotable, true);
+  assertEquals(Number.isSafeInteger(record.issuedAt), true);
+  assertEquals(record.reconcileBy - record.issuedAt, 86_400_000,
+    "every reservation has a bounded reconciliation deadline");
   assertEquals(record.identity.owner, `agent:${runId}:|hub`);
   assertEquals(root.nodes.has(EMSCRIPTEN_SW_INTENT_ROOT), true);
   assertEquals(root.nodes.has("wasm-streams-v1"), false, "intent precedes the output root");
@@ -93,6 +96,17 @@ Deno.test("x9r8k: two overlapping grants for one output ref cannot both begin", 
   assertEquals(results.filter((result) => result.status === "fulfilled").length, 1);
   assertEquals(results.filter((result) => result.status === "rejected").length, 1);
   assertEquals((await sw.read({ identity, inputRef })).state, "pending");
+});
+
+Deno.test("x9r8k: stale intent reaches a typed bounded reconciliation deadline", async () => {
+  const { storage } = storageFor();
+  let instant = 1_800_000_000_000;
+  const sw = createEmscriptenSwIntent({ storage, now: () => instant });
+  const record = await sw.begin({ identity, inputRef });
+  assertEquals(record.reconcileBy, instant + 86_400_000);
+  instant = record.reconcileBy;
+  await code(() => sw.read({ identity, inputRef }), "emscripten_sw_intent_expired");
+  await code(() => sw.begin({ identity, inputRef }), "emscripten_sw_intent_replay");
 });
 
 Deno.test("x9r8k: interrupted reservation without a record never authorizes retry", async () => {

@@ -69,6 +69,7 @@ async function setup() {
   const channel = await openAuditedHostOwnedEmscriptenWriter({ identity, storage, evidence });
   await channel.push({ seq: 0, chunk: new Uint8Array([10, 20]) });
   const proof = await channel.close();
+  assertEquals((await intent.read({ identity, inputRef })).state, "pending");
   return { ...fixture, identity, inputRef, outputRef, intent, evidence, proof };
 }
 async function code(operation, expected) {

@@ -235,8 +235,11 @@ export async function openWasmStreamHandles({ ref, owner, allowUnsealedOutput = 
   });
 }
 
-export async function createWasmStreamOutput({ owner, storage, beforeCreate, preserveOnFailure = false } = {}) {
-  if (typeof preserveOnFailure !== "boolean" || (preserveOnFailure && typeof beforeCreate !== "function")) {
+export async function createWasmStreamOutput({ owner, storage, beforeCreate,
+  preserveOnFailure = false, onRetainedFailure } = {}) {
+  if (typeof preserveOnFailure !== "boolean" ||
+      (preserveOnFailure && (typeof beforeCreate !== "function" || typeof onRetainedFailure !== "function")) ||
+      (!preserveOnFailure && onRetainedFailure !== undefined)) {
     fail("wasm_stream_before_create");
   }
   const id = newWasmStreamId();
@@ -264,8 +267,13 @@ export async function createWasmStreamOutput({ owner, storage, beforeCreate, pre
     return Object.freeze({ version: 1, id, kind: "stdout" });
   } catch (error) {
     // After a staging-only SW intent was persisted, an ambiguous partial
-    // output is quarantined; the SW cannot use cleanup to erase that evidence.
-    if (!preserveOnFailure) await removeStreamDirectory(id, storage);
+    // output is quarantined. Write a typed, bounded retained marker before
+    // reporting the original failure; no cleanup may erase that evidence.
+    if (preserveOnFailure) {
+      try {
+        await onRetainedFailure(Object.freeze({ version: 1, id, kind: "stdout" }), "output_create_failed");
+      } catch { fail("wasm_stream_retention_unavailable"); }
+    } else await removeStreamDirectory(id, storage);
     throw error;
   }
 }

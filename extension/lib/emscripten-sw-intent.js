@@ -9,7 +9,9 @@ const HEX32 = /^[0-9a-f]{32}$/u;
 const HEX64 = /^[0-9a-f]{64}$/u;
 const NAME = /^[A-Za-z0-9_.-]{1,128}$/u;
 const IDENTITY_KEYS = ["runId", "agentId", "outputRef", "generation", "packageId", "graphDigest", "operationId"];
-const RECORD_KEYS = ["version", "state", "identity", "inputRef", "stagingOnly", "nonpromotable"];
+const RECORD_KEYS = ["version", "state", "identity", "inputRef", "stagingOnly", "nonpromotable", "issuedAt", "reconcileBy"];
+const RETAINED_KEYS = ["version", "type", "state", "identity", "inputRef", "reason", "retainedAt", "reconcileBy"];
+export const EMSCRIPTEN_SW_RECONCILE_MS = 24 * 60 * 60 * 1000;
 const activeByStorage = new WeakMap();
 
 function fail(code, cause) {
@@ -55,9 +57,9 @@ async function directoryFor(storage, refId, create) {
     }
   } catch (cause) { fail("emscripten_sw_intent_unavailable", cause); }
 }
-async function load(directory) {
+async function load(directory, name = "intent.json") {
   let file;
-  try { file = await directory.getFileHandle("intent.json"); }
+  try { file = await directory.getFileHandle(name); }
   catch (cause) {
     if (cause?.name === "NotFoundError") return null;
     fail("emscripten_sw_intent_unavailable", cause);
@@ -68,18 +70,40 @@ async function load(directory) {
 function checked(actual, expected) {
   if (!exact(actual, RECORD_KEYS) || actual.version !== 1 || actual.state !== "pending" ||
       actual.stagingOnly !== true || actual.nonpromotable !== true ||
+      !Number.isSafeInteger(actual.issuedAt) || actual.issuedAt < 0 ||
+      !Number.isSafeInteger(actual.reconcileBy) ||
+      actual.reconcileBy - actual.issuedAt !== EMSCRIPTEN_SW_RECONCILE_MS ||
       !exact(actual.identity, [...IDENTITY_KEYS, "owner"]) ||
       !same(actual.identity, expected.identity) || !same(actual.inputRef, expected.inputRef)) {
     fail("emscripten_sw_intent_collision");
   }
   return Object.freeze(actual);
 }
+function checkedRetained(actual, intent) {
+  if (!exact(actual, RETAINED_KEYS) || actual.version !== 1 ||
+      actual.type !== "emscripten-staging-retained" || actual.state !== "retained-not-deleted" ||
+      actual.reason !== "output_create_failed" || !same(actual.identity, intent.identity) ||
+      !same(actual.inputRef, intent.inputRef) ||
+      !Number.isSafeInteger(actual.retainedAt) || actual.retainedAt < intent.issuedAt ||
+      actual.reconcileBy !== intent.reconcileBy) fail("emscripten_sw_intent_collision");
+  return Object.freeze(actual);
+}
+async function writeVerified(directory, name, record) {
+  try {
+    const handle = await directory.getFileHandle(name, { create: true });
+    const writer = await handle.createWritable({ mode: "exclusive" });
+    try { await writer.write(JSON.stringify(record)); await writer.close(); }
+    catch (cause) { await writer.abort?.().catch(() => {}); throw cause; }
+  } catch (cause) { fail("emscripten_sw_intent_unavailable", cause); }
+  if (!same(await load(directory, name), record)) fail("emscripten_sw_intent_unavailable");
+}
 
 /** Trusted SW calls begin from the stream allocator's beforeCreate hook.
  * No output directory is opened unless its distinct, verified intent is durable.
  * A duplicate begin is NEVER an idempotent execution grant. */
-export function createEmscriptenSwIntent({ storage = globalThis.navigator?.storage } = {}) {
-  if (!storage || typeof storage !== "object" || typeof storage.getDirectory !== "function") {
+export function createEmscriptenSwIntent({ storage = globalThis.navigator?.storage, now = Date.now } = {}) {
+  if (!storage || typeof storage !== "object" || typeof storage.getDirectory !== "function" ||
+      typeof now !== "function") {
     fail("emscripten_sw_intent_unavailable");
   }
   return Object.freeze({
@@ -98,21 +122,52 @@ export function createEmscriptenSwIntent({ storage = globalThis.navigator?.stora
           checked(present, expected);
           fail("emscripten_sw_intent_replay");
         }
-        try {
-          const handle = await directory.getFileHandle("intent.json", { create: true });
-          const writer = await handle.createWritable({ mode: "exclusive" });
-          try { await writer.write(JSON.stringify(expected)); await writer.close(); }
-          catch (cause) { await writer.abort?.().catch(() => {}); throw cause; }
-        } catch (cause) { fail("emscripten_sw_intent_unavailable", cause); }
+        const issuedAt = now();
+        if (!Number.isSafeInteger(issuedAt) || issuedAt < 0 ||
+            !Number.isSafeInteger(issuedAt + EMSCRIPTEN_SW_RECONCILE_MS)) fail("emscripten_sw_intent_unavailable");
+        const record = { ...expected, issuedAt, reconcileBy: issuedAt + EMSCRIPTEN_SW_RECONCILE_MS };
+        await writeVerified(directory, "intent.json", record);
         return checked(await load(directory), expected);
       } finally { active.delete(refId); }
+    },
+    async recordRetained(raw, reason) {
+      if (reason !== "output_create_failed") fail("emscripten_sw_intent_reason");
+      const expected = recordFor(raw);
+      const { directory } = await directoryFor(storage, expected.identity.outputRef.id, false);
+      const intent = checked(await load(directory), expected);
+      const present = await load(directory, "retained.json");
+      if (present !== null) return checkedRetained(present, intent);
+      const retainedAt = now();
+      if (!Number.isSafeInteger(retainedAt) || retainedAt < intent.issuedAt) {
+        fail("emscripten_sw_intent_unavailable");
+      }
+      const record = { version: 1, type: "emscripten-staging-retained", state: "retained-not-deleted",
+        identity: intent.identity, inputRef: intent.inputRef, reason,
+        retainedAt, reconcileBy: intent.reconcileBy };
+      await writeVerified(directory, "retained.json", record);
+      return checkedRetained(await load(directory, "retained.json"), intent);
+    },
+    async readRetained(raw) {
+      const expected = recordFor(raw);
+      const { directory } = await directoryFor(storage, expected.identity.outputRef.id, false);
+      const intent = checked(await load(directory), expected);
+      const retained = await load(directory, "retained.json");
+      if (retained === null) fail("emscripten_sw_intent_unavailable");
+      return checkedRetained(retained, intent);
     },
     async read(raw) {
       const expected = recordFor(raw);
       const { directory } = await directoryFor(storage, expected.identity.outputRef.id, false);
       const stored = await load(directory);
       if (stored === null) fail("emscripten_sw_intent_unavailable");
-      return checked(stored, expected);
+      const intent = checked(stored, expected);
+      const retained = await load(directory, "retained.json");
+      if (retained !== null) {
+        checkedRetained(retained, intent);
+        fail("emscripten_sw_intent_retained");
+      }
+      if (now() >= intent.reconcileBy) fail("emscripten_sw_intent_expired");
+      return intent;
     },
   });
 }
