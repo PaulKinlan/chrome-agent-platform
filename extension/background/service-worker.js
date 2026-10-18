@@ -110,6 +110,7 @@ import {
 import { WASM_STREAM_RUN_TYPE, WASM_STREAM_WALL_MS } from "../lib/wasm-stream-host.js";
 import { CALLEXPORT_RUN_TYPE } from "../lib/wasm-callexport-host.js";
 import { EMSCRIPTEN_RUN_TYPE } from "../lib/emscripten-host.js";
+import { isEmscriptenModelRunLive, runFencedEmscripten } from "../lib/emscripten-run-fence.js";
 // The dispatch broker reads the registry through the small read-only core —
 // the write/validation authority module stays out of this bundle (the
 // standing static/RHC boundary pin).
@@ -852,7 +853,8 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
 // offscreen host with the lifecycle-derived deadline. graphDigest may be null
 // when the caller is the Settings surface — identity then comes entirely from
 // the fresh read (nothing is caller-asserted).
-async function runAdmittedEmscripten({ packageId, version, graphDigest, operationId, args, authority }) {
+async function runAdmittedEmscripten({ packageId, version, graphDigest, operationId, args, authority, isLive }) {
+  if (!isLive()) return { ok: false, phase: "failed", error: "emscripten_run_not_live" };
   const store = await masterMemory();
   const read = await readCommittedPackages(store);
   if (!read.ok) return { ok: false, phase: "failed", error: `emscripten_${read.error}` };
@@ -866,6 +868,9 @@ async function runAdmittedEmscripten({ packageId, version, graphDigest, operatio
   if (!envelope) return { ok: false, phase: "failed", error: "emscripten_operation_unknown" };
   const host = await ensureOffscreen();
   if (!host.ok) return host;
+  // Registry reads and offscreen setup are asynchronous. Recheck immediately
+  // before the native send; a cancellation in either gap must not start work.
+  if (!isLive()) return { ok: false, phase: "failed", error: "emscripten_run_not_live" };
   const wallMs = envelope.lifecycle.startupMs + envelope.lifecycle.callMs + 10_000;
   try {
     return await new Promise((resolve) => {
@@ -887,7 +892,7 @@ async function runAdmittedEmscripten({ packageId, version, graphDigest, operatio
   }
 }
 
-async function dispatchEmscriptenRun({ packageId, version, graphDigest, operationId, args, context }) {
+async function dispatchEmscriptenRun({ packageId, version, graphDigest, operationId, args, context, preview = false }) {
   const runId = typeof context?.runId === "string" && context.runId ? context.runId : null;
   if (!runId) throw new Error("emscripten_run_required");
   const authority = buildPreviewAuthority({
@@ -896,7 +901,16 @@ async function dispatchEmscriptenRun({ packageId, version, graphDigest, operatio
       : "https://agent.cap",
     documentId: String(context?.documentId || runId),
   });
-  return await runAdmittedEmscripten({ packageId, version, graphDigest, operationId, args, authority });
+  const dispatch = (isLive) => runAdmittedEmscripten({
+    packageId, version, graphDigest, operationId, args, authority, isLive,
+  });
+  if (preview) return await dispatch(() => true); // SW-only Settings route, never a model identity
+  const isLive = () => isEmscriptenModelRunLive({
+    runId, agentId: context?.agentId, signal: context?.signal,
+    active: activeExecutions, cancelled: cancellingApprovalExecutions,
+    ended: endedExecutions, workerRun: runControl.get(runId),
+  });
+  return await runFencedEmscripten({ context, isLive, dispatch: () => dispatch(isLive) });
 }
 
 async function loadAdmittedEmscriptenPackages() {
@@ -8517,6 +8531,7 @@ const handlers = mergeRouteMaps(
             origin: "https://agent.cap",
             documentId: String(context.documentId),
           },
+          preview: true,
         });
       }
       return await record.dispatch(validated.data, {
@@ -8524,6 +8539,7 @@ const handlers = mergeRouteMaps(
         agentId: "hub",
         origin: "https://agent.cap",
         documentId: String(context.documentId),
+        preview: true,
       });
     }
 
@@ -8539,6 +8555,7 @@ const handlers = mergeRouteMaps(
         origin: "https://agent.cap",
         documentId: String(context.documentId),
       },
+      preview: true,
     });
   },
   // CAP-FB-20260822-TOOL-PREVIEW-EXEC-01 — the FIRST real bundled execution:

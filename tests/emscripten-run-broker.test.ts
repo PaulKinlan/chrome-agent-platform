@@ -152,6 +152,9 @@ Deno.test("broker: executable records wire validator/authorizer/dispatch with ru
   assertEquals(dispatched[0].packageId, "cap.acceptance.a0.numeric");
   assertEquals(dispatched[0].graphDigest, GRAPH, "the composition-time graphDigest travels for the dispatch-time stale fence");
   assertEquals(dispatched[0].args, [6, 7, 0.5]);
+  assertEquals(dispatched[0].preview, false, "model dispatch never borrows the Settings preview");
+  await record.dispatch(validated.data, { runId: "settings-preview-1", preview: true });
+  assertEquals(dispatched[1].preview, true, "only explicit SW Settings context carries preview authority");
   const failed = await record.validateArguments({ value: 6, weight: 7, bias: 0.5, hook: "()=>{}" });
   assertEquals(failed.ok, false, "caller-supplied hooks rejected by exact keys");
 });
