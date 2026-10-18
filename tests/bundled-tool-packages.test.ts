@@ -394,6 +394,15 @@ Deno.test("store map: bundle archive map and boundary allowlist cover all 6 surf
   assert(!STORE_BOUNDARY_ALLOWLIST.allowedWasmBundles.includes("dist/artifacts.bundle.js"));
 });
 
+Deno.test("pah52: Store archive registers the schema-2 broker before mapping a schema-2 manifest", async () => {
+  const source = await Deno.readTextFile(root("scripts/package-archive.mjs"));
+  const guard = source.indexOf("if (manifest.schemaVersion === 2 && !schema2AdmissionReady)");
+  const admission = source.indexOf('await import("../extension/lib/wasm-package-admission.js")');
+  const probe = source.indexOf("registerBundledManifestIdentity(manifestIdentities, identity, manifest)");
+  assert(guard > 0 && guard < admission && admission < probe,
+    "load the full options-only schema-2 validator before the archive authority probe, only when needed");
+});
+
 Deno.test("store map: exact archivePath→executable mapping for ALL 52 shipped CAS binaries", async () => {
   const map = await buildBundledWasmManifestMap(repoRoot);
   assertEquals(map.size, 52, "physical CAS count stays 52 while manifest identities grow to 55");
