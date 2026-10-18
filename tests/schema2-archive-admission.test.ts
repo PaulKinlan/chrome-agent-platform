@@ -5,9 +5,10 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import { join } from "node:path";
 import { buildBundledWasmManifestMap } from "../scripts/package-archive.mjs";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 Deno.test("fdjme: Store archive mapper itself registers schema-2 authority before its probe", async () => {
-  const root = await Deno.makeTempDir({ prefix: "cap-fdjme-schema2-" });
+  const root = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-fdjme-schema2-" });
   try {
     const builder = new URL("../scripts/lib/emscripten-numeric-acceptance.mjs", import.meta.url).href;
     // Deliberate process boundary: buildNumericAcceptancePackage calls
