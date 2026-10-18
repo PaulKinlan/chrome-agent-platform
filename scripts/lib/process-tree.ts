@@ -51,12 +51,26 @@ export function setsidSpawnSpec(binary: string, args: string[]): { command: stri
  * `exec`s the command in place; a pending alarm survives `exec`). A wedged
  * process-table probe therefore ends as `signal: "SIGALRM"` instead of hanging
  * a teardown forever. A missing binary exits 127.
+ *
+ * `seconds` must be a FINITE number (chrome-agent-platform-ia98o). The bound is
+ * interpolated into a perl program where `alarm shift` reads a non-numeric string
+ * as 0, i.e. NO alarm: `NaN` and `Infinity` would therefore produce an UNBOUNDED
+ * probe - exactly the hang this helper exists to prevent, arrived at silently.
+ * A refusal is the honest outcome: an unbounded probe is worse than an error, and
+ * the caller passed a value that cannot mean what it says. `0` is still accepted
+ * and still means "at least one second", which is what perl's alarm can do.
  */
 export function boundedCommandSpec(
   seconds: number,
   command: string,
   args: string[],
 ): { command: string; args: string[] } {
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    throw new RangeError(
+      `boundedCommandSpec: seconds must be a finite, non-negative number, got ${String(seconds)} ` +
+        `(a non-finite bound disarms the alarm, so the probe would never end)`,
+    );
+  }
   return {
     command: PERL,
     args: [

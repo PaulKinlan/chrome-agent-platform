@@ -192,6 +192,29 @@ Deno.test("the default ps runner, forced onto the fallback path, agrees with thi
   assert(liveGroupMembers(viaPs.group, { hasProc: false }).includes(SELF), "the real ps listing contains this process");
 });
 
+Deno.test("ia98o: boundedCommandSpec REFUSES a bound that cannot mean anything", () => {
+  // perl's `alarm shift` reads a non-numeric string as 0, i.e. NO alarm. So a non-finite second would not
+  // merely be odd - it would silently produce the UNBOUNDED probe this helper exists to prevent. Refusing is
+  // the only honest outcome: an unbounded probe is worse than an error, and the caller passed a value that
+  // cannot mean what it says.
+  for (const bad of [NaN, Infinity, -Infinity, -1, -0.5]) {
+    let thrown: unknown;
+    try {
+      boundedCommandSpec(bad, "/bin/true", []);
+    } catch (error) {
+      thrown = error;
+    }
+    assertEquals(thrown instanceof RangeError, true, `${String(bad)} must be refused as a RangeError, not defaulted`);
+    assert(String((thrown as Error).message).includes(String(bad)), `the refusal names the value: ${String(bad)}`);
+  }
+  // The finite cases are unchanged, INCLUDING 0 and 0.2 (both round up to perl's minimum of one second).
+  const bound = (seconds: number) => boundedCommandSpec(seconds, "/bin/true", []).args[3];
+  assertEquals(bound(0), "1");
+  assertEquals(bound(0.2), "1");
+  assertEquals(bound(1), "1");
+  assertEquals(bound(5), "5");
+});
+
 Deno.test("boundedCommandSpec: a wedged probe is ended by the kernel at the bound; a finishing one is untouched", () => {
   const wedged = boundedCommandSpec(1, "/bin/sleep", ["3"]);
   const t0 = performance.now();

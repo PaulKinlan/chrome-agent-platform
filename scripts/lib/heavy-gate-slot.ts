@@ -84,10 +84,21 @@ export function heavyGateDisabled(): boolean {
   return Deno.env.get("CAP_HEAVY_GATE_DISABLE") === "1";
 }
 
+/**
+ * How long to wait for the slot: the env knob, then the caller's bound, then the default.
+ *
+ * The CALLER's bound is filtered the same way as the env one (chrome-agent-platform-ia98o). It used to be
+ * returned as-is, and a non-finite value is not a bound at all: `Infinity` makes the poll loop's
+ * `Date.now() < deadline` is always true, so a held slot is waited on forever - the same "a non-finite bound
+ * silently becomes no bound" failure the process-tree probe had, one layer up. A NaN deadline makes the loop
+ * exit immediately, which is fail-closed but reports a nonsense bound, so both are normalised instead.
+ */
 function boundMs(opts: AcquireHeavyGateOptions): number {
+  const DEFAULT_BOUND_MS = 20 * 60_000;
   const env = Number(Deno.env.get("CAP_HEAVY_GATE_BOUND_MS"));
   if (Number.isFinite(env) && env > 0) return env;
-  return opts.boundMs ?? 20 * 60_000;
+  if (typeof opts.boundMs === "number" && Number.isFinite(opts.boundMs) && opts.boundMs > 0) return opts.boundMs;
+  return DEFAULT_BOUND_MS;
 }
 
 function slotPaths(opts: AcquireHeavyGateOptions): HeavyGateSlot {

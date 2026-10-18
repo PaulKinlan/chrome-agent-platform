@@ -130,6 +130,39 @@ Deno.test("0lj3: the slot is taken, announced by name, and released", async () =
   }
 });
 
+Deno.test("ia98o: a NON-FINITE caller bound is not a bound - it is normalised to the default", async () => {
+  // The same coercion one layer up: `opts.boundMs` used to be returned as-is, so Infinity made the poll
+  // loop's `Date.now() < deadline` always true and a HELD slot was waited on forever. The announcement
+  // reports the bound actually in force, which is how this test sees the normalisation without waiting for
+  // the 20-minute default: the holder releases quickly and the acquire succeeds after it.
+  for (const bad of [Infinity, NaN, -5]) {
+    const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-" });
+    const slotPath = `${dir}/gate.lock`;
+    const holderPath = `${slotPath}.holder.json`;
+    const holder = await spawnHolder(dir, ["700", "bound-probe", slotPath]);
+    try {
+      const held = await holder.waitForHeld();
+      assert(held.held, `the child never took the slot: ${holder.output()}`);
+      const lines: string[] = [];
+      const lease = await acquireHeavyGateSlot({
+        gate: "bound-probe-gate",
+        kind: "gate",
+        boundMs: bad,
+        slot: { slotPath, holderPath },
+        onWait: (line) => lines.push(line),
+        onAcquired: (line) => lines.push(line),
+      });
+      lease.release();
+      const announced = lines.join("\n");
+      assert(announced.includes("bound 1200000 ms"), `boundMs=${String(bad)} must fall back to the default: ${announced}`);
+      assert(!announced.includes(String(bad)), `the announcement must not claim the unusable bound: ${announced}`);
+    } finally {
+      await reap(holder.child);
+      await Deno.remove(dir, { recursive: true }).catch(() => {});
+    }
+  }
+});
+
 Deno.test("0lj3: another PROCESS's gate holds the slot, and the refusal NAMES it", async () => {
   const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-" });
   const slotPath = `${dir}/gate.lock`;
