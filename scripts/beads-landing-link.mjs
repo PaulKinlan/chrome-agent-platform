@@ -71,24 +71,30 @@ export function groupByBead(refs) {
     .sort((a, b) => b.commits.length - a.commits.length || a.bead.localeCompare(b.bead));
 }
 
-function git(cwd, args) {
+export const MAX_GIT_BUFFER_BYTES = 256 * 1024 * 1024;
+
+export function execGit(cwd, args, { maxBuffer = MAX_GIT_BUFFER_BYTES } = {}) {
   let r;
   try {
-    r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", maxBuffer: Infinity });
+    r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", maxBuffer });
   } catch (error) {
     if (error.code === "ENOBUFS" || error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
-      throw new Error(`git ${args.join(" ")} exceeded buffer capacity: ${error.message}`);
+      throw new Error(`git ${args.join(" ")} exceeded buffer capacity (${maxBuffer} bytes): ${error.message}`);
     }
     throw error;
   }
   if (r.error) {
     if (r.error.code === "ENOBUFS" || r.error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
-      throw new Error(`git ${args.join(" ")} exceeded buffer capacity: ${r.error.message}`);
+      throw new Error(`git ${args.join(" ")} exceeded buffer capacity (${maxBuffer} bytes): ${r.error.message}`);
     }
     throw r.error;
   }
   if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr || r.stdout}`);
   return r.stdout;
+}
+
+function git(cwd, args, options) {
+  return execGit(cwd, args, options);
 }
 
 function bd(cwd, args) {

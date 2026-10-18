@@ -165,17 +165,62 @@ Deno.test("re8v7: the checker buffers no fixed stdout ceiling", async () => {
   assert(/spawn\(/.test(code), "the checker must collect stdout from a streamed child");
 });
 
-Deno.test("550tr: scripts that buffer git/tool outputs do not impose a fixed numeric maxBuffer ceiling", async () => {
-  const scripts = [
-    "scripts/beads-landing-link.mjs",
-    "scripts/check-owed-changelog.mjs",
-    "scripts/package-archive.mjs",
-    "scripts/security-suite-custody.mjs",
-  ];
-  for (const rel of scripts) {
-    const src = await readFile(new URL(`../${rel}`, import.meta.url), "utf8");
-    const code = src.split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
-    assert(!/maxBuffer:\s*\d+\s*\*\s*1024/.test(code), `${rel} must not impose a fixed numeric maxBuffer`);
+Deno.test("o3i89 / nabuw: buffer capacity constants are bounded finite numbers >= 1MiB and !== Infinity", async () => {
+  const { MAX_GIT_BUFFER_BYTES: gitLandingCap } = await import("../scripts/beads-landing-link.mjs");
+  const { MAX_GIT_BUFFER_BYTES: gitOwedCap } = await import("../scripts/check-owed-changelog.mjs");
+  const { MAX_ARCHIVE_BUFFER_BYTES: archiveCap } = await import("../scripts/package-archive.mjs");
+  const { PS_MAX_BUFFER_BYTES: psCap, FLOCK_MAX_BUFFER_BYTES: flockCap } = await import("../scripts/security-suite-custody.mjs");
+
+  for (const [name, cap] of [
+    ["beads-landing-link MAX_GIT_BUFFER_BYTES", gitLandingCap],
+    ["check-owed-changelog MAX_GIT_BUFFER_BYTES", gitOwedCap],
+    ["package-archive MAX_ARCHIVE_BUFFER_BYTES", archiveCap],
+    ["security-suite-custody PS_MAX_BUFFER_BYTES", psCap],
+    ["security-suite-custody FLOCK_MAX_BUFFER_BYTES", flockCap],
+  ] as const) {
+    assert(typeof cap === "number", `${name} must be a number`);
+    assert(Number.isFinite(cap), `${name} must be finite (not Infinity)`);
+    assert(cap >= 1024 * 1024, `${name} must be at least 1MiB`);
   }
+});
+
+Deno.test("nabuw / o3i89: buffer overflow triggers reachable capacity errors with clear diagnostics", async () => {
+  const { execGit: execGitLanding } = await import("../scripts/beads-landing-link.mjs");
+  const { execGit: execGitOwed } = await import("../scripts/check-owed-changelog.mjs");
+  const { makePsRun, readProcIdentity, probeCanonicalLockHeld } = await import("../scripts/security-suite-custody.mjs");
+
+  // 1. beads-landing-link execGit
+  try {
+    execGitLanding(process.cwd(), ["status"], { maxBuffer: 1 });
+    assert(false, "execGitLanding should have thrown on buffer overflow");
+  } catch (err: any) {
+    assert(err.message.includes("exceeded buffer capacity"), `Expected capacity error, got: ${err.message}`);
+  }
+
+  // 2. check-owed-changelog execGit
+  try {
+    execGitOwed(process.cwd(), ["status"], { maxBuffer: 1 });
+    assert(false, "execGitOwed should have thrown on buffer overflow");
+  } catch (err: any) {
+    assert(err.message.includes("exceeded buffer capacity"), `Expected capacity error, got: ${err.message}`);
+  }
+
+  // 3. security-suite-custody makePsRun / readProcIdentity
+  const tinyPsRun = makePsRun(5000, 1);
+  try {
+    await readProcIdentity(process.pid, { hasProc: false, run: tinyPsRun });
+    assert(false, "readProcIdentity should have thrown ProcessUnreadableError on buffer overflow");
+  } catch (err: any) {
+    assert(err.message.includes("exceeded buffer capacity"), `Expected capacity error, got: ${err.message}`);
+  }
+
+  // 4. security-suite-custody probeCanonicalLockHeld
+  const enobufsFlock = async () => {
+    const error = new Error("buffer overflow") as any;
+    error.code = "ENOBUFS";
+    throw error;
+  };
+  const lockVerdict = await probeCanonicalLockHeld("/dev/null", enobufsFlock);
+  assert(lockVerdict?.includes("exceeded buffer capacity"), `Expected capacity error verdict, got: ${lockVerdict}`);
 });
 

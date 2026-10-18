@@ -14,9 +14,9 @@ const DIST = `${EXT_DIR}/dist`;
 const { binary: RESOLVED_BIN, tried: TRIED_BINS } = resolveChromiumBinaryReport();
 
 const SURFACES = [
-  { path: "ntp/ntp.html", bundle: "ntp.bundle.js", minChunks: 4 },
-  { path: "sidepanel/sidepanel.html", bundle: "sidepanel.bundle.js", minChunks: 3 },
-  { path: "options/options.html", bundle: "options.bundle.js", minChunks: 5 },
+  { path: "ntp/ntp.html", bundle: "ntp.bundle.js" },
+  { path: "sidepanel/sidepanel.html", bundle: "sidepanel.bundle.js" },
+  { path: "options/options.html", bundle: "options.bundle.js" },
 ];
 
 type MarkerIndex = {
@@ -243,8 +243,8 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
       assert(expectedGraph.size > 0, `${surface.path} expected graph must not be empty`);
 
       // 3. Wait until all expected dynamic chunks resolve, in-flight requests drain, and 300ms quiet window elapses.
-      // Under gate load (chrome-agent-platform-30yox), an optional or below-the-fold chunk like vault-quotas
-      // can be dispatched after earlier chunks settle; do not prematurely settle on minChunks alone while expected chunks remain.
+      // Under gate load (chrome-agent-platform-30yox), main-thread contention can postpone dynamic-import
+      // dispatch of chunks (like vault-quotas in options); do not prematurely settle while expected chunks remain.
       let settled = false;
       const settleDeadline = Date.now() + 10000;
       while (Date.now() < settleDeadline) {

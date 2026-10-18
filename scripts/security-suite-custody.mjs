@@ -153,12 +153,13 @@ export const PS_ENV = Object.freeze({ LC_ALL: "C", TZ: "UTC" });
  *  ignore SIGTERM). The whole-table read is larger than a single-pid read, hence the buffer.
  *  `makePsRun(timeoutMs)` builds the runner so a test can shorten the bound and prove it. */
 export const PS_TIMEOUT_MS = 5_000;
-export const makePsRun = (timeoutMs = PS_TIMEOUT_MS) => (file, args) =>
+export const PS_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+export const makePsRun = (timeoutMs = PS_TIMEOUT_MS, maxBuffer = PS_MAX_BUFFER_BYTES) => (file, args) =>
   execFileAsync(file, args, {
     env: PS_ENV,
     timeout: timeoutMs,
     killSignal: "SIGKILL",
-    maxBuffer: Infinity,
+    maxBuffer,
   });
 const defaultPsRun = makePsRun();
 
@@ -189,6 +190,9 @@ export async function readProcIdentity(pid, deps = {}) {
         String(pid),
       ]));
     } catch (error) {
+      if (error?.code === "ENOBUFS" || error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+        throw new ProcessUnreadableError(pid, `ps output exceeded buffer capacity: ${error.message}`, error);
+      }
       if (
         error?.code === 1 && !error.signal && error.killed !== true &&
         error.stdout === "" && error.stderr === ""
@@ -313,16 +317,17 @@ export const FLOCK_HELD_EXIT = 97;
 /** A wedged `flock` must not hang custody either (chrome-agent-platform-d9fyo): the probe had NO bound,
  *  so a `flock` that blocks forever held the whole custody chain open instead of failing closed. */
 export const FLOCK_PROBE_TIMEOUT_MS = 5_000;
+export const FLOCK_MAX_BUFFER_BYTES = 1024 * 1024;
 /** `flock` is resolved through PATH (below), so unlike `/bin/ps` this child KEEPS the inherited
  *  environment - only LC_ALL/TZ are pinned, for the same reason as PS_ENV: a translated or differently
  *  zoned diagnostic must not decide a verdict. `makeFlockRun(timeoutMs)` exists so a test can shorten the
  *  bound and prove it, exactly as `makePsRun` does for `ps`. */
-export const makeFlockRun = (timeoutMs = FLOCK_PROBE_TIMEOUT_MS) => (file, args) =>
+export const makeFlockRun = (timeoutMs = FLOCK_PROBE_TIMEOUT_MS, maxBuffer = FLOCK_MAX_BUFFER_BYTES) => (file, args) =>
   execFileAsync(file, args, {
     env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
     timeout: timeoutMs,
     killSignal: "SIGKILL",
-    maxBuffer: Infinity,
+    maxBuffer,
   });
 
 /**
@@ -357,6 +362,9 @@ export async function probeCanonicalLockHeld(
     await run("flock", ["-n", "-E", String(FLOCK_HELD_EXIT), lockPath, "true"]);
     return "canonical inherited lock has no live exclusive flock";
   } catch (e) {
+    if (e?.code === "ENOBUFS" || e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+      return `flock probe exceeded buffer capacity: ${e.message}`;
+    }
     // ONLY the exact held exit with empty stderr proves the lock is held. A bound expiring is a kill
     // (signal/killed set) and is therefore explicitly NOT that proof: a timeout is unverifiable, never
     // "the lock is not held".
@@ -646,6 +654,9 @@ export async function procIdentities(deps = {}) {
         "pid=,state=,ppid=,pgid=,uid=,lstart=",
       ]));
     } catch (error) {
+      if (error?.code === "ENOBUFS" || error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+        throw new ProcessUnreadableError(null, `ps whole-table output exceeded buffer capacity: ${error.message}`, error);
+      }
       throw new ProcessUnreadableError(
         null,
         `ps failed (${error?.code ?? error?.signal ?? error?.message ?? "unknown"})`,
