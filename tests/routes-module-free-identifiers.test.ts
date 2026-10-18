@@ -162,6 +162,29 @@ function collect(ast) {
   return { freeCallees };
 }
 
+// Import PATHS are the other half of a move (chrome-agent-platform-atxc6, gate cycle on fb1b704f): the
+// handlers arrived from extension/background/, so a dynamic `import("../lib/skill-catalog.js")` that was
+// correct in the worker became a broken path one directory deeper. The bundle refused it in 9 s — but only
+// after a gate cycle, and only because esbuild resolves the graph. A file-existence check on every specifier
+// is cheaper and names the file that is wrong.
+function importSpecifiers(ast) {
+  const specs = [];
+  const visit = (node) => {
+    if (!node || typeof node.type !== "string") return;
+    if (node.type === "ImportDeclaration" && typeof node.source?.value === "string") specs.push(node.source.value);
+    if (node.type === "ImportExpression" && node.source?.type === "Literal" && typeof node.source.value === "string") {
+      specs.push(node.source.value);
+    }
+    for (const key of KEYS(node)) {
+      const value = node[key];
+      if (Array.isArray(value)) for (const child of value) visit(child);
+      else if (value && typeof value.type === "string") visit(value);
+    }
+  };
+  visit(ast);
+  return specs;
+}
+
 const ROUTES_DIR = new URL("../extension/background/routes/", import.meta.url);
 
 Deno.test("route modules: every call target resolves in its own lexical scope", async () => {
@@ -212,4 +235,36 @@ export async function factory(config) {
 `;
   const resolved = collect(acorn.parse(ok, { ecmaVersion: "latest", sourceType: "module" }));
   assertEquals([...resolved.freeCallees.keys()], []);
+});
+
+Deno.test("route modules: every import specifier resolves on disk (a moved handler keeps its own depth)", async () => {
+  const problems = [];
+  let checked = 0;
+  for await (const entry of Deno.readDir(ROUTES_DIR)) {
+    if (!entry.isFile || !entry.name.endsWith(".js")) continue;
+    const code = await Deno.readTextFile(new URL(entry.name, ROUTES_DIR));
+    for (const spec of importSpecifiers(acorn.parse(code, { ecmaVersion: "latest", sourceType: "module" }))) {
+      if (!spec.startsWith(".")) continue; // bare/npm: specifiers are resolved by the runtime, not by path
+      checked += 1;
+      const target = new URL(spec, new URL(entry.name, ROUTES_DIR));
+      try {
+        await Deno.stat(target);
+      } catch {
+        problems.push(`extension/background/routes/${entry.name} imports ${spec}, which does not exist from that directory`);
+      }
+    }
+  }
+  assert(checked > 20, `expected to resolve the route modules' relative imports, saw ${checked}`);
+  assertEquals(problems, [], `an unresolved specifier fails the build and then every route in the file:\n${problems.join("\n")}`);
+});
+
+Deno.test("route modules: the import-path scanner catches a handler that kept the worker's depth", () => {
+  // The exact shape of the fb1b704f failure: correct at extension/background/, one directory too shallow in
+  // extension/background/routes/.
+  const ast = acorn.parse('const m = await import("../lib/skill-catalog.js");', {
+    ecmaVersion: "latest", sourceType: "module", allowAwaitOutsideFunction: true,
+  });
+  assertEquals(importSpecifiers(ast), ["../lib/skill-catalog.js"]);
+  const resolved = new URL("../lib/skill-catalog.js", new URL("skills.js", ROUTES_DIR));
+  assertEquals(resolved.pathname.endsWith("/extension/background/lib/skill-catalog.js"), true);
 });
