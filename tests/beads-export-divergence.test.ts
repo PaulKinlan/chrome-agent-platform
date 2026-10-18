@@ -222,5 +222,38 @@ Deno.test("nabuw / o3i89: buffer overflow triggers reachable capacity errors wit
   };
   const lockVerdict = await probeCanonicalLockHeld("/dev/null", enobufsFlock);
   assert(lockVerdict?.includes("exceeded buffer capacity"), `Expected capacity error verdict, got: ${lockVerdict}`);
+
+  // 5. package-archive trackedExtensionIndex
+  const { trackedExtensionIndex, verifyPackageArchive } = await import("../scripts/package-archive.mjs");
+  try {
+    trackedExtensionIndex(process.cwd(), { maxBuffer: 1 });
+    assert(false, "trackedExtensionIndex should have thrown on buffer overflow");
+  } catch (err: any) {
+    assert(err.message.includes("exceeded buffer capacity"), `Expected capacity error, got: ${err.message}`);
+  }
+
+  // 6. package-archive verifyPackageArchive (unzip -Z1 capacity guard)
+  const scratch = await Deno.makeTempDir();
+  const tmpZip = `${scratch}/test.zip`;
+  try {
+    const zipCmd = new Deno.Command("zip", { args: ["-q", tmpZip, "package.json"] });
+    const { code } = await zipCmd.output();
+    assert(code === 0, "zip creation failed");
+    try {
+      await verifyPackageArchive(
+        { archive: tmpZip, expected: [], scratchParent: scratch },
+        { maxBuffer: 1 },
+      );
+      assert(false, "verifyPackageArchive should have thrown on buffer overflow");
+    } catch (err: any) {
+      assert(err.message.includes("exceeded buffer capacity"), `Expected capacity error, got: ${err.message}`);
+    }
+  } finally {
+    await Deno.remove(scratch, { recursive: true }).catch(() => {});
+  }
+
+  // 7. package-archive source code does not use maxBuffer: Infinity (05x0v)
+  const packageArchiveSrc = await Deno.readTextFile(new URL("../scripts/package-archive.mjs", import.meta.url));
+  assert(!/maxBuffer:\s*Infinity/.test(packageArchiveSrc), "scripts/package-archive.mjs must not contain maxBuffer: Infinity");
 });
 

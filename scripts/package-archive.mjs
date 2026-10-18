@@ -68,7 +68,7 @@ async function sha256File(file) {
 
 export const MAX_ARCHIVE_BUFFER_BYTES = 128 * 1024 * 1024;
 
-function trackedExtensionIndex(root, { maxBuffer = MAX_ARCHIVE_BUFFER_BYTES } = {}) {
+export function trackedExtensionIndex(root, { maxBuffer = MAX_ARCHIVE_BUFFER_BYTES } = {}) {
   let raw;
   try {
     raw = execFileSync(
@@ -421,6 +421,7 @@ async function runZipToFile(
 
 export async function verifyPackageArchive(
   { archive, expected, scratchParent },
+  { maxBuffer = MAX_ARCHIVE_BUFFER_BYTES } = {},
 ) {
   const archiveInfo = await lstat(archive).catch(() => null);
   if (!archiveInfo?.isFile() || archiveInfo.isSymbolicLink()) {
@@ -430,12 +431,12 @@ export async function verifyPackageArchive(
   try {
     const res = await execFileAsync("unzip", ["-Z1", archive], {
       encoding: "utf8",
-      maxBuffer: MAX_ARCHIVE_BUFFER_BYTES,
+      maxBuffer,
     });
     stdout = res.stdout;
   } catch (error) {
     if (error.code === "ENOBUFS" || error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
-      throw packageError(`unzip -Z1 exceeded buffer capacity (${MAX_ARCHIVE_BUFFER_BYTES} bytes): ${error.message}`);
+      throw packageError(`unzip -Z1 exceeded buffer capacity (${maxBuffer} bytes): ${error.message}`);
     }
     throw error;
   }
@@ -457,11 +458,11 @@ export async function verifyPackageArchive(
   try {
     try {
       await execFileAsync("unzip", ["-q", archive, "-d", extract], {
-        maxBuffer: MAX_ARCHIVE_BUFFER_BYTES,
+        maxBuffer,
       });
     } catch (error) {
       if (error.code === "ENOBUFS" || error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
-        throw packageError(`unzip -q exceeded buffer capacity (${MAX_ARCHIVE_BUFFER_BYTES} bytes): ${error.message}`);
+        throw packageError(`unzip -q exceeded buffer capacity (${maxBuffer} bytes): ${error.message}`);
       }
       throw error;
     }

@@ -74,15 +74,8 @@ export function groupByBead(refs) {
 export const MAX_GIT_BUFFER_BYTES = 256 * 1024 * 1024;
 
 export function execGit(cwd, args, { maxBuffer = MAX_GIT_BUFFER_BYTES } = {}) {
-  let r;
-  try {
-    r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", maxBuffer });
-  } catch (error) {
-    if (error.code === "ENOBUFS" || error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
-      throw new Error(`git ${args.join(" ")} exceeded buffer capacity (${maxBuffer} bytes): ${error.message}`);
-    }
-    throw error;
-  }
+  // spawnSync returns { error } on buffer capacity overflow (ENOBUFS), it does not throw.
+  const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", maxBuffer });
   if (r.error) {
     if (r.error.code === "ENOBUFS" || r.error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
       throw new Error(`git ${args.join(" ")} exceeded buffer capacity (${maxBuffer} bytes): ${r.error.message}`);
