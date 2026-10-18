@@ -571,11 +571,35 @@ export function testCandidatesForChanged(changed, reverse, mapped = []) {
   return [...selected].sort();
 }
 
+// ── quiet-box suites never enter a per-change subset (chrome-agent-platform-zwpp9) ──────────
+// A suite that measures WALL-CLOCK budgets in a real browser can only produce a verdict on an idle
+// host. A per-change subset runs on a shared, loaded fleet box BY DEFINITION — measured on this VM
+// 2026-10-18: load1 5.25-5.8 on 8 cores while two lanes built (load/core 0.66-0.73) against the
+// repo's own CAP_QUIET_MAX_LOAD_PER_CORE=0.35 — so selecting one here does not test the page, it
+// samples the neighbours: the run ends in an environmental refusal (exit 75), the fleet's per-commit
+// gate has no refusal verdict, and the landing costs a retry until a run happens to land on a quiet
+// moment (observed: 3 refusals + 2 passes for one tip on 2026-10-18).
+//
+// These suites stay in the heavy tier (`npm run test:heavy`, nightly `npm run test:all`) and in the
+// FULL suite's partition. What is withdrawn here is a load-dependent VERDICT, not the assertion —
+// and not the coverage of a change TO the suite: a changed suite always runs itself.
+export const FAST_SUBSET_EXCLUDED_REASONS = Object.freeze({
+  "tests/ntp-boot-staging-timing.test.ts":
+    "wall-clock NTP boot budgets (median long tasks 0, composer-ready, thread-hydrated) need a quiet box; a per-change subset runs on a loaded fleet host, so the only verdict it can produce here is an environmental refusal",
+});
+export const FAST_SUBSET_EXCLUDED = new Set(Object.keys(FAST_SUBSET_EXCLUDED_REASONS));
+export const OMITTED_QUIET_BOX_REASON = "not run: its wall-clock budget needs a quiet box (heavy tier owns the verdict)";
+
 export function selectTestFiles(changed, reverse, mapped = []) {
+  const changedSet = new Set(changed ?? []);
   return [...new Set([
     ...ALWAYS_ON.filter((c) => existsSync(join(ROOT, c))),
     ...testCandidatesForChanged(changed, reverse, mapped),
-  ])].sort();
+  ])]
+    // Selection is by import path, and every fleet host is loaded; a quiet-box suite is therefore
+    // dropped from an unasked-for selection but kept when the change IS that suite.
+    .filter((file) => !FAST_SUBSET_EXCLUDED.has(file) || changedSet.has(file))
+    .sort();
 }
 
 // Changed code/config files with NO reachable test. A subset cannot prove
@@ -703,7 +727,9 @@ export function omittedInventory(files, reason, limit = omittedLimit()) {
   const selected = new Set(files);
   const all = allTestFiles()
     .filter((f) => !selected.has(f))
-    .map((f) => ({ file: f, reason }));
+    // A quiet-box suite is omitted for its OWN reason, never under the generic "unselected" text:
+    // an omission whose class cannot be told apart from the other 600 is a silent skip in practice.
+    .map((f) => ({ file: f, reason: FAST_SUBSET_EXCLUDED.has(f) ? OMITTED_QUIET_BOX_REASON : reason }));
   if (all.length <= limit) return { omitted: all, omittedTotal: all.length, omittedTruncated: 0 };
   return {
     omitted: all.slice(0, limit),

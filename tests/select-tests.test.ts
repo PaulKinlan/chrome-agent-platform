@@ -6,7 +6,17 @@
 import { assertEquals, assert } from "jsr:@std/assert@1";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { CORE, ROOT, buildReverseGraph, isBuildResidue, selectTestFiles } from "../scripts/select-tests.mjs";
+import {
+  CORE,
+  FAST_SUBSET_EXCLUDED,
+  FAST_SUBSET_EXCLUDED_REASONS,
+  OMITTED_QUIET_BOX_REASON,
+  ROOT,
+  buildReverseGraph,
+  isBuildResidue,
+  omittedInventory,
+  selectTestFiles,
+} from "../scripts/select-tests.mjs";
 
 // A real seam with a known importer: schedule-parser.js is imported by
 // tests/schedule-parser.test.ts. If the graph walk stops resolving, the subset
@@ -89,4 +99,37 @@ Deno.test("select-tests: evidence modules referenced by tests preserve transitiv
     selected.includes("tests/evidence-instruments.test.ts"),
     "changing scripts/lib/kat-finalizer.ts must select tests/evidence-instruments.test.ts via cap-evidence transitive edge",
   );
+});
+
+// ── zwpp9: a quiet-box suite cannot produce a verdict on a loaded fleet host ──────────────
+// tests/ntp-boot-staging-timing.test.ts measures wall-clock budgets in a real browser and
+// refuses environmentally (exit 75) whenever load/core exceeds CAP_QUIET_MAX_LOAD_PER_CORE.
+// The fast subset runs on a shared, loaded box, so selecting it there yielded 3 refusals + 2
+// passes for one tip on 2026-10-18 — a load-dependent verdict for every landing. It stays in
+// the heavy tier; a per-change subset no longer selects it unless the change IS that suite.
+
+Deno.test("zwpp9: a quiet-box suite is not selected by import mapping, but a change to it runs it", () => {
+  const suite = "tests/ntp-boot-staging-timing.test.ts";
+  assert(FAST_SUBSET_EXCLUDED.has(suite), "the quiet-box registry names the wall-clock boot suite");
+  assert(existsSync(join(ROOT, suite)), "the excluded suite still exists (a stale entry would hide a rename)");
+  assert(
+    (FAST_SUBSET_EXCLUDED_REASONS[suite] ?? "").length > 40,
+    "every exclusion states why, because an unexplained exclusion is a silent skip",
+  );
+
+  // Mapping-driven selection (a change to one of its dependencies) must not pull it in:
+  const mapped = [{ file: "scripts/lib/ntp-boot-attribution.ts", mechanism: "scanned by the suite", tests: [suite] }];
+  const viaMapping = selectTestFiles(["scripts/lib/ntp-boot-attribution.ts"], buildReverseGraph(), mapped);
+  assert(!viaMapping.includes(suite), "the loaded-box fast subset must not select a quiet-box suite");
+
+  // A change TO the suite runs it: the lane that edits a wall-clock test owns its verdict.
+  const edited = selectTestFiles([suite], buildReverseGraph(), []);
+  assert(edited.includes(suite), "editing the suite itself still selects it");
+});
+
+Deno.test("zwpp9: the gate ledger names the quiet-box omission, not the generic 'unselected' class", () => {
+  const inventory = omittedInventory(["tests/select-tests.test.ts"], "unselected: no import path from the changed set");
+  const entries = inventory.omitted.filter((e) => FAST_SUBSET_EXCLUDED.has(e.file));
+  assert(entries.length > 0, "the excluded suite is disclosed in the omission inventory");
+  for (const entry of entries) assertEquals(entry.reason, OMITTED_QUIET_BOX_REASON);
 });
