@@ -1,9 +1,9 @@
 // x9r8k.2: SW-only offscreen binary STAGING host. No seal, publish or delete.
 import { emscriptenJobOwner } from "./emscripten-custody.js";
-import { fetchVerifiedEmscriptenAsset, EMSCRIPTEN_WORKER_PATH } from "./emscripten-host.js";
+
 import { runAuditedHostBinaryJob } from "./emscripten-host-binary-runner.js";
 import { EMSCRIPTEN_HOST_STAGE_TYPE } from "./emscripten-stage-protocol.js";
-import { isTrustedServiceWorkerSender } from "./pure.js";
+import { isTrustedServiceWorkerSender, sha256HexBytes } from "./pure.js";
 import { validateSealedWasmStream, validateWasmStreamRef } from "./wasm-stream-files.js";
 
 const REQUEST_KEYS = ["type", "identity", "inputRef", "packageId", "version", "graphDigest",
@@ -14,6 +14,8 @@ const PARAM_KEYS = ["name", "type", "minimum", "maximum"];
 const HEX64 = /^[0-9a-f]{64}$/u;
 const HEX32 = /^[0-9a-f]{32}$/u;
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+const CAS_PATH = /^wasm\/cas\/[0-9a-f]{64}\.wasm$/u;
+const RUNTIME_PATH = /^wasm\/runtime\/[a-z0-9._-]+\/[0-9A-Za-z.+-]+\/[A-Za-z0-9._-]+\.mjs$/u;
 const activePackages = new Set();
 function exact(value, keys) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value) &&
@@ -22,6 +24,21 @@ function exact(value, keys) {
 }
 function fail(code) { const error = new Error(code); error.code = code; throw error; }
 function unknown(code) { return Object.freeze({ ok: false, phase: "unknown", error: code }); }
+async function fetchStagingAsset(asset, runtime) {
+  if (!exact(asset, ["role", "path", "sha256", "size"]) ||
+      !["adapter", "glue", "main-wasm"].includes(asset.role) ||
+      !HEX64.test(asset.sha256 ?? "") || !Number.isSafeInteger(asset.size) || asset.size <= 0 ||
+      !(asset.role === "main-wasm" ? CAS_PATH : RUNTIME_PATH).test(asset.path ?? "")) {
+    fail("emscripten_stage_assets");
+  }
+  const response = await fetch(runtime.getURL(asset.path));
+  if (!response.ok) fail("emscripten_stage_asset_fetch");
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.length !== asset.size || await sha256HexBytes(bytes) !== asset.sha256) {
+    fail("emscripten_stage_asset_hash");
+  }
+  return bytes;
+}
 function validate(raw) {
   if (!exact(raw, REQUEST_KEYS) || raw.type !== EMSCRIPTEN_HOST_STAGE_TYPE ||
       !exact(raw.identity, IDENTITY_KEYS) ||
@@ -85,7 +102,7 @@ export async function executeStagedEmscriptenBinaryRequest(raw, {
     catch { fail("emscripten_stage_input_unavailable"); }
     const byRole = new Map();
     for (const asset of raw.assets) {
-      byRole.set(asset.role, await fetchVerifiedEmscriptenAsset(asset, runtime));
+      byRole.set(asset.role, await fetchStagingAsset(asset, runtime));
     }
     const glue = raw.assets.find((asset) => asset.role === "glue");
     const adapter = raw.assets.find((asset) => asset.role === "adapter");
@@ -95,7 +112,7 @@ export async function executeStagedEmscriptenBinaryRequest(raw, {
       glueUrl: runtime.getURL(glue.path), adapterUrl: runtime.getURL(adapter.path),
       wasmBytes: byRole.get("main-wasm") });
     const proof = await runBinary({ identity: raw.identity, job, storage,
-      createWorker: () => new Worker(runtime.getURL(EMSCRIPTEN_WORKER_PATH), { type: "module" }),
+      createWorker: () => new Worker(runtime.getURL("lib/emscripten-worker.js"), { type: "module" }),
       wallMs: raw.lifecycle.startupMs + raw.lifecycle.callMs + 5_000 });
     return Object.freeze({ ...unknown("emscripten_worker_termination_unproved"), hostProof: proof });
   } catch (cause) {
