@@ -175,6 +175,37 @@ Deno.test("closure: a generator SPAWNED by path is in the closure, and changing 
   }
 });
 
+Deno.test("closure: an authority the generator IMPORTS from the product tree changes the key (the eduhf repro)", async () => {
+  // The reviewer's repro (chrome-agent-platform-eduhf): a generator that imports ../extension/lib/
+  // wasm-package-authority.js and executes validate(). Before the fix, scope filtering dropped that
+  // import, so flipping validate() to a throw left the key identical and a matching record skipped.
+  const dir = scratchDir();
+  try {
+    await mkdir(join(dir, "scripts"), { recursive: true });
+    await mkdir(join(dir, "tests"), { recursive: true });
+    await mkdir(join(dir, "extension", "lib"), { recursive: true });
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "cap", type: "module", version: V1 }));
+    await writeFile(join(dir, "build.mjs"), 'import { generate } from "./scripts/build-bundled-tool-packages.mjs";\n');
+    await writeFile(join(dir, "scripts", "build-gate.ts"), "");
+    for (const test of BUILD_GATE_FILES) await writeFile(join(dir, test), "");
+    await writeFile(
+      join(dir, "scripts", "build-bundled-tool-packages.mjs"),
+      'import { validate } from "../extension/lib/wasm-package-authority.js";\nexport const generate = () => validate();\n',
+    );
+    await writeFile(join(dir, "extension", "lib", "wasm-package-authority.js"), "export function validate() { return true; }\n");
+
+    const before = await collectBuildTierInputPaths({ root: dir });
+    assert(before.paths.includes("extension/lib/wasm-package-authority.js"), `executed product authority must be keyed (${before.paths.join(", ")})`);
+    const beforeKey = buildTierKey(await collectBuildTierInputs({ root: dir, version: V1, paths: before.paths }));
+
+    await writeFile(join(dir, "extension", "lib", "wasm-package-authority.js"), 'export function validate() { throw new Error("broken authority"); }\n');
+    const afterKey = buildTierKey(await collectBuildTierInputs({ root: dir, version: V1, paths: before.paths }));
+    assertNotEquals(afterKey, beforeKey, "a changed executed authority must invalidate the recorded PASS");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 Deno.test("closure: a helper imported by the build OR by a tier test is an input, transitively", async () => {
   const graph: Record<string, string> = {
     "build.mjs": 'import { x } from "./scripts/lib/direct.mjs";',
@@ -247,6 +278,8 @@ Deno.test("closure: the real tier's own dependencies are inputs (the 1yzg2 revie
     "scripts/stubs/gateway-stub.mjs",
     "scripts/stubs/vercel-oidc-stub.mjs",
     "scripts/mcp-probe-entry.js",
+    // imported and EXECUTED by the generator (chrome-agent-platform-eduhf)
+    "extension/lib/wasm-package-authority.js",
     // imported by build.mjs
     "scripts/browser-dependencies.mjs",
     "scripts/lib/bounded-child.mjs",
@@ -280,19 +313,25 @@ Deno.test("closure: product sources, the changelog and unrelated tests are NOT i
   }
 });
 
-Deno.test("closure: machinery that imports a PRODUCT file does not drag the product tree into the key", async () => {
-  // extension/**, docs/** are product/output surfaces: build:production asserts their generated state on
-  // every gate, and keying them would re-run this tier on nearly every product landing. The scope rule
-  // stops the walk; this pins it against a real file the machinery imports today.
+Deno.test("closure: an EXECUTED product helper is keyed (the eduhf finding), an unexecuted product file is not", async () => {
+  // chrome-agent-platform-eduhf: the bundled-tool generator imports ../extension/lib/wasm-package-
+  // authority.js and executes its validate(), so that file IS a build-tier input even though it lives
+  // in the product tree. Scope therefore governs PATH TOKENS only; imports are followed anywhere.
   assert(inClosureScope("scripts/lib/build-lock.mjs"));
   assert(inClosureScope("tests/build-smoke.test.ts"));
-  assert(!inClosureScope("extension/lib/kv.js"));
+  assert(!inClosureScope("extension/lib/kv.js"), "path tokens are not followed into product trees (they are write targets there)");
   assert(!inClosureScope("docs/components-core.js"));
   const { paths } = await collectBuildTierClosure({ root: ROOT });
-  const product = paths.filter((rel) => !inClosureScope(rel) && rel !== "build.mjs");
-  assertEquals(product, [], `the closure must stay inside the machinery trees: ${product.join(", ")}`);
-  for (const rel of ["extension/lib/kv.js", "extension/shared/components-core.js", "docs/components-core.js"]) {
-    assert(!paths.includes(rel), `${rel} is product content and must not be keyed`);
+  assert(paths.includes("extension/lib/wasm-package-authority.js"), "the generator's executed authority must be keyed");
+  // Write targets are never keyed: build.mjs writes docs/** on every build, so keying them would make
+  // every landing run this tier.
+  const docs = paths.filter((rel) => rel.startsWith("docs/"));
+  assertEquals(docs, [], `docs/** is a build WRITE target and must not be keyed: ${docs.join(", ")}`);
+  // The bound stays meaningful: following imports into product trees must not approach MAX_CLOSURE_FILES.
+  assert(paths.length < 100, `closure is ${paths.length} files; the walk has escaped the machinery tree`);
+  // And the ordinary, unexecuted product surface is still out.
+  for (const rel of ["extension/shared/components-core.js", "extension/background/service-worker.js"]) {
+    assert(!paths.includes(rel), `${rel} is not executed by the tier and must not be keyed`);
   }
 });
 

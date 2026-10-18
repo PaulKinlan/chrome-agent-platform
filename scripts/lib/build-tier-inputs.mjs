@@ -37,12 +37,17 @@
 // build reaches child processes and bundler entry points. Bare specifiers (`node:`, `npm:`, `jsr:`,
 // `jsr:@std/...`) are not repo files and are covered by the lockfiles in the data set below.
 //
-// PATH TOKENS ARE RESTRICTED TO THE MACHINERY TREES (`scripts/`, `tests/`, `packages/`,
-// `wasm-tools/`). `docs/**` and `extension/**` are deliberately NOT token-scanned: in the build they
-// are overwhelmingly WRITE targets (`in sync docs/components-core.js`), so keying every such
-// reference would make the tier re-run on nearly every product change and the skip would never fire.
-// The parts of `extension/**` the machinery actually IMPORTS still enter through the import closure
-// (extension/lib/{cap-log,kv,memory,emscripten-module-audit,bundled-inventory-data}.js do today).
+// IMPORTS ARE FOLLOWED ANYWHERE, including the product trees: the bundled-tool generator imports
+// ../extension/lib/wasm-package-authority.js and EXECUTES its validate(), so that file is a build-tier
+// input even though it lives in extension/ (chrome-agent-platform-eduhf — an earlier revision filtered
+// imports to the machinery trees and silently dropped it). 14 extension/lib modules are in the closure
+// today and 2 of the last 40 landings touched any closure file at all, so following them costs the skip
+// almost nowhere and is the only direction that cannot certify a stale PASS.
+//
+// PATH TOKENS, unlike imports, ARE restricted to the machinery trees (`scripts/`, `tests/`).
+// `docs/**` and `extension/**` are not token-scanned: in the build they are overwhelmingly WRITE
+// targets (`in sync docs/components-core.js`), so keying every such reference would make the tier
+// re-run on nearly every product change and the skip would never fire.
 // That makes the key track what the tests actually execute: a helper imported or spawned by the
 // build, or by a test, is an input automatically, and nobody has to remember to add it.
 // Plus the DATA inputs the closure cannot see:
@@ -175,13 +180,17 @@ export const PATH_TOKEN_RE = /(?:^|[^\w.\/-])((?:scripts|tests|packages|wasm-too
 const NOT_A_PATH_TOKEN = /(?:^|\/)\.\.(?:\/|$)/;
 
 /**
- * What the closure may CONTAIN: the machinery and the tests. A resolved import or path token outside
- * these prefixes is product content (`extension/**`, `docs/**`, a root config) and is NOT added — the
- * existing policy, made mechanical so a helper that imports a product file cannot drag ~100 product
- * sources into the key and re-run the tier on every product landing. `extension/manifest*.json` and
- * the bundled inventory's release surface are keyed explicitly as DATA inputs instead.
+ * Where PATH TOKENS are looked for: the machinery and the tests. A path token outside these prefixes
+ * is not followed, because in the build those are overwhelmingly WRITE targets (`in sync
+ * docs/components-core.js`) and keying them would re-run the tier on nearly every product landing.
+ *
+ * IMPORTS ARE FOLLOWED ANYWHERE (chrome-agent-platform-eduhf): the bundled-tool generator imports
+ * ../extension/lib/wasm-package-authority.js and EXECUTES its validate(), and an earlier revision
+ * silently dropped that because it lived outside these trees — a changed authority left the key
+ * identical and a matching record skipped the tier. An executed helper is an input wherever it lives;
+ * that costs the skip on landings that touch generator inputs, and it is the correct direction.
  */
-const CLOSURE_PREFIXES = ["scripts/", "tests/"];
+const TOKEN_PREFIXES = ["scripts/", "tests/"];
 
 /**
  * Tokens that are added to the key but NOT walked, and prefix checks for the reason:
@@ -205,9 +214,9 @@ export function pathReferences(text) {
   return [...out];
 }
 
-/** True when a resolved path may be part of the closure (machinery or tests). */
+/** True when a path is machinery/tests. Path TOKENS are only followed there; imports are followed everywhere. */
 export function inClosureScope(repoPath) {
-  return CLOSURE_PREFIXES.some((prefix) => String(repoPath).startsWith(prefix));
+  return TOKEN_PREFIXES.some((prefix) => String(repoPath).startsWith(prefix));
 }
 
 /** Normalise a repo-relative POSIX path, resolving `.` and `..` segments. */
@@ -292,7 +301,7 @@ export async function collectBuildTierClosure({
     for (const specifier of moduleSpecifiers(code)) {
       const resolved = await resolveSpecifier(rel, specifier, exists);
       if (resolved) {
-        if (inClosureScope(resolved) && !seen.has(resolved)) queue.push(resolved);
+        if (!seen.has(resolved)) queue.push(resolved);
       } else if (specifier.startsWith(".")) {
         unresolved.add(`${rel} -> ${specifier}`); // a RELATIVE import that does not resolve: residue, reported
       }
