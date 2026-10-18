@@ -117,6 +117,10 @@ export const SOURCE_INSPECTING_GUARDS = [
   // tests/chrome-profile-static.test.ts, which IS always-on below. See SCANNER_EXCLUSIONS for the
   // browser-dependent remainder.
   "tests/durable-root.test.ts",
+  // kafr4: walks scripts/ AND tests/ to judge the connect/reap ORDER of every suite, reading tracked
+  // source as data (no import edge from a suite it judges, and none from the suite's own edits), so it
+  // is a repo-rooted source scan and belongs here rather than in the changed-set selection.
+  "tests/kafr4-suite-connect-inside-reaping-try.test.ts",
   "tests/dialog-confirm-modernization.test.ts",
   "tests/single-source-helpers.test.ts",
   "tests/chrome-profile-static.test.ts",
