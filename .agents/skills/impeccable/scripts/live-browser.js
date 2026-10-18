@@ -424,13 +424,21 @@
   let annotState = { comments: [], strokes: [] };
   let annotActive = false;
   // `annotPointer` is either:
-  //   { kind: 'new',   x0, y0, moved, strokeEl, strokePoints }   creating a stroke/pin
-  //   { kind: 'pin',   idx, startPointer, startPin, moved }     dragging an existing pin
+  //   { kind: 'new',   x0, y0, startClient, moved, strokeEl, strokePoints }   creating a stroke/pin
+  //   { kind: 'pin',   idx, startPointer, startClient, startPin, moved }     dragging an existing pin
+  // `startClient` is the press position in client coordinates, so the drag
+  // threshold can be tested without reading the overlay's rect (3g38z).
   let annotPointer = null;
   let annotEditing = null;        // { idx, input, wrapEl }
   let annotLastPinClick = { idx: -1, time: 0 }; // for click-click-to-delete
   let placeholderResizeLayerEl = null;
   let placeholderResizeDrag = null;
+  // Coalesced pointermove state: a pen or a 120 Hz trackpad fires pointermove far
+  // faster than the page paints, and each pass reads the overlay rect and (on a
+  // pin drag) rebuilds every pin. One pass per animation frame, latest position
+  // wins (chrome-agent-platform-3g38z).
+  let annotMoveFrame = 0;
+  let annotMovePending = null;
 
   function initAnnotOverlay() {
     annotOverlayEl = document.createElement('div');
@@ -517,6 +525,8 @@
   function hideAnnotOverlay() {
     annotActive = false;
     placeholderResizeDrag = null;
+    if (annotMoveFrame) { cancelAnimationFrame(annotMoveFrame); annotMoveFrame = 0; }
+    annotMovePending = null;
     if (annotOverlayEl) annotOverlayEl.style.display = 'none';
     syncPlaceholderResizeHandles();
     // Drop any in-progress edit without touching annotState - clearAnnotations
@@ -639,6 +649,7 @@
       annotPointer = {
         kind: 'pin', idx,
         startPointer: p,
+        startClient: { x: e.clientX, y: e.clientY },
         startPin: { x: pin.x, y: pin.y },
         moved: false,
       };
@@ -654,7 +665,7 @@
       return;
     }
     const p = localCoords(e);
-    annotPointer = { kind: 'new', x0: p.x, y0: p.y, moved: false, strokeEl: null, strokePoints: null };
+    annotPointer = { kind: 'new', x0: p.x, y0: p.y, startClient: { x: e.clientX, y: e.clientY }, moved: false, strokeEl: null, strokePoints: null };
     try { annotOverlayEl.setPointerCapture(e.pointerId); } catch {}
     e.stopPropagation(); e.preventDefault();
   }
@@ -677,44 +688,60 @@
     }
 
     if (!annotPointer) return;
-    const p = localCoords(e);
+
+    // The drag threshold is tested in CLIENT space, which needs no layout read,
+    // so a move that is not yet a drag costs nothing and still propagates exactly
+    // as before. Past the threshold the pass below runs once per animation frame
+    // instead of once per event (chrome-agent-platform-3g38z).
+    if (!annotPointer.moved) {
+      const start = annotPointer.startClient;
+      if (!start || Math.hypot(e.clientX - start.x, e.clientY - start.y) < DRAG_THRESHOLD) return;
+      annotPointer.moved = true;
+      // Create the stroke preview now — no layout read — so the drag is visible
+      // from the first frame it moves, as it was when this all ran inline.
+      if (annotPointer.kind === 'new') startAnnotStrokePreview();
+    }
+
+    annotMovePending = { clientX: e.clientX, clientY: e.clientY };
+    if (!annotMoveFrame) annotMoveFrame = requestAnimationFrame(flushAnnotMove);
+    e.stopPropagation();
+  }
+
+  function startAnnotStrokePreview() {
+    const strokeEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    strokeEl.setAttribute('stroke', C.brand);
+    strokeEl.setAttribute('stroke-width', '3');
+    strokeEl.setAttribute('stroke-linecap', 'round');
+    strokeEl.setAttribute('stroke-linejoin', 'round');
+    strokeEl.setAttribute('fill', 'none');
+    strokeEl.setAttribute('pointer-events', 'none');
+    annotSvgEl.appendChild(strokeEl);
+    annotPointer.strokeEl = strokeEl;
+    annotPointer.strokePoints = [[annotPointer.x0, annotPointer.y0]];
+  }
+
+  // One coalesced pass per frame: the only overlay rect read, and the only
+  // renderAllPins rebuild, that a burst of pointermove events costs.
+  function flushAnnotMove() {
+    annotMoveFrame = 0;
+    const pending = annotMovePending;
+    annotMovePending = null;
+    if (!pending || !annotActive || !annotPointer) return;
+    const p = localCoords(pending);
 
     if (annotPointer.kind === 'pin') {
-      const dx = p.x - annotPointer.startPointer.x;
-      const dy = p.y - annotPointer.startPointer.y;
-      if (!annotPointer.moved) {
-        if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
-        annotPointer.moved = true;
-      }
       const pin = annotState.comments[annotPointer.idx];
       if (!pin) { annotPointer = null; return; }
-      pin.x = annotPointer.startPin.x + dx;
-      pin.y = annotPointer.startPin.y + dy;
+      pin.x = annotPointer.startPin.x + (p.x - annotPointer.startPointer.x);
+      pin.y = annotPointer.startPin.y + (p.y - annotPointer.startPointer.y);
       renderAllPins();
-      e.stopPropagation();
       return;
     }
 
-    // kind === 'new'
-    const dx = p.x - annotPointer.x0, dy = p.y - annotPointer.y0;
-    if (!annotPointer.moved) {
-      if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
-      annotPointer.moved = true;
-      const strokeEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      strokeEl.setAttribute('stroke', C.brand);
-      strokeEl.setAttribute('stroke-width', '3');
-      strokeEl.setAttribute('stroke-linecap', 'round');
-      strokeEl.setAttribute('stroke-linejoin', 'round');
-      strokeEl.setAttribute('fill', 'none');
-      strokeEl.setAttribute('pointer-events', 'none');
-      annotSvgEl.appendChild(strokeEl);
-      annotPointer.strokeEl = strokeEl;
-      annotPointer.strokePoints = [[annotPointer.x0, annotPointer.y0]];
-    }
     annotPointer.strokePoints.push([p.x, p.y]);
     annotPointer.strokeEl.setAttribute('d', pointsToPath(annotPointer.strokePoints));
-    e.stopPropagation();
   }
+
 
   function pointsToPath(points) {
     if (!points || points.length === 0) return '';
@@ -731,6 +758,12 @@
       placeholderResizeDrag = null;
       e.stopPropagation();
       return;
+    }
+    // Commit the last coalesced position before the drag finishes, so a fast
+    // stroke keeps its final point instead of the last one a frame caught.
+    if (annotMoveFrame) {
+      cancelAnimationFrame(annotMoveFrame);
+      flushAnnotMove();
     }
     if (!annotActive || !annotPointer) return;
 
