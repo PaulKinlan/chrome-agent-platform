@@ -387,14 +387,49 @@ Deno.test("ntp wiring: openThread answers the click before the thread.get read",
 
 Deno.test("ntp wiring: hideThreadViewInner clears the sidebar aria-current highlight (ome8i)", async () => {
   const source = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
-  const start = source.indexOf("function hideThreadViewInner()");
-  assert(start >= 0, "hideThreadViewInner exists");
-  const end = source.indexOf("function hideViewInner()", start);
-  const body = source.slice(start, end);
 
+  // 1. Full-source pin: attributed to extension/ntp/ntp.js by substring-pin-honesty.
   assertStringIncludes(
-    body,
+    source,
     "highlightTaskSidebarRow(null);",
-    "hideThreadViewInner must clear the active sidebar row's aria-current",
+    "extension/ntp/ntp.js must invoke highlightTaskSidebarRow(null)",
+  );
+
+  // 2. AST pin (s74jz): enforce that hideThreadViewInner contains a live
+  // CallExpression to highlightTaskSidebarRow(null), rejecting comment shadows.
+  const { parse } = await import("npm:acorn");
+  const ast = parse(source, { ecmaVersion: "latest", sourceType: "module" }) as any;
+  const hideFn = ast.body?.find(
+    (node: any) => node.type === "FunctionDeclaration" && node.id?.name === "hideThreadViewInner",
+  );
+  assert(hideFn, "function hideThreadViewInner must exist in ntp.js");
+
+  let foundCall = false;
+  const walk = (node: any) => {
+    if (!node || typeof node !== "object" || foundCall) return;
+    if (
+      node.type === "CallExpression" &&
+      node.callee?.name === "highlightTaskSidebarRow" &&
+      node.arguments?.length === 1 &&
+      node.arguments[0]?.type === "Literal" &&
+      node.arguments[0]?.value === null
+    ) {
+      foundCall = true;
+      return;
+    }
+    for (const key of Object.keys(node)) {
+      const child = node[key];
+      if (Array.isArray(child)) {
+        for (const item of child) walk(item);
+      } else if (child && typeof child === "object") {
+        walk(child);
+      }
+    }
+  };
+  walk(hideFn);
+
+  assert(
+    foundCall,
+    "hideThreadViewInner must contain a live call to highlightTaskSidebarRow(null) (not a comment)",
   );
 });
