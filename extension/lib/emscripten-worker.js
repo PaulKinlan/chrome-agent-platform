@@ -8,7 +8,7 @@
 // caller-influenced Module fields, hooks, locateFile or memory settings.
 
 import { adapterContractFor } from "./emscripten-adapter-registry.js";
-import { createEmscriptenFrameAcks, postEmscriptenOutputFrames } from "./emscripten-worker-frames.js";
+import { createEmscriptenFrameAcks, createEmscriptenOutputEnd, postEmscriptenOutputFrames } from "./emscripten-worker-frames.js";
 
 const JOB_TYPE = "cap:emscripten-worker-job";
 const RESULT_TYPE = "cap:emscripten-run-result";
@@ -126,10 +126,11 @@ addEventListener("message", async (event) => {
   try {
     const result = await run(job);
     if (job.operation.result === "buffer") {
-      await postEmscriptenOutputFrames(result, { ...identity, workerInstanceId }, {
+      const progress = await postEmscriptenOutputFrames(result, { ...identity, workerInstanceId }, {
         expectAck: (seq) => acks.expect(seq),
         postFrame: (frame, transfer) => postMessage(frame, transfer),
       });
+      postMessage(createEmscriptenOutputEnd(result, { ...identity, workerInstanceId }, progress));
     }
     active = false;
     frameAcks = null;

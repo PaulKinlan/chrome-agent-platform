@@ -1,7 +1,10 @@
 // Pure job-Worker -> offscreen-host byte transport. No OPFS ref, handle or
 // directory crosses this message channel. A frame ACK grants only backpressure.
+import { createIncrementalSha256 } from "./incremental-sha256.js";
+
 export const EMSCRIPTEN_OUTPUT_FRAME_TYPE = "cap:emscripten-output-frame";
 export const EMSCRIPTEN_OUTPUT_ACK_TYPE = "cap:emscripten-output-ack";
+export const EMSCRIPTEN_OUTPUT_END_TYPE = "cap:emscripten-output-end";
 const FRAME_BYTES = 64 * 1024;
 
 function fail(code) {
@@ -61,6 +64,22 @@ export async function postEmscriptenOutputFrames(bytes, identity, { expectAck, p
     seq++;
   }
   return Object.freeze({ frames: seq, bytes: bytes.byteLength });
+}
+
+/** Producer's declared end is posted only AFTER all host ACKs. It is an
+ * assertion of stream completeness, NOT a worker-termination witness. */
+export function createEmscriptenOutputEnd(bytes, identity, progress) {
+  if (!(bytes instanceof Uint8Array) ||
+      !exactKeys(identity, ["sessionId", "packageId", "operationId", "workerInstanceId"]) ||
+      ![identity.sessionId, identity.packageId, identity.operationId,
+        identity.workerInstanceId].every((value) => typeof value === "string" && value.length > 0) ||
+      !exactKeys(progress, ["frames", "bytes"]) || !Number.isSafeInteger(progress.frames) ||
+      progress.frames < 0 || progress.frames !== Math.ceil(bytes.byteLength / FRAME_BYTES) ||
+      progress.bytes !== bytes.byteLength) fail("emscripten_output_end_invalid");
+  const hash = createIncrementalSha256();
+  hash.update(bytes);
+  return Object.freeze({ type: EMSCRIPTEN_OUTPUT_END_TYPE, ...identity,
+    frames: progress.frames, bytes: progress.bytes, sha256: hash.hex() });
 }
 
 /** Host-owned receiver: an ACK follows the actual serialized writer.write(),

@@ -5,7 +5,7 @@ import { runAuditedHostBinaryJob } from "../extension/lib/emscripten-host-binary
 import { createEmscriptenHostEvidence } from "../extension/lib/emscripten-host-evidence.js";
 import { emscriptenJobOwner } from "../extension/lib/emscripten-custody.js";
 import { createWasmStreamOutput, listWasmStreamEntries } from "../extension/lib/wasm-stream-files.js";
-import { EMSCRIPTEN_OUTPUT_FRAME_TYPE, EMSCRIPTEN_OUTPUT_ACK_TYPE } from "../extension/lib/emscripten-worker-frames.js";
+import { EMSCRIPTEN_OUTPUT_FRAME_TYPE, EMSCRIPTEN_OUTPUT_ACK_TYPE, createEmscriptenOutputEnd } from "../extension/lib/emscripten-worker-frames.js";
 
 function storageFixture() {
   function directory() {
@@ -67,7 +67,8 @@ async function context() {
     adapterUrl: "chrome-extension://test/adapter.mjs", wasmBytes: new Uint8Array([1]) };
   return { storage, identity, evidence, job };
 }
-function fakeWorker({ malformed = false, timeout = false, lateFrame = false } = {}) {
+function fakeWorker({ malformed = false, timeout = false, lateFrame = false,
+  sendEnd = true, wrongDigest = false, frameAfterEnd = false } = {}) {
   const frames = [];
   let stopped = 0;
   const instance = "11111111-1111-4111-8111-111111111111";
@@ -99,6 +100,14 @@ function fakeWorker({ malformed = false, timeout = false, lateFrame = false } = 
       } else if (message.type === EMSCRIPTEN_OUTPUT_ACK_TYPE) {
         frames.push(message);
         queueMicrotask(() => {
+          if (sendEnd) {
+            const end = createEmscriptenOutputEnd(new Uint8Array([10, 20]), {
+              sessionId: job.sessionId, packageId: job.packageId,
+              operationId: job.operationId, workerInstanceId: instance,
+            }, { frames: 1, bytes: 2 });
+            worker.onmessage({ data: wrongDigest ? { ...end, sha256: "0".repeat(64) } : end });
+          }
+          if (frameAfterEnd) worker.emitLateFrame();
           worker.onmessage({ data: {
             type: "cap:emscripten-run-result", sessionId: job.sessionId,
             packageId: job.packageId, operationId: job.operationId,
@@ -115,6 +124,22 @@ function fakeWorker({ malformed = false, timeout = false, lateFrame = false } = 
   };
   return worker;
 }
+
+Deno.test("x9r8k: scalar terminal without a producer-end declaration stays UNKNOWN", async () => {
+  const { storage, identity, evidence, job } = await context();
+  await assertRejects(() => runAuditedHostBinaryJob({ identity, job, storage, evidence,
+    createWorker: () => fakeWorker({ sendEnd: false }), wallMs: 1000 }));
+  assertEquals((await evidence.read(identity)).state, "unknown");
+});
+
+Deno.test("x9r8k: mismatched producer end or frame after end never yields CLOSED", async () => {
+  for (const options of [{ wrongDigest: true }, { frameAfterEnd: true }]) {
+    const { storage, identity, evidence, job } = await context();
+    await assertRejects(() => runAuditedHostBinaryJob({ identity, job, storage, evidence,
+      createWorker: () => fakeWorker(options), wallMs: 1000 }));
+    assertEquals((await evidence.read(identity)).state, "unknown");
+  }
+});
 
 Deno.test("3mcu1: host-only runner writes through host channel, closes and persists exact proof", async () => {
   const { storage, identity, evidence, job } = await context();
