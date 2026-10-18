@@ -47,6 +47,8 @@ Deno.test("Emscripten run fence: worker identity must match agent surface; abort
   const base = { runId: RUN, agentId: "named:alice", active, cancelled: new Set(), ended: new Set() };
   assertEquals(isEmscriptenModelRunLive({ ...base, workerRun: { kind: "worker", surface: "agent-worker:named:bob" } }), false);
   assertEquals(isEmscriptenModelRunLive({ ...base, workerRun: { kind: "worker", surface: "agent-worker:named:alice" } }), true);
+  assertEquals(isEmscriptenModelRunLive({ ...base, workerRun: { kind: "agent", surface: "named:alice" } }), true,
+    "ordinary SW-owned agent runs have a non-worker runControl record and remain live");
   assertEquals(isEmscriptenModelRunLive({ ...base, ended: new Set([RUN]) }), false);
   const controller = new AbortController(); controller.abort();
   assertEquals(isEmscriptenModelRunLive({ ...base, signal: controller.signal }), false);

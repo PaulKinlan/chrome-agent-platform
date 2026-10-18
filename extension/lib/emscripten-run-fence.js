@@ -11,9 +11,11 @@ export function isEmscriptenModelRunLive({
   if (typeof runId !== "string" || !RUN_ID_RE.test(runId) ||
       typeof agentId !== "string" || !agentId || signal?.aborted ||
       cancelled?.has(runId) || ended?.has(runId)) return false;
-  if (workerRun != null) {
-    return workerRun.kind === "worker" && workerRun.surface === `agent-worker:${agentId}`;
+  if (workerRun?.kind === "worker") {
+    return workerRun.surface === `agent-worker:${agentId}`;
   }
+  // Ordinary hub/named agent executions ALSO register in runControl with
+  // kind "task"/"agent". Their authoritative liveness is activeExecutions.
   return active?.has(runId) === true;
 }
 
