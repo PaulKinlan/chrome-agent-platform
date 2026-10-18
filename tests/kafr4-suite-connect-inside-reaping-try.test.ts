@@ -36,6 +36,11 @@ function codeOnly(source: string): string {
   let out = "";
   let i = 0;
   const template = () => modes[modes.length - 1].kind === "template";
+  // Regex-literal disambiguation (ke0n9): `/` starts a REGEX where an expression cannot end, and a regex
+  // body may contain `}` and `/` that are not code. Without this, `/${}/.test("}")` inside an
+  // interpolation closed the interpolation early and blanked the live code after it.
+  let lastSignificant = "";
+  const regexFollows = () => lastSignificant === "" || "([{,;:=!&|?+-*%<>~^".includes(lastSignificant);
   while (i < source.length) {
     const ch = source[i];
     const next = source[i + 1];
@@ -48,6 +53,26 @@ function codeOnly(source: string): string {
       i += 2;
       while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) { out += " "; i++; }
       if (i < source.length) { out += "  "; i += 2; }
+      continue;
+    }
+    if (!template() && ch === "/" && regexFollows()) {
+      // Blank the regex BODY (it is a pattern, not code) but keep the delimiters, so a `}` or a nested
+      // `/` inside a character class cannot end an interpolation or start a comment.
+      out += "/";
+      i++;
+      let inClass = false;
+      while (i < source.length) {
+        const c = source[i];
+        if (c === "\\") { out += "  "; i += 2; continue; }
+        if (c === "[") { inClass = true; out += "["; i++; continue; }
+        if (c === "]") { inClass = false; out += "]"; i++; continue; }
+        if (c === "/" && !inClass) { out += "/"; i++; break; }
+        if (c === "\n") { out += "\n"; i++; break; }
+        out += " ";
+        i++;
+      }
+      while (i < source.length && /[a-z]/i.test(source[i])) { out += source[i]; i++; }
+      lastSignificant = "/";
       continue;
     }
     if (template()) {
@@ -81,11 +106,13 @@ function codeOnly(source: string): string {
     if (ch === "{") {
       top.braceDepth++;
       out += ch;
+      lastSignificant = ch;
       i++;
       continue;
     }
     if (ch === "}") {
       top.braceDepth--;
+      lastSignificant = ch;
       if (modes.length > 1 && top.braceDepth < 0) {
         modes.pop();
         out += "}";
@@ -96,6 +123,8 @@ function codeOnly(source: string): string {
       i++;
       continue;
     }
+    if (ch === "`") { lastSignificant = "`"; }
+    if (!/\s/.test(ch)) lastSignificant = ch;
     out += ch;
     i++;
   }
@@ -301,6 +330,29 @@ Deno.test("kafr4 falsification: the PRE-FIX shape (connect before the try) reds 
   `;
   assertEquals(connectInsideReapingTry(fixed, cdpCallIndices(fixed)[0] ?? -1), true,
     "and the fixed shape is admitted, so the guard is not simply refusing everything");
+});
+
+Deno.test("ke0n9: a regex literal's } and / do not end the interpolation or start a comment", () => {
+  // The reviewer's shape: a valid TypeScript template whose interpolation tests `/[}]/` (or `/${}/`) before
+  // a real connect. Read as plain text, the `}` inside the pattern closed the interpolation early and every
+  // live call after it was blanked - the census stayed green while a connect sat outside a reaping try.
+  const withRegex = `
+    const first = await ${LAUNCH}({});
+    const guard = \`validate: \${/[}]/.test("}") && await ${CONNECT}(second.wsUrl)} done\`;
+    try {
+      await cdp.eval(guard);
+    } finally {
+      await reapLeaderAndSettle(first.proc);
+    }
+  `;
+  const calls = cdpCallIndices(withRegex);
+  assertEquals(calls.length, 1, "the connect after the regex literal is still LIVE code and is a call site");
+  assertEquals(connectInsideReapingTry(withRegex, calls[0]), false,
+    "and it sits before the try whose finally reaps, which is the leak the regex blind spot hid");
+  // Division must not be mistaken for a regex: `a / b` leaves the following code intact.
+  const division = `const half = total / count;\nconst cdp = await ${CONNECT}(url);\n`;
+  assertEquals(cdpCallIndices(division).length, 1,
+    "a division sign does not start a regex, so the connect after it is still seen");
 });
 
 Deno.test("3ce48: a real connect inside a template interpolation IS a call site", () => {
