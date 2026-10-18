@@ -1,37 +1,36 @@
-# Emscripten offscreen host evidence — xoeaa (partial)
+# Emscripten offscreen host evidence — xoeaa + 3mcu1 (partial)
 
-The retained `extension/lib/emscripten-host-evidence.js` stores a versioned
-`pending.json` and optional `unknown.json` under a dedicated
+The retained `extension/lib/emscripten-host-evidence.js` stores versioned
+`pending.json` plus optional `unknown.json` or `closed.json` under a separate
 `emscripten-host-evidence-v1/<outputRef.id>-<generation>/` OPFS directory.
-Unlike service-worker run-log rows, these records are not compacted by run
-retention. The identity binds execution ID, agent ID, injective stream owner,
-exact stdout ref, SW-issued generation, package, graph digest and operation.
-The host creates its own incarnation ID. Restarted hosts may read evidence but
-cannot claim or overwrite a prior incarnation's pending record. Once UNKNOWN
-is recorded, `begin` refuses the same ref/generation even for the original host:
-UNKNOWN can never authorize native replay. An offscreen restart without a known
-terminal event remains the typed implicit `writer_fence_unavailable`; a restarted
-incarnation cannot annotate a prior host's pending record with a fabricated
-`offscreen_restart` reason. Invalid,
-corrupt, unreadable and foreign records fail closed. The original sealed input
-and shared stream/artifact directories are never removed by this module.
+Unlike service-worker run logs, these records are not compacted. Identity binds
+execution ID, agent ID, injective stream owner, exact stdout ref, SW-issued
+generation, package, graph digest and operation. The host creates its own
+incarnation ID. Restarted hosts can read but cannot claim or overwrite a prior
+incarnation's record. UNKNOWN or CLOSED prevents another `begin` for that ref
+and generation. Missing, corrupt, unreadable and foreign records fail closed.
+No original input, stream or artifact directory is removed by this ledger.
 
-**No positive terminal proof exists here.** A pending record reads as `unknown`;
-`recordUnknown` records a typed failure such as timeout or unproved termination.
-There is deliberately no `quiescent` state, publish API, or cleanup authority.
-`Worker.terminate()` and a successful message do not prove an OPFS writer was
-flushed/closed. This module is not yet imported by the offscreen entry, and the
-Emscripten binary broker/host guard remains on. It cannot unblock x9r8k or
-9a1wj. ADR nv5g0 requires g2dje's host-managed writer leases, explicit close
-acknowledgment and independently durable no-writers fence before a later slice
-may record positive terminal evidence. Future integration must durably begin
-before native construction; if the host crashes before or during an UNKNOWN
-write, the surviving pending row is still UNKNOWN, never success.
+A pending record reads as UNKNOWN. `recordUnknown` persists typed timeout or
+unproved termination. The 3mcu1 host-owned writer can persist a narrow positive
+CLOSED receipt only after it observes its own exclusive-lock probe, drained
+queue, writer `close()` and independently re-read byte count and SHA-256. An
+UNKNOWN and a CLOSED record for the same identity conflict and read as
+unavailable. Restart may read CLOSED but cannot add it for a prior incarnation.
+A `Worker.terminate()` call or successful worker message alone is not proof of
+close. A crash before a terminal write leaves pending UNKNOWN; an incomplete or
+corrupt terminal write is unavailable, never success.
 
-The host ledger is a separate failure-state witness, not a browser permission
-boundary: reviewed extension-origin Worker code may itself access origin OPFS.
-Untrusted native code must not receive this root or arbitrary handles. The
-ledger's one-host-writer assumption must be replaced with a crash-safe CAS or
-exclusive lease before any future positive terminal state is implemented.
-Tests: `tests/emscripten-host-evidence.test.ts` covers restart, foreign tuple,
-wrong generation, corrupted metadata and UNKNOWN-only results.
+These modules remain **unwired** to the offscreen entry. The binary broker/host
+refusal remains on. A host receipt is not SW live-run authority, a publication
+check or permission for destructive cleanup. `x9r8k` and `9a1wj` are not
+cleared by this preparatory proof. The host ledger is not a browser permission
+boundary: same-origin Worker code can itself access OPFS. `197jd` tracks the
+admission restriction on exact glue/adapter bytes; the residual assumption is
+explicit. One offscreen host is assumed to be the writer of each record; any
+future concurrent-host path needs crash-safe CAS rather than worker leases.
+
+Focused tests: `tests/emscripten-host-evidence.test.ts` covers restart, foreign
+identity and corrupt metadata; `tests/emscripten-host-writer.test.ts` covers
+queue drain, exclusive lock, close failure, forced abort, and persistent CLOSED
+versus UNKNOWN.

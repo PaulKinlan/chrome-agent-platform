@@ -125,6 +125,10 @@ Deno.test("emscripten host: happy path posts the exact job to one fresh worker a
     assert(JSON.stringify(Object.keys(posted).sort()) ===
       JSON.stringify(["adapterUrl","args","glueUrl","graphDigest","operation","operationId","packageId","sessionId","type","version","wasmBytes"]),
       "exact job keys");
+    assert(!Object.values(posted).some((value) => value && typeof value === "object" &&
+      (typeof value.createWritable === "function" || typeof value.getDirectory === "function" ||
+        (typeof value.id === "string" && /^[0-9a-f]{32}$/u.test(value.id) && typeof value.kind === "string"))),
+    "job Worker must receive no OPFS handle, directory or stream ref");
     assert(posted.glueUrl.endsWith("wasm/runtime/cap.acceptance.a0.numeric/1.0.0/numeric-glue.mjs"), "broker-selected glue URL");
     assert(transferred?.length === 1 && transferred[0] instanceof ArrayBuffer, "the verified wasm bytes transfer");
     assert(terminated >= 1, "the worker is terminated on settlement");
