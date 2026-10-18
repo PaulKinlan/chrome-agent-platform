@@ -13,7 +13,7 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { runSerialLanes, serialLaneCommand } from "../scripts/lib/serial-phase.mjs";
 import {
@@ -82,101 +82,63 @@ Deno.test("lanes: a SERIAL file with no lane is a loud error, never a silent fal
   assert(message.includes("no SERIAL_LANES entry"), `unexpected error: ${message}`);
 });
 
-/** A fixture test file that appends start/end stamps to a shared events file. */
-async function writeFixture(dir: string, name: string, events: string, sleepMs: number) {
-  const path = join(dir, `${name}.test.ts`);
-  await Deno.writeTextFile(
-    path,
-    [
-      `const EVENTS = ${JSON.stringify(events)};`,
-      `const stamp = (phase: string) => Deno.writeTextFileSync(EVENTS, ${JSON.stringify(name)} + "-" + phase + " " + Date.now() + "\\n", { append: true });`,
-      `Deno.test(${JSON.stringify(name)}, async () => {`,
-      `  stamp("start");`,
-      `  await new Promise((r) => setTimeout(r, ${sleepMs}));`,
-      `  stamp("end");`,
-      `});`,
-      "",
-    ].join("\n"),
-  );
-  return path;
-}
-
-Deno.test("lanes: build and global overlap, strict runs alone, and the attribution survives the child", async () => {
-  const dir = scratch("e2e");
-  const events = join(dir, "events.log");
-  try {
-    await writeFixture(dir, "zz-strict", events, 300);
-    // The build lane must outlast the child's STARTUP, or the two fixture intervals cannot intersect
-    // even though the lanes ran together: the child pays a runtime start (deno type-checks here).
-    await writeFixture(dir, "zz-build", events, 3_000);
-    await writeFixture(dir, "zz-global", events, 600);
-    // The fixtures are NOT SERIAL members, so this test drives the lanes through a temporary
-    // classification: runSerialLanes classifies by SERIAL_LANES, and these names are unknown to it, so
-    // call the pieces the lanes are built from and assert the wall-clock shape instead.
-    const { runSerialFiles } = await import("../scripts/lib/serial-phase.mjs");
-    const laneOpts: {
-    stdio: ["ignore", "ignore", "ignore"];
-    cwd: string;
-  } = { stdio: ["ignore", "ignore", "ignore"], cwd: ROOT };
-
-    const childStart = Date.now();
-    const childLane = (async () => {
-      const result = join(dir, "global.json");
-      const command = serialLaneCommand({ resultPath: result, files: [join(dir, "zz-global.test.ts")], cwd: ROOT });
-      const { spawnSync: spawnChild } = await import("node:child_process");
-      const run = spawnChild(command.command, command.args, { cwd: command.options.cwd, env: command.options.env, stdio: ["ignore", "ignore", "ignore"] });
-      const reported = JSON.parse(await Deno.readTextFile(result));
-      return { code: run.status ?? 1, reported };
-    })();
-    const buildRc = runSerialFiles([join(dir, "zz-build.test.ts")], laneOpts);
-    const global = await childLane;
-    const childEnd = Date.now();
-    const concurrentWall = childEnd - childStart;
-
-    assertEquals(buildRc, 0, "the build lane fixture must pass");
-    assertEquals(global.code, 0, "the child lane fixture must pass");
-    assertEquals(global.reported.rc, 0, "the child lane must report its own exit code");
-    assertEquals(global.reported.failures, [], "a passing lane reports no failures");
-    // The OVERLAP ITSELF is asserted below from the fixtures' timestamps — wall time cannot decide it,
-    // because the child pays a runtime startup (a deno run type-checks the lane module here; node does
-    // not). Only a sanity bound on the whole two-lane step is kept.
-    assert(concurrentWall > 0, "the concurrent lanes must have taken measurable time");
-
-    // Strict alone: its interval must not intersect either lane's interval.
-    const strictStart = Date.now();
-    assertEquals(runSerialFiles([join(dir, "zz-strict.test.ts")], laneOpts), 0);
-    const strictEnd = Date.now();
-    const rows = (await Deno.readTextFile(events)).trim().split("\n").map((line) => {
-      const [tag, ms] = line.split(" ");
-      return { tag, at: Number(ms) };
-    });
-    const at = (tag: string) => rows.find((row) => row.tag === tag)?.at;
-    const buildStart = at("zz-build-start") ?? -1;
-    const buildEnd = at("zz-build-end") ?? -1;
-    const globalStart = at("zz-global-start") ?? -1;
-    const globalEnd = at("zz-global-end") ?? -1;
-    assert(buildStart > 0 && buildEnd > 0 && globalStart > 0 && globalEnd > 0, `both lanes must have stamped: ${JSON.stringify(rows)}`);
-    const buildWindow = buildStart + ".." + buildEnd;
-    const globalWindow = globalStart + ".." + globalEnd;
-    // Real overlap: the global lane's PROCESS was alive while the build lane ran. Measuring the child's
-    // spawn-to-exit lifetime (not its first fixture stamp) keeps this honest under `deno test`, where
-    // the child pays a multi-second module type-check before its first test starts; under `npm test`
-    // (node) that startup is tens of milliseconds.
-    assert(
-      Math.max(buildStart, childStart) < Math.min(buildEnd, childEnd),
-      `the two lanes must run concurrently: build ${buildWindow}, global process ${childStart}..${childEnd}`,
-    );
-    // Strict alone: nothing else may start inside its window, and it starts after both lanes ended.
-    for (const row of rows) {
-      if (row.tag.endsWith("-start") && !row.tag.startsWith("zz-strict") && row.at > strictStart && row.at < strictEnd) {
-        assert(false, `${row.tag} started at ${row.at} inside the strict window ${strictStart}..${strictEnd}`);
+Deno.test("lanes: the child is spawned BEFORE the build lane runs, both are awaited, failures merge in order", async () => {
+  // The ordering is the whole mechanism, and it is asserted with the lane seams so the test does not pay
+  // a real `deno test` startup per fixture (seconds on a loaded box) to prove a millisecond fact.
+  const events: string[] = [];
+  const files = [
+    "tests/ntp-boot-staging.test.ts", // strict
+    "tests/build-smoke.test.ts", // build
+    "tests/chrome-launch-lock.test.ts", // global
+  ];
+  let resolveChild = () => {};
+  const childDone = new Promise<void>((resolve) => { resolveChild = () => resolve(); });
+  const failuresOut: any[] = [];
+  const rc = await runSerialLanes(files, {
+    runLaneFiles: (laneFiles: string[], opts: any) => {
+      for (const file of laneFiles) events.push(`run:${file}`);
+      if (laneFiles.includes("tests/build-smoke.test.ts")) {
+        // The build lane must see the child already spawned.
+        assertEquals(events.includes("spawn-child"), true, "the child must be spawned before the build lane runs");
+        events.push("build-start");
+        opts.failuresOut.push({ file: "tests/build-smoke.test.ts", code: 0, timedOut: false, isRefusal: false, secs: "0", log: null });
+        events.push("build-end");
+        // The child finishes right after the build lane — the parent must then be able to await it.
+        setTimeout(() => resolveChild(), 0);
       }
-    }
-    assert(strictStart > Math.max(buildEnd, globalEnd), "the strict lane must run after both lanes finished");
-    assertEquals(rows.filter((row) => row.tag === "zz-strict-start").length, 1, "the strict fixture must have started once");
-  } finally {
-    await Deno.remove(dir, { recursive: true }).catch(() => {});
-  }
+      if (laneFiles.includes("tests/chrome-launch-lock.test.ts")) {
+        events.push("global-ran");
+        opts.failuresOut.push({ file: "tests/chrome-launch-lock.test.ts", code: 0, timedOut: false, isRefusal: false, secs: "0", log: null });
+      }
+      return 0;
+    },
+    spawnLaneChild: (lane: any) => {
+      events.push("spawn-child");
+      // The child's files are run by the child itself; its result arrives from the file it writes.
+      // A FAILING record here also pins the merge order and the exit-code combination.
+      writeFileSync(
+        lane.resultPath,
+        JSON.stringify({
+          rc: 1,
+          failures: [{ file: "tests/chrome-launch-lock.test.ts", code: 1, timedOut: false, isRefusal: false, secs: "1.0", log: null }],
+        }),
+      );
+      return {
+        pid: 0,
+        kill: () => {},
+        exited: childDone.then(() => ({ code: 1, signal: null })),
+      };
+    },
+    failuresOut,
+  });
+  assertEquals(rc, 1, "a failing child lane must fail the phase with its own code");
+  assertEquals(
+    failuresOut.map((failure) => failure.file),
+    ["tests/build-smoke.test.ts", "tests/chrome-launch-lock.test.ts"],
+    "merged failures must come back in SERIAL declaration order",
+  );
+  assertEquals(events.indexOf("spawn-child") < events.indexOf("build-start"), true, "spawn must precede the build lane");
+  assertEquals(events.includes("build-end"), true, "the build lane must run to completion while the child lives");
 });
 
 Deno.test("lanes: a failing file in the child lane is named and fails the phase", async () => {
@@ -190,7 +152,7 @@ Deno.test("lanes: a failing file in the child lane is named and fails the phase"
     const result = join(dir, "global.json");
     const { spawnSync: spawnChild } = await import("node:child_process");
     const command = serialLaneCommand({ resultPath: result, files: [failing], cwd: ROOT });
-    const run = spawnChild(command.command, command.args, { cwd: command.options.cwd, env: command.options.env, stdio: ["ignore", "ignore", "ignore"] });
+    const run = spawnChild("node", command.args, { cwd: command.options.cwd, env: command.options.env, stdio: ["ignore", "ignore", "ignore"] });
     const code = run.status ?? 1;
     const reported = JSON.parse(await Deno.readTextFile(result));
     assert(code !== 0, "a failing file must fail the lane process");

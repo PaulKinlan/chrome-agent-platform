@@ -515,7 +515,7 @@ export function serialLaneCommand({ resultPath, files, cwd = undefined, env = pr
  * `failuresOut` in SERIAL declaration order so the summary reads the same.
  *
  * @param {string[]} files
- * @param {{ timeoutMs?: number, perFileTimeoutMs?: Record<string, number> | null, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv, failuresOut?: any[], childBoundMs?: number }} [options]
+ * @param {{ timeoutMs?: number, perFileTimeoutMs?: Record<string, number> | null, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv, failuresOut?: any[], childBoundMs?: number, runLaneFiles?: (files: string[], options: any) => number, spawnLaneChild?: ((lane: any) => { pid: number, kill: () => void, exited: Promise<{ code: number | null, signal: string | null }> }) | null }} [options]
  * @returns {Promise<number>}
  */
 export async function runSerialLanes(files, {
@@ -526,6 +526,11 @@ export async function runSerialLanes(files, {
   env = process.env,
   failuresOut = undefined,
   childBoundMs = undefined,
+  // Test seams. `runLaneFiles` and `spawnLaneChild` exist so a unit test can assert the LANE ORDERING
+  // and the merge without paying a real deno startup per fixture (a real `deno test` child costs seconds
+  // on a loaded box, which would make the assertion about the gate cost more than the gate saves).
+  runLaneFiles = runSerialFiles,
+  spawnLaneChild = null,
 } = {}) {
   const lanes = serialLanes(files);
   const runOpts = { ...(timeoutMs === undefined ? {} : { timeoutMs }), perFileTimeoutMs, stdio, cwd, env };
@@ -538,7 +543,7 @@ export async function runSerialLanes(files, {
       `run-tests: serial lane STRICT (${lanes.strict.length} file(s), run ALONE — their reasons say concurrent load or wall-clock timing breaks them): ` +
         lanes.strict.join(", "),
     );
-    codes.strict = runSerialFiles(lanes.strict, { ...runOpts, failuresOut: laneFailures.strict });
+    codes.strict = runLaneFiles(lanes.strict, { ...runOpts, failuresOut: laneFailures.strict });
   }
 
   if (lanes.build.length && lanes.global.length) {
@@ -554,24 +559,30 @@ export async function runSerialLanes(files, {
       announce(
         `run-tests: serial lanes FALL BACK TO SEQUENTIAL — no durable result path for the global lane (${error?.message ?? error})`,
       );
-      codes.build = runSerialFiles(lanes.build, { ...runOpts, failuresOut: laneFailures.build });
-      codes.global = runSerialFiles(lanes.global, { ...runOpts, failuresOut: laneFailures.global });
+      codes.build = runLaneFiles(lanes.build, { ...runOpts, failuresOut: laneFailures.build });
+      codes.global = runLaneFiles(lanes.global, { ...runOpts, failuresOut: laneFailures.global });
       resultPath = null;
     }
     if (resultPath) {
       const bound = childBoundMs ??
         lanes.global.reduce((total, file) => total + (perFileTimeoutMs?.[file] ?? defaultSerialTimeoutMs(env)), 0) + 60_000;
       const lane = serialLaneCommand({ resultPath, files: lanes.global, cwd, env });
-      const child = spawn(lane.command, lane.args, lane.options);
+      const child = spawnLaneChild
+        ? spawnLaneChild({ ...lane, resultPath, files: lanes.global })
+        : spawn(lane.command, lane.args, lane.options);
       let killed = false;
-      const killer = setTimeout(() => {
+      const killer = spawnLaneChild ? null : setTimeout(() => {
         killed = true;
         try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch { /* gone */ } }
       }, bound);
-      const childExited = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
-      codes.build = runSerialFiles(lanes.build, { ...runOpts, failuresOut: laneFailures.build });
+      const childExited = spawnLaneChild
+        ? child.exited
+        : new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
+      // SPAWNED ABOVE, RUN BELOW: the child is already working when the build lane starts — that ordering
+      // is the whole point of the lane split, and it is what the unit test pins.
+      codes.build = runLaneFiles(lanes.build, { ...runOpts, failuresOut: laneFailures.build });
       const { code, signal } = await childExited;
-      clearTimeout(killer);
+      if (killer) clearTimeout(killer);
       let reported = null;
       try {
         reported = JSON.parse(readFileSync(resultPath, "utf8"));
@@ -593,7 +604,7 @@ export async function runSerialLanes(files, {
   } else if (lanes.build.length || lanes.global.length) {
     const lane = lanes.build.length ? "build" : "global";
     // Only one lane has members: nothing to overlap, so keep the plain sequential path.
-    codes[lane] = runSerialFiles(lanes[lane], { ...runOpts, failuresOut: laneFailures[lane] });
+    codes[lane] = runLaneFiles(lanes[lane], { ...runOpts, failuresOut: laneFailures[lane] });
   }
 
   // Merge in SERIAL declaration order so the named-failure summary reads exactly as before.
