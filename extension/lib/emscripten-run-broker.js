@@ -228,6 +228,9 @@ export function executableEmscriptenToolRecords(packages, context = {}) {
         operationId: row.operationId,
         args: validatedArgs?.args ?? [],
         context: runContext,
+        // Only the SW's Settings route supplies this internal preview marker;
+        // lazy model dispatch constructs runContext without it.
+        preview: runContext?.preview === true,
       });
     };
 

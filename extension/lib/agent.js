@@ -1324,6 +1324,9 @@ export function createAgent({
       runId: ownData(activeRun.identity, "runId"),
       taskId: ownData(activeRun.identity, "taskId"),
       agentId: id,
+      // The master agent's id is always "hub", even for named/background runs.
+      // Only the SW-provided immutable run identity carries their real surface.
+      runSurfaceRef: ownData(activeRun.identity, "runSurfaceRef"),
       origin: ownData(dynamic, "origin") ?? ownData(activeRun.identity, "origin") ?? (id === "hub" ? "" : id),
       documentId: ownData(dynamic, "documentId") ?? ownData(activeRun.identity, "documentId") ?? "",
       runGeneration: ownData(dynamic, "runGeneration") ?? ownData(activeRun.identity, "runGeneration") ?? String(activeRun.gen ?? "0"),
@@ -1818,6 +1821,7 @@ export function createAgent({
       const identity = Object.freeze({
         runId: String(ownData(identityInput, "runId") ?? crypto.randomUUID()),
         taskId: String(ownData(identityInput, "taskId") ?? taskId ?? "adhoc"),
+        runSurfaceRef: ownData(identityInput, "runSurfaceRef"),
         origin: String(ownData(identityInput, "origin") ?? (id === "hub" ? "" : id)),
         documentId: String(ownData(identityInput, "documentId") ?? ""),
         runGeneration: String(ownData(identityInput, "runGeneration") ?? gen ?? "0"),
