@@ -154,13 +154,20 @@ Deno.test("re8v7: the checker refuses unknown arguments before it reads any expo
   assertStringIncludes(text, "cannot verify committed IDs");
 });
 
+function stripComments(source: string): string {
+  // Strip block comments /* ... */
+  const withoutBlock = source.replace(/\/\*[\s\S]*?\*\//g, "");
+  // Strip line comments // to end of line
+  return withoutBlock.replace(/\/\/.*$/gm, "");
+}
+
 Deno.test("re8v7: the checker buffers no fixed stdout ceiling", async () => {
   // The functional cases above prove the current read works at 16 MiB+; this pin
   // is what stops the cheap "raise the constant" repair from re-introducing a
   // date-shaped bound (7unpg tracks the ratchet itself, not this read).
   const source = await readFile(CHECKER, "utf8");
-  // Comments are allowed to NAME the removed option; executable code is not.
-  const code = source.split("\n").filter((line) => !line.trimStart().startsWith("//")).join("\n");
+  // Comments (line, block, trailing) are allowed to NAME the removed option; executable code is not.
+  const code = stripComments(source);
   assert(!/maxBuffer/.test(code), "no spawn option may cap stdout at a fixed size");
   assert(/spawn\(/.test(code), "the checker must collect stdout from a streamed child");
 });
@@ -252,16 +259,13 @@ Deno.test("nabuw / o3i89: buffer overflow triggers reachable capacity errors wit
     await Deno.remove(scratch, { recursive: true }).catch(() => {});
   }
 
-  // 7. package-archive source code does not use unbounded maxBuffer (05x0v, o3vrq).
-  // Comments are allowed to name the options; executable code is not.
+  // 7. package-archive source code does not use unbounded maxBuffer (05x0v, o3vrq, wh98h, stvca).
+  // Comments (line, block, trailing) are allowed to name options in prose; executable code is strictly verified.
   const packageArchiveSrc = await Deno.readTextFile(new URL("../scripts/package-archive.mjs", import.meta.url));
-  const packageArchiveCode = packageArchiveSrc
-    .split("\n")
-    .filter((line) => !line.trimStart().startsWith("//"))
-    .join("\n");
+  const packageArchiveCode = stripComments(packageArchiveSrc);
   assert(
-    !/maxBuffer:\s*(\+?Infinity|\d{9,}|2\s*\*\*\s*\d+)/.test(packageArchiveCode),
-    "scripts/package-archive.mjs must not contain unbounded maxBuffer",
+    !/maxBuffer\s*:\s*(?!\s*(?:maxBuffer\s*[,}]|MAX_ARCHIVE_BUFFER_BYTES\s*[,}]))/.test(packageArchiveCode),
+    "scripts/package-archive.mjs must only bind maxBuffer to the scoped parameter or MAX_ARCHIVE_BUFFER_BYTES",
   );
 });
 
