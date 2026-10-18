@@ -2,6 +2,7 @@
 import { assert, assertEquals, assertNotEquals, assertRejects } from "jsr:@std/assert@1";
 import { kvGet } from "../extension/lib/kv.js";
 import { createEphemeralSiteToolConsentStore } from "../extension/lib/ephemeral-site-tool-consent.js";
+import { markCleanupPending } from "../extension/lib/enrollment.js";
 import { listOrigins, siteMemory } from "../extension/lib/memory.js";
 import {
   abandonEnrollmentPromotion, abandonEnrollmentPromotionLocked, completeEnrollmentPromotion, disenrollOrigin,
@@ -389,6 +390,38 @@ Deno.test("do09a: a pending promotion the sweep abandons cannot be completed by 
   assertEquals(await isEnrolled(origin), false);
   // ...and the same-generation consent envelope is gone, so no site copy outlives the tombstone.
   assertEquals(await siteMemory(origin).getStrict(SITE_TOOL_CONSENT_KEY).catch(() => null), null);
+});
+
+Deno.test("do09a: policy-pending Disable survives boot reconciliation without re-enrollment", async () => {
+  const origin = "https://policy-pending-disable-restart.example";
+  const first = await prepareEnrollmentPromotion(origin, decisions(origin));
+  await complete(origin, first.gen);
+  failConsentWrite = true;
+  try { await assertRejects(() => setEnrollmentPolicy(origin, "deny"), Error, "simulated consent write failure"); }
+  finally { failConsentWrite = false; }
+  const staged = await pending(origin);
+  assertEquals(staged.phase, "policy-pending");
+  assertEquals(await isEnrolled(origin), false);
+
+  // Model the production Disable sweep's pending-row path. Its catch writes only
+  // cleanupPending; that flag alone must not leave a replayable policy decision.
+  const targets = await listEnrollmentSweepTargets();
+  const failures = [];
+  for (const row of targets.pending.filter((entry) => entry.origin === origin)) {
+    try { await abandonEnrollmentPromotionLocked(row.origin, row.gen); }
+    catch (error) { await markCleanupPending(row.origin); failures.push(error); }
+  }
+  // A worker restart reads the durable pending population anew. The real boot
+  // reconciler calls completeEnrollmentPromotion for each policy-pending row.
+  for (const row of await listPendingEnrollmentPromotions()) {
+    if (row.origin === origin && row.phase === "policy-pending") await complete(row.origin, row.gen);
+  }
+  assertEquals(await isEnrolled(origin), false, "boot must not restore enrollment after Disable");
+  assertEquals(failures.length, 0, "Disable must tombstone, not leave a retry-only cleanup marker");
+  assertEquals((await listPendingEnrollmentPromotions()).some((row) => row.origin === origin), false);
+  const tombstone = await pending(origin);
+  assertEquals(tombstone.phase, undefined);
+  assertNotEquals(tombstone.gen, staged.gen);
 });
 
 Deno.test("do09a: the scripting-Disable transition sweeps the pending promotions, not just listOrigins()", async () => {
