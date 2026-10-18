@@ -129,9 +129,9 @@ Deno.test("settleAll: a falsy rejection reason (undefined, 0, empty string) stil
 //   positive: a grace that outlasts the reader keeps the old tree readable across the swap;
 //   negative: with NO grace the same reader loses the tree mid-read (if it did not, the positive half
 //             would be asserting nothing).
-// Deterministic by CONSTRUCTION, not by a timer winning a race: the reader is paced, so it always has
-// unread files left when the swap lands, and the positive case's grace is many times the reader's
-// remaining work, so load can slow the reader without changing either outcome.
+// Deterministic by CONSTRUCTION, not by a timer winning a race: explicit Promise barriers hold
+// the reader across the atomic swap and gate GC cleanup, guaranteeing unread files remain when
+// the swap lands and eliminating wall-clock sleep races.
 //
 // Scope, stated honestly: this pins the CONTRACT (a grace must outlive a reader). That build.mjs
 // actually waits `gcGraceMs` before its rm is pinned separately by build-parallel-discipline.test.ts:804;
@@ -153,11 +153,15 @@ Deno.test("b0ld8: a reader that pinned the OLD version dir survives a publish+GC
   };
   // build.mjs's publish order: symlink a next link, atomically rename it over dist, wait the grace
   // only when a prior version exists, then GC every other version directory.
-  const publishAndGc = async (grace: number | Promise<void>) => {
+  const publishAndGc = async (
+    grace: number | Promise<void>,
+    onSwapped?: () => void,
+  ) => {
     const next = `${dist}.next`;
     await rm(next, { force: true }).catch(() => {});
     await symlink(path.relative(root, newDir), next);
     await rename(next, dist);
+    if (onSwapped) onSwapped();
     if (typeof grace === "number") {
       if (grace > 0) await sleep(grace);
     } else if (grace) {
@@ -188,17 +192,22 @@ Deno.test("b0ld8: a reader that pinned the OLD version dir survives a publish+GC
     await writeFile(path.join(newDir, "f0.js"), "new");
 
     // POSITIVE: grace outlasts the reader's remaining work. Deterministic Promise barriers
-    // ensure reader finishes before GC runs, without wall-clock sleep races.
+    // hold reader at file 0 until the swap completes, ensuring unread files (1..7) remain
+    // when the swap lands, and that reader finishes before GC runs, without wall-clock races.
     await seed();
     const pin1 = await realpath(dist);
     assertEquals(pin1, oldDir, "the reader must pin the OLD version directory");
     const firstRead1 = Promise.withResolvers<void>();
-    const positive = readPinned(pin1, (idx) => {
-      if (idx === 0) firstRead1.resolve();
+    const swapped = Promise.withResolvers<void>();
+    const positive = readPinned(pin1, async (idx) => {
+      if (idx === 0) {
+        firstRead1.resolve();
+        await swapped.promise;
+      }
     });
     await firstRead1.promise;
     const allowGc = Promise.withResolvers<void>();
-    const publishing = publishAndGc(allowGc.promise);
+    const publishing = publishAndGc(allowGc.promise, () => swapped.resolve());
     assertEquals(
       await positive,
       [],

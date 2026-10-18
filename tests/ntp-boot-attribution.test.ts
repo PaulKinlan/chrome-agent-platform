@@ -803,14 +803,13 @@ Deno.test("mujlt runner boundary: mixed failure (refusal + product red) preserve
 Deno.test("mujlt runner boundary: abnormal exit before test summary preserves exit code", async () => {
   const scratch = Deno.makeTempDirSync({ dir: durableDir("scratch"), prefix: "mujlt-runner-abnormal-" });
   const fixture = `${scratch}/abnormal-exit.test.ts`;
-  // Script emits refusal marker but terminates abruptly before Deno test summary can be printed
+  // Script emits refusal marker, then terminates abruptly via SIGTERM before Deno test summary can be printed
   Deno.writeTextFileSync(
     fixture,
     `import { ENVIRONMENTAL_REFUSAL_MARKER } from "${new URL("../scripts/lib/ntp-boot-attribution.ts", import.meta.url).href}";\n` +
-      `Deno.test("fixture: abnormal exit after marker", async () => {\n` +
-      `  Deno.stderr.writeSync(new TextEncoder().encode(ENVIRONMENTAL_REFUSAL_MARKER + ' {"reason":"test-refusal"}\\n'));\n` +
-      `  await new Promise((resolve) => setTimeout(resolve, 25));\n` +
-      `  Deno.kill(Deno.pid, "SIGKILL");\n` +
+      `Deno.test("fixture: abnormal exit after marker", () => {\n` +
+      `  console.error("fixture: abnormal exit after marker\\n" + ENVIRONMENTAL_REFUSAL_MARKER + ' {"reason":"test-refusal"}');\n` +
+      `  Deno.kill(Deno.pid, "SIGTERM");\n` +
       `});\n`,
   );
 
@@ -823,9 +822,10 @@ Deno.test("mujlt runner boundary: abnormal exit before test summary preserves ex
     const { code, stdout, stderr } = await cmd.output();
     const out = new TextDecoder().decode(stdout) + new TextDecoder().decode(stderr);
     assert(code !== 75, `runner must NOT relabel abrupt termination as 75, got ${code}:\n${out}`);
-    if (out.includes(ENVIRONMENTAL_REFUSAL_MARKER)) {
-      assertStringIncludes(out, "missing test summary — preserving exit");
-    }
+    assertEquals(code, 143, `runner must preserve abrupt termination signal exit code (143), got ${code}:\n${out}`);
+    assertStringIncludes(out, "fixture: abnormal exit after marker");
+    assertStringIncludes(out, ENVIRONMENTAL_REFUSAL_MARKER);
+    assertStringIncludes(out, "missing test summary — preserving exit 143");
   } finally {
     try { Deno.removeSync(scratch, { recursive: true }); } catch {}
   }
