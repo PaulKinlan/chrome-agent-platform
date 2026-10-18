@@ -657,3 +657,28 @@ Deno.test("a child that cannot take the lock", () => {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 });
+
+Deno.test("v3p4s: serial-runner maps child SIGKILL to 137 and SIGTERM to 143", async () => {
+  const dir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-v3p4s-sig-" });
+  const killFile = `${dir}/kill.test.ts`;
+  const termFile = `${dir}/term.test.ts`;
+  await Deno.writeTextFile(killFile, `Deno.test("k", () => { Deno.kill(Deno.pid, "SIGKILL"); });\n`);
+  await Deno.writeTextFile(termFile, `Deno.test("t", () => { Deno.kill(Deno.pid, "SIGTERM"); });\n`);
+  try {
+    const rKill = new Deno.Command("node", {
+      args: ["scripts/lib/serial-runner.mjs", killFile, "", "30000", ""],
+      stdout: "piped",
+      stderr: "piped",
+    }).outputSync();
+    assertEquals(rKill.code, 137, `serial-runner must map SIGKILL to exit 137, got ${rKill.code}`);
+
+    const rTerm = new Deno.Command("node", {
+      args: ["scripts/lib/serial-runner.mjs", termFile, "", "30000", ""],
+      stdout: "piped",
+      stderr: "piped",
+    }).outputSync();
+    assertEquals(rTerm.code, 143, `serial-runner must map SIGTERM to exit 143, got ${rTerm.code}`);
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
