@@ -47,7 +47,6 @@
     "test:ui": "deno run -A scripts/ui-integration.ts",
     "test:width": "deno run -A scripts/kat-constrained-width-layout.ts",
     "test:opfs": "deno run -A scripts/opfs-real-browser.ts",
-    "test:emscripten:staging-browser": "deno run -A --config deno.runner.jsonc scripts/emscripten-staging-browser.ts",
     "test:webmcp": "deno run -A scripts/webmcp-acceptance.ts",
     "test:sidebar": "deno run -A scripts/sidebar-parity.ts",
     "sync:changelog": "node scripts/sync-changelog.mjs",

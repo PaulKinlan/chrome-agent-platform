@@ -6,10 +6,10 @@
 import { cp, readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
-import { durableDir } from "./lib/durable-root.mjs";
+import { launchChrome, openCdp } from "../lib/chrome-launch.ts";
+import { durableDir } from "../lib/durable-root.mjs";
 
-const source = fileURLToPath(new URL("../extension/", import.meta.url));
+const source = fileURLToPath(new URL("../../extension/", import.meta.url));
 const scratch = durableDir("emscripten-staging-browser", crypto.randomUUID());
 const ext = join(scratch, "extension");
 const profile = join(scratch, "profile");

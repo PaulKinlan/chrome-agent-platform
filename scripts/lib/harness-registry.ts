@@ -166,7 +166,6 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "data-memory-clear.ts": { class: "named", npm: "test:data-clear", reason: "13/0 at the re-inventory (8 s); run on demand — promotion is the owner's call" },
   "kat-local-files.ts": { class: "kat" },
   "opfs-real-browser.ts": { class: "named", npm: "test:opfs", reason: "6/0 at the re-inventory (2 s); run on demand — promotion is the owner's call" },
-  "emscripten-staging-browser.ts": { class: "named", npm: "test:emscripten:staging-browser", reason: "x9r8k.2: real Chrome staging custody under synthetic live-run and admitted-registry fixture; on-demand only, no production admission claim" },
   "perf-leak-trace.ts": { class: "named", npm: "test:perf", reason: "8/0 at the re-inventory (3 s); run on demand — promotion is the owner's call" },
   "perf-seeded-scale.ts": { class: "named", npm: "test:perf:seeded", reason: "takes a seed-count argument (120) and a seeded profile; SEEDED-PROFILE-GATES-01 owns wiring it as a gate" },
   "perf-gallery-previews.ts": { class: "named", npm: "test:perf:gallery", reason: "0iln: measures the artifacts-gallery preview waterfall in a real browser (seeded with 30 artifacts, run twice — fixed tree vs a pre-fix baseline via CAP_EXT) and needs a real Chrome, so it is evidence-on-demand rather than a test:all gate" },
