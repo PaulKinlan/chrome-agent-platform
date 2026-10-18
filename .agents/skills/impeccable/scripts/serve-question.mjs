@@ -1338,8 +1338,20 @@ ${buildPath?.toggle ? `<div id="bp-confirm" role="dialog" aria-modal="true" aria
   }
   prevBtn?.addEventListener('click', () => pageDeck(-1));
   nextBtn?.addEventListener('click', () => pageDeck(1));
-  deck?.addEventListener('scroll', updateNav, { passive: true });
-  addEventListener('resize', updateNav);
+  // Coalesce to one pass per animation frame: a scroll burst fires dozens of
+  // events between paints and updateNav reads the deck's scroll/client geometry
+  // on every call. The frame runs after the last event of the burst, so the
+  // state it reads is already final.
+  let navFrame = 0;
+  const scheduleNavUpdate = () => {
+    if (navFrame) return;
+    navFrame = requestAnimationFrame(() => {
+      navFrame = 0;
+      updateNav();
+    });
+  };
+  deck?.addEventListener('scroll', scheduleNavUpdate, { passive: true });
+  addEventListener('resize', scheduleNavUpdate);
   updateNav();
 
   // Ambient: the hovered card's visible art bleeds into the page ground.
