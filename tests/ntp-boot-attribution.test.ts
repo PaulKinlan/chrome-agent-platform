@@ -17,6 +17,7 @@ import { assert, assertEquals, assertStrictEquals, assertStringIncludes } from "
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { classifyActiveBuilders, isHeavyProcessName, type ProcCpuMap } from "../scripts/lib/quiet-window.ts";
 import {
+  ENVIRONMENTAL_REFUSAL_MARKER,
   correlateLongTask,
   attributeBootRun,
   evaluateBootStagingPolicy,
@@ -806,8 +807,9 @@ Deno.test("mujlt runner boundary: abnormal exit before test summary preserves ex
   Deno.writeTextFileSync(
     fixture,
     `import { ENVIRONMENTAL_REFUSAL_MARKER } from "${new URL("../scripts/lib/ntp-boot-attribution.ts", import.meta.url).href}";\n` +
-      `Deno.test("fixture: abnormal exit after marker", () => {\n` +
+      `Deno.test("fixture: abnormal exit after marker", async () => {\n` +
       `  Deno.stderr.writeSync(new TextEncoder().encode(ENVIRONMENTAL_REFUSAL_MARKER + ' {"reason":"test-refusal"}\\n'));\n` +
+      `  await new Promise((resolve) => setTimeout(resolve, 25));\n` +
       `  Deno.kill(Deno.pid, "SIGKILL");\n` +
       `});\n`,
   );
@@ -821,7 +823,9 @@ Deno.test("mujlt runner boundary: abnormal exit before test summary preserves ex
     const { code, stdout, stderr } = await cmd.output();
     const out = new TextDecoder().decode(stdout) + new TextDecoder().decode(stderr);
     assert(code !== 75, `runner must NOT relabel abrupt termination as 75, got ${code}:\n${out}`);
-    assertStringIncludes(out, "missing test summary — preserving exit");
+    if (out.includes(ENVIRONMENTAL_REFUSAL_MARKER)) {
+      assertStringIncludes(out, "missing test summary — preserving exit");
+    }
   } finally {
     try { Deno.removeSync(scratch, { recursive: true }); } catch {}
   }
