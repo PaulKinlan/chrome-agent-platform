@@ -80,6 +80,18 @@ Deno.test("bundle budget: sizes return measured bytes; an over-reference bundle 
   assertThrows(() => assertBundleBudget({ label: "x.js", bytes: NaN }), undefined, "not measurable");
 });
 
+Deno.test("tv7bz: Store build registers schema-2 admission before validating bundled manifest identity", async () => {
+  // Source-only check inside this suite's existing reviewed read-only build
+  // exemption. No build, artifact write or new serial phase is introduced.
+  const source = await Deno.readTextFile("extension/../build.mjs");
+  const validation = source.indexOf("registerBundledManifestIdentity(manifestIdentities, identity, manifest)");
+  const schema2Only = source.indexOf("if (manifest.schemaVersion === 2 && !schema2AdmissionReady)");
+  const admission = source.indexOf('await import("./extension/lib/wasm-package-admission.js")');
+  assert(validation > 0, "Store build must validate inventory manifest identity");
+  assert(schema2Only > 0 && schema2Only < admission && admission < validation,
+    "load the options-only broker only for schema-2, before the authority probe");
+});
+
 Deno.test("bundle budget: build.mjs wires the metafile report, the store gate, and scrub-BEFORE-minify", async () => {
   const source = await Deno.readTextFile("extension/../build.mjs");
   // The SW build carries the metafile the report + gate consume.
