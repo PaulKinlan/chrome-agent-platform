@@ -54,13 +54,24 @@ function setup() {
     ],
   };
   const byRel = new Map([[rel, manifestBytes], [A, ADAPTER], [G, GLUE]]);
-  return { manifest, rel, inventory, byRel,
+  // In-memory TEST anchors model separate human-reviewed source records. The
+  // production table has real source commits and bead IDs, never these mocks.
+  const reviewedSources = Object.fromEntries([
+    [A, "adapter", ADAPTER], [G, "glue", GLUE],
+  ].map(([path, role, content]) => [path.slice("extension/".length), {
+    packageId: manifest.package.id, version: manifest.package.version, role,
+    sha256: pin(content), size: content.length, sourceCommit: "f".repeat(40),
+    sourcePath: "packages/bundled/evidence/test/fixture.mjs", reviewBead: "chrome-agent-platform-testfixture",
+  }]));
+  const state = { manifest, rel, inventory, byRel, reviewedSources,
     readBytes: async (path) => { if (!byRel.has(path)) throw new Error(`missing: ${path}`); return byRel.get(path); } };
+  state.check = () => buildSchema2RuntimeJsMap(state.inventory, { readBytes: state.readBytes, reviewedSources: state.reviewedSources });
+  return state;
 }
 
 Deno.test("tiwpa: manifest + inventory + exact bytes admit only reviewed runtime JS", async () => {
   const s = setup();
-  const map = await buildSchema2RuntimeJsMap(s.inventory, { readBytes: s.readBytes });
+  const map = await s.check();
   assertEquals([...map], [
     [A.slice("extension/".length), { role: "adapter", size: ADAPTER.length, sha256: pin(ADAPTER) }],
     [G.slice("extension/".length), { role: "glue", size: GLUE.length, sha256: pin(GLUE) }],
@@ -70,19 +81,37 @@ Deno.test("tiwpa: manifest + inventory + exact bytes admit only reviewed runtime
 Deno.test("tiwpa: mutated, partially repinned, duplicate or unlisted runtime JS fails closed", async () => {
   const mutated = setup();
   mutated.byRel.set(G, bytes("export const instantiate = WebAssembly.compile;\n"));
-  await assertRejects(() => buildSchema2RuntimeJsMap(mutated.inventory, { readBytes: mutated.readBytes }), Error, "runtime JS byte drift");
+  await assertRejects(() => mutated.check(), Error, "runtime JS byte drift");
 
   const repinned = setup();
   const manifest = structuredClone(repinned.manifest);
   manifest.assets[1].sha256 = pin(bytes("unreviewed glue"));
   const manifestBytes = bytes(canonicalJson(manifest));
   repinned.byRel.set(repinned.rel, manifestBytes);
+  repinned.inventory.files[0].sha256 = pin(manifestBytes);
+  repinned.inventory.files[0].size = manifestBytes.length;
   repinned.inventory.manifests[0].digest = new WasmPackageAuthority().manifestDigest(manifest);
-  await assertRejects(() => buildSchema2RuntimeJsMap(repinned.inventory, { readBytes: repinned.readBytes }), Error, "runtime JS inventory pin drift");
+  await assertRejects(() => repinned.check(), Error, "runtime JS inventory pin drift");
+
+  const dualRepin = setup();
+  const unreviewedBytes = bytes("export const instantiate = WebAssembly.compile;\n");
+  const amended = structuredClone(dualRepin.manifest);
+  amended.assets[1].sha256 = pin(unreviewedBytes);
+  amended.assets[1].size = unreviewedBytes.length;
+  const amendedManifest = bytes(canonicalJson(amended));
+  dualRepin.byRel.set(dualRepin.rel, amendedManifest);
+  dualRepin.byRel.set(G, unreviewedBytes);
+  dualRepin.inventory.files[0].sha256 = pin(amendedManifest);
+  dualRepin.inventory.files[0].size = amendedManifest.length;
+  dualRepin.inventory.files[2].sha256 = pin(unreviewedBytes);
+  dualRepin.inventory.files[2].size = unreviewedBytes.length;
+  dualRepin.inventory.manifests[0].digest = new WasmPackageAuthority().manifestDigest(amended);
+  await assertRejects(() => dualRepin.check(), Error, "runtime JS review anchor missing or drifted",
+    "repinning BOTH manifest and inventory in a new tree must not create a review anchor");
 
   const unlisted = setup();
   unlisted.inventory.files.push({ rel: "extension/wasm/runtime/shape/1.0.0/stray.mjs", sha256: pin(GLUE), size: GLUE.length });
-  await assertRejects(() => buildSchema2RuntimeJsMap(unlisted.inventory, { readBytes: unlisted.readBytes }), Error, "unlisted runtime JS inventory row");
+  await assertRejects(() => unlisted.check(), Error, "unlisted runtime JS inventory row");
 
   const duplicate = setup();
   const other = structuredClone(duplicate.manifest);
@@ -92,5 +121,5 @@ Deno.test("tiwpa: mutated, partially repinned, duplicate or unlisted runtime JS 
   duplicate.byRel.set(rel, otherBytes);
   duplicate.inventory.files.push({ rel, sha256: pin(otherBytes), size: otherBytes.length });
   duplicate.inventory.manifests.push({ pkg: other.package.id, version: other.package.version, digest: new WasmPackageAuthority().manifestDigest(other) });
-  await assertRejects(() => buildSchema2RuntimeJsMap(duplicate.inventory, { readBytes: duplicate.readBytes }), Error, "duplicate runtime JS asset mapping");
+  await assertRejects(() => duplicate.check(), Error, "duplicate runtime JS asset mapping");
 });
