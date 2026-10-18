@@ -19,25 +19,54 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
-/** Blank out comments and string/template CONTENTS so brace matching counts code, not prose or JSON. */
+/**
+ * Blank out comments and string CONTENTS so brace matching counts code, not prose or JSON (7g1fp, 3ce48).
+ *
+ * A template literal is NOT blanked wholesale. `${ ... }` is executable code - the reviewer's case was a
+ * real second `openCdp(...)` spelled inside an interpolation, which the first version of this helper hid,
+ * so a connect that could throw and skip its reap was invisible to the census. Interpolations are scanned
+ * as code (recursively, so nested templates work), and only the literal text around them is blanked.
+ *
+ * Output keeps the input length exactly, so every index into it addresses the raw source and the
+ * file:line in a failure message points at the line a human must read.
+ */
 function codeOnly(source: string): string {
+  type Mode = { kind: "code"; braceDepth: number } | { kind: "template" };
+  const modes: Mode[] = [{ kind: "code", braceDepth: 0 }];
   let out = "";
   let i = 0;
+  const template = () => modes[modes.length - 1].kind === "template";
   while (i < source.length) {
     const ch = source[i];
     const next = source[i + 1];
-    if (ch === "/" && next === "/") {
+    if (!template() && ch === "/" && next === "/") {
       while (i < source.length && source[i] !== "\n") { out += " "; i++; }
       continue;
     }
-    if (ch === "/" && next === "*") {
+    if (!template() && ch === "/" && next === "*") {
       out += "  ";
       i += 2;
       while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) { out += " "; i++; }
       if (i < source.length) { out += "  "; i += 2; }
       continue;
     }
-    if (ch === '"' || ch === "'" || ch === "`") {
+    if (template()) {
+      if (ch === "\\") { out += source.slice(i, i + 2); i += 2; continue; }
+      if (ch === "$" && next === "{") {
+        // Real code starts here: opened for the tokeniser, not blanked.
+        modes.push({ kind: "code", braceDepth: 0 });
+        out += "${";
+        i += 2;
+        continue;
+      }
+      if (ch === "`") { modes.pop(); out += "`"; i++; continue; }
+      out += ch === "\n" ? "\n" : " ";
+      i++;
+      continue;
+    }
+    const top = modes[modes.length - 1] as { kind: "code"; braceDepth: number };
+    if (ch === "`") { modes.push({ kind: "template" }); out += "`"; i++; continue; }
+    if ((ch === '"' || ch === "'") ) {
       const quote = ch;
       out += quote;
       i++;
@@ -47,6 +76,24 @@ function codeOnly(source: string): string {
         out += source[i] === "\n" ? "\n" : " ";
         i++;
       }
+      continue;
+    }
+    if (ch === "{") {
+      top.braceDepth++;
+      out += ch;
+      i++;
+      continue;
+    }
+    if (ch === "}") {
+      top.braceDepth--;
+      if (modes.length > 1 && top.braceDepth < 0) {
+        modes.pop();
+        out += "}";
+        i++;
+        continue;
+      }
+      out += ch;
+      i++;
       continue;
     }
     out += ch;
@@ -254,6 +301,44 @@ Deno.test("kafr4 falsification: the PRE-FIX shape (connect before the try) reds 
   `;
   assertEquals(connectInsideReapingTry(fixed, cdpCallIndices(fixed)[0] ?? -1), true,
     "and the fixed shape is admitted, so the guard is not simply refusing everything");
+});
+
+Deno.test("3ce48: a real connect inside a template interpolation IS a call site", () => {
+  // The reviewer's case: `${...}` is executable, so a second connect spelled there can throw and skip its
+  // reap. The helper must see it, report it, and the census must refuse the file.
+  const interpolated = `
+    const first = await ${LAUNCH}({});
+    try {
+      const cdp = await ${CONNECT}(first.wsUrl);
+      const label = \`phase two: \${await ${CONNECT}(second.wsUrl)} connected\`;
+      await cdp.eval(label);
+    } finally {
+      await reapLeaderAndSettle(first.proc);
+    }
+  `;
+  const calls = cdpCallIndices(interpolated);
+  assertEquals(calls.length, 2, "the interpolation is code: both connects are call sites");
+  assertEquals(connectInsideReapingTry(interpolated, calls[0]), true);
+  assertEquals(connectInsideReapingTry(interpolated, calls[1]), true,
+    "spelled inside the try body it IS guarded, so it is admitted - the finding was that it was invisible");
+
+  // The leaked-browser shape: the same interpolation BEFORE the try, where a rejection skips the reap.
+  const beforeTheTry = `
+    const first = await ${LAUNCH}({});
+    const label = \`phase two: \${await ${CONNECT}(second.wsUrl)} connected\`;
+    try {
+      await cdp.eval(label);
+    } finally {
+      await reapLeaderAndSettle(first.proc);
+    }
+  `;
+  const before = cdpCallIndices(beforeTheTry);
+  assertEquals(before.length, 1, "the pre-try interpolation is a call site");
+  assertEquals(connectInsideReapingTry(beforeTheTry, before[0]), false,
+    "and a connect spelled there skips the reap, which is the leak the helper used to hide");
+  // A template with no interpolation is still just text: it must not create phantom call sites.
+  const prose = "const note = \`call ${CONNECT}(fake.wsUrl) by hand\`;";
+  assertEquals(cdpCallIndices(prose).length, 0, "template TEXT is not code");
 });
 
 Deno.test("7g1fp: a connect MENTIONED in a block comment or a string is not a connect", () => {
