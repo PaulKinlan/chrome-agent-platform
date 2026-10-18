@@ -1,0 +1,1416 @@
+From ba6b3faea53ced97cb0cd5b8443b835d203027fb Mon Sep 17 00:00:00 2001
+From: "Paul Kinlan (fleet:chrome-agent-platform)" <paul.kinlan@gmail.com>
+Date: Sun, 18 Oct 2026 00:59:30 +0000
+Subject: [PATCH] perf-review: bounded candidate batching, per-batch contract,
+ named truncation (rn0ky)
+
+The nightly lost a 47-candidate perf-review to a completion cut mid-JSON at 50,314 bytes (cut after
+candidate 45), and the run reached the operator as "no verdict" - which reads as a model that ignored
+the contract, sends nobody looking for an output bound, and hides the 45 rows that were nearly there.
+Raising the budget was not the answer: 157 s of a 10-minute budget was used, so the binding constraint
+was the size of one completion, not time.
+
+Three pieces, and each is provable on its own:
+
+1. lib/candidate_batching.py (new, pure): plan_batches splits a candidate list deterministically,
+   bounded by BOTH count and serialized bytes (one oversized record gets a batch of its own rather
+   than being dropped); merge_reports concatenates findings in pre-pass order, unions reviewed_commits
+   and REFUSES by name a candidate_id answered twice; classify_unparseable names truncation
+   structurally (ends inside a string, or unclosed braces) with the evidence kept.
+2. factory: a per-batch engine call loop, opt-in per station via
+   `output.max_candidates_per_call`. Each batch gets its own prompt, its own raw output
+   (model_output.batch<k>.txt), its own parse + field normalisation + schema validation (the output
+   CONTRACT, per chunk) and its own artifacts; the recorded report is the deterministic merge. The
+   parse path is now one shared function (parse_station_report) so a batch is held to exactly the
+   contract the single call was always held to. presented_candidates.json records every id the run
+   put in front of the model across all batches, and lib/findings.read_presented_candidate_ids reads
+   it first - so a batched run is judged on all of them, not on the first slice of one prompt.
+3. OutputTruncatedError(NoVerdictError): a cut completion is a NAMED station failure carrying the
+   batch, the byte count, the brace census and the unaccounted ids, written to failure_reason.txt and
+   output_classification.json. Still a plumbing failure, so the bounded repair-retry and line
+   continuation are unchanged.
+
+perf-review opts in at 8 candidates per call; every other station is untouched (a test pins that an
+undeclared bound stays one call).
+
+Tests: 30 unit tests for the module (including the nightly's exact cut-inside-a-string shape), 5
+end-to-end tests driving the real dispatcher with a real pre-pass and a stub engine (3 batches over 8
+candidates, per-batch prompts/outputs, merged report in pre-pass order, the accounting population,
+opt-in behaviour, named truncation for batch 2/3, prose classified as no-json rather than truncation),
+and 382 existing tests re-run green (findings, factory_truth, candidate accounting, report_schema,
+perf_review, line_andon, keyless broker, containment adapters).
+
+Release-note: none - the perf-review station now answers large candidate lists in bounded batches and reports a truncated completion as truncation instead of "no verdict".
+---
+ agents/perf-review/agent.yaml               |   4 +
+ factory                                     | 345 ++++++++++++++++----
+ lib/candidate_batching.py                   | 287 ++++++++++++++++
+ lib/findings.py                             |  16 +
+ tests/test_candidate_batching.py            | 236 +++++++++++++
+ tests/test_candidate_batching_end_to_end.py | 269 +++++++++++++++
+ tests/test_factory_truth.py                 |   2 +-
+ tests/test_line_andon.py                    |   2 +-
+ tests/test_pi_keyless_broker.py             |   2 +-
+ 9 files changed, 1094 insertions(+), 69 deletions(-)
+ create mode 100644 lib/candidate_batching.py
+ create mode 100644 tests/test_candidate_batching.py
+ create mode 100644 tests/test_candidate_batching_end_to_end.py
+
+diff --git a/agents/perf-review/agent.yaml b/agents/perf-review/agent.yaml
+index ccb4e60..15ef270 100644
+--- a/agents/perf-review/agent.yaml
++++ b/agents/perf-review/agent.yaml
+@@ -15,3 +15,7 @@ budget:
+   max_minutes: 10
+ output:
+   schema: report.schema.json
++  # rn0ky: a single call carrying 47 candidates produced a 50 KB completion cut mid-JSON at candidate
++  # 45, which the parser could only report as "no verdict". Eight candidates per call keeps every
++  # response small enough to finish, and each batch is validated and retried on its own.
++  max_candidates_per_call: 8
+diff --git a/factory b/factory
+index 1414da4..ab418c0 100755
+--- a/factory
++++ b/factory
+@@ -18,7 +18,7 @@ import time
+ from datetime import datetime, timezone
+ from pathlib import Path
+ from secrets import token_hex
+-from typing import Any, Dict, List, Optional, Tuple
++from typing import Any, Dict, List, Optional, Tuple, Sequence
+ 
+ FACTORY_ROOT = Path(__file__).resolve().parent
+ 
+@@ -39,6 +39,9 @@ try:  # repo root on sys.path, or run as a script from another cwd
+                              candidate_coverage, read_candidate_count, read_presented_candidate_ids,
+                              station_is_incomplete,
+                              dispatch_env_failure_report, write_line_report)
++    from lib.candidate_batching import (BatchMergeError, BatchPlanError, batch_candidate_ids,
++                                        classify_unparseable, describe_truncation, merge_reports,
++                                        plan_batches)
+     from lib.report_schema import (declared_schema, normalize_agent_report, output_contract_prompt,
+                                validate_agent_report)
+     from lib import sinks
+@@ -69,6 +72,9 @@ except ImportError:
+                              candidate_coverage, read_candidate_count, read_presented_candidate_ids,
+                              station_is_incomplete,
+                              dispatch_env_failure_report, write_line_report)
++    from lib.candidate_batching import (BatchMergeError, BatchPlanError, batch_candidate_ids,
++                                        classify_unparseable, describe_truncation, merge_reports,
++                                        plan_batches)
+     from lib.report_schema import (declared_schema, normalize_agent_report, output_contract_prompt,
+                                validate_agent_report)
+     from lib import sinks
+@@ -184,6 +190,17 @@ class SilentStationError(NoVerdictError):
+     """
+ 
+ 
++class OutputTruncatedError(NoVerdictError):
++    """The engine's output was CUT mid-JSON - a completion that hit an output bound (rn0ky).
++
++    A PLUMBING failure like its parent, and named rather than silent: the nightly read a 47-candidate
++    perf-review as "no verdict" when what actually happened was a 50 KB completion cut mid-string at
++    candidate 45. The classification (truncated vs no-json-at-all), the evidence (bytes, brace counts,
++    the ids visible in the fragment) and the batch it came from are in the message, so an operator can
++    tell an output bound from a model that ignored the contract.
++    """
++
++
+ class EnvironmentFailureError(StationError):
+     """An engine adapter failed due to missing, invalid, or inaccessible credentials (agents-zrn).
+ 
+@@ -913,6 +930,107 @@ def extract_json_from_output(text: str) -> Optional[Dict[str, Any]]:
+     pool = with_findings or objects
+     return max(pool, key=lambda o: o[0])[1]
+ 
++def max_candidates_per_call(agent_cfg: Any) -> Optional[int]:
++    """The station's declared per-call candidate bound, or None for one call (rn0ky).
++
++    Opt-in by declaration, deliberately: batching changes what a station asks the model for, so it is
++    the station's decision (agent.yaml `output.max_candidates_per_call`), not a global surprise for the
++    twenty other stations. A malformed value is refused loudly rather than silently ignored - a bound
++    nobody applied is how a 47-candidate batch truncated in the first place.
++    """
++    if not isinstance(agent_cfg, dict):
++        return None
++    output = agent_cfg.get("output")
++    if not isinstance(output, dict):
++        return None
++    raw = output.get("max_candidates_per_call")
++    if raw is None:
++        return None
++    try:
++        value = int(raw)
++    except (TypeError, ValueError):
++        raise StationError(
++            f"agent.yaml output.max_candidates_per_call must be an integer, got {raw!r}")
++    if value < 1:
++        raise StationError(
++            f"agent.yaml output.max_candidates_per_call must be >= 1, got {value}")
++    return value
++
++
++def parse_station_report(raw_output: str, *, agent_dir: Path, agent_cfg: Any,
++                         target_dir: Optional[Path], run_dir: Path,
++                         tag: str = "") -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
++    """Parse, normalise and schema-validate ONE engine output. `(report, None)` or `(None, reason)`.
++
++    Extracted from the single-call path so a BATCHED run (rn0ky) applies exactly the same contract to
++    every batch: the same field normalisation, the same schema, the same artifacts. `tag` suffixes the
++    artifact names (`.batch3`) so a batched run keeps each batch's rejected report instead of the last
++    one overwriting the others.
++
++    The reason string is the same text the single-call path has always produced, so a downstream reader
++    (and the repair-retry hint) sees no change for single-call stations.
++    """
++    report = extract_json_from_output(raw_output)
++    if report is not None and not isinstance(report.get("findings"), list):
++        # Every report contract requires a findings list. An object without one (a fragment of
++        # truncated output, an echoed tool call) is not a verdict; reading its missing findings as
++        # [] was a clean PASS/0 nobody earned.
++        report = None
++    if report is None:
++        return None, "Could not parse a JSON report (with a findings list) from model output"
++    # Known field-name synonyms are mapped first (fleet-9wyi): `"id"` for `rule_id` is a usable
++    # report, not a missing one. Every mapping is printed and recorded.
++    normalised = normalize_agent_report(agent_dir, agent_cfg, report)
++    if normalised:
++        print(f"Note: normalised {len(normalised)} field name(s)/value(s) in the model "
++              f"report (first: {normalised[0]}); see normalised_fields{tag}.json.")
++        _write_run_artifact(run_dir / f"normalised_fields{tag}.json", json.dumps(normalised, indent=2))
++    # The output contract is the deterministic half of the agent (SF-07): a report that violates it
++    # is treated exactly like unparseable output - the store never sees it, so no finding transitions
++    # on half-formed data.
++    schema_errors = validate_agent_report(agent_dir, agent_cfg, report, target_dir=target_dir)
++    if schema_errors:
++        rejected = report.get("findings") if isinstance(report.get("findings"), list) else []
++        # Say what was lost and where it is, so a rejection never reads as an empty response
++        # (fleet-9wyi): the full violation list and the parsed report are kept.
++        _write_run_artifact(run_dir / f"schema_errors{tag}.json", json.dumps(schema_errors, indent=2))
++        _write_run_artifact(run_dir / f"rejected_report{tag}.json", json.dumps(report, indent=2))
++        return None, (f"Model output violates the declared report schema "
++                      f"({len(schema_errors)} violation(s); first: {schema_errors[0]}); "
++                      f"{len(rejected)} finding(s) were in the rejected report "
++                      f"(kept in {run_dir / f'rejected_report{tag}.json'}, violations in "
++                      f"schema_errors{tag}.json)")
++    return report, None
++
++
++def name_parse_failure(raw_output: str, reason: str, *, run_dir: Path, agent_name: str,
++                       batch_index: Optional[int] = None, batch_count: Optional[int] = None,
++                       expected_ids: Sequence[str] = ()) -> str:
++    """Turn an unusable output into a NAMED failure: truncated vs no-JSON, with the evidence kept.
++
++    rn0ky: a completion cut by an output bound used to reach the operator as "no verdict", which reads
++    as a model that ignored the contract and sends nobody looking for a token limit. The classification
++    is structural (ends inside a string, or unclosed braces) and is written to
++    `output_classification.json` in the run directory either way, so the two failures stay tellable
++    apart after the fact.
++    """
++    kind, evidence = classify_unparseable(raw_output)
++    record = {"kind": kind, "reason": reason}
++    if batch_index is not None and batch_count is not None:
++        record["batch"] = batch_index + 1
++        record["batches"] = batch_count
++    record.update(evidence)
++    _write_run_artifact(run_dir / "output_classification.json", json.dumps(record, indent=2))
++    if kind == "truncated":
++        named = describe_truncation(
++            evidence,
++            batch_index=batch_index if batch_index is not None else 0,
++            batch_count=batch_count if batch_count is not None else 1,
++            expected_ids=expected_ids)
++        return f"{agent_name}: model output was TRUNCATED - {named} (evidence in output_classification.json)"
++    return reason
++
++
+ _TRANSIENT_DIRS: List[Path] = []
+ _TRANSIENT_DIR_PREFIXES = ("factory-sock-", "factory-pi-", "factory-pins-")
+ _TRANSIENT_DIR_MAX_AGE_SECONDS = 24 * 3600  # agents-uxs: far beyond any legitimate run lifetime
+@@ -1705,12 +1823,6 @@ def run_agent(agent_name: str, target_arg: str, engine_arg: str = "auto", explic
+         candidates_slice = (candidates_data[:CANDIDATE_PROMPT_SLICE]
+                             if isinstance(candidates_data, list) else candidates_data)
+ 
+-        prompt = (
+-            f"You are the {agent_name} agent. Examine the following context and candidate issues discovered by the "
+-            f"deterministic scanner in repository '{target_name}'. Follow your SKILL.md instructions, "
+-            f"triage each item, and output your structured JSON findings.\n\n"
+-            f"Scanner Data:\n{json.dumps(candidates_slice, indent=2)}\n"
+-        ) + context_block
+         # Carry the exact output contract in the prompt: a SKILL.md example with `"findings": []`
+         # left the model to invent finding field names, and `"id"` for `rule_id` cost a whole
+         # threat model (fleet-9wyi).
+@@ -1718,18 +1830,75 @@ def run_agent(agent_name: str, target_arg: str, engine_arg: str = "auto", explic
+             output_schema = declared_schema(agent_dir, agent_cfg)
+         except (FileNotFoundError, ValueError):
+             output_schema = None
++        contract_block = ""
+         if output_schema:
+             # The schema alone states which fields exist and marks some required in a nested array;
+             # a model that omits one loses the whole report with it (agents-sz8q: 35 violations for
+             # 35 candidates). The fragment spells out the required sets in words too.
+-            prompt += output_contract_prompt(output_schema)
++            contract_block = output_contract_prompt(output_schema)
+         if repair_hint:
+             # agents-noo: a repair-retry tells the model exactly what was rejected, so the second
+             # attempt has a real chance of producing a valid report instead of the same garbage.
+-            prompt += "\n\n" + repair_hint
+-        prompt_file = run_dir / "prompt.txt"
+-        _write_run_artifact(prompt_file, prompt)
+-        os.chmod(prompt_file, 0o600)
++            contract_block += "\n\n" + repair_hint
++
++        # rn0ky: BOUNDED BATCHING. A station may declare `output.max_candidates_per_call`; when the
++        # presented list is larger, it is split into deterministic bounded batches (by count AND by
++        # serialized bytes) and each batch is one engine call with its own contract and its own
++        # check. The alternative - one call carrying 47 candidates and asking for 47 fully-populated
++        # rows - is what produced a 50 KB completion cut mid-JSON at candidate 45, which reached
++        # nobody as a truncation because the parser could only say "no verdict".
++        max_per_call = max_candidates_per_call(agent_cfg)
++        batch_count = 1
++        if max_per_call and isinstance(candidates_slice, list) and len(candidates_slice) > max_per_call:
++            try:
++                batches = plan_batches(candidates_slice, max_per_call)
++            except BatchPlanError as e:
++                raise StationError(f"{agent_name}: cannot bound the candidate list into batches: {e}")
++            batch_count = len(batches)
++            presented = {
++                "max_candidates_per_call": max_per_call,
++                "batch_count": batch_count,
++                "presented": len(candidates_slice),
++                "candidate_ids": [cid for batch in batches for cid in batch_candidate_ids(batch)],
++                "batches": [batch_candidate_ids(batch) for batch in batches],
++            }
++            # Written BEFORE the engine runs: the accounting check reads what was PRESENTED, and a
++            # batched run presents every candidate across N prompts rather than the first 50 of one.
++            _write_run_artifact(run_dir / "presented_candidates.json",
++                                json.dumps(presented, indent=2))
++            print(f"-> Batching {len(candidates_slice)} candidate(s) into {batch_count} call(s) "
++                  f"of at most {max_per_call}.")
++        else:
++            batches = [candidates_slice]
++
++        prompts: List[str] = []
++        for batch_index, batch in enumerate(batches):
++            if batch_count > 1:
++                batch_ids = batch_candidate_ids(batch)
++                header = (
++                    f"BATCH {batch_index + 1} of {batch_count}: the candidate list is presented in "
++                    f"{batch_count} batches so that no single response has to carry every row. Answer "
++                    f"ONLY for the candidates in THIS batch, and answer for EVERY one of them - a "
++                    f"confirmed row or a dismissal with `false_positive: true`, never an omission."
++                    + (f" The candidate ids in this batch: {', '.join(batch_ids)}." if batch_ids else "")
++                    + "\n\n"
++                )
++            else:
++                header = ""
++            batch_prompt = header + (
++                f"You are the {agent_name} agent. Examine the following context and candidate issues discovered by the "
++                f"deterministic scanner in repository '{target_name}'. Follow your SKILL.md instructions, "
++                f"triage each item, and output your structured JSON findings.\n\n"
++                f"Scanner Data:\n{json.dumps(batch, indent=2)}\n"
++            ) + context_block + contract_block
++            prompts.append(batch_prompt)
++            tag = f".batch{batch_index + 1}" if batch_count > 1 else ""
++            batch_prompt_file = run_dir / f"prompt{tag}.txt"
++            _write_run_artifact(batch_prompt_file, batch_prompt)
++            os.chmod(batch_prompt_file, 0o600)
++            if batch_count == 1:
++                prompt = batch_prompt
++        batched = batch_count > 1
+ 
+         # agents-m2n: the directive file for the adapter's system channel. run_dir is
+         # already read-write inside the OS sandbox, and the path reaches the adapter as a
+@@ -1903,12 +2072,32 @@ def run_agent(agent_name: str, target_arg: str, engine_arg: str = "auto", explic
+             # broker serves exactly the process it was started for and no other
+             # descendant of the dispatcher.
+             try:
+-                adapter_res = run_station_command(
+-                    adapter_cmd, budget, f"engine '{engine}'",
+-                    input=prompt, capture_output=True, text=True,
+-                    check=False, env=adapter_env,
+-                    on_spawn=((lambda proc: broker.restrict_peer_root(proc.pid))
+-                              if broker is not None else None))
++                # rn0ky: one engine call per batch. Each call's raw output is moved aside
++                # (model_output.batch<k>.txt) so the next call cannot overwrite it - the adapter
++                # always writes model_output.txt, and a batched run needs every batch's answer.
++                adapter_res = None
++                for _batch_index, _batch_prompt in enumerate(prompts):
++                    _batch_tag = f".batch{_batch_index + 1}" if batched else ""
++                    _batch_label = (f"engine '{engine}' batch {_batch_index + 1}/{len(prompts)}"
++                                    if batched else f"engine '{engine}'")
++                    _res = run_station_command(
++                        adapter_cmd, budget, _batch_label,
++                        input=_batch_prompt, capture_output=True, text=True,
++                        check=False, env=adapter_env,
++                        on_spawn=((lambda proc: broker.restrict_peer_root(proc.pid))
++                                  if broker is not None else None))
++                    if batched:
++                        _produced = run_dir / "model_output.txt"
++                        if _produced.exists():
++                            _write_run_artifact(run_dir / f"model_output{_batch_tag}.txt",
++                                                _produced.read_text(encoding="utf-8",
++                                                                    errors="replace"))
++                            _produced.unlink()
++                    adapter_res = _res
++                    if _res.returncode != 0:
++                        # A failed call is the run's answer: later batches cannot rescue it, and
++                        # carrying on would spend the budget on a session that already failed.
++                        break
+             except StationTimeout as e:
+                 reason = str(e)
+                 report = {
+@@ -1931,8 +2120,11 @@ def run_agent(agent_name: str, target_arg: str, engine_arg: str = "auto", explic
+             # agents-7ik: collect the proposal ONLY from a successful session — a failed one
+             # leaves partial edits that must not be presented as "the proposal"; they are
+             # discarded together with the worktree in the finally below.
++            # rn0ky: a batched run moves each batch's answer aside, so "the session produced an
++            # answer" is any batch output, not just the single-call file name.
+             session_succeeded = (adapter_res.returncode == 0
+-                                 and (run_dir / "model_output.txt").exists())
++                                 and ((run_dir / "model_output.txt").exists()
++                                      or bool(list(run_dir.glob("model_output.batch*.txt")))))
+             if worktree_dir is not None:
+                 if session_succeeded:
+                     patch_file = _collect_session_diff(worktree_dir, run_dir, worktree_gitdir)
+@@ -1977,7 +2169,15 @@ def run_agent(agent_name: str, target_arg: str, engine_arg: str = "auto", explic
+         
+         output_file = run_dir / "model_output.txt"
+         stderr_file = run_dir / "model_stderr.txt"
+-        raw_output = output_file.read_text(encoding="utf-8", errors="replace") if output_file.exists() else ""
++        # rn0ky: with batching, the answer lives in model_output.batch<k>.txt (the single-call file
++        # name is kept for the un-batched path, and for an adapter that ignored the rename).
++        batch_output_files = sorted(run_dir.glob("model_output.batch*.txt"),
++                                    key=lambda f: int("".join(ch for ch in f.stem if ch.isdigit()) or 0))
++        if batched and batch_output_files:
++            raw_output = "\n".join(f.read_text(encoding="utf-8", errors="replace")
++                                   for f in batch_output_files)
++        else:
++            raw_output = output_file.read_text(encoding="utf-8", errors="replace") if output_file.exists() else ""
+         stderr_raw = stderr_file.read_text(encoding="utf-8", errors="replace") if stderr_file.exists() else ""
+         if adapter_res.returncode != 0:
+             auth_reason = detect_adapter_auth_failure(raw_output, adapter_res.stderr or "", adapter_res.stdout or "")
+@@ -2001,7 +2201,9 @@ def run_agent(agent_name: str, target_arg: str, engine_arg: str = "auto", explic
+                 raise AdapterAuthError(agent_name, engine, adapter_res.returncode, auth_reason,
+                                        output_file if output_file.exists() else None)
+ 
+-        has_output = bool(raw_output.strip()) if output_file.exists() else False
++        # rn0ky: with batching the answer is in the batch files, so "the engine produced output" must
++        # not be read off the single-call file name.
++        has_output = bool(raw_output.strip()) if (output_file.exists() or batch_output_files) else False
+         has_engine_stderr = bool(stderr_raw.strip())
+         has_adapter_stderr = bool((adapter_res.stderr or "").strip())
+         engine_exited_zero = (
+@@ -2010,7 +2212,9 @@ def run_agent(agent_name: str, target_arg: str, engine_arg: str = "auto", explic
+         )
+ 
+         # agents-h8i4, agents-2wgg: Failure classification ladder when output is missing or empty.
+-        if not output_file.exists():
++        # rn0ky: a batched run moves every batch's answer to model_output.batch<k>.txt, so the single
++        # call's file name is legitimately absent - the answers are the batch files.
++        if not output_file.exists() and not batch_output_files:
+             # If model_output.txt was not created AND adapter stderr has no diagnostics,
+             # this is a silent crash without output file: route to silent station retry.
+             if not has_adapter_stderr:
+@@ -2130,58 +2334,59 @@ def run_agent(agent_name: str, target_arg: str, engine_arg: str = "auto", explic
+             _write_run_artifact(run_dir / "failure_reason.txt", reason + "\n")
+             raise StationError(reason)
+ 
+-        raw_output = output_file.read_text(encoding="utf-8", errors="replace")
+-        report = extract_json_from_output(raw_output)
+-        if report is not None and not isinstance(report.get("findings"), list):
+-            # Every report contract requires a findings list. An object without one (a
+-            # fragment of truncated output, an echoed tool call) is not a verdict; reading
+-            # its missing findings as [] was a clean PASS/0 nobody earned.
+-            report = None
++        # rn0ky: parsing, field normalisation and the schema check are one shared function, so a
++        # batched run applies exactly this contract to every batch. `tag` keeps per-batch artifacts
++        # apart instead of the last batch overwriting the others.
++        if batched and batch_output_files:
++            batch_reports: List[Dict[str, Any]] = []
++            batch_failure: Optional[str] = None
++            for _batch_index, _batch_file in enumerate(batch_output_files):
++                _tag = f".batch{_batch_index + 1}"
++                _batch_raw = _batch_file.read_text(encoding="utf-8", errors="replace")
++                _part, _reason = parse_station_report(
++                    _batch_raw, agent_dir=agent_dir, agent_cfg=agent_cfg,
++                    target_dir=target_dir, run_dir=run_dir, tag=_tag)
++                if _part is None:
++                    batch_failure = (_reason or "unparseable output") + f" (batch {_batch_index + 1}/{len(batch_output_files)})"
++                    _named = name_parse_failure(
++                        _batch_raw, batch_failure, run_dir=run_dir, agent_name=agent_name,
++                        batch_index=_batch_index, batch_count=len(batch_output_files),
++                        expected_ids=batch_candidate_ids(batches[_batch_index])
++                        if _batch_index < len(batches) else ())
++                    if _named.startswith(f"{agent_name}: model output was TRUNCATED"):
++                        _write_run_artifact(run_dir / "failure_reason.txt", _named + "\n")
++                        raise OutputTruncatedError(
++                            f"{_named}; no verdict (raw output kept in {_batch_file})")
++                    batch_failure = _named
++                    break
++                batch_reports.append(_part)
++            if batch_failure is not None:
++                report, parse_reason = None, batch_failure
++            else:
++                try:
++                    report, parse_reason = merge_reports(batch_reports), None
++                except BatchMergeError as e:
++                    # A batch answered another batch's candidate: merging would double-book it.
++                    report, parse_reason = None, f"per-batch reports cannot be merged: {e}"
++        else:
++            report, parse_reason = parse_station_report(
++                raw_output, agent_dir=agent_dir, agent_cfg=agent_cfg, target_dir=target_dir,
++                run_dir=run_dir, tag="")
+         if report is None:
+             model_parse_succeeded = False
+-            no_verdict = "Could not parse a JSON report (with a findings list) from model output"
++            no_verdict = parse_reason or (
++                "Could not parse a JSON report (with a findings list) from model output")
+             print(f"Warning: {no_verdict}. Skipping findings store update to prevent false 'fixed' transitions.")
+             report = {
+-                "summary": "NO VERDICT: model output contained no JSON report.",
++                "summary": ("NO VERDICT: model output failed the declared report schema."
++                            if "violates the declared report schema" in no_verdict
++                            else "NO VERDICT: model output contained no JSON report."),
+                 "verdict": "error",
+                 "scanned_files": len(candidates_data) if isinstance(candidates_data, list) else 1,
+                 "findings": []
+             }
+         else:
+-            # Known field-name synonyms are mapped first (fleet-9wyi): `"id"` for `rule_id`
+-            # is a usable report, not a missing one. Every mapping is printed and recorded.
+-            normalised = normalize_agent_report(agent_dir, agent_cfg, report)
+-            if normalised:
+-                print(f"Note: normalised {len(normalised)} field name(s)/value(s) in the model "
+-                      f"report (first: {normalised[0]}); see normalised_fields.json.")
+-                _write_run_artifact(run_dir / "normalised_fields.json",
+-                                    json.dumps(normalised, indent=2))
+-            # The output contract is the deterministic half of the agent (SF-07): a report
+-            # that violates it is treated exactly like unparseable output — the store never
+-            # sees it, so no finding transitions on half-formed data.
+-            schema_errors = validate_agent_report(agent_dir, agent_cfg, report, target_dir=target_dir)
+-            if schema_errors:
+-                model_parse_succeeded = False
+-                rejected = report.get("findings") if isinstance(report.get("findings"), list) else []
+-                # Say what was lost and where it is, so a rejection never reads as an empty
+-                # response (fleet-9wyi): the full violation list and the parsed report are kept.
+-                _write_run_artifact(run_dir / "schema_errors.json",
+-                                    json.dumps(schema_errors, indent=2))
+-                _write_run_artifact(run_dir / "rejected_report.json",
+-                                    json.dumps(report, indent=2))
+-                no_verdict = (f"Model output violates the declared report schema "
+-                              f"({len(schema_errors)} violation(s); first: {schema_errors[0]}); "
+-                              f"{len(rejected)} finding(s) were in the rejected report "
+-                              f"(kept in {run_dir / 'rejected_report.json'}, violations in "
+-                              f"schema_errors.json)")
+-                print(f"Warning: {no_verdict}. "
+-                      f"Skipping findings store update to prevent false 'fixed' transitions.")
+-                report = {
+-                    "summary": "NO VERDICT: model output failed the declared report schema.",
+-                    "verdict": "error",
+-                    "scanned_files": len(candidates_data) if isinstance(candidates_data, list) else 1,
+-                    "findings": []
+-                }
++            model_parse_succeeded = True
+ 
+     if isinstance(report.get("findings"), list):
+         report["findings"].sort(key=_finding_sort_key)
+@@ -2190,10 +2395,18 @@ def run_agent(agent_name: str, target_arg: str, engine_arg: str = "auto", explic
+     if not model_parse_succeeded:
+         # No verdict is a station failure, never PASS/0 (fleet-ddd, journal-mid). The raw output
+         # stays in the run directory for a human (or a re-import) to recover. The engine ran and
+-        # returned zero — only its output was unusable — so this is a PLUMBING failure, not a
++        # returned zero - only its output was unusable - so this is a PLUMBING failure, not a
+         # genuine engine failure: NoVerdictError, which run_line repair-retries once then degrades
+         # and continues instead of halting every downstream station (agents-noo).
++        #
++        # rn0ky: name the failure first. A completion cut by an output bound is TRUNCATION, not a
++        # model that ignored the contract, and OutputTruncatedError says so (still a plumbing
++        # failure, so the repair-retry and line continuation are unchanged).
++        no_verdict = name_parse_failure(raw_output, no_verdict, run_dir=run_dir, agent_name=agent_name)
+         _write_run_artifact(run_dir / "failure_reason.txt", no_verdict + "\n")
++        if no_verdict.startswith(f"{agent_name}: model output was TRUNCATED"):
++            raise OutputTruncatedError(
++                f"{no_verdict}; no verdict (raw output kept in {run_dir / 'model_output.txt'})")
+         raise NoVerdictError(f"{agent_name}: {no_verdict}; no verdict (raw output kept in "
+                            f"{run_dir / 'model_output.txt'})")
+ 
+diff --git a/lib/candidate_batching.py b/lib/candidate_batching.py
+new file mode 100644
+index 0000000..828e989
+--- /dev/null
++++ b/lib/candidate_batching.py
+@@ -0,0 +1,287 @@
++#!/usr/bin/env python3
++"""Bounded batching, deterministic merging and truncation naming for station candidate lists.
++
++Why this module exists (chrome-agent-platform-rn0ky, nightly wib2r): the factory used to hand a
++station EVERY presented candidate in one prompt and ask for one row per candidate in one JSON
++report. At ~45 candidates / ~50 KB the model's completion is cut mid-JSON, `extract_json_from_output`
++finds no decodable object, and the station reports "no verdict" - a silent degrade that names
++neither the cause (output truncation) nor the work lost. Raising the token budget is not a fix:
++157 s of a 10-minute budget was used, so the binding constraint is the completion size, not time.
++
++Three things are needed and each lives here, as pure functions so they are unit-testable without an
++engine:
++
++1. `plan_batches` - a deterministic partition of the candidate list that is bounded by BOTH a count
++   and a serialized-byte budget. Order is preserved, every candidate appears exactly once, and a
++   single oversized candidate goes in a batch of its own rather than being dropped or split.
++2. `merge_reports` - one report from N per-batch reports: findings concatenated in pre-pass order,
++   `reviewed_commits` unioned, duplicates REFUSED by name rather than silently dropped. A merge
++   that loses a candidate would turn the accounting check into a lie, so it raises instead.
++3. `classify_unparseable` - decides whether unparseable output was TRUNCATED (the JSON structure
++   ends inside a string or with unclosed braces) or merely had no JSON in it, with the evidence
++   (bytes, brace counts, candidate ids visible in the fragment). Truncation is a named station
++   error, not a shrug.
++"""
++
++import json
++import re
++from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
++
++# A batch of 8 candidates is ~9 KB of prompt/response - well inside the size at which the nightly
++# truncated (45 ids, 50,314 B). Callers may override per station.
++DEFAULT_MAX_PER_BATCH = 8
++# Even a small count of huge candidate records (a 40 KB diff excerpt each) must not build a batch
++# the model cannot answer, so a batch is also bounded by the serialized bytes of its candidates.
++DEFAULT_MAX_BATCH_BYTES = 12_000
++
++# The pre-pass identity field. Copied, never invented: the factory compares the ids a report cites
++# with the ids it presented (agents-w9ni).
++_CANDIDATE_ID_RE = re.compile(r"cand-[A-Za-z0-9][A-Za-z0-9_.:-]*")
++_TAIL_CHARS = 180
++
++
++class BatchPlanError(ValueError):
++    """The candidate list or the bounds cannot produce a valid plan.
++
++    Raised rather than returning an empty or partial plan: a station that silently processes
++    three of forty candidates because a bound was misconfigured is worse than one that fails
++    loudly, because its report still looks complete.
++    """
++
++
++class BatchMergeError(ValueError):
++    """Per-batch reports cannot be merged without losing or duplicating a candidate."""
++
++
++def _candidate_bytes(candidate: Any) -> int:
++    """The serialized size of one candidate record, in bytes (UTF-8).
++
++    A record that cannot be serialized still gets a size (its repr) because the planner must
++    never be the thing that decides a candidate is unrepresentable - the report contract and the
++    accounting check own that judgement.
++    """
++    try:
++        return len(json.dumps(candidate, ensure_ascii=False).encode("utf-8"))
++    except (TypeError, ValueError):
++        return len(repr(candidate).encode("utf-8"))
++
++
++def plan_batches(candidates: Sequence[Any],
++                 max_per_batch: int = DEFAULT_MAX_PER_BATCH,
++                 max_batch_bytes: int = DEFAULT_MAX_BATCH_BYTES) -> List[List[Any]]:
++    """Partition `candidates` into bounded, order-preserving batches.
++
++    Both bounds are honoured: a batch stops at `max_per_batch` records or before adding a record
++    that would push its serialized bytes past `max_batch_bytes`, whichever comes first. A single
++    candidate larger than `max_batch_bytes` still gets a batch of its own - it is presented, not
++    dropped, and the model is asked about exactly one oversized record instead of forty.
++
++    Determinism matters: the same input and bounds always produce the same partition, so a rerun
++    (or a review) reads the same batches in the same order. An empty list yields no batches.
++    """
++    if max_per_batch < 1:
++        raise BatchPlanError(f"max_per_batch must be >= 1, got {max_per_batch!r}")
++    if max_batch_bytes < 1:
++        raise BatchPlanError(f"max_batch_bytes must be >= 1, got {max_batch_bytes!r}")
++    if candidates is None:
++        raise BatchPlanError("candidates is None: a station with no pre-pass has nothing to batch")
++    if not isinstance(candidates, (list, tuple)):
++        raise BatchPlanError(
++            f"candidates must be a list to be batched, got {type(candidates).__name__}")
++
++    batches: List[List[Any]] = []
++    current: List[Any] = []
++    current_bytes = 0
++    for candidate in candidates:
++        size = _candidate_bytes(candidate)
++        if current and (len(current) >= max_per_batch
++                        or current_bytes + size > max_batch_bytes):
++            batches.append(current)
++            current = []
++            current_bytes = 0
++        current.append(candidate)
++        current_bytes += size
++    if current:
++        batches.append(current)
++
++    total = sum(len(batch) for batch in batches)
++    if total != len(candidates):
++        # Cannot happen with the loop above; asserted because a planner bug here would silently
++        # un-account for candidates and read as a clean run.
++        raise BatchPlanError(
++            f"internal: planned {total} candidates from a list of {len(candidates)}")
++    return batches
++
++
++def batch_candidate_ids(batch: Iterable[Any]) -> List[str]:
++    """The `candidate_id`s of one batch, in order, skipping candidates that carry none.
++
++    No id is invented. A pre-pass that supplies no ids leaves this list short, which is exactly
++    what the accounting check's count-only fallback keys on.
++    """
++    ids: List[str] = []
++    for candidate in batch:
++        if isinstance(candidate, dict):
++            value = candidate.get("candidate_id")
++            if isinstance(value, str) and value.strip():
++                ids.append(value.strip())
++    return ids
++
++
++def merge_reports(parts: Sequence[Dict[str, Any]], *,
++                  summary: Optional[str] = None,
++                  target: Optional[str] = None) -> Dict[str, Any]:
++    """Merge per-batch reports into one report, deterministically.
++
++    Findings keep the order the batches were planned in (which is the pre-pass order), so a merged
++    report reads like the single-call report it replaces. `reviewed_commits` is unioned in first-seen
++    order. A `candidate_id` answered twice raises: two rows for one candidate means one batch
++    answered another batch's candidate (a misbuilt prompt), and picking one of them would hide it.
++
++    Non-contract keys are NOT copied: `verdict`, `status` and `scanned_files` are the factory's to
++    set after this point, and letting a batch report supply them would let model output decide a
++    station's status.
++    """
++    findings: List[Dict[str, Any]] = []
++    seen_ids: Dict[str, int] = {}
++    reviewed: List[str] = []
++    first_target: Optional[str] = None
++    parts = list(parts)
++    if not parts:
++        raise BatchMergeError("no per-batch reports to merge")
++
++    for index, part in enumerate(parts):
++        if not isinstance(part, dict):
++            raise BatchMergeError(
++                f"batch {index} report is {type(part).__name__}, not an object")
++        rows = part.get("findings")
++        if rows is None:
++            rows = []
++        if not isinstance(rows, list):
++            raise BatchMergeError(
++                f"batch {index} report has a non-list 'findings' ({type(rows).__name__})")
++        for row in rows:
++            if not isinstance(row, dict):
++                raise BatchMergeError(
++                    f"batch {index} report has a non-object finding ({type(row).__name__})")
++            candidate_id = row.get("candidate_id")
++            if isinstance(candidate_id, str) and candidate_id.strip():
++                key = candidate_id.strip()
++                if key in seen_ids:
++                    raise BatchMergeError(
++                        f"candidate_id {key!r} appears in batch {seen_ids[key]} and batch {index}: "
++                        f"a batch answered a candidate it was not given")
++                seen_ids[key] = index
++            findings.append(row)
++        commits = part.get("reviewed_commits")
++        if isinstance(commits, list):
++            for commit in commits:
++                if isinstance(commit, str) and commit not in reviewed:
++                    reviewed.append(commit)
++        if first_target is None and isinstance(part.get("target"), str) and part["target"].strip():
++            first_target = part["target"]
++
++    merged: Dict[str, Any] = {
++        "summary": summary if summary is not None else (
++            f"Merged {len(parts)} bounded batch report(s): {len(findings)} row(s) "
++            f"across {len(seen_ids)} cited candidate id(s)."),
++        "findings": findings,
++    }
++    resolved_target = target if target is not None else first_target
++    if resolved_target is not None:
++        merged["target"] = resolved_target
++    if reviewed:
++        merged["reviewed_commits"] = reviewed
++    return merged
++
++
++def _scan_json_structure(text: str) -> Dict[str, Any]:
++    """Brace/string census of the output, ignoring string CONTENTS (so a snippet with a brace is
++    not read as structure). Escapes are honoured so `\\"` does not end a string early."""
++    depth = 0
++    opens = 0
++    closes = 0
++    in_string = False
++    escaped = False
++    for char in text:
++        if in_string:
++            if escaped:
++                escaped = False
++            elif char == "\\":
++                escaped = True
++            elif char == '"':
++                in_string = False
++            continue
++        if char == '"':
++            in_string = True
++        elif char == "{":
++            depth += 1
++            opens += 1
++        elif char == "}":
++            if depth > 0:
++                depth -= 1
++            closes += 1
++    return {
++        "depth": depth,
++        "open_braces": opens,
++        "close_braces": closes,
++        "in_string_at_end": in_string,
++        "escaped_at_end": escaped,
++    }
++
++
++def classify_unparseable(text: Optional[str]) -> Tuple[str, Dict[str, Any]]:
++    """Classify output that produced no report: `truncated` or `no_json`, with evidence.
++
++    `truncated` is the signature of a completion cut by an output cap: the text ends inside a
++    string, or its braces do not balance (more `{` than `}`). Both are structural facts about the
++    fragment, not guesses about intent.
++
++    Anything else is `no_json`: prose, an echoed tool call, an error transcript. That is a
++    different failure - the model did not answer in the contract's shape at all - and naming it
++    truncation would send an operator looking for a token limit that was never hit.
++    """
++    evidence: Dict[str, Any] = {"bytes": 0, "ids_seen": 0, "ids": [], "tail": ""}
++    if not isinstance(text, str) or not text.strip():
++        evidence["empty"] = True
++        return "no_json", evidence
++
++    scan = _scan_json_structure(text)
++    ids = sorted(set(_CANDIDATE_ID_RE.findall(text)))
++    evidence.update(scan)
++    evidence["bytes"] = len(text.encode("utf-8"))
++    evidence["ids_seen"] = len(ids)
++    evidence["ids"] = ids[-5:]
++    evidence["last_id"] = ids[-1] if ids else None
++    evidence["tail"] = text[-_TAIL_CHARS:]
++
++    truncated = bool(scan["in_string_at_end"]
++                     or scan["depth"] > 0
++                     or scan["open_braces"] > scan["close_braces"])
++    return ("truncated" if truncated else "no_json"), evidence
++
++
++def describe_truncation(evidence: Dict[str, Any], *,
++                        batch_index: int, batch_count: int,
++                        expected_ids: Sequence[str] = ()) -> str:
++    """One operator-facing line naming the truncation, its batch and the work it lost.
++
++    Deliberately concrete: a nightly reader needs to know WHICH batch was cut, how many bytes
++    arrived, and how many of the candidates it was given are not accounted for, without opening
++    the run directory.
++    """
++    total = len(expected_ids)
++    cited = {cid for cid in (evidence.get("ids") or []) if isinstance(cid, str)}
++    missing = [cid for cid in expected_ids if cid not in cited]
++    if total:
++        accounted = f"{total - len(missing)}/{total} candidate id(s) visible in the fragment"
++    else:
++        accounted = "no candidate ids were supplied for this batch (count-only accounting)"
++    return (
++        f"batch {batch_index + 1}/{batch_count} output was TRUNCATED mid-JSON after "
++        f"{evidence.get('bytes', 0)} bytes ({evidence.get('open_braces', 0)} '{{' vs "
++        f"{evidence.get('close_braces', 0)} '}}', "
++        f"{'ends inside a string' if evidence.get('in_string_at_end') else 'unclosed structure'}); "
++        f"{accounted}"
++        + (f"; first unaccounted: {', '.join(missing[:5])}" if missing else "")
++    )
+diff --git a/lib/findings.py b/lib/findings.py
+index c49ae98..e5edb1a 100755
+--- a/lib/findings.py
++++ b/lib/findings.py
+@@ -1657,6 +1657,22 @@ def read_presented_candidate_ids(run_dir: Any,
+     Counting and identity are two different bounds. A count can be satisfied by the right NUMBER of rows
+     describing candidates the station was never shown; citing ids cannot.
+     """
++    # rn0ky: a BATCHED run presents every candidate across N prompts, so "the prompt carried the first
++    # slice_size" is no longer true of it. The dispatcher writes presented_candidates.json with exactly
++    # the ids it put in front of the model (all batches, in order) and THIS is the population a report
++    # must cite. Read it first, and fall back to the slice for every run that predates batching - the
++    # fallback is not a compatibility nicety: those runs really did present only the slice.
++    if run_dir:
++        try:
++            recorded = json.loads((Path(run_dir) / "presented_candidates.json").read_text(encoding="utf-8"))
++        except (OSError, ValueError):
++            recorded = None
++        if isinstance(recorded, dict):
++            recorded_ids = recorded.get("candidate_ids")
++            if isinstance(recorded_ids, list):
++                ids = [cid for cid in recorded_ids if isinstance(cid, str) and cid]
++                # partial ids are no ids, exactly as below: the presented population must be nameable
++                return ids if len(ids) == len(recorded_ids) else []
+     payload = _read_candidate_payload(run_dir)
+     if payload is None:
+         return None
+diff --git a/tests/test_candidate_batching.py b/tests/test_candidate_batching.py
+new file mode 100644
+index 0000000..7ca9f0d
+--- /dev/null
++++ b/tests/test_candidate_batching.py
+@@ -0,0 +1,236 @@
++#!/usr/bin/env python3
++"""Bounded batching, deterministic merging and truncation naming (chrome-agent-platform-rn0ky).
++
++The nightly lost a 47-candidate perf-review run to a completion cut mid-JSON at 50,314 bytes and
++reported it as "no verdict". These tests pin the three pieces that replace that silence: a bounded
++deterministic partition, a merge that refuses to lose or duplicate a candidate, and a classifier
++that names truncation from the shape of the fragment rather than guessing.
++"""
++
++import json
++import unittest
++
++from lib.candidate_batching import (
++    DEFAULT_MAX_BATCH_BYTES,
++    DEFAULT_MAX_PER_BATCH,
++    BatchMergeError,
++    BatchPlanError,
++    batch_candidate_ids,
++    classify_unparseable,
++    describe_truncation,
++    merge_reports,
++    plan_batches,
++)
++
++
++def candidate(index, *, padding=0, with_id=True):
++    row = {
++        "rule_id": "layout-thrashing-forced-reflow",
++        "path": f"src/file{index}.ts",
++        "line_number": index,
++        "severity": "high",
++        "snippet": "el.offsetWidth" + ("x" * padding),
++    }
++    if with_id:
++        row["candidate_id"] = f"cand-perf-{index:03d}"
++    return row
++
++
++def report(rows, *, commits=(), target="demo"):
++    findings = [{"candidate_id": f"cand-perf-{i:03d}", "rule_id": "r", "path": "p",
++                 "snippet": "s", "severity": "info", "title": "t", "description": "d",
++                 "remediation": "x", "false_positive": True} for i in rows]
++    payload = {"summary": "s", "target": target, "findings": findings}
++    if commits:
++        payload["reviewed_commits"] = list(commits)
++    return payload
++
++
++class TestPlanBatches(unittest.TestCase):
++    def test_every_candidate_appears_exactly_once_in_prepass_order(self):
++        candidates = [candidate(i) for i in range(47)]
++        batches = plan_batches(candidates)
++        flattened = [row["candidate_id"] for batch in batches for row in batch]
++        self.assertEqual(flattened, [row["candidate_id"] for row in candidates])
++
++    def test_batches_are_bounded_by_count(self):
++        batches = plan_batches([candidate(i) for i in range(47)], max_per_batch=8)
++        self.assertEqual([len(b) for b in batches], [8, 8, 8, 8, 8, 7])
++        self.assertEqual(len(batches), 6)
++
++    def test_batches_are_bounded_by_bytes_as_well_as_count(self):
++        # 40 records, small count bound, but each record is ~1 KB: the byte budget must cut first.
++        candidates = [candidate(i, padding=1000) for i in range(40)]
++        batches = plan_batches(candidates, max_per_batch=40, max_batch_bytes=4000)
++        self.assertGreater(len(batches), 1)
++        for batch in batches:
++            payload = json.dumps(batch, ensure_ascii=False).encode("utf-8")
++            self.assertLessEqual(len(payload), 4000 + 1200)  # one record may not fit alone
++
++    def test_a_single_oversized_candidate_gets_its_own_batch_rather_than_being_dropped(self):
++        huge = candidate(0, padding=20000)
++        batches = plan_batches([huge, candidate(1), candidate(2)], max_per_batch=8,
++                               max_batch_bytes=1000)
++        self.assertEqual(len(batches[0]), 1)
++        self.assertEqual(batches[0][0]["candidate_id"], "cand-perf-000")
++        self.assertEqual(sum(len(b) for b in batches), 3)
++
++    def test_deterministic_for_the_same_input_and_bounds(self):
++        candidates = [candidate(i, padding=i * 7) for i in range(30)]
++        self.assertEqual(plan_batches(candidates), plan_batches(candidates))
++
++    def test_empty_list_yields_no_batches(self):
++        self.assertEqual(plan_batches([]), [])
++
++    def test_none_is_refused_rather_than_treated_as_empty(self):
++        # "no pre-pass" and "a pre-pass with zero candidates" are different facts; batching only
++        # ever sees the second, so a None here is a caller bug, not a clean scan.
++        with self.assertRaises(BatchPlanError):
++            plan_batches(None)
++
++    def test_non_list_is_refused(self):
++        with self.assertRaises(BatchPlanError):
++            plan_batches({"candidates": [candidate(0)]})
++
++    def test_bounds_must_be_positive(self):
++        for bad in (0, -1):
++            with self.assertRaises(BatchPlanError):
++                plan_batches([candidate(0)], max_per_batch=bad)
++            with self.assertRaises(BatchPlanError):
++                plan_batches([candidate(0)], max_batch_bytes=bad)
++
++    def test_defaults_are_the_documented_bounds(self):
++        self.assertEqual(DEFAULT_MAX_PER_BATCH, 8)
++        self.assertEqual(DEFAULT_MAX_BATCH_BYTES, 12_000)
++
++
++class TestBatchCandidateIds(unittest.TestCase):
++    def test_ids_are_copied_verbatim_and_never_invented(self):
++        batch = [candidate(0), candidate(1, with_id=False), candidate(2)]
++        self.assertEqual(batch_candidate_ids(batch), ["cand-perf-000", "cand-perf-002"])
++
++    def test_non_dict_rows_and_blank_ids_are_skipped(self):
++        batch = ["not-a-dict", {"candidate_id": "  "}, {"candidate_id": "cand-perf-009"}]
++        self.assertEqual(batch_candidate_ids(batch), ["cand-perf-009"])
++
++
++class TestMergeReports(unittest.TestCase):
++    def test_findings_keep_batch_order(self):
++        merged = merge_reports([report([0, 1]), report([2, 3])])
++        self.assertEqual([row["candidate_id"] for row in merged["findings"]],
++                         ["cand-perf-000", "cand-perf-001", "cand-perf-002", "cand-perf-003"])
++
++    def test_reviewed_commits_are_unioned_first_seen(self):
++        merged = merge_reports([report([0], commits=["a", "b"]), report([1], commits=["b", "c"])])
++        self.assertEqual(merged["reviewed_commits"], ["a", "b", "c"])
++
++    def test_a_duplicated_candidate_id_is_refused_by_name(self):
++        with self.assertRaises(BatchMergeError) as ctx:
++            merge_reports([report([0, 1]), report([1, 2])])
++        self.assertIn("cand-perf-001", str(ctx.exception))
++        self.assertIn("batch 0 and batch 1", str(ctx.exception))
++
++    def test_a_non_object_report_is_refused(self):
++        with self.assertRaises(BatchMergeError):
++            merge_reports([report([0]), "not-a-report"])
++
++    def test_a_non_list_findings_value_is_refused(self):
++        with self.assertRaises(BatchMergeError):
++            merge_reports([{"summary": "s", "findings": {"candidate_id": "x"}}])
++
++    def test_no_reports_to_merge_is_refused(self):
++        with self.assertRaises(BatchMergeError):
++            merge_reports([])
++
++    def test_model_output_cannot_supply_a_station_status(self):
++        # verdict/status/scanned_files belong to the factory: a merged report must not carry them
++        # from a batch, or model output would decide whether the station passed.
++        first = report([0])
++        first.update({"verdict": "pass", "status": "PASS", "scanned_files": 0})
++        merged = merge_reports([first])
++        for key in ("verdict", "status", "scanned_files"):
++            self.assertNotIn(key, merged)
++
++    def test_target_falls_back_to_the_first_batch_that_names_one(self):
++        self.assertEqual(merge_reports([{"summary": "s", "findings": []},
++                                        report([0], target="chosen")])["target"], "chosen")
++        self.assertNotIn("target", merge_reports([{"summary": "s", "findings": []}]))
++
++    def test_summary_is_deterministic_and_counts_rows_and_ids(self):
++        merged = merge_reports([report([0, 1]), report([2])])
++        self.assertEqual(merged["summary"],
++                         "Merged 2 bounded batch report(s): 3 row(s) across 3 cited candidate id(s).")
++
++
++class TestClassifyUnparseable(unittest.TestCase):
++    def _cut_report(self, rows):
++        """A report cut mid-string, the exact nightly shape: valid head, then a hard stop."""
++        text = json.dumps(report(rows), indent=2)
++        # Cut inside a string VALUE, not at a structural boundary: the nightly's shape was a hard
++        # stop mid-value, which is what "ends inside a string" means.
++        marker = text.rindex('"description": "')
++        return text[: marker + len('"description": "') + 1]
++
++    def test_a_cut_report_is_named_truncated(self):
++        verdict, evidence = classify_unparseable(self._cut_report(range(45)))
++        self.assertEqual(verdict, "truncated")
++        self.assertTrue(evidence["in_string_at_end"])
++        self.assertGreater(evidence["bytes"], 1000)
++
++    def test_unclosed_structure_is_named_truncated(self):
++        text = '{"summary": "s", "findings": [{"candidate_id": "cand-perf-001"}'
++        verdict, evidence = classify_unparseable(text)
++        self.assertEqual(verdict, "truncated")
++        self.assertEqual(evidence["depth"], 1)
++        self.assertEqual(evidence["open_braces"], 2)
++        self.assertEqual(evidence["close_braces"], 1)
++
++    def test_prose_without_json_is_not_called_truncation(self):
++        verdict, evidence = classify_unparseable("I reviewed the diff and found nothing of note.")
++        self.assertEqual(verdict, "no_json")
++        self.assertFalse(evidence["in_string_at_end"])
++
++    def test_an_empty_output_is_no_json_with_an_explicit_flag(self):
++        for text in ("", "   ", None):
++            verdict, evidence = classify_unparseable(text)
++            self.assertEqual(verdict, "no_json")
++            self.assertTrue(evidence.get("empty"))
++
++    def test_braces_inside_strings_do_not_make_a_complete_report_look_truncated(self):
++        # A snippet containing '{' must not fake an unbalanced structure: this report is complete
++        # and simply had no decodable object for another reason (e.g. it is prose about braces).
++        verdict, evidence = classify_unparseable(
++            'prose: the snippet uses { and } characters, and quotes a "string".')
++        self.assertEqual(verdict, "no_json")
++        self.assertEqual(evidence["open_braces"], 1)
++        self.assertEqual(evidence["close_braces"], 1)
++
++    def test_escaped_quote_does_not_end_the_string(self):
++        verdict, evidence = classify_unparseable('{"snippet": "a \\" b { ')
++        self.assertEqual(verdict, "truncated")
++        self.assertTrue(evidence["in_string_at_end"])
++
++    def test_candidate_ids_visible_in_the_fragment_are_reported(self):
++        text = self._cut_report(range(45))
++        _, evidence = classify_unparseable(text)
++        self.assertEqual(evidence["ids_seen"], 45)
++        self.assertEqual(evidence["last_id"], "cand-perf-044")
++
++    def test_truncation_message_names_batch_bytes_and_unaccounted_ids(self):
++        text = self._cut_report(range(45))
++        _, evidence = classify_unparseable(text)
++        message = describe_truncation(evidence, batch_index=2, batch_count=6,
++                                      expected_ids=[f"cand-perf-{i:03d}" for i in range(8)])
++        self.assertIn("batch 3/6", message)
++        self.assertIn("TRUNCATED mid-JSON", message)
++        self.assertIn("0/8 candidate id(s) visible", message)
++        self.assertIn("cand-perf-000", message)
++
++    def test_truncation_message_says_so_when_no_ids_were_supplied(self):
++        _, evidence = classify_unparseable('{"summary": "cut')
++        message = describe_truncation(evidence, batch_index=0, batch_count=1)
++        self.assertIn("count-only accounting", message)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_candidate_batching_end_to_end.py b/tests/test_candidate_batching_end_to_end.py
+new file mode 100644
+index 0000000..db5f66d
+--- /dev/null
++++ b/tests/test_candidate_batching_end_to_end.py
+@@ -0,0 +1,269 @@
++#!/usr/bin/env python3
++"""End-to-end: a station with more candidates than its per-call bound runs in bounded batches.
++
++chrome-agent-platform-rn0ky. The nightly lost a 47-candidate perf-review to a completion cut mid-JSON
++(50,314 bytes, cut after candidate 45) and the run reached the operator as "no verdict". These tests
++drive the real dispatcher (`factory run`, a stub engine, a real pre-pass) and pin the three things the
++bead asked for:
++
++  * the candidate list is split into deterministic BOUNDED batches, each its own engine call;
++  * each batch's answer is parsed and validated against the report contract SEPARATELY, and the
++    report the run records is the deterministic merge of them (every presented id accounted for);
++  * a cut batch is a NAMED truncation error in the run directory, not a silent no-verdict.
++
++The engine is a stub because what is under test is the dispatcher's batching and contract handling,
++not a model. The truncation case uses the nightly's exact shape: valid JSON head, hard stop mid-string.
++"""
++
++import json
++import os
++import stat
++import sys
++import unittest
++from pathlib import Path
++
++sys.path.insert(0, str(Path(__file__).resolve().parent))
++
++from containment_harness import ContainmentHarness  # noqa: E402
++
++CANDIDATE_COUNT = 8
++PER_CALL = 3
++
++PREPASS = f'''
++import argparse, json, sys
++parser = argparse.ArgumentParser()
++parser.add_argument("--target")
++parser.add_argument("--output")
++args, _unknown = parser.parse_known_args()
++candidates = [
++    {{
++        "candidate_id": f"cand-perf-{{i:03d}}",
++        "rule_id": "layout-thrashing-forced-reflow",
++        "path": f"src/file{{i}}.ts",
++        "line_number": i + 1,
++        "severity": "high",
++        "snippet": "el.offsetWidth",
++    }}
++    for i in range({CANDIDATE_COUNT})
++]
++open(args.output, "w", encoding="utf-8").write(json.dumps({{"candidates": candidates}}))
++'''
++
++AGENT_YAML = f"""name: probe
++class: proposer
++plane: [local]
++containment: t2-local
++triggers: [manual]
++blocking: false
++short_circuit_empty: false
++summary: batched probe
++capabilities:
++  write: false
++  network: false
++  browser: false
++  requires: []
++budget:
++  max_minutes: 5
++output:
++  schema: report.schema.json
++  max_candidates_per_call: {PER_CALL}
++"""
++
++SCHEMA = {
++    "$schema": "https://json-schema.org/draft/2020-12/schema",
++    "title": "ProbeReport",
++    "type": "object",
++    "required": ["summary", "findings"],
++    "properties": {
++        "summary": {"type": "string"},
++        "target": {"type": "string"},
++        "findings": {
++            "type": "array",
++            "items": {
++                "type": "object",
++                "required": ["rule_id", "path", "snippet", "severity", "title", "description",
++                             "remediation"],
++                "properties": {
++                    "rule_id": {"type": "string"},
++                    "path": {"type": "string"},
++                    "line_number": {"type": "integer"},
++                    "snippet": {"type": "string"},
++                    "severity": {"type": "string",
++                                 "enum": ["critical", "high", "medium", "low", "info"]},
++                    "title": {"type": "string"},
++                    "description": {"type": "string"},
++                    "remediation": {"type": "string"},
++                    "candidate_id": {"type": "string"},
++                    "false_positive": {"type": "boolean"},
++                },
++            },
++        },
++    },
++}
++
++# Answers exactly the candidates the prompt carried: the ids are read back out of the prompt, which is
++# also how the test proves each engine call saw only its own batch. Bash + builtins only: a test stub
++# must not widen the engine sandbox's executable allowlist to get python3.
++IDS_AND_ROWS = r"""#!/usr/bin/env bash
++set -uo pipefail
++prompt=$(cat)
++declare -A seen=()
++ids=()
++for id in $(printf '%s' "$prompt" | grep -o "cand-perf-[0-9][0-9][0-9]"); do
++  if [ -n "${seen[$id]:-}" ]; then continue; fi
++  seen[$id]=1
++  ids+=("$id")
++done
++joined=$(printf '%s,' "${ids[@]}")
++printf 'BATCH_IDS:%s\n' "${joined%,}"
++out='{"summary":"batched","findings":['
++first=1
++for id in "${ids[@]}"; do
++  if [ $first -eq 0 ]; then out="$out,"; fi
++  first=0
++  out="$out{\"rule_id\":\"layout-thrashing-forced-reflow\",\"path\":\"src/$id.ts\",\"line_number\":1,\"snippet\":\"el.offsetWidth\",\"severity\":\"high\",\"title\":\"t\",\"description\":\"d\",\"remediation\":\"x\",\"candidate_id\":\"$id\"}"
++done
++"""
++
++# Every batch answers in full.
++BATCH_STUB = IDS_AND_ROWS + r"""printf '%s]}\n' "$out"
++"""
++
++# The nightly's shape: the second batch's completion is CUT mid-string, leaving no decodable object.
++TRUNCATING_STUB = IDS_AND_ROWS + r"""if [[ " ${ids[*]} " == *" cand-perf-003 "* ]]; then
++  printf '%s{"rule_id":"r","path":"p","snippet":"s","severity":"high","title":"t","description":"partial'
++else
++  printf '%s]}\n' "$out"
++fi
++"""
++
++# Prose instead of a report: a different failure, and it must not be named truncation.
++PROSE_STUB = r"""#!/usr/bin/env bash
++set -uo pipefail
++cat >/dev/null
++echo "I reviewed the diff and found nothing of note."
++"""
++
++
++class BatchedStation(ContainmentHarness):
++    """The real dispatcher, a real pre-pass, a stub engine; batching declared in agent.yaml."""
++
++    def agent(self, yaml_text):  # noqa: D401 - the harness's own staging, extended
++        directory = self.root / "agents" / "probe"
++        (directory / "scripts").mkdir(parents=True, exist_ok=True)
++        (directory / "agent.yaml").write_text(yaml_text, encoding="utf-8")
++        (directory / "SKILL.md").write_text("# Probe\n", encoding="utf-8")
++        (directory / "report.schema.json").write_text(json.dumps(SCHEMA, indent=2),
++                                                      encoding="utf-8")
++        (directory / "scripts" / "prepass.py").write_text(PREPASS, encoding="utf-8")
++
++    def stub(self, script):
++        stub = self.bin / "pi"
++        stub.write_text(script, encoding="utf-8")
++        stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
++
++    def run_batched(self):
++        self.agent(AGENT_YAML)
++        self.stub(BATCH_STUB)
++        return self.factory("pi")
++
++    def run_dir(self):
++        dirs = self.run_dirs()
++        self.assertEqual(len(dirs), 1, f"expected one run directory, got {dirs}")
++        return dirs[0]
++
++
++class TestBoundedBatching(BatchedStation):
++    def test_a_large_candidate_list_runs_in_bounded_batches_and_merges(self):
++        res = self.run_batched()
++        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
++        run = self.run_dir()
++
++        prompts = sorted(run.glob("prompt.batch*.txt"))
++        self.assertEqual(len(prompts), 3,
++                         f"{CANDIDATE_COUNT} candidates at {PER_CALL} per call is 3 batches, got {prompts}")
++        seen = []
++        for prompt in prompts:
++            text = prompt.read_text(encoding="utf-8")
++            ids = sorted(set(__import__("re").findall(r"cand-perf-\d{3}", text)))
++            self.assertLessEqual(len(ids), PER_CALL, f"{prompt.name} carried {len(ids)} candidates")
++            seen.extend(ids)
++        self.assertEqual(sorted(seen), [f"cand-perf-{i:03d}" for i in range(CANDIDATE_COUNT)],
++                         "every candidate is presented exactly once, across the batches")
++
++        outputs = sorted(run.glob("model_output.batch*.txt"))
++        self.assertEqual(len(outputs), 3, "each batch keeps its own raw output")
++        recorded = []
++        for output in outputs:
++            line = next(l for l in output.read_text(encoding="utf-8").splitlines()
++                        if l.startswith("BATCH_IDS:"))
++            recorded.append(line.split(":", 1)[1])
++        self.assertEqual(recorded, ["cand-perf-000,cand-perf-001,cand-perf-002",
++                                    "cand-perf-003,cand-perf-004,cand-perf-005",
++                                    "cand-perf-006,cand-perf-007"],
++                         "each engine call saw exactly its own batch, in pre-pass order")
++
++        presented = json.loads((run / "presented_candidates.json").read_text(encoding="utf-8"))
++        self.assertEqual(presented["presented"], CANDIDATE_COUNT)
++        self.assertEqual(presented["batch_count"], 3)
++        self.assertEqual(presented["candidate_ids"],
++                         [f"cand-perf-{i:03d}" for i in range(CANDIDATE_COUNT)])
++
++        report = json.loads((run / "report.json").read_text(encoding="utf-8"))
++        cited = [f["candidate_id"] for f in report["findings"]]
++        self.assertEqual(cited, [f"cand-perf-{i:03d}" for i in range(CANDIDATE_COUNT)],
++                         "the merged report keeps pre-pass order and loses no row")
++
++    def test_the_accounting_population_is_every_batch_not_the_first_slice(self):
++        # The whole point of the merge: a run that presented 8 candidates across 3 calls must be
++        # judged on all 8, not on the first CANDIDATE_PROMPT_SLICE of a single prompt.
++        res = self.run_batched()
++        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
++        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
++        from lib.findings import read_presented_candidate_ids
++
++        ids = read_presented_candidate_ids(self.run_dir())
++        self.assertEqual(ids, [f"cand-perf-{i:03d}" for i in range(CANDIDATE_COUNT)])
++
++    def test_a_station_without_the_bound_stays_one_call(self):
++        self.agent(AGENT_YAML.replace("  max_candidates_per_call: 3\n", ""))
++        self.stub(BATCH_STUB)
++        res = self.factory("pi")
++        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
++        run = self.run_dir()
++        self.assertFalse(list(run.glob("prompt.batch*.txt")),
++                         "batching is opt-in: an undeclared bound must not split the call")
++        self.assertTrue((run / "prompt.txt").exists())
++
++
++class TestTruncationIsNamed(BatchedStation):
++    def test_a_batch_cut_mid_json_is_a_named_truncation_error(self):
++        self.agent(AGENT_YAML)
++        self.stub(TRUNCATING_STUB)
++        res = self.factory("pi")
++        self.assertNotEqual(res.returncode, 0, "a cut report must not be recorded as a verdict")
++        run = self.run_dir()
++
++        reason = (run / "failure_reason.txt").read_text(encoding="utf-8")
++        self.assertIn("TRUNCATED", reason)
++        self.assertIn("batch 2/3", reason, f"the failure names WHICH batch was cut: {reason}")
++
++        classification = json.loads((run / "output_classification.json").read_text(encoding="utf-8"))
++        self.assertEqual(classification["kind"], "truncated")
++        self.assertEqual(classification["batch"], 2)
++        self.assertEqual(classification["batches"], 3)
++        self.assertTrue(classification["in_string_at_end"],
++                        "the nightly's shape: the completion ended inside a string")
++
++    def test_prose_instead_of_a_report_is_no_json_not_a_truncation(self):
++        self.agent(AGENT_YAML)
++        self.stub(PROSE_STUB)
++        res = self.factory("pi")
++        self.assertNotEqual(res.returncode, 0)
++        run = self.run_dir()
++        classification = json.loads((run / "output_classification.json").read_text(encoding="utf-8"))
++        self.assertEqual(classification["kind"], "no_json")
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_factory_truth.py b/tests/test_factory_truth.py
+index ee0cbc5..d7e9eb4 100644
+--- a/tests/test_factory_truth.py
++++ b/tests/test_factory_truth.py
+@@ -48,7 +48,7 @@ _loader.exec_module(factory_cli)
+ LIB_MODULES = ("findings.py", "redaction.py", "embargo.py", "budget.py", "child_env.py",
+                "credential_broker.py", "net_forward.py", "egress_proxy.py",
+                "report_schema.py", "containment.py", "sandbox.py", "retention.py",
+-               "tool_pins.py", "line_numbers.py")
++               "tool_pins.py", "line_numbers.py", "candidate_batching.py")
+ 
+ 
+ def finding(**overrides):
+diff --git a/tests/test_line_andon.py b/tests/test_line_andon.py
+index 5de0a32..8555e6c 100644
+--- a/tests/test_line_andon.py
++++ b/tests/test_line_andon.py
+@@ -37,7 +37,7 @@ loader.exec_module(factory_cli)
+ LIB_MODULES = ("findings.py", "redaction.py", "embargo.py", "budget.py", "child_env.py",
+                "credential_broker.py", "net_forward.py", "egress_proxy.py",
+                "report_schema.py", "containment.py", "sandbox.py", "retention.py",
+-               "tool_pins.py", "line_numbers.py")
++               "tool_pins.py", "line_numbers.py", "candidate_batching.py")
+ 
+ 
+ class _Marker:
+diff --git a/tests/test_pi_keyless_broker.py b/tests/test_pi_keyless_broker.py
+index cd337a6..4ce666f 100644
+--- a/tests/test_pi_keyless_broker.py
++++ b/tests/test_pi_keyless_broker.py
+@@ -51,7 +51,7 @@ _loader.exec_module(factory_cli)
+ LIB_MODULES = ("findings.py", "redaction.py", "embargo.py", "budget.py", "child_env.py",
+                "credential_broker.py", "net_forward.py", "egress_proxy.py",
+                "report_schema.py", "containment.py", "sandbox.py", "retention.py",
+-               "tool_pins.py", "yaml_mini.py", "line_numbers.py")
++               "tool_pins.py", "yaml_mini.py", "line_numbers.py", "candidate_batching.py")
+ 
+ # Every variable that could carry a real model credential on the host (lib/child_env.py
+ # plus the broker's secret vars). The fleet has none of them set.
+-- 
+2.43.0
+
