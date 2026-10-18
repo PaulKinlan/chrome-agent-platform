@@ -12,13 +12,25 @@
 // Honesty boundary: a textual deny-list can never PROVE the absence of a
 // capability. Dynamically computed member access (globalThis["navigator"]
 // ["storage"]), string-built identifiers and similar stay invisible to any
-// pattern. The residual is recorded in docs/RISK-REGISTER.md (R25); the C2
-// claim (an admitted package cannot obtain its own OPFS write capability)
-// remains an assumption — now a scanned one, not a proof.
+// pattern; computed import specifiers (import(variable)) stay invisible to
+// the resolver below. The residual is recorded in docs/RISK-REGISTER.md
+// (R25); the C2 claim (an admitted package cannot obtain its own OPFS write
+// capability) remains an assumption — now a scanned one, not a proof.
 //
 // No package JavaScript is executed here. The scan is synchronous, bounded by
 // the verified asset byte set, and runs on bytes already digest-checked by
 // the graph audit.
+//
+// Import-graph closure (review finding 1o3uv on chrome-agent-platform-197jd):
+// capabilities do not care about manifest roles. A glue module may relative-
+// import another package asset — a data-role .mjs — and that module executes
+// in the same worker with the same reachability. The scan therefore starts
+// from the declared JS roles (glue/adapter/pthread-bootstrap) and TRANSITIVELY
+// scans every asset they import, whatever role the manifest gave it. Every
+// import specifier must resolve to admitted package bytes: relative paths
+// resolve inside the verified set or the package is refused
+// (js_capability_import_unresolved); bare and URL specifiers cannot resolve
+// in an MV3 worker and are refused the same way.
 
 import { WasmPackageAuthorityError } from "./wasm-package-authority.js";
 
@@ -78,28 +90,74 @@ const DENY_LIST_IDS = Object.freeze(EMSCRIPTEN_JS_CAPABILITY_DENY_LIST.map((e) =
 // ES modules are valid UTF-8 by construction; anything else is a refusal.
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
-/** Roles whose package-provided JS the worker actually imports and runs. */
+/** Roles whose package-provided JS the worker executes or may bootstrap. */
 export function isJsCapabilityAssetRole(role) {
-  return role === "glue" || role === "adapter";
+  return role === "glue" || role === "adapter" || role === "pthread-bootstrap";
+}
+
+// Import specifiers this scan resolves: static import/export-from and dynamic
+// import() with a literal specifier. Computed specifiers are invisible here —
+// recorded residual (R25); network-URL-shaped dynamic imports are already
+// denied by the network-dynamic-import list entry at the importing asset.
+const IMPORT_SPECIFIER_RE = /\b(?:import\s*\(\s*|import\s+(?:[\s\S]{0,200}?\bfrom\s+)?|export\s+[\s\S]{0,200}?\bfrom\s+)(["'])([^"'\n\r]+)\1/g;
+
+export function extractImportSpecifiers(text) {
+  const specifiers = [];
+  IMPORT_SPECIFIER_RE.lastIndex = 0;
+  let match;
+  while ((match = IMPORT_SPECIFIER_RE.exec(text)) !== null) {
+    specifiers.push(match[2]);
+    if (specifiers.length > 64) fail("js_capability_scan_invalid", "import_specifier_bound");
+  }
+  return specifiers;
+}
+
+/** Resolve a relative import specifier against an asset path; null when it is not relative. */
+export function resolveRelativeImport(fromPath, specifier) {
+  if (!specifier.startsWith("./") && !specifier.startsWith("../") && !specifier.startsWith("/")) return null;
+  let url;
+  try {
+    url = new URL(specifier, `file:///${fromPath}`);
+  } catch {
+    return ""; // malformed relative specifier — never silently accepted
+  }
+  return url.pathname.replace(/^\//u, "");
 }
 
 /**
- * Scan the verified glue+adapter bytes for denied capabilities.
- * Refusal: WasmPackageAuthorityError("js_capability_denied", "wasm",
- * "<assetId>:<capability-code>"). Verdict (all clean):
+ * Scan the verified package JS for denied capabilities, transitively through
+ * the ES module import graph.
+ *
+ * @param entryAssets declared JS-role assets (glue/adapter/pthread-bootstrap)
+ *   — the scan seeds from these.
+ * @param allAssets every asset in the admitted graph — the resolution universe
+ *   an import specifier may target, whatever role the manifest gave it.
+ * @param files path -> verified bytes.
+ *
+ * Refusals: WasmPackageAuthorityError
+ *   - "js_capability_denied", detail "<assetId>:<capability-code>" — a
+ *     deny-list pattern matched any scanned asset, including transitively
+ *     imported data-role modules;
+ *   - "js_capability_import_unresolved", detail "<assetId>:<specifier>" — an
+ *     import that does not resolve to admitted package bytes;
+ *   - "js_capability_unreadable" — non-UTF-8 JS bytes.
+ * Verdict (all clean):
  * { verdict:"pass", denyList:[ids], scanned:[{asset, role, sha256, exemptions:[ids]}] }
  * — recorded on the admission receipt as `current.jsCapabilityAudit`.
- * Undecodable bytes are refused (js_capability_unreadable), never skipped.
  */
-export function auditEmscriptenJsCapabilities(capabilityAssets, files) {
-  if (!Array.isArray(capabilityAssets) || !(files instanceof Map)) fail("js_capability_scan_invalid");
+export function auditEmscriptenJsCapabilities(entryAssets, allAssets, files) {
+  if (!Array.isArray(entryAssets) || !Array.isArray(allAssets) || !(files instanceof Map)) fail("js_capability_scan_invalid");
+  const byPath = new Map(allAssets.map((a) => [a?.path, a]));
   const scanned = [];
-  for (const asset of capabilityAssets) {
-    if (!asset || typeof asset.id !== "string" || typeof asset.path !== "string" ||
-        typeof asset.sha256 !== "string" || !isJsCapabilityAssetRole(asset.role)) {
-      fail("js_capability_scan_invalid");
-    }
-    const bytes = files.get(asset.path);
+  const seen = new Set();
+  const queue = entryAssets.map((a) => a?.path).filter(Boolean).sort();
+  while (queue.length) {
+    const path = queue.shift();
+    if (seen.has(path)) continue;
+    seen.add(path);
+    const asset = byPath.get(path);
+    if (!asset) fail("js_capability_scan_invalid", path);
+    const bytes = files.get(path);
     if (!(bytes instanceof Uint8Array)) fail("js_capability_scan_invalid", asset.id);
     let text;
     try {
@@ -122,6 +180,15 @@ export function auditEmscriptenJsCapabilities(capabilityAssets, files) {
       sha256: asset.sha256,
       exemptions: Object.freeze(exemptions.sort()),
     }));
+    // Import-graph closure: every specifier must land on admitted bytes.
+    for (const specifier of extractImportSpecifiers(text)) {
+      const resolved = resolveRelativeImport(path, specifier);
+      const target = resolved === null ? undefined : byPath.get(resolved);
+      if (resolved === null || resolved === "" || !target || !files.has(target.path)) {
+        fail("js_capability_import_unresolved", `${asset.id}:${specifier}`);
+      }
+      if (!seen.has(target.path)) queue.push(target.path);
+    }
   }
   return Object.freeze({
     verdict: "pass",

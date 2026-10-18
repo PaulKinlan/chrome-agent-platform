@@ -78,12 +78,28 @@ const CLEAN_SOURCE = `export const q = (a, b) => a + b;\n`;
 
 /** Scan one synthetic asset; returns {ok, audit} or {ok:false, error}. */
 function scanSource(source, { role = "glue", sha256 = "a".repeat(64), id = "glue" } = {}) {
-  const path = `extension/wasm/runtime/pkg/1.0.0/${role}.mjs`;
-  const bytes = enc.encode(source);
-  const files = new Map([[path, bytes]]);
-  const asset = { id, role, path, sha256, size: bytes.byteLength };
+  return scanGraph([{ source, role, sha256, id }]);
+}
+
+/**
+ * Scan a synthetic asset graph: the first N specs are the declared JS-role
+ * entries, the rest form the resolution universe (any role) that relative
+ * imports may target. Paths derive from the asset id so "./x.mjs" specifiers
+ * resolve naturally within the directory.
+ */
+function scanGraph(entries, extra = []) {
+  const assets = [];
+  const files = new Map();
+  for (const [index, spec] of [...entries, ...extra].entries()) {
+    const role = spec.role ?? (index < entries.length ? "glue" : "data");
+    const id = spec.id ?? (index < entries.length ? role : `${role}${index}`);
+    const path = spec.path ?? `extension/wasm/runtime/pkg/1.0.0/${id}.mjs`;
+    const bytes = enc.encode(spec.source);
+    assets.push({ id, role, path, sha256: spec.sha256 ?? "a".repeat(64), size: bytes.byteLength });
+    files.set(path, bytes);
+  }
   try {
-    return { ok: true, audit: auditEmscriptenJsCapabilities([asset], files) };
+    return { ok: true, audit: auditEmscriptenJsCapabilities(assets.slice(0, entries.length), assets, files) };
   } catch (error) {
     return { ok: false, error };
   }
@@ -122,7 +138,9 @@ Deno.test("js-capability admission: the deny-list is one frozen constant with un
   );
   assertEquals(isJsCapabilityAssetRole("glue"), true);
   assertEquals(isJsCapabilityAssetRole("adapter"), true);
+  assertEquals(isJsCapabilityAssetRole("pthread-bootstrap"), true);
   assertEquals(isJsCapabilityAssetRole("main-wasm"), false);
+  assertEquals(isJsCapabilityAssetRole("data"), false);
 });
 
 Deno.test("js-capability admission: every deny-list entry has a fixture and every fixture names a live entry", () => {
@@ -185,6 +203,77 @@ Deno.test("js-capability admission: the preamble exemption is byte-exact and glu
   const { ok, error } = scanSource(FIXTURES.get("fetch"), { role: "adapter", sha256: NUMERIC_ACCEPTANCE_PINS.glue.sha256, id: "adapter" });
   assertEquals(ok, false, "adapter with fetch must be refused even under a reviewed digest");
   assertEquals(error.detail, "adapter:fetch_call");
+  // pthread-bootstrap is package JS too: scanned as an entry, never exempt.
+  const boot = scanGraph([{ id: "boot", role: "pthread-bootstrap", source: FIXTURES.get("fetch") }]);
+  assertEquals(boot.ok, false, "pthread-bootstrap with fetch must be refused");
+  assertEquals(boot.error.detail, "boot:fetch_call");
+  const bootExempt = scanGraph([{
+    id: "boot",
+    role: "pthread-bootstrap",
+    source: new TextDecoder().decode(await evidenceBytes("packages/bundled/evidence/emscripten-abi/build-a/numeric.mjs")),
+    sha256: NUMERIC_ACCEPTANCE_PINS.glue.sha256,
+  }]);
+  assertEquals(bootExempt.ok, false, "the preamble exemption is glue-only even byte-exact");
+});
+
+Deno.test("js-capability admission: a glue importing a data-role module is scanned transitively (1o3uv)", () => {
+  // The review finding's exact hostile shape: the capability lives in a
+  // data-role .mjs that the glue relative-imports. Roles do not fence
+  // execution — the import graph does the reaching.
+  const { ok, error } = scanGraph(
+    [{ id: "glue", role: "glue", source: `import { p } from "./payload.mjs";\nexport const q = p;\n` }],
+    [{ id: "payload", role: "data", source: FIXTURES.get("caches") }],
+  );
+  assertEquals(ok, false, "capability behind a data-role import must be refused");
+  assertEquals(error.code, "js_capability_denied");
+  assertEquals(error.detail, "payload:cache_storage");
+
+  // Transitive chains and clean multi-file graphs report every scanned row.
+  const chain = scanGraph(
+    [{ id: "glue", role: "glue", source: `export * from "./a.mjs";\n` }],
+    [
+      { id: "a", role: "data", source: `import { q } from "./b.mjs";\nexport const u = q;\n` },
+      { id: "b", role: "data", source: `export const v = 1;\n` },
+    ],
+  );
+  assertEquals(chain.ok, true);
+  assertEquals(chain.audit.scanned.map((r) => r.asset), ["glue", "a", "b"]);
+  assertEquals(chain.audit.scanned.map((r) => r.role), ["glue", "data", "data"]);
+
+  // Deep capability: refused wherever it hides in the chain.
+  const deep = scanGraph(
+    [{ id: "glue", role: "glue", source: `export * from "./a.mjs";\n` }],
+    [
+      { id: "a", role: "data", source: `export * from "./b.mjs";\n` },
+      { id: "b", role: "data", source: FIXTURES.get("indexedDB") },
+    ],
+  );
+  assertEquals(deep.ok, false);
+  assertEquals(deep.error.detail, "b:indexed_db");
+
+  // Cycles terminate (visited set), clean cycle still passes.
+  const cycle = scanGraph(
+    [{ id: "glue", role: "glue", source: `export * from "./a.mjs";\n` }],
+    [{ id: "a", role: "data", source: `export * from "./glue.mjs";\n` }],
+  );
+  assertEquals(cycle.ok, true);
+  assertEquals(cycle.audit.scanned.map((r) => r.asset), ["glue", "a"]);
+});
+
+Deno.test("js-capability admission: an import escaping the admitted set is refused", () => {
+  const missing = scanGraph([{ id: "glue", role: "glue", source: `import { p } from "./absent.mjs";\nexport const q = p;\n` }]);
+  assertEquals(missing.ok, false, "a relative import must resolve to admitted bytes");
+  assertEquals(missing.error.code, "js_capability_import_unresolved");
+  assertEquals(missing.error.detail, "glue:./absent.mjs");
+
+  const traversal = scanGraph([{ id: "glue", role: "glue", source: `import { p } from "../../../secrets.mjs";\nexport const q = p;\n` }]);
+  assertEquals(traversal.ok, false, "../ traversal must not resolve outside the package");
+  assertEquals(traversal.error.code, "js_capability_import_unresolved");
+
+  const bare = scanGraph([{ id: "glue", role: "glue", source: `import "external-thing";\nexport const q = 1;\n` }]);
+  assertEquals(bare.ok, false, "bare specifiers cannot resolve in an MV3 worker");
+  assertEquals(bare.error.code, "js_capability_import_unresolved");
+  assertEquals(bare.error.detail, "glue:external-thing");
 });
 
 function fileMapFor(out) {
@@ -349,6 +438,71 @@ Deno.test("js-capability admission: a hostile glue is refused end-to-end through
   assertEquals(error.code, "js_capability_denied");
   assertEquals(error.detail, "glue:cache_storage");
   // The refusal precedes the registry write: nothing was admitted.
+  const registryRaw = await store.getStrict("wasmPkg");
+  assertEquals(registryRaw === null || Object.keys(registryRaw.packages ?? {}).length === 0, true);
+});
+
+Deno.test("js-capability admission: hostile data-role import is refused END-TO-END through admitBundled (1o3uv)", async () => {
+  registerRealSurface();
+  const out = await buildNumericAcceptancePackage();
+  const manifest = structuredClone(out.manifest);
+
+  // The hostile shape: a CLEAN glue that relative-imports a data-role module
+  // carrying the capability. Old behaviour admitted this package with
+  // verdict=pass because only glue/adapter bytes were scanned.
+  const glueBytes = enc.encode(`import { p } from "./payload.mjs";\nexport const q = p;\n`);
+  const payloadBytes = enc.encode(FIXTURES.get("caches"));
+  const glueAsset = manifest.assets.find((a) => a.role === "glue");
+  const payloadRel = glueAsset.path.replace(/glue\.mjs$/u, "payload.mjs");
+  glueAsset.sha256 = await shaHexBytes(glueBytes);
+  glueAsset.size = glueBytes.byteLength;
+  manifest.assets.push({
+    id: "payload",
+    role: "data",
+    path: payloadRel,
+    sha256: await shaHexBytes(payloadBytes),
+    size: payloadBytes.byteLength,
+  });
+
+  // Provenance binds outputAssets to the manifest asset ids, and the manifest
+  // pins the sidecar bytes — both must be re-forged for the manifest to stay
+  // structurally valid so the refusal comes from the CAPABILITY scan, not an
+  // earlier layer.
+  const sidecarRel = manifest.provenance.record.path;
+  const sidecar = JSON.parse(new TextDecoder().decode(out.files.find((f) => f.rel === sidecarRel).bytes));
+  sidecar.outputAssets = manifest.assets.map((a) => a.id);
+  const sidecarBytes = enc.encode(canonicalJson(sidecar));
+  manifest.provenance.record = {
+    path: sidecarRel,
+    sha256: await shaHexBytes(sidecarBytes),
+    size: sidecarBytes.byteLength,
+  };
+
+  const canonical = canonicalJson(manifest);
+  const patchedDigest = new WasmPackageAuthority().manifestDigest(canonical);
+  assert(patchedDigest !== out.manifestDigest, "patched manifest must have a new digest");
+
+  const files = new Map(out.files.map((f) => [f.rel, f.bytes]));
+  files.set(glueAsset.path, glueBytes);
+  files.set(payloadRel, payloadBytes);
+  files.set(sidecarRel, sidecarBytes);
+  files.set(`extension/wasm/manifests/${NUMERIC_ACCEPTANCE_PINS.packageId}-${NUMERIC_ACCEPTANCE_PINS.packageVersion}.manifest.json`, enc.encode(canonical));
+  files.set("extension/wasm/licenses/CAP-authored-Apache-2.0.txt", await evidenceBytes("extension/wasm/licenses/CAP-authored-Apache-2.0.txt"));
+  const inventory = await inventoryWithDigests(inventoryFor(files, {
+    pkg: NUMERIC_ACCEPTANCE_PINS.packageId,
+    version: NUMERIC_ACCEPTANCE_PINS.packageVersion,
+    digest: patchedDigest,
+  }));
+  const store = new FakeStore();
+  const authority = new WasmPackageAuthority({ getStore: () => store, inventory, now: () => 1000 });
+  const error = await authority.admitBundled({ manifest: canonical, files: null }).then(
+    () => null,
+    (e) => e,
+  );
+  assert(error, "the capability behind a data-role import must be refused at admission");
+  assertEquals(error instanceof WasmPackageAuthorityError, true);
+  assertEquals(error.code, "js_capability_denied");
+  assertEquals(error.detail, "payload:cache_storage");
   const registryRaw = await store.getStrict("wasmPkg");
   assertEquals(registryRaw === null || Object.keys(registryRaw.packages ?? {}).length === 0, true);
 });

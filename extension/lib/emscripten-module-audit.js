@@ -339,12 +339,16 @@ export async function auditEmscriptenGraph(graph, files) {
     assets.set(asset.id, asset);
   }
   if (files.size !== paths.size || [...files.keys()].some(path => !paths.has(path))) fail("asset_files_mismatch");
-  // Capability scan FIRST (chrome-agent-platform-197jd): the worker imports
-  // glue+adapter JS by URL, so their text is scanned for denied capabilities
-  // before any binary parsing or provider resolution. Receipt verdict rides
-  // out on the graph result; a hit refuses admission with a typed code.
+  // Capability scan FIRST (chrome-agent-platform-197jd; import-graph closure
+  // per review finding 1o3uv): the worker imports glue+adapter JS by URL and
+  // those modules may relative-import FURTHER package assets in any role, so
+  // the scan seeds from the declared JS roles and transitively scans the
+  // whole import-reachable JS set before any binary parsing or provider
+  // resolution. Receipt verdict rides out on the graph result; a hit refuses
+  // admission with a typed code.
   const jsAudit = auditEmscriptenJsCapabilities(
     [...assets.values()].filter(a => isJsCapabilityAssetRole(a.role)),
+    [...assets.values()],
     files,
   );
   const wasmAssets = [...assets.values()].filter(a => a.role === "main-wasm" || a.role === "side-wasm");
