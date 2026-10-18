@@ -272,6 +272,7 @@ import {
   appendSiteToolAudit,
   digestSiteToolArguments,
   listSiteToolAudit,
+  siteToolInvocationAuditOutcome,
   withSiteToolAuditBarrier,
 } from "../lib/site-tool-audit.js";
 import {
@@ -3186,16 +3187,16 @@ async function readSiteLazySources(origin, runGenCell, askGateGetter = null) {
       ? res
       : await withSiteDocsFallback({ origin, name, args, res });
     try {
+      // The outcome states what the PAGE's tool did (0jniu): a tool failure the
+      // docs fallback rescued is a FAILED invocation with reason "docs-fallback",
+      // never "succeeded" — the audit is the record of the site's behaviour.
+      const verdict = siteToolInvocationAuditOutcome(finalRes);
       await appendRequiredSiteToolAudit(auditRecordFor(consent, {
         event: "invocation-finished",
         direction: "site-to-agent",
         actor: "system",
-        outcome: finalRes?.authorityRevoked === true ? "revoked" : (finalRes?.error || finalRes?.ok === false) ? "failed" : "succeeded",
-        reason: finalRes?.authorityRevoked === true
-          ? "authority-changed"
-          : finalRes?.docsFallback
-            ? "docs-fallback"
-            : (finalRes?.error || finalRes?.ok === false) ? "page-error" : "page-result",
+        outcome: verdict.outcome,
+        reason: verdict.reason,
         context: modelContext,
         argDigest,
       }));
@@ -10181,10 +10182,13 @@ const handlers = mergeRouteMaps(
       res = { ok: false, error: "site tool invocation failed" };
     }
     try {
+      // One rule for every site-tool invocation row (0jniu), so the two
+      // dispatch paths cannot drift into labelling a failure differently.
+      const verdict = siteToolInvocationAuditOutcome(res);
       await appendRequiredSiteToolAudit(auditRecordFor(consent, {
         event: "invocation-finished", direction: "site-to-agent", actor: "system",
-        outcome: res?.authorityRevoked === true ? "revoked" : (res?.error || res?.ok === false) ? "failed" : "succeeded",
-        reason: res?.authorityRevoked === true ? "authority-changed" : (res?.error || res?.ok === false) ? "page-error" : "page-result",
+        outcome: verdict.outcome,
+        reason: verdict.reason,
         context, argDigest,
       }));
     } catch { return { ok: false, error: "site_tool_audit_unavailable" }; }

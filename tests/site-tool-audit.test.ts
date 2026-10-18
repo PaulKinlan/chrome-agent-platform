@@ -3,6 +3,7 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import {
   createSiteToolAuditStore,
   digestSiteToolArguments,
+  siteToolInvocationAuditOutcome,
 } from "../extension/lib/site-tool-audit.js";
 
 class FileNode { kind = "file"; bytes = new Uint8Array(); failWrite = false; }
@@ -217,4 +218,33 @@ Deno.test("site tool audit: strict bounded records never retain raw arguments/re
   await assertRejects(() => store.append(getter), Error, "site_tool_audit_record");
   assertEquals(digestSiteToolArguments({ b: 2, a: 1 }), digestSiteToolArguments({ a: 1, b: 2 }));
   assert((await store.list()).records.length === 0);
+});
+
+// ── 0jniu: the audit states what the PAGE's tool did ────────────────────────
+// The old row expression was `finalRes?.ok === false ? "failed" : "succeeded"`,
+// and withSiteDocsFallback turns a tool failure into
+// { ok: true, docsFallback: { toolError } } — so a failed invocation was recorded
+// as "succeeded" (reason: docs-fallback) and the owner could not tell "the
+// page's tool worked" from "the page's tool failed and its docs answered".
+
+Deno.test("0jniu: a failed site tool rescued by the docs fallback is audited as a FAILED invocation", () => {
+  const recovered = { ok: true, result: "answer from the site's docs", docsFallback: { tool: "search_docs", toolError: "denied" } };
+  assertEquals(siteToolInvocationAuditOutcome(recovered), { outcome: "failed", reason: "docs-fallback" });
+  // The rest of the verdict table, so one rule covers every terminal row.
+  assertEquals(siteToolInvocationAuditOutcome({ ok: false, error: "denied" }), { outcome: "failed", reason: "page-error" });
+  assertEquals(siteToolInvocationAuditOutcome({ ok: true, result: 42 }), { outcome: "succeeded", reason: "page-result" });
+  assertEquals(
+    siteToolInvocationAuditOutcome({ ok: false, error: "revoked", authorityRevoked: true }),
+    { outcome: "revoked", reason: "authority-changed" },
+  );
+});
+
+Deno.test("0jniu WIRING: both site-tool dispatch paths derive the row from that one rule", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  assert(sw.includes("siteToolInvocationAuditOutcome(finalRes)"), "the docs-fallback dispatch path uses the shared verdict");
+  assert(sw.includes("siteToolInvocationAuditOutcome(res)"), "the plain dispatch path uses the same verdict");
+  assert(
+    !sw.includes('finalRes?.ok === false) ? "failed" : "succeeded"'),
+    "the old inline label that called a docs rescue a success is gone",
+  );
 });
