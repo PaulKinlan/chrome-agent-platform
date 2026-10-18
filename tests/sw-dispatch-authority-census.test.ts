@@ -28,6 +28,7 @@ import { createFsGrantRoutes } from "../extension/background/routes/fs-grants.js
 import { createAgentWorkspaceRoutes } from "../extension/background/routes/agent-workspace.js";
 import { createAgentBoardRoutes } from "../extension/lib/agent-board.js";
 import { createHooksRoutes } from "../extension/background/routes/hooks.js";
+import { createToolStreamRoutes } from "../extension/background/routes/tool-stream.js";
 import { createMemoryRoutes } from "../extension/background/routes/memory.js";
 import { createAgentScheduleRoutes } from "../extension/background/routes/agent-schedule.js";
 import { createAgentWorkerRoutes } from "../extension/background/routes/agent-worker.js";
@@ -202,6 +203,9 @@ function extractAllRegisteredRoutes(
     // chrome-agent-platform-atxc6: the hooks module takes only approval-gating helpers that cannot change
     // the set of route NAMES, so an empty stub is the honest resolution.
     createHooksRoutes: () => createHooksRoutes({ requireOwnerApproval: async () => ({ ok: true }), payloadFields: () => {} }),
+    // chrome-agent-platform-atxc6 slice 2: the bundled-tool transport routes. The injected owner
+    // derivation and streaming engine cannot change the set of route NAMES, so stubs are honest here.
+    createToolStreamRoutes: () => createToolStreamRoutes({ wasmStreamOwner: () => "owner", runWasmStreamTool: async () => ({}) }),
     createVaultRoutes: () => createVaultRoutes({ vault: { listMasked: () => [] }, requireSettingsSender: () => {} }),
     createEnclaveProxyRoutes: () => createEnclaveProxyRoutes({ vault: { getSecretRaw: () => null } }),
   };
@@ -359,6 +363,7 @@ function assertRouteMap(routeMap: string): void {
     ["routes/enclave-proxy.js", Object.keys(createEnclaveProxyRoutes({ vault: { getSecretRaw: () => null } }))],
     // chrome-agent-platform-atxc6: appended last in mergeRouteMaps, so it is listed last here too.
     ["routes/hooks.js", Object.keys(createHooksRoutes({ requireOwnerApproval: async () => ({ ok: true }), payloadFields: () => {} }))],
+    ["routes/tool-stream.js", Object.keys(createToolStreamRoutes({ wasmStreamOwner: () => "owner", runWasmStreamTool: async () => ({}) }))],
   ]);
   const moduleRows = [...routeMap.matchAll(/^\| `((?:routes\/|extension\/lib\/)[^`]+)`(?: \([^|]+\))? \| (\d+) \| ([^|]+) \|/gm)];
   assertEquals(moduleRows.map((row) => row[1]), [...modules.keys()], "ROUTE_MAP must list all composed route modules once");

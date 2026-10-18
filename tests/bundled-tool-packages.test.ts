@@ -317,7 +317,11 @@ Deno.test("idempotence: the generated inventory release equals the package versi
 Deno.test("posture: Settings preview and run-bound model dispatch share immutable package authority", async () => {
   const sw = await Deno.readTextFile(root("extension/background/service-worker.js"));
   assert(sw.includes("tool.preview.run"), "the legacy Settings preview route exists");
-  assert(sw.includes("tool-stream.run"), "the Settings file-backed route exists");
+  // chrome-agent-platform-atxc6 slice 2: the file-backed transport routes moved to routes/tool-stream.js, so
+  // the pin follows the route to its new home rather than silently passing on an import of the module.
+  const transport = await Deno.readTextFile(root("extension/background/routes/tool-stream.js"));
+  assert(transport.includes('async "tool-stream.run"'), "the Settings file-backed route exists");
+  assert(sw.includes("toolStreamRoutes"), "the worker composes the extracted transport routes");
   assert(sw.includes("dispatchBundledTool: dispatchBundledWasmStream"), "model execution receives the live file-backed dispatch closure");
   // chrome-agent-platform-ecke: this substring is satisfied by the IMPORT at
   // service-worker.js:98 (`import { BUNDLED_INVENTORY } from

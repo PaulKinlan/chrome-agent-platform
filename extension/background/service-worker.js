@@ -49,6 +49,7 @@ import {
   createAgentWorkspaceRoutes,
   createMemoryRoutes,
   createHooksRoutes,
+  createToolStreamRoutes,
   resolveMemory,
   awaitMemoryQuiescence,
   enumerateMemoryStores,
@@ -7450,6 +7451,11 @@ async function enclaveStatusForSettings() {
 // digest payload), not because the handlers need anything else from the worker.
 const hooksRoutes = createHooksRoutes({ requireOwnerApproval, payloadFields });
 
+// chrome-agent-platform-atxc6: the bundled-tool transport routes now live in their own module. The two
+// injected helpers are the worker's owner derivation and the streaming engine it also serves the preview
+// from (they stay in the worker on purpose).
+const toolStreamRoutes = createToolStreamRoutes({ wasmStreamOwner, runWasmStreamTool });
+
 const enclaveStatusRoutes = {
   "enclave.status": async (m, context) => {
     if (context?.principal !== "owner-options") {
@@ -7645,44 +7651,6 @@ const handlers = mergeRouteMaps(
     return await runTableArtifactTool(toolId, args, context, { isRunLive, runJob: runOffscreenTableJob });
   },
 
-  // File-backed bundled-tool transport. Every public route is restricted to
-  // the exact Settings document by wasmStreamOwner(); content moves in caller-
-  // chosen chunks, while execution and results use opaque OPFS references.
-  async "tool-stream.input.create"(_message, context) {
-    const owner = wasmStreamOwner(context);
-    const ref = await createWasmStreamInput({ owner });
-    return { ok: true, ref };
-  },
-  async "tool-stream.input.append"({ ref, base64 } = {}, context) {
-    const owner = wasmStreamOwner(context);
-    return await appendWasmStreamInputBase64({ ref, owner, base64 });
-  },
-  async "tool-stream.input.seal"({ ref } = {}, context) {
-    const owner = wasmStreamOwner(context);
-    return await sealWasmStreamInput({ ref, owner });
-  },
-  async "tool-stream.run"({ toolId, args = [], inputRef } = {}, context) {
-    const owner = wasmStreamOwner(context);
-    return await runWasmStreamTool({
-      toolId,
-      args,
-      inputRef,
-      owner,
-      documentId: context.documentId,
-    });
-  },
-  async "tool-stream.output.read"({ ref, offset = 0, length = 65536 } = {}, context) {
-    const owner = wasmStreamOwner(context);
-    return await readWasmStreamWindow({ ref, owner, offset, length });
-  },
-  async "tool-stream.output.receipt"({ ref } = {}, context) {
-    const owner = wasmStreamOwner(context);
-    return await readWasmStreamReceipt({ ref, owner });
-  },
-  async "tool-stream.remove"({ ref } = {}, context) {
-    const owner = wasmStreamOwner(context);
-    return await removeWasmStream({ ref, owner });
-  },
 
   // ── The "what I did" action ledger (CAP-FB-20260830-ACTIVITY-LEDGER-UNDO-01) ──
   // actions.list returns the most-recent reversible-first ledger rows the hub +
@@ -13148,35 +13116,6 @@ const handlers = mergeRouteMaps(
     return { ok: true };
   },
 
-  // ---- tool streaming platform (CAP-FB-20260822-WASM-TOOL-PLATFORM-01) ----
-  // Input create/append/seal, execution, reads, receipts, and removal use the
-  // single owner-derived lifecycle routes above. These platform-only bridges
-  // must not shadow that authority with caller-supplied owner strings.
-  async "tool-stream.stage-attachment"({ attachment } = {}, routeContext) {
-    const owner = wasmStreamOwner(routeContext);
-    const res = await stageAttachmentAsWasmStream(attachment, { owner });
-    return { ok: true, inputRef: res.inputRef, bytes: res.bytes, name: res.name };
-  },
-  async "tool-stream.stage-asset"({ assetId, origin = "master" } = {}, routeContext) {
-    const owner = wasmStreamOwner(routeContext);
-    const assetRes = await getAsset(origin, assetId);
-    if (!assetRes?.ok || !assetRes.asset) return { ok: false, error: "asset not found" };
-    const res = await stageAssetAsWasmStream(assetRes.asset, { owner });
-    return { ok: true, inputRef: res.inputRef, bytes: res.bytes, name: res.name };
-  },
-  async "tool-stream.promote-output"({ outputRef, name, assetType = "text", origin = "master", force = false } = {}, routeContext) {
-    const owner = wasmStreamOwner(routeContext);
-    return await promoteWasmStreamToArtifact(outputRef, { origin, name, type: assetType, owner, force });
-  },
-  async "tool-stream.discard"({ ref } = {}, routeContext) {
-    const owner = wasmStreamOwner(routeContext);
-    await discardWasmStream({ ref, owner });
-    return { ok: true };
-  },
-  async "tool-stream.tabular-transform"({ inputRef, operations, outputFormat, delimiter } = {}, routeContext) {
-    const owner = wasmStreamOwner(routeContext);
-    return await streamTabularTransform(inputRef, { operations, outputFormat, delimiter, owner });
-  },
   async "observability.setVerbosity"({ level } = {}) {
     try {
       await setLogVerbosity(level);
@@ -13256,6 +13195,7 @@ const handlers = mergeRouteMaps(
   },
   },
   hooksRoutes,
+  toolStreamRoutes,
 );
 
 async function resumeInterruptedRuns() {
