@@ -17,7 +17,10 @@ export function registerEmscriptenBinaryStagingHost(deps = {}) {
       sendResponse(unknown("emscripten_stage_sender"));
       return false;
     }
-    const load = deps.load ?? (() => import("./emscripten-host-stage.js"));
+    // Resolve a fixed extension URL at runtime: the Store bundle does not
+    // support code splitting and otherwise eagerly inlines the entire native
+    // runner into offscreen.bundle.js (343 KB > its 250 KB budget).
+    const load = deps.load ?? (() => import(runtime.getURL("lib/emscripten-host-stage.js")));
     Promise.resolve().then(load)
       .then(({ executeStagedEmscriptenBinaryRequest }) =>
         (deps.execute ?? executeStagedEmscriptenBinaryRequest)(message, { ...deps, runtime }))
