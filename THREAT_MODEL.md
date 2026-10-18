@@ -385,7 +385,7 @@ consequences are carried by the matching register entry where one exists.
   model-authored `promptTemplate` can no longer reach the instruction position either: the
   model-callable tool carries no template field (`extension/lib/management-tools.js:459-463`,
   its call at `:466`), and the route forces a model principal's template to empty
-  (`extension/background/service-worker.js#hooks.subscribe`, the route's owner gate) — which
+  (`extension/background/routes/hooks.js#hooks.subscribe`, the route's owner gate; extracted from the monolith by chrome-agent-platform-atxc6) — which
   matters because `dispatchHook` (`extension/background/service-worker.js#dispatchHook`)
   executes that template verbatim as the recurring run's task.
 - **Falsifiable, not prose:** `tests/hook-subscribe-approval.test.ts` drives the REAL route

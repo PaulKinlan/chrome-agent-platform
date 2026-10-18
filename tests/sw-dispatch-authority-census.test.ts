@@ -27,6 +27,7 @@ import { createSchedulerRoutes } from "../extension/background/routes/scheduler.
 import { createFsGrantRoutes } from "../extension/background/routes/fs-grants.js";
 import { createAgentWorkspaceRoutes } from "../extension/background/routes/agent-workspace.js";
 import { createAgentBoardRoutes } from "../extension/lib/agent-board.js";
+import { createHooksRoutes } from "../extension/background/routes/hooks.js";
 import { createMemoryRoutes } from "../extension/background/routes/memory.js";
 import { createAgentScheduleRoutes } from "../extension/background/routes/agent-schedule.js";
 import { createAgentWorkerRoutes } from "../extension/background/routes/agent-worker.js";
@@ -198,6 +199,9 @@ function extractAllRegisteredRoutes(
   // each factory's own argument validation — the keys come from the real returned
   // object, never from a parallel hand-kept list.
   const SW_ROUTE_FACTORY_STUBS: Record<string, () => object> = {
+    // chrome-agent-platform-atxc6: the hooks module takes only approval-gating helpers that cannot change
+    // the set of route NAMES, so an empty stub is the honest resolution.
+    createHooksRoutes: () => createHooksRoutes({ requireOwnerApproval: async () => ({ ok: true }), payloadFields: () => {} }),
     createVaultRoutes: () => createVaultRoutes({ vault: { listMasked: () => [] }, requireSettingsSender: () => {} }),
     createEnclaveProxyRoutes: () => createEnclaveProxyRoutes({ vault: { getSecretRaw: () => null } }),
   };
@@ -241,6 +245,9 @@ function extractAllRegisteredRoutes(
     } else if (arg.type === "CallExpression") {
       if (arg.callee.name === "createAgentWorkspaceRoutes") for (const k of Object.keys(createAgentWorkspaceRoutes())) routes.add(k);
       else if (arg.callee.name === "createMemoryRoutes") for (const k of Object.keys(createMemoryRoutes())) routes.add(k);
+      // chrome-agent-platform-atxc6: the system-hooks domain module. Its factory takes two injected
+      // service-worker helpers that only gate dispatch, never the route NAMES, so an empty stub is the
+      // honest resolution here — and the census still fails if the module registers an unclassified route.
       else if (arg.callee.name === "createAgentWorkerRoutes") for (const k of Object.keys(createAgentWorkerRoutes({}))) routes.add(k);
       else if (SW_ROUTE_FACTORY_STUBS[arg.callee.name]) for (const k of Object.keys(SW_ROUTE_FACTORY_STUBS[arg.callee.name]())) routes.add(k);
       else {
@@ -350,6 +357,8 @@ function assertRouteMap(routeMap: string): void {
     ["extension/lib/agent-board.js", Object.keys(createAgentBoardRoutes({}).routes)],
     ["routes/vault.js", Object.keys(createVaultRoutes({ vault: { listMasked: () => [] }, requireSettingsSender: () => {}, storageArea: null }))],
     ["routes/enclave-proxy.js", Object.keys(createEnclaveProxyRoutes({ vault: { getSecretRaw: () => null } }))],
+    // chrome-agent-platform-atxc6: appended last in mergeRouteMaps, so it is listed last here too.
+    ["routes/hooks.js", Object.keys(createHooksRoutes({ requireOwnerApproval: async () => ({ ok: true }), payloadFields: () => {} }))],
   ]);
   const moduleRows = [...routeMap.matchAll(/^\| `((?:routes\/|extension\/lib\/)[^`]+)`(?: \([^|]+\))? \| (\d+) \| ([^|]+) \|/gm)];
   assertEquals(moduleRows.map((row) => row[1]), [...modules.keys()], "ROUTE_MAP must list all composed route modules once");
@@ -764,6 +773,7 @@ function approvalFunction(ast: any, name: string): any {
 }
 
 const APPROVAL_MODULES = {
+  hooksRoutes: "extension/background/routes/hooks.js",
   schedulerRoutes: "extension/background/routes/scheduler.js",
   fsGrantRoutes: "extension/background/routes/fs-grants.js",
   agentScheduleRoutes: "extension/background/routes/agent-schedule.js",

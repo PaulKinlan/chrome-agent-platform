@@ -48,6 +48,7 @@ import {
   createVaultRoutes,
   createAgentWorkspaceRoutes,
   createMemoryRoutes,
+  createHooksRoutes,
   resolveMemory,
   awaitMemoryQuiescence,
   enumerateMemoryStores,
@@ -7444,6 +7445,11 @@ async function enclaveStatusForSettings() {
   }));
   return { enabled, services, ledger: enclaveLedger.list() };
 }
+// chrome-agent-platform-atxc6: the system-hooks domain now lives in its own module. Two service-worker
+// helpers are injected because they are approval-gating machinery (the ledger seam and the canonical
+// digest payload), not because the handlers need anything else from the worker.
+const hooksRoutes = createHooksRoutes({ requireOwnerApproval, payloadFields });
+
 const enclaveStatusRoutes = {
   "enclave.status": async (m, context) => {
     if (context?.principal !== "owner-options") {
@@ -12196,74 +12202,6 @@ const handlers = mergeRouteMaps(
     }
   },
 
-  // ---- system hooks (routes) ----
-  async "hooks.status"() {
-    // The Settings Hooks panel: every hook + denied state + subscribers.
-    return { hooks: await hookStatus() };
-  },
-  // OWNER-ONLY: the deny-list is authoritative and can only be changed from the
-  // Settings UI. It is deliberately NOT exposed to the agent toolset (no
-  // `deny_hook` tool) — the agent can never un-deny a hook it was refused.
-  async "hooks.deny"({ hookId, denied }, context) {
-    if (context?.principal !== "owner-options") return { ok: false, error: "hook policy is owned by Settings" };
-    if (!getHook(hookId)) return { ok: false, error: `unknown hook ${hookId}` };
-    return await setHookDeny(hookId, denied !== false);
-  },
-  async "hooks.subscribe"({ hookId, skillId, recipeId, promptTemplate }, context) {
-    const resolvedSkillId = skillId !== undefined ? skillId : recipeId;
-    // chrome-agent-platform-51cd: the MODEL path may not author a template. Authorship belongs to the
-    // owner; there is no owner subscribe UI today, so in practice a model-authored template is simply
-    // unreachable, and the dispatch fallback (skill prompt + the fenced payload) is what runs instead
-    // when the stored template is empty. Belt-and-braces on purpose: even if a future route forgets its
-    // gate, an empty template cannot put model text into the instruction position.
-    const authoredTemplate = context?.principal === "model" ? "" : promptTemplate;
-    return await subscribeHook(
-      { hookId, skillId: resolvedSkillId, recipeId: resolvedSkillId, promptTemplate: authoredTemplate },
-      {
-        gate: async ({ existing, candidate }) => {
-          let payload;
-          try {
-            // `existing` is NULL on the create path (51cd made the gate unconditional), and the digest must
-            // be STABLE across create and retry - an approved retry only matches when the payload it re-sends
-            // is identical, so the absent-row form gets an explicit, fixed marker rather than throwing.
-            payload = canonicalRecord(
-              canonicalField("request", payloadFields([["hookId", candidate.hookId], ["recipeId", candidate.skillId ?? candidate.recipeId], ["promptTemplate", candidate.promptTemplate]])),
-              existing
-                ? canonicalField("existing", payloadFields([["hookId", existing.hookId], ["recipeId", existing.skillId ?? existing.recipeId], ["promptTemplate", existing.promptTemplate], ["enabled", existing.enabled], ["at", existing.at]]))
-                : canonicalField("existing", payloadFields([["present", "false"]])),
-            );
-          }
-          catch { return { ok: false, error: "hook subscription payload is not approvable" }; }
-          return await requireOwnerApproval(
-            context,
-            "hooks.subscribe",
-            canonicalOperationTarget("hook", candidate),
-            payload,
-          );
-        },
-      },
-    );
-  },
-  async "hooks.unsubscribe"({ hookId, skillId, recipeId }, context) {
-    const resolvedSkillId = skillId !== undefined ? skillId : recipeId;
-    return await unsubscribeHook(
-      { hookId, skillId: resolvedSkillId, recipeId: resolvedSkillId },
-      {
-        gateBeforeDelete: async ({ existing }) => {
-          let payload;
-          try { payload = payloadFields([["hookId", existing.hookId], ["recipeId", existing.skillId ?? existing.recipeId], ["promptTemplate", existing.promptTemplate], ["enabled", existing.enabled], ["at", existing.at]]); }
-          catch { return { ok: false, error: "hook removal payload is not approvable" }; }
-          return await requireOwnerApproval(
-            context,
-            "hooks.unsubscribe",
-            canonicalOperationTarget("hook", existing),
-            payload,
-          );
-        },
-      },
-    );
-  },
-
   async "browser-control.get"() {
     const s = await kvGet("cap:browserControlGrant");
     const grant = s["cap:browserControlGrant"];
@@ -13317,6 +13255,7 @@ const handlers = mergeRouteMaps(
     return await settingsSessions.close({ documentId });
   },
   },
+  hooksRoutes,
 );
 
 async function resumeInterruptedRuns() {

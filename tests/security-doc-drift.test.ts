@@ -134,9 +134,13 @@ function sourceAnchorLines(ast: unknown, symbol: string): number[] {
 }
 
 function assertLiveRouteCitations(model: string, pure: string, worker: string, register = read("docs/RISK-REGISTER.md")): void {
+  // chrome-agent-platform-atxc6: extracted route modules are anchorable sources too — a citation must
+  // resolve to the executable member wherever it now lives, and an unregistered source fails closed.
+  const hooks = read("extension/background/routes/hooks.js");
   const sources = new Map([
     ["extension/lib/pure.js", pure],
     ["extension/background/service-worker.js", worker],
+    ["extension/background/routes/hooks.js", hooks],
   ]);
   const parsed = new Map<string, unknown>();
   const check = (piece: string, path: string, symbol: string) => {
@@ -160,7 +164,9 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string, r
   const pythonFetch = swRoute("python.fetch");
   const namedTools = swRoute("named-agent.set-tools");
   const exportFolder = swRoute("asset.export-to-folder");
-  const hooksSubscribe = swRoute("hooks.subscribe");
+  // chrome-agent-platform-atxc6: hooks.* moved to extension/background/routes/hooks.js, so its anchor is
+  // resolved in THAT module — the citation still points at the executable member, just in its new home.
+  const hooksSubscribe = ["extension/background/routes/hooks.js", "hooks.subscribe"];
   const backgroundSet = swRoute("background-agent.set");
   const sections: Array<[string, string[][]]> = [
     [section(model, "## 1. System Overview", "## 2. Trust Boundaries"), [listener]],

@@ -115,12 +115,24 @@ async function loadModelRoute(approvalStore) {
     .flatMap((n) => n.declarations ?? [])
     .find((n) => n.id.name === "handlers");
   assert(handlers, "the SW `handlers` route map must exist");
-  const route = handlers.init.arguments
-    .flatMap((n) => n.properties ?? [])
-    .find((n) => n.key?.value === "hooks.subscribe");
+  // chrome-agent-platform-atxc6: hooks.* moved to extension/background/routes/hooks.js, so the member is
+  // selected from THAT module's returned route map. The handler text is still the production text (the
+  // module is a move, not a rewrite), which is what this suite exercises.
+  const hooksSource = await Deno.readTextFile(
+    new URL("../extension/background/routes/hooks.js", import.meta.url),
+  );
+  const hooksAst = parse(hooksSource, { ecmaVersion: "latest", sourceType: "module" });
+  const factory = hooksAst.body
+    .map((n) => (n.type === "ExportNamedDeclaration" ? n.declaration : n))
+    .find((n) => n?.type === "FunctionDeclaration" && n.id.name === "createHooksRoutes");
+  assert(factory, "the hooks route factory must exist");
+  const returned = factory.body.body.find((n) => n.type === "ReturnStatement")?.argument;
+  // `return Object.freeze({ ... })`: the route map is the freeze call's argument.
+  const routeObject = returned?.type === "CallExpression" ? returned.arguments?.[0] : returned;
+  const route = routeObject?.properties?.find((n) => n.key?.value === "hooks.subscribe");
   assert(route, "the actual hooks.subscribe dispatch member must exist");
   const modelDispatch = runInNewContext(
-    `${functions.join("\n")}\nconst handlers = ({${source.slice(route.start, route.end)}}); dispatchRoute;`,
+    `${functions.join("\n")}\nconst handlers = ({${hooksSource.slice(route.start, route.end)}}); dispatchRoute;`,
     {
       ...approvals,
       ...(await hooks()),
