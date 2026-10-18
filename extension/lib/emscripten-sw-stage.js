@@ -165,6 +165,11 @@ export async function stageTrustedEmscriptenBinary(raw, {
       ? cause.code : "emscripten_stage_unavailable";
     result = unknown(code);
     if (code === "emscripten_run_not_live") retentionReason = "run_not_live";
+    else if (code === "emscripten_staging_evidence_mismatch" ||
+        code === "emscripten_staging_bytes_mismatch") retentionReason = "evidence_mismatch";
+    else if (code.startsWith("emscripten_staging_") || code.startsWith("wasm_stream_")) {
+      retentionReason = "evidence_unavailable";
+    }
   } finally {
     if (outputRef && swIntent) {
       try { await swIntent.recordRetained({ identity, inputRef: raw.inputRef }, retentionReason); }

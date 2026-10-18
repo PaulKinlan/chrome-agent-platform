@@ -155,6 +155,36 @@ Deno.test("x9r8k.2: even a forged positive host result with CLOSED proof is refu
   assertEquals(f.deletions, []);
 });
 
+Deno.test("jwosv: a contradictory host proof retains an evidence-mismatch marker", async () => {
+  const f = await setup();
+  const send = f.deps.sendHost;
+  f.deps.sendHost = async (message) => {
+    const response = await send(message);
+    return { ...response, hostProof: { ...response.hostProof, evidenceState: "unknown" } };
+  };
+  const result = await stageTrustedEmscriptenBinary(request(f.inputRef), f.deps);
+  assertEquals(result, { ok: false, phase: "unknown", error: "emscripten_staging_evidence_mismatch" });
+  const intents = await f.root.getDirectoryHandle("emscripten-sw-intent-v1");
+  const [dir] = [...intents.nodes.values()];
+  const marker = JSON.parse(await (await (await dir.getFileHandle("retained.json")).getFile()).text());
+  assertEquals(marker.state, "retained-not-deleted");
+  assertEquals(marker.reason, "evidence_mismatch");
+  assertEquals(f.deletions, []);
+});
+
+Deno.test("jwosv: an unreadable host ledger retains an evidence-unavailable marker", async () => {
+  const f = await setup();
+  f.deps.evidence = { read: async () => { throw new Error("missing host ledger"); } };
+  const result = await stageTrustedEmscriptenBinary(request(f.inputRef), f.deps);
+  assertEquals(result, { ok: false, phase: "unknown", error: "emscripten_staging_evidence_unavailable" });
+  const intents = await f.root.getDirectoryHandle("emscripten-sw-intent-v1");
+  const [dir] = [...intents.nodes.values()];
+  const marker = JSON.parse(await (await (await dir.getFileHandle("retained.json")).getFile()).text());
+  assertEquals(marker.state, "retained-not-deleted");
+  assertEquals(marker.reason, "evidence_unavailable");
+  assertEquals(f.deletions, []);
+});
+
 Deno.test("x9r8k.2: SW-owned capability has no extension-page message ingress", async () => {
   const f = await setup();
   const invoke = bindTrustedSwStaging(f.deps);

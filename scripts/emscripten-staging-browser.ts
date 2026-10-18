@@ -30,6 +30,12 @@ async function asset(path: string, bytes: Uint8Array) {
   return { path: `extension/${path}`, sha256: await sha256(bytes), size: bytes.length };
 }
 try {
+  // The fixture instruments the minified STORE binding, not the default
+  // developer bundle. Refuse that target before copying or launching Chrome.
+  let target: string | undefined;
+  try { target = JSON.parse(await readFile(join(source, "dist/dist.complete"), "utf8")).target; }
+  catch { /* A missing or invalid marker is not a store build. */ }
+  assert(target === "store", "store build required: run npm run build:production before this browser harness");
   // Follow the dist symlink INTO this temporary copy; NEVER rewrite a shared
   // build artifact in the worktree when installing the fixture hooks below.
   await cp(source, ext, { recursive: true, dereference: true });

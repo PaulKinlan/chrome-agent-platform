@@ -11,7 +11,8 @@ const NAME = /^[A-Za-z0-9_.-]{1,128}$/u;
 const IDENTITY_KEYS = ["runId", "agentId", "outputRef", "generation", "packageId", "graphDigest", "operationId"];
 const RECORD_KEYS = ["version", "state", "identity", "inputRef", "stagingOnly", "nonpromotable", "issuedAt", "reconcileBy"];
 const RETAINED_KEYS = ["version", "type", "state", "identity", "inputRef", "reason", "retainedAt", "reconcileBy"];
-const RETENTION_REASONS = ["output_create_failed", "run_not_live", "host_unavailable", "termination_unproved"];
+const RETENTION_REASONS = ["output_create_failed", "run_not_live", "host_unavailable",
+  "evidence_mismatch", "evidence_unavailable", "termination_unproved"];
 export const EMSCRIPTEN_SW_RECONCILE_MS = 24 * 60 * 60 * 1000;
 const activeByStorage = new WeakMap();
 

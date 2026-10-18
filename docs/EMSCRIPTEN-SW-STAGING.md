@@ -35,6 +35,11 @@ literal `onRetainedFailure: intent.recordRetained` is incorrect and fails to
 write a marker. A post-intent creation failure retains any partial directory
 and writes a typed
 `retained-not-deleted` marker with that bounded reconciliation deadline.
+After host work, the marker distinguishes `host_unavailable` from
+`evidence_mismatch` (contradictory host proof or output bytes),
+`evidence_unavailable` (independent verification could not read its inputs),
+`run_not_live`, and `termination_unproved`. These are bounded audit reasons,
+not permission to seal, publish or delete.
 A missing marker writer refuses before output creation. If the marker append
 itself fails, creation returns `wasm_stream_retention_unavailable`, leaves the
 partial directory and the pre-existing bounded reservation intact, and no
@@ -53,3 +58,9 @@ sealed output; it must not be called with a CLOSED alias or a fabricated
 same-origin Worker admission (197jd) and the independent literal termination
 witness (uz7e3). Browser staging evidence, when recorded, proves no more than
 UNKNOWN; `Worker.terminate()` and producer-end do not prove termination.
+The on-demand browser acceptance harness requires a minified store build:
+`npm run build:production && deno run -A scripts/emscripten-staging-browser.ts`.
+It refuses a developer or missing build with that instruction before Chrome
+launch. The harness seeds a synthetic live run and admitted registry in a
+**temporary copy** of the built SW; it does not prove unmodified production
+admission or confer any binary publication authority.
