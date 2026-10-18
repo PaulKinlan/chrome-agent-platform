@@ -17,6 +17,7 @@
 // ENOBUFS`).
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { parse as parseJs } from "npm:acorn";
 import { spawn, spawnSync } from "node:child_process";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -259,13 +260,41 @@ Deno.test("nabuw / o3i89: buffer overflow triggers reachable capacity errors wit
     await Deno.remove(scratch, { recursive: true }).catch(() => {});
   }
 
-  // 7. package-archive source code does not use unbounded maxBuffer (05x0v, o3vrq, wh98h, stvca).
-  // Comments (line, block, trailing) are allowed to name options in prose; executable code is strictly verified.
+  // 7. package-archive source code does not use unbounded maxBuffer (05x0v, o3vrq, wh98h, stvca, 8gnu0).
+  // Uses AST parsing so comments, string literals, quoted keys, and default parameters are strictly evaluated.
   const packageArchiveSrc = await Deno.readTextFile(new URL("../scripts/package-archive.mjs", import.meta.url));
-  const packageArchiveCode = stripComments(packageArchiveSrc);
-  assert(
-    !/maxBuffer\s*:\s*(?!\s*(?:maxBuffer\s*[,}]|MAX_ARCHIVE_BUFFER_BYTES\s*[,}]))/.test(packageArchiveCode),
-    "scripts/package-archive.mjs must only bind maxBuffer to the scoped parameter or MAX_ARCHIVE_BUFFER_BYTES",
-  );
+  const ast = parseJs(packageArchiveSrc, { ecmaVersion: "latest", sourceType: "module" });
+  function walk(node: any) {
+    if (!node || typeof node !== "object") return;
+    if (node.type === "Property") {
+      const keyName = node.key.type === "Identifier" ? node.key.name : node.key.value;
+      if (keyName === "maxBuffer") {
+        if (node.value.type === "Identifier") {
+          assert(
+            ["maxBuffer", "MAX_ARCHIVE_BUFFER_BYTES"].includes(node.value.name),
+            `scripts/package-archive.mjs Property maxBuffer must bind to maxBuffer or MAX_ARCHIVE_BUFFER_BYTES, got identifier ${node.value.name}`,
+          );
+        } else if (node.value.type === "AssignmentPattern") {
+          assert(
+            node.value.right.type === "Identifier" && node.value.right.name === "MAX_ARCHIVE_BUFFER_BYTES",
+            "scripts/package-archive.mjs Property maxBuffer default must bind to MAX_ARCHIVE_BUFFER_BYTES",
+          );
+        } else {
+          assert(
+            false,
+            `scripts/package-archive.mjs Property maxBuffer must bind to maxBuffer or MAX_ARCHIVE_BUFFER_BYTES, got ${node.value.type}`,
+          );
+        }
+      }
+    }
+    for (const key of Object.keys(node)) {
+      if (Array.isArray(node[key])) {
+        for (const child of node[key]) walk(child);
+      } else if (node[key] && typeof node[key] === "object") {
+        walk(node[key]);
+      }
+    }
+  }
+  walk(ast);
 });
 
