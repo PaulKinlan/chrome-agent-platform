@@ -11613,13 +11613,26 @@ const handlers = mergeRouteMaps(
     // slug is neither a built-in/background skill nor a custom skill — the
     // agent is gone, the alarm must go too. Cancels every orphan and reports
     // exactly what was cancelled.
+    //
+    // BOOT-RECOVERY BARRIER (chrome-agent-platform-rtir6): the worker launches
+    // recoverOnBoot() FIRE-AND-FORGET at module eval, and it is that pass which runs the
+    // one-time recipe->skill rekey (migrateSkillIdentities) and the alarm reconcile. A sweep
+    // dispatched inside that window lists names the rekey is still about to change, spends its
+    // cancels against pre-migration state, and can report them as failures that only the next
+    // sweep repairs. Await the memoized recovery first, so the sweep always decides on settled
+    // state.
+    //
+    // A recovery FAILURE must not fail the sweep: it is reported (`bootRecovery: "failed"`) and
+    // the fail-closed registry checks below still decide — they cancel nothing on anything
+    // unreadable, which is the safe direction either way.
+    const bootRecovery = await recoverOnBoot().then(() => "ready").catch(() => "failed");
     const tasks = await listScheduledTasks().catch(() => null);
     const custom = await getCustomSkills().catch(() => null);
     // FAIL CLOSED (review P1-a): an unreadable registry means a live custom
     // skill is INDISTINGUISHABLE from an orphan — refuse to cancel anything
     // rather than risk cancelling a live agent's schedule.
     if (!Array.isArray(tasks) || !Array.isArray(custom)) {
-      return { ok: false, error: "the skill/schedule registry could not be read — refusing to cancel anything", cancelled: [], count: 0 };
+      return { ok: false, bootRecovery, error: "the skill/schedule registry could not be read — refusing to cancel anything", cancelled: [], count: 0 };
     }
     const known = new Set([
       ...backgroundSkills().flatMap((r) => [`skill:${r.id}`, `recipe:${r.id}`]),
@@ -11637,7 +11650,7 @@ const handlers = mergeRouteMaps(
       else failed.push(t.name);
     }
     if (cancelled.length) broadcastRegistryChanged();
-    return { ok: true, cancelled, failed, count: cancelled.length };
+    return { ok: true, bootRecovery, cancelled, failed, count: cancelled.length };
   },
   async "task.list"() {
     // Owner-visible scheduled-task list (active + quarantined) so a quarantined

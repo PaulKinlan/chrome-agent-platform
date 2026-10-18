@@ -139,6 +139,12 @@ Deno.test("schedule.cancelOrphans ROUTE: an unreadable recipe registry refuses t
   // 2. Healthy registry: only the true orphans are cancelled, each CONFIRMED.
   const clean = await dispatch({ type: "schedule.cancelOrphans" });
   assertEquals(clean?.ok, true);
+  // rtir6: the sweep decides on SETTLED boot state. `bootRecovery: "ready"` is only reachable
+  // because the route awaits the memoized recoverOnBoot() (which runs the one-time recipe->skill
+  // rekey and the alarm reconcile) BEFORE it lists the registry; without that barrier a sweep
+  // dispatched in the boot window sees pre-migration names and reports failures the next sweep
+  // repairs. "failed" would mean recovery threw and the sweep fell back to the fail-closed checks.
+  assertEquals(clean?.bootRecovery, "ready", "the orphan sweep waits for boot recovery before deciding");
   assertEquals([...(clean?.cancelled ?? [])].sort(), ["recipe:ghost", "recipe:ghost2"],
     "only schedules whose recipe exists nowhere are cancelled");
   const afterClean = await dispatch({ type: "kv.get", keys: ["cap:scheduledTasks"] });
@@ -158,6 +164,7 @@ Deno.test("schedule.cancelOrphans ROUTE: an unreadable recipe registry refuses t
   const refused = await dispatch({ type: "schedule.cancelOrphans" });
   failMasterReads = false;
   assertEquals(refused?.ok, false, "an unreadable registry is an honest refusal, never a cleanup");
+  assertEquals(refused?.bootRecovery, "ready", "the barrier is reported on the refusal path too");
   assertEquals(refused?.count, 0);
   assert(String(refused?.error ?? "").length > 0, "the refusal carries a reason");
   const afterRefusal = await dispatch({ type: "kv.get", keys: ["cap:scheduledTasks"] });
