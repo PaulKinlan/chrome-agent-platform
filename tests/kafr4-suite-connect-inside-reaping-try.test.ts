@@ -112,25 +112,24 @@ function tryBlocks(rawSource: string): Block[] {
 }
 
 /**
- * EVERY real (non-comment) `openCdp(` CALL in the source, in order (d36q4).
+ * EVERY real (non-comment, non-string) `openCdp(` CALL in the source, in order (d36q4, 7g1fp).
  *
- * The first version returned only the first call, and the reviewer showed what that misses: a suite with
- * two launches where the SECOND connect sits outside its reaping try was admitted, because the guard had
- * stopped looking after the first one. A guard that judges one call site per file is a guard for suites
- * that happen to have one; the rule is per CONNECT, so every connect is judged.
+ * The first version returned only the first call, so a suite with two launches where the SECOND connect
+ * sat outside its reaping try was admitted. Walking every call site fixed that and introduced the mirror
+ * error the reviewer then found: detection skipped `//` lines but not `/* ... *​/` blocks, so a connect
+ * MENTIONED in a doc comment was judged as a real one and a valid suite was falsely refused.
+ *
+ * So the scan runs over `codeOnly`, which blanks comments AND string bodies in place (same length), and
+ * the indices it returns still address the raw source. A call spelled inside a string or a comment is not
+ * a call; the one shape this cannot see is a call inside a template interpolation, which no suite in this
+ * repo uses and which would have to be spelled `\`${${CONNECT}(x)}\``.
  */
 function cdpCallIndices(source: string): number[] {
+  const code = codeOnly(source);
   const re = new RegExp(`\\b${CONNECT}\\s*\\(`, "g");
   const found: number[] = [];
   let match: RegExpExecArray | null;
-  while ((match = re.exec(source)) !== null) {
-    const lineStart = source.lastIndexOf("\n", match.index) + 1;
-    const prefix = source.slice(lineStart, match.index);
-    const inLineComment = prefix.includes("//");
-    const before = source.slice(Math.max(0, match.index - 2), match.index);
-    if (inLineComment || before === "//") continue;
-    found.push(match.index);
-  }
+  while ((match = re.exec(code)) !== null) found.push(match.index);
   return found;
 }
 
@@ -255,6 +254,28 @@ Deno.test("kafr4 falsification: the PRE-FIX shape (connect before the try) reds 
   `;
   assertEquals(connectInsideReapingTry(fixed, cdpCallIndices(fixed)[0] ?? -1), true,
     "and the fixed shape is admitted, so the guard is not simply refusing everything");
+});
+
+Deno.test("7g1fp: a connect MENTIONED in a block comment or a string is not a connect", () => {
+  const safe = `
+    const first = await ${LAUNCH}({});
+    try {
+      const cdp = await ${CONNECT}(first.wsUrl);
+      /**
+       * Historical shape, do not use: this used to be
+       *   const cdp2 = await ${CONNECT}(second.wsUrl);
+       * before the reaping try.
+       */
+      const note = "call ${CONNECT}(fake.wsUrl) only inside the try";
+      await cdp.eval(note);
+    } finally {
+      await reapLeaderAndSettle(first.proc);
+    }
+  `;
+  const calls = cdpCallIndices(safe);
+  assertEquals(calls.length, 1, "only the real call is a call site - not the block comment and not the string");
+  assertEquals(connectInsideReapingTry(safe, calls[0]), true,
+    "and the file is admitted, which the //-only filter got wrong in the reviewer's reproduction");
 });
 
 Deno.test("d36q4 falsification: a SECOND connect outside its reaping try is not hidden by a good first one", () => {
