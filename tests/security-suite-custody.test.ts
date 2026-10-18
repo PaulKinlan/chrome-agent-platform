@@ -305,6 +305,16 @@ Deno.test("security-suite custody: production mode is immutable and fake runners
     "self-test-only override refused in production mode",
   );
 
+  await assertRejects(
+    () => resolveSupervisorConfig({
+      env: { HOME: Deno.env.get("HOME") ?? "", CAP_SECURITY_TEST_SIGNAL: "SIGKILL" },
+      repoRoot: ROOT,
+      expectedFixtureHash: "unused-in-production",
+    }),
+    Error,
+    "self-test-only override refused in production mode",
+  );
+
   for (const name of ["CAP_SECURITY_TEST_FORCE_OBSERVATION_UNREADABLE", "CAP_SECURITY_TEST_FORCE_RESIDUE_UNREADABLE"]) {
     await assertRejects(() => resolveSupervisorConfig({
       env: { HOME: Deno.env.get("HOME") ?? "", [name]: "1" },
