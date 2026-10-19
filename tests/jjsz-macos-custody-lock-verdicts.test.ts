@@ -2,7 +2,7 @@
 //
 // That branch is the ONLY thing standing between a stray process holding a descriptor on some other
 // file and the supervisor's custody check, and it could not run on Linux, so none of its verdicts had a
-// test. It now takes optional seams (`hasProc`, `fstat`, `statPath`, `probe`; defaults = the previous
+// test. It now takes optional seams (`hasProc`, `statFd`, `statPath`, `probe`; defaults = the previous
 // behaviour), which pin the verdict table on EVERY platform:
 //   - the descriptor is missing                      -> refused, nothing else consulted
 //   - the lock path cannot be read                   -> refused, the probe is NOT called
@@ -29,17 +29,17 @@ type Stat = { dev: number | bigint; ino: number | bigint };
 
 function seams(
   over: {
-    fstat?: (fd: number) => Stat;
+    statFd?: (fd: number) => Stat;
     statPath?: (path: string) => Stat;
     probe?: (path: string) => Promise<string | null>;
   } = {},
 ) {
-  const calls = { fstat: [] as number[], statPath: [] as string[], probe: [] as string[] };
+  const calls = { statFd: [] as number[], statPath: [] as string[], probe: [] as string[] };
   const deps = {
     hasProc: false,
-    fstat: (fd: number): Stat => {
-      calls.fstat.push(fd);
-      return (over.fstat ?? (() => ({ dev: 7, ino: 42 })))(fd);
+    statFd: (fd: number): Stat => {
+      calls.statFd.push(fd);
+      return (over.statFd ?? (() => ({ dev: 7, ino: 42 })))(fd);
     },
     statPath: (path: string): Stat => {
       calls.statPath.push(path);
@@ -77,7 +77,7 @@ async function cleanupSteps(
 }
 
 Deno.test("jjsz F3: a missing descriptor is refused and nothing else is consulted", async () => {
-  const { calls, deps } = seams({ fstat: failing("EBADF") });
+  const { calls, deps } = seams({ statFd: failing("EBADF") });
   assertEquals(await verifyInheritedCanonicalLock(9, deps), MISSING);
   assertEquals(calls.statPath, [], "the lock path must not be read once the descriptor is missing");
   assertEquals(calls.probe, [], "the lock must not be probed once the descriptor is missing");
@@ -99,7 +99,7 @@ Deno.test("jjsz F3: a descriptor on a DIFFERENT file is refused and the probe is
   ];
   for (const [name, fdStat, lockStat] of differs) {
     await t.step(name, async () => {
-      const { calls, deps } = seams({ fstat: () => fdStat, statPath: () => lockStat });
+      const { calls, deps } = seams({ statFd: () => fdStat, statPath: () => lockStat });
       assertEquals(
         await verifyInheritedCanonicalLock(9, deps),
         WRONG_TARGET,
@@ -113,13 +113,13 @@ Deno.test("jjsz F3: a descriptor on a DIFFERENT file is refused and the probe is
 Deno.test("jjsz F3: the same file with the lock HELD is verified, probing exactly the canonical path", async () => {
   const { calls, deps } = seams({ probe: () => Promise.resolve(null) });
   assertEquals(await verifyInheritedCanonicalLock(11, deps), null);
-  assertEquals(calls.fstat, [11], "the descriptor under test is the one asked about");
+  assertEquals(calls.statFd, [11], "the descriptor under test is the one asked about");
   assertEquals(calls.statPath, [CANONICAL_LOCK], "the descriptor is compared with the canonical lock file");
   assertEquals(calls.probe, [CANONICAL_LOCK], "exactly one probe, on the canonical lock path");
 
   // Equal bigint stats are the same file too.
   const big = seams({
-    fstat: () => ({ dev: 7n, ino: 42n }),
+    statFd: () => ({ dev: 7n, ino: 42n }),
     statPath: () => ({ dev: 7n, ino: 42n }),
   });
   assertEquals(await verifyInheritedCanonicalLock(9, big.deps), null);
@@ -139,7 +139,7 @@ Deno.test("jjsz F3: the same file with the lock NOT held or unverifiable returns
 Deno.test("jjsz F3: the descriptor defaults to 9 (the supervisor's lock descriptor)", async () => {
   const { calls, deps } = seams();
   await verifyInheritedCanonicalLock(undefined, deps);
-  assertEquals(calls.fstat, [9]);
+  assertEquals(calls.statFd, [9]);
 });
 
 Deno.test("jjsz F3: hasProc: true never takes the no-/proc branch", async () => {
@@ -150,7 +150,7 @@ Deno.test("jjsz F3: hasProc: true never takes the no-/proc branch", async () => 
     await verifyInheritedCanonicalLock(2_147_483_000, { ...deps, hasProc: true }),
     MISSING,
   );
-  assertEquals(calls, { fstat: [], statPath: [], probe: [] });
+  assertEquals(calls, { statFd: [], statPath: [], probe: [] });
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -189,7 +189,8 @@ Deno.test({
     const probed: string[] = [];
     const real = {
       hasProc: false,
-      // fstat is left to its DEFAULT (fstatSync) so the real default is exercised too.
+      // statFd is left to its DEFAULT (write-only re-open of /dev/fd/<fd> + fstat of the
+      // handle) so production's real call is exercised, not a stub.
       statPath: () => statSync(lock),
       probe: (_path: string) => {
         probed.push(_path);
@@ -205,8 +206,11 @@ Deno.test({
       }
       assert(announced.includes("held"), "fixture: the flock holder must announce that it owns the lock");
 
-      lockFd = openSync(lock, "r");
-      otherFd = openSync(other, "r");
+      // jbu9f: the supervisor takes the lock with `exec 9>` (O_WRONLY) and macOS
+      // refuses an /dev/fd re-open asking for more access than the original, so the
+      // fixture must hold the descriptor write-only exactly as production does.
+      lockFd = openSync(lock, "a");
+      otherFd = openSync(other, "a");
       assert(
         fstatSync(lockFd).ino !== fstatSync(otherFd).ino,
         "fixture: the two descriptors must be different files",

@@ -8,7 +8,7 @@
 
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { fstatSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, statSync } from "node:fs";
 import {
   chmod,
   lstat,
@@ -384,15 +384,31 @@ export async function probeCanonicalLockHeld(
  * and `flock` must fail to take the lock (somebody holds it); see probeCanonicalLockHeld for what that
  * does and does not prove.
  *
- * `deps` is a test seam, every default = today's behaviour (chrome-agent-platform-jjsz F3: the no-/proc
- * branch cannot run on Linux, so it had no test of its verdicts): `hasProc` selects the platform
- * branch, `fstat(fd)` and `statPath(path)` read the descriptor and the lock path, and
+ * `deps` is a test seam, every default = production behaviour (chrome-agent-platform-jjsz F3: the
+ * no-/proc branch cannot run on Linux, so it had no test of its verdicts): `hasProc` selects the
+ * platform branch, `statFd(fd)` and `statPath(path)` read the descriptor and the lock path, and
  * `probe(lockPath)` is probeCanonicalLockHeld. The /proc branch does not use them.
+ *
+ * WHY `statFd` RE-OPENS THE FD PATH WRITE-ONLY AND STATS THE HANDLE (8bp69, corrected by jbu9f).
+ * Two measured facts decide the shape, both on macOS 15 arm64 / Deno 2.9.0:
+ *   1. `fstatSync(fd)` on an INHERITED descriptor throws EBADF under Deno: its `node:fs` fd namespace
+ *      is not the OS fd table, while the Node supervisor fstats the same fd and `ls -l /dev/fd/9`
+ *      shows the lock file. So the inherited fd itself is not readable from the runner.
+ *   2. `stat("/dev/fd/<fd>")` is NOT the same thing: it reports DEVFS's device (703529602) with the
+ *      lock file's inode, never the lock file's device (16777229), and it even succeeds for a
+ *      descriptor this process does not hold. A path stat therefore refuses every real lock and
+ *      "proves" things about unrelated descriptors.
+ * The form that works (Paul's measured correction, 2026-10-07 15:27) is to OPEN the fd path
+ * WRITE-ONLY and stat the HANDLE that open returns: it is a descriptor Deno opened, so the runner
+ * can fstat it, and it is the underlying file, so dev/ino match the canonical lock exactly
+ * (measured equal: true). Write-only is mandatory, not stylistic: the supervisor takes the lock with
+ * `exec 9>` (O_WRONLY) and macOS refuses an /dev/fd re-open that asks for more access than the
+ * original — a read-write or read-only reopen fails. An open error fails closed (refused).
  *
  * @param {number} [fd]
  * @param {{
  *   hasProc?: boolean,
- *   fstat?: (fd: number) => {dev: number | bigint, ino: number | bigint},
+ *   statFd?: (fd: number) => {dev: number | bigint, ino: number | bigint},
  *   statPath?: (path: string) => {dev: number | bigint, ino: number | bigint},
  *   probe?: (lockPath: string) => Promise<string | null>,
  * }} [deps]
@@ -401,14 +417,23 @@ export async function probeCanonicalLockHeld(
 export async function verifyInheritedCanonicalLock(fd = 9, deps = {}) {
   const {
     hasProc = HAS_PROC,
-    fstat = fstatSync,
+    // 8bp69/jbu9f: open the fd path WRITE-ONLY and fstat the HANDLE (see above). A path stat
+    // reports devfs's device on macOS; the inherited descriptor itself throws EBADF under Deno.
+    statFd = (descriptor) => {
+      const handle = openSync(`/dev/fd/${descriptor}`, "a");
+      try {
+        return fstatSync(handle);
+      } finally {
+        closeSync(handle);
+      }
+    },
     statPath = statSync,
     probe = probeCanonicalLockHeld,
   } = deps;
   if (!hasProc) {
     let fdStat;
     try {
-      fdStat = fstat(fd);
+      fdStat = statFd(fd);
     } catch {
       return "canonical inherited lock fd is missing";
     }
