@@ -22,6 +22,18 @@ function requiresSealedCustody(op) {
   return op.result === "buffer" || op.params?.some((param) => param.type === "buffer");
 }
 
+// Classify a FRESH committed operation before Settings can create an offscreen
+// host. The envelope stays null for byte-bearing operations: this only gives
+// the refusal its truthful typed reason on both direct and broker paths.
+export function classifyEmscriptenOperation(record, operationId) {
+  const operations = record?.manifest?.entry?.operations;
+  const op = Array.isArray(operations) ? operations.find((candidate) => candidate?.id === operationId) : null;
+  if (!op || (op.kind !== "native-scalar-v1" && op.kind !== "native-buffer-v1")) {
+    return "emscripten_operation_unknown";
+  }
+  return requiresSealedCustody(op) ? "emscripten_output_custody_unavailable" : null;
+}
+
 export function isSchema2Admitted(pkg) {
   return Boolean(pkg && pkg.schema2 === true && pkg.manifest && pkg.graphDigest);
 }

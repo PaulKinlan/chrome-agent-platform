@@ -2297,6 +2297,7 @@ h4{margin:0;font-size:14px;overflow-wrap:anywhere}
         </div>
         <button class="package-validate-btn" type="button" hidden>Validate package</button>
         <p class="validation-status" role="status" aria-live="polite" aria-atomic="true"></p>
+        <p class="meta emscripten-binary-note">Emscripten binary preview is unavailable. Settings cannot verify a run that survives a restart or prove its worker has stopped. Available packages can still be validated; validation does not run them.</p>
         <p class="validation-js-audit" role="status" aria-live="polite" aria-atomic="true"></p>
       </div>
       <div class="preview" hidden>

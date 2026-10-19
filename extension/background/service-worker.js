@@ -118,6 +118,7 @@ import { bindTrustedSwStaging } from "../lib/emscripten-sw-stage.js";
 import { readCommittedPackages } from "../lib/wasm-package-registry-core.js";
 import {
   buildEmscriptenRunEnvelope,
+  classifyEmscriptenOperation,
   executableEmscriptenToolRecords,
 } from "../lib/emscripten-run-broker.js";
 import { WASI_JOB_RUN_TYPE } from "../lib/wasm-job-host.js";
@@ -866,7 +867,10 @@ async function runAdmittedEmscripten({ packageId, version, graphDigest, operatio
     return { ok: false, phase: "failed", error: "emscripten_stale_graph" };
   }
   const envelope = buildEmscriptenRunEnvelope({ record: current, operationId, args, authority });
-  if (!envelope) return { ok: false, phase: "failed", error: "emscripten_operation_unknown" };
+  if (!envelope) {
+    const refusal = classifyEmscriptenOperation(current, operationId) ?? "emscripten_operation_unknown";
+    return { ok: false, phase: "failed", error: refusal };
+  }
   const host = await ensureOffscreen();
   if (!host.ok) return host;
   // Registry reads and offscreen setup are asynchronous. Recheck immediately
@@ -8527,7 +8531,20 @@ const handlers = mergeRouteMaps(
                r.descriptorInput?.sourceKind === "emscripten-package" &&
                r.descriptorInput?.operationId === operationId,
       );
-      if (!record) return { ok: false, phase: "failed", error: "lazy_tool_not_registered" };
+      if (!record) {
+        // The model catalog intentionally omits custody operations. An exact
+        // Settings document still gets the typed refusal, not a misleading
+        // "unknown tool" — only after a fresh registry and identity check.
+        const store = await masterMemory();
+        const read = await readCommittedPackages(store);
+        const current = read.ok ? read.packages.get(packageId) : null;
+        if (current?.version === version &&
+            (graphDigest === undefined || current.graphDigest === graphDigest) &&
+            classifyEmscriptenOperation(current, operationId) === "emscripten_output_custody_unavailable") {
+          return { ok: false, phase: "failed", error: "emscripten_output_custody_unavailable" };
+        }
+        return { ok: false, phase: "failed", error: "lazy_tool_not_registered" };
+      }
 
       let namedArgs = args;
       if (Array.isArray(args)) {
