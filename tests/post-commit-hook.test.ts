@@ -160,6 +160,39 @@ Deno.test("66voq: a DIFFERENT batch reusing the same Release-note text must STAM
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+Deno.test("p0ll0: an unrelated DIRTY CHANGELOG edit is not an uncommitted stamp — the batch STAMPS", async () => {
+  // Review of 178298b4d: after an ancestry miss the old probe asked "does
+  // CHANGELOG.md differ from HEAD?" — which ANY unrelated local edit satisfies —
+  // and exited 0 claiming an UNCOMMITTED same-batch stamp. A clean, committed
+  // section plus a dirty two-line edit lost the release, the direction that must
+  // never happen. Only "HEAD does not carry this section yet" is that evidence.
+  const dir = await mirror();
+  try {
+    const first = commit(dir, "one branch", "you can export conversations");
+    assertEquals(stamp(dir, "--from", first).status, 0);
+    git(dir, "add", "-A");
+    git(dir, "commit", "-q", "-m", "chore(release): 1.2.4");
+    // A genuinely NEW batch carrying identical copy: ancestry cannot match it.
+    const second = commit(dir, "another union", "you can export conversations");
+    assert(second !== first, "fixture must produce a distinct sha");
+    // …and the tree is dirty for a reason that has nothing to do with this batch.
+    // The destination is written LITERALLY as path.join(dir, ...) on purpose:
+    // the partition guard inspects every write site, and an indirection through
+    // a local name revokes this file's reviewed scratch-fixture exemption.
+    const before = await readFile(path.join(dir, "CHANGELOG.md"), "utf8");
+    await writeFile(path.join(dir, "CHANGELOG.md"), `${before}\n- an unrelated hand edit\n`);
+    assertEquals(git(dir, "status", "--porcelain"), "M CHANGELOG.md",
+      "the fixture must actually leave CHANGELOG.md dirty");
+    const result = stamp(dir, "--from", second);
+    assertEquals(result.status, 0, result.stderr);
+    assert(!result.stderr.includes("UNCOMMITTED"), result.stderr);
+    assertEquals(await version(dir), "1.2.5",
+      "a dirty-but-unrelated CHANGELOG must never swallow a release");
+    const log = await readFile(path.join(dir, "CHANGELOG.md"), "utf8");
+    assertEquals((log.match(/## \[1\.2\.5\]/g) ?? []).length, 1, log);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 Deno.test("axtv2: a section introduced by a MERGE commit is attributed — the same batch's re-run skips", async () => {
   // The merger resolved a landing INTO the merge commit: the section exists only
   // in the merge's own diff. Plain `git log -S` skips merges, so without `-m`

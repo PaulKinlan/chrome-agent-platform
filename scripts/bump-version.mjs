@@ -33,7 +33,7 @@
 
 import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync, existsSync } from "fs";
-import { join, relative } from "path";
+import { join, relative, sep } from "path";
 import { execSync, execFileSync } from "child_process";
 // ONE source of truth for what counts as a user-facing bullet. This file used to
 // carry its own copy of the six filter regexes plus isUserFacingEntry, justified
@@ -298,20 +298,30 @@ function newestSectionIntroducer(changelogPathArg, version) {
   }
 }
 
-/** True when CHANGELOG.md differs from HEAD — the fingerprint of an
- *  UNCOMMITTED stamp (axtv2: never inferred from version equality, which holds
- *  on every clean checkout). Null when git cannot answer. */
-function changelogDiffersFromHead(changelogPathArg) {
+/** Does the COMMITTED (HEAD) CHANGELOG already carry `version` as its newest
+ *  section? True/False, or null when git cannot answer.
+ *
+ *  p0ll0 (review of 178298b4d): "CHANGELOG.md differs from HEAD" is NOT the
+ *  fingerprint of an uncommitted stamp — ANY unrelated local edit to the file
+ *  satisfies it. The probe asked "does HEAD already have this release?", and a
+ *  dirty working tree would then read as an uncommitted stamp of the CURRENT
+ *  batch, exiting 0 and losing a release: the exact direction the whole skip
+ *  must never fail in. Only the SECTION's presence at HEAD is evidence. */
+function headHasNewestSection(changelogPathArg, version) {
+  let committed;
   try {
-    execFileSync(
+    committed = execFileSync(
       "git",
-      ["diff", "--quiet", "HEAD", "--", relative(ROOT, changelogPathArg)],
-      { cwd: ROOT, stdio: ["ignore", "ignore", "ignore"] },
+      ["show", `HEAD:${relative(ROOT, changelogPathArg).split(sep).join("/")}`],
+      { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
     );
-    return false;
-  } catch (error) {
-    // exit 1 = differs (the answer we want); anything else = git failure.
-    return error?.code === 1 || error?.status === 1 ? true : null;
+  } catch {
+    return null; // no HEAD:path (unborn HEAD, new tree) — cannot answer
+  }
+  try {
+    return (parseChangelog(committed)[0]?.version ?? null) === version;
+  } catch {
+    return null;
   }
 }
 
@@ -356,17 +366,20 @@ if (landingMode && changelogVersion && landingNotes.length) {
       );
       process.exit(0);
     }
-    // axtv2: the ONLY other skip is a genuinely UNCOMMITTED stamp — CHANGELOG.md
-    // differs from HEAD (the first stamp wrote the entry but the merger has not
-    // committed it yet). The old tree-state inference (current ===
-    // changelogVersion) held on EVERY clean checkout, so any attribution
-    // failure — git error, shallow clone, merge-introduced section — became a
-    // skip and lost the release. Attribution failure now STAMPS.
-    const changelogState = changelogDiffersFromHead(changelogPath);
-    if (changelogState === true) {
+    // axtv2: the ONLY other skip is a genuinely UNCOMMITTED stamp — the working
+    // tree carries a `## [version]` section that HEAD does NOT have yet (the
+    // first stamp wrote the entry but the merger has not committed it). The old
+    // tree-state inference (current === changelogVersion) held on EVERY clean
+    // checkout, so any attribution failure — git error, shallow clone,
+    // merge-introduced section — became a skip and lost the release.
+    // p0ll0: and a DIRTY CHANGELOG is not that evidence either; only HEAD's
+    // missing section is. Everything else STAMPS.
+    const headHasSection = headHasNewestSection(changelogPath, changelogVersion);
+    if (headHasSection === false) {
       console.error(
-        `[bump-version] this batch is already released as [${changelogVersion}] — CHANGELOG.md carries an UNCOMMITTED ` +
-        `stamp of this batch (working tree differs from HEAD); nothing to stamp (idempotent re-run, x0vas/axtv2).`,
+        `[bump-version] this batch is already released as [${changelogVersion}] — HEAD does not carry [${changelogVersion}] ` +
+        `yet, so CHANGELOG.md holds an UNCOMMITTED stamp of this batch; nothing to stamp ` +
+        `(idempotent re-run, x0vas/axtv2).`,
       );
       process.exit(0);
     }
