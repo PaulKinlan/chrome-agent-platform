@@ -85,6 +85,19 @@ export function trackEmbeddedFrameContexts(cdp: EmbeddedCdp, sessionId: string, 
     const deadline = Date.now() + timeoutMs;
     let staleRetries = 0;
     let lastFrameId: string | null = null;
+    // m7vb5: remember what the readiness probe last observed so a deadline
+    // error names the ACTUAL document (observed vs expected) instead of the
+    // ambiguous frame=seen/staleRetries=0 that sent lanes down the wrong
+    // hypothesis (no default context vs wrong path vs fragment mismatch).
+    let lastObserved: { url?: unknown; ready?: unknown } | null = null;
+    // jm34x: a reader must ALSO tell apart 'the document was never verified'
+    // from 'readiness PASSED and only the owner operation kept losing its
+    // context' — same deadline, opposite conclusions. verified records the
+    // last document URL that PASSED readiness; probeStale/ownerStale split
+    // the retry count by stage (the returned staleRetries stays the total).
+    let lastVerified: string | null = null;
+    let probeStale = 0;
+    let ownerStale = 0;
     while (Date.now() < deadline) {
       const tree = (await cdp.send("Page.getFrameTree", {}, sessionId))?.result?.frameTree;
       const frame = tree?.childFrames?.find((child: any) => child?.frame?.url === expectedUrl)?.frame;
@@ -108,6 +121,7 @@ export function trackEmbeddedFrameContexts(cdp: EmbeddedCdp, sessionId: string, 
         if (!isMissingCdpContext(error)) throw error;
         discard(contextId);
         staleRetries++;
+        probeStale++;
         await nextChange(deadline - Date.now());
         continue;
       }
@@ -121,10 +135,15 @@ export function trackEmbeddedFrameContexts(cdp: EmbeddedCdp, sessionId: string, 
       // (exact origin + path, fragment stripped); the hash is navigation
       // state, not document identity.
       const seenUrl = typeof state?.url === "string" ? state.url.split("#")[0] : "";
+      // jm34x/m7vb5: record what was actually observed even on a mismatch, so the
+      // deadline error can distinguish 'wrong document' from 'right document,
+      // never ready' instead of being byte-identical for both.
       if (seenUrl !== expectedUrl || (state.ready !== "interactive" && state.ready !== "complete")) {
+        lastObserved = state && typeof state === "object" ? { url: state.url, ready: state.ready } : { url: state, ready: undefined };
         await nextChange(deadline - Date.now());
         continue;
       }
+      lastVerified = typeof state?.url === "string" ? state.url : expectedUrl;
       try {
         const result = await cdp.send("Runtime.evaluate", {
           expression, contextId, returnByValue: true, awaitPromise: true,
@@ -138,10 +157,11 @@ export function trackEmbeddedFrameContexts(cdp: EmbeddedCdp, sessionId: string, 
         if (!isMissingCdpContext(error)) throw error;
         discard(contextId);
         staleRetries++;
+        ownerStale++;
         await nextChange(deadline - Date.now());
       }
     }
-    throw new Error(`embedded Settings live context was unavailable before ${timeoutMs}ms (frame=${lastFrameId ? "seen" : "absent"}, staleRetries=${staleRetries})`);
+    throw new Error(`embedded Settings live context was unavailable before ${timeoutMs}ms (frame=${lastFrameId ? "seen" : "absent"}, staleRetries=${staleRetries}, probeStale=${probeStale}, ownerStale=${ownerStale}, verified=${JSON.stringify(lastVerified)}, observed=${JSON.stringify(lastObserved?.url ?? null)}, expected=${JSON.stringify(expectedUrl)}, ready=${JSON.stringify(lastObserved?.ready ?? null)})`);
   }
   return { evaluate, close };
 }

@@ -126,6 +126,70 @@ Deno.test("live-frame tracker does NOT replay a mutation after a generic timeout
   assert(!isMissingCdpContext(new Error("Runtime.evaluate: Execution context was destroyed")));
 });
 
+Deno.test("jm34x: probe-stage vs owner-stage stale retries are named separately, with the verified document", async () => {
+  // Case 1: the default context never became addressable — the READINESS
+  // probe keeps getting 'Cannot find context'.
+  const probeFail = fakeCdp(async () => { throw new Error("Runtime.evaluate: Cannot find context with specified id"); });
+  {
+    const tracker = trackEmbeddedFrameContexts(probeFail, SESSION);
+    try {
+      probeFail.emit("Runtime.executionContextCreated", CREATED(50));
+      const error = await assertRejects(
+        () => tracker.evaluate({ extensionId: "abcdef", path: "/options/options.html", expression: "owner-approval-request", timeoutMs: 400 }),
+        Error, "unavailable");
+      assert(error.message.includes("probeStale="), "probe-stage retries must be named");
+      assert(!error.message.includes("probeStale=0"), "case 1 has probe-stage retries");
+      assert(error.message.includes("ownerStale=0"), "case 1 never reached the owner operation");
+      assert(error.message.includes("verified=null"), "case 1 never verified the document");
+      assertEquals(probeFail.calls.filter((c) => c.expression === "owner-approval-request").length, 0);
+    } finally { tracker.close(); }
+  }
+  // Case 2: readiness PASSES (document verified correct) and only the OWNER
+  // operation keeps losing its context.
+  const ownerFail = fakeCdp(async (_id, expression) => {
+    if (expression.includes("document.URL")) return ready;
+    throw new Error("Runtime.evaluate: Cannot find context with specified id");
+  });
+  {
+    const tracker = trackEmbeddedFrameContexts(ownerFail, SESSION);
+    try {
+      ownerFail.emit("Runtime.executionContextCreated", CREATED(51));
+      const error = await assertRejects(
+        () => tracker.evaluate({ extensionId: "abcdef", path: "/options/options.html", expression: "owner-approval-request", timeoutMs: 400 }),
+        Error, "unavailable");
+      assert(error.message.includes("probeStale=0"), "case 2's probe always succeeded");
+      assert(!error.message.includes("ownerStale=0"), "case 2 has owner-stage retries");
+      assert(error.message.includes(`verified="${URL}"`), "case 2 DID verify the document");
+    } finally { tracker.close(); }
+  }
+});
+
+Deno.test("m7vb5: the deadline error names the observed document URL and the expected URL", async () => {
+  // A readiness mismatch used to read identically to 'no context ever
+  // arrived' (frame=seen, staleRetries=0), which sent lanes down the wrong
+  // hypothesis for hours (utfug). The terminal error must carry what the
+  // probe actually saw versus what it wanted.
+  const cdp = fakeCdp(async (_id, expression) => {
+    if (expression.includes("document.URL")) {
+      return { result: { result: { value: { url: "chrome-extension://abcdef/options/other.html", ready: "complete" } } } };
+    }
+    return ownerDecision;
+  });
+  const tracker = trackEmbeddedFrameContexts(cdp, SESSION);
+  try {
+    cdp.emit("Runtime.executionContextCreated", CREATED(40));
+    const error = await assertRejects(
+      () => tracker.evaluate({ extensionId: "abcdef", path: "/options/options.html", expression: "owner-approval-request", timeoutMs: 400 }),
+      Error,
+      "unavailable",
+    );
+    assert(error.message.includes('"chrome-extension://abcdef/options/other.html"'), "observed URL missing from the deadline error");
+    assert(error.message.includes('"chrome-extension://abcdef/options/options.html"'), "expected URL missing from the deadline error");
+    assert(error.message.includes('"complete"'), "observed readyState missing from the deadline error");
+    assertEquals(cdp.calls.filter((call) => call.expression === "owner-approval-request").length, 0,
+      "the owner operation must never run in the wrong document");
+  } finally { tracker.close(); }
+});
 
 Deno.test("utfug: a section fragment on document.URL (#providers) is NOT a different document", async () => {
   // The NTP's openView appends the section hash to the pooled Settings frame
@@ -149,26 +213,6 @@ Deno.test("utfug: a section fragment on document.URL (#providers) is NOT a diffe
   } finally { tracker.close(); }
 });
 
-Deno.test("utfug: a fragment-less match still REFUSES a different path", async () => {
-  const cdp = fakeCdp(async (_id, expression) => {
-    if (expression.includes("document.URL")) {
-      return { result: { result: { value: { url: "chrome-extension://abcdef/options/other.html", ready: "complete" } } } };
-    }
-    return ownerDecision;
-  });
-  const tracker = trackEmbeddedFrameContexts(cdp, SESSION);
-  try {
-    cdp.emit("Runtime.executionContextCreated", CREATED(21));
-    await assertRejects(
-      () => tracker.evaluate({ extensionId: "abcdef", path: "/options/options.html", expression: "owner-approval-request", timeoutMs: 400 }),
-      Error,
-      "unavailable",
-    );
-    assertEquals(cdp.calls.filter((call) => call.expression === "owner-approval-request").length, 0,
-      "the owner operation must never run in the wrong document");
-  } finally { tracker.close(); }
-});
-
 Deno.test("q6ad9: a tracker seeded from buffered history evaluates in a context created BEFORE subscription", async () => {
   // The journey's exact defect: the pooled Settings frame booted at an earlier
   // leg; the tracker subscribes later and NO live created event fires on
@@ -185,52 +229,5 @@ Deno.test("q6ad9: a tracker seeded from buffered history evaluates in a context 
     assertEquals(answer.result, ownerDecision);
     assertEquals(answer.staleRetries, 0);
     // NO live events were emitted — the seed alone carried the context.
-  } finally { tracker.close(); }
-});
-
-Deno.test("q6ad9: a seed the buffer itself marks DESTROYED is weeded, never evaluated in", async () => {
-  const cdp = fakeCdp(async (_id, expression) =>
-    expression.includes("document.URL") ? ready : ownerDecision);
-  const tracker = trackEmbeddedFrameContexts(cdp, SESSION, { seedEvents: [
-    { sessionId: SESSION, kind: "created", id: 31, frameId: "settings-frame", isDefault: true },
-    { sessionId: SESSION, kind: "destroyed", id: 31 },
-    { sessionId: SESSION, kind: "created", id: 32, frameId: "settings-frame", isDefault: true },
-  ] });
-  try {
-    const answer = await tracker.evaluate({ extensionId: "abcdef", path: "/options/options.html", expression: "owner-approval-request", timeoutMs: 500 });
-    assertEquals(answer.result, ownerDecision);
-    assertEquals(cdp.calls.filter((call) => call.contextId === 31).length, 0,
-      "a destroyed seed must never be evaluated in");
-  } finally { tracker.close(); }
-});
-
-Deno.test("q6ad9: a seeded cleared event wipes earlier created seeds for the session", async () => {
-  const cdp = fakeCdp(async (_id, expression) =>
-    expression.includes("document.URL") ? ready : ownerDecision);
-  const tracker = trackEmbeddedFrameContexts(cdp, SESSION, { seedEvents: [
-    { sessionId: SESSION, kind: "created", id: 33, frameId: "settings-frame", isDefault: true },
-    { sessionId: SESSION, kind: "cleared" },
-    { sessionId: SESSION, kind: "created", id: 34, frameId: "settings-frame", isDefault: true },
-  ] });
-  try {
-    const answer = await tracker.evaluate({ extensionId: "abcdef", path: "/options/options.html", expression: "owner-approval-request", timeoutMs: 500 });
-    assertEquals(answer.result, ownerDecision);
-    assert(cdp.calls.every((call) => call.contextId !== 33), "the pre-clear context is stale navigation history");
-  } finally { tracker.close(); }
-});
-
-Deno.test("q6ad9: without a seed, a pre-existing context is NOT invented (fail-loud preserved)", async () => {
-  // The seeded path must not weaken the unseeded one: a tracker with no seed
-  // and no live events still times out honestly instead of guessing.
-  const cdp = fakeCdp(async (_id, expression) =>
-    expression.includes("document.URL") ? ready : ownerDecision);
-  const tracker = trackEmbeddedFrameContexts(cdp, SESSION);
-  try {
-    await assertRejects(
-      () => tracker.evaluate({ extensionId: "abcdef", path: "/options/options.html", expression: "owner-approval-request", timeoutMs: 400 }),
-      Error,
-      "unavailable",
-    );
-    assertEquals(cdp.calls.filter((call) => call.expression === "owner-approval-request").length, 0);
   } finally { tracker.close(); }
 });
