@@ -239,42 +239,49 @@ try {
     check("seeded acp.token for the LOCAL bridge (authenticated path)", seeded?.ok === true, seeded);
   }
 
-  // The owner's ask (hub sidebar): harness rows visible where he works, and the
-  // activity ledger folded rather than competing for the pane.
+  // The owner's ask (hub sidebar): harness rows visible where he works. The
+  // current design folds them in the #harness-presence disclosure (closed by
+  // default; initSideDisclosures defaults open only Tasks + Agents) and renders
+  // the rows into #harness-list — whose replaceChildren() at boot REMOVES the
+  // legacy static #side-harness div (ntp.js renderSidebarHarnessRows), which is
+  // why the pre-2026-10 selector read null (chrome-agent-platform-3ehb8).
   const hubSide = await evl(ntp, `(() => {
-    const host = document.getElementById('side-harness');
-    const section = host?.closest('section');
+    const presence = document.getElementById('harness-presence');
+    const summary = presence?.querySelector('summary');
+    if (presence && presence.open === false && summary) summary.click();
+    const host = document.getElementById('harness-list') || document.getElementById('side-harness');
     const ledger = document.getElementById('activity-ledger-section');
     return {
-      rows: host ? [...host.querySelectorAll('button')].map(b => b.textContent.trim()) : null,
-      sectionHidden: section?.hidden ?? null,
-      ledgerTagName: ledger?.tagName ?? null,
-      ledgerOpen: ledger?.open ?? null,
+      rows: host ? [...host.querySelectorAll('harness-agent-button, button')].map(b => (b.getAttribute('name') || b.textContent).trim()) : null,
+      presenceFound: !!presence,
+      presenceOpen: presence?.open ?? null,
+      // The Activity ledger deliberately LEFT the hub (a hidden span placeholder;
+      // the side panel check below asserts it GONE). "Not competing for the pane"
+      // now means absent, not folded.
+      ledgerAbsentOrHidden: ledger ? ledger.hidden === true : true,
+      ledgerTag: ledger?.tagName ?? null,
     };
   })()`);
+  await sleep(300);
   await shot(ntp, "08-hub-sidebar-harness");
-  check("hub sidebar · harness rows are visible", Array.isArray(hubSide?.rows) && hubSide.rows.length >= 1, hubSide);
-  check("hub sidebar · Activity is folded (not hidden, not expanded)", hubSide?.ledgerTagName === "DETAILS" && hubSide?.ledgerOpen === false, hubSide);
+  check("hub sidebar · harness rows are visible", Array.isArray(hubSide?.rows) && hubSide.rows.length >= 1 && hubSide.rows.some((r) => /pi/i.test(r)), hubSide);
+  check("hub sidebar · Activity ledger does not compete for the pane (absent or hidden)", hubSide?.ledgerAbsentOrHidden === true && (hubSide?.ledgerTag === null || hubSide?.ledgerTag === "SPAN"), hubSide);
   await shot(ntp, "01-hub-composer");
 
-  // ── 0. the + menu's "Choose agent" lists the pi harness agent ──────────
+  // ── 0. the + menu is the attach menu; agent choosing lives in @mentions ─
+  // The menu renders exactly 8 attach entries (data-kind file…add-tab); the
+  // click handler's choose-agent branch is dead code — no such button is
+  // rendered (components-conversation.js). The old leg opened a picker via
+  // button[data-kind=choose-agent] and, once that button vanished, passed
+  // VACUOUSLY (opened:false, pickGroups read the hidden picker anyway) —
+  // retired; the honest pi-selection proof is the mention popup + routing
+  // chip checks below (chrome-agent-platform-3ehb8).
   await clickExpr(ntp, `${COMPOSER}.querySelector('attach-button, .composer-attach, #attach').shadowRoot.querySelector('.plus')`);
   await sleep(400);
   const plusItems = await evl(ntp, `(() => { const m = document.getElementById('composer'); const b = m.querySelector('attach-button, .composer-attach, #attach').shadowRoot;
-    return [...b.querySelectorAll('button, [role=menuitem]')].map(x => x.textContent?.trim()).filter(Boolean).slice(0, 12); })()`);
+    return [...b.querySelectorAll('button[data-kind], [role=menuitem]')].map(x => x.textContent?.trim()).filter(Boolean).slice(0, 12); })()`);
   await shot(ntp, "00-plus-menu");
-  check("the + menu exposes an agent-choosing entry", Array.isArray(plusItems) && plusItems.some((x) => /agent/i.test(x)), plusItems);
-  const chooseAgent = `${COMPOSER}.querySelector('attach-button, .composer-attach, #attach').shadowRoot.querySelector('button[data-kind="choose-agent"]')`;
-  const opened = await clickExpr(ntp, chooseAgent);
-  await sleep(600);
-  const pickGroups = await evl(ntp, `(() => { const p = ${COMPOSER}.querySelector('agent-picker, .composer-agent-pick, #agent-pick'); if (!p) return null;
-    return [...p.shadowRoot.querySelectorAll('.group-h, .opt .name')].map(x => x.textContent?.trim()).filter(Boolean); })()`);
-  await shot(ntp, "00-agent-picker");
-  check(
-    "the agent picker lists pi under a Harness Agents (ACP) group",
-    Array.isArray(pickGroups) && pickGroups.some((x) => /ACP/i.test(x)) && pickGroups.some((x) => /^pi$/i.test(x)),
-    { opened, pickGroups },
-  );
+  check("the + menu opens the attach menu (agent choosing lives in @mentions, checked below)", Array.isArray(plusItems) && plusItems.length >= 4, plusItems);
   await evl(ntp, `document.body.click()`);
   await pressKey(ntp, "Escape");
   await sleep(200);
@@ -509,31 +516,35 @@ try {
     await shot(ntp, "09-owner-gate");
   }
 
-  // ── the side panel's Agents section lists the harness agent ────────────
+  // ── the side panel's harness affordance ─────────────────────────────
+  // The Agents picker deliberately EXCLUDES acp/site kinds now (four-surfaces
+  // invariant, sidepanel.html): harness agents live in the #harness-quick-page
+  // strip of the PAGE view. The old #harness-quick element and the picker-group
+  // assertions are retired accordingly (chrome-agent-platform-3ehb8).
   const panel = await openPage(`chrome-extension://${extId}/sidepanel/sidepanel.html`);
   await sleep(2000);
-  const panelRows = await evl(panel, `(() => {
-    const p = document.getElementById('agents-picker');
-    if (!p) return null;
-    const rows = [...p.shadowRoot.querySelectorAll('.group-h, .opt .name, .opt .sub')].map(x => x.textContent?.trim()).filter(Boolean);
-    return { rows, tabHidden: document.getElementById('agents-view')?.hidden ?? null };
+  const panelStrip = await evl(panel, `(() => {
+    const q = document.getElementById('harness-quick-page');
+    return q ? { hidden: q.hidden,
+      labels: [...q.querySelectorAll('button.hq .hq-label')].map(x => x.textContent?.trim()).filter(Boolean),
+      rows: q.querySelectorAll('button.hq').length } : null;
   })()`);
   await shot(panel, "06-sidepanel-agents");
-  const panelHasAcpGroup = Array.isArray(panelRows?.rows) && panelRows.rows.some((r) => /ACP/i.test(r));
-  const panelHasPi = Array.isArray(panelRows?.rows) && panelRows.rows.some((r) => /^pi$/i.test(r));
-  check("side panel · Agents section shows the ACP harness group", panelHasAcpGroup, panelRows);
-  check("side panel · Agents section lists pi", panelHasPi, panelRows);
+  const stripHasPi = Array.isArray(panelStrip?.labels) && panelStrip.labels.some((r) => /^pi$/i.test(r));
+  check("side panel · the harness strip lists pi (the picker deliberately excludes acp kinds)", stripHasPi, panelStrip);
   // The owner's ask: harness agents reachable in ONE click from the side panel.
-  // Select the Agents tab FIRST: the pane is hidden until then, and a click at
+  // The strip is page-view-only: switching to Agents hides it, and a click at
   // the coordinates of a hidden element lands on whatever is behind it.
+  check("side panel · one-click harness rows exist", (panelStrip?.rows ?? 0) >= 1, panelStrip);
   const tabClicked = await clickExpr(panel, `document.getElementById('tab-agents')`);
-  await sleep(400);
-  const quickRows = await evl(panel, `(() => { const q = document.getElementById('harness-quick');
-    return q ? [...q.querySelectorAll('button.hq')].map(b => b.textContent.trim()) : null; })()`);
   check("side panel · the Agents tab is reachable", tabClicked === true);
-  check("side panel · one-click harness rows exist", Array.isArray(quickRows) && quickRows.length >= 1, quickRows);
-  // Click the FIRST row with real input and confirm the conversation opens.
-  const firstRow = await boxOf(panel, `document.querySelector('#harness-quick button.hq')`);
+  // Back to the page view: the strip hides in the Agents view, and the row
+  // click below needs a visible target at real coordinates.
+  await clickExpr(panel, `document.getElementById('tab-page')`);
+  await sleep(300);
+  // Click the FIRST row with real input and confirm the conversation opens —
+  // the handler itself switches to the Agents view and opens the detail pane.
+  const firstRow = await boxOf(panel, `document.querySelector('#harness-quick-page button.hq')`);
   if (firstRow) {
     await send("Input.dispatchMouseEvent", { type: "mousePressed", x: firstRow.x, y: firstRow.y, button: "left", buttons: 1, clickCount: 1 }, panel);
     await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: firstRow.x, y: firstRow.y, button: "left", buttons: 0, clickCount: 1 }, panel);
