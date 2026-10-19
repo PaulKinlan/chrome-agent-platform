@@ -37,14 +37,24 @@ export const EXPECTED_CHECKS = [...SETTINGS_CHECKS, ...ACTIVITY_CHECKS] as const
 type Verdict = "PASS" | "FAIL" | "NOT_REACHED";
 type Check = { name: string; verdict: Verdict; detail?: unknown };
 
+export const isSettingsOnly = Deno.args.includes("--settings-only");
+
 export function allNamedChecksPass(checks: Check[]): boolean {
   return checks.length === EXPECTED_CHECKS.length &&
     EXPECTED_CHECKS.every((name, i) => checks[i]?.name === name && checks[i]?.verdict === "PASS");
 }
 
+export function allNamedSettingsChecksPass(checks: Check[]): boolean {
+  return checks.length >= SETTINGS_CHECKS.length &&
+    SETTINGS_CHECKS.every((name, i) => checks[i]?.name === name && checks[i]?.verdict === "PASS");
+}
+
 export async function runForVerdict(run: () => Promise<Check[]>, report: (error: unknown) => void = console.error): Promise<number> {
-  try { return allNamedChecksPass(await run()) ? 0 : 1; }
-  catch (error) { report(error); return 1; }
+  try {
+    const checks = await run();
+    const pass = isSettingsOnly ? allNamedSettingsChecksPass(checks) : allNamedChecksPass(checks);
+    return pass ? 0 : 1;
+  } catch (error) { report(error); return 1; }
 }
 
 async function waitFor<T>(name: string, probe: () => Promise<T | null | false>, ms = 12000): Promise<T> {
@@ -66,7 +76,9 @@ async function waitFor<T>(name: string, probe: () => Promise<T | null | false>, 
 }
 
 async function main(): Promise<Check[]> {
-  const checks: Check[] = EXPECTED_CHECKS.map((name) => ({ name, verdict: "NOT_REACHED" }));
+  const checks: Check[] = isSettingsOnly
+    ? SETTINGS_CHECKS.map((name) => ({ name, verdict: "NOT_REACHED" }))
+    : EXPECTED_CHECKS.map((name) => ({ name, verdict: "NOT_REACHED" }));
   const evidenceFiles: { name: string; sha256: string; bytes: number }[] = [];
   const evidence = durableDir("gi0jw-activity-approval", `${Date.now()}-${Deno.pid}`);
   const profile = chromeProfileDir(`gi0jw-activity-approval-${Deno.pid}-${Date.now()}`);
@@ -264,6 +276,7 @@ async function main(): Promise<Check[]> {
     record(SETTINGS_CHECKS[5], afterRestart?.ok === true && afterRestart.agent?.name === original,
       { targetName: afterRestart?.agent?.name });
 
+    if (!isSettingsOnly) {
     // --------------------------------------------------------------
     // Activity: the MODEL's real live run must pay and consume its owner card.
     // Do this LAST: if this leg stalls, Settings has already been measured.
@@ -366,6 +379,7 @@ async function main(): Promise<Check[]> {
     }, 8000);
     record(ACTIVITY_CHECKS[5], undoClicked && undone.agentGone && undone.rowUndone, undone);
     await save("activity-after-undo.png", await cdp.screenshot(ntpSession, { timeoutMs: 8000 }));
+    }
   } catch (error) {
     failure = String(error?.stack ?? error?.message ?? error);
     console.error(`FOCUSED_KAT_ABORT: ${failure}`);
@@ -381,9 +395,9 @@ async function main(): Promise<Check[]> {
       try { await teardownChrome(chrome, profile); }
       catch (error) { teardownError = `${teardownError ?? ""}; Chrome teardown: ${String(error)}`; }
     }
-    const manifest = { schema: "cap-focused-approval-v1", sourceCommit, distMarker,
+    const manifest = { schema: "cap-focused-approval-v1", mode: isSettingsOnly ? "settings-only" : "full", sourceCommit, distMarker,
       browser: browser?.Browser ?? null, binary,
-      checks, settings: checks.slice(0, SETTINGS_CHECKS.length), activity: checks.slice(SETTINGS_CHECKS.length),
+      checks, settings: checks.slice(0, SETTINGS_CHECKS.length), activity: isSettingsOnly ? [] : checks.slice(SETTINGS_CHECKS.length),
       files: evidenceFiles, failure, teardownError, evidenceDir: evidence,
       totals: { passed: checks.filter((c) => c.verdict === "PASS").length,
         failed: checks.filter((c) => c.verdict === "FAIL").length,
