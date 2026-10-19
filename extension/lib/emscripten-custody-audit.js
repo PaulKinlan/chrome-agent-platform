@@ -10,6 +10,10 @@ import {
 } from "./emscripten-custody.js";
 import { validateWasmStreamRef } from "./wasm-stream-files.js";
 
+const HEX64 = /^[0-9a-f]{64}$/u;
+const RECEIPT_KEYS = ["graphDigest", "operationId", "packageId", "version", "runId", "agentId", "bytes", "sha256"];
+const PROVENANCE_KEYS = ["graphDigest", "operationId", "packageId", "version"];
+
 function fail(code, cause) {
   const error = new Error(code, cause ? { cause } : undefined);
   error.code = code;
@@ -22,12 +26,14 @@ function fail(code, cause) {
 export function emscriptenRunAuditAuthority({ registry, isLive, isTerminated } = {}) {
   if (typeof registry?.appendLog !== "function" || typeof registry?.listLogs !== "function" ||
       typeof isLive !== "function" || typeof isTerminated !== "function") fail("emscripten_custody_audit_unavailable");
+  const readRow = async (runId, key, type) => {
+    const rows = await registry.listLogs(runId);
+    return rows.find((row) => row?.idempotencyKey === key && row?.type === type) ?? null;
+  };
   return Object.freeze({
     append: (runId, row, key) => registry.appendLog(runId, row, key),
-    readIntent: async (runId, key) => {
-      const rows = await registry.listLogs(runId);
-      return rows.find((row) => row?.idempotencyKey === key && row?.type === "emscripten-custody-intent") ?? null;
-    },
+    readIntent: (runId, key) => readRow(runId, key, "emscripten-custody-intent"),
+    readTerminal: (runId, key) => readRow(runId, key, "emscripten-custody-terminal"),
     isLive, isTerminated,
   });
 }
@@ -120,9 +126,52 @@ export async function recordEmscriptenTerminalAudit({
   return Object.freeze({ ok: true, audited: true, bytes: verified.bytes, sha256: verified.sha256 });
 }
 
-/** Only metadata-proved unpromoted output is discardable; corrupt metadata is
- * quarantined by refusal (9a1wj), never removed by id alone. */
-export async function discardFencedEmscriptenOutput({ runId, agentId, outputRef, storage, isTerminated } = {}) {
+function matchesPersistedRow(actual, expected, key) {
+  return sameRow(actual, expected) &&
+    (!Object.hasOwn(actual, "executionId") || actual.executionId === expected.runId) &&
+    (!Object.hasOwn(actual, "idempotencyKey") || actual.idempotencyKey === key);
+}
+
+function matchesTerminalReceipt(receipt, runId, agentId, bytes, sha256) {
+  return Boolean(receipt && typeof receipt === "object" && !Array.isArray(receipt) &&
+    Object.getPrototypeOf(receipt) === Object.prototype &&
+    JSON.stringify(Object.keys(receipt).sort()) === JSON.stringify([...RECEIPT_KEYS].sort()) &&
+    receipt.runId === runId && receipt.agentId === agentId &&
+    receipt.bytes === bytes && receipt.sha256 === sha256 &&
+    PROVENANCE_KEYS.every((key) => typeof receipt[key] === "string" &&
+      receipt[key].length > 0 && receipt[key].length <= 256) && HEX64.test(receipt.graphDigest));
+}
+
+/** WAL intent + terminal rows are necessary, NOT permanent deletion proof:
+ * compaction/missing evidence refuses and retains bytes. This historical
+ * attestation does not rehash today's file: verifyEmscriptenOutputSeal may
+ * itself DELETE on drift and must never be used as a pre-delete probe.
+ * No staging route calls this retained, unwired helper. */
+export async function discardFencedEmscriptenOutput({ runId, agentId, inputRef, outputRef, storage,
+  readIntent, readTerminal, isTerminated } = {}) {
   if (typeof isTerminated !== "function" || !(await isTerminated())) fail("emscripten_worker_not_fenced");
-  return await discardEmscriptenJobOutput({ runId, agentId, outputRef, storage });
+  if (typeof readIntent !== "function" || typeof readTerminal !== "function") fail("emscripten_custody_audit_unavailable");
+  const owner = emscriptenJobOwner({ runId, agentId });
+  const input = validateWasmStreamRef(inputRef, { kinds: ["input"] });
+  const output = validateWasmStreamRef(outputRef, { kinds: ["stdout"] });
+  const intentKey = `emscripten-intent:${runId}:${output.id}`;
+  const terminalKey = `emscripten-terminal:${runId}:${output.id}`;
+  let intent, terminal;
+  try {
+    intent = await readIntent(runId, intentKey);
+    terminal = await readTerminal(runId, terminalKey);
+  } catch (error) { fail("emscripten_custody_audit_unavailable", error); }
+  if (!matchesPersistedRow(intent, {
+    type: "emscripten-custody-intent", custodyVersion: 1, runId, agentId, owner,
+    inputRef: input, outputRef: output, stagingOnly: true, nonpromotable: true,
+  }, intentKey) || !Number.isSafeInteger(terminal?.bytes) || terminal.bytes < 0 ||
+      !HEX64.test(terminal?.sha256) || terminal?.workerTerminated !== true ||
+      !matchesTerminalReceipt(terminal.receipt, runId, agentId, terminal.bytes, terminal.sha256) ||
+      !matchesPersistedRow(terminal, {
+        type: "emscripten-custody-terminal", custodyVersion: 1, runId, agentId, owner,
+        inputRef: input, outputRef: output, bytes: terminal.bytes, sha256: terminal.sha256,
+        receipt: terminal.receipt, workerTerminated: true,
+      }, terminalKey)) fail("emscripten_custody_audit_mismatch");
+  if (!(await isTerminated())) fail("emscripten_worker_not_fenced");
+  return await discardEmscriptenJobOutput({ runId, agentId, outputRef: output, storage });
 }

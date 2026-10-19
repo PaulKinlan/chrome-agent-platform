@@ -166,6 +166,17 @@ written only after a trusted callback confirms termination and handle closure,
 an independent bounded-window output rehash succeeds, and the run is still live.
 The callback must derive these facts from service-worker authority, never worker
 self-report. An absent/compacted intent is a refusal, **not** cleanup permission.
+The retained `discardFencedEmscriptenOutput` wrapper also requires both exact
+intent and terminal rows for the same locally derived run, agent, input and
+output identity, with a literal termination check before and after reading.
+It accepts the terminal digest and receipt only as a shape-checked historical
+audit, **not** a fresh proof of on-disk bytes; it cannot invoke
+`verifyEmscriptenOutputSeal` as a pre-delete probe because that helper deletes
+on verification drift. The underlying deletion primitive still rechecks
+output ownership and promoted metadata. Missing or compacted rows retain the
+output for a separately reviewed reconciler; neither age nor the staging
+reconciliation deadline authorizes deletion. This wrapper remains unwired and
+does not gate the separately exported legacy seal, verify or discard helpers.
 
 These run-log rows can be compacted under the retention policy above, so they
 are **not** a permanent deletion ledger or negative publication proof. No
