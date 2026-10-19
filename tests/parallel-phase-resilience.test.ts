@@ -23,14 +23,14 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/u, "");
  * chrome-agent-platform-6z8yi: clean up any stale 1k2a-parallel-* scratch directories
  * left behind if a previous test run was SIGKILLed before its finally block could run.
  */
-async function sweepStaleOrphanDirs() {
+export async function sweepStaleOrphanDirs() {
   const root = durableRoot();
   try {
     for await (const entry of Deno.readDir(root)) {
       if (entry.isDirectory && entry.name.startsWith("1k2a-parallel-")) {
-        const m = /^1k2a-parallel-[^-]+-(\d+)-/.exec(entry.name);
+        const m = /^1k2a-parallel-(.+)-(\d+)-([0-9a-zA-Z]+)$/.exec(entry.name);
         if (m) {
-          const pid = Number(m[1]);
+          const pid = Number(m[2]);
           let pidAlive = false;
           try {
             if (Deno.build.os === "linux") {
@@ -750,4 +750,36 @@ Deno.test("ri0x8: captureSnapshotWithRetry survives transient MHTML generation f
     caughtError!.message.includes("Page.captureSnapshot failed after 3 attempts [live-chrome=7 load1=12.50 heavy-builders=2[esbuild,cargo]]"),
     `error message must include attempt count and environmentLine: ${caughtError!.message}`,
   );
+});
+
+Deno.test("6z8yi/t4uvt: sweepStaleOrphanDirs cleans up hyphenated 1k2a-parallel-* scratch directories for dead PIDs", async () => {
+  const root = durableRoot();
+  const deadPid = 4194001;
+  const testDir = `${root}/1k2a-parallel-orphan-test-${deadPid}-deadbeef`;
+  const livePid = Deno.pid;
+  const liveDir = `${root}/1k2a-parallel-orphan-test-${livePid}-deadbeef`;
+
+  await Deno.mkdir(testDir, { recursive: true });
+  await Deno.mkdir(liveDir, { recursive: true });
+  try {
+    await sweepStaleOrphanDirs();
+
+    let deadExists = true;
+    try {
+      await Deno.stat(testDir);
+    } catch {
+      deadExists = false;
+    }
+    assertEquals(deadExists, false, "dead PID scratch dir with hyphenated label must be swept");
+
+    let liveExists = false;
+    try {
+      await Deno.stat(liveDir);
+      liveExists = true;
+    } catch {}
+    assertEquals(liveExists, true, "live PID scratch dir must be preserved");
+  } finally {
+    await Deno.remove(testDir, { recursive: true }).catch(() => {});
+    await Deno.remove(liveDir, { recursive: true }).catch(() => {});
+  }
 });
