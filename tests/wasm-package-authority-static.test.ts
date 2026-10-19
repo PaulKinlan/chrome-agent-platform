@@ -63,7 +63,7 @@ Deno.test("wasm static/RHC boundary: no route, execution, owner, OPFS, network o
 // wjrgk: reuse this already-always-on source guard rather than editing the
 // selector's own machinery (which correctly turns a fast gate into a full one).
 // The deliberately injected source is IN MEMORY, never left in the repo.
-Deno.test("static-first: CAP-authored Emscripten source cannot install a dynamic linker", async () => {
+Deno.test("static-first: walked product JS cannot install a dynamic linker", async () => {
   const worker = "extension/lib/emscripten-worker.js";
   const sources = await collectProductSources(new URL("../", import.meta.url));
   assert(sources.size > 300, `source audit vacuous: ${sources.size} modules`);

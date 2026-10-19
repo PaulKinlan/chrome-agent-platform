@@ -1,6 +1,6 @@
-// CAP-authored source audit for the always-on static-first Emscripten pin.
-// Generated bundles, historical ABI evidence and Python's pinned runtime are
-// not CAP-authored Emscripten source. The caller must pass its own repo root.
+// Always-on static-first Emscripten audit of walked product JS, including vendor JS.
+// Generated bundles and historical ABI evidence are excluded; Python's pinned
+// runtime is outside these roots. The caller must pass its own repo root.
 import { tokenizer } from "../../extension/lib/vendor/acorn.mjs";
 
 const SCRIPT_EXTENSIONS = /\.(?:js|mjs|cjs)$/u;
