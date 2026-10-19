@@ -25,6 +25,7 @@
 
 import { redactSecretText, truncateUtf8, utf8ByteLength } from "./pure.js";
 import { mintUntrustedToken } from "./untrusted-fence.js";
+import { isReservedMasterKey } from "./memory.js";
 
 /** The preview/template body: the Settings preview and the preview attestation
  * render the layer structure with this clearly-marked placeholder; a run's
@@ -59,14 +60,19 @@ const MEMORY_DIGEST_KEY_MAX_BYTES = 80;
 const MEMORY_DIGEST_SCAN_CAP = 200;
 // AUTHORITY STATE IS NOT A NOTE: the digest shows only what the AGENT could
 // have written through `memory_set` — never the reserved keys trusted product
-// code owns (lib/memory.js MASTER_RESERVED_KEYS / SITE_RESERVED_KEYS and the
-// trusted `thread:`/`run*:` prefixes). Digesting a thread body or the run
-// registry would flood the prompt with authority state and carry conversation
+// code owns (lib/memory.js isReservedMasterKey). Digesting a thread body or the
+// run registry would flood the prompt with authority state and carry conversation
 // bodies into every unrelated run. `index` and `journal` are excluded too: the
 // index has its own block below, and the journal is run history (reachable
-// through memory_grep), not a note.
-const MEMORY_DIGEST_SKIP_RE =
-  /^(?:index|journal|threads|origins|enrolled|scripts|skills|approvals|toolDirectory|agentConfig|run-registry|run-dismissed-failed)$|^(?:thread:|run:|run-outbox:|run-log:|run-resume:|run-payload:|__)/;
+// through memory_grep), not a note. Also skip site/approvals/toolDirectory keys.
+const DIGEST_ADDITIONAL_SKIP_KEYS = new Set([
+  "index", "journal", "skills", "approvals", "toolDirectory", "agentConfig"
+]);
+
+export function shouldSkipMemoryDigestKey(key) {
+  const k = String(key);
+  return DIGEST_ADDITIONAL_SKIP_KEYS.has(k) || isReservedMasterKey(k);
+}
 
 /** Sanitize agent-written text: ONE ordering invariant, all paths — strip
  * forbidden control chars FIRST (a control char can split a credential shape,
@@ -238,7 +244,7 @@ async function gatherMemoryDigest(memory) {
   try {
     const all = await memory.keys();
     const candidates = (Array.isArray(all) ? all : [])
-      .filter((k) => typeof k === "string" && k.length > 0 && !MEMORY_DIGEST_SKIP_RE.test(k))
+      .filter((k) => typeof k === "string" && k.length > 0 && !shouldSkipMemoryDigestKey(k))
       .slice(0, MEMORY_DIGEST_SCAN_CAP);
     if (candidates.length === 0) return { digest: null, more: 0 };
     // Ordering costs one extra read per key, so it is paid ONLY when it can

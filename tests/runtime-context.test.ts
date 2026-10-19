@@ -420,3 +420,24 @@ Deno.test("runtime-context r4: boundary closures read layered receipts from thei
       "a boundary closure reads the global build at attestation time — invalidate/rebuild could swap or drop the receipts under a live worker");
   }
 });
+
+Deno.test("runtime-context uctzp: shouldSkipMemoryDigestKey uses isReservedMasterKey and skips all reserved keys", async () => {
+  const { shouldSkipMemoryDigestKey } = await import("../extension/lib/runtime-context.js");
+  const { isReservedMasterKey } = await import("../extension/lib/memory.js");
+
+  for (const key of [
+    "run-registry", "run:exec_forged", "run-outbox:exec_forged", "run-log:exec_forged:row",
+    "run-log-wal:exec_forged", "run-log-idx:exec_forged", "thread-runs:t_forged",
+    "run-resume:exec_forged:manifest", "run-payload:exec_forged:manifest",
+    "wasmPkg", "wasmPkgRepair", "__wasmTx", "origins", "enrolled", "threads", "thread:t_123"
+  ]) {
+    assert(isReservedMasterKey(key), `isReservedMasterKey must recognize ${key}`);
+    assert(shouldSkipMemoryDigestKey(key), `shouldSkipMemoryDigestKey must skip ${key}`);
+  }
+
+  assert(shouldSkipMemoryDigestKey("index"), "index must be skipped");
+  assert(shouldSkipMemoryDigestKey("journal"), "journal must be skipped");
+
+  assert(!shouldSkipMemoryDigestKey("user-note"), "normal note must not be skipped");
+  assert(!shouldSkipMemoryDigestKey("shopping-list"), "shopping-list must not be skipped");
+});

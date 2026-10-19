@@ -248,6 +248,17 @@ const MASTER_RESERVED_KEYS = new Set([
 // store — the model's memory_set can never write the generation authority,
 // the WAL, a tombstone, or an artifact body/repair record.
 const INTERNAL_PREFIX_RE = /^(?:__gen|__tx|__wal|__epoch|__tombs|__wasmTx|profile:)/;
+
+/** Whether a key is reserved against untrusted writes on the master memory store.
+ * Also used by runtime-context.js to filter authority keys from the prompt memory digest. */
+export function isReservedMasterKey(key) {
+  const k = String(key);
+  return MASTER_RESERVED_KEYS.has(k) ||
+    k.startsWith("thread:") || k.startsWith("thread-runs:") ||
+    k.startsWith("run:") || k.startsWith("run-") ||
+    INTERNAL_KEY_RE.test(k);
+}
+
 // The full hidden namespace (keys()/get/list exclusion + set reservation).
 // `asset-` covers the immutable artifact version rows, the content-addressed
 // blobs, their refcounts and the byte accounting
@@ -819,20 +830,8 @@ function utf8Bytes(str) {
  * critical deadlock: withWriteLock → setTrusted → setValue → withWriteLock hung
  * forever and poisoned all later OPFS writes). */
 async function setValueInner(path, key, value, { isMaster, trusted = false, storeBoundBytes = null }) {
-  const reserved = isMaster ? MASTER_RESERVED_KEYS : SITE_RESERVED_KEYS;
   const k = String(key);
-  // Reserve both exact keys AND the `thread:` PREFIX on the master store: a
-  // forged `thread:t_...` body must be as unreachable as a forged `threads`
-  // index (the wider-goal review's thread-authority finding).
-  const trustedPrefix = isMaster && (
-    k.startsWith("thread:") || k.startsWith("thread-runs:") ||
-    k.startsWith("run:") || k.startsWith("run-")
-  );
-  // The internal namespace + artifact/package prefixes are reserved on EVERY
-  // store; trusted product code alone may write them through setTrusted.
-  const internal = INTERNAL_PREFIX_RE.test(k) || k === "assetRepair" ||
-    k === "wasmPkg" || k === "wasmPkgRepair" || k.startsWith("asset:") || k.startsWith("asset-");
-  if (!trusted && (reserved.has(k) || trustedPrefix || internal)) {
+  if (!trusted && (isMaster ? isReservedMasterKey(k) : (SITE_RESERVED_KEYS.has(k) || INTERNAL_KEY_RE.test(k)))) {
     throw new Error(`key "${key}" is reserved on this store`);
   }
   let serialized;
