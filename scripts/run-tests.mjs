@@ -141,18 +141,34 @@ function runParallel(files, phase = "parallel phase", durationsOut = null) {
       }
       process.removeListener("SIGTERM", onSigTerm);
       process.removeListener("SIGINT", onSigInt);
+      process.removeListener("SIGHUP", onSigHup);
+      process.removeListener("SIGQUIT", onSigQuit);
       process.kill(process.pid, sig);
     };
     const onSigTerm = () => onSig("SIGTERM");
     const onSigInt = () => onSig("SIGINT");
+    const onSigHup = () => onSig("SIGHUP");
+    const onSigQuit = () => onSig("SIGQUIT");
     process.on("SIGTERM", onSigTerm);
     process.on("SIGINT", onSigInt);
+    process.on("SIGHUP", onSigHup);
+    process.on("SIGQUIT", onSigQuit);
+
+    const onExit = () => {
+      if (child.pid) {
+        try { process.kill(-child.pid, "SIGKILL"); } catch { /* clean */ }
+      }
+    };
+    process.on("exit", onExit);
 
     const cleanup = () => {
       if (readyPoll) clearInterval(readyPoll);
       if (timer) clearTimeout(timer);
       process.removeListener("SIGTERM", onSigTerm);
       process.removeListener("SIGINT", onSigInt);
+      process.removeListener("SIGHUP", onSigHup);
+      process.removeListener("SIGQUIT", onSigQuit);
+      process.removeListener("exit", onExit);
       if (child.pid) {
         try { process.kill(-child.pid, "SIGKILL"); } catch { /* clean */ }
       }
