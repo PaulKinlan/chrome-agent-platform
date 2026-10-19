@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
-// Bump the version across package.json + package-lock.json + extension/manifest.json + CHANGELOG.md.
+// Stamp the release identity ONCE per landed union (x0vas): package.json +
+// package-lock.json + extension/manifest.json + CHANGELOG.md + the generated
+// extension/CHANGELOG.md, the About page and the bundled inventory's release
+// field. Lanes never run this; the merger does, on the union tip (--landing).
 // Adapted from the owner's earlier extension pattern.
 //
 // Usage:
@@ -21,11 +24,12 @@
 // are only ever consumed by commits that also write a real user-language entry,
 // which keeps the changelog contiguous by construction.
 //
-// --hook (8nec): the post-commit mode. The note is EXPLICIT — --user-note only,
-// never inferred from the subject — and the bump is once per branch: when the
-// working version no longer matches origin/main's, this branch already carries the
-// bump (or is behind main) and nothing is written. scripts/git-hooks/post-commit
-// is the author interface (a `Release-note:` trailer or CAP_USER_NOTE).
+// --hook (8nec): the LEGACY post-commit mode, kept for the sanitize tests and
+// --reconcile-merge repair. It is INVOKED BY NOBODY since uikt5: the tracked
+// scripts/git-hooks/post-commit is a stamping no-op — lanes never mint releases;
+// the merger stamps the union with --landing. The note is EXPLICIT — --user-note
+// only, never inferred from the subject — and the bump is once per branch: when
+// the working version no longer matches origin/main's, nothing is written.
 
 import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync, existsSync } from "fs";
@@ -267,6 +271,26 @@ if ((reconcileMerge && (!changelogVersion || hookMode || type !== "patch" || !su
   process.exit(1);
 }
 const releaseBase = reconcileMerge ? changelogVersion : current;
+
+// chrome-agent-platform-x0vas: a union stamp is IDEMPOTENT per batch. The merger's
+// flow can legitimately re-run step 3a (a gate failure after stamping, an amended
+// landing message); a re-run must NOT mint a second patch for the same effect.
+// When every note this batch would write already appears verbatim in the NEWEST
+// CHANGELOG section — surface agreement is already enforced above — the batch is
+// released: write nothing, exit 0. A batch with any NEW effect has at least one
+// note outside the newest section and stamps normally.
+if (landingMode && changelogVersion && landingNotes.length) {
+  const newestBullets = existsSync(changelogPath)
+    ? (parseChangelog(readFileSync(changelogPath, "utf-8"))[0]?.bullets ?? []).map((b) => String(b).trim())
+    : [];
+  if (newestBullets.length && landingNotes.every((note) => newestBullets.includes(note))) {
+    console.error(
+      `[bump-version] this batch is already released as [${changelogVersion}] — every landing note ` +
+      `is in the newest CHANGELOG section; nothing to stamp (idempotent re-run, x0vas).`,
+    );
+    process.exit(0);
+  }
+}
 
 // 8nec (B): one bump per branch, not one per commit. If this branch's version no longer
 // matches origin/main's, the branch either already carries the bump (its changelog entry

@@ -69,17 +69,6 @@ export const HARNESS_TREE_GUARDS = Object.freeze([
   "tests/chrome-test-contract.test.ts",
 ]);
 
-/** Tests that read the release/bookkeeping files as DATA (by literal path), so
- *  they are the coverage a version bump actually has. */
-export const BOOKKEEPING_GUARDS = Object.freeze([
-  "tests/manifest-permissions.test.ts",
-  "tests/package-scripts-exist.test.ts",
-  "tests/changelog.test.ts",
-  "tests/bump-version-sanitize.test.ts",
-  "tests/bundled-tool-packages.test.ts",
-  "tests/first-run-onboarding-composition.test.ts",
-]);
-
 /** Tests that inspect and validate the extension/wasm/manifests/ directory. */
 export const WASM_MANIFEST_GUARDS = Object.freeze([
   "tests/bundled-tool-packages.test.ts",
@@ -112,84 +101,6 @@ export const BOOKKEEPING_FILES = Object.freeze([
   "package-lock.json",
   "extension/manifest.json",
 ]);
-
-/**
- * The root fields a version bump is allowed to move, PER FILE.
- *
- * The authority is what the hook ACTUALLY writes (scripts/bump-version.mjs:145-155):
- *   package.json            → root `version`
- *   package-lock.json       → root `version` AND `packages[""].version` (mirror)
- *   extension/manifest.json → root `version` AND `version_name`
- *
- * A path not listed here has NO approved fields, so every difference counts and
- * the predicate fails closed. A nested dependency's `version` is deliberately
- * not approved anywhere — that is a real change.
- */
-export const VERSION_FIELDS_BY_FILE = Object.freeze({
-  "package.json": Object.freeze(["version"]),
-  "package-lock.json": Object.freeze(["version"]),
-  "extension/manifest.json": Object.freeze(["version", "version_name"]),
-});
-
-/**
- * Strip the approved version fields and return a STRUCTURE-PRESERVING canonical
- * form. Everything else — object vs array, empty containers, key identity — must
- * survive, because the only safe `true` is "nothing outside those fields moved".
- */
-function strippedCanonical(value, rel) {
-  const path = String(rel ?? "").replace(/\\/g, "/");
-  const fields = VERSION_FIELDS_BY_FILE[path] ?? [];
-  const clone = structuredClone(value);
-  if (clone && typeof clone === "object" && !Array.isArray(clone)) {
-    for (const field of fields) delete clone[field];
-    if (path === "package-lock.json") {
-      const rootEntry = clone.packages && typeof clone.packages === "object" && !Array.isArray(clone.packages)
-        ? clone.packages[""]
-        : null;
-      if (rootEntry && typeof rootEntry === "object" && !Array.isArray(rootEntry)) delete rootEntry.version;
-    }
-  }
-  return canonicalJson(clone);
-}
-
-/** Deterministic JSON with object keys sorted, so key ORDER is not a difference
- *  while structure and identity still are. Arrays keep their order (it is
- *  meaningful); objects and arrays stay distinguishable; empty containers are
- *  represented explicitly. */
-function canonicalJson(value) {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value && typeof value === "object") {
-    const keys = Object.keys(value).sort();
-    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
-}
-
-/**
- * Is the difference between two JSON texts confined to version fields?
- *
- * Returns `false` for anything it cannot prove — unparseable text, a missing
- * side, a changed key set, a changed nested value. FAILS CLOSED by construction:
- * the only `true` is "parsed both sides and every differing key path is a
- * declared version field".
- */
-export function versionOnlyJsonChange(beforeText, afterText, rel) {
-  if (typeof beforeText !== "string" || typeof afterText !== "string") return false;
-  const path = String(rel ?? "").replace(/\\/g, "/");
-  if (!VERSION_FIELDS_BY_FILE[path]) return false;
-  let before, after;
-  try {
-    before = JSON.parse(beforeText);
-    after = JSON.parse(afterText);
-  } catch {
-    return false; // unparseable: never claim it is only a version bump
-  }
-  // Everything OUTSIDE this file's approved fields must be structurally identical.
-  if (strippedCanonical(before, path) !== strippedCanonical(after, path)) return false;
-  // …and at least one approved field must actually have moved: two identical
-  // files are not a "version-only CHANGE".
-  return canonicalJson(before) !== canonicalJson(after);
-}
 
 /** A harness under scripts/ that no test imports. */
 export function isScriptsHarness(rel) {
@@ -259,14 +170,10 @@ export function isBookkeepingFile(rel) {
 /**
  * Why this uncovered file is uncovered, and what covers it instead.
  *
- * `versionOnly` is supplied by the caller (it needs git to read the base blob),
- * so this function stays pure and testable. When a bookkeeping file's diff is
- * NOT version-only, it is deliberately left unmappable: that is a real change.
- *
  * Returns `{ mechanism, tests }`; `tests` empty means FAIL CLOSED and the
  * mechanism is the reason to print.
  */
-export function classifyUncovered(rel, { versionOnly = false, referrers = [] } = {}) {
+export function classifyUncovered(rel, { referrers = [] } = {}) {
   const path = rel.replace(/\\/g, "/");
   // The selector's own machinery is never subset-mappable. Checked FIRST so
   // no later branch can bless it, and duplicated at the caller because an
@@ -380,20 +287,18 @@ export function classifyUncovered(rel, { versionOnly = false, referrers = [] } =
  */
 export function mapUncovered(
   uncovered,
-  versionOnlyFor,
   declaredTestExists,
   declaredSourceExists,
   referrersFor = () => [],
 ) {
-  if (typeof versionOnlyFor !== "function" || typeof declaredTestExists !== "function" ||
-      typeof declaredSourceExists !== "function") {
-    throw new Error("mapUncovered: version-only and declared guard existence predicates are required; source-existence predicate is required");
+  if (typeof declaredTestExists !== "function" || typeof declaredSourceExists !== "function") {
+    throw new Error("mapUncovered: declared guard and source existence predicates are required");
   }
   const mapped = [];
   const unmappable = [];
   for (const file of uncovered) {
     const referrers = typeof referrersFor === "function" ? referrersFor(file) : [];
-    const verdict = classifyUncovered(file, { versionOnly: versionOnlyFor(file), referrers });
+    const verdict = classifyUncovered(file, { referrers });
     const missing = verdict.tests.filter((test) => !declaredTestExists(test));
     if (missing.length) {
       unmappable.push({

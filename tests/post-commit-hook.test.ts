@@ -97,6 +97,42 @@ Deno.test("uikt5: two trailed branch commits become ONE landing release with bot
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+Deno.test("x0vas: re-running the same landing batch is idempotent — no duplicate release", async () => {
+  const dir = await mirror();
+  try {
+    const first = commit(dir, "one branch", "you can export conversations");
+    const result = stamp(dir, "--from", first);
+    assertEquals(result.status, 0, result.stderr);
+    assertEquals(await version(dir), "1.2.4");
+    // The merger commits the stamp; a later re-run of step 3a (amended landing
+    // message, retried batch) reads the COMMITTED release and must no-op.
+    git(dir, "add", "-A");
+    git(dir, "commit", "-q", "-m", "chore(release): 1.2.4");
+    const rerun = stamp(dir, "--from", first);
+    assertEquals(rerun.status, 0, rerun.stderr);
+    assert(rerun.stderr.includes("already released"), rerun.stderr);
+    assertEquals(await version(dir), "1.2.4");
+    const log = await readFile(path.join(dir, "CHANGELOG.md"), "utf8");
+    assertEquals((log.match(/## \[1\.2\.4\]/g) ?? []).length, 1, log);
+    assertEquals(git(dir, "status", "--porcelain"), "");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+Deno.test("x0vas: a batch with a NEW effect still stamps after an earlier release", async () => {
+  const dir = await mirror();
+  try {
+    const first = commit(dir, "one branch", "you can export conversations");
+    assertEquals(stamp(dir, "--from", first).status, 0);
+    const second = commit(dir, "another branch", "you can clear conversations");
+    const result = stamp(dir, "--from", second);
+    assertEquals(result.status, 0, result.stderr);
+    assertEquals(await version(dir), "1.2.5");
+    const log = await readFile(path.join(dir, "CHANGELOG.md"), "utf8");
+    assertEquals((log.match(/## \[1\.2\.5\]/g) ?? []).length, 1, log);
+    assert(log.includes("- you can clear conversations"), log);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 Deno.test("3er9j: mixed union refuses a trailer-less candidate unless named internal", async () => {
   const dir = await mirror();
   try {

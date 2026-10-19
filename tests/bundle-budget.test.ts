@@ -228,7 +228,12 @@ Deno.test("9epn.4 bundle budget: every generated bundle has a ceiling and the ga
   const entries = Object.entries(STORE_BUNDLE_BUDGETS);
   assertEquals(
     [...Object.keys(STORE_BUNDLE_BUDGETS)].sort(),
-    [...DIST_COMPLETE_OUTPUTS].sort(),
+    // chrome-agent-platform-x0vas: dist/build-identity.json is a marker-recorded
+    // output (branch + commit) but NOT a bundle — nothing bundles it, so it is
+    // exempt from the budget table by name. It stays in DIST_COMPLETE_OUTPUTS so
+    // a branch switch at the same commit invalidates the marker and rebuilds;
+    // a budget ceiling for it would just lie about what it is.
+    [...DIST_COMPLETE_OUTPUTS].filter((rel) => rel !== "build-identity.json").sort(),
     "the budget table and the marker's output list name the SAME bundles — a bundle recorded without a ceiling (or a ceiling for a bundle the marker does not record) is the gap this bead closed",
   );
   assertEquals(BUDGET_REPORTED_BUNDLES, Object.keys(STORE_BUNDLE_BUDGETS));

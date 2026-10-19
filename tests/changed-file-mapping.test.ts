@@ -15,7 +15,6 @@ import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
 import {
   BOOKKEEPING_FILES,
-  BOOKKEEPING_GUARDS,
   classifyUncovered,
   HARNESS_TREE_GUARDS,
   HTML_EXPORT_ENTRY_GUARDS,
@@ -28,8 +27,6 @@ import {
   isWasmSbom,
   mapUncovered,
   SELECTOR_INFRASTRUCTURE,
-  VERSION_FIELDS_BY_FILE,
-  versionOnlyJsonChange,
   WASM_LICENSE_GUARDS,
   WASM_MANIFEST_GUARDS,
   WASM_SBOM_GUARDS,
@@ -42,216 +39,44 @@ import {
   referrersFor,
   selectTestFiles,
   testFilesWithContent,
-  versionOnlyAgainst,
 } from "../scripts/select-tests.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const declaredGuardExists = (rel: string) => {
   try { return Deno.statSync(`${ROOT}${rel}`).isFile; } catch { return false; }
 };
-const BASE = JSON.stringify({
-  name: "chrome-agent-platform",
-  version: "0.3.474",
-  dependencies: { ai: "7.0.66", zod: "3.25.76" },
-  scripts: { test: "node scripts/run-tests.mjs" },
-});
-const withBase = (mutate: (o: any) => void) => {
-  const o = JSON.parse(BASE);
-  mutate(o);
-  return JSON.stringify(o);
-};
-
-const PKG = "package.json";
-const MAN = "extension/manifest.json";
-const LOCK = "package-lock.json";
-
-Deno.test("nco2: a pure version bump is mappable", () => {
-  assertEquals(versionOnlyJsonChange(BASE, withBase((o) => o.version = "0.3.475"), PKG), true);
-  // manifest carries a second version field.
-  const man = JSON.stringify({ version: "1.0", version_name: "1.0", permissions: ["storage"] });
-  const bumped = JSON.stringify({ version: "1.1", version_name: "1.1", permissions: ["storage"] });
-  assertEquals(versionOnlyJsonChange(man, bumped, MAN), true);
-  // package-lock's root self-entry mirrors the project version.
-  const lock = JSON.stringify({ version: "1.0", packages: { "": { version: "1.0" }, "node_modules/ai": { version: "7.0.66" } } });
-  const lockBumped = JSON.stringify({ version: "1.1", packages: { "": { version: "1.1" }, "node_modules/ai": { version: "7.0.66" } } });
-  assertEquals(versionOnlyJsonChange(lock, lockBumped, LOCK), true);
-});
-
-Deno.test("nco2: a NESTED dependency bump is NOT mappable (the line-grep trap)", () => {
-  // mo2f.3 proved a line filter on `"version"` passes a dependency bump exactly
-  // as cleanly as a project bump. Parsing both sides is what closes that hole,
-  // so this is the assertion that must never be relaxed into a token match.
-  assertEquals(versionOnlyJsonChange(BASE, withBase((o) => o.dependencies.ai = "9.9.9"), PKG), false);
-  const lock = JSON.stringify({ version: "1.0", packages: { "": { version: "1.0" }, "node_modules/ai": { version: "7.0.66" } } });
-  const sneaky = JSON.stringify({ version: "1.1", packages: { "": { version: "1.1" }, "node_modules/ai": { version: "9.9.9" } } });
-  assertEquals(versionOnlyJsonChange(lock, sneaky, LOCK), false, "a nested dependency bump hidden behind a real version bump");
-});
-
-Deno.test("nco2: security-relevant manifest edits are NOT mappable", () => {
-  const man = JSON.stringify({
-    version: "1.0",
-    version_name: "1.0",
-    permissions: ["storage"],
-    content_security_policy: { extension_pages: "script-src 'self' 'wasm-unsafe-eval'" },
-  });
-  const weakenedCsp = JSON.stringify({
-    version: "1.1",
-    version_name: "1.1",
-    permissions: ["storage"],
-    content_security_policy: { extension_pages: "script-src 'self' 'unsafe-eval'" },
-  });
-  const newPermission = JSON.stringify({
-    version: "1.1",
-    version_name: "1.1",
-    permissions: ["storage", "debugger"],
-    content_security_policy: { extension_pages: "script-src 'self' 'wasm-unsafe-eval'" },
-  });
-  assertEquals(versionOnlyJsonChange(man, weakenedCsp, MAN), false, "a weakened CSP must force the full suite");
-  assertEquals(versionOnlyJsonChange(man, newPermission, MAN), false, "a new permission must force the full suite");
-});
-
-Deno.test("nco2: STRUCTURE is preserved — empty containers and key identity are real changes", () => {
-  // (a) EMPTY CONTAINERS VANISHED when flattened — they have no leaves.
-  assertEquals(
-    versionOnlyJsonChange(BASE, withBase((o) => { o.version = "0.3.999"; o.overrides = {}; }), PKG),
-    false,
-    "adding an empty `overrides: {}` is a structural change, not a version bump",
-  );
-  const manifest = JSON.stringify({ version: "1.0", version_name: "1.0", permissions: ["storage"] });
-  assertEquals(
-    versionOnlyJsonChange(
-      manifest,
-      JSON.stringify({ version: "1.1", version_name: "1.1", permissions: ["storage"], web_accessible_resources: [] }),
-      MAN,
-    ),
-    false,
-    "adding an empty `web_accessible_resources: []` is a structural change",
-  );
-  // …including a container that changes TYPE while staying empty.
-  assertEquals(
-    versionOnlyJsonChange(
-      JSON.stringify({ version: "1.0", overrides: {} }),
-      JSON.stringify({ version: "1.1", overrides: [] }),
-      PKG,
-    ),
-    false,
-    "`{}` becoming `[]` is a structural change — a flattened map cannot see it",
-  );
-
-  // (b) KEY PATHS COLLIDED: `dependencies.ai` and a literal top-level key named
-  //     "dependencies.ai" flattened identically, so MOVING a real dependency out
-  //     of its container compared equal to leaving it there.
-  assertEquals(
-    versionOnlyJsonChange(
-      BASE,
-      withBase((o) => {
-        o.version = "0.3.999";
-        o["dependencies.ai"] = o.dependencies.ai;
-        delete o.dependencies.ai;
-      }),
-      PKG,
-    ),
-    false,
-    "moving a dependency to a dotted top-level key is a real change, not a bump",
-  );
-  // The same collision with bracket syntax and a real permissions array.
-  assertEquals(
-    versionOnlyJsonChange(
-      manifest,
-      JSON.stringify({ version: "1.1", version_name: "1.1", "permissions[0]": "storage" }),
-      MAN,
-    ),
-    false,
-    "replacing an array with same-valued indexed keys is a real change",
-  );
-
-  // And the ordinary positives still map: key ORDER is not a difference.
-  assertEquals(
-    versionOnlyJsonChange(
-      JSON.stringify({ name: "x", version: "1.0", dependencies: { ai: "7.0.66" } }),
-      JSON.stringify({ dependencies: { ai: "7.0.66" }, version: "1.1", name: "x" }),
-      PKG,
-    ),
-    true,
-    "reordered keys with only the version moved is still a version-only change",
-  );
-});
-
-Deno.test("nco2/R2b: the approved fields are PER FILE — `release` is not one of them anywhere", () => {
-  assertEquals(VERSION_FIELDS_BY_FILE[PKG], ["version"]);
-  assertEquals(VERSION_FIELDS_BY_FILE[LOCK], ["version"]);
-  assertEquals(VERSION_FIELDS_BY_FILE[MAN], ["version", "version_name"]);
-  for (const [file, fields] of Object.entries(VERSION_FIELDS_BY_FILE)) {
-    assert(!fields.includes("release"), `${file} must not approve \`release\` — the hook never writes it there`);
-  }
-
-  // A release CONFIG object is a real change in all three, with no version moved.
-  const rel = (o: any) => { o.release = { branches: ["preview"], plugins: ["x"] }; };
-  assertEquals(versionOnlyJsonChange(BASE, withBase(rel), PKG), false, "package.json release config");
-  const man = JSON.stringify({ version: "1.0", version_name: "1.0", permissions: ["storage"] });
-  assertEquals(
-    versionOnlyJsonChange(man, JSON.stringify({ version: "1.0", version_name: "1.0", permissions: ["storage"], release: { permissions: ["debugger"] } }), MAN),
-    false,
-    "a manifest `release` object is not a manifest version field",
-  );
-  const lock = JSON.stringify({ version: "1.0", packages: { "": { version: "1.0" } } });
-  assertEquals(
-    versionOnlyJsonChange(lock, JSON.stringify({ version: "1.0", packages: { "": { version: "1.0" } }, release: { enabled: false } }), LOCK),
-    false,
-    "a lock `release` object is not a lock version field",
-  );
-
-  // package.json has no `version_name`, so writing one is a real change there…
-  assertEquals(
-    versionOnlyJsonChange(BASE, withBase((o) => { o.version_name = "not-a-package-version"; }), PKG),
-    false,
-    "package.json does not carry version_name — writing one is a real change",
-  );
-  // …while the manifest's IS approved, because the hook writes it.
-  assertEquals(
-    versionOnlyJsonChange(man, JSON.stringify({ version: "1.1", version_name: "1.1", permissions: ["storage"] }), MAN),
-    true,
-    "the manifest's version_name moves with its version",
-  );
-
-  // packages[""] is stripped for the LOCK ONLY. The same shape elsewhere is not
-  // a version mirror, and treating it as one would erase a real change.
-  const shaped = JSON.stringify({ version: "1.0", packages: { "": { version: "1.0" } } });
-  const shapedMoved = JSON.stringify({ version: "1.1", packages: { "": { version: "9.9.9" } } });
-  assertEquals(versionOnlyJsonChange(shaped, shapedMoved, LOCK), true, "the lock's self-mirror moves with the version");
-  assertEquals(
-    versionOnlyJsonChange(shaped, shapedMoved, PKG),
-    false,
-    "the same shape in package.json is NOT a version mirror",
-  );
-});
-
-Deno.test("nco2: anything unprovable is NOT mappable (fails closed)", () => {
-  assertEquals(versionOnlyJsonChange(BASE, "{not json", PKG), false, "unparseable after");
-  assertEquals(versionOnlyJsonChange("{not json", BASE, PKG), false, "unparseable before");
-  assertEquals(versionOnlyJsonChange(BASE, BASE, PKG), false, "identical files are not a version-only CHANGE");
-  assertEquals(versionOnlyJsonChange(undefined, BASE, PKG), false, "missing side");
-  assertEquals(versionOnlyJsonChange(BASE, withBase((o) => o.scripts.evil = "rm -rf /"), PKG), false, "an added script");
-  assertEquals(versionOnlyJsonChange(BASE, withBase((o) => delete o.dependencies.zod), PKG), false, "a removed dependency");
-  const realBump = withBase((o) => o.version = "0.3.999");
-  assertEquals(versionOnlyJsonChange(BASE, realBump, PKG), true, "control: WITH a path this is version-only");
-  assertEquals(versionOnlyJsonChange(BASE, realBump), false, "the same change with NO path fails closed");
-  assertEquals(versionOnlyJsonChange(BASE, realBump, "some/other.json"), false, "an undeclared path fails closed");
-});
 
 Deno.test("nco2: classification names the mechanism, and only maps what it can justify", () => {
   const harness = classifyUncovered("scripts/a11y-audit.ts");
   assert(harness.tests.length > 0, "an unimported harness maps to its tree-walking guards");
   assert(/enumerated by the tree-walking guards/.test(harness.mechanism), harness.mechanism);
 
-  const bump = classifyUncovered("package.json", { versionOnly: true });
-  assertEquals(bump.tests, [], "even version-only JSON must fail closed on a lane");
+  const bump = classifyUncovered("package.json");
+  assertEquals(bump.tests, [], "bookkeeping JSON must fail closed on a lane");
   assert(/belongs to the merger/.test(bump.mechanism), bump.mechanism);
-  assertEquals(classifyUncovered("package.json", { versionOnly: false }).tests, []);
 
   const unknown = classifyUncovered("some/unknown-thing.json");
   assertEquals(unknown.tests, [], "an unrecognised file still fails closed");
   assert(/genuinely unmappable/.test(unknown.mechanism), unknown.mechanism);
+});
+
+Deno.test("x0vas: every bookkeeping file fails closed BY NAME — no version-only mapping survives", () => {
+  assertEquals(BOOKKEEPING_FILES.length, 3);
+  for (const rel of BOOKKEEPING_FILES) {
+    const verdict = classifyUncovered(rel);
+    assertEquals(verdict.tests, [], `${rel} must fail closed`);
+    assert(
+      /belongs to the merger/.test(verdict.mechanism),
+      `${rel} mechanism must name the merger: ${verdict.mechanism}`,
+    );
+  }
+  // A FUNCTIONAL edit (the permission change o65r shipped, a dependency bump, a
+  // weakened CSP) gets the SAME fail-closed verdict as a version edit: the class
+  // that used to tell them apart is gone, and the mechanism no longer pretends
+  // the selector could certify any of them.
+  const functional = classifyUncovered("extension/manifest.json", { referrers: [] });
+  assertEquals(functional.tests, []);
+  assert(/belongs to the merger/.test(functional.mechanism), functional.mechanism);
 });
 
 Deno.test("nco2: unenumerated scripts under scripts/ fail closed", () => {
@@ -313,7 +138,6 @@ Deno.test("y546u: Export JS guards are reached through real selector edges, not 
 Deno.test("nco2: mapUncovered splits mapped from unmappable and carries the reason", () => {
   const { mapped, unmappable } = mapUncovered(
     ["package.json", "extension/manifest.json", "scripts/a11y-audit.ts", "some/unknown-thing.json"],
-    (f) => f === "package.json",
     declaredGuardExists,
     () => true,
   );
@@ -328,13 +152,13 @@ Deno.test("nco2: mapUncovered splits mapped from unmappable and carries the reas
 Deno.test("cqsim: absent declared guard refuses subset and names both source and missing test", () => {
   const source = "extension/ntp/ntp.html";
   const guard = "tests/thread-export-entry-html.test.ts";
-  const missing = mapUncovered([source], () => false, () => false, () => true);
+  const missing = mapUncovered([source], () => false, () => true);
   assertEquals(missing.mapped, []);
   assertEquals(missing.unmappable.map((entry: any) => entry.file), [source]);
   assert(missing.unmappable[0].mechanism.includes(source));
   assert(missing.unmappable[0].mechanism.includes(guard));
-  assertThrows(() => mapUncovered([source], () => false), Error, "declared guard existence predicates are required");
-  const present = mapUncovered([source], () => false, declaredGuardExists, () => true);
+  assertThrows(() => mapUncovered([source], () => false), Error, "declared guard and source existence predicates are required");
+  const present = mapUncovered([source], declaredGuardExists, () => true);
   assertEquals(present.unmappable, []);
   assertEquals(present.mapped[0].tests, [guard]);
 });
@@ -342,27 +166,23 @@ Deno.test("cqsim: absent declared guard refuses subset and names both source and
 Deno.test("9l5z4: deleted exact HTML entries fail closed with source and declared guard named", () => {
   const guard = "tests/thread-export-entry-html.test.ts";
   for (const source of Object.keys(HTML_EXPORT_ENTRY_GUARDS)) {
-    const missing = mapUncovered([source], () => false, declaredGuardExists, () => false);
+    const missing = mapUncovered([source], declaredGuardExists, () => false);
     assertEquals(missing.mapped, [], source);
     assertEquals(missing.unmappable.map((entry: any) => entry.file), [source]);
     assert(missing.unmappable[0].mechanism.includes(source));
     assert(missing.unmappable[0].mechanism.includes(guard));
-    const present = mapUncovered([source], () => false, declaredGuardExists, () => true);
+    const present = mapUncovered([source], declaredGuardExists, () => true);
     assertEquals(present.unmappable, []);
     assertEquals(present.mapped[0].tests, [guard]);
   }
   assertThrows(
-    () => mapUncovered(["extension/ntp/ntp.html"], () => false, declaredGuardExists),
+    () => mapUncovered(["extension/ntp/ntp.html"], declaredGuardExists),
     Error,
-    "source-existence predicate is required",
+    "declared guard and source existence predicates are required",
   );
 });
 
 Deno.test("nco2: every declared guard EXISTS and actually reads the tree it guards", () => {
-  assert(
-    BOOKKEEPING_GUARDS.includes("tests/first-run-onboarding-composition.test.ts"),
-    "BOOKKEEPING_GUARDS must include tests/first-run-onboarding-composition.test.ts to catch cross-file version skew",
-  );
   assert(
     !HARNESS_TREE_GUARDS.includes("tests/chrome-profile-location.test.ts"),
     "HARNESS_TREE_GUARDS must NOT include tests/chrome-profile-location.test.ts (real-browser test must not be launched by generic harness changes)",
@@ -380,13 +200,11 @@ Deno.test("nco2: every declared guard EXISTS and actually reads the tree it guar
       `${rel} must READ the tree (that is why it has no import edge)`,
     );
   }
-  for (const rel of BOOKKEEPING_GUARDS) {
-    const src = Deno.readTextFileSync(`${ROOT}${rel}`);
-    assert(
-      BOOKKEEPING_FILES.some((f) => src.includes(f)),
-      `${rel} must contain the literal path of a bookkeeping file it is claimed to cover`,
-    );
-  }
+  // chrome-agent-platform-x0vas: the BOOKKEEPING_GUARDS list is gone with the
+  // version-only mapping. The bookkeeping files' fail-closed coverage is pinned
+  // by the always-on guards directly (manifest-permissions, package-scripts-exist,
+  // changelog, bump-version-sanitize, bundled-tool-packages,
+  // first-run-onboarding-composition) — see tests/select-tests-always-on.test.ts.
   for (const rel of WASM_MANIFEST_GUARDS) {
     const src = Deno.readTextFileSync(`${ROOT}${rel}`);
     assert(/manifests|manifest/i.test(src), `${rel} must reference Wasm manifests`);
@@ -477,21 +295,8 @@ Deno.test("nco2/R3: the CALLER uses the merge-base — a caller-only revert must
   assertEquals(changed, ["extension/lib/agent.js"], "the changed set still comes back through the filter");
 });
 
-Deno.test("nco2/R2-caller: versionOnlyAgainst uses the merge-base and passes rel path", async () => {
-  const calls: string[][] = [];
-  const fakeGit = (args: string[]) => {
-    calls.push(args);
-    if (args[0] === "show") return JSON.stringify({ name: "test", version: "0.1.0" });
-    return "";
-  };
-
-  // Test that versionOnlyAgainst calls git with the expected ref:rel
-  const res = versionOnlyAgainst("MERGE_BASE_SHA", "package.json", fakeGit);
-  assert(calls.some((c) => c[0] === "show" && c[1] === "MERGE_BASE_SHA:package.json"), "calls git show with ref:path");
-});
-
 Deno.test("nco2: the mapping is a SUBSET of the full suite, never an invention", () => {
-  for (const rel of [...HARNESS_TREE_GUARDS, ...BOOKKEEPING_GUARDS]) {
+  for (const rel of [...HARNESS_TREE_GUARDS]) {
     assert(
       Deno.statSync(`${ROOT}${rel}`).isFile,
       `${rel} must exist — a mapping to a missing test selects nothing and proves nothing`,
@@ -683,7 +488,6 @@ Deno.test("3aq3v: Wasm manifest, SBOM, and license predicates and mapping", () =
       "extension/wasm/sbom/hash_keccak_256.cdx.json",
       "extension/wasm/licenses/hash-wasm-MIT.txt",
     ],
-    () => false,
     declaredGuardExists,
     () => true,
     referrersFor,
@@ -696,7 +500,6 @@ Deno.test("oeqvx: mapUncovered maps fixture when referrersFor is supplied and fa
   const fixture = "tests/fixtures/security-suite-fake-runner.mjs";
   const mappedResult = mapUncovered(
     [fixture],
-    () => false,
     declaredGuardExists,
     () => true,
     referrersFor,
@@ -712,7 +515,6 @@ Deno.test("oeqvx: mapUncovered maps fixture when referrersFor is supplied and fa
   // Non-equivalent mutant: when referrersFor returns [] (or mapping removed), fixture fails closed
   const mutantResult = mapUncovered(
     [fixture],
-    () => false,
     declaredGuardExists,
     () => true,
     () => [],

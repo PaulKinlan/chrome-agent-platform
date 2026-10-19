@@ -12,7 +12,8 @@ Deno.test("first-run composition leaves the current release identity unchanged",
     text("../extension/manifest.json").then(JSON.parse),
   ]);
   // Release-agnostic identity: every release surface carries ONE semver-valid
-  // version (the post-commit hook allocates it; no test may hardcode it).
+  // version (the MERGER allocates it once per landed union — x0vas/uikt5; lanes
+  // never stamp; no test may hardcode it).
   assert(
     typeof pkg.version === "string" && /^\d+\.\d+\.\d+$/.test(pkg.version),
     `package.json version must be semantic, got ${pkg.version}`,

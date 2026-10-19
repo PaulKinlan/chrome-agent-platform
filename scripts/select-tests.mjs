@@ -47,7 +47,7 @@ import { constants as osConstants } from "node:os";
 import { tokenizer } from "acorn";
 import { partition } from "./test-partition.mjs";
 import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
-import { HTML_EXPORT_ENTRY_GUARDS, isSelectorInfrastructure, mapUncovered, versionOnlyJsonChange } from "./lib/changed-file-mapping.mjs";
+import { HTML_EXPORT_ENTRY_GUARDS, isSelectorInfrastructure, mapUncovered } from "./lib/changed-file-mapping.mjs";
 import { isPassiveContentFile } from "./lib/content-exemptions.mjs";
 import { emitGateLedger, explainChangedFileMapping } from "./lib/gate-manifest.mjs";
 import { decideBuild, ensureStoreBuild, findDistConsumers } from "./build-if-needed.mjs";
@@ -365,19 +365,6 @@ export function mergeBaseOf(base, runGit = git) {
     return runGit(["merge-base", "HEAD", base]).trim() || base;
   } catch {
     return base; // unrelated histories / missing ref: diff against it directly
-  }
-}
-
-/** Read a path at `ref` and at the working tree, and ask whether the difference
- *  is confined to version fields. Any git failure is `false` (fail closed). */
-export function versionOnlyAgainst(ref, rel, runGit = git) {
-  try {
-    const before = runGit(["show", `${ref}:${rel}`]);
-    const abs = join(ROOT, rel);
-    if (!existsSync(abs)) return false;
-    return versionOnlyJsonChange(before, readFileSync(abs, "utf8"), rel);
-  } catch {
-    return false; // new file, unreadable ref, anything unexpected: fail closed
   }
 }
 
@@ -962,9 +949,8 @@ export function planSelection({ base = "origin/main" } = {}) {
     };
   }
 
-  const baseRef = mergeBaseOf(base);
   const { mapped, unmappable } = uncovered.length
-    ? mapUncovered(uncovered, (rel) => versionOnlyAgainst(baseRef, rel), (test) => {
+    ? mapUncovered(uncovered, (test) => {
       try { return statSync(join(ROOT, test)).isFile(); } catch { return false; }
     }, (source) => {
       try { return statSync(join(ROOT, source)).isFile(); } catch { return false; }

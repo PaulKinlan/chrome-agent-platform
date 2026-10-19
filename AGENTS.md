@@ -145,9 +145,11 @@ the stall that left the changelog a full day behind at 0.3.577 while every exist
 check stayed green, because a stall keeps both sides of the version==changelog
 comparison equally stale. The ledger reads HEAD (a release exists when it is
 committed) and is live-asserted in `tests/owed-changelog-ledger.test.ts`; landing
-cadence is in `docs/MERGER-PLAYBOOK.md` §3 steps 4/9a. If the post-commit hook is not
-installed in your checkout's shared `.git/hooks`, entries do not write themselves —
-run `node scripts/bump-version.mjs patch --user-note "<what the user gets>"`.
+cadence is in `docs/MERGER-PLAYBOOK.md` §3 steps 4/9a. Lanes never write release
+entries (the post-commit hook is a stamping no-op — uikt5/x0vas): the MERGER stamps
+the union once per batch with `node scripts/bump-version.mjs patch --landing --from
+<sha> …` on the landed tip (docs/MERGER-PLAYBOOK.md §3a). A lane's job is only the
+`Release-note:` trailer in its commit bodies.
 
 - **Pick work**: `bd ready` (the claimable frontier — open beads with no open
   blockers). Claim atomically: `bd update <id> --claim`.
