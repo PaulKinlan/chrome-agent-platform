@@ -119,6 +119,26 @@ Deno.test("uikt5: scratch-fixture exemption rejects a real shared writer and a m
   );
 });
 
+Deno.test("zeaub: the parallel exemption fails closed if its fixture root becomes shared", async () => {
+  const rel = "tests/wasm-package-authority-static.test.ts";
+  const source = await Deno.readTextFile(`${ROOT}${rel}`);
+  assertEquals(unserialisedHazards([[rel, source]]), [], "unique durable scratch fixture is parallel-safe");
+  const rootSite = 'const root = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-static-first-walk-" });';
+  assertStringIncludes(source, rootSite, "the actual fixture must derive its root from makeTempDir per run");
+  const shared = source.replace(rootSite, 'const root = join(durableDir("scratch"), "static-first-shared");');
+  assertStringIncludes(unserialisedHazards([[rel, shared]]).join("; "), rel,
+    "a static scratch directory revokes the exemption");
+  const writer = source.replace(
+    "await Deno.writeTextFile(file, contents);",
+    'await Deno.writeTextFile(file, contents);\n    await Deno.writeTextFile(join(ROOT, "extension/dist/shared.js"), "unsafe");',
+  );
+  assertStringIncludes(unserialisedHazards([[rel, writer]]).join("; "), rel,
+    "any added real-checkout writer revokes the exemption");
+  const escaped = source.replace('"extension/lib/entry.js"', '"../escape.js"');
+  assertStringIncludes(unserialisedHazards([[rel, escaped]]).join("; "), rel,
+    "a fixture path outside extension/packages revokes the exemption");
+});
+
 Deno.test("partition guard: a driver reference is a LOAD or a SPAWN, never a mention (8b8w/f94p)", async () => {
   // Probe strings are ASSEMBLED at runtime so this file's own text never
   // carries a literal tests/* reference for its own inheritance scan.

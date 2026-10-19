@@ -355,7 +355,7 @@ export const EXEMPTIONS = {
   "tests/mcp-zod-peer-parity.test.ts": "reads build.mjs as TEXT as static input (never spawned, never imported); every write is confined to a per-test makeTempDir sandbox under durableDir(scratch) removed in a finally - no shared artifact is touched, so parallel execution is harmless",
   // zeaub: literal extension/dist and packages paths describe hostile files inside a
   // unique durable scratch root; no read or write uses the checkout's build artifacts.
-  "tests/wasm-package-authority-static.test.ts": "walks extension/packages fixture paths only inside its unique durableDir(scratch) makeTempDir removed in finally; the real checkout is read-only, so parallel execution is safe",
+  "tests/wasm-package-authority-static.test.ts": "zeaub: only the static-first fixture's extension/packages paths (never real checkout paths) are written under a unique durableDir(scratch) makeTempDir with cap-static-first-walk- prefix, removed in finally; isolatedStaticFirstWalkFixture checks the exact call sites and path prefixes, so parallel execution is safe",
   // o49qg: these five classify as artifact hazards, but are audited read-only.
   // The sixth (tool-exec-preview) has no classifier hit and must NOT be given a
   // dead exemption. Both runners finish SERIAL first; the full runner also
@@ -860,6 +860,49 @@ function isolatedLandingFixture(text) {
   return true;
 }
 
+// zeaub: the exemption belongs to ONE fixture, not every future writer in its
+// always-on test file. Check the unique durable root, the only path-producing
+// helper, every fixture name, every write/link call site, and finally cleanup.
+function isolatedStaticFirstWalkFixture(text) {
+  const code = stripComments(text);
+  const start = code.indexOf('Deno.test("static-first: the walked JS file set matches the documented scope"');
+  const end = code.indexOf('Deno.test("wasm-package-authority-static: every hash-wasm', start);
+  if (start < 0 || end < start || code.indexOf('Deno.test("static-first: the walked JS file set matches', start + 1) !== -1) return false;
+  const body = code.slice(start, end);
+  if (!body.includes('const root = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-static-first-walk-" });') ||
+      !body.includes('const file = join(root, relative);') ||
+      !/finally\s*\{\s*await Deno\.remove\(root, \{ recursive: true \}\);/.test(body) ||
+      !/for \(const path of allowed\) await put\(path,/.test(body) ||
+      !/for \(const path of excluded\) await put\(path,/.test(body) ||
+      [...body.matchAll(/\bput\s*\(/g)].length !== 2) return false;
+  for (const name of ["allowed", "excluded"]) {
+    const list = body.match(new RegExp(`const ${name} = \\[([\\s\\S]*?)\\];`));
+    if (!list || !/^\s*(?:"[^"]+"\s*,?\s*)+$/.test(list[1])) return false;
+    for (const match of list[1].matchAll(/"([^"]+)"/g)) {
+      const parts = match[1].split("/");
+      if (!["extension", "packages"].includes(parts[0]) ||
+          parts.slice(1).some((part) => !part || part === "." || part === "..")) return false;
+    }
+  }
+  const writes = [...code.matchAll(WRITE_CALL_RE)];
+  if (writes.length !== 3) return false;
+  const allowedWrites = new Map([
+    ["mkdir", "dirname(file), { recursive: true }"],
+    ["writeTextFile", "file, contents"],
+    ["remove", "root, { recursive: true }"],
+  ]);
+  for (const call of writes) {
+    const name = call[0].slice(0, -1).trim();
+    const args = getCallArgs(code, call.index + call[0].length).trim();
+    if (call.index < start || call.index >= end || allowedWrites.get(name) !== args) return false;
+    allowedWrites.delete(name);
+  }
+  const links = [...code.matchAll(/\bDeno\.symlink\s*\(/g)];
+  return allowedWrites.size === 0 && links.length === 1 && links[0].index >= start && links[0].index < end &&
+    getCallArgs(code, links[0].index + links[0][0].length).trim() ===
+      'join(root, allowed[0]), join(root, "packages/pkg/src/linked.js")';
+}
+
 export function unserialisedHazards(entries) {
   const violations = [];
   for (const [rel, text] of entries) {
@@ -906,7 +949,8 @@ export function unserialisedHazards(entries) {
     if (SERIAL.has(rel)) continue;
     const reason = EXEMPTIONS[rel];
     if (typeof reason === "string" && reason.trim().length > 0 &&
-        (rel !== "tests/post-commit-hook.test.ts" || isolatedLandingFixture(text))) continue;
+        (rel !== "tests/post-commit-hook.test.ts" || isolatedLandingFixture(text)) &&
+        (rel !== "tests/wasm-package-authority-static.test.ts" || isolatedStaticFirstWalkFixture(text))) continue;
     violations.push(`${rel} — ${classes.join("; ")}`);
   }
   return violations;
