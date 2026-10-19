@@ -33,7 +33,7 @@
 
 import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync, existsSync } from "fs";
-import { join } from "path";
+import { join, relative, sep } from "path";
 import { execSync, execFileSync } from "child_process";
 // ONE source of truth for what counts as a user-facing bullet. This file used to
 // carry its own copy of the six filter regexes plus isUserFacingEntry, justified
@@ -272,23 +272,124 @@ if ((reconcileMerge && (!changelogVersion || hookMode || type !== "patch" || !su
 }
 const releaseBase = reconcileMerge ? changelogVersion : current;
 
+// chrome-agent-platform-66voq: attribute the newest CHANGELOG section to the
+// commit that introduced it, and test batch membership by git ancestry.
+// chrome-agent-platform-axtv2: `-m` is REQUIRED — a section introduced by a
+// MERGE commit's second parent is invisible to plain `git log -S`, and a
+// missing introduction must never read as "not this batch" on its own. Both
+// helpers resolve to "cannot attribute" (null / false) on any git failure —
+// and every unattributable case STAMPS: a lost release is worse than a
+// duplicate one.
+function newestSectionIntroducer(changelogPathArg, version) {
+  try {
+    const raw = execFileSync(
+      "git",
+      ["log", "-m", "-S", `## [${version}]`, "--format=%H", "-n", "1", "--", relative(ROOT, changelogPathArg)],
+      { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    );
+    // axTV2 follow-up: `-m` prints the match once per parent diff, so the first
+    // output line is the introduction commit and the rest are duplicates — the
+    // whole trimmed blob is NOT a valid object name and would break the
+    // ancestry check into "stamp".
+    const lines = String(raw).split("\n").map((l) => l.trim()).filter(Boolean);
+    return lines[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Does the COMMITTED (HEAD) CHANGELOG already carry `version` as its newest
+ *  section? True/False, or null when git cannot answer.
+ *
+ *  p0ll0 (review of 178298b4d): "CHANGELOG.md differs from HEAD" is NOT the
+ *  fingerprint of an uncommitted stamp — ANY unrelated local edit to the file
+ *  satisfies it. The probe asked "does HEAD already have this release?", and a
+ *  dirty working tree would then read as an uncommitted stamp of the CURRENT
+ *  batch, exiting 0 and losing a release: the exact direction the whole skip
+ *  must never fail in. Only the SECTION's presence at HEAD is evidence. */
+function headHasNewestSection(changelogPathArg, version) {
+  let committed;
+  try {
+    committed = execFileSync(
+      "git",
+      ["show", `HEAD:${relative(ROOT, changelogPathArg).split(sep).join("/")}`],
+      { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    );
+  } catch {
+    return null; // no HEAD:path (unborn HEAD, new tree) — cannot answer
+  }
+  try {
+    return (parseChangelog(committed)[0]?.version ?? null) === version;
+  } catch {
+    return null;
+  }
+}
+
+function commitIsAncestor(ancestorCandidate, descendant) {
+  try {
+    execFileSync(
+      "git",
+      ["merge-base", "--is-ancestor", ancestorCandidate, descendant],
+      { cwd: ROOT, stdio: ["ignore", "ignore", "ignore"] },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // chrome-agent-platform-x0vas: a union stamp is IDEMPOTENT per batch. The merger's
 // flow can legitimately re-run step 3a (a gate failure after stamping, an amended
 // landing message); a re-run must NOT mint a second patch for the same effect.
-// When every note this batch would write already appears verbatim in the NEWEST
-// CHANGELOG section — surface agreement is already enforced above — the batch is
-// released: write nothing, exit 0. A batch with any NEW effect has at least one
-// note outside the newest section and stamps normally.
+// chrome-agent-platform-66voq: the skip can NOT be note-text alone — two
+// different unions can carry identical Release-note lines, and skipping the
+// second would land its effects without a release. The skip requires the batch
+// ITSELF to be the one that produced the newest section: the commit that
+// introduced `## [changelogVersion]` must already contain every --from sha in
+// its ancestry. When git cannot attribute the section (uncommitted stamp: the
+// entry exists only in the working tree, introducer null) the tree-state
+// equality current === changelogVersion is the evidence instead.
 if (landingMode && changelogVersion && landingNotes.length) {
   const newestBullets = existsSync(changelogPath)
     ? (parseChangelog(readFileSync(changelogPath, "utf-8"))[0]?.bullets ?? []).map((b) => String(b).trim())
     : [];
-  if (newestBullets.length && landingNotes.every((note) => newestBullets.includes(note))) {
+  const notesMatch = newestBullets.length > 0 && landingNotes.every((note) => newestBullets.includes(note));
+  if (notesMatch) {
+    const introducer = newestSectionIntroducer(changelogPath, changelogVersion);
+    const fromShas = candidates.map((c) => c.sha);
+    const batchIsInHistory = introducer !== null && fromShas.every((sha) => sha === introducer || commitIsAncestor(sha, introducer));
+    if (batchIsInHistory) {
+      console.error(
+        `[bump-version] this batch is already released as [${changelogVersion}] — the newest CHANGELOG section ` +
+        `was produced by this exact batch (introducer ${introducer.slice(0, 12)} contains every --from sha); ` +
+        `nothing to stamp (idempotent re-run, x0vas/66voq).`,
+      );
+      process.exit(0);
+    }
+    // axtv2: the ONLY other skip is a genuinely UNCOMMITTED stamp — the working
+    // tree carries a `## [version]` section that HEAD does NOT have yet (the
+    // first stamp wrote the entry but the merger has not committed it). The old
+    // tree-state inference (current === changelogVersion) held on EVERY clean
+    // checkout, so any attribution failure — git error, shallow clone,
+    // merge-introduced section — became a skip and lost the release.
+    // p0ll0: and a DIRTY CHANGELOG is not that evidence either; only HEAD's
+    // missing section is. Everything else STAMPS.
+    const headHasSection = headHasNewestSection(changelogPath, changelogVersion);
+    if (headHasSection === false) {
+      console.error(
+        `[bump-version] this batch is already released as [${changelogVersion}] — HEAD does not carry [${changelogVersion}] ` +
+        `yet, so CHANGELOG.md holds an UNCOMMITTED stamp of this batch; nothing to stamp ` +
+        `(idempotent re-run, x0vas/axtv2).`,
+      );
+      process.exit(0);
+    }
+    // Notes match but this batch did NOT produce the newest section (or its
+    // introduction cannot be attributed): STAMP — never suppress (66voq/axtv2).
     console.error(
-      `[bump-version] this batch is already released as [${changelogVersion}] — every landing note ` +
-      `is in the newest CHANGELOG section; nothing to stamp (idempotent re-run, x0vas).`,
+      `[bump-version] landing notes already appear in [${changelogVersion}], but that section was NOT produced by this batch ` +
+      `(66voq${introducer === null ? "; section introduction unattributable, preferring a stamp over a lost release" : ""}) ` +
+      `— stamping a new release for this batch's effects.`,
     );
-    process.exit(0);
   }
 }
 

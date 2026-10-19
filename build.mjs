@@ -945,8 +945,10 @@ try {
     // commit + same branch = same bytes (validate-or-build reuse holds); a
     // different branch at the same commit rebuilds — the honest cost of an
     // identity that differs. Git unavailable (sanitized env) → nulls, never a
-    // build failure. BOUNDED (fnmr): both git reads go through runBoundedChild —
-    // an unbounded execFileSync wedged a worktree's build for 3h37m.
+    // build failure. The reads go through scripts/lib/build-identity.mjs
+    // (chrome-agent-platform-4169y: single-sourced, not inlined here) with THIS
+    // builder's bounded runner — an unbounded execFileSync wedged a worktree's
+    // build for 3h37m (fnmr).
     const gitShow = async (args) => {
       try {
         const child = await runBoundedChild("git", args, {
@@ -960,8 +962,9 @@ try {
         return null; // no git, sanitized env, timeout — identity is best-effort
       }
     };
-    const devBranch = await gitShow(["rev-parse", "--abbrev-ref", "HEAD"]);
-    const devCommit = await gitShow(["rev-parse", "--short", "HEAD"]);
+    const { currentGitBranch, currentGitCommit } = await import("./scripts/lib/build-identity.mjs");
+    const devBranch = await currentGitBranch(ROOT, gitShow);
+    const devCommit = await currentGitCommit(ROOT, gitShow);
     await writeFile(
       path.join(STAGE, "build-identity.json"),
       JSON.stringify({ branch: devBranch, commit: devCommit }) + "\n",

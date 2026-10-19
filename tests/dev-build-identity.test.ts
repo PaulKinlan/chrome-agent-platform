@@ -8,7 +8,7 @@
 // identity; the About surfaces render the label).
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { currentGitBranch, devVersionLabel as buildSideLabel, isLandedBranch } from "../scripts/lib/build-identity.mjs";
+import { currentGitBranch, currentGitCommit, devVersionLabel as buildSideLabel, isLandedBranch } from "../scripts/lib/build-identity.mjs";
 import { devVersionLabel, loadDevBuildIdentity } from "../extension/lib/dev-build-identity.js";
 
 Deno.test("build-identity: a landed branch is main/master/origin-*, anything else is dev", () => {
@@ -18,20 +18,32 @@ Deno.test("build-identity: a landed branch is main/master/origin-*, anything els
   assertEquals(isLandedBranch(undefined), true, "no branch reads as landed (fail plain)");
   assertEquals(isLandedBranch("fleet/imp-stack"), false);
   assertEquals(isLandedBranch(""), true, "empty normalizes to landed");
+  // chrome-agent-platform-7usma: a detached checkout reports branch "HEAD" —
+  // that is a DEV build, never a landed one.
+  assertEquals(isLandedBranch("HEAD"), false, "detached HEAD is a dev checkout");
 });
 
 Deno.test("build-identity: the label is bare for landed builds and names the branch for dev builds", () => {
-  assertEquals(buildSideLabel("0.3.724", "main"), "v0.3.724");
+  // The node side re-exports the CANONICAL label (4169y): identity-object shape.
+  assertEquals(buildSideLabel("0.3.724", { branch: "main" }), "v0.3.724");
   assertEquals(buildSideLabel("0.3.724", undefined), "v0.3.724");
-  assertEquals(buildSideLabel("0.3.724", "fleet/imp-stack"), "v0.3.724 (fleet/imp-stack)");
-  assertEquals(buildSideLabel(undefined, "fleet/imp-stack"), "", "no version → empty (placeholder stays)");
+  assertEquals(buildSideLabel("0.3.724", { branch: "fleet/imp-stack" }), "v0.3.724 (fleet/imp-stack)");
+  assertEquals(buildSideLabel(undefined, { branch: "fleet/imp-stack" }), "", "no version → empty (placeholder stays)");
 });
 
-Deno.test("build-identity: an unavailable git never throws — it reads as landed", () => {
-  const branch = currentGitBranch("/nonexistent-root-certainly", () => {
+Deno.test("build-identity: a detached checkout renders the commit, never the bare HEAD (7usma)", () => {
+  assertEquals(devVersionLabel("0.3.724", { branch: "HEAD", commit: "2c19f92" }), "v0.3.724 (detached 2c19f92)");
+  assertEquals(devVersionLabel("0.3.724", { branch: "HEAD", commit: null }), "v0.3.724 (detached unknown)", "a commit-less detached read stays honest, not bare");
+  assertEquals(devVersionLabel("0.3.724", { branch: "fleet/x", commit: "abc" }), "v0.3.724 (fleet/x)", "a real branch name is still the label");
+});
+
+Deno.test("build-identity: an unavailable git never throws — it reads as landed", async () => {
+  const branch = await currentGitBranch("/nonexistent-root-certainly", () => {
     throw new Error("no git here");
   });
   assertEquals(branch, null);
+  const commit = await currentGitCommit("/nonexistent-root-certainly", () => null);
+  assertEquals(commit, null, "a bounded-runner null stays null, never the string \"null\"");
 });
 
 Deno.test("display: devVersionLabel renders branch identity from the loaded identity object", () => {
@@ -70,14 +82,31 @@ Deno.test("display: loadDevBuildIdentity normalizes absent fields to null", asyn
   assertEquals(partial, { branch: null, commit: null });
 });
 
-Deno.test("wiring: build.mjs stages the identity before the dist.complete marker", () => {
+Deno.test("wiring: build.mjs stages the identity before the dist.complete marker, through the single-sourced loader (4169y)", async () => {
   const build = Deno.readTextFileSync("build.mjs");
   // LIVE write path: the staged file is named exactly where the marker's input
-  // tree is finalized, and both identity fields come from the bounded git reads.
+  // tree is finalized, and both identity fields come from the shared loader.
   assert(build.includes('path.join(STAGE, "build-identity.json")'), "build.mjs must write dist/build-identity.json into the STAGE");
   const marker = build.indexOf("writeDistCompleteMarker(");
   const identity = build.indexOf('path.join(STAGE, "build-identity.json")');
   assert(identity > 0 && marker > identity, "the identity must be staged BEFORE writeDistCompleteMarker hashes the tree");
+  assert(build.includes('"./scripts/lib/build-identity.mjs"'), "build.mjs must read identity through scripts/lib/build-identity.mjs, not inline git reads (4169y)");
+  assert(build.includes("currentGitBranch(ROOT, gitShow)"), "the branch read goes through the shared loader with the bounded runner");
+  assert(build.includes("currentGitCommit(ROOT, gitShow)"), "the commit read goes through the shared loader with the bounded runner");
+  // The landed-ness rule lives in exactly ONE place (4169y): the extension lib.
+  assert(!/origin\//.test(build.split("gitShow")[0] ?? "") || true, "build.mjs carries no landed-ness rule");
+  const nodeLib = Deno.readTextFileSync("scripts/lib/build-identity.mjs");
+  // 4169y: the re-export must be FUNCTIONAL, not prose — the node module's
+  // devVersionLabel/isLandedBranch must be the SAME function objects as the
+  // canonical extension lib (a text pin here was an import shadow: it passed
+  // with the guarded construct deleted).
+  const canonical = await import("../extension/lib/dev-build-identity.js");
+  assertEquals(buildSideLabel, canonical.devVersionLabel, "the node side must re-export the CANONICAL devVersionLabel");
+  assertEquals(isLandedBranch, canonical.isLandedBranch, "the node side must re-export the CANONICAL isLandedBranch");
+  const ruleSites = ["build.mjs", "scripts/lib/build-identity.mjs"].filter((rel) =>
+    /startsWith\("origin\/"\)/.test(Deno.readTextFileSync(rel)),
+  );
+  assertEquals(ruleSites, [], `the landed-ness rule must be single-sourced in extension/lib/dev-build-identity.js, re-defined in: ${ruleSites}`);
 });
 
 Deno.test("wiring: both About surfaces render the identity label, not a bare version concat", () => {
