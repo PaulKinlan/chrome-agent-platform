@@ -17,6 +17,7 @@ import { dirname, join } from "node:path";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { scanShippedJs } from "../scripts/scan-shipped.mjs";
 import { collectProductSources, auditStaticFirst } from "./helpers/emscripten-static-first-audit.mjs";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const hex = (bytes) => [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
@@ -87,7 +88,7 @@ Deno.test("static-first: walked product JS cannot install a dynamic linker", asy
 // zeaub: walk a disposable tree, not only an in-memory Map. A vendor/cjs skip
 // must turn this test RED even when the real source count remains above 300.
 Deno.test("static-first: the walked JS file set matches the documented scope", async () => {
-  const root = await Deno.makeTempDir({ prefix: "cap-static-first-walk-" });
+  const root = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-static-first-walk-" });
   const allowed = [
     "extension/lib/entry.js", "extension/lib/vendor/third.mjs",
     "extension/lib/legacy.cjs", "packages/pkg/src/entry.js",

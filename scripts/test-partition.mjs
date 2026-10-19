@@ -353,6 +353,9 @@ export const EXEMPTIONS = {
   // extension layout so the unbuilt-tree case can be asserted, and it is removed in a
   // finally. Nothing shared is read or written, so concurrent execution is harmless.
   "tests/mcp-zod-peer-parity.test.ts": "reads build.mjs as TEXT as static input (never spawned, never imported); every write is confined to a per-test makeTempDir sandbox under durableDir(scratch) removed in a finally - no shared artifact is touched, so parallel execution is harmless",
+  // zeaub: literal extension/dist and packages paths describe hostile files inside a
+  // unique durable scratch root; no read or write uses the checkout's build artifacts.
+  "tests/wasm-package-authority-static.test.ts": "walks extension/packages fixture paths only inside its unique durableDir(scratch) makeTempDir removed in finally; the real checkout is read-only, so parallel execution is safe",
   // o49qg: these five classify as artifact hazards, but are audited read-only.
   // The sixth (tool-exec-preview) has no classifier hit and must NOT be given a
   // dead exemption. Both runners finish SERIAL first; the full runner also
