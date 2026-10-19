@@ -82,7 +82,7 @@ Deno.test("display: loadDevBuildIdentity normalizes absent fields to null", asyn
   assertEquals(partial, { branch: null, commit: null });
 });
 
-Deno.test("wiring: build.mjs stages the identity before the dist.complete marker, through the single-sourced loader (4169y)", () => {
+Deno.test("wiring: build.mjs stages the identity before the dist.complete marker, through the single-sourced loader (4169y)", async () => {
   const build = Deno.readTextFileSync("build.mjs");
   // LIVE write path: the staged file is named exactly where the marker's input
   // tree is finalized, and both identity fields come from the shared loader.
@@ -96,7 +96,13 @@ Deno.test("wiring: build.mjs stages the identity before the dist.complete marker
   // The landed-ness rule lives in exactly ONE place (4169y): the extension lib.
   assert(!/origin\//.test(build.split("gitShow")[0] ?? "") || true, "build.mjs carries no landed-ness rule");
   const nodeLib = Deno.readTextFileSync("scripts/lib/build-identity.mjs");
-  assert(nodeLib.includes('from "../../extension/lib/dev-build-identity.js"'), "the node side re-exports the canonical rule");
+  // 4169y: the re-export must be FUNCTIONAL, not prose — the node module's
+  // devVersionLabel/isLandedBranch must be the SAME function objects as the
+  // canonical extension lib (a text pin here was an import shadow: it passed
+  // with the guarded construct deleted).
+  const canonical = await import("../extension/lib/dev-build-identity.js");
+  assertEquals(buildSideLabel, canonical.devVersionLabel, "the node side must re-export the CANONICAL devVersionLabel");
+  assertEquals(isLandedBranch, canonical.isLandedBranch, "the node side must re-export the CANONICAL isLandedBranch");
   const ruleSites = ["build.mjs", "scripts/lib/build-identity.mjs"].filter((rel) =>
     /startsWith\("origin\/"\)/.test(Deno.readTextFileSync(rel)),
   );
