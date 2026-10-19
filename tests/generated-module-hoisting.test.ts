@@ -11,6 +11,7 @@
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import { collectSharedStrings, renderHoistedValue } from "../scripts/lib/shared-strings.mjs";
+import { renderBundledInventoryData } from "../scripts/lib/bundled-inventory-render.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const DATA_MODULE = `${ROOT}extension/lib/bundled-tool-packages.data.js`;
@@ -173,6 +174,37 @@ Deno.test("structure hoisting: escapeRegex is load-bearing for unhoisted literal
   assert(rendered.includes('"caveats": V0'), "caveats with unhoisted regex metacharacters must be substituted");
   const mod = await import(`data:text/javascript,${encodeURIComponent(rendered)}`);
   assertEquals(mod.ROWS, value, "round-trip value with unhoisted regex metacharacters must be deep-equal");
+});
+
+Deno.test("sp5lt: inventory path interning preserves exported rows and refuses alien paths", async () => {
+  const inventory = {
+    schemaVersion: 1, release: "1.0.0", signer: { lane: "test", keyId: "test" },
+    manifests: [{ pkg: "cap.example", version: "1.0.0", digest: "a".repeat(64) }],
+    files: [
+      { rel: "extension/wasm/cas/main.wasm", sha256: "b".repeat(64), size: 12 },
+      { rel: "extension/wasm/sbom/a-\\\"b.json", sha256: "c".repeat(64), size: 27 },
+    ],
+    evidence: [], revocations: [],
+  };
+  const rendered = renderBundledInventoryData({ inventory });
+  assertEquals((rendered.match(/"rel": P \+ /gu) ?? []).length, 2, "only file rels are interned");
+  assertEquals((rendered.match(/"extension\/wasm\/"/gu) ?? []).length, 1, "prefix is emitted once");
+  const mod = await import(`data:text/javascript,${encodeURIComponent(rendered)}`);
+  assertEquals(mod.BUNDLED_INVENTORY, inventory, "the runtime value is byte-for-byte equivalent as JSON");
+  assert(Object.isFrozen(mod.BUNDLED_INVENTORY), "the previous shallow freeze stays intact");
+  assertThrows(() => renderBundledInventoryData({ inventory: {
+    ...inventory, files: [{ rel: "tools/escape.wasm", sha256: "d".repeat(64), size: 1 }],
+  } }), Error, "inventory_rel_prefix_invalid", "unexpected path roots must fail closed");
+});
+
+Deno.test("sp5lt: generated inventory actually hoists every Wasm file path", async () => {
+  const { BUNDLED_INVENTORY } = await import("../extension/lib/bundled-inventory-data.js");
+  const text = await Deno.readTextFile(new URL("../extension/lib/bundled-inventory-data.js", import.meta.url));
+  assert(BUNDLED_INVENTORY.files.length > 150, "a shortened fixture cannot masquerade as a bundle saving");
+  assertEquals((text.match(/"rel": P \+ /gu) ?? []).length, BUNDLED_INVENTORY.files.length,
+    "every exported file rel must be reconstructed from the one shared prefix");
+  assert(BUNDLED_INVENTORY.files.every(({ rel }) => rel.startsWith("extension/wasm/")),
+    "runtime paths still use the full extension/wasm/ root");
 });
 
 Deno.test("structure hoisting: replacement count mismatch throws fail-closed (3ugl / P2)", () => {
