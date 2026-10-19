@@ -113,6 +113,11 @@ node scripts/check-beads-export-divergence.mjs
 # version/changelog/About/inventory stamp on the union. Do not pass merge commits
 # or arbitrary ancestors: name only the candidate commits landing in this batch.
 node scripts/bump-version.mjs patch --landing --from <candidate-sha> [--from <next-candidate-sha> ...]
+# The stamp is IDEMPOTENT per batch (x0vas): if every note this batch would write
+# already appears verbatim in the NEWEST CHANGELOG section (and the six surfaces
+# agree), the command writes nothing and exits 0 — so a re-run after a gate
+# failure or an amended landing message cannot mint a duplicate release. A batch
+# with any NEW effect still stamps normally.
 # EVERY --from candidate must supply a Release-note trailer, or be named as
 # --internal <same-candidate-sha> explicitly if it is internal-only. A mixed
 # batch with an unnamed trailer-less candidate FAILS rather than silently

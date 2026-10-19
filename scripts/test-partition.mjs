@@ -23,6 +23,9 @@
 // means stating why it is a shared-build-artifact hazard. The guard test
 // asserts every entry carries one.
 export const SERIAL_REASONS = {
+  // x0vas: static source pin of build.mjs's identity staging — reads text only,
+  // never builds — but serial because the census keys on the build.mjs mention.
+  "tests/dev-build-identity.test.ts": "reads build.mjs source to pin the staged build-identity.json write (x0vas); no build is executed",
   "tests/build-sdk-dedup.test.ts": "spawns build.mjs to assert the AI SDK deduplication guard behaviors in different layouts",
   "tests/build-smoke.test.ts": "fast smoke-level assertion in npm test: a store build of THIS tree exited 0 (run now, or reused from the record build.mjs writes only when it exits 0 for the same commit and source authority) and the live dist.complete validates (chrome-agent-platform-h65e, jjsz)",
   "tests/build-bootstrap.test.ts": "runs node build.mjs in-place (dist/dist-versions rewrite)",
@@ -117,6 +120,8 @@ export const SERIAL_LANES = Object.freeze({
   "tests/requires-owner-gesture-column-allowlist.test.ts": "build",
   "tests/emscripten-abi-loaded-harness.test.ts": "build",
   "tests/chunk-resolution-browser.test.ts": "build",
+  // x0vas: reads build.mjs source (a build-artifact mention), never builds.
+  "tests/dev-build-identity.test.ts": "build",
 });
 
 /**

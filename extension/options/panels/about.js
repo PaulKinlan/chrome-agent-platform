@@ -3,6 +3,7 @@
 import { DEVELOPER_FEATURES_KEY } from "../../lib/pure.js";
 import { isUserFacingEntry, partitionChangelog } from "../changelog-filter.js";
 import { withUnmount, bindPanelCtx } from "../panel-context.js";
+import { devVersionLabel, loadDevBuildIdentity } from "../../lib/dev-build-identity.js";
 
 export { isUserFacingEntry, partitionChangelog };
 
@@ -165,7 +166,7 @@ export function initAboutStatic(root, ctx) {
   try {
     const v = chrome.runtime?.getManifest?.()?.version;
     const av = $("#about-version");
-    if (av && v) av.textContent = "v" + v;
+    if (av && v) loadDevBuildIdentity().then((identity) => { av.textContent = devVersionLabel(v, identity); });
   } catch { /* non-extension (browser test) — leave the placeholder */ }
 
   $("#open-shortcut-settings")?.addEventListener("click", () => {

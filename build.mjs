@@ -937,6 +937,36 @@ try {
     // stage path and version ID are invocation custody and MUST NOT enter this
     // production byte. The marker binds stable indexed source plus exact
     // generated output bytes and is therefore reproducible and verifiable.
+    // chrome-agent-platform-x0vas: a dev build carries its branch identity so the
+    // About surfaces can show "v<last-landed> (<branch>)" — with the per-commit
+    // version hook gone, the tree version IS the last landed version on every dev
+    // build, and two loaded worktrees are indistinguishable without it. Written
+    // into the staged tree BEFORE the marker so dist.complete hashes it: same
+    // commit + same branch = same bytes (validate-or-build reuse holds); a
+    // different branch at the same commit rebuilds — the honest cost of an
+    // identity that differs. Git unavailable (sanitized env) → nulls, never a
+    // build failure. BOUNDED (fnmr): both git reads go through runBoundedChild —
+    // an unbounded execFileSync wedged a worktree's build for 3h37m.
+    const gitShow = async (args) => {
+      try {
+        const child = await runBoundedChild("git", args, {
+          cwd: ROOT,
+          stdio: ["ignore", "pipe", "ignore"],
+          label: `git ${args[0]} (build identity)`,
+          timeoutMs: 10_000,
+        });
+        return child.status === 0 ? String(child.stdout ?? "").trim() || null : null;
+      } catch {
+        return null; // no git, sanitized env, timeout — identity is best-effort
+      }
+    };
+    const devBranch = await gitShow(["rev-parse", "--abbrev-ref", "HEAD"]);
+    const devCommit = await gitShow(["rev-parse", "--short", "HEAD"]);
+    await writeFile(
+      path.join(STAGE, "build-identity.json"),
+      JSON.stringify({ branch: devBranch, commit: devCommit }) + "\n",
+    );
+
     const sourceAfter = await computeIndexedSourceAuthority({ root: ROOT });
     if (
       sourceAfter.digest !== sourceBefore.digest ||

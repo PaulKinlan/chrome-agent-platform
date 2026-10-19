@@ -12,6 +12,7 @@ import {
   sleep,
 } from "../lib/pure.js";
 import { hydrateI18n } from "../shared/i18n.js";
+import { devVersionLabel, loadDevBuildIdentity } from "../lib/dev-build-identity.js";
 import { consumeSiteActivityFocus, normalizeSiteActivityFocus, SITE_ACTIVITY_FOCUS_KEY } from "../lib/site-activity-focus.js";
 import { createNavigationController } from "../lib/navigation-controller.js";
 import "../shared/components-settings.js";
@@ -681,7 +682,7 @@ if (typeof requestIdleCallback === "function") {
 try {
   const v = chrome.runtime.getManifest().version;
   const el = $("#app-version");
-  if (el && v) el.textContent = "v" + v;
+  if (el && v) el.textContent = devVersionLabel(v, await loadDevBuildIdentity());
 } catch { /* non-extension (browser test) — leave the placeholder */ }
 initAboutStatic(document.getElementById("about"), getSectionContext("about"));
 

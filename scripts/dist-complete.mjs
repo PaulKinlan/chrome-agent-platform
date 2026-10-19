@@ -50,6 +50,12 @@ export const DIST_COMPLETE_OUTPUTS = Object.freeze([
   "offscreen.bundle.js",
   "user-wasm-store-client.bundle.js",
   "settings-view.bundle.js",
+  // chrome-agent-platform-x0vas: the dev-build identity (branch + commit) the
+  // About surfaces render. Written by build.mjs into the staged tree before the
+  // marker, so the identity is a hashed output: same commit + same branch = same
+  // bytes (validate-or-build reuse holds); a different branch at the same commit
+  // rebuilds — the honest cost of an identity that differs.
+  "build-identity.json",
 ]);
 export const INDEXED_SOURCE_EXCLUDED_PATHS = Object.freeze(new Set([
   "docs/diff-core.bundle.js",
