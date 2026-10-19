@@ -68,6 +68,14 @@ export function trackEmbeddedFrameContexts(cdp: EmbeddedCdp, sessionId: string) 
     // ambiguous frame=seen/staleRetries=0 that sent lanes down the wrong
     // hypothesis (no default context vs wrong path vs fragment mismatch).
     let lastObserved: { url?: unknown; ready?: unknown } | null = null;
+    // jm34x: a reader must ALSO tell apart 'the document was never verified'
+    // from 'readiness PASSED and only the owner operation kept losing its
+    // context' — same deadline, opposite conclusions. verified records the
+    // last document URL that PASSED readiness; probeStale/ownerStale split
+    // the retry count by stage (the returned staleRetries stays the total).
+    let lastVerified: string | null = null;
+    let probeStale = 0;
+    let ownerStale = 0;
     while (Date.now() < deadline) {
       const tree = (await cdp.send("Page.getFrameTree", {}, sessionId))?.result?.frameTree;
       const frame = tree?.childFrames?.find((child: any) => child?.frame?.url === expectedUrl)?.frame;
@@ -91,6 +99,7 @@ export function trackEmbeddedFrameContexts(cdp: EmbeddedCdp, sessionId: string) 
         if (!isMissingCdpContext(error)) throw error;
         discard(contextId);
         staleRetries++;
+        probeStale++;
         await nextChange(deadline - Date.now());
         continue;
       }
@@ -101,6 +110,7 @@ export function trackEmbeddedFrameContexts(cdp: EmbeddedCdp, sessionId: string) 
         await nextChange(deadline - Date.now());
         continue;
       }
+      lastVerified = typeof state?.url === "string" ? state.url : expectedUrl;
       try {
         const result = await cdp.send("Runtime.evaluate", {
           expression, contextId, returnByValue: true, awaitPromise: true,
@@ -114,10 +124,11 @@ export function trackEmbeddedFrameContexts(cdp: EmbeddedCdp, sessionId: string) 
         if (!isMissingCdpContext(error)) throw error;
         discard(contextId);
         staleRetries++;
+        ownerStale++;
         await nextChange(deadline - Date.now());
       }
     }
-    throw new Error(`embedded Settings live context was unavailable before ${timeoutMs}ms (frame=${lastFrameId ? "seen" : "absent"}, staleRetries=${staleRetries}, observed=${JSON.stringify(lastObserved?.url ?? null)}, expected=${JSON.stringify(expectedUrl)}, ready=${JSON.stringify(lastObserved?.ready ?? null)})`);
+    throw new Error(`embedded Settings live context was unavailable before ${timeoutMs}ms (frame=${lastFrameId ? "seen" : "absent"}, staleRetries=${staleRetries}, probeStale=${probeStale}, ownerStale=${ownerStale}, verified=${JSON.stringify(lastVerified)}, observed=${JSON.stringify(lastObserved?.url ?? null)}, expected=${JSON.stringify(expectedUrl)}, ready=${JSON.stringify(lastObserved?.ready ?? null)})`);
   }
   return { evaluate, close };
 }

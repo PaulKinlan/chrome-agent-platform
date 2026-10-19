@@ -126,6 +126,44 @@ Deno.test("live-frame tracker does NOT replay a mutation after a generic timeout
   assert(!isMissingCdpContext(new Error("Runtime.evaluate: Execution context was destroyed")));
 });
 
+Deno.test("jm34x: probe-stage vs owner-stage stale retries are named separately, with the verified document", async () => {
+  // Case 1: the default context never became addressable — the READINESS
+  // probe keeps getting 'Cannot find context'.
+  const probeFail = fakeCdp(async () => { throw new Error("Runtime.evaluate: Cannot find context with specified id"); });
+  {
+    const tracker = trackEmbeddedFrameContexts(probeFail, SESSION);
+    try {
+      probeFail.emit("Runtime.executionContextCreated", CREATED(50));
+      const error = await assertRejects(
+        () => tracker.evaluate({ extensionId: "abcdef", path: "/options/options.html", expression: "owner-approval-request", timeoutMs: 400 }),
+        Error, "unavailable");
+      assert(error.message.includes("probeStale="), "probe-stage retries must be named");
+      assert(!error.message.includes("probeStale=0"), "case 1 has probe-stage retries");
+      assert(error.message.includes("ownerStale=0"), "case 1 never reached the owner operation");
+      assert(error.message.includes("verified=null"), "case 1 never verified the document");
+      assertEquals(probeFail.calls.filter((c) => c.expression === "owner-approval-request").length, 0);
+    } finally { tracker.close(); }
+  }
+  // Case 2: readiness PASSES (document verified correct) and only the OWNER
+  // operation keeps losing its context.
+  const ownerFail = fakeCdp(async (_id, expression) => {
+    if (expression.includes("document.URL")) return ready;
+    throw new Error("Runtime.evaluate: Cannot find context with specified id");
+  });
+  {
+    const tracker = trackEmbeddedFrameContexts(ownerFail, SESSION);
+    try {
+      ownerFail.emit("Runtime.executionContextCreated", CREATED(51));
+      const error = await assertRejects(
+        () => tracker.evaluate({ extensionId: "abcdef", path: "/options/options.html", expression: "owner-approval-request", timeoutMs: 400 }),
+        Error, "unavailable");
+      assert(error.message.includes("probeStale=0"), "case 2's probe always succeeded");
+      assert(!error.message.includes("ownerStale=0"), "case 2 has owner-stage retries");
+      assert(error.message.includes(`verified="${URL}"`), "case 2 DID verify the document");
+    } finally { tracker.close(); }
+  }
+});
+
 Deno.test("m7vb5: the deadline error names the observed document URL and the expected URL", async () => {
   // A readiness mismatch used to read identically to 'no context ever
   // arrived' (frame=seen, staleRetries=0), which sent lanes down the wrong
