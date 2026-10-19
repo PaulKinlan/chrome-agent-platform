@@ -103,6 +103,7 @@ export const PANEL_REGISTRY = /* @__PURE__ */ Object.freeze([
     ],
     [
       "invalidate-agent",
+      "named-agent.create",
       "named-agent.set-provider",
       "management.pending-approvals",
       "management.resolve-approval",

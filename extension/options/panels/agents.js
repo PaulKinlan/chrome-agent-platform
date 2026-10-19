@@ -2,8 +2,14 @@
 
 import { formatCadenceMinutes } from "../../lib/next-run-label.js";
 import { ensureAcpNativePermission } from "../../lib/acp-native.js";
-import { projectUnifiedAgents } from "../../lib/agent-projection.js";
-import { skillAsTemplate } from "../../lib/agent-templates.js";
+import { projectUnifiedAgents, slugifyAgentId } from "../../lib/agent-projection.js";
+import {
+  AGENT_TEMPLATES,
+  STARTER_TEMPLATE_IDS,
+  agentTemplateById,
+  skillAsTemplate,
+  templatePrefill,
+} from "../../lib/agent-templates.js";
 import {
   agentScheduleMarker,
   backgroundAgentsForDisplay,
@@ -974,17 +980,47 @@ function editSkillPrompt(skill, ctx) {
   textarea.focus();
 }
 
-// Settings offers the SAME scheduled catalogue as the hub's create flow,
-// through the SAME component (CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01):
-// the disabled background skills render as <agent-template-card>s inside an
-// <agent-template-gallery> filtered to Scheduled. Choosing a card selects it;
-// "Add" enables exactly ONE skill through background-agent.set, and it then
-// appears in every agent list.
-function renderBackgroundAgentPicker(agents, ctx) {
-  const host = $("#background-agent-add");
+// Settings offers the template catalogue through the shared gallery component
+// (CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01): curated starter templates,
+// general templates, and scheduled background skills. Choosing a card selects it;
+// "Add" enables a background skill through background-agent.set or creates a
+// named agent from a template via named-agent.create.
+export function uniqueAgentName(baseName, existingAgents = []) {
+  const clean = String(baseName ?? "").trim() || "Agent";
+  const taken = new Set(
+    (Array.isArray(existingAgents) ? existingAgents : [])
+      .map((a) => (typeof a === "string" ? a : a?.name || a?.id))
+      .filter(Boolean)
+      .map(slugifyAgentId)
+  );
+  if (!taken.has(slugifyAgentId(clean))) return clean;
+  let counter = 2;
+  while (taken.has(slugifyAgentId(`${clean} ${counter}`))) {
+    counter++;
+  }
+  return `${clean} ${counter}`;
+}
+
+export function composeSettingsTemplateCatalogue(backgroundAgents = []) {
+  const starterIds = new Set(STARTER_TEMPLATE_IDS);
+  const backgroundTemplates = (Array.isArray(backgroundAgents) ? backgroundAgents : [])
+    .map(skillAsTemplate)
+    .filter(Boolean);
+  return [
+    ...STARTER_TEMPLATE_IDS.map(agentTemplateById).filter(Boolean).map((t) => ({ ...t, starter: true })),
+    ...AGENT_TEMPLATES.filter((t) => !starterIds.has(t.id)),
+    ...backgroundTemplates.filter((t) => !AGENT_TEMPLATES.some((c) => c.id === t.id)),
+  ];
+}
+
+export function renderBackgroundAgentPicker(agents, ctx) {
+  const panelCtx = ensureCtx(null, ctx);
+  const host = panelCtx.$("#background-agent-add");
   if (!host) return;
   host.replaceChildren();
-  if (!agents.length) {
+
+  const catalogue = composeSettingsTemplateCatalogue(agents);
+  if (!catalogue.length) {
     host.hidden = true;
     return;
   }
@@ -993,24 +1029,23 @@ function renderBackgroundAgentPicker(agents, ctx) {
   const disclosure = document.createElement("details");
   disclosure.className = "starter-templates-disclosure";
   const summary = document.createElement("summary");
-  summary.setAttribute("data-i18n", "options_browse_starter_templates");
   summary.textContent = "Browse starter templates…";
 
   const copy = document.createElement("div");
   copy.className = "background-agent-add-copy";
   const title = document.createElement("h3");
   title.id = "background-agent-add-title";
-  title.textContent = "Add a scheduled agent";
+  title.textContent = "Add an agent from a template";
   const hint = document.createElement("p");
   hint.className = "muted";
-  hint.textContent = "Choose a built-in scheduled template, then add it to your agents.";
+  hint.textContent = "Choose a built-in template or scheduled automation, then add it to your agents.";
   copy.append(title, hint);
 
   const gallery = document.createElement("agent-template-gallery");
   gallery.id = "background-agent-gallery";
-  gallery.setAttribute("filters", "scheduled");
-  gallery.setAttribute("filter", "scheduled");
-  gallery.templates = agents.map(skillAsTemplate).filter(Boolean);
+  gallery.setAttribute("filters", "starter,all,scheduled");
+  gallery.setAttribute("filter", "starter");
+  gallery.templates = catalogue;
 
   const controls = document.createElement("div");
   controls.className = "background-agent-add-controls";
@@ -1027,19 +1062,51 @@ function renderBackgroundAgentPicker(agents, ctx) {
   let selectedId = "";
   on(gallery, "use", (event) => {
     selectedId = String(event.detail?.id ?? "");
-    const agent = agents.find((candidate) => candidate.id === selectedId);
-    add.disabled = !agent;
-    const cadenceText = formatCadenceMinutes(agent?.schedule?.periodInMinutes);
-    chosen.textContent = agent ? `${agent.name} — runs ${cadenceText || `every ${agent.schedule?.periodInMinutes ?? "?"} min`} once added.` : "Nothing chosen yet.";
-    add.textContent = agent ? `Add ${agent.name}` : "Add";
+    const template = catalogue.find((candidate) => candidate.id === selectedId);
+    add.disabled = !template;
+    if (!template) {
+      chosen.textContent = "Nothing chosen yet.";
+      add.textContent = "Add";
+      return;
+    }
+    const cadenceText = formatCadenceMinutes(template?.schedule?.periodInMinutes);
+    if (cadenceText || template?.schedule?.periodInMinutes) {
+      chosen.textContent = `${template.name} — runs ${cadenceText || `every ${template.schedule?.periodInMinutes ?? "?"} min`} once added.`;
+    } else {
+      chosen.textContent = `${template.name} — on-demand agent once added.`;
+    }
+    add.textContent = `Add ${template.name}`;
   });
   on(add, "click", async () => {
-    const agent = agents.find((candidate) => candidate.id === selectedId);
-    if (!selectedId || !agent) return;
+    const item = catalogue.find((candidate) => candidate.id === selectedId);
+    if (!selectedId || !item) return;
     add.disabled = true;
-    const out = await send({ type: "background-agent.set", id: selectedId, enabled: true })
-      .catch((error) => ({ ok: false, error: String(error?.message ?? error) }));
-    saveFlash(out?.ok ? `${agent.name} added.` : `Could not add ${agent.name}: ${out?.error ?? "failed"}.`);
+    let out;
+    let addedName = item.name;
+    if (item.source === "skill") {
+      out = await send({ type: "background-agent.set", id: selectedId, enabled: true })
+        .catch((error) => ({ ok: false, error: String(error?.message ?? error) }));
+    } else {
+      const pre = templatePrefill(item);
+      const namedRes = await boundedSend("named-agent.list").catch(() => ({ agents: [] }));
+      const existingNamed = Array.isArray(namedRes?.agents) ? namedRes.agents : [];
+      addedName = uniqueAgentName(pre?.name ?? item.name, existingNamed);
+      const preSchedule = pre?.schedule;
+      const targetSchedule = preSchedule
+        ? {
+            periodInMinutes: preSchedule.periodInMinutes,
+            task: preSchedule.task ?? preSchedule.prompt ?? "",
+          }
+        : null;
+      out = await send({
+        type: "named-agent.create",
+        name: addedName,
+        role: pre?.role ?? item.role,
+        skills: pre?.skills ?? item.skills ?? [],
+        schedule: targetSchedule,
+      }).catch((error) => ({ ok: false, error: String(error?.message ?? error) }));
+    }
+    saveFlash(out?.ok ? `${addedName} added.` : `Could not add ${addedName}: ${out?.error ?? "failed"}.`);
     await renderUnifiedAgentSettings();
   });
   controls.append(chosen, add);
@@ -1061,7 +1128,7 @@ async function renderUnifiedAgentSettings(ctx) {
   const background = backgroundAgentsForDisplay(backgroundRes?.agents);
   const existingBackground = background.filter((agent) => agent.enabled === true);
   const unified = projectUnifiedAgents(named, existingBackground);
-  renderBackgroundAgentPicker(background.filter((agent) => agent.enabled !== true));
+  renderBackgroundAgentPicker(background);
 
   list.replaceChildren();
   if (!unified.length) {

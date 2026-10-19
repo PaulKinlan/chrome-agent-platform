@@ -148,9 +148,9 @@ Deno.test("template select module: selection survives filtering (retained hidden
   assertStringIncludes(picker, "::picker-icon { display: none; }", "the duplicate default chevron is suppressed");
 });
 
-Deno.test("Settings offers the same scheduled catalogue through the same gallery component", () => {
+Deno.test("Settings offers the template catalogue through the gallery component", () => {
   assertStringIncludes(options, 'document.createElement("agent-template-gallery")');
-  assertStringIncludes(options, 'setAttribute("filters", "scheduled")');
+  assertStringIncludes(options, 'setAttribute("filters", "starter,all,scheduled")');
   assert(!options.includes('empty.textContent = "Choose a background agent…"'), "the select-based picker is replaced");
 });
 

@@ -70,8 +70,8 @@ Deno.test("every agent display surface uses the active-only projection (Settings
   const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
   const sidepanel = await Deno.readTextFile(new URL("../extension/sidepanel/sidepanel.html", import.meta.url));
   assertEquals(options.includes("const existingBackground = background.filter((agent) => agent.enabled === true)"), true);
-  // The disabled recipes stay reachable as templates through Settings' picker.
-  assertEquals(options.includes("renderBackgroundAgentPicker(background.filter((agent) => agent.enabled !== true))"), true);
+  // The recipes and templates stay reachable through Settings' picker.
+  assertEquals(options.includes("renderBackgroundAgentPicker(background)"), true);
   assertEquals(ntp.includes("backgroundAgentsForDisplay(background, { activeOnly: true })"), true);
   // The sidebar receives the SAME active projection as the panel — no second
   // "navigation" projection that re-admits disabled templates.
