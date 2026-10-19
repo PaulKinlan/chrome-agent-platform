@@ -72,9 +72,10 @@ still depends on that run's permissions, origin and policy.
 ## Measured gates and limits
 
 Store-target bundle sizes from a fresh `npm run build:production` (measured 2026-10-16 on
-`origin/main` b6389708, v0.3.712). The ceilings are the ones the build itself reports and asserts
-against — `STORE_SW_BUDGET_BYTES` and `STORE_BUNDLE_BUDGETS` in `scripts/bundle-budget.mjs`, which is
-the source of truth; the table is a dated snapshot, so re-measure rather than trusting it:
+`origin/main` b6389708, v0.3.712). The reference sizes come from `STORE_SW_BUDGET_BYTES` and
+`STORE_BUNDLE_BUDGETS` in `scripts/bundle-budget.mjs`, the source of truth; this table is a dated
+snapshot, so re-measure rather than trusting it. Only store `offscreen.bundle.js` has an enforced
+per-bundle ceiling (250,000 bytes, rmoh8); the other twelve are reported, not enforced:
 
 | Surface | Size | Ceiling | Headroom |
 | --- | ---: | ---: | ---: |
@@ -97,8 +98,10 @@ Every store budget passes and none was relaxed. Five bundles sit under 5% headro
 the pattern chrome-agent-platform-3rryv tracks, not a single over-budget bundle. The per-bundle
 ceilings quoted here earlier in this file (options 900,000, ntp 920,000, sidepanel 700,000, with
 matching sizes) predated the 20e2u code-splitting ratchet-down and were wrong on both sides of the
-comparison; since Paul's 2026-10-05 decision a size overrun is measured and reported rather than
-failing the build, and a lane still must not retune a ceiling.
+comparison; since Paul's 2026-10-05 decision those other per-bundle overruns are measured and
+reported rather than failing the build, and a lane still must not retune a reference. The later
+x9r8k.2 offscreen staging build measured 249,976 B (24 B under its now-enforced 250,000 B ceiling);
+any further growth must be reclaimed or explicitly reviewed, not silently shipped.
 
 ## Operational boundaries
 

@@ -196,10 +196,11 @@ whole-suite mutant run); **inspection** means read from the source, not executed
 
 - **Watches:** `STORE_BUNDLE_BUDGETS` (scripts/bundle-budget.mjs) — the store build
   REPORTS every bundle against its reference (owner decision Paul, 2026-10-05:
-  sizes are measured and reported, not enforced; `assertBundleBudget` still
-  fails closed on duplicated/drifted dependency inputs) and
-  `tests/bundle-budget.test.ts` prints the sizes recorded in
-  `dist.complete` against the same table (report-only).
+  twelve per-bundle sizes remain advisory; `assertBundleBudget` still fails
+  closed on duplicated/drifted dependency inputs). The rmoh8 exception is the
+  enforced 250,000-byte store `offscreen.bundle.js` ceiling; its synthetic
+  overrun and the real recorded bytes are pinned by `tests/bundle-budget.test.ts`.
+  That suite prints all sizes recorded in `dist.complete` against the same table.
   `tests/unbundled-page-census.test.ts` pins
   the transitive STATIC-import byte total of each raw-module page (artifact,
   artifacts, directory, privacy, offscreen) at its measured value with

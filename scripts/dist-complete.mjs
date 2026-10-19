@@ -27,9 +27,9 @@ export const DIST_COMPLETE_TARGETS = Object.freeze([
 // marker used to bind only the SW + options; ntp / sidepanel / diff-core / the
 // agent worker were shipped unrecorded, so their sizes could not be gated from
 // the marker. Now `outputs[i].size` is the number tests/bundle-budget.test.ts
-// holds against scripts/bundle-budget.mjs STORE_BUNDLE_BUDGETS (report-only
-// since the owner decision of 2026-10-05: sizes are measured and reported,
-// not enforced).
+// holds against scripts/bundle-budget.mjs STORE_BUNDLE_BUDGETS (the store
+// offscreen entry is enforced by rmoh8; the other twelve per-bundle sizes
+// remain advisory under the 2026-10-05 owner decision).
 export const DIST_COMPLETE_OUTPUTS = Object.freeze([
   "background/service-worker.js",
   "options.bundle.js",

@@ -854,7 +854,8 @@ try {
     // reference in STORE_BUNDLE_BUDGETS — assertBundleBudget still fails the
     // build on the dependency-integrity invariants (duplicated instances,
     // lockfile drift) — and an over-reference bundle prints its top
-    // contributors instead of failing the build. The developer build notes
+    // contributors instead of failing, except store offscreen >250000 bytes
+    // (rmoh8: a hard ceiling). The developer build notes
     // its unminified bytes (larger by design).
     {
       const { assertBundleBudget, bundleBudgetReport, STORE_BUNDLE_BUDGETS, STORE_SW_BUDGET_BYTES, STORE_AGGREGATE_CHUNKS_BUDGET_BYTES } = await import("./scripts/bundle-budget.mjs");
@@ -886,7 +887,7 @@ try {
           assertBundleBudget({ label: rel, bytes: size, budgetBytes, metafile });
           const over = bundleBudgetReport({ label: rel, bytes: size, budgetBytes, metafile });
           if (over) console.log(over);
-          else console.log(`bundle budget: store ${rel} ${size} bytes <= ${budgetBytes} budget`);
+          else console.log(`bundle budget: store ${rel} ${size} bytes <= ${budgetBytes} ${rel === "offscreen.bundle.js" ? "enforced ceiling" : "advisory reference"}`);
         }
         let aggregateChunkBytes = 0;
         for (const chunkPath of emittedChunks) {

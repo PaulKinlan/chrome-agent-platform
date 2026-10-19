@@ -11,11 +11,10 @@ import { dirname, join } from "node:path";
 // dependency-integrity invariants (one instance per exact package version, no
 // lockfile drift, no zod CJS+ESM double-bundling).
 //
-// OWNER DECISION (Paul, 2026-10-05): "The limits make no sense anymore." A
-// bundle exceeding its SIZE ceiling no longer fails the build — the size is
-// measured, recorded in extension/dist/dist.complete, and reported loudly
-// (with its top contributors) instead of blocking. The integrity invariants
-// below still throw. The developer build stays unminified with source maps
+// OWNER DECISION (Paul, 2026-10-05): "The limits make no sense anymore." Bundle
+// sizes are reported, not fatal, EXCEPT the store offscreen bundle's explicit
+// 250000-byte ceiling (rmoh8). The integrity invariants below still throw.
+// The developer build stays unminified with source maps
 // (CAP-FB-20260826-OBSERVABILITY-01).
 
 /** Store-target service-worker budget: 3.0 MB minified. */
@@ -298,14 +297,17 @@ function dependencyRootNote(root) {
 
 /**
  * The over-reference REPORT (owner decision Paul, 2026-10-05: reported, not
- * enforced): names the bundle, the actual size, the reference size and the
+ * enforced except offscreen, rmoh8): names the bundle, the actual size, the reference size and the
  * top contributors (when a metafile is available). Pure — returns the text;
  * the caller decides where it prints. An under-reference call returns "".
  */
 export function bundleBudgetReport({ label, bytes, budgetBytes = STORE_SW_BUDGET_BYTES, metafile = null, root = process.cwd() }) {
   const size = Number(bytes);
   if (!Number.isFinite(size) || size < 0 || size <= budgetBytes) return "";
-  return `bundle budget report: ${label} is ${size} bytes; the store reference size is ${budgetBytes} — OVER by ${size - budgetBytes} bytes (reported, not enforced; owner decision 2026-10-05).\n` +
+  const policy = label === "offscreen.bundle.js"
+    ? "enforced store ceiling (rmoh8; scripts/bundle-budget.mjs:STORE_BUNDLE_BUDGETS)"
+    : "reported, not enforced; owner decision 2026-10-05";
+  return `bundle budget report: ${label} is ${size} bytes; the store reference size is ${budgetBytes} — OVER by ${size - budgetBytes} bytes (${policy}).\n` +
     `Top contributors:\n${formatContributors(metafile)}` +
     dependencyRootNote(root);
 }
@@ -314,9 +316,9 @@ export function bundleBudgetReport({ label, bytes, budgetBytes = STORE_SW_BUDGET
  * The build-time check (build.mjs): FAILS CLOSED on an unmeasurable size and
  * on the dependency-integrity invariants (one instance per exact package
  * version, no lockfile drift, no zod CJS double-bundling — 63et / 9epn.3),
- * and RETURNS the measured size otherwise. The SIZE itself is not fatal
- * (owner decision Paul, 2026-10-05) — the caller reports an over-reference
- * bundle via bundleBudgetReport; the bytes still land in dist.complete.
+ * and RETURNS the measured size otherwise. Offscreen alone has a store-only
+ * hard ceiling (rmoh8); all other sizes remain advisory (owner decision Paul,
+ * 2026-10-05) and land in dist.complete after bundleBudgetReport.
  */
 export function assertBundleBudget({ label, bytes, budgetBytes = STORE_SW_BUDGET_BYTES, metafile = null, root = process.cwd() }) {
   const size = Number(bytes);
@@ -367,10 +369,18 @@ export function assertBundleBudget({ label, bytes, budgetBytes = STORE_SW_BUDGET
       );
     }
   }
-  // SIZE IS NOT FATAL HERE (owner decision Paul, 2026-10-05): an
-  // over-reference bundle is REPORTED by the caller via bundleBudgetReport
-  // and its bytes still land in dist/dist.complete. Nothing below depends on
-  // budgetBytes — the parameter stays so the call sites (and their pins) keep
-  // one shape for integrity + reporting.
+  // rmoh8: the offscreen store size alone is an enforced exception. Use the
+  // table directly so a caller cannot lift the ceiling via budgetBytes; the
+  // build already invokes this with measured store bytes before publishing.
+  const offscreenCeiling = STORE_BUNDLE_BUDGETS["offscreen.bundle.js"];
+  if (label === "offscreen.bundle.js" && size > offscreenCeiling) {
+    const error = new Error(`bundle budget: ${label} is ${size} bytes; exceeds the enforced ${offscreenCeiling}-byte ceiling ` +
+      `from scripts/bundle-budget.mjs:STORE_BUNDLE_BUDGETS by ${size - offscreenCeiling} bytes.\n` +
+      `Top contributors:\n${formatContributors(metafile)}` + dependencyRootNote(root));
+    error.code = "cap_offscreen_bundle_ceiling_exceeded";
+    throw error;
+  }
+  // Other sizes remain report-only (Paul, 2026-10-05); budgetBytes retains
+  // the shared caller shape for integrity checks and the reference report.
   return size;
 }

@@ -6,10 +6,11 @@
 // grew, and the "store = minified" contract was never implemented (the store
 // shipped 141k lines of readable JS). The fix: metafile-backed contributor
 // reporting on every build, store-target minification after the eval scrub,
-// and a hard 3.0 MB gate on the minified SW bundle.
+// and a measured 3.0 MB store SW reference (advisory since 2026-10-05).
+// rmoh8 enforces only the offscreen store ceiling: 250000 bytes.
 //
-// Falsification: set the gate to 1 MB and the store build fails naming the
-// top contributors; restore and it passes. The order pin (scrub BEFORE
+// Falsification: a synthetic 250001-byte offscreen bundle fails naming its
+// source and top contributors. The order pin (scrub BEFORE
 // minify) is the safety-critical invariant: the eval scrub's textual patterns
 // only match unminified code.
 // @ts-nocheck
@@ -80,6 +81,20 @@ Deno.test("bundle budget: sizes return measured bytes; an over-reference bundle 
   assertThrows(() => assertBundleBudget({ label: "x.js", bytes: NaN }), undefined, "not measurable");
 });
 
+Deno.test("rmoh8: a synthetic offscreen bundle over 250000 bytes fails with typed measured-source evidence", () => {
+  const ceiling = STORE_BUNDLE_BUDGETS["offscreen.bundle.js"];
+  assertEquals(ceiling, 250_000, "the store table is the single ceiling source");
+  assertEquals(assertBundleBudget({ label: "offscreen.bundle.js", bytes: ceiling, budgetBytes: ceiling }), ceiling);
+  const failure = assertThrows(() => assertBundleBudget({ label: "offscreen.bundle.js",
+    bytes: ceiling + 1, budgetBytes: ceiling,
+    metafile: { inputs: { "stage-host.js": { bytes: ceiling + 1 } } },
+  }));
+  assertEquals(failure.code, "cap_offscreen_bundle_ceiling_exceeded");
+  for (const fact of ["offscreen.bundle.js", "250001 bytes", "250000", "scripts/bundle-budget.mjs", "stage-host.js"]) {
+    assertStringIncludes(failure.message, fact);
+  }
+});
+
 Deno.test("tv7bz: Store build registers schema-2 admission before validating bundled manifest identity", async () => {
   // Source-only check inside this suite's existing reviewed read-only build
   // exemption. No build, artifact write or new serial phase is introduced.
@@ -100,8 +115,8 @@ Deno.test("bundle budget: build.mjs wires the metafile report, the store gate, a
   // source maps (CAP-FB-20260826-OBSERVABILITY-01).
   assertStringIncludes(source, "if (!DEBUG_BUILD) {");
   assertStringIncludes(source, "minify: true");
-  // The gate iterates the ONE budget table and holds every bundle against its
-  // own ceiling with its own metafile (9epn.4).
+  // The build iterates the ONE budget table and checks integrity for every
+  // bundle; only offscreen size is fatal (rmoh8).
   assertStringIncludes(source, "for (const [rel, budgetBytes] of Object.entries(STORE_BUNDLE_BUDGETS))");
   assertStringIncludes(source, "assertBundleBudget({ label: rel, bytes: size, budgetBytes, metafile })");
   // SAFETY ORDER: the eval scrub (textual, unminified-only patterns) runs
@@ -247,9 +262,14 @@ Deno.test("9epn.4 bundle budget: every generated bundle has a ceiling and the ga
   for (const [label, budgetBytes] of entries) {
     // At the reference: passes and returns the size.
     assertEquals(assertBundleBudget({ label, bytes: budgetBytes, budgetBytes }), budgetBytes, `${label}: the exact reference passes`);
-    // One byte over (owner decision 2026-10-05): REPORTED, not thrown — the
-    // call returns the size and the report names bundle, size and reference.
-    assertEquals(assertBundleBudget({ label, bytes: budgetBytes + 1, budgetBytes }), budgetBytes + 1, `${label}: an over-reference size returns instead of throwing`);
+    if (label === "offscreen.bundle.js") {
+      const error = assertThrows(() => assertBundleBudget({ label, bytes: budgetBytes + 1, budgetBytes }));
+      assertEquals(error.code, "cap_offscreen_bundle_ceiling_exceeded");
+    } else {
+      // All other entries remain advisory under the 2026-10-05 owner decision.
+      assertEquals(assertBundleBudget({ label, bytes: budgetBytes + 1, budgetBytes }), budgetBytes + 1,
+        `${label}: an over-reference size returns instead of throwing`);
+    }
     const report = bundleBudgetReport({ label, bytes: budgetBytes + 1, budgetBytes });
     assertStringIncludes(report, label, `${label}: the report names the bundle`);
     assertStringIncludes(report, String(budgetBytes + 1), `${label}: the report names the actual size`);
@@ -287,12 +307,14 @@ Deno.test("9epn.4 bundle budget: dist.complete records every generated bundle, r
     assertEquals(size, (await Deno.stat(`extension/dist/${path}`)).size, `${path}: the recorded size is the shipped file's size`);
   }
   if (marker.target !== "store") return; // developer build: unminified by design; the references measure the store bytes
-  // OWNER DECISION (Paul, 2026-10-05): sizes over a reference are REPORTED,
-  // not gated. The report stays LOUD — one line per budgeted entry, so
-  // growth is visible in every suite run — but it can never redden the build.
+  // All entries are reported; offscreen also has a hard 250000-byte ceiling.
+  // A store build above it must fail before publication (rmoh8).
   for (const [path, budget] of Object.entries(STORE_BUNDLE_BUDGETS)) {
     const size = sizeOf.get(path);
     assert(size !== undefined, `${path}: budgeted but not recorded in dist.complete`);
+    if (path === "offscreen.bundle.js") {
+      assert(size <= budget, `${path}: shipped ${size} bytes exceeds the enforced ${budget}-byte ceiling`);
+    }
     const report = bundleBudgetReport({ label: path, bytes: size, budgetBytes: budget });
     if (report) console.log(report);
     else console.log(`bundle budget: store ${path} ${size} bytes <= ${budget} reference`);
