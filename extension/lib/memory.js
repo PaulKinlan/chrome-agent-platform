@@ -825,9 +825,8 @@ async function setValueInner(path, key, value, { isMaster, trusted = false, stor
   // forged `thread:t_...` body must be as unreachable as a forged `threads`
   // index (the wider-goal review's thread-authority finding).
   const trustedPrefix = isMaster && (
-    k.startsWith("thread:") || k.startsWith("run:") ||
-    k.startsWith("run-outbox:") || k.startsWith("run-log:") ||
-    k.startsWith("run-resume:") || k.startsWith("run-payload:")
+    k.startsWith("thread:") || k.startsWith("thread-runs:") ||
+    k.startsWith("run:") || k.startsWith("run-")
   );
   // The internal namespace + artifact/package prefixes are reserved on EVERY
   // store; trusted product code alone may write them through setTrusted.
