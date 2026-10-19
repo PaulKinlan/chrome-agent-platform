@@ -189,7 +189,8 @@ Deno.test({
     const probed: string[] = [];
     const real = {
       hasProc: false,
-      // statFd is left to its DEFAULT (statSync("/dev/fd/<fd>")) so production's real call is exercised.
+      // statFd is left to its DEFAULT (write-only re-open of /dev/fd/<fd> + fstat of the
+      // handle) so production's real call is exercised, not a stub.
       statPath: () => statSync(lock),
       probe: (_path: string) => {
         probed.push(_path);
@@ -205,8 +206,11 @@ Deno.test({
       }
       assert(announced.includes("held"), "fixture: the flock holder must announce that it owns the lock");
 
-      lockFd = openSync(lock, "r");
-      otherFd = openSync(other, "r");
+      // jbu9f: the supervisor takes the lock with `exec 9>` (O_WRONLY) and macOS
+      // refuses an /dev/fd re-open asking for more access than the original, so the
+      // fixture must hold the descriptor write-only exactly as production does.
+      lockFd = openSync(lock, "a");
+      otherFd = openSync(other, "a");
       assert(
         fstatSync(lockFd).ino !== fstatSync(otherFd).ino,
         "fixture: the two descriptors must be different files",
