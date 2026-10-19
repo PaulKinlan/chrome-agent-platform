@@ -134,7 +134,8 @@ Deno.test("static-first: the walked JS file set matches the documented scope", a
   // Model a private synthetic tree with path segments, never paths into the checkout.
   const allowed = [
     ["extension", "lib", "entry.js"], ["extension", "lib", "vendor", "third.mjs"],
-    ["extension", "lib", "legacy.cjs"], ["packages", "pkg", "src", "entry.js"],
+    ["extension", "lib", "legacy.cjs"], ["extension", "lib", "evidence", "gen.js"],
+    ["packages", "pkg", "src", "entry.js"],
   ].map((segments) => segments.join("/"));
   const excluded = [
     ["extension", "dist", "gen.js"], ["extension", "lib", "deep", "dist", "gen.js"],
@@ -146,6 +147,7 @@ Deno.test("static-first: the walked JS file set matches the documented scope", a
     ["packages", "bundled", "evidence", "archive", "gen.js"],
     ["extension", "lib", "other.ts"], ["extension", "lib", "other.tsx"],
     ["extension", "lib", "other.jsx"],
+    ["tools", "outside.js"],
   ].map((segments) => segments.join("/"));
   const put = async (relative: string, contents: string) => {
     const file = join(root, relative);
