@@ -63,6 +63,11 @@ export function trackEmbeddedFrameContexts(cdp: EmbeddedCdp, sessionId: string) 
     const deadline = Date.now() + timeoutMs;
     let staleRetries = 0;
     let lastFrameId: string | null = null;
+    // m7vb5: remember what the readiness probe last observed so a deadline
+    // error names the ACTUAL document (observed vs expected) instead of the
+    // ambiguous frame=seen/staleRetries=0 that sent lanes down the wrong
+    // hypothesis (no default context vs wrong path vs fragment mismatch).
+    let lastObserved: { url?: unknown; ready?: unknown } | null = null;
     while (Date.now() < deadline) {
       const tree = (await cdp.send("Page.getFrameTree", {}, sessionId))?.result?.frameTree;
       const frame = tree?.childFrames?.find((child: any) => child?.frame?.url === expectedUrl)?.frame;
@@ -92,6 +97,7 @@ export function trackEmbeddedFrameContexts(cdp: EmbeddedCdp, sessionId: string) 
       if (ready?.result?.exceptionDetails) throw new Error("embedded Settings readiness evaluation threw");
       const state = ready?.result?.result?.value;
       if (state?.url !== expectedUrl || (state.ready !== "interactive" && state.ready !== "complete")) {
+        lastObserved = state && typeof state === "object" ? { url: state.url, ready: state.ready } : { url: state, ready: undefined };
         await nextChange(deadline - Date.now());
         continue;
       }
@@ -111,7 +117,7 @@ export function trackEmbeddedFrameContexts(cdp: EmbeddedCdp, sessionId: string) 
         await nextChange(deadline - Date.now());
       }
     }
-    throw new Error(`embedded Settings live context was unavailable before ${timeoutMs}ms (frame=${lastFrameId ? "seen" : "absent"}, staleRetries=${staleRetries})`);
+    throw new Error(`embedded Settings live context was unavailable before ${timeoutMs}ms (frame=${lastFrameId ? "seen" : "absent"}, staleRetries=${staleRetries}, observed=${JSON.stringify(lastObserved?.url ?? null)}, expected=${JSON.stringify(expectedUrl)}, ready=${JSON.stringify(lastObserved?.ready ?? null)})`);
   }
   return { evaluate, close };
 }

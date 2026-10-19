@@ -125,3 +125,30 @@ Deno.test("live-frame tracker does NOT replay a mutation after a generic timeout
   assert(isMissingCdpContext(new Error("Runtime.evaluate: Cannot find context with specified id")));
   assert(!isMissingCdpContext(new Error("Runtime.evaluate: Execution context was destroyed")));
 });
+
+Deno.test("m7vb5: the deadline error names the observed document URL and the expected URL", async () => {
+  // A readiness mismatch used to read identically to 'no context ever
+  // arrived' (frame=seen, staleRetries=0), which sent lanes down the wrong
+  // hypothesis for hours (utfug). The terminal error must carry what the
+  // probe actually saw versus what it wanted.
+  const cdp = fakeCdp(async (_id, expression) => {
+    if (expression.includes("document.URL")) {
+      return { result: { result: { value: { url: "chrome-extension://abcdef/options/other.html", ready: "complete" } } } };
+    }
+    return ownerDecision;
+  });
+  const tracker = trackEmbeddedFrameContexts(cdp, SESSION);
+  try {
+    cdp.emit("Runtime.executionContextCreated", CREATED(40));
+    const error = await assertRejects(
+      () => tracker.evaluate({ extensionId: "abcdef", path: "/options/options.html", expression: "owner-approval-request", timeoutMs: 400 }),
+      Error,
+      "unavailable",
+    );
+    assert(error.message.includes('"chrome-extension://abcdef/options/other.html"'), "observed URL missing from the deadline error");
+    assert(error.message.includes('"chrome-extension://abcdef/options/options.html"'), "expected URL missing from the deadline error");
+    assert(error.message.includes('"complete"'), "observed readyState missing from the deadline error");
+    assertEquals(cdp.calls.filter((call) => call.expression === "owner-approval-request").length, 0,
+      "the owner operation must never run in the wrong document");
+  } finally { tracker.close(); }
+});
