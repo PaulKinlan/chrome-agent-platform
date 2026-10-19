@@ -12,10 +12,12 @@
 // precondition (it skips extension/dist). Do not fold it back into the original file, and do not
 // promote that file whole.
 // @ts-nocheck
-import { fileURLToPath } from "node:url";
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { dirname, join } from "node:path";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { scanShippedJs } from "../scripts/scan-shipped.mjs";
 import { collectProductSources, auditStaticFirst } from "./helpers/emscripten-static-first-audit.mjs";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const hex = (bytes) => [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
@@ -123,4 +125,48 @@ Deno.test("wasm-package-authority-static: every hash-wasm manifest pins its own 
   }
   assertEquals(new Set(rows.map((r) => r.serial)).size, rows.length, "each reviewed binary carries its own SBOM serial");
   assertEquals(new Set(rows.map((r) => r.ref)).size, rows.length, "each manifest pins its own CDX file");
+});
+
+// zeaub: walk a disposable tree, not only an in-memory Map. A vendor/cjs skip
+// must turn this test RED even when the real source count remains above 300.
+Deno.test("static-first: the walked JS file set matches the documented scope", async () => {
+  const root = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-static-first-walk-" });
+  // Model a private synthetic tree with path segments, never paths into the checkout.
+  const allowed = [
+    ["extension", "lib", "entry.js"], ["extension", "lib", "vendor", "third.mjs"],
+    ["extension", "lib", "legacy.cjs"], ["packages", "pkg", "src", "entry.js"],
+  ].map((segments) => segments.join("/"));
+  const excluded = [
+    ["extension", "dist", "gen.js"], ["extension", "lib", "deep", "dist", "gen.js"],
+    ["packages", "pkg", "deep", "dist-versions", "gen.js"],
+    ["packages", "pkg", "dist-archives", "gen.js"],
+    ["packages", "pkg", "deep", "node_modules", "gen.js"],
+    ["extension", ".dist-stage-1", "gen.js"], ["extension", ".dist-link-1", "gen.js"],
+    ["extension", ".dist-prev-1", "gen.js"],
+    ["packages", "bundled", "evidence", "archive", "gen.js"],
+    ["extension", "lib", "other.ts"], ["extension", "lib", "other.tsx"],
+    ["extension", "lib", "other.jsx"],
+  ].map((segments) => segments.join("/"));
+  const put = async (relative: string, contents: string) => {
+    const file = join(root, relative);
+    await Deno.mkdir(dirname(file), { recursive: true });
+    await Deno.writeTextFile(file, contents);
+  };
+  try {
+    for (const path of allowed) await put(path, "export const safe = 1;");
+    for (const path of excluded) await put(path, "Module.loadDylibs();");
+    const sourceRoot = pathToFileURL(`${root}/`);
+    const sources = await collectProductSources(sourceRoot);
+    assertEquals([...sources.keys()].sort(), allowed.sort(), "every documented inclusion and exclusion must be witnessed");
+    assertEquals(auditStaticFirst(sources), [], "excluded hostile code must not enter the audit");
+    await Deno.symlink(join(root, allowed[0]), join(root, "packages", "pkg", "src", "linked.js"));
+    await assertRejects(
+      () => collectProductSources(sourceRoot),
+      Error,
+      "unreviewed product source symlink",
+      "a symlink outside the exclusions must fail closed",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
 });
