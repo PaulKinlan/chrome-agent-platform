@@ -155,7 +155,13 @@ Deno.test("ia98o: a NON-FINITE caller bound is not a bound - it is normalised to
       lease.release();
       const announced = lines.join("\n");
       assert(announced.includes("bound 1200000 ms"), `boundMs=${String(bad)} must fall back to the default: ${announced}`);
-      assert(!announced.includes(String(bad)), `the announcement must not claim the unusable bound: ${announced}`);
+      // chrome-agent-platform-tijnj: assert the bound TOKEN, not a bare substring.
+      // String(-5) = "-5" also occurs inside the announced fixture path whenever the
+      // makeTempDir hex begins with '5' (observed: cap-heavyslot-5e9deff4b901fa07),
+      // which red-rolled ~1-in-16 full-suite runs. The pin's intent is exactly that
+      // the announcement never REPORT the unusable bound as the bound in force, and
+      // the announcement mentions bounds only as "bound <N> ms".
+      assert(!announced.includes(`bound ${String(bad)}`), `the announcement must not claim the unusable bound: ${announced}`);
     } finally {
       await reap(holder.child);
       await Deno.remove(dir, { recursive: true }).catch(() => {});
