@@ -28,9 +28,21 @@ async function sweepStaleOrphanDirs() {
   try {
     for await (const entry of Deno.readDir(root)) {
       if (entry.isDirectory && entry.name.startsWith("1k2a-parallel-")) {
-        const m = /^1k2a-parallel-[^-]+-(\d+)-/.exec(entry.name);
+        // t4uvt: the fixture LABEL is multi-segment ("orphan-test", "residual-test"),
+        // so the old `[^-]+` never matched the exact shape the 121-minute orphan
+        // left behind — the sweep skipped it silently. The label may now contain
+        // dashes; the trailing -<pid>-<8hex> tail is anchored, so the pid is always
+        // the second-to-last segment. Safety is unchanged: the pid-liveness check
+        // below is the only removal authority, and only this suite's own
+        // 1k2a-parallel-* shapes match at all.
+        const m = /^1k2a-parallel-(.+)-(\d+)-([0-9a-f]{8})$/.exec(entry.name);
         if (m) {
-          const pid = Number(m[1]);
+          // chrome-agent-platform-2jjit: the PID is the SECOND group — the label
+          // before it may contain dashes. Parsing m[1] (the old group index)
+          // yields NaN for multi-segment labels, /proc/NaN never stats, and the
+          // sweep would treat a LIVE pid as dead and delete its directory.
+          const pid = Number(m[2]);
+          if (!Number.isSafeInteger(pid) || pid <= 0) continue;
           let pidAlive = false;
           try {
             if (Deno.build.os === "linux") {
@@ -58,6 +70,81 @@ async function sweepStaleOrphanDirs() {
 }
 
 await sweepStaleOrphanDirs();
+
+Deno.test("2jjit: the sweep never deletes a LIVE pid's directory (multi-segment label included)", async () => {
+  // 2jjit: the group-index drift made Number(m[1]) = NaN for "orphan-test"
+  // labels, /proc/NaN never stats, and the liveness gate read "dead" — the sweep
+  // would have deleted a LIVE pid's directory. A genuinely LIVE pid (a sleeping
+  // child) with a real fixture shape must survive the sweep.
+  const root = durableRoot();
+  const child = new Deno.Command("sh", { args: ["-c", "sleep 30"] }).spawn();
+  const livePid = child.pid;
+  const multi = `${root}/1k2a-parallel-orphan-test-${livePid}-deadbeef`;
+  const single = `${root}/1k2a-parallel-foo-${livePid}-deadbeef`;
+  await Deno.mkdir(multi, { recursive: true });
+  await Deno.mkdir(single, { recursive: true });
+  try {
+    await sweepStaleOrphanDirs();
+    assertEquals(await Deno.stat(multi).then(() => true, () => false), true,
+      `a LIVE pid's multi-segment directory must NEVER be swept: ${multi}`);
+    assertEquals(await Deno.stat(single).then(() => true, () => false), true,
+      `a LIVE pid's single-segment directory must NEVER be swept: ${single}`);
+  } finally {
+    child.kill("SIGKILL");
+    await child.status;
+    await Deno.remove(multi, { recursive: true }).catch(() => {});
+    await Deno.remove(single, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("2jjit: names that are not this suite's fixture shape are never swept", async () => {
+  // The prefix alone must not authorize deletion: a directory that carries the
+  // 1k2a-parallel- prefix but no -<pid>-<8hex> tail (an unrelated lane's
+  // directory, or prose) is not this suite's fixture and must survive.
+  const root = durableRoot();
+  const strangers = [
+    `${root}/1k2a-parallel-not-a-fixture`,
+    `${root}/1k2a-parallel-`,
+    `${root}/1k2a-parallel-orphan-test-not-a-pid-nothex`,
+  ];
+  for (const dir of strangers) await Deno.mkdir(dir, { recursive: true });
+  try {
+    await sweepStaleOrphanDirs();
+    for (const dir of strangers) {
+      assertEquals(await Deno.stat(dir).then(() => true, () => false), true,
+        `a non-fixture name must never be swept: ${dir}`);
+    }
+  } finally {
+    for (const dir of strangers) await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("t4uvt: the stale-orphan sweep matches the REAL orphan shape, multi-segment label included", async () => {
+  // t4uvt: the reviewer's exact repro. The suite's largest fixture label is
+  // multi-segment ("orphan-test"), and the old sweep regex `[^-]+` matched only a
+  // single dash-free segment — so the EXACT directory shape the 121-minute orphan
+  // left behind was never swept, while a synthetic single-segment dir was. A
+  // genuinely dead pid (a child that has already exited) is the sweep's only
+  // removal authority; a live pid's dir is never touched.
+  const root = durableRoot();
+  const child = new Deno.Command("sh", { args: ["-c", "exit 0"] }).spawn();
+  const deadPid = child.pid;
+  await child.status;
+  const multi = `${root}/1k2a-parallel-orphan-test-${deadPid}-deadbeef`;
+  const single = `${root}/1k2a-parallel-foo-${deadPid}-deadbeef`;
+  await Deno.mkdir(multi, { recursive: true });
+  await Deno.mkdir(single, { recursive: true });
+  try {
+    await sweepStaleOrphanDirs();
+    assertEquals(await Deno.stat(multi).then(() => false, () => true), true,
+      `the multi-segment orphan shape must be swept: ${multi}`);
+    assertEquals(await Deno.stat(single).then(() => false, () => true), true,
+      `the single-segment shape must still be swept: ${single}`);
+  } finally {
+    await Deno.remove(multi, { recursive: true }).catch(() => {});
+    await Deno.remove(single, { recursive: true }).catch(() => {});
+  }
+});
 
 /**
  * Pure scale factor calculation given machine load and CPU count (chrome-agent-platform-v6kut).
