@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.727] — 2026-10-19
+- Settings now displays the full curated agent template catalogue so users can browse and add starter templates directly.
+- Settings template agent instantiation now preserves recurring background schedules and avoids overwriting existing named agents.
+- Settings now displays the full curated agent template catalogue so you can browse and add starter templates directly.
+- Instantiating a Settings template now keeps a recurring background schedule and never overwrites an existing named agent.
+
 ## [0.3.726] — 2026-10-19
 - Builds now name their branch and commit even from a detached checkout, and an interrupted release can no longer lose its version number to an unrelated local edit.
 
