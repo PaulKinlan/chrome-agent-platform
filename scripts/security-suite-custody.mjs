@@ -8,7 +8,7 @@
 
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { fstatSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import {
   chmod,
   lstat,
@@ -384,15 +384,23 @@ export async function probeCanonicalLockHeld(
  * and `flock` must fail to take the lock (somebody holds it); see probeCanonicalLockHeld for what that
  * does and does not prove.
  *
- * `deps` is a test seam, every default = today's behaviour (chrome-agent-platform-jjsz F3: the no-/proc
- * branch cannot run on Linux, so it had no test of its verdicts): `hasProc` selects the platform
- * branch, `fstat(fd)` and `statPath(path)` read the descriptor and the lock path, and
+ * `deps` is a test seam, every default = production behaviour (chrome-agent-platform-jjsz F3: the
+ * no-/proc branch cannot run on Linux, so it had no test of its verdicts): `hasProc` selects the
+ * platform branch, `statFd(fd)` and `statPath(path)` read the descriptor and the lock path, and
  * `probe(lockPath)` is probeCanonicalLockHeld. The /proc branch does not use them.
+ *
+ * WHY `statFd` STATS A PATH (chrome-agent-platform-8bp69). The first macOS draft read the descriptor
+ * with `fstatSync(fd)` and could never work in the Deno runner: Deno's `node:fs` fd namespace is NOT
+ * the OS fd table, so an inherited descriptor throws EBADF even though the supervisor (Node) fstats
+ * the same fd happily and `ls -l /dev/fd/9` shows the lock file. Measured on macOS 15 arm64 / Deno
+ * 2.9.0: `bash -c 'exec 9>x.lock; deno eval "fstatSync(9)"'` throws EBADF while
+ * `node -e "fstatSync(9)"` succeeds. `stat("/dev/fd/<fd>")` is the same descriptor in BOTH runtimes
+ * (macOS fdesc stat == fstat of that descriptor), so the seam — and production — stat the fd PATH.
  *
  * @param {number} [fd]
  * @param {{
  *   hasProc?: boolean,
- *   fstat?: (fd: number) => {dev: number | bigint, ino: number | bigint},
+ *   statFd?: (fd: number) => {dev: number | bigint, ino: number | bigint},
  *   statPath?: (path: string) => {dev: number | bigint, ino: number | bigint},
  *   probe?: (lockPath: string) => Promise<string | null>,
  * }} [deps]
@@ -401,14 +409,16 @@ export async function probeCanonicalLockHeld(
 export async function verifyInheritedCanonicalLock(fd = 9, deps = {}) {
   const {
     hasProc = HAS_PROC,
-    fstat = fstatSync,
+    // 8bp69: stat the fd as a PATH. `fstatSync(fd)` cannot work under Deno on macOS (see above),
+    // and `/dev/fd/<fd>` is that descriptor in both runtimes.
+    statFd = (descriptor) => statSync(`/dev/fd/${descriptor}`),
     statPath = statSync,
     probe = probeCanonicalLockHeld,
   } = deps;
   if (!hasProc) {
     let fdStat;
     try {
-      fdStat = fstat(fd);
+      fdStat = statFd(fd);
     } catch {
       return "canonical inherited lock fd is missing";
     }
