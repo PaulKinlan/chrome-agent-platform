@@ -64,10 +64,13 @@ Deno.test("3nurz: waitForServiceWorker recovers when first Target.getTargets cal
     call1SettledAt === 0 || call2StartedAt < call1SettledAt,
     `call 2 must start before call 1 settles (call 2 started at ${call2StartedAt - call1StartedAt}ms, call 1 settled at ${call1SettledAt - call1StartedAt}ms)`,
   );
-  assert(
-    call2StartedAt - call1StartedAt < 150,
-    `call 2 must be triggered promptly by callTimeoutMs (started at ${call2StartedAt - call1StartedAt}ms, expected ~60ms)`,
-  );
+  // owhbi: NO wall-clock latency bound here. A `< 150ms` bound on
+  // call2StartedAt - call1StartedAt converts scheduler jitter on a loaded box
+  // into a false product failure (two consecutive full-gate reds on an
+  // unchanged tree, 9/9 green in isolation; measured margin was only ~2.4x on
+  // an IDLE box). The contract under test is ORDER: attempt 2 is triggered by
+  // callTimeoutMs, before attempt 1's 250ms stall settles — pinned above —
+  // plus exactly two attempts (callCount === 2, pinned above).
 });
 
 Deno.test("3nurz: FALSIFICATION — legacy behavior without per-call retry fails or hangs on first stalled call", async () => {
@@ -112,7 +115,11 @@ Deno.test("3nurz: terminal transport failure (cdp websocket closed) fails fast i
 
   const duration = Date.now() - start;
   assertEquals(callCount, 1, "terminal transport error must not be retried");
-  assert(duration < 200, `terminal error must fail fast (took ${duration}ms, expected <200ms)`);
+  // Fail-fast is pinned AGAINST THE CONFIGURED BUDGET, never a bare absolute:
+  // a fixed `< 200ms` rail converts scheduler slip on a loaded gate box into a
+  // false product red (owhbi class). Half the 5000ms budget still fails if the
+  // implementation waits the deadline out, with a wide margin for timer slip.
+  assert(duration < 2500, `terminal error must fail fast, not wait out the 5000ms budget (took ${duration}ms)`);
   assert(
     !(err instanceof ServiceWorkerTargetTimeoutError),
     "must not misclassify terminal socket closure as a load timeout",
@@ -160,8 +167,11 @@ Deno.test("3nurz: waitForServiceWorker throws ServiceWorkerTargetTimeoutError na
   const err: any = await assertRejects(
     () =>
       waitForServiceWorker(mockSend, {
-        timeoutMs: 120,
-        callTimeoutMs: 30,
+        // owhbi class: the first callTimeout must fire comfortably BEFORE the
+        // deadline or attempts>=2 flakes under gate load. 50ms vs 300ms is a
+        // 6x margin (the old 30ms vs 120ms rail was 4x and rail-adjacent).
+        timeoutMs: 300,
+        callTimeoutMs: 50,
         intervalMs: 10,
         measureVerdict: async () => mockVerdict,
         countLiveChrome: () => 7,
@@ -170,8 +180,8 @@ Deno.test("3nurz: waitForServiceWorker throws ServiceWorkerTargetTimeoutError na
   );
 
   assert(err instanceof ServiceWorkerTargetTimeoutError, "must be instance of ServiceWorkerTargetTimeoutError");
-  assertEquals(err.totalTimeoutMs, 120);
-  assertEquals(err.callTimeoutMs, 30);
+  assertEquals(err.totalTimeoutMs, 300);
+  assertEquals(err.callTimeoutMs, 50);
   assertEquals(err.liveChrome, 7);
   assertEquals(err.verdict.cause, "loaded");
   assert(err.attempts >= 2, "must have retried multiple times before exhausting deadline");
@@ -225,13 +235,17 @@ Deno.test("3nurz: waitForServiceWorker returns null when Chrome is responsive bu
   };
 
   const target = await waitForServiceWorker(mockSend, {
-    timeoutMs: 60,
+    // owhbi class, coord route (A): the pin is "keeps polling", not "polls
+    // twice inside 60ms" — a 60ms deadline with callCount >= 2 hit the rail
+    // exactly under gate load (measured polls 4,6,2,3). 300ms with >= 3 still
+    // fails if polling stops entirely or after the first call.
+    timeoutMs: 300,
     callTimeoutMs: 25,
     intervalMs: 10,
   });
 
   assertEquals(target, null, "must return null when no worker registers within deadline without errors");
-  assert(callCount >= 2, "must have polled responsive Chrome multiple times");
+  assert(callCount >= 3, `must have kept polling responsive Chrome (polled ${callCount}x in 300ms)`);
 });
 
 Deno.test("3nurz: isTerminalTransportError accurately detects socket closed and broken errors", () => {
