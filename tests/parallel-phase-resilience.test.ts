@@ -55,16 +55,54 @@ export function classifyPsOutput(out: { success: boolean; stdout: Uint8Array } |
   return state[0] === "Z" ? DEAD : ALIVE;
 }
 
+/** The one `ps` call the non-Linux branch makes (injectable for tests). */
+async function defaultPsState(pid: number): Promise<{ success: boolean; stdout: Uint8Array } | null> {
+  try {
+    return await new Deno.Command("ps", {
+      args: ["-o", "state=", "-p", String(pid)],
+      stdout: "piped",
+      stderr: "null",
+    }).output();
+  } catch {
+    return null;
+  }
+}
+
 /**
- * The platform-aware probe. `statProc` is injectable so a test can drive the real
- * probe AND the real sweep through the uncertainty paths a container actually
- * produces (hidepid, EPERM, no /proc) without faking the answer itself.
+ * Is the /proc MOUNT itself usable? 43e7a: without this, "no /proc mounted at
+ * all" is indistinguishable from "that pid does not exist" — every stat returns
+ * ENOENT, so the sweep would call EVERY pid dead and delete every directory,
+ * live pids included. The mount must be proved before ENOENT is allowed to mean
+ * anything about a pid.
+ */
+async function procMountUsable(statProc: (path: string) => Promise<unknown>): Promise<boolean> {
+  try {
+    await statProc("/proc");
+    await statProc("/proc/self");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The platform-aware probe. Both inputs are injectable so a test can drive the
+ * REAL probe and the REAL sweep through the paths a container or another OS
+ * actually produces, WITHOUT depending on the runner's own OS (2nw7x): a test
+ * injects the platform's own answer, so it is green on Linux and macOS alike.
  */
 export async function defaultPidState(
   pid: number,
-  { statProc = Deno.stat }: { statProc?: (path: string) => Promise<unknown> } = {},
+  {
+    statProc = Deno.stat,
+    psProc = defaultPsState,
+  }: {
+    statProc?: (path: string) => Promise<unknown>;
+    psProc?: (pid: number) => Promise<{ success: boolean; stdout: Uint8Array } | null>;
+  } = {},
 ): Promise<PidState> {
   if (Deno.build.os === "linux") {
+    if (!(await procMountUsable(statProc))) return UNKNOWN;
     try {
       await statProc(`/proc/${pid}`);
       return ALIVE;
@@ -72,16 +110,7 @@ export async function defaultPidState(
       return classifyStatError(err);
     }
   }
-  try {
-    const out = await new Deno.Command("ps", {
-      args: ["-o", "state=", "-p", String(pid)],
-      stdout: "piped",
-      stderr: "null",
-    }).output();
-    return classifyPsOutput(out);
-  } catch {
-    return UNKNOWN;
-  }
+  return classifyPsOutput(await psProc(pid));
 }
 
 async function sweepStaleOrphanDirs(
@@ -192,37 +221,72 @@ Deno.test("t4uvt: the stale-orphan sweep matches the REAL orphan shape, multi-se
   }
 });
 
+const utf8 = (text: string) => new TextEncoder().encode(text);
+
+/**
+ * 2nw7x: a probe that answers DEAD on BOTH platforms without depending on the
+ * runner's OS — Linux sees ENOENT for the pid (with /proc proved present), macOS
+ * sees a zombie `ps` state.
+ */
+const deadOnEveryPlatform = (pid: number) =>
+  defaultPidState(pid, {
+    statProc: (p) =>
+      p === "/proc" || p === "/proc/self" ? Promise.resolve({}) : Promise.reject(new Deno.errors.NotFound("no such process")),
+    psProc: () => Promise.resolve({ success: true, stdout: utf8("Z\n") }),
+  });
+
+/** A probe that cannot ANSWER on both platforms: hidepid / an unusable `ps`. */
+const unknownOnEveryPlatform = (pid: number) =>
+  defaultPidState(pid, {
+    statProc: (p) =>
+      p === "/proc" || p === "/proc/self" ? Promise.resolve({}) : Promise.reject(new Deno.errors.PermissionDenied("hidepid")),
+    psProc: () => Promise.resolve({ success: false, stdout: new Uint8Array() }),
+  });
+
 Deno.test("j2isq: the sweep PRESERVES a fixture directory whenever the probe cannot answer", async () => {
   // The probe's uncertainty paths used to resolve to "dead", which IS the
-  // deletion authority: an unreadable /proc (EACCES/EPERM, no /proc in a
-  // container, hidepid) or a missing/empty `ps` deleted a directory whose pid
-  // might be perfectly alive. Uncertainty must preserve; only proof of death
-  // may delete.
+  // deletion authority: an unreadable /proc (EACCES/EPERM, hidepid) or a
+  // missing/empty `ps` deleted a directory whose pid might be perfectly alive.
+  // Uncertainty must preserve; only proof of death may delete.
   const root = durableRoot();
   const unknownDir = `${root}/1k2a-parallel-orphan-test-2147483646-deadbeef`;
   const deadDir = `${root}/1k2a-parallel-residual-test-2147483645-deadbeef`;
   await Deno.mkdir(unknownDir, { recursive: true });
   await Deno.mkdir(deadDir, { recursive: true });
   try {
-    // The REAL probe and the REAL sweep run: only the filesystem answer is
-    // injected, so this drives the classifier, the sweep's gate and the removal
-    // authority together. A hidepid/EACCES /proc is the container reality, and a
-    // `ps` that cannot answer is the macOS reality (same UNKNOWN answer).
-    await sweepStaleOrphanDirs({
-      pidState: (pid) =>
-        pid === 2147483646
-          ? defaultPidState(pid, {
-            statProc: () => Promise.reject(new Deno.errors.PermissionDenied("hidepid hides /proc")),
-          })
-          : defaultPidState(pid, { statProc: () => Promise.reject(new Deno.errors.NotFound("no such process")) }),
-    });
+    await sweepStaleOrphanDirs({ pidState: unknownOnEveryPlatform });
     assertEquals(await Deno.stat(unknownDir).then(() => true, () => false), true,
       `an UNKNOWN liveness answer must PRESERVE the directory: ${unknownDir}`);
+    await sweepStaleOrphanDirs({ pidState: deadOnEveryPlatform });
     assertEquals(await Deno.stat(deadDir).then(() => false, () => true), true,
       `positive proof of death must still authorize deletion: ${deadDir}`);
   } finally {
     await Deno.remove(unknownDir, { recursive: true }).catch(() => {});
     await Deno.remove(deadDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("43e7a: with NO /proc mounted the sweep PRESERVES — a missing mount is not a dead pid", async () => {
+  // Without this distinction every /proc lookup returns ENOENT on a container
+  // that never mounted /proc, so EVERY pid read as dead and every directory —
+  // live pids included — was deleted. The mount must be proved usable first.
+  const root = durableRoot();
+  const liveLookingDir = `${root}/1k2a-parallel-orphan-test-2147483644-deadbeef`;
+  await Deno.mkdir(liveLookingDir, { recursive: true });
+  try {
+    await sweepStaleOrphanDirs({
+      pidState: (pid) =>
+        defaultPidState(pid, {
+          // On Linux: every stat fails, including the mount probe.
+          statProc: () => Promise.reject(new Deno.errors.NotFound("/proc not mounted")),
+          // On macOS there is no /proc at all; this pid answers ALIVE there.
+          psProc: () => Promise.resolve({ success: true, stdout: utf8("S\n") }),
+        }),
+    });
+    assertEquals(await Deno.stat(liveLookingDir).then(() => true, () => false), true,
+      `an unusable /proc mount must PRESERVE every fixture directory: ${liveLookingDir}`);
+  } finally {
+    await Deno.remove(liveLookingDir, { recursive: true }).catch(() => {});
   }
 });
 
