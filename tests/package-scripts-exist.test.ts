@@ -12,6 +12,13 @@
 // The rule: a path under scripts/ that appears in an npm script value is a file
 // on disk, and every `npm run <name>` step inside a script names a script that
 // exists. Mechanical, so the next deletion cannot leave a dangling command.
+//
+// chrome-agent-platform-7dot3: the same failure mode in the other direction —
+// two npm scripts running the SAME command. `test:fast` was a byte-identical
+// fork of `test:changed` that nothing referenced, so the fast gate had two
+// names and drifted; the repo refuses that shape for test* scripts (the
+// build/build:debug and package/package:store pairs are named variants with
+// their own identity and stay out of this check's scope).
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
@@ -33,6 +40,17 @@ function scriptRefs(cmd: string): string[] {
 /** The `npm run <name>` steps of a command line. */
 function npmRunSteps(cmd: string): string[] {
   return [...cmd.matchAll(/\bnpm run ([^\s&|;]+)/g)].map((m) => m[1]!);
+}
+
+/** True when two entries in a list of command strings are equal after trimming. */
+function duplicateCommands(cmds: string[]): boolean {
+  const seen = new Set<string>();
+  for (const cmd of cmds) {
+    const key = cmd.trim();
+    if (seen.has(key)) return true;
+    seen.add(key);
+  }
+  return false;
 }
 
 const exists = (rel: string) => {
@@ -70,6 +88,21 @@ Deno.test("i845: every `npm run <name>` step inside a script names a script that
     for (const step of npmRunSteps(cmd)) if (!(step in scripts)) dangling.push(`${name} → npm run ${step}`);
   }
   assertEquals(dangling, []);
+});
+
+Deno.test("i845: no two test* npm scripts run the same command (alias drift, cf. the retired test:fast)", () => {
+  assertEquals(duplicateCommands(["a b", "a b"]), true, "detector sees identical commands");
+  assertEquals(duplicateCommands(["a b", " a b "]), true, "detector ignores surrounding whitespace");
+  assertEquals(duplicateCommands(["a b", "a c", "b b"]), false, "distinct commands are not duplicates");
+  const byCmd = new Map<string, string[]>();
+  for (const [name, cmd] of Object.entries(scripts)) {
+    if (!name.startsWith("test")) continue;
+    const key = cmd.trim();
+    byCmd.set(key, [...(byCmd.get(key) ?? []), name]);
+  }
+  const dups = [...byCmd.entries()].filter(([, names]) => names.length > 1)
+    .map(([cmd, names]) => `${names.join(" / ")} → ${cmd}`);
+  assertEquals(dups, [], "test* scripts must have distinct commands — keep one name per runner");
 });
 
 Deno.test("i845: test:all starts with a real gate — nothing checks the retired task file's layout any more", () => {

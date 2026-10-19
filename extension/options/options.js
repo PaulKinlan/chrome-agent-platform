@@ -466,6 +466,8 @@ export async function handleSettingsHashNavigation(hash, isTraverse = false) {
   }
   hideDeveloperLockedNotice();
 
+  const wasActive = section.classList.contains("active");
+
   document.querySelectorAll("section.panel").forEach((s) => {
     s.classList.toggle("active", s.id === sectionId);
     s.dataset.active = s.id === sectionId ? "true" : "false";
@@ -487,15 +489,17 @@ export async function handleSettingsHashNavigation(hash, isTraverse = false) {
   await ensureSectionRendered(sectionId);
   if (sectionId === "usage") await renderUsagePanel(undefined, getSectionContext("usage"));
 
-  section.scrollIntoView({
-    behavior: isTraverse ? "auto" : "smooth",
-    block: "start",
-  });
+  if (!wasActive || isTraverse) {
+    section.scrollIntoView({
+      behavior: isTraverse ? "auto" : "smooth",
+      block: "start",
+    });
 
-  const heading = section.querySelector("h2, h3");
-  if (heading) {
-    heading.setAttribute("tabindex", "-1");
-    heading.focus({ preventScroll: true });
+    const heading = section.querySelector("h2, h3");
+    if (heading) {
+      heading.setAttribute("tabindex", "-1");
+      heading.focus({ preventScroll: true });
+    }
   }
 
   return true;
