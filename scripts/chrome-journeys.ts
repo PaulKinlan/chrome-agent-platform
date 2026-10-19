@@ -60,6 +60,7 @@ import { composerInput, composerSend, composerPopup } from "./lib/composer-targe
 import { viewEdgeParity } from "./lib/view-edge-parity.ts";
 import { clickVisibleCreateAgent } from "./lib/create-agent-click.ts";
 import { waitForAppReady } from "./lib/app-readiness.ts";
+import { trackEmbeddedFrameContexts } from "./lib/embedded-frame-eval.ts";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -222,10 +223,25 @@ class Cdp {
   // GENERATED-UI-BOOTSTRAP-SYNTAX-01).
   frameSessions = new Set();
   swAttachErrors = [];
-  executionContextEvents = []; // { sessionId, kind: "created"|"cleared", ts }
+  executionContextEvents = []; // { sessionId, kind: "created"|"destroyed"|"cleared", ts }
   fatalEvents = []; // malformed protocol, target crash, unexpected socket close
   intentionalClose = false;
   onAttach = null; // (sessionId, targetInfo, waitingForDebugger) => void
+  // h5rsw: generic event subscription, so a shared primitive
+  // (scripts/lib/embedded-frame-eval.ts's trackEmbeddedFrameContexts) rides
+  // THIS transport instead of a hand-rolled per-harness copy. Handlers run
+  // after the built-in buffers update; a throwing listener must not break
+  // dispatch for the rest.
+  listeners = new Map(); // method -> Set<(params, sessionId) => void>
+  on(method, handler) {
+    let set = this.listeners.get(method);
+    if (!set) {
+      set = new Set();
+      this.listeners.set(method, set);
+    }
+    set.add(handler);
+    return () => set.delete(handler);
+  }
   constructor(ws) {
     this.ws = ws;
     ws.onerror = () => this.fatalEvents.push("websocket error");
@@ -278,6 +294,14 @@ class Cdp {
           sessionId: d.sessionId, kind: "cleared", ts: Date.now(),
         });
       }
+      if (d.method === "Runtime.executionContextDestroyed") {
+        // Buffered so a tracker seeded from this history (q6ad9) never
+        // resurrects a context Chrome already tore down.
+        this.executionContextEvents.push({
+          sessionId: d.sessionId, kind: "destroyed",
+          id: d.params?.executionContextId, ts: Date.now(),
+        });
+      }
       if (d.method === "Runtime.executionContextCreated") {
         this.executionContextEvents.push({
           sessionId: d.sessionId, kind: "created",
@@ -307,6 +331,11 @@ class Cdp {
           // generated document); absent for console.error calls.
           url: d.params?.exceptionDetails?.url ?? null,
         });
+      }
+      for (const handler of this.listeners.get(d.method) ?? []) {
+        try {
+          handler(d.params, d.sessionId);
+        } catch { /* a listener must not break dispatch for the rest */ }
       }
     };
   }
@@ -8112,26 +8141,28 @@ async function main() {
       return frame && frame.contentDocument ? "present" : null;
     })()`);
     // The embedded frame's default execution context is reported on the NTP
-    // session a beat after the frame navigates; wait (bounded) for it rather
-    // than reading the event list once — the pooled frame's creation raced
-    // this read and the deny then ran in no context at all (observed 2026-08-30).
-    let settingsFrame = null;
-    let settingsCtx = null;
-    for (let i = 0; i < 25 && !settingsCtx; i++) {
-      const frameTree = await cdp.send("Page.getFrameTree", {}, ntpSession);
-      settingsFrame = (frameTree?.result?.frameTree?.childFrames ?? [])
-        .find((f) => String(f?.frame?.url ?? "").includes("options/options.html")) ?? null;
-      settingsCtx = cdp.executionContextEvents
-        .filter((e) => e.kind === "created" && e.sessionId === ntpSession && e.isDefault &&
-          e.frameId === settingsFrame?.frame?.id)
-        .pop() ?? null;
-      if (!settingsCtx) await sleep(200);
-    }
-    const iframeNav = settingsFrameId === "present" && !!settingsCtx?.id;
+    // session a beat after the frame navigates; reading the event list once
+    // raced the pooled frame's creation (observed 2026-08-30). The SHARED
+    // live-frame tracker (scripts/lib/embedded-frame-eval.ts — h5rsw: no third
+    // hand-rolled context strategy) follows the frame's live default context,
+    // verifies the real document inside it, and retries ONLY a proven-stale
+    // context (never a post-dispatch destruction).
+    let iframeNav = false;
     let iframeDeny = false;
-    if (iframeNav) {
-      const denied = await withTimeout(
-        cdp.send("Runtime.evaluate", {
+    let iframeCtxDetail = "embedded Settings frame not present";
+    if (settingsFrameId === "present") {
+      // q6ad9: the journey opened Settings at :2025 on THIS session, so the
+      // pooled frame's default context predates the tracker subscription and
+      // no new created event fires on reopen. Seed the tracker from the
+      // transport's buffered context history (which the pre-delta loop read
+      // directly); a seeded-but-dead context is weeded by the readiness
+      // probe's narrow stale retry.
+      const frameTracker = trackEmbeddedFrameContexts(cdp, ntpSession, { seedEvents: cdp.executionContextEvents });
+      try {
+        const denied = await frameTracker.evaluate({
+          extensionId: extId,
+          path: "/options/options.html",
+          timeoutMs: 15000,
           expression: `(async () => {
             const pending = await chrome.runtime.sendMessage({ type: "management.pending-approvals" });
             if (pending?.ok !== true || pending.approvals?.length !== 1 ||
@@ -8141,14 +8172,15 @@ async function main() {
             const out = await chrome.runtime.sendMessage({ type: "management.resolve-approval", approvalId: id, approve: false });
             return out?.ok === true && out?.decision === "denied";
           })()`,
-          contextId: settingsCtx.id,
-          returnByValue: true,
-          awaitPromise: true,
-        }, ntpSession),
-        15000,
-        "iframe approval deny",
-      );
-      iframeDeny = wireValue<any>(denied, "jny.iframe-deny") === true;
+        });
+        iframeNav = true;
+        iframeCtxDetail = `frame=${Cdp.diagnosticId(denied.frameId)} staleRetries=${denied.staleRetries}`;
+        iframeDeny = wireValue<any>(denied.result, "jny.iframe-deny") === true;
+      } catch (e) {
+        iframeCtxDetail = String(e?.message ?? e);
+      } finally {
+        frameTracker.close();
+      }
     }
     await sleep(250);
     const iframeAfter = await msgValue({ type: "agent.get", origin: approvalTargetOrigin });
@@ -8157,7 +8189,7 @@ async function main() {
     const iframePass = iframeDeniedRequest?.ok === false &&
       /requires owner approval/i.test(String(iframeDeniedRequest?.error ?? "")) && iframeNav && iframeDeny &&
       iframeAfter?.ok === true && iframeAfter.agent?.name === unchangedApprovalTargetName;
-    console.log(`approval journey (iframe deny): ${JSON.stringify({ deniedRequest: iframeDeniedRequest, settingsFrameId, settingsCtx: !!settingsCtx?.id, iframeNav, iframeDeny, after: iframeAfter?.agent?.name ?? iframeAfter })}`);
+    console.log(`approval journey (iframe deny): ${JSON.stringify({ deniedRequest: iframeDeniedRequest, settingsFrameId, iframeCtx: iframeCtxDetail, iframeNav, iframeDeny, after: iframeAfter?.agent?.name ?? iframeAfter })}`);
     check(
       "approval: primary NTP Settings iframe can deny an exact request",
       iframePass,
@@ -10118,4 +10150,9 @@ async function teardownJourneyChrome(proc, profile) {
   await teardownChrome(proc, profile);
 }
 
-await main();
+// h5rsw: import-safe entry — importing this module (a focused KAT reusing a
+// journey primitive) must not start the 379-check journey in the importer's
+// process. `import.meta.main` is the sanctioned gate (tests/main-module-check-guard.test.ts).
+if (import.meta.main) {
+  await main();
+}

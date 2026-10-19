@@ -15,10 +15,32 @@ export function isMissingCdpContext(error: unknown): boolean {
   return STALE_CONTEXT.test(String(error instanceof Error ? error.message : error));
 }
 
-export function trackEmbeddedFrameContexts(cdp: EmbeddedCdp, sessionId: string) {
+export function trackEmbeddedFrameContexts(cdp: EmbeddedCdp, sessionId: string, opts: {
+  /** Buffered context events captured BEFORE this subscription (the journey
+   * harness's Cdp.executionContextEvents). q6ad9: the pooled Settings frame can
+   * boot long before the tracker is created (panel reuse performs no
+   * navigation, so no new created event ever fires) — without the buffer the
+   * tracker spins to its deadline with frame=seen, staleRetries=0. Seeds are
+   * replayed in order (created registers, destroyed removes, cleared wipes);
+   * a seeded-but-dead context is weeded by the readiness probe's narrow
+   * stale retry, never trusted blindly. */
+  seedEvents?: Array<{ sessionId?: string; kind?: string; id?: number; frameId?: string; isDefault?: boolean }>;
+} = {}) {
   const contexts = new Map<string, number[]>();
   const waiters = new Set<() => void>();
   const wake = () => { for (const notify of waiters) notify(); };
+  for (const seed of opts.seedEvents ?? []) {
+    if (seed?.sessionId !== sessionId) continue;
+    if (seed.kind === "cleared") { contexts.clear(); continue; }
+    if (seed.kind === "destroyed" && Number.isInteger(seed.id)) {
+      for (const [frame, entries] of contexts) contexts.set(frame, entries.filter((e) => e !== seed.id));
+      continue;
+    }
+    if (seed.kind === "created" && seed.isDefault === true && typeof seed.frameId === "string" && Number.isInteger(seed.id)) {
+      const entries = contexts.get(seed.frameId) ?? [];
+      contexts.set(seed.frameId, [...entries.filter((e) => e !== seed.id), seed.id!]);
+    }
+  }
   const stopCreated = cdp.on("Runtime.executionContextCreated", (event, session) => {
     const frameId = event?.context?.auxData?.frameId;
     const contextId = event?.context?.id;

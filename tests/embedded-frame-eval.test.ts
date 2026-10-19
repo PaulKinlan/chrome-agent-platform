@@ -126,6 +126,7 @@ Deno.test("live-frame tracker does NOT replay a mutation after a generic timeout
   assert(!isMissingCdpContext(new Error("Runtime.evaluate: Execution context was destroyed")));
 });
 
+
 Deno.test("utfug: a section fragment on document.URL (#providers) is NOT a different document", async () => {
   // The NTP's openView appends the section hash to the pooled Settings frame
   // (options/options.html#providers); Page.getFrameTree reports it separately
@@ -165,5 +166,71 @@ Deno.test("utfug: a fragment-less match still REFUSES a different path", async (
     );
     assertEquals(cdp.calls.filter((call) => call.expression === "owner-approval-request").length, 0,
       "the owner operation must never run in the wrong document");
+  } finally { tracker.close(); }
+});
+
+Deno.test("q6ad9: a tracker seeded from buffered history evaluates in a context created BEFORE subscription", async () => {
+  // The journey's exact defect: the pooled Settings frame booted at an earlier
+  // leg; the tracker subscribes later and NO live created event fires on
+  // reopen. Without a seed this spins to the deadline (frame=seen,
+  // staleRetries=0). With the transport's buffered events replayed at
+  // construction, the pre-existing context is found and used.
+  const cdp = fakeCdp(async (_id, expression) =>
+    expression.includes("document.URL") ? ready : ownerDecision);
+  const tracker = trackEmbeddedFrameContexts(cdp, SESSION, { seedEvents: [
+    { sessionId: SESSION, kind: "created", id: 30, frameId: "settings-frame", isDefault: true },
+  ] });
+  try {
+    const answer = await tracker.evaluate({ extensionId: "abcdef", path: "/options/options.html", expression: "owner-approval-request", timeoutMs: 500 });
+    assertEquals(answer.result, ownerDecision);
+    assertEquals(answer.staleRetries, 0);
+    // NO live events were emitted — the seed alone carried the context.
+  } finally { tracker.close(); }
+});
+
+Deno.test("q6ad9: a seed the buffer itself marks DESTROYED is weeded, never evaluated in", async () => {
+  const cdp = fakeCdp(async (_id, expression) =>
+    expression.includes("document.URL") ? ready : ownerDecision);
+  const tracker = trackEmbeddedFrameContexts(cdp, SESSION, { seedEvents: [
+    { sessionId: SESSION, kind: "created", id: 31, frameId: "settings-frame", isDefault: true },
+    { sessionId: SESSION, kind: "destroyed", id: 31 },
+    { sessionId: SESSION, kind: "created", id: 32, frameId: "settings-frame", isDefault: true },
+  ] });
+  try {
+    const answer = await tracker.evaluate({ extensionId: "abcdef", path: "/options/options.html", expression: "owner-approval-request", timeoutMs: 500 });
+    assertEquals(answer.result, ownerDecision);
+    assertEquals(cdp.calls.filter((call) => call.contextId === 31).length, 0,
+      "a destroyed seed must never be evaluated in");
+  } finally { tracker.close(); }
+});
+
+Deno.test("q6ad9: a seeded cleared event wipes earlier created seeds for the session", async () => {
+  const cdp = fakeCdp(async (_id, expression) =>
+    expression.includes("document.URL") ? ready : ownerDecision);
+  const tracker = trackEmbeddedFrameContexts(cdp, SESSION, { seedEvents: [
+    { sessionId: SESSION, kind: "created", id: 33, frameId: "settings-frame", isDefault: true },
+    { sessionId: SESSION, kind: "cleared" },
+    { sessionId: SESSION, kind: "created", id: 34, frameId: "settings-frame", isDefault: true },
+  ] });
+  try {
+    const answer = await tracker.evaluate({ extensionId: "abcdef", path: "/options/options.html", expression: "owner-approval-request", timeoutMs: 500 });
+    assertEquals(answer.result, ownerDecision);
+    assert(cdp.calls.every((call) => call.contextId !== 33), "the pre-clear context is stale navigation history");
+  } finally { tracker.close(); }
+});
+
+Deno.test("q6ad9: without a seed, a pre-existing context is NOT invented (fail-loud preserved)", async () => {
+  // The seeded path must not weaken the unseeded one: a tracker with no seed
+  // and no live events still times out honestly instead of guessing.
+  const cdp = fakeCdp(async (_id, expression) =>
+    expression.includes("document.URL") ? ready : ownerDecision);
+  const tracker = trackEmbeddedFrameContexts(cdp, SESSION);
+  try {
+    await assertRejects(
+      () => tracker.evaluate({ extensionId: "abcdef", path: "/options/options.html", expression: "owner-approval-request", timeoutMs: 400 }),
+      Error,
+      "unavailable",
+    );
+    assertEquals(cdp.calls.filter((call) => call.expression === "owner-approval-request").length, 0);
   } finally { tracker.close(); }
 });

@@ -1,13 +1,24 @@
 // The long Chrome journey used to kill only the Chrome parent + processes whose
 // argv contained its profile. Shared teardown also owns Chrome's process group;
 // detached crashpad helpers leave that group and remain a separate reaper issue.
-// Exercise the seam without importing chrome-journeys.ts (starts a browser).
+// Exercise the seam by slicing the source (importing chrome-journeys.ts is
+// side-effect-free since h5rsw's import.meta.main guard, verified behaviourally
+// by tests/journey-import-safe.test.ts — but the seam stays unit-isolated).
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 const source = await Deno.readTextFile(new URL("../scripts/chrome-journeys.ts", import.meta.url));
 const start = source.indexOf("async function teardownJourneyChrome(");
-const end = source.indexOf("\nawait main();", start);
+const end = source.indexOf("\nif (import.meta.main) {", start);
 assert(start >= 0 && end > start, "find the journey's real cleanup function");
+const entryGuard = source.slice(end);
+assert(
+  entryGuard.includes("if (import.meta.main) {\n  await main();\n}"),
+  "the entry guard runs main() only when the file is executed, never on import (h5rsw)",
+);
+assert(
+  !entryGuard.includes("\nawait main();"),
+  "no unconditional top-level await main() survives outside the import.meta.main guard (h5rsw)",
+);
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
 function build(teardownChrome: (proc: unknown, profile: string) => Promise<void>) {
