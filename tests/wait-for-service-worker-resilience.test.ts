@@ -64,10 +64,13 @@ Deno.test("3nurz: waitForServiceWorker recovers when first Target.getTargets cal
     call1SettledAt === 0 || call2StartedAt < call1SettledAt,
     `call 2 must start before call 1 settles (call 2 started at ${call2StartedAt - call1StartedAt}ms, call 1 settled at ${call1SettledAt - call1StartedAt}ms)`,
   );
-  assert(
-    call2StartedAt - call1StartedAt < 150,
-    `call 2 must be triggered promptly by callTimeoutMs (started at ${call2StartedAt - call1StartedAt}ms, expected ~60ms)`,
-  );
+  // owhbi: NO wall-clock latency bound here. A `< 150ms` bound on
+  // call2StartedAt - call1StartedAt converts scheduler jitter on a loaded box
+  // into a false product failure (two consecutive full-gate reds on an
+  // unchanged tree, 9/9 green in isolation; measured margin was only ~2.4x on
+  // an IDLE box). The contract under test is ORDER: attempt 2 is triggered by
+  // callTimeoutMs, before attempt 1's 250ms stall settles — pinned above —
+  // plus exactly two attempts (callCount === 2, pinned above).
 });
 
 Deno.test("3nurz: FALSIFICATION — legacy behavior without per-call retry fails or hangs on first stalled call", async () => {
