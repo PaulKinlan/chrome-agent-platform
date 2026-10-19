@@ -91,7 +91,15 @@ export function trackEmbeddedFrameContexts(cdp: EmbeddedCdp, sessionId: string) 
       }
       if (ready?.result?.exceptionDetails) throw new Error("embedded Settings readiness evaluation threw");
       const state = ready?.result?.result?.value;
-      if (state?.url !== expectedUrl || (state.ready !== "interactive" && state.ready !== "complete")) {
+      // document.URL carries the section fragment openView appends
+      // (options/options.html#providers), while Page.getFrameTree reports the
+      // fragment separately as urlFragment — so a naive === against the
+      // fragment-less expectedUrl NEVER matches and the tracker spins to its
+      // deadline (chrome-agent-platform-utfug). Compare the DOCUMENT identity
+      // (exact origin + path, fragment stripped); the hash is navigation
+      // state, not document identity.
+      const seenUrl = typeof state?.url === "string" ? state.url.split("#")[0] : "";
+      if (seenUrl !== expectedUrl || (state.ready !== "interactive" && state.ready !== "complete")) {
         await nextChange(deadline - Date.now());
         continue;
       }

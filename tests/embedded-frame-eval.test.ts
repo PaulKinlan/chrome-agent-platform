@@ -125,3 +125,45 @@ Deno.test("live-frame tracker does NOT replay a mutation after a generic timeout
   assert(isMissingCdpContext(new Error("Runtime.evaluate: Cannot find context with specified id")));
   assert(!isMissingCdpContext(new Error("Runtime.evaluate: Execution context was destroyed")));
 });
+
+Deno.test("utfug: a section fragment on document.URL (#providers) is NOT a different document", async () => {
+  // The NTP's openView appends the section hash to the pooled Settings frame
+  // (options/options.html#providers); Page.getFrameTree reports it separately
+  // as urlFragment, but page-side document.URL carries it. Readiness must
+  // compare the DOCUMENT identity (origin+path), fragment stripped — a naive
+  // === spins to the deadline with frame=seen, staleRetries=0 (the live KAT
+  // failure this pins). A wrong PATH must still refuse.
+  const cdp = fakeCdp(async (_id, expression) => {
+    if (expression.includes("document.URL")) {
+      return { result: { result: { value: { url: URL + "#providers", ready: "complete" } } } };
+    }
+    return ownerDecision;
+  });
+  const tracker = trackEmbeddedFrameContexts(cdp, SESSION);
+  try {
+    cdp.emit("Runtime.executionContextCreated", CREATED(20));
+    const answer = await tracker.evaluate({ extensionId: "abcdef", path: "/options/options.html", expression: "owner-approval-request", timeoutMs: 500 });
+    assertEquals(answer.result, ownerDecision);
+    assertEquals(answer.staleRetries, 0);
+  } finally { tracker.close(); }
+});
+
+Deno.test("utfug: a fragment-less match still REFUSES a different path", async () => {
+  const cdp = fakeCdp(async (_id, expression) => {
+    if (expression.includes("document.URL")) {
+      return { result: { result: { value: { url: "chrome-extension://abcdef/options/other.html", ready: "complete" } } } };
+    }
+    return ownerDecision;
+  });
+  const tracker = trackEmbeddedFrameContexts(cdp, SESSION);
+  try {
+    cdp.emit("Runtime.executionContextCreated", CREATED(21));
+    await assertRejects(
+      () => tracker.evaluate({ extensionId: "abcdef", path: "/options/options.html", expression: "owner-approval-request", timeoutMs: 400 }),
+      Error,
+      "unavailable",
+    );
+    assertEquals(cdp.calls.filter((call) => call.expression === "owner-approval-request").length, 0,
+      "the owner operation must never run in the wrong document");
+  } finally { tracker.close(); }
+});
