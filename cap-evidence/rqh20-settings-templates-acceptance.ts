@@ -14,7 +14,7 @@ const chrome = await launchChrome({
   extension: EXT,
   profile,
   windowSize: "1400,1000",
-  timeoutMs: 25000,
+  timeoutMs: 30000,
 });
 
 try {
@@ -46,6 +46,9 @@ try {
   })()`);
   console.log("Initial host inspection:", initialInspection);
   if (initialInspection.hostHidden) throw new Error("#background-agent-add is unexpectedly hidden!");
+  if (initialInspection.summaryText === "options_browse_starter_templates") {
+    throw new Error("Raw i18n key rendered for disclosure summary (finding ahzuf)!");
+  }
 
   // Expand the disclosure
   await cdp.eval(sessionId, `(() => {
@@ -160,6 +163,34 @@ try {
     throw new Error(`Research Analyst not found in unified agent list! Found: ${listState.agentNames?.join(", ")}`);
   }
   console.log("SUCCESS: Research Analyst template instantiated and present in Settings agent list!");
+
+  // Collision check (finding i3z5z): Add Research Analyst again, verify "Research Analyst 2" is created
+  console.log("Adding Research Analyst again to test collision prevention...");
+  await cdp.eval(sessionId, `(() => {
+    const gallery = document.querySelector("#background-agent-gallery");
+    const cards = [...(gallery?.shadowRoot?.querySelectorAll("agent-template-card") ?? [])];
+    const target = cards.find(c => c.shadowRoot?.querySelector(".name")?.textContent?.includes("Research Analyst"));
+    target?.shadowRoot?.querySelector(".use")?.click();
+  })()`);
+  await new Promise((r) => setTimeout(r, 600));
+
+  await cdp.eval(sessionId, `(() => {
+    const addBtn = document.querySelector(".background-agent-add-controls button.primary");
+    addBtn?.click();
+  })()`);
+  await new Promise((r) => setTimeout(r, 2000));
+
+  const listStateAfterCollision = await cdp.eval(sessionId, `(() => {
+    const list = document.querySelector("#unified-agent-list");
+    const rows = [...(list?.querySelectorAll(".agent-settings-row") ?? [])];
+    const names = rows.map(r => r.querySelector(".agent-row-title strong, .perm-name")?.textContent?.trim()).filter(Boolean);
+    return { agentNames: names };
+  })()`);
+  console.log("Unified agent list after duplicate add:", listStateAfterCollision);
+  if (!listStateAfterCollision.agentNames?.includes("Research Analyst 2")) {
+    throw new Error(`Collision not avoided! Expected "Research Analyst 2", got ${listStateAfterCollision.agentNames?.join(", ")}`);
+  }
+  console.log("SUCCESS: Collision avoided, Research Analyst 2 created without overwriting!");
 
   // Screenshot 3: Agent instantiated in list
   const shot3 = await cdp.screenshot(sessionId);

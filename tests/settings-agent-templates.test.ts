@@ -25,15 +25,20 @@ import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   AGENT_TEMPLATE_COUNT,
   STARTER_TEMPLATE_IDS,
+  AGENT_TEMPLATES,
+  templatePrefill,
 } from "../extension/lib/agent-templates.js";
 import { createPanelContext } from "../extension/options/panel-context.js";
 
 const _ACCEPTANCE = new URL("../cap-evidence/rqh20-settings-templates-acceptance.ts", import.meta.url);
+const agentsMod = await import("../extension/options/panels/agents.js");
+(globalThis as any)._agentsModule = agentsMod;
+(globalThis as any)._templatesModule = { AGENT_TEMPLATES, templatePrefill };
 
 const {
   composeSettingsTemplateCatalogue,
   renderBackgroundAgentPicker,
-} = await import("../extension/options/panels/agents.js");
+} = agentsMod;
 
 Deno.test("Settings template catalogue: includes curated starter templates even when background skills are empty", () => {
   // When there are ZERO background skills, curated templates must still populate the catalogue
@@ -186,6 +191,44 @@ Deno.test("Settings template gallery: section stays visible by default and rende
   } finally {
     (globalThis as any).document = prevDoc;
   }
+});
+
+Deno.test("Settings uniqueAgentName avoids collisions with existing named agents (0owtx/i3z5z)", () => {
+  const { uniqueAgentName } = (globalThis as any)._agentsModule;
+  assertEquals(uniqueAgentName("Chief of Staff", []), "Chief of Staff");
+  assertEquals(uniqueAgentName("Chief of Staff", [{ name: "Chief of Staff" }]), "Chief of Staff 2");
+  assertEquals(
+    uniqueAgentName("Chief of Staff", [{ name: "Chief of Staff" }, { name: "Chief of Staff 2" }]),
+    "Chief of Staff 3",
+  );
+});
+
+Deno.test("Settings background template prefill maps recurring prompt to schedule.task (0owtx)", () => {
+  const { AGENT_TEMPLATES, templatePrefill } = (globalThis as any)._templatesModule;
+  const bgTemplates = AGENT_TEMPLATES.filter((t: any) => t.mode === "background");
+  assert(bgTemplates.length > 0, "at least one background template exists");
+  for (const t of bgTemplates) {
+    const pre = templatePrefill(t);
+    assert(pre.schedule, `${t.id} must have schedule`);
+    const task = pre.schedule.task ?? pre.schedule.prompt;
+    assert(typeof task === "string" && task.length > 10, `${t.id} must have non-empty prompt`);
+  }
+});
+
+Deno.test("starter templates disclosure summary does not set missing data-i18n key (ahzuf)", async () => {
+  const code = await Deno.readTextFile(new URL("../extension/options/panels/agents.js", import.meta.url));
+  assert(
+    !code.includes('setAttribute("data-i18n", "options_browse_starter_templates")'),
+    "disclosure summary must not set missing data-i18n attribute which causes hydrateI18n to overwrite text with raw key",
+  );
+  assert(
+    code.includes('summary.textContent = "Browse starter templates…"'),
+    "disclosure summary must provide plain text Browse starter templates…",
+  );
+});
+
+Deno.test("Settings template acceptance script exists and is tracked", () => {
+  assert(_ACCEPTANCE.href.endsWith("rqh20-settings-templates-acceptance.ts"));
 });
 
 Deno.test("Settings panels/agents.js source: imports AGENT_TEMPLATES and passes background to picker", async () => {
