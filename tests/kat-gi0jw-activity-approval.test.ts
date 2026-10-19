@@ -64,3 +64,19 @@ Deno.test("focused KAT dispatches every genuine click to its page session and re
     "a worker restart must be observed rather than simulated");
   assert(source.includes("await teardownChrome(chrome, profile)"), "the one browser must be owner-cleaned");
 });
+
+Deno.test("focused KAT pre-grants the send-time tabs+tabGroups permission (headless can never answer its prompt)", async () => {
+  // 67xdt: f51b27c8a made EVERY hub send await
+  // chrome.permissions.request({tabs, tabGroups}). In headless Chrome that
+  // native prompt is unanswerable, so a send without the seeded grant hangs
+  // the handler silently (composer clears, no run, no card — the 30s
+  // activity-pending-card wait then times out). launchChrome's
+  // grantPermissions seeds the profile Preferences before launch, the repo's
+  // one established pattern (demo-path journey, seedGrantedPermissions).
+  const source = await Deno.readTextFile(new URL("../scripts/kat-gi0jw-activity-approval.ts", import.meta.url));
+  const launchIdx = source.indexOf("await launchChrome({");
+  assert(launchIdx >= 0, "the KAT must launch through the shared launcher");
+  const grantIdx = source.indexOf('grantPermissions: ["tabs", "tabGroups"]');
+  assert(grantIdx > launchIdx && grantIdx < launchIdx + 1200,
+    "the KAT's launch must pre-grant tabs+tabGroups or every send hangs headlessly");
+});
