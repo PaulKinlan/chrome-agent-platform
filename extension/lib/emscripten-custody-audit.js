@@ -36,10 +36,15 @@ function requireAudit(append, isLive) {
   if (typeof append !== "function" || typeof isLive !== "function") fail("emscripten_custody_audit_unavailable");
 }
 
+const REGISTRY_ROW_KEYS = new Set(["schemaVersion", "retentionPolicyVersion", "executionId", "at", "idempotencyKey"]);
 function sameRow(actual, expected) {
-  // appendLog returns the persisted row (also on a duplicate idempotency key).
-  // Never accept a successful but no-op append or a replay for different bytes.
-  return actual && Object.keys(expected).every((key) => JSON.stringify(actual[key]) === JSON.stringify(expected[key]));
+  // appendLog stamps only registry-owned bookkeeping onto the complete custody
+  // row (also on a replay). An unknown persisted field is not an exact match.
+  if (!actual || typeof actual !== "object" || Array.isArray(actual) ||
+      Object.getPrototypeOf(actual) !== Object.prototype) return false;
+  return Object.keys(actual).every((key) => Object.hasOwn(expected, key) || REGISTRY_ROW_KEYS.has(key)) &&
+    Object.keys(expected).every((key) => Object.hasOwn(actual, key) &&
+      JSON.stringify(actual[key]) === JSON.stringify(expected[key]));
 }
 
 async function appendExact({ append, row, key }) {
