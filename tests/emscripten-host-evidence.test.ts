@@ -2,6 +2,7 @@
 // @ts-nocheck
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { createEmscriptenHostEvidence, EMSCRIPTEN_HOST_EVIDENCE_ROOT } from "../extension/lib/emscripten-host-evidence.js";
+import { encodeModelStreamOwner } from "../extension/lib/wasm-stream-owner-codec.js";
 
 function missing() { return new DOMException("not found", "NotFoundError"); }
 function dir() {
@@ -50,7 +51,7 @@ Deno.test("xoeaa: pending and UNKNOWN survive offscreen restart; never claim wor
   const host = createEmscriptenHostEvidence({ storage });
   const pending = await host.begin(identity);
   assertEquals(pending.state, "pending");
-  assertEquals(pending.identity.owner, `agent:${RUN}:|named:alice`);
+  assertEquals(pending.identity.owner, encodeModelStreamOwner(RUN, "named:alice"));
   assertEquals(await host.begin(identity), pending, "same host may read its pending row");
   assertEquals((await host.read(identity)).state, "unknown", "pending is not success");
   const unknown = await host.recordUnknown(identity, "worker_termination_unproved");

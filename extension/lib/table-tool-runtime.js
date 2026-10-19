@@ -15,6 +15,7 @@ import { sha256Hex } from "./pure.js";
 import { canonicalJson } from "./wasm-package-authority.js";
 import { stageAssetAsWasmStream } from "./tool-stream-platform.js";
 import { discardWasmStream, readWasmStreamReceipt } from "./wasm-stream-files.js";
+import { encodeModelStreamOwner } from "./wasm-stream-owner-codec.js";
 import { runTableWorkerJob } from "./table-worker-host.js";
 
 export const TABLE_TOOL_NAMES = Object.freeze([
@@ -201,7 +202,7 @@ export function tableRunOwner(context) {
   const agentId = context.agentId;
   if (typeof runId !== "string" || runId !== context.executionId || !TABLE_RUN_ID_RE.test(runId)) fail("table_run_required");
   if (typeof agentId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(agentId)) fail("table_run_required");
-  return `agent:${runId}:${agentId}`;
+  return encodeModelStreamOwner(runId, agentId);
 }
 
 function normalizeCall(toolId, args) {
