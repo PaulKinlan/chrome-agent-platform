@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
-import { ACTIVITY_CHECKS, allNamedChecksPass, EXPECTED_CHECKS, runForVerdict, SETTINGS_CHECKS } from "../scripts/kat-gi0jw-activity-approval.ts";
+import { ACTIVITY_CHECKS, allNamedChecksPass, allNamedSettingsChecksPass, EXPECTED_CHECKS, runForVerdict, SETTINGS_CHECKS } from "../scripts/kat-gi0jw-activity-approval.ts";
 import { HARNESSES } from "../scripts/lib/harness-registry.ts";
 
 const green = EXPECTED_CHECKS.map((name) => ({ name, verdict: "PASS" as const }));
@@ -14,6 +14,14 @@ Deno.test("focused approval KAT pins all six Settings checks and Activity create
     "a Settings check not reached is NOT a pass");
   assert(!allNamedChecksPass(green.map((row, i) => i === 6 ? { ...row, verdict: "FAIL" } : row)),
     "a failed Activity card cannot masquerade as acceptance");
+});
+
+Deno.test("focused approval KAT supports --settings-only mode and allNamedSettingsChecksPass", () => {
+  const settingsGreen = SETTINGS_CHECKS.map((name) => ({ name, verdict: "PASS" as const }));
+  assert(allNamedSettingsChecksPass(settingsGreen));
+  assert(!allNamedSettingsChecksPass(settingsGreen.slice(0, -1)), "missing settings check must fail");
+  assert(!allNamedSettingsChecksPass(settingsGreen.map((row, i) => i === 0 ? { ...row, verdict: "FAIL" as const } : row)), "failed settings check must fail");
+  assert(!allNamedChecksPass(settingsGreen), "settings-only green checks do NOT satisfy full 12-check requirement");
 });
 
 Deno.test("focused acceptance verdict seam exits nonzero for incomplete, failed, or thrown drives", async () => {
