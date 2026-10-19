@@ -558,3 +558,70 @@ Deno.test("tool-library: a legacy or corrupt shadow summary (missing/typed-wrong
     assertEquals(threw, null, `${label}: the corrupt summary renders without throwing`);
   }
 });
+
+Deno.test("tool-library: site tools render .source-tool-origin with scheme stripped (lmk2)", async () => {
+  class El {
+    constructor(tag) { this.tag = tag; this.children = []; this.textContent = ""; this.className = ""; this.hidden = false; this.attrs = {}; }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    getAttribute(k) { return this.attrs[k] ?? null; }
+    append(...nodes) { this.children.push(...nodes); }
+    replaceChildren(...nodes) { this.children = [...nodes]; }
+    get classList() { return { toggle: () => {}, add: () => {}, remove: () => {} }; }
+  }
+  const registry = new Map();
+  const catalogEl = new El("div");
+  const bySelector = new Map([[".catalog", catalogEl], [".status-line", new El("p")], [".preview", new El("div")]]);
+  const shadow = { _html: "", set innerHTML(v) { this._html = v; }, get innerHTML() { return this._html; }, querySelector: (s) => bySelector.get(s) ?? null, querySelectorAll: () => [] };
+  globalThis.HTMLElement = class { attachShadow() { return shadow; } addEventListener() {} dispatchEvent() { return true; } getAttribute() { return null; } hasAttribute() { return false; } };
+  globalThis.customElements = { define(n, c) { registry.set(n, c); }, get(n) { return registry.get(n); } };
+  globalThis.window = globalThis;
+  globalThis.CustomEvent = class { constructor(t, i = {}) { this.type = t; this.detail = i.detail ?? {}; } };
+  globalThis.matchMedia = () => ({ matches: false });
+  globalThis.document = { createElement: (t) => new El(t), querySelector: () => null, head: { appendChild() {} }, getElementById: () => null };
+
+  const mod = await import("../extension/shared/components.js?details-slice-origin");
+  const { TOOL_PURPOSE_FAMILIES, TOOL_PURPOSE_GROUPS } = await import("../extension/lib/tool-purpose-groups.js");
+  const ToolLibraryClass = mod.ToolLibrary ?? registry.get("tool-library");
+  const library = Object.create(ToolLibraryClass.prototype);
+  library._root = shadow;
+  library._rendered = true;
+  library._state = "ready";
+  library._announcedState = "";
+  library._error = "";
+  library._results = null;
+  library._summary = null;
+  library.summary = {
+    descriptorCount: 1,
+    bySource: { "webmcp-declared": 1 },
+    catalogDiagnostics: {},
+    selectionDiagnostics: {},
+    settingsPreviewTools: [],
+    purposeFamilies: TOOL_PURPOSE_FAMILIES,
+    purposeGroups: TOOL_PURPOSE_GROUPS,
+    toolsBySource: {
+      "webmcp-declared": [
+        {
+          toolId: "site_search",
+          name: "site_search",
+          sourceLabel: "Site tools",
+          origin: "https://beads.gascity.com",
+          purpose: "browser-tabs",
+          version: null,
+          available: true,
+          description: "Search site",
+        },
+      ],
+    },
+  };
+  library.state = "ready";
+
+  const allOriginEls = [];
+  const walk = (node) => {
+    if (node.className === "source-tool-origin") allOriginEls.push(node);
+    for (const child of node.children ?? []) walk(child);
+  };
+  walk(catalogEl);
+
+  assertEquals(allOriginEls.length, 1);
+  assertEquals(allOriginEls[0].textContent, "beads.gascity.com");
+});

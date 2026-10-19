@@ -2183,50 +2183,41 @@ export class ToolLibrary extends Component {
     // only .catalog — rebuilding the status-line node would either lose the
     // announcement or re-announce the same text.
     if (!this._root.querySelector(".status-line")) {
-      mountTemplate(this, `
-      :host { display:block; color:var(--text, #24211f); }
-      .framing { margin:0 0 12px; padding:10px 12px; border-radius:var(--radius-md,10px);
-        background:var(--bg, #f7f6f3); color:var(--muted, #625d57); font-size:13px; }
-      .groups { margin:0 0 16px; padding:0; display:grid; gap:6px; }
-      .purpose-family { display:grid; gap:6px; margin:0 0 14px; }
-      .purpose-family-label { margin:0; font-size:15px; }
-      .purpose-family-line { margin:2px 0 4px; font-size:12px; color:var(--muted, #625d57); }
-      .groups .purpose-label { font-weight:600; }
-      .groups .purpose-line { flex:1 1 100%; order:3; font-size:12px; font-weight:400;
-        color:var(--muted, #625d57); overflow-wrap:anywhere; }
-      .source-tool-head .src { font-size:var(--text-xs, 12px); padding:1px 8px; border:1px solid var(--border, #ddd8d2);
-        border-radius:999px; color:var(--muted, #625d57); white-space:nowrap; }
-      .groups details { border:1px solid var(--border, #ddd8d2); border-radius:var(--radius-md,10px);
-        background:var(--panel, #fff); }
-      .groups summary { display:flex; flex-wrap:wrap; gap:8px; align-items:baseline; cursor:pointer;
-        padding:9px 12px; font-size:13px; min-inline-size:0; list-style-position:outside; }
-      .groups summary::-webkit-details-marker { display:inline-block; }
-      .groups summary:focus-visible { outline:2px solid var(--accent, #0e6e63); outline-offset:2px; }
-      .groups .count { margin-inline-start:auto; font-variant-numeric:tabular-nums; font-weight:700; }
-      .groups .source-tools { margin:0; padding:0 12px 10px; list-style:none; display:grid; gap:8px; }
-      .source-tool { min-inline-size:0; }
-      .source-tool + .source-tool { border-block-start:1px solid var(--border, #ddd8d2); padding-block-start:8px; }
-      .source-tool-head { display:grid; grid-template-columns:minmax(0, 1fr) auto auto; gap:8px; align-items:start; }
-      .source-tool-head strong { font-size:13px; overflow-wrap:anywhere; min-inline-size:0; }
-      .source-tool-head .avail { font-size:var(--text-xs, 12px); padding:1px 8px; border:1px solid var(--border, #ddd8d2);
-        border-radius:999px; color:var(--muted, #625d57); white-space:nowrap; }
-      .source-tool-head .avail.unavailable { border-color:var(--warning, #9a6b00); color:var(--warning, #9a6b00); }
-      .source-tool-desc { margin:4px 0 0; font-size:12px; color:var(--muted, #625d57);
-        overflow-wrap:anywhere; min-inline-size:0; }
-      @media (max-width:560px) { .source-tool-head { grid-template-columns:1fr; } }
-      .rows { margin:12px 0 0; padding:0; list-style:none; display:grid; gap:10px; }
-      .tool { border-block-start:1px solid var(--border, #ddd8d2); padding-block-start:12px; min-inline-size:0; }
-      .tool:first-child { border-block-start:0; padding-block-start:0; }
-      .tool-head { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:8px; align-items:start; }
-      h4 { margin:0; font-size:14px; overflow-wrap:anywhere; }
-      .meta, .digest, .scope { color:var(--muted, #625d57); font-size:12px; overflow-wrap:anywhere;
-        min-inline-size:0; }
-      .digest { font-family:ui-monospace,monospace; word-break:break-all; }
-      .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; min-inline-size:0; }
-      .chip { font-size:var(--text-xs, 12px); padding:2px 8px; border:1px solid var(--border, #ddd8d2);
-        border-radius:999px; color:var(--muted, #625d57); max-inline-size:100%; overflow-wrap:anywhere; }
-      .chip.avail-owner-action-required { border-color:var(--warning, #9a6b00); color:var(--warning, #9a6b00); }
-      .chip.avail-stale { border-color:var(--muted, #625d57); }
+      mountTemplate(this, `:host{display:block;color:var(--text, #24211f)}
+.framing{margin:0 0 12px;padding:10px 12px;border-radius:var(--radius-md,10px);background:var(--bg, #f7f6f3);color:var(--muted, #625d57);font-size:13px}
+.groups{margin:0 0 16px;padding:0;display:grid;gap:6px}
+.purpose-family{display:grid;gap:6px;margin:0 0 14px}
+.purpose-family-label{margin:0;font-size:15px}
+.purpose-family-line{margin:2px 0 4px;font-size:12px;color:var(--muted, #625d57)}
+.groups .purpose-label{font-weight:600}
+.groups .purpose-line{flex:1 1 100%;order:3;font-size:12px;font-weight:400;color:var(--muted, #625d57);overflow-wrap:anywhere}
+.source-tool-head .src{font-size:var(--text-xs, 12px);padding:1px 8px;border:1px solid var(--border, #ddd8d2);border-radius:999px;color:var(--muted, #625d57);white-space:nowrap}
+.groups details{border:1px solid var(--border, #ddd8d2);border-radius:var(--radius-md,10px);background:var(--panel, #fff)}
+.groups summary{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;cursor:pointer;padding:9px 12px;font-size:13px;min-inline-size:0;list-style-position:outside}
+.groups summary::-webkit-details-marker{display:inline-block}
+.groups summary:focus-visible{outline:2px solid var(--accent, #0e6e63);outline-offset:2px}
+.groups .count{margin-inline-start:auto;font-variant-numeric:tabular-nums;font-weight:700}
+.groups .source-tools{margin:0;padding:0 12px 10px;list-style:none;display:grid;gap:8px}
+.source-tool{min-inline-size:0}
+.source-tool + .source-tool{border-block-start:1px solid var(--border, #ddd8d2);padding-block-start:8px}
+.source-tool-head{display:grid;grid-template-columns:minmax(0, 1fr) auto auto;gap:8px;align-items:start}
+.source-tool-head strong{font-size:13px;overflow-wrap:anywhere;min-inline-size:0}
+.source-tool-head .avail{font-size:var(--text-xs, 12px);padding:1px 8px;border:1px solid var(--border, #ddd8d2);border-radius:999px;color:var(--muted, #625d57);white-space:nowrap}
+.source-tool-head .avail.unavailable{border-color:var(--warning, #9a6b00);color:var(--warning, #9a6b00)}
+.source-tool-origin{margin:2px 0 0;font-size:11px;color:var(--muted, #625d57);overflow-wrap:anywhere}
+.source-tool-desc{margin:4px 0 0;font-size:12px;color:var(--muted, #625d57);overflow-wrap:anywhere;min-inline-size:0}
+@media (max-width:560px){.source-tool-head{grid-template-columns:1fr}}
+.rows{margin:12px 0 0;padding:0;list-style:none;display:grid;gap:10px}
+.tool{border-block-start:1px solid var(--border, #ddd8d2);padding-block-start:12px;min-inline-size:0}
+.tool:first-child{border-block-start:0;padding-block-start:0}
+.tool-head{display:grid;grid-template-columns:minmax(0, 1fr) auto;gap:8px;align-items:start}
+h4{margin:0;font-size:14px;overflow-wrap:anywhere}
+.meta, .digest, .scope{color:var(--muted, #625d57);font-size:12px;overflow-wrap:anywhere;min-inline-size:0}
+.digest{font-family:ui-monospace,monospace;word-break:break-all}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;min-inline-size:0}
+.chip{font-size:var(--text-xs, 12px);padding:2px 8px;border:1px solid var(--border, #ddd8d2);border-radius:999px;color:var(--muted, #625d57);max-inline-size:100%;overflow-wrap:anywhere}
+.chip.avail-owner-action-required{border-color:var(--warning, #9a6b00);color:var(--warning, #9a6b00)}
+.chip.avail-stale{border-color:var(--muted, #625d57)}
       .chip.avail-disabled { border-color:var(--danger, #b3261e); color:var(--danger, #b3261e); }
       .diag { margin-top:12px; }
       .diag summary { cursor:pointer; font-size:13px; font-weight:600; }
@@ -2521,10 +2512,17 @@ export class ToolLibrary extends Component {
               ? `v${row.version}`
               : (row.available === true ? "available" : "unavailable");
             head.append(title, src, avail);
+            li.append(head);
+            if (typeof row.origin === "string" && row.origin) {
+              const originEl = document.createElement("div");
+              originEl.className = "source-tool-origin";
+              originEl.textContent = row.origin.replace(/^https?:\/\//, "");
+              li.append(originEl);
+            }
             const desc = document.createElement("p");
             desc.className = "source-tool-desc";
             desc.textContent = String(row.description ?? "");
-            li.append(head, desc);
+            li.append(desc);
             list.append(li);
           }
           details.append(list);
