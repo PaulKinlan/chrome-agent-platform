@@ -223,7 +223,7 @@ class Cdp {
   // GENERATED-UI-BOOTSTRAP-SYNTAX-01).
   frameSessions = new Set();
   swAttachErrors = [];
-  executionContextEvents = []; // { sessionId, kind: "created"|"cleared", ts }
+  executionContextEvents = []; // { sessionId, kind: "created"|"destroyed"|"cleared", ts }
   fatalEvents = []; // malformed protocol, target crash, unexpected socket close
   intentionalClose = false;
   onAttach = null; // (sessionId, targetInfo, waitingForDebugger) => void
@@ -292,6 +292,14 @@ class Cdp {
       if (d.method === "Runtime.executionContextsCleared") {
         this.executionContextEvents.push({
           sessionId: d.sessionId, kind: "cleared", ts: Date.now(),
+        });
+      }
+      if (d.method === "Runtime.executionContextDestroyed") {
+        // Buffered so a tracker seeded from this history (q6ad9) never
+        // resurrects a context Chrome already tore down.
+        this.executionContextEvents.push({
+          sessionId: d.sessionId, kind: "destroyed",
+          id: d.params?.executionContextId, ts: Date.now(),
         });
       }
       if (d.method === "Runtime.executionContextCreated") {
@@ -8143,7 +8151,13 @@ async function main() {
     let iframeDeny = false;
     let iframeCtxDetail = "embedded Settings frame not present";
     if (settingsFrameId === "present") {
-      const frameTracker = trackEmbeddedFrameContexts(cdp, ntpSession);
+      // q6ad9: the journey opened Settings at :2025 on THIS session, so the
+      // pooled frame's default context predates the tracker subscription and
+      // no new created event fires on reopen. Seed the tracker from the
+      // transport's buffered context history (which the pre-delta loop read
+      // directly); a seeded-but-dead context is weeded by the readiness
+      // probe's narrow stale retry.
+      const frameTracker = trackEmbeddedFrameContexts(cdp, ntpSession, { seedEvents: cdp.executionContextEvents });
       try {
         const denied = await frameTracker.evaluate({
           extensionId: extId,
