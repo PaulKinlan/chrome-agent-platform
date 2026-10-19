@@ -36,7 +36,7 @@ Deno.test("loaded Emscripten probe snapshot binds shipped CSP and every test-onl
   );
   assertEquals(
     snapshotDigest,
-    "c23dc8f1c71adce625806e3e1381188adebaf3d0d7c09a697c2b91124b295ed8",
+    "a63948aa6b85e9707f4791bccd98ed99c753e3d29d69e9b4ef17126749c2c6f6",
   );
   const harness = Deno.readTextFileSync("scripts/emscripten-abi-loaded.ts");
   assert(
@@ -51,7 +51,7 @@ Deno.test("loaded Emscripten probe snapshot binds shipped CSP and every test-onl
   ]);
   assertEquals(
     snapshot.manifest.nonReleaseContractSha256,
-    "6e84e6e01bce9c8490574aaa9200fc421dd62c94b2a898691a01bc5bff34dbe3",
+    "c9132ae6e491d455338d78b675fc5dd875e72e5fedfc3ed874e2a1c3f95be409",
   );
   const manifestBytes = await Deno.readFile(snapshot.manifest.source);
   const { verifyCurrentManifest } = await import(

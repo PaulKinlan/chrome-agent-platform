@@ -40,6 +40,15 @@ const extension = join(run, 'extension');
 execFileSync('cp', ['--archive', '--dereference', '--reflink=auto', join(root, 'extension'), extension]);
 assert.deepEqual(inventory(extension, '', true), source, 'initial copy must match all current built bytes');
 manifest.permissions.push('nativeMessaging');
+// The shipped manifest ships nativeMessaging as OPTIONAL (chrome-agent-platform-o65r,
+// JIT grant); the copy needs it REQUIRED so the probe's direct connectNative works with
+// no grant flow. Chrome rejects a permission listed as both required and optional, so the
+// optional entry is removed from the copy — recorded in the receipt's activation delta.
+const activationDelta = [{ op: 'add', path: '/permissions/-', value: 'nativeMessaging' }];
+if (Array.isArray(manifest.optional_permissions) && manifest.optional_permissions.includes('nativeMessaging')) {
+  manifest.optional_permissions = manifest.optional_permissions.filter((p) => p !== 'nativeMessaging');
+  activationDelta.push({ op: 'remove', path: '/optional_permissions/-', value: 'nativeMessaging' });
+}
 writeFileSync(join(extension, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 const copied = inventory(extension, '', true);
 assert.deepEqual(copied.filter((p) => p.path !== 'manifest.json'), source.filter((p) => p.path !== 'manifest.json'));
@@ -51,7 +60,7 @@ const receipt = {
   testOnly: true, createdAt: new Date().toISOString(), root, extension, extensionId,
   gitHead: execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
   gitStatus: execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' }).trim(),
-  activationDelta: [{ op: 'add', path: '/permissions/-', value: 'nativeMessaging' }],
+  activationDelta,
   sourceManifestSha256: protectedBefore['extension/manifest.json'],
   generatedManifestSha256: sha(readFileSync(join(extension, 'manifest.json'))),
   sourceTreeSha256: sha(JSON.stringify(source)), generatedTreeSha256: sha(JSON.stringify(copied)),

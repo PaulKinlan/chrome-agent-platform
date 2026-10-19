@@ -72,3 +72,23 @@ Deno.test("acp settings: options.js implements renderAcpSettings with KV read/wr
   assert(code.includes('await storage.set({ "acp.permissions":'), "persists acp.permissions");
   assert(code.includes('await storage.set({ "acp.transport":'), "persists acp.transport");
 });
+
+Deno.test("acp settings: selecting the Native host transport requests the optional nativeMessaging grant in the handler (chrome-agent-platform-o65r)", async () => {
+  const code = await Deno.readTextFile(fileURLToPath(new URL("../extension/options/panels/agents.js", import.meta.url)));
+  // Anchored to the LIVE CALL SITES, not the import line: an import is a shadow
+  // (substring-pin-honesty), so the pin that must survive deleting the construct is
+  // the invocation with its argument list.
+  assert(code.includes("ensureAcpNativePermission()"), "the grant helper is invoked from the settings handlers");
+  // The persistence of acp.transport="native" sits INSIDE the grant's success path: the
+  // handler asks (the select change is the user gesture) and on refusal reverts the select
+  // and surfaces the error — a saved "native" the runtime can never use would silently
+  // downgrade every turn to the bridge.
+  const handler = code.slice(
+    code.indexOf('transportEl.addEventListener("change"'),
+    code.indexOf('if (testBtn)'),
+  );
+  assert(handler.includes("ensureAcpNativePermission()"), "the transport change handler asks for the grant");
+  const guarded = handler.indexOf("ensureAcpNativePermission()") < handler.indexOf('await storage.set({ "acp.transport": val })');
+  assert(guarded, "the grant precedes the persistence — selecting native without the grant must not save");
+  assert(handler.includes('transportEl.value = s?.["acp.transport"]'), "a refusal reverts the select to the persisted transport");
+});
