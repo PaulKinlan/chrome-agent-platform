@@ -123,10 +123,11 @@ function install() {
   console.log(`installed ${written.join(", ")}`);
   console.log(`captured PATH → ${join(envDir, "path.env")}`);
   console.log(`captured PATH → ${join(HOME, ".cap-acp", "path.env")}`);
-  console.log("NOTE: this branch does NOT add nativeMessaging to extension/manifest.json yet.");
-  console.log("      To activate the transport, add it to the manifest's permissions and re-pin");
-  console.log("      packages/bundled/evidence/emscripten-abi/loaded-probe/snapshot.json (sha256 +");
-  console.log("      nonReleaseContractSha256), then reload the extension.");
+  // chrome-agent-platform-o65r: the extension ships nativeMessaging in
+  // optional_permissions and requests it JIT (Settings → Agents → Transport =
+  // Native host, or the Test connection click) — no manifest edit is needed here.
+  console.log("NOTE: the extension asks for the nativeMessaging permission when you select the");
+  console.log("      Native host transport (Settings → Agents → External agent harnesses).");
   console.log(`  host script : ${HOST_SH}`);
   console.log(`  extension   : ${extId}`);
   console.log(`  harness     : ${harness}`);

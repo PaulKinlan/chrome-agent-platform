@@ -106,3 +106,52 @@ export class AcpNativeTransport {
     this.port = null;
   }
 }
+
+/**
+ * Ensure the optional `nativeMessaging` permission is granted (chrome-agent-platform-o65r).
+ *
+ * The shipped manifest lists `nativeMessaging` in `optional_permissions` — install never
+ * demands it (the CAP-FB-20260831 boot-perms model), so the owner grants it at the moment
+ * of need: selecting the Native host transport (or pressing Test connection) IS the user
+ * gesture. A refusal or a failed request is a CLEAR error, never a silent failure — the
+ * transport can only fall back to the WebSocket bridge honestly when the owner knows the
+ * native leg is unavailable.
+ *
+ * Idempotent: an already-granted permission is detected with contains() and never
+ * re-prompts.
+ *
+ * @param {{ contains?: (bundle: { permissions: string[] }) => Promise<boolean>,
+ *          request?: (bundle: { permissions: string[] }) => Promise<boolean> }} [perms]
+ *   Injectable chrome.permissions surface (defaults to the real one); tests pass fakes.
+ * @returns {Promise<{ granted: boolean, error: string }>} granted=true when the permission
+ *   is (or just became) available; error is "" when granted, else a user-facing message.
+ */
+export async function ensureAcpNativePermission(perms = {}) {
+  const contains = perms.contains
+    || (typeof chrome !== "undefined" && chrome?.permissions?.contains
+      ? (bundle) => chrome.permissions.contains(bundle)
+      : null);
+  const request = perms.request
+    || (typeof chrome !== "undefined" && chrome?.permissions?.request
+      ? (bundle) => chrome.permissions.request(bundle)
+      : null);
+  const bundle = { permissions: ["nativeMessaging"] };
+  if (!contains || !request) {
+    return { granted: false, error: "chrome.permissions is unavailable in this context — native messaging cannot be granted here." };
+  }
+  try {
+    if (await contains(bundle) === true) return { granted: true, error: "" };
+  } catch { /* a failed contains is not a denial — fall through to request */ }
+  try {
+    if (await request(bundle) === true) return { granted: true, error: "" };
+    return {
+      granted: false,
+      error: "Native messaging permission was not granted — the native host transport stays unavailable and the WebSocket bridge is used instead. You can retry any time.",
+    };
+  } catch (err) {
+    return {
+      granted: false,
+      error: `Native messaging permission could not be requested (${String(err?.message ?? err)}). Click “Test connection” to grant it from a real click.`,
+    };
+  }
+}

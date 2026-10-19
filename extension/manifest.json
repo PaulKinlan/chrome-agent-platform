@@ -43,7 +43,8 @@
     "search",
     "webRequest",
     "userScripts",
-    "clipboardWrite"
+    "clipboardWrite",
+    "nativeMessaging"
   ],
   "chrome_url_overrides": {
     "newtab": "ntp/ntp.html"

@@ -1,6 +1,7 @@
 // extension/options/panels/agents.js — Agents & Site Agents panel module (chrome-agent-platform-8v5l.1).
 
 import { formatCadenceMinutes } from "../../lib/next-run-label.js";
+import { ensureAcpNativePermission } from "../../lib/acp-native.js";
 import { projectUnifiedAgents } from "../../lib/agent-projection.js";
 import { skillAsTemplate } from "../../lib/agent-templates.js";
 import {
@@ -581,6 +582,19 @@ async function renderAcpSettings() {
 
   transportEl.addEventListener("change", async () => {
     const val = transportEl.value;
+    // OPTIONAL + JIT model (chrome-agent-platform-o65r): the shipped manifest lists
+    // nativeMessaging in optional_permissions, so selecting the Native host transport
+    // IS the moment of need — request it here rather than failing the leg later.
+    if (val === "native") {
+      const grant = await ensureAcpNativePermission();
+      if (!grant.granted) {
+        // Not granted: keep the previous transport (a saved "native" the runtime
+        // can never use would silently downgrade every turn to the bridge).
+        transportEl.value = s?.["acp.transport"] || "";
+        saveFlash(grant.error);
+        return;
+      }
+    }
     if (val) await storage.set({ "acp.transport": val });
     else await storage.remove(["acp.transport"]);
     saveFlash("ACP transport mode saved.");
@@ -591,6 +605,19 @@ async function renderAcpSettings() {
       if (statusEl) {
         statusEl.textContent = "Connecting…";
         statusEl.style.color = "";
+      }
+      // A click is the reliable user-activation gesture for the JIT nativeMessaging
+      // grant (chrome-agent-platform-o65r): a select's change event is not always
+      // treated as one. Only when the operator's transport preference names the
+      // native host — a bridge-only test must never prompt for a permission it
+      // does not need.
+      if ((transportEl.value || s?.["acp.transport"]) === "native") {
+        const grant = await ensureAcpNativePermission();
+        if (!grant.granted && statusEl) {
+          statusEl.textContent = grant.error;
+          statusEl.style.color = "var(--danger, #b3261e)";
+          return;
+        }
       }
       try {
         const ep = endpointEl.value.trim() || "http://127.0.0.1:3210/health";

@@ -376,15 +376,20 @@ Deliberately NOT yet implemented (tracked as beads):
      newline-delimited stdio, reusing the SAME harness table and host-default
      rules as the bridge. STATUS: host + framing + transport are unit-tested
      (`tests/acp-native-host.test.ts`) and the host was driven end to end over
-     Chrome's own framing; the BROWSER leg is unverified in this repo because
-     the harnesses launch headless Chrome, which reports "native messaging host
-     not found" even with a manifest installed for every Chrome product
-     directory — that needs a headed browser. The extension only uses this
-     transport when the host is installed; otherwise it falls back to the
-     bridge. Activating it also needs `nativeMessaging` in
-     `extension/manifest.json` plus a re-pin of
-     `packages/bundled/evidence/emscripten-abi/loaded-probe/snapshot.json`
-     (its manifest hash), which is deliberately NOT done yet.
+     Chrome's own framing; the BROWSER leg is verified in a HEADED browser via
+     the isolated-copy protocol (`cap-evidence/acp-native-headed.md`, gab8:
+     real Chrome native IPC, fixture adapter behind it, then the WebSocket
+     fallback — headless Chrome reports "native messaging host not found" even
+     with a manifest installed for every Chrome product directory, so the
+     headed run is the evidence). The extension only uses this transport when
+     the host is installed; otherwise it falls back to the bridge. ACTIVATED
+     (chrome-agent-platform-o65r): `nativeMessaging` ships in
+     `optional_permissions` — install never demands it — and the owner grants
+     it JIT from the transport selection or Test connection click
+     (`ensureAcpNativePermission`, extension/lib/acp-native.js; refusal reverts
+     the select and says so). The loaded-probe snapshot's manifest contract was
+     re-pinned for the permission addition; the probe's historical manifest
+     record (bytes/sha256 at 0.3.256) is untouched evidence.
   2. **A background service** — `node scripts/acp-service.mjs install` registers
      the bridge as a launchd LaunchAgent (macOS) or a systemd --user unit
      (Linux): starts at login, restarts on crash. `npm run acp:service` status.

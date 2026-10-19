@@ -68,6 +68,14 @@ Deno.test("manifest lint: no permission is both required and optional (Chrome wo
   assertEquals(overlap, [], `permissions listed as both required and optional: ${overlap.join(", ")}`);
 });
 
+Deno.test("manifest lint: nativeMessaging is optional + JIT, never install-required (ACP native host transport, chrome-agent-platform-o65r)", () => {
+  const mf = readManifest();
+  const required = mf.permissions ?? [];
+  const optional = mf.optional_permissions ?? [];
+  assert(!required.includes("nativeMessaging"), "install must never demand nativeMessaging — a native-host transport that stays uninstalled must not tax every install");
+  assert(optional.includes("nativeMessaging"), "nativeMessaging must be optional so Settings can request it JIT from the transport-selection gesture (ensureAcpNativePermission)");
+});
+
 Deno.test("capability lint: each enterprise-blockable capability is runtime-requestable, not install-required", () => {
   // The inverse of the pre-reversal check: a capability backed by one of the
   // four must NOT have all its permissions in the install set — it is granted
