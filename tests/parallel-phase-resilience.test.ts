@@ -13,11 +13,51 @@
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
-import { durableDir } from "../scripts/lib/durable-root.mjs";
+import { durableDir, durableRoot } from "../scripts/lib/durable-root.mjs";
 import { DEFAULT_PARALLEL_TIMEOUT_MS as RUN_PARALLEL_TIMEOUT_MS, areAllFailuresEnvironmental } from "../scripts/run-tests.mjs";
 import { DEFAULT_PARALLEL_TIMEOUT_MS as SELECT_PARALLEL_TIMEOUT_MS } from "../scripts/select-tests.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/u, "");
+
+/**
+ * chrome-agent-platform-6z8yi: clean up any stale 1k2a-parallel-* scratch directories
+ * left behind if a previous test run was SIGKILLed before its finally block could run.
+ */
+async function sweepStaleOrphanDirs() {
+  const root = durableRoot();
+  try {
+    for await (const entry of Deno.readDir(root)) {
+      if (entry.isDirectory && entry.name.startsWith("1k2a-parallel-")) {
+        const m = /^1k2a-parallel-[^-]+-(\d+)-/.exec(entry.name);
+        if (m) {
+          const pid = Number(m[1]);
+          let pidAlive = false;
+          try {
+            if (Deno.build.os === "linux") {
+              await Deno.stat(`/proc/${pid}`);
+              pidAlive = true;
+            } else {
+              const out = await new Deno.Command("ps", {
+                args: ["-o", "state=", "-p", String(pid)],
+                stdout: "piped",
+                stderr: "null",
+              }).output().catch(() => null);
+              const s = out ? new TextDecoder().decode(out.stdout).trim() : "";
+              if (s && s[0] !== "Z") pidAlive = true;
+            }
+          } catch {
+            pidAlive = false;
+          }
+          if (!pidAlive) {
+            await Deno.remove(`${root}/${entry.name}`, { recursive: true }).catch(() => {});
+          }
+        }
+      }
+    }
+  } catch {}
+}
+
+await sweepStaleOrphanDirs();
 
 /**
  * Pure scale factor calculation given machine load and CPU count (chrome-agent-platform-v6kut).
@@ -71,13 +111,30 @@ Deno.test("1k2a: parallel phase timeout kills entire process group leaving no or
   const probeFile = `${dir}/zz-probe-hang.test.ts`;
 
   const probeSrc = `
+const initialPpid = Deno.ppid;
+let sleeper = 0;
+const ppidTimer = setInterval(() => {
+  if (Deno.ppid !== initialPpid || Deno.ppid === 1) {
+    if (sleeper > 0) {
+      try { Deno.kill(sleeper, "SIGKILL"); } catch {}
+    }
+    Deno.exit(1);
+  }
+}, 50);
+setTimeout(() => {
+  if (sleeper > 0) {
+    try { Deno.kill(sleeper, "SIGKILL"); } catch {}
+  }
+  Deno.exit(1);
+}, 30000);
+
 const b = new Deno.Command("bash", {
-  args: ["-c", "sleep 300 & echo $! > ${pidFile}.sleep"],
+  args: ["-c", "sleep 30 & echo $! > ${pidFile}.sleep"],
   stdout: "null",
   stderr: "null",
 });
 b.outputSync();
-const sleeper = Number((await Deno.readTextFile("${pidFile}.sleep")).trim());
+sleeper = Number((await Deno.readTextFile("${pidFile}.sleep")).trim());
 await Deno.writeTextFile("${pidFile}", String(sleeper));
 Deno.test("hangs in parallel phase", async () => {
   setInterval(() => {}, 1000);
@@ -141,6 +198,195 @@ Deno.test("hangs in parallel phase", async () => {
   }
 });
 
+Deno.test("6z8yi: cancelling parent while parallel child is running leaves no orphan Deno or sleeper process", async () => {
+  const dir = await durableDir(`1k2a-parallel-cancel-test-${Deno.pid}-${crypto.randomUUID().slice(0, 8)}`);
+  const pidFile = `${dir}/grandchild.pid`;
+  const probeFile = `${dir}/zz-probe-cancel.test.ts`;
+
+  const probeSrc = `
+const initialPpid = Deno.ppid;
+let sleeper = 0;
+const ppidTimer = setInterval(() => {
+  if (Deno.ppid !== initialPpid || Deno.ppid === 1) {
+    if (sleeper > 0) {
+      try { Deno.kill(sleeper, "SIGKILL"); } catch {}
+    }
+    Deno.exit(1);
+  }
+}, 50);
+setTimeout(() => {
+  if (sleeper > 0) {
+    try { Deno.kill(sleeper, "SIGKILL"); } catch {}
+  }
+  Deno.exit(1);
+}, 30000);
+
+const b = new Deno.Command("bash", {
+  args: ["-c", "sleep 30 & echo $! > ${pidFile}.sleep"],
+  stdout: "null",
+  stderr: "null",
+});
+b.outputSync();
+sleeper = Number((await Deno.readTextFile("${pidFile}.sleep")).trim());
+await Deno.writeTextFile("${pidFile}", JSON.stringify({ denoPid: Deno.pid, sleeperPid: sleeper }));
+Deno.test("hangs in parallel phase until parent cancel", async () => {
+  setInterval(() => {}, 1000);
+  await new Promise(() => {});
+});
+`;
+  await Deno.writeTextFile(probeFile, probeSrc);
+
+  let pids: { denoPid?: number; sleeperPid?: number } = {};
+  try {
+    const proc = new Deno.Command("node", {
+      args: ["scripts/run-tests.mjs", probeFile],
+      cwd: ROOT,
+      env: {
+        CAP_PARALLEL_TEST_TIMEOUT_MS: "30000",
+      },
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const child = proc.spawn();
+
+    for (let i = 0; i < 50; i++) {
+      try {
+        const text = await Deno.readTextFile(pidFile);
+        pids = JSON.parse(text);
+        if (pids.denoPid && pids.sleeperPid) break;
+      } catch {}
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert(pids.denoPid && pids.denoPid > 0, "probe must have recorded denoPid");
+    assert(pids.sleeperPid && pids.sleeperPid > 0, "probe must have recorded sleeperPid");
+
+    // Cancel parent abruptly with SIGKILL while the child is actively running
+    child.kill("SIGKILL");
+    await child.status;
+
+    // Verify both Deno child and sleeper process exit promptly and do not survive as orphans
+    for (const targetPid of [pids.denoPid, pids.sleeperPid]) {
+      let alive = true;
+      for (let i = 0; i < 40; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        try {
+          if (Deno.build.os === "linux") {
+            const stat = await Deno.readTextFile(`/proc/${targetPid}/stat`);
+            const state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
+            if (state === "Z" || state === "X") {
+              alive = false;
+              break;
+            }
+          } else {
+            const out = await new Deno.Command("ps", {
+              args: ["-o", "state=", "-p", String(targetPid)],
+              stdout: "piped",
+              stderr: "null",
+            }).output().catch(() => null);
+            const s = out ? new TextDecoder().decode(out.stdout).trim() : "";
+            if (!s || s[0] === "Z") {
+              alive = false;
+              break;
+            }
+          }
+        } catch {
+          alive = false;
+          break;
+        }
+      }
+      assertEquals(alive, false, `PID ${targetPid} must not survive parent cancellation`);
+    }
+  } finally {
+    if (pids.denoPid) {
+      try { Deno.kill(pids.denoPid, "SIGKILL"); } catch {}
+    }
+    if (pids.sleeperPid) {
+      try { Deno.kill(pids.sleeperPid, "SIGKILL"); } catch {}
+    }
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("6z8yi/qvv7k: harness watchdog reaps detached parallel child on runner SIGKILL even without fixture ppid monitor", async () => {
+  const dir = await durableDir(`1k2a-parallel-qvv7k-${Deno.pid}-${crypto.randomUUID().slice(0, 8)}`);
+  const pidFile = `${dir}/grandchild.pid`;
+  const probeFile = `${dir}/zz-probe-qvv7k.test.ts`;
+
+  // Fixture has NO ppid monitor and NO self-defense timeout — it relies purely on the harness watchdog
+  const probeSrc = `
+await Deno.writeTextFile("${pidFile}", String(Deno.pid));
+Deno.test("hangs without ppid monitor", async () => {
+  setInterval(() => {}, 1000);
+  await new Promise(() => {});
+});
+`;
+  await Deno.writeTextFile(probeFile, probeSrc);
+
+  let denoPid = 0;
+  try {
+    const proc = new Deno.Command("node", {
+      args: ["scripts/run-tests.mjs", probeFile],
+      cwd: ROOT,
+      env: {
+        CAP_PARALLEL_TEST_TIMEOUT_MS: "30000",
+      },
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const child = proc.spawn();
+
+    for (let i = 0; i < 50; i++) {
+      try {
+        const text = await Deno.readTextFile(pidFile);
+        denoPid = Number(text.trim());
+        if (denoPid > 0) break;
+      } catch {}
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert(denoPid > 0, "probe must have recorded denoPid");
+
+    // Abruptly kill the runner parent with SIGKILL (uncatchable)
+    child.kill("SIGKILL");
+    await child.status;
+
+    // The harness watchdog must reap the detached Deno process group
+    let alive = true;
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      try {
+        if (Deno.build.os === "linux") {
+          const stat = await Deno.readTextFile(`/proc/${denoPid}/stat`);
+          const state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
+          if (state === "Z" || state === "X") {
+            alive = false;
+            break;
+          }
+        } else {
+          const out = await new Deno.Command("ps", {
+            args: ["-o", "state=", "-p", String(denoPid)],
+            stdout: "piped",
+            stderr: "null",
+          }).output().catch(() => null);
+          const s = out ? new TextDecoder().decode(out.stdout).trim() : "";
+          if (!s || s[0] === "Z") {
+            alive = false;
+            break;
+          }
+        }
+      } catch {
+        alive = false;
+        break;
+      }
+    }
+    assertEquals(alive, false, `detached PID ${denoPid} without ppid monitor must be reaped by harness watchdog`);
+  } finally {
+    if (denoPid > 0) {
+      try { Deno.kill(denoPid, "SIGKILL"); } catch {}
+    }
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
 Deno.test("1k2a/5nhz: parallel phase timeout with cold-boot delay awaits ready marker before starting timer", async () => {
   const dir = await durableDir(`1k2a-parallel-delayed-boot-${Deno.pid}-${crypto.randomUUID().slice(0, 8)}`);
   const pidFile = `${dir}/grandchild.pid`;
@@ -149,14 +395,31 @@ Deno.test("1k2a/5nhz: parallel phase timeout with cold-boot delay awaits ready m
   // Simulates a heavy cold boot: sleeps 2.5s before spawning sleeper and writing pidFile.
   // Delay (2500ms) exceeds execution timeout (1500ms), proving the timeout starts only after readiness.
   const probeSrc = `
+const initialPpid = Deno.ppid;
+let sleeper = 0;
+const ppidTimer = setInterval(() => {
+  if (Deno.ppid !== initialPpid || Deno.ppid === 1) {
+    if (sleeper > 0) {
+      try { Deno.kill(sleeper, "SIGKILL"); } catch {}
+    }
+    Deno.exit(1);
+  }
+}, 50);
+setTimeout(() => {
+  if (sleeper > 0) {
+    try { Deno.kill(sleeper, "SIGKILL"); } catch {}
+  }
+  Deno.exit(1);
+}, 30000);
+
 await new Promise((r) => setTimeout(r, 2500));
 const b = new Deno.Command("bash", {
-  args: ["-c", "sleep 300 & echo $! > ${pidFile}.sleep"],
+  args: ["-c", "sleep 30 & echo $! > ${pidFile}.sleep"],
   stdout: "null",
   stderr: "null",
 });
 b.outputSync();
-const sleeper = Number((await Deno.readTextFile("${pidFile}.sleep")).trim());
+sleeper = Number((await Deno.readTextFile("${pidFile}.sleep")).trim());
 await Deno.writeTextFile("${pidFile}", String(sleeper));
 Deno.test("delayed boot hangs in parallel phase", async () => {
   setInterval(() => {}, 1000);
@@ -219,6 +482,16 @@ Deno.test("1k2a/5nhz: parallel phase fails closed with diagnostic if ready marke
 
   // Fixture never writes the ready marker
   const probeSrc = `
+const initialPpid = Deno.ppid;
+setInterval(() => {
+  if (Deno.ppid !== initialPpid || Deno.ppid === 1) {
+    Deno.exit(1);
+  }
+}, 50);
+setTimeout(() => {
+  Deno.exit(1);
+}, 30000);
+
 Deno.test("never writes marker", async () => {
   setInterval(() => {}, 1000);
   await new Promise(() => {});
@@ -355,7 +628,7 @@ Deno.test("1k2a: passing parallel test that leaves an orphan process has orphan 
   // Passes immediately, but leaves background sleeper
   const probeSrc = `
 const b = new Deno.Command("bash", {
-  args: ["-c", "sleep 300 & echo $! > ${pidFile}.sleep"],
+  args: ["-c", "sleep 30 & echo $! > ${pidFile}.sleep"],
   stdout: "null",
   stderr: "null",
 });
