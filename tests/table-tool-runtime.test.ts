@@ -7,6 +7,7 @@ import {
   tableRunOwner,
   TABLE_TOOL_NAMES,
 } from "../extension/lib/table-tool-runtime.js";
+import { encodeModelStreamOwner } from "../extension/lib/wasm-stream-owner-codec.js";
 
 const context = Object.freeze({
   principal: "model",
@@ -14,6 +15,7 @@ const context = Object.freeze({
   runId: "exec:11111111-1111-4111-8111-111111111111",
   agentId: "agent-instance-a",
 });
+const expectedOwner = encodeModelStreamOwner(context.runId, context.agentId);
 
 function table(value = "secret-cell") {
   return {
@@ -103,7 +105,7 @@ Deno.test("provider asset reads keep canonical table cells and headers local", (
 });
 
 Deno.test("table runtime derives custody only from an immutable live model envelope", () => {
-  assertEquals(tableRunOwner(context), `agent:${context.runId}:${context.agentId}`);
+  assertEquals(tableRunOwner(context), expectedOwner);
   for (const forged of [
     { ...context, principal: "extension" },
     { ...context, runId: "exec:other" },
@@ -151,7 +153,7 @@ Deno.test("table runtime publishes complete canonical data but returns provider-
   }));
 
   assertEquals(result.ok, true);
-  assertEquals(stagedOwner, `agent:${context.runId}:${context.agentId}`);
+  assertEquals(stagedOwner, expectedOwner);
   assertEquals(stagedChunkSize, TABLE_LIMITS.chunkSize, "table staging writes in exact 64 KiB chunks");
   assertEquals(discarded, 1, "temporary staged input is removed before publication");
   assertEquals(result.artifactId, "a_output");
@@ -160,7 +162,7 @@ Deno.test("table runtime publishes complete canonical data but returns provider-
   assertEquals(result.workUnits, 7);
   assertEquals(created.origin, "master");
   assertEquals(JSON.parse(created.input.content), table("output-secret-cell"), "the artifact keeps the complete canonical table");
-  assertEquals(created.input.meta.runOwner, `agent:${context.runId}:${context.agentId}`, "caller metadata cannot override custody");
+  assertEquals(created.input.meta.runOwner, expectedOwner, "caller metadata cannot override custody");
   assertEquals(created.input.meta.operation.version, "cap.table-publication/1");
   assertEquals(created.input.meta.operation.toolId, "table_filter");
   assertEquals(created.input.meta.operation.request, { predicate: { column: "c1", op: "is_present" } });
@@ -364,7 +366,7 @@ Deno.test("table runtime revalidates sealed stream custody and receipt identity"
       owner,
     }),
     readStreamReceipt: async ({ owner }) => {
-      assertEquals(owner, `agent:${context.runId}:${context.agentId}`);
+      assertEquals(owner, expectedOwner);
       return { ok: true, receipt: { stdoutBytes: 123, stdoutSha256: digest } };
     },
     discardStream: async () => { discarded++; return { ok: true }; },
@@ -394,7 +396,7 @@ Deno.test("table runtime revalidates stream-backed custody and cleans every work
       asset: { content: "bounded preview only", meta: { streamRef: { id: "foreign" }, streamOwner: "caller-forged" } },
     }),
     stageAsset: async (_asset, { owner }) => {
-      assertEquals(owner, `agent:${context.runId}:${context.agentId}`);
+      assertEquals(owner, expectedOwner);
       throw new Error("wasm_stream_authority customer@example.com");
     },
     runJob: async () => { runs++; return { ok: true }; },

@@ -4,6 +4,7 @@
 // and therefore retain their artifact-owned lifetime.
 
 import { discardWasmStream, validateWasmStreamRef } from "./wasm-stream-files.js";
+import { decodeModelStreamOwner } from "./wasm-stream-owner-codec.js";
 
 const outputsByRun = new Map();
 
@@ -19,7 +20,10 @@ function runKey(runId) {
 export function retainRunWasmStreamOutput(runId, { ref, owner } = {}) {
   const key = runKey(runId);
   const output = validateWasmStreamRef(ref, { kinds: ["stdout"] });
-  if (typeof owner !== "string" || !owner.startsWith(`agent:${key}:`)) {
+  // ko4h6: exact decoded runId equality only. A legacy or foreign owner —
+  // including one whose run id merely has this run id as a prefix — decodes
+  // to a different tuple (or nothing) and is refused, never inferred.
+  if (decodeModelStreamOwner(owner)?.runId !== key) {
     const error = new Error("wasm_stream_owner");
     error.code = "wasm_stream_owner";
     throw error;
@@ -40,6 +44,9 @@ export async function releaseRunWasmStreamOutputs(runId, { storage } = {}) {
   let preserved = 0;
   let failed = 0;
   for (const record of records.values()) {
+    // Retained records were admitted under this exact run; re-prove it before
+    // any deletion so a corrupted record can never discard a foreign stream.
+    if (decodeModelStreamOwner(record.owner)?.runId !== key) { failed += 1; continue; }
     try {
       await discardWasmStream({ ...record, storage });
       released += 1;

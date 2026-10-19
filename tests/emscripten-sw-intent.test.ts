@@ -2,6 +2,7 @@
 // @ts-nocheck
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { createEmscriptenSwIntent, EMSCRIPTEN_SW_INTENT_ROOT } from "../extension/lib/emscripten-sw-intent.js";
+import { encodeModelStreamOwner } from "../extension/lib/wasm-stream-owner-codec.js";
 
 function missing() { return new DOMException("not found", "NotFoundError"); }
 function dir() {
@@ -56,7 +57,7 @@ Deno.test("x9r8k: independent SW intent persists before any output creation and 
   assertEquals(Number.isSafeInteger(record.issuedAt), true);
   assertEquals(record.reconcileBy - record.issuedAt, 86_400_000,
     "every reservation has a bounded reconciliation deadline");
-  assertEquals(record.identity.owner, `agent:${runId}:|hub`);
+  assertEquals(record.identity.owner, encodeModelStreamOwner(runId, "hub"));
   assertEquals(root.nodes.has(EMSCRIPTEN_SW_INTENT_ROOT), true);
   assertEquals(root.nodes.has("wasm-streams-v1"), false, "intent precedes the output root");
   const restarted = createEmscriptenSwIntent({ storage });

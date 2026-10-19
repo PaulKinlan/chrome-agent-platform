@@ -107,6 +107,7 @@ import {
   releaseRunWasmStreamOutputs,
   retainRunWasmStreamOutput,
 } from "../lib/wasm-stream-run-lifecycle.js";
+import { encodeModelStreamOwner, isModelStreamOwner } from "../lib/wasm-stream-owner-codec.js";
 import { WASM_STREAM_RUN_TYPE, WASM_STREAM_WALL_MS } from "../lib/wasm-stream-host.js";
 import { CALLEXPORT_RUN_TYPE } from "../lib/wasm-callexport-host.js";
 import { EMSCRIPTEN_RUN_TYPE } from "../lib/emscripten-host.js";
@@ -759,8 +760,8 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
   if (callexportRow) {
     const runId = typeof context?.runId === "string" && context.runId ? context.runId : null;
     if (!runId) throw new Error("wasm_stream_run_required");
-    const agentId = String(context?.agentId ?? "hub");
-    const owner = `agent:${runId}:${agentId}`;
+    const agentId = String(context?.agentId || "hub");
+    const owner = encodeModelStreamOwner(runId, agentId);
     const authority = buildPreviewAuthority({
       origin: typeof context?.origin === "string" && /^https?:\/\//u.test(context.origin)
         ? new URL(context.origin).origin
@@ -811,8 +812,8 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
   }
   const runId = typeof context?.runId === "string" && context.runId ? context.runId : null;
   if (!runId) throw new Error("wasm_stream_run_required");
-  const agentId = String(context?.agentId ?? "hub");
-  const owner = `agent:${runId}:${agentId}`;
+  const agentId = String(context?.agentId || "hub");
+  const owner = encodeModelStreamOwner(runId, agentId);
   let inputRef = validatedArgs?.inputRef ?? null;
   let staged = false;
   if (!inputRef) {
@@ -1002,7 +1003,7 @@ async function runWasmStreamTool({ toolId, args, inputRef, owner, origin = PREVI
   // never squeezed into context: the explicit OPFS reference, size, and digest
   // are authoritative and can feed the next tool without copying.
   const outputDescriptor = wasmStreamOutputDescriptor(toolId, args);
-  const outputLifetime = owner.startsWith("agent:") ? "run" : "explicit-remove";
+  const outputLifetime = isModelStreamOwner(owner) ? "run" : "explicit-remove";
   let stdout = null;
   if (result.receipt.stdoutBytes <= 64 * 1024 && outputDescriptor.type === "utf8") {
     const window = await readWasmStreamWindow({

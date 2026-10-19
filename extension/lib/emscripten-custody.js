@@ -2,6 +2,7 @@
 // This module is NOT connected to the model/offscreen wire. Binary operations
 // remain refused until durable audit, worker isolation and live publication land.
 import { validExecutionId } from "./durable-runs.js";
+import { encodeModelStreamOwner } from "./wasm-stream-owner-codec.js";
 import { createIncrementalSha256 } from "./incremental-sha256.js";
 import {
   createWasmStreamOutput,
@@ -28,8 +29,9 @@ export function emscriptenJobOwner({ runId, agentId } = {}) {
   if (!validExecutionId(runId) || typeof agentId !== "string" || !AGENT_RE.test(agentId)) {
     fail("emscripten_custody_invalid_identity");
   }
-  // Neither validated identity admits '|': :| is an unambiguous tuple boundary.
-  return `agent:${runId}:|${agentId}`;
+  // ko4h6: the shared length-prefixed v2 codec — injective for every tuple,
+  // with no dependence on which characters either identity grammar admits.
+  return encodeModelStreamOwner(runId, agentId);
 }
 
 function receiptFor({ runId, agentId, bytes, sha256, provenance }) {

@@ -18,6 +18,7 @@ import {
   releaseRunWasmStreamOutputs,
   retainRunWasmStreamOutput,
 } from "../extension/lib/wasm-stream-run-lifecycle.js";
+import { encodeModelStreamOwner } from "../extension/lib/wasm-stream-owner-codec.js";
 import { createWasiPreview1Runtime } from "../extension/lib/wasi-preview1-runtime.js";
 import {
   buildPreviewAuthority,
@@ -244,7 +245,7 @@ Deno.test("stream staging and publication failures remove partial directories", 
 Deno.test("model stream outputs remain chainable until their exact run settles", async () => {
   const { root, storage } = memoryStorage();
   const runId = "execution-1";
-  const owner = `agent:${runId}:hub`;
+  const owner = encodeModelStreamOwner(runId, "hub");
   for (let index = 0; index < 2; index++) {
     const output = await createWasmStreamOutput({ owner, storage });
     await sealWasmStreamOutput({
@@ -263,6 +264,52 @@ Deno.test("model stream outputs remain chainable until their exact run settles",
   equal(cleanup.failed, 0);
   equal(streamDirectoryCount(root), 0, "settled run must release every non-promoted output");
   equal((await releaseRunWasmStreamOutputs(runId, { storage })).released, 0, "cleanup is idempotent");
+});
+
+Deno.test("ko4h6: a foreign run whose id is a prefix cannot retain or release another run's output", async () => {
+  const { root, storage } = memoryStorage();
+  // The longer run's output, staged under ITS owner. The prefix run
+  // "acp:aaaaaaaa" previously matched via startsWith("agent:acp:aaaaaaaa:").
+  const foreignOwner = encodeModelStreamOwner("acp:aaaaaaaa:b", "hub");
+  const output = await createWasmStreamOutput({ owner: foreignOwner, storage });
+  await sealWasmStreamOutput({
+    ref: output, owner: foreignOwner, bytes: 0,
+    receipt: { stdoutBytes: 0, stdoutSha256: "0".repeat(64) }, storage,
+  });
+  let code = "";
+  try { retainRunWasmStreamOutput("acp:aaaaaaaa", { ref: output, owner: foreignOwner }); }
+  catch (error) { code = error?.code; }
+  equal(code, "wasm_stream_owner", "prefix run must not retain a foreign run's output");
+  const cleanup = await releaseRunWasmStreamOutputs("acp:aaaaaaaa", { storage });
+  equal(cleanup.released, 0, "prefix run settlement must release nothing");
+  equal(streamDirectoryCount(root), 1, "foreign output must survive the prefix run's settlement");
+  // The exact run still retains, chains, and cleans up normally.
+  retainRunWasmStreamOutput("acp:aaaaaaaa:b", { ref: output, owner: foreignOwner });
+  await validateSealedWasmStream({ ref: output, owner: foreignOwner, storage });
+  equal((await releaseRunWasmStreamOutputs("acp:aaaaaaaa:b", { storage })).released, 1);
+  equal(streamDirectoryCount(root), 0, "exact run settlement releases its own output");
+});
+
+Deno.test("ko4h6: legacy ambiguous owners are non-authoritative under every candidate run", async () => {
+  const { root, storage } = memoryStorage();
+  // "agent:acp:aaaaaaaa:b:hub" could be (acp:aaaaaaaa, b:hub), (acp:aaaaaaaa:b, hub),
+  // or other tuples — it must never be decoded by splitting or prefix inference.
+  for (const legacyOwner of ["agent:acp:aaaaaaaa:b:hub", "agent:acp:aaaaaaaa:b:|hub", "agent:execution-1:hub"]) {
+    const output = await createWasmStreamOutput({ owner: legacyOwner, storage });
+    await sealWasmStreamOutput({
+      ref: output, owner: legacyOwner, bytes: 0,
+      receipt: { stdoutBytes: 0, stdoutSha256: "0".repeat(64) }, storage,
+    });
+    for (const candidateRun of ["acp:aaaaaaaa", "acp:aaaaaaaa:b", "execution-1"]) {
+      let code = "";
+      try { retainRunWasmStreamOutput(candidateRun, { ref: output, owner: legacyOwner }); }
+      catch (error) { code = error?.code; }
+      equal(code, "wasm_stream_owner", `legacy owner ${legacyOwner} must not retain under ${candidateRun}`);
+      equal((await releaseRunWasmStreamOutputs(candidateRun, { storage })).released, 0,
+        "legacy output must not be released by a guessed run");
+    }
+  }
+  equal(streamDirectoryCount(root), 3, "legacy outputs are preserved, never silently recoded or deleted");
 });
 
 Deno.test("WASI stdio adapters stream complete input/output without runtime accumulation", async () => {
@@ -350,7 +397,7 @@ Deno.test("the bundled-tool transport exposes one owner-derived stream lifecycle
     "every orchestrator run must receive its immutable settlement key");
   assert(!source.includes('context?.executionId ?? "run"'),
     "model stream retention must never fall back to a different or shared run key");
-  assert(source.includes('owner.startsWith("agent:") ? "run" : "explicit-remove"'),
+  assert(source.includes('isModelStreamOwner(owner) ? "run" : "explicit-remove"'),
     "stream results must disclose run-scoped versus owner-controlled lifetime");
 });
 

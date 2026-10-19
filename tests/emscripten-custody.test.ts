@@ -2,6 +2,7 @@
 // @ts-nocheck
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import * as custody from "../extension/lib/emscripten-custody.js";
+import { decodeModelStreamOwner } from "../extension/lib/wasm-stream-owner-codec.js";
 import * as audited from "../extension/lib/emscripten-custody-audit.js";
 import {
   listWasmStreamEntries,
@@ -120,8 +121,8 @@ Deno.test("7wywc: colon-bearing run/agent tuples have distinct, reversible strea
   assert(firstOwner !== secondOwner, "different run/agent tuples must never share a stream owner");
   for (const { runId, agentId } of [first, second, { runId: RUN, agentId: "named:alice" }]) {
     const encoded = custody.emscriptenJobOwner({ runId, agentId });
-    assertEquals(encoded.startsWith(`agent:${runId}:|`), true);
-    assertEquals(encoded.slice(`agent:${runId}:|`.length), agentId);
+    // ko4h6: reversible through the shared v2 codec, not string surgery.
+    assertEquals(decodeModelStreamOwner(encoded), { runId, agentId });
   }
 });
 
