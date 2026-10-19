@@ -6,8 +6,11 @@
 //      second, deliberately UNREACHABLE server (a port bound then freed).
 //   2. Load the extension in headless Chromium (fresh profile), attach to its
 //      service-worker target.
-//   3. Inside the SW, dynamically import the developer-only probe bundle and
-//      run mount → list → call → teardown against BOTH servers.
+//   3. Wait for the SW's module evaluation to finish (the probe is installed
+//      by an esbuild inject wrapper near the end of the bundle — the SW target
+//      appears hundreds of ms BEFORE top-level evaluation completes, so an
+//      immediate Runtime.evaluate races it: chrome-agent-platform-uf9l), then
+//      run mount → list → call → teardown against BOTH servers via the probe.
 //   4. Assert: the reachable server lists its tools and `add(3,5)` returns "8";
 //      the unreachable server is reported FAILED without throwing or killing
 //      the working one; teardown is clean.
@@ -123,6 +126,23 @@ async function main() {
     const swSession = a.result.sessionId as string;
     await cdp.send("Runtime.enable", {}, swSession);
 
+    // chrome-agent-platform-uf9l: waitForServiceWorker resolves when the SW
+    // TARGET exists, but the probe is installed by an esbuild inject wrapper
+    // near the end of the bundle's top-level evaluation — observed ~500 ms
+    // after target creation on an idle host, longer under load. Poll for the
+    // probe (bounded) instead of racing module evaluation; a clear FAIL beats
+    // the misleading '__capMcpProbe not installed in SW' probe summary.
+    let probeReady = false;
+    for (let waited = 0; waited <= 15000; waited += 250) {
+      const t = await evalIn(cdp, swSession, "typeof globalThis.__capMcpProbe");
+      if (t === "function") { probeReady = true; break; }
+      await sleep(250);
+    }
+    if (!probeReady) {
+      console.log("FAIL: __capMcpProbe never installed after 15s — SW module evaluation did not complete");
+      Deno.exit(1);
+    }
+
     const servers = [
       { name: "calc", transport: { type: "http", url: good.url } },
       { name: "down", transport: { type: "http", url: badUrl } },
@@ -130,9 +150,8 @@ async function main() {
     const probeArg = { servers, call: { tool: "mcp__calc__add", args: { a: 3, b: 5 } } };
 
     // The probe is injected directly into the developer SW bundle (SW globals
-    // forbid dynamic import()), so it is already installed on globalThis.
+    // forbid dynamic import()); the wait above confirmed it is installed.
     const expr = `(async () => {
-      if (typeof globalThis.__capMcpProbe !== 'function') return { error: '__capMcpProbe not installed in SW' };
       return await globalThis.__capMcpProbe(${JSON.stringify(probeArg)});
     })()`;
 
