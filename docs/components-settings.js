@@ -2204,7 +2204,7 @@ export class ToolLibrary extends Component {
 .source-tool-head strong{font-size:13px;overflow-wrap:anywhere;min-inline-size:0}
 .source-tool-head .avail{font-size:var(--text-xs, 12px);padding:1px 8px;border:1px solid var(--border, #ddd8d2);border-radius:999px;color:var(--muted, #625d57);white-space:nowrap}
 .source-tool-head .avail.unavailable{border-color:var(--warning, #9a6b00);color:var(--warning, #9a6b00)}
-.source-tool-origin{margin:2px 0 0;font-size:11px;color:var(--muted, #625d57);overflow-wrap:anywhere}
+.source-tool-origin{margin:2px 0 0;font-size:var(--text-xs, 12px);color:var(--muted, #625d57);overflow-wrap:anywhere}
 .source-tool-desc{margin:4px 0 0;font-size:12px;color:var(--muted, #625d57);overflow-wrap:anywhere;min-inline-size:0}
 @media (max-width:560px){.source-tool-head{grid-template-columns:1fr}}
 .rows{margin:12px 0 0;padding:0;list-style:none;display:grid;gap:10px}
