@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.726] — 2026-10-19
+- Builds now name their branch and commit even from a detached checkout, and an interrupted release can no longer lose its version number to an unrelated local edit.
+
 ## [0.3.725] — 2026-10-19
 - Developer builds now show which branch they came from on the About page, and landing the same batch twice can no longer create two releases.
 - Dev builds now name their branch in the About page, and release identity is assigned once per build.
