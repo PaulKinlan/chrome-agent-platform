@@ -12,8 +12,9 @@
 // precondition (it skips extension/dist). Do not fold it back into the original file, and do not
 // promote that file whole.
 // @ts-nocheck
-import { fileURLToPath } from "node:url";
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { dirname, join } from "node:path";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { scanShippedJs } from "../scripts/scan-shipped.mjs";
 import { collectProductSources, auditStaticFirst } from "./helpers/emscripten-static-first-audit.mjs";
 
@@ -81,6 +82,46 @@ Deno.test("static-first: walked product JS cannot install a dynamic linker", asy
   ].sort(), "Module hooks cannot install an unreviewed byte source");
   assertEquals(auditStaticFirst(new Map([[worker, "// loadDylibs and dynamicLibraries remain unsupported\n"]])), [],
     "a negation comment is not an executable path");
+});
+
+// zeaub: walk a disposable tree, not only an in-memory Map. A vendor/cjs skip
+// must turn this test RED even when the real source count remains above 300.
+Deno.test("static-first: the walked JS file set matches the documented scope", async () => {
+  const root = await Deno.makeTempDir({ prefix: "cap-static-first-walk-" });
+  const allowed = [
+    "extension/lib/entry.js", "extension/lib/vendor/third.mjs",
+    "extension/lib/legacy.cjs", "packages/pkg/src/entry.js",
+  ];
+  const excluded = [
+    "extension/dist/gen.js", "extension/lib/deep/dist/gen.js",
+    "packages/pkg/deep/dist-versions/gen.js", "packages/pkg/dist-archives/gen.js",
+    "packages/pkg/deep/node_modules/gen.js",
+    "extension/.dist-stage-1/gen.js", "extension/.dist-link-1/gen.js",
+    "extension/.dist-prev-1/gen.js", "packages/bundled/evidence/archive/gen.js",
+    "extension/lib/other.ts", "extension/lib/other.tsx", "extension/lib/other.jsx",
+  ];
+  const put = async (relative: string, contents: string) => {
+    const file = join(root, relative);
+    await Deno.mkdir(dirname(file), { recursive: true });
+    await Deno.writeTextFile(file, contents);
+  };
+  try {
+    for (const path of allowed) await put(path, "export const safe = 1;");
+    for (const path of excluded) await put(path, "Module.loadDylibs();");
+    const sourceRoot = pathToFileURL(`${root}/`);
+    const sources = await collectProductSources(sourceRoot);
+    assertEquals([...sources.keys()].sort(), allowed.sort(), "every documented inclusion and exclusion must be witnessed");
+    assertEquals(auditStaticFirst(sources), [], "excluded hostile code must not enter the audit");
+    await Deno.symlink(join(root, allowed[0]), join(root, "packages/pkg/src/linked.js"));
+    await assertRejects(
+      () => collectProductSources(sourceRoot),
+      Error,
+      "unreviewed product source symlink",
+      "a symlink outside the exclusions must fail closed",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
 });
 
 // The per-tool SBOM identity was unpinned (chrome-agent-platform-10z9): the manifests are what a
