@@ -82,6 +82,29 @@ function runParallel(files, phase = "parallel phase", durationsOut = null) {
     let readyPoll = null;
     let readyOk = !PARALLEL_READY_FILE;
 
+    // Watchdog (qvv7k): monitor runner PID. If this runner process dies unexpectedly
+    // (e.g. uncatchable SIGKILL from a gate timeout or reaper), terminate the detached
+    // child's process group so no test descendants survive reparented to init (PID 1).
+    let watchdog = null;
+    if (child.pid) {
+      try {
+        watchdog = spawn(
+          "sh",
+          [
+            "-c",
+            'parent=$1; child_pgid=$2; while kill -0 "$parent" 2>/dev/null; do sleep 0.5; done; kill -9 -"$child_pgid" 2>/dev/null',
+            "_",
+            String(process.pid),
+            String(child.pid),
+          ],
+          { stdio: "ignore", detached: true },
+        );
+        watchdog.unref();
+      } catch {
+        /* best-effort */
+      }
+    }
+
     const startPhaseTimer = () => {
       if (phaseTimeoutMs > 0 && Number.isFinite(phaseTimeoutMs)) {
         timer = setTimeout(() => {
@@ -136,23 +159,47 @@ function runParallel(files, phase = "parallel phase", durationsOut = null) {
     }
 
     const onSig = (sig) => {
+      if (watchdog && watchdog.pid) {
+        try { process.kill(-watchdog.pid, "SIGKILL"); } catch { /* gone */ }
+        try { process.kill(watchdog.pid, "SIGKILL"); } catch { /* gone */ }
+      }
       if (child.pid) {
         try { process.kill(-child.pid, "SIGKILL"); } catch { /* gone */ }
       }
       process.removeListener("SIGTERM", onSigTerm);
       process.removeListener("SIGINT", onSigInt);
+      process.removeListener("SIGHUP", onSigHup);
+      process.removeListener("SIGQUIT", onSigQuit);
       process.kill(process.pid, sig);
     };
     const onSigTerm = () => onSig("SIGTERM");
     const onSigInt = () => onSig("SIGINT");
+    const onSigHup = () => onSig("SIGHUP");
+    const onSigQuit = () => onSig("SIGQUIT");
     process.on("SIGTERM", onSigTerm);
     process.on("SIGINT", onSigInt);
+    process.on("SIGHUP", onSigHup);
+    process.on("SIGQUIT", onSigQuit);
+
+    const onExit = () => {
+      if (child.pid) {
+        try { process.kill(-child.pid, "SIGKILL"); } catch { /* clean */ }
+      }
+    };
+    process.on("exit", onExit);
 
     const cleanup = () => {
       if (readyPoll) clearInterval(readyPoll);
       if (timer) clearTimeout(timer);
       process.removeListener("SIGTERM", onSigTerm);
       process.removeListener("SIGINT", onSigInt);
+      process.removeListener("SIGHUP", onSigHup);
+      process.removeListener("SIGQUIT", onSigQuit);
+      process.removeListener("exit", onExit);
+      if (watchdog && watchdog.pid) {
+        try { process.kill(-watchdog.pid, "SIGKILL"); } catch { /* gone */ }
+        try { process.kill(watchdog.pid, "SIGKILL"); } catch { /* gone */ }
+      }
       if (child.pid) {
         try { process.kill(-child.pid, "SIGKILL"); } catch { /* clean */ }
       }
