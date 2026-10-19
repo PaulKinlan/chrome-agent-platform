@@ -82,6 +82,33 @@ Deno.test("display: loadDevBuildIdentity normalizes absent fields to null", asyn
   assertEquals(partial, { branch: null, commit: null });
 });
 
+/**
+ * a7ybr: what a duplicate landed-ness rule LOOKS like, in every spelling that
+ * means "is this branch a landed ref" — a branch-membership test against
+ * origin/* or main/master. Matching one literal form (`startsWith("origin/")`)
+ * let a variant spelling through; matching the family does not.
+ */
+const LANDEDNESS_RULE = new RegExp([
+  String.raw`(?:startsWith|includes|endsWith)\s*\(\s*["'\`]origin[\/-]`,
+  String.raw`(?:indexOf|search)\s*\(\s*["'\`]origin[\/-][^)]*\)\s*[!=]==?\s*0`,
+  String.raw`[!=]==?\s*["'\`](?:main|master)["'\`]`,
+  String.raw`["'\`](?:main|master)["'\`]\s*[!=]==?`,
+].join("|"));
+
+/** Node-side files that own identity plumbing and must NOT restate the rule. */
+const NODE_SIDE_IDENTITY_FILES = ["build.mjs", "scripts/lib/build-identity.mjs"];
+
+/**
+ * a7ybr: a third file must not be able to escape by living one directory away.
+ * Every `scripts/lib/*.mjs` is scanned (a single-level read of one directory, no
+ * repo walk), so moving the rule into a sibling helper is still caught.
+ */
+function nodeIdentityLibraryFiles(): string[] {
+  return [...Deno.readDirSync("scripts/lib")]
+    .filter((entry) => entry.isFile && entry.name.endsWith(".mjs"))
+    .map((entry) => `scripts/lib/${entry.name}`);
+}
+
 Deno.test("wiring: build.mjs stages the identity before the dist.complete marker, through the single-sourced loader (4169y)", async () => {
   const build = Deno.readTextFileSync("build.mjs");
   // LIVE write path: the staged file is named exactly where the marker's input
@@ -93,9 +120,8 @@ Deno.test("wiring: build.mjs stages the identity before the dist.complete marker
   assert(build.includes('"./scripts/lib/build-identity.mjs"'), "build.mjs must read identity through scripts/lib/build-identity.mjs, not inline git reads (4169y)");
   assert(build.includes("currentGitBranch(ROOT, gitShow)"), "the branch read goes through the shared loader with the bounded runner");
   assert(build.includes("currentGitCommit(ROOT, gitShow)"), "the commit read goes through the shared loader with the bounded runner");
-  // The landed-ness rule lives in exactly ONE place (4169y): the extension lib.
-  assert(!/origin\//.test(build.split("gitShow")[0] ?? "") || true, "build.mjs carries no landed-ness rule");
-  const nodeLib = Deno.readTextFileSync("scripts/lib/build-identity.mjs");
+  assert(!LANDEDNESS_RULE.test(build.slice(0, build.indexOf("gitShow"))),
+    "build.mjs carries no landed-ness rule above its gitShow usage (4169y/a7ybr)");
   // 4169y: the re-export must be FUNCTIONAL, not prose — the node module's
   // devVersionLabel/isLandedBranch must be the SAME function objects as the
   // canonical extension lib (a text pin here was an import shadow: it passed
@@ -103,10 +129,16 @@ Deno.test("wiring: build.mjs stages the identity before the dist.complete marker
   const canonical = await import("../extension/lib/dev-build-identity.js");
   assertEquals(buildSideLabel, canonical.devVersionLabel, "the node side must re-export the CANONICAL devVersionLabel");
   assertEquals(isLandedBranch, canonical.isLandedBranch, "the node side must re-export the CANONICAL isLandedBranch");
-  const ruleSites = ["build.mjs", "scripts/lib/build-identity.mjs"].filter((rel) =>
-    /startsWith\("origin\/"\)/.test(Deno.readTextFileSync(rel)),
-  );
-  assertEquals(ruleSites, [], `the landed-ness rule must be single-sourced in extension/lib/dev-build-identity.js, re-defined in: ${ruleSites}`);
+  // a7ybr: the old pin was (1) unable to fail — `|| true` — and (2) matched ONE
+  // spelling, so `b.indexOf("origin/") === 0` or a `=== "main"` test escaped. The
+  // rule is a BRANCH-MEMBERSHIP TEST, so the scan matches the family, and it
+  // includes a POSITIVE CONTROL: if the canonical rule vanishes, this fails.
+  const CANONICAL_IDENTITY = "extension/lib/dev-build-identity.js";
+  const ruleSites = [...NODE_SIDE_IDENTITY_FILES, ...nodeIdentityLibraryFiles()]
+    .filter((rel) => rel !== CANONICAL_IDENTITY && LANDEDNESS_RULE.test(Deno.readTextFileSync(rel)));
+  assertEquals(ruleSites, [], `the landed-ness rule must be single-sourced in ${CANONICAL_IDENTITY}, re-defined in: ${ruleSites}`);
+  assert(LANDEDNESS_RULE.test(Deno.readTextFileSync(CANONICAL_IDENTITY)),
+    `the canonical landed-ness rule is MISSING from ${CANONICAL_IDENTITY} — the scan above proves nothing without it`);
 });
 
 Deno.test("wiring: both About surfaces render the identity label, not a bare version concat", () => {
