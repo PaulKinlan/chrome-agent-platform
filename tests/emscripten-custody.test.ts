@@ -13,7 +13,7 @@ const RUN = "exec_ems_custody_run_123456";
 const OTHER_RUN = "exec_ems_custody_run_654321";
 const owner = (runId = RUN, agentId = "hub") => custody.emscriptenJobOwner({ runId, agentId });
 const fileNode = () => ({ kind: "file", bytes: new Uint8Array() });
-const dirNode = () => ({ kind: "directory", children: new Map() });
+const dirNode = () => ({ kind: "directory", children: new Map(), removeAttempts: 0 });
 
 class MemoryDirectory {
   kind = "directory";
@@ -48,6 +48,7 @@ class MemoryDirectory {
     };
   }
   async removeEntry(name) {
+    this.node.removeAttempts++;
     if (!this.node.children.delete(name)) throw new Error("entry not found");
   }
   async *entries() {
@@ -238,7 +239,7 @@ Deno.test("ltkj.4.4: durable intent precedes output-directory creation and appen
 });
 
 Deno.test("ltkj.4.4: terminal audit requires matching durable intent, stopped worker and live SW run", async () => {
-  const { storage } = memoryStorage();
+  const { storage, root } = memoryStorage();
   const inputRef = await stageWasmStreamInputChunks({ owner: owner(), chunks: [new TextEncoder().encode("original")], storage });
   const rows = new Map();
   const append = async (_run, row, key) => { rows.set(key, row); return row; };
@@ -260,8 +261,68 @@ Deno.test("ltkj.4.4: terminal audit requires matching durable intent, stopped wo
   assertEquals([...rows.keys()].filter((key) => key.includes("terminal")).length, 0);
   const terminal = await audited.recordEmscriptenTerminalAudit(args);
   assertEquals(terminal, { ok: true, audited: true, bytes: bytes.length, sha256: await digest(bytes) });
-  assertEquals(rows.get(`emscripten-terminal:${RUN}:${job.outputRef.id}`).workerTerminated, true);
-  await expectCode(audited.discardFencedEmscriptenOutput({ ...args, isTerminated: () => false }), "emscripten_worker_not_fenced");
+  const terminalKey = `emscripten-terminal:${RUN}:${job.outputRef.id}`;
+  const terminalRow = rows.get(terminalKey);
+  assertEquals(terminalRow.workerTerminated, true);
+  const streamNode = root.node.children.get(WASM_STREAM_ROOT_NAME);
+  const readTerminal = async (_run, key) => rows.get(key);
+  const refuse = async (overrides, code) => {
+    await expectCode(audited.discardFencedEmscriptenOutput({ ...args, readTerminal, ...overrides }), code);
+    assertEquals(streamNode.removeAttempts, 0, "refusal must not even attempt removeEntry");
+    assertEquals((await listWasmStreamEntries({ storage })).length, 2);
+  };
+  await refuse({ isTerminated: () => false }, "emscripten_worker_not_fenced");
+  await refuse({ readTerminal: async () => null }, "emscripten_custody_audit_mismatch");
+  await refuse({ readIntent: async () => null }, "emscripten_custody_audit_mismatch");
+  await refuse({ readTerminal: undefined }, "emscripten_custody_audit_unavailable");
+  await refuse({ readTerminal: async () => ({ ...terminalRow, agentId: "foreign" }) }, "emscripten_custody_audit_mismatch");
+  await refuse({ readTerminal: async () => ({ ...terminalRow, workerTerminated: false }) }, "emscripten_custody_audit_mismatch");
+  await refuse({ readTerminal: async () => ({ ...terminalRow, receipt: { ...terminalRow.receipt, bytes: 999 } }) }, "emscripten_custody_audit_mismatch");
+  await refuse({ readTerminal: async () => ({ ...terminalRow, receipt: { ...terminalRow.receipt, forged: true } }) }, "emscripten_custody_audit_mismatch");
+  await refuse({ readTerminal: async () => ({ ...terminalRow, promotable: true }) }, "emscripten_custody_audit_mismatch");
+  await refuse({ readTerminal: async () => ({ ...terminalRow, executionId: OTHER_RUN }) }, "emscripten_custody_audit_mismatch");
+  await refuse({ readTerminal: async () => ({ type: "compacted", runId: RUN }) }, "emscripten_custody_audit_mismatch");
+  await refuse({ readTerminal: async () => { throw new Error("unknown execution"); } }, "emscripten_custody_audit_unavailable");
+  let checks = 0;
+  await refuse({ isTerminated: () => ++checks < 2 }, "emscripten_worker_not_fenced");
+  const registryRow = (row, key) => ({ ...row, schemaVersion: 1, retentionPolicyVersion: "run-retention-v2",
+    executionId: RUN, at: 123, idempotencyKey: key });
+  await audited.discardFencedEmscriptenOutput({ ...args,
+    readIntent: async (_run, key) => registryRow(rows.get(key), key),
+    readTerminal: async (_run, key) => registryRow(rows.get(key), key),
+  });
+  assertEquals(streamNode.removeAttempts, 1, "only the audited output is removed");
+  assertEquals((await listWasmStreamEntries({ storage })).map(({ id }) => id), [inputRef.id]);
+});
+
+Deno.test("lv9xs: no durable intent or terminal row means no cleanup attempt", async () => {
+  const { storage, root } = memoryStorage();
+  const inputRef = await stageWasmStreamInputChunks({ owner: owner(), chunks: [new Uint8Array([1])], storage });
+  const job = await custody.allocateEmscriptenJobStreams({ runId: RUN, agentId: "hub", inputRef, storage });
+  const streamNode = root.node.children.get(WASM_STREAM_ROOT_NAME);
+  const before = (await listWasmStreamEntries({ storage })).map(({ id }) => id).sort();
+  assertEquals(before, [inputRef.id, job.outputRef.id].sort());
+  await expectCode(audited.discardFencedEmscriptenOutput({ runId: RUN, agentId: "hub", inputRef,
+    outputRef: job.outputRef, storage, isTerminated: () => true,
+    readIntent: async () => null, readTerminal: async () => null,
+  }), "emscripten_custody_audit_mismatch");
+  assertEquals(streamNode.removeAttempts, 0, "no removeEntry before durable audit proof");
+  assertEquals((await listWasmStreamEntries({ storage })).map(({ id }) => id).sort(), before);
+});
+
+Deno.test("lv9xs: an intent without terminal audit still cannot authorize cleanup", async () => {
+  const { storage, root } = memoryStorage();
+  const inputRef = await stageWasmStreamInputChunks({ owner: owner(), chunks: [new Uint8Array([1])], storage });
+  const rows = new Map();
+  const job = await audited.allocateAuditedEmscriptenJobStreams({ runId: RUN, agentId: "hub", inputRef, storage,
+    isLive: () => true, append: async (_run, row, key) => { rows.set(key, row); return row; },
+  });
+  const streams = root.node.children.get(WASM_STREAM_ROOT_NAME);
+  await expectCode(audited.discardFencedEmscriptenOutput({ runId: RUN, agentId: "hub", inputRef,
+    outputRef: job.outputRef, storage, isTerminated: () => true,
+    readIntent: async (_run, key) => rows.get(key), readTerminal: async () => null,
+  }), "emscripten_custody_audit_mismatch");
+  assertEquals(streams.removeAttempts, 0);
   assertEquals((await listWasmStreamEntries({ storage })).length, 2);
 });
 
@@ -281,10 +342,15 @@ Deno.test("ltkj.4.4: SW registry adapter refuses absent/compacted intent and che
   const key = `emscripten-intent:${RUN}:abcd`;
   await authority.append(RUN, row, key);
   assertEquals((await authority.readIntent(RUN, key)).agentId, "hub");
+  const terminalKey = `emscripten-terminal:${RUN}:abcd`;
+  const terminalRow = { type: "emscripten-custody-terminal", runId: RUN, agentId: "hub" };
+  await authority.append(RUN, terminalRow, terminalKey);
+  assertEquals(await authority.readTerminal(RUN, terminalKey), { ...terminalRow, executionId: RUN, idempotencyKey: terminalKey });
   const replay = await authority.append(RUN, { ...row, agentId: "foreign" }, key);
   assertEquals(replay.agentId, "hub", "caller must reject a mismatched persisted replay");
   rows.length = 0;
   assertEquals(await authority.readIntent(RUN, key), null, "a compacted intent cannot be inferred");
+  assertEquals(await authority.readTerminal(RUN, terminalKey), null, "a compacted terminal cannot be inferred");
   await expectCode(Promise.resolve().then(() => audited.emscriptenRunAuditAuthority({ registry: null, isLive: () => true, isTerminated: () => true })),
     "emscripten_custody_audit_unavailable");
 });
