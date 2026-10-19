@@ -1,6 +1,13 @@
 // ltkj.4.2 — an offscreen completion is never proof its model run still owns it.
 // @ts-nocheck
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
+// Erased imports expose the two source files inspected below to the fast
+// gate's static test graph; the actual assertions read their text at runtime.
+import type {} from "../extension/shared/components-settings.js";
+import type {} from "../docs/components-settings.js";
+import * as emsBroker from "../extension/lib/emscripten-run-broker.js";
+import { emscriptenJobOwner } from "../extension/lib/emscripten-custody.js";
+import { validatePreviewInput } from "../extension/lib/tool-exec-preview.js";
 import { runFencedEmscripten, isEmscriptenModelRunLive, dispatchEmscriptenForRun } from "../extension/lib/emscripten-run-fence.js";
 import { createRunControl } from "../extension/lib/run-control.js";
 import { createAgent } from "../extension/lib/agent.js";
@@ -151,6 +158,57 @@ Deno.test("Emscripten run fence: service worker uses a model fence and an explic
 
   assert(source.includes("if (!isLive()) return { ok: false, phase: \"failed\", error: \"emscripten_run_not_live\" };"),
     "native send must be gated again after asynchronous registry and host setup");
+});
+
+Deno.test("r48jj: Settings binary preview refuses before host setup and cannot render an unauthorised run", async () => {
+  const operation = (result, params = []) => ({ id: "preview", kind: "native-buffer-v1", result, params });
+  const record = (op) => ({ manifest: { entry: { operations: [op] } } });
+  assertEquals(typeof emsBroker.classifyEmscriptenOperation, "function", "the broker owns one typed custody predicate");
+  for (const op of [operation("buffer"), operation("i32", [{ name: "input", type: "buffer" }])]) {
+    assertEquals(emsBroker.classifyEmscriptenOperation(record(op), "preview"),
+      "emscripten_output_custody_unavailable", "no binary output or input can enter a Settings preview");
+  }
+  assertEquals(emsBroker.classifyEmscriptenOperation(record(operation("string")), "preview"), null,
+    "existing string preview remains available");
+  const scalar = record({ ...operation("f64"), kind: "native-scalar-v1" });
+  assertEquals(emsBroker.classifyEmscriptenOperation(scalar, "preview"), null,
+    "existing scalar preview remains available");
+  assertEquals(emsBroker.classifyEmscriptenOperation(scalar, "missing"), "emscripten_operation_unknown");
+  for (const runId of ["settings-preview-deadbeef1234", "model-run-deadbeef"]) {
+    assertThrows(() => emscriptenJobOwner({ runId, agentId: "hub" }), Error,
+      "emscripten_custody_invalid_identity", "a preview pseudo-id cannot own a native output stream");
+  }
+
+  const source = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const run = source.slice(source.indexOf("async function runAdmittedEmscripten("), source.indexOf("async function dispatchEmscriptenRun("));
+  const beforeHost = run.slice(run.indexOf("const envelope = buildEmscriptenRunEnvelope("), run.indexOf("const host = await ensureOffscreen()"));
+  assert(beforeHost.includes("if (!envelope)"), "empty envelopes refuse instead of reaching a host");
+  assert(beforeHost.includes("classifyEmscriptenOperation(current, operationId)"),
+    "direct Settings preview uses the broker's typed custody refusal BEFORE host creation");
+  assert(beforeHost.includes('return { ok: false, phase: "failed", error: refusal }'),
+    "the refusal cannot be converted into an apparently successful renderable run");
+  const route = source.slice(source.indexOf('async "tool.package.run"('), source.indexOf('async "tool.preview.run"('));
+  const missingRecord = route.slice(route.indexOf("if (!record)"), route.indexOf("let namedArgs"));
+  assert(missingRecord.includes("classifyEmscriptenOperation(current, operationId)"),
+    "broker mode cannot bypass the binary refusal through its missing catalog row");
+  assert(missingRecord.includes('error: "emscripten_output_custody_unavailable"'),
+    "broker mode returns the typed code, never a successful result");
+
+  const panel = await Deno.readTextFile(new URL("../extension/options/panels/tool-library.js", import.meta.url));
+  assert(!panel.includes('type: "tool.package.run"'), "the validation-only panel must not grow a dead Emscripten Run button");
+  assertThrows(() => validatePreviewInput({ toolId: "cap.emscripten.binary-preview", args: [], stdin: "" }),
+    Error, "preview_unknown_tool", "the bundled preview route cannot render an unowned Emscripten run");
+  const component = await Deno.readTextFile(new URL("../extension/shared/components-settings.js", import.meta.url));
+  assert(component.includes('class="meta emscripten-binary-note"'), "Settings visibly explains why binary preview is unavailable");
+  assert(component.includes("Settings cannot verify a run that survives a restart or prove its worker has stopped."),
+    "the visible copy names the missing authority without exposing an internal error code");
+  assert(component.includes("Available packages can still be validated; validation does not run them."),
+    "an empty package list must not imply that there is a package available to run");
+  const gallery = await Deno.readTextFile(new URL("../docs/components-settings.js", import.meta.url));
+  assert(gallery.includes("Settings cannot verify a run that survives a restart or prove its worker has stopped."),
+    "the committed docs gallery must show the same binary-preview limitation");
+  assert(gallery.includes("Available packages can still be validated; validation does not run them."),
+    "the gallery must not imply that an empty package list can be run");
 });
 
 Deno.test("Emscripten run fence: createAgent model run projects runSurfaceRef into lazy tool dispatch context (y7khr)", async () => {
