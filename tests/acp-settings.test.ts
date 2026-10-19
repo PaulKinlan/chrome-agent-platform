@@ -75,10 +75,10 @@ Deno.test("acp settings: options.js implements renderAcpSettings with KV read/wr
 
 Deno.test("acp settings: selecting the Native host transport requests the optional nativeMessaging grant in the handler (chrome-agent-platform-o65r)", async () => {
   const code = await Deno.readTextFile(fileURLToPath(new URL("../extension/options/panels/agents.js", import.meta.url)));
-  assert(
-    code.includes('import { ensureAcpNativePermission } from "../../lib/acp-native.js"'),
-    "the grant helper is imported",
-  );
+  // Anchored to the LIVE CALL SITES, not the import line: an import is a shadow
+  // (substring-pin-honesty), so the pin that must survive deleting the construct is
+  // the invocation with its argument list.
+  assert(code.includes("ensureAcpNativePermission()"), "the grant helper is invoked from the settings handlers");
   // The persistence of acp.transport="native" sits INSIDE the grant's success path: the
   // handler asks (the select change is the user gesture) and on refusal reverts the select
   // and surfaces the error — a saved "native" the runtime can never use would silently
