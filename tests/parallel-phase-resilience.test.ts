@@ -23,7 +23,99 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/u, "");
  * chrome-agent-platform-6z8yi: clean up any stale 1k2a-parallel-* scratch directories
  * left behind if a previous test run was SIGKILLed before its finally block could run.
  */
-async function sweepStaleOrphanDirs() {
+/**
+ * j2isq: the liveness probe's answers. ONLY positive proof of death authorizes
+ * deletion; every uncertainty is UNKNOWN and must PRESERVE. A stale scratch
+ * directory under durableRoot() is harmless — deleting a live lane's directory
+ * is the bug this distinguishes.
+ */
+type PidState = "alive" | "dead" | "unknown";
+const ALIVE: PidState = "alive";
+const DEAD: PidState = "dead";
+const UNKNOWN: PidState = "unknown";
+
+/**
+ * j2isq: an unreadable /proc entry is not evidence of death. EACCES/EPERM, a
+ * container without /proc mounted, and hidepid all surface as a throw that the
+ * old probe collapsed into `pidAlive = false` — the deletion authority.
+ */
+export function classifyStatError(err: unknown): PidState {
+  return err instanceof Deno.errors.NotFound ? DEAD : UNKNOWN;
+}
+
+/**
+ * j2isq: the non-Linux `ps` probe. A missing ps, a non-zero exit and empty
+ * stdout are all "cannot answer", which is UNKNOWN, never dead. Only a real
+ * state character decides — and a zombie (Z) holds nothing, so it is dead.
+ */
+export function classifyPsOutput(out: { success: boolean; stdout: Uint8Array } | null): PidState {
+  if (!out || !out.success) return UNKNOWN;
+  const state = new TextDecoder().decode(out.stdout).trim();
+  if (!state) return UNKNOWN;
+  return state[0] === "Z" ? DEAD : ALIVE;
+}
+
+/** The one `ps` call the non-Linux branch makes (injectable for tests). */
+async function defaultPsState(pid: number): Promise<{ success: boolean; stdout: Uint8Array } | null> {
+  try {
+    return await new Deno.Command("ps", {
+      args: ["-o", "state=", "-p", String(pid)],
+      stdout: "piped",
+      stderr: "null",
+    }).output();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Is the /proc MOUNT itself usable? 43e7a: without this, "no /proc mounted at
+ * all" is indistinguishable from "that pid does not exist" — every stat returns
+ * ENOENT, so the sweep would call EVERY pid dead and delete every directory,
+ * live pids included. The mount must be proved before ENOENT is allowed to mean
+ * anything about a pid.
+ */
+async function procMountUsable(statProc: (path: string) => Promise<unknown>): Promise<boolean> {
+  try {
+    await statProc("/proc");
+    await statProc("/proc/self");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The platform-aware probe. Both inputs are injectable so a test can drive the
+ * REAL probe and the REAL sweep through the paths a container or another OS
+ * actually produces, WITHOUT depending on the runner's own OS (2nw7x): a test
+ * injects the platform's own answer, so it is green on Linux and macOS alike.
+ */
+export async function defaultPidState(
+  pid: number,
+  {
+    statProc = Deno.stat,
+    psProc = defaultPsState,
+  }: {
+    statProc?: (path: string) => Promise<unknown>;
+    psProc?: (pid: number) => Promise<{ success: boolean; stdout: Uint8Array } | null>;
+  } = {},
+): Promise<PidState> {
+  if (Deno.build.os === "linux") {
+    if (!(await procMountUsable(statProc))) return UNKNOWN;
+    try {
+      await statProc(`/proc/${pid}`);
+      return ALIVE;
+    } catch (err) {
+      return classifyStatError(err);
+    }
+  }
+  return classifyPsOutput(await psProc(pid));
+}
+
+async function sweepStaleOrphanDirs(
+  { pidState = defaultPidState }: { pidState?: (pid: number) => Promise<PidState> } = {},
+) {
   const root = durableRoot();
   try {
     for await (const entry of Deno.readDir(root)) {
@@ -43,26 +135,9 @@ async function sweepStaleOrphanDirs() {
           // sweep would treat a LIVE pid as dead and delete its directory.
           const pid = Number(m[2]);
           if (!Number.isSafeInteger(pid) || pid <= 0) continue;
-          let pidAlive = false;
-          try {
-            if (Deno.build.os === "linux") {
-              await Deno.stat(`/proc/${pid}`);
-              pidAlive = true;
-            } else {
-              const out = await new Deno.Command("ps", {
-                args: ["-o", "state=", "-p", String(pid)],
-                stdout: "piped",
-                stderr: "null",
-              }).output().catch(() => null);
-              const s = out ? new TextDecoder().decode(out.stdout).trim() : "";
-              if (s && s[0] !== "Z") pidAlive = true;
-            }
-          } catch {
-            pidAlive = false;
-          }
-          if (!pidAlive) {
-            await Deno.remove(`${root}/${entry.name}`, { recursive: true }).catch(() => {});
-          }
+          // j2isq: PRESERVE on any answer that is not positive proof of death.
+          if ((await pidState(pid)) !== DEAD) continue;
+          await Deno.remove(`${root}/${entry.name}`, { recursive: true }).catch(() => {});
         }
       }
     }
@@ -144,6 +219,102 @@ Deno.test("t4uvt: the stale-orphan sweep matches the REAL orphan shape, multi-se
     await Deno.remove(multi, { recursive: true }).catch(() => {});
     await Deno.remove(single, { recursive: true }).catch(() => {});
   }
+});
+
+const utf8 = (text: string) => new TextEncoder().encode(text);
+
+/**
+ * 2nw7x: a probe that answers DEAD on BOTH platforms without depending on the
+ * runner's OS — Linux sees ENOENT for the pid (with /proc proved present), macOS
+ * sees a zombie `ps` state.
+ */
+const deadOnEveryPlatform = (pid: number) =>
+  defaultPidState(pid, {
+    statProc: (p) =>
+      p === "/proc" || p === "/proc/self" ? Promise.resolve({}) : Promise.reject(new Deno.errors.NotFound("no such process")),
+    psProc: () => Promise.resolve({ success: true, stdout: utf8("Z\n") }),
+  });
+
+/** A probe that cannot ANSWER on both platforms: hidepid / an unusable `ps`. */
+const unknownOnEveryPlatform = (pid: number) =>
+  defaultPidState(pid, {
+    statProc: (p) =>
+      p === "/proc" || p === "/proc/self" ? Promise.resolve({}) : Promise.reject(new Deno.errors.PermissionDenied("hidepid")),
+    psProc: () => Promise.resolve({ success: false, stdout: new Uint8Array() }),
+  });
+
+Deno.test("j2isq: the sweep PRESERVES a fixture directory whenever the probe cannot answer", async () => {
+  // The probe's uncertainty paths used to resolve to "dead", which IS the
+  // deletion authority: an unreadable /proc (EACCES/EPERM, hidepid) or a
+  // missing/empty `ps` deleted a directory whose pid might be perfectly alive.
+  // Uncertainty must preserve; only proof of death may delete.
+  const root = durableRoot();
+  const unknownDir = `${root}/1k2a-parallel-orphan-test-2147483646-deadbeef`;
+  const deadDir = `${root}/1k2a-parallel-residual-test-2147483645-deadbeef`;
+  await Deno.mkdir(unknownDir, { recursive: true });
+  await Deno.mkdir(deadDir, { recursive: true });
+  try {
+    await sweepStaleOrphanDirs({ pidState: unknownOnEveryPlatform });
+    assertEquals(await Deno.stat(unknownDir).then(() => true, () => false), true,
+      `an UNKNOWN liveness answer must PRESERVE the directory: ${unknownDir}`);
+    await sweepStaleOrphanDirs({ pidState: deadOnEveryPlatform });
+    assertEquals(await Deno.stat(deadDir).then(() => false, () => true), true,
+      `positive proof of death must still authorize deletion: ${deadDir}`);
+  } finally {
+    await Deno.remove(unknownDir, { recursive: true }).catch(() => {});
+    await Deno.remove(deadDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("43e7a: with NO /proc mounted the sweep PRESERVES — a missing mount is not a dead pid", async () => {
+  // Without this distinction every /proc lookup returns ENOENT on a container
+  // that never mounted /proc, so EVERY pid read as dead and every directory —
+  // live pids included — was deleted. The mount must be proved usable first.
+  const root = durableRoot();
+  const liveLookingDir = `${root}/1k2a-parallel-orphan-test-2147483644-deadbeef`;
+  await Deno.mkdir(liveLookingDir, { recursive: true });
+  try {
+    await sweepStaleOrphanDirs({
+      pidState: (pid) =>
+        defaultPidState(pid, {
+          // On Linux: every stat fails, including the mount probe.
+          statProc: () => Promise.reject(new Deno.errors.NotFound("/proc not mounted")),
+          // On macOS there is no /proc at all; this pid answers ALIVE there.
+          psProc: () => Promise.resolve({ success: true, stdout: utf8("S\n") }),
+        }),
+    });
+    assertEquals(await Deno.stat(liveLookingDir).then(() => true, () => false), true,
+      `an unusable /proc mount must PRESERVE every fixture directory: ${liveLookingDir}`);
+  } finally {
+    await Deno.remove(liveLookingDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("j2isq: only ENOENT from the /proc probe is death; every other error is unknown", () => {
+  assertEquals(classifyStatError(new Deno.errors.NotFound("no such file")), DEAD);
+  assertEquals(classifyStatError(new Deno.errors.PermissionDenied("denied")), UNKNOWN);
+  assertEquals(classifyStatError(new Deno.errors.NotCapable("no capability")), UNKNOWN);
+  // A bare Error is what a non-Deno stat failure looks like; never death.
+  assertEquals(classifyStatError(new Error("EIO")), UNKNOWN);
+});
+
+Deno.test("j2isq: the ps probe cannot answer is UNKNOWN, never death", () => {
+  const enc = (s: string) => new TextEncoder().encode(s);
+  // A missing ps, a failing ps, and an empty state are all "cannot answer".
+  assertEquals(classifyPsOutput(null), UNKNOWN);
+  assertEquals(classifyPsOutput({ success: false, stdout: enc("") }), UNKNOWN);
+  assertEquals(classifyPsOutput({ success: true, stdout: enc("\n") }), UNKNOWN);
+  // A real state character decides.
+  assertEquals(classifyPsOutput({ success: true, stdout: enc("Z\n") }), DEAD);
+  assertEquals(classifyPsOutput({ success: true, stdout: enc("S\n") }), ALIVE);
+  assertEquals(classifyPsOutput({ success: true, stdout: enc("R+") }), ALIVE);
+});
+
+Deno.test("j2isq: the real platform probe never calls a nonexistent pid alive", async () => {
+  // The fail-safe direction is "preserve on uncertainty", so a dead pid may read
+  // as UNKNOWN (a scratch directory survives); what must NEVER happen is a pid
+  // with no process reading as ALIVE, which would strand real orphans forever.
+  assert((await defaultPidState(2147483646)) !== ALIVE);
 });
 
 /**
