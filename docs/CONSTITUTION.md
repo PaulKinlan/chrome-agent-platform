@@ -161,10 +161,13 @@ These are long-living agents. Memory + perf degrade over time if unchecked.
 - **Performance budgets**: the SW must register fast (<500ms); the NTP/chat
   render fast (<1s); the agent loop doesn't block the UI thread; bundles stay
   reasonable. **Every generated bundle's size is MEASURED AND REPORTED by the
-  build, not enforced** (OWNER DECISION, Paul, 2026-10-05: "The limits make
-  no sense anymore" — a bundle over its reference size no longer fails the
-  build). `STORE_BUNDLE_BUDGETS` in scripts/bundle-budget.mjs holds the
-  reporting references; the build prints each bundle's size against its
+  build.** Twelve store per-bundle sizes remain advisory (OWNER DECISION, Paul,
+  2026-10-05: "The limits make no sense anymore"). The rmoh8 exception is the
+  store `offscreen.bundle.js` hard ceiling of 250,000 bytes: exceeding it fails
+  the build with the measured size and `scripts/bundle-budget.mjs` source before
+  publication. Developer builds are unminified and exempt. `STORE_BUNDLE_BUDGETS`
+  in scripts/bundle-budget.mjs holds the ceiling and remaining references; the
+  build prints each bundle's size against its
   reference (with top contributors when over), `dist/dist.complete` records
   every bundle's size + sha256, and tests/bundle-budget.test.ts reports the
   recorded sizes against the same table: service worker 3.0 MB (2.54 MB as
@@ -180,8 +183,9 @@ These are long-living agents. Memory + perf degrade over time if unchecked.
   are pinned at their measured static-import byte totals with zero headroom
   (tests/unbundled-page-census.test.ts) until they are bundled. (The old
   "lowering a ceiling is a ratchet; raising one is an owner decision"
-  rule was retired with the 2026-10-05 decision — sizes are reported, not
-  enforced, so there is no ceiling to ratchet.)
+  rule was retired for advisory sizes with the 2026-10-05 decision; the
+  offscreen exception is a separate enforced ceiling and must not be raised
+  by an individual lane.)
   On a seeded profile (5 agents,
   50 artifacts, 60 runs): `agent.run` p50 < 400ms, `thread.get` < 40ms,
   `run.list` < 40ms, composer-ready < 150ms, data-visible < 250ms, zero long tasks > 50ms,
