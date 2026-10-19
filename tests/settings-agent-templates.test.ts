@@ -136,6 +136,12 @@ Deno.test("Settings template gallery: section stays visible by default and rende
       list.push(fn);
       this.eventListeners.set(event, list);
     }
+    dispatchEvent(ev: any) {
+      const type = typeof ev === "string" ? ev : ev?.type;
+      const list = this.eventListeners.get(type) ?? [];
+      for (const fn of list) fn(ev);
+      return true;
+    }
     querySelector(sel: string): StubElement | null {
       for (const child of this.children) {
         if (sel === "agent-template-gallery" && child.tagName === "AGENT-TEMPLATE-GALLERY") return child;
@@ -203,15 +209,140 @@ Deno.test("Settings uniqueAgentName avoids collisions with existing named agents
   );
 });
 
-Deno.test("Settings background template prefill maps recurring prompt to schedule.task (0owtx)", () => {
-  const { AGENT_TEMPLATES, templatePrefill } = (globalThis as any)._templatesModule;
-  const bgTemplates = AGENT_TEMPLATES.filter((t: any) => t.mode === "background");
-  assert(bgTemplates.length > 0, "at least one background template exists");
-  for (const t of bgTemplates) {
-    const pre = templatePrefill(t);
-    assert(pre.schedule, `${t.id} must have schedule`);
-    const task = pre.schedule.task ?? pre.schedule.prompt;
-    assert(typeof task === "string" && task.length > 10, `${t.id} must have non-empty prompt`);
+Deno.test("Settings Add gallery excludes already-enabled background skills (t163u)", () => {
+  const enabledSkill = {
+    id: "active-watcher",
+    name: "Active Watcher",
+    mode: "background",
+    enabled: true,
+    schedule: { periodInMinutes: 30, prompt: "Watch" },
+  };
+  const disabledSkill = {
+    id: "idle-watcher",
+    name: "Idle Watcher",
+    mode: "background",
+    enabled: false,
+    schedule: { periodInMinutes: 60, prompt: "Watch idle" },
+  };
+
+  const catalogue: any[] = composeSettingsTemplateCatalogue([enabledSkill, disabledSkill]);
+  assertEquals(catalogue.some((t: any) => t?.id === "active-watcher"), false, "already-enabled skill must not be offered in Add gallery");
+  assertEquals(catalogue.some((t: any) => t?.id === "idle-watcher"), true, "disabled skill must be offered in Add gallery");
+  assertEquals(catalogue.some((t: any) => t?.id === "chief-of-staff"), true, "curated templates must always be offered");
+});
+
+Deno.test("Settings Add handler maps background template prompt to schedule.task and handles scheduleError (66avy/72omn)", async () => {
+  class StubEl {
+    tagName: string;
+    attributes = new Map<string, string>();
+    children: StubEl[] = [];
+    hidden = false;
+    templates: any[] = [];
+    id = "";
+    className = "";
+    type = "";
+    textContent = "";
+    disabled = false;
+    eventListeners = new Map<string, Function[]>();
+    constructor(tag: string) { this.tagName = tag.toUpperCase(); }
+    setAttribute(n: string, v: string) { this.attributes.set(n, String(v)); }
+    getAttribute(n: string) { return this.attributes.get(n) ?? null; }
+    removeAttribute(n: string) { this.attributes.delete(n); }
+    replaceChildren(...nodes: StubEl[]) { this.children = [...nodes]; }
+    append(...nodes: StubEl[]) { this.children.push(...nodes); }
+    appendChild(node: StubEl) { this.children.push(node); return node; }
+    addEventListener(event: string, fn: Function) {
+      const list = this.eventListeners.get(event) ?? [];
+      list.push(fn);
+      this.eventListeners.set(event, list);
+    }
+    dispatchEvent(ev: any) {
+      const type = typeof ev === "string" ? ev : ev?.type;
+      const list = this.eventListeners.get(type) ?? [];
+      for (const fn of list) fn(ev);
+      return true;
+    }
+    querySelector(sel: string): StubEl | null {
+      for (const child of this.children) {
+        if (sel === "agent-template-gallery" && child.tagName === "AGENT-TEMPLATE-GALLERY") return child;
+        if (sel === "button" && child.tagName === "BUTTON") return child;
+        if (sel.includes("button.primary") && child.tagName === "BUTTON" && child.className.includes("primary")) return child;
+        if (sel.startsWith("#") && child.id === sel.slice(1)) return child;
+        if (sel.startsWith(".") && child.className.includes(sel.slice(1))) return child;
+        const found = child.querySelector(sel);
+        if (found) return found;
+      }
+      return null;
+    }
+  }
+
+  const host = new StubEl("div");
+  host.id = "background-agent-add";
+  const root = new StubEl("section");
+  root.id = "agents";
+  root.append(host);
+
+  const prevDoc = (globalThis as any).document;
+  (globalThis as any).document = {
+    createElement: (tag: string) => new StubEl(tag),
+  };
+
+  try {
+    const sentMessages: any[] = [];
+    const flashes: string[] = [];
+
+    const customSend = async (type: string, payload: any = {}) => {
+      sentMessages.push({ type, ...payload });
+      if (type === "named-agent.create") {
+        return { ok: true, agent: { id: "tab-janitor", name: payload.name }, scheduleError: "alarm registration delayed" };
+      }
+      return { ok: true };
+    };
+    const customBoundedSend = async (type: string) => {
+      if (type === "named-agent.list") return { agents: [] };
+      return { ok: true };
+    };
+
+    const ctx = createPanelContext({
+      root: root as any,
+      send: customSend,
+      boundedSend: customBoundedSend,
+      saveFlash: (msg: string) => flashes.push(msg),
+    });
+
+    renderBackgroundAgentPicker([], ctx);
+
+    const gallery = host.querySelector("agent-template-gallery");
+    assert(gallery, "gallery must exist");
+
+    // Select tab-janitor (a background template with periodInMinutes and prompt)
+    gallery.dispatchEvent({ type: "use", detail: { id: "tab-janitor" } });
+
+    // Click Add button
+    const addBtn = host.querySelector("button");
+    const clickFns = (addBtn as any).eventListeners.get("click") ?? [];
+    for (const fn of clickFns) {
+      await fn({ type: "click" });
+    }
+
+    // 66avy: Assert named-agent.create was sent with schedule.task mapped from template prompt
+    const createMsg = sentMessages.find((m) => m.type === "named-agent.create");
+    assert(createMsg, "named-agent.create must be sent");
+    assertEquals(createMsg.name, "Tab Janitor");
+    assert(createMsg.schedule, "schedule must be present in create message");
+    assertEquals(createMsg.schedule.periodInMinutes, 120);
+    assertEquals(
+      createMsg.schedule.task,
+      "Do your scheduled hygiene pass: dedupe tabs, close stale ones, group by domain — then report what you did.",
+    );
+
+    // 72omn: Assert scheduleError is surfaced in flash message
+    assert(
+      flashes.some((f) => f.includes("Tab Janitor added, but its schedule was not created: alarm registration delayed.")),
+      `flash must surface scheduleError, got: ${JSON.stringify(flashes)}`,
+    );
+  } finally {
+    (globalThis as any).document = prevDoc;
   }
 });
 
