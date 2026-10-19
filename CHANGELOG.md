@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.725] — 2026-10-19
+- Developer builds now show which branch they came from on the About page, and landing the same batch twice can no longer create two releases.
+- Dev builds now name their branch in the About page, and release identity is assigned once per build.
+
 ## [0.3.724] — 2026-10-16
 - Backups of many small files spend less time waiting for OPFS opens; archive content and chunked memory behavior remain unchanged.
 
