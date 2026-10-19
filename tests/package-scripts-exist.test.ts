@@ -19,6 +19,9 @@
 // names and drifted; the repo refuses that shape for test* scripts (the
 // build/build:debug and package/package:store pairs are named variants with
 // their own identity and stay out of this check's scope).
+// chrome-agent-platform-dyfbf: the comparison resolves pure `npm run <name>`
+// indirection aliases one level first — a wrapper around an existing runner is
+// the same second-name drift in a different coat.
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
@@ -51,6 +54,16 @@ function duplicateCommands(cmds: string[]): boolean {
     seen.add(key);
   }
   return false;
+}
+
+/** A test* script that is EXACTLY `npm run <name>` (no args, no chaining) is a
+ * pure alias: resolve it one level to the target script's command so the
+ * duplicate runner check sees through the indirection (dyfbf). Anything else —
+ * extra args, a && chain, an unknown target — resolves to itself. */
+function resolveTestCommand(cmd: string, scripts: Record<string, string>): string {
+  const m = cmd.match(/^npm run (\S+)$/);
+  if (!m) return cmd;
+  return scripts[m[1]!] ?? cmd;
 }
 
 const exists = (rel: string) => {
@@ -94,15 +107,26 @@ Deno.test("i845: no two test* npm scripts run the same command (alias drift, cf.
   assertEquals(duplicateCommands(["a b", "a b"]), true, "detector sees identical commands");
   assertEquals(duplicateCommands(["a b", " a b "]), true, "detector ignores surrounding whitespace");
   assertEquals(duplicateCommands(["a b", "a c", "b b"]), false, "distinct commands are not duplicates");
+  // chrome-agent-platform-dyfbf: an indirection alias is the same drift with a
+  // wrapper — `"test:quick": "npm run test:changed"` is two npm names for one
+  // runner while its VALUE differs from every other script, so the raw string
+  // comparison passed it. A test* script whose ENTIRE value is `npm run <name>`
+  // (single step — no chaining, no extra args) is an alias: resolve it one level
+  // to the target's command before comparing. Multi-step chains (test:all,
+  // test:kat) do real work of their own and stay as-is.
+  assertEquals(resolveTestCommand("npm run test:changed", { "test:changed": "node scripts/select-tests.mjs" }), "node scripts/select-tests.mjs", "single-step npm run resolves to the target command");
+  assertEquals(resolveTestCommand("npm run test:changed -- --quiet", {}), "npm run test:changed -- --quiet", "extra args are not a pure alias");
+  assertEquals(resolveTestCommand("npm run a && npm run b", {}), "npm run a && npm run b", "a chain is not a pure alias");
+  assertEquals(resolveTestCommand("npm run missing", { }), "npm run missing", "an unknown target resolves to itself");
   const byCmd = new Map<string, string[]>();
   for (const [name, cmd] of Object.entries(scripts)) {
     if (!name.startsWith("test")) continue;
-    const key = cmd.trim();
+    const key = resolveTestCommand(cmd.trim(), scripts);
     byCmd.set(key, [...(byCmd.get(key) ?? []), name]);
   }
   const dups = [...byCmd.entries()].filter(([, names]) => names.length > 1)
     .map(([cmd, names]) => `${names.join(" / ")} → ${cmd}`);
-  assertEquals(dups, [], "test* scripts must have distinct commands — keep one name per runner");
+  assertEquals(dups, [], "test* scripts must have distinct resolved commands — keep one name per runner, direct or aliased");
 });
 
 Deno.test("i845: test:all starts with a real gate — nothing checks the retired task file's layout any more", () => {
