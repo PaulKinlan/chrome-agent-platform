@@ -15,6 +15,7 @@
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { scanShippedJs } from "../scripts/scan-shipped.mjs";
+import { collectProductSources, auditStaticFirst } from "./helpers/emscripten-static-first-audit.mjs";
 
 const hex = (bytes) => [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
@@ -57,6 +58,29 @@ Deno.test("wasm static/RHC boundary: no route, execution, owner, OPFS, network o
   assert(dynamic.some((row) => row.includes("dynamic WebAssembly")));
   const fetched = await scanShippedJs(["fetch.js"], { readText: async () => 'fetch("https://evil.test/x.wasm")' });
   assert(fetched.some((row) => row.includes("network Wasm")));
+});
+
+// wjrgk: reuse this already-always-on source guard rather than editing the
+// selector's own machinery (which correctly turns a fast gate into a full one).
+// The deliberately injected source is IN MEMORY, never left in the repo.
+Deno.test("static-first: CAP-authored Emscripten source cannot install a dynamic linker", async () => {
+  const worker = "extension/lib/emscripten-worker.js";
+  const sources = await collectProductSources(new URL("../", import.meta.url));
+  assert(sources.size > 300, `source audit vacuous: ${sources.size} modules`);
+  for (const anchor of [worker, "extension/lib/emscripten-run-broker.js", "extension/lib/wasm-package-authority.js"]) {
+    assert(sources.has(anchor), `product source anchor absent: ${anchor}`);
+  }
+  assertEquals(auditStaticFirst(sources), []);
+  const mutated = new Map(sources);
+  mutated.set(worker, `${sources.get(worker)}\nModule["dynamicLibraries"] = []; loadDylibs();\n`);
+  assert(auditStaticFirst(mutated).some((row) => row === `${worker}:dynamicLibraries`), "dynamic library knob must trip");
+  assert(auditStaticFirst(mutated).some((row) => row === `${worker}:loadDylibs`), "dynamic linker call must trip");
+  const hooks = new Map([[worker, 'Module["instantiateWasm"] = () => {}; Module.locateFile = () => {};']]);
+  assertEquals(auditStaticFirst(hooks), [
+    `${worker}:Module-hook`, `${worker}:Module-hook`, `${worker}:instantiateWasm`, `${worker}:locateFile`,
+  ].sort(), "Module hooks cannot install an unreviewed byte source");
+  assertEquals(auditStaticFirst(new Map([[worker, "// loadDylibs and dynamicLibraries remain unsupported\n"]])), [],
+    "a negation comment is not an executable path");
 });
 
 // The per-tool SBOM identity was unpinned (chrome-agent-platform-10z9): the manifests are what a
