@@ -28,7 +28,14 @@ async function sweepStaleOrphanDirs() {
   try {
     for await (const entry of Deno.readDir(root)) {
       if (entry.isDirectory && entry.name.startsWith("1k2a-parallel-")) {
-        const m = /^1k2a-parallel-[^-]+-(\d+)-/.exec(entry.name);
+        // t4uvt: the fixture LABEL is multi-segment ("orphan-test", "residual-test"),
+        // so the old `[^-]+` never matched the exact shape the 121-minute orphan
+        // left behind — the sweep skipped it silently. The label may now contain
+        // dashes; the trailing -<pid>-<8hex> tail is anchored, so the pid is always
+        // the second-to-last segment. Safety is unchanged: the pid-liveness check
+        // below is the only removal authority, and only this suite's own
+        // 1k2a-parallel-* shapes match at all.
+        const m = /^1k2a-parallel-(.+)-(\d+)-([0-9a-f]{8})$/.exec(entry.name);
         if (m) {
           const pid = Number(m[1]);
           let pidAlive = false;
@@ -58,6 +65,33 @@ async function sweepStaleOrphanDirs() {
 }
 
 await sweepStaleOrphanDirs();
+
+Deno.test("t4uvt: the stale-orphan sweep matches the REAL orphan shape, multi-segment label included", async () => {
+  // t4uvt: the reviewer's exact repro. The suite's largest fixture label is
+  // multi-segment ("orphan-test"), and the old sweep regex `[^-]+` matched only a
+  // single dash-free segment — so the EXACT directory shape the 121-minute orphan
+  // left behind was never swept, while a synthetic single-segment dir was. A
+  // genuinely dead pid (a child that has already exited) is the sweep's only
+  // removal authority; a live pid's dir is never touched.
+  const root = durableRoot();
+  const child = new Deno.Command("sh", { args: ["-c", "exit 0"] }).spawn();
+  const deadPid = child.pid;
+  await child.status;
+  const multi = `${root}/1k2a-parallel-orphan-test-${deadPid}-deadbeef`;
+  const single = `${root}/1k2a-parallel-foo-${deadPid}-deadbeef`;
+  await Deno.mkdir(multi, { recursive: true });
+  await Deno.mkdir(single, { recursive: true });
+  try {
+    await sweepStaleOrphanDirs();
+    assertEquals(await Deno.stat(multi).then(() => false, () => true), true,
+      `the multi-segment orphan shape must be swept: ${multi}`);
+    assertEquals(await Deno.stat(single).then(() => false, () => true), true,
+      `the single-segment shape must still be swept: ${single}`);
+  } finally {
+    await Deno.remove(multi, { recursive: true }).catch(() => {});
+    await Deno.remove(single, { recursive: true }).catch(() => {});
+  }
+});
 
 /**
  * Pure scale factor calculation given machine load and CPU count (chrome-agent-platform-v6kut).
