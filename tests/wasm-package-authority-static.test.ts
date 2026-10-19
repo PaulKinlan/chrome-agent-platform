@@ -136,6 +136,7 @@ Deno.test("static-first: the walked JS file set matches the documented scope", a
     ["extension", "lib", "entry.js"], ["extension", "lib", "vendor", "third.mjs"],
     ["extension", "lib", "legacy.cjs"], ["extension", "lib", "evidence", "gen.js"],
     ["packages", "pkg", "src", "entry.js"],
+    ["packages", "bundled", "sqlite3", "host", "probe.mjs"],
   ].map((segments) => segments.join("/"));
   const excluded = [
     ["extension", "dist", "gen.js"], ["extension", "lib", "deep", "dist", "gen.js"],
