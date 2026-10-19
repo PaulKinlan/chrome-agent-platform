@@ -96,6 +96,15 @@ async function main(): Promise<Check[]> {
     if (distMarker.commit !== sourceCommit) throw new Error("production bundle is not bound to this KAT's exact source commit — rebuild first");
     binary = resolveChromiumBinary();
     chrome = await launchChrome({ extension: EXT, profile, binary, windowSize: "1400,900", clearEnv: true,
+      // 67xdt: since f51b27c8a the hub send handler awaits
+      // chrome.permissions.request({tabs, tabGroups}) on EVERY send; headless
+      // Chrome can never answer that native prompt, so the handler hangs and
+      // the run never starts (live evidence: threadTitle stuck at "Task",
+      // run.list empty, zero provider requests). The repo's one answer is the
+      // profile-seeded grant (chrome-launch.ts seedGrantedPermissions, the
+      // demo-path journey's own pattern): with tabs+tabGroups already granted,
+      // request() settles immediately and the send reaches the run.
+      grantPermissions: ["tabs", "tabGroups"],
       env: Deno.env.get("FLEET_LANE") ? { FLEET_LANE: Deno.env.get("FLEET_LANE")! } : {} });
     cdp = await openCdp(chrome.wsUrl);
     const sw = await cdp.serviceWorker({ match: SW_MATCH, timeoutMs: 20000 });
