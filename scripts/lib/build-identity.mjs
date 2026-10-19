@@ -1,35 +1,41 @@
-// scripts/lib/build-identity.mjs — chrome-agent-platform-x0vas: a dev build knows
-// WHICH branch produced it. With the per-commit version hook gone, the version in
-// the tree is the LAST LANDED version on every dev build, so two loaded worktrees
-// would be indistinguishable on the About page. The build writes
-// `dist/build-identity.json` { branch, commit } into the staged tree BEFORE the
-// dist.complete marker, so the identity is a hashed output: same commit + same
-// branch = same bytes (validate-or-build reuse holds); a different branch at the
-// same commit rebuilds — the honest cost of an identity that differs.
+// scripts/lib/build-identity.mjs — chrome-agent-platform-x0vas: the NODE side of
+// the build identity. The RULE (what counts as landed, how the label renders) is
+// single-sourced in extension/lib/dev-build-identity.js (chrome-agent-platform-4169y)
+// and re-exported here so every node caller renders through the same code the
+// extension bundles. This module only adds what node needs and the extension
+// cannot have: the git reads. Both accept an injectable `run` so build.mjs can
+// pass its BOUNDED child runner (fnmr) — the default execFileSync exists for
+// tests and one-shot scripts, never for the build path.
+//
+// A build must never fail over identity: every read resolves to null on any
+// git failure (sanitized env, odd worktree, timeout).
 
 import { execFileSync } from "node:child_process";
 
-/** The current git branch, or null when git is unavailable (sanitized env).
- *  A build must never fail over identity. */
-export function currentGitBranch(root, run = (args) => execFileSync("git", args, { cwd: root, encoding: "utf8" })) {
+export { devVersionLabel, isLandedBranch } from "../../extension/lib/dev-build-identity.js";
+
+/** Run one git arg vector, resolving to its trimmed stdout or null. The
+ *  injectable `run` may be sync or async; both are awaited. A null/undefined
+ *  result (bounded-runner failure) stays null — never the string "null". */
+async function gitOut(root, args, run) {
+  const doRun = run ?? ((a) => execFileSync("git", a, { cwd: root, encoding: "utf8" }));
   try {
-    return String(run(["rev-parse", "--abbrev-ref", "HEAD"])).trim() || null;
+    const out = await doRun(args);
+    if (out === null || out === undefined) return null;
+    return String(out).trim() || null;
   } catch {
     return null;
   }
 }
 
-/** A LANDED build: no branch, or a tracking/landed ref. Anything else is dev. */
-export function isLandedBranch(branch) {
-  if (!branch) return true;
-  const b = String(branch);
-  return b === "main" || b === "master" || b.startsWith("origin/");
+/** The current git branch ("--abbrev-ref HEAD"), or null when git is
+ *  unavailable. A detached checkout reports "HEAD" (the caller decides what
+ *  that renders as — see isLandedBranch/devVersionLabel). */
+export async function currentGitBranch(root, run) {
+  return gitOut(root, ["rev-parse", "--abbrev-ref", "HEAD"], run);
 }
 
-/** The full About-page version label: "v1.2.3" on a landed build, else
- *  "v1.2.3 (fleet/imp-stack)". Absent version → "" (leave the placeholder). */
-export function devVersionLabel(version, branch) {
-  if (!version) return "";
-  if (isLandedBranch(branch)) return `v${version}`;
-  return `v${version} (${branch})`;
+/** The current git commit (short form), or null when git is unavailable. */
+export async function currentGitCommit(root, run) {
+  return gitOut(root, ["rev-parse", "--short", "HEAD"], run);
 }
