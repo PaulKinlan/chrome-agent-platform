@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.730] — 2026-10-20
+- Settings now recovers if the agents panel fails to load on the first attempt, instead of staying unusable until the page is reloaded.
+
 ## [0.3.729] — 2026-10-20
 - Settings options bundle now dynamically loads the agents panel on demand, improving load performance and bundle headroom.
 - Settings now loads the agents panel on demand, so the settings page opens faster.
