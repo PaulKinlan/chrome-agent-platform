@@ -61,6 +61,15 @@ export const INDEXED_SOURCE_EXCLUDED_PATHS = Object.freeze(new Set([
   "docs/diff-core.bundle.js",
 ]));
 
+/**
+ * Hard bound on emitted dynamic chunk count (chunks/*.js in dist/chunks/).
+ * Ratcheted to 15 in chrome-agent-platform-5irv6 after code-splitting the Settings
+ * agents panel into on-demand dynamic chunks.
+ * - Pre-split baseline: 7 chunks (557,701 B aggregate)
+ * - Post-split measurement: 13 chunks (615,237 B aggregate vs 750,000 B aggregate budget)
+ * - Headroom: bound 15 provides +2 spare chunk slots for future dynamic code-splitting
+ *   while failing closed against chunk proliferation or accidental bundle fragmentation.
+ */
 export const MAX_CHUNK_COUNT = 15;
 export const MAX_CHUNK_FILE_BYTES = 500 * 1024;
 export const CHUNK_PATH_RE = /^chunks\/[a-zA-Z0-9._-]+\.js$/u;
