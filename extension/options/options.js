@@ -39,11 +39,25 @@ import {
   mount as mountToolLibraryPanel,
 } from "./panels/tool-library.js";
 import "./panels/skills.js";
-import {
-  hydrateAgentsHeavyLists as hydrateAgentsHeavyListsPanel,
-  renderSiteToolConsents as renderSiteToolConsentsPanel,
-  mount as mountAgentsPanel,
-} from "./panels/agents.js";
+let agentsModulePromise = null;
+function getAgentsModule() {
+  return (agentsModulePromise ??= import("./panels/agents.js"));
+}
+
+async function mountAgentsPanel(root, ctx) {
+  const mod = await getAgentsModule();
+  return mod.mount(root, ctx);
+}
+
+async function renderSiteToolConsentsPanel(options, ctx) {
+  const mod = await getAgentsModule();
+  return mod.renderSiteToolConsents(options, ctx);
+}
+
+async function hydrateAgentsHeavyListsPanel(ctx) {
+  const mod = await getAgentsModule();
+  return mod.hydrateAgentsHeavyLists(ctx);
+}
 import {
   syncBrowserGrantState,
   renderActionPolicy as renderActionPolicyPanel,

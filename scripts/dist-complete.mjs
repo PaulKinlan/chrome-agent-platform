@@ -61,7 +61,7 @@ export const INDEXED_SOURCE_EXCLUDED_PATHS = Object.freeze(new Set([
   "docs/diff-core.bundle.js",
 ]));
 
-export const MAX_CHUNK_COUNT = 10;
+export const MAX_CHUNK_COUNT = 15;
 export const MAX_CHUNK_FILE_BYTES = 500 * 1024;
 export const CHUNK_PATH_RE = /^chunks\/[a-zA-Z0-9._-]+\.js$/u;
 

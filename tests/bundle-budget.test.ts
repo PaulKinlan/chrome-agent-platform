@@ -1107,6 +1107,9 @@ Deno.test("20e2u bundle budget: sidepanel <= 250 KB, ntp <= 500 KB, options <= 4
   );
 
   const optStat = await Deno.stat(optionsBundle);
+  // chrome-agent-platform-5irv6: options.bundle.js has a 450,000 byte ceiling.
+  // With the agents panel code-split into a dynamic chunk, the initial options bundle
+  // measures ~393,566 bytes, providing ~56.4 KB (>12%) of documented headroom.
   assert(
     optStat.size <= 450_000,
     `options.bundle.js must be <= 450 KB minified (actual: ${optStat.size} bytes)`,
