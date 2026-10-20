@@ -69,21 +69,42 @@ Deno.test("2kwan retryable agents-chunk import: options.js clears cached promise
     "options.js must dynamically import ./panels/agents.js",
   );
   assert(
-    JS.includes("agentsModulePromise = null;"),
-    "options.js must reset agentsModulePromise to null on rejection so chunk load failures are retryable",
+    /catch\s*\(\(?\w*\)?\s*=>\s*\{\s*agentsModulePromise\s*=\s*null;\s*throw\s+\w+;\s*\}\)/.test(JS),
+    "options.js must reset agentsModulePromise to null inside the .catch block and rethrow so chunk load failures are retryable",
   );
 });
 
 Deno.test("u3pmj retryable lazy dynamic imports: web-services.js and ntp.js clear cached promises on rejection", async () => {
   const webServicesJs = await Deno.readTextFile("extension/options/panels/web-services.js");
   assert(
-    webServicesJs.includes('import("./vault-quotas.js")') && webServicesJs.includes("quotaUiPromise = null;"),
-    "web-services.js must reset quotaUiPromise to null on rejection so quota UI chunk load failures are retryable",
+    webServicesJs.includes('import("./vault-quotas.js")'),
+    "web-services.js must dynamically import ./vault-quotas.js",
+  );
+  assert(
+    /catch\s*\(\(?\w*\)?\s*=>\s*\{\s*quotaUiPromise\s*=\s*null;\s*throw\s+\w+;\s*\}\)/.test(webServicesJs),
+    "web-services.js must reset quotaUiPromise to null inside the .catch block and rethrow so quota UI chunk load failures are retryable",
   );
   const ntpJs = await Deno.readTextFile("extension/ntp/ntp.js");
   assert(
-    ntpJs.includes("settingsViewModulePromise = null;") && ntpJs.includes("settingsViewModulePromise = import(url).catch"),
-    "ntp.js must reset settingsViewModulePromise to null on rejection so settings view module load failures are retryable",
+    /import\(url\)\.catch\s*\(\(?\w*\)?\s*=>\s*\{\s*settingsViewModulePromise\s*=\s*null;\s*throw\s+\w+;\s*\}\)/.test(ntpJs),
+    "ntp.js must reset settingsViewModulePromise to null inside the .catch block and rethrow so settings view module load failures are retryable",
+  );
+});
+
+Deno.test("a4tw7 reload affordances: options.js, web-services.js, and ntp.js render reload affordance on chunk failure", async () => {
+  assert(
+    JS.includes("panel-load-error") && JS.includes("location.reload()"),
+    "options.js must render a reload affordance when dynamic agents panel import fails",
+  );
+  const webServicesJs = await Deno.readTextFile("extension/options/panels/web-services.js");
+  assert(
+    webServicesJs.includes("quota-load-error"),
+    "web-services.js must render a reload affordance when dynamic vault quota import fails",
+  );
+  const ntpJs = await Deno.readTextFile("extension/ntp/ntp.js");
+  assert(
+    ntpJs.includes("settings-load-error") && ntpJs.includes("location.reload()"),
+    "ntp.js must render a reload affordance when dynamic settings view import fails",
   );
 });
 

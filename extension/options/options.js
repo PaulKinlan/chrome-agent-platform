@@ -48,8 +48,19 @@ function getAgentsModule() {
 }
 
 async function mountAgentsPanel(root, ctx) {
-  const mod = await getAgentsModule();
-  return mod.mount(root, ctx);
+  try {
+    const mod = await getAgentsModule();
+    return await mod.mount(root, ctx);
+  } catch (err) {
+    if (root && !root.querySelector(".panel-load-error")) {
+      const errBox = document.createElement("div");
+      errBox.className = "panel-load-error";
+      errBox.style.cssText = "padding:24px;text-align:center;color:var(--text-muted,#888);";
+      errBox.innerHTML = `Failed to load agents panel. <button class="btn" style="margin-left:8px;" onclick="location.reload()">Reload</button>`;
+      root.append(errBox);
+    }
+    throw err;
+  }
 }
 
 async function renderSiteToolConsentsPanel(options, ctx) {

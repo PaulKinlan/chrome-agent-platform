@@ -5821,7 +5821,16 @@ function teardownHubSettingsView() {
 }
 
 async function renderHubSettingsView(sectionId, { focusHeading = false } = {}) {
-  const mod = await loadSettingsViewModule();
+  let mod;
+  try {
+    mod = await loadSettingsViewModule();
+  } catch (err) {
+    if (settingsViewEl) {
+      settingsViewEl.hidden = false;
+      settingsViewEl.innerHTML = `<div class="settings-load-error" style="padding:24px;text-align:center;color:var(--text-muted,#888)">Failed to load settings view. <button class="btn" style="margin-left:8px;" onclick="location.reload()">Reload</button></div>`;
+    }
+    throw err;
+  }
   activeSettingsViewTeardown = mod.teardownSettingsView;
   activeSettingsViewSectionId = sectionId;
   return await mod.renderSettingsView(settingsViewEl, {

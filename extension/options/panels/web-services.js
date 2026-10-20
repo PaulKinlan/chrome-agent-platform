@@ -287,8 +287,18 @@ const loadQuotaUi = () =>
 const quotaDeps = () => ({ byId, mk, send: vaultSend, rerender: renderVaultPanel });
 
 export async function renderVaultQuotas(ctx) {
-  const mod = await loadQuotaUi();
-  return mod.renderVaultQuotas(ctx, quotaDeps());
+  try {
+    const mod = await loadQuotaUi();
+    return await mod.renderVaultQuotas(ctx, quotaDeps());
+  } catch (err) {
+    const host = byId("vault-quotas") || byId("vault-summary");
+    if (host && !host.querySelector(".quota-load-error")) {
+      const errBox = mk("div", "quota-load-error", "Failed to load quota view. Reload page to retry.");
+      errBox.style.cssText = "color:var(--text-muted, #888);padding:8px 0;font-size:12px;";
+      host.append(errBox);
+    }
+    throw err;
+  }
 }
 
 function renderVaultLedger(ledgerEntries, ctx) {
