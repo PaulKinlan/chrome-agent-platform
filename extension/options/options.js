@@ -41,7 +41,10 @@ import {
 import "./panels/skills.js";
 let agentsModulePromise = null;
 function getAgentsModule() {
-  return (agentsModulePromise ??= import("./panels/agents.js"));
+  return (agentsModulePromise ??= import("./panels/agents.js").catch((err) => {
+    agentsModulePromise = null;
+    throw err;
+  }));
 }
 
 async function mountAgentsPanel(root, ctx) {

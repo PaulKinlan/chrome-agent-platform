@@ -1115,6 +1115,18 @@ Deno.test("20e2u bundle budget: sidepanel <= 250 KB, ntp <= 500 KB, options <= 4
     `options.bundle.js must be <= 450 KB minified (actual: ${optStat.size} bytes)`,
   );
 
+  // wct3m: Pin that curated template data is code-split out of the initial options bundle.
+  // If panels/agents.js is accidentally statically re-imported, curated templates appear in options.bundle.js.
+  const optionsBundleText = await Deno.readTextFile(optionsBundle);
+  assert(
+    !optionsBundleText.includes("Tab Janitor") && !optionsBundleText.includes("Chief of Staff"),
+    "options.bundle.js must not include curated template data ('Tab Janitor' / 'Chief of Staff' must remain in deferred chunks)",
+  );
+  assert(
+    optStat.size <= 410_000,
+    `options.bundle.js must retain at least 40 KB of headroom under the 450 KB ceiling after agents panel code-splitting (actual: ${optStat.size} bytes)`,
+  );
+
   const markerPath = join(repo, "extension", "dist", "dist.complete");
   const marker = JSON.parse(await Deno.readTextFile(markerPath));
   const chunks = (marker.outputs || []).filter((o: any) => o.path.startsWith("chunks/"));
