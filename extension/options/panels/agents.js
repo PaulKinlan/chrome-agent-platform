@@ -28,6 +28,8 @@ import { confirmActionDialog, deleteAgentDialog, escapeHtml } from "../../shared
 import { createPanelContext, escapeAttr, withUnmount, bindPanelCtx } from "../panel-context.js";
 import { PROVIDERS, providerCatalogue, blockSessionOnlyCredentialSave } from "./providers.js";
 
+const PROVIDERS_ATTR = escapeAttr(JSON.stringify(PROVIDERS.map((p) => ({ id: p.id, name: p.name, icon: "terminal" }))));
+
 const rootState = new WeakMap();
 
 const [ensureCtx, $, $$, byId, send, boundedSend, storage, saveFlash, on, makeUnmount, wireOnce] = bindPanelCtx("agents");
@@ -145,24 +147,17 @@ async function renderDiscoveredOpenTabs(ctx) {
   container.style.display = "block";
   const header = document.createElement("div");
   header.className = "muted small";
-  header.style.marginBottom = "8px";
-  header.style.fontWeight = "600";
+  header.style.cssText = "margin-bottom:8px;font-weight:600";
   header.textContent = "Discovered open pages — click to add as Site Agent:";
   container.appendChild(header);
 
   for (const t of unenrolled.slice(0, 5)) {
     const row = document.createElement("div");
     row.className = "origin-row";
-    row.style.display = "flex";
-    row.style.alignItems = "center";
-    row.style.justifyContent = "space-between";
-    row.style.marginBottom = "6px";
+    row.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-bottom:6px";
 
     const info = document.createElement("div");
-    info.style.overflow = "hidden";
-    info.style.textOverflow = "ellipsis";
-    info.style.whiteSpace = "nowrap";
-    info.style.marginRight = "8px";
+    info.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:8px";
 
     const titleSpan = document.createElement("span");
     titleSpan.style.fontWeight = "600";
@@ -171,8 +166,7 @@ async function renderDiscoveredOpenTabs(ctx) {
     urlSpan.className = "muted small";
     urlSpan.style.marginLeft = "8px";
     urlSpan.textContent = t.origin;
-    info.appendChild(titleSpan);
-    info.appendChild(urlSpan);
+    info.append(titleSpan, urlSpan);
     row.appendChild(info);
 
     const enrollBtn = document.createElement("button");
@@ -243,11 +237,7 @@ async function renderEnrolledSites(ctx) {
     disenroll.addEventListener("click", async () => {
       const res = await send({ type: "agent.delete", origin })
         .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-      if (res?.ok) {
-        saveFlash(`Site Agent removed for ${origin}.`);
-      } else {
-        saveFlash(`Couldn't fully remove the Site Agent for ${origin}. Try again.`);
-      }
+      saveFlash(res?.ok ? `Site Agent removed for ${origin}.` : `Couldn't fully remove the Site Agent for ${origin}. Try again.`);
       renderEnrolledSites();
       notifySiteDataChanged();
       renderSiteToolConsents({ cursor: null });
@@ -663,7 +653,6 @@ function agentProviderRowHtml(a, cur, globalCfg) {
   const baseURLDefault = needsBaseURL
     ? (cur.baseURL ?? (globalCfg?.provider === "openai-compatible" ? globalCfg.baseURL : ""))
     : "";
-  const providersAttr = escapeAttr(JSON.stringify(PROVIDERS.map((p) => ({ id: p.id, name: p.name, icon: "terminal" }))));
   const internalDisabled = selection.hiddenInternal ? "disabled" : "";
   return `
     <div class="agent-row-summary">
@@ -672,7 +661,7 @@ function agentProviderRowHtml(a, cur, globalCfg) {
         <span class="muted">${escapeHtml(a.role || "Interactive agent")}</span>
       </div>
     </div>
-    <provider-select class="ag-provider" providers="${providersAttr}" value="${escapeAttr(provider)}" label="Provider" placeholder="${selection.hiddenInternal ? "Choose a listed provider" : "Use the global provider"}"></provider-select>
+    <provider-select class="ag-provider" providers="${PROVIDERS_ATTR}" value="${escapeAttr(provider)}" label="Provider" placeholder="${selection.hiddenInternal ? "Choose a listed provider" : "Use the global provider"}"></provider-select>
     <model-picker class="ag-model" models="${escapeAttr(JSON.stringify(models))}" value="${escapeAttr(selection.hiddenInternal ? "" : (cur.model ?? ""))}" label="Model id" placeholder="${models.length ? "Search or type a model id…" : "model id"}" ${provider ? "" : "disabled"}></model-picker>
     <label class="field ag-base-url" ${needsBaseURL ? "" : "hidden"}><span class="field-label">Base URL</span><input class="agent-provider-base-url" type="text" placeholder="https://your-endpoint/v1" value="${escapeAttr(baseURLDefault)}"></label>
     <label class="field"><span class="field-label">API key (write-only)</span><input class="agent-provider-key" type="password" placeholder="${selection.hiddenInternal ? "Not used by the active internal provider" : cur.hasApiKey ? "(kept — blank keeps it)" : "…"}" autocomplete="off" title="${selection.hiddenInternal ? "Choose a listed provider before entering a key" : cur.hasApiKey ? "A saved key is kept when this field is left blank" : "API key"}" ${internalDisabled}></label>
@@ -995,15 +984,14 @@ export function uniqueAgentName(baseName, existingAgents = []) {
   );
   if (!taken.has(slugifyAgentId(clean))) return clean;
   let counter = 2;
-  while (taken.has(slugifyAgentId(`${clean} ${counter}`))) {
-    counter++;
-  }
+  while (taken.has(slugifyAgentId(`${clean} ${counter}`))) counter++;
   return `${clean} ${counter}`;
 }
 
 export function composeSettingsTemplateCatalogue(backgroundAgents = []) {
   const starterIds = new Set(STARTER_TEMPLATE_IDS);
   const backgroundTemplates = (Array.isArray(backgroundAgents) ? backgroundAgents : [])
+    .filter((a) => a && a.enabled !== true)
     .map(skillAsTemplate)
     .filter(Boolean);
   return [
@@ -1069,12 +1057,8 @@ export function renderBackgroundAgentPicker(agents, ctx) {
       add.textContent = "Add";
       return;
     }
-    const cadenceText = formatCadenceMinutes(template?.schedule?.periodInMinutes);
-    if (cadenceText || template?.schedule?.periodInMinutes) {
-      chosen.textContent = `${template.name} — runs ${cadenceText || `every ${template.schedule?.periodInMinutes ?? "?"} min`} once added.`;
-    } else {
-      chosen.textContent = `${template.name} — on-demand agent once added.`;
-    }
+    const cadence = formatCadenceMinutes(template?.schedule?.periodInMinutes);
+    chosen.textContent = `${template.name} — ${cadence ? `runs ${cadence}` : "on-demand agent"} once added.`;
     add.textContent = `Add ${template.name}`;
   });
   on(add, "click", async () => {
@@ -1106,7 +1090,13 @@ export function renderBackgroundAgentPicker(agents, ctx) {
         schedule: targetSchedule,
       }).catch((error) => ({ ok: false, error: String(error?.message ?? error) }));
     }
-    saveFlash(out?.ok ? `${addedName} added.` : `Could not add ${addedName}: ${out?.error ?? "failed"}.`);
+    saveFlash(
+      !out?.ok
+        ? `Could not add ${addedName}: ${out?.error ?? "failed"}.`
+        : out?.scheduleError
+          ? `${addedName} added, but its schedule was not created: ${out.scheduleError}.`
+          : `${addedName} added.`
+    );
     await renderUnifiedAgentSettings();
   });
   controls.append(chosen, add);
