@@ -56,7 +56,13 @@ async function mountAgentsPanel(root, ctx) {
       const errBox = document.createElement("div");
       errBox.className = "panel-load-error";
       errBox.style.cssText = "padding:24px;text-align:center;color:var(--text-muted,#888);";
-      errBox.innerHTML = `Failed to load agents panel. <button class="btn" style="margin-left:8px;" onclick="location.reload()">Reload</button>`;
+      errBox.append(document.createTextNode("Failed to load agents panel. "));
+      const btn = document.createElement("button");
+      btn.className = "btn";
+      btn.style.marginLeft = "8px";
+      btn.textContent = "Reload";
+      btn.addEventListener("click", () => location.reload());
+      errBox.append(btn);
       root.append(errBox);
     }
     throw err;

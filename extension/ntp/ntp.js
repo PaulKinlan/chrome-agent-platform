@@ -5827,7 +5827,18 @@ async function renderHubSettingsView(sectionId, { focusHeading = false } = {}) {
   } catch (err) {
     if (settingsViewEl) {
       settingsViewEl.hidden = false;
-      settingsViewEl.innerHTML = `<div class="settings-load-error" style="padding:24px;text-align:center;color:var(--text-muted,#888)">Failed to load settings view. <button class="btn" style="margin-left:8px;" onclick="location.reload()">Reload</button></div>`;
+      settingsViewEl.replaceChildren();
+      const errBox = document.createElement("div");
+      errBox.className = "settings-load-error";
+      errBox.style.cssText = "padding:24px;text-align:center;color:var(--text-muted,#888);";
+      errBox.append(document.createTextNode("Failed to load settings view. "));
+      const btn = document.createElement("button");
+      btn.className = "btn";
+      btn.style.marginLeft = "8px";
+      btn.textContent = "Reload";
+      btn.addEventListener("click", () => location.reload());
+      errBox.append(btn);
+      settingsViewEl.append(errBox);
     }
     throw err;
   }

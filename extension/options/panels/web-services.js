@@ -293,8 +293,12 @@ export async function renderVaultQuotas(ctx) {
   } catch (err) {
     const host = byId("vault-quotas") || byId("vault-summary");
     if (host && !host.querySelector(".quota-load-error")) {
-      const errBox = mk("div", "quota-load-error", "Failed to load quota view. Reload page to retry.");
+      const errBox = mk("div", "quota-load-error", "Failed to load quota view. ");
       errBox.style.cssText = "color:var(--text-muted, #888);padding:8px 0;font-size:12px;";
+      const btn = mk("button", "btn", "Reload");
+      btn.style.marginLeft = "8px";
+      btn.addEventListener("click", () => location.reload());
+      errBox.append(btn);
       host.append(errBox);
     }
     throw err;

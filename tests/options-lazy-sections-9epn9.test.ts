@@ -98,13 +98,19 @@ Deno.test("a4tw7 reload affordances: options.js, web-services.js, and ntp.js ren
   );
   const webServicesJs = await Deno.readTextFile("extension/options/panels/web-services.js");
   assert(
-    webServicesJs.includes("quota-load-error"),
+    webServicesJs.includes("quota-load-error") && webServicesJs.includes("location.reload()"),
     "web-services.js must render a reload affordance when dynamic vault quota import fails",
   );
   const ntpJs = await Deno.readTextFile("extension/ntp/ntp.js");
   assert(
     ntpJs.includes("settings-load-error") && ntpJs.includes("location.reload()"),
     "ntp.js must render a reload affordance when dynamic settings view import fails",
+  );
+  assert(
+    !JS.includes('onclick="location.reload()"') &&
+      !webServicesJs.includes('onclick="location.reload()"') &&
+      !ntpJs.includes('onclick="location.reload()"'),
+    "chunk failure reload buttons must not use inline onclick handlers (violates MV3 CSP); use addEventListener",
   );
 });
 
