@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.731] — 2026-10-20
+- Fix transient dynamic chunk load failures in NTP settings and vault quota panels by making chunk imports retryable
+- Add reload-to-retry UI affordances and exact regression pins for dynamic chunk load failures across Settings and NTP views
+- Fix CSP violations on dynamic chunk load failure reload buttons by using addEventListener instead of inline onclick
+- Route vault quota reload control through host context callbacks to maintain panel isolation
+- Failed page-section loads in Settings and NTP now offer a reload control instead of leaving a blank panel, and those controls work under the extension's security policy.
+- Reloading a vault quota panel keeps it isolated from other panels instead of re-rendering the whole page.
+
 ## [0.3.730] — 2026-10-20
 - Settings now recovers if the agents panel fails to load on the first attempt, instead of staying unusable until the page is reloaded.
 
