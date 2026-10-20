@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.728] — 2026-10-20
+- Settings template addition now surfaces recurring schedule creation warnings and excludes already-enabled background skills from the Add gallery.
+- Adding a template in Settings now warns you when its recurring schedule could not be created, and already-enabled background skills are no longer offered again.
+
 ## [0.3.727] — 2026-10-19
 - Settings now displays the full curated agent template catalogue so users can browse and add starter templates directly.
 - Settings template agent instantiation now preserves recurring background schedules and avoids overwriting existing named agents.
