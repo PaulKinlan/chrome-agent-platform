@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.729] — 2026-10-20
+- Settings options bundle now dynamically loads the agents panel on demand, improving load performance and bundle headroom.
+- Settings now loads the agents panel on demand, so the settings page opens faster.
+
 ## [0.3.728] — 2026-10-20
 - Settings template addition now surfaces recurring schedule creation warnings and excludes already-enabled background skills from the Add gallery.
 - Adding a template in Settings now warns you when its recurring schedule could not be created, and already-enabled background skills are no longer offered again.
