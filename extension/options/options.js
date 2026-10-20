@@ -48,8 +48,25 @@ function getAgentsModule() {
 }
 
 async function mountAgentsPanel(root, ctx) {
-  const mod = await getAgentsModule();
-  return mod.mount(root, ctx);
+  try {
+    const mod = await getAgentsModule();
+    return await mod.mount(root, ctx);
+  } catch (err) {
+    if (root && !root.querySelector(".panel-load-error")) {
+      const errBox = document.createElement("div");
+      errBox.className = "panel-load-error";
+      errBox.style.cssText = "padding:24px;text-align:center;color:var(--text-muted,#888);";
+      errBox.append(document.createTextNode("Failed to load agents panel. "));
+      const btn = document.createElement("button");
+      btn.className = "btn";
+      btn.style.marginLeft = "8px";
+      btn.textContent = "Reload";
+      btn.addEventListener("click", () => location.reload());
+      errBox.append(btn);
+      root.append(errBox);
+    }
+    throw err;
+  }
 }
 
 async function renderSiteToolConsentsPanel(options, ctx) {
@@ -196,6 +213,11 @@ const sectionContexts = new Map();
 const devRendered = new Set();
 
 const hostCallbacks = {
+  reload: () => {
+    if (typeof location !== "undefined" && typeof location.reload === "function") {
+      location.reload();
+    }
+  },
   admissionHostReady,
   onDiagnosticsRevision: () => {
     refreshDiagnostics().catch(() => {});

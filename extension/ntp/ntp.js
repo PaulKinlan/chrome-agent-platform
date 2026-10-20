@@ -5796,7 +5796,10 @@ function loadSettingsViewModule() {
     const url = typeof chrome !== "undefined" && typeof chrome.runtime?.getURL === "function"
       ? chrome.runtime.getURL("dist/settings-view.bundle.js")
       : "../options/settings-view.js";
-    settingsViewModulePromise = import(url);
+    settingsViewModulePromise = import(url).catch((err) => {
+      settingsViewModulePromise = null;
+      throw err;
+    });
   }
   return settingsViewModulePromise;
 }
@@ -5818,7 +5821,27 @@ function teardownHubSettingsView() {
 }
 
 async function renderHubSettingsView(sectionId, { focusHeading = false } = {}) {
-  const mod = await loadSettingsViewModule();
+  let mod;
+  try {
+    mod = await loadSettingsViewModule();
+  } catch (err) {
+    if (settingsViewEl) {
+      settingsViewEl.hidden = false;
+      settingsViewEl.replaceChildren();
+      const errBox = document.createElement("div");
+      errBox.className = "settings-load-error";
+      errBox.style.cssText = "padding:24px;text-align:center;color:var(--text-muted,#888);";
+      errBox.append(document.createTextNode("Failed to load settings view. "));
+      const btn = document.createElement("button");
+      btn.className = "btn";
+      btn.style.marginLeft = "8px";
+      btn.textContent = "Reload";
+      btn.addEventListener("click", () => location.reload());
+      errBox.append(btn);
+      settingsViewEl.append(errBox);
+    }
+    throw err;
+  }
   activeSettingsViewTeardown = mod.teardownSettingsView;
   activeSettingsViewSectionId = sectionId;
   return await mod.renderSettingsView(settingsViewEl, {

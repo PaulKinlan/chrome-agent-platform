@@ -278,13 +278,37 @@ const mk = (tag, cls, text, style) => {
 // and options.bundle.js has a hard 450 KB budget. The promise is memoised so every entry point shares one
 // fetch, and renderVaultQuotas is awaited during the initial render, so the chunk is loaded before any
 // control it owns can be clicked.
-let quotaUiPromise;
-const loadQuotaUi = () => (quotaUiPromise ??= import("./vault-quotas.js"));
+let quotaUiPromise = null;
+const loadQuotaUi = () =>
+  (quotaUiPromise ??= import("./vault-quotas.js").catch((err) => {
+    quotaUiPromise = null;
+    throw err;
+  }));
 const quotaDeps = () => ({ byId, mk, send: vaultSend, rerender: renderVaultPanel });
 
 export async function renderVaultQuotas(ctx) {
-  const mod = await loadQuotaUi();
-  return mod.renderVaultQuotas(ctx, quotaDeps());
+  try {
+    const mod = await loadQuotaUi();
+    return await mod.renderVaultQuotas(ctx, quotaDeps());
+  } catch (err) {
+    const host = byId("vault-quotas") || byId("vault-summary");
+    if (host && !host.querySelector(".quota-load-error")) {
+      const errBox = mk("div", "quota-load-error", "Failed to load quota view. ");
+      errBox.style.cssText = "color:var(--text-muted, #888);padding:8px 0;font-size:12px;";
+      const btn = mk("button", "btn", "Reload");
+      btn.style.marginLeft = "8px";
+      btn.addEventListener("click", () => {
+        if (typeof ctx?.callbacks?.reload === "function") {
+          ctx.callbacks.reload();
+        } else {
+          renderVaultPanel(ctx);
+        }
+      });
+      errBox.append(btn);
+      host.append(errBox);
+    }
+    throw err;
+  }
 }
 
 function renderVaultLedger(ledgerEntries, ctx) {
