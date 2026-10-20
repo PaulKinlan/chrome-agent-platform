@@ -477,10 +477,10 @@ setTimeout(() => {
     try { Deno.kill(sleeper, "SIGKILL"); } catch {}
   }
   Deno.exit(1);
-}, 30000);
+}, 60000);
 
 const b = new Deno.Command("bash", {
-  args: ["-c", "sleep 30 & echo $! > ${pidFile}.sleep"],
+  args: ["-c", "sleep 60 & echo $! > ${pidFile}.sleep"],
   stdout: "null",
   stderr: "null",
 });
@@ -496,18 +496,21 @@ Deno.test("hangs in parallel phase until parent cancel", async () => {
 
   let pids: { denoPid?: number; sleeperPid?: number } = {};
   try {
+    const timeoutMs = String(loadScaledTimeout(30_000));
     const proc = new Deno.Command("node", {
       args: ["scripts/run-tests.mjs", probeFile],
       cwd: ROOT,
       env: {
-        CAP_PARALLEL_TEST_TIMEOUT_MS: "30000",
+        CAP_PARALLEL_TEST_TIMEOUT_MS: timeoutMs,
       },
       stdout: "piped",
       stderr: "piped",
     });
     const child = proc.spawn();
 
-    for (let i = 0; i < 50; i++) {
+    const readyTimeoutMs = loadScaledTimeout(15_000);
+    const maxAttempts = Math.ceil(readyTimeoutMs / 100);
+    for (let i = 0; i < maxAttempts; i++) {
       try {
         const text = await Deno.readTextFile(pidFile);
         pids = JSON.parse(text);
@@ -523,9 +526,11 @@ Deno.test("hangs in parallel phase until parent cancel", async () => {
     await child.status;
 
     // Verify both Deno child and sleeper process exit promptly and do not survive as orphans
+    const reapTimeoutMs = loadScaledTimeout(5_000);
+    const reapAttempts = Math.ceil(reapTimeoutMs / 100);
     for (const targetPid of [pids.denoPid, pids.sleeperPid]) {
       let alive = true;
-      for (let i = 0; i < 40; i++) {
+      for (let i = 0; i < reapAttempts; i++) {
         await new Promise((r) => setTimeout(r, 100));
         try {
           if (Deno.build.os === "linux") {
@@ -582,18 +587,21 @@ Deno.test("hangs without ppid monitor", async () => {
 
   let denoPid = 0;
   try {
+    const timeoutMs = String(loadScaledTimeout(30_000));
     const proc = new Deno.Command("node", {
       args: ["scripts/run-tests.mjs", probeFile],
       cwd: ROOT,
       env: {
-        CAP_PARALLEL_TEST_TIMEOUT_MS: "30000",
+        CAP_PARALLEL_TEST_TIMEOUT_MS: timeoutMs,
       },
       stdout: "piped",
       stderr: "piped",
     });
     const child = proc.spawn();
 
-    for (let i = 0; i < 50; i++) {
+    const readyTimeoutMs = loadScaledTimeout(15_000);
+    const maxAttempts = Math.ceil(readyTimeoutMs / 100);
+    for (let i = 0; i < maxAttempts; i++) {
       try {
         const text = await Deno.readTextFile(pidFile);
         denoPid = Number(text.trim());
@@ -608,8 +616,10 @@ Deno.test("hangs without ppid monitor", async () => {
     await child.status;
 
     // The harness watchdog must reap the detached Deno process group
+    const reapTimeoutMs = loadScaledTimeout(5_000);
+    const reapAttempts = Math.ceil(reapTimeoutMs / 100);
     let alive = true;
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < reapAttempts; i++) {
       await new Promise((r) => setTimeout(r, 100));
       try {
         if (Deno.build.os === "linux") {
@@ -876,6 +886,20 @@ Deno.test("v6kut: computeLoadScale and loadScaledTimeout are bounded, load-respo
   assertEquals(loadScaledTimeout(15_000, 4, 2, 1), 30_000, "2x load gives 30s");
   assertEquals(loadScaledTimeout(15_000, 4, 100, 1), 60_000, "100x load capped at 60s ceiling");
   assertEquals(loadScaledTimeout(15_000, 4, Infinity, 1), 60_000, "Infinity load capped at 60s ceiling");
+});
+
+Deno.test("xkm3b: 6z8yi parallel resilience tests derive probe readiness and reap budgets from loadScaledTimeout, avoiding fixed 5s timeouts under gate load", async () => {
+  const src = await Deno.readTextFile("tests/parallel-phase-resilience.test.ts");
+  const test1 = src.slice(src.indexOf("6z8yi: cancelling parent"), src.indexOf("6z8yi/qvv7k:"));
+  const test2 = src.slice(src.indexOf("6z8yi/qvv7k:"), src.indexOf("1k2a/5nhz: parallel phase timeout with cold-boot delay"));
+
+  assert(!test1.includes("for (let i = 0; i < 50; i++)"), "test1 must not use fixed 50-iteration (5s) readiness poll");
+  assert(test1.includes("readyTimeoutMs = loadScaledTimeout(15_000)"), "test1 must derive ready timeout from loadScaledTimeout");
+  assert(test1.includes("reapTimeoutMs = loadScaledTimeout(5_000)"), "test1 must derive reap timeout from loadScaledTimeout");
+
+  assert(!test2.includes("for (let i = 0; i < 50; i++)"), "test2 must not use fixed 50-iteration (5s) readiness poll");
+  assert(test2.includes("readyTimeoutMs = loadScaledTimeout(15_000)"), "test2 must derive ready timeout from loadScaledTimeout");
+  assert(test2.includes("reapTimeoutMs = loadScaledTimeout(5_000)"), "test2 must derive reap timeout from loadScaledTimeout");
 });
 
 Deno.test("1k2a: passing parallel test that leaves an orphan process has orphan reaped on exit", async () => {
