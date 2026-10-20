@@ -138,12 +138,12 @@ Deno.test("20e2u condition (a): validateDistCompleteMarker fails closed on tampe
   }
 });
 
-Deno.test("20e2u condition (a): chunk bounds enforced (count <= 10, size <= 500KB)", async () => {
+Deno.test("20e2u condition (a): chunk bounds enforced (count <= 15, size <= 500KB)", async () => {
   const tmp = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-chunk-test-" });
   const dist = `${tmp}/dist`;
   try {
-    // 1. More than 10 chunks fails closed
-    const overflowChunks = Array.from({ length: 11 }, (_, i) => ({
+    // 1. More than 15 chunks fails closed
+    const overflowChunks = Array.from({ length: 16 }, (_, i) => ({
       name: `chunk-overflow-${i}.js`,
       content: `export const x = ${i};\n`,
     }));
@@ -158,7 +158,7 @@ Deno.test("20e2u condition (a): chunk bounds enforced (count <= 10, size <= 500K
         });
       },
       Error,
-      "chunk count exceeds bound: 11 > 10",
+      "chunk count exceeds bound: 16 > 15",
     );
 
     // 2. Oversized chunk (> 500 KB) fails closed
