@@ -98,7 +98,7 @@ Deno.test("a4tw7 reload affordances: options.js, web-services.js, and ntp.js ren
   );
   const webServicesJs = await Deno.readTextFile("extension/options/panels/web-services.js");
   assert(
-    webServicesJs.includes("quota-load-error") && webServicesJs.includes("location.reload()"),
+    webServicesJs.includes("quota-load-error") && webServicesJs.includes("ctx.callbacks.reload"),
     "web-services.js must render a reload affordance when dynamic vault quota import fails",
   );
   const ntpJs = await Deno.readTextFile("extension/ntp/ntp.js");

@@ -297,7 +297,13 @@ export async function renderVaultQuotas(ctx) {
       errBox.style.cssText = "color:var(--text-muted, #888);padding:8px 0;font-size:12px;";
       const btn = mk("button", "btn", "Reload");
       btn.style.marginLeft = "8px";
-      btn.addEventListener("click", () => location.reload());
+      btn.addEventListener("click", () => {
+        if (typeof ctx?.callbacks?.reload === "function") {
+          ctx.callbacks.reload();
+        } else {
+          renderVaultPanel(ctx);
+        }
+      });
       errBox.append(btn);
       host.append(errBox);
     }

@@ -213,6 +213,11 @@ const sectionContexts = new Map();
 const devRendered = new Set();
 
 const hostCallbacks = {
+  reload: () => {
+    if (typeof location !== "undefined" && typeof location.reload === "function") {
+      location.reload();
+    }
+  },
   admissionHostReady,
   onDiagnosticsRevision: () => {
     refreshDiagnostics().catch(() => {});
