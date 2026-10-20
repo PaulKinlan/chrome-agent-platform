@@ -63,6 +63,30 @@ Deno.test("9epn.9 hydration: options.js stages active section hydration and yiel
   );
 });
 
+Deno.test("2kwan retryable agents-chunk import: options.js clears cached promise on import rejection", () => {
+  assert(
+    JS.includes('import("./panels/agents.js")'),
+    "options.js must dynamically import ./panels/agents.js",
+  );
+  assert(
+    JS.includes("agentsModulePromise = null;"),
+    "options.js must reset agentsModulePromise to null on rejection so chunk load failures are retryable",
+  );
+});
+
+Deno.test("u3pmj retryable lazy dynamic imports: web-services.js and ntp.js clear cached promises on rejection", async () => {
+  const webServicesJs = await Deno.readTextFile("extension/options/panels/web-services.js");
+  assert(
+    webServicesJs.includes('import("./vault-quotas.js")') && webServicesJs.includes("quotaUiPromise = null;"),
+    "web-services.js must reset quotaUiPromise to null on rejection so quota UI chunk load failures are retryable",
+  );
+  const ntpJs = await Deno.readTextFile("extension/ntp/ntp.js");
+  assert(
+    ntpJs.includes("settingsViewModulePromise = null;") && ntpJs.includes("settingsViewModulePromise = import(url).catch"),
+    "ntp.js must reset settingsViewModulePromise to null on rejection so settings view module load failures are retryable",
+  );
+});
+
 Deno.test("9epn.9 section rendering: renderSection covers all 16 settings sections including data, board-permissions and web-services", () => {
   const ensureBlock = JS.slice(JS.indexOf("async function ensureSectionRendered"), JS.indexOf("// nav active state"));
   for (const section of SETTINGS_SECTIONS) {

@@ -5796,7 +5796,10 @@ function loadSettingsViewModule() {
     const url = typeof chrome !== "undefined" && typeof chrome.runtime?.getURL === "function"
       ? chrome.runtime.getURL("dist/settings-view.bundle.js")
       : "../options/settings-view.js";
-    settingsViewModulePromise = import(url);
+    settingsViewModulePromise = import(url).catch((err) => {
+      settingsViewModulePromise = null;
+      throw err;
+    });
   }
   return settingsViewModulePromise;
 }

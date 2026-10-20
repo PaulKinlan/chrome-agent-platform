@@ -278,8 +278,12 @@ const mk = (tag, cls, text, style) => {
 // and options.bundle.js has a hard 450 KB budget. The promise is memoised so every entry point shares one
 // fetch, and renderVaultQuotas is awaited during the initial render, so the chunk is loaded before any
 // control it owns can be clicked.
-let quotaUiPromise;
-const loadQuotaUi = () => (quotaUiPromise ??= import("./vault-quotas.js"));
+let quotaUiPromise = null;
+const loadQuotaUi = () =>
+  (quotaUiPromise ??= import("./vault-quotas.js").catch((err) => {
+    quotaUiPromise = null;
+    throw err;
+  }));
 const quotaDeps = () => ({ byId, mk, send: vaultSend, rerender: renderVaultPanel });
 
 export async function renderVaultQuotas(ctx) {
