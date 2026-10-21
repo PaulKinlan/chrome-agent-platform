@@ -2,7 +2,9 @@
 // Call-export lane admission (chrome-agent-platform-uslb): the authority's
 // callExport ABI declaration + the CAP-authored harness running the REAL
 // hash-wasm blake3 module (zero imports, no package JS).
-import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes, assertRejects } from "jsr:@std/assert@1";
+import { Buffer } from "node:buffer";
+import crypto from "node:crypto";
 import {
   auditWasmBinary,
   WasmPackageAuthority,
@@ -642,3 +644,169 @@ Deno.test("callexport: wave-1 tools hash a 20 KiB input correctly via the stream
     assertEquals(actual, expectedHash, `${toolId} streaming-fallback vector for a 20 KiB input`);
   }
 });
+
+// na5gy: falsifier test demonstrating that driving the module's raw unchunked
+// Hash_Calculate directly (the pre-existing v1 defect) corrupts digests on inputs > 16 KiB
+// by writing over main_buffer, while the fixed host streaming path returns the exact
+// external reference digest.
+Deno.test("callexport: falsifier — unchunked one-shot Hash_Calculate silently corrupts inputs > 16 KiB (na5gy)", async () => {
+  const manifest = JSON.parse(await Deno.readTextFile("extension/wasm/manifests/cap.bundled.hash.sha1-1.0.0.manifest.json"));
+  const exec = manifest.executables[0];
+  const bytes = await Deno.readFile(`extension/wasm/cas/${exec.sha256}.wasm`);
+
+  // Verify on 17 KiB (17408 bytes) and 64 KiB (65536 bytes)
+  for (const size of [17408, 65536]) {
+    const input = new Uint8Array(size);
+    for (let i = 0; i < input.length; i++) input[i] = (i * 7 + 13) & 0xff;
+
+    // Simulate the pre-existing unchunked one-shot drive: writes input into main_buffer (16 KiB)
+    const module = new WebAssembly.Module(bytes);
+    const instance = new WebAssembly.Instance(module, {});
+    const ex = instance.exports;
+    const bufferPtr = ex.Hash_GetBuffer();
+    const heap = new Uint8Array(ex.memory.buffer);
+    heap.set(input, bufferPtr);
+    ex.Hash_Calculate(input.byteLength, 0, 20);
+    const corruptedOneShot = [...heap.subarray(bufferPtr, bufferPtr + 20)].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+    // External reference digest from node:crypto
+    const expectedRef = crypto.createHash("sha1").update(input).digest("hex");
+
+    // FALSIFICATION: unchunked one-shot drive produces a WRONG digest
+    assert(corruptedOneShot !== expectedRef, `one-shot drive must produce corrupted digest at ${size} bytes`);
+
+    // The fixed callexport host streams via Init/Update/Final and returns the EXACT reference digest
+    const b64 = Buffer.from(input).toString("base64");
+    const actual = await executeCallexportRun({ wasmBytes: bytes, executable: exec, data: b64 });
+    assertEquals(actual, expectedRef, `callexport host must produce exact reference digest at ${size} bytes`);
+  }
+});
+
+// na5gy: full-spectrum Known-Answer Tests (KAT) for all 17 wave-1 hash tools at
+// 17 KiB (boundary), 64 KiB (multi-chunk), and 4 MiB (advertised maximum limit).
+// Expected digests: official hash-wasm 4.12.0 reference implementation,
+// cross-checked with node:crypto / node:zlib where supported.
+Deno.test("callexport: wave-1 tools hash 17 KiB, 64 KiB and 4 MiB inputs correctly against external references (na5gy)", async () => {
+  const EXPECTED_KAT: Record<string, Record<string, string>> = {
+    "17K": {
+      hash_md4: "3eba4d2313279a5dac1e88786ab93a08",
+      hash_sha1: "cc65307d10a0927961547db84402bb63eb565296",
+      hash_sha224: "0f0f600d6bbdb61ce429d8bcf7bc156797ab243fa7b1929888705283",
+      hash_sha384: "dc0e6eff76d0f104866e111f49e0d5019acdb55536ad290e877111c360eb8058568b21b76c6e117e50565cc903c7c23b",
+      hash_sha3_256: "91b3ca0213d8f27cc005526491addae2f56b3d1a1298d655a6be4094c50be852",
+      hash_sha3_384: "463aa8f84e0fff02633d24187f58b8b6317797aab219de0985a0a434dbdb22f9ab4fa8fe7894bd6e7660b228d583493e",
+      hash_sha3_512: "03bf54186c5c8ac06472b01767de42951bdd8652dd0f325d2bcbd9903d38d2c06f3fc3dde20f7fac116a1b8275bbed7d262f067cb9306e2b473a3ce21851e782",
+      hash_keccak_256: "6bfdd2f35d4b2df33f22f8b22b90a1099878ba2f1f3b1842fc1c8eb327c0f568",
+      hash_blake2b: "b325c7a8d8d2bd58c5affc7509aa0394a10b9cca4ba9029faeacd0e1c8586348ef8b7bdd5f16e7b6b9780b6bac6cc3135c2df1d4843a07a387d2fd7b1b49f725",
+      hash_blake2s: "d19cf9055147b2a17abce7060f4e787a648e9d790a072f37e9bdb31e18877130",
+      hash_ripemd160: "317dea656f4bb26b9a0053545ba2a86c14ddfe92",
+      hash_sm3: "2f2810c6235e24b4300a068b10c636ae93fa04f75ecf6026d51f7d99fd2b4d0d",
+      hash_whirlpool: "9032e43abf58217070d039bd1d3f3058b9423b0acd5afd19da9ff1f44c5589d4a95908c4ae439031ab5f422a8b3b7df0fd63849cca733e53998fc50fac49c7b9",
+      hash_blake3: "5ef582ec05dd07a55b838635f04574dbeb4e325e1a297acb408b3265796b332a",
+      hash_adler32: "733adff0",
+      hash_crc32: "51d7d554",
+      hash_xxhash32: "ebd6460b",
+    },
+    "64K": {
+      hash_md4: "56c867958135525dd931841bb97f5916",
+      hash_sha1: "ee27b888ba32926f4a8bef844c41a4fdc310d260",
+      hash_sha224: "506bb8637faafd971a546835d2d48a0af0a43417cd90602231b2d4c8",
+      hash_sha384: "a208940e418ecfd739638b3bf540e4af61a7ee8287fe81a1b272a52e2db40bad18b59552e877f2badaec9991b88b4914",
+      hash_sha3_256: "0d3953d62b545e11bce6d21bb1d1d72200979b513b8aaf701848bdda735ba359",
+      hash_sha3_384: "c9810849e8775b8805adc31d859476232645c599517b86e41519b006dbbc26462eba56b816ef02ac8022d8c28ac76eb0",
+      hash_sha3_512: "ce379da9f8030820e5d83cf820b72bb8a40af33945d1cb7c451ff97e475f1fd709461170a5cb3e70d486a2214c856086ba0a76ae757a9a15900d0ca883c23204",
+      hash_keccak_256: "d9afb8d99302af8fedc89ef075a910b0d7ce4d86ee841c015e971b2de06743ee",
+      hash_blake2b: "20fbe09814ea098dd140825451e2d4eb080a5defe3de96adb8e99c35364a8034006d03f7a5d8f238187bc67687cd88837b11618f81baf8b2becc8199ddd6bca7",
+      hash_blake2s: "efe80a45e860fb45e4de7438ad68f818a91262a99e2f27e5133c6c7a3ad9b037",
+      hash_ripemd160: "3cb9968fd04aae4338dcf05258de575e66c51e96",
+      hash_sm3: "23792073f324b5817a72fa3544991794de1300fcab79d9a8233f492c555c3a7f",
+      hash_whirlpool: "909fc4ccd846cc23db8c52d4ddc58a3468722ed40ca809b06db02042c16d6f3f9faed14768c4d4d549fe55641ffdf73d1ba13519f9cef70134ac3d4cb077e558",
+      hash_blake3: "38017a0ce98d2f0e8933beee8b2de470365ab73ee47185c6ee27b35d825ef3fd",
+      hash_adler32: "56448772",
+      hash_crc32: "80e78f7c",
+      hash_xxhash32: "08bd96de",
+    },
+    "4M": {
+      hash_md4: "d5680f2be97aad3165519799818b4c61",
+      hash_sha1: "feb8d41630f87bd595d7199d6845199e9015976f",
+      hash_sha224: "b9e6afff5d4ac93e7821038af452df2e3d76983f423d652388482851",
+      hash_sha384: "5454543aed2ca8cddcbe5534350d1cab60df72f94d7b168864fec1bf1ea4262b411057198723f7682fecaf57e71b2827",
+      hash_sha3_256: "e3004448f926f56fb9f043271017913a586ad4c4de3ef6ecbec02dfbe90f6205",
+      hash_sha3_384: "f1d34f4264f4171520595025381f1a6af54185c694b3146d3f77c97d9f161011cc7515e4e75f6d651aa383378b64bace",
+      hash_sha3_512: "8c1d634cff381793b917bff8ed0c0ac5c077de635ad91d9876c9e43384ed1cc4105bf5651eb6c67daacb649016da2f2d3a318a3a3da7b66ead91171890ab2d01",
+      hash_keccak_256: "a8970e1eb248168faa69474b9061348f49e23341119d79bcb4d42396d6052041",
+      hash_blake2b: "e3bc699586ae5ddd1db9918cbd8d5169672a5ea95fc760ace3c691294ad962cb430a1b0b13ffc383fc035a30c297726f94606124fcc10d778f39db21c3363732",
+      hash_blake2s: "0e3ca28b3e9f2603e4b5f48fc23d5d0a6cece550536ef9f2187fb686261be163",
+      hash_ripemd160: "1d76e73b6611d146e6b548f4f10448d18551a392",
+      hash_sm3: "b6bab38fdf94ef1db68486ab4a66475e2b66aaf76944ac992d82630ba1fa211d",
+      hash_whirlpool: "05c47d945800ebf8e9dc0e8bcc0b40341912b775728725833ac6c58c2ac5732d23096fe0077de13ea51e47f6783177e20c39eb88aa4d1fa1f536245a3d24a8f4",
+      hash_blake3: "a92d9d227552a88c81ddbcee3794e259c9f34891a68f11e6f907707fb08eb6ef",
+      hash_adler32: "4008de30",
+      hash_crc32: "1fafde95",
+      hash_xxhash32: "72a1aea1",
+    },
+  };
+
+  const SIZES: Record<string, number> = {
+    "17K": 17408,
+    "64K": 65536,
+    "4M": 4194304,
+  };
+
+  for (const [sizeLabel, sizeBytes] of Object.entries(SIZES)) {
+    const input = new Uint8Array(sizeBytes);
+    for (let i = 0; i < input.length; i++) input[i] = (i * 7 + 13) & 0xff;
+    const data = Buffer.from(input).toString("base64");
+    const expectedForSize = EXPECTED_KAT[sizeLabel];
+
+    for (const [toolId, expectedHash] of Object.entries(expectedForSize)) {
+      const pkgId = `cap.bundled.${toolId.replace(/_/g, ".")}`;
+      const manifestPath = `extension/wasm/manifests/${pkgId}-1.0.0.manifest.json`;
+      const manifest = JSON.parse(await Deno.readTextFile(manifestPath));
+      const exec = manifest.executables[0];
+      const bytes = await Deno.readFile(`extension/wasm/cas/${exec.sha256}.wasm`);
+      const actual = await executeCallexportRun({ wasmBytes: bytes, executable: exec, data });
+      assertEquals(actual, expectedHash, `${toolId} streaming digest for ${sizeLabel} (${sizeBytes} bytes) matches external reference`);
+    }
+  }
+});
+
+// na5gy: verify that inputs strictly exceeding the advertised 4 MiB budget fail closed
+Deno.test("callexport: input over 4 MiB advertised budget fails closed with input_over_budget (na5gy)", async () => {
+  const manifest = JSON.parse(await Deno.readTextFile("extension/wasm/manifests/cap.bundled.hash.sha1-1.0.0.manifest.json"));
+  const exec = manifest.executables[0];
+  const bytes = await Deno.readFile(`extension/wasm/cas/${exec.sha256}.wasm`);
+
+  // 4 MiB + 1 byte
+  const overInput = new Uint8Array(4 * 1024 * 1024 + 1);
+  const data = Buffer.from(overInput).toString("base64");
+
+  await assertRejects(
+    async () => {
+      await executeCallexportRun({ wasmBytes: bytes, executable: exec, data });
+    },
+    Error,
+    "input_over_budget",
+  );
+});
+
+// na5gy / j8qy3: verify all 17 wave-1 hash tools declare the honest 4 MiB streaming caveat
+Deno.test("callexport: all 17 wave-1 hash tool caveats declare the honest 4 MiB streaming contract (na5gy/j8qy3)", () => {
+  const wave1ToolIds = [
+    "hash_md4", "hash_sha1", "hash_sha224", "hash_sha384",
+    "hash_sha3_256", "hash_sha3_384", "hash_sha3_512", "hash_keccak_256",
+    "hash_blake2b", "hash_blake2s", "hash_ripemd160", "hash_sm3",
+    "hash_whirlpool", "hash_blake3", "hash_adler32", "hash_crc32", "hash_xxhash32",
+  ];
+  for (const toolId of wave1ToolIds) {
+    const row = BUNDLED_TOOL_PACKAGE_ROWS.find((r) => r.toolId === toolId);
+    assert(row, `tool row for ${toolId} must exist`);
+    const caveats = (row.caveats ?? []).join(" ");
+    assert(
+      caveats.includes("Hashing of base64 input up to 4 MiB; inputs over 16 KiB stream through the module in 16 KiB chunks."),
+      `${toolId} must advertise honest 4 MiB streaming chunk caveat (got: ${caveats})`,
+    );
+    assert(!caveats.includes("no streaming API yet"), `${toolId} must not contain stale 'no streaming API yet' copy`);
+  }
+});
+
