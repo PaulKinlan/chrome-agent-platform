@@ -12,6 +12,7 @@ import { recordUsage } from "./usage.js";
 import { createRunTextTracker } from "./run-text-steps.js";
 import { createTextDeltaCoalescer } from "./text-delta-coalescer.js";
 import { grepAgentMemory } from "./named-agents.js";
+import { isReservedKey } from "./memory.js";
 import { assertRunOwned } from "./run-fence.js";
 import { MODEL_PRICING } from "./model-prices.js";
 import { appendSkillsLayer, baselineSystemPrompt } from "./system-prompts.js";
@@ -315,7 +316,7 @@ export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, 
       description: "Read a value from the agent's memory.",
       inputSchema: z.object({ key: z.string() }),
       execute: async ({ key }) => {
-        if (/^(?:__gen|__tx|__wal|__epoch|__tombs|assets|assetRepair|asset:|profile:|profile$|cap:board-)/.test(String(key ?? ""))) {
+        if (isReservedKey(key)) {
           return { key, value: undefined, error: `key "${key}" is reserved` };
         }
         const err = await enrolledGuard();

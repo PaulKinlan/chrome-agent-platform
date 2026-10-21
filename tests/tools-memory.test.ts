@@ -126,3 +126,57 @@ Deno.test("memory scoped (readOnly) toolset omits memory_set (side-effect-free)"
   assert(t.memory_get && t.memory_list, "read tools must be present");
   assert(!t.memory_set, "memory_set must NOT be in the readOnly (scoped) set");
 });
+
+Deno.test("memory_get: REJECTS reserved keys including __wasmTx:* and authority keys (m7a12 / d1s24)", async () => {
+  const mem = makeMemory();
+  const t = tools(mem);
+
+  const reservedKeys = [
+    "__wasmTx:test",
+    "__wasmTx",
+    "__gen",
+    "__tx",
+    "__wal",
+    "__epoch",
+    "__tombs",
+    "origins",
+    "enrolled",
+    "assets",
+    "threads",
+    "scripts",
+    "run-registry",
+    "wasmPkg",
+    "wasmPkgRepair",
+    "cap:board-jobs",
+    "cap:board-messages",
+    "profile:user",
+    "profile",
+    "thread:t_123",
+    "run:exec_123",
+    "approvals",
+    "toolDirectory",
+    "journal",
+    "agentConfig",
+  ];
+
+  for (const key of reservedKeys) {
+    const r = await t.memory_get.execute({ key });
+    assertEquals(r.value, undefined, `expected value to be undefined for reserved key ${key}`);
+    assertStringIncludes(String(r.error), "is reserved", `expected reserved error for ${key}`);
+  }
+
+  // Normal user key is allowed
+  await mem.set("user_note", { ok: true });
+  const okResult = await t.memory_get.execute({ key: "user_note" });
+  assertEquals(okResult.error, undefined);
+  assertEquals(okResult.value, { ok: true });
+});
+
+Deno.test("memory.js: INTERNAL_PREFIX_RE is dead and removed; isReservedKey and INTERNAL_KEY_RE are authoritative (m7a12)", async () => {
+  const memoryMod = await import("../extension/lib/memory.js");
+  assertEquals(memoryMod.INTERNAL_PREFIX_RE, undefined, "INTERNAL_PREFIX_RE must be deleted");
+  assert(typeof memoryMod.isReservedKey === "function", "isReservedKey must be exported");
+  assert(memoryMod.INTERNAL_KEY_RE instanceof RegExp, "INTERNAL_KEY_RE must be exported");
+  assert(memoryMod.isReservedKey("__wasmTx:tx1"), "__wasmTx:tx1 must be recognized as reserved");
+  assert(!memoryMod.isReservedKey("my_data"), "normal key must not be reserved");
+});

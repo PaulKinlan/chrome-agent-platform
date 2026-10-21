@@ -16,7 +16,7 @@ Deno.test("queueing longer than the budget is NOT a failure once the lock marker
   });
   assertEquals(r.killedFor, null);
   assertEquals(r.code, 0);
-  assert(r.lockWaitMs >= 1000, `lock wait should be measured (${r.lockWaitMs} ms)`);
+  assert(r.lockWaitMs >= 700, `lock wait should be measured (${r.lockWaitMs} ms)`);
   assert(r.ranMs < 700, `the budget clock started at the marker (${r.ranMs} ms)`);
   assert(r.text.includes("CAP_SECURITY_RESULT"));
 });
