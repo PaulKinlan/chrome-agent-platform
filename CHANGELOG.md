@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.735] — 2026-10-21
+- hashing inputs over 16 KiB with the bundled hash tools now produces correct digests instead of silently wrong ones.
+- Hashing inputs larger than 16 KB with the bundled hash tools now returns the correct digest instead of a silently wrong one.
+
 ## [0.3.734] — 2026-10-21
 - a new on-device regex tool (regexops) lets agents run safe, linear-time pattern search and text rewriting without ReDoS risk.
 - A new on-device regex tool lets agents run safe, linear-time pattern search and text rewriting without the risk of catastrophic backtracking.
