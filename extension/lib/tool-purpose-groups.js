@@ -250,6 +250,7 @@ const DIRECT_TOOL_GROUP = Object.freeze({
   "grep": "text-documents",
   "wc": "text-documents",
   "sed": "text-documents",
+  "regexops": "text-documents",
   "awk": "text-documents",
   "jq": "text-documents",
   "diff": "text-documents",

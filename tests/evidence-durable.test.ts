@@ -84,7 +84,8 @@ Deno.test("fresh-checkout: FULL verify (not fallback) passes on a pristine tree 
     const r = run("node", [join(tmp, "scripts/build-bundled-tool-packages.mjs"), "--verify"], { cwd: tmp });
     assertEquals(r.code, 0, r.stderr);
     // bwxf: 190 -> 202 — the wave-2 admission adds 4 manifests + 4 SBOMs + 4 CAS identities.
-    assertStringIncludes(r.stdout, "VERIFY OK: 202 generated files byte-identical");
+    // nmc2: 202 -> 206 — regexops adds its manifest + SBOM + CAS + NOTICES text.
+    assertStringIncludes(r.stdout, "VERIFY OK: 206 generated files byte-identical");
     if (r.stderr.includes("self-consistency fallback") || r.stdout.includes("self-consistency fallback")) {
       throw new Error("fresh checkout fell back to degraded verify — migration incomplete");
     }

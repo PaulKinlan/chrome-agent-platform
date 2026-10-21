@@ -1,0 +1,19 @@
+[package]
+name = "regexops"
+version = "1.0.0"
+edition = "2021"
+description = "Deterministic WASI regex tool (linear-time RE2-style matching via the regex crate)"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# chrome-agent-platform-nmc2: the regex crate gives RE2-style LINEAR-TIME
+# matching guarantees — no backtracking, no catastrophic ReDoS blowup — which
+# is the whole point of admitting this instead of an arbitrary regex engine.
+regex = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
