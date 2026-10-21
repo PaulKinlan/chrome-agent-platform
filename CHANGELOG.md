@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.733] — 2026-10-21
+- four new on-device hash tools (xxHash64, XXH3-64, XXH128 and CRC-64/XZ) are available to agents via list_tools/execute_tool, with known-answer-verified results.
+- Four new on-device hash tools (xxHash64, XXH3-64, XXH128 and CRC-64/XZ) are available to agents, with results verified against known answers.
+
 ## [0.3.732] — 2026-10-21
 - Settings' starter-template picker now lists every agent template (all 42, including the 25 scheduled automations) in one searchable menu, and adding a scheduled agent keeps its schedule.
 - Settings' template picker is now one searchable menu that lists every agent template, including the scheduled automations, and adding a scheduled agent keeps its schedule.
