@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.732] — 2026-10-21
+- Settings' starter-template picker now lists every agent template (all 42, including the 25 scheduled automations) in one searchable menu, and adding a scheduled agent keeps its schedule.
+- Settings' template picker is now one searchable menu that lists every agent template, including the scheduled automations, and adding a scheduled agent keeps its schedule.
+
 ## [0.3.731] — 2026-10-20
 - Fix transient dynamic chunk load failures in NTP settings and vault quota panels by making chunk imports retryable
 - Add reload-to-retry UI affordances and exact regression pins for dynamic chunk load failures across Settings and NTP views
