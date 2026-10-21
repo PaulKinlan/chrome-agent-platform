@@ -33,7 +33,7 @@
 
       <section class="tools-section" aria-labelledby="tools-heading">
         <div class="tools-section-header">
-          <h2 id="tools-heading">Bundled Tools &amp; Libraries (<span id="tool-count">55</span>)</h2>
+          <h2 id="tools-heading">Bundled Tools &amp; Libraries (<span id="tool-count">59</span>)</h2>
           <div class="section-actions">
             <button type="button" class="btn small" id="expand-all-btn">Expand all notices</button>
             <button type="button" class="btn small" id="collapse-all-btn">Collapse all notices</button>
@@ -42,7 +42,7 @@
         <div class="toolbar">
           <label for="tool-search" class="sr-only">Filter bundled tools</label>
           <input type="search" id="tool-search" class="search-input" placeholder="Filter by name, license, category, or keyword (e.g. jq, MIT, media)…" autocomplete="off" spellcheck="false">
-          <p id="filter-status" class="filter-status" role="status" aria-live="polite">Showing 55 tools</p>
+          <p id="filter-status" class="filter-status" role="status" aria-live="polite">Showing 59 tools</p>
         </div>
         <div class="tools-grid" id="tools-container">
         <article class="tool-card" id="tool-avif" data-tool-id="avif" data-package-id="cap.bundled.avif" data-category="media" data-spdx="BSD-3-Clause AND Apache-2.0">
@@ -2297,6 +2297,78 @@ Special thank you to the authors of original C algorithms:
             </div>
           </details>
         </article>
+        <article class="tool-card" id="tool-hash_crc64" data-tool-id="hash_crc64" data-package-id="cap.bundled.hash.crc64" data-category="data" data-spdx="MIT">
+          <header class="tool-card-head">
+            <div class="tool-identity">
+              <h3 class="tool-title"><code>hash_crc64</code></h3>
+              <span class="badge version-badge">v1.0.0</span>
+              <span class="badge category-badge">data</span>
+            </div>
+            <div class="tool-meta-row">
+              <span class="badge spdx-badge" title="SPDX license expression">SPDX: <strong>MIT</strong></span>
+              <a href="https://github.com/Daninet/hash-wasm" class="source-link" target="_blank" rel="noopener noreferrer" title="View upstream source repository">
+                <span>Source</span>
+                <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          </header>
+          <p class="tool-desc">hash_crc64 - compute the CRC-64/XZ cyclic redundancy checksum (fixed polynomial). Use for integrity checks. In/out: base64 bytes as &#39;data&#39; to a 16-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;crc64&#39;.</p>
+          <div class="tool-provenance">
+            <span class="prov-item">Package: <code>cap.bundled.hash.crc64</code></span>
+            <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
+          </div>
+          <details class="license-disclosure">
+            <summary class="disclosure-summary">
+              <span class="summary-label">View License (hash-wasm-MIT.txt)</span>
+            </summary>
+            <div class="disclosure-body">
+              
+              
+              <div class="license-block">
+                <h4 class="notice-heading">License Text (hash-wasm-MIT.txt &mdash; MIT)</h4>
+                <pre class="license-pre">MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak &lt;solar@openwall.com&gt;
+- Aleksey Kravchenko &lt;rhash.admin@gmail.com&gt;
+- Colin Percival
+- Stephan Brumme &lt;create@stephan-brumme.com&gt;
+- Steve Reid &lt;steve@edmweb.com&gt;
+- Samuel Neves &lt;sneves@dei.uc.pt&gt;
+- Solar Designer &lt;solar@openwall.com&gt;
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
+</pre>
+              </div>
+            </div>
+          </details>
+        </article>
         <article class="tool-card" id="tool-hash_keccak_256" data-tool-id="hash_keccak_256" data-package-id="cap.bundled.hash.keccak.256" data-category="data" data-spdx="MIT">
           <header class="tool-card-head">
             <div class="tool-identity">
@@ -3089,6 +3161,150 @@ Special thank you to the authors of original C algorithms:
             </div>
           </details>
         </article>
+        <article class="tool-card" id="tool-hash_xxhash128" data-tool-id="hash_xxhash128" data-package-id="cap.bundled.hash.xxhash128" data-category="data" data-spdx="MIT">
+          <header class="tool-card-head">
+            <div class="tool-identity">
+              <h3 class="tool-title"><code>hash_xxhash128</code></h3>
+              <span class="badge version-badge">v1.0.0</span>
+              <span class="badge category-badge">data</span>
+            </div>
+            <div class="tool-meta-row">
+              <span class="badge spdx-badge" title="SPDX license expression">SPDX: <strong>MIT</strong></span>
+              <a href="https://github.com/Daninet/hash-wasm" class="source-link" target="_blank" rel="noopener noreferrer" title="View upstream source repository">
+                <span>Source</span>
+                <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          </header>
+          <p class="tool-desc">hash_xxhash128 - compute the 128-bit xxHash (XXH128) checksum, fixed seed 0. Use for strong non-cryptographic fingerprints. In/out: base64 bytes as &#39;data&#39; to a 32-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;xxhash128&#39;.</p>
+          <div class="tool-provenance">
+            <span class="prov-item">Package: <code>cap.bundled.hash.xxhash128</code></span>
+            <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
+          </div>
+          <details class="license-disclosure">
+            <summary class="disclosure-summary">
+              <span class="summary-label">View License (hash-wasm-MIT.txt)</span>
+            </summary>
+            <div class="disclosure-body">
+              
+              
+              <div class="license-block">
+                <h4 class="notice-heading">License Text (hash-wasm-MIT.txt &mdash; MIT)</h4>
+                <pre class="license-pre">MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak &lt;solar@openwall.com&gt;
+- Aleksey Kravchenko &lt;rhash.admin@gmail.com&gt;
+- Colin Percival
+- Stephan Brumme &lt;create@stephan-brumme.com&gt;
+- Steve Reid &lt;steve@edmweb.com&gt;
+- Samuel Neves &lt;sneves@dei.uc.pt&gt;
+- Solar Designer &lt;solar@openwall.com&gt;
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
+</pre>
+              </div>
+            </div>
+          </details>
+        </article>
+        <article class="tool-card" id="tool-hash_xxhash3" data-tool-id="hash_xxhash3" data-package-id="cap.bundled.hash.xxhash3" data-category="data" data-spdx="MIT">
+          <header class="tool-card-head">
+            <div class="tool-identity">
+              <h3 class="tool-title"><code>hash_xxhash3</code></h3>
+              <span class="badge version-badge">v1.0.0</span>
+              <span class="badge category-badge">data</span>
+            </div>
+            <div class="tool-meta-row">
+              <span class="badge spdx-badge" title="SPDX license expression">SPDX: <strong>MIT</strong></span>
+              <a href="https://github.com/Daninet/hash-wasm" class="source-link" target="_blank" rel="noopener noreferrer" title="View upstream source repository">
+                <span>Source</span>
+                <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          </header>
+          <p class="tool-desc">hash_xxhash3 - compute the XXH3-64 checksum, fixed seed 0. Use for fast non-cryptographic hashing. In/out: base64 bytes as &#39;data&#39; to a 16-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;xxhash3&#39;.</p>
+          <div class="tool-provenance">
+            <span class="prov-item">Package: <code>cap.bundled.hash.xxhash3</code></span>
+            <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
+          </div>
+          <details class="license-disclosure">
+            <summary class="disclosure-summary">
+              <span class="summary-label">View License (hash-wasm-MIT.txt)</span>
+            </summary>
+            <div class="disclosure-body">
+              
+              
+              <div class="license-block">
+                <h4 class="notice-heading">License Text (hash-wasm-MIT.txt &mdash; MIT)</h4>
+                <pre class="license-pre">MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak &lt;solar@openwall.com&gt;
+- Aleksey Kravchenko &lt;rhash.admin@gmail.com&gt;
+- Colin Percival
+- Stephan Brumme &lt;create@stephan-brumme.com&gt;
+- Steve Reid &lt;steve@edmweb.com&gt;
+- Samuel Neves &lt;sneves@dei.uc.pt&gt;
+- Solar Designer &lt;solar@openwall.com&gt;
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
+</pre>
+              </div>
+            </div>
+          </details>
+        </article>
         <article class="tool-card" id="tool-hash_xxhash32" data-tool-id="hash_xxhash32" data-package-id="cap.bundled.hash.xxhash32" data-category="data" data-spdx="MIT">
           <header class="tool-card-head">
             <div class="tool-identity">
@@ -3107,6 +3323,78 @@ Special thank you to the authors of original C algorithms:
           <p class="tool-desc">hash_xxhash32 - compute fast 32-bit xxHash non-cryptographic checksum. Use for high-speed hash tables. In/out: base64-encoded bytes as &#39;data&#39; to an 8-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;xxhash32&#39;.</p>
           <div class="tool-provenance">
             <span class="prov-item">Package: <code>cap.bundled.hash.xxhash32</code></span>
+            <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
+          </div>
+          <details class="license-disclosure">
+            <summary class="disclosure-summary">
+              <span class="summary-label">View License (hash-wasm-MIT.txt)</span>
+            </summary>
+            <div class="disclosure-body">
+              
+              
+              <div class="license-block">
+                <h4 class="notice-heading">License Text (hash-wasm-MIT.txt &mdash; MIT)</h4>
+                <pre class="license-pre">MIT License
+
+Copyright (c) 2020 Dani Biró
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Embedded C implementations might use other, similarly permissive licenses.
+Check the beginning of the files from the /src directory.
+
+Special thank you to the authors of original C algorithms:
+- Alexander Peslyak &lt;solar@openwall.com&gt;
+- Aleksey Kravchenko &lt;rhash.admin@gmail.com&gt;
+- Colin Percival
+- Stephan Brumme &lt;create@stephan-brumme.com&gt;
+- Steve Reid &lt;steve@edmweb.com&gt;
+- Samuel Neves &lt;sneves@dei.uc.pt&gt;
+- Solar Designer &lt;solar@openwall.com&gt;
+- Project Nayuki
+- ARM Limited
+- Yanbo Li dreamfly281@gmail.com, goldboar@163.comYanbo Li
+- Mark Adler
+- Yann Collet
+</pre>
+              </div>
+            </div>
+          </details>
+        </article>
+        <article class="tool-card" id="tool-hash_xxhash64" data-tool-id="hash_xxhash64" data-package-id="cap.bundled.hash.xxhash64" data-category="data" data-spdx="MIT">
+          <header class="tool-card-head">
+            <div class="tool-identity">
+              <h3 class="tool-title"><code>hash_xxhash64</code></h3>
+              <span class="badge version-badge">v1.0.0</span>
+              <span class="badge category-badge">data</span>
+            </div>
+            <div class="tool-meta-row">
+              <span class="badge spdx-badge" title="SPDX license expression">SPDX: <strong>MIT</strong></span>
+              <a href="https://github.com/Daninet/hash-wasm" class="source-link" target="_blank" rel="noopener noreferrer" title="View upstream source repository">
+                <span>Source</span>
+                <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          </header>
+          <p class="tool-desc">hash_xxhash64 - compute the 64-bit xxHash (XXH64) checksum, fixed seed 0. Use for fast non-cryptographic hashing. In/out: base64 bytes as &#39;data&#39; to a 16-hex digest. Example: {data: &#39;aGVsbG8=&#39;} -&gt; {hash: &#39;...&#39;}; algorithm: &#39;xxhash64&#39;.</p>
+          <div class="tool-provenance">
+            <span class="prov-item">Package: <code>cap.bundled.hash.xxhash64</code></span>
             <span class="prov-item">Rebuild: <code>packages/bundled/evidence/hashwasm/extract.mjs</code></span>
           </div>
           <details class="license-disclosure">

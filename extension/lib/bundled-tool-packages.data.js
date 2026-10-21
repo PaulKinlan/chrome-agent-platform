@@ -6,12 +6,12 @@ const S = Object.freeze([
  "read-only",
  "1.0.0",
  "crypto",
+ "extension/wasm/licenses/hash-wasm-MIT.txt",
  "text.transform",
+ "hashwasm",
  "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation.",
  "One-shot hashing of base64 input up to 4 MiB; no streaming API yet.",
- "extension/wasm/licenses/hash-wasm-MIT.txt",
  "extension/wasm/licenses/Apache-2.0.txt",
- "hashwasm",
  "extension/wasm/licenses/MIT.txt",
  "Apache-2.0",
  "Model and Settings execution use owner-bound OPFS input/output references; large results return a complete size and SHA-256 receipt instead of truncation, and can feed the next tool by reference.",
@@ -23,6 +23,7 @@ const S = Object.freeze([
  "2.0.0",
  "media",
  "4b3e3ab7973037bfdf21c776085c617dd15d8faad72c073f2eb4ca022a233f8b",
+ "Streaming drive (16 KiB chunks); seed fixed at 0, not an argument.",
  "MIT AND Apache-2.0",
  "compressops",
  "file.write",
@@ -39,26 +40,29 @@ const S = Object.freeze([
  "hash_keccak_256",
  "hash_ripemd160",
  "hash_whirlpool",
+ "hash_xxhash128",
  "hash_sha3_256",
  "hash_sha3_384",
  "hash_sha3_512",
  "hash_xxhash32",
+ "hash_xxhash64",
  "hash_adler32",
  "hash_blake2b",
  "hash_blake2s",
+ "hash_xxhash3",
  "hash_blake3",
  "hash_sha224",
  "hash_sha384"
 ]);
-const C0 = Object.freeze([S[1], S[5]]);
+const C0 = Object.freeze([S[1], S[6]]);
 const C1 = Object.freeze([S[1], S[4]]);
 const C2 = Object.freeze([S[1], S[14]]);
 const C3 = Object.freeze([S[1]]);
 const L0 = Object.freeze({ spdx: "MIT", file: S[11], notices: null });
-const L1 = Object.freeze({ spdx: S[12], file: S[9], notices: null });
-const L2 = Object.freeze({ spdx: "MIT", file: S[8], notices: null });
+const L1 = Object.freeze({ spdx: S[12], file: S[10], notices: null });
+const L2 = Object.freeze({ spdx: "MIT", file: S[5], notices: null });
 const V0 = Object.freeze([S[16], S[17], S[13]]);
-const V1 = Object.freeze([S[7]]);
+const V1 = Object.freeze([S[9]]);
 export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.base64",
@@ -97,7 +101,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "md5sum - compute legacy 128-bit MD5 hash checksums. Use for non-security file verification. In/out: stdin (<=2 KiB) to 32-hex digest. No flags. Example: stdin 'hello' -> '5d41402abc4b2a76b9719d911017c592'.",
   "caveats": [
    "Legacy checksum matching/non-adversarial accidental-corruption detection only; never signatures, content trust, or collision-resistant integrity.",
-   S[6]
+   S[8]
   ],
   "capabilities": C1,
   "replayClass": S[2],
@@ -127,7 +131,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "sha256sum - compute cryptographic 256-bit SHA-256 hash digests. Use to hash files or verify secure integrity. In/out: stdin (<=2 KiB) to 64-hex digest. No flags. Example: stdin 'hello' -> '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'.",
   "caveats": [
    "Implements the FIPS 180-4 SHA-256 cryptographic hash contract; emits lowercase 64-hex digest string from stdin",
-   S[6]
+   S[8]
   ],
   "capabilities": C1,
   "replayClass": S[2],
@@ -157,7 +161,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "sha512sum - compute cryptographic 512-bit SHA-512 hash digests. Use for high-security hashing. In/out: stdin (<=2 KiB) to 128-hex digest. No flags. Example: stdin 'hello' -> the 128-hex digest.",
   "caveats": [
    "Implements the FIPS 180-4 SHA-512 cryptographic hash contract; emits lowercase 128-hex digest string from stdin",
-   S[6]
+   S[8]
   ],
   "capabilities": C1,
   "replayClass": S[2],
@@ -187,7 +191,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "xxd - convert binary data to hex dumps and reconstruct it. Use for byte-level inspection. In/out: stdin (<=2 KiB) to hex stdout. Key flag: -p (plain hex). Example: -p + stdin 'Hi' -> '4869\\n'.",
   "caveats": [
    "Supports plain dump/reverse and traditional 16-byte hex dump round-trip modes from stdin.",
-   S[6]
+   S[8]
   ],
   "capabilities": C0,
   "replayClass": S[2],
@@ -217,7 +221,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "uuid - generate random UUID v4 unique identifier strings. Use to create unique keys or IDs. In/out: empty stdin to UUID stdout. Key flag: -n <count> (max 64). Example: -n 2 -> two UUID lines.",
   "caveats": [
    "Backed by WASI random_get (crypto.getRandomValues). Replay is read-only (zero external mutation) but output is intentionally nondeterministic (replaying produces a fresh UUID).",
-   S[6]
+   S[8]
   ],
   "capabilities": C1,
   "replayClass": S[2],
@@ -274,7 +278,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "head - extract the leading lines from a text stream. Use to inspect the start of a file. In/out: stdin (<=2 KiB) to sliced stdout. Key flag: -n (default 10). Example: -n 2 + stdin 'a\\nb\\nc' -> 'a\\nb'.",
   "caveats": [
    "Extracts first N lines (-n N, default 10). Buffers stdin subject to the exact 8 MiB input ceiling.",
-   S[6]
+   S[8]
   ],
   "capabilities": C0,
   "replayClass": S[2],
@@ -304,7 +308,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "tail - extract the trailing lines from a text stream. Use to inspect the end of a log file. In/out: stdin (<=2 KiB) to sliced stdout. Key flag: -n (default 10). Example: -n 2 + stdin 'a\\nb\\nc' -> 'b\\nc'.",
   "caveats": [
    "Extracts last N lines (-n N, default 10). Buffers stdin subject to the exact 8 MiB input ceiling.",
-   S[6]
+   S[8]
   ],
   "capabilities": C0,
   "replayClass": S[2],
@@ -334,7 +338,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "cut - extract columns or delimiter-separated fields from text. Use to parse CSV or TSV columns. In/out: stdin (<=2 KiB) to column stdout. Flags: -d, -f. Example: -d , -f 2 + stdin 'a,b,c' -> 'b'.",
   "caveats": [
    "Extracts single column via -d <delim> -f <col>. Stdin-only; zero file operands.",
-   S[6]
+   S[8]
   ],
   "capabilities": C0,
   "replayClass": S[2],
@@ -472,7 +476,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "diff - compare text documents and calculate diff changes. Use to compare revisions by viewing differences, or for file editing. In/out: two text args (<=1 KiB each) to unified diff. No flags. Example: 'a\\nb\\n' and 'a\\nc\\n' -> hunk diff.",
   "caveats": [
    "Two literal document arguments, one full-context hunk, 16 MiB LCS workspace cap. Exits 0 (match), 1 (diff), 2 (syntax error).",
-   S[6]
+   S[8]
   ],
   "capabilities": C0,
   "replayClass": S[2],
@@ -502,7 +506,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "patch - apply unified diff hunks to a source text document. Use to update files or do editing from patches. In/out: source text arg + diff arg (<=1 KiB each) to patched stdout. No flags. Example: source 'a\\nb\\n' + diff -> 'a\\nc\\n'.",
   "caveats": [
    "Exact-position literal-text transform over two arguments (original text, unified diff). No fuzz, offsets, reverse application, multi-file patching, or filesystem mutation.",
-   S[6]
+   S[8]
   ],
   "capabilities": C0,
   "replayClass": S[2],
@@ -532,7 +536,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "toml2json - convert TOML configuration text to JSON format. Use to parse, convert, or read config data. In/out: valid TOML stdin (<=2 KiB) to JSON stdout. No flags. Example: stdin 'a = 1' -> '{\"a\":1}\\n'.",
   "caveats": [
    "Parses TOML from stdin using pinned tomlc99 and emits formatted JSON on stdout. TOML input bounded by 8 MiB ceiling; NUL and non-finite values rejected. Composite licence: tomlc99 is MIT, wrapper is Apache-2.0.",
-   S[6]
+   S[8]
   ],
   "capabilities": [
    S[1],
@@ -541,8 +545,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   ],
   "replayClass": S[2],
   "licence": {
-   "spdx": S[22],
-   "file": S[9],
+   "spdx": S[23],
+   "file": S[10],
    "notices": "extension/wasm/licenses/toml2json-NOTICES.txt"
   },
   "binary": {
@@ -570,13 +574,13 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "markdown - convert Markdown formatted text into safe HTML. Use to render and view formatted content. In/out: Markdown stdin (<=2 KiB) to HTML stdout. No flags; safe mode is enforced. Example: stdin '# Hi' -> '<h1>Hi</h1>\\n'.",
   "caveats": [
    "Based on pinned cmark 0.31.1 (BSD-2-Clause). Source accepts cmark-compatible input files or stdin. Raw HTML and dangerous javascript: URLs are omitted/disabled for XSS protection",
-   S[6],
+   S[8],
    "file.read remains declared in the manifest; the route projects NO files into the fresh empty per-job workspace, so a file operand cannot read owner data and fails closed (path normalization prevents escape/cross-job)."
   ],
   "capabilities": [
    S[1],
    S[14],
-   S[5]
+   S[6]
   ],
   "replayClass": S[2],
   "licence": {
@@ -702,15 +706,15 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "touch - create empty files or update file timestamps. Use to create or touch files in scratch space. In/out: /job/scratch path operand. Flags: -t <epoch_sec>, -c (no-create). Example: -t 0 '/job/scratch/touched'.",
   "caveats": [
    "Creates empty files or mutates access/modify times via WASI utimensat. -t accepts Unix epoch seconds; absent files are created unless -c. Replay class is mutating and interruption is never auto-resumed",
-   S[28],
+   S[29],
    "file.read/write is confined to the spec-owned scratch/touched fixture (bounded epoch timestamps); path normalization and the scratch class rights prevent escape, persistence, and cross-job access."
   ],
   "capabilities": [
    S[1],
    S[14],
-   S[24]
+   S[25]
   ],
-  "replayClass": S[26],
+  "replayClass": S[27],
   "licence": L1,
   "binary": {
    "sha256": "9c9cae983c3db00bdead5e7cf00bdb345d298dda194bd683915b4e7d083346ac",
@@ -737,15 +741,15 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "truncate - resize a file to a target size (shrink or extend); supports +/- and K/M/G/T suffixes. Use for editing file sizes in scratch space. In/out: /job/scratch path (max 10 MiB). Flag: -s. Example: -s 0 '/job/scratch/touched'.",
   "caveats": [
    "Shrinks or extends files in workspace; size accepts integer bytes or one binary K/M/G/T suffix, optional +/-; absent files created unless -c. Replay class is mutating and interruption is never auto-resumed",
-   S[28],
+   S[29],
    "file.read/write is confined to the spec-owned scratch/touched fixture (0..10 MiB); path normalization and the scratch class rights prevent escape, persistence, and cross-job access."
   ],
   "capabilities": [
    S[1],
    S[14],
-   S[24]
+   S[25]
   ],
-  "replayClass": S[26],
+  "replayClass": S[27],
   "licence": L1,
   "binary": {
    "sha256": "ebc062481bf0ba2bf1dfdae6e7cf32ffe47d665702fbc8646ec29e134a480aad",
@@ -765,14 +769,14 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.csvtool",
   "version": S[3],
-  "toolId": S[27],
-  "lane": S[27],
-  "displayName": S[27],
+  "toolId": S[28],
+  "lane": S[28],
+  "displayName": S[28],
   "category": "text",
   "description": "csvtool - parse, transform, and edit RFC 4180 CSV spreadsheet table data. Use for CSV editing, filtering, or formatting rows. In/out: CSV stdin (<=2 KiB) to CSV stdout. No flags. Example: stdin 'a,b\\n1,2' -> 'a,b\\n1,2'.",
   "caveats": [
    "Stdin/stdout only; no file operands.",
-   S[6]
+   S[8]
   ],
   "capabilities": C0,
   "replayClass": S[2],
@@ -825,14 +829,14 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.imageops",
   "version": S[3],
-  "toolId": S[25],
-  "lane": S[25],
-  "displayName": S[25],
+  "toolId": S[26],
+  "lane": S[26],
+  "displayName": S[26],
   "category": S[20],
   "description": "imageops - inspect, resize, and convert images (png/jpeg/webp). Use for image dimensions, resizing, or format conversion. In/out: base64 image text on stdin; base64 image bytes (or info JSON text) on stdout. Subcommands: info; resize; convert.",
   "caveats": [
    "png/jpeg/webp only; stdin/stdout; no EXIF editing.",
-   S[6]
+   S[8]
   ],
   "capabilities": C3,
   "replayClass": S[2],
@@ -855,9 +859,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.compressops",
   "version": S[3],
-  "toolId": S[23],
-  "lane": S[23],
-  "displayName": S[23],
+  "toolId": S[24],
+  "lane": S[24],
+  "displayName": S[24],
   "category": "data",
   "description": "compressops - compress or decompress with zstd or brotli. Use to shrink text or bytes. Compress text (stdin) to a base64 frame; decompress a base64 frame to base64; info reports a base64 frame. zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
   "caveats": [
@@ -892,13 +896,13 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "oxipng - shrink a PNG without changing its pixels. Use to optimise a PNG before saving or sharing it. In/out: base64 PNG text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: -o <0..6> effort (default 2); --strip safe|all.",
   "caveats": [
    "PNG in, PNG out; stdin/stdout; lossless (pixels identical) but colour type or bit depth may be reduced; a 3.5 s internal deadline bounds the effort.",
-   S[6]
+   S[8]
   ],
   "capabilities": C3,
   "replayClass": S[2],
   "licence": {
-   "spdx": S[22],
-   "file": S[9],
+   "spdx": S[23],
+   "file": S[10],
    "notices": "extension/wasm/licenses/oxipng-NOTICES.txt"
   },
   "binary": {
@@ -926,13 +930,13 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "jxl - decode a JPEG XL (JXL) image to PNG. Use to decode or view a JXL file or convert JXL to PNG. In/out: base64 JXL text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: --to png (default).",
   "caveats": [
    "JXL in, PNG out; stdin/stdout; decodes JPEG XL to raw PNG (base64 at the tool boundary).",
-   S[6]
+   S[8]
   ],
   "capabilities": C3,
   "replayClass": S[2],
   "licence": {
-   "spdx": S[22],
-   "file": S[9],
+   "spdx": S[23],
+   "file": S[10],
    "notices": "extension/wasm/licenses/jxl-NOTICES.txt"
   },
   "binary": {
@@ -960,13 +964,13 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "avif - encode an image to AVIF on-device. Use to convert a PNG/JPEG/WebP to the smaller AVIF format. In/out: base64 image text on stdin to AVIF bytes on stdout (base64 at the boundary). Flags: --quality <1..100> (default 80); --speed <1..10> (default 10).",
   "caveats": [
    "PNG/JPEG/WebP in, AVIF out; stdin/stdout; lossy at the chosen quality; a high-entropy source can encode larger than the input.",
-   S[6]
+   S[8]
   ],
   "capabilities": C3,
   "replayClass": S[2],
   "licence": {
    "spdx": "BSD-3-Clause AND Apache-2.0",
-   "file": S[9],
+   "file": S[10],
    "notices": "extension/wasm/licenses/avif-NOTICES.txt"
   },
   "binary": {
@@ -987,9 +991,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.hash.blake3",
   "version": S[3],
-  "toolId": S[45],
+  "toolId": S[49],
   "lane": "hashwasm-blake3",
-  "displayName": S[45],
+  "displayName": S[49],
   "category": "data",
   "description": "hash_blake3 - hash data with BLAKE3. Use to fingerprint content, verify integrity, or derive ids. In/out: base64-encoded bytes as 'data' to a hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}.",
   "caveats": V1,
@@ -1016,7 +1020,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "packageId": "cap.bundled.hash.md4",
   "version": S[3],
   "toolId": "hash_md4",
-  "lane": S[10],
+  "lane": S[7],
   "displayName": "hash_md4",
   "category": "data",
   "description": "hash_md4 - hash data with MD4. Use for legacy compatibility checksums. In/out: base64-encoded bytes as 'data' to a 32-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'md4'.",
@@ -1044,7 +1048,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "packageId": "cap.bundled.hash.sha1",
   "version": S[3],
   "toolId": "hash_sha1",
-  "lane": S[10],
+  "lane": S[7],
   "displayName": "hash_sha1",
   "category": "data",
   "description": "hash_sha1 - hash data with SHA-1. Use to verify legacy file or commit integrity. In/out: base64-encoded bytes as 'data' to a 40-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha1'.",
@@ -1071,9 +1075,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.hash.sha224",
   "version": S[3],
-  "toolId": S[46],
-  "lane": S[10],
-  "displayName": S[46],
+  "toolId": S[50],
+  "lane": S[7],
+  "displayName": S[50],
   "category": "data",
   "description": "hash_sha224 - hash data with SHA-224. Use for cryptographic checksums and integrity. In/out: base64-encoded bytes as 'data' to a 56-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha224'.",
   "caveats": V1,
@@ -1099,9 +1103,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.hash.sha384",
   "version": S[3],
-  "toolId": S[47],
-  "lane": S[10],
-  "displayName": S[47],
+  "toolId": S[51],
+  "lane": S[7],
+  "displayName": S[51],
   "category": "data",
   "description": "hash_sha384 - hash data with SHA-384. Use for high-security cryptographic hashing. In/out: base64-encoded bytes as 'data' to a 96-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha384'.",
   "caveats": V1,
@@ -1127,9 +1131,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.hash.sha3.256",
   "version": S[3],
-  "toolId": S[38],
-  "lane": S[10],
-  "displayName": S[38],
+  "toolId": S[40],
+  "lane": S[7],
+  "displayName": S[40],
   "category": "data",
   "description": "hash_sha3_256 - hash data with SHA3-256. Use for modern Keccak/SHA-3 cryptographic hashing. In/out: base64-encoded bytes as 'data' to a 64-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha3_256'.",
   "caveats": V1,
@@ -1155,9 +1159,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.hash.sha3.384",
   "version": S[3],
-  "toolId": S[39],
-  "lane": S[10],
-  "displayName": S[39],
+  "toolId": S[41],
+  "lane": S[7],
+  "displayName": S[41],
   "category": "data",
   "description": "hash_sha3_384 - hash data with SHA3-384. Use for cryptographic hashing. In/out: base64-encoded bytes as 'data' to a 96-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha3_384'.",
   "caveats": V1,
@@ -1183,9 +1187,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.hash.sha3.512",
   "version": S[3],
-  "toolId": S[40],
-  "lane": S[10],
-  "displayName": S[40],
+  "toolId": S[42],
+  "lane": S[7],
+  "displayName": S[42],
   "category": "data",
   "description": "hash_sha3_512 - hash data with SHA3-512. Use for cryptographic hashing. In/out: base64-encoded bytes as 'data' to a 128-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sha3_512'.",
   "caveats": V1,
@@ -1211,9 +1215,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.hash.keccak.256",
   "version": S[3],
-  "toolId": S[35],
-  "lane": S[10],
-  "displayName": S[35],
+  "toolId": S[36],
+  "lane": S[7],
+  "displayName": S[36],
   "category": "data",
   "description": "hash_keccak_256 - hash data with Keccak-256 (not SHA3-256; different padding). Use for Ethereum-compatible Keccak digests. In/out: base64-encoded bytes as 'data' to a 64-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'keccak_256'.",
   "caveats": V1,
@@ -1239,9 +1243,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.hash.blake2b",
   "version": S[3],
-  "toolId": S[43],
-  "lane": S[10],
-  "displayName": S[43],
+  "toolId": S[46],
+  "lane": S[7],
+  "displayName": S[46],
   "category": "data",
   "description": "hash_blake2b - hash data with BLAKE2b (512-bit). Use for fast secure hashing and fingerprinting. In/out: base64-encoded bytes as 'data' to a 128-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'blake2b'.",
   "caveats": V1,
@@ -1267,9 +1271,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.hash.blake2s",
   "version": S[3],
-  "toolId": S[44],
-  "lane": S[10],
-  "displayName": S[44],
+  "toolId": S[47],
+  "lane": S[7],
+  "displayName": S[47],
   "category": "data",
   "description": "hash_blake2s - hash data with BLAKE2s (256-bit). Use for fast 32-bit architecture secure hashing. In/out: base64-encoded bytes as 'data' to a 64-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'blake2s'.",
   "caveats": V1,
@@ -1295,9 +1299,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.hash.ripemd160",
   "version": S[3],
-  "toolId": S[36],
-  "lane": S[10],
-  "displayName": S[36],
+  "toolId": S[37],
+  "lane": S[7],
+  "displayName": S[37],
   "category": "data",
   "description": "hash_ripemd160 - hash data with RIPEMD-160. Use for cryptographic address and checksum derivation. In/out: base64-encoded bytes as 'data' to a 40-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'ripemd160'.",
   "caveats": V1,
@@ -1324,7 +1328,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "packageId": "cap.bundled.hash.sm3",
   "version": S[3],
   "toolId": "hash_sm3",
-  "lane": S[10],
+  "lane": S[7],
   "displayName": "hash_sm3",
   "category": "data",
   "description": "hash_sm3 - hash data with Chinese National Standard SM3. Use for commercial cryptographic compliance. In/out: base64-encoded bytes as 'data' to a 64-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'sm3'.",
@@ -1351,9 +1355,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.hash.whirlpool",
   "version": S[3],
-  "toolId": S[37],
-  "lane": S[10],
-  "displayName": S[37],
+  "toolId": S[38],
+  "lane": S[7],
+  "displayName": S[38],
   "category": "data",
   "description": "hash_whirlpool - hash data with Whirlpool (512-bit). Use for ISO/IEC 10118-3 cryptographic hashing. In/out: base64-encoded bytes as 'data' to a 128-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'whirlpool'.",
   "caveats": V1,
@@ -1379,9 +1383,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.hash.adler32",
   "version": S[3],
-  "toolId": S[42],
-  "lane": S[10],
-  "displayName": S[42],
+  "toolId": S[45],
+  "lane": S[7],
+  "displayName": S[45],
   "category": "data",
   "description": "hash_adler32 - compute Adler-32 rolling checksum. Use for quick data error-detection in compressed streams. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'adler32'.",
   "caveats": V1,
@@ -1408,7 +1412,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "packageId": "cap.bundled.hash.crc32",
   "version": S[3],
   "toolId": "hash_crc32",
-  "lane": S[10],
+  "lane": S[7],
   "displayName": "hash_crc32",
   "category": "data",
   "description": "hash_crc32 - compute standard CRC-32 (IEEE 802.3) cyclic redundancy checksum. Use for integrity checks. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'crc32'.",
@@ -1435,9 +1439,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.hash.xxhash32",
   "version": S[3],
-  "toolId": S[41],
-  "lane": S[10],
-  "displayName": S[41],
+  "toolId": S[43],
+  "lane": S[7],
+  "displayName": S[43],
   "category": "data",
   "description": "hash_xxhash32 - compute fast 32-bit xxHash non-cryptographic checksum. Use for high-speed hash tables. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'xxhash32'.",
   "caveats": V1,
@@ -1461,11 +1465,131 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "callexport": true
  },
  {
+  "packageId": "cap.bundled.hash.xxhash64",
+  "version": S[3],
+  "toolId": S[44],
+  "lane": S[7],
+  "displayName": S[44],
+  "category": "data",
+  "description": "hash_xxhash64 - compute the 64-bit xxHash (XXH64) checksum, fixed seed 0. Use for fast non-cryptographic hashing. In/out: base64 bytes as 'data' to a 16-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'xxhash64'.",
+  "caveats": [
+   S[22]
+  ],
+  "capabilities": C3,
+  "replayClass": S[2],
+  "licence": L2,
+  "binary": {
+   "sha256": "de1f937a9c1d82dc347dd6abb38833f73ef77bebe68495b2ca3c51b584df79be",
+   "bytes": 2386,
+   "tier": "tiny",
+   "initialPages": 2,
+   "maxPages": 2
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.hash.xxhash64-1.0.0.manifest.json",
+  "sourceKind": S[0],
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": false,
+  "disabled": false,
+  "disabledReason": null,
+  "callexport": true
+ },
+ {
+  "packageId": "cap.bundled.hash.xxhash3",
+  "version": S[3],
+  "toolId": S[48],
+  "lane": S[7],
+  "displayName": S[48],
+  "category": "data",
+  "description": "hash_xxhash3 - compute the XXH3-64 checksum, fixed seed 0. Use for fast non-cryptographic hashing. In/out: base64 bytes as 'data' to a 16-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'xxhash3'.",
+  "caveats": [
+   S[22]
+  ],
+  "capabilities": C3,
+  "replayClass": S[2],
+  "licence": L2,
+  "binary": {
+   "sha256": "2a8d44107f4641e0e7ca169d52cd3890365c9c83877cb95e35d381625e0c3b74",
+   "bytes": 8866,
+   "tier": "tiny",
+   "initialPages": 2,
+   "maxPages": 2
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.hash.xxhash3-1.0.0.manifest.json",
+  "sourceKind": S[0],
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": false,
+  "disabled": false,
+  "disabledReason": null,
+  "callexport": true
+ },
+ {
+  "packageId": "cap.bundled.hash.xxhash128",
+  "version": S[3],
+  "toolId": S[39],
+  "lane": S[7],
+  "displayName": S[39],
+  "category": "data",
+  "description": "hash_xxhash128 - compute the 128-bit xxHash (XXH128) checksum, fixed seed 0. Use for strong non-cryptographic fingerprints. In/out: base64 bytes as 'data' to a 32-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'xxhash128'.",
+  "caveats": [
+   S[22]
+  ],
+  "capabilities": C3,
+  "replayClass": S[2],
+  "licence": L2,
+  "binary": {
+   "sha256": "a02165ba1a90d88728f125e1e58b8821f5e46d4a7602b66b4a0458dc250c5fd1",
+   "bytes": 10302,
+   "tier": "tiny",
+   "initialPages": 2,
+   "maxPages": 2
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.hash.xxhash128-1.0.0.manifest.json",
+  "sourceKind": S[0],
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": false,
+  "disabled": false,
+  "disabledReason": null,
+  "callexport": true
+ },
+ {
+  "packageId": "cap.bundled.hash.crc64",
+  "version": S[3],
+  "toolId": "hash_crc64",
+  "lane": S[7],
+  "displayName": "hash_crc64",
+  "category": "data",
+  "description": "hash_crc64 - compute the CRC-64/XZ cyclic redundancy checksum (fixed polynomial). Use for integrity checks. In/out: base64 bytes as 'data' to a 16-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'crc64'.",
+  "caveats": [
+   "Streaming drive (16 KiB chunks); CRC-64/XZ with the fixed polynomial c96c5795d7870f42, not an argument."
+  ],
+  "capabilities": C3,
+  "replayClass": S[2],
+  "licence": L2,
+  "binary": {
+   "sha256": "4ff0b9eb1efab52973e27f1aea8810a2f752997390eb0e7a8061e67aaf2340a7",
+   "bytes": 1210,
+   "tier": "tiny",
+   "initialPages": 2,
+   "maxPages": 2
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.hash.crc64-1.0.0.manifest.json",
+  "sourceKind": S[0],
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": false,
+  "disabled": false,
+  "disabledReason": null,
+  "callexport": true
+ },
+ {
   "packageId": "cap.bundled.chacha20.poly1305",
   "version": S[3],
-  "toolId": S[34],
+  "toolId": S[35],
   "lane": "awasm-chacha",
-  "displayName": S[34],
+  "displayName": S[35],
   "category": S[4],
   "description": "chacha20_poly1305 - encrypt/decrypt data with ChaCha20-Poly1305 AEAD. Use for authenticated encryption on-device. In/out: base64 key (32B), nonce (12B), data, mode ('encrypt'|'decrypt'). Example: {key: '...', nonce: '...', data: '...'} -> {data: '...'}.",
   "caveats": [
@@ -1531,21 +1655,21 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.awk.filter.bounded",
   "version": S[3],
-  "toolId": S[33],
+  "toolId": S[34],
   "lane": "awk",
-  "displayName": S[33],
+  "displayName": S[34],
   "category": "text",
   "description": "awk_filter_bounded - split, filter, and print bounded text records. Use for field extraction and literal line filtering. In/out: stdin plus one program arg to stdout. Supports -F and literal /pattern/ with ^/$ edge anchors.",
   "caveats": [
    "Bounded clean-room subset, not canonical awk; literal patterns with optional ^/$ edge anchors only.",
    "CAP preview is stdin-only; no owner files are projected.",
-   S[6]
+   S[8]
   ],
   "capabilities": C0,
   "replayClass": S[2],
   "licence": {
-   "spdx": S[32],
-   "file": S[29],
+   "spdx": S[33],
+   "file": S[30],
    "notices": "extension/wasm/licenses/awk-NOTICES.txt"
   },
   "binary": {
@@ -1566,20 +1690,20 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.date.formatter.bounded",
   "version": S[3],
-  "toolId": S[30],
+  "toolId": S[31],
   "lane": "date",
-  "displayName": S[30],
+  "displayName": S[31],
   "category": "time",
   "description": "date_formatter_bounded - format current time, numeric epochs, or exact ISO dates. Use for UTC and ISO formatting. In/out: up to four bounded args to one stdout line. Invalid or missing date specs fail nonzero.",
   "caveats": [
    "Bounded clean-room formatter, not canonical date; exact numeric epoch and ISO date inputs only.",
-   S[6]
+   S[8]
   ],
   "capabilities": C0,
   "replayClass": S[2],
   "licence": {
-   "spdx": S[32],
-   "file": S[29],
+   "spdx": S[33],
+   "file": S[30],
    "notices": "extension/wasm/licenses/date-NOTICES.txt"
   },
   "binary": {
@@ -1702,9 +1826,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.sqlite3.query.bounded",
   "version": S[3],
-  "toolId": S[31],
+  "toolId": S[32],
   "lane": "sqlite3",
-  "displayName": S[31],
+  "displayName": S[32],
   "category": "data",
   "description": "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational data. In/out: JSON request (<=2 KiB) with sql and params to row set (<=64 KiB). No flags. Example: 'SELECT * FROM test'.",
   "caveats": [
@@ -1718,12 +1842,12 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "data.read",
    "data.write",
    S[14],
-   S[24]
+   S[25]
   ],
-  "replayClass": S[26],
+  "replayClass": S[27],
   "licence": {
    "spdx": "blessing AND Apache-2.0",
-   "file": S[9],
+   "file": S[10],
    "notices": "extension/wasm/licenses/SQLite-Blessing-3.46.0.txt"
   },
   "binary": {

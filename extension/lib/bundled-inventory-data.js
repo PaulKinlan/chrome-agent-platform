@@ -100,6 +100,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "digest": "46ca602b097d817c917e3025ed79e1e8fbc256b76e9e591e105c3b03b2a8d65e"
   },
   {
+   "pkg": "cap.bundled.hash.crc64",
+   "version": "1.0.0",
+   "digest": "1cdb1d12aef5b445670c0851a5d6a785a7f265c9f9c5baa2c6c9a51cbf12feb5"
+  },
+  {
    "pkg": "cap.bundled.hash.keccak.256",
    "version": "1.0.0",
    "digest": "9f0f24e9d947a393af228f09f35590844409159111ea39fd63187fb6ab1d46e1"
@@ -155,9 +160,24 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "digest": "19878e6c39dd6d3d11da8af08ed933694bc423415d0fa96ab0ccc73fb847ce8f"
   },
   {
+   "pkg": "cap.bundled.hash.xxhash128",
+   "version": "1.0.0",
+   "digest": "7ebb834b8879142dfe3e4f05348b9df15f8426fc8957c9e5075628d6b2d5e0a0"
+  },
+  {
+   "pkg": "cap.bundled.hash.xxhash3",
+   "version": "1.0.0",
+   "digest": "91472d1ac6d0e4bba650cc255dfa438252f4967e6214bb54bc317f1a32c395a2"
+  },
+  {
    "pkg": "cap.bundled.hash.xxhash32",
    "version": "1.0.0",
    "digest": "d0eef46db2d1dd39deebb1f19b862394ff06a949aa2bb9eb36eb62a28d40441b"
+  },
+  {
+   "pkg": "cap.bundled.hash.xxhash64",
+   "version": "1.0.0",
+   "digest": "d560046d4342d23c2a57061a4c13549cad0b4fb701c85f0c1945dc0ced8250d6"
   },
   {
    "pkg": "cap.bundled.head",
@@ -332,6 +352,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 34894
   },
   {
+   "rel": P + "cas/2a8d44107f4641e0e7ca169d52cd3890365c9c83877cb95e35d381625e0c3b74.wasm",
+   "sha256": "2a8d44107f4641e0e7ca169d52cd3890365c9c83877cb95e35d381625e0c3b74",
+   "size": 8866
+  },
+  {
    "rel": P + "cas/3ac6d44a150d6e51afec98a6552ea313067162429066486ed3c5fc8698937197.wasm",
    "sha256": "3ac6d44a150d6e51afec98a6552ea313067162429066486ed3c5fc8698937197",
    "size": 2853
@@ -360,6 +385,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": P + "cas/4b3e3ab7973037bfdf21c776085c617dd15d8faad72c073f2eb4ca022a233f8b.wasm",
    "sha256": "4b3e3ab7973037bfdf21c776085c617dd15d8faad72c073f2eb4ca022a233f8b",
    "size": 4018
+  },
+  {
+   "rel": P + "cas/4ff0b9eb1efab52973e27f1aea8810a2f752997390eb0e7a8061e67aaf2340a7.wasm",
+   "sha256": "4ff0b9eb1efab52973e27f1aea8810a2f752997390eb0e7a8061e67aaf2340a7",
+   "size": 1210
   },
   {
    "rel": P + "cas/58308a6f83dd912cb7c16045ebba13ce507a2554ea0fc008b12582822c812d26.wasm",
@@ -415,6 +445,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": P + "cas/9ce43db995cc580551a3a061127ca0756043d2f55e2c925efbb43106c8438761.wasm",
    "sha256": "9ce43db995cc580551a3a061127ca0756043d2f55e2c925efbb43106c8438761",
    "size": 32309
+  },
+  {
+   "rel": P + "cas/a02165ba1a90d88728f125e1e58b8821f5e46d4a7602b66b4a0458dc250c5fd1.wasm",
+   "sha256": "a02165ba1a90d88728f125e1e58b8821f5e46d4a7602b66b4a0458dc250c5fd1",
+   "size": 10302
   },
   {
    "rel": P + "cas/a762e1cdcbfa18f5497fd39a20a4158f74173737187e5bd85a67acebf6b737a8.wasm",
@@ -495,6 +530,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": P + "cas/daa8ef830215b5e710dd529a4ed5d8c81591bdf92401241a94242b0b79857585.wasm",
    "sha256": "daa8ef830215b5e710dd529a4ed5d8c81591bdf92401241a94242b0b79857585",
    "size": 32116
+  },
+  {
+   "rel": P + "cas/de1f937a9c1d82dc347dd6abb38833f73ef77bebe68495b2ca3c51b584df79be.wasm",
+   "sha256": "de1f937a9c1d82dc347dd6abb38833f73ef77bebe68495b2ca3c51b584df79be",
+   "size": 2386
   },
   {
    "rel": P + "cas/e0543d170ac9bd0cd55b274604b55add18c17c5d87169ebfdf25b4b7245a386a.wasm",
@@ -722,6 +762,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 1965
   },
   {
+   "rel": P + "manifests/cap.bundled.hash.crc64-1.0.0.manifest.json",
+   "sha256": "1cdb1d12aef5b445670c0851a5d6a785a7f265c9f9c5baa2c6c9a51cbf12feb5",
+   "size": 2054
+  },
+  {
    "rel": P + "manifests/cap.bundled.hash.keccak.256-1.0.0.manifest.json",
    "sha256": "9f0f24e9d947a393af228f09f35590844409159111ea39fd63187fb6ab1d46e1",
    "size": 2046
@@ -777,9 +822,24 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 1986
   },
   {
+   "rel": P + "manifests/cap.bundled.hash.xxhash128-1.0.0.manifest.json",
+   "sha256": "7ebb834b8879142dfe3e4f05348b9df15f8426fc8957c9e5075628d6b2d5e0a0",
+   "size": 2100
+  },
+  {
+   "rel": P + "manifests/cap.bundled.hash.xxhash3-1.0.0.manifest.json",
+   "sha256": "91472d1ac6d0e4bba650cc255dfa438252f4967e6214bb54bc317f1a32c395a2",
+   "size": 2059
+  },
+  {
    "rel": P + "manifests/cap.bundled.hash.xxhash32-1.0.0.manifest.json",
    "sha256": "d0eef46db2d1dd39deebb1f19b862394ff06a949aa2bb9eb36eb62a28d40441b",
    "size": 1962
+  },
+  {
+   "rel": P + "manifests/cap.bundled.hash.xxhash64-1.0.0.manifest.json",
+   "sha256": "d560046d4342d23c2a57061a4c13549cad0b4fb701c85f0c1945dc0ced8250d6",
+   "size": 2081
   },
   {
    "rel": P + "manifests/cap.bundled.head-1.0.0.manifest.json",
@@ -987,6 +1047,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 1393
   },
   {
+   "rel": P + "sbom/hash_crc64.cdx.json",
+   "sha256": "d718166d6b49dd0ba8d4fd47ba760c5279205d8cf1f4e60c6e0f3fe0e1084884",
+   "size": 1393
+  },
+  {
    "rel": P + "sbom/hash_keccak_256.cdx.json",
    "sha256": "603dff86047a3569e62881795f02730f7e35f4a0195cec49297e8ff5c70fe7d5",
    "size": 1403
@@ -1042,8 +1107,23 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 1401
   },
   {
+   "rel": P + "sbom/hash_xxhash128.cdx.json",
+   "sha256": "5eb707417f9425aabcc3d90686f1a33fb3237ec6b92537781f9b0c6734909ad0",
+   "size": 1401
+  },
+  {
+   "rel": P + "sbom/hash_xxhash3.cdx.json",
+   "sha256": "ed32ec51b6fa95c8713831ff7e37b648fe6fddf8d5a5127b7400645237834e34",
+   "size": 1397
+  },
+  {
    "rel": P + "sbom/hash_xxhash32.cdx.json",
    "sha256": "d873d17e50c6b56ddbe4ca71be8566636a681d00e3e24b7ffd9342d1dbb1b78d",
+   "size": 1399
+  },
+  {
+   "rel": P + "sbom/hash_xxhash64.cdx.json",
+   "sha256": "e91ee421a6858550a05d6c7a1b6b9935d925dda48123a5b44f98f017380bb25f",
    "size": 1399
   },
   {

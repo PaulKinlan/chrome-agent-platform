@@ -17,16 +17,16 @@ const FORBIDDEN_JARGON_PATTERNS = Object.freeze([
   "CAP-authored",
 ]);
 
-Deno.test("tool naming & descriptions: all 55 tools have Unix-name displayName and lead with '<toolname> - '", () => {
+Deno.test("tool naming & descriptions: all 59 tools have Unix-name displayName and lead with '<toolname> - '", () => {
   assertEquals(
     BUNDLED_TOOL_PACKAGE_ROWS.length,
-    55,
-    "exact 55 bundled tool rows",
+    59,
+    "exact 59 bundled tool rows",
   );
   assertEquals(
     Object.keys(AGENT_DESCRIPTIONS).length,
-    55,
-    "exact 55 agent descriptions",
+    59,
+    "exact 59 agent descriptions",
   );
 
   for (const row of BUNDLED_TOOL_PACKAGE_ROWS) {
@@ -264,8 +264,8 @@ Deno.test("tool naming & descriptions: importing the bundled-tool generator writ
   );
   assertEquals(
     stdout.trim(),
-    "EXPORTS:AGENT_DESCRIPTIONS\nDESCRIPTIONS:55",
-    "the pure surface is the one data export, and all 55 descriptions survive",
+    "EXPORTS:AGENT_DESCRIPTIONS\nDESCRIPTIONS:59",
+    "the pure surface is the one data export, and all 59 descriptions survive",
   );
   assertEquals(
     await fingerprint(),

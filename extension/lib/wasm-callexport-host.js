@@ -54,6 +54,9 @@ export async function executeCallexportRun({ wasmBytes, executable, data, args }
   if (spec.abi === "chacha20_poly1305") {
     return executeChachaPoly1305Run({ ex, memory, args: args ?? (data ? { data } : {}) });
   }
+  if (spec.abi === "hashwasm_stream") {
+    return executeHashwasmStreamRun({ ex, memory, spec, data });
+  }
   const input = decodeBase64(data);
   const bufferPtr = ex[spec.inputBuffer]();
   if (!Number.isSafeInteger(bufferPtr) || bufferPtr < 0) fail("buffer_ptr_invalid");
@@ -83,6 +86,56 @@ function timingSafeEqual(a, b) {
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
   return diff === 0;
+}
+
+// hashwasm_stream (chrome-agent-platform-bwxf) — the streaming drive for the
+// hash-wasm modules whose upstream Hash_Calculate is a literal no-op
+// (xxhash64 / xxhash3 / xxhash128 / crc64). Contract, verified against the
+// official umd glue and the pinned binaries:
+//   main_buffer (Hash_GetBuffer) is 16 KiB and cannot be grown (no
+//   Hash_SetMemorySize export), so the input is fed in <=16384-byte chunks;
+//   the seed/polynomial (seedBytes, little-endian) is written at the buffer
+//   and Hash_Init() reads it from there; Hash_Update(chunkLength) consumes
+//   the buffer; Hash_Final() writes the digest (big-endian-ready — the
+//   modules bswap internally) at buffer[0..digestBytes).
+// The seed is part of the ADMITTED SPEC (seedHex), never user input: these
+// tools take only {data}, like every other hash tool.
+const HASHWASM_STREAM_CHUNK_BYTES = 16384;
+function executeHashwasmStreamRun({ ex, memory, spec, data }) {
+  const init = ex[spec.entry];
+  const update = ex[spec.updateEntry];
+  const final = ex[spec.finalEntry];
+  if (typeof init !== "function" || typeof update !== "function" || typeof final !== "function") {
+    fail("stream_export_missing");
+  }
+  const input = decodeBase64(data);
+  const bufferPtr = ex[spec.inputBuffer]();
+  if (!Number.isSafeInteger(bufferPtr) || bufferPtr < 0) fail("buffer_ptr_invalid");
+  const heap = new Uint8Array(memory.buffer);
+  const seedBytes = spec.seedBytes;
+  // seedHex is the CANONICAL hex of the u64 value (hash-wasm's string
+  // convention, e.g. crc64's default "c96c5795d7870f42"), written
+  // LITTLE-ENDIAN: the upstream glue does setUint32(0, lo, true) /
+  // setUint32(4, hi, true) and the C reads *(uint64_t*)main_buffer.
+  const seed = new Uint8Array(seedBytes);
+  for (let i = 0; i < seedBytes; i++) {
+    seed[i] = parseInt(spec.seedHex.slice((seedBytes - 1 - i) * 2, (seedBytes - i) * 2), 16);
+    if (!Number.isFinite(seed[i])) fail("seed_hex_invalid");
+  }
+  if (bufferPtr + seedBytes > heap.byteLength) fail("input_exceeds_memory");
+  heap.set(seed, bufferPtr);
+  try {
+    init();
+    for (let off = 0; off < input.byteLength; off += HASHWASM_STREAM_CHUNK_BYTES) {
+      const end = Math.min(off + HASHWASM_STREAM_CHUNK_BYTES, input.byteLength);
+      heap.set(input.subarray(off, end), bufferPtr);
+      update(end - off);
+    }
+    final();
+  } catch { fail("entry_call_failed"); }
+  const digest = new Uint8Array(memory.buffer, bufferPtr, spec.digestBytes).slice();
+  if (digest.byteLength !== spec.digestBytes) fail("digest_read_failed");
+  return [...digest].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function encodeBase64(bytes) {
