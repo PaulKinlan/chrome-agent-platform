@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.736] — 2026-10-21
+- All 17 bundled hash tools are verified against external reference digests up to the advertised 4 MiB limit with consistent streaming caveats.
+- All 17 bundled hash tools are now verified against external reference digests up to the advertised 4 MB limit, so large inputs are confirmed correct rather than silently wrong.
+
 ## [0.3.735] — 2026-10-21
 - hashing inputs over 16 KiB with the bundled hash tools now produces correct digests instead of silently wrong ones.
 - Hashing inputs larger than 16 KB with the bundled hash tools now returns the correct digest instead of a silently wrong one.
