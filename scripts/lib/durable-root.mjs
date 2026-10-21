@@ -86,6 +86,7 @@ export const DEFAULT_DURABLE_DIR_FLOOR_BYTES = 32 * 1024 * 1024;
 // bound. Nothing a live run just created is ever a candidate (age gate), and no
 // other lane's evidence directory is in the allowlist.
 export const DEFAULT_DURABLE_DIR_TRIM_NAMES = ["serial-phase-logs", "acp-fixture-logs", "scratch", "tmp"];
+export const EPOCH_SUFFIX_RE = /^.+-[0-9]{10,}$/;
 export const DEFAULT_DURABLE_DIR_TRIM_MIN_AGE_MS = 60 * 60 * 1000;
 export const DEFAULT_DURABLE_DIR_TRIM_MAX_ENTRIES = 200;
 // The stat budget for the staleness walk (kkczc/zcg7p): proving an entry stale means looking at its
@@ -237,6 +238,43 @@ export function trimStaleScratch(root, {
       }
     }
   }
+  // Also trim stale top-level epoch-suffixed run directories directly under root (wvg1s)
+  if (removed < maxEntries && budget.left > 0) {
+    let topEntries;
+    try {
+      topEntries = readdirSync(root, { withFileTypes: true });
+    } catch {
+      topEntries = [];
+    }
+    const topCandidates = [];
+    for (const entry of topEntries) {
+      if (entry.isSymbolicLink()) continue;
+      if (!EPOCH_SUFFIX_RE.test(entry.name)) continue;
+      const path = join(root, entry.name);
+      let st;
+      try {
+        st = lstatSync(path);
+      } catch {
+        continue;
+      }
+      if (st.isSymbolicLink()) continue;
+      const match = /-([0-9]{10,})$/.exec(entry.name);
+      const suffixTs = match ? Number(match[1]) : 0;
+      if (suffixTs > 0 && now - suffixTs < minAgeMs) continue; // suffix is fresher than minAgeMs: keep
+
+      const newest = newestMtimeMs(path, budget);
+      if (newest === null) continue; // could not prove it stale: keep it
+      if (now - newest >= minAgeMs) topCandidates.push({ path, newest });
+    }
+    topCandidates.sort((a, b) => a.newest - b.newest);
+    for (const candidate of topCandidates) {
+      if (removed >= maxEntries) break;
+      try {
+        rmSync(candidate.path, { recursive: true, force: true });
+        removed++;
+      } catch {}
+    }
+  }
   return { removed, before, after: freeBytesAt(root) };
 }
 
@@ -285,7 +323,19 @@ export function durableDir(...parts) {
     const parent = parts.length > 1 ? join(durableRoot(), ...parts.slice(0, -1)) : durableRoot();
     try {
       if (existsSync(parent)) {
-        const count = readdirSync(parent).length;
+        let count = readdirSync(parent).length;
+        if (count >= cap) {
+          // Relieve entry cap pressure from stale scratch and epoch-suffixed run dirs (wvg1s)
+          const root = durableRoot();
+          const trim = trimStaleScratch(root, {
+            names: trimNames(),
+            minAgeMs: parseCapEnv("CAP_DURABLE_DIR_TRIM_MIN_AGE_MS", DEFAULT_DURABLE_DIR_TRIM_MIN_AGE_MS, { allowZero: true }),
+            maxEntries: parseCapEnv("CAP_DURABLE_DIR_TRIM_MAX_ENTRIES", DEFAULT_DURABLE_DIR_TRIM_MAX_ENTRIES, { allowZero: true }),
+          });
+          if (trim.removed > 0) {
+            count = readdirSync(parent).length;
+          }
+        }
         if (count >= cap) {
           throw new Error(
             `CAP_DURABLE_DIR_MAX_ENTRIES exceeded: ${parent} has ${count} entries (limit ${cap}, requested ${dir})`,
