@@ -519,7 +519,7 @@ for (const toolId of LANES.c2.tools) {
       displayName: item.toolId,
       category: "data",
       description: AGENT_DESCRIPTIONS[item.toolId],
-      caveats: item.caveats ?? ["One-shot hashing of base64 input up to 4 MiB; no streaming API yet."],
+      caveats: item.caveats ?? ["Hashing of base64 input up to 4 MiB; inputs over 16 KiB stream through the module in 16 KiB chunks."],
       replayClass: "read-only",
       capabilities: item.capabilities,
       callexport,

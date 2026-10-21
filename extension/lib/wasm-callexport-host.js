@@ -61,6 +61,34 @@ export async function executeCallexportRun({ wasmBytes, executable, data, args }
   const bufferPtr = ex[spec.inputBuffer]();
   if (!Number.isSafeInteger(bufferPtr) || bufferPtr < 0) fail("buffer_ptr_invalid");
   const heap = new Uint8Array(memory.buffer);
+  if (input.byteLength > HASHWASM_STREAM_CHUNK_BYTES) {
+    // z3raf: the one-shot drive writes the WHOLE input at the fixed 16 KiB
+    // main_buffer, and the module reads it with no bounds check — inputs over
+    // 16 KiB silently corrupted memory (while the advertised limit said
+    // 4 MiB). Every hash-wasm wave-1 module exports the streaming set, and
+    // its C sources give the exact param mapping used by Hash_Calculate:
+    // Hash_Init(initParam) / Hash_Update(len) / Hash_Final(finalParam), with
+    // extra JS-side args ignored by wasm's fixed arity for no-param families.
+    // Chunked drive; digest at buffer[0..digestBytes) exactly as wave-2.
+    const init = ex.Hash_Init;
+    const update = ex.Hash_Update;
+    const final = ex.Hash_Final;
+    if (typeof init !== "function" || typeof update !== "function" || typeof final !== "function") {
+      fail("input_exceeds_buffer"); // honest refusal, never a silent overrun
+    }
+    try {
+      init(spec.initParam ?? 0);
+      for (let off = 0; off < input.byteLength; off += HASHWASM_STREAM_CHUNK_BYTES) {
+        const end = Math.min(off + HASHWASM_STREAM_CHUNK_BYTES, input.byteLength);
+        heap.set(input.subarray(off, end), bufferPtr);
+        update(end - off);
+      }
+      final(spec.finalParam ?? spec.digestBytes);
+    } catch { fail("entry_call_failed"); }
+    const streamed = new Uint8Array(memory.buffer, bufferPtr, spec.digestBytes).slice();
+    if (streamed.byteLength !== spec.digestBytes) fail("digest_read_failed");
+    return [...streamed].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
   if (bufferPtr + input.byteLength > heap.byteLength) fail("input_exceeds_memory");
   heap.set(input, bufferPtr);
   let digest;

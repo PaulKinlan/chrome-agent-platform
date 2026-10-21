@@ -10,8 +10,8 @@ const S = Object.freeze([
  "text.transform",
  "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation.",
  "hashwasm",
- "One-shot hashing of base64 input up to 4 MiB; no streaming API yet.",
  "extension/wasm/licenses/Apache-2.0.txt",
+ "Hashing of base64 input up to 4 MiB; inputs over 16 KiB stream through the module in 16 KiB chunks.",
  "extension/wasm/licenses/MIT.txt",
  "Apache-2.0",
  "Model and Settings execution use owner-bound OPFS input/output references; large results return a complete size and SHA-256 receipt instead of truncation, and can feed the next tool by reference.",
@@ -60,10 +60,10 @@ const C1 = Object.freeze([S[1], S[4]]);
 const C2 = Object.freeze([S[1], S[15]]);
 const C3 = Object.freeze([S[1]]);
 const L0 = Object.freeze({ spdx: "MIT", file: S[11], notices: null });
-const L1 = Object.freeze({ spdx: S[12], file: S[10], notices: null });
+const L1 = Object.freeze({ spdx: S[12], file: S[9], notices: null });
 const L2 = Object.freeze({ spdx: "MIT", file: S[5], notices: null });
 const V0 = Object.freeze([S[16], S[17], S[13]]);
-const V1 = Object.freeze([S[9]]);
+const V1 = Object.freeze([S[10]]);
 export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.base64",
@@ -547,7 +547,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": S[2],
   "licence": {
    "spdx": S[22],
-   "file": S[10],
+   "file": S[9],
    "notices": "extension/wasm/licenses/toml2json-NOTICES.txt"
   },
   "binary": {
@@ -903,7 +903,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": S[2],
   "licence": {
    "spdx": S[22],
-   "file": S[10],
+   "file": S[9],
    "notices": "extension/wasm/licenses/regexops-NOTICES.txt"
   },
   "binary": {
@@ -937,7 +937,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": S[2],
   "licence": {
    "spdx": S[22],
-   "file": S[10],
+   "file": S[9],
    "notices": "extension/wasm/licenses/oxipng-NOTICES.txt"
   },
   "binary": {
@@ -971,7 +971,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": S[2],
   "licence": {
    "spdx": S[22],
-   "file": S[10],
+   "file": S[9],
    "notices": "extension/wasm/licenses/jxl-NOTICES.txt"
   },
   "binary": {
@@ -1005,7 +1005,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": S[2],
   "licence": {
    "spdx": "BSD-3-Clause AND Apache-2.0",
-   "file": S[10],
+   "file": S[9],
    "notices": "extension/wasm/licenses/avif-NOTICES.txt"
   },
   "binary": {
@@ -1031,7 +1031,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "displayName": S[50],
   "category": "data",
   "description": "hash_blake3 - hash data with BLAKE3. Use to fingerprint content, verify integrity, or derive ids. In/out: base64-encoded bytes as 'data' to a hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}.",
-  "caveats": V1,
+  "caveats": [
+   "One-shot hashing of base64 input up to 4 MiB; no streaming API yet."
+  ],
   "capabilities": C1,
   "replayClass": S[2],
   "licence": L2,
@@ -1882,7 +1884,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": S[27],
   "licence": {
    "spdx": "blessing AND Apache-2.0",
-   "file": S[10],
+   "file": S[9],
    "notices": "extension/wasm/licenses/SQLite-Blessing-3.46.0.txt"
   },
   "binary": {

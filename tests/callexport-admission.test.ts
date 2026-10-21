@@ -252,7 +252,6 @@ Deno.test("callexport: hashwasm_stream manifests validate strictly and reject wr
   const authority = new WasmPackageAuthority({ now: () => 1 });
   const manifestText = await Deno.readTextFile("extension/wasm/manifests/cap.bundled.hash.crc64-1.0.0.manifest.json");
   assertEquals(authority.validateManifest(manifestText).ok, true, "the admitted crc64 streaming manifest validates");
-
   // A v1-only field (initParam) is not part of the streaming key set.
   const extra = JSON.parse(manifestText);
   extra.executables[0].callExport.initParam = 7;
@@ -286,6 +285,43 @@ Deno.test("callexport: hashwasm_stream manifests validate strictly and reject wr
   assertEquals(threw?.code, "callexport_entry_missing");
   // And the real binary passes the audit as admitted.
   assertEquals(auditWasmBinary(bytes, exec).ok, true, "the admitted crc64 binary passes the audit");
+});
+
+// nlx4o (bwxf follow-up): the BOUNDS on the streaming spec fields are enforced
+// but were untested — nothing exercised 0/4097 digestBytes or 0/65 seedBytes,
+// so the refusals rested on code reading. These pins prove each bound fails
+// closed with its typed error against the REAL manifest + REAL binary.
+Deno.test("callexport: hashwasm_stream bound refusals fail closed with typed errors (nlx4o)", async () => {
+  const authority = new WasmPackageAuthority({ now: () => 1 });
+  const manifestText = await Deno.readTextFile("extension/wasm/manifests/cap.bundled.hash.crc64-1.0.0.manifest.json");
+
+  function mutated(mutate: (callExport: Record<string, unknown>) => void) {
+    const m = JSON.parse(manifestText);
+    mutate(m.executables[0].callExport);
+    return authority.validateManifest(JSON.stringify(m));
+  }
+
+  // digestBytes: 0 and 4097 are both outside 1..4096.
+  assertEquals(mutated((c) => { c.digestBytes = 0; }).error, "callexport_digest_invalid");
+  assertEquals(mutated((c) => { c.digestBytes = 4097; }).error, "callexport_digest_invalid");
+
+  // seedBytes: 0 and 65 are both outside 1..64.
+  assertEquals(mutated((c) => { c.seedBytes = 0; }).error, "callexport_seed_invalid");
+  assertEquals(mutated((c) => { c.seedBytes = 65; }).error, "callexport_seed_invalid");
+
+  // seedHex must be exactly seedBytes*2 lowercase hex chars.
+  assertEquals(mutated((c) => { c.seedHex = "c96c5795d7870f"; }).error, "callexport_seedhex_invalid");
+  assertEquals(mutated((c) => { c.seedHex = "C96C5795D7870F42"; }).error, "callexport_seedhex_invalid");
+
+  // The bound values themselves ADMIT: digestBytes 4096 and seedBytes 64 pass
+  // validation (the ranges are inclusive), proving the refusals are the BOUNDS
+  // and not some other shape check.
+  const wide = JSON.parse(manifestText);
+  wide.executables[0].callExport.digestBytes = 4096;
+  wide.executables[0].callExport.seedBytes = 64;
+  wide.executables[0].callExport.seedHex = "ab".repeat(64);
+  const wideResult = authority.validateManifest(JSON.stringify(wide));
+  assertEquals(wideResult.ok, true, `inclusive bounds admit (got ${wideResult.error})`);
 });
 
 Deno.test("callexport: all 21 admitted hash tools run through the harness and match KAT vectors", async () => {
@@ -563,4 +599,46 @@ Deno.test("callexport: executableBundledToolRecords chacha20_poly1305 validator 
   const swCode = await Deno.readTextFile("extension/background/service-worker.js");
   assert(swCode.includes("type: CALLEXPORT_RUN_TYPE"), "service-worker must dispatch CALLEXPORT_RUN_TYPE");
   assert(swCode.includes("args: validatedArgs ?? {}"), "service-worker callexport envelope must forward args");
+});
+
+
+// z3raf: inputs over 16 KiB used to be written WHOLE into the fixed 16 KiB
+// main_buffer (no bounds check inside the module) — silently corrupting the
+// digest — while the advertised limit said 4 MiB. The host now streams any
+// oversized input through the module's own Init/Update/Final with the SAME
+// admitted params. Expected digests: the OFFICIAL hash-wasm 4.12.0 JS library
+// from the SAME pinned tarball (its own glue, its own wasm), 9 of them
+// independently cross-checked against node crypto/zlib at generation time.
+Deno.test("callexport: wave-1 tools hash a 20 KiB input correctly via the streaming fallback (z3raf)", async () => {
+  const input = new Uint8Array(20480);
+  for (let i = 0; i < input.length; i++) input[i] = (i * 7 + 13) & 0xff;
+  const data = btoa(String.fromCharCode(...input));
+  const EXPECTED_20K: Record<string, string> = {
+    hash_md4: "e919c9820a5164ffd29a0c2f705e2129",
+    hash_sha1: "6b6d0103c2da1f737b0f375c1a67174e4b6e0b44",
+    hash_sha224: "841f8dc23d2aa4974b6d43e529147cca578126d8c10282609ac8b6ff",
+    hash_sha384: "a815d8086ddaed016faec1461af4b0b5b1da1ee0d1633332ddff28779233355c17a498a8779b010ebecd19827fdb6b64",
+    hash_sha3_256: "d7a1aa30106ca965d5b0c325d2e67830c393bd3cd69a44fef9a1a7b4d1c73d73",
+    hash_sha3_384: "99a1da5f657b207e04baada91b70d2f915248cc4ef55696c646cfe5d54880f86cb3091311dae052112d708ee119759be",
+    hash_sha3_512: "f09edffb56b383215a8991e9846031447b1d26297c3c80f682138ad8af16ddd5140e830a020e8cb38c4bad9d15f3f4423b4a408ff7b615426d711ca47cf5e653",
+    hash_keccak_256: "73002ae7df1962dac768ef52a67da924b16d9bf2af416faa6750014ed982e13d",
+    hash_blake2b: "d6a96035e1acf72fa7fb949bf06a1120bd5244a3377476c018752abacce0698e72263fba50cb5f8cc2179f2cef8954d257680c96ea1c3e7a95038ac3b7a9d517",
+    hash_blake2s: "509537e8b1096b8ccef046abe760bc9814ece08e80fba187b47cd4b175d3f537",
+    hash_ripemd160: "4767d4543e97eb62ee0a1a3e5a427f1f05bd09c8",
+    hash_sm3: "73fea2bcd92628221be24086469279bb563ca49ff7cd2b67457f4fb183a4b1b2",
+    hash_whirlpool: "b77a6ea2e673b4115a8ab4f471e6490c5d7ed5eb84c5b6bc837caf94e5e38900aaf6b497938df6238552d3d13d134f495e8eb94b92303d0cd98c4c99929941d1",
+    hash_blake3: "2362265bdd255312540c27141ee553641f3f8e68e7c8e0865776d309d60b090a",
+    hash_adler32: "5d27da4a",
+    hash_crc32: "045c3ef7",
+    hash_xxhash32: "3291a957",
+  };
+  for (const [toolId, expectedHash] of Object.entries(EXPECTED_20K)) {
+    const pkgId = `cap.bundled.${toolId.replace(/_/g, ".")}`;
+    const manifestPath = `extension/wasm/manifests/${pkgId}-1.0.0.manifest.json`;
+    const manifest = JSON.parse(await Deno.readTextFile(manifestPath));
+    const exec = manifest.executables[0];
+    const bytes = await Deno.readFile(`extension/wasm/cas/${exec.sha256}.wasm`);
+    const actual = await executeCallexportRun({ wasmBytes: bytes, executable: exec, data });
+    assertEquals(actual, expectedHash, `${toolId} streaming-fallback vector for a 20 KiB input`);
+  }
 });
