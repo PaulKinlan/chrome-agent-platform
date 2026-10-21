@@ -252,7 +252,6 @@ Deno.test("callexport: hashwasm_stream manifests validate strictly and reject wr
   const authority = new WasmPackageAuthority({ now: () => 1 });
   const manifestText = await Deno.readTextFile("extension/wasm/manifests/cap.bundled.hash.crc64-1.0.0.manifest.json");
   assertEquals(authority.validateManifest(manifestText).ok, true, "the admitted crc64 streaming manifest validates");
-
   // A v1-only field (initParam) is not part of the streaming key set.
   const extra = JSON.parse(manifestText);
   extra.executables[0].callExport.initParam = 7;
@@ -286,6 +285,43 @@ Deno.test("callexport: hashwasm_stream manifests validate strictly and reject wr
   assertEquals(threw?.code, "callexport_entry_missing");
   // And the real binary passes the audit as admitted.
   assertEquals(auditWasmBinary(bytes, exec).ok, true, "the admitted crc64 binary passes the audit");
+});
+
+// nlx4o (bwxf follow-up): the BOUNDS on the streaming spec fields are enforced
+// but were untested — nothing exercised 0/4097 digestBytes or 0/65 seedBytes,
+// so the refusals rested on code reading. These pins prove each bound fails
+// closed with its typed error against the REAL manifest + REAL binary.
+Deno.test("callexport: hashwasm_stream bound refusals fail closed with typed errors (nlx4o)", async () => {
+  const authority = new WasmPackageAuthority({ now: () => 1 });
+  const manifestText = await Deno.readTextFile("extension/wasm/manifests/cap.bundled.hash.crc64-1.0.0.manifest.json");
+
+  function mutated(mutate: (callExport: Record<string, unknown>) => void) {
+    const m = JSON.parse(manifestText);
+    mutate(m.executables[0].callExport);
+    return authority.validateManifest(JSON.stringify(m));
+  }
+
+  // digestBytes: 0 and 4097 are both outside 1..4096.
+  assertEquals(mutated((c) => { c.digestBytes = 0; }).error, "callexport_digest_invalid");
+  assertEquals(mutated((c) => { c.digestBytes = 4097; }).error, "callexport_digest_invalid");
+
+  // seedBytes: 0 and 65 are both outside 1..64.
+  assertEquals(mutated((c) => { c.seedBytes = 0; }).error, "callexport_seed_invalid");
+  assertEquals(mutated((c) => { c.seedBytes = 65; }).error, "callexport_seed_invalid");
+
+  // seedHex must be exactly seedBytes*2 lowercase hex chars.
+  assertEquals(mutated((c) => { c.seedHex = "c96c5795d7870f"; }).error, "callexport_seedhex_invalid");
+  assertEquals(mutated((c) => { c.seedHex = "C96C5795D7870F42"; }).error, "callexport_seedhex_invalid");
+
+  // The bound values themselves ADMIT: digestBytes 4096 and seedBytes 64 pass
+  // validation (the ranges are inclusive), proving the refusals are the BOUNDS
+  // and not some other shape check.
+  const wide = JSON.parse(manifestText);
+  wide.executables[0].callExport.digestBytes = 4096;
+  wide.executables[0].callExport.seedBytes = 64;
+  wide.executables[0].callExport.seedHex = "ab".repeat(64);
+  const wideResult = authority.validateManifest(JSON.stringify(wide));
+  assertEquals(wideResult.ok, true, `inclusive bounds admit (got ${wideResult.error})`);
 });
 
 Deno.test("callexport: all 21 admitted hash tools run through the harness and match KAT vectors", async () => {
