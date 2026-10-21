@@ -154,6 +154,10 @@ export const UPSTREAM_MAP = Object.freeze({
     upstreamName: "hash-wasm (Daninet/hash-wasm)",
     upstreamUrl: "https://github.com/Daninet/hash-wasm",
   },
+  "cap.bundled.regexops": {
+    upstreamName: "Chrome Agent Platform (nmc2; regex crate by The Rust Project Developers / Andrew Gallant)",
+    upstreamUrl: "https://github.com/PaulKinlan/chrome-agent-platform",
+  },
   "cap.bundled.head": {
     upstreamName: "Chrome Agent Platform (a2)",
     upstreamUrl: "https://github.com/PaulKinlan/chrome-agent-platform",

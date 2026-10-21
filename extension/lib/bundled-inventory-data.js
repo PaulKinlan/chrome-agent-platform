@@ -220,6 +220,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "digest": "5e864edcdad1039a4e81141e254689e270a407c8c85ca66d3a80fb5c5ae062cd"
   },
   {
+   "pkg": "cap.bundled.regexops",
+   "version": "1.0.0",
+   "digest": "a94b3c303a3021ca7c515248ce31e0fef5662307d9b95e3e43362d6106636495"
+  },
+  {
    "pkg": "cap.bundled.sed",
    "version": "1.0.0",
    "digest": "0e1c211c8dee47c37831bbf4968b35dc03e3580dec7b5b3acb9c564e7fc5a2c7"
@@ -355,6 +360,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": P + "cas/2a8d44107f4641e0e7ca169d52cd3890365c9c83877cb95e35d381625e0c3b74.wasm",
    "sha256": "2a8d44107f4641e0e7ca169d52cd3890365c9c83877cb95e35d381625e0c3b74",
    "size": 8866
+  },
+  {
+   "rel": P + "cas/307b5b5bf05c3d83108e3551f05e89f2b9bfc480ee789650dae28e15eb503d9a.wasm",
+   "sha256": "307b5b5bf05c3d83108e3551f05e89f2b9bfc480ee789650dae28e15eb503d9a",
+   "size": 893555
   },
   {
    "rel": P + "cas/3ac6d44a150d6e51afec98a6552ea313067162429066486ed3c5fc8698937197.wasm",
@@ -657,6 +667,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 1068
   },
   {
+   "rel": P + "licenses/regexops-NOTICES.txt",
+   "sha256": "34d6607780c2817a68a0bdc7cec93aecfe46a6bd8c789bb7373834a57827ba5f",
+   "size": 481
+  },
+  {
    "rel": P + "licenses/SQLite-Blessing-3.46.0.txt",
    "sha256": "06545a6ec25fbbff6c62f205f94a35be49e38f33bea827a8cfb07d7b82e4b083",
    "size": 254
@@ -880,6 +895,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": P + "manifests/cap.bundled.patch-1.0.0.manifest.json",
    "sha256": "5e864edcdad1039a4e81141e254689e270a407c8c85ca66d3a80fb5c5ae062cd",
    "size": 1846
+  },
+  {
+   "rel": P + "manifests/cap.bundled.regexops-1.0.0.manifest.json",
+   "sha256": "a94b3c303a3021ca7c515248ce31e0fef5662307d9b95e3e43362d6106636495",
+   "size": 1939
   },
   {
    "rel": P + "manifests/cap.bundled.sed-1.0.0.manifest.json",
@@ -1145,6 +1165,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": P + "sbom/oxipng.cdx.json",
    "sha256": "e8d28965d370b29256514a294184dc137356ecefb91b957d61a023d38032344a",
    "size": 6624
+  },
+  {
+   "rel": P + "sbom/regexops.cdx.json",
+   "sha256": "2032b2870227682b4e591cfd873c3ce0390bcdfdb603683d613a7a85c408e6aa",
+   "size": 2000
   },
   {
    "rel": P + "sbom/sed.cdx.json",

@@ -31,7 +31,7 @@ Managed default tools run across three dedicated execution lanes:
   - Contract: `_start` entry point, `wasi_snapshot_preview1` imports only (`fd_read`, `fd_write`, `fd_close`, `fd_seek`, etc.).
   - Communication: Streaming `stdin` → `stdout`, isolated per-job preopen mounts (`/job/inputs`).
   - Confinement: Wall-clock execution limits and memory32 `maxPages` bounds; zero host networking; origin-keyed OPFS isolation. Path and envelope bytes are bounded, but there is **no per-call IO byte cap** (`extension/lib/wasi-preview1-runtime.js`: "no per-call IO byte cap").
-  - Status: **BUILT** (`extension/lib/wasm-stream-files.js`, `extension/lib/tool-stream-platform.js`; 37 admitted command tool packages in `extension/wasm/manifests/`).
+  - Status: **BUILT** (`extension/lib/wasm-stream-files.js`, `extension/lib/tool-stream-platform.js`; 38 admitted command tool packages in `extension/wasm/manifests/`, including the CAP-authored `cap.bundled.regexops` (nmc2)).
 - **Lane B: Call-Export Pure Compute Modules (Minimal Host):**
   - Contract: Zero imports (no WASI, no POSIX glue); exports direct computation functions.
   - Communication: CAP-authored JS harness writes buffers directly into WebAssembly memory, invokes the export, and reads back return values. Instantiates in-thread within the offscreen document host via `extension/lib/wasm-callexport-host.js`.
@@ -258,8 +258,10 @@ Chrome; ~350 KB gz ICU4C wasm only needed for other browsers)
   allowlist); schema-2 `auditEmscriptenModule` refuses `multi_value_unsupported at wasm`
   before import admission (the Emscripten 6.0.0 thin-native profile has no
   wasm-bindgen string-ABI host).
-- ReDoS-safe regex capability is separately filed as `chrome-agent-platform-nmc2`
-  (CAP-authored WASI preview-1 Rust-regex driver, Lane A — admissible in shape, not admitted).
+- ReDoS-safe regex capability shipped via `chrome-agent-platform-nmc2`:
+  `cap.bundled.regexops-1.0.0` (CAP-authored WASI preview-1 Rust-regex driver,
+  Lane A; `regex` crate 1.13.1, byte-reproducible build, binary self-bounds
+  pattern/replace/max; evidence tree `packages/bundled/evidence/regexops/`).
 - Sources: https://github.com/rust-lang/regex (linear-time guarantee)
 
 ### pcre2-wasm — NOT-FOUND (no maintained npm wasm port; rust regex covers the need)

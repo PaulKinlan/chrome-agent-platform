@@ -98,6 +98,7 @@ const PATHS = {
   imageops: join(EVIDENCE, "imageops"),
   zxing: join(EVIDENCE, "zxing"),
   compressops: join(EVIDENCE, "compressops"),
+  regexops: join(EVIDENCE, "regexops"),
   oxipng: join(EVIDENCE, "oxipng"),
   jxl: join(EVIDENCE, "jxl"),
   avif: join(EVIDENCE, "avif"),
@@ -170,6 +171,7 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
   hash_crc64: "hash_crc64 - compute the CRC-64/XZ cyclic redundancy checksum (fixed polynomial). Use for integrity checks. In/out: base64 bytes as 'data' to a 16-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'crc64'.",
   chacha20_poly1305: "chacha20_poly1305 - encrypt/decrypt data with ChaCha20-Poly1305 AEAD. Use for authenticated encryption on-device. In/out: base64 key (32B), nonce (12B), data, mode ('encrypt'|'decrypt'). Example: {key: '...', nonce: '...', data: '...'} -> {data: '...'}.",
   compressops: "compressops - compress or decompress with zstd or brotli. Use to shrink text or bytes. Compress text (stdin) to a base64 frame; decompress a base64 frame to base64; info reports a base64 frame. zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
+  regexops: "regexops - linear-time regex match/replace (ReDoS-safe). Use for pattern search and bounded rewriting. Subject on stdin (UTF-8). match -p <pattern> [--max 1..256] prints spans+groups as JSON; replace -p <pattern> -r <text> rewrites.",
   oxipng: "oxipng - shrink a PNG without changing its pixels. Use to optimise a PNG before saving or sharing it. In/out: base64 PNG text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: -o <0..6> effort (default 2); --strip safe|all.",
   jxl: "jxl - decode a JPEG XL (JXL) image to PNG. Use to decode or view a JXL file or convert JXL to PNG. In/out: base64 JXL text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: --to png (default).",
   avif: "avif - encode an image to AVIF on-device. Use to convert a PNG/JPEG/WebP to the smaller AVIF format. In/out: base64 image text on stdin to AVIF bytes on stdout (base64 at the boundary). Flags: --quality <1..100> (default 80); --speed <1..10> (default 10).",
@@ -343,6 +345,16 @@ for (const toolId of LANES.c2.tools) {
   const buildB = readFileSync(join(PATHS.compressops, "build-b/compressops.wasm"));
   if (sha256(buildB) !== sha256(wasm)) throw new Error("compressops reproducibility broken (build-a != build-b)");
   packages.push({ toolId: "compressops", lane: "compressops", bytes: wasm, row: null, tier: "default", spdx: "Apache-2.0", licenseFile: "extension/wasm/licenses/Apache-2.0.txt", notices: null, sbom: { src: join(PATHS.compressops, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/compressops.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "rustc/cargo 1.97.1; wasm32-wasip1", buildScriptLane: "compressops", displayName: "compressops", category: "data", description: AGENT_DESCRIPTIONS.compressops, caveats: ["zstd and brotli only; stdin/stdout; no in-place archive manipulation."], replayClass: "read-only", capabilities: ["compute"] });
+}
+{ // regexops (nmc2 — CAP-authored linear-time regex WASI CLI): MIT OR Apache-2.0.
+  // ReDoS-safe by construction (regex crate = RE2-style automata, no
+  // backtracking); the binary self-bounds pattern/replacement/max so the host
+  // wrapper needs no regex-specific ceilings.
+  const wasm = readFileSync(join(PATHS.regexops, "build-a/regexops.wasm"));
+  if (sha256(wasm) !== "307b5b5bf05c3d83108e3551f05e89f2b9bfc480ee789650dae28e15eb503d9a" || wasm.byteLength !== 893555) throw new Error("regexops hash/size mismatch");
+  const buildB = readFileSync(join(PATHS.regexops, "build-b/regexops.wasm"));
+  if (sha256(buildB) !== sha256(wasm)) throw new Error("regexops reproducibility broken (build-a != build-b)");
+  packages.push({ toolId: "regexops", lane: "regexops", bytes: wasm, row: null, tier: "default", spdx: "MIT AND Apache-2.0", licenseFile: "extension/wasm/licenses/Apache-2.0.txt", notices: "extension/wasm/licenses/regexops-NOTICES.txt", sbom: { src: join(PATHS.regexops, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/regexops.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "rustc/cargo 1.99.1; wasm32-wasip1", buildScriptLane: "regexops", displayName: "regexops", category: "text", description: AGENT_DESCRIPTIONS.regexops, caveats: ["match/replace only; stdin/stdout (UTF-8); pattern <= 256 chars; match output capped (--max, default 32) with a truncated flag; linear-time engine (regex crate), no backtracking."], replayClass: "read-only", capabilities: ["compute", "text.transform"] });
 }
 { // oxipng (CAP-authored WASI driver over the oxipng crate; libdeflate compiled freestanding; m3vb option B): MIT AND Apache-2.0
   const wasm = readFileSync(join(PATHS.oxipng, "build-a/oxipng.wasm"));
@@ -665,6 +677,7 @@ const LICENSE_WRITES = {
   "extension/wasm/licenses/posixutils-rs-MIT.txt": readFileSync(join(PATHS.awkFull, "source/LICENSE")),
   "extension/wasm/licenses/jq-MIT.txt": readFileSync(join(PATHS.jq, "COPYING-jq.txt")),
   "extension/wasm/licenses/hash-wasm-MIT.txt": readFileSync(join(PATHS.hashwasm, "LICENSES/hash-wasm-MIT.txt")),
+  "extension/wasm/licenses/regexops-NOTICES.txt": readFileSync(join(PATHS.regexops, "NOTICES.md")),
 };
 
 // ── Manifests (authority-schema-exact; canonical bytes; re-validated) ───────
@@ -680,7 +693,7 @@ const SIGNER = { lane: "bundled", keyId: "cap-bundled-release" };
 // (explicit owner click). Every other lane stays admitted:false / disabled:true
 // — no catalog/provider selection authority. New semantic tranches append so
 // the predecessor order stays stable.
-const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "imageops", "zxing", "compressops", "oxipng", "avif", "jxl", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded", "awk_filter_bounded", "date_formatter_bounded", "sed", "awk", "jq"]);
+const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "imageops", "zxing", "compressops", "oxipng", "avif", "jxl", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded", "awk_filter_bounded", "date_formatter_bounded", "sed", "awk", "jq", "regexops"]);
 // Per-package source anchors: the original 25 keep the bundle-landing anchor;
 // SQLite (package 26) anchors at the exact 0.2.166 tabular parent.
 const SOURCE = { repo: "https://github.com/PaulKinlan/chrome-agent-platform", commit: "5e086c1fb0847ddccf1a16ba3129a4cf900eac8f" };
