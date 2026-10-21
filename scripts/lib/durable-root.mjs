@@ -10,7 +10,7 @@
 // scripts and node build scripts) share this one rule.
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statfsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 /** True when `dir` sits on a RAM-backed filesystem (tmpfs/ramfs per /proc/mounts). */
 export function isRamBacked(dir) {
@@ -240,6 +240,17 @@ export function trimStaleScratch(root, {
   return { removed, before, after: freeBytesAt(root) };
 }
 
+/** Return the nearest existing ancestor of `path`, falling back to `homedir()`. */
+export function nearestExistingAncestor(path) {
+  let cur = path;
+  while (cur && !existsSync(cur)) {
+    const parent = dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  return cur && existsSync(cur) ? cur : homedir();
+}
+
 function freeBytesAt(path) {
   try {
     const st = statfsSync(path);
@@ -283,7 +294,7 @@ export function durableDir(...parts) {
       }
       if (minFree > 0 || floor > 0) {
         const root = durableRoot();
-        const anchor = existsSync(parent) ? parent : homedir();
+        const anchor = nearestExistingAncestor(parent);
         let free = freeBytesAt(anchor);
         const low = free !== null && ((minFree > 0 && free < minFree) || (floor > 0 && free < floor));
         if (low) {

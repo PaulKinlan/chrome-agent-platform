@@ -143,6 +143,18 @@ error: AssertionError: must have polled responsive Chrome multiple times under l
 `;
   assertEquals(areAllFailuresEnvironmental(assertionFailureWithLoadQuote), false, "AssertionError must never be converted to environmental");
 
+  const assertionFailureEmbeddingRefusal = `
+ ERRORS 
+
+test failure embedding real refusal marker => ./tests/sample-failure.test.ts:25:6
+error: AssertionError: Expected refusal but got QuietWindowRefusedError: ENVIRONMENT: machine is not quiet enough for this gate
+    throw new AssertionError(msg);
+          ^
+
+ FAILURES 
+`;
+  assertEquals(areAllFailuresEnvironmental(assertionFailureEmbeddingRefusal), false, "AssertionError embedding real environmental refusal marker must never be converted to environmental");
+
   // 5. Finding lckla: Parallel phase load alone (e.g. load/core 0.89) with ZERO named heavy-builder jobs
   // MUST strictly remain PRODUCT RED (exit 1) per MERGER-PLAYBOOK m9g43.
   const swParallelPhaseOnlyLoadOutput = `

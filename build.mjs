@@ -914,7 +914,7 @@ try {
     // packaged extension at dist/wasm-tools/python/ (the generated-artifact
     // tree — the raw third-party glue is never shipped as scanned source).
     {
-      const RUNTIME_SRC = process.env.CAP_PYODIDE_RUNTIME_SRC || path.join(ROOT, "wasm-tools/python");
+      const RUNTIME_SRC = path.join(ROOT, "wasm-tools/python");
       const count = await stagePyodideRuntime(RUNTIME_SRC, STAGE);
       console.log(`build: admitted Pyodide runtime staged (${count} files, sha256-verified against MANIFEST.json)`);
     }

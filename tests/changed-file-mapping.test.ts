@@ -528,3 +528,9 @@ Deno.test("oeqvx: mapUncovered maps fixture when referrersFor is supplied and fa
   );
 });
 
+Deno.test("zbge2: wasm license notice text files are not skipped as passive content by changedWithoutCoverage", () => {
+  const uncovered = changedWithoutCoverage(["extension/wasm/licenses/hash-wasm-MIT.txt"]);
+  assertEquals(uncovered, ["extension/wasm/licenses/hash-wasm-MIT.txt"]);
+});
+
+

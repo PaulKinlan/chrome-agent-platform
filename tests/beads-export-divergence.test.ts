@@ -144,15 +144,17 @@ Deno.test("re8v7: the checker refuses unknown arguments before it reads any expo
     cwd: REPO_ROOT,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const text = await new Promise<string>((resolve, reject) => {
+  const { code, text } = await new Promise<{ code: number | null; text: string }>((resolve, reject) => {
     let out = "";
     child.stdout.on("data", (chunk) => out += chunk.toString());
     child.stderr.on("data", (chunk) => out += chunk.toString());
     child.on("error", reject);
-    child.on("close", () => resolve(out));
+    child.on("close", (code) => resolve({ code, text: out }));
   });
+  assertEquals(code, 1, "checker must exit with code 1 on unknown arguments");
   assertStringIncludes(text, "usage: check-beads-export-divergence.mjs");
   assertStringIncludes(text, "cannot verify committed IDs");
+  assert(!text.includes("export failed"), "must refuse usage before attempting git or bd export read");
 });
 
 function stripComments(source: string): string {

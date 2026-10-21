@@ -12,6 +12,7 @@ import {
   DEFAULT_DURABLE_DIR_MIN_FREE_BYTES,
   freeSpaceVerdict,
   isRamBacked,
+  nearestExistingAncestor,
   trimStaleScratch,
 } from "../scripts/lib/durable-root.mjs";
 
@@ -943,3 +944,19 @@ Deno.test("zcg7p/kkczc: when staleness cannot be PROVEN the entry is kept (bound
     await Deno.remove(root, { recursive: true }).catch(() => {});
   }
 });
+
+Deno.test("sd5h6: nearestExistingAncestor finds the closest existing directory instead of homedir", async () => {
+  const root = await Deno.makeTempDir({ prefix: "cap-ancestor-probe-" });
+  try {
+    const parent = join(root, "level1");
+    const child = join(parent, "level2", "level3");
+    // Before level1 exists, nearest existing ancestor of child is root
+    assertEquals(nearestExistingAncestor(child), root);
+    // After creating level1, nearest existing ancestor of child is level1
+    await Deno.mkdir(parent, { recursive: true });
+    assertEquals(nearestExistingAncestor(child), parent);
+  } finally {
+    await Deno.remove(root, { recursive: true }).catch(() => {});
+  }
+});
+
