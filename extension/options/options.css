@@ -1005,9 +1005,10 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   margin-top: 8px;
 }
 
-/* Background templates are the SAME gallery the hub's create flow uses
-   (agent-template-gallery, filtered to Scheduled); only agents the owner has
-   created or enabled become management rows below it. */
+/* Background templates come through the SAME shared Customizable Select as the
+   create flow (lib/agent-template-select.js — n3fqo): every template, Starter /
+   Other / Scheduled, with a live filter; only agents the owner has created or
+   enabled become management rows below it. */
 .background-agent-add {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

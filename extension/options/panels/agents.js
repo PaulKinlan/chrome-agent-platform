@@ -1,6 +1,7 @@
 // extension/options/panels/agents.js — Agents & Site Agents panel module (chrome-agent-platform-8v5l.1).
 
 import { formatCadenceMinutes } from "../../lib/next-run-label.js";
+import { buildTemplateSelect } from "../../lib/agent-template-select.js";
 import { ensureAcpNativePermission } from "../../lib/acp-native.js";
 import { projectUnifiedAgents, slugifyAgentId } from "../../lib/agent-projection.js";
 import {
@@ -969,11 +970,17 @@ function editSkillPrompt(skill, ctx) {
   textarea.focus();
 }
 
-// Settings offers the template catalogue through the shared gallery component
-// (CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01): curated starter templates,
-// general templates, and scheduled background skills. Choosing a card selects it;
-// "Add" enables a background skill through background-agent.set or creates a
-// named agent from a template via named-agent.create.
+// Settings offers the template catalogue through the SAME shared Customizable
+// Select the create dialog uses (chrome-agent-platform-n3fqo — owner directive:
+// the card grid's starter-only default hid the scheduled agents and its layout
+// gapped). buildTemplateSelect renders a native <select> with the Customizable
+// Select pattern (appearance: base-select) where supported and a classic select
+// otherwise, grouped Starter / Other / Scheduled with a live filter — EVERY
+// template reachable, including already-enabled background skills (which the
+// picker reports honestly instead of re-adding). Choosing an option enables
+// "Add", which enables a background skill through background-agent.set or
+// creates a named agent from a template via named-agent.create (schedule passed
+// structurally, so the cadence survives instantiation).
 export function uniqueAgentName(baseName, existingAgents = []) {
   const clean = String(baseName ?? "").trim() || "Agent";
   const taken = new Set(
@@ -990,9 +997,16 @@ export function uniqueAgentName(baseName, existingAgents = []) {
 
 export function composeSettingsTemplateCatalogue(backgroundAgents = []) {
   const starterIds = new Set(STARTER_TEMPLATE_IDS);
+  // EVERY background skill is offered (chrome-agent-platform-n3fqo: the full
+  // catalogue — all 42 on a stock install, 25 of them scheduled — stays
+  // reachable). An already-enabled skill is MARKED `enabled` so the picker can
+  // say so honestly instead of silently re-adding it (the t163u intent: never
+  // a duplicate agent).
   const backgroundTemplates = (Array.isArray(backgroundAgents) ? backgroundAgents : [])
-    .filter((a) => a && a.enabled !== true)
-    .map(skillAsTemplate)
+    .map((a) => {
+      const template = skillAsTemplate(a);
+      return template && a?.enabled === true ? { ...template, enabled: true } : template;
+    })
     .filter(Boolean);
   return [
     ...STARTER_TEMPLATE_IDS.map(agentTemplateById).filter(Boolean).map((t) => ({ ...t, starter: true })),
@@ -1017,7 +1031,7 @@ export function renderBackgroundAgentPicker(agents, ctx) {
   const disclosure = document.createElement("details");
   disclosure.className = "starter-templates-disclosure";
   const summary = document.createElement("summary");
-  summary.textContent = "Browse starter templates…";
+  summary.textContent = "Browse agent templates…";
 
   const copy = document.createElement("div");
   copy.className = "background-agent-add-copy";
@@ -1029,11 +1043,35 @@ export function renderBackgroundAgentPicker(agents, ctx) {
   hint.textContent = "Choose a built-in template or scheduled automation, then add it to your agents.";
   copy.append(title, hint);
 
-  const gallery = document.createElement("agent-template-gallery");
-  gallery.id = "background-agent-gallery";
-  gallery.setAttribute("filters", "starter,all,scheduled");
-  gallery.setAttribute("filter", "starter");
-  gallery.templates = catalogue;
+  const pickerHost = document.createElement("div");
+  pickerHost.id = "background-agent-gallery";
+  let selectedId = "";
+  buildTemplateSelect({
+    host: pickerHost,
+    catalogue,
+    blankLabel: "Choose a template…",
+    filterLabel: "Search templates",
+    onChange: (id) => {
+      selectedId = String(id ?? "");
+      const template = catalogue.find((candidate) => candidate.id === selectedId);
+      if (!template) {
+        add.disabled = true;
+        chosen.textContent = "Nothing chosen yet.";
+        add.textContent = "Add";
+        return;
+      }
+      if (template.enabled === true) {
+        add.disabled = true;
+        chosen.textContent = `${template.name} is already enabled — nothing to add.`;
+        add.textContent = "Add";
+        return;
+      }
+      add.disabled = false;
+      const cadence = formatCadenceMinutes(template?.schedule?.periodInMinutes);
+      chosen.textContent = `${template.name} — ${cadence ? `runs ${cadence}` : "on-demand agent"} once added.`;
+      add.textContent = `Add ${template.name}`;
+    },
+  });
 
   const controls = document.createElement("div");
   controls.className = "background-agent-add-controls";
@@ -1047,23 +1085,16 @@ export function renderBackgroundAgentPicker(agents, ctx) {
   add.className = "btn primary";
   add.textContent = "Add";
   add.disabled = true;
-  let selectedId = "";
-  on(gallery, "use", (event) => {
-    selectedId = String(event.detail?.id ?? "");
-    const template = catalogue.find((candidate) => candidate.id === selectedId);
-    add.disabled = !template;
-    if (!template) {
-      chosen.textContent = "Nothing chosen yet.";
-      add.textContent = "Add";
-      return;
-    }
-    const cadence = formatCadenceMinutes(template?.schedule?.periodInMinutes);
-    chosen.textContent = `${template.name} — ${cadence ? `runs ${cadence}` : "on-demand agent"} once added.`;
-    add.textContent = `Add ${template.name}`;
-  });
   on(add, "click", async () => {
     const item = catalogue.find((candidate) => candidate.id === selectedId);
     if (!selectedId || !item) return;
+    // n3fqo: an already-enabled skill stays in the list (the full catalogue is
+    // reachable) but is never re-added — enabling again would reset a live
+    // schedule. The picker reports the state instead.
+    if (item.enabled === true) {
+      saveFlash(`${item.name} is already enabled.`);
+      return;
+    }
     add.disabled = true;
     let out;
     let addedName = item.name;
@@ -1100,7 +1131,7 @@ export function renderBackgroundAgentPicker(agents, ctx) {
     await renderUnifiedAgentSettings();
   });
   controls.append(chosen, add);
-  disclosure.append(summary, copy, gallery, controls);
+  disclosure.append(summary, copy, pickerHost, controls);
   host.setAttribute("role", "group");
   host.setAttribute("aria-labelledby", title.id);
   host.append(disclosure);

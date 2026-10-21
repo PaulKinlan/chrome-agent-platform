@@ -167,9 +167,22 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 - `<agent-template-gallery>` is the shared catalogue GRID surface: a segmented
   Starter / All / Scheduled filter (`aria-pressed` buttons with counts) over an
   auto-fill grid of cards with a roving tabindex (one tab stop; arrows, Home,
-  End move; Enter/Space activate). Settings → Agents uses it filtered to
-  Scheduled.
-- The CREATE-AGENT dialog offers the catalogue through `agent-template-select`
+  End move; Enter/Space activate). No product surface composes it today —
+  Settings → Agents moved to the template select (n3fqo) — but it stays the
+  reusable catalogue grid (no component is deleted; REVIEW-2026-08-30 §9) and
+  is exercised in the component gallery.
+- Settings → Agents offers the catalogue through `agent-template-select`
+  (chrome-agent-platform-n3fqo — owner directive: the card grid's starter-only
+  default hid the scheduled agents): the SAME searchable grouped native select
+  as the create dialog, listing EVERY template — Starter / Other / Scheduled
+  groups, a live filter, and the classic-select fallback. Already-enabled
+  background skills stay listed (the full catalogue stays reachable) and are
+  reported honestly — `"<name> is already enabled — nothing to add."` — instead
+  of being re-added; choosing anything else enables Add, which instantiates the
+  template with its schedule intact (`background-agent.set` for skills,
+  `named-agent.create` with the structured schedule for curated templates).
+- The CREATE-AGENT dialog and Settings → Agents offer the catalogue through
+  `agent-template-select`
   (CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01): a NATIVE `<select>` with the
   Customizable Select pattern where supported — first-child `<button>`
   select-button, `<selectedcontent>` mirroring the choice, `appearance:
