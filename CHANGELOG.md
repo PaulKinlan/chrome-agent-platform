@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.734] — 2026-10-21
+- a new on-device regex tool (regexops) lets agents run safe, linear-time pattern search and text rewriting without ReDoS risk.
+- A new on-device regex tool lets agents run safe, linear-time pattern search and text rewriting without the risk of catastrophic backtracking.
+
 ## [0.3.733] — 2026-10-21
 - four new on-device hash tools (xxHash64, XXH3-64, XXH128 and CRC-64/XZ) are available to agents via list_tools/execute_tool, with known-answer-verified results.
 - Four new on-device hash tools (xxHash64, XXH3-64, XXH128 and CRC-64/XZ) are available to agents, with results verified against known answers.
