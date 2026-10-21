@@ -337,6 +337,18 @@ function validateManifestObject(manifest) {
     if (executable.callExport != null) {
       if (executable.callExport.abi === "chacha20_poly1305") {
         exactKeys(executable.callExport, ["abi"], [], `${path}.callExport`);
+      } else if (executable.callExport.abi === "hashwasm_stream") {
+        // chrome-agent-platform-bwxf: the streaming drive for the no-op
+        // Hash_Calculate family. The seed is ADMITTED PROVENANCE (seedHex),
+        // never user input; update/final entries are pinned export names.
+        exactKeys(executable.callExport, ["abi", "entry", "updateEntry", "finalEntry", "inputBuffer", "digestBytes", "seedBytes", "seedHex"], [], `${path}.callExport`);
+        const EXPORT_NAME_RE = /^[A-Za-z0-9_.$-]{1,64}$/u;
+        for (const key of ["entry", "updateEntry", "finalEntry", "inputBuffer"]) {
+          if (!EXPORT_NAME_RE.test(assertAscii(executable.callExport[key], `${path}.callExport.${key}`, { min: 1, max: 64 }))) fail("callexport_entry_invalid", `${path}.callExport.${key}`);
+        }
+        if (!Number.isSafeInteger(executable.callExport.digestBytes) || executable.callExport.digestBytes < 1 || executable.callExport.digestBytes > 4096) fail("callexport_digest_invalid", `${path}.callExport.digestBytes`);
+        if (!Number.isSafeInteger(executable.callExport.seedBytes) || executable.callExport.seedBytes < 1 || executable.callExport.seedBytes > 64) fail("callexport_seed_invalid", `${path}.callExport.seedBytes`);
+        if (typeof executable.callExport.seedHex !== "string" || executable.callExport.seedHex.length !== executable.callExport.seedBytes * 2 || !/^[0-9a-f]+$/.test(executable.callExport.seedHex)) fail("callexport_seedhex_invalid", `${path}.callExport.seedHex`);
       } else {
         exactKeys(executable.callExport, ["entry", "inputBuffer", "digestBytes"], ["abi", "initParam", "finalParam"], `${path}.callExport`);
         // Wasm export names are case-sensitive identifiers (Hash_Calculate) —
@@ -575,6 +587,12 @@ export function auditWasmBinary(input, executable, { limits = WASM_PACKAGE_LIMIT
       for (const req of ["encryptInit", "encryptBlocks", "decryptInit", "decryptBlocks", "tagFinish"]) {
         if (!fnExports.has(req)) fail("callexport_entry_missing", req);
       }
+    } else if (executable.callExport.abi === "hashwasm_stream") {
+      // bwxf: every export the streaming drive calls must EXIST in the binary.
+      for (const req of [executable.callExport.entry, executable.callExport.updateEntry, executable.callExport.finalEntry]) {
+        if (!fnExports.has(req)) fail("callexport_entry_missing", req);
+      }
+      if (!fnExports.has(executable.callExport.inputBuffer)) fail("callexport_buffer_missing", executable.callExport.inputBuffer);
     } else {
       if (!fnExports.has(executable.callExport.entry)) fail("callexport_entry_missing", executable.callExport.entry);
       if (!fnExports.has(executable.callExport.inputBuffer)) fail("callexport_buffer_missing", executable.callExport.inputBuffer);

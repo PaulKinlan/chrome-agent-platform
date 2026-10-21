@@ -138,6 +138,22 @@ export const UPSTREAM_MAP = Object.freeze({
     upstreamName: "hash-wasm (Daninet/hash-wasm)",
     upstreamUrl: "https://github.com/Daninet/hash-wasm",
   },
+  "cap.bundled.hash.xxhash3": {
+    upstreamName: "hash-wasm (Daninet/hash-wasm)",
+    upstreamUrl: "https://github.com/Daninet/hash-wasm",
+  },
+  "cap.bundled.hash.xxhash64": {
+    upstreamName: "hash-wasm (Daninet/hash-wasm)",
+    upstreamUrl: "https://github.com/Daninet/hash-wasm",
+  },
+  "cap.bundled.hash.xxhash128": {
+    upstreamName: "hash-wasm (Daninet/hash-wasm)",
+    upstreamUrl: "https://github.com/Daninet/hash-wasm",
+  },
+  "cap.bundled.hash.crc64": {
+    upstreamName: "hash-wasm (Daninet/hash-wasm)",
+    upstreamUrl: "https://github.com/Daninet/hash-wasm",
+  },
   "cap.bundled.head": {
     upstreamName: "Chrome Agent Platform (a2)",
     upstreamUrl: "https://github.com/PaulKinlan/chrome-agent-platform",

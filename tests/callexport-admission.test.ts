@@ -2,7 +2,7 @@
 // Call-export lane admission (chrome-agent-platform-uslb): the authority's
 // callExport ABI declaration + the CAP-authored harness running the REAL
 // hash-wasm blake3 module (zero imports, no package JS).
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   auditWasmBinary,
   WasmPackageAuthority,
@@ -248,7 +248,47 @@ Deno.test("callexport: manifest validation rejects out-of-range initParam and fi
   assertEquals(res4.error, "callexport_finalparam_invalid");
 });
 
-Deno.test("callexport: all 17 admitted hash tools run through the harness and match KAT vectors", async () => {
+Deno.test("callexport: hashwasm_stream manifests validate strictly and reject wrong shapes (bwxf)", async () => {
+  const authority = new WasmPackageAuthority({ now: () => 1 });
+  const manifestText = await Deno.readTextFile("extension/wasm/manifests/cap.bundled.hash.crc64-1.0.0.manifest.json");
+  assertEquals(authority.validateManifest(manifestText).ok, true, "the admitted crc64 streaming manifest validates");
+
+  // A v1-only field (initParam) is not part of the streaming key set.
+  const extra = JSON.parse(manifestText);
+  extra.executables[0].callExport.initParam = 7;
+  assertEquals(authority.validateManifest(JSON.stringify(extra)).ok, false, "unknown key under hashwasm_stream is rejected");
+
+  // A wrong-length seedHex is rejected (must be exactly seedBytes*2 hex chars).
+  const shortSeed = JSON.parse(manifestText);
+  shortSeed.executables[0].callExport.seedHex = "c96c5795";
+  assertEquals(authority.validateManifest(JSON.stringify(shortSeed)).ok, false, "seedHex length mismatch is rejected");
+
+  // A non-hex seedHex is rejected.
+  const badSeed = JSON.parse(manifestText);
+  badSeed.executables[0].callExport.seedHex = "zzzz5795d7870f42";
+  assertEquals(authority.validateManifest(JSON.stringify(badSeed)).ok, false, "non-hex seedHex is rejected");
+
+  // The audited binary must export every export the drive calls: drop
+  // Hash_Update from the declared spec and the AUDIT (not just the validator)
+  // must fail with callexport_entry_missing.
+  const manifest = JSON.parse(manifestText);
+  const exec = manifest.executables[0];
+  const bytes = await Deno.readFile(`extension/wasm/cas/${exec.sha256}.wasm`);
+  const broken = JSON.parse(manifestText);
+  broken.executables[0].callExport.updateEntry = "Hash_Update_Missing";
+  let threw = null;
+  try {
+    auditWasmBinary(bytes, broken.executables[0]);
+  } catch (error) {
+    threw = error;
+  }
+  assert(threw instanceof WasmPackageAuthorityError, "a missing streaming export fails the binary audit");
+  assertEquals(threw?.code, "callexport_entry_missing");
+  // And the real binary passes the audit as admitted.
+  assertEquals(auditWasmBinary(bytes, exec).ok, true, "the admitted crc64 binary passes the audit");
+});
+
+Deno.test("callexport: all 21 admitted hash tools run through the harness and match KAT vectors", async () => {
   const EXPECTED_HELLO_VECTORS = {
     hash_md4: "866437cb7a794bce2b727acc0362ee27",
     hash_sha1: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d",
@@ -267,6 +307,13 @@ Deno.test("callexport: all 17 admitted hash tools run through the harness and ma
     hash_crc32: "3610a686",
     hash_xxhash32: "fb0077f9",
     hash_blake3: "ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f",
+    // hash-wasm wave 2 (chrome-agent-platform-bwxf): the streaming family —
+    // measured against the pinned 4.12.0 binaries through the hashwasm_stream
+    // ABI (seed 0; crc64 = CRC-64/XZ polynomial c96c5795d7870f42).
+    hash_xxhash64: "26c7827d889f6da3",
+    hash_xxhash3: "9555e8555c62dcfd",
+    hash_xxhash128: "b5e9c1ad071b3e7fc779cfaa5e523818",
+    hash_crc64: "9b1edae5dbb937b1",
   };
 
   for (const [toolId, expectedHash] of Object.entries(EXPECTED_HELLO_VECTORS)) {

@@ -28,6 +28,10 @@ if (upstreamLicense !== vendoredLicense) throw new Error("license text mismatch 
 const MODULES = [
   "md4", "sha1", "sha256", "sha512", "ripemd160", "sm3", "whirlpool",
   "blake2b", "blake2s", "adler32", "crc32", "xxhash32", "sha3", "blake3",
+  // hash-wasm wave 2 (chrome-agent-platform-bwxf): the streaming-only family —
+  // their Hash_Calculate is a literal no-op upstream; the CAP host drives
+  // Hash_Init/Hash_Update/Hash_Final via the hashwasm_stream ABI instead.
+  "xxhash64", "xxhash3", "xxhash128", "crc64",
 ];
 
 for (const name of MODULES) {

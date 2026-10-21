@@ -78,13 +78,14 @@ Deno.test("the generated descriptor module keeps every value AND pays for the re
   }
 
   // The file-size guard: original 50,000 ceiling was calibrated for 38 tools
-  // (~1,316 B/tool). With 55 tools admitted (16 hash-wasm wave-1 + blake3 + chacha20_poly1305),
+  // (~1,316 B/tool). With 59 tools admitted (16 hash-wasm wave-1 + 4 hash-wasm wave-2 + blake3 + chacha20_poly1305),
   // full hoisting (shared S table, capability arrays C*, licences L*, caveats V*)
-  // emits 59,466 bytes after the 9iyc SHA-3 variants (~867 B/new tool). The
-  // 60,100-byte ceiling keeps ~1% headroom; each admission ratchets it deliberately.
+  // emitted 59,466 bytes at 55 tools; the bwxf wave-2 four add 4 distinct
+  // binaries/manifest rows (~980 B/new tool) → 63,404 bytes measured. The
+  // 64,000-byte ceiling keeps ~1% headroom; each admission ratchets it deliberately.
   // Dead-defs and unhoisted structure remain guarded by the structure pins below.
   const bytes = (await Deno.stat(DATA_MODULE)).size;
-  assert(bytes < 60_100, `the generated descriptor module should stay compact, was ${bytes} bytes`);
+  assert(bytes < 64_000, `the generated descriptor module should stay compact, was ${bytes} bytes`);
 
   // 3ugl / F2: Structure hoisting pins
   // Verify that all 3 hoisted structure kinds are actually emitted as definitions AND referenced in the rows

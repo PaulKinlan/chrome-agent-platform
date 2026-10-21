@@ -164,6 +164,10 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
   hash_adler32: "hash_adler32 - compute Adler-32 rolling checksum. Use for quick data error-detection in compressed streams. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'adler32'.",
   hash_crc32: "hash_crc32 - compute standard CRC-32 (IEEE 802.3) cyclic redundancy checksum. Use for integrity checks. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'crc32'.",
   hash_xxhash32: "hash_xxhash32 - compute fast 32-bit xxHash non-cryptographic checksum. Use for high-speed hash tables. In/out: base64-encoded bytes as 'data' to an 8-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'xxhash32'.",
+  hash_xxhash64: "hash_xxhash64 - compute the 64-bit xxHash (XXH64) checksum, fixed seed 0. Use for fast non-cryptographic hashing. In/out: base64 bytes as 'data' to a 16-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'xxhash64'.",
+  hash_xxhash3: "hash_xxhash3 - compute the XXH3-64 checksum, fixed seed 0. Use for fast non-cryptographic hashing. In/out: base64 bytes as 'data' to a 16-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'xxhash3'.",
+  hash_xxhash128: "hash_xxhash128 - compute the 128-bit xxHash (XXH128) checksum, fixed seed 0. Use for strong non-cryptographic fingerprints. In/out: base64 bytes as 'data' to a 32-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'xxhash128'.",
+  hash_crc64: "hash_crc64 - compute the CRC-64/XZ cyclic redundancy checksum (fixed polynomial). Use for integrity checks. In/out: base64 bytes as 'data' to a 16-hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}; algorithm: 'crc64'.",
   chacha20_poly1305: "chacha20_poly1305 - encrypt/decrypt data with ChaCha20-Poly1305 AEAD. Use for authenticated encryption on-device. In/out: base64 key (32B), nonce (12B), data, mode ('encrypt'|'decrypt'). Example: {key: '...', nonce: '...', data: '...'} -> {data: '...'}.",
   compressops: "compressops - compress or decompress with zstd or brotli. Use to shrink text or bytes. Compress text (stdin) to a base64 frame; decompress a base64 frame to base64; info reports a base64 frame. zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
   oxipng: "oxipng - shrink a PNG without changing its pixels. Use to optimise a PNG before saving or sharing it. In/out: base64 PNG text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: -o <0..6> effort (default 2); --strip safe|all.",
@@ -386,19 +390,40 @@ for (const toolId of LANES.c2.tools) {
     { toolId: "hash_adler32", binaryName: "adler32", sha256: "7aa030fcf233eb001ee09036e9ea025c40754d3792d7d10c605a3b81a39f7a54", bytes: 1452, digestBytes: 4, capabilities: ["compute"] },
     { toolId: "hash_crc32", binaryName: "crc32", sha256: "e2223e87187457beaaaf58af50a88772141c5a83bc68d0340608215423ba901d", bytes: 1231, digestBytes: 4, initParam: 0xedb88320, capabilities: ["compute"] },
     { toolId: "hash_xxhash32", binaryName: "xxhash32", sha256: "0cd750338eee542f087493e656c67f7358120e201a23cc5c0faa8f1fd60c1058", bytes: 2475, digestBytes: 4, capabilities: ["compute"] },
+    // hash-wasm wave 2 (chrome-agent-platform-bwxf): the streaming-only family.
+    // Upstream Hash_Calculate is a LITERAL no-op in these four modules (verified
+    // against the pinned tarball's C sources); the CAP host drives
+    // Hash_Init/Hash_Update/Hash_Final through the hashwasm_stream ABI instead.
+    // Seed surface is FIXED and documented: 0 for xxhash*, the CRC-64/XZ
+    // polynomial for crc64 — the tool takes only {data}, like every hash tool.
+    { toolId: "hash_xxhash64", binaryName: "xxhash64", sha256: "de1f937a9c1d82dc347dd6abb38833f73ef77bebe68495b2ca3c51b584df79be", bytes: 2386, digestBytes: 8, abi: "hashwasm_stream", seedHex: "0000000000000000", capabilities: ["compute"], caveats: ["Streaming drive (16 KiB chunks); seed fixed at 0, not an argument."] },
+    { toolId: "hash_xxhash3", binaryName: "xxhash3", sha256: "2a8d44107f4641e0e7ca169d52cd3890365c9c83877cb95e35d381625e0c3b74", bytes: 8866, digestBytes: 8, abi: "hashwasm_stream", seedHex: "0000000000000000", capabilities: ["compute"], caveats: ["Streaming drive (16 KiB chunks); seed fixed at 0, not an argument."] },
+    { toolId: "hash_xxhash128", binaryName: "xxhash128", sha256: "a02165ba1a90d88728f125e1e58b8821f5e46d4a7602b66b4a0458dc250c5fd1", bytes: 10302, digestBytes: 16, abi: "hashwasm_stream", seedHex: "0000000000000000", capabilities: ["compute"], caveats: ["Streaming drive (16 KiB chunks); seed fixed at 0, not an argument."] },
+    { toolId: "hash_crc64", binaryName: "crc64", sha256: "4ff0b9eb1efab52973e27f1aea8810a2f752997390eb0e7a8061e67aaf2340a7", bytes: 1210, digestBytes: 8, abi: "hashwasm_stream", seedHex: "c96c5795d7870f42", capabilities: ["compute"], caveats: ["Streaming drive (16 KiB chunks); CRC-64/XZ with the fixed polynomial c96c5795d7870f42, not an argument."] },
   ];
   for (const item of HASHWASM_WAVE1_TOOLS) {
     const wasm = readFileSync(join(PATHS.hashwasm, `binaries/${item.binaryName}.wasm`));
     if (sha256(wasm) !== item.sha256 || wasm.byteLength !== item.bytes) {
       throw new Error(`${item.toolId} hash/size mismatch`);
     }
-    const callexport = {
-      entry: "Hash_Calculate",
-      inputBuffer: "Hash_GetBuffer",
-      digestBytes: item.digestBytes,
-      ...(item.initParam != null ? { initParam: item.initParam } : {}),
-      ...(item.finalParam != null ? { finalParam: item.finalParam } : {}),
-    };
+    const callexport = item.abi === "hashwasm_stream"
+      ? {
+          abi: item.abi,
+          entry: "Hash_Init",
+          updateEntry: "Hash_Update",
+          finalEntry: "Hash_Final",
+          inputBuffer: "Hash_GetBuffer",
+          digestBytes: item.digestBytes,
+          seedBytes: 8,
+          seedHex: item.seedHex,
+        }
+      : {
+          entry: "Hash_Calculate",
+          inputBuffer: "Hash_GetBuffer",
+          digestBytes: item.digestBytes,
+          ...(item.initParam != null ? { initParam: item.initParam } : {}),
+          ...(item.finalParam != null ? { finalParam: item.finalParam } : {}),
+        };
     const algo = item.toolId.replace(/^hash_/, "");
     const compName = `hashwasm-${algo}`;
     // A CycloneDX serial identifies a package SBOM, not only the shared bytes.
@@ -482,7 +507,7 @@ for (const toolId of LANES.c2.tools) {
       displayName: item.toolId,
       category: "data",
       description: AGENT_DESCRIPTIONS[item.toolId],
-      caveats: ["One-shot hashing of base64 input up to 4 MiB; no streaming API yet."],
+      caveats: item.caveats ?? ["One-shot hashing of base64 input up to 4 MiB; no streaming API yet."],
       replayClass: "read-only",
       capabilities: item.capabilities,
       callexport,

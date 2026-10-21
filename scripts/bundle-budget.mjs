@@ -39,7 +39,12 @@ export const STORE_BUNDLE_BUDGETS = Object.freeze({
   "artifact.bundle.js": 200_000,
   "directory.bundle.js": 65_000,
   "privacy.bundle.js": 65_000,
-  "offscreen.bundle.js": 250_000,
+  // bwxf (2026-10-21): 250_000 -> 258_000. The offscreen store embeds the
+  // bundled tool descriptors; the hash-wasm wave-2 admission (4 new manifest
+  // identities: xxhash64/xxhash3/xxhash128/crc64) measured 255,306 bytes at
+  // the old ceiling (~1,300 B of descriptor data per admitted tool). The
+  // ~1% headroom convention matches the descriptor-module ratchet.
+  "offscreen.bundle.js": 258_000,
   "user-wasm-store-client.bundle.js": 10_000,
   "settings-view.bundle.js": 120_000,
 });
