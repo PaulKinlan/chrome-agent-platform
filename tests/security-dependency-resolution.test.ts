@@ -73,7 +73,27 @@ function evalStaticString(node) {
     const right = evalStaticString(node.right);
     if (left !== null && right !== null) return left + right;
   }
+  if (node.type === "MemberExpression" && node.computed) {
+    if (node.object.type === "ArrayExpression" && node.property.type === "Literal" && typeof node.property.value === "number") {
+      return evalStaticString(node.object.elements[node.property.value]);
+    }
+  }
   return null;
+}
+
+function containsLiteral(node, value) {
+  if (!node) return false;
+  if (node.type === "Literal" && node.value === value) return true;
+  for (const key of Object.keys(node)) {
+    if (key === "parent" || key === "loc" || key === "start" || key === "end") continue;
+    const child = node[key];
+    if (Array.isArray(child)) {
+      if (child.some((c) => containsLiteral(c, value))) return true;
+    } else if (child && typeof child === "object") {
+      if (containsLiteral(child, value)) return true;
+    }
+  }
+  return false;
 }
 
 function preBundleGuardProblems(source) {
@@ -103,12 +123,12 @@ function preBundleGuardProblems(source) {
     problems.push("the esbuild import surface must be exactly { build, transform }");
   }
   // createRequire is used for unrelated dependency checks in this file; only
-  // esbuild's specifier outside its one static import is prohibited (aat1m, i1gox).
+  // esbuild's specifier outside its one static import is prohibited (aat1m, i1gox, hz68x).
   const isEsbuildLoad = (node) => {
     if (isName(node, "esbuild") && !isPropertyKey(node, parents.get(node))) return true;
     if (node.type === "ImportExpression") {
       const argStr = evalStaticString(node.source);
-      if (argStr === "esbuild" || (node.source.type === "Identifier" && node.source.name === "esbuild")) return true;
+      if (argStr === "esbuild" || (node.source.type === "Identifier" && node.source.name === "esbuild") || containsLiteral(node.source, "esbuild")) return true;
     }
     if (node.type === "CallExpression") {
       const callee = node.callee;
@@ -116,7 +136,7 @@ function preBundleGuardProblems(source) {
         (callee.type === "CallExpression" && isName(callee.callee, "createRequire"));
       if (isReq) {
         const argStr = evalStaticString(node.arguments[0]);
-        if (argStr === "esbuild" || node.arguments[0]?.name === "esbuild") return true;
+        if (argStr === "esbuild" || node.arguments[0]?.name === "esbuild" || containsLiteral(node.arguments[0], "esbuild")) return true;
       }
     }
     if (node.type === "Literal" && node.value === "esbuild" && !esbuildDeclarations.some((d) => d.source === node)) {
@@ -246,6 +266,10 @@ Deno.test("bbz3s: comment, conditional, late and swallowed-check mutants cannot 
       `    const decoy = await import("esb" + "uild");\n${line}`), "esbuild cannot be loaded outside"],
     ["dynamic import identifier (i1gox)", replaceOnce(source, line,
       `    const decoy = await import(esbuild);\n${line}`), "esbuild cannot be loaded outside"],
+    ["require computed member access (hz68x)", replaceOnce(source, line,
+      `    const decoy = require(["esbuild"][0]);\n${line}`), "esbuild cannot be loaded outside"],
+    ["dynamic import computed member access (hz68x)", replaceOnce(source, line,
+      `    const decoy = await import(["esbuild"][0]);\n${line}`), "esbuild cannot be loaded outside"],
     ["build alias evades the bundle scan", replaceOnce(source, line,
       `    const bundledEarly = build; bundledEarly({ entryPoints: ["decoy.js"] });\n${line}`), "build must be called directly"],
   ];
