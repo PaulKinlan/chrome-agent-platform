@@ -1,10 +1,11 @@
 // tests/template-cards.test.ts — the template CATALOGUE (CAP-FB-20260830-
 // AGENT-TEMPLATES-INTEGRATION-01) is the first-class way to create an agent.
-// The card + gallery remain the SHARED catalogue components (Settings' scheduled
-// gallery uses them); the CREATE dialog now offers the catalogue as a native,
-// searchable, grouped <select> (CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01 —
-// owner directive: customizable-select elements, keeping the Starter / Other /
-// Scheduled grouping).
+// The card + gallery remain the SHARED catalogue components (no component is
+// deleted; REVIEW-2026-08-30 §9); BOTH product surfaces — the CREATE dialog
+// (CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01) and Settings → Agents
+// (chrome-agent-platform-n3fqo) — now offer the catalogue as a native,
+// searchable, grouped <select> (owner directive: customizable-select elements,
+// keeping the Starter / Other / Scheduled grouping).
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS } from "../extension/lib/agent-templates.js";
 
@@ -148,10 +149,23 @@ Deno.test("template select module: selection survives filtering (retained hidden
   assertStringIncludes(picker, "::picker-icon { display: none; }", "the duplicate default chevron is suppressed");
 });
 
-Deno.test("Settings offers the template catalogue through the gallery component", () => {
-  assertStringIncludes(options, 'document.createElement("agent-template-gallery")');
-  assertStringIncludes(options, 'setAttribute("filters", "starter,all,scheduled")');
-  assert(!options.includes('empty.textContent = "Choose a background agent…"'), "the select-based picker is replaced");
+Deno.test("Settings offers the template catalogue through the same customizable select (n3fqo)", () => {
+  // Settings → Agents renders the catalogue through buildTemplateSelect — the
+  // SAME picker module the create dialog uses — never the card grid, and never
+  // a starter-only default filter that hides the scheduled agents.
+  assertStringIncludes(options, 'import { buildTemplateSelect } from "../../lib/agent-template-select.js"');
+  assert(
+    /buildTemplateSelect\(\s*\{/.test(options),
+    "Settings actually CALLS buildTemplateSelect — the import alone can go dead",
+  );
+  assert(
+    !options.includes('document.createElement("agent-template-gallery")'),
+    "the card grid is gone from Settings (the shared components remain, the surface moved to the select)",
+  );
+  assert(
+    !options.includes('setAttribute("filters", "starter,all,scheduled")'),
+    "no starter-only default filter may hide the scheduled agents",
+  );
 });
 
 Deno.test("template cards + gallery: component gallery documents the reusable primitives", () => {

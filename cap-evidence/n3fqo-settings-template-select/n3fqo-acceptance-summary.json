@@ -1,0 +1,73 @@
+{
+  "bead": "chrome-agent-platform-n3fqo",
+  "counts": {
+    "total": 43,
+    "blank": true,
+    "groups": [
+      {
+        "label": "Starter",
+        "n": 7,
+        "ids": [
+          "chief-of-staff",
+          "research-analyst",
+          "advanced-web-developer",
+          "site-auditor",
+          "critic",
+          "webapp-test-pilot",
+          "skill-smith"
+        ]
+      },
+      {
+        "label": "Other",
+        "n": 10,
+        "ids": [
+          "code-reviewer",
+          "data-wrangler",
+          "meeting-wing",
+          "form-filer",
+          "fact-checker",
+          "scribe-doc-writer",
+          "personal-shopper",
+          "repo-steward",
+          "travel-planner",
+          "tutor-study-coach"
+        ]
+      },
+      {
+        "label": "Scheduled",
+        "n": 25,
+        "ids": [
+          "tab-janitor",
+          "bookmark-librarian",
+          "price-watcher",
+          "subscription-auditor",
+          "auto-group-by-domain",
+          "auto-pin-favorites",
+          "auto-reading-list",
+          "bookmark-auto-categorize",
+          "bookmark-dedupe",
+          "daily-summary",
+          "dead-bookmark-cleaner",
+          "dedupe-tabs",
+          "download-nightly-summary",
+          "download-organizer",
+          "focus-mode",
+          "idle-close-tabs",
+          "meeting-prep",
+          "page-sentiment-log",
+          "reading-time-estimator",
+          "stale-tab-closer",
+          "summarize-on-navigate",
+          "tab-screenshot-diary",
+          "weekly-digest",
+          "weekly-review-prompt",
+          "page-change-watcher"
+        ]
+      }
+    ],
+    "named": 42,
+    "everyOptionLabelled": true
+  },
+  "failures": [],
+  "at": "2026-10-21T14:00:44.062Z"
+}

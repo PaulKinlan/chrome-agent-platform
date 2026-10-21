@@ -1527,6 +1527,8 @@ const ALLOWED = new Map<string, string>([
     'message "the options page wires the extracted host unit": an intentional import-PROVENANCE pin (which module supplies the host). The live wiring is pinned by the assertion directly above it, assert(options.includes(\'registerWasmPreviewHost()\')), whose occurrence is the real call site at options.js:413.'],
   [tp("template-cards.test.ts::extension/ntp/ntp.js::import { buildTemplateSelect } from \"../lib/agent-template-select.js\""),
     "chrome-agent-platform-uodl: this import pin is what mutant U-I1 survived (a dead binding with the import left in place, full suite 3977/0). It is kept as the module-provenance pin and is now COVERED by the two call-site assertions added directly below it, which kill U-I1. Kept under audit rather than deleted so the provenance stays pinned."],
+  [tp("template-cards.test.ts::extension/options/panels/agents.js::import { buildTemplateSelect } from \"../../lib/agent-template-select.js\""),
+    "chrome-agent-platform-n3fqo: the Settings twin of the uodl NTP pin — module provenance for the agents chunk. COVERED by the call-site regex assertion directly below it (/buildTemplateSelect\\(\\s*\\{/ against the same file), which fails if the import goes dead. Kept under audit rather than deleted so the provenance stays pinned."],
   // --- chrome-agent-platform-c9y8: the two offenders the extended attribution
   //     surfaced, both adjudicated by intent in the wzez census
   //     (cap-evidence/uodl/census-4c89bd9d/CENSUS.md Â§6).

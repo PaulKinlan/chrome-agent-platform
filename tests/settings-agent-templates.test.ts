@@ -1,7 +1,11 @@
-// tests/settings-agent-templates.test.ts — regression tests for template agent
-// list in Settings (chrome-agent-platform-rqh20).
+// tests/settings-agent-templates.test.ts — regression tests for the template
+// agent picker in Settings (chrome-agent-platform-rqh20; updated by
+// chrome-agent-platform-n3fqo: the card grid became the shared Customizable
+// Select, the FULL catalogue — 21 curated + every background skill — stays
+// reachable, and an already-enabled skill is reported honestly instead of
+// being hidden or re-added).
 // P1 (Paul): template agent list is EMPTY in Settings - curated AGENT_TEMPLATES
-// never reach the gallery and the section self-hides.
+// never reach the picker and the section self-hides.
 
 // Set up minimal browser stubs before dynamic module imports
 class HTMLElementStub {
@@ -14,6 +18,7 @@ class HTMLElementStub {
   removeEventListener() {}
   querySelector() { return null; }
   querySelectorAll() { return []; }
+  style = { cssText: "" };
 }
 (globalThis as any).HTMLElement = HTMLElementStub;
 (globalThis as any).customElements = (globalThis as any).customElements || {
@@ -30,7 +35,7 @@ import {
 } from "../extension/lib/agent-templates.js";
 import { createPanelContext } from "../extension/options/panel-context.js";
 
-const _ACCEPTANCE = new URL("../cap-evidence/rqh20-settings-templates-acceptance.ts", import.meta.url);
+const _ACCEPTANCE = new URL("../cap-evidence/n3fqo-settings-template-select-acceptance.ts", import.meta.url);
 const agentsMod = await import("../extension/options/panels/agents.js");
 (globalThis as any)._agentsModule = agentsMod;
 (globalThis as any)._templatesModule = { AGENT_TEMPLATES, templatePrefill };
@@ -39,6 +44,97 @@ const {
   composeSettingsTemplateCatalogue,
   renderBackgroundAgentPicker,
 } = agentsMod;
+
+/** A minimal DOM node that can absorb what buildTemplateSelect and the picker
+ * wiring do: property sets, append/replaceChildren, listeners, dispatch, and
+ * simple tag/#id/.class selectors. `style` must exist because the select
+ * builder writes inline cssText. */
+class PanelNode {
+  tagName: string;
+  attributes = new Map<string, string>();
+  children: PanelNode[] = [];
+  hidden = false;
+  id = "";
+  className = "";
+  type = "";
+  textContent = "";
+  disabled = false;
+  value = "";
+  open = false;
+  label = "";
+  eventListeners = new Map<string, Function[]>();
+  style = { cssText: "" };
+
+  constructor(tag: string) {
+    this.tagName = tag.toUpperCase();
+  }
+  setAttribute(name: string, value: string) {
+    this.attributes.set(name, String(value));
+  }
+  getAttribute(name: string) {
+    return this.attributes.get(name) ?? null;
+  }
+  removeAttribute(name: string) {
+    this.attributes.delete(name);
+  }
+  replaceChildren(...nodes: PanelNode[]) {
+    this.children = [...nodes];
+  }
+  append(...nodes: PanelNode[]) {
+    this.children.push(...nodes);
+  }
+  appendChild(node: PanelNode) {
+    this.children.push(node);
+    return node;
+  }
+  addEventListener(event: string, fn: Function) {
+    const list = this.eventListeners.get(event) ?? [];
+    list.push(fn);
+    this.eventListeners.set(event, list);
+  }
+  dispatchEvent(ev: any) {
+    const type = typeof ev === "string" ? ev : ev?.type;
+    const list = this.eventListeners.get(type) ?? [];
+    for (const fn of list) fn(ev);
+    return true;
+  }
+  _matches(sel: string): boolean {
+    // simple tag, #id, .class, or compound tag.class ("button.primary")
+    const compound = sel.match(/^([a-z]+)((?:\.[\w-]+)+)$/);
+    if (compound) {
+      if (this.tagName.toLowerCase() !== compound[1]) return false;
+      const classes = compound[2].slice(1).split(".");
+      return classes.every((c) => this.className.split(/\s+/).includes(c));
+    }
+    if (sel === this.tagName.toLowerCase()) return true;
+    if (sel.startsWith("#") && this.id === sel.slice(1)) return true;
+    if (sel.startsWith(".") && this.className.split(/\s+/).includes(sel.slice(1))) return true;
+    return false;
+  }
+  querySelectorAll(sel: string): PanelNode[] {
+    const results: PanelNode[] = [];
+    for (const child of this.children) {
+      if (child._matches(sel)) results.push(child);
+      results.push(...child.querySelectorAll(sel));
+    }
+    return results;
+  }
+  querySelector(sel: string): PanelNode | null {
+    return this.querySelectorAll(sel)[0] ?? null;
+  }
+}
+
+function withPanelDoc(root: PanelNode, fn: () => Promise<void> | void) {
+  const prevDoc = (globalThis as any).document;
+  (globalThis as any).document = {
+    createElement: (tag: string) => new PanelNode(tag),
+  };
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      (globalThis as any).document = prevDoc;
+    });
+}
 
 Deno.test("Settings template catalogue: includes curated starter templates even when background skills are empty", () => {
   // When there are ZERO background skills, curated templates must still populate the catalogue
@@ -94,109 +190,44 @@ Deno.test("Settings template catalogue: merges background skills without duplica
   assertStringIncludes(String(cosTemplates[0].role ?? ""), "# Chief of Staff Persona");
 });
 
-Deno.test("Settings template gallery: section stays visible by default and renders templates even with no disabled skills", () => {
-  // Minimal DOM node stub for testing renderBackgroundAgentPicker
-  class StubElement {
-    tagName: string;
-    attributes = new Map<string, string>();
-    children: StubElement[] = [];
-    hidden = false;
-    templates: any[] = [];
-    id = "";
-    className = "";
-    type = "";
-    textContent = "";
-    disabled = false;
-    eventListeners = new Map<string, Function[]>();
-
-    constructor(tag: string) {
-      this.tagName = tag.toUpperCase();
-    }
-    setAttribute(name: string, value: string) {
-      this.attributes.set(name, String(value));
-    }
-    getAttribute(name: string) {
-      return this.attributes.get(name) ?? null;
-    }
-    removeAttribute(name: string) {
-      this.attributes.delete(name);
-    }
-    replaceChildren(...nodes: StubElement[]) {
-      this.children = [...nodes];
-    }
-    append(...nodes: StubElement[]) {
-      this.children.push(...nodes);
-    }
-    appendChild(node: StubElement) {
-      this.children.push(node);
-      return node;
-    }
-    addEventListener(event: string, fn: Function) {
-      const list = this.eventListeners.get(event) ?? [];
-      list.push(fn);
-      this.eventListeners.set(event, list);
-    }
-    dispatchEvent(ev: any) {
-      const type = typeof ev === "string" ? ev : ev?.type;
-      const list = this.eventListeners.get(type) ?? [];
-      for (const fn of list) fn(ev);
-      return true;
-    }
-    querySelector(sel: string): StubElement | null {
-      for (const child of this.children) {
-        if (sel === "agent-template-gallery" && child.tagName === "AGENT-TEMPLATE-GALLERY") return child;
-        if (sel.startsWith("#") && child.id === sel.slice(1)) return child;
-        if (sel.startsWith(".") && child.className.includes(sel.slice(1))) return child;
-        const found = child.querySelector(sel);
-        if (found) return found;
-      }
-      return null;
-    }
-    querySelectorAll(sel: string): StubElement[] {
-      const results: StubElement[] = [];
-      for (const child of this.children) {
-        if (sel === "agent-template-gallery" && child.tagName === "AGENT-TEMPLATE-GALLERY") results.push(child);
-        results.push(...child.querySelectorAll(sel));
-      }
-      return results;
-    }
-  }
-
-  const host = new StubElement("div");
+Deno.test("Settings template picker: section stays visible and the select renders the curated catalogue even with no background skills", async () => {
+  const host = new PanelNode("div");
   host.id = "background-agent-add";
-  // Initially host might have been hidden
-  host.hidden = true;
+  host.hidden = true; // the section must UN-hide itself
 
-  const root = new StubElement("section");
+  const root = new PanelNode("section");
   root.id = "agents";
   root.append(host);
 
-  const prevDoc = (globalThis as any).document;
-  (globalThis as any).document = {
-    createElement: (tag: string) => new StubElement(tag),
-  };
-
-  try {
+  await withPanelDoc(root, () => {
     const ctx = createPanelContext({ root: root as any });
 
-    // Calling with empty array (e.g. 0 disabled background skills)
+    // Calling with empty array (e.g. 0 background skills)
     renderBackgroundAgentPicker([], ctx);
 
     // Regression check: the host must NOT hide itself
     assertEquals(host.hidden, false, "host #background-agent-add must remain visible even with 0 background skills");
 
-    // The gallery must have received the curated templates
-    const gallery: any = host.querySelector("agent-template-gallery");
-    assert(gallery, "agent-template-gallery must be created inside host");
-    assert(gallery.templates.length >= 21, `gallery.templates must have at least 21 templates, got ${gallery.templates.length}`);
-    assertEquals(gallery.getAttribute("filters"), "starter,all,scheduled");
-    assertEquals(gallery.getAttribute("filter"), "starter");
-
-    const starterCards = gallery.templates.filter((t: any) => t.starter === true);
-    assertEquals(starterCards.length, 7, "gallery must have 7 starter templates");
-  } finally {
-    (globalThis as any).document = prevDoc;
-  }
+    // The picker renders the customizable select: one blank option + every
+    // curated template (21), grouped Starter / Other / Scheduled (the curated
+    // background templates keep Scheduled present even with zero skills).
+    const pickerHost = host.querySelector("#background-agent-gallery");
+    assert(pickerHost, "the template picker host must be created inside #background-agent-add");
+    const select = pickerHost.querySelector(".agent-template-select");
+    assert(select, "the customizable select must be rendered");
+    const options = select.querySelectorAll("option");
+    assert(
+      options.length >= 1 + 21,
+      `the select must offer the blank + every curated template, got ${options.length}`,
+    );
+    assertEquals(
+      (select.querySelectorAll("optgroup")).map((g: any) => g.label),
+      ["Starter", "Other", "Scheduled"],
+      "Starter first; the 4 curated background templates keep the Scheduled group present even with zero skills",
+    );
+    assertEquals(options[0].value, "", "the first option is the blank placeholder");
+    assertStringIncludes(String(options[1].value), "chief-of-staff", "starters come first");
+  });
 });
 
 Deno.test("Settings uniqueAgentName avoids collisions with existing named agents (0owtx/i3z5z)", () => {
@@ -209,7 +240,7 @@ Deno.test("Settings uniqueAgentName avoids collisions with existing named agents
   );
 });
 
-Deno.test("Settings Add gallery excludes already-enabled background skills (t163u)", () => {
+Deno.test("Settings picker lists enabled background skills, marked — never hidden, never re-added (t163u, n3fqo)", () => {
   const enabledSkill = {
     id: "active-watcher",
     name: "Active Watcher",
@@ -225,69 +256,27 @@ Deno.test("Settings Add gallery excludes already-enabled background skills (t163
     schedule: { periodInMinutes: 60, prompt: "Watch idle" },
   };
 
+  // n3fqo: the FULL catalogue stays reachable — an already-enabled skill stays
+  // listed (marked enabled:true) so the picker can report it honestly; t163u's
+  // intent (never a duplicate agent) is kept by the Add handler refusing it.
   const catalogue: any[] = composeSettingsTemplateCatalogue([enabledSkill, disabledSkill]);
-  assertEquals(catalogue.some((t: any) => t?.id === "active-watcher"), false, "already-enabled skill must not be offered in Add gallery");
-  assertEquals(catalogue.some((t: any) => t?.id === "idle-watcher"), true, "disabled skill must be offered in Add gallery");
+  const enabled = catalogue.find((t: any) => t?.id === "active-watcher");
+  assert(enabled, "an already-enabled skill must STAY in the catalogue");
+  assertEquals(enabled.enabled, true, "and it must carry enabled:true so the picker can report it");
+  const disabled = catalogue.find((t: any) => t?.id === "idle-watcher");
+  assert(disabled, "a disabled skill must be offered");
+  assertEquals(disabled.enabled ?? false, false, "a disabled skill is not marked enabled");
   assertEquals(catalogue.some((t: any) => t?.id === "chief-of-staff"), true, "curated templates must always be offered");
 });
 
 Deno.test("Settings Add handler maps background template prompt to schedule.task and handles scheduleError (66avy/72omn)", async () => {
-  class StubEl {
-    tagName: string;
-    attributes = new Map<string, string>();
-    children: StubEl[] = [];
-    hidden = false;
-    templates: any[] = [];
-    id = "";
-    className = "";
-    type = "";
-    textContent = "";
-    disabled = false;
-    eventListeners = new Map<string, Function[]>();
-    constructor(tag: string) { this.tagName = tag.toUpperCase(); }
-    setAttribute(n: string, v: string) { this.attributes.set(n, String(v)); }
-    getAttribute(n: string) { return this.attributes.get(n) ?? null; }
-    removeAttribute(n: string) { this.attributes.delete(n); }
-    replaceChildren(...nodes: StubEl[]) { this.children = [...nodes]; }
-    append(...nodes: StubEl[]) { this.children.push(...nodes); }
-    appendChild(node: StubEl) { this.children.push(node); return node; }
-    addEventListener(event: string, fn: Function) {
-      const list = this.eventListeners.get(event) ?? [];
-      list.push(fn);
-      this.eventListeners.set(event, list);
-    }
-    dispatchEvent(ev: any) {
-      const type = typeof ev === "string" ? ev : ev?.type;
-      const list = this.eventListeners.get(type) ?? [];
-      for (const fn of list) fn(ev);
-      return true;
-    }
-    querySelector(sel: string): StubEl | null {
-      for (const child of this.children) {
-        if (sel === "agent-template-gallery" && child.tagName === "AGENT-TEMPLATE-GALLERY") return child;
-        if (sel === "button" && child.tagName === "BUTTON") return child;
-        if (sel.includes("button.primary") && child.tagName === "BUTTON" && child.className.includes("primary")) return child;
-        if (sel.startsWith("#") && child.id === sel.slice(1)) return child;
-        if (sel.startsWith(".") && child.className.includes(sel.slice(1))) return child;
-        const found = child.querySelector(sel);
-        if (found) return found;
-      }
-      return null;
-    }
-  }
-
-  const host = new StubEl("div");
+  const host = new PanelNode("div");
   host.id = "background-agent-add";
-  const root = new StubEl("section");
+  const root = new PanelNode("section");
   root.id = "agents";
   root.append(host);
 
-  const prevDoc = (globalThis as any).document;
-  (globalThis as any).document = {
-    createElement: (tag: string) => new StubEl(tag),
-  };
-
-  try {
+  await withPanelDoc(root, async () => {
     const sentMessages: any[] = [];
     const flashes: string[] = [];
 
@@ -312,14 +301,18 @@ Deno.test("Settings Add handler maps background template prompt to schedule.task
 
     renderBackgroundAgentPicker([], ctx);
 
-    const gallery = host.querySelector("agent-template-gallery");
-    assert(gallery, "gallery must exist");
+    const select = host.querySelector(".agent-template-select");
+    assert(select, "the customizable select must exist");
 
     // Select tab-janitor (a background template with periodInMinutes and prompt)
-    gallery.dispatchEvent({ type: "use", detail: { id: "tab-janitor" } });
+    // by driving the NATIVE select the way the owner does.
+    select.value = "tab-janitor";
+    select.dispatchEvent({ type: "change" });
 
     // Click Add button
-    const addBtn = host.querySelector("button");
+    const addBtn = host.querySelector("button.primary");
+    assert(addBtn, "the Add button must exist");
+    assertEquals(addBtn.disabled, false, "choosing a template enables Add");
     const clickFns = (addBtn as any).eventListeners.get("click") ?? [];
     for (const fn of clickFns) {
       await fn({ type: "click" });
@@ -341,9 +334,60 @@ Deno.test("Settings Add handler maps background template prompt to schedule.task
       flashes.some((f) => f.includes("Tab Janitor added, but its schedule was not created: alarm registration delayed.")),
       `flash must surface scheduleError, got: ${JSON.stringify(flashes)}`,
     );
-  } finally {
-    (globalThis as any).document = prevDoc;
-  }
+  });
+});
+
+Deno.test("Settings picker: choosing an already-enabled skill disables Add and never re-sends (n3fqo)", async () => {
+  const host = new PanelNode("div");
+  host.id = "background-agent-add";
+  const root = new PanelNode("section");
+  root.id = "agents";
+  root.append(host);
+
+  await withPanelDoc(root, async () => {
+    const sentMessages: any[] = [];
+    const flashes: string[] = [];
+
+    const ctx = createPanelContext({
+      root: root as any,
+      send: async (type: string, payload: any = {}) => {
+        sentMessages.push({ type, ...payload });
+        return { ok: true };
+      },
+      boundedSend: async () => ({ agents: [] }),
+      saveFlash: (msg: string) => flashes.push(msg),
+    });
+
+    renderBackgroundAgentPicker([
+      { id: "active-watcher", name: "Active Watcher", mode: "background", enabled: true, schedule: { periodInMinutes: 30, prompt: "Watch" } },
+    ], ctx);
+
+    const select = host.querySelector(".agent-template-select");
+    assert(select, "the customizable select must exist");
+
+    select.value = "active-watcher";
+    select.dispatchEvent({ type: "change" });
+
+    const addBtn = host.querySelector("button.primary");
+    assert(addBtn, "the Add button must exist");
+    assertEquals(addBtn.disabled, true, "Add must stay disabled for an already-enabled skill");
+    const chosen = host.querySelector(".background-agent-add-chosen");
+    assert(
+      String(chosen?.textContent ?? "").includes("already enabled"),
+      `the status must say the skill is already enabled, got: ${chosen?.textContent}`,
+    );
+
+    // Clicking is a guarded no-op: nothing is sent.
+    const clickFns = (addBtn as any).eventListeners.get("click") ?? [];
+    for (const fn of clickFns) {
+      await fn({ type: "click" });
+    }
+    assertEquals(sentMessages.length, 0, "no background-agent.set may be sent for an already-enabled skill");
+    assert(
+      flashes.some((f) => f.includes("Active Watcher is already enabled.")),
+      `flash must report the already-enabled state, got: ${JSON.stringify(flashes)}`,
+    );
+  });
 });
 
 Deno.test("starter templates disclosure summary does not set missing data-i18n key (ahzuf)", async () => {
@@ -353,13 +397,13 @@ Deno.test("starter templates disclosure summary does not set missing data-i18n k
     "disclosure summary must not set missing data-i18n attribute which causes hydrateI18n to overwrite text with raw key",
   );
   assert(
-    code.includes('summary.textContent = "Browse starter templates…"'),
-    "disclosure summary must provide plain text Browse starter templates…",
+    code.includes('summary.textContent = "Browse agent templates…"'),
+    "disclosure summary must provide plain text (n3fqo: it offers ALL templates, not just starters)",
   );
 });
 
 Deno.test("Settings template acceptance script exists and is tracked", () => {
-  assert(_ACCEPTANCE.href.endsWith("rqh20-settings-templates-acceptance.ts"));
+  assert(_ACCEPTANCE.href.endsWith("n3fqo-settings-template-select-acceptance.ts"));
 });
 
 Deno.test("Settings panels/agents.js source: imports AGENT_TEMPLATES and passes background to picker", async () => {
