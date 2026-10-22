@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.737] — 2026-10-22
+- Scope ACP scratch leak detection to local run paths and strengthen AST loader detection for computed esbuild specifiers.
+- Stale scratch directories left behind by earlier test runs are now cleaned up automatically, so the suite stops failing on a full disk, and the checks that guard against leaked test files and stray tool loading are stricter.
+
 ## [0.3.736] — 2026-10-21
 - All 17 bundled hash tools are verified against external reference digests up to the advertised 4 MiB limit with consistent streaming caveats.
 - All 17 bundled hash tools are now verified against external reference digests up to the advertised 4 MB limit, so large inputs are confirmed correct rather than silently wrong.
