@@ -62,32 +62,55 @@ function isPropertyKey(node, parent) {
   return false;
 }
 
-function evalStaticString(node, bindings = new Map(), seen = new Set()) {
+function findScopedDeclarator(identNode, parents) {
+  if (!identNode || identNode.type !== "Identifier" || !parents) return null;
+  const name = identNode.name;
+  for (let p = parents.get(identNode); p; p = parents.get(p)) {
+    const stmts = Array.isArray(p.body) ? p.body : (Array.isArray(p.consequent) ? p.consequent : null);
+    if (stmts) {
+      for (const stmt of stmts) {
+        if (stmt.type === "VariableDeclaration") {
+          for (const decl of stmt.declarations) {
+            if (decl.id.type === "Identifier" && decl.id.name === name) {
+              return decl.init;
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function evalStaticString(node, parents, seen = new Set()) {
   if (!node) return null;
   if (node.type === "Literal" && typeof node.value === "string") return node.value;
   if (node.type === "TemplateLiteral" && node.expressions.length === 0) {
     return node.quasis[0].value.cooked ?? node.quasis[0].value.raw;
   }
   if (node.type === "BinaryExpression" && node.operator === "+") {
-    const left = evalStaticString(node.left, bindings, seen);
-    const right = evalStaticString(node.right, bindings, seen);
+    const left = evalStaticString(node.left, parents, seen);
+    const right = evalStaticString(node.right, parents, seen);
     if (left !== null && right !== null) return left + right;
   }
-  if (node.type === "Identifier" && bindings.has(node.name) && !seen.has(node.name)) {
-    seen.add(node.name);
-    return evalStaticString(bindings.get(node.name), bindings, seen);
+  if (node.type === "Identifier" && parents && !seen.has(node)) {
+    seen.add(node);
+    const init = findScopedDeclarator(node, parents);
+    if (init) return evalStaticString(init, parents, seen);
   }
   if (node.type === "MemberExpression" && node.computed) {
     let obj = node.object;
-    if (obj.type === "Identifier" && bindings.has(obj.name) && !seen.has(obj.name)) {
-      obj = bindings.get(obj.name);
+    if (obj.type === "Identifier" && parents && !seen.has(obj)) {
+      seen.add(obj);
+      obj = findScopedDeclarator(obj, parents) ?? obj;
     }
     let idxNode = node.property;
-    if (idxNode.type === "Identifier" && bindings.has(idxNode.name) && !seen.has(idxNode.name)) {
-      idxNode = bindings.get(idxNode.name);
+    if (idxNode.type === "Identifier" && parents && !seen.has(idxNode)) {
+      seen.add(idxNode);
+      idxNode = findScopedDeclarator(idxNode, parents) ?? idxNode;
     }
     if (obj?.type === "ArrayExpression" && idxNode?.type === "Literal" && typeof idxNode.value === "number") {
-      return evalStaticString(obj.elements[idxNode.value], bindings, seen);
+      return evalStaticString(obj.elements[idxNode.value], parents, seen);
     }
   }
   return null;
@@ -126,12 +149,6 @@ function preBundleGuardProblems(source) {
   // The bundle scan below recognizes direct build() calls only. Keep the
   // esbuild binding surface closed, so buildSync/context/namespace imports or
   // a future bundling API cannot start work before the live guard unseen.
-  const bindings = new Map();
-  for (const node of nodes) {
-    if (node.type === "VariableDeclarator" && node.id.type === "Identifier" && node.init) {
-      bindings.set(node.id.name, node.init);
-    }
-  }
   const esbuildDeclarations = program.body.filter((node) =>
     node.type === "ImportDeclaration" && node.source.value === "esbuild");
   const esbuildSpecifiers = esbuildDeclarations.length === 1 ? esbuildDeclarations[0].specifiers : [];
@@ -145,7 +162,7 @@ function preBundleGuardProblems(source) {
   const isEsbuildLoad = (node) => {
     if (isName(node, "esbuild") && !isPropertyKey(node, parents.get(node))) return true;
     if (node.type === "ImportExpression") {
-      const argStr = evalStaticString(node.source, bindings);
+      const argStr = evalStaticString(node.source, parents);
       if (argStr === "esbuild" || (node.source.type === "Identifier" && node.source.name === "esbuild") || containsLiteral(node.source, "esbuild")) return true;
     }
     if (node.type === "CallExpression") {
@@ -153,7 +170,7 @@ function preBundleGuardProblems(source) {
       const isReq = (callee.type === "Identifier" && callee.name === "require") ||
         (callee.type === "CallExpression" && isName(callee.callee, "createRequire"));
       if (isReq) {
-        const argStr = evalStaticString(node.arguments[0], bindings);
+        const argStr = evalStaticString(node.arguments[0], parents);
         if (argStr === "esbuild" || node.arguments[0]?.name === "esbuild" || containsLiteral(node.arguments[0], "esbuild")) return true;
       }
     }
@@ -290,6 +307,8 @@ Deno.test("bbz3s: comment, conditional, late and swallowed-check mutants cannot 
       `    const __probe = "esbuild"; const decoy = require(__probe);\n${line}`), "esbuild cannot be loaded outside"],
     ["require hoisted array element specifier (pap3g)", replaceOnce(source, line,
       `    const __probeArr = ["esbuild"]; const decoy = require(__probeArr[0]);\n${line}`), "esbuild cannot be loaded outside"],
+    ["require scoped identifier shadowing (ynkzd)", replaceOnce(source, line,
+      `    function __f(){ const __n = "esbuild"; require(__n); } const __n = "lodash";\n${line}`), "esbuild cannot be loaded outside"],
     ["dynamic import computed member access (hz68x)", replaceOnce(source, line,
       `    const decoy = await import(["esbuild"][0]);\n${line}`), "esbuild cannot be loaded outside"],
     ["build alias evades the bundle scan", replaceOnce(source, line,
@@ -308,6 +327,9 @@ Deno.test("bbz3s: comment, conditional, late and swallowed-check mutants cannot 
   // aat1m: unrelated non-call uses of "build" as a property key or literal "esbuild" in arrays must not falsely RED
   const legalProp = replaceOnce(source, line, `    const cfg = { build: 1 }; const ext = ["esbuild"];\n${line}`);
   assertEquals(preBundleGuardProblems(legalProp), [], "aat1m: property key build and literal esbuild in array must not red");
+  // ynkzd: unrelated local require shadowed by an outer "esbuild" const must not falsely RED
+  const legalShadow = replaceOnce(source, line, `    function __g(){ const __n = "lodash"; require(__n); } const __n = "esbuild";\n${line}`);
+  assertEquals(preBundleGuardProblems(legalShadow), [], "ynkzd: local non-esbuild require shadowed by outer esbuild const must not red");
   assertEquals(Deno.readTextFileSync(BUILD_SOURCE), source, "mutations stay in memory: build.mjs is byte-identical");
 });
 

@@ -289,38 +289,42 @@ Deno.test("c7a2n/n1os6: all scratch directories created by this run are cleaned 
     await cleanScratch(s);
   }
   assert(createdScratches.size > 0, "test run must have created scratch directories to verify cleanup");
-  const leaked = [];
-  for (const path of createdScratches) {
-    if (existsSync(path)) {
-      leaked.push(path);
-    }
-  }
-  assertEquals(leaked, [], `all scratch directories created by this run must be cleaned up (leaked: ${leaked.join(", ")})`);
 
-  // Falsifier: a foreign acp-harness-default-* dir present in durableRoot must not be tracked or flagged as leaked (7yy5m)
+  // Create a foreign scratch directory in durableRoot BEFORE checking leaks (wq1t4 / 7yy5m).
+  // If the test ever regresses to scanning durableRoot for acp-harness-default-*, this foreign dir fails the check.
   const { durableRoot } = await import("../scripts/lib/durable-root.mjs");
   const root = durableRoot();
   const foreignDir = join(root, `acp-harness-default-foreign-${Date.now()}`);
   await Deno.mkdir(foreignDir, { recursive: true });
+
   try {
-    assert(!createdScratches.has(foreignDir), "foreign directory must not be in createdScratches");
-    const foreignLeakCheck = [...createdScratches].filter((p) => existsSync(p));
-    assertEquals(foreignLeakCheck, [], "foreign scratch directory must not affect this run's cleanup verdict");
-    assertEquals(existsSync(foreignDir), true, "foreign scratch directory remains untouched on disk");
+    const leaked = [];
+    for (const path of createdScratches) {
+      if (existsSync(path)) {
+        leaked.push(path);
+      }
+    }
+    assertEquals(leaked, [], `all scratch directories created by this run must be cleaned up (leaked: ${leaked.join(", ")})`);
+    assertEquals(existsSync(foreignDir), true, "foreign scratch directory must remain untouched on disk");
+
+    // Falsifier: an expected scratch dir still existing on disk must FAIL
+    const fakeLeaked = join(root, `acp-harness-default-fake-leak-${Date.now()}`);
+    await Deno.mkdir(fakeLeaked, { recursive: true });
+    createdScratches.add(fakeLeaked);
+    try {
+      const leakedAfterFake = [];
+      for (const path of createdScratches) {
+        if (existsSync(path)) {
+          leakedAfterFake.push(path);
+        }
+      }
+      assertEquals(leakedAfterFake, [fakeLeaked], "uncleaned scratch directory must be detected as leaked");
+    } finally {
+      createdScratches.delete(fakeLeaked);
+      await Deno.remove(fakeLeaked, { recursive: true });
+    }
   } finally {
     await Deno.remove(foreignDir, { recursive: true });
-  }
-
-  // Falsifier: an expected scratch dir still existing on disk must FAIL
-  const fakeLeaked = join(root, `acp-harness-default-fake-leak-${Date.now()}`);
-  await Deno.mkdir(fakeLeaked, { recursive: true });
-  createdScratches.add(fakeLeaked);
-  try {
-    const shouldFailCheck = [...createdScratches].filter((p) => existsSync(p));
-    assertEquals(shouldFailCheck, [fakeLeaked], "uncleaned scratch directory must be detected as leaked");
-  } finally {
-    createdScratches.delete(fakeLeaked);
-    await Deno.remove(fakeLeaked, { recursive: true });
   }
 });
 
