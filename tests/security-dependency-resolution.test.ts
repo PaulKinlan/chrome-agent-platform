@@ -78,6 +78,14 @@ function findScopedDeclarator(identNode, parents) {
         }
       }
     }
+    if (p.type === "CatchClause" && p.param && bindingNames(p.param).includes(name)) {
+      return null;
+    }
+    if (["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"].includes(p.type)) {
+      if (p.params.some((param) => bindingNames(param).includes(name))) {
+        return null;
+      }
+    }
   }
   return null;
 }
@@ -330,6 +338,11 @@ Deno.test("bbz3s: comment, conditional, late and swallowed-check mutants cannot 
   // ynkzd: unrelated local require shadowed by an outer "esbuild" const must not falsely RED
   const legalShadow = replaceOnce(source, line, `    function __g(){ const __n = "lodash"; require(__n); } const __n = "esbuild";\n${line}`);
   assertEquals(preBundleGuardProblems(legalShadow), [], "ynkzd: local non-esbuild require shadowed by outer esbuild const must not red");
+  // ja7kv: unrelated require of a function/catch parameter shadowing an outer "esbuild" const must not falsely RED
+  const legalParam = replaceOnce(source, line, `    function __h(__n){ require(__n); } const __n = "esbuild";\n${line}`);
+  assertEquals(preBundleGuardProblems(legalParam), [], "ja7kv: function param shadowing outer esbuild const must not red");
+  const legalCatch = replaceOnce(source, line, `    try {} catch (__n){ require(__n); } const __n = "esbuild";\n${line}`);
+  assertEquals(preBundleGuardProblems(legalCatch), [], "ja7kv: catch param shadowing outer esbuild const must not red");
   assertEquals(Deno.readTextFileSync(BUILD_SOURCE), source, "mutations stay in memory: build.mjs is byte-identical");
 });
 
