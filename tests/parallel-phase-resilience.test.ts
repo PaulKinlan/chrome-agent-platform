@@ -662,6 +662,39 @@ Deno.test("hangs without ppid monitor", async () => {
   }
 });
 
+/**
+ * How long a child in the parallel phase runner takes to reach its FIRST statement on this box.
+ * Sized from a measured probe with a generous timeout so the probe itself never reds.
+ */
+async function measureChildBootMs(dir: string): Promise<number> {
+  const probe = `${dir}/zz-boot-probe-${crypto.randomUUID().slice(0, 8)}.test.ts`;
+  const marker = `${probe}.marker`;
+  await Deno.writeTextFile(
+    probe,
+    `await Deno.writeTextFile(${JSON.stringify(marker)}, "ready");\n` +
+      `Deno.test("boot probe", () => {});\n`,
+  );
+  const t0 = Date.now();
+  const proc = new Deno.Command("node", {
+    args: ["scripts/run-tests.mjs", probe],
+    cwd: ROOT,
+    env: {
+      CAP_PARALLEL_READY_FILE: marker,
+      CAP_PARALLEL_READY_TIMEOUT_MS: "120000",
+      CAP_PARALLEL_TEST_TIMEOUT_MS: "5000",
+    },
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const res = await proc.output();
+  const elapsed = Date.now() - t0;
+  assert(
+    res.code === 0,
+    `the parallel boot probe must reach its marker on this box: ${new TextDecoder().decode(res.stderr)}`,
+  );
+  return Math.max(1_500, elapsed);
+}
+
 Deno.test("1k2a/5nhz: parallel phase timeout with cold-boot delay awaits ready marker before starting timer", async () => {
   const dir = await durableDir(`1k2a-parallel-delayed-boot-${Deno.pid}-${crypto.randomUUID().slice(0, 8)}`);
   const pidFile = `${dir}/grandchild.pid`;
@@ -705,13 +738,16 @@ Deno.test("delayed boot hangs in parallel phase", async () => {
 
   let orphanPid = 0;
   try {
+    const bootMs = await measureChildBootMs(dir);
+    const latenessMs = 2_500;
+    const readyTimeoutMs = String(loadScaledTimeout(Math.max(15_000, bootMs) + latenessMs));
     const proc = new Deno.Command("node", {
       args: ["scripts/run-tests.mjs", probeFile],
       cwd: ROOT,
       env: {
         CAP_PARALLEL_TEST_TIMEOUT_MS: "1500",
         CAP_PARALLEL_READY_FILE: pidFile,
-        CAP_PARALLEL_READY_TIMEOUT_MS: "15000",
+        CAP_PARALLEL_READY_TIMEOUT_MS: readyTimeoutMs,
       },
       stdout: "piped",
       stderr: "piped",
