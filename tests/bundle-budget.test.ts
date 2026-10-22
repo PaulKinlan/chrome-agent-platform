@@ -45,131 +45,6 @@ Deno.test("bundle budget: the store SW budget is exactly the constitution number
   assert(BUDGET_REPORTED_BUNDLES.includes("background/service-worker.js"));
 });
 
-export interface CeilingCheckSite {
-  id: string;
-  doc: "constitution" | "riskRegister" | "testCoupling" | "acpHarness";
-  verify: (content: string, ceiling: number) => void;
-  mutate: (content: string, ceiling: number) => string;
-}
-
-export const CEILING_CHECK_SITES: CeilingCheckSite[] = [
-  {
-    id: "constitution-ceiling",
-    doc: "constitution",
-    verify: (content, ceiling) => {
-      const formatted = ceiling.toLocaleString("en-US");
-      assert(
-        content.includes(`store \`offscreen.bundle.js\` hard ceiling of ${formatted} bytes`),
-        `docs/CONSTITUTION.md must state the enforced offscreen ceiling of ${formatted} bytes`,
-      );
-    },
-    mutate: (content, ceiling) =>
-      content.replace(
-        `store \`offscreen.bundle.js\` hard ceiling of ${ceiling.toLocaleString("en-US")} bytes`,
-        "store `offscreen.bundle.js` hard ceiling of 999,999 bytes",
-      ),
-  },
-  {
-    id: "risk-register-ceiling",
-    doc: "riskRegister",
-    verify: (content, ceiling) => {
-      const formatted = ceiling.toLocaleString("en-US");
-      assert(
-        content.includes(`store \`offscreen.bundle.js\` now fails above the ${formatted}-byte ceiling`),
-        `docs/RISK-REGISTER.md must state the enforced offscreen ceiling of ${formatted} bytes`,
-      );
-    },
-    mutate: (content, ceiling) =>
-      content.replace(
-        `store \`offscreen.bundle.js\` now fails above the ${ceiling.toLocaleString("en-US")}-byte ceiling`,
-        "store `offscreen.bundle.js` now fails above the 999,999-byte ceiling",
-      ),
-  },
-  {
-    id: "test-coupling-ceiling",
-    doc: "testCoupling",
-    verify: (content, ceiling) => {
-      const formatted = ceiling.toLocaleString("en-US");
-      assert(
-        content.includes(`enforced ${formatted}-byte store \`offscreen.bundle.js\` ceiling`),
-        `docs/TEST-COUPLING-INVENTORY.md must state the enforced offscreen ceiling of ${formatted} bytes`,
-      );
-    },
-    mutate: (content, ceiling) =>
-      content.replace(
-        `enforced ${ceiling.toLocaleString("en-US")}-byte store \`offscreen.bundle.js\` ceiling`,
-        "enforced 999,999-byte store `offscreen.bundle.js` ceiling",
-      ),
-  },
-  {
-    id: "acp-harness-sentence-ceiling",
-    doc: "acpHarness",
-    verify: (content, ceiling) => {
-      const formatted = ceiling.toLocaleString("en-US");
-      assert(
-        content.includes(`per-bundle ceiling (${formatted} bytes`),
-        `docs/ACP-HARNESS-TOOLS.md must state the per-bundle ceiling of ${formatted} bytes`,
-      );
-    },
-    mutate: (content, ceiling) =>
-      content.replace(
-        `per-bundle ceiling (${ceiling.toLocaleString("en-US")} bytes`,
-        "per-bundle ceiling (999,999 bytes",
-      ),
-  },
-  {
-    id: "acp-harness-table-row",
-    doc: "acpHarness",
-    verify: (content, ceiling) => {
-      const formatted = ceiling.toLocaleString("en-US");
-      const match = content.match(/\|\s*offscreen\.bundle\.js\s*\|\s*([^|]+)\|\s*([^|]+)\|\s*([^|]+)\|/);
-      assert(match, "docs/ACP-HARNESS-TOOLS.md must contain the offscreen.bundle.js table row");
-      assertEquals(
-        match[2].trim(),
-        `${formatted} B`,
-        `docs/ACP-HARNESS-TOOLS.md table ceiling cell must equal ${formatted} B (was ${match[2].trim()})`,
-      );
-    },
-    mutate: (content) =>
-      content.replace(
-        /(\|\s*offscreen\.bundle\.js\s*\|\s*[^|]+\|\s*)([^|]+)(\|\s*[^|]+\|)/,
-        "$1 999,999 B $3",
-      ),
-  },
-  {
-    id: "acp-harness-prose-ratchet",
-    doc: "acpHarness",
-    verify: (content, ceiling) => {
-      const formatted = ceiling.toLocaleString("en-US");
-      assert(
-        content.includes(`the ratcheted ${formatted} B ceiling`),
-        `docs/ACP-HARNESS-TOOLS.md must state the ratcheted ${formatted} B ceiling in prose`,
-      );
-    },
-    mutate: (content, ceiling) =>
-      content.replace(
-        `the ratcheted ${ceiling.toLocaleString("en-US")} B ceiling`,
-        "the ratcheted 999,999 B ceiling",
-      ),
-  },
-  {
-    id: "acp-harness-history-ratchet",
-    doc: "acpHarness",
-    verify: (content, ceiling) => {
-      const formatted = ceiling.toLocaleString("en-US");
-      assert(
-        content.includes(`later ratcheted to ${formatted} B by bwxf`),
-        `docs/ACP-HARNESS-TOOLS.md must state the historical ratchet to ${formatted} B by bwxf`,
-      );
-    },
-    mutate: (content, ceiling) =>
-      content.replace(
-        `later ratcheted to ${ceiling.toLocaleString("en-US")} B by bwxf`,
-        "later ratcheted to 999,999 B by bwxf",
-      ),
-  },
-];
-
 export function verifyEnforcedOffscreenCeilingDocs(
   docs: {
     constitution: string;
@@ -179,12 +54,96 @@ export function verifyEnforcedOffscreenCeilingDocs(
   },
   ceiling: number,
 ) {
-  for (const site of CEILING_CHECK_SITES) {
-    site.verify(docs[site.doc], ceiling);
+  const formatted = ceiling.toLocaleString("en-US");
+
+  // 1. Constitution positive pin
+  assert(
+    docs.constitution.includes(`store \`offscreen.bundle.js\` hard ceiling of ${formatted} bytes`),
+    `docs/CONSTITUTION.md must state the enforced offscreen ceiling of ${formatted} bytes`,
+  );
+
+  // 2. Risk Register positive pin
+  assert(
+    docs.riskRegister.includes(`store \`offscreen.bundle.js\` now fails above the ${formatted}-byte ceiling`),
+    `docs/RISK-REGISTER.md must state the enforced offscreen ceiling of ${formatted}-byte ceiling`,
+  );
+
+  // 3. Test Coupling Inventory positive pin
+  assert(
+    docs.testCoupling.includes(`enforced ${formatted}-byte store \`offscreen.bundle.js\` ceiling`),
+    `docs/TEST-COUPLING-INVENTORY.md must state the enforced ${formatted}-byte store offscreen ceiling`,
+  );
+
+  // 4. ACP Harness Tools: exhaustive table and prose verification (h2c0e)
+  const content = docs.acpHarness;
+
+  // 4a. Match ALL table rows for offscreen.bundle.js (forbids unpinned or conflicting duplicate rows)
+  const rowMatches = [...content.matchAll(/\|\s*offscreen\.bundle\.js\s*\|\s*([^|]+)\|\s*([^|]+)\|\s*([^|]+)\|/g)];
+  assert(rowMatches.length >= 1, "docs/ACP-HARNESS-TOOLS.md must contain the offscreen.bundle.js table row");
+  for (const match of rowMatches) {
+    const ceilingCell = match[2].trim();
+    assertEquals(
+      ceilingCell,
+      `${formatted} B`,
+      `docs/ACP-HARNESS-TOOLS.md table ceiling cell must equal ${formatted} B, found: ${ceilingCell}`,
+    );
   }
+
+  // 4b. Match ALL prose sentences mentioning offscreen and ceiling/ratchet
+  // Strip table lines first so markdown table formatting is not parsed as prose sentences
+  const proseOnly = content
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("|"))
+    .join("\n");
+
+  const sentences = proseOnly.split(/(?<=[.!?\n])\s+/);
+  let checkedSentences = 0;
+  for (const sentence of sentences) {
+    if (!/offscreen/i.test(sentence)) continue;
+    if (!/ceiling|ratchet/i.test(sentence)) continue;
+    checkedSentences++;
+
+    // Historical figures must match 250,000
+    const historicalMatches = [
+      ...sentence.matchAll(/ratcheted from ([\d,]+)/g),
+      ...sentence.matchAll(/original ([\d,]+)\s*(?:B|bytes)?\s*ceiling/g),
+    ];
+    for (const h of historicalMatches) {
+      assertEquals(h[1].trim(), "250,000", `historical reference must be 250,000, got ${h[1]}`);
+    }
+
+    // Scrub historical figures before checking enforced ceiling figures
+    const scrubbed = sentence
+      .replace(/ratcheted from [\d,]+/g, "")
+      .replace(/original [\d,]+\s*(?:B|bytes)?\s*ceiling/g, "");
+
+    const enforcedMatches = [
+      ...scrubbed.matchAll(/ceiling[^\d]{0,30}([\d,]+)\s*(?:B|bytes|KB)/gi),
+      ...scrubbed.matchAll(/([\d,]+)\s*(?:B|bytes|KB)[^\w\n]{0,20}ceiling/gi),
+      ...scrubbed.matchAll(/ratcheted to\s+([\d,]+)\s*(?:B|bytes|KB)/gi),
+    ];
+
+    assert(
+      enforcedMatches.length > 0,
+      `sentence mentioning offscreen ceiling must contain at least one enforced ceiling figure: "${sentence.trim()}"`,
+    );
+    for (const m of enforcedMatches) {
+      const figure = m[1].trim();
+      assertEquals(
+        figure,
+        formatted,
+        `Sentence states invalid offscreen ceiling ${figure} (expected ${formatted}) in: "${sentence.trim()}"`,
+      );
+    }
+  }
+
+  assert(
+    checkedSentences >= 3,
+    `docs/ACP-HARNESS-TOOLS.md must contain at least 3 offscreen ceiling sentences (found ${checkedSentences})`,
+  );
 }
 
-Deno.test("0kdsc / ug95c / k3vrl / akoxt / 324tz / rjvdp: docs quoting the enforced offscreen ceiling match STORE_BUNDLE_BUDGETS['offscreen.bundle.js']", () => {
+Deno.test("0kdsc / ug95c / k3vrl / akoxt / 324tz / rjvdp / h2c0e: docs quoting the enforced offscreen ceiling match STORE_BUNDLE_BUDGETS['offscreen.bundle.js']", () => {
   const offscreenCeiling = STORE_BUNDLE_BUDGETS["offscreen.bundle.js"];
   const root = fileURLToPath(new URL("../", import.meta.url));
   const docs = {
@@ -194,19 +153,47 @@ Deno.test("0kdsc / ug95c / k3vrl / akoxt / 324tz / rjvdp: docs quoting the enfor
     acpHarness: Deno.readTextFileSync(join(root, "docs/ACP-HARNESS-TOOLS.md")),
   };
 
-  // 1. Positive verification: all sites match the actual enforced constant
+  // 1. Positive baseline: all docs match the actual enforced constant
   verifyEnforcedOffscreenCeilingDocs(docs, offscreenCeiling);
 
-  // 2. Active per-site falsifier: mutating each site independently turns that site RED
-  //    (proves every single site is live and non-tautological).
-  for (const site of CEILING_CHECK_SITES) {
-    const mutatedContent = site.mutate(docs[site.doc], offscreenCeiling);
-    assert(
-      mutatedContent !== docs[site.doc],
-      `falsifier mutation for ${site.id} must modify the doc content`,
-    );
+  // 2. Active falsifier: mutated constant fails closed
+  assertThrows(
+    () => verifyEnforcedOffscreenCeilingDocs(docs, offscreenCeiling + 1000),
+    Error,
+  );
+
+  // 3. Active falsifier: new conflicting prose sentence (h2c0e case 1)
+  assertThrows(
+    () =>
+      verifyEnforcedOffscreenCeilingDocs({
+        ...docs,
+        acpHarness: docs.acpHarness + "\nThe enforced offscreen ceiling is now 260,000 B for all store surfaces.\n",
+      }, offscreenCeiling),
+    Error,
+  );
+
+  // 4. Active falsifier: duplicate table row placed after real row (h2c0e case 2)
+  const realRow = "| offscreen.bundle.js | 245,796 B | 258,000 B | 12,204 B |\n";
+  assertThrows(
+    () =>
+      verifyEnforcedOffscreenCeilingDocs({
+        ...docs,
+        acpHarness: docs.acpHarness.replace(
+          realRow,
+          realRow + "| offscreen.bundle.js | 245,796 B | 300,000 B | 54,204 B |\n",
+        ),
+      }, offscreenCeiling),
+    Error,
+  );
+
+  // 5. Active falsifier: each individual document mutated to a bogus ceiling fails closed
+  for (const docKey of Object.keys(docs) as Array<keyof typeof docs>) {
+    const mutatedDocs = {
+      ...docs,
+      [docKey]: docs[docKey].replaceAll(offscreenCeiling.toLocaleString("en-US"), "999,999"),
+    };
     assertThrows(
-      () => site.verify(mutatedContent, offscreenCeiling),
+      () => verifyEnforcedOffscreenCeilingDocs(mutatedDocs, offscreenCeiling),
       Error,
     );
   }
