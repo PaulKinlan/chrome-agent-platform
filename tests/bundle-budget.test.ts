@@ -82,7 +82,7 @@ export function verifyEnforcedOffscreenCeilingDocs(
     `docs/ACP-HARNESS-TOOLS.md must state the enforced offscreen ceiling of ${formatted}`,
   );
 
-  // 4a. Check all table rows referencing offscreen (with or without backticks, in 4-column or 2-column tables)
+  // 4a. Check all table rows referencing offscreen (with or without backticks, in 4-column, 3-column, or 2-column tables)
   const tableRows = content
     .split("\n")
     .filter((line) => line.trim().startsWith("|") && /offscreen/i.test(line));
@@ -90,34 +90,52 @@ export function verifyEnforcedOffscreenCeilingDocs(
 
   for (const row of tableRows) {
     const cells = row.split("|").map((c) => c.trim().replace(/^`|`$/g, "")).filter(Boolean);
-    if (cells.length >= 4) {
+    let matched = false;
+    if (cells.length === 4) {
       // 4-column table: Surface, Size, Ceiling, Headroom
       const ceilingCell = cells[2];
-      assert(
-        ceilingCell === `${formatted} B` || ceilingCell === `${formatted} bytes` || ceilingCell === formatted,
-        `Table row ceiling column must equal ${formatted} B, found: ${ceilingCell} in: "${row.trim()}"`,
-      );
+      matched = ceilingCell === `${formatted} B` || ceilingCell === `${formatted} bytes` || ceilingCell === formatted;
     } else if (cells.length === 2) {
       // 2-column table: Surface, Limit
       const limitCell = cells[1];
-      assert(
-        limitCell === `${formatted} B` || limitCell === `${formatted} bytes` || limitCell === formatted,
-        `Table row limit column must equal ${formatted} B, found: ${limitCell} in: "${row.trim()}"`,
-      );
+      matched = limitCell === `${formatted} B` || limitCell === `${formatted} bytes` || limitCell === formatted;
+    } else if (cells.length === 3) {
+      // 3-column table: Surface, Ceiling, Headroom OR Surface, Size, Ceiling
+      const c1 = cells[1];
+      const c2 = cells[2];
+      matched = c1 === `${formatted} B` || c1 === `${formatted} bytes` || c1 === formatted ||
+        c2 === `${formatted} B` || c2 === `${formatted} bytes` || c2 === formatted;
     }
+    assert(
+      matched,
+      `Table row ceiling column must equal ${formatted} B in: "${row.trim()}"`,
+    );
   }
 
   // 4b. Check all prose paragraphs and sentences mentioning offscreen and ceiling/budget/limit claims
+  function parseByteValue(numStr: string, unit?: string): number | null {
+    const cleanNum = parseFloat(numStr.replace(/,/g, ""));
+    if (isNaN(cleanNum)) return null;
+    const u = (unit || "").toLowerCase();
+    if (u === "mb") return Math.round(cleanNum * 1000 * 1000);
+    if (u === "kb") return Math.round(cleanNum * 1000);
+    return Math.round(cleanNum);
+  }
+
   // First, scrub known legitimate historical phrases so their "250,000" is not mistaken for a current ceiling:
   const scrubbed = content
-    .replace(/ratcheted from 250,000\s*(?:bytes|B)?/gi, "HISTORICAL_RATCHET")
-    .replace(/original 250,000\s*(?:bytes|B)?\s*ceiling/gi, "HISTORICAL_ORIGINAL");
+    .replace(/ratcheted from 250,000\s*(?:bytes|B)?/gi, "")
+    .replace(/original 250,000\s*(?:bytes|B)?\s*ceiling/gi, "");
 
   const sentences = scrubbed.split(/(?<=[.!?\n])\s+/);
   let mentionsEnforcedCeiling = false;
 
-  const HEADROOM_FIGURES = new Set(["377", "1,088", "5,473", "12,204", "3,212", "2,694", "24"]);
-  const MEASURED_SIZE_FIGURES = new Set(["245,796", "255,306", "249,976"]);
+  // Patterns connecting ceiling/budget/limit with a quantity (within a clause, avoiding ;)
+  // Exclude numbers with % (e.g. 5%, 1.0%)
+  const patterns = [
+    /\b(?:ceiling|budget|limit|growth)\b[^\d.!?\n;()]{0,35}?(\d+(?:[\d,]*\d)?(?:\.\d+)?)\s*(bytes|B|KB|MB)?\b(?!\s*%)/gi,
+    /(\d+(?:[\d,]*\d)?(?:\.\d+)?)\s*(bytes|B|KB|MB)?\b(?!\s*%)[^\d.!?\n;()]{0,35}?\b(?:ceiling|budget|limit)\b/gi,
+  ];
 
   for (let i = 0; i < sentences.length; i++) {
     const s = sentences[i];
@@ -126,27 +144,25 @@ export function verifyEnforcedOffscreenCeilingDocs(
       (/offscreen/i.test(prev) && /\b(that limit|that ceiling|that budget|growth to)\b/i.test(s));
 
     if (!isOffscreenContext) continue;
-    if (!/ceiling|budget|limit|ratcheted/i.test(s)) continue;
     if (s.trim().startsWith("|")) continue; // table rows verified structurally above
 
-    // Strip backticks first to inspect bare numbers
     const cleanS = s.replace(/`/g, "");
-    const numbers = [...cleanS.matchAll(/\b([\d][\d,]{2,})\b/g)].map((m) => m[1]);
 
-    for (const num of numbers) {
-      if (/headroom|thin margin/i.test(cleanS) && HEADROOM_FIGURES.has(num)) {
-        continue;
-      }
-      if (/snapshot|measured|staging build/i.test(cleanS) && MEASURED_SIZE_FIGURES.has(num)) {
-        continue;
-      }
-      if (num === formatted || num === rawNum) {
-        mentionsEnforcedCeiling = true;
-      } else {
-        assert(
-          false,
-          `Invalid offscreen ceiling/budget/limit figure ${num} (expected ${formatted}) in: "${s.trim()}"`,
-        );
+    for (const pat of patterns) {
+      for (const match of cleanS.matchAll(pat)) {
+        const rawNum = match[1];
+        const unit = match[2] || "";
+        const val = parseByteValue(rawNum, unit);
+        if (val !== null) {
+          if (val === ceiling) {
+            mentionsEnforcedCeiling = true;
+          } else {
+            assert(
+              false,
+              `Invalid offscreen ceiling/budget/limit figure ${rawNum}${unit ? " " + unit : ""} (${val} B, expected ${formatted} B) in: "${s.trim()}"`,
+            );
+          }
+        }
       }
     }
   }
@@ -157,7 +173,7 @@ export function verifyEnforcedOffscreenCeilingDocs(
   );
 }
 
-Deno.test("0kdsc / ug95c / k3vrl / akoxt / 324tz / rjvdp / h2c0e / tgff6 / benkb: docs quoting the enforced offscreen ceiling match STORE_BUNDLE_BUDGETS['offscreen.bundle.js']", () => {
+Deno.test("0kdsc / ug95c / k3vrl / akoxt / 324tz / rjvdp / h2c0e / tgff6 / benkb / t2ntz / n4ofi / 5h7mi: docs quoting the enforced offscreen ceiling match STORE_BUNDLE_BUDGETS['offscreen.bundle.js']", () => {
   const offscreenCeiling = STORE_BUNDLE_BUDGETS["offscreen.bundle.js"];
   const root = fileURLToPath(new URL("../", import.meta.url));
   const docs = {
@@ -176,7 +192,7 @@ Deno.test("0kdsc / ug95c / k3vrl / akoxt / 324tz / rjvdp / h2c0e / tgff6 / benkb
     Error,
   );
 
-  // 3. Active falsifiers for benkb escapes:
+  // 3. Active falsifiers for benkb / t2ntz / n4ofi / 5h7mi escapes:
   // Case H: false current ceiling using allowlisted historical figure 250,000
   assertThrows(
     () =>
@@ -216,6 +232,76 @@ Deno.test("0kdsc / ug95c / k3vrl / akoxt / 324tz / rjvdp / h2c0e / tgff6 / benkb
       }, offscreenCeiling),
     Error,
   );
+
+  // Case I: conflicting figure with no unit
+  assertThrows(
+    () =>
+      verifyEnforcedOffscreenCeilingDocs({
+        ...docs,
+        acpHarness: docs.acpHarness + "\nThe enforced offscreen.bundle.js ceiling is now 300000 for all store surfaces.\n",
+      }, offscreenCeiling),
+    Error,
+  );
+
+  // Case L: conflicting figure in following paragraph referencing 'That limit'
+  assertThrows(
+    () =>
+      verifyEnforcedOffscreenCeilingDocs({
+        ...docs,
+        acpHarness: docs.acpHarness + "\nThe offscreen.bundle.js ceiling is 258,000 B.\n\nThat limit may grow to 300,000 B next wave.\n",
+      }, offscreenCeiling),
+    Error,
+  );
+
+  // t2ntz Case 1: ceiling claimed with "measured at"
+  assertThrows(
+    () =>
+      verifyEnforcedOffscreenCeilingDocs({
+        ...docs,
+        acpHarness: docs.acpHarness + "\nThe enforced offscreen.bundle.js ceiling is measured at 245,796 B for all store surfaces.\n",
+      }, offscreenCeiling),
+    Error,
+  );
+
+  // t2ntz Case 2: ceiling claimed with "headroom"
+  assertThrows(
+    () =>
+      verifyEnforcedOffscreenCeilingDocs({
+        ...docs,
+        acpHarness: docs.acpHarness + "\nThe offscreen.bundle.js ceiling sits at 377 B of headroom for all store surfaces.\n",
+      }, offscreenCeiling),
+    Error,
+  );
+
+  // n4ofi: 3-column table with wrong ceiling
+  assertThrows(
+    () =>
+      verifyEnforcedOffscreenCeilingDocs({
+        ...docs,
+        acpHarness: docs.acpHarness + "\n| Surface | Ceiling | Headroom |\n| --- | ---: | ---: |\n| offscreen.bundle.js | 300,000 B | 12,204 B |\n",
+      }, offscreenCeiling),
+    Error,
+  );
+
+  // 5h7mi: unit conversion check - 0.3 MB (300,000 B) must fail
+  assertThrows(
+    () =>
+      verifyEnforcedOffscreenCeilingDocs({
+        ...docs,
+        acpHarness: docs.acpHarness + "\nThe enforced offscreen.bundle.js ceiling is 0.3 MB for all store surfaces.\n",
+      }, offscreenCeiling),
+    Error,
+  );
+
+  // 5h7mi positive checks: unit-equivalent expressions pass
+  verifyEnforcedOffscreenCeilingDocs({
+    ...docs,
+    acpHarness: docs.acpHarness + "\nThe enforced offscreen.bundle.js ceiling is 258,000B for all store surfaces.\n",
+  }, offscreenCeiling);
+  verifyEnforcedOffscreenCeilingDocs({
+    ...docs,
+    acpHarness: docs.acpHarness + "\nThe enforced offscreen.bundle.js ceiling is 258 KB for all store surfaces.\n",
+  }, offscreenCeiling);
 
   // Case I: conflicting figure with no unit
   assertThrows(
