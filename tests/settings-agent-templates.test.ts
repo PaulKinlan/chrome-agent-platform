@@ -33,6 +33,7 @@ import {
   AGENT_TEMPLATES,
   templatePrefill,
 } from "../extension/lib/agent-templates.js";
+import { backgroundSkills } from "../extension/lib/skill-registry.js";
 import { createPanelContext } from "../extension/options/panel-context.js";
 
 const _ACCEPTANCE = new URL("../cap-evidence/n3fqo-settings-template-select-acceptance.ts", import.meta.url);
@@ -160,6 +161,97 @@ Deno.test("Settings template catalogue: includes curated starter templates even 
   assert(ra, "Research Analyst must exist in catalogue");
   assertStringIncludes(String(ra.role ?? ""), "# Research Analyst Persona");
   assert(Array.isArray(ra.skills) && ra.skills.includes("multi-tab-researcher"));
+});
+
+Deno.test("Settings template stock catalogue: builds exactly 42 templates with 25 Scheduled by ID and name (ng824)", () => {
+  const skills = backgroundSkills();
+  const catalogue: any[] = composeSettingsTemplateCatalogue(skills);
+
+  // 1. Total count is exactly 42
+  assertEquals(catalogue.length, 42, `stock catalogue must contain exactly 42 templates, got ${catalogue.length}`);
+
+  // 2. Starters: exactly 7 curated starter templates
+  const starters = catalogue.filter((t) => t?.starter === true);
+  assertEquals(starters.length, 7, `must contain exactly 7 starter templates, got ${starters.length}`);
+  assertEquals(
+    starters.map((t) => t.id).sort(),
+    [...STARTER_TEMPLATE_IDS].sort(),
+    "starter templates must match STARTER_TEMPLATE_IDS",
+  );
+
+  // 3. Scheduled: exactly 25 scheduled templates (4 curated background + 21 built-in background skills)
+  const scheduled = catalogue.filter((t) => !t.starter && (t.mode === "background" || t.schedule));
+  assertEquals(scheduled.length, 25, `must contain exactly 25 scheduled templates, got ${scheduled.length}`);
+
+  const EXPECTED_SCHEDULED_IDS = [
+    "auto-group-by-domain",
+    "auto-pin-favorites",
+    "auto-reading-list",
+    "bookmark-auto-categorize",
+    "bookmark-dedupe",
+    "bookmark-librarian",
+    "daily-summary",
+    "dead-bookmark-cleaner",
+    "dedupe-tabs",
+    "download-nightly-summary",
+    "download-organizer",
+    "focus-mode",
+    "idle-close-tabs",
+    "meeting-prep",
+    "page-change-watcher",
+    "page-sentiment-log",
+    "price-watcher",
+    "reading-time-estimator",
+    "stale-tab-closer",
+    "subscription-auditor",
+    "summarize-on-navigate",
+    "tab-janitor",
+    "tab-screenshot-diary",
+    "weekly-digest",
+    "weekly-review-prompt",
+  ];
+  assertEquals(
+    scheduled.map((t) => t.id).sort(),
+    [...EXPECTED_SCHEDULED_IDS].sort(),
+    "scheduled template IDs must match the expected 25 built-in/curated scheduled templates",
+  );
+
+  // 4. Other: exactly 10 on-demand curated templates
+  const others = catalogue.filter((t) => !t.starter && !t.schedule && t.mode !== "background");
+  assertEquals(others.length, 10, `must contain exactly 10 other on-demand templates, got ${others.length}`);
+  const EXPECTED_OTHER_IDS = [
+    "code-reviewer",
+    "data-wrangler",
+    "fact-checker",
+    "form-filer",
+    "meeting-wing",
+    "personal-shopper",
+    "repo-steward",
+    "scribe-doc-writer",
+    "travel-planner",
+    "tutor-study-coach",
+  ];
+  assertEquals(
+    others.map((t) => t.id).sort(),
+    [...EXPECTED_OTHER_IDS].sort(),
+    "other template IDs must match the 10 curated on-demand templates",
+  );
+
+  // 5. Every template has non-empty id and name
+  for (const t of catalogue) {
+    assert(typeof t.id === "string" && t.id.length > 0, `template id must be non-empty string: ${JSON.stringify(t)}`);
+    assert(typeof t.name === "string" && t.name.length > 0, `template name must be non-empty string: ${t.id}`);
+  }
+
+  // 6. Falsifier: dropping any one scheduled skill from the input turns the assertion RED
+  for (const droppedId of ["daily-summary", "page-change-watcher", "focus-mode"]) {
+    const mutatedSkills = skills.filter((s: any) => s.id !== droppedId);
+    const mutatedCatalogue = composeSettingsTemplateCatalogue(mutatedSkills);
+    const mutatedScheduled = mutatedCatalogue.filter((t: any) => !t.starter && (t.mode === "background" || t.schedule));
+    assert(mutatedCatalogue.length !== 42, `dropping ${droppedId} must reduce total catalogue length below 42`);
+    assert(mutatedScheduled.length !== 25, `dropping ${droppedId} must reduce scheduled count below 25`);
+    assert(!mutatedScheduled.some((t: any) => t.id === droppedId), `dropped ${droppedId} must not be in scheduled list`);
+  }
 });
 
 Deno.test("Settings template catalogue: merges background skills without duplicating curated templates", () => {
