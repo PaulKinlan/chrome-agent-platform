@@ -170,6 +170,26 @@ export function measuredReadyLoadPerCpu() {
   }
 }
 
+/** A ready-marker deadline needs ABSOLUTE load, not load per CPU (chrome-agent-platform-kzy5x).
+ *
+ * The grace below exists to cover a child's cold boot, and what makes a cold boot slow is how many
+ * runnable tasks are contending for it — the absolute 1-minute load. Keying on load/cpus makes an
+ * 8-core fleet box read as IDLE exactly when it is thrashing: measured on 2026-10-22 at absolute load
+ * 5.5 (cpus 8 -> 0.69/cpu), classifyReadyMarkerTimeout called it "idle-never-settled" and granted a
+ * nested deno cold boot NO grace at all, so the readiness proofs redded "the CHILD never reached its
+ * first action" in both the serial and the parallel phases. This is the same arithmetic coord P1'd on
+ * chrome-agent-platform-whl7d (custody TERM window) and that the boot budgets in the resilience tests
+ * were just re-keyed on. The x4 ceiling is unchanged, so the grace stays bounded.
+ */
+export function measuredReadyLoad() {
+  try {
+    const load = os.loadavg?.()[0];
+    return Number.isFinite(load) && load >= 0 ? load : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Classify the first ready-marker deadline, not the child result. A loaded
  * machine earns one bounded grace window; absent markers still time out.
  * Unmeasurable load is NOT assumed loaded. The same x4 ceiling as the serial

@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { classifyReadyMarkerTimeout, measuredReadyLoadPerCpu } from "./serial-phase.mjs";
+import { classifyReadyMarkerTimeout, measuredReadyLoad } from "./serial-phase.mjs";
 
 const [file, readyFile, timeoutMsStr, readyTimeoutMsStr, injectedReadyLoadStr] = process.argv.slice(2);
 const timeoutMs = Number(timeoutMsStr || "10000");
@@ -54,17 +54,18 @@ if (readyFile) {
       // whose Deno cold boot has not yet received CPU time. Grace is x4 max.
       readyVerdict ??= classifyReadyMarkerTimeout({
         baseMs: readyTimeoutMs,
-        loadPerCpu: injectedReadyLoad === undefined ? measuredReadyLoadPerCpu() : injectedReadyLoad,
+        // kzy5x: ABSOLUTE load, so an 8-core box at load 5.5 is not read as idle and the cold boot gets grace.
+        loadPerCpu: injectedReadyLoad === undefined ? measuredReadyLoad() : injectedReadyLoad,
       });
       if (readyVerdict.cause === "loaded" && !readyVerdict.reported) {
-        process.stderr.write(`\nrunSerialFile: READY_MARKER_LOADED_GRACE ${readyFile} soft=${readyTimeoutMs}ms hard=${readyVerdict.hardTimeoutMs}ms load=${readyVerdict.loadPerCpu.toFixed(2)}/cpu\n`);
+        process.stderr.write(`\nrunSerialFile: READY_MARKER_LOADED_GRACE ${readyFile} soft=${readyTimeoutMs}ms hard=${readyVerdict.hardTimeoutMs}ms load=${readyVerdict.loadPerCpu.toFixed(2)}\n`);
         readyVerdict.reported = true;
       }
       if (Date.now() - t0 <= readyVerdict.hardTimeoutMs) return;
       clearInterval(poll);
       poll = null;
       timedOut = true;
-      process.stderr.write(`\nrunSerialFile: READY_MARKER_TIMEOUT_${readyVerdict.cause.toUpperCase().replaceAll("-", "_")} ${readyFile} soft=${readyTimeoutMs}ms hard=${readyVerdict.hardTimeoutMs}ms load=${readyVerdict.loadPerCpu ?? "unmeasurable"}/cpu\n`);
+      process.stderr.write(`\nrunSerialFile: READY_MARKER_TIMEOUT_${readyVerdict.cause.toUpperCase().replaceAll("-", "_")} ${readyFile} soft=${readyTimeoutMs}ms hard=${readyVerdict.hardTimeoutMs}ms load=${readyVerdict.loadPerCpu ?? "unmeasurable"}\n`);
       if (child.pid) {
         try { process.kill(-child.pid, "SIGKILL"); } catch { /* gone */ }
       }
