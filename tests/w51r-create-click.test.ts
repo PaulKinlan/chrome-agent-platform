@@ -112,6 +112,14 @@ export type TimeoutComputer = (options: { base: number; loadPerCpu: number }) =>
  * Executes or dry-runs the w51r Create button click browser journey.
  * Both the real browser journey and the unit verification test share this identical entrypoint.
  * Derives open and ready budgets using the sanctioned serialFileTimeoutMs helper.
+ *
+ * The budget is derived at the WAIT, not once before Chrome launches: a sample
+ * taken at entry describes the box as it was, and under gate contention the load
+ * that starves hydration arrives afterwards (measured: ntp hydration needs ~21s
+ * at load-per-CPU 2.5 while an entry sample of 0.56/CPU froze the budget at the
+ * idle 10000ms, so the observation timed out on a page that was hydrating fine).
+ * The base and the MAX_LOAD_SCALE cap are unchanged — an idle box waits exactly
+ * as long as before, and every wait still has to observe its own event.
  */
 export async function runW51rCreateClickJourney(options: {
   computeTimeout?: TimeoutComputer;
@@ -120,9 +128,13 @@ export async function runW51rCreateClickJourney(options: {
   cdp?: any;
 } = {}): Promise<void> {
   const compute: TimeoutComputer = options.computeTimeout ?? ((opts) => serialFileTimeoutMs(opts));
-  const load = options.loadPerCpu ?? currentLoadPerCpu();
-  const openTimeoutMs = compute({ base: 12000, loadPerCpu: load });
-  const readyTimeoutMs = compute({ base: 10000, loadPerCpu: load });
+  const load = () => options.loadPerCpu ?? currentLoadPerCpu();
+  const openTimeoutMs = compute({ base: 12000, loadPerCpu: load() });
+  const readyTimeoutMs = compute({ base: 10000, loadPerCpu: load() });
+  // Same derivation, sampled when the wait actually runs (the real-browser path).
+  const openBudget = () => compute({ base: 12000, loadPerCpu: load() });
+  const readyBudget = () => compute({ base: 10000, loadPerCpu: load() });
+  const screenshotBudget = () => compute({ base: 6000, loadPerCpu: load() });
 
   // Injected launch hook allows unit verification of the real entrypoint without Chrome:
   if (options.launch) {
@@ -148,25 +160,27 @@ export async function runW51rCreateClickJourney(options: {
     // Bring tab to front so Chromium routes input events to an active, focused viewport
     await cdp.send("Page.bringToFront", {}, wide.sessionId);
     // Wait for app hydration so staged boot (Stage 1, 2A, 2B) and event listeners settle
-    await waitForAppReady((expr) => cdp!.eval(wide.sessionId, expr), { surfaceName: "NTP Hub", timeoutMs: readyTimeoutMs });
+    await waitForAppReady((expr) => cdp!.eval(wide.sessionId, expr), { surfaceName: "NTP Hub", timeoutMs: readyBudget() });
     const state = `(() => { const b=document.getElementById('new-agent'); const h=[...document.querySelectorAll('body > agent-dialog')].find(h=>h.getAttribute('title')==='Create an agent');
       return { ready: document.readyState==='complete', buttonDisplay: b ? getComputedStyle(b).display : null, open: h?.open===true,
         nativeOpen: h?.shadowRoot?.querySelector('dialog')?.open===true, status: document.getElementById('status')?.textContent??null,
         clicks: window.__w51rClicks||0 }; })()`;
     const read = (sid: string) => cdp!.eval(sid, state);
-    const waitFor = async (sid: string, predicate: (value: any) => boolean, ms = 10000) => {
+    // No default budget: every poll states the bound it is polling under, so a
+    // call site cannot inherit an un-derived magic number.
+    const waitFor = async (sid: string, predicate: (value: any) => boolean, ms: number) => {
       const deadline = Date.now() + ms;
       let value;
       do { value = await read(sid); if (predicate(value)) return value; await new Promise((r) => setTimeout(r, 100)); } while (Date.now() < deadline);
       throw new Error(`w51r state did not arrive in ${ms}ms: ${JSON.stringify(value)}`);
     };
-    await waitFor(wide.sessionId, (s) => s.ready && s.buttonDisplay !== null, readyTimeoutMs);
+    await waitFor(wide.sessionId, (s) => s.ready && s.buttonDisplay !== null, readyBudget());
     await cdp.eval(wide.sessionId, `document.addEventListener('click', e => { if (e.composedPath().includes(document.getElementById('new-agent'))) window.__w51rClicks=(window.__w51rClicks||0)+1 }, true); true`);
-    await clickVisibleCreateAgent(cdp, wide.sessionId, (expr) => cdp!.eval(wide.sessionId, expr), { waitForReady: true, timeoutMs: readyTimeoutMs });
-    const opened = await waitFor(wide.sessionId, (s) => s.open, openTimeoutMs);
+    await clickVisibleCreateAgent(cdp, wide.sessionId, (expr) => cdp!.eval(wide.sessionId, expr), { waitForReady: true, timeoutMs: readyBudget() });
+    const opened = await waitFor(wide.sessionId, (s) => s.open, openBudget());
     assertEquals(opened.nativeOpen, true, "the actual shadow-root dialog must be open");
     assertEquals(opened.clicks, 1, "the real mouse event must reach #new-agent once");
-    const image = await cdp.screenshot(wide.sessionId, { fromSurface: false, timeoutMs: 6000,
+    const image = await cdp.screenshot(wide.sessionId, { fromSurface: false, timeoutMs: screenshotBudget(),
       onFailure: (failures: ScreenshotFailure[]) => console.error(`w51r open dialog: DOM state asserted; screenshot capture failed: ${JSON.stringify(failures)}`),
     });
     assert(image, "the open dialog needs screenshot evidence");
@@ -176,7 +190,7 @@ export async function runW51rCreateClickJourney(options: {
     await cdp.send("Page.bringToFront", {}, narrow.sessionId);
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 500, height: 900, deviceScaleFactor: 1, mobile: false }, narrow.sessionId);
     await cdp.send("Page.navigate", { url: `chrome-extension://${id}/ntp/ntp.html` }, narrow.sessionId);
-    await waitFor(narrow.sessionId, (s) => s.ready && s.buttonDisplay === "none", readyTimeoutMs);
+    await waitFor(narrow.sessionId, (s) => s.ready && s.buttonDisplay === "none", readyBudget());
     await cdp.eval(narrow.sessionId, `document.addEventListener('click', e => { if (e.composedPath().includes(document.getElementById('new-agent'))) window.__w51rClicks=(window.__w51rClicks||0)+1 }, true); true`);
     let refusal: Error | undefined;
     try { await clickVisibleCreateAgent(cdp, narrow.sessionId, (expr) => cdp!.eval(narrow.sessionId, expr)); }
@@ -185,7 +199,7 @@ export async function runW51rCreateClickJourney(options: {
     const after = await read(narrow.sessionId);
     assertEquals(after.clicks, 0, "no hidden-element mouse click must be dispatched");
     assertEquals(after.open, false, "a refusal cannot have opened a Create dialog");
-    const narrowImage = await cdp.screenshot(narrow.sessionId, { fromSurface: false, timeoutMs: 6000,
+    const narrowImage = await cdp.screenshot(narrow.sessionId, { fromSurface: false, timeoutMs: screenshotBudget(),
       onFailure: (failures: ScreenshotFailure[]) => console.error(`w51r narrow rail: DOM state asserted; screenshot capture failed: ${JSON.stringify(failures)}`),
     });
     assert(narrowImage, "collapsed rail needs screenshot evidence");

@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { launchChrome, waitForServiceWorker, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
+import { currentLoadPerCpu, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 const EXT = `${ROOT}/extension`;
@@ -55,6 +56,48 @@ async function clickAgentRowWhenReady(ev: (expression: string) => Promise<any>, 
   } while (Date.now() < deadline);
   throw new Error(`Agent row ${JSON.stringify(name)} did not render within ${waitMs}ms: ${JSON.stringify(observed)}`);
 }
+
+// A fixed delay after a CDP action measures the box's scheduling, not the
+// browser's progress (this fixture redded under gate contention on exactly
+// those delays: the hub row never rendered in 15s of wall clock because the
+// poll was reading a document that had not booted yet, and two demo turns were
+// polled at 4000ms each while the journal still held 0 entries). Every
+// post-action wait below is a poll on the OBSERVABLE outcome the delay used to
+// paper over, and the deadline is a load-scaled BOUND (serialFileTimeoutMs): a
+// busy box gets more time, but the same event still has to happen.
+async function waitForObservable(
+  ev: (expression: string) => Promise<any>,
+  expression: string,
+  predicate: (value: any) => boolean,
+  label: string,
+  waitMs: number,
+) {
+  const deadline = Date.now() + waitMs;
+  let observed: any;
+  do {
+    observed = await ev(expression);
+    if (predicate(observed)) return observed;
+    if (Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+  } while (Date.now() < deadline);
+  throw new Error(`${label} did not arrive within ${waitMs}ms: ${JSON.stringify(observed)}`);
+}
+
+// The bound for one observable above. The base is the delay these polls
+// replaced, so an idle box waits exactly as long as before.
+const settleBoundMs = () => serialFileTimeoutMs({ base: 15000, loadPerCpu: currentLoadPerCpu() });
+
+// Page.navigate resolves before the new document exists, so a poll started right
+// after it can still read the OLD document (ntp.html is up in both). A
+// document-identity token is the only honest "this is the new document" signal:
+// a fresh document has none, so the poll re-stamps one.
+const DOC_TOKEN_EXPR = `window.__ixe0oDocToken ?? (window.__ixe0oDocToken = String(Math.random()))`;
+const HUB_BOOT_EXPR = `(() => { window.__ixe0oDocToken = window.__ixe0oDocToken ?? String(Math.random());
+  return { token: window.__ixe0oDocToken, ready: document.readyState, hub: !!document.getElementById("named-agents") }; })()`;
+
+// The first document's runtime bridge: the next action is a
+// chrome.runtime.sendMessage FROM the page, which needs the extension runtime to
+// exist, not a fixed 1500ms.
+const PAGE_RUNTIME_EXPR = `({ ready: document.readyState, runtime: typeof chrome?.runtime?.sendMessage === "function" })`;
 
 Deno.test("agent-picker readiness retries delayed rows and fails visibly for a missing row", async () => {
   let calls = 0;
@@ -162,7 +205,10 @@ Deno.test({
         return r.result?.result?.value;
       };
 
-      await new Promise((r) => setTimeout(r, 1500));
+      // The page must be able to carry a runtime message before it is asked to
+      // (the sleep here measured boot latency, not boot completion).
+      await waitForObservable(ev, PAGE_RUNTIME_EXPR,
+        (s) => s?.runtime === true, "the first ntp document's extension runtime", settleBoundMs());
 
       // 1. Seed named agent with initial name
       const created = await ev(`new Promise((resolve) => chrome.runtime.sendMessage({
@@ -174,16 +220,27 @@ Deno.test({
       assertEquals(created?.ok, true, "Named agent creation must succeed");
 
       // 2. Open agent from the hub (the real UI path that seeds history.state carrying the name)
+      const docToken = await ev(DOC_TOKEN_EXPR);
       await send("Page.navigate", { url: `chrome-extension://${extId}/ntp/ntp.html` }, sessionId);
-      await new Promise((r) => setTimeout(r, 1500));
+      // The reload is DONE when the reloaded document is complete and the hub
+      // container has mounted — not when 1500ms have passed.
+      await waitForObservable(ev, HUB_BOOT_EXPR,
+        (s) => !!s?.token && s.token !== docToken && s.hub === true,
+        "the reloaded hub document", settleBoundMs());
 
       // muc moved the hub rows into agent-picker's shadow-root .opt buttons;
       // clicking one emits the real agent-select path, not a direct route call.
-      await clickAgentRowWhenReady(ev, "ZZZ Original Name");
-      await new Promise((r) => setTimeout(r, 1000));
+      await clickAgentRowWhenReady(ev, "ZZZ Original Name", settleBoundMs());
+      // openAgentSurface finishes asynchronously (named-agent.get + history
+      // synchronization); wait for BOTH settled surfaces rather than assuming
+      // 1000ms is enough for them.
+      const before = await waitForObservable(ev,
+        `({ title: document.getElementById("thread-title")?.textContent ?? null, name: window.history?.state?.name ?? null })`,
+        (s) => s?.title === "ZZZ Original Name" && s.name === "ZZZ Original Name",
+        "the opened agent surface carrying the hub row's name", settleBoundMs());
 
-      const titleBefore = await ev("document.getElementById('thread-title')?.textContent");
-      const stateBefore = await ev("window.history?.state?.name");
+      const titleBefore = before.title;
+      const stateBefore = before.name;
       assertEquals(titleBefore, "ZZZ Original Name", "Initial header must match original agent name");
       assertEquals(stateBefore, "ZZZ Original Name", "History state must capture original name");
 
@@ -310,7 +367,8 @@ Deno.test({
         const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId);
         return r.result?.result?.value;
       };
-      await new Promise((r) => setTimeout(r, 1500));
+      await waitForObservable(ev, PAGE_RUNTIME_EXPR,
+        (s) => s?.runtime === true, "the first ntp document's extension runtime", settleBoundMs());
 
       // Seed the target agent, and put the internal TESTING provider (demo) in
       // front of it: the race window only manifests against real history weight
@@ -325,18 +383,31 @@ Deno.test({
 
       // Open TARGET's own surface via the real hub row, then run two REAL demo
       // turns so its journal has the weight a real agent has.
+      const q0ygDocToken = await ev(DOC_TOKEN_EXPR);
       await send("Page.navigate", { url: `chrome-extension://${extId}/ntp/ntp.html` }, sessionId);
-      await new Promise((r) => setTimeout(r, 1500));
-      await clickAgentRowWhenReady(ev, "V1");
-      await new Promise((r) => setTimeout(r, 1200));
+      await waitForObservable(ev, HUB_BOOT_EXPR,
+        (s) => !!s?.token && s.token !== q0ygDocToken && s.hub === true,
+        "the reloaded hub document", settleBoundMs());
+      await clickAgentRowWhenReady(ev, "V1", settleBoundMs());
+      // The demo turns below dispatch on #thread-composer and append to the
+      // TARGET's journal, so wait for the surface to be routed to that agent
+      // (title + history id), not for 1200ms to pass.
+      await waitForObservable(ev,
+        `({ title: document.getElementById("thread-title")?.textContent ?? null, id: window.history?.state?.id ?? null })`,
+        (s) => s?.title === "V1" && s.id === "agent-q0yg-guard",
+        "the target agent surface", settleBoundMs());
+      const journalLengthExpr = `new Promise((resolve) => chrome.runtime.sendMessage({ type: "named-agent.history", id: "agent-q0yg-guard" }, (res) => resolve(res?.entries?.length ?? -1)))`;
       for (let i = 0; i < 2; i++) {
         await ev(`(() => {
           const tc = document.querySelector("#thread-composer");
           tc.dispatchEvent(new CustomEvent("send", { detail: { text: "demo run " + ${i}, attachments: [] } }));
         })()`);
-        await new Promise((r) => setTimeout(r, 4000));
+        // The run is done when its journal entry EXISTS, not when 4000ms have
+        // passed: each demo turn must land one more entry than the last.
+        await waitForObservable(ev, journalLengthExpr, (n) => typeof n === "number" && n > i,
+          `demo run ${i}'s journal entry`, settleBoundMs());
       }
-      const entries = await ev(`new Promise((resolve) => chrome.runtime.sendMessage({ type: "named-agent.history", id: "agent-q0yg-guard" }, (res) => resolve(res?.entries?.length ?? -1)))`);
+      const entries = await ev(journalLengthExpr);
       assert(entries > 0, `the target must carry real journal history (got ${entries})`);
 
       // The rename lands BETWEEN mention-pick and send (the product window):
@@ -353,10 +424,15 @@ Deno.test({
         const tc = document.querySelector("#thread-composer");
         tc.dispatchEvent(new CustomEvent("send", { detail: { text: "stale mention check", attachments: [], agent: { ref: "named:agent-q0yg-guard", kind: "named", id: "agent-q0yg-guard", name: "V1" } } }));
       })()`);
-      await new Promise((r) => setTimeout(r, 3000));
+      // The surface settles asynchronously (the list reply lands after the
+      // caller-name navigation); wait for the settled pair, then assert it.
+      const settled = await waitForObservable(ev,
+        `({ title: document.getElementById("thread-title")?.textContent ?? null, name: window.history?.state?.name ?? null })`,
+        (s) => s?.title === "V2" && s.name === "V2",
+        "the stale-mention surface settling on the list-resolved name", settleBoundMs());
 
-      const title = await ev(`document.getElementById("thread-title")?.textContent`);
-      const stateName = await ev(`window.history?.state?.name`);
+      const title = settled.title;
+      const stateName = settled.name;
       const storageName = await ev(`new Promise((resolve) => chrome.runtime.sendMessage({ type: "named-agent.get", id: "agent-q0yg-guard" }, (res) => resolve(res?.agent?.name)))`);
 
       // Storage control: the rename is real.
