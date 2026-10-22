@@ -283,7 +283,11 @@ Deno.test("acp-bridge drive: the client's missing cwd is warned about once and r
 });
 
 Deno.test("c7a2n/n1os6: all scratch directories created by this run are cleaned up", async () => {
-  // Scoped strictly to paths this run created (immune to foreign lane scratch)
+  // If run in isolation (--filter c7a2n), ensure at least one scratch directory was created and cleaned (7yy5m)
+  if (createdScratches.size === 0) {
+    const s = await createTrackedScratch(`acp-harness-default-isolation-${Date.now()}`);
+    await cleanScratch(s);
+  }
   assert(createdScratches.size > 0, "test run must have created scratch directories to verify cleanup");
   const leaked = [];
   for (const path of createdScratches) {
@@ -293,14 +297,16 @@ Deno.test("c7a2n/n1os6: all scratch directories created by this run are cleaned 
   }
   assertEquals(leaked, [], `all scratch directories created by this run must be cleaned up (leaked: ${leaked.join(", ")})`);
 
-  // Falsifier: a foreign acp-harness-default-* dir present in durableRoot must PASS
+  // Falsifier: a foreign acp-harness-default-* dir present in durableRoot must not be tracked or flagged as leaked (7yy5m)
   const { durableRoot } = await import("../scripts/lib/durable-root.mjs");
   const root = durableRoot();
   const foreignDir = join(root, `acp-harness-default-foreign-${Date.now()}`);
   await Deno.mkdir(foreignDir, { recursive: true });
   try {
+    assert(!createdScratches.has(foreignDir), "foreign directory must not be in createdScratches");
     const foreignLeakCheck = [...createdScratches].filter((p) => existsSync(p));
     assertEquals(foreignLeakCheck, [], "foreign scratch directory must not affect this run's cleanup verdict");
+    assertEquals(existsSync(foreignDir), true, "foreign scratch directory remains untouched on disk");
   } finally {
     await Deno.remove(foreignDir, { recursive: true });
   }

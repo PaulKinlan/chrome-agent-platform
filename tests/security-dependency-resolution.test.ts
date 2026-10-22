@@ -62,20 +62,32 @@ function isPropertyKey(node, parent) {
   return false;
 }
 
-function evalStaticString(node) {
+function evalStaticString(node, bindings = new Map(), seen = new Set()) {
   if (!node) return null;
   if (node.type === "Literal" && typeof node.value === "string") return node.value;
   if (node.type === "TemplateLiteral" && node.expressions.length === 0) {
     return node.quasis[0].value.cooked ?? node.quasis[0].value.raw;
   }
   if (node.type === "BinaryExpression" && node.operator === "+") {
-    const left = evalStaticString(node.left);
-    const right = evalStaticString(node.right);
+    const left = evalStaticString(node.left, bindings, seen);
+    const right = evalStaticString(node.right, bindings, seen);
     if (left !== null && right !== null) return left + right;
   }
+  if (node.type === "Identifier" && bindings.has(node.name) && !seen.has(node.name)) {
+    seen.add(node.name);
+    return evalStaticString(bindings.get(node.name), bindings, seen);
+  }
   if (node.type === "MemberExpression" && node.computed) {
-    if (node.object.type === "ArrayExpression" && node.property.type === "Literal" && typeof node.property.value === "number") {
-      return evalStaticString(node.object.elements[node.property.value]);
+    let obj = node.object;
+    if (obj.type === "Identifier" && bindings.has(obj.name) && !seen.has(obj.name)) {
+      obj = bindings.get(obj.name);
+    }
+    let idxNode = node.property;
+    if (idxNode.type === "Identifier" && bindings.has(idxNode.name) && !seen.has(idxNode.name)) {
+      idxNode = bindings.get(idxNode.name);
+    }
+    if (obj?.type === "ArrayExpression" && idxNode?.type === "Literal" && typeof idxNode.value === "number") {
+      return evalStaticString(obj.elements[idxNode.value], bindings, seen);
     }
   }
   return null;
@@ -114,6 +126,12 @@ function preBundleGuardProblems(source) {
   // The bundle scan below recognizes direct build() calls only. Keep the
   // esbuild binding surface closed, so buildSync/context/namespace imports or
   // a future bundling API cannot start work before the live guard unseen.
+  const bindings = new Map();
+  for (const node of nodes) {
+    if (node.type === "VariableDeclarator" && node.id.type === "Identifier" && node.init) {
+      bindings.set(node.id.name, node.init);
+    }
+  }
   const esbuildDeclarations = program.body.filter((node) =>
     node.type === "ImportDeclaration" && node.source.value === "esbuild");
   const esbuildSpecifiers = esbuildDeclarations.length === 1 ? esbuildDeclarations[0].specifiers : [];
@@ -127,7 +145,7 @@ function preBundleGuardProblems(source) {
   const isEsbuildLoad = (node) => {
     if (isName(node, "esbuild") && !isPropertyKey(node, parents.get(node))) return true;
     if (node.type === "ImportExpression") {
-      const argStr = evalStaticString(node.source);
+      const argStr = evalStaticString(node.source, bindings);
       if (argStr === "esbuild" || (node.source.type === "Identifier" && node.source.name === "esbuild") || containsLiteral(node.source, "esbuild")) return true;
     }
     if (node.type === "CallExpression") {
@@ -135,7 +153,7 @@ function preBundleGuardProblems(source) {
       const isReq = (callee.type === "Identifier" && callee.name === "require") ||
         (callee.type === "CallExpression" && isName(callee.callee, "createRequire"));
       if (isReq) {
-        const argStr = evalStaticString(node.arguments[0]);
+        const argStr = evalStaticString(node.arguments[0], bindings);
         if (argStr === "esbuild" || node.arguments[0]?.name === "esbuild" || containsLiteral(node.arguments[0], "esbuild")) return true;
       }
     }
@@ -268,6 +286,10 @@ Deno.test("bbz3s: comment, conditional, late and swallowed-check mutants cannot 
       `    const decoy = await import(esbuild);\n${line}`), "esbuild cannot be loaded outside"],
     ["require computed member access (hz68x)", replaceOnce(source, line,
       `    const decoy = require(["esbuild"][0]);\n${line}`), "esbuild cannot be loaded outside"],
+    ["require hoisted identifier specifier (pap3g)", replaceOnce(source, line,
+      `    const __probe = "esbuild"; const decoy = require(__probe);\n${line}`), "esbuild cannot be loaded outside"],
+    ["require hoisted array element specifier (pap3g)", replaceOnce(source, line,
+      `    const __probeArr = ["esbuild"]; const decoy = require(__probeArr[0]);\n${line}`), "esbuild cannot be loaded outside"],
     ["dynamic import computed member access (hz68x)", replaceOnce(source, line,
       `    const decoy = await import(["esbuild"][0]);\n${line}`), "esbuild cannot be loaded outside"],
     ["build alias evades the bundle scan", replaceOnce(source, line,
