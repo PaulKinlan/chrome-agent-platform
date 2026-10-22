@@ -60,10 +60,12 @@ function sample(over: Partial<LoadSample> = {}): LoadSample {
 // process-wide state, not test-local configuration. Under parallel-phase contention, tests that need
 // a larger proc scan budget scope it inside the individual test with save/restore in a finally.
 //
-// The value this process ARRIVED with is captured here, at import time, BEFORE any test registration.
-// The first-registered assertion below compares against it rather than against `undefined`, so the
-// guard reds a module-scope set by this file of ANY spelling (jtpa5) while an operator/fleet shell
-// that exports the knob does not false-RED a correct tree (chrome-agent-platform-6ai58).
+// The module-scope property is checked in a SANITISED CHILD PROCESS (see the jtpa5 test below) and
+// NOT by capturing a baseline here: a module-scope set that runs BEFORE any in-module capture becomes
+// the capture, so the two are indistinguishable and an in-process baseline goes falsely green. The
+// capture below exists only for the end-of-suite check, which asks a different question - did a TEST
+// leak a change it did not restore (chrome-agent-platform-6ai58 keeps that meaningful when the knob
+// arrived already set).
 const AMBIENT_PROC_SCAN_MS = Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS");
 
 const SPEC = { maxLoadPerCore: 0.35, maxCompilers: 1, maxWaitMs: 1000, sampleMs: 50, sustainedSamples: 3 };
@@ -216,23 +218,70 @@ async function startCalibratedCompiler(dir: string, targetMs: number): Promise<{
   return { proc, pid: proc.pid, input, compileMs };
 }
 
-Deno.test("3ow6b / jtpa5: CAP_QUIET_MAX_PROC_SCAN_MS must not change at module evaluation time", () => {
-  // The property is syntax-independent by construction: module evaluation runs every top-level
-  // statement BEFORE any test body, so a module-scope set of any spelling — bare statement, nested
-  // block, destructuring, multi-line call, appended after the last test — has already executed when
-  // this FIRST-registered test runs. That is why it is a behavioural assertion and not a text scan
-  // (three textual rounds each closed one syntax and let the next one through).
+Deno.test("3ow6b / jtpa5: importing this file in a SANITISED child process leaves CAP_QUIET_MAX_PROC_SCAN_MS unset", async () => {
+  // WHY A CHILD PROCESS, and not a baseline captured in this module: module scope runs before any
+  // capture placed in this module, so a module-scope set BECOMES the baseline and is indistinguishable
+  // from an operator export. Measured false green on the baseline design: `Deno.env["set"](KEY,
+  // "2500")` inserted immediately above the capture left both in-process assertions green while the
+  // import leaked 2500. No in-process baseline can fix that, and no text scan can either - brace,
+  // bracket, destructuring and split-call spellings each defeated a textual round.
   //
-  // It asserts equality with the value the process STARTED with, not `undefined`: a module-scope set
-  // by this file differs from that baseline and reds, while an ambient export from an operator shell
-  // or fleet wrapper leaves the baseline unchanged and stays green (chrome-agent-platform-6ai58).
-  assertEquals(
-    Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS"),
-    AMBIENT_PROC_SCAN_MS,
-    `CAP_QUIET_MAX_PROC_SCAN_MS changed before any test ran (arrived as ${
-      AMBIENT_PROC_SCAN_MS ?? "unset"
-    }): module-scope mutation detected (chrome-agent-platform-jtpa5)`,
-  );
+  // So the property is measured where it cannot be poisoned: a FRESH PROCESS whose environment never
+  // contained the key. Any value present AFTER importing this file can only have come from the
+  // module's own top-level code, whatever its spelling and wherever it is placed (jtpa5). Because the
+  // key is deleted from the child rather than compared to anything, an operator/fleet shell that
+  // exports it in the parent changes nothing here (chrome-agent-platform-6ai58).
+  //
+  // The sanitisation is made OBSERVABLE rather than assumed - the crux of this design is that the
+  // child's environment really is not the parent's:
+  //   * the parent poisons its OWN environment with the key ("999") and a parent-only marker;
+  //   * the child is spawned with clearEnv:true and a minimal env carrying a child marker;
+  //   * the child fails closed if it sees the parent-only marker (clearEnv did not take effect), if it
+  //     is missing its own marker (the environment is not the one this test built), or if the key is
+  //     present at any point - before the import (sanitisation failed) or after it (module-scope set).
+  const KEY = "CAP_QUIET_MAX_PROC_SCAN_MS";
+  const PARENT_MARKER = "CAP_QUIET_GUARD_PARENT";
+  const CHILD_MARKER = "CAP_QUIET_GUARD_CHILD";
+  const target = new URL("./quiet-window.test.ts", import.meta.url).href;
+  const prior = Deno.env.get(KEY);
+  Deno.env.set(KEY, "999");
+  Deno.env.set(PARENT_MARKER, "1");
+  try {
+    const env: Record<string, string> = { [CHILD_MARKER]: "1" };
+    for (const name of ["HOME", "PATH", "TMPDIR", "DENO_DIR", "DENO_NO_UPDATE_CHECK"]) {
+      const value = Deno.env.get(name);
+      if (value !== undefined) env[name] = value;
+    }
+    const script = `
+      const KEY = ${JSON.stringify(KEY)};
+      const CHILD_MARKER = ${JSON.stringify(CHILD_MARKER)};
+      const PARENT_MARKER = ${JSON.stringify(PARENT_MARKER)};
+      const fail = (why) => { console.error(why); Deno.exit(99); };
+      if (Deno.env.get(CHILD_MARKER) !== "1") fail("the child did not receive the environment this test built");
+      if (Deno.env.get(PARENT_MARKER) !== undefined) fail("clearEnv did not take effect: the parent environment reached the child");
+      if (Deno.env.get(KEY) !== undefined) fail("sanitisation failed: " + KEY + " was inherited by the child");
+      await import(${JSON.stringify(target)});
+      const leaked = Deno.env.get(KEY);
+      if (leaked !== undefined) fail("module-scope mutation: " + KEY + " = " + leaked + " after importing this file");
+    `;
+    const child = await new Deno.Command(Deno.execPath(), {
+      args: ["eval", "--no-check", script],
+      cwd: ROOT,
+      clearEnv: true,
+      env,
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    const detail = new TextDecoder().decode(child.stderr).trim() || new TextDecoder().decode(child.stdout).trim();
+    assertEquals(
+      child.code,
+      0,
+      `importing this file must not set ${KEY} (child exit ${child.code}): ${detail}`,
+    );
+  } finally {
+    if (prior === undefined) Deno.env.delete(KEY); else Deno.env.set(KEY, prior);
+    Deno.env.delete(PARENT_MARKER);
+  }
 });
 
 Deno.test("dnop: a PARKED heavy-named daemon is not a build; a COMPILING one still is", async () => {
@@ -1319,10 +1368,12 @@ Deno.test("n64td / o7abi: createExecutableStub eliminates write-then-exec ETXTBS
 });
 
 Deno.test("3ow6b / jtpa5: CAP_QUIET_MAX_PROC_SCAN_MS is back to its arrival value at end of suite", async () => {
-  // The scoped overrides in this file (the 1io9 drills that raise and zero the budget) save and
-  // restore in a finally. This asserts that they actually restore, including against a non-undefined
-  // ambient baseline: comparing to AMBIENT_PROC_SCAN_MS rather than `undefined` keeps the check
-  // honest when the knob arrived set (chrome-agent-platform-6ai58).
+  // A different question from the sanitised-child check above: did a TEST in this file leak an override
+  // it did not restore? The scoped 1io9 drills raise and zero the budget and restore in a finally; this
+  // asserts that they restore, and comparing to the value this suite STARTED with (rather than to
+  // `undefined`) keeps the check honest when the knob arrived already set (chrome-agent-platform-6ai58).
+  // It cannot and does not try to detect a module-scope set - that is the child's job, because a
+  // module-scope set would also be this suite's arrival value.
   assertEquals(
     Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS"),
     AMBIENT_PROC_SCAN_MS,
