@@ -8,6 +8,7 @@
 // (marked resolved).
 // @ts-nocheck — dynamic chrome/OPFS stubs (no types in Deno).
 import { assert, assertEquals } from "jsr:@std/assert@1";
+import { currentLoadPerCpu, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
 
 // ---- minimal in-memory OPFS fake (masterMemory lives under memory/master) ----
 function dirNode() { return { kind: "directory", children: new Map() }; }
@@ -119,6 +120,29 @@ Deno.test("background-agent.delete ROUTE: a teardown marking failure keeps the s
   const dispatch = (msg, sender = ownerSender) => new Promise((resolve) => {
     for (const fn of [...listeners]) { try { fn(msg, sender, resolve); } catch { /* another listener's throw */ } }
   });
+
+  // The worker starts recoverOnBoot() FIRE-AND-FORGET at module eval, and that
+  // pass runs the recipe->skill rekey plus the alarm reconcile against the SAME
+  // cap:scheduledTasks key this fixture seeds and deletes (the product carries
+  // the matching barrier for its own sweeps — chrome-agent-platform-rtir6).
+  // Assuming the pass finished "by now" is a wall-clock assumption about the
+  // box, so wait for it to be OBSERVABLY settled: the orphan sweep awaits the
+  // memoized recovery and reports it back as `bootRecovery`.
+  const bootRecovery = await (async () => {
+    const deadline = Date.now() + serialFileTimeoutMs({ base: 5000, loadPerCpu: currentLoadPerCpu() });
+    let observed;
+    do {
+      observed = await dispatch({ type: "schedule.cancelOrphans" });
+      if (observed?.bootRecovery) break;
+      if (Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    } while (Date.now() < deadline);
+    return observed;
+  })();
+  assertEquals(
+    bootRecovery?.bootRecovery,
+    "ready",
+    `the worker's boot recovery must settle before the seed (observed: ${JSON.stringify(bootRecovery)})`,
+  );
 
   // 1. Duplicate a built-in skill → a custom editable instance in masterMemory.
   const dup = await dispatch({ type: "background-agent.duplicate", id: "tab-hygiene" });
