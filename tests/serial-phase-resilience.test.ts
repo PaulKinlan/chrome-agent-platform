@@ -18,6 +18,39 @@ import { durableDir } from "../scripts/lib/durable-root.mjs";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /**
+ * How long a nested deno test actually takes to reach its FIRST statement on this box (kzy5x).
+ *
+ * A ready-marker proof has two numbers and both are bounded by this cost: the marker cannot appear before
+ * the child boots, and the grace window must be big enough to cover boot PLUS whatever lateness the case
+ * declares. Hard-coding either number is what made `xy6n2 late marker` and the two "fast marker-then-exit"
+ * cases red on a loaded fleet box (measured boots of 10-22 s against a 5 s soft / 20 s hard window) while
+ * the runner logic was correct. Measured here, once per case, so the relationship holds at any boot cost.
+ */
+async function measureChildBootMs(dir: string): Promise<number> {
+  const probe = `${dir}/zz-boot-probe-${crypto.randomUUID().slice(0, 8)}.test.ts`;
+  const marker = `${probe}.marker`;
+  await Deno.writeTextFile(
+    probe,
+    `await Deno.writeTextFile(${JSON.stringify(marker)}, "ready");\n` +
+      `Deno.test("boot probe", () => {});\n`,
+  );
+  const t0 = Date.now();
+  const res = runSerialFile(probe, {
+    timeoutMs: 5_000,
+    readyFile: marker,
+    readyTimeoutMs: 120_000, // the probe must never be the thing that reds
+    stdio: ["ignore", "ignore", "pipe"],
+    cwd: ROOT,
+  });
+  const elapsed = Date.now() - t0;
+  assert(
+    res.code === 0,
+    `the boot probe must reach its marker on this box: ${res.stderr?.toString()}`,
+  );
+  return Math.max(1_500, elapsed);
+}
+
+/**
  * iypw instruments. The reference's premise record, a SIGCONT-based liveness instrument that
  * matches the one the assertion uses, and readings that make a failure attributable instead of
  * a bare boolean.
@@ -442,8 +475,22 @@ Deno.test("xy6n2: a marker after the 5s soft deadline succeeds only when load is
   const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-late-ready-" });
   const readyFile = `${tempDir}/late.marker`;
   const tempTest = `${tempDir}/late-ready.test.ts`;
+  // kzy5x: the marker must arrive AFTER the soft deadline and BEFORE the hard one, and on this box the
+  // CHILD'S OWN COLD BOOT dominates both numbers (measured 10-22s at fleet load ~5, in a serial lane that
+  // runs alone). With a fixed soft=5000 / hard=20000 the marker's own 6s delay sat on top of a boot that
+  // alone could exceed 20s, so the run was killed by the hard bound and the case redded on the box rather
+  // than on the code. Both numbers are now derived from a MEASURED boot, so the property under test — a
+  // late marker survives the soft bound via the named, bounded grace — holds at any boot cost.
+  const bootMs = await measureChildBootMs(tempDir);
+  const softMs = bootMs + 500; // the marker (which cannot precede boot) is guaranteed to arrive AFTER this
+  const lateDelayMs = 6_000; // ...and comfortably before the derived hard bound (soft x up-to-4)
+  assert(
+    bootMs + lateDelayMs < softMs * 4,
+    `the declared late delay must land inside the derived hard bound: boot ${bootMs}ms + ${lateDelayMs}ms ` +
+      `vs hard ${softMs * 4}ms`,
+  );
   await Deno.writeTextFile(tempTest, `
-await new Promise((resolve) => setTimeout(resolve, 6000));
+await new Promise((resolve) => setTimeout(resolve, ${lateDelayMs}));
 await Deno.writeTextFile(${JSON.stringify(readyFile)}, "ready");
 Deno.test("passes after late marker", () => {});
 `);
@@ -451,15 +498,20 @@ Deno.test("passes after late marker", () => {});
     const res = runSerialFile(tempTest, {
       timeoutMs: 2_000,
       readyFile,
-      readyTimeoutMs: 5_000,
+      readyTimeoutMs: softMs,
       readyLoadPerCpu: 4, // deterministic injected reading, never manufacture system load
       stdio: "pipe",
       cwd: ROOT,
     } as Parameters<typeof runSerialFile>[1]);
-    assertEquals(res.code, 0, `late marker must not be killed by the soft bound: ${res.stderr?.toString()}`);
+    assertEquals(
+      res.code,
+      0,
+      `late marker must not be killed by the soft bound (boot ${bootMs}ms, soft ${softMs}ms, late ` +
+        `${lateDelayMs}ms): ${res.stderr?.toString()}`,
+    );
     assertEquals(res.timedOut, false);
     assert((res.stderr?.toString() ?? "").includes("READY_MARKER_LOADED_GRACE"),
-      "the extension must name its measured/injected load and hard bound");
+      `the extension must name its measured/injected load and hard bound: ${res.stderr?.toString()}`);
     assertEquals(await Deno.readTextFile(readyFile), "ready", "fixture must write the marker event");
   } finally {
     await Deno.remove(tempDir, { recursive: true }).catch(() => {});
