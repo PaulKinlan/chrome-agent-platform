@@ -5,7 +5,7 @@
 // defaults retained evidence or big scratch to /tmp (allowlist: tiny
 // cross-process coordination files and test fixtures).
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { assert, assertEquals, assertThrows, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   DEFAULT_DURABLE_DIR_FLOOR_BYTES,
@@ -14,6 +14,7 @@ import {
   isRamBacked,
   nearestExistingAncestor,
   trimStaleScratch,
+  isTrimmableTopLevelScratch,
 } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -940,6 +941,67 @@ Deno.test("zcg7p/kkczc: when staleness cannot be PROVEN the entry is kept (bound
     assertEquals(trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 10, maxStats: 1 }).removed, 0, "an unproven entry must be kept");
     assertEquals(existsSyncGuard(`${dir}/a`), true, "unproven scratch survives");
     assertEquals(trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 10, maxStats: 100 }).removed, 1, "with a real budget the same entry is provably stale and goes");
+  } finally {
+    await Deno.remove(root, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("7xhvo: the trim reaches the dirs that actually grow — `*-scratch` top-level and the browser-profile parents", async () => {
+  const root = await Deno.makeTempDir({ prefix: "cap-trim-7xhvo-probe-" });
+  const now = Date.now();
+  const hour = 60 * 60 * 1000;
+  const old = (now - 2 * hour) / 1000;
+  const stale = (path: string) => {
+    Deno.mkdirSync(dirname(path), { recursive: true });
+    Deno.writeTextFileSync(path, "x");
+    Deno.utimeSync(path, old, old);
+    // Staleness is the NEWEST mtime anywhere in the subtree, so the intermediate dirs created
+    // just now must be aged too — otherwise this fixture describes a live tree, not a stale one.
+    let cur = dirname(path);
+    while (cur.startsWith(root) && cur !== root) {
+      Deno.utimeSync(cur, old, old);
+      cur = dirname(cur);
+    }
+  };
+  try {
+    // Measured as invisible to the allowlist before this fix (>40% of the live tree).
+    stale(`${root}/dist-complete-source-authority-scratch/deep/artifact.bin`);
+    stale(`${root}/cap-chrome-profiles/profile-1/Cookies`);
+    stale(`${root}/chrome-profiles/profile-2/Cookies`);
+    // A LIVE `*-scratch` dir must survive: the suffix narrows WHERE, never WHEN.
+    Deno.mkdirSync(`${root}/w51r-create-click-scratch`, { recursive: true });
+    Deno.writeTextFileSync(`${root}/w51r-create-click-scratch/live.log`, "x");
+    // Neither a suffix-free evidence dir nor a symlink is ours.
+    stale(`${root}/lead-evidence-dir/deliverable.txt`);
+    Deno.mkdirSync(`${root}/elsewhere-scratch`, { recursive: true });
+    Deno.symlinkSync(`${root}/lead-evidence-dir`, `${root}/alias-scratch`);
+
+    assertEquals(
+      isTrimmableTopLevelScratch("dist-complete-source-authority-scratch"),
+      true,
+      "a top-level *-scratch dir is scratch by convention, not by enumeration",
+    );
+    assertEquals(isTrimmableTopLevelScratch("lead-evidence-dir"), false, "another lane's evidence is never ours");
+    assertEquals(isTrimmableTopLevelScratch("-scratch"), false, "a bare suffix is not a name");
+    assertEquals(isTrimmableTopLevelScratch("x", []), false, "an explicit empty suffix set disables the rule");
+
+    const { removed } = trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 50 });
+    // 3 = the two profile parents + the stale `*-scratch` dir. `elsewhere-scratch` is fresh, so the
+    // age gate keeps it: the suffix narrows WHERE the trim may look, never WHEN it may remove.
+    assertEquals(removed, 3, "both profile parents and the stale *-scratch dir are trimmed");
+    assertEquals(
+      existsSyncGuard(`${root}/elsewhere-scratch`),
+      true,
+      "a fresh *-scratch dir survives — the suffix rule never relaxes the age gate",
+    );
+    assertEquals(existsSyncGuard(`${root}/dist-complete-source-authority-scratch`), false, "the 84 MiB *-scratch dir is reachable now");
+    // An allowlisted parent loses its STALE ENTRIES (the parent itself is the container, exactly as
+    // serial-phase-logs behaves); the entry is the unit of removal.
+    assertEquals(existsSyncGuard(`${root}/cap-chrome-profiles/profile-1`), false, "the browser-profile parent's stale entry is reachable now");
+    assertEquals(existsSyncGuard(`${root}/chrome-profiles/profile-2`), false, "the legacy profile parent's stale entry is reachable now");
+    assertEquals(existsSyncGuard(`${root}/w51r-create-click-scratch/live.log`), true, "a live *-scratch dir is still protected by the age gate");
+    assertEquals(existsSyncGuard(`${root}/lead-evidence-dir/deliverable.txt`), true, "the suffix rule does not widen the allowlist to evidence dirs");
+    assertEquals(existsSyncGuard(`${root}/lead-evidence-dir`), true, "a symlinked *-scratch parent is not followed");
   } finally {
     await Deno.remove(root, { recursive: true }).catch(() => {});
   }

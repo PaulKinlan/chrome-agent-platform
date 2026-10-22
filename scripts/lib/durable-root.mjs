@@ -85,9 +85,33 @@ export const DEFAULT_DURABLE_DIR_FLOOR_BYTES = 32 * 1024 * 1024;
 // only when they are older than the age bound, oldest first, up to the entry
 // bound. Nothing a live run just created is ever a candidate (age gate), and no
 // other lane's evidence directory is in the allowlist.
-export const DEFAULT_DURABLE_DIR_TRIM_NAMES = ["serial-phase-logs", "acp-fixture-logs", "scratch", "tmp"];
-export const EPOCH_SUFFIX_RE = /^.+-[0-9]{10,}$/;
-export const DEFAULT_DURABLE_DIR_TRIM_MIN_AGE_MS = 60 * 60 * 1000;
+//
+// 7xhvo (measured 2026-10-22 on this VM, 449.7 MiB in the tree): the allowlist was
+// narrower than the write pattern it exists to relieve, so the relief path could not
+// reach the dirs that actually grow — acp-fixture-logs 91.6 MiB (allowed), then
+// dist-complete-source-authority-scratch 84.0, cap-chrome-profiles 75.6, chrome-profiles
+// 6.9 all INVISIBLE, i.e. >40% of the tree unreachable. `cap-evidence-bound.sh` was
+// reporting "still over 2048MB but every age-eligible child is live/fresh" because its
+// budget was dominated by dirs no trim could touch. Two additions, both keeping every
+// existing safety rule (age gate on the newest mtime in the SUBTREE, oldest-first,
+// entry-bounded, symlinks never followed or removed):
+//   * the two browser-profile parents, by name;
+//   * a SUFFIX rule for top-level `*-scratch` dirs, because a per-test name list goes
+//     stale the moment a new suite invents a scratch dir — which is exactly how this
+//     gap happened. Suffix-matched names carry no embedded timestamp, so only the
+//     mtime staleness walk gates them (the slower, safer rule).
+export const DEFAULT_DURABLE_DIR_TRIM_NAMES = [
+  "serial-phase-logs",
+  "acp-fixture-logs",
+  "scratch",
+  "tmp",
+  "cap-chrome-profiles",
+  "chrome-profiles",
+];
+// Top-level `*-scratch` dirs are machine scratch by convention (see tests writing
+// `<name>-scratch`); the suffix is the rule, not an enumeration of today's names.
+export const DEFAULT_DURABLE_DIR_TRIM_SUFFIXES = ["-scratch"];
+export const EPOCH_SUFFIX_RE = /^.+-[0-9]{10,}$/;export const DEFAULT_DURABLE_DIR_TRIM_MIN_AGE_MS = 60 * 60 * 1000;
 export const DEFAULT_DURABLE_DIR_TRIM_MAX_ENTRIES = 200;
 // The stat budget for the staleness walk (kkczc/zcg7p): proving an entry stale means looking at its
 // whole subtree, so the walk is bounded and an unfinished walk means "unknown", which keeps the
@@ -175,6 +199,22 @@ function newestMtimeMs(path, budget) {
 }
 
 /**
+ * Is this TOP-LEVEL entry one the trim may consider (subject to the same age gate as
+ * everything else)? Pure and exported so the widening is unit-tested rather than
+ * inferred from a scan of a live tree.
+ * @param {string} name
+ * @param {string[]} suffixes
+ */
+export function isTrimmableTopLevelScratch(name, suffixes = DEFAULT_DURABLE_DIR_TRIM_SUFFIXES) {
+  const text = String(name ?? "");
+  if (!text) return false;
+  if (EPOCH_SUFFIX_RE.test(text)) return true;
+  const allow = Array.isArray(suffixes) ? suffixes : [];
+  return allow.some((suffix) => typeof suffix === "string" && suffix.length > 0
+    && text.length > suffix.length && text.endsWith(suffix));
+}
+
+/**
  * Bounded self-cleaning trim of stale scratch under the durable root (nudb2).
  * Allowlisted directories only, age-gated oldest-first, entry-bounded, and every
  * failure ignored: the trim is relief, never a new way for a gate to fail.
@@ -188,6 +228,7 @@ function newestMtimeMs(path, budget) {
  */
 export function trimStaleScratch(root, {
   names = DEFAULT_DURABLE_DIR_TRIM_NAMES,
+  suffixes = DEFAULT_DURABLE_DIR_TRIM_SUFFIXES,
   minAgeMs = DEFAULT_DURABLE_DIR_TRIM_MIN_AGE_MS,
   maxEntries = DEFAULT_DURABLE_DIR_TRIM_MAX_ENTRIES,
   maxStats = DEFAULT_DURABLE_DIR_TRIM_MAX_STATS,
@@ -243,7 +284,8 @@ export function trimStaleScratch(root, {
       }
     }
   }
-  // Also trim stale top-level epoch-suffixed run directories directly under root (wvg1s)
+  // Also trim stale top-level epoch-suffixed run directories, and (7xhvo) `*-scratch`
+  // dirs, directly under root (wvg1s)
   if (removed < maxEntries && budget.left > 0) {
     let topEntries;
     try {
@@ -254,7 +296,7 @@ export function trimStaleScratch(root, {
     const topCandidates = [];
     for (const entry of topEntries) {
       if (entry.isSymbolicLink()) continue;
-      if (!EPOCH_SUFFIX_RE.test(entry.name)) continue;
+      if (!isTrimmableTopLevelScratch(entry.name, suffixes)) continue;
       const path = join(root, entry.name);
       let st;
       try {
