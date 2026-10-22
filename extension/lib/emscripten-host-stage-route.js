@@ -1,5 +1,5 @@
 // Offscreen-only, SW-sender-gated ingress for nonpublishing binary staging.
-// Keep this tiny: the 250 KB offscreen bundle limit must not eagerly include
+// Keep this tiny: the 258 KB offscreen bundle limit must not eagerly include
 // the native runner, SHA-256/OPFS writer and binary custody helpers.
 import { EMSCRIPTEN_HOST_STAGE_TYPE } from "./emscripten-stage-protocol.js";
 import { isTrustedServiceWorkerSender } from "./pure.js";
@@ -17,7 +17,7 @@ export function registerEmscriptenBinaryStagingHost(runtime = globalThis.chrome?
     }
     // Resolve a fixed extension URL at runtime: the Store bundle does not
     // support code splitting and otherwise eagerly inlines the entire native
-    // runner into offscreen.bundle.js (343 KB > its 250 KB budget).
+    // runner into offscreen.bundle.js (343 KB > its 258 KB budget).
     Promise.resolve().then(load ?? (() => import(runtime.getURL("lib/emscripten-host-stage.js"))))
       .then(({ executeStagedEmscriptenBinaryRequest }) => executeStagedEmscriptenBinaryRequest(message))
       .then(sendResponse, () => refuse("emscripten_stage_host_unavailable"));

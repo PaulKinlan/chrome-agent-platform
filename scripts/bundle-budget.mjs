@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 //
 // OWNER DECISION (Paul, 2026-10-05): "The limits make no sense anymore." Bundle
 // sizes are reported, not fatal, EXCEPT the store offscreen bundle's explicit
-// 250000-byte ceiling (rmoh8). The integrity invariants below still throw.
+// 258000-byte ceiling (250000 at rmoh8, ratcheted to 258000 by bwxf). The integrity invariants below still throw.
 // The developer build stays unminified with source maps
 // (CAP-FB-20260826-OBSERVABILITY-01).
 

@@ -75,7 +75,7 @@ Store-target bundle sizes from a fresh `npm run build:production` (measured 2026
 `origin/main` b6389708, v0.3.712). The reference sizes come from `STORE_SW_BUDGET_BYTES` and
 `STORE_BUNDLE_BUDGETS` in `scripts/bundle-budget.mjs`, the source of truth; this table is a dated
 snapshot, so re-measure rather than trusting it. Only store `offscreen.bundle.js` has an enforced
-per-bundle ceiling (250,000 bytes, rmoh8); the other twelve are reported, not enforced:
+per-bundle ceiling (258,000 bytes, ratcheted from 250,000 by bwxf); the other twelve are reported, not enforced:
 
 | Surface | Size | Ceiling | Headroom |
 | --- | ---: | ---: | ---: |
@@ -89,7 +89,7 @@ per-bundle ceiling (250,000 bytes, rmoh8); the other twelve are reported, not en
 | artifact.bundle.js | 138,122 B | 200,000 B | 61,878 B |
 | directory.bundle.js | 61,788 B | 65,000 B | 3,212 B |
 | privacy.bundle.js | 63,912 B | 65,000 B | 1,088 B |
-| offscreen.bundle.js | 245,796 B | 250,000 B | 4,204 B |
+| offscreen.bundle.js | 245,796 B | 258,000 B | 12,204 B |
 | settings-view.bundle.js | 85,847 B | 120,000 B | 34,153 B |
 | chunks aggregate (7 chunks) | 556,793 B | 750,000 B | 193,207 B |
 
@@ -100,7 +100,7 @@ ceilings quoted here earlier in this file (options 900,000, ntp 920,000, sidepan
 matching sizes) predated the 20e2u code-splitting ratchet-down and were wrong on both sides of the
 comparison; since Paul's 2026-10-05 decision those other per-bundle overruns are measured and
 reported rather than failing the build, and a lane still must not retune a reference. The later
-x9r8k.2 offscreen staging build measured 249,976 B (24 B under its now-enforced 250,000 B ceiling);
+x9r8k.2 offscreen staging build measured 249,976 B (24 B under its original 250,000 B ceiling, later ratcheted to 258,000 B by bwxf);
 any further growth must be reclaimed or explicitly reviewed, not silently shipped.
 
 ## Operational boundaries
