@@ -16,7 +16,7 @@
 import { kvGet, kvSet } from "./kv.js";
 import { sleep } from "./pure.js";
 import { GEMINI_IMAGE_MODEL } from "./model-catalog.js";
-import { namedAgentMemory, purgeStoreDir } from "./memory.js";
+import { isReservedKey, namedAgentMemory, purgeStoreDir } from "./memory.js";
 import { deleteAgentPromptOverride } from "./system-prompts.js";
 import { normalizeCanDelegateTo } from "./agent-delegation.js";
 import {
@@ -997,7 +997,8 @@ export async function grepAgentMemory(memory, query) {
   const needle = String(query).toLowerCase();
   if (!needle) return { query, count: 0, matches: [] };
   const matches = [];
-  const keys = await mem.keys().catch(() => []);
+  const rawKeys = await mem.keys().catch(() => []);
+  const keys = (Array.isArray(rawKeys) ? rawKeys : []).filter((k) => !isReservedKey(k));
   for (const key of keys.slice(0, 200)) {
     const value = await mem.get(key).catch(() => null);
     let haystack = "";

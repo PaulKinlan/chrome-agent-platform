@@ -244,10 +244,12 @@ const MASTER_RESERVED_KEYS = new Set([
   "cap:board-jobs",
   "cap:board-messages",
 ]);
-// The INTERNAL namespace + the artifact/repair/package/profile prefixes are reserved on EVERY
-// store — the model's memory_set can never write the generation authority,
-// the WAL, a tombstone, or an artifact body/repair record.
-const INTERNAL_PREFIX_RE = /^(?:__gen|__tx|__wal|__epoch|__tombs|__wasmTx|profile:)/;
+
+// The full hidden namespace (keys()/get/list exclusion + set reservation).
+// `asset-` covers the immutable artifact version rows, the content-addressed
+// blobs, their refcounts and the byte accounting
+// (CAP-FB-20260830-ARTIFACT-VERSIONS-01) — authority state like the bodies.
+export const INTERNAL_KEY_RE = /^(?:__gen|__tx|__wal|__epoch|__tombs|__wasmTx|assets|assetRepair|asset[:-]|wasmPkg|wasmPkgRepair|profile:|profile$|cap:board-)/;
 
 /** Whether a key is reserved against untrusted writes on the master memory store.
  * Also used by runtime-context.js to filter authority keys from the prompt memory digest. */
@@ -259,18 +261,13 @@ export function isReservedMasterKey(key) {
     INTERNAL_KEY_RE.test(k);
 }
 
-// The full hidden namespace (keys()/get/list exclusion + set reservation).
-// `asset-` covers the immutable artifact version rows, the content-addressed
-// blobs, their refcounts and the byte accounting
-// (CAP-FB-20260830-ARTIFACT-VERSIONS-01) — authority state like the bodies.
-const INTERNAL_KEY_RE = /^(?:__gen|__tx|__wal|__epoch|__tombs|__wasmTx|assets|assetRepair|asset[:-]|wasmPkg|wasmPkgRepair|profile:|profile$|cap:board-)/;
 // Authority/registry keys that the MODEL's `memory_set` must never write on a
 // SITE store: a worker that could write `approvals` or `toolDirectory` would
 // bypass the owner's first-run approval or forge its own tool directory, and
 // one that wrote `journal` could fabricate results. Internal TRUSTED code
 // (approveTool/upsertTools/journalAppend/enrollOrigin) uses `setTrusted`, which
 // bypasses this reservation; the model + page surfaces only reach `set`.
-const SITE_RESERVED_KEYS = new Set([
+export const SITE_RESERVED_KEYS = new Set([
   "approvals",
   "toolDirectory",
   "journal",
@@ -279,6 +276,34 @@ const SITE_RESERVED_KEYS = new Set([
   "scripts",
   "agentConfig",
 ]);
+
+// Keys reserved from model READ tools (memory_get, memory_list).
+// Note: "journal" is write-only reserved (the agent model cannot overwrite its
+// audit log, but is permitted to read its own run history via memory_get or
+// search it via memory_grep).
+export const SITE_READ_RESERVED_KEYS = new Set([
+  "approvals",
+  "toolDirectory",
+  "enrolled",
+  "assets",
+  "scripts",
+  "agentConfig",
+]);
+
+/** Whether a key is reserved from agent memory read tools (memory_get, memory_list, memory_grep). */
+export function isReservedReadKey(key) {
+  const k = String(key ?? "");
+  return isReservedMasterKey(k) || SITE_READ_RESERVED_KEYS.has(k);
+}
+
+/** Whether a key is reserved from agent memory write tools (memory_set). */
+export function isReservedWriteKey(key) {
+  const k = String(key ?? "");
+  return isReservedMasterKey(k) || SITE_RESERVED_KEYS.has(k);
+}
+
+/** Default read-gate reservation predicate. */
+export const isReservedKey = isReservedReadKey;
 
 // dptw: no aggregate per-origin/global byte quotas — stores grow until the
 // browser's own OPFS quota refuses, and that refusal surfaces honestly.

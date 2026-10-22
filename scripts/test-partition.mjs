@@ -177,7 +177,6 @@ export const HEAVY_GATE_REASONS = {
   "tests/jxl-admission.test.ts": "loads 4.3MB JXL WASM and executes real streaming worker image decoding",
   "tests/oxipng-admission.test.ts": "loads 652KB OxiPNG WASM and executes real streaming worker PNG optimization",
   "tests/avif-admission.test.ts": "loads 4.3MB AVIF evidence binaries and executes real job-lane worker",
-  "tests/callexport-admission.test.ts": "loads multiple MBs of call-export WASM evidence binaries (b2, c2, d3)",
   "tests/t3-trio-admission.test.ts": "loads awk/sed/grep WASM binaries and runs WASI instances",
   "tests/unix-tools-admission.test.ts": "instantiates WASM binaries and executes WASI tool streaming KAT",
   "tests/wasi-preview1-runtime.test.ts": "instantiates WASM binaries and executes extensive WASI preview1 runtime test matrix",
@@ -197,7 +196,7 @@ export const HEAVY_GATE_REASONS = {
   // rvht7: this file is in WALL_CLOCK_HEAVY_FILES, so heavy-gate runs it AFTER the parallel batch, alone,
   // and it acquires a quiet window itself (lib/heavy-quiet-acquire.ts) before measuring. The wait is bounded
   // and ends in an environmental refusal (exit 75 + CAP_ENVIRONMENTAL_REFUSAL) rather than a FAIL: the tier's
-  // other 19 suites saturate the box by design, so a wall-clock verdict taken beside them measured the box,
+  // other 18 suites saturate the box by design, so a wall-clock verdict taken beside them measured the box,
   // not the tree.
   "tests/ntp-boot-staging-timing.test.ts":
     "wall-clock NTP boot budgets (median long tasks 0, composer-ready < 150ms, thread-hydrated <= 250ms) in a real browser; kept out of the FULL gate so a landing does not take a load-dependent verdict, but note this tier runs in parallel with WASM stress suites and is not itself quiet",

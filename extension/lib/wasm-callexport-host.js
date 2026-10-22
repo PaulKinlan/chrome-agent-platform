@@ -85,11 +85,16 @@ export async function executeCallexportRun({ wasmBytes, executable, data, args }
       }
       final(spec.finalParam ?? spec.digestBytes);
     } catch { fail("entry_call_failed"); }
-    const streamed = new Uint8Array(memory.buffer, bufferPtr, spec.digestBytes).slice();
+    if (bufferPtr + spec.digestBytes > heap.byteLength) fail("digest_read_failed");
+    let streamed;
+    try {
+      streamed = new Uint8Array(memory.buffer, bufferPtr, spec.digestBytes).slice();
+    } catch { fail("digest_read_failed"); }
     if (streamed.byteLength !== spec.digestBytes) fail("digest_read_failed");
     return [...streamed].map((b) => b.toString(16).padStart(2, "0")).join("");
   }
   if (bufferPtr + input.byteLength > heap.byteLength) fail("input_exceeds_memory");
+  if (bufferPtr + spec.digestBytes > heap.byteLength) fail("digest_read_failed");
   heap.set(input, bufferPtr);
   let digest;
   try {
@@ -145,10 +150,17 @@ function executeHashwasmStreamRun({ ex, memory, spec, data }) {
   // convention, e.g. crc64's default "c96c5795d7870f42"), written
   // LITTLE-ENDIAN: the upstream glue does setUint32(0, lo, true) /
   // setUint32(4, hi, true) and the C reads *(uint64_t*)main_buffer.
+  if (
+    typeof spec.seedHex !== "string" ||
+    spec.seedHex.length !== seedBytes * 2 ||
+    !/^[0-9a-fA-F]*$/.test(spec.seedHex)
+  ) {
+    fail("seed_hex_invalid");
+  }
   const seed = new Uint8Array(seedBytes);
   for (let i = 0; i < seedBytes; i++) {
-    seed[i] = parseInt(spec.seedHex.slice((seedBytes - 1 - i) * 2, (seedBytes - i) * 2), 16);
-    if (!Number.isFinite(seed[i])) fail("seed_hex_invalid");
+    const hexSlice = spec.seedHex.slice((seedBytes - 1 - i) * 2, (seedBytes - i) * 2);
+    seed[i] = parseInt(hexSlice, 16);
   }
   if (bufferPtr + seedBytes > heap.byteLength) fail("input_exceeds_memory");
   heap.set(seed, bufferPtr);
@@ -161,7 +173,11 @@ function executeHashwasmStreamRun({ ex, memory, spec, data }) {
     }
     final();
   } catch { fail("entry_call_failed"); }
-  const digest = new Uint8Array(memory.buffer, bufferPtr, spec.digestBytes).slice();
+  if (bufferPtr + spec.digestBytes > heap.byteLength) fail("digest_read_failed");
+  let digest;
+  try {
+    digest = new Uint8Array(memory.buffer, bufferPtr, spec.digestBytes).slice();
+  } catch { fail("digest_read_failed"); }
   if (digest.byteLength !== spec.digestBytes) fail("digest_read_failed");
   return [...digest].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
