@@ -193,10 +193,15 @@ export function trimStaleScratch(root, {
   maxStats = DEFAULT_DURABLE_DIR_TRIM_MAX_STATS,
   now = Date.now(),
 } = {}) {
+  const allow = Array.isArray(names) ? names : [];
+  if (allow.length === 0) {
+    const free = freeBytesAt(root);
+    return { removed: 0, before: free, after: free };
+  }
   const before = freeBytesAt(root);
   const budget = { left: maxStats };
   let removed = 0;
-  for (const name of names) {
+  for (const name of allow) {
     if (removed >= maxEntries || budget.left <= 0) break;
     const parent = join(root, name);
     let parentStat;
