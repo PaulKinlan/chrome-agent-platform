@@ -55,11 +55,8 @@ function sample(over: Partial<LoadSample> = {}): LoadSample {
   };
 }
 
-// Under parallel-phase contention on a loaded box, default 400ms proc scan budget can truncate
-// before discovering the test's own spawned burner processes (ssemb / kzy5x). Ensure sufficient budget during tests.
-if (!Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS")) {
-  Deno.env.set("CAP_QUIET_MAX_PROC_SCAN_MS", "2500");
-}
+// Under parallel-phase contention, tests that need a larger proc scan budget must scope it
+// cleanly inside the individual test with save/restore in finally (chrome-agent-platform-3ow6b).
 
 const SPEC = { maxLoadPerCore: 0.35, maxCompilers: 1, maxWaitMs: 1000, sampleMs: 50, sustainedSamples: 3 };
 
@@ -1293,3 +1290,15 @@ Deno.test("n64td / o7abi: createExecutableStub eliminates write-then-exec ETXTBS
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 });
+
+Deno.test("3ow6b: quiet-window test suite has no module-scope CAP_QUIET_MAX_PROC_SCAN_MS override", async () => {
+  const src = await Deno.readTextFile(fileURLToPath(import.meta.url));
+  const firstTestIdx = src.indexOf("Deno.test(");
+  assert(firstTestIdx > 0, "tests/quiet-window.test.ts must define at least one Deno.test");
+  const prelude = src.slice(0, firstTestIdx);
+  assert(
+    !prelude.includes("CAP_QUIET_MAX_PROC_SCAN_MS"),
+    "tests/quiet-window.test.ts must not mutate or set CAP_QUIET_MAX_PROC_SCAN_MS at module scope in the prelude (chrome-agent-platform-3ow6b)",
+  );
+});
+
