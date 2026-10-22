@@ -518,6 +518,53 @@ Deno.test("passes after late marker", () => {});
   }
 });
 
+Deno.test("xy6n2 falsifier: the DERIVED late-marker window is still a BOUND — an unmarked child dies at it", async () => {
+  // coord's requirement before landing kzy5x: "a boot-derived number that can only grow is the same trap in a
+  // new place". So the derivation is tested from the other side: the SAME boot-derived soft deadline, with the
+  // load injection that grants NO grace, must still KILL a child that never writes its marker and must name
+  // which bound refused it. If a future edit turns the derived number into something that can only grow, this
+  // case reds (no 124, or no named timeout). The probe inside measureChildBootMs can also fail on its own
+  // terms: its 120 s window is an ASSERTION (`the boot probe must reach its marker on this box`), so a boot
+  // that never completes reds by name instead of quietly inflating the numbers.
+  const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-derived-bound-" });
+  const readyFile = `${tempDir}/never.marker`;
+  const tempTest = `${tempDir}/never-ready.test.ts`;
+  await Deno.writeTextFile(
+    tempTest,
+    'Deno.test("hangs without a marker", async () => { setInterval(() => {}, 1000); await new Promise(() => {}); });\n',
+  );
+  const bootMs = await measureChildBootMs(tempDir);
+  const softMs = bootMs + 500;
+  try {
+    const res = runSerialFile(tempTest, {
+      timeoutMs: 2_000,
+      readyFile,
+      readyTimeoutMs: softMs,
+      readyLoadPerCpu: 1, // idle: the derived number gets NO grace, so the derivation itself is the bound
+      stdio: ["ignore", "ignore", "pipe"],
+      cwd: ROOT,
+    } as Parameters<typeof runSerialFile>[1]);
+    assertEquals(
+      res.code,
+      124,
+      `a child that never marks must still be killed at the derived bound (soft ${softMs}ms): ` +
+        `${res.stderr?.toString()}`,
+    );
+    assertEquals(res.timedOut, true);
+    assert(
+      (res.stderr?.toString() ?? "").includes("READY_MARKER_TIMEOUT_IDLE_NEVER_SETTLED"),
+      `the derived bound must still refuse BY NAME: ${res.stderr?.toString()}`,
+    );
+    assertEquals(
+      await Deno.stat(readyFile).then(() => true).catch(() => false),
+      false,
+      "the unmarked child never produces the marker",
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
+
 Deno.test("xy6n2: ready timeout classification has an idle bound, measured x4 load cap, and unmeasurable refusal", () => {
   assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 1 }),
     { cause: "idle-never-settled", loadPerCpu: 1, hardTimeoutMs: 5_000 });
