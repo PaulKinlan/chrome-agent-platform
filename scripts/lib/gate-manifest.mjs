@@ -85,6 +85,7 @@ export function explainChangedFileMapping({ changed = [], candidates = {}, execu
  *   fileMapping?: Array<{ file: string, status: string, executed_suites: string[], reason: string }>,
  *   build?: { disposition: string, reason: string, secs: number, markerCommit?: string | null } | null,
  *   suiteDurations?: Map<string, number> | Record<string, number>,
+ *   incomplete?: string | null,
  * }} fields
  * @returns {string}
  */
@@ -101,6 +102,7 @@ export function formatGateManifest({
   fileMapping = [],
   build = null,
   suiteDurations = null,
+  incomplete = null,
 } = {}) {
   if (tier !== "fast" && tier !== "full") {
     throw new Error(`gate manifest: tier must be "fast" or "full", got ${JSON.stringify(tier)}`);
@@ -178,6 +180,10 @@ export function formatGateManifest({
     const durations = suiteDurationsObject(suiteDurations);
     if (Object.keys(durations).length) payload.suite_durations = durations;
   }
+  // jtrny: a phase the bound killed is named in the record. Without it the rc is the only trace that the
+  // run is not a completion, and rc 124 reads identically to an externally bound-killed gate.
+  const incompleteReason = String(incomplete ?? "").trim();
+  if (incompleteReason) payload.incomplete = incompleteReason;
   return GATE_MANIFEST_PREFIX + JSON.stringify(payload);
 }
 
@@ -255,6 +261,7 @@ export function deferredTierEntries({
  *   deferred?: Array<{ file: string, reason: string }>, rc: number, cliFiles?: string[],
  *   build?: object | null, fileMappingContext?: object | null,
  *   suiteDurations?: Map<string, number> | Record<string, number> | null,
+ *   incomplete?: string | null,
  * }} args
  * @returns {object | null} null when this was not the default `npm test` form (no gate record)
  */
@@ -269,6 +276,7 @@ export function fullTierManifestFields({
   build = null,
   fileMappingContext = null,
   suiteDurations = null,
+  incomplete = null,
 } = {}) {
   if (cliFiles.length > 0) return null;
   const executedSuites = [...serialFiles, ...parallelFiles];
@@ -291,6 +299,7 @@ export function fullTierManifestFields({
     // are still the honest input for re-weighting, so they ride along
     // regardless of rc (unlike executed_suites, which rc gates).
     suiteDurations,
+    incomplete,
     omitted,
     omittedTotal: omitted.length,
     ...(fileMappingContext ? { fileMapping: explainChangedFileMapping({
