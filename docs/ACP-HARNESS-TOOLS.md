@@ -94,8 +94,11 @@ per-bundle ceiling (258,000 bytes, ratcheted from 250,000 by bwxf); the other tw
 | chunks aggregate (7 chunks) | 556,793 B | 750,000 B | 193,207 B |
 
 Every store budget passes and none was relaxed. Five bundles sit under 5% headroom (diff-core
-377 B, privacy 1,088 B, options 5,473 B, offscreen 4,204 B, directory 3,212 B): that thin margin is
-the pattern chrome-agent-platform-3rryv tracks, not a single over-budget bundle. The per-bundle
+377 B, privacy 1,088 B, options 5,473 B, offscreen 12,204 B, directory 3,212 B): that thin margin is
+the pattern chrome-agent-platform-3rryv tracks, not a single over-budget bundle. Note that the offscreen
+table row records the pre-wave 245,796 B snapshot against the ratcheted 258,000 B ceiling; the post-bwxf
+wave-2 admission measured 255,306 B (2,694 B / ~1.0% headroom against the enforced ceiling), so active
+operational slack is narrower. The per-bundle
 ceilings quoted here earlier in this file (options 900,000, ntp 920,000, sidepanel 700,000, with
 matching sizes) predated the 20e2u code-splitting ratchet-down and were wrong on both sides of the
 comparison; since Paul's 2026-10-05 decision those other per-bundle overruns are measured and
