@@ -993,6 +993,29 @@ Deno.test("wvg1s: trimStaleScratch prunes stale top-level epoch-suffixed run dir
   }
 });
 
+Deno.test("uy3fj: trimStaleScratch with empty names list disables the trim completely (no-op)", async () => {
+  const root = await Deno.makeTempDir({ prefix: "cap-epoch-trim-disabled-" });
+  const now = Date.now();
+  const hour = 60 * 60 * 1000;
+  const old = (now - 2 * hour) / 1000;
+  const staleEpoch = now - 2 * hour;
+
+  try {
+    const staleDir = `${root}/3yfs-matrix-${staleEpoch}`;
+    Deno.mkdirSync(staleDir, { recursive: true });
+    Deno.writeTextFileSync(`${staleDir}/log.txt`, "content");
+    Deno.utimeSync(staleDir, old, old);
+    Deno.utimeSync(`${staleDir}/log.txt`, old, old);
+
+    // With names: [] (the "" env contract), trimStaleScratch is a complete no-op and deletes nothing
+    const res = trimStaleScratch(root, { names: [], now, minAgeMs: hour, maxEntries: 10 });
+    assertEquals(res.removed, 0, "empty names list must disable trim completely");
+    assertEquals(existsSyncGuard(staleDir), true, "stale epoch dir must survive when trim is disabled");
+  } finally {
+    await Deno.remove(root, { recursive: true }).catch(() => {});
+  }
+});
+
 Deno.test("wvg1s: durableDir relieves entry cap pressure by trimming stale epoch-suffixed entries", async () => {
   const root = await Deno.makeTempDir({ prefix: "cap-durable-cap-relief-" });
   const now = Date.now();
