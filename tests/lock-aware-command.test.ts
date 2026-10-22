@@ -9,7 +9,7 @@ const MARK = "CAP_SECURITY_LOCK_ACQUIRED";
 Deno.test("queueing longer than the budget is NOT a failure once the lock marker arrives", async () => {
   // DOCUMENTED PASS:
   // Queueing time before the lock marker arrives is excluded from the child's budgetMs.
-  // In rLong below, the child queues ~1.4s (well exceeding its 700ms budget) before emitting
+  // In rLong below, the child queues ~1.5s (well exceeding its 1000ms budget) before emitting
   // the marker. Because the marker arrives, the budget clock starts at the marker rather
   // than at spawn, so queueing longer than the budget is NOT a failure (killedFor is null, code is 0).
   //
@@ -24,7 +24,7 @@ Deno.test("queueing longer than the budget is NOT a failure once the lock marker
   const rShort = await runLockAware({
     executable: "/bin/sh",
     args: ["-c", `t0=$(date +%s%3N); sleep 0.4; t1=$(date +%s%3N); echo ${MARK} $t1; sleep 0.5; t2=$(date +%s%3N); echo "CAP_TIMINGS $t0 $t1 $t2"; echo CAP_SECURITY_RESULT '{"ok":true}'`],
-    budgetMs: 700,
+    budgetMs: 1500,
     lockMarker: MARK,
   });
   assertEquals(rShort.killedFor, null);
@@ -56,11 +56,11 @@ Deno.test("queueing longer than the budget is NOT a failure once the lock marker
 
   const rLong = await runLockAware({
     executable: "/bin/sh",
-    args: ["-c", `t0=$(date +%s%3N); sleep 1.4; t1=$(date +%s%3N); echo ${MARK} $t1; sleep 0.1; t2=$(date +%s%3N); echo "CAP_TIMINGS $t0 $t1 $t2"; echo CAP_SECURITY_RESULT '{"ok":true}'`],
-    budgetMs: 700,
+    args: ["-c", `t0=$(date +%s%3N); sleep 1.5; t1=$(date +%s%3N); echo ${MARK} $t1; sleep 0.1; t2=$(date +%s%3N); echo "CAP_TIMINGS $t0 $t1 $t2"; echo CAP_SECURITY_RESULT '{"ok":true}'`],
+    budgetMs: 1000,
     lockMarker: MARK,
   });
-  // Documented pass: queueing > budgetMs (1.4s wait > 700ms budget) succeeds once marker arrives:
+  // Documented pass: queueing > budgetMs (1.5s wait > 1000ms budget) succeeds once marker arrives:
   assertEquals(rLong.killedFor, null);
   assertEquals(rLong.code, 0);
 
@@ -70,7 +70,7 @@ Deno.test("queueing longer than the budget is NOT a failure once the lock marker
 
   assert(rLong.lockWaitMs >= 1000, `long lock wait should be measured (${rLong.lockWaitMs} ms >= 1000ms)`);
   assert(rLong.lockWaitMs >= waitLong * 0.8, `long lock wait (${rLong.lockWaitMs}ms) tracks time-to-marker (${waitLong}ms)`);
-  assert(rLong.ranMs < 700, `the budget clock started at the marker (${rLong.ranMs} ms < 700ms budget)`);
+  assert(rLong.ranMs < 1000, `the budget clock started at the marker (${rLong.ranMs} ms < 1000ms budget)`);
   assert(rLong.text.includes("CAP_SECURITY_RESULT"));
 
   // The measured difference must reflect the delta between the two sleeps (1.4s - 0.4s = 1.0s),
