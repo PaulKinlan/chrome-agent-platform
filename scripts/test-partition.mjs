@@ -177,7 +177,6 @@ export const HEAVY_GATE_REASONS = {
   "tests/jxl-admission.test.ts": "loads 4.3MB JXL WASM and executes real streaming worker image decoding",
   "tests/oxipng-admission.test.ts": "loads 652KB OxiPNG WASM and executes real streaming worker PNG optimization",
   "tests/avif-admission.test.ts": "loads 4.3MB AVIF evidence binaries and executes real job-lane worker",
-  "tests/callexport-admission.test.ts": "loads multiple MBs of call-export WASM evidence binaries (b2, c2, d3)",
   "tests/t3-trio-admission.test.ts": "loads awk/sed/grep WASM binaries and runs WASI instances",
   "tests/unix-tools-admission.test.ts": "instantiates WASM binaries and executes WASI tool streaming KAT",
   "tests/wasi-preview1-runtime.test.ts": "instantiates WASM binaries and executes extensive WASI preview1 runtime test matrix",

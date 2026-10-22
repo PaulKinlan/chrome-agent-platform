@@ -943,8 +943,9 @@ Deno.test("o29c0: every HEAVY_GATE file is enumerated, has a reason, and exists 
   // deliberate floor moves 19 -> 20. Named here because the move is a gate-contract change: the
   // FULL gate keeps certifying that the hub boots (browser tests that load ntp.html and assert
   // outcomes) without a wall-clock budget that a loaded box cannot honour.
-  assert(HEAVY_GATE_FILES.length >= 20, `HEAVY_GATE_FILES floor tightened: must enumerate at least 20 heavy tests, got ${HEAVY_GATE_FILES.length}`);
-  assertEquals(HEAVY_GATE_FILES.length, 20, "HEAVY_GATE_FILES floor tightened: exactly 20 heavy tests partitioned");
+  // chrome-agent-platform-jede4: callexport-admission moved from heavy tier to default gate (20 -> 19).
+  assert(HEAVY_GATE_FILES.length >= 19, `HEAVY_GATE_FILES floor tightened: must enumerate at least 19 heavy tests, got ${HEAVY_GATE_FILES.length}`);
+  assertEquals(HEAVY_GATE_FILES.length, 19, "HEAVY_GATE_FILES floor tightened: exactly 19 heavy tests partitioned (jede4)");
   const reasons = HEAVY_GATE_REASONS as Record<string, string>;
   for (const file of HEAVY_GATE_FILES) {
     assert(typeof reasons[file] === "string" && reasons[file].length > 0, `${file} must have a non-empty reason in HEAVY_GATE_REASONS`);

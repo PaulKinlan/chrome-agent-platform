@@ -326,6 +326,60 @@ Deno.test("callexport: hashwasm_stream bound refusals fail closed with typed err
   assertEquals(wideResult.ok, true, `inclusive bounds admit (got ${wideResult.error})`);
 });
 
+Deno.test("callexport: v1 callExport digestBytes bound refusals fail closed (yiy1x)", async () => {
+  const authority = new WasmPackageAuthority({ now: () => 1 });
+  const manifestText = await Deno.readTextFile("extension/wasm/manifests/cap.bundled.hash.blake3-1.0.0.manifest.json");
+
+  function mutated(mutate: (callExport: Record<string, unknown>) => void) {
+    const m = JSON.parse(manifestText);
+    mutate(m.executables[0].callExport);
+    return authority.validateManifest(JSON.stringify(m));
+  }
+
+  // v1 digestBytes bound: 0 and 4097 are both outside 1..4096.
+  assertEquals(mutated((c) => { c.digestBytes = 0; }).error, "callexport_digest_invalid");
+  assertEquals(mutated((c) => { c.digestBytes = 4097; }).error, "callexport_digest_invalid");
+
+  // Inclusive edge 4096 admits:
+  const wide = JSON.parse(manifestText);
+  wide.executables[0].callExport.digestBytes = 4096;
+  const wideResult = authority.validateManifest(JSON.stringify(wide));
+  assertEquals(wideResult.ok, true, `v1 inclusive bound admits (got ${wideResult.error})`);
+});
+
+Deno.test("callexport: hashwasm_stream seedHex validation and out-of-bounds digest read fail closed (ldgv0)", async () => {
+  const manifestText = await Deno.readTextFile("extension/wasm/manifests/cap.bundled.hash.crc64-1.0.0.manifest.json");
+  const manifest = JSON.parse(manifestText);
+  const exec = manifest.executables[0];
+  const bytes = await Deno.readFile(`extension/wasm/cas/${exec.sha256}.wasm`);
+
+  // 1. Invalid seedHex (bypassing manifest validator) fails closed with seed_hex_invalid
+  const badSeedExec = JSON.parse(JSON.stringify(exec));
+  badSeedExec.callExport.seedHex = "zz".repeat(badSeedExec.callExport.seedBytes);
+  await assertRejects(
+    () => executeCallexportRun({
+      wasmBytes: bytes,
+      executable: badSeedExec,
+      data: btoa("test"),
+    }),
+    Error,
+    "seed_hex_invalid",
+  );
+
+  // 2. Out-of-bounds digestBytes fails closed with digest_read_failed
+  const oobExec = JSON.parse(JSON.stringify(exec));
+  oobExec.callExport.digestBytes = 100_000_000; // far exceeds wasm memory buffer
+  await assertRejects(
+    () => executeCallexportRun({
+      wasmBytes: bytes,
+      executable: oobExec,
+      data: btoa("test"),
+    }),
+    Error,
+    "digest_read_failed",
+  );
+});
+
 Deno.test("callexport: all 21 admitted hash tools run through the harness and match KAT vectors", async () => {
   const EXPECTED_HELLO_VECTORS = {
     hash_md4: "866437cb7a794bce2b727acc0362ee27",
