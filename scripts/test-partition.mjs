@@ -62,16 +62,6 @@ export const SERIAL_REASONS = {
   // loaded fleet machine. cihz made the kill structural and the survive margin wide, but the
   // assertions are still real elapsed time, so the declaration stands.
   "tests/serial-phase-timeout.test.ts": "wall-clock kill/survive bounds assertions (declared 5000 ms work vs 4000 ms flat / 12000 ms scaled bounds) race the parallel phase",
-  // kzy5x: the two readiness-bootstrap suites SPAWN A NESTED RUNTIME (node scripts/run-tests.mjs and a
-  // second deno) and then assert a COLD-BOOT/ready-marker window. In the 32-worker parallel phase this box
-  // reaches absolute load ~30, and the runner's own grace is classified per CPU (measured in the failing
-  // gate: `READY_MARKER_LOADED_GRACE soft=5000ms hard=20000ms load=4.00/cpu`), so the nested boot outlives
-  // every bounded budget no matter how the test scales it: the red is the box, not the code. They belong in
-  // the strict lane, alone, where the boot has CPU. Measured 2026-10-22 (fast gate 0957ed64): 5 reds, 4 of
-  // them in these two files, all "fast marker-then-exit must succeed with code 0" / "late marker must not be
-  // killed by the soft bound".
-  "tests/serial-phase-resilience.test.ts": "spawns a nested deno runtime and asserts cold-boot/ready-marker windows that the 32-worker parallel phase (absolute load ~30) cannot satisfy; wall-clock readiness bounds",
-  "tests/parallel-phase-resilience.test.ts": "spawns node scripts/run-tests.mjs plus a nested deno and asserts cold-boot/ready-marker windows that the parallel phase's own load cannot satisfy; wall-clock readiness bounds",
   // 20e2u: launches real Chrome to load extension/dist bundles and verify dynamic chunk resolution.
   "tests/chunk-resolution-browser.test.ts": "launches Chrome to load extension/dist bundles and verify dynamic chunk resolution; races serial builds mutating dist/",
   // chrome-agent-platform-jdgjy: boots ntp.html in real headless Chrome and asserts on
@@ -110,8 +100,6 @@ export const SERIAL_LANES = Object.freeze({
   "tests/ntp-boot-staging.test.ts": "strict",
   "tests/chrome-slot-semaphore-honesty.test.ts": "strict",
   "tests/serial-phase-timeout.test.ts": "strict",
-  "tests/serial-phase-resilience.test.ts": "strict",
-  "tests/parallel-phase-resilience.test.ts": "strict",
   // GLOBAL: the Chrome lock/slot cluster.
   "tests/chrome-launch-lock.test.ts": "global",
   "tests/chrome-launch-lock-scope.test.ts": "global",

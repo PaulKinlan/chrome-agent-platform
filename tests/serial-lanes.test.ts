@@ -64,18 +64,10 @@ Deno.test("lanes: a file whose own reason names concurrent load or wall-clock ti
       `${file}'s SERIAL reason names a load/clock hazard, so it cannot run in the concurrent ${LANES[file]} lane`,
     );
   }
-  // And the ones that do are strictly serial. kzy5x added the two readiness-bootstrap suites: they spawn a
-  // nested runtime and assert cold-boot windows, which the 32-worker parallel phase (absolute load ~30 here)
-  // cannot satisfy — measured in fast gate 0957ed64, 4 of its 5 reds.
+  // And the three that do are strictly serial.
   assertEquals(
     Object.entries(LANES).filter(([, lane]) => lane === "strict").map(([file]) => file).sort(),
-    [
-      "tests/chrome-slot-semaphore-honesty.test.ts",
-      "tests/ntp-boot-staging.test.ts",
-      "tests/parallel-phase-resilience.test.ts",
-      "tests/serial-phase-resilience.test.ts",
-      "tests/serial-phase-timeout.test.ts",
-    ],
+    ["tests/chrome-slot-semaphore-honesty.test.ts", "tests/ntp-boot-staging.test.ts", "tests/serial-phase-timeout.test.ts"],
   );
 });
 
