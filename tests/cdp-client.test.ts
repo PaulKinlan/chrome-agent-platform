@@ -331,13 +331,13 @@ Deno.test("startup: a FAILING test-build child preserves its first cause (exit c
     const { execSync } = await import(cpMod2);
     const srcRoot = fileURLToPath(new URL("..", import.meta.url));
     // Copy ONLY `scripts/` (where build-test-extension.mjs is mutated for this test)
-    // and symlink the immutable/heavy repo entries (`.git`, `node_modules`, `extension`,
-    // `deno.json`, `deno.lock`, `package.json`) so we never copy `.cache/` (live Chrome
-    // profiles) or hundreds of MB of `node_modules/.deno` and `packages/bundled`.
+    // and copy minimal configuration manifests (deno.json, deno.lock, package.json).
+    // Do NOT symlink the real tree (.git, node_modules, extension) into the scratch repo
+    // to prevent any stray child writes from leaking into the live repository (chrome-agent-platform-jos6s).
     await fsp2.mkdir(path2.join(repo, "scripts"), { recursive: true });
     execSync(`rsync -a --exclude '/.cache/' ${JSON.stringify(path2.join(srcRoot, "scripts") + "/")} ${JSON.stringify(path2.join(repo, "scripts") + "/")}`, { shell: "/bin/bash", stdio: "pipe" });
-    for (const entry of [".git", "node_modules", "extension", "deno.json", "deno.lock", "package.json"]) {
-      await fsp2.symlink(path2.join(srcRoot, entry), path2.join(repo, entry)).catch(() => {});
+    for (const entry of ["deno.json", "deno.lock", "package.json"]) {
+      await fsp2.copyFile(path2.join(srcRoot, entry), path2.join(repo, entry)).catch(() => {});
     }
     // Break the builder so the child exits nonzero:
     await fsp2.writeFile(path2.join(repo, "scripts/build-test-extension.mjs"), "process.exit(97);\n");
