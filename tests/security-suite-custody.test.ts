@@ -13,12 +13,16 @@ import {
   isVanishedGroupError,
   isVanishedProcError,
   liveObservedResidue,
+  loadPerCpuSample,
   pidAlive,
   ProcessGoneError,
   PROFILE_ROOT,
   readProcIdentity,
   residueForReceipt,
   resolveSupervisorConfig,
+  selfTestTermWaitMs,
+  SELF_TEST_TERM_WAIT_FLOOR_MS,
+  SELF_TEST_TERM_WAIT_MAX_SCALE,
   SELF_TEST_TOKEN,
   terminateAttestedGroup,
   terminateAttestedGroupSafely,
@@ -484,13 +488,49 @@ Deno.test("security-suite custody: PGID/SID mismatch fails closed with no fixtur
   }
 });
 
+// chrome-agent-platform-whl7d: the self-test TERM grace window is a declared RELATIONSHIP to measured load
+// (see SELF_TEST_TERM_WAIT_FLOOR_MS in scripts/security-suite-custody.mjs), so the case below can go on
+// asserting "no escalation" at any load. A flat 250 ms made that assertion a race with the box: the
+// merger's full gate redded it on 2026-10-22 at load 3.9 with this file byte-identical to main.
+Deno.test("whl7d: the self-test TERM grace window scales with measured load and stays bounded", () => {
+  const idle = SELF_TEST_TERM_WAIT_FLOOR_MS;
+  assertEquals(selfTestTermWaitMs({ loadPerCpu: 1 }), idle, "an idle box gets exactly the floor");
+  assertEquals(selfTestTermWaitMs({ loadPerCpu: 0 }), idle);
+  assertEquals(selfTestTermWaitMs({ loadPerCpu: Number.NaN }), idle);
+  assertEquals(selfTestTermWaitMs({}), idle, "unmeasurable load is not assumed loaded");
+  assertEquals(
+    selfTestTermWaitMs({ loadPerCpu: SELF_TEST_TERM_WAIT_MAX_SCALE }),
+    idle * SELF_TEST_TERM_WAIT_MAX_SCALE,
+    "load scales the window, so one event-loop turn on a busy box is not read as a custody defect",
+  );
+  assertEquals(
+    selfTestTermWaitMs({ loadPerCpu: 99 }),
+    idle * SELF_TEST_TERM_WAIT_MAX_SCALE,
+    "the window must clamp, so escalation is still bounded",
+  );
+  let previous = 0;
+  for (const load of [1, 1.5, 2, 3, 4, 6, 99]) {
+    const ms = selfTestTermWaitMs({ loadPerCpu: load });
+    assert(ms >= previous, `load ${load} produced ${ms}ms, below the previous ${previous}ms`);
+    previous = ms;
+  }
+  // The sample the supervisor actually uses is a load per CPU, never a raw load average.
+  const sampled = loadPerCpuSample();
+  assert(Number.isFinite(sampled) && sampled >= 0, `the load sample must be finite and non-negative, got ${sampled}`);
+});
+
 Deno.test("security-suite custody: hard timeout sends TERM and returns 124", async () => {
   const result = await runSupervisor("timeout", 300);
   try {
     assertEquals(result.code, 124);
     assertEquals(result.receipt?.timedOut, true);
     assertEquals(result.receipt?.termSent, true);
-    assertEquals(result.receipt?.killSent, false);
+    assertEquals(
+      result.receipt?.killSent,
+      false,
+      `a fixture that exits on TERM must not be escalated to KILL; the window is load-scaled ` +
+        `(self-test floor ${SELF_TEST_TERM_WAIT_FLOOR_MS}ms x measured load, ceiling x${SELF_TEST_TERM_WAIT_MAX_SCALE})`,
+    );
     assert(result.state.some((row) => row.event === "runner-term"));
     assertEquals(result.receipt?.cleaned, true);
     await assertRecordedPidsGone(result);

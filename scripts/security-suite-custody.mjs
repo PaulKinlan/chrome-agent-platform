@@ -19,6 +19,7 @@ import {
   rm,
   stat,
 } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
@@ -43,6 +44,39 @@ export const CANONICAL_LOCK = "/tmp/cap-serialized-chrome-acceptance.lock";
 export const PROFILE_ROOT = durableDir("cap-sec-profiles");
 export const PRODUCTION_TIMEOUT_MS = 120_000;
 export const SELF_TEST_TOKEN = "security-suite-custody-v1";
+
+// chrome-agent-platform-whl7d: the SELF-TEST term-grace window is a MEASURED function of the box, not a
+// flat 250 ms race. The one thing that window waits for is one turn of the fixture's Node event loop
+// (its SIGTERM handler runs `process.exit(0)`), and on a fleet box running the rest of the gate that turn
+// is legitimately longer than 250 ms: the merger's full gate on 2026-10-22 (load 3.9, .beads/embeddeddolt
+// at 2.0GB) redded `hard timeout sends TERM and returns 124` although nothing in its fixture or its
+// supervisor logic had changed. Escalating to SIGKILL because the box was busy is not a custody defect,
+// so the window is scaled by measured load per CPU under the same x4 ceiling the serial phase uses
+// (serialFileTimeoutMs), which keeps "TERM first, escalate only if the group outlives the declared
+// window" true at any load without widening it on an idle box. PRODUCTION is untouched: its own 5 s
+// window is the operator's, and nothing here is reachable from it.
+export const SELF_TEST_TERM_WAIT_FLOOR_MS = 250;
+export const SELF_TEST_TERM_WAIT_MAX_SCALE = 4;
+
+/** The self-test TERM grace window for a measured load per CPU (1 = idle, unmeasurable = idle). */
+export function selfTestTermWaitMs({ loadPerCpu = 1 } = {}) {
+  const ratio = Number.isFinite(loadPerCpu) && loadPerCpu > 1 ? loadPerCpu : 1;
+  return Math.round(
+    SELF_TEST_TERM_WAIT_FLOOR_MS * Math.min(ratio, SELF_TEST_TERM_WAIT_MAX_SCALE),
+  );
+}
+
+/** 1-minute load per CPU, or 1 when it cannot be measured (never assume a loaded box). */
+export function loadPerCpuSample() {
+  try {
+    const cpus = os.cpus?.().length ?? 0;
+    const load = os.loadavg?.()[0];
+    if (!cpus || !Number.isFinite(load) || load < 0) return 1;
+    return load / cpus;
+  } catch {
+    return 1;
+  }
+}
 
 const RUN_ID_PATTERN = /^[a-f0-9]{16}$/u;
 const NONCE_PATTERN = /^[a-f0-9]{32}$/u;
@@ -1104,7 +1138,8 @@ export async function resolveSupervisorConfig({
     forceObservationUnreadable: env.CAP_SECURITY_TEST_FORCE_OBSERVATION_UNREADABLE === "1",
     forceResidueUnreadable: env.CAP_SECURITY_TEST_FORCE_RESIDUE_UNREADABLE === "1",
     sampleFreezeMs,
-    termWaitMs: 250,
+    // whl7d: declared relationship, not a flat race — see SELF_TEST_TERM_WAIT_FLOOR_MS.
+    termWaitMs: selfTestTermWaitMs({ loadPerCpu: loadPerCpuSample() }),
     killWaitMs: 1_000,
     evidenceRoot: durableDir("cap-sec-selftest-evidence"),
     profileRoot: PROFILE_ROOT,
