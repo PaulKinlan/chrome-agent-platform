@@ -55,6 +55,7 @@ export function verifyEnforcedOffscreenCeilingDocs(
   ceiling: number,
 ) {
   const formatted = ceiling.toLocaleString("en-US");
+  const rawNum = String(ceiling);
 
   // 1. Constitution positive pin
   assert(
@@ -74,73 +75,89 @@ export function verifyEnforcedOffscreenCeilingDocs(
     `docs/TEST-COUPLING-INVENTORY.md must state the enforced ${formatted}-byte store offscreen ceiling`,
   );
 
-  // 4. ACP Harness Tools: number-enumerated verification across tables and prose (tgff6)
+  // 4. ACP Harness Tools: structural table column checks and contextual prose checks (benkb)
   const content = docs.acpHarness;
   assert(
     content.includes(`${formatted} bytes`) || content.includes(`${formatted} B`),
     `docs/ACP-HARNESS-TOOLS.md must state the enforced offscreen ceiling of ${formatted}`,
   );
 
-  const ALLOWED_ACP_OFFSCREEN_FIGURES = new Set([
-    "250,000", // historical pre-bwxf ceiling
-    "245,796", // pre-wave size snapshot
-    "255,306", // post-bwxf wave-2 measured size
-    "249,976", // x9r8k.2 staging size
-    "12,204",  // 258,000 - 245,796 headroom
-    "2,694",   // 258,000 - 255,306 headroom
-    "5,473",   // options headroom
-    "3,212",   // directory headroom
-    "1,088",   // privacy headroom
-    "377",     // diff-core headroom
-    "24",      // 24 B under original ceiling
-  ]);
+  // 4a. Check all table rows referencing offscreen (with or without backticks, in 4-column or 2-column tables)
+  const tableRows = content
+    .split("\n")
+    .filter((line) => line.trim().startsWith("|") && /offscreen/i.test(line));
+  assert(tableRows.length >= 1, "docs/ACP-HARNESS-TOOLS.md must contain the offscreen table row");
 
-  // 4a. Check all table rows mentioning offscreen (line by line, any cell position or surface styling)
-  const lines = content.split("\n");
-  for (const line of lines) {
-    if (line.trim().startsWith("|") && /offscreen/i.test(line)) {
-      const matches = [...line.matchAll(/\b([\d][\d,]{0,})\s*(?:B|bytes|KB)\b/gi)];
-      for (const m of matches) {
-        const numStr = m[1].trim();
-        if (ALLOWED_ACP_OFFSCREEN_FIGURES.has(numStr)) continue;
-        assertEquals(
-          numStr,
-          formatted,
-          `docs/ACP-HARNESS-TOOLS.md table row contains invalid offscreen figure ${numStr} (expected ${formatted}) in: "${line.trim()}"`,
+  for (const row of tableRows) {
+    const cells = row.split("|").map((c) => c.trim().replace(/^`|`$/g, "")).filter(Boolean);
+    if (cells.length >= 4) {
+      // 4-column table: Surface, Size, Ceiling, Headroom
+      const ceilingCell = cells[2];
+      assert(
+        ceilingCell === `${formatted} B` || ceilingCell === `${formatted} bytes` || ceilingCell === formatted,
+        `Table row ceiling column must equal ${formatted} B, found: ${ceilingCell} in: "${row.trim()}"`,
+      );
+    } else if (cells.length === 2) {
+      // 2-column table: Surface, Limit
+      const limitCell = cells[1];
+      assert(
+        limitCell === `${formatted} B` || limitCell === `${formatted} bytes` || limitCell === formatted,
+        `Table row limit column must equal ${formatted} B, found: ${limitCell} in: "${row.trim()}"`,
+      );
+    }
+  }
+
+  // 4b. Check all prose paragraphs and sentences mentioning offscreen and ceiling/budget/limit claims
+  // First, scrub known legitimate historical phrases so their "250,000" is not mistaken for a current ceiling:
+  const scrubbed = content
+    .replace(/ratcheted from 250,000\s*(?:bytes|B)?/gi, "HISTORICAL_RATCHET")
+    .replace(/original 250,000\s*(?:bytes|B)?\s*ceiling/gi, "HISTORICAL_ORIGINAL");
+
+  const sentences = scrubbed.split(/(?<=[.!?\n])\s+/);
+  let mentionsEnforcedCeiling = false;
+
+  const HEADROOM_FIGURES = new Set(["377", "1,088", "5,473", "12,204", "3,212", "2,694", "24"]);
+  const MEASURED_SIZE_FIGURES = new Set(["245,796", "255,306", "249,976"]);
+
+  for (let i = 0; i < sentences.length; i++) {
+    const s = sentences[i];
+    const prev = i > 0 ? sentences[i - 1] : "";
+    const isOffscreenContext = /offscreen/i.test(s) ||
+      (/offscreen/i.test(prev) && /\b(that limit|that ceiling|that budget|growth to)\b/i.test(s));
+
+    if (!isOffscreenContext) continue;
+    if (!/ceiling|budget|limit|ratcheted/i.test(s)) continue;
+    if (s.trim().startsWith("|")) continue; // table rows verified structurally above
+
+    // Strip backticks first to inspect bare numbers
+    const cleanS = s.replace(/`/g, "");
+    const numbers = [...cleanS.matchAll(/\b([\d][\d,]{2,})\b/g)].map((m) => m[1]);
+
+    for (const num of numbers) {
+      if (/headroom|thin margin/i.test(cleanS) && HEADROOM_FIGURES.has(num)) {
+        continue;
+      }
+      if (/snapshot|measured|staging build/i.test(cleanS) && MEASURED_SIZE_FIGURES.has(num)) {
+        continue;
+      }
+      if (num === formatted || num === rawNum) {
+        mentionsEnforcedCeiling = true;
+      } else {
+        assert(
+          false,
+          `Invalid offscreen ceiling/budget/limit figure ${num} (expected ${formatted}) in: "${s.trim()}"`,
         );
       }
     }
   }
 
-  // 4b. Check all prose paragraphs mentioning offscreen (ignoring markdown table lines)
-  const paragraphs = content
-    .split(/\n\s*\n/)
-    .map((p) =>
-      p
-        .split("\n")
-        .filter((l) => !l.trim().startsWith("|"))
-        .join(" ")
-        .trim()
-    )
-    .filter(Boolean);
-
-  for (const para of paragraphs) {
-    if (!/offscreen/i.test(para)) continue;
-
-    const matches = [...para.matchAll(/\b([\d][\d,]{2,})\s*(?:B|bytes|KB)\b/gi)];
-    for (const m of matches) {
-      const numStr = m[1].trim();
-      if (ALLOWED_ACP_OFFSCREEN_FIGURES.has(numStr)) continue;
-      assertEquals(
-        numStr,
-        formatted,
-        `docs/ACP-HARNESS-TOOLS.md prose contains invalid offscreen figure ${numStr} (expected ${formatted}) in: "${para}"`,
-      );
-    }
-  }
+  assert(
+    mentionsEnforcedCeiling,
+    `docs/ACP-HARNESS-TOOLS.md must state the enforced offscreen ceiling of ${formatted}`,
+  );
 }
 
-Deno.test("0kdsc / ug95c / k3vrl / akoxt / 324tz / rjvdp / h2c0e / tgff6: docs quoting the enforced offscreen ceiling match STORE_BUNDLE_BUDGETS['offscreen.bundle.js']", () => {
+Deno.test("0kdsc / ug95c / k3vrl / akoxt / 324tz / rjvdp / h2c0e / tgff6 / benkb: docs quoting the enforced offscreen ceiling match STORE_BUNDLE_BUDGETS['offscreen.bundle.js']", () => {
   const offscreenCeiling = STORE_BUNDLE_BUDGETS["offscreen.bundle.js"];
   const root = fileURLToPath(new URL("../", import.meta.url));
   const docs = {
@@ -159,47 +176,68 @@ Deno.test("0kdsc / ug95c / k3vrl / akoxt / 324tz / rjvdp / h2c0e / tgff6: docs q
     Error,
   );
 
-  // 3. Active falsifier: budget-worded claim (tgff6 case A)
+  // 3. Active falsifiers for benkb escapes:
+  // Case H: false current ceiling using allowlisted historical figure 250,000
   assertThrows(
     () =>
       verifyEnforcedOffscreenCeilingDocs({
         ...docs,
-        acpHarness: docs.acpHarness + "\nThe offscreen.bundle.js budget is now 300,000 B for all store surfaces.\n",
+        acpHarness: docs.acpHarness + "\nThe enforced offscreen.bundle.js ceiling is 250,000 B for all store surfaces.\n",
       }, offscreenCeiling),
     Error,
   );
 
-  // 4. Active falsifier: ceiling in a different table (tgff6 case B)
+  // Case M: false current ceiling using allowlisted snapshot size 245,796
   assertThrows(
     () =>
       verifyEnforcedOffscreenCeilingDocs({
         ...docs,
-        acpHarness: docs.acpHarness + "\n| Surface | Enforced limit |\n| --- | ---: |\n| offscreen bundle | 300,000 B |\n",
+        acpHarness: docs.acpHarness + "\nThe enforced offscreen.bundle.js ceiling is 245,796 B for all store surfaces.\n",
       }, offscreenCeiling),
     Error,
   );
 
-  // 5. Active falsifier: sentence keeps 258,000 B AND admits 300,000 B (tgff6 case F)
+  // Case J: allowlisted headroom figure in ceiling cell
   assertThrows(
     () =>
       verifyEnforcedOffscreenCeilingDocs({
         ...docs,
-        acpHarness: docs.acpHarness + "\nThe offscreen.bundle.js ceiling stays 258,000 B, although growth to 300,000 B is now permitted.\n",
+        acpHarness: docs.acpHarness + "\n| Surface | Size | Ceiling | Headroom |\n| --- | ---: | ---: | ---: |\n| offscreen.bundle.js | 245,796 B | 377 B | 12,204 B |\n",
       }, offscreenCeiling),
     Error,
   );
 
-  // 6. Active falsifier: duplicate row with backticked surface cell (tgff6 case G)
+  // Case K: backticked figure in ceiling cell
   assertThrows(
     () =>
       verifyEnforcedOffscreenCeilingDocs({
         ...docs,
-        acpHarness: docs.acpHarness + "\n| Surface | Size | Ceiling | Headroom |\n| --- | ---: | ---: | ---: |\n| `offscreen.bundle.js` | 245,796 B | 300,000 B | 54,204 B |\n",
+        acpHarness: docs.acpHarness + "\n| Surface | Size | Ceiling | Headroom |\n| --- | ---: | ---: | ---: |\n| offscreen.bundle.js | 245,796 B | `300,000 B` | 12,204 B |\n",
       }, offscreenCeiling),
     Error,
   );
 
-  // 7. Active falsifier: each individual document mutated to a bogus ceiling fails closed
+  // Case I: conflicting figure with no unit
+  assertThrows(
+    () =>
+      verifyEnforcedOffscreenCeilingDocs({
+        ...docs,
+        acpHarness: docs.acpHarness + "\nThe enforced offscreen.bundle.js ceiling is now 300000 for all store surfaces.\n",
+      }, offscreenCeiling),
+    Error,
+  );
+
+  // Case L: conflicting figure in following paragraph referencing 'That limit'
+  assertThrows(
+    () =>
+      verifyEnforcedOffscreenCeilingDocs({
+        ...docs,
+        acpHarness: docs.acpHarness + "\nThe offscreen.bundle.js ceiling is 258,000 B.\n\nThat limit may grow to 300,000 B next wave.\n",
+      }, offscreenCeiling),
+    Error,
+  );
+
+  // 4. Active falsifier: each individual document mutated to a bogus ceiling fails closed
   for (const docKey of Object.keys(docs) as Array<keyof typeof docs>) {
     const mutatedDocs = {
       ...docs,
