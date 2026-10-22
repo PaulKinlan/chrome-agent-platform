@@ -31,8 +31,12 @@ import {
   AGENT_TEMPLATE_COUNT,
   STARTER_TEMPLATE_IDS,
   AGENT_TEMPLATES,
+  agentTemplateById,
+  skillAsTemplate,
   templatePrefill,
 } from "../extension/lib/agent-templates.js";
+import { backgroundSkills } from "../extension/lib/skill-registry.js";
+import { groupTemplates } from "../extension/lib/agent-template-select.js";
 import { createPanelContext } from "../extension/options/panel-context.js";
 
 const _ACCEPTANCE = new URL("../cap-evidence/n3fqo-settings-template-select-acceptance.ts", import.meta.url);
@@ -160,6 +164,155 @@ Deno.test("Settings template catalogue: includes curated starter templates even 
   assert(ra, "Research Analyst must exist in catalogue");
   assertStringIncludes(String(ra.role ?? ""), "# Research Analyst Persona");
   assert(Array.isArray(ra.skills) && ra.skills.includes("multi-tab-researcher"));
+});
+
+Deno.test("Settings template stock catalogue: builds exactly 42 templates with 25 Scheduled by ID and name (ng824, 495st)", () => {
+  const skills = backgroundSkills();
+  const catalogue: any[] = composeSettingsTemplateCatalogue(skills);
+
+  // 1. Total count is exactly 42
+  assertEquals(catalogue.length, 42, `stock catalogue must contain exactly 42 templates, got ${catalogue.length}`);
+
+  // Use shipped groupTemplates() to divide catalogue according to production rules
+  const groups = groupTemplates(catalogue);
+  const starterGroup = groups.find((g) => g.id === "starter");
+  const scheduledGroup = groups.find((g) => g.id === "scheduled");
+  const otherGroup = groups.find((g) => g.id === "other");
+
+  assert(starterGroup, "Starter group must exist");
+  assert(scheduledGroup, "Scheduled group must exist");
+  assert(otherGroup, "Other group must exist");
+
+  // 2. Starters: exactly 7 curated starter templates
+  assertEquals(starterGroup.items.length, 7, `must contain exactly 7 starter templates, got ${starterGroup.items.length}`);
+  assertEquals(
+    starterGroup.items.map((t: any) => t.id).sort(),
+    [...STARTER_TEMPLATE_IDS].sort(),
+    "starter templates must match STARTER_TEMPLATE_IDS",
+  );
+
+  // 3. Scheduled: exactly 25 scheduled templates (4 curated background + 21 built-in background skills)
+  assertEquals(scheduledGroup.items.length, 25, `must contain exactly 25 scheduled templates, got ${scheduledGroup.items.length}`);
+
+  const EXPECTED_CURATED_BACKGROUND_IDS = [
+    "bookmark-librarian",
+    "price-watcher",
+    "subscription-auditor",
+    "tab-janitor",
+  ];
+  const EXPECTED_BUILTIN_SKILL_IDS = [
+    "auto-group-by-domain",
+    "auto-pin-favorites",
+    "auto-reading-list",
+    "bookmark-auto-categorize",
+    "bookmark-dedupe",
+    "daily-summary",
+    "dead-bookmark-cleaner",
+    "dedupe-tabs",
+    "download-nightly-summary",
+    "download-organizer",
+    "focus-mode",
+    "idle-close-tabs",
+    "meeting-prep",
+    "page-change-watcher",
+    "page-sentiment-log",
+    "reading-time-estimator",
+    "stale-tab-closer",
+    "summarize-on-navigate",
+    "tab-screenshot-diary",
+    "weekly-digest",
+    "weekly-review-prompt",
+  ];
+
+  // 495st: Assert the source composition split (4 curated background, 21 skills)
+  const scheduledSkills = scheduledGroup.items.filter((t: any) => t.source === "skill");
+  const scheduledCurated = scheduledGroup.items.filter((t: any) => t.source !== "skill");
+  assertEquals(scheduledSkills.length, 21, "must contain exactly 21 scheduled skills");
+  assertEquals(scheduledCurated.length, 4, "must contain exactly 4 curated background templates");
+
+  assertEquals(
+    scheduledSkills.map((t: any) => t.id).sort(),
+    [...EXPECTED_BUILTIN_SKILL_IDS].sort(),
+    "scheduled skill IDs must match expected 21 built-in background skills",
+  );
+  assertEquals(
+    scheduledCurated.map((t: any) => t.id).sort(),
+    [...EXPECTED_CURATED_BACKGROUND_IDS].sort(),
+    "scheduled curated IDs must match expected 4 curated background templates",
+  );
+
+  const EXPECTED_SCHEDULED_IDS = [
+    ...EXPECTED_CURATED_BACKGROUND_IDS,
+    ...EXPECTED_BUILTIN_SKILL_IDS,
+  ];
+  assertEquals(
+    scheduledGroup.items.map((t: any) => t.id).sort(),
+    [...EXPECTED_SCHEDULED_IDS].sort(),
+    "scheduled template IDs must match the expected 25 built-in/curated scheduled templates",
+  );
+
+  // 4. Other: exactly 10 on-demand curated templates
+  assertEquals(otherGroup.items.length, 10, `must contain exactly 10 other on-demand templates, got ${otherGroup.items.length}`);
+  const EXPECTED_OTHER_IDS = [
+    "code-reviewer",
+    "data-wrangler",
+    "fact-checker",
+    "form-filer",
+    "meeting-wing",
+    "personal-shopper",
+    "repo-steward",
+    "scribe-doc-writer",
+    "travel-planner",
+    "tutor-study-coach",
+  ];
+  assertEquals(
+    otherGroup.items.map((t: any) => t.id).sort(),
+    [...EXPECTED_OTHER_IDS].sort(),
+    "other template IDs must match the 10 curated on-demand templates",
+  );
+
+  // 5. Every template has non-empty id and name
+  for (const t of catalogue) {
+    assert(typeof t.id === "string" && t.id.length > 0, `template id must be non-empty string: ${JSON.stringify(t)}`);
+    assert(typeof t.name === "string" && t.name.length > 0, `template name must be non-empty string: ${t.id}`);
+  }
+
+  // 6. Falsifiers:
+  // a) dropping any one scheduled skill from the input turns the assertion RED
+  for (const droppedId of ["daily-summary", "page-change-watcher", "focus-mode", "dedupe-tabs"]) {
+    const mutatedSkills = skills.filter((s: any) => s.id !== droppedId);
+    const mutatedCatalogue = composeSettingsTemplateCatalogue(mutatedSkills);
+    const mutatedScheduled = groupTemplates(mutatedCatalogue).find((g) => g.id === "scheduled")?.items ?? [];
+    assert(mutatedCatalogue.length !== 42, `dropping ${droppedId} must reduce total catalogue length below 42`);
+    assert(mutatedScheduled.length !== 25, `dropping ${droppedId} must reduce scheduled count below 25`);
+    assert(!mutatedScheduled.some((t: any) => t.id === droppedId), `dropped ${droppedId} must not be in scheduled list`);
+  }
+
+  // b) 495st: inserting a curated twin in AGENT_TEMPLATES for any scheduled skill must RED on source-split assertion
+  for (const skillId of ["dedupe-tabs", "focus-mode", "daily-summary"]) {
+    const twin = {
+      id: skillId,
+      name: `${skillId} (curated twin)`,
+      mode: "background",
+      source: "template",
+    };
+    const starterIds = new Set(STARTER_TEMPLATE_IDS);
+    const mockAgentTemplates = [twin, ...AGENT_TEMPLATES];
+    const backgroundTemplates = skills
+      .map((a: any) => skillAsTemplate(a))
+      .filter(Boolean)
+      .filter((t: any) => !mockAgentTemplates.some((c: any) => c.id === t.id));
+    const collidedCatalogue = [
+      ...STARTER_TEMPLATE_IDS.map(agentTemplateById).filter(Boolean).map((t: any) => ({ ...t, starter: true })),
+      ...mockAgentTemplates.filter((t: any) => !starterIds.has(t.id)),
+      ...backgroundTemplates,
+    ];
+    const collidedScheduled = groupTemplates(collidedCatalogue).find((g) => g.id === "scheduled")?.items ?? [];
+    const skillCount = collidedScheduled.filter((t: any) => t.source === "skill").length;
+    const curatedCount = collidedScheduled.filter((t: any) => t.source !== "skill").length;
+    assert(skillCount !== 21, `curated twin substituting ${skillId} must reduce skill count below 21 (got ${skillCount})`);
+    assert(curatedCount !== 4, `curated twin substituting ${skillId} must increase curated count above 4 (got ${curatedCount})`);
+  }
 });
 
 Deno.test("Settings template catalogue: merges background skills without duplicating curated templates", () => {
