@@ -163,7 +163,8 @@ These are long-living agents. Memory + perf degrade over time if unchecked.
   reasonable. **Every generated bundle's size is MEASURED AND REPORTED by the
   build.** Twelve store per-bundle sizes remain advisory (OWNER DECISION, Paul,
   2026-10-05: "The limits make no sense anymore"). The rmoh8 exception is the
-  store `offscreen.bundle.js` hard ceiling of 250,000 bytes: exceeding it fails
+  store `offscreen.bundle.js` hard ceiling of 258,000 bytes (250,000 at rmoh8,
+  ratcheted to 258,000 by bwxf): exceeding it fails
   the build with the measured size and `scripts/bundle-budget.mjs` source before
   publication. Developer builds are unminified and exempt. `STORE_BUNDLE_BUDGETS`
   in scripts/bundle-budget.mjs holds the ceiling and remaining references; the
