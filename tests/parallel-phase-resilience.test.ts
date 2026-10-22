@@ -318,13 +318,20 @@ Deno.test("j2isq: the real platform probe never calls a nonexistent pid alive", 
 });
 
 /**
- * Pure scale factor calculation given machine load and CPU count (chrome-agent-platform-v6kut).
- * Caps strictly at maxScale (default 4x) regardless of ambient load spikes.
+ * Pure scale factor for a COLD-BOOT budget (chrome-agent-platform-v6kut, rekeyed by kzy5x/whl7d).
+ *
+ * WHY ABSOLUTE LOAD AND NOT LOAD PER CPU: the quantity that predicts how long a child takes to reach its
+ * first line is how many runnable tasks are contending for it — ABSOLUTE load. Keying on load/cpus was a
+ * real, measured defect: on this 8-core VM the gate that reddened `1k2a ... fast marker-then-exit, got 124`
+ * ran at absolute load 11, so `11/8 = 1.375` bought a 17.059 s boot budget while the deno cold boot it was
+ * waiting for took longer than that; the same ratio reads ~0.7 on a thrashing box and leaves the budget on
+ * its floor (coord's P1 on chrome-agent-platform-whl7d found the identical arithmetic in the custody TERM
+ * window). `cpus` is still accepted — callers pass it — but it can no longer divide the scale away.
+ * Caps strictly at maxScale (default 4x) so the budget stays a budget.
  */
 export function computeLoadScale(load: number, cpus: number, maxScale = 4): number {
   if (Number.isNaN(load) || !Number.isFinite(cpus) || cpus <= 0 || load <= 0) return 1;
-  const ratio = Math.max(1, load / cpus);
-  return Math.min(maxScale, ratio);
+  return Math.min(maxScale, Math.max(1, load));
 }
 
 /**
@@ -869,12 +876,26 @@ Deno.test("passes immediately after marker", () => {});
 Deno.test("v6kut: computeLoadScale and loadScaledTimeout are bounded, load-responsive, and capped at maxScale independent of ambient load", () => {
   // Pure scale calculation across load spectrum (test-honesty: proven without ambient box state)
   assertEquals(computeLoadScale(0, 1), 1, "zero/idle load returns floor scale 1");
-  assertEquals(computeLoadScale(1, 1), 1, "load equal to CPUs returns scale 1");
-  assertEquals(computeLoadScale(2, 1), 2, "load 2x CPUs returns scale 2");
-  assertEquals(computeLoadScale(3, 1), 3, "load 3x CPUs returns scale 3");
-  assertEquals(computeLoadScale(4, 1), 4, "load 4x CPUs returns maxScale 4");
+  assertEquals(computeLoadScale(1, 1), 1, "one runnable task is the floor");
+  assertEquals(computeLoadScale(2, 1), 2, "two runnable tasks give scale 2");
+  assertEquals(computeLoadScale(3, 1), 3, "three runnable tasks give scale 3");
+  assertEquals(computeLoadScale(4, 1), 4, "four runnable tasks reach maxScale 4");
   assertEquals(computeLoadScale(100, 1), 4, "extreme load caps at maxScale 4");
   assertEquals(computeLoadScale(Infinity, 1), 4, "infinite load caps strictly at maxScale 4");
+
+  // THE MOTIVATING CASE (kzy5x/whl7d), pinned as its own assertion: the gate that redded
+  // `1k2a ... fast marker-then-exit, got 124` ran at absolute load ~11 on 8 cores with a 17.059 s boot
+  // budget. Keying on load/cpus (1.375) is what produced that 17 s; absolute load must reach the ceiling.
+  assert(
+    computeLoadScale(11, 8) >= 4,
+    `absolute load 11 on an 8-core box must give the maximum boot scale, got ${computeLoadScale(11, 8)} ` +
+      `(dividing by CPUs is the defect this pins)`,
+  );
+  assertEquals(
+    computeLoadScale(11, 8),
+    computeLoadScale(11, 64),
+    "CPU count must not divide the boot budget away: a many-core host at load 11 boots just as slowly",
+  );
 
   // Non-finite or negative inputs fail safe to floor 1
   assertEquals(computeLoadScale(NaN, 1), 1);

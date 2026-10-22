@@ -12,7 +12,7 @@
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { classifyReadyMarkerTimeout, currentLoadPerCpu, runSerialFile, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
+import { classifyReadyMarkerTimeout, runSerialFile, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -528,9 +528,14 @@ Deno.test("passes immediately after marker", () => {});
     // SOFT deadline it can extend to a 60–80s HARD deadline under measured
     // load, then refuses an absent marker. The missing-marker fixtures above
     // retain their separate short fail-closed bounds.
+    // kzy5x/whl7d: the boot budget is keyed on ABSOLUTE load, not load per CPU. On this 8-core VM the gates
+    // that redded these readiness cases ran at absolute load 11-14, so load/cpus was ~1.4-1.75 and this
+    // budget sat on its 15s floor while the deno cold boot it waits for took longer (coord P1 on whl7d found
+    // the same arithmetic in the custody TERM window). The x4 ceiling above still bounds it at 20s, and the
+    // measured-load HARD grace after this soft deadline is unchanged.
     const bootBudgetMs = Math.max(15_000, serialFileTimeoutMs({
       base: 5_000,
-      loadPerCpu: currentLoadPerCpu(),
+      loadPerCpu: Deno.loadavg()[0],
     }));
     assert(bootBudgetMs >= 15_000 && bootBudgetMs <= 20_000,
       `positive marker soft boot budget must stay in 15–20s, got ${bootBudgetMs}ms`);
