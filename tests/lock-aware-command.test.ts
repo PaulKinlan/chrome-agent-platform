@@ -9,15 +9,19 @@ const MARK = "CAP_SECURITY_LOCK_ACQUIRED";
 Deno.test("queueing longer than the budget is NOT a failure once the lock marker arrives", async () => {
   // Run with two distinct queue durations to prove lockWaitMs is dynamically measured,
   // killing any constant mutant (e.g. opts.budgetMs * 2) (mlopt).
+  // In rShort, the child queues 0.4s and then does 0.5s of real work:
+  // lockWaitMs must track the ~400ms queue (< 600ms), killing any total-lifetime
+  // (endedAt - spawnedAt) mutant which reports ~900ms (dbdwu).
   const rShort = await runLockAware({
     executable: "/bin/sh",
-    args: ["-c", `sleep 0.4; echo ${MARK} $(date +%s); sleep 0.1; echo CAP_SECURITY_RESULT '{"ok":true}'`],
+    args: ["-c", `sleep 0.4; echo ${MARK} $(date +%s); sleep 0.5; echo CAP_SECURITY_RESULT '{"ok":true}'`],
     budgetMs: 700,
     lockMarker: MARK,
   });
   assertEquals(rShort.killedFor, null);
   assertEquals(rShort.code, 0);
-  assert(rShort.lockWaitMs >= 300 && rShort.lockWaitMs < 800, `short lock wait should track ~400ms (${rShort.lockWaitMs} ms)`);
+  assert(rShort.lockWaitMs >= 300 && rShort.lockWaitMs < 600, `short lock wait should track ~400ms (${rShort.lockWaitMs} ms)`);
+  assert(rShort.ranMs >= 400 && rShort.ranMs < 700, `short ranMs should track ~500ms (${rShort.ranMs} ms)`);
 
   const rLong = await runLockAware({
     executable: "/bin/sh",

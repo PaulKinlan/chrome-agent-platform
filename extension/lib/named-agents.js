@@ -1000,6 +1000,7 @@ export async function grepAgentMemory(memory, query) {
   const rawKeys = await mem.keys().catch(() => []);
   const keys = (Array.isArray(rawKeys) ? rawKeys : []).filter((k) => !isReservedKey(k));
   for (const key of keys.slice(0, 200)) {
+    if (key === "journal") continue;
     const value = await mem.get(key).catch(() => null);
     let haystack = "";
     try { haystack = JSON.stringify(value ?? null); } catch { haystack = String(value); }
