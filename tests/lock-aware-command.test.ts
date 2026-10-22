@@ -7,16 +7,16 @@ import { runLockAware } from "../scripts/lib/lock-aware-command.ts";
 const MARK = "CAP_SECURITY_LOCK_ACQUIRED";
 
 Deno.test("queueing longer than the budget is NOT a failure once the lock marker arrives", async () => {
-  // Pretends to queue 1.2 s for the lock, then does 0.1 s of real work.
+  // Pretends to queue 1.4 s for the lock, then does 0.1 s of real work.
   const r = await runLockAware({
     executable: "/bin/sh",
-    args: ["-c", `sleep 1.2; echo ${MARK} $(date +%s); sleep 0.1; echo CAP_SECURITY_RESULT '{"ok":true}'`],
+    args: ["-c", `sleep 1.4; echo ${MARK} $(date +%s); sleep 0.1; echo CAP_SECURITY_RESULT '{"ok":true}'`],
     budgetMs: 700,
     lockMarker: MARK,
   });
   assertEquals(r.killedFor, null);
   assertEquals(r.code, 0);
-  assert(r.lockWaitMs >= 700, `lock wait should be measured (${r.lockWaitMs} ms)`);
+  assert(r.lockWaitMs >= 1000, `lock wait should be measured (${r.lockWaitMs} ms)`);
   assert(r.ranMs < 700, `the budget clock started at the marker (${r.ranMs} ms)`);
   assert(r.text.includes("CAP_SECURITY_RESULT"));
 });

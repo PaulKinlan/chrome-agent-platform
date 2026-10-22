@@ -180,3 +180,37 @@ Deno.test("memory.js: INTERNAL_PREFIX_RE is dead and removed; isReservedKey and 
   assert(memoryMod.isReservedKey("__wasmTx:tx1"), "__wasmTx:tx1 must be recognized as reserved");
   assert(!memoryMod.isReservedKey("my_data"), "normal key must not be reserved");
 });
+
+Deno.test("memory_list and memory_grep: never expose reserved authority keys (bnmlv)", async () => {
+  const mem = makeMemory();
+  const t = tools(mem);
+
+  const reservedKeys = [
+    "origins",
+    "enrolled",
+    "assets",
+    "threads",
+    "scripts",
+    "run-registry",
+    "approvals",
+    "agentConfig",
+    "thread:t_1",
+    "run:exec_1",
+  ];
+
+  for (const k of reservedKeys) {
+    mem._map.set(k, { secret: "AUTHORITY-SENTINEL" });
+  }
+  mem._map.set("user_note", { text: "AUTHORITY-SENTINEL in user space" });
+  mem._map.set("safe_key", { data: 123 });
+
+  // memory_list must only return unreserved keys
+  const listResult = await t.memory_list.execute({});
+  assertEquals(listResult.keys.sort(), ["safe_key", "user_note"]);
+
+  // memory_grep must not return reserved keys as memory sources
+  const grepResult = await t.memory_grep.execute({ query: "AUTHORITY-SENTINEL" });
+  const memoryMatches = grepResult.matches.filter((m) => m.source === "memory");
+  assertEquals(memoryMatches.length, 1);
+  assertEquals(memoryMatches[0].key, "user_note");
+});

@@ -490,7 +490,8 @@ export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, 
       execute: async () => {
         const err = await enrolledGuard();
         if (err) return err;
-        const keys = await memory.keys();
+        const rawKeys = await memory.keys();
+        const keys = (Array.isArray(rawKeys) ? rawKeys : []).filter((k) => !isReservedKey(k));
         // POST-read generation revalidation (the round-26 blocker): a re-enroll
         // DURING the awaited keys() read must not return the NEW enrollment's
         // keys to the stale run.
