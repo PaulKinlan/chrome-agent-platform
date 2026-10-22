@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.739] — 2026-10-22
+- Harden ACP offscreen doc check with number-enumerated scan and active falsifiers.
+- The extension's offscreen bundle is now held to a documented 258 KB limit, and the checks that guard it fail if the documentation and the code ever disagree about that number.
+
 ## [0.3.738] — 2026-10-22
 - Account for parameter shadowing in esbuild pre-bundle load pin.
 - The memory tools now hide their internal bookkeeping keys, hashing refuses malformed or oversized seeds instead of guessing, and two test guards that could no longer fail now genuinely fail when the thing they protect breaks.
