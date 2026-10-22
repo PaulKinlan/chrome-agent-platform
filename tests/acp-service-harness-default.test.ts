@@ -10,6 +10,7 @@
 // Driven through `install --dry-run`, which prints the plan and writes NOTHING:
 // that is the install-time context (the process PATH), and no unit is created.
 import { assert, assertEquals } from "jsr:@std/assert@1";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fromFileUrl } from "jsr:@std/path@1/from-file-url";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
@@ -21,9 +22,25 @@ const NODE_BIN = new TextDecoder().decode(
   new Deno.Command("which", { args: ["node"], stdout: "piped" }).outputSync().stdout,
 ).trim() || "node";
 
+const createdScratches = new Set<string>();
+
+async function createTrackedScratch(name: string): Promise<string> {
+  const dir = await durableDir(name);
+  createdScratches.add(dir);
+  return dir;
+}
+
+async function cleanScratch(dir: string) {
+  try {
+    await Deno.remove(dir, { recursive: true });
+  } finally {
+    assert(!existsSync(dir), `scratch dir ${dir} must be removed after test execution`);
+  }
+}
+
 /** A scratch home, a bin dir with exactly `bins`, and the dry-run plan. */
 async function plan({ bins, harness }: { bins: string[]; harness?: string }) {
-  const scratch = await durableDir(`acp-harness-default-${Date.now()}`);
+  const scratch = await createTrackedScratch(`acp-harness-default-${Date.now()}`);
   try {
     const bin = join(scratch, "bin");
     const home = join(scratch, "home");
@@ -49,7 +66,7 @@ async function plan({ bins, harness }: { bins: string[]; harness?: string }) {
       plannedHarness: /harness:\s*(\S+)/.exec(new TextDecoder().decode(res.stdout))?.[1] ?? null,
     };
   } finally {
-    await Deno.remove(scratch, { recursive: true }).catch(() => {});
+    await cleanScratch(scratch);
   }
 }
 
@@ -123,12 +140,12 @@ async function hostDefaultsFor(home: string, makeJournal: boolean, frame: object
 }
 
 Deno.test("acp-bridge: a session with no cwd gets NOTHING invented when $HOME/journal does not exist", async () => {
-  const scratch = await durableDir(`acp-cwd-${Date.now()}`);
+  const scratch = await createTrackedScratch(`acp-cwd-${Date.now()}`);
   try {
     const got = await hostDefaultsFor(join(scratch, "no-journal"), false, { method: "session/new", params: {} });
     assertEquals(got.params?.cwd, undefined, `nothing may be invented: ${JSON.stringify(got)}`);
   } finally {
-    await Deno.remove(scratch, { recursive: true }).catch(() => {});
+    await cleanScratch(scratch);
   }
 });
 
@@ -137,7 +154,7 @@ Deno.test("acp-bridge: a machine that HAS $HOME/journal still does not have it i
   // the invention SAFE and left the KNOWLEDGE in — on any machine with a real
   // ~/journal it would have been silently adopted as the working directory. A
   // tool must not carry somebody's directory convention, so the default is "".
-  const scratch = await durableDir(`acp-cwd-with-${Date.now()}`);
+  const scratch = await createTrackedScratch(`acp-cwd-with-${Date.now()}`);
   try {
     const home = join(scratch, "with-journal");
     const got = await hostDefaultsFor(home, true, { method: "session/new", params: {} });
@@ -146,12 +163,12 @@ Deno.test("acp-bridge: a machine that HAS $HOME/journal still does not have it i
     const explicit = await hostDefaultsFor(home, true, null, join(home, "journal"));
     assertEquals(explicit.params?.cwd, join(home, "journal"), JSON.stringify(explicit));
   } finally {
-    await Deno.remove(scratch, { recursive: true }).catch(() => {});
+    await cleanScratch(scratch);
   }
 });
 
 Deno.test("acp-bridge: an explicit cwd in the frame, or the documented empty host default, is never overridden", async () => {
-  const scratch = await durableDir(`acp-cwd-explicit-${Date.now()}`);
+  const scratch = await createTrackedScratch(`acp-cwd-explicit-${Date.now()}`);
   try {
     const home = join(scratch, "home");
     const explicit = await hostDefaultsFor(home, false, { method: "session/new", params: { cwd: "/somewhere/told" } });
@@ -160,7 +177,7 @@ Deno.test("acp-bridge: an explicit cwd in the frame, or the documented empty hos
     const emptyHostDefault = await hostDefaultsFor(home, false, null, "");
     assertEquals(emptyHostDefault.params?.cwd, undefined, JSON.stringify(emptyHostDefault));
   } finally {
-    await Deno.remove(scratch, { recursive: true }).catch(() => {});
+    await cleanScratch(scratch);
   }
 });
 
@@ -191,11 +208,13 @@ Deno.test("acp-bridge: a client cwd that is missing HERE warns with the path, th
 });
 
 Deno.test("acp-bridge drive: the client's missing cwd is warned about once and reaches the adapter UNSHANGED", async () => {
-  const scratch = await durableDir(`acp-client-cwd-${Date.now()}`);
+  const scratch = await createTrackedScratch(`acp-client-cwd-${Date.now()}`);
   const home = join(scratch, "home");
   const log = join(scratch, "frames.jsonl");
   await Deno.mkdir(home, { recursive: true });
-  const port = 39847;
+  const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
+  const port = (listener.addr as Deno.NetAddr).port;
+  listener.close();
   const bridge = new Deno.Command(Deno.execPath(), {
     args: ["run", "-A", "scripts/acp-bridge.ts", "--port", String(port), "--harness", "claude-code",
       "--adapter", join(Deno.cwd(), "tests/fixtures/acp-fake-adapter.mjs"),
@@ -222,18 +241,23 @@ Deno.test("acp-bridge drive: the client's missing cwd is warned about once and r
   try {
     // Deno's global WebSocket (browser-shaped events), so no client dependency.
     // wait for the listener
+    let up = false;
     for (let i = 0; i < 100; i++) {
       try {
         const probe = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(500) });
-        if (probe.status < 500) break;
+        if (probe.status < 500) {
+          up = true;
+          break;
+        }
       } catch { /* not up yet */ }
       await new Promise((r) => setTimeout(r, 200));
     }
+    assert(up, `the bridge must start and respond to /health on port ${port}; stderr: ${stderrSeen}`);
     const ws = new WebSocket(`ws://127.0.0.1:${port}/acp?token=${TEST_BRIDGE_TOKEN}`);
     await new Promise<void>((resolve, reject) => {
       ws.onopen = () => resolve();
-      ws.onerror = () => reject(new Error("websocket error"));
-      setTimeout(() => reject(new Error("ws open timeout")), 10_000);
+      ws.onerror = () => reject(new Error(`websocket error on port ${port}: ${stderrSeen}`));
+      setTimeout(() => reject(new Error(`ws open timeout on port ${port}: ${stderrSeen}`)), 10_000);
     });
     const frame = JSON.stringify({ jsonrpc: "2.0", id: 7, method: "session/new", params: { cwd: "/no/such/place", mcpServers: [] } });
     ws.send(frame);
@@ -254,6 +278,43 @@ Deno.test("acp-bridge drive: the client's missing cwd is warned about once and r
     try { bridge.kill("SIGKILL"); } catch { /* already gone */ }
     await bridge.status.catch(() => {});
     await collector;
-    await Deno.remove(scratch, { recursive: true }).catch(() => {});
+    await cleanScratch(scratch);
   }
 });
+
+Deno.test("c7a2n/n1os6: all scratch directories created by this run are cleaned up", async () => {
+  // Scoped strictly to paths this run created (immune to foreign lane scratch)
+  assert(createdScratches.size > 0, "test run must have created scratch directories to verify cleanup");
+  const leaked = [];
+  for (const path of createdScratches) {
+    if (existsSync(path)) {
+      leaked.push(path);
+    }
+  }
+  assertEquals(leaked, [], `all scratch directories created by this run must be cleaned up (leaked: ${leaked.join(", ")})`);
+
+  // Falsifier: a foreign acp-harness-default-* dir present in durableRoot must PASS
+  const { durableRoot } = await import("../scripts/lib/durable-root.mjs");
+  const root = durableRoot();
+  const foreignDir = join(root, `acp-harness-default-foreign-${Date.now()}`);
+  await Deno.mkdir(foreignDir, { recursive: true });
+  try {
+    const foreignLeakCheck = [...createdScratches].filter((p) => existsSync(p));
+    assertEquals(foreignLeakCheck, [], "foreign scratch directory must not affect this run's cleanup verdict");
+  } finally {
+    await Deno.remove(foreignDir, { recursive: true });
+  }
+
+  // Falsifier: an expected scratch dir still existing on disk must FAIL
+  const fakeLeaked = join(root, `acp-harness-default-fake-leak-${Date.now()}`);
+  await Deno.mkdir(fakeLeaked, { recursive: true });
+  createdScratches.add(fakeLeaked);
+  try {
+    const shouldFailCheck = [...createdScratches].filter((p) => existsSync(p));
+    assertEquals(shouldFailCheck, [fakeLeaked], "uncleaned scratch directory must be detected as leaked");
+  } finally {
+    createdScratches.delete(fakeLeaked);
+    await Deno.remove(fakeLeaked, { recursive: true });
+  }
+});
+

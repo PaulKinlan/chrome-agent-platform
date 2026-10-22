@@ -43,7 +43,7 @@ const unawait = (node: Ast | null | undefined): Ast | null | undefined =>
 
 /** Source-only prefilter is an optimisation, never the verdict. AST nodes decide. */
 function browserKillShape(source: string): Shape {
-  if (!source.includes("launchChrome") || !source.includes(".kill")) {
+  if (!source.includes("kill")) {
     return { launches: 0, bareKills: 0 };
   }
   const { code } = transformSync(source, { loader: "ts", format: "esm", target: "esnext" });
@@ -73,10 +73,10 @@ function browserKillShape(source: string): Shape {
       if (containsLaunch) launchers.add(functionName);
     }
   });
-  if (!launches) return { launches: 0, bareKills: 0 };
 
   const handles = new Set<string>();
   const procs = new Set<string>();
+  const pids = new Set<string>();
   const launchish = (node: Ast | null | undefined) => {
     const call = unawait(node);
     return call?.type === "CallExpression" &&
@@ -105,6 +105,22 @@ function browserKillShape(source: string): Shape {
       const owner = dotted(assign.right.object);
       if (owner && handles.has(owner)) procs.add(assign.left.name);
     }
+    // Track destructured pid: const { pid } = chrome.proc; or const { pid } = proc;
+    if (node.type === "VariableDeclarator" && node.id.type === "ObjectPattern") {
+      const initTarget = dotted(node.init);
+      if (initTarget && (procs.has(initTarget) || [...handles].some((h) => initTarget === `${h}.proc`) || initTarget.endsWith(".proc"))) {
+        for (const prop of node.id.properties) {
+          if (prop.key?.name === "pid" && prop.value?.type === "Identifier") pids.add(prop.value.name);
+        }
+      }
+    }
+    // Track direct pid assignment: const pid = chrome.proc.pid;
+    if (assign?.left?.type === "Identifier" && dotted(assign.right)?.endsWith(".pid")) {
+      const parentTarget = dotted(assign.right.object);
+      if (parentTarget && (procs.has(parentTarget) || [...handles].some((h) => parentTarget === `${h}.proc`) || parentTarget.endsWith(".proc"))) {
+        pids.add(assign.left.name);
+      }
+    }
   });
 
   let bareKills = 0;
@@ -112,10 +128,12 @@ function browserKillShape(source: string): Shape {
     if (node.type !== "CallExpression") return;
     const callee = dotted(node.callee);
     if (!callee) return;
-    if (callee === "Deno.kill") {
+    if (callee === "Deno.kill" || callee === "nodeProcess.kill" || callee === "process.kill") {
       const target = dotted(node.arguments[0]);
-      if (target && ([...procs].some((p) => target === `${p}.pid`) ||
-        [...handles].some((h) => target === `${h}.proc.pid`))) bareKills++;
+      if (target && (pids.has(target) || [...procs].some((p) => target === `${p}.pid`) ||
+        [...handles].some((h) => target === `${h}.proc.pid`) || target.endsWith(".proc.pid"))) {
+        bareKills++;
+      }
       return;
     }
     if (!callee.endsWith(".kill")) return;
@@ -253,6 +271,20 @@ Deno.test("6efbv: fresh script and changed allowlisted shape mutants turn the ru
   const pidKill = `const chrome = await launchChrome({profile: "P"}); Deno.kill(chrome.proc.pid, "SIGKILL");`;
   assert(audit({ "scripts/new-pid-kill.ts": pidKill }, {}).some((s) => s.includes("unlisted launchChrome bare kill")),
     "killing the browser by pid instead of through its handle is still bare");
+
+  // lt2e2: bare kill of imported browser handle without in-file launchChrome
+  const importedHandleKill = `function cleanup(chrome: any) { chrome.proc.kill("SIGKILL"); }`;
+  assert(audit({ "scripts/imported-kill.ts": importedHandleKill }, {}).some((s) => s.includes("unlisted launchChrome bare kill")),
+    "lt2e2: bare kill of imported handle must be detected without launchChrome in file");
+
+  // r52vz: destructured pid and process.kill
+  const destructuredPidKill = `const chrome = await launchChrome({profile: "P"}); const { pid } = chrome.proc; Deno.kill(pid, "SIGKILL");`;
+  assert(audit({ "scripts/new-destructured-pid.ts": destructuredPidKill }, {}).some((s) => s.includes("unlisted launchChrome bare kill")),
+    "r52vz: destructured pid kill must be detected as bare kill");
+
+  const processKill = `import nodeProcess from "node:process"; const chrome = await launchChrome({profile: "P"}); nodeProcess.kill(chrome.proc.pid, "SIGKILL");`;
+  assert(audit({ "scripts/new-process-kill.ts": processKill }, {}).some((s) => s.includes("unlisted launchChrome bare kill")),
+    "r52vz: nodeProcess.kill of browser pid must be detected as bare kill");
 
   const original = Deno.readTextFileSync(`${ROOT}${CUSTODY_RUNNER}`);
   const needle = "    await reapLeaderAndSettle(chrome.proc);";

@@ -14,7 +14,6 @@ import { settleAll } from "./build-concurrency.mjs";
  *
  * @param {string} runtimeSrc Directory containing MANIFEST.json and runtime assets
  * @param {string} stageDistDir Target staging directory (where wasm-tools/python/ will be created)
- * @param {object} [options] Injection options for testing/mocking
  * @returns {Promise<number>} Number of staged files
  */
 export async function stagePyodideRuntime(runtimeSrc, stageDistDir) {

@@ -12,6 +12,7 @@ import {
   DEFAULT_DURABLE_DIR_MIN_FREE_BYTES,
   freeSpaceVerdict,
   isRamBacked,
+  nearestExistingAncestor,
   trimStaleScratch,
 } from "../scripts/lib/durable-root.mjs";
 
@@ -943,3 +944,101 @@ Deno.test("zcg7p/kkczc: when staleness cannot be PROVEN the entry is kept (bound
     await Deno.remove(root, { recursive: true }).catch(() => {});
   }
 });
+
+Deno.test("sd5h6: nearestExistingAncestor finds the closest existing directory instead of homedir", async () => {
+  const root = await Deno.makeTempDir({ prefix: "cap-ancestor-probe-" });
+  try {
+    const parent = join(root, "level1");
+    const child = join(parent, "level2", "level3");
+    // Before level1 exists, nearest existing ancestor of child is root
+    assertEquals(nearestExistingAncestor(child), root);
+    // After creating level1, nearest existing ancestor of child is level1
+    await Deno.mkdir(parent, { recursive: true });
+    assertEquals(nearestExistingAncestor(child), parent);
+  } finally {
+    await Deno.remove(root, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("wvg1s: trimStaleScratch prunes stale top-level epoch-suffixed run dirs and preserves named evidence", async () => {
+  const root = await Deno.makeTempDir({ prefix: "cap-epoch-trim-probe-" });
+  const now = Date.now();
+  const hour = 60 * 60 * 1000;
+  const old = (now - 2 * hour) / 1000;
+  const staleEpoch = now - 2 * hour;
+  const freshEpoch = now - 5 * 60 * 1000; // 5 min ago
+
+  try {
+    const staleDir = `${root}/3yfs-matrix-${staleEpoch}`;
+    const freshDir = `${root}/3yfs-matrix-${freshEpoch}`;
+    const namedEvidence = `${root}/lead-evidence-named`;
+
+    for (const d of [staleDir, freshDir, namedEvidence]) {
+      Deno.mkdirSync(d, { recursive: true });
+      Deno.writeTextFileSync(`${d}/log.txt`, "content");
+    }
+    Deno.utimeSync(staleDir, old, old);
+    Deno.utimeSync(`${staleDir}/log.txt`, old, old);
+    Deno.utimeSync(namedEvidence, old, old);
+    Deno.utimeSync(`${namedEvidence}/log.txt`, old, old);
+
+    // Stale epoch-suffixed dir is trimmed, fresh epoch dir survives, and named evidence without epoch suffix survives
+    const res = trimStaleScratch(root, { now, minAgeMs: hour, maxEntries: 10 });
+    assertEquals(res.removed, 1, "only the stale epoch-suffixed directory is trimmed");
+    assertEquals(existsSyncGuard(staleDir), false, "stale epoch dir must be deleted");
+    assertEquals(existsSyncGuard(freshDir), true, "fresh epoch dir must survive");
+    assertEquals(existsSyncGuard(namedEvidence), true, "named evidence dir without epoch suffix must survive");
+  } finally {
+    await Deno.remove(root, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("wvg1s: durableDir relieves entry cap pressure by trimming stale epoch-suffixed entries", async () => {
+  const root = await Deno.makeTempDir({ prefix: "cap-durable-cap-relief-" });
+  const now = Date.now();
+  const hour = 60 * 60 * 1000;
+  const old = (now - 2 * hour) / 1000;
+  const staleEpoch = now - 2 * hour;
+
+  // Run in a child process so CAP_DURABLE_ROOT and CAP_DURABLE_DIR_MAX_ENTRIES do not affect parallel tests
+  const script = `
+    import { durableDir } from "./scripts/lib/durable-root.mjs";
+    import { assertEquals } from "jsr:@std/assert@1";
+    import { existsSync, mkdirSync, utimesSync, writeFileSync } from "node:fs";
+
+    const root = ${JSON.stringify(root)};
+    const staleDir = root + "/matrix-" + ${staleEpoch};
+    mkdirSync(staleDir, { recursive: true });
+    writeFileSync(staleDir + "/log.txt", "old");
+    utimesSync(staleDir, ${old}, ${old});
+    utimesSync(staleDir + "/log.txt", ${old}, ${old});
+
+    // Parent has 1 entry (staleDir). Set cap to 1.
+    // Without trim relief, creating a new dir under root would fail with CAP_DURABLE_DIR_MAX_ENTRIES.
+    // With trim relief, staleDir is pruned and newDir is created successfully!
+    const created = durableDir("newDir");
+    assertEquals(existsSync(created), true, "newDir must be created");
+    assertEquals(existsSync(staleDir), false, "staleDir must be trimmed to make room");
+  `;
+
+  const proc = new Deno.Command(Deno.execPath(), {
+    args: ["eval", script],
+    cwd: ROOT,
+    env: {
+      ...Deno.env.toObject(),
+      CAP_DURABLE_ROOT: root,
+      CAP_DURABLE_DIR_MAX_ENTRIES: "1",
+    },
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const res = await proc.output();
+  try {
+    assertEquals(res.code, 0, new TextDecoder().decode(res.stderr));
+  } finally {
+    await Deno.remove(root, { recursive: true }).catch(() => {});
+  }
+});
+
+
+

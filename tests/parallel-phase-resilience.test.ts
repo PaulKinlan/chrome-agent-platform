@@ -1038,6 +1038,19 @@ error: AssertionError: Expected error to be instance of "QuietWindowRefusedError
  FAILURES 
 `;
   assertEquals(areAllFailuresEnvironmental(assertRejectsForgedBody), false, "assertRejects errorBody naming QuietWindowRefusedError must not mask AssertionError");
+
+  // Finding hl3yn: AssertionError embedding a real environmental refusal marker must NOT convert an assertion failure to environmental
+  const assertRejectsEmbeddingRealMarker = `
+ ERRORS 
+
+genuine product regression => ./tests/quiet-window.test.ts:445:6
+error: AssertionError: Expected error to be instance of "QuietWindowRefusedError", but was "QuietWindowRefusedError: ENVIRONMENT: machine is not quiet enough for this gate".
+  throw new AssertionError(message);
+        ^
+
+ FAILURES 
+`;
+  assertEquals(areAllFailuresEnvironmental(assertRejectsEmbeddingRealMarker), false, "AssertionError embedding real environmental refusal marker must NOT be converted to environmental");
 });
 
 Deno.test("ic1pa: processGroup returns null on ESRCH / vanished process", async () => {

@@ -199,7 +199,32 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string, r
     const allowlistMatches = sourceAnchorNodes(swAst, "PAGE_ALLOWED_ROUTES.has");
     if (listenerMatches.length === 1 && allowlistMatches.length === 1) {
       const listenerCall = listenerMatches[0].node;
-      const callback = listenerCall.arguments?.[0];
+      let callback = listenerCall.arguments?.[0];
+      // Resolve Identifier callback to its function declaration/variable declarator (uuq1o)
+      if (callback?.type === "Identifier") {
+        const name = callback.name;
+        let resolved = null;
+        const findDecl = (node: any) => {
+          if (!node || typeof node !== "object" || resolved) return;
+          if (node.type === "FunctionDeclaration" && node.id?.name === name) {
+            resolved = node;
+            return;
+          }
+          if (node.type === "VariableDeclarator" && node.id?.name === name && node.init &&
+              (node.init.type === "FunctionExpression" || node.init.type === "ArrowFunctionExpression")) {
+            resolved = node.init;
+            return;
+          }
+          for (const key of Object.keys(node)) {
+            if (key === "start" || key === "end" || key === "loc") continue;
+            const val = node[key];
+            if (Array.isArray(val)) val.forEach(findDecl);
+            else if (val && typeof val === "object") findDecl(val);
+          }
+        };
+        findDecl(swAst);
+        if (resolved) callback = resolved;
+      }
       const allowlistCall = allowlistMatches[0].node;
       assert(
         callback &&
@@ -209,6 +234,29 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string, r
           allowlistCall.end <= callback.end,
         "extension/background/service-worker.js#PAGE_ALLOWED_ROUTES.has must be contained within " +
           "the extension/background/service-worker.js#chrome.runtime.onMessage.addListener callback",
+      );
+      // Verify allowlistCall is directly within the listener callback, not an inner function (uuq1o)
+      let enclosingFunction: any = null;
+      const findEnclosing = (node: any) => {
+        if (!node || typeof node !== "object") return;
+        const isFn = node.type === "FunctionDeclaration" || node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression";
+        if (isFn && allowlistCall.start >= node.start && allowlistCall.end <= node.end) {
+          if (!enclosingFunction || (node.start >= enclosingFunction.start && node.end <= enclosingFunction.end)) {
+            enclosingFunction = node;
+          }
+        }
+        for (const key of Object.keys(node)) {
+          if (key === "start" || key === "end" || key === "loc") continue;
+          const val = node[key];
+          if (Array.isArray(val)) val.forEach(findEnclosing);
+          else if (val && typeof val === "object") findEnclosing(val);
+        }
+      };
+      findEnclosing(swAst);
+      assertEquals(
+        enclosingFunction,
+        callback,
+        "PAGE_ALLOWED_ROUTES.has must be directly inside the message listener callback body, not hidden in an inner function",
       );
     }
   }

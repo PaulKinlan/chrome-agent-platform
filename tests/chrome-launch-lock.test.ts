@@ -48,8 +48,14 @@ async function fakeBrowser(): Promise<string> {
 async function removeTempFile(path: string, set?: Set<string>): Promise<void> {
   try {
     await Deno.remove(path);
-  } catch { /* already gone */ }
-  set?.delete(path);
+    set?.delete(path);
+  } catch (e) {
+    if (e instanceof Deno.errors.NotFound) {
+      set?.delete(path);
+    } else {
+      throw e;
+    }
+  }
 }
 
 /** Hold the canonical lock path exclusively from OUTSIDE this process, and CONFIRM the hold
@@ -207,4 +213,6 @@ Deno.test("cleanup: chrome-launch-lock restores env after temporary lock fixture
   for (const fake of [...activeFakes]) {
     await removeTempFile(fake, activeFakes);
   }
+  assertEquals(activeLocks.size, 0, "all activeLocks must be cleaned up");
+  assertEquals(activeFakes.size, 0, "all activeFakes must be cleaned up");
 });
