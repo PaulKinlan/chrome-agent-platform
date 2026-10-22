@@ -1,9 +1,11 @@
 // Shared live custody helpers for the serialized real-Chromium security suite.
 // Production supervision and no-Chrome mutants call these same functions.
 //
-// Platform note (chrome-agent-platform-jjsz): process identity is read from `/proc` where it exists and
-// from `/bin/ps` on macOS. `ps` cannot report a session id, so a macOS identity carries `sid` = `pgid` and
-// the PGID/SID attestation proves less there (see parsePsIdentityLine and attestOwnedGroup). A `ps` that
+// Platform note (chrome-agent-platform-jjsz / chrome-agent-platform-xjjhi): process identity is read
+// from `/proc` where it exists and from `/bin/ps` on macOS. `ps` cannot report an explicit session id
+// keyword, but `ps -o stat=` carries the 's' flag for session leaders (e.g. 'Ss' for a detached/setsid leader).
+// On the no-/proc branch, `sid` is derived as `pid` when the process is a session leader (`s` flag present
+// and `pgid === pid`), and `null` otherwise (see parsePsIdentityLine and attestOwnedGroup). A `ps` that
 // cannot answer is "unreadable", which is never treated as "gone" (see readProcIdentity).
 
 import { execFile } from "node:child_process";
@@ -150,11 +152,13 @@ export function parseProcStat(raw) {
   return identity;
 }
 
-function parsePsIdentityLine(line) {
-  const m = /^\s*(\d+)\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/u.exec(line);
+export function parsePsIdentityLine(line) {
+  const m = /^\s*(\d+)\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s*$/u.exec(line);
   if (!m) return null;
   const pid = Number(m[1]);
-  const state = m[2][0] ?? "";
+  const statStr = m[2];
+  const state = statStr[0] ?? "";
+  const isSessionLeader = statStr.slice(1).includes("s") || statStr === "s";
   const ppid = Number(m[3]);
   const pgid = Number(m[4]);
   const uid = Number(m[5]);
@@ -174,13 +178,13 @@ function parsePsIdentityLine(line) {
     state,
     ppid,
     pgid,
-    // NOT A MEASUREMENT (chrome-agent-platform-jjsz F5). macOS `ps` has no session-id keyword (`sess`
-    // prints 0 for every process and `tpgid` is the terminal's group), so the session id CANNOT be read
-    // here and is set EQUAL TO THE PGID. Consequence: attestOwnedGroup's `sid === pid` half is vacuous on
-    // this branch and only `pgid === pid` (+ uid) is proven; see attestOwnedGroup. The STAT column's `s`
-    // flag does mark a session leader and could close that gap; it is not wired, and nothing here may
-    // read this field as evidence of a session.
-    sid: pgid,
+    // chrome-agent-platform-xjjhi: on macOS (no /proc), `ps` has no session-id keyword (`sess` prints 0
+    // on Darwin). But `ps -o stat=` includes 's' when the process is a session leader (e.g. 'Ss' for a
+    // detached/setsid'd leader, vs 'S' for a setpgid-only process or 'S+' for a foreground child).
+    // Deriving sid = pid when the 's' flag is present and the process is its own group leader (pgid === pid),
+    // and null otherwise, gives attestOwnedGroup a genuine measurement to distinguish setsid leaders from
+    // setpgid-only processes.
+    sid: (isSessionLeader && pgid === pid) ? pid : null,
     starttime,
     uid,
   };
@@ -259,7 +263,7 @@ export async function readProcIdentity(pid, deps = {}) {
     try {
       ({ stdout } = await run("/bin/ps", [
         "-o",
-        "pid=,state=,ppid=,pgid=,uid=,lstart=",
+        "pid=,stat=,ppid=,pgid=,uid=,lstart=",
         "-p",
         String(pid),
       ]));
@@ -659,21 +663,18 @@ export async function cleanupExactProfile(options) {
  * Attest that `pid` leads a process group (and, where the platform lets us read it, a session) that
  * this uid owns, so a negative-PGID signal can only reach that group.
  *
- * WHAT IT PROVES DIFFERS BY PLATFORM (chrome-agent-platform-jjsz F5).
+ * WHAT IT PROVES DIFFERS BY PLATFORM (chrome-agent-platform-jjsz F5 / chrome-agent-platform-xjjhi).
  *  - Linux (`/proc`): `pid === pgid && pid === sid && uid === expectedUid`. The session id is READ from
  *    `/proc/<pid>/stat`, so a runner that only called setpgid(0, 0) and never setsid() is refused.
- *  - macOS (no `/proc`): `ps` has no session-id keyword, so parsePsIdentityLine sets `sid` EQUAL TO
- *    `pgid`. The `sid === pid` clause is therefore implied by `pgid === pid` and proves nothing about a
- *    session: only `pgid === pid` and the uid are attested. A runner that did setpgid(0, 0) without
- *    setsid() passes here and is refused on Linux.
- * The supervisor starts the runner with `detached: true` (libuv calls setsid) on both platforms, so
- * real runs ARE session leaders by construction; the attestation on macOS just does not verify it. The
- * STAT column's `s` flag marks a session leader and could close that gap; it is not wired.
+ *  - macOS (no `/proc`): `ps` has no session-id keyword, but `ps -o stat=` includes the 's' flag for session
+ *    leaders. parsePsIdentityLine derives `sid: pid` when 's' is present and `pgid === pid`, and `null`
+ *    otherwise. A detached/setsid launch (Ss) attests successfully; a setpgid-only launch (S) or plain
+ *    foreground child (S+) produces sid: null and is refused.
  *
  * @param {number} pid
  * @param {{
  *   expectedUid?: number,
- *   readIdentity?: (pid: number) => Promise<{pid: number, pgid: number, sid: number, uid: number}>,
+ *   readIdentity?: (pid: number) => Promise<{pid: number, pgid: number, sid: number | null, uid: number}>,
  * }} [options]
  */
 export async function attestOwnedGroup(pid, {
@@ -750,7 +751,7 @@ export async function procIdentities(deps = {}) {
     try {
       ({ stdout } = await run("/bin/ps", [
         "-axo",
-        "pid=,state=,ppid=,pgid=,uid=,lstart=",
+        "pid=,stat=,ppid=,pgid=,uid=,lstart=",
       ]));
     } catch (error) {
       if (error?.code === "ENOBUFS" || error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {

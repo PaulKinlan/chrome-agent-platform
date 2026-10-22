@@ -36,6 +36,7 @@ import {
   PS_ENV,
   observeDescendants,
   parseProcStat,
+  parsePsIdentityLine,
   procIdentities,
   ProcessGoneError,
   ProcessUnreadableError,
@@ -59,7 +60,7 @@ function psFailure(over: Record<string, unknown> = {}): Error {
 const rejecting = (error: Error): Run => () => Promise.reject(error);
 const printing = (stdout: string): Run => () => Promise.resolve({ stdout, stderr: "" });
 
-const psRow = (pid: number, ppid: number, pgid: number, uid = UID, state = "S", lstart = C_LSTART) =>
+const psRow = (pid: number, ppid: number, pgid: number, uid = UID, state = "Ss", lstart = C_LSTART) =>
   `${String(pid).padStart(5)} ${state.padEnd(2)} ${String(ppid).padStart(5)} ${
     String(pgid).padStart(5)
   } ${String(uid).padStart(5)} ${lstart}`;
@@ -170,7 +171,7 @@ Deno.test("jjsz F2: a healthy ps row parses to the documented identity", async (
   assert(Number.isFinite(ms), "fixture: this runtime must parse a C-locale lstart");
   const identity = await readProcIdentity(1234, {
     hasProc: false,
-    run: printing(`  1234 S+     1  1234   ${UID} ${C_LSTART}\n`),
+    run: printing(`  1234 Ss     1  1234   ${UID} ${C_LSTART}\n`),
   });
   assertEquals(identity, {
     pid: 1234,
@@ -201,26 +202,66 @@ Deno.test("jjsz F2: readProcIdentity picks its branch by hasProc, and the /proc 
 });
 
 // ---------------------------------------------------------------------------------------------
-// F5: the session id is a copy, and what that does to the attestation
+// F5 & chrome-agent-platform-xjjhi: session leadership from ps -o stat= s-flag
 // ---------------------------------------------------------------------------------------------
 
-Deno.test("jjsz F5: the no-/proc session id is a COPY of the process group id (documented, not measured)", async () => {
-  // pid 1235 sits in group 1000 under parent 1: the copy must come from the group, not the pid or the parent.
-  const identity = await readProcIdentity(1235, { hasProc: false, run: printing(psRow(1235, 1, 1000)) });
-  assertEquals(identity.pgid, 1000);
-  assertEquals(identity.sid, 1000, "sid is synthesised from pgid, because ps cannot print a session id");
-  assertNotEquals(identity.sid, identity.pid);
-  assertNotEquals(identity.sid, identity.ppid);
+Deno.test("xjjhi: parsePsIdentityLine derives sid = pid for session leaders (Ss) and null for non-leaders (S, S+)", () => {
+  // Ss: setsid leader (pid === pgid, s flag in stat) => sid: pid
+  const leader = parsePsIdentityLine(`  1234 Ss 1 1234 ${UID} ${C_LSTART}\n`);
+  assert(leader !== null);
+  assertEquals(leader.pid, 1234);
+  assertEquals(leader.pgid, 1234);
+  assertEquals(leader.sid, 1234, "Ss leader must have sid === pid");
+  assertEquals(leader.state, "S");
+
+  // S: setpgid-only (pid === pgid, but NOT setsid - no 's' in stat) => sid: null
+  const setpgidOnly = parsePsIdentityLine(`  1234 S 1 1234 ${UID} ${C_LSTART}\n`);
+  assert(setpgidOnly !== null);
+  assertEquals(setpgidOnly.pid, 1234);
+  assertEquals(setpgidOnly.pgid, 1234);
+  assertEquals(setpgidOnly.sid, null, "S setpgid-only process must have sid: null");
+
+  // S+: plain foreground child in another session => sid: null
+  const foreground = parsePsIdentityLine(`  1235 S+ 1234 1234 ${UID} ${C_LSTART}\n`);
+  assert(foreground !== null);
+  assertEquals(foreground.pid, 1235);
+  assertEquals(foreground.pgid, 1234);
+  assertEquals(foreground.sid, null, "S+ child must have sid: null");
+
+  // R+s / Rs / Ss+: session leader flags anywhere in stat string
+  const runningLeader = parsePsIdentityLine(`  5000 Rs 1 5000 ${UID} ${C_LSTART}\n`);
+  assert(runningLeader !== null);
+  assertEquals(runningLeader.sid, 5000);
 });
 
-Deno.test("jjsz F5: the PGID/SID attestation proves only pgid and uid on the no-/proc branch", async () => {
-  // macOS: pgid === pid is all that can be shown; sid === pgid by construction, so the sid half is vacuous.
-  const mac = (pid: number) => readProcIdentity(pid, { hasProc: false, run: printing(psRow(4242, 1, 4242)) });
-  const accepted = await attestOwnedGroup(4242, { expectedUid: UID, readIdentity: mac });
-  assertEquals(accepted.ok, true, "a macOS group leader passes on pgid and uid alone");
+Deno.test("xjjhi: attestOwnedGroup on no-/proc branch distinguishes setsid leaders from setpgid-only", async () => {
+  // macOS: a genuine detached/setsid leader (Ss) passes attestation
+  const macLeader = (pid: number) => readProcIdentity(pid, { hasProc: false, run: printing(psRow(4242, 1, 4242, UID, "Ss")) });
+  const accepted = await attestOwnedGroup(4242, { expectedUid: UID, readIdentity: macLeader });
+  assertEquals(accepted.ok, true, "a macOS setsid leader (Ss) passes attestation");
+
+  // macOS: a setpgid-only process (S) without session leadership fails closed
+  const macSetpgidOnly = (pid: number) => readProcIdentity(pid, { hasProc: false, run: printing(psRow(4242, 1, 4242, UID, "S")) });
+  const refusedSetpgid = await attestOwnedGroup(4242, { expectedUid: UID, readIdentity: macSetpgidOnly });
+  assertEquals(refusedSetpgid.ok, false, "a setpgid-only process (S) without 's' flag must fail closed");
+  assertMatch(String(refusedSetpgid.reason), /sid=null/u, "the refusal names sid=null");
+
+  // FALSIFIER: if the old unstrengthened behavior (sid = pgid) were used, the setpgid-only process
+  // would erroneously pass attestation.
+  const oldUnstrengthenedIdentity = {
+    pid: 4242,
+    state: "S",
+    ppid: 1,
+    pgid: 4242,
+    sid: 4242, // old behavior: sid was set equal to pgid
+    starttime: "123456",
+    uid: UID,
+  };
+  const falsePass = await attestOwnedGroup(4242, { expectedUid: UID, readIdentity: () => Promise.resolve(oldUnstrengthenedIdentity) });
+  assertEquals(falsePass.ok, true, "falsifier: old unstrengthened behavior produced false pass on setpgid-only process");
 
   // The same pid and pgid on Linux, where /proc DOES report the session: a process that only did
-  // setpgid(0, 0) (sid 999 != pid) is refused. This is the half macOS cannot check.
+  // setpgid(0, 0) (sid 999 != pid) is refused.
   const fields = Array.from({ length: 40 }, () => "0");
   Object.assign(fields, { 0: "S", 1: "1", 2: "4242", 3: "999", 19: "123456" });
   const linux = { ...parseProcStat(`4242 (runner) ${fields.join(" ")}`), uid: UID };
@@ -230,12 +271,12 @@ Deno.test("jjsz F5: the PGID/SID attestation proves only pgid and uid on the no-
   assertMatch(String(refused.reason), /sid=999/u, "the refusal names the session the /proc branch read");
 
   // The uid half is real on both platforms.
-  const wrongUid = await attestOwnedGroup(4242, { expectedUid: UID + 1, readIdentity: mac });
+  const wrongUid = await attestOwnedGroup(4242, { expectedUid: UID + 1, readIdentity: macLeader });
   assertEquals(wrongUid.ok, false);
   // And so is pid === pgid.
   const notLeader = await attestOwnedGroup(4243, {
     expectedUid: UID,
-    readIdentity: (pid) => readProcIdentity(pid, { hasProc: false, run: printing(psRow(4243, 1, 4242)) }),
+    readIdentity: (pid) => readProcIdentity(pid, { hasProc: false, run: printing(psRow(4243, 1, 4242, UID, "Ss")) }),
   });
   assertEquals(notLeader.ok, false);
 });
