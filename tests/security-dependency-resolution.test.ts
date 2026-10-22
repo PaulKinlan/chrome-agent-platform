@@ -62,6 +62,29 @@ function isPropertyKey(node, parent) {
   return false;
 }
 
+function hasFunctionScopedVar(fnNode, name) {
+  const queue = [fnNode.body];
+  while (queue.length) {
+    const curr = queue.shift();
+    if (!curr || typeof curr !== "object") continue;
+    if (curr !== fnNode.body && ["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"].includes(curr.type)) {
+      continue;
+    }
+    if (curr.type === "VariableDeclaration" && curr.kind === "var") {
+      for (const decl of curr.declarations) {
+        if (bindingNames(decl.id).includes(name)) return decl.init ?? null;
+      }
+    }
+    for (const key of Object.keys(curr)) {
+      if (key === "parent" || key === "loc" || key === "start" || key === "end") continue;
+      const val = curr[key];
+      if (Array.isArray(val)) queue.push(...val);
+      else if (val && typeof val === "object") queue.push(val);
+    }
+  }
+  return undefined;
+}
+
 function findScopedDeclarator(identNode, parents) {
   if (!identNode || identNode.type !== "Identifier" || !parents) return null;
   const name = identNode.name;
@@ -101,6 +124,10 @@ function findScopedDeclarator(identNode, parents) {
       }
       if (p.id?.name === name) {
         return null;
+      }
+      const hoistedVar = hasFunctionScopedVar(p, name);
+      if (hoistedVar !== undefined) {
+        return hoistedVar;
       }
     }
     if ((p.type === "ClassDeclaration" || p.type === "ClassExpression") && p.id?.name === name) {
@@ -339,6 +366,8 @@ Deno.test("bbz3s: comment, conditional, late and swallowed-check mutants cannot 
       `    function __f(){ const __n = "esbuild"; require(__n); } const __n = "lodash";\n${line}`), "esbuild cannot be loaded outside"],
     ["dynamic import computed member access (hz68x)", replaceOnce(source, line,
       `    const decoy = await import(["esbuild"][0]);\n${line}`), "esbuild cannot be loaded outside"],
+    ["require hoisted var in block resolves to esbuild (wglzv)", replaceOnce(source, line,
+      `    function __v2(){ if (1) { var __n2 = "esbuild"; } require(__n2); }\n${line}`), "esbuild cannot be loaded outside"],
     ["build alias evades the bundle scan", replaceOnce(source, line,
       `    const bundledEarly = build; bundledEarly({ entryPoints: ["decoy.js"] });\n${line}`), "build must be called directly"],
   ];
@@ -363,6 +392,9 @@ Deno.test("bbz3s: comment, conditional, late and swallowed-check mutants cannot 
   assertEquals(preBundleGuardProblems(legalParam), [], "ja7kv: function param shadowing outer esbuild const must not red");
   const legalCatch = replaceOnce(source, line, `    try {} catch (__n){ require(__n); } const __n = "esbuild";\n${line}`);
   assertEquals(preBundleGuardProblems(legalCatch), [], "ja7kv: catch param shadowing outer esbuild const must not red");
+  // wglzv: unrelated require of a function-scoped var hoisted out of a sibling block must not falsely RED
+  const legalVarHoist = replaceOnce(source, line, `    function __v(){ if (1) { var __n = "lodash"; } require(__n); } const __n = "esbuild";\n${line}`);
+  assertEquals(preBundleGuardProblems(legalVarHoist), [], "wglzv: hoisted var shadowing outer esbuild const must not red");
   // tp912: named function/class expression id and for-of head declarator shadowing outer esbuild const must not falsely RED
   const legalFne = replaceOnce(source, line, `    const __fne = function __n(){ require(__n); }; const __n = "esbuild";\n${line}`);
   assertEquals(preBundleGuardProblems(legalFne), [], "tp912: function expression id shadowing outer esbuild const must not red");
