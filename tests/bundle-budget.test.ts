@@ -7,11 +7,11 @@
 // shipped 141k lines of readable JS). The fix: metafile-backed contributor
 // reporting on every build, store-target minification after the eval scrub,
 // and a measured 3.0 MB store SW reference (advisory since 2026-10-05).
-// rmoh8 enforces only the offscreen store ceiling (256000 at rmoh8, ratcheted
+// rmoh8 enforces only the offscreen store ceiling (250000 at rmoh8, ratcheted
 // to 258000 by bwxf's wave-2 admission: 4 new manifest identities measured
 // 255306 bytes).
 //
-// Falsification: a synthetic 256001-byte offscreen bundle fails naming its
+// Falsification: a synthetic 258001-byte offscreen bundle fails naming its
 // source and top contributors. The order pin (scrub BEFORE
 // minify) is the safety-critical invariant: the eval scrub's textual patterns
 // only match unminified code.
