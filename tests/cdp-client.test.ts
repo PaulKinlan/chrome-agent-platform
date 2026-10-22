@@ -330,15 +330,11 @@ Deno.test("startup: a FAILING test-build child preserves its first cause (exit c
     const cpMod2 = "node:child_process";
     const { execSync } = await import(cpMod2);
     const srcRoot = fileURLToPath(new URL("..", import.meta.url));
-    // Copy ONLY `scripts/` (where build-test-extension.mjs is mutated for this test)
-    // and copy minimal configuration manifests (deno.json, deno.lock, package.json).
-    // Do NOT symlink the real tree (.git, node_modules, extension) into the scratch repo
-    // to prevent any stray child writes from leaking into the live repository (chrome-agent-platform-jos6s).
+    // Copy ONLY `scripts/` (where build-test-extension.mjs is mutated for this test).
+    // Do NOT symlink or copy files from the real tree (.git, node_modules, extension)
+    // to prevent any stray child writes from leaking into the live repository (chrome-agent-platform-jos6s, bn43m).
     await fsp2.mkdir(path2.join(repo, "scripts"), { recursive: true });
     execSync(`rsync -a --exclude '/.cache/' ${JSON.stringify(path2.join(srcRoot, "scripts") + "/")} ${JSON.stringify(path2.join(repo, "scripts") + "/")}`, { shell: "/bin/bash", stdio: "pipe" });
-    for (const entry of ["deno.json", "deno.lock", "package.json"]) {
-      await fsp2.copyFile(path2.join(srcRoot, entry), path2.join(repo, entry)).catch(() => {});
-    }
     // Break the builder so the child exits nonzero:
     await fsp2.writeFile(path2.join(repo, "scripts/build-test-extension.mjs"), "process.exit(97);\n");
     // Run the journey; it must exit nonzero and emit an early manifest naming code=97.

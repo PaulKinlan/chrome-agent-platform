@@ -12,8 +12,8 @@
 //   - procIdentities / observeDescendants: a failed or empty `ps` table REJECTS (it used to become `[]`,
 //     "no descendants"), and a failed sample leaves the observed map untouched.
 //   - terminateAttestedGroup: an unreadable table still refuses to signal, with the ORIGINAL error.
-// F5. macOS `ps` cannot report a session id, so the identity's `sid` is a COPY of its `pgid` and the
-// PGID/SID attestation proves less there. That is characterised, not fixed.
+// F5. On macOS, `ps` cannot directly report a session id via `-o sid=`, so the identity's `sid`
+// is derived from BSD `stat` flags (flag 's' marks a session leader, giving sid = pid, else null; xjjhi).
 //
 // Every macOS-branch test drives the branch through the `hasProc: false` and `run` seams, so it runs on
 // EVERY platform; the REAL-ps tests at the end run wherever a `/bin/ps` prints the documented columns.
@@ -282,13 +282,13 @@ Deno.test("xjjhi: attestOwnedGroup on no-/proc branch distinguishes setsid leade
 });
 
 // ---------------------------------------------------------------------------------------------
-// The Linux /proc session-id refusal with a REAL process (macOS ps cannot report SID).
+// The Linux /proc session-id refusal with a REAL process.
 // ---------------------------------------------------------------------------------------------
 
 Deno.test({
-  name: "mwj7v/jjsz F5 Linux /proc: a real group leader without a new session is refused [macOS has no SID]",
-  // This branch does not exist on macOS: its ps identity synthesises sid = pgid.
-  // The seam test above runs on every host; the real /proc refusal must run on Linux.
+  name: "mwj7v/jjsz F5 Linux /proc: a real group leader without a new session is refused",
+  // The seam tests above run on every host (including the macOS stat 's' flag parser);
+  // the real /proc refusal runs on Linux.
   ignore: Deno.build.os !== "linux",
   fn: async () => {
     // The child changes ONLY its process group, not its session. Unlike a
