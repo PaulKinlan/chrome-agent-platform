@@ -45,51 +45,76 @@ Deno.test("bundle budget: the store SW budget is exactly the constitution number
   assert(BUDGET_REPORTED_BUNDLES.includes("background/service-worker.js"));
 });
 
-Deno.test("0kdsc: docs quoting the enforced offscreen ceiling match STORE_BUNDLE_BUDGETS['offscreen.bundle.js']", () => {
-  const offscreenCeiling = STORE_BUNDLE_BUDGETS["offscreen.bundle.js"];
-  const formattedCeiling = offscreenCeiling.toLocaleString("en-US"); // "258,000"
-
-  const root = fileURLToPath(new URL("../", import.meta.url));
-  const constitution = Deno.readTextFileSync(join(root, "docs/CONSTITUTION.md"));
-  const riskRegister = Deno.readTextFileSync(join(root, "docs/RISK-REGISTER.md"));
-  const testCoupling = Deno.readTextFileSync(join(root, "docs/TEST-COUPLING-INVENTORY.md"));
-  const acpHarness = Deno.readTextFileSync(join(root, "docs/ACP-HARNESS-TOOLS.md"));
+export function verifyEnforcedOffscreenCeilingDocs(
+  docs: {
+    constitution: string;
+    riskRegister: string;
+    testCoupling: string;
+    acpHarness: string;
+  },
+  ceiling: number,
+) {
+  const formattedCeiling = ceiling.toLocaleString("en-US");
 
   assert(
-    constitution.includes(`store \`offscreen.bundle.js\` hard ceiling of ${formattedCeiling} bytes`),
+    docs.constitution.includes(`store \`offscreen.bundle.js\` hard ceiling of ${formattedCeiling} bytes`),
     `docs/CONSTITUTION.md must state the enforced offscreen ceiling of ${formattedCeiling} bytes`,
   );
   assert(
-    riskRegister.includes(`store \`offscreen.bundle.js\` now fails above the ${formattedCeiling}-byte ceiling`),
+    docs.riskRegister.includes(`store \`offscreen.bundle.js\` now fails above the ${formattedCeiling}-byte ceiling`),
     `docs/RISK-REGISTER.md must state the enforced offscreen ceiling of ${formattedCeiling} bytes`,
   );
   assert(
-    testCoupling.includes(`enforced ${formattedCeiling}-byte store \`offscreen.bundle.js\` ceiling`),
+    docs.testCoupling.includes(`enforced ${formattedCeiling}-byte store \`offscreen.bundle.js\` ceiling`),
     `docs/TEST-COUPLING-INVENTORY.md must state the enforced offscreen ceiling of ${formattedCeiling} bytes`,
   );
   assert(
-    acpHarness.includes(`per-bundle ceiling (${formattedCeiling} bytes`),
-    `docs/ACP-HARNESS-TOOLS.md must state the enforced offscreen ceiling of ${formattedCeiling} bytes`,
+    docs.acpHarness.includes(`per-bundle ceiling (${formattedCeiling} bytes`),
+    `docs/ACP-HARNESS-TOOLS.md must state the per-bundle ceiling of ${formattedCeiling} bytes`,
+  );
+  assert(
+    docs.acpHarness.includes(`| offscreen.bundle.js | 245,796 B | ${formattedCeiling} B |`),
+    `docs/ACP-HARNESS-TOOLS.md must state ${formattedCeiling} B in the offscreen table row`,
+  );
+  assert(
+    docs.acpHarness.includes(`the ratcheted ${formattedCeiling} B ceiling`),
+    `docs/ACP-HARNESS-TOOLS.md must state the ratcheted ${formattedCeiling} B ceiling in prose`,
+  );
+}
+
+Deno.test("0kdsc / ug95c / k3vrl: docs quoting the enforced offscreen ceiling match STORE_BUNDLE_BUDGETS['offscreen.bundle.js']", () => {
+  const offscreenCeiling = STORE_BUNDLE_BUDGETS["offscreen.bundle.js"];
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const docs = {
+    constitution: Deno.readTextFileSync(join(root, "docs/CONSTITUTION.md")),
+    riskRegister: Deno.readTextFileSync(join(root, "docs/RISK-REGISTER.md")),
+    testCoupling: Deno.readTextFileSync(join(root, "docs/TEST-COUPLING-INVENTORY.md")),
+    acpHarness: Deno.readTextFileSync(join(root, "docs/ACP-HARNESS-TOOLS.md")),
+  };
+
+  // 1. Positive verification: all docs match the actual enforced constant
+  verifyEnforcedOffscreenCeilingDocs(docs, offscreenCeiling);
+
+  // 2. Active falsifier: passing a mutated ceiling through the real verification
+  //    function MUST throw AssertionError on doc mismatch (proves assertions fail closed).
+  assertThrows(
+    () => verifyEnforcedOffscreenCeilingDocs(docs, offscreenCeiling + 1000),
+    Error,
+    "must state",
   );
 
-  // Falsifier: mutating the expected ceiling must fail all doc assertions
-  const syntheticCeiling = (offscreenCeiling + 1000).toLocaleString("en-US");
-  assert(
-    !constitution.includes(`store \`offscreen.bundle.js\` hard ceiling of ${syntheticCeiling} bytes`),
-    "falsifier: constitution must not match synthetic ceiling",
-  );
-  assert(
-    !riskRegister.includes(`store \`offscreen.bundle.js\` now fails above the ${syntheticCeiling}-byte ceiling`),
-    "falsifier: risk-register must not match synthetic ceiling",
-  );
-  assert(
-    !testCoupling.includes(`enforced ${syntheticCeiling}-byte store \`offscreen.bundle.js\` ceiling`),
-    "falsifier: test-coupling must not match synthetic ceiling",
-  );
-  assert(
-    !acpHarness.includes(`per-bundle ceiling (${syntheticCeiling} bytes`),
-    "falsifier: acp-harness must not match synthetic ceiling",
-  );
+  // 3. Falsifier for each individual doc: mutating each doc independently turns the check RED
+  for (const docKey of Object.keys(docs) as Array<keyof typeof docs>) {
+    const mutatedDocs = {
+      ...docs,
+      [docKey]: docs[docKey].replaceAll(offscreenCeiling.toLocaleString("en-US"), "999,999"),
+    };
+    assertThrows(
+      () => verifyEnforcedOffscreenCeilingDocs(mutatedDocs, offscreenCeiling),
+      Error,
+      "must state",
+    );
+  }
 });
 
 Deno.test("bundle budget: topContributors sorts largest-first and truncates", () => {
