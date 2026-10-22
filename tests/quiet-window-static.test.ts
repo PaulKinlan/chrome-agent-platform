@@ -137,8 +137,9 @@ Deno.test("3ow6b / jtpa5: the module-scope guard in tests/quiet-window.test.ts i
     !/Deno\.env\.(set|delete)\s*\(\s*["']CAP_QUIET_MAX_PROC_SCAN_MS["']/.test(prelude),
     "tests/quiet-window.test.ts must not SET or DELETE CAP_QUIET_MAX_PROC_SCAN_MS at module scope in the prelude (chrome-agent-platform-3ow6b)",
   );
+  const firstRegistration = /^Deno\.test\(\s*["'`]([^"'`]*)["'`]/.exec(src.slice(firstTestIdx));
   assert(
-    src.slice(firstTestIdx, firstTestIdx + 200).includes("module evaluation time"),
+    firstRegistration !== null && /module evaluation time/.test(firstRegistration[1]),
     "the module-scope guard must be the FIRST-registered test in tests/quiet-window.test.ts: a later position lets an earlier test body run first (chrome-agent-platform-jtpa5)",
   );
 });
