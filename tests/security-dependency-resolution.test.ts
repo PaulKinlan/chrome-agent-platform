@@ -78,6 +78,20 @@ function findScopedDeclarator(identNode, parents) {
         }
       }
     }
+    if ((p.type === "ForOfStatement" || p.type === "ForInStatement" || p.type === "ForStatement") && p.left?.type === "VariableDeclaration") {
+      for (const decl of p.left.declarations) {
+        if (bindingNames(decl.id).includes(name)) {
+          return decl.init ?? null;
+        }
+      }
+    }
+    if (p.type === "ForStatement" && p.init?.type === "VariableDeclaration") {
+      for (const decl of p.init.declarations) {
+        if (bindingNames(decl.id).includes(name)) {
+          return decl.init ?? null;
+        }
+      }
+    }
     if (p.type === "CatchClause" && p.param && bindingNames(p.param).includes(name)) {
       return null;
     }
@@ -85,6 +99,12 @@ function findScopedDeclarator(identNode, parents) {
       if (p.params.some((param) => bindingNames(param).includes(name))) {
         return null;
       }
+      if (p.id?.name === name) {
+        return null;
+      }
+    }
+    if ((p.type === "ClassDeclaration" || p.type === "ClassExpression") && p.id?.name === name) {
+      return null;
     }
   }
   return null;
@@ -343,6 +363,13 @@ Deno.test("bbz3s: comment, conditional, late and swallowed-check mutants cannot 
   assertEquals(preBundleGuardProblems(legalParam), [], "ja7kv: function param shadowing outer esbuild const must not red");
   const legalCatch = replaceOnce(source, line, `    try {} catch (__n){ require(__n); } const __n = "esbuild";\n${line}`);
   assertEquals(preBundleGuardProblems(legalCatch), [], "ja7kv: catch param shadowing outer esbuild const must not red");
+  // tp912: named function/class expression id and for-of head declarator shadowing outer esbuild const must not falsely RED
+  const legalFne = replaceOnce(source, line, `    const __fne = function __n(){ require(__n); }; const __n = "esbuild";\n${line}`);
+  assertEquals(preBundleGuardProblems(legalFne), [], "tp912: function expression id shadowing outer esbuild const must not red");
+  const legalCe = replaceOnce(source, line, `    const __ce = class __n { static m(){ require(__n); } }; const __n = "esbuild";\n${line}`);
+  assertEquals(preBundleGuardProblems(legalCe), [], "tp912: class expression id shadowing outer esbuild const must not red");
+  const legalForOf = replaceOnce(source, line, `    for (const __n of ["x"]) { require(__n); } const __n = "esbuild";\n${line}`);
+  assertEquals(preBundleGuardProblems(legalForOf), [], "tp912: for-of head declarator shadowing outer esbuild const must not red");
   assertEquals(Deno.readTextFileSync(BUILD_SOURCE), source, "mutations stay in memory: build.mjs is byte-identical");
 });
 
