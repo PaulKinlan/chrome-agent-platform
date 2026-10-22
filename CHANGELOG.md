@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.738] — 2026-10-22
+- Account for parameter shadowing in esbuild pre-bundle load pin.
+- The memory tools now hide their internal bookkeeping keys, hashing refuses malformed or oversized seeds instead of guessing, and two test guards that could no longer fail now genuinely fail when the thing they protect breaks.
+
 ## [0.3.737] — 2026-10-22
 - Scope ACP scratch leak detection to local run paths and strengthen AST loader detection for computed esbuild specifiers.
 - Stale scratch directories left behind by earlier test runs are now cleaned up automatically, so the suite stops failing on a full disk, and the checks that guard against leaked test files and stray tool loading are stricter.
