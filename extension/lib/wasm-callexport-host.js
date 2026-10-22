@@ -152,6 +152,9 @@ function executeHashwasmStreamRun({ ex, memory, spec, data }) {
   // setUint32(4, hi, true) and the C reads *(uint64_t*)main_buffer.
   if (
     typeof spec.seedHex !== "string" ||
+    !Number.isSafeInteger(seedBytes) ||
+    seedBytes < 1 ||
+    seedBytes > 64 ||
     spec.seedHex.length !== seedBytes * 2 ||
     !/^[0-9a-fA-F]*$/.test(spec.seedHex)
   ) {

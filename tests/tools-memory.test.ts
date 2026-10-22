@@ -4,9 +4,9 @@
 // reserved-key + oversize rejection, and the scoped toolset omitting memory_set).
 // @ts-nocheck
 
-import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 import { memoryToolset } from "../extension/lib/agent.js";
-import { isReservedWriteKey } from "../extension/lib/memory.js";
+import { isReservedWriteKey, siteMemory } from "../extension/lib/memory.js";
 
 // A tiny in-memory memory store with a version token (mirrors the OPFS store's
 // set→version contract used by the CAS compensation).
@@ -237,11 +237,28 @@ Deno.test("memory read tools uniformly permit reading agent journal while memory
   const listResult = await t.memory_list.execute({});
   assert(listResult.keys.includes("journal"));
 
-  // memory_grep searches journal as history
+  // memory_grep searches journal as history without duplicate memory-source match (uij9m)
   const grepResult = await t.memory_grep.execute({ query: "audit" });
-  assert(grepResult.matches.some((m) => m.source === "history"));
+  assertEquals(grepResult.count, 1);
+  assertEquals(grepResult.matches.length, 1);
+  assertEquals(grepResult.matches[0].source, "history");
 
   // memory_set REFUSES writing to journal (write-reserved)
   const setResult = await t.memory_set.execute({ key: "journal", value: [{ fabricated: true }] });
   assertStringIncludes(String(setResult.error), "is not writable");
+});
+
+Deno.test("production store set: rejects model write to journal (qeit9)", async () => {
+  const store = siteMemory("https://qeit9.example");
+  await assertRejects(
+    () => store.set("journal", [{ fabricated: true }]),
+    Error,
+    'key "journal" is reserved on this store',
+  );
+  // Source pin on memory.js ensuring setValueInner checks SITE_RESERVED_KEYS directly
+  const src = await Deno.readTextFile("extension/lib/memory.js");
+  assert(
+    src.includes("SITE_RESERVED_KEYS.has(k) || INTERNAL_KEY_RE.test(k)"),
+    "setValueInner must check SITE_RESERVED_KEYS directly, not isReservedReadKey",
+  );
 });

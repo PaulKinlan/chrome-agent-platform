@@ -392,6 +392,24 @@ Deno.test("callexport: hashwasm_stream seedHex validation and out-of-bounds dige
     Error,
     "digest_read_failed",
   );
+
+  // 3. Non-integer or out-of-range seedBytes fails closed with seed_hex_invalid (0i716)
+  for (const badSeedBytes of [8.5, "8", 0, 65, NaN, Infinity]) {
+    const badBytesExec = JSON.parse(JSON.stringify(exec));
+    badBytesExec.callExport.seedBytes = badSeedBytes;
+    if (typeof badSeedBytes === "number" && Number.isFinite(badSeedBytes)) {
+      badBytesExec.callExport.seedHex = "a".repeat(Math.floor(badSeedBytes * 2));
+    }
+    await assertRejects(
+      () => executeCallexportRun({
+        wasmBytes: bytes,
+        executable: badBytesExec,
+        data: btoa("test"),
+      }),
+      Error,
+      "seed_hex_invalid",
+    );
+  }
 });
 
 Deno.test("callexport: all 21 admitted hash tools run through the harness and match KAT vectors", async () => {
