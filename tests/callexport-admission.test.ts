@@ -354,11 +354,18 @@ Deno.test("callexport: hashwasm_stream seedHex validation and out-of-bounds dige
   const bytes = await Deno.readFile(`extension/wasm/cas/${exec.sha256}.wasm`);
 
   // 1. Invalid seedHex (bypassing manifest validator) fails closed with seed_hex_invalid
-  // ldgv0 / mjkxu: fully invalid, trailing non-hex nibble, and leading whitespace must all fail closed.
+  // ldgv0 / mjkxu / o7fpl: fully invalid, trailing non-hex, leading whitespace, over-long,
+  // trailing newline, short, empty, and non-string must all fail closed with seed_hex_invalid.
   for (const badHex of [
     "zz".repeat(exec.callExport.seedBytes),
     "c96c5795d7870f4z",
     " 96c5795d7870f42",
+    "00c96c5795d7870f42",
+    "c96c5795d7870f42ab",
+    "c96c5795d7870f42\n",
+    "c96c5795",
+    "",
+    null,
   ]) {
     const badSeedExec = JSON.parse(JSON.stringify(exec));
     badSeedExec.callExport.seedHex = badHex;
