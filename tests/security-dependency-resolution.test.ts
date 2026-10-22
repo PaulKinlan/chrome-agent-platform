@@ -62,20 +62,63 @@ function isPropertyKey(node, parent) {
   return false;
 }
 
-function evalStaticString(node) {
+function findScopedDeclarator(identNode, parents) {
+  if (!identNode || identNode.type !== "Identifier" || !parents) return null;
+  const name = identNode.name;
+  for (let p = parents.get(identNode); p; p = parents.get(p)) {
+    const stmts = Array.isArray(p.body) ? p.body : (Array.isArray(p.consequent) ? p.consequent : null);
+    if (stmts) {
+      for (const stmt of stmts) {
+        if (stmt.type === "VariableDeclaration") {
+          for (const decl of stmt.declarations) {
+            if (decl.id.type === "Identifier" && decl.id.name === name) {
+              return decl.init;
+            }
+          }
+        }
+      }
+    }
+    if (p.type === "CatchClause" && p.param && bindingNames(p.param).includes(name)) {
+      return null;
+    }
+    if (["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"].includes(p.type)) {
+      if (p.params.some((param) => bindingNames(param).includes(name))) {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+function evalStaticString(node, parents, seen = new Set()) {
   if (!node) return null;
   if (node.type === "Literal" && typeof node.value === "string") return node.value;
   if (node.type === "TemplateLiteral" && node.expressions.length === 0) {
     return node.quasis[0].value.cooked ?? node.quasis[0].value.raw;
   }
   if (node.type === "BinaryExpression" && node.operator === "+") {
-    const left = evalStaticString(node.left);
-    const right = evalStaticString(node.right);
+    const left = evalStaticString(node.left, parents, seen);
+    const right = evalStaticString(node.right, parents, seen);
     if (left !== null && right !== null) return left + right;
   }
+  if (node.type === "Identifier" && parents && !seen.has(node)) {
+    seen.add(node);
+    const init = findScopedDeclarator(node, parents);
+    if (init) return evalStaticString(init, parents, seen);
+  }
   if (node.type === "MemberExpression" && node.computed) {
-    if (node.object.type === "ArrayExpression" && node.property.type === "Literal" && typeof node.property.value === "number") {
-      return evalStaticString(node.object.elements[node.property.value]);
+    let obj = node.object;
+    if (obj.type === "Identifier" && parents && !seen.has(obj)) {
+      seen.add(obj);
+      obj = findScopedDeclarator(obj, parents) ?? obj;
+    }
+    let idxNode = node.property;
+    if (idxNode.type === "Identifier" && parents && !seen.has(idxNode)) {
+      seen.add(idxNode);
+      idxNode = findScopedDeclarator(idxNode, parents) ?? idxNode;
+    }
+    if (obj?.type === "ArrayExpression" && idxNode?.type === "Literal" && typeof idxNode.value === "number") {
+      return evalStaticString(obj.elements[idxNode.value], parents, seen);
     }
   }
   return null;
@@ -127,7 +170,7 @@ function preBundleGuardProblems(source) {
   const isEsbuildLoad = (node) => {
     if (isName(node, "esbuild") && !isPropertyKey(node, parents.get(node))) return true;
     if (node.type === "ImportExpression") {
-      const argStr = evalStaticString(node.source);
+      const argStr = evalStaticString(node.source, parents);
       if (argStr === "esbuild" || (node.source.type === "Identifier" && node.source.name === "esbuild") || containsLiteral(node.source, "esbuild")) return true;
     }
     if (node.type === "CallExpression") {
@@ -135,7 +178,7 @@ function preBundleGuardProblems(source) {
       const isReq = (callee.type === "Identifier" && callee.name === "require") ||
         (callee.type === "CallExpression" && isName(callee.callee, "createRequire"));
       if (isReq) {
-        const argStr = evalStaticString(node.arguments[0]);
+        const argStr = evalStaticString(node.arguments[0], parents);
         if (argStr === "esbuild" || node.arguments[0]?.name === "esbuild" || containsLiteral(node.arguments[0], "esbuild")) return true;
       }
     }
@@ -268,6 +311,12 @@ Deno.test("bbz3s: comment, conditional, late and swallowed-check mutants cannot 
       `    const decoy = await import(esbuild);\n${line}`), "esbuild cannot be loaded outside"],
     ["require computed member access (hz68x)", replaceOnce(source, line,
       `    const decoy = require(["esbuild"][0]);\n${line}`), "esbuild cannot be loaded outside"],
+    ["require hoisted identifier specifier (pap3g)", replaceOnce(source, line,
+      `    const __probe = "esbuild"; const decoy = require(__probe);\n${line}`), "esbuild cannot be loaded outside"],
+    ["require hoisted array element specifier (pap3g)", replaceOnce(source, line,
+      `    const __probeArr = ["esbuild"]; const decoy = require(__probeArr[0]);\n${line}`), "esbuild cannot be loaded outside"],
+    ["require scoped identifier shadowing (ynkzd)", replaceOnce(source, line,
+      `    function __f(){ const __n = "esbuild"; require(__n); } const __n = "lodash";\n${line}`), "esbuild cannot be loaded outside"],
     ["dynamic import computed member access (hz68x)", replaceOnce(source, line,
       `    const decoy = await import(["esbuild"][0]);\n${line}`), "esbuild cannot be loaded outside"],
     ["build alias evades the bundle scan", replaceOnce(source, line,
@@ -286,6 +335,14 @@ Deno.test("bbz3s: comment, conditional, late and swallowed-check mutants cannot 
   // aat1m: unrelated non-call uses of "build" as a property key or literal "esbuild" in arrays must not falsely RED
   const legalProp = replaceOnce(source, line, `    const cfg = { build: 1 }; const ext = ["esbuild"];\n${line}`);
   assertEquals(preBundleGuardProblems(legalProp), [], "aat1m: property key build and literal esbuild in array must not red");
+  // ynkzd: unrelated local require shadowed by an outer "esbuild" const must not falsely RED
+  const legalShadow = replaceOnce(source, line, `    function __g(){ const __n = "lodash"; require(__n); } const __n = "esbuild";\n${line}`);
+  assertEquals(preBundleGuardProblems(legalShadow), [], "ynkzd: local non-esbuild require shadowed by outer esbuild const must not red");
+  // ja7kv: unrelated require of a function/catch parameter shadowing an outer "esbuild" const must not falsely RED
+  const legalParam = replaceOnce(source, line, `    function __h(__n){ require(__n); } const __n = "esbuild";\n${line}`);
+  assertEquals(preBundleGuardProblems(legalParam), [], "ja7kv: function param shadowing outer esbuild const must not red");
+  const legalCatch = replaceOnce(source, line, `    try {} catch (__n){ require(__n); } const __n = "esbuild";\n${line}`);
+  assertEquals(preBundleGuardProblems(legalCatch), [], "ja7kv: catch param shadowing outer esbuild const must not red");
   assertEquals(Deno.readTextFileSync(BUILD_SOURCE), source, "mutations stay in memory: build.mjs is byte-identical");
 });
 
