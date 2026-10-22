@@ -277,12 +277,33 @@ export const SITE_RESERVED_KEYS = new Set([
   "agentConfig",
 ]);
 
-/** Whether a key is reserved from agent memory tools (memory_get, memory_set).
- * Covers master reserved keys, internal prefix vocabulary, and site reserved keys. */
-export function isReservedKey(key) {
+// Keys reserved from model READ tools (memory_get, memory_list).
+// Note: "journal" is write-only reserved (the agent model cannot overwrite its
+// audit log, but is permitted to read its own run history via memory_get or
+// search it via memory_grep).
+export const SITE_READ_RESERVED_KEYS = new Set([
+  "approvals",
+  "toolDirectory",
+  "enrolled",
+  "assets",
+  "scripts",
+  "agentConfig",
+]);
+
+/** Whether a key is reserved from agent memory read tools (memory_get, memory_list, memory_grep). */
+export function isReservedReadKey(key) {
+  const k = String(key ?? "");
+  return isReservedMasterKey(k) || SITE_READ_RESERVED_KEYS.has(k);
+}
+
+/** Whether a key is reserved from agent memory write tools (memory_set). */
+export function isReservedWriteKey(key) {
   const k = String(key ?? "");
   return isReservedMasterKey(k) || SITE_RESERVED_KEYS.has(k);
 }
+
+/** Default read-gate reservation predicate. */
+export const isReservedKey = isReservedReadKey;
 
 // dptw: no aggregate per-origin/global byte quotas — stores grow until the
 // browser's own OPFS quota refuses, and that refusal surfaces honestly.

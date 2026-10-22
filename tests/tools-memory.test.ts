@@ -6,6 +6,7 @@
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { memoryToolset } from "../extension/lib/agent.js";
+import { isReservedWriteKey } from "../extension/lib/memory.js";
 
 // A tiny in-memory memory store with a version token (mirrors the OPFS store's
 // set→version contract used by the CAS compensation).
@@ -22,11 +23,16 @@ function makeMemory() {
     async set(key, value) {
       // Reserved authority keys are owner-only (never model-writable) — mirror
       // the store's reserved-key rejection.
-      if (key === "origins" || key === "enrollment") {
+      if (key === "origins" || key === "enrollment" || isReservedWriteKey(key)) {
         throw new Error(`reserved key ${key} is not writable by the model`);
       }
       const s = JSON.stringify(value);
       if (s.length > 256 * 1024) throw new Error("value exceeds 256 KiB bound");
+      map.set(key, value);
+      version += 1;
+      return version;
+    },
+    async setTrusted(key, value) {
       map.set(key, value);
       version += 1;
       return version;
@@ -77,7 +83,7 @@ Deno.test("memory_list: lists the keys", async () => {
 Deno.test("memory_grep: finds a matching key + a journal entry", async () => {
   const mem = makeMemory();
   await mem.set("pr-notes", "the PR reviewer flagged a bug");
-  await mem.set("journal", [{ kind: "task", text: "review the PR" }]);
+  await mem.setTrusted("journal", [{ kind: "task", text: "review the PR" }]);
   const r = await tools(mem).memory_grep.execute({ query: "PR" });
   assert(r.matches && r.matches.length > 0, `grep should find matches, got ${JSON.stringify(r)}`);
 });
@@ -155,7 +161,6 @@ Deno.test("memory_get: REJECTS reserved keys including __wasmTx:* and authority 
     "run:exec_123",
     "approvals",
     "toolDirectory",
-    "journal",
     "agentConfig",
   ];
 
@@ -213,4 +218,30 @@ Deno.test("memory_list and memory_grep: never expose reserved authority keys (bn
   const memoryMatches = grepResult.matches.filter((m) => m.source === "memory");
   assertEquals(memoryMatches.length, 1);
   assertEquals(memoryMatches[0].key, "user_note");
+});
+
+Deno.test("memory read tools uniformly permit reading agent journal while memory_set refuses writing to it (3w00j)", async () => {
+  const mem = makeMemory();
+  const t = tools(mem);
+
+  // Journal is seeded with run history
+  const journalEntries = [{ task: "audit", result: "ok" }];
+  mem._map.set("journal", journalEntries);
+
+  // memory_get permits reading journal
+  const getResult = await t.memory_get.execute({ key: "journal" });
+  assertEquals(getResult.error, undefined);
+  assertEquals(getResult.value, journalEntries);
+
+  // memory_list includes journal
+  const listResult = await t.memory_list.execute({});
+  assert(listResult.keys.includes("journal"));
+
+  // memory_grep searches journal as history
+  const grepResult = await t.memory_grep.execute({ query: "audit" });
+  assert(grepResult.matches.some((m) => m.source === "history"));
+
+  // memory_set REFUSES writing to journal (write-reserved)
+  const setResult = await t.memory_set.execute({ key: "journal", value: [{ fabricated: true }] });
+  assertStringIncludes(String(setResult.error), "is not writable");
 });

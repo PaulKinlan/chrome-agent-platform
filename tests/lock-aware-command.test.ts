@@ -7,18 +7,33 @@ import { runLockAware } from "../scripts/lib/lock-aware-command.ts";
 const MARK = "CAP_SECURITY_LOCK_ACQUIRED";
 
 Deno.test("queueing longer than the budget is NOT a failure once the lock marker arrives", async () => {
-  // Pretends to queue 1.4 s for the lock, then does 0.1 s of real work.
-  const r = await runLockAware({
+  // Run with two distinct queue durations to prove lockWaitMs is dynamically measured,
+  // killing any constant mutant (e.g. opts.budgetMs * 2) (mlopt).
+  const rShort = await runLockAware({
+    executable: "/bin/sh",
+    args: ["-c", `sleep 0.4; echo ${MARK} $(date +%s); sleep 0.1; echo CAP_SECURITY_RESULT '{"ok":true}'`],
+    budgetMs: 700,
+    lockMarker: MARK,
+  });
+  assertEquals(rShort.killedFor, null);
+  assertEquals(rShort.code, 0);
+  assert(rShort.lockWaitMs >= 300 && rShort.lockWaitMs < 800, `short lock wait should track ~400ms (${rShort.lockWaitMs} ms)`);
+
+  const rLong = await runLockAware({
     executable: "/bin/sh",
     args: ["-c", `sleep 1.4; echo ${MARK} $(date +%s); sleep 0.1; echo CAP_SECURITY_RESULT '{"ok":true}'`],
     budgetMs: 700,
     lockMarker: MARK,
   });
-  assertEquals(r.killedFor, null);
-  assertEquals(r.code, 0);
-  assert(r.lockWaitMs >= 1000, `lock wait should be measured (${r.lockWaitMs} ms)`);
-  assert(r.ranMs < 700, `the budget clock started at the marker (${r.ranMs} ms)`);
-  assert(r.text.includes("CAP_SECURITY_RESULT"));
+  assertEquals(rLong.killedFor, null);
+  assertEquals(rLong.code, 0);
+  assert(rLong.lockWaitMs >= 1000, `long lock wait should be measured (${rLong.lockWaitMs} ms)`);
+  assert(rLong.ranMs < 700, `the budget clock started at the marker (${rLong.ranMs} ms)`);
+  assert(rLong.text.includes("CAP_SECURITY_RESULT"));
+
+  // The measured difference must reflect the delta between the two sleeps (1.4s - 0.4s = 1.0s),
+  // proving lockWaitMs tracks actual elapsed queue time rather than returning a constant.
+  assert(rLong.lockWaitMs - rShort.lockWaitMs >= 600, `lockWaitMs delta (${rLong.lockWaitMs - rShort.lockWaitMs} ms) must track actual wait`);
 });
 
 Deno.test("a child that hangs AFTER acquiring the lock still fails on its own budget", async () => {
