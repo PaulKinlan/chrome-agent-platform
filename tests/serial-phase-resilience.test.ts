@@ -12,10 +12,43 @@
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { classifyReadyMarkerTimeout, currentLoadPerCpu, runSerialFile, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
+import { classifyReadyMarkerTimeout, runSerialFile, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
+
+/**
+ * How long a nested deno test actually takes to reach its FIRST statement on this box (kzy5x).
+ *
+ * A ready-marker proof has two numbers and both are bounded by this cost: the marker cannot appear before
+ * the child boots, and the grace window must be big enough to cover boot PLUS whatever lateness the case
+ * declares. Hard-coding either number is what made `xy6n2 late marker` and the two "fast marker-then-exit"
+ * cases red on a loaded fleet box (measured boots of 10-22 s against a 5 s soft / 20 s hard window) while
+ * the runner logic was correct. Measured here, once per case, so the relationship holds at any boot cost.
+ */
+async function measureChildBootMs(dir: string): Promise<number> {
+  const probe = `${dir}/zz-boot-probe-${crypto.randomUUID().slice(0, 8)}.test.ts`;
+  const marker = `${probe}.marker`;
+  await Deno.writeTextFile(
+    probe,
+    `await Deno.writeTextFile(${JSON.stringify(marker)}, "ready");\n` +
+      `Deno.test("boot probe", () => {});\n`,
+  );
+  const t0 = Date.now();
+  const res = runSerialFile(probe, {
+    timeoutMs: 5_000,
+    readyFile: marker,
+    readyTimeoutMs: 120_000, // the probe must never be the thing that reds
+    stdio: ["ignore", "ignore", "pipe"],
+    cwd: ROOT,
+  });
+  const elapsed = Date.now() - t0;
+  assert(
+    res.code === 0,
+    `the boot probe must reach its marker on this box: ${res.stderr?.toString()}`,
+  );
+  return Math.max(1_500, elapsed);
+}
 
 /**
  * iypw instruments. The reference's premise record, a SIGCONT-based liveness instrument that
@@ -442,8 +475,22 @@ Deno.test("xy6n2: a marker after the 5s soft deadline succeeds only when load is
   const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-late-ready-" });
   const readyFile = `${tempDir}/late.marker`;
   const tempTest = `${tempDir}/late-ready.test.ts`;
+  // kzy5x: the marker must arrive AFTER the soft deadline and BEFORE the hard one, and on this box the
+  // CHILD'S OWN COLD BOOT dominates both numbers (measured 10-22s at fleet load ~5, in a serial lane that
+  // runs alone). With a fixed soft=5000 / hard=20000 the marker's own 6s delay sat on top of a boot that
+  // alone could exceed 20s, so the run was killed by the hard bound and the case redded on the box rather
+  // than on the code. Both numbers are now derived from a MEASURED boot, so the property under test — a
+  // late marker survives the soft bound via the named, bounded grace — holds at any boot cost.
+  const bootMs = await measureChildBootMs(tempDir);
+  const softMs = bootMs + 500; // the marker (which cannot precede boot) is guaranteed to arrive AFTER this
+  const lateDelayMs = 6_000; // ...and comfortably before the derived hard bound (soft x up-to-4)
+  assert(
+    bootMs + lateDelayMs < softMs * 4,
+    `the declared late delay must land inside the derived hard bound: boot ${bootMs}ms + ${lateDelayMs}ms ` +
+      `vs hard ${softMs * 4}ms`,
+  );
   await Deno.writeTextFile(tempTest, `
-await new Promise((resolve) => setTimeout(resolve, 6000));
+await new Promise((resolve) => setTimeout(resolve, ${lateDelayMs}));
 await Deno.writeTextFile(${JSON.stringify(readyFile)}, "ready");
 Deno.test("passes after late marker", () => {});
 `);
@@ -451,16 +498,68 @@ Deno.test("passes after late marker", () => {});
     const res = runSerialFile(tempTest, {
       timeoutMs: 2_000,
       readyFile,
-      readyTimeoutMs: 5_000,
+      readyTimeoutMs: softMs,
       readyLoadPerCpu: 4, // deterministic injected reading, never manufacture system load
       stdio: "pipe",
       cwd: ROOT,
     } as Parameters<typeof runSerialFile>[1]);
-    assertEquals(res.code, 0, `late marker must not be killed by the soft bound: ${res.stderr?.toString()}`);
+    assertEquals(
+      res.code,
+      0,
+      `late marker must not be killed by the soft bound (boot ${bootMs}ms, soft ${softMs}ms, late ` +
+        `${lateDelayMs}ms): ${res.stderr?.toString()}`,
+    );
     assertEquals(res.timedOut, false);
     assert((res.stderr?.toString() ?? "").includes("READY_MARKER_LOADED_GRACE"),
-      "the extension must name its measured/injected load and hard bound");
+      `the extension must name its measured/injected load and hard bound: ${res.stderr?.toString()}`);
     assertEquals(await Deno.readTextFile(readyFile), "ready", "fixture must write the marker event");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("xy6n2 falsifier: the DERIVED late-marker window is still a BOUND — an unmarked child dies at it", async () => {
+  // coord's requirement before landing kzy5x: "a boot-derived number that can only grow is the same trap in a
+  // new place". So the derivation is tested from the other side: the SAME boot-derived soft deadline, with the
+  // load injection that grants NO grace, must still KILL a child that never writes its marker and must name
+  // which bound refused it. If a future edit turns the derived number into something that can only grow, this
+  // case reds (no 124, or no named timeout). The probe inside measureChildBootMs can also fail on its own
+  // terms: its 120 s window is an ASSERTION (`the boot probe must reach its marker on this box`), so a boot
+  // that never completes reds by name instead of quietly inflating the numbers.
+  const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-derived-bound-" });
+  const readyFile = `${tempDir}/never.marker`;
+  const tempTest = `${tempDir}/never-ready.test.ts`;
+  await Deno.writeTextFile(
+    tempTest,
+    'Deno.test("hangs without a marker", async () => { setInterval(() => {}, 1000); await new Promise(() => {}); });\n',
+  );
+  const bootMs = await measureChildBootMs(tempDir);
+  const softMs = bootMs + 500;
+  try {
+    const res = runSerialFile(tempTest, {
+      timeoutMs: 2_000,
+      readyFile,
+      readyTimeoutMs: softMs,
+      readyLoadPerCpu: 1, // idle: the derived number gets NO grace, so the derivation itself is the bound
+      stdio: ["ignore", "ignore", "pipe"],
+      cwd: ROOT,
+    } as Parameters<typeof runSerialFile>[1]);
+    assertEquals(
+      res.code,
+      124,
+      `a child that never marks must still be killed at the derived bound (soft ${softMs}ms): ` +
+        `${res.stderr?.toString()}`,
+    );
+    assertEquals(res.timedOut, true);
+    assert(
+      (res.stderr?.toString() ?? "").includes("READY_MARKER_TIMEOUT_IDLE_NEVER_SETTLED"),
+      `the derived bound must still refuse BY NAME: ${res.stderr?.toString()}`,
+    );
+    assertEquals(
+      await Deno.stat(readyFile).then(() => true).catch(() => false),
+      false,
+      "the unmarked child never produces the marker",
+    );
   } finally {
     await Deno.remove(tempDir, { recursive: true }).catch(() => {});
   }
@@ -528,9 +627,14 @@ Deno.test("passes immediately after marker", () => {});
     // SOFT deadline it can extend to a 60–80s HARD deadline under measured
     // load, then refuses an absent marker. The missing-marker fixtures above
     // retain their separate short fail-closed bounds.
+    // kzy5x/whl7d: the boot budget is keyed on ABSOLUTE load, not load per CPU. On this 8-core VM the gates
+    // that redded these readiness cases ran at absolute load 11-14, so load/cpus was ~1.4-1.75 and this
+    // budget sat on its 15s floor while the deno cold boot it waits for took longer (coord P1 on whl7d found
+    // the same arithmetic in the custody TERM window). The x4 ceiling above still bounds it at 20s, and the
+    // measured-load HARD grace after this soft deadline is unchanged.
     const bootBudgetMs = Math.max(15_000, serialFileTimeoutMs({
       base: 5_000,
-      loadPerCpu: currentLoadPerCpu(),
+      loadPerCpu: Deno.loadavg()[0],
     }));
     assert(bootBudgetMs >= 15_000 && bootBudgetMs <= 20_000,
       `positive marker soft boot budget must stay in 15–20s, got ${bootBudgetMs}ms`);
