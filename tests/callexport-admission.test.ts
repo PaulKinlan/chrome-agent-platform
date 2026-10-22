@@ -354,17 +354,24 @@ Deno.test("callexport: hashwasm_stream seedHex validation and out-of-bounds dige
   const bytes = await Deno.readFile(`extension/wasm/cas/${exec.sha256}.wasm`);
 
   // 1. Invalid seedHex (bypassing manifest validator) fails closed with seed_hex_invalid
-  const badSeedExec = JSON.parse(JSON.stringify(exec));
-  badSeedExec.callExport.seedHex = "zz".repeat(badSeedExec.callExport.seedBytes);
-  await assertRejects(
-    () => executeCallexportRun({
-      wasmBytes: bytes,
-      executable: badSeedExec,
-      data: btoa("test"),
-    }),
-    Error,
-    "seed_hex_invalid",
-  );
+  // ldgv0 / mjkxu: fully invalid, trailing non-hex nibble, and leading whitespace must all fail closed.
+  for (const badHex of [
+    "zz".repeat(exec.callExport.seedBytes),
+    "c96c5795d7870f4z",
+    " 96c5795d7870f42",
+  ]) {
+    const badSeedExec = JSON.parse(JSON.stringify(exec));
+    badSeedExec.callExport.seedHex = badHex;
+    await assertRejects(
+      () => executeCallexportRun({
+        wasmBytes: bytes,
+        executable: badSeedExec,
+        data: btoa("test"),
+      }),
+      Error,
+      "seed_hex_invalid",
+    );
+  }
 
   // 2. Out-of-bounds digestBytes fails closed with digest_read_failed
   const oobExec = JSON.parse(JSON.stringify(exec));

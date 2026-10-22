@@ -153,8 +153,8 @@ function executeHashwasmStreamRun({ ex, memory, spec, data }) {
   const seed = new Uint8Array(seedBytes);
   for (let i = 0; i < seedBytes; i++) {
     const hexSlice = spec.seedHex.slice((seedBytes - 1 - i) * 2, (seedBytes - i) * 2);
+    if (!/^[0-9a-fA-F]{2}$/.test(hexSlice)) fail("seed_hex_invalid");
     const parsed = parseInt(hexSlice, 16);
-    if (!Number.isFinite(parsed) || isNaN(parsed) || parsed < 0 || parsed > 255) fail("seed_hex_invalid");
     seed[i] = parsed;
   }
   if (bufferPtr + seedBytes > heap.byteLength) fail("input_exceeds_memory");
