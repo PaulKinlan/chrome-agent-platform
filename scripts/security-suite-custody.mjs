@@ -48,22 +48,62 @@ export const SELF_TEST_TOKEN = "security-suite-custody-v1";
 // chrome-agent-platform-whl7d: the SELF-TEST term-grace window is a MEASURED function of the box, not a
 // flat 250 ms race. The one thing that window waits for is one turn of the fixture's Node event loop
 // (its SIGTERM handler runs `process.exit(0)`), and on a fleet box running the rest of the gate that turn
-// is legitimately longer than 250 ms: the merger's full gate on 2026-10-22 (load 3.9, .beads/embeddeddolt
+// is legitimately longer than 250 ms: the merger's full gate on 2026-10-22 (loadavg 3.9, .beads/embeddeddolt
 // at 2.0GB) redded `hard timeout sends TERM and returns 124` although nothing in its fixture or its
-// supervisor logic had changed. Escalating to SIGKILL because the box was busy is not a custody defect,
-// so the window is scaled by measured load per CPU under the same x4 ceiling the serial phase uses
-// (serialFileTimeoutMs), which keeps "TERM first, escalate only if the group outlives the declared
-// window" true at any load without widening it on an idle box. PRODUCTION is untouched: its own 5 s
-// window is the operator's, and nothing here is reachable from it.
+// supervisor logic had changed. Escalating to SIGKILL because the box was busy is not a custody defect.
+//
+// WHY ABSOLUTE LOAD, NOT LOAD PER CPU (coord P1 on whl7d, 2026-10-22 — the first cut of this was WRONG):
+// it scaled by loadavg/cpus, so on this 8-core VM at the very loadavg that motivated the fix (3.9) the
+// ratio was 0.49 and the window stayed on its floor - the fix did not cover its own case. These VMs
+// saturate ABSOLUTELY: a handful of busy lanes (imageops, esbuild, Rust, rustc, another lane's gate) thrash
+// the box while load-per-CPU still reads ~0.7. The quantity that predicts one turn of a child's event loop
+// is how many runnable tasks are contending for it, so the scale is the absolute 1-minute loadavg, with
+// load-per-CPU kept only so a genuinely oversubscribed big host still scales. PRODUCTION is untouched: its
+// own 5 s window is the operator's, and nothing here is reachable from it.
 export const SELF_TEST_TERM_WAIT_FLOOR_MS = 250;
-export const SELF_TEST_TERM_WAIT_MAX_SCALE = 4;
+export const SELF_TEST_TERM_WAIT_MAX_SCALE = 8;
 
-/** The self-test TERM grace window for a measured load per CPU (1 = idle, unmeasurable = idle). */
-export function selfTestTermWaitMs({ loadPerCpu = 1 } = {}) {
-  const ratio = Number.isFinite(loadPerCpu) && loadPerCpu > 1 ? loadPerCpu : 1;
-  return Math.round(
-    SELF_TEST_TERM_WAIT_FLOOR_MS * Math.min(ratio, SELF_TEST_TERM_WAIT_MAX_SCALE),
-  );
+/** The self-test TERM grace window for a measured load (1 = idle, unmeasurable = idle).
+ * `loadavg` is the 1-minute ABSOLUTE load (the predictor); `loadPerCpu` only ever raises it. */
+export function selfTestTermWaitMs({ loadavg = 1, loadPerCpu = 1 } = {}) {
+  const absolute = Number.isFinite(loadavg) && loadavg > 1 ? loadavg : 1;
+  const perCpu = Number.isFinite(loadPerCpu) && loadPerCpu > 1 ? loadPerCpu : 1;
+  const scale = Math.min(Math.max(absolute, perCpu), SELF_TEST_TERM_WAIT_MAX_SCALE);
+  return Math.round(SELF_TEST_TERM_WAIT_FLOOR_MS * scale);
+}
+
+/**
+ * What the hard-timeout case may conclude from the receipt PLUS the fixture's own state.
+ *
+ * whl7d (coord P1, second gap): the window exists to allow one turn of the child's event loop, so the
+ * verdict must be read against evidence that the turn happened - not against a clock the box decides.
+ * `termHandled` is the fixture's `runner-term` record, written by the SIGTERM handler itself: it can only
+ * exist if the child was scheduled and ran its handler.
+ *
+ *   TERM handled + no KILL   -> clean           (the window covered the turn)
+ *   TERM handled + KILL      -> window-too-short (the DEFECT this must still catch: the child responded,
+ *                                                 yet the supervisor escalated before it could exit)
+ *   TERM not handled + KILL  -> escalated-blind (the child never got a turn; escalation was the only lawful
+ *                                                 action, and demanding "no escalation" there is what made
+ *                                                 the old assertion a race with the box)
+ *   TERM not handled + no KILL -> unexplained   (no turn AND no escalation: the run claims the group died
+ *                                                 without the child ever acknowledging TERM - not provable)
+ */
+export function termEscalationVerdict({ killSent, termHandled } = {}) {
+  if (termHandled && killSent) return "window-too-short";
+  if (termHandled) return "clean";
+  if (killSent) return "escalated-blind";
+  return "unexplained";
+}
+
+/** 1-minute load average (absolute runnable count), or 1 when it cannot be measured. */
+export function loadAverageSample() {
+  try {
+    const load = os.loadavg?.()[0];
+    return Number.isFinite(load) && load >= 0 ? load : 1;
+  } catch {
+    return 1;
+  }
 }
 
 /** 1-minute load per CPU, or 1 when it cannot be measured (never assume a loaded box). */
@@ -1138,8 +1178,12 @@ export async function resolveSupervisorConfig({
     forceObservationUnreadable: env.CAP_SECURITY_TEST_FORCE_OBSERVATION_UNREADABLE === "1",
     forceResidueUnreadable: env.CAP_SECURITY_TEST_FORCE_RESIDUE_UNREADABLE === "1",
     sampleFreezeMs,
-    // whl7d: declared relationship, not a flat race — see SELF_TEST_TERM_WAIT_FLOOR_MS.
-    termWaitMs: selfTestTermWaitMs({ loadPerCpu: loadPerCpuSample() }),
+    // whl7d: declared relationship, not a flat race — absolute load drives the window (see
+    // SELF_TEST_TERM_WAIT_FLOOR_MS for why load-per-CPU was wrong).
+    termWaitMs: selfTestTermWaitMs({
+      loadavg: loadAverageSample(),
+      loadPerCpu: loadPerCpuSample(),
+    }),
     killWaitMs: 1_000,
     evidenceRoot: durableDir("cap-sec-selftest-evidence"),
     profileRoot: PROFILE_ROOT,

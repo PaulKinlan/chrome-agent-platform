@@ -13,6 +13,7 @@ import {
   isVanishedGroupError,
   isVanishedProcError,
   liveObservedResidue,
+  loadAverageSample,
   loadPerCpuSample,
   pidAlive,
   ProcessGoneError,
@@ -24,6 +25,7 @@ import {
   SELF_TEST_TERM_WAIT_FLOOR_MS,
   SELF_TEST_TERM_WAIT_MAX_SCALE,
   SELF_TEST_TOKEN,
+  termEscalationVerdict,
   terminateAttestedGroup,
   terminateAttestedGroupSafely,
   waitUntil,
@@ -491,32 +493,67 @@ Deno.test("security-suite custody: PGID/SID mismatch fails closed with no fixtur
 // chrome-agent-platform-whl7d: the self-test TERM grace window is a declared RELATIONSHIP to measured load
 // (see SELF_TEST_TERM_WAIT_FLOOR_MS in scripts/security-suite-custody.mjs), so the case below can go on
 // asserting "no escalation" at any load. A flat 250 ms made that assertion a race with the box: the
-// merger's full gate redded it on 2026-10-22 at load 3.9 with this file byte-identical to main.
-Deno.test("whl7d: the self-test TERM grace window scales with measured load and stays bounded", () => {
+// merger's full gate redded it on 2026-10-22 at loadavg 3.9 with this file byte-identical to main.
+//
+// The MOTIVATING CASE is pinned below as its own assertion: loadavg 3.9 on THIS 8-core VM reads as 0.49
+// load-per-CPU, and the first cut of this fix scaled by that ratio, so it clamped to the floor and left the
+// very state that motivated it uncovered (coord P1, verified: cpus 8, loadavg 3.9 -> ratio 0.49).
+Deno.test("whl7d: the self-test TERM grace window keys on ABSOLUTE saturation and stays bounded", () => {
   const idle = SELF_TEST_TERM_WAIT_FLOOR_MS;
-  assertEquals(selfTestTermWaitMs({ loadPerCpu: 1 }), idle, "an idle box gets exactly the floor");
-  assertEquals(selfTestTermWaitMs({ loadPerCpu: 0 }), idle);
-  assertEquals(selfTestTermWaitMs({ loadPerCpu: Number.NaN }), idle);
+  assertEquals(selfTestTermWaitMs({ loadavg: 1 }), idle, "an idle box gets exactly the floor");
+  assertEquals(selfTestTermWaitMs({ loadavg: 0 }), idle);
+  assertEquals(selfTestTermWaitMs({ loadavg: Number.NaN }), idle);
   assertEquals(selfTestTermWaitMs({}), idle, "unmeasurable load is not assumed loaded");
+  // THE MOTIVATING CASE, asserted rather than described: the box that redded the gate was at loadavg 3.9
+  // with 8 cores. Absolute load must move the window off its floor even though per-CPU load reads 0.49.
+  const motiving = selfTestTermWaitMs({ loadavg: 3.9, loadPerCpu: 3.9 / 8 });
+  assert(
+    motiving > idle,
+    `loadavg 3.9 on an 8-core box must widen the window above the ${idle}ms floor, got ${motiving}ms — ` +
+      `scaling by load-per-CPU (0.49) is the defect this pins`,
+  );
+  assert(motiving >= 900, `the motivating case must get a window of ~1s, got ${motiving}ms`);
+  // Per-CPU load can only ever RAISE the window (a genuinely oversubscribed big host), never lower it.
   assertEquals(
-    selfTestTermWaitMs({ loadPerCpu: SELF_TEST_TERM_WAIT_MAX_SCALE }),
+    selfTestTermWaitMs({ loadavg: 3.9, loadPerCpu: 12 }),
     idle * SELF_TEST_TERM_WAIT_MAX_SCALE,
-    "load scales the window, so one event-loop turn on a busy box is not read as a custody defect",
+    "a per-CPU oversubscription still scales, and clamps at the ceiling",
   );
   assertEquals(
-    selfTestTermWaitMs({ loadPerCpu: 99 }),
+    selfTestTermWaitMs({ loadavg: 8 }),
     idle * SELF_TEST_TERM_WAIT_MAX_SCALE,
     "the window must clamp, so escalation is still bounded",
   );
   let previous = 0;
-  for (const load of [1, 1.5, 2, 3, 4, 6, 99]) {
-    const ms = selfTestTermWaitMs({ loadPerCpu: load });
+  for (const load of [0, 1, 1.5, 2, 3, 4, 6, 99]) {
+    const ms = selfTestTermWaitMs({ loadavg: load });
     assert(ms >= previous, `load ${load} produced ${ms}ms, below the previous ${previous}ms`);
     previous = ms;
   }
-  // The sample the supervisor actually uses is a load per CPU, never a raw load average.
-  const sampled = loadPerCpuSample();
-  assert(Number.isFinite(sampled) && sampled >= 0, `the load sample must be finite and non-negative, got ${sampled}`);
+  // The samples the supervisor actually uses: one absolute, one per CPU. Both must be finite and sane, and
+  // the ABSOLUTE one is what decides (it is passed first and the reader above proves it dominates).
+  const absolute = loadAverageSample();
+  assert(Number.isFinite(absolute) && absolute >= 0, `the absolute load sample must be finite and non-negative, got ${absolute}`);
+  const perCpu = loadPerCpuSample();
+  assert(Number.isFinite(perCpu) && perCpu >= 0, `the per-CPU load sample must be finite and non-negative, got ${perCpu}`);
+});
+
+// whl7d (coord P1, second gap): the window is declared, so the VERDICT must be read against evidence that
+// the child's event loop actually turned - `runner-term` can only exist if the SIGTERM handler ran. The four
+// combinations are pinned, and the third one is the defect this test exists to still catch.
+Deno.test("whl7d: the escalation verdict is evidence-based, and still fails when the window was too short", () => {
+  assertEquals(termEscalationVerdict({ killSent: false, termHandled: true }), "clean");
+  assertEquals(
+    termEscalationVerdict({ killSent: true, termHandled: true }),
+    "window-too-short",
+    "a child that ACKed TERM and was still escalated to KILL is the defect, and must not read as clean",
+  );
+  assertEquals(
+    termEscalationVerdict({ killSent: true, termHandled: false }),
+    "escalated-blind",
+    "a child that never got a turn can only be killed - demanding 'no escalation' there is the race",
+  );
+  assertEquals(termEscalationVerdict({ killSent: false, termHandled: false }), "unexplained");
 });
 
 Deno.test("security-suite custody: hard timeout sends TERM and returns 124", async () => {
@@ -525,13 +562,25 @@ Deno.test("security-suite custody: hard timeout sends TERM and returns 124", asy
     assertEquals(result.code, 124);
     assertEquals(result.receipt?.timedOut, true);
     assertEquals(result.receipt?.termSent, true);
-    assertEquals(
-      result.receipt?.killSent,
-      false,
-      `a fixture that exits on TERM must not be escalated to KILL; the window is load-scaled ` +
-        `(self-test floor ${SELF_TEST_TERM_WAIT_FLOOR_MS}ms x measured load, ceiling x${SELF_TEST_TERM_WAIT_MAX_SCALE})`,
+    // whl7d: TERM is always first (structural). Whether a KILL followed is a property of whether the child's
+    // event loop TURNED, which the fixture records itself - so the assertion is evidence-based, and it still
+    // reds if the supervisor escalates over a child that had already acknowledged TERM.
+    const termHandled = result.state.some((row) => row.event === "runner-term");
+    const verdict = termEscalationVerdict({ killSent: result.receipt?.killSent === true, termHandled });
+    assert(
+      verdict === "clean" || verdict === "escalated-blind",
+      `hard timeout must either exit on TERM (clean) or escalate only because the child never turned ` +
+        `(escalated-blind); got '${verdict}' (termHandled=${termHandled}, killSent=${String(result.receipt?.killSent)}). ` +
+        `'window-too-short' means the child ACKed TERM and was still KILLed - the window ` +
+        `(floor ${SELF_TEST_TERM_WAIT_FLOOR_MS}ms x absolute load, ceiling x${SELF_TEST_TERM_WAIT_MAX_SCALE}) is too small.`,
     );
-    assert(result.state.some((row) => row.event === "runner-term"));
+    if (termHandled) {
+      assertEquals(
+        result.receipt?.killSent,
+        false,
+        "a fixture that exited on TERM must not have been escalated",
+      );
+    }
     assertEquals(result.receipt?.cleaned, true);
     await assertRecordedPidsGone(result);
   } finally {
