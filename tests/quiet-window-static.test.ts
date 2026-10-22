@@ -111,3 +111,36 @@ Deno.test("kemd3: quiet-window test fixture must not print alarming un-mocked ru
   assertEquals(match[1], "fixture:mock-compiler", "compilerNames in sustained fixture must be explicitly mock-prefixed");
 });
 
+Deno.test("3ow6b / jtpa5: the module-scope guard in tests/quiet-window.test.ts is live and registered first", async () => {
+  // This half stays a SOURCE READER and spawns nothing (chrome-agent-platform-fgik F1 keeps the
+  // always-on set cheap; a child-process import check here was redded for exactly that reason). The
+  // syntax-independent behaviour is asserted in tests/quiet-window.test.ts itself, as the
+  // FIRST-registered test, which is the only layer that can catch a module-scope set of any spelling
+  // (nested block, destructuring, multi-line call, appended after the last test).
+  //
+  // What is decidable from source, and therefore pinned here: (1) the baseline capture the
+  // behavioural guard compares against exists at module scope, BEFORE any registration; (2) the
+  // prelude never calls Deno.env.set/delete on the key — reads are the point, writes are the leak; and
+  // (3) the guard really is the first Deno.test in the file, which is what makes it ran-before-any-other.
+  const src = await Deno.readTextFile(`${ROOT}tests/quiet-window.test.ts`);
+  const firstTestIdx = src.indexOf("Deno.test(");
+  assert(firstTestIdx > 0, "tests/quiet-window.test.ts must define at least one Deno.test");
+  const prelude = src.slice(0, firstTestIdx);
+
+  assert(
+    /const\s+AMBIENT_PROC_SCAN_MS\s*=\s*Deno\.env\.get\(\s*["']CAP_QUIET_MAX_PROC_SCAN_MS["']\s*\)/.test(
+      prelude,
+    ),
+    "the module-scope arrival baseline must be captured before any test registration (chrome-agent-platform-jtpa5)",
+  );
+  assert(
+    !/Deno\.env\.(set|delete)\s*\(\s*["']CAP_QUIET_MAX_PROC_SCAN_MS["']/.test(prelude),
+    "tests/quiet-window.test.ts must not SET or DELETE CAP_QUIET_MAX_PROC_SCAN_MS at module scope in the prelude (chrome-agent-platform-3ow6b)",
+  );
+  assert(
+    src.slice(firstTestIdx, firstTestIdx + 200).includes("module evaluation time"),
+    "the module-scope guard must be the FIRST-registered test in tests/quiet-window.test.ts: a later position lets an earlier test body run first (chrome-agent-platform-jtpa5)",
+  );
+});
+
+

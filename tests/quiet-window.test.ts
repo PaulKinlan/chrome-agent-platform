@@ -55,11 +55,16 @@ function sample(over: Partial<LoadSample> = {}): LoadSample {
   };
 }
 
-// Under parallel-phase contention on a loaded box, default 400ms proc scan budget can truncate
-// before discovering the test's own spawned burner processes (ssemb / kzy5x). Ensure sufficient budget during tests.
-if (!Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS")) {
-  Deno.env.set("CAP_QUIET_MAX_PROC_SCAN_MS", "2500");
-}
+// CAP_QUIET_MAX_PROC_SCAN_MS must never be overridden at MODULE SCOPE (chrome-agent-platform-3ow6b):
+// an un-restored module-scope set leaks into every later suite in the same deno process, so it is
+// process-wide state, not test-local configuration. Under parallel-phase contention, tests that need
+// a larger proc scan budget scope it inside the individual test with save/restore in a finally.
+//
+// The value this process ARRIVED with is captured here, at import time, BEFORE any test registration.
+// The first-registered assertion below compares against it rather than against `undefined`, so the
+// guard reds a module-scope set by this file of ANY spelling (jtpa5) while an operator/fleet shell
+// that exports the knob does not false-RED a correct tree (chrome-agent-platform-6ai58).
+const AMBIENT_PROC_SCAN_MS = Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS");
 
 const SPEC = { maxLoadPerCore: 0.35, maxCompilers: 1, maxWaitMs: 1000, sampleMs: 50, sustainedSamples: 3 };
 
@@ -210,6 +215,25 @@ async function startCalibratedCompiler(dir: string, targetMs: number): Promise<{
   }).spawn();
   return { proc, pid: proc.pid, input, compileMs };
 }
+
+Deno.test("3ow6b / jtpa5: CAP_QUIET_MAX_PROC_SCAN_MS must not change at module evaluation time", () => {
+  // The property is syntax-independent by construction: module evaluation runs every top-level
+  // statement BEFORE any test body, so a module-scope set of any spelling — bare statement, nested
+  // block, destructuring, multi-line call, appended after the last test — has already executed when
+  // this FIRST-registered test runs. That is why it is a behavioural assertion and not a text scan
+  // (three textual rounds each closed one syntax and let the next one through).
+  //
+  // It asserts equality with the value the process STARTED with, not `undefined`: a module-scope set
+  // by this file differs from that baseline and reds, while an ambient export from an operator shell
+  // or fleet wrapper leaves the baseline unchanged and stays green (chrome-agent-platform-6ai58).
+  assertEquals(
+    Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS"),
+    AMBIENT_PROC_SCAN_MS,
+    `CAP_QUIET_MAX_PROC_SCAN_MS changed before any test ran (arrived as ${
+      AMBIENT_PROC_SCAN_MS ?? "unset"
+    }): module-scope mutation detected (chrome-agent-platform-jtpa5)`,
+  );
+});
 
 Deno.test("dnop: a PARKED heavy-named daemon is not a build; a COMPILING one still is", async () => {
   // The measured defect: three esbuild SERVICE daemons (ages 1d14h, 2d00h,
@@ -1293,3 +1317,20 @@ Deno.test("n64td / o7abi: createExecutableStub eliminates write-then-exec ETXTBS
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 });
+
+Deno.test("3ow6b / jtpa5: CAP_QUIET_MAX_PROC_SCAN_MS is back to its arrival value at end of suite", async () => {
+  // The scoped overrides in this file (the 1io9 drills that raise and zero the budget) save and
+  // restore in a finally. This asserts that they actually restore, including against a non-undefined
+  // ambient baseline: comparing to AMBIENT_PROC_SCAN_MS rather than `undefined` keeps the check
+  // honest when the knob arrived set (chrome-agent-platform-6ai58).
+  assertEquals(
+    Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS"),
+    AMBIENT_PROC_SCAN_MS,
+    `CAP_QUIET_MAX_PROC_SCAN_MS leaked or left changed after the suite's scoped overrides (arrived as ${
+      AMBIENT_PROC_SCAN_MS ?? "unset"
+    }) (chrome-agent-platform-jtpa5)`,
+  );
+});
+
+
+
