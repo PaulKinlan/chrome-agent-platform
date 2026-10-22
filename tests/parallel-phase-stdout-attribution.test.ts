@@ -73,6 +73,25 @@ for (const site of ["run-tests", "select-tests"] as const) {
     assertStringIncludes(out, "culprit unconfirmed", `do not call every parallel candidate a proven failure:\n${out}`);
     if (site === "run-tests") {
       assertStringIncludes(out, "run-tests: 1 files total", `the full-gate CLI-file path must reach its summary:\n${out}`);
+      // jtrny: a phase killed by its own bound must say HOW FAR IT GOT, and the summary must not read as a
+      // completion. The old code printed no status line for a timed-out phase, so the only
+      // completion-shaped line left in a real gate log was this summary ("N files total ... wall Xs") — two
+      // agents read a 15%-done starved phase as a finished suite plus a mysterious 568s POST-TEST tail.
+      assertStringIncludes(
+        out,
+        "run-tests: parallel phase progress at the kill: 0 of 1 file(s) completed a test, 1 produced no completed result",
+        `a killed phase must state what it measurably achieved:\n${out}`,
+      );
+      assertStringIncludes(
+        out,
+        "run-tests: parallel phase (1 files) TIMED-OUT in",
+        `a killed phase must print a status line of its own shape, not only the planner summary:\n${out}`,
+      );
+      assertStringIncludes(
+        out,
+        "— INCOMPLETE: parallel phase killed at its 2.5s bound",
+        `the planner summary must refuse to read as completion when a phase was killed:\n${out}`,
+      );
     } else {
       assertStringIncludes(out, "WEFF_DRIVER_RC=124", `the selector fixture must hit its phase timeout:\n${out}`);
     }

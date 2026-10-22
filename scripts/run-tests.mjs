@@ -32,6 +32,7 @@ import { parallelPlan, computeParallelPhaseTimeout, DEFAULT_PARALLEL_TIMEOUT_MS 
 import { loadWeights, scheduleOrder } from "./lib/parallel-schedule.mjs";
 import { emitGateLedger, deferredTierEntries, fullTierManifestFields, parseGateBuild } from "./lib/gate-manifest.mjs";
 import { parseSuiteDurations, slowestSuites } from "./lib/parallel-durations.mjs";
+import { candidateBlockLines, incompleteNote, killProgress, killProgressLine } from "./lib/phase-outcome.mjs";
 import { checkBrowserPrerequisite } from "./lib/browser-prerequisite.mjs";
 import {
   ENVIRONMENTAL_REFUSAL_EXIT,
@@ -45,7 +46,7 @@ const PARALLEL_READY_FILE = process.env.CAP_PARALLEL_READY_FILE;
 const PARALLEL_READY_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_READY_TIMEOUT_MS ?? 60_000);
 
 
-function runParallel(files, phase = "parallel phase", durationsOut = null) {
+function runParallel(files, phase = "parallel phase", durationsOut = null, killedOut = null) {
   if (!files || files.length === 0) return Promise.resolve(0);
   // Concurrent scheduling cannot identify the stalled file. Announce every
   // candidate BEFORE spawn so even a mid-phase kill leaves names on both streams.
@@ -219,13 +220,30 @@ function runParallel(files, phase = "parallel phase", durationsOut = null) {
       }
       if (PARALLEL_READY_FILE && !readyOk) {
         announce(`\nrun-tests: ${phase} child exited before creating ready marker ${PARALLEL_READY_FILE}`);
+        if (killedOut) killedOut.push(`${phase} child exited before its ready marker`);
         resolve(124);
         return;
       }
       if (timedOut) {
+        // jtrny: a killed phase must say HOW FAR IT GOT, and must never be reported in a shape that reads
+        // as completion. The old block named every candidate "culprit unconfirmed" and printed no phase
+        // status line at all, so the only completion-shaped line left in the log was the planner summary
+        // ("N files total … wall Xs") — which is how a 15%-done starved phase was read as a finished
+        // suite plus a mysterious 568s tail. See scripts/lib/phase-outcome.mjs.
+        const secsAtKill = ((Date.now() - t0) / 1000).toFixed(0);
+        const progress = killProgress(files, capturedOutput);
         announce(`\nrun-tests: ${phase} TIMED OUT after ${phaseTimeoutMs / 1000}s`);
-        announce(`run-tests: TIMED-OUT ${phase.toUpperCase()} CANDIDATE FILE(S) (culprit unconfirmed):`);
-        for (const file of files) announce(`  - ${file} (${phase} timed out; individual culprit unknown)`);
+        announce(killProgressLine({ phase, files, output: capturedOutput, elapsedSecs: Number(secsAtKill) }));
+        announce(`run-tests: ${phase} (${files.length} files) TIMED-OUT in ${secsAtKill}s (bound ${phaseTimeoutMs / 1000}s)`);
+        for (const line of candidateBlockLines({ phase, candidates: progress.noResult, total: files.length })) {
+          announce(line);
+        }
+        if (killedOut) {
+          killedOut.push(
+            `${phase} killed at its ${phaseTimeoutMs / 1000}s bound ` +
+              `(${progress.completed.length}/${files.length} files had completed a test)`,
+          );
+        }
         resolve(124);
         return;
       }
@@ -373,11 +391,14 @@ export async function main(args = process.argv.slice(2)) {
   const readOnly = plan.files.filter((file) => READ_ONLY_DIST.has(file));
   const other = plan.files.filter((file) => !READ_ONLY_DIST.has(file));
   const suiteDurations = new Map();
+  // jtrny: every phase the bound killed, so the planner summary can refuse to read as a completion and
+  // the manifest can carry the reason instead of leaving a reader to infer it from an rc.
+  const killedPhases = [];
   const readOnlyRc = await runReadOnlyDistBatch(readOnly,
-    (files) => runParallel(files, "post-build read-only phase", suiteDurations));
+    (files) => runParallel(files, "post-build read-only phase", suiteDurations, killedPhases));
   // Preserve kz27: a failed builder OR read-only guard must not hide the
   // independent parallel guards; both phases run and the first failure wins.
-  const parallelRc = await runParallel(other, "parallel phase", suiteDurations);
+  const parallelRc = await runParallel(other, "parallel phase", suiteDurations, killedPhases);
   const rc = combinePhaseExitCodes(serialRc, readOnlyRc, parallelRc);
   const buildDeferredCount = cliFiles.length === 0 ? all.filter((f) => BUILD_GATE.has(f)).length : 0;
   const heavyDeferredCount = cliFiles.length === 0 ? all.filter((f) => HEAVY_GATE.has(f)).length : 0;
@@ -388,7 +409,8 @@ export async function main(args = process.argv.slice(2)) {
   console.log(
     `run-tests: ${serialFiles.length + parallel.length} files total, ${plan.skipped} skipped` +
       ` (${serialFiles.length} serial, ${readOnly.length} post-build read-only, ${parallel.length - readOnly.length} other parallel` +
-      `${deferredSummary}), wall ${((Date.now() - t0) / 1000).toFixed(0)}s`,
+      `${deferredSummary}), wall ${((Date.now() - t0) / 1000).toFixed(0)}s` +
+      incompleteNote(killedPhases),
   );
   // The coverage ledger for the FULL tier (chrome-agent-platform-0eq00). Only the default `npm test`
   // form is a gate; an explicit-file run (`run-tests.mjs tests/x.test.ts`) is an inner-loop tool and
@@ -419,6 +441,7 @@ export async function main(args = process.argv.slice(2)) {
       build: parseGateBuild(process.env.CAP_GATE_BUILD_JSON),
       fileMappingContext,
       suiteDurations,
+      incomplete: killedPhases.length ? killedPhases.join("; ") : null,
     });
     emitGateLedger({ manifest, fileMapping: manifest?.fileMapping ?? [] });
   }
