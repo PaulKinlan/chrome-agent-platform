@@ -15,7 +15,11 @@ Deno.test("queueing longer than the budget is NOT a failure once the lock marker
   //
   // Run with two distinct queue durations to prove lockWaitMs is dynamically measured,
   // killing any constant mutant (e.g. opts.budgetMs * 2) (mlopt).
-  // In rShort, the child queues ~0.4s and then does ~0.5s of real work.
+  // In rShort, the child queues ~0.4s and then does ~0.35s of real work under a 700ms budget:
+  // the scenario total (0.75s) EXCEEDS the budget, so a from-spawn budget mutant would kill
+  // this child — the PASS is the proof that queue time is excluded (restored per review of
+  // f6d0642dc; the 1500ms budget had removed exactly that proof). Work is 0.35s, not 0.5s,
+  // so the post-marker budget keeps ~350ms of scheduler-overshoot headroom at 700ms.
   // The child measures its own elapsed segments (time-to-marker and post-marker work) via timestamps.
   // Bounds are asserted relative to measured segments with sane floors, so slow-box overhead
   // does not false-red a passing queue, while still killing:
@@ -23,8 +27,8 @@ Deno.test("queueing longer than the budget is NOT a failure once the lock marker
   // - total-lifetime mutants (endedAt - spawnedAt) (dbdwu) which fail to exclude post-marker work.
   const rShort = await runLockAware({
     executable: "/bin/sh",
-    args: ["-c", `t0=$(date +%s%3N); sleep 0.4; t1=$(date +%s%3N); echo ${MARK} $t1; sleep 0.5; t2=$(date +%s%3N); echo "CAP_TIMINGS $t0 $t1 $t2"; echo CAP_SECURITY_RESULT '{"ok":true}'`],
-    budgetMs: 1500,
+    args: ["-c", `t0=$(date +%s%3N); sleep 0.4; t1=$(date +%s%3N); echo ${MARK} $t1; sleep 0.35; t2=$(date +%s%3N); echo "CAP_TIMINGS $t0 $t1 $t2"; echo CAP_SECURITY_RESULT '{"ok":true}'`],
+    budgetMs: 700,
     lockMarker: MARK,
   });
   assertEquals(rShort.killedFor, null);
@@ -36,9 +40,9 @@ Deno.test("queueing longer than the budget is NOT a failure once the lock marker
   const workShort = Number(mShort[3]) - Number(mShort[2]);
   const totalShort = rShort.lockWaitMs + rShort.ranMs;
 
-  // Sane floors: lockWaitMs >= 300ms, ranMs >= 400ms
+  // Sane floors: lockWaitMs >= 300ms, ranMs >= 250ms (queue 400 / work 350 minus 100 slack).
   assert(rShort.lockWaitMs >= 300, `short lock wait (${rShort.lockWaitMs}ms) must meet sane floor (>= 300ms)`);
-  assert(rShort.ranMs >= 400, `short ranMs (${rShort.ranMs}ms) must meet sane floor (>= 400ms)`);
+  assert(rShort.ranMs >= 250, `short ranMs (${rShort.ranMs}ms) must meet sane floor (>= 250ms)`);
 
   // Bounds relative to measured elapsed segments. The tolerance is DERIVED, not a magic
   // ratio: under load the child's own timestamp capture (and its sleep wake) slips by the
@@ -53,9 +57,16 @@ Deno.test("queueing longer than the budget is NOT a failure once the lock marker
     `short lock wait (${rShort.lockWaitMs}ms) tracks time-to-marker (${waitShort}ms, overshoot ${overshootShort}ms)`,
   );
   assert(
-    rShort.ranMs >= Math.min(workShort, 500) - 50,
+    rShort.ranMs >= Math.min(workShort, 350) - 50,
     `short ranMs (${rShort.ranMs}ms) tracks post-marker work (${workShort}ms)`,
   );
+  // Upper bounds, anchored to the scenario budget (700ms), restored per the review of
+  // f6d0642dc: the measured queue must stay under the budget (queue-exclusion visible), and the
+  // post-marker work must FIT the budget once the clock restarts at the marker (the
+  // exclusion payoff). A total-lifetime lockWaitMs (~750ms+ of runtime) fails the first;
+  // a from-spawn ranMs (queue + work ≈ 750ms+) fails the second.
+  assert(rShort.lockWaitMs < 700, `short lock wait (${rShort.lockWaitMs}ms) must stay under the 700ms budget (queue is excluded, not accumulated)`);
+  assert(rShort.ranMs < 700, `short ranMs (${rShort.ranMs}ms) must fit the 700ms budget once the clock restarts at the marker`);
   // Killing dbdwu: lockWaitMs tracks only pre-marker queueing, not total lifetime (endedAt - spawnedAt).
   // Under honest execution, (rShort.lockWaitMs - waitShort) is merely spawn overhead (~100-300ms),
   // which is strictly less than the post-marker ranMs (~500ms+).
