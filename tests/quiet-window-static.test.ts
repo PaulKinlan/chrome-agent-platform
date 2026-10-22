@@ -111,3 +111,15 @@ Deno.test("kemd3: quiet-window test fixture must not print alarming un-mocked ru
   assertEquals(match[1], "fixture:mock-compiler", "compilerNames in sustained fixture must be explicitly mock-prefixed");
 });
 
+Deno.test("3ow6b: quiet-window.test.ts must not mutate CAP_QUIET_MAX_PROC_SCAN_MS at module scope", async () => {
+  const src = await Deno.readTextFile(`${ROOT}tests/quiet-window.test.ts`);
+  const firstTestIdx = src.indexOf("Deno.test(");
+  assert(firstTestIdx > 0, "tests/quiet-window.test.ts must define at least one Deno.test");
+  const prelude = src.slice(0, firstTestIdx);
+  assert(
+    !prelude.includes("CAP_QUIET_MAX_PROC_SCAN_MS"),
+    "tests/quiet-window.test.ts must not mutate or set CAP_QUIET_MAX_PROC_SCAN_MS at module scope in the prelude (chrome-agent-platform-3ow6b)",
+  );
+});
+
+
