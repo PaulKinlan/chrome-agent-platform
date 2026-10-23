@@ -84,6 +84,23 @@ A timeout that follows a failed assertion is a **PRODUCT FAILURE**, and the prec
 
 ---
 
+### Measuring a gate phase: the noise floor is 1.35x (chrome-agent-platform-og9m7)
+
+Before quoting a wall-clock number as evidence for a permanent change, read
+[docs/GATE-MEASUREMENT-PROTOCOL.md](GATE-MEASUREMENT-PROTOCOL.md). Four **identical** arms of the always-on gate
+on one tree, page cache warmed, all green, measured 193 s / 176 s / 238 s / 187 s: a **1.35x spread with no code
+difference**, uncorrelated with the reported load (the fastest arm ran at the highest load), and with no
+cold-first-arm effect. That sample is a noise floor, not an A/B (load recorded after only, one schedule repeated,
+no per-arm scheduler log). The threshold is `max(measured identical-arm spread, worst observed same-schedule
+pair)`, which is **~2x today** (1.35x here, ~2.0x from the widest known same-schedule pair), and it tightens as
+better samples arrive. So a comparison under today's ~2x is `undecided`, not a small win, and per-suite timings
+taken from a concurrent run vary far more than the phase total (median 2.39x, p90 5.0x across the same four arms).
+Interleave arms (A B A B), run at least two per side, print load before and after each, and grep the log for the
+line proving which scheduler actually ran - an off switch that silently does nothing produces three copies of the
+same arm and reads as "no effect". If the machine cannot be measured (truncated probe, refused scan), the run is
+**not evidence**: fail closed. A bound raise requires a valid measured comparison; it can never be inferred from
+this protocol existing.
+
 ## 3. Step-by-Step Landing Checklist
 
 Execute every landing inside a dedicated durable worktree (e.g. `~/worktrees/cap-merger-landing`):
