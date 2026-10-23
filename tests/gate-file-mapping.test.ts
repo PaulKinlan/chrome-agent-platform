@@ -129,3 +129,51 @@ Deno.test("sgzyg: fail-closed FULL records changed heavy test as not run, with i
   assertStringIncludes(rows.find((row) => row.file === "tests/python-runtime.test.ts")?.reason ?? "", "test:heavy");
   assertEquals(rows.find((row) => row.file === "extension/background/service-worker.js")?.executed_suites, ["tests/thread-export-sw-entry.test.ts"]);
 });
+
+// chrome-agent-platform-ea2qv: a FAILED run must not accuse the SELECTOR. select-tests.mjs zeroes the
+// executed suite list when rc != 0 (w6kc0: a failed run certifies nothing, and that must stay), and the
+// ledger used to translate that empty list into "not run: ... heavy tier owns the verdict" / "reachable
+// suite(s) not executed" — a selection omission that never happened. On 2026-10-23 that text sent coord
+// to commission a selector fix and made me file a P3 against the selector (4ml4b, withdrawn) while the
+// gate's own log showed the suite had run and passed 37 tests inside that very run.
+Deno.test("ea2qv: a failed run reports the FAILURE, not a selection omission, for a file whose suites were selected", () => {
+  const changed = ["scripts/lib/quiet-window.ts"];
+  const candidates = { "scripts/lib/quiet-window.ts": ["tests/quiet-window.test.ts"] };
+  const [failed] = explainChangedFileMapping({
+    changed,
+    candidates,
+    executedSuites: [], // exactly what select-tests.mjs passes when rc != 0
+    omitted: [], // the suite was NOT omitted — it ran
+    runExitCode: 1,
+  });
+  assertEquals(failed.status, "unmapped");
+  assertEquals(failed.executed_suites, []);
+  assertStringIncludes(failed.reason, "run failed, rc=1");
+  assertStringIncludes(failed.reason, "no selection omission is claimed");
+  assert(
+    !failed.reason.includes("quiet box") && !failed.reason.includes("not executed") && !failed.reason.includes("unselected"),
+    `a failed run must not name a selection omission: ${failed.reason}`,
+  );
+});
+
+Deno.test("ea2qv: a green run's rows are byte-identical to today's, and a real omission keeps its own reason", () => {
+  const base = {
+    changed: ["scripts/lib/quiet-window.ts", "tests/python-runtime.test.ts"],
+    candidates: {
+      "scripts/lib/quiet-window.ts": ["tests/quiet-window.test.ts"],
+      "tests/python-runtime.test.ts": ["tests/python-runtime.test.ts"],
+    },
+    executedSuites: ["tests/quiet-window.test.ts"],
+    omitted: [{ file: "tests/python-runtime.test.ts", reason: "deferred: Pyodide tier only" }],
+  };
+  const implicit = explainChangedFileMapping(base as never);
+  const explicitGreen = explainChangedFileMapping({ ...base, runExitCode: 0 } as never);
+  assertEquals(JSON.stringify(explicitGreen), JSON.stringify(implicit), "rc=0 must not change one byte of the ledger");
+  assertEquals(implicit[0].status, "mapped", "the file whose suite ran is still mapped on a green run");
+
+  // rc != 0, but this file's suite was GENUINELY omitted: the omission is true whatever the run did, so
+  // it must keep its own reason instead of being relabelled as a failure.
+  const failed = explainChangedFileMapping({ ...base, executedSuites: [], runExitCode: 7 } as never);
+  assertStringIncludes(failed[1].reason, "Pyodide tier only");
+  assertStringIncludes(failed[0].reason, "run failed, rc=7");
+});
