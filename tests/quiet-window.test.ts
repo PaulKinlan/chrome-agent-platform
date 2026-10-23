@@ -1143,6 +1143,43 @@ Deno.test("r2ai: a box that CANNOT be sampled at either budget still refuses, an
   }
 });
 
+Deno.test("30429: a zero-ms scan budget truncates at the boundary, pinned with a FROZEN clock (the pre-fix `>` comparison reds this)", async () => {
+  // The exact-boundary pin. The budget test used `>` against Date.now(), so a walk that consumed
+  // 0 ms satisfied neither side of the comparison and an impossible zero-millisecond budget reported
+  // measurable:true. A real /proc walk costs ~1ms on this box, which HIDES the boundary, so the clock
+  // is injected: frozen at 0, `0 - 0 >= 0` is true (refuse now) while the old `0 - 0 > 0` was false.
+  const { readLoadSample } = await import("../scripts/lib/quiet-window.ts");
+  const frozen = await readLoadSample(null, { hasProc: true, now: () => 0, budget: { entries: 4096, ms: 0 } });
+  assertEquals(frozen.measurable, false, "a zero-ms budget must refuse on the first row, not report a measurement");
+  assert(/truncated/.test(frozen.error ?? ""), `the refusal must name truncation: ${frozen.error}`);
+  assert(/0 ms/.test(frozen.error ?? "") || /\/ 0 ms/.test(frozen.error ?? ""), `the refusal must show the 0 ms budget: ${frozen.error}`);
+
+  // The boundary the OTHER way: with a budget the frozen clock cannot reach, the same walk measures.
+  const measured = await readLoadSample(null, { hasProc: true, now: () => 0, budget: { entries: 4096, ms: 1 } });
+  assert(measured.error === undefined || !/truncated/.test(measured.error), `1 ms must not truncate at 0 ms elapsed: ${measured.error}`);
+});
+
+Deno.test("30429: an explicit CAP_QUIET_MAX_PROC_SCAN_MS=0 ALONE refuses instead of reading as measurable", async () => {
+  // The edge: the budget comparison used `>` against Date.now(). A small or fast table finishes in
+  // 0 ms, so `0 > 0` was false and a zero-millisecond (i.e. impossible) budget reported
+  // measurable:true. Only the ENTRIES bound refused it before, which is why the r2ai drill above sets
+  // both. `>=` makes an explicit 0 mean "refuse now", which is what an operator writing 0 asks for.
+  const { readLoadSample } = await import("../scripts/lib/quiet-window.ts");
+  const before = [Deno.env.get("CAP_QUIET_MAX_PROC_SCAN"), Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS")] as const;
+  Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN"); // entries stay at the generous default
+  Deno.env.set("CAP_QUIET_MAX_PROC_SCAN_MS", "0"); // the ONLY constraint
+  try {
+    const s = await readLoadSample();
+    assertEquals(s.measurable, false, "an impossible time budget must never produce a measurable sample");
+    assert(/truncated/.test(s.error ?? ""), `the refusal must name truncation: ${s.error}`);
+    assert(/0 ms/.test(s.error ?? ""), `and it must show the zero budget it was given: ${s.error}`);
+    assert(/retry/i.test(s.error ?? ""), `and it must say the retry was tried (4 x 0 ms is still 0): ${s.error}`);
+  } finally {
+    if (before[0] === undefined) Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN"); else Deno.env.set("CAP_QUIET_MAX_PROC_SCAN", before[0]);
+    if (before[1] === undefined) Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN_MS"); else Deno.env.set("CAP_QUIET_MAX_PROC_SCAN_MS", before[1]);
+  }
+});
+
 // ── qs8v7: the threshold counts heavy builder JOBS, not compiler processes ────────────────────────
 // The incident: a union gate read "active heavy-builders 9 > 1 (named: rustc ...)" while ONE Rust
 // build was running. A cargo/rust build forks one rustc per codegen unit, so a pid count turned a
