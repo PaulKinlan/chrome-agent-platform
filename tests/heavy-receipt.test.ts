@@ -2,14 +2,17 @@
 //
 // The gate fails closed without a fresh passing heavy receipt for the exact tree being
 // certified, so these tests pin every branch of checkHeavyReceipt plus the two wirings:
-// heavy-gate writes a receipt for every outcome, and run-tests invokes the check on the gate
-// form only. All file assertions run against a repo-local temp durable root (CAP_DURABLE_ROOT),
-// set and restored inside each test — process-global env, but deno --parallel isolates files
-// in separate workers, so cross-file interference is not possible (same pattern as
-// tests/durable-root.test.ts).
+// heavy-gate writes a receipt for every outcome, and the gate command invokes the check.
+//
+// ISOLATION: receipts are content-addressed by git tree hash, so these tests mint their own
+// RANDOM 40-hex tree per test and remove the files they wrote in a finally. That keeps every
+// test independent (no order, no machine state, no files another lane's concurrent run of this
+// same file is touching) without mutating the parent process's durable root at all — a test
+// that does that races parallel suites, which is why tests/durable-root.test.ts fails the gate
+// on the pattern (bead zuo0i).
 
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
-import { mkdirSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -21,34 +24,42 @@ import {
 
 const ROOT = join(fileURLToPath(import.meta.url), "..", "..");
 
-function withDurableRoot(fn: (dir: string) => void | Promise<void>) {
+/** A random 40-hex tree id. Unique per test, so two concurrent runs of this file cannot collide
+ *  on a receipt path, and no real commit tree is ever named. */
+function randomTree(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(20)), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Each test gets as many tree ids as it needs; every receipt file it writes is removed in the
+ *  finally, even when an assertion throws. */
+function withReceipts(fn: (nextTree: () => string) => void | Promise<void>) {
   return async () => {
-    const dir = join(ROOT, ".cap-test-durable", `heavy-receipt-${crypto.randomUUID().slice(0, 8)}`);
-    mkdirSync(dir, { recursive: true });
-    const previous = Deno.env.get("CAP_DURABLE_ROOT");
-    Deno.env.set("CAP_DURABLE_ROOT", dir);
+    const minted: string[] = [];
+    const nextTree = () => {
+      const tree = randomTree();
+      minted.push(tree);
+      return tree;
+    };
     try {
-      await fn(dir);
+      await fn(nextTree);
     } finally {
-      if (previous === undefined) Deno.env.delete("CAP_DURABLE_ROOT");
-      else Deno.env.set("CAP_DURABLE_ROOT", previous);
-      rmSync(dir, { recursive: true, force: true });
+      for (const tree of minted) rmSync(receiptPath(tree), { force: true });
     }
   };
 }
 
-const TREE = "a".repeat(40);
 const NOW = 1_800_000_000_000;
 
-Deno.test("upqhp: a passing receipt for the exact tree certifies it", withDurableRoot(async (dir) => {
+Deno.test("upqhp: a passing receipt for the exact tree certifies it", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
   const { path } = writeHeavyReceipt({
     tree: TREE,
     commit: "491316ec6",
     result: "pass",
     command: "deno run -A scripts/heavy-gate.ts",
     exitCode: 0,
-    logPath: "/tmp/heavy.log",
-    suites: 21,
+    logPath: "cap-evidence/logs/heavy-gate.log",
+    suites: 19,
     producer: "chrome-agent-platform-scale2",
     startedAt: NOW - 1000,
     finishedAt: NOW,
@@ -60,13 +71,14 @@ Deno.test("upqhp: a passing receipt for the exact tree certifies it", withDurabl
   assertEquals(receipt.result, "pass");
   assertEquals(receipt.commit, "491316ec6");
   assertEquals(receipt.producer, "chrome-agent-platform-scale2");
-  assertEquals(receipt.suites, 21);
+  assertEquals(receipt.suites, 19);
   // coord condition (upqhp): the receipt records the EXACT command and result.
   assertEquals(receipt.command, "deno run -A scripts/heavy-gate.ts");
   assertEquals(receipt.exitCode, 0);
 }));
 
-Deno.test("upqhp falsifier: a tree with no receipt is refused, never silently skipped", withDurableRoot(async () => {
+Deno.test("upqhp falsifier: a tree with no receipt is refused, never silently skipped", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
   const verdict = checkHeavyReceipt(TREE, { now: NOW });
   assertEquals(verdict.ok, false);
   assertEquals(verdict.reason, "missing");
@@ -75,11 +87,12 @@ Deno.test("upqhp falsifier: a tree with no receipt is refused, never silently sk
   assertStringIncludes(verdict.line, TREE.slice(0, 12));
 }));
 
-Deno.test("upqhp falsifier: a receipt for a DIFFERENT tree does not certify", withDurableRoot(async () => {
+Deno.test("upqhp falsifier: a receipt for a DIFFERENT tree does not certify", withReceipts(async (nextTree) => {
   // Content addressing: a receipt for another tree simply does not exist at this tree's path,
   // so the honest refusal is "missing". The tree-mismatch branch guards a hand-mislabeled
   // file — a receipt whose FILENAME claims tree A but whose contents claim tree B.
-  writeHeavyReceipt({ tree: "b".repeat(40), commit: "x", result: "pass", finishedAt: NOW });
+  const TREE = nextTree();
+  writeHeavyReceipt({ tree: nextTree(), commit: "x", result: "pass", finishedAt: NOW });
   const otherTree = checkHeavyReceipt(TREE, { now: NOW });
   assertEquals(otherTree.ok, false);
   assertEquals(otherTree.reason, "missing");
@@ -87,7 +100,7 @@ Deno.test("upqhp falsifier: a receipt for a DIFFERENT tree does not certify", wi
   writeHeavyReceipt({ tree: TREE, commit: "x", result: "pass", finishedAt: NOW });
   const path = receiptPath(TREE);
   const mislabeled = JSON.parse(Deno.readTextFileSync(path));
-  mislabeled.tree = "c".repeat(40);
+  mislabeled.tree = nextTree();
   Deno.writeTextFileSync(path, JSON.stringify(mislabeled));
   const mismatch = checkHeavyReceipt(TREE, { now: NOW });
   assertEquals(mismatch.ok, false);
@@ -95,7 +108,8 @@ Deno.test("upqhp falsifier: a receipt for a DIFFERENT tree does not certify", wi
   assertEquals(mismatch.marker, "HEAVY_RECEIPT_REFUSAL");
 }));
 
-Deno.test("upqhp falsifier: a refused or failed tier run does not certify", withDurableRoot(async () => {
+Deno.test("upqhp falsifier: a refused or failed tier run does not certify", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
   for (const result of ["refusal", "fail"] as const) {
     writeHeavyReceipt({ tree: TREE, commit: "x", result, finishedAt: NOW });
     const verdict = checkHeavyReceipt(TREE, { now: NOW });
@@ -104,7 +118,8 @@ Deno.test("upqhp falsifier: a refused or failed tier run does not certify", with
   }
 }));
 
-Deno.test("upqhp: a receipt older than the window is refused as stale", withDurableRoot(async () => {
+Deno.test("upqhp: a receipt older than the window is refused as stale", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
   writeHeavyReceipt({ tree: TREE, commit: "x", result: "pass", finishedAt: NOW - DEFAULT_RECEIPT_MAX_AGE_MS - 1000 });
   const stale = checkHeavyReceipt(TREE, { now: NOW });
   assertEquals(stale.ok, false);
@@ -114,7 +129,8 @@ Deno.test("upqhp: a receipt older than the window is refused as stale", withDura
   assertEquals(checkHeavyReceipt(TREE, { now: NOW }).ok, true);
 }));
 
-Deno.test("upqhp: a MALFORMED receipt is refused and the message names the expected tree", withDurableRoot(async () => {
+Deno.test("upqhp: a MALFORMED receipt is refused and the message names the expected tree", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
   const path = receiptPath(TREE);
   Deno.writeTextFileSync(path, "{not json at all");
   const verdict = checkHeavyReceipt(TREE, { now: NOW });
@@ -124,7 +140,8 @@ Deno.test("upqhp: a MALFORMED receipt is refused and the message names the expec
   assertStringIncludes(verdict.line, TREE.slice(0, 12));
 }));
 
-Deno.test("upqhp: an undatable receipt is refused rather than guessed", withDurableRoot(async () => {
+Deno.test("upqhp: an undatable receipt is refused rather than guessed", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
   writeHeavyReceipt({ tree: TREE, commit: "x", result: "pass", finishedAt: NOW });
   // Corrupt the timestamp the way a half-written file would lose it.
   const path = receiptPath(TREE);
@@ -136,7 +153,8 @@ Deno.test("upqhp: an undatable receipt is refused rather than guessed", withDura
   assertEquals(verdict.reason, "no-timestamp");
 }));
 
-Deno.test("upqhp: the writer refuses to mint a receipt with an invalid result", withDurableRoot(async () => {
+Deno.test("upqhp: the writer refuses to mint a receipt with an invalid result", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
   let threw: unknown = null;
   try {
     writeHeavyReceipt({ tree: TREE, result: "green" as never, finishedAt: NOW });
