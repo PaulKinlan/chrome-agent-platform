@@ -1,13 +1,22 @@
 // scripts/lib/serial-runner.mjs — bounded child execution with readiness handshake
 // for serial phase test fixtures (chrome-agent-platform-5nhz).
 import { spawn } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, statSync, writeFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { classifyReadyMarkerTimeout, measuredReadyLoad } from "./serial-phase.mjs";
 
 const [file, readyFile, timeoutMsStr, readyTimeoutMsStr, injectedReadyLoadStr] = process.argv.slice(2);
 const timeoutMs = Number(timeoutMsStr || "10000");
 const readyTimeoutMs = Number(readyTimeoutMsStr || "60000");
+
+// chrome-agent-platform-tf96x: leave a SENTINEL naming us, so the detached fixture we are about to
+// spawn can tell when we are gone. The fixture runs in its own process group ON PURPOSE, which also
+// means nothing above us can kill it — measured 2026-10-23, a fixture orphaned by a bound-killed
+// gate ran 120 minutes until the reaper swept it. The fixture polls /proc/<this pid> and exits when
+// we disappear; the write is best-effort and cleans up with the scratch dir like everything else.
+try {
+  writeFileSync(`${file}.runner`, String(process.pid));
+} catch { /* best-effort: a fixture without a sentinel keeps today's behaviour */ }
 
 const child = spawn("deno", ["test", "-A", "--config", "deno.runner.jsonc", file], {
   stdio: "inherit",

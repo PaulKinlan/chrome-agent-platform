@@ -71,8 +71,44 @@ type GrandchildRecord = { sleeper: number; child: number; pgrp: number; childPgr
  * `hang: true` never finishes (the timeout path); `hang: false` passes immediately (the residual
  * path, where only the runner's tail kill can reach the orphan).
  */
-function probeSource(pidFile: string, { hang }: { hang: boolean }): string {
-  return `const b = new Deno.Command("bash", {
+/** chrome-agent-platform-tf96x: every detached fixture carries a SELF-REAPING WATCHDOG keyed on
+ * the runner's sentinel pid file (scripts/lib/serial-runner.mjs writes `${file}.runner` before
+ * spawning us). The fixture runs in its own process group ON PURPOSE (that is what the pozs
+ * proofs measure), which also means nothing above it can be killed on its behalf: measured
+ * 2026-10-23, a fixture orphaned by a bound-killed gate ran 120 minutes until the reaper swept
+ * it. The watchdog makes the CHILD own its cleanup: it polls /proc/<runner-pid> and exits as
+ * soon as the runner is gone, whatever killed it. It changes nothing while the runner lives, so
+ * every assertion in this file is unaffected.
+ *   Measured dead ends this does NOT use: Deno.ppid reads 1 from process start on this box even
+ * while the real parent is alive, and detached-spawn reparenting is not observable (ppid is 1
+ * from birth), so no ppid-comparison watchdog can ever fire here; /proc/<pid> existence is the
+ * one signal that is both true and available.
+ * A MISSING sentinel never reaps: the write is best-effort, and a false exit would 124 whole
+ * gates, while the write-before-spawn ordering makes the missing case a nanosecond-scale window.
+ */
+function selfReapWatchdog(sentinelPath: string): string {
+  return `
+const __sentinel = ${JSON.stringify(sentinelPath)};
+const __selfReap = setInterval(() => {
+  let runnerPid = 0;
+  try { runnerPid = Number(Deno.readTextFileSync(__sentinel)); } catch { /* not written yet */ }
+  if (runnerPid > 0) {
+    try { Deno.statSync("/proc/" + runnerPid + "/stat"); return; } catch { /* runner is gone */ }
+    clearInterval(__selfReap);
+    Deno.exit(0); // nobody above us can kill us any more: a leaked fixture reaps itself
+  }
+  // No sentinel: keep today's behaviour (hang until the runner's bounds kill us). A missing
+  // sentinel must never become a false exit — the write is best-effort, and exiting a healthy
+  // fixture because of an fs hiccup would 124 whole gates. The write precedes our spawn, so a
+  // sentinel that does appear is present from our first tick; a nanosecond-scale write-failure
+  // window is not worth a mass-timeout risk.
+}, 1000);
+Deno.unrefTimer(__selfReap); // must never hold the event loop: fixtures that should EXIT exit
+`;
+}
+
+function probeSource(pidFile: string, fixturePath: string, { hang }: { hang: boolean }): string {
+  return `${selfReapWatchdog(fixturePath + ".runner")}const b = new Deno.Command("bash", {
   args: ["-c", "sleep 300 & echo $! > ${pidFile}.sleep"],
   stdout: "null",
   stderr: "null",
@@ -345,7 +381,7 @@ Deno.test("pozs: timed-out serial file leaves no descendant processes behind (pr
   const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-grandchild-probe-" });
   const pidFile = `${tempDir}/grandchild.pid`;
   const tempTest = `${tempDir}/grandchild-hang.test.ts`;
-  await Deno.writeTextFile(tempTest, probeSource(pidFile, { hang: true }));
+  await Deno.writeTextFile(tempTest, probeSource(pidFile, tempTest, { hang: true }));
 
   let grandchildPid = 0;
   try {
@@ -386,7 +422,7 @@ Deno.test("pozs/5nhz: timed-out serial file with cold-boot delay awaits ready ma
   // Delay (2500ms) exceeds execution timeout (1500ms), proving the timeout starts only after readiness.
   const delayedSource = `
 await new Promise((r) => setTimeout(r, 2500));
-${probeSource(pidFile, { hang: true })}
+${probeSource(pidFile, tempTest, { hang: true })}
 `;
   await Deno.writeTextFile(tempTest, delayedSource);
 
@@ -423,8 +459,7 @@ Deno.test("pozs/5nhz: runSerialFile fails closed with diagnostic if ready marker
   const missingReadyFile = `${tempDir}/nonexistent.pid`;
   const tempTest = `${tempDir}/hangs-never-ready.test.ts`;
 
-  await Deno.writeTextFile(tempTest, `
-Deno.test("hangs without writing marker", async () => {
+  await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}Deno.test("hangs without writing marker", async () => {
   setInterval(() => {}, 1000);
   await new Promise(() => {});
 });
@@ -451,8 +486,7 @@ Deno.test("pozs/5nhz: runSerialFile fails closed if child exits 0 without writin
   const tempTest = `${tempDir}/exits-without-marker.test.ts`;
 
   // Fixture returns 0 immediately without writing marker
-  await Deno.writeTextFile(tempTest, `
-Deno.test("passes immediately without marker", () => {
+  await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}Deno.test("passes immediately without marker", () => {
   // returns 0
 });
 `);
@@ -503,8 +537,7 @@ Deno.test("xy6n2: a marker after the 5s soft deadline succeeds only when load is
       `fixture boot ≤ ${bootMs}ms + late ${lateMarginMs}ms + slack ${LATE_ASSERTION_SLACK_MS}ms ` +
       `vs hard ${softMs * 4}ms (soft ${softMs}ms + 500ms poll)`,
   );
-  await Deno.writeTextFile(tempTest, `
-await new Promise((resolve) => setTimeout(resolve, ${softMs + lateMarginMs}));
+  await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}await new Promise((resolve) => setTimeout(resolve, ${softMs + lateMarginMs}));
 await Deno.writeTextFile(${JSON.stringify(readyFile)}, "ready");
 Deno.test("passes after late marker", () => {});
 `);
@@ -597,8 +630,7 @@ Deno.test("xy6n2: loaded grace still refuses a genuinely absent marker by a name
   // Keep the child alive beyond the hard ready bound. Deno treats an unresolved
   // test promise as a failed test and exits early, which would exercise the
   // separate child-exit refusal rather than the hard-deadline classifier.
-  await Deno.writeTextFile(tempTest, `
-await new Promise((resolve) => setTimeout(resolve, 60_000));
+  await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}await new Promise((resolve) => setTimeout(resolve, 60_000));
 Deno.test("never writes marker", () => {});
 `);
   try {
@@ -627,8 +659,7 @@ Deno.test("pozs/5nhz: runSerialFile succeeds when child writes ready marker and 
   const tempTest = `${tempDir}/fast-ready.test.ts`;
 
   // Fixture writes marker and exits 0 immediately without hanging
-  await Deno.writeTextFile(tempTest, `
-await Deno.writeTextFile("${readyFile}", "ready");
+  await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}await Deno.writeTextFile("${readyFile}", "ready");
 Deno.test("passes immediately after marker", () => {});
 `);
 
@@ -679,7 +710,7 @@ Deno.test("pozs: a serial file that EXITS while its orphan lives leaves no desce
   const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-residual-probe-" });
   const pidFile = `${tempDir}/grandchild.pid`;
   const tempTest = `${tempDir}/exits-with-orphan.test.ts`;
-  await Deno.writeTextFile(tempTest, probeSource(pidFile, { hang: false }));
+  await Deno.writeTextFile(tempTest, probeSource(pidFile, tempTest, { hang: false }));
 
   let grandchildPid = 0;
   try {
