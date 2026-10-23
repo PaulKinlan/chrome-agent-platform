@@ -74,6 +74,30 @@ export function selfTestTermWaitMs({ loadavg = 1, loadPerCpu = 1 } = {}) {
   return Math.round(SELF_TEST_TERM_WAIT_FLOOR_MS * scale);
 }
 
+/** Ceiling for the self-test READINESS grace (chrome-agent-platform-4vmn7). A ready marker is not a
+ *  signal window: the child has to boot and register before the scenario clock may start, and one boot is
+ *  a single bounded event, so x4 is enough where the TERM window needs x8 turns. */
+export const SELF_TEST_READY_MAX_SCALE = 4;
+
+/** The self-test stubborn-readiness deadline for a measured load (1 = idle, unmeasurable = idle).
+ *
+ *  chrome-agent-platform-4vmn7: the readiness deadline was FLAT (`CAP_SECURITY_TEST_ACK_DEADLINE_MS`,
+ *  12 s). Under fleet load the stubborn child's cold boot plus one supervisor sample could exceed it, and
+ *  the supervisor then exited 97 ("stubborn-readiness-timeout") instead of proving TERM-then-KILL — the
+ *  same shape whl7d fixed for the TERM window, one clock earlier. Same rule and same predictor as
+ *  `selfTestTermWaitMs`: the ABSOLUTE 1-minute load (these VMs saturate absolutely; load-per-CPU reads
+ *  ~0.7 while the box thrashes), load-per-CPU only ever raises it. PRODUCTION is untouched: the readiness
+ *  handshake exists only for the self-test.
+ *  @param {{ baseMs?: number, loadavg?: number, loadPerCpu?: number }} [opts]
+ */
+export function selfTestReadyDeadlineMs({ baseMs, loadavg = 1, loadPerCpu = 1 } = {}) {
+  const base = Number.isFinite(baseMs) && baseMs > 0 ? baseMs : 0;
+  const absolute = Number.isFinite(loadavg) && loadavg > 1 ? loadavg : 1;
+  const perCpu = Number.isFinite(loadPerCpu) && loadPerCpu > 1 ? loadPerCpu : 1;
+  const scale = Math.min(Math.max(absolute, perCpu), SELF_TEST_READY_MAX_SCALE);
+  return Math.round(base * scale);
+}
+
 /**
  * What the hard-timeout case may conclude from the receipt PLUS the fixture's own state.
  *
