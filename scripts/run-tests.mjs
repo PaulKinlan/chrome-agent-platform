@@ -407,9 +407,23 @@ export async function main(args = process.argv.slice(2)) {
   // is exactly why the first cut shipped asserted-not-observed. It runs the serial phase for real, runs NO
   // parallel file, and reports every parallel file as unrun.
   const stopAfterSerial = process.env.CAP_RUN_TESTS_STOP_AFTER_SERIAL === "1";
-  // What this execution did NOT run: the planner's skip, plus every parallel file the seam declined to run.
-  const unrunCount = stopAfterSerial || skipSerial ? parallel.length : plan.skipped;
-  const gaps = certificationGaps({ skipped: unrunCount });
+  // What this execution did NOT run. Three independent sources, and every one of them has to be here: the
+  // planner's skip, the parallel files a seam declined, and - the w6kc0 review P1 finding - the SERIAL files a
+  // seam declined. Counting only parallel files meant a serial-only selection under CAP_RUN_TESTS_SKIP_SERIAL
+  // had an EMPTY gap and exited 0 without running the file it was asked to run: the same false green this bead
+  // exists to kill, reached through the fix's own seam.
+  const unrunSerial = skipSerial ? serialFiles.length : 0;
+  const unrunParallel = stopAfterSerial ? parallel.length : plan.skipped;
+  const unrunCount = unrunSerial + unrunParallel;
+  const gaps = [];
+  if (unrunSerial > 0) gaps.push(`serial phase skipped (${unrunSerial} file(s) unrun)`);
+  gaps.push(...certificationGaps({ skipped: unrunParallel }));
+  // A selection whose ENTIRE content was skipped is incomplete regardless of phase: nothing ran, so nothing
+  // can be certified, even if the arithmetic above somehow produced no gap.
+  const selectedTotal = serialFiles.length + parallel.length;
+  if (selectedTotal > 0 && unrunCount >= selectedTotal && !gaps.length) {
+    gaps.push(`the whole selection was skipped (${selectedTotal} file(s) unrun)`);
+  }
   // Extract reviewed readers from the parallel plan; SERIAL has fully ended.
   // In the unchanged per-change runner both subsets still share its one
   // parallel process AFTER serial (partition(...).parallel is intentionally total).
@@ -452,9 +466,10 @@ export async function main(args = process.argv.slice(2)) {
   // form is a gate; an explicit-file run (`run-tests.mjs tests/x.test.ts`) is an inner-loop tool and
   // deliberately emits nothing, so a probe run can never look like a gate record.
   if (cliFiles.length === 0) {
-    const skippedFiles = stopAfterSerial || skipSerial
-      ? parallel
-      : parallel.filter((f) => !plan.files.includes(f));
+    const skippedFiles = [
+      ...(skipSerial ? serialFiles : []),
+      ...(stopAfterSerial ? parallel : parallel.filter((f) => !plan.files.includes(f))),
+    ];
     // A FAST selector that failed closed passes its changed-file candidates to
     // this FULL runner. Report placement from suites that actually executed,
     // including a named reason when a heavy/build-tier suite was deferred.

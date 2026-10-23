@@ -93,15 +93,20 @@ export function parallelPlan({ serialRc, parallel, alwaysOn, failingFiles = [] }
   // chrome-agent-platform-w6kc0: the outcome must never read as a certification of the tree. The run is
   // INCOMPLETE in the marker a reader greps for, and it names the count, because "698 skipped" inside a
   // sentence was read past twice while the guard subset came back green.
+  // The log contract keeps BOTH markers a reader greps for: SKIPPED (the historical wording this announcement
+  // has always used, pinned by tests/parallel-plan.test.ts) and INCOMPLETE (the certification verdict w6kc0
+  // added). Replacing one with the other silently changed the log contract; they say different things - what was
+  // omitted, and what that means for the run.
   return {
     files,
     skipped,
     incomplete: true,
     announce:
-      `run-tests: INCOMPLETE — serial file(s) failed${names}, so the parallel phase was skipped after the ` +
-      `serial failure (${skipped} of ${parallel.length} parallel file(s) unrun). Only the ALWAYS-ON GUARD SET ` +
-      `(${files.length} file(s)) ran, because a guard result must never be conditional on an unrelated phase ` +
-      `passing. This run CANNOT certify the tree.`,
+      `run-tests: serial file(s) failed${names}, so ${skipped} of ${parallel.length} parallel file(s) are ` +
+      `SKIPPED — except the ALWAYS-ON GUARD SET (${files.length} file(s)), which runs regardless, because a ` +
+      `guard result must never be conditional on an unrelated phase passing. ` +
+      `INCOMPLETE: the parallel phase was skipped after the serial failure (${skipped} file(s) unrun); this ` +
+      `run CANNOT certify the tree.`,
   };
 }
 

@@ -36,7 +36,13 @@ Deno.test("kz27: a FAILED serial phase still runs the always-on guard set, and s
   assert(plan.announce !== null, "skipping files must be announced, never silent");
   assert(plan.announce.includes("INCOMPLETE"), plan.announce);
   assert(plan.announce.includes("ALWAYS-ON GUARD SET"), plan.announce);
-  assert(/\d+ of \d+ parallel file\(s\) unrun/.test(plan.announce), `the count must be unmistakeable: ${plan.announce}`);
+  // The announcement keeps BOTH halves of the log contract: the SKIPPED count (how much was omitted) and the
+  // INCOMPLETE gap (what that means for certification). Replacing one with the other was review P2-3.
+  assert(/\d+ of \d+ parallel file\(s\) are SKIPPED/.test(plan.announce), `the skip count must be exact: ${plan.announce}`);
+  assert(
+    /INCOMPLETE: the parallel phase was skipped after the serial failure \(\d+ file\(s\) unrun\)/.test(plan.announce),
+    `the INCOMPLETE gap must name the cause and the count: ${plan.announce}`,
+  );
   assert(
     plan.announce.includes("3 of 4"),
     `the announcement must say how much was skipped: ${plan.announce}`,
@@ -130,6 +136,7 @@ Deno.test("w6kc0: a skipped parallel phase is INCOMPLETE and yields a named cert
   assertEquals(plan.incomplete, true, "a skipped run is incomplete");
   const announce = String(plan.announce ?? "");
   assert(announce.length > 0, "a skipped run must announce itself");
+  assert(announce.includes("SKIPPED"), announce);
   assert(announce.includes("INCOMPLETE"), announce);
   assert(announce.includes("unrun"), announce);
   assert(announce.includes("CANNOT certify"), announce);

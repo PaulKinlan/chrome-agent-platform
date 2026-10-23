@@ -19,9 +19,9 @@ import { fullTierManifestFields } from "../scripts/lib/gate-manifest.mjs";
 
 const ROOT = new URL("../", import.meta.url).pathname;
 
-function runChild(env: Record<string, string>) {
+function runChild(env: Record<string, string>, cli: string[] = []) {
   const command = new Deno.Command(Deno.execPath(), {
-    args: ["run", "-A", "--config", "deno.runner.jsonc", "scripts/run-tests.mjs"],
+    args: ["run", "-A", "--config", "deno.runner.jsonc", "scripts/run-tests.mjs", ...cli],
     cwd: ROOT,
     env: {
       PATH: Deno.env.get("PATH") ?? "",
@@ -68,6 +68,21 @@ Deno.test("w6kc0: a forced serial failure makes the CHILD runner refuse certific
   // And the human-readable outcome says so too, rather than only the machine record.
   assert(stderr.includes("INCOMPLETE"), "the run must print the INCOMPLETE marker");
   assert(stderr.includes("NOT CERTIFIABLE"), "the run must print NOT CERTIFIABLE");
+
+  // Review P1-2: this case must show that a REAL SERIAL FAILURE caused the planner to narrow - the
+  // announcement, the plan-level skip and the cause, not merely a non-zero exit that could come from anywhere.
+  assert(
+    stderr.includes("serial file(s) failed"),
+    `the announcement must name the serial failure as the cause: ${stderr.slice(-1200)}`,
+  );
+  assert(
+    /\d+ of \d+ parallel file\(s\) are SKIPPED/.test(stderr),
+    `the announcement must state the plan-level skip and its size: ${stderr.slice(-1200)}`,
+  );
+  assert(
+    /skipped after the serial failure \(\d+ file\(s\) unrun\)/.test(stderr),
+    `the gap must attribute the skip to the serial failure: ${stderr.slice(-1200)}`,
+  );
 });
 
 Deno.test("w6kc0: SYNTHETIC phase-0 skip — all phases green, files unrun, still refused (reds if the wiring is reverted)", () => {
@@ -113,4 +128,22 @@ Deno.test("w6kc0: the positive control — a run with nothing skipped certifies,
   const declined = certificationGaps({ skipped: 3 });
   assertEquals(declined.length, 1);
   assert(declined[0].includes("3 file(s) unrun"), declined[0]);
+});
+
+Deno.test("w6kc0: a serial-only selection cannot be skipped into a green (review P1-1)", () => {
+  // The shape that bit: an explicit serial-only selection has ZERO parallel files, so a gap computed from
+  // parallel files alone is empty and the run exits 0 having executed nothing.
+  const { code, stdout, stderr } = runChild(
+    { CAP_SERIAL_TEST_TIMEOUT_MS: "1", CAP_RUN_TESTS_SKIP_SERIAL: "1" },
+    ["tests/build-smoke.test.ts"],
+  );
+  const out = `${stdout}\n${stderr}`;
+  assert(code !== 0, `a serial-only selection that ran nothing must exit non-zero, got ${code}. ${stderr.slice(-900)}`);
+  assert(out.includes("INCOMPLETE"), "the run must say INCOMPLETE (summary line, stdout)");
+  assert(
+    /serial phase skipped \(\d+ file\(s\) unrun\)/.test(out),
+    `the gap must count the SKIPPED SERIAL files, not just parallel ones: ${out.slice(-900)}`,
+  );
+  // And the seam must not print a green for a test it never ran.
+  assert(!/GREEN|^ok\b/m.test(stdout), `nothing ran, so nothing may read as green: ${stdout.slice(-400)}`);
 });
