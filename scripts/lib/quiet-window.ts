@@ -440,6 +440,10 @@ export interface LoadSampleDeps {
   loadavg?: () => number[];
   /** The scan budget, instead of the CAP_QUIET_MAX_PROC_SCAN(_MS) environment. */
   budget?: { entries: number; ms: number };
+  /** Stands in for `Date.now()` in the SCAN-BUDGET comparison (chrome-agent-platform-30429), so the
+   *  boundary between "truncated" and "measured" can be pinned with a frozen clock instead of a
+   *  timing race. Default: the real clock. The sample's `at` timestamp still uses the real clock. */
+  now?: () => number;
 }
 
 /** The environment `ps` runs under on the no-/proc branch (chrome-agent-platform-jjsz F6).
@@ -505,6 +509,7 @@ async function readLoadSampleOnce(
   deps: LoadSampleDeps = {},
 ): Promise<LoadSample> {
   const hasProc = deps.hasProc ?? HAS_PROC;
+  const now = deps.now ?? (() => Date.now());
   const at = Date.now();
   const cores = Math.max(1, navigator.hardwareConcurrency || 1);
   let load1 = NaN, load5 = NaN, load15 = NaN;
@@ -548,7 +553,7 @@ async function readLoadSampleOnce(
     // (the module's contract: an unmeasurable box is a refusal, never an
     // assumed quiet one).
     let truncated = false;
-    let startedAt = Date.now();
+    let startedAt = now();
     // chrome-agent-platform-jjsz F6: the rows the macOS parser read and the rows it could not. A row that
     // matches nothing is a process this walk cannot see, so it is COUNTED, never dropped (the old
     // `if (!m) continue` made an unreadable table read as "no builders"): any such row, or no row at all,
@@ -564,12 +569,18 @@ async function readLoadSampleOnce(
       // The scan budget bounds the PARSE of the table, not the `ps` child that prints it. `startedAt` used
       // to be taken before this await, so a slow ps (a loaded box) spent the budget before one row was
       // read and the sample was refused as "truncated" for a reason that is not the box's process count.
-      startedAt = Date.now();
+      startedAt = now();
       if (ps.code !== 0) throw new Error(`ps exited ${ps.code}`);
       const lines = ps.stdout.split("\n");
       for (const line of lines) {
         if (!line.trim()) continue;
-        if (seen >= budget.entries || Date.now() - startedAt > budget.ms) {
+        // chrome-agent-platform-30429: `>=`, not `>`. An EXPLICIT 0 ms budget is the operator asking
+        // for a walk that cannot be measured, and with `>` it truncated only once 1 ms had actually
+        // elapsed — so a fast table (40 injected pids, or this box's ~230 entries warm) finished in
+        // 0 ms, `0 > 0` was false, and an impossible time bound read as a MEASURABLE sample. `>=`
+        // refuses on the first row, which is what "zero milliseconds" means. For any non-zero budget
+        // the difference is the exact-boundary millisecond only.
+        if (seen >= budget.entries || now() - startedAt >= budget.ms) {
           truncated = true;
           break;
         }
@@ -608,7 +619,9 @@ async function readLoadSampleOnce(
       }
     } else {
       for await (const entry of Deno.readDir("/proc")) {
-        if (seen >= budget.entries || Date.now() - startedAt > budget.ms) {
+        // chrome-agent-platform-30429: `>=` so an explicit 0 ms budget refuses immediately (see the
+        // ps-table branch above for the full reasoning).
+        if (seen >= budget.entries || now() - startedAt >= budget.ms) {
           truncated = true;
           break;
         }
@@ -645,7 +658,7 @@ async function readLoadSampleOnce(
         // reach before it was cut off.
         compilers, compilerNames: [...names], measurable: false,
         unbaselined: prev == null,
-        error: `proc scan truncated after ${seen} entries in ${Date.now() - startedAt} ms ` +
+        error: `proc scan truncated after ${seen} entries in ${now() - startedAt} ms ` +
           `(budget ${budget.entries} entries / ${budget.ms} ms) — the builder count is INCOMPLETE, ` +
           `so this sample is NOT a quiet verdict; raise CAP_QUIET_MAX_PROC_SCAN(_MS) deliberately ` +
           `if this box really has that many processes (chrome-agent-platform-1io9)`,

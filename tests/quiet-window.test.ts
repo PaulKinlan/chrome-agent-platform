@@ -1143,6 +1143,65 @@ Deno.test("r2ai: a box that CANNOT be sampled at either budget still refuses, an
   }
 });
 
+// chrome-agent-platform-30429: an EXPLICIT zero-millisecond scan budget is the operator asking for a walk
+// that cannot be measured. The budget test was `>`, so a walk that consumed 0 ms satisfied neither side and
+// an impossible bound read as MEASURABLE; `>=` refuses on the first row.
+//
+// These two cases are HERMETIC (coord, 2026-10-23): they drive the `ps` branch with an INJECTED table and
+// an injected loadavg, so there is no /proc (this must also hold on macOS, where the old cases would have
+// thrown instead of pinning), no real process table, no ambient CPU count and no sleep. The injected table
+// is small, so the ENTRY cap can never be what truncates: the only truncating condition here is the time
+// budget, which is the thing this bead is about.
+const SCAN_ROWS = [
+  "  101 00:01.20 Wed Oct  7 12:26:48 2026 rustc",
+  "  102 00:00.10 Wed Oct  7 12:26:48 2026 chrome_crashpad",
+  "  103 00:00.05 Wed Oct  7 12:26:48 2026 deno",
+].join("\n");
+function injectedScan(budget: { entries: number; ms: number } | null) {
+  return {
+    hasProc: false,
+    now: () => 0, // frozen clock: `0 - 0 >= 0` is the boundary itself, `> 0` is the old defect
+    loadavg: () => [0.5, 0.5, 0.5],
+    runPs: async () => ({ code: 0, stdout: SCAN_ROWS }),
+    ...(budget ? { budget } : {}),
+  };
+}
+
+Deno.test("30429: a zero-ms scan budget refuses at the boundary, on an injected table (the pre-fix `>` reds this)", async () => {
+  const { readLoadSample } = await import("../scripts/lib/quiet-window.ts");
+  const frozen = await readLoadSample(null, injectedScan({ entries: 4096, ms: 0 }));
+  assertEquals(frozen.measurable, false, "a zero-ms budget must refuse on the first row, not report a measurement");
+  assert(/truncated/.test(frozen.error ?? ""), `the refusal must name truncation: ${frozen.error}`);
+  assert(/\/ 0 ms/.test(frozen.error ?? ""), `the refusal must show the 0 ms budget: ${frozen.error}`);
+
+  // The SAME table one millisecond later is a real MEASUREMENT — and an attributable one: the injected
+  // rustc row is counted, so this cannot pass by merely not throwing.
+  const measured = await readLoadSample(null, injectedScan({ entries: 4096, ms: 1 }));
+  assertEquals(measured.measurable, true, `a 1 ms budget on a 3-row table must measure: ${measured.error ?? ""}`);
+  assertEquals(measured.compilers, 1, "the injected rustc row is the one active heavy builder");
+  assertEquals(measured.compilerNames, ["rustc"], "and it is named, so the sample is attributable, not just non-throwing");
+  assertEquals(measured.load1, 0.5, "the injected loadavg is what the sample reports");
+});
+
+Deno.test("30429: CAP_QUIET_MAX_PROC_SCAN_MS=0 ALONE refuses instead of reading as measurable", async () => {
+  // The ENV route to the same budget, with the same injected table: only the environment can truncate
+  // here (entries stay at the generous default), so an explicit 0 must refuse on its own.
+  const { readLoadSample } = await import("../scripts/lib/quiet-window.ts");
+  const before = [Deno.env.get("CAP_QUIET_MAX_PROC_SCAN"), Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS")] as const;
+  Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN"); // entries stay at the generous default
+  Deno.env.set("CAP_QUIET_MAX_PROC_SCAN_MS", "0"); // the ONLY constraint
+  try {
+    const s = await readLoadSample(null, injectedScan(null));
+    assertEquals(s.measurable, false, "an impossible time budget must never produce a measurable sample");
+    assert(/truncated/.test(s.error ?? ""), `the refusal must name truncation: ${s.error}`);
+    assert(/0 ms/.test(s.error ?? ""), `and it must show the zero budget it was given: ${s.error}`);
+    assert(/retry/i.test(s.error ?? ""), `and it must say the retry was tried (4 x 0 ms is still 0): ${s.error}`);
+  } finally {
+    if (before[0] === undefined) Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN"); else Deno.env.set("CAP_QUIET_MAX_PROC_SCAN", before[0]);
+    if (before[1] === undefined) Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN_MS"); else Deno.env.set("CAP_QUIET_MAX_PROC_SCAN_MS", before[1]);
+  }
+});
+
 // ── qs8v7: the threshold counts heavy builder JOBS, not compiler processes ────────────────────────
 // The incident: a union gate read "active heavy-builders 9 > 1 (named: rustc ...)" while ONE Rust
 // build was running. A cargo/rust build forks one rustc per codegen unit, so a pid count turned a
