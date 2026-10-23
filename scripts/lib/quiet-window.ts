@@ -130,6 +130,12 @@ export function isZeroTickActiveBuilder(comm: string): boolean {
  *  deliberately on a box that really has thousands of processes. */
 const MAX_PROC_SCAN = 4096;
 const MAX_PROC_SCAN_MS = 400;
+/** How many `/proc/<pid>/{comm,stat}` reads one sample issues at a time (chrome-agent-platform-ip654).
+ *  The walk is I/O-latency-bound: on a fully loaded box a single read measured 6.6-105 ms, so a
+ *  sequential walk of a ~230-entry table did not fit in 1600 ms. Concurrency is what makes the SAME
+ *  table cheap (measured warm: 83-103 ms sequential vs 2-9 ms at 8-32 wide), which is the honest fix —
+ *  the bound is about how much of the table can be SEEN, not about how patient a constant is. */
+const PROC_SCAN_CONCURRENCY = 8;
 
 /** The per-sample /proc budget, read per call (same rule as the other tunables:
  *  no module-reload order trap). */
@@ -147,6 +153,16 @@ export interface LoadSample {
   at: number;
   /** True when the first /proc walk truncated and the bounded retry produced this sample (r2ai). */
   retriedAfterTruncation?: boolean;
+  /** ip654: what a TRUNCATED walk actually did — the entries it reached, the wall time it spent, and the
+   *  budget it compared against. Carried as fields (as well as in `error`) so the retry budget can be
+   *  DERIVED from this box's observation instead of a constant multiple. Only present when truncated. */
+  scanSeen?: number;
+  scanElapsedMs?: number;
+  scanBudgetEntries?: number;
+  scanBudgetMs?: number;
+  /** ip654: the budget the retry actually used, and whether it was derived from this box's measurement or
+   *  was the historical 4x of an explicitly-set bound. Present whenever a retry ran. */
+  scanRetry?: { entries: number; ms: number; derived: boolean };
   load1: number;
   load5: number;
   load15: number;
@@ -400,7 +416,7 @@ export async function readLoadSample(prev?: ProcCpuMap | null, deps: LoadSampleD
   const budget = deps.budget ?? procScanBudget();
   const first = await readLoadSampleOnce(prev, budget, deps);
   if (first.measurable !== false || typeof first.error !== "string" || !first.error.includes("truncated")) return first;
-  const retry = { entries: budget.entries * 4, ms: budget.ms * 4 };
+  const retry = derivedRetryBudget(budget, first, deps);
   const second = await readLoadSampleOnce(prev, retry, deps);
   if (second.measurable === false) {
     // The suffix says the RETRY truncated too, so it is only said when it did. A retry that failed for
@@ -408,10 +424,74 @@ export async function readLoadSample(prev?: ProcCpuMap | null, deps: LoadSampleD
     if (typeof second.error !== "string" || !second.error.includes("truncated")) return second;
     return {
       ...second,
-      error: `${second.error} — and a retry with ${retry.entries} entries / ${retry.ms} ms truncated too, so this box could not be sampled at either budget`,
+      scanRetry: { entries: retry.entries, ms: retry.ms, derived: retry.derived },
+      error: `${second.error} — and a retry with ${retry.entries} entries / ${retry.ms} ms${
+        retry.derived ? " (derived from this box's measured table size and read throughput)" : ""
+      } truncated too, so this box could not be sampled at either budget`,
     };
   }
-  return { ...second, retriedAfterTruncation: true };
+  return { ...second, retriedAfterTruncation: true, scanRetry: { entries: retry.entries, ms: retry.ms, derived: retry.derived } };
+}
+
+/** Extra entries the derived retry allows over the table it measured (the table can grow between the two
+ *  passes: a parallel-phase test file starting children is exactly the case we are here for). */
+const RETRY_ENTRY_HEADROOM = 64;
+/** A derived budget is still a BOUND: past this, the box is too starved to sample cheaply and the sample
+ *  stays a refusal rather than letting one gate wait minutes (chrome-agent-platform-ip654). */
+const MAX_PROC_SCAN_RETRY_MS = 10_000;
+
+/** How many numeric `/proc` entries exist right now, or null when it cannot be read.
+ *  This is the observable table size the retry budget is derived from. */
+function procTableSize(): number | null {
+  if (!HAS_PROC) return null;
+  try {
+    let n = 0;
+    for (const entry of Deno.readDirSync("/proc")) {
+      if (entry.isDirectory && /^\d+$/u.test(entry.name)) n++;
+    }
+    return n;
+  } catch {
+    return null;
+  }
+}
+
+/** The budget for the retry after a truncated walk (chrome-agent-platform-ip654).
+ *
+ *  The old rule was `everything × 4`, which assumes the first pass' throughput holds. It does not: on a
+ *  fully loaded VM the gate logs show the 4x retry (16384 entries / 1600 ms) truncating after 17-256
+ *  entries of a ~230-entry table, because per-read latency had collapsed to 6.6-105 ms. A larger
+ *  constant cannot rescue a throughput collapse, and raising one because a red is inconvenient is the
+ *  move this bead forbids.
+ *
+ *  So when the bound is the DEFAULT, it is derived from what this box just showed us: how big the table
+ *  is (observable), and how long an entry actually took (observable, carried out of the truncated
+ *  sample), with headroom for the table growing between passes. When `CAP_QUIET_MAX_PROC_SCAN(_MS)` was
+ *  set EXPLICITLY — by an operator, or by a test driving a bound it knows cannot be met — the derivation
+ *  does not touch it: an explicit bound is a deliberate statement, and the 1io9 / r2ai drills that a
+ *  truncated walk REFUSES depend on that staying true.
+ *
+ *  Exported because the arithmetic IS the contract: a test pins the derived numbers on hand-built
+ *  observations, so the property cannot drift with a timer, a load average or a test box's speed. */
+export function derivedRetryBudget(
+  budget: { entries: number; ms: number },
+  first: LoadSample,
+  deps: LoadSampleDeps,
+): { entries: number; ms: number; derived: boolean } {
+  const fourX = { entries: budget.entries * 4, ms: budget.ms * 4, derived: false };
+  const envEntries = Number(Deno.env.get("CAP_QUIET_MAX_PROC_SCAN"));
+  const envMs = Number(Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS"));
+  if ((Number.isFinite(envEntries) && envEntries > 0) || (Number.isFinite(envMs) && envMs >= 0)) return fourX;
+  const table = deps.procTableSize ? deps.procTableSize() : procTableSize();
+  const seen = first.scanSeen ?? 0;
+  const elapsed = first.scanElapsedMs ?? 0;
+  if (table == null || table <= 0 || seen <= 0) return fourX;
+  const entries = Math.max(budget.entries, table + RETRY_ENTRY_HEADROOM);
+  // ms per entry as THIS box actually served them, doubled for safety, plus a small fixed allowance for
+  // the directory listing and the loadavg reads.
+  const msPerEntry = Math.max(elapsed, 1) / seen;
+  const needed = Math.ceil(table * msPerEntry * 2) + 100;
+  const ms = Math.min(Math.max(needed, budget.ms * 4), MAX_PROC_SCAN_RETRY_MS);
+  return { entries, ms, derived: true };
 }
 
 const HAS_PROC = (() => {
@@ -436,6 +516,13 @@ export interface LoadSampleDeps {
   hasProc?: boolean;
   /** Stands in for the `/bin/ps` child process. Default: spawn it. */
   runPs?: (invocation: PsInvocation) => Promise<PsResult>;
+  /** Stands in for the numeric `/proc` entries the walk inspects (ip654). Default: read `/proc`. */
+  procPids?: () => Promise<string[]>;
+  /** Stands in for one `/proc/<pid>/{comm,stat}` read (ip654). Default: `Deno.readTextFile`. */
+  readProcFile?: (path: string) => Promise<string>;
+  /** Stands in for the observable table size the retry budget derives its entries bound from (ip654).
+   *  Default: count the numeric entries in `/proc`. */
+  procTableSize?: () => number | null;
   /** Stands in for `Deno.loadavg()` on the no-/proc branch. */
   loadavg?: () => number[];
   /** The scan budget, instead of the CAP_QUIET_MAX_PROC_SCAN(_MS) environment. */
@@ -607,45 +694,96 @@ async function readLoadSampleOnce(
         }
       }
     } else {
-      for await (const entry of Deno.readDir("/proc")) {
+      // chrome-agent-platform-ip654: this walk is I/O-LATENCY-bound, not CPU-bound. Measured on this VM
+      // (8 vCPU, ~230 pids): a full sequential walk of the table (readdir + one comm read per pid) is
+      // 83-298 ms warm, i.e. ~1 ms per entry — comfortably inside the 400 ms budget. But under the FULL
+      // gate's parallel phase (747 suites, hundreds of live processes) the same per-entry read measured
+      // 6.6-105 ms, and the gate logs show the RETRY budget (16384 entries / 1600 ms) truncating after
+      // only 17-256 entries of a ~230-entry table. The entry budget was never the constraint (16384 vs
+      // 230); the per-read LATENCY was, because the reads were issued one at a time and queued behind
+      // everything else. Reading PROC_SCAN_CONCURRENCY entries at a time cuts the wall time of the SAME
+      // table by ~8-30x (measured here: 83-103 ms sequential vs 2-9 ms at 8/16/32 wide, warm cache),
+      // which is the honest fix: the bound is about how much of the table can be SEEN, and this makes
+      // seeing it cheap instead of widening a constant until the red goes away.
+      const pids: string[] = [];
+      let listingTruncated = false;
+      const readPids = deps.procPids ?? (async () => {
+        const out: string[] = [];
+        // The LISTING is bounded too: one `readDir` iteration per entry is cheap (2-101 ms for this
+        // box's ~230), but a starved box must not be able to spend an unbounded budget here, and the
+        // collected list must not grow past the entries bound the walk is going to honour anyway.
+        for await (const entry of Deno.readDir("/proc")) {
+          if (Date.now() - startedAt > budget.ms) {
+            listingTruncated = true;
+            break;
+          }
+          if (!entry.isDirectory || !/^\d+$/u.test(entry.name) || entry.name === selfPid) continue;
+          out.push(entry.name);
+          if (out.length > budget.entries + PROC_SCAN_CONCURRENCY) break;
+        }
+        return out;
+      });
+      const listing = await readPids();
+      pids.push(...listing.filter((pid) => pid !== selfPid));
+      if (listingTruncated) {
+        truncated = true;
+        seen = pids.length;
+      }
+      const readProcFile = deps.readProcFile ?? ((path: string) => Deno.readTextFile(path));
+      /** One entry's evidence, or null when the process exited mid-scan (not an error). */
+      const inspect = async (pid: string): Promise<{ pid: string; comm: string; parsed: ProcCpu | null } | null> => {
+        try {
+          const comm = (await readProcFile(`/proc/${pid}/comm`)).trim();
+          if (!isHeavyProcessName(comm)) return { pid, comm, parsed: null };
+          return { pid, comm, parsed: parseProcStatCpu(await readProcFile(`/proc/${pid}/stat`), comm) };
+        } catch {
+          return null; // a process that exited mid-scan is not an error
+        }
+      };
+      for (let i = 0; !truncated && i < pids.length; i += PROC_SCAN_CONCURRENCY) {
         if (seen >= budget.entries || Date.now() - startedAt > budget.ms) {
           truncated = true;
           break;
         }
-        if (!entry.isDirectory || !/^\d+$/u.test(entry.name) || entry.name === selfPid) continue;
-        seen++;
-        try {
-          const comm = (await Deno.readTextFile(`/proc/${entry.name}/comm`)).trim();
-          if (isHeavyProcessName(comm)) {
-            compilers++;
-            if (isZeroTickActiveBuilder(comm)) {
-              hasDiscreteBuilder = true;
-            }
-            if (names.size < 8) {
-              names.add(comm);
-            } else if (isZeroTickActiveBuilder(comm)) {
-              for (const existing of names) {
-                if (!isZeroTickActiveBuilder(existing)) {
-                  names.delete(existing);
-                  names.add(comm);
-                  break;
-                }
+        // The entries bound keeps its old meaning exactly: no batch may inspect an entry past it, so a
+        // deliberately small CAP_QUIET_MAX_PROC_SCAN still truncates at that number (1io9's drill).
+        const room = Math.max(1, budget.entries - seen);
+        const batch = pids.slice(i, i + Math.min(PROC_SCAN_CONCURRENCY, room));
+        const records = await Promise.all(batch.map(inspect));
+        seen += batch.length;
+        for (const record of records) {
+          if (!record || !isHeavyProcessName(record.comm)) continue;
+          compilers++;
+          if (isZeroTickActiveBuilder(record.comm)) {
+            hasDiscreteBuilder = true;
+          }
+          if (names.size < 8) {
+            names.add(record.comm);
+          } else if (isZeroTickActiveBuilder(record.comm)) {
+            for (const existing of names) {
+              if (!isZeroTickActiveBuilder(existing)) {
+                names.delete(existing);
+                names.add(record.comm);
+                break;
               }
             }
-            const parsed = parseProcStatCpu(await Deno.readTextFile(`/proc/${entry.name}/stat`), comm);
-            if (parsed) cpu.set(entry.name, parsed);
           }
-        } catch { /* a process that exited mid-scan is not an error */ }
+          if (record.parsed) cpu.set(record.pid, record.parsed);
+        }
       }
     }
     if (truncated) {
+      const scanElapsedMs = Date.now() - startedAt;
       return {
         at, load1, load5, load15, cores, loadPerCore: load1 / cores,
         // The partial counts stay as evidence: a reader can see what the walk did
         // reach before it was cut off.
         compilers, compilerNames: [...names], measurable: false,
         unbaselined: prev == null,
-        error: `proc scan truncated after ${seen} entries in ${Date.now() - startedAt} ms ` +
+        // ip654: what the walk actually managed, so the retry budget can be DERIVED from this box's
+        // measured table size and throughput instead of a constant multiple of a constant.
+        scanSeen: seen, scanElapsedMs, scanBudgetEntries: budget.entries, scanBudgetMs: budget.ms,
+        error: `proc scan truncated after ${seen} entries in ${scanElapsedMs} ms ` +
           `(budget ${budget.entries} entries / ${budget.ms} ms) — the builder count is INCOMPLETE, ` +
           `so this sample is NOT a quiet verdict; raise CAP_QUIET_MAX_PROC_SCAN(_MS) deliberately ` +
           `if this box really has that many processes (chrome-agent-platform-1io9)`,

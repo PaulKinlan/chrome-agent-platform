@@ -1143,6 +1143,116 @@ Deno.test("r2ai: a box that CANNOT be sampled at either budget still refuses, an
   }
 });
 
+// ── ip654: the retry bound is DERIVED from this box, and an explicit bound is never widened ──────
+Deno.test("ip654: a truncated walk retries with a budget DERIVED from the measured table, and the walk it retries still sees every entry", async () => {
+  // The gate evidence this pins: with the old `everything × 4` rule the retry (16384 entries / 1600 ms)
+  // truncated after 17-256 entries of a ~230-entry table, because per-read latency had collapsed to
+  // 6.6-105 ms under the parallel phase. A bigger constant cannot rescue a throughput collapse.
+  //
+  // Staged so the derivation is OBSERVABLE rather than asserted: a 4500-entry table (larger than the
+  // 4096 default, so the max() in the derivation is visible) walked with a deliberately small FIRST
+  // budget via the deps seam, so the first pass truncates on ENTRIES in ~a millisecond and the retry's
+  // entries bound must become this box's measured table plus headroom - not the old 16384.
+  const { readLoadSample } = await import("../scripts/lib/quiet-window.ts");
+  const TABLE = 4500;
+  const pids = Array.from({ length: TABLE }, (_, i) => String(100000 + i));
+  const heavyPid = pids[TABLE - 1]; // the LAST entry: proves the batched walk reaches the whole table
+  const readProcFile = (path: string) =>
+    Promise.resolve(
+      path.endsWith("/stat")
+        ? "4242 (esbuild) S 1 4242 4242 0 -1 4194304 0 0 0 0 120 40 0 0 20 0 1 0 98765 0 0"
+        : path.includes(heavyPid)
+        ? "esbuild\n"
+        : "deno\n",
+    );
+  const s = await readLoadSample(null, {
+    budget: { entries: 64, ms: 400 },
+    procPids: async () => pids,
+    readProcFile,
+    procTableSize: () => TABLE,
+  });
+  assertEquals(s.measurable, true, `the derived budget must be able to see this table: ${s.error ?? ""}`);
+  assertEquals(s.retriedAfterTruncation, true, "the first pass truncated, so a retry ran");
+  assertEquals(s.scanRetry?.derived, true, `the retry budget must be derived, not the constant 4x: ${JSON.stringify(s.scanRetry)}`);
+  assertEquals(s.scanRetry?.entries, TABLE + 64, "the entries bound is the MEASURED table plus headroom");
+  assert(
+    (s.scanRetry?.entries ?? Infinity) < 4096 * 4,
+    `derived entries must not be the old constant 4x (16384): ${JSON.stringify(s.scanRetry)}`,
+  );
+  // And the batched walk is not blind: the heavy process at the END of the table is counted, so
+  // concurrency bought speed without skipping entries.
+  assertEquals(s.compilers, 1, `the last entry in the table must still be inspected: ${JSON.stringify(s.compilerNames)}`);
+  assert(s.compilerNames.includes("esbuild"), `the heavy name is evidence: ${JSON.stringify(s.compilerNames)}`);
+});
+
+Deno.test("ip654: the derived retry arithmetic comes from the observation, and an explicit or unobservable bound falls back to 4x", async () => {
+  // The arithmetic IS the contract here, so it is pinned directly on hand-built observations: no timer,
+  // no load average, no dependence on how fast this box happens to be today.
+  const { derivedRetryBudget } = await import("../scripts/lib/quiet-window.ts");
+  const envEntries = Deno.env.get("CAP_QUIET_MAX_PROC_SCAN");
+  const envMs = Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS");
+  try {
+    Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN");
+    Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN_MS");
+    const observation = { load1: 1, load5: 1, load15: 1, cores: 8, loadPerCore: 0.125, compilers: 0, compilerNames: [], measurable: false, at: 0, unbaselined: true, scanSeen: 64, scanElapsedMs: 24 } as const;
+
+    // A 4500-entry table measured at 24 ms for 64 entries (0.375 ms/entry) needs ~3.4 s, not the 1600 ms
+    // a constant 4x would give: the TIME bound is the one that collapsed in the gate logs.
+    const slow = derivedRetryBudget({ entries: 4096, ms: 400 }, observation as never, { procTableSize: () => 4500 });
+    assertEquals(slow.derived, true);
+    assertEquals(slow.entries, 4564, "entries = the measured table + headroom");
+    assertEquals(slow.ms, Math.min(Math.max(Math.ceil(4500 * (24 / 64) * 2) + 100, 1600), 10_000));
+    assert(slow.ms > 1600, `the time bound is derived from the observed per-entry cost (${slow.ms} ms)`);
+
+    // A fast walk on a small table stays at the 4x floor, so the derivation never SHRINKS the retry.
+    const fast = derivedRetryBudget({ entries: 4096, ms: 400 }, { ...observation, scanSeen: 4096, scanElapsedMs: 40 } as never, { procTableSize: () => 300 });
+    assertEquals(fast.entries, 4096, "a table smaller than the default keeps the default entries bound");
+    assertEquals(fast.ms, 1600, "and 4x the default time, because the observed cost is tiny");
+
+    // Unobservable table (no /proc, an unreadable listing): fall back to 4x rather than guess.
+    const blind = derivedRetryBudget({ entries: 4096, ms: 400 }, observation as never, { procTableSize: () => null });
+    assertEquals(blind, { entries: 16384, ms: 1600, derived: false });
+
+    // An EXPLICIT bound is a deliberate statement and is never replaced by a derived one.
+    Deno.env.set("CAP_QUIET_MAX_PROC_SCAN", "512");
+    const explicit = derivedRetryBudget({ entries: 512, ms: 400 }, observation as never, { procTableSize: () => 4500 });
+    assertEquals(explicit, { entries: 2048, ms: 1600, derived: false });
+    Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN");
+
+    // A derived bound is still a BOUND: past the ceiling the sample stays a refusal.
+    const starved = derivedRetryBudget({ entries: 4096, ms: 400 }, { ...observation, scanSeen: 1, scanElapsedMs: 4000 } as never, { procTableSize: () => 4500 });
+    assertEquals(starved.ms, 10_000, "the derived time bound is capped at the ceiling");
+  } finally {
+    if (envEntries === undefined) Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN"); else Deno.env.set("CAP_QUIET_MAX_PROC_SCAN", envEntries);
+    if (envMs === undefined) Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN_MS"); else Deno.env.set("CAP_QUIET_MAX_PROC_SCAN_MS", envMs);
+  }
+});
+
+Deno.test("ip654: an EXPLICIT scan bound is never widened by the derivation, so an unmatchable bound still refuses", async () => {
+  // The 1io9 property, restated against the new derivation: an operator (or a drill) that sets the bound
+  // is making a deliberate statement, so the retry stays the historical 4x of THAT bound and the sample
+  // stays a refusal. Derivation must never be a way for a red to become green.
+  const { readLoadSample } = await import("../scripts/lib/quiet-window.ts");
+  const pids = Array.from({ length: 40 }, (_, i) => String(200000 + i));
+  const before = Deno.env.get("CAP_QUIET_MAX_PROC_SCAN");
+  Deno.env.set("CAP_QUIET_MAX_PROC_SCAN", "1");
+  try {
+    const s = await readLoadSample(null, {
+      procPids: async () => pids,
+      readProcFile: async () => "deno\n",
+      procTableSize: () => pids.length,
+    });
+    assertEquals(s.measurable, false, "a bound that cannot be met is still a refusal");
+    assert(/truncated/.test(s.error ?? ""), `the refusal names truncation: ${s.error}`);
+    assertEquals(s.scanRetry?.derived, false, "an explicit bound must not be replaced by a derived one");
+    assertEquals(s.scanRetry?.entries, 4, `the retry is 4x the EXPLICIT bound: ${JSON.stringify(s.scanRetry)}`);
+    assertEquals(s.scanBudgetEntries, 4, "the retry walk compared against those 4 entries, not a derived bound");
+    assertEquals(s.scanSeen, 4, `the explicit entries bound is honoured exactly: saw ${s.scanSeen}`);
+  } finally {
+    if (before === undefined) Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN"); else Deno.env.set("CAP_QUIET_MAX_PROC_SCAN", before);
+  }
+});
+
 // ── qs8v7: the threshold counts heavy builder JOBS, not compiler processes ────────────────────────
 // The incident: a union gate read "active heavy-builders 9 > 1 (named: rustc ...)" while ONE Rust
 // build was running. A cargo/rust build forks one rustc per codegen unit, so a pid count turned a
