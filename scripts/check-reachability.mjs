@@ -39,6 +39,75 @@ export const SHIPPED_EXTENSIONS = new Set([".js", ".mjs", ".html", ".css"]);
 export const CODE_EXTENSIONS = new Set([".js", ".mjs", ".ts", ".tsx"]);
 export const SKIPPED_DIRS = new Set(["dist", "dist-versions", "dist-archives", "node_modules"]);
 
+// ── content-addressed analysis memo (chrome-agent-platform-8qy5d) ────────────
+// One walk tokenizes the same file 3-4 times: the entry-point BFS and the
+// RETAINED BFS both call candidateRefs, and checkExportReachability tokenizes
+// every reached module again (or twice for HTML inline scripts). Both analyses
+// are PURE in (rel, source) — they never consult the tree, the shipped set or
+// any other file — so the same content must always produce the same answer and
+// can be memoized by content instead of recomputed.
+//
+// Keyed by CONTENT, never by path+mtime: an edited file, a planted file and a
+// removed file all take a different key, so a memo hit can only ever be the
+// answer for exactly the bytes being asked about. Keying by stat data would
+// leave a stale-verdict window on a coarse-mtime filesystem; keying by content
+// cannot. The default is a fresh cache per call (within-call dedupe only); a
+// caller that scans repeatedly — tests/reachability.test.ts — passes one cache
+// so unchanged files are analysed once for the whole file run.
+export function createContentCache() {
+  return { refs: new Map(), analyses: new Map(), hits: 0, misses: 0 };
+}
+
+function memoByContent(cache, bucket, rel, source, compute) {
+  if (!cache) return compute();
+  let byContent = cache[bucket].get(rel);
+  if (!byContent) {
+    byContent = new Map();
+    cache[bucket].set(rel, byContent);
+  }
+  if (byContent.has(source)) {
+    cache.hits += 1;
+    return byContent.get(source);
+  }
+  cache.misses += 1;
+  const value = compute();
+  byContent.set(source, value);
+  return value;
+}
+
+// candidateRefs/analyzeModuleTokens behind the shared memo. Both wrappers are
+// the ONLY way the walks below reach those functions, so the memo covers the
+// whole scan rather than one call site.
+function candidateRefsMemo(cache, rel, source) {
+  return memoByContent(cache, "refs", rel, source, () => candidateRefs(rel, source));
+}
+
+function analyzeModuleMemo(cache, rel, source) {
+  return memoByContent(cache, "analyses", rel, source, () => analyzeModuleTokens(source, rel));
+}
+
+// Read each path ONCE per scan (chrome-agent-platform-8qy5d). A single scan used
+// to read every reached file three times — the entry BFS, the RETAINED BFS and the
+// export analysis each walked the same tree — 1087 reads for 372 files. Those reads
+// are sequential awaits that Deno offloads to its fs thread pool, so their cost is
+// wall-latency, not CPU: under fleet load (measured at load 12 on 8 CPUs, 16 CPU
+// hogs) one scan took 13-50s while the same scan took 0.5-1s on a quiet box. Reading
+// once per scan removes two thirds of that latency with no change in what is read.
+// The map lives for exactly one call, so it cannot go stale (the content memo is the
+// only thing that outlives a scan, and it is keyed by content).
+function readOnce(io) {
+  const seen = new Map();
+  return {
+    readdir: io.readdir,
+    readFile: async (path) => {
+      if (seen.has(path)) return seen.get(path);
+      const source = await io.readFile(path);
+      seen.set(path, source);
+      return source;
+    },
+  };
+}
+
 // file (relative to extension/) → the reason it stays although no entry point
 // reaches it. Files a RETAINED module imports are kept with it (the walk
 // continues from every RETAINED root), so only roots are listed; run with
@@ -460,6 +529,42 @@ export function exportedFunctions(source, file = "<js>") {
 }
 
 /**
+ * Token counts for a reached HTML file's inline scripts.
+ *
+ * Returns null when acorn cannot tokenize it, which is the outcome the previous
+ * inline try/catch produced (no entry in analysesByFile) — the difference is that
+ * the null is now recorded in the content memo, so a repeated scan does not
+ * re-attempt the same failing tokenization.
+ *
+ * KNOWN DEFECT (filed as its own bead, chrome-agent-platform-8qy5d review find):
+ * this tokenizes the WHOLE document as JavaScript, so every real .html file throws
+ * at its first non-JS character (e.g. the '—' in a comment) and returns null. In
+ * other words no HTML inline-script token has ever been counted. Fixing it changes
+ * export-reachability verdicts, so it is deliberately NOT folded into this
+ * performance change; this function only stops the failure being re-paid per scan.
+ */
+function analyzeHtmlTokens(html) {
+  try {
+    const counts = new Map();
+    for (const tok of tokenizer(html, { ecmaVersion: "latest", sourceType: "module", allowHashBang: true })) {
+      if (tok.type?.label === "name" && typeof tok.value === "string") {
+        counts.set(tok.value, (counts.get(tok.value) || 0) + 1);
+      }
+    }
+    return {
+      tokens: [],
+      tokenCounts: counts,
+      declCounts: new Map(),
+      useCounts: counts,
+      importedBindings: new Map(),
+      exportedBindings: new Map(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Scan reached modules for exported functions with no callers in reached files.
  * Policy (CAP-FB-20260922 / kf3h):
  * - Scans reached code modules (.js, .mjs, .ts, .tsx).
@@ -475,6 +580,7 @@ export async function checkExportReachability({
   io,
   retainedExports = RETAINED_EXPORTS,
   strictExports = false,
+  contentCache = createContentCache(),
 }) {
   const reachedCode = [...reached].filter((f) => {
     const ext = f.slice(f.lastIndexOf("."));
@@ -485,30 +591,20 @@ export async function checkExportReachability({
   for (const rel of reachedCode) {
     try {
       const source = await io.readFile(`${root}/${rel}`);
-      analysesByFile.set(rel, analyzeModuleTokens(source, rel));
+      analysesByFile.set(rel, analyzeModuleMemo(contentCache, rel, source));
     } catch {}
   }
 
+  const reachedCodeSet = new Set(reachedCode);
+
   // Also count tokens in reached HTML files (inline scripts)
   for (const rel of reached) {
-    if (reachedCode.includes(rel)) continue;
+    if (reachedCodeSet.has(rel)) continue;
     if (rel.endsWith(".html")) {
       try {
         const html = await io.readFile(`${root}/${rel}`);
-        const counts = new Map();
-        for (const tok of tokenizer(html, { ecmaVersion: "latest", sourceType: "module", allowHashBang: true })) {
-          if (tok.type?.label === "name" && typeof tok.value === "string") {
-            counts.set(tok.value, (counts.get(tok.value) || 0) + 1);
-          }
-        }
-        analysesByFile.set(rel, {
-          tokens: [],
-          tokenCounts: counts,
-          declCounts: new Map(),
-          useCounts: counts,
-          importedBindings: new Map(),
-          exportedBindings: new Map(),
-        });
+        const analysis = memoByContent(contentCache, "analyses", rel, html, () => analyzeHtmlTokens(html));
+        if (analysis) analysesByFile.set(rel, analysis);
       } catch {}
     }
   }
@@ -581,6 +677,23 @@ export async function checkExportReachability({
   }
 
   // 5. Collect all specifically reached export keys across callers and traversed re-export paths
+  // chrome-agent-platform-8qy5d: section C below asks "which files export this identifier?"
+  // once per used identifier. Answering that by scanning every analysis is
+  // O(files x identifiers x files) — 355 reached modules made each scan spend ~2.3s of CPU in
+  // this loop alone (measured with --cpu-prof). Build the inverted index once instead: same
+  // credits, same order, one pass.
+  const filesByExportName = new Map();
+  for (const [file, analysis] of analysesByFile) {
+    for (const name of analysis.exportedBindings.keys()) {
+      let files = filesByExportName.get(name);
+      if (!files) {
+        files = [];
+        filesByExportName.set(name, files);
+      }
+      files.push(file);
+    }
+  }
+
   const reachedKeys = new Set();
   for (const [file, analysis] of analysesByFile) {
     // A. Internal composition: if this file uses any of its own exports (or local name, P2b)
@@ -612,10 +725,8 @@ export async function checkExportReachability({
     // C. Direct/unimported identifier uses (namespace/global calls)
     for (const [usedIdent, count] of analysis.useCounts) {
       if (count > 0 && !analysis.importedBindings.has(usedIdent)) {
-        for (const [otherFile, otherAnalysis] of analysesByFile) {
-          if (otherAnalysis.exportedBindings.has(usedIdent)) {
-            creditTraversedPath(otherFile, usedIdent, reachedKeys);
-          }
+        for (const otherFile of filesByExportName.get(usedIdent) || []) {
+          creditTraversedPath(otherFile, usedIdent, reachedKeys);
         }
       }
     }
@@ -687,8 +798,10 @@ export async function checkScriptsExportReachability({
   io,
   retainedExports = RETAINED_EXPORTS,
   strictExports = false,
+  contentCache = createContentCache(),
 }) {
   const pkgContent = await io.readFile(`${repoRoot}/package.json`);
+  io = readOnce(io);
   const pkg = JSON.parse(pkgContent);
   const seedScripts = new Set();
   for (const cmd of Object.values(pkg.scripts || {})) {
@@ -710,7 +823,7 @@ export async function checkScriptsExportReachability({
       continue;
     }
     const dir = current.includes("/") ? current.slice(0, current.lastIndexOf("/")) : "";
-    const refs = candidateRefs(current, content);
+    const refs = candidateRefsMemo(contentCache, current, content);
     for (const ref of refs) {
       if (ref.startsWith("./") || ref.startsWith("../")) {
         const baseResolved = normalize(`${dir}/${ref}`);
@@ -747,6 +860,7 @@ export async function checkScriptsExportReachability({
     io,
     retainedExports: scopedRetainedExports,
     strictExports,
+    contentCache,
   });
 }
 
@@ -819,7 +933,9 @@ export async function checkReachability({
   retainedExports = RETAINED_EXPORTS,
   strictExports = false,
   io,
+  contentCache = createContentCache(),
 }) {
+  io = readOnce(io); // one read per path for the whole scan (see readOnce)
   const shippedList = await walkShipped(root, io);
   const shipped = new Set(shippedList);
   const bundles = parseBundleMap(buildSource);
@@ -851,7 +967,7 @@ export async function checkReachability({
     while (q.length) {
       const rel = q.shift();
       const source = await io.readFile(`${root}/${rel}`);
-      for (const ref of candidateRefs(rel, source)) {
+      for (const ref of candidateRefsMemo(contentCache, rel, source)) {
         const target = resolveRef(rel, ref, shipped, bundles);
         if (target) s2(target);
       }
@@ -861,7 +977,7 @@ export async function checkReachability({
   while (queue.length) {
     const rel = queue.shift();
     const source = await io.readFile(`${root}/${rel}`);
-    for (const ref of candidateRefs(rel, source)) {
+    for (const ref of candidateRefsMemo(contentCache, rel, source)) {
       const target = resolveRef(rel, ref, shipped, bundles);
       if (target && !reached.has(target)) { reached.add(target); queue.push(target); }
     }
@@ -887,6 +1003,7 @@ export async function checkReachability({
     io,
     retainedExports: scopedRetainedExports,
     strictExports,
+    contentCache,
   });
 
   const violations = [
