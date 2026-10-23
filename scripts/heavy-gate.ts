@@ -148,10 +148,16 @@ export async function runHeavyGate(args = Deno.args): Promise<number> {
   try {
     const mod = await import("./lib/heavy-receipt.mjs");
     const tree = mod.currentTreeHash();
+    // upqhp (coord): the receipt records the EXACT command and result, not just a class —
+    // argv so an auditor can re-run what produced the certification, rc so a timed-out or
+    // signal-killed run cannot masquerade as a clean class.
+    const argv = ["deno", "run", "-A", "scripts/heavy-gate.ts", ...args];
     const written = mod.writeHeavyReceipt({
       tree,
       commit: mod.currentCommitSha(),
       result: rc === 0 ? "pass" : rc === ENVIRONMENTAL_REFUSAL_EXIT ? "refusal" : "fail",
+      command: argv.join(" "),
+      exitCode: rc,
       logPath: Deno.env.get("HEAVY_GATE_LOG_PATH") ?? null,
       suites: requested.length,
       startedAt: runStart,

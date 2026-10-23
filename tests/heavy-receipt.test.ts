@@ -45,6 +45,8 @@ Deno.test("upqhp: a passing receipt for the exact tree certifies it", withDurabl
     tree: TREE,
     commit: "491316ec6",
     result: "pass",
+    command: "deno run -A scripts/heavy-gate.ts",
+    exitCode: 0,
     logPath: "/tmp/heavy.log",
     suites: 21,
     producer: "chrome-agent-platform-scale2",
@@ -59,6 +61,9 @@ Deno.test("upqhp: a passing receipt for the exact tree certifies it", withDurabl
   assertEquals(receipt.commit, "491316ec6");
   assertEquals(receipt.producer, "chrome-agent-platform-scale2");
   assertEquals(receipt.suites, 21);
+  // coord condition (upqhp): the receipt records the EXACT command and result.
+  assertEquals(receipt.command, "deno run -A scripts/heavy-gate.ts");
+  assertEquals(receipt.exitCode, 0);
 }));
 
 Deno.test("upqhp falsifier: a tree with no receipt is refused, never silently skipped", withDurableRoot(async () => {
@@ -109,6 +114,16 @@ Deno.test("upqhp: a receipt older than the window is refused as stale", withDura
   assertEquals(checkHeavyReceipt(TREE, { now: NOW }).ok, true);
 }));
 
+Deno.test("upqhp: a MALFORMED receipt is refused and the message names the expected tree", withDurableRoot(async () => {
+  const path = receiptPath(TREE);
+  Deno.writeTextFileSync(path, "{not json at all");
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  assertEquals(verdict.ok, false);
+  assertEquals(verdict.reason, "unreadable");
+  assertEquals(verdict.marker, "HEAVY_RECEIPT_REFUSAL");
+  assertStringIncludes(verdict.line, TREE.slice(0, 12));
+}));
+
 Deno.test("upqhp: an undatable receipt is refused rather than guessed", withDurableRoot(async () => {
   writeHeavyReceipt({ tree: TREE, commit: "x", result: "pass", finishedAt: NOW });
   // Corrupt the timestamp the way a half-written file would lose it.
@@ -151,4 +166,6 @@ Deno.test("upqhp wiring: the receipt check is a gate-command stage, not an npm-t
   const heavyGate = Deno.readTextFileSync(join(ROOT, "scripts", "heavy-gate.ts"));
   assertStringIncludes(heavyGate, "writeHeavyReceipt({");
   assertStringIncludes(heavyGate, "result: rc === 0 ? \"pass\" : rc === ENVIRONMENTAL_REFUSAL_EXIT ? \"refusal\" : \"fail\"");
+  assertStringIncludes(heavyGate, "command: argv.join(\" \")");
+  assertStringIncludes(heavyGate, "exitCode: rc");
 });

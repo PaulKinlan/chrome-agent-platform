@@ -69,10 +69,12 @@ export function currentCommitSha(cwd) {
 /**
  * Write a receipt for a completed heavy-gate run. Called for EVERY outcome: a refusal or a
  * failure is recorded too (honest ledger), but only `result: "pass"` ever certifies — the
- * gate check below requires it.
- * @param {{ tree: string, commit?: string, result: "pass" | "fail" | "refusal", logPath?: string | null, suites?: number | null, producer?: string, startedAt?: number | null, finishedAt?: number }} args
+ * gate check below requires it. The receipt records the EXACT COMMAND and exit code (coord,
+ * upqhp: "the receipt must record the exact command and result, not just a pass boolean"),
+ * so an auditor can re-run what produced the certification.
+ * @param {{ tree: string, commit?: string, result: "pass" | "fail" | "refusal", command?: string, exitCode?: number | null, logPath?: string | null, suites?: number | null, producer?: string, startedAt?: number | null, finishedAt?: number }} args
  */
-export function writeHeavyReceipt({ tree, commit = "unknown", result, logPath = null, suites = null, producer = process.env.FLEET_LANE ?? "unknown", startedAt = null, finishedAt = Date.now() }) {
+export function writeHeavyReceipt({ tree, commit = "unknown", result, command = "unknown", exitCode = null, logPath = null, suites = null, producer = process.env.FLEET_LANE ?? "unknown", startedAt = null, finishedAt = Date.now() }) {
   if (result !== "pass" && result !== "fail" && result !== "refusal") {
     throw new Error(`heavy-receipt: invalid result "${result}" (pass|fail|refusal)`);
   }
@@ -81,6 +83,8 @@ export function writeHeavyReceipt({ tree, commit = "unknown", result, logPath = 
     tree,
     commit,
     result,
+    command,
+    exitCode,
     suites,
     producer,
     host: process.env.HOSTNAME ?? "unknown",
@@ -123,7 +127,9 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
     return {
       ok: false,
       reason: "unreadable",
-      line: `run-tests: HEAVY RECEIPT UNREADABLE at ${path} (${error.message}) — refusing rather than guessing.`,
+      line:
+        `run-tests: HEAVY RECEIPT MALFORMED at ${path} for expected tree ${tree.slice(0, 12)} (${error.message}) — ` +
+        `refusing rather than guessing (upqhp).`,
       marker: "HEAVY_RECEIPT_REFUSAL",
       payload: { tree, reason: "unreadable" },
     };
