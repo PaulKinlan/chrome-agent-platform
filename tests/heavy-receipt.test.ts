@@ -149,12 +149,18 @@ Deno.test("upqhp: the writer refuses to mint a receipt with an invalid result", 
 Deno.test("upqhp wiring: the receipt check is a gate-command stage, not an npm-test stage", () => {
   // Learned on 92157a0e5's first fast gate: the fast gate escalates machinery changes (edits to
   // run-tests.mjs) to the FULL suite, so a receipt demand inside npm test turns every machinery
-  // change into a 40-minute tier gate. The check therefore lives in scripts/gate-receipt.mjs,
-  // wired as its own gate-command stage (npm run gate:receipt).
+  // change into a 40-minute tier gate. The check therefore lives in scripts/gate-receipt.mjs and
+  // is invoked by the gate command directly: `node scripts/gate-receipt.mjs`.
   const runTests = Deno.readTextFileSync(join(ROOT, "scripts", "run-tests.mjs"));
   assertEquals(runTests.includes("checkHeavyReceipt"), false, "run-tests must not demand receipts (fast-gate escalation would multiply tier cost)");
+  // NOT an npm script, deliberately (measured on 1b1a8d3's fast gate, 2026-10-23): select-tests
+  // FAILS CLOSED on any package.json edit ("release/version JSON belongs to the merger; a lane
+  // change here cannot be subset-certified") and escalates the fast tier to the FULL suite, which
+  // then dies at the lane's bound with no verdict. A one-line npm alias is not worth making every
+  // future receipt change un-certifiable, so the gate command names this file instead.
   const pkg = JSON.parse(Deno.readTextFileSync(join(ROOT, "package.json")));
-  assertEquals(pkg.scripts["gate:receipt"], "node scripts/gate-receipt.mjs");
+  assertEquals(pkg.scripts["gate:receipt"], undefined, "the receipt stage is invoked by path, not through an npm alias (a package.json edit cannot be fast-certified)");
+  assertEquals(Deno.statSync(join(ROOT, "scripts", "gate-receipt.mjs")).isFile, true);
   const stage = Deno.readTextFileSync(join(ROOT, "scripts", "gate-receipt.mjs"));
   assertStringIncludes(stage, "checkHeavyReceipt(tree)");
   assertStringIncludes(stage, "HEAVY_RECEIPT_REFUSAL");

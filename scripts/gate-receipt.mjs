@@ -8,6 +8,13 @@
 // full suite, and a receipt demand inside npm test would turn every such change into a
 // 40-minute tier gate (learned on 92157a0e5's first fast gate: FAIL, receipt missing).
 //
+// INVOCATION (this file is NOT an npm alias, deliberately): the gate command appends
+// `node scripts/gate-receipt.mjs` to its chain. Adding a `gate:receipt` entry to package.json
+// would work, but select-tests FAILS CLOSED on any package.json edit ("release/version JSON
+// belongs to the merger; a lane change here cannot be subset-certified"), so a one-line alias
+// made the whole change un-certifiable by the fast gate — measured on the first fast gate for
+// this work (killed at its bound after escalating to the FULL suite). Name the file instead.
+//
 // Fleet gate order (producer rule, coord 2026-10-23): run `npm run test:heavy` on the landing
 // tree FIRST — it writes the receipt — then the gate; this stage certifies it.
 //

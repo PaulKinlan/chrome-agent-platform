@@ -136,7 +136,7 @@ export async function runHeavyGate(args = Deno.args): Promise<number> {
   const rc = codes.length ? combinePhaseExitCodes(...codes) : 0;
 
   // chrome-agent-platform-upqhp: every tier run writes a receipt for the exact tree it ran on
-  // (keyed by TREE hash). The gate-command stage (npm run gate:receipt) fails closed without a
+  // (keyed by TREE hash). The gate-command stage (`node scripts/gate-receipt.mjs`) fails closed without a
   // fresh passing receipt for the tree it certifies, so this write is what keeps the heavy tier
   // genuinely covered once a suite is tiered here. Refusals and failures are recorded too — an
   // honest ledger — but only result "pass" ever certifies (checkHeavyReceipt enforces it).
