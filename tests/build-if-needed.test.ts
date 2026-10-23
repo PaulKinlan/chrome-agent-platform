@@ -257,7 +257,10 @@ Deno.test("0eq00 build: an omitted build is explicit and runs nothing", async ()
     required: false,
     reason: "nothing selected reads dist",
     root: ROOT,
-    validate: async () => ({ ok: false, error: "not consulted" }),
+    // chrome-agent-platform-dfif5: a skip must EARN itself — the marker has to validate for this
+    // tree before the build is omitted. The stub models a FRESH artefact: validation consulted,
+    // verdict ok, so the skip stands and runs nothing.
+    validate: async () => ({ ok: true, commit: "fresh-commit" }),
     runBuild: async () => {
       built += 1;
       return 0;
@@ -265,8 +268,60 @@ Deno.test("0eq00 build: an omitted build is explicit and runs nothing", async ()
   });
   assertEquals(result.disposition, "omitted");
   assertEquals(result.reason, "nothing selected reads dist");
+  assertEquals(result.markerCommit, "fresh-commit");
   assertEquals(built, 0);
   assertEquals(GATE_BUILD_TARGET, "store");
+});
+
+Deno.test("dfif5: presence is not freshness — a STALE artefact on an unselected path is refused the skip and builds", async () => {
+  let built = 0;
+  let validations = 0;
+  const result = await ensureStoreBuild({
+    required: false,
+    reason: "nothing selected reads dist and no build input changed",
+    root: ROOT,
+    // First validation (the skip's freshness probe) finds the artefact STALE; after the refused
+    // skip pays its build, the post-build certification must succeed (a build that left an invalid
+    // marker is disposition "failed", pinned separately by 0eq00).
+    validate: async () => {
+      validations += 1;
+      return validations === 1
+        ? { ok: false, error: "marker indexed source authority is stale" }
+        : { ok: true, commit: "rebuilt-commit" };
+    },
+    runBuild: async () => {
+      built += 1;
+      return 0;
+    },
+  });
+  assertEquals(result.disposition, "ran", "a stale artefact must not read as a valid skip");
+  assertEquals(built, 1, "the refused skip pays exactly one build");
+  assertEquals(result.markerCommit, "rebuilt-commit");
+  assert(
+    result.reason.includes("marker indexed source authority is stale"),
+    `the record must name the staleness that refused the skip: ${result.reason}`,
+  );
+});
+
+Deno.test("dfif5: a fresh artefact on an unselected path still skips — the fix must not degrade into always-building", async () => {
+  let built = 0;
+  let validations = 0;
+  const result = await ensureStoreBuild({
+    required: false,
+    reason: "nothing selected reads dist",
+    root: ROOT,
+    validate: async () => {
+      validations += 1;
+      return { ok: true, commit: "head-commit" };
+    },
+    runBuild: async () => {
+      built += 1;
+      return 0;
+    },
+  });
+  assertEquals(result.disposition, "omitted");
+  assertEquals(built, 0, "a certified-fresh artefact must not trigger a build");
+  assertEquals(validations, 1, "the skip is proven by exactly one validation");
 });
 
 Deno.test("0eq00 ledger (P1-A): the FAST inventory names every suite the subset did NOT run", () => {

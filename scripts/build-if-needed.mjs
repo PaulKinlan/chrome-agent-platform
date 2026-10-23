@@ -333,12 +333,28 @@ export async function ensureStoreBuild({
   });
   const build = runBuild ?? defaultRunBuild(root);
 
-  if (!required) {
-    return { disposition: "omitted", reason, secs: 0, markerCommit: null };
+  const t0 = Date.now();
+  // chrome-agent-platform-dfif5: PRESENCE IS NOT FRESHNESS. An unselected path used to return
+  // "omitted" without a single check, so an artefact that exists but is STALE — stamped for an older
+  // commit, or built from source bytes this tree no longer has — counted as present, and the tier
+  // ran against bundles this tree no longer produces ("extension is not built" is the easy failure;
+  // a stale bundle quietly shipping old behaviour is the dangerous one). A skip now has to EARN
+  // itself: the same dist.complete machinery that certifies a reuse (commit, indexed source bytes,
+  // output bytes) must validate for this tree before the build may be omitted. A stale artefact on
+  // an unselected path falls into the SAME validate-or-build path below, so the run pays at most one
+  // build per commit (the repo's own 1mz2 lane rule: rebuild after your last commit) and never
+  // silently tests against bundles the tree refutes. Validating first also means the "ran"/"failed"
+  // records below quote the REAL staleness error, whatever path discovered it.
+  const existing = await validateMarker();
+  if (!required && existing.ok) {
+    return {
+      disposition: "omitted",
+      reason,
+      secs: (Date.now() - t0) / 1000,
+      markerCommit: existing.commit ?? null,
+    };
   }
 
-  const t0 = Date.now();
-  const existing = await validateMarker();
   if (existing.ok) {
     return {
       disposition: "reused",
