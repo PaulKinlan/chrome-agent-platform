@@ -169,14 +169,11 @@ export async function runW51rCreateClickJourney(options: {
         surfaceName: "NTP Hub",
         // timeoutMs keeps its meaning: the TOTAL ceiling before this surface is called unready.
         timeoutMs: readyBudget(),
-        // dnqyt, and an explicit decision rather than a silent default: measured on this VM, NTP
-        // hydration reaches `jobsBoard` at ~3.8s and `namedHydrated` at ~7.2s idle, and the same
-        // two steps land at ~6.2s and ~12.3s with six competing busy loops. A 10s ceiling
-        // therefore rejects a page that is hydrating fine (the w51r:397 red). The wait already
-        // resets on observed progress, so this ceiling only bounds the pathological case; 60s is
-        // ~5x the measured loaded worst case and a page that STOPS advancing still reds after
-        // readyBudget()ms of no progress.
-        maxTotalMs: 60000,
+        // dnqyt: NO budget growth here. coord's ruling is that the total ceiling stays
+        // readyBudget() and a page progressing slower than that still reds; a longer worst case is
+        // Paul's call with measurements, not a harness constant. What this call site adds is only
+        // the probe trace, so a red says whether hydration was still ADVANCING (this bead) or had
+        // stopped (a product regression).
         onProbe: (e) => readinessTrace.push({ atMs: e.atMs, advanced: e.advanced, probe: e.probe }),
       });
     } catch (readinessError) {
