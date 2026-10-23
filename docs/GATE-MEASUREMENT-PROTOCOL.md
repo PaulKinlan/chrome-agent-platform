@@ -37,12 +37,21 @@ A same-schedule repeated-run sample is exactly what a noise floor needs; it just
 Do not hard-code the number. The threshold for treating a wall-clock difference as real is:
 
 ```
-threshold = max(measured identical-arm spread, worst observed same-schedule pair)
+threshold = max(measured identical-arm spread, worst same-schedule pair) over the WINDOW
+WINDOW     = the last 10 valid comparisons, or all comparisons from the last 30 days if fewer than 10 exist
 ```
 
-Today that is **~2x**: 1.35x from the four-arm sample above, and ~2.0x from the widest known pair of same-schedule
-runs on one tree (291 s and 147 s, `scripts/run-tests.mjs`, 2026-10-23). It **tightens automatically** as better
-samples arrive - re-measure, do not re-quote. Consequences:
+Both terms are maxima over that **window**, never over all history: an all-time maximum can only grow, so it would
+be set by the worst artefact ever recorded and could never relax - a floor like that stops measuring and starts
+legislating. A comparison is **valid** (and enters the window) only if it has at least two arms per side, interleaved,
+load recorded before and after each arm, no refusal, and the scheduler line attached (rule 6). Invalid comparisons
+are recorded but do not move the floor.
+
+Today the window gives **~2x**: ~1.35x identical-arm spread from the four-arm sample above (a sample, not the floor),
+and ~2.0x from the widest same-schedule pair on one tree (291 s and 147 s, `scripts/run-tests.mjs`, 2026-10-23). It
+**tightens or relaxes as the window rolls**: when an old outlier ages out and the remaining comparisons are tighter,
+the floor drops, which is the point of stating the window instead of the number. Re-measure; do not re-quote.
+Consequences:
 
 - **Any wall-clock A/B whose effect is under today's ~2x threshold is undecided.** It is not a small win and it is
   not a small loss; it is the same measurement twice.
@@ -68,9 +77,16 @@ samples arrive - re-measure, do not re-quote. Consequences:
 4. **Warm the page cache** (`find tests scripts -name '*.ts' -o -name '*.mjs' | xargs cat > /dev/null`) and say so.
 5. **Print load before and after every arm**, and treat a run whose load moved by more than ~2x mid-arm as void
    rather than as data.
-6. **Prove which scheduler ran.** Grep the log for the line each path emits (`always-on guard batch: N file(s)`) and
-   quote the count. An off switch that silently does nothing turns an A/B into the same arm three times - measured
-   2026-10-23 at 174 s / 167 s / 222 s, which would have read as "no effect" and was actually "no experiment".
+6. **Prove which scheduler ran - capture the scheduler line verbatim and attach it to the record.** Do not write a
+   grep from memory: the strings differ per path, and a pattern that matches nothing silently certifies whichever
+   arm the reader assumed. The announcements these runners print today are
+   `run-tests: <phase> candidates (N file(s))` (`scripts/run-tests.mjs:58`),
+   `run-tests: parallel scheduler longest-first (N selected file(s)); Deno default workers` (`run-tests.mjs:63`),
+   `select-tests: <label> candidates (N file(s))` (`scripts/select-tests.mjs:740`) and
+   `select-tests: N file(s) - partition: X serial hazard(s) [...], Y parallel` (`scripts/select-tests.mjs:813`).
+   Quote the line and its count per arm; if the line you expect is absent, the arm did not run the way you think it
+   did. An off switch that silently does nothing turns an A/B into the same arm three times - measured 2026-10-23 at
+   174 s / 167 s / 222 s, which would have read as "no effect" and was actually "no experiment".
 7. **Record the negative result.** A withdrawn change with its numbers attached is what stops the next person
    re-running it; a deleted branch is an invitation to repeat it.
 8. **FAIL CLOSED when the machine cannot be measured.** If the load probe is truncated, the process scan refuses,

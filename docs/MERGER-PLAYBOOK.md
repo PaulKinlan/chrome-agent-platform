@@ -91,9 +91,10 @@ Before quoting a wall-clock number as evidence for a permanent change, read
 on one tree, page cache warmed, all green, measured 193 s / 176 s / 238 s / 187 s: a **1.35x spread with no code
 difference**, uncorrelated with the reported load (the fastest arm ran at the highest load), and with no
 cold-first-arm effect. That sample is a noise floor, not an A/B (load recorded after only, one schedule repeated,
-no per-arm scheduler log). The threshold is `max(measured identical-arm spread, worst observed same-schedule
-pair)`, which is **~2x today** (1.35x here, ~2.0x from the widest known same-schedule pair), and it tightens as
-better samples arrive. So a comparison under today's ~2x is `undecided`, not a small win, and per-suite timings
+no per-arm scheduler log). The threshold is `max(measured identical-arm spread, worst same-schedule pair)` over a **window** (the last 10 valid
+comparisons, or the last 30 days if fewer), which is **~2x today** (1.35x here, ~2.0x from the widest known
+same-schedule pair). The window matters: an all-time maximum can only grow, so it would be set by the worst artefact
+ever recorded and never relax. So a comparison under today's ~2x is `undecided`, not a small win, and per-suite timings
 taken from a concurrent run vary far more than the phase total (median 2.39x, p90 5.0x across the same four arms).
 Interleave arms (A B A B), run at least two per side, print load before and after each, and grep the log for the
 line proving which scheduler actually ran - an off switch that silently does nothing produces three copies of the
