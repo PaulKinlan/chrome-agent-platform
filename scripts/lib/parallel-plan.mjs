@@ -68,9 +68,10 @@ export function guardSubset(parallel, alwaysOn) {
 
 /**
  * @param {{ serialRc: number, parallel: string[], alwaysOn: string[], failingFiles?: string[] }} args
- * @returns {{ files: string[], skipped: number, announce: string|null }}
+ * @returns {{ files: string[], skipped: number, incomplete?: boolean, announce: string|null }}
  *   files    — the parallel files to run
  *   skipped  — how many parallel files this run does NOT execute
+ *   incomplete — true when files were SKIPPED, i.e. the run cannot certify the tree (w6kc0)
  *   announce — a line to print when files were skipped or refusal occurred, else null
  */
 export function parallelPlan({ serialRc, parallel, alwaysOn, failingFiles = [] }) {
@@ -89,13 +90,38 @@ export function parallelPlan({ serialRc, parallel, alwaysOn, failingFiles = [] }
   const names = Array.isArray(failingFiles) && failingFiles.length > 0
     ? ` [${failingFiles.join(", ")}]`
     : "";
+  // chrome-agent-platform-w6kc0: the outcome must never read as a certification of the tree. The run is
+  // INCOMPLETE in the marker a reader greps for, and it names the count, because "698 skipped" inside a
+  // sentence was read past twice while the guard subset came back green.
+  // The log contract keeps BOTH markers a reader greps for: SKIPPED (the historical wording this announcement
+  // has always used, pinned by tests/parallel-plan.test.ts) and INCOMPLETE (the certification verdict w6kc0
+  // added). Replacing one with the other silently changed the log contract; they say different things - what was
+  // omitted, and what that means for the run.
   return {
     files,
     skipped,
+    incomplete: true,
     announce:
-      `run-tests: serial file(s) failed${names}, so ${skipped} of ${parallel.length} ` +
-      `parallel file(s) are SKIPPED — except the ALWAYS-ON GUARD SET (${files.length} file(s)), which ` +
-      `runs regardless, because a guard result must never be conditional on an unrelated phase passing.`,
+      `run-tests: serial file(s) failed${names}, so ${skipped} of ${parallel.length} parallel file(s) are ` +
+      `SKIPPED — except the ALWAYS-ON GUARD SET (${files.length} file(s)), which runs regardless, because a ` +
+      `guard result must never be conditional on an unrelated phase passing. ` +
+      `INCOMPLETE: the parallel phase was skipped after the serial failure (${skipped} file(s) unrun); this ` +
+      `run CANNOT certify the tree.`,
   };
+}
+
+/**
+ * The certification gaps a plan implies (chrome-agent-platform-w6kc0). A run that skipped files cannot be
+ * a verdict on the tree, whatever its guard subset said, so the gaps are derived from the PLAN rather than
+ * inferred from whichever exit code the phases happened to produce. Pure, so the falsifier is a unit test:
+ * a failed serial phase yields a named gap with its count, a clean one yields none.
+ *
+ * @param {{ skipped?: number }} plan
+ * @returns {string[]} empty when the run executed everything it selected
+ */
+export function certificationGaps(plan) {
+  const skipped = Number(plan?.skipped ?? 0);
+  if (!Number.isFinite(skipped) || skipped <= 0) return [];
+  return [`parallel phase skipped after serial failure (${skipped} file(s) unrun)`];
 }
 
