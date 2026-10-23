@@ -28,7 +28,12 @@ import { resolve as resolvePath } from "node:path";
 import { BUILD_GATE, BUILD_GATE_FILES, BUILD_GATE_REASONS, HEAVY_GATE, HEAVY_GATE_FILES, HEAVY_GATE_REASONS, READ_ONLY_DIST, SERIAL, partition } from "./test-partition.mjs";
 import { announce, runReadOnlyDistBatch, runSerialFiles, runSerialLanes } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
-import { parallelPlan, computeParallelPhaseTimeout, DEFAULT_PARALLEL_TIMEOUT_MS } from "./lib/parallel-plan.mjs";
+import {
+  certificationGaps,
+  computeParallelPhaseTimeout,
+  DEFAULT_PARALLEL_TIMEOUT_MS,
+  parallelPlan,
+} from "./lib/parallel-plan.mjs";
 import { loadWeights, scheduleOrder } from "./lib/parallel-schedule.mjs";
 import { emitGateLedger, deferredTierEntries, fullTierManifestFields, parseGateBuild } from "./lib/gate-manifest.mjs";
 import { parseSuiteDurations, slowestSuites } from "./lib/parallel-durations.mjs";
@@ -385,6 +390,10 @@ export async function main(args = process.argv.slice(2)) {
   const failingFiles = serialFailures.filter((f) => f.code !== 0 && !f.isRefusal).map((f) => f.file);
   const plan = parallelPlan({ serialRc, parallel, alwaysOn: ALWAYS_ON, failingFiles });
   if (plan.announce) console.error(`\n${plan.announce}`);
+  // chrome-agent-platform-w6kc0: a run that skipped files must never certify the tree, whatever the
+  // guard subset did. The planner already drives rc non-zero on a serial failure; this makes the claim
+  // structural rather than a consequence of which rc the phases happened to produce.
+  const gaps = certificationGaps(plan);
   // Extract reviewed readers from the parallel plan; SERIAL has fully ended.
   // In the unchanged per-change runner both subsets still share its one
   // parallel process AFTER serial (partition(...).parallel is intentionally total).
@@ -400,6 +409,10 @@ export async function main(args = process.argv.slice(2)) {
   // independent parallel guards; both phases run and the first failure wins.
   const parallelRc = await runParallel(other, "parallel phase", suiteDurations, killedPhases);
   const rc = combinePhaseExitCodes(serialRc, readOnlyRc, parallelRc);
+  // w6kc0: a skip is a certification gap regardless of the phase exit codes, so force the outcome red and
+  // say so on the summary line. rc 0 with unrun files is the exact false assurance this bead is about.
+  const effectiveRc = gaps.length && rc === 0 ? 1 : rc;
+  const gapsNote = gaps.length ? ` — INCOMPLETE: ${gaps.join("; ")}` : "";
   const buildDeferredCount = cliFiles.length === 0 ? all.filter((f) => BUILD_GATE.has(f)).length : 0;
   const heavyDeferredCount = cliFiles.length === 0 ? all.filter((f) => HEAVY_GATE.has(f)).length : 0;
   const deferredParts = [];
@@ -410,8 +423,15 @@ export async function main(args = process.argv.slice(2)) {
     `run-tests: ${serialFiles.length + parallel.length} files total, ${plan.skipped} skipped` +
       ` (${serialFiles.length} serial, ${readOnly.length} post-build read-only, ${parallel.length - readOnly.length} other parallel` +
       `${deferredSummary}), wall ${((Date.now() - t0) / 1000).toFixed(0)}s` +
-      incompleteNote(killedPhases),
+      incompleteNote(killedPhases) +
+      gapsNote,
   );
+  if (gaps.length) {
+    console.error(
+      `run-tests: NOT CERTIFIABLE — ${gaps.join("; ")}. A green guard subset does not make ` +
+        `this a verdict on the tree: re-run once the serial phase passes.`,
+    );
+  }
   // The coverage ledger for the FULL tier (chrome-agent-platform-0eq00). Only the default `npm test`
   // form is a gate; an explicit-file run (`run-tests.mjs tests/x.test.ts`) is an inner-loop tool and
   // deliberately emits nothing, so a probe run can never look like a gate record.
@@ -437,15 +457,18 @@ export async function main(args = process.argv.slice(2)) {
         heavyGateFiles: HEAVY_GATE_FILES,
         heavyGateReasons: HEAVY_GATE_REASONS,
       }),
-      rc,
+      rc: effectiveRc,
       build: parseGateBuild(process.env.CAP_GATE_BUILD_JSON),
       fileMappingContext,
       suiteDurations,
-      incomplete: killedPhases.length ? killedPhases.join("; ") : null,
+      incomplete:
+        [...killedPhases, ...gaps].length
+          ? [...killedPhases, ...gaps].join("; ")
+          : null,
     });
     emitGateLedger({ manifest, fileMapping: manifest?.fileMapping ?? [] });
   }
-  process.exit(rc);
+  process.exit(effectiveRc);
 }
 
 // Node canonicalizes the module URL but not a symlinked argv path. Without

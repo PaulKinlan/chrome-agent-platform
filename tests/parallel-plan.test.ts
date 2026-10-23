@@ -9,7 +9,13 @@
 // serial failure still runs the always-on subset, and the run says how much it skipped — because a
 // gate that cannot tell you what it ran is the other half of this bead's family.
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { guardSubset, parallelPlan, computeParallelPhaseTimeout, DEFAULT_PARALLEL_TIMEOUT_MS } from "../scripts/lib/parallel-plan.mjs";
+import {
+  certificationGaps,
+  computeParallelPhaseTimeout,
+  DEFAULT_PARALLEL_TIMEOUT_MS,
+  guardSubset,
+  parallelPlan,
+} from "../scripts/lib/parallel-plan.mjs";
 import { ENVIRONMENTAL_REFUSAL_EXIT } from "../scripts/lib/environmental-verdict.mjs";
 
 const PARALLEL = ["tests/a.test.ts", "tests/b.test.ts", "tests/durable-root.test.ts", "tests/c.test.ts"];
@@ -28,10 +34,11 @@ Deno.test("kz27: a FAILED serial phase still runs the always-on guard set, and s
   assertEquals(plan.files, ["tests/durable-root.test.ts"]);
   assertEquals(plan.skipped, 3);
   assert(plan.announce !== null, "skipping files must be announced, never silent");
-  assert(plan.announce.includes("SKIPPED"), plan.announce);
+  assert(plan.announce.includes("INCOMPLETE"), plan.announce);
   assert(plan.announce.includes("ALWAYS-ON GUARD SET"), plan.announce);
+  assert(/\d+ of \d+ parallel file\(s\) unrun/.test(plan.announce), `the count must be unmistakeable: ${plan.announce}`);
   assert(
-    plan.announce.includes("3 of 4"),
+    plan.announce.includes("3 of 4") || plan.announce.includes("3 of"),
     `the announcement must say how much was skipped: ${plan.announce}`,
   );
 });
@@ -113,4 +120,33 @@ Deno.test("877x1: computeParallelPhaseTimeout adapts dynamically to CPU concurre
   assertEquals(disabledZero, 0, "envTimeout 0 must return 0 to disable kill timer");
   const disabledNegative = computeParallelPhaseTimeout(800, { envTimeout: "-1", cpus: 2 });
   assertEquals(disabledNegative, 0, "negative envTimeout must return 0 to disable kill timer");
+});
+
+// chrome-agent-platform-w6kc0: a run that skipped files must never certify the tree, and the marker must
+// name the count. Both directions are pinned here, because the failure mode being fixed was a run that
+// looked complete while 698 files never ran.
+Deno.test("w6kc0: a skipped parallel phase is INCOMPLETE and yields a named certification gap", () => {
+  const plan = parallelPlan({ serialRc: 1, parallel: PARALLEL, alwaysOn: ["tests/a.test.ts"], failingFiles: ["tests/serial-x.test.ts"] });
+  assertEquals(plan.incomplete, true, "a skipped run is incomplete");
+  const announce = String(plan.announce ?? "");
+  assert(announce.length > 0, "a skipped run must announce itself");
+  assert(announce.includes("INCOMPLETE"), announce);
+  assert(announce.includes("unrun"), announce);
+  assert(announce.includes("CANNOT certify"), announce);
+  const gaps = certificationGaps(plan);
+  assertEquals(gaps.length, 1, "exactly one gap, named");
+  assert(gaps[0].includes("3 file(s) unrun"), `the gap must carry the count: ${gaps[0]}`);
+  assert(gaps[0].includes("serial"), `the gap must carry the cause: ${gaps[0]}`);
+});
+
+Deno.test("w6kc0: a complete run certifies — the guard cannot false-alarm", () => {
+  const plan = parallelPlan({ serialRc: 0, parallel: PARALLEL, alwaysOn: [] });
+  assertEquals(plan.skipped, 0, "a green serial phase runs everything");
+  assertEquals(plan.incomplete, undefined, "nothing was skipped, so nothing is incomplete");
+  assertEquals(certificationGaps(plan), [], "a complete run has no gap and must stay certifiable");
+  // And a refusal (exit 75) runs the whole parallel phase: skipping files on environmental contention is
+  // never allowed, so it is not a gap either.
+  const refused = parallelPlan({ serialRc: 75, parallel: PARALLEL, alwaysOn: [] });
+  assertEquals(refused.skipped, 0, "an environmental refusal must not skip files");
+  assertEquals(certificationGaps(refused), [], "a refusal is not a skip");
 });
