@@ -1140,6 +1140,9 @@ async function main() {
   }
 
   const reachableModules = plan.reverse ? reachableModulesFrom(plan.reverse) : null;
+  // chrome-agent-platform-5iygy: the built extension's presence is checked on disk rather than inferred from the
+  // selection, because a real-browser suite loads extension/dist without ever naming it in source.
+  const distPresent = existsSync(join(ROOT, "extension/dist/background/service-worker.js"));
   const decision = decideBuild({
     kind: "subset",
     selected: plan.files,
@@ -1148,6 +1151,7 @@ async function main() {
     // chrome-agent-platform-1l1ph: with no import graph and a non-empty selection the consumer
     // analysis is incomplete, and an incomplete analysis must not omit the build.
     consumptionProof: reachableModules || plan.files.length === 0 ? "proven" : "no import graph for this selection",
+    distPresent,
   });
   const build = await prepareBuild(decision, buildIfNeeded);
   process.exit(await runDeno(plan.files, {

@@ -103,7 +103,7 @@ Deno.test("omsz9 build: the always-on core is dist-free, so a subset gate can om
   const alwaysOnConsumers = consumers.filter((f) => ALWAYS_ON.includes(f));
   assertEquals(alwaysOnConsumers, [], "the always-on set must contain zero dist consumers");
 
-  const decision = decideBuild({ kind: "subset", selected: ALWAYS_ON, changed: [], distConsumers: consumers });
+  const decision = decideBuild({ kind: "subset", selected: ALWAYS_ON, changed: [], distConsumers: consumers, distPresent: true });
   assertEquals(decision.required, false);
   assert(decision.reason.includes(`no selected test reads ${DIST_ROOT}`), decision.reason);
   assert(decision.reason.includes("no build input changed"), decision.reason);
@@ -148,6 +148,7 @@ Deno.test("0eq00 build: the decision skips a build only when nothing needs one (
     selected: ["tests/vocabulary.test.ts"],
     changed: ["tests/vocabulary.test.ts"],
     distConsumers: ["tests/owner-approval-security.test.ts"],
+    distPresent: true,
   });
   assertEquals(decision.required, false);
   assert(decision.reason.includes(`no selected test reads ${DIST_ROOT}`), decision.reason);
@@ -155,7 +156,7 @@ Deno.test("0eq00 build: the decision skips a build only when nothing needs one (
 });
 
 Deno.test("0eq00 build: a full-suite fallback and a build input each force the build", () => {
-  const full = decideBuild({ kind: "full", selected: [], changed: [], distConsumers: [] });
+  const full = decideBuild({ kind: "full", selected: [], changed: [], distConsumers: [], distPresent: true });
   assertEquals(full.required, true);
   assert(full.reason.includes("full suite"), full.reason);
 
@@ -164,6 +165,7 @@ Deno.test("0eq00 build: a full-suite fallback and a build input each force the b
     selected: ["tests/vocabulary.test.ts"],
     changed: [BUILD_MJS],
     distConsumers: [],
+    distPresent: true,
   });
   assertEquals(input.required, true);
   assert(input.reason.includes(BUILD_MJS), input.reason);
@@ -445,6 +447,7 @@ Deno.test("1l1ph build: a real test whose import closure gains a dist import is 
     selected: [test],
     changed: [test],
     distConsumers: findDistConsumers([test], readWithDist, reachable),
+    distPresent: true,
   });
   assertEquals(decision.required, true, "the transitive consumer must force the build");
 });
@@ -467,7 +470,7 @@ Deno.test("1l1ph build: a selection with no dist consumer anywhere in its graph 
     [],
     "no consumer may be invented for a dist-free selection (or the omission becomes decorative)",
   );
-  const decision = decideBuild({ kind: "subset", selected: clean, changed: clean, distConsumers: consumers });
+  const decision = decideBuild({ kind: "subset", selected: clean, changed: clean, distConsumers: consumers, distPresent: true });
   assertEquals(decision.required, false, "a proven dist-free selection must not pay for a build");
   assert(decision.reason.includes("no selected test reads"), decision.reason);
 });
@@ -532,5 +535,55 @@ Deno.test("1l1ph build: transitive detection follows real imports — a comment 
     findDistConsumers([test], (rel) => (rel === test ? readTest : markerReader), () => ["extension/shared/marker-reader.js"]).includes(test),
     false,
     "a module that only reads the built tree must not force every gate to build",
+  );
+});
+
+// chrome-agent-platform-5iygy: a worktree with no built extension must BUILD, whatever the selection looks like.
+// The consumer analysis reads test SOURCE for reads/imports of the dist tree, and a journey that boots Chrome with
+// the unpacked extension never names the path - so on a fresh worktree the gate skipped the build and then four
+// real-browser suites failed with "extension is not built (missing dist/background/service-worker.js)".
+// The title is assembled from DIST_ROOT deliberately: a literal dist path beside this file's readFileSync import
+// trips the partition content classifier (test-partition.mjs), which the partition guard then rejects.
+Deno.test(`5iygy: absent ${DIST_ROOT} forces the build even when no selected test looks like a dist consumer`, () => {
+  const decision = decideBuild({
+    kind: "subset",
+    selected: ["tests/bgagent-delete.test.ts", "tests/journey-focus-fail-closed.test.ts"],
+    changed: ["scripts/lib/app-readiness.ts"],
+    distConsumers: [],
+    consumptionProof: "proven",
+    distPresent: false,
+  });
+  assertEquals(decision.required, true, "an absent dist is proof the build is needed");
+  assert(
+    /no extension\/dist/.test(decision.reason),
+    `the reason must name the missing artefact, got: ${decision.reason}`,
+  );
+  // The same selection on a tree that HAS a dist still saves the build - the fix must not make the build
+  // unconditional, or it gives back the ~95s the 0eq00 validate-or-build work removed.
+  const reusable = decideBuild({
+    kind: "subset",
+    selected: ["tests/bgagent-delete.test.ts"],
+    changed: ["scripts/lib/app-readiness.ts"],
+    distConsumers: [],
+    consumptionProof: "proven",
+    distPresent: true,
+  });
+  assertEquals(reusable.required, false, "a present dist with no consumer and no build input keeps the saving");
+});
+
+// 5iygy review: the parameter is REQUIRED, and an omitted value must read as UNKNOWN, never as "the artefact is
+// there". For a function whose purpose is "build when unsure", defaulting to present would let a future caller
+// inherit the exact failure the parameter exists to prevent - so the unknown case builds and says why.
+Deno.test("5iygy: an omitted distPresent means UNKNOWN and builds rather than assuming the artefact is present", () => {
+  const decision = decideBuild({
+    kind: "subset",
+    selected: ["tests/vocabulary.test.ts"],
+    changed: [],
+    distConsumers: [],
+  });
+  assertEquals(decision.required, true, "unknown must build");
+  assert(
+    /did not say whether the built extension exists/.test(decision.reason),
+    `the reason must name the unknown, got: ${decision.reason}`,
   );
 });

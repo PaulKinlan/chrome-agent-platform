@@ -228,7 +228,17 @@ export function isBuildInput(rel) {
  * @param {{ kind: "subset" | "full", selected?: string[], changed?: string[], distConsumers?: string[] }} args
  * @returns {{ required: boolean, reason: string }}
  */
-export function decideBuild({ kind, selected = [], changed = [], distConsumers = [], consumptionProof = "proven" } = {}) {
+export function decideBuild({
+  kind,
+  selected = [],
+  changed = [],
+  distConsumers = [],
+  consumptionProof = "proven",
+  // REQUIRED, no default (chrome-agent-platform-5iygy review): for a function whose whole purpose is "build when
+  // unsure", an omitted value must never read as "the artefact is there". A default would let a future caller
+  // inherit the exact failure this parameter exists to prevent, so the choice is forced at every call site.
+  distPresent,
+} = {}) {
   if (kind === "full") {
     return { required: true, reason: "the selector failed closed to the full suite" };
   }
@@ -241,6 +251,29 @@ export function decideBuild({ kind, selected = [], changed = [], distConsumers =
       reason:
         `the dist-consumer analysis could not be completed for this selection (${consumptionProof}), ` +
         `so the build is required rather than assume no selected test reads extension/dist`,
+    };
+  }
+  // FAIL SAFE (chrome-agent-platform-5iygy): a worktree with NO dist cannot run a suite that loads the unpacked
+  // extension, and the consumer analysis cannot see that requirement - it reads the test SOURCE for reads/imports
+  // of extension/dist, while a journey that boots Chrome with the extension never mentions the path. Measured on a
+  // fresh worktree: four real-browser suites (bgagent-delete, journey-focus-fail-closed and the journeys that
+  // launch Chrome) failed with "extension is not built (missing dist/background/service-worker.js)" AFTER this
+  // function returned "no selected test reads extension/dist". Absence of the artefact is proof of the need to
+  // build, whatever the static scan says about the selection.
+  if (distPresent === undefined) {
+    return {
+      required: true,
+      reason:
+        "the caller did not say whether the built extension exists in this worktree, and unknown must mean build " +
+        "rather than assume the artefact is present",
+    };
+  }
+  if (!distPresent) {
+    return {
+      required: true,
+      reason:
+        "this worktree has no extension/dist (the built extension is absent), so the build is required before " +
+        "any suite that loads the unpacked extension can run",
     };
   }
   const consumers = distConsumers.filter((f) => selected.includes(f));
