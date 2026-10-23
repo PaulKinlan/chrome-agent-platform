@@ -110,12 +110,35 @@ export const APP_READY_EXPRESSION = `(() => {
   }
 })()`;
 
+/**
+ * The clock and timer functions the poll loop runs on, injectable so a unit test can
+ * drive the loop deterministically instead of asserting poll counts against real
+ * elapsed milliseconds (chrome-agent-platform-2y6fr: on a loaded box one scheduling
+ * overshoot could consume the whole timeoutMs budget and a test that asserts
+ * "must poll multiple times" observed a single poll — a red that named the fixture
+ * rather than the product). Defaults to the real clock; callers that pass nothing
+ * keep the previous behaviour exactly.
+ */
+export interface AppReadinessTimers {
+  now(): number;
+  setTimeout(fn: (...args: any[]) => void, ms: number): any;
+  clearTimeout(handle: any): void;
+}
+
+const REAL_READINESS_TIMERS: AppReadinessTimers = {
+  now: () => Date.now(),
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (handle) => clearTimeout(handle),
+};
+
 export interface AppReadinessOptions {
   timeoutMs?: number;
   pollIntervalMs?: number;
   surfaceName?: string;
   predicateExpr?: string;
   probeTimeoutMs?: number;
+  /** Clock/timer source for the poll loop; defaults to the real one (2y6fr). */
+  timers?: AppReadinessTimers;
 }
 
 export interface AppReadinessResult {
@@ -154,13 +177,14 @@ export async function waitForAppReady(
   const pollIntervalMs = options.pollIntervalMs ?? 100;
   const surface = options.surfaceName ? ` for ${options.surfaceName}` : "";
   const expr = options.predicateExpr ?? APP_READY_EXPRESSION;
-  const deadline = Date.now() + timeoutMs;
-  const start = Date.now();
+  const timers = options.timers ?? REAL_READINESS_TIMERS;
+  const deadline = timers.now() + timeoutMs;
+  const start = timers.now();
   let lastProbe: any = null;
   let lastTimeoutError: Error | null = null;
 
-  while (Date.now() < deadline) {
-    const remainingMs = deadline - Date.now();
+  while (timers.now() < deadline) {
+    const remainingMs = deadline - timers.now();
     if (remainingMs <= 0) break;
     const probeLimit = Math.min(remainingMs, options.probeTimeoutMs ?? 2000);
 
@@ -170,24 +194,24 @@ export async function waitForAppReady(
       const probe = await Promise.race([
         evaluate(expr),
         new Promise((_, reject) => {
-          probeTimer = setTimeout(() => {
+          probeTimer = timers.setTimeout(() => {
             localProbeTimeoutError = new Error(`probe evaluation timed out after ${probeLimit}ms${surface}`);
             reject(localProbeTimeoutError);
           }, probeLimit);
         }),
       ]);
-      clearTimeout(probeTimer);
+      timers.clearTimeout(probeTimer);
       lastProbe = probe;
       lastTimeoutError = null;
-      if (Date.now() <= deadline && probe && typeof probe === "object" && probe.ready === true) {
+      if (timers.now() <= deadline && probe && typeof probe === "object" && probe.ready === true) {
         return {
           ready: true,
           signal: typeof probe.signal === "string" ? probe.signal : "custom-predicate",
-          elapsedMs: Date.now() - start,
+          elapsedMs: timers.now() - start,
         };
       }
     } catch (e: any) {
-      clearTimeout(probeTimer);
+      timers.clearTimeout(probeTimer);
       if (localProbeTimeoutError && e === localProbeTimeoutError) {
         lastTimeoutError = e;
         lastProbe = { error: String(e) };
@@ -198,7 +222,7 @@ export async function waitForAppReady(
         lastProbe = { error: String(e) };
       }
     }
-    await new Promise((r) => setTimeout(r, pollIntervalMs));
+    await new Promise((r) => timers.setTimeout(r, pollIntervalMs));
   }
 
   if (lastTimeoutError) {

@@ -28,6 +28,74 @@ import {
 } from "../scripts/lib/kat-evaluate.ts";
 import { clickVisibleCreateAgent } from "../scripts/lib/create-agent-click.ts";
 
+// chrome-agent-platform-2y6fr: the poll loop's timing tests below assert BEHAVIOUR
+// ("a hung probe is retried", "the budget is honoured"), and used to assert it against
+// real elapsed milliseconds and observed poll counts. On a loaded box one scheduling
+// overshoot could swallow the whole timeoutMs budget, so the fixture reported
+// "must poll multiple times ... (got 1 calls)" for a product that was correct — a red
+// that named the box, not the code. These tests now run the loop on a driven clock
+// (AppReadinessOptions.timers): zero real time passes, every timer fires in order, and
+// the same assertions become exact rather than racy.
+function fakeTimers() {
+  let now = 0;
+  let seq = 0;
+  const queue = new Map<number, { at: number; fn: () => void }>();
+  return {
+    now: () => now,
+    setTimeout(fn: () => void, ms: number) {
+      const id = ++seq;
+      queue.set(id, { at: now + ms, fn });
+      return id;
+    },
+    clearTimeout(handle: any) {
+      queue.delete(handle as number);
+    },
+    pending: () => queue.size,
+    /** Fire the earliest pending timer, advancing the clock to its due time. */
+    fireNextDue(): boolean {
+      let nextId: number | null = null;
+      let next: { at: number; fn: () => void } | null = null;
+      for (const [id, item] of queue) {
+        if (next === null || item.at < next.at) {
+          nextId = id;
+          next = item;
+        }
+      }
+      if (nextId === null || next === null) return false;
+      queue.delete(nextId);
+      if (next.at > now) now = next.at;
+      next.fn();
+      return true;
+    },
+  };
+}
+
+type FakeTimers = ReturnType<typeof fakeTimers>;
+
+async function drainMicrotasks(rounds = 24) {
+  for (let i = 0; i < rounds; i++) await Promise.resolve();
+}
+
+/** Run `work` to completion on the fake clock, firing timers in due order. */
+async function onFakeClock<T>(work: () => Promise<T>, timers: FakeTimers, maxSteps = 4096): Promise<T> {
+  let settled = false;
+  let value: T | undefined;
+  let error: any = null;
+  work().then(
+    (v) => { settled = true; value = v; },
+    (e) => { settled = true; error = e; },
+  );
+  for (let step = 0; step < maxSteps && !settled; step++) {
+    await drainMicrotasks();
+    if (settled) break;
+    timers.fireNextDue();
+  }
+  await drainMicrotasks();
+  if (!settled) throw new Error("fake clock: work did not settle within the step budget");
+  if (error) throw error;
+  return value as T;
+}
+
 Deno.test("iksuc: pre-hydration click silently no-ops on unhydrated fixture (reproducing the gap)", async () => {
   // DOM fixture before hydration: button exists, but event listener is not yet wired
   let dialogOpened = false;
@@ -169,15 +237,18 @@ Deno.test("iksuc: clickVisibleCreateAgent with { waitForReady: true } refuses un
 Deno.test("iksuc / pew31 / w7mv6: waitForAppReady bounds wait and fails closed when evaluator stalls or never resolves", async () => {
   // Evaluator that hangs indefinitely
   const evaluate = () => new Promise(() => {});
-
-  const start = Date.now();
+  const timers = fakeTimers();
   let caught: Error | null = null;
+  const startedAt = timers.now();
   try {
-    await waitForAppReady(evaluate, { timeoutMs: 300, probeTimeoutMs: 100, pollIntervalMs: 20 });
+    await onFakeClock(
+      () => waitForAppReady(evaluate, { timeoutMs: 300, probeTimeoutMs: 100, pollIntervalMs: 20, timers }),
+      timers,
+    );
   } catch (e) {
     caught = e as Error;
   }
-  const elapsed = Date.now() - start;
+  const elapsed = timers.now() - startedAt;
 
   assert(caught !== null, "must time out when evaluator hangs");
   assert(
@@ -204,63 +275,76 @@ Deno.test("iksuc / pew31 / w7mv6: waitForAppReady bounds wait and fails closed w
 Deno.test("p2aki: transient probe timeout retries within caller timeoutMs budget and succeeds when subsequent probe settles", async () => {
   let probeCalls = 0;
   // Evaluator where call 1 times out (takes 100ms with probeTimeoutMs=40), but call 2 settles in 10ms with {ready: true}
+  const timers = fakeTimers();
   const evaluate = (_expr: string) => {
     probeCalls++;
     if (probeCalls === 1) {
       return new Promise((resolve) => {
-        setTimeout(() => resolve({ ready: false }), 120);
+        timers.setTimeout(() => resolve({ ready: false }), 120);
       });
     }
     return new Promise((resolve) => {
-      setTimeout(() => resolve({ ready: true, signal: "ntp-hydrated" }), 10);
+      timers.setTimeout(() => resolve({ ready: true, signal: "ntp-hydrated" }), 10);
     });
   };
 
-  const start = Date.now();
-  const res = await waitForAppReady(evaluate, {
-    timeoutMs: 600,
-    probeTimeoutMs: 40,
-    pollIntervalMs: 15,
-    surfaceName: "NTP main",
-  });
-  const elapsed = Date.now() - start;
+  const startedAt = timers.now();
+  const res = await onFakeClock(
+    () => waitForAppReady(evaluate, {
+      timeoutMs: 600,
+      probeTimeoutMs: 40,
+      pollIntervalMs: 15,
+      surfaceName: "NTP main",
+      timers,
+    }),
+    timers,
+  );
+  const elapsed = timers.now() - startedAt;
 
   assertEquals(res.ready, true);
   assertEquals(res.signal, "ntp-hydrated");
   assertEquals(probeCalls, 2, "must retry on second probe after first probe timed out");
-  assert(elapsed >= 45 && elapsed < 400, `must succeed promptly once second probe settles (elapsed: ${elapsed}ms)`);
+  assert(elapsed >= 40 && elapsed < 400, `must succeed promptly once second probe settles (elapsed: ${elapsed}ms)`);
 });
 
 Deno.test("p2aki / pew31 / w7mv6: persistent hung probe exhausts timeoutMs budget and throws distinct probe timeout provenance", async () => {
   let probeCalls = 0;
 
   // Evaluator that hangs on every call
+  const timers = fakeTimers();
   const evaluate = (_expr: string) => {
     probeCalls++;
     return new Promise((_, reject) => {
-      setTimeout(() => {
+      timers.setTimeout(() => {
         reject(new Error("cdp timeout: Runtime.evaluate (requestId=99, targetId=page-1)"));
       }, 150);
     });
   };
 
   let caught: any = null;
-  const start = Date.now();
+  const startedAt = timers.now();
   try {
-    await waitForAppReady(evaluate, {
-      timeoutMs: 180,
-      probeTimeoutMs: 50,
-      pollIntervalMs: 15,
-      surfaceName: "NTP main",
-    });
+    await onFakeClock(
+      () => waitForAppReady(evaluate, {
+        timeoutMs: 180,
+        probeTimeoutMs: 50,
+        pollIntervalMs: 15,
+        surfaceName: "NTP main",
+        timers,
+      }),
+      timers,
+    );
   } catch (e) {
     caught = e;
   }
-  const elapsed = Date.now() - start;
+  const elapsed = timers.now() - startedAt;
 
   assert(caught !== null, "must throw when evaluator hangs");
-  assert(probeCalls >= 2, `must poll multiple times within timeoutMs budget (got ${probeCalls} calls)`);
-  assert(elapsed >= 150 && elapsed < 350, `must exhaust timeoutMs budget (took ${elapsed}ms)`);
+  // 2y6fr: on a driven clock this is exact — with timeoutMs 180, probeTimeoutMs 50 and
+  // pollIntervalMs 15 the loop probes at t=0, 65 and 130, so fewer probes would mean the
+  // retry path was skipped, which is the regression this pins.
+  assertEquals(probeCalls, 3, `must poll on every iteration within timeoutMs budget (got ${probeCalls} calls)`);
+  assert(elapsed >= 180 && elapsed < 350, `must exhaust the timeoutMs budget (took ${elapsed}ms)`);
   assert(
     isTransportOrEvaluateTimeoutError(caught),
     `must match isTransportOrEvaluateTimeoutError, got: ${caught.message}`,
