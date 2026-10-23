@@ -38,7 +38,7 @@ Deno.test("kz27: a FAILED serial phase still runs the always-on guard set, and s
   assert(plan.announce.includes("ALWAYS-ON GUARD SET"), plan.announce);
   assert(/\d+ of \d+ parallel file\(s\) unrun/.test(plan.announce), `the count must be unmistakeable: ${plan.announce}`);
   assert(
-    plan.announce.includes("3 of 4") || plan.announce.includes("3 of"),
+    plan.announce.includes("3 of 4"),
     `the announcement must say how much was skipped: ${plan.announce}`,
   );
 });

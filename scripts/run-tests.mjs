@@ -386,14 +386,30 @@ export async function main(args = process.argv.slice(2)) {
   // chrome-agent-platform-1oouo: SERIAL runs as lanes when two of its three hazard classes are
   // independent (build writers vs the process-global Chrome lock/slot cluster); the load- and
   // clock-sensitive files still run ALONE, first. scripts/test-partition.mjs SERIAL_LANES pins the split.
-  const serialRc = serialFiles.length ? await runSerialLanes(serialFiles, { failuresOut: serialFailures }) : 0;
+  // w6kc0 review P1-1: the synthetic phase-0 case. Declining the serial phase entirely is the ONLY cheap way
+  // to reach the skip route with every phase exit code at 0, which is the state where the forced exit and the
+  // manifest's certification are load-bearing (with a real serial failure rc is already non-zero, so a
+  // reverted wiring would still look red). Used by tests/gate-outcome-child-run.test.ts, never by the gate.
+  const skipSerial = process.env.CAP_RUN_TESTS_SKIP_SERIAL === "1";
+  const serialRc = skipSerial || !serialFiles.length
+    ? 0
+    : await runSerialLanes(serialFiles, { failuresOut: serialFailures });
   const failingFiles = serialFailures.filter((f) => f.code !== 0 && !f.isRefusal).map((f) => f.file);
   const plan = parallelPlan({ serialRc, parallel, alwaysOn: ALWAYS_ON, failingFiles });
   if (plan.announce) console.error(`\n${plan.announce}`);
   // chrome-agent-platform-w6kc0: a run that skipped files must never certify the tree, whatever the
   // guard subset did. The planner already drives rc non-zero on a serial failure; this makes the claim
   // structural rather than a consequence of which rc the phases happened to produce.
-  const gaps = certificationGaps(plan);
+  // chrome-agent-platform-w6kc0 review P1-1: a "stop after the serial phase" seam, so the gate-outcome
+  // WIRING (gap detection -> summary marker -> forced exit -> manifest certification) can be observed by a
+  // CHILD RUN of this runner (tests/gate-outcome-child-run.test.ts) rather than only by unit-testing the
+  // pure planner. Without a cheap seam the only way to exercise the wiring is a ~7-minute full gate, which
+  // is exactly why the first cut shipped asserted-not-observed. It runs the serial phase for real, runs NO
+  // parallel file, and reports every parallel file as unrun.
+  const stopAfterSerial = process.env.CAP_RUN_TESTS_STOP_AFTER_SERIAL === "1";
+  // What this execution did NOT run: the planner's skip, plus every parallel file the seam declined to run.
+  const unrunCount = stopAfterSerial || skipSerial ? parallel.length : plan.skipped;
+  const gaps = certificationGaps({ skipped: unrunCount });
   // Extract reviewed readers from the parallel plan; SERIAL has fully ended.
   // In the unchanged per-change runner both subsets still share its one
   // parallel process AFTER serial (partition(...).parallel is intentionally total).
@@ -403,11 +419,11 @@ export async function main(args = process.argv.slice(2)) {
   // jtrny: every phase the bound killed, so the planner summary can refuse to read as a completion and
   // the manifest can carry the reason instead of leaving a reader to infer it from an rc.
   const killedPhases = [];
-  const readOnlyRc = await runReadOnlyDistBatch(readOnly,
+  const readOnlyRc = stopAfterSerial ? 0 : await runReadOnlyDistBatch(readOnly,
     (files) => runParallel(files, "post-build read-only phase", suiteDurations, killedPhases));
   // Preserve kz27: a failed builder OR read-only guard must not hide the
   // independent parallel guards; both phases run and the first failure wins.
-  const parallelRc = await runParallel(other, "parallel phase", suiteDurations, killedPhases);
+  const parallelRc = stopAfterSerial ? 0 : await runParallel(other, "parallel phase", suiteDurations, killedPhases);
   const rc = combinePhaseExitCodes(serialRc, readOnlyRc, parallelRc);
   // w6kc0: a skip is a certification gap regardless of the phase exit codes, so force the outcome red and
   // say so on the summary line. rc 0 with unrun files is the exact false assurance this bead is about.
@@ -420,7 +436,7 @@ export async function main(args = process.argv.slice(2)) {
   if (heavyDeferredCount) deferredParts.push(`${heavyDeferredCount} deferred to npm run test:heavy`);
   const deferredSummary = deferredParts.length ? `, ${deferredParts.join(", ")}` : "";
   console.log(
-    `run-tests: ${serialFiles.length + parallel.length} files total, ${plan.skipped} skipped` +
+    `run-tests: ${serialFiles.length + parallel.length} files total, ${unrunCount} skipped` +
       ` (${serialFiles.length} serial, ${readOnly.length} post-build read-only, ${parallel.length - readOnly.length} other parallel` +
       `${deferredSummary}), wall ${((Date.now() - t0) / 1000).toFixed(0)}s` +
       incompleteNote(killedPhases) +
@@ -436,7 +452,9 @@ export async function main(args = process.argv.slice(2)) {
   // form is a gate; an explicit-file run (`run-tests.mjs tests/x.test.ts`) is an inner-loop tool and
   // deliberately emits nothing, so a probe run can never look like a gate record.
   if (cliFiles.length === 0) {
-    const skippedFiles = parallel.filter((f) => !plan.files.includes(f));
+    const skippedFiles = stopAfterSerial || skipSerial
+      ? parallel
+      : parallel.filter((f) => !plan.files.includes(f));
     // A FAST selector that failed closed passes its changed-file candidates to
     // this FULL runner. Report placement from suites that actually executed,
     // including a named reason when a heavy/build-tier suite was deferred.
