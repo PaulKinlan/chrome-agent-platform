@@ -337,7 +337,9 @@ Deno.test("juubk: the dirty-worktree rule ignores the passive beads ledger, noth
   for (const path of [".beads/issues.jsonl", ".beads/config.yaml"]) {
     assertEquals(isRelevantDirtyPath(path), false, `${path} must not block a receipt`);
   }
-  for (const path of ["scripts/heavy-gate.ts", "tests/heavy-receipt.test.ts", "extension/dist/hub.js", "package.json"]) {
+  // Any other tracked path blocks by default — the rule is an allowlist of ONE prefix, not a list of
+  // files to remember. These are the shapes a landing actually dirties.
+  for (const path of ["scripts/heavy-gate.ts", "tests/heavy-receipt.test.ts", "package.json", "scripts/test-partition.mjs"]) {
     assertEquals(isRelevantDirtyPath(path), true, `${path} changes what the suites measure`);
   }
 });
