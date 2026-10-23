@@ -28,6 +28,74 @@ import {
 } from "../scripts/lib/kat-evaluate.ts";
 import { clickVisibleCreateAgent } from "../scripts/lib/create-agent-click.ts";
 
+// chrome-agent-platform-2y6fr: the poll loop's timing tests below assert BEHAVIOUR
+// ("a hung probe is retried", "the budget is honoured"), and used to assert it against
+// real elapsed milliseconds and observed poll counts. On a loaded box one scheduling
+// overshoot could swallow the whole timeoutMs budget, so the fixture reported
+// "must poll multiple times ... (got 1 calls)" for a product that was correct — a red
+// that named the box, not the code. These tests now run the loop on a driven clock
+// (AppReadinessOptions.timers): zero real time passes, every timer fires in order, and
+// the same assertions become exact rather than racy.
+function fakeTimers() {
+  let now = 0;
+  let seq = 0;
+  const queue = new Map<number, { at: number; fn: () => void }>();
+  return {
+    now: () => now,
+    setTimeout(fn: () => void, ms: number) {
+      const id = ++seq;
+      queue.set(id, { at: now + ms, fn });
+      return id;
+    },
+    clearTimeout(handle: any) {
+      queue.delete(handle as number);
+    },
+    pending: () => queue.size,
+    /** Fire the earliest pending timer, advancing the clock to its due time. */
+    fireNextDue(): boolean {
+      let nextId: number | null = null;
+      let next: { at: number; fn: () => void } | null = null;
+      for (const [id, item] of queue) {
+        if (next === null || item.at < next.at) {
+          nextId = id;
+          next = item;
+        }
+      }
+      if (nextId === null || next === null) return false;
+      queue.delete(nextId);
+      if (next.at > now) now = next.at;
+      next.fn();
+      return true;
+    },
+  };
+}
+
+type FakeTimers = ReturnType<typeof fakeTimers>;
+
+async function drainMicrotasks(rounds = 24) {
+  for (let i = 0; i < rounds; i++) await Promise.resolve();
+}
+
+/** Run `work` to completion on the fake clock, firing timers in due order. */
+async function onFakeClock<T>(work: () => Promise<T>, timers: FakeTimers, maxSteps = 4096): Promise<T> {
+  let settled = false;
+  let value: T | undefined;
+  let error: any = null;
+  work().then(
+    (v) => { settled = true; value = v; },
+    (e) => { settled = true; error = e; },
+  );
+  for (let step = 0; step < maxSteps && !settled; step++) {
+    await drainMicrotasks();
+    if (settled) break;
+    timers.fireNextDue();
+  }
+  await drainMicrotasks();
+  if (!settled) throw new Error("fake clock: work did not settle within the step budget");
+  if (error) throw error;
+  return value as T;
+}
+
 Deno.test("iksuc: pre-hydration click silently no-ops on unhydrated fixture (reproducing the gap)", async () => {
   // DOM fixture before hydration: button exists, but event listener is not yet wired
   let dialogOpened = false;
@@ -169,15 +237,18 @@ Deno.test("iksuc: clickVisibleCreateAgent with { waitForReady: true } refuses un
 Deno.test("iksuc / pew31 / w7mv6: waitForAppReady bounds wait and fails closed when evaluator stalls or never resolves", async () => {
   // Evaluator that hangs indefinitely
   const evaluate = () => new Promise(() => {});
-
-  const start = Date.now();
+  const timers = fakeTimers();
   let caught: Error | null = null;
+  const startedAt = timers.now();
   try {
-    await waitForAppReady(evaluate, { timeoutMs: 300, probeTimeoutMs: 100, pollIntervalMs: 20 });
+    await onFakeClock(
+      () => waitForAppReady(evaluate, { timeoutMs: 300, probeTimeoutMs: 100, pollIntervalMs: 20, timers }),
+      timers,
+    );
   } catch (e) {
     caught = e as Error;
   }
-  const elapsed = Date.now() - start;
+  const elapsed = timers.now() - startedAt;
 
   assert(caught !== null, "must time out when evaluator hangs");
   assert(
@@ -204,63 +275,78 @@ Deno.test("iksuc / pew31 / w7mv6: waitForAppReady bounds wait and fails closed w
 Deno.test("p2aki: transient probe timeout retries within caller timeoutMs budget and succeeds when subsequent probe settles", async () => {
   let probeCalls = 0;
   // Evaluator where call 1 times out (takes 100ms with probeTimeoutMs=40), but call 2 settles in 10ms with {ready: true}
+  const timers = fakeTimers();
   const evaluate = (_expr: string) => {
     probeCalls++;
     if (probeCalls === 1) {
       return new Promise((resolve) => {
-        setTimeout(() => resolve({ ready: false }), 120);
+        timers.setTimeout(() => resolve({ ready: false }), 120);
       });
     }
     return new Promise((resolve) => {
-      setTimeout(() => resolve({ ready: true, signal: "ntp-hydrated" }), 10);
+      timers.setTimeout(() => resolve({ ready: true, signal: "ntp-hydrated" }), 10);
     });
   };
 
-  const start = Date.now();
-  const res = await waitForAppReady(evaluate, {
-    timeoutMs: 600,
-    probeTimeoutMs: 40,
-    pollIntervalMs: 15,
-    surfaceName: "NTP main",
-  });
-  const elapsed = Date.now() - start;
+  const startedAt = timers.now();
+  const res = await onFakeClock(
+    () => waitForAppReady(evaluate, {
+      timeoutMs: 600,
+      probeTimeoutMs: 40,
+      pollIntervalMs: 15,
+      surfaceName: "NTP main",
+      timers,
+    }),
+    timers,
+  );
+  const elapsed = timers.now() - startedAt;
 
   assertEquals(res.ready, true);
   assertEquals(res.signal, "ntp-hydrated");
   assertEquals(probeCalls, 2, "must retry on second probe after first probe timed out");
-  assert(elapsed >= 45 && elapsed < 400, `must succeed promptly once second probe settles (elapsed: ${elapsed}ms)`);
+  // Driven clock, so the schedule is exact rather than a floor: probe 1 times out at 40ms, the
+  // 15ms inter-poll sleep lands at 55ms, and probe 2 settles 10ms later.
+  assertEquals(elapsed, 65, `driven-clock schedule must be exact (elapsed: ${elapsed}ms)`);
 });
 
 Deno.test("p2aki / pew31 / w7mv6: persistent hung probe exhausts timeoutMs budget and throws distinct probe timeout provenance", async () => {
   let probeCalls = 0;
 
   // Evaluator that hangs on every call
+  const timers = fakeTimers();
   const evaluate = (_expr: string) => {
     probeCalls++;
     return new Promise((_, reject) => {
-      setTimeout(() => {
+      timers.setTimeout(() => {
         reject(new Error("cdp timeout: Runtime.evaluate (requestId=99, targetId=page-1)"));
       }, 150);
     });
   };
 
   let caught: any = null;
-  const start = Date.now();
+  const startedAt = timers.now();
   try {
-    await waitForAppReady(evaluate, {
-      timeoutMs: 180,
-      probeTimeoutMs: 50,
-      pollIntervalMs: 15,
-      surfaceName: "NTP main",
-    });
+    await onFakeClock(
+      () => waitForAppReady(evaluate, {
+        timeoutMs: 180,
+        probeTimeoutMs: 50,
+        pollIntervalMs: 15,
+        surfaceName: "NTP main",
+        timers,
+      }),
+      timers,
+    );
   } catch (e) {
     caught = e;
   }
-  const elapsed = Date.now() - start;
+  const elapsed = timers.now() - startedAt;
 
   assert(caught !== null, "must throw when evaluator hangs");
-  assert(probeCalls >= 2, `must poll multiple times within timeoutMs budget (got ${probeCalls} calls)`);
-  assert(elapsed >= 150 && elapsed < 350, `must exhaust timeoutMs budget (took ${elapsed}ms)`);
+  // 2y6fr: on a driven clock this is exact — with timeoutMs 180, probeTimeoutMs 50 and
+  // pollIntervalMs 15 the loop probes at t=0, 65 and 130, so fewer probes would mean the
+  // retry path was skipped, which is the regression this pins.
+  assertEquals(probeCalls, 3, `must poll on every iteration within timeoutMs budget (got ${probeCalls} calls)`);
+  assert(elapsed >= 180 && elapsed < 350, `must exhaust the timeoutMs budget (took ${elapsed}ms)`);
   assert(
     isTransportOrEvaluateTimeoutError(caught),
     `must match isTransportOrEvaluateTimeoutError, got: ${caught.message}`,
@@ -698,4 +784,126 @@ Deno.test("z4tzw: APP_READY_EXPRESSION tests default providers section hydration
   const readyRes = runExpression(hydratedProviders);
   assertEquals(readyRes.ready, true);
   assertEquals(readyRes.signal, "options-hydrated");
+});
+
+// ---------------------------------------------------------------------------
+// dnqyt: the readiness budget is a NO-PROGRESS bound, not a stopwatch on the whole wait.
+//
+// Measured on this VM with the real extension (scratch probe, not committed): NTP hydration
+// reports `jobsBoard` at ~3.8s and `namedHydrated` at ~7.2s on an idle box; with six competing
+// busy loops the same two steps land at ~6.2s and ~12.3s. A fixed 10s budget therefore reds a
+// page that is hydrating perfectly well, and that is exactly the w51r:397 full-gate red. These
+// tests replay the LOADED trace on a driven clock, so they are the same measurement every run.
+// ---------------------------------------------------------------------------
+const LOADED_NTP_TRACE = (nowMs: number) => {
+  if (nowMs >= 12300) return { ready: true, signal: "ntp-hydrated" };
+  if (nowMs >= 6200) {
+    return { ready: false, reason: "ntp hydration pending", jobsBoard: true, namedHydrated: false };
+  }
+  return { ready: false, reason: "ntp hydration pending", jobsBoard: false, namedHydrated: false };
+};
+
+Deno.test("dnqyt: a slow-but-hydrating NTP page passes past the old fixed 10s stopwatch (loaded trace)", async () => {
+  const timers = fakeTimers();
+  const startedAt = timers.now();
+  const res = await onFakeClock(
+    () => waitForAppReady(() => Promise.resolve(LOADED_NTP_TRACE(timers.now())), {
+      // dnqyt v3: timeoutMs keeps its 10s TOTAL meaning; the call site that needs a longer worst
+      // case says so explicitly (maxTotalMs) instead of the default silently growing.
+      timeoutMs: 10000,
+      maxTotalMs: 60000,
+      pollIntervalMs: 100,
+      surfaceName: "NTP Hub",
+      timers,
+    }),
+    timers,
+  );
+  const elapsed = timers.now() - startedAt;
+
+  assertEquals(res.ready, true);
+  assertEquals(res.signal, "ntp-hydrated");
+  assert(elapsed >= 12300, `the hydrated-in-12.3s trace must not fail at 10000ms (took ${elapsed}ms)`);
+  assert(elapsed < 12600, `must proceed as soon as hydration is observed (took ${elapsed}ms)`);
+});
+
+Deno.test("dnqyt: a never-hydrating page still fails closed after ONE no-progress window, not the cap", async () => {
+  const timers = fakeTimers();
+  // The falsifier that must survive: a page whose readiness state never advances is NOT
+  // excused by the progress rule — it reds after a single no-progress window.
+  const evaluate = () =>
+    Promise.resolve({ ready: false, reason: "ntp hydration pending", jobsBoard: true, namedHydrated: false });
+
+  let caught: any = null;
+  const startedAt = timers.now();
+  try {
+    await onFakeClock(
+      () => waitForAppReady(evaluate, { timeoutMs: 100000, stallMs: 8000, pollIntervalMs: 200, surfaceName: "NTP Hub", timers }),
+      timers,
+    );
+  } catch (e) {
+    caught = e;
+  }
+  const elapsed = timers.now() - startedAt;
+
+  assert(caught !== null, "must fail closed when readiness never advances");
+  assert(caught.message.startsWith(APP_NEVER_BECAME_READY), `named failure expected, got: ${caught.message}`);
+  assert(caught.message.includes("NTP Hub"), `must name the surface, got: ${caught.message}`);
+  assert(elapsed >= 8000 && elapsed < 8600, `must stop after one 8000ms stall window, not the 100000ms ceiling (took ${elapsed}ms)`);
+  // coord (dnqyt): "not ready yet, still progressing" must be DISTINGUISHABLE from "not ready
+  // ever". The stall path says so by name and reports the progress it did (or did not) see.
+  assert(caught.message.includes("no observed progress for 8000ms"), `stall path must be named, got: ${caught.message}`);
+  assert(caught.message.includes("0 observed advance(s)"), `stall path must report progress seen, got: ${caught.message}`);
+});
+
+Deno.test("dnqyt: a page that flaps between two unready states terminates at the hard cap", async () => {
+  const timers = fakeTimers();
+  // Progress that never becomes readiness must not buy an unbounded wait.
+  let probe = 0;
+  const evaluate = () =>
+    Promise.resolve({ ready: false, reason: "ntp hydration pending", jobsBoard: (probe++ % 2) === 0, namedHydrated: false });
+
+  let caught: any = null;
+  const startedAt = timers.now();
+  try {
+    await onFakeClock(
+      () => waitForAppReady(evaluate, { timeoutMs: 20000, stallMs: 5000, pollIntervalMs: 100, surfaceName: "NTP Hub", timers }),
+      timers,
+    );
+  } catch (e) {
+    caught = e;
+  }
+  const elapsed = timers.now() - startedAt;
+
+  assert(caught !== null, "must fail closed rather than wait forever");
+  assert(caught.message.startsWith(APP_NEVER_BECAME_READY), `named failure expected, got: ${caught.message}`);
+  assert(elapsed >= 20000 && elapsed < 20500, `must stop at the 20000ms ceiling (took ${elapsed}ms)`);
+  assert(
+    caught.message.includes("still advancing but not ready within the 20000ms ceiling"),
+    `ceiling path must be named distinctly from the stall path, got: ${caught.message}`,
+  );
+  assert(/[1-9][0-9]* observed advance\(s\)/.test(caught.message), `ceiling path must report the advances, got: ${caught.message}`);
+});
+
+Deno.test("dnqyt: the probe trace records each observation and which ones advanced", async () => {
+  const timers = fakeTimers();
+  const events: Array<{ atMs: number; advanced: boolean; probe: any }> = [];
+  await onFakeClock(
+    () => waitForAppReady(() => Promise.resolve(LOADED_NTP_TRACE(timers.now())), {
+      timeoutMs: 10000,
+      maxTotalMs: 60000,
+      pollIntervalMs: 100,
+      surfaceName: "NTP Hub",
+      timers,
+      onProbe: (e) => events.push({ atMs: e.atMs, advanced: e.advanced, probe: e.probe }),
+    }),
+    timers,
+  );
+
+  assert(events.length >= 3, `every observation must be traced (got ${events.length})`);
+  assertEquals(events[0].advanced, false, "the first probe is the baseline, not progress");
+  const advances = events.filter((e) => e.advanced);
+  assertEquals(advances.length, 2, `exactly the two hydration steps count as progress (got ${advances.length})`);
+  assert(advances[0].atMs >= 6200, `first advance is observed at the jobsBoard step (got ${advances[0].atMs}ms)`);
+  assert(advances[1].atMs >= 12300, `second advance is the ready step (got ${advances[1].atMs}ms)`);
+  assertEquals(events[events.length - 1].probe.ready, true, "the trace ends on the ready observation");
 });

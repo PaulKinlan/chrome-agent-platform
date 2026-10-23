@@ -110,12 +110,72 @@ export const APP_READY_EXPRESSION = `(() => {
   }
 })()`;
 
+/**
+ * The clock and timer functions the poll loop runs on, injectable so a unit test can
+ * drive the loop deterministically instead of asserting poll counts against real
+ * elapsed milliseconds (chrome-agent-platform-2y6fr: on a loaded box one scheduling
+ * overshoot could consume the whole timeoutMs budget and a test that asserts
+ * "must poll multiple times" observed a single poll — a red that named the fixture
+ * rather than the product). Defaults to the real clock; callers that pass nothing
+ * keep the previous behaviour exactly.
+ */
+export interface AppReadinessTimers {
+  now(): number;
+  setTimeout(fn: (...args: any[]) => void, ms: number): any;
+  clearTimeout(handle: any): void;
+}
+
+const REAL_READINESS_TIMERS: AppReadinessTimers = {
+  now: () => Date.now(),
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (handle) => clearTimeout(handle),
+};
+
+/**
+ * The TOTAL ceiling used when a caller names none — unchanged from the pre-dnqyt behaviour.
+ * dnqyt did not move it: a call site that needs a longer worst case opts in with `maxTotalMs`
+ * and measurements (see tests/w51r-create-click.test.ts), so no caller's worst-case latency
+ * changes silently.
+ */
+export const DEFAULT_READINESS_TIMEOUT_MS = 10000;
+
 export interface AppReadinessOptions {
+  /**
+   * TOTAL ceiling on the wait, in milliseconds (default 10000). This keeps its original
+   * meaning: it is the longest the whole wait may take, and it is what a red reports.
+   */
   timeoutMs?: number;
+  /**
+   * NO-PROGRESS window (dnqyt), separate from the ceiling so `timeoutMs` is not silently
+   * repurposed: every observed ADVANCE in the probe result restarts this window, and the wait
+   * fails as soon as the state stops advancing for this long. Default: timeoutMs. It never
+   * extends the ceiling — progress can buy time inside the budget, not past it.
+   */
+  stallMs?: number;
+  /**
+   * Explicit opt-in to a LONGER total ceiling than `timeoutMs`, for a call site that has
+   * measurements showing the default ceiling is too tight (w51r does, with numbers). Default:
+   * timeoutMs, i.e. no extension at all.
+   */
+  maxTotalMs?: number;
   pollIntervalMs?: number;
   surfaceName?: string;
   predicateExpr?: string;
   probeTimeoutMs?: number;
+  /** Clock/timer source for the poll loop; defaults to the real one (2y6fr). */
+  timers?: AppReadinessTimers;
+  /**
+   * Called once per probe with what was observed and whether it ADVANCED. Harnesses use it to
+   * record a probe trace beside their screenshots, so a red can be classified as stall vs
+   * slow-but-hydrating from the run's own evidence (dnqyt).
+   */
+  onProbe?: (event: AppReadinessProbeEvent) => void;
+}
+
+export interface AppReadinessProbeEvent {
+  atMs: number;
+  probe: any;
+  advanced: boolean;
 }
 
 export interface AppReadinessResult {
@@ -150,62 +210,124 @@ export async function waitForAppReady(
   evaluate: (expression: string) => Promise<any>,
   options: AppReadinessOptions = {},
 ): Promise<AppReadinessResult> {
-  const timeoutMs = options.timeoutMs ?? 10000;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
+  const stallMs = options.stallMs ?? timeoutMs;
+  // The ceiling can only be RAISED explicitly by a call site that says why (maxTotalMs); with no
+  // opt-in the wait is bounded exactly as it always was.
+  const maxTotalMs = Math.max(options.maxTotalMs ?? timeoutMs, timeoutMs);
   const pollIntervalMs = options.pollIntervalMs ?? 100;
   const surface = options.surfaceName ? ` for ${options.surfaceName}` : "";
   const expr = options.predicateExpr ?? APP_READY_EXPRESSION;
-  const deadline = Date.now() + timeoutMs;
-  const start = Date.now();
+  const timers = options.timers ?? REAL_READINESS_TIMERS;
+  const start = timers.now();
+  const hardDeadline = start + maxTotalMs;
+  // dnqyt: NTP hydration observed on this VM takes ~7.2s cold and ~12.3s with six competing
+  // busy loops, and the readiness expression reports only two coarse transitions on the way
+  // (jobsBoard true, then namedHydrated true). A fixed 10s stopwatch therefore reds a page
+  // that is hydrating perfectly well. The bound now applies to NO PROGRESS: every observed
+  // change in the probe result buys another full stallMs window, and maxTotalMs stops a page
+  // that flaps forever. A genuinely never-hydrating document reports the same result forever,
+  // so it still fails closed after one stallMs window — the falsifier this keeps.
+  let stallDeadline = start + stallMs;
+  let lastKey: string | null = null;
   let lastProbe: any = null;
   let lastTimeoutError: Error | null = null;
+  let advances = 0;
+  let lastAdvanceAtMs: number | null = null;
 
-  while (Date.now() < deadline) {
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) break;
+  const keyOf = (probe: any): string => {
+    try {
+      return JSON.stringify(probe) ?? String(probe);
+    } catch {
+      return String(probe);
+    }
+  };
+
+  // The two terminating paths coord asked to be distinguishable, kept explicit:
+  //   "stall"  -> the observed state stopped advancing (a page that will never hydrate), and
+  //   "cap"    -> the state is STILL advancing but readiness never arrived inside the hard cap.
+  // They produce different named reasons below, so a red says which kind of not-ready it is.
+  let exitReason: "stall" | "ceiling" = "stall";
+  while (true) {
+    // Stall first: when the ceiling and the no-progress window expire together the honest
+    // report is that the observed state stopped advancing.
+    if (timers.now() >= stallDeadline) { exitReason = "stall"; break; }
+    if (timers.now() >= hardDeadline) { exitReason = "ceiling"; break; }
+    const remainingMs = Math.min(hardDeadline, stallDeadline) - timers.now();
+    if (remainingMs <= 0) { exitReason = "stall"; break; }
     const probeLimit = Math.min(remainingMs, options.probeTimeoutMs ?? 2000);
 
     let probeTimer: any;
     let localProbeTimeoutError: Error | null = null;
+    let observed: any;
     try {
       const probe = await Promise.race([
         evaluate(expr),
         new Promise((_, reject) => {
-          probeTimer = setTimeout(() => {
+          probeTimer = timers.setTimeout(() => {
             localProbeTimeoutError = new Error(`probe evaluation timed out after ${probeLimit}ms${surface}`);
             reject(localProbeTimeoutError);
           }, probeLimit);
         }),
       ]);
-      clearTimeout(probeTimer);
+      timers.clearTimeout(probeTimer);
       lastProbe = probe;
       lastTimeoutError = null;
-      if (Date.now() <= deadline && probe && typeof probe === "object" && probe.ready === true) {
+      observed = probe;
+      if (timers.now() <= hardDeadline && probe && typeof probe === "object" && probe.ready === true) {
+        const advanced = keyOf(probe) !== lastKey;
+        options.onProbe?.({ atMs: timers.now() - start, probe, advanced });
         return {
           ready: true,
           signal: typeof probe.signal === "string" ? probe.signal : "custom-predicate",
-          elapsedMs: Date.now() - start,
+          elapsedMs: timers.now() - start,
         };
       }
     } catch (e: any) {
-      clearTimeout(probeTimer);
+      timers.clearTimeout(probeTimer);
       if (localProbeTimeoutError && e === localProbeTimeoutError) {
         lastTimeoutError = e;
         lastProbe = { error: String(e) };
+        // A local probe timeout is NOT progress: its message carries the remaining budget, so
+        // keying off it would make every iteration look like an advance and turn a hung page
+        // into an unbounded wait. Class it, don't quote it.
+        observed = { probeTimedOut: true };
       } else if (isTransportOrEvaluateTimeoutError(e)) {
         throw e;
       } else {
         lastTimeoutError = null;
         lastProbe = { error: String(e) };
+        observed = { evaluateError: true };
       }
     }
-    await new Promise((r) => setTimeout(r, pollIntervalMs));
+
+    const advanced = lastKey !== null && keyOf(observed) !== lastKey;
+    if (advanced) {
+      advances++;
+      lastAdvanceAtMs = timers.now() - start;
+      stallDeadline = timers.now() + stallMs;
+    }
+    lastKey = keyOf(observed);
+    options.onProbe?.({ atMs: timers.now() - start, probe: observed, advanced });
+    await new Promise((r) => timers.setTimeout(r, pollIntervalMs));
   }
 
+  const detail = lastProbe ? ` (last probe: ${JSON.stringify(lastProbe)})` : "";
+  const progress = `${advances} observed advance(s)${lastAdvanceAtMs === null ? "" : `, last at ${lastAdvanceAtMs}ms`}`;
+  // A probe that never answered keeps its distinct provenance (the w7mv6/p2aki contract: that is
+  // an evaluation-layer failure and must not be laundered into "app never became ready"). This is
+  // the pre-dnqyt behaviour, unchanged.
   if (lastTimeoutError) {
     throw lastTimeoutError;
   }
-  const detail = lastProbe ? ` (last probe: ${JSON.stringify(lastProbe)})` : "";
-  throw new Error(`${APP_NEVER_BECAME_READY}${surface} within ${timeoutMs}ms${detail}`);
+  if (exitReason === "ceiling") {
+    throw new Error(
+      `${APP_NEVER_BECAME_READY}${surface}: still advancing but not ready within the ${maxTotalMs}ms ceiling (${progress})${detail}`,
+    );
+  }
+  throw new Error(
+    `${APP_NEVER_BECAME_READY}${surface}: no observed progress for ${stallMs}ms (${progress})${detail}`,
+  );
 }
 
 /**

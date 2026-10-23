@@ -34,6 +34,23 @@ const NONCE = "k8u-bridge-key-0123456789abcdef";
 
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Wait for an OBSERVED condition instead of sleeping a guessed number of milliseconds
+ * (chrome-agent-platform-qzboj). Fixed sleeps in a fixture that drives real async work are a
+ * wall-clock bet: on a box running 743 files the continuation can be starved well past the
+ * sleep, and the fixture reports a product failure it never observed. The bound here only
+ * guards against a genuine hang — it is not the measurement.
+ */
+async function waitUntil(what, predicate, budgetMs = 10000) {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > budgetMs) {
+      throw new Error(`timed out after ${budgetMs}ms waiting for ${what}`);
+    }
+    await tick(5);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // (b) FIRST sync/invoke requires a generation — content-script.js harness
 // (the webmcp-status.test.ts pattern, minimized).
@@ -213,6 +230,10 @@ Deno.test("k8u (d): a cancelled in-flight invocation can never post under a canc
   const posted = [];
   const logs = [];
   const messageListeners = [];
+  // qzboj: the page tool settles when THIS fixture says so, not after a 250ms timer, so
+  // "settles after the flood" is an ordering we control rather than a race against the box.
+  let settleSlowTool = null;
+  let slowToolCalls = 0;
   const windowObj = {
     CapBridgeAuth: bridgeAuth,
     postMessage(msg) { posted.push(msg); },
@@ -224,12 +245,13 @@ Deno.test("k8u (d): a cancelled in-flight invocation can never post under a canc
       const i = messageListeners.indexOf(fn);
       if (i >= 0) messageListeners.splice(i, 1);
     },
-    // A positively-exposed page tool that settles LATE (after the flood).
+    // A positively-exposed page tool that is held open until the fixture releases it.
     webmcpExpose: [{
       name: "slow_tool",
       description: "settles late",
       fn: function slow_tool(marker) {
-        return new Promise((resolve) => setTimeout(() => resolve(String(marker)), 250));
+        slowToolCalls++;
+        return new Promise((resolve) => { settleSlowTool = () => resolve(String(marker)); });
       },
     }],
   };
@@ -257,7 +279,7 @@ Deno.test("k8u (d): a cancelled in-flight invocation can never post under a canc
   const hook = windowObj.__capMainWorldBootstrap;
   assertEquals(typeof hook, "function", "the bootstrap hook is installed");
   hook(NONCE, false);
-  await tick(400); // let discovery collect + post the tools list
+  await waitUntil("the world to post its bootstrap tools list", () => posted.length > 0);
 
   // Open the world's "up" messages in order.
   let lastUp = -1;
@@ -284,7 +306,9 @@ Deno.test("k8u (d): a cancelled in-flight invocation can never post under a canc
   // deferral + pre-start checks) before any cancel lands.
   const before = posted.length;
   sendDown({ type: "invoke", requestId: "r1", name: "slow_tool", args: { marker: MARKER }, source: "inferred" });
-  await tick(60);
+  // The page tool being CALLED is the proof the invoke got past the one-macrotask deferral and
+  // the pre-start checks; a sleep only hoped so.
+  await waitUntil("the invoked page tool to start", () => slowToolCalls === 1);
 
   // Cancel, then FLOOD: 300 cancel/resume cycles. Under the retired tombstone
   // design this volume would evict r1's tombstone (or outlive its 60s TTL in a
@@ -297,8 +321,11 @@ Deno.test("k8u (d): a cancelled in-flight invocation can never post under a canc
   }
   sendDown({ type: "resume" }); // end armed — the world is usable again
 
-  // Let the page function settle (250ms) well past the flood.
-  await tick(400);
+  // Let the page function settle (well past the flood) and wait for the world to post.
+  assertEquals(typeof settleSlowTool, "function", "the page tool is still pending across the flood");
+  const beforeSettle = posted.length;
+  settleSlowTool();
+  await waitUntil("the cancelled invocation to post its result", () => posted.length > beforeSettle);
 
   const results = upMessages(before).filter((m) => m.type === "result" && m.requestId === "r1");
   assertEquals(results.length, 1, "exactly one result posts for the cancelled invocation");
@@ -312,7 +339,10 @@ Deno.test("k8u (d): a cancelled in-flight invocation can never post under a canc
   // The world still works after the flood: a NEW invoke under the final armed
   // epoch succeeds (the flood did not wedge the bridge or leak state into it).
   sendDown({ type: "invoke", requestId: "r2", name: "slow_tool", args: { marker: "post-flood" }, source: "inferred" });
-  await tick(400);
+  await waitUntil("the post-flood page tool to start", () => slowToolCalls === 2);
+  const beforePostFlood = posted.length;
+  settleSlowTool();
+  await waitUntil("the post-flood invocation to post its result", () => posted.length > beforePostFlood);
   const r2 = upMessages(before).filter((m) => m.type === "result" && m.requestId === "r2");
   assertEquals(r2.length, 1);
   assertEquals(r2[0]?.ok, true, "a post-flood invocation under the armed epoch succeeds");
