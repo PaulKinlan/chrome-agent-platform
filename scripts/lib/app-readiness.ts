@@ -132,24 +132,30 @@ const REAL_READINESS_TIMERS: AppReadinessTimers = {
 };
 
 /**
- * The no-progress bound used when a caller names none (dnqyt). The measured NTP-hydration
- * trace on this VM: idle, `jobsBoard` appears at ~3.8s and `namedHydrated` at ~7.2s; with six
- * competing busy loops the same two steps land at ~6.2s and ~12.3s. The largest gap between
- * observed advances is therefore ~6.1s, and this bound keeps ~5x headroom over it while still
- * failing closed in bounded time on a page whose readiness genuinely stops reporting progress.
+ * The TOTAL ceiling used when a caller names none — unchanged from the pre-dnqyt behaviour.
+ * dnqyt did not move it: a call site that needs a longer worst case opts in with `maxTotalMs`
+ * and measurements (see tests/w51r-create-click.test.ts), so no caller's worst-case latency
+ * changes silently.
  */
-export const DEFAULT_READINESS_STALL_MS = 30000;
+export const DEFAULT_READINESS_TIMEOUT_MS = 10000;
 
 export interface AppReadinessOptions {
   /**
-   * The NO-PROGRESS bound (dnqyt): how long the observed readiness state may stay unchanged
-   * before the wait fails closed. It is deliberately not a stopwatch on the whole wait — a
-   * page that is still hydrating under load keeps resetting it (see `maxTotalMs`).
+   * TOTAL ceiling on the wait, in milliseconds (default 10000). This keeps its original
+   * meaning: it is the longest the whole wait may take, and it is what a red reports.
    */
   timeoutMs?: number;
   /**
-   * Hard cap on the whole wait, so a page whose probe result flaps forever still terminates.
-   * Default: max(timeoutMs * 4, 120000).
+   * NO-PROGRESS window (dnqyt), separate from the ceiling so `timeoutMs` is not silently
+   * repurposed: every observed ADVANCE in the probe result restarts this window, and the wait
+   * fails as soon as the state stops advancing for this long. Default: timeoutMs. It never
+   * extends the ceiling — progress can buy time inside the budget, not past it.
+   */
+  stallMs?: number;
+  /**
+   * Explicit opt-in to a LONGER total ceiling than `timeoutMs`, for a call site that has
+   * measurements showing the default ceiling is too tight (w51r does, with numbers). Default:
+   * timeoutMs, i.e. no extension at all.
    */
   maxTotalMs?: number;
   pollIntervalMs?: number;
@@ -204,8 +210,11 @@ export async function waitForAppReady(
   evaluate: (expression: string) => Promise<any>,
   options: AppReadinessOptions = {},
 ): Promise<AppReadinessResult> {
-  const stallMs = options.timeoutMs ?? DEFAULT_READINESS_STALL_MS;
-  const maxTotalMs = Math.max(options.maxTotalMs ?? Math.max(stallMs * 4, 120000), stallMs);
+  const timeoutMs = options.timeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
+  const stallMs = options.stallMs ?? timeoutMs;
+  // The ceiling can only be RAISED explicitly by a call site that says why (maxTotalMs); with no
+  // opt-in the wait is bounded exactly as it always was.
+  const maxTotalMs = Math.max(options.maxTotalMs ?? timeoutMs, timeoutMs);
   const pollIntervalMs = options.pollIntervalMs ?? 100;
   const surface = options.surfaceName ? ` for ${options.surfaceName}` : "";
   const expr = options.predicateExpr ?? APP_READY_EXPRESSION;
@@ -223,6 +232,8 @@ export async function waitForAppReady(
   let lastKey: string | null = null;
   let lastProbe: any = null;
   let lastTimeoutError: Error | null = null;
+  let advances = 0;
+  let lastAdvanceAtMs: number | null = null;
 
   const keyOf = (probe: any): string => {
     try {
@@ -232,9 +243,18 @@ export async function waitForAppReady(
     }
   };
 
-  while (timers.now() < hardDeadline && timers.now() < stallDeadline) {
+  // The two terminating paths coord asked to be distinguishable, kept explicit:
+  //   "stall"  -> the observed state stopped advancing (a page that will never hydrate), and
+  //   "cap"    -> the state is STILL advancing but readiness never arrived inside the hard cap.
+  // They produce different named reasons below, so a red says which kind of not-ready it is.
+  let exitReason: "stall" | "ceiling" = "stall";
+  while (true) {
+    // Stall first: when the ceiling and the no-progress window expire together the honest
+    // report is that the observed state stopped advancing.
+    if (timers.now() >= stallDeadline) { exitReason = "stall"; break; }
+    if (timers.now() >= hardDeadline) { exitReason = "ceiling"; break; }
     const remainingMs = Math.min(hardDeadline, stallDeadline) - timers.now();
-    if (remainingMs <= 0) break;
+    if (remainingMs <= 0) { exitReason = "stall"; break; }
     const probeLimit = Math.min(remainingMs, options.probeTimeoutMs ?? 2000);
 
     let probeTimer: any;
@@ -283,6 +303,8 @@ export async function waitForAppReady(
 
     const advanced = lastKey !== null && keyOf(observed) !== lastKey;
     if (advanced) {
+      advances++;
+      lastAdvanceAtMs = timers.now() - start;
       stallDeadline = timers.now() + stallMs;
     }
     lastKey = keyOf(observed);
@@ -290,12 +312,21 @@ export async function waitForAppReady(
     await new Promise((r) => timers.setTimeout(r, pollIntervalMs));
   }
 
+  const detail = lastProbe ? ` (last probe: ${JSON.stringify(lastProbe)})` : "";
+  const progress = `${advances} observed advance(s)${lastAdvanceAtMs === null ? "" : `, last at ${lastAdvanceAtMs}ms`}`;
+  // A probe that never answered keeps its distinct provenance (the w7mv6/p2aki contract: that is
+  // an evaluation-layer failure and must not be laundered into "app never became ready"). This is
+  // the pre-dnqyt behaviour, unchanged.
   if (lastTimeoutError) {
     throw lastTimeoutError;
   }
-  const detail = lastProbe ? ` (last probe: ${JSON.stringify(lastProbe)})` : "";
+  if (exitReason === "ceiling") {
+    throw new Error(
+      `${APP_NEVER_BECAME_READY}${surface}: still advancing but not ready within the ${maxTotalMs}ms ceiling (${progress})${detail}`,
+    );
+  }
   throw new Error(
-    `${APP_NEVER_BECAME_READY}${surface} within ${stallMs}ms of no progress (cap ${maxTotalMs}ms)${detail}`,
+    `${APP_NEVER_BECAME_READY}${surface}: no observed progress for ${stallMs}ms (${progress})${detail}`,
   );
 }
 

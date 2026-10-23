@@ -304,7 +304,9 @@ Deno.test("p2aki: transient probe timeout retries within caller timeoutMs budget
   assertEquals(res.ready, true);
   assertEquals(res.signal, "ntp-hydrated");
   assertEquals(probeCalls, 2, "must retry on second probe after first probe timed out");
-  assert(elapsed >= 40 && elapsed < 400, `must succeed promptly once second probe settles (elapsed: ${elapsed}ms)`);
+  // Driven clock, so the schedule is exact rather than a floor: probe 1 times out at 40ms, the
+  // 15ms inter-poll sleep lands at 55ms, and probe 2 settles 10ms later.
+  assertEquals(elapsed, 65, `driven-clock schedule must be exact (elapsed: ${elapsed}ms)`);
 });
 
 Deno.test("p2aki / pew31 / w7mv6: persistent hung probe exhausts timeoutMs budget and throws distinct probe timeout provenance", async () => {
@@ -806,7 +808,10 @@ Deno.test("dnqyt: a slow-but-hydrating NTP page passes past the old fixed 10s st
   const startedAt = timers.now();
   const res = await onFakeClock(
     () => waitForAppReady(() => Promise.resolve(LOADED_NTP_TRACE(timers.now())), {
+      // dnqyt v3: timeoutMs keeps its 10s TOTAL meaning; the call site that needs a longer worst
+      // case says so explicitly (maxTotalMs) instead of the default silently growing.
       timeoutMs: 10000,
+      maxTotalMs: 60000,
       pollIntervalMs: 100,
       surfaceName: "NTP Hub",
       timers,
@@ -832,7 +837,7 @@ Deno.test("dnqyt: a never-hydrating page still fails closed after ONE no-progres
   const startedAt = timers.now();
   try {
     await onFakeClock(
-      () => waitForAppReady(evaluate, { timeoutMs: 8000, maxTotalMs: 100000, pollIntervalMs: 200, surfaceName: "NTP Hub", timers }),
+      () => waitForAppReady(evaluate, { timeoutMs: 100000, stallMs: 8000, pollIntervalMs: 200, surfaceName: "NTP Hub", timers }),
       timers,
     );
   } catch (e) {
@@ -843,7 +848,11 @@ Deno.test("dnqyt: a never-hydrating page still fails closed after ONE no-progres
   assert(caught !== null, "must fail closed when readiness never advances");
   assert(caught.message.startsWith(APP_NEVER_BECAME_READY), `named failure expected, got: ${caught.message}`);
   assert(caught.message.includes("NTP Hub"), `must name the surface, got: ${caught.message}`);
-  assert(elapsed >= 8000 && elapsed < 8600, `must stop after one 8000ms window, not the 100000ms cap (took ${elapsed}ms)`);
+  assert(elapsed >= 8000 && elapsed < 8600, `must stop after one 8000ms stall window, not the 100000ms ceiling (took ${elapsed}ms)`);
+  // coord (dnqyt): "not ready yet, still progressing" must be DISTINGUISHABLE from "not ready
+  // ever". The stall path says so by name and reports the progress it did (or did not) see.
+  assert(caught.message.includes("no observed progress for 8000ms"), `stall path must be named, got: ${caught.message}`);
+  assert(caught.message.includes("0 observed advance(s)"), `stall path must report progress seen, got: ${caught.message}`);
 });
 
 Deno.test("dnqyt: a page that flaps between two unready states terminates at the hard cap", async () => {
@@ -857,7 +866,7 @@ Deno.test("dnqyt: a page that flaps between two unready states terminates at the
   const startedAt = timers.now();
   try {
     await onFakeClock(
-      () => waitForAppReady(evaluate, { timeoutMs: 5000, maxTotalMs: 20000, pollIntervalMs: 100, surfaceName: "NTP Hub", timers }),
+      () => waitForAppReady(evaluate, { timeoutMs: 20000, stallMs: 5000, pollIntervalMs: 100, surfaceName: "NTP Hub", timers }),
       timers,
     );
   } catch (e) {
@@ -867,7 +876,12 @@ Deno.test("dnqyt: a page that flaps between two unready states terminates at the
 
   assert(caught !== null, "must fail closed rather than wait forever");
   assert(caught.message.startsWith(APP_NEVER_BECAME_READY), `named failure expected, got: ${caught.message}`);
-  assert(elapsed >= 20000 && elapsed < 20500, `must stop at the 20000ms cap (took ${elapsed}ms)`);
+  assert(elapsed >= 20000 && elapsed < 20500, `must stop at the 20000ms ceiling (took ${elapsed}ms)`);
+  assert(
+    caught.message.includes("still advancing but not ready within the 20000ms ceiling"),
+    `ceiling path must be named distinctly from the stall path, got: ${caught.message}`,
+  );
+  assert(/[1-9][0-9]* observed advance\(s\)/.test(caught.message), `ceiling path must report the advances, got: ${caught.message}`);
 });
 
 Deno.test("dnqyt: the probe trace records each observation and which ones advanced", async () => {
@@ -876,6 +890,7 @@ Deno.test("dnqyt: the probe trace records each observation and which ones advanc
   await onFakeClock(
     () => waitForAppReady(() => Promise.resolve(LOADED_NTP_TRACE(timers.now())), {
       timeoutMs: 10000,
+      maxTotalMs: 60000,
       pollIntervalMs: 100,
       surfaceName: "NTP Hub",
       timers,
