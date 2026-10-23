@@ -431,7 +431,12 @@ import { measureWithLoadRetry } from "../scripts/lib/load-retry.ts";
 
 Deno.test("e7gwq / j2vok falsification: crafted adversarial inputs finish in linear time without stalling the service worker", async () => {
   const budgetMs = loadScaledTimingBudget(75, 6);
-  const measure = (run: (stats: { steps: number }) => void) => measureWithLoadRetry(run, budgetMs);
+  // b9dtq: keep the FASTEST of 5 warm samples. A single wall sample can be 10-20x the real work when
+  // someone else's job lands on the core (measured here: a 4.9ms parse sampled at 93.9ms), which reds a
+  // tight budget by rounding. Preemption only ever adds time, so the minimum approximates the true cost
+  // and a genuine slowdown still slows every sample.
+  const SAMPLES = 5;
+  const measure = (run: (stats: { steps: number }) => void) => measureWithLoadRetry(run, budgetMs, {}, SAMPLES);
 
   // 1. 100,000 unclosed opening brackets that would cause catastrophic scan/regex times
   const unclosedBrackets = "[".repeat(100_000);
@@ -441,7 +446,7 @@ Deno.test("e7gwq / j2vok falsification: crafted adversarial inputs finish in lin
   });
   assertEquals(res1, []);
   assert(stats1.steps <= unclosedBrackets.length, `steps (${stats1.steps}) must not exceed input length (${unclosedBrackets.length})`);
-  assert(elapsed1 < budgetMs, `100k unclosed brackets must finish in <${budgetMs}ms (took ${elapsed1.toFixed(2)}ms)`);
+  assert(elapsed1 < budgetMs, `100k unclosed brackets must finish in <${budgetMs}ms (fastest of ${SAMPLES}: ${elapsed1.toFixed(2)}ms)`);
 
   // 2. 500KiB of unmatched ']' brackets (voya0 finding: previous lastIndexOf backward scan took 21.3s)
   const unmatchedClosing = "]".repeat(500 * 1024);
@@ -451,7 +456,7 @@ Deno.test("e7gwq / j2vok falsification: crafted adversarial inputs finish in lin
   });
   assertEquals(resVoya, []);
   assert(statsVoya.steps <= unmatchedClosing.length, `steps (${statsVoya.steps}) must not exceed input length (${unmatchedClosing.length})`);
-  assert(elapsedVoya < budgetMs, `500KiB of unmatched ']' must finish in <${budgetMs}ms (took ${elapsedVoya.toFixed(2)}ms)`);
+  assert(elapsedVoya < budgetMs, `500KiB of unmatched ']' must finish in <${budgetMs}ms (fastest of ${SAMPLES}: ${elapsedVoya.toFixed(2)}ms)`);
 
   // 3. sbiel finding: [x](y) followed by repeated '](' patterns that previously triggered backward rescans
   const sbielInput = "[x](https://docs.example.com/y)\n" + "](".repeat(100_000);
@@ -461,7 +466,7 @@ Deno.test("e7gwq / j2vok falsification: crafted adversarial inputs finish in lin
   });
   assertEquals(resSbiel, ["https://docs.example.com/y"]);
   assert(statsSbiel.steps <= sbielInput.length, `steps (${statsSbiel.steps}) must not exceed input length (${sbielInput.length})`);
-  assert(elapsedSbiel < budgetMs, `100k '](' patterns must finish in <${budgetMs}ms (took ${elapsedSbiel.toFixed(2)}ms)`);
+  assert(elapsedSbiel < budgetMs, `100k '](' patterns must finish in <${budgetMs}ms (fastest of ${SAMPLES}: ${elapsedSbiel.toFixed(2)}ms)`);
 
   // 4. 20,000 unclosed link patterns: `[text](` repeated
   const unclosedLinks = "[text](".repeat(20_000);
@@ -471,7 +476,7 @@ Deno.test("e7gwq / j2vok falsification: crafted adversarial inputs finish in lin
   });
   assertEquals(res2, []);
   assert(stats2.steps <= unclosedLinks.length, `steps (${stats2.steps}) must not exceed input length (${unclosedLinks.length})`);
-  assert(elapsed2 < budgetMs, `20k unclosed links must finish in <${budgetMs}ms (took ${elapsed2.toFixed(2)}ms)`);
+  assert(elapsed2 < budgetMs, `20k unclosed links must finish in <${budgetMs}ms (fastest of ${SAMPLES}: ${elapsed2.toFixed(2)}ms)`);
 
   // 5. Deeply nested brackets: `[[[[...]]]]`
   const nested = "[".repeat(10_000) + "]".repeat(10_000);
@@ -481,7 +486,7 @@ Deno.test("e7gwq / j2vok falsification: crafted adversarial inputs finish in lin
   });
   assertEquals(res3, []);
   assert(stats3.steps <= nested.length, `steps (${stats3.steps}) must not exceed input length (${nested.length})`);
-  assert(elapsed3 < budgetMs, `10k nested brackets must finish in <${budgetMs}ms (took ${elapsed3.toFixed(2)}ms)`);
+  assert(elapsed3 < budgetMs, `10k nested brackets must finish in <${budgetMs}ms (fastest of ${SAMPLES}: ${elapsed3.toFixed(2)}ms)`);
 });
 
 Deno.test("ri0x8: measureWithLoadRetry executes warm retry on injected non-quiet contention and uses fresh stats per attempt", async () => {
@@ -575,6 +580,45 @@ Deno.test("ri0x8: measureWithLoadRetry executes warm retry on injected non-quiet
   assertEquals(resultUnmeasurable.retried, false, "retried flag must be false");
 });
 
+Deno.test("b9dtq: measureWithLoadRetry keeps the fastest warm sample, so one preempted sample cannot spend the budget", async () => {
+  // Deterministic clock: one heavily preempted sample (500ms), then the real cost (3ms).
+  const quietDeps = {
+    readLoadSample: async () => ({ measurable: true, loadPerCore: 0.1, activeCompilers: 0 }),
+    isQuiet: () => true,
+    resolveSpec: () => ({}) as any,
+  };
+  let clock = 0;
+  const durations = [500, 12, 3, 40, 7];
+  let call = 0;
+  const fastest = await measureWithLoadRetry(
+    (stats) => {
+      stats.steps = 1_000;
+      clock += durations[Math.min(call++, durations.length - 1)];
+    },
+    75,
+    { ...quietDeps, now: () => clock },
+    5,
+  );
+  assertEquals(fastest.elapsed, 3, "the fastest sample must win, not the first or the last");
+  assertEquals(fastest.samples, 5, "all requested samples are taken");
+  assertEquals(fastest.stats.steps, 1_000);
+  assertEquals(fastest.retried, false, "a sample inside the budget must not reach the retry path");
+
+  // Fails closed: when EVERY sample is over budget, the minimum is still reported (never a pass).
+  let slowClock = 0;
+  const slow = await measureWithLoadRetry(
+    (stats) => {
+      stats.steps = 1_000;
+      slowClock += 100;
+    },
+    75,
+    { ...quietDeps, now: () => slowClock },
+    5,
+  );
+  assertEquals(slow.elapsed, 100, "the minimum of the samples is reported even when all of them are over budget");
+  assert(slow.elapsed >= 75, "a budget miss must never be rounded into a pass");
+});
+
 /**
  * Mutant: reproduces pre-e7gwq quadratic backward rescanning behavior (voya0 / sbiel defect).
  * For each closing bracket ']', it scans backward through the preceding text looking for matching '['.
@@ -627,13 +671,30 @@ Deno.test("j2vok falsification: negative mutant reproducing pre-e7gwq quadratic 
   const sampleInput = "]".repeat(sampleSize);
 
   // 1. Linear scanner does strictly 1 outer-loop iteration per character (forward-only progression)
+  // chrome-agent-platform-b9dtq: this sample took 84.02ms against an 84ms budget derived from the
+  // same load — pure scheduler preemption on a parse that really costs 0.09ms (measured: min 0.09ms,
+  // max 0.11ms over 5 samples), i.e. an exact-boundary red by rounding. Keep the fastest of several
+  // warm samples instead: preemption can only ADD time, so the minimum is a load-robust estimate of
+  // the real cost, while a genuine slowdown slows every sample and still reds the budget.
+  const LINEAR_SAMPLES = 5;
   const linearStats = { steps: 0 };
-  const tLinear0 = performance.now();
-  parseLlmsTxt(sampleInput, ORIGIN, { stats: linearStats });
-  const linearElapsed = performance.now() - tLinear0;
+  let linearElapsed = Number.POSITIVE_INFINITY;
+  for (let sample = 0; sample < LINEAR_SAMPLES; sample++) {
+    const sampleStats = { steps: 0 };
+    const t = performance.now();
+    parseLlmsTxt(sampleInput, ORIGIN, { stats: sampleStats });
+    const sampleElapsed = performance.now() - t;
+    if (sampleElapsed < linearElapsed) {
+      linearElapsed = sampleElapsed;
+      linearStats.steps = sampleStats.steps;
+    }
+  }
 
   assertEquals(linearStats.steps, sampleSize, "linear scanner outer-loop steps must equal input length");
-  assert(linearElapsed < budgetMs, `linear parse on 5k sample must take <${budgetMs}ms (took ${linearElapsed.toFixed(2)}ms)`);
+  assert(
+    linearElapsed < budgetMs,
+    `linear parse on 5k sample must finish in <${budgetMs}ms (fastest of ${LINEAR_SAMPLES}: ${linearElapsed.toFixed(2)}ms)`,
+  );
 
   // 2. Quadratic mutant executes N + N*(N-1)/2 steps (O(N^2) catastrophic backward scan)
   const mutantStats = { steps: 0 };
@@ -656,7 +717,7 @@ Deno.test("j2vok falsification: negative mutant reproducing pre-e7gwq quadratic 
     "mutant must violate the deterministic linear step bound (steps <= length)",
   );
 
-  // Fails-closed timing comparison: mutant is detected by superlinear execution steps
+  // Fails-closed timing comparison: mutant is detected by superlinear execution steps or work
   assert(
     mutantElapsed > linearElapsed || mutantStats.steps > 10_000_000,
     "mutant must be detected by superlinear execution steps",
