@@ -68,6 +68,23 @@ function sample(over: Partial<LoadSample> = {}): LoadSample {
 // arrived already set).
 const AMBIENT_PROC_SCAN_MS = Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS");
 
+/** Scope a /proc scan budget to ONE test and restore it when the test settles
+ *  (chrome-agent-platform-3ow6b). The module-scope override this replaced was process-wide state that
+ *  leaked into every later suite in the same deno process; the tests that genuinely need a bigger budget
+ *  for their own spawned children state it locally instead (ssemb / kzy5x: parallel-phase churn on a
+ *  loaded box can truncate the 400 ms default before the walk reaches children THIS test just spawned,
+ *  and a truncated walk is unmeasurable by design - 1io9 - so the sample comes back refused, not wrong). */
+async function withProcScanBudget<T>(ms: string, body: () => Promise<T>): Promise<T> {
+  const before = Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS");
+  Deno.env.set("CAP_QUIET_MAX_PROC_SCAN_MS", ms);
+  try {
+    return await body();
+  } finally {
+    if (before === undefined) Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN_MS");
+    else Deno.env.set("CAP_QUIET_MAX_PROC_SCAN_MS", before);
+  }
+}
+
 const SPEC = { maxLoadPerCore: 0.35, maxCompilers: 1, maxWaitMs: 1000, sampleMs: 50, sustainedSamples: 3 };
 
 /**
@@ -341,7 +358,7 @@ Deno.test("dnop: /proc/<pid>/stat parsing survives a comm with spaces and parent
   assertEquals(parseProcStatCpu("garbage"), null);
 });
 
-Deno.test("dnop: the REAL sampler counts this test's compiling process and not its parked ones", async () => {
+Deno.test("dnop: the REAL sampler counts this test's compiling process and not its parked ones", () => withProcScanBudget("2500", async () => {
   // Ambient state is never assumed: every assertion names a pid THIS test
   // created, so another lane's build cannot make it pass or fail (p15i).
   const dir = await Deno.makeTempDir({ prefix: "cap-dnop-procs-" });
@@ -401,7 +418,7 @@ Deno.test("dnop: the REAL sampler counts this test's compiling process and not i
     }
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
-});
+}));
 
 Deno.test("mkax: a quiet box starts the gate immediately", async () => {
   const notices: string[] = [];
@@ -588,7 +605,7 @@ Deno.test("mkax: quietReasons names what is holding the gate; heavy builders are
   }
 });
 
-Deno.test("mkax: a real sample from this box is finite, bounded and evidence-shaped", async () => {
+Deno.test("mkax: a real sample from this box is finite, bounded and evidence-shaped", () => withProcScanBudget("2500", async () => {
   const s = await readLoadSample();
   assertEquals(s.measurable, true, `this box is measurable: ${s.error ?? ""}`);
   assert(Number.isFinite(s.load1) && s.load1 >= 0, `load1 ${s.load1}`);
@@ -600,7 +617,7 @@ Deno.test("mkax: a real sample from this box is finite, bounded and evidence-sha
   const line = environmentLine(s);
   assert(line.includes("load1=") && line.includes("cores=") && line.includes("heavy-builders="), line);
   assertEquals(line.includes("worktrees"), false, "no paths or argv in the evidence line");
-});
+}));
 
 Deno.test("mkax: the launcher refuses to START the browser when the box is not quiet", async () => {
   const { launchChrome, teardownChrome } = await import("../scripts/lib/chrome-launch.ts");
@@ -757,6 +774,11 @@ Deno.test("mkax: the REAL journey gate refuses with exit 75 while a REAL compile
         CAP_QUIET_SAMPLE_MS: sampleMs,
         CAP_QUIET_MAX_COMPILERS: "1",
         CAP_QUIET_SUSTAINED: "2",
+        // A deliberate scan budget for THIS child, so the assertion is about the refusal and not about
+        // the 400 ms default: the test asserts measurable === true, and a walk truncated by the suite's
+        // own churn would make the refusal unmeasurable instead (1io9). It used to inherit this from the
+        // file's module-scope override (3ow6b), which is now scoped per test rather than process-wide.
+        CAP_QUIET_MAX_PROC_SCAN_MS: "2500",
         // zeew — TWO ambient assumptions removed, and the FIRST is the real one:
         //
         // 1. A PRIVATE fleet slot. The spawned gate takes the fleet-wide slot
@@ -1206,7 +1228,7 @@ Deno.test("qs8v7: parseProcStatCpu reads field 4 (ppid) and refuses a non-numeri
   assertEquals(odd?.ppid, null, "a parent this parser cannot read is null, never a merge");
 });
 
-Deno.test("qs8v7: the REAL sampler groups this test\'s nine children under their heavy parent job", async () => {
+Deno.test("qs8v7: the REAL sampler groups this test\'s nine children under their heavy parent job", () => withProcScanBudget("2500", async () => {
   // Linux only: the parent chain comes from /proc/<pid>/stat, and the macOS ps path does not report
   // it — there the documented fallback keeps the process count (fail closed).
   if (Deno.build.os !== "linux") return;
@@ -1254,7 +1276,7 @@ Deno.test("qs8v7: the REAL sampler groups this test\'s nine children under their
     } catch { /* best effort */ }
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
-});
+}));
 
 Deno.test("n64td / o7abi: createExecutableStub eliminates write-then-exec ETXTBSY race across multiple rapid cycles for both symlink and fallback", async () => {
   const dir = await Deno.makeTempDir({ prefix: "cap-n64td-stubs-" });

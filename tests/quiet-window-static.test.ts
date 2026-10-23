@@ -134,10 +134,24 @@ Deno.test("3ow6b / jtpa5: the always-on half stays a source scan, and the module
     ),
     "the arrival capture the end-of-suite leak check compares against must exist before any registration (chrome-agent-platform-jtpa5)",
   );
-  assert(
-    !/Deno\.env\.(set|delete)\s*\(\s*["']CAP_QUIET_MAX_PROC_SCAN_MS["']/.test(prelude),
-    "tests/quiet-window.test.ts must not SET or DELETE CAP_QUIET_MAX_PROC_SCAN_MS at module scope in the prelude (chrome-agent-platform-3ow6b)",
-  );
+  // Module scope must only READ the key. Every prelude line that mentions it has to be the arrival
+  // capture itself, or an INDENTED line inside a function body (the scoped-budget helper, which runs
+  // only when a test calls it, and restores what it found). This is the round-2 rule kept as a cheap
+  // complement, and it is NOT the module-scope guard: a nested block indents its own lines, which is
+  // exactly why the behavioural check below is a sanitised CHILD PROCESS rather than a text scan.
+  for (const line of prelude.split("\n")) {
+    if (!line.includes("CAP_QUIET_MAX_PROC_SCAN_MS")) continue;
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) continue;
+    const isArrivalCapture = /^const\s+AMBIENT_PROC_SCAN_MS\s*=/.test(line);
+    const isInsideAFunction = /^\s+\S/.test(line);
+    assert(
+      isArrivalCapture || isInsideAFunction,
+      `module scope must only READ CAP_QUIET_MAX_PROC_SCAN_MS; this prelude line executes at import time: ${
+        JSON.stringify(line)
+      } (chrome-agent-platform-3ow6b)`,
+    );
+  }
   assert(
     src.includes("SANITISED child process leaves CAP_QUIET_MAX_PROC_SCAN_MS unset"),
     "the sanitised-child module-scope check must stay in tests/quiet-window.test.ts: it is the only layer that cannot be poisoned by an in-module baseline (chrome-agent-platform-jtpa5)",
